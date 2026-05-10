@@ -294,3 +294,181 @@ button:disabled {
   color: var(--muted);
   font-size: 12px;
 }
+
+/* ─── Inputs (mode select, etc.) ──────────────────────────────────────── */
+.inputs select {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+/* ─── Param editor ────────────────────────────────────────────────────── */
+.param-editor {
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.param-editor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.param-editor-title {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.param-editor-type {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.param-raw {
+  background: var(--bg-elev-2);
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  overflow-x: auto;
+  margin: 0;
+}
+
+.small {
+  font-size: 11px;
+}
+
+.apply-all-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ─── Hex cell input (used by S-box and matrix editors) ───────────────── */
+.hex-cell {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: center;
+  width: 32px;
+  height: 26px;
+  padding: 0;
+  letter-spacing: 0.05em;
+}
+
+.hex-cell.compact {
+  width: 24px;
+  height: 22px;
+  font-size: 10px;
+}
+
+.hex-cell:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg);
+}
+
+.hex-cell.modified {
+  color: var(--changed);
+  border-color: var(--changed);
+}
+
+/* ─── S-box editor (16x16 grid with axis labels) ──────────────────────── */
+.sbox-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.sbox-axis-label {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 10px;
+  color: var(--muted);
+  padding-left: 32px;
+}
+
+.sbox-axis-label .axis-cell {
+  width: 24px;
+  text-align: center;
+}
+
+.sbox-grid {
+  display: grid;
+  grid-template-columns: 24px repeat(16, 24px);
+  grid-template-rows: repeat(16, 22px);
+  gap: 2px;
+}
+
+.sbox-grid .axis-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.sbox-cell-wrap {
+  display: contents;
+}
+
+/* ─── MixColumns matrix editor ────────────────────────────────────────── */
+.matrix-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.matrix-row {
+  display: flex;
+  gap: 4px;
+}
+
+/* ─── Shifts editor ───────────────────────────────────────────────────── */
+.shifts-editor {
+  display: flex;
+  gap: 16px;
+}
+
+.shift-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.shift-label {
+  font-size: 11px;
+}
+
+.shift-row input[type="number"] {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: center;
+  width: 50px;
+  padding: 4px;
+}
+
+.shift-row input[type="number"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}

@@ -1,45 +1,104 @@
+/**
+ * App shell. Owns:
+ *   - The plaintext/key/mode form
+ *   - The "run" trigger and its debounced auto-rerun on spec edits
+ *   - Layout for trace timeline, matrix view, step list, and ParamEditor
+ *
+ * The interesting wiring is the createEffect at the bottom of App: when
+ * the user edits the spec via ParamEditor, the spec signal changes; the
+ * effect notices, debounces 200ms (so 256-cell S-box edits don't hammer
+ * the runtime), and re-runs the trace. That's the "swap a value, watch
+ * the trace update" loop the modularity demo lives on.
+ */
+
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, MatrixState } from "@/core/types";
-import { Show, createMemo, createSignal } from "solid-js";
+import { Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { MatrixView } from "./components/MatrixView";
+import { ParamEditor } from "./components/ParamEditor";
 import { StepList } from "./components/StepList";
 import { TraceTimeline } from "./components/TraceTimeline";
-import { useSpec } from "./stores/spec";
+import { resetSpec, setMode, useMode, useSpec } from "./stores/spec";
 import { getTrace, setTrace, useFrameIndex, useTraceVersion } from "./stores/trace";
 import "./app.css";
 
+// Default test vector from FIPS-197 Appendix C.1 — gives users a known
+// good answer to compare against on first load.
 const DEFAULT_PT = "00112233445566778899aabbccddeeff";
 const DEFAULT_KEY = "000102030405060708090a0b0c0d0e0f";
 
+// How long after the last spec edit before we re-run the cipher. 200ms is
+// long enough that fast typing on 256 S-box cells doesn't cause a re-run
+// on every keystroke, but short enough to feel immediate.
+const AUTO_RERUN_DEBOUNCE_MS = 200;
+
 export const App = () => {
   const spec = useSpec();
-  const [plaintext, setPlaintext] = createSignal(DEFAULT_PT);
-  const [key, setKey] = createSignal(DEFAULT_KEY);
+  const mode = useMode();
+
+  // Inputs — kept as strings so the user can paste partial hex without
+  // the input fighting them mid-type. We validate on run.
+  const [inputHex, setInputHex] = createSignal(DEFAULT_PT);
+  const [keyHex, setKeyHex] = createSignal(DEFAULT_KEY);
   const [error, setError] = createSignal<string | null>(null);
 
+  // Has the user successfully run the cipher at least once? If yes, spec
+  // edits trigger an auto-rerun. If no, edits do nothing — we'd just be
+  // throwing parse errors at the user before they've even hit "run."
+  const [hasRunOnce, setHasRunOnce] = createSignal(false);
+
+  // Build the registry once. It's pure config — no per-render recompute.
   const registry = buildDefaultRegistry();
 
-  const run = () => {
+  /**
+   * Run the current spec with the current inputs, push the resulting trace
+   * into the trace store, and update error state. Doesn't throw — errors
+   * are surfaced via setError so the UI can render them inline.
+   */
+  const run = (): void => {
     try {
       setError(null);
-      const ptBytes = bytesFromHex(plaintext());
-      if (ptBytes.length !== 16) throw new Error("plaintext must be 16 bytes (32 hex chars)");
-      const keyBytes = bytesFromHex(key());
-      if (keyBytes.length !== 16) throw new Error("key must be 16 bytes (32 hex chars)");
+      const inputBytes = bytesFromHex(inputHex());
+      if (inputBytes.length !== 16) {
+        throw new Error(
+          `${inputLabel()} must be 16 bytes (32 hex chars), got ${inputBytes.length}`,
+        );
+      }
+      const keyBytes = bytesFromHex(keyHex());
+      if (keyBytes.length !== 16) {
+        throw new Error(`key must be 16 bytes (32 hex chars), got ${keyBytes.length}`);
+      }
       const initialAux = new Map<string, AuxValue>([["key", keyBytes]]);
       const trace = runSpec(spec(), registry, {
-        initialState: matrixFromBytes(ptBytes),
+        initialState: matrixFromBytes(inputBytes),
         initialAux,
       });
       setTrace(trace);
+      setHasRunOnce(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   };
 
+  // Auto re-run on spec edit, debounced. The `on(spec, ...)` form runs ONLY
+  // when the spec signal changes, not on initial setup — important because
+  // we don't want to auto-run before the user has hit the button once.
+  createEffect(
+    on(
+      spec,
+      () => {
+        if (!hasRunOnce()) return;
+        const handle = window.setTimeout(run, AUTO_RERUN_DEBOUNCE_MS);
+        onCleanup(() => window.clearTimeout(handle));
+      },
+      { defer: true },
+    ),
+  );
+
+  // Reactive derived values for the trace view.
   const frameIndex = useFrameIndex();
   const version = useTraceVersion();
 
@@ -48,12 +107,16 @@ export const App = () => {
     return getTrace()?.frames[frameIndex()] ?? null;
   });
 
-  const ciphertext = createMemo(() => {
+  const outputHex = createMemo(() => {
     void version();
     const t = getTrace();
     if (!t || t.finalState.shape !== "matrix4x4-bytes") return null;
     return hexFromBytes(t.finalState.bytes);
   });
+
+  // Labels switch between encrypt/decrypt modes so the UI doesn't lie.
+  const inputLabel = () => (mode() === "encrypt" ? "plaintext" : "ciphertext");
+  const outputLabel = () => (mode() === "encrypt" ? "ciphertext" : "plaintext");
 
   return (
     <div class="app">
@@ -62,36 +125,57 @@ export const App = () => {
         <span class="cipher-name">{spec().name}</span>
       </header>
 
+      {/* ─── Inputs row ─────────────────────────────────────────────── */}
       <section class="inputs">
         <label>
-          plaintext (hex)
+          mode
+          <select
+            value={mode()}
+            onChange={(e) => setMode(e.currentTarget.value as "encrypt" | "decrypt")}
+          >
+            <option value="encrypt">encrypt</option>
+            <option value="decrypt">decrypt</option>
+          </select>
+        </label>
+        <label>
+          {inputLabel()} (hex)
           <input
-            value={plaintext()}
-            onInput={(e) => setPlaintext(e.currentTarget.value)}
+            value={inputHex()}
+            onInput={(e) => setInputHex(e.currentTarget.value)}
             spellcheck={false}
           />
         </label>
         <label>
           key (hex)
-          <input value={key()} onInput={(e) => setKey(e.currentTarget.value)} spellcheck={false} />
+          <input
+            value={keyHex()}
+            onInput={(e) => setKeyHex(e.currentTarget.value)}
+            spellcheck={false}
+          />
         </label>
         <button type="button" onClick={run}>
-          encrypt
+          run
+        </button>
+        <button type="button" onClick={resetSpec} title="Restore the canonical spec for this mode">
+          reset spec
         </button>
       </section>
 
+      {/* ─── Errors and result hex ───────────────────────────────────── */}
       <Show when={error()}>
         <div class="error">{error()}</div>
       </Show>
 
-      <Show when={ciphertext()}>
+      <Show when={!error() && outputHex()}>
         <div class="result">
-          ciphertext: <code>{ciphertext()}</code>
+          {outputLabel()}: <code>{outputHex()}</code>
         </div>
       </Show>
 
+      {/* ─── Trace timeline scrubber ─────────────────────────────────── */}
       <TraceTimeline />
 
+      {/* ─── Matrix view + ParamEditor (active step) ─────────────────── */}
       <section class="trace-view">
         <Show
           when={currentFrame()}
@@ -106,6 +190,7 @@ export const App = () => {
                 </span>
                 <span class="frame-type">{frame().stepType}</span>
               </div>
+
               <Show
                 when={
                   frame().stateBefore.shape === "matrix4x4-bytes" &&
@@ -118,11 +203,16 @@ export const App = () => {
                   after={frame().stateAfter as MatrixState}
                 />
               </Show>
+
+              {/* ParamEditor sits below the state view so users can edit
+                  the very step they're inspecting. */}
+              <ParamEditor frame={frame()} />
             </>
           )}
         </Show>
       </section>
 
+      {/* ─── Sidebar: full step list ─────────────────────────────────── */}
       <aside class="step-list-pane">
         <h2>steps</h2>
         <StepList />
