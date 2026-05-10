@@ -1,108 +1,21 @@
 /**
- * Tiny markdown renderer covering the features used by step-documentation
- * detail strings. Intentionally not a full CommonMark implementation —
- * we're optimizing for "small bundle, predictable output" over coverage.
+ * Renders the small markdown subset used for step-doc detail strings.
+ * Pure parsing logic lives in markdown-parser.ts so it can be tested in a
+ * node-only environment; this file is the JSX renderer on top.
  *
- * Supported (block-level):
- *   - blank-line separated paragraphs
- *   - "# Heading" / "## Heading" / "### Heading"
- *   - "- list item" or "* list item" (single-level only)
- *   - fenced code blocks: ```lang\ncode\n```
- *
- * Supported (inline):
- *   - **bold**
- *   - `code`
+ * Supported features (mirrored in markdown-parser.ts):
+ *   block: paragraphs, # / ## / ### headings, - / * lists, ``` code fences
+ *   inline: **bold**, `code`
  *
  * Anything else falls through as plain text. If we ever need real
- * markdown features (links, tables, math), pull in `marked` and replace.
+ * markdown features (links, tables, math), drop in `marked` and replace.
  */
 
 import { For, type JSX, Show } from "solid-js";
+import { type Block, parseBlocks } from "./markdown-parser";
 
 type Props = {
   source: string;
-};
-
-// ─── Block-level parsing ──────────────────────────────────────────────────
-// Parse the source into a sequence of typed blocks. Each block is rendered
-// independently; inline parsing happens inside paragraphs and list items.
-
-type Block =
-  | { kind: "heading"; level: 1 | 2 | 3; text: string }
-  | { kind: "paragraph"; text: string }
-  | { kind: "list"; items: string[] }
-  | { kind: "code"; language: string; text: string };
-
-const parseBlocks = (source: string): Block[] => {
-  const blocks: Block[] = [];
-  // Normalize line endings before splitting; Windows CRLF would otherwise
-  // leave a stray \r at the end of every line and break inline parsing.
-  const lines = source.replace(/\r\n/g, "\n").split("\n");
-
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i] ?? "";
-
-    // Skip blank lines between blocks
-    if (line.trim() === "") {
-      i++;
-      continue;
-    }
-
-    // Headings: # / ## / ###
-    const headingMatch = /^(#{1,3})\s+(.+)$/.exec(line);
-    if (headingMatch) {
-      const level = headingMatch[1]?.length as 1 | 2 | 3;
-      blocks.push({ kind: "heading", level, text: headingMatch[2] ?? "" });
-      i++;
-      continue;
-    }
-
-    // Fenced code: ```[lang]
-    if (line.startsWith("```")) {
-      const language = line.slice(3).trim();
-      const codeLines: string[] = [];
-      i++;
-      while (i < lines.length && !(lines[i] ?? "").startsWith("```")) {
-        codeLines.push(lines[i] ?? "");
-        i++;
-      }
-      // Skip the closing fence (or EOF)
-      if (i < lines.length) i++;
-      blocks.push({ kind: "code", language, text: codeLines.join("\n") });
-      continue;
-    }
-
-    // Lists: a run of lines starting with "- " or "* "
-    if (/^[-*]\s+/.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && /^[-*]\s+/.test(lines[i] ?? "")) {
-        items.push((lines[i] ?? "").replace(/^[-*]\s+/, ""));
-        i++;
-      }
-      blocks.push({ kind: "list", items });
-      continue;
-    }
-
-    // Paragraph: collect consecutive non-blank lines that aren't another
-    // block kind. A blank line, a heading, a fence, or a list ends it.
-    const paraLines: string[] = [];
-    while (i < lines.length) {
-      const l = lines[i] ?? "";
-      if (l.trim() === "") break;
-      if (/^#{1,3}\s+/.test(l)) break;
-      if (l.startsWith("```")) break;
-      if (/^[-*]\s+/.test(l)) break;
-      paraLines.push(l);
-      i++;
-    }
-    if (paraLines.length > 0) {
-      // Paragraphs join lines with a single space — soft line breaks.
-      blocks.push({ kind: "paragraph", text: paraLines.join(" ") });
-    }
-  }
-
-  return blocks;
 };
 
 // ─── Inline parsing ───────────────────────────────────────────────────────
@@ -154,53 +67,50 @@ const renderInline = (text: string): JSX.Element[] => {
 // ─── Rendering ────────────────────────────────────────────────────────────
 
 export const Markdown = (props: Props) => {
-  // Parse fresh on every render — these are short docs (a few KB at most)
-  // and the doc text itself rarely changes once registered. If this ever
-  // shows up in a profile, memoize on `source`.
+  // Parse on every render — these are short docs (a few KB at most) and
+  // the doc text rarely changes once registered. Memoize on `source` if
+  // this ever shows up in a profile.
   const blocks = () => parseBlocks(props.source);
 
   return (
     <div class="markdown">
-      <For each={blocks()}>
-        {(block) => (
-          <Show
-            when={block.kind === "heading"}
-            fallback={
-              <Show
-                when={block.kind === "list"}
-                fallback={
-                  <Show
-                    when={block.kind === "code"}
-                    fallback={
-                      // Paragraph
-                      <p>{renderInline((block as { text: string }).text)}</p>
-                    }
-                  >
-                    <pre>
-                      <code>{(block as { text: string }).text}</code>
-                    </pre>
-                  </Show>
-                }
-              >
-                <ul>
-                  <For each={(block as { items: string[] }).items}>
-                    {(item) => <li>{renderInline(item)}</li>}
-                  </For>
-                </ul>
-              </Show>
-            }
-          >
-            {/* Heading: render h1/h2/h3 based on level */}
-            <HeadingTag block={block as { level: 1 | 2 | 3; text: string }} />
-          </Show>
-        )}
-      </For>
+      <For each={blocks()}>{(block) => <BlockView block={block} />}</For>
     </div>
   );
 };
 
-// Solid doesn't support dynamic JSX tag names cleanly via a string, so
-// we dispatch with a small switch — verbose but explicit.
+// Single block dispatcher. Cleaner than a chain of nested <Show> fallbacks.
+const BlockView = (props: { block: Block }) => (
+  <Show
+    when={props.block.kind === "heading"}
+    fallback={
+      <Show
+        when={props.block.kind === "list"}
+        fallback={
+          <Show
+            when={props.block.kind === "code"}
+            fallback={<p>{renderInline((props.block as { text: string }).text)}</p>}
+          >
+            <pre>
+              <code>{(props.block as { text: string }).text}</code>
+            </pre>
+          </Show>
+        }
+      >
+        <ul>
+          <For each={(props.block as { items: string[] }).items}>
+            {(item) => <li>{renderInline(item)}</li>}
+          </For>
+        </ul>
+      </Show>
+    }
+  >
+    <HeadingTag block={props.block as { level: 1 | 2 | 3; text: string }} />
+  </Show>
+);
+
+// Solid doesn't support a string-typed dynamic JSX tag cleanly; explicit
+// dispatch is verbose but keeps the type narrowing intact.
 const HeadingTag = (props: { block: { level: 1 | 2 | 3; text: string } }) => (
   <Show
     when={props.block.level === 1}

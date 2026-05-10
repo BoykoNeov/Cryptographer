@@ -10,7 +10,7 @@
  */
 
 import type { MatrixState, TraceFrame } from "@/core/types";
-import { Show } from "solid-js";
+import { Show, createMemo } from "solid-js";
 import { getTrace, setFrame, useFrameIndex, useTraceVersion } from "../stores/trace";
 import { TinyMatrix } from "./TinyMatrix";
 
@@ -18,13 +18,16 @@ export const StepStrip = () => {
   const frameIndex = useFrameIndex();
   const version = useTraceVersion();
 
-  // Resolve the three frames once per render. Reading the version signal
-  // ensures we recompute whenever the trace itself is replaced.
-  const frames = (): {
+  // Memoize the {prev, current, next} triple. Without createMemo, each
+  // <Thumbnail frame={…().prev|.current|.next}> binding would recompute the
+  // object independently — three trace lookups per render where one suffices.
+  const neighborhood = createMemo<{
     prev: TraceFrame | null;
     current: TraceFrame | null;
     next: TraceFrame | null;
-  } => {
+  }>(() => {
+    // Track the version signal so the memo invalidates when the trace
+    // is replaced (e.g. after a spec edit triggers a rerun).
     void version();
     const t = getTrace();
     if (!t) return { prev: null, current: null, next: null };
@@ -34,13 +37,21 @@ export const StepStrip = () => {
       current: t.frames[i] ?? null,
       next: t.frames[i + 1] ?? null,
     };
-  };
+  });
 
   return (
     <div class="step-strip">
-      <Thumbnail frame={frames().prev} position="prev" onClick={() => setFrame(frameIndex() - 1)} />
-      <Thumbnail frame={frames().current} position="current" />
-      <Thumbnail frame={frames().next} position="next" onClick={() => setFrame(frameIndex() + 1)} />
+      <Thumbnail
+        frame={neighborhood().prev}
+        position="prev"
+        onClick={() => setFrame(frameIndex() - 1)}
+      />
+      <Thumbnail frame={neighborhood().current} position="current" />
+      <Thumbnail
+        frame={neighborhood().next}
+        position="next"
+        onClick={() => setFrame(frameIndex() + 1)}
+      />
     </div>
   );
 };
