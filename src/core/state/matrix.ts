@@ -18,12 +18,7 @@ export const cloneMatrix = (m: MatrixState): MatrixState => ({
 export const matAt = (m: MatrixState, row: number, col: number): number =>
   m.bytes[row + 4 * col] ?? 0;
 
-export const setMatAt = (
-  buf: Uint8Array,
-  row: number,
-  col: number,
-  value: number,
-): void => {
+export const setMatAt = (buf: Uint8Array, row: number, col: number, value: number): void => {
   buf[row + 4 * col] = value & 0xff;
 };
 

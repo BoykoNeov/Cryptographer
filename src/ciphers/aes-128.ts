@@ -1,10 +1,5 @@
 import type { CipherSpec, StepNode } from "../core/types";
-import {
-  AES_MIX_MATRIX,
-  AES_RCON,
-  AES_SBOX,
-  AES_SHIFT_ROWS,
-} from "./aes-constants";
+import { AES_MIX_MATRIX, AES_RCON, AES_SBOX, AES_SHIFT_ROWS } from "./aes-constants";
 
 const ROUNDS = 10;
 

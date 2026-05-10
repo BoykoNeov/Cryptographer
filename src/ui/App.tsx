@@ -1,9 +1,9 @@
-import { Show, createMemo, createSignal } from "solid-js";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, MatrixState } from "@/core/types";
+import { Show, createMemo, createSignal } from "solid-js";
 import { MatrixView } from "./components/MatrixView";
 import { StepList } from "./components/StepList";
 import { TraceTimeline } from "./components/TraceTimeline";
@@ -73,11 +73,7 @@ export const App = () => {
         </label>
         <label>
           key (hex)
-          <input
-            value={key()}
-            onInput={(e) => setKey(e.currentTarget.value)}
-            spellcheck={false}
-          />
+          <input value={key()} onInput={(e) => setKey(e.currentTarget.value)} spellcheck={false} />
         </label>
         <button type="button" onClick={run}>
           encrypt

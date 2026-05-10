@@ -17,7 +17,11 @@ export const TraceTimeline = () => {
       <Show when={trace()} fallback={<span class="muted">no trace yet — run the cipher</span>}>
         {(t) => (
           <>
-            <button onClick={() => setFrame(frameIndex() - 1)} disabled={frameIndex() === 0}>
+            <button
+              type="button"
+              onClick={() => setFrame(frameIndex() - 1)}
+              disabled={frameIndex() === 0}
+            >
               ◀
             </button>
             <input
@@ -28,6 +32,7 @@ export const TraceTimeline = () => {
               onInput={(e) => setFrame(Number(e.currentTarget.value))}
             />
             <button
+              type="button"
               onClick={() => setFrame(frameIndex() + 1)}
               disabled={frameIndex() >= max()}
             >

@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { aes128Spec } from "@/ciphers/aes-128";
+import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
-import { aes128Spec } from "@/ciphers/aes-128";
-import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import type { AuxValue, StepNode } from "@/core/types";
+import { describe, expect, it } from "vitest";
 
 describe("AES-128 (FIPS-197 Appendix C.1)", () => {
   const plaintextHex = "00112233445566778899aabbccddeeff";
@@ -89,9 +89,7 @@ describe("AES-128 (FIPS-197 Appendix C.1)", () => {
     expect(initialAddFrame).toBeDefined();
     if (!initialAddFrame) return;
     if (initialAddFrame.stateAfter.shape !== "matrix4x4-bytes") return;
-    expect(hexFromBytes(initialAddFrame.stateAfter.bytes)).toBe(
-      "193de3bea0f4e22b9ac68d2ae9f84808",
-    );
+    expect(hexFromBytes(initialAddFrame.stateAfter.bytes)).toBe("193de3bea0f4e22b9ac68d2ae9f84808");
   });
 
   it("changes ciphertext when ShiftRows and MixColumns are reordered", () => {

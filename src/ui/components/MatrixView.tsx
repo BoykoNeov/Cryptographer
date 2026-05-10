@@ -1,5 +1,5 @@
-import { For } from "solid-js";
 import type { MatrixState } from "@/core/types";
+import { For } from "solid-js";
 
 type Props = {
   before: MatrixState;

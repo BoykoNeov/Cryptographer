@@ -1,5 +1,5 @@
-import type { Json, MatrixState, StepExecutor } from "../core/types";
 import { gfMul, matAt, setMatAt } from "../core/state/matrix";
+import type { Json, MatrixState, StepExecutor } from "../core/types";
 
 /**
  * Multiply each column of the 4x4 state by a 4x4 GF(2^8) matrix.

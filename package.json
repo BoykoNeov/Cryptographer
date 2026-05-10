@@ -11,7 +11,9 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "format": "biome format --write .",
-    "lint": "biome lint ."
+    "lint": "biome lint .",
+    "check": "biome ci . && npm run typecheck && npm test && vite build",
+    "prepare": "node scripts/install-git-hooks.mjs"
   },
   "dependencies": {
     "solid-js": "^1.9.3",

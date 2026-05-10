@@ -1,0 +1,39 @@
+# Continuous-integration gate. Runs the same `npm run check` the local
+# pre-commit hook runs, but on a clean Linux box with no caching tricks —
+# this is the gate of record for everything that lands on `main`.
+#
+# The pre-commit hook can be bypassed with `--no-verify`; this can't be
+# (without disabling the workflow). That's why we run both.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    name: lint + typecheck + test + build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      # `npm ci` is faster and stricter than `npm install` for CI: it
+      # requires package-lock.json and won't silently update it.
+      - name: Install dependencies
+        run: npm ci
+
+      # Single command that bundles formatting, lint, typecheck, tests,
+      # and build. Defined in package.json so local + CI stay in sync.
+      - name: Run all checks
+        run: npm run check

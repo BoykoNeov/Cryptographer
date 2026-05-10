@@ -1,5 +1,5 @@
-import { createSignal } from "solid-js";
 import type { Trace } from "@/core/types";
+import { createSignal } from "solid-js";
 
 /**
  * The trace itself lives outside the reactive system — only the index is

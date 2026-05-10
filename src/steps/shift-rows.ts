@@ -1,5 +1,5 @@
-import type { Json, MatrixState, StepExecutor } from "../core/types";
 import { matAt, setMatAt } from "../core/state/matrix";
+import type { Json, MatrixState, StepExecutor } from "../core/types";
 
 /**
  * Cyclically shift each row of the 4x4 state to the left by `shifts[r]` columns.

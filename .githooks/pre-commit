@@ -1,0 +1,19 @@
+#!/bin/sh
+# Pre-commit gate. Runs the same checks CI runs, so you find out about a
+# broken commit on YOUR machine in seconds rather than 30s after pushing.
+#
+# Bypass with `git commit --no-verify` if you genuinely need to commit
+# work-in-progress (the CI gate on push will still catch problems).
+#
+# Order matters: cheapest checks first, so a fast-failing one short-circuits
+# before the expensive build runs.
+#   1. biome ci         — formatting + lint (<1s)
+#   2. tsc --noEmit     — type errors (~3s)
+#   3. vitest run       — unit tests (~0.3s)
+#   4. vite build       — bundles cleanly (~3s)
+
+set -e
+
+echo "→ pre-commit: running npm run check"
+npm run check
+echo "✓ pre-commit: all checks passed"

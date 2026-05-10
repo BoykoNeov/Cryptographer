@@ -3,23 +3,13 @@
  * forever — changes here are breaking for any spec on disk.
  */
 
-export type Json =
-  | null
-  | boolean
-  | number
-  | string
-  | Json[]
-  | { [k: string]: Json };
+export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 
 // ─── State ────────────────────────────────────────────────────────────────
 // Discriminated union. Each variant carries the bytes plus enough shape
 // metadata for the UI to pick the right view without a runtime cast.
 
-export type StateShape =
-  | "bytes"
-  | "matrix4x4-bytes"
-  | "bitvec"
-  | "bigint";
+export type StateShape = "bytes" | "matrix4x4-bytes" | "bitvec" | "bigint";
 
 export type BytesState = {
   readonly shape: "bytes";
@@ -56,22 +46,22 @@ export type Aux = ReadonlyMap<string, AuxValue>;
 
 export type StepLeaf = {
   readonly kind: "step";
-  readonly id: string;          // unique within spec; UI references this
-  readonly type: string;         // registry key, e.g. "aes.sub-bytes@1"
+  readonly id: string; // unique within spec; UI references this
+  readonly type: string; // registry key, e.g. "aes.sub-bytes@1"
   readonly params: Json;
 };
 
 export type StepGroup = {
   readonly kind: "group";
   readonly id: string;
-  readonly label: string;        // "Round 1", "Key Expansion"
+  readonly label: string; // "Round 1", "Key Expansion"
   readonly children: readonly StepNode[];
 };
 
 export type StepNode = StepLeaf | StepGroup;
 
 export type CipherSpec = {
-  readonly id: string;             // "aes-128@1"
+  readonly id: string; // "aes-128@1"
   readonly name: string;
   readonly stateShape: StateShape;
   /** Inputs the runtime needs to seed the state and aux map. */
@@ -121,8 +111,4 @@ export type StepResult = {
   readonly auxReads?: readonly string[];
 };
 
-export type StepExecutor = (
-  state: State,
-  params: Json,
-  ctx: StepContext,
-) => StepResult;
+export type StepExecutor = (state: State, params: Json, ctx: StepContext) => StepResult;

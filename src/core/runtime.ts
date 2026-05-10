@@ -1,14 +1,6 @@
-import { cloneState } from "./state/clone";
-import type {
-  Aux,
-  AuxValue,
-  CipherSpec,
-  State,
-  StepNode,
-  Trace,
-  TraceFrame,
-} from "./types";
 import type { StepRegistry } from "./registry";
+import { cloneState } from "./state/clone";
+import type { Aux, AuxValue, CipherSpec, State, StepNode, Trace, TraceFrame } from "./types";
 
 export type RuntimeInput = {
   readonly initialState: State;
@@ -24,11 +16,7 @@ export type RuntimeInput = {
  * The runtime is the only place that knows about tracing, mutation of the
  * aux map, or frame indexing.
  */
-export const runSpec = (
-  spec: CipherSpec,
-  registry: StepRegistry,
-  input: RuntimeInput,
-): Trace => {
+export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: RuntimeInput): Trace => {
   const frames: TraceFrame[] = [];
   let state: State = cloneState(input.initialState);
   const aux = new Map<string, AuxValue>(input.initialAux ?? []);
