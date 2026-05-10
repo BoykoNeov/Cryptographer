@@ -1,0 +1,8 @@
+node_modules
+dist
+.DS_Store
+*.log
+.vite
+
+# Per-user Claude Code overrides — should not be committed
+.claude/settings.local.json
