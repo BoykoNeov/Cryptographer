@@ -1,18 +1,44 @@
 #!/bin/sh
-# Pre-commit gate. Runs the same checks CI runs, so you find out about a
-# broken commit on YOUR machine in seconds rather than 30s after pushing.
+# Pre-commit gate. Two parts:
 #
-# Bypass with `git commit --no-verify` if you genuinely need to commit
-# work-in-progress (the CI gate on push will still catch problems).
+#   (a) Step-coverage rule — if a new file is added under src/steps/, this
+#       commit MUST also touch a tests/*.test.ts file. Catches the most
+#       common silent failure: adding a step type with no test coverage.
+#       Bypass with `git commit --no-verify` for genuine non-implementation
+#       additions (constants files, comments, etc.).
 #
-# Order matters: cheapest checks first, so a fast-failing one short-circuits
-# before the expensive build runs.
-#   1. biome ci         — formatting + lint (<1s)
-#   2. tsc --noEmit     — type errors (~3s)
-#   3. vitest run       — unit tests (~0.3s)
-#   4. vite build       — bundles cleanly (~3s)
+#   (b) The full quality gate — biome ci, typecheck, vitest, vite build.
+#       Same checks CI runs, so problems surface in seconds locally
+#       instead of 30s after pushing.
+#
+# Order matters: (a) is a fast metadata check; (b) is multiple seconds.
+# Failing fast on missing-test commits saves rerunning the full gate.
 
 set -e
+
+# ─── (a) Step-coverage rule ──────────────────────────────────────────────
+# Files newly added under src/steps/ must be accompanied by test changes.
+# CLAUDE.md and other non-.ts files in that dir are exempt by the regex.
+
+NEW_STEPS=$(git diff --cached --name-only --diff-filter=A 2>/dev/null \
+  | grep -E '^src/steps/.*\.ts$' || true)
+
+if [ -n "$NEW_STEPS" ]; then
+  TEST_TOUCHED=$(git diff --cached --name-only 2>/dev/null \
+    | grep -E '^tests/.*\.test\.ts$' || true)
+  if [ -z "$TEST_TOUCHED" ]; then
+    echo ""
+    echo "✗ pre-commit: new step file(s) staged but no tests/*.test.ts modified:"
+    echo "$NEW_STEPS" | sed 's/^/    /'
+    echo ""
+    echo "  Add or update a test in tests/ that exercises the new step,"
+    echo "  then commit again. To bypass for non-implementation additions,"
+    echo "  use: git commit --no-verify"
+    exit 1
+  fi
+fi
+
+# ─── (b) Full quality gate ───────────────────────────────────────────────
 
 echo "→ pre-commit: running npm run check"
 npm run check
