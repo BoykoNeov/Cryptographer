@@ -1,17 +1,15 @@
 /**
- * App shell. Owns:
- *   - The plaintext/key/mode form
- *   - The "run" trigger and its debounced auto-rerun on spec edits
- *   - Layout for trace timeline, matrix view, step list, and ParamEditor
+ * App shell. Owns the input form, the run trigger, the debounced auto-rerun
+ * on spec edits, and the layout for everything below: timeline, neighborhood
+ * strip, matrix view, step description, and the editable param editor.
  *
- * The interesting wiring is the createEffect at the bottom of App: when
- * the user edits the spec via ParamEditor, the spec signal changes; the
- * effect notices, debounces 200ms (so 256-cell S-box edits don't hammer
- * the runtime), and re-runs the trace. That's the "swap a value, watch
- * the trace update" loop the modularity demo lives on.
+ * The interesting wiring is the createEffect at the bottom: when the user
+ * edits the spec via ParamEditor, the spec signal changes; the effect
+ * notices, debounces 200ms (so 256-cell S-box edits don't hammer the
+ * runtime), and re-runs the trace. That's the "swap a value, watch the
+ * trace update" loop the modularity demo lives on.
  */
 
-import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
@@ -19,8 +17,12 @@ import type { AuxValue, MatrixState } from "@/core/types";
 import { Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { MatrixView } from "./components/MatrixView";
 import { ParamEditor } from "./components/ParamEditor";
+import { StepDescription } from "./components/StepDescription";
 import { StepList } from "./components/StepList";
+import { StepStrip } from "./components/StepStrip";
 import { TraceTimeline } from "./components/TraceTimeline";
+import { installKeyboardShortcuts } from "./stores/keyboard";
+import { registry } from "./stores/registry";
 import { resetSpec, setMode, useMode, useSpec } from "./stores/spec";
 import { getTrace, setTrace, useFrameIndex, useTraceVersion } from "./stores/trace";
 import "./app.css";
@@ -50,8 +52,9 @@ export const App = () => {
   // throwing parse errors at the user before they've even hit "run."
   const [hasRunOnce, setHasRunOnce] = createSignal(false);
 
-  // Build the registry once. It's pure config — no per-render recompute.
-  const registry = buildDefaultRegistry();
+  // Wire window-level keyboard shortcuts (←/→ scrub, Home/End, PageUp/Down).
+  // Tied to App's lifecycle via onCleanup inside the helper.
+  installKeyboardShortcuts();
 
   /**
    * Run the current spec with the current inputs, push the resulting trace
@@ -123,6 +126,7 @@ export const App = () => {
       <header>
         <h1>Cryptographer</h1>
         <span class="cipher-name">{spec().name}</span>
+        <span class="muted small kbd-hint">←/→ step · Home/End jump · PgUp/PgDn round</span>
       </header>
 
       {/* ─── Inputs row ─────────────────────────────────────────────── */}
@@ -175,7 +179,7 @@ export const App = () => {
       {/* ─── Trace timeline scrubber ─────────────────────────────────── */}
       <TraceTimeline />
 
-      {/* ─── Matrix view + ParamEditor (active step) ─────────────────── */}
+      {/* ─── Main trace view: strip, matrix, description, editor ─────── */}
       <section class="trace-view">
         <Show
           when={currentFrame()}
@@ -183,6 +187,8 @@ export const App = () => {
         >
           {(frame) => (
             <>
+              {/* Frame header: full path/id (the strip below shows
+                  shortened labels; this is the unambiguous reference). */}
               <div class="frame-header">
                 <span class="frame-step">
                   {frame().path.length > 0 ? `${frame().path.join(" › ")} › ` : ""}
@@ -191,6 +197,10 @@ export const App = () => {
                 <span class="frame-type">{frame().stepType}</span>
               </div>
 
+              {/* Neighborhood strip: prev / current / next thumbnails. */}
+              <StepStrip />
+
+              {/* Matrix view of the current step's before/after state. */}
               <Show
                 when={
                   frame().stateBefore.shape === "matrix4x4-bytes" &&
@@ -204,15 +214,17 @@ export const App = () => {
                 />
               </Show>
 
-              {/* ParamEditor sits below the state view so users can edit
-                  the very step they're inspecting. */}
+              {/* Human-readable explanation of what this step does. */}
+              <StepDescription frame={frame()} />
+
+              {/* Editable params for the current step. */}
               <ParamEditor frame={frame()} />
             </>
           )}
         </Show>
       </section>
 
-      {/* ─── Sidebar: full step list ─────────────────────────────────── */}
+      {/* ─── Sidebar: collapsible step tree ─────────────────────────── */}
       <aside class="step-list-pane">
         <h2>steps</h2>
         <StepList />

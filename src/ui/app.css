@@ -472,3 +472,336 @@ button:disabled {
   outline: none;
   border-color: var(--accent);
 }
+
+/* ─── Header keyboard hint ────────────────────────────────────────────── */
+.kbd-hint {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+/* ─── Step strip (prev/current/next) ──────────────────────────────────── */
+.step-strip {
+  display: grid;
+  grid-template-columns: 1fr 1.5fr 1fr;
+  gap: 12px;
+  padding: 12px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.step-thumb {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  min-height: 160px;
+}
+
+.step-thumb-current {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.step-thumb-edge {
+  opacity: 0.5;
+}
+
+.step-thumb-clickable {
+  cursor: pointer;
+  transition: border-color 0.1s;
+}
+
+.step-thumb-clickable:hover {
+  border-color: var(--accent);
+}
+
+.step-thumb-position {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.step-thumb-current .step-thumb-position {
+  color: var(--accent);
+}
+
+.step-thumb-label {
+  font-size: 12px;
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.step-thumb-type {
+  font-size: 10px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.step-thumb-empty {
+  font-size: 11px;
+  font-style: italic;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ─── Tiny matrix (used inside step thumbnails) ───────────────────────── */
+.tiny-matrix {
+  display: grid;
+  grid-template-rows: repeat(4, 22px);
+  grid-template-columns: repeat(4, 28px);
+  gap: 1px;
+  background: var(--border);
+  padding: 1px;
+  border-radius: 2px;
+  width: max-content;
+}
+
+.tiny-cell {
+  background: var(--bg-elev-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+/* ─── Step description (markdown rendered docs) ───────────────────────── */
+.step-description {
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.step-description-empty {
+  padding: 12px;
+  font-style: italic;
+}
+
+.step-description-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-left: 3px solid var(--accent);
+  padding-left: 12px;
+}
+
+.step-description-name {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.step-description-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.step-description-body {
+  font-size: 13px;
+  line-height: 1.55;
+  max-width: 70ch;
+}
+
+.step-description-params,
+.step-description-refs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.step-description-params h3,
+.step-description-refs h3 {
+  margin: 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.step-description-params dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 12px;
+  margin: 0;
+}
+
+.step-description-params dt {
+  font-family: inherit;
+}
+
+.step-description-params dd {
+  margin: 0;
+  color: var(--text);
+}
+
+.step-description-params code {
+  background: var(--bg-elev-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.step-description-refs ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+/* ─── Markdown rendering ──────────────────────────────────────────────── */
+.markdown {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  margin: 8px 0 0 0;
+  font-weight: 600;
+}
+
+.markdown h1 {
+  font-size: 16px;
+}
+
+.markdown h2 {
+  font-size: 14px;
+}
+
+.markdown h3 {
+  font-size: 13px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.markdown p {
+  margin: 0;
+}
+
+.markdown ul {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.markdown code {
+  background: var(--bg-elev-2);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.92em;
+  letter-spacing: 0.02em;
+}
+
+.markdown strong {
+  color: #d6e1ff;
+  font-weight: 600;
+}
+
+.markdown pre {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px;
+  margin: 0;
+  overflow-x: auto;
+  font-size: 12px;
+}
+
+.markdown pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+/* ─── Step tree (collapsible groups in sidebar) ───────────────────────── */
+.step-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.group-row {
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  gap: 6px;
+  align-items: center;
+  text-align: left;
+  padding: 5px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.group-row:hover {
+  background: var(--bg-elev-2);
+}
+
+.group-row.on-path {
+  color: var(--accent);
+}
+
+.group-chevron {
+  font-size: 9px;
+  color: var(--muted);
+}
+
+.group-label {
+  font-size: 11px;
+}
+
+.group-count {
+  font-size: 10px;
+}
+
+.step-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1px;
+  text-align: left;
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.step-row:hover:not(:disabled) {
+  background: var(--bg-elev-2);
+}
+
+.step-row.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.step-row.disabled {
+  opacity: 0.4;
+}
+
+.step-row-name {
+  font-size: 11px;
+}
+
+.step-row-type {
+  font-size: 9px;
+  color: var(--muted);
+  font-style: italic;
+}

@@ -1,4 +1,4 @@
-import type { AuxValue, Json, StepExecutor } from "../core/types";
+import type { AuxValue, Json, StepDocumentation, StepExecutor } from "../core/types";
 
 /**
  * AES-128 key expansion. FIPS-197 §5.2.
@@ -68,6 +68,52 @@ export const keyExpansion: StepExecutor = (state, params, ctx) => {
   }
 
   return { state, auxReads: [p.keyAuxName], auxWrites };
+};
+
+// ─── Documentation ────────────────────────────────────────────────────────
+
+export const keyExpansionDoc: StepDocumentation = {
+  name: "Key Expansion",
+  summary: "Derive 11 round keys (176 bytes total) from the 16-byte cipher key.",
+  detail: `## Key Expansion (AES-128)
+
+The 16-byte cipher key is expanded into **11 round keys** of 16 bytes
+each — one for the initial AddRoundKey, plus one per round (10 for AES-128).
+Total output: 176 bytes, written to aux as \`roundKey.0\` through
+\`roundKey.10\`. The state itself is unchanged by this step; the work
+product lives entirely in the aux map.
+
+The expansion is iterative. For most word indices \`i\`, the new word is
+\`w[i] = w[i-4] XOR w[i-1]\`. Every fourth word receives extra processing:
+
+1. **RotWord** — cyclic byte rotation of the previous word
+2. **SubWord** — apply the (forward) S-box to each byte
+3. **XOR with Rcon[i/4]** — round constant, defined as \`x^(i-1)\` in GF(2^8)
+
+This guarantees the round keys differ from each other in nontrivial ways
+even when the original key has structure (e.g. all zeros).
+
+**Notable detail:** key expansion uses the **forward** S-box even when
+we're decrypting. The inverse cipher consumes the same round keys in
+reverse order, but it does *not* re-derive them with the inverse S-box.
+That's why our forward and decryption specs share this step verbatim.`,
+  params: new Map([
+    ["keyAuxName", "Name of the aux entry containing the input cipher key (16 bytes for AES-128)."],
+    [
+      "outputPrefix",
+      'Prefix for the round-key aux entries. With prefix "roundKey", outputs are roundKey.0 … roundKey.10.',
+    ],
+    [
+      "sbox",
+      "Forward S-box used by the SubWord sub-step. Always the forward AES S-box, even when decrypting.",
+    ],
+    [
+      "rcon",
+      "Round-constant table. Index 0 is unused; indices 1..rounds carry the round constants.",
+    ],
+    ["rounds", "Number of cipher rounds. AES-128 uses 10."],
+  ]),
+  references: ["FIPS-197 §5.2 (Key Expansion)", "FIPS-197 Appendix A.1 (AES-128 example)"],
 };
 
 const rotWord = (w: Uint8Array): Uint8Array =>

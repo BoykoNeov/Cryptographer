@@ -1,5 +1,5 @@
 import { gfMul, matAt, setMatAt } from "../core/state/matrix";
-import type { Json, MatrixState, StepExecutor } from "../core/types";
+import type { Json, MatrixState, StepDocumentation, StepExecutor } from "../core/types";
 
 /**
  * Multiply each column of the 4x4 state by a 4x4 GF(2^8) matrix.
@@ -26,6 +26,52 @@ export const mixColumns: StepExecutor = (state, params) => {
   }
   const result: MatrixState = { shape: "matrix4x4-bytes", bytes: next };
   return { state: result };
+};
+
+// ─── Documentation ────────────────────────────────────────────────────────
+
+export const mixColumnsDoc: StepDocumentation = {
+  name: "Mix Columns",
+  summary: "Multiply each column of the state by a 4×4 matrix in GF(2^8).",
+  detail: `## Mix Columns
+
+Each of the four columns of the state is treated as a 4-byte vector and
+multiplied by a fixed 4×4 matrix. Arithmetic is over **GF(2^8)** — the
+finite field of 256 elements — using the irreducible polynomial
+\`x^8 + x^4 + x^3 + x + 1\`.
+
+Standard AES forward matrix is mostly small constants \`{1, 2, 3}\`:
+
+\`\`\`
+[2 3 1 1]
+[1 2 3 1]
+[1 1 2 3]
+[3 1 1 2]
+\`\`\`
+
+The inverse direction uses \`{9, 11, 13, 14}\`. Both are MDS matrices —
+maximum-distance-separable — meaning a change to a single input byte
+guarantees changes in **all four** output bytes.
+
+**Why it matters:** this is the column-level **diffusion** step. ShiftRows
+spread bytes between columns; MixColumns then spreads each column's
+content across all four bytes within it. Together they ensure full
+diffusion within two rounds of AES.
+
+**Try it:** replace the matrix with the identity and run encryption. AES
+becomes nothing more than SubBytes + ShiftRows + key XOR — a much weaker
+cipher, breakable by hand on a couple of round outputs.`,
+  params: new Map([
+    [
+      "matrix",
+      "Row-major 4×4 array of GF(2^8) coefficients (0..255). Forward AES uses {1,2,3} entries; inverse uses {9,11,13,14}.",
+    ],
+  ]),
+  references: [
+    "FIPS-197 §5.1.3 (MixColumns)",
+    "FIPS-197 §5.3.3 (InvMixColumns)",
+    "FIPS-197 §4.2 (GF(2^8) arithmetic)",
+  ],
 };
 
 const readMatrix = (params: Json): readonly (readonly number[])[] => {

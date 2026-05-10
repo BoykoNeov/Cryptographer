@@ -1,5 +1,5 @@
 import { matAt, setMatAt } from "../core/state/matrix";
-import type { Json, MatrixState, StepExecutor } from "../core/types";
+import type { Json, MatrixState, StepDocumentation, StepExecutor } from "../core/types";
 
 /**
  * Cyclically shift each row of the 4x4 state to the left by `shifts[r]` columns.
@@ -23,6 +23,37 @@ export const shiftRows: StepExecutor = (state, params) => {
   }
   const result: MatrixState = { shape: "matrix4x4-bytes", bytes: next };
   return { state: result };
+};
+
+// ─── Documentation ────────────────────────────────────────────────────────
+
+export const shiftRowsDoc: StepDocumentation = {
+  name: "Shift Rows",
+  summary: "Cyclically rotate each row of the 4×4 state by a fixed amount.",
+  detail: `## Shift Rows
+
+Each row \`r\` of the 4×4 state matrix is cyclically shifted **left** by
+\`shifts[r]\` columns. In standard AES forward this is \`[0, 1, 2, 3]\`
+(row 0 unchanged, row 1 shifted by 1, etc.). The inverse direction is
+\`[0, 3, 2, 1]\` (equivalent to shifting right by \`[0, 1, 2, 3]\`).
+
+**Why it matters:** the cipher state is column-oriented (MixColumns mixes
+within columns). ShiftRows is what spreads bytes across columns so a
+single byte's influence eventually reaches every output byte. Without it,
+each column would evolve independently and the cipher would be 4× weaker.
+
+This step is **purely a permutation** — no byte values change, only their
+positions. Combined with SubBytes (also byte-local) it provides
+*confusion*; combined with MixColumns (column-local) it provides
+*diffusion*. SubBytes and ShiftRows commute (try swapping them — the
+output is unchanged) because both are byte-position operations.`,
+  params: new Map([
+    [
+      "shifts",
+      "Array of 4 left-shift counts, one per row. AES uses [0,1,2,3] forward, [0,3,2,1] inverse.",
+    ],
+  ]),
+  references: ["FIPS-197 §5.1.2 (ShiftRows)", "FIPS-197 §5.3.1 (InvShiftRows)"],
 };
 
 const readShifts = (params: Json): readonly number[] => {

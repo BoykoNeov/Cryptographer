@@ -112,3 +112,37 @@ export type StepResult = {
 };
 
 export type StepExecutor = (state: State, params: Json, ctx: StepContext) => StepResult;
+
+// ─── Documentation ────────────────────────────────────────────────────────
+// Human-readable explanation of a step type. Lives next to the executor in
+// the registry so the UI can render a description for whatever step the
+// user is currently inspecting — without needing to know about specific
+// ciphers. New step types added by future ciphers describe themselves
+// automatically via this same shape.
+//
+// `detail` is a tiny markdown subset: paragraphs, **bold**, `code`,
+// # headings, and `- ` lists. See ui/components/Markdown.tsx for what
+// renders. Keep snippets short and educational.
+
+export type StepDocumentation = {
+  /** Human-readable name (e.g. "Byte Substitution"). */
+  readonly name: string;
+  /** One-liner shown next to the step in compact contexts. */
+  readonly summary: string;
+  /** Long-form markdown shown in the description panel. */
+  readonly detail: string;
+  /** Optional explanation for each parameter the step accepts. */
+  readonly params?: ReadonlyMap<string, string>;
+  /** Optional spec/standard references (e.g. "FIPS-197 §5.1.1"). */
+  readonly references?: readonly string[];
+};
+
+/**
+ * Combined unit registered for each step type: the runtime executor plus
+ * (optionally) human-readable docs. Existing call sites can still register
+ * by passing just an executor — the registry coerces it to this shape.
+ */
+export type StepDefinition = {
+  readonly executor: StepExecutor;
+  readonly doc?: StepDocumentation;
+};

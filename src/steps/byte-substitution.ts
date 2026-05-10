@@ -1,4 +1,4 @@
-import type { Json, MatrixState, StepExecutor } from "../core/types";
+import type { Json, MatrixState, StepDocumentation, StepExecutor } from "../core/types";
 
 /**
  * Generic byte substitution: replace every byte b with sbox[b].
@@ -18,6 +18,42 @@ export const byteSubstitution: StepExecutor = (state, params) => {
   }
   const result: MatrixState = { shape: "matrix4x4-bytes", bytes: next };
   return { state: result };
+};
+
+// ─── Documentation ────────────────────────────────────────────────────────
+// Generic explanation of what byte substitution does. Intentionally not
+// AES-specific — this same step type is used for SubBytes and InvSubBytes
+// in AES, and any future cipher that does table-driven byte substitution
+// can plug in its own S-box and reuse all of this.
+
+export const byteSubstitutionDoc: StepDocumentation = {
+  name: "Byte Substitution",
+  summary: "Replace every byte using a 256-entry lookup table.",
+  detail: `## Byte Substitution
+
+Each byte \`b\` of the state is replaced with \`sbox[b]\`, where \`sbox\` is a
+256-entry permutation provided as a parameter. The substitution is applied
+**independently** to every byte, so this step is purely position-preserving
+and purely byte-local.
+
+**Why it matters:** when the lookup table is *non-linear* (i.e. the function
+\`b → sbox[b]\` is not affine over GF(2)), this is the only step in many
+modern ciphers that resists differential and linear cryptanalysis. The
+non-linearity is what makes the cipher resemble a random function rather
+than a structured algebraic one.
+
+In **AES** this step is called **SubBytes** (FIPS-197 §5.1.1). The AES S-box
+is constructed from the multiplicative inverse in GF(2^8) followed by an
+affine transformation over GF(2). Swapping it for the identity permutation
+(try it!) breaks the cipher's security entirely while leaving the structure
+intact.`,
+  params: new Map([
+    [
+      "sbox",
+      "256-entry array of bytes (0..255). Indexing it must produce a permutation for the cipher to be invertible.",
+    ],
+  ]),
+  references: ["FIPS-197 §5.1.1 (SubBytes)", "FIPS-197 §5.3.2 (InvSubBytes)"],
 };
 
 const readSbox = (params: Json): readonly number[] => {
