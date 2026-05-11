@@ -94,6 +94,8 @@ For step-type-specific guidance (adding new ones), see `src/steps/CLAUDE.md`.
 - **Key expansion uses the FORWARD S-box, even when decrypting.** The inverse cipher consumes the same round keys in reverse order; it does not re-derive them with the inverse S-box. Both `aes-128.ts` and `aes-128-decrypt.ts` share the same `key-expansion` step verbatim.
 - **Don't redirect native command stderr in PowerShell with `2>&1`.** PowerShell 5.1 wraps stderr lines in `NativeCommandError` records and sets `$?` to false even on success exit code 0. Capture stdout only, or merge in a different way.
 - **Solid components must use `createMemo` for derived values** read multiple times in JSX. A plain function gets evaluated independently per access; that's three trace lookups per render in the worst case.
+- **Solid `For` callbacks aren't reactive scopes** — a `const value = formatByte(..., props.format)` captured outside the JSX is computed once when the item is added. Inline the dynamic call into the JSX (`{formatByte(..., props.format)}`) so prop changes propagate. We've hit this in `MatrixView.tsx`: refactoring cell-value computation into a const broke the format-toggle reactivity.
+- **Don't set `display:` on the bare `.modal` rule for a native `<dialog>`.** The UA stylesheet's `dialog:not([open]) { display: none }` is what hides the closed modal; overriding with `display: flex` makes the dialog visible at ALL times, obscuring the rest of the page. Put flex layout on an inner wrapper (`.modal-inner`) and let the UA rule handle visibility. The backdrop is the native `::backdrop` pseudo, not a separate element.
 
 ## Planning mode usage
 

@@ -10,7 +10,7 @@
 |---|---|---|
 | 1 — preserve current frame across re-runs | ✅ done 2026-05-11 | `943b28e` |
 | 3 — byte format toggle (hex/decimal/ASCII) | ✅ done 2026-05-11 | `96c1a1b` impl + `400de9b` jsdom component tests |
-| 2 — run history + diff visualization | ✅ done 2026-05-11 | `63c7abe` (2a + 2b) + this batch (2c + 2d) |
+| 2 — run history + diff visualization | ✅ done 2026-05-11 | `63c7abe` (2a + 2b) · `c442beb` (2c + 2d) · `3f518a3` (CSS fix: dialog UA-display gotcha) |
 | 4 — 2D / DAG visualization | deferred (joint design with binary export) | — |
 
 Test count grew 30 → 117 across 11 files. Bundle: 18KB → 23KB gzipped JS. Phase 2 added the run-history store (`src/ui/stores/history.ts`), the `compareSpecs` helper (`src/core/spec-mutations.ts`), and the Run Explorer modal (`src/ui/components/RunExplorerModal.tsx`) with a pure delta-string formatter split out for fast node-env tests (`src/ui/components/run-delta-format.ts`).
