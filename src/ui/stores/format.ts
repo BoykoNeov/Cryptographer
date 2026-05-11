@@ -46,3 +46,18 @@ export const setByteFormat = (fmt: ByteFormat): void => {
     // works — just won't survive reload. Not worth surfacing to the user.
   }
 };
+
+/**
+ * Reset back to default ("hex") and clear localStorage. Tests use this to
+ * isolate cases that swap formats — production code never calls it.
+ */
+export const __resetByteFormatForTests = (): void => {
+  setByteFormatSignal("hex");
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.removeItem(STORAGE_KEY);
+    }
+  } catch {
+    // Ignore.
+  }
+};
