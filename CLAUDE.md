@@ -7,10 +7,10 @@ Interactive cryptography explorer. The user enters plaintext + key, sees every i
 | Command | What it does |
 |---|---|
 | `npm run dev` | Vite dev server at `http://localhost:5173`. Hot-reloads on file changes. |
-| `npm test` | Vitest, single run. Currently 30 tests, ~300ms total. |
+| `npm test` | Vitest, single run. Currently 92 tests across 9 files, ~1.4s total (jsdom UI tests dominate). |
 | `npm run typecheck` | `tsc --noEmit`, strict. |
 | `npm run check` | The gate: `biome ci . && tsc --noEmit && vitest run && vite build`. Runs in ~6s on this machine. |
-| `npm run build` | Production build into `dist/`. ~18KB gzipped JS. |
+| `npm run build` | Production build into `dist/`. ~20KB gzipped JS. |
 
 The pre-commit hook in `.githooks/pre-commit` runs `npm run check`. GitHub Actions in `.github/workflows/ci.yml` runs the same on push. Don't bypass with `--no-verify` unless you have a specific reason; both gates exist for a reason.
 
@@ -45,19 +45,40 @@ The future "binary export" feature is what *forced* the spec-as-data choice: a c
 
 **Param editing in the UI:** when the user edits a step's params, the spec store creates a new spec via the helpers in `src/core/spec-mutations.ts` (which preserve reference equality on untouched branches). A `createEffect(on(spec, ...))` then debounces 200ms before re-running the cipher and producing a new trace.
 
+**Frame preservation across re-runs:** `src/ui/stores/trace.ts::setTrace` is the single boundary that swaps in a new trace. It captures the current `stepId` and tries to land the scrubber back on the same step in the new trace; if that stepId is gone, it clamps the previous numeric index. Universal — every cipher's traces flow through this same boundary, so a future Speck/ChaCha20/RSA inherits the behavior for free.
+
+**Byte format toggle:** `src/core/format.ts` defines `ByteFormat = "hex" | "decimal" | "ascii"` plus the `formatByte`/`parseByte` round-trip pair. `src/ui/stores/format.ts` holds the active format (persisted in `localStorage`). Every byte-rendering site reads the store; the App-level toggle does an in-place re-render of the input/key fields (parse with old → format with new) so the user's data survives. S-box axis labels stay hex regardless — they're addresses, not values.
+
+**UI testing:** Most tests run in vitest's `node` environment (fast, no DOM). UI component tests opt into jsdom with a `// @vitest-environment jsdom` directive at the top of the file, then use `@solidjs/testing-library`. The Solid plugin needs `resolve.conditions: ["development", "browser"]` and `server.deps.inline: [/solid-js/]` in `vite.config.ts` — without those, `createSignal` throws "Client-only API called on the server side." Module-scope signals in stores produce a harmless "computations created outside createRoot" warning during tests; ignore.
+
 ## Key files (load-bearing)
 
+**Core (load-bearing contracts):**
 - `src/core/types.ts` — `CipherSpec`, `StepNode`, `State` variants, `TraceFrame`, `StepDocumentation`. Saved JSON references these shapes forever; changes here are breaking.
 - `src/core/runtime.ts` — the walk-and-trace engine. Pure given a registry.
 - `src/core/registry.ts` — `StepRegistry`. Maps stepType → `{ executor, doc }`.
 - `src/core/spec-mutations.ts` — `findStep`, `updateStepParams`, `updateAllStepsByType`. Pure spec-in/spec-out.
+- `src/core/format.ts` — `ByteFormat`, `formatByte`/`parseByte`/`formatBytes`/`parseBytes`/`parseBytesWithLength`. Consumed by every byte-rendering site.
+
+**Ciphers:**
 - `src/ciphers/default-registry.ts` — wires every step type. Adding a new step means editing this.
 - `src/ciphers/aes-128.ts`, `src/ciphers/aes-128-decrypt.ts` — the two real cipher specs.
 - `src/ciphers/aes-constants.ts` — AES_SBOX, AES_INV_SBOX, AES_RCON, AES_MIX_MATRIX, AES_INV_MIX_MATRIX, AES_SHIFT_ROWS, AES_INV_SHIFT_ROWS.
+
+**UI stores (singletons; module-scope signals on purpose):**
+- `src/ui/stores/trace.ts` — current trace + frame index, `setTrace` preserves focus by stepId across re-runs.
+- `src/ui/stores/format.ts` — active byte format, persisted in `localStorage`.
+- `src/ui/stores/spec.ts` — current spec + cipher mode (encrypt/decrypt).
+- `src/ui/components/ByteCellInput.tsx` — format-aware editable byte cell. Width adapts (hex=2/dec=3/ASCII=4 chars). Used by SboxEditor (16x16) and MatrixEditor (4x4).
+
+**Tests:**
 - `tests/aes-vectors.test.ts` — FIPS-197 Appendix C.1 and B known-answer tests for forward AES.
 - `tests/aes-decrypt.test.ts` — round-trip + decryption tests.
 - `tests/spec-mutations.test.ts` — spec mutation helpers + the headline "swap S-box → ciphertext changes" modularity test.
 - `tests/markdown.test.ts` — parser tests for the step-doc renderer.
+- `tests/format.test.ts` — byte format core (round-trip, validation, length errors).
+- `tests/trace-frame-preservation.test.ts` — `setTrace` keeps the scrubber on the same stepId across re-runs.
+- `tests/byte-cell-input.test.tsx`, `tests/matrix-view.test.tsx`, `tests/app-format-toggle.test.tsx` — jsdom component tests for the format toggle (the `.tsx` files run in jsdom; see Conventions).
 
 For step-type-specific guidance (adding new ones), see `src/steps/CLAUDE.md`.
 

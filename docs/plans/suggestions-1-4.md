@@ -1,8 +1,19 @@
 # UX/feature suggestions plan — Phases 1–4
 
 **Date:** 2026-05-11
-**Status:** Approved; execution deferred to a future session.
+**Status:** Phase 1 ✅ done · Phase 3 ✅ done · Phase 2 ⏳ next · Phase 4 deferred.
 **Source:** Conversation between the user and Claude on 2026-05-11.
+
+## Progress log
+
+| Phase | Status | Commits |
+|---|---|---|
+| 1 — preserve current frame across re-runs | ✅ done 2026-05-11 | `943b28e` |
+| 3 — byte format toggle (hex/decimal/ASCII) | ✅ done 2026-05-11 | `96c1a1b` impl + `400de9b` jsdom component tests |
+| 2 — run history + diff visualization | ⏳ next | — |
+| 4 — 2D / DAG visualization | deferred (joint design with binary export) | — |
+
+Test count grew 30 → 92 across 9 files. Bundle: 18KB → 20KB gzipped JS. The jsdom + `@solidjs/testing-library` setup added in commit `400de9b` is reusable for any future UI test (per-file `// @vitest-environment jsdom` directive).
 
 ## Context
 
