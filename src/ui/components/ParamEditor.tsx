@@ -88,6 +88,9 @@ export const ParamEditor = (props: Props) => {
             <Match when={getStep().type === "generic.add-round-key@1"}>
               <AddRoundKeyBlock step={getStep()} matchingCount={matchingSteps()} />
             </Match>
+            <Match when={BLOCK_SIZE_PARAM_TYPES.has(getStep().type)}>
+              <BlockSizeBlock step={getStep()} matchingCount={matchingSteps()} />
+            </Match>
           </Switch>
         </div>
       )}
@@ -258,6 +261,45 @@ const KeyExpansionBlock = (props: BlockProps) => {
         label="key-expansion params"
       />
     </>
+  );
+};
+
+// Padding-family + load/store block-size block.
+//
+// All of these steps share a single { blockSize: number } param. The raw
+// JSON fallback rendered three lines for that one fact. One read-only
+// scalar row matches the look of the AddRoundKey block.
+//
+// Why read-only:
+//  - load-block hard-asserts blockSize === 16; anything else throws.
+//  - pkcs7-pad / zero-pad / iso7816-4-pad will run with any 1..255 value,
+//    but the App's Run handler caps input length based on the *active
+//    padding scheme* (paddingLimits in stores/padding.ts), not this
+//    param, so editing it here just produces a downstream length mismatch
+//    at load-block.
+// Multi-block + non-AES block sizes will unlock genuine editability when
+// the cipher modes (ECB/CBC/CTR/GCM) feature lands.
+const BLOCK_SIZE_PARAM_TYPES = new Set([
+  "generic.pkcs7-pad@1",
+  "generic.pkcs7-unpad@1",
+  "generic.zero-pad@1",
+  "generic.zero-unpad@1",
+  "generic.iso7816-4-pad@1",
+  "generic.iso7816-4-unpad@1",
+  "generic.load-block@1",
+  "generic.store-block@1",
+]);
+
+const BlockSizeBlock = (props: BlockProps) => {
+  const params = (): { blockSize?: number } => props.step.params as never;
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>Block size</dt>
+        <dd>{params().blockSize ?? "—"} bytes</dd>
+      </div>
+    </dl>
   );
 };
 
