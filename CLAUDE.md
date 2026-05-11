@@ -97,5 +97,6 @@ If a future need argues for one of these, revisit then.
 ## Pointers
 
 - Original architectural plan: `~/.claude/plans/i-want-to-build-tender-spark.md`
+- Approved UX/feature plan (phases 1–4: frame preservation, run history + diff, byte format toggle, deferred 2D viz): `docs/plans/suggestions-1-4.md`
 - User preferences (commit cadence, comment density): saved as feedback memories under `C:\Users\boiko\.claude\projects\M--claud-projects-Cryptographer\memory\`
 - GitHub repo: https://github.com/BoykoNeov/Cryptographer
