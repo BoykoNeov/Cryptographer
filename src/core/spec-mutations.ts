@@ -109,6 +109,26 @@ export const updateAllStepsByType = (
 
 // ─── Comparing two specs ──────────────────────────────────────────────────
 
+/**
+ * A single per-cell change inside a numeric-array param (S-box entry,
+ * MixColumns matrix cell, shift offset, …). Two flavors:
+ *   • `kind: "1d"` for flat number arrays — `index` is the array offset
+ *     (used for shifts, rcon, and other small flat tables).
+ *   • `kind: "2d"` for nested 2D number arrays (MixColumns matrix) AND for
+ *     flat-256 byte tables (AES-style S-box) where the canonical view is
+ *     a 16×16 grid. `compareSpecs` decomposes index → (row, col) at diff
+ *     time so consumers don't need to know the source shape.
+ */
+export type ParamCellDiff =
+  | { readonly kind: "1d"; readonly index: number; readonly from: number; readonly to: number }
+  | {
+      readonly kind: "2d";
+      readonly row: number;
+      readonly col: number;
+      readonly from: number;
+      readonly to: number;
+    };
+
 /** A single param-level difference between two specs. */
 export type SpecParamDiff = {
   /** The leaf stepId where the change was observed (or `"*"` for tree-level changes). */
@@ -120,6 +140,28 @@ export type SpecParamDiff = {
    * spec-id mismatch ("(cipher swapped)") or trailing-length differences.
    */
   readonly paramName: string;
+  /**
+   * The step's `type` field at the diff site, when known. Optional because
+   * tree-level markers (`"(cipher swapped)"`, `"(structure)"`, trailing
+   * length deltas) don't have a single step. Currently unused by the
+   * formatter — kept so future presentations (e.g. "round.1 SubBytes
+   * S-box") can prefix human-readable labels without re-walking the spec.
+   */
+  readonly stepType?: string;
+  /**
+   * Populated when both sides of the diff are JSON scalars (number / string
+   * / boolean / null). The formatter renders these as "param X → Y".
+   */
+  readonly scalar?: { readonly from: Json; readonly to: Json };
+  /**
+   * Populated when both sides of the diff are number arrays of matching
+   * shape (flat OR 2D). The formatter renders these per-cell with row/col
+   * or index coordinates and uses the active ByteFormat for the values.
+   * An empty array here means the arrays compare equal AT THE NUMERIC
+   * LEVEL (shouldn't happen — `jsonEqual` would have short-circuited —
+   * but defended against in the consumer).
+   */
+  readonly cells?: readonly ParamCellDiff[];
 };
 
 /**
@@ -156,23 +198,123 @@ const jsonEqual = (a: Json, b: Json): boolean => {
 };
 
 /**
- * Enumerate the top-level keys that differ between two Json values, when
- * both sides are plain objects. If either side isn't an object (array,
- * primitive), return a single `"*"` marker meaning "params replaced
- * wholesale" — we don't try to diff inside arrays here because the user-
- * visible params (S-box, MixColumns matrix) carry their identity at the
- * object-key level, not at array-element level.
+ * Per-key diff carrier produced by `classifyKeyDiff`. Mirrors the shape of
+ * `SpecParamDiff` without the stepId/stepType context — those are added
+ * later when `compareSpecs` walks the tree.
  */
-const diffJsonObjectKeys = (a: Json, b: Json): readonly string[] => {
+type KeyDiffInfo = {
+  readonly scalar?: { readonly from: Json; readonly to: Json };
+  readonly cells?: readonly ParamCellDiff[];
+};
+
+/** True if `v` is a JSON scalar (number / string / boolean / null). */
+const isJsonScalar = (v: Json): boolean => v === null || typeof v !== "object";
+
+/** True if every element of `v` is a JS number — i.e. a flat byte/int array. */
+const isFlatNumberArray = (v: Json): v is number[] =>
+  Array.isArray(v) && v.every((e) => typeof e === "number");
+
+/**
+ * True if `v` is a 2D number array (array of equal-length number rows).
+ * Used to detect the MixColumns matrix shape (4×4 row-of-rows) so we can
+ * decompose changes into `(row, col)` pairs rather than spilling raw
+ * flattened indexes into the legend.
+ */
+const is2dNumberArray = (v: Json): v is number[][] =>
+  Array.isArray(v) &&
+  v.length > 0 &&
+  v.every((row) => Array.isArray(row) && row.every((e) => typeof e === "number"));
+
+/**
+ * Classify a single keys-differ situation into a richer diff carrier. The
+ * three flavors we handle:
+ *   • Both scalars → `{ scalar: { from, to } }`. Lets the legend render
+ *     `rounds 10 → 12` instead of `rounds changed`.
+ *   • Both flat number arrays of equal length → `{ cells: [...] }`. For a
+ *     length-256 array we treat it as the canonical AES S-box (16×16) and
+ *     decompose every index into `(row, col)`. Other lengths keep the 1D
+ *     `index` form (used by `shifts`, `rcon`, etc.).
+ *   • Both 2D number arrays of matching shape → `{ cells: [...] }` with
+ *     `(row, col)` pairs straight from the nesting. Matches MixColumns.
+ *
+ * Everything else (object-replaced-with-array, nested object diffs, mixed
+ * shapes) collapses to `{}` — the formatter falls back to "X changed",
+ * preserving the pre-extension behavior for diffs we can't summarize.
+ */
+const classifyKeyDiff = (a: Json, b: Json): KeyDiffInfo => {
+  // Scalars on both sides → before/after values.
+  if (isJsonScalar(a) && isJsonScalar(b)) {
+    return { scalar: { from: a, to: b } };
+  }
+
+  // Flat number array, equal length → per-cell diffs.
+  if (isFlatNumberArray(a) && isFlatNumberArray(b) && a.length === b.length) {
+    const cells: ParamCellDiff[] = [];
+    // Length-256 arrays are the AES S-box / inverse S-box convention; render
+    // as the canonical 16×16 (row, col) grid the editor itself uses. Any
+    // other length stays in flat-`index` form because there's no shared
+    // visualization convention to lean on.
+    const decomposeAsTable = a.length === 256;
+    for (let i = 0; i < a.length; i++) {
+      const av = a[i] ?? 0;
+      const bv = b[i] ?? 0;
+      if (av !== bv) {
+        if (decomposeAsTable) {
+          // index → (row, col) with row = high nibble, col = low nibble.
+          // Same convention as `SboxEditor.tsx`.
+          cells.push({ kind: "2d", row: i >> 4, col: i & 15, from: av, to: bv });
+        } else {
+          cells.push({ kind: "1d", index: i, from: av, to: bv });
+        }
+      }
+    }
+    return { cells };
+  }
+
+  // 2D number array with matching outer + inner shapes → per-cell diffs
+  // with explicit (row, col). Mismatched shapes fall through to {}.
+  if (is2dNumberArray(a) && is2dNumberArray(b) && a.length === b.length) {
+    const shapesMatch = a.every((row, r) => row.length === (b[r]?.length ?? -1));
+    if (shapesMatch) {
+      const cells: ParamCellDiff[] = [];
+      for (let r = 0; r < a.length; r++) {
+        const rowA = a[r] ?? [];
+        const rowB = b[r] ?? [];
+        for (let c = 0; c < rowA.length; c++) {
+          const av = rowA[c] ?? 0;
+          const bv = rowB[c] ?? 0;
+          if (av !== bv) cells.push({ kind: "2d", row: r, col: c, from: av, to: bv });
+        }
+      }
+      return { cells };
+    }
+  }
+
+  // Anything else: caller falls back to the "X changed" summary.
+  return {};
+};
+
+/**
+ * Enumerate the top-level keys that differ between two Json values, returning
+ * the full per-key diff info so the caller can produce richer `SpecParamDiff`
+ * entries. If either side isn't an object (array, primitive), return a single
+ * `"*"` marker — params replaced wholesale aren't worth diving into.
+ */
+const diffJsonObjectKeysRich = (
+  a: Json,
+  b: Json,
+): readonly { readonly key: string; readonly info: KeyDiffInfo }[] => {
   const aIsObj = a !== null && typeof a === "object" && !Array.isArray(a);
   const bIsObj = b !== null && typeof b === "object" && !Array.isArray(b);
-  if (!aIsObj || !bIsObj) return ["*"];
+  if (!aIsObj || !bIsObj) return [{ key: "*", info: {} }];
   const ao = a as { [k: string]: Json };
   const bo = b as { [k: string]: Json };
   const keys = new Set<string>([...Object.keys(ao), ...Object.keys(bo)]);
-  const out: string[] = [];
+  const out: { key: string; info: KeyDiffInfo }[] = [];
   for (const k of keys) {
-    if (!jsonEqual(ao[k] ?? null, bo[k] ?? null)) out.push(k);
+    const av = ao[k] ?? null;
+    const bv = bo[k] ?? null;
+    if (!jsonEqual(av, bv)) out.push({ key: k, info: classifyKeyDiff(av, bv) });
   }
   return out;
 };
@@ -207,10 +349,21 @@ export const compareSpecs = (a: CipherSpec, b: CipherSpec): readonly SpecParamDi
       }
       if (x.kind === "step" && y.kind === "step") {
         if (x.type !== y.type) {
-          changes.push({ stepId: x.id, paramName: "(type)" });
+          changes.push({ stepId: x.id, stepType: x.type, paramName: "(type)" });
         } else if (!jsonEqual(x.params, y.params)) {
-          const keys = diffJsonObjectKeys(x.params, y.params);
-          for (const k of keys) changes.push({ stepId: x.id, paramName: k });
+          // Walk the params object and ask `classifyKeyDiff` to attach value
+          // info to each differing key. Bare diffs (no scalar/cells) preserve
+          // the legacy "X changed" rendering path in describeDelta.
+          const entries = diffJsonObjectKeysRich(x.params, y.params);
+          for (const { key, info } of entries) {
+            changes.push({
+              stepId: x.id,
+              stepType: x.type,
+              paramName: key,
+              ...(info.scalar !== undefined ? { scalar: info.scalar } : {}),
+              ...(info.cells !== undefined ? { cells: info.cells } : {}),
+            });
+          }
         }
       } else if (x.kind === "group" && y.kind === "group") {
         visit(x.children, y.children);

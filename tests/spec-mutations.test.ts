@@ -1,7 +1,13 @@
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
-import { findStep, updateAllStepsByType, updateStepParams } from "@/core/spec-mutations";
+import {
+  type ParamCellDiff,
+  compareSpecs,
+  findStep,
+  updateAllStepsByType,
+  updateStepParams,
+} from "@/core/spec-mutations";
 import { bytesFromHex, hexFromBytes } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, Json } from "@/core/types";
@@ -86,6 +92,92 @@ describe("spec mutation helpers", () => {
       };
       visit(updated.steps as never);
       expect(count).toBe(10); // one per round
+    });
+
+    // ─── compareSpecs richer diff shape (May 2026) ─────────────────────────
+    // The legend used to read "round.1.sub-bytes: sbox changed". With the
+    // SpecParamDiff.cells extension the diff now carries the exact (row, col,
+    // from, to) of every changed cell so the formatter can render
+    // "S-box[row 0, col 0] 63 → 00". These tests pin the producer-side shape.
+
+    it("emits 2D cell diffs for a length-256 array param (AES S-box convention)", () => {
+      // Tweak one S-box entry on a single round and confirm compareSpecs
+      // surfaces the exact (row, col) and before/after byte values.
+      const original = findStep(aes128Spec, "round.1.sub-bytes");
+      const originalSbox = (original?.params as { sbox: number[] }).sbox;
+      const tweakedSbox = [...originalSbox];
+      // Pick an index whose canonical value is non-zero so the diff is
+      // unambiguous. AES sbox[0x00] = 0x63 by convention.
+      const before = tweakedSbox[0] ?? -1;
+      tweakedSbox[0] = 0x00;
+      const tweaked = updateStepParams(aes128Spec, "round.1.sub-bytes", { sbox: tweakedSbox });
+
+      const diffs = compareSpecs(aes128Spec, tweaked);
+      // Exactly one leaf differs.
+      expect(diffs.length).toBe(1);
+      const d = diffs[0];
+      expect(d?.stepId).toBe("round.1.sub-bytes");
+      expect(d?.paramName).toBe("sbox");
+      expect(d?.stepType).toBe("generic.byte-substitution@1");
+      const cells = d?.cells ?? [];
+      expect(cells.length).toBe(1);
+      const c = cells[0] as ParamCellDiff;
+      expect(c.kind).toBe("2d");
+      if (c.kind === "2d") {
+        // Index 0 → (row 0, col 0).
+        expect(c.row).toBe(0);
+        expect(c.col).toBe(0);
+        expect(c.from).toBe(before);
+        expect(c.to).toBe(0x00);
+      }
+    });
+
+    it("emits 2D cell diffs for a nested 4×4 matrix param (MixColumns convention)", () => {
+      // Pick a MixColumns step and tweak one cell of its matrix. The diff
+      // should report (row, col) straight from the 2D nesting.
+      const original = findStep(aes128Spec, "round.1.mix-columns");
+      const originalMatrix = (original?.params as { matrix: number[][] }).matrix.map((r) => [...r]);
+      // Clone deeply, modify [2][3]. Pull the row out to avoid a non-null
+      // assertion (biome blocks `tweakedMatrix[2]![3]` style).
+      const tweakedMatrix = originalMatrix.map((r) => [...r]);
+      const row2 = tweakedMatrix[2] ?? [];
+      const before = row2[3] ?? -1;
+      row2[3] = 0xff;
+      const tweaked = updateStepParams(aes128Spec, "round.1.mix-columns", {
+        matrix: tweakedMatrix,
+      });
+
+      const diffs = compareSpecs(aes128Spec, tweaked);
+      expect(diffs.length).toBe(1);
+      const cells = diffs[0]?.cells ?? [];
+      expect(cells.length).toBe(1);
+      const c = cells[0] as ParamCellDiff;
+      expect(c.kind).toBe("2d");
+      if (c.kind === "2d") {
+        expect(c.row).toBe(2);
+        expect(c.col).toBe(3);
+        expect(c.from).toBe(before);
+        expect(c.to).toBe(0xff);
+      }
+    });
+
+    it("emits a scalar diff when only a primitive param value differs (e.g. rounds count)", () => {
+      // Synthetic spec where only a number-valued param differs. Use
+      // updateStepParams on key-expansion which has a `rounds` field.
+      const tweaked = updateStepParams(aes128Spec, "key-expansion", {
+        keyAuxName: "key",
+        outputPrefix: "roundKey",
+        sbox: [...(findStep(aes128Spec, "key-expansion")?.params as { sbox: number[] }).sbox],
+        rcon: [...(findStep(aes128Spec, "key-expansion")?.params as { rcon: number[] }).rcon],
+        rounds: 999, // was 10
+      });
+
+      const diffs = compareSpecs(aes128Spec, tweaked);
+      // Just `rounds` should differ (other keys re-spread from the original).
+      expect(diffs.length).toBe(1);
+      expect(diffs[0]?.paramName).toBe("rounds");
+      expect(diffs[0]?.scalar).toEqual({ from: 10, to: 999 });
+      expect(diffs[0]?.cells).toBeUndefined();
     });
 
     it("end-to-end: swapping the S-box changes the ciphertext", () => {
