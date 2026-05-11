@@ -842,32 +842,33 @@ button:disabled {
 }
 
 /* ─── Run Explorer modal (Phase 2c) ───────────────────────────────────── */
-/* Backdrop covers the entire viewport with a translucent veil. The modal
-   itself sits centered on top. We don't trap focus or do other a11y heavy
-   lifting here — the close button is the dialog's "X" and Escape isn't
-   wired through the backdrop (clicking outside dismisses). */
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-  padding: 24px;
-}
-
+/* The modal IS a native <dialog>. CRITICAL: do not set `display` on the
+   bare `.modal` selector — native dialog defaults to `display: none` via
+   `dialog:not([open])` in the UA stylesheet, and overriding that makes
+   the modal visible at all times (which obscures the rest of the page).
+   Layout lives on `.modal-inner` (always rendered when the dialog is
+   open). The backdrop is the native `::backdrop` pseudo. */
 .modal {
   background: var(--bg-elev);
+  color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 16px;
   max-width: 1100px;
-  width: 100%;
+  width: 90vw;
   max-height: 90vh;
+  overflow: hidden;
+}
+
+.modal::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.modal-inner {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  max-height: calc(90vh - 32px);
   overflow: hidden;
 }
 
