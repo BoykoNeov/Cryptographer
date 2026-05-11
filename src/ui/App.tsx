@@ -29,6 +29,13 @@ import { StepList } from "./components/StepList";
 import { StepStrip } from "./components/StepStrip";
 import { TraceTimeline } from "./components/TraceTimeline";
 import { setByteFormat, useByteFormat } from "./stores/format";
+import {
+  findPreviousRunFrameByStepId,
+  pushSnapshot,
+  setShowPreviousRun,
+  useHistory,
+  useShowPreviousRun,
+} from "./stores/history";
 import { installKeyboardShortcuts } from "./stores/keyboard";
 import { registry } from "./stores/registry";
 import { resetSpec, setMode, useMode, useSpec } from "./stores/spec";
@@ -93,11 +100,22 @@ export const App = () => {
         throw new Error(`key: ${e instanceof Error ? e.message : String(e)}`);
       }
       const initialAux = new Map<string, AuxValue>([["key", keyBytes]]);
-      const trace = runSpec(spec(), registry, {
+      const currentSpec = spec();
+      const trace = runSpec(currentSpec, registry, {
         initialState: matrixFromBytes(inputBytes),
         initialAux,
       });
       setTrace(trace);
+      // Push BEFORE setHasRunOnce so the snapshot captures the configuration
+      // that produced this trace. The snapshot store dedups identical re-runs
+      // automatically, so the auto-rerun-on-spec-edit path won't spam history.
+      pushSnapshot({
+        inputBytes,
+        keyBytes,
+        mode: mode(),
+        spec: currentSpec,
+        trace,
+      });
       setHasRunOnce(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -149,6 +167,23 @@ export const App = () => {
     if (!t || t.finalState.shape !== "matrix4x4-bytes") return null;
     return formatBytes(t.finalState.bytes, fmt());
   });
+
+  // Phase 2b — overlay: look up the same-stepId frame from the run just
+  // before the current one. We memoize on (history, currentFrame.stepId)
+  // so a scrub through the trace re-uses the same snapshot's frames
+  // without re-walking them on every render.
+  const history = useHistory();
+  const showPrev = useShowPreviousRun();
+  const previousRunFrame = createMemo(() => {
+    if (!showPrev()) return null;
+    const f = currentFrame();
+    if (!f) return null;
+    return findPreviousRunFrameByStepId(history(), f.stepId);
+  });
+  // Snapshot count drives the "compare runs" button label and disables the
+  // overlay toggle when there's nothing to compare against (1 run only).
+  const historyCount = createMemo(() => history().length);
+  const canCompare = createMemo(() => historyCount() >= 2);
 
   // Labels switch between encrypt/decrypt modes so the UI doesn't lie.
   const inputLabel = () => (mode() === "encrypt" ? "plaintext" : "ciphertext");
@@ -256,7 +291,27 @@ export const App = () => {
                   {frame().path.length > 0 ? `${frame().path.join(" › ")} › ` : ""}
                   {frame().stepId}
                 </span>
-                <span class="frame-type">{frame().stepType}</span>
+                <div class="frame-header-right">
+                  {/* Phase 2b — overlay toggle. Disabled until we have a
+                      second snapshot to compare against, so the user can't
+                      ask for an overlay that doesn't exist yet. */}
+                  <label
+                    class="compare-toggle"
+                    title="Show previous run alongside the current matrix"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={showPrev()}
+                      disabled={!canCompare()}
+                      onChange={(e) => setShowPreviousRun(e.currentTarget.checked)}
+                    />
+                    compare to previous run
+                    <Show when={canCompare()}>
+                      <span class="compare-count">({historyCount()} runs)</span>
+                    </Show>
+                  </label>
+                  <span class="frame-type">{frame().stepType}</span>
+                </div>
               </div>
 
               {/* Neighborhood strip: prev / current / next thumbnails. */}
@@ -273,6 +328,11 @@ export const App = () => {
                 <MatrixView
                   before={frame().stateBefore as MatrixState}
                   after={frame().stateAfter as MatrixState}
+                  previousAfter={
+                    previousRunFrame()?.stateAfter.shape === "matrix4x4-bytes"
+                      ? (previousRunFrame()?.stateAfter as MatrixState)
+                      : null
+                  }
                 />
               </Show>
 

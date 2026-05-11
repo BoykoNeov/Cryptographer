@@ -76,4 +76,42 @@ describe("MatrixView — format-aware cell rendering", () => {
     const afterCells = grids[1]?.querySelectorAll(".cell") ?? [];
     expect(afterCells[0]?.classList.contains("changed")).toBe(true);
   });
+
+  // ─── Phase 2b — previous-run overlay rendering ─────────────────────────
+
+  it("renders a third grid when previousAfter is provided", () => {
+    const state = sampleMatrix();
+    const { container } = render(() => (
+      <MatrixView before={state} after={state} previousAfter={state} />
+    ));
+    const grids = container.querySelectorAll(".grid-block");
+    expect(grids.length).toBe(3);
+    // Third grid is the previous-run column; its title must say so.
+    expect(grids[2]?.querySelector(".grid-title")?.textContent).toBe("previous run");
+  });
+
+  it("omits the previous-run grid when previousAfter is null", () => {
+    const state = sampleMatrix();
+    const { container } = render(() => (
+      <MatrixView before={state} after={state} previousAfter={null} />
+    ));
+    expect(container.querySelectorAll(".grid-block").length).toBe(2);
+  });
+
+  it("rings cells in the previous-run grid whose value differs from current after", () => {
+    const after = matrixFromBytes(new Uint8Array(16)); // all zeros
+    const prevBytes = new Uint8Array(16);
+    prevBytes[0] = 0xab; // byte 0 differs from current after
+    const previousAfter = matrixFromBytes(prevBytes);
+    const { container } = render(() => (
+      <MatrixView before={after} after={after} previousAfter={previousAfter} />
+    ));
+    const grids = container.querySelectorAll(".grid-block");
+    expect(grids.length).toBe(3);
+    const prevCells = grids[2]?.querySelectorAll(".cell") ?? [];
+    // First cell of the previous-run grid (byte 0) differs → diff-vs-prev.
+    expect(prevCells[0]?.classList.contains("diff-vs-prev")).toBe(true);
+    // Other cells match (all zeros) → no ring.
+    expect(prevCells[1]?.classList.contains("diff-vs-prev")).toBe(false);
+  });
 });

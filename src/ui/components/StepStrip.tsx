@@ -11,6 +11,7 @@
 
 import type { MatrixState, TraceFrame } from "@/core/types";
 import { Show, createMemo } from "solid-js";
+import { findPreviousRunFrameByStepId, useHistory, useShowPreviousRun } from "../stores/history";
 import { getTrace, setFrame, useFrameIndex, useTraceVersion } from "../stores/trace";
 import { TinyMatrix } from "./TinyMatrix";
 
@@ -56,6 +57,25 @@ export const StepStrip = () => {
   );
 };
 
+/**
+ * Resolve the previous-run after-state for a given frame, honoring the
+ * "compare to previous run" toggle. Pulls from the history store; returns
+ * null when the toggle is off or there's no prior run. Shared by every
+ * thumbnail in the strip so the per-step comparison is consistent.
+ */
+const usePreviousMatrixFor = (frame: () => TraceFrame | null) => {
+  const history = useHistory();
+  const showPrev = useShowPreviousRun();
+  return createMemo<MatrixState | null>(() => {
+    if (!showPrev()) return null;
+    const f = frame();
+    if (!f) return null;
+    const prev = findPreviousRunFrameByStepId(history(), f.stepId);
+    if (!prev || prev.stateAfter.shape !== "matrix4x4-bytes") return null;
+    return prev.stateAfter as MatrixState;
+  });
+};
+
 // ─── Single thumbnail ────────────────────────────────────────────────────
 
 type ThumbnailProps = {
@@ -74,6 +94,10 @@ const Thumbnail = (props: ThumbnailProps) => {
     if (!f || f.stateAfter.shape !== "matrix4x4-bytes") return null;
     return f.stateAfter as MatrixState;
   };
+
+  // Phase 2b — per-thumbnail previous-run comparison. Reads the same toggle
+  // the main MatrixView uses so the strip stays in sync.
+  const previousMatrix = usePreviousMatrixFor(() => props.frame);
 
   // The visible label for the step. We trim path noise — usually the
   // last segment of the path plus the step name conveys plenty.
@@ -125,7 +149,7 @@ const Thumbnail = (props: ThumbnailProps) => {
             <div class="step-thumb-label">{label()}</div>
             <div class="step-thumb-type">{frame().stepType}</div>
             <Show when={matrixState()} fallback={<div class="muted small">(non-matrix state)</div>}>
-              {(state) => <TinyMatrix state={state()} />}
+              {(state) => <TinyMatrix state={state()} previousState={previousMatrix()} />}
             </Show>
           </>
         )}
