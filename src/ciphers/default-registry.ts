@@ -19,6 +19,9 @@ import { mixColumns, mixColumnsDoc } from "../steps/mix-columns";
 import { pkcs7Pad, pkcs7PadDoc } from "../steps/pkcs7-pad";
 import { pkcs7Unpad, pkcs7UnpadDoc } from "../steps/pkcs7-unpad";
 import { shiftRows, shiftRowsDoc } from "../steps/shift-rows";
+import { speckKeySchedule, speckKeyScheduleDoc } from "../steps/speck-key-schedule";
+import { speckRound, speckRoundDoc } from "../steps/speck-round";
+import { speckRoundInverse, speckRoundInverseDoc } from "../steps/speck-round-inverse";
 import { storeBlock, storeBlockDoc } from "../steps/store-block";
 import { zeroPad, zeroPadDoc } from "../steps/zero-pad";
 import { zeroUnpad, zeroUnpadDoc } from "../steps/zero-unpad";
@@ -50,5 +53,15 @@ export const buildDefaultRegistry = (): StepRegistry => {
   r.register("generic.iso7816-4-unpad@1", { executor: iso78164Unpad, doc: iso78164UnpadDoc });
   r.register("generic.load-block@1", { executor: loadBlock, doc: loadBlockDoc });
   r.register("generic.store-block@1", { executor: storeBlock, doc: storeBlockDoc });
+  // ─── Speck (ARX block cipher, second cipher family) ────────────────────
+  // Three step types complete a full Speck cipher: a key-schedule that
+  // expands an m-word master key into `rounds` round-key words, a forward
+  // ARX round, and its inverse. Speck32/64 ships as two cipher specs in
+  // the UI (BE-paper and LE-NSA byte orders), but the step code is one
+  // copy parametric on `byteOrder`. The conventions compute the same
+  // word-level cipher; only byte serialization at the boundary differs.
+  r.register("speck.key-schedule@1", { executor: speckKeySchedule, doc: speckKeyScheduleDoc });
+  r.register("speck.round@1", { executor: speckRound, doc: speckRoundDoc });
+  r.register("speck.round-inverse@1", { executor: speckRoundInverse, doc: speckRoundInverseDoc });
   return r;
 };

@@ -91,6 +91,16 @@ export const ParamEditor = (props: Props) => {
             <Match when={BLOCK_SIZE_PARAM_TYPES.has(getStep().type)}>
               <BlockSizeBlock step={getStep()} matchingCount={matchingSteps()} />
             </Match>
+            <Match when={getStep().type === "speck.key-schedule@1"}>
+              <SpeckKeyScheduleBlock step={getStep()} matchingCount={matchingSteps()} />
+            </Match>
+            <Match
+              when={
+                getStep().type === "speck.round@1" || getStep().type === "speck.round-inverse@1"
+              }
+            >
+              <SpeckRoundBlock step={getStep()} matchingCount={matchingSteps()} />
+            </Match>
           </Switch>
         </div>
       )}
@@ -321,6 +331,111 @@ const AddRoundKeyBlock = (props: BlockProps) => {
       <div class="param-scalar-row">
         <dt>Round key aux</dt>
         <dd>{params().auxName ?? "—"}</dd>
+      </div>
+    </dl>
+  );
+};
+
+// Speck key-schedule block.
+//
+// All seven params are structural (cipher-defining constants or naming
+// hooks); we render them read-only as a scalars dl. Mirrors the shape of
+// KeyExpansionBlock's scalars row but without the embedded S-box / rcon
+// editors — Speck has no S-box, and its "round constant" is just the
+// loop counter `i` XOR'd into the schedule (no table to edit).
+//
+// No ApplyAllRow: there's only one key-schedule step in any Speck spec.
+const SpeckKeyScheduleBlock = (props: BlockProps) => {
+  const params = (): {
+    keyAuxName?: string;
+    outputPrefix?: string;
+    rounds?: number;
+    wordBits?: number;
+    m?: number;
+    alpha?: number;
+    beta?: number;
+    byteOrder?: string;
+  } => props.step.params as never;
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>Input aux</dt>
+        <dd>{params().keyAuxName ?? "—"}</dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Output prefix</dt>
+        <dd>{params().outputPrefix ?? "—"}</dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Rounds</dt>
+        <dd>{params().rounds ?? "—"}</dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Word bits (n)</dt>
+        <dd>{params().wordBits ?? "—"}</dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Key words (m)</dt>
+        <dd>{params().m ?? "—"}</dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>α (ROR)</dt>
+        <dd>{params().alpha ?? "—"}</dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>β (ROL)</dt>
+        <dd>{params().beta ?? "—"}</dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Byte order</dt>
+        <dd>{params().byteOrder ?? "—"}</dd>
+      </div>
+    </dl>
+  );
+};
+
+// Speck round / round-inverse block.
+//
+// Five structural params shared by both forward and inverse steps. The
+// `roundKeyAux` is the per-leaf knob that wires the round to its specific
+// round-key word; pinning it visible makes the encrypt-vs-decrypt key
+// ordering (`roundKey.0` first vs. `roundKey.21` first) inspectable when
+// scrubbing through the trace.
+//
+// No ApplyAllRow: like AddRoundKey, each Speck round leaf intentionally
+// references a DIFFERENT roundKey aux name. Copying one step's params
+// onto every match would point every round at the same key.
+const SpeckRoundBlock = (props: BlockProps) => {
+  const params = (): {
+    roundKeyAux?: string;
+    alpha?: number;
+    beta?: number;
+    wordBits?: number;
+    byteOrder?: string;
+  } => props.step.params as never;
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>Round key aux</dt>
+        <dd>{params().roundKeyAux ?? "—"}</dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>α (ROR)</dt>
+        <dd>{params().alpha ?? "—"}</dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>β (ROL)</dt>
+        <dd>{params().beta ?? "—"}</dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Word bits (n)</dt>
+        <dd>{params().wordBits ?? "—"}</dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Byte order</dt>
+        <dd>{params().byteOrder ?? "—"}</dd>
       </div>
     </dl>
   );
