@@ -7,10 +7,10 @@ Interactive cryptography explorer. The user enters plaintext + key, sees every i
 | Command | What it does |
 |---|---|
 | `npm run dev` | Vite dev server at `http://localhost:5173`. Hot-reloads on file changes. |
-| `npm test` | Vitest, single run. Currently 203 tests across 18 files, ~1.9s total (jsdom UI tests dominate). |
+| `npm test` | Vitest, single run. Currently 218 tests across 21 files, ~2s total (jsdom UI tests dominate). |
 | `npm run typecheck` | `tsc --noEmit`, strict. |
 | `npm run check` | The gate: `biome ci . && tsc --noEmit && vitest run && vite build`. Runs in ~6s on this machine. |
-| `npm run build` | Production build into `dist/`. ~31KB gzipped JS. |
+| `npm run build` | Production build into `dist/`. ~32KB gzipped JS. |
 
 The pre-commit hook in `.githooks/pre-commit` runs `npm run check`. GitHub Actions in `.github/workflows/ci.yml` runs the same on push. Don't bypass with `--no-verify` unless you have a specific reason; both gates exist for a reason.
 
@@ -62,13 +62,16 @@ The future "binary export" feature is what *forced* the spec-as-data choice: a c
 
 **Ciphers:**
 - `src/ciphers/default-registry.ts` — wires every step type. Adding a new step means editing this.
-- `src/ciphers/aes-128.ts`, `src/ciphers/aes-128-decrypt.ts` — the two real cipher specs.
-- `src/ciphers/aes-constants.ts` — AES_SBOX, AES_INV_SBOX, AES_RCON, AES_MIX_MATRIX, AES_INV_MIX_MATRIX, AES_SHIFT_ROWS, AES_INV_SHIFT_ROWS.
+- `src/ciphers/aes-128.ts`, `src/ciphers/aes-128-decrypt.ts` — AES-128 forward + inverse specs.
+- `src/ciphers/aes-192.ts`, `src/ciphers/aes-192-decrypt.ts` — AES-192 (Nk=6, Nr=12). Reuses every AES-128 step type; only `ROUNDS` and `inputs.key.byteLength` differ.
+- `src/ciphers/aes-256.ts`, `src/ciphers/aes-256-decrypt.ts` — AES-256 (Nk=8, Nr=14). Same shape as AES-192; the `aes.key-expansion@1` step has an Nk>6 branch that fires only here.
+- `src/ciphers/aes-constants.ts` — AES_SBOX, AES_INV_SBOX, AES_RCON, AES_MIX_MATRIX, AES_INV_MIX_MATRIX, AES_SHIFT_ROWS, AES_INV_SHIFT_ROWS. Rcon table is long enough for all three key sizes.
 
 **UI stores (singletons; module-scope signals on purpose):**
 - `src/ui/stores/trace.ts` — current trace + frame index, `setTrace` preserves focus by stepId across re-runs.
 - `src/ui/stores/format.ts` — active byte format, persisted in `localStorage`.
-- `src/ui/stores/spec.ts` — current spec + cipher mode (encrypt/decrypt). `setMode`, `resetSpec`, and `setPadding` all funnel through `applyPaddingScheme` so the active padding scheme survives mode flips and resets.
+- `src/ui/stores/spec.ts` — current spec + (cipher, mode) selector. `defaults` is a `Record<Cipher, Record<Mode, CipherSpec>>` table. `setMode`, `setCipher`, `resetSpec`, and `setPadding` all funnel through `applyPaddingScheme` so the active padding scheme survives mode / cipher flips and resets.
+- `src/ui/stores/cipher.ts` — active AES variant (`aes-128` / `aes-192` / `aes-256`), persisted in `localStorage`. Also exports `DEFAULT_KEY_BYTES_BY_CIPHER` (FIPS-197 §A.1/§A.2/§A.3 canonical keys) used by the App's cipher-change handler to swap the key field only when it still holds the previous cipher's default.
 - `src/ui/stores/history.ts` — 5-deep run snapshot ring buffer + `pushSnapshot` (auto-dedups identical re-runs), `findPreviousRunFrameByStepId`, and the `showPreviousRun` overlay toggle.
 - `src/ui/stores/padding.ts` — active padding scheme (`none` / `pkcs7`), persisted in `localStorage`. `paddingLimits(mode, scheme)` returns the allowed raw-input byte-length range so the Run handler can produce friendly errors.
 - `src/ui/components/ByteCellInput.tsx` — format-aware editable byte cell. Width adapts (hex=2/dec=3/ASCII=4 chars). Used by SboxEditor (16x16) and MatrixEditor (4x4).
@@ -76,8 +79,11 @@ The future "binary export" feature is what *forced* the spec-as-data choice: a c
 - `src/ui/components/RunExplorerModal.tsx` — side-by-side run comparison modal (uses native `<dialog>` for backdrop + escape handling). Pure delta-string formatter lives in `run-delta-format.ts` so node-env tests can pin its output without spinning up jsdom.
 
 **Tests:**
-- `tests/aes-vectors.test.ts` — FIPS-197 Appendix C.1 and B known-answer tests for forward AES.
-- `tests/aes-decrypt.test.ts` — round-trip + decryption tests.
+- `tests/aes-vectors.test.ts` — FIPS-197 Appendix C.1 and B known-answer tests for forward AES-128.
+- `tests/aes-decrypt.test.ts` — round-trip + decryption tests (AES-128).
+- `tests/aes-192-vectors.test.ts` — NIST AES Core 192 KAT + FIPS-197 §A.2 roundKey.12 assertion + round-trip with `aes-192-decrypt`.
+- `tests/aes-256-vectors.test.ts` — NIST AES Core 256 KAT + FIPS-197 §A.3 roundKey.3 (pins the Nk>6 SubWord-only branch in key-expansion) + roundKey.14 + round-trip + Nk+6==rounds assertion error.
+- `tests/app-cipher-selector.test.tsx` — jsdom integration. Drives the App through the actual `<select>` change events to prove the cipher dropdown wires up the key-field auto-swap, dynamic key length, and that AES-192 / AES-256 produce the NIST canonical ciphertexts end-to-end.
 - `tests/spec-mutations.test.ts` — spec mutation helpers + the headline "swap S-box → ciphertext changes" modularity test.
 - `tests/markdown.test.ts` — parser tests for the step-doc renderer.
 - `tests/format.test.ts` — byte format core (round-trip, validation, length errors).
@@ -96,6 +102,8 @@ For step-type-specific guidance (adding new ones), see `src/steps/CLAUDE.md`.
 - **The AES state matrix is column-major.** Byte at row `r`, col `c` lives at `bytes[r + 4*c]`. The first 4 bytes of the input go into column 0 (top-to-bottom), not row 0 (left-to-right). Visualization conventions sometimes invert this.
 - **GF(2^8) uses the polynomial `x^8 + x^4 + x^3 + x + 1` (0x11b).** Don't use 0x1b alone (that's the reduction-when-MSB-is-set part of `xtime`).
 - **Key expansion uses the FORWARD S-box, even when decrypting.** The inverse cipher consumes the same round keys in reverse order; it does not re-derive them with the inverse S-box. Both `aes-128.ts` and `aes-128-decrypt.ts` share the same `key-expansion` step verbatim.
+- **AES-256 has an extra `i % Nk == 4` SubWord-only branch in key expansion.** When `Nk > 6`, every word at `i % Nk == 4` passes through SubWord WITHOUT RotWord and WITHOUT an Rcon XOR. Only AES-256 (Nk=8) triggers it — AES-128/192 never reach the branch. If you assert only the final round key, an end-to-end KAT can pass with a wrong intermediate by coincidence. `tests/aes-256-vectors.test.ts` asserts `roundKey.3` directly (= w[12..15], where w[12] is the first index that fires the branch) as the specific guard.
+- **AES key length and `rounds` must agree: `rounds === Nk + 6`.** Key-expansion asserts this — a 24-byte key with `rounds: 10` (or any mismatched pair) throws "rounds (X) must equal Nk+6 (Y)". When writing a new AES-variant spec, both the `inputs.key.byteLength` and the key-expansion `rounds` param must move together.
 - **Don't redirect native command stderr in PowerShell with `2>&1`.** PowerShell 5.1 wraps stderr lines in `NativeCommandError` records and sets `$?` to false even on success exit code 0. Capture stdout only, or merge in a different way.
 - **Solid components must use `createMemo` for derived values** read multiple times in JSX. A plain function gets evaluated independently per access; that's three trace lookups per render in the worst case.
 - **Solid `For` callbacks aren't reactive scopes** — a `const value = formatByte(..., props.format)` captured outside the JSX is computed once when the item is added. Inline the dynamic call into the JSX (`{formatByte(..., props.format)}`) so prop changes propagate. We've hit this in `MatrixView.tsx`: refactoring cell-value computation into a const broke the format-toggle reactivity.

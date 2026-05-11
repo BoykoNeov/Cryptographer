@@ -44,6 +44,13 @@ import { StepDescription } from "./components/StepDescription";
 import { StepList } from "./components/StepList";
 import { StepStrip } from "./components/StepStrip";
 import { TraceTimeline } from "./components/TraceTimeline";
+import {
+  CIPHER_LABELS,
+  CIPHER_OPTIONS,
+  type Cipher,
+  DEFAULT_KEY_BYTES_BY_CIPHER,
+  useCipher,
+} from "./stores/cipher";
 import { setByteFormat, useByteFormat } from "./stores/format";
 import {
   findPreviousRunFrameByStepId,
@@ -61,20 +68,18 @@ import {
   usePaddingScheme,
 } from "./stores/padding";
 import { registry } from "./stores/registry";
-import { resetSpec, setMode, setPadding, useMode, useSpec } from "./stores/spec";
+import { resetSpec, setCipher, setMode, setPadding, useMode, useSpec } from "./stores/spec";
 import { getTrace, setTrace, useFrameIndex, useTraceVersion } from "./stores/trace";
 import "./app.css";
 
-// Default test vector from FIPS-197 Appendix C.1 — gives users a known
-// good answer to compare against on first load when padding="none". Stored
-// as hex bytes; rendered through formatBytes at init so the on-screen value
-// matches the user's current format choice (e.g. after a reload in decimal
-// mode).
+// Default plaintext is the FIPS-197 Appendix C.1 / Appendix B sequential
+// vector — gives users a known good answer to compare against on first
+// load when padding="none". Block size is 16 for all three AES variants,
+// so this default works for AES-128/192/256 alike. Stored as hex bytes;
+// rendered through formatBytes at init so the on-screen value matches the
+// user's current format choice (e.g. after a reload in decimal mode).
 const DEFAULT_PT_BYTES = new Uint8Array([
   0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
-]);
-const DEFAULT_KEY_BYTES = new Uint8Array([
-  0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
 ]);
 // When the user reloads with a non-`none` padding scheme that caps input
 // below 16 bytes (pkcs7 + iso7816-4), the FIPS vector would immediately
@@ -93,18 +98,23 @@ export const App = () => {
   const mode = useMode();
   const fmt = useByteFormat();
   const padding = usePaddingScheme();
+  const cipher = useCipher();
 
   // Inputs — kept as strings (in whatever the current byte format is) so
   // the user can paste partial input without the field fighting them
   // mid-type. We validate on run. Initial plaintext varies by initial
   // padding scheme: schemes that cap encrypt input below 16 bytes (pkcs7
   // + iso7816-4) get the short "apple" so the user sees padding working
-  // immediately on a fresh reload.
+  // immediately on a fresh reload. Initial key varies by cipher — each
+  // AES variant ships a canonical FIPS-197 §A.x default so the first Run
+  // reproduces a textbook ciphertext.
   const initialLimits = paddingLimits(mode(), padding());
   const initialPtBytes =
     mode() === "encrypt" && initialLimits.max < 16 ? DEFAULT_SHORT_PT_BYTES : DEFAULT_PT_BYTES;
   const [inputText, setInputText] = createSignal(formatBytes(initialPtBytes, fmt()));
-  const [keyText, setKeyText] = createSignal(formatBytes(DEFAULT_KEY_BYTES, fmt()));
+  const [keyText, setKeyText] = createSignal(
+    formatBytes(DEFAULT_KEY_BYTES_BY_CIPHER[cipher()], fmt()),
+  );
   const [error, setError] = createSignal<string | null>(null);
 
   // Has the user successfully run the cipher at least once? If yes, spec
@@ -146,10 +156,12 @@ export const App = () => {
         throw new Error(formatLengthError(mode(), padding(), inputBytes.length, min, max));
       }
 
-      // Key is always exactly 16 bytes for AES-128 regardless of padding.
+      // Key length depends on the active cipher: 16 (AES-128) / 24 (192) /
+      // 32 (256). The spec carries this in inputs.key.byteLength — read it
+      // off the live spec rather than threading the cipher signal in.
       let keyBytes: Uint8Array;
       try {
-        keyBytes = parseBytesWithLength(keyText(), fmt(), 16);
+        keyBytes = parseBytesWithLength(keyText(), fmt(), spec().inputs.key.byteLength);
       } catch (e) {
         throw new Error(`key: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -236,6 +248,24 @@ export const App = () => {
    * "apple"; `none` (min/max 16) forces the FIPS vector back if "apple"
    * is currently in the field.
    */
+  /**
+   * Switch the active AES variant (128/192/256). Routes through the spec
+   * store, which replaces the spec and re-applies the active padding.
+   * Then swap the key field IF it currently holds the previous cipher's
+   * canonical default — mirroring the swap policy in `changePadding`. A
+   * user-typed key is never clobbered; the user will see a friendly length
+   * error on the next Run if they don't update it manually.
+   */
+  const changeCipher = (next: Cipher): void => {
+    const prev = cipher();
+    if (prev === next) return;
+    const currentBytes = tryParseBytes(keyText(), fmt());
+    if (currentBytes && bytesEqual(currentBytes, DEFAULT_KEY_BYTES_BY_CIPHER[prev])) {
+      setKeyText(formatBytes(DEFAULT_KEY_BYTES_BY_CIPHER[next], fmt()));
+    }
+    setCipher(next);
+  };
+
   const changePadding = (next: PaddingScheme): void => {
     const prev = padding();
     if (prev === next) return;
@@ -318,6 +348,16 @@ export const App = () => {
           >
             <option value="encrypt">encrypt</option>
             <option value="decrypt">decrypt</option>
+          </select>
+        </label>
+        <label>
+          cipher
+          <select
+            value={cipher()}
+            onChange={(e) => changeCipher(e.currentTarget.value as Cipher)}
+            title="AES variant — 128/192/256 differ in key length and round count"
+          >
+            <For each={CIPHER_OPTIONS}>{(c) => <option value={c}>{CIPHER_LABELS[c]}</option>}</For>
           </select>
         </label>
         <label>
