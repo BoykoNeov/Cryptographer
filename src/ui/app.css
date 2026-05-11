@@ -207,6 +207,47 @@ button:disabled {
 }
 
 /* Phase 2b — compare-to-previous-run toggle in the trace-view header. */
+/* Auto/manual rerun toggle. Lives in `.inputs` next to the Run button —
+   inherits flex layout from the parent, so we just style the checkbox
+   row and let alignment fall out naturally. Mirrors `.compare-toggle`
+   for visual consistency: same font size, same gap, same muted color. */
+.auto-rerun-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  /* Push to bottom of the flex row so it lines up with the buttons,
+     which the parent `.inputs` aligns to `end`. */
+  align-self: end;
+  padding-bottom: 6px;
+}
+
+.auto-rerun-toggle input[type="checkbox"] {
+  cursor: pointer;
+}
+
+/* The "edits pending" banner. Full-width row inside `.inputs` (the flex
+   wrap container) so it lands on its own line below the controls. Uses
+   the same warm "changed" palette as the modified-cell highlight in the
+   matrix view — same semantic meaning ("something is different and you
+   should notice"), just at the section scale. */
+.pending-banner {
+  flex-basis: 100%;
+  background: var(--changed-bg);
+  border: 1px solid var(--changed);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--changed);
+}
+
+.pending-banner strong {
+  color: var(--text);
+}
+
 .compare-toggle {
   display: flex;
   align-items: center;

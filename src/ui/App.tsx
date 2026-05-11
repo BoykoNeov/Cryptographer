@@ -44,6 +44,7 @@ import { StepDescription } from "./components/StepDescription";
 import { StepList } from "./components/StepList";
 import { StepStrip } from "./components/StepStrip";
 import { TraceTimeline } from "./components/TraceTimeline";
+import { clearDirty, setAutoRerun, setDirty, useAutoRerun, useDirty } from "./stores/auto-rerun";
 import {
   CIPHER_LABELS,
   CIPHER_OPTIONS,
@@ -123,6 +124,13 @@ export const App = () => {
   // throwing parse errors at the user before they've even hit "run."
   const [hasRunOnce, setHasRunOnce] = createSignal(false);
 
+  // Auto/manual rerun preference + dirty flag (May 2026). Two pieces of
+  // state with different lifetimes: the *preference* is persisted in
+  // localStorage; the *dirty flag* is session-only and just tracks whether
+  // there are unrun edits relative to the most recent successful run.
+  const autoRerun = useAutoRerun();
+  const dirty = useDirty();
+
   // Phase 2c — Run Explorer modal open state. Local to the App component;
   // the modal pulls everything it needs from the global stores.
   const [explorerOpen, setExplorerOpen] = createSignal(false);
@@ -198,19 +206,38 @@ export const App = () => {
         trace,
       });
       setHasRunOnce(true);
+      // The new trace is in sync with the live spec, so any "edits pending"
+      // banner from manual mode is now stale. Clear it. (Auto-rerun mode
+      // never sets dirty, so this is a no-op there.)
+      clearDirty();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   };
 
-  // Auto re-run on spec edit, debounced. The `on(spec, ...)` form runs ONLY
-  // when the spec signal changes, not on initial setup — important because
-  // we don't want to auto-run before the user has hit the button once.
+  // Re-run on spec edit, but only when the user has opted into auto-rerun
+  // mode (the default). In manual mode we instead flip the dirty flag so
+  // the UI can show an "edits pending — click Run" banner, preserving the
+  // prior run snapshot for comparison in the Run Explorer until the user
+  // deliberately commits the batched edits.
+  //
+  // `on(spec, ...)` runs ONLY when the spec signal changes, not on initial
+  // setup — important because neither mode should fire before the user
+  // has hit Run once.
   createEffect(
     on(
       spec,
       () => {
         if (!hasRunOnce()) return;
+        if (!autoRerun()) {
+          // Manual mode: just record that there are unrun edits. No
+          // debounce, no cipher call — the user will press Run.
+          setDirty(true);
+          return;
+        }
+        // Auto mode (default): same debounced re-run as before. 200ms is
+        // long enough that fast S-box typing doesn't hammer the runtime
+        // but short enough to feel immediate.
         const handle = window.setTimeout(run, AUTO_RERUN_DEBOUNCE_MS);
         onCleanup(() => window.clearTimeout(handle));
       },
@@ -454,6 +481,36 @@ export const App = () => {
         >
           compare runs ({historyCount()})
         </button>
+        {/* Auto/manual rerun toggle. When ON, spec edits re-run the cipher
+            after a 200ms debounce. When OFF, edits just light up the
+            "edits pending" banner below and the user commits them with
+            Run — useful when you want to batch several S-box tweaks into
+            one snapshot for the Run Explorer instead of having each edit
+            push the prior run off the 5-deep history buffer. */}
+        <label
+          class="auto-rerun-toggle"
+          title="Re-run the cipher automatically when you edit the spec"
+        >
+          <input
+            type="checkbox"
+            checked={autoRerun()}
+            onChange={(e) => setAutoRerun(e.currentTarget.checked)}
+          />
+          auto-rerun
+        </label>
+        {/* Manual mode only: surface unrun spec edits so the user sees
+            their tweaks haven't taken effect yet. The banner clears on
+            the next successful run. Hidden in auto-rerun mode (dirty is
+            never set). Lives inside `.inputs` (flex wrap row) with
+            full-width basis so it lands on its own line below the Run
+            button — visually adjacent to the action that clears it. */}
+        <Show when={dirty()}>
+          {/* Native <output> carries an implicit `role="status"` so screen
+              readers announce the change without us repeating the role. */}
+          <output class="pending-banner">
+            edits pending — click <strong>run</strong> to update the trace
+          </output>
+        </Show>
       </section>
 
       {/* ─── Errors and result hex ───────────────────────────────────── */}
