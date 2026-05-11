@@ -11,7 +11,7 @@
  */
 
 import { For } from "solid-js";
-import { HexCellInput } from "./HexCellInput";
+import { ByteCellInput } from "./ByteCellInput";
 
 type Props = {
   matrix: readonly (readonly number[])[];
@@ -29,7 +29,7 @@ export const MatrixEditor = (props: Props) => {
           <div class="matrix-row">
             <For each={cols}>
               {(c) => (
-                <HexCellInput
+                <ByteCellInput
                   value={props.matrix[r]?.[c] ?? 0}
                   onCommit={(next) => {
                     // Deep clone — if we returned a partially-shared array,

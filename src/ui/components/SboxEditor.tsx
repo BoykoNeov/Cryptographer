@@ -12,7 +12,7 @@
 
 import { AES_SBOX } from "@/ciphers/aes-constants";
 import { For } from "solid-js";
-import { HexCellInput } from "./HexCellInput";
+import { ByteCellInput } from "./ByteCellInput";
 
 type Props = {
   sbox: readonly number[];
@@ -37,6 +37,12 @@ export const SboxEditor = (props: Props) => {
     <div class="sbox-editor">
       <div class="sbox-axis-label sbox-col-axis">
         <span class="muted">col →</span>
+        {/* Axis labels are intentionally rendered in hex regardless of the
+            global byte-format toggle. These are *addresses* — the high/low
+            nibble of the byte being looked up in the table — not byte
+            values. Decimal would imply a 16x16 grid indexed 0..255 (it
+            isn't), and ASCII would be nonsense. Keeping hex preserves the
+            FIPS-197 Appendix C presentation convention. */}
         <For each={rows}>{(c) => <span class="axis-cell">{toHex1(c)}</span>}</For>
       </div>
 
@@ -58,7 +64,7 @@ export const SboxEditor = (props: Props) => {
                   class="sbox-cell-wrap"
                   style={{ "grid-row": `${r + 1}`, "grid-column": `${c + 2}` }}
                 >
-                  <HexCellInput
+                  <ByteCellInput
                     compact
                     value={props.sbox[idx] ?? 0}
                     modified={props.sbox[idx] !== (canonical[idx] ?? 0)}

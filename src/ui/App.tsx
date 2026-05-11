@@ -8,10 +8,17 @@
  * notices, debounces 200ms (so 256-cell S-box edits don't hammer the
  * runtime), and re-runs the trace. That's the "swap a value, watch the
  * trace update" loop the modularity demo lives on.
+ *
+ * Phase 3 added a hex/decimal/ASCII byte format toggle. The plaintext and
+ * key fields hold their text in whichever format is currently active; the
+ * Run handler parses with that format, and the output renders the bytes
+ * back through it. Switching format mid-session re-renders the current
+ * input text in place (parse with old format → re-format with new) so
+ * the user doesn't lose their typed value.
  */
 
+import { type ByteFormat, formatBytes, parseBytes, parseBytesWithLength } from "@/core/format";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex, hexFromBytes } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, MatrixState } from "@/core/types";
 import { Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
@@ -21,6 +28,7 @@ import { StepDescription } from "./components/StepDescription";
 import { StepList } from "./components/StepList";
 import { StepStrip } from "./components/StepStrip";
 import { TraceTimeline } from "./components/TraceTimeline";
+import { setByteFormat, useByteFormat } from "./stores/format";
 import { installKeyboardShortcuts } from "./stores/keyboard";
 import { registry } from "./stores/registry";
 import { resetSpec, setMode, useMode, useSpec } from "./stores/spec";
@@ -28,9 +36,15 @@ import { getTrace, setTrace, useFrameIndex, useTraceVersion } from "./stores/tra
 import "./app.css";
 
 // Default test vector from FIPS-197 Appendix C.1 — gives users a known
-// good answer to compare against on first load.
-const DEFAULT_PT = "00112233445566778899aabbccddeeff";
-const DEFAULT_KEY = "000102030405060708090a0b0c0d0e0f";
+// good answer to compare against on first load. Stored as hex bytes;
+// rendered through formatBytes at init so the on-screen value matches the
+// user's current format choice (e.g. after a reload in decimal mode).
+const DEFAULT_PT_BYTES = new Uint8Array([
+  0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+]);
+const DEFAULT_KEY_BYTES = new Uint8Array([
+  0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+]);
 
 // How long after the last spec edit before we re-run the cipher. 200ms is
 // long enough that fast typing on 256 S-box cells doesn't cause a re-run
@@ -40,11 +54,13 @@ const AUTO_RERUN_DEBOUNCE_MS = 200;
 export const App = () => {
   const spec = useSpec();
   const mode = useMode();
+  const fmt = useByteFormat();
 
-  // Inputs — kept as strings so the user can paste partial hex without
-  // the input fighting them mid-type. We validate on run.
-  const [inputHex, setInputHex] = createSignal(DEFAULT_PT);
-  const [keyHex, setKeyHex] = createSignal(DEFAULT_KEY);
+  // Inputs — kept as strings (in whatever the current byte format is) so
+  // the user can paste partial input without the field fighting them
+  // mid-type. We validate on run.
+  const [inputText, setInputText] = createSignal(formatBytes(DEFAULT_PT_BYTES, fmt()));
+  const [keyText, setKeyText] = createSignal(formatBytes(DEFAULT_KEY_BYTES, fmt()));
   const [error, setError] = createSignal<string | null>(null);
 
   // Has the user successfully run the cipher at least once? If yes, spec
@@ -64,15 +80,17 @@ export const App = () => {
   const run = (): void => {
     try {
       setError(null);
-      const inputBytes = bytesFromHex(inputHex());
-      if (inputBytes.length !== 16) {
-        throw new Error(
-          `${inputLabel()} must be 16 bytes (32 hex chars), got ${inputBytes.length}`,
-        );
+      let inputBytes: Uint8Array;
+      try {
+        inputBytes = parseBytesWithLength(inputText(), fmt(), 16);
+      } catch (e) {
+        throw new Error(`${inputLabel()}: ${e instanceof Error ? e.message : String(e)}`);
       }
-      const keyBytes = bytesFromHex(keyHex());
-      if (keyBytes.length !== 16) {
-        throw new Error(`key must be 16 bytes (32 hex chars), got ${keyBytes.length}`);
+      let keyBytes: Uint8Array;
+      try {
+        keyBytes = parseBytesWithLength(keyText(), fmt(), 16);
+      } catch (e) {
+        throw new Error(`key: ${e instanceof Error ? e.message : String(e)}`);
       }
       const initialAux = new Map<string, AuxValue>([["key", keyBytes]]);
       const trace = runSpec(spec(), registry, {
@@ -101,6 +119,21 @@ export const App = () => {
     ),
   );
 
+  /**
+   * Switch byte format. Re-renders the current input/key text in the new
+   * format so the user doesn't lose their value. If a field doesn't parse
+   * cleanly in the old format (mid-edit garbage), leave the raw text alone
+   * — the user will see an error on the next Run anyway, no point clobbering
+   * their in-flight typing.
+   */
+  const changeFormat = (next: ByteFormat): void => {
+    const prev = fmt();
+    if (prev === next) return;
+    setInputText(reformatTextOrKeep(inputText(), prev, next));
+    setKeyText(reformatTextOrKeep(keyText(), prev, next));
+    setByteFormat(next);
+  };
+
   // Reactive derived values for the trace view.
   const frameIndex = useFrameIndex();
   const version = useTraceVersion();
@@ -110,11 +143,11 @@ export const App = () => {
     return getTrace()?.frames[frameIndex()] ?? null;
   });
 
-  const outputHex = createMemo(() => {
+  const outputText = createMemo(() => {
     void version();
     const t = getTrace();
     if (!t || t.finalState.shape !== "matrix4x4-bytes") return null;
-    return hexFromBytes(t.finalState.bytes);
+    return formatBytes(t.finalState.bytes, fmt());
   });
 
   // Labels switch between encrypt/decrypt modes so the UI doesn't lie.
@@ -141,19 +174,48 @@ export const App = () => {
             <option value="decrypt">decrypt</option>
           </select>
         </label>
+        {/* Group of buttons (not a single form control) → semantic
+            <fieldset>/<legend> per biome's a11y lint. The group browses
+            as one labeled chunk for screen readers. */}
+        <fieldset class="input-group">
+          <legend class="input-group-label">bytes</legend>
+          <div class="format-toggle">
+            <button
+              type="button"
+              classList={{ active: fmt() === "hex" }}
+              onClick={() => changeFormat("hex")}
+            >
+              hex
+            </button>
+            <button
+              type="button"
+              classList={{ active: fmt() === "decimal" }}
+              onClick={() => changeFormat("decimal")}
+            >
+              dec
+            </button>
+            <button
+              type="button"
+              classList={{ active: fmt() === "ascii" }}
+              onClick={() => changeFormat("ascii")}
+            >
+              ASCII
+            </button>
+          </div>
+        </fieldset>
         <label>
-          {inputLabel()} (hex)
+          {inputLabel()} ({fmt()})
           <input
-            value={inputHex()}
-            onInput={(e) => setInputHex(e.currentTarget.value)}
+            value={inputText()}
+            onInput={(e) => setInputText(e.currentTarget.value)}
             spellcheck={false}
           />
         </label>
         <label>
-          key (hex)
+          key ({fmt()})
           <input
-            value={keyHex()}
-            onInput={(e) => setKeyHex(e.currentTarget.value)}
+            value={keyText()}
+            onInput={(e) => setKeyText(e.currentTarget.value)}
             spellcheck={false}
           />
         </label>
@@ -170,9 +232,9 @@ export const App = () => {
         <div class="error">{error()}</div>
       </Show>
 
-      <Show when={!error() && outputHex()}>
+      <Show when={!error() && outputText()}>
         <div class="result">
-          {outputLabel()}: <code>{outputHex()}</code>
+          {outputLabel()} ({fmt()}): <code>{outputText()}</code>
         </div>
       </Show>
 
@@ -231,4 +293,19 @@ export const App = () => {
       </aside>
     </div>
   );
+};
+
+/**
+ * Best-effort re-render of an input field's text when the format toggles.
+ * If the field parses cleanly in the old format, re-emit it in the new
+ * one. If not (user typed partial / invalid data), leave the raw text
+ * alone — better than clobbering their in-progress edit.
+ */
+const reformatTextOrKeep = (text: string, from: ByteFormat, to: ByteFormat): string => {
+  try {
+    const bytes = parseBytes(text, from);
+    return formatBytes(bytes, to);
+  } catch {
+    return text;
+  }
 };

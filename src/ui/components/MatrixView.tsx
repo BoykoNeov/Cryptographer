@@ -1,5 +1,7 @@
+import { type ByteFormat, formatByte } from "@/core/format";
 import type { MatrixState } from "@/core/types";
 import { For } from "solid-js";
+import { useByteFormat } from "../stores/format";
 
 type Props = {
   before: MatrixState;
@@ -8,9 +10,11 @@ type Props = {
 
 /**
  * Side-by-side 4×4 byte grids. Cells where the byte changed between
- * `before` and `after` are highlighted on the right.
+ * `before` and `after` are highlighted on the right. Bytes render in the
+ * currently-selected format (hex / decimal / ASCII) from the format store.
  */
 export const MatrixView = (props: Props) => {
+  const fmt = useByteFormat();
   const cells = () => {
     const out: { row: number; col: number; before: number; after: number; changed: boolean }[] = [];
     for (let c = 0; c < 4; c++) {
@@ -26,8 +30,8 @@ export const MatrixView = (props: Props) => {
 
   return (
     <div class="matrix-view">
-      <Grid title="before" cells={cells()} field="before" />
-      <Grid title="after" cells={cells()} field="after" highlightChanged />
+      <Grid title="before" cells={cells()} field="before" format={fmt()} />
+      <Grid title="after" cells={cells()} field="after" highlightChanged format={fmt()} />
     </div>
   );
 };
@@ -37,6 +41,7 @@ const Grid = (props: {
   cells: { row: number; col: number; before: number; after: number; changed: boolean }[];
   field: "before" | "after";
   highlightChanged?: boolean;
+  format: ByteFormat;
 }) => (
   <div class="grid-block">
     <div class="grid-title">{props.title}</div>
@@ -48,7 +53,7 @@ const Grid = (props: {
             classList={{ changed: !!props.highlightChanged && cell.changed }}
             style={{ "grid-row": `${cell.row + 1}`, "grid-column": `${cell.col + 1}` }}
           >
-            {(cell[props.field] as number).toString(16).padStart(2, "0")}
+            {formatByte(cell[props.field] as number, props.format)}
           </div>
         )}
       </For>
