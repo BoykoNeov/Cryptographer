@@ -85,6 +85,9 @@ export const ParamEditor = (props: Props) => {
             <Match when={getStep().type === "aes.key-expansion@1"}>
               <KeyExpansionBlock step={getStep()} matchingCount={matchingSteps()} />
             </Match>
+            <Match when={getStep().type === "generic.add-round-key@1"}>
+              <AddRoundKeyBlock step={getStep()} matchingCount={matchingSteps()} />
+            </Match>
           </Switch>
         </div>
       )}
@@ -255,6 +258,29 @@ const KeyExpansionBlock = (props: BlockProps) => {
         label="key-expansion params"
       />
     </>
+  );
+};
+
+// AddRoundKey block.
+//
+// One param, one string: { auxName: "roundKey.N" }. The raw-JSON fallback
+// rendered this as three lines for one fact. Single read-only scalar row
+// matches the look of the key-expansion scalars.
+//
+// No ApplyAllRow: each AddRoundKey step intentionally references a
+// DIFFERENT round key (roundKey.0 … roundKey.Nr), and copying one step's
+// auxName onto every match would silently XOR the same round key Nr+1
+// times and produce wrong ciphertext.
+const AddRoundKeyBlock = (props: BlockProps) => {
+  const params = (): { auxName?: string } => props.step.params as never;
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>Round key aux</dt>
+        <dd>{params().auxName ?? "—"}</dd>
+      </div>
+    </dl>
   );
 };
 
