@@ -9,16 +9,16 @@
  * canonical spec is loaded for the current mode. Keeping it out of the spec
  * means switching encrypt↔decrypt doesn't lose the user's padding preference.
  *
- * Today's vocabulary is "none" | "pkcs7". The select is built to extend:
- * "zero-pad" and "iso7816-4" arrive in a follow-up commit; both are
- * additional registry+helper entries, not a refactor.
+ * Vocabulary: "none" | "pkcs7" | "zero-pad" | "iso7816-4". The select was
+ * built extensibly for exactly this: adding a new scheme is a registry
+ * entry + a row in `paddingLimits` + a label below.
  */
 
 import type { PaddingScheme } from "@/core/spec-mutations";
 import { createSignal } from "solid-js";
 
 const STORAGE_KEY = "cryptographer.paddingScheme";
-const ALL_PADDING_SCHEMES: readonly PaddingScheme[] = ["none", "pkcs7"];
+const ALL_PADDING_SCHEMES: readonly PaddingScheme[] = ["none", "pkcs7", "zero-pad", "iso7816-4"];
 
 const loadInitial = (): PaddingScheme => {
   // Same defensive shape as the format store — localStorage may be absent
@@ -59,6 +59,8 @@ export type { PaddingScheme };
 export const PADDING_SCHEME_LABELS: Record<PaddingScheme, string> = {
   none: "none",
   pkcs7: "PKCS#7",
+  "zero-pad": "Zero-pad",
+  "iso7816-4": "ISO 7816-4",
 };
 
 export const PADDING_SCHEME_OPTIONS = ALL_PADDING_SCHEMES;
@@ -68,13 +70,19 @@ export const PADDING_SCHEME_OPTIONS = ALL_PADDING_SCHEMES;
  * handler to give a friendly error when the user's input is the wrong size
  * for single-block scope.
  *
- *   encrypt + none   → exactly 16 (today's behavior)
- *   encrypt + pkcs7  → 0..15 (PKCS#7 always adds ≥1 byte; 16 raw bytes
- *                             would need a second padding block, which
- *                             requires multi-block modes)
- *   decrypt + any    → exactly 16 (ciphertext is always one full block)
+ *   encrypt + none      → exactly 16 (today's behavior)
+ *   encrypt + pkcs7     → 0..15  (PKCS#7 always adds ≥1 byte; 16 raw bytes
+ *                                 would need a second padding block)
+ *   encrypt + zero-pad  → 1..16  (zero-pad doesn't always pad, so 16 bytes
+ *                                 fits in one block; length 0 is excluded
+ *                                 because the formula gives N=0 there,
+ *                                 producing a 0-byte block that fails
+ *                                 load-block)
+ *   encrypt + iso7816-4 → 0..15  (sentinel-byte-based; always adds ≥1 byte,
+ *                                 same shape constraint as PKCS#7)
+ *   decrypt + any       → exactly 16 (ciphertext is always one full block)
  *
- * Future schemes will register their own ranges here.
+ * Multi-block modes would relax the upper bound; that's a separate phase.
  */
 export const paddingLimits = (
   mode: "encrypt" | "decrypt",
@@ -85,6 +93,10 @@ export const paddingLimits = (
     case "none":
       return { min: 16, max: 16 };
     case "pkcs7":
+      return { min: 0, max: 15 };
+    case "zero-pad":
+      return { min: 1, max: 16 };
+    case "iso7816-4":
       return { min: 0, max: 15 };
   }
 };

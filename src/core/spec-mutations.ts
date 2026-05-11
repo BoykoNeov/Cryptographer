@@ -227,27 +227,64 @@ export const compareSpecs = (a: CipherSpec, b: CipherSpec): readonly SpecParamDi
 
 // ─── Padding-scheme overlay ───────────────────────────────────────────────
 // Layer a padding chain onto a canonical cipher spec without modifying the
-// canonical spec itself. The four step types listed in `PADDING_STEP_TYPES`
-// are reserved for this overlay — `applyPaddingScheme` strips any existing
+// canonical spec itself. The step types listed in `PADDING_STEP_TYPES` are
+// reserved for this overlay — `applyPaddingScheme` strips any existing
 // instance before inserting the new chain, so calling it repeatedly with
 // the same scheme is a no-op (idempotent).
 //
-// Encrypt + pkcs7: prepend  [pkcs7-pad → load-block] to spec.steps. Input
+// Encrypt + <scheme>: prepend [<scheme>-pad → load-block] to spec.steps. Input
 //   shape becomes `bytes` (variable-length); the runtime seeds with BytesState
 //   and the load-block frame transitions to MatrixState before AES runs.
-// Decrypt + pkcs7: append   [store-block → pkcs7-unpad] to spec.steps. Input
-//   shape stays `matrix4x4-bytes` (the ciphertext is one block). The final
-//   state after the chain is BytesState (0..blockSize-1 bytes of recovered
-//   plaintext).
+// Decrypt + <scheme>: append   [store-block → <scheme>-unpad] to spec.steps.
+//   Input shape stays `matrix4x4-bytes` (the ciphertext is one block). The
+//   final state after the chain is BytesState (0..blockSize bytes of
+//   recovered plaintext, depending on scheme).
 // scheme=none: strips any existing chain and returns the canonical spec
 //   unchanged (or as close to it as `applyPaddingScheme` was last fed).
+//
+// Adding a new scheme: register the pad/unpad step types in the registry,
+// extend the `PaddingScheme` union below, add its (pad, unpad) type pair
+// to `SCHEME_STEP_TYPES`, and (in the UI store) extend `paddingLimits` +
+// `PADDING_SCHEME_LABELS`. No edits to the rest of this function needed.
 
-export type PaddingScheme = "none" | "pkcs7";
+export type PaddingScheme = "none" | "pkcs7" | "zero-pad" | "iso7816-4";
 
-/** Step types reserved for the padding overlay. */
-const PADDING_STEP_TYPES: ReadonlySet<string> = new Set([
-  "generic.pkcs7-pad@1",
-  "generic.pkcs7-unpad@1",
+/**
+ * Per-scheme step-type pair. Keyed by every non-`none` scheme so the
+ * encrypt/decrypt overlay branches can build leaves without a per-scheme
+ * `if` ladder. Extending: register the step types, then add a row here.
+ */
+const SCHEME_STEP_TYPES: Record<
+  Exclude<PaddingScheme, "none">,
+  { padType: string; unpadType: string; padId: string; unpadId: string }
+> = {
+  pkcs7: {
+    padType: "generic.pkcs7-pad@1",
+    unpadType: "generic.pkcs7-unpad@1",
+    padId: "pkcs7-pad",
+    unpadId: "pkcs7-unpad",
+  },
+  "zero-pad": {
+    padType: "generic.zero-pad@1",
+    unpadType: "generic.zero-unpad@1",
+    padId: "zero-pad",
+    unpadId: "zero-unpad",
+  },
+  "iso7816-4": {
+    padType: "generic.iso7816-4-pad@1",
+    unpadType: "generic.iso7816-4-unpad@1",
+    padId: "iso7816-4-pad",
+    unpadId: "iso7816-4-unpad",
+  },
+};
+
+/**
+ * Step types reserved for the padding overlay. Derived from
+ * `SCHEME_STEP_TYPES` plus the two shape-bridge steps so adding a new
+ * scheme automatically extends what gets stripped on a re-apply.
+ */
+const PADDING_STEP_TYPES: ReadonlySet<string> = new Set<string>([
+  ...Object.values(SCHEME_STEP_TYPES).flatMap((s) => [s.padType, s.unpadType]),
   "generic.load-block@1",
   "generic.store-block@1",
 ]);
@@ -300,12 +337,13 @@ export const applyPaddingScheme = (
     };
   }
 
-  // scheme === "pkcs7"
+  const { padType, unpadType, padId, unpadId } = SCHEME_STEP_TYPES[scheme];
+
   if (mode === "encrypt") {
     const padLeaf: StepLeaf = {
       kind: "step",
-      id: "pkcs7-pad",
-      type: "generic.pkcs7-pad@1",
+      id: padId,
+      type: padType,
       params: { blockSize: AES_BLOCK_SIZE },
     };
     const loadLeaf: StepLeaf = {
@@ -314,8 +352,9 @@ export const applyPaddingScheme = (
       type: "generic.load-block@1",
       params: { blockSize: AES_BLOCK_SIZE },
     };
-    // Input now arrives as BytesState (variable length 0..blockSize-1).
-    // The load-block frame is the visible transition into the matrix.
+    // Input now arrives as BytesState (variable length, range depends on
+    // scheme — see paddingLimits in the UI store). The load-block frame
+    // is the visible transition into the AES 4×4 matrix.
     const plaintextShape: StateShape = "bytes";
     return {
       ...spec,
@@ -337,8 +376,8 @@ export const applyPaddingScheme = (
   };
   const unpadLeaf: StepLeaf = {
     kind: "step",
-    id: "pkcs7-unpad",
-    type: "generic.pkcs7-unpad@1",
+    id: unpadId,
+    type: unpadType,
     params: { blockSize: AES_BLOCK_SIZE },
   };
   // Decrypt input is still the 16-byte ciphertext block — matrix-direct.

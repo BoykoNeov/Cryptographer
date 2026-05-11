@@ -1,6 +1,6 @@
 # Plaintext input + visible padding for AES (single-block)
 
-**Status:** ✅ Shipped in commit `cbaba6a` (May 2026). Multi-block + ECB/CBC/CTR/GCM modes and zero-pad / ISO 7816-4 schemes remain deferred per the "Deferred" section below; the padding selector is built extensible for them.
+**Status:** ✅ Shipped in commit `cbaba6a` (May 2026) for PKCS#7; ✅ extended with zero-pad + ISO 7816-4 in a follow-up (May 2026). Multi-block + ECB/CBC/CTR/GCM modes remain deferred per the "Deferred" section below; the three single-block schemes are all in.
 
 ## Context
 
@@ -126,7 +126,7 @@ Existing tests stay untouched (FIPS-197 vectors test the canonical spec; `applyP
 
 ## Deferred (explicitly out of scope)
 
-- **Zero-pad and ISO 7816-4 schemes** — the scheme select is built extensibly so they're a registry+enum addition later, not a refactor. Document this in the v1 padding-pad step doc so users know more schemes are coming.
+- ~~**Zero-pad and ISO 7816-4 schemes**~~ — ✅ shipped in the follow-up commit. Added as a generic.zero-pad@1 / generic.zero-unpad@1 pair (lossy on trailing zeros — that's the lesson) and a generic.iso7816-4-pad@1 / generic.iso7816-4-unpad@1 pair (0x80 sentinel + zeros). Each pair's `StepDocumentation.detail` calls out the trade-offs vs. the other two schemes so the educational story is captured in-app. Limits: zero-pad accepts 1..16 bytes on encrypt (length 0 excluded because the canonical formula gives N=0 → empty block → fails load-block); iso7816-4 accepts 0..15 like PKCS#7 (always adds ≥1 byte).
 - **Multi-block + modes** (ECB / CBC / CTR / GCM) — requires a loop construct in the spec (the current runtime is linear). Listed as a future architecture phase.
 - **RSA / stream-cipher padding** — handled when those ciphers are added; the PKCS#7 module is not reused for them.
 - **Plaintext on output for *encrypt*** — ciphertext is pseudorandom, ASCII rendering of it would be garbage. The "see plaintext on output" benefit is realized in decrypt mode (which this plan already covers via the unpad step + widened `outputText` memo).

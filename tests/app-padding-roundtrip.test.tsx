@@ -191,3 +191,139 @@ describe("App — PKCS#7 padding round-trip", () => {
     expect(decResultCode).toBe("6170706c65");
   });
 });
+
+describe("App — ISO 7816-4 padding round-trip", () => {
+  beforeEach(() => resetAll());
+  afterEach(() => {
+    cleanup();
+    resetAll();
+  });
+
+  it("encrypts 'apple' under ISO 7816-4 and the pad frame ends in 0x80 + zeros", () => {
+    const { container } = render(() => <App />);
+
+    fireEvent.change(findSelectByLabel(container, "padding"), {
+      target: { value: "iso7816-4" },
+    });
+    fireEvent.click(findFormatButton(container, "ASCII"));
+    expect(findInputByLabel(container, "plaintext").value).toBe("apple");
+
+    fireEvent.click(findButton(container, "run"));
+
+    const err = container.querySelector(".error");
+    expect(err).toBeFalsy();
+
+    // Scrub to frame 0 (= the iso7816-4-pad frame).
+    const slider = container.querySelector(
+      ".trace-timeline input[type='range']",
+    ) as HTMLInputElement | null;
+    expect(slider).toBeTruthy();
+    if (!slider) return;
+    fireEvent.input(slider, { target: { value: "0" } });
+
+    const frameStep = container.querySelector(".frame-step")?.textContent ?? "";
+    expect(frameStep).toContain("iso7816-4-pad");
+
+    // 'after' row: 16 cells, byte 5 is 0x80 sentinel, bytes 6..15 are 0x00.
+    const rows = container.querySelectorAll(".bytes-row-block");
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    const afterCells = rows[1]?.querySelectorAll(".bytes-cell") ?? [];
+    expect(afterCells.length).toBe(16);
+    expect(afterCells[5]?.textContent?.trim()).toBe("\\x80");
+    for (let i = 6; i < 16; i++) {
+      expect(afterCells[i]?.textContent?.trim()).toBe("\\x00");
+    }
+  });
+
+  it("round-trips 'apple' through encrypt → decrypt under ISO 7816-4", () => {
+    const { container } = render(() => <App />);
+
+    // Encrypt path.
+    fireEvent.change(findSelectByLabel(container, "padding"), {
+      target: { value: "iso7816-4" },
+    });
+    fireEvent.input(findInputByLabel(container, "plaintext"), {
+      target: { value: "6170706c65" }, // "apple" in hex
+    });
+    fireEvent.click(findButton(container, "run"));
+
+    const cipherHex = (container.querySelector(".result code")?.textContent ?? "").trim();
+    expect(cipherHex.length).toBe(32);
+
+    // Decrypt path.
+    fireEvent.change(findSelectByLabel(container, "mode"), { target: { value: "decrypt" } });
+    expect(findSelectByLabel(container, "padding").value).toBe("iso7816-4");
+    fireEvent.input(findInputByLabel(container, "ciphertext"), {
+      target: { value: cipherHex },
+    });
+    fireEvent.click(findButton(container, "run"));
+
+    const decHex = (container.querySelector(".result code")?.textContent ?? "").trim();
+    expect(decHex).toBe("6170706c65"); // "apple" recovered intact
+  });
+});
+
+describe("App — Zero-pad scheme", () => {
+  beforeEach(() => resetAll());
+  afterEach(() => {
+    cleanup();
+    resetAll();
+  });
+
+  it("keeps the FIPS 16-byte default when switching to zero-pad (max=16)", () => {
+    const { container } = render(() => <App />);
+
+    // Default plaintext is the FIPS vector (16 bytes). Zero-pad accepts up
+    // to 16 bytes, so the input doesn't need swapping — verify the App
+    // does NOT clobber the user's input on this transition.
+    const inputBefore = findInputByLabel(container, "plaintext").value;
+    fireEvent.change(findSelectByLabel(container, "padding"), {
+      target: { value: "zero-pad" },
+    });
+    const inputAfter = findInputByLabel(container, "plaintext").value;
+    expect(inputAfter).toBe(inputBefore);
+  });
+
+  it("encrypts the 16-byte FIPS vector under zero-pad with no padding step output growth", () => {
+    const { container } = render(() => <App />);
+
+    fireEvent.change(findSelectByLabel(container, "padding"), {
+      target: { value: "zero-pad" },
+    });
+    fireEvent.click(findButton(container, "run"));
+
+    // No error, valid ciphertext produced.
+    expect(container.querySelector(".error")).toBeFalsy();
+    const cipherHex = (container.querySelector(".result code")?.textContent ?? "").trim();
+    expect(cipherHex.length).toBe(32);
+
+    // Scrub to frame 0 (the zero-pad frame). Zero-pad on a clean block
+    // multiple is a no-op: 'after' bytes should match 'before' length-wise.
+    const slider = container.querySelector(
+      ".trace-timeline input[type='range']",
+    ) as HTMLInputElement | null;
+    if (!slider) return;
+    fireEvent.input(slider, { target: { value: "0" } });
+    const frameStep = container.querySelector(".frame-step")?.textContent ?? "";
+    expect(frameStep).toContain("zero-pad");
+    const rows = container.querySelectorAll(".bytes-row-block");
+    const beforeCells = rows[0]?.querySelectorAll(".bytes-cell") ?? [];
+    const afterCells = rows[1]?.querySelectorAll(".bytes-cell") ?? [];
+    expect(beforeCells.length).toBe(16);
+    expect(afterCells.length).toBe(16);
+  });
+
+  it("rejects length-0 input under zero-pad with a friendly error", () => {
+    const { container } = render(() => <App />);
+
+    fireEvent.change(findSelectByLabel(container, "padding"), {
+      target: { value: "zero-pad" },
+    });
+    fireEvent.input(findInputByLabel(container, "plaintext"), { target: { value: "" } });
+    fireEvent.click(findButton(container, "run"));
+
+    const err = container.querySelector(".error")?.textContent ?? "";
+    expect(err).toContain("Zero-pad");
+    expect(err).toContain("1–16 bytes");
+  });
+});

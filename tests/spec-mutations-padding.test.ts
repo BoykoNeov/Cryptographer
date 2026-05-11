@@ -106,6 +106,106 @@ describe("applyPaddingScheme idempotency", () => {
   });
 });
 
+describe("applyPaddingScheme(spec, encrypt, 'zero-pad')", () => {
+  it("prepends zero-pad and load-block in that order", () => {
+    const result = applyPaddingScheme(aes128Spec, "encrypt", "zero-pad");
+    const types = topLevelLeafTypes(result);
+    expect(types[0]).toBe("generic.zero-pad@1");
+    expect(types[1]).toBe("generic.load-block@1");
+    expect(types[2]).toBe("aes.key-expansion@1");
+  });
+
+  it("declares input shape as 'bytes' so the runtime accepts BytesState", () => {
+    const result = applyPaddingScheme(aes128Spec, "encrypt", "zero-pad");
+    expect(result.inputs.plaintext.shape).toBe("bytes");
+  });
+
+  it("uses blockSize=16 in zero-pad/load params", () => {
+    const result = applyPaddingScheme(aes128Spec, "encrypt", "zero-pad");
+    const pad = findFirstLeaf(result, "generic.zero-pad@1");
+    expect(pad?.params).toEqual({ blockSize: 16 });
+  });
+});
+
+describe("applyPaddingScheme(spec, decrypt, 'zero-pad')", () => {
+  it("appends store-block and zero-unpad in that order", () => {
+    const result = applyPaddingScheme(aes128DecryptSpec, "decrypt", "zero-pad");
+    const types = topLevelLeafTypes(result);
+    expect(types[types.length - 2]).toBe("generic.store-block@1");
+    expect(types[types.length - 1]).toBe("generic.zero-unpad@1");
+    expect(result.inputs.plaintext.shape).toBe("matrix4x4-bytes");
+  });
+});
+
+describe("applyPaddingScheme(spec, encrypt, 'iso7816-4')", () => {
+  it("prepends iso7816-4-pad and load-block in that order", () => {
+    const result = applyPaddingScheme(aes128Spec, "encrypt", "iso7816-4");
+    const types = topLevelLeafTypes(result);
+    expect(types[0]).toBe("generic.iso7816-4-pad@1");
+    expect(types[1]).toBe("generic.load-block@1");
+    expect(types[2]).toBe("aes.key-expansion@1");
+  });
+
+  it("declares input shape as 'bytes'", () => {
+    const result = applyPaddingScheme(aes128Spec, "encrypt", "iso7816-4");
+    expect(result.inputs.plaintext.shape).toBe("bytes");
+  });
+
+  it("uses blockSize=16 in pad params", () => {
+    const result = applyPaddingScheme(aes128Spec, "encrypt", "iso7816-4");
+    const pad = findFirstLeaf(result, "generic.iso7816-4-pad@1");
+    expect(pad?.params).toEqual({ blockSize: 16 });
+  });
+});
+
+describe("applyPaddingScheme(spec, decrypt, 'iso7816-4')", () => {
+  it("appends store-block and iso7816-4-unpad in that order", () => {
+    const result = applyPaddingScheme(aes128DecryptSpec, "decrypt", "iso7816-4");
+    const types = topLevelLeafTypes(result);
+    expect(types[types.length - 2]).toBe("generic.store-block@1");
+    expect(types[types.length - 1]).toBe("generic.iso7816-4-unpad@1");
+  });
+});
+
+describe("applyPaddingScheme cross-scheme swaps", () => {
+  it("pkcs7 → zero-pad strips PKCS#7 leaves before inserting zero-pad", () => {
+    const pkcs7 = applyPaddingScheme(aes128Spec, "encrypt", "pkcs7");
+    const zero = applyPaddingScheme(pkcs7, "encrypt", "zero-pad");
+    const types = topLevelLeafTypes(zero);
+    // No PKCS#7 residue.
+    expect(types).not.toContain("generic.pkcs7-pad@1");
+    expect(types).not.toContain("generic.pkcs7-unpad@1");
+    // New zero-pad chain present.
+    expect(types[0]).toBe("generic.zero-pad@1");
+    expect(types[1]).toBe("generic.load-block@1");
+  });
+
+  it("iso7816-4 → none returns canonical-equivalent (no overlay leaves)", () => {
+    const iso = applyPaddingScheme(aes128Spec, "encrypt", "iso7816-4");
+    const canonical = applyPaddingScheme(iso, "encrypt", "none");
+    const types = topLevelLeafTypes(canonical);
+    expect(types).not.toContain("generic.iso7816-4-pad@1");
+    expect(types).not.toContain("generic.load-block@1");
+    expect(types[0]).toBe("aes.key-expansion@1");
+    expect(canonical.inputs.plaintext.shape).toBe("matrix4x4-bytes");
+  });
+
+  it("all three non-none schemes produce structurally parallel encrypt overlays", () => {
+    // Same leaf ORDER and leaf COUNT for all three; only the scheme-
+    // specific pad-step type differs. This pins the generic shape: any
+    // future scheme should look the same from the outside.
+    const a = topLevelLeafTypes(applyPaddingScheme(aes128Spec, "encrypt", "pkcs7"));
+    const b = topLevelLeafTypes(applyPaddingScheme(aes128Spec, "encrypt", "zero-pad"));
+    const c = topLevelLeafTypes(applyPaddingScheme(aes128Spec, "encrypt", "iso7816-4"));
+    expect(a.length).toBe(b.length);
+    expect(b.length).toBe(c.length);
+    // Position 0 = the pad step (differs by scheme); 1 = load-block; rest =
+    // canonical AES tail and is identical across schemes.
+    expect(a.slice(1)).toEqual(b.slice(1));
+    expect(b.slice(1)).toEqual(c.slice(1));
+  });
+});
+
 describe("applyPaddingScheme preserves user edits to canonical AES leaves", () => {
   it("does not touch round groups when applying overlay", () => {
     // Round groups (round.1, round.2, ...) carry the per-round sub-bytes /

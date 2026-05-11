@@ -7,10 +7,10 @@ Interactive cryptography explorer. The user enters plaintext + key, sees every i
 | Command | What it does |
 |---|---|
 | `npm run dev` | Vite dev server at `http://localhost:5173`. Hot-reloads on file changes. |
-| `npm test` | Vitest, single run. Currently 161 tests across 16 files, ~1.8s total (jsdom UI tests dominate). |
+| `npm test` | Vitest, single run. Currently 203 tests across 18 files, ~1.9s total (jsdom UI tests dominate). |
 | `npm run typecheck` | `tsc --noEmit`, strict. |
 | `npm run check` | The gate: `biome ci . && tsc --noEmit && vitest run && vite build`. Runs in ~6s on this machine. |
-| `npm run build` | Production build into `dist/`. ~28KB gzipped JS. |
+| `npm run build` | Production build into `dist/`. ~31KB gzipped JS. |
 
 The pre-commit hook in `.githooks/pre-commit` runs `npm run check`. GitHub Actions in `.github/workflows/ci.yml` runs the same on push. Don't bypass with `--no-verify` unless you have a specific reason; both gates exist for a reason.
 
@@ -131,6 +131,6 @@ If a future need argues for one of these, revisit then.
 
 - Original architectural plan: `~/.claude/plans/i-want-to-build-tender-spark.md`
 - Approved UX/feature plan (phases 1–4: frame preservation, run history + diff, byte format toggle, deferred 2D viz): `docs/plans/suggestions-1-4.md`
-- Plaintext input + visible PKCS#7 padding plan (shipped May 2026; multi-block + zero-pad / ISO 7816-4 deferred): `docs/plans/pkcs7-padding.md`
+- Plaintext input + visible padding plan (PKCS#7 shipped May 2026; zero-pad + ISO 7816-4 follow-up shipped May 2026; multi-block deferred): `docs/plans/pkcs7-padding.md`
 - User preferences (commit cadence, comment density): saved as feedback memories under `C:\Users\boiko\.claude\projects\M--claud-projects-Cryptographer\memory\`
 - GitHub repo: https://github.com/BoykoNeov/Cryptographer

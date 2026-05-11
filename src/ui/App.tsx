@@ -76,11 +76,12 @@ const DEFAULT_PT_BYTES = new Uint8Array([
 const DEFAULT_KEY_BYTES = new Uint8Array([
   0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
 ]);
-// When the user reloads with padding="pkcs7" persisted, the FIPS vector
-// (16 bytes) would immediately fail the 0..15 length cap. Default to a
-// short, visible word so the trace produces a clean pad/unpad frame on
-// first Run. The bytes are the ASCII codepoints for "apple".
-const DEFAULT_PKCS7_PT_BYTES = new Uint8Array([0x61, 0x70, 0x70, 0x6c, 0x65]);
+// When the user reloads with a non-`none` padding scheme that caps input
+// below 16 bytes (pkcs7 + iso7816-4), the FIPS vector would immediately
+// fail the length check. Default to a short, visible word so the trace
+// produces a clean pad/unpad frame on first Run. The bytes are the ASCII
+// codepoints for "apple".
+const DEFAULT_SHORT_PT_BYTES = new Uint8Array([0x61, 0x70, 0x70, 0x6c, 0x65]);
 
 // How long after the last spec edit before we re-run the cipher. 200ms is
 // long enough that fast typing on 256 S-box cells doesn't cause a re-run
@@ -96,10 +97,12 @@ export const App = () => {
   // Inputs — kept as strings (in whatever the current byte format is) so
   // the user can paste partial input without the field fighting them
   // mid-type. We validate on run. Initial plaintext varies by initial
-  // padding scheme: pkcs7+encrypt gets the short "apple" so the user sees
-  // padding working immediately on a fresh reload.
+  // padding scheme: schemes that cap encrypt input below 16 bytes (pkcs7
+  // + iso7816-4) get the short "apple" so the user sees padding working
+  // immediately on a fresh reload.
+  const initialLimits = paddingLimits(mode(), padding());
   const initialPtBytes =
-    padding() === "pkcs7" && mode() === "encrypt" ? DEFAULT_PKCS7_PT_BYTES : DEFAULT_PT_BYTES;
+    mode() === "encrypt" && initialLimits.max < 16 ? DEFAULT_SHORT_PT_BYTES : DEFAULT_PT_BYTES;
   const [inputText, setInputText] = createSignal(formatBytes(initialPtBytes, fmt()));
   const [keyText, setKeyText] = createSignal(formatBytes(DEFAULT_KEY_BYTES, fmt()));
   const [error, setError] = createSignal<string | null>(null);
@@ -151,10 +154,13 @@ export const App = () => {
         throw new Error(`key: ${e instanceof Error ? e.message : String(e)}`);
       }
 
-      // Initial state shape: bytes for encrypt+pkcs7 (variable-length input
-      // entering the pad chain); matrix for everything else (today's flow).
+      // Initial state shape: bytes for any encrypt run with a non-`none`
+      // padding scheme (input enters the pad chain as a variable-length
+      // byte sequence). Matrix for everything else — `none` keeps the
+      // canonical 16-byte matrix flow, and decrypt always seeds with the
+      // 16-byte ciphertext block regardless of scheme.
       const initialState: State =
-        mode() === "encrypt" && padding() === "pkcs7"
+        mode() === "encrypt" && padding() !== "none"
           ? makeBytesState(inputBytes)
           : matrixFromBytes(inputBytes);
 
@@ -213,27 +219,38 @@ export const App = () => {
 
   /**
    * Switch padding scheme. Persists the choice, rebuilds the spec with the
-   * new overlay (triggers auto-rerun via createEffect on spec), and — on
-   * the transition from "none" to "pkcs7" — swaps the default FIPS vector
-   * for the short "apple" so the new pad frame shows up immediately.
+   * new overlay (triggers auto-rerun via createEffect on spec), and — when
+   * the user's current input would no longer fit the new scheme's length
+   * range — swaps in a sensible default so the next Run produces a clean
+   * frame instead of a length-mismatch error.
    *
-   * We only swap the input bytes if the field currently holds the canonical
-   * FIPS vector (untouched first-load state). If the user already typed
-   * something else, we leave it alone — clobbering their edit on a selector
-   * change would be hostile.
+   * Swap policy: only touches the input if it currently holds one of our
+   * two canonical defaults (FIPS-197 16-byte vector, or "apple"). If the
+   * user typed anything else, leave it alone — clobbering their in-flight
+   * edit on a selector change would be hostile. They'll see the friendly
+   * length error on the next Run.
+   *
+   * Generalized over the four (and future) schemes: the decision hangs on
+   * the new scheme's max length, not on the scheme name. So zero-pad (max
+   * 16) keeps the FIPS vector; pkcs7/iso7816-4 (max 15) force the short
+   * "apple"; `none` (min/max 16) forces the FIPS vector back if "apple"
+   * is currently in the field.
    */
   const changePadding = (next: PaddingScheme): void => {
     const prev = padding();
     if (prev === next) return;
-    if (next === "pkcs7" && mode() === "encrypt") {
+    if (mode() === "encrypt") {
       const currentBytes = tryParseBytes(inputText(), fmt());
-      if (currentBytes && bytesEqual(currentBytes, DEFAULT_PT_BYTES)) {
-        setInputText(formatBytes(DEFAULT_PKCS7_PT_BYTES, fmt()));
-      }
-    } else if (next === "none" && mode() === "encrypt") {
-      const currentBytes = tryParseBytes(inputText(), fmt());
-      if (currentBytes && bytesEqual(currentBytes, DEFAULT_PKCS7_PT_BYTES)) {
-        setInputText(formatBytes(DEFAULT_PT_BYTES, fmt()));
+      if (currentBytes) {
+        const nextLimits = paddingLimits(mode(), next);
+        const fits = currentBytes.length >= nextLimits.min && currentBytes.length <= nextLimits.max;
+        if (!fits) {
+          if (bytesEqual(currentBytes, DEFAULT_PT_BYTES) && nextLimits.max < 16) {
+            setInputText(formatBytes(DEFAULT_SHORT_PT_BYTES, fmt()));
+          } else if (bytesEqual(currentBytes, DEFAULT_SHORT_PT_BYTES) && nextLimits.min === 16) {
+            setInputText(formatBytes(DEFAULT_PT_BYTES, fmt()));
+          }
+        }
       }
     }
     setPadding(next);
@@ -623,7 +640,7 @@ const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean => {
 /** Build the friendly length-mismatch error shown when the input isn't in
  * the allowed [min, max] range for (mode, scheme). The hint cites the
  * scheme so the user can connect "why 0..15" to "PKCS#7 always adds ≥1 byte
- * to fill the block." */
+ * to fill the block" and similar reasoning for the other schemes. */
 const formatLengthError = (
   mode: "encrypt" | "decrypt",
   scheme: PaddingScheme,
@@ -633,11 +650,23 @@ const formatLengthError = (
 ): string => {
   const label = mode === "encrypt" ? "plaintext" : "ciphertext";
   const range = min === max ? `${min} bytes` : `${min}–${max} bytes`;
-  if (mode === "encrypt" && scheme === "pkcs7") {
-    return `${label}: PKCS#7 input must be ${range}; got ${got}. (A ${max + 1}-byte input would need a second padding block — multi-block modes are not yet supported.)`;
-  }
   if (mode === "decrypt") {
     return `${label}: must be exactly ${min} bytes (one AES block); got ${got}.`;
   }
-  return `${label}: must be ${range}; got ${got}.`;
+  // Encrypt-side, per-scheme hints. Each branch names the scheme and the
+  // structural reason for the cap so the error doubles as a teaching
+  // moment, not just a guard message.
+  switch (scheme) {
+    case "pkcs7":
+      return `${label}: PKCS#7 input must be ${range}; got ${got}. (A ${max + 1}-byte input would need a second padding block — multi-block modes are not yet supported.)`;
+    case "iso7816-4":
+      return `${label}: ISO 7816-4 input must be ${range}; got ${got}. (Like PKCS#7, this scheme always appends at least one byte — the 0x80 sentinel — so a ${max + 1}-byte input would need a second block.)`;
+    case "zero-pad":
+      if (got < min) {
+        return `${label}: Zero-pad input must be ${range}; got ${got}. (Length 0 would produce an empty padded block, which can't be loaded into the AES state.)`;
+      }
+      return `${label}: Zero-pad input must be ${range}; got ${got}. (A ${max + 1}-byte input would need a second padding block — multi-block modes are not yet supported.)`;
+    case "none":
+      return `${label}: must be ${range}; got ${got}.`;
+  }
 };
