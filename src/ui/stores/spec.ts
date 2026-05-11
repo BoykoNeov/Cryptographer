@@ -25,6 +25,10 @@ import { aes192Spec } from "@/ciphers/aes-192";
 import { aes192DecryptSpec } from "@/ciphers/aes-192-decrypt";
 import { aes256Spec } from "@/ciphers/aes-256";
 import { aes256DecryptSpec } from "@/ciphers/aes-256-decrypt";
+import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
+import { speck32_64BeDecryptSpec } from "@/ciphers/speck-32-64-be-decrypt";
+import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
+import { speck32_64LeDecryptSpec } from "@/ciphers/speck-32-64-le-decrypt";
 import {
   type PaddingScheme,
   applyPaddingScheme,
@@ -41,12 +45,16 @@ import { setPaddingScheme, usePaddingScheme } from "./padding";
 export type Mode = "encrypt" | "decrypt";
 
 // Two-dimensional table of canonical specs: defaults[cipher][mode]. Adding
-// a new cipher (Speck, ChaCha20, ...) means a new row here plus a new entry
-// in the cipher-store's `Cipher` union and labels map.
+// a new cipher (ChaCha20, RSA, …) means a new row here plus a new entry in
+// the cipher-store's `Cipher` union and labels map. Speck32/64 ships as
+// two cipher entries (BE-paper and LE-NSA byte conventions) sharing the
+// same step code — different byteOrder param on the leaves.
 const defaults: Record<Cipher, Record<Mode, CipherSpec>> = {
   "aes-128": { encrypt: aes128Spec, decrypt: aes128DecryptSpec },
   "aes-192": { encrypt: aes192Spec, decrypt: aes192DecryptSpec },
   "aes-256": { encrypt: aes256Spec, decrypt: aes256DecryptSpec },
+  "speck-32-64-be": { encrypt: speck32_64BeSpec, decrypt: speck32_64BeDecryptSpec },
+  "speck-32-64-le": { encrypt: speck32_64LeSpec, decrypt: speck32_64LeDecryptSpec },
 };
 
 // ─── Signals ─────────────────────────────────────────────────────────────

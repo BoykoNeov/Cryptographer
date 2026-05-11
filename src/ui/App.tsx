@@ -49,6 +49,8 @@ import {
   CIPHER_OPTIONS,
   type Cipher,
   DEFAULT_KEY_BYTES_BY_CIPHER,
+  DEFAULT_PT_BYTES_BY_CIPHER,
+  isAesCipher,
   useCipher,
 } from "./stores/cipher";
 import { setByteFormat, useByteFormat } from "./stores/format";
@@ -72,20 +74,17 @@ import { resetSpec, setCipher, setMode, setPadding, useMode, useSpec } from "./s
 import { getTrace, setTrace, useFrameIndex, useTraceVersion } from "./stores/trace";
 import "./app.css";
 
-// Default plaintext is the FIPS-197 Appendix C.1 / Appendix B sequential
-// vector — gives users a known good answer to compare against on first
-// load when padding="none". Block size is 16 for all three AES variants,
-// so this default works for AES-128/192/256 alike. Stored as hex bytes;
-// rendered through formatBytes at init so the on-screen value matches the
-// user's current format choice (e.g. after a reload in decimal mode).
-const DEFAULT_PT_BYTES = new Uint8Array([
-  0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
-]);
+// Per-cipher default plaintext lives in stores/cipher.ts (mirrors the
+// per-cipher default key). AES uses the FIPS-197 sequential 16-byte vector;
+// Speck uses the Beaulieu et al. 2013 KAT plaintext in the appropriate
+// byte convention. The shared 16-byte AES default is grabbed below for the
+// "currently holds a recognisable default?" check in changePadding.
+const DEFAULT_AES_PT_BYTES = DEFAULT_PT_BYTES_BY_CIPHER["aes-128"];
 // When the user reloads with a non-`none` padding scheme that caps input
 // below 16 bytes (pkcs7 + iso7816-4), the FIPS vector would immediately
 // fail the length check. Default to a short, visible word so the trace
 // produces a clean pad/unpad frame on first Run. The bytes are the ASCII
-// codepoints for "apple".
+// codepoints for "apple". AES-only — Speck has no padding scheme today.
 const DEFAULT_SHORT_PT_BYTES = new Uint8Array([0x61, 0x70, 0x70, 0x6c, 0x65]);
 
 // How long after the last spec edit before we re-run the cipher. 200ms is
@@ -102,15 +101,17 @@ export const App = () => {
 
   // Inputs — kept as strings (in whatever the current byte format is) so
   // the user can paste partial input without the field fighting them
-  // mid-type. We validate on run. Initial plaintext varies by initial
-  // padding scheme: schemes that cap encrypt input below 16 bytes (pkcs7
-  // + iso7816-4) get the short "apple" so the user sees padding working
-  // immediately on a fresh reload. Initial key varies by cipher — each
-  // AES variant ships a canonical FIPS-197 §A.x default so the first Run
-  // reproduces a textbook ciphertext.
-  const initialLimits = paddingLimits(mode(), padding());
+  // mid-type. We validate on run. Initial plaintext varies by cipher AND
+  // by initial padding scheme. For non-AES ciphers (Speck), we use the
+  // cipher's KAT plaintext directly — padding isn't supported yet.
+  // For AES, schemes that cap encrypt input below 16 bytes (pkcs7 +
+  // iso7816-4) get the short "apple" so the user sees padding working
+  // immediately on a fresh reload. Initial key varies by cipher.
+  const initialLimits = paddingLimits(mode(), padding(), cipher());
   const initialPtBytes =
-    mode() === "encrypt" && initialLimits.max < 16 ? DEFAULT_SHORT_PT_BYTES : DEFAULT_PT_BYTES;
+    isAesCipher(cipher()) && mode() === "encrypt" && initialLimits.max < 16
+      ? DEFAULT_SHORT_PT_BYTES
+      : DEFAULT_PT_BYTES_BY_CIPHER[cipher()];
   const [inputText, setInputText] = createSignal(formatBytes(initialPtBytes, fmt()));
   const [keyText, setKeyText] = createSignal(
     formatBytes(DEFAULT_KEY_BYTES_BY_CIPHER[cipher()], fmt()),
@@ -151,9 +152,11 @@ export const App = () => {
       } catch (e) {
         throw new Error(`${inputLabel()}: ${e instanceof Error ? e.message : String(e)}`);
       }
-      const { min, max } = paddingLimits(mode(), padding());
+      const { min, max } = paddingLimits(mode(), padding(), cipher());
       if (inputBytes.length < min || inputBytes.length > max) {
-        throw new Error(formatLengthError(mode(), padding(), inputBytes.length, min, max));
+        throw new Error(
+          formatLengthError(mode(), padding(), cipher(), inputBytes.length, min, max),
+        );
       }
 
       // Key length depends on the active cipher: 16 (AES-128) / 24 (192) /
@@ -166,13 +169,14 @@ export const App = () => {
         throw new Error(`key: ${e instanceof Error ? e.message : String(e)}`);
       }
 
-      // Initial state shape: bytes for any encrypt run with a non-`none`
-      // padding scheme (input enters the pad chain as a variable-length
-      // byte sequence). Matrix for everything else — `none` keeps the
-      // canonical 16-byte matrix flow, and decrypt always seeds with the
-      // 16-byte ciphertext block regardless of scheme.
+      // Initial state shape: read directly from the active spec. For AES+
+      // padding the spec declares `inputs.plaintext.shape === "bytes"` so
+      // pad/load can wrap it; for AES+none and decrypt it's a 16-byte
+      // matrix; for Speck (no padding overlay) it's always bytes (4-byte
+      // block). The spec is the single source of truth, so we no longer
+      // hardcode the (mode, padding) heuristic here.
       const initialState: State =
-        mode() === "encrypt" && padding() !== "none"
+        spec().inputs.plaintext.shape === "bytes"
           ? makeBytesState(inputBytes)
           : matrixFromBytes(inputBytes);
 
@@ -259,9 +263,23 @@ export const App = () => {
   const changeCipher = (next: Cipher): void => {
     const prev = cipher();
     if (prev === next) return;
-    const currentBytes = tryParseBytes(keyText(), fmt());
-    if (currentBytes && bytesEqual(currentBytes, DEFAULT_KEY_BYTES_BY_CIPHER[prev])) {
+    // Key field: swap to the new cipher's default only if it currently
+    // holds the previous cipher's default. User-typed keys are left alone
+    // (the user will see a friendly length error on Run if the byte count
+    // doesn't match the new cipher's `inputs.key.byteLength`).
+    const currentKey = tryParseBytes(keyText(), fmt());
+    if (currentKey && bytesEqual(currentKey, DEFAULT_KEY_BYTES_BY_CIPHER[prev])) {
       setKeyText(formatBytes(DEFAULT_KEY_BYTES_BY_CIPHER[next], fmt()));
+    }
+    // Plaintext field: same policy. AES↔Speck flips change the block size
+    // (16↔4 bytes), so a literal value-equal default carry-over is the
+    // right trigger for an auto-swap. A user-typed arbitrary value stays.
+    // Also covers AES↔AES (no-op for "00112233...ff" which is the shared
+    // FIPS-197 default across all three AES variants) and Speck-BE↔Speck-LE
+    // (4 bytes either way, but the byte sequence differs by convention).
+    const currentPt = tryParseBytes(inputText(), fmt());
+    if (currentPt && bytesEqual(currentPt, DEFAULT_PT_BYTES_BY_CIPHER[prev])) {
+      setInputText(formatBytes(DEFAULT_PT_BYTES_BY_CIPHER[next], fmt()));
     }
     setCipher(next);
   };
@@ -272,13 +290,13 @@ export const App = () => {
     if (mode() === "encrypt") {
       const currentBytes = tryParseBytes(inputText(), fmt());
       if (currentBytes) {
-        const nextLimits = paddingLimits(mode(), next);
+        const nextLimits = paddingLimits(mode(), next, cipher());
         const fits = currentBytes.length >= nextLimits.min && currentBytes.length <= nextLimits.max;
         if (!fits) {
-          if (bytesEqual(currentBytes, DEFAULT_PT_BYTES) && nextLimits.max < 16) {
+          if (bytesEqual(currentBytes, DEFAULT_AES_PT_BYTES) && nextLimits.max < 16) {
             setInputText(formatBytes(DEFAULT_SHORT_PT_BYTES, fmt()));
           } else if (bytesEqual(currentBytes, DEFAULT_SHORT_PT_BYTES) && nextLimits.min === 16) {
-            setInputText(formatBytes(DEFAULT_PT_BYTES, fmt()));
+            setInputText(formatBytes(DEFAULT_AES_PT_BYTES, fmt()));
           }
         }
       }
@@ -365,7 +383,12 @@ export const App = () => {
           <select
             value={padding()}
             onChange={(e) => changePadding(e.currentTarget.value as PaddingScheme)}
-            title="Padding scheme applied at the start of encrypt / end of decrypt"
+            disabled={!isAesCipher(cipher())}
+            title={
+              isAesCipher(cipher())
+                ? "Padding scheme applied at the start of encrypt / end of decrypt"
+                : "Padding is AES-only in this build — the overlay's load-block step assumes a 16-byte matrix. The non-AES cipher uses its natural block size as the input length."
+            }
           >
             <For each={PADDING_SCHEME_OPTIONS}>
               {(scheme) => <option value={scheme}>{PADDING_SCHEME_LABELS[scheme]}</option>}
@@ -684,12 +707,18 @@ const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean => {
 const formatLengthError = (
   mode: "encrypt" | "decrypt",
   scheme: PaddingScheme,
+  cipher: Cipher,
   got: number,
   min: number,
   max: number,
 ): string => {
   const label = mode === "encrypt" ? "plaintext" : "ciphertext";
   const range = min === max ? `${min} bytes` : `${min}–${max} bytes`;
+  // Non-AES ciphers (today: Speck32/64) take a fixed single-block input.
+  // Padding doesn't apply; just say what the block size is.
+  if (!isAesCipher(cipher)) {
+    return `${label}: must be exactly ${min} bytes (one ${CIPHER_LABELS[cipher]} block); got ${got}.`;
+  }
   if (mode === "decrypt") {
     return `${label}: must be exactly ${min} bytes (one AES block); got ${got}.`;
   }

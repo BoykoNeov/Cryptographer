@@ -11,10 +11,26 @@
 
 import { createSignal } from "solid-js";
 
-export type Cipher = "aes-128" | "aes-192" | "aes-256";
+export type AesCipher = "aes-128" | "aes-192" | "aes-256";
+export type SpeckCipher = "speck-32-64-be" | "speck-32-64-le";
+export type Cipher = AesCipher | SpeckCipher;
 
 const STORAGE_KEY = "cryptographer.cipher";
-const ALL_CIPHERS: readonly Cipher[] = ["aes-128", "aes-192", "aes-256"];
+const ALL_CIPHERS: readonly Cipher[] = [
+  "aes-128",
+  "aes-192",
+  "aes-256",
+  "speck-32-64-be",
+  "speck-32-64-le",
+];
+
+/**
+ * True for AES-family ciphers (the only ones that today support the
+ * `load-block`/`store-block` overlay and PKCS#7/zero/ISO 7816-4 padding).
+ * Type-predicate form so TS narrows `cipher` on each branch — important
+ * for the exhaustiveness check in `paddingLimits`'s non-AES switch.
+ */
+export const isAesCipher = (c: Cipher): c is AesCipher => c.startsWith("aes-");
 
 const loadInitial = (): Cipher => {
   // Defensive: localStorage may be absent (vitest node env) or denied
@@ -52,6 +68,8 @@ export const CIPHER_LABELS: Record<Cipher, string> = {
   "aes-128": "AES-128",
   "aes-192": "AES-192",
   "aes-256": "AES-256",
+  "speck-32-64-be": "Speck 32/64 (BE, paper)",
+  "speck-32-64-le": "Speck 32/64 (LE, NSA)",
 };
 
 export const CIPHER_OPTIONS = ALL_CIPHERS;
@@ -83,6 +101,39 @@ export const DEFAULT_KEY_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
     0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe, 0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d, 0x77, 0x81,
     0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7, 0x2d, 0x98, 0x10, 0xa3, 0x09, 0x14, 0xdf, 0xf4,
   ]),
+  // Speck32/64 canonical key from Beaulieu et al. 2013 Table 4.1. Same
+  // word-level key under both byte conventions; the bytes differ only in
+  // serialisation. BE-paper: `1918 1110 0908 0100`; LE-NSA: bytes are
+  // k_0-first low-byte-first.
+  "speck-32-64-be": new Uint8Array([0x19, 0x18, 0x11, 0x10, 0x09, 0x08, 0x01, 0x00]),
+  "speck-32-64-le": new Uint8Array([0x00, 0x01, 0x08, 0x09, 0x10, 0x11, 0x18, 0x19]),
+};
+
+/**
+ * Canonical default plaintext per cipher.
+ *
+ * AES variants share the FIPS-197 sequential 16-byte vector. Speck32/64
+ * uses the canonical Beaulieu et al. KAT plaintext under each byte
+ * convention (paper-visual vs. NSA-reference byte order). The Speck
+ * defaults are 4 bytes each — one block at the cipher's natural width —
+ * so the first Run lands on the published ciphertext exactly.
+ *
+ * App.tsx consults this table when swapping ciphers: if the plaintext
+ * field currently holds the previous cipher's known default, replace
+ * with the new cipher's default. A user-typed value is left alone.
+ */
+export const DEFAULT_PT_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
+  "aes-128": new Uint8Array([
+    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+  ]),
+  "aes-192": new Uint8Array([
+    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+  ]),
+  "aes-256": new Uint8Array([
+    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+  ]),
+  "speck-32-64-be": new Uint8Array([0x65, 0x74, 0x69, 0x4c]), // "6574694c"
+  "speck-32-64-le": new Uint8Array([0x4c, 0x69, 0x74, 0x65]), // "4c697465"
 };
 
 /** Test-only reset; production code never calls this. */

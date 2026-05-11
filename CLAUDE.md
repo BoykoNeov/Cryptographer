@@ -7,7 +7,7 @@ Interactive cryptography explorer. The user enters plaintext + key, sees every i
 | Command | What it does |
 |---|---|
 | `npm run dev` | Vite dev server at `http://localhost:5173`. Hot-reloads on file changes. |
-| `npm test` | Vitest, single run. Currently 218 tests across 21 files, ~2s total (jsdom UI tests dominate). |
+| `npm test` | Vitest, single run. Currently 235 tests across 23 files, ~2s total (jsdom UI tests dominate). |
 | `npm run typecheck` | `tsc --noEmit`, strict. |
 | `npm run check` | The gate: `biome ci . && tsc --noEmit && vitest run && vite build`. Runs in ~6s on this machine. |
 | `npm run build` | Production build into `dist/`. ~32KB gzipped JS. |
@@ -66,6 +66,7 @@ The future "binary export" feature is what *forced* the spec-as-data choice: a c
 - `src/ciphers/aes-192.ts`, `src/ciphers/aes-192-decrypt.ts` — AES-192 (Nk=6, Nr=12). Reuses every AES-128 step type; only `ROUNDS` and `inputs.key.byteLength` differ.
 - `src/ciphers/aes-256.ts`, `src/ciphers/aes-256-decrypt.ts` — AES-256 (Nk=8, Nr=14). Same shape as AES-192; the `aes.key-expansion@1` step has an Nk>6 branch that fires only here.
 - `src/ciphers/aes-constants.ts` — AES_SBOX, AES_INV_SBOX, AES_RCON, AES_MIX_MATRIX, AES_INV_MIX_MATRIX, AES_SHIFT_ROWS, AES_INV_SHIFT_ROWS. Rcon table is long enough for all three key sizes.
+- `src/ciphers/speck-32-64-builder.ts` + `speck-32-64-{be,le}{,-decrypt}.ts` — Speck32/64 spec factory + four canonical specs (BE encrypt, BE decrypt, LE encrypt, LE decrypt). The four files differ only by the `(byteOrder, direction)` pair passed to the builder; the builder bakes the per-leaf params and the decrypt round-key reversal. Block size is 4 bytes, key is 8 bytes, 22 rounds, no padding overlay support.
 
 **UI stores (singletons; module-scope signals on purpose):**
 - `src/ui/stores/trace.ts` — current trace + frame index, `setTrace` preserves focus by stepId across re-runs.
@@ -111,6 +112,11 @@ For step-type-specific guidance (adding new ones), see `src/steps/CLAUDE.md`.
 - **In integration tests, click the format-toggle BUTTON; don't call `setByteFormat` directly.** The store call only updates the format signal — the App's `changeFormat` handler also re-renders the input AND key fields in place. Calling the setter alone leaves the key in the old format → the Run handler then rejects it as the wrong byte count. We hit this when wiring the PKCS#7 round-trip test.
 - **PKCS#7 always adds at least one byte of padding.** When the raw input is already a clean block multiple, canonical PKCS#7 appends a FULL extra block of `blockSize`. The single-block UI caps input at `blockSize - 1` to avoid this case; the step itself implements the canonical behavior. Don't "optimize" by skipping padding when `input.length % blockSize === 0` — you'll break unpad.
 - **`applyPaddingScheme` walks the TOP level of `spec.steps` only.** The four overlay step types (pkcs7-pad/unpad, load-block/store-block) are always inserted at the top level so a top-level filter cleanly strips them without descending into per-round groups. If a future scheme needs to insert leaves inside groups, the helper needs a deeper walk — don't sneak overlay leaves into nested groups.
+- **The padding overlay is AES-only.** `load-block` is hardcoded for blockSize=16 (the 4×4 byte matrix). `applyPaddingScheme` early-returns for any spec whose `stateShape !== "matrix4x4-bytes"`, and the UI disables the padding `<select>` for non-AES ciphers. A future block-size-aware load/store rework can unlock the overlay for Speck and friends, but right now: don't try to apply padding to non-AES specs, and don't write tests that assume the overlay fires for them.
+- **Speck byte ordering: two conventions, neither is "wrong."** The Beaulieu et al. paper gives *word-level* test vectors only. We ship two cipher specs (`speck-32-64-be` paper-faithful, `speck-32-64-le` NSA reference) sharing the same step code; they differ only in the `byteOrder` param on each leaf. Same word-level KAT, different byte serializations. Don't quote a BE byte sequence to test an LE spec or vice versa — the codec in `src/steps/speck-word-codec.ts` is the boundary that absorbs the convention.
+- **Speck's key bytes are NOT in `k_0`-first order for BE-paper.** In `K = (l_{m-2}, l_{m-3}, …, l_0, k_0)`, the visual order (and BE-paper byte order) puts `l_{m-2}` first in memory and `k_0` last. For LE-NSA it's the reverse (k_0 first). If you write a test that assumes "first 2 bytes are k_0," that's wrong for BE — `decodeKey` in the codec handles this asymmetry. Verify against the KAT before pinning intermediate-word assertions.
+- **JS bitwise ops are 32-bit.** Speck's ARX kernel uses word sizes parameterized by `wordBits`. The rotations multiply by `(1 << bits) - 1` for the mask. `1 << 16 = 65536` works fine, but `1 << 32 = 1` (the shift count is taken mod 32). The `wordMask` helper special-cases 32 and uses `0xffffffff`. Larger Speck variants (Speck128/* uses 64-bit words) will need BigInt; today we only test 16-bit Speck32/64 and the code asserts up to 32.
+- **Speck modular subtraction (decrypt round) can go negative in JS.** The inverse round computes `(x' XOR k) - y` which mathematically wraps mod 2^n. In JS, the `-` operator can return negative numbers; mask back to `wordBits` *after* adding `(mask + 1)` to bring the value non-negative first. Otherwise the trailing `& mask` works on a signed int32 and produces garbage for some inputs.
 
 ## Planning mode usage
 
@@ -140,5 +146,6 @@ If a future need argues for one of these, revisit then.
 - Original architectural plan: `~/.claude/plans/i-want-to-build-tender-spark.md`
 - Approved UX/feature plan (phases 1–4: frame preservation, run history + diff, byte format toggle, deferred 2D viz): `docs/plans/suggestions-1-4.md`
 - Plaintext input + visible padding plan (PKCS#7 shipped May 2026; zero-pad + ISO 7816-4 follow-up shipped May 2026; multi-block deferred): `docs/plans/pkcs7-padding.md`
+- Speck32/64 plan (second cipher family — ARX, both BE-paper + LE-NSA byte conventions): `docs/plans/speck.md`
 - User preferences (commit cadence, comment density): saved as feedback memories under `C:\Users\boiko\.claude\projects\M--claud-projects-Cryptographer\memory\`
 - GitHub repo: https://github.com/BoykoNeov/Cryptographer

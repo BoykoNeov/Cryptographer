@@ -1,5 +1,6 @@
 import { aes128Spec } from "@/ciphers/aes-128";
 import { aes128DecryptSpec } from "@/ciphers/aes-128-decrypt";
+import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { applyPaddingScheme } from "@/core/spec-mutations";
 import type { CipherSpec, StepLeaf, StepNode } from "@/core/types";
 import { describe, expect, it } from "vitest";
@@ -203,6 +204,41 @@ describe("applyPaddingScheme cross-scheme swaps", () => {
     // canonical AES tail and is identical across schemes.
     expect(a.slice(1)).toEqual(b.slice(1));
     expect(b.slice(1)).toEqual(c.slice(1));
+  });
+});
+
+describe("applyPaddingScheme is a no-op for non-AES (non-matrix4x4-bytes) specs", () => {
+  it("returns the Speck spec without inserting AES padding leaves", () => {
+    // Speck32/64's spec has stateShape="bytes" and its own 4-byte block.
+    // The padding overlay's load-block is hardcoded for blockSize=16, so
+    // applyPaddingScheme must silently skip it — otherwise switching to
+    // Speck while padding=pkcs7 is persisted would crash on every Run.
+    const result = applyPaddingScheme(speck32_64BeSpec, "encrypt", "pkcs7");
+    const types = topLevelLeafTypes(result);
+    // No padding-overlay leaves got inserted.
+    expect(types).not.toContain("generic.pkcs7-pad@1");
+    expect(types).not.toContain("generic.load-block@1");
+    // First leaf is still Speck's key-schedule, as in the canonical spec.
+    expect(types[0]).toBe("speck.key-schedule@1");
+    // Input shape preserved (Speck consumes BytesState directly).
+    expect(result.inputs.plaintext.shape).toBe("bytes");
+  });
+
+  it("strips any stale AES overlay leaves on a non-AES spec", () => {
+    // Simulate a spec that somehow had AES overlay leaves smuggled in (e.g.
+    // a future regression where applyPaddingScheme didn't early-return).
+    // Calling applyPaddingScheme(., ., 'none') on a non-AES spec should
+    // strip them clean.
+    const tampered: CipherSpec = {
+      ...speck32_64BeSpec,
+      steps: [
+        { kind: "step", id: "stale-pad", type: "generic.pkcs7-pad@1", params: { blockSize: 16 } },
+        ...speck32_64BeSpec.steps,
+      ],
+    };
+    const result = applyPaddingScheme(tampered, "encrypt", "none");
+    expect(topLevelLeafTypes(result)).not.toContain("generic.pkcs7-pad@1");
+    expect(topLevelLeafTypes(result)[0]).toBe("speck.key-schedule@1");
   });
 });
 

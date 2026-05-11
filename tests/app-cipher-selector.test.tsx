@@ -83,11 +83,11 @@ describe("App — cipher selector", () => {
     resetAll();
   });
 
-  it("renders all three AES variants in the cipher dropdown", () => {
+  it("renders every cipher variant in the dropdown (3 AES + 2 Speck)", () => {
     const { container } = render(() => <App />);
     const select = findSelectByLabel(container, "cipher");
     const values = Array.from(select.querySelectorAll("option")).map((o) => o.value);
-    expect(values).toEqual(["aes-128", "aes-192", "aes-256"]);
+    expect(values).toEqual(["aes-128", "aes-192", "aes-256", "speck-32-64-be", "speck-32-64-le"]);
   });
 
   it("defaults to AES-128 with the FIPS-197 §A.1 key on fresh load", () => {
@@ -153,6 +153,75 @@ describe("App — cipher selector", () => {
     expect(container.querySelector(".error")).toBeNull();
     const result = container.querySelector(".result code")?.textContent ?? "";
     expect(result).toBe("f3eed1bdb5d2a03c064b5a7e3db181f8");
+  });
+
+  it("encrypts under Speck32/64 (BE-paper) end-to-end through the selector", () => {
+    const { container } = render(() => <App />);
+
+    fireEvent.change(findSelectByLabel(container, "cipher"), {
+      target: { value: "speck-32-64-be" },
+    });
+
+    // Auto-swap should have replaced both fields with the Speck KAT defaults.
+    // Verify before clicking Run so a regression in changeCipher's plaintext-
+    // swap policy is caught here, not silently via the wrong ciphertext.
+    expect(findInputByLabel(container, "key").value).toBe("1918111009080100");
+    expect(findInputByLabel(container, "plaintext").value).toBe("6574694c");
+
+    // Padding selector must be disabled — overlay assumes a 16-byte matrix.
+    const paddingSelect = findSelectByLabel(container, "padding");
+    expect(paddingSelect.disabled).toBe(true);
+
+    fireEvent.click(findButton(container, "run"));
+    expect(container.querySelector(".error")).toBeNull();
+    const result = container.querySelector(".result code")?.textContent ?? "";
+    expect(result).toBe("a86842f2");
+
+    // Regression guard: ParamEditor must dispatch to the Speck-specific
+    // Match arms, NOT fall back to the raw-JSON view (`.param-raw`). The
+    // raw fallback would silently ship a stringified params blob — the
+    // exact failure src/steps/CLAUDE.md flags as the most common new-
+    // step-type pitfall.
+    expect(container.querySelector(".param-raw")).toBeNull();
+    expect(container.querySelector(".param-scalars")).not.toBeNull();
+  });
+
+  it("encrypts under Speck32/64 (LE-NSA) and produces the LE-encoded ciphertext", () => {
+    const { container } = render(() => <App />);
+
+    fireEvent.change(findSelectByLabel(container, "cipher"), {
+      target: { value: "speck-32-64-le" },
+    });
+
+    // The LE-NSA key is the same KAT word-wise, low-byte-first in memory.
+    expect(findInputByLabel(container, "key").value).toBe("0001080910111819");
+    expect(findInputByLabel(container, "plaintext").value).toBe("4c697465");
+
+    fireEvent.click(findButton(container, "run"));
+    expect(container.querySelector(".error")).toBeNull();
+    const result = container.querySelector(".result code")?.textContent ?? "";
+    expect(result).toBe("f24268a8");
+  });
+
+  it("flipping AES-128 → Speck → AES-128 round-trips the canonical inputs back", () => {
+    // Regression guard for the changeCipher plaintext-swap policy. Going
+    // AES → Speck should swap a 16-byte FIPS vector to a 4-byte KAT
+    // plaintext; coming back should restore the FIPS vector. A user-typed
+    // value in between would break this expectation — but here we never type.
+    const { container } = render(() => <App />);
+
+    const ptInput = findInputByLabel(container, "plaintext");
+    expect(ptInput.value).toBe("00112233445566778899aabbccddeeff");
+
+    fireEvent.change(findSelectByLabel(container, "cipher"), {
+      target: { value: "speck-32-64-be" },
+    });
+    expect(ptInput.value).toBe("6574694c");
+
+    fireEvent.change(findSelectByLabel(container, "cipher"), {
+      target: { value: "aes-128" },
+    });
+    expect(ptInput.value).toBe("00112233445566778899aabbccddeeff");
   });
 
   it("does NOT clobber a user-typed key when the cipher changes", () => {

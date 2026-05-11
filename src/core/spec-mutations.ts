@@ -322,6 +322,18 @@ export const applyPaddingScheme = (
 ): CipherSpec => {
   const stripped = stripPaddingLeaves(spec.steps);
 
+  // The padding overlay's load-block/store-block leaves are hardcoded for
+  // AES's 4×4 byte matrix. For any cipher whose state shape isn't that
+  // matrix (today: Speck32/64, which uses BytesState) the overlay can't
+  // apply meaningfully — silently skip it and return the canonical spec.
+  // The padding store still carries the user's preference, so flipping
+  // back to an AES variant re-applies the choice without losing it.
+  // A future block-size-aware load/store rework will let Speck adopt the
+  // same padding chain.
+  if (spec.stateShape !== "matrix4x4-bytes") {
+    return { ...spec, steps: stripped };
+  }
+
   if (scheme === "none") {
     // Canonical path: matrix-direct input, no padding chain. Keep the
     // original `inputs.plaintext.shape` and `stateShape` since the

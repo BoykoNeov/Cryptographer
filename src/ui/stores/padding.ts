@@ -16,6 +16,7 @@
 
 import type { PaddingScheme } from "@/core/spec-mutations";
 import { createSignal } from "solid-js";
+import { type Cipher, isAesCipher } from "./cipher";
 
 const STORAGE_KEY = "cryptographer.paddingScheme";
 const ALL_PADDING_SCHEMES: readonly PaddingScheme[] = ["none", "pkcs7", "zero-pad", "iso7816-4"];
@@ -66,10 +67,11 @@ export const PADDING_SCHEME_LABELS: Record<PaddingScheme, string> = {
 export const PADDING_SCHEME_OPTIONS = ALL_PADDING_SCHEMES;
 
 /**
- * Allowed raw input byte-length range for (mode, scheme). Used by the Run
- * handler to give a friendly error when the user's input is the wrong size
- * for single-block scope.
+ * Allowed raw input byte-length range for (mode, scheme, cipher). Used by
+ * the Run handler to give a friendly error when the user's input is the
+ * wrong size for single-block scope.
  *
+ * AES-family (cipher.startsWith("aes-")):
  *   encrypt + none      → exactly 16 (today's behavior)
  *   encrypt + pkcs7     → 0..15  (PKCS#7 always adds ≥1 byte; 16 raw bytes
  *                                 would need a second padding block)
@@ -82,12 +84,38 @@ export const PADDING_SCHEME_OPTIONS = ALL_PADDING_SCHEMES;
  *                                 same shape constraint as PKCS#7)
  *   decrypt + any       → exactly 16 (ciphertext is always one full block)
  *
+ * Non-AES (today: Speck32/64): padding is not yet supported, so the input
+ * is always exactly one cipher block — 4 bytes for Speck32/64 — regardless
+ * of mode or the persisted padding choice. The padding selector is
+ * disabled in the UI when a non-AES cipher is active.
+ *
  * Multi-block modes would relax the upper bound; that's a separate phase.
  */
 export const paddingLimits = (
   mode: "encrypt" | "decrypt",
   scheme: PaddingScheme,
+  cipher: Cipher,
 ): { min: number; max: number } => {
+  if (!isAesCipher(cipher)) {
+    // Per-cipher fixed block size. Listed positively (not via a fallback)
+    // so a future Speck64/128 PR that forgets to extend this switch fails
+    // loud — throwing here is preferable to silently inheriting Speck32's
+    // 4-byte cap and giving the user a "must be 4 bytes" error on an
+    // 8-byte cipher.
+    switch (cipher) {
+      case "speck-32-64-be":
+      case "speck-32-64-le":
+        return { min: 4, max: 4 };
+      default: {
+        // Exhaustiveness check: if `Cipher` grows and this switch isn't
+        // updated, TypeScript narrows `cipher` to `never` here and the
+        // compile fails. At runtime, this is reached if the type lied to
+        // us (cast through `any`, etc.); throwing is still the right call.
+        const _exhaustive: never = cipher;
+        throw new Error(`paddingLimits: unsupported non-AES cipher: ${_exhaustive as string}`);
+      }
+    }
+  }
   if (mode === "decrypt") return { min: 16, max: 16 };
   switch (scheme) {
     case "none":
