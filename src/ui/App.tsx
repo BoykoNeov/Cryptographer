@@ -24,6 +24,7 @@ import type { AuxValue, MatrixState } from "@/core/types";
 import { Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { MatrixView } from "./components/MatrixView";
 import { ParamEditor } from "./components/ParamEditor";
+import { RunExplorerModal } from "./components/RunExplorerModal";
 import { StepDescription } from "./components/StepDescription";
 import { StepList } from "./components/StepList";
 import { StepStrip } from "./components/StepStrip";
@@ -74,6 +75,10 @@ export const App = () => {
   // edits trigger an auto-rerun. If no, edits do nothing — we'd just be
   // throwing parse errors at the user before they've even hit "run."
   const [hasRunOnce, setHasRunOnce] = createSignal(false);
+
+  // Phase 2c — Run Explorer modal open state. Local to the App component;
+  // the modal pulls everything it needs from the global stores.
+  const [explorerOpen, setExplorerOpen] = createSignal(false);
 
   // Wire window-level keyboard shortcuts (←/→ scrub, Home/End, PageUp/Down).
   // Tied to App's lifecycle via onCleanup inside the helper.
@@ -260,6 +265,14 @@ export const App = () => {
         <button type="button" onClick={resetSpec} title="Restore the canonical spec for this mode">
           reset spec
         </button>
+        <button
+          type="button"
+          onClick={() => setExplorerOpen(true)}
+          disabled={historyCount() === 0}
+          title="Open the Run Explorer to compare snapshots side by side"
+        >
+          compare runs ({historyCount()})
+        </button>
       </section>
 
       {/* ─── Errors and result hex ───────────────────────────────────── */}
@@ -351,6 +364,10 @@ export const App = () => {
         <h2>steps</h2>
         <StepList />
       </aside>
+
+      {/* ─── Run Explorer modal (Phase 2c). Renders as a sibling so
+            it can position fixed across the entire viewport. */}
+      <RunExplorerModal isOpen={explorerOpen} onClose={() => setExplorerOpen(false)} />
     </div>
   );
 };

@@ -7,10 +7,10 @@ Interactive cryptography explorer. The user enters plaintext + key, sees every i
 | Command | What it does |
 |---|---|
 | `npm run dev` | Vite dev server at `http://localhost:5173`. Hot-reloads on file changes. |
-| `npm test` | Vitest, single run. Currently 92 tests across 9 files, ~1.4s total (jsdom UI tests dominate). |
+| `npm test` | Vitest, single run. Currently 117 tests across 11 files, ~1.4s total (jsdom UI tests dominate). |
 | `npm run typecheck` | `tsc --noEmit`, strict. |
 | `npm run check` | The gate: `biome ci . && tsc --noEmit && vitest run && vite build`. Runs in ~6s on this machine. |
-| `npm run build` | Production build into `dist/`. ~20KB gzipped JS. |
+| `npm run build` | Production build into `dist/`. ~23KB gzipped JS. |
 
 The pre-commit hook in `.githooks/pre-commit` runs `npm run check`. GitHub Actions in `.github/workflows/ci.yml` runs the same on push. Don't bypass with `--no-verify` unless you have a specific reason; both gates exist for a reason.
 
@@ -57,7 +57,7 @@ The future "binary export" feature is what *forced* the spec-as-data choice: a c
 - `src/core/types.ts` — `CipherSpec`, `StepNode`, `State` variants, `TraceFrame`, `StepDocumentation`. Saved JSON references these shapes forever; changes here are breaking.
 - `src/core/runtime.ts` — the walk-and-trace engine. Pure given a registry.
 - `src/core/registry.ts` — `StepRegistry`. Maps stepType → `{ executor, doc }`.
-- `src/core/spec-mutations.ts` — `findStep`, `updateStepParams`, `updateAllStepsByType`. Pure spec-in/spec-out.
+- `src/core/spec-mutations.ts` — `findStep`, `updateStepParams`, `updateAllStepsByType`, `compareSpecs`. Pure spec-in/spec-out.
 - `src/core/format.ts` — `ByteFormat`, `formatByte`/`parseByte`/`formatBytes`/`parseBytes`/`parseBytesWithLength`. Consumed by every byte-rendering site.
 
 **Ciphers:**
@@ -69,7 +69,9 @@ The future "binary export" feature is what *forced* the spec-as-data choice: a c
 - `src/ui/stores/trace.ts` — current trace + frame index, `setTrace` preserves focus by stepId across re-runs.
 - `src/ui/stores/format.ts` — active byte format, persisted in `localStorage`.
 - `src/ui/stores/spec.ts` — current spec + cipher mode (encrypt/decrypt).
+- `src/ui/stores/history.ts` — 5-deep run snapshot ring buffer + `pushSnapshot` (auto-dedups identical re-runs), `findPreviousRunFrameByStepId`, and the `showPreviousRun` overlay toggle.
 - `src/ui/components/ByteCellInput.tsx` — format-aware editable byte cell. Width adapts (hex=2/dec=3/ASCII=4 chars). Used by SboxEditor (16x16) and MatrixEditor (4x4).
+- `src/ui/components/RunExplorerModal.tsx` — side-by-side run comparison modal (uses native `<dialog>` for backdrop + escape handling). Pure delta-string formatter lives in `run-delta-format.ts` so node-env tests can pin its output without spinning up jsdom.
 
 **Tests:**
 - `tests/aes-vectors.test.ts` — FIPS-197 Appendix C.1 and B known-answer tests for forward AES.
@@ -78,7 +80,8 @@ The future "binary export" feature is what *forced* the spec-as-data choice: a c
 - `tests/markdown.test.ts` — parser tests for the step-doc renderer.
 - `tests/format.test.ts` — byte format core (round-trip, validation, length errors).
 - `tests/trace-frame-preservation.test.ts` — `setTrace` keeps the scrubber on the same stepId across re-runs.
-- `tests/byte-cell-input.test.tsx`, `tests/matrix-view.test.tsx`, `tests/app-format-toggle.test.tsx` — jsdom component tests for the format toggle (the `.tsx` files run in jsdom; see Conventions).
+- `tests/byte-cell-input.test.tsx`, `tests/matrix-view.test.tsx`, `tests/app-format-toggle.test.tsx` — jsdom component tests for the format toggle (the `.tsx` files run in jsdom; see Conventions). `matrix-view` also covers the Phase 2b previous-run overlay.
+- `tests/run-history.test.ts`, `tests/run-explorer-delta.test.ts` — Phase 2 store + delta formatter tests (node-env; the modal's pure helper was split out so it can be tested without DOM).
 
 For step-type-specific guidance (adding new ones), see `src/steps/CLAUDE.md`.
 

@@ -1,7 +1,7 @@
 # UX/feature suggestions plan — Phases 1–4
 
 **Date:** 2026-05-11
-**Status:** Phase 1 ✅ done · Phase 3 ✅ done · Phase 2 ⏳ next · Phase 4 deferred.
+**Status:** Phases 1, 2, 3 ✅ done · Phase 4 deferred.
 **Source:** Conversation between the user and Claude on 2026-05-11.
 
 ## Progress log
@@ -10,10 +10,10 @@
 |---|---|---|
 | 1 — preserve current frame across re-runs | ✅ done 2026-05-11 | `943b28e` |
 | 3 — byte format toggle (hex/decimal/ASCII) | ✅ done 2026-05-11 | `96c1a1b` impl + `400de9b` jsdom component tests |
-| 2 — run history + diff visualization | ⏳ next | — |
+| 2 — run history + diff visualization | ✅ done 2026-05-11 | `63c7abe` (2a + 2b) + this batch (2c + 2d) |
 | 4 — 2D / DAG visualization | deferred (joint design with binary export) | — |
 
-Test count grew 30 → 92 across 9 files. Bundle: 18KB → 20KB gzipped JS. The jsdom + `@solidjs/testing-library` setup added in commit `400de9b` is reusable for any future UI test (per-file `// @vitest-environment jsdom` directive).
+Test count grew 30 → 117 across 11 files. Bundle: 18KB → 23KB gzipped JS. Phase 2 added the run-history store (`src/ui/stores/history.ts`), the `compareSpecs` helper (`src/core/spec-mutations.ts`), and the Run Explorer modal (`src/ui/components/RunExplorerModal.tsx`) with a pure delta-string formatter split out for fast node-env tests (`src/ui/components/run-delta-format.ts`).
 
 ## Context
 
