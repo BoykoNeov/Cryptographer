@@ -652,18 +652,35 @@ button:disabled {
   align-items: flex-start;
 }
 
+/* The column-axis row uses the SAME grid template as `.sbox-grid` below so
+   the hex digits 0..f sit directly above the cells they label. Previously
+   this was a flex row with `padding-left`, which let the "col →" caption's
+   natural text width displace every number one column to the right (0 above
+   col 1, f above an empty trailing slot). The caption now occupies the
+   24px corner column (above the row-axis labels) with right-alignment so
+   the arrow points toward column 0; the 16 axis cells fill columns 2..17. */
 .sbox-axis-label {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: 24px repeat(16, 32px);
   gap: 2px;
+  align-items: center;
   font-size: 10px;
   color: var(--muted);
-  padding-left: 32px;
+}
+
+.sbox-axis-label .muted {
+  /* "col →" caption lives in grid column 1 (24px). Right-aligned + smaller
+     font so it fits comfortably and the arrow visually leads into the
+     column-0 cell to its right. */
+  text-align: right;
+  font-size: 9px;
+  white-space: nowrap;
+  padding-right: 2px;
 }
 
 .sbox-axis-label .axis-cell {
-  width: 32px;
   text-align: center;
+  /* Width comes from the grid track — no explicit width needed. */
 }
 
 /* Cells are 32px wide (matches .byte-cell.compact) so the same column
