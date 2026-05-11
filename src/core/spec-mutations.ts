@@ -8,7 +8,7 @@
  * S-box") without knowing how to walk the tree itself.
  */
 
-import type { CipherSpec, Json, StepLeaf, StepNode } from "./types";
+import type { CipherSpec, Json, StateShape, StepLeaf, StepNode } from "./types";
 
 // ─── Walking the tree ─────────────────────────────────────────────────────
 
@@ -223,4 +223,134 @@ export const compareSpecs = (a: CipherSpec, b: CipherSpec): readonly SpecParamDi
 
   visit(a.steps, b.steps);
   return changes;
+};
+
+// ─── Padding-scheme overlay ───────────────────────────────────────────────
+// Layer a padding chain onto a canonical cipher spec without modifying the
+// canonical spec itself. The four step types listed in `PADDING_STEP_TYPES`
+// are reserved for this overlay — `applyPaddingScheme` strips any existing
+// instance before inserting the new chain, so calling it repeatedly with
+// the same scheme is a no-op (idempotent).
+//
+// Encrypt + pkcs7: prepend  [pkcs7-pad → load-block] to spec.steps. Input
+//   shape becomes `bytes` (variable-length); the runtime seeds with BytesState
+//   and the load-block frame transitions to MatrixState before AES runs.
+// Decrypt + pkcs7: append   [store-block → pkcs7-unpad] to spec.steps. Input
+//   shape stays `matrix4x4-bytes` (the ciphertext is one block). The final
+//   state after the chain is BytesState (0..blockSize-1 bytes of recovered
+//   plaintext).
+// scheme=none: strips any existing chain and returns the canonical spec
+//   unchanged (or as close to it as `applyPaddingScheme` was last fed).
+
+export type PaddingScheme = "none" | "pkcs7";
+
+/** Step types reserved for the padding overlay. */
+const PADDING_STEP_TYPES: ReadonlySet<string> = new Set([
+  "generic.pkcs7-pad@1",
+  "generic.pkcs7-unpad@1",
+  "generic.load-block@1",
+  "generic.store-block@1",
+]);
+
+/** AES block size — the only value supported by this overlay today. */
+const AES_BLOCK_SIZE = 16;
+
+/**
+ * Strip every top-level leaf whose `type` is in `PADDING_STEP_TYPES`. We
+ * walk only the top level: the canonical AES specs put all their per-round
+ * work inside `group` nodes, and the overlay's pad/load/unpad/store leaves
+ * are always inserted at the top — so a top-level filter cleans the overlay
+ * without risking damage to round groups.
+ */
+const stripPaddingLeaves = (steps: readonly StepNode[]): readonly StepNode[] =>
+  steps.filter((n) => !(n.kind === "step" && PADDING_STEP_TYPES.has(n.type)));
+
+/**
+ * Layer a padding chain onto a cipher spec.
+ *
+ * Idempotent: any pre-existing padding leaves are stripped before the new
+ * chain is inserted, so feeding the same (spec, mode, scheme) pair twice
+ * produces structurally equivalent output. The canonical spec is reachable
+ * by passing scheme=`"none"` — useful when the user toggles the padding
+ * selector back to off.
+ *
+ * Pure: returns a new spec; the input spec is not mutated. New StepLeaf
+ * objects are emitted on each call (no shared param references between
+ * leaves — that's the same hygiene the cipher-spec factories follow).
+ */
+export const applyPaddingScheme = (
+  spec: CipherSpec,
+  mode: "encrypt" | "decrypt",
+  scheme: PaddingScheme,
+): CipherSpec => {
+  const stripped = stripPaddingLeaves(spec.steps);
+
+  if (scheme === "none") {
+    // Canonical path: matrix-direct input, no padding chain. Keep the
+    // original `inputs.plaintext.shape` and `stateShape` since the
+    // canonical specs already describe the matrix-direct flow.
+    return {
+      ...spec,
+      stateShape: "matrix4x4-bytes",
+      inputs: {
+        ...spec.inputs,
+        plaintext: { shape: "matrix4x4-bytes" },
+      },
+      steps: stripped,
+    };
+  }
+
+  // scheme === "pkcs7"
+  if (mode === "encrypt") {
+    const padLeaf: StepLeaf = {
+      kind: "step",
+      id: "pkcs7-pad",
+      type: "generic.pkcs7-pad@1",
+      params: { blockSize: AES_BLOCK_SIZE },
+    };
+    const loadLeaf: StepLeaf = {
+      kind: "step",
+      id: "load-block",
+      type: "generic.load-block@1",
+      params: { blockSize: AES_BLOCK_SIZE },
+    };
+    // Input now arrives as BytesState (variable length 0..blockSize-1).
+    // The load-block frame is the visible transition into the matrix.
+    const plaintextShape: StateShape = "bytes";
+    return {
+      ...spec,
+      stateShape: "matrix4x4-bytes",
+      inputs: {
+        ...spec.inputs,
+        plaintext: { shape: plaintextShape },
+      },
+      steps: [padLeaf, loadLeaf, ...stripped],
+    };
+  }
+
+  // mode === "decrypt"
+  const storeLeaf: StepLeaf = {
+    kind: "step",
+    id: "store-block",
+    type: "generic.store-block@1",
+    params: {},
+  };
+  const unpadLeaf: StepLeaf = {
+    kind: "step",
+    id: "pkcs7-unpad",
+    type: "generic.pkcs7-unpad@1",
+    params: { blockSize: AES_BLOCK_SIZE },
+  };
+  // Decrypt input is still the 16-byte ciphertext block — matrix-direct.
+  // The unpad chain runs at the END, after AES has finished, producing
+  // a BytesState of the recovered plaintext.
+  return {
+    ...spec,
+    stateShape: "matrix4x4-bytes",
+    inputs: {
+      ...spec.inputs,
+      plaintext: { shape: "matrix4x4-bytes" },
+    },
+    steps: [...stripped, storeLeaf, unpadLeaf],
+  };
 };

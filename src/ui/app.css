@@ -292,6 +292,83 @@ button:disabled {
   outline-offset: -2px;
 }
 
+/* ─── BytesView (variable-length byte sequence) ───────────────────────── */
+/* Rendered for pkcs7-pad, pkcs7-unpad, and the bytes-side of load/store-
+   block frames. Lays out cells as a wrapping row rather than a fixed
+   grid — the sequence length varies (5 → 16 across a pad, 16 → 5 across
+   an unpad), so a flex row that wraps reads better than a column count. */
+.bytes-view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.bytes-row-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bytes-row-count {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: normal;
+  margin-left: 6px;
+}
+
+.bytes-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+.bytes-cell {
+  background: var(--bg-elev-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  min-width: 48px;
+  height: 40px;
+  padding: 0 6px;
+  border-radius: 2px;
+}
+
+.bytes-cell.changed {
+  background: var(--changed-bg);
+  color: var(--changed);
+}
+
+.bytes-cell.diff-vs-prev {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* "Missing" cells appear when one row is shorter than its comparison —
+   e.g. the `before` row of a pkcs7-pad frame is 5 bytes while `after` is
+   16, so before's positions 5..15 render as ghost cells. Lets the user see
+   the length expansion visually rather than reading the row count. */
+.bytes-cell-missing {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+/* ─── Mixed-shape boundary frames ─────────────────────────────────────── */
+/* When a step transitions between bytes and matrix shapes (load-block /
+   store-block), we render the two sides side-by-side in a single block.
+   The matrix-view and bytes-row each own their internal layout; this
+   wrapper just gives them horizontal alignment with a vertical separator. */
+.mixed-shape-view {
+  display: flex;
+  gap: 32px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
 .tiny-cell.diff-vs-prev {
   outline: 1.5px solid var(--accent);
   outline-offset: -1.5px;

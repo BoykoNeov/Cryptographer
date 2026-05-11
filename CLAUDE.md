@@ -68,9 +68,11 @@ The future "binary export" feature is what *forced* the spec-as-data choice: a c
 **UI stores (singletons; module-scope signals on purpose):**
 - `src/ui/stores/trace.ts` — current trace + frame index, `setTrace` preserves focus by stepId across re-runs.
 - `src/ui/stores/format.ts` — active byte format, persisted in `localStorage`.
-- `src/ui/stores/spec.ts` — current spec + cipher mode (encrypt/decrypt).
+- `src/ui/stores/spec.ts` — current spec + cipher mode (encrypt/decrypt). `setMode`, `resetSpec`, and `setPadding` all funnel through `applyPaddingScheme` so the active padding scheme survives mode flips and resets.
 - `src/ui/stores/history.ts` — 5-deep run snapshot ring buffer + `pushSnapshot` (auto-dedups identical re-runs), `findPreviousRunFrameByStepId`, and the `showPreviousRun` overlay toggle.
+- `src/ui/stores/padding.ts` — active padding scheme (`none` / `pkcs7`), persisted in `localStorage`. `paddingLimits(mode, scheme)` returns the allowed raw-input byte-length range so the Run handler can produce friendly errors.
 - `src/ui/components/ByteCellInput.tsx` — format-aware editable byte cell. Width adapts (hex=2/dec=3/ASCII=4 chars). Used by SboxEditor (16x16) and MatrixEditor (4x4).
+- `src/ui/components/BytesView.tsx` — variable-length sibling to MatrixView. Renders BytesState frames (pkcs7-pad / pkcs7-unpad) as a 1×N wrapping row with length-delta "missing" cell placeholders when the row's compareTo side is longer.
 - `src/ui/components/RunExplorerModal.tsx` — side-by-side run comparison modal (uses native `<dialog>` for backdrop + escape handling). Pure delta-string formatter lives in `run-delta-format.ts` so node-env tests can pin its output without spinning up jsdom.
 
 **Tests:**
@@ -82,6 +84,8 @@ The future "binary export" feature is what *forced* the spec-as-data choice: a c
 - `tests/trace-frame-preservation.test.ts` — `setTrace` keeps the scrubber on the same stepId across re-runs.
 - `tests/byte-cell-input.test.tsx`, `tests/matrix-view.test.tsx`, `tests/app-format-toggle.test.tsx` — jsdom component tests for the format toggle (the `.tsx` files run in jsdom; see Conventions). `matrix-view` also covers the Phase 2b previous-run overlay.
 - `tests/run-history.test.ts`, `tests/run-explorer-delta.test.ts` — Phase 2 store + delta formatter tests (node-env; the modal's pure helper was split out so it can be tested without DOM).
+- `tests/pkcs7-pad.test.ts`, `tests/load-store-block.test.ts`, `tests/spec-mutations-padding.test.ts` — Phase 4 step + overlay tests (node-env).
+- `tests/bytes-view.test.tsx`, `tests/app-padding-roundtrip.test.tsx` — Phase 4 jsdom integration tests. The headline round-trip drives the App from "apple" through encrypt → ciphertext → decrypt → "apple".
 
 For step-type-specific guidance (adding new ones), see `src/steps/CLAUDE.md`.
 
@@ -96,6 +100,9 @@ For step-type-specific guidance (adding new ones), see `src/steps/CLAUDE.md`.
 - **Solid components must use `createMemo` for derived values** read multiple times in JSX. A plain function gets evaluated independently per access; that's three trace lookups per render in the worst case.
 - **Solid `For` callbacks aren't reactive scopes** — a `const value = formatByte(..., props.format)` captured outside the JSX is computed once when the item is added. Inline the dynamic call into the JSX (`{formatByte(..., props.format)}`) so prop changes propagate. We've hit this in `MatrixView.tsx`: refactoring cell-value computation into a const broke the format-toggle reactivity.
 - **Don't set `display:` on the bare `.modal` rule for a native `<dialog>`.** The UA stylesheet's `dialog:not([open]) { display: none }` is what hides the closed modal; overriding with `display: flex` makes the dialog visible at ALL times, obscuring the rest of the page. Put flex layout on an inner wrapper (`.modal-inner`) and let the UA rule handle visibility. The backdrop is the native `::backdrop` pseudo, not a separate element.
+- **In integration tests, click the format-toggle BUTTON; don't call `setByteFormat` directly.** The store call only updates the format signal — the App's `changeFormat` handler also re-renders the input AND key fields in place. Calling the setter alone leaves the key in the old format → the Run handler then rejects it as the wrong byte count. We hit this when wiring the PKCS#7 round-trip test.
+- **PKCS#7 always adds at least one byte of padding.** When the raw input is already a clean block multiple, canonical PKCS#7 appends a FULL extra block of `blockSize`. The single-block UI caps input at `blockSize - 1` to avoid this case; the step itself implements the canonical behavior. Don't "optimize" by skipping padding when `input.length % blockSize === 0` — you'll break unpad.
+- **`applyPaddingScheme` walks the TOP level of `spec.steps` only.** The four overlay step types (pkcs7-pad/unpad, load-block/store-block) are always inserted at the top level so a top-level filter cleanly strips them without descending into per-round groups. If a future scheme needs to insert leaves inside groups, the helper needs a deeper walk — don't sneak overlay leaves into nested groups.
 
 ## Planning mode usage
 

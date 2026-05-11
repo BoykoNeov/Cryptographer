@@ -1,5 +1,5 @@
 import { type ByteFormat, formatByte } from "@/core/format";
-import type { MatrixState } from "@/core/types";
+import type { MatrixState, State } from "@/core/types";
 import { For, Show } from "solid-js";
 import { useByteFormat } from "../stores/format";
 
@@ -7,13 +7,14 @@ type Props = {
   before: MatrixState;
   after: MatrixState;
   /**
-   * Same-stepId after-state from the immediately prior run. When given (and
-   * the overlay toggle in App is on), MatrixView renders a third grid to
-   * the right showing this state, with cells that differ from the current
-   * `after` highlighted by an accent ring. Useful for spotting "this byte
-   * changed because I just edited an S-box / changed an input byte."
+   * Same-stepId after-state from the immediately prior run. The caller can
+   * pass any State variant — if the prior run had a different shape at this
+   * stepId (e.g. user changed padding scheme between runs and the stepId
+   * now points to a BytesState), MatrixView quietly suppresses the overlay
+   * rather than crashing on the matrix-shaped index reads. Only matrix-
+   * shaped states render as the third grid.
    */
-  previousAfter?: MatrixState | null;
+  previousAfter?: State | null;
 };
 
 /**
@@ -26,7 +27,18 @@ type Props = {
  */
 export const MatrixView = (props: Props) => {
   const fmt = useByteFormat();
+  // Belts-and-braces guard: callers should only pass a previousAfter whose
+  // shape is `matrix4x4-bytes`. If a future code path slips a different
+  // shape through (e.g. the user changed padding scheme between runs and
+  // the same stepId now points to a BytesState), treat it as "no overlay"
+  // rather than crashing on the index reads below.
+  const safePreviousAfter = () => {
+    if (!props.previousAfter) return null;
+    if (props.previousAfter.shape !== "matrix4x4-bytes") return null;
+    return props.previousAfter;
+  };
   const cells = () => {
+    const prev = safePreviousAfter();
     const out: {
       row: number;
       col: number;
@@ -41,7 +53,7 @@ export const MatrixView = (props: Props) => {
         const idx = r + 4 * c;
         const b = props.before.bytes[idx] ?? 0;
         const a = props.after.bytes[idx] ?? 0;
-        const p = props.previousAfter ? (props.previousAfter.bytes[idx] ?? 0) : null;
+        const p = prev ? (prev.bytes[idx] ?? 0) : null;
         out.push({
           row: r,
           col: c,
@@ -60,7 +72,7 @@ export const MatrixView = (props: Props) => {
     <div class="matrix-view">
       <Grid title="before" cells={cells()} field="before" format={fmt()} />
       <Grid title="after" cells={cells()} field="after" highlightChanged format={fmt()} />
-      <Show when={props.previousAfter}>
+      <Show when={safePreviousAfter()}>
         <Grid title="previous run" cells={cells()} field="prev" highlightDiffPrev format={fmt()} />
       </Show>
     </div>

@@ -15,13 +15,28 @@
  * back through it. Switching format mid-session re-renders the current
  * input text in place (parse with old format → re-format with new) so
  * the user doesn't lose their typed value.
+ *
+ * Phase 4 (this commit) added PKCS#7 padding as a visible step. When the
+ * selector is on PKCS#7, encrypt input can be 0..15 bytes; the spec gains
+ * a `pkcs7-pad → load-block` prefix that's rendered in the trace, and the
+ * inverse `store-block → pkcs7-unpad` suffix on decrypt produces a
+ * variable-length plaintext from the 16-byte ciphertext. The Run handler
+ * routes through scheme-aware parsing + initial-state shape selection.
  */
 
-import { type ByteFormat, formatBytes, parseBytes, parseBytesWithLength } from "@/core/format";
+import {
+  type ByteFormat,
+  formatByte,
+  formatBytes,
+  parseBytes,
+  parseBytesWithLength,
+} from "@/core/format";
 import { runSpec } from "@/core/runtime";
+import { makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
-import type { AuxValue, MatrixState } from "@/core/types";
-import { Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
+import type { AuxValue, BytesState, MatrixState, State, TraceFrame } from "@/core/types";
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
+import { BytesView } from "./components/BytesView";
 import { MatrixView } from "./components/MatrixView";
 import { ParamEditor } from "./components/ParamEditor";
 import { RunExplorerModal } from "./components/RunExplorerModal";
@@ -38,21 +53,34 @@ import {
   useShowPreviousRun,
 } from "./stores/history";
 import { installKeyboardShortcuts } from "./stores/keyboard";
+import {
+  PADDING_SCHEME_LABELS,
+  PADDING_SCHEME_OPTIONS,
+  type PaddingScheme,
+  paddingLimits,
+  usePaddingScheme,
+} from "./stores/padding";
 import { registry } from "./stores/registry";
-import { resetSpec, setMode, useMode, useSpec } from "./stores/spec";
+import { resetSpec, setMode, setPadding, useMode, useSpec } from "./stores/spec";
 import { getTrace, setTrace, useFrameIndex, useTraceVersion } from "./stores/trace";
 import "./app.css";
 
 // Default test vector from FIPS-197 Appendix C.1 — gives users a known
-// good answer to compare against on first load. Stored as hex bytes;
-// rendered through formatBytes at init so the on-screen value matches the
-// user's current format choice (e.g. after a reload in decimal mode).
+// good answer to compare against on first load when padding="none". Stored
+// as hex bytes; rendered through formatBytes at init so the on-screen value
+// matches the user's current format choice (e.g. after a reload in decimal
+// mode).
 const DEFAULT_PT_BYTES = new Uint8Array([
   0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
 ]);
 const DEFAULT_KEY_BYTES = new Uint8Array([
   0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
 ]);
+// When the user reloads with padding="pkcs7" persisted, the FIPS vector
+// (16 bytes) would immediately fail the 0..15 length cap. Default to a
+// short, visible word so the trace produces a clean pad/unpad frame on
+// first Run. The bytes are the ASCII codepoints for "apple".
+const DEFAULT_PKCS7_PT_BYTES = new Uint8Array([0x61, 0x70, 0x70, 0x6c, 0x65]);
 
 // How long after the last spec edit before we re-run the cipher. 200ms is
 // long enough that fast typing on 256 S-box cells doesn't cause a re-run
@@ -63,11 +91,16 @@ export const App = () => {
   const spec = useSpec();
   const mode = useMode();
   const fmt = useByteFormat();
+  const padding = usePaddingScheme();
 
   // Inputs — kept as strings (in whatever the current byte format is) so
   // the user can paste partial input without the field fighting them
-  // mid-type. We validate on run.
-  const [inputText, setInputText] = createSignal(formatBytes(DEFAULT_PT_BYTES, fmt()));
+  // mid-type. We validate on run. Initial plaintext varies by initial
+  // padding scheme: pkcs7+encrypt gets the short "apple" so the user sees
+  // padding working immediately on a fresh reload.
+  const initialPtBytes =
+    padding() === "pkcs7" && mode() === "encrypt" ? DEFAULT_PKCS7_PT_BYTES : DEFAULT_PT_BYTES;
+  const [inputText, setInputText] = createSignal(formatBytes(initialPtBytes, fmt()));
   const [keyText, setKeyText] = createSignal(formatBytes(DEFAULT_KEY_BYTES, fmt()));
   const [error, setError] = createSignal<string | null>(null);
 
@@ -88,26 +121,47 @@ export const App = () => {
    * Run the current spec with the current inputs, push the resulting trace
    * into the trace store, and update error state. Doesn't throw — errors
    * are surfaced via setError so the UI can render them inline.
+   *
+   * Scheme-aware: the (mode, scheme) pair picks the initial state shape
+   * and the allowed input-length range. Encrypt+pkcs7 seeds with BytesState
+   * (variable length, 0..15); everything else seeds with the 16-byte matrix.
    */
   const run = (): void => {
     try {
       setError(null);
+
+      // Parse the input as raw bytes first, no length enforcement — we'll
+      // do scheme-specific validation below for a friendlier error.
       let inputBytes: Uint8Array;
       try {
-        inputBytes = parseBytesWithLength(inputText(), fmt(), 16);
+        inputBytes = parseBytes(inputText(), fmt());
       } catch (e) {
         throw new Error(`${inputLabel()}: ${e instanceof Error ? e.message : String(e)}`);
       }
+      const { min, max } = paddingLimits(mode(), padding());
+      if (inputBytes.length < min || inputBytes.length > max) {
+        throw new Error(formatLengthError(mode(), padding(), inputBytes.length, min, max));
+      }
+
+      // Key is always exactly 16 bytes for AES-128 regardless of padding.
       let keyBytes: Uint8Array;
       try {
         keyBytes = parseBytesWithLength(keyText(), fmt(), 16);
       } catch (e) {
         throw new Error(`key: ${e instanceof Error ? e.message : String(e)}`);
       }
+
+      // Initial state shape: bytes for encrypt+pkcs7 (variable-length input
+      // entering the pad chain); matrix for everything else (today's flow).
+      const initialState: State =
+        mode() === "encrypt" && padding() === "pkcs7"
+          ? makeBytesState(inputBytes)
+          : matrixFromBytes(inputBytes);
+
       const initialAux = new Map<string, AuxValue>([["key", keyBytes]]);
       const currentSpec = spec();
       const trace = runSpec(currentSpec, registry, {
-        initialState: matrixFromBytes(inputBytes),
+        initialState,
         initialAux,
       });
       setTrace(trace);
@@ -157,6 +211,34 @@ export const App = () => {
     setByteFormat(next);
   };
 
+  /**
+   * Switch padding scheme. Persists the choice, rebuilds the spec with the
+   * new overlay (triggers auto-rerun via createEffect on spec), and — on
+   * the transition from "none" to "pkcs7" — swaps the default FIPS vector
+   * for the short "apple" so the new pad frame shows up immediately.
+   *
+   * We only swap the input bytes if the field currently holds the canonical
+   * FIPS vector (untouched first-load state). If the user already typed
+   * something else, we leave it alone — clobbering their edit on a selector
+   * change would be hostile.
+   */
+  const changePadding = (next: PaddingScheme): void => {
+    const prev = padding();
+    if (prev === next) return;
+    if (next === "pkcs7" && mode() === "encrypt") {
+      const currentBytes = tryParseBytes(inputText(), fmt());
+      if (currentBytes && bytesEqual(currentBytes, DEFAULT_PT_BYTES)) {
+        setInputText(formatBytes(DEFAULT_PKCS7_PT_BYTES, fmt()));
+      }
+    } else if (next === "none" && mode() === "encrypt") {
+      const currentBytes = tryParseBytes(inputText(), fmt());
+      if (currentBytes && bytesEqual(currentBytes, DEFAULT_PKCS7_PT_BYTES)) {
+        setInputText(formatBytes(DEFAULT_PT_BYTES, fmt()));
+      }
+    }
+    setPadding(next);
+  };
+
   // Reactive derived values for the trace view.
   const frameIndex = useFrameIndex();
   const version = useTraceVersion();
@@ -166,11 +248,18 @@ export const App = () => {
     return getTrace()?.frames[frameIndex()] ?? null;
   });
 
+  /**
+   * Format the final state's bytes through the active byte format. Accepts
+   * both matrix and bytes final-state shapes — bytes shows up when the
+   * decrypt+pkcs7 path strips the padding at the end.
+   */
   const outputText = createMemo(() => {
     void version();
     const t = getTrace();
-    if (!t || t.finalState.shape !== "matrix4x4-bytes") return null;
-    return formatBytes(t.finalState.bytes, fmt());
+    if (!t) return null;
+    const s = t.finalState;
+    if (s.shape !== "matrix4x4-bytes" && s.shape !== "bytes") return null;
+    return formatBytes(s.bytes, fmt());
   });
 
   // Phase 2b — overlay: look up the same-stepId frame from the run just
@@ -179,7 +268,7 @@ export const App = () => {
   // without re-walking them on every render.
   const history = useHistory();
   const showPrev = useShowPreviousRun();
-  const previousRunFrame = createMemo(() => {
+  const previousRunFrame = createMemo<TraceFrame | null>(() => {
     if (!showPrev()) return null;
     const f = currentFrame();
     if (!f) return null;
@@ -212,6 +301,18 @@ export const App = () => {
           >
             <option value="encrypt">encrypt</option>
             <option value="decrypt">decrypt</option>
+          </select>
+        </label>
+        <label>
+          padding
+          <select
+            value={padding()}
+            onChange={(e) => changePadding(e.currentTarget.value as PaddingScheme)}
+            title="Padding scheme applied at the start of encrypt / end of decrypt"
+          >
+            <For each={PADDING_SCHEME_OPTIONS}>
+              {(scheme) => <option value={scheme}>{PADDING_SCHEME_LABELS[scheme]}</option>}
+            </For>
           </select>
         </label>
         {/* Group of buttons (not a single form control) → semantic
@@ -330,24 +431,12 @@ export const App = () => {
               {/* Neighborhood strip: prev / current / next thumbnails. */}
               <StepStrip />
 
-              {/* Matrix view of the current step's before/after state. */}
-              <Show
-                when={
-                  frame().stateBefore.shape === "matrix4x4-bytes" &&
-                  frame().stateAfter.shape === "matrix4x4-bytes"
-                }
-                fallback={<div class="muted">non-matrix state — view not yet implemented</div>}
-              >
-                <MatrixView
-                  before={frame().stateBefore as MatrixState}
-                  after={frame().stateAfter as MatrixState}
-                  previousAfter={
-                    previousRunFrame()?.stateAfter.shape === "matrix4x4-bytes"
-                      ? (previousRunFrame()?.stateAfter as MatrixState)
-                      : null
-                  }
-                />
-              </Show>
+              {/* State view, dispatched by (stateBefore.shape, stateAfter.shape):
+                  - both matrix       → MatrixView (today's path)
+                  - both bytes        → BytesView (pad/unpad frames)
+                  - mixed (boundary)  → side-by-side inline render so the
+                                        user can see the shape transition. */}
+              <FrameStateView frame={frame()} previousRunFrame={previousRunFrame()} />
 
               {/* Human-readable explanation of what this step does. */}
               <StepDescription frame={frame()} />
@@ -373,6 +462,131 @@ export const App = () => {
 };
 
 /**
+ * Shape-aware render dispatch for one frame's before/after state. Pulled
+ * out of App so the four-way branch is readable.
+ */
+const FrameStateView = (props: {
+  frame: TraceFrame;
+  previousRunFrame: TraceFrame | null;
+}) => {
+  const before = () => props.frame.stateBefore;
+  const after = () => props.frame.stateAfter;
+  const prevAfter = () => props.previousRunFrame?.stateAfter ?? null;
+
+  return (
+    <Show
+      when={before().shape === "matrix4x4-bytes" && after().shape === "matrix4x4-bytes"}
+      fallback={
+        <Show
+          when={before().shape === "bytes" && after().shape === "bytes"}
+          fallback={<MixedShapeView before={before()} after={after()} />}
+        >
+          <BytesView
+            before={before() as BytesState}
+            after={after() as BytesState}
+            previousAfter={prevAfter()}
+          />
+        </Show>
+      }
+    >
+      <MatrixView
+        before={before() as MatrixState}
+        after={after() as MatrixState}
+        previousAfter={prevAfter()}
+      />
+    </Show>
+  );
+};
+
+/**
+ * Boundary-frame view for shape transitions (BytesState ↔ MatrixState).
+ * Renders the bytes side as a single row and the matrix side as a 4×4 grid,
+ * side-by-side, so the user can see the layout swap (which is what
+ * load-block and store-block represent). The byte values themselves don't
+ * change across these frames — only the shape does.
+ */
+const MixedShapeView = (props: { before: State; after: State }) => {
+  return (
+    <div class="mixed-shape-view">
+      <SingleStateView title="before" state={props.before} />
+      <SingleStateView title="after" state={props.after} />
+    </div>
+  );
+};
+
+const SingleStateView = (props: { title: string; state: State }) => {
+  const fmt = useByteFormat();
+
+  // Derive cell descriptors per shape. Reading props.state inside the
+  // memos keeps the views reactive to scrubber changes.
+  const bytesCells = createMemo(() => {
+    if (props.state.shape !== "bytes") return null;
+    const bytes = props.state.bytes;
+    return { length: bytes.length, indices: Array.from({ length: bytes.length }, (_, i) => i) };
+  });
+
+  const matrixCells = createMemo(() => {
+    if (props.state.shape !== "matrix4x4-bytes") return null;
+    const out: { row: number; col: number; idx: number }[] = [];
+    for (let c = 0; c < 4; c++) {
+      for (let r = 0; r < 4; r++) {
+        out.push({ row: r, col: c, idx: r + 4 * c });
+      }
+    }
+    return out;
+  });
+
+  return (
+    <Show
+      when={matrixCells()}
+      fallback={
+        <Show when={bytesCells()}>
+          {(getCells) => (
+            <div class="bytes-row-block">
+              <div class="grid-title">
+                {props.title}
+                <span class="bytes-row-count"> ({getCells().length} bytes)</span>
+              </div>
+              <div class="bytes-row">
+                <For each={getCells().indices}>
+                  {(i) => (
+                    <div class="bytes-cell">
+                      {/* Inline format read so a format toggle re-renders. */}
+                      {formatByte((props.state as BytesState).bytes[i] ?? 0, fmt())}
+                    </div>
+                  )}
+                </For>
+              </div>
+            </div>
+          )}
+        </Show>
+      }
+    >
+      {(getCells) => (
+        <div class="grid-block">
+          <div class="grid-title">{props.title} (matrix)</div>
+          <div class="grid">
+            <For each={getCells()}>
+              {(cell) => (
+                <div
+                  class="cell"
+                  style={{
+                    "grid-row": `${cell.row + 1}`,
+                    "grid-column": `${cell.col + 1}`,
+                  }}
+                >
+                  {formatByte((props.state as MatrixState).bytes[cell.idx] ?? 0, fmt())}
+                </div>
+              )}
+            </For>
+          </div>
+        </div>
+      )}
+    </Show>
+  );
+};
+
+/**
  * Best-effort re-render of an input field's text when the format toggles.
  * If the field parses cleanly in the old format, re-emit it in the new
  * one. If not (user typed partial / invalid data), leave the raw text
@@ -385,4 +599,45 @@ const reformatTextOrKeep = (text: string, from: ByteFormat, to: ByteFormat): str
   } catch {
     return text;
   }
+};
+
+/** Returns null if the field doesn't parse cleanly — used by `changePadding`
+ * to test whether the input is still the canonical default before swapping
+ * it for the scheme-appropriate default. */
+const tryParseBytes = (text: string, fmt: ByteFormat): Uint8Array | null => {
+  try {
+    return parseBytes(text, fmt);
+  } catch {
+    return null;
+  }
+};
+
+const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean => {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+};
+
+/** Build the friendly length-mismatch error shown when the input isn't in
+ * the allowed [min, max] range for (mode, scheme). The hint cites the
+ * scheme so the user can connect "why 0..15" to "PKCS#7 always adds ≥1 byte
+ * to fill the block." */
+const formatLengthError = (
+  mode: "encrypt" | "decrypt",
+  scheme: PaddingScheme,
+  got: number,
+  min: number,
+  max: number,
+): string => {
+  const label = mode === "encrypt" ? "plaintext" : "ciphertext";
+  const range = min === max ? `${min} bytes` : `${min}–${max} bytes`;
+  if (mode === "encrypt" && scheme === "pkcs7") {
+    return `${label}: PKCS#7 input must be ${range}; got ${got}. (A ${max + 1}-byte input would need a second padding block — multi-block modes are not yet supported.)`;
+  }
+  if (mode === "decrypt") {
+    return `${label}: must be exactly ${min} bytes (one AES block); got ${got}.`;
+  }
+  return `${label}: must be ${range}; got ${got}.`;
 };
