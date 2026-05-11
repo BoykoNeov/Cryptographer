@@ -493,6 +493,80 @@ button:disabled {
   margin: 0;
 }
 
+/* Compact display of scalar params (keyAuxName / outputPrefix / rounds
+   for key-expansion). One row per fact, label left-aligned, value right.
+   Read-only because editing these strings either throws (wrong aux name)
+   or trips the Nr = Nk+6 assertion in the executor. */
+.param-scalars {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.param-scalar-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.param-scalar-row dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.param-scalar-row dd {
+  margin: 0;
+}
+
+/* Grouped section inside a param editor (a label + the editor for one
+   chunk of the params). Used by the key-expansion block. */
+.param-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.param-section-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* When .param-section is a <details>, the summary IS the label — strip
+   the default list marker so it looks identical to a plain label, with
+   just a tiny chevron to hint it's expandable. */
+.param-collapsible > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.param-collapsible > summary::-webkit-details-marker {
+  display: none;
+}
+
+.param-collapsible > summary::before {
+  content: "▸ ";
+  display: inline-block;
+  width: 1em;
+  transition: transform 120ms;
+}
+
+.param-collapsible[open] > summary::before {
+  content: "▾ ";
+}
+
+/* Single horizontal row of byte cells. AES Rcon is 11 entries; flexible
+   wrap keeps the layout sane if a future cipher ships a longer table. */
+.rcon-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 .small {
   font-size: 11px;
 }

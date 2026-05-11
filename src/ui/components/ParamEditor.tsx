@@ -14,8 +14,9 @@
 
 import { findStep } from "@/core/spec-mutations";
 import type { Json, StepLeaf, TraceFrame } from "@/core/types";
-import { Match, Show, Switch } from "solid-js";
+import { For, Match, Show, Switch } from "solid-js";
 import { editAllStepsByType, editStepParams, useSpec } from "../stores/spec";
+import { ByteCellInput } from "./ByteCellInput";
 import { MatrixEditor } from "./MatrixEditor";
 import { SboxEditor } from "./SboxEditor";
 import { ShiftsEditor } from "./ShiftsEditor";
@@ -80,6 +81,9 @@ export const ParamEditor = (props: Props) => {
             </Match>
             <Match when={getStep().type === "generic.shift-rows@1"}>
               <ShiftsBlock step={getStep()} matchingCount={matchingSteps()} />
+            </Match>
+            <Match when={getStep().type === "aes.key-expansion@1"}>
+              <KeyExpansionBlock step={getStep()} matchingCount={matchingSteps()} />
             </Match>
           </Switch>
         </div>
@@ -169,6 +173,86 @@ const ShiftsBlock = (props: BlockProps) => {
         stepType={props.step.type}
         matchingCount={props.matchingCount}
         label="row shifts"
+      />
+    </>
+  );
+};
+
+// Key-expansion block.
+//
+// The raw JSON fallback was unusable for this step type — `sbox` (256
+// numbers) and `rcon` (~11) pretty-print to hundreds of single-value
+// lines. This compact view shows:
+//   - scalars (keyAuxName / outputPrefix / rounds) as a read-only dl;
+//     editing them by hand reliably breaks the spec (mismatched aux
+//     names throw, and the executor asserts `rounds === Nk + 6`).
+//   - rcon as a single horizontal row of editable byte cells.
+//   - the S-box collapsed inside a <details>, reusing SboxEditor so
+//     the affordance is identical to SubBytes.
+const KeyExpansionBlock = (props: BlockProps) => {
+  const params = (): {
+    keyAuxName?: string;
+    outputPrefix?: string;
+    rounds?: number;
+    sbox?: readonly number[];
+    rcon?: readonly number[];
+  } => props.step.params as never;
+
+  const sbox = (): readonly number[] => params().sbox ?? [];
+  const rcon = (): readonly number[] => params().rcon ?? [];
+
+  const writeParams = (patch: Record<string, Json>) => {
+    editStepParams(props.step.id, {
+      ...(props.step.params as Record<string, Json>),
+      ...patch,
+    });
+  };
+
+  return (
+    <>
+      <dl class="param-scalars">
+        <div class="param-scalar-row">
+          <dt>Input aux</dt>
+          <dd>{params().keyAuxName ?? "—"}</dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Output prefix</dt>
+          <dd>{params().outputPrefix ?? "—"}</dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Rounds (Nr)</dt>
+          <dd>{params().rounds ?? "—"}</dd>
+        </div>
+      </dl>
+
+      <div class="param-section">
+        <div class="param-section-label">Rcon (round constants)</div>
+        <div class="rcon-row">
+          <For each={rcon()}>
+            {(value, i) => (
+              <ByteCellInput
+                value={value}
+                onCommit={(next) => {
+                  const out = [...rcon()];
+                  out[i()] = next;
+                  writeParams({ rcon: out });
+                }}
+              />
+            )}
+          </For>
+        </div>
+      </div>
+
+      <details class="param-section param-collapsible">
+        <summary class="param-section-label">S-box (256 entries — click to expand)</summary>
+        <SboxEditor sbox={sbox()} onChange={(next) => writeParams({ sbox: next })} />
+      </details>
+
+      <ApplyAllRow
+        currentParams={props.step.params}
+        stepType={props.step.type}
+        matchingCount={props.matchingCount}
+        label="key-expansion params"
       />
     </>
   );
