@@ -1,5 +1,11 @@
 # Speck32/64 — second cipher
 
+> **Status: shipped** (May 2026, commits `2e16285` + `9c9452c`). All four
+> Speck32/64 specs are reachable through the cipher selector; KAT + round-
+> trip tests pass for both BE-paper and LE-NSA byte conventions. Out-of-
+> scope items (other Speck variants, padding for non-AES, two-word labeled
+> view, codegen) remain deferred.
+
 A first non-AES cipher, to validate the spec-as-data architecture beyond a single
 algorithm family.
 

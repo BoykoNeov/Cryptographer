@@ -29,7 +29,7 @@ A `CipherSpec` (`src/core/types.ts`) is a tree of `StepNode`s. Leaves are `{ kin
 
 Each step type registers an executor *and* a `StepDocumentation` block (`name`, `summary`, `detail` markdown, `params`, `references`). The UI looks up the same key for both. Adding a new cipher = registering its step types in `src/ciphers/default-registry.ts` plus authoring a `CipherSpec` JSON file. **No UI changes needed for new step types** unless their params can't be edited by the existing `ParamEditor` blocks.
 
-State is a discriminated union: `BytesState`, `MatrixState` (4×4 byte matrix, column-major), `BitVecState`, `BigIntState`. AES uses `MatrixState`; future ciphers will use the others.
+State is a discriminated union: `BytesState`, `MatrixState` (4×4 byte matrix, column-major), `BitVecState`, `BigIntState`. AES uses `MatrixState`; Speck32/64 uses `BytesState` of length 4 (the two-word ARX interpretation lives inside the executor via a byte ↔ word codec). `BitVecState` and `BigIntState` are declared but not yet exercised by a shipped cipher.
 
 The future "binary export" feature is what *forced* the spec-as-data choice: a code generator can consume JSON, not closures.
 
@@ -146,6 +146,6 @@ If a future need argues for one of these, revisit then.
 - Original architectural plan: `~/.claude/plans/i-want-to-build-tender-spark.md`
 - Approved UX/feature plan (phases 1–4: frame preservation, run history + diff, byte format toggle, deferred 2D viz): `docs/plans/suggestions-1-4.md`
 - Plaintext input + visible padding plan (PKCS#7 shipped May 2026; zero-pad + ISO 7816-4 follow-up shipped May 2026; multi-block deferred): `docs/plans/pkcs7-padding.md`
-- Speck32/64 plan (second cipher family — ARX, both BE-paper + LE-NSA byte conventions): `docs/plans/speck.md`
+- Speck32/64 plan (shipped May 2026 — second cipher family, ARX, both BE-paper + LE-NSA byte conventions): `docs/plans/speck.md`
 - User preferences (commit cadence, comment density): saved as feedback memories under `C:\Users\boiko\.claude\projects\M--claud-projects-Cryptographer\memory\`
 - GitHub repo: https://github.com/BoykoNeov/Cryptographer
