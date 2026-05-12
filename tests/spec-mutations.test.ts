@@ -1,5 +1,6 @@
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { serpent128Spec } from "@/ciphers/serpent-128";
 import { runSpec } from "@/core/runtime";
 import {
   type ParamCellDiff,
@@ -8,7 +9,7 @@ import {
   updateAllStepsByType,
   updateStepParams,
 } from "@/core/spec-mutations";
-import { bytesFromHex, hexFromBytes } from "@/core/state/bytes";
+import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, Json } from "@/core/types";
 import { describe, expect, it } from "vitest";
@@ -202,6 +203,55 @@ describe("spec mutation helpers", () => {
       if (trace.finalState.shape !== "matrix4x4-bytes") throw new Error("bad shape");
       // Output should NOT be the standard AES ciphertext anymore.
       expect(hexFromBytes(trace.finalState.bytes)).not.toBe("69c4e0d86a7b0430d8cdb78070b4c55a");
+    });
+
+    it("end-to-end: swapping a single Serpent S-box on one round changes the ciphertext", () => {
+      // Serpent equivalent of the AES modularity test. Each round leaf
+      // carries its own 16-entry S-box copy; mutating round.5's S-box
+      // should change the ciphertext for a fixed (key, plaintext) without
+      // touching any other round.
+      const identitySbox4 = Array.from({ length: 16 }, (_, i) => i);
+
+      // Confirm structurally that there are 32 sub-bytes leaves.
+      let beforeCount = 0;
+      const visit = (
+        nodes: readonly {
+          kind: string;
+          type?: string;
+          children?: readonly unknown[];
+        }[],
+      ): void => {
+        for (const node of nodes) {
+          if (node.kind === "step" && node.type === "serpent.sub-bytes@1") beforeCount++;
+          else if (node.kind === "group") visit(node.children as never);
+        }
+      };
+      visit(serpent128Spec.steps as never);
+      expect(beforeCount).toBe(32);
+
+      const swapped = updateStepParams(serpent128Spec, "round.5.sub-bytes", {
+        sbox: identitySbox4,
+        sboxIndex: 4,
+      });
+
+      const pt = makeBytesState(bytesFromHex("00112233445566778899aabbccddeeff"));
+      const initialAux = new Map<string, AuxValue>([
+        ["key", bytesFromHex("000102030405060708090a0b0c0d0e0f")],
+      ]);
+      const baseline = runSpec(serpent128Spec, buildDefaultRegistry(), {
+        initialState: pt,
+        initialAux,
+      });
+      const modified = runSpec(swapped, buildDefaultRegistry(), {
+        initialState: pt,
+        initialAux,
+      });
+      if (baseline.finalState.shape !== "bytes" || modified.finalState.shape !== "bytes") {
+        throw new Error("bad shape");
+      }
+      expect(hexFromBytes(modified.finalState.bytes)).not.toBe(
+        hexFromBytes(baseline.finalState.bytes),
+      );
     });
   });
 });

@@ -83,11 +83,20 @@ describe("App — cipher selector", () => {
     resetAll();
   });
 
-  it("renders every cipher variant in the dropdown (3 AES + 2 Speck)", () => {
+  it("renders every cipher variant in the dropdown (3 AES + 2 Speck + 3 Serpent)", () => {
     const { container } = render(() => <App />);
     const select = findSelectByLabel(container, "cipher");
     const values = Array.from(select.querySelectorAll("option")).map((o) => o.value);
-    expect(values).toEqual(["aes-128", "aes-192", "aes-256", "speck-32-64-be", "speck-32-64-le"]);
+    expect(values).toEqual([
+      "aes-128",
+      "aes-192",
+      "aes-256",
+      "speck-32-64-be",
+      "speck-32-64-le",
+      "serpent-128",
+      "serpent-192",
+      "serpent-256",
+    ]);
   });
 
   it("defaults to AES-128 with the FIPS-197 §A.1 key on fresh load", () => {
@@ -222,6 +231,44 @@ describe("App — cipher selector", () => {
       target: { value: "aes-128" },
     });
     expect(ptInput.value).toBe("00112233445566778899aabbccddeeff");
+  });
+
+  it("encrypts under Serpent-128 end-to-end through the selector", () => {
+    const { container } = render(() => <App />);
+
+    fireEvent.change(findSelectByLabel(container, "cipher"), {
+      target: { value: "serpent-128" },
+    });
+
+    // Auto-swap should leave the FIPS-style sequential bytes in both fields
+    // (Serpent defaults reuse them — same block size, no AES vs Serpent
+    // ambiguity for a 16-byte plaintext).
+    expect(findInputByLabel(container, "key").value).toBe("000102030405060708090a0b0c0d0e0f");
+    expect(findInputByLabel(container, "plaintext").value).toBe("00112233445566778899aabbccddeeff");
+
+    // Padding is AES-only today; Serpent uses BytesState so the overlay's
+    // applyPaddingScheme early-returns and the dropdown disables.
+    const paddingSelect = findSelectByLabel(container, "padding");
+    expect(paddingSelect.disabled).toBe(true);
+
+    // Use a verified KAT vector from the Python reference. Replace the
+    // plaintext field with all-zeros and the key with the single-bit key
+    // so we can match against the headline reference value.
+    fireEvent.input(findInputByLabel(container, "plaintext"), {
+      target: { value: "00000000000000000000000000000000" },
+    });
+    fireEvent.input(findInputByLabel(container, "key"), {
+      target: { value: "80000000000000000000000000000000" },
+    });
+
+    fireEvent.click(findButton(container, "run"));
+    expect(container.querySelector(".error")).toBeNull();
+    const result = container.querySelector(".result code")?.textContent ?? "";
+    expect(result).toBe("264e5481eff42a4606abda06c0bfda3d");
+
+    // Regression guard: the Serpent ParamEditor blocks must dispatch (no
+    // raw-JSON fallback).
+    expect(container.querySelector(".param-raw")).toBeNull();
   });
 
   it("does NOT clobber a user-typed key when the cipher changes", () => {

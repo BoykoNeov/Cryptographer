@@ -20,6 +20,18 @@ import { loadBlock, loadBlockDoc } from "../steps/load-block";
 import { mixColumns, mixColumnsDoc } from "../steps/mix-columns";
 import { pkcs7Pad, pkcs7PadDoc } from "../steps/pkcs7-pad";
 import { pkcs7Unpad, pkcs7UnpadDoc } from "../steps/pkcs7-unpad";
+import { serpentAddRoundKey, serpentAddRoundKeyDoc } from "../steps/serpent-add-round-key";
+import { serpentBitPermutation, serpentBitPermutationDoc } from "../steps/serpent-bit-permutation";
+import {
+  serpentInvLinearTransform,
+  serpentInvLinearTransformDoc,
+} from "../steps/serpent-inv-linear-transform";
+import { serpentKeyExpansion, serpentKeyExpansionDoc } from "../steps/serpent-key-expansion";
+import {
+  serpentLinearTransform,
+  serpentLinearTransformDoc,
+} from "../steps/serpent-linear-transform";
+import { serpentSubBytes, serpentSubBytesDoc } from "../steps/serpent-sub-bytes";
 import { shiftRows, shiftRowsDoc } from "../steps/shift-rows";
 import { speckKeySchedule, speckKeyScheduleDoc } from "../steps/speck-key-schedule";
 import { speckRound, speckRoundDoc } from "../steps/speck-round";
@@ -78,5 +90,33 @@ export const buildDefaultRegistry = (): StepRegistry => {
   r.register("speck.key-schedule@1", { executor: speckKeySchedule, doc: speckKeyScheduleDoc });
   r.register("speck.round@1", { executor: speckRound, doc: speckRoundDoc });
   r.register("speck.round-inverse@1", { executor: speckRoundInverse, doc: speckRoundInverseDoc });
+  // ─── Serpent (AES-finalist SP-network, third cipher family) ────────────
+  // Six step types: key expansion, a single bit-permutation step used as
+  // both IP and FP (table-driven), AddRoundKey, a bitsliced 4-bit SubBytes
+  // (used for both forward and inverse — S-box table is the per-leaf param),
+  // and forward + inverse Linear Transform. All three Serpent variants
+  // (128/192/256) share the registered types; only the key length and the
+  // key-expansion `keyByteLength` param differ across them.
+  r.register("serpent.key-expansion@1", {
+    executor: serpentKeyExpansion,
+    doc: serpentKeyExpansionDoc,
+  });
+  r.register("serpent.bit-permutation@1", {
+    executor: serpentBitPermutation,
+    doc: serpentBitPermutationDoc,
+  });
+  r.register("serpent.add-round-key@1", {
+    executor: serpentAddRoundKey,
+    doc: serpentAddRoundKeyDoc,
+  });
+  r.register("serpent.sub-bytes@1", { executor: serpentSubBytes, doc: serpentSubBytesDoc });
+  r.register("serpent.linear-transform@1", {
+    executor: serpentLinearTransform,
+    doc: serpentLinearTransformDoc,
+  });
+  r.register("serpent.inv-linear-transform@1", {
+    executor: serpentInvLinearTransform,
+    doc: serpentInvLinearTransformDoc,
+  });
   return r;
 };

@@ -30,6 +30,12 @@ import { aes192Spec } from "@/ciphers/aes-192";
 import { aes192DecryptSpec } from "@/ciphers/aes-192-decrypt";
 import { aes256Spec } from "@/ciphers/aes-256";
 import { aes256DecryptSpec } from "@/ciphers/aes-256-decrypt";
+import { serpent128Spec } from "@/ciphers/serpent-128";
+import { serpent128DecryptSpec } from "@/ciphers/serpent-128-decrypt";
+import { serpent192Spec } from "@/ciphers/serpent-192";
+import { serpent192DecryptSpec } from "@/ciphers/serpent-192-decrypt";
+import { serpent256Spec } from "@/ciphers/serpent-256";
+import { serpent256DecryptSpec } from "@/ciphers/serpent-256-decrypt";
 import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { speck32_64BeDecryptSpec } from "@/ciphers/speck-32-64-be-decrypt";
 import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
@@ -75,6 +81,15 @@ const defaults: Record<Cipher, Partial<Record<CipherMode, Record<Mode, CipherSpe
   },
   "speck-32-64-le": {
     "single-block": { encrypt: speck32_64LeSpec, decrypt: speck32_64LeDecryptSpec },
+  },
+  "serpent-128": {
+    "single-block": { encrypt: serpent128Spec, decrypt: serpent128DecryptSpec },
+  },
+  "serpent-192": {
+    "single-block": { encrypt: serpent192Spec, decrypt: serpent192DecryptSpec },
+  },
+  "serpent-256": {
+    "single-block": { encrypt: serpent256Spec, decrypt: serpent256DecryptSpec },
   },
 };
 

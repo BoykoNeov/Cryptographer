@@ -36,4 +36,17 @@ describe("cipher-mode × cipher support matrix", () => {
       expect(isCipherModeSupported(cipher, "ctr")).toBe(false);
     }
   });
+
+  it("Serpent ships single-block only at first (all variants); ecb/cbc/ctr unsupported", () => {
+    // Canary: when a future phase adds multi-block Serpent (which would
+    // reuse the iterate primitive the same way AES-128-ECB does), this
+    // test fires and forces the SUPPORTED_CIPHER_MODES_BY_CIPHER matrix
+    // to be updated alongside the new spec factory.
+    for (const cipher of ["serpent-128", "serpent-192", "serpent-256"] as const) {
+      expect(isCipherModeSupported(cipher, "single-block")).toBe(true);
+      expect(isCipherModeSupported(cipher, "ecb")).toBe(false);
+      expect(isCipherModeSupported(cipher, "cbc")).toBe(false);
+      expect(isCipherModeSupported(cipher, "ctr")).toBe(false);
+    }
+  });
 });

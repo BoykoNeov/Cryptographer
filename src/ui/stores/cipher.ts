@@ -13,7 +13,8 @@ import { createSignal } from "solid-js";
 
 export type AesCipher = "aes-128" | "aes-192" | "aes-256";
 export type SpeckCipher = "speck-32-64-be" | "speck-32-64-le";
-export type Cipher = AesCipher | SpeckCipher;
+export type SerpentCipher = "serpent-128" | "serpent-192" | "serpent-256";
+export type Cipher = AesCipher | SpeckCipher | SerpentCipher;
 
 const STORAGE_KEY = "cryptographer.cipher";
 const ALL_CIPHERS: readonly Cipher[] = [
@@ -22,6 +23,9 @@ const ALL_CIPHERS: readonly Cipher[] = [
   "aes-256",
   "speck-32-64-be",
   "speck-32-64-le",
+  "serpent-128",
+  "serpent-192",
+  "serpent-256",
 ];
 
 /**
@@ -70,6 +74,9 @@ export const CIPHER_LABELS: Record<Cipher, string> = {
   "aes-256": "AES-256",
   "speck-32-64-be": "Speck 32/64 (BE, paper)",
   "speck-32-64-le": "Speck 32/64 (LE, NSA)",
+  "serpent-128": "Serpent-128",
+  "serpent-192": "Serpent-192",
+  "serpent-256": "Serpent-256",
 };
 
 export const CIPHER_OPTIONS = ALL_CIPHERS;
@@ -107,6 +114,23 @@ export const DEFAULT_KEY_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
   // k_0-first low-byte-first.
   "speck-32-64-be": new Uint8Array([0x19, 0x18, 0x11, 0x10, 0x09, 0x08, 0x01, 0x00]),
   "speck-32-64-le": new Uint8Array([0x00, 0x01, 0x08, 0x09, 0x10, 0x11, 0x18, 0x19]),
+  // Serpent default keys: the same sequential byte pattern as AES so the
+  // first Run shows a non-trivial trace. Serpent doesn't have a single
+  // canonical KAT key the way AES (FIPS-197 Appendix C) does — the NIST
+  // submission's `ecb_vk.txt` walks variable-key positions instead — so
+  // we reuse the AES key bytes for the 128 / 192 / 256 variants and let
+  // the user replace with NESSIE test vectors if they want to verify.
+  "serpent-128": new Uint8Array([
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+  ]),
+  "serpent-192": new Uint8Array([
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+  ]),
+  "serpent-256": new Uint8Array([
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+  ]),
 };
 
 /**
@@ -134,6 +158,16 @@ export const DEFAULT_PT_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
   ]),
   "speck-32-64-be": new Uint8Array([0x65, 0x74, 0x69, 0x4c]), // "6574694c"
   "speck-32-64-le": new Uint8Array([0x4c, 0x69, 0x74, 0x65]), // "4c697465"
+  // Serpent uses the same 16-byte plaintext as AES (also 128-bit block).
+  "serpent-128": new Uint8Array([
+    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+  ]),
+  "serpent-192": new Uint8Array([
+    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+  ]),
+  "serpent-256": new Uint8Array([
+    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+  ]),
 };
 
 /** Test-only reset; production code never calls this. */

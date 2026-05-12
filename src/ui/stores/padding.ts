@@ -110,6 +110,16 @@ export const paddingLimits = (
       case "speck-32-64-be":
       case "speck-32-64-le":
         return { min: 4, max: 4 };
+      // Serpent uses 16-byte blocks like AES, but the padding overlay
+      // (`load-block`/`store-block`) is hardcoded for MatrixState and our
+      // Serpent specs use BytesState — so today the padding selector is
+      // disabled for Serpent and the input is required to be exactly one
+      // block. A future block-size-aware load/store rework can unlock the
+      // overlay for both Speck and Serpent simultaneously.
+      case "serpent-128":
+      case "serpent-192":
+      case "serpent-256":
+        return { min: 16, max: 16 };
       default: {
         const _exhaustive: never = cipher;
         throw new Error(`paddingLimits: unsupported non-AES cipher: ${_exhaustive as string}`);

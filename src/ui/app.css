@@ -810,6 +810,42 @@ button:disabled {
   display: contents;
 }
 
+/* ─── Serpent S-box editor (4x4 grid, 16 4-bit entries) ───────────────── */
+/* Serpent's S-boxes are 16-entry 4-bit tables, so we render them as a 4x4
+   grid of editable cells. Index 0 is top-left; index 15 is bottom-right,
+   row-major. Sized to roughly match the AES S-box cell footprint so the
+   visual rhythm between cipher types stays consistent. */
+.serpent-sbox-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 32px);
+  grid-template-rows: repeat(4, 22px);
+  gap: 3px;
+}
+
+.serpent-sbox-cell-wrap {
+  display: contents;
+}
+
+/* ─── Serpent bit-permutation table viewer ─────────────────────────────── */
+/* The 128-entry IP/FP table is read-only and educational only. Rendered
+   as a wrapping row of small monospace integers; the title attribute on
+   each cell carries the "output bit i ← input bit table[i]" reading. */
+.serpent-bit-table {
+  display: grid;
+  grid-template-columns: repeat(16, 1fr);
+  gap: 2px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.serpent-bit-table .bit-table-cell {
+  text-align: right;
+  padding: 1px 4px;
+  background: var(--cell-bg, transparent);
+  border-radius: 2px;
+}
+
 /* ─── MixColumns matrix editor ────────────────────────────────────────── */
 .matrix-editor {
   display: flex;

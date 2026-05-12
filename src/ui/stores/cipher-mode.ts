@@ -57,6 +57,9 @@ export const SUPPORTED_CIPHER_MODES_BY_CIPHER: Readonly<Record<Cipher, readonly 
   "aes-256": ["single-block"],
   "speck-32-64-be": ["single-block"],
   "speck-32-64-le": ["single-block"],
+  "serpent-128": ["single-block"],
+  "serpent-192": ["single-block"],
+  "serpent-256": ["single-block"],
 };
 
 export const isCipherModeSupported = (cipher: Cipher, mode: CipherMode): boolean =>

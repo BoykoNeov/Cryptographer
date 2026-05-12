@@ -101,6 +101,26 @@ export const ParamEditor = (props: Props) => {
             >
               <SpeckRoundBlock step={getStep()} matchingCount={matchingSteps()} />
             </Match>
+            <Match when={getStep().type === "serpent.key-expansion@1"}>
+              <SerpentKeyExpansionBlock step={getStep()} matchingCount={matchingSteps()} />
+            </Match>
+            <Match when={getStep().type === "serpent.bit-permutation@1"}>
+              <SerpentBitPermutationBlock step={getStep()} matchingCount={matchingSteps()} />
+            </Match>
+            <Match when={getStep().type === "serpent.add-round-key@1"}>
+              <SerpentAddRoundKeyBlock step={getStep()} matchingCount={matchingSteps()} />
+            </Match>
+            <Match when={getStep().type === "serpent.sub-bytes@1"}>
+              <SerpentSubBytesBlock step={getStep()} matchingCount={matchingSteps()} />
+            </Match>
+            <Match
+              when={
+                getStep().type === "serpent.linear-transform@1" ||
+                getStep().type === "serpent.inv-linear-transform@1"
+              }
+            >
+              <NoParamsBlock label="Linear transform has no editable parameters." />
+            </Match>
           </Switch>
         </div>
       )}
@@ -440,6 +460,149 @@ const SpeckRoundBlock = (props: BlockProps) => {
     </dl>
   );
 };
+
+// ─── Serpent step blocks ─────────────────────────────────────────────────
+
+// Serpent key-expansion: three scalars (keyAuxName, outputPrefix,
+// keyByteLength). All structural — editing them by hand breaks the spec.
+// No S-box param to expose here (Serpent's S-boxes live on the per-round
+// sub-bytes leaves, not on the schedule itself — unlike AES, which has
+// the S-box on its schedule because the schedule consumes it for SubWord).
+const SerpentKeyExpansionBlock = (props: BlockProps) => {
+  const params = (): {
+    keyAuxName?: string;
+    outputPrefix?: string;
+    keyByteLength?: number;
+  } => props.step.params as never;
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>Input aux</dt>
+        <dd>{params().keyAuxName ?? "—"}</dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Output prefix</dt>
+        <dd>{params().outputPrefix ?? "—"}</dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Key bytes</dt>
+        <dd>{params().keyByteLength ?? "—"}</dd>
+      </div>
+    </dl>
+  );
+};
+
+// Serpent bit-permutation: 128-entry table param. Editing the table by
+// hand is impractical; we show the label (IP / FP) as a scalar and tuck
+// the table behind a <details>. Display is a 16x8 grid of source-bit
+// indices (matches the layout the constants file uses for line-by-line
+// auditing). Read-only — this is a structural cipher constant.
+const SerpentBitPermutationBlock = (props: BlockProps) => {
+  const params = (): { table?: number[]; label?: string } => props.step.params as never;
+  const table = (): readonly number[] => params().table ?? [];
+
+  return (
+    <>
+      <dl class="param-scalars">
+        <div class="param-scalar-row">
+          <dt>Permutation</dt>
+          <dd>{params().label ?? "—"}</dd>
+        </div>
+      </dl>
+      <details class="param-section param-collapsible">
+        <summary class="param-section-label">
+          Bit permutation table (128 entries — click to expand)
+        </summary>
+        <div class="serpent-bit-table">
+          <For each={table()}>
+            {(value, i) => (
+              <span class="bit-table-cell" title={`output bit ${i()} ← input bit ${value}`}>
+                {value}
+              </span>
+            )}
+          </For>
+        </div>
+      </details>
+    </>
+  );
+};
+
+// Serpent add-round-key: one scalar (roundKeyAux). Same shape as AES
+// AddRoundKeyBlock — no ApplyAllRow because each leaf intentionally
+// points at a different round key.
+const SerpentAddRoundKeyBlock = (props: BlockProps) => {
+  const params = (): { roundKeyAux?: string } => props.step.params as never;
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>Round key aux</dt>
+        <dd>{params().roundKeyAux ?? "—"}</dd>
+      </div>
+    </dl>
+  );
+};
+
+// Serpent SubBytes: 16-entry 4-bit S-box. Rendered as an editable 4x4
+// grid (16 cells in row-major order, index 0 top-left). Each cell is a
+// ByteCellInput; the user can experiment by swapping values, and the
+// effect propagates through the spec store like any other param edit.
+//
+// sboxIndex (0..7) is shown read-only as context — telling the user
+// "this is S-box 3 of the 8 Serpent S-boxes" so they can correlate
+// with the cipher description.
+const SerpentSubBytesBlock = (props: BlockProps) => {
+  const params = (): { sbox?: number[]; sboxIndex?: number } => props.step.params as never;
+  const sbox = (): readonly number[] => params().sbox ?? [];
+
+  const writeSbox = (next: number[]) => {
+    editStepParams(props.step.id, {
+      ...(props.step.params as Record<string, Json>),
+      sbox: next,
+    });
+  };
+
+  return (
+    <>
+      <dl class="param-scalars">
+        <div class="param-scalar-row">
+          <dt>S-box index</dt>
+          <dd>S_{params().sboxIndex ?? "—"}</dd>
+        </div>
+      </dl>
+      <div class="param-section">
+        <div class="param-section-label">S-box (16 entries, 4-bit each)</div>
+        <div class="serpent-sbox-grid">
+          <For each={sbox()}>
+            {(value, i) => (
+              <div class="serpent-sbox-cell-wrap" title={`S[${i()}] = ${value}`}>
+                <ByteCellInput
+                  compact
+                  value={value}
+                  onCommit={(next) => {
+                    // Clamp to 0..15 — anything outside that range isn't a
+                    // valid 4-bit S-box entry. ByteCellInput will already
+                    // refuse non-byte values; we tighten further here.
+                    const clamped = Math.max(0, Math.min(15, next));
+                    const out = [...sbox()];
+                    out[i()] = clamped;
+                    writeSbox(out);
+                  }}
+                />
+              </div>
+            )}
+          </For>
+        </div>
+      </div>
+    </>
+  );
+};
+
+// Empty-params placeholder for steps whose entire computation is in code
+// (the Serpent LT and inverse LT). Avoids the raw-JSON fallback rendering
+// `{}` for an empty params object.
+const NoParamsBlock = (props: { label: string }) => <div class="muted small">{props.label}</div>;
 
 // ─── Apply-to-all button ─────────────────────────────────────────────────
 
