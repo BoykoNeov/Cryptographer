@@ -1,0 +1,6 @@
+- [Commit cadence — every batch](feedback_commit_cadence.md) — Push after each completed batch; don't accumulate.
+- [Code comment density — often](feedback_code_comments.md) — Override default "no comments" rule; add comments frequently for this user.
+- [AES & cryptography pitfalls](feedback_aes_pitfalls.md) — FIPS-197 appendix mix-up, SubBytes/ShiftRows commute, column-major matrix, GF(2^8) polynomial, key-expansion uses forward S-box even when decrypting.
+- [Preserve current trace frame across re-runs](feedback_frame_preservation.md) — Don't reset scrubber to frame 0 on Run/edit; preserve by stepId. Universal for all ciphers.
+- [New cipher: external oracle BEFORE tests](feedback_crypto_verification.md) — For ChaCha20/RSA/etc., get a Python or npm reference and pin the FIRST KAT against IT, not against web-cited values.
+- [2D editor + JSON export plan (Slices 1+2 shipped)](project_2d_editor_plan.md) — Slices 1+2 shipped 2026-05-12; next session picks any unshipped spine slice (3 schema or 4 mutation surface).
