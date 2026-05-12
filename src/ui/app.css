@@ -1558,6 +1558,18 @@ button:disabled {
   cursor: pointer;
 }
 
+/* Root-level leaves get a grab cursor to advertise that they're
+   draggable (parity with container headers). The cursor only changes
+   for the draggable subset; nested leaves keep the plain pointer. */
+
+.graph-leaf-draggable {
+  cursor: grab;
+}
+
+.graph-leaf-draggable:active {
+  cursor: grabbing;
+}
+
 .graph-leaf-rect {
   fill: var(--bg);
   stroke: var(--border);

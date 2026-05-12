@@ -5,16 +5,19 @@
  * Slice 2 originally shipped a read-only renderer over `core/graph.ts`'s
  * `deriveAuxGraph`. Slice 6 layers two interactive affordances on top:
  *
- *   1. **Container drag.** Pointer-down on a container's header band
- *      starts a drag; pointermove updates the layout store; pointerup
- *      commits the new position. Containers move; their children re-flow
- *      via the existing auto-layout walk from the new top-left.
+ *   1. **Container drag + root-leaf drag.** Pointer-down on a container's
+ *      header band or on a root-level leaf starts a drag; pointermove
+ *      updates the layout store; pointerup commits the new position. For
+ *      leaves, a sub-threshold release synthesizes the original click
+ *      (which scrubs the trace) so click-to-navigate still works.
  *
- *      Why container-only (not leaf): the pedagogical use case is
- *      rearranging WHOLE ROUNDS. Leaf-level drag (SubBytes alone) would
- *      let leaves escape their parent's bounding box, a visual quirk we
- *      don't need yet. Slice 8 (palette insert) will revisit leaf
- *      positioning when newly dropped steps need landing coordinates.
+ *      Why root-level only (not nested leaves): the pedagogical use case
+ *      is rearranging top-level entities (key-expansion, the round
+ *      groups, the per-block iterate, the standalone initial AddRoundKey).
+ *      Nested leaves like `round.5.sub-bytes` keep their click-only
+ *      behavior so users can't accidentally pull a single step out of
+ *      its parent round's bounding box. Slice 8 (palette insert) will
+ *      revisit nested-leaf positioning if it becomes useful.
  *
  *   2. **Collapse / expand.** A chevron in the container header toggles
  *      that container into `LayoutSpec.collapsedGroups`. The pure
@@ -151,11 +154,15 @@ const layoutNode = (
 /**
  * Lay out the entire root (mixed leaves + containers) as a horizontal flow.
  *
- * Pinned root-level entries use their pinned coords and do NOT advance the
- * cursor for subsequent un-pinned siblings — so dragging round.5 up doesn't
- * push round.6/7/8/9/10 into a weird offset. Canvas extent tracks the max
- * right/bottom across all boxes (pinned or not), so dragging far right just
- * grows the SVG to fit.
+ * Pinned root-level entries use their pinned coords for placement BUT still
+ * advance the cursor by their natural width — so un-pinned siblings stay in
+ * their original slots instead of sliding leftward into the vacated space.
+ * (Slice 6 originally skipped cursor advancement on pin; that caused a
+ * visible reflow when only some siblings were pinned: drag round.5 and
+ * round.6 collapsed into round.5's slot, round.7 into round.6's, etc.)
+ *
+ * Canvas extent tracks the max right/bottom across all boxes (pinned or
+ * not), so dragging far right just grows the SVG to fit.
  */
 const layoutRoot = (
   graph: CipherGraph,
@@ -169,12 +176,14 @@ const layoutRoot = (
   let maxRight = CANVAS_MARGIN;
   let maxBottom = CANVAS_MARGIN;
   for (const id of graph.rootIds) {
-    const isPinned = pinned.has(id);
-    // Un-pinned: use the running cursor. Pinned: layoutNode reads the pin.
+    // Capture the cursor BEFORE layoutNode — that's the natural-flow X
+    // for this root entity, used for cursor advancement even when the
+    // entity is pinned somewhere else. box.w is content-derived (depends
+    // on children, not on this entity's pin), so it's safe to use as the
+    // natural width for the advancement step.
+    const naturalX = cursorX;
     const box = layoutNode(id, cursorX, CANVAS_MARGIN, containersById, pinned, boxes);
-    if (!isPinned) {
-      cursorX = box.x + box.w + FLOW_GAP;
-    }
+    cursorX = naturalX + box.w + FLOW_GAP;
     const right = box.x + box.w;
     const bottom = box.y + box.h;
     if (right > maxRight) maxRight = right;
@@ -262,15 +271,20 @@ export const GraphView = () => {
   };
 
   /**
-   * Begin a container drag on pointerdown over a container header.
-   * Tracks (startClientX/Y, startBoxX/Y, moved). Updates the store on
-   * each pointermove and stops on pointerup/cancel. setPointerCapture is
-   * best-effort — jsdom doesn't implement it in older versions; the drag
-   * still works without it, the cursor just can't leave the rect.
+   * Begin a node drag on pointerdown. Works for any node id (container
+   * or leaf) — the layout engine treats leaves with pins the same as
+   * containers with pins. setPointerCapture is best-effort: jsdom
+   * doesn't implement it in older versions, but the window-level
+   * listeners installed below keep the drag working regardless.
+   *
+   * If `onClickFallback` is provided, a sub-threshold pointerup (no
+   * meaningful movement) fires it — that's how leaves preserve their
+   * click-to-scrub behavior while ALSO being draggable when the user
+   * actually drags.
    */
-  const startContainerDrag = (containerId: string, e: PointerEvent): void => {
+  const startNodeDrag = (nodeId: string, e: PointerEvent, onClickFallback?: () => void): void => {
     e.stopPropagation();
-    const startBox = layout().boxes.get(containerId);
+    const startBox = layout().boxes.get(nodeId);
     if (!startBox) return;
     const startClientX = e.clientX;
     const startClientY = e.clientY;
@@ -303,13 +317,14 @@ export const GraphView = () => {
       if (!moved) return;
       // SVG viewBox is 1:1 with rendered width/height, so client-px delta
       // maps directly onto SVG-unit delta.
-      setNodePosition(spec().id, containerId, startBoxX + dx, startBoxY + dy);
+      setNodePosition(spec().id, nodeId, startBoxX + dx, startBoxY + dy);
     };
 
     const onUp = (): void => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
+      if (!moved && onClickFallback) onClickFallback();
     };
 
     window.addEventListener("pointermove", onMove);
@@ -384,7 +399,7 @@ export const GraphView = () => {
                       container={container}
                       box={b()}
                       isCollapsed={collapsedSet().has(container.id)}
-                      onDragStart={(e) => startContainerDrag(container.id, e)}
+                      onDragStart={(e) => startNodeDrag(container.id, e)}
                       onToggleCollapse={() => toggleCollapse(spec().id, container.id)}
                     />
                   )}
@@ -414,7 +429,13 @@ export const GraphView = () => {
             }}
           </For>
 
-          {/* Leaves last so they sit on top. */}
+          {/* Leaves last so they sit on top. Root-level leaves (those with
+              empty containerPath — e.g. AES's `key-expansion`,
+              `initial.add-round-key`) are draggable; nested leaves keep
+              their click-only behavior so users don't accidentally pull
+              `round.5.sub-bytes` out of its parent group. The single
+              `startNodeDrag` handler covers both: when draggable, drag +
+              click; when not, an explicit click handler stays on the <g>. */}
           <For each={graph().nodes}>
             {(node) => {
               const box = createMemo(() => layout().boxes.get(node.stepId));
@@ -422,12 +443,21 @@ export const GraphView = () => {
                 const c = containersById().get(id);
                 return c?.kind === "iterate";
               });
+              const isRootLevel = node.containerPath.length === 0;
               // exactOptionalPropertyTypes is on, so we conditionally spread
               // blockSpan rather than passing `undefined` as a real value.
               const blockSpanProps =
                 isInsideIterate && node.blockSpan !== undefined
                   ? { blockSpan: node.blockSpan }
                   : {};
+              // Conditional spread for the drag handler — only present on
+              // root-level leaves. Nested leaves get a plain onClick.
+              const dragProps = isRootLevel
+                ? {
+                    onPointerDown: (e: PointerEvent) =>
+                      startNodeDrag(node.stepId, e, () => handleLeafClick(node.stepId)),
+                  }
+                : {};
               return (
                 <Show when={box()}>
                   {(b) => (
@@ -436,7 +466,9 @@ export const GraphView = () => {
                       label={shortLeafLabel(node.stepId)}
                       stepType={node.stepType}
                       box={b()}
+                      draggable={isRootLevel}
                       {...blockSpanProps}
+                      {...dragProps}
                       onClick={() => handleLeafClick(node.stepId)}
                     />
                   )}
@@ -458,47 +490,68 @@ const LeafRect = (props: {
   stepType: string;
   box: Box;
   blockSpan?: number;
+  draggable: boolean;
+  /** Present only when draggable. The parent wires this to `startNodeDrag`
+   * with the leaf's onClick as the sub-threshold fallback, so clicks still
+   * scrub the trace and drags pin the position. */
+  onPointerDown?: (e: PointerEvent) => void;
+  /** Used by the keyboard handler always; also used by mouse when not
+   * draggable (a click that didn't go through the drag handler). */
   onClick: () => void;
-}) => (
+}) => {
   // SVG <g> can't be replaced by a semantic <button> (it'd leave the SVG
-  // coordinate system). We attach both click and Enter/Space keyboard
-  // handlers; biome's useSemanticElements rule then leaves us alone because
-  // we deliberately don't set role="button" (which is what the rule
-  // objects to in non-SVG contexts).
-  <g
-    class="graph-leaf"
-    onClick={props.onClick}
-    onKeyDown={(e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        props.onClick();
-      }
-    }}
-  >
-    <title>
-      {props.stepId} ({props.stepType})
-      {props.blockSpan !== undefined && props.blockSpan > 1 ? ` — ×${props.blockSpan} blocks` : ""}
-    </title>
-    <rect
-      class="graph-leaf-rect"
-      x={props.box.x}
-      y={props.box.y}
-      width={props.box.w}
-      height={props.box.h}
-      rx={4}
-      ry={4}
-    />
-    <text
-      class="graph-leaf-label"
-      x={props.box.x + props.box.w / 2}
-      y={props.box.y + props.box.h / 2}
-      text-anchor="middle"
-      dominant-baseline="central"
+  // coordinate system). We attach pointer + keyboard handlers; biome's
+  // useSemanticElements rule then leaves us alone because we deliberately
+  // don't set role="button" (which is what the rule objects to in non-SVG
+  // contexts).
+  //
+  // Click semantics:
+  //   - draggable: the parent's pointerdown handler synthesizes the click
+  //     on sub-threshold release via the onClickFallback path. We do NOT
+  //     attach onClick to the <g> in that case, because pointerdown +
+  //     onClickFallback fully covers it (and adding onClick would fire
+  //     twice on a real click).
+  //   - non-draggable: plain onClick (the legacy behavior). pointerdown
+  //     isn't wired so the click flows through the browser as before.
+  return (
+    <g
+      class={`graph-leaf${props.draggable ? " graph-leaf-draggable" : ""}`}
+      onPointerDown={props.onPointerDown}
+      onClick={props.draggable ? undefined : props.onClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          props.onClick();
+        }
+      }}
     >
-      {props.label}
-    </text>
-  </g>
-);
+      <title>
+        {props.stepId} ({props.stepType})
+        {props.blockSpan !== undefined && props.blockSpan > 1
+          ? ` — ×${props.blockSpan} blocks`
+          : ""}
+      </title>
+      <rect
+        class="graph-leaf-rect"
+        x={props.box.x}
+        y={props.box.y}
+        width={props.box.w}
+        height={props.box.h}
+        rx={4}
+        ry={4}
+      />
+      <text
+        class="graph-leaf-label"
+        x={props.box.x + props.box.w / 2}
+        y={props.box.y + props.box.h / 2}
+        text-anchor="middle"
+        dominant-baseline="central"
+      >
+        {props.label}
+      </text>
+    </g>
+  );
+};
 
 const ContainerRect = (props: {
   container: ContainerNode;

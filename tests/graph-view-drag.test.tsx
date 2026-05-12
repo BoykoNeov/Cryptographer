@@ -207,6 +207,146 @@ describe("GraphView — container drag (Slice 6)", () => {
     const afterStray = getLayoutForSpec(specId)?.positions["round.5"];
     expect(afterStray).toEqual(afterUp);
   });
+
+  // Regression: pinning round.5 used to leave its slot vacant, causing
+  // round.6 to slide leftward into it (and round.7 into round.6's slot,
+  // etc.). The user reported this in feedback. Fix: layoutRoot always
+  // advances the cursor by the natural width, even when an entity is
+  // pinned. This test asserts un-pinned siblings keep their original
+  // X coordinates after a sibling is dragged.
+  it("pinning a root container does not shift the rendered X of subsequent siblings", () => {
+    seedAes128Trace();
+    const { container } = render(() => <GraphView />);
+    const specId = useSpec()().id;
+
+    // Snapshot pre-drag X coordinates of round.6 and round.7.
+    const getX = (id: string): number => {
+      const headerSibling = container.querySelector(
+        `[data-testid="graph-container-header-${id}"]`,
+      ) as Element;
+      const group = headerSibling.parentElement as Element;
+      const rect = group.querySelector(".graph-container-rect") as SVGRectElement;
+      return Number(rect.getAttribute("x"));
+    };
+    const beforeR6X = getX("round.6");
+    const beforeR7X = getX("round.7");
+
+    // Drag round.5 well off its natural slot.
+    const r5Header = container.querySelector(
+      '[data-testid="graph-container-header-round.5"]',
+    ) as Element;
+    r5Header.dispatchEvent(pointerEvt("pointerdown", 100, 100));
+    window.dispatchEvent(pointerEvt("pointermove", 200, 250));
+    window.dispatchEvent(pointerEvt("pointerup", 200, 250));
+
+    // Round.5 should be pinned.
+    expect(getLayoutForSpec(specId)?.positions["round.5"]).toBeDefined();
+
+    // Round.6 and round.7's X must NOT have moved — they're still in
+    // their auto-flow positions, NOT collapsed into round.5's old slot.
+    expect(getX("round.6")).toBe(beforeR6X);
+    expect(getX("round.7")).toBe(beforeR7X);
+  });
+});
+
+// ─── Root-level leaf drag ─────────────────────────────────────────────────
+// Root-level leaves like AES-128's `key-expansion` and
+// `initial.add-round-key` are now draggable (sibling of the container
+// drag). Nested leaves like `round.5.sub-bytes` keep their click-only
+// behavior so users can't accidentally pull a single step out of its
+// parent round.
+
+describe("GraphView — root-level leaf drag", () => {
+  beforeEach(resetAll);
+  afterEach(() => {
+    cleanup();
+    resetAll();
+  });
+
+  it("dragging a root-level leaf (key-expansion) pins its position AND moves the rendered rect", () => {
+    seedAes128Trace();
+    const { container } = render(() => <GraphView />);
+    const specId = useSpec()().id;
+
+    // Find the root-level key-expansion <g class="graph-leaf"> by walking
+    // titles. Its title prefix is the stepId.
+    const leafGs = Array.from(container.querySelectorAll("g.graph-leaf"));
+    const target = leafGs.find((g) =>
+      g.querySelector("title")?.textContent?.startsWith("key-expansion ("),
+    ) as Element | undefined;
+    if (!target) throw new Error("key-expansion leaf not found");
+
+    // It should advertise itself as draggable via the class hook.
+    expect(target.classList.contains("graph-leaf-draggable")).toBe(true);
+
+    const rect = target.querySelector(".graph-leaf-rect") as SVGRectElement;
+    const beforeX = Number(rect.getAttribute("x"));
+    const beforeY = Number(rect.getAttribute("y"));
+
+    // Drag down + right.
+    target.dispatchEvent(pointerEvt("pointerdown", 50, 50));
+    window.dispatchEvent(pointerEvt("pointermove", 200, 180));
+    window.dispatchEvent(pointerEvt("pointerup", 200, 180));
+
+    // Store has the pin.
+    const pin = getLayoutForSpec(specId)?.positions["key-expansion"];
+    expect(pin).toBeDefined();
+
+    // Rendered rect's x/y reflect the delta (150, 130).
+    const afterX = Number(rect.getAttribute("x"));
+    const afterY = Number(rect.getAttribute("y"));
+    expect(afterX - beforeX).toBeCloseTo(150, 0);
+    expect(afterY - beforeY).toBeCloseTo(130, 0);
+  });
+
+  it("nested leaves (e.g. round.5.sub-bytes) are NOT draggable", () => {
+    seedAes128Trace();
+    const { container } = render(() => <GraphView />);
+    const specId = useSpec()().id;
+
+    const leafGs = Array.from(container.querySelectorAll("g.graph-leaf"));
+    const nested = leafGs.find((g) =>
+      g.querySelector("title")?.textContent?.startsWith("round.5.sub-bytes ("),
+    ) as Element | undefined;
+    if (!nested) throw new Error("round.5.sub-bytes leaf not found");
+
+    // No draggable class.
+    expect(nested.classList.contains("graph-leaf-draggable")).toBe(false);
+
+    // pointerdown + move should not write any leaf pin to the store
+    // (because the onPointerDown handler isn't wired).
+    nested.dispatchEvent(pointerEvt("pointerdown", 50, 50));
+    window.dispatchEvent(pointerEvt("pointermove", 200, 180));
+    window.dispatchEvent(pointerEvt("pointerup", 200, 180));
+    expect(getLayoutForSpec(specId)?.positions["round.5.sub-bytes"]).toBeUndefined();
+  });
+
+  it("sub-threshold click on a draggable leaf still scrubs the trace", async () => {
+    seedAes128Trace();
+    const { container } = render(() => <GraphView />);
+    // Use the trace store's setFrame import indirectly: pre-park the
+    // scrubber on frame 0, then click key-expansion → its frame index.
+    const { setFrame, useFrameIndex } = await import("@/ui/stores/trace");
+    setFrame(0);
+    expect(useFrameIndex()()).toBe(0);
+
+    const leafGs = Array.from(container.querySelectorAll("g.graph-leaf"));
+    const target = leafGs.find((g) =>
+      g.querySelector("title")?.textContent?.startsWith("key-expansion ("),
+    ) as Element | undefined;
+    if (!target) throw new Error("key-expansion leaf not found");
+
+    // Sub-threshold drag (2px) acts as a click — the drag handler's
+    // onClickFallback should fire handleLeafClick → setFrame.
+    target.dispatchEvent(pointerEvt("pointerdown", 50, 50));
+    window.dispatchEvent(pointerEvt("pointermove", 51, 50));
+    window.dispatchEvent(pointerEvt("pointerup", 51, 50));
+
+    const trace = getTrace();
+    if (!trace) throw new Error("trace was lost");
+    const expected = trace.frames.findIndex((f) => f.stepId === "key-expansion");
+    expect(useFrameIndex()()).toBe(expected);
+  });
 });
 
 // ─── Collapse ──────────────────────────────────────────────────────────────
