@@ -659,24 +659,33 @@ const ContainerRect = (props: {
 };
 
 const EdgePath = (props: { from: Box; to: Box; auxKey: string; kind: "aux" | "state" }) => {
+  // The `d` attribute is computed via createMemo so it tracks changes to
+  // props.from / props.to. Without the memo, the path string would be
+  // captured once at component init — a static binding — and drags would
+  // not move the arrows (the user observed: arrows only update after a
+  // collapse toggle, because the toggle forces graph() to re-derive +
+  // <For> to re-key, which remounts EdgePath with fresh prop values).
+  //
   // Source: right-center of `from`. Target: left-center of `to`, inset by
   // ARROW_INSET so the arrowhead's tip touches the consumer box's edge
   // cleanly instead of penetrating the rectangle. Bezier control points
   // pulled half the horizontal distance so the curve dips gently without
   // overshooting in the (rare) right-to-left case.
-  const sx = props.from.x + props.from.w;
-  const sy = props.from.y + props.from.h / 2;
-  // Pre-inset target x; bezier control still uses the unmodified target
-  // x so the curve approaches the box at the same angle as before.
-  const txRaw = props.to.x;
-  const ty = props.to.y + props.to.h / 2;
-  const tx = txRaw - ARROW_INSET;
-  const dx = Math.max(20, Math.abs(txRaw - sx) / 2);
-  const d = `M ${sx} ${sy} C ${sx + dx} ${sy}, ${txRaw - dx} ${ty}, ${tx} ${ty}`;
+  const d = createMemo(() => {
+    const sx = props.from.x + props.from.w;
+    const sy = props.from.y + props.from.h / 2;
+    // Pre-inset target x; bezier control still uses the unmodified target
+    // x so the curve approaches the box at the same angle as before.
+    const txRaw = props.to.x;
+    const ty = props.to.y + props.to.h / 2;
+    const tx = txRaw - ARROW_INSET;
+    const dx = Math.max(20, Math.abs(txRaw - sx) / 2);
+    return `M ${sx} ${sy} C ${sx + dx} ${sy}, ${txRaw - dx} ${ty}, ${tx} ${ty}`;
+  });
   return (
     <path
       class={`graph-edge graph-edge-${props.kind}`}
-      d={d}
+      d={d()}
       marker-end={`url(#graph-arrow-${props.kind})`}
     >
       <title>{props.auxKey}</title>

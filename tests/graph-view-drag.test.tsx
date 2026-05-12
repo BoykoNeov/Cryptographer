@@ -208,6 +208,71 @@ describe("GraphView — container drag (Slice 6)", () => {
     expect(afterStray).toEqual(afterUp);
   });
 
+  // Regression: dragged container's arrows didn't follow because EdgePath
+  // captured `d = M ... C ...` as a const at component-init time. Now `d`
+  // is wrapped in createMemo so the path attribute updates reactively.
+  // Pre-fix this only worked after a collapse toggle (which forces a
+  // re-mount of EdgePath via re-keyed <For>). This test reproduces the
+  // expanded-only case the user reported.
+  it("arrows follow dragged containers even when nothing is collapsed", () => {
+    seedAes128Trace();
+    const { container } = render(() => <GraphView />);
+
+    // Snapshot the first edge's `d` BEFORE the drag.
+    const firstEdge = container.querySelector(".graph-edge") as SVGPathElement;
+    expect(firstEdge).not.toBeNull();
+    const beforeD = firstEdge.getAttribute("d");
+    expect(beforeD).not.toBeNull();
+
+    // Drag round.5 substantially. round.5 is the consumer (target) of at
+    // least one key-expansion edge (roundKey.5), so the `d` attribute of
+    // that edge must change once round.5's position changes.
+    const r5Header = container.querySelector(
+      '[data-testid="graph-container-header-round.5"]',
+    ) as Element;
+    r5Header.dispatchEvent(pointerEvt("pointerdown", 100, 100));
+    window.dispatchEvent(pointerEvt("pointermove", 300, 350));
+    window.dispatchEvent(pointerEvt("pointerup", 300, 350));
+
+    // At least ONE edge's `d` must differ from its pre-drag value. We
+    // walk all edges so the test stays robust to edge ordering — the
+    // round-key edge to round.5 is the easy candidate, but other edges
+    // that touch round.5 also count.
+    const edges = Array.from(container.querySelectorAll(".graph-edge"));
+    const anyChanged = edges.some((p) => {
+      const dAttr = p.getAttribute("d");
+      return dAttr !== null && dAttr !== beforeD;
+    });
+    expect(anyChanged).toBe(true);
+  });
+
+  // Specifically pin the final round (round.10) — the user reported it
+  // wasn't draggable. If this test passes programmatically, the issue is
+  // environmental (CSS overflow scroll position, browser quirk). If it
+  // fails, we have a reproducible bug.
+  it("the final round (round.10) is draggable like every other root container", () => {
+    seedAes128Trace();
+    const { container } = render(() => <GraphView />);
+    const specId = useSpec()().id;
+
+    const r10Header = container.querySelector(
+      '[data-testid="graph-container-header-round.10"]',
+    ) as Element | null;
+    expect(r10Header).not.toBeNull();
+
+    const group = (r10Header as Element).parentElement as Element;
+    const rect = group.querySelector(".graph-container-rect") as SVGRectElement;
+    const beforeX = Number(rect.getAttribute("x"));
+
+    (r10Header as Element).dispatchEvent(pointerEvt("pointerdown", 100, 100));
+    window.dispatchEvent(pointerEvt("pointermove", 150, 200));
+    window.dispatchEvent(pointerEvt("pointerup", 150, 200));
+
+    expect(getLayoutForSpec(specId)?.positions["round.10"]).toBeDefined();
+    const afterX = Number(rect.getAttribute("x"));
+    expect(afterX - beforeX).toBeCloseTo(50, 0);
+  });
+
   // Regression: pinning round.5 used to leave its slot vacant, causing
   // round.6 to slide leftward into it (and round.7 into round.6's slot,
   // etc.). The user reported this in feedback. Fix: layoutRoot always
