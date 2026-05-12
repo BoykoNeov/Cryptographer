@@ -45,6 +45,7 @@ import { createSignal } from "solid-js";
 import { type Cipher, setCipher as setCipherSignal, useCipher } from "./cipher";
 import {
   type CipherMode,
+  isCipherModeSupported,
   setCipherMode as setCipherModeSignal,
   useCipherMode,
 } from "./cipher-mode";
@@ -131,12 +132,19 @@ export const setMode = (m: Mode): void => {
  * Switch the active cipher. Replaces the spec with the new cipher's
  * canonical default for the current (cipherMode, mode), then re-applies
  * the active padding overlay. If the new cipher doesn't support the
- * current cipherMode, `resolveDefault` falls back to single-block — the
- * cipher-mode store stays at whatever the user picked (so flipping back
- * later restores it for ciphers that do support it).
+ * current cipherMode, the cipherMode signal is RESET to "single-block"
+ * before the spec is rebuilt. Without this reset, `resolveDefault` would
+ * silently fall back to single-block but the dropdown would still show
+ * the unsupported mode — `paddingLimits` would then return the
+ * multi-block range, the spec would run as single-block with the
+ * padding overlay, and the user would see a deep "load-block: expected
+ * 16, got 32" error instead of any UI signal.
  */
 export const setCipher = (c: Cipher): void => {
   setCipherSignal(c);
+  if (!isCipherModeSupported(c, useCipherMode()())) {
+    setCipherModeSignal("single-block");
+  }
   setSpec(
     applyPaddingScheme(resolveDefault(c, useCipherMode()(), mode()), mode(), usePaddingScheme()()),
   );

@@ -26,6 +26,7 @@
  */
 
 import { createSignal } from "solid-js";
+import { type Cipher, useCipher } from "./cipher";
 
 export type CipherMode = "single-block" | "ecb" | "cbc" | "ctr";
 
@@ -36,19 +37,49 @@ const ALL_CIPHER_MODES: readonly CipherMode[] = ["single-block", "ecb", "cbc", "
 // rollout doesn't move things around in the UI.
 export const SUPPORTED_CIPHER_MODES: readonly CipherMode[] = ["single-block", "ecb"];
 
+/**
+ * Which (cipher, cipherMode) combinations have a concrete spec in
+ * `stores/spec.ts`'s defaults table. Phase 1 only AES-128 has the ECB
+ * factory wired up; AES-192/256 ECB ship in Phase 4; CBC + CTR ship in
+ * Phases 2 + 3 (also AES-128 only at first). Speck is single-block only.
+ *
+ * Used both by the App's dropdown (to disable unsupported (cipher, mode)
+ * options so the user can't pick a combo that silently falls back to
+ * single-block) and by `setCipher` in spec.ts (to reset cipherMode when
+ * the user switches to a cipher that doesn't support the active mode).
+ *
+ * If this drifts from the actual defaults table, the dropdown will lie —
+ * keep them in sync when registering a new mode factory.
+ */
+export const SUPPORTED_CIPHER_MODES_BY_CIPHER: Readonly<Record<Cipher, readonly CipherMode[]>> = {
+  "aes-128": ["single-block", "ecb"],
+  "aes-192": ["single-block"],
+  "aes-256": ["single-block"],
+  "speck-32-64-be": ["single-block"],
+  "speck-32-64-le": ["single-block"],
+};
+
+export const isCipherModeSupported = (cipher: Cipher, mode: CipherMode): boolean =>
+  (SUPPORTED_CIPHER_MODES_BY_CIPHER[cipher] as readonly string[]).includes(mode);
+
 const STORAGE_KEY = "cryptographer.cipherMode";
 
 const loadInitial = (): CipherMode => {
   try {
     if (typeof localStorage === "undefined") return "single-block";
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw && (ALL_CIPHER_MODES as readonly string[]).includes(raw)) {
-      const m = raw as CipherMode;
-      // If the persisted value is a phase that hasn't shipped yet, fall
-      // back to the safest mode so the app doesn't crash on load.
-      if (!(SUPPORTED_CIPHER_MODES as readonly string[]).includes(m)) return "single-block";
-      return m;
-    }
+    if (!raw || !(ALL_CIPHER_MODES as readonly string[]).includes(raw)) return "single-block";
+    const m = raw as CipherMode;
+    // Two layers of validation: (1) is this mode in a shipped phase? (2)
+    // is this mode supported by the cipher the user actually has loaded?
+    // The second one catches the cross-store mismatch where a prior
+    // session persisted (cipher=aes-192, cipherMode=ecb) — without this
+    // check the spec store silently falls back to single-block but the
+    // dropdown lies, and the multi-block paddingLimits range causes a
+    // deep "load-block expected 16 got 32" error on Run.
+    if (!(SUPPORTED_CIPHER_MODES as readonly string[]).includes(m)) return "single-block";
+    if (!isCipherModeSupported(useCipher()(), m)) return "single-block";
+    return m;
   } catch {
     // Storage denied; fall through.
   }

@@ -59,6 +59,7 @@ import {
   CIPHER_MODE_LABELS,
   type CipherMode,
   SUPPORTED_CIPHER_MODES,
+  isCipherModeSupported,
   useCipherMode,
 } from "./stores/cipher-mode";
 import { setByteFormat, useByteFormat } from "./stores/format";
@@ -456,16 +457,22 @@ export const App = () => {
             disabled={!isAesCipher(cipher())}
             title={
               isAesCipher(cipher())
-                ? "Block-cipher mode of operation. 'single block' keeps the canonical FIPS-197 single-block trace. ECB encrypts each block independently (educational baseline — the Tux-image leak). CBC/CTR ship in later phases."
+                ? "Block-cipher mode of operation. 'single block' keeps the canonical FIPS-197 single-block trace. ECB encrypts each block independently (educational baseline — the Tux-image leak). CBC/CTR ship in later phases. AES-128 is the only variant with the multi-block factories wired up today — AES-192/256 ECB lands in Phase 4."
                 : "Modes of operation are AES-only in this build; Speck runs as a single-block cipher."
             }
           >
             <option value="single-block">{CIPHER_MODE_LABELS["single-block"]}</option>
             <option
               value="ecb"
-              disabled={!(SUPPORTED_CIPHER_MODES as readonly string[]).includes("ecb")}
+              disabled={
+                !(SUPPORTED_CIPHER_MODES as readonly string[]).includes("ecb") ||
+                !isCipherModeSupported(cipher(), "ecb")
+              }
             >
               {CIPHER_MODE_LABELS.ecb}
+              {isAesCipher(cipher()) && !isCipherModeSupported(cipher(), "ecb")
+                ? " (AES-128 only in Phase 1)"
+                : ""}
             </option>
             <option
               value="cbc"
