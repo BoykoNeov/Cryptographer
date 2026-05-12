@@ -151,6 +151,18 @@ describe("deriveAuxGraph — AES-128 (single block, no iterate)", () => {
     }
   });
 
+  // Sequence commit 1: pin that every derivation-time edge today carries
+  // `kind: "aux"`. State edges arrive in commit 2; this guard keeps that
+  // change explicit (any new "state" edge appearing here would have to
+  // come from an inference pass, not from auxRead/auxWritten walking).
+  it("tags every derived edge as `aux` (state edges land in commit 2)", () => {
+    const g = deriveAuxGraph(runAes128(), aes128Spec);
+    expect(g.edges.length).toBeGreaterThan(0);
+    for (const edge of g.edges) {
+      expect(edge.kind).toBe("aux");
+    }
+  });
+
   it("assigns no blockSpan to any node when no iterate is present", () => {
     const g = deriveAuxGraph(runAes128(), aes128Spec);
     for (const node of g.nodes) expect(node.blockSpan).toBeUndefined();

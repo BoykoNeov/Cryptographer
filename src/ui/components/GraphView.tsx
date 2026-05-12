@@ -60,6 +60,12 @@ const CANVAS_MARGIN = 24;
 const DRAG_THRESHOLD_PX = 4;
 /** Width of the collapse-chevron hit area inside the container header. */
 const CHEVRON_W = 16;
+/**
+ * Pixel inset from the consumer box's left edge to the arrowhead tip.
+ * Without this, the marker renders flush with the box and visually
+ * penetrates the rectangle's stroke. 6px gives a clean visible gap.
+ */
+const ARROW_INSET = 6;
 
 // ─── Layout ────────────────────────────────────────────────────────────────
 
@@ -325,6 +331,40 @@ export const GraphView = () => {
           role="img"
           aria-label="Aux-flow graph of the active cipher spec"
         >
+          {/* Arrowhead marker definitions. One per edge kind so each can be
+              tinted to match the edge stroke (state spine = solid; aux
+              annotation = translucent). markerUnits=userSpaceOnUse keeps the
+              marker size fixed in canvas pixels regardless of stroke width.
+              `orient=auto` rotates the marker to follow the path tangent;
+              `refX=8` aligns the arrow tip with the path endpoint (the path
+              itself is already inset by ARROW_INSET — see EdgePath). */}
+          <defs>
+            <marker
+              id="graph-arrow-aux"
+              viewBox="0 0 10 10"
+              refX="8"
+              refY="5"
+              markerWidth="8"
+              markerHeight="8"
+              markerUnits="userSpaceOnUse"
+              orient="auto"
+            >
+              <path class="graph-arrow-glyph-aux" d="M 0 0 L 10 5 L 0 10 z" />
+            </marker>
+            <marker
+              id="graph-arrow-state"
+              viewBox="0 0 10 10"
+              refX="8"
+              refY="5"
+              markerWidth="9"
+              markerHeight="9"
+              markerUnits="userSpaceOnUse"
+              orient="auto"
+            >
+              <path class="graph-arrow-glyph-state" d="M 0 0 L 10 5 L 0 10 z" />
+            </marker>
+          </defs>
+
           {/* Containers first so leaves render on top of their frames. */}
           <For each={graph().containers}>
             {(container) => {
@@ -350,7 +390,7 @@ export const GraphView = () => {
               const fromBox = layout().boxes.get(edge.from);
               const toBox = layout().boxes.get(edge.to);
               if (!fromBox || !toBox) return null;
-              return <EdgePath from={fromBox} to={toBox} auxKey={edge.auxKey} />;
+              return <EdgePath from={fromBox} to={toBox} auxKey={edge.auxKey} kind={edge.kind} />;
             }}
           </For>
 
@@ -542,18 +582,27 @@ const ContainerRect = (props: {
   );
 };
 
-const EdgePath = (props: { from: Box; to: Box; auxKey: string }) => {
-  // Source: right-center of `from`. Target: left-center of `to`. Bezier
-  // control points pulled half the horizontal distance so the curve dips
-  // gently without overshooting in the (rare) right-to-left case.
+const EdgePath = (props: { from: Box; to: Box; auxKey: string; kind: "aux" | "state" }) => {
+  // Source: right-center of `from`. Target: left-center of `to`, inset by
+  // ARROW_INSET so the arrowhead's tip touches the consumer box's edge
+  // cleanly instead of penetrating the rectangle. Bezier control points
+  // pulled half the horizontal distance so the curve dips gently without
+  // overshooting in the (rare) right-to-left case.
   const sx = props.from.x + props.from.w;
   const sy = props.from.y + props.from.h / 2;
-  const tx = props.to.x;
+  // Pre-inset target x; bezier control still uses the unmodified target
+  // x so the curve approaches the box at the same angle as before.
+  const txRaw = props.to.x;
   const ty = props.to.y + props.to.h / 2;
-  const dx = Math.max(20, Math.abs(tx - sx) / 2);
-  const d = `M ${sx} ${sy} C ${sx + dx} ${sy}, ${tx - dx} ${ty}, ${tx} ${ty}`;
+  const tx = txRaw - ARROW_INSET;
+  const dx = Math.max(20, Math.abs(txRaw - sx) / 2);
+  const d = `M ${sx} ${sy} C ${sx + dx} ${sy}, ${txRaw - dx} ${ty}, ${tx} ${ty}`;
   return (
-    <path class="graph-edge" d={d}>
+    <path
+      class={`graph-edge graph-edge-${props.kind}`}
+      d={d}
+      marker-end={`url(#graph-arrow-${props.kind})`}
+    >
       <title>{props.auxKey}</title>
     </path>
   );

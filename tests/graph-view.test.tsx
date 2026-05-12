@@ -108,6 +108,26 @@ describe("GraphView — component-level (AES-128 fixture)", () => {
     expect(roundKeyEdges.length).toBe(11);
   });
 
+  // Sequence commit 1: every aux edge in today's graph is rendered with
+  // the aux-kind class AND references the aux arrow marker via marker-end.
+  // These two facts together prove the renderer is using the kind hook
+  // (commit 2 will exercise the state-kind branch).
+  it("tags every edge with its kind class and the matching arrow marker", () => {
+    seedAes128Trace();
+    const { container } = render(() => <GraphView />);
+    const edges = container.querySelectorAll(".graph-edge");
+    expect(edges.length).toBeGreaterThan(0);
+    for (const edge of Array.from(edges)) {
+      // Every edge today is aux-kind; state edges land in commit 2.
+      expect(edge.classList.contains("graph-edge-aux")).toBe(true);
+      expect(edge.getAttribute("marker-end")).toBe("url(#graph-arrow-aux)");
+    }
+    // Both marker defs render (state defs exist even though no state edges
+    // reference them yet — the renderer is ready for commit 2).
+    expect(container.querySelector("#graph-arrow-aux")).not.toBeNull();
+    expect(container.querySelector("#graph-arrow-state")).not.toBeNull();
+  });
+
   it("clicking a leaf node moves the trace scrubber to the matching frame", () => {
     seedAes128Trace();
     // Park the scrubber on frame 0 so the click-induced jump is observable.

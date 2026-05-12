@@ -1581,16 +1581,54 @@ button:disabled {
 }
 
 /* Aux-flow edges. Drawn between leaves/containers; the auxKey lives in a
-   <title> for native browser tooltips on hover. */
+   <title> for native browser tooltips on hover.
+
+   Two kinds, distinguished visually:
+     - `graph-edge-aux`: dataflow annotations (round keys, S-box references,
+       IV, keystream). Thin and translucent so the eye reads them as
+       SECONDARY information.
+     - `graph-edge-state`: the implicit state thread between consecutive
+       same-parent leaves. Thicker, less translucent — the PRIMARY dataflow
+       spine of the cipher. State edges land in commit 2 of this sequence;
+       the styling hook exists here from commit 1 so the renderer doesn't
+       need a second pass when inference goes in. */
 
 .graph-edge {
   fill: none;
   stroke: var(--accent);
+}
+
+.graph-edge-aux {
   stroke-opacity: 0.35;
   stroke-width: 1.5;
 }
 
-.graph-edge:hover {
+.graph-edge-aux:hover {
   stroke-opacity: 0.9;
   stroke-width: 2.5;
+}
+
+.graph-edge-state {
+  stroke: var(--text);
+  stroke-opacity: 0.85;
+  stroke-width: 2;
+}
+
+.graph-edge-state:hover {
+  stroke-opacity: 1;
+  stroke-width: 2.5;
+}
+
+/* Arrow glyphs reference the same colors as their parent edge. Filled
+   triangles render cleanly at the small marker size we use; strokes
+   would alias at this scale. */
+
+.graph-arrow-glyph-aux {
+  fill: var(--accent);
+  fill-opacity: 0.55;
+}
+
+.graph-arrow-glyph-state {
+  fill: var(--text);
+  fill-opacity: 0.9;
 }
