@@ -151,6 +151,43 @@ describe("GraphView — container drag (Slice 6)", () => {
     expect(getLayoutForSpec(specId)).toBeNull();
   });
 
+  // Regression: this is the bug that wasn't caught by the store-only
+  // assertion above. Dragging an expanded container DID update the store
+  // but the rendered <rect> kept its old x/y because the row callback
+  // captured `layout().boxes.get(id)` once at row-init time. The render
+  // path now wraps the lookup in `createMemo` so the JSX binding tracks
+  // layout changes — this test pins that contract.
+  it("moves the rendered container rect's x/y attributes after a drag (not just the store)", () => {
+    seedAes128Trace();
+    const { container } = render(() => <GraphView />);
+    const header = container.querySelector(
+      '[data-testid="graph-container-header-round.5"]',
+    ) as Element;
+    expect(header).not.toBeNull();
+
+    // Read the container rect's PRE-drag attributes. The data-testid header
+    // is a sibling of the <rect class="graph-container-rect"> inside the
+    // same <g class="graph-container">, so we walk up + find.
+    const containerGroup = header.parentElement as Element;
+    const rect = containerGroup.querySelector(".graph-container-rect") as SVGRectElement;
+    expect(rect).not.toBeNull();
+    const beforeX = Number(rect.getAttribute("x"));
+    const beforeY = Number(rect.getAttribute("y"));
+
+    // Drag down + right by (100, 80) — well above the 4px threshold.
+    header.dispatchEvent(pointerEvt("pointerdown", 100, 100));
+    window.dispatchEvent(pointerEvt("pointermove", 200, 180));
+    window.dispatchEvent(pointerEvt("pointerup", 200, 180));
+
+    // POST-drag the rendered rect's x/y must reflect the new position.
+    // We don't pin the exact pixel because startBox is auto-laid-out,
+    // but the delta should appear.
+    const afterX = Number(rect.getAttribute("x"));
+    const afterY = Number(rect.getAttribute("y"));
+    expect(afterX - beforeX).toBeCloseTo(100, 0);
+    expect(afterY - beforeY).toBeCloseTo(80, 0);
+  });
+
   it("removes window listeners after pointerup so a stray pointermove doesn't keep updating", () => {
     seedAes128Trace();
     const { container } = render(() => <GraphView />);

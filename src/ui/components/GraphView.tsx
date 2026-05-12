@@ -365,20 +365,30 @@ export const GraphView = () => {
             </marker>
           </defs>
 
-          {/* Containers first so leaves render on top of their frames. */}
+          {/* Containers first so leaves render on top of their frames.
+              `box` is a createMemo so the JSX binding tracks layout()
+              changes — without it, the captured const goes stale when
+              the layout store updates (drag fires setNodePosition; the
+              <For> array reference doesn't change, so row callbacks
+              don't re-run; only fine-grained bindings inside the JSX
+              update the DOM). Same shape for edges and leaves below.
+              See CLAUDE.md's "Solid `For` callbacks aren't reactive
+              scopes" note. */}
           <For each={graph().containers}>
             {(container) => {
-              const box = layout().boxes.get(container.id);
-              if (!box) return null;
-              const isCollapsed = collapsedSet().has(container.id);
+              const box = createMemo(() => layout().boxes.get(container.id));
               return (
-                <ContainerRect
-                  container={container}
-                  box={box}
-                  isCollapsed={isCollapsed}
-                  onDragStart={(e) => startContainerDrag(container.id, e)}
-                  onToggleCollapse={() => toggleCollapse(spec().id, container.id)}
-                />
+                <Show when={box()}>
+                  {(b) => (
+                    <ContainerRect
+                      container={container}
+                      box={b()}
+                      isCollapsed={collapsedSet().has(container.id)}
+                      onDragStart={(e) => startContainerDrag(container.id, e)}
+                      onToggleCollapse={() => toggleCollapse(spec().id, container.id)}
+                    />
+                  )}
+                </Show>
               );
             }}
           </For>
@@ -387,18 +397,27 @@ export const GraphView = () => {
               lines tuck under the rectangle fills. */}
           <For each={graph().edges}>
             {(edge) => {
-              const fromBox = layout().boxes.get(edge.from);
-              const toBox = layout().boxes.get(edge.to);
-              if (!fromBox || !toBox) return null;
-              return <EdgePath from={fromBox} to={toBox} auxKey={edge.auxKey} kind={edge.kind} />;
+              const fromBox = createMemo(() => layout().boxes.get(edge.from));
+              const toBox = createMemo(() => layout().boxes.get(edge.to));
+              return (
+                <Show when={fromBox() && toBox()}>
+                  <EdgePath
+                    // biome-ignore lint/style/noNonNullAssertion: <Show> guard above
+                    from={fromBox()!}
+                    // biome-ignore lint/style/noNonNullAssertion: <Show> guard above
+                    to={toBox()!}
+                    auxKey={edge.auxKey}
+                    kind={edge.kind}
+                  />
+                </Show>
+              );
             }}
           </For>
 
           {/* Leaves last so they sit on top. */}
           <For each={graph().nodes}>
             {(node) => {
-              const box = layout().boxes.get(node.stepId);
-              if (!box) return null;
+              const box = createMemo(() => layout().boxes.get(node.stepId));
               const isInsideIterate = node.containerPath.some((id) => {
                 const c = containersById().get(id);
                 return c?.kind === "iterate";
@@ -410,14 +429,18 @@ export const GraphView = () => {
                   ? { blockSpan: node.blockSpan }
                   : {};
               return (
-                <LeafRect
-                  stepId={node.stepId}
-                  label={shortLeafLabel(node.stepId)}
-                  stepType={node.stepType}
-                  box={box}
-                  {...blockSpanProps}
-                  onClick={() => handleLeafClick(node.stepId)}
-                />
+                <Show when={box()}>
+                  {(b) => (
+                    <LeafRect
+                      stepId={node.stepId}
+                      label={shortLeafLabel(node.stepId)}
+                      stepType={node.stepType}
+                      box={b()}
+                      {...blockSpanProps}
+                      onClick={() => handleLeafClick(node.stepId)}
+                    />
+                  )}
+                </Show>
               );
             }}
           </For>
