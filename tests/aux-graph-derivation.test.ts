@@ -23,7 +23,7 @@ import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
-import { deriveAuxGraph } from "@/core/graph";
+import { collapseGraph, deriveAuxGraph } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
@@ -315,5 +315,113 @@ describe("deriveAuxGraph — empty trace", () => {
     expect(g.edges.length).toBe(0);
     for (const node of g.nodes) expect(node.blockSpan).toBeUndefined();
     for (const c of g.containers) expect(c.blockSpan).toBeUndefined();
+  });
+});
+
+// ─── collapseGraph (Slice 6 view-time transform) ──────────────────────────
+
+describe("collapseGraph — view-time transform", () => {
+  it("is a no-op for an empty collapsedIds set (identity)", () => {
+    const g = deriveAuxGraph(runAes128(), aes128Spec);
+    const out = collapseGraph(g, new Set());
+    // Object identity: when the early-return fires, we return the same ref.
+    expect(out).toBe(g);
+  });
+
+  it("hides every leaf inside a collapsed container (AES-128 round.5 collapse)", () => {
+    const g = deriveAuxGraph(runAes128(), aes128Spec);
+    const out = collapseGraph(g, new Set(["round.5"]));
+    // round.5 had 4 leaves (sub-bytes, shift-rows, mix-columns, add-round-key);
+    // they vanish from the node list. Pre: 41, post: 41 - 4 = 37.
+    expect(out.nodes.length).toBe(37);
+    // The container itself stays — renderer draws it as a collapsed chip.
+    expect(out.containers.find((c) => c.id === "round.5")).toBeDefined();
+    // But its childIds is now empty so the layout walk treats it as leaf-sized.
+    expect(out.containers.find((c) => c.id === "round.5")?.childIds.length).toBe(0);
+  });
+
+  it("re-routes round-key edges that entered a collapsed container to terminate at it", () => {
+    const g = deriveAuxGraph(runAes128(), aes128Spec);
+    // Before collapse: 11 fan-out edges from key-expansion (initial +
+    // round.1..10's add-round-key consumers).
+    const before = g.edges.filter((e) => e.from === "key-expansion").length;
+    expect(before).toBe(11);
+
+    const out = collapseGraph(g, new Set(["round.3"]));
+    // After collapse: round.3.add-round-key is hidden, but the edge
+    // key-expansion → round.3.add-round-key remaps to key-expansion → round.3.
+    // No edge count change for this particular fan-out (the remap doesn't
+    // collide with anything else).
+    const after = out.edges.filter((e) => e.from === "key-expansion").length;
+    expect(after).toBe(11);
+    // The specific re-routed edge exists.
+    expect(
+      out.edges.some(
+        (e) => e.from === "key-expansion" && e.to === "round.3" && e.auxKey === "roundKey.3",
+      ),
+    ).toBe(true);
+    // And the pre-collapse target is gone.
+    expect(out.edges.some((e) => e.to === "round.3.add-round-key")).toBe(false);
+  });
+
+  it("drops self-loop edges produced by collapse (aux that lived entirely inside the container)", () => {
+    // AES round groups don't produce internal aux edges (state flows
+    // through `state`, not aux), so manufacture the case: collapse
+    // round.1 AND every group between key-expansion and round.1's consumer.
+    // Simpler proof: collapse round.1; any edge whose endpoints both
+    // remap to round.1 disappears.
+    const g = deriveAuxGraph(runAes128(), aes128Spec);
+    // Pre-count edges that go between round.1 internal leaves (none in
+    // AES because state flows through `state`, not aux — but the property
+    // is enforced regardless).
+    const out = collapseGraph(g, new Set(["round.1"]));
+    // No edge should be a self-loop at round.1.
+    for (const e of out.edges) {
+      expect(e.from === "round.1" && e.to === "round.1").toBe(false);
+    }
+  });
+
+  it("collapses multiple containers at once (round.5 + round.6)", () => {
+    const g = deriveAuxGraph(runAes128(), aes128Spec);
+    const out = collapseGraph(g, new Set(["round.5", "round.6"]));
+    // Two rounds × 4 leaves = 8 fewer nodes.
+    expect(out.nodes.length).toBe(g.nodes.length - 8);
+    // Both containers still present in the container list.
+    expect(out.containers.some((c) => c.id === "round.5")).toBe(true);
+    expect(out.containers.some((c) => c.id === "round.6")).toBe(true);
+  });
+
+  it("filters rootIds to only entries that still resolve to a visible node or container", () => {
+    const g = deriveAuxGraph(runAes128(), aes128Spec);
+    // Collapse a round that's in rootIds — the container ITSELF stays in
+    // rootIds (it's still visible as a collapsed chip).
+    const out = collapseGraph(g, new Set(["round.7"]));
+    expect(out.rootIds).toContain("round.7");
+    // Sanity: no rootIds entry that points to a now-hidden leaf.
+    const visible = new Set<string>([
+      ...out.nodes.map((n) => n.stepId),
+      ...out.containers.map((c) => c.id),
+    ]);
+    for (const id of out.rootIds) expect(visible.has(id)).toBe(true);
+  });
+
+  it("collapses an iterate container (AES-128-ECB → ecb-blocks)", () => {
+    const trace = runAes128Ecb();
+    const g = deriveAuxGraph(trace, aes128EcbSpec);
+    // Pre-collapse: 44 nodes total, of which 4 are top-level (key-expansion,
+    // split-blocks, compute-block-count, concat-blocks) and 40 live inside
+    // the iterate.
+    expect(g.nodes.length).toBe(44);
+    const out = collapseGraph(g, new Set(["ecb-blocks"]));
+    // After collapse: only the 4 top-level leaves remain visible.
+    expect(out.nodes.length).toBe(4);
+    // The iterate container survives in the container list as a chip;
+    // its childIds is cleared.
+    const it = out.containers.find((c) => c.id === "ecb-blocks");
+    expect(it).toBeDefined();
+    expect(it?.childIds.length).toBe(0);
+    // Round groups (round.1..round.10) live INSIDE the iterate; they're
+    // hidden after collapse.
+    expect(out.containers.some((c) => c.id === "round.1")).toBe(false);
   });
 });

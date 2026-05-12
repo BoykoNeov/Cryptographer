@@ -1518,6 +1518,38 @@ button:disabled {
   font-weight: 600;
 }
 
+/* Slice 6 — collapsed containers render as a leaf-sized chip; show a
+   denser fill so the visual difference from an expanded box is obvious. */
+.graph-container-rect-collapsed {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+}
+
+/* Slice 6 — drag handle band over the container's header. Cursor cue +
+   transparent fill so it doesn't obscure the label. */
+.graph-container-header {
+  cursor: grab;
+}
+
+.graph-container-header:active {
+  cursor: grabbing;
+}
+
+/* Slice 6 — chevron click target on the right of the header. */
+.graph-container-chevron {
+  cursor: pointer;
+}
+
+.graph-container-chevron-glyph {
+  fill: var(--muted);
+  font-size: 10px;
+  pointer-events: none;
+}
+
+.graph-container-chevron:hover .graph-container-chevron-glyph {
+  fill: var(--accent);
+}
+
 /* Leaf rectangles. The `cursor: pointer` + `:hover` style gives them the
    "this is clickable" affordance — clicking moves the trace scrubber to
    the matching frame via setFrame(). */

@@ -45,6 +45,12 @@ import { __resetCipherForTests, useCipher } from "@/ui/stores/cipher";
 import { __resetCipherModeForTests, useCipherMode } from "@/ui/stores/cipher-mode";
 import { __resetByteFormatForTests, useByteFormat } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
+import {
+  __resetLayoutsForTests,
+  getLayoutForSpec,
+  setNodePosition,
+  toggleCollapse,
+} from "@/ui/stores/layout";
 import { __resetPaddingForTests, usePaddingScheme } from "@/ui/stores/padding";
 import { __resetSpecForTests, useMode, useSpec } from "@/ui/stores/spec";
 import { __resetTraceForTests, getTrace, useTraceVersion } from "@/ui/stores/trace";
@@ -145,6 +151,7 @@ const resetAll = (): void => {
   __resetSpecForTests();
   __resetHistoryForTests();
   __resetTraceForTests();
+  __resetLayoutsForTests();
 };
 
 // ─── Tests ───────────────────────────────────────────────────────────────
@@ -330,6 +337,82 @@ describe("App — Save/Load (Slice 5)", () => {
       expect(err?.textContent).toContain("schemaVersion 2 is not supported");
     });
     expect(useSpec()()).toBe(specBefore);
+  });
+
+  // ─── Slice 6 — layout sidecar in Save/Load ──────────────────────────────
+  // These three cases extend the Slice 5 envelope:
+  //   • Spec-only Save with NO drag/collapse continues to omit the layout
+  //     sidecar entirely → byte-stable (the existing repeat-save test
+  //     above already pins this; this one makes the absence explicit).
+  //   • Spec-only Save WITH a pinned position emits the layout sidecar.
+  //   • Save → reset → Load restores the pinned positions + collapsed set
+  //     into the layout store, keyed by the loaded spec's id.
+
+  it("Save with no layout customization omits the layout sidecar", async () => {
+    const { container } = render(() => <App />);
+    fireEvent.click(findButton(container, "save"));
+
+    const text = await latestBlob(saveCapture).text();
+    const parsed = parseDocument(text);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    // No drag, no collapse → no `layout` key at all (this is what keeps
+    // spec-only saves byte-stable for Slice 7's URL hash).
+    expect(parsed.doc.layout).toBeUndefined();
+  });
+
+  it("Save after dragging a container includes the layout sidecar", async () => {
+    const { container } = render(() => <App />);
+
+    // Pin round.5 + collapse round.7 directly via the store. The drag
+    // pathway has its own tests in graph-view-drag.test.tsx; we're
+    // verifying the Save side here, not the drag side.
+    const specId = useSpec()().id;
+    setNodePosition(specId, "round.5", 400, 80);
+    toggleCollapse(specId, "round.7");
+
+    fireEvent.click(findButton(container, "save"));
+
+    const text = await latestBlob(saveCapture).text();
+    const parsed = parseDocument(text);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    expect(parsed.doc.layout).toBeDefined();
+    expect(parsed.doc.layout?.positions["round.5"]).toEqual({ x: 400, y: 80 });
+    expect(parsed.doc.layout?.collapsedGroups).toEqual(["round.7"]);
+    expect(parsed.doc.layout?.flowDirection).toBe("ltr");
+  });
+
+  it("Save → Load round-trip restores layout into the per-spec store", async () => {
+    const { container, unmount } = render(() => <App />);
+
+    // Drag + collapse via the store directly (drag plumbing tested elsewhere).
+    const specId = useSpec()().id;
+    setNodePosition(specId, "round.5", 400, 80);
+    toggleCollapse(specId, "round.7");
+
+    fireEvent.click(findButton(container, "save"));
+    const savedText = await latestBlob(saveCapture).text();
+
+    // Full reset (including layouts) + remount.
+    unmount();
+    cleanup();
+    resetAll();
+    const { container: c2 } = render(() => <App />);
+
+    // Pre-Load: no layout for this spec.
+    expect(getLayoutForSpec(specId)).toBeNull();
+
+    driveLoad(c2, savedText);
+
+    await waitFor(() => {
+      const layout = getLayoutForSpec(specId);
+      expect(layout).not.toBeNull();
+    });
+    const layout = getLayoutForSpec(specId);
+    expect(layout?.positions["round.5"]).toEqual({ x: 400, y: 80 });
+    expect(layout?.collapsedGroups).toEqual(["round.7"]);
   });
 
   it("Load applies byteFormat BEFORE formatting inputBytes/keyBytes", async () => {

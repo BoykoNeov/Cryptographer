@@ -88,6 +88,7 @@ import {
   useShowPreviousRun,
 } from "./stores/history";
 import { installKeyboardShortcuts } from "./stores/keyboard";
+import { getLayoutForSpec, hasUserLayout, setLayoutForSpec } from "./stores/layout";
 import {
   PADDING_SCHEME_LABELS,
   PADDING_SCHEME_OPTIONS,
@@ -312,9 +313,15 @@ export const App = () => {
     // path would mean the same spec produces a different shareable URL
     // every session. With include-session on, the session bytes are
     // already session-specific, so adding createdAt costs no determinism.
+    // Layout sidecar is included only when the user has dragged something
+    // OR collapsed a container (`hasUserLayout`). Empty/null layouts must
+    // be OMITTED — otherwise the same un-customized spec produces different
+    // bytes than a fresh save (the Slice 5 byte-stability test pins this).
+    const layout = getLayoutForSpec(spec().id);
     const doc: CipherDocument = {
       schemaVersion: CURRENT_SCHEMA_VERSION,
       spec: spec(),
+      ...(hasUserLayout(layout) && layout ? { layout } : {}),
       ...(includeSession()
         ? {
             session: buildSessionSnapshot(),
@@ -381,6 +388,13 @@ export const App = () => {
       return;
     }
     const doc = result.doc;
+    // Apply the layout sidecar BEFORE setting the spec — GraphView reads
+    // layout reactively keyed by the active spec's id, and we want its
+    // first re-derive after the spec change to read the new layout
+    // (not blink through the old auto-layout for a frame). When the doc
+    // has no layout sidecar, pass null to clear any persisted entry for
+    // this spec id (loading is "this is the file's truth").
+    setLayoutForSpec(doc.spec.id, doc.layout ?? null);
     setSpecFromDocument(doc);
 
     // After setSpecFromDocument: byteFormat is now the document's value.

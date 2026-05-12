@@ -1,38 +1,40 @@
 /**
- * Read-only 2D graph view of the active spec + trace.
+ * 2D graph view of the active spec + trace, with container drag + collapse
+ * (Slice 6 of the 2D editor plan).
  *
- * Slice 2 of the 2D editor plan. The graph derivation in `core/graph.ts`
- * gives us a logical (nodes, containers, edges) shape; this component lays
- * it out and renders it as SVG. No drag, no editing, no palette — clicking
- * a leaf node moves the trace scrubber to that step (via setFrame), exactly
- * like clicking a row in the sidebar StepList.
+ * Slice 2 originally shipped a read-only renderer over `core/graph.ts`'s
+ * `deriveAuxGraph`. Slice 6 layers two interactive affordances on top:
  *
- * Layout (hand-rolled, FIPS-197-flavored):
+ *   1. **Container drag.** Pointer-down on a container's header band
+ *      starts a drag; pointermove updates the layout store; pointerup
+ *      commits the new position. Containers move; their children re-flow
+ *      via the existing auto-layout walk from the new top-left.
  *
- *   - **Top level and iterate bodies** flow LEFT-TO-RIGHT — time goes
- *     rightward. AES-128's spec laid out this way reads like the FIPS-197
- *     "10-round pipeline" diagram: key-expansion box on the left, the
- *     initial AddRoundKey next, then 10 round columns.
- *   - **Groups** stack their children VERTICALLY — round.1's
- *     sub-bytes / shift-rows / mix-columns / add-round-key form one tall
- *     column the eye can read top-to-bottom inside the round box.
- *   - **Containers** (groups + iterates) render as labeled rounded rects
- *     that frame their children. Iterates carry a `×N` chip in the header
- *     when `blockSpan > 1` (the multi-block ECB case).
- *   - **Edges** are simple bezier curves from source-right-center to
- *     target-left-center. The auxKey lives in a hover `<title>` element.
+ *      Why container-only (not leaf): the pedagogical use case is
+ *      rearranging WHOLE ROUNDS. Leaf-level drag (SubBytes alone) would
+ *      let leaves escape their parent's bounding box, a visual quirk we
+ *      don't need yet. Slice 8 (palette insert) will revisit leaf
+ *      positioning when newly dropped steps need landing coordinates.
  *
- * The whole thing re-derives the graph reactively whenever the spec or the
- * trace changes — a 200ms-debounced spec edit shows up in this view as soon
- * as the auto-rerun lands a new trace. With no trace (pre-first-run) the
- * graph still renders the structural skeleton; only the edges are absent.
+ *   2. **Collapse / expand.** A chevron in the container header toggles
+ *      that container into `LayoutSpec.collapsedGroups`. The pure
+ *      `collapseGraph` transform in `core/graph.ts` hides the children
+ *      and re-routes any aux edges that crossed the boundary to terminate
+ *      at the collapsed chip. Edges that lived entirely inside the
+ *      container drop out (self-loop after remap).
  *
- * Pan/zoom are deferred to a future slice; today the SVG is rendered at its
- * computed size inside a scrollable container, so the user just scrolls.
+ * The whole thing still re-derives reactively from spec + trace + layout;
+ * layout signal updates don't trigger the auto-rerun (different signal),
+ * so dragging is responsive even on a multi-block trace.
+ *
+ * Click-vs-drag disambiguation: pointermove movement < 4px is treated as a
+ * click (which scrubs the trace for leaves, toggles collapse on chevrons,
+ * starts no drag). Above threshold, the click handler is suppressed.
  */
 
-import { type CipherGraph, type ContainerNode, deriveAuxGraph } from "@/core/graph";
+import { type CipherGraph, type ContainerNode, collapseGraph, deriveAuxGraph } from "@/core/graph";
 import { For, Show, createMemo } from "solid-js";
+import { setNodePosition, toggleCollapse, useLayoutMap } from "../stores/layout";
 import { useSpec } from "../stores/spec";
 import { getTrace, setFrame, useTraceVersion } from "../stores/trace";
 
@@ -54,6 +56,10 @@ const CONTAINER_PAD = 10;
 const HEADER_H = 22;
 /** Outer margin of the SVG canvas. */
 const CANVAS_MARGIN = 24;
+/** Pixel threshold above which a pointer event is a drag, not a click. */
+const DRAG_THRESHOLD_PX = 4;
+/** Width of the collapse-chevron hit area inside the container header. */
+const CHEVRON_W = 16;
 
 // ─── Layout ────────────────────────────────────────────────────────────────
 
@@ -63,80 +69,116 @@ type Box = { x: number; y: number; w: number; h: number };
  * Place one node (leaf or container) with its top-left at (cursorX, cursorY)
  * and return the bounding box. Recurses into containers; writes every leaf
  * and container's final box into `out`.
+ *
+ * Pinned containers (those with a user-dragged position in `pinned`) use
+ * their pinned (x, y) as the top-left instead of (cursorX, cursorY). Their
+ * children still flow inside relative to that top-left.
  */
 const layoutNode = (
   id: string,
   cursorX: number,
   cursorY: number,
   containersById: Map<string, ContainerNode>,
+  pinned: ReadonlyMap<string, { x: number; y: number }>,
   out: Map<string, Box>,
 ): Box => {
   const container = containersById.get(id);
+  const pin = pinned.get(id);
+  const startX = pin?.x ?? cursorX;
+  const startY = pin?.y ?? cursorY;
 
   if (!container) {
     // Leaf: fixed-size rectangle.
-    const box: Box = { x: cursorX, y: cursorY, w: LEAF_W, h: LEAF_H };
+    const box: Box = { x: startX, y: startY, w: LEAF_W, h: LEAF_H };
+    out.set(id, box);
+    return box;
+  }
+
+  // Collapsed container: render as a leaf-sized chip; skip child recursion.
+  // `collapseGraph` already cleared childIds for collapsed containers, so
+  // this check is `childIds.length === 0` rather than a separate flag —
+  // belt and braces, since an iterate with zero body children would also
+  // hit this branch (and render correctly as an empty chip).
+  if (container.childIds.length === 0) {
+    const box: Box = { x: startX, y: startY, w: LEAF_W, h: LEAF_H };
     out.set(id, box);
     return box;
   }
 
   if (container.kind === "group") {
     // Vertical stack of children inside a padded, header-topped rect.
-    const innerX = cursorX + CONTAINER_PAD;
-    let innerY = cursorY + HEADER_H + CONTAINER_PAD;
+    const innerX = startX + CONTAINER_PAD;
+    let innerY = startY + HEADER_H + CONTAINER_PAD;
     let maxChildW = 0;
     let lastChildBottom = innerY;
     for (const childId of container.childIds) {
-      const childBox = layoutNode(childId, innerX, innerY, containersById, out);
+      const childBox = layoutNode(childId, innerX, innerY, containersById, pinned, out);
       innerY = childBox.y + childBox.h + STACK_GAP;
       lastChildBottom = childBox.y + childBox.h;
       if (childBox.w > maxChildW) maxChildW = childBox.w;
     }
     const w = Math.max(maxChildW, LEAF_W) + 2 * CONTAINER_PAD;
-    const h = lastChildBottom - cursorY + CONTAINER_PAD;
-    const box: Box = { x: cursorX, y: cursorY, w, h };
+    const h = lastChildBottom - startY + CONTAINER_PAD;
+    const box: Box = { x: startX, y: startY, w, h };
     out.set(id, box);
     return box;
   }
 
   // Iterate: horizontal flow of children, same as the top-level root.
-  let innerX = cursorX + CONTAINER_PAD;
-  const innerY = cursorY + HEADER_H + CONTAINER_PAD;
+  let innerX = startX + CONTAINER_PAD;
+  const innerY = startY + HEADER_H + CONTAINER_PAD;
   let maxChildH = 0;
   let lastChildRight = innerX;
   for (const childId of container.childIds) {
-    const childBox = layoutNode(childId, innerX, innerY, containersById, out);
+    const childBox = layoutNode(childId, innerX, innerY, containersById, pinned, out);
     innerX = childBox.x + childBox.w + FLOW_GAP;
     lastChildRight = childBox.x + childBox.w;
     if (childBox.h > maxChildH) maxChildH = childBox.h;
   }
-  const w = lastChildRight - cursorX + CONTAINER_PAD;
+  const w = lastChildRight - startX + CONTAINER_PAD;
   const h = HEADER_H + 2 * CONTAINER_PAD + maxChildH;
-  const box: Box = { x: cursorX, y: cursorY, w, h };
+  const box: Box = { x: startX, y: startY, w, h };
   out.set(id, box);
   return box;
 };
 
-/** Lay out the entire root (mixed leaves + containers) as a horizontal flow. */
+/**
+ * Lay out the entire root (mixed leaves + containers) as a horizontal flow.
+ *
+ * Pinned root-level entries use their pinned coords and do NOT advance the
+ * cursor for subsequent un-pinned siblings — so dragging round.5 up doesn't
+ * push round.6/7/8/9/10 into a weird offset. Canvas extent tracks the max
+ * right/bottom across all boxes (pinned or not), so dragging far right just
+ * grows the SVG to fit.
+ */
 const layoutRoot = (
   graph: CipherGraph,
+  pinned: ReadonlyMap<string, { x: number; y: number }>,
 ): { boxes: Map<string, Box>; canvasW: number; canvasH: number } => {
   const containersById = new Map<string, ContainerNode>();
   for (const c of graph.containers) containersById.set(c.id, c);
 
   const boxes = new Map<string, Box>();
   let cursorX = CANVAS_MARGIN;
-  let maxH = 0;
+  let maxRight = CANVAS_MARGIN;
+  let maxBottom = CANVAS_MARGIN;
   for (const id of graph.rootIds) {
-    const box = layoutNode(id, cursorX, CANVAS_MARGIN, containersById, boxes);
-    cursorX = box.x + box.w + FLOW_GAP;
-    if (box.h > maxH) maxH = box.h;
+    const isPinned = pinned.has(id);
+    // Un-pinned: use the running cursor. Pinned: layoutNode reads the pin.
+    const box = layoutNode(id, cursorX, CANVAS_MARGIN, containersById, pinned, boxes);
+    if (!isPinned) {
+      cursorX = box.x + box.w + FLOW_GAP;
+    }
+    const right = box.x + box.w;
+    const bottom = box.y + box.h;
+    if (right > maxRight) maxRight = right;
+    if (bottom > maxBottom) maxBottom = bottom;
   }
 
   return {
     boxes,
-    canvasW: cursorX - FLOW_GAP + CANVAS_MARGIN,
-    canvasH: maxH + 2 * CANVAS_MARGIN,
+    canvasW: maxRight + CANVAS_MARGIN,
+    canvasH: maxBottom + CANVAS_MARGIN,
   };
 };
 
@@ -145,11 +187,33 @@ const layoutRoot = (
 export const GraphView = () => {
   const spec = useSpec();
   const version = useTraceVersion();
+  const layoutMap = useLayoutMap();
+
+  /** Active spec's persisted layout, or null if none yet. */
+  const activeLayout = createMemo(() => {
+    const m = layoutMap();
+    return m[spec().id] ?? null;
+  });
+
+  /** Set of collapsed container ids for the active spec (memoized). */
+  const collapsedSet = createMemo<ReadonlySet<string>>(() => {
+    const l = activeLayout();
+    return l ? new Set(l.collapsedGroups) : new Set();
+  });
+
+  /** Map of pinned positions for the active spec (memoized). */
+  const pinnedMap = createMemo<ReadonlyMap<string, { x: number; y: number }>>(() => {
+    const l = activeLayout();
+    if (!l) return new Map();
+    const m = new Map<string, { x: number; y: number }>();
+    for (const [id, p] of Object.entries(l.positions)) m.set(id, p);
+    return m;
+  });
 
   // Re-derive on every spec OR trace change. Both signals matter:
   //   - spec edit → new nodes/containers (structural change)
   //   - trace replace → new edges + blockSpan annotations
-  const graph = createMemo<CipherGraph>(() => {
+  const rawGraph = createMemo<CipherGraph>(() => {
     void version();
     const t = getTrace();
     // No trace yet → derive from an empty trace; the structural skeleton
@@ -162,7 +226,10 @@ export const GraphView = () => {
     return deriveAuxGraph(fallback, spec());
   });
 
-  const layout = createMemo(() => layoutRoot(graph()));
+  /** Apply collapse view-transform after raw derivation. */
+  const graph = createMemo<CipherGraph>(() => collapseGraph(rawGraph(), collapsedSet()));
+
+  const layout = createMemo(() => layoutRoot(graph(), pinnedMap()));
 
   const containersById = createMemo(() => {
     const m = new Map<string, ContainerNode>();
@@ -188,9 +255,68 @@ export const GraphView = () => {
     if (idx >= 0) setFrame(idx);
   };
 
+  /**
+   * Begin a container drag on pointerdown over a container header.
+   * Tracks (startClientX/Y, startBoxX/Y, moved). Updates the store on
+   * each pointermove and stops on pointerup/cancel. setPointerCapture is
+   * best-effort — jsdom doesn't implement it in older versions; the drag
+   * still works without it, the cursor just can't leave the rect.
+   */
+  const startContainerDrag = (containerId: string, e: PointerEvent): void => {
+    e.stopPropagation();
+    const startBox = layout().boxes.get(containerId);
+    if (!startBox) return;
+    const startClientX = e.clientX;
+    const startClientY = e.clientY;
+    const startBoxX = startBox.x;
+    const startBoxY = startBox.y;
+    let moved = false;
+
+    const target = e.currentTarget as Element | null;
+    if (
+      target &&
+      typeof (target as Element & { setPointerCapture?: (id: number) => void })
+        .setPointerCapture === "function"
+    ) {
+      try {
+        (target as Element & { setPointerCapture: (id: number) => void }).setPointerCapture(
+          e.pointerId,
+        );
+      } catch {
+        // Capture failed (jsdom, security restriction). Drag still works
+        // via the window-level listeners below.
+      }
+    }
+
+    const onMove = (ev: PointerEvent): void => {
+      const dx = ev.clientX - startClientX;
+      const dy = ev.clientY - startClientY;
+      if (!moved && Math.abs(dx) + Math.abs(dy) > DRAG_THRESHOLD_PX) {
+        moved = true;
+      }
+      if (!moved) return;
+      // SVG viewBox is 1:1 with rendered width/height, so client-px delta
+      // maps directly onto SVG-unit delta.
+      setNodePosition(spec().id, containerId, startBoxX + dx, startBoxY + dy);
+    };
+
+    const onUp = (): void => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  };
+
   return (
     <div class="graph-view">
-      <Show when={graph().nodes.length > 0} fallback={<div class="muted">no nodes to display</div>}>
+      <Show
+        when={graph().nodes.length > 0 || graph().containers.length > 0}
+        fallback={<div class="muted">no nodes to display</div>}
+      >
         <svg
           class="graph-view-svg"
           width={layout().canvasW}
@@ -204,7 +330,16 @@ export const GraphView = () => {
             {(container) => {
               const box = layout().boxes.get(container.id);
               if (!box) return null;
-              return <ContainerRect container={container} box={box} />;
+              const isCollapsed = collapsedSet().has(container.id);
+              return (
+                <ContainerRect
+                  container={container}
+                  box={box}
+                  isCollapsed={isCollapsed}
+                  onDragStart={(e) => startContainerDrag(container.id, e)}
+                  onToggleCollapse={() => toggleCollapse(spec().id, container.id)}
+                />
+              );
             }}
           </For>
 
@@ -302,50 +437,110 @@ const LeafRect = (props: {
   </g>
 );
 
-const ContainerRect = (props: { container: ContainerNode; box: Box }) => (
-  <g class={`graph-container graph-container-${props.container.kind}`}>
-    <title>
-      {props.container.kind}: {props.container.id}
-      {props.container.blockSpan !== undefined && props.container.blockSpan > 1
-        ? ` — ×${props.container.blockSpan}`
-        : ""}
-    </title>
-    <rect
-      class={`graph-container-rect graph-container-rect-${props.container.kind}`}
-      x={props.box.x}
-      y={props.box.y}
-      width={props.box.w}
-      height={props.box.h}
-      rx={6}
-      ry={6}
-    />
-    <text
-      class="graph-container-label"
-      x={props.box.x + CONTAINER_PAD}
-      y={props.box.y + HEADER_H / 2 + 1}
-      dominant-baseline="central"
-    >
-      {props.container.label}
-    </text>
-    <Show
-      when={
-        props.container.kind === "iterate" &&
-        props.container.blockSpan !== undefined &&
-        props.container.blockSpan > 1
-      }
-    >
+const ContainerRect = (props: {
+  container: ContainerNode;
+  box: Box;
+  isCollapsed: boolean;
+  onDragStart: (e: PointerEvent) => void;
+  onToggleCollapse: () => void;
+}) => {
+  // Chevron sits at the right edge of the header band; clicking it doesn't
+  // start a drag. The rest of the header is the drag handle.
+  return (
+    <g class={`graph-container graph-container-${props.container.kind}`}>
+      <title>
+        {props.container.kind}: {props.container.id}
+        {props.container.blockSpan !== undefined && props.container.blockSpan > 1
+          ? ` — ×${props.container.blockSpan}`
+          : ""}
+      </title>
+      <rect
+        class={`graph-container-rect graph-container-rect-${props.container.kind}${
+          props.isCollapsed ? " graph-container-rect-collapsed" : ""
+        }`}
+        x={props.box.x}
+        y={props.box.y}
+        width={props.box.w}
+        height={props.box.h}
+        rx={6}
+        ry={6}
+      />
+      {/* Header drag-handle band. Sits over the top HEADER_H pixels of the
+          container rect; pointer-events="all" so it captures pointerdown
+          before the child leaves do. */}
+      <rect
+        class="graph-container-header"
+        x={props.box.x}
+        y={props.box.y}
+        width={Math.max(0, props.box.w - CHEVRON_W)}
+        height={HEADER_H}
+        fill="transparent"
+        onPointerDown={(e) => props.onDragStart(e)}
+        data-testid={`graph-container-header-${props.container.id}`}
+      />
       <text
-        class="graph-iterate-badge"
-        x={props.box.x + props.box.w - CONTAINER_PAD}
+        class="graph-container-label"
+        x={props.box.x + CONTAINER_PAD}
         y={props.box.y + HEADER_H / 2 + 1}
-        text-anchor="end"
         dominant-baseline="central"
       >
-        ×{props.container.blockSpan}
+        {props.container.label}
       </text>
-    </Show>
-  </g>
-);
+      <Show
+        when={
+          props.container.kind === "iterate" &&
+          props.container.blockSpan !== undefined &&
+          props.container.blockSpan > 1
+        }
+      >
+        <text
+          class="graph-iterate-badge"
+          x={props.box.x + props.box.w - CONTAINER_PAD - CHEVRON_W}
+          y={props.box.y + HEADER_H / 2 + 1}
+          text-anchor="end"
+          dominant-baseline="central"
+        >
+          ×{props.container.blockSpan}
+        </text>
+      </Show>
+      {/* Chevron hit area on the right side of the header band. Clicking
+          toggles collapse via the layout store. */}
+      <g
+        class="graph-container-chevron"
+        onClick={(e) => {
+          e.stopPropagation();
+          props.onToggleCollapse();
+        }}
+        onKeyDown={(e) => {
+          // Mirrors the LeafRect pattern: Enter and Space toggle collapse
+          // for keyboard users. biome's useKeyWithClickEvents enforces it.
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            props.onToggleCollapse();
+          }
+        }}
+        data-testid={`graph-container-chevron-${props.container.id}`}
+      >
+        <rect
+          x={props.box.x + props.box.w - CHEVRON_W}
+          y={props.box.y}
+          width={CHEVRON_W}
+          height={HEADER_H}
+          fill="transparent"
+        />
+        <text
+          class="graph-container-chevron-glyph"
+          x={props.box.x + props.box.w - CHEVRON_W / 2}
+          y={props.box.y + HEADER_H / 2 + 1}
+          text-anchor="middle"
+          dominant-baseline="central"
+        >
+          {props.isCollapsed ? "▸" : "▾"}
+        </text>
+      </g>
+    </g>
+  );
+};
 
 const EdgePath = (props: { from: Box; to: Box; auxKey: string }) => {
   // Source: right-center of `from`. Target: left-center of `to`. Bezier
