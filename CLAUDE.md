@@ -7,10 +7,10 @@ Interactive cryptography explorer. The user enters plaintext + key, sees every i
 | Command | What it does |
 |---|---|
 | `npm run dev` | Vite dev server at `http://localhost:5173`. Hot-reloads on file changes. |
-| `npm test` | Vitest, single run. Currently 280 tests across 29 files, ~2s total (jsdom UI tests dominate). |
+| `npm test` | Vitest, single run. Currently 380 tests across 36 files, ~3s total (jsdom UI tests dominate). |
 | `npm run typecheck` | `tsc --noEmit`, strict. |
-| `npm run check` | The gate: `biome ci . && tsc --noEmit && vitest run && vite build`. Runs in ~6s on this machine. |
-| `npm run build` | Production build into `dist/`. ~42KB gzipped JS. |
+| `npm run check` | The gate: `biome ci . && tsc --noEmit && vitest run && vite build`. Runs in ~7s on this machine. |
+| `npm run build` | Production build into `dist/`. ~55KB gzipped JS. |
 
 The pre-commit hook in `.githooks/pre-commit` runs `npm run check`. GitHub Actions in `.github/workflows/ci.yml` runs the same on push. Don't bypass with `--no-verify` unless you have a specific reason; both gates exist for a reason.
 
@@ -61,6 +61,7 @@ The future "binary export" feature is what *forced* the spec-as-data choice: a c
 - `src/core/registry.ts` — `StepRegistry`. Maps stepType → `{ executor, doc }`.
 - `src/core/spec-mutations.ts` — `findStep`, `updateStepParams`, `updateAllStepsByType`, `compareSpecs`. Pure spec-in/spec-out. `compareSpecs` returns `SpecParamDiff[]` where each entry optionally carries `scalar` (before/after for primitive params) or `cells` (per-cell `ParamCellDiff`, 1D index or 2D row/col; flat-256 arrays auto-decompose to 16×16 like the S-box editor). Bare diffs with neither field intentionally pass through — `describeDelta` falls back to "X changed" for them.
 - `src/core/format.ts` — `ByteFormat`, `formatByte`/`parseByte`/`formatBytes`/`parseBytes`/`parseBytesWithLength`. Consumed by every byte-rendering site.
+- `src/core/graph.ts` — `deriveAuxGraph(trace, spec): CipherGraph` plus `GraphNode` / `ContainerNode` / `GraphEdge` types. Pure function: spec contributes structure (nodes, containers, `rootIds`), trace contributes edges (from `auxRead`/`auxWritten`) and `blockSpan` annotations on iterate-body nodes. Strips `:b{i}` per-iteration suffixes during edge dedup (so 4-block ECB collapses to one logical edge per consumer, not four) and synthesizes iterate-mediated edges around the boundary (`split-blocks → iterate → concat-blocks`) since the runtime moves those aux values itself without recording them in any frame's `auxWrites`. Slice 1 of the 2D editor plan.
 
 **Ciphers:**
 - `src/ciphers/default-registry.ts` — wires every step type. Adding a new step means editing this.
@@ -87,6 +88,8 @@ The future "binary export" feature is what *forced* the spec-as-data choice: a c
 - `src/ui/components/BytesView.tsx` — variable-length sibling to MatrixView. Renders BytesState frames (pkcs7-pad / pkcs7-unpad) as a 1×N wrapping row with length-delta "missing" cell placeholders when the row's compareTo side is longer. When the longer side of a row pair exceeds 16 bytes (i.e. the frame is multi-block), cells are visually segmented into per-block `.bytes-block-group` panels with "Block N" headers; each panel is a **4×4 grid with `grid-auto-flow: column`** so the byte ordering matches the AES State matrix the reader has been watching inside the round (byte[0..3] fill column 0 top-to-bottom, etc — FIPS-197 §3.4). This makes ECB-mode repetition obvious: identical plaintext blocks become identical-looking 4×4 ciphertext blocks side-by-side. Single-block frames (max length ≤16) keep the flat layout. The same grouping is mirrored in App's `SingleStateView` for mixed-shape frames (notably `concat-blocks`, where the bytes side is N×16 long).
 - `src/ui/components/BlockBadge.tsx` — small "Block i of N" chip rendered above the per-frame state view when the current frame belongs to an iterate loop (i.e. `frame.blockIndex !== undefined` and the trace has more than one block). Pure visual — no scrubber surgery. Driven by App-level `blockCount` memo that scans `trace.frames` for the max `blockIndex`.
 - `src/ui/components/RunExplorerModal.tsx` — side-by-side run comparison modal (uses native `<dialog>` for backdrop + escape handling). Pure delta-string formatter lives in `run-delta-format.ts` so node-env tests can pin its output without spinning up jsdom.
+- `src/ui/stores/view-mode.ts` — three-mode signal (`linear` / `graph` / `json`), persisted in `localStorage`. Drives the tab bar above `.trace-view`: linear shows today's per-frame view (frame header, StepStrip, BlockBadge, FrameStateView, StepDescription, ParamEditor); graph swaps in `GraphView`; json swaps in a `<pre>` of `JSON.stringify(spec(), null, 2)`. Slice 2 of the 2D editor plan.
+- `src/ui/components/GraphView.tsx` — read-only SVG renderer over `deriveAuxGraph(getTrace(), spec())`. Hand-rolled FIPS-197-flavored layout: top-level and iterate bodies flow LEFT-TO-RIGHT (time rightward), groups stack their children VERTICALLY (one round = one column). Iterates carry a `×N` chip in the header when `blockSpan > 1`. Edges are bezier curves between leaf/container right-center → left-center; the auxKey lives in a hover `<title>`. Clicking a leaf calls `setFrame(idx)` for the first trace frame whose canonical (`:b{i}`-stripped) stepId matches — same UX as clicking a StepList row, so the frame-preservation invariant carries over for free. Re-derives reactively on every spec edit OR trace replace. Renders the structural skeleton even without a trace (no edges, no `blockSpan`). No drag/edit yet — that's Slice 6 / 8.
 
 **Tests:**
 - `tests/aes-vectors.test.ts` — FIPS-197 Appendix C.1 and B known-answer tests for forward AES-128.
@@ -113,6 +116,8 @@ The future "binary export" feature is what *forced* the spec-as-data choice: a c
 - `tests/serpent-ip-fp-roundtrip.test.ts` — Pins that IP and FP are mutual inverses (IP[FP[i]] === i and FP[IP[i]] === i), that both tables are permutations of {0..127}, and that round-trip on random states recovers the input.
 - `tests/serpent-sbox-roundtrip.test.ts` — Pins that each of the 8 forward S-boxes is a 16-entry permutation of {0..15} and that the computed inverse table inverts it exactly. Also pins specific entries per-S-box so a wholesale table swap can't pass the structural checks.
 - `tests/serpent-roundtrip.test.ts` — Encrypt/decrypt round-trip across all three Serpent variants × four plaintexts each, plus structural assertions (99 frames per encrypt, 33 unique round keys per variant) and bad-key-length error paths.
+- `tests/aux-graph-derivation.test.ts` — 2D editor Slice 1: 17 node-env tests pinning `deriveAuxGraph` across AES-128 (no iterate), AES-128-ECB (`:b{i}` collapse + iterate-mediated edge synthesis + `blockSpan` annotation), Speck32/64 (flat, no containers), Serpent-128 (32 round groups, 33 round-key fan-out edges), edge dedup, and the empty-trace structural-skeleton path.
+- `tests/graph-view.test.tsx` — 2D editor Slice 2: 9 jsdom tests. Component-level: `GraphView` renders 41 leaf rects + 10 container rects for AES-128, edges carry the auxKey in `<title>`, leaf-click drives `setFrame` to the matching frame, renders without a trace (structural skeleton). App-level: tab bar renders three tabs with `linear` active by default, clicking `graph` / `JSON` swaps content, tab switching preserves the stepId-anchored frame focus.
 
 For step-type-specific guidance (adding new ones), see `src/steps/CLAUDE.md`.
 
@@ -181,5 +186,6 @@ If a future need argues for one of these, revisit then.
 - Speck32/64 plan (shipped May 2026 — second cipher family, ARX, both BE-paper + LE-NSA byte conventions): `docs/plans/speck.md`
 - Multi-block AES with ECB/CBC/CTR plan (Phase 1 — loop primitive + AES-128 ECB — shipped May 2026; Phases 2–4 on paper: CBC + IV, CTR + keystream, AES-192/256 generalization): `docs/plans/multi-block-aes-modes.md`
 - Serpent cipher plan (all three key sizes, standard form with explicit IP/FP, single-block — shipped May 2026): `~/.claude/plans/i-want-serpent-cipher-indexed-finch.md`
+- 2D/DAG visual cipher editor + JSON document export plan (Slice 1 — aux-graph derivation — and Slice 2 — read-only graph view tab — shipped May 2026; Slices 3–11 pending across future sessions): `~/.claude/plans/peppy-knitting-fairy.md`. The memory entry `project_2d_editor_plan.md` tracks per-slice progress so a future session can pick up the next slice without re-reading the full plan.
 - User preferences (commit cadence, comment density): saved as feedback memories under `C:\Users\boiko\.claude\projects\M--claud-projects-Cryptographer\memory\`
 - GitHub repo: https://github.com/BoykoNeov/Cryptographer
