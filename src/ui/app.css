@@ -1399,3 +1399,147 @@ button:disabled {
   color: var(--muted);
   font-style: italic;
 }
+
+/* ─── Slice 2: view-mode tabs (linear / graph / JSON) ─────────────────────
+   Tab bar sits above the trace-view content. Three buttons; the active one
+   gets the accent border/background combo so it reads as "selected." The
+   bar wraps inside the trace-view section and uses border-bottom as the
+   visual separator from the per-mode content below. */
+
+.view-mode-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+
+.view-mode-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px 14px;
+  cursor: pointer;
+  border-radius: 4px 4px 0 0;
+  margin-bottom: -1px;
+}
+
+.view-mode-tab:hover:not(.active) {
+  color: var(--text);
+  background: var(--bg-elev);
+}
+
+.view-mode-tab.active {
+  background: var(--bg-elev);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+/* ─── JSON tab: raw spec pretty-print ─────────────────────────────────────
+   `<pre>` of JSON.stringify(spec, null, 2). Scrolls in both axes for long
+   ciphers (Serpent's 32-round body is wide AND tall pretty-printed). */
+
+.view-mode-json {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 12px;
+  font-size: 11px;
+  line-height: 1.4;
+  max-height: 600px;
+  overflow: auto;
+  margin: 0;
+  color: var(--text);
+}
+
+/* ─── Graph tab: SVG container + node/edge styles ─────────────────────────
+   The graph SVG sits inside a scrollable wrapper because the canvas size
+   grows with the spec (AES-128's 10-round pipeline is ~1500px wide). No
+   pan/zoom today — just native scrolling. */
+
+.graph-view {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  max-height: 600px;
+  overflow: auto;
+}
+
+.graph-view-svg {
+  display: block;
+  font-family: inherit;
+}
+
+/* Container rectangles frame their children. Groups and iterates use
+   different stroke colors so the user can tell "this is one round" from
+   "this loop runs N times." */
+
+.graph-container-rect {
+  fill: var(--bg-elev-2);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.graph-container-rect-iterate {
+  stroke: var(--accent);
+  stroke-dasharray: 4 3;
+}
+
+.graph-container-label {
+  fill: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.graph-iterate-badge {
+  fill: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Leaf rectangles. The `cursor: pointer` + `:hover` style gives them the
+   "this is clickable" affordance — clicking moves the trace scrubber to
+   the matching frame via setFrame(). */
+
+.graph-leaf {
+  cursor: pointer;
+}
+
+.graph-leaf-rect {
+  fill: var(--bg);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.graph-leaf:hover .graph-leaf-rect,
+.graph-leaf:focus .graph-leaf-rect {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+}
+
+.graph-leaf:focus {
+  outline: none;
+}
+
+.graph-leaf-label {
+  fill: var(--text);
+  font-size: 11px;
+  pointer-events: none;
+}
+
+/* Aux-flow edges. Drawn between leaves/containers; the auxKey lives in a
+   <title> for native browser tooltips on hover. */
+
+.graph-edge {
+  fill: none;
+  stroke: var(--accent);
+  stroke-opacity: 0.35;
+  stroke-width: 1.5;
+}
+
+.graph-edge:hover {
+  stroke-opacity: 0.9;
+  stroke-width: 2.5;
+}

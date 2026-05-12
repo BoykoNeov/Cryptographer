@@ -35,9 +35,20 @@ import { runSpec } from "@/core/runtime";
 import { makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, BytesState, MatrixState, State, TraceFrame } from "@/core/types";
-import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
+import {
+  For,
+  Match,
+  Show,
+  Switch,
+  createEffect,
+  createMemo,
+  createSignal,
+  on,
+  onCleanup,
+} from "solid-js";
 import { BlockBadge } from "./components/BlockBadge";
 import { BytesView } from "./components/BytesView";
+import { GraphView } from "./components/GraphView";
 import { MatrixView } from "./components/MatrixView";
 import { ParamEditor } from "./components/ParamEditor";
 import { RunExplorerModal } from "./components/RunExplorerModal";
@@ -89,6 +100,13 @@ import {
   useSpec,
 } from "./stores/spec";
 import { getTrace, setTrace, useFrameIndex, useTraceVersion } from "./stores/trace";
+import {
+  ALL_VIEW_MODES,
+  VIEW_MODE_LABELS,
+  type ViewMode,
+  setViewMode,
+  useViewMode,
+} from "./stores/view-mode";
 import "./app.css";
 
 // Per-cipher default plaintext lives in stores/cipher.ts (mirrors the
@@ -116,6 +134,7 @@ export const App = () => {
   const padding = usePaddingScheme();
   const cipher = useCipher();
   const cipherMode = useCipherMode();
+  const viewMode = useViewMode();
 
   // Inputs — kept as strings (in whatever the current byte format is) so
   // the user can paste partial input without the field fighting them
@@ -610,66 +629,103 @@ export const App = () => {
       {/* ─── Trace timeline scrubber ─────────────────────────────────── */}
       <TraceTimeline />
 
-      {/* ─── Main trace view: strip, matrix, description, editor ─────── */}
+      {/* ─── Main trace view: tab bar + per-mode content ─────────────── */}
       <section class="trace-view">
-        <Show
-          when={currentFrame()}
-          fallback={<div class="muted">run the cipher to see step-by-step state</div>}
-        >
-          {(frame) => (
-            <>
-              {/* Frame header: full path/id (the strip below shows
-                  shortened labels; this is the unambiguous reference). */}
-              <div class="frame-header">
-                <span class="frame-step">
-                  {frame().path.length > 0 ? `${frame().path.join(" › ")} › ` : ""}
-                  {frame().stepId}
-                </span>
-                <div class="frame-header-right">
-                  {/* Phase 2b — overlay toggle. Disabled until we have a
-                      second snapshot to compare against, so the user can't
-                      ask for an overlay that doesn't exist yet. */}
-                  <label
-                    class="compare-toggle"
-                    title="Show previous run alongside the current matrix"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={showPrev()}
-                      disabled={!canCompare()}
-                      onChange={(e) => setShowPreviousRun(e.currentTarget.checked)}
-                    />
-                    compare to previous run
-                    <Show when={canCompare()}>
-                      <span class="compare-count">({historyCount()} runs)</span>
-                    </Show>
-                  </label>
-                  <span class="frame-type">{frame().stepType}</span>
-                </div>
-              </div>
+        {/* Slice 2 — three mutually-exclusive views over the same spec/trace:
+            linear (today's per-frame state + editor), graph (2D aux-flow),
+            JSON (raw spec). The tab bar lives above the content so it's
+            visible even before the first Run (graph & json work without a
+            trace; linear shows its empty-state fallback). */}
+        <div class="view-mode-tabs" role="tablist" aria-label="View mode">
+          <For each={ALL_VIEW_MODES}>
+            {(m) => (
+              <button
+                type="button"
+                class="view-mode-tab"
+                classList={{ active: viewMode() === m }}
+                role="tab"
+                aria-selected={viewMode() === m}
+                onClick={() => setViewMode(m as ViewMode)}
+              >
+                {VIEW_MODE_LABELS[m]}
+              </button>
+            )}
+          </For>
+        </div>
 
-              {/* Neighborhood strip: prev / current / next thumbnails. */}
-              <StepStrip />
+        <Switch>
+          <Match when={viewMode() === "linear"}>
+            <Show
+              when={currentFrame()}
+              fallback={<div class="muted">run the cipher to see step-by-step state</div>}
+            >
+              {(frame) => (
+                <>
+                  {/* Frame header: full path/id (the strip below shows
+                      shortened labels; this is the unambiguous reference). */}
+                  <div class="frame-header">
+                    <span class="frame-step">
+                      {frame().path.length > 0 ? `${frame().path.join(" › ")} › ` : ""}
+                      {frame().stepId}
+                    </span>
+                    <div class="frame-header-right">
+                      {/* Phase 2b — overlay toggle. Disabled until we have a
+                          second snapshot to compare against, so the user can't
+                          ask for an overlay that doesn't exist yet. */}
+                      <label
+                        class="compare-toggle"
+                        title="Show previous run alongside the current matrix"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={showPrev()}
+                          disabled={!canCompare()}
+                          onChange={(e) => setShowPreviousRun(e.currentTarget.checked)}
+                        />
+                        compare to previous run
+                        <Show when={canCompare()}>
+                          <span class="compare-count">({historyCount()} runs)</span>
+                        </Show>
+                      </label>
+                      <span class="frame-type">{frame().stepType}</span>
+                    </div>
+                  </div>
 
-              {/* Multi-block context chip. Only renders when the current
-                  frame belongs to an iterate node (blockIndex is set). */}
-              <BlockBadge blockIndex={frame().blockIndex} blockCount={blockCount()} />
+                  {/* Neighborhood strip: prev / current / next thumbnails. */}
+                  <StepStrip />
 
-              {/* State view, dispatched by (stateBefore.shape, stateAfter.shape):
-                  - both matrix       → MatrixView (today's path)
-                  - both bytes        → BytesView (pad/unpad frames)
-                  - mixed (boundary)  → side-by-side inline render so the
-                                        user can see the shape transition. */}
-              <FrameStateView frame={frame()} previousRunFrame={previousRunFrame()} />
+                  {/* Multi-block context chip. Only renders when the current
+                      frame belongs to an iterate node (blockIndex is set). */}
+                  <BlockBadge blockIndex={frame().blockIndex} blockCount={blockCount()} />
 
-              {/* Human-readable explanation of what this step does. */}
-              <StepDescription frame={frame()} />
+                  {/* State view, dispatched by (stateBefore.shape, stateAfter.shape):
+                      - both matrix       → MatrixView (today's path)
+                      - both bytes        → BytesView (pad/unpad frames)
+                      - mixed (boundary)  → side-by-side inline render so the
+                                            user can see the shape transition. */}
+                  <FrameStateView frame={frame()} previousRunFrame={previousRunFrame()} />
 
-              {/* Editable params for the current step. */}
-              <ParamEditor frame={frame()} />
-            </>
-          )}
-        </Show>
+                  {/* Human-readable explanation of what this step does. */}
+                  <StepDescription frame={frame()} />
+
+                  {/* Editable params for the current step. */}
+                  <ParamEditor frame={frame()} />
+                </>
+              )}
+            </Show>
+          </Match>
+
+          <Match when={viewMode() === "graph"}>
+            <GraphView />
+          </Match>
+
+          <Match when={viewMode() === "json"}>
+            {/* Raw spec JSON. Pretty-printed two-space; the surrounding
+                <pre> preserves whitespace. Read-only for now; future slices
+                can wire bidirectional edit + Zod parse here. */}
+            <pre class="view-mode-json">{JSON.stringify(spec(), null, 2)}</pre>
+          </Match>
+        </Switch>
       </section>
 
       {/* ─── Sidebar: collapsible step tree ─────────────────────────── */}
