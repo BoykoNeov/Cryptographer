@@ -1510,6 +1510,19 @@ button:disabled {
   fill: var(--muted);
   font-size: 11px;
   font-weight: 600;
+  /* Header label is purely cosmetic. SVG <text> accepts pointer events
+     by default, which means a long label that overflows the container's
+     right edge (e.g. "round.10" extending past round.10's box) becomes
+     a hit target that absorbs pointerdown — the user clicks the visible
+     label expecting to drag the container, but the click lands on the
+     <text> not on the underlying header rect, so the drag handler never
+     fires. pointer-events:none routes those clicks through to the rect.
+     The browser tooltip via <title> on the parent <g> still works
+     because hover detection runs on the group, not the label.
+     LONGER-TERM: label truncation + click-to-expand is the next priority
+     before more graph-readability work — see plans/peppy-knitting-fairy
+     "Next priority" section. */
+  pointer-events: none;
 }
 
 .graph-iterate-badge {
