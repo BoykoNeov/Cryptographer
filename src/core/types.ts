@@ -39,7 +39,7 @@ export type State = BytesState | MatrixState | BitVecState | BigIntState;
 // Some steps need data alongside the main state — round keys, IVs, counters.
 // They live in a typed `aux` map so executors stay pure of side channels.
 
-export type AuxValue = State | Uint8Array | number | bigint;
+export type AuxValue = State | Uint8Array | number | bigint | readonly State[];
 export type Aux = ReadonlyMap<string, AuxValue>;
 
 // ─── Spec ─────────────────────────────────────────────────────────────────
@@ -58,7 +58,37 @@ export type StepGroup = {
   readonly children: readonly StepNode[];
 };
 
-export type StepNode = StepLeaf | StepGroup;
+/**
+ * Iteration primitive: the runtime expands this into per-iteration frames
+ * inline at runSpec time. Used by multi-block cipher modes (ECB/CBC/CTR)
+ * to run the AES round body once per plaintext block without unrolling
+ * the JSON spec.
+ *
+ * Contract:
+ *  - `aux[countFromAux]` must hold a `number` — the iteration count.
+ *  - `aux[blocksFromAux]` must hold a `MatrixState[]` of length `count` —
+ *    the per-iteration input. The runtime sets `state = blocks[i]` at the
+ *    start of each iteration.
+ *  - The runtime initializes `aux[outBlocksAux] = []` once before the loop
+ *    and appends each iteration's final state to it.
+ *  - Per-iteration step ids get a `:b{i}` suffix in the emitted frames so
+ *    the flat trace stays uniquely keyed. Each frame is also stamped with
+ *    `blockIndex: i` for renderers that want to display block context.
+ *  - `aux["blockIndex"] = i` is exposed to step executors during iteration
+ *    `i` (used by `xor-with-plaintext-block@1` in CTR mode to slice the
+ *    right keystream-target block).
+ */
+export type IterateGroup = {
+  readonly kind: "iterate";
+  readonly id: string;
+  readonly label?: string;
+  readonly countFromAux: string;
+  readonly blocksFromAux: string;
+  readonly outBlocksAux: string;
+  readonly children: readonly StepNode[];
+};
+
+export type StepNode = StepLeaf | StepGroup | IterateGroup;
 
 export type CipherSpec = {
   readonly id: string; // "aes-128@1"
@@ -87,6 +117,11 @@ export type TraceFrame = {
   /** Aux entries that were read or written by this step. */
   readonly auxRead: ReadonlyMap<string, AuxValue>;
   readonly auxWritten: ReadonlyMap<string, AuxValue>;
+  /**
+   * 0-based index of the block this frame belongs to when emitted inside
+   * an `iterate` node; undefined for frames outside any iterate.
+   */
+  readonly blockIndex?: number;
 };
 
 export type Trace = {

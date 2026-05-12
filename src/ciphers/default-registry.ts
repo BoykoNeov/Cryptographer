@@ -11,6 +11,8 @@
 import { StepRegistry } from "../core/registry";
 import { addRoundKey, addRoundKeyDoc } from "../steps/add-round-key";
 import { byteSubstitution, byteSubstitutionDoc } from "../steps/byte-substitution";
+import { computeBlockCount, computeBlockCountDoc } from "../steps/compute-block-count";
+import { concatBlocks, concatBlocksDoc } from "../steps/concat-blocks";
 import { iso78164Pad, iso78164PadDoc } from "../steps/iso7816-4-pad";
 import { iso78164Unpad, iso78164UnpadDoc } from "../steps/iso7816-4-unpad";
 import { keyExpansion, keyExpansionDoc } from "../steps/key-expansion";
@@ -22,6 +24,7 @@ import { shiftRows, shiftRowsDoc } from "../steps/shift-rows";
 import { speckKeySchedule, speckKeyScheduleDoc } from "../steps/speck-key-schedule";
 import { speckRound, speckRoundDoc } from "../steps/speck-round";
 import { speckRoundInverse, speckRoundInverseDoc } from "../steps/speck-round-inverse";
+import { splitBlocks, splitBlocksDoc } from "../steps/split-blocks";
 import { storeBlock, storeBlockDoc } from "../steps/store-block";
 import { zeroPad, zeroPadDoc } from "../steps/zero-pad";
 import { zeroUnpad, zeroUnpadDoc } from "../steps/zero-unpad";
@@ -53,6 +56,18 @@ export const buildDefaultRegistry = (): StepRegistry => {
   r.register("generic.iso7816-4-unpad@1", { executor: iso78164Unpad, doc: iso78164UnpadDoc });
   r.register("generic.load-block@1", { executor: loadBlock, doc: loadBlockDoc });
   r.register("generic.store-block@1", { executor: storeBlock, doc: storeBlockDoc });
+  // ─── Multi-block iteration boundary (Phase: ECB/CBC/CTR modes) ─────────
+  // split-blocks turns a padded BytesState into MatrixState[] for the
+  // `iterate` runtime; concat-blocks reverses that after the loop;
+  // compute-block-count writes the iteration count to aux. All three
+  // are AES-shaped today (blockSize=16) — see each step's doc for the
+  // generalization story when a non-matrix block cipher arrives.
+  r.register("generic.split-blocks@1", { executor: splitBlocks, doc: splitBlocksDoc });
+  r.register("generic.concat-blocks@1", { executor: concatBlocks, doc: concatBlocksDoc });
+  r.register("generic.compute-block-count@1", {
+    executor: computeBlockCount,
+    doc: computeBlockCountDoc,
+  });
   // ─── Speck (ARX block cipher, second cipher family) ────────────────────
   // Three step types complete a full Speck cipher: a key-schedule that
   // expands an m-word master key into `rounds` round-key words, a forward

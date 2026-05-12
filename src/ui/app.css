@@ -276,6 +276,22 @@ button:disabled {
   font-size: 11px;
 }
 
+/* Multi-block ECB/CBC/CTR — small "Block i of N" chip rendered above the
+   frame's state view when the current frame belongs to an iterate loop. */
+.block-badge {
+  display: inline-block;
+  margin-bottom: 8px;
+  padding: 2px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.block-badge strong {
+  font-weight: 600;
+}
+
 .matrix-view {
   display: flex;
   gap: 32px;

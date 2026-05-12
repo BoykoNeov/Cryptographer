@@ -17,6 +17,17 @@
 import type { PaddingScheme } from "@/core/spec-mutations";
 import { createSignal } from "solid-js";
 import { type Cipher, isAesCipher } from "./cipher";
+import type { CipherMode } from "./cipher-mode";
+
+/**
+ * UI cap on multi-block input length, in *blocks*. Real ciphers have no
+ * such limit — this is purely so the trace scrubber stays browsable.
+ * `MAX_BLOCKS_UI × 16` bytes ⇒ on the order of (frames-per-block × N)
+ * trace frames; at 16 blocks for AES-128, that's ~1600 frames, still
+ * navigable. Bumping this is a one-line change if a user wants to encrypt
+ * a paragraph; just be aware the slider degrades visually.
+ */
+export const MAX_BLOCKS_UI = 16;
 
 const STORAGE_KEY = "cryptographer.paddingScheme";
 const ALL_PADDING_SCHEMES: readonly PaddingScheme[] = ["none", "pkcs7", "zero-pad", "iso7816-4"];
@@ -67,55 +78,88 @@ export const PADDING_SCHEME_LABELS: Record<PaddingScheme, string> = {
 export const PADDING_SCHEME_OPTIONS = ALL_PADDING_SCHEMES;
 
 /**
- * Allowed raw input byte-length range for (mode, scheme, cipher). Used by
- * the Run handler to give a friendly error when the user's input is the
- * wrong size for single-block scope.
+ * Allowed raw input byte-length range for (mode, scheme, cipher, cipherMode).
+ * Used by the Run handler to give a friendly error when the user's input is
+ * the wrong size.
  *
- * AES-family (cipher.startsWith("aes-")):
- *   encrypt + none      → exactly 16 (today's behavior)
- *   encrypt + pkcs7     → 0..15  (PKCS#7 always adds ≥1 byte; 16 raw bytes
- *                                 would need a second padding block)
- *   encrypt + zero-pad  → 1..16  (zero-pad doesn't always pad, so 16 bytes
- *                                 fits in one block; length 0 is excluded
- *                                 because the formula gives N=0 there,
- *                                 producing a 0-byte block that fails
- *                                 load-block)
- *   encrypt + iso7816-4 → 0..15  (sentinel-byte-based; always adds ≥1 byte,
- *                                 same shape constraint as PKCS#7)
- *   decrypt + any       → exactly 16 (ciphertext is always one full block)
+ * Three families of behavior:
  *
- * Non-AES (today: Speck32/64): padding is not yet supported, so the input
- * is always exactly one cipher block — 4 bytes for Speck32/64 — regardless
- * of mode or the persisted padding choice. The padding selector is
- * disabled in the UI when a non-AES cipher is active.
+ *   • Non-AES (Speck32/64): one fixed-size block, regardless of mode or
+ *     padding choice. The padding selector is disabled in the UI.
  *
- * Multi-block modes would relax the upper bound; that's a separate phase.
+ *   • AES single-block: today's behavior — exactly 16 bytes on decrypt,
+ *     0..15 / 1..16 / 16..16 on encrypt depending on padding scheme.
+ *
+ *   • AES multi-block (ECB / CBC): input is N × 16 bytes (any whole
+ *     number of blocks up to MAX_BLOCKS_UI). PKCS#7 / zero-pad /
+ *     iso7816-4 each take 0..MAX_BLOCKS_UI × 16 on encrypt (their pad
+ *     step expands to the next block boundary). On decrypt, input must
+ *     be a clean multiple of 16, 16..MAX_BLOCKS_UI × 16.
+ *
+ *   • AES CTR (Phase 3): no padding, any length 0..MAX_BLOCKS_UI × 16.
+ *     The keystream is truncated to the original length.
  */
 export const paddingLimits = (
   mode: "encrypt" | "decrypt",
   scheme: PaddingScheme,
   cipher: Cipher,
+  cipherMode: CipherMode = "single-block",
 ): { min: number; max: number } => {
   if (!isAesCipher(cipher)) {
-    // Per-cipher fixed block size. Listed positively (not via a fallback)
-    // so a future Speck64/128 PR that forgets to extend this switch fails
-    // loud — throwing here is preferable to silently inheriting Speck32's
-    // 4-byte cap and giving the user a "must be 4 bytes" error on an
-    // 8-byte cipher.
     switch (cipher) {
       case "speck-32-64-be":
       case "speck-32-64-le":
         return { min: 4, max: 4 };
       default: {
-        // Exhaustiveness check: if `Cipher` grows and this switch isn't
-        // updated, TypeScript narrows `cipher` to `never` here and the
-        // compile fails. At runtime, this is reached if the type lied to
-        // us (cast through `any`, etc.); throwing is still the right call.
         const _exhaustive: never = cipher;
         throw new Error(`paddingLimits: unsupported non-AES cipher: ${_exhaustive as string}`);
       }
     }
   }
+
+  const MAX_BYTES = MAX_BLOCKS_UI * 16;
+
+  // ── AES multi-block (ECB / CBC) ─────────────────────────────────────────
+  if (cipherMode === "ecb" || cipherMode === "cbc") {
+    if (mode === "decrypt") {
+      // Decrypt input must be a clean ciphertext block multiple. The Run
+      // handler also checks `length % 16 === 0`; this just bounds the
+      // overall range. min=16 because we need at least one block to act on.
+      return { min: 16, max: MAX_BYTES };
+    }
+    // Encrypt: every padding scheme produces a clean multi-block output;
+    // the pad step itself enforces its scheme-specific invariants on
+    // shorter inputs. The UI just caps the overall length.
+    switch (scheme) {
+      case "none":
+        // Same as today's single-block "none" but extended to multi-block:
+        // input must already be a multiple of 16. The Run handler checks
+        // alignment; we bound the range.
+        return { min: 16, max: MAX_BYTES };
+      case "pkcs7":
+      case "iso7816-4":
+        // Always-adds-≥1-byte schemes: encrypt of `MAX_BYTES` bytes would
+        // append a full extra padding block, going past the UI cap. So
+        // top out at MAX_BYTES - 1 so the padded result stays ≤ MAX_BYTES.
+        return { min: 0, max: MAX_BYTES - 1 };
+      case "zero-pad":
+        // Zero-pad is the one scheme that doesn't always add a byte: input
+        // length already a multiple of 16 produces no extra padding. So
+        // it can use the full range — except length 0, which would yield
+        // a 0-byte input (no blocks to iterate).
+        return { min: 1, max: MAX_BYTES };
+    }
+  }
+
+  // ── AES CTR (Phase 3) ───────────────────────────────────────────────────
+  // CTR doesn't use the padding overlay (no padding needed; the keystream
+  // is truncated to plaintext length). The byte-length range is purely the
+  // UI cap. Same on encrypt and decrypt (CTR is symmetric).
+  if (cipherMode === "ctr") {
+    return { min: 0, max: MAX_BYTES };
+  }
+
+  // ── AES single-block ───────────────────────────────────────────────────
   if (mode === "decrypt") return { min: 16, max: 16 };
   switch (scheme) {
     case "none":

@@ -456,6 +456,17 @@ const stripPaddingLeaves = (steps: readonly StepNode[]): readonly StepNode[] =>
   steps.filter((n) => !(n.kind === "step" && PADDING_STEP_TYPES.has(n.type)));
 
 /**
+ * Detect a multi-block cipher spec by looking for an `iterate` node at the
+ * top level. Multi-block AES (ECB/CBC/CTR factories) put their iterate
+ * loop at the top level; non-iterating specs (single-block AES, Speck)
+ * don't have one. Used to branch `applyPaddingScheme`: multi-block specs
+ * already do their own BytesState↔MatrixState shape handling inside the
+ * loop, so the overlay only needs to add pad/unpad — no load/store-block.
+ */
+const hasIterateNode = (steps: readonly StepNode[]): boolean =>
+  steps.some((n) => n.kind === "iterate");
+
+/**
  * Layer a padding chain onto a cipher spec.
  *
  * Idempotent: any pre-existing padding leaves are stripped before the new
@@ -463,6 +474,16 @@ const stripPaddingLeaves = (steps: readonly StepNode[]): readonly StepNode[] =>
  * produces structurally equivalent output. The canonical spec is reachable
  * by passing scheme=`"none"` — useful when the user toggles the padding
  * selector back to off.
+ *
+ * Three shape branches:
+ *  1. Multi-block AES (has an `iterate` node) — pad on encrypt / unpad on
+ *     decrypt, no load/store-block (the iterate body handles state shape).
+ *  2. Single-block AES (`stateShape === "matrix4x4-bytes"`) — today's path:
+ *     prepend [pad, load-block] on encrypt or append [store-block, unpad]
+ *     on decrypt.
+ *  3. Anything else (Speck32/64) — overlay is a no-op for now; the user's
+ *     preference is preserved in the store and re-applies when the user
+ *     flips back to an AES variant.
  *
  * Pure: returns a new spec; the input spec is not mutated. New StepLeaf
  * objects are emitted on each call (no shared param references between
@@ -475,6 +496,35 @@ export const applyPaddingScheme = (
 ): CipherSpec => {
   const stripped = stripPaddingLeaves(spec.steps);
 
+  // ── Branch 1: multi-block (ECB/CBC/CTR) ────────────────────────────────
+  // The iterate node already handles BytesState ↔ MatrixState transitions
+  // via the split-blocks / concat-blocks boundary steps inside the spec.
+  // All we add here is the pad/unpad at the outer BytesState boundary.
+  if (hasIterateNode(stripped)) {
+    if (scheme === "none") {
+      return { ...spec, steps: stripped };
+    }
+    const { padType, unpadType, padId, unpadId } = SCHEME_STEP_TYPES[scheme];
+    if (mode === "encrypt") {
+      const padLeaf: StepLeaf = {
+        kind: "step",
+        id: padId,
+        type: padType,
+        params: { blockSize: AES_BLOCK_SIZE },
+      };
+      return { ...spec, steps: [padLeaf, ...stripped] };
+    }
+    // decrypt
+    const unpadLeaf: StepLeaf = {
+      kind: "step",
+      id: unpadId,
+      type: unpadType,
+      params: { blockSize: AES_BLOCK_SIZE },
+    };
+    return { ...spec, steps: [...stripped, unpadLeaf] };
+  }
+
+  // ── Branch 3: non-AES single-block (Speck) ─────────────────────────────
   // The padding overlay's load-block/store-block leaves are hardcoded for
   // AES's 4×4 byte matrix. For any cipher whose state shape isn't that
   // matrix (today: Speck32/64, which uses BytesState) the overlay can't

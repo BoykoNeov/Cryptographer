@@ -1,58 +1,17 @@
-import type { CipherSpec, StepNode } from "../core/types";
-import { AES_MIX_MATRIX, AES_RCON, AES_SBOX, AES_SHIFT_ROWS } from "./aes-constants";
+/**
+ * AES-128 forward cipher, FIPS-197 §5.1 (single-block).
+ *
+ * The per-block body (initial AddRoundKey + 9 rounds + final round) lives
+ * in `aes-round-builder.ts` so the upcoming ECB / CBC / CTR multi-block
+ * factories can reuse it verbatim. Key expansion stays here because it runs
+ * once total — never inside the per-block loop regardless of mode.
+ */
+
+import type { CipherSpec } from "../core/types";
+import { AES_RCON, AES_SBOX } from "./aes-constants";
+import { buildAesEncryptBody } from "./aes-round-builder";
 
 const ROUNDS = 10;
-
-const subBytesStep = (idPrefix: string): StepNode => ({
-  kind: "step",
-  id: `${idPrefix}.sub-bytes`,
-  type: "generic.byte-substitution@1",
-  params: { sbox: [...AES_SBOX] },
-});
-
-const shiftRowsStep = (idPrefix: string): StepNode => ({
-  kind: "step",
-  id: `${idPrefix}.shift-rows`,
-  type: "generic.shift-rows@1",
-  params: { shifts: [...AES_SHIFT_ROWS] },
-});
-
-const mixColumnsStep = (idPrefix: string): StepNode => ({
-  kind: "step",
-  id: `${idPrefix}.mix-columns`,
-  type: "generic.mix-columns@1",
-  params: { matrix: AES_MIX_MATRIX.map((row) => [...row]) },
-});
-
-const addRoundKeyStep = (idPrefix: string, roundIndex: number): StepNode => ({
-  kind: "step",
-  id: `${idPrefix}.add-round-key`,
-  type: "generic.add-round-key@1",
-  params: { auxName: `roundKey.${roundIndex}` },
-});
-
-const round = (n: number): StepNode => ({
-  kind: "group",
-  id: `round.${n}`,
-  label: `Round ${n}`,
-  children: [
-    subBytesStep(`round.${n}`),
-    shiftRowsStep(`round.${n}`),
-    mixColumnsStep(`round.${n}`),
-    addRoundKeyStep(`round.${n}`, n),
-  ],
-});
-
-const finalRound: StepNode = {
-  kind: "group",
-  id: `round.${ROUNDS}`,
-  label: `Round ${ROUNDS} (final, no MixColumns)`,
-  children: [
-    subBytesStep(`round.${ROUNDS}`),
-    shiftRowsStep(`round.${ROUNDS}`),
-    addRoundKeyStep(`round.${ROUNDS}`, ROUNDS),
-  ],
-};
 
 export const aes128Spec: CipherSpec = {
   id: "aes-128@1",
@@ -75,8 +34,6 @@ export const aes128Spec: CipherSpec = {
         rounds: ROUNDS,
       },
     },
-    addRoundKeyStep("initial", 0),
-    ...Array.from({ length: ROUNDS - 1 }, (_, i) => round(i + 1)),
-    finalRound,
+    ...buildAesEncryptBody(ROUNDS),
   ],
 };
