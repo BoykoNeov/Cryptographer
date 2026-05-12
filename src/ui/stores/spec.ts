@@ -40,6 +40,7 @@ import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { speck32_64BeDecryptSpec } from "@/ciphers/speck-32-64-be-decrypt";
 import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
 import { speck32_64LeDecryptSpec } from "@/ciphers/speck-32-64-le-decrypt";
+import type { CipherDocument } from "@/core/document";
 import {
   type PaddingScheme,
   applyPaddingScheme,
@@ -55,6 +56,7 @@ import {
   setCipherMode as setCipherModeSignal,
   useCipherMode,
 } from "./cipher-mode";
+import { setByteFormat } from "./format";
 import { setPaddingScheme, usePaddingScheme } from "./padding";
 
 // ─── Mode ────────────────────────────────────────────────────────────────
@@ -206,6 +208,53 @@ export const editStepParams = (stepId: string, params: Json): void => {
  */
 export const editAllStepsByType = (stepType: string, update: (params: Json) => Json): void => {
   setSpec((s) => updateAllStepsByType(s, stepType, update));
+};
+
+/**
+ * Apply a loaded `CipherDocument` to the live stores (Slice 5 of the 2D
+ * editor plan). This is the boundary that the Save/Load UI calls after
+ * `parseDocument` succeeds — it routes around the public selector setters
+ * (each of which would trigger its own spec rebuild) and lands the
+ * document's literal `spec` value as the authoritative final state.
+ *
+ * Hydration order matters:
+ *   1. byteFormat first — so a later App-level format of restored input/
+ *      key bytes uses the freshly-applied format, not the previous one.
+ *   2. cipher, cipherMode, padding — raw signal setters (from cipher.ts /
+ *      cipher-mode.ts / padding.ts) that update the signal + localStorage
+ *      WITHOUT rebuilding the spec. We bypass this module's own setCipher
+ *      etc. on purpose: those would each rebuild spec from the canonical
+ *      defaults table, then the next setter would overwrite it again, and
+ *      the literal `doc.spec` would never land.
+ *   3. mode — same idea via the local setModeSignal.
+ *   4. spec — finally, set the document's spec verbatim. The
+ *      createEffect(on(spec, ...)) in App.tsx picks this up; the Load
+ *      handler also calls run() synchronously so the trace lands before
+ *      the debounce.
+ *
+ * Cross-store consistency (e.g. a document with cipher=aes-192 +
+ * cipherMode=ecb when AES-192-ECB doesn't ship yet) is NOT corrected —
+ * the document's spec is what runs, regardless. If it's inconsistent with
+ * the supported-modes matrix, the dropdown will show the unsupported
+ * combo grayed out, but the loaded trace still works because we use the
+ * literal spec rather than re-resolving the defaults table.
+ *
+ * Input + key bytes are NOT applied here — App.tsx owns those signals and
+ * reads `doc.session.inputBytes` / `keyBytes` directly after this call.
+ */
+export const setSpecFromDocument = (doc: CipherDocument): void => {
+  if (doc.session) {
+    setByteFormat(doc.session.byteFormat);
+    setCipherSignal(doc.session.cipher);
+    setCipherModeSignal(doc.session.cipherMode);
+    setPaddingScheme(doc.session.padding);
+    setModeSignal(doc.session.mode);
+  }
+  // Set the document's spec literally — no padding overlay re-application,
+  // no canonical-default fallback. The document author already baked the
+  // overlay into the serialized spec (round-trip property locked in by
+  // tests/document-roundtrip.test.ts).
+  setSpec(doc.spec);
 };
 
 /**

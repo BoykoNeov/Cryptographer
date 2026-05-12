@@ -25,6 +25,12 @@
  */
 
 import {
+  CURRENT_SCHEMA_VERSION,
+  type CipherDocument,
+  parseDocument,
+  serializeDocument,
+} from "@/core/document";
+import {
   type ByteFormat,
   formatByte,
   formatBytes,
@@ -96,6 +102,7 @@ import {
   setCipherMode,
   setMode,
   setPadding,
+  setSpecFromDocument,
   useMode,
   useSpec,
 } from "./stores/spec";
@@ -170,6 +177,19 @@ export const App = () => {
   // Phase 2c — Run Explorer modal open state. Local to the App component;
   // the modal pulls everything it needs from the global stores.
   const [explorerOpen, setExplorerOpen] = createSignal(false);
+
+  // Slice 5 of the 2D editor plan — Save/Load.
+  //
+  // The checkbox is a binary toggle per the locked-in design (memory
+  // entry [[project-2d-editor-plan]]): off → spec-only file (no session
+  // field at all); on → full session (selectors + inputs + key bytes).
+  // Splitting selectors off from bytes would be a third variant; the user
+  // signed off on two. Default off so the first impulse-save doesn't leak
+  // plaintext bytes to disk.
+  const [includeSession, setIncludeSession] = createSignal(false);
+  // Ref to the hidden <input type="file"> so the [Load] button can trigger
+  // the OS file picker programmatically.
+  let fileInputRef: HTMLInputElement | undefined;
 
   // Wire window-level keyboard shortcuts (←/→ scrub, Home/End, PageUp/Down).
   // Tied to App's lifecycle via onCleanup inside the helper.
@@ -261,6 +281,151 @@ export const App = () => {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
+  };
+
+  /**
+   * Build the serialized JSON text for a "Save" action against the
+   * current store state. Pure-ish: reads signals + the includeSession
+   * checkbox, returns the text. Factored out so tests can drive Save
+   * without mocking `Blob` + `URL.createObjectURL` + the synthesized
+   * `<a>` click — they just call this and inspect the result.
+   *
+   * Two shapes:
+   *   • includeSession=false → `{ schemaVersion, spec, metadata? }`.
+   *     Just the cipher topology; no selectors, no plaintext/key. The
+   *     "share my custom AES variant" minimum.
+   *   • includeSession=true → adds `session` with the four selector
+   *     values + active byteFormat + (if parseable) inputBytes + keyBytes.
+   *     Reloading this file rebuilds the user's view exactly.
+   *
+   * `inputBytes` / `keyBytes` are best-effort: if the current text in the
+   * fields doesn't parse cleanly under the active byte format (mid-edit
+   * garbage), we omit them. The file is still valid — `session.inputBytes`
+   * is optional in the schema — and the loading user will just see their
+   * own input/key default on load. Better than refusing to save.
+   */
+  const buildSaveText = (): string => {
+    // `createdAt` only fires when include-session is on, so spec-only
+    // saves are byte-stable: the same custom spec saved twice produces
+    // identical files. That matters for Slice 7 (URL hash share), which
+    // hashes the serialized form — stamping a timestamp on the spec-only
+    // path would mean the same spec produces a different shareable URL
+    // every session. With include-session on, the session bytes are
+    // already session-specific, so adding createdAt costs no determinism.
+    const doc: CipherDocument = {
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      spec: spec(),
+      ...(includeSession()
+        ? {
+            session: buildSessionSnapshot(),
+            metadata: { createdAt: Date.now() },
+          }
+        : {}),
+    };
+    return serializeDocument(doc);
+  };
+
+  const buildSessionSnapshot = () => {
+    // Best-effort bytes capture. Same try/catch shape as
+    // `tryParseBytes`/`reformatTextOrKeep` elsewhere in this file.
+    const input = tryParseBytes(inputText(), fmt());
+    const key = tryParseBytes(keyText(), fmt());
+    return {
+      mode: mode(),
+      cipher: cipher(),
+      cipherMode: cipherMode(),
+      padding: padding(),
+      byteFormat: fmt(),
+      ...(input ? { inputBytes: Array.from(input) } : {}),
+      ...(key ? { keyBytes: Array.from(key) } : {}),
+    } as const;
+  };
+
+  /**
+   * Trigger a file download for the current document. Uses the modern
+   * Blob + URL.createObjectURL + synthesized `<a download>` dance —
+   * standard pattern for client-side file output. Filename includes the
+   * spec id and today's date so the user's downloads folder stays
+   * navigable even if they save many variants.
+   */
+  const saveDocument = (): void => {
+    const text = buildSaveText();
+    const blob = new Blob([text], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${spec().id}-${ymdToday()}.cipher.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  /**
+   * Inner Load pathway: takes the file's text content, parses it, applies
+   * the document to the live stores, and runs the cipher. Factored out so
+   * the jsdom test can drive Load without an actual File object (jsdom's
+   * FileReader + the synthetic file input chain is awkward; this avoids
+   * it). Returns nothing — error state goes through setError, success
+   * propagates via the trace store + selector stores.
+   *
+   * Run is called synchronously at the end so the trace lands without
+   * waiting for the 200ms `on(spec)` debounce. The debounce will still
+   * fire (since spec just changed) but `pushSnapshot` dedups identical
+   * snapshots, so this is harmless.
+   */
+  const handleLoadFromText = (text: string): void => {
+    const result = parseDocument(text);
+    if (!result.ok) {
+      setError(`Could not load this file: ${result.error}`);
+      return;
+    }
+    const doc = result.doc;
+    setSpecFromDocument(doc);
+
+    // After setSpecFromDocument: byteFormat is now the document's value.
+    // Format the restored bytes through the NEW byteFormat (advisor: the
+    // order matters — fmt() above is already the new value because
+    // setByteFormat fired first inside setSpecFromDocument).
+    if (doc.session?.inputBytes) {
+      setInputText(formatBytes(new Uint8Array(doc.session.inputBytes), fmt()));
+    }
+    if (doc.session?.keyBytes) {
+      setKeyText(formatBytes(new Uint8Array(doc.session.keyBytes), fmt()));
+    }
+
+    // Clear any previous error so the success state is visible.
+    setError(null);
+    // Run synchronously so the trace lands immediately. The `on(spec)`
+    // createEffect will also fire (since we just changed spec); its
+    // debounced run lands at +200ms but pushSnapshot dedups, so it's a
+    // no-op on history.
+    run();
+  };
+
+  /**
+   * Click handler for the [Load…] button. Wraps the OS file picker in a
+   * promise-y read; delegates the parsed text to `handleLoadFromText`.
+   * jsdom-test pathway calls `handleLoadFromText` directly to sidestep
+   * the file-picker dance.
+   */
+  const onLoadClick = (): void => {
+    fileInputRef?.click();
+  };
+  const onFileChosen = (e: Event): void => {
+    const target = e.currentTarget as HTMLInputElement;
+    const file = target.files?.[0];
+    if (!file) return;
+    file
+      .text()
+      .then(handleLoadFromText)
+      .catch((err) => {
+        setError(`Could not load this file: ${err instanceof Error ? err.message : String(err)}`);
+      })
+      .finally(() => {
+        // Reset the file input so re-picking the same file fires `change`.
+        target.value = "";
+      });
   };
 
   // Re-run on spec edit, but only when the user has opted into auto-rerun
@@ -575,6 +740,43 @@ export const App = () => {
         <button type="button" onClick={resetSpec} title="Restore the canonical spec for this mode">
           reset spec
         </button>
+        {/* Slice 5 — Save current document to a downloadable file. The
+            checkbox below toggles between spec-only and full-session
+            (selectors + inputs + key bytes). */}
+        <button
+          type="button"
+          onClick={saveDocument}
+          title="Download the current cipher as a .cipher.json file"
+        >
+          save…
+        </button>
+        {/* Hidden file picker; the visible button triggers it. We assign
+            the ref so the button's onClick can call .click() — clicking
+            a hidden file input via ref is the standard pattern when the
+            file input itself can't carry the desired styling. */}
+        <input
+          type="file"
+          accept=".json,.cipher.json,application/json"
+          ref={(el) => {
+            fileInputRef = el;
+          }}
+          style={{ display: "none" }}
+          onChange={onFileChosen}
+        />
+        <button type="button" onClick={onLoadClick} title="Load a .cipher.json file">
+          load…
+        </button>
+        <label
+          class="include-session-toggle"
+          title="Save inputs + key + selector state with the file (off by default — keeps spec-only files small and avoids leaking plaintext when sharing)"
+        >
+          <input
+            type="checkbox"
+            checked={includeSession()}
+            onChange={(e) => setIncludeSession(e.currentTarget.checked)}
+          />
+          include session
+        </label>
         <button
           type="button"
           onClick={() => setExplorerOpen(true)}
@@ -898,6 +1100,20 @@ const SingleStateView = (props: { title: string; state: State }) => {
       )}
     </Show>
   );
+};
+
+/**
+ * Compact YYYYMMDD date string used in the default Save filename. UTC-day
+ * is unnecessary here (the filename is for the user's own filesystem;
+ * local-day is what they expect). Two-digit month/day padding so a saved
+ * file from January (`01`) doesn't sort before December (`12`).
+ */
+const ymdToday = (): string => {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}${m}${day}`;
 };
 
 /**

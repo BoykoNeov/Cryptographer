@@ -229,6 +229,25 @@ button:disabled {
   cursor: pointer;
 }
 
+/* Slice 5 — "include session" toggle next to the Save button. Same shape
+   as `.auto-rerun-toggle` so a future refactor could merge them; keeping
+   them separate avoids a hostile rename if either rule needs to drift. */
+.include-session-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  align-self: end;
+  padding-bottom: 6px;
+}
+
+.include-session-toggle input[type="checkbox"] {
+  cursor: pointer;
+}
+
 /* The "edits pending" banner. Full-width row inside `.inputs` (the flex
    wrap container) so it lands on its own line below the controls. Uses
    the same warm "changed" palette as the modified-cell highlight in the
