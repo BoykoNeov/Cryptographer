@@ -738,6 +738,8 @@ const MixedShapeView = (props: { before: State; after: State }) => {
   );
 };
 
+const SINGLE_STATE_BLOCK_BYTES = 16;
+
 const SingleStateView = (props: { title: string; state: State }) => {
   const fmt = useByteFormat();
 
@@ -747,6 +749,21 @@ const SingleStateView = (props: { title: string; state: State }) => {
     if (props.state.shape !== "bytes") return null;
     const bytes = props.state.bytes;
     return { length: bytes.length, indices: Array.from({ length: bytes.length }, (_, i) => i) };
+  });
+
+  // When the bytes sequence exceeds one block, slice the indices into
+  // 16-cell groups so multi-block outputs (notably `concat-blocks`) render
+  // as visually-separated blocks. This is what surfaces ECB's pedagogical
+  // weakness — identical plaintext blocks → identical ciphertext blocks.
+  const bytesBlockGroups = createMemo<number[][] | null>(() => {
+    const c = bytesCells();
+    if (!c) return null;
+    if (c.length <= SINGLE_STATE_BLOCK_BYTES) return null;
+    const out: number[][] = [];
+    for (let i = 0; i < c.indices.length; i += SINGLE_STATE_BLOCK_BYTES) {
+      out.push(c.indices.slice(i, i + SINGLE_STATE_BLOCK_BYTES));
+    }
+    return out;
   });
 
   const matrixCells = createMemo(() => {
@@ -760,6 +777,14 @@ const SingleStateView = (props: { title: string; state: State }) => {
     return out;
   });
 
+  // Shared cell renderer for both the flat and grouped bytes branches.
+  const renderByteCell = (i: number) => (
+    <div class="bytes-cell">
+      {/* Inline format read so a format toggle re-renders. */}
+      {formatByte((props.state as BytesState).bytes[i] ?? 0, fmt())}
+    </div>
+  );
+
   return (
     <Show
       when={matrixCells()}
@@ -772,14 +797,23 @@ const SingleStateView = (props: { title: string; state: State }) => {
                 <span class="bytes-row-count"> ({getCells().length} bytes)</span>
               </div>
               <div class="bytes-row">
-                <For each={getCells().indices}>
-                  {(i) => (
-                    <div class="bytes-cell">
-                      {/* Inline format read so a format toggle re-renders. */}
-                      {formatByte((props.state as BytesState).bytes[i] ?? 0, fmt())}
-                    </div>
+                <Show
+                  when={bytesBlockGroups()}
+                  fallback={<For each={getCells().indices}>{renderByteCell}</For>}
+                >
+                  {(getGroups) => (
+                    <For each={getGroups()}>
+                      {(group, gi) => (
+                        <div class="bytes-block-group">
+                          <div class="bytes-block-label">Block {gi() + 1}</div>
+                          <div class="bytes-block-cells">
+                            <For each={group}>{renderByteCell}</For>
+                          </div>
+                        </div>
+                      )}
+                    </For>
                   )}
-                </For>
+                </Show>
               </div>
             </div>
           )}

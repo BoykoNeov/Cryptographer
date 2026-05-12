@@ -12,11 +12,18 @@
  * Length-change highlight: when before.length ≠ after.length, cells beyond
  * the shorter side are flagged so the user can see the expansion (pad) or
  * truncation (unpad) at a glance.
+ *
+ * Multi-block block grouping: when the longer side of a row pair exceeds one
+ * AES block (16 bytes), cells are visually segmented into 16-byte groups
+ * with a "Block N" header. This makes ECB-mode pedagogy obvious — identical
+ * plaintext blocks produce identical ciphertext blocks, and the reader can
+ * spot the repetition at a glance instead of squinting at a single wrapping
+ * line. Single-block frames (max length ≤ 16) keep today's flat layout.
  */
 
 import { type ByteFormat, formatByte } from "@/core/format";
 import type { BytesState, State } from "@/core/types";
-import { For, Show } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { useByteFormat } from "../stores/format";
 
 type Props = {
@@ -31,6 +38,16 @@ type Props = {
    */
   previousAfter?: State | null;
 };
+
+/**
+ * AES block size in bytes. Block grouping kicks in when a row pair's longer
+ * side exceeds this — i.e. the visualization implies "this is multi-block."
+ * Today this is hardcoded to 16 because only AES multi-block ciphers reach
+ * BytesView with >16 bytes; a future block cipher with a different block
+ * size would need to thread the block size through (or the heuristic
+ * needs to read the cipher's block size from a store).
+ */
+const BLOCK_BYTES = 16;
 
 export const BytesView = (props: Props) => {
   const fmt = useByteFormat();
@@ -70,6 +87,13 @@ export const BytesView = (props: Props) => {
   );
 };
 
+/** Per-cell descriptor; produced once and consumed by either the flat or
+ * grouped renderer. `missing` means this position only exists on the
+ * compareTo side (the row is shorter); `flagged` is "different from
+ * compareTo" — interpretation (changed vs diff-vs-prev) is up to the caller's
+ * `highlightChanged` / `highlightDiffPrev` flags. */
+type Cell = { index: number; byte: number; flagged: boolean; missing: boolean };
+
 const Row = (props: {
   title: string;
   bytes: Uint8Array;
@@ -88,8 +112,8 @@ const Row = (props: {
   // Materialize cell descriptors once per render so the For loop's keyed
   // reactivity stays cheap. The byte format is read inside JSX (not here)
   // so a format toggle still re-renders the labels.
-  const cells = () => {
-    const out: { index: number; byte: number; flagged: boolean; missing: boolean }[] = [];
+  const cells = createMemo<Cell[]>(() => {
+    const out: Cell[] = [];
     const len = props.bytes.length;
     for (let i = 0; i < len; i++) {
       const b = props.bytes[i] ?? 0;
@@ -111,7 +135,42 @@ const Row = (props: {
       }
     }
     return out;
-  };
+  });
+
+  /** When the longer side of the row pair exceeds one block, slice the
+   * cells into 16-byte groups so multi-block ciphertext reads as discrete
+   * blocks. Returns null when grouping isn't appropriate (single block or
+   * empty), and the flat-row fallback renders instead. */
+  const blockGroups = createMemo<Cell[][] | null>(() => {
+    const all = cells();
+    const maxLen = Math.max(props.bytes.length, props.compareTo?.length ?? 0);
+    if (maxLen <= BLOCK_BYTES) return null;
+    const out: Cell[][] = [];
+    for (let i = 0; i < all.length; i += BLOCK_BYTES) {
+      out.push(all.slice(i, i + BLOCK_BYTES));
+    }
+    return out;
+  });
+
+  /** Cell renderer factored out so the flat and grouped branches stay
+   * literally identical in markup. Returning a function is the
+   * Solid-friendly way to share JSX between two `For` callbacks without
+   * losing prop reactivity. */
+  const renderCell = (cell: Cell) => (
+    <div
+      class="bytes-cell"
+      classList={{
+        changed: !!props.highlightChanged && cell.flagged,
+        "diff-vs-prev": !!props.highlightDiffPrev && cell.flagged,
+        "bytes-cell-missing": cell.missing,
+      }}
+      title={`index ${cell.index}`}
+    >
+      {/* Inline so a format toggle re-renders. Missing cells (this
+          row is shorter than the compare row) render a dim dash. */}
+      {cell.missing ? "·" : formatByte(cell.byte, props.format)}
+    </div>
+  );
 
   return (
     <div class="bytes-row-block">
@@ -124,23 +183,21 @@ const Row = (props: {
           when={props.bytes.length > 0 || props.compareTo}
           fallback={<span class="muted small">(empty)</span>}
         >
-          <For each={cells()}>
-            {(cell) => (
-              <div
-                class="bytes-cell"
-                classList={{
-                  changed: !!props.highlightChanged && cell.flagged,
-                  "diff-vs-prev": !!props.highlightDiffPrev && cell.flagged,
-                  "bytes-cell-missing": cell.missing,
-                }}
-                title={`index ${cell.index}`}
-              >
-                {/* Inline so a format toggle re-renders. Missing cells (this
-                    row is shorter than the compare row) render a dim dash. */}
-                {cell.missing ? "·" : formatByte(cell.byte, props.format)}
-              </div>
+          <Show when={blockGroups()} fallback={<For each={cells()}>{renderCell}</For>}>
+            {(getGroups) => (
+              <For each={getGroups()}>
+                {(group, gi) => (
+                  <div class="bytes-block-group">
+                    {/* 1-based label to match BlockBadge's "Block N of M". */}
+                    <div class="bytes-block-label">Block {gi() + 1}</div>
+                    <div class="bytes-block-cells">
+                      <For each={group}>{renderCell}</For>
+                    </div>
+                  </div>
+                )}
+              </For>
             )}
-          </For>
+          </Show>
         </Show>
       </div>
     </div>

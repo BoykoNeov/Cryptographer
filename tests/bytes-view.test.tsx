@@ -136,6 +136,49 @@ describe("BytesView", () => {
     expect(flagged.length).toBe(11);
   });
 
+  // Multi-block grouping. When the longer side of a row pair exceeds one
+  // 16-byte block, cells get segmented into per-block panels so ECB-mode
+  // ciphertext reads as discrete blocks (which makes the textbook ECB
+  // weakness — identical plaintext → identical ciphertext — visible at
+  // a glance).
+  it("groups cells into 16-byte block panels when the row exceeds one block", () => {
+    // 32-byte before/after (two AES blocks). The first 16 bytes are
+    // identical between the two halves — exactly the ECB-leakage pattern
+    // we want the user to be able to spot.
+    const repeat = (b: number, n: number) => new Uint8Array(n).fill(b);
+    const blockA = repeat(0xaa, 16);
+    const blockB = repeat(0xbb, 16);
+    const concat = new Uint8Array(32);
+    concat.set(blockA, 0);
+    concat.set(blockB, 16);
+    const before: BytesState = { shape: "bytes", bytes: concat };
+    const after: BytesState = { shape: "bytes", bytes: concat };
+
+    const { container } = render(() => <BytesView before={before} after={after} />);
+
+    // Both before and after rows render block panels.
+    const groups = container.querySelectorAll(".bytes-block-group");
+    expect(groups.length).toBe(4); // 2 blocks × 2 rows
+    // Labels are 1-based to match BlockBadge.
+    const labels = Array.from(container.querySelectorAll(".bytes-block-label"))
+      .map((n) => n.textContent ?? "")
+      .filter((t) => t.startsWith("Block "));
+    expect(labels).toContain("Block 1");
+    expect(labels).toContain("Block 2");
+    // Each block panel holds exactly 16 cells.
+    for (const g of Array.from(groups)) {
+      expect(g.querySelectorAll(".bytes-cell").length).toBe(16);
+    }
+  });
+
+  it("keeps the flat (non-grouped) layout when the row fits in one block", () => {
+    // 16-byte after-row + 5-byte before-row → max is 16, no grouping.
+    const before: BytesState = { shape: "bytes", bytes: new Uint8Array([1, 2, 3, 4, 5]) };
+    const after: BytesState = { shape: "bytes", bytes: new Uint8Array(16) };
+    const { container } = render(() => <BytesView before={before} after={after} />);
+    expect(container.querySelectorAll(".bytes-block-group").length).toBe(0);
+  });
+
   // Defensive: the shape-mismatch guard is App-level (the dispatch filters
   // before passing). But if a future caller threads a non-bytes State
   // through TypeScript by casting, BytesView shouldn't blow up.

@@ -414,6 +414,54 @@ button:disabled {
   opacity: 0.6;
 }
 
+/* Multi-block grouping. When a BytesState exceeds one block (16 bytes),
+   `BytesView`/`SingleStateView` segment cells into per-block panels so the
+   reader sees discrete blocks instead of one long wrap-line. This is the
+   key visualization for ECB-mode pedagogy: identical plaintext blocks
+   encrypt to identical ciphertext blocks, and that's only obvious when
+   the blocks are visually separated. */
+.bytes-block-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev-1, rgba(255, 255, 255, 0.02));
+}
+
+.bytes-block-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Block panel renders each block as a 4×4 grid so it visually matches the
+   AES State matrix the reader has been watching inside the round body. The
+   `grid-auto-flow: column` setting is the AES-specific bit — items fill
+   column 1 top-to-bottom first (bytes 0..3), then column 2 (bytes 4..7),
+   matching FIPS-197 §3.4's column-major state layout exactly. Track sizes
+   mirror the MatrixView `.grid` rule above for visual parity. */
+.bytes-block-cells {
+  display: grid;
+  grid-template-rows: repeat(4, 40px);
+  grid-template-columns: repeat(4, 48px);
+  grid-auto-flow: column;
+  gap: 2px;
+  background: var(--border);
+  padding: 2px;
+  border-radius: 4px;
+}
+
+/* When `.bytes-row` actually contains block groups (multi-block frames),
+   widen the gap between groups so blocks read as distinct units. The default
+   2px gap inside the row is right for cells but visually merges two adjacent
+   block panels. */
+.bytes-row:has(.bytes-block-group) {
+  gap: 12px;
+}
+
 /* ─── Mixed-shape boundary frames ─────────────────────────────────────── */
 /* When a step transitions between bytes and matrix shapes (load-block /
    store-block), we render the two sides side-by-side in a single block.
