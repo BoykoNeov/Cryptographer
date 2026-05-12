@@ -8,7 +8,15 @@
  * S-box") without knowing how to walk the tree itself.
  */
 
-import type { CipherSpec, Json, StateShape, StepLeaf, StepNode } from "./types";
+import type {
+  CipherSpec,
+  IterateGroup,
+  Json,
+  StateShape,
+  StepGroup,
+  StepLeaf,
+  StepNode,
+} from "./types";
 
 // ─── Walking the tree ─────────────────────────────────────────────────────
 
@@ -376,6 +384,199 @@ export const compareSpecs = (a: CipherSpec, b: CipherSpec): readonly SpecParamDi
 
   visit(a.steps, b.steps);
   return changes;
+};
+
+// ─── Structural mutations (Slice 4 of the 2D editor plan) ────────────────
+// Pure helpers for the visual editor's drag-to-reorder, palette-insert, and
+// "remove this step" operations. Each preserves reference equality on
+// branches the operation doesn't touch — same discipline as
+// `updateStepParams` above. Each throws if the targeted stepId doesn't
+// exist (silent no-ops would be a footgun for the visual editor: the
+// palette's drop coordinate is meant to be authoritative, and a typo'd id
+// in calling code should surface immediately, not vanish into a no-op).
+//
+// The mutators don't validate the *contents* of `newStep` against the
+// registry — that's the runtime's job at execution time. Adding a leaf
+// with an unknown `type` produces a spec that fails to run; this is the
+// same contract `updateStepParams` honors.
+
+/**
+ * Structural neighborhood of a node in the spec tree.
+ *  - `node` is the matched node itself (leaf, group, or iterate).
+ *  - `parent` is the group/iterate container holding it, or `null` when the
+ *    node lives at the top level of `spec.steps`.
+ *  - `indexInParent` is the node's position in its sibling array.
+ *
+ * Unlike `findStep` (leaves-only), this returns ANY node kind so the
+ * visual editor can anchor inserts to groups too (e.g. "drop this new step
+ * after the round.5 group, not inside it").
+ */
+export type StepLocation = {
+  readonly node: StepNode;
+  readonly parent: StepGroup | IterateGroup | null;
+  readonly indexInParent: number;
+};
+
+/**
+ * Find a node (leaf OR group OR iterate) by id and return its structural
+ * neighborhood. Depth-first; returns null on no match. Ids are assumed
+ * unique within a spec — if duplicates exist the first match in DFS order
+ * wins (mirrors `findStep`).
+ */
+export const findStepAndParent = (spec: CipherSpec, stepId: string): StepLocation | null => {
+  const visit = (
+    nodes: readonly StepNode[],
+    parent: StepGroup | IterateGroup | null,
+  ): StepLocation | null => {
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      if (!node) continue;
+      if (node.id === stepId) return { node, parent, indexInParent: i };
+      if (node.kind !== "step") {
+        const found = visit(node.children, node);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+  return visit(spec.steps, null);
+};
+
+/**
+ * Internal walker shared by every structural mutator. Locates the array
+ * that *directly contains* `anchorStepId`, calls `transform` with that
+ * array + the anchor's index in it, and rebuilds the surrounding tree.
+ * Returns null if no node carried that id (lets each caller raise its
+ * own contextual error).
+ *
+ * Reference-equality discipline: if `transform` returns the same array it
+ * was given (the no-op case for reorder-to-same-index), the function
+ * returns the original spec by reference. Branches that don't contain
+ * the anchor keep their original group/iterate node references too —
+ * same pattern as `updateStepParams`.
+ */
+const transformParentArray = (
+  spec: CipherSpec,
+  anchorStepId: string,
+  transform: (children: readonly StepNode[], indexOfAnchor: number) => readonly StepNode[],
+): CipherSpec | null => {
+  let found = false;
+
+  const visit = (nodes: readonly StepNode[]): readonly StepNode[] => {
+    // First: is the anchor at THIS level? If so, this is the splice site.
+    const idx = nodes.findIndex((n) => n.id === anchorStepId);
+    if (idx >= 0) {
+      found = true;
+      return transform(nodes, idx);
+    }
+    // Otherwise recurse into groups/iterates, threading found-state so we
+    // don't accidentally re-visit if the user's spec has an id collision.
+    let mutated = false;
+    const newChildren = nodes.map((n) => {
+      if (n.kind === "step" || found) return n;
+      const updatedChildren = visit(n.children);
+      if (updatedChildren === n.children) return n;
+      mutated = true;
+      return { ...n, children: updatedChildren };
+    });
+    return mutated ? newChildren : nodes;
+  };
+
+  const newSteps = visit(spec.steps);
+  if (!found) return null;
+  if (newSteps === spec.steps) return spec; // identity short-circuit
+  return { ...spec, steps: newSteps };
+};
+
+/**
+ * Insert `newStep` immediately after `afterStepId`, into the same parent
+ * (top level, group, or iterate body). Throws if no node with that id
+ * exists.
+ *
+ * The new step's `id` is NOT checked for uniqueness — id management is
+ * the caller's responsibility (the palette generates unique ids; the
+ * load path validates at parse time).
+ */
+export const insertStepAfter = (
+  spec: CipherSpec,
+  afterStepId: string,
+  newStep: StepNode,
+): CipherSpec => {
+  const result = transformParentArray(spec, afterStepId, (children, idx) => [
+    ...children.slice(0, idx + 1),
+    newStep,
+    ...children.slice(idx + 1),
+  ]);
+  if (!result) throw new Error(`insertStepAfter: no step with id "${afterStepId}"`);
+  return result;
+};
+
+/**
+ * Insert `newStep` immediately before `beforeStepId`. Mirror of
+ * `insertStepAfter`; same throw-on-missing contract.
+ */
+export const insertStepBefore = (
+  spec: CipherSpec,
+  beforeStepId: string,
+  newStep: StepNode,
+): CipherSpec => {
+  const result = transformParentArray(spec, beforeStepId, (children, idx) => [
+    ...children.slice(0, idx),
+    newStep,
+    ...children.slice(idx),
+  ]);
+  if (!result) throw new Error(`insertStepBefore: no step with id "${beforeStepId}"`);
+  return result;
+};
+
+/**
+ * Remove the node identified by `stepId` from its parent. Removing the
+ * sole child of a group leaves an empty group standing — empty groups
+ * are valid in the data model and may carry meaningful labels the user
+ * wants to keep (a future "fill this round with…" UI affordance).
+ * Throws if no node has that id.
+ */
+export const removeStep = (spec: CipherSpec, stepId: string): CipherSpec => {
+  const result = transformParentArray(spec, stepId, (children, idx) => [
+    ...children.slice(0, idx),
+    ...children.slice(idx + 1),
+  ]);
+  if (!result) throw new Error(`removeStep: no step with id "${stepId}"`);
+  return result;
+};
+
+/**
+ * Move the node identified by `stepId` to a new position WITHIN ITS
+ * CURRENT PARENT. `newIndexInParent` is the target slot in the sibling
+ * array after the move; out-of-range values are clamped to the valid
+ * range `[0, siblings.length - 1]`. Moving to the current index is a
+ * no-op and returns the original spec by reference. Throws if no node
+ * has that id.
+ *
+ * Cross-parent moves (e.g. drag a leaf out of round.3 into round.5) are
+ * intentionally not supported by this function. Callers can express that
+ * as `removeStep` + `insertStepAfter` to keep the semantics explicit.
+ */
+export const reorderStep = (
+  spec: CipherSpec,
+  stepId: string,
+  newIndexInParent: number,
+): CipherSpec => {
+  const result = transformParentArray(spec, stepId, (children, idx) => {
+    if (children.length === 0) return children;
+    const clamped = Math.max(0, Math.min(newIndexInParent, children.length - 1));
+    if (clamped === idx) return children; // identity → outer short-circuits
+    const moving = children[idx];
+    if (!moving) return children;
+    // Build the new order: first splice the moving node out, then splice
+    // it back in at the clamped index. Doing it in two steps keeps the
+    // index math obvious — `clamped` is the post-removal slot, which is
+    // what callers naturally think in.
+    const without = [...children.slice(0, idx), ...children.slice(idx + 1)];
+    return [...without.slice(0, clamped), moving, ...without.slice(clamped)];
+  });
+  if (!result) throw new Error(`reorderStep: no step with id "${stepId}"`);
+  return result;
 };
 
 // ─── Padding-scheme overlay ───────────────────────────────────────────────
