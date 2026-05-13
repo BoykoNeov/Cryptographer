@@ -44,10 +44,11 @@ import type { CipherDocument } from "@/core/document";
 import {
   type PaddingScheme,
   applyPaddingScheme,
+  insertStepAfter,
   updateAllStepsByType,
   updateStepParams,
 } from "@/core/spec-mutations";
-import type { CipherSpec, Json } from "@/core/types";
+import type { CipherSpec, Json, StepLeaf, StepNode } from "@/core/types";
 import { createSignal } from "solid-js";
 import { type Cipher, setCipher as setCipherSignal, useCipher } from "./cipher";
 import {
@@ -208,6 +209,95 @@ export const editStepParams = (stepId: string, params: Json): void => {
  */
 export const editAllStepsByType = (stepType: string, update: (params: Json) => Json): void => {
   setSpec((s) => updateAllStepsByType(s, stepType, update));
+};
+
+/**
+ * Insert a brand-new step leaf into the live spec (Slice 8 of the 2D
+ * editor plan). The palette + GraphView drop handler call this with a
+ * `stepType` registered in the registry and an anchor that says WHERE
+ * relative to the existing tree the new leaf should land.
+ *
+ * Two anchor flavors:
+ *   • `{ kind: "after", stepId }` — uses `insertStepAfter` to place the
+ *     new leaf immediately after that node, into its parent. The anchor
+ *     can be a leaf id OR a container id (group/iterate) — `findStepAndParent`
+ *     handles both since Slice 4.
+ *   • `{ kind: "root-append" }` — appends to `spec.steps`. Used when the
+ *     drop lands on the SVG canvas with no specific node target (today's
+ *     ciphers always have at least one root node, so this is the empty-
+ *     canvas / fallback path).
+ *
+ * The new leaf carries `params: {}` — the runtime will almost certainly
+ * throw on first execution because most step types require parameters
+ * (S-box, block size, …). That's deliberate per the Slice 8 plan: the
+ * inserted leaf is a placeholder the user opens in the ParamEditor to
+ * configure. The Run error surfaces in the existing error banner, telling
+ * the user which step is missing what.
+ *
+ * Id generation: `<last-stepType-segment-without-@N>-<n>`. Example:
+ * `generic.byte-substitution@1` → `byte-substitution-1`. n auto-increments
+ * to dodge collisions with existing leaves of the same stepType.
+ *
+ * Returns the generated id so the caller (GraphView's drop handler) can
+ * route the trace scrubber to the new step's frame once the auto-rerun
+ * lands — even though that frame is likely an ERROR frame for a leaf with
+ * empty params.
+ */
+export const insertStepIntoSpec = (
+  stepType: string,
+  anchor: { kind: "after"; stepId: string } | { kind: "root-append" },
+): string => {
+  const currentSpec = spec();
+  const newId = generateUniqueStepId(currentSpec, stepType);
+  const newLeaf: StepLeaf = {
+    kind: "step",
+    id: newId,
+    type: stepType,
+    params: {},
+  };
+  if (anchor.kind === "after") {
+    setSpec(insertStepAfter(currentSpec, anchor.stepId, newLeaf));
+  } else {
+    // root-append: rebuild the top-level array with the new leaf at the
+    // end. `insertStepAfter` would also work if there's a last element,
+    // but a direct append covers the empty-spec edge case uniformly.
+    setSpec({ ...currentSpec, steps: [...currentSpec.steps, newLeaf] });
+  }
+  return newId;
+};
+
+/**
+ * Walk the spec collecting every existing step / group / iterate id, then
+ * produce the smallest positive integer `n` for which
+ * `<lastSegment>-<n>` is unused. The base segment is the last dot-separated
+ * part of `stepType` with any trailing `@version` chopped off, so
+ * `generic.byte-substitution@1` → base `byte-substitution`. Pure helper,
+ * doesn't read or write the spec store — it just receives the live spec
+ * as an argument.
+ */
+const generateUniqueStepId = (spec: CipherSpec, stepType: string): string => {
+  const lastDot = stepType.lastIndexOf(".");
+  const lastSegment = lastDot >= 0 ? stepType.slice(lastDot + 1) : stepType;
+  const atIdx = lastSegment.indexOf("@");
+  const base = atIdx >= 0 ? lastSegment.slice(0, atIdx) : lastSegment;
+  // Collect every id in the spec — leaves AND groups AND iterates, because
+  // ids share one namespace and a collision with a group id would be just
+  // as bad as one with a leaf id. Cheap to walk on every insert; specs
+  // top out at a few hundred nodes.
+  const usedIds = new Set<string>();
+  const visit = (nodes: readonly StepNode[]): void => {
+    for (const node of nodes) {
+      usedIds.add(node.id);
+      if (node.kind !== "step") visit(node.children);
+    }
+  };
+  visit(spec.steps);
+  // Find the first free `<base>-<n>` starting at n=1. Linear scan is fine
+  // because the worst case is hundreds of inserts of the same type in one
+  // session — well below the threshold where a smarter algorithm pays off.
+  let n = 1;
+  while (usedIds.has(`${base}-${n}`)) n++;
+  return `${base}-${n}`;
 };
 
 /**

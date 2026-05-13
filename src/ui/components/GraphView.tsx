@@ -42,14 +42,15 @@ import {
   deriveAuxGraph,
   replicateHighFanoutSources,
 } from "@/core/graph";
-import { For, Show, createMemo } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import {
   setNodePosition,
   setReplicationMode,
   toggleCollapse,
   useLayoutMap,
 } from "../stores/layout";
-import { useSpec } from "../stores/spec";
+import { registry } from "../stores/registry";
+import { insertStepIntoSpec, useSpec } from "../stores/spec";
 import { getTrace, setFrame, useTraceVersion } from "../stores/trace";
 import {
   ALL_VIEW_DENSITIES,
@@ -64,6 +65,7 @@ import {
   setReplicationEnabled,
   useReplicationEnabled,
 } from "../stores/view-replication";
+import { STEP_TYPE_DRAG_MIME, StepPalette } from "./StepPalette";
 
 // ─── Layout constants ──────────────────────────────────────────────────────
 // All in CSS pixels. The size-and-gap subset scales with the active view
@@ -697,6 +699,100 @@ export const GraphView = () => {
   };
 
   /**
+   * Slice 8 — palette drop wiring.
+   *
+   * Two pieces:
+   *   1. **`dragOverActive`** — a reactive flag set while a step-type drag
+   *      hovers over the canvas. CSS uses it to highlight the drop zone
+   *      (`.graph-drop-zone-active`) so the user gets a visual cue that the
+   *      canvas accepts the drag.
+   *   2. **`handleDrop` / `handleDragOver` / `handleDragLeave`** — HTML5
+   *      DnD plumbing. `dragover` MUST `preventDefault()` for the drop to
+   *      fire (browser default is to reject drops); the `dataTransfer.types`
+   *      check ensures we only accept drags that started from our own
+   *      palette (any old text drag from the OS gets ignored).
+   *
+   * Drop anchoring (the "WHERE in the spec" decision):
+   *   - The drop event's `target` walks up via `closest("[data-drop-anchor]")`.
+   *   - LeafRect's `<g>` carries `data-drop-anchor={clickTargetId}` —
+   *     replica-resolved so a drop on a replica anchors to the SOURCE's
+   *     real stepId (the replica's synthetic `${src}@->${consumer}` id
+   *     doesn't exist in the spec; `insertStepAfter` would throw).
+   *   - ContainerRect's outer `<g>` carries `data-drop-anchor={container.id}`.
+   *     Per advisor + plan: drop-on-container = "after the container in
+   *     its parent", NOT "into the container body". Users wanting "into
+   *     round.5" drop on a specific leaf inside round.5 instead. This
+   *     stays within Slice 4's `insertStepAfter` API.
+   *   - No anchor found → `root-append` (drop on canvas background).
+   *
+   * Replica nodes route via `clickTargetId` the same way clicks do
+   * (see `handleLeafClick`). Collapsed containers stay anchorable through
+   * their outer `<g>` — collapsing hides children but the container's
+   * graph entry persists.
+   */
+  const [dragOverActive, setDragOverActive] = createSignal(false);
+
+  /**
+   * Check whether a drag event carries a step-type payload from our palette.
+   * `dataTransfer.types` is the only field readable during `dragover` —
+   * `getData` is blocked outside `drop` for security reasons. So we sniff
+   * the MIME list to decide whether to call `preventDefault` (which signals
+   * "this is a valid drop target" to the browser).
+   */
+  const isStepTypeDrag = (e: DragEvent): boolean => {
+    const types = e.dataTransfer?.types;
+    if (!types) return false;
+    // `types` is a DOMStringList in some browsers; spread covers both.
+    for (const t of types) {
+      if (t === STEP_TYPE_DRAG_MIME || t === "text/plain") return true;
+    }
+    return false;
+  };
+
+  const handleDragOver = (e: DragEvent): void => {
+    if (!isStepTypeDrag(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    if (!dragOverActive()) setDragOverActive(true);
+  };
+
+  const handleDragLeave = (e: DragEvent): void => {
+    // Only clear when leaving the wrapping element entirely. `dragleave`
+    // fires on every child transition too, so filtering by relatedTarget
+    // keeps the highlight from flickering as the cursor crosses an
+    // internal leaf/container boundary. relatedTarget=null means the
+    // pointer left the document; treat as a real leave.
+    const related = e.relatedTarget as Node | null;
+    const current = e.currentTarget as Node | null;
+    if (related && current && current.contains(related)) return;
+    setDragOverActive(false);
+  };
+
+  const handleDrop = (e: DragEvent): void => {
+    e.preventDefault();
+    setDragOverActive(false);
+    if (!e.dataTransfer) return;
+    // Prefer the custom MIME (palette-authored); fall back to text/plain
+    // for browsers that strip non-standard MIMEs on DnD payloads.
+    const stepType =
+      e.dataTransfer.getData(STEP_TYPE_DRAG_MIME) || e.dataTransfer.getData("text/plain");
+    if (!stepType || !registry.has(stepType)) return;
+    // Walk up from the drop target looking for the nearest `data-drop-anchor`
+    // attribute. `closest` returns the element itself if it matches, so a
+    // drop directly on a `<g class="graph-leaf">` finds itself. Replicas
+    // carry their `clickTargetId` (source's stepId), so the anchor is
+    // always a real spec id.
+    const target = e.target as Element | null;
+    const anchored = target?.closest?.("[data-drop-anchor]") ?? null;
+    const anchorId = anchored?.getAttribute("data-drop-anchor") ?? null;
+    if (anchorId !== null && anchorId.length > 0) {
+      insertStepIntoSpec(stepType, { kind: "after", stepId: anchorId });
+    } else {
+      insertStepIntoSpec(stepType, { kind: "root-append" });
+    }
+  };
+
+  /**
    * Begin a node drag on pointerdown. Works for any node id (container
    * or leaf) — the layout engine treats leaves with pins the same as
    * containers with pins. setPointerCapture is best-effort: jsdom
@@ -771,8 +867,21 @@ export const GraphView = () => {
   };
 
   return (
-    <div class="graph-view">
-      {/* Sticky-header wrapper. The density toolbar and replication-overrides
+    <div class="graph-view-layout" data-testid="graph-view-layout">
+      {/* Slice 8 — step palette. Lives as a left sidebar inside the graph
+          view layout so it's only visible when the user is in graph mode.
+          Drags from the palette dispatch DataTransfer payloads that the
+          canvas's drop handlers below pick up. Doesn't subscribe to spec/
+          trace signals — the registry it lists is static after module load. */}
+      <StepPalette />
+      <div
+        class="graph-view"
+        classList={{ "graph-drop-zone-active": dragOverActive() }}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        {/* Sticky-header wrapper. The density toolbar and replication-overrides
           panel both want to stay visible while the SVG canvas scrolls. They
           previously each set their own `position: sticky` with hardcoded top
           offsets (`top: 0` for the toolbar, `top: 32px` for the panel —
@@ -782,48 +891,48 @@ export const GraphView = () => {
           sidesteps the math: the wrapper sticks at top: 0 and the children
           stack naturally inside it, so the panel can never overlap the
           toolbar regardless of the toolbar's true height. */}
-      <div class="graph-view-sticky-header">
-        {/* Density toolbar (commit 3 of the graph-readability sequence).
+        <div class="graph-view-sticky-header">
+          {/* Density toolbar (commit 3 of the graph-readability sequence).
           Lives inside GraphView because density is graph-specific — the
           linear and JSON views ignore it. Uses `<fieldset>`/`<legend>` for
           the same a11y-friendly group semantics as the byte-format toggle
           in App.tsx (biome's useSemanticElements rule wants a semantic
           group element, not `<div role="group">`). */}
-        <fieldset class="graph-view-toolbar">
-          <legend class="graph-view-toolbar-label">density</legend>
-          <div class="format-toggle">
-            <For each={ALL_VIEW_DENSITIES}>
-              {(d) => (
-                <button
-                  type="button"
-                  classList={{ active: density() === d }}
-                  onClick={() => setViewDensity(d as ViewDensity)}
-                  title={`Switch graph to ${VIEW_DENSITY_LABELS[d]} density`}
-                >
-                  {VIEW_DENSITY_LABELS[d]}
-                </button>
-              )}
-            </For>
-          </div>
-          {/* Commit 4: high-fanout replica toggle. When ON, sources with
+          <fieldset class="graph-view-toolbar">
+            <legend class="graph-view-toolbar-label">density</legend>
+            <div class="format-toggle">
+              <For each={ALL_VIEW_DENSITIES}>
+                {(d) => (
+                  <button
+                    type="button"
+                    classList={{ active: density() === d }}
+                    onClick={() => setViewDensity(d as ViewDensity)}
+                    title={`Switch graph to ${VIEW_DENSITY_LABELS[d]} density`}
+                  >
+                    {VIEW_DENSITY_LABELS[d]}
+                  </button>
+                )}
+              </For>
+            </div>
+            {/* Commit 4: high-fanout replica toggle. When ON, sources with
             >REPLICATION_THRESHOLD outgoing aux edges (AES key-expansion,
             Speck/Serpent key schedules) are replicated as small chips
             next to each consumer, shortening edges and reducing visual
             clutter. Off by default — the "one source, many edges" view
             is also pedagogically valuable. */}
-          <label
-            class="graph-replicate-toggle"
-            title={`Show high-fanout sources (>${REPLICATION_THRESHOLD} outgoing aux edges) as small replicas next to each consumer`}
-          >
-            <input
-              type="checkbox"
-              checked={replicate()}
-              onChange={(e) => setReplicationEnabled(e.currentTarget.checked)}
-            />
-            replicate fan-out
-          </label>
-        </fieldset>
-        {/* Commit 5: per-source replication overrides. Visible only when
+            <label
+              class="graph-replicate-toggle"
+              title={`Show high-fanout sources (>${REPLICATION_THRESHOLD} outgoing aux edges) as small replicas next to each consumer`}
+            >
+              <input
+                type="checkbox"
+                checked={replicate()}
+                onChange={(e) => setReplicationEnabled(e.currentTarget.checked)}
+              />
+              replicate fan-out
+            </label>
+          </fieldset>
+          {/* Commit 5: per-source replication overrides. Visible only when
           the global toggle is ON — master-switch semantic means an
           override panel is meaningless when nothing is replicated. The
           panel lists every aux-edge source with fanout ≥ 2, sorted desc
@@ -835,108 +944,108 @@ export const GraphView = () => {
           store maps "auto" → null (clears the override). The panel sticks
           to the top of the scroll wrapper like the toolbar so it stays
           visible at far-right scroll positions. */}
-        <Show when={replicate() && replicationSources().length > 0}>
-          <div class="graph-replication-panel">
-            <div class="graph-replication-panel-header">
-              replication overrides
-              <span class="graph-replication-panel-hint">
-                auto = follow global threshold ({REPLICATION_THRESHOLD})
-              </span>
-            </div>
-            <For each={replicationSources()}>
-              {(src) => {
-                const currentMode = createMemo<"auto" | "always" | "never">(() => {
-                  const m = replicationModes()[src.id];
-                  return m ?? "auto";
-                });
-                return (
-                  <div class="graph-replication-row" data-testid={`replication-row-${src.id}`}>
-                    <span class="graph-replication-row-id" title={src.id}>
-                      {src.id}
-                    </span>
-                    <span class="graph-replication-row-fanout">
-                      {src.fanout} {src.fanout === 1 ? "edge" : "edges"}
-                    </span>
-                    <div class="format-toggle">
-                      <button
-                        type="button"
-                        classList={{ active: currentMode() === "auto" }}
-                        onClick={() => setReplicationMode(spec().id, src.id, null)}
-                        title="Defer to the global threshold"
-                      >
-                        auto
-                      </button>
-                      <button
-                        type="button"
-                        classList={{ active: currentMode() === "always" }}
-                        onClick={() => setReplicationMode(spec().id, src.id, "always")}
-                        title="Always replicate this source"
-                      >
-                        always
-                      </button>
-                      <button
-                        type="button"
-                        classList={{ active: currentMode() === "never" }}
-                        onClick={() => setReplicationMode(spec().id, src.id, "never")}
-                        title="Never replicate this source"
-                      >
-                        never
-                      </button>
+          <Show when={replicate() && replicationSources().length > 0}>
+            <div class="graph-replication-panel">
+              <div class="graph-replication-panel-header">
+                replication overrides
+                <span class="graph-replication-panel-hint">
+                  auto = follow global threshold ({REPLICATION_THRESHOLD})
+                </span>
+              </div>
+              <For each={replicationSources()}>
+                {(src) => {
+                  const currentMode = createMemo<"auto" | "always" | "never">(() => {
+                    const m = replicationModes()[src.id];
+                    return m ?? "auto";
+                  });
+                  return (
+                    <div class="graph-replication-row" data-testid={`replication-row-${src.id}`}>
+                      <span class="graph-replication-row-id" title={src.id}>
+                        {src.id}
+                      </span>
+                      <span class="graph-replication-row-fanout">
+                        {src.fanout} {src.fanout === 1 ? "edge" : "edges"}
+                      </span>
+                      <div class="format-toggle">
+                        <button
+                          type="button"
+                          classList={{ active: currentMode() === "auto" }}
+                          onClick={() => setReplicationMode(spec().id, src.id, null)}
+                          title="Defer to the global threshold"
+                        >
+                          auto
+                        </button>
+                        <button
+                          type="button"
+                          classList={{ active: currentMode() === "always" }}
+                          onClick={() => setReplicationMode(spec().id, src.id, "always")}
+                          title="Always replicate this source"
+                        >
+                          always
+                        </button>
+                        <button
+                          type="button"
+                          classList={{ active: currentMode() === "never" }}
+                          onClick={() => setReplicationMode(spec().id, src.id, "never")}
+                          title="Never replicate this source"
+                        >
+                          never
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                );
-              }}
-            </For>
-          </div>
-        </Show>
-      </div>
-      <Show
-        when={graph().nodes.length > 0 || graph().containers.length > 0}
-        fallback={<div class="muted">no nodes to display</div>}
-      >
-        <svg
-          class="graph-view-svg"
-          width={layout().canvasW}
-          height={layout().canvasH}
-          viewBox={`0 0 ${layout().canvasW} ${layout().canvasH}`}
-          role="img"
-          aria-label="Aux-flow graph of the active cipher spec"
+                  );
+                }}
+              </For>
+            </div>
+          </Show>
+        </div>
+        <Show
+          when={graph().nodes.length > 0 || graph().containers.length > 0}
+          fallback={<div class="muted">no nodes to display</div>}
         >
-          {/* Arrowhead marker definitions. One per edge kind so each can be
+          <svg
+            class="graph-view-svg"
+            width={layout().canvasW}
+            height={layout().canvasH}
+            viewBox={`0 0 ${layout().canvasW} ${layout().canvasH}`}
+            role="img"
+            aria-label="Aux-flow graph of the active cipher spec"
+          >
+            {/* Arrowhead marker definitions. One per edge kind so each can be
               tinted to match the edge stroke (state spine = solid; aux
               annotation = translucent). markerUnits=userSpaceOnUse keeps the
               marker size fixed in canvas pixels regardless of stroke width.
               `orient=auto` rotates the marker to follow the path tangent;
               `refX=8` aligns the arrow tip with the path endpoint (the path
               itself is already inset by ARROW_INSET — see EdgePath). */}
-          <defs>
-            <marker
-              id="graph-arrow-aux"
-              viewBox="0 0 10 10"
-              refX="8"
-              refY="5"
-              markerWidth="8"
-              markerHeight="8"
-              markerUnits="userSpaceOnUse"
-              orient="auto"
-            >
-              <path class="graph-arrow-glyph-aux" d="M 0 0 L 10 5 L 0 10 z" />
-            </marker>
-            <marker
-              id="graph-arrow-state"
-              viewBox="0 0 10 10"
-              refX="8"
-              refY="5"
-              markerWidth="9"
-              markerHeight="9"
-              markerUnits="userSpaceOnUse"
-              orient="auto"
-            >
-              <path class="graph-arrow-glyph-state" d="M 0 0 L 10 5 L 0 10 z" />
-            </marker>
-          </defs>
+            <defs>
+              <marker
+                id="graph-arrow-aux"
+                viewBox="0 0 10 10"
+                refX="8"
+                refY="5"
+                markerWidth="8"
+                markerHeight="8"
+                markerUnits="userSpaceOnUse"
+                orient="auto"
+              >
+                <path class="graph-arrow-glyph-aux" d="M 0 0 L 10 5 L 0 10 z" />
+              </marker>
+              <marker
+                id="graph-arrow-state"
+                viewBox="0 0 10 10"
+                refX="8"
+                refY="5"
+                markerWidth="9"
+                markerHeight="9"
+                markerUnits="userSpaceOnUse"
+                orient="auto"
+              >
+                <path class="graph-arrow-glyph-state" d="M 0 0 L 10 5 L 0 10 z" />
+              </marker>
+            </defs>
 
-          {/* Containers first so leaves render on top of their frames.
+            {/* Containers first so leaves render on top of their frames.
               `box` is a createMemo so the JSX binding tracks layout()
               changes — without it, the captured const goes stale when
               the layout store updates (drag fires setNodePosition; the
@@ -945,104 +1054,106 @@ export const GraphView = () => {
               update the DOM). Same shape for edges and leaves below.
               See CLAUDE.md's "Solid `For` callbacks aren't reactive
               scopes" note. */}
-          <For each={graph().containers}>
-            {(container) => {
-              const box = createMemo(() => layout().boxes.get(container.id));
-              return (
-                <Show when={box()}>
-                  {(b) => (
-                    <ContainerRect
-                      container={container}
-                      box={b()}
-                      isCollapsed={collapsedSet().has(container.id)}
-                      consts={consts()}
-                      onDragStart={(e) => startNodeDrag(container.id, e)}
-                      onToggleCollapse={() => toggleCollapse(spec().id, container.id)}
-                    />
-                  )}
-                </Show>
-              );
-            }}
-          </For>
+            <For each={graph().containers}>
+              {(container) => {
+                const box = createMemo(() => layout().boxes.get(container.id));
+                return (
+                  <Show when={box()}>
+                    {(b) => (
+                      <ContainerRect
+                        container={container}
+                        box={b()}
+                        isCollapsed={collapsedSet().has(container.id)}
+                        consts={consts()}
+                        onDragStart={(e) => startNodeDrag(container.id, e)}
+                        onToggleCollapse={() => toggleCollapse(spec().id, container.id)}
+                      />
+                    )}
+                  </Show>
+                );
+              }}
+            </For>
 
-          {/* Edges between leaf/container centers. Drawn before leaves so the
+            {/* Edges between leaf/container centers. Drawn before leaves so the
               lines tuck under the rectangle fills. */}
-          <For each={graph().edges}>
-            {(edge) => {
-              const fromBox = createMemo(() => layout().boxes.get(edge.from));
-              const toBox = createMemo(() => layout().boxes.get(edge.to));
-              return (
-                <Show when={fromBox() && toBox()}>
-                  <EdgePath
-                    // biome-ignore lint/style/noNonNullAssertion: <Show> guard above
-                    from={fromBox()!}
-                    // biome-ignore lint/style/noNonNullAssertion: <Show> guard above
-                    to={toBox()!}
-                    auxKey={edge.auxKey}
-                    kind={edge.kind}
-                  />
-                </Show>
-              );
-            }}
-          </For>
+            <For each={graph().edges}>
+              {(edge) => {
+                const fromBox = createMemo(() => layout().boxes.get(edge.from));
+                const toBox = createMemo(() => layout().boxes.get(edge.to));
+                return (
+                  <Show when={fromBox() && toBox()}>
+                    <EdgePath
+                      // biome-ignore lint/style/noNonNullAssertion: <Show> guard above
+                      from={fromBox()!}
+                      // biome-ignore lint/style/noNonNullAssertion: <Show> guard above
+                      to={toBox()!}
+                      auxKey={edge.auxKey}
+                      kind={edge.kind}
+                    />
+                  </Show>
+                );
+              }}
+            </For>
 
-          {/* Leaves last so they sit on top. Root-level leaves (those with
+            {/* Leaves last so they sit on top. Root-level leaves (those with
               empty containerPath — e.g. AES's `key-expansion`,
               `initial.add-round-key`) are draggable; nested leaves keep
               their click-only behavior so users don't accidentally pull
               `round.5.sub-bytes` out of its parent group. The single
               `startNodeDrag` handler covers both: when draggable, drag +
               click; when not, an explicit click handler stays on the <g>. */}
-          <For each={graph().nodes}>
-            {(node) => {
-              const box = createMemo(() => layout().boxes.get(node.stepId));
-              const isInsideIterate = node.containerPath.some((id) => {
-                const c = containersById().get(id);
-                return c?.kind === "iterate";
-              });
-              const isRootLevel = node.containerPath.length === 0;
-              const isReplica = node.replicaOf !== undefined;
-              // Replicas route clicks through `replicaOf` so the scrubber
-              // lands on the SOURCE's frame, not on the replica's synthetic
-              // id (which has no matching trace frame). Replicas are also
-              // never draggable — they're auto-placed visual references.
-              const clickTargetId = node.replicaOf ?? node.stepId;
-              // exactOptionalPropertyTypes is on, so we conditionally spread
-              // blockSpan rather than passing `undefined` as a real value.
-              const blockSpanProps =
-                isInsideIterate && node.blockSpan !== undefined
-                  ? { blockSpan: node.blockSpan }
-                  : {};
-              // Conditional spread for the drag handler — only present on
-              // root-level leaves AND not replicas (replicas are auto-placed).
-              const dragProps =
-                isRootLevel && !isReplica
-                  ? {
-                      onPointerDown: (e: PointerEvent) =>
-                        startNodeDrag(node.stepId, e, () => handleLeafClick(clickTargetId)),
-                    }
-                  : {};
-              return (
-                <Show when={box()}>
-                  {(b) => (
-                    <LeafRect
-                      stepId={node.stepId}
-                      label={shortLeafLabel(clickTargetId)}
-                      stepType={node.stepType}
-                      box={b()}
-                      draggable={isRootLevel && !isReplica}
-                      isReplica={isReplica}
-                      {...blockSpanProps}
-                      {...dragProps}
-                      onClick={() => handleLeafClick(clickTargetId)}
-                    />
-                  )}
-                </Show>
-              );
-            }}
-          </For>
-        </svg>
-      </Show>
+            <For each={graph().nodes}>
+              {(node) => {
+                const box = createMemo(() => layout().boxes.get(node.stepId));
+                const isInsideIterate = node.containerPath.some((id) => {
+                  const c = containersById().get(id);
+                  return c?.kind === "iterate";
+                });
+                const isRootLevel = node.containerPath.length === 0;
+                const isReplica = node.replicaOf !== undefined;
+                // Replicas route clicks through `replicaOf` so the scrubber
+                // lands on the SOURCE's frame, not on the replica's synthetic
+                // id (which has no matching trace frame). Replicas are also
+                // never draggable — they're auto-placed visual references.
+                const clickTargetId = node.replicaOf ?? node.stepId;
+                // exactOptionalPropertyTypes is on, so we conditionally spread
+                // blockSpan rather than passing `undefined` as a real value.
+                const blockSpanProps =
+                  isInsideIterate && node.blockSpan !== undefined
+                    ? { blockSpan: node.blockSpan }
+                    : {};
+                // Conditional spread for the drag handler — only present on
+                // root-level leaves AND not replicas (replicas are auto-placed).
+                const dragProps =
+                  isRootLevel && !isReplica
+                    ? {
+                        onPointerDown: (e: PointerEvent) =>
+                          startNodeDrag(node.stepId, e, () => handleLeafClick(clickTargetId)),
+                      }
+                    : {};
+                return (
+                  <Show when={box()}>
+                    {(b) => (
+                      <LeafRect
+                        stepId={node.stepId}
+                        label={shortLeafLabel(clickTargetId)}
+                        stepType={node.stepType}
+                        box={b()}
+                        draggable={isRootLevel && !isReplica}
+                        isReplica={isReplica}
+                        dropAnchorId={clickTargetId}
+                        {...blockSpanProps}
+                        {...dragProps}
+                        onClick={() => handleLeafClick(clickTargetId)}
+                      />
+                    )}
+                  </Show>
+                );
+              }}
+            </For>
+          </svg>
+        </Show>
+      </div>
     </div>
   );
 };
@@ -1060,6 +1171,14 @@ const LeafRect = (props: {
    * adds `.graph-leaf-replica` class so CSS can distinguish a visual
    * reference (dashed border, lighter fill) from a real leaf. */
   isReplica: boolean;
+  /**
+   * The anchor id used for a palette drop landing on this leaf (Slice 8).
+   * For replicas the parent passes the SOURCE's stepId (via
+   * `clickTargetId`) — the replica's synthetic `${src}@->${consumer}` id
+   * doesn't exist in the spec, so the source's id is what
+   * `insertStepAfter` actually needs.
+   */
+  dropAnchorId: string;
   /** Present only when draggable. The parent wires this to `startNodeDrag`
    * with the leaf's onClick as the sub-threshold fallback, so clicks still
    * scrub the trace and drags pin the position. */
@@ -1087,6 +1206,7 @@ const LeafRect = (props: {
       class={`graph-leaf${props.draggable ? " graph-leaf-draggable" : ""}${
         props.isReplica ? " graph-leaf-replica" : ""
       }`}
+      data-drop-anchor={props.dropAnchorId}
       onPointerDown={props.onPointerDown}
       onClick={props.draggable ? undefined : props.onClick}
       onKeyDown={(e) => {
@@ -1146,7 +1266,10 @@ const ContainerRect = (props: {
   // for the available-width arithmetic, so it also tracks density flips.
   const labelTL = createMemo(() => labelTextLength(props.container, props.box.w, props.consts));
   return (
-    <g class={`graph-container graph-container-${props.container.kind}`}>
+    <g
+      class={`graph-container graph-container-${props.container.kind}`}
+      data-drop-anchor={props.container.id}
+    >
       <title>
         {props.container.kind}: {props.container.id}
         {props.container.blockSpan !== undefined && props.container.blockSpan > 1

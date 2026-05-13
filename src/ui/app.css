@@ -1817,3 +1817,125 @@ button:disabled {
   fill: var(--text);
   fill-opacity: 0.9;
 }
+
+/* ─── Slice 8: step palette + drop affordance ────────────────────────────
+   The graph view becomes a two-column layout in graph mode: palette on the
+   left (sticky / fixed width), scrollable SVG canvas on the right. Linear
+   and JSON tabs don't render this layout — the palette lives inside
+   GraphView, so it's automatically scoped to the graph view.
+
+   `min-width: 0` on the SVG wrapper is the standard flex-child quirk to
+   let it shrink below its content's natural width — without it the SVG
+   would push the palette off-screen on narrow viewports. */
+
+.graph-view-layout {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.graph-view-layout > .graph-view {
+  /* Take the remaining horizontal space after the palette. Same min-width
+     escape hatch as the standard flex layout pattern. */
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Drop-zone highlight when a palette drag is over the canvas. Subtle —
+   a 2px inset ring so it doesn't fight with the existing 1px border. */
+.graph-drop-zone-active {
+  outline: 2px dashed var(--accent);
+  outline-offset: -3px;
+}
+
+/* Palette sidebar. Fixed-ish width (clamped) so it stays usable on small
+   viewports without dominating big ones. Sticky-top inside the layout so
+   it remains visible as the SVG scrolls horizontally past the viewport
+   edge. */
+.step-palette {
+  flex: 0 0 200px;
+  max-height: 600px;
+  overflow-y: auto;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.step-palette-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 2px 0;
+  color: var(--muted);
+}
+
+.step-palette-hint {
+  font-size: 11px;
+  margin: 0 0 10px 0;
+  color: var(--muted);
+}
+
+.step-palette-group {
+  margin: 0 0 10px 0;
+}
+
+.step-palette-group-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 4px 0;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.step-palette-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.step-palette-entry {
+  /* Looks like a card, behaves like a draggable handle. `cursor: grab`
+     is the standard affordance for "this can be dragged"; the browser
+     switches to `cursor: grabbing` automatically during the drag, but
+     we don't need to set that ourselves. */
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: grab;
+  user-select: none;
+}
+
+.step-palette-entry:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover, var(--bg));
+}
+
+.step-palette-entry:active {
+  /* Active state == cursor pressed down (pre-drag). Subtle visual nudge
+     so the user gets feedback before the browser's drag ghost appears. */
+  cursor: grabbing;
+}
+
+.step-palette-entry-name {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.step-palette-entry-type {
+  /* Full step type id (e.g. `generic.byte-substitution@1`) shown small
+     and dim — useful for the user who wants to know what registry key
+     they're inserting, without dominating the row. */
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--font-mono, monospace);
+}

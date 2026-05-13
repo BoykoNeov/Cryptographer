@@ -636,8 +636,13 @@ const SCHEME_STEP_TYPES: Record<
  * Step types reserved for the padding overlay. Derived from
  * `SCHEME_STEP_TYPES` plus the two shape-bridge steps so adding a new
  * scheme automatically extends what gets stripped on a re-apply.
+ *
+ * Exported (Slice 8) so the palette can exclude these types — they're
+ * managed by the padding selector and would silently vanish on the next
+ * padding toggle if a user palette-dropped one (see `applyPaddingScheme`
+ * below: every call starts with `stripPaddingLeaves(spec.steps)`).
  */
-const PADDING_STEP_TYPES: ReadonlySet<string> = new Set<string>([
+export const PADDING_STEP_TYPES: ReadonlySet<string> = new Set<string>([
   ...Object.values(SCHEME_STEP_TYPES).flatMap((s) => [s.padType, s.unpadType]),
   "generic.load-block@1",
   "generic.store-block@1",
