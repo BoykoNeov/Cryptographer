@@ -734,6 +734,42 @@ button:disabled {
   gap: 4px;
 }
 
+/* Editable aux-name text input used by the Slice 10 aux primitive blocks
+   (aux-load / aux-xor / aux-copy). Same monospace/colorway as .byte-cell
+   so the param editor stays visually consistent across cell-shaped and
+   identifier-shaped inputs. Width is generous because aux keys like
+   "roundKey.10" or "feedback-stage-1" routinely run past 12 chars. */
+.aux-name-input {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 2px 6px;
+  width: 180px;
+  max-width: 100%;
+}
+
+.aux-name-input:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: 0;
+}
+
+/* +byte / −byte buttons under the aux-load value row. Tiny, low-key —
+   the user usually only touches these once per spec, when first wiring
+   up an aux-load. */
+.aux-byte-controls {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.aux-byte-controls button {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
 .small {
   font-size: 11px;
 }

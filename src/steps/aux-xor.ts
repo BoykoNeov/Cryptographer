@@ -1,0 +1,167 @@
+/**
+ * XOR one aux byte sequence into another.
+ *
+ * Reads `aux[from]` and `aux[into]`; writes the byte-wise XOR back to
+ * `aux[into]`. State is passthrough. The second of three Slice 10 aux
+ * primitives that, together with `aux-load` and `aux-copy`, let a user
+ * compose block-cipher chaining modes (CBC, OFB, CFB) inside the visual
+ * editor without writing a custom executor.
+ *
+ * ## Missing-aux semantics — graceful, NOT throwing
+ *
+ * The whole point of this step shipping in the same slice as the visual
+ * editor's palette is that users will drop it onto a graph and wire it up
+ * one click at a time. Half-wired specs are the normal authoring state;
+ * the step needs to survive them.
+ *
+ *  - If EITHER \`aux[from]\` or \`aux[into]\` is undefined, this step
+ *    returns passthrough with NO \`auxWrites\`. It still DECLARES both
+ *    keys in \`auxReads\` so the runtime records the request — Slice 9's
+ *    \`validateGraph\` reads \`TraceFrame.auxReadMissing\` to surface an
+ *    "orphaned-read" warning on the node.
+ *
+ *  - If BOTH operands are present but their values are malformed
+ *    (non-Uint8Array, or length mismatch), the step THROWS. That's a
+ *    programmer/spec error — the kind of mistake a warning glyph
+ *    wouldn't help with, because the spec has the wrong shape.
+ *
+ * The distinction the runtime cares about is "missing key" (a wiring
+ * decision the user is still making) vs "malformed value" (a structural
+ * bug). The first becomes a soft warning; the second halts the run.
+ *
+ * ## Why XOR
+ *
+ * XOR is self-inverse: applying the same operand twice cancels out, which
+ * is why every block-cipher chaining mode that uses feedback reduces to a
+ * pair of XORs at the start and end of the chain. Surfacing XOR as a
+ * standalone aux primitive lets students see the structure plainly,
+ * separate from a specific cipher's round function.
+ */
+
+import type { AuxValue, Json, StepDocumentation, StepExecutor } from "../core/types";
+
+export const auxXor: StepExecutor = (state, params, ctx) => {
+  const { from, into } = readParams(params);
+
+  // Both reads are declared up front, regardless of presence. The runtime
+  // splits the list into `auxRead` (present) and `auxReadMissing` (absent)
+  // based on `ctx.aux.get` results — see `runtime.ts:104-113`. Declaring
+  // here is what makes orphan warnings light up downstream.
+  const auxReads: readonly string[] = [from, into];
+
+  const fromValue = ctx.aux.get(from);
+  const intoValue = ctx.aux.get(into);
+
+  // Missing-key path: passthrough, no write. Slice 9's validateGraph picks
+  // up the orphan from `frame.auxReadMissing` and renders a warning glyph.
+  if (fromValue === undefined || intoValue === undefined) {
+    return { state, auxReads };
+  }
+
+  // Structural validation: both present, both must be Uint8Array of equal
+  // length. Anything else is a spec authoring bug — throw with a message
+  // that points at the offending key so the App's error banner can show it.
+  if (!(fromValue instanceof Uint8Array)) {
+    throw new Error(
+      `aux-xor: aux["${from}"] must be a Uint8Array, got ${describeValue(fromValue)}`,
+    );
+  }
+  if (!(intoValue instanceof Uint8Array)) {
+    throw new Error(
+      `aux-xor: aux["${into}"] must be a Uint8Array, got ${describeValue(intoValue)}`,
+    );
+  }
+  if (fromValue.length !== intoValue.length) {
+    throw new Error(
+      `aux-xor: length mismatch — aux["${from}"]=${fromValue.length} bytes, aux["${into}"]=${intoValue.length} bytes`,
+    );
+  }
+
+  const out = new Uint8Array(fromValue.length);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = (fromValue[i] ?? 0) ^ (intoValue[i] ?? 0);
+  }
+  const auxWrites = new Map<string, AuxValue>([[into, out]]);
+  return { state, auxReads, auxWrites };
+};
+
+export const auxXorDoc: StepDocumentation = {
+  name: "Aux XOR",
+  summary: "XOR aux[from] into aux[into], writing the result back to aux[into].",
+  detail: `## Aux XOR
+
+Byte-wise XOR of two aux values, with the result replacing one of them:
+
+\`\`\`
+state                       → state (passthrough)
+aux[from], aux[into]        → aux[into] := aux[from] ⊕ aux[into]
+\`\`\`
+
+The operation is symmetric in its inputs (XOR is commutative), but the
+asymmetric \`from\`/\`into\` naming captures the intent: \`into\` is the
+running accumulator (e.g. CBC's feedback buffer), \`from\` is the new
+contribution being mixed in (e.g. the current plaintext block).
+
+**Self-inverse property.** \`A ⊕ B ⊕ B = A\`. Applying the same step twice
+with the same \`from\` (and an unchanged \`aux[from]\`) cancels out — which
+is why decryption in feedback modes reuses the same XOR with the previous
+ciphertext, no separate "unmix" step needed.
+
+**Graceful when wires aren't connected yet.** If either operand's aux key
+hasn't been written by an upstream step at the time this step runs, the
+step is a passthrough — no error, no write. The visual editor's
+validation overlay flags such missing reads with an orange \`!\` glyph on
+the node. This lets users build half-wired specs incrementally and see
+exactly which connection is still missing.
+
+**Structural errors still throw.** If both operands are present but they
+aren't Uint8Arrays, or their lengths don't match, the step halts with a
+descriptive error. That's a different class of mistake — a wiring problem
+becomes a soft warning; a shape problem stops the run so it can't quietly
+produce wrong output.`,
+  params: new Map([
+    [
+      "from",
+      "Aux key whose value is the XOR operand to mix IN. Read-only — this step does not modify aux[from].",
+    ],
+    [
+      "into",
+      "Aux key whose value is BOTH read (as the second operand) and overwritten with the result.",
+    ],
+  ]),
+  references: [
+    "NIST SP 800-38A §6.2 (CBC mode)",
+    "NIST SP 800-38A §6.5 (CFB mode)",
+    "NIST SP 800-38A §6.4 (OFB mode)",
+  ],
+};
+
+const readParams = (params: Json): { from: string; into: string } => {
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("aux-xor requires params.from + params.into");
+  }
+  const p = params as { from?: unknown; into?: unknown };
+  if (typeof p.from !== "string" || p.from.length === 0) {
+    throw new Error("aux-xor: from must be a non-empty string");
+  }
+  if (typeof p.into !== "string" || p.into.length === 0) {
+    throw new Error("aux-xor: into must be a non-empty string");
+  }
+  return { from: p.from, into: p.into };
+};
+
+/**
+ * Render an AuxValue's shape compactly for an error message. AuxValue is a
+ * union of State / Uint8Array / number / bigint / readonly State[] — a
+ * raw `typeof` of "object" doesn't tell the user what went wrong.
+ */
+const describeValue = (v: unknown): string => {
+  if (v === null || v === undefined) return String(v);
+  if (typeof v === "number") return `number (${v})`;
+  if (typeof v === "bigint") return "bigint";
+  if (Array.isArray(v)) return `State[] (length ${v.length})`;
+  if (typeof v === "object" && v !== null && "shape" in v) {
+    return `State<${(v as { shape: string }).shape}>`;
+  }
+  return typeof v;
+};

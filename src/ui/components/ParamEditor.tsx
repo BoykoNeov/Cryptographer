@@ -14,7 +14,7 @@
 
 import { findStep } from "@/core/spec-mutations";
 import type { Json, StepLeaf, TraceFrame } from "@/core/types";
-import { For, Match, Show, Switch } from "solid-js";
+import { For, Match, Show, Switch, createSignal } from "solid-js";
 import { editAllStepsByType, editStepParams, useSpec } from "../stores/spec";
 import { ByteCellInput } from "./ByteCellInput";
 import { MatrixEditor } from "./MatrixEditor";
@@ -120,6 +120,15 @@ export const ParamEditor = (props: Props) => {
               }
             >
               <NoParamsBlock label="Linear transform has no editable parameters." />
+            </Match>
+            <Match when={getStep().type === "generic.aux-load@1"}>
+              <AuxLoadBlock step={getStep()} />
+            </Match>
+            <Match when={getStep().type === "generic.aux-xor@1"}>
+              <AuxXorBlock step={getStep()} />
+            </Match>
+            <Match when={getStep().type === "generic.aux-copy@1"}>
+              <AuxCopyBlock step={getStep()} />
             </Match>
           </Switch>
         </div>
@@ -603,6 +612,217 @@ const SerpentSubBytesBlock = (props: BlockProps) => {
 // (the Serpent LT and inverse LT). Avoids the raw-JSON fallback rendering
 // `{}` for an empty params object.
 const NoParamsBlock = (props: { label: string }) => <div class="muted small">{props.label}</div>;
+
+// ─── Slice 10 aux primitives ─────────────────────────────────────────────
+//
+// These three step types arrive on the canvas via palette drop with empty
+// params, so unlike the structural read-only blocks above (KeyExpansion,
+// SpeckKeySchedule, AddRoundKey), they MUST be editable in place —
+// otherwise the user can't fill in the aux names and the step never runs.
+//
+// No ApplyAllRow on any of them: every aux-load/aux-xor/aux-copy leaf is
+// expected to point at distinct aux keys by design (the whole point of the
+// primitives is wiring DIFFERENT slots together). Copying one step's
+// params onto every sibling would silently route all of them at the same
+// slot and produce wrong output — same reasoning as AddRoundKeyBlock.
+
+// Generic editable text-input row used by the aux-primitive blocks. Keeps
+// the per-block bodies tight and the input styling consistent with the
+// `.param-scalar-row` look of the read-only blocks above.
+const AuxNameInput = (props: {
+  value: string;
+  placeholder: string;
+  onCommit: (v: string) => void;
+}) => {
+  const [draft, setDraft] = createSignal(props.value);
+  // Re-sync the local draft if the upstream value changes (e.g. another
+  // tab edits the spec, or an Apply-to-all on a different step type lands).
+  let lastUpstream = props.value;
+  const syncedDraft = () => {
+    if (props.value !== lastUpstream) {
+      lastUpstream = props.value;
+      setDraft(props.value);
+    }
+    return draft();
+  };
+  const commit = () => {
+    const next = draft().trim();
+    if (next !== props.value) props.onCommit(next);
+    // Snap draft to the committed value (or upstream if commit was a no-op).
+    setDraft(next || props.value);
+  };
+  return (
+    <input
+      type="text"
+      class="aux-name-input"
+      spellcheck={false}
+      placeholder={props.placeholder}
+      value={syncedDraft()}
+      onInput={(e) => setDraft(e.currentTarget.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          commit();
+          e.currentTarget.blur();
+        } else if (e.key === "Escape") {
+          setDraft(props.value);
+          e.currentTarget.blur();
+        }
+      }}
+    />
+  );
+};
+
+// aux-load: { auxName: string, value: number[] }.
+// Renders an editable text input for the destination aux key + a horizontal
+// row of ByteCellInput byte cells for `value` (reuses the `.rcon-row`
+// styling from KeyExpansionBlock). Append/remove buttons let the user
+// grow/shrink the byte sequence — palette inserts start at length 0 and
+// the user adds bytes one at a time.
+const AuxLoadBlock = (props: { step: StepLeaf }) => {
+  const params = (): { auxName?: string; value?: readonly number[] } => props.step.params as never;
+  const auxName = () => params().auxName ?? "";
+  const value = (): readonly number[] => params().value ?? [];
+
+  const writeParams = (patch: Record<string, Json>) => {
+    editStepParams(props.step.id, {
+      ...(props.step.params as Record<string, Json>),
+      ...patch,
+    });
+  };
+
+  return (
+    <>
+      <dl class="param-scalars">
+        <div class="param-scalar-row">
+          <dt>Aux name (write)</dt>
+          <dd>
+            <AuxNameInput
+              value={auxName()}
+              placeholder="e.g. iv, counter, tweak"
+              onCommit={(v) => writeParams({ auxName: v })}
+            />
+          </dd>
+        </div>
+      </dl>
+      <div class="param-section">
+        <div class="param-section-label">Value (bytes — {value().length})</div>
+        <div class="rcon-row">
+          <For each={value()}>
+            {(byte, i) => (
+              <ByteCellInput
+                value={byte}
+                onCommit={(next) => {
+                  const out = [...value()];
+                  out[i()] = next;
+                  writeParams({ value: out });
+                }}
+              />
+            )}
+          </For>
+        </div>
+        <div class="aux-byte-controls">
+          <button
+            type="button"
+            onClick={() => writeParams({ value: [...value(), 0] })}
+            title="Append a zero byte to the value"
+          >
+            + byte
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const v = value();
+              if (v.length > 0) writeParams({ value: v.slice(0, -1) });
+            }}
+            disabled={value().length === 0}
+            title="Drop the last byte"
+          >
+            − byte
+          </button>
+        </div>
+      </div>
+    </>
+  );
+};
+
+// aux-xor: { from: string, into: string }.
+// Two editable aux-name inputs. The graceful-on-missing semantic is in the
+// executor — leaving either field empty just produces an orphaned-read
+// warning glyph in the graph view rather than throwing.
+const AuxXorBlock = (props: { step: StepLeaf }) => {
+  const params = (): { from?: string; into?: string } => props.step.params as never;
+
+  const writeParams = (patch: Record<string, Json>) => {
+    editStepParams(props.step.id, {
+      ...(props.step.params as Record<string, Json>),
+      ...patch,
+    });
+  };
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>From (read)</dt>
+        <dd>
+          <AuxNameInput
+            value={params().from ?? ""}
+            placeholder="aux key to XOR IN"
+            onCommit={(v) => writeParams({ from: v })}
+          />
+        </dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Into (read+write)</dt>
+        <dd>
+          <AuxNameInput
+            value={params().into ?? ""}
+            placeholder="aux key to accumulate into"
+            onCommit={(v) => writeParams({ into: v })}
+          />
+        </dd>
+      </div>
+    </dl>
+  );
+};
+
+// aux-copy: { from: string, to: string }. Mirror of AuxXorBlock with the
+// destination key labelled `to` to match the executor's params.
+const AuxCopyBlock = (props: { step: StepLeaf }) => {
+  const params = (): { from?: string; to?: string } => props.step.params as never;
+
+  const writeParams = (patch: Record<string, Json>) => {
+    editStepParams(props.step.id, {
+      ...(props.step.params as Record<string, Json>),
+      ...patch,
+    });
+  };
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>From (read)</dt>
+        <dd>
+          <AuxNameInput
+            value={params().from ?? ""}
+            placeholder="aux key to copy FROM"
+            onCommit={(v) => writeParams({ from: v })}
+          />
+        </dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>To (write)</dt>
+        <dd>
+          <AuxNameInput
+            value={params().to ?? ""}
+            placeholder="aux key to copy TO"
+            onCommit={(v) => writeParams({ to: v })}
+          />
+        </dd>
+      </div>
+    </dl>
+  );
+};
 
 // ─── Apply-to-all button ─────────────────────────────────────────────────
 

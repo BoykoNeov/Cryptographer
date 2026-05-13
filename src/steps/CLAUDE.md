@@ -68,6 +68,53 @@ Then a `CipherSpec` references the step type by string and provides params:
 - **Aux values that aren't `Uint8Array` when the step expects them.** Assertion: `if (!(rk instanceof Uint8Array) || rk.length !== 16) throw new Error(...)`. Better than a misleading XOR result.
 - **Off-by-one errors in cyclic shifts.** AES `ShiftRows` shifts row `r` LEFT by `shifts[r]`. The inverse is shifting RIGHT by the same amounts, equivalent to LEFT by `(4 - shifts[r]) mod 4` = `[0, 3, 2, 1]`. Test both directions with a known vector.
 
+## Compose your own block-cipher mode (Slice 10 recipe)
+
+Three small step types — `generic.aux-load@1`, `generic.aux-xor@1`,
+`generic.aux-copy@1` — exist so a user can construct chaining modes (CBC,
+OFB, CFB) entirely inside the visual editor, without writing a custom
+executor. Each is dataflow-only: state is passthrough, the work happens
+over the `aux` map. Each is graceful on missing reads — wiring up a spec
+one step at a time produces orange `!` warning dots on under-wired nodes
+instead of throwing.
+
+**CBC encryption (chaining math), 2 blocks:**
+
+```text
+aux-load IV            → aux[iv]      (the initialization vector literal)
+aux-load P0            → aux[p0]      (or seed via a state↔aux bridge later)
+aux-load P1            → aux[p1]
+aux-copy iv → feedback                 (initialize the running chain)
+aux-xor  p0 → feedback                 (feedback now = P0 ⊕ IV = C0)
+<cipher core>                          (when a state↔aux bridge primitive lands)
+aux-copy feedback → c0                 (snapshot before next iteration overwrites)
+aux-xor  p1 → feedback                 (feedback now = P1 ⊕ C0 = C1)
+aux-copy feedback → c1
+```
+
+**Why each primitive earns its place:**
+
+- `aux-load` is the only way to introduce a literal (IV, counter,
+  per-mode constant) without baking it into another step's params.
+- `aux-xor` is in-place by design — it's the chain accumulator. Pairing
+  it with `aux-copy` is what gives you a per-iteration snapshot.
+- `aux-copy` doubles as a rename/router when one step's output needs to
+  feed two different downstream consumers under different aux names.
+
+**Decryption** is symmetric: each block's plaintext recovers as `P_i =
+C_i ⊕ C_{i-1}` (with `C_{-1} = IV`). Wire each `C_i` through an
+`aux-copy` to a working slot, then `aux-xor` the previous ciphertext (or
+IV) into it.
+
+The full executable example lives in `tests/aux-primitives.test.ts`'s
+CBC-from-scratch suite.
+
+**Out of scope for Slice 10:** today's primitives operate only over the
+aux map. Threading the cipher state through the chain (so a real AES
+core can sit between `aux-xor` and `aux-copy`) needs a state↔aux bridge
+step type — a future primitive. For now, "single-round CBC" means
+"the chaining math, exercised standalone."
+
 ## What does *not* belong here
 
 - **Cipher specs** (the JSON tree of step nodes). Those go in `src/ciphers/<cipher>.ts`.

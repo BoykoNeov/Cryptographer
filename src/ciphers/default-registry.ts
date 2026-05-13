@@ -10,6 +10,9 @@
 
 import { StepRegistry } from "../core/registry";
 import { addRoundKey, addRoundKeyDoc } from "../steps/add-round-key";
+import { auxCopy, auxCopyDoc } from "../steps/aux-copy";
+import { auxLoad, auxLoadDoc } from "../steps/aux-load";
+import { auxXor, auxXorDoc } from "../steps/aux-xor";
 import { byteSubstitution, byteSubstitutionDoc } from "../steps/byte-substitution";
 import { computeBlockCount, computeBlockCountDoc } from "../steps/compute-block-count";
 import { concatBlocks, concatBlocksDoc } from "../steps/concat-blocks";
@@ -80,6 +83,17 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: computeBlockCount,
     doc: computeBlockCountDoc,
   });
+  // ─── Aux operation primitives (Slice 10 of the 2D editor plan) ─────────
+  // Three small steps that let a user *compose* block-cipher chaining
+  // modes (CBC, OFB, CFB) inside the visual editor instead of choosing
+  // from a fixed list. Each is graceful when its read keys are missing —
+  // the runtime records the miss in `TraceFrame.auxReadMissing` and the
+  // graph view's validateGraph (Slice 9) surfaces an orphaned-read
+  // warning glyph on the node. That keeps half-wired specs debuggable
+  // during palette-driven authoring instead of throwing mid-spec.
+  r.register("generic.aux-load@1", { executor: auxLoad, doc: auxLoadDoc });
+  r.register("generic.aux-xor@1", { executor: auxXor, doc: auxXorDoc });
+  r.register("generic.aux-copy@1", { executor: auxCopy, doc: auxCopyDoc });
   // ─── Speck (ARX block cipher, second cipher family) ────────────────────
   // Three step types complete a full Speck cipher: a key-schedule that
   // expands an m-word master key into `rounds` round-key words, a forward
