@@ -33,20 +33,58 @@ import type { Edge, Node } from "@xyflow/react";
 
 // ─── Layout constants ────────────────────────────────────────────────────
 
-/** Width / height for every leaf node. Containers compute their own size. */
-const LEAF_W = 180;
-const LEAF_H = 56;
-/** Horizontal gap between siblings inside a container. */
-const SIBLING_GAP_X = 32;
-/** Vertical gap reserved when a container's children are themselves
- * containers of different heights (drives row-of-mixed-heights alignment). */
-const SIBLING_GAP_Y = 16;
-/** Padding inside a container: extra left/right, more on top to leave
- * room for the container's label band, smaller on the bottom. */
-const PAD_LEFT = 20;
-const PAD_RIGHT = 20;
-const PAD_TOP = 48;
-const PAD_BOTTOM = 20;
+/**
+ * Layout dimensions used by the DFS placer. Externalized so the view
+ * component can scale them with the active `view-density` preset
+ * (compact / normal / spacious) the same way the SVG `GraphView` does.
+ * "normal" returns BASE values byte-for-byte; the adapter's existing
+ * tests pin those, so default-density rendering stays stable.
+ */
+export type XyflowLayoutConstants = {
+  readonly LEAF_W: number;
+  readonly LEAF_H: number;
+  readonly SIBLING_GAP_X: number;
+  readonly SIBLING_GAP_Y: number;
+  readonly PAD_LEFT: number;
+  readonly PAD_RIGHT: number;
+  readonly PAD_TOP: number;
+  readonly PAD_BOTTOM: number;
+};
+
+/** Default (1.0× density) values. */
+export const BASE_XYFLOW_CONSTANTS: XyflowLayoutConstants = {
+  LEAF_W: 180,
+  LEAF_H: 56,
+  SIBLING_GAP_X: 32,
+  // Vertical gap reserved when a container's children are themselves
+  // containers of different heights (drives row-of-mixed-heights alignment).
+  SIBLING_GAP_Y: 16,
+  // Padding inside a container: extra left/right, more on top to leave
+  // room for the container's label band, smaller on the bottom.
+  PAD_LEFT: 20,
+  PAD_RIGHT: 20,
+  PAD_TOP: 48,
+  PAD_BOTTOM: 20,
+};
+
+/**
+ * Apply a uniform density scale to BASE_XYFLOW_CONSTANTS. Mirrors the SVG
+ * view's `layoutConstantsFor` — Math.round keeps pixel values integer so
+ * xyflow's transforms stay crisp at non-DPR-aware zoom levels. PAD_TOP is
+ * scaled along with everything else; the header band still has room for
+ * the container label because xyflow renders the label inside the group
+ * box via CSS rather than a fixed header height.
+ */
+export const scaleXyflowConstants = (scale: number): XyflowLayoutConstants => ({
+  LEAF_W: Math.round(BASE_XYFLOW_CONSTANTS.LEAF_W * scale),
+  LEAF_H: Math.round(BASE_XYFLOW_CONSTANTS.LEAF_H * scale),
+  SIBLING_GAP_X: Math.round(BASE_XYFLOW_CONSTANTS.SIBLING_GAP_X * scale),
+  SIBLING_GAP_Y: Math.round(BASE_XYFLOW_CONSTANTS.SIBLING_GAP_Y * scale),
+  PAD_LEFT: Math.round(BASE_XYFLOW_CONSTANTS.PAD_LEFT * scale),
+  PAD_RIGHT: Math.round(BASE_XYFLOW_CONSTANTS.PAD_RIGHT * scale),
+  PAD_TOP: Math.round(BASE_XYFLOW_CONSTANTS.PAD_TOP * scale),
+  PAD_BOTTOM: Math.round(BASE_XYFLOW_CONSTANTS.PAD_BOTTOM * scale),
+});
 
 // ─── Edge styling ────────────────────────────────────────────────────────
 
@@ -71,6 +109,8 @@ type Box = { readonly w: number; readonly h: number };
 type Index = {
   readonly leafById: ReadonlyMap<string, GraphNode>;
   readonly containerById: ReadonlyMap<string, ContainerNode>;
+  readonly rootIds: ReadonlySet<string>;
+  readonly consts: XyflowLayoutConstants;
 };
 
 // ─── Public entry point ──────────────────────────────────────────────────
@@ -81,6 +121,24 @@ export type XyflowAdapterResult = {
 };
 
 /**
+ * Optional inputs that let the view component shape the adapter's output
+ * without forking the layout algorithm.
+ *
+ * - `constants`: density-scaled box/gap/padding values. Defaults to the
+ *   base 1.0× constants so the adapter's existing unit tests
+ *   (`tests/cipher-to-xyflow.test.ts`) keep pinning the same numbers.
+ * - `pinnedPositions`: absolute canvas positions for root-level nodes the
+ *   user has dragged. The auto-cursor still advances by each root's
+ *   un-pinned width (matching SVG GraphView's "no visible reflow on
+ *   pin" property: dragging one root doesn't reshuffle un-pinned
+ *   siblings into the vacated slot).
+ */
+export type XyflowAdapterOptions = {
+  readonly constants?: XyflowLayoutConstants;
+  readonly pinnedPositions?: ReadonlyMap<string, { readonly x: number; readonly y: number }>;
+};
+
+/**
  * Convert a CipherGraph (post-`deriveAuxGraph` + any view transforms like
  * collapse / replication) into xyflow's node/edge arrays. The result is
  * stateless: feed it to `<ReactFlow nodes={...} edges={...} />` and the
@@ -88,21 +146,55 @@ export type XyflowAdapterResult = {
  *
  * Stable across re-runs: same input graph → identical output (no dates,
  * no UUIDs, no implicit ordering from Map iteration order).
+ *
+ * Draggability convention: only ROOT-LEVEL nodes are flagged
+ * `draggable: true`. Nested children always have `draggable: false`,
+ * matching SVG GraphView's Slice 6 scope ("container drag is for
+ * top-level entities; nested leaves keep their click-only behavior so
+ * they can't escape their parent's bounding box").
  */
-export const cipherGraphToXyflow = (graph: CipherGraph): XyflowAdapterResult => {
+export const cipherGraphToXyflow = (
+  graph: CipherGraph,
+  options: XyflowAdapterOptions = {},
+): XyflowAdapterResult => {
+  const consts = options.constants ?? BASE_XYFLOW_CONSTANTS;
+  const pinned = options.pinnedPositions;
+
   const leafById = new Map<string, GraphNode>();
   for (const n of graph.nodes) leafById.set(n.stepId, n);
   const containerById = new Map<string, ContainerNode>();
   for (const c of graph.containers) containerById.set(c.id, c);
-  const idx: Index = { leafById, containerById };
+  const idx: Index = {
+    leafById,
+    containerById,
+    rootIds: new Set(graph.rootIds),
+    consts,
+  };
 
   const nodes: Node[] = [];
 
-  // Root-level cursor: walk rootIds left-to-right, accumulating x.
+  // Root-level cursor: walk rootIds left-to-right, accumulating x. After
+  // each root lays out, if the user has pinned that root's position,
+  // override the just-emitted top-level node's `position` — children
+  // remain parent-relative so they ride along automatically. Cursor still
+  // advances by the auto width so un-pinned siblings don't collapse into
+  // a pinned predecessor's vacated slot (mirrors GraphView.tsx's
+  // "preserve cursor on pin" rationale).
   let cursorX = 0;
   for (const rootId of graph.rootIds) {
+    const startIdx = nodes.length;
     const { w } = layoutOne(rootId, undefined, cursorX, 0, idx, nodes);
-    cursorX += w + SIBLING_GAP_X;
+    const pin = pinned?.get(rootId);
+    if (pin) {
+      for (let i = startIdx; i < nodes.length; i++) {
+        const n = nodes[i];
+        if (n?.id === rootId) {
+          nodes[i] = { ...n, position: { x: pin.x, y: pin.y } };
+          break;
+        }
+      }
+    }
+    cursorX += w + consts.SIBLING_GAP_X;
   }
 
   const edges: Edge[] = graph.edges.map((e) => ({
@@ -159,11 +251,13 @@ const layoutOne = (
     if (leaf.blockSpan !== undefined && leaf.blockSpan > 1) {
       labelParts.push(`(×${leaf.blockSpan})`);
     }
+    const isRoot = idx.rootIds.has(id);
     const node: Node = {
       id,
       position: { x: absX, y: absY },
-      width: LEAF_W,
-      height: LEAF_H,
+      width: idx.consts.LEAF_W,
+      height: idx.consts.LEAF_H,
+      draggable: isRoot,
       data: { label: labelParts.join(" "), stepType: leaf.stepType, replicaOf: leaf.replicaOf },
     };
     if (parentId !== undefined) {
@@ -171,7 +265,7 @@ const layoutOne = (
       node.extent = "parent";
     }
     out.push(node);
-    return { w: LEAF_W, h: LEAF_H };
+    return { w: idx.consts.LEAF_W, h: idx.consts.LEAF_H };
   }
 
   // ── Container branch (group OR iterate) ────────────────────────────
@@ -187,12 +281,14 @@ const layoutOne = (
   // as a small labeled chip. The collapseGraph transform produces this
   // shape intentionally.
   if (container.childIds.length === 0) {
+    const isRootChip = idx.rootIds.has(id);
     const node: Node = {
       id,
       position: { x: absX, y: absY },
-      width: LEAF_W,
-      height: LEAF_H,
+      width: idx.consts.LEAF_W,
+      height: idx.consts.LEAF_H,
       type: "group",
+      draggable: isRootChip,
       data: { label: containerLabel(container), kind: container.kind },
     };
     if (parentId !== undefined) {
@@ -200,26 +296,26 @@ const layoutOne = (
       node.extent = "parent";
     }
     out.push(node);
-    return { w: LEAF_W, h: LEAF_H };
+    return { w: idx.consts.LEAF_W, h: idx.consts.LEAF_H };
   }
 
   // Lay out children with absolute coordinates first. We track where in
   // `out` the children land so we can convert their positions to
   // container-relative after the container's size is finalized.
   const childrenStart = out.length;
-  const childInteriorAbsX = absX + PAD_LEFT;
-  const childInteriorAbsY = absY + PAD_TOP;
+  const childInteriorAbsX = absX + idx.consts.PAD_LEFT;
+  const childInteriorAbsY = absY + idx.consts.PAD_TOP;
   let cursorX = childInteriorAbsX;
   let maxChildH = 0;
   for (const childId of container.childIds) {
     const { w, h } = layoutOne(childId, id, cursorX, childInteriorAbsY, idx, out);
-    cursorX += w + SIBLING_GAP_X;
+    cursorX += w + idx.consts.SIBLING_GAP_X;
     if (h > maxChildH) maxChildH = h;
   }
   // Subtract one trailing gap (we added it after the final child).
-  const childrenWidth = cursorX - SIBLING_GAP_X - childInteriorAbsX;
-  const totalW = PAD_LEFT + childrenWidth + PAD_RIGHT;
-  const totalH = PAD_TOP + maxChildH + SIBLING_GAP_Y + PAD_BOTTOM;
+  const childrenWidth = cursorX - idx.consts.SIBLING_GAP_X - childInteriorAbsX;
+  const totalW = idx.consts.PAD_LEFT + childrenWidth + idx.consts.PAD_RIGHT;
+  const totalH = idx.consts.PAD_TOP + maxChildH + idx.consts.SIBLING_GAP_Y + idx.consts.PAD_BOTTOM;
 
   // Convert the just-pushed direct children of THIS container from
   // absolute to container-relative. Grandchildren further down were
@@ -235,12 +331,14 @@ const layoutOne = (
     };
   }
 
+  const isRootContainer = idx.rootIds.has(id);
   const node: Node = {
     id,
     position: { x: absX, y: absY },
     width: totalW,
     height: totalH,
     type: "group",
+    draggable: isRootContainer,
     data: { label: containerLabel(container), kind: container.kind },
   };
   if (parentId !== undefined) {

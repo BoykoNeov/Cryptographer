@@ -488,3 +488,152 @@ steps would be:
 - `package.json` / `package-lock.json` (+react, +react-dom,
   +@xyflow/react, +@types/react, +@types/react-dom)
 
+## xyflow Phase 2 result — SVG view's readability tricks ported
+
+Picking the spike up again after the "logic correct, aesthetics weak"
+verdict on Phase 1. The user steered next-direction toward "Port SVG
+view's tricks" — bring collapse, high-fanout replication, view
+density, and drag-to-pin into the xyflow view so the side-by-side
+comparison is apples-to-apples instead of comparing a feature-rich
+SVG view against a feature-bare xyflow view.
+
+### What shipped on this branch (Phase 2)
+
+Two files modified, no new files, ~80 lines added:
+
+- `src/ui/graph/cipher-to-xyflow.ts` —
+  - `XyflowLayoutConstants` type + `BASE_XYFLOW_CONSTANTS` +
+    `scaleXyflowConstants(scale)` exported alongside the adapter. The
+    adapter accepts an optional `constants` field; defaults to the
+    base 1.0× values so the existing 8 adapter tests still pin the
+    same numbers byte-for-byte.
+  - `XyflowAdapterOptions` adds `pinnedPositions` — a Map of
+    root-level `nodeId → {x, y}`. Adapter overrides the just-emitted
+    top-level node's `position` when a pin exists; cursor still
+    advances by the un-pinned width so siblings don't reflow into the
+    pinned node's vacated slot. Pins on non-root ids are silently
+    ignored (matches SVG view's Slice 6 container-only-drag scope).
+  - Every emitted node gets `draggable: isRoot`, so xyflow's drag
+    model fires only on root-level siblings — nested children stay
+    locked inside their parent's bounding box.
+- `src/ui/components/XyflowGraphView.tsx` — wires four more stores:
+  - `useLayoutMap` → pinnedPositions + collapsedGroups +
+    replicationModes per active spec.
+  - `useViewDensity` → multiplies BASE_XYFLOW_CONSTANTS through
+    `scaleXyflowConstants(DENSITY_SCALE[density()])`.
+  - `useReplicationEnabled` → gates `replicateHighFanoutSources` on
+    top of `collapseGraph` before the adapter conversion.
+  - `onNodeDragStop` → `setNodePosition(specId, nodeId, x, y)`. Why
+    drag-STOP and not drag-IN-PROGRESS: xyflow handles in-drag
+    visuals internally, so we can defer the localStorage write until
+    the commit. (SVG view writes on every pointermove because it
+    drives the visuals itself.)
+  - `onNodeDoubleClick` → `toggleCollapse(specId, containerId)` when
+    the target is a container. Why double-click (vs. SVG view's
+    chevron): xyflow's default node component doesn't carry a
+    chevron, and adding one would require a full custom node
+    component (more bundle, more friction for a spike).
+
+The createEffect dependency list grew from `[spec, traceVersion]` to
+`[spec, traceVersion, layoutMap, density, replicationEnabled]`. Every
+re-render path now reads the same five signals; no derived memos in
+this file — render is cheap enough that recomputing the graph
+pipeline on each effect tick is fine.
+
+### What worked
+
+- **All four trick categories landed.** Collapse: double-click any
+  container, its children disappear and boundary-crossing edges
+  terminate at the chip. Replication: flip the global toggle, AES's
+  key-expansion stops dropping 11 long lines and instead seeds 11
+  local chips next to each AddRoundKey consumer. Density: compact
+  shrinks the canvas; spacious grows it; pinned positions rescale via
+  the existing `rescaleAllPositions` boundary so dragged containers
+  stay in their logical slot across density flips. Drag-to-pin:
+  root-level containers + leaves drag freely; nested children stay
+  put. Bonus: pinning round.5 doesn't shift round.6's auto-position
+  (no visible reflow on pin — same property the SVG view enforces).
+- **Same boundaries, no new state.** Phase 2 added zero new stores
+  and zero new persistence keys. Every effect routes through the same
+  `setNodePosition` / `toggleCollapse` / `setReplicationMode` setters
+  that the SVG view uses, so a user who pins in the SVG view sees
+  identical pin positions when they flip to the xyflow tab and vice
+  versa. The layout sidecar carries through unchanged.
+- **Bundle cost is essentially zero.** Production build:
+  198.17 KB gzipped (was 197.68 KB before Phase 2; +0.49 KB). React +
+  ReactDOM + xyflow's runtime were already paying rent; the new
+  wiring is pure adapter code.
+- **Test coverage extends cleanly.** 7 new adapter tests pin the
+  Phase 2 properties (density scaling, pin override, non-root pin
+  ignored, no-sibling-reflow, root-only draggable). Suite is 603
+  tests / 48 files passing (+7 over Phase 1's 596).
+
+### What didn't work / surprised
+
+- **Layout is still naive.** Density scaling and replication apply on
+  top of the same DFS-cursor layout, which still produces a single
+  horizontal row at each container level. Compact + replication ON
+  helps visibility a lot (the replicated key-expansion chips now sit
+  near their consumers, and at 0.75× the whole pipeline fits in a
+  ~1500px viewport), but the SVG view's mixed horizontal-and-vertical
+  flow inside iterate bodies is still missing. That's the
+  dagre/elkjs escalation the original Phase 1 writeup flagged.
+- **No state-edge spine inside groups yet.** The SVG view also lays
+  state edges vertically inside groups so AES round bodies read as
+  top-to-bottom flows; xyflow renders state edges with the same
+  `smoothstep` curve as aux, which works but doesn't visually
+  separate the spine from the annotations as cleanly. Cosmetic only;
+  fixable with a custom state-edge component if we ever revive this.
+- **Pinned-position visual quirk after collapse.** When the user
+  collapses a container, the chip lands at the auto-cursor x for the
+  new layout, BUT if the user had pinned that container before
+  collapsing, the pin position survives (correctly — same property
+  the SVG view enforces). The interaction reads fine but it surprises
+  on the first try: drag a round, then collapse it, the chip lands
+  exactly where the round was. Not a bug.
+
+### Bundle / perf measurements (Phase 2)
+
+```
+                  Phase 1     Phase 2     delta
+JS (gzipped)      197.68 KB   198.17 KB   +0.49 KB
+CSS (gzipped)     6.40 KB     6.40 KB     ±0
+Modules           302         302         ±0
+Build time        1.78s       2.39s       +0.61s
+Tests             596         603         +7
+```
+
+The +0.49 KB delta is the per-spec layout lookup, the four extra
+signal reads in the effect, and the seven new adapter exports. The
+adapter's own pure logic stayed within the same DFS-cursor function;
+nothing fundamentally larger.
+
+### Recommendation (Phase 2)
+
+**Don't change Phase 1's recommendation.** Phase 2 closed the
+features-gap between the xyflow view and the SVG view for free
+(+0.49 KB), but the headline +121.68 KB gzipped from carrying
+React + ReactDOM + `@xyflow/react` is unchanged. The "this is a
+parallel implementation worth maintaining" bar would need a UI
+direction where xyflow's hooks (custom node components, edge
+routing plugins, the surrounding ecosystem) are paying for
+themselves — Slice 9+ of the 2D editor plan doesn't reach that
+threshold.
+
+What Phase 2 does change: this branch is now a more honest
+reference point. If a future session adopts xyflow, they don't
+need to re-port collapse / replication / density / drag — the
+pipeline is already there, and the only remaining gap on the
+"reach SVG view parity" axis is the layout aesthetics
+(dagre/elkjs).
+
+### Files modified (Phase 2)
+
+- `src/ui/graph/cipher-to-xyflow.ts` (+~50 lines:
+  XyflowLayoutConstants, scaleXyflowConstants, options threading,
+  per-node draggable flag, root-pin override)
+- `src/ui/components/XyflowGraphView.tsx` (+~40 lines: 4 new signal
+  reads, transform pipeline wiring, drag-stop + double-click
+  handlers, expanded effect dependency list)
+- `tests/cipher-to-xyflow.test.ts` (+7 tests, ~80 lines)
+

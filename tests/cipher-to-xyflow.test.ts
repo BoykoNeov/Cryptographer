@@ -25,7 +25,11 @@ import { runSpec } from "@/core/runtime";
 import { makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, Trace } from "@/core/types";
-import { cipherGraphToXyflow } from "@/ui/graph/cipher-to-xyflow";
+import {
+  BASE_XYFLOW_CONSTANTS,
+  cipherGraphToXyflow,
+  scaleXyflowConstants,
+} from "@/ui/graph/cipher-to-xyflow";
 import { describe, expect, it } from "vitest";
 
 const ZERO_KEY = new Uint8Array(16);
@@ -163,6 +167,103 @@ describe("cipherGraphToXyflow — adapter shape", () => {
     for (const e of edges) {
       // animated=true → kind="aux"; animated=false → kind="state"
       expect(e.animated).toBe(false);
+    }
+  });
+
+  // Phase 2 of the spike adds three knobs to the adapter so the view
+  // component can match what the SVG GraphView ships: density-scaled
+  // layout constants, pinned positions for root-level nodes (drag-to-
+  // pin source of truth), and per-node `draggable` so xyflow's drag
+  // model only fires on root-level siblings — same Slice 6 container-
+  // only-drag scope. These tests pin those properties at the adapter
+  // boundary so the view component can trust them.
+
+  it("density scaling: scaleXyflowConstants(0.75) shrinks every value vs. base", () => {
+    const compact = scaleXyflowConstants(0.75);
+    expect(compact.LEAF_W).toBeLessThan(BASE_XYFLOW_CONSTANTS.LEAF_W);
+    expect(compact.LEAF_H).toBeLessThan(BASE_XYFLOW_CONSTANTS.LEAF_H);
+    expect(compact.SIBLING_GAP_X).toBeLessThan(BASE_XYFLOW_CONSTANTS.SIBLING_GAP_X);
+    expect(compact.PAD_LEFT).toBeLessThan(BASE_XYFLOW_CONSTANTS.PAD_LEFT);
+  });
+
+  it("density scaling: scale=1.0 reproduces BASE_XYFLOW_CONSTANTS byte-for-byte", () => {
+    const normal = scaleXyflowConstants(1.0);
+    expect(normal).toEqual(BASE_XYFLOW_CONSTANTS);
+  });
+
+  it("adapter uses scaled constants when constants option is passed", () => {
+    const trace = runAes128();
+    const graph = deriveAuxGraph(trace, aes128Spec);
+    const compactConsts = scaleXyflowConstants(0.75);
+    const { nodes } = cipherGraphToXyflow(graph, { constants: compactConsts });
+    // Find any leaf — its width should match the scaled LEAF_W, not the base.
+    const leaf = nodes.find((n) => n.type !== "group");
+    expect(leaf).toBeDefined();
+    expect(leaf?.width).toBe(compactConsts.LEAF_W);
+    expect(leaf?.height).toBe(compactConsts.LEAF_H);
+  });
+
+  it("pinned positions override root nodes' auto-computed position", () => {
+    const trace = runAes128();
+    const graph = deriveAuxGraph(trace, aes128Spec);
+    // Pin the first root container to a specific position.
+    const rootId = graph.rootIds[0];
+    expect(rootId, "AES-128 should have at least one root").toBeDefined();
+    const pinned = new Map<string, { x: number; y: number }>([
+      [rootId as string, { x: 1234, y: 567 }],
+    ]);
+    const { nodes } = cipherGraphToXyflow(graph, { pinnedPositions: pinned });
+    const pinnedNode = nodes.find((n) => n.id === rootId);
+    expect(pinnedNode?.position).toEqual({ x: 1234, y: 567 });
+  });
+
+  it("pinned position on a non-root id is ignored (matches SVG view's root-only drag scope)", () => {
+    const trace = runAes128();
+    const graph = deriveAuxGraph(trace, aes128Spec);
+    // round.1.sub-bytes is nested inside round.1; pin it to a bogus
+    // absolute position. The adapter should keep it at its auto-laid
+    // position (relative to round.1, small positive x).
+    const pinned = new Map<string, { x: number; y: number }>([
+      ["round.1.sub-bytes", { x: 9999, y: 9999 }],
+    ]);
+    const { nodes } = cipherGraphToXyflow(graph, { pinnedPositions: pinned });
+    const nested = nodes.find((n) => n.id === "round.1.sub-bytes");
+    expect(nested).toBeDefined();
+    expect(nested?.position.x).toBeLessThan(100);
+    expect(nested?.position.y).toBeLessThan(100);
+  });
+
+  it("pinning one root preserves x of un-pinned siblings (no reflow on pin)", () => {
+    const trace = runAes128();
+    const graph = deriveAuxGraph(trace, aes128Spec);
+    const baseline = cipherGraphToXyflow(graph);
+    const rootIds = graph.rootIds;
+    // Need at least 2 roots for the property to be testable.
+    expect(rootIds.length).toBeGreaterThanOrEqual(2);
+    const firstRoot = rootIds[0] as string;
+    const secondRoot = rootIds[1] as string;
+    const pinned = new Map<string, { x: number; y: number }>([[firstRoot, { x: -500, y: -500 }]]);
+    const withPin = cipherGraphToXyflow(graph, { pinnedPositions: pinned });
+    const findRoot = (
+      nodes: readonly { id: string; position: { x: number; y: number } }[],
+      id: string,
+    ) => nodes.find((n) => n.id === id);
+    const baselineSecond = findRoot(baseline.nodes, secondRoot);
+    const pinnedSecond = findRoot(withPin.nodes, secondRoot);
+    expect(baselineSecond?.position.x).toBe(pinnedSecond?.position.x);
+  });
+
+  it("root-level nodes are draggable; nested nodes are not", () => {
+    const trace = runAes128();
+    const graph = deriveAuxGraph(trace, aes128Spec);
+    const { nodes } = cipherGraphToXyflow(graph);
+    const rootSet = new Set(graph.rootIds);
+    for (const n of nodes) {
+      if (rootSet.has(n.id)) {
+        expect(n.draggable, `${n.id} should be draggable (root)`).toBe(true);
+      } else {
+        expect(n.draggable, `${n.id} should NOT be draggable (nested)`).toBe(false);
+      }
     }
   });
 
