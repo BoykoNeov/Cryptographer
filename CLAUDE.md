@@ -92,9 +92,13 @@ If a future need argues for one of these, revisit then.
 ## Pointers
 
 **In this repo:**
+- `README.md` — public-facing GitHub entry point (project description, install, command table, links). Keep it in sync with shipped features when the user-visible surface changes — adding a new cipher, mode, or major UI feature should update the "What's in the box" table.
+- `CHANGELOG.md` — release log (Keep-a-Changelog format). Convert the `[Unreleased]` section into a dated `[X.Y.Z]` heading on each release; bump `package.json`'s `version` and tag in the same commit. `docs/versioning.md` carries the release process.
 - `docs/key-files.md` — detailed file-by-file inventory (core contracts, ciphers, UI stores, components, tests).
 - `docs/gotchas.md` — the full "Things to avoid" list, topic-grouped.
+- `docs/versioning.md` — versioning policy for the three independent surfaces: app semver, step-type `@N` suffix bumps, document `schemaVersion` migration path. Read before any change that touches a step-type contract, the document schema, or the release process.
 - `src/steps/CLAUDE.md` — step-type-specific guidance.
+- `src/version.ts` — `APP_VERSION` constant re-exported from `package.json`. Consumed by the UI footer and the session-on document export.
 
 **Plans:**
 - Original architectural plan: `~/.claude/plans/i-want-to-build-tender-spark.md`

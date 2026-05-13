@@ -1,0 +1,79 @@
+# Changelog
+
+All notable changes to Cryptographer are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). See [`docs/versioning.md`](./docs/versioning.md) for the versioning policy (release process, step-type `@N` suffix bumps, and document `schemaVersion` migrations).
+
+## [Unreleased]
+
+_Nothing yet._
+
+## [0.2.0] — 2026-05-13
+
+### Added — release infrastructure
+- **README.md** as the public-facing GitHub entry point — what the project is, install + run, command table, architecture summary, project layout, pointers into the docs.
+- **CHANGELOG.md** (this file) tracking releases retrospectively from v0.1.0.
+- **LICENSE** (MIT).
+- **`docs/versioning.md`** formalizing the versioning policy: app semver release process, the `stepType@N` suffix convention, and the document `schemaVersion` migration path.
+- **`src/version.ts`** re-exporting `package.json` version as `APP_VERSION` so the UI and the document-export path share one source of truth.
+- **UI footer** showing the current build version and a link to the GitHub repo.
+- **`metadata.appVersion`** is now stamped into exported `.cipher.json` documents — but only on the session-included save path, alongside the existing `createdAt`. Spec-only saves remain byte-identical across builds so the planned URL-share feature (Slice 7) stays deterministic.
+
+### Notes
+The schema field `DocumentMetadata.appVersion?: string` has been part of `schemaVersion: 1` since Slice 3 — this release just starts populating it. No schema bump.
+
+## [0.1.0] — 2026-05-13 (retrospective)
+
+The initial release, reconstructed from `git log`. This entry covers everything that landed before the release-infrastructure work in v0.2.0.
+
+### Added — ciphers
+- **AES-128** forward + inverse (FIPS-197 Appendix C.1 vectors).
+- **AES-192** and **AES-256** with NIST AES Core known-answer tests + the FIPS-197 §A.2/§A.3 round-key assertions. Shared step types with AES-128; the `aes.key-expansion@1` step has an Nk>6 branch that fires only for AES-256.
+- **Speck32/64** in two byte-order conventions: big-endian (the original paper) and little-endian (the NSA reference implementation). Both directions for both. 22 rounds, 4-byte block, 8-byte key.
+- **Serpent** (128/192/256) — SP-network in **standard form** (visible IP/FP, per-nibble S-box, table-based linear transform). Single-block today; multi-block lands when the existing `iterate` primitive is plugged in.
+
+### Added — modes of operation
+- **Multi-block ECB** for AES-128 (Phase 1 of the multi-block plan). CBC/CTR scaffolding is in place but specs aren't shipped yet.
+- The runtime's **`iterate` primitive** — the same loop body executes once per block, the trace's per-iteration frames get a `:b{i}` suffix on every `stepId`, and `frame.blockIndex` annotations let the UI render block badges.
+- Boundary steps **`generic.split-blocks@1`** and **`generic.concat-blocks@1`** to convert `BytesState ↔ MatrixState[]` around the loop.
+
+### Added — padding
+- **PKCS#7**, **zero-pad**, **ISO 7816-4**, and **none** padding schemes — each rendered as a visible step in the trace (not hidden by the runtime).
+- Per-`(mode, scheme, cipher, cipherMode)` length limits surface as friendly errors on Run.
+
+### Added — UI
+- Per-frame **state view**: 4×4 grid for `MatrixState`, 1×N wrap for `BytesState`, mixed-shape view for `load-block`/`store-block` boundaries.
+- **StepDescription** panel with markdown rendering, FIPS / paper references, inline parameters.
+- **ParamEditor** blocks for every step's params (matrix, S-box, AddRoundKey, padding/load/store, key-expansion) — edit a value and the trace re-runs in ~200ms.
+- **Auto-rerun toggle**: in manual mode, an "edits pending" banner replaces the live re-run.
+- **Keyboard navigation**: ←/→ step, Home/End jump, PgUp/PgDn round.
+- **Neighborhood strip** of nearby steps with virtualization.
+- **Run history** (5-deep ring) + **previous-run overlay** showing diff cells against the last run.
+- **Run Explorer modal** for side-by-side run comparison with a pure delta-string formatter (testable in node-env).
+- **Byte format toggle**: hex / decimal / ASCII; the active format propagates to every byte-rendering site. S-box axis labels stay hex (addresses, not values).
+- **Cipher selector** + per-cipher key auto-swap when the field still holds the previous cipher's default.
+- **Mode-of-operation selector** with cross-cipher matrix (`SUPPORTED_CIPHER_MODES_BY_CIPHER`) so unsupported combos disable gracefully.
+- **Multi-block visual grouping**: ECB output renders as 4×4 block panels so identical plaintext blocks produce visibly-identical ciphertext blocks (the Tux-image pedagogy).
+- **2D graph view tab** (Slices 1–6 of the visual editor plan):
+  - `deriveAuxGraph(trace, spec): CipherGraph` — pure derivation of nodes, containers, aux-flow edges (with iterate-mediated synthesis), and the state-edge spine.
+  - `collapseGraph(graph, collapsedIds): CipherGraph` — pure view-time transform; collapsed containers become chips, internal nodes disappear, edges remap to surviving endpoints.
+  - SVG renderer with hand-rolled FIPS-197-flavored layout (top-level + iterate bodies flow left-to-right, groups stack vertically). Container drag + chevron-toggle collapse. Arrowhead markers + state-vs-aux edge styling. Container label truncation via SVG `textLength`.
+  - Layout sidecar persistence — pinned positions + collapsed groups survive reload.
+- **File Save / Load** for `CipherDocument` JSON (Slice 5), with an include-session checkbox controlling whether plaintext/key bytes are written. Spec-only saves are byte-stable.
+
+### Added — core
+- **`CipherSpec`** as JSON (`src/core/types.ts`): tree of `StepNode`s (step leaves, groups, iterate groups). Saved-document forever-shape.
+- **`StepRegistry`** mapping `stepType → { executor, doc }` so adding a step type registers behavior and documentation together.
+- **`Runtime`** — pure walk-and-trace engine; the only piece that knows about tracing or iteration.
+- **`CipherDocument`** file format (`schemaVersion: 1`) — required `spec`, optional `layout` (graph positions + collapsed groups), `session` (selector snapshot + optional bytes), `metadata` (name / createdAt / appVersion). `serializeDocument` is deterministic (alphabetical key order).
+- **`spec-mutations.ts`** — `findStep`, `findStepAndParent`, `updateStepParams`, `updateAllStepsByType`, `insertStepAfter`/`insertStepBefore`, `removeStep`, `reorderStep`, `compareSpecs`. Pure spec-in/spec-out with reference equality preserved on untouched branches.
+
+### Added — quality gate
+- **Pre-commit hook** in `.githooks/pre-commit` running the full `npm run check` (biome + tsc + vitest + vite build) plus a step-coverage gate (new files in `src/steps/` require a `tests/` change in the same commit).
+- **GitHub Actions** running the same on push.
+- **Playwright real-browser smoke tests** in `e2e/` (currently the Slice 6 graph drag/collapse spec).
+- ~528 tests across ~42 files; ~7s for the full gate, ~4s for vitest alone.
+
+[Unreleased]: https://github.com/BoykoNeov/Cryptographer/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/BoykoNeov/Cryptographer/compare/2afe2d6...v0.2.0
+[0.1.0]: https://github.com/BoykoNeov/Cryptographer/tree/2afe2d6

@@ -41,6 +41,7 @@ import { runSpec } from "@/core/runtime";
 import { makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, BytesState, MatrixState, State, TraceFrame } from "@/core/types";
+import { APP_VERSION } from "@/version";
 import {
   For,
   Match,
@@ -325,7 +326,12 @@ export const App = () => {
       ...(includeSession()
         ? {
             session: buildSessionSnapshot(),
-            metadata: { createdAt: Date.now() },
+            // `appVersion` stamps which build of Cryptographer produced this
+            // file — useful forensically when a v0.5 user opens a v0.2 file.
+            // Only emitted on the session-on branch alongside `createdAt`;
+            // the spec-only branch stays byte-stable so the Slice 7 URL hash
+            // remains deterministic across builds.
+            metadata: { createdAt: Date.now(), appVersion: APP_VERSION },
           }
         : {}),
     };
@@ -953,6 +959,23 @@ export const App = () => {
       {/* ─── Run Explorer modal (Phase 2c). Renders as a sibling so
             it can position fixed across the entire viewport. */}
       <RunExplorerModal isOpen={explorerOpen} onClose={() => setExplorerOpen(false)} />
+
+      {/* ─── Footer ─────────────────────────────────────────────────
+            Low-emphasis build stamp. The version surfaces which build
+            the user is on (useful when reporting bugs or comparing a
+            saved CipherDocument's `metadata.appVersion` to the live UI).
+            See CHANGELOG.md and docs/versioning.md for the policy. */}
+      <footer class="app-footer">
+        <span class="muted small">Cryptographer v{APP_VERSION}</span>
+        <a
+          class="muted small"
+          href="https://github.com/BoykoNeov/Cryptographer"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          GitHub
+        </a>
+      </footer>
     </div>
   );
 };

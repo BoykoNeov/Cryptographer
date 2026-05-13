@@ -29,16 +29,37 @@ html,
 .app {
   display: grid;
   grid-template-columns: 1fr 320px;
-  grid-template-rows: auto auto auto auto 1fr;
+  grid-template-rows: auto auto auto auto 1fr auto;
   grid-template-areas:
     "header header"
     "inputs sidebar"
     "result sidebar"
     "timeline sidebar"
-    "trace sidebar";
+    "trace sidebar"
+    "footer footer";
   gap: 12px;
   padding: 16px;
   min-height: 100vh;
+}
+
+/* Footer — low-emphasis build stamp. Spans both columns at the bottom of
+   the grid. Inline-flex so the version and the GitHub link sit on the
+   same baseline with a separator. */
+.app-footer {
+  grid-area: footer;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  margin-top: 4px;
+}
+
+.app-footer a {
+  text-decoration: none;
+}
+.app-footer a:hover {
+  text-decoration: underline;
 }
 
 header {
