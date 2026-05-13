@@ -182,19 +182,22 @@ describe("GraphView — component-level (AES-128 fixture)", () => {
 
 // ─── App-level tab integration ────────────────────────────────────────────
 
-describe("App — view-mode tab bar (linear / graph / JSON)", () => {
+describe("App — view-mode tab bar (linear / graph / xyflow / JSON)", () => {
   beforeEach(resetAll);
   afterEach(() => {
     cleanup();
     resetAll();
   });
 
-  it("renders all three tabs in the tab bar with the linear tab active by default", () => {
+  it("renders all four tabs in the tab bar with the linear tab active by default", () => {
+    // xyflow tab is the spike's view-mode slot (Phase 1 evaluation of
+    // mounting @xyflow/react inside the Solid view); it sits alongside
+    // the SVG `graph` view, not in place of it.
     const { container } = render(() => <App />);
     const tabs = container.querySelectorAll(".view-mode-tab");
-    expect(tabs.length).toBe(3);
+    expect(tabs.length).toBe(4);
     const labels = Array.from(tabs).map((t) => t.textContent?.trim());
-    expect(labels).toEqual(["linear", "graph", "JSON"]);
+    expect(labels).toEqual(["linear", "graph", "xyflow", "JSON"]);
     // First tab (linear) is active by default.
     const active = container.querySelector(".view-mode-tab.active");
     expect(active?.textContent?.trim()).toBe("linear");

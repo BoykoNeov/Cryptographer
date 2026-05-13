@@ -1,10 +1,24 @@
-# solid-flow spike — Slice 8 mechanic decision
+# Graph framework spikes — xyflow + solid-flow
 
-> **Status: complete. Recommendation: Abandon solid-flow; ship Slice 8
-> as HTML5 DnD on the existing SVG GraphView.** Phase 1 stopped at
-> the typing-survey stage — every Phase 1 success criterion is blocked
-> by missing API surface, so no adapter code was written. See the
-> [Result](#result) section for findings and the migration path.
+> **Status:**
+>   1. **solid-flow** (1.0.4): **Abandoned at typing survey.** Missing
+>      subflow nesting, custom edge types, drop handler. No code
+>      written. See [solid-flow result](#result).
+>   2. **xyflow (`@xyflow/react` 12.10.2 via React-in-Solid interop):**
+>      **Phase 1 shipped.** Adapter + Solid wrapper + view-mode tab
+>      built. Render works for AES-128 and AES-128-ECB including
+>      3-level nesting and both edge kinds. **Bundle: +121.68 KB
+>      gzipped over the 76 KB baseline (197.68 KB total).** See
+>      [xyflow Phase 1 result](#xyflow-phase-1-result).
+>
+> The branch's narrative shifted: when the spike started, the question
+> was "which graph framework hosts Slice 8?" That was answered in the
+> parallel session by shipping Slice 8 hand-rolled on `main`. The new
+> question this branch answers is more open-ended — "if we wanted a
+> graph framework as a future-option, what would it cost and how does
+> it feel?" Phase 1 of the original plan (build the adapter, render,
+> measure) maps to that question directly; Phases 2–5 (palette drop,
+> Slice 8 mechanic decision) no longer apply.
 
 A timeboxed evaluation of [`solid-flow`](https://www.npmjs.com/package/solid-flow)
 as the rendering + drag-and-drop substrate for Slice 8 of the 2D editor
@@ -293,4 +307,184 @@ Not run — no implementation code was written, so the measurements
 the plan called for would not have been meaningful. The abandon
 decision rests on API capability, not on observed performance or
 bundle weight.
+
+## xyflow Phase 1 result
+
+Picking the spike back up after the solid-flow abandon, with `xyflow`
+as the alternate target. Same coexistence pattern — a fourth view
+mode (`xyflow`) alongside the SVG `graph` view. Goal: see whether
+xyflow can do what our SVG view does (3-level nesting, two edge
+kinds), at what bundle cost.
+
+### What shipped on this branch
+
+Five files, ~250 lines of code + ~150 lines of tests:
+
+- `src/ui/graph/cipher-to-xyflow.ts` — pure adapter
+  `cipherGraphToXyflow(graph: CipherGraph) → { nodes, edges }`. DFS
+  layout: every leaf is a fixed 180×56 box; containers are sized
+  innermost-first to fit their children's bounding box plus padding
+  (PAD_LEFT/RIGHT/TOP/BOTTOM constants). Two-stage relativization:
+  children are placed in absolute coordinates while the parent's box
+  is measured, then re-relativized to parent-local coordinates after
+  the parent's origin is known. Iterates and groups both render as
+  xyflow `type: "group"` nodes; iterates get a `×N` label suffix
+  when their `blockSpan` is known.
+- `src/ui/components/XyflowGraphView.tsx` — Solid wrapper. Owns a
+  sized `<div ref>`, mounts a React root via
+  `react-dom/client.createRoot` in `onMount`, re-renders via
+  `createEffect(on([spec, traceVersion], render, { defer: true }))`,
+  unmounts in `onCleanup`. Renders with `React.createElement` instead
+  of JSX so vite-plugin-solid doesn't fight `@vitejs/plugin-react`
+  for the `.tsx` extension; the plugin-conflict rabbit hole is
+  avoided entirely.
+- `src/ui/stores/view-mode.ts` — `ALL_VIEW_MODES` gains `"xyflow"`
+  between `"graph"` and `"json"`; `VIEW_MODE_LABELS` gains the label.
+- `src/ui/App.tsx` — one new `<Match>` case rendering
+  `<XyflowGraphView />` when `viewMode() === "xyflow"`.
+- `tests/cipher-to-xyflow.test.ts` — 8 jsdom-free unit tests pinning
+  the adapter: node/edge counts, parentId chain for 3-level nesting,
+  relative-vs-absolute positioning, iterate `×N` label, edge style
+  hints differentiating aux from state, empty-trace fallback, and
+  collapsed-container chip rendering. Suite is 596 tests / 48 files
+  passing (was 587 before; +1 file, +8 tests, plus a test-renames
+  update for the new four-tab tab bar).
+
+### What worked
+
+- **3-level nesting renders.** AES-128-ECB has the deepest realistic
+  structure: top-level iterate `ecb-blocks` → group `round.1` →
+  leaf `round.1.sub-bytes`. The adapter chains `parentId` correctly,
+  containers get explicit width/height, and xyflow positions the
+  leaf relative to the round group relative to the iterate
+  correctly. The 3-level concern flagged in the original Phase 1
+  risks list ("reported flaky on the React side at deep nesting")
+  did not bite for our depth.
+- **Two edge kinds without custom components.** State edges
+  (`#1e293b`, 2.5px, no animation) and aux edges (`#94a3b8`,
+  1.25px, animated dashed) are distinguishable via inline `style`
+  + `animated` properties on the built-in `smoothstep` edge type.
+  No React custom-edge components needed — keeps the bridge code
+  tight.
+- **Solid↔React interop is small.** The whole bridge is ~40 lines:
+  one `createRoot`, one `render(createElement(...))`, one
+  `unmount`. No state synchronization or two-way binding —
+  Solid signals drive React re-renders, period.
+- **Pre-run rendering.** Empty-frames trace produces a
+  structure-only graph (containers + leaves + state edges, no aux
+  edges). The view tab works before any Run, matching the SVG
+  view's behavior. The empty-trace fallback shape mirrors the
+  precedent in `GraphView.tsx`.
+- **xyflow chrome out of the box.** Built-in `<Background>`,
+  `<Controls>`, `<MiniMap>` add visual polish for free —
+  navigation controls, zoom/fit/lock buttons, an inset map. The
+  SVG view would need each of these hand-implemented.
+
+### What didn't work / what surprised
+
+- **Bundle weight is the headline cost.** Production build:
+  197.68 KB gzipped JS (vs. 76 KB baseline) — **+121.68 KB**, a
+  2.6× total bundle. React 19 + ReactDOM 19 + `@xyflow/react`
+  itself make up most of this. For a learning tool that has to
+  load on first paint, this is a meaningful regression — the
+  cipher app's whole module surface (every cipher, every step
+  type, the trace engine, ALL the UI views) is currently smaller
+  than just the React+xyflow runtime would be. Slice 7 (URL
+  sharing) added 4 KB; this would add 30× as much.
+- **"use client" directive warning.** Rollup logs that the React
+  Server Components directive at the top of
+  `node_modules/@xyflow/react/dist/esm/index.js` is being
+  ignored. Harmless (we're not using RSC), but it's a reminder
+  that `@xyflow/react` is built for a meta-framework world and we
+  carry that intent in the bundle even though we don't benefit.
+- **Layout is naive.** The adapter does a DFS-cursor layout (a
+  single horizontal row at each container level). The SVG
+  `GraphView.tsx` has *much* more sophisticated routing —
+  orthogonal-axis replicas, density rescale, sticky-header, drag
+  clamping. Reaching parity would require either porting all that
+  logic OR adopting `@dagrejs/dagre` / `elkjs` (more bundle).
+  Phase 1 says "skip layout perfection," and the result reflects
+  that — readable but flat-looking compared to the SVG view.
+- **No replication / collapse integration.** The SVG view applies
+  `replicateHighFanoutSources` (so AES's `key-expansion` doesn't
+  drop 11 long lines across the canvas) and reads from the layout
+  store for collapse + drag-pin state. The xyflow view runs raw
+  `deriveAuxGraph` output. That's the spike's deliberate scope
+  cut — Phase 2/3 work in the original plan — but it means the
+  visual comparison isn't apples-to-apples.
+- **Visual smoke confirmed (user, 2026-05-13):** zoomable chain of
+  blocks with their internals visible; lines connect
+  block-to-block AND within blocks (state spine AND aux edges
+  both rendering). Logic correct. Aesthetics weak — "not very
+  beautiful." This matches the spike's deliberate layout cut: the
+  naive DFS-cursor layout produces a single horizontal row at each
+  container level, which makes deeply nested AES round groups
+  look cramped vs. the SVG view's mixed horizontal-and-vertical
+  flow with orthogonal-axis replicas. Polish would mean reaching
+  for dagre/elkjs (more bundle) or porting the SVG view's
+  hand-tuned routing (more code on this branch).
+
+### Bundle / perf measurements
+
+```
+                  before     after      delta
+JS (gzipped)      76 KB      197.68 KB  +121.68 KB (+160%)
+CSS (gzipped)    ~5 KB        6.40 KB     +1.4 KB
+Modules            ~225       302         +77
+Build time        ~1.0s       1.78s       +0.78s
+```
+
+Per-step adapter timing is sub-millisecond (not separately
+measured; the unit tests run in 10 ms across 8 cases including
+AES-128 and AES-128-ECB graph derivation each call, so the
+adapter is well within budget).
+
+### Recommendation
+
+**Don't merge this branch into `main` as-is.** The bundle cost is
+disqualifying for a learning tool that already ships a working SVG
+graph view. Even if xyflow's chrome (MiniMap, Controls, Background)
+is nicer than hand-rolled equivalents, the value isn't 121 KB
+gzipped of value.
+
+**Keep this branch as a working reference.** Two reasons to keep
+it alive rather than delete:
+
+1. If the project ever pivots toward a much larger scope where the
+   bundle delta is amortized (e.g. a full visual-cipher-design IDE
+   with persistence, real-time collaboration, complex editing
+   gestures), xyflow becomes the right tool — and this branch is
+   the existing integration to revive.
+2. The adapter (`cipher-to-xyflow.ts`) is a useful pattern document
+   even outside xyflow: it shows how `CipherGraph` maps to a
+   parent/child node graph with sized containers, which any future
+   framework (svelte-flow if we change UI stack, d3-dag, etc.)
+   would need to do the same mapping for.
+
+**If a future session does adopt xyflow**, the immediate next
+steps would be:
+- Port `replicateHighFanoutSources` into the adapter so high-fanout
+  graphs don't drop long lines.
+- Wire the layout store: `onNodeDragStop` → `setNodePosition`,
+  group expand/collapse → `toggleCollapse`.
+- Custom node component for leaves (Solid renders the leaf body via
+  a portal, OR write a small React component that consumes step
+  metadata from `data`).
+- Investigate whether `@xyflow/react`'s edge routing can be tuned
+  to handle the AES round-key fan-out as cleanly as the SVG view's
+  hand-tuned routing.
+
+### Files added (`explore/solid-flow` branch only — not on main)
+
+- `src/ui/graph/cipher-to-xyflow.ts` (~200 lines)
+- `src/ui/components/XyflowGraphView.tsx` (~120 lines)
+- `tests/cipher-to-xyflow.test.ts` (~170 lines)
+
+### Files modified
+
+- `src/ui/stores/view-mode.ts` (+`"xyflow"` entry)
+- `src/ui/App.tsx` (+import, +`<Match>` case)
+- `tests/graph-view.test.tsx` (tab count assertion: 3 → 4)
+- `package.json` / `package-lock.json` (+react, +react-dom,
+  +@xyflow/react, +@types/react, +@types/react-dom)
 

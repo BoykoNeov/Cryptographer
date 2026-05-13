@@ -56,6 +56,7 @@ import {
 import { BlockBadge } from "./components/BlockBadge";
 import { BytesView } from "./components/BytesView";
 import { GraphView } from "./components/GraphView";
+import { XyflowGraphView } from "./components/XyflowGraphView";
 import { MatrixView } from "./components/MatrixView";
 import { ParamEditor } from "./components/ParamEditor";
 import { RunExplorerModal } from "./components/RunExplorerModal";
@@ -939,6 +940,15 @@ export const App = () => {
 
           <Match when={viewMode() === "graph"}>
             <GraphView />
+          </Match>
+
+          {/* Experimental xyflow view (Phase 1 spike). Mounts a React root
+              inside this Solid sub-tree via react-dom/client; coexists with
+              the SVG GraphView via the tab strip. Read-only; no replication
+              / collapse / drag-to-pin integration with the existing layout
+              stores — that's the spike's deliberate scope cut. */}
+          <Match when={viewMode() === "xyflow"}>
+            <XyflowGraphView />
           </Match>
 
           <Match when={viewMode() === "json"}>

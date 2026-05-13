@@ -18,12 +18,13 @@
 
 import { createSignal } from "solid-js";
 
-export const ALL_VIEW_MODES = ["linear", "graph", "json"] as const;
+export const ALL_VIEW_MODES = ["linear", "graph", "xyflow", "json"] as const;
 export type ViewMode = (typeof ALL_VIEW_MODES)[number];
 
 export const VIEW_MODE_LABELS: Readonly<Record<ViewMode, string>> = {
   linear: "linear",
   graph: "graph",
+  xyflow: "xyflow",
   json: "JSON",
 };
 
