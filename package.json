@@ -18,7 +18,6 @@
     "prepare": "node scripts/install-git-hooks.mjs"
   },
   "dependencies": {
-    "solid-flow": "^1.0.4",
     "solid-js": "^1.9.3",
     "zod": "^3.24.1"
   },

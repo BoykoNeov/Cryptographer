@@ -1,8 +1,10 @@
 # solid-flow spike — Slice 8 mechanic decision
 
-> **Status: in progress.** Branch `explore/solid-flow`, dev server bound
-> to port 5174 so it coexists with `main` on 5173. Phase 0 done
-> (dependency selected + installed); Phases 1–5 pending.
+> **Status: complete. Recommendation: Abandon solid-flow; ship Slice 8
+> as HTML5 DnD on the existing SVG GraphView.** Phase 1 stopped at
+> the typing-survey stage — every Phase 1 success criterion is blocked
+> by missing API surface, so no adapter code was written. See the
+> [Result](#result) section for findings and the migration path.
 
 A timeboxed evaluation of [`solid-flow`](https://www.npmjs.com/package/solid-flow)
 as the rendering + drag-and-drop substrate for Slice 8 of the 2D editor
@@ -173,4 +175,122 @@ page:
 
 ## Result
 
-_(Pending — fill in at end of Phase 5.)_
+**Recommendation: Abandon.** Phase 1 stopped at the typing-survey
+stage — `solid-flow@1.0.4`'s public API lacks three primitives that
+the spike's Phase 1 and Phase 2 gates require. No adapter code was
+written; abandon is grounded in primary-source reading of the
+shipped `.d.ts` files plus the README's canonical example.
+
+### Findings
+
+The total exported surface is `<SolidFlow>` + two interfaces:
+
+```ts
+// node_modules/solid-flow/dist/components/index.d.ts
+interface NodeProps {
+  id: string;
+  position: { x: number; y: number };
+  data: { label?: string; content: any };
+  inputs: number;
+  outputs: number;
+  actions?: { delete: boolean };
+}
+
+interface EdgeProps {
+  id: string;
+  sourceNode: string;
+  targetNode: string;
+  sourceOutput: number;
+  targetInput: number;
+}
+
+interface Props {
+  nodes: NodeProps[];
+  edges: EdgeProps[];
+  onNodesChange: (newNodes: NodeProps[]) => void;
+  onEdgesChange: (newEdges: EdgeProps[]) => void;
+}
+```
+
+Against the spike's gates:
+
+1. **No subflow nesting.** `NodeProps` has no `parentId` or `type`.
+   The 3-level nesting (root → iterate → round-group → leaves) the
+   plan named as the Phase 1 acceptance criterion is not expressible.
+   The only conceivable workaround — mount a nested `<SolidFlow>`
+   inside a parent node's `data.content` — leaves cross-boundary
+   edges, coordinate translation, and parent-drag-moves-children
+   unsolved.
+
+2. **No custom edge types.** `EdgeProps` has no `type`, `data`, or
+   styling fields, and there is no custom-edge component registry.
+   Two visually distinct edge kinds (aux = gray curved, state = blue
+   animated) cannot be expressed. `data.content: any` customizes
+   node *interiors*, not edges.
+
+3. **No drop handler.** No `onDrop` prop on the component. The drag
+   primitives that exist (`onMouseDownOutput` / `onMouseUpInput` in
+   the internal `NodeComponent.d.ts`) are for drawing edges between
+   existing port handles, not for dropping new nodes onto the canvas
+   from a palette. This also forecloses the plan's "Partial" exit
+   recommendation — there are no usable DnD primitives to keep.
+
+The library is functional for the use case it advertises (flat node
+graphs with port-connected straight-line edges). It is not the
+right tool for visually structured cipher pipelines with
+multi-level grouping and semantically distinguished edge classes.
+
+### Why not push for a workaround
+
+The plan budgets 2–3 h for Phase 1. Faking nesting via nested
+`<SolidFlow>` inside `content`, faking edge classes via JSX
+overlays, and faking drop via a separate event listener on the
+component's outer `<div>` is potentially within that budget — but
+the bundle and complexity tradeoff is then *much* worse than the
+HTML5-on-SVG alternative. Every Phase 1 criterion would be
+compromised before Phase 2 even started. Abandon now is cheaper
+than abandon-after-hacking.
+
+### Migration path
+
+Slice 8 ships as **HTML5 DnD on the existing SVG `GraphView.tsx`**:
+
+- `StepPalette.tsx` — flat list of step types from
+  `registry.types()`. HTML5 `draggable` on each entry,
+  `dataTransfer.setData("application/x-step-type", type)` on
+  `dragstart`.
+- `GraphView.tsx` — wire `dragover` (preventDefault) and `drop` on
+  the root `<svg>`. On drop, convert `clientX/Y` to SVG-canvas
+  coords via `getScreenCTM().inverse()` (standard pattern; see the
+  existing drag handler for the precedent).
+- Find the nearest existing node by Euclidean distance, build a new
+  `StepLeaf`, call `core/spec-mutations.ts::insertStepAfter`
+  (Slice 4, shipped) — same logic block that the solid-flow Phase 2
+  would have run.
+- Optional: install `@thisbeyond/solid-dnd@0.7.5` (~5 KB gzipped)
+  only if the native event ergonomics feel rough during
+  implementation. Defer that decision until we hit friction.
+
+This direction was the third option presented at the start of the
+spike. The spike's value is that it makes the choice *defensible*:
+we now know solid-flow doesn't fit, by inspection of the actual
+shipped types, and the answer is durable until the library has a
+major-version API revision.
+
+### Branch cleanup
+
+- `solid-flow` uninstalled from `package.json`.
+- `vite.config.ts` `server.port` / `strictPort` reverted; the
+  side-by-side coexistence rationale is gone.
+- This document remains as the durable writeup. Worth merging to
+  `main` (or cherry-picking the doc + the CLAUDE.md / memory
+  updates) so the abandon decision survives the eventual deletion
+  of `explore/solid-flow`.
+
+### Bundle / perf measurements
+
+Not run — no implementation code was written, so the measurements
+the plan called for would not have been meaningful. The abandon
+decision rests on API capability, not on observed performance or
+bundle weight.
+

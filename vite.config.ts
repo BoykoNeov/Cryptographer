@@ -8,13 +8,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   plugins: [solid()],
-  // explore/xyflow runs on 5174 so it can coexist with main's dev server
-  // on 5173. strictPort makes a port collision fail loudly instead of
-  // silently drifting to the next free port.
-  server: {
-    port: 5174,
-    strictPort: true,
-  },
   resolve: {
     alias: {
       "@": resolve(__dirname, "src"),
