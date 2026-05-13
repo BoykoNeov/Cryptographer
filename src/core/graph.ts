@@ -82,6 +82,13 @@ export type GraphNode = {
    * leaf is outside any iterate, or the iterate had zero iterations).
    */
   readonly blockSpan?: number;
+  /**
+   * Set on replica nodes produced by `replicateHighFanoutSources`: the
+   * canonical stepId this replica points at. The renderer routes clicks
+   * through this so a replica still scrubs to the source's trace frame.
+   * Undefined for the original (non-replica) nodes.
+   */
+  readonly replicaOf?: string;
 };
 
 export type ContainerNode = {
@@ -533,6 +540,166 @@ export const collapseGraph = (
     nodes: newNodes,
     containers: newContainers,
     edges: newEdges,
+    rootIds: newRootIds,
+  };
+};
+
+// ─── High-fanout replication (commit 4 of the graph-readability sequence) ─
+
+/**
+ * Replicate any aux-edge source whose outgoing-aux count exceeds `threshold`.
+ *
+ * Why: AES-128's `key-expansion` produces 11 outgoing roundKey edges that
+ * fan out to all 11 AddRoundKey consumers, dominating the canvas with long
+ * cross-pipeline lines. Replicating moves each edge to a short local hop:
+ * a tiny `key-expansion` chip lands next to each consumer, the long lines
+ * disappear, the eye reads the round body before the schedule.
+ *
+ * Semantics:
+ *   - Counts only `kind: "aux"` edges. State edges are 1-to-1 between
+ *     consecutive same-parent leaves (no fanout possible) and pass through
+ *     unchanged.
+ *   - A "source" is any id appearing in `edge.from` for ≥ threshold + 1
+ *     aux edges. Both leaves and iterate containers can be sources (the
+ *     iterate boundary participates in synthetic edges; see deriveAuxGraph's
+ *     "iterate-mediated aux" note).
+ *   - One replica per (source, consumer) pair, even if multiple aux keys
+ *     flow source → consumer. The replica gets all those edges; visually
+ *     this reads as a single local chip with N tiny edges to its
+ *     consumer, which is still much less cluttered than N long edges
+ *     fanning from the original.
+ *   - Replica id format: `${sourceId}@->${consumerId}` (the `@->` infix is
+ *     unique enough to never collide with a real spec id; spec ids use
+ *     dots and dashes only).
+ *   - Replicas inherit the source's stepType + label so the user reads
+ *     them as visual references to the source. `replicaOf` carries the
+ *     source's canonical stepId so click handlers can navigate to the
+ *     source's trace frame.
+ *   - Replicas land in `containerPath` matching the consumer's, then are
+ *     inserted as siblings immediately before the consumer in the parent's
+ *     `childIds` (or `rootIds` if the consumer is at the root).
+ *   - The original source node is KEPT in `nodes` so the linear-list
+ *     sidebar's click-to-scrub continues to work. The source loses its
+ *     replicated outgoing aux edges; if it had below-threshold outgoing
+ *     aux to other consumers, those pass through unchanged.
+ *   - `threshold <= 0` or no high-fanout sources → return the input graph
+ *     by reference. Identity short-circuit keeps the createMemo chain
+ *     in GraphView cheap when replication is off.
+ */
+export const replicateHighFanoutSources = (graph: CipherGraph, threshold: number): CipherGraph => {
+  if (threshold <= 0) return graph;
+
+  // Count outgoing aux edges per source. State edges are excluded.
+  const fanoutBySrc = new Map<string, number>();
+  for (const e of graph.edges) {
+    if (e.kind !== "aux") continue;
+    fanoutBySrc.set(e.from, (fanoutBySrc.get(e.from) ?? 0) + 1);
+  }
+
+  const highFanoutSrcs = new Set<string>();
+  for (const [srcId, count] of fanoutBySrc) {
+    if (count > threshold) highFanoutSrcs.add(srcId);
+  }
+
+  if (highFanoutSrcs.size === 0) return graph;
+
+  // Index source nodes by id so replicas can inherit stepType + label.
+  // Containers can also be sources (iterate aux), so check both maps.
+  const nodeById = new Map<string, GraphNode>();
+  for (const n of graph.nodes) nodeById.set(n.stepId, n);
+  const containerById = new Map<string, ContainerNode>();
+  for (const c of graph.containers) containerById.set(c.id, c);
+
+  // Walk aux edges, build:
+  //   - newAuxEdges: the rewritten aux edges (replicas as source) + unchanged ones
+  //   - replicasBySource: (srcId, consumerId) → replica node
+  //   - replicaInsertBefore: parent container id (or null = root) →
+  //       (consumerId → [replicaIds]) in spec-order
+  const newAuxEdges: GraphEdge[] = [];
+  const replicaKey = (srcId: string, consumerId: string) => `${srcId}@->${consumerId}`;
+  const replicas = new Map<string, GraphNode>(); // replicaId → node
+
+  // For each parent container id (use "" for root), and for each consumer,
+  // the ordered list of replica ids to insert immediately before that
+  // consumer. Order: insertion order of (src, consumer) encounters, so
+  // multiple high-fanout sources pointing at the same consumer line up
+  // left-to-right in encounter order.
+  const insertionsByParent = new Map<string, Map<string, string[]>>();
+  const ensureInsertionMap = (parentKey: string): Map<string, string[]> => {
+    let m = insertionsByParent.get(parentKey);
+    if (!m) {
+      m = new Map();
+      insertionsByParent.set(parentKey, m);
+    }
+    return m;
+  };
+
+  for (const edge of graph.edges) {
+    if (edge.kind !== "aux" || !highFanoutSrcs.has(edge.from)) {
+      newAuxEdges.push(edge);
+      continue;
+    }
+    // High-fanout source: rewrite the edge through a replica node.
+    const rId = replicaKey(edge.from, edge.to);
+    if (!replicas.has(rId)) {
+      // Determine the consumer's parent container (last in containerPath)
+      // and lookup its inherited fields from the source node/container.
+      const consumerNode = nodeById.get(edge.to);
+      const consumerContainer = containerById.get(edge.to);
+      const consumerPath = consumerNode?.containerPath ?? consumerContainer?.containerPath ?? [];
+      const sourceNode = nodeById.get(edge.from);
+      const sourceContainer = containerById.get(edge.from);
+      const stepType = sourceNode?.stepType ?? sourceContainer?.kind ?? "replica";
+      const label = sourceNode?.label ?? sourceContainer?.label ?? edge.from;
+      replicas.set(rId, {
+        stepId: rId,
+        stepType,
+        label,
+        containerPath: consumerPath,
+        replicaOf: edge.from,
+      });
+      // Schedule the replica for insertion next to its consumer.
+      const parentKey =
+        consumerPath.length > 0 ? (consumerPath[consumerPath.length - 1] ?? "") : "";
+      const map = ensureInsertionMap(parentKey);
+      const list = map.get(edge.to) ?? [];
+      list.push(rId);
+      map.set(edge.to, list);
+    }
+    newAuxEdges.push({ from: rId, to: edge.to, auxKey: edge.auxKey, kind: "aux" });
+  }
+
+  // Build replacement childIds for each affected container + rootIds.
+  const splice = (childIds: readonly string[], byConsumer: Map<string, string[]>) => {
+    const out: string[] = [];
+    for (const id of childIds) {
+      const ins = byConsumer.get(id);
+      if (ins) out.push(...ins);
+      out.push(id);
+    }
+    return out;
+  };
+
+  const newContainers = graph.containers.map((c) => {
+    const ins = insertionsByParent.get(c.id);
+    if (!ins) return c;
+    return { ...c, childIds: splice(c.childIds, ins) };
+  });
+
+  const rootInsertions = insertionsByParent.get("");
+  const newRootIds = rootInsertions ? splice(graph.rootIds, rootInsertions) : graph.rootIds;
+
+  // State edges pass through unchanged (they were never aux). Concat after
+  // newAuxEdges to preserve the same ordering convention as deriveAuxGraph
+  // (aux first, state second) — keeps any existing edge-indexing tests
+  // unaffected.
+  const stateEdges = graph.edges.filter((e) => e.kind === "state");
+  const newAuxOnly = newAuxEdges.filter((e) => e.kind === "aux");
+
+  return {
+    nodes: [...graph.nodes, ...replicas.values()],
+    containers: newContainers,
+    edges: [...newAuxOnly, ...stateEdges],
     rootIds: newRootIds,
   };
 };

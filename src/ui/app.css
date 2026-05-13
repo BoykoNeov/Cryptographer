@@ -1539,6 +1539,15 @@ button:disabled {
   padding: 0;
 }
 
+/* Commit 4 — replicate-fanout checkbox in the graph toolbar. */
+.graph-replicate-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .graph-view-svg {
   display: block;
   font-family: inherit;
@@ -1640,6 +1649,20 @@ button:disabled {
   fill: var(--bg);
   stroke: var(--border);
   stroke-width: 1;
+}
+
+/* Commit 4 — replica leaves rendered by `replicateHighFanoutSources`.
+   Dashed stroke + slightly muted fill reads as "a reference, not the
+   thing itself"; click still navigates to the source's frame. */
+.graph-leaf-replica .graph-leaf-rect {
+  fill: var(--bg-elev);
+  stroke-dasharray: 3 2;
+  stroke: var(--muted);
+}
+
+.graph-leaf-replica .graph-leaf-label {
+  fill: var(--muted);
+  font-style: italic;
 }
 
 .graph-leaf:hover .graph-leaf-rect,

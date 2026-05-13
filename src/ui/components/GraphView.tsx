@@ -35,7 +35,13 @@
  * starts no drag). Above threshold, the click handler is suppressed.
  */
 
-import { type CipherGraph, type ContainerNode, collapseGraph, deriveAuxGraph } from "@/core/graph";
+import {
+  type CipherGraph,
+  type ContainerNode,
+  collapseGraph,
+  deriveAuxGraph,
+  replicateHighFanoutSources,
+} from "@/core/graph";
 import { For, Show, createMemo } from "solid-js";
 import { setNodePosition, toggleCollapse, useLayoutMap } from "../stores/layout";
 import { useSpec } from "../stores/spec";
@@ -48,6 +54,11 @@ import {
   setViewDensity,
   useViewDensity,
 } from "../stores/view-density";
+import {
+  REPLICATION_THRESHOLD,
+  setReplicationEnabled,
+  useReplicationEnabled,
+} from "../stores/view-replication";
 
 // ─── Layout constants ──────────────────────────────────────────────────────
 // All in CSS pixels. The size-and-gap subset scales with the active view
@@ -330,6 +341,7 @@ export const GraphView = () => {
   const version = useTraceVersion();
   const layoutMap = useLayoutMap();
   const density = useViewDensity();
+  const replicate = useReplicationEnabled();
 
   /**
    * Size + gap constants for the active density. Memoized so the layout
@@ -377,8 +389,15 @@ export const GraphView = () => {
     return deriveAuxGraph(fallback, spec());
   });
 
-  /** Apply collapse view-transform after raw derivation. */
-  const graph = createMemo<CipherGraph>(() => collapseGraph(rawGraph(), collapsedSet()));
+  /** Apply collapse, then optional fanout replication. Order matters:
+   * replicate AFTER collapse so the surviving (post-collapse) aux edges
+   * are what gets evaluated against the threshold. A collapsed round-key
+   * source disappears, and we don't want to manufacture replicas for
+   * edges that aren't on screen anyway. */
+  const graph = createMemo<CipherGraph>(() => {
+    const collapsed = collapseGraph(rawGraph(), collapsedSet());
+    return replicate() ? replicateHighFanoutSources(collapsed, REPLICATION_THRESHOLD) : collapsed;
+  });
 
   const layout = createMemo(() => layoutRoot(graph(), pinnedMap(), consts()));
 
@@ -398,6 +417,9 @@ export const GraphView = () => {
     void version();
     const t = getTrace();
     if (!t) return;
+    // Replica ids are not real stepIds (`${source}@->${consumer}`); their
+    // graph node carries `replicaOf` with the source's canonical id. The
+    // caller resolves that to a real stepId before getting here.
     const idx = t.frames.findIndex((f) => {
       const colonIdx = f.stepId.indexOf(":b");
       const canonical = colonIdx >= 0 ? f.stepId.slice(0, colonIdx) : f.stepId;
@@ -493,6 +515,23 @@ export const GraphView = () => {
             )}
           </For>
         </div>
+        {/* Commit 4: high-fanout replica toggle. When ON, sources with
+            >REPLICATION_THRESHOLD outgoing aux edges (AES key-expansion,
+            Speck/Serpent key schedules) are replicated as small chips
+            next to each consumer, shortening edges and reducing visual
+            clutter. Off by default — the "one source, many edges" view
+            is also pedagogically valuable. */}
+        <label
+          class="graph-replicate-toggle"
+          title={`Show high-fanout sources (>${REPLICATION_THRESHOLD} outgoing aux edges) as small replicas next to each consumer`}
+        >
+          <input
+            type="checkbox"
+            checked={replicate()}
+            onChange={(e) => setReplicationEnabled(e.currentTarget.checked)}
+          />
+          replicate fan-out
+        </label>
       </fieldset>
       <Show
         when={graph().nodes.length > 0 || graph().containers.length > 0}
@@ -605,6 +644,12 @@ export const GraphView = () => {
                 return c?.kind === "iterate";
               });
               const isRootLevel = node.containerPath.length === 0;
+              const isReplica = node.replicaOf !== undefined;
+              // Replicas route clicks through `replicaOf` so the scrubber
+              // lands on the SOURCE's frame, not on the replica's synthetic
+              // id (which has no matching trace frame). Replicas are also
+              // never draggable — they're auto-placed visual references.
+              const clickTargetId = node.replicaOf ?? node.stepId;
               // exactOptionalPropertyTypes is on, so we conditionally spread
               // blockSpan rather than passing `undefined` as a real value.
               const blockSpanProps =
@@ -612,25 +657,27 @@ export const GraphView = () => {
                   ? { blockSpan: node.blockSpan }
                   : {};
               // Conditional spread for the drag handler — only present on
-              // root-level leaves. Nested leaves get a plain onClick.
-              const dragProps = isRootLevel
-                ? {
-                    onPointerDown: (e: PointerEvent) =>
-                      startNodeDrag(node.stepId, e, () => handleLeafClick(node.stepId)),
-                  }
-                : {};
+              // root-level leaves AND not replicas (replicas are auto-placed).
+              const dragProps =
+                isRootLevel && !isReplica
+                  ? {
+                      onPointerDown: (e: PointerEvent) =>
+                        startNodeDrag(node.stepId, e, () => handleLeafClick(clickTargetId)),
+                    }
+                  : {};
               return (
                 <Show when={box()}>
                   {(b) => (
                     <LeafRect
                       stepId={node.stepId}
-                      label={shortLeafLabel(node.stepId)}
+                      label={shortLeafLabel(clickTargetId)}
                       stepType={node.stepType}
                       box={b()}
-                      draggable={isRootLevel}
+                      draggable={isRootLevel && !isReplica}
+                      isReplica={isReplica}
                       {...blockSpanProps}
                       {...dragProps}
-                      onClick={() => handleLeafClick(node.stepId)}
+                      onClick={() => handleLeafClick(clickTargetId)}
                     />
                   )}
                 </Show>
@@ -652,6 +699,10 @@ const LeafRect = (props: {
   box: Box;
   blockSpan?: number;
   draggable: boolean;
+  /** True for replica nodes (commit 4 of the graph-readability sequence) —
+   * adds `.graph-leaf-replica` class so CSS can distinguish a visual
+   * reference (dashed border, lighter fill) from a real leaf. */
+  isReplica: boolean;
   /** Present only when draggable. The parent wires this to `startNodeDrag`
    * with the leaf's onClick as the sub-threshold fallback, so clicks still
    * scrub the trace and drags pin the position. */
@@ -676,7 +727,9 @@ const LeafRect = (props: {
   //     isn't wired so the click flows through the browser as before.
   return (
     <g
-      class={`graph-leaf${props.draggable ? " graph-leaf-draggable" : ""}`}
+      class={`graph-leaf${props.draggable ? " graph-leaf-draggable" : ""}${
+        props.isReplica ? " graph-leaf-replica" : ""
+      }`}
       onPointerDown={props.onPointerDown}
       onClick={props.draggable ? undefined : props.onClick}
       onKeyDown={(e) => {
