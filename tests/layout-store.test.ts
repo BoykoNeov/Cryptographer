@@ -26,6 +26,7 @@ import {
   clearLayoutForSpec,
   getLayoutForSpec,
   hasUserLayout,
+  rescaleAllPositions,
   setLayoutForSpec,
   setNodePosition,
   setReplicationMode,
@@ -358,6 +359,76 @@ describe("layout store — setReplicationMode (commit 5)", () => {
     // An empty `replicationModes: {}` would defeat byte-stability: spec-only
     // saves with no user customization need to omit the field entirely.
     expect(parsed["aes-128@1"].replicationModes).toBeUndefined();
+  });
+});
+
+describe("layout store — rescaleAllPositions (density-flip pin scaling)", () => {
+  it("multiplies every pinned position by the factor", () => {
+    setNodePosition("aes-128@1", "round.1", 100, 50);
+    setNodePosition("aes-128@1", "round.5", 200, 80);
+    rescaleAllPositions(1.5);
+    const l = getLayoutForSpec("aes-128@1");
+    expect(l?.positions["round.1"]).toEqual({ x: 150, y: 75 });
+    expect(l?.positions["round.5"]).toEqual({ x: 300, y: 120 });
+  });
+
+  it("rescales positions across all specs in the map", () => {
+    setNodePosition("aes-128@1", "round.1", 100, 100);
+    setNodePosition("aes-256@1", "round.1", 200, 200);
+    rescaleAllPositions(0.5);
+    expect(getLayoutForSpec("aes-128@1")?.positions["round.1"]).toEqual({ x: 50, y: 50 });
+    expect(getLayoutForSpec("aes-256@1")?.positions["round.1"]).toEqual({ x: 100, y: 100 });
+  });
+
+  it("factor === 1.0 is a no-op (preserves reference equality on layoutMap)", () => {
+    setNodePosition("aes-128@1", "round.1", 100, 100);
+    const before = useLayoutMap()();
+    rescaleAllPositions(1.0);
+    expect(useLayoutMap()()).toBe(before);
+  });
+
+  it("preserves collapsedGroups and replicationModes unchanged", () => {
+    setNodePosition("aes-128@1", "round.1", 100, 100);
+    toggleCollapse("aes-128@1", "round.5");
+    setReplicationMode("aes-128@1", "key-expansion", "always");
+    rescaleAllPositions(0.75);
+    const l = getLayoutForSpec("aes-128@1");
+    expect(l?.positions["round.1"]).toEqual({ x: 75, y: 75 });
+    // Density-independent fields must survive untouched.
+    expect(l?.collapsedGroups).toEqual(["round.5"]);
+    expect(l?.replicationModes).toEqual({ "key-expansion": "always" });
+  });
+
+  it("rounds to integer pixels (no fractional drift in storage)", () => {
+    setNodePosition("aes-128@1", "round.1", 100, 100);
+    rescaleAllPositions(0.75);
+    const p = getLayoutForSpec("aes-128@1")?.positions["round.1"];
+    // 100 * 0.75 = 75 exactly; pick a factor that produces a fraction to
+    // exercise the rounding path.
+    expect(p).toEqual({ x: 75, y: 75 });
+    rescaleAllPositions(1.333);
+    const p2 = getLayoutForSpec("aes-128@1")?.positions["round.1"];
+    expect(Number.isInteger(p2?.x)).toBe(true);
+    expect(Number.isInteger(p2?.y)).toBe(true);
+  });
+
+  it("a spec with no pins is passed through unchanged (collapsed-only or modes-only layouts survive)", () => {
+    toggleCollapse("aes-128@1", "round.5");
+    const before = getLayoutForSpec("aes-128@1");
+    rescaleAllPositions(0.5);
+    const after = getLayoutForSpec("aes-128@1");
+    // Same layout value — no positions to rescale, so the entry is
+    // identity-passed through the rebuild.
+    expect(after).toBe(before);
+  });
+
+  it("persists rescaled positions to localStorage atomically", () => {
+    setNodePosition("aes-128@1", "round.1", 80, 40);
+    rescaleAllPositions(1.25);
+    const raw = storage.getItem(STORAGE_KEY);
+    expect(raw).not.toBeNull();
+    const parsed = JSON.parse(raw as string);
+    expect(parsed["aes-128@1"].positions["round.1"]).toEqual({ x: 100, y: 50 });
   });
 });
 

@@ -274,6 +274,58 @@ export const setLayoutForSpec = (specId: string, layout: LayoutSpec | null): voi
   persist(map);
 };
 
+/**
+ * Multiply every pinned position in every spec's layout by `factor`. Used by
+ * `view-density.ts::setViewDensity` to keep dragged containers in their
+ * "logical slot" when the user flips density — without rescaling, a pin at
+ * (400, 200) saved at normal density (1.0×) stays at (400, 200) when the
+ * canvas redraws at compact (0.75×), which collides with the surrounding
+ * un-pinned flow that DID shrink.
+ *
+ * No-ops when `factor === 1.0` (e.g., flipping between two density values
+ * that happen to scale the same — not possible today, but defensive) and
+ * when the layout map has no positions to rescale. `Math.round` keeps the
+ * stored values integer; over many flips the drift is sub-pixel and
+ * invisible (3 flips ≈ ±1px on a 400-pixel coordinate).
+ *
+ * Does NOT touch `collapsedGroups` or `replicationModes` — those are
+ * density-independent. Replication overrides are still a single map entry,
+ * not coordinates.
+ */
+export const rescaleAllPositions = (factor: number): void => {
+  if (factor === 1.0) return;
+  const map = layoutMap();
+  let changed = false;
+  const newMap: { [specId: string]: LayoutSpec } = {};
+  for (const [specId, layout] of Object.entries(map)) {
+    const positionEntries = Object.entries(layout.positions);
+    if (positionEntries.length === 0) {
+      // No pins for this spec → no rescale; pass through unchanged.
+      newMap[specId] = layout;
+      continue;
+    }
+    const newPositions: { [nodeId: string]: { x: number; y: number } } = {};
+    for (const [id, p] of positionEntries) {
+      newPositions[id] = {
+        x: Math.round(p.x * factor),
+        y: Math.round(p.y * factor),
+      };
+    }
+    newMap[specId] = withReplicationModes(
+      {
+        positions: newPositions,
+        collapsedGroups: layout.collapsedGroups,
+        flowDirection: layout.flowDirection,
+      },
+      cloneReplicationModes(layout),
+    );
+    changed = true;
+  }
+  if (!changed) return;
+  setLayoutMapSignal(newMap);
+  persist(newMap);
+};
+
 /** Drop one spec's layout (also a localStorage write). Reserved for tests. */
 export const clearLayoutForSpec = (specId: string): void => {
   const map = { ...layoutMap() };

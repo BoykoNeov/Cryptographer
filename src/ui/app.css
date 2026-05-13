@@ -1507,12 +1507,27 @@ button:disabled {
   overflow: auto;
 }
 
-/* Toolbar above the SVG. Stays inside the scrolling wrapper so it sticks
-   to the top when the user scrolls the SVG canvas (`position: sticky`
-   keeps it visible even at far-right scroll positions in the AES-128
-   wide-pipeline case). `<fieldset>` reset mirrors the byte-format toggle
-   in `.inputs` — strip the default border/padding so the toolbar reads
-   as a row, not a UA-styled grouped form control. */
+/* Sticky-header wrapper. Holds the density toolbar AND the per-source
+   replication-overrides panel (when visible). Both used to set their
+   own `position: sticky` with hardcoded top offsets — the panel's
+   `top: 32px` was a guess at the toolbar's rendered height and would
+   visibly drift if the toolbar grew. One sticky wrapper sidesteps the
+   math: it pins at top: 0, children stack naturally inside it, and the
+   panel can never overlap the toolbar regardless of either's height.
+   `background` is required so SVG content scrolling underneath doesn't
+   bleed through the transparent stacking context. */
+.graph-view-sticky-header {
+  position: sticky;
+  top: 0;
+  left: 0;
+  background: var(--bg-elev);
+  z-index: 1;
+}
+
+/* Toolbar above the SVG. Stays inside the scrolling wrapper via its
+   parent's `position: sticky`. `<fieldset>` reset mirrors the byte-
+   format toggle in `.inputs` — strip the default border/padding so
+   the toolbar reads as a row, not a UA-styled grouped form control. */
 .graph-view-toolbar {
   display: flex;
   align-items: center;
@@ -1521,11 +1536,7 @@ button:disabled {
   border: none;
   border-bottom: 1px solid var(--border);
   margin: 0;
-  position: sticky;
-  top: 0;
-  left: 0;
   background: var(--bg-elev);
-  z-index: 1;
 }
 
 .graph-view-toolbar-label {
@@ -1548,11 +1559,11 @@ button:disabled {
   color: var(--muted);
 }
 
-/* Commit 5 — per-source replication override panel. Sticky beneath the
-   toolbar (which is itself sticky at `top: 0`) so it stays visible at
-   any scroll position. The 32px figure matches the toolbar's rendered
-   height (≈ 6px padding + ~20px content + 6px padding + 1px border);
-   keep them in sync if the toolbar's padding changes. */
+/* Commit 5 — per-source replication override panel. Lives inside
+   `.graph-view-sticky-header` so it shares the toolbar's sticky band;
+   no `position: sticky` of its own (the old hardcoded `top: 32px` was
+   a guess at the toolbar's rendered height and produced a visible
+   overlap when the actual height differed). */
 .graph-replication-panel {
   display: flex;
   flex-direction: column;
@@ -1560,10 +1571,6 @@ button:disabled {
   padding: 6px 8px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-elev);
-  position: sticky;
-  top: 32px;
-  left: 0;
-  z-index: 1;
   font-size: 11px;
 }
 

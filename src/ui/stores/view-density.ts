@@ -36,6 +36,7 @@
  */
 
 import { createSignal } from "solid-js";
+import { rescaleAllPositions } from "./layout";
 
 export const ALL_VIEW_DENSITIES = ["compact", "normal", "spacious"] as const;
 export type ViewDensity = (typeof ALL_VIEW_DENSITIES)[number];
@@ -80,6 +81,23 @@ const [viewDensity, setViewDensitySignal] = createSignal<ViewDensity>(loadInitia
 export const useViewDensity = () => viewDensity;
 
 export const setViewDensity = (density: ViewDensity): void => {
+  // Rescale all pinned positions by newScale/oldScale BEFORE flipping the
+  // density signal. Without this, a container dragged at (say) compact
+  // density retains its absolute coords when the user switches to spacious,
+  // while every un-pinned sibling lays out at the new scale — producing
+  // overlap as the new flow expands past the stale pin. Order matters
+  // intentionally: rescale first, then flip the density signal, so when
+  // GraphView's createMemo chain re-runs it sees the already-scaled pin
+  // map alongside the new consts. (Both signal writes happen synchronously
+  // here; Solid batches the resulting reactive updates.)
+  const oldDensity = viewDensity();
+  if (oldDensity !== density) {
+    const oldScale = DENSITY_SCALE[oldDensity];
+    const newScale = DENSITY_SCALE[density];
+    if (oldScale !== newScale) {
+      rescaleAllPositions(newScale / oldScale);
+    }
+  }
   setViewDensitySignal(density);
   try {
     if (typeof localStorage !== "undefined") {

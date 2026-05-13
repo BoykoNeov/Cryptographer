@@ -131,6 +131,38 @@ describe("GraphView — container drag (Slice 6)", () => {
     }
   });
 
+  it("clamps drag to non-negative SVG coordinates (block can't be lost behind the sticky header)", () => {
+    // Regression: the sticky toolbar/replication-overrides header has
+    // z-index: 1 over the SVG. A block dragged to negative SVG y is
+    // clipped (outside the SVG viewBox) AND unclickable; the bad
+    // position persists in localStorage so the block stays lost across
+    // reloads. The drag handler clamps newX/newY to >= 0 so a block
+    // can never land outside the SVG's drawn area.
+    seedAes128Trace();
+    const { container } = render(() => <GraphView />);
+    const specId = useSpec()().id;
+
+    // Seed round.5 at a starting position close to the top, then drag UP
+    // far enough that the natural newY would go negative.
+    setNodePosition(specId, "round.5", 50, 30);
+    const header = container.querySelector(
+      '[data-testid="graph-container-header-round.5"]',
+    ) as Element;
+    expect(header).not.toBeNull();
+
+    // pointerdown at (100, 100); move UP/LEFT by (-200, -200). Natural
+    // newX = 50 - 200 = -150; natural newY = 30 - 200 = -170. Both
+    // negative — the clamp must bring them to 0.
+    header.dispatchEvent(pointerEvt("pointerdown", 100, 100));
+    window.dispatchEvent(pointerEvt("pointermove", -100, -100));
+    window.dispatchEvent(pointerEvt("pointerup", -100, -100));
+
+    const p = getLayoutForSpec(specId)?.positions["round.5"];
+    expect(p).toBeDefined();
+    expect(p?.x).toBeGreaterThanOrEqual(0);
+    expect(p?.y).toBeGreaterThanOrEqual(0);
+  });
+
   it("does NOT pin a position when the pointer barely moves (sub-threshold = click, not drag)", () => {
     seedAes128Trace();
     const { container } = render(() => <GraphView />);

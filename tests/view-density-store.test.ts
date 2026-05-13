@@ -126,6 +126,40 @@ describe("view-density store — setViewDensity persistence", () => {
   });
 });
 
+describe("view-density store — pin rescale on density change", () => {
+  it("scales pinned positions by newScale/oldScale when density flips", async () => {
+    // Drag a container while the store is at "normal" (1.0×). Switching to
+    // "compact" (0.75×) without rescaling would leave the pin at its old
+    // absolute coords while every un-pinned sibling shrinks — producing
+    // overlap. With rescale, the pin should land at 0.75× the original.
+    const { setNodePosition, getLayoutForSpec } = await import("@/ui/stores/layout");
+    const { setViewDensity } = await import("@/ui/stores/view-density");
+    setNodePosition("aes-128@1", "round.5", 400, 200);
+    setViewDensity("compact");
+    expect(getLayoutForSpec("aes-128@1")?.positions["round.5"]).toEqual({ x: 300, y: 150 });
+  });
+
+  it("a no-op density set (same → same) does NOT rescale", async () => {
+    const { setNodePosition, getLayoutForSpec } = await import("@/ui/stores/layout");
+    const { setViewDensity } = await import("@/ui/stores/view-density");
+    setNodePosition("aes-128@1", "round.5", 400, 200);
+    setViewDensity("normal"); // already "normal" by default
+    expect(getLayoutForSpec("aes-128@1")?.positions["round.5"]).toEqual({ x: 400, y: 200 });
+  });
+
+  it("a round-trip compact → normal restores the original (within 1px rounding)", async () => {
+    const { setNodePosition, getLayoutForSpec } = await import("@/ui/stores/layout");
+    const { setViewDensity } = await import("@/ui/stores/view-density");
+    setNodePosition("aes-128@1", "round.5", 400, 200);
+    setViewDensity("compact");
+    setViewDensity("normal");
+    const p = getLayoutForSpec("aes-128@1")?.positions["round.5"];
+    // (400 * 0.75 = 300) * (1.0 / 0.75) = 400 exactly.
+    expect(p?.x).toBe(400);
+    expect(p?.y).toBe(200);
+  });
+});
+
 describe("view-density store — defensive load", () => {
   it("returns 'normal' when localStorage is unavailable", async () => {
     uninstallStorage();

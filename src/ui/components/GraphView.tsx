@@ -212,6 +212,54 @@ const labelTextLength = (
 type Box = { x: number; y: number; w: number; h: number };
 
 /**
+ * Replica placement info, derived once at the top of `layoutRoot` from the
+ * graph's nodes + aux edges and threaded down through `layoutNode`. Two
+ * lookups the group-layout pass needs:
+ *
+ *   - `isReplica(id)` — is this child a fan-out replica? Replicas are
+ *     skipped in the main vertical-stack pass so they don't displace
+ *     real siblings (and don't sit between state-spine-consecutive
+ *     leaves obscuring the spine edge).
+ *   - `consumerOf(replicaId)` — where does this replica's short aux
+ *     arrow terminate? The replica is positioned to the LEFT of the
+ *     consumer at the consumer's y, after the consumer has been laid out
+ *     in the main pass.
+ *
+ * Empty for graphs without replication on (the master-switch case);
+ * `layoutNode`'s replica branch then short-circuits to current behavior.
+ */
+type ReplicaPlacement = {
+  readonly isReplica: ReadonlySet<string>;
+  readonly consumerOf: ReadonlyMap<string, string>;
+};
+
+const EMPTY_REPLICA_PLACEMENT: ReplicaPlacement = {
+  isReplica: new Set(),
+  consumerOf: new Map(),
+};
+
+/**
+ * Build the replica → consumer map from the graph. The replica's
+ * outgoing aux edge points at its consumer (every replica has exactly
+ * one — that's the point of replication). Using the edge list (not the
+ * `${src}@->${consumer}` id format) keeps the layout decoupled from
+ * `graph.ts`'s replica-id convention.
+ */
+const buildReplicaPlacement = (graph: CipherGraph): ReplicaPlacement => {
+  const isReplica = new Set<string>();
+  const consumerOf = new Map<string, string>();
+  for (const n of graph.nodes) {
+    if (n.replicaOf !== undefined) isReplica.add(n.stepId);
+  }
+  if (isReplica.size === 0) return EMPTY_REPLICA_PLACEMENT;
+  for (const e of graph.edges) {
+    if (e.kind !== "aux") continue;
+    if (isReplica.has(e.from)) consumerOf.set(e.from, e.to);
+  }
+  return { isReplica, consumerOf };
+};
+
+/**
  * Place one node (leaf or container) with its top-left at (cursorX, cursorY)
  * and return the bounding box. Recurses into containers; writes every leaf
  * and container's final box into `out`.
@@ -228,6 +276,7 @@ const layoutNode = (
   pinned: ReadonlyMap<string, { x: number; y: number }>,
   out: Map<string, Box>,
   consts: LayoutConstants,
+  replicas: ReplicaPlacement,
 ): Box => {
   const container = containersById.get(id);
   const pin = pinned.get(id);
@@ -254,36 +303,167 @@ const layoutNode = (
 
   if (container.kind === "group") {
     // Vertical stack of children inside a padded, header-topped rect.
-    const innerX = startX + consts.CONTAINER_PAD;
-    let innerY = startY + HEADER_H + consts.CONTAINER_PAD;
+    //
+    // Replica placement uses a DUAL strategy because there are two distinct
+    // scenarios that would cause the replica to obscure an arrow:
+    //
+    //   1. **Consumer is NOT the first non-replica child** (AES case:
+    //      `add-round-key` is the LAST step). The intra-column state
+    //      spine arrow `mix-columns → add-round-key` runs vertically
+    //      through the column. A replica in the column blocks it. The
+    //      inter-round spine arrow `prev.add-round-key → curr.sub-bytes`
+    //      enters at `sub-bytes`'s y (the FIRST child) — far from the
+    //      replica's consumer y. → LEFT GUTTER at consumer.y is safe.
+    //
+    //   2. **Consumer IS the first non-replica child** (Serpent case:
+    //      `add-round-key` is the FIRST step). The inter-round spine
+    //      arrow `prev.linear-transform → curr.add-round-key` enters
+    //      from the LEFT at the first child's y. A replica in the LEFT
+    //      gutter at that y would obscure that arrow. There's no in-
+    //      column child above the consumer to displace, so the safe
+    //      placement is to LIFT the column by `LEAF_H + STACK_GAP` and
+    //      place the replica in the new space ABOVE the consumer at
+    //      the column's x. The incoming arrow now enters BELOW the
+    //      replica's y-range, passing cleanly.
+    //
+    // Both strategies are independent: gutter widens the group when any
+    // non-first-child replica is present; lift heightens the group when
+    // any first-child replica is present. A hypothetical mixed group
+    // (some replicas first-child, others not) gets BOTH treatments.
+    const normalChildren: string[] = [];
+    for (const childId of container.childIds) {
+      if (!replicas.isReplica.has(childId)) normalChildren.push(childId);
+    }
+    const firstNormalId = normalChildren[0];
+
+    const leftGutterReplicas: string[] = [];
+    const liftedReplicas: string[] = [];
+    for (const childId of container.childIds) {
+      if (!replicas.isReplica.has(childId)) continue;
+      const consumerId = replicas.consumerOf.get(childId);
+      if (consumerId === undefined) continue;
+      if (consumerId === firstNormalId) {
+        liftedReplicas.push(childId);
+      } else {
+        leftGutterReplicas.push(childId);
+      }
+    }
+
+    const gutterW = leftGutterReplicas.length > 0 ? consts.LEAF_W + consts.FLOW_GAP : 0;
+    const liftH = liftedReplicas.length > 0 ? consts.LEAF_H + consts.STACK_GAP : 0;
+
+    const innerX = startX + consts.CONTAINER_PAD + gutterW;
+    let innerY = startY + HEADER_H + consts.CONTAINER_PAD + liftH;
     let maxChildW = 0;
     let lastChildBottom = innerY;
-    for (const childId of container.childIds) {
-      const childBox = layoutNode(childId, innerX, innerY, containersById, pinned, out, consts);
+    for (const childId of normalChildren) {
+      const childBox = layoutNode(
+        childId,
+        innerX,
+        innerY,
+        containersById,
+        pinned,
+        out,
+        consts,
+        replicas,
+      );
       innerY = childBox.y + childBox.h + consts.STACK_GAP;
       lastChildBottom = childBox.y + childBox.h;
       if (childBox.w > maxChildW) maxChildW = childBox.w;
     }
-    const w = Math.max(maxChildW, consts.LEAF_W) + 2 * consts.CONTAINER_PAD;
+
+    // Second pass: place LEFT-gutter replicas (consumers that are NOT
+    // the first child) at their consumer's vertical center.
+    const replicaX = startX + consts.CONTAINER_PAD;
+    for (const replicaId of leftGutterReplicas) {
+      const consumerId = replicas.consumerOf.get(replicaId);
+      if (consumerId === undefined) continue;
+      const consumerBox = out.get(consumerId);
+      if (!consumerBox) continue;
+      const replicaY = consumerBox.y + (consumerBox.h - consts.LEAF_H) / 2;
+      out.set(replicaId, { x: replicaX, y: replicaY, w: consts.LEAF_W, h: consts.LEAF_H });
+    }
+
+    // Third pass: place LIFTED replicas (consumers that ARE the first
+    // child) directly above their consumer in the column. The liftH
+    // shift on innerY above guarantees this y lands inside the group's
+    // padded inner area, just below the header.
+    for (const replicaId of liftedReplicas) {
+      const consumerId = replicas.consumerOf.get(replicaId);
+      if (consumerId === undefined) continue;
+      const consumerBox = out.get(consumerId);
+      if (!consumerBox) continue;
+      out.set(replicaId, {
+        x: consumerBox.x,
+        y: consumerBox.y - consts.LEAF_H - consts.STACK_GAP,
+        w: consts.LEAF_W,
+        h: consts.LEAF_H,
+      });
+    }
+
+    const columnW = Math.max(maxChildW, consts.LEAF_W);
+    const w = gutterW + columnW + 2 * consts.CONTAINER_PAD;
+    // Height formula uses lastChildBottom which already includes the
+    // liftH shift via innerY; don't add liftH again.
     const h = lastChildBottom - startY + consts.CONTAINER_PAD;
     const box: Box = { x: startX, y: startY, w, h };
     out.set(id, box);
     return box;
   }
 
-  // Iterate: horizontal flow of children, same as the top-level root.
+  // Iterate: horizontal flow of children. Replica placement is the
+  // horizontal-flow MIRROR of the group's vertical-flow gutter: replicas
+  // go ABOVE their consumer (orthogonal to the spine direction at this
+  // scope) so a state-spine arrow running along the body row (e.g.
+  // initial.add-round-key → round.1.sub-bytes in AES-128-ECB's iterate
+  // body) doesn't pass through a replica sitting at the same y. The body
+  // row shifts down by LEAF_H + STACK_GAP only when at least one replica
+  // is present so non-replicated bodies keep their original height.
+  const hasIterateReplicas = container.childIds.some((cId) => replicas.isReplica.has(cId));
+  const replicaLiftH = hasIterateReplicas ? consts.LEAF_H + consts.STACK_GAP : 0;
+
   let innerX = startX + consts.CONTAINER_PAD;
-  const innerY = startY + HEADER_H + consts.CONTAINER_PAD;
+  const innerY = startY + HEADER_H + consts.CONTAINER_PAD + replicaLiftH;
   let maxChildH = 0;
   let lastChildRight = innerX;
   for (const childId of container.childIds) {
-    const childBox = layoutNode(childId, innerX, innerY, containersById, pinned, out, consts);
+    if (replicas.isReplica.has(childId)) continue;
+    const childBox = layoutNode(
+      childId,
+      innerX,
+      innerY,
+      containersById,
+      pinned,
+      out,
+      consts,
+      replicas,
+    );
     innerX = childBox.x + childBox.w + consts.FLOW_GAP;
     lastChildRight = childBox.x + childBox.w;
     if (childBox.h > maxChildH) maxChildH = childBox.h;
   }
+
+  // Second pass: place iterate-body replicas above their consumers. The
+  // lifted innerY guarantees consumer.y - LEAF_H - STACK_GAP lands at
+  // the OLD innerY (the natural top of the inner content), which is
+  // inside the container's box.
+  for (const childId of container.childIds) {
+    if (!replicas.isReplica.has(childId)) continue;
+    const consumerId = replicas.consumerOf.get(childId);
+    if (consumerId === undefined) continue;
+    const consumerBox = out.get(consumerId);
+    if (!consumerBox) continue;
+    const replicaY = consumerBox.y - consts.LEAF_H - consts.STACK_GAP;
+    out.set(childId, {
+      x: consumerBox.x,
+      y: replicaY,
+      w: consts.LEAF_W,
+      h: consts.LEAF_H,
+    });
+  }
+
   const w = lastChildRight - startX + consts.CONTAINER_PAD;
-  const h = HEADER_H + 2 * consts.CONTAINER_PAD + maxChildH;
+  const h = HEADER_H + 2 * consts.CONTAINER_PAD + replicaLiftH + maxChildH;
   const box: Box = { x: startX, y: startY, w, h };
   out.set(id, box);
   return box;
@@ -310,23 +490,61 @@ export const layoutRoot = (
   const containersById = new Map<string, ContainerNode>();
   for (const c of graph.containers) containersById.set(c.id, c);
 
+  // Derive replica placement info once. When replication is off (the
+  // master switch in GraphView), the set is empty and the group-layout
+  // pass short-circuits to the original column-only behavior.
+  const replicas = buildReplicaPlacement(graph);
+
+  // Root is also horizontal flow, so the same orthogonal-axis principle
+  // as the iterate body applies: a root-level replica spliced between
+  // state-spine-consecutive leaves (e.g. AES-128 `key-expansion` →
+  // `key-expansion@->initial.add-round-key` → `initial.add-round-key`)
+  // would sit at the same y as the spine arrow and obscure it. Shift the
+  // entire row down by LEAF_H + STACK_GAP and place root replicas ABOVE
+  // their consumer at the OLD CANVAS_MARGIN row. Only fires when there's
+  // at least one root-level replica.
+  const hasRootReplicas = graph.rootIds.some((id) => replicas.isReplica.has(id));
+  const rootReplicaLiftH = hasRootReplicas ? consts.LEAF_H + consts.STACK_GAP : 0;
+  const rowStartY = CANVAS_MARGIN + rootReplicaLiftH;
+
   const boxes = new Map<string, Box>();
   let cursorX = CANVAS_MARGIN;
   let maxRight = CANVAS_MARGIN;
   let maxBottom = CANVAS_MARGIN;
   for (const id of graph.rootIds) {
+    if (replicas.isReplica.has(id)) continue;
     // Capture the cursor BEFORE layoutNode — that's the natural-flow X
     // for this root entity, used for cursor advancement even when the
     // entity is pinned somewhere else. box.w is content-derived (depends
     // on children, not on this entity's pin), so it's safe to use as the
     // natural width for the advancement step.
     const naturalX = cursorX;
-    const box = layoutNode(id, cursorX, CANVAS_MARGIN, containersById, pinned, boxes, consts);
+    const box = layoutNode(id, cursorX, rowStartY, containersById, pinned, boxes, consts, replicas);
     cursorX = naturalX + box.w + consts.FLOW_GAP;
     const right = box.x + box.w;
     const bottom = box.y + box.h;
     if (right > maxRight) maxRight = right;
     if (bottom > maxBottom) maxBottom = bottom;
+  }
+
+  // Second pass: place root-level replicas above their consumers. The
+  // shift above guarantees `consumer.y - LEAF_H - STACK_GAP === CANVAS_MARGIN`
+  // for non-pinned consumers, so the replica row sits flush against the
+  // top margin (no negative-y boxes; canvas dimensions don't need
+  // re-extension).
+  for (const id of graph.rootIds) {
+    if (!replicas.isReplica.has(id)) continue;
+    const consumerId = replicas.consumerOf.get(id);
+    if (consumerId === undefined) continue;
+    const consumerBox = boxes.get(consumerId);
+    if (!consumerBox) continue;
+    const replicaY = consumerBox.y - consts.LEAF_H - consts.STACK_GAP;
+    boxes.set(id, {
+      x: consumerBox.x,
+      y: replicaY,
+      w: consts.LEAF_W,
+      h: consts.LEAF_H,
+    });
   }
 
   return {
@@ -525,7 +743,19 @@ export const GraphView = () => {
       if (!moved) return;
       // SVG viewBox is 1:1 with rendered width/height, so client-px delta
       // maps directly onto SVG-unit delta.
-      setNodePosition(spec().id, nodeId, startBoxX + dx, startBoxY + dy);
+      //
+      // Clamp to (0, 0) so the block can't be dragged off the top or left
+      // of the SVG. Negative SVG coordinates fall outside the viewBox and
+      // are clipped by the browser — the block becomes invisible AND
+      // unclickable. The bad position would also persist in localStorage,
+      // making the block unreachable across reloads until the user
+      // manually edits storage. At y >= 0 the block stays inside the
+      // drawn area; even when the sticky header (z-index: 1) visually
+      // overlays small SVG y values at scrollTop > 0, scrolling the
+      // container back to the top always reveals the block.
+      const newX = Math.max(0, startBoxX + dx);
+      const newY = Math.max(0, startBoxY + dy);
+      setNodePosition(spec().id, nodeId, newX, newY);
     };
 
     const onUp = (): void => {
@@ -542,48 +772,58 @@ export const GraphView = () => {
 
   return (
     <div class="graph-view">
-      {/* Density toolbar (commit 3 of the graph-readability sequence).
+      {/* Sticky-header wrapper. The density toolbar and replication-overrides
+          panel both want to stay visible while the SVG canvas scrolls. They
+          previously each set their own `position: sticky` with hardcoded top
+          offsets (`top: 0` for the toolbar, `top: 32px` for the panel —
+          a guess at the toolbar's rendered height), which the actual rendered
+          toolbar height didn't match, so the panel slid up into the toolbar
+          when the user scrolled. Wrapping both in a single sticky element
+          sidesteps the math: the wrapper sticks at top: 0 and the children
+          stack naturally inside it, so the panel can never overlap the
+          toolbar regardless of the toolbar's true height. */}
+      <div class="graph-view-sticky-header">
+        {/* Density toolbar (commit 3 of the graph-readability sequence).
           Lives inside GraphView because density is graph-specific — the
           linear and JSON views ignore it. Uses `<fieldset>`/`<legend>` for
           the same a11y-friendly group semantics as the byte-format toggle
           in App.tsx (biome's useSemanticElements rule wants a semantic
-          group element, not `<div role="group">`). Stays above the SVG so
-          it remains visible even when the graph canvas is scrolled. */}
-      <fieldset class="graph-view-toolbar">
-        <legend class="graph-view-toolbar-label">density</legend>
-        <div class="format-toggle">
-          <For each={ALL_VIEW_DENSITIES}>
-            {(d) => (
-              <button
-                type="button"
-                classList={{ active: density() === d }}
-                onClick={() => setViewDensity(d as ViewDensity)}
-                title={`Switch graph to ${VIEW_DENSITY_LABELS[d]} density`}
-              >
-                {VIEW_DENSITY_LABELS[d]}
-              </button>
-            )}
-          </For>
-        </div>
-        {/* Commit 4: high-fanout replica toggle. When ON, sources with
+          group element, not `<div role="group">`). */}
+        <fieldset class="graph-view-toolbar">
+          <legend class="graph-view-toolbar-label">density</legend>
+          <div class="format-toggle">
+            <For each={ALL_VIEW_DENSITIES}>
+              {(d) => (
+                <button
+                  type="button"
+                  classList={{ active: density() === d }}
+                  onClick={() => setViewDensity(d as ViewDensity)}
+                  title={`Switch graph to ${VIEW_DENSITY_LABELS[d]} density`}
+                >
+                  {VIEW_DENSITY_LABELS[d]}
+                </button>
+              )}
+            </For>
+          </div>
+          {/* Commit 4: high-fanout replica toggle. When ON, sources with
             >REPLICATION_THRESHOLD outgoing aux edges (AES key-expansion,
             Speck/Serpent key schedules) are replicated as small chips
             next to each consumer, shortening edges and reducing visual
             clutter. Off by default — the "one source, many edges" view
             is also pedagogically valuable. */}
-        <label
-          class="graph-replicate-toggle"
-          title={`Show high-fanout sources (>${REPLICATION_THRESHOLD} outgoing aux edges) as small replicas next to each consumer`}
-        >
-          <input
-            type="checkbox"
-            checked={replicate()}
-            onChange={(e) => setReplicationEnabled(e.currentTarget.checked)}
-          />
-          replicate fan-out
-        </label>
-      </fieldset>
-      {/* Commit 5: per-source replication overrides. Visible only when
+          <label
+            class="graph-replicate-toggle"
+            title={`Show high-fanout sources (>${REPLICATION_THRESHOLD} outgoing aux edges) as small replicas next to each consumer`}
+          >
+            <input
+              type="checkbox"
+              checked={replicate()}
+              onChange={(e) => setReplicationEnabled(e.currentTarget.checked)}
+            />
+            replicate fan-out
+          </label>
+        </fieldset>
+        {/* Commit 5: per-source replication overrides. Visible only when
           the global toggle is ON — master-switch semantic means an
           override panel is meaningless when nothing is replicated. The
           panel lists every aux-edge source with fanout ≥ 2, sorted desc
@@ -595,60 +835,61 @@ export const GraphView = () => {
           store maps "auto" → null (clears the override). The panel sticks
           to the top of the scroll wrapper like the toolbar so it stays
           visible at far-right scroll positions. */}
-      <Show when={replicate() && replicationSources().length > 0}>
-        <div class="graph-replication-panel">
-          <div class="graph-replication-panel-header">
-            replication overrides
-            <span class="graph-replication-panel-hint">
-              auto = follow global threshold ({REPLICATION_THRESHOLD})
-            </span>
-          </div>
-          <For each={replicationSources()}>
-            {(src) => {
-              const currentMode = createMemo<"auto" | "always" | "never">(() => {
-                const m = replicationModes()[src.id];
-                return m ?? "auto";
-              });
-              return (
-                <div class="graph-replication-row" data-testid={`replication-row-${src.id}`}>
-                  <span class="graph-replication-row-id" title={src.id}>
-                    {src.id}
-                  </span>
-                  <span class="graph-replication-row-fanout">
-                    {src.fanout} {src.fanout === 1 ? "edge" : "edges"}
-                  </span>
-                  <div class="format-toggle">
-                    <button
-                      type="button"
-                      classList={{ active: currentMode() === "auto" }}
-                      onClick={() => setReplicationMode(spec().id, src.id, null)}
-                      title="Defer to the global threshold"
-                    >
-                      auto
-                    </button>
-                    <button
-                      type="button"
-                      classList={{ active: currentMode() === "always" }}
-                      onClick={() => setReplicationMode(spec().id, src.id, "always")}
-                      title="Always replicate this source"
-                    >
-                      always
-                    </button>
-                    <button
-                      type="button"
-                      classList={{ active: currentMode() === "never" }}
-                      onClick={() => setReplicationMode(spec().id, src.id, "never")}
-                      title="Never replicate this source"
-                    >
-                      never
-                    </button>
+        <Show when={replicate() && replicationSources().length > 0}>
+          <div class="graph-replication-panel">
+            <div class="graph-replication-panel-header">
+              replication overrides
+              <span class="graph-replication-panel-hint">
+                auto = follow global threshold ({REPLICATION_THRESHOLD})
+              </span>
+            </div>
+            <For each={replicationSources()}>
+              {(src) => {
+                const currentMode = createMemo<"auto" | "always" | "never">(() => {
+                  const m = replicationModes()[src.id];
+                  return m ?? "auto";
+                });
+                return (
+                  <div class="graph-replication-row" data-testid={`replication-row-${src.id}`}>
+                    <span class="graph-replication-row-id" title={src.id}>
+                      {src.id}
+                    </span>
+                    <span class="graph-replication-row-fanout">
+                      {src.fanout} {src.fanout === 1 ? "edge" : "edges"}
+                    </span>
+                    <div class="format-toggle">
+                      <button
+                        type="button"
+                        classList={{ active: currentMode() === "auto" }}
+                        onClick={() => setReplicationMode(spec().id, src.id, null)}
+                        title="Defer to the global threshold"
+                      >
+                        auto
+                      </button>
+                      <button
+                        type="button"
+                        classList={{ active: currentMode() === "always" }}
+                        onClick={() => setReplicationMode(spec().id, src.id, "always")}
+                        title="Always replicate this source"
+                      >
+                        always
+                      </button>
+                      <button
+                        type="button"
+                        classList={{ active: currentMode() === "never" }}
+                        onClick={() => setReplicationMode(spec().id, src.id, "never")}
+                        title="Never replicate this source"
+                      >
+                        never
+                      </button>
+                    </div>
                   </div>
-                </div>
-              );
-            }}
-          </For>
-        </div>
-      </Show>
+                );
+              }}
+            </For>
+          </div>
+        </Show>
+      </div>
       <Show
         when={graph().nodes.length > 0 || graph().containers.length > 0}
         fallback={<div class="muted">no nodes to display</div>}
