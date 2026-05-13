@@ -69,6 +69,62 @@ const CHEVRON_W = 16;
  * penetrates the rectangle's stroke. 6px gives a clean visible gap.
  */
 const ARROW_INSET = 6;
+/**
+ * Pixel gap between the right edge of a container label and whatever sits to
+ * its right (chevron or iterate badge). Keeps the truncated text from
+ * kissing the chevron glyph when `textLength` compression kicks in.
+ */
+const LABEL_RIGHT_GAP = 4;
+/**
+ * Pixel width to reserve for the `×N` iterate badge when present. Sized for
+ * "×NN" at 11px bold (≈22px) with a small breathing margin; over-reserving
+ * a couple of pixels is preferable to letting label characters collide
+ * with the badge's leftmost glyph.
+ */
+const ITERATE_BADGE_RESERVE_W = 28;
+/**
+ * Rough px-per-char at the container label's font (11px, weight 600,
+ * sans-serif). Used purely as a heuristic: if the label's natural width
+ * estimate is wider than the available header room, apply `textLength` to
+ * clip; otherwise leave the SVG `<text>` to render at its natural size so
+ * short labels don't get visually spread out by `lengthAdjust`. 7 is a
+ * deliberate slight over-estimate — under-clipping (visible overflow) is
+ * worse than over-clipping (a few pixels of compression nobody notices).
+ */
+const LABEL_PX_PER_CHAR = 7;
+
+/**
+ * Compute the `textLength` value (in CSS pixels) that should be applied to a
+ * container's header label, or `undefined` when the label fits naturally
+ * and no clipping is needed.
+ *
+ * Why this exists: long container labels (e.g. AES-128's final round
+ * "Round 10 (final, no MixColumns)" at 33 chars) overflowed the container
+ * box's right edge in Slice 6 — visually past the chevron, and (until
+ * `pointer-events: none` mitigated it) absorbing pointerdown events meant
+ * for the underlying drag handle. SVG `textLength` + `lengthAdjust=
+ * spacingAndGlyphs` is the V1 baseline: the browser shrinks the rendered
+ * text to fit without us doing font measurement. The `<title>` element on
+ * the parent `<g>` keeps the full label discoverable on hover.
+ *
+ * Available width = box width − left padding − right reserve. Right reserve
+ * is the chevron always plus the `×N` iterate badge when one is rendered,
+ * plus `LABEL_RIGHT_GAP` so the label doesn't visually kiss whatever sits
+ * to its right.
+ */
+const labelTextLength = (container: ContainerNode, boxW: number): number | undefined => {
+  const hasIterateBadge =
+    container.kind === "iterate" && container.blockSpan !== undefined && container.blockSpan > 1;
+  const reserveRight =
+    CHEVRON_W + LABEL_RIGHT_GAP + (hasIterateBadge ? ITERATE_BADGE_RESERVE_W : 0);
+  const available = boxW - CONTAINER_PAD - reserveRight;
+  // Container narrower than its own affordances — nothing to clip TO. The
+  // chevron/badge already eat the box; let the label render naturally and
+  // count on the higher-level layout-knob work to grow the box.
+  if (available <= 0) return undefined;
+  const naturalEstimate = container.label.length * LABEL_PX_PER_CHAR;
+  return naturalEstimate > available ? available : undefined;
+};
 
 // ─── Layout ────────────────────────────────────────────────────────────────
 
@@ -562,6 +618,16 @@ const ContainerRect = (props: {
 }) => {
   // Chevron sits at the right edge of the header band; clicking it doesn't
   // start a drag. The rest of the header is the drag handle.
+  //
+  // The label's `textLength` is memoized so it tracks both label changes
+  // (spec edits rename a group) and box width changes (collapse toggles or
+  // child resizes shrink the container). When the label fits naturally the
+  // memo returns `undefined`; Solid omits the attribute, leaving the text
+  // to render at its natural width — that branch is deliberate because
+  // `lengthAdjust=spacingAndGlyphs` will SPREAD a short label out to fill
+  // the supplied width, which would look worse than the overflow we're
+  // protecting against.
+  const labelTL = createMemo(() => labelTextLength(props.container, props.box.w));
   return (
     <g class={`graph-container graph-container-${props.container.kind}`}>
       <title>
@@ -599,6 +665,8 @@ const ContainerRect = (props: {
         x={props.box.x + CONTAINER_PAD}
         y={props.box.y + HEADER_H / 2 + 1}
         dominant-baseline="central"
+        textLength={labelTL()}
+        lengthAdjust={labelTL() === undefined ? undefined : "spacingAndGlyphs"}
       >
         {props.container.label}
       </text>
