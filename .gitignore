@@ -6,3 +6,10 @@ dist
 
 # Per-user Claude Code overrides — should not be committed
 .claude/settings.local.json
+
+# Playwright artifacts (`npm run smoke`). The .spec files in `e2e/` ARE
+# checked in; only the run output (HTML reporter dump, trace zips,
+# screenshots from failed runs) is excluded.
+test-results/
+playwright-report/
+.playwright/
