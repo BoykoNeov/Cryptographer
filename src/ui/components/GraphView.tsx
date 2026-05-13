@@ -734,21 +734,84 @@ const EdgePath = (props: { from: Box; to: Box; auxKey: string; kind: "aux" | "st
   // collapse toggle, because the toggle forces graph() to re-derive +
   // <For> to re-key, which remounts EdgePath with fresh prop values).
   //
-  // Source: right-center of `from`. Target: left-center of `to`, inset by
-  // ARROW_INSET so the arrowhead's tip touches the consumer box's edge
-  // cleanly instead of penetrating the rectangle. Bezier control points
-  // pulled half the horizontal distance so the curve dips gently without
-  // overshooting in the (rare) right-to-left case.
+  // Exit/entry sides are chosen by geometry, not hard-coded. The arrowhead
+  // already conveys flow direction, so we don't need to enforce the
+  // "always right→left" rule. Two regimes:
+  //
+  //   - **Vertical sides** (exit bottom / enter top, or the reverse): used
+  //     when the boxes overlap on the x-axis but are separated on y. This
+  //     is the "stacked vertically inside an expanded group" case (AES's
+  //     sub-bytes → shift-rows, every cipher's intra-round leaves). With
+  //     hard-coded right→left the curve had to bulge way out past the
+  //     boxes' right edges and loop back to enter from the left, passing
+  //     visually BEHIND the components. Bottom→top tucks the edge into
+  //     the natural inter-leaf gap.
+  //
+  //   - **Horizontal sides** (exit right / enter left, or reverse): the
+  //     default for everything else — horizontal flow at the root, iterate
+  //     bodies, cross-container fan-outs. This matches the original
+  //     behavior and the FIPS-197-flavored "time flows rightward" layout.
+  //
+  // Inset is clamped to half the natural gap between source and target so
+  // the arrowhead never crosses the source on tight gaps (the STACK_GAP=6
+  // case inside groups would otherwise produce a zero-length or
+  // negative-length path).
   const d = createMemo(() => {
-    const sx = props.from.x + props.from.w;
-    const sy = props.from.y + props.from.h / 2;
-    // Pre-inset target x; bezier control still uses the unmodified target
-    // x so the curve approaches the box at the same angle as before.
-    const txRaw = props.to.x;
-    const ty = props.to.y + props.to.h / 2;
-    const tx = txRaw - ARROW_INSET;
-    const dx = Math.max(20, Math.abs(txRaw - sx) / 2);
-    return `M ${sx} ${sy} C ${sx + dx} ${sy}, ${txRaw - dx} ${ty}, ${tx} ${ty}`;
+    const { from, to } = props;
+
+    // Axis overlap detection. Strict > rather than >= so two boxes that
+    // merely touch at one edge (e.g., adjacent siblings in a flow with
+    // FLOW_GAP=0, hypothetical) count as non-overlapping on that axis.
+    const horizOverlap = Math.min(from.x + from.w, to.x + to.w) > Math.max(from.x, to.x);
+    const vertOverlap = Math.min(from.y + from.h, to.y + to.h) > Math.max(from.y, to.y);
+
+    // Only switch to vertical sides when boxes are *purely* vertically
+    // separated (share x-range, no y-overlap). Diagonal cases keep the
+    // horizontal regime so the curve travels through the inter-container
+    // gap, which is the established visual pattern.
+    const useVertical = horizOverlap && !vertOverlap;
+
+    if (useVertical) {
+      const fromCx = from.x + from.w / 2;
+      const toCx = to.x + to.w / 2;
+      const downward = to.y + to.h / 2 >= from.y + from.h / 2;
+      const sx = fromCx;
+      const sy = downward ? from.y + from.h : from.y;
+      const tx = toCx;
+      const tEdge = downward ? to.y : to.y + to.h;
+      const naturalGap = downward ? to.y - (from.y + from.h) : from.y - (to.y + to.h);
+      // Clamp inset so even adjacent siblings (gap = STACK_GAP = 6) get a
+      // monotonic, non-self-intersecting path.
+      const inset = Math.max(0, Math.min(ARROW_INSET, naturalGap / 2));
+      const ty = downward ? tEdge - inset : tEdge + inset;
+      // Pull magnitude proportional to the post-inset span; degenerates
+      // to a straight line for very short edges (no floor — the loop
+      // artifact we used to get came from over-pulling on tiny gaps).
+      const span = Math.abs(ty - sy);
+      const pull = Math.min(20, span * 0.5);
+      const c1y = downward ? sy + pull : sy - pull;
+      const c2y = downward ? ty - pull : ty + pull;
+      return `M ${sx} ${sy} C ${sx} ${c1y}, ${tx} ${c2y}, ${tx} ${ty}`;
+    }
+
+    // Horizontal regime. Source exits whichever edge faces the target;
+    // target enters the facing edge with inset. Pull formula matches the
+    // original (max(20, |dx|/2)) so the curve aesthetic for root-level
+    // and cross-container fan-outs is unchanged.
+    const fromCy = from.y + from.h / 2;
+    const toCy = to.y + to.h / 2;
+    const rightward = to.x + to.w / 2 >= from.x + from.w / 2;
+    const sx = rightward ? from.x + from.w : from.x;
+    const sy = fromCy;
+    const tEdge = rightward ? to.x : to.x + to.w;
+    const naturalGap = rightward ? to.x - (from.x + from.w) : from.x - (to.x + to.w);
+    const inset = naturalGap > 0 ? Math.min(ARROW_INSET, naturalGap / 2) : ARROW_INSET;
+    const tx = rightward ? tEdge - inset : tEdge + inset;
+    const ty = toCy;
+    const pull = Math.max(20, Math.abs(tx - sx) / 2);
+    const c1x = rightward ? sx + pull : sx - pull;
+    const c2x = rightward ? tx - pull : tx + pull;
+    return `M ${sx} ${sy} C ${c1x} ${sy}, ${c2x} ${ty}, ${tx} ${ty}`;
   });
   return (
     <path
