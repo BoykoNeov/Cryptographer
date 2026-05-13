@@ -1,16 +1,24 @@
 /**
  * Aux-graph derivation: turn a (spec, trace) pair into a directed graph
  * suitable for the upcoming 2D visual editor. Nodes are the spec's leaves,
- * containers are its groups and iterates, and edges are the aux-flow
- * dependencies between leaves (round-key fan-out, IV chaining in CBC,
- * keystream blocks in CTR, …).
+ * containers are its groups and iterates, and edges encode two kinds of
+ * dataflow:
+ *
+ *   - **Aux edges** (trace-derived) — round-key fan-out, IV chaining in
+ *     CBC, keystream blocks in CTR, etc. Annotations on the cipher's
+ *     primary dataflow.
+ *   - **State edges** (spec-derived) — the implicit `(state, params) →
+ *     state` thread through consecutive leaves. The headline pedagogical
+ *     spine of the graph: students see the SubBytes → ShiftRows →
+ *     MixColumns → AddRoundKey progression as a continuous chain.
  *
  * The graph is DERIVED, not stored. The spec already encodes the structural
  * tree; the trace's `TraceFrame.auxRead` / `auxWritten` (`types.ts`) already
- * encode the data-flow edges of a successful run. This file is the pure
+ * encode aux dataflow; the executor contract `(state, params) → state` makes
+ * the state spine inferable from spec structure alone. This file is the pure
  * function that combines them into one shape the renderer can lay out.
  *
- * Two key correctness pieces — both invisible if you only walk frames naively:
+ * Three key correctness pieces — invisible if you only walk frames naively:
  *
  *   1. **`:b{i}` collapse.** The runtime suffixes every per-iteration step id
  *      so the flat trace stays uniquely keyed (`runtime.ts:119`). For the
@@ -30,6 +38,25 @@
  *      story we exist to tell. We synthesize the edges using the iterate's
  *      id as the participant: the iterate node itself becomes a node-like
  *      participant in the edge list.
+ *
+ *   3. **Iterate breaks the state thread.** State edges connect DFS-
+ *      consecutive leaves WITHIN a single iterate-scope; groups are
+ *      transparent (DFS through), iterates are opaque (their body is its
+ *      own scope, no spine edge crosses the boundary in either direction).
+ *      This matches runtime semantics — the iterate replaces `state` with
+ *      `blocks[i]` per iteration and accumulates output into
+ *      `aux[outBlocksAux]` rather than leaving it on `state`, so a state
+ *      edge crossing the iterate boundary would be misleading. The runtime
+ *      always passes a real state value at the boundary, but it's not the
+ *      previous step's output state — the aux edges (blocks-in /
+ *      output-blocks-out) are the honest depiction of the per-block data
+ *      handoff, and the state spine should not double them.
+ *
+ *      **Feistel future**: when a Feistel-style cipher with branching
+ *      state lands, the "DFS-consecutive leaves share state" assumption
+ *      breaks (left/right halves evolve independently inside a round).
+ *      Both this derivation-time inference AND any future runtime-recorded
+ *      state lineage need revisiting then.
  *
  * Note on `rootIds`: the plan's `rootContainers: ContainerNode[]` would lose
  * top-level leaves (e.g. `aes128EcbSpec` has `key-expansion`, `split-blocks`,
@@ -278,6 +305,78 @@ const deriveEdges = (trace: Trace, ctx: BuildContext): GraphEdge[] => {
   return edges;
 };
 
+/** Sentinel aux key carried on every state edge. Real aux keys never
+ * collide with this value (they come from step `auxWrites` and are
+ * domain-specific — "roundKey.0", "blockCount", "input-blocks", etc.). */
+const STATE_AUX_KEY = "state";
+
+/**
+ * Spec-walk pass: emit a `kind: "state"` edge between every DFS-consecutive
+ * pair of sibling leaves within the same iterate-scope.
+ *
+ * Scope rules:
+ *   - **Groups are transparent.** DFS descends into them and their leaves
+ *     join the parent scope's spine. The spine therefore crosses round-
+ *     group boundaries (e.g. `round.1.add-round-key → round.2.sub-bytes`)
+ *     — exactly the pedagogical "the cipher's primary dataflow runs through
+ *     every round in order" story.
+ *   - **Iterates are opaque boundaries.** Hitting one FLUSHES the parent
+ *     scope's accumulated leaf chain (emitting whatever edges exist so
+ *     far) and recurses into the iterate body as its OWN scope. After the
+ *     iterate, the parent scope resumes with a fresh empty leaf chain — no
+ *     state edge bridges the iterate in either direction. See item 3 in
+ *     the file header for why.
+ *
+ * The function reads only `spec`, never the trace. State edges therefore
+ * appear on the structural skeleton before any run, while aux edges remain
+ * trace-derived. This matches the rendering goal: the spine is what the
+ * user reads as "this is what the cipher does", and it should be visible
+ * the moment they load a spec.
+ */
+const inferStateEdges = (spec: CipherSpec): GraphEdge[] => {
+  const edges: GraphEdge[] = [];
+
+  const emitChain = (leaves: readonly string[]): void => {
+    for (let i = 0; i + 1 < leaves.length; i++) {
+      const from = leaves[i];
+      const to = leaves[i + 1];
+      if (from === undefined || to === undefined) continue;
+      edges.push({ from, to, auxKey: STATE_AUX_KEY, kind: "state" });
+    }
+  };
+
+  /**
+   * Process one iterate-scope: collect its DFS leaves into a single chain
+   * (recursing through groups, halting at iterates), and recurse into each
+   * iterate body as its own scope. Returns after emitting all edges
+   * generated by this scope and its nested iterate scopes.
+   */
+  const processScope = (siblings: readonly StepNode[]): void => {
+    let leaves: string[] = [];
+    const walk = (nodes: readonly StepNode[]): void => {
+      for (const node of nodes) {
+        if (node.kind === "step") {
+          leaves.push(node.id);
+        } else if (node.kind === "group") {
+          // Group is transparent — descend, its leaves join this scope.
+          walk(node.children);
+        } else {
+          // Iterate is opaque — flush the chain so far, then recurse with
+          // the body as its own scope. The parent chain resumes empty.
+          emitChain(leaves);
+          leaves = [];
+          processScope(node.children);
+        }
+      }
+    };
+    walk(siblings);
+    emitChain(leaves);
+  };
+
+  processScope(spec.steps);
+  return edges;
+};
+
 /**
  * Compute `blockSpan` for every leaf inside an iterate and for every
  * iterate container. The runtime stamps `frame.blockIndex` on each frame
@@ -459,7 +558,12 @@ export const deriveAuxGraph = (trace: Trace, spec: CipherSpec): CipherGraph => {
 
   const rootIds = walkSpec(spec.steps, [], ctx);
   annotateBlockSpans(trace, ctx);
-  const edges = deriveEdges(trace, ctx);
+  // Aux edges come from trace-walking (empty trace → empty list); state
+  // edges come from spec-walking (always present, even pre-run). Append
+  // state edges AFTER aux edges so existing tests that index the edge
+  // list by position continue to work, and so a reader scanning the
+  // dataflow sees the annotations first and the spine last.
+  const edges = [...deriveEdges(trace, ctx), ...inferStateEdges(spec)];
 
   return {
     nodes: ctx.nodes,

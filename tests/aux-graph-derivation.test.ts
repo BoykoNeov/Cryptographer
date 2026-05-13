@@ -141,7 +141,11 @@ describe("deriveAuxGraph — AES-128 (single block, no iterate)", () => {
       "initial.add-round-key",
       ...Array.from({ length: 10 }, (_, i) => `round.${i + 1}.add-round-key`),
     ]);
-    const keyExpEdges = g.edges.filter((e) => e.from === "key-expansion");
+    // Filter to aux edges — key-expansion is also the first leaf in DFS
+    // order, so it carries an outgoing `kind: "state"` spine edge to
+    // initial.add-round-key. That edge is correct but not what THIS test
+    // pins (this is the round-key fan-out test, sequence commit 1).
+    const keyExpEdges = g.edges.filter((e) => e.kind === "aux" && e.from === "key-expansion");
     expect(keyExpEdges.length).toBe(11);
     const actualConsumers = new Set(keyExpEdges.map((e) => e.to));
     expect(actualConsumers).toEqual(expectedConsumers);
@@ -151,16 +155,26 @@ describe("deriveAuxGraph — AES-128 (single block, no iterate)", () => {
     }
   });
 
-  // Sequence commit 1: pin that every derivation-time edge today carries
-  // `kind: "aux"`. State edges arrive in commit 2; this guard keeps that
-  // change explicit (any new "state" edge appearing here would have to
-  // come from an inference pass, not from auxRead/auxWritten walking).
-  it("tags every derived edge as `aux` (state edges land in commit 2)", () => {
+  // Sequence commits 1 + 2: trace-derived edges (round-key fan-out etc.)
+  // carry `kind: "aux"`; spec-derived spine edges (consecutive-leaf state
+  // thread) carry `kind: "state"`. The two populations are disjoint by
+  // their auxKey sentinel: state edges all use the literal "state" key,
+  // which never collides with a real `auxWrites` key.
+  it("partitions edges into aux (trace) and state (spec) populations", () => {
     const g = deriveAuxGraph(runAes128(), aes128Spec);
     expect(g.edges.length).toBeGreaterThan(0);
-    for (const edge of g.edges) {
-      expect(edge.kind).toBe("aux");
-    }
+    const auxEdges = g.edges.filter((e) => e.kind === "aux");
+    const stateEdges = g.edges.filter((e) => e.kind === "state");
+    // Both populations must be non-empty for AES-128 — round-key fan-out
+    // on the aux side, the 40-edge spine on the state side.
+    expect(auxEdges.length).toBeGreaterThan(0);
+    expect(stateEdges.length).toBeGreaterThan(0);
+    // No edge is missing a kind.
+    expect(auxEdges.length + stateEdges.length).toBe(g.edges.length);
+    // State edges always carry the "state" sentinel auxKey; aux edges
+    // never use it (they come from real `auxWrites` keys).
+    for (const e of auxEdges) expect(e.auxKey).not.toBe("state");
+    for (const e of stateEdges) expect(e.auxKey).toBe("state");
   });
 
   it("assigns no blockSpan to any node when no iterate is present", () => {
@@ -228,10 +242,13 @@ describe("deriveAuxGraph — AES-128-ECB (multi-block iterate)", () => {
 
   it("dedups iteration replicas — key-expansion → round.N.add-round-key shows ONE edge per N", () => {
     const g = deriveAuxGraph(runAes128Ecb(), aes128EcbSpec);
+    // Filter to aux edges — key-expansion also carries a `kind: "state"`
+    // spine edge to the next DFS-consecutive leaf (split-blocks at top
+    // scope in ECB), which isn't what this dedup test pins.
+    const keyExpEdges = g.edges.filter((e) => e.kind === "aux" && e.from === "key-expansion");
     // Each round's add-round-key consumes one roundKey.N regardless of which
     // block. After collapsing :b0..:b3 there must be exactly 11 fan-out
     // edges from key-expansion, the same as single-block AES-128.
-    const keyExpEdges = g.edges.filter((e) => e.from === "key-expansion");
     expect(keyExpEdges.length).toBe(11);
     // And every (from,to,auxKey) triple is unique — paranoia against dedup
     // regressions when iteration replicas multiplied.
@@ -263,7 +280,10 @@ describe("deriveAuxGraph — Speck32/64 BE (flat, no groups)", () => {
 
   it("fans out 22 round-key edges from key-schedule to round.1..round.22", () => {
     const g = deriveAuxGraph(runSpeck(), speck32_64BeSpec);
-    const ksEdges = g.edges.filter((e) => e.from === "key-schedule");
+    // Filter to aux edges — key-schedule is also the first leaf in DFS
+    // order, so it has an outgoing `kind: "state"` spine edge to round.1
+    // (which this fan-out test deliberately ignores).
+    const ksEdges = g.edges.filter((e) => e.kind === "aux" && e.from === "key-schedule");
     expect(ksEdges.length).toBe(22);
     // Each round.i reads roundKey.{i-1}.
     for (let i = 1; i <= 22; i++) {
@@ -291,7 +311,9 @@ describe("deriveAuxGraph — Serpent-128 (SP-network, 32 round groups)", () => {
     // Each normal round has 1 AddRoundKey (rounds 1..31 → 31 edges).
     // Final round (32) has 2 AddRoundKey leaves (.add-round-key + .add-final-round-key).
     // Total fan-out: 31 + 2 = 33.
-    const kEdges = g.edges.filter((e) => e.from === "key-expansion");
+    // Filter to aux edges — key-expansion is also the first leaf in DFS
+    // order, so it has an outgoing `kind: "state"` spine edge to `ip`.
+    const kEdges = g.edges.filter((e) => e.kind === "aux" && e.from === "key-expansion");
     expect(kEdges.length).toBe(33);
     // Each edge carries a distinct roundKey.N.
     const auxKeys = new Set(kEdges.map((e) => e.auxKey));
@@ -318,15 +340,151 @@ describe("deriveAuxGraph — edge deduplication", () => {
 // ─── Trace-less derivation (pre-run state) ────────────────────────────────
 
 describe("deriveAuxGraph — empty trace", () => {
-  it("returns the structural graph (nodes + containers + rootIds) with no edges or blockSpan", () => {
+  it("returns spec-derived spine but no aux edges or blockSpan annotations", () => {
     const g = deriveAuxGraph(emptyTrace(), aes128EcbSpec);
     // Spec walk is independent of trace: still 44 nodes + 11 containers.
     expect(g.nodes.length).toBe(44);
     expect(g.containers.length).toBe(11);
-    // No frames → no edges and no blockSpan annotations.
-    expect(g.edges.length).toBe(0);
+    // No frames → no aux edges and no blockSpan annotations.
+    const auxEdges = g.edges.filter((e) => e.kind === "aux");
+    expect(auxEdges.length).toBe(0);
     for (const node of g.nodes) expect(node.blockSpan).toBeUndefined();
     for (const c of g.containers) expect(c.blockSpan).toBeUndefined();
+    // Spec-derived state spine appears regardless of trace state — the
+    // headline pedagogical benefit of commit 2 is that the spine is visible
+    // BEFORE the first run, so the user sees what the cipher "does" up front.
+    // AES-128-ECB spine count:
+    //   - top-scope pre-iterate: 3 leaves → 2 state edges
+    //   - iterate body (initial AK + 9 full rounds + 1 final round = 40 leaves)
+    //     → 39 state edges
+    //   - top-scope post-iterate: 1 leaf (concat-blocks) → 0 state edges
+    //   - total: 2 + 39 + 0 = 41 state edges
+    const stateEdges = g.edges.filter((e) => e.kind === "state");
+    expect(stateEdges.length).toBe(41);
+  });
+});
+
+// ─── State-edge inference (round-to-round spine, commit 2) ────────────────
+
+describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
+  it("AES-128: produces 40 state edges, one per consecutive-leaf pair", () => {
+    const g = deriveAuxGraph(runAes128(), aes128Spec);
+    const stateEdges = g.edges.filter((e) => e.kind === "state");
+    // 41 leaves in DFS order → 40 edges in a single chain (no iterate
+    // boundary to break it).
+    expect(stateEdges.length).toBe(40);
+    // Every state edge is between two distinct nodes that exist in the graph.
+    const nodeIds = new Set(g.nodes.map((n) => n.stepId));
+    for (const e of stateEdges) {
+      expect(e.from).not.toBe(e.to);
+      expect(nodeIds.has(e.from)).toBe(true);
+      expect(nodeIds.has(e.to)).toBe(true);
+    }
+  });
+
+  it("AES-128: spine crosses round-group boundaries (round.1.add-round-key → round.2.sub-bytes)", () => {
+    // The headline correctness check for the spine: groups are transparent,
+    // so the spine threads through every leaf in DFS order regardless of
+    // which round-group they live in.
+    const g = deriveAuxGraph(runAes128(), aes128Spec);
+    const bridge = g.edges.find(
+      (e) =>
+        e.kind === "state" && e.from === "round.1.add-round-key" && e.to === "round.2.sub-bytes",
+    );
+    expect(bridge).toBeDefined();
+    // Same property at the front of the chain: key-expansion → initial.add-round-key.
+    const firstPair = g.edges.find(
+      (e) => e.kind === "state" && e.from === "key-expansion" && e.to === "initial.add-round-key",
+    );
+    expect(firstPair).toBeDefined();
+    // Last edge: round.10.shift-rows → round.10.add-round-key (the final
+    // round has no mix-columns, so the second-to-last leaf is shift-rows).
+    const lastEdge = g.edges.find(
+      (e) =>
+        e.kind === "state" && e.from === "round.10.shift-rows" && e.to === "round.10.add-round-key",
+    );
+    expect(lastEdge).toBeDefined();
+  });
+
+  it("AES-128-ECB: spine breaks at the iterate boundary (no edge crosses in either direction)", () => {
+    const g = deriveAuxGraph(runAes128Ecb(), aes128EcbSpec);
+    const stateEdges = g.edges.filter((e) => e.kind === "state");
+
+    // Top-scope pre-iterate: 3 leaves (key-expansion, split-blocks,
+    // compute-block-count) → 2 state edges in one chain.
+    expect(
+      stateEdges.find((e) => e.from === "key-expansion" && e.to === "split-blocks"),
+    ).toBeDefined();
+    expect(
+      stateEdges.find((e) => e.from === "split-blocks" && e.to === "compute-block-count"),
+    ).toBeDefined();
+
+    // Iterate-body scope: 40 leaves → 39 state edges. Spot-check the
+    // expected endpoints inside the body.
+    expect(
+      stateEdges.find((e) => e.from === "initial.add-round-key" && e.to === "round.1.sub-bytes"),
+    ).toBeDefined();
+    expect(
+      stateEdges.find((e) => e.from === "round.5.add-round-key" && e.to === "round.6.sub-bytes"),
+    ).toBeDefined();
+
+    // The headline boundary checks: NO state edge bridges the iterate
+    // boundary in either direction. The iterate replaces `state` with
+    // `blocks[i]` per iteration and accumulates output into
+    // `aux[outBlocksAux]` — the aux edges already capture that handoff
+    // honestly, so the state spine MUST NOT double them.
+    const crossesIn = stateEdges.find(
+      (e) => e.from === "compute-block-count" && e.to === "initial.add-round-key",
+    );
+    expect(crossesIn).toBeUndefined();
+    const crossesOut = stateEdges.find(
+      (e) => e.from === "round.10.add-round-key" && e.to === "concat-blocks",
+    );
+    expect(crossesOut).toBeUndefined();
+    // Spine MUST NOT silently skip over the iterate either (compute-block-
+    // count is the last pre-iterate leaf and concat-blocks the only post;
+    // a naive impl that ignored iterates entirely would emit this edge).
+    const skipsIterate = stateEdges.find(
+      (e) => e.from === "compute-block-count" && e.to === "concat-blocks",
+    );
+    expect(skipsIterate).toBeUndefined();
+
+    // Total: 2 (pre) + 39 (body) + 0 (post, concat-blocks is alone) = 41.
+    expect(stateEdges.length).toBe(41);
+  });
+
+  it("Speck32/64 (flat, no groups, no iterates): 22 state edges across 23 leaves", () => {
+    const g = deriveAuxGraph(runSpeck(), speck32_64BeSpec);
+    const stateEdges = g.edges.filter((e) => e.kind === "state");
+    // 23 flat leaves → 22 spine edges. Sanity-check the obvious ones.
+    expect(stateEdges.length).toBe(22);
+    expect(stateEdges.find((e) => e.from === "key-schedule" && e.to === "round.1")).toBeDefined();
+    expect(stateEdges.find((e) => e.from === "round.1" && e.to === "round.2")).toBeDefined();
+  });
+
+  it("Serpent-128 (32 round groups, IP/FP outside): spine threads through every leaf", () => {
+    const g = deriveAuxGraph(runSerpent128(), serpent128Spec);
+    const stateEdges = g.edges.filter((e) => e.kind === "state");
+    // Serpent-128 has 99 leaves → 98 spine edges (one continuous chain;
+    // round groups are transparent).
+    expect(stateEdges.length).toBe(98);
+    // Each spine edge endpoint exists in the node set.
+    const nodeIds = new Set(g.nodes.map((n) => n.stepId));
+    for (const e of stateEdges) {
+      expect(nodeIds.has(e.from)).toBe(true);
+      expect(nodeIds.has(e.to)).toBe(true);
+    }
+  });
+
+  it("never duplicates aux+state on the same (from, to, auxKey) triple", () => {
+    // State edges' "state" sentinel auxKey can't collide with real aux
+    // keys (those come from step `auxWrites`, all of which are domain-
+    // specific). This pins the no-collision invariant explicitly so a
+    // future aux-write of literal "state" doesn't silently merge with
+    // the spine in collapseGraph's dedup.
+    const g = deriveAuxGraph(runAes128Ecb(), aes128EcbSpec);
+    const auxKeysOnAuxEdges = new Set(g.edges.filter((e) => e.kind === "aux").map((e) => e.auxKey));
+    expect(auxKeysOnAuxEdges.has("state")).toBe(false);
   });
 });
 
@@ -354,9 +512,10 @@ describe("collapseGraph — view-time transform", () => {
 
   it("re-routes round-key edges that entered a collapsed container to terminate at it", () => {
     const g = deriveAuxGraph(runAes128(), aes128Spec);
-    // Before collapse: 11 fan-out edges from key-expansion (initial +
-    // round.1..10's add-round-key consumers).
-    const before = g.edges.filter((e) => e.from === "key-expansion").length;
+    // Before collapse: 11 fan-out aux edges from key-expansion (initial +
+    // round.1..10's add-round-key consumers). Filter to kind=aux because
+    // key-expansion also has an outgoing spine edge — see commit 2.
+    const before = g.edges.filter((e) => e.kind === "aux" && e.from === "key-expansion").length;
     expect(before).toBe(11);
 
     const out = collapseGraph(g, new Set(["round.3"]));
@@ -364,7 +523,7 @@ describe("collapseGraph — view-time transform", () => {
     // key-expansion → round.3.add-round-key remaps to key-expansion → round.3.
     // No edge count change for this particular fan-out (the remap doesn't
     // collide with anything else).
-    const after = out.edges.filter((e) => e.from === "key-expansion").length;
+    const after = out.edges.filter((e) => e.kind === "aux" && e.from === "key-expansion").length;
     expect(after).toBe(11);
     // The specific re-routed edge exists.
     expect(
@@ -415,6 +574,83 @@ describe("collapseGraph — view-time transform", () => {
       ...out.containers.map((c) => c.id),
     ]);
     for (const id of out.rootIds) expect(visible.has(id)).toBe(true);
+  });
+
+  it("drops state edges that lived entirely inside a collapsed container (round.5)", () => {
+    // The state spine threads through every leaf inside a round (sub-bytes
+    // → shift-rows → mix-columns → add-round-key). Collapsing round.5
+    // hides those 4 leaves; their internal state edges remap both
+    // endpoints to round.5 and become self-loops, which the dedup pass
+    // drops.
+    const g = deriveAuxGraph(runAes128(), aes128Spec);
+    const before = g.edges.filter((e) => e.kind === "state").length;
+    expect(before).toBe(40);
+
+    const out = collapseGraph(g, new Set(["round.5"]));
+    const afterState = out.edges.filter((e) => e.kind === "state");
+    // Inside round.5 there were 3 state edges (4 leaves → 3 internal edges).
+    // Plus the two boundary edges (round.4.add-round-key → round.5.sub-bytes
+    // and round.5.add-round-key → round.6.sub-bytes) which remap their
+    // round.5-side endpoint to "round.5" and survive as cross-boundary
+    // edges. Net: 40 - 3 internal = 37 surviving state edges.
+    expect(afterState.length).toBe(37);
+    // No state self-loop on round.5.
+    for (const e of afterState) {
+      expect(e.from === "round.5" && e.to === "round.5").toBe(false);
+    }
+  });
+
+  it("re-routes state edges crossing a collapsed container's boundary to terminate at it", () => {
+    const g = deriveAuxGraph(runAes128(), aes128Spec);
+    const out = collapseGraph(g, new Set(["round.5"]));
+    const stateEdges = out.edges.filter((e) => e.kind === "state");
+    // The pre-collapse pair (round.4.add-round-key → round.5.sub-bytes)
+    // remaps the consumer to the collapsed container chip.
+    const entering = stateEdges.find(
+      (e) => e.from === "round.4.add-round-key" && e.to === "round.5",
+    );
+    expect(entering).toBeDefined();
+    // The exit edge (round.5.add-round-key → round.6.sub-bytes) remaps
+    // the producer to the collapsed chip.
+    const leaving = stateEdges.find((e) => e.from === "round.5" && e.to === "round.6.sub-bytes");
+    expect(leaving).toBeDefined();
+    // And the original-endpoint versions are gone (their internal
+    // round.5.* endpoints don't exist anymore in the visible graph).
+    expect(
+      stateEdges.some((e) => e.from === "round.4.add-round-key" && e.to === "round.5.sub-bytes"),
+    ).toBe(false);
+    expect(
+      stateEdges.some((e) => e.from === "round.5.add-round-key" && e.to === "round.6.sub-bytes"),
+    ).toBe(false);
+  });
+
+  it("collapses an iterate container's state spine (AES-128-ECB → ecb-blocks)", () => {
+    // Pre-collapse: AES-128-ECB has 41 state edges:
+    //   - top scope pre-iterate: 2 (KE → split, split → count)
+    //   - iterate body scope: 39 (40 leaves → 39 in one chain)
+    //   - top scope post-iterate: 0 (concat-blocks alone)
+    // Collapsing the iterate hides all 40 body leaves, so all 39 body
+    // state edges remap both endpoints to "ecb-blocks" and become
+    // self-loops → dropped. The 2 pre-iterate edges survive untouched
+    // (their endpoints are outside the iterate). 41 − 39 = 2.
+    const g = deriveAuxGraph(runAes128Ecb(), aes128EcbSpec);
+    const stateBefore = g.edges.filter((e) => e.kind === "state");
+    expect(stateBefore.length).toBe(41);
+
+    const out = collapseGraph(g, new Set(["ecb-blocks"]));
+    const stateAfter = out.edges.filter((e) => e.kind === "state");
+    expect(stateAfter.length).toBe(2);
+    // The two surviving spine edges are the pre-iterate pair.
+    expect(
+      stateAfter.find((e) => e.from === "key-expansion" && e.to === "split-blocks"),
+    ).toBeDefined();
+    expect(
+      stateAfter.find((e) => e.from === "split-blocks" && e.to === "compute-block-count"),
+    ).toBeDefined();
+    // No state self-loop on the iterate container.
+    for (const e of stateAfter) {
+      expect(e.from === "ecb-blocks" && e.to === "ecb-blocks").toBe(false);
+    }
   });
 
   it("collapses an iterate container (AES-128-ECB → ecb-blocks)", () => {

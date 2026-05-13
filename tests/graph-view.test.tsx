@@ -108,22 +108,35 @@ describe("GraphView — component-level (AES-128 fixture)", () => {
     expect(roundKeyEdges.length).toBe(11);
   });
 
-  // Sequence commit 1: every aux edge in today's graph is rendered with
-  // the aux-kind class AND references the aux arrow marker via marker-end.
-  // These two facts together prove the renderer is using the kind hook
-  // (commit 2 will exercise the state-kind branch).
+  // Sequence commits 1 + 2: every edge in today's graph is rendered with
+  // a kind-tagged class AND references the matching arrow marker. Aux
+  // edges (trace-derived) carry `.graph-edge-aux` + `url(#graph-arrow-aux)`;
+  // state edges (spec-derived spine) carry `.graph-edge-state` +
+  // `url(#graph-arrow-state)`. Both populations are non-empty for AES-128
+  // — round-key fan-out on the aux side, the 40-edge spine on the state side.
   it("tags every edge with its kind class and the matching arrow marker", () => {
     seedAes128Trace();
     const { container } = render(() => <GraphView />);
     const edges = container.querySelectorAll(".graph-edge");
     expect(edges.length).toBeGreaterThan(0);
+    let auxCount = 0;
+    let stateCount = 0;
     for (const edge of Array.from(edges)) {
-      // Every edge today is aux-kind; state edges land in commit 2.
-      expect(edge.classList.contains("graph-edge-aux")).toBe(true);
-      expect(edge.getAttribute("marker-end")).toBe("url(#graph-arrow-aux)");
+      const isAux = edge.classList.contains("graph-edge-aux");
+      const isState = edge.classList.contains("graph-edge-state");
+      // Exactly one kind class per edge.
+      expect(isAux !== isState).toBe(true);
+      if (isAux) {
+        expect(edge.getAttribute("marker-end")).toBe("url(#graph-arrow-aux)");
+        auxCount++;
+      } else {
+        expect(edge.getAttribute("marker-end")).toBe("url(#graph-arrow-state)");
+        stateCount++;
+      }
     }
-    // Both marker defs render (state defs exist even though no state edges
-    // reference them yet — the renderer is ready for commit 2).
+    expect(auxCount).toBeGreaterThan(0);
+    expect(stateCount).toBeGreaterThan(0);
+    // Both marker defs render so the matching `url(#…)` references resolve.
     expect(container.querySelector("#graph-arrow-aux")).not.toBeNull();
     expect(container.querySelector("#graph-arrow-state")).not.toBeNull();
   });
@@ -152,14 +165,18 @@ describe("GraphView — component-level (AES-128 fixture)", () => {
     expect(useFrameIndex()()).toBe(expectedIdx);
   });
 
-  it("renders without a trace (structural skeleton only, no edges)", () => {
-    // Don't seed a trace; just render. The graph must still draw the spec's
-    // nodes/containers from the empty-trace branch in deriveAuxGraph.
+  it("renders without a trace (structural skeleton + spec-derived spine, no aux edges)", () => {
+    // Don't seed a trace; just render. The graph still draws the spec's
+    // nodes/containers AND the 40-edge AES-128 state spine — the spine is
+    // spec-derived, so it shows up before the first run (one of the
+    // pedagogical payoffs of commit 2 in the readability sequence).
     const { container } = render(() => <GraphView />);
     const leaves = container.querySelectorAll(".graph-leaf-rect");
     expect(leaves.length).toBe(41);
-    const edges = container.querySelectorAll(".graph-edge");
-    expect(edges.length).toBe(0);
+    // No aux edges pre-run (those require a trace).
+    expect(container.querySelectorAll(".graph-edge-aux").length).toBe(0);
+    // Full 40-edge state spine across AES-128's leaves.
+    expect(container.querySelectorAll(".graph-edge-state").length).toBe(40);
   });
 });
 
