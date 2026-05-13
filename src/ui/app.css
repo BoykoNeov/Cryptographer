@@ -288,6 +288,28 @@ button:disabled {
   color: var(--text);
 }
 
+/* Slice 7 — Share status pill. Sits on its own row below the toolbar via
+   `flex-basis: 100%` (same trick as the pending-banner above) so it
+   doesn't shift the action buttons around when it appears. Variants
+   color-code by kind: success uses the accent palette, error reuses the
+   error-row's red. */
+.share-status {
+  flex-basis: 100%;
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+.share-status-success {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+.share-status-error {
+  background: #3a1010;
+  border: 1px solid #ff6e6e;
+  color: #ff8c8c;
+}
+
 .compare-toggle {
   display: flex;
   align-items: center;

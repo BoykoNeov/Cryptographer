@@ -52,6 +52,7 @@ import {
   createSignal,
   on,
   onCleanup,
+  onMount,
 } from "solid-js";
 import { BlockBadge } from "./components/BlockBadge";
 import { BytesView } from "./components/BytesView";
@@ -109,6 +110,12 @@ import {
   useSpec,
 } from "./stores/spec";
 import { getTrace, setTrace, useFrameIndex, useTraceVersion } from "./stores/trace";
+import {
+  buildShareHash,
+  decodeHashToDocument,
+  encodeDocumentToHash,
+  extractHashPayload,
+} from "./stores/url-share";
 import {
   ALL_VIEW_MODES,
   VIEW_MODE_LABELS,
@@ -192,6 +199,23 @@ export const App = () => {
   // Ref to the hidden <input type="file"> so the [Load] button can trigger
   // the OS file picker programmatically.
   let fileInputRef: HTMLInputElement | undefined;
+
+  // Slice 7 — URL hash share feedback. The Share button copies the
+  // generated link to the clipboard and flips this signal so the UI can
+  // show "Copied!" briefly; cleared by setTimeout. Using a signal (vs.
+  // inline DOM mutation) keeps the rendering reactive and SSR-safe.
+  const [shareStatus, setShareStatus] = createSignal<{
+    readonly kind: "success" | "error";
+    readonly message: string;
+  } | null>(null);
+  // Stable closure variable for the share-status auto-clear timer. Tracked
+  // here (not via onCleanup inside the async handler — onCleanup requires
+  // a current reactive owner, which event handlers don't have) so a quick
+  // double-share doesn't leave the first timer racing the second.
+  let shareStatusTimer: ReturnType<typeof setTimeout> | null = null;
+  onCleanup(() => {
+    if (shareStatusTimer !== null) clearTimeout(shareStatusTimer);
+  });
 
   // Wire window-level keyboard shortcuts (←/→ scrub, Home/End, PageUp/Down).
   // Tied to App's lifecycle via onCleanup inside the helper.
@@ -375,17 +399,129 @@ export const App = () => {
   };
 
   /**
-   * Inner Load pathway: takes the file's text content, parses it, applies
-   * the document to the live stores, and runs the cipher. Factored out so
-   * the jsdom test can drive Load without an actual File object (jsdom's
-   * FileReader + the synthetic file input chain is awkward; this avoids
-   * it). Returns nothing — error state goes through setError, success
-   * propagates via the trace store + selector stores.
+   * Slice 7 — Share. Build the current document, encode it as `#doc=…`,
+   * concatenate with the page's origin + path, and write the resulting
+   * URL to the clipboard. Async because both `encodeDocumentToHash`
+   * (CompressionStream-driven) and `navigator.clipboard.writeText` return
+   * promises.
    *
-   * Run is called synchronously at the end so the trace lands without
-   * waiting for the 200ms `on(spec)` debounce. The debounce will still
-   * fire (since spec just changed) but `pushSnapshot` dedups identical
-   * snapshots, so this is harmless.
+   * Honors the same `includeSession` toggle as Save — the user opts into
+   * leaking plaintext bytes the same way for both surfaces. Spec-only
+   * shares are byte-stable, so the same URL works across sessions; the
+   * Slice 7 test pins this property the same way Slice 5 pins it for the
+   * file path.
+   *
+   * Success flips `shareStatus` to a brief "Copied!" inline message;
+   * clipboard failures (write blocked by browser policy, e.g. in HTTP
+   * dev contexts) fall through to a friendly error so the user can copy
+   * the URL manually from the field shown below.
+   */
+  const shareDocument = async (): Promise<void> => {
+    try {
+      const doc = parseDocument(buildSaveText());
+      if (!doc.ok) {
+        setShareStatus({
+          kind: "error",
+          message: `could not build share document: ${doc.error}`,
+        });
+        return;
+      }
+      const encoded = await encodeDocumentToHash(doc.doc);
+      const url = `${window.location.origin}${window.location.pathname}${buildShareHash(encoded)}`;
+      try {
+        await navigator.clipboard.writeText(url);
+        setShareStatus({ kind: "success", message: `link copied (${encoded.length} chars)` });
+      } catch (clipErr) {
+        // Clipboard write can be blocked in non-secure contexts (HTTP) or
+        // by user permission denial. The URL itself encoded fine; surface
+        // it so the user can copy it from the address bar manually.
+        window.history.replaceState(null, "", buildShareHash(encoded));
+        setShareStatus({
+          kind: "error",
+          message: `clipboard write blocked — URL placed in address bar: ${errMessage(clipErr)}`,
+        });
+      }
+    } catch (e) {
+      setShareStatus({ kind: "error", message: `share failed: ${errMessage(e)}` });
+    }
+    // Auto-clear the inline status after 3s so the toolbar doesn't carry
+    // a stale "Copied!" forever. Clear any pending prior timer first so
+    // a fast double-share doesn't reset the new status early.
+    if (shareStatusTimer !== null) clearTimeout(shareStatusTimer);
+    shareStatusTimer = setTimeout(() => {
+      setShareStatus(null);
+      shareStatusTimer = null;
+    }, 3000);
+  };
+
+  /**
+   * Slice 7 — boot hook. On first mount, if the URL hash carries a `doc=…`
+   * payload, decode it asynchronously and apply via `applyDocument`. On
+   * success, clear the hash from the address bar (replaceState, not
+   * pushState — we don't want a back-button bounce to the shared URL).
+   * On failure, keep the hash so the user can debug or report it.
+   *
+   * Stores have already hydrated from localStorage at module-import time
+   * by the time onMount runs; `setSpecFromDocument` deliberately bypasses
+   * the defaults table, so the URL's literal spec wins over whatever
+   * localStorage held.
+   */
+  onMount(() => {
+    if (typeof window === "undefined") return; // SSR / non-browser test env
+    const payload = extractHashPayload(window.location.hash);
+    if (payload === null || payload.length === 0) return;
+    void (async () => {
+      const result = await decodeHashToDocument(payload);
+      if (!result.ok) {
+        setError(`Could not load shared link: ${result.error}`);
+        return;
+      }
+      applyDocument(result.doc);
+      // Strip the hash from the address bar so a refresh doesn't re-apply
+      // the shared doc (which would clobber any edits the user made since
+      // the initial load).
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    })();
+  });
+
+  /**
+   * Apply a parsed CipherDocument to the live stores: layout sidecar (if
+   * any), spec + selectors via `setSpecFromDocument`, session inputs/key
+   * (formatted under the doc's byteFormat), then run synchronously so the
+   * trace lands immediately. Shared by file-load (Slice 5) and URL-share
+   * load (Slice 7) so both paths go through one boundary.
+   *
+   * Three orderings that have to be right and would silently regress if a
+   * refactor splits them:
+   *   1. **Layout BEFORE spec.** GraphView reads layout reactively keyed by
+   *      the active spec's id; we want its first re-derive after the spec
+   *      change to read the new layout, not blink through auto-layout for
+   *      a frame.
+   *   2. **byteFormat lands inside `setSpecFromDocument` BEFORE we call
+   *      formatBytes here.** The Slice 5 byteFormat-hydration-order test
+   *      pins this — if a refactor splits the setter, restored bytes would
+   *      render in the old format.
+   *   3. **`run()` synchronously** so the trace appears immediately. The
+   *      200ms `on(spec)` debounce will also fire (spec changed); its
+   *      duplicate run is harmless because pushSnapshot dedups.
+   */
+  const applyDocument = (doc: CipherDocument): void => {
+    setLayoutForSpec(doc.spec.id, doc.layout ?? null);
+    setSpecFromDocument(doc);
+    if (doc.session?.inputBytes) {
+      setInputText(formatBytes(new Uint8Array(doc.session.inputBytes), fmt()));
+    }
+    if (doc.session?.keyBytes) {
+      setKeyText(formatBytes(new Uint8Array(doc.session.keyBytes), fmt()));
+    }
+    setError(null);
+    run();
+  };
+
+  /**
+   * Inner Load pathway: parse the file's text content, then apply via
+   * `applyDocument`. Factored out so the jsdom test can drive Load without
+   * an actual File object.
    */
   const handleLoadFromText = (text: string): void => {
     const result = parseDocument(text);
@@ -393,34 +529,7 @@ export const App = () => {
       setError(`Could not load this file: ${result.error}`);
       return;
     }
-    const doc = result.doc;
-    // Apply the layout sidecar BEFORE setting the spec — GraphView reads
-    // layout reactively keyed by the active spec's id, and we want its
-    // first re-derive after the spec change to read the new layout
-    // (not blink through the old auto-layout for a frame). When the doc
-    // has no layout sidecar, pass null to clear any persisted entry for
-    // this spec id (loading is "this is the file's truth").
-    setLayoutForSpec(doc.spec.id, doc.layout ?? null);
-    setSpecFromDocument(doc);
-
-    // After setSpecFromDocument: byteFormat is now the document's value.
-    // Format the restored bytes through the NEW byteFormat (advisor: the
-    // order matters — fmt() above is already the new value because
-    // setByteFormat fired first inside setSpecFromDocument).
-    if (doc.session?.inputBytes) {
-      setInputText(formatBytes(new Uint8Array(doc.session.inputBytes), fmt()));
-    }
-    if (doc.session?.keyBytes) {
-      setKeyText(formatBytes(new Uint8Array(doc.session.keyBytes), fmt()));
-    }
-
-    // Clear any previous error so the success state is visible.
-    setError(null);
-    // Run synchronously so the trace lands immediately. The `on(spec)`
-    // createEffect will also fire (since we just changed spec); its
-    // debounced run lands at +200ms but pushSnapshot dedups, so it's a
-    // no-op on history.
-    run();
+    applyDocument(result.doc);
   };
 
   /**
@@ -786,6 +895,18 @@ export const App = () => {
         <button type="button" onClick={onLoadClick} title="Load a .cipher.json file">
           load…
         </button>
+        {/* Slice 7 — Share. Encodes the current document (respecting the
+            include-session toggle below) as a `#doc=…` URL and copies it
+            to the clipboard. Inline status pings below the toolbar. */}
+        <button
+          type="button"
+          onClick={() => {
+            void shareDocument();
+          }}
+          title="Copy a shareable URL of the current cipher to the clipboard"
+        >
+          share…
+        </button>
         <label
           class="include-session-toggle"
           title="Save inputs + key + selector state with the file (off by default — keeps spec-only files small and avoids leaking plaintext when sharing)"
@@ -834,6 +955,21 @@ export const App = () => {
           <output class="pending-banner">
             edits pending — click <strong>run</strong> to update the trace
           </output>
+        </Show>
+        {/* Slice 7 — Share feedback. Surfaces "Copied!" or a clipboard
+            failure inline below the toolbar; auto-clears after 3s. */}
+        <Show when={shareStatus()}>
+          {(getStatus) => (
+            <output
+              class="share-status"
+              classList={{
+                "share-status-success": getStatus().kind === "success",
+                "share-status-error": getStatus().kind === "error",
+              }}
+            >
+              {getStatus().message}
+            </output>
+          )}
         </Show>
       </section>
 
@@ -1186,6 +1322,11 @@ const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean => {
   }
   return true;
 };
+
+/** Tiny shared formatter for catch blocks — keeps the call sites readable
+ * and avoids the `e instanceof Error ? e.message : String(e)` chant
+ * sprinkled across the file. */
+const errMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /** Build the friendly length-mismatch error shown when the input isn't in
  * the allowed [min, max] range. The hint cites the scheme (and, for

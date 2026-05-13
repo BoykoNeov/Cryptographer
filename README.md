@@ -24,8 +24,9 @@ Interactive features:
 - **Step description** with FIPS-197 / paper references and inline parameter editing — swap the S-box and watch the trace update.
 - **Run history** (last 5) with a diff overlay showing how the current run differs from any prior one.
 - **Byte format toggle**: hex / decimal / ASCII, applied to every input + output cell.
-- **2D graph view** (work-in-progress): pan/drag containers, collapse groups, see the aux-flow + state-flow edges that connect every step. Slices 1–6 of 11 are shipped.
+- **2D graph view** (work-in-progress): pan/drag containers, collapse groups, see the aux-flow + state-flow edges that connect every step. Slices 1–7 of 11 are shipped.
 - **Save / Load** custom ciphers as `.cipher.json` documents (`schemaVersion: 1`, see [`src/core/document.ts`](./src/core/document.ts)).
+- **Share via URL**: a `#doc=…` hash carries the whole document (deflate-raw + base64url, ~2 KB even for AES-256 + session) so a paste-able link reproduces a custom cipher in a fresh tab. The "include session" toggle is shared with Save, so spec-only shares stay public-safe (no plaintext, no key bytes).
 
 ## Quickstart
 

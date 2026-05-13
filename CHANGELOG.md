@@ -6,7 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+- **URL hash sharing (Slice 7 of the 2D editor plan)** — new `[share…]` button next to Save/Load. Encodes the current `CipherDocument` as `${origin}${pathname}#doc=<base64url-deflate-raw>` and copies it to the clipboard; opening that URL in a fresh tab decodes on mount and snaps the spec / layout / session to the shared values, then strips the hash from the address bar so a refresh doesn't re-apply. Honors the same `include session` toggle as Save (default off → spec-only, byte-stable across sessions). Compression uses the browser-native `CompressionStream("deflate-raw")`, no new dependencies; measured payloads land at ~1.6 KB for spec-only AES-128 and ~1.9 KB for the AES-256 + session worst case (vs. ~20 KB without compression). Bundle grew from 72 KB → 76 KB gzipped (compression is built-in; the +4 KB is the new `src/ui/stores/url-share.ts` module + handler wiring).
+- Clipboard-write failure (HTTP context / permission denied) falls back to writing the URL into the address bar so the user can copy it manually.
+- 20 new tests across `tests/url-share.test.ts` (node env — encode/decode round-trip, determinism, size budget, malformed payload handling) and `tests/app-url-share.test.tsx` (jsdom — Share button → clipboard, boot-mount hash decode for spec-only + session + layout sidecar, malformed-payload error path, no-hash noop). Suite now at 608 tests across 49 files.
 
 ## [0.2.0] — 2026-05-13
 
