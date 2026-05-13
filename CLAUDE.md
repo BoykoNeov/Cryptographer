@@ -7,7 +7,7 @@ Interactive cryptography explorer. The user enters plaintext + key, sees every i
 | Command | What it does |
 |---|---|
 | `npm run dev` | Vite dev server at `http://localhost:5173`. Hot-reloads on file changes. |
-| `npm test` | Vitest, single run. Currently 528 tests across 42 files, ~4s total (jsdom UI tests dominate). |
+| `npm test` | Vitest, single run. Currently 608 tests across 49 files, ~5s total (jsdom UI tests dominate). |
 | `npm run typecheck` | `tsc --noEmit`, strict. |
 | `npm run check` | The gate: `biome ci . && tsc --noEmit && vitest run && vite build`. Runs in ~7s on this machine. |
 | `npm run build` | Production build into `dist/`. ~72KB gzipped JS. |
@@ -107,7 +107,7 @@ If a future need argues for one of these, revisit then.
 - Speck32/64 plan (shipped May 2026 — second cipher family, ARX, both BE-paper + LE-NSA byte conventions): `docs/plans/speck.md`
 - Multi-block AES with ECB/CBC/CTR plan (Phase 1 — loop primitive + AES-128 ECB — shipped May 2026; Phases 2–4 on paper): `docs/plans/multi-block-aes-modes.md`
 - Serpent cipher plan (all three key sizes, standard form with explicit IP/FP, single-block — shipped May 2026): `~/.claude/plans/i-want-serpent-cipher-indexed-finch.md`
-- 2D/DAG visual cipher editor + JSON document export plan (Slices 1–6 shipped May 2026; Slices 7–11 pending): `~/.claude/plans/peppy-knitting-fairy.md`. Memory entry `project_2d_editor_plan.md` tracks per-slice progress. Label truncation V1 (SVG `textLength`) shipped 2026-05-13 (commit `e12129a`); Slices 7–11 + the graph-readability sequence are no longer blocked. Option B (click-to-expand with `LayoutSpec.expandedLabels`) is an optional V2 follow-up; pick up only on explicit user ask. Slice 7 (URL share) leans on Slice 5's `setSpecFromDocument` boundary and the spec-only byte-stability property.
+- 2D/DAG visual cipher editor + JSON document export plan (Slices 1–7 shipped May 2026; Slices 8–11 pending): `~/.claude/plans/peppy-knitting-fairy.md`. Memory entry `project_2d_editor_plan.md` tracks per-slice progress. Slice 7 (URL hash share — `[share…]` button, `#doc=<base64url-deflate-raw>`, browser-native `CompressionStream`, no new deps) shipped 2026-05-13 (commit `0bf381e`); the boot decode + share both route through the shared `applyDocument` boundary in `App.tsx`, factored out of `handleLoadFromText`. Option B (click-to-expand with `LayoutSpec.expandedLabels`) is an optional V2 follow-up for the readability sequence; pick up only on explicit user ask. **Next priority: Slice 8 (palette + graph insertion)** — a solid-flow spike is open on branch `explore/solid-flow` to evaluate library-vs-hand-rolled (port 5174, plan only on that branch). The spike has three exit conditions: Migrate, Partial (DnD primitives only), or Abandon; check the memory entry before assuming Slice 8 lands hand-rolled.
 
 **Future:**
 - **Feistel future**: A Feistel-style cipher (with branching state — left/right halves evolving independently in the round body) is a planned future addition. Today's executor contract `(state, params) → state` is what makes the upcoming derivation-time state-edge inference (in `core/graph.ts`) correct by construction: "consecutive same-parent leaves share state" is guaranteed, not assumed. A branching primitive would break that — both derivation-time AND any future runtime-recorded state-lineage approach would need revisiting when Feistel lands. Don't assume the inference generalizes for free.
