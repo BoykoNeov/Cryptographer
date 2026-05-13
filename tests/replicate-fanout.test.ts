@@ -60,6 +60,44 @@ describe("replicateHighFanoutSources", () => {
     expect(r.nodes.find((n) => n.stepId === "key-expansion")).toBeDefined();
   });
 
+  it('mode "always" replicates a low-fanout source that auto would skip', () => {
+    const g = aes128Graph();
+    // round.0.add-round-key is an aux CONSUMER of key-expansion, not a
+    // source. Pick an actual low-fanout source — the iterate doesn't
+    // exist in single-block AES, and most leaves don't emit aux. Use
+    // `key-expansion` with a HIGH threshold so auto would skip, then
+    // force replication via "always".
+    const r = replicateHighFanoutSources(g, 50, { "key-expansion": "always" });
+    // High threshold alone would have left the graph alone; "always"
+    // forces replication anyway.
+    expect(r).not.toBe(g);
+    const replicas = r.nodes.filter((n) => n.replicaOf === "key-expansion");
+    expect(replicas.length).toBe(11);
+  });
+
+  it('mode "never" suppresses replication of a high-fanout source that auto would replicate', () => {
+    const g = aes128Graph();
+    // Threshold 6 would auto-replicate key-expansion (fanout 11), but the
+    // "never" override pins it back.
+    const r = replicateHighFanoutSources(g, 6, { "key-expansion": "never" });
+    expect(r).toBe(g);
+    const replicas = r.nodes.filter((n) => n.replicaOf === "key-expansion");
+    expect(replicas.length).toBe(0);
+  });
+
+  it("threshold <= 0 with no 'always' overrides short-circuits (modes empty)", () => {
+    const g = aes128Graph();
+    expect(replicateHighFanoutSources(g, 0, {})).toBe(g);
+    expect(replicateHighFanoutSources(g, -1, undefined)).toBe(g);
+  });
+
+  it("threshold <= 0 with an 'always' override still replicates that source", () => {
+    const g = aes128Graph();
+    const r = replicateHighFanoutSources(g, 0, { "key-expansion": "always" });
+    expect(r).not.toBe(g);
+    expect(r.nodes.filter((n) => n.replicaOf === "key-expansion").length).toBe(11);
+  });
+
   it("each replica sits in its consumer's parent container, before the consumer", () => {
     const g = aes128Graph();
     const r = replicateHighFanoutSources(g, 6);

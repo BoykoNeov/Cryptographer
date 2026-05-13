@@ -28,6 +28,7 @@ import {
   hasUserLayout,
   setLayoutForSpec,
   setNodePosition,
+  setReplicationMode,
   toggleCollapse,
   useLayoutMap,
 } from "@/ui/stores/layout";
@@ -257,6 +258,106 @@ describe("layout store — hasUserLayout", () => {
         flowDirection: "ltr",
       }),
     ).toBe(true);
+  });
+
+  it("returns true when at least one replicationModes override is present", () => {
+    expect(
+      hasUserLayout({
+        positions: {},
+        collapsedGroups: [],
+        flowDirection: "ltr",
+        replicationModes: { "key-expansion": "always" },
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when replicationModes is present but empty", () => {
+    expect(
+      hasUserLayout({
+        positions: {},
+        collapsedGroups: [],
+        flowDirection: "ltr",
+        replicationModes: {},
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("layout store — setReplicationMode (commit 5)", () => {
+  it("stores an override under the named spec id", () => {
+    setReplicationMode("aes-128@1", "key-expansion", "always");
+    expect(getLayoutForSpec("aes-128@1")?.replicationModes).toEqual({
+      "key-expansion": "always",
+    });
+    expect(getLayoutForSpec("aes-256@1")).toBeNull();
+  });
+
+  it("can change a stored override to a different mode", () => {
+    setReplicationMode("aes-128@1", "key-expansion", "always");
+    setReplicationMode("aes-128@1", "key-expansion", "never");
+    expect(getLayoutForSpec("aes-128@1")?.replicationModes).toEqual({
+      "key-expansion": "never",
+    });
+  });
+
+  it("passing null clears the entry (back to implicit auto)", () => {
+    setReplicationMode("aes-128@1", "key-expansion", "always");
+    setReplicationMode("aes-128@1", "key-expansion", null);
+    // Only override → cleared → no other user-layout → entry removed
+    // entirely (byte-stability discipline).
+    expect(getLayoutForSpec("aes-128@1")).toBeNull();
+  });
+
+  it("clearing an override while a position pin exists keeps the entry", () => {
+    setNodePosition("aes-128@1", "round.1", 100, 100);
+    setReplicationMode("aes-128@1", "key-expansion", "always");
+    setReplicationMode("aes-128@1", "key-expansion", null);
+    // Pin survives; replicationModes is dropped (omitted when empty so the
+    // serialized form stays byte-stable).
+    const layout = getLayoutForSpec("aes-128@1");
+    expect(layout).not.toBeNull();
+    expect(layout?.positions["round.1"]).toEqual({ x: 100, y: 100 });
+    expect(layout?.replicationModes).toBeUndefined();
+  });
+
+  it("multiple overrides on the same spec accumulate", () => {
+    setReplicationMode("aes-128@1", "key-expansion", "always");
+    setReplicationMode("aes-128@1", "split-blocks", "never");
+    expect(getLayoutForSpec("aes-128@1")?.replicationModes).toEqual({
+      "key-expansion": "always",
+      "split-blocks": "never",
+    });
+  });
+
+  it("two specs' overrides coexist", () => {
+    setReplicationMode("aes-128@1", "key-expansion", "always");
+    setReplicationMode("aes-256@1", "key-expansion", "never");
+    expect(getLayoutForSpec("aes-128@1")?.replicationModes).toEqual({
+      "key-expansion": "always",
+    });
+    expect(getLayoutForSpec("aes-256@1")?.replicationModes).toEqual({
+      "key-expansion": "never",
+    });
+  });
+
+  it("persists to localStorage synchronously", () => {
+    setReplicationMode("aes-128@1", "key-expansion", "always");
+    const raw = storage.getItem(STORAGE_KEY);
+    expect(raw).not.toBeNull();
+    const parsed = JSON.parse(raw as string);
+    expect(parsed["aes-128@1"].replicationModes).toEqual({
+      "key-expansion": "always",
+    });
+  });
+
+  it("does NOT write an empty replicationModes object to disk", () => {
+    setNodePosition("aes-128@1", "round.1", 0, 0);
+    setReplicationMode("aes-128@1", "key-expansion", "always");
+    setReplicationMode("aes-128@1", "key-expansion", null);
+    const parsed = JSON.parse(storage.getItem(STORAGE_KEY) as string);
+    // An empty `replicationModes: {}` would defeat byte-stability: spec-only
+    // saves with no user customization need to omit the field entirely.
+    expect(parsed["aes-128@1"].replicationModes).toBeUndefined();
   });
 });
 

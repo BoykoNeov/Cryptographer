@@ -1548,6 +1548,61 @@ button:disabled {
   color: var(--muted);
 }
 
+/* Commit 5 — per-source replication override panel. Sticky beneath the
+   toolbar (which is itself sticky at `top: 0`) so it stays visible at
+   any scroll position. The 32px figure matches the toolbar's rendered
+   height (≈ 6px padding + ~20px content + 6px padding + 1px border);
+   keep them in sync if the toolbar's padding changes. */
+.graph-replication-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+  position: sticky;
+  top: 32px;
+  left: 0;
+  z-index: 1;
+  font-size: 11px;
+}
+
+.graph-replication-panel-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--muted);
+  text-transform: lowercase;
+}
+
+.graph-replication-panel-hint {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.graph-replication-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.graph-replication-row-id {
+  flex: 1;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color: var(--text);
+  /* Long source ids can overflow at narrow viewports — let them
+     ellipsize rather than push the toggle buttons off-screen. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-replication-row-fanout {
+  color: var(--muted);
+  min-width: 56px;
+  text-align: right;
+}
+
 .graph-view-svg {
   display: block;
   font-family: inherit;

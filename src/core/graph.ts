@@ -547,7 +547,8 @@ export const collapseGraph = (
 // ─── High-fanout replication (commit 4 of the graph-readability sequence) ─
 
 /**
- * Replicate any aux-edge source whose outgoing-aux count exceeds `threshold`.
+ * Replicate any aux-edge source whose outgoing-aux count exceeds `threshold`,
+ * with per-source overrides via `modes`.
  *
  * Why: AES-128's `key-expansion` produces 11 outgoing roundKey edges that
  * fan out to all 11 AddRoundKey consumers, dominating the canvas with long
@@ -559,10 +560,20 @@ export const collapseGraph = (
  *   - Counts only `kind: "aux"` edges. State edges are 1-to-1 between
  *     consecutive same-parent leaves (no fanout possible) and pass through
  *     unchanged.
- *   - A "source" is any id appearing in `edge.from` for ≥ threshold + 1
- *     aux edges. Both leaves and iterate containers can be sources (the
- *     iterate boundary participates in synthetic edges; see deriveAuxGraph's
- *     "iterate-mediated aux" note).
+ *   - A "source" is any id appearing in `edge.from` for at least one aux
+ *     edge. Both leaves and iterate containers can be sources (the
+ *     iterate boundary participates in synthetic edges; see
+ *     deriveAuxGraph's "iterate-mediated aux" note).
+ *   - Per-source override (commit 5):
+ *       - `modes[src] === "always"` → replicate regardless of count.
+ *       - `modes[src] === "never"`  → don't replicate, even at high fanout.
+ *       - absent / "auto"           → replicate iff `count > threshold`.
+ *     Master-switch semantic: a caller that wants replication globally OFF
+ *     passes `threshold <= 0` AND an empty modes object; per-node `"always"`
+ *     entries fire ONLY if at least one source is selected. The GraphView
+ *     enforces "global off = no replicas, period" by short-circuiting the
+ *     transform call entirely; this function honors `"always"` regardless
+ *     so unit tests can drive it in isolation without needing the toggle.
  *   - One replica per (source, consumer) pair, even if multiple aux keys
  *     flow source → consumer. The replica gets all those edges; visually
  *     this reads as a single local chip with N tiny edges to its
@@ -582,12 +593,22 @@ export const collapseGraph = (
  *     sidebar's click-to-scrub continues to work. The source loses its
  *     replicated outgoing aux edges; if it had below-threshold outgoing
  *     aux to other consumers, those pass through unchanged.
- *   - `threshold <= 0` or no high-fanout sources → return the input graph
- *     by reference. Identity short-circuit keeps the createMemo chain
- *     in GraphView cheap when replication is off.
+ *   - `threshold <= 0` with no `"always"` overrides → return the input
+ *     graph by reference. Identity short-circuit keeps the createMemo
+ *     chain in GraphView cheap when replication is off.
  */
-export const replicateHighFanoutSources = (graph: CipherGraph, threshold: number): CipherGraph => {
-  if (threshold <= 0) return graph;
+export const replicateHighFanoutSources = (
+  graph: CipherGraph,
+  threshold: number,
+  modes?: { readonly [sourceId: string]: "always" | "never" },
+): CipherGraph => {
+  const modesObj = modes ?? {};
+  // Early exit when there's no possible work: threshold below 1 disables
+  // auto-replication, AND no per-source "always" override is present. This
+  // is the GraphView's master-switch case when the user has turned the
+  // global toggle off without setting any explicit overrides.
+  const hasAnyAlwaysOverride = Object.values(modesObj).some((m) => m === "always");
+  if (threshold <= 0 && !hasAnyAlwaysOverride) return graph;
 
   // Count outgoing aux edges per source. State edges are excluded.
   const fanoutBySrc = new Map<string, number>();
@@ -598,7 +619,17 @@ export const replicateHighFanoutSources = (graph: CipherGraph, threshold: number
 
   const highFanoutSrcs = new Set<string>();
   for (const [srcId, count] of fanoutBySrc) {
-    if (count > threshold) highFanoutSrcs.add(srcId);
+    const m = modesObj[srcId];
+    if (m === "never") continue;
+    if (m === "always") {
+      highFanoutSrcs.add(srcId);
+      continue;
+    }
+    // Auto: threshold check. `threshold <= 0` was already handled by the
+    // early-exit above unless an "always" override exists somewhere else
+    // in the modes map; in that case auto sources still respect the
+    // threshold (a 0 threshold means "no auto replication").
+    if (threshold > 0 && count > threshold) highFanoutSrcs.add(srcId);
   }
 
   if (highFanoutSrcs.size === 0) return graph;

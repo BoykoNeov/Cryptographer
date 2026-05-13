@@ -29,7 +29,7 @@
  * dedicated setters that update the signal AND persist atomically.
  */
 
-import type { LayoutSpec } from "@/core/document";
+import type { LayoutSpec, ReplicationMode } from "@/core/document";
 import { createSignal } from "solid-js";
 
 const STORAGE_KEY = "cryptographer.layouts";
@@ -73,6 +73,10 @@ const loadInitial = (): LayoutMap => {
  * Lightweight structural check for a LayoutSpec. Not a full schema validation
  * (Slice 3's Zod schema is the authoritative one for file I/O); this is the
  * "trust but verify the broad shape" pass for localStorage rehydration.
+ *
+ * `replicationModes` is checked loosely: if present, must be a plain object,
+ * but we don't validate every entry's value shape here — the file-I/O path
+ * does that via Zod, and the renderer treats unknown values as "auto" anyway.
  */
 const isLayoutSpec = (v: unknown): v is LayoutSpec => {
   if (v === null || typeof v !== "object" || Array.isArray(v)) return false;
@@ -80,6 +84,15 @@ const isLayoutSpec = (v: unknown): v is LayoutSpec => {
   if (typeof o.positions !== "object" || o.positions === null) return false;
   if (!Array.isArray(o.collapsedGroups)) return false;
   if (o.flowDirection !== "ltr") return false;
+  if (o.replicationModes !== undefined) {
+    if (
+      o.replicationModes === null ||
+      typeof o.replicationModes !== "object" ||
+      Array.isArray(o.replicationModes)
+    ) {
+      return false;
+    }
+  }
   return true;
 };
 
@@ -104,6 +117,36 @@ const emptyLayout = (): LayoutSpec => ({
   collapsedGroups: [],
   flowDirection: "ltr",
 });
+
+/**
+ * Helper: snapshot a layout's existing `replicationModes` as a plain
+ * (mutable) object so a setter can edit it without aliasing. Treats absent
+ * field as empty — matches the serialization convention of omitting empty
+ * modes maps.
+ */
+const cloneReplicationModes = (layout: LayoutSpec): { [sourceId: string]: ReplicationMode } => {
+  const out: { [sourceId: string]: ReplicationMode } = {};
+  if (layout.replicationModes) {
+    for (const [k, v] of Object.entries(layout.replicationModes)) {
+      out[k] = v;
+    }
+  }
+  return out;
+};
+
+/**
+ * Spread a possibly-empty replicationModes object onto a LayoutSpec, omitting
+ * the field entirely when empty so the resulting object continues to satisfy
+ * the byte-stability contract (empty maps would still serialize to `{}` —
+ * present-but-empty produces different bytes than absent).
+ */
+const withReplicationModes = (
+  base: Omit<LayoutSpec, "replicationModes">,
+  modes: { [sourceId: string]: ReplicationMode },
+): LayoutSpec => {
+  if (Object.keys(modes).length === 0) return base as LayoutSpec;
+  return { ...base, replicationModes: modes };
+};
 
 /**
  * Persist the in-memory map to localStorage. Best-effort: failures are
@@ -131,11 +174,15 @@ const persist = (map: LayoutMap): void => {
  */
 export const setNodePosition = (specId: string, nodeId: string, x: number, y: number): void => {
   const current = layoutMap()[specId] ?? emptyLayout();
-  const next: LayoutSpec = {
-    positions: { ...current.positions, [nodeId]: { x, y } },
-    collapsedGroups: current.collapsedGroups,
-    flowDirection: current.flowDirection,
-  };
+  const modes = cloneReplicationModes(current);
+  const next: LayoutSpec = withReplicationModes(
+    {
+      positions: { ...current.positions, [nodeId]: { x, y } },
+      collapsedGroups: current.collapsedGroups,
+      flowDirection: current.flowDirection,
+    },
+    modes,
+  );
   const map = { ...layoutMap(), [specId]: next };
   setLayoutMapSignal(map);
   persist(map);
@@ -153,11 +200,58 @@ export const toggleCollapse = (specId: string, containerId: string): void => {
   } else {
     set.add(containerId);
   }
-  const next: LayoutSpec = {
-    positions: current.positions,
-    collapsedGroups: [...set],
-    flowDirection: current.flowDirection,
-  };
+  const next: LayoutSpec = withReplicationModes(
+    {
+      positions: current.positions,
+      collapsedGroups: [...set],
+      flowDirection: current.flowDirection,
+    },
+    cloneReplicationModes(current),
+  );
+  const map = { ...layoutMap(), [specId]: next };
+  setLayoutMapSignal(map);
+  persist(map);
+};
+
+/**
+ * Set or clear a per-source replication-mode override (commit 5 of the
+ * graph-readability sequence). Passing `null` removes the entry — falls
+ * back to the implicit `"auto"` default (follow the global threshold).
+ * Empty modes maps are NOT preserved on the LayoutSpec: an empty map
+ * defeats the byte-stability gate because it serializes to `"replicationModes":{}`
+ * (different bytes than the absent-field default). `withReplicationModes`
+ * omits the field when the map is empty, keeping spec-only saves stable.
+ */
+export const setReplicationMode = (
+  specId: string,
+  sourceId: string,
+  mode: ReplicationMode | null,
+): void => {
+  const current = layoutMap()[specId] ?? emptyLayout();
+  const modes = cloneReplicationModes(current);
+  if (mode === null) {
+    delete modes[sourceId];
+  } else {
+    modes[sourceId] = mode;
+  }
+  const next: LayoutSpec = withReplicationModes(
+    {
+      positions: current.positions,
+      collapsedGroups: current.collapsedGroups,
+      flowDirection: current.flowDirection,
+    },
+    modes,
+  );
+  // If the resulting layout is entirely empty (no pins, no collapsed, no
+  // modes), drop the entry from the map — same byte-stability discipline
+  // as `setLayoutForSpec(null)`. Otherwise just write through.
+  if (!hasUserLayout(next)) {
+    const map = { ...layoutMap() };
+    delete (map as { [specId: string]: LayoutSpec })[specId];
+    setLayoutMapSignal(map);
+    persist(map);
+    return;
+  }
   const map = { ...layoutMap(), [specId]: next };
   setLayoutMapSignal(map);
   persist(map);
@@ -196,7 +290,13 @@ export const clearLayoutForSpec = (specId: string): void => {
  */
 export const hasUserLayout = (layout: LayoutSpec | null): boolean => {
   if (!layout) return false;
-  return Object.keys(layout.positions).length > 0 || layout.collapsedGroups.length > 0;
+  if (Object.keys(layout.positions).length > 0) return true;
+  if (layout.collapsedGroups.length > 0) return true;
+  // Commit 5: replicationModes also counts. An override is meaningful even
+  // when nothing has been dragged or collapsed (e.g. "force key-expansion
+  // to always replicate, keep everything else auto").
+  if (layout.replicationModes && Object.keys(layout.replicationModes).length > 0) return true;
+  return false;
 };
 
 /** Hard reset for tests. Production code never calls this. */

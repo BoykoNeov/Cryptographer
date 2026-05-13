@@ -60,17 +60,37 @@ export type StepPosition = {
 };
 
 /**
+ * Per-source override for the high-fanout-replica transform. `"always"`
+ * forces replication regardless of fanout count; `"never"` suppresses
+ * replication even when the source's fanout exceeds the global threshold.
+ * Absence of an entry (the implicit `"auto"`) defers to the threshold —
+ * the default behavior shipped in commit 4 of the graph-readability
+ * sequence. Commit 5 of that sequence introduced this field.
+ */
+export type ReplicationMode = "always" | "never";
+
+/**
  * Sidecar graph layout. Positions keyed by `stepId` so a graph remembers
  * where the user dragged each node; container ids appear in
  * `collapsedGroups` when the user has clicked their chevron.
  *
  * `flowDirection: "ltr"` is the only value today; reserved field so a
  * future top-to-bottom layout doesn't need a schemaVersion bump.
+ *
+ * `replicationModes` carries per-source overrides for the high-fanout-
+ * replica transform (commit 5 of the graph-readability sequence). Absent
+ * keys take the `"auto"` default; only `"always"` and `"never"` overrides
+ * are stored. The field rides on `LayoutSpec` so that a shared
+ * `.cipher.json` carries the author's annotated view of which sources to
+ * replicate, while the byte-stability gate (`hasUserLayout`) still skips
+ * the layout sidecar when the modes map is empty AND no positions /
+ * collapsed groups exist.
  */
 export type LayoutSpec = {
   readonly positions: { readonly [stepId: string]: StepPosition };
   readonly collapsedGroups: readonly string[];
   readonly flowDirection: "ltr";
+  readonly replicationModes?: { readonly [sourceId: string]: ReplicationMode };
 };
 
 /**

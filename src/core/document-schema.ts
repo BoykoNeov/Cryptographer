@@ -174,11 +174,19 @@ const PositionSchema = z
   })
   .strict();
 
+// Per-source override for the replication transform. Plain object
+// (`{ [sourceId]: "always" | "never" }`) at the JSON layer; the absence of
+// an entry is the implicit `"auto"` default and is never serialized. The
+// enum is closed (no `"auto"`) so a serialized doc never contains
+// redundant defaults — keeps the byte-stability gate clean.
+const ReplicationModeSchema = z.enum(["always", "never"]);
+
 export const LayoutSpecSchema = z
   .object({
     positions: z.record(PositionSchema),
     collapsedGroups: z.array(z.string()),
     flowDirection: z.literal("ltr"),
+    replicationModes: z.record(ReplicationModeSchema).optional(),
   })
   .strict();
 

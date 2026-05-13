@@ -43,7 +43,12 @@ import {
   replicateHighFanoutSources,
 } from "@/core/graph";
 import { For, Show, createMemo } from "solid-js";
-import { setNodePosition, toggleCollapse, useLayoutMap } from "../stores/layout";
+import {
+  setNodePosition,
+  setReplicationMode,
+  toggleCollapse,
+  useLayoutMap,
+} from "../stores/layout";
 import { useSpec } from "../stores/spec";
 import { getTrace, setFrame, useTraceVersion } from "../stores/trace";
 import {
@@ -373,6 +378,16 @@ export const GraphView = () => {
     return m;
   });
 
+  /**
+   * Per-source replication overrides for the active spec. Plain object so
+   * it can be passed straight to `replicateHighFanoutSources` without a
+   * Map ↔ object conversion at the boundary.
+   */
+  const replicationModes = createMemo<{ readonly [sourceId: string]: "always" | "never" }>(() => {
+    const l = activeLayout();
+    return l?.replicationModes ?? {};
+  });
+
   // Re-derive on every spec OR trace change. Both signals matter:
   //   - spec edit → new nodes/containers (structural change)
   //   - trace replace → new edges + blockSpan annotations
@@ -389,14 +404,49 @@ export const GraphView = () => {
     return deriveAuxGraph(fallback, spec());
   });
 
-  /** Apply collapse, then optional fanout replication. Order matters:
-   * replicate AFTER collapse so the surviving (post-collapse) aux edges
-   * are what gets evaluated against the threshold. A collapsed round-key
-   * source disappears, and we don't want to manufacture replicas for
-   * edges that aren't on screen anyway. */
-  const graph = createMemo<CipherGraph>(() => {
-    const collapsed = collapseGraph(rawGraph(), collapsedSet());
-    return replicate() ? replicateHighFanoutSources(collapsed, REPLICATION_THRESHOLD) : collapsed;
+  /**
+   * Post-collapse, pre-replication graph. Held as its own memo because the
+   * replication-overrides panel (rendered below the toolbar) lists ALL
+   * aux-edge sources visible in this graph — counting edges before
+   * replication would otherwise double-count once `"always"` overrides
+   * introduce replicas.
+   */
+  const collapsedGraph = createMemo<CipherGraph>(() => collapseGraph(rawGraph(), collapsedSet()));
+
+  /** Apply optional fanout replication on top of the collapsed graph.
+   * Master-switch semantic: when the global toggle is off, NO replicas
+   * appear — even if the user has per-source `"always"` overrides set.
+   * The override panel below is hidden in that case so the user doesn't
+   * wonder why their override isn't taking effect.
+   */
+  const graph = createMemo<CipherGraph>(() =>
+    replicate()
+      ? replicateHighFanoutSources(collapsedGraph(), REPLICATION_THRESHOLD, replicationModes())
+      : collapsedGraph(),
+  );
+
+  /**
+   * Sources eligible for a row in the override panel: any id appearing in
+   * `edge.from` for at least one aux edge in the collapsed graph. Sorted
+   * by fanout descending so the high-fanout offenders surface first.
+   * Includes both leaf stepIds and iterate-container ids. Sources with
+   * fanout < 2 are filtered out — a single straight line gains nothing
+   * from replication, and listing every consumer-of-one as a row would
+   * drown the panel.
+   */
+  const replicationSources = createMemo<{ readonly id: string; readonly fanout: number }[]>(() => {
+    const g = collapsedGraph();
+    const counts = new Map<string, number>();
+    for (const e of g.edges) {
+      if (e.kind !== "aux") continue;
+      counts.set(e.from, (counts.get(e.from) ?? 0) + 1);
+    }
+    const rows: { id: string; fanout: number }[] = [];
+    for (const [id, fanout] of counts) {
+      if (fanout >= 2) rows.push({ id, fanout });
+    }
+    rows.sort((a, b) => b.fanout - a.fanout || a.id.localeCompare(b.id));
+    return rows;
   });
 
   const layout = createMemo(() => layoutRoot(graph(), pinnedMap(), consts()));
@@ -533,6 +583,72 @@ export const GraphView = () => {
           replicate fan-out
         </label>
       </fieldset>
+      {/* Commit 5: per-source replication overrides. Visible only when
+          the global toggle is ON — master-switch semantic means an
+          override panel is meaningless when nothing is replicated. The
+          panel lists every aux-edge source with fanout ≥ 2, sorted desc
+          (high-fanout offenders first); per row, three radio-style
+          buttons mirror the byte-format toggle's affordance.
+
+          Clicking the already-active button is a no-op (no toggle-back).
+          To go back to "auto" the user picks the "auto" button. The
+          store maps "auto" → null (clears the override). The panel sticks
+          to the top of the scroll wrapper like the toolbar so it stays
+          visible at far-right scroll positions. */}
+      <Show when={replicate() && replicationSources().length > 0}>
+        <div class="graph-replication-panel">
+          <div class="graph-replication-panel-header">
+            replication overrides
+            <span class="graph-replication-panel-hint">
+              auto = follow global threshold ({REPLICATION_THRESHOLD})
+            </span>
+          </div>
+          <For each={replicationSources()}>
+            {(src) => {
+              const currentMode = createMemo<"auto" | "always" | "never">(() => {
+                const m = replicationModes()[src.id];
+                return m ?? "auto";
+              });
+              return (
+                <div class="graph-replication-row" data-testid={`replication-row-${src.id}`}>
+                  <span class="graph-replication-row-id" title={src.id}>
+                    {src.id}
+                  </span>
+                  <span class="graph-replication-row-fanout">
+                    {src.fanout} {src.fanout === 1 ? "edge" : "edges"}
+                  </span>
+                  <div class="format-toggle">
+                    <button
+                      type="button"
+                      classList={{ active: currentMode() === "auto" }}
+                      onClick={() => setReplicationMode(spec().id, src.id, null)}
+                      title="Defer to the global threshold"
+                    >
+                      auto
+                    </button>
+                    <button
+                      type="button"
+                      classList={{ active: currentMode() === "always" }}
+                      onClick={() => setReplicationMode(spec().id, src.id, "always")}
+                      title="Always replicate this source"
+                    >
+                      always
+                    </button>
+                    <button
+                      type="button"
+                      classList={{ active: currentMode() === "never" }}
+                      onClick={() => setReplicationMode(spec().id, src.id, "never")}
+                      title="Never replicate this source"
+                    >
+                      never
+                    </button>
+                  </div>
+                </div>
+              );
+            }}
+          </For>
+        </div>
+      </Show>
       <Show
         when={graph().nodes.length > 0 || graph().containers.length > 0}
         fallback={<div class="muted">no nodes to display</div>}

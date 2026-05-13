@@ -114,6 +114,44 @@ describe("serializeDocument + parseDocument: documents with sidecars", () => {
     if (result.ok) expect(result.doc).toEqual(doc);
   });
 
+  it("round-trips a document with replicationModes (commit 5)", () => {
+    const doc: CipherDocument = {
+      schemaVersion: 1,
+      spec: aes128Spec,
+      layout: {
+        positions: {},
+        collapsedGroups: [],
+        flowDirection: "ltr",
+        replicationModes: {
+          "key-expansion": "always",
+          "split-blocks": "never",
+        },
+      },
+    };
+    const text = serializeDocument(doc);
+    const result = parseDocument(text);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.doc).toEqual(doc);
+  });
+
+  it("rejects an invalid replicationModes value", () => {
+    // "auto" is the IMPLICIT default — absence of an entry is auto, so the
+    // schema's closed enum doesn't include "auto" as a serialized value.
+    // A doc that tries to persist "auto" explicitly is malformed.
+    const malformed = JSON.stringify({
+      schemaVersion: 1,
+      spec: aes128Spec,
+      layout: {
+        positions: {},
+        collapsedGroups: [],
+        flowDirection: "ltr",
+        replicationModes: { "key-expansion": "auto" },
+      },
+    });
+    const result = parseDocument(malformed);
+    expect(result.ok).toBe(false);
+  });
+
   it("round-trips a document with a SessionSnapshot (no bytes)", () => {
     const doc: CipherDocument = {
       schemaVersion: 1,
