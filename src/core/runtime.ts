@@ -97,9 +97,19 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
       });
 
       const auxRead = new Map<string, AuxValue>();
+      // Track requested-but-unfulfilled aux reads separately so Slice 9's
+      // `validateGraph` can surface them as orphaned-read warnings. The
+      // happy-path produces no missing reads, so we lazily allocate the
+      // array only on the first miss to keep frame allocation light.
+      let auxReadMissing: string[] | undefined;
       for (const k of result.auxReads ?? []) {
         const v = aux.get(k);
-        if (v !== undefined) auxRead.set(k, v);
+        if (v !== undefined) {
+          auxRead.set(k, v);
+        } else {
+          if (auxReadMissing === undefined) auxReadMissing = [];
+          auxReadMissing.push(k);
+        }
       }
 
       const auxWritten = new Map<string, AuxValue>();
@@ -128,6 +138,7 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
         stateAfter: cloneState(state),
         auxRead,
         auxWritten,
+        ...(auxReadMissing !== undefined ? { auxReadMissing } : {}),
         ...(blockIndex !== undefined ? { blockIndex } : {}),
       };
       frames.push(frame);

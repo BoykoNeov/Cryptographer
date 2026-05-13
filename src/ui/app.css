@@ -1818,6 +1818,37 @@ button:disabled {
   fill-opacity: 0.9;
 }
 
+/* ─── Slice 9: validation warning indicator ────────────────────────────────
+   A small orange circle with a `!` glyph rendered on top of a leaf or
+   container's top-right corner when `validateGraph` flags an orphaned
+   read, unused write, or cycle involving that node. Native browser
+   tooltip carries the formatted message; the dot also stays clickable
+   so a future inline-message panel can hook in without a markup change.
+
+   Theme-friendly: we pick `--warning` if the user's palette defines it,
+   else fall back to a high-contrast orange that reads on both light
+   and dark backgrounds. The glyph text is white on either to stay
+   legible. */
+
+.graph-warning-dot {
+  pointer-events: all;
+  cursor: help;
+}
+
+.graph-warning-dot-circle {
+  fill: var(--warning, #d97706);
+  stroke: var(--bg, #ffffff);
+  stroke-width: 1;
+}
+
+.graph-warning-dot-glyph {
+  fill: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  pointer-events: none;
+  user-select: none;
+}
+
 /* ─── Slice 8: step palette + drop affordance ────────────────────────────
    The graph view becomes a two-column layout in graph mode: palette on the
    left (sticky / fixed width), scrollable SVG canvas on the right. Linear

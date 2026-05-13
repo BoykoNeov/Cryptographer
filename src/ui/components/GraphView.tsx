@@ -38,9 +38,11 @@
 import {
   type CipherGraph,
   type ContainerNode,
+  type GraphWarning,
   collapseGraph,
   deriveAuxGraph,
   replicateHighFanoutSources,
+  validateGraph,
 } from "@/core/graph";
 import { For, Show, createMemo, createSignal } from "solid-js";
 import {
@@ -678,6 +680,89 @@ export const GraphView = () => {
   });
 
   /**
+   * Slice 9 — edge-aware validation.
+   *
+   * Validate the RAW graph (pre-collapse, pre-replication) so warnings
+   * reflect spec truth, not view-state. Then remap each warning's stepId
+   * to whatever node is actually visible: a hidden stepId surfaces on the
+   * outermost collapsed ancestor that's still rendered, so collapsing a
+   * round can't silently hide a wiring problem inside it.
+   *
+   * The remap mirrors `collapseGraph`'s own "outermost collapsed ancestor"
+   * logic (graph.ts) — kept inline here rather than re-exported to avoid
+   * coupling the renderer to a private helper.
+   *
+   * Replicas are produced by post-validation transforms, so warnings never
+   * land on synthetic replica ids; they always target the source's
+   * canonical stepId (which renders as the "main" node in `graph.nodes`).
+   */
+  const rawWarnings = createMemo<readonly GraphWarning[]>(() => {
+    void version();
+    const t = getTrace();
+    if (!t) return [];
+    return validateGraph(rawGraph(), t);
+  });
+
+  /**
+   * Warnings indexed by the *visible* node id (post-collapse remap). Each
+   * entry is the list of warnings to surface on that node. Iterating
+   * `Object.entries` (or `[...map]`) preserves insertion order — which
+   * matches `validateGraph`'s stable order (orphans, then unused, then
+   * cycles) so the multi-warning case reads predictably.
+   */
+  const warningsByVisibleId = createMemo<ReadonlyMap<string, readonly GraphWarning[]>>(() => {
+    const out = new Map<string, GraphWarning[]>();
+    const collapsed = collapsedSet();
+    if (rawWarnings().length === 0) return out;
+
+    // Build a lookup from any RAW node/container id to its containerPath
+    // (root-first ancestor chain). The raw graph is the source of truth
+    // for the path, so we read off it (not the post-collapse graph, which
+    // may have replicas + remapped edges).
+    const pathById = new Map<string, readonly string[]>();
+    const raw = rawGraph();
+    for (const n of raw.nodes) pathById.set(n.stepId, n.containerPath);
+    for (const c of raw.containers) pathById.set(c.id, c.containerPath);
+
+    /**
+     * Resolve a raw stepId to the visible id it should attach to. Walk the
+     * containerPath root-first and return the first collapsed ancestor;
+     * otherwise return the stepId itself. Mirrors `collapseGraph`'s remap.
+     */
+    const remap = (stepId: string): string => {
+      const path = pathById.get(stepId);
+      if (!path) return stepId;
+      for (const ancestor of path) {
+        if (collapsed.has(ancestor)) return ancestor;
+      }
+      return stepId;
+    };
+
+    const push = (visibleId: string, w: GraphWarning): void => {
+      const list = out.get(visibleId) ?? [];
+      list.push(w);
+      out.set(visibleId, list);
+    };
+
+    for (const w of rawWarnings()) {
+      if (w.kind === "cycle") {
+        // Attach a cycle warning to every participating visible node so
+        // the user can see at least one indicator regardless of which
+        // round they happen to be looking at. Dedup the visible ids so
+        // a cycle that crosses two leaves inside a single collapsed
+        // round produces one indicator, not two.
+        const visibleParticipants = new Set<string>();
+        for (const id of w.stepIds) visibleParticipants.add(remap(id));
+        for (const id of visibleParticipants) push(id, w);
+      } else {
+        push(remap(w.stepId), w);
+      }
+    }
+
+    return out;
+  });
+
+  /**
    * Click handler for a leaf node. Move the scrubber to the first trace
    * frame whose stepId matches the canonical (suffix-stripped) leaf id.
    * Iterate-body leaves have `:b{i}` suffixed frame ids — we just match
@@ -1057,6 +1142,9 @@ export const GraphView = () => {
             <For each={graph().containers}>
               {(container) => {
                 const box = createMemo(() => layout().boxes.get(container.id));
+                const containerWarnings = createMemo(
+                  () => warningsByVisibleId().get(container.id) ?? [],
+                );
                 return (
                   <Show when={box()}>
                     {(b) => (
@@ -1067,6 +1155,7 @@ export const GraphView = () => {
                         consts={consts()}
                         onDragStart={(e) => startNodeDrag(container.id, e)}
                         onToggleCollapse={() => toggleCollapse(spec().id, container.id)}
+                        warnings={containerWarnings()}
                       />
                     )}
                   </Show>
@@ -1131,6 +1220,7 @@ export const GraphView = () => {
                           startNodeDrag(node.stepId, e, () => handleLeafClick(clickTargetId)),
                       }
                     : {};
+                const leafWarnings = createMemo(() => warningsByVisibleId().get(node.stepId) ?? []);
                 return (
                   <Show when={box()}>
                     {(b) => (
@@ -1145,6 +1235,7 @@ export const GraphView = () => {
                         {...blockSpanProps}
                         {...dragProps}
                         onClick={() => handleLeafClick(clickTargetId)}
+                        warnings={leafWarnings()}
                       />
                     )}
                   </Show>
@@ -1159,6 +1250,68 @@ export const GraphView = () => {
 };
 
 // ─── Pieces ────────────────────────────────────────────────────────────────
+
+/**
+ * One-line human-readable summary of a `GraphWarning`. Used both as the
+ * `<title>` text on the warning dot (native browser tooltip) and as the
+ * inline message below the node when the dot is clicked.
+ *
+ * Format goal: a screen-reader user hearing this without visual context
+ * should understand the issue and which step/aux-key it pertains to.
+ * "Orphaned read of 'roundKey.0'" tells the user what's missing.
+ */
+const formatWarning = (w: GraphWarning): string => {
+  switch (w.kind) {
+    case "orphaned-read":
+      return `Orphaned read of aux key '${w.auxKey}' — no upstream step writes it.`;
+    case "unused-write":
+      return `Unused write of aux key '${w.auxKey}' — no downstream step reads it.`;
+    case "cycle":
+      return `Cycle in dataflow: ${w.stepIds.join(" → ")} → ${w.stepIds[0]}.`;
+  }
+};
+
+/** Side length of the warning indicator's hit area (CSS pixels). Sized for
+ * a comfortable click target without crowding the leaf rectangle's label. */
+const WARNING_DOT_SIZE = 12;
+/** Inset from the leaf/container's top-right corner. */
+const WARNING_DOT_INSET = 2;
+
+/**
+ * SVG warning indicator. Rendered as a `<g>` with a circle + an exclamation
+ * glyph and a `<title>` carrying the formatted message. Native browser
+ * tooltips on hover; the click handler relays up so the parent can also
+ * toggle inline display elsewhere (today: no inline display — the title
+ * tooltip is the v1 affordance).
+ */
+const WarningGlyph = (props: {
+  x: number;
+  y: number;
+  warnings: readonly GraphWarning[];
+}) => (
+  <g
+    class="graph-warning-dot"
+    data-testid="graph-warning-dot"
+    transform={`translate(${props.x}, ${props.y})`}
+  >
+    <title>{props.warnings.map(formatWarning).join("\n")}</title>
+    <circle
+      class="graph-warning-dot-circle"
+      cx={WARNING_DOT_SIZE / 2}
+      cy={WARNING_DOT_SIZE / 2}
+      r={WARNING_DOT_SIZE / 2}
+    />
+    <text
+      class="graph-warning-dot-glyph"
+      x={WARNING_DOT_SIZE / 2}
+      y={WARNING_DOT_SIZE / 2 + 0.5}
+      text-anchor="middle"
+      dominant-baseline="central"
+    >
+      !
+    </text>
+  </g>
+);
 
 const LeafRect = (props: {
   stepId: string;
@@ -1186,6 +1339,10 @@ const LeafRect = (props: {
   /** Used by the keyboard handler always; also used by mouse when not
    * draggable (a click that didn't go through the drag handler). */
   onClick: () => void;
+  /** Slice 9 — validation warnings to surface on this leaf. Empty array
+   * is the happy path (no indicator rendered). Multi-warning case: a
+   * single glyph with all messages joined in the title tooltip. */
+  warnings: readonly GraphWarning[];
 }) => {
   // SVG <g> can't be replaced by a semantic <button> (it'd leave the SVG
   // coordinate system). We attach pointer + keyboard handlers; biome's
@@ -1240,6 +1397,13 @@ const LeafRect = (props: {
       >
         {props.label}
       </text>
+      <Show when={props.warnings.length > 0}>
+        <WarningGlyph
+          x={props.box.x + props.box.w - WARNING_DOT_SIZE - WARNING_DOT_INSET}
+          y={props.box.y + WARNING_DOT_INSET}
+          warnings={props.warnings}
+        />
+      </Show>
     </g>
   );
 };
@@ -1251,6 +1415,11 @@ const ContainerRect = (props: {
   consts: LayoutConstants;
   onDragStart: (e: PointerEvent) => void;
   onToggleCollapse: () => void;
+  /** Slice 9 — validation warnings to surface on this container's header.
+   * Populated either when a container's own id (e.g. an iterate) carries
+   * a warning, or when collapse remapped a child's warning to this
+   * ancestor. */
+  warnings: readonly GraphWarning[];
 }) => {
   // Chevron sits at the right edge of the header band; clicking it doesn't
   // start a drag. The rest of the header is the drag handle.
@@ -1326,6 +1495,28 @@ const ContainerRect = (props: {
         >
           ×{props.container.blockSpan}
         </text>
+      </Show>
+      {/* Slice 9 — validation warning glyph in the header band, positioned
+          to the LEFT of the chevron (and to the left of the iterate badge
+          when one is present) so it never overlaps either affordance.
+          Same shape + tooltip as the leaf indicator so users learn the
+          glyph once. */}
+      <Show when={props.warnings.length > 0}>
+        {(() => {
+          const hasIterateBadge =
+            props.container.kind === "iterate" &&
+            props.container.blockSpan !== undefined &&
+            props.container.blockSpan > 1;
+          // Right-edge reserve = chevron + (badge if present, with LABEL_RIGHT_GAP
+          // breathing room). Matches the `labelTextLength` arithmetic above so
+          // the warning glyph occupies the same "header right-side reserved
+          // zone" as the badge, never the label area.
+          const reserveRight =
+            CHEVRON_W + LABEL_RIGHT_GAP + (hasIterateBadge ? ITERATE_BADGE_RESERVE_W : 0);
+          const x = props.box.x + props.box.w - reserveRight - WARNING_DOT_SIZE;
+          const y = props.box.y + (HEADER_H - WARNING_DOT_SIZE) / 2;
+          return <WarningGlyph x={x} y={y} warnings={props.warnings} />;
+        })()}
       </Show>
       {/* Chevron hit area on the right side of the header band. Clicking
           toggles collapse via the layout store. */}

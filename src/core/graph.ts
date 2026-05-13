@@ -735,6 +735,190 @@ export const replicateHighFanoutSources = (
   };
 };
 
+// ─── Validation (Slice 9) ──────────────────────────────────────────────────
+
+/**
+ * A structural issue detected on a (graph, trace) pair. Surfaced by the
+ * `GraphView` as overlay warning dots so a user editing a spec via the
+ * palette gets immediate feedback when their wiring is broken.
+ *
+ * Three variants today:
+ *
+ *   - **`orphaned-read`** — a step requested an aux key for which no
+ *     upstream step ever produced a value. Detected from
+ *     `frame.auxReadMissing` (populated by the runtime). Today's strict
+ *     consumers (e.g. `add-round-key`) THROW on missing aux rather than
+ *     producing a frame, so this warning will only light up once Slice 10's
+ *     graceful aux primitives (`aux-xor`, `aux-copy`) land. The plumbing
+ *     is in place now so the visual editor can flag the issue without
+ *     waiting for those steps.
+ *
+ *   - **`unused-write`** — a step wrote an aux key that nothing downstream
+ *     consumed. Common pedagogical mistake: drag in `key-expansion` but
+ *     forget to wire any `add-round-key`. Detected by diffing each frame's
+ *     `auxWritten` against the producer-set of `graph.edges`.
+ *
+ *   - **`cycle`** — a cycle in the directed graph of aux + state edges.
+ *     Acyclic by construction for any (spec, trace) the runtime can produce
+ *     (writers are timestamped forward; consumers always sit after their
+ *     writer). Included for defense in depth so a future refactor that
+ *     introduces edge synthesis from non-trace sources can't silently
+ *     hand a malformed graph to the renderer.
+ *
+ * `stepId` fields carry the *canonical* (post `:b{i}` strip) id, matching
+ * `GraphNode.stepId`, so the renderer can index warnings by node id
+ * directly. For orphaned reads inside an iterate body, the warning fires
+ * once per logical step (not N times per block) thanks to the dedup.
+ */
+export type GraphWarning =
+  | { readonly kind: "orphaned-read"; readonly stepId: string; readonly auxKey: string }
+  | { readonly kind: "unused-write"; readonly stepId: string; readonly auxKey: string }
+  | { readonly kind: "cycle"; readonly stepIds: readonly string[] };
+
+/**
+ * Walk a directed adjacency list and return the first cycle found via
+ * iterative DFS with a recursion-stack set. Returns the ordered sequence
+ * of node ids that form the cycle (start == end is implicit; the start id
+ * appears once at the head).
+ *
+ * Iterative (not recursive) because deeply nested specs would blow the JS
+ * stack on a recursive walker. The trade-off is a tiny bit more state to
+ * shuttle (an explicit `stack` of `{node, childIndex}` pairs), but it caps
+ * memory at O(graph depth) regardless of engine.
+ */
+const findFirstCycle = (adjacency: ReadonlyMap<string, readonly string[]>): string[] | null => {
+  const VISITING = 1;
+  const DONE = 2;
+  const color = new Map<string, number>();
+  // Parent pointer for reconstructing the cycle path when a back-edge is found.
+  const parent = new Map<string, string | null>();
+
+  for (const startNode of adjacency.keys()) {
+    if (color.get(startNode) === DONE) continue;
+    // Stack frame: [node, iterator over its children's indices].
+    const stack: { node: string; childIdx: number }[] = [{ node: startNode, childIdx: 0 }];
+    color.set(startNode, VISITING);
+    parent.set(startNode, null);
+
+    while (stack.length > 0) {
+      const top = stack[stack.length - 1];
+      if (!top) break;
+      const children = adjacency.get(top.node) ?? [];
+      if (top.childIdx >= children.length) {
+        // No more children — pop and mark DONE.
+        color.set(top.node, DONE);
+        stack.pop();
+        continue;
+      }
+      const child = children[top.childIdx++];
+      if (child === undefined) continue;
+      const childColor = color.get(child);
+      if (childColor === VISITING) {
+        // Back-edge: walk the parent chain from `top.node` back up until
+        // we hit `child` (which is somewhere on the active stack). The
+        // resulting sequence, reversed, is the cycle.
+        const cycle: string[] = [child];
+        let cursor: string | null = top.node;
+        while (cursor !== null && cursor !== child) {
+          cycle.push(cursor);
+          cursor = parent.get(cursor) ?? null;
+        }
+        cycle.reverse();
+        return cycle;
+      }
+      if (childColor === DONE) continue;
+      color.set(child, VISITING);
+      parent.set(child, top.node);
+      stack.push({ node: child, childIdx: 0 });
+    }
+  }
+
+  return null;
+};
+
+/**
+ * Static analysis of a derived graph + the trace it came from. Pure
+ * function — no I/O, no side effects, deterministic.
+ *
+ * Why two inputs (graph + trace) rather than just the graph as the plan
+ * sketched: orphaned-read detection needs the per-frame `auxReadMissing`
+ * info, which isn't preserved in the graph's edges (the graph deliberately
+ * stores only realized dataflow). Splitting it out into a second arg keeps
+ * the graph itself a clean "what actually happened" snapshot.
+ *
+ * Returns warnings in a stable order:
+ *   1. orphaned-reads in trace-frame order
+ *   2. unused-writes in trace-frame order
+ *   3. cycles (at most one in practice; the search returns on first hit)
+ *
+ * Calling on an empty trace produces no warnings — the graph is
+ * structure-only and we have no read/write events to inspect.
+ */
+export const validateGraph = (graph: CipherGraph, trace: Trace): GraphWarning[] => {
+  const warnings: GraphWarning[] = [];
+
+  // ─── Orphaned reads ──────────────────────────────────────────────────────
+  // The runtime stamps `auxReadMissing` on any frame whose step requested an
+  // aux key with no upstream producer. Dedup by (canonical stepId, auxKey)
+  // so multi-block iterates don't flag the same logical issue 16 times.
+  const seenOrphan = new Set<string>();
+  for (const frame of trace.frames) {
+    if (!frame.auxReadMissing || frame.auxReadMissing.length === 0) continue;
+    const stepId = stripBlockSuffix(frame.stepId);
+    for (const auxKey of frame.auxReadMissing) {
+      const key = `${stepId}\x00${auxKey}`;
+      if (seenOrphan.has(key)) continue;
+      seenOrphan.add(key);
+      warnings.push({ kind: "orphaned-read", stepId, auxKey });
+    }
+  }
+
+  // ─── Unused writes ───────────────────────────────────────────────────────
+  // For each aux-key write, check whether the writer participates in at
+  // least one outgoing aux edge for that key. If not, the value sat
+  // unconsumed in the aux map — surface it.
+  //
+  // The graph's edges record (from, auxKey) pairs after `:b{i}` collapse,
+  // so we look up by the canonical stepId. Indexing the producer set once
+  // costs O(edges); each lookup is O(1).
+  const producerEdges = new Set<string>();
+  for (const edge of graph.edges) {
+    if (edge.kind !== "aux") continue;
+    producerEdges.add(`${edge.from}\x00${edge.auxKey}`);
+  }
+  const seenUnused = new Set<string>();
+  for (const frame of trace.frames) {
+    if (frame.auxWritten.size === 0) continue;
+    const stepId = stripBlockSuffix(frame.stepId);
+    for (const auxKey of frame.auxWritten.keys()) {
+      const key = `${stepId}\x00${auxKey}`;
+      if (seenUnused.has(key)) continue;
+      seenUnused.add(key);
+      if (!producerEdges.has(key)) {
+        warnings.push({ kind: "unused-write", stepId, auxKey });
+      }
+    }
+  }
+
+  // ─── Cycles ──────────────────────────────────────────────────────────────
+  // Build an adjacency list over BOTH aux and state edges (a future Feistel
+  // branching primitive could in principle create a cycle that crosses the
+  // state thread; cheap to include both today). Search; surface the first
+  // cycle found. Today's shipped specs are acyclic by construction.
+  const adjacency = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    const list = adjacency.get(edge.from) ?? [];
+    list.push(edge.to);
+    adjacency.set(edge.from, list);
+  }
+  const cycle = findFirstCycle(adjacency);
+  if (cycle !== null) {
+    warnings.push({ kind: "cycle", stepIds: cycle });
+  }
+
+  return warnings;
+};
+
 // ─── Public entry point ────────────────────────────────────────────────────
 
 /**

@@ -178,6 +178,53 @@ describe("GraphView — component-level (AES-128 fixture)", () => {
     // Full 40-edge state spine across AES-128's leaves.
     expect(container.querySelectorAll(".graph-edge-state").length).toBe(40);
   });
+
+  // ─── Slice 9 — validation warning indicators ─────────────────────────────
+  // GraphView ships a small warning glyph on any leaf or container whose
+  // canonical stepId carries at least one `validateGraph` warning. The
+  // shipped specs produce no warnings (see tests/graph-validation.test.ts),
+  // so these tests synthesize one by replacing a single AES frame with one
+  // that requests a missing aux key — the same shape Slice 10's graceful
+  // aux primitives will emit naturally.
+
+  it("does not render any warning dots on a clean AES-128 trace", () => {
+    seedAes128Trace();
+    const { container } = render(() => <GraphView />);
+    expect(container.querySelectorAll('[data-testid="graph-warning-dot"]').length).toBe(0);
+  });
+
+  it("renders a warning dot on the node whose frame carries auxReadMissing", () => {
+    // Seed a real trace, then build a modified trace with one frame replaced
+    // by one carrying `auxReadMissing: ["nonexistent"]`. We pick a frame for
+    // `round.3.sub-bytes` so the target node is interior (proves the dot
+    // doesn't depend on root-level layout). The replacement uses a real
+    // frame's other fields verbatim so we don't accidentally test against a
+    // synthetic-stepId that GraphView wouldn't render.
+    seedAes128Trace();
+    const baseTrace = getTrace();
+    if (!baseTrace) throw new Error("trace not seeded");
+    const targetIdx = baseTrace.frames.findIndex((f) => f.stepId === "round.3.sub-bytes");
+    expect(targetIdx).toBeGreaterThan(0);
+    const original = baseTrace.frames[targetIdx];
+    if (!original) throw new Error("target frame not found");
+    const replaced = { ...original, auxReadMissing: ["nonexistent.key"] as const };
+    const newFrames = [
+      ...baseTrace.frames.slice(0, targetIdx),
+      replaced,
+      ...baseTrace.frames.slice(targetIdx + 1),
+    ];
+    setTrace({ ...baseTrace, frames: newFrames });
+
+    const { container } = render(() => <GraphView />);
+    const dots = container.querySelectorAll('[data-testid="graph-warning-dot"]');
+    expect(dots.length).toBe(1);
+    // The dot's title must name the missing key so users can read what's
+    // wrong without opening a side panel. (No inline-panel UI yet; that's
+    // an optional follow-up — V1 is the title tooltip.)
+    const title = dots[0]?.querySelector("title")?.textContent ?? "";
+    expect(title).toContain("nonexistent.key");
+    expect(title.toLowerCase()).toContain("orphan");
+  });
 });
 
 // ─── App-level tab integration ────────────────────────────────────────────

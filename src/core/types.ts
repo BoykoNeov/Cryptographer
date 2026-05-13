@@ -118,6 +118,26 @@ export type TraceFrame = {
   readonly auxRead: ReadonlyMap<string, AuxValue>;
   readonly auxWritten: ReadonlyMap<string, AuxValue>;
   /**
+   * Aux keys the step *requested* via `result.auxReads` but for which the
+   * aux map held no value at read time. Populated by the runtime and used
+   * by Slice 9's `validateGraph` to surface "orphaned-read" warnings.
+   *
+   * Why this needs to be on the frame, not derivable later: the runtime
+   * filters out missing keys from `auxRead` (only successful reads land
+   * there). Without recording the request list explicitly, the orphan
+   * information is lost at the trace boundary.
+   *
+   * Omitted (rather than empty array) for frames whose step requested no
+   * aux at all OR whose every request succeeded — keeps the common case
+   * allocation-free and the discriminator unambiguous.
+   *
+   * Note on shipped strict steps (e.g. `add-round-key`): those THROW when
+   * the named aux is missing, so they never emit a frame at all. This
+   * field starts showing values once non-throwing graceful aux consumers
+   * land in Slice 10 (`aux-xor`, `aux-copy`).
+   */
+  readonly auxReadMissing?: readonly string[];
+  /**
    * 0-based index of the block this frame belongs to when emitted inside
    * an `iterate` node; undefined for frames outside any iterate.
    */
