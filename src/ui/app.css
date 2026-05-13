@@ -1507,6 +1507,38 @@ button:disabled {
   overflow: auto;
 }
 
+/* Toolbar above the SVG. Stays inside the scrolling wrapper so it sticks
+   to the top when the user scrolls the SVG canvas (`position: sticky`
+   keeps it visible even at far-right scroll positions in the AES-128
+   wide-pipeline case). `<fieldset>` reset mirrors the byte-format toggle
+   in `.inputs` — strip the default border/padding so the toolbar reads
+   as a row, not a UA-styled grouped form control. */
+.graph-view-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  margin: 0;
+  position: sticky;
+  top: 0;
+  left: 0;
+  background: var(--bg-elev);
+  z-index: 1;
+}
+
+.graph-view-toolbar-label {
+  /* `<legend>` floats by default in a fieldset; flatten it to inline so
+     it sits left of the button group rather than overlapping the border. */
+  float: none;
+  width: auto;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: lowercase;
+  padding: 0;
+}
+
 .graph-view-svg {
   display: block;
   font-family: inherit;

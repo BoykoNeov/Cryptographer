@@ -40,28 +40,53 @@ import { For, Show, createMemo } from "solid-js";
 import { setNodePosition, toggleCollapse, useLayoutMap } from "../stores/layout";
 import { useSpec } from "../stores/spec";
 import { getTrace, setFrame, useTraceVersion } from "../stores/trace";
+import {
+  ALL_VIEW_DENSITIES,
+  DENSITY_SCALE,
+  VIEW_DENSITY_LABELS,
+  type ViewDensity,
+  setViewDensity,
+  useViewDensity,
+} from "../stores/view-density";
 
 // ─── Layout constants ──────────────────────────────────────────────────────
-// All in CSS pixels. Hand-tuned for AES-128's spec to fit "look like a cipher
-// diagram" out of the box. Stable across other ciphers because the layout
-// rules are uniform — Speck (flat, 23 leaves) becomes a long thin strip,
-// Serpent (32 groups of 3) becomes a wider strip with taller round columns.
+// All in CSS pixels. The size-and-gap subset scales with the active view
+// density (commit 3 of the graph-readability sequence); the rest are
+// density-independent because they describe affordance hit-targets (drag
+// threshold, chevron width) or font-derived heuristics (label rendering)
+// that don't get more legible by scaling the surrounding geometry.
+//
+// Why split the constants this way:
+//
+//   - Scaling DRAG_THRESHOLD_PX would make compact mode harder to
+//     drag-versus-click (4px ≈ a deliberate flick; 3px ≈ accidental).
+//   - Scaling CHEVRON_W would shrink the chevron hit area below the
+//     iOS/Android 44px / desktop ~16px touch-target threshold.
+//   - Scaling LABEL_PX_PER_CHAR would be a no-op: the heuristic models
+//     the FONT's px-per-char, not the layout's, and the font size is
+//     fixed (browser zoom is the user's accessibility lever, not us).
+//   - Scaling HEADER_H + CANVAS_MARGIN is intentionally skipped so the
+//     header band stays comfortable for 11px text and the canvas keeps
+//     a consistent outer breathing room across densities. Reconsider
+//     if a future density preset goes more extreme than 0.75×/1.25×.
 
-const LEAF_W = 132;
-const LEAF_H = 28;
-/** Vertical gap between siblings stacked inside a group. */
-const STACK_GAP = 6;
-/** Horizontal gap between siblings flowing inside an iterate body / root. */
-const FLOW_GAP = 16;
-/** Padding inside a container (group or iterate) box. */
-const CONTAINER_PAD = 10;
-/** Height of the container's header band (label + optional ×N chip). */
+/** Base (1.0×) leaf-rectangle width in CSS pixels. */
+const BASE_LEAF_W = 132;
+/** Base (1.0×) leaf-rectangle height. */
+const BASE_LEAF_H = 28;
+/** Base (1.0×) vertical gap between siblings stacked inside a group. */
+const BASE_STACK_GAP = 6;
+/** Base (1.0×) horizontal gap between siblings flowing inside an iterate body / root. */
+const BASE_FLOW_GAP = 16;
+/** Base (1.0×) padding inside a container (group or iterate) box. */
+const BASE_CONTAINER_PAD = 10;
+/** Height of the container's header band (label + optional ×N chip). Fixed. */
 const HEADER_H = 22;
-/** Outer margin of the SVG canvas. */
+/** Outer margin of the SVG canvas. Fixed. */
 const CANVAS_MARGIN = 24;
-/** Pixel threshold above which a pointer event is a drag, not a click. */
+/** Pixel threshold above which a pointer event is a drag, not a click. Fixed. */
 const DRAG_THRESHOLD_PX = 4;
-/** Width of the collapse-chevron hit area inside the container header. */
+/** Width of the collapse-chevron hit area inside the container header. Fixed. */
 const CHEVRON_W = 16;
 /**
  * Pixel inset from the consumer box's left edge to the arrowhead tip.
@@ -94,6 +119,42 @@ const ITERATE_BADGE_RESERVE_W = 28;
 const LABEL_PX_PER_CHAR = 7;
 
 /**
+ * Density-derived size + gap constants. The five values that scale with
+ * `ViewDensity` live in this record; the fixed constants (HEADER_H,
+ * CANVAS_MARGIN, etc.) stay module-scope. `layoutNode`, `layoutRoot`, and
+ * `labelTextLength` take this record as a parameter so they remain pure
+ * (testable without the component) AND so the component's reactive memo
+ * over density propagates correctly through the layout pipeline.
+ */
+type LayoutConstants = {
+  readonly LEAF_W: number;
+  readonly LEAF_H: number;
+  readonly STACK_GAP: number;
+  readonly FLOW_GAP: number;
+  readonly CONTAINER_PAD: number;
+};
+
+/**
+ * Build the size + gap constants for a given density. "normal" returns the
+ * base values byte-for-byte so the default rendering is identical to the
+ * pre-density layout (and the prior label-truncation + drag tests don't
+ * need to be re-baselined). `Math.round` keeps the values at integer
+ * pixels — SVG accepts fractional pixels but integer x/w stays crisp on
+ * non-DPR-aware browsers and avoids sub-pixel rendering artifacts at the
+ * leaf rect's right edge.
+ */
+const layoutConstantsFor = (density: ViewDensity): LayoutConstants => {
+  const scale = DENSITY_SCALE[density];
+  return {
+    LEAF_W: Math.round(BASE_LEAF_W * scale),
+    LEAF_H: Math.round(BASE_LEAF_H * scale),
+    STACK_GAP: Math.round(BASE_STACK_GAP * scale),
+    FLOW_GAP: Math.round(BASE_FLOW_GAP * scale),
+    CONTAINER_PAD: Math.round(BASE_CONTAINER_PAD * scale),
+  };
+};
+
+/**
  * Compute the `textLength` value (in CSS pixels) that should be applied to a
  * container's header label, or `undefined` when the label fits naturally
  * and no clipping is needed.
@@ -112,12 +173,16 @@ const LABEL_PX_PER_CHAR = 7;
  * plus `LABEL_RIGHT_GAP` so the label doesn't visually kiss whatever sits
  * to its right.
  */
-const labelTextLength = (container: ContainerNode, boxW: number): number | undefined => {
+const labelTextLength = (
+  container: ContainerNode,
+  boxW: number,
+  consts: LayoutConstants,
+): number | undefined => {
   const hasIterateBadge =
     container.kind === "iterate" && container.blockSpan !== undefined && container.blockSpan > 1;
   const reserveRight =
     CHEVRON_W + LABEL_RIGHT_GAP + (hasIterateBadge ? ITERATE_BADGE_RESERVE_W : 0);
-  const available = boxW - CONTAINER_PAD - reserveRight;
+  const available = boxW - consts.CONTAINER_PAD - reserveRight;
   // Container narrower than its own affordances — nothing to clip TO. The
   // chevron/badge already eat the box; let the label render naturally and
   // count on the higher-level layout-knob work to grow the box.
@@ -146,6 +211,7 @@ const layoutNode = (
   containersById: Map<string, ContainerNode>,
   pinned: ReadonlyMap<string, { x: number; y: number }>,
   out: Map<string, Box>,
+  consts: LayoutConstants,
 ): Box => {
   const container = containersById.get(id);
   const pin = pinned.get(id);
@@ -154,7 +220,7 @@ const layoutNode = (
 
   if (!container) {
     // Leaf: fixed-size rectangle.
-    const box: Box = { x: startX, y: startY, w: LEAF_W, h: LEAF_H };
+    const box: Box = { x: startX, y: startY, w: consts.LEAF_W, h: consts.LEAF_H };
     out.set(id, box);
     return box;
   }
@@ -165,43 +231,43 @@ const layoutNode = (
   // belt and braces, since an iterate with zero body children would also
   // hit this branch (and render correctly as an empty chip).
   if (container.childIds.length === 0) {
-    const box: Box = { x: startX, y: startY, w: LEAF_W, h: LEAF_H };
+    const box: Box = { x: startX, y: startY, w: consts.LEAF_W, h: consts.LEAF_H };
     out.set(id, box);
     return box;
   }
 
   if (container.kind === "group") {
     // Vertical stack of children inside a padded, header-topped rect.
-    const innerX = startX + CONTAINER_PAD;
-    let innerY = startY + HEADER_H + CONTAINER_PAD;
+    const innerX = startX + consts.CONTAINER_PAD;
+    let innerY = startY + HEADER_H + consts.CONTAINER_PAD;
     let maxChildW = 0;
     let lastChildBottom = innerY;
     for (const childId of container.childIds) {
-      const childBox = layoutNode(childId, innerX, innerY, containersById, pinned, out);
-      innerY = childBox.y + childBox.h + STACK_GAP;
+      const childBox = layoutNode(childId, innerX, innerY, containersById, pinned, out, consts);
+      innerY = childBox.y + childBox.h + consts.STACK_GAP;
       lastChildBottom = childBox.y + childBox.h;
       if (childBox.w > maxChildW) maxChildW = childBox.w;
     }
-    const w = Math.max(maxChildW, LEAF_W) + 2 * CONTAINER_PAD;
-    const h = lastChildBottom - startY + CONTAINER_PAD;
+    const w = Math.max(maxChildW, consts.LEAF_W) + 2 * consts.CONTAINER_PAD;
+    const h = lastChildBottom - startY + consts.CONTAINER_PAD;
     const box: Box = { x: startX, y: startY, w, h };
     out.set(id, box);
     return box;
   }
 
   // Iterate: horizontal flow of children, same as the top-level root.
-  let innerX = startX + CONTAINER_PAD;
-  const innerY = startY + HEADER_H + CONTAINER_PAD;
+  let innerX = startX + consts.CONTAINER_PAD;
+  const innerY = startY + HEADER_H + consts.CONTAINER_PAD;
   let maxChildH = 0;
   let lastChildRight = innerX;
   for (const childId of container.childIds) {
-    const childBox = layoutNode(childId, innerX, innerY, containersById, pinned, out);
-    innerX = childBox.x + childBox.w + FLOW_GAP;
+    const childBox = layoutNode(childId, innerX, innerY, containersById, pinned, out, consts);
+    innerX = childBox.x + childBox.w + consts.FLOW_GAP;
     lastChildRight = childBox.x + childBox.w;
     if (childBox.h > maxChildH) maxChildH = childBox.h;
   }
-  const w = lastChildRight - startX + CONTAINER_PAD;
-  const h = HEADER_H + 2 * CONTAINER_PAD + maxChildH;
+  const w = lastChildRight - startX + consts.CONTAINER_PAD;
+  const h = HEADER_H + 2 * consts.CONTAINER_PAD + maxChildH;
   const box: Box = { x: startX, y: startY, w, h };
   out.set(id, box);
   return box;
@@ -220,9 +286,10 @@ const layoutNode = (
  * Canvas extent tracks the max right/bottom across all boxes (pinned or
  * not), so dragging far right just grows the SVG to fit.
  */
-const layoutRoot = (
+export const layoutRoot = (
   graph: CipherGraph,
   pinned: ReadonlyMap<string, { x: number; y: number }>,
+  consts: LayoutConstants,
 ): { boxes: Map<string, Box>; canvasW: number; canvasH: number } => {
   const containersById = new Map<string, ContainerNode>();
   for (const c of graph.containers) containersById.set(c.id, c);
@@ -238,8 +305,8 @@ const layoutRoot = (
     // on children, not on this entity's pin), so it's safe to use as the
     // natural width for the advancement step.
     const naturalX = cursorX;
-    const box = layoutNode(id, cursorX, CANVAS_MARGIN, containersById, pinned, boxes);
-    cursorX = naturalX + box.w + FLOW_GAP;
+    const box = layoutNode(id, cursorX, CANVAS_MARGIN, containersById, pinned, boxes, consts);
+    cursorX = naturalX + box.w + consts.FLOW_GAP;
     const right = box.x + box.w;
     const bottom = box.y + box.h;
     if (right > maxRight) maxRight = right;
@@ -253,12 +320,25 @@ const layoutRoot = (
   };
 };
 
+/** Re-exported for tests that want to drive `layoutRoot` directly. */
+export { layoutConstantsFor };
+
 // ─── Component ─────────────────────────────────────────────────────────────
 
 export const GraphView = () => {
   const spec = useSpec();
   const version = useTraceVersion();
   const layoutMap = useLayoutMap();
+  const density = useViewDensity();
+
+  /**
+   * Size + gap constants for the active density. Memoized so the layout
+   * memo below only re-runs on actual density changes (not on every
+   * unrelated signal tick that flows through this component). All four
+   * downstream memos (`graph`, `layout`, `containersById`) read this
+   * implicitly via the consts threaded into `layoutRoot`.
+   */
+  const consts = createMemo(() => layoutConstantsFor(density()));
 
   /** Active spec's persisted layout, or null if none yet. */
   const activeLayout = createMemo(() => {
@@ -300,7 +380,7 @@ export const GraphView = () => {
   /** Apply collapse view-transform after raw derivation. */
   const graph = createMemo<CipherGraph>(() => collapseGraph(rawGraph(), collapsedSet()));
 
-  const layout = createMemo(() => layoutRoot(graph(), pinnedMap()));
+  const layout = createMemo(() => layoutRoot(graph(), pinnedMap(), consts()));
 
   const containersById = createMemo(() => {
     const m = new Map<string, ContainerNode>();
@@ -390,6 +470,30 @@ export const GraphView = () => {
 
   return (
     <div class="graph-view">
+      {/* Density toolbar (commit 3 of the graph-readability sequence).
+          Lives inside GraphView because density is graph-specific — the
+          linear and JSON views ignore it. Uses `<fieldset>`/`<legend>` for
+          the same a11y-friendly group semantics as the byte-format toggle
+          in App.tsx (biome's useSemanticElements rule wants a semantic
+          group element, not `<div role="group">`). Stays above the SVG so
+          it remains visible even when the graph canvas is scrolled. */}
+      <fieldset class="graph-view-toolbar">
+        <legend class="graph-view-toolbar-label">density</legend>
+        <div class="format-toggle">
+          <For each={ALL_VIEW_DENSITIES}>
+            {(d) => (
+              <button
+                type="button"
+                classList={{ active: density() === d }}
+                onClick={() => setViewDensity(d as ViewDensity)}
+                title={`Switch graph to ${VIEW_DENSITY_LABELS[d]} density`}
+              >
+                {VIEW_DENSITY_LABELS[d]}
+              </button>
+            )}
+          </For>
+        </div>
+      </fieldset>
       <Show
         when={graph().nodes.length > 0 || graph().containers.length > 0}
         fallback={<div class="muted">no nodes to display</div>}
@@ -455,6 +559,7 @@ export const GraphView = () => {
                       container={container}
                       box={b()}
                       isCollapsed={collapsedSet().has(container.id)}
+                      consts={consts()}
                       onDragStart={(e) => startNodeDrag(container.id, e)}
                       onToggleCollapse={() => toggleCollapse(spec().id, container.id)}
                     />
@@ -613,6 +718,7 @@ const ContainerRect = (props: {
   container: ContainerNode;
   box: Box;
   isCollapsed: boolean;
+  consts: LayoutConstants;
   onDragStart: (e: PointerEvent) => void;
   onToggleCollapse: () => void;
 }) => {
@@ -626,8 +732,9 @@ const ContainerRect = (props: {
   // to render at its natural width — that branch is deliberate because
   // `lengthAdjust=spacingAndGlyphs` will SPREAD a short label out to fill
   // the supplied width, which would look worse than the overflow we're
-  // protecting against.
-  const labelTL = createMemo(() => labelTextLength(props.container, props.box.w));
+  // protecting against. Depends on `consts.CONTAINER_PAD` (density-derived)
+  // for the available-width arithmetic, so it also tracks density flips.
+  const labelTL = createMemo(() => labelTextLength(props.container, props.box.w, props.consts));
   return (
     <g class={`graph-container graph-container-${props.container.kind}`}>
       <title>
@@ -662,7 +769,7 @@ const ContainerRect = (props: {
       />
       <text
         class="graph-container-label"
-        x={props.box.x + CONTAINER_PAD}
+        x={props.box.x + props.consts.CONTAINER_PAD}
         y={props.box.y + HEADER_H / 2 + 1}
         dominant-baseline="central"
         textLength={labelTL()}
@@ -679,7 +786,7 @@ const ContainerRect = (props: {
       >
         <text
           class="graph-iterate-badge"
-          x={props.box.x + props.box.w - CONTAINER_PAD - CHEVRON_W}
+          x={props.box.x + props.box.w - props.consts.CONTAINER_PAD - CHEVRON_W}
           y={props.box.y + HEADER_H / 2 + 1}
           text-anchor="end"
           dominant-baseline="central"
