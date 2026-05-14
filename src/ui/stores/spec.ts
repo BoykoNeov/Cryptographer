@@ -63,6 +63,7 @@ import {
   useCipherMode,
 } from "./cipher-mode";
 import { setByteFormat } from "./format";
+import { setIvBytes } from "./iv";
 import { renameSpecLayoutIds } from "./layout";
 import { setPaddingScheme, usePaddingScheme } from "./padding";
 
@@ -531,6 +532,12 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
     setCipherModeSignal(doc.session.cipherMode);
     setPaddingScheme(doc.session.padding);
     setModeSignal(doc.session.mode);
+    // IV bytes — restored when the saved session carried them (CBC and
+    // future feedback modes). The schema validates length=16 already, so
+    // the cast to Uint8Array can't fail.
+    if (doc.session.ivBytes !== undefined) {
+      setIvBytes(new Uint8Array(doc.session.ivBytes));
+    }
   }
   // Document carries one spec (for the document's mode). Land it in the
   // matching slot; rebuild the OTHER slot from canonical so the

@@ -110,6 +110,10 @@ export type SessionSnapshot = {
   readonly byteFormat: ByteFormat;
   readonly inputBytes?: readonly number[];
   readonly keyBytes?: readonly number[];
+  // IV bytes (Phase 2). Strictly 16 bytes when present. Optional so
+  // pre-Phase-2 documents that predate the IV store still round-trip
+  // without conversion.
+  readonly ivBytes?: readonly number[];
 };
 
 /** Naming + timestamps. Forensic value when loading an old file. */

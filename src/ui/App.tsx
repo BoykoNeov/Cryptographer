@@ -57,6 +57,7 @@ import {
 import { BlockBadge } from "./components/BlockBadge";
 import { BytesView } from "./components/BytesView";
 import { GraphView } from "./components/GraphView";
+import { IvInput } from "./components/IvInput";
 import { MatrixView } from "./components/MatrixView";
 import { ParamEditor } from "./components/ParamEditor";
 import { RunExplorerModal } from "./components/RunExplorerModal";
@@ -89,6 +90,7 @@ import {
   useHistory,
   useShowPreviousRun,
 } from "./stores/history";
+import { useIvBytes } from "./stores/iv";
 import { installKeyboardShortcuts } from "./stores/keyboard";
 import { getLayoutForSpec, hasUserLayout, setLayoutForSpec } from "./stores/layout";
 import {
@@ -157,6 +159,7 @@ export const App = () => {
   const padding = usePaddingScheme();
   const cipher = useCipher();
   const cipherMode = useCipherMode();
+  const ivBytes = useIvBytes();
   const viewMode = useViewMode();
 
   // True when the live spec has diverged from the canonical default for
@@ -298,14 +301,12 @@ export const App = () => {
           : matrixFromBytes(inputBytes);
 
       const initialAux = new Map<string, AuxValue>([["key", keyBytes]]);
-      // CBC needs an IV seeded into aux. The dedicated IV store + UI input
-      // arrive in the next commit; for now we seed an all-zero placeholder
-      // so the spec runs end-to-end (matching NIST SP 800-38A §F.2.1's IV
-      // when the user types all zeros). The constant IV is sufficient to
-      // demonstrate the CBC chain — identical plaintext blocks still
-      // produce different ciphertext after the first block.
+      // CBC seeds the IV from the dedicated `iv` store (the IvInput
+      // field below). The store always holds exactly 16 bytes — its
+      // setter enforces the length and the randomize button generates
+      // the right size — so we can drop straight into aux.
       if (cipherMode() === "cbc") {
-        initialAux.set("iv", new Uint8Array(16));
+        initialAux.set("iv", new Uint8Array(ivBytes()));
       }
       const currentSpec = spec();
       const trace = runSpec(currentSpec, registry, {
@@ -391,6 +392,11 @@ export const App = () => {
     // `tryParseBytes`/`reformatTextOrKeep` elsewhere in this file.
     const input = tryParseBytes(inputText(), fmt());
     const key = tryParseBytes(keyText(), fmt());
+    // IV included only when the active mode uses one. Saving an IV for
+    // single-block / ECB would be confusing — the spec doesn't read
+    // aux[iv] there, so the value would silently round-trip but mean
+    // nothing.
+    const includeIv = cipherMode() === "cbc";
     return {
       mode: mode(),
       cipher: cipher(),
@@ -399,6 +405,7 @@ export const App = () => {
       byteFormat: fmt(),
       ...(input ? { inputBytes: Array.from(input) } : {}),
       ...(key ? { keyBytes: Array.from(key) } : {}),
+      ...(includeIv ? { ivBytes: Array.from(ivBytes()) } : {}),
     } as const;
   };
 
@@ -956,6 +963,14 @@ export const App = () => {
             spellcheck={false}
           />
         </label>
+        {/* IV input: shown only when CBC is active. The all-zero default
+            from the iv store is replaced by NIST §F's standard test
+            vector so the first-impression CBC run against the §F sample
+            plaintext matches the published §F.2.1 ciphertext. The
+            randomize button uses crypto.getRandomValues. */}
+        <Show when={cipherMode() === "cbc"}>
+          <IvInput format={fmt()} />
+        </Show>
         <button type="button" onClick={run}>
           run
         </button>

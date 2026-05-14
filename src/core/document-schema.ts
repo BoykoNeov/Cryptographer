@@ -205,6 +205,11 @@ export const SessionSnapshotSchema = z
     byteFormat: z.enum(["hex", "decimal", "ascii"]),
     inputBytes: z.array(z.number().int().min(0).max(255)).optional(),
     keyBytes: z.array(z.number().int().min(0).max(255)).optional(),
+    // IV bytes — written by the App when the saved session was in CBC
+    // (and, in future phases, CFB/OFB/CTR). Strictly 16 bytes when
+    // present; absent for single-block / ECB sessions. Optional so
+    // pre-Phase-2 documents (no ivBytes field) still validate.
+    ivBytes: z.array(z.number().int().min(0).max(255)).length(16).optional(),
   })
   .strict();
 
