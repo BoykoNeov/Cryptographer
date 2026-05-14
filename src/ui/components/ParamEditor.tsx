@@ -90,7 +90,11 @@ export const ParamEditor = (props: Props) => {
             <Match when={getStep().type === "generic.shift-rows@1"}>
               <ShiftsBlock step={getStep()} matchingCount={matchingSteps()} />
             </Match>
-            <Match when={getStep().type === "aes.key-expansion@1"}>
+            <Match
+              when={
+                getStep().type === "aes.key-expansion@1" || getStep().type === "aes.key-expansion@2"
+              }
+            >
               <KeyExpansionBlock step={getStep()} matchingCount={matchingSteps()} />
             </Match>
             <Match when={getStep().type === "generic.add-round-key@1"}>

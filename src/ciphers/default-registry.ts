@@ -18,7 +18,12 @@ import { computeBlockCount, computeBlockCountDoc } from "../steps/compute-block-
 import { concatBlocks, concatBlocksDoc } from "../steps/concat-blocks";
 import { iso78164Pad, iso78164PadDoc } from "../steps/iso7816-4-pad";
 import { iso78164Unpad, iso78164UnpadDoc } from "../steps/iso7816-4-unpad";
-import { keyExpansion, keyExpansionDoc } from "../steps/key-expansion";
+import {
+  keyExpansion,
+  keyExpansionDoc,
+  keyExpansionV2,
+  keyExpansionV2Doc,
+} from "../steps/key-expansion";
 import { loadBlock, loadBlockDoc } from "../steps/load-block";
 import { mixColumns, mixColumnsDoc } from "../steps/mix-columns";
 import { pkcs7Pad, pkcs7PadDoc } from "../steps/pkcs7-pad";
@@ -54,6 +59,11 @@ export const buildDefaultRegistry = (): StepRegistry => {
   r.register("generic.mix-columns@1", { executor: mixColumns, doc: mixColumnsDoc });
   r.register("generic.add-round-key@1", { executor: addRoundKey, doc: addRoundKeyDoc });
   r.register("aes.key-expansion@1", { executor: keyExpansion, doc: keyExpansionDoc });
+  // @2: relaxed `rounds === Nk + 6` assertion + on-the-fly Rcon extension.
+  // Drives the duplicate-round feature; canonical specs stay on @1 and the
+  // mutator rewrites the type to @2 when bumping rounds past the standard
+  // count. ParamEditor renders both versions through the same block.
+  r.register("aes.key-expansion@2", { executor: keyExpansionV2, doc: keyExpansionV2Doc });
   // ─── Padding chain (Phase: plaintext input + visible padding) ──────────
   // BytesState ↔ MatrixState boundary steps plus three pad/unpad pairs.
   // Each pair is generic over `blockSize` so they drop into future block

@@ -180,6 +180,173 @@ const subWord = (w: Uint8Array, sbox: readonly number[]): Uint8Array =>
     sbox[w[3] ?? 0] ?? 0,
   ]);
 
+// ─── @2: relaxed-rounds variant (drives "duplicate round") ────────────────
+//
+// Two differences from @1:
+//   1. The `rounds === Nk + 6` assertion is relaxed to `rounds >= Nk + 1`.
+//      That admits non-canonical AES variants the duplicate-round mutator
+//      produces ("what would AES-128 look like with 11 rounds?"). The lower
+//      bound still rules out degenerate cases that can't even derive an
+//      initial AddRoundKey's round key.
+//   2. The user-supplied `rcon` array is treated as a seed. If a needed
+//      index is missing or zero past the seeded prefix, the executor
+//      extends on the fly via the FIPS-197 recurrence `Rcon[i] = xtime(Rcon[i-1])`
+//      over GF(2^8) with reduction polynomial 0x11b. The seed wins where
+//      it's present, so users can still inspect / edit the canonical Rcon
+//      values in ParamEditor; the auto-extension only fills holes.
+//
+// Param shape is identical to @1, so the existing `KeyExpansionBlock` in
+// ParamEditor.tsx renders both with no code branch beyond a type match.
+
+/**
+ * Multiply by x in GF(2^8) with reduction polynomial 0x11b. The standard
+ * AES Rcon recurrence: `Rcon[i] = xtime(Rcon[i-1])` with Rcon[1] = 0x01.
+ */
+const xtime = (n: number): number => {
+  const shifted = (n << 1) & 0xff;
+  return (n & 0x80) === 0 ? shifted : shifted ^ 0x1b;
+};
+
+/**
+ * AES key expansion (@2). Drop-in replacement for @1 at canonical round
+ * counts (10 / 12 / 14) — produces byte-identical round keys — but accepts
+ * arbitrary `rounds >= Nk + 1` and extends a short user-supplied Rcon table
+ * via xtime on the fly. Used by the duplicate-round feature to express
+ * non-standard variants ("AES with 11 rounds").
+ */
+export const keyExpansionV2: StepExecutor = (state, params, ctx) => {
+  const p = readParams(params);
+  const key = ctx.aux.get(p.keyAuxName);
+  if (
+    !(key instanceof Uint8Array) ||
+    (key.length !== 16 && key.length !== 24 && key.length !== 32)
+  ) {
+    throw new Error(`aux '${p.keyAuxName}' must be a 16-, 24-, or 32-byte Uint8Array`);
+  }
+  const Nk = key.length / 4;
+  const Nb = 4;
+  // Lower bound: `rounds >= 1` guarantees at least one round key past the
+  // initial AddRoundKey's key.0 — below that the cipher has no rounds at
+  // all and the spec is degenerate. Upper bound is unbounded; duplicate-
+  // round produces arbitrarily large values (the user can keep clicking).
+  if (!Number.isInteger(p.rounds) || p.rounds < 1) {
+    throw new Error(`rounds (${p.rounds}) must be an integer >= 1`);
+  }
+  const totalWords = Nb * (p.rounds + 1);
+
+  // Resolve the Rcon table on first miss, lazily, so we don't allocate when
+  // the seed already covers the round count. Higher indices fill via the
+  // FIPS-197 recurrence; lower indices honor whatever the user supplied
+  // (including zeros — that's how `@1`'s table is shaped at index 0).
+  const maxRconIdx = Math.floor((totalWords - 1) / Nk);
+  const rcon: number[] = [...p.rcon];
+  while (rcon.length <= maxRconIdx) {
+    const prev = rcon[rcon.length - 1] ?? 0;
+    // Seed chain from index 1 = 0x01 if the user supplied nothing useful.
+    // Canonical AES_RCON has Rcon[0]=0, Rcon[1]=0x01, so this branch fires
+    // only when the user truncated the table below index 1.
+    rcon.push(rcon.length === 1 ? 0x01 : xtime(prev));
+  }
+
+  const w: Uint8Array[] = new Array(totalWords);
+  for (let i = 0; i < Nk; i++) {
+    w[i] = new Uint8Array([
+      key[4 * i] ?? 0,
+      key[4 * i + 1] ?? 0,
+      key[4 * i + 2] ?? 0,
+      key[4 * i + 3] ?? 0,
+    ]);
+  }
+
+  for (let i = Nk; i < totalWords; i++) {
+    let temp: Uint8Array = new Uint8Array(w[i - 1] as Uint8Array);
+    if (i % Nk === 0) {
+      temp = subWord(rotWord(temp), p.sbox);
+      const rc = rcon[i / Nk] ?? 0;
+      temp[0] = (temp[0] ?? 0) ^ rc;
+    } else if (Nk > 6 && i % Nk === 4) {
+      // AES-256-only branch (FIPS-197 §5.2); fires for Nk=8 only.
+      temp = subWord(temp, p.sbox);
+    }
+    const prev = w[i - Nk] as Uint8Array;
+    w[i] = new Uint8Array([
+      (prev[0] ?? 0) ^ (temp[0] ?? 0),
+      (prev[1] ?? 0) ^ (temp[1] ?? 0),
+      (prev[2] ?? 0) ^ (temp[2] ?? 0),
+      (prev[3] ?? 0) ^ (temp[3] ?? 0),
+    ]);
+  }
+
+  const auxWrites = new Map<string, AuxValue>();
+  for (let r = 0; r <= p.rounds; r++) {
+    const rk = new Uint8Array(16);
+    for (let word = 0; word < 4; word++) {
+      const src = w[r * 4 + word] as Uint8Array;
+      rk[word * 4 + 0] = src[0] ?? 0;
+      rk[word * 4 + 1] = src[1] ?? 0;
+      rk[word * 4 + 2] = src[2] ?? 0;
+      rk[word * 4 + 3] = src[3] ?? 0;
+    }
+    auxWrites.set(`${p.outputPrefix}.${r}`, rk);
+  }
+
+  return { state, auxReads: [p.keyAuxName], auxWrites };
+};
+
+export const keyExpansionV2Doc: StepDocumentation = {
+  name: "Key Expansion (v2)",
+  summary:
+    "Derive `rounds + 1` round keys from the cipher key. Accepts non-canonical round counts.",
+  detail: `## Key Expansion v2 (AES)
+
+Same FIPS-197 §5.2 procedure as the v1 step, with two relaxations that let
+this executor power non-standard AES variants (e.g. "AES-128 with 11
+rounds"):
+
+1. **No \`rounds === Nk + 6\` assertion.** v1 enforced the FIPS-197 standard
+   relation; v2 accepts any \`rounds >= Nk + 1\`. The other branches
+   (RotWord/SubWord on \`i % Nk == 0\`, the Nk>6 extra SubWord) still fire
+   exactly as the standard prescribes — only the count of derived words
+   changes.
+
+2. **Rcon table is extended on the fly.** If the user-supplied
+   \`rcon\` array is shorter than \`floor(totalWords / Nk) + 1\`, the
+   executor appends entries using \`Rcon[i] = xtime(Rcon[i-1])\` in
+   GF(2^8). Standard Rcon values seeded by the canonical spec stay
+   visible and editable in the ParamEditor; the auto-extension only
+   fills slots the user didn't provide.
+
+At canonical round counts (10 / 12 / 14) v2 produces byte-identical round
+keys to v1 — pinned by a parity test against \`aes.key-expansion@1\`.`,
+  params: new Map([
+    [
+      "keyAuxName",
+      "Name of the aux entry containing the input cipher key. Length must be 16, 24, or 32 bytes (AES-128 / 192 / 256).",
+    ],
+    [
+      "outputPrefix",
+      'Prefix for the round-key aux entries. With prefix "roundKey", outputs are roundKey.0 … roundKey.{rounds}.',
+    ],
+    [
+      "sbox",
+      "Forward S-box used by the SubWord sub-step. Always the forward AES S-box, even when decrypting.",
+    ],
+    [
+      "rcon",
+      "Round-constant seed table. Entries past the seed are extended via Rcon[i] = xtime(Rcon[i-1]).",
+    ],
+    [
+      "rounds",
+      "Number of cipher rounds. Standard values: 10 / 12 / 14 for AES-128 / 192 / 256. Non-standard counts produce non-standard ciphers.",
+    ],
+  ]),
+  references: [
+    "FIPS-197 §5.2 (Key Expansion)",
+    "FIPS-197 Appendix A (canonical round-key examples — v2 matches at canonical rounds)",
+  ],
+  shapeContract: { input: "any", output: "preserveInput" },
+};
+
 type Params = {
   keyAuxName: string;
   outputPrefix: string;
