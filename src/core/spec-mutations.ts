@@ -579,6 +579,350 @@ export const reorderStep = (
   return result;
 };
 
+// ─── Duplicate-round ──────────────────────────────────────────────────────
+//
+// Insert a clone of an AES round group, renumber surrounding siblings to
+// keep round labels matching their key index, bump key-expansion's
+// `rounds` (and morph its type `@1 → @2` so the schedule actually
+// extends), and report a rename map for layout-pin migration.
+//
+// Two directions:
+//
+//   forward (encrypt). Source matches `^round\.\d+$`. Clone goes AFTER
+//   source. Subsequent siblings (still in the same parent — typically
+//   `spec.steps`, or the children of an `iterate` for multi-block AES)
+//   that match `round.K` get renumbered `K → K+1`, and any AddRoundKey
+//   inside such a group has its `auxName` `roundKey.K → roundKey.K+1`
+//   in lockstep.
+//
+//   reverse (decrypt). Source matches `^inv-round\.\d+$`. Decrypt specs
+//   sit in reverse round order (inv-initial at the top, inv-round.0 at
+//   the bottom), so the renumber direction flips: the clone goes BEFORE
+//   source and EARLIER siblings (which carry higher inv-round numbers)
+//   get renumbered. The companion `inv-initial.add-round-key` leaf —
+//   which reads `roundKey.{rounds}` and sits at the very top of the
+//   decrypt body — also gets its auxName bumped.
+//
+// The mutator does not assert "the spec is well-formed AES." It rewrites
+// what it can see and leaves unrelated nodes alone. Misuse (e.g. invoking
+// reverse on a forward-shaped spec) returns a structurally valid spec
+// that just won't compute anything sensible — the runtime catches the
+// downstream consequences.
+
+/** Outcome of `duplicateRoundGroup`. The rename map is keyed `oldId → newId`. */
+export type DuplicateRoundResult = {
+  readonly spec: CipherSpec;
+  readonly renames: ReadonlyMap<string, string>;
+};
+
+const ROUND_ID_RE = /^round\.(\d+)$/;
+const INV_ROUND_ID_RE = /^inv-round\.(\d+)$/;
+const ROUND_LABEL_RE = /^Round (\d+)/;
+const INV_ROUND_LABEL_RE = /^Inverse Round (\d+)/;
+const ADD_ROUND_KEY_TYPE = "generic.add-round-key@1";
+const KEY_EXPANSION_V1 = "aes.key-expansion@1";
+const KEY_EXPANSION_V2 = "aes.key-expansion@2";
+
+/**
+ * Renumber one round group: rewrite the group's id, the canonical prefix
+ * on every child leaf id, the group's display label if it follows the
+ * canonical "Round N" / "Inverse Round N" pattern, and any AddRoundKey
+ * leaf's `auxName` that points at `roundKey.{fromN}`. Records every id
+ * rewrite into `renames` so the layout migration can follow.
+ *
+ * Non-canonical children (e.g. user-inserted leaves the palette added
+ * inside this round) pass through unchanged for ids/labels but still get
+ * the auxName bump if they're AddRoundKey leaves with the matching index.
+ */
+const renumberRoundGroup = (
+  group: StepGroup,
+  fromN: number,
+  toN: number,
+  direction: "forward" | "reverse",
+  renames: Map<string, string>,
+): StepGroup => {
+  const idPrefix = direction === "forward" ? "round" : "inv-round";
+  const oldGroupId = `${idPrefix}.${fromN}`;
+  const newGroupId = `${idPrefix}.${toN}`;
+  if (group.id === oldGroupId) renames.set(oldGroupId, newGroupId);
+
+  const oldChildPrefix = `${idPrefix}.${fromN}.`;
+  const newChildPrefix = `${idPrefix}.${toN}.`;
+  const oldAuxName = `roundKey.${fromN}`;
+  const newAuxName = `roundKey.${toN}`;
+
+  const newChildren = group.children.map((child) => {
+    if (child.kind !== "step") {
+      // Nested groups inside a round group aren't a shape any canonical
+      // AES spec produces, but the data model allows them. Leave the inner
+      // id alone — only the outer round's renumber is in scope here.
+      return child;
+    }
+    let newId = child.id;
+    if (child.id.startsWith(oldChildPrefix)) {
+      newId = newChildPrefix + child.id.slice(oldChildPrefix.length);
+      renames.set(child.id, newId);
+    }
+    let newParams = child.params;
+    if (child.type === ADD_ROUND_KEY_TYPE) {
+      const p = child.params as { readonly auxName?: unknown };
+      if (p && typeof p.auxName === "string" && p.auxName === oldAuxName) {
+        newParams = { ...(p as Record<string, Json>), auxName: newAuxName };
+      }
+    }
+    return { ...child, id: newId, params: newParams };
+  });
+
+  // Update the label if it follows the canonical pattern, preserving any
+  // suffix the user might've left (e.g. " (final, no MixColumns)").
+  const labelRe = direction === "forward" ? ROUND_LABEL_RE : INV_ROUND_LABEL_RE;
+  let newLabel = group.label;
+  if (typeof group.label === "string") {
+    const m = group.label.match(labelRe);
+    if (m) {
+      const baseWord = direction === "forward" ? "Round" : "Inverse Round";
+      const suffix = group.label.slice(m[0].length);
+      newLabel = `${baseWord} ${toN}${suffix}`;
+    }
+  }
+
+  return {
+    ...group,
+    id: newGroupId,
+    ...(newLabel !== undefined ? { label: newLabel } : {}),
+    children: newChildren,
+  };
+};
+
+/**
+ * Bump the `roundKey.K` auxName on `inv-initial.add-round-key` by 1.
+ * Returns the original leaf reference if no bump applies (params shape
+ * unexpected, auxName doesn't match the pattern) so reference equality
+ * holds when the surrounding mutation is a no-op.
+ */
+const bumpInvInitialAuxName = (leaf: StepLeaf): StepLeaf => {
+  if (leaf.type !== ADD_ROUND_KEY_TYPE) return leaf;
+  const p = leaf.params as { readonly auxName?: unknown };
+  if (!p || typeof p.auxName !== "string") return leaf;
+  const m = p.auxName.match(/^roundKey\.(\d+)$/);
+  if (!m || !m[1]) return leaf;
+  const k = Number.parseInt(m[1], 10);
+  return {
+    ...leaf,
+    params: { ...(p as Record<string, Json>), auxName: `roundKey.${k + 1}` },
+  };
+};
+
+/**
+ * Locate the AES key-expansion leaf at the top level of `spec.steps`,
+ * bump its `rounds` param by 1, and morph the type from `@1 → @2` (the
+ * schedule needs the relaxed-rounds executor to accept the new count).
+ * Throws if no key-expansion leaf exists at the top level — every
+ * shipped AES spec puts it there, including ECB (key-expansion sits
+ * outside the iterate so it runs once).
+ */
+const bumpKeyExpansion = (spec: CipherSpec): CipherSpec => {
+  let found = false;
+  const newSteps = spec.steps.map((node) => {
+    if (found) return node;
+    if (
+      node.kind === "step" &&
+      (node.type === KEY_EXPANSION_V1 || node.type === KEY_EXPANSION_V2)
+    ) {
+      found = true;
+      const p = node.params as { readonly rounds?: unknown };
+      const currentRounds = typeof p?.rounds === "number" ? p.rounds : 0;
+      return {
+        ...node,
+        type: KEY_EXPANSION_V2,
+        params: {
+          ...(p as Record<string, Json>),
+          rounds: currentRounds + 1,
+        },
+      };
+    }
+    return node;
+  });
+  if (!found) {
+    throw new Error(
+      "duplicateRoundGroup: no aes.key-expansion@* leaf at the top level of the spec",
+    );
+  }
+  return { ...spec, steps: newSteps };
+};
+
+/**
+ * Insert a clone of an AES round group, renumber siblings + key schedule
+ * accordingly, and return the updated spec plus a `oldId → newId` rename
+ * map. See the section header above for the forward/reverse semantics.
+ *
+ * Throws if `sourceId` doesn't resolve to a group node, if the id doesn't
+ * follow the round/inv-round naming convention for the requested
+ * direction, or if no top-level key-expansion leaf is found.
+ */
+export const duplicateRoundGroup = (
+  spec: CipherSpec,
+  sourceId: string,
+  direction: "forward" | "reverse",
+): DuplicateRoundResult => {
+  const loc = findStepAndParent(spec, sourceId);
+  if (!loc) throw new Error(`duplicateRoundGroup: no node with id "${sourceId}"`);
+  if (loc.node.kind !== "group") {
+    throw new Error(
+      `duplicateRoundGroup: source "${sourceId}" must be a group, got ${loc.node.kind}`,
+    );
+  }
+  const idRe = direction === "forward" ? ROUND_ID_RE : INV_ROUND_ID_RE;
+  const m = sourceId.match(idRe);
+  if (!m || !m[1]) {
+    throw new Error(
+      `duplicateRoundGroup: source id "${sourceId}" doesn't match the round-id format for direction "${direction}"`,
+    );
+  }
+  const sourceN = Number.parseInt(m[1], 10);
+  const cloneN = sourceN + 1;
+  const renames = new Map<string, string>();
+
+  // Build the clone: same source group renumbered to the next round
+  // index. The clone itself isn't a rename of an existing id (no entry
+  // in `renames`), but its AddRoundKey auxName points at `roundKey.{cloneN}`
+  // so the bumped schedule's new entry feeds it.
+  const clone = renumberRoundGroupClone(loc.node, sourceN, cloneN, direction);
+
+  // Walk the immediate parent's children. Insert the clone and renumber
+  // affected siblings in one pass.
+  const oldChildren = loc.parent ? loc.parent.children : spec.steps;
+  const sourceIdx = loc.indexInParent;
+  const newChildren: StepNode[] = [];
+
+  if (direction === "forward") {
+    // Keep everything up to and including source unchanged.
+    for (let i = 0; i <= sourceIdx; i++) {
+      const n = oldChildren[i];
+      if (n) newChildren.push(n);
+    }
+    // Splice clone in.
+    newChildren.push(clone);
+    // Renumber subsequent siblings whose ids match `round.K`. Other node
+    // kinds (e.g. iterate, non-round groups, leaves like split/concat
+    // for multi-block parents) pass through.
+    for (let i = sourceIdx + 1; i < oldChildren.length; i++) {
+      const n = oldChildren[i];
+      if (!n) continue;
+      if (n.kind === "group") {
+        const km = n.id.match(idRe);
+        if (km?.[1]) {
+          const k = Number.parseInt(km[1], 10);
+          newChildren.push(renumberRoundGroup(n, k, k + 1, direction, renames));
+          continue;
+        }
+      }
+      newChildren.push(n);
+    }
+  } else {
+    // reverse: walk earlier siblings; renumber inv-round.K (K > sourceN)
+    // and bump the inv-initial.add-round-key auxName. Source and later
+    // siblings (lower inv-round numbers, plus inv-round.0) pass through.
+    for (let i = 0; i < sourceIdx; i++) {
+      const n = oldChildren[i];
+      if (!n) continue;
+      if (n.kind === "step" && n.id === "inv-initial.add-round-key") {
+        newChildren.push(bumpInvInitialAuxName(n));
+        continue;
+      }
+      if (n.kind === "group") {
+        const km = n.id.match(idRe);
+        if (km?.[1]) {
+          const k = Number.parseInt(km[1], 10);
+          if (k > sourceN) {
+            newChildren.push(renumberRoundGroup(n, k, k + 1, direction, renames));
+            continue;
+          }
+        }
+      }
+      newChildren.push(n);
+    }
+    // Insert clone immediately before source.
+    newChildren.push(clone);
+    // Source + everything after stays as-is.
+    for (let i = sourceIdx; i < oldChildren.length; i++) {
+      const n = oldChildren[i];
+      if (n) newChildren.push(n);
+    }
+  }
+
+  // Splice the rebuilt array back into the spec. If source was at the
+  // top level (no parent), we replace `spec.steps` directly. Otherwise
+  // walk the tree once to replace the parent's children — reusing the
+  // existing `transformParentArray` would re-search by id, but the
+  // child-array transform fits its signature cleanly.
+  let specAfterSplice: CipherSpec;
+  if (loc.parent === null) {
+    specAfterSplice = { ...spec, steps: newChildren };
+  } else {
+    const replaced = replaceParentChildrenByRef(spec, loc.parent, newChildren);
+    if (!replaced) {
+      throw new Error("duplicateRoundGroup: internal — could not splice children back into parent");
+    }
+    specAfterSplice = replaced;
+  }
+
+  // Finally, bump the key schedule. This is independent of which parent
+  // held the source — key-expansion is always at the top level (single-
+  // block and ECB both put it there, outside the iterate).
+  const finalSpec = bumpKeyExpansion(specAfterSplice);
+  return { spec: finalSpec, renames };
+};
+
+/**
+ * Clone variant of `renumberRoundGroup` for the freshly-inserted copy.
+ * The clone is a NEW group, not a rename of an existing one — so we
+ * don't write to the rename map (no old id existed to map FROM). Behavior
+ * is otherwise identical to the live renumber path.
+ */
+const renumberRoundGroupClone = (
+  group: StepGroup,
+  fromN: number,
+  toN: number,
+  direction: "forward" | "reverse",
+): StepGroup => {
+  // Reuse the same logic but throw away the rename entries; the clone's
+  // ids are new and have no old layout pins to migrate.
+  const discardedRenames = new Map<string, string>();
+  return renumberRoundGroup(group, fromN, toN, direction, discardedRenames);
+};
+
+/**
+ * Walk the spec, find the exact parent reference, and return a new spec
+ * with that parent's children replaced. Returns null if the parent isn't
+ * found (treated as an internal error by the caller — it just was located
+ * by `findStepAndParent`). Branches without the parent reuse their
+ * original references.
+ */
+const replaceParentChildrenByRef = (
+  spec: CipherSpec,
+  parent: StepGroup | IterateGroup,
+  newChildren: readonly StepNode[],
+): CipherSpec | null => {
+  let found = false;
+  const visit = (nodes: readonly StepNode[]): readonly StepNode[] => {
+    return nodes.map((n) => {
+      if (found) return n;
+      if (n === parent) {
+        found = true;
+        return { ...n, children: newChildren };
+      }
+      if (n.kind === "step") return n;
+      const next = visit(n.children);
+      if (next === n.children) return n;
+      return { ...n, children: next };
+    });
+  };
+  const newSteps = visit(spec.steps);
+  if (!found) return null;
+  return { ...spec, steps: newSteps };
+};
+
 // ─── Padding-scheme overlay ───────────────────────────────────────────────
 // Layer a padding chain onto a canonical cipher spec without modifying the
 // canonical spec itself. The step types listed in `PADDING_STEP_TYPES` are
