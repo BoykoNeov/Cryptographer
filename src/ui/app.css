@@ -2205,6 +2205,33 @@ button:disabled {
   outline-offset: -3px;
 }
 
+/* Live drop-target preview during a palette drag. Distinct from the
+   broader `.graph-drop-zone-active` (which highlights the whole canvas
+   while ANY drag is over it) — this one paints the specific anchor the
+   drop would resolve to right now, so the user can see WHERE their drop
+   will land before they release. Updated by the dragOverAnchorId signal
+   in `GraphView.tsx`, set every dragover via the same closest() walk
+   the drop handler uses.
+
+   Targets the inner `rect` so the highlight feels "inside" the node
+   rather than ringing the whole `<g>` (which would clash with the leaf
+   text + chip overlays). For containers, the same selector tags the
+   header band's rect element. */
+.graph-leaf.graph-drop-target-active rect,
+.graph-container.graph-drop-target-active rect {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+
+/* Slight fill bump so the highlight reads at a glance on dim themes
+   where the accent stroke alone is too subtle. Uses currentColor + the
+   accent var via a CSS-trick (color-mix is supported in modern browsers
+   we target via Vite). */
+.graph-leaf.graph-drop-target-active rect,
+.graph-container.graph-drop-target-active rect {
+  fill: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
 /* Palette sidebar. Fixed-ish width (clamped) so it stays usable on small
    viewports without dominating big ones. Sticky-top inside the layout so
    it remains visible as the SVG scrolls horizontally past the viewport

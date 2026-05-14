@@ -182,3 +182,88 @@ describe("GraphView — drop-anchor greying class on .graph-view", () => {
     expect(matrixAnchors).toBeGreaterThan(0);
   });
 });
+
+/**
+ * Synthesize a dragover/dragleave/drop event with a step-type-MIME-carrying
+ * `dataTransfer` so `isStepTypeDrag` in GraphView's handler returns true.
+ * jsdom's DragEvent constructor doesn't accept a `dataTransfer` init, so
+ * we forge one via `Object.defineProperty` after construction.
+ */
+const fireGraphEvent = (target: Element, type: "dragover" | "dragleave" | "drop"): void => {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", {
+    value: {
+      types: ["application/x-cryptographer-step-type", "text/plain"],
+      // `dropEffect` setter is touched by handleDragOver — allow assignment.
+      dropEffect: "none" as DataTransfer["dropEffect"],
+      getData: () => "",
+      setData: () => {},
+    },
+    writable: false,
+  });
+  target.dispatchEvent(event);
+};
+
+/**
+ * Drop-anchor highlight preview during a palette drag. Until this shipped,
+ * compatible anchors had no positive "drop here will land at X" hint —
+ * only shape-incompatible ones dimmed via the greying pass. Users had to
+ * drop blind, especially in canvas gaps where the closest() walk
+ * fell back to root-append far from where they meant to drop.
+ *
+ * These tests assert that `dragover` resolves the same anchor the drop
+ * handler would use and toggles `.graph-drop-target-active` on the
+ * matching `<g>`. Moving the cursor to a new anchor swaps the highlight.
+ * `dragleave` clears it.
+ */
+describe("GraphView — drop-anchor highlight during palette drag", () => {
+  beforeEach(() => {
+    resetAll();
+    seedAes128Trace();
+  });
+  afterEach(() => {
+    cleanup();
+    resetAll();
+  });
+
+  it("dragover on a leaf adds .graph-drop-target-active to that leaf", () => {
+    const { container } = render(() => <GraphView />);
+    // Pick any leaf-level drop anchor. AES-128 root has key-expansion
+    // and the post-round ciphertext leaf; round contents are nested.
+    const anchors = container.querySelectorAll("[data-drop-anchor]");
+    expect(anchors.length).toBeGreaterThan(0);
+    const leaf = anchors[0] as Element;
+    expect(leaf.classList.contains("graph-drop-target-active")).toBe(false);
+    fireGraphEvent(leaf, "dragover");
+    expect(leaf.classList.contains("graph-drop-target-active")).toBe(true);
+  });
+
+  it("moving the dragover to a different anchor moves the highlight with it", () => {
+    const { container } = render(() => <GraphView />);
+    const anchors = Array.from(container.querySelectorAll("[data-drop-anchor]"));
+    expect(anchors.length).toBeGreaterThan(1);
+    const first = anchors[0] as Element;
+    const second = anchors[1] as Element;
+    fireGraphEvent(first, "dragover");
+    expect(first.classList.contains("graph-drop-target-active")).toBe(true);
+    fireGraphEvent(second, "dragover");
+    // Solid's reactive update of the per-leaf classList flips the
+    // first one off because dragOverAnchorId() === clickTargetId no
+    // longer holds for it.
+    expect(first.classList.contains("graph-drop-target-active")).toBe(false);
+    expect(second.classList.contains("graph-drop-target-active")).toBe(true);
+  });
+
+  it("dragleave (off the canvas) clears the highlight", () => {
+    const { container } = render(() => <GraphView />);
+    const leaf = container.querySelector("[data-drop-anchor]") as Element;
+    fireGraphEvent(leaf, "dragover");
+    expect(leaf.classList.contains("graph-drop-target-active")).toBe(true);
+    // Dragleave bubbles up to the .graph-view wrapper; that's where
+    // handleDragLeave is attached. Fire it on the wrapper so the
+    // relatedTarget check fires correctly (no related target → cleared).
+    const view = container.querySelector(".graph-view") as Element;
+    fireGraphEvent(view, "dragleave");
+    expect(leaf.classList.contains("graph-drop-target-active")).toBe(false);
+  });
+});

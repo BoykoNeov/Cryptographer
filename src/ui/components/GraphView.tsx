@@ -939,6 +939,23 @@ export const GraphView = () => {
   const [dragOverActive, setDragOverActive] = createSignal(false);
 
   /**
+   * Anchor id (leaf stepId or container id) the user's drag is currently
+   * resolving to. Updated continuously while a step-type drag is over the
+   * canvas; consumed by LeafRect / ContainerRect to render a
+   * `.graph-drop-target-active` highlight so the user sees exactly WHERE
+   * the drop would land before they commit.
+   *
+   * Without this preview, users had to drop blind and verify after the
+   * fact — particularly painful when the cursor was in the gap between
+   * containers and the anchor resolver fell back to root-append (drop
+   * lands at the end of the spec, far from where the user intended).
+   *
+   * `null` means no anchor under the cursor right now (cursor between
+   * elements, drag hasn't started, or drag just ended).
+   */
+  const [dragOverAnchorId, setDragOverAnchorId] = createSignal<string | null>(null);
+
+  /**
    * Slice 11 — in-app help modal open state. Toggled by the toolbar's
    * `?` button; `<GraphHelpModal>` reads it to drive the native
    * `<dialog>` open/close. Local to GraphView (not in a store) because
@@ -968,6 +985,17 @@ export const GraphView = () => {
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
     if (!dragOverActive()) setDragOverActive(true);
+    // Resolve the same anchor the drop handler would use — `closest`
+    // walks up from the element under the cursor looking for the nearest
+    // `data-drop-anchor`. Null when the cursor is in the canvas gap
+    // (drop would root-append). Update the signal continuously so the
+    // highlight tracks the cursor in real time.
+    const target = e.target as Element | null;
+    const anchored = target?.closest?.("[data-drop-anchor]") ?? null;
+    const anchorId = anchored?.getAttribute("data-drop-anchor") ?? null;
+    if (anchorId !== dragOverAnchorId()) {
+      setDragOverAnchorId(anchorId);
+    }
   };
 
   const handleDragLeave = (e: DragEvent): void => {
@@ -980,11 +1008,13 @@ export const GraphView = () => {
     const current = e.currentTarget as Node | null;
     if (related && current && current.contains(related)) return;
     setDragOverActive(false);
+    setDragOverAnchorId(null);
   };
 
   const handleDrop = (e: DragEvent): void => {
     e.preventDefault();
     setDragOverActive(false);
+    setDragOverAnchorId(null);
     if (!e.dataTransfer) return;
     // Prefer the custom MIME (palette-authored); fall back to text/plain
     // for browsers that strip non-standard MIMEs on DnD payloads.
@@ -1357,6 +1387,10 @@ export const GraphView = () => {
                         onToggleCollapse={() => toggleCollapse(spec().id, container.id)}
                         warnings={containerWarnings()}
                         stateShape={shapesByAnchor().get(container.id) ?? ""}
+                        // Live preview during a palette drag: highlights this
+                        // container whenever the cursor's resolved anchor
+                        // (`closest("[data-drop-anchor]")`) is THIS container.
+                        isDropTargetActive={dragOverAnchorId() === container.id}
                       />
                     )}
                   </Show>
@@ -1433,6 +1467,11 @@ export const GraphView = () => {
                         draggable={isRootLevel && !isReplica}
                         isReplica={isReplica}
                         dropAnchorId={clickTargetId}
+                        // Reactive: the JSX expression re-evaluates when
+                        // dragOverAnchorId() changes, and Solid forwards
+                        // the new prop value through to LeafRect — which
+                        // toggles `.graph-drop-target-active` accordingly.
+                        isDropTargetActive={dragOverAnchorId() === clickTargetId}
                         {...blockSpanProps}
                         {...dragProps}
                         onClick={() => handleLeafClick(clickTargetId)}
@@ -1683,6 +1722,13 @@ const LeafRect = (props: {
    * decide whether to grey this anchor during a palette drag.
    */
   stateShape: string;
+  /**
+   * True when the current palette drag would land at this leaf's anchor
+   * if released now. Toggles `.graph-drop-target-active` so CSS can
+   * paint a subtle highlight, giving the user a live preview of where
+   * the drop will commit. Always false when no drag is in progress.
+   */
+  isDropTargetActive: boolean;
 }) => {
   // SVG <g> can't be replaced by a semantic <button> (it'd leave the SVG
   // coordinate system). We attach pointer + keyboard handlers; biome's
@@ -1703,6 +1749,7 @@ const LeafRect = (props: {
       class={`graph-leaf${props.draggable ? " graph-leaf-draggable" : ""}${
         props.isReplica ? " graph-leaf-replica" : ""
       }`}
+      classList={{ "graph-drop-target-active": props.isDropTargetActive }}
       data-drop-anchor={props.dropAnchorId}
       data-state-shape={props.stateShape}
       // `tabindex="0"` puts the leaf in the natural keyboard tab order so
@@ -1790,6 +1837,13 @@ const ContainerRect = (props: {
    * grey this container's drop anchor during an incompatible drag.
    */
   stateShape: string;
+  /**
+   * True when the current palette drag would land on THIS container if
+   * the user released right now (the live drag-anchor preview). Toggles
+   * `.graph-drop-target-active` so CSS can paint a subtle highlight.
+   * Always false when no drag is in progress.
+   */
+  isDropTargetActive: boolean;
 }) => {
   // Chevron sits at the right edge of the header band; clicking it doesn't
   // start a drag. The rest of the header is the drag handle.
@@ -1815,6 +1869,7 @@ const ContainerRect = (props: {
   return (
     <g
       class={`graph-container graph-container-${props.container.kind}`}
+      classList={{ "graph-drop-target-active": props.isDropTargetActive }}
       data-drop-anchor={props.container.id}
       data-state-shape={props.stateShape}
       tabindex={0}
