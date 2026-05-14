@@ -46,7 +46,13 @@ import { serpent192Spec } from "@/ciphers/serpent-192";
 import { serpent256Spec } from "@/ciphers/serpent-256";
 import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
-import { type CipherGraph, type GraphEdge, deriveAuxGraph, validateGraph } from "@/core/graph";
+import {
+  type CipherGraph,
+  type GraphEdge,
+  buildIterateFeedbackPredicate,
+  deriveAuxGraph,
+  validateGraph,
+} from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
@@ -401,26 +407,29 @@ describe("validateGraph — unused-write warnings", () => {
   });
 });
 
+// Hand-built CipherGraph fixtures used across the cycle-detection and the
+// iterate-feedback-predicate describe blocks. Defined at module scope so
+// both consumers share the same shape.
+const makeNode = (id: string) => ({
+  stepId: id,
+  stepType: "generic.test@1",
+  label: id,
+  containerPath: [] as readonly string[],
+});
+
+const auxEdge = (from: string, to: string, key: string): GraphEdge => ({
+  from,
+  to,
+  auxKey: key,
+  kind: "aux",
+});
+
 // ─── Cycle detection ───────────────────────────────────────────────────────
 
 describe("validateGraph — cycle detection", () => {
   // Trace-derived graphs are acyclic by construction (writers stamp time
   // forward), so the detector only fires for hand-built or future-
   // synthesized graphs. Build cycles by hand for unit coverage.
-
-  const makeNode = (id: string) => ({
-    stepId: id,
-    stepType: "generic.test@1",
-    label: id,
-    containerPath: [] as readonly string[],
-  });
-
-  const auxEdge = (from: string, to: string, key: string): GraphEdge => ({
-    from,
-    to,
-    auxKey: key,
-    kind: "aux",
-  });
 
   it("flags a 2-node cycle", () => {
     const graph: CipherGraph = {
@@ -574,5 +583,119 @@ describe("validateGraph — cycle detection", () => {
     const warnings = validateGraph(graph, emptyTrace);
     const cycle = warnings.find((w) => w.kind === "cycle");
     expect(cycle).toBeDefined();
+  });
+});
+
+/**
+ * Direct unit coverage for `buildIterateFeedbackPredicate`. The renderer
+ * uses the same predicate to mark iterate-feedback edges with a dashed
+ * style (e.g. CBC's `cbc-snapshot → cbc-xor`) so the predicate must:
+ *
+ *   1. Return TRUE for a backwards-in-spec-order aux edge inside the same
+ *      iterate body (the canonical chain-mode shape).
+ *   2. Return FALSE for ordinary forward aux edges (e.g. round-key fan-out).
+ *   3. Return FALSE for state edges regardless of direction (they're
+ *      forward-only by construction; a backward state edge is a real bug
+ *      the renderer should NOT silently dress as feedback).
+ *   4. Return FALSE for edges whose endpoints don't share an iterate
+ *      ancestor (a real cycle inside a `group`, or one endpoint outside
+ *      the iterate entirely).
+ *
+ * Shared with `validateGraph` so both the cycle filter and the renderer
+ * stay in sync — same predicate, two consumers.
+ */
+describe("buildIterateFeedbackPredicate — shared cycle-filter / renderer helper", () => {
+  it("flags backwards aux edge inside the same iterate (CBC shape)", () => {
+    const graph: CipherGraph = {
+      nodes: [
+        { ...makeNode("xor"), containerPath: ["loop"] },
+        { ...makeNode("snapshot"), containerPath: ["loop"] },
+      ],
+      containers: [
+        {
+          kind: "iterate",
+          id: "loop",
+          label: "loop",
+          containerPath: [],
+          childIds: ["xor", "snapshot"],
+        },
+      ],
+      edges: [auxEdge("snapshot", "xor", "chain")],
+      rootIds: ["loop"],
+    };
+    const predicate = buildIterateFeedbackPredicate(graph);
+    expect(predicate(graph.edges[0] as GraphEdge)).toBe(true);
+  });
+
+  it("does NOT flag a forward aux edge inside the same iterate (normal flow)", () => {
+    const graph: CipherGraph = {
+      nodes: [
+        { ...makeNode("xor"), containerPath: ["loop"] },
+        { ...makeNode("snapshot"), containerPath: ["loop"] },
+      ],
+      containers: [
+        {
+          kind: "iterate",
+          id: "loop",
+          label: "loop",
+          containerPath: [],
+          childIds: ["xor", "snapshot"],
+        },
+      ],
+      edges: [auxEdge("xor", "snapshot", "data")],
+      rootIds: ["loop"],
+    };
+    const predicate = buildIterateFeedbackPredicate(graph);
+    expect(predicate(graph.edges[0] as GraphEdge)).toBe(false);
+  });
+
+  it("never flags state edges, even when going backwards in spec order", () => {
+    // Defensive — state edges are forward-only by construction, but if a
+    // future bug stamps one backwards we don't want the dashed style to
+    // silently hide it. validateGraph's cycle detector should still see it.
+    const graph: CipherGraph = {
+      nodes: [
+        { ...makeNode("xor"), containerPath: ["loop"] },
+        { ...makeNode("snapshot"), containerPath: ["loop"] },
+      ],
+      containers: [
+        {
+          kind: "iterate",
+          id: "loop",
+          label: "loop",
+          containerPath: [],
+          childIds: ["xor", "snapshot"],
+        },
+      ],
+      edges: [{ from: "snapshot", to: "xor", auxKey: "state", kind: "state" }],
+      rootIds: ["loop"],
+    };
+    const predicate = buildIterateFeedbackPredicate(graph);
+    expect(predicate(graph.edges[0] as GraphEdge)).toBe(false);
+  });
+
+  it("does NOT flag a backwards aux edge that lacks a shared iterate ancestor", () => {
+    // Two leaves inside the same `group` (not iterate). A backwards aux
+    // edge here is a real cycle, not iterate feedback — predicate must
+    // not absorb it.
+    const graph: CipherGraph = {
+      nodes: [
+        { ...makeNode("a"), containerPath: ["grp"] },
+        { ...makeNode("b"), containerPath: ["grp"] },
+      ],
+      containers: [
+        {
+          kind: "group",
+          id: "grp",
+          label: "grp",
+          containerPath: [],
+          childIds: ["a", "b"],
+        },
+      ],
+      edges: [auxEdge("b", "a", "x")],
+      rootIds: ["grp"],
+    };
+    const predicate = buildIterateFeedbackPredicate(graph);
+    expect(predicate(graph.edges[0] as GraphEdge)).toBe(false);
   });
 });

@@ -2047,6 +2047,21 @@ button:disabled {
   stroke-width: 2.5;
 }
 
+/* Cross-iteration aux feedback (CBC's `cbc-snapshot → cbc-xor`, future
+   OFB/CFB equivalents). Dashed stroke distinguishes "this loops to the
+   next iteration" from "within-iteration flow". Hover bumps opacity +
+   removes the dash to make the path easier to follow visually when
+   tracing the feedback chain. */
+.graph-edge-feedback {
+  stroke-dasharray: 4 3;
+  stroke-opacity: 0.55;
+}
+
+.graph-edge-feedback:hover {
+  stroke-dasharray: none;
+  stroke-opacity: 0.95;
+}
+
 /* Arrow glyphs reference the same colors as their parent edge. Filled
    triangles render cleanly at the small marker size we use; strokes
    would alias at this scale. */

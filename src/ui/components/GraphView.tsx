@@ -39,6 +39,7 @@ import {
   type CipherGraph,
   type ContainerNode,
   type GraphWarning,
+  buildIterateFeedbackPredicate,
   collapseGraph,
   deriveAuxGraph,
   replicateHighFanoutSources,
@@ -757,6 +758,21 @@ export const GraphView = () => {
   );
 
   /**
+   * Iterate-feedback predicate over the rendered graph. Rebuilt every
+   * time `graph()` changes (collapse, replication, spec edit). Used by
+   * the edge renderer to draw cross-iteration aux feedback (CBC's
+   * `cbc-snapshot → cbc-xor`, OFB/CFB's analogous edges when they ship)
+   * with a distinctive dashed style — without it, those backwards-in-
+   * spec-order arrows look identical to normal forward edges and users
+   * can mistake them for bugs.
+   *
+   * The same predicate is what `validateGraph` uses internally to exclude
+   * these edges from cycle detection; sharing the helper keeps both
+   * surfaces in sync.
+   */
+  const feedbackPredicate = createMemo(() => buildIterateFeedbackPredicate(graph()));
+
+  /**
    * Sources eligible for a row in the override panel: any id appearing in
    * `edge.from` for at least one aux edge in the collapsed graph. Sorted
    * by fanout descending so the high-fanout offenders surface first.
@@ -1413,6 +1429,11 @@ export const GraphView = () => {
                       to={toBox()!}
                       auxKey={edge.auxKey}
                       kind={edge.kind}
+                      // Cross-iteration aux feedback (e.g. CBC's
+                      // cbc-snapshot → cbc-xor): renders dashed so the
+                      // user can read "this is iteration-N → iteration-
+                      // N+1, not within-iteration flow" at a glance.
+                      isFeedback={feedbackPredicate()(edge)}
                     />
                   </Show>
                 );
@@ -2024,7 +2045,25 @@ const ContainerRect = (props: {
   );
 };
 
-const EdgePath = (props: { from: Box; to: Box; auxKey: string; kind: "aux" | "state" }) => {
+const EdgePath = (props: {
+  from: Box;
+  to: Box;
+  auxKey: string;
+  kind: "aux" | "state";
+  /**
+   * True when this edge is iterate-feedback — a cross-iteration aux flow
+   * collapsed into one canonical edge after the runtime's `:b{i}` strip.
+   * Renderer signals this via a distinctive dashed style + label suffix
+   * so the user can read "this loops to the next iteration" at a glance
+   * rather than mistaking it for a backwards-pointing bug.
+   *
+   * Only meaningful when `kind === "aux"` — state edges are forward-only
+   * by construction and the feedback predicate always returns false for
+   * them. Defensive: even if a future bug stamps a state edge as
+   * feedback, the dashed style is visual-only and doesn't affect dataflow.
+   */
+  isFeedback: boolean;
+}) => {
   // The `d` attribute is computed via createMemo so it tracks changes to
   // props.from / props.to. Without the memo, the path string would be
   // captured once at component init — a static binding — and drags would
@@ -2114,10 +2153,14 @@ const EdgePath = (props: { from: Box; to: Box; auxKey: string; kind: "aux" | "st
   return (
     <path
       class={`graph-edge graph-edge-${props.kind}`}
+      classList={{ "graph-edge-feedback": props.isFeedback }}
       d={d()}
       marker-end={`url(#graph-arrow-${props.kind})`}
     >
-      <title>{props.auxKey}</title>
+      <title>
+        {props.auxKey}
+        {props.isFeedback ? " — feedback (next iteration)" : ""}
+      </title>
     </path>
   );
 };
