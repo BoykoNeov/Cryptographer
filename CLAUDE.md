@@ -7,7 +7,7 @@ Interactive cryptography explorer. The user enters plaintext + key, sees every i
 | Command | What it does |
 |---|---|
 | `npm run dev` | Vite dev server at `http://localhost:5173`. Hot-reloads on file changes. |
-| `npm test` | Vitest, single run. Currently 678 tests across 54 files, ~7s total (jsdom UI tests dominate). |
+| `npm test` | Vitest, single run. Currently 710 tests across 59 files, ~10s total (jsdom UI tests dominate). |
 | `npm run typecheck` | `tsc --noEmit`, strict. |
 | `npm run check` | The gate: `biome ci . && tsc --noEmit && vitest run && vite build`. Runs in ~10s on this machine. |
 | `npm run build` | Production build into `dist/`. ~84 KB gzipped JS. |

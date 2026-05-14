@@ -387,6 +387,68 @@ export const resetSpec = (): void => {
   );
 };
 
+/**
+ * Structural deep equality for `Json`-typed values. Used by `isCustomSpec`
+ * to compare the live spec to the canonical default without depending on
+ * insertion-order stability — `JSON.stringify` would be order-sensitive, and
+ * while today's spread-based mutations preserve key order, a future param
+ * editor could round-trip a step's params through a differently-shaped
+ * object and reorder keys. Recursive walk, ~15 lines, no allocation hot
+ * path because it short-circuits on the first mismatch.
+ */
+const deepEqualJson = (a: unknown, b: unknown): boolean => {
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  if (typeof a !== typeof b) return false;
+  if (typeof a !== "object") return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!deepEqualJson(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  const ao = a as Record<string, unknown>;
+  const bo = b as Record<string, unknown>;
+  const ak = Object.keys(ao);
+  const bk = Object.keys(bo);
+  if (ak.length !== bk.length) return false;
+  for (const k of ak) {
+    if (!Object.prototype.hasOwnProperty.call(bo, k)) return false;
+    if (!deepEqualJson(ao[k], bo[k])) return false;
+  }
+  return true;
+};
+
+/**
+ * True when the live spec differs from the canonical default that the
+ * current selectors (cipher, cipherMode, mode, padding) would produce.
+ *
+ * Used by the UI to render a "Custom (was AES-128)" indicator + a
+ * "reset to canonical" affordance so the user can see when they've
+ * diverged from the textbook spec and snap back to it in one click.
+ *
+ * Why selector flips don't trigger this: `setCipher` / `setCipherMode` /
+ * `setMode` all replace the spec with the new canonical default, and
+ * `setPadding` rebuilds via `applyPaddingScheme` from the live spec —
+ * which, when the live spec was already canonical, produces the same
+ * tree as a fresh canonical-then-padding build (verified by the padding
+ * round-trip test below).
+ *
+ * Implementation reads every signal it needs so Solid's tracking sees
+ * each dependency; the App-side caller can wrap this in `createMemo` for
+ * caching when it's read multiple times per render.
+ */
+export const isCustomSpec = (): boolean => {
+  const canonical = applyPaddingScheme(
+    resolveDefault(useCipher()(), useCipherMode()(), mode()),
+    mode(),
+    usePaddingScheme()(),
+  );
+  return !deepEqualJson(spec(), canonical);
+};
+
 /** Test-only reset; production code uses the setters above. */
 export const __resetSpecForTests = (): void => {
   setModeSignal("encrypt");

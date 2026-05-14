@@ -82,6 +82,44 @@ h1 {
   font-size: 13px;
 }
 
+/* When the live spec has diverged from canonical, .cipher-name renders
+   "Custom (was AES-128)" instead of the canonical name, and the App
+   applies .is-custom via Solid's classList binding. Lift the colour out
+   of the muted grey so the divergence reads at a glance — same palette
+   as the --changed accent used elsewhere for modified state. */
+.cipher-name.is-custom {
+  color: var(--changed);
+}
+
+/* Wrapper that holds the cipher <select> plus the inline "reset" button
+   side-by-side under the "cipher" label column. The outer label is a
+   flex column (label text on top, content below); this row is a flex
+   row so the button sits to the right of the select. */
+.cipher-select-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* "Reset to canonical" affordance next to the cipher dropdown. Only
+   rendered when the spec has diverged. Sized small and low-weight so it
+   reads as a corrective action, not a primary control — and uses the
+   --changed accent that elsewhere flags edited state, so it's
+   immediately recognisable as paired with the "Custom (was X)" label. */
+.reset-spec-button {
+  background: transparent;
+  border: 1px solid var(--changed);
+  color: var(--changed);
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.reset-spec-button:hover:not(:disabled) {
+  background: var(--changed);
+  color: var(--bg);
+}
+
 .inputs {
   grid-area: inputs;
   display: flex;

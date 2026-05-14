@@ -100,6 +100,7 @@ import {
 } from "./stores/padding";
 import { registry } from "./stores/registry";
 import {
+  isCustomSpec,
   resetSpec,
   setCipher,
   setCipherMode,
@@ -151,6 +152,14 @@ export const App = () => {
   const cipher = useCipher();
   const cipherMode = useCipherMode();
   const viewMode = useViewMode();
+
+  // True when the live spec has diverged from the canonical default for
+  // the current selectors (param edits, palette inserts, deletions). Drives
+  // the "Custom (was AES-128)" indicator in the header + dropdown, and the
+  // visibility of the reset-to-canonical button next to the cipher selector.
+  // Memoised so the dropdown's per-option label callback doesn't recompute
+  // the deep-equal walk on every render.
+  const isCustom = createMemo(() => isCustomSpec());
 
   // Inputs — kept as strings (in whatever the current byte format is) so
   // the user can paste partial input without the field fighting them
@@ -736,7 +745,16 @@ export const App = () => {
     <div class="app">
       <header>
         <h1>Cryptographer</h1>
-        <span class="cipher-name">{spec().name}</span>
+        {/* When the live spec matches the canonical default for the current
+            selectors, show the spec's own name ("AES-128", "AES-128 ECB",
+            etc.). After any user edit (param tweak, palette insert, delete)
+            switch to "Custom (was <variant>)" so the user can see at a glance
+            that they've diverged. The variant comes from CIPHER_LABELS rather
+            than spec.name on purpose — the indicator next to the dropdown
+            uses the same source, keeping the two surfaces in sync. */}
+        <span class="cipher-name" classList={{ "is-custom": isCustom() }}>
+          {isCustom() ? `Custom (was ${CIPHER_LABELS[cipher()]})` : spec().name}
+        </span>
         <span class="muted small kbd-hint">←/→ step · Home/End jump · PgUp/PgDn round</span>
       </header>
 
@@ -754,13 +772,43 @@ export const App = () => {
         </label>
         <label>
           cipher
-          <select
-            value={cipher()}
-            onChange={(e) => changeCipher(e.currentTarget.value as Cipher)}
-            title="AES variant — 128/192/256 differ in key length and round count"
-          >
-            <For each={CIPHER_OPTIONS}>{(c) => <option value={c}>{CIPHER_LABELS[c]}</option>}</For>
-          </select>
+          <div class="cipher-select-row">
+            <select
+              value={cipher()}
+              onChange={(e) => changeCipher(e.currentTarget.value as Cipher)}
+              title="AES variant — 128/192/256 differ in key length and round count"
+            >
+              {/* The selected option's label flips to "Custom (was AES-128)"
+                  when the live spec has diverged from canonical. Picking the
+                  same value from the dropdown is a no-op (no onChange) — the
+                  reset button alongside is the action surface. We keep the
+                  reset-to-canonical out of the dropdown to avoid hijacking
+                  the cipher-switch semantics. */}
+              <For each={CIPHER_OPTIONS}>
+                {(c) => (
+                  <option value={c}>
+                    {c === cipher() && isCustom()
+                      ? `Custom (was ${CIPHER_LABELS[c]})`
+                      : CIPHER_LABELS[c]}
+                  </option>
+                )}
+              </For>
+            </select>
+            {/* Visible only when the spec has diverged. Single reset surface
+                — placed here next to the dropdown (the action surface) rather
+                than mirrored next to the header indicator, so it doesn't
+                compete with the muted cipher-name label. */}
+            <Show when={isCustom()}>
+              <button
+                type="button"
+                class="reset-spec-button"
+                onClick={() => resetSpec()}
+                title={`Discard edits and restore the canonical ${CIPHER_LABELS[cipher()]} spec`}
+              >
+                reset
+              </button>
+            </Show>
+          </div>
         </label>
         <label>
           mode of operation
