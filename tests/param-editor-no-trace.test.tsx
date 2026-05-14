@@ -216,9 +216,6 @@ describe("ParamEditor decoupled from TraceFrame — bug-2 fix", () => {
       hint?.textContent ?? "",
       "hint mentions IV use case (one of the three canonical aux-load shapes)",
     ).toContain("IV");
-    expect(
-      hint?.textContent ?? "",
-      "hint mentions counter use case",
-    ).toContain("counter");
+    expect(hint?.textContent ?? "", "hint mentions counter use case").toContain("counter");
   });
 });
