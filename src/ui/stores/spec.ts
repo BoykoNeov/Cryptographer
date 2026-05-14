@@ -45,6 +45,7 @@ import {
   type PaddingScheme,
   applyPaddingScheme,
   insertStepAfter,
+  removeStep,
   updateAllStepsByType,
   updateStepParams,
 } from "@/core/spec-mutations";
@@ -243,6 +244,31 @@ export const editAllStepsByType = (stepType: string, update: (params: Json) => J
  * lands — even though that frame is likely an ERROR frame for a leaf with
  * empty params.
  */
+/**
+ * Remove a leaf, group, or iterate (and all its descendants) from the
+ * live spec. Three UI affordances drive this:
+ *   - the × button rendered on hover at the corner of each graph node;
+ *   - the "Delete this step" button in the ParamEditor;
+ *   - the Delete/Backspace keyboard shortcut while a graph node is
+ *     focused.
+ *
+ * No-op + warn if the id doesn't resolve. Throwing on a stale id would
+ * be hostile — the user clicks delete on a node, the spec re-runs
+ * meanwhile and the leaf was already removed; we don't want a crash.
+ * `removeStep` (core) throws on stale ids by design; we catch here to
+ * make the boundary lenient.
+ */
+export const removeStepFromSpec = (stepId: string): void => {
+  try {
+    setSpec((s) => removeStep(s, stepId));
+  } catch (err) {
+    // Stale id or other failure — surface to the console for debugging
+    // but don't crash the UI. Real users won't see this; the path lights
+    // up only when delete races with another spec mutation.
+    console.warn(`removeStepFromSpec(${stepId}) failed:`, err);
+  }
+};
+
 export const insertStepIntoSpec = (
   stepType: string,
   anchor: { kind: "after"; stepId: string } | { kind: "root-append" },

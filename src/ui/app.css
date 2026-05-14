@@ -1955,6 +1955,49 @@ button:disabled {
   user-select: none;
 }
 
+/*
+ * Delete affordance on graph leaves + containers. Hidden by default so
+ * the canvas stays uncluttered; revealed when the user hovers (or
+ * focuses, via the keyboard tabindex elsewhere) the parent leaf/container.
+ *
+ * Why CSS-driven visibility instead of conditional render in TSX: the
+ * mount/unmount churn of revealing 100+ × buttons across a long cipher
+ * (every round leaf × every round group) would cost more than the
+ * always-rendered hidden SVG nodes do. opacity flips don't trigger
+ * Solid re-renders or DOM mutations — pure paint.
+ *
+ * The cursor is `pointer` (not `help` like the warning dot) because
+ * clicking it has a side effect (removes from spec), not just shows info.
+ */
+.graph-delete-button {
+  opacity: 0;
+  pointer-events: none;
+  cursor: pointer;
+  transition: opacity 0.12s ease-out;
+}
+.graph-leaf:hover .graph-delete-button,
+.graph-container:hover .graph-delete-button,
+.graph-delete-button:focus-within {
+  opacity: 1;
+  pointer-events: all;
+}
+
+.graph-delete-button-circle {
+  fill: var(--danger, #dc2626);
+  stroke: var(--bg, #0f1115);
+  stroke-width: 1;
+}
+
+.graph-delete-button-glyph {
+  fill: #ffffff;
+  /* Smaller than the warning glyph because `×` reads cleanly at 11–12px
+     where `!` needs the extra weight to pop. */
+  font-size: 12px;
+  font-weight: 700;
+  pointer-events: none;
+  user-select: none;
+}
+
 /* ─── Slice 8: step palette + drop affordance ────────────────────────────
    The graph view becomes a two-column layout in graph mode: palette on the
    left (sticky / fixed width), scrollable SVG canvas on the right. Linear

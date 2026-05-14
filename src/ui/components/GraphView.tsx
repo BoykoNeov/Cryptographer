@@ -53,7 +53,7 @@ import {
   useLayoutMap,
 } from "../stores/layout";
 import { registry } from "../stores/registry";
-import { insertStepIntoSpec, useSpec } from "../stores/spec";
+import { insertStepIntoSpec, removeStepFromSpec, useSpec } from "../stores/spec";
 import { getTrace, setFrame, useTraceVersion } from "../stores/trace";
 import {
   ALL_VIEW_DENSITIES,
@@ -1396,6 +1396,66 @@ const WarningGlyph = (props: {
   </g>
 );
 
+/**
+ * SVG delete affordance. Same chip pattern as the warning dot (matching
+ * 12-px circle + glyph) but tinted red and reading `×`. Hidden by default
+ * via CSS (`opacity: 0`), revealed on parent leaf/container hover. Click
+ * fires the supplied handler — typically `removeStepFromSpec(stepId)`.
+ *
+ * Stops propagation so the click doesn't bubble up to the parent
+ * `<g>`'s click/drag handlers (which would scrub the trace or start a
+ * drag, neither of which the user wants when they meant "delete").
+ */
+const DeleteGlyph = (props: {
+  x: number;
+  y: number;
+  /** Step id for the tooltip + testid. The handler is responsible for
+   *  resolving the id to a real removal. */
+  stepId: string;
+  onDelete: () => void;
+}) => (
+  <g
+    class="graph-delete-button"
+    data-testid={`graph-delete-${props.stepId}`}
+    transform={`translate(${props.x}, ${props.y})`}
+    onClick={(e) => {
+      e.stopPropagation();
+      props.onDelete();
+    }}
+    onPointerDown={(e) => {
+      // Stop pointerdown too, otherwise the parent's startNodeDrag
+      // claims the gesture and the click handler never fires (sub-
+      // threshold release on a moved-but-not-far-enough pointer is
+      // possible but uneven).
+      e.stopPropagation();
+    }}
+    onKeyDown={(e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        e.stopPropagation();
+        props.onDelete();
+      }
+    }}
+  >
+    <title>Delete {props.stepId}</title>
+    <circle
+      class="graph-delete-button-circle"
+      cx={WARNING_DOT_SIZE / 2}
+      cy={WARNING_DOT_SIZE / 2}
+      r={WARNING_DOT_SIZE / 2}
+    />
+    <text
+      class="graph-delete-button-glyph"
+      x={WARNING_DOT_SIZE / 2}
+      y={WARNING_DOT_SIZE / 2 + 0.5}
+      text-anchor="middle"
+      dominant-baseline="central"
+    >
+      ×
+    </text>
+  </g>
+);
+
 const LeafRect = (props: {
   stepId: string;
   label: string;
@@ -1457,12 +1517,22 @@ const LeafRect = (props: {
       }`}
       data-drop-anchor={props.dropAnchorId}
       data-state-shape={props.stateShape}
+      // `tabindex="0"` puts the leaf in the natural keyboard tab order so
+      // Delete/Backspace can target the focused node. Replicas are
+      // skipped — they're visual references, not editable nodes.
+      tabindex={props.isReplica ? undefined : 0}
       onPointerDown={props.onPointerDown}
       onClick={props.draggable ? undefined : props.onClick}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           props.onClick();
+        } else if (e.key === "Delete" && !props.isReplica) {
+          // Delete-only by design — Backspace is reserved for future
+          // navigation/back-style use so we don't bind it to a
+          // destructive action.
+          e.preventDefault();
+          removeStepFromSpec(props.stepId);
         }
       }}
     >
@@ -1495,6 +1565,18 @@ const LeafRect = (props: {
           x={props.box.x + props.box.w - WARNING_DOT_SIZE - WARNING_DOT_INSET}
           y={props.box.y + WARNING_DOT_INSET}
           warnings={props.warnings}
+        />
+      </Show>
+      {/* Delete affordance — top-LEFT corner (warnings take top-right).
+          Suppressed on replicas: a replica is a visual reference to its
+          source, not an editable node. Deleting the source via its own
+          × naturally removes the replica too on next derive. */}
+      <Show when={!props.isReplica}>
+        <DeleteGlyph
+          x={props.box.x + WARNING_DOT_INSET}
+          y={props.box.y + WARNING_DOT_INSET}
+          stepId={props.stepId}
+          onDelete={() => removeStepFromSpec(props.stepId)}
         />
       </Show>
     </g>
@@ -1539,6 +1621,16 @@ const ContainerRect = (props: {
       class={`graph-container graph-container-${props.container.kind}`}
       data-drop-anchor={props.container.id}
       data-state-shape={props.stateShape}
+      tabindex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Delete") {
+          // Delete-only by design — Backspace is reserved for future
+          // navigation use. Removes the container + every descendant
+          // (`removeStep` is tree-aware in core/spec-mutations.ts).
+          e.preventDefault();
+          removeStepFromSpec(props.container.id);
+        }
+      }}
     >
       <title>
         {props.container.kind}: {props.container.id}
@@ -1619,6 +1711,16 @@ const ContainerRect = (props: {
           return <WarningGlyph x={x} y={y} warnings={props.warnings} />;
         })()}
       </Show>
+      {/* Delete affordance for the container — left edge of the header
+          band, before the label. Removes the container + all descendants
+          (`removeStep` is tree-aware via `transformParentArray`). Same
+          hover-reveal pattern as the leaf's × button. */}
+      <DeleteGlyph
+        x={props.box.x + WARNING_DOT_INSET}
+        y={props.box.y + (HEADER_H - WARNING_DOT_SIZE) / 2}
+        stepId={props.container.id}
+        onDelete={() => removeStepFromSpec(props.container.id)}
+      />
       {/* Chevron hit area on the right side of the header band. Clicking
           toggles collapse via the layout store. */}
       <g

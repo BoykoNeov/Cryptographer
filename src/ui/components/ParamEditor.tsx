@@ -15,7 +15,7 @@
 import { findStep } from "@/core/spec-mutations";
 import type { Json, StepLeaf, TraceFrame } from "@/core/types";
 import { For, Match, Show, Switch, createSignal } from "solid-js";
-import { editAllStepsByType, editStepParams, useSpec } from "../stores/spec";
+import { editAllStepsByType, editStepParams, removeStepFromSpec, useSpec } from "../stores/spec";
 import { ByteCellInput } from "./ByteCellInput";
 import { MatrixEditor } from "./MatrixEditor";
 import { SboxEditor } from "./SboxEditor";
@@ -131,6 +131,25 @@ export const ParamEditor = (props: Props) => {
               <AuxCopyBlock step={getStep()} />
             </Match>
           </Switch>
+
+          {/* Delete affordance. Sits at the bottom of the editor so it
+              doesn't compete with per-block "Apply to all" rows. No
+              confirmation dialog — the cipher pedagogy is "experiment
+              freely, see what breaks"; an accidental delete is recovered
+              by dragging the step back in from the palette. The button
+              is intentionally low-emphasis (no .danger class) to keep
+              the editor feeling like a workbench, not a tribunal. */}
+          <div class="param-editor-footer">
+            <button
+              type="button"
+              class="param-editor-delete"
+              data-testid="param-editor-delete"
+              onClick={() => removeStepFromSpec(getStep().id)}
+              title={`Remove ${getStep().id} from the spec`}
+            >
+              Delete this step
+            </button>
+          </div>
         </div>
       )}
     </Show>

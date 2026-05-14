@@ -46,6 +46,12 @@ internalized.
 - **Click a leaf** to focus the linear trace's scrubber on the matching
   frame. The param panel below the graph shows that step's parameters
   for in-place editing.
+- **Delete a node** three ways: hover any leaf or container and click
+  the red `×` button at its top-left corner; or focus a node (click it)
+  and press <kbd>Delete</kbd>; or open the param panel below the graph
+  and use the "Delete this step" button. Deleting a container removes
+  all its descendants too. No undo — drag the step back from the
+  palette if you regret it.
 
 ## Toolbar
 
