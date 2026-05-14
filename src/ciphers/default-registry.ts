@@ -18,6 +18,7 @@ import { computeBlockCount, computeBlockCountDoc } from "../steps/compute-block-
 import { concatBlocks, concatBlocksDoc } from "../steps/concat-blocks";
 import { iso78164Pad, iso78164PadDoc } from "../steps/iso7816-4-pad";
 import { iso78164Unpad, iso78164UnpadDoc } from "../steps/iso7816-4-unpad";
+import { ivLoad, ivLoadDoc } from "../steps/iv-load";
 import {
   keyExpansion,
   keyExpansionDoc,
@@ -45,7 +46,9 @@ import { speckKeySchedule, speckKeyScheduleDoc } from "../steps/speck-key-schedu
 import { speckRound, speckRoundDoc } from "../steps/speck-round";
 import { speckRoundInverse, speckRoundInverseDoc } from "../steps/speck-round-inverse";
 import { splitBlocks, splitBlocksDoc } from "../steps/split-blocks";
+import { stateToAux, stateToAuxDoc } from "../steps/state-to-aux";
 import { storeBlock, storeBlockDoc } from "../steps/store-block";
+import { xorAuxIntoState, xorAuxIntoStateDoc } from "../steps/xor-aux-into-state";
 import { zeroPad, zeroPadDoc } from "../steps/zero-pad";
 import { zeroUnpad, zeroUnpadDoc } from "../steps/zero-unpad";
 
@@ -104,6 +107,21 @@ export const buildDefaultRegistry = (): StepRegistry => {
   r.register("generic.aux-load@1", { executor: auxLoad, doc: auxLoadDoc });
   r.register("generic.aux-xor@1", { executor: auxXor, doc: auxXorDoc });
   r.register("generic.aux-copy@1", { executor: auxCopy, doc: auxCopyDoc });
+  // ─── Chaining-mode primitives (Phase 2 of multi-block AES — CBC) ───────
+  // Three step types that compose into a CBC body inside the iterate
+  // loop, and generalize to OFB/CFB without rewrites:
+  //   • iv-load: Uint8Array aux → MatrixState aux (one-shot, pre-loop).
+  //   • xor-aux-into-state: state ⊕= aux[name]; the chaining XOR.
+  //   • state-to-aux: clone state into aux[name]; the chain snapshot.
+  // The post-AES decrypt chain-advance (chain := next-chain) reuses the
+  // existing `generic.aux-copy@1` — no fourth primitive needed. See
+  // `aes-cbc-builder.ts` for how they assemble.
+  r.register("generic.iv-load@1", { executor: ivLoad, doc: ivLoadDoc });
+  r.register("generic.xor-aux-into-state@1", {
+    executor: xorAuxIntoState,
+    doc: xorAuxIntoStateDoc,
+  });
+  r.register("generic.state-to-aux@1", { executor: stateToAux, doc: stateToAuxDoc });
   // ─── Speck (ARX block cipher, second cipher family) ────────────────────
   // Three step types complete a full Speck cipher: a key-schedule that
   // expands an m-word master key into `rounds` round-key words, a forward

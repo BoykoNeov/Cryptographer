@@ -142,6 +142,15 @@ export const ParamEditor = (props: Props) => {
             <Match when={getStep().type === "generic.aux-copy@1"}>
               <AuxCopyBlock step={getStep()} />
             </Match>
+            <Match when={getStep().type === "generic.iv-load@1"}>
+              <IvLoadBlock step={getStep()} />
+            </Match>
+            <Match when={getStep().type === "generic.xor-aux-into-state@1"}>
+              <XorAuxIntoStateBlock step={getStep()} />
+            </Match>
+            <Match when={getStep().type === "generic.state-to-aux@1"}>
+              <StateToAuxBlock step={getStep()} />
+            </Match>
           </Switch>
 
           {/* Delete affordance. Sits at the bottom of the editor so it
@@ -848,6 +857,112 @@ const AuxCopyBlock = (props: { step: StepLeaf }) => {
             value={params().to ?? ""}
             placeholder="aux key to copy TO"
             onCommit={(v) => writeParams({ to: v })}
+          />
+        </dd>
+      </div>
+    </dl>
+  );
+};
+
+// ─── Phase-2 chaining-mode primitives ─────────────────────────────────────
+//
+// Three blocks for the iv-load / xor-aux-into-state / state-to-aux step
+// types that compose into CBC's per-block chaining math. Same authoring
+// model as the Slice 10 aux primitives: every leaf is expected to point
+// at distinct slots, so no ApplyAllRow. The graceful missing-aux semantic
+// is in the executors — leaving a field empty produces an orange `!`
+// glyph on the graph node, not a runtime throw.
+
+// iv-load: { ivAuxName: string, outAuxName: string }. Bytes-in-aux to
+// matrix-in-aux bridge, used once before the iterate loop in CBC/OFB/CFB
+// specs. The labels distinguish the source (typically `iv`, seeded by the
+// App from the IvInput field) from the destination (typically `chain`).
+const IvLoadBlock = (props: { step: StepLeaf }) => {
+  const params = (): { ivAuxName?: string; outAuxName?: string } => props.step.params as never;
+
+  const writeParams = (patch: Record<string, Json>) => {
+    editStepParams(props.step.id, {
+      ...(props.step.params as Record<string, Json>),
+      ...patch,
+    });
+  };
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>IV aux (read, Uint8Array 16)</dt>
+        <dd>
+          <AuxNameInput
+            value={params().ivAuxName ?? ""}
+            placeholder="aux key holding 16 IV bytes — typically iv"
+            onCommit={(v) => writeParams({ ivAuxName: v })}
+          />
+        </dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Output aux (write, MatrixState)</dt>
+        <dd>
+          <AuxNameInput
+            value={params().outAuxName ?? ""}
+            placeholder="aux key to publish matrix — typically chain"
+            onCommit={(v) => writeParams({ outAuxName: v })}
+          />
+        </dd>
+      </div>
+    </dl>
+  );
+};
+
+// xor-aux-into-state: { auxName: string }. The chaining XOR — state ⊕=
+// aux[name]. One slot only (the operand); the state side is implicit.
+const XorAuxIntoStateBlock = (props: { step: StepLeaf }) => {
+  const params = (): { auxName?: string } => props.step.params as never;
+
+  const writeParams = (patch: Record<string, Json>) => {
+    editStepParams(props.step.id, {
+      ...(props.step.params as Record<string, Json>),
+      ...patch,
+    });
+  };
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>Aux (read, MatrixState)</dt>
+        <dd>
+          <AuxNameInput
+            value={params().auxName ?? ""}
+            placeholder="aux key to XOR INTO state — typically chain"
+            onCommit={(v) => writeParams({ auxName: v })}
+          />
+        </dd>
+      </div>
+    </dl>
+  );
+};
+
+// state-to-aux: { auxName: string }. Snapshot the running state into an
+// aux slot. Mirror of XorAuxIntoStateBlock — single slot, no orphan
+// reads (the step has no aux inputs).
+const StateToAuxBlock = (props: { step: StepLeaf }) => {
+  const params = (): { auxName?: string } => props.step.params as never;
+
+  const writeParams = (patch: Record<string, Json>) => {
+    editStepParams(props.step.id, {
+      ...(props.step.params as Record<string, Json>),
+      ...patch,
+    });
+  };
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>Aux (write)</dt>
+        <dd>
+          <AuxNameInput
+            value={params().auxName ?? ""}
+            placeholder="aux key to snapshot state into"
+            onCommit={(v) => writeParams({ auxName: v })}
           />
         </dd>
       </div>
