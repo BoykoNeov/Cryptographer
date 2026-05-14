@@ -17,9 +17,38 @@ Per user's chosen design (2026-05-14 session, advisor-consulted):
 
 ## Status
 
-**Blocked by `docs/plans/trace-coupling-bug-fix.md`.** The bug-fix plan
-removes the no-trace-before-Run failure mode that would make duplicate-
-round changes hard to test interactively. Land that first.
+**SHIPPED 2026-05-14.** All six phases landed on `main` across six
+commits. 62 new tests added; project total now 772 across 67 files.
+
+Notable design adjustments made during implementation (vs. the original
+plan):
+
+  - **Phase 4 architecture flipped to a two-spec store.** The plan
+    sketched a `pendingCounterpart` stash consumed on mode flip;
+    advisor caught three bugs in that design (edits-clearing-
+    counterpart, stacking-against-canonical, bidirectional swap-on-
+    flip). Replaced with `specs: { encrypt, decrypt }` simultaneously
+    held in the store. Cleaner invariants, smaller test surface for
+    the bugs the stash design would've needed to dodge.
+  - **`setMode` no longer resets to canonical** (consequence of the
+    two-spec store). Each mode keeps its own customizations across
+    flips. Documented in CHANGELOG as a behavior change.
+  - **Rcon stays as a param in `@2`**, extended on overflow via
+    `xtime`. The plan considered dropping it; keeping it preserves
+    visible/editable Rcon in the ParamEditor (pedagogical bias).
+  - **`@1` stays the canonical spec type.** The mutator morphs
+    `@1 → @2` at duplicate time. Canonical specs (aes-128.ts etc.)
+    still emit `@1` so saved documents with `@1` round-trip
+    byte-identically.
+  - **UI gate `isRoundDuplicatable`** suppresses the duplicate button
+    on rounds where auto-mirror has no counterpart (final encrypt
+    round; `inv-round.0`). Cleaner than letting the mutator best-
+    effort silently fail.
+
+Out of scope items from the plan remain out of scope:
+  - Speck / Serpent duplicate-round.
+  - Feistel-aware rerouting.
+  - Duplicating non-round groups.
 
 ## Context
 

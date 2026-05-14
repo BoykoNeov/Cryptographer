@@ -1682,6 +1682,14 @@ const ContainerRect = (props: {
   // protecting against. Depends on `consts.CONTAINER_PAD` (density-derived)
   // for the available-width arithmetic, so it also tracks density flips.
   const labelTL = createMemo(() => labelTextLength(props.container, props.box.w, props.consts));
+  // When the duplicate button renders next to the delete chip, the label
+  // text needs to start further right or it sits underneath the chip on
+  // hover. The delete chip alone is tolerated (existing behavior); a
+  // SECOND chip pushes the overlap past readability. Memoize so the
+  // shift recomputes only when the spec/container id changes.
+  const labelLeftOffset = createMemo(() =>
+    isRoundDuplicatable(props.container.id) ? WARNING_DOT_SIZE + 6 : 0,
+  );
   return (
     <g
       class={`graph-container graph-container-${props.container.kind}`}
@@ -1730,7 +1738,7 @@ const ContainerRect = (props: {
       />
       <text
         class="graph-container-label"
-        x={props.box.x + props.consts.CONTAINER_PAD}
+        x={props.box.x + props.consts.CONTAINER_PAD + labelLeftOffset()}
         y={props.box.y + HEADER_H / 2 + 1}
         dominant-baseline="central"
         textLength={labelTL()}
