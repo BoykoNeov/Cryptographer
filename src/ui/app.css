@@ -28,7 +28,18 @@ html,
 
 .app {
   display: grid;
-  grid-template-columns: 1fr 320px;
+  /* `minmax(0, 1fr)` instead of the default `1fr` (which expands to
+     `minmax(auto, 1fr)`) so the trace column can't be blown out by an
+     intrinsically wide child — chiefly the graph-view SVG canvas, which
+     for AES-128 with all 10 round groups expanded easily exceeds the
+     viewport width. Without this clamp, the column grows to fit the
+     SVG, which forces the entire page to scroll horizontally and drags
+     the sidebar + ParamEditor out of view alongside the canvas. The
+     `.graph-view` itself already owns `overflow: auto`, but that's
+     only effective once the ancestor chain stops expanding past the
+     viewport — see `.trace-view` and `.graph-view-layout` below for
+     the matching `min-width: 0` rules on the flex chain. */
+  grid-template-columns: minmax(0, 1fr) 320px;
   grid-template-rows: auto auto auto auto 1fr auto;
   grid-template-areas:
     "header header"
@@ -239,6 +250,16 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  /* Belt-and-braces with `.app`'s `minmax(0, 1fr)` column: as a grid
+     item, the default `min-width: auto` would let a wide child (the
+     graph-view SVG) push this section past its grid track. Setting
+     `min-width: 0` lets the section shrink to whatever the grid track
+     allots, so horizontal overflow stays contained inside the
+     `.graph-view` wrapper below — the canvas scrolls internally and
+     the sibling ParamEditor pane (rendered right after `<GraphView />`)
+     stays anchored to the viewport instead of being dragged off-screen
+     with the canvas. */
+  min-width: 0;
 }
 
 .frame-header {
@@ -2111,6 +2132,17 @@ button:disabled {
   display: flex;
   align-items: stretch;
   gap: 8px;
+  /* Third link in the min-width:0 chain (`.app` grid → `.trace-view`
+     flex column → this row). As a flex item itself (a child of the
+     vertical `.trace-view` flex column), the default `min-width: auto`
+     would let our content's intrinsic width win and push the column —
+     and then the grid track — past the viewport. Clamping to 0 here
+     means the SVG's overflow is finally contained by `.graph-view`'s
+     own `overflow: auto`. Net effect: only the canvas scrolls
+     horizontally when wide (e.g. AES-128 with all rounds expanded);
+     the palette to its left stays pinned at column 0, and the
+     ParamEditor below stays anchored to the viewport. */
+  min-width: 0;
 }
 
 .graph-view-layout > .graph-view {
