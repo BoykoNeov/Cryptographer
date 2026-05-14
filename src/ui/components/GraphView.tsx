@@ -54,7 +54,7 @@ import {
 } from "../stores/layout";
 import { registry } from "../stores/registry";
 import { insertStepIntoSpec, removeStepFromSpec, useSpec } from "../stores/spec";
-import { getTrace, setFrame, useTraceVersion } from "../stores/trace";
+import { getTrace, setSelectedStepId, useTraceVersion } from "../stores/trace";
 import {
   ALL_VIEW_DENSITIES,
   DENSITY_SCALE,
@@ -803,24 +803,26 @@ export const GraphView = () => {
   });
 
   /**
-   * Click handler for a leaf node. Move the scrubber to the first trace
-   * frame whose stepId matches the canonical (suffix-stripped) leaf id.
-   * Iterate-body leaves have `:b{i}` suffixed frame ids — we just match
-   * the first iteration so the user lands somewhere sensible.
+   * Click handler for a leaf node. Update the editor's selection signal —
+   * `setSelectedStepId` is the single boundary that BOTH binds the
+   * ParamEditor to this step AND moves the scrubber if the step has a
+   * matching trace frame.
+   *
+   * Two behaviors are intentionally split this way:
+   *   - Selection ALWAYS happens, even when no frame exists for `stepId`.
+   *     That's the bug-2 fix: a freshly-dropped step is editable
+   *     immediately, before the debounced auto-rerun has produced a new
+   *     trace. Same for a step that lives downstream of an executor that
+   *     threw and never reached this leaf.
+   *   - Scrubber move happens only if a frame matches (the iterate-body
+   *     `:b{i}` suffix is stripped inside `setSelectedStepId`). Replica
+   *     ids (`${source}@->${consumer}`) are resolved at the call site —
+   *     the caller passes the source's canonical id, so this function
+   *     only ever sees real stepIds.
    */
   const handleLeafClick = (stepId: string): void => {
     void version();
-    const t = getTrace();
-    if (!t) return;
-    // Replica ids are not real stepIds (`${source}@->${consumer}`); their
-    // graph node carries `replicaOf` with the source's canonical id. The
-    // caller resolves that to a real stepId before getting here.
-    const idx = t.frames.findIndex((f) => {
-      const colonIdx = f.stepId.indexOf(":b");
-      const canonical = colonIdx >= 0 ? f.stepId.slice(0, colonIdx) : f.stepId;
-      return canonical === stepId;
-    });
-    if (idx >= 0) setFrame(idx);
+    setSelectedStepId(stepId);
   };
 
   /**

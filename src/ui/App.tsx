@@ -110,7 +110,13 @@ import {
   useMode,
   useSpec,
 } from "./stores/spec";
-import { getTrace, setTrace, useFrameIndex, useTraceVersion } from "./stores/trace";
+import {
+  getTrace,
+  setTrace,
+  useFrameIndex,
+  useSelectedStepId,
+  useTraceVersion,
+} from "./stores/trace";
 import {
   buildShareHash,
   decodeHashToDocument,
@@ -478,7 +484,24 @@ export const App = () => {
   onMount(() => {
     if (typeof window === "undefined") return; // SSR / non-browser test env
     const payload = extractHashPayload(window.location.hash);
-    if (payload === null || payload.length === 0) return;
+    if (payload === null || payload.length === 0) {
+      // No URL-hash doc to decode. Fire a boot-time run with the default
+      // selectors so a trace exists before the user touches anything.
+      //
+      // This fixes the trace-coupling bug (`docs/plans/trace-coupling-bug-
+      // fix.md`): without a trace, palette drops produced no warning
+      // glyphs (validateGraph walks frames), the ParamEditor couldn't
+      // resolve a clicked leaf (it took a TraceFrame, not a stepId), and
+      // the replicate-fanout toggle had no aux edges to operate on.
+      // Boot-running with the canonical default spec makes the graph view
+      // immediately interactive on app load.
+      //
+      // The hash-decode branch below already calls `run()` via
+      // `applyDocument`, so we only need this in the no-hash path —
+      // doubling up would be wasted work even though `pushSnapshot` dedups.
+      run();
+      return;
+    }
     void (async () => {
       const result = await decodeHashToDocument(payload);
       if (!result.ok) {
@@ -685,6 +708,13 @@ export const App = () => {
   // Reactive derived values for the trace view.
   const frameIndex = useFrameIndex();
   const version = useTraceVersion();
+  // Editor-surface selection. Drives both ParamEditor mounts (linear +
+  // graph) so the editor binds to whichever step the user last touched,
+  // regardless of whether that step has an executed trace frame backing
+  // it. Kept in sync with the scrubber by `setFrame` + `setTrace` over in
+  // `stores/trace.ts`, so linear-view scrubbing continues to update the
+  // editor without any per-callsite plumbing here.
+  const selectedStepId = useSelectedStepId();
 
   const currentFrame = createMemo(() => {
     void version();
@@ -1114,8 +1144,13 @@ export const App = () => {
                   {/* Human-readable explanation of what this step does. */}
                   <StepDescription frame={frame()} />
 
-                  {/* Editable params for the current step. */}
-                  <ParamEditor frame={frame()} />
+                  {/* Editable params for the current step. Reads the
+                      shared selection signal (kept in sync with the
+                      scrubber by stores/trace.ts) rather than the frame
+                      object — the editor must remain bound even when the
+                      selected step has no trace frame (palette-dropped or
+                      downstream of an upstream throw). */}
+                  <ParamEditor stepId={selectedStepId()} />
                 </>
               )}
             </Show>
@@ -1123,20 +1158,20 @@ export const App = () => {
 
           <Match when={viewMode() === "graph"}>
             <GraphView />
-            {/* Slice 10 follow-up — the graph view used to omit the param
-                editor, which left palette-dropped aux primitives
-                configurable only after switching to linear mode (the
-                user had to tab-switch every edit). Render the editor
-                below the graph so clicking a graph node lights up the
-                same editing surface linear mode shows. Same
-                `currentFrame()` signal feeds both; clicking a leaf
-                calls `setFrame` through `handleLeafClick` in GraphView,
-                the signal updates, and this editor reactively
-                re-renders. */}
-            <Show when={currentFrame()}>
-              {(graphFrame) => (
+            {/* Slice 10 + trace-coupling-bug-fix follow-up: the graph
+                view's editor pane reads the shared `selectedStepId`
+                signal rather than the trace frame. Clicking a leaf in
+                GraphView calls `setSelectedStepId` (which both binds the
+                editor AND moves the scrubber if a frame matches), so the
+                editor lights up even for steps that were just dropped
+                from the palette and haven't been re-executed yet. The
+                pane wrapper renders whenever there is a selection — on
+                app boot the boot-run sets selectedStepId to the first
+                frame's stepId, so the editor is visible immediately. */}
+            <Show when={selectedStepId()}>
+              {(graphStepId) => (
                 <div class="graph-param-editor-pane">
-                  <ParamEditor frame={graphFrame()} />
+                  <ParamEditor stepId={graphStepId()} />
                 </div>
               )}
             </Show>

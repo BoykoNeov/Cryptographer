@@ -184,21 +184,10 @@ describe("ParamEditor — Delete button", () => {
     expect(targetStep).not.toBeNull();
     if (!targetStep) throw new Error("unreachable");
 
-    // Synthesize the frame the App.tsx wires into ParamEditor — it
-    // only needs `stepId` to be resolvable via findStep.
-    const frame = {
-      index: 0,
-      path: ["round.1"],
-      stepId: targetId,
-      stepType: targetStep.type,
-      params: targetStep.params,
-      stateBefore: { shape: "matrix4x4-bytes" as const, bytes: new Uint8Array(16) },
-      stateAfter: { shape: "matrix4x4-bytes" as const, bytes: new Uint8Array(16) },
-      auxRead: new Map(),
-      auxWritten: new Map(),
-    };
-
-    const { container } = render(() => <ParamEditor frame={frame} />);
+    // ParamEditor takes a stepId directly (the trace-coupling fix
+    // decoupled the editor from TraceFrame so palette-dropped steps with
+    // no frame yet are still editable). We just pass the target id.
+    const { container } = render(() => <ParamEditor stepId={targetId} />);
     const btn = container.querySelector<HTMLButtonElement>('[data-testid="param-editor-delete"]');
     expect(btn).not.toBeNull();
     if (!btn) throw new Error("unreachable");

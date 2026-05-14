@@ -13,7 +13,7 @@
  */
 
 import { findStep } from "@/core/spec-mutations";
-import type { Json, StepLeaf, TraceFrame } from "@/core/types";
+import type { Json, StepLeaf } from "@/core/types";
 import { For, Match, Show, Switch, createSignal } from "solid-js";
 import { editAllStepsByType, editStepParams, removeStepFromSpec, useSpec } from "../stores/spec";
 import { ByteCellInput } from "./ByteCellInput";
@@ -22,20 +22,28 @@ import { SboxEditor } from "./SboxEditor";
 import { ShiftsEditor } from "./ShiftsEditor";
 
 type Props = {
-  /** The frame whose step we should be editing — typically the active frame. */
-  frame: TraceFrame | null;
+  /**
+   * The id of the step we should be editing. Decoupled from the trace
+   * frame so freshly-inserted steps (palette drops, with empty params and
+   * no executed frame yet) are immediately editable, and so steps that
+   * never executed (e.g. an upstream step threw) remain reachable through
+   * a graph-view click. The id is resolved against the live spec via
+   * `findStep`, so the spec — not the trace — is the source of truth.
+   */
+  stepId: string | null;
 };
 
 export const ParamEditor = (props: Props) => {
   const spec = useSpec();
 
-  // Resolve the frame's stepId back to the live spec leaf. We don't trust
-  // the frame's own params because the spec may have been edited since the
-  // frame was emitted — the spec is the source of truth.
+  // Resolve the stepId to a live spec leaf. Returns null if the id is null
+  // or no longer present in the spec (e.g. the user deleted it from
+  // another surface). The Show below renders the "no step selected"
+  // fallback in both cases.
   const step = (): StepLeaf | null => {
-    const f = props.frame;
-    if (!f) return null;
-    return findStep(spec(), f.stepId);
+    const id = props.stepId;
+    if (!id) return null;
+    return findStep(spec(), id);
   };
 
   const matchingSteps = (): number => {

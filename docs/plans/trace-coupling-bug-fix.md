@@ -1,5 +1,8 @@
 # Trace-coupling bug fix
 
+**Status: shipped 2026-05-14.** Tests `trace-coupling-repro.test.tsx`
+(Phase 1) and `param-editor-no-trace.test.tsx` (Phase 3) pin the fix.
+
 Three editor-flow bugs share one root cause: the graph view's affordances
 (orphan warnings, ParamEditor selection, replicate fan-out) all depend on
 a trace, but the trace doesn't run before the user clicks "Run" for the
@@ -10,6 +13,24 @@ a follow-up polish pass.
 This plan implements **option 1 + option 3a** from the design discussion
 (2026-05-14 session, advisor-consulted). Option 3b (static spec validator)
 is intentionally deferred until the Feistel branching data model settles.
+
+### Implementation note: `selectedStepId` lives in `stores/trace.ts`
+
+Phase 3 added a `selectedStepId` signal alongside `frameIndex` (rather
+than a new `stores/selection.ts`). Three invariants the implementation
+enforces — pinned in this paragraph because they're load-bearing:
+
+1. `setFrame(n)` writes `selectedStepId` to the new frame's canonical
+   stepId (`:b{i}` suffix stripped). All linear-view scrubbers funnel
+   through here, so the editor stays in sync with no per-callsite plumbing.
+2. `setTrace(...)` prefers the *current* `selectedStepId` over the
+   scrubber's previous frame stepId when computing where to land the
+   scrubber. This is the post-advisor fix: without it, a palette-dropped
+   step that the user clicked (but had no frame yet) would have its
+   selection silently overwritten 200ms later by the auto-rerun's setTrace.
+3. `setTrace(...)` only re-initializes `selectedStepId` when the prior
+   selection was null OR didn't survive into the new trace (cipher swap,
+   step removed). Otherwise it leaves the user's explicit anchor alone.
 
 ## Context
 

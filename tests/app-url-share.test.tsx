@@ -38,7 +38,7 @@ import { __resetHistoryForTests } from "@/ui/stores/history";
 import { __resetLayoutsForTests, getLayoutForSpec } from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
 import { __resetSpecForTests, useSpec } from "@/ui/stores/spec";
-import { __resetTraceForTests, getTrace } from "@/ui/stores/trace";
+import { __resetTraceForTests } from "@/ui/stores/trace";
 import { buildShareHash, encodeDocumentToHash } from "@/ui/stores/url-share";
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -324,8 +324,11 @@ describe("App — Boot decode (Slice 7)", () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 20));
     expect(useCipher()()).toBe(cipherBefore);
     expect(container.querySelector(".error")).toBeNull();
-    // Trace store untouched (boot decode would have called run() if it
-    // applied a doc).
-    expect(getTrace()).toBeNull();
+    // (Note: pre-2026-05-14 this also asserted `getTrace() === null` as a
+    // side-channel signal that boot decode hadn't applied a doc. The
+    // trace-coupling fix added an unconditional boot-time `run()` for the
+    // no-hash branch, so the trace is now non-null after any App render.
+    // The substantive signals — cipher unchanged + no error — still pin
+    // the no-hash-decode-applied invariant.)
   });
 });
