@@ -404,13 +404,21 @@ const layoutNode = (
     // child) directly above their consumer in the column. The liftH
     // shift on innerY above guarantees this y lands inside the group's
     // padded inner area, just below the header.
+    //
+    // Per-consumer index counter — see `layoutRoot` for the full rationale.
+    // Multiple sources targeting the same consumer (e.g. dual `always`
+    // replication overrides) would otherwise stack at identical
+    // coordinates; step subsequent replicas RIGHT by LEAF_W + FLOW_GAP.
+    const liftedReplicaIndexByConsumer = new Map<string, number>();
     for (const replicaId of liftedReplicas) {
       const consumerId = replicas.consumerOf.get(replicaId);
       if (consumerId === undefined) continue;
       const consumerBox = out.get(consumerId);
       if (!consumerBox) continue;
+      const idx = liftedReplicaIndexByConsumer.get(consumerId) ?? 0;
+      liftedReplicaIndexByConsumer.set(consumerId, idx + 1);
       out.set(replicaId, {
-        x: consumerBox.x,
+        x: consumerBox.x + idx * (consts.LEAF_W + consts.FLOW_GAP),
         y: consumerBox.y - consts.LEAF_H - consts.STACK_GAP,
         w: consts.LEAF_W,
         h: consts.LEAF_H,
@@ -463,15 +471,23 @@ const layoutNode = (
   // lifted innerY guarantees consumer.y - LEAF_H - STACK_GAP lands at
   // the OLD innerY (the natural top of the inner content), which is
   // inside the container's box.
+  //
+  // Per-consumer index counter — see `layoutRoot` for the full rationale.
+  // Multiple sources targeting the same consumer (e.g. dual `always`
+  // replication overrides) would otherwise stack at identical
+  // coordinates; step subsequent replicas RIGHT by LEAF_W + FLOW_GAP.
+  const iterateReplicaIndexByConsumer = new Map<string, number>();
   for (const childId of container.childIds) {
     if (!replicas.isReplica.has(childId)) continue;
     const consumerId = replicas.consumerOf.get(childId);
     if (consumerId === undefined) continue;
     const consumerBox = out.get(consumerId);
     if (!consumerBox) continue;
+    const idx = iterateReplicaIndexByConsumer.get(consumerId) ?? 0;
+    iterateReplicaIndexByConsumer.set(consumerId, idx + 1);
     const replicaY = consumerBox.y - consts.LEAF_H - consts.STACK_GAP;
     out.set(childId, {
-      x: consumerBox.x,
+      x: consumerBox.x + idx * (consts.LEAF_W + consts.FLOW_GAP),
       y: replicaY,
       w: consts.LEAF_W,
       h: consts.LEAF_H,
@@ -548,15 +564,29 @@ export const layoutRoot = (
   // for non-pinned consumers, so the replica row sits flush against the
   // top margin (no negative-y boxes; canvas dimensions don't need
   // re-extension).
+  //
+  // Per-consumer index counter: multiple distinct sources can target the
+  // same consumer (e.g. setting both `compute-block-count` and
+  // `split-blocks` to "always" in the replication-overrides panel yields
+  // two replicas pointing at the iterate). Without the counter the second
+  // replica lands directly on top of the first — same x, same y — and only
+  // one is visible / clickable. We step each subsequent replica RIGHT by
+  // LEAF_W + FLOW_GAP so they tile horizontally above the consumer.
+  // The same pattern repeats in `layoutNode`'s group + iterate branches —
+  // three sites, one fix each, because each layout pass owns its own
+  // replica-placement loop.
+  const rootReplicaIndexByConsumer = new Map<string, number>();
   for (const id of graph.rootIds) {
     if (!replicas.isReplica.has(id)) continue;
     const consumerId = replicas.consumerOf.get(id);
     if (consumerId === undefined) continue;
     const consumerBox = boxes.get(consumerId);
     if (!consumerBox) continue;
+    const idx = rootReplicaIndexByConsumer.get(consumerId) ?? 0;
+    rootReplicaIndexByConsumer.set(consumerId, idx + 1);
     const replicaY = consumerBox.y - consts.LEAF_H - consts.STACK_GAP;
     boxes.set(id, {
-      x: consumerBox.x,
+      x: consumerBox.x + idx * (consts.LEAF_W + consts.FLOW_GAP),
       y: replicaY,
       w: consts.LEAF_W,
       h: consts.LEAF_H,

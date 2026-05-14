@@ -43,7 +43,14 @@ import { aes128Spec } from "@/ciphers/aes-128";
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { serpent128Spec } from "@/ciphers/serpent-128";
-import { type CipherGraph, deriveAuxGraph, replicateHighFanoutSources } from "@/core/graph";
+import {
+  type CipherGraph,
+  type ContainerNode,
+  type GraphEdge,
+  type GraphNode,
+  deriveAuxGraph,
+  replicateHighFanoutSources,
+} from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
@@ -356,5 +363,201 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
     // that exact value as a regression anchor — if the gutter
     // accidentally fires when no replicas exist, this fails.
     expect(r5.w).toBe(consts.LEAF_W + 2 * consts.CONTAINER_PAD);
+  });
+});
+
+/**
+ * Multiple-source-per-consumer replica stacking (polish item #2).
+ *
+ * The bug it prevents: when the user sets MORE than one source's
+ * replication override to "always" (e.g. both `compute-block-count` AND
+ * `split-blocks` for the same iterate consumer), every replica targeting
+ * the same consumer used to land at exactly `(consumer.x, consumer.y -
+ * LEAF_H - STACK_GAP)`. Two replicas → same box → only the last-drawn one
+ * is visible, clicks land on whichever ended up on top.
+ *
+ * The fix: each placement loop keeps a per-consumer index counter and
+ * shifts the Nth replica RIGHT by `idx * (LEAF_W + FLOW_GAP)`. Three
+ * layout passes own their own loop (root, group lift, iterate body), so
+ * the same fix repeats three times — and we pin all three here using
+ * synthetic `CipherGraph` literals, since the real-cipher fixtures above
+ * only ever produce one source (key-expansion) per consumer.
+ */
+describe("GraphView — multiple sources targeting same consumer don't overlap", () => {
+  // Helper: builds a minimal CipherGraph with N replica nodes all pointing
+  // at one consumer. `consumerContainerPath` controls where the consumer
+  // sits — `[]` for root, `["body"]` for inside an iterate body, etc.
+  // Each replica gets its own aux edge so `buildReplicaPlacement` registers
+  // it via `consumerOf`.
+  const makeMultiReplicaGraph = (
+    consumerId: string,
+    replicaIds: readonly string[],
+    extras: {
+      readonly containers?: readonly ContainerNode[];
+      readonly extraRootIds?: readonly string[];
+      readonly consumerContainerPath?: readonly string[];
+    } = {},
+  ): CipherGraph => {
+    const consumerContainerPath = extras.consumerContainerPath ?? [];
+    const nodes: GraphNode[] = [
+      {
+        stepId: consumerId,
+        stepType: "test.consumer",
+        label: consumerId,
+        containerPath: consumerContainerPath,
+      },
+      ...replicaIds.map(
+        (rid): GraphNode => ({
+          stepId: rid,
+          stepType: "test.source",
+          label: rid,
+          containerPath: consumerContainerPath,
+          // The marker that promotes this node into `isReplica`.
+          replicaOf: rid.split("->")[0] ?? "src",
+        }),
+      ),
+    ];
+    const edges: GraphEdge[] = replicaIds.map((rid) => ({
+      from: rid,
+      to: consumerId,
+      auxKey: "test-key",
+      kind: "aux",
+    }));
+    // For root placement, rootIds includes both consumer and replicas (in
+    // any order — buildReplicaPlacement reads them all). For nested cases,
+    // the caller passes `extraRootIds` (e.g. the iterate container) and the
+    // replicas/consumer live inside `extras.containers` via their childIds.
+    const rootIds =
+      consumerContainerPath.length === 0
+        ? [...replicaIds, consumerId]
+        : (extras.extraRootIds ?? []);
+    return {
+      nodes,
+      containers: extras.containers ?? [],
+      edges,
+      rootIds,
+    };
+  };
+
+  it("root: two replicas → same consumer get distinct x positions", () => {
+    // Two synthetic replicas, both at root level, both pointing at one
+    // consumer via aux edges. Pre-fix both would land at consumer.x; post-
+    // fix the second steps right by LEAF_W + FLOW_GAP.
+    const g = makeMultiReplicaGraph("consumer", ["src-a->consumer", "src-b->consumer"]);
+    const consts = layoutConstantsFor("normal");
+    const { boxes } = layoutRoot(g, new Map<string, { x: number; y: number }>(), consts);
+    const a = boxes.get("src-a->consumer");
+    const b = boxes.get("src-b->consumer");
+    const c = boxes.get("consumer");
+    if (!a || !b || !c) throw new Error("missing synthetic box");
+    // Distinct x positions — the headline assertion.
+    expect(a.x).not.toBe(b.x);
+    // Specific deterministic placement (Map iteration order is insertion
+    // order, and rootIds is replica-first; first replica at consumer.x,
+    // second offset by LEAF_W + FLOW_GAP).
+    expect(a.x).toBe(c.x);
+    expect(b.x).toBe(c.x + consts.LEAF_W + consts.FLOW_GAP);
+    // Both still above the consumer at the lifted y.
+    expect(a.y).toBeLessThan(c.y);
+    expect(b.y).toBe(a.y);
+  });
+
+  it("root: three replicas → same consumer tile horizontally without overlap", () => {
+    // Stress to N=3 — confirms the counter increments rather than only
+    // distinguishing first-vs-rest.
+    const g = makeMultiReplicaGraph("consumer", [
+      "src-a->consumer",
+      "src-b->consumer",
+      "src-c->consumer",
+    ]);
+    const consts = layoutConstantsFor("normal");
+    const { boxes } = layoutRoot(g, new Map<string, { x: number; y: number }>(), consts);
+    const xs = ["src-a->consumer", "src-b->consumer", "src-c->consumer"].map(
+      (id) => boxes.get(id)?.x,
+    );
+    // All three distinct.
+    expect(new Set(xs).size).toBe(3);
+    // Strictly increasing (insertion-order ⇒ deterministic).
+    expect(xs[0]).toBeLessThan(xs[1] ?? Number.POSITIVE_INFINITY);
+    expect(xs[1]).toBeLessThan(xs[2] ?? Number.POSITIVE_INFINITY);
+  });
+
+  it("iterate body: two replicas → same consumer get distinct x positions", () => {
+    // Build an iterate container whose body contains: replica-A, replica-B,
+    // consumer. The iterate's layoutNode pass (horizontal-flow branch) owns
+    // the placement loop; same per-consumer-index fix applies.
+    const replicaA = "src-a->consumer";
+    const replicaB = "src-b->consumer";
+    const consumerId = "consumer";
+    const iterateId = "iterate";
+    const containers: ContainerNode[] = [
+      {
+        kind: "iterate",
+        id: iterateId,
+        label: "iterate",
+        containerPath: [],
+        // Order matters for placement: replicas first (the splice-before-
+        // consumer convention), then the consumer.
+        childIds: [replicaA, replicaB, consumerId],
+        blockSpan: 2,
+      },
+    ];
+    const g = makeMultiReplicaGraph(consumerId, [replicaA, replicaB], {
+      containers,
+      extraRootIds: [iterateId],
+      consumerContainerPath: [iterateId],
+    });
+    const consts = layoutConstantsFor("normal");
+    const { boxes } = layoutRoot(g, new Map<string, { x: number; y: number }>(), consts);
+    const a = boxes.get(replicaA);
+    const b = boxes.get(replicaB);
+    const c = boxes.get(consumerId);
+    if (!a || !b || !c) throw new Error("missing iterate-body synthetic box");
+    expect(a.x).not.toBe(b.x);
+    // Both replicas sit above the consumer (orthogonal lift).
+    expect(a.y).toBeLessThan(c.y);
+    expect(b.y).toBeLessThan(c.y);
+    expect(a.y).toBe(b.y);
+    // First replica sits at consumer.x; second shifted right by one step.
+    expect(a.x).toBe(c.x);
+    expect(b.x).toBe(c.x + consts.LEAF_W + consts.FLOW_GAP);
+  });
+
+  it("group (lift branch): two replicas → first-child consumer get distinct x positions", () => {
+    // Mirror of the iterate test, but for the vertical-stack group's LIFT
+    // branch (consumer IS the first non-replica child). Same fix applies.
+    const replicaA = "src-a->consumer";
+    const replicaB = "src-b->consumer";
+    const consumerId = "consumer";
+    const groupId = "group";
+    const containers: ContainerNode[] = [
+      {
+        kind: "group",
+        id: groupId,
+        label: "group",
+        containerPath: [],
+        // Consumer is FIRST non-replica child → triggers lift branch (not
+        // left-gutter). Both replicas point at this first child.
+        childIds: [replicaA, replicaB, consumerId],
+      },
+    ];
+    const g = makeMultiReplicaGraph(consumerId, [replicaA, replicaB], {
+      containers,
+      extraRootIds: [groupId],
+      consumerContainerPath: [groupId],
+    });
+    const consts = layoutConstantsFor("normal");
+    const { boxes } = layoutRoot(g, new Map<string, { x: number; y: number }>(), consts);
+    const a = boxes.get(replicaA);
+    const b = boxes.get(replicaB);
+    const c = boxes.get(consumerId);
+    if (!a || !b || !c) throw new Error("missing group-lift synthetic box");
+    expect(a.x).not.toBe(b.x);
+    // Both above the consumer at the same lifted y.
+    expect(a.y).toBeLessThan(c.y);
+    expect(b.y).toBe(a.y);
+    // Tiles horizontally: first at consumer.x, second offset by LEAF_W + FLOW_GAP.
+    expect(a.x).toBe(c.x);
+    expect(b.x).toBe(c.x + consts.LEAF_W + consts.FLOW_GAP);
   });
 });
