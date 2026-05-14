@@ -117,6 +117,7 @@ spec is debuggable in place.`,
     ],
   ]),
   references: ["NIST SP 800-38A §6 (Modes of Operation)"],
+  shapeContract: { input: "any", output: "preserveInput" },
 };
 
 /**

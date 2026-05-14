@@ -200,6 +200,7 @@ consumes \`K_0\` first, decrypt consumes \`K_32\` first.`,
     "Anderson, Biham, Knudsen 1998, §2 (Key Schedule)",
     "Serpent NIST submission, tstsubmtl/serpref.c (makeKey() function)",
   ],
+  shapeContract: { input: "any", output: "preserveInput" },
 };
 
 type Params = {

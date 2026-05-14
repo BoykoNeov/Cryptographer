@@ -166,6 +166,7 @@ across all three key sizes.`,
     "FIPS-197 Appendix A.2 (AES-192 example)",
     "FIPS-197 Appendix A.3 (AES-256 example, illustrates the Nk>6 SubWord branch)",
   ],
+  shapeContract: { input: "any", output: "preserveInput" },
 };
 
 const rotWord = (w: Uint8Array): Uint8Array =>

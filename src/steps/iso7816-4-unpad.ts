@@ -99,6 +99,7 @@ of bare ISO 7816-4 + CBC.
     ["blockSize", "Cipher block size in bytes. Must match the block size used by iso7816-4-pad."],
   ]),
   references: ["ISO/IEC 7816-4 §5.4.1", "Vaudenay 2002 (padding oracle attacks)"],
+  shapeContract: { input: "bytes", output: "preserveInput" },
 };
 
 const readBlockSize = (params: Json): number => {

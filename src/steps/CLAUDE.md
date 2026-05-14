@@ -21,6 +21,13 @@ export const myStepDoc: StepDocumentation = {
     ["paramName", "what it is and the legal range"],
   ]),
   references: ["FIPS-197 §X.Y.Z", "..."],
+  // State-shape contract. Required for every shipped step type — three
+  // UX surfaces read it: palette chip, drop-anchor greying, and the
+  // pre-Run `state-shape-mismatch` warning. See `core/types.ts`'s
+  // `StepShapeContract`. Use `"any"` when the step only touches aux
+  // (key schedules, aux primitives) and `"preserveInput"` when state
+  // passes through unchanged (the common case).
+  shapeContract: { input: "matrix4x4-bytes", output: "preserveInput" },
 };
 ```
 
@@ -48,6 +55,7 @@ Then a `CipherSpec` references the step type by string and provides params:
 - **Param validation**: throw a descriptive `Error` when params are wrong shape or out of range. Don't silently coerce. The catch in `App.tsx` will display the message inline; users learn faster from explicit errors.
 - **State immutability**: don't mutate `state.bytes` in place. Allocate a new `Uint8Array` for the output. The runtime clones around you, but mutating the input state breaks the trace's `before` snapshot.
 - **Aux discipline**: declare every aux key you read in `auxReads` (for trace bookkeeping). Aux values written via `auxWrites` are merged into the live aux map by the runtime — don't write directly.
+- **State-shape contract**: declare `shapeContract` in the doc block (input shape the executor accepts; output shape it produces, or `"preserveInput"` if state passes through). Drives the palette chip + drop-anchor greying + the pre-Run `state-shape-mismatch` warning. `tests/state-shape-contracts.test.ts` enforces 100% coverage on the default registry.
 
 ## Adding a new step type — checklist
 

@@ -82,6 +82,7 @@ docs for the full lossiness discussion.`,
     ["blockSize", "Cipher block size in bytes. Must match the block size used by zero-pad."],
   ]),
   references: ["ISO/IEC 9797-1 §6.3.1 (padding method 1)"],
+  shapeContract: { input: "bytes", output: "preserveInput" },
 };
 
 const readBlockSize = (params: Json): number => {

@@ -65,7 +65,7 @@
  * container interleave at the root.
  */
 
-import type { CipherSpec, IterateGroup, StepNode, Trace } from "./types";
+import type { CipherSpec, IterateGroup, StateShape, StepNode, Trace } from "./types";
 
 // ─── Public types ─────────────────────────────────────────────────────────
 
@@ -765,6 +765,15 @@ export const replicateHighFanoutSources = (
  *     introduces edge synthesis from non-trace sources can't silently
  *     hand a malformed graph to the renderer.
  *
+ *   - **`state-shape-mismatch`** — a leaf declares (via its registered
+ *     `shapeContract`) that it consumes a specific `StateShape`, but the
+ *     spec-inferred shape arriving at that position is something else.
+ *     Detected statically by `validateShapes` in `core/spec-shapes.ts` —
+ *     does NOT need a trace, so the warning lights up the moment the user
+ *     drops a shape-incompatible step from the palette. Surfaces the
+ *     "compute-block-count expects bytes state" runtime exception as a
+ *     pre-Run advisory instead.
+ *
  * `stepId` fields carry the *canonical* (post `:b{i}` strip) id, matching
  * `GraphNode.stepId`, so the renderer can index warnings by node id
  * directly. For orphaned reads inside an iterate body, the warning fires
@@ -773,7 +782,13 @@ export const replicateHighFanoutSources = (
 export type GraphWarning =
   | { readonly kind: "orphaned-read"; readonly stepId: string; readonly auxKey: string }
   | { readonly kind: "unused-write"; readonly stepId: string; readonly auxKey: string }
-  | { readonly kind: "cycle"; readonly stepIds: readonly string[] };
+  | { readonly kind: "cycle"; readonly stepIds: readonly string[] }
+  | {
+      readonly kind: "state-shape-mismatch";
+      readonly stepId: string;
+      readonly expected: StateShape | "any";
+      readonly got: StateShape;
+    };
 
 /**
  * Walk a directed adjacency list and return the first cycle found via

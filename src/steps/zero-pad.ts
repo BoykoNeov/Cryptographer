@@ -103,6 +103,7 @@ Twofish/Serpent, etc.
     ["blockSize", "Cipher block size in bytes. AES uses 16; DES/3DES use 8. Must be 1..255."],
   ]),
   references: ["ISO/IEC 9797-1 §6.3.1 (padding method 1)"],
+  shapeContract: { input: "bytes", output: "preserveInput" },
 };
 
 const readBlockSize = (params: Json): number => {

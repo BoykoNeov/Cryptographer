@@ -2076,3 +2076,71 @@ button:disabled {
   color: var(--muted);
   font-family: var(--font-mono, monospace);
 }
+
+/*
+ * State-shape chip on each palette entry. Shows the input state shape the
+ * step accepts ("bytes" / "4×4 matrix" / "any"). Cues the user before
+ * they drag: AES round steps go on matrix-shaped state, padding on bytes,
+ * aux primitives on any. The `data-shape` attribute carries the raw
+ * StateShape so a future feature (e.g. a per-shape filter in the palette)
+ * can key off it cheaply.
+ */
+.step-palette-entry-shape {
+  display: inline-block;
+  align-self: flex-start;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-family: var(--font-mono, monospace);
+  background: rgba(127, 127, 127, 0.15);
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+.step-palette-entry-shape[data-shape="bytes"] {
+  /* Bytes shape — most steps (padding, key schedule, etc.). Subtle blue
+     to distinguish at a glance from the matrix flavour without competing
+     with the entry name/type text colour. */
+  background: rgba(59, 130, 246, 0.18);
+  color: rgb(96, 165, 250);
+}
+.step-palette-entry-shape[data-shape="matrix4x4-bytes"] {
+  /* AES core shape. Amber so the eye separates it from bytes-shape
+     entries even in a long mixed list. */
+  background: rgba(245, 158, 11, 0.18);
+  color: rgb(251, 191, 36);
+}
+.step-palette-entry-shape[data-shape="any"] {
+  /* Aux primitives + key schedules — no shape restriction. */
+  background: rgba(127, 127, 127, 0.15);
+  color: var(--muted);
+}
+
+/*
+ * Drop-anchor greying. Activated while the user is dragging a
+ * shape-constrained step from the palette. The `.graph-view` div gets a
+ * `dragging-bytes` or `dragging-matrix` class (driven from
+ * GraphView.tsx's `draggedInputShape` memo). Drop anchors carrying a
+ * mismatched `data-state-shape` dim to 0.35 opacity so the user can
+ * still see them but visibly reads them as "not for this step".
+ *
+ * Anchors with NO `data-state-shape` (e.g. the empty-canvas root-append)
+ * stay full opacity — root-append always works for any shape because
+ * the runtime seeds state from `inputs.plaintext.shape`, which the user
+ * can also change via the cipher dropdown.
+ *
+ * Greying is advisory only — drop is not blocked. A determined user
+ * gets an orange `!` warning dot on the dropped node and, on Run, the
+ * same executor exception they'd have got without the greying. This
+ * preserves the project's "experiment freely, see what breaks"
+ * pedagogy.
+ */
+.graph-view.dragging-bytes
+  [data-drop-anchor][data-state-shape]:not([data-state-shape=""]):not([data-state-shape="bytes"]) {
+  opacity: 0.35;
+}
+.graph-view.dragging-matrix
+  [data-drop-anchor][data-state-shape]:not([data-state-shape=""]):not(
+    [data-state-shape="matrix4x4-bytes"]
+  ) {
+  opacity: 0.35;
+}

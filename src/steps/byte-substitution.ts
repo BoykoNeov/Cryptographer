@@ -54,6 +54,7 @@ intact.`,
     ],
   ]),
   references: ["FIPS-197 §5.1.1 (SubBytes)", "FIPS-197 §5.3.2 (InvSubBytes)"],
+  shapeContract: { input: "matrix4x4-bytes", output: "preserveInput" },
 };
 
 const readSbox = (params: Json): readonly number[] => {

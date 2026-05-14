@@ -105,6 +105,7 @@ one round's S-box doesn't bleed into any other.`,
     "Anderson, Biham, Knudsen 1998, §2 (Round function), Appendix (S-box tables)",
     "Serpent NIST submission, tstsubmtl/serpref.c (SHat() function)",
   ],
+  shapeContract: { input: "bytes", output: "preserveInput" },
 };
 
 const readSbox = (params: Json): readonly number[] => {

@@ -101,4 +101,5 @@ that AES uses to share structure between encryption and decryption.`,
     "Anderson, Biham, Knudsen 1998, §2 (Linear Transformation L), Appendix C (LT table)",
     "Serpent NIST submission, tstsubmtl/serpref.c (LT() function, LTTable[])",
   ],
+  shapeContract: { input: "bytes", output: "preserveInput" },
 };

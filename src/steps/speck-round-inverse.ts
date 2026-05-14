@@ -118,6 +118,7 @@ expansion even on the decrypt path.`,
   references: [
     "Beaulieu et al. 2013 §3 (the inverse round is the natural reversal of the forward equations; not stated explicitly but trivially derived)",
   ],
+  shapeContract: { input: "bytes", output: "preserveInput" },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────

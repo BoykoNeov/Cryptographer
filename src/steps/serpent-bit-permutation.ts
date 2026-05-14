@@ -88,6 +88,7 @@ of byte 15.`,
     "Anderson, Biham, Knudsen 1998, 'Serpent: A Proposal for the Advanced Encryption Standard', §2 (Initial and Final Permutations)",
     "Serpent NIST submission, tstsubmtl/serpref.c (InitialPermutation, FinalPermutation tables)",
   ],
+  shapeContract: { input: "bytes", output: "preserveInput" },
 };
 
 const readTable = (params: Json): readonly number[] => {

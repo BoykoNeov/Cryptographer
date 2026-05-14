@@ -72,6 +72,7 @@ cipher, breakable by hand on a couple of round outputs.`,
     "FIPS-197 §5.3.3 (InvMixColumns)",
     "FIPS-197 §4.2 (GF(2^8) arithmetic)",
   ],
+  shapeContract: { input: "matrix4x4-bytes", output: "preserveInput" },
 };
 
 const readMatrix = (params: Json): readonly (readonly number[])[] => {

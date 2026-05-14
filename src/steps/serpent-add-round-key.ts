@@ -75,6 +75,7 @@ naturally — see \`serpent.key-expansion@1\` for the why.`,
     "Anderson, Biham, Knudsen 1998, §2 (Round function K_i XOR)",
     "Serpent NIST submission, tstsubmtl/serpref.c (keying() function)",
   ],
+  shapeContract: { input: "bytes", output: "preserveInput" },
 };
 
 const readRoundKeyAux = (params: Json): string => {

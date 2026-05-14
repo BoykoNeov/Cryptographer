@@ -93,6 +93,7 @@ A future cipher with different geometry would register a sibling step
     ],
   ]),
   references: ["FIPS-197 §3.4 (State)", "NIST SP 800-38A §6 (Modes of Operation)"],
+  shapeContract: { input: "bytes", output: "preserveInput" },
 };
 
 const readParams = (params: Json): { blockSize: number; outBlocksAux: string } => {

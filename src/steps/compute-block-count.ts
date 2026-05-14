@@ -59,6 +59,7 @@ frame in the trace per Run.`,
     ],
   ]),
   references: ["NIST SP 800-38A §6"],
+  shapeContract: { input: "bytes", output: "preserveInput" },
 };
 
 const readParams = (params: Json): { blockSize: number; countAux: string } => {

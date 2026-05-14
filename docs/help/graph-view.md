@@ -23,14 +23,19 @@ internalized.
 - **Orange `!` glyph** on a node means the validator found a wiring
   problem. Hover for the message: an orphaned read (the step asked for
   an aux key nothing produced), an unused write (this step's output is
-  never consumed), or a cycle.
+  never consumed), a cycle, or a state-shape mismatch (the step expects
+  a different state shape — e.g. bytes — than what arrives here).
 
 ## Editing the graph
 
 - **Drag from the palette.** The left sidebar lists every registered
-  step type, grouped by namespace. Drag an entry onto the canvas. Drop
-  on a leaf or container header to insert *after* that node in its
-  parent. Drop on empty canvas to append at the root.
+  step type, grouped by namespace, with a small chip showing the input
+  state shape each step expects (`bytes`, `4×4 matrix`, or `any`). Drag
+  an entry onto the canvas. Drop on a leaf or container header to
+  insert *after* that node in its parent. Drop on empty canvas to
+  append at the root. While dragging a shape-constrained step, drop
+  positions whose state shape doesn't match are dimmed — drop is still
+  allowed, but you'll get an orange warning on the resulting node.
 - **Drag containers** to rearrange. The pointer-down handle is the
   container's header band. Pinned positions persist per-spec in
   `localStorage`, and travel with `Save` and `Share` if you ticked

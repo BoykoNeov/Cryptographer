@@ -179,6 +179,34 @@ export type StepExecutor = (state: State, params: Json, ctx: StepContext) => Ste
 // # headings, and `- ` lists. See ui/components/Markdown.tsx for what
 // renders. Keep snippets short and educational.
 
+/**
+ * Declared input/output state-shape contract for a step type. Consumed by:
+ *   - the palette UI, which renders a "bytes" / "4×4 matrix" / "any" chip
+ *     so users know what shape the step expects before they drag it;
+ *   - the graph view's drop-anchor greying, which dims spec positions
+ *     whose inferred state shape doesn't match the dragged step's input;
+ *   - `validateShapes` in `core/spec-shapes.ts`, which emits a static
+ *     `state-shape-mismatch` warning whenever a leaf's declared input
+ *     disagrees with the shape arriving from upstream.
+ *
+ * Optional. Steps that omit the contract skip all three behaviors — the
+ * palette shows no chip, drag never greys their target, validation skips
+ * them. This keeps the field a soft addition: no existing executor breaks
+ * by not declaring it (the runtime's existing throw is still the fallback).
+ *
+ * Why a discrete `"preserveInput"` output: most step types (every AES
+ * round step, every padding step, the aux primitives) pass state through
+ * untouched. Spelling that out as a literal keeps the static walker from
+ * having to enumerate shapes for the trivial case.
+ */
+export type StepShapeContract = {
+  /** What state shape this executor accepts. `"any"` for aux-only steps. */
+  readonly input: StateShape | "any";
+  /** What state shape this executor produces. `"preserveInput"` for
+   *  passthroughs (the common case — AES rounds, padding, aux primitives). */
+  readonly output: StateShape | "preserveInput";
+};
+
 export type StepDocumentation = {
   /** Human-readable name (e.g. "Byte Substitution"). */
   readonly name: string;
@@ -190,6 +218,8 @@ export type StepDocumentation = {
   readonly params?: ReadonlyMap<string, string>;
   /** Optional spec/standard references (e.g. "FIPS-197 §5.1.1"). */
   readonly references?: readonly string[];
+  /** Optional state-shape contract. See `StepShapeContract` for usage. */
+  readonly shapeContract?: StepShapeContract;
 };
 
 /**

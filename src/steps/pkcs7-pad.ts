@@ -75,6 +75,7 @@ identical to PKCS #5 padding which is just PKCS#7 fixed at blockSize=8.`,
     ],
   ]),
   references: ["RFC 5652 §6.3", "PKCS #7 v1.5 (RSA Labs, 1993)"],
+  shapeContract: { input: "bytes", output: "preserveInput" },
 };
 
 const readBlockSize = (params: Json): number => {

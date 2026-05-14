@@ -62,4 +62,5 @@ start with this step.`,
     "Anderson, Biham, Knudsen 1998, §2 (Inverse Linear Transformation L^-1), Appendix C (inverse LT table)",
     "Serpent NIST submission, tstsubmtl/serpref.c (LTInverse() function, LTTableInverse[])",
   ],
+  shapeContract: { input: "bytes", output: "preserveInput" },
 };

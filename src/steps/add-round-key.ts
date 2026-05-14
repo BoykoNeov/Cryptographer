@@ -56,6 +56,7 @@ obscures what's happening.)`,
     ],
   ]),
   references: ["FIPS-197 §5.1.4 (AddRoundKey)"],
+  shapeContract: { input: "matrix4x4-bytes", output: "preserveInput" },
 };
 
 const readAuxName = (params: Json): string => {

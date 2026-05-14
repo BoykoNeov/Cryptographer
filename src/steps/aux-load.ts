@@ -107,6 +107,7 @@ rather than a privileged input.`,
     "NIST SP 800-38A §6 (Modes of Operation — IV requirements)",
     "RFC 3686 §4 (CTR mode counter block formatting)",
   ],
+  shapeContract: { input: "any", output: "preserveInput" },
 };
 
 /**

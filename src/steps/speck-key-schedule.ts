@@ -139,6 +139,7 @@ serialization at the boundary differs.
     "Beaulieu et al. 2013, 'The SIMON and SPECK Families of Lightweight Block Ciphers', §3 (Key Schedule)",
     "Beaulieu et al. 2013, Table 4.1 (Speck32/64 test vector)",
   ],
+  shapeContract: { input: "any", output: "preserveInput" },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────

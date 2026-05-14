@@ -38,4 +38,5 @@ steps (like \`pkcs7-unpad\`) can consume it.
 The trace shows MatrixState before and BytesState after. The byte values
 are identical on both sides; only the shape changes.`,
   references: ["FIPS-197 §3.4 (State)"],
+  shapeContract: { input: "matrix4x4-bytes", output: "bytes" },
 };

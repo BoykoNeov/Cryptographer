@@ -144,6 +144,7 @@ produce wrong output.`,
     "NIST SP 800-38A §6.5 (CFB mode)",
     "NIST SP 800-38A §6.4 (OFB mode)",
   ],
+  shapeContract: { input: "any", output: "preserveInput" },
 };
 
 /**

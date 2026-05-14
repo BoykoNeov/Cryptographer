@@ -111,6 +111,7 @@ after 22 rounds.`,
   references: [
     "Beaulieu et al. 2013, 'The SIMON and SPECK Families of Lightweight Block Ciphers', §3 (Speck Round Function)",
   ],
+  shapeContract: { input: "bytes", output: "preserveInput" },
 };
 
 // ─── Helpers (duplicated from key-schedule deliberately — see note) ───────

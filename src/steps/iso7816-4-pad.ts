@@ -98,6 +98,7 @@ replacement for PKCS#7 in most contexts where determinism matters.
     ["blockSize", "Cipher block size in bytes. AES uses 16; DES/3DES use 8. Must be 1..255."],
   ]),
   references: ["ISO/IEC 7816-4 §5.4.1", "ISO/IEC 9797-1 padding method 2"],
+  shapeContract: { input: "bytes", output: "preserveInput" },
 };
 
 const readBlockSize = (params: Json): number => {

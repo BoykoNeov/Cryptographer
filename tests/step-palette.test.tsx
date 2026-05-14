@@ -159,6 +159,23 @@ describe("StepPalette — render", () => {
       expect(e.draggable).toBe(true);
     }
   });
+
+  it("renders a state-shape chip on entries whose step type declares a shapeContract", () => {
+    // Every shipped step type declares a contract (see
+    // `tests/state-shape-contracts.test.ts`), so every entry should show
+    // a chip. The chip's `data-shape` attribute mirrors the contract's
+    // declared input.
+    const { container } = render(() => <StepPalette />);
+    const registry = buildDefaultRegistry();
+    for (const stepType of registry.types()) {
+      if (PADDING_STEP_TYPES.has(stepType)) continue;
+      const contract = registry.getDoc(stepType)?.shapeContract;
+      if (!contract) continue;
+      const chip = container.querySelector(`[data-testid="step-palette-entry-shape-${stepType}"]`);
+      expect(chip, `palette entry ${stepType} should show a shape chip`).not.toBeNull();
+      expect(chip?.getAttribute("data-shape")).toBe(contract.input);
+    }
+  });
 });
 
 // ─── insertStepIntoSpec mutator (signal-level) ─────────────────────────────

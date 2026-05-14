@@ -25,7 +25,8 @@
  */
 
 import { PADDING_STEP_TYPES } from "@/core/spec-mutations";
-import { For, createMemo } from "solid-js";
+import type { StateShape } from "@/core/types";
+import { For, createMemo, createSignal } from "solid-js";
 import { registry } from "../stores/registry";
 
 /**
@@ -34,6 +35,38 @@ import { registry } from "../stores/registry";
  * keys when reading/writing across getData/setData, so use lowercase.
  */
 export const STEP_TYPE_DRAG_MIME = "application/x-cryptographer-step-type";
+
+/**
+ * Module-level signal of the step type currently being dragged from the
+ * palette (or `null` when no palette drag is in flight). Exported so the
+ * GraphView can react to `dragstart` BEFORE `drop` — the drop-anchor
+ * greying needs to know which step is dragging the moment the gesture
+ * begins, and `dataTransfer.getData()` deliberately returns the empty
+ * string outside the drop event (browser security around cross-origin
+ * drags).
+ *
+ * Lifecycle: set on `dragstart` of a palette entry, cleared on `dragend`
+ * of the same entry (fires regardless of drop success). Browsers
+ * guarantee `dragend` after every `dragstart`, so the signal never
+ * "leaks" a stale step type past one gesture.
+ */
+const [activeDragStepType, setActiveDragStepType] = createSignal<string | null>(null);
+
+/** Read-only accessor for the active palette drag's step type (or null). */
+export const useActiveDragStepType = (): (() => string | null) => activeDragStepType;
+
+/**
+ * Display labels for each StateShape variant + the "any" sentinel. Used
+ * by both the palette chip and the tooltip. Kept tight so the chip
+ * doesn't crowd the palette entry's name/id column.
+ */
+export const SHAPE_LABELS: Record<StateShape | "any", string> = {
+  bytes: "bytes",
+  "matrix4x4-bytes": "4×4 matrix",
+  bitvec: "bitvec",
+  bigint: "bigint",
+  any: "any",
+};
 
 /**
  * One row of palette state: the raw step type id (e.g.
@@ -48,6 +81,12 @@ type PaletteEntry = {
   readonly namespace: string;
   readonly name: string;
   readonly summary: string;
+  /**
+   * Declared input state shape from the step's `shapeContract`. Undefined
+   * when the step type registered no contract (the field is optional, see
+   * `core/types.ts`'s `StepDocumentation`).
+   */
+  readonly inputShape?: StateShape | "any";
 };
 
 /**
@@ -75,6 +114,11 @@ const collectEntries = (): readonly PaletteEntry[] => {
       namespace,
       name: doc?.name ?? stepType,
       summary: doc?.summary ?? "",
+      // Carry the contract's input shape onto the entry so the chip + the
+      // dragstart handler (which sets the module-level drag signal) both
+      // see the same value. Undefined when the step has no contract — the
+      // chip is then suppressed and dragging it greys no anchors.
+      ...(doc?.shapeContract ? { inputShape: doc.shapeContract.input } : {}),
     });
   }
   entries.sort((a, b) => a.name.localeCompare(b.name));
@@ -136,6 +180,10 @@ export const StepPalette = () => {
    * sidebar-style palette.
    */
   const onDragStart = (e: DragEvent, stepType: string): void => {
+    // Publish the drag's step type on the module-level signal so the
+    // GraphView can read it during dragover (where `dataTransfer.getData`
+    // returns "" for security reasons). Cleared by onDragEnd below.
+    setActiveDragStepType(stepType);
     if (!e.dataTransfer) return;
     e.dataTransfer.setData(STEP_TYPE_DRAG_MIME, stepType);
     // Fallback for cross-browser safety: some older browsers won't expose
@@ -143,6 +191,16 @@ export const StepPalette = () => {
     // The drop handler tries the custom MIME first, then text/plain.
     e.dataTransfer.setData("text/plain", stepType);
     e.dataTransfer.effectAllowed = "copy";
+  };
+
+  /**
+   * Always fires after `dragstart`, regardless of drop success. Resets the
+   * module-level signal so the next drag starts clean. The browser
+   * guarantees `dragend` even when the user drops outside any handler or
+   * presses Escape mid-drag.
+   */
+  const onDragEnd = (): void => {
+    setActiveDragStepType(null);
   };
 
   return (
@@ -159,19 +217,40 @@ export const StepPalette = () => {
             <h4 class="step-palette-group-label">{namespace}</h4>
             <ul class="step-palette-list">
               <For each={entries}>
-                {(entry) => (
-                  <li
-                    class="step-palette-entry"
-                    draggable={true}
-                    data-step-type={entry.stepType}
-                    data-testid={`step-palette-entry-${entry.stepType}`}
-                    title={entry.summary || entry.stepType}
-                    onDragStart={(e) => onDragStart(e, entry.stepType)}
-                  >
-                    <span class="step-palette-entry-name">{entry.name}</span>
-                    <span class="step-palette-entry-type">{entry.stepType}</span>
-                  </li>
-                )}
+                {(entry) => {
+                  // Compose a hover tooltip that combines the summary (or
+                  // stepType fallback) with the shape contract — so users
+                  // who scan via native browser tooltips see both pieces of
+                  // metadata at once, without having to drag to find out.
+                  const baseTitle = entry.summary || entry.stepType;
+                  const shapeTitle =
+                    entry.inputShape !== undefined
+                      ? `\nExpects: ${SHAPE_LABELS[entry.inputShape]} state`
+                      : "";
+                  return (
+                    <li
+                      class="step-palette-entry"
+                      draggable={true}
+                      data-step-type={entry.stepType}
+                      data-testid={`step-palette-entry-${entry.stepType}`}
+                      title={baseTitle + shapeTitle}
+                      onDragStart={(e) => onDragStart(e, entry.stepType)}
+                      onDragEnd={onDragEnd}
+                    >
+                      <span class="step-palette-entry-name">{entry.name}</span>
+                      <span class="step-palette-entry-type">{entry.stepType}</span>
+                      {entry.inputShape !== undefined ? (
+                        <span
+                          class="step-palette-entry-shape"
+                          data-shape={entry.inputShape}
+                          data-testid={`step-palette-entry-shape-${entry.stepType}`}
+                        >
+                          {SHAPE_LABELS[entry.inputShape]}
+                        </span>
+                      ) : null}
+                    </li>
+                  );
+                }}
               </For>
             </ul>
           </section>

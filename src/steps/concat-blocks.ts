@@ -78,6 +78,7 @@ the keystream-extended output back to the original plaintext length.`,
     ],
   ]),
   references: ["NIST SP 800-38A §6"],
+  shapeContract: { input: "matrix4x4-bytes", output: "bytes" },
 };
 
 const readBlocksAux = (params: Json): string => {

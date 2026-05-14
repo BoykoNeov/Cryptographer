@@ -44,6 +44,7 @@ import {
   replicateHighFanoutSources,
   validateGraph,
 } from "@/core/graph";
+import { inferShapesAtAnchors, validateShapes } from "@/core/spec-shapes";
 import { For, Show, createMemo, createSignal } from "solid-js";
 import {
   setNodePosition,
@@ -68,7 +69,7 @@ import {
   useReplicationEnabled,
 } from "../stores/view-replication";
 import { GraphHelpModal } from "./GraphHelpModal";
-import { STEP_TYPE_DRAG_MIME, StepPalette } from "./StepPalette";
+import { STEP_TYPE_DRAG_MIME, StepPalette, useActiveDragStepType } from "./StepPalette";
 
 // ─── Layout constants ──────────────────────────────────────────────────────
 // All in CSS pixels. The size-and-gap subset scales with the active view
@@ -592,6 +593,37 @@ export const GraphView = () => {
     return l ? new Set(l.collapsedGroups) : new Set();
   });
 
+  /**
+   * Map from each spec node id (leaf stepId or container id) to the
+   * StateShape that exists immediately AFTER that node completes.
+   * Threaded onto every drop anchor as `data-state-shape="..."` so the
+   * CSS `.dragging-*` rules can grey incompatible anchors during a
+   * palette drag. Re-derives whenever the spec changes.
+   *
+   * Pure structural fact — does NOT depend on the trace. The memo
+   * subscribes only to `spec()` so a Run-without-spec-change is a no-op.
+   */
+  const shapesByAnchor = createMemo(() => inferShapesAtAnchors(spec(), registry));
+
+  /**
+   * The input shape of the step type currently being dragged from the
+   * palette, or `null` when no palette drag is in flight (or the dragged
+   * step type has no `shapeContract`). When this is `"bytes"` or
+   * `"matrix4x4-bytes"`, the `.graph-view` div gains a `dragging-bytes`
+   * / `dragging-matrix` class so the CSS rules dim mismatched anchors.
+   *
+   * "any" inputs (aux primitives) and contract-less steps both produce
+   * `null` here — they never grey anything, since they can land
+   * anywhere.
+   */
+  const draggedInputShape = createMemo<string | null>(() => {
+    const t = useActiveDragStepType()();
+    if (t === null) return null;
+    const contract = registry.getDoc(t)?.shapeContract;
+    if (!contract || contract.input === "any") return null;
+    return contract.input;
+  });
+
   /** Map of pinned positions for the active spec (memoized). */
   const pinnedMap = createMemo<ReadonlyMap<string, { x: number; y: number }>>(() => {
     const l = activeLayout();
@@ -699,9 +731,16 @@ export const GraphView = () => {
    */
   const rawWarnings = createMemo<readonly GraphWarning[]>(() => {
     void version();
+    // Two warning sources, concatenated:
+    //   1. `validateShapes` runs against the spec alone — no trace
+    //      required — so state-shape-mismatch dots appear the moment a
+    //      shape-incompatible step is dropped from the palette.
+    //   2. `validateGraph` consumes the (graph, trace) pair for the
+    //      original three warning kinds (orphaned-read, unused-write,
+    //      cycle), all of which need executed frames to detect.
+    const shape = validateShapes(spec(), registry);
     const t = getTrace();
-    if (!t) return [];
-    return validateGraph(rawGraph(), t);
+    return t ? [...shape, ...validateGraph(rawGraph(), t)] : shape;
   });
 
   /**
@@ -970,7 +1009,15 @@ export const GraphView = () => {
       <StepPalette />
       <div
         class="graph-view"
-        classList={{ "graph-drop-zone-active": dragOverActive() }}
+        classList={{
+          "graph-drop-zone-active": dragOverActive(),
+          // Activated by the module-level signal in StepPalette during a
+          // palette drag. CSS rules in app.css read the data-state-shape
+          // attribute on each drop anchor and dim those whose shape
+          // doesn't match the dragged step's input contract.
+          "dragging-bytes": draggedInputShape() === "bytes",
+          "dragging-matrix": draggedInputShape() === "matrix4x4-bytes",
+        }}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -1179,6 +1226,7 @@ export const GraphView = () => {
                         onDragStart={(e) => startNodeDrag(container.id, e)}
                         onToggleCollapse={() => toggleCollapse(spec().id, container.id)}
                         warnings={containerWarnings()}
+                        stateShape={shapesByAnchor().get(container.id) ?? ""}
                       />
                     )}
                   </Show>
@@ -1259,6 +1307,7 @@ export const GraphView = () => {
                         {...dragProps}
                         onClick={() => handleLeafClick(clickTargetId)}
                         warnings={leafWarnings()}
+                        stateShape={shapesByAnchor().get(clickTargetId) ?? ""}
                       />
                     )}
                   </Show>
@@ -1296,6 +1345,12 @@ const formatWarning = (w: GraphWarning): string => {
       return `Unused write of aux key '${w.auxKey}' — no downstream step reads it.`;
     case "cycle":
       return `Cycle in dataflow: ${w.stepIds.join(" → ")} → ${w.stepIds[0]}.`;
+    case "state-shape-mismatch":
+      // Both `expected` and `got` are StateShape strings ("bytes",
+      // "matrix4x4-bytes", etc.). Surfacing them raw matches the
+      // executor's own throw text so the warning and the Run-time
+      // exception read consistently.
+      return `Expects state shape '${w.expected}', but '${w.got}' arrives here.`;
   }
 };
 
@@ -1371,6 +1426,15 @@ const LeafRect = (props: {
    * is the happy path (no indicator rendered). Multi-warning case: a
    * single glyph with all messages joined in the title tooltip. */
   warnings: readonly GraphWarning[];
+  /**
+   * State shape that exists at this leaf's position (i.e. AFTER it runs
+   * — but for drop-anchor purposes, "after this step" == "before the
+   * next step", which is what insertStepAfter creates). Empty string when
+   * the spec walker didn't visit this id (shouldn't happen for shipped
+   * specs, but kept defensive). Read by CSS via `data-state-shape` to
+   * decide whether to grey this anchor during a palette drag.
+   */
+  stateShape: string;
 }) => {
   // SVG <g> can't be replaced by a semantic <button> (it'd leave the SVG
   // coordinate system). We attach pointer + keyboard handlers; biome's
@@ -1392,6 +1456,7 @@ const LeafRect = (props: {
         props.isReplica ? " graph-leaf-replica" : ""
       }`}
       data-drop-anchor={props.dropAnchorId}
+      data-state-shape={props.stateShape}
       onPointerDown={props.onPointerDown}
       onClick={props.draggable ? undefined : props.onClick}
       onKeyDown={(e) => {
@@ -1448,6 +1513,13 @@ const ContainerRect = (props: {
    * a warning, or when collapse remapped a child's warning to this
    * ancestor. */
   warnings: readonly GraphWarning[];
+  /**
+   * Inferred state shape at this container's position (== shape after
+   * the container exits). Empty string for containers the walker didn't
+   * visit (shouldn't happen). Read by CSS via `data-state-shape` to
+   * grey this container's drop anchor during an incompatible drag.
+   */
+  stateShape: string;
 }) => {
   // Chevron sits at the right edge of the header band; clicking it doesn't
   // start a drag. The rest of the header is the drag handle.
@@ -1466,6 +1538,7 @@ const ContainerRect = (props: {
     <g
       class={`graph-container graph-container-${props.container.kind}`}
       data-drop-anchor={props.container.id}
+      data-state-shape={props.stateShape}
     >
       <title>
         {props.container.kind}: {props.container.id}

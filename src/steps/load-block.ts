@@ -64,6 +64,7 @@ The trace shows BytesState before and MatrixState after.`,
     ],
   ]),
   references: ["FIPS-197 §3.4 (State)"],
+  shapeContract: { input: "bytes", output: "matrix4x4-bytes" },
 };
 
 const readBlockSize = (params: Json): number => {

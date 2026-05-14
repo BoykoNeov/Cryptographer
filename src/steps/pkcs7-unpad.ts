@@ -94,6 +94,7 @@ docs for the full reusability story.`,
     ],
   ]),
   references: ["RFC 5652 §6.3", "Vaudenay 2002 (padding oracle attacks on CBC)"],
+  shapeContract: { input: "bytes", output: "preserveInput" },
 };
 
 const readBlockSize = (params: Json): number => {

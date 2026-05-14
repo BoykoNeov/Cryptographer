@@ -54,6 +54,7 @@ output is unchanged) because both are byte-position operations.`,
     ],
   ]),
   references: ["FIPS-197 §5.1.2 (ShiftRows)", "FIPS-197 §5.3.1 (InvShiftRows)"],
+  shapeContract: { input: "matrix4x4-bytes", output: "preserveInput" },
 };
 
 const readShifts = (params: Json): readonly number[] => {
