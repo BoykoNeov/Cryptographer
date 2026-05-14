@@ -2036,6 +2036,35 @@ button:disabled {
   user-select: none;
 }
 
+/* Duplicate affordance — sister of the delete chip. Same hover-reveal,
+   same chip dimensions; tinted with the accent/primary color (not
+   danger red) since the click adds rather than removes. */
+.graph-duplicate-button {
+  opacity: 0;
+  pointer-events: none;
+  cursor: pointer;
+  transition: opacity 0.12s ease-out;
+}
+.graph-container:hover .graph-duplicate-button,
+.graph-duplicate-button:focus-within {
+  opacity: 1;
+  pointer-events: all;
+}
+
+.graph-duplicate-button-circle {
+  fill: var(--accent, #2563eb);
+  stroke: var(--bg, #0f1115);
+  stroke-width: 1;
+}
+
+.graph-duplicate-button-glyph {
+  fill: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  pointer-events: none;
+  user-select: none;
+}
+
 /* ─── Slice 8: step palette + drop affordance ────────────────────────────
    The graph view becomes a two-column layout in graph mode: palette on the
    left (sticky / fixed width), scrollable SVG canvas on the right. Linear

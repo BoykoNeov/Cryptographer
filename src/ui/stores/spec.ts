@@ -45,6 +45,7 @@ import {
   type PaddingScheme,
   applyPaddingScheme,
   duplicateRoundGroup,
+  findStepAndParent,
   insertStepAfter,
   removeStep,
   updateAllStepsByType,
@@ -419,6 +420,39 @@ export const duplicateRoundInSpec = (sourceId: string): void => {
   // spec.id; each gets the matching rename map applied.
   renameSpecLayoutIds(newActive.id, activeRenames);
   renameSpecLayoutIds(newCounterpart.id, counterpartRenames);
+};
+
+/**
+ * UI gate for the graph-view duplicate button. Returns true iff the
+ * container at `containerId` is a round group whose auto-mirror has a
+ * clean landing site on the counterpart side.
+ *
+ *   - `round.N`: needs a sibling `round.{N+1}` to exist. The final
+ *     round (e.g. `round.{rounds}` in canonical AES) has no
+ *     `round.{N+1}` sibling, so it would auto-mirror to a non-existent
+ *     `inv-round.{rounds}` on the decrypt side. Suppress the button
+ *     to avoid a half-mirrored state.
+ *   - `inv-round.N`: needs `N > 0`. `inv-round.0` is the final inverse
+ *     round; mirroring to encrypt's `round.0` (which doesn't exist —
+ *     encrypt's `initial.add-round-key` is a LEAF, not a group) would
+ *     fail.
+ *   - Anything else (leaves, iterate body, non-round groups): false.
+ *
+ * Pure read of the active spec. Tracking is implicit (reads `specs()`
+ * and `mode()` via `activeSpec()`), so consumers using this inside
+ * `createMemo` automatically re-evaluate when the spec changes.
+ */
+export const isRoundDuplicatable = (containerId: string): boolean => {
+  const m = containerId.match(/^(round|inv-round)\.(\d+)$/);
+  if (!m || !m[1] || !m[2]) return false;
+  const prefix = m[1];
+  const n = Number.parseInt(m[2], 10);
+  if (prefix === "inv-round") return n > 0;
+  // prefix === "round": confirm a higher-numbered sibling exists.
+  const loc = findStepAndParent(activeSpec(), containerId);
+  if (!loc || loc.node.kind !== "group") return false;
+  const siblings = loc.parent ? loc.parent.children : activeSpec().steps;
+  return siblings.some((s) => s.kind === "group" && s.id === `round.${n + 1}`);
 };
 
 /**

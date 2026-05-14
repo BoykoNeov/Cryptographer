@@ -53,7 +53,13 @@ import {
   useLayoutMap,
 } from "../stores/layout";
 import { registry } from "../stores/registry";
-import { insertStepIntoSpec, removeStepFromSpec, useSpec } from "../stores/spec";
+import {
+  duplicateRoundInSpec,
+  insertStepIntoSpec,
+  isRoundDuplicatable,
+  removeStepFromSpec,
+  useSpec,
+} from "../stores/spec";
 import { getTrace, setSelectedStepId, useTraceVersion } from "../stores/trace";
 import {
   ALL_VIEW_DENSITIES,
@@ -1408,6 +1414,64 @@ const WarningGlyph = (props: {
  * `<g>`'s click/drag handlers (which would scrub the trace or start a
  * drag, neither of which the user wants when they meant "delete").
  */
+/**
+ * SVG duplicate affordance for AES round groups. Same hover-reveal chip
+ * pattern as `DeleteGlyph` — a 12-px circle with a `+` glyph, hidden
+ * until the parent container is hovered. Click fires `onDuplicate`.
+ *
+ * Rendered only on `round.N` containers that have a `round.{N+1}` sibling
+ * AND on `inv-round.N` containers with `N > 0` — `isRoundDuplicatable`
+ * in the spec store gates this. The restriction sidesteps the
+ * "duplicating the final round auto-mirrors into a nonexistent
+ * counterpart" half-state.
+ */
+const DuplicateGlyph = (props: {
+  x: number;
+  y: number;
+  /** Container id for the tooltip + testid. */
+  containerId: string;
+  onDuplicate: () => void;
+}) => (
+  <g
+    class="graph-duplicate-button"
+    data-testid={`graph-duplicate-${props.containerId}`}
+    transform={`translate(${props.x}, ${props.y})`}
+    onClick={(e) => {
+      e.stopPropagation();
+      props.onDuplicate();
+    }}
+    onPointerDown={(e) => {
+      // Same rationale as DeleteGlyph: prevent the parent's drag-start
+      // from claiming the gesture.
+      e.stopPropagation();
+    }}
+    onKeyDown={(e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        e.stopPropagation();
+        props.onDuplicate();
+      }
+    }}
+  >
+    <title>Duplicate {props.containerId}</title>
+    <circle
+      class="graph-duplicate-button-circle"
+      cx={WARNING_DOT_SIZE / 2}
+      cy={WARNING_DOT_SIZE / 2}
+      r={WARNING_DOT_SIZE / 2}
+    />
+    <text
+      class="graph-duplicate-button-glyph"
+      x={WARNING_DOT_SIZE / 2}
+      y={WARNING_DOT_SIZE / 2 + 0.5}
+      text-anchor="middle"
+      dominant-baseline="central"
+    >
+      +
+    </text>
+  </g>
+);
+
 const DeleteGlyph = (props: {
   x: number;
   y: number;
@@ -1723,6 +1787,19 @@ const ContainerRect = (props: {
         stepId={props.container.id}
         onDelete={() => removeStepFromSpec(props.container.id)}
       />
+      {/* Duplicate affordance for AES round groups. Sits immediately
+          to the right of the delete chip, in the same row, hidden via
+          the same hover-reveal CSS pattern. Gated by
+          `isRoundDuplicatable` so the final round (no clean counterpart)
+          doesn't render the button. */}
+      <Show when={isRoundDuplicatable(props.container.id)}>
+        <DuplicateGlyph
+          x={props.box.x + WARNING_DOT_INSET + WARNING_DOT_SIZE + 4}
+          y={props.box.y + (HEADER_H - WARNING_DOT_SIZE) / 2}
+          containerId={props.container.id}
+          onDuplicate={() => duplicateRoundInSpec(props.container.id)}
+        />
+      </Show>
       {/* Chevron hit area on the right side of the header band. Clicking
           toggles collapse via the layout store. */}
       <g
