@@ -44,6 +44,7 @@ import type { CipherDocument } from "@/core/document";
 import {
   type PaddingScheme,
   applyPaddingScheme,
+  duplicateRoundGroup,
   insertStepAfter,
   removeStep,
   updateAllStepsByType,
@@ -59,6 +60,7 @@ import {
   useCipherMode,
 } from "./cipher-mode";
 import { setByteFormat } from "./format";
+import { renameSpecLayoutIds } from "./layout";
 import { setPaddingScheme, usePaddingScheme } from "./padding";
 
 // ─── Mode ────────────────────────────────────────────────────────────────
@@ -114,102 +116,140 @@ const resolveDefault = (cipher: Cipher, cipherMode: CipherMode, mode: Mode): Cip
 };
 
 // ─── Signals ─────────────────────────────────────────────────────────────
+//
+// Two-spec store: encrypt and decrypt are held simultaneously, in
+// independent slots. Phase 4 of docs/plans/duplicate-round.md introduced
+// this shape so the auto-mirror feature can write to both slots in one
+// shot (`duplicateRoundInSpec` below) and so flipping mode preserves
+// each side's customizations.
+//
+// Public surface stays compatible: `useSpec()` still returns an accessor
+// for the currently active mode's spec. Behavior change worth noting:
+// `setMode` no longer resets the spec to canonical — it just flips the
+// active slot. `setCipher` / `setCipherMode` rebuild BOTH slots from
+// canonical (a cipher swap is a clean break).
+
+type SpecsByMode = { readonly encrypt: CipherSpec; readonly decrypt: CipherSpec };
+
+const buildCanonicalPair = (
+  cipher: Cipher,
+  cipherMode: CipherMode,
+  scheme: PaddingScheme,
+): SpecsByMode => ({
+  encrypt: applyPaddingScheme(resolveDefault(cipher, cipherMode, "encrypt"), "encrypt", scheme),
+  decrypt: applyPaddingScheme(resolveDefault(cipher, cipherMode, "decrypt"), "decrypt", scheme),
+});
 
 const [mode, setModeSignal] = createSignal<Mode>("encrypt");
-// Seed initial spec with the persisted (cipher, cipherMode, padding).
-const [spec, setSpec] = createSignal<CipherSpec>(
-  applyPaddingScheme(
-    resolveDefault(useCipher()(), useCipherMode()(), "encrypt"),
-    "encrypt",
-    usePaddingScheme()(),
-  ),
+const [specs, setSpecs] = createSignal<SpecsByMode>(
+  buildCanonicalPair(useCipher()(), useCipherMode()(), usePaddingScheme()()),
 );
 
+// Active-spec accessor — reads both signals so consumers tracking
+// `useSpec()` re-render on mode flips AND on per-slot edits.
+const activeSpec = (): CipherSpec => specs()[mode()];
+
 export const useMode = () => mode;
-export const useSpec = () => spec;
+export const useSpec = () => activeSpec;
+
+/**
+ * Read-only access to both slots. Used by the Save/Load surface so a
+ * future "save both modes' specs" flow has a clean read boundary; today
+ * only the active slot ships in the document, but the two-slot store
+ * makes a richer save trivial later.
+ */
+export const useSpecsByMode = () => specs;
+
+// Internal: replace only the active mode's slot. Used by edit helpers
+// (params, palette inserts, deletes) so changes to one mode never leak
+// into the other.
+const updateActive = (updater: (s: CipherSpec) => CipherSpec): void => {
+  const current = specs();
+  const m = mode();
+  const updated = updater(current[m]);
+  if (updated === current[m]) return; // reference-equal → no-op write
+  setSpecs({ ...current, [m]: updated } as SpecsByMode);
+};
+
+// Internal: replace both slots in one signal write. Used by selector
+// changes that rebuild canonical (cipher / cipherMode / padding) and by
+// duplicate-round's auto-mirror.
+const updateBoth = (updater: (s: CipherSpec, m: Mode) => CipherSpec): void => {
+  const current = specs();
+  setSpecs({
+    encrypt: updater(current.encrypt, "encrypt"),
+    decrypt: updater(current.decrypt, "decrypt"),
+  });
+};
 
 // ─── Mutators ────────────────────────────────────────────────────────────
 
 /**
- * Switch between encrypt and decrypt. RESETS the spec to the default for
- * the new (cipher, cipherMode, mode) — any in-progress experiments are
- * discarded. The active padding scheme is re-applied to the freshly-
- * loaded canonical spec so the user's choice persists across the flip.
+ * Switch between encrypt and decrypt. With the two-spec store this is a
+ * pure index flip — the OTHER slot keeps whatever the user last left in
+ * it (e.g. customizations from a prior session-in-this-mode). Cipher and
+ * cipherMode swaps still rebuild both slots from canonical; this setter
+ * doesn't.
  */
 export const setMode = (m: Mode): void => {
   setModeSignal(m);
-  setSpec(
-    applyPaddingScheme(
-      resolveDefault(useCipher()(), useCipherMode()(), m),
-      m,
-      usePaddingScheme()(),
-    ),
-  );
 };
 
 /**
- * Switch the active cipher. Replaces the spec with the new cipher's
- * canonical default for the current (cipherMode, mode), then re-applies
- * the active padding overlay. If the new cipher doesn't support the
- * current cipherMode, the cipherMode signal is RESET to "single-block"
- * before the spec is rebuilt. Without this reset, `resolveDefault` would
- * silently fall back to single-block but the dropdown would still show
- * the unsupported mode — `paddingLimits` would then return the
- * multi-block range, the spec would run as single-block with the
- * padding overlay, and the user would see a deep "load-block: expected
- * 16, got 32" error instead of any UI signal.
+ * Switch the active cipher. Both slots rebuild from canonical for the
+ * new cipher × current cipherMode pair, then re-apply the active padding
+ * overlay. If the new cipher doesn't support the current cipherMode,
+ * the cipherMode signal RESETs to "single-block" first (same rationale
+ * as the prior single-spec version: keeps `paddingLimits` consistent
+ * with what the spec can actually accept).
  */
 export const setCipher = (c: Cipher): void => {
   setCipherSignal(c);
   if (!isCipherModeSupported(c, useCipherMode()())) {
     setCipherModeSignal("single-block");
   }
-  setSpec(
-    applyPaddingScheme(resolveDefault(c, useCipherMode()(), mode()), mode(), usePaddingScheme()()),
-  );
+  setSpecs(buildCanonicalPair(c, useCipherMode()(), usePaddingScheme()()));
 };
 
 /**
- * Switch the block-cipher mode of operation (single-block / ecb / cbc /
- * ctr). Replaces the spec with the multi-block factory's output for the
- * current cipher + mode, then re-applies the padding overlay. If the
- * requested cipherMode isn't registered for the current cipher, falls
- * back to single-block.
+ * Switch the block-cipher mode of operation. Both slots rebuild from
+ * canonical so encrypt/decrypt stay coherent (the multi-block factory
+ * builds the matching pair).
  */
 export const setCipherMode = (m: CipherMode): void => {
   setCipherModeSignal(m);
-  setSpec(
-    applyPaddingScheme(resolveDefault(useCipher()(), m, mode()), mode(), usePaddingScheme()()),
-  );
+  setSpecs(buildCanonicalPair(useCipher()(), m, usePaddingScheme()()));
 };
 
 /**
- * Switch the padding scheme. Persists the choice and rebuilds the current
- * spec with the new overlay. User edits to canonical AES leaves survive
- * because `applyPaddingScheme` only touches the overlay step types; it
- * walks the existing spec to strip+rebuild the padding chain without
- * disturbing the AES rounds.
+ * Switch the padding scheme. Re-applies the overlay to BOTH slots — the
+ * encrypt slot gets pad+load-block prepended, the decrypt slot gets
+ * store-block+unpad appended. `applyPaddingScheme` is idempotent (strips
+ * existing overlay before re-applying) so user edits to round leaves
+ * survive.
  */
 export const setPadding = (scheme: PaddingScheme): void => {
   setPaddingScheme(scheme);
-  setSpec((s) => applyPaddingScheme(s, mode(), scheme));
+  updateBoth((s, m) => applyPaddingScheme(s, m, scheme));
 };
 
 /**
- * Edit one specific step's params. The UI uses this when the user changes
- * a value in the ParamEditor and wants the change scoped to a single step.
+ * Edit one specific step's params. Writes to the ACTIVE mode's slot
+ * only — edits don't leak across modes. Two-spec semantics: encrypt's
+ * S-box change does not propagate to decrypt's S-box, by design.
  */
 export const editStepParams = (stepId: string, params: Json): void => {
-  setSpec((s) => updateStepParams(s, stepId, params));
+  updateActive((s) => updateStepParams(s, stepId, params));
 };
 
 /**
- * Apply an update to every step of a given type. Used for "swap the S-box
- * across all 10 round SubBytes steps in one click" — the more dramatic
- * modularity demo, since AES the cipher conceptually has ONE S-box.
+ * Apply an update to every step of a given type IN THE ACTIVE SPEC.
+ * Used for "swap the S-box across all 10 round SubBytes steps in one
+ * click." The decrypt slot's S-boxes are not touched (in fact, decrypt
+ * uses the INVERSE S-box — propagating verbatim would be wrong).
  */
 export const editAllStepsByType = (stepType: string, update: (params: Json) => Json): void => {
-  setSpec((s) => updateAllStepsByType(s, stepType, update));
+  updateActive((s) => updateAllStepsByType(s, stepType, update));
 };
 
 /**
@@ -260,7 +300,7 @@ export const editAllStepsByType = (stepType: string, update: (params: Json) => J
  */
 export const removeStepFromSpec = (stepId: string): void => {
   try {
-    setSpec((s) => removeStep(s, stepId));
+    updateActive((s) => removeStep(s, stepId));
   } catch (err) {
     // Stale id or other failure — surface to the console for debugging
     // but don't crash the UI. Real users won't see this; the path lights
@@ -273,7 +313,7 @@ export const insertStepIntoSpec = (
   stepType: string,
   anchor: { kind: "after"; stepId: string } | { kind: "root-append" },
 ): string => {
-  const currentSpec = spec();
+  const currentSpec = activeSpec();
   const newId = generateUniqueStepId(currentSpec, stepType);
   const newLeaf: StepLeaf = {
     kind: "step",
@@ -282,14 +322,103 @@ export const insertStepIntoSpec = (
     params: {},
   };
   if (anchor.kind === "after") {
-    setSpec(insertStepAfter(currentSpec, anchor.stepId, newLeaf));
+    updateActive((s) => insertStepAfter(s, anchor.stepId, newLeaf));
   } else {
     // root-append: rebuild the top-level array with the new leaf at the
     // end. `insertStepAfter` would also work if there's a last element,
     // but a direct append covers the empty-spec edge case uniformly.
-    setSpec({ ...currentSpec, steps: [...currentSpec.steps, newLeaf] });
+    updateActive((s) => ({ ...s, steps: [...s.steps, newLeaf] }));
   }
   return newId;
+};
+
+/**
+ * Duplicate-round entry point for the graph-view toolbar (Phase 4 of
+ * docs/plans/duplicate-round.md). Invariants:
+ *
+ *   - The CURRENT mode's spec is mutated via `duplicateRoundGroup` with
+ *     the appropriate direction (forward for encrypt, reverse for
+ *     decrypt).
+ *   - The COUNTERPART mode's spec is also mutated, with the opposite
+ *     direction and the source id translated by key index
+ *     (round.N ↔ inv-round.N).
+ *   - Both slots are written in one signal update.
+ *   - Layout pins are migrated for BOTH spec.id's via
+ *     `renameSpecLayoutIds`. Pins on un-renamed nodes stay.
+ *   - Stacking duplicates: the second call applies the mutator to the
+ *     LIVE (already-modified) counterpart slot, not to canonical. So
+ *     two duplicates on encrypt produce a decrypt with two mirrored
+ *     duplicates.
+ *
+ * Failure modes:
+ *   - Active-side mutator throws → the entire call throws; nothing
+ *     changes. (Bad source id, source isn't a group, etc.)
+ *   - Counterpart mutator throws → active-side change still lands but
+ *     counterpart is left unchanged. The user sees a console warning;
+ *     they can manually adjust decrypt. This path is reachable if the
+ *     counterpart spec has been customized in a way that lost the
+ *     matching inv-round.N (e.g. user deleted it manually).
+ *
+ * The source id is restricted to non-final rounds by the UI layer
+ * (Phase 5) — round.{rounds} / inv-round.0 have no clean auto-mirror
+ * because the canonical decrypt has no inv-round.{rounds}.
+ */
+export const duplicateRoundInSpec = (sourceId: string): void => {
+  const currentMode = mode();
+  const current = specs();
+  const activeDirection: "forward" | "reverse" = currentMode === "encrypt" ? "forward" : "reverse";
+
+  // Active-side: throws propagate to the caller (UI surfaces in the
+  // existing error banner). Without this, a typo'd id would silently
+  // no-op which would be a debugging puzzle.
+  const { spec: newActive, renames: activeRenames } = duplicateRoundGroup(
+    current[currentMode],
+    sourceId,
+    activeDirection,
+  );
+
+  // Counterpart-side: best-effort. The counterpart's source id swaps
+  // by key index — round.N ↔ inv-round.N — preserving the "same key
+  // index, mirrored direction" semantic.
+  const counterpartMode: Mode = currentMode === "encrypt" ? "decrypt" : "encrypt";
+  const counterpartDirection: "forward" | "reverse" =
+    counterpartMode === "encrypt" ? "forward" : "reverse";
+  const counterpartSourceId =
+    activeDirection === "forward"
+      ? sourceId.replace(/^round\./, "inv-round.")
+      : sourceId.replace(/^inv-round\./, "round.");
+
+  let newCounterpart: CipherSpec = current[counterpartMode];
+  let counterpartRenames: ReadonlyMap<string, string> = new Map();
+  try {
+    const result = duplicateRoundGroup(
+      current[counterpartMode],
+      counterpartSourceId,
+      counterpartDirection,
+    );
+    newCounterpart = result.spec;
+    counterpartRenames = result.renames;
+  } catch (err) {
+    // Don't roll back active-side: the user explicitly clicked
+    // duplicate, and partial success > total failure when the
+    // counterpart is the only failed side.
+    console.warn(
+      `duplicateRoundInSpec: counterpart mirror failed for ${counterpartSourceId}:`,
+      err,
+    );
+  }
+
+  // Single signal update: both slots land atomically. Subscribers see
+  // one consistent (encrypt, decrypt) pair.
+  setSpecs({
+    [currentMode]: newActive,
+    [counterpartMode]: newCounterpart,
+  } as SpecsByMode);
+
+  // Layout migration. Both specs have their own layout entry keyed by
+  // spec.id; each gets the matching rename map applied.
+  renameSpecLayoutIds(newActive.id, activeRenames);
+  renameSpecLayoutIds(newCounterpart.id, counterpartRenames);
 };
 
 /**
@@ -366,25 +495,37 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
     setPaddingScheme(doc.session.padding);
     setModeSignal(doc.session.mode);
   }
-  // Set the document's spec literally — no padding overlay re-application,
-  // no canonical-default fallback. The document author already baked the
-  // overlay into the serialized spec (round-trip property locked in by
-  // tests/document-roundtrip.test.ts).
-  setSpec(doc.spec);
+  // Document carries one spec (for the document's mode). Land it in the
+  // matching slot; rebuild the OTHER slot from canonical so the
+  // unactive mode is consistent with the current selectors. A saved
+  // document doesn't carry the counterpart, so this is the best we can
+  // do without a richer document schema.
+  const docMode: Mode = doc.session?.mode ?? mode();
+  const otherMode: Mode = docMode === "encrypt" ? "decrypt" : "encrypt";
+  const otherCanonical = applyPaddingScheme(
+    resolveDefault(useCipher()(), useCipherMode()(), otherMode),
+    otherMode,
+    usePaddingScheme()(),
+  );
+  setSpecs({
+    [docMode]: doc.spec,
+    [otherMode]: otherCanonical,
+  } as SpecsByMode);
 };
 
 /**
  * Restore the default spec for the current (cipher, cipherMode, mode).
- * Preserves the padding scheme + cipher + cipherMode.
+ * Affects the ACTIVE slot only — the counterpart slot keeps whatever
+ * the user has there. Matches the existing single-spec semantic of
+ * "reset the thing I'm looking at."
  */
 export const resetSpec = (): void => {
-  setSpec(
-    applyPaddingScheme(
-      resolveDefault(useCipher()(), useCipherMode()(), mode()),
-      mode(),
-      usePaddingScheme()(),
-    ),
+  const canonical = applyPaddingScheme(
+    resolveDefault(useCipher()(), useCipherMode()(), mode()),
+    mode(),
+    usePaddingScheme()(),
   );
+  updateActive(() => canonical);
 };
 
 /**
@@ -446,11 +587,15 @@ export const isCustomSpec = (): boolean => {
     mode(),
     usePaddingScheme()(),
   );
-  return !deepEqualJson(spec(), canonical);
+  return !deepEqualJson(activeSpec(), canonical);
 };
 
 /** Test-only reset; production code uses the setters above. */
 export const __resetSpecForTests = (): void => {
   setModeSignal("encrypt");
-  setSpec(applyPaddingScheme(aes128Spec, "encrypt", usePaddingScheme()()));
+  const scheme = usePaddingScheme()();
+  setSpecs({
+    encrypt: applyPaddingScheme(aes128Spec, "encrypt", scheme),
+    decrypt: applyPaddingScheme(aes128DecryptSpec, "decrypt", scheme),
+  });
 };
