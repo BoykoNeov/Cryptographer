@@ -484,4 +484,95 @@ describe("validateGraph — cycle detection", () => {
     };
     expect(validateGraph(graph, emptyTrace)).toEqual([]);
   });
+
+  // ─── Iterate-feedback exclusion ───────────────────────────────────────────
+  // CBC's chain feedback (writer→reader within one iterate body, going
+  // backwards in spec order) is the canonical motivator: the `:b{i}`
+  // stepId-strip merges iteration N's snapshot-write with iteration N+1's
+  // xor-read, producing an edge that looks like a cycle in canonical-id
+  // space but is just per-iteration feedback. Filter it out at the cycle
+  // detector — same edge stays in graph.edges (renderer still draws it).
+
+  it("does NOT flag aux feedback inside an iterate body (CBC chain pattern)", () => {
+    // Hand-build: an iterate "loop" with two leaves; the second writes
+    // aux[chain] and the first reads it (the `:b{i}`-collapsed shape).
+    // A forward state edge from xor → snapshot completes the
+    // would-be-cycle. The fix suppresses the cycle warning.
+    const graph: CipherGraph = {
+      nodes: [
+        { ...makeNode("xor"), containerPath: ["loop"] },
+        { ...makeNode("snapshot"), containerPath: ["loop"] },
+      ],
+      containers: [
+        {
+          kind: "iterate",
+          id: "loop",
+          label: "loop",
+          containerPath: [],
+          childIds: ["xor", "snapshot"],
+        },
+      ],
+      edges: [
+        // Forward state edge (the AES body, simplified to a single hop).
+        { from: "xor", to: "snapshot", auxKey: "state", kind: "state" },
+        // Backwards aux edge: snapshot writes chain, xor reads it
+        // (canonicalized across iteration boundaries).
+        auxEdge("snapshot", "xor", "chain"),
+      ],
+      rootIds: ["loop"],
+    };
+    const warnings = validateGraph(graph, emptyTrace);
+    expect(warnings.filter((w) => w.kind === "cycle")).toEqual([]);
+  });
+
+  it("STILL flags a real cycle inside a non-iterate group (filter is iterate-specific)", () => {
+    // Group ancestor (not iterate). A genuine logic loop here is a real
+    // cycle the user would want to know about. The filter must not fire.
+    const graph: CipherGraph = {
+      nodes: [
+        { ...makeNode("a"), containerPath: ["grp"] },
+        { ...makeNode("b"), containerPath: ["grp"] },
+      ],
+      containers: [
+        {
+          kind: "group",
+          id: "grp",
+          label: "grp",
+          containerPath: [],
+          childIds: ["a", "b"],
+        },
+      ],
+      edges: [auxEdge("a", "b", "x"), auxEdge("b", "a", "y")],
+      rootIds: ["grp"],
+    };
+    const warnings = validateGraph(graph, emptyTrace);
+    const cycle = warnings.find((w) => w.kind === "cycle");
+    expect(cycle).toBeDefined();
+  });
+
+  it("STILL flags a cycle that crosses an iterate boundary (filter requires SHARED iterate ancestor)", () => {
+    // One endpoint inside an iterate, one outside. The common ancestor is
+    // the root (not an iterate), so the filter must not fire even though
+    // the iterate-feedback shape looks similar.
+    const graph: CipherGraph = {
+      nodes: [
+        { ...makeNode("outer"), containerPath: [] },
+        { ...makeNode("inner"), containerPath: ["loop"] },
+      ],
+      containers: [
+        {
+          kind: "iterate",
+          id: "loop",
+          label: "loop",
+          containerPath: [],
+          childIds: ["inner"],
+        },
+      ],
+      edges: [auxEdge("outer", "inner", "x"), auxEdge("inner", "outer", "y")],
+      rootIds: ["outer", "loop"],
+    };
+    const warnings = validateGraph(graph, emptyTrace);
+    const cycle = warnings.find((w) => w.kind === "cycle");
+    expect(cycle).toBeDefined();
+  });
 });

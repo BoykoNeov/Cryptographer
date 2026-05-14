@@ -22,6 +22,7 @@
 import { aes128CbcSpec } from "@/ciphers/aes-128-cbc";
 import { aes128CbcDecryptSpec } from "@/ciphers/aes-128-cbc-decrypt";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { deriveAuxGraph, validateGraph } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue } from "@/core/types";
@@ -134,6 +135,34 @@ describe("AES-128 CBC (NIST SP 800-38A §F.2)", () => {
     // the iterate node).
     const ivFrame = trace.frames.find((f) => f.stepId === "iv-load");
     expect(ivFrame).toBeDefined();
+  });
+
+  it("multi-block trace produces NO cycle warnings (iterate-feedback regression)", () => {
+    // The `:b{i}` collapse merges per-iteration aux writes / reads onto
+    // one canonical stepId. For CBC, cbc-snapshot's chain-write in
+    // iteration N merges with cbc-xor's chain-read in iteration N+1,
+    // producing a backwards aux edge in canonical-id space. Combined
+    // with the forward state spine through the AES body, the naive
+    // cycle detector would flag the entire iterate body. This test pins
+    // the iterate-feedback exclusion in validateGraph that suppresses
+    // the false alarm.
+    const trace = runSpec(aes128CbcSpec, buildDefaultRegistry(), {
+      initialState: makeBytesState(bytesFromHex(PLAINTEXT_4_BLOCKS)),
+      initialAux: buildAux(),
+    });
+    const graph = deriveAuxGraph(trace, aes128CbcSpec);
+    const warnings = validateGraph(graph, trace);
+    expect(warnings.filter((w) => w.kind === "cycle")).toEqual([]);
+
+    // Same for decrypt — the aux-copy(next-chain → chain) advance is
+    // ALSO a backwards aux edge once collapsed.
+    const decTrace = runSpec(aes128CbcDecryptSpec, buildDefaultRegistry(), {
+      initialState: makeBytesState(bytesFromHex(CBC_CIPHERTEXT_4_BLOCKS)),
+      initialAux: buildAux(),
+    });
+    const decGraph = deriveAuxGraph(decTrace, aes128CbcDecryptSpec);
+    const decWarnings = validateGraph(decGraph, decTrace);
+    expect(decWarnings.filter((w) => w.kind === "cycle")).toEqual([]);
   });
 
   it("round-trips an arbitrary 48-byte plaintext (3 blocks) through encrypt → decrypt", () => {

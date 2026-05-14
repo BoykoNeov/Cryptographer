@@ -919,9 +919,100 @@ export const validateGraph = (graph: CipherGraph, trace: Trace): GraphWarning[] 
   // Build an adjacency list over BOTH aux and state edges (a future Feistel
   // branching primitive could in principle create a cycle that crosses the
   // state thread; cheap to include both today). Search; surface the first
-  // cycle found. Today's shipped specs are acyclic by construction.
+  // cycle found.
+  //
+  // **Iterate-feedback exclusion.** The runtime emits per-iteration frames
+  // with `:b{i}`-suffixed stepIds; deriveAuxGraph strips that suffix so
+  // iteration replicas collapse into one canonical node per logical leaf.
+  // That collapse also collapses cross-iteration aux flow: in CBC,
+  // `cbc-snapshot:b0` writes `aux[chain]` and `cbc-xor:b1` reads it; after
+  // the strip both endpoints canonicalize to `cbc-snapshot` and `cbc-xor`,
+  // producing an edge `cbc-snapshot → cbc-xor` that goes BACKWARDS in the
+  // iterate body's spec order. Combined with the forward state spine
+  // (`cbc-xor → ... → cbc-snapshot`), the cycle detector would flag the
+  // entire iterate body. That's a false positive — the real dataflow is
+  // acyclic when per-iteration ordering is respected.
+  //
+  // The filter rule is exact, not heuristic: with the executor contract
+  // `(state, params) → state` and aux writes happening in spec order, the
+  // ONLY way an edge `writer → reader` can exist with `writer` downstream
+  // of `reader` is the `:b{i}`-collapse case above. So we suppress any aux
+  // edge that (a) has its endpoints inside the same iterate ancestor AND
+  // (b) goes backwards in spec order within that iterate. State edges are
+  // never filtered — `inferStateEdges` only emits forward edges by
+  // construction, and a backwards state edge would indicate a real bug.
+  //
+  // The edge stays in `graph.edges`, so the renderer still draws it (the
+  // user wants to see the chain feedback). Only the cycle detector
+  // ignores it. A future renderer feature could draw feedback edges with
+  // a distinctive style (curved arrow, dashed); tracked in the graph-view
+  // UX polish memory entry.
+
+  // Pre-order DFS spec-order: parent < children < parent's next sibling.
+  // We need this so `cbc-blocks < cbc-xor < ... < cbc-snapshot`, which
+  // makes the backwards edge `cbc-snapshot → cbc-xor` correctly trigger
+  // `fromOrder > toOrder`. Walking rootIds + each container's childIds
+  // preserves spec order because both are populated in spec order during
+  // `walkSpec` and `deriveAuxGraph`.
+  const specOrder = new Map<string, number>();
+  const containerById = new Map<string, ContainerNode>();
+  for (const c of graph.containers) containerById.set(c.id, c);
+  {
+    let order = 0;
+    const orderWalk = (ids: readonly string[]): void => {
+      for (const id of ids) {
+        specOrder.set(id, order++);
+        const c = containerById.get(id);
+        if (c) orderWalk(c.childIds);
+      }
+    };
+    orderWalk(graph.rootIds);
+  }
+
+  // containerPath + iterate-id lookups. Both leaves and iterate containers
+  // can participate in edges (the iterate-mediated aux synthesis makes the
+  // container an edge participant).
+  const pathById = new Map<string, readonly string[]>();
+  for (const n of graph.nodes) pathById.set(n.stepId, n.containerPath);
+  for (const c of graph.containers) pathById.set(c.id, c.containerPath);
+
+  const iterateIds = new Set<string>();
+  for (const c of graph.containers) {
+    if (c.kind === "iterate") iterateIds.add(c.id);
+  }
+
+  // Deepest common iterate ancestor of two containerPaths. Returns undefined
+  // when none — those edges are eligible for normal cycle detection.
+  // "Deepest common" not "any common": two nodes sharing a `group` ancestor
+  // but not an iterate ancestor is a legitimate cycle scope (a real cycle
+  // there should be flagged).
+  const deepestCommonIterate = (a: readonly string[], b: readonly string[]): string | undefined => {
+    const maxLen = Math.min(a.length, b.length);
+    let deepest: string | undefined;
+    for (let i = 0; i < maxLen; i++) {
+      const ai = a[i];
+      if (ai === undefined || ai !== b[i]) break;
+      if (iterateIds.has(ai)) deepest = ai;
+    }
+    return deepest;
+  };
+
+  const isIterateFeedback = (edge: GraphEdge): boolean => {
+    // State edges are forward-only by construction; never feedback.
+    if (edge.kind !== "aux") return false;
+    const fromPath = pathById.get(edge.from);
+    const toPath = pathById.get(edge.to);
+    if (fromPath === undefined || toPath === undefined) return false;
+    if (deepestCommonIterate(fromPath, toPath) === undefined) return false;
+    const fromOrder = specOrder.get(edge.from);
+    const toOrder = specOrder.get(edge.to);
+    if (fromOrder === undefined || toOrder === undefined) return false;
+    return fromOrder > toOrder;
+  };
+
   const adjacency = new Map<string, string[]>();
   for (const edge of graph.edges) {
+    if (isIterateFeedback(edge)) continue;
     const list = adjacency.get(edge.from) ?? [];
     list.push(edge.to);
     adjacency.set(edge.from, list);
