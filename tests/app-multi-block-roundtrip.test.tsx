@@ -128,14 +128,14 @@ describe("App — multi-block ECB round-trip (Phase 1)", () => {
     expect(recovered).toBe(PLAINTEXT);
   });
 
-  it("cipher-mode dropdown disables CBC and CTR (Phase 2/3 placeholders)", () => {
+  it("cipher-mode dropdown enables ECB + CBC, disables CTR (Phase 3 placeholder)", () => {
     const { container } = render(() => <App />);
     const sel = findSelectByLabel(container, "mode of operation");
     const cbcOption = Array.from(sel.options).find((o) => o.value === "cbc");
     const ctrOption = Array.from(sel.options).find((o) => o.value === "ctr");
-    expect(cbcOption?.disabled).toBe(true);
+    // CBC enabled as of Phase 2; CTR remains a Phase 3 placeholder.
+    expect(cbcOption?.disabled).toBe(false);
     expect(ctrOption?.disabled).toBe(true);
-    // ECB is enabled.
     const ecbOption = Array.from(sel.options).find((o) => o.value === "ecb");
     expect(ecbOption?.disabled).toBe(false);
   });

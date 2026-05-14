@@ -23,6 +23,8 @@
  */
 
 import { aes128Spec } from "@/ciphers/aes-128";
+import { aes128CbcSpec } from "@/ciphers/aes-128-cbc";
+import { aes128CbcDecryptSpec } from "@/ciphers/aes-128-cbc-decrypt";
 import { aes128DecryptSpec } from "@/ciphers/aes-128-decrypt";
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { aes128EcbDecryptSpec } from "@/ciphers/aes-128-ecb-decrypt";
@@ -76,6 +78,7 @@ const defaults: Record<Cipher, Partial<Record<CipherMode, Record<Mode, CipherSpe
   "aes-128": {
     "single-block": { encrypt: aes128Spec, decrypt: aes128DecryptSpec },
     ecb: { encrypt: aes128EcbSpec, decrypt: aes128EcbDecryptSpec },
+    cbc: { encrypt: aes128CbcSpec, decrypt: aes128CbcDecryptSpec },
   },
   "aes-192": {
     "single-block": { encrypt: aes192Spec, decrypt: aes192DecryptSpec },

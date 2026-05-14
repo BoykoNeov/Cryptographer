@@ -298,6 +298,15 @@ export const App = () => {
           : matrixFromBytes(inputBytes);
 
       const initialAux = new Map<string, AuxValue>([["key", keyBytes]]);
+      // CBC needs an IV seeded into aux. The dedicated IV store + UI input
+      // arrive in the next commit; for now we seed an all-zero placeholder
+      // so the spec runs end-to-end (matching NIST SP 800-38A §F.2.1's IV
+      // when the user types all zeros). The constant IV is sufficient to
+      // demonstrate the CBC chain — identical plaintext blocks still
+      // produce different ciphertext after the first block.
+      if (cipherMode() === "cbc") {
+        initialAux.set("iv", new Uint8Array(16));
+      }
       const currentSpec = spec();
       const trace = runSpec(currentSpec, registry, {
         initialState,
@@ -848,7 +857,7 @@ export const App = () => {
             disabled={!isAesCipher(cipher())}
             title={
               isAesCipher(cipher())
-                ? "Block-cipher mode of operation. 'single block' keeps the canonical FIPS-197 single-block trace. ECB encrypts each block independently (educational baseline — the Tux-image leak). CBC/CTR ship in later phases. AES-128 is the only variant with the multi-block factories wired up today — AES-192/256 ECB lands in Phase 4."
+                ? "Block-cipher mode of operation. 'single block' keeps the canonical FIPS-197 single-block trace. ECB encrypts each block independently (educational baseline — the Tux-image leak). CBC chains blocks via the IV + previous-ciphertext XOR so identical plaintext blocks produce different ciphertext. CTR ships in Phase 3. AES-128 is the only variant with the multi-block factories wired up today — AES-192/256 lands in Phase 4."
                 : "Modes of operation are AES-only in this build; Speck runs as a single-block cipher."
             }
           >
@@ -867,9 +876,15 @@ export const App = () => {
             </option>
             <option
               value="cbc"
-              disabled={!(SUPPORTED_CIPHER_MODES as readonly string[]).includes("cbc")}
+              disabled={
+                !(SUPPORTED_CIPHER_MODES as readonly string[]).includes("cbc") ||
+                !isCipherModeSupported(cipher(), "cbc")
+              }
             >
-              {CIPHER_MODE_LABELS.cbc} (coming Phase 2)
+              {CIPHER_MODE_LABELS.cbc}
+              {isAesCipher(cipher()) && !isCipherModeSupported(cipher(), "cbc")
+                ? " (AES-128 only in Phase 2)"
+                : ""}
             </option>
             <option
               value="ctr"

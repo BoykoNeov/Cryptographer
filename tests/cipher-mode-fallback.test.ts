@@ -23,10 +23,11 @@ import { isCipherModeSupported } from "@/ui/stores/cipher-mode";
 import { describe, expect, it } from "vitest";
 
 describe("cipher-mode × cipher support matrix", () => {
-  it("Phase 1: AES-128 supports single-block + ecb; others single-block only", () => {
+  it("Phase 2: AES-128 supports single-block + ecb + cbc; others single-block only", () => {
     expect(isCipherModeSupported("aes-128", "single-block")).toBe(true);
     expect(isCipherModeSupported("aes-128", "ecb")).toBe(true);
-    expect(isCipherModeSupported("aes-128", "cbc")).toBe(false);
+    expect(isCipherModeSupported("aes-128", "cbc")).toBe(true);
+    // CTR ships in Phase 3.
     expect(isCipherModeSupported("aes-128", "ctr")).toBe(false);
 
     for (const cipher of ["aes-192", "aes-256", "speck-32-64-be", "speck-32-64-le"] as const) {

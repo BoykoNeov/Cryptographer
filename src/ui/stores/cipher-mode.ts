@@ -32,10 +32,10 @@ export type CipherMode = "single-block" | "ecb" | "cbc" | "ctr";
 
 const ALL_CIPHER_MODES: readonly CipherMode[] = ["single-block", "ecb", "cbc", "ctr"];
 
-// Phase 1 ships ECB; CBC + CTR arrive in later phases. The dropdown shows
-// all four entries but disables the unsupported ones so the eventual
-// rollout doesn't move things around in the UI.
-export const SUPPORTED_CIPHER_MODES: readonly CipherMode[] = ["single-block", "ecb"];
+// Phase 1 shipped ECB; Phase 2 ships CBC; CTR arrives in Phase 3. The
+// dropdown shows all four entries but disables the unsupported ones so
+// the eventual rollout doesn't move things around in the UI.
+export const SUPPORTED_CIPHER_MODES: readonly CipherMode[] = ["single-block", "ecb", "cbc"];
 
 /**
  * Which (cipher, cipherMode) combinations have a concrete spec in
@@ -52,7 +52,7 @@ export const SUPPORTED_CIPHER_MODES: readonly CipherMode[] = ["single-block", "e
  * keep them in sync when registering a new mode factory.
  */
 export const SUPPORTED_CIPHER_MODES_BY_CIPHER: Readonly<Record<Cipher, readonly CipherMode[]>> = {
-  "aes-128": ["single-block", "ecb"],
+  "aes-128": ["single-block", "ecb", "cbc"],
   "aes-192": ["single-block"],
   "aes-256": ["single-block"],
   "speck-32-64-be": ["single-block"],
