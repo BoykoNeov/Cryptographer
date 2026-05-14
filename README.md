@@ -44,11 +44,11 @@ Open `http://localhost:5173`. Hot reload kicks in on every save.
 | Command | What it does |
 |---|---|
 | `npm run dev` | Vite dev server with HMR. |
-| `npm test` | Vitest, single run. ~528 tests across 42 files, ~4s. |
+| `npm test` | Vitest, single run. ~678 tests across 54 files, ~7s. |
 | `npm run typecheck` | `tsc --noEmit`, strict mode. |
-| `npm run check` | The full gate: `biome ci . && tsc --noEmit && vitest run && vite build`. ~7s. |
+| `npm run check` | The full gate: `biome ci . && tsc --noEmit && vitest run && vite build`. ~10s. |
 | `npm run smoke` | Playwright real-browser smoke tests (currently the Slice 6 graph drag/collapse spec). |
-| `npm run build` | Production build into `dist/`. ~72 KB gzipped JS. |
+| `npm run build` | Production build into `dist/`. ~84 KB gzipped JS. |
 
 The pre-commit hook in `.githooks/pre-commit` runs `npm run check`. GitHub Actions runs the same on push.
 

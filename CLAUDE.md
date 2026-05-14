@@ -7,10 +7,10 @@ Interactive cryptography explorer. The user enters plaintext + key, sees every i
 | Command | What it does |
 |---|---|
 | `npm run dev` | Vite dev server at `http://localhost:5173`. Hot-reloads on file changes. |
-| `npm test` | Vitest, single run. Currently 608 tests across 49 files, ~5s total (jsdom UI tests dominate). |
+| `npm test` | Vitest, single run. Currently 678 tests across 54 files, ~7s total (jsdom UI tests dominate). |
 | `npm run typecheck` | `tsc --noEmit`, strict. |
-| `npm run check` | The gate: `biome ci . && tsc --noEmit && vitest run && vite build`. Runs in ~7s on this machine. |
-| `npm run build` | Production build into `dist/`. ~72KB gzipped JS. |
+| `npm run check` | The gate: `biome ci . && tsc --noEmit && vitest run && vite build`. Runs in ~10s on this machine. |
+| `npm run build` | Production build into `dist/`. ~84 KB gzipped JS. |
 
 The pre-commit hook in `.githooks/pre-commit` runs `npm run check`. GitHub Actions in `.github/workflows/ci.yml` runs the same on push. Don't bypass with `--no-verify` unless you have a specific reason; both gates exist for a reason.
 
@@ -36,6 +36,50 @@ State is a discriminated union: `BytesState`, `MatrixState` (4×4 byte matrix, c
 The future "binary export" feature is what *forced* the spec-as-data choice: a code generator can consume JSON, not closures.
 
 **Detailed file-by-file inventory: see `docs/key-files.md`.** For step-type-specific guidance (adding new ones), see `src/steps/CLAUDE.md`.
+
+### Graph view + persistence
+
+The 2D editor (the "graph" view tab, alongside `linear` / `json` in
+`src/ui/stores/view-mode.ts`) is a second derivation layered on top of
+the same trace the linear view consumes. Pure functions own each step:
+`deriveAuxGraph(trace, spec) → CipherGraph` builds the DAG from the
+recorded `auxRead`/`auxWritten`/`auxReadMissing` on each `TraceFrame`;
+`collapseGraph` rewrites it for collapsed containers; `replicateHighFanoutSources`
+splits source nodes whose fanout exceeds a threshold; `validateGraph(graph, trace)`
+emits `GraphWarning[]` (orphaned-read / unused-write / cycle). The SVG
+renderer in `src/ui/components/GraphView.tsx` consumes the post-pipeline
+graph and overlays the layout sidecar (`src/ui/stores/layout.ts`,
+per-spec.id, persisted to localStorage) for pinned positions + collapsed
+sets.
+
+**Authoring** is a two-channel surface. The palette
+(`src/ui/components/StepPalette.tsx`) lists every non-padding registered
+step type and emits HTML5 drags carrying the `STEP_TYPE_DRAG_MIME`
+payload; `GraphView`'s drop handler walks `closest("[data-drop-anchor]")`
+to map cursor → spec node, and routes to `insertStepIntoSpec(stepType,
+anchor)` in the spec store. The same store boundary handles in-place
+param edits via `editStepParams(stepId, params)` (driven by the
+`ParamEditor` rendered below `<GraphView />` so the panel is reachable
+from inside graph mode).
+
+**Persistence** lives in `src/core/document.ts` (the `CipherDocument`
+schema) and routes all I/O through `applyDocument` in `App.tsx`. Three
+entry points produce the same envelope:
+[save] downloads it as a `.cipher.json` blob; [share…] packs it into
+`#doc=<base64url-deflate-raw>` via the browser-native `CompressionStream`
+(`src/ui/stores/url-share.ts`); a paste of the URL into a fresh tab
+boots through `applyDocument` again. Spec-only saves (the default,
+without "include session") are byte-stable so URL-share hashes are
+deterministic — `metadata.createdAt` and `metadata.appVersion` are
+session-gated to keep that property. Layout pins survive Save/Share
+when the user has dragged or collapsed at least one container.
+
+**The end-to-end round-trip** — palette drop → param edit → layout pin
+→ Save → reset → Load — is pinned by
+`tests/built-from-palette-roundtrip.test.tsx`, the integration assertion
+the 11-slice plan promises. The in-app `?` button on the graph toolbar
+opens `docs/help/graph-view.md` (loaded via Vite `?raw`) inside a
+`<dialog>` for users who want a quick reference.
 
 ## Conventions
 
@@ -99,6 +143,7 @@ If a future need argues for one of these, revisit then.
 - `docs/versioning.md` — versioning policy for the three independent surfaces: app semver, step-type `@N` suffix bumps, document `schemaVersion` migration path. Read before any change that touches a step-type contract, the document schema, or the release process.
 - `src/steps/CLAUDE.md` — step-type-specific guidance.
 - `src/version.ts` — `APP_VERSION` constant re-exported from `package.json`. Consumed by the UI footer and the session-on document export.
+- `docs/help/graph-view.md` — user-facing reference for the graph view (edges, drag/drop, palette, warning glyphs, toolbar). Bundled into the app via Vite `?raw` and rendered inside the in-app help modal (`?` button in the graph toolbar). Keep this file the single source of truth — both GitHub readers and the in-app modal display the same prose.
 
 **Plans:**
 - Original architectural plan: `~/.claude/plans/i-want-to-build-tender-spark.md`
@@ -107,7 +152,7 @@ If a future need argues for one of these, revisit then.
 - Speck32/64 plan (shipped May 2026 — second cipher family, ARX, both BE-paper + LE-NSA byte conventions): `docs/plans/speck.md`
 - Multi-block AES with ECB/CBC/CTR plan (Phase 1 — loop primitive + AES-128 ECB — shipped May 2026; Phases 2–4 on paper): `docs/plans/multi-block-aes-modes.md`
 - Serpent cipher plan (all three key sizes, standard form with explicit IP/FP, single-block — shipped May 2026): `~/.claude/plans/i-want-serpent-cipher-indexed-finch.md`
-- 2D/DAG visual cipher editor + JSON document export plan (Slices 1–8 shipped May 2026; Slices 9–11 pending): `~/.claude/plans/peppy-knitting-fairy.md`. Memory entry `project_2d_editor_plan.md` tracks per-slice progress. Slice 8 (palette + graph insertion — `StepPalette.tsx` sidebar inside `.graph-view-layout`, HTML5 DnD via the `application/x-cryptographer-step-type` MIME, drop on a leaf calls `insertStepAfter(leafId)`, drop on a container header calls `insertStepAfter(containerId)` (after-the-container-in-its-parent, NOT into-container — explicit Slice 8 semantic), drop on empty canvas root-appends; padding overlay step types excluded from the palette so the next selector flip can't silently strip user inserts) shipped on `main` hand-rolled — a parallel solid-flow spike on branch `explore/solid-flow` is being driven by a separate session to evaluate the library route; don't touch that branch from here. Slice 7 (URL hash share — `[share…]` button, `#doc=<base64url-deflate-raw>`, browser-native `CompressionStream`, no new deps) shipped 2026-05-13 (commit `0bf381e`); the boot decode + share both route through the shared `applyDocument` boundary in `App.tsx`, factored out of `handleLoadFromText`. Option B (click-to-expand with `LayoutSpec.expandedLabels`) is an optional V2 follow-up for the readability sequence; pick up only on explicit user ask. **Next priority: Slice 9 (edge-aware validation)** — depends on Slice 1 only; produces `GraphWarning[]` from `core/graph.ts` (orphaned reads, unused writes, cycles), surfaces as overlay dots on graph nodes.
+- 2D/DAG visual cipher editor + JSON document export plan (all 11 slices shipped May 2026): `~/.claude/plans/peppy-knitting-fairy.md`. Memory entry `project_2d_editor_plan.md` tracks per-slice progress. Slice 8 (palette + graph insertion — `StepPalette.tsx` sidebar inside `.graph-view-layout`, HTML5 DnD via the `application/x-cryptographer-step-type` MIME, drop on a leaf calls `insertStepAfter(leafId)`, drop on a container header calls `insertStepAfter(containerId)` (after-the-container-in-its-parent, NOT into-container — explicit Slice 8 semantic), drop on empty canvas root-appends; padding overlay step types excluded from the palette so the next selector flip can't silently strip user inserts) shipped on `main` hand-rolled — a parallel solid-flow spike on branch `explore/solid-flow` is being driven by a separate session to evaluate the library route; don't touch that branch from here. Slice 7 (URL hash share — `[share…]` button, `#doc=<base64url-deflate-raw>`, browser-native `CompressionStream`, no new deps) shipped 2026-05-13 (commit `0bf381e`); the boot decode + share both route through the shared `applyDocument` boundary in `App.tsx`, factored out of `handleLoadFromText`. Option B (click-to-expand with `LayoutSpec.expandedLabels`) is an optional V2 follow-up for the readability sequence; pick up only on explicit user ask. **Next priority: Slice 9 (edge-aware validation)** — depends on Slice 1 only; produces `GraphWarning[]` from `core/graph.ts` (orphaned reads, unused writes, cycles), surfaces as overlay dots on graph nodes.
 
 **Future:**
 - **Feistel future**: A Feistel-style cipher (with branching state — left/right halves evolving independently in the round body) is a planned future addition. Today's executor contract `(state, params) → state` is what makes the upcoming derivation-time state-edge inference (in `core/graph.ts`) correct by construction: "consecutive same-parent leaves share state" is guaranteed, not assumed. A branching primitive would break that — both derivation-time AND any future runtime-recorded state-lineage approach would need revisiting when Feistel lands. Don't assume the inference generalizes for free.

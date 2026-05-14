@@ -67,6 +67,7 @@ import {
   setReplicationEnabled,
   useReplicationEnabled,
 } from "../stores/view-replication";
+import { GraphHelpModal } from "./GraphHelpModal";
 import { STEP_TYPE_DRAG_MIME, StepPalette } from "./StepPalette";
 
 // ─── Layout constants ──────────────────────────────────────────────────────
@@ -818,6 +819,14 @@ export const GraphView = () => {
   const [dragOverActive, setDragOverActive] = createSignal(false);
 
   /**
+   * Slice 11 — in-app help modal open state. Toggled by the toolbar's
+   * `?` button; `<GraphHelpModal>` reads it to drive the native
+   * `<dialog>` open/close. Local to GraphView (not in a store) because
+   * no other view cares whether the help panel is open.
+   */
+  const [helpOpen, setHelpOpen] = createSignal(false);
+
+  /**
    * Check whether a drag event carries a step-type payload from our palette.
    * `dataTransfer.types` is the only field readable during `dragover` —
    * `getData` is blocked outside `drop` for security reasons. So we sniff
@@ -1016,6 +1025,20 @@ export const GraphView = () => {
               />
               replicate fan-out
             </label>
+            {/* Slice 11 — in-app help button. Pushed to the right edge of
+            the toolbar via `margin-left: auto` in `.graph-view-help-button`
+            so it doesn't visually compete with the density + replicate
+            controls on the left. The actual help content lives in
+            `docs/help/graph-view.md` and renders via `GraphHelpModal`. */}
+            <button
+              type="button"
+              class="graph-view-help-button"
+              onClick={() => setHelpOpen(true)}
+              title="What does this view show? How do I drag and drop?"
+              aria-label="Show graph view help"
+            >
+              ?
+            </button>
           </fieldset>
           {/* Commit 5: per-source replication overrides. Visible only when
           the global toggle is ON — master-switch semantic means an
@@ -1245,6 +1268,11 @@ export const GraphView = () => {
           </svg>
         </Show>
       </div>
+      {/* Slice 11 — in-app help modal. Mounted at the layout root (sibling
+      to the palette + scroll wrapper) so its `<dialog>` backdrop can
+      cover the whole graph view, not just the SVG canvas. The modal owns
+      its own `<dialog>` lifecycle; we only flip the open signal here. */}
+      <GraphHelpModal isOpen={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   );
 };

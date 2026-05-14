@@ -1628,6 +1628,59 @@ button:disabled {
   color: var(--muted);
 }
 
+/* Slice 11 — help button in the graph toolbar. `margin-left: auto` pushes
+   it to the right edge of the fieldset so it doesn't visually compete
+   with the density + replicate controls. The narrow circular form is a
+   well-understood "what is this?" affordance; a `<title>` attribute
+   carries the long-form hint for hover. */
+.graph-view-help-button {
+  margin-left: auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-elev);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+.graph-view-help-button:hover {
+  background: var(--bg);
+  color: var(--text);
+  border-color: var(--text);
+}
+
+/* Slice 11 — help modal body. Inherits the base `.modal` chrome from
+   the run-explorer modal styles; the body just needs prose-friendly
+   spacing because the inlined Markdown can run several paragraphs. */
+.graph-help-body {
+  max-width: 70ch;
+  line-height: 1.5;
+  font-size: 13px;
+}
+
+.graph-help-body h1,
+.graph-help-body h2,
+.graph-help-body h3 {
+  margin-top: 1.2em;
+  margin-bottom: 0.4em;
+}
+
+.graph-help-body ul {
+  padding-left: 1.4em;
+}
+
+.graph-help-body code {
+  font-size: 0.92em;
+}
+
 /* Commit 5 — per-source replication override panel. Lives inside
    `.graph-view-sticky-header` so it shares the toolbar's sticky band;
    no `position: sticky` of its own (the old hardcoded `top: 32px` was
