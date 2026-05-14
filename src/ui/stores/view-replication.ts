@@ -27,12 +27,33 @@
 import { createSignal } from "solid-js";
 
 /**
- * Fanout threshold above which a source is eligible for replication. Hard-
- * coded for v1 to keep the user-facing surface a simple on/off toggle.
- * Commit 5 will surface per-node overrides; this constant becomes the
- * default for the "auto" mode there.
+ * Default fanout threshold above which a source is eligible for "auto"
+ * replication. Catches AES-128 key-expansion (11 round keys), Speck (22
+ * round keys), Serpent (32 round keys) while leaving small-fanout sources
+ * untouched. The user can override this at runtime via the toolbar number
+ * input — see `useReplicationThreshold`.
+ *
+ * Why "default" (not "the" threshold): per-spec persistence of a numeric
+ * threshold would land in `LayoutSpec`, which is the byte-stability surface
+ * (`docs/versioning.md`); a missing-when-default discipline keeps Save/Share
+ * deterministic, but adds noise to the spec layer for a knob most users
+ * won't change. Session-only is the pragmatic v1 — power users adjust it,
+ * the default ships everywhere else.
  */
-export const REPLICATION_THRESHOLD = 6;
+export const DEFAULT_REPLICATION_THRESHOLD = 6;
+
+/**
+ * Back-compat alias. Older call sites read `REPLICATION_THRESHOLD` as a
+ * constant; new code threads `useReplicationThreshold()` instead so the
+ * value reacts to the toolbar input.
+ */
+export const REPLICATION_THRESHOLD = DEFAULT_REPLICATION_THRESHOLD;
+
+/** Bounds for the toolbar's numeric input. Lower bound 1 (replicate on any
+ * fanout above 1); upper bound a safe sentinel that exceeds any realistic
+ * cipher's fanout (Serpent's 32 round keys is the current ceiling). */
+export const REPLICATION_THRESHOLD_MIN = 1;
+export const REPLICATION_THRESHOLD_MAX = 99;
 
 const STORAGE_KEY = "cryptographer.replicationEnabled";
 
@@ -62,9 +83,44 @@ export const setReplicationEnabled = (enabled: boolean): void => {
   }
 };
 
+/**
+ * Session-only signal for the user-adjustable fanout threshold. Lives at the
+ * module scope so it shares the same boundary as `replicationEnabled` — both
+ * are graph-view-global preferences, neither belongs in `LayoutSpec`.
+ *
+ * Why no persistence: keeps `LayoutSpec` byte-stable for share-URL hashing,
+ * and avoids the "is `threshold: 6` an explicit user choice or just the
+ * default?" ambiguity that bites the omit-when-default discipline elsewhere.
+ * The user re-picks per session; the default catches every cipher we ship.
+ */
+const [replicationThreshold, setReplicationThresholdSignal] = createSignal<number>(
+  DEFAULT_REPLICATION_THRESHOLD,
+);
+
+export const useReplicationThreshold = () => replicationThreshold;
+
+/**
+ * Set the active replication threshold. Out-of-range inputs are clamped
+ * silently — a number-input's `min`/`max` attributes are advisory in most
+ * browsers; pasting "999" still fires the change. Non-finite (`NaN`,
+ * `Infinity`) falls back to the default.
+ */
+export const setReplicationThreshold = (value: number): void => {
+  let next: number;
+  if (!Number.isFinite(value)) {
+    next = DEFAULT_REPLICATION_THRESHOLD;
+  } else {
+    next = Math.round(value);
+    if (next < REPLICATION_THRESHOLD_MIN) next = REPLICATION_THRESHOLD_MIN;
+    if (next > REPLICATION_THRESHOLD_MAX) next = REPLICATION_THRESHOLD_MAX;
+  }
+  setReplicationThresholdSignal(next);
+};
+
 /** Test hard-reset. Production code never calls this. */
 export const __resetReplicationForTests = (): void => {
   setReplicationEnabledSignal(false);
+  setReplicationThresholdSignal(DEFAULT_REPLICATION_THRESHOLD);
   try {
     if (typeof localStorage !== "undefined") {
       localStorage.removeItem(STORAGE_KEY);

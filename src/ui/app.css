@@ -1666,6 +1666,38 @@ button:disabled {
   color: var(--muted);
 }
 
+/* Threshold input next to the replicate-fanout checkbox. Disabled visually
+   when the master toggle is off so users see the dependency. The `>` glyph
+   reads "fanout greater than N" without needing a longer caption. */
+.graph-replicate-threshold {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.graph-replicate-threshold-label {
+  font-weight: 600;
+  user-select: none;
+}
+
+.graph-replicate-threshold-input {
+  width: 42px;
+  font-size: 11px;
+  padding: 1px 2px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-elev);
+  color: var(--text);
+  text-align: center;
+}
+
+.graph-replicate-threshold-input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* Slice 11 — help button in the graph toolbar. `margin-left: auto` pushes
    it to the right edge of the fieldset so it doesn't visually compete
    with the density + replicate controls. The narrow circular form is a

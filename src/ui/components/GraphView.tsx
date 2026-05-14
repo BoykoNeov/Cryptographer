@@ -70,9 +70,13 @@ import {
   useViewDensity,
 } from "../stores/view-density";
 import {
-  REPLICATION_THRESHOLD,
+  DEFAULT_REPLICATION_THRESHOLD,
+  REPLICATION_THRESHOLD_MAX,
+  REPLICATION_THRESHOLD_MIN,
   setReplicationEnabled,
+  setReplicationThreshold,
   useReplicationEnabled,
+  useReplicationThreshold,
 } from "../stores/view-replication";
 import { GraphHelpModal } from "./GraphHelpModal";
 import { STEP_TYPE_DRAG_MIME, StepPalette, useActiveDragStepType } from "./StepPalette";
@@ -577,6 +581,7 @@ export const GraphView = () => {
   const layoutMap = useLayoutMap();
   const density = useViewDensity();
   const replicate = useReplicationEnabled();
+  const replicationThreshold = useReplicationThreshold();
 
   /**
    * Size + gap constants for the active density. Memoized so the layout
@@ -682,7 +687,7 @@ export const GraphView = () => {
    */
   const graph = createMemo<CipherGraph>(() =>
     replicate()
-      ? replicateHighFanoutSources(collapsedGraph(), REPLICATION_THRESHOLD, replicationModes())
+      ? replicateHighFanoutSources(collapsedGraph(), replicationThreshold(), replicationModes())
       : collapsedGraph(),
   );
 
@@ -690,10 +695,13 @@ export const GraphView = () => {
    * Sources eligible for a row in the override panel: any id appearing in
    * `edge.from` for at least one aux edge in the collapsed graph. Sorted
    * by fanout descending so the high-fanout offenders surface first.
-   * Includes both leaf stepIds and iterate-container ids. Sources with
-   * fanout < 2 are filtered out — a single straight line gains nothing
-   * from replication, and listing every consumer-of-one as a row would
-   * drown the panel.
+   * Includes both leaf stepIds and iterate-container ids.
+   *
+   * Includes single-edge sources (fanout = 1). A user with a long arrow
+   * crossing the canvas may want to replicate even a one-consumer source
+   * to shorten that arrow — the original `fanout >= 2` cutoff hid that
+   * use case. The visual cost is a longer override panel; tradeoff
+   * favored the discoverability of "any aux edge can be locally replicated".
    */
   const replicationSources = createMemo<{ readonly id: string; readonly fanout: number }[]>(() => {
     const g = collapsedGraph();
@@ -704,7 +712,7 @@ export const GraphView = () => {
     }
     const rows: { id: string; fanout: number }[] = [];
     for (const [id, fanout] of counts) {
-      if (fanout >= 2) rows.push({ id, fanout });
+      if (fanout >= 1) rows.push({ id, fanout });
     }
     rows.sort((a, b) => b.fanout - a.fanout || a.id.localeCompare(b.id));
     return rows;
@@ -1064,14 +1072,20 @@ export const GraphView = () => {
               </For>
             </div>
             {/* Commit 4: high-fanout replica toggle. When ON, sources with
-            >REPLICATION_THRESHOLD outgoing aux edges (AES key-expansion,
-            Speck/Serpent key schedules) are replicated as small chips
-            next to each consumer, shortening edges and reducing visual
-            clutter. Off by default — the "one source, many edges" view
-            is also pedagogically valuable. */}
+            more than `replicationThreshold()` outgoing aux edges (AES
+            key-expansion, Speck/Serpent key schedules) are replicated as
+            small chips next to each consumer, shortening edges and reducing
+            visual clutter. Off by default — the "one source, many edges"
+            view is also pedagogically valuable.
+
+            The threshold input next to the checkbox lets the user lower
+            the bar (e.g. 1 to replicate everything) or raise it (e.g. 20
+            to only catch Speck/Serpent schedules and leave AES alone).
+            Default = DEFAULT_REPLICATION_THRESHOLD (6). Session-only —
+            kept out of LayoutSpec to preserve share-URL byte stability. */}
             <label
               class="graph-replicate-toggle"
-              title={`Show high-fanout sources (>${REPLICATION_THRESHOLD} outgoing aux edges) as small replicas next to each consumer`}
+              title={`Show sources with more than ${replicationThreshold()} outgoing aux edges as small replicas next to each consumer`}
             >
               <input
                 type="checkbox"
@@ -1079,6 +1093,26 @@ export const GraphView = () => {
                 onChange={(e) => setReplicationEnabled(e.currentTarget.checked)}
               />
               replicate fan-out
+            </label>
+            <label
+              class="graph-replicate-threshold"
+              title={`Sources with more than this many outgoing aux edges become replication candidates (default ${DEFAULT_REPLICATION_THRESHOLD}). Per-source overrides in the panel below take precedence.`}
+            >
+              <span class="graph-replicate-threshold-label">&gt;</span>
+              <input
+                type="number"
+                class="graph-replicate-threshold-input"
+                min={REPLICATION_THRESHOLD_MIN}
+                max={REPLICATION_THRESHOLD_MAX}
+                step={1}
+                value={replicationThreshold()}
+                disabled={!replicate()}
+                onInput={(e) => {
+                  const parsed = Number.parseInt(e.currentTarget.value, 10);
+                  setReplicationThreshold(parsed);
+                }}
+                aria-label="Fanout threshold for replication"
+              />
             </label>
             {/* Slice 11 — in-app help button. Pushed to the right edge of
             the toolbar via `margin-left: auto` in `.graph-view-help-button`
@@ -1112,7 +1146,7 @@ export const GraphView = () => {
               <div class="graph-replication-panel-header">
                 replication overrides
                 <span class="graph-replication-panel-hint">
-                  auto = follow global threshold ({REPLICATION_THRESHOLD})
+                  auto = follow global threshold ({replicationThreshold()})
                 </span>
               </div>
               <For each={replicationSources()}>
