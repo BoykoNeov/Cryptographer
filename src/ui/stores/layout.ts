@@ -351,6 +351,75 @@ export const hasUserLayout = (layout: LayoutSpec | null): boolean => {
   return false;
 };
 
+/**
+ * Apply an id-rename map to every layer of a LayoutSpec (positions,
+ * collapsedGroups, replicationModes). Used by the duplicate-round
+ * feature: when the spec mutator renames `round.3 → round.4`,
+ * `round.4 → round.5`, etc., any pre-existing layout pin or collapsed
+ * marker on the old id needs to follow the rename so the visual state
+ * stays attached to the same logical container.
+ *
+ * Pure: returns a new LayoutSpec with the rename applied. Un-renamed
+ * ids pass through unchanged. If `renames` is empty, returns the input
+ * by reference for cheap no-op short-circuit.
+ *
+ * Implementation notes:
+ *   • A collision-free rename map is assumed — if two old ids map to
+ *     the same new id, the later one in the `Object.entries` order wins
+ *     (positions, replicationModes). For the duplicate-round mutator
+ *     this never happens: the rename map is always a strict shift of
+ *     contiguous round numbers, so the destinations are all distinct.
+ *   • The `replicationModes` field is omitted from the result when
+ *     empty (same byte-stability discipline as `withReplicationModes`).
+ */
+export const renameLayoutIds = (
+  layout: LayoutSpec,
+  renames: ReadonlyMap<string, string>,
+): LayoutSpec => {
+  if (renames.size === 0) return layout;
+
+  const newPositions: { [stepId: string]: { x: number; y: number } } = {};
+  for (const [id, pos] of Object.entries(layout.positions)) {
+    const newId = renames.get(id) ?? id;
+    newPositions[newId] = pos;
+  }
+
+  const newCollapsedGroups = layout.collapsedGroups.map((id) => renames.get(id) ?? id);
+
+  let newReplicationModes: { [sourceId: string]: ReplicationMode } | undefined;
+  if (layout.replicationModes) {
+    const remapped: { [sourceId: string]: ReplicationMode } = {};
+    for (const [id, mode] of Object.entries(layout.replicationModes)) {
+      const newId = renames.get(id) ?? id;
+      remapped[newId] = mode;
+    }
+    if (Object.keys(remapped).length > 0) newReplicationModes = remapped;
+  }
+
+  return {
+    positions: newPositions,
+    collapsedGroups: newCollapsedGroups,
+    flowDirection: layout.flowDirection,
+    ...(newReplicationModes ? { replicationModes: newReplicationModes } : {}),
+  };
+};
+
+/**
+ * Apply a rename map to one spec's persisted layout in place (writes
+ * through the signal AND localStorage). No-op if the spec has no
+ * layout yet OR the rename map is empty.
+ */
+export const renameSpecLayoutIds = (specId: string, renames: ReadonlyMap<string, string>): void => {
+  if (renames.size === 0) return;
+  const current = layoutMap()[specId];
+  if (!current) return;
+  const next = renameLayoutIds(current, renames);
+  if (next === current) return;
+  const map = { ...layoutMap(), [specId]: next };
+  setLayoutMapSignal(map);
+  persist(map);
+};
+
 /** Hard reset for tests. Production code never calls this. */
 export const __resetLayoutsForTests = (): void => {
   setLayoutMapSignal({});
