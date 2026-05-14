@@ -78,9 +78,21 @@ describe("aux-load@1", () => {
     ).toThrow(/value\[1\] must be an integer in \[0, 255\]/);
   });
 
-  it("rejects non-string auxName", () => {
-    expect(() => auxLoad(emptyBytes(), { auxName: "", value: [] }, makeCtx(new Map()))).toThrow(
-      /auxName must be a non-empty string/,
+  it("treats empty auxName as unset (passthrough, no auxWrites) — palette-drop authoring state", () => {
+    const result = auxLoad(emptyBytes(), { auxName: "", value: [1, 2, 3] }, makeCtx(new Map()));
+    expect(result.auxWrites).toBeUndefined();
+  });
+
+  it("treats missing auxName as unset (passthrough)", () => {
+    // Palette-dropped params start as `{}` — auxName is undefined. Must
+    // not throw, must not write.
+    const result = auxLoad(emptyBytes(), {}, makeCtx(new Map()));
+    expect(result.auxWrites).toBeUndefined();
+  });
+
+  it("rejects non-string auxName (malformed JSON spec — not reachable from the UI)", () => {
+    expect(() => auxLoad(emptyBytes(), { auxName: 42, value: [] }, makeCtx(new Map()))).toThrow(
+      /auxName must be a string/,
     );
   });
 
@@ -150,6 +162,18 @@ describe("aux-xor@1", () => {
       /must be a Uint8Array/,
     );
   });
+
+  it("freshly-palette-dropped (empty params) emits a passthrough frame with empty-string reads declared", () => {
+    // The contract that lets the user drop the step onto the canvas, see
+    // an orphan-read warning glyph, then fill in the params one at a
+    // time. Without the lenient empty-string handling, the executor used
+    // to throw on `from must be a non-empty string`, which left the new
+    // node clickless (no frame → graph click can't focus the param
+    // panel) and warningless (no frame → no auxReadMissing).
+    const result = auxXor(emptyBytes(), {}, makeCtx(new Map()));
+    expect(result.auxWrites).toBeUndefined();
+    expect(result.auxReads).toEqual(["", ""]);
+  });
 });
 
 // ─── aux-copy ─────────────────────────────────────────────────────────────
@@ -186,6 +210,12 @@ describe("aux-copy@1", () => {
     const aux = new Map<string, AuxValue>([["count", 7]]);
     const result = auxCopy(emptyBytes(), { from: "count", to: "count-mirror" }, makeCtx(aux));
     expect(result.auxWrites?.get("count-mirror")).toBe(7);
+  });
+
+  it("freshly-palette-dropped (empty params) emits a passthrough frame with empty-string read declared", () => {
+    const result = auxCopy(emptyBytes(), {}, makeCtx(new Map()));
+    expect(result.auxWrites).toBeUndefined();
+    expect(result.auxReads).toEqual([""]);
   });
 });
 
@@ -231,6 +261,45 @@ describe("runtime integration — missing aux populates auxReadMissing on the fr
     expect(keys).toEqual(["a", "b"]);
     for (const w of orphans) {
       if (w.kind === "orphaned-read") expect(w.stepId).toBe("xor");
+    }
+  });
+
+  it("freshly palette-dropped aux-xor (params={}) emits a frame and surfaces orphan warnings", () => {
+    // Regression for the bug a user hit in browser-verification of Slice
+    // 10: drop aux-xor onto the canvas → no warning glyph → can't click
+    // through to params editor. Root cause was the executor throwing on
+    // empty `from`/`into`, which prevented a frame from being emitted,
+    // which left validateGraph with nothing to warn about and made the
+    // graph click handler's `t.frames.findIndex` return -1.
+    const droppedSpec: CipherSpec = {
+      id: "test-fresh-drop@1",
+      name: "test fresh palette drop",
+      stateShape: "bytes",
+      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+      steps: [{ kind: "step", id: "xor", type: "generic.aux-xor@1", params: {} }],
+    };
+    const trace = runSpec(droppedSpec, buildDefaultRegistry(), {
+      initialState: emptyBytes(),
+    });
+    // Frame emitted → graph click can land on it → param editor can
+    // resolve the step.
+    expect(trace.frames.length).toBe(1);
+    const frame = trace.frames[0];
+    expect(frame).toBeDefined();
+    if (!frame) return;
+    // Empty-string reads declared as missing → validator surfaces them.
+    expect(frame.auxReadMissing).toEqual(["", ""]);
+    const graph = deriveAuxGraph(trace, droppedSpec);
+    const warnings = validateGraph(graph, trace);
+    const orphans = warnings.filter((w) => w.kind === "orphaned-read");
+    // Both reads use the same auxKey (""), and validateGraph dedups by
+    // (stepId, auxKey) — so the two empty-string reads collapse to ONE
+    // warning. That's correct UX: a single glyph per node says "this
+    // step is unwired," regardless of how many fields are blank.
+    expect(orphans.length).toBe(1);
+    if (orphans[0]?.kind === "orphaned-read") {
+      expect(orphans[0].stepId).toBe("xor");
+      expect(orphans[0].auxKey).toBe("");
     }
   });
 

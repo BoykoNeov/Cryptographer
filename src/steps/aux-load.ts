@@ -30,6 +30,14 @@ import type { AuxValue, Json, StepDocumentation, StepExecutor } from "../core/ty
 
 export const auxLoad: StepExecutor = (state, params) => {
   const { auxName, value } = readParams(params);
+  // Unset auxName (freshly palette-dropped state) → passthrough, no write.
+  // No orphan warning fires (aux-load has no reads), but the user can
+  // still click the node and edit params normally. The Slice 9 validator
+  // will flag the empty `auxName` only once it lands in a real graph
+  // edge — for an unwired aux-load it's just inert.
+  if (auxName === "") {
+    return { state };
+  }
   // Fresh Uint8Array per call — never alias the params array. The runtime
   // may persist this value across many frames; sharing the backing storage
   // with a JSON literal in params would break the immutability the trace
@@ -101,16 +109,25 @@ rather than a privileged input.`,
   ],
 };
 
+/**
+ * Lenient param reader. Undefined/empty `auxName` collapses to `""` (the
+ * executor treats that as "unset"). Undefined `value` collapses to `[]`.
+ * Non-string `auxName` or non-array `value` throw (users can't produce
+ * those via the UI; their presence means a malformed JSON spec).
+ */
 const readParams = (params: Json): { auxName: string; value: readonly number[] } => {
   if (typeof params !== "object" || params === null || Array.isArray(params)) {
-    throw new Error("aux-load requires params.auxName + params.value");
+    throw new Error("aux-load: params must be an object");
   }
   const p = params as { auxName?: unknown; value?: unknown };
-  if (typeof p.auxName !== "string" || p.auxName.length === 0) {
-    throw new Error("aux-load: auxName must be a non-empty string");
+  if (p.auxName !== undefined && typeof p.auxName !== "string") {
+    throw new Error("aux-load: auxName must be a string");
   }
-  if (!Array.isArray(p.value)) {
+  if (p.value !== undefined && !Array.isArray(p.value)) {
     throw new Error("aux-load: value must be an array of integers");
   }
-  return { auxName: p.auxName, value: p.value as readonly number[] };
+  return {
+    auxName: (p.auxName as string | undefined) ?? "",
+    value: (p.value as readonly number[] | undefined) ?? [],
+  };
 };

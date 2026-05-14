@@ -49,12 +49,22 @@ import type { AuxValue, Json, StepDocumentation, StepExecutor } from "../core/ty
 
 export const auxCopy: StepExecutor = (state, params, ctx) => {
   const { from, to } = readParams(params);
+  // Declare the read regardless of presence so the runtime can record a
+  // missing key in `frame.auxReadMissing` (which surfaces as a Slice 9
+  // orphan-read warning glyph on the node). Empty `from` is by
+  // construction missing — `ctx.aux.get("")` is undefined.
   const auxReads: readonly string[] = [from];
 
-  const value = ctx.aux.get(from);
+  const value = from === "" ? undefined : ctx.aux.get(from);
   if (value === undefined) {
-    // Missing-key path: passthrough, no write. validateGraph picks up the
-    // orphan from `frame.auxReadMissing`.
+    // Missing-key path: passthrough, no write.
+    return { state, auxReads };
+  }
+
+  // No `to` to write to → still passthrough; the read was successful, so
+  // no orphan warning fires either. This is the "half-wired forward"
+  // authoring state and isn't surfaced specially.
+  if (to === "") {
     return { state, auxReads };
   }
 
@@ -109,16 +119,22 @@ spec is debuggable in place.`,
   references: ["NIST SP 800-38A §6 (Modes of Operation)"],
 };
 
+/**
+ * Lenient param reader — undefined/absent and empty string both map to
+ * `""` (the executor's "unset" sentinel). Non-string values throw because
+ * users can't type one through the text input; a non-string is a
+ * malformed JSON spec, not an in-progress authoring state.
+ */
 const readParams = (params: Json): { from: string; to: string } => {
   if (typeof params !== "object" || params === null || Array.isArray(params)) {
-    throw new Error("aux-copy requires params.from + params.to");
+    throw new Error("aux-copy: params must be an object");
   }
   const p = params as { from?: unknown; to?: unknown };
-  if (typeof p.from !== "string" || p.from.length === 0) {
-    throw new Error("aux-copy: from must be a non-empty string");
+  if (p.from !== undefined && typeof p.from !== "string") {
+    throw new Error("aux-copy: from must be a string");
   }
-  if (typeof p.to !== "string" || p.to.length === 0) {
-    throw new Error("aux-copy: to must be a non-empty string");
+  if (p.to !== undefined && typeof p.to !== "string") {
+    throw new Error("aux-copy: to must be a string");
   }
-  return { from: p.from, to: p.to };
+  return { from: p.from ?? "", to: p.to ?? "" };
 };

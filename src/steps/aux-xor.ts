@@ -47,10 +47,20 @@ export const auxXor: StepExecutor = (state, params, ctx) => {
   // splits the list into `auxRead` (present) and `auxReadMissing` (absent)
   // based on `ctx.aux.get` results — see `runtime.ts:104-113`. Declaring
   // here is what makes orphan warnings light up downstream.
+  //
+  // Unset/empty params (the freshly-palette-dropped state) get declared as
+  // empty-string reads. The aux map never holds the key "", so they route
+  // straight to auxReadMissing and surface as orphan-read warnings on the
+  // node — the user's signal that the step needs wiring. Same effect as a
+  // missing real key, just with an empty-string auxKey in the warning.
   const auxReads: readonly string[] = [from, into];
 
-  const fromValue = ctx.aux.get(from);
-  const intoValue = ctx.aux.get(into);
+  // An empty-string key is by construction missing — `ctx.aux.get("")` is
+  // undefined unless someone explicitly wrote it, which no shipped step
+  // ever does. Treating it identically to a real-but-missing key keeps the
+  // rest of the executor flat.
+  const fromValue = from === "" ? undefined : ctx.aux.get(from);
+  const intoValue = into === "" ? undefined : ctx.aux.get(into);
 
   // Missing-key path: passthrough, no write. Slice 9's validateGraph picks
   // up the orphan from `frame.auxReadMissing` and renders a warning glyph.
@@ -136,18 +146,32 @@ produce wrong output.`,
   ],
 };
 
+/**
+ * Read `from`/`into` params with the lenient authoring contract:
+ *  - undefined / absent → "" (treated as unset by the executor)
+ *  - empty string       → "" (same)
+ *  - non-empty string   → use it
+ *  - anything else      → THROW (programmer/spec error; users can only
+ *    produce strings via the text inputs, so a non-string here means a
+ *    malformed JSON spec)
+ *
+ * The throw-vs-graceful split mirrors the executor's own missing-vs-
+ * malformed distinction. A fresh palette drop arrives with `params: {}`,
+ * which lands in the lenient branch and lets the step run as a passthrough
+ * so the orphan-read warning surfaces on the node.
+ */
 const readParams = (params: Json): { from: string; into: string } => {
   if (typeof params !== "object" || params === null || Array.isArray(params)) {
-    throw new Error("aux-xor requires params.from + params.into");
+    throw new Error("aux-xor: params must be an object");
   }
   const p = params as { from?: unknown; into?: unknown };
-  if (typeof p.from !== "string" || p.from.length === 0) {
-    throw new Error("aux-xor: from must be a non-empty string");
+  if (p.from !== undefined && typeof p.from !== "string") {
+    throw new Error("aux-xor: from must be a string");
   }
-  if (typeof p.into !== "string" || p.into.length === 0) {
-    throw new Error("aux-xor: into must be a non-empty string");
+  if (p.into !== undefined && typeof p.into !== "string") {
+    throw new Error("aux-xor: into must be a string");
   }
-  return { from: p.from, into: p.into };
+  return { from: p.from ?? "", into: p.into ?? "" };
 };
 
 /**

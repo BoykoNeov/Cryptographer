@@ -1075,6 +1075,23 @@ export const App = () => {
 
           <Match when={viewMode() === "graph"}>
             <GraphView />
+            {/* Slice 10 follow-up — the graph view used to omit the param
+                editor, which left palette-dropped aux primitives
+                configurable only after switching to linear mode (the
+                user had to tab-switch every edit). Render the editor
+                below the graph so clicking a graph node lights up the
+                same editing surface linear mode shows. Same
+                `currentFrame()` signal feeds both; clicking a leaf
+                calls `setFrame` through `handleLeafClick` in GraphView,
+                the signal updates, and this editor reactively
+                re-renders. */}
+            <Show when={currentFrame()}>
+              {(graphFrame) => (
+                <div class="graph-param-editor-pane">
+                  <ParamEditor frame={graphFrame()} />
+                </div>
+              )}
+            </Show>
           </Match>
 
           <Match when={viewMode() === "json"}>

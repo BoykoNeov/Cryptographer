@@ -734,6 +734,17 @@ button:disabled {
   gap: 4px;
 }
 
+/* Slice 10 follow-up: param editor pane rendered below GraphView so the
+   user can configure palette-dropped steps (aux-load/xor/copy + any other
+   step type) without tab-switching back to linear mode. Same .param-editor
+   shell + per-step blocks the linear view uses; this wrapper just adds the
+   top border + breathing room that distinguishes it from the graph above. */
+.graph-param-editor-pane {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
 /* Editable aux-name text input used by the Slice 10 aux primitive blocks
    (aux-load / aux-xor / aux-copy). Same monospace/colorway as .byte-cell
    so the param editor stays visually consistent across cell-shaped and
@@ -1649,6 +1660,12 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* Cap the row width so the auto/always/never buttons stay near the
+     source id even when the panel itself spans the full canvas width
+     (1500px+ for AES-128). Without this cap, `flex:1` on the id pushes
+     the buttons all the way to the right edge — easy to miss and
+     requires horizontal scrolling on narrower viewports. */
+  max-width: 560px;
 }
 
 .graph-replication-row-id {
