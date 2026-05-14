@@ -1,6 +1,6 @@
 # Multi-block AES with ECB / CBC / CTR
 
-**Status:** Phase 1 (loop primitive + AES-128 ECB) ✅ shipped May 2026 (commit `1e144c0`). Phases 2 (CBC + IV), 3 (CTR + keystream), and 4 (AES-192/256 generalization) remain on the plan; the runtime + spec-store + cipher-mode-dropdown infrastructure they need is already in place.
+**Status:** Phase 1 (loop primitive + AES-128 ECB) ✅ shipped May 2026 (commit `1e144c0`). Phase 2 (CBC + IV) ✅ shipped 2026-05-14 (commits `4a91462` chaining primitives, `e9cc510` CBC factory + dropdown, `46f7ccc` IV store + IvInput + document round-trip). Implementation deviated from this plan's CBC-specific step names (`xor-with-chain`, `store-chain`, …) in favor of generic primitives (`generic.iv-load@1`, `generic.xor-aux-into-state@1`, `generic.state-to-aux@1`) that compose into CBC and will reuse for OFB/CFB without rewrites; the decrypt chain-advance reuses the existing `generic.aux-copy@1`. Phases 3 (CTR + keystream) and 4 (AES-192/256 generalization) remain on the plan; the runtime + spec-store + cipher-mode-dropdown infrastructure they need is already in place.
 
 ## Context
 

@@ -12,7 +12,7 @@ Shipped ciphers (all with both encrypt + decrypt paths and FIPS / NIST / paper-v
 
 | Cipher | Variants | Block | Key | Mode of operation |
 |---|---|---|---|---|
-| **AES** | 128 / 192 / 256 | 16 B | 16 / 24 / 32 B | single-block, ECB (AES-128 only today) |
+| **AES** | 128 / 192 / 256 | 16 B | 16 / 24 / 32 B | single-block, ECB + CBC (AES-128 only today) |
 | **Speck32/64** | BE (paper) + LE (NSA reference) | 4 B | 8 B | single-block |
 | **Serpent** | 128 / 192 / 256 | 16 B | 16 / 24 / 32 B | single-block |
 
