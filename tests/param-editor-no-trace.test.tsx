@@ -164,4 +164,61 @@ describe("ParamEditor decoupled from TraceFrame — bug-2 fix", () => {
       ).toContain("aux-xor-1");
     });
   });
+
+  // Graph-UX polish item #3 — aux-load label clarification.
+  //
+  // The aux-load ParamEditor block historically rendered its byte sequence
+  // under a bare `Value (bytes — N)` label, with no in-context explanation
+  // of what bytes belong there. Users reaching the step via the palette
+  // had no prior context for aux primitives and would back out of the
+  // step entirely. The fix adds a `.aux-byte-hint` line citing the three
+  // canonical use cases (IV, counter start, mode constant). This test
+  // exercises the same drop-then-click path as the bug-2 fix above, but
+  // for aux-load, and asserts the hint text is rendered.
+  it("aux-load editor renders a pedagogical hint beneath the byte cells", async () => {
+    const { container } = render(() => <App />);
+    setViewMode("graph");
+
+    // Drop aux-load onto the key-expansion leaf (same root-level anchor
+    // as the bug-2 test — keeps the insertion at the top of spec.steps).
+    const anchor = container.querySelector<SVGGElement>(
+      'g.graph-leaf[data-drop-anchor="key-expansion"]',
+    );
+    expect(anchor, "key-expansion leaf must be drop-targetable").not.toBeNull();
+    if (!anchor) return;
+    fireDropAt(anchor, "generic.aux-load@1");
+
+    // Wait for the dropped aux-load to render in the graph.
+    await waitFor(() => {
+      const dropped = container.querySelector('g.graph-leaf[data-drop-anchor="aux-load-1"]');
+      expect(dropped, "the dropped aux-load must render as a graph leaf").not.toBeNull();
+    });
+
+    // Click (via Enter key — same reason as the bug-2 test) to bind the
+    // editor to the new aux-load leaf.
+    const droppedLeaf = container.querySelector<SVGGElement>(
+      'g.graph-leaf[data-drop-anchor="aux-load-1"]',
+    );
+    if (!droppedLeaf) throw new Error("dropped leaf not found after waitFor confirmed it");
+    fireEvent.keyDown(droppedLeaf, { key: "Enter" });
+
+    // Assert the editor opened for aux-load-1, then assert the hint is
+    // present. The hint is a `.aux-byte-hint` div with a stable copy
+    // fragment that won't drift on minor reword polish.
+    await waitFor(() => {
+      const title = container.querySelector(".param-editor-title");
+      expect(title?.textContent ?? "", "title binds to aux-load-1").toContain("aux-load-1");
+    });
+
+    const hint = container.querySelector(".aux-byte-hint");
+    expect(hint, "aux-byte-hint must be rendered beneath the byte cells").not.toBeNull();
+    expect(
+      hint?.textContent ?? "",
+      "hint mentions IV use case (one of the three canonical aux-load shapes)",
+    ).toContain("IV");
+    expect(
+      hint?.textContent ?? "",
+      "hint mentions counter use case",
+    ).toContain("counter");
+  });
 });

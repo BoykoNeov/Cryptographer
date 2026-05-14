@@ -840,6 +840,16 @@ button:disabled {
   padding: 2px 8px;
 }
 
+/* Pedagogical hint beneath the aux-load byte cells. The vertical breathing
+   room separates it from the byte row above and the +/- controls below
+   so the user reads it as guidance rather than as part of the input row.
+   `<code>` tags inside the hint render with the inline `code` styling
+   (same as the rest of the app) — no override needed. */
+.aux-byte-hint {
+  margin-top: 6px;
+  line-height: 1.4;
+}
+
 .small {
   font-size: 11px;
 }

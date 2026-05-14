@@ -719,6 +719,14 @@ const AuxNameInput = (props: {
 // styling from KeyExpansionBlock). Append/remove buttons let the user
 // grow/shrink the byte sequence — palette inserts start at length 0 and
 // the user adds bytes one at a time.
+//
+// Pedagogical note: aux-load is one of the first step types a user touches
+// when wiring a new chaining mode (CBC's IV, CTR's counter start, OFB's
+// keystream seed). Reaching it via the palette gives no prior context for
+// what bytes the row is asking for, so we render an inline `.muted small`
+// hint beneath the byte cells listing the common shapes (16-byte IV,
+// 16-byte counter, mode constant). Cheap copy is the difference between
+// "user can keep going" and "user backs out of the step entirely."
 const AuxLoadBlock = (props: { step: StepLeaf }) => {
   const params = (): { auxName?: string; value?: readonly number[] } => props.step.params as never;
   const auxName = () => params().auxName ?? "";
@@ -746,7 +754,15 @@ const AuxLoadBlock = (props: { step: StepLeaf }) => {
         </div>
       </dl>
       <div class="param-section">
-        <div class="param-section-label">Value (bytes — {value().length})</div>
+        {/* Label restates which aux slot the bytes land in (the aux name
+            edited above) so the row reads as "this is what gets published
+            under that key" — read top-to-bottom the connection is obvious
+            without scanning back up. The byte count tail (`N total`) is a
+            running counter the user can match against the placeholder
+            hint below. */}
+        <div class="param-section-label">
+          Bytes published under aux[{auxName() || "name"}] ({value().length} total)
+        </div>
         <div class="rcon-row">
           <For each={value()}>
             {(byte, i) => (
@@ -760,6 +776,16 @@ const AuxLoadBlock = (props: { step: StepLeaf }) => {
               />
             )}
           </For>
+        </div>
+        {/* Why this hint exists: users reaching this step via palette drop
+            have no prior context for what bytes belong here. The three
+            canonical shapes (CBC IV, CTR counter start, per-mode constant)
+            cover essentially every aux-load instance the shipped specs
+            need, and naming them by use case rather than by byte count
+            lets the user reason "I want an IV" → "16 bytes." */}
+        <div class="muted small aux-byte-hint">
+          The byte sequence published under <code>aux[{auxName() || "name"}]</code>. Common uses: 16
+          bytes for an IV, 16 bytes for a counter starting value, a per-mode constant.
         </div>
         <div class="aux-byte-controls">
           <button
