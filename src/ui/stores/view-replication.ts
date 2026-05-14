@@ -117,10 +117,41 @@ export const setReplicationThreshold = (value: number): void => {
   setReplicationThresholdSignal(next);
 };
 
+/**
+ * Session-only signal for the replication overrides panel's open/closed state.
+ *
+ * With the `fanout ≥ 1` filter the panel rarely empties — every cipher we
+ * ship has at least one aux-edge source. The four panel rows then occupy
+ * ~140 px of vertical real estate above the canvas, even for users who only
+ * tuned one override and don't need to see the others. A collapse toggle
+ * lets them close the panel after they're done.
+ *
+ * Why session-only (not in `LayoutSpec`): same reason as the threshold above
+ * — UI state for a panel knob doesn't belong in the byte-stable share-URL
+ * surface. The default is derived from "does this spec have any user-set
+ * overrides?" — see `GraphView.tsx`'s effect that watches `spec().id` and
+ * calls `setReplicationPanelOpen` accordingly on each spec change. That way
+ * loading a spec with custom overrides shows the user *why* their canvas
+ * looks the way it does, while a fresh spec stays decluttered.
+ */
+const [replicationPanelOpen, setReplicationPanelOpenSignal] = createSignal<boolean>(false);
+
+export const useReplicationPanelOpen = () => replicationPanelOpen;
+
+export const setReplicationPanelOpen = (open: boolean): void => {
+  setReplicationPanelOpenSignal(open);
+};
+
+/** Convenience for the header click handler. */
+export const toggleReplicationPanelOpen = (): void => {
+  setReplicationPanelOpenSignal((prev) => !prev);
+};
+
 /** Test hard-reset. Production code never calls this. */
 export const __resetReplicationForTests = (): void => {
   setReplicationEnabledSignal(false);
   setReplicationThresholdSignal(DEFAULT_REPLICATION_THRESHOLD);
+  setReplicationPanelOpenSignal(false);
   try {
     if (typeof localStorage !== "undefined") {
       localStorage.removeItem(STORAGE_KEY);

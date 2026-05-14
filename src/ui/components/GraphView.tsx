@@ -45,7 +45,7 @@ import {
   validateGraph,
 } from "@/core/graph";
 import { inferShapesAtAnchors, validateShapes } from "@/core/spec-shapes";
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import {
   setNodePosition,
   setReplicationMode,
@@ -74,8 +74,11 @@ import {
   REPLICATION_THRESHOLD_MAX,
   REPLICATION_THRESHOLD_MIN,
   setReplicationEnabled,
+  setReplicationPanelOpen,
   setReplicationThreshold,
+  toggleReplicationPanelOpen,
   useReplicationEnabled,
+  useReplicationPanelOpen,
   useReplicationThreshold,
 } from "../stores/view-replication";
 import { GraphHelpModal } from "./GraphHelpModal";
@@ -612,6 +615,13 @@ export const GraphView = () => {
   const density = useViewDensity();
   const replicate = useReplicationEnabled();
   const replicationThreshold = useReplicationThreshold();
+  // `useReplicationPanelOpen` follows the same accessor-factory shape as
+  // its siblings above — call it ONCE here to capture the live accessor,
+  // then read `replicationPanelOpen()` (not `useReplicationPanelOpen()`)
+  // wherever we need the current boolean. Calling the factory inline in
+  // JSX would always return a truthy function reference and the panel
+  // would never close.
+  const replicationPanelOpen = useReplicationPanelOpen();
 
   /**
    * Size + gap constants for the active density. Memoized so the layout
@@ -683,6 +693,31 @@ export const GraphView = () => {
     const l = activeLayout();
     return l?.replicationModes ?? {};
   });
+
+  /**
+   * Auto-open the replication overrides panel when a freshly-loaded spec
+   * carries per-source overrides — otherwise the user wouldn't see *why*
+   * the canvas looks customized. On a clean spec (no overrides) it stays
+   * closed so the toolbar real estate isn't eaten by an empty-by-intent
+   * panel. After mount, the user's manual chevron clicks win until the
+   * spec id changes again.
+   *
+   * Why `on(() => spec().id, ...)` instead of watching `replicationModes()`:
+   * we want this to fire on spec load / spec switch, NOT every time the
+   * user toggles an override mid-session — otherwise the close button
+   * fights the auto-open the moment the user clicks an "always"/"never"
+   * radio. Tying the effect to spec id keeps user intent in charge once
+   * the panel is rendered.
+   */
+  createEffect(
+    on(
+      () => spec().id,
+      () => {
+        const hasAnyOverride = Object.keys(replicationModes()).length > 0;
+        setReplicationPanelOpen(hasAnyOverride);
+      },
+    ),
+  );
 
   // Re-derive on every spec OR trace change. Both signals matter:
   //   - spec edit → new nodes/containers (structural change)
@@ -1173,56 +1208,79 @@ export const GraphView = () => {
           visible at far-right scroll positions. */}
           <Show when={replicate() && replicationSources().length > 0}>
             <div class="graph-replication-panel">
-              <div class="graph-replication-panel-header">
+              {/* Header is a clickable button — toggles the panel body open
+                or closed. The chevron rotates 90° via CSS based on the
+                `data-open` attribute so users get an animated affordance
+                rather than a static glyph. Tests assert on
+                `data-testid="replication-panel-toggle"` + the body's
+                presence-or-absence. */}
+              <button
+                type="button"
+                class="graph-replication-panel-header"
+                data-testid="replication-panel-toggle"
+                data-open={replicationPanelOpen() ? "true" : "false"}
+                aria-expanded={replicationPanelOpen() ? "true" : "false"}
+                onClick={toggleReplicationPanelOpen}
+                title={
+                  replicationPanelOpen()
+                    ? "Collapse replication overrides"
+                    : "Expand replication overrides"
+                }
+              >
+                <span class="graph-replication-panel-chevron" aria-hidden="true">
+                  ▸
+                </span>
                 replication overrides
                 <span class="graph-replication-panel-hint">
                   auto = follow global threshold ({replicationThreshold()})
                 </span>
-              </div>
-              <For each={replicationSources()}>
-                {(src) => {
-                  const currentMode = createMemo<"auto" | "always" | "never">(() => {
-                    const m = replicationModes()[src.id];
-                    return m ?? "auto";
-                  });
-                  return (
-                    <div class="graph-replication-row" data-testid={`replication-row-${src.id}`}>
-                      <span class="graph-replication-row-id" title={src.id}>
-                        {src.id}
-                      </span>
-                      <span class="graph-replication-row-fanout">
-                        {src.fanout} {src.fanout === 1 ? "edge" : "edges"}
-                      </span>
-                      <div class="format-toggle">
-                        <button
-                          type="button"
-                          classList={{ active: currentMode() === "auto" }}
-                          onClick={() => setReplicationMode(spec().id, src.id, null)}
-                          title="Defer to the global threshold"
-                        >
-                          auto
-                        </button>
-                        <button
-                          type="button"
-                          classList={{ active: currentMode() === "always" }}
-                          onClick={() => setReplicationMode(spec().id, src.id, "always")}
-                          title="Always replicate this source"
-                        >
-                          always
-                        </button>
-                        <button
-                          type="button"
-                          classList={{ active: currentMode() === "never" }}
-                          onClick={() => setReplicationMode(spec().id, src.id, "never")}
-                          title="Never replicate this source"
-                        >
-                          never
-                        </button>
+              </button>
+              <Show when={replicationPanelOpen()}>
+                <For each={replicationSources()}>
+                  {(src) => {
+                    const currentMode = createMemo<"auto" | "always" | "never">(() => {
+                      const m = replicationModes()[src.id];
+                      return m ?? "auto";
+                    });
+                    return (
+                      <div class="graph-replication-row" data-testid={`replication-row-${src.id}`}>
+                        <span class="graph-replication-row-id" title={src.id}>
+                          {src.id}
+                        </span>
+                        <span class="graph-replication-row-fanout">
+                          {src.fanout} {src.fanout === 1 ? "edge" : "edges"}
+                        </span>
+                        <div class="format-toggle">
+                          <button
+                            type="button"
+                            classList={{ active: currentMode() === "auto" }}
+                            onClick={() => setReplicationMode(spec().id, src.id, null)}
+                            title="Defer to the global threshold"
+                          >
+                            auto
+                          </button>
+                          <button
+                            type="button"
+                            classList={{ active: currentMode() === "always" }}
+                            onClick={() => setReplicationMode(spec().id, src.id, "always")}
+                            title="Always replicate this source"
+                          >
+                            always
+                          </button>
+                          <button
+                            type="button"
+                            classList={{ active: currentMode() === "never" }}
+                            onClick={() => setReplicationMode(spec().id, src.id, "never")}
+                            title="Never replicate this source"
+                          >
+                            never
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  );
-                }}
-              </For>
+                    );
+                  }}
+                </For>
+              </Show>
             </div>
           </Show>
         </div>

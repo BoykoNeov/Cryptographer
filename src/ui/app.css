@@ -1797,12 +1797,48 @@ button:disabled {
   font-size: 11px;
 }
 
+/* Header is a <button> now (clickable collapse toggle) — strip the
+   default button chrome so it still looks like a flat label, but keep
+   it focusable + keyboard-accessible. The chevron glyph rotates 90°
+   when the panel is open (data-open="true") so users get an animated
+   affordance instead of a static one. */
 .graph-replication-panel-header {
   display: flex;
   align-items: baseline;
   gap: 8px;
   color: var(--muted);
   text-transform: lowercase;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+}
+
+.graph-replication-panel-header:hover {
+  color: var(--fg);
+}
+
+.graph-replication-panel-header:focus-visible {
+  outline: 2px solid var(--accent, currentColor);
+  outline-offset: 2px;
+}
+
+.graph-replication-panel-chevron {
+  display: inline-block;
+  font-size: 10px;
+  transition: transform 120ms ease;
+  /* Default state (closed): chevron points right (▸). Open state:
+     rotates 90° clockwise to point down. Tying the rotation to the
+     header's data-open attribute keeps the JSX side clean — no
+     conditional class toggling needed. */
+}
+
+.graph-replication-panel-header[data-open="true"] .graph-replication-panel-chevron {
+  transform: rotate(90deg);
 }
 
 .graph-replication-panel-hint {

@@ -39,6 +39,7 @@ import {
   REPLICATION_THRESHOLD_MIN,
   __resetReplicationForTests,
   setReplicationEnabled,
+  setReplicationPanelOpen,
   useReplicationThreshold,
 } from "@/ui/stores/view-replication";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
@@ -158,6 +159,9 @@ describe("GraphView — replication threshold input", () => {
     seedAes128Trace();
     setReplicationEnabled(true);
     const { container } = render(() => <GraphView />);
+    // Panel auto-closes on a no-override spec since the collapse toggle
+    // shipped; open it after render so the row assertion sees the body.
+    setReplicationPanelOpen(true);
     const keyExpRow = container.querySelector('[data-testid="replication-row-key-expansion"]');
     expect(keyExpRow).not.toBeNull();
   });

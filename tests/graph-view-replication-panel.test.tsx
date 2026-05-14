@@ -29,7 +29,11 @@ import { __resetLayoutsForTests, getLayoutForSpec, setReplicationMode } from "@/
 import { __resetSpecForTests } from "@/ui/stores/spec";
 import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
 import { __resetViewDensityForTests } from "@/ui/stores/view-density";
-import { __resetReplicationForTests, setReplicationEnabled } from "@/ui/stores/view-replication";
+import {
+  __resetReplicationForTests,
+  setReplicationEnabled,
+  setReplicationPanelOpen,
+} from "@/ui/stores/view-replication";
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -72,6 +76,10 @@ describe("GraphView — replication override panel (commit 5)", () => {
     seedAes128Trace();
     setReplicationEnabled(true);
     const { container } = render(() => <GraphView />);
+    // Panel defaults CLOSED on a spec with no overrides (the auto-open
+    // effect set it false on mount). Open it AFTER render so the manual
+    // setter wins; setting before render would be undone by the effect.
+    setReplicationPanelOpen(true);
     const row = container.querySelector('[data-testid="replication-row-key-expansion"]');
     expect(row).not.toBeNull();
     // Row's fanout label reflects the 11 outgoing roundKey edges.
@@ -82,6 +90,7 @@ describe("GraphView — replication override panel (commit 5)", () => {
     seedAes128Trace();
     setReplicationEnabled(true);
     const { container } = render(() => <GraphView />);
+    setReplicationPanelOpen(true);
     const row = container.querySelector(
       '[data-testid="replication-row-key-expansion"]',
     ) as HTMLElement;
@@ -97,6 +106,8 @@ describe("GraphView — replication override panel (commit 5)", () => {
     seedAes128Trace();
     setReplicationEnabled(true);
     setReplicationMode(aes128Spec.id, "key-expansion", "never");
+    // Pre-seeded override → effect should auto-open the panel on mount;
+    // no manual setReplicationPanelOpen(true) needed here.
     const { container } = render(() => <GraphView />);
     const row = container.querySelector(
       '[data-testid="replication-row-key-expansion"]',
@@ -113,6 +124,7 @@ describe("GraphView — replication override panel (commit 5)", () => {
     seedAes128Trace();
     setReplicationEnabled(true);
     const { container } = render(() => <GraphView />);
+    setReplicationPanelOpen(true);
     const row = container.querySelector(
       '[data-testid="replication-row-key-expansion"]',
     ) as HTMLElement;
@@ -127,5 +139,86 @@ describe("GraphView — replication override panel (commit 5)", () => {
     expect(getActiveLabel()).toBe("always");
     setReplicationMode(aes128Spec.id, "key-expansion", "never");
     expect(getActiveLabel()).toBe("never");
+  });
+});
+
+/**
+ * Collapse-toggle tests for the replication overrides panel. The panel
+ * sat permanently expanded after the fanout-≥-1 filter change — even
+ * users who tuned a one-off override couldn't reclaim the ~140 px of
+ * canvas they were eating. These tests pin the new behavior:
+ *
+ *   - Default state on a fresh spec with NO overrides: closed.
+ *   - Default state on a spec WITH any user override: open (so the user
+ *     can see *why* their canvas looks customized without hunting for
+ *     the toggle).
+ *   - Clicking the header chevron flips the state both directions and
+ *     the row body appears/disappears in lock-step.
+ */
+describe("GraphView — replication panel collapse toggle", () => {
+  beforeEach(resetAll);
+  afterEach(() => {
+    cleanup();
+    resetAll();
+  });
+
+  it("defaults CLOSED when the active spec has no per-source overrides", () => {
+    seedAes128Trace();
+    setReplicationEnabled(true);
+    const { container } = render(() => <GraphView />);
+    const toggle = container.querySelector(
+      '[data-testid="replication-panel-toggle"]',
+    ) as HTMLButtonElement | null;
+    // Toggle button is present (panel is rendered) but in closed state.
+    expect(toggle).not.toBeNull();
+    expect(toggle?.dataset.open).toBe("false");
+    // Body rows are NOT rendered — the <Show> wrapper hides them when
+    // the panel is closed.
+    expect(container.querySelector('[data-testid="replication-row-key-expansion"]')).toBeNull();
+  });
+
+  it("defaults OPEN when the active spec carries a user override at render time", () => {
+    seedAes128Trace();
+    setReplicationEnabled(true);
+    // Seed override BEFORE mount so the auto-open effect fires on the
+    // spec().id sample at initial render. This is the canonical "load a
+    // customized spec from disk / a share URL" flow.
+    setReplicationMode(aes128Spec.id, "key-expansion", "always");
+    const { container } = render(() => <GraphView />);
+    const toggle = container.querySelector(
+      '[data-testid="replication-panel-toggle"]',
+    ) as HTMLButtonElement | null;
+    expect(toggle?.dataset.open).toBe("true");
+    expect(container.querySelector('[data-testid="replication-row-key-expansion"]')).not.toBeNull();
+  });
+
+  it("clicking the header chevron toggles the panel open and closed", () => {
+    seedAes128Trace();
+    setReplicationEnabled(true);
+    const { container } = render(() => <GraphView />);
+    const toggle = container.querySelector(
+      '[data-testid="replication-panel-toggle"]',
+    ) as HTMLButtonElement;
+    // Starts closed (no overrides) → click → open.
+    expect(toggle.dataset.open).toBe("false");
+    toggle.click();
+    expect(toggle.dataset.open).toBe("true");
+    expect(container.querySelector('[data-testid="replication-row-key-expansion"]')).not.toBeNull();
+    // Click again → closed → body disappears.
+    toggle.click();
+    expect(toggle.dataset.open).toBe("false");
+    expect(container.querySelector('[data-testid="replication-row-key-expansion"]')).toBeNull();
+  });
+
+  it("aria-expanded mirrors the open/closed state for screen-reader users", () => {
+    seedAes128Trace();
+    setReplicationEnabled(true);
+    const { container } = render(() => <GraphView />);
+    const toggle = container.querySelector(
+      '[data-testid="replication-panel-toggle"]',
+    ) as HTMLButtonElement;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    toggle.click();
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
   });
 });
