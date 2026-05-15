@@ -148,6 +148,64 @@ describe("lookupEdgeValue — regular aux edges", () => {
     );
     expect(out.status).toBe("missing");
   });
+
+  // ── Producer-side fallback for iterate-as-consumer ──────────────────
+  //
+  // The graph derivation emits aux edges whose `to` is the iterate
+  // CONTAINER (e.g. `compute-block-count → ecb-blocks` for the count,
+  // `split-blocks → ecb-blocks` for the blocks array). The runtime
+  // reads `aux[countFromAux]` / `aux[blocksFromAux]` off the iterate
+  // BEFORE setting up body frames, so neither `auxRead` lives on a
+  // body frame. Consumer-side `findConsumerFrame("ecb-blocks", ...)`
+  // returns null because no leaf frame's stepId canonicalizes to
+  // `ecb-blocks` (only body steps have frames).
+  //
+  // Without producer-side fallback, the value-inspector would say
+  // "no frame found for consumer ecb-blocks" — which is exactly the
+  // bug surfaced by the Slice 7c demo path (the user clicked a
+  // `compute-block-count` / `split-blocks` replica's outgoing arrow
+  // and got "no value"). Producer-side fallback resolves to the
+  // value the leaf step wrote into `auxWritten` — the count or the
+  // blocks array — and the inspector renders it correctly.
+  it("resolves compute-block-count→ecb-blocks via producer-side auxWritten (block count)", () => {
+    const trace = runAes128Ecb();
+    // ECB plaintext is 4 × 16 bytes → block count is 4.
+    const edge = auxEdge("compute-block-count", "ecb-blocks", "blockCount");
+    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, undefined);
+    expect(out.status).toBe("value");
+    if (out.status !== "value") return;
+    expect(out.displayKind).toBe("aux");
+    expect(out.auxKey).toBe("blockCount");
+    expect(out.value).toBe(4);
+  });
+
+  it("resolves split-blocks→ecb-blocks via producer-side auxWritten (blocks array)", () => {
+    const trace = runAes128Ecb();
+    // ECB-mode `split-blocks` writes the array of MatrixState into
+    // `aux[outBlocksAux]` (default key: "input-blocks"). With the
+    // 4-block test plaintext, the lookup returns an array of length 4.
+    const edge = auxEdge("split-blocks", "ecb-blocks", "input-blocks");
+    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, undefined);
+    expect(out.status).toBe("value");
+    if (out.status !== "value") return;
+    expect(out.displayKind).toBe("aux");
+    expect(out.auxKey).toBe("input-blocks");
+    expect(Array.isArray(out.value)).toBe(true);
+    expect((out.value as readonly unknown[]).length).toBe(4);
+  });
+
+  it("returns `missing` when neither consumer nor producer has the aux", () => {
+    const trace = runAes128Ecb();
+    // Consumer (iterate) has no leaf frame; producer (also missing) also
+    // doesn't. The fallback should still return missing without throwing.
+    const out = lookupEdgeValue(
+      auxEdge("no-such-producer", "ecb-blocks", "no-such-aux"),
+      aes128EcbSpec,
+      trace,
+      undefined,
+    );
+    expect(out.status).toBe("missing");
+  });
 });
 
 describe("lookupEdgeValue — regular state edges", () => {

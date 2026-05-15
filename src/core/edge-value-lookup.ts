@@ -452,6 +452,46 @@ const lookupChipOutgoing = (
   };
 };
 
+/**
+ * Producer-side aux fallback. Scans the trace for the producer's own
+ * frame and reads `auxWritten.get(edge.auxKey)`. Used when the consumer
+ * side can't answer — the canonical case is an aux edge whose `to` is
+ * an iterate container (e.g. `compute-block-count → ecb-blocks` or
+ * `split-blocks → ecb-blocks`). The runtime reads
+ * `aux[countFromAux]` / `aux[blocksFromAux]` *before* setting up body
+ * frames, so no body frame has those reads in `auxRead`. The producer
+ * IS a leaf and DID write the value, so its `auxWritten` is the
+ * authoritative source.
+ *
+ * Returns null when no producer frame writes this aux key. Lets the
+ * caller emit a richer "missing" reason than the producer-side branch
+ * could on its own.
+ */
+const lookupAuxFromProducer = (
+  edge: GraphEdge,
+  trace: Trace,
+  currentBlockIndex: number | undefined,
+): EdgeValueLookup | null => {
+  const producer = findProducerFrame(trace, edge.from, currentBlockIndex);
+  if (producer === null) return null;
+  const v = producer.auxWritten.get(edge.auxKey);
+  if (v === undefined) return null;
+  return producer.blockIndex !== undefined
+    ? {
+        status: "value",
+        value: v,
+        displayKind: "aux",
+        auxKey: edge.auxKey,
+        blockIndex: producer.blockIndex,
+      }
+    : {
+        status: "value",
+        value: v,
+        displayKind: "aux",
+        auxKey: edge.auxKey,
+      };
+};
+
 const lookupRegularAux = (
   edge: GraphEdge,
   trace: Trace,
@@ -459,6 +499,17 @@ const lookupRegularAux = (
 ): EdgeValueLookup => {
   const frame = findConsumerFrame(trace, edge.to, currentBlockIndex);
   if (frame === null) {
+    // Consumer has no leaf frame in the trace. The canonical case is
+    // an aux edge whose `to` is an iterate container — iterate ids
+    // never appear as a leaf frame's stepId (only their body steps do).
+    // The runtime DOES read `aux[countFromAux]` / `aux[blocksFromAux]`
+    // off the iterate, but those reads happen on the runtime side
+    // before any body frame is emitted, so they're not recorded as
+    // `auxRead` on any frame. Fall back to the producer's `auxWritten`,
+    // which IS captured (the producer is always a leaf step that
+    // writes the aux to be consumed downstream).
+    const fromProducer = lookupAuxFromProducer(edge, trace, currentBlockIndex);
+    if (fromProducer !== null) return fromProducer;
     return {
       status: "missing",
       reason: `no frame found for consumer "${edge.to}"`,
@@ -466,11 +517,13 @@ const lookupRegularAux = (
   }
   const v = frame.auxRead.get(edge.auxKey);
   if (v === undefined) {
-    // Consumer frame exists but didn't actually read this aux — happens
-    // when the graph derivation paired a writer→reader at the spec
-    // level but the runtime's runSpec didn't surface it on this frame
-    // (rare). Fall through to "missing" rather than silently showing
-    // a stale value from an earlier iteration.
+    // Consumer frame exists but didn't actually read this aux. Try the
+    // producer side first — same rationale as the no-consumer-frame
+    // branch above; this also covers the rare case where graph
+    // derivation paired a writer→reader at the spec level but the
+    // runtime's runSpec didn't surface it on this frame.
+    const fromProducer = lookupAuxFromProducer(edge, trace, currentBlockIndex);
+    if (fromProducer !== null) return fromProducer;
     return {
       status: "missing",
       reason: `consumer "${edge.to}" did not read aux "${edge.auxKey}" at frame ${frame.index}`,
