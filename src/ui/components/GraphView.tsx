@@ -1488,6 +1488,21 @@ export const GraphView = () => {
   const WHEEL_ZOOM_STEP = 0.05;
 
   const handleWheelZoom = (ev: WheelEvent): void => {
+    // TEMP DIAG — remove after Chrome-wheel-zoom is verified working in
+    // the browser. Tells us which of four failure modes the user is
+    // hitting: (a) no log = listener doesn't fire, (b) ctrlKey:false on
+    // ctrl-wheel = key not detected, (c) ctrlKey:true but page still
+    // zooms = preventDefault ignored, (d) all logs good = check
+    // SVG reactivity instead.
+    // biome-ignore lint/suspicious/noConsole: temporary diagnostic
+    console.log("[zoom-wheel]", {
+      ctrlKey: ev.ctrlKey,
+      metaKey: ev.metaKey,
+      deltaY: ev.deltaY,
+      targetTag: (ev.target as Element | null)?.tagName,
+      currentTargetClass: (ev.currentTarget as Element | null)?.className,
+      defaultPrevented: ev.defaultPrevented,
+    });
     if (!(ev.ctrlKey || ev.metaKey)) return;
     // Must preventDefault to suppress Chrome's page-zoom default. The
     // listener that fires this MUST be registered with `{ passive: false }`
@@ -1502,6 +1517,8 @@ export const GraphView = () => {
     const direction = ev.deltaY < 0 ? 1 : -1;
     const current = getViewZoom(spec().id);
     const next = Math.round((current + direction * WHEEL_ZOOM_STEP) * 100) / 100;
+    // biome-ignore lint/suspicious/noConsole: temporary diagnostic
+    console.log("[zoom-wheel] update", { current, next, specId: spec().id });
     setViewZoom(spec().id, next);
   };
 
@@ -1516,6 +1533,11 @@ export const GraphView = () => {
    * preventDefault lands before any framework / browser handling.
    */
   const attachScrollWrapperRef = (el: HTMLDivElement): void => {
+    // TEMP DIAG — remove with the other [zoom-wheel] logs after browser
+    // verification. Confirms the ref callback fires at all (rules out
+    // ref-not-populated failure mode).
+    // biome-ignore lint/suspicious/noConsole: temporary diagnostic
+    console.log("[zoom-wheel] attach to", el.className, el.tagName);
     scrollWrapperEl = el;
     el.addEventListener("wheel", handleWheelZoom, { passive: false, capture: true });
     onCleanup(() => el.removeEventListener("wheel", handleWheelZoom, { capture: true }));
