@@ -101,6 +101,29 @@ export type GraphNode = {
    * self-evident on the canvas.
    */
   readonly endpointSide?: "input" | "output";
+  /**
+   * Block-chip marker (Slice 6 of the graph-narrative plan). When set,
+   * this node is one of N synthetic chips representing a single block
+   * iteration of the collapsed iterate identified by this field. The
+   * value is the iterate container's id — used by the renderer to
+   * route clicks back to a sensible scrub target (currently a no-op,
+   * matching today's "click a collapsed iterate chip" behavior).
+   *
+   * Why a separate field from `replicaOf`: aux replicas use the
+   * `isReplica` machinery in `GraphView`'s layout passes to be
+   * auto-positioned ABOVE their consumer. Block chips need to lay out
+   * NORMALLY in the rootIds sequence at the iterate's old slot — they
+   * can't share `replicaOf` without also being pulled into that auto-
+   * placement loop. Keeping the marker distinct keeps the layout
+   * machinery untouched while still letting the renderer suppress
+   * drag/delete/drop the same way it does for replicas.
+   *
+   * Block chips are NOT spec nodes — they don't round-trip through
+   * Save/Share, they aren't drop-anchored as their own ids, they
+   * aren't draggable, they don't accept Delete. The user's
+   * "expand the iterate" action restores the original chip.
+   */
+  readonly blockChipOf?: string;
 };
 
 export type ContainerNode = {
@@ -613,6 +636,222 @@ export const collapseGraph = (
     edges: newEdges,
     rootIds: newRootIds,
   };
+};
+
+// ─── Collapsed-iterate block-chip expansion (Slice 6) ────────────────────
+
+/**
+ * Sentinel `stepType` set on synthetic block-chip nodes. Never registered in
+ * the step registry — the renderer dispatches off `blockChipOf` instead.
+ * The id is used in the leaf's `<title>` tooltip so a hovering user gets
+ * a hint that the chip isn't a real spec step.
+ */
+const BLOCK_CHIP_STEP_TYPE = "__block_chip__";
+
+/**
+ * Cap on how many chips render for a collapsed iterate. With N ≤ CAP, all
+ * N chips render; with N > CAP, the first (CAP - 1) chips render plus one
+ * `+M more blocks` ellipsis chip — total visible items always ≤ CAP. The
+ * cap exists because pathological N (a 16KB file under AES-128 = 1024
+ * blocks) would otherwise tile the canvas with chips and obscure the
+ * pedagogical point.
+ */
+const BLOCK_CHIP_CAP = 6;
+
+/**
+ * Suffix appended to an iterate id to form the i-th block chip's id.
+ * The leading `@` is shared with replica ids (`${src}@->${cons}`) — both
+ * use a character that never appears in spec ids (which are dot-and-dash
+ * lowercase). A future grep for `@block` finds every block-chip site.
+ */
+const blockChipId = (iterateId: string, i: number): string => `${iterateId}@block${i}`;
+/** Companion id for the ellipsis chip (one per collapsed-iterate that overflows). */
+const blockMoreChipId = (iterateId: string): string => `${iterateId}@blockMore`;
+
+/**
+ * View-time transform: expand each collapsed iterate into N parallel
+ * "block-chip" nodes representing the N per-block iterations the runtime
+ * walked. Pedagogical purpose — keeps the "ECB is N parallel AES copies"
+ * story visible when the user collapses the iterate body. Without this
+ * transform the collapsed iterate becomes a single `×N` chip and the
+ * narrative collapses to a number.
+ *
+ * Pipeline placement: AFTER `collapseGraph` (so it sees collapsed-set
+ * info), BEFORE `replicateHighFanoutSources` (so the chips become
+ * replication candidates: `key-expansion` set to `"always"` plus this
+ * transform produces one tiny key-expansion replica next to each chip,
+ * which is pedagogically excellent — the user sees N tiny key-expansion
+ * chips feeding N tiny block chips, perfect for the "schedule fans out"
+ * story).
+ *
+ * Semantics:
+ *   - For each iterate container in `collapsedIds` whose `blockSpan` is
+ *     a known positive integer (i.e. the trace has run): replace it.
+ *   - "Replace" means:
+ *     1. Drop the iterate container from `containers`.
+ *     2. Splice its slot in either `rootIds` or its parent's `childIds`
+ *        with the chip ids (in spec order at that slot).
+ *     3. Add `min(N, CAP)` chip nodes — but if `N > CAP`, the last is an
+ *        ellipsis chip labeled `+${N - (CAP - 1)} more blocks`.
+ *     4. For every edge with the iterate as endpoint, fan to one edge
+ *        per chip (each chip becomes the endpoint in its own copy of
+ *        the edge). The ellipsis chip collectively represents the
+ *        edges of the (N - CAP + 1) blocks it stands for.
+ *   - Untouched cases: non-iterate containers, iterates not in
+ *     `collapsedIds`, iterates whose `blockSpan` is undefined (pre-run
+ *     or trace without `blockIndex` stamps), iterates whose `blockSpan`
+ *     is 0. Those pass through identically — the collapsed iterate
+ *     keeps its today's `×N` chip behavior or stays expanded.
+ *   - Identity short-circuit: when no iterate qualifies, return the
+ *     input by reference. Keeps the createMemo chain in GraphView
+ *     cheap for the common single-block-cipher case.
+ *
+ * Why chips are nodes (not containers): a container with `childIds: []`
+ * already exists as a layout primitive (collapsed-iterate chip), but
+ * containers carry header bands and click-to-expand semantics we don't
+ * want here. A chip is conceptually a leaf — a small clickable thing
+ * representing one parallel computation. Modeling it as a `GraphNode`
+ * with `blockChipOf` set lets it ride the existing leaf-rendering path
+ * with no new SVG component.
+ *
+ * Why fan EVERY edge (not just aux): defensive. Today only aux edges
+ * touch the iterate id (count, blocks-in, blocks-out from
+ * `deriveAuxGraph`'s iterate-mediated synthesis), so the rule reduces
+ * to "fan aux edges." But state-edge endpoint pills (Slice 1)
+ * structurally CAN anchor on the iterate via the `inputAnchorId` /
+ * `outputAnchorId` fallback in `deriveAuxGraph`, and a future renderer
+ * change could route more state through the iterate node. Fanning all
+ * kinds keeps the transform robust to those shifts without an extra
+ * code path.
+ *
+ * Composition with `replicateHighFanoutSources`: chips become aux-edge
+ * consumers (and producers, via the iterate's `outBlocksAux`). A source
+ * like `key-expansion` that emitted one edge to the iterate now emits
+ * N edges to N chips, which raises its outgoing-aux count. The
+ * threshold check fires per existing logic; if replication is on, the
+ * user sees one tiny key-expansion replica per chip. No additional
+ * plumbing required.
+ *
+ * Future cases this transform intentionally does NOT handle:
+ *   1. Nested iterates (iterate-within-iterate): if the iterate's
+ *      parent itself is a collapsed iterate, the inner iterate vanishes
+ *      with the outer collapse before this transform sees it (collapse
+ *      hides everything inside a collapsed ancestor). No behavior to
+ *      define until a cipher routinely nests iterates.
+ *   2. Pathological N (1000+ blocks): chips cap at CAP regardless, so
+ *      the visual stays bounded. The ellipsis chip's "+999 more"
+ *      label conveys the scale without trying to draw a thousand
+ *      tiny rectangles.
+ */
+export const expandCollapsedIterates = (
+  graph: CipherGraph,
+  collapsedIds: ReadonlySet<string>,
+): CipherGraph => {
+  if (collapsedIds.size === 0) return graph;
+
+  // Collect target iterates: collapsed AND has a known positive blockSpan.
+  // Pre-run traces leave blockSpan undefined — the collapsed `×N` chip
+  // keeps its today's behavior in that case, no transform applied.
+  const targets = graph.containers.filter(
+    (c) =>
+      c.kind === "iterate" &&
+      collapsedIds.has(c.id) &&
+      c.blockSpan !== undefined &&
+      c.blockSpan > 0,
+  );
+  if (targets.length === 0) return graph;
+
+  // Working copies — each iterate processed in turn, mutating the running
+  // graph state. Order doesn't matter for non-overlapping iterates (no
+  // shipped cipher nests iterates), and even hypothetical nested cases
+  // resolve correctly because the inner iterate would have been hidden
+  // by the outer's collapse before reaching this transform.
+  let nodes = [...graph.nodes];
+  let containers = [...graph.containers];
+  let edges = [...graph.edges];
+  let rootIds = [...graph.rootIds];
+
+  for (const iterate of targets) {
+    const N = iterate.blockSpan ?? 0;
+    if (N <= 0) continue;
+    const visibleCount = N <= BLOCK_CHIP_CAP ? N : BLOCK_CHIP_CAP - 1;
+    const includeEllipsis = N > BLOCK_CHIP_CAP;
+
+    // Build chip nodes. `stepType` is a sentinel — not registered. Renderer
+    // discriminates off `blockChipOf` for behavior, off `node.label` for
+    // display text. `containerPath` matches the iterate's so the chips
+    // sit at the iterate's old depth in the spec tree.
+    const chipNodes: GraphNode[] = [];
+    for (let i = 0; i < visibleCount; i++) {
+      chipNodes.push({
+        stepId: blockChipId(iterate.id, i),
+        stepType: BLOCK_CHIP_STEP_TYPE,
+        label: `block ${i + 1}`,
+        containerPath: iterate.containerPath,
+        blockChipOf: iterate.id,
+      });
+    }
+    if (includeEllipsis) {
+      chipNodes.push({
+        stepId: blockMoreChipId(iterate.id),
+        stepType: BLOCK_CHIP_STEP_TYPE,
+        // Hidden-block count = N minus visible non-ellipsis chips.
+        label: `+${N - visibleCount} more blocks`,
+        containerPath: iterate.containerPath,
+        blockChipOf: iterate.id,
+      });
+    }
+    const chipIds = chipNodes.map((c) => c.stepId);
+
+    // Splice chips into rootIds OR the parent container's childIds, in
+    // place of the iterate id. Iterates always live in exactly one place;
+    // the path search is unambiguous.
+    const rootIdx = rootIds.indexOf(iterate.id);
+    if (rootIdx >= 0) {
+      rootIds = [...rootIds.slice(0, rootIdx), ...chipIds, ...rootIds.slice(rootIdx + 1)];
+    } else {
+      containers = containers.map((c) => {
+        const idx = c.childIds.indexOf(iterate.id);
+        if (idx < 0) return c;
+        return {
+          ...c,
+          childIds: [...c.childIds.slice(0, idx), ...chipIds, ...c.childIds.slice(idx + 1)],
+        };
+      });
+    }
+
+    // Drop the iterate from `containers` — the chips fully replace it
+    // visually. Anything that walked containers expecting to find this id
+    // (e.g. a long-lived container reference) would now miss it; today's
+    // downstream consumers don't hold such references across the memo
+    // boundary, so this is safe.
+    containers = containers.filter((c) => c.id !== iterate.id);
+
+    // Fan edges touching the iterate to one edge per chip. Edges that
+    // don't touch the iterate pass through unchanged.
+    const newEdges: GraphEdge[] = [];
+    for (const e of edges) {
+      const fromIsIter = e.from === iterate.id;
+      const toIsIter = e.to === iterate.id;
+      if (!fromIsIter && !toIsIter) {
+        newEdges.push(e);
+        continue;
+      }
+      for (const chipId of chipIds) {
+        newEdges.push({
+          from: fromIsIter ? chipId : e.from,
+          to: toIsIter ? chipId : e.to,
+          auxKey: e.auxKey,
+          kind: e.kind,
+        });
+      }
+    }
+    edges = newEdges;
+
+    nodes = [...nodes, ...chipNodes];
+  }
+
+  return { nodes, containers, edges, rootIds };
 };
 
 // ─── High-fanout replication (commit 4 of the graph-readability sequence) ─

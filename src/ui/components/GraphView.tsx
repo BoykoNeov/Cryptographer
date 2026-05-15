@@ -44,6 +44,7 @@ import {
   buildIterateFeedbackPredicate,
   collapseGraph,
   deriveAuxGraph,
+  expandCollapsedIterates,
   replicateHighFanoutSources,
   validateGraph,
 } from "@/core/graph";
@@ -1041,7 +1042,23 @@ export const GraphView = () => {
    */
   const collapsedGraph = createMemo<CipherGraph>(() => collapseGraph(rawGraph(), collapsedSet()));
 
-  /** Apply optional fanout replication on top of the collapsed graph.
+  /**
+   * Slice 6 — collapsed-iterate block-chip expansion. Every iterate the
+   * user has collapsed AND that has a known blockSpan (post-Run) becomes
+   * N parallel chip nodes (cap 6 visible + ellipsis). The transform is
+   * an identity short-circuit when nothing qualifies, so single-block
+   * specs and pre-Run state pay zero cost.
+   *
+   * Pipeline placement: AFTER `collapseGraph` (so the collapsed-set
+   * info is available), BEFORE `replicateHighFanoutSources` (so chips
+   * become aux-edge consumers and a `key-expansion@always` override
+   * spawns one tiny replica per chip — the pedagogical composition).
+   */
+  const expandedGraph = createMemo<CipherGraph>(() =>
+    expandCollapsedIterates(collapsedGraph(), collapsedSet()),
+  );
+
+  /** Apply optional fanout replication on top of the expanded graph.
    * Master-switch semantic: when the global toggle is off, NO replicas
    * appear — even if the user has per-source `"always"` overrides set.
    * The override panel below is hidden in that case so the user doesn't
@@ -1049,8 +1066,8 @@ export const GraphView = () => {
    */
   const replicatedGraph = createMemo<CipherGraph>(() =>
     replicate()
-      ? replicateHighFanoutSources(collapsedGraph(), replicationThreshold(), replicationModes())
-      : collapsedGraph(),
+      ? replicateHighFanoutSources(expandedGraph(), replicationThreshold(), replicationModes())
+      : expandedGraph(),
   );
 
   /**
@@ -2340,12 +2357,24 @@ export const GraphView = () => {
                   return c?.kind === "iterate";
                 });
                 const isRootLevel = node.containerPath.length === 0;
-                const isReplica = node.replicaOf !== undefined;
-                // Replicas route clicks through `replicaOf` so the scrubber
-                // lands on the SOURCE's frame, not on the replica's synthetic
-                // id (which has no matching trace frame). Replicas are also
-                // never draggable — they're auto-placed visual references.
-                const clickTargetId = node.replicaOf ?? node.stepId;
+                // Two flavors of "synthetic" leaf — both suppress drag /
+                // delete and route clicks to a source id, but they reach
+                // the renderer via different graph fields:
+                //   - aux replicas (`replicaOf`) — auto-positioned ABOVE
+                //     their consumer by `buildReplicaPlacement`'s second
+                //     pass; click scrubs to the source's trace frame.
+                //   - block chips (`blockChipOf`, Slice 6) — laid out
+                //     normally at the iterate's old slot; click routes
+                //     to the iterate id (today a no-op, matching the
+                //     "click a collapsed iterate chip" baseline). They
+                //     do NOT enter `isReplica` in `buildReplicaPlacement`
+                //     so the layout machinery treats them as ordinary
+                //     leaves; the styling/no-drag/no-delete behavior is
+                //     applied here at the render boundary instead.
+                const isAuxReplica = node.replicaOf !== undefined;
+                const isBlockChip = node.blockChipOf !== undefined;
+                const isReplicaLike = isAuxReplica || isBlockChip;
+                const clickTargetId = node.blockChipOf ?? node.replicaOf ?? node.stepId;
                 // exactOptionalPropertyTypes is on, so we conditionally spread
                 // blockSpan rather than passing `undefined` as a real value.
                 const blockSpanProps =
@@ -2353,9 +2382,11 @@ export const GraphView = () => {
                     ? { blockSpan: node.blockSpan }
                     : {};
                 // Conditional spread for the drag handler — only present on
-                // root-level leaves AND not replicas (replicas are auto-placed).
+                // root-level leaves AND not replica-like (replicas + chips
+                // are both auto / synthetic placements that shouldn't be
+                // user-pinned).
                 const dragProps =
-                  isRootLevel && !isReplica
+                  isRootLevel && !isReplicaLike
                     ? {
                         onPointerDown: (e: PointerEvent) =>
                           startNodeDrag(node.stepId, e, () => handleLeafClick(clickTargetId)),
@@ -2367,11 +2398,21 @@ export const GraphView = () => {
                     {(b) => (
                       <LeafRect
                         stepId={node.stepId}
-                        label={shortLeafLabel(clickTargetId)}
+                        // `node.label` covers all three cases: ordinary
+                        // leaves carry `node.label === node.stepId` (so
+                        // the dot-strip shortener still produces e.g.
+                        // `sub-bytes`), aux replicas carry the source's
+                        // bare id (e.g. `key-expansion`, no dot to
+                        // strip), block chips carry `block N` /
+                        // `+N more blocks` directly. Reading from
+                        // `node.label` rather than `clickTargetId`
+                        // means the chip's display text wins over the
+                        // iterate id it'd otherwise resolve to.
+                        label={shortLeafLabel(node.label)}
                         stepType={node.stepType}
                         box={b()}
-                        draggable={isRootLevel && !isReplica}
-                        isReplica={isReplica}
+                        draggable={isRootLevel && !isReplicaLike}
+                        isReplica={isReplicaLike}
                         dropAnchorId={clickTargetId}
                         // Reactive: the JSX expression re-evaluates when
                         // dragOverAnchorId() changes, and Solid forwards
