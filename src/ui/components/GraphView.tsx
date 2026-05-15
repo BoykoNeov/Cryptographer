@@ -636,6 +636,17 @@ export const layoutRoot = (
     // misleading. The non-replica lookup picks the real consumer.
     // Collapsed iterates have `childIds === []` so the lookup falls
     // back to the consumer's own x — no special-case branch needed.
+    //
+    // Generality gap noted for future work: this special-case lives
+    // only here in `layoutRoot`'s second pass. The two sibling replica-
+    // placement loops (`layoutNode`'s group branch + iterate-body
+    // branch) DON'T have the iterate-target check. A hypothetical
+    // future cipher where a replica sits inside a group but targets
+    // an iterate would have its source anchored at the iterate's left
+    // edge here. The target-side `visualEdgeTargetId` retarget still
+    // applies, so the arrow lands correctly; only the source's x is
+    // less pedagogically meaningful. No shipped or planned cipher
+    // hits this — defer until something demands it.
     const consumerContainer = containersById.get(consumerId);
     const firstNonReplicaChildId =
       consumerContainer?.kind === "iterate"
@@ -695,6 +706,35 @@ export { layoutConstantsFor };
  * (the state spine is sacred per the graph-narrative plan's Slice 7
  * design vote). A redundant filter would invite the reader to ask
  * "what about state replicas?" when none exist by construction.
+ *
+ * Cipher-family generality (advisor pass 2026-05-15):
+ * - Single-block AES / Speck / Serpent: no iterates → early-return on
+ *   the `kind === "iterate"` check, behavior unchanged.
+ * - AES-128 ECB (and the upcoming CBC / CTR which reuse the same
+ *   iterate primitive): primary use case; arrow is perfectly vertical.
+ * - Feistel (near-future per `[[project-feistel-near-future]]`): the
+ *   iterate primitive is independent of state branching, so any new
+ *   state-edge kinds the Feistel data model introduces still flow
+ *   into the iterate the same structural way. Helper unaffected.
+ * - Hash functions (SHA-2 / SHA-3 / MAC / KDF per
+ *   `[[project-hash-future]]`): if a hash spec uses `iterate` for
+ *   block compression (likely), block-count and message-block aux
+ *   replicas point at the iterate the same way ECB's count does.
+ *   Same retarget applies. AEAD's two-output shape may force
+ *   endpoint-pill (Slice 1) revision but is orthogonal to this code.
+ *
+ * Two cases this helper intentionally does NOT handle (future work
+ * if a cipher demands them):
+ * 1. **Nested iterates** (iterate-within-iterate): if the iterate's
+ *    first non-replica child is ITSELF an iterate, the arrow lands
+ *    on the inner iterate's box rather than its first body step.
+ *    Recursion would fix this. Today no shipped or planned cipher
+ *    nests iterates — CBC, CTR, and the planned hash compression
+ *    loops are all flat.
+ * 2. **Replica → group edges**: groups are pure visual wrappers
+ *    without iteration-entry semantics, so the safe default is to
+ *    anchor on the group's center (no retarget). If a future cipher
+ *    routinely produces replica→group edges, revisit then.
  */
 export const visualEdgeTargetId = (
   edge: GraphEdge,
