@@ -189,7 +189,18 @@ labels.
 
 ---
 
-## Slice 4 — Edge inspector panel (replaces tooltip)
+## Slice 4 — Edge inspector panel (replaces tooltip) — SHIPPED 2026-05-15
+
+**Status:** shipped. Pure value-lookup helper in
+`src/core/edge-value-lookup.ts`; view store in
+`src/ui/stores/view-edge-inspector.ts`; rendering + hover/click wiring
+in `GraphView.tsx`; CSS in `app.css`; help paragraph in
+`docs/help/graph-view.md`. Pin-on-click stays in v1 (the killer demo is
+"pin an edge, scrub the trace, watch the value change frame-to-frame").
+Pin clears on spec.id change via a `createEffect(on(() => spec().id))`
+so a stale pin from a prior spec can't render against ids that no
+longer exist. 23 new tests (15 lookup unit + 8 panel component); suite
+at 958 across 79 files.
 
 **Goal:** Show the data flowing through any specific edge at the
 current scrubber position. Replaces the existing `<title>` tooltip

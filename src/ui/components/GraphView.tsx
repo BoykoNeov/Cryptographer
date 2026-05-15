@@ -35,6 +35,8 @@
  * starts no drag). Above threshold, the click handler is suppressed.
  */
 
+import { type EdgeValueLookup, lookupEdgeValue } from "@/core/edge-value-lookup";
+import { type ByteFormat, formatBytes } from "@/core/format";
 import {
   type CipherGraph,
   type ContainerNode,
@@ -49,8 +51,9 @@ import {
   validateGraph,
 } from "@/core/graph";
 import { inferShapesAtAnchors, validateShapes } from "@/core/spec-shapes";
-import type { StepNode } from "@/core/types";
+import type { AuxValue, State, StepNode } from "@/core/types";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
+import { useByteFormat } from "../stores/format";
 import {
   setNodePosition,
   setReplicationMode,
@@ -66,7 +69,7 @@ import {
   useMode,
   useSpec,
 } from "../stores/spec";
-import { getTrace, setSelectedStepId, useTraceVersion } from "../stores/trace";
+import { getTrace, setSelectedStepId, useFrameIndex, useTraceVersion } from "../stores/trace";
 import {
   ALL_VIEW_DENSITIES,
   DENSITY_SCALE,
@@ -75,6 +78,17 @@ import {
   setViewDensity,
   useViewDensity,
 } from "../stores/view-density";
+import {
+  clearPinnedEdge,
+  encodeEdgeKey,
+  setHoveredEdgeKey,
+  toggleInspectorPanelOpen,
+  togglePinnedEdge,
+  useActiveEdgeKey,
+  useHoveredEdgeKey,
+  useInspectorPanelOpen,
+  usePinnedEdgeKey,
+} from "../stores/view-edge-inspector";
 import {
   DEFAULT_REPLICATION_THRESHOLD,
   REPLICATION_THRESHOLD_MAX,
@@ -785,6 +799,28 @@ export const GraphView = () => {
   // JSX would always return a truthy function reference and the panel
   // would never close.
   const replicationPanelOpen = useReplicationPanelOpen();
+  // Slice 4 — edge inspector. Same accessor-factory pattern as
+  // `replicationPanelOpen` above: capture each accessor ONCE so the
+  // reactive call sites below read the live boolean instead of a
+  // truthy function reference.
+  const hoveredEdgeKey = useHoveredEdgeKey();
+  const pinnedEdgeKey = usePinnedEdgeKey();
+  const activeEdgeKey = useActiveEdgeKey();
+  const inspectorPanelOpen = useInspectorPanelOpen();
+  const frameIndex = useFrameIndex();
+  const byteFormat = useByteFormat();
+  // Clear the pin whenever the user swaps to a different cipher spec.
+  // A pinned edge from a prior spec points at node ids that no longer
+  // exist in the new graph; without this reset the panel would render
+  // "missing" against stale identity (see `view-edge-inspector.ts`
+  // module docstring).
+  createEffect(
+    on(
+      () => spec().id,
+      () => clearPinnedEdge(),
+      { defer: true },
+    ),
+  );
 
   /**
    * Per-spec zoom factor for the SVG canvas (Slice 3 of the
@@ -2204,6 +2240,44 @@ export const GraphView = () => {
               </Show>
             </div>
           </Show>
+          {/* Slice 4 — edge inspector panel. Mounted unconditionally so the
+            collapsed-header toggle is always reachable; the body renders
+            value/empty content based on hover-or-pin state.
+
+            Reactivity: the value memo depends on activeEdgeKey() (hover or
+            pin), the current frame index (for block-aware lookup),
+            useTraceVersion (re-run swaps the trace), and the active byte
+            format. Missing any of those would produce a stale render — see
+            the advisor's reactivity-dep-list note for Slice 4. */}
+          <div class="graph-edge-inspector-panel">
+            <button
+              type="button"
+              class="graph-edge-inspector-panel-header"
+              data-testid="edge-inspector-panel-toggle"
+              data-open={inspectorPanelOpen() ? "true" : "false"}
+              aria-expanded={inspectorPanelOpen() ? "true" : "false"}
+              onClick={toggleInspectorPanelOpen}
+              title={inspectorPanelOpen() ? "Collapse edge inspector" : "Expand edge inspector"}
+            >
+              <span class="graph-edge-inspector-panel-chevron" aria-hidden="true">
+                ▸
+              </span>
+              edge inspector
+              <span class="graph-edge-inspector-panel-hint">hover or click an edge</span>
+            </button>
+            <Show when={inspectorPanelOpen()}>
+              <EdgeInspectorBody
+                activeEdgeKey={activeEdgeKey}
+                hoveredEdgeKey={hoveredEdgeKey}
+                pinnedEdgeKey={pinnedEdgeKey}
+                edges={() => graph().edges}
+                spec={spec}
+                frameIndex={frameIndex}
+                version={version}
+                byteFormat={byteFormat}
+              />
+            </Show>
+          </div>
         </div>
         <Show
           when={graph().nodes.length > 0 || graph().containers.length > 0}
@@ -2306,6 +2380,7 @@ export const GraphView = () => {
                   const targetId = visualEdgeTargetId(edge, nodesById(), containersById());
                   return layout().boxes.get(targetId);
                 });
+                const eKey = encodeEdgeKey(edge);
                 return (
                   <Show when={fromBox() && toBox()}>
                     <EdgePath
@@ -2320,6 +2395,8 @@ export const GraphView = () => {
                       // user can read "this is iteration-N → iteration-
                       // N+1, not within-iteration flow" at a glance.
                       isFeedback={feedbackPredicate()(edge)}
+                      edgeKey={eKey}
+                      isPinned={pinnedEdgeKey() === eKey}
                     />
                   </Show>
                 );
@@ -3077,6 +3154,22 @@ const EdgePath = (props: {
    * feedback, the dashed style is visual-only and doesn't affect dataflow.
    */
   isFeedback: boolean;
+  /**
+   * Slice 4 — identity key for the edge-inspector store. The path's
+   * mouseenter/leave/click handlers route through this key so the
+   * panel below can look up the value flowing through THIS edge at
+   * the current scrubber position.
+   *
+   * Why a string key (not the GraphEdge object): signals compare by
+   * reference + value-equality. Strings are cheap to compare and cheap
+   * to encode/decode at the boundary. The `view-edge-inspector` store
+   * holds the active key; the panel uses `decodeEdgeKey` only when it
+   * needs the full GraphEdge to feed `lookupEdgeValue`.
+   */
+  edgeKey: string;
+  /** True when this edge is the currently-pinned inspector target —
+   *  applies the `graph-edge-pinned` halo class. */
+  isPinned: boolean;
 }) => {
   // The `d` attribute is computed via createMemo so it tracks changes to
   // props.from / props.to. Without the memo, the path string would be
@@ -3164,19 +3257,282 @@ const EdgePath = (props: {
     const c2x = rightward ? tx - pull : tx + pull;
     return `M ${sx} ${sy} C ${c1x} ${sy}, ${c2x} ${ty}, ${tx} ${ty}`;
   });
+  // Keyboard handler mirrors the click so biome's a11y lint passes
+  // (`useKeyWithClickEvents`). SVG `<path>` is non-focusable by default
+  // — the handler will never actually fire in practice — but the rule
+  // wants the affordance present in case a future cipher adds
+  // `tabindex` to make edges keyboard-reachable.
+  const handleKeyToggle = (e: KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.stopPropagation();
+      togglePinnedEdge(props.edgeKey);
+    }
+  };
   return (
-    <path
-      class={`graph-edge graph-edge-${props.kind}`}
-      classList={{ "graph-edge-feedback": props.isFeedback }}
-      d={d()}
-      marker-end={`url(#graph-arrow-${props.kind})`}
-    >
-      <title>
-        {props.auxKey}
-        {props.isFeedback ? " — feedback (next iteration)" : ""}
-      </title>
-    </path>
+    // Two-layer render: the visible thin/dashed path on top (no pointer
+    // events — it would otherwise compete with the wide hit path for
+    // hover detection), and a wide invisible hit path BELOW IT in the
+    // SVG paint order that captures hover/click on a fat 12px stroke.
+    //
+    // Why this matters: `.graph-edge-aux` renders at 1.5 px stroke and
+    // `.graph-edge-state` at 2 px. SVG paths only react to events ON
+    // their actual stroke, so a 2 px hit target is finicky to hover
+    // and worse at non-100% zooms. The 12 px transparent companion
+    // gives users a comfortable hit zone (matches the slop most users
+    // expect for "click the line"). Standard SVG idiom — same `d`,
+    // `stroke="transparent"`, `pointer-events="stroke"`, `fill="none"`.
+    // Drawn second so SVG paint order puts it on top of the visible
+    // path; without that, browser hit-testing prefers the visible
+    // path (smaller hit zone) when the cursor is dead-center.
+    //
+    // The visible path keeps its classes + pinned halo styling because
+    // `.graph-edge-pinned`'s drop-shadow renders relative to the
+    // visible stroke geometry; applying it to a transparent stroke
+    // would render no shadow. The hit path also gets the data-edge-
+    // key attribute because the component tests target `data-edge-
+    // key` to locate hover/click targets.
+    <g>
+      <path
+        class={`graph-edge graph-edge-${props.kind}`}
+        classList={{
+          "graph-edge-feedback": props.isFeedback,
+          "graph-edge-pinned": props.isPinned,
+        }}
+        d={d()}
+        marker-end={`url(#graph-arrow-${props.kind})`}
+        pointer-events="none"
+      />
+      <path
+        class="graph-edge-hit"
+        d={d()}
+        data-edge-key={props.edgeKey}
+        onMouseEnter={() => setHoveredEdgeKey(props.edgeKey)}
+        onMouseLeave={() => setHoveredEdgeKey(null)}
+        onClick={(e) => {
+          // stopPropagation so the click doesn't bubble up to the
+          // canvas (which would otherwise treat empty-area clicks as
+          // drag-cancel or future canvas-level handlers).
+          e.stopPropagation();
+          togglePinnedEdge(props.edgeKey);
+        }}
+        onKeyDown={handleKeyToggle}
+      >
+        <title>
+          {props.auxKey}
+          {props.isFeedback ? " — feedback (next iteration)" : ""}
+        </title>
+      </path>
+    </g>
   );
+};
+
+/**
+ * Maximum entries to render before truncating to "… N more" for a value
+ * that resolves to `readonly State[]` (e.g. the iterate's `blocksFromAux`
+ * shown on the boundary edge into a non-collapsed iterate). Picked to
+ * match Slice 6's block-chip cap (6) so the inspector and the canvas
+ * tell the same story about how much detail is shown.
+ */
+const INSPECTOR_ARRAY_PREVIEW_CAP = 6;
+
+/**
+ * Render an `AuxValue` (or `State`) as a single line of text suitable
+ * for the inspector panel. Bytes-y values flow through `formatBytes`
+ * with the active byte format. Arrays show up to `INSPECTOR_ARRAY_PREVIEW_CAP`
+ * entries followed by "… N more" — typical case is "first 6 blocks of
+ * 8" or similar, matching the chip cap visually.
+ *
+ * Why one line: the panel sits below the replication panel above the
+ * SVG, so vertical real estate is precious. A pre-formatted plain
+ * string lets us reuse the existing `.graph-edge-inspector-value`
+ * styling without growing per-shape branches in the JSX.
+ */
+const formatAuxValueOneline = (value: AuxValue, fmt: ByteFormat): string => {
+  // Array of States (e.g. blocksFromAux / outBlocksAux). Slice + ellipsis.
+  if (Array.isArray(value)) {
+    const arr = value as readonly State[];
+    const visible = arr.slice(0, INSPECTOR_ARRAY_PREVIEW_CAP);
+    const formatted = visible.map((s) => formatStateOneline(s, fmt));
+    const tail =
+      arr.length > INSPECTOR_ARRAY_PREVIEW_CAP
+        ? `, … ${arr.length - INSPECTOR_ARRAY_PREVIEW_CAP} more`
+        : "";
+    return `[ ${formatted.join(", ")}${tail} ]`;
+  }
+  // Plain Uint8Array (e.g. round-key aux). Render through formatBytes.
+  if (value instanceof Uint8Array) {
+    return formatBytes(value, fmt);
+  }
+  // Number / bigint (e.g. blockCount). String-ify directly.
+  if (typeof value === "number" || typeof value === "bigint") {
+    return value.toString();
+  }
+  // State variant — discriminate on shape. Narrowing has eliminated the
+  // array/Uint8Array/number/bigint branches above, so the residual type
+  // is the State union; cast to satisfy TS without changing semantics.
+  return formatStateOneline(value as State, fmt);
+};
+
+const formatStateOneline = (state: State, fmt: ByteFormat): string => {
+  switch (state.shape) {
+    case "bytes":
+      return formatBytes(state.bytes, fmt);
+    case "matrix4x4-bytes":
+      return formatBytes(state.bytes, fmt);
+    case "bitvec":
+      // No bit-level renderer yet — show the underlying packed bytes as
+      // hex regardless of fmt. Once a cipher actually exercises bitvec
+      // state we can add a dedicated bit-string formatter.
+      return formatBytes(state.bits, "hex");
+    case "bigint":
+      return state.value.toString();
+  }
+};
+
+/**
+ * Body of the edge-inspector panel. Pulled out as a separate component
+ * because the value-lookup memo + the kind-badge logic add visual
+ * weight; threading the dependencies as props keeps the parent JSX
+ * readable without inlining 50 lines of inspector code.
+ *
+ * Reactivity dependencies (per the Slice 4 advisor note):
+ *   - `activeEdgeKey` — the user's current hover/pin target
+ *   - `frameIndex` — current scrubber position drives block-aware lookup
+ *   - `version` — re-run replaces the trace; without this dep, the
+ *     panel would render against a stale trace after a param edit
+ *   - `byteFormat` — value formatting is format-aware
+ *
+ * Missing any of those produces a stale panel; pinning the list here
+ * (and matching it in the memo body) is the discipline check.
+ */
+const EdgeInspectorBody = (props: {
+  activeEdgeKey: () => string | null;
+  hoveredEdgeKey: () => string | null;
+  pinnedEdgeKey: () => string | null;
+  edges: () => readonly GraphEdge[];
+  spec: () => import("@/core/types").CipherSpec;
+  frameIndex: () => number;
+  version: () => number;
+  byteFormat: () => ByteFormat;
+}) => {
+  // Resolve the active key back to a GraphEdge by looking it up in the
+  // current graph (rather than decoding the key directly). The current
+  // graph is the post-replication, post-collapse, post-chip-expansion
+  // graph the renderer is showing — so the edge we find is the same
+  // identity the user clicked, including any synthetic chip endpoints.
+  // Decoding the key without this lookup would also work (the format
+  // round-trips), but going through `edges()` makes the inspector
+  // automatically degrade to "missing" if a spec change retired the
+  // hovered edge between hover and render.
+  const activeEdge = createMemo<GraphEdge | null>(() => {
+    const key = props.activeEdgeKey();
+    if (key === null) return null;
+    for (const e of props.edges()) {
+      if (encodeEdgeKey(e) === key) return e;
+    }
+    return null;
+  });
+
+  const lookup = createMemo<EdgeValueLookup | null>(() => {
+    // Tracked deps so the memo invalidates on every change that could
+    // affect the rendered value. The block-aware lookup needs the
+    // current frame's blockIndex; the trace lives outside Solid
+    // (perf), so we read it via `getTrace()` with `version()` as the
+    // invalidation trigger.
+    void props.version();
+    const trace = getTrace();
+    const edge = activeEdge();
+    if (edge === null) return null;
+    const idx = props.frameIndex();
+    const currentBlockIndex = trace !== null ? trace.frames[idx]?.blockIndex : undefined;
+    return lookupEdgeValue(edge, props.spec(), trace, currentBlockIndex);
+  });
+
+  // Render. The four branches match the EdgeValueLookup discriminant.
+  return (
+    <div class="graph-edge-inspector-body" data-testid="edge-inspector-body">
+      <Show
+        when={activeEdge() !== null}
+        fallback={
+          <div class="graph-edge-inspector-empty">
+            Hover an edge to see the value flowing through it, or click an edge to pin it.
+          </div>
+        }
+      >
+        {(_present) => {
+          // _present is the truthiness; the actual edge comes from activeEdge().
+          // biome-ignore lint/style/noNonNullAssertion: <Show when={...!==null}>
+          const edge = () => activeEdge()!;
+          const result = () => lookup();
+          return (
+            <>
+              <div class="graph-edge-inspector-identity">
+                <span class="graph-edge-inspector-from" title={edge().from}>
+                  {edge().from}
+                </span>
+                <span class="graph-edge-inspector-arrow" aria-hidden="true">
+                  →
+                </span>
+                <span class="graph-edge-inspector-to" title={edge().to}>
+                  {edge().to}
+                </span>
+                <Show when={props.pinnedEdgeKey() === props.activeEdgeKey()}>
+                  <span class="graph-edge-inspector-pin-badge" title="pinned">
+                    📌
+                  </span>
+                </Show>
+              </div>
+              <Show when={result()}>
+                {(r) => (
+                  <>
+                    <div class="graph-edge-inspector-kind-row">
+                      <span
+                        class={`graph-edge-inspector-kind-badge graph-edge-inspector-kind-${r().status === "value" ? r().status : "info"}`}
+                      >
+                        {kindBadgeText(r(), edge())}
+                      </span>
+                    </div>
+                    <div class="graph-edge-inspector-value-row">
+                      {valueRowText(r(), props.byteFormat())}
+                    </div>
+                  </>
+                )}
+              </Show>
+            </>
+          );
+        }}
+      </Show>
+    </div>
+  );
+};
+
+/** Compute the kind-badge label for an inspector row. */
+const kindBadgeText = (r: EdgeValueLookup, edge: GraphEdge): string => {
+  if (r.status === "endpoint") {
+    return r.endpointSide === "input" ? "input pill" : "output pill";
+  }
+  if (r.status === "no-trace") return "no trace";
+  if (r.status === "missing") return "no value";
+  // r.status === "value"
+  const blockSuffix = r.blockIndex !== undefined ? ` (block ${r.blockIndex})` : "";
+  if (r.displayKind === "state") return `state${blockSuffix}`;
+  if (r.displayKind === "block-payload") return `block payload${blockSuffix}`;
+  return `aux: ${edge.auxKey}${blockSuffix}`;
+};
+
+/** Render the value-row content for an inspector row. Returns a string;
+ *  rich rendering (matrix grid etc.) is intentionally not part of v1. */
+const valueRowText = (r: EdgeValueLookup, fmt: ByteFormat): string => {
+  switch (r.status) {
+    case "endpoint":
+      return r.label;
+    case "no-trace":
+      return "Run the cipher to see edge values.";
+    case "missing":
+      return r.reason;
+    case "value":
+      return formatAuxValueOneline(r.value, fmt);
+  }
 };
 
 /**

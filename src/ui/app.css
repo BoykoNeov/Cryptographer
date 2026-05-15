@@ -1945,6 +1945,140 @@ button:disabled {
   text-align: right;
 }
 
+/* Slice 4 — edge inspector panel. Same look as the replication panel
+   above (collapsible header + body), styled to match so the user reads
+   them as related toolbar surfaces. Lives below the replication panel
+   inside `.graph-view-sticky-header` so both share the toolbar's
+   sticky band. */
+.graph-edge-inspector-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+  font-size: 11px;
+}
+
+.graph-edge-inspector-panel-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--muted);
+  text-transform: lowercase;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+}
+
+.graph-edge-inspector-panel-header:hover {
+  color: var(--fg);
+}
+
+.graph-edge-inspector-panel-header:focus-visible {
+  outline: 2px solid var(--accent, currentColor);
+  outline-offset: 2px;
+}
+
+.graph-edge-inspector-panel-chevron {
+  display: inline-block;
+  font-size: 10px;
+  transition: transform 120ms ease;
+}
+
+.graph-edge-inspector-panel-header[data-open="true"] .graph-edge-inspector-panel-chevron {
+  transform: rotate(90deg);
+}
+
+.graph-edge-inspector-panel-hint {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.graph-edge-inspector-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* Cap body width on wide canvases so long hex dumps don't push the
+     panel out into horizontal scroll territory. Browser wraps the
+     value row on the explicit `word-break` rule below. */
+  max-width: 720px;
+}
+
+.graph-edge-inspector-empty {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.graph-edge-inspector-identity {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color: var(--text);
+  /* Truncate each endpoint id at the same place so long ids don't
+     blow up the panel height. The full id is in the <title> tooltip. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-edge-inspector-from,
+.graph-edge-inspector-to {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
+}
+
+.graph-edge-inspector-arrow {
+  color: var(--muted);
+}
+
+.graph-edge-inspector-pin-badge {
+  font-size: 10px;
+  margin-left: auto;
+  opacity: 0.85;
+}
+
+.graph-edge-inspector-kind-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.graph-edge-inspector-kind-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--bg-elev-2);
+  color: var(--muted);
+  text-transform: lowercase;
+}
+
+.graph-edge-inspector-kind-value {
+  background: var(--accent);
+  color: var(--bg);
+  opacity: 0.85;
+}
+
+.graph-edge-inspector-value-row {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color: var(--text);
+  /* Long hex dumps wrap rather than blow up the layout. The 720px cap
+     on the body above keeps the panel tidy on wide screens. */
+  word-break: break-all;
+  white-space: pre-wrap;
+  background: var(--bg-elev-2);
+  padding: 4px 6px;
+  border-radius: 2px;
+}
+
 .graph-view-svg {
   display: block;
   font-family: inherit;
@@ -2153,6 +2287,31 @@ button:disabled {
 .graph-edge-feedback:hover {
   stroke-dasharray: none;
   stroke-opacity: 0.95;
+}
+
+/* Slice 4 — pinned edge highlight. Wraps a wide, partially-transparent
+   stroke around the edge so the user can spot the pinned target at a
+   glance even when zoomed out. Composes with the kind-specific styles
+   above (the regular stroke still draws on top, so the edge's color
+   isn't swallowed by the halo). */
+.graph-edge-pinned {
+  stroke-width: 4;
+  stroke-opacity: 1;
+  filter: drop-shadow(0 0 4px var(--accent));
+}
+
+/* Slice 4 — wide invisible hit-path companion. Drawn beside the visible
+   `.graph-edge` to give the user a comfortable click/hover zone. The
+   visible edge is 1.5–2px thick; this 12px transparent stroke catches
+   pointer events the visible stroke would miss. `pointer-events: stroke`
+   makes the path react only when the cursor is directly over its
+   stroke (a non-zero stroke region) — never on its hollow interior. */
+.graph-edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 12;
+  pointer-events: stroke;
+  cursor: pointer;
 }
 
 /* Arrow glyphs reference the same colors as their parent edge. Filled

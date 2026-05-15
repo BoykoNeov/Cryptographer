@@ -98,11 +98,15 @@ describe("GraphView — component-level (AES-128 fixture)", () => {
   it("renders aux-flow edges from the trace (11 key-expansion fan-out edges)", () => {
     seedAes128Trace();
     const { container } = render(() => <GraphView />);
-    // Edge paths each carry a <title> with the auxKey. Round-key fan-out
-    // gives us 11 paths whose title starts with "roundKey." — sanity check.
+    // Edge titles (auxKey tooltip text) live on the hit-path sibling
+    // since Slice 4's wide-invisible-companion refactor — that's the
+    // path that actually fires hover events because the visible
+    // `.graph-edge` has pointer-events:none. Filter the hit paths and
+    // assert exactly 11 round-key tooltips for AES-128.
     const edges = container.querySelectorAll(".graph-edge");
     expect(edges.length).toBeGreaterThanOrEqual(11);
-    const roundKeyEdges = Array.from(edges).filter((e) =>
+    const hitPaths = container.querySelectorAll(".graph-edge-hit");
+    const roundKeyEdges = Array.from(hitPaths).filter((e) =>
       e.querySelector("title")?.textContent?.startsWith("roundKey."),
     );
     expect(roundKeyEdges.length).toBe(11);
