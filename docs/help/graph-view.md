@@ -65,7 +65,12 @@ internalized.
   "include session" or made any layout edits.
 - **Collapse a container** with the chevron in its header. The body
   hides; aux edges that crossed into it now terminate at the chip.
-  Click again to expand.
+  Click again to expand. **Collapsing an iterate** (the `ecb-blocks`
+  loop in ECB, etc.) is a special case: instead of a single chip with
+  a `×N` badge, you get N parallel block-chips (`block 1`, `block 2`,
+  …) showing the per-block fan-out at a glance. The chips are capped
+  at 6 — for N > 6 the last is an ellipsis chip labelled `+M more
+  blocks`.
 - **Click a leaf** to focus the linear trace's scrubber on the matching
   frame. The param panel below the graph shows that step's parameters
   for in-place editing.
