@@ -2966,6 +2966,14 @@ const LeafRect = (props: {
       }}
       data-drop-anchor={props.dropAnchorId}
       data-state-shape={props.stateShape}
+      // Always-present stepId hook for tests + browser tooling. Mirrors
+      // the existing `graph-container-header-${id}` / `graph-container-
+      // chevron-${id}` testid pattern. Replica chips carry their
+      // synthetic `${src}@->${consumer}` id here, which is the only
+      // stable handle a Playwright spec has on them (their <title>
+      // text contains the same id but is brittle to the title-format
+      // changes).
+      data-testid={`graph-leaf-${props.stepId}`}
       // `tabindex="0"` puts the leaf in the natural keyboard tab order so
       // Delete/Backspace can target the focused node. Replicas are
       // skipped — they're visual references, not editable nodes.
