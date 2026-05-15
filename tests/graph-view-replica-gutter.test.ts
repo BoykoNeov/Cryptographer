@@ -55,7 +55,7 @@ import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue } from "@/core/types";
-import { layoutConstantsFor, layoutRoot } from "@/ui/components/GraphView";
+import { layoutConstantsFor, layoutRoot, visualEdgeTargetId } from "@/ui/components/GraphView";
 import { describe, expect, it } from "vitest";
 
 // ─── Fixtures ──────────────────────────────────────────────────────────────
@@ -805,3 +805,270 @@ const makeMultiReplicaGraphForLeaf = (
     rootIds: [...replicaIds, consumerId],
   };
 };
+
+/**
+ * Slice-2 follow-up: `visualEdgeTargetId` retargets replica→iterate aux
+ * edges to terminate at the iterate body's first child. Pure-function
+ * tests exercise all four branches directly; one integration check
+ * against the AES-128-ECB fixture confirms the helper composes with
+ * the actual derived graph.
+ *
+ * The pure helper is exercised in isolation rather than asserting on
+ * the rendered `<path d="...">` bezier coordinates — those would
+ * re-baseline on every density tweak or curve refactor, and the
+ * helper's branches are the actual behavior under test.
+ */
+describe("visualEdgeTargetId — retargets replica→iterate edges to first body child", () => {
+  // Pure-helper tests build a `nodesById` + `containersById` pair
+  // directly. The helper doesn't touch boxes or layout — it just maps
+  // edge → target stepId, so synthetic inputs cover every branch
+  // without running `layoutRoot`.
+  const makeMaps = (
+    nodes: readonly GraphNode[],
+    containers: readonly ContainerNode[],
+  ): {
+    nodesById: Map<string, GraphNode>;
+    containersById: Map<string, ContainerNode>;
+  } => {
+    const nodesById = new Map<string, GraphNode>();
+    for (const n of nodes) nodesById.set(n.stepId, n);
+    const containersById = new Map<string, ContainerNode>();
+    for (const c of containers) containersById.set(c.id, c);
+    return { nodesById, containersById };
+  };
+
+  it("retargets replica→iterate to first body child when iterate has children", () => {
+    const replicaNode: GraphNode = {
+      stepId: "src->iterate",
+      stepType: "test.source",
+      label: "replica",
+      containerPath: [],
+      replicaOf: "src",
+    };
+    const consumerNode: GraphNode = {
+      stepId: "first-body-step",
+      stepType: "test.consumer",
+      label: "first-body-step",
+      containerPath: ["iterate"],
+    };
+    const iterate: ContainerNode = {
+      kind: "iterate",
+      id: "iterate",
+      label: "iterate",
+      containerPath: [],
+      childIds: ["first-body-step", "second-body-step"],
+      blockSpan: 2,
+    };
+    const { nodesById, containersById } = makeMaps([replicaNode, consumerNode], [iterate]);
+    const edge: GraphEdge = {
+      from: "src->iterate",
+      to: "iterate",
+      auxKey: "blockCount",
+      kind: "aux",
+    };
+    // Retarget kicks in: source is a replica, target is an iterate
+    // with a body. Visual endpoint becomes the first body child.
+    expect(visualEdgeTargetId(edge, nodesById, containersById)).toBe("first-body-step");
+  });
+
+  it("falls back to the iterate's own id when the iterate body is empty (collapsed)", () => {
+    // `collapseGraph` clears `childIds` for collapsed containers.
+    // The retarget can't pick a first child, so the visual endpoint
+    // stays at the iterate itself — preserving the pre-fix arrow.
+    const replicaNode: GraphNode = {
+      stepId: "src->iterate",
+      stepType: "test.source",
+      label: "replica",
+      containerPath: [],
+      replicaOf: "src",
+    };
+    const collapsedIterate: ContainerNode = {
+      kind: "iterate",
+      id: "iterate",
+      label: "iterate",
+      containerPath: [],
+      childIds: [],
+      blockSpan: 4,
+    };
+    const { nodesById, containersById } = makeMaps([replicaNode], [collapsedIterate]);
+    const edge: GraphEdge = {
+      from: "src->iterate",
+      to: "iterate",
+      auxKey: "blockCount",
+      kind: "aux",
+    };
+    expect(visualEdgeTargetId(edge, nodesById, containersById)).toBe("iterate");
+  });
+
+  it("does NOT retarget when target is a leaf (not an iterate container)", () => {
+    // Slice 2 + this follow-up only special-case iterate consumers.
+    // A replica whose consumer is a regular leaf keeps the natural
+    // edge endpoint — short arrow lands on the leaf itself.
+    const replicaNode: GraphNode = {
+      stepId: "src->consumer",
+      stepType: "test.source",
+      label: "replica",
+      containerPath: [],
+      replicaOf: "src",
+    };
+    const consumerNode: GraphNode = {
+      stepId: "consumer",
+      stepType: "test.consumer",
+      label: "consumer",
+      containerPath: [],
+    };
+    const { nodesById, containersById } = makeMaps([replicaNode, consumerNode], []);
+    const edge: GraphEdge = {
+      from: "src->consumer",
+      to: "consumer",
+      auxKey: "round-key",
+      kind: "aux",
+    };
+    expect(visualEdgeTargetId(edge, nodesById, containersById)).toBe("consumer");
+  });
+
+  it("does NOT retarget when target is a group container (only iterate triggers retarget)", () => {
+    // Defensive: a hypothetical replica→group edge stays anchored on
+    // the group. Today no such edge exists (state spine is sacred,
+    // groups are never replication consumers in practice), but pin
+    // the branch so a future refactor doesn't accidentally widen the
+    // special case.
+    const replicaNode: GraphNode = {
+      stepId: "src->group",
+      stepType: "test.source",
+      label: "replica",
+      containerPath: [],
+      replicaOf: "src",
+    };
+    const group: ContainerNode = {
+      kind: "group",
+      id: "group",
+      label: "group",
+      containerPath: [],
+      childIds: ["child-a", "child-b"],
+    };
+    const { nodesById, containersById } = makeMaps([replicaNode], [group]);
+    const edge: GraphEdge = {
+      from: "src->group",
+      to: "group",
+      auxKey: "test",
+      kind: "aux",
+    };
+    expect(visualEdgeTargetId(edge, nodesById, containersById)).toBe("group");
+  });
+
+  it("skips past in-body replicas to find the first REAL body step", () => {
+    // `replicateHighFanoutSources` splices its synthetic replica chips
+    // into the consumer's parent `childIds` immediately BEFORE the
+    // consumer. For an iterate body, that means `childIds[0]` is often
+    // a replica (e.g. `key-expansion@->initial.add-round-key`) ahead of
+    // the actual first step (`initial.add-round-key`). Anchoring the
+    // arrowhead at the replica chip would misleadingly suggest the
+    // count flows into a key-expansion replica. Skip past replicas so
+    // the visual target is the first non-replica body step.
+    const outerReplicaNode: GraphNode = {
+      stepId: "src->iterate",
+      stepType: "test.source",
+      label: "outer replica",
+      containerPath: [],
+      replicaOf: "src",
+    };
+    const inBodyReplicaNode: GraphNode = {
+      stepId: "key-expansion@->initial.add-round-key",
+      stepType: "test.source",
+      label: "in-body replica",
+      containerPath: ["iterate"],
+      replicaOf: "key-expansion",
+    };
+    const realFirstStep: GraphNode = {
+      stepId: "initial.add-round-key",
+      stepType: "test.consumer",
+      label: "initial.add-round-key",
+      containerPath: ["iterate"],
+    };
+    const iterate: ContainerNode = {
+      kind: "iterate",
+      id: "iterate",
+      label: "iterate",
+      containerPath: [],
+      // Replica spliced BEFORE the real first step — typical of the
+      // post-replication graph.
+      childIds: ["key-expansion@->initial.add-round-key", "initial.add-round-key"],
+      blockSpan: 2,
+    };
+    const { nodesById, containersById } = makeMaps(
+      [outerReplicaNode, inBodyReplicaNode, realFirstStep],
+      [iterate],
+    );
+    const edge: GraphEdge = {
+      from: "src->iterate",
+      to: "iterate",
+      auxKey: "blockCount",
+      kind: "aux",
+    };
+    expect(visualEdgeTargetId(edge, nodesById, containersById)).toBe("initial.add-round-key");
+  });
+
+  it("does NOT retarget when source is NOT a replica (non-replica → iterate stays anchored on the iterate)", () => {
+    // The natural state-spine arrow into an iterate (e.g.
+    // `compute-block-count → ecb-blocks` BEFORE replication forces a
+    // replica) should keep landing at the iterate's center-top, where
+    // the user sees "the iterate consumes this." The retarget is
+    // strictly a replica-edge concern.
+    const sourceNode: GraphNode = {
+      stepId: "compute-block-count",
+      stepType: "generic.compute-block-count@1",
+      label: "compute-block-count",
+      containerPath: [],
+      // No replicaOf field → not a replica.
+    };
+    const iterate: ContainerNode = {
+      kind: "iterate",
+      id: "ecb-blocks",
+      label: "ecb-blocks",
+      containerPath: [],
+      childIds: ["initial.add-round-key"],
+      blockSpan: 2,
+    };
+    const { nodesById, containersById } = makeMaps([sourceNode], [iterate]);
+    const edge: GraphEdge = {
+      from: "compute-block-count",
+      to: "ecb-blocks",
+      auxKey: "blockCount",
+      kind: "aux",
+    };
+    expect(visualEdgeTargetId(edge, nodesById, containersById)).toBe("ecb-blocks");
+  });
+
+  it("AES-128 ECB integration: compute-block-count replica retargets to initial.add-round-key", () => {
+    // The headline end-to-end check: force replication of
+    // `compute-block-count` and verify the helper produces the right
+    // visual target against the real derived graph. Combined with
+    // Slice 2's source-side anchor (also at `initial.add-round-key`'s
+    // x), this yields a perfectly vertical arrow on AES-128 ECB
+    // since `initial.add-round-key` is a leaf — replica.center.x ==
+    // firstChild.center.x.
+    const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
+      initialState: makeBytesState(bytesFromHex(ECB_PT_1_BLOCK)),
+      initialAux: new Map<string, AuxValue>([["key", bytesFromHex(ECB_KEY)]]),
+    });
+    const replicated = replicateHighFanoutSources(deriveAuxGraph(trace, aes128EcbSpec), 6, {
+      "compute-block-count": "always",
+    });
+    const nodesById = new Map<string, GraphNode>();
+    for (const n of replicated.nodes) nodesById.set(n.stepId, n);
+    const containersById = new Map<string, ContainerNode>();
+    for (const c of replicated.containers) containersById.set(c.id, c);
+    const replicaEdge = replicated.edges.find(
+      (e) => e.from === "compute-block-count@->ecb-blocks" && e.to === "ecb-blocks",
+    );
+    if (!replicaEdge) {
+      throw new Error(
+        "missing replica edge compute-block-count@->ecb-blocks → ecb-blocks in derived graph",
+      );
+    }
+    expect(visualEdgeTargetId(replicaEdge, nodesById, containersById)).toBe(
+      "initial.add-round-key",
+    );
+  });
+});

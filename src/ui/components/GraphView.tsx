@@ -38,6 +38,8 @@
 import {
   type CipherGraph,
   type ContainerNode,
+  type GraphEdge,
+  type GraphNode,
   type GraphWarning,
   buildIterateFeedbackPredicate,
   collapseGraph,
@@ -619,21 +621,28 @@ export const layoutRoot = (
     const idx = rootReplicaIndexByConsumer.get(consumerId) ?? 0;
     rootReplicaIndexByConsumer.set(consumerId, idx + 1);
     const replicaY = consumerBox.y - consts.LEAF_H - consts.STACK_GAP;
-    // Slice-2 anchor: when the consumer is an iterate container, place the
-    // replica above the iterate body's FIRST child instead of the iterate's
-    // own left edge. The arrow then drops "into the start of the body,
-    // where the aux is read," which matches the runtime semantics — the
-    // iterate consumes `countFromAux` / `blocksFromAux` at iteration entry,
-    // and the first body step is the first observer of the resulting state.
-    // For wide iterates (e.g. AES-128 ECB at ~1500px) the visual sweep
-    // shrinks by the container's left padding; the bigger benefit is
-    // pedagogical positioning. Collapsed iterates have `childIds === []`
-    // (`collapseGraph` clears them) so the lookup falls back to the
-    // consumer's own x — no special-case branch needed for that.
+    // Slice-2 anchor: when the consumer is an iterate container, place
+    // the replica above the iterate body's first NON-REPLICA child —
+    // i.e. the first actual body step — instead of the iterate's own
+    // left edge. The arrow then drops "into the start of the body
+    // where the aux is read," matching the runtime: the iterate
+    // consumes `countFromAux` / `blocksFromAux` at iteration entry,
+    // and the first body step is the first observer of the resulting
+    // state. We skip past replicas in `childIds` because
+    // `replicateHighFanoutSources` splices in-body replicas (e.g.
+    // `key-expansion@->initial.add-round-key`) AHEAD of the real
+    // first step. Anchoring above the replica chip instead would
+    // visually point the count-arrow at a key-expansion replica —
+    // misleading. The non-replica lookup picks the real consumer.
+    // Collapsed iterates have `childIds === []` so the lookup falls
+    // back to the consumer's own x — no special-case branch needed.
     const consumerContainer = containersById.get(consumerId);
-    const firstChildId =
-      consumerContainer?.kind === "iterate" ? consumerContainer.childIds[0] : undefined;
-    const firstChildBox = firstChildId !== undefined ? boxes.get(firstChildId) : undefined;
+    const firstNonReplicaChildId =
+      consumerContainer?.kind === "iterate"
+        ? consumerContainer.childIds.find((cid) => !replicas.isReplica.has(cid))
+        : undefined;
+    const firstChildBox =
+      firstNonReplicaChildId !== undefined ? boxes.get(firstNonReplicaChildId) : undefined;
     const anchorX = firstChildBox?.x ?? consumerBox.x;
     boxes.set(id, {
       x: anchorX + idx * (consts.LEAF_W + consts.FLOW_GAP),
@@ -652,6 +661,62 @@ export const layoutRoot = (
 
 /** Re-exported for tests that want to drive `layoutRoot` directly. */
 export { layoutConstantsFor };
+
+/**
+ * Slice-2 follow-up: choose the visual target node for an edge.
+ *
+ * For replica→iterate-container aux edges, the arrow's arrowhead is
+ * better anchored at the iterate body's FIRST child than at the iterate
+ * container itself. Reason: the aux (`countFromAux` / `blocksFromAux`)
+ * is data-model-consumed by the iterate at iteration entry — that's
+ * what `edge.to` correctly says — but the runtime's first observer is
+ * the first body step. Pointing the arrowhead there makes the visual
+ * read "this aux flows INTO the start of the body," which matches the
+ * runtime and shortens the visible sweep to zero when first-child is
+ * a leaf (composes with Slice 2's source-side anchor at the same
+ * `firstChild.x`).
+ *
+ * Edge `to` itself stays semantically correct — `validateGraph` and
+ * the upcoming Slice 4 edge inspector both read `edge.to` to surface
+ * "this aux is consumed by ecb-blocks." Only the rendered arrow's
+ * visual endpoint differs.
+ *
+ * When the first child is itself a wide group (no shipped cipher does
+ * this today — AES's iterate body opens with the leaf
+ * `initial.add-round-key`, and CBC follows the same shape), the arrow
+ * lands at the group's top-center, not its left edge. Still
+ * pedagogically correct — the wide thing IS the first consumer.
+ *
+ * Collapsed iterates (`childIds === []` — `collapseGraph` clears them)
+ * fall back to the container's own box, preserving pre-retarget visual
+ * behavior for that case.
+ *
+ * Why no `edge.kind === "aux"` filter: replicas only carry aux edges
+ * (the state spine is sacred per the graph-narrative plan's Slice 7
+ * design vote). A redundant filter would invite the reader to ask
+ * "what about state replicas?" when none exist by construction.
+ */
+export const visualEdgeTargetId = (
+  edge: GraphEdge,
+  nodesById: ReadonlyMap<string, GraphNode>,
+  containersById: ReadonlyMap<string, ContainerNode>,
+): string => {
+  const fromNode = nodesById.get(edge.from);
+  if (fromNode?.replicaOf === undefined) return edge.to;
+  const toContainer = containersById.get(edge.to);
+  if (toContainer?.kind !== "iterate") return edge.to;
+  // Skip past any replicas that were spliced into the body before the
+  // actual first step (e.g. `replicateHighFanoutSources` puts
+  // `key-expansion@->initial.add-round-key` AHEAD of
+  // `initial.add-round-key` in the iterate body's `childIds`). We want
+  // the visual edge to terminate at the real first consumer step, not
+  // at another replica chip — otherwise the arrow appears to feed into
+  // a key-expansion replica when it's actually the block-count flowing.
+  const firstNonReplicaChildId = toContainer.childIds.find(
+    (cid) => nodesById.get(cid)?.replicaOf === undefined,
+  );
+  return firstNonReplicaChildId ?? edge.to;
+};
 
 // ─── Component ─────────────────────────────────────────────────────────────
 
@@ -996,6 +1061,18 @@ export const GraphView = () => {
   const containersById = createMemo(() => {
     const m = new Map<string, ContainerNode>();
     for (const c of graph().containers) m.set(c.id, c);
+    return m;
+  });
+
+  /**
+   * O(1) lookup for `visualEdgeTargetId` — needs `replicaOf` off each
+   * node to decide whether to retarget the edge endpoint. Memoized so
+   * the per-edge `toBox` reads don't rebuild the map on every reactive
+   * tick.
+   */
+  const nodesById = createMemo(() => {
+    const m = new Map<string, GraphNode>();
+    for (const n of graph().nodes) m.set(n.stepId, n);
     return m;
   });
 
@@ -1611,7 +1688,18 @@ export const GraphView = () => {
             <For each={graph().edges}>
               {(edge) => {
                 const fromBox = createMemo(() => layout().boxes.get(edge.from));
-                const toBox = createMemo(() => layout().boxes.get(edge.to));
+                // Slice-2 follow-up: visually terminate replica→iterate-
+                // container aux edges at the iterate body's FIRST child,
+                // not at the iterate container itself. The edge data model
+                // is unchanged (`edge.to` still points at the iterate, so
+                // Slice 9's validator and Slice 4's inspector keep reading
+                // the right consumer); only the rendered arrowhead anchor
+                // shifts. For everything else this returns `edge.to`
+                // unchanged.
+                const toBox = createMemo(() => {
+                  const targetId = visualEdgeTargetId(edge, nodesById(), containersById());
+                  return layout().boxes.get(targetId);
+                });
                 return (
                   <Show when={fromBox() && toBox()}>
                     <EdgePath
