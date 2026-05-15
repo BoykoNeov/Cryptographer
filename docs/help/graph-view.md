@@ -8,6 +8,13 @@ internalized.
 
 ## Reading the picture
 
+- **Pill at each edge of the canvas** — `plaintext` on the left,
+  `ciphertext` on the right — show where data enters and leaves the
+  cipher. On a decrypt spec the labels swap (`ciphertext` on the left,
+  `plaintext` on the right); the rest of the graph still flows
+  left-to-right. The pills aren't editable: you can't drop a palette
+  step on them, click them, or delete them. They're there so the
+  cipher's I/O is self-evident at a glance.
 - **Boxes** are step nodes. A leaf step is a single primitive
   (e.g. `sub-bytes`, `mix-columns`); a container is a group or an iterate
   loop. Iterate containers carry a `×N` chip telling you how many times

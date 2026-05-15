@@ -46,6 +46,7 @@ import {
   validateGraph,
 } from "@/core/graph";
 import { inferShapesAtAnchors, validateShapes } from "@/core/spec-shapes";
+import type { StepNode } from "@/core/types";
 import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import {
   setNodePosition,
@@ -59,6 +60,7 @@ import {
   insertStepIntoSpec,
   isRoundDuplicatable,
   removeStepFromSpec,
+  useMode,
   useSpec,
 } from "../stores/spec";
 import { getTrace, setSelectedStepId, useTraceVersion } from "../stores/trace";
@@ -522,6 +524,22 @@ export const layoutRoot = (
   graph: CipherGraph,
   pinned: ReadonlyMap<string, { x: number; y: number }>,
   consts: LayoutConstants,
+  /**
+   * Root-level leaves whose registered `shapeContract.input` is `"any"`
+   * (i.e. they don't consume cipher state — `aes.key-expansion@1`,
+   * `generic.iv-load@1`, etc.). They get lifted to the same `CANVAS_MARGIN`
+   * row that root replicas live on, mirroring the existing "spine row is
+   * for state flow, ancillary computation sits above" visual language.
+   * Without this lift, the synthetic plaintext-pill → first-state-consumer
+   * arrow geometrically passes through `key-expansion`'s rectangle on
+   * AES specs — visually confusing even though the arrow doesn't route
+   * through that node logically.
+   *
+   * Defaults to an empty set so callers that haven't computed it (the
+   * test suite drives `layoutRoot` directly with the old signature)
+   * keep the same layout they always had.
+   */
+  auxOnlyRootIds: ReadonlySet<string> = new Set(),
 ): { boxes: Map<string, Box>; canvasW: number; canvasH: number } => {
   const containersById = new Map<string, ContainerNode>();
   for (const c of graph.containers) containersById.set(c.id, c);
@@ -537,10 +555,17 @@ export const layoutRoot = (
   // `key-expansion@->initial.add-round-key` → `initial.add-round-key`)
   // would sit at the same y as the spine arrow and obscure it. Shift the
   // entire row down by LEAF_H + STACK_GAP and place root replicas ABOVE
-  // their consumer at the OLD CANVAS_MARGIN row. Only fires when there's
-  // at least one root-level replica.
+  // their consumer at the OLD CANVAS_MARGIN row.
+  //
+  // Two reasons we shift: a root replica is present, OR an aux-only
+  // root leaf is present (post-Slice 1 endpoint pills — see above).
+  // Shifting once when either condition fires keeps the geometry simple
+  // and means the aux-only-lift row and the replica row coincide
+  // visually, reinforcing "above the spine = supporting computation."
   const hasRootReplicas = graph.rootIds.some((id) => replicas.isReplica.has(id));
-  const rootReplicaLiftH = hasRootReplicas ? consts.LEAF_H + consts.STACK_GAP : 0;
+  const hasAuxOnlyRoots = graph.rootIds.some((id) => auxOnlyRootIds.has(id));
+  const needsSpineLift = hasRootReplicas || hasAuxOnlyRoots;
+  const rootReplicaLiftH = needsSpineLift ? consts.LEAF_H + consts.STACK_GAP : 0;
   const rowStartY = CANVAS_MARGIN + rootReplicaLiftH;
 
   const boxes = new Map<string, Box>();
@@ -555,7 +580,12 @@ export const layoutRoot = (
     // on children, not on this entity's pin), so it's safe to use as the
     // natural width for the advancement step.
     const naturalX = cursorX;
-    const box = layoutNode(id, cursorX, rowStartY, containersById, pinned, boxes, consts, replicas);
+    // Aux-only root leaves lay out at the lifted row (CANVAS_MARGIN), the
+    // rest at the spine row (rowStartY). `layoutNode` honors pins
+    // internally, so a user who manually drags an aux-only leaf to the
+    // spine row keeps that pin.
+    const startY = auxOnlyRootIds.has(id) ? CANVAS_MARGIN : rowStartY;
+    const box = layoutNode(id, cursorX, startY, containersById, pinned, boxes, consts, replicas);
     cursorX = naturalX + box.w + consts.FLOW_GAP;
     const right = box.x + box.w;
     const bottom = box.y + box.h;
@@ -720,6 +750,103 @@ export const GraphView = () => {
     ),
   );
 
+  /**
+   * Endpoint pill anchors (Slice 1 of the graph-narrative plan). Walk the
+   * spec's top-level entities forward (for input) / backward (for output)
+   * and pick the first one whose state contract is NOT `"any"`. This skips
+   * aux-only leaves like `aes.key-expansion@1` so the plaintext arrow
+   * lands on the leaf that actually reads state — `initial.add-round-key`
+   * for single-block AES, `split-blocks` for ECB/CBC.
+   *
+   * Containers (groups + iterates) are treated as state-consumers
+   * unconditionally — state threads through their bodies. The state
+   * spine inferred by `inferStateEdges` already chains the rest.
+   *
+   * Fallback when no leaf in the spec has a non-"any" contract (an empty
+   * or aux-only spec): leave both anchors undefined, in which case
+   * `deriveAuxGraph` falls back to `rootIds[0]` / `rootIds[last]`.
+   */
+  const endpointAnchors = createMemo<{ input: string | undefined; output: string | undefined }>(
+    () => {
+      const s = spec();
+      const isStateConsumer = (n: StepNode): boolean => {
+        if (n.kind !== "step") return true;
+        const contract = registry.getDoc(n.type)?.shapeContract;
+        // No contract: treat as consumer (avoid pointing the arrow at a
+        // node the user can't even reason about). The shape-validation
+        // suite enforces 100% contract coverage on the default registry,
+        // so this branch only fires for hand-rolled specs in dev.
+        return !contract || contract.input !== "any";
+      };
+      let input: string | undefined;
+      let output: string | undefined;
+      for (const n of s.steps) {
+        if (isStateConsumer(n)) {
+          input = n.id;
+          break;
+        }
+      }
+      for (let i = s.steps.length - 1; i >= 0; i--) {
+        const n = s.steps[i];
+        if (n && isStateConsumer(n)) {
+          output = n.id;
+          break;
+        }
+      }
+      return { input, output };
+    },
+  );
+
+  /**
+   * Endpoint pill labels. Encrypt mode: plaintext → ciphertext.
+   * Decrypt mode: labels swap (input pill reads "ciphertext", output
+   * reads "plaintext"). The layout / spec direction itself does NOT
+   * mirror — decryption already flows left-to-right with the inverse
+   * round body, so only the I/O labels need to swap. This matches the
+   * design decision from 2026-05-15 (memory: feedback_graph_design_decisions).
+   *
+   * **Hash-future seam.** When hash specs, MACs, or KDFs ship (planned),
+   * extend this dispatch with another branch keyed off whatever cipher
+   * attribute is most natural at that point. Nomenclature varies:
+   * hashes use `message` / `digest`, MACs use `message` / `tag`, KDFs
+   * use `ikm + salt + info` / `okm`, AEAD ciphers have TWO outputs
+   * (ciphertext + tag). The shape can't be locked in today — wait for
+   * the first hash spec, then add the branch. Memory pointer:
+   * [[project_hash_future]].
+   */
+  const endpointLabels = createMemo<{ inputLabel: string; outputLabel: string }>(() =>
+    useMode()() === "encrypt"
+      ? { inputLabel: "plaintext", outputLabel: "ciphertext" }
+      : { inputLabel: "ciphertext", outputLabel: "plaintext" },
+  );
+
+  /**
+   * Root-level leaves whose `shapeContract.input === "any"` — i.e. they
+   * don't consume cipher state. Today's examples: `aes.key-expansion@1`,
+   * `generic.iv-load@1`, `generic.aux-load@1` (when used as a literal
+   * source at root level). These get lifted above the spine row by
+   * `layoutRoot` so the synthetic plaintext-pill → first-state-consumer
+   * arrow doesn't visually pass through them.
+   *
+   * Scoped to ROOT level only: nested aux-only steps live inside a
+   * container the user has already navigated into, so the visual clash
+   * with the input-pill arrow doesn't arise. Containers (groups, iterates)
+   * are never aux-only — state always threads through their bodies.
+   */
+  const auxOnlyRootIds = createMemo<ReadonlySet<string>>(() => {
+    const s = spec();
+    const out = new Set<string>();
+    for (const n of s.steps) {
+      if (n.kind !== "step") continue;
+      const contract = registry.getDoc(n.type)?.shapeContract;
+      // Only "any" lifts. No-contract leaves stay on the spine — they
+      // might consume state, we can't tell, and a wrong lift is more
+      // jarring than a missed one.
+      if (contract && contract.input === "any") out.add(n.id);
+    }
+    return out;
+  });
+
   // Re-derive on every spec OR trace change. Both signals matter:
   //   - spec edit → new nodes/containers (structural change)
   //   - trace replace → new edges + blockSpan annotations
@@ -733,7 +860,19 @@ export const GraphView = () => {
       finalState: { shape: "bytes" as const, bytes: new Uint8Array(0) },
       finalAux: new Map(),
     };
-    return deriveAuxGraph(fallback, spec());
+    const labels = endpointLabels();
+    const anchors = endpointAnchors();
+    return deriveAuxGraph(fallback, spec(), {
+      endpoints: {
+        inputLabel: labels.inputLabel,
+        outputLabel: labels.outputLabel,
+        // Conditional spread under exactOptionalPropertyTypes: undefined
+        // anchors should NOT be present as keys (they'd defeat the
+        // function's `??` fallback to rootIds[0]).
+        ...(anchors.input !== undefined ? { inputAnchorId: anchors.input } : {}),
+        ...(anchors.output !== undefined ? { outputAnchorId: anchors.output } : {}),
+      },
+    });
   });
 
   /**
@@ -751,11 +890,48 @@ export const GraphView = () => {
    * The override panel below is hidden in that case so the user doesn't
    * wonder why their override isn't taking effect.
    */
-  const graph = createMemo<CipherGraph>(() =>
+  const replicatedGraph = createMemo<CipherGraph>(() =>
     replicate()
       ? replicateHighFanoutSources(collapsedGraph(), replicationThreshold(), replicationModes())
       : collapsedGraph(),
   );
+
+  /**
+   * Final display graph: drop state-spine edges that touch a lifted
+   * aux-only root leaf. This is the rendering companion to the
+   * `auxOnlyRootIds` lift in `layoutRoot` — having lifted the leaf OFF
+   * the spine row, we also take it off the spine LOGICALLY so the eye
+   * reads the canvas correctly:
+   *
+   *   - For AES single-block, dropping `key-expansion → initial.add-round-key`
+   *     (state) means initial.add-round-key has exactly ONE incoming
+   *     arrow from the plaintext direction: the endpoint pill's state
+   *     edge. When replication is on, the aux replica adds a SECOND
+   *     incoming arrow (`key-expansion@->initial.add-round-key →
+   *     initial.add-round-key`) — that's the round-key fan-out story,
+   *     intentionally distinct from the spine.
+   *   - Without this filter the spine edge co-exists with the aux
+   *     replica's arrow, producing three near-parallel inbound arrows
+   *     at initial.add-round-key. Visually noisy and pedagogically
+   *     misleading: it reads as "key-expansion's state flows into
+   *     add-round-key" when in fact key-expansion's state is identity.
+   *
+   * Validation is unaffected — `rawWarnings` consumes `rawGraph()`,
+   * not this filtered view. The dropped edges are the spec-true
+   * state-passthrough edges; removing them from the display doesn't
+   * change what `validateGraph` sees.
+   */
+  const graph = createMemo<CipherGraph>(() => {
+    const g = replicatedGraph();
+    const auxOnly = auxOnlyRootIds();
+    if (auxOnly.size === 0) return g;
+    const filteredEdges = g.edges.filter((e) => {
+      if (e.kind !== "state") return true;
+      return !auxOnly.has(e.from) && !auxOnly.has(e.to);
+    });
+    if (filteredEdges.length === g.edges.length) return g;
+    return { ...g, edges: filteredEdges };
+  });
 
   /**
    * Iterate-feedback predicate over the rendered graph. Rebuilt every
@@ -799,7 +975,7 @@ export const GraphView = () => {
     return rows;
   });
 
-  const layout = createMemo(() => layoutRoot(graph(), pinnedMap(), consts()));
+  const layout = createMemo(() => layoutRoot(graph(), pinnedMap(), consts(), auxOnlyRootIds()));
 
   const containersById = createMemo(() => {
     const m = new Map<string, ContainerNode>();
@@ -1446,9 +1622,25 @@ export const GraphView = () => {
               their click-only behavior so users don't accidentally pull
               `round.5.sub-bytes` out of its parent group. The single
               `startNodeDrag` handler covers both: when draggable, drag +
-              click; when not, an explicit click handler stays on the <g>. */}
+              click; when not, an explicit click handler stays on the <g>.
+
+              Synthetic endpoint pills (Slice 1) — `__cipher_input__` and
+              `__cipher_output__` — branch out early to an EndpointPill
+              component: rounded chip, no drop anchor, no drag, no click-
+              scrub, no delete, no warnings. */}
             <For each={graph().nodes}>
               {(node) => {
+                if (node.endpointSide !== undefined) {
+                  const epBox = createMemo(() => layout().boxes.get(node.stepId));
+                  // Narrow the union for the typechecker — Solid's <Show>
+                  // can't carry the discriminator through without it.
+                  const side = node.endpointSide;
+                  return (
+                    <Show when={epBox()}>
+                      {(b) => <EndpointPill box={b()} side={side} label={node.label} />}
+                    </Show>
+                  );
+                }
                 const box = createMemo(() => layout().boxes.get(node.stepId));
                 const isInsideIterate = node.containerPath.some((id) => {
                   const c = containersById().get(id);
@@ -1838,6 +2030,57 @@ const LeafRect = (props: {
     </g>
   );
 };
+
+/**
+ * Synthetic endpoint pill — Slice 1 of the graph-narrative plan.
+ *
+ * Rounded rectangle (rx = h/2 produces a pill shape) at the canvas left
+ * (`side="input"`, labelled "plaintext" / "ciphertext") or canvas right
+ * (`side="output"`, labelled "ciphertext" / "plaintext"). Visually
+ * distinct from the rectangular leaves so a new viewer reads it as
+ * "this is where data enters / exits the cipher", not as another step.
+ *
+ * Deliberately NO affordances:
+ *   - no `data-drop-anchor` (palette drops can't target the pill)
+ *   - no `tabindex` (not in keyboard focus order; nothing to focus on)
+ *   - no `onClick` (no trace frame to scrub to)
+ *   - no delete glyph (it's not a spec node; can't be removed)
+ *   - no warnings overlay (validation skips synthetic ids by construction)
+ *
+ * The label-swap on decrypt (input pill reads "ciphertext", output reads
+ * "plaintext") is handled in the parent `endpointLabels` memo; this
+ * component just renders whatever label it's given.
+ */
+const EndpointPill = (props: {
+  box: Box;
+  side: "input" | "output";
+  label: string;
+}) => (
+  <g class={`graph-endpoint-pill graph-endpoint-${props.side}`}>
+    <title>
+      {props.side === "input" ? "Cipher input — " : "Cipher output — "}
+      {props.label}
+    </title>
+    <rect
+      class="graph-endpoint-rect"
+      x={props.box.x}
+      y={props.box.y}
+      width={props.box.w}
+      height={props.box.h}
+      rx={props.box.h / 2}
+      ry={props.box.h / 2}
+    />
+    <text
+      class="graph-endpoint-label"
+      x={props.box.x + props.box.w / 2}
+      y={props.box.y + props.box.h / 2}
+      text-anchor="middle"
+      dominant-baseline="central"
+    >
+      {props.label}
+    </text>
+  </g>
+);
 
 const ContainerRect = (props: {
   container: ContainerNode;

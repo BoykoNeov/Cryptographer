@@ -25,7 +25,7 @@ import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
-import { __resetSpecForTests } from "@/ui/stores/spec";
+import { __resetSpecForTests, setMode } from "@/ui/stores/spec";
 import {
   __resetTraceForTests,
   getTrace,
@@ -175,8 +175,104 @@ describe("GraphView — component-level (AES-128 fixture)", () => {
     expect(leaves.length).toBe(41);
     // No aux edges pre-run (those require a trace).
     expect(container.querySelectorAll(".graph-edge-aux").length).toBe(0);
-    // Full 40-edge state spine across AES-128's leaves.
-    expect(container.querySelectorAll(".graph-edge-state").length).toBe(40);
+    // 40-edge state spine MINUS the single edge that touched `key-expansion`
+    // (an aux-only root leaf — see the `auxOnlyRootIds` spine filter in
+    // `graph` memo), PLUS 2 synthetic state edges from the plaintext /
+    // ciphertext endpoint pills (Slice 1 of the graph-narrative plan).
+    //   40 − 1 + 2 = 41
+    expect(container.querySelectorAll(".graph-edge-state").length).toBe(41);
+    // Both endpoint pills rendered.
+    expect(container.querySelectorAll(".graph-endpoint-rect").length).toBe(2);
+  });
+
+  it("replication fan-out doesn't add a third inbound arrow at initial.add-round-key", () => {
+    // The bug this catches: when fan-out replication is ON, the `aux`
+    // replica `key-expansion@->initial.add-round-key` arrows into
+    // `initial.add-round-key`. If we ALSO kept the spec-true
+    // `key-expansion → initial.add-round-key` state-spine edge, the
+    // canvas would show THREE inbound arrows: (a) the plaintext pill's
+    // endpoint spine, (b) the old spine edge from key-expansion, and
+    // (c) the small replica's round-key fan-out. The spine filter on
+    // `auxOnlyRootIds` drops (b) so only (a) + (c) reach the canvas.
+    //
+    // Default `replicate` toggle is ON, threshold 6 — AES-128's
+    // key-expansion fans out to 11 consumers and replicates by default.
+    seedAes128Trace();
+    const { container } = render(() => <GraphView />);
+    // Inbound arrows at initial.add-round-key in this pre-collapse
+    // expanded view: 1 state from the plaintext pill + 1 aux from the
+    // key-expansion replica = 2. NOT 3.
+    const edges = Array.from(container.querySelectorAll(".graph-edge"));
+    // Find every <path d="..."> whose `d` ends at initial.add-round-key's
+    // box. The box's center x changes with density; rather than measure
+    // pixels, rely on the count of edges with marker-end (every rendered
+    // edge has it) and assert the total state count is the unfiltered-
+    // minus-one number. The exact identity of the missing edge is pinned
+    // separately by the spec-shape test in aux-graph-derivation.test.ts.
+    const stateCount = edges.filter((e) => e.classList.contains("graph-edge-state")).length;
+    // 39 spine (40 native − 1 filtered) + 2 endpoint = 41. Same as the
+    // pre-run test above; this test exists to pin that the post-run +
+    // replicate-on path arrives at the same total.
+    expect(stateCount).toBe(41);
+  });
+
+  // ─── Slice 1 of graph-narrative plan — endpoint pills ────────────────────
+
+  describe("endpoint pills (Slice 1)", () => {
+    it("renders 'plaintext' input pill + 'ciphertext' output pill in encrypt mode", () => {
+      seedAes128Trace();
+      const { container } = render(() => <GraphView />);
+
+      const pills = container.querySelectorAll(".graph-endpoint-pill");
+      expect(pills.length).toBe(2);
+
+      const labels = Array.from(container.querySelectorAll(".graph-endpoint-label")).map(
+        (el) => el.textContent,
+      );
+      expect(labels).toContain("plaintext");
+      expect(labels).toContain("ciphertext");
+    });
+
+    it("swaps endpoint labels in decrypt mode (plaintext <-> ciphertext)", () => {
+      // Mode flip happens before render so the createMemo picks it up
+      // before the first reactive pass.
+      setMode("decrypt");
+      const { container } = render(() => <GraphView />);
+
+      const labels = Array.from(container.querySelectorAll(".graph-endpoint-label")).map(
+        (el) => el.textContent,
+      );
+      // Same two strings, but the input-side pill now reads "ciphertext".
+      expect(labels).toContain("plaintext");
+      expect(labels).toContain("ciphertext");
+
+      // Confirm the SIDE class matches: input pill on decrypt = ciphertext.
+      const inputPill = container.querySelector(".graph-endpoint-input");
+      const outputPill = container.querySelector(".graph-endpoint-output");
+      expect(inputPill?.querySelector(".graph-endpoint-label")?.textContent).toBe("ciphertext");
+      expect(outputPill?.querySelector(".graph-endpoint-label")?.textContent).toBe("plaintext");
+    });
+
+    it("endpoint pills have no drop-anchor and no delete glyph", () => {
+      // Endpoints aren't editable: they aren't spec nodes, you can't drop
+      // a palette step on them, and you can't delete them.
+      const { container } = render(() => <GraphView />);
+
+      const pills = container.querySelectorAll(".graph-endpoint-pill");
+      expect(pills.length).toBe(2);
+
+      for (const pill of Array.from(pills)) {
+        // No data-drop-anchor: drag-drop resolution via
+        // `closest("[data-drop-anchor]")` will fall through to whatever
+        // ancestor matches (typically the canvas-empty root path).
+        expect(pill.hasAttribute("data-drop-anchor")).toBe(false);
+        // No delete glyph (LeafRect renders `.graph-delete-glyph`; the
+        // endpoint pill component doesn't).
+        expect(pill.querySelector(".graph-delete-glyph")).toBeNull();
+        // Not in the tab order.
+        expect(pill.hasAttribute("tabindex")).toBe(false);
+      }
+    });
   });
 
   // ─── Slice 9 — validation warning indicators ─────────────────────────────

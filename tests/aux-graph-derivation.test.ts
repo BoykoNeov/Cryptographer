@@ -23,7 +23,14 @@ import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
-import { collapseGraph, deriveAuxGraph } from "@/core/graph";
+import {
+  CIPHER_INPUT_ID,
+  CIPHER_OUTPUT_ID,
+  buildIterateFeedbackPredicate,
+  collapseGraph,
+  deriveAuxGraph,
+  isEndpointId,
+} from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
@@ -671,5 +678,159 @@ describe("collapseGraph — view-time transform", () => {
     // Round groups (round.1..round.10) live INSIDE the iterate; they're
     // hidden after collapse.
     expect(out.containers.some((c) => c.id === "round.1")).toBe(false);
+  });
+});
+
+// ─── Slice 1 of graph-narrative plan — synthetic endpoint pills ──────────
+
+describe("deriveAuxGraph — synthetic endpoint pills (Slice 1)", () => {
+  // The pills are opt-in via `opts.endpoints`. Every test in the suites
+  // above continues to call `deriveAuxGraph(trace, spec)` with no opts and
+  // sees the same shape it always did — these tests opt in and check the
+  // injected pieces.
+
+  const ENCRYPT_OPTS = {
+    endpoints: {
+      inputLabel: "plaintext",
+      outputLabel: "ciphertext",
+      // The renderer skips aux-only leaves (key-expansion). The unit
+      // tests pass the desired anchor directly — they don't have the
+      // registry handy and the fallback to rootIds[0] would point at
+      // key-expansion, which is what Option B is designed to avoid.
+      inputAnchorId: "initial.add-round-key",
+      outputAnchorId: "round.10",
+    },
+  };
+
+  it("injects two endpoint nodes when opts.endpoints is provided", () => {
+    const g = deriveAuxGraph(emptyTrace(), aes128Spec, ENCRYPT_OPTS);
+
+    const input = g.nodes.find((n) => n.stepId === CIPHER_INPUT_ID);
+    const output = g.nodes.find((n) => n.stepId === CIPHER_OUTPUT_ID);
+    expect(input).toBeDefined();
+    expect(output).toBeDefined();
+    expect(input?.endpointSide).toBe("input");
+    expect(output?.endpointSide).toBe("output");
+    expect(input?.label).toBe("plaintext");
+    expect(output?.label).toBe("ciphertext");
+    // Endpoint pills are root-level (no container path).
+    expect(input?.containerPath.length).toBe(0);
+    expect(output?.containerPath.length).toBe(0);
+  });
+
+  it("omits endpoint nodes when opts is undefined (back-compat)", () => {
+    // Every existing test in this file calls deriveAuxGraph with no opts.
+    // This pins that contract: no opts ⇒ no pills, ever.
+    const g = deriveAuxGraph(emptyTrace(), aes128Spec);
+    expect(g.nodes.some((n) => isEndpointId(n.stepId))).toBe(false);
+    expect(g.edges.some((e) => isEndpointId(e.from) || isEndpointId(e.to))).toBe(false);
+  });
+
+  it("prepends + appends pills to rootIds (canvas-extreme placement hook)", () => {
+    const g = deriveAuxGraph(emptyTrace(), aes128Spec, ENCRYPT_OPTS);
+    expect(g.rootIds[0]).toBe(CIPHER_INPUT_ID);
+    expect(g.rootIds[g.rootIds.length - 1]).toBe(CIPHER_OUTPUT_ID);
+  });
+
+  it("emits two state-kind edges connecting the pills to the anchors", () => {
+    const g = deriveAuxGraph(emptyTrace(), aes128Spec, ENCRYPT_OPTS);
+
+    const inputEdge = g.edges.find((e) => e.from === CIPHER_INPUT_ID);
+    const outputEdge = g.edges.find((e) => e.to === CIPHER_OUTPUT_ID);
+    expect(inputEdge).toBeDefined();
+    expect(outputEdge).toBeDefined();
+    expect(inputEdge?.kind).toBe("state");
+    expect(outputEdge?.kind).toBe("state");
+    expect(inputEdge?.to).toBe("initial.add-round-key");
+    expect(outputEdge?.from).toBe("round.10");
+  });
+
+  it("falls back to rootIds[0] / rootIds[last] when anchors are omitted", () => {
+    const g = deriveAuxGraph(emptyTrace(), aes128Spec, {
+      endpoints: { inputLabel: "plaintext", outputLabel: "ciphertext" },
+    });
+
+    const inputEdge = g.edges.find((e) => e.from === CIPHER_INPUT_ID);
+    const outputEdge = g.edges.find((e) => e.to === CIPHER_OUTPUT_ID);
+    // Without anchor overrides, the function points at the spec's literal
+    // top-level extremes. For AES-128 that means key-expansion at the
+    // input side and final-round at the output side. The renderer's job
+    // is to pass smarter anchors that skip aux-only leaves.
+    expect(inputEdge?.to).toBe("key-expansion");
+    expect(outputEdge?.from).toBe("round.10");
+  });
+
+  it("swaps labels on decrypt-style invocation", () => {
+    // Decrypt mode: the caller's labels themselves swap. The function
+    // doesn't introspect direction; it just renders what it's given.
+    const g = deriveAuxGraph(emptyTrace(), aes128Spec, {
+      endpoints: {
+        inputLabel: "ciphertext",
+        outputLabel: "plaintext",
+        inputAnchorId: "initial.add-round-key",
+        outputAnchorId: "round.10",
+      },
+    });
+    expect(g.nodes.find((n) => n.stepId === CIPHER_INPUT_ID)?.label).toBe("ciphertext");
+    expect(g.nodes.find((n) => n.stepId === CIPHER_OUTPUT_ID)?.label).toBe("plaintext");
+  });
+
+  it("renderer's anchor heuristic skips aux-only leaves (regression pin)", () => {
+    // The renderer (GraphView.tsx) walks rootIds forward to find the
+    // first leaf whose shapeContract.input is NOT "any", skipping
+    // key-expansion. This test validates the *intent* by exercising the
+    // helper directly with the value the renderer would pass — pinning
+    // that the function honors a non-rootIds[0] anchor when supplied.
+    const g = deriveAuxGraph(emptyTrace(), aes128Spec, ENCRYPT_OPTS);
+    const inputEdge = g.edges.find((e) => e.from === CIPHER_INPUT_ID);
+    // initial.add-round-key, NOT key-expansion (which is the literal rootIds[0]).
+    expect(inputEdge?.to).toBe("initial.add-round-key");
+    // Visually: the plaintext-pill arrow lands at the leaf that actually
+    // reads state, not at the key schedule.
+  });
+
+  it("endpoint edges are never classified as feedback", () => {
+    // Defense in depth: buildIterateFeedbackPredicate's early-return for
+    // endpoint ids means the renderer never dashes the spine edges into
+    // the pills. State edges are already excluded from feedback by kind,
+    // so this is belt-and-suspenders against a future re-classification.
+    const g = deriveAuxGraph(runAes128Ecb(), aes128EcbSpec, ENCRYPT_OPTS);
+    const isFeedback = buildIterateFeedbackPredicate(g);
+    for (const e of g.edges) {
+      if (isEndpointId(e.from) || isEndpointId(e.to)) {
+        expect(isFeedback(e)).toBe(false);
+      }
+    }
+  });
+
+  it("collapsing the entire iterate body still leaves the input pill visible", () => {
+    // The pedagogical payoff of Slice 1: even when the user collapses
+    // away the round body, "plaintext enters here" is still self-evident.
+    const g = deriveAuxGraph(runAes128Ecb(), aes128EcbSpec, {
+      endpoints: {
+        inputLabel: "plaintext",
+        outputLabel: "ciphertext",
+        inputAnchorId: "split-blocks",
+        outputAnchorId: "concat-blocks",
+      },
+    });
+    const collapsed = collapseGraph(g, new Set(["ecb-blocks"]));
+    // Both pills survive the collapse.
+    expect(collapsed.nodes.some((n) => n.stepId === CIPHER_INPUT_ID)).toBe(true);
+    expect(collapsed.nodes.some((n) => n.stepId === CIPHER_OUTPUT_ID)).toBe(true);
+    // Both endpoint edges survive too (their anchors are outside the
+    // iterate, so collapse's "remap inside-collapsed endpoints" pass
+    // doesn't touch them).
+    expect(collapsed.edges.some((e) => e.from === CIPHER_INPUT_ID)).toBe(true);
+    expect(collapsed.edges.some((e) => e.to === CIPHER_OUTPUT_ID)).toBe(true);
+  });
+
+  it("suppresses pill injection when the spec is empty", () => {
+    // No rootIds → no anchors possible → no pills. Cheaper than
+    // rendering a floating "plaintext" arrow into nothing.
+    const emptySpec = { ...aes128Spec, steps: [] };
+    const g = deriveAuxGraph(emptyTrace(), emptySpec, ENCRYPT_OPTS);
+    expect(g.nodes.some((n) => isEndpointId(n.stepId))).toBe(false);
+    expect(g.edges.some((e) => isEndpointId(e.from) || isEndpointId(e.to))).toBe(false);
   });
 });

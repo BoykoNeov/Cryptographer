@@ -561,3 +561,81 @@ describe("GraphView — multiple sources targeting same consumer don't overlap",
     expect(b.x).toBe(c.x + consts.LEAF_W + consts.FLOW_GAP);
   });
 });
+
+/**
+ * Aux-only root-leaf lift (Slice 1 visual companion — Section 5.15 of
+ * the graph-narrative plan, surfaced during browser verification).
+ *
+ * The bug it prevents: post-Slice-1, the synthetic plaintext pill at
+ * canvas left points (via the renderer's anchor heuristic) at the FIRST
+ * state-consumer leaf — for AES single-block that's `initial.add-round-key`.
+ * Geometrically the arrow runs from far left to past `key-expansion`'s
+ * x-slot, and without a Y offset on `key-expansion`, that arrow passes
+ * directly through `key-expansion`'s rectangle. Visually it reads as
+ * "plaintext flows through key-expansion" which is wrong: key-expansion
+ * is aux-only (state passes through identity).
+ *
+ * The fix: any root-level leaf whose `shapeContract.input === "any"`
+ * is lifted to the same `CANVAS_MARGIN` row that root replicas occupy,
+ * mirroring the existing visual language "above the spine = supporting
+ * computation; on the spine = state flow."
+ */
+describe("GraphView — aux-only root leaves are lifted above the spine row", () => {
+  it("places `key-expansion` at CANVAS_MARGIN and the spine row below it", () => {
+    // No replicas — pure aux-only-lift behavior, isolated.
+    const g = aes128Graph();
+    const consts = layoutConstantsFor("normal");
+    const empty = new Map<string, { x: number; y: number }>();
+    const auxOnlyRootIds = new Set<string>(["key-expansion"]);
+    const { boxes } = layoutRoot(g, empty, consts, auxOnlyRootIds);
+
+    const ke = boxes.get("key-expansion");
+    const initial = boxes.get("initial.add-round-key");
+    if (!ke || !initial) throw new Error("missing key boxes");
+
+    // key-expansion sits at the lifted row (CANVAS_MARGIN).
+    expect(ke.y).toBe(24);
+    // The spine row sits one LEAF_H + STACK_GAP below it (so the arrow
+    // from a left-side endpoint pill clears the key-expansion chip).
+    expect(initial.y).toBe(24 + consts.LEAF_H + consts.STACK_GAP);
+    // Both still flow left-to-right horizontally: key-expansion's x
+    // is to the left of initial.add-round-key's.
+    expect(ke.x).toBeLessThan(initial.x);
+  });
+
+  it("when no aux-only root leaves are present, spine stays at CANVAS_MARGIN", () => {
+    // Empty auxOnlyRootIds → no lift → spine row is the top row.
+    // Backward-compat: callers that pass nothing get the old behavior.
+    const g = aes128Graph();
+    const consts = layoutConstantsFor("normal");
+    const empty = new Map<string, { x: number; y: number }>();
+    const { boxes } = layoutRoot(g, empty, consts);
+
+    const ke = boxes.get("key-expansion");
+    const initial = boxes.get("initial.add-round-key");
+    if (!ke || !initial) throw new Error("missing key boxes");
+
+    // No lift: both sit at CANVAS_MARGIN.
+    expect(ke.y).toBe(24);
+    expect(initial.y).toBe(24);
+  });
+
+  it("composes with the root-replica lift (only one lift level is applied)", () => {
+    // When BOTH conditions fire (aux-only root + at least one root replica),
+    // the lift happens once. The replicas sit at CANVAS_MARGIN alongside
+    // the aux-only leaf; the spine row is at CANVAS_MARGIN + LEAF_H + STACK_GAP.
+    const g = aes128ReplicatedGraph();
+    const consts = layoutConstantsFor("normal");
+    const empty = new Map<string, { x: number; y: number }>();
+    const auxOnlyRootIds = new Set<string>(["key-expansion"]);
+    const { boxes } = layoutRoot(g, empty, consts, auxOnlyRootIds);
+
+    const ke = boxes.get("key-expansion");
+    const initial = boxes.get("initial.add-round-key");
+    if (!ke || !initial) throw new Error("missing key boxes");
+    // Lifted row.
+    expect(ke.y).toBe(24);
+    // Spine row.
+    expect(initial.y).toBe(24 + consts.LEAF_H + consts.STACK_GAP);
+  });
+});

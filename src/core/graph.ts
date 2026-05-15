@@ -89,6 +89,18 @@ export type GraphNode = {
    * Undefined for the original (non-replica) nodes.
    */
   readonly replicaOf?: string;
+  /**
+   * Synthetic-endpoint marker (Slice 1 of the graph-narrative plan).
+   * Set to `"input"` on the plaintext / ciphertext pill at the canvas's
+   * left edge; `"output"` on the pill at the right edge. Undefined for
+   * every ordinary leaf and for every replica.
+   *
+   * Endpoint pills are NOT spec nodes — they don't round-trip through
+   * Save/Share, they aren't drop-anchored, they aren't click-scrubbable,
+   * they aren't deletable. They exist only to make the cipher's I/O
+   * self-evident on the canvas.
+   */
+  readonly endpointSide?: "input" | "output";
 };
 
 export type ContainerNode = {
@@ -143,6 +155,29 @@ export type CipherGraph = {
    */
   readonly rootIds: readonly string[];
 };
+
+// ─── Synthetic endpoint pills (Slice 1) ───────────────────────────────────
+
+/**
+ * Canonical id of the plaintext-side endpoint pill. Held as a single
+ * exported constant so consumers (renderer, test fixtures, validators) all
+ * agree on the spelling. The leading + trailing `__` and the `cipher_`
+ * prefix are chosen so the id can't collide with any spec id (spec ids
+ * use lowercase + dots + dashes only) and so a future grep for
+ * `__cipher_` finds every site that participates in endpoint handling.
+ */
+export const CIPHER_INPUT_ID = "__cipher_input__";
+/** Canonical id of the ciphertext-side endpoint pill. See `CIPHER_INPUT_ID`. */
+export const CIPHER_OUTPUT_ID = "__cipher_output__";
+/** Sentinel `stepType` set on synthetic endpoint nodes. Never registered in
+ *  the step registry — the renderer dispatches off `endpointSide` instead. */
+const ENDPOINT_STEP_TYPE = "__endpoint__";
+
+/** True iff `id` is one of the two synthetic endpoint pills. Cheap branch
+ *  test reused by `buildIterateFeedbackPredicate` and `validateGraph` to
+ *  short-circuit any edge that touches a pill. */
+export const isEndpointId = (id: string): boolean =>
+  id === CIPHER_INPUT_ID || id === CIPHER_OUTPUT_ID;
 
 // ─── Internal helpers ──────────────────────────────────────────────────────
 
@@ -938,6 +973,13 @@ export const buildIterateFeedbackPredicate = (
   return (edge: GraphEdge): boolean => {
     // State edges are forward-only by construction; never feedback.
     if (edge.kind !== "aux") return false;
+    // Synthetic endpoint pills (Slice 1) carry kind:"state" edges to the
+    // first/last state-consumer leaf. Today the predicate already short-
+    // circuits state edges above, but a future renderer change that
+    // re-classifies endpoint edges as aux would silently pull them
+    // through the feedback styling — the explicit guard makes the
+    // exclusion intent visible and survives refactors.
+    if (isEndpointId(edge.from) || isEndpointId(edge.to)) return false;
     const fromPath = pathById.get(edge.from);
     const toPath = pathById.get(edge.to);
     if (fromPath === undefined || toPath === undefined) return false;
@@ -1066,14 +1108,50 @@ export const validateGraph = (graph: CipherGraph, trace: Trace): GraphWarning[] 
 // ─── Public entry point ────────────────────────────────────────────────────
 
 /**
+ * Caller-supplied configuration for synthetic plaintext/ciphertext pills.
+ * When this options object is omitted, `deriveAuxGraph` produces no
+ * endpoint pills — the graph stays exactly as it was before Slice 1.
+ *
+ * Why this is opt-in: every existing test calls `deriveAuxGraph(trace,
+ * spec)` and asserts node counts; injecting pills unconditionally would
+ * break ~50 sites. The renderer opts in by passing labels + anchors;
+ * tests can opt in as needed.
+ *
+ * `inputAnchorId` / `outputAnchorId` are the canonical ids (leaf stepId
+ * or container id) where the input / output state edges terminate. When
+ * a caller doesn't have a registry handy and can't compute the
+ * first-state-consumer anchor, they can pass `undefined` and the
+ * function falls back to `rootIds[0]` / `rootIds[rootIds.length - 1]`.
+ * The renderer (`GraphView.tsx`) walks the registry to skip aux-only
+ * leaves like `aes.key-expansion@1` so the pedagogical arrow lands on
+ * the first leaf that actually reads state.
+ */
+export type EndpointOptions = {
+  readonly inputLabel: string;
+  readonly outputLabel: string;
+  readonly inputAnchorId?: string;
+  readonly outputAnchorId?: string;
+};
+
+/**
  * Derive an aux-flow graph from a spec + trace.
  *
  * The spec contributes structure (nodes, containers, child relationships,
  * rootIds). The trace contributes data flow (edges) and `blockSpan` on
  * iterate-body nodes. Passing an empty trace returns a structure-only graph
  * with no edges and no blockSpans — the natural state before the first run.
+ *
+ * When `opts.endpoints` is provided, two synthetic endpoint pills
+ * (`__cipher_input__` and `__cipher_output__`) are appended to `nodes`
+ * and `kind: "state"` edges connect them to the configured anchors.
+ * The pills are prepended/appended to `rootIds` so the layout pass
+ * places them at the canvas extremes naturally.
  */
-export const deriveAuxGraph = (trace: Trace, spec: CipherSpec): CipherGraph => {
+export const deriveAuxGraph = (
+  trace: Trace,
+  spec: CipherSpec,
+  opts?: { readonly endpoints?: EndpointOptions },
+): CipherGraph => {
   const ctx: BuildContext = {
     nodes: [],
     containers: [],
@@ -1090,6 +1168,73 @@ export const deriveAuxGraph = (trace: Trace, spec: CipherSpec): CipherGraph => {
   // list by position continue to work, and so a reader scanning the
   // dataflow sees the annotations first and the spine last.
   const edges = [...deriveEdges(trace, ctx), ...inferStateEdges(spec)];
+
+  // ─── Optional endpoint pill injection (Slice 1) ──────────────────────────
+  //
+  // Order matters relative to the consumers downstream:
+  //   - `collapseGraph` runs after this. Endpoints have `containerPath: []`
+  //     so they're never hidden by a collapsed ancestor — safe.
+  //   - `replicateHighFanoutSources` runs after collapse. It only counts
+  //     `kind: "aux"` edges as candidates, so the endpoint state edges
+  //     can't trigger replication — safe.
+  //   - The renderer prepends/appends endpoint ids to `rootIds` so the
+  //     layout's left-to-right walk naturally places them at the extremes.
+  //
+  // If `rootIds` is empty (empty spec), endpoint injection is suppressed
+  // — there's nothing to anchor to, and a floating "plaintext" pill
+  // would be confusing.
+  if (opts?.endpoints && rootIds.length > 0) {
+    const ep = opts.endpoints;
+    const inputAnchor = ep.inputAnchorId ?? rootIds[0];
+    const outputAnchor = ep.outputAnchorId ?? rootIds[rootIds.length - 1];
+
+    const endpointNodes: GraphNode[] = [
+      {
+        stepId: CIPHER_INPUT_ID,
+        stepType: ENDPOINT_STEP_TYPE,
+        label: ep.inputLabel,
+        containerPath: [],
+        endpointSide: "input",
+      },
+      {
+        stepId: CIPHER_OUTPUT_ID,
+        stepType: ENDPOINT_STEP_TYPE,
+        label: ep.outputLabel,
+        containerPath: [],
+        endpointSide: "output",
+      },
+    ];
+
+    // kind:"state" so the renderer styles the endpoint edges as spine
+    // (thicker, darker, less translucent) — matching how a viewer reads
+    // "this is the cipher's primary dataflow" through the rest of the
+    // pipeline. State edges are forward-only and never feedback; the
+    // explicit guards in `buildIterateFeedbackPredicate` and validation
+    // back this up so a future re-classification can't silently regress.
+    if (inputAnchor !== undefined) {
+      edges.push({
+        from: CIPHER_INPUT_ID,
+        to: inputAnchor,
+        auxKey: STATE_AUX_KEY,
+        kind: "state",
+      });
+    }
+    if (outputAnchor !== undefined) {
+      edges.push({
+        from: outputAnchor,
+        to: CIPHER_OUTPUT_ID,
+        auxKey: STATE_AUX_KEY,
+        kind: "state",
+      });
+    }
+
+    return {
+      nodes: [...ctx.nodes, ...endpointNodes],
+      containers: ctx.containers,
+      edges,
+      rootIds: [CIPHER_INPUT_ID, ...rootIds, CIPHER_OUTPUT_ID],
+    };
+  }
 
   return {
     nodes: ctx.nodes,
