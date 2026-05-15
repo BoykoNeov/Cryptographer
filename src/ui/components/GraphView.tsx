@@ -49,16 +49,7 @@ import {
 } from "@/core/graph";
 import { inferShapesAtAnchors, validateShapes } from "@/core/spec-shapes";
 import type { StepNode } from "@/core/types";
-import {
-  For,
-  Show,
-  createEffect,
-  createMemo,
-  createSignal,
-  on,
-  onCleanup,
-  onMount,
-} from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import {
   setNodePosition,
   setReplicationMode,
@@ -1488,11 +1479,7 @@ export const GraphView = () => {
   };
 
   /**
-   * Wheel handler for ctrl/meta + wheel = zoom (Slice 3). Registered with
-   * `{ passive: false }` via the explicit `addEventListener` below because
-   * Solid's JSX `onWheel` registers a passive listener in some browsers,
-   * which makes `preventDefault()` a no-op and lets the browser's
-   * page-scroll fire alongside our zoom change.
+   * Wheel handler for Ctrl/⌘ + wheel = zoom (Slice 3).
    *
    * Step is intentionally finer (0.05) than the toolbar buttons (0.1) so
    * trackpad pinch / wheel feels smoother — high-precision wheels emit
@@ -1500,22 +1487,39 @@ export const GraphView = () => {
    */
   const WHEEL_ZOOM_STEP = 0.05;
 
-  onMount(() => {
-    const el = scrollWrapperEl;
-    if (!el) return;
-    const handleWheel = (ev: WheelEvent): void => {
-      if (!(ev.ctrlKey || ev.metaKey)) return;
-      ev.preventDefault();
-      // `deltaY < 0` is wheel-up / pinch-out → zoom in. Sign convention is
-      // the same one OS-level zoom shortcuts use.
-      const direction = ev.deltaY < 0 ? 1 : -1;
-      const current = getViewZoom(spec().id);
-      const next = Math.round((current + direction * WHEEL_ZOOM_STEP) * 100) / 100;
-      setViewZoom(spec().id, next);
-    };
-    el.addEventListener("wheel", handleWheel, { passive: false });
-    onCleanup(() => el.removeEventListener("wheel", handleWheel));
-  });
+  const handleWheelZoom = (ev: WheelEvent): void => {
+    if (!(ev.ctrlKey || ev.metaKey)) return;
+    // Must preventDefault to suppress Chrome's page-zoom default. The
+    // listener that fires this MUST be registered with `{ passive: false }`
+    // — Solid's JSX `onWheel` prop produces a passive listener in some
+    // browsers, which silently turns preventDefault into a no-op.
+    ev.preventDefault();
+    // Stop propagation so an outer scroll container doesn't also process
+    // the same Ctrl+wheel (e.g. zoom the page underneath our SVG).
+    ev.stopPropagation();
+    // `deltaY < 0` is wheel-up / pinch-out → zoom in. Sign matches OS-
+    // level zoom shortcuts.
+    const direction = ev.deltaY < 0 ? 1 : -1;
+    const current = getViewZoom(spec().id);
+    const next = Math.round((current + direction * WHEEL_ZOOM_STEP) * 100) / 100;
+    setViewZoom(spec().id, next);
+  };
+
+  /**
+   * Attach the wheel listener directly via a ref callback (not through
+   * an `onMount` reading a `let`-ref later). The callback fires once,
+   * synchronously, when the wrapper element is created — eliminates a
+   * timing window where `scrollWrapperEl` could be undefined at the
+   * point `onMount` reads it. `capture: true` is belt-and-suspenders:
+   * Chrome's page-zoom intervention sometimes wins over bubble-phase
+   * listeners on scrollable containers; capture phase fires first so
+   * preventDefault lands before any framework / browser handling.
+   */
+  const attachScrollWrapperRef = (el: HTMLDivElement): void => {
+    scrollWrapperEl = el;
+    el.addEventListener("wheel", handleWheelZoom, { passive: false, capture: true });
+    onCleanup(() => el.removeEventListener("wheel", handleWheelZoom, { capture: true }));
+  };
 
   /** Click handler for `[reset zoom]`. Clears horizontal scroll too. */
   const handleResetZoom = (): void => {
@@ -1534,7 +1538,7 @@ export const GraphView = () => {
           trace signals — the registry it lists is static after module load. */}
       <StepPalette />
       <div
-        ref={scrollWrapperEl}
+        ref={attachScrollWrapperRef}
         class="graph-view"
         classList={{
           "graph-drop-zone-active": dragOverActive(),
@@ -1647,6 +1651,13 @@ export const GraphView = () => {
               class="graph-view-zoom"
               title="Zoom the graph canvas. Ctrl + mouse wheel also zooms."
             >
+              {/* Label matches the visual treatment of the "density" `<legend>`
+              at the start of the toolbar — same `.graph-view-toolbar-label`
+              class — so users get an explicit name on the right-side
+              cluster too, parallel to the density label on the left. */}
+              <span class="graph-view-toolbar-label" aria-hidden="true">
+                zoom
+              </span>
               <button
                 type="button"
                 class="graph-view-zoom-button"

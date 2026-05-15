@@ -1774,6 +1774,13 @@ button:disabled {
   color: var(--muted);
 }
 
+/* Give the "zoom" label a little more space from the [−] button than the
+   2-px gap between the buttons themselves. Matches the visual rhythm of
+   the "density" legend on the left side of the toolbar. */
+.graph-view-zoom > .graph-view-toolbar-label {
+  margin-right: 4px;
+}
+
 .graph-view-zoom-button {
   min-width: 22px;
   height: 22px;
