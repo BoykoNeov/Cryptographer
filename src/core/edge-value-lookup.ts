@@ -1,10 +1,10 @@
 /**
  * Edge value lookup — resolves "what data flows through THIS edge at the
- * current scrubber position?" for the Slice 4 inspector panel.
+ * current scrubber position?" for the value-inspector panel.
  *
  * Pure function over (spec, trace, edge, currentBlockIndex). The renderer
- * in `GraphView` reads the hovered/pinned edge from the
- * `view-edge-inspector` store, calls this, and formats the result with
+ * in `GraphView` reads the selected edge from the
+ * `view-value-inspector` store, calls this, and formats the result with
  * the user-selected ByteFormat. No Solid signals, no DOM — all the
  * complexity lives here so the lookup is testable against canned traces
  * without spinning up a renderer.

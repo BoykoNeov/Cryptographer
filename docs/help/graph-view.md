@@ -103,21 +103,20 @@ internalized.
 
 ## Inspecting an edge's value
 
-Below the toolbar sits a collapsible **edge inspector** panel. Open it
-and hover any edge in the graph — the panel shows the value flowing
+Below the toolbar sits a collapsible **value inspector** panel. Open it
+and click any edge in the graph — the panel shows the value flowing
 through that edge at the current scrubber position: the round key
 (`roundKey.3`), the per-block plaintext payload (`block 2`'s 16-byte
 matrix), the cross-iteration feedback IV, or a literal `cipher input`
-label on the plaintext-pill edge. **Click** an edge to *pin* it; the
-edge gets a soft halo on the canvas and the panel keeps showing its
-value while you move the cursor or scrub the trace. Click the same
-edge again to un-pin, or click a different edge to move the pin. The
-"pin it and scrub" flow is the killer demo — watch a round key stay
-constant while the state value changes frame-to-frame, or pin
-`outBlocks[1]` and step through every iteration of the iterate body
-to see how that block's matrix is being computed. Pin clears
-automatically when you switch ciphers (otherwise it would point at an
-edge that doesn't exist in the new spec).
+label on the plaintext-pill edge. The clicked edge gets a soft halo on
+the canvas, and the panel keeps showing its value while you scrub the
+trace — the "click an edge and scrub" flow is the killer demo: watch a
+round key stay constant while the state value changes frame-to-frame,
+or click `outBlocks[1]` and step through every iteration of the iterate
+body to see how that block's matrix is being computed. Click the same
+edge again to clear, or click a different edge to move the selection.
+Selection clears automatically when you switch ciphers (otherwise it
+would point at an edge that doesn't exist in the new spec).
 
 ## Composing your own block-cipher mode
 

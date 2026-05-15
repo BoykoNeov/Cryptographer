@@ -1945,12 +1945,13 @@ button:disabled {
   text-align: right;
 }
 
-/* Slice 4 — edge inspector panel. Same look as the replication panel
-   above (collapsible header + body), styled to match so the user reads
-   them as related toolbar surfaces. Lives below the replication panel
-   inside `.graph-view-sticky-header` so both share the toolbar's
-   sticky band. */
-.graph-edge-inspector-panel {
+/* Value-inspector panel (formerly "edge inspector" — renamed when the
+   click model dropped hover and the panel's domain expanded beyond
+   edges). Same look as the replication panel above (collapsible header
+   + body), styled to match so the user reads them as related toolbar
+   surfaces. Lives below the replication panel inside
+   `.graph-view-sticky-header` so both share the toolbar's sticky band. */
+.graph-value-inspector-panel {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1960,7 +1961,7 @@ button:disabled {
   font-size: 11px;
 }
 
-.graph-edge-inspector-panel-header {
+.graph-value-inspector-panel-header {
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -1976,31 +1977,31 @@ button:disabled {
   user-select: none;
 }
 
-.graph-edge-inspector-panel-header:hover {
+.graph-value-inspector-panel-header:hover {
   color: var(--fg);
 }
 
-.graph-edge-inspector-panel-header:focus-visible {
+.graph-value-inspector-panel-header:focus-visible {
   outline: 2px solid var(--accent, currentColor);
   outline-offset: 2px;
 }
 
-.graph-edge-inspector-panel-chevron {
+.graph-value-inspector-panel-chevron {
   display: inline-block;
   font-size: 10px;
   transition: transform 120ms ease;
 }
 
-.graph-edge-inspector-panel-header[data-open="true"] .graph-edge-inspector-panel-chevron {
+.graph-value-inspector-panel-header[data-open="true"] .graph-value-inspector-panel-chevron {
   transform: rotate(90deg);
 }
 
-.graph-edge-inspector-panel-hint {
+.graph-value-inspector-panel-hint {
   font-size: 10px;
   opacity: 0.7;
 }
 
-.graph-edge-inspector-body {
+.graph-value-inspector-body {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -2010,12 +2011,11 @@ button:disabled {
   max-width: 720px;
   /* Reserve enough vertical space for the populated state (identity
      row + kind badge row + value row) even when the body is empty,
-     so hovering an edge doesn't grow the panel's height and push the
-     SVG canvas down. Without this, the canvas shifts under the
-     cursor, the cursor leaves the edge, the body empties + shrinks,
-     and the canvas shifts back up — re-triggering hover. The user
-     experiences this as a flicker / cycle where the inspector keeps
-     populating and depopulating as the SVG bounces.
+     so populating doesn't grow the panel's height and push the SVG
+     canvas down. (Originally added when hover would otherwise cycle
+     between populate/depopulate as the canvas shifted; click-only
+     selection has the same height-stability requirement when an edge
+     is selected versus cleared.)
      Height calc: identity (~18 px) + kind (~18 px) + value (~30 px,
      enough for the 32-char round-key hex on one line) + 2× 4 px gap
      = ~76 px. Round up to 84 px for a small visual buffer. */
@@ -2027,12 +2027,12 @@ button:disabled {
   overflow-y: auto;
 }
 
-.graph-edge-inspector-empty {
+.graph-value-inspector-empty {
   color: var(--muted);
   font-style: italic;
 }
 
-.graph-edge-inspector-identity {
+.graph-value-inspector-identity {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -2045,31 +2045,25 @@ button:disabled {
   white-space: nowrap;
 }
 
-.graph-edge-inspector-from,
-.graph-edge-inspector-to {
+.graph-value-inspector-from,
+.graph-value-inspector-to {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 280px;
 }
 
-.graph-edge-inspector-arrow {
+.graph-value-inspector-arrow {
   color: var(--muted);
 }
 
-.graph-edge-inspector-pin-badge {
-  font-size: 10px;
-  margin-left: auto;
-  opacity: 0.85;
-}
-
-.graph-edge-inspector-kind-row {
+.graph-value-inspector-kind-row {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.graph-edge-inspector-kind-badge {
+.graph-value-inspector-kind-badge {
   font-size: 10px;
   padding: 1px 6px;
   border-radius: 8px;
@@ -2078,13 +2072,13 @@ button:disabled {
   text-transform: lowercase;
 }
 
-.graph-edge-inspector-kind-value {
+.graph-value-inspector-kind-value {
   background: var(--accent);
   color: var(--bg);
   opacity: 0.85;
 }
 
-.graph-edge-inspector-value-row {
+.graph-value-inspector-value-row {
   font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
   color: var(--text);
   /* Long hex dumps wrap rather than blow up the layout. The 720px cap
@@ -2311,14 +2305,14 @@ button:disabled {
    glance even when zoomed out. Composes with the kind-specific styles
    above (the regular stroke still draws on top, so the edge's color
    isn't swallowed by the halo). */
-.graph-edge-pinned {
+.graph-edge-selected {
   stroke-width: 4;
   stroke-opacity: 1;
   filter: drop-shadow(0 0 4px var(--accent));
 }
 
-/* Slice 4 — wide invisible hit-path companion. Drawn beside the visible
-   `.graph-edge` to give the user a comfortable click/hover zone. The
+/* Wide invisible hit-path companion. Drawn beside the visible
+   `.graph-edge` to give the user a comfortable click zone. The
    visible edge is 1.5–2px thick; this 12px transparent stroke catches
    pointer events the visible stroke would miss. `pointer-events: stroke`
    makes the path react only when the cursor is directly over its

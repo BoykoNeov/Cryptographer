@@ -79,17 +79,6 @@ import {
   useViewDensity,
 } from "../stores/view-density";
 import {
-  clearPinnedEdge,
-  encodeEdgeKey,
-  setHoveredEdgeKey,
-  toggleInspectorPanelOpen,
-  togglePinnedEdge,
-  useActiveEdgeKey,
-  useHoveredEdgeKey,
-  useInspectorPanelOpen,
-  usePinnedEdgeKey,
-} from "../stores/view-edge-inspector";
-import {
   DEFAULT_REPLICATION_THRESHOLD,
   REPLICATION_THRESHOLD_MAX,
   REPLICATION_THRESHOLD_MIN,
@@ -101,6 +90,14 @@ import {
   useReplicationPanelOpen,
   useReplicationThreshold,
 } from "../stores/view-replication";
+import {
+  clearSelectedEdge,
+  encodeEdgeKey,
+  toggleInspectorPanelOpen,
+  toggleSelectedEdge,
+  useInspectorPanelOpen,
+  useSelectedEdgeKey,
+} from "../stores/view-value-inspector";
 import {
   VIEW_ZOOM_DEFAULT,
   VIEW_ZOOM_MAX,
@@ -713,7 +710,7 @@ export { layoutConstantsFor };
  * `firstChild.x`).
  *
  * Edge `to` itself stays semantically correct — `validateGraph` and
- * the upcoming Slice 4 edge inspector both read `edge.to` to surface
+ * the value inspector both read `edge.to` to surface
  * "this aux is consumed by ecb-blocks." Only the rendered arrow's
  * visual endpoint differs.
  *
@@ -799,25 +796,23 @@ export const GraphView = () => {
   // JSX would always return a truthy function reference and the panel
   // would never close.
   const replicationPanelOpen = useReplicationPanelOpen();
-  // Slice 4 — edge inspector. Same accessor-factory pattern as
+  // Value inspector. Same accessor-factory pattern as
   // `replicationPanelOpen` above: capture each accessor ONCE so the
   // reactive call sites below read the live boolean instead of a
-  // truthy function reference.
-  const hoveredEdgeKey = useHoveredEdgeKey();
-  const pinnedEdgeKey = usePinnedEdgeKey();
-  const activeEdgeKey = useActiveEdgeKey();
+  // truthy function reference. Click-only — no hover signal.
+  const selectedEdgeKey = useSelectedEdgeKey();
   const inspectorPanelOpen = useInspectorPanelOpen();
   const frameIndex = useFrameIndex();
   const byteFormat = useByteFormat();
-  // Clear the pin whenever the user swaps to a different cipher spec.
-  // A pinned edge from a prior spec points at node ids that no longer
+  // Clear the selection whenever the user swaps to a different cipher spec.
+  // A selected edge from a prior spec points at node ids that no longer
   // exist in the new graph; without this reset the panel would render
-  // "missing" against stale identity (see `view-edge-inspector.ts`
+  // "missing" against stale identity (see `view-value-inspector.ts`
   // module docstring).
   createEffect(
     on(
       () => spec().id,
-      () => clearPinnedEdge(),
+      () => clearSelectedEdge(),
       { defer: true },
     ),
   );
@@ -2240,36 +2235,34 @@ export const GraphView = () => {
               </Show>
             </div>
           </Show>
-          {/* Slice 4 — edge inspector panel. Mounted unconditionally so the
+          {/* Value-inspector panel. Mounted unconditionally so the
             collapsed-header toggle is always reachable; the body renders
-            value/empty content based on hover-or-pin state.
+            value/empty content based on the selected edge (click-only —
+            no hover).
 
-            Reactivity: the value memo depends on activeEdgeKey() (hover or
-            pin), the current frame index (for block-aware lookup),
-            useTraceVersion (re-run swaps the trace), and the active byte
-            format. Missing any of those would produce a stale render — see
-            the advisor's reactivity-dep-list note for Slice 4. */}
-          <div class="graph-edge-inspector-panel">
+            Reactivity: the value memo depends on selectedEdgeKey(), the
+            current frame index (for block-aware lookup), useTraceVersion
+            (re-run swaps the trace), and the active byte format.
+            Missing any of those would produce a stale render. */}
+          <div class="graph-value-inspector-panel">
             <button
               type="button"
-              class="graph-edge-inspector-panel-header"
-              data-testid="edge-inspector-panel-toggle"
+              class="graph-value-inspector-panel-header"
+              data-testid="value-inspector-panel-toggle"
               data-open={inspectorPanelOpen() ? "true" : "false"}
               aria-expanded={inspectorPanelOpen() ? "true" : "false"}
               onClick={toggleInspectorPanelOpen}
-              title={inspectorPanelOpen() ? "Collapse edge inspector" : "Expand edge inspector"}
+              title={inspectorPanelOpen() ? "Collapse value inspector" : "Expand value inspector"}
             >
-              <span class="graph-edge-inspector-panel-chevron" aria-hidden="true">
+              <span class="graph-value-inspector-panel-chevron" aria-hidden="true">
                 ▸
               </span>
-              edge inspector
-              <span class="graph-edge-inspector-panel-hint">hover or click an edge</span>
+              value inspector
+              <span class="graph-value-inspector-panel-hint">click an edge</span>
             </button>
             <Show when={inspectorPanelOpen()}>
-              <EdgeInspectorBody
-                activeEdgeKey={activeEdgeKey}
-                hoveredEdgeKey={hoveredEdgeKey}
-                pinnedEdgeKey={pinnedEdgeKey}
+              <ValueInspectorBody
+                selectedEdgeKey={selectedEdgeKey}
                 edges={() => graph().edges}
                 spec={spec}
                 frameIndex={frameIndex}
@@ -2396,7 +2389,7 @@ export const GraphView = () => {
                       // N+1, not within-iteration flow" at a glance.
                       isFeedback={feedbackPredicate()(edge)}
                       edgeKey={eKey}
-                      isPinned={pinnedEdgeKey() === eKey}
+                      isSelected={selectedEdgeKey() === eKey}
                     />
                   </Show>
                 );
@@ -3155,21 +3148,22 @@ const EdgePath = (props: {
    */
   isFeedback: boolean;
   /**
-   * Slice 4 — identity key for the edge-inspector store. The path's
-   * mouseenter/leave/click handlers route through this key so the
-   * panel below can look up the value flowing through THIS edge at
-   * the current scrubber position.
+   * Identity key for the value-inspector store. The path's click
+   * handler routes through this key so the panel below can look up
+   * the value flowing through THIS edge at the current scrubber
+   * position. Click-only — hover was dropped when the inspector
+   * generalized to other element types.
    *
    * Why a string key (not the GraphEdge object): signals compare by
    * reference + value-equality. Strings are cheap to compare and cheap
-   * to encode/decode at the boundary. The `view-edge-inspector` store
+   * to encode/decode at the boundary. The `view-value-inspector` store
    * holds the active key; the panel uses `decodeEdgeKey` only when it
    * needs the full GraphEdge to feed `lookupEdgeValue`.
    */
   edgeKey: string;
-  /** True when this edge is the currently-pinned inspector target —
-   *  applies the `graph-edge-pinned` halo class. */
-  isPinned: boolean;
+  /** True when this edge is the currently-selected inspector target —
+   *  applies the `graph-edge-selected` halo class. */
+  isSelected: boolean;
 }) => {
   // The `d` attribute is computed via createMemo so it tracks changes to
   // props.from / props.to. Without the memo, the path string would be
@@ -3265,18 +3259,18 @@ const EdgePath = (props: {
   const handleKeyToggle = (e: KeyboardEvent) => {
     if (e.key === "Enter" || e.key === " ") {
       e.stopPropagation();
-      togglePinnedEdge(props.edgeKey);
+      toggleSelectedEdge(props.edgeKey);
     }
   };
   return (
     // Two-layer render: the visible thin/dashed path on top (no pointer
     // events — it would otherwise compete with the wide hit path for
-    // hover detection), and a wide invisible hit path BELOW IT in the
-    // SVG paint order that captures hover/click on a fat 12px stroke.
+    // click detection), and a wide invisible hit path on top of it in
+    // the SVG paint order that captures clicks on a fat 12px stroke.
     //
     // Why this matters: `.graph-edge-aux` renders at 1.5 px stroke and
     // `.graph-edge-state` at 2 px. SVG paths only react to events ON
-    // their actual stroke, so a 2 px hit target is finicky to hover
+    // their actual stroke, so a 2 px hit target is finicky to click
     // and worse at non-100% zooms. The 12 px transparent companion
     // gives users a comfortable hit zone (matches the slop most users
     // expect for "click the line"). Standard SVG idiom — same `d`,
@@ -3285,18 +3279,18 @@ const EdgePath = (props: {
     // path; without that, browser hit-testing prefers the visible
     // path (smaller hit zone) when the cursor is dead-center.
     //
-    // The visible path keeps its classes + pinned halo styling because
-    // `.graph-edge-pinned`'s drop-shadow renders relative to the
+    // The visible path keeps its classes + selected halo styling because
+    // `.graph-edge-selected`'s drop-shadow renders relative to the
     // visible stroke geometry; applying it to a transparent stroke
     // would render no shadow. The hit path also gets the data-edge-
     // key attribute because the component tests target `data-edge-
-    // key` to locate hover/click targets.
+    // key` to locate click targets.
     <g>
       <path
         class={`graph-edge graph-edge-${props.kind}`}
         classList={{
           "graph-edge-feedback": props.isFeedback,
-          "graph-edge-pinned": props.isPinned,
+          "graph-edge-selected": props.isSelected,
         }}
         d={d()}
         marker-end={`url(#graph-arrow-${props.kind})`}
@@ -3306,14 +3300,12 @@ const EdgePath = (props: {
         class="graph-edge-hit"
         d={d()}
         data-edge-key={props.edgeKey}
-        onMouseEnter={() => setHoveredEdgeKey(props.edgeKey)}
-        onMouseLeave={() => setHoveredEdgeKey(null)}
         onClick={(e) => {
           // stopPropagation so the click doesn't bubble up to the
           // canvas (which would otherwise treat empty-area clicks as
           // drag-cancel or future canvas-level handlers).
           e.stopPropagation();
-          togglePinnedEdge(props.edgeKey);
+          toggleSelectedEdge(props.edgeKey);
         }}
         onKeyDown={handleKeyToggle}
       >
@@ -3344,7 +3336,7 @@ const INSPECTOR_ARRAY_PREVIEW_CAP = 6;
  *
  * Why one line: the panel sits below the replication panel above the
  * SVG, so vertical real estate is precious. A pre-formatted plain
- * string lets us reuse the existing `.graph-edge-inspector-value`
+ * string lets us reuse the existing `.graph-value-inspector-value-row`
  * styling without growing per-shape branches in the JSX.
  */
 const formatAuxValueOneline = (value: AuxValue, fmt: ByteFormat): string => {
@@ -3390,13 +3382,13 @@ const formatStateOneline = (state: State, fmt: ByteFormat): string => {
 };
 
 /**
- * Body of the edge-inspector panel. Pulled out as a separate component
+ * Body of the value-inspector panel. Pulled out as a separate component
  * because the value-lookup memo + the kind-badge logic add visual
  * weight; threading the dependencies as props keeps the parent JSX
  * readable without inlining 50 lines of inspector code.
  *
- * Reactivity dependencies (per the Slice 4 advisor note):
- *   - `activeEdgeKey` — the user's current hover/pin target
+ * Reactivity dependencies:
+ *   - `selectedEdgeKey` — the user's currently-clicked edge
  *   - `frameIndex` — current scrubber position drives block-aware lookup
  *   - `version` — re-run replaces the trace; without this dep, the
  *     panel would render against a stale trace after a param edit
@@ -3405,10 +3397,8 @@ const formatStateOneline = (state: State, fmt: ByteFormat): string => {
  * Missing any of those produces a stale panel; pinning the list here
  * (and matching it in the memo body) is the discipline check.
  */
-const EdgeInspectorBody = (props: {
-  activeEdgeKey: () => string | null;
-  hoveredEdgeKey: () => string | null;
-  pinnedEdgeKey: () => string | null;
+const ValueInspectorBody = (props: {
+  selectedEdgeKey: () => string | null;
   edges: () => readonly GraphEdge[];
   spec: () => import("@/core/types").CipherSpec;
   frameIndex: () => number;
@@ -3423,9 +3413,9 @@ const EdgeInspectorBody = (props: {
   // Decoding the key without this lookup would also work (the format
   // round-trips), but going through `edges()` makes the inspector
   // automatically degrade to "missing" if a spec change retired the
-  // hovered edge between hover and render.
+  // selected edge between click and render.
   const activeEdge = createMemo<GraphEdge | null>(() => {
-    const key = props.activeEdgeKey();
+    const key = props.selectedEdgeKey();
     if (key === null) return null;
     for (const e of props.edges()) {
       if (encodeEdgeKey(e) === key) return e;
@@ -3450,12 +3440,12 @@ const EdgeInspectorBody = (props: {
 
   // Render. The four branches match the EdgeValueLookup discriminant.
   return (
-    <div class="graph-edge-inspector-body" data-testid="edge-inspector-body">
+    <div class="graph-value-inspector-body" data-testid="value-inspector-body">
       <Show
         when={activeEdge() !== null}
         fallback={
-          <div class="graph-edge-inspector-empty">
-            Hover an edge to see the value flowing through it, or click an edge to pin it.
+          <div class="graph-value-inspector-empty">
+            Click an edge to see the value flowing through it.
           </div>
         }
       >
@@ -3466,33 +3456,28 @@ const EdgeInspectorBody = (props: {
           const result = () => lookup();
           return (
             <>
-              <div class="graph-edge-inspector-identity">
-                <span class="graph-edge-inspector-from" title={edge().from}>
+              <div class="graph-value-inspector-identity">
+                <span class="graph-value-inspector-from" title={edge().from}>
                   {edge().from}
                 </span>
-                <span class="graph-edge-inspector-arrow" aria-hidden="true">
+                <span class="graph-value-inspector-arrow" aria-hidden="true">
                   →
                 </span>
-                <span class="graph-edge-inspector-to" title={edge().to}>
+                <span class="graph-value-inspector-to" title={edge().to}>
                   {edge().to}
                 </span>
-                <Show when={props.pinnedEdgeKey() === props.activeEdgeKey()}>
-                  <span class="graph-edge-inspector-pin-badge" title="pinned">
-                    📌
-                  </span>
-                </Show>
               </div>
               <Show when={result()}>
                 {(r) => (
                   <>
-                    <div class="graph-edge-inspector-kind-row">
+                    <div class="graph-value-inspector-kind-row">
                       <span
-                        class={`graph-edge-inspector-kind-badge graph-edge-inspector-kind-${r().status === "value" ? r().status : "info"}`}
+                        class={`graph-value-inspector-kind-badge graph-value-inspector-kind-${r().status === "value" ? r().status : "info"}`}
                       >
                         {kindBadgeText(r(), edge())}
                       </span>
                     </div>
-                    <div class="graph-edge-inspector-value-row">
+                    <div class="graph-value-inspector-value-row">
                       {valueRowText(r(), props.byteFormat())}
                     </div>
                   </>

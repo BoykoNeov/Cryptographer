@@ -2,7 +2,7 @@
  * Tests for `core/edge-value-lookup.ts::lookupEdgeValue` (Slice 4 of the
  * graph-narrative-and-zoom plan).
  *
- * The function is the pure lookup behind the Slice 4 edge-inspector
+ * The function is the pure lookup behind the value-inspector
  * panel. It resolves "what value flows through this edge at the current
  * scrubber position?" against a real trace, with special branches for
  * synthetic endpoint pills (Slice 1), block-chip ids (Slice 6), and the
