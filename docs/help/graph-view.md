@@ -69,14 +69,16 @@ internalized.
   per-consumer chips. Trades horizontal width for vertical height; the
   long fan-out lines collapse into local stubs.
 - **Zoom** scales the rendered canvas from 50% to 200%. Use the
-  toolbar's `−` / `+` buttons, the percentage readout (click `reset`
-  to return to 100%), or hold <kbd>Ctrl</kbd> (or <kbd>⌘</kbd> on
-  macOS) and roll the mouse wheel. Zoom is independent of density:
-  density rescales the layout geometry (and re-flows the canvas);
-  zoom rescales the rendered pixels (the layout is unchanged). Zoom
-  is a viewer preference — it's saved per-spec in your browser, but
-  doesn't travel with `Save` or `Share…`, so a link you share will
-  render at the recipient's zoom, not yours.
+  toolbar's `−` / `+` buttons (or `reset` to return to 100%), or
+  **just roll the mouse wheel while the cursor is over the canvas**
+  (no modifier needed). <kbd>Shift</kbd> + wheel scrolls the canvas
+  horizontally instead — useful on wide pipelines (AES-128 ECB,
+  Serpent). Zoom is independent of density: density rescales the
+  layout geometry (and re-flows the canvas); zoom rescales the
+  rendered pixels (the layout is unchanged). Zoom is a viewer
+  preference — it's saved per-spec in your browser, but doesn't
+  travel with `Save` or `Share…`, so a link you share will render
+  at the recipient's zoom, not yours.
 
 ## Composing your own block-cipher mode
 

@@ -1479,29 +1479,42 @@ export const GraphView = () => {
   };
 
   /**
-   * Wheel handler for Ctrl/⌘ + wheel = zoom (Slice 3).
+   * Wheel handler for "wheel over canvas = zoom" (Slice 3, design-tool
+   * convention picked 2026-05-15 after the initial Ctrl+wheel mapping
+   * confused users — they expected Figma-style wheel-alone zoom).
+   *
+   * Modifier semantics:
+   *   - Plain wheel (no modifier): ZOOM. preventDefault to suppress the
+   *     browser's default vertical-scroll-the-page behavior.
+   *   - Shift + wheel: HORIZONTAL SCROLL the canvas. Don't preventDefault;
+   *     `.graph-view`'s `overflow: auto` already scrolls horizontally,
+   *     and Chrome maps Shift+wheel's deltaY onto the X axis natively.
+   *     AES / Serpent canvases are wider than the viewport, so this
+   *     gesture is meaningful.
+   *   - Ctrl + wheel: also ZOOM (kept for muscle-memory users who
+   *     learned the browser zoom convention).
    *
    * Step matches the toolbar buttons (0.10) so one wheel notch on a
-   * standard mouse feels like one button click — anything finer
-   * (originally tried 0.05) felt like "nothing happened" to users
-   * expecting Chrome-page-zoom-sized jumps. The deltaY-magnitude scale
-   * factor keeps trackpads sane: standard wheel notch is |deltaY| ≈ 100
-   * → magnitude 1 (full step per notch); trackpad scrolls are tens per
-   * event but fire many events per gesture → each event a small fraction
-   * of a step, totalling about one step per visible gesture. Capped at 1
-   * so a high-precision device can't blast through the range in one tick.
+   * standard mouse feels like one button click. The deltaY-magnitude
+   * scale factor keeps trackpads sane: standard wheel notch is
+   * |deltaY| ≈ 100 → magnitude 1 (full step per notch); trackpad scrolls
+   * are tens per event but fire many events per gesture → each event a
+   * fraction of a step, totalling about one step per visible gesture.
+   * Capped at 1 so a high-precision device can't blast through the
+   * range in one tick.
    */
   const WHEEL_ZOOM_STEP = 0.1;
 
   const handleWheelZoom = (ev: WheelEvent): void => {
-    if (!(ev.ctrlKey || ev.metaKey)) return;
-    // Must preventDefault to suppress Chrome's page-zoom default. The
-    // listener that fires this MUST be registered with `{ passive: false }`
-    // — Solid's JSX `onWheel` prop produces a passive listener in some
-    // browsers, which silently turns preventDefault into a no-op.
+    // Shift escape hatch: let the browser handle horizontal scroll.
+    if (ev.shiftKey) return;
+    // Must preventDefault to suppress the browser's default scroll. The
+    // listener MUST be registered with `{ passive: false }` — Solid's
+    // JSX `onWheel` prop produces a passive listener in some browsers,
+    // which silently turns preventDefault into a no-op.
     ev.preventDefault();
     // Stop propagation so an outer scroll container doesn't also process
-    // the same Ctrl+wheel (e.g. zoom the page underneath our SVG).
+    // the same wheel event.
     ev.stopPropagation();
     // `deltaY < 0` is wheel-up / pinch-out → zoom in. Sign matches OS-
     // level zoom shortcuts.
@@ -1656,7 +1669,7 @@ export const GraphView = () => {
             the assistive surface is fine without an outer group element. */}
             <div
               class="graph-view-zoom"
-              title="Zoom the graph canvas. Ctrl + mouse wheel also zooms."
+              title="Zoom the graph canvas. Mouse wheel over the canvas also zooms (Shift+wheel scrolls horizontally)."
             >
               {/* Label matches the visual treatment of the "density" `<legend>`
               at the start of the toolbar — same `.graph-view-toolbar-label`
