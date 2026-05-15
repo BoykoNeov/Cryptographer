@@ -619,8 +619,24 @@ export const layoutRoot = (
     const idx = rootReplicaIndexByConsumer.get(consumerId) ?? 0;
     rootReplicaIndexByConsumer.set(consumerId, idx + 1);
     const replicaY = consumerBox.y - consts.LEAF_H - consts.STACK_GAP;
+    // Slice-2 anchor: when the consumer is an iterate container, place the
+    // replica above the iterate body's FIRST child instead of the iterate's
+    // own left edge. The arrow then drops "into the start of the body,
+    // where the aux is read," which matches the runtime semantics — the
+    // iterate consumes `countFromAux` / `blocksFromAux` at iteration entry,
+    // and the first body step is the first observer of the resulting state.
+    // For wide iterates (e.g. AES-128 ECB at ~1500px) the visual sweep
+    // shrinks by the container's left padding; the bigger benefit is
+    // pedagogical positioning. Collapsed iterates have `childIds === []`
+    // (`collapseGraph` clears them) so the lookup falls back to the
+    // consumer's own x — no special-case branch needed for that.
+    const consumerContainer = containersById.get(consumerId);
+    const firstChildId =
+      consumerContainer?.kind === "iterate" ? consumerContainer.childIds[0] : undefined;
+    const firstChildBox = firstChildId !== undefined ? boxes.get(firstChildId) : undefined;
+    const anchorX = firstChildBox?.x ?? consumerBox.x;
     boxes.set(id, {
-      x: consumerBox.x + idx * (consts.LEAF_W + consts.FLOW_GAP),
+      x: anchorX + idx * (consts.LEAF_W + consts.FLOW_GAP),
       y: replicaY,
       w: consts.LEAF_W,
       h: consts.LEAF_H,

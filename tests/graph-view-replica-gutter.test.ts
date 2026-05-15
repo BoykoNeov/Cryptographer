@@ -639,3 +639,169 @@ describe("GraphView — aux-only root leaves are lifted above the spine row", ()
     expect(initial.y).toBe(24 + consts.LEAF_H + consts.STACK_GAP);
   });
 });
+
+/**
+ * Slice-2 root-replica anchor for iterate consumers.
+ *
+ * The bug it prevents: prior to Slice 2, a root-level replica whose
+ * consumer is a wide iterate (e.g. AES-128 ECB's `ecb-blocks` at ~1500px)
+ * was placed at `consumer.x` — above the iterate's LEFT edge. The
+ * EdgePath then routed the aux arrow from the replica's center down to
+ * the iterate's center-top, sweeping ~750px horizontally on a real ECB
+ * trace. The pedagogical reading was wrong too: the iterate's
+ * `countFromAux` / `blocksFromAux` are consumed at iteration entry, which
+ * is conceptually "at the start of the body," not "at the iterate
+ * container's left edge."
+ *
+ * The fix: in `layoutRoot`'s root-replica placement loop, when the
+ * consumer container is an `iterate`, anchor the replica above the
+ * iterate body's FIRST child (`childIds[0]`) instead of the iterate's
+ * own x. The arrow drops into "the start of the body where the aux is
+ * read," matching the runtime's read order.
+ */
+describe("GraphView — root replica with iterate consumer anchors above first body child", () => {
+  it("places `compute-block-count` replica above ecb-blocks's first body child, not the iterate's left edge", () => {
+    // Force replication of compute-block-count via the per-source override.
+    // Its natural fanout is 1 (the iterate is its only consumer), so the
+    // threshold-only path doesn't trigger replication — `modes` does.
+    const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
+      initialState: makeBytesState(bytesFromHex(ECB_PT_1_BLOCK)),
+      initialAux: new Map<string, AuxValue>([["key", bytesFromHex(ECB_KEY)]]),
+    });
+    const replicated = replicateHighFanoutSources(deriveAuxGraph(trace, aes128EcbSpec), 6, {
+      "compute-block-count": "always",
+    });
+    const consts = layoutConstantsFor("normal");
+    const empty = new Map<string, { x: number; y: number }>();
+    const { boxes } = layoutRoot(replicated, empty, consts);
+
+    // The replica id is `${source}@->${consumer}`. Consumer is the iterate
+    // container `ecb-blocks`.
+    const replicaId = "compute-block-count@->ecb-blocks";
+    const replicaBox = boxes.get(replicaId);
+    const iterateBox = boxes.get("ecb-blocks");
+    const firstChildBox = boxes.get("initial.add-round-key");
+    if (!replicaBox || !iterateBox || !firstChildBox) {
+      throw new Error(
+        `missing box: replica=${!!replicaBox} iterate=${!!iterateBox} firstChild=${!!firstChildBox}`,
+      );
+    }
+
+    // Slice-2 headline: replica.x equals the first body child's x — NOT
+    // the iterate's left edge. Half-leaf tolerance to absorb the future
+    // CONTAINER_PAD vs LEAF_W ratio shifts without re-baselining.
+    expect(Math.abs(replicaBox.x - firstChildBox.x)).toBeLessThanOrEqual(consts.LEAF_W / 2);
+
+    // And explicitly: the replica is shifted RIGHT of the iterate's left
+    // edge (since first child sits at iterate.x + CONTAINER_PAD). This
+    // pins the regression — pre-fix, replicaBox.x === iterateBox.x.
+    expect(replicaBox.x).toBeGreaterThan(iterateBox.x);
+
+    // The replica still lives above its consumer (orthogonal to the spine).
+    expect(replicaBox.y).toBeLessThan(iterateBox.y);
+  });
+
+  it("falls back to the iterate's left edge when the iterate body is empty (collapsed)", () => {
+    // Defensive: a collapsed iterate has `childIds === []` (collapseGraph
+    // clears them). The anchor lookup should degrade to the iterate's own
+    // x — the previous behavior — so collapsing doesn't crash or place
+    // the replica off-canvas.
+    //
+    // Synthetic graph: one source, one iterate consumer with no body
+    // (childIds empty), one aux edge. Mirrors how a post-collapse graph
+    // looks to layoutRoot.
+    const consumerId = "iterate";
+    const replicaId = "src->iterate";
+    const g: CipherGraph = {
+      nodes: [
+        {
+          stepId: "src",
+          stepType: "test.source",
+          label: "src",
+          containerPath: [],
+        },
+        {
+          stepId: replicaId,
+          stepType: "test.source",
+          label: replicaId,
+          containerPath: [],
+          replicaOf: "src",
+        },
+      ],
+      containers: [
+        {
+          kind: "iterate",
+          id: consumerId,
+          label: "iterate",
+          containerPath: [],
+          childIds: [], // Collapsed — no body children.
+          blockSpan: 1,
+        },
+      ],
+      edges: [{ from: replicaId, to: consumerId, auxKey: "test-key", kind: "aux" }],
+      rootIds: ["src", replicaId, consumerId],
+    };
+    const consts = layoutConstantsFor("normal");
+    const { boxes } = layoutRoot(g, new Map<string, { x: number; y: number }>(), consts);
+    const r = boxes.get(replicaId);
+    const c = boxes.get(consumerId);
+    if (!r || !c) throw new Error("missing collapsed-iterate box");
+    // Fallback: replica.x === consumer.x (no first-child to anchor to).
+    expect(r.x).toBe(c.x);
+    expect(r.y).toBeLessThan(c.y);
+  });
+
+  it("non-iterate consumers (leaves) are unaffected — replica still sits at consumer.x", () => {
+    // Slice 2 only special-cases iterate consumers. A replica whose
+    // consumer is a regular leaf must continue to land at consumer.x —
+    // the polish item #2 stacking test (`root: two replicas → same
+    // consumer get distinct x positions`) already pins this for the
+    // leaf-consumer case, but verify here too as a focused regression.
+    const g = makeMultiReplicaGraphForLeaf("consumer", ["src-a->consumer"]);
+    const consts = layoutConstantsFor("normal");
+    const { boxes } = layoutRoot(g, new Map<string, { x: number; y: number }>(), consts);
+    const r = boxes.get("src-a->consumer");
+    const c = boxes.get("consumer");
+    if (!r || !c) throw new Error("missing synthetic box");
+    // Leaf consumer → no special-case → replica still anchored at consumer.x.
+    expect(r.x).toBe(c.x);
+  });
+});
+
+// Small synthetic-graph helper kept module-local to the test file. Mirrors
+// `makeMultiReplicaGraph` above but skipped the `containers` plumbing —
+// this is purely for the "leaf consumer" regression case.
+const makeMultiReplicaGraphForLeaf = (
+  consumerId: string,
+  replicaIds: readonly string[],
+): CipherGraph => {
+  const nodes: GraphNode[] = [
+    {
+      stepId: consumerId,
+      stepType: "test.consumer",
+      label: consumerId,
+      containerPath: [],
+    },
+    ...replicaIds.map(
+      (rid): GraphNode => ({
+        stepId: rid,
+        stepType: "test.source",
+        label: rid,
+        containerPath: [],
+        replicaOf: rid.split("->")[0] ?? "src",
+      }),
+    ),
+  ];
+  const edges: GraphEdge[] = replicaIds.map((rid) => ({
+    from: rid,
+    to: consumerId,
+    auxKey: "test-key",
+    kind: "aux",
+  }));
+  return {
+    nodes,
+    containers: [],
+    edges,
+    rootIds: [...replicaIds, consumerId],
+  };
+};
