@@ -327,18 +327,40 @@ describe("expandCollapsedIterates on AES-128 ECB (4 blocks)", () => {
       "ecb-blocks@block3",
     ]);
 
-    // Edges from `split-blocks` and `compute-block-count` to the iterate
-    // each fan to 4 (one per chip), preserving auxKey + kind.
-    const splitEdges = expanded.edges.filter(
-      (e) => e.from === "split-blocks" && e.to.startsWith("ecb-blocks@block"),
+    // Aux edges from `split-blocks` to the iterate fan to 4 (one per
+    // chip), preserving auxKey + kind. Filter by `kind === "aux"` because
+    // post-spine-fix the chips ALSO receive state-spine edges from
+    // `compute-block-count` — those are exercised in the spine-fanning
+    // test below.
+    const splitAuxEdges = expanded.edges.filter(
+      (e) => e.kind === "aux" && e.from === "split-blocks" && e.to.startsWith("ecb-blocks@block"),
     );
-    expect(splitEdges).toHaveLength(4);
+    expect(splitAuxEdges).toHaveLength(4);
 
-    // Edges from the iterate to `concat-blocks` fan the same way.
-    const concatEdges = expanded.edges.filter(
-      (e) => e.from.startsWith("ecb-blocks@block") && e.to === "concat-blocks",
+    // Aux edges from the iterate to `concat-blocks` fan the same way.
+    const concatAuxEdges = expanded.edges.filter(
+      (e) => e.kind === "aux" && e.from.startsWith("ecb-blocks@block") && e.to === "concat-blocks",
     );
-    expect(concatEdges).toHaveLength(4);
+    expect(concatAuxEdges).toHaveLength(4);
+
+    // State-spine edges fan through the chips too — `compute-block-count
+    // → ecb-blocks` and `ecb-blocks → concat-blocks` (the iterate-as-node
+    // chain participation set by `inferStateEdges`) become 4 edges each
+    // post-expansion, so chips carry the spine in parallel. This is the
+    // pedagogical "the data IS the per-block payload during the iterate"
+    // story.
+    const computeStateEdges = expanded.edges.filter(
+      (e) =>
+        e.kind === "state" &&
+        e.from === "compute-block-count" &&
+        e.to.startsWith("ecb-blocks@block"),
+    );
+    expect(computeStateEdges).toHaveLength(4);
+    const concatStateEdges = expanded.edges.filter(
+      (e) =>
+        e.kind === "state" && e.from.startsWith("ecb-blocks@block") && e.to === "concat-blocks",
+    );
+    expect(concatStateEdges).toHaveLength(4);
   });
 
   it("composes with replicateHighFanoutSources: key-expansion replicates per chip", () => {

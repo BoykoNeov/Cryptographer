@@ -39,21 +39,25 @@
  *      id as the participant: the iterate node itself becomes a node-like
  *      participant in the edge list.
  *
- *   3. **Iterate is a scope boundary the parent spine BRIDGES OVER.**
- *      State edges connect DFS-consecutive leaves at the same scope;
- *      groups are transparent (DFS through), iterates split scopes (their
- *      body becomes its own per-iteration chain) BUT the parent chain
- *      bridges over the iterate's position with a single state edge from
- *      the leaf-before to the leaf-after. The runtime semantically
- *      replaces `state` with `blocks[i]` per iteration, so the bridge
- *      edge is a pedagogical aid rather than a literal description of
- *      memory contents — the aux edges (blocks-in / output-blocks-out)
- *      remain the honest depiction of the per-block data handoff, and
- *      the bridge complements them by keeping the visible white spine
- *      continuous from plaintext to ciphertext on the canvas. See the
- *      `inferStateEdges` function-level docstring for the design
- *      decision (overrode the prior "iterate is opaque" policy after
- *      Slice 6 made the visual severance unmistakable).
+ *   3. **Iterate participates in the parent spine as a node, AND opens a
+ *      separate scope for its body.** State edges connect DFS-consecutive
+ *      leaves at the same scope; groups are transparent (DFS through),
+ *      iterates split scopes (their body becomes its own per-iteration
+ *      chain) AND the iterate's id joins the parent chain so the spine
+ *      threads `prev → iterate → next`. After `expandCollapsedIterates`
+ *      replaces a collapsed iterate with N parallel block-chips, the
+ *      defensive "fan every edge touching the iterate" rule fans the
+ *      state edges one-per-chip — N parallel white spine paths where
+ *      there used to be one. The runtime semantically replaces `state`
+ *      with `blocks[i]` per iteration, so the spine edge is a
+ *      pedagogical aid rather than a literal description of memory
+ *      contents — the aux edges (blocks-in / output-blocks-out) remain
+ *      the honest depiction of the per-block data handoff, and the
+ *      spine complements them with the human-intuitive "data flows
+ *      through here" story. See the `inferStateEdges` function-level
+ *      docstring for the design decision (overrode the prior "iterate
+ *      is opaque" policy and a brief detour through "iterate is bridged
+ *      over" after Slice 6 made both readings visibly wrong).
  *
  *      **Feistel future**: when a Feistel-style cipher with branching
  *      state lands, the "DFS-consecutive leaves share state" assumption
@@ -397,36 +401,39 @@ const STATE_AUX_KEY = "state";
  *     step on it appeared to "do nothing" because the empty round was
  *     visually disconnected from the chain. The full transparent-group
  *     semantics return as soon as the user adds any leaf back.
- *   - **Iterates are scope boundaries that the parent spine BRIDGES OVER.**
- *     The iterate's body becomes its own scope (per-iteration spine emitted
- *     by recursing into the body), AND the parent scope's chain continues
- *     uninterrupted across the iterate position. Concretely: in
- *     `[A, B, iter, C, D]` at root scope, the parent chain accumulates
- *     `[A, B, C, D]` and emits `A→B`, `B→C` (the BRIDGE edge over the
- *     iterate), `C→D`. An iterate inside a group's subtree makes that
- *     group NON-empty for spine purposes, because the iterate represents
- *     real (just opaque) content the user can see.
+ *   - **Iterates participate in the parent chain as a node, AND open a
+ *     separate scope for their body.** The iterate's id joins the parent
+ *     scope's leaf chain so the spine threads `prev → iterate → next`,
+ *     while the iterate's body becomes its own scope (per-iteration spine
+ *     emitted by recursing into the body). Concretely: in
+ *     `[A, B, iter, C, D]` at root scope, the parent chain becomes
+ *     `[A, B, iter, C, D]` and emits `A→B`, `B→iter`, `iter→C`, `C→D`.
+ *     An iterate inside a group's subtree makes that group NON-empty for
+ *     spine purposes, because the iterate is a real spine participant
+ *     (not just a flushable boundary).
  *
- *     Why bridge instead of flushing (the prior policy): without a bridge
- *     edge the white spine visibly severs at the iterate's location on
- *     the canvas, leaving the eye to guess the dataflow continues — and
- *     after Slice 6 (`expandCollapsedIterates` replaces a collapsed iterate
- *     with N parallel block-chips), the iterate's own chip is GONE so even
- *     the visual proxy disappears. The bridge edge connects the leaves
- *     either side of the iterate directly, so the spine reads "data
- *     enters here, the iterate happens, data emerges there." The iterate's
- *     id is deliberately NOT pushed into the parent's leaf chain — that
- *     would make every block-chip post-Slice-6 a state-spine participant
- *     and falsely suggest the chips chain into one another, when in fact
- *     they're parallel iterations of the body.
+ *     **Pre-Slice-6** (iterate not collapsed): the white arrows enter
+ *     the iterate container's left edge and exit its right edge,
+ *     analogous to how the spine threads through round groups today.
  *
- *     The original "no bridge" rationale (item 3 in the file header) noted
- *     that the runtime's state value at the iterate boundary isn't the
- *     previous step's output (it's `blocks[i]` per iteration). True — but
- *     the visual spine has always been a pedagogical aid, not a literal
- *     description of memory contents. The bridge gives the user the
- *     correct dataflow story without changing the underlying aux edges
- *     (which still honestly depict the per-block handoff).
+ *     **Post-Slice-6** (`expandCollapsedIterates` replaces a collapsed
+ *     iterate with N parallel block-chips): the same edges fan one-per-
+ *     chip via the transform's defensive "fan every edge touching the
+ *     iterate, regardless of kind" rule. Each chip ends up with an
+ *     incoming state edge from `prev` and an outgoing state edge to
+ *     `next`, so the chips carry the spine in parallel — N white paths
+ *     where there used to be one. Pedagogically: "after split-blocks
+ *     the data IS the per-block payload, and the chips ARE where the
+ *     data lives during the iterate." No `chip_i → chip_{i+1}` edges
+ *     are produced — the chips are parallel paths, not chained ones.
+ *
+ *     The runtime's state value at the iterate boundary isn't literally
+ *     the previous step's output (per iteration the iterate substitutes
+ *     `state = blocks[i]`). The state spine has always been a pedagogical
+ *     aid rather than a literal description of memory contents — the aux
+ *     edges (blocks-in / output-blocks-out) honestly depict the per-block
+ *     handoff, and the spine complements them by showing the human-
+ *     intuitive "data flows through here" story.
  *
  * The function reads only `spec`, never the trace. State edges therefore
  * appear on the structural skeleton before any run, while aux edges remain
@@ -488,14 +495,19 @@ const inferStateEdges = (spec: CipherSpec): GraphEdge[] => {
           }
         } else {
           // Iterate boundary — recurse into the body as its own scope
-          // (the per-iteration spine is a separate chain), and let the
-          // parent chain BRIDGE OVER the iterate's position. The
-          // iterate's id is deliberately NOT pushed: the bridge edge
-          // connects the leaf BEFORE to the leaf AFTER directly, so
-          // the post-Slice-6 block chips don't get pulled onto the
-          // state spine. See the function-level docstring for the
-          // pedagogical rationale.
+          // (the per-iteration spine is a separate chain), AND push
+          // the iterate's id onto the parent chain so the parent
+          // spine threads `prev → iterate → next`. Pre-Slice-6 the
+          // iterate's container chip catches both arrows on its left
+          // / right edges, just like the spine threads through round
+          // groups. Post-Slice-6 `expandCollapsedIterates` fans both
+          // edges to one-per-chip (defensive "fan all kinds" rule),
+          // so each chip carries the spine in parallel — exactly the
+          // mental model that "after split-blocks the data IS the
+          // per-block payload, and the chips ARE where the data
+          // lives during the iterate."
           processScope(node.children);
+          leaves.push(node.id);
         }
       }
     };
