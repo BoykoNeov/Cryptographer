@@ -38,11 +38,27 @@ internalized.
 - **Drag from the palette.** The left sidebar lists every registered
   step type, grouped by namespace, with a small chip showing the input
   state shape each step expects (`bytes`, `4×4 matrix`, or `any`). Drag
-  an entry onto the canvas. Drop on a leaf or container header to
-  insert *after* that node in its parent. Drop on empty canvas to
-  append at the root. While dragging a shape-constrained step, drop
-  positions whose state shape doesn't match are dimmed — drop is still
-  allowed, but you'll get an orange warning on the resulting node.
+  an entry onto the canvas:
+  - **Drop on a leaf** → insert *after* that leaf in its parent.
+  - **Drop on a container's header band** (the labelled top strip of
+    a group/iterate) → insert as the *first child* of that container's
+    body. Use this when you want a new step at the start of a round.
+  - **Drop in a container's body** → routes to one of the gutter
+    strips that tile the body (see next bullet). The strips guarantee
+    body drops never escape to the container's parent.
+  - **Drop on empty canvas** → append at the root.
+  While dragging a shape-constrained step, drop positions whose state
+  shape doesn't match are dimmed — drop is still allowed, but you'll
+  get an orange warning on the resulting node.
+- **Drop gutters tile the container body.** While you drag, thin
+  tinted strips cover the entire inside of each container body — one
+  at the start (above the first step), one between every pair of
+  sibling steps, and one at the end (below the last step). Drop on a
+  gutter to insert at *that specific slot*. The gutter you hover
+  lights up so you can see exactly where the new step will land
+  before releasing. The body is fully tiled: a drop anywhere in the
+  body whitespace is guaranteed to land at a body position, never
+  escape upward to the container's parent.
 - **Drag containers** to rearrange. The pointer-down handle is the
   container's header band. Pinned positions persist per-spec in
   `localStorage`, and travel with `Save` and `Share` if you ticked

@@ -208,11 +208,29 @@ describe("Slice 11 — palette-built spec round-trips through Save/Load", () => 
     insertStepIntoSpec("generic.aux-xor@1", { kind: "after", stepId: "aux-load-1" });
     insertStepIntoSpec("generic.aux-copy@1", { kind: "after", stepId: "aux-xor-1" });
 
-    // Sanity: all three leaves should now exist with auto-generated ids.
+    // Slice 5 — drop-at-first-position pin. Insert a fourth aux leaf at
+    // the START of `round.1`'s body via the `before` anchor branch (the
+    // drop-gutter surface). This exercises a slot that pre-Slice 5 had
+    // no drop affordance and verifies the Save/Load layer round-trips
+    // the `before`-flavored insertion correctly. The new leaf is
+    // anchored before `round.1.sub-bytes` so it lands as round.1's
+    // first child.
+    insertStepIntoSpec("generic.aux-copy@1", {
+      kind: "before",
+      stepId: "round.1.sub-bytes",
+    });
+
+    // Sanity: all four leaves should now exist with auto-generated ids.
     const specWithInserts = useSpec()();
     expect(findStep(specWithInserts, "aux-load-1")).not.toBeNull();
     expect(findStep(specWithInserts, "aux-xor-1")).not.toBeNull();
     expect(findStep(specWithInserts, "aux-copy-1")).not.toBeNull();
+    // Slice 5 — drop-at-first-position pin: the Slice 5 leaf must land
+    // as round.1's first child, not as a sibling at root.
+    const sliceFiveLeafLoc = findStepAndParent(specWithInserts, "aux-copy-2");
+    expect(sliceFiveLeafLoc, "Slice 5 insert must exist").not.toBeNull();
+    expect(sliceFiveLeafLoc?.parent?.id).toBe("round.1");
+    expect(sliceFiveLeafLoc?.indexInParent).toBe(0);
 
     // ── Phase C — edit each inserted step's params via the store ──────
     // This is what the user does via the ParamEditor blocks; the store
@@ -229,6 +247,11 @@ describe("Slice 11 — palette-built spec round-trips through Save/Load", () => 
     });
     editStepParams("aux-xor-1", { from: "iv", into: "iv" });
     editStepParams("aux-copy-1", { from: "iv", to: "iv-snapshot" });
+    // Slice 5 — the at-first-position insert needs valid params too,
+    // otherwise the runtime throws on the inserted-but-misconfigured
+    // leaf and the trace doesn't survive long enough for the final-
+    // state byte-equality assertion below.
+    editStepParams("aux-copy-2", { from: "iv", to: "iv-mirror" });
 
     // ── Phase D — pin a layout position on a USER-INSERTED id ─────────
     // file-save-load.test.tsx pins `round.5` (a default-spec id). The
@@ -310,6 +333,16 @@ describe("Slice 11 — palette-built spec round-trips through Save/Load", () => 
     if (auxCopyLoc?.node.kind === "step") {
       expect(auxCopyLoc.node.type).toBe("generic.aux-copy@1");
       expect(auxCopyLoc.node.params).toEqual({ from: "iv", to: "iv-snapshot" });
+    }
+
+    // Slice 5 — verify the at-first-position leaf survived load with
+    // BOTH its position (first child of round.1) AND its params intact.
+    const sliceFiveLeafAfterLoad = findStepAndParent(loadedSpec, "aux-copy-2");
+    expect(sliceFiveLeafAfterLoad, "Slice 5 leaf must survive load").not.toBeNull();
+    expect(sliceFiveLeafAfterLoad?.parent?.id).toBe("round.1");
+    expect(sliceFiveLeafAfterLoad?.indexInParent).toBe(0);
+    if (sliceFiveLeafAfterLoad?.node.kind === "step") {
+      expect(sliceFiveLeafAfterLoad.node.params).toEqual({ from: "iv", to: "iv-mirror" });
     }
 
     // (c) Layout pin on the USER-INSERTED id is restored. This is the

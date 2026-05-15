@@ -2340,6 +2340,51 @@ button:disabled {
   fill: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
+/* Slice 5 — drop gutters between sibling leaves inside container bodies.
+   A gutter is a thin SVG rect occupying the gap area (STACK_GAP for
+   groups' vertical stacks, FLOW_GAP for iterates' horizontal flows) plus
+   strips at the start and end of each body.
+
+   Off by default:
+     - `pointer-events: none` so the gutter doesn't capture clicks on
+       container-body whitespace when no drag is in flight
+     - `opacity: 0` so the canvas is visually clean
+
+   During a palette drag, `.graph-drop-zone-active` is flipped on the
+   wrapping `.graph-view` div by `handleDragOver`. That cascades into:
+     - pointer-events: all (so the gutter participates in hit-testing
+       — necessary for the gutter-wins-over-anchor priority in
+       `handleDrop`)
+     - a faint baseline fill so the user perceives that gutters EXIST
+       between siblings (otherwise drop targets feel invisible until the
+       cursor lands on one)
+
+   The `.graph-drop-gutter-active` modifier paints the strip the cursor
+   is currently over — bold accent fill + dashed outline — matching the
+   `.graph-drop-target-active` treatment on leaves/containers so the
+   visual vocabulary is consistent across all three drop affordances.
+
+   The orientation classes are unused today (the visual is identical
+   either way) but provide a hook for future per-axis tweaks (e.g.
+   wider hit-area on iterate gutters where FLOW_GAP gives more room). */
+.graph-drop-gutter {
+  pointer-events: none;
+  opacity: 0;
+  fill: var(--accent);
+}
+
+.graph-view.graph-drop-zone-active .graph-drop-gutter {
+  pointer-events: all;
+  opacity: 0.18;
+}
+
+.graph-view.graph-drop-zone-active .graph-drop-gutter.graph-drop-gutter-active {
+  opacity: 0.55;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 2;
+}
+
 /* Palette sidebar. Fixed-ish width (clamped) so it stays usable on small
    viewports without dominating big ones. Sticky-top inside the layout so
    it remains visible as the SVG scrolls horizontally past the viewport

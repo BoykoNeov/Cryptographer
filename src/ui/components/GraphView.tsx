@@ -1134,6 +1134,23 @@ export const GraphView = () => {
 
   const layout = createMemo(() => layoutRoot(graph(), pinnedMap(), consts(), auxOnlyRootIds()));
 
+  /**
+   * Slice 5 — drop-gutter record shape. One record per gutter strip:
+   * id == `data-drop-gutter` encoding (the same
+   * `${"before"|"after"}:${siblingId}` string the drop handler
+   * dispatches on), orientation drives the CSS hover style. The memo
+   * itself (`dropGutters`) lives further down — after `nodesById` is in
+   * scope, since the gutter builder filters out replica children.
+   */
+  type DropGutterRect = {
+    readonly id: string;
+    readonly orientation: "horizontal" | "vertical";
+    readonly x: number;
+    readonly y: number;
+    readonly w: number;
+    readonly h: number;
+  };
+
   const containersById = createMemo(() => {
     const m = new Map<string, ContainerNode>();
     for (const c of graph().containers) m.set(c.id, c);
@@ -1150,6 +1167,235 @@ export const GraphView = () => {
     const m = new Map<string, GraphNode>();
     for (const n of graph().nodes) m.set(n.stepId, n);
     return m;
+  });
+
+  /**
+   * Slice 5 — drop-gutter records for every visible container.
+   *
+   * Three gutter flavors per container, in a single pass:
+   *   - **at-start** (`before:${firstChildId}`) — strip just above (group)
+   *     or just left (iterate) of the first body child. This is the
+   *     "before-first" position that was inexpressible pre-Slice 5.
+   *   - **between siblings** (`before:${nextChildId}`) — strip filling the
+   *     STACK_GAP / FLOW_GAP between two consecutive children. Redundant
+   *     with the previous sibling's leaf-after anchor but matches user
+   *     expectation that gutters exist symmetrically.
+   *   - **at-end** (`after:${lastChildId}`) — strip just below (group) or
+   *     just right (iterate) of the last body child.
+   *
+   * Excluded:
+   *   - Collapsed containers (`childIds === []` after `collapseGraph`):
+   *     the body isn't visible, so the gutters would point at offscreen
+   *     positions.
+   *   - Replica chips inside `childIds`: replicas are synthetic graph
+   *     artifacts with no spec entry, so `insertStepBefore(replicaId)`
+   *     would throw.
+   *   - Containers with zero real (non-replica) children.
+   *
+   * Encoding convention: gutter id == `data-drop-gutter` value == the
+   * `${kind}:${siblingId}` string the drop handler dispatches on. One
+   * stable per-slot key serves the `<For>`, the live highlight signal,
+   * and the handler dispatch.
+   *
+   * ## Structural invariant: tile the body
+   *
+   * A drop inside a container's body MUST resolve to a position within
+   * that body — never escape to the container's parent scope. The
+   * gutter cross-axis dimension (strip width for groups, strip height
+   * for iterates) is therefore extended to the full body inner area:
+   *
+   *   - Group: every strip's X span covers `cBox.x + CONTAINER_PAD` to
+   *     `cBox.x + cBox.w - CONTAINER_PAD` (the entire body's horizontal
+   *     extent, not just the children's column).
+   *   - Iterate: every strip's Y span covers `cBox.y + HEADER_H +
+   *     CONTAINER_PAD` to `cBox.y + cBox.h - CONTAINER_PAD`
+   *     (the entire body's vertical extent).
+   *
+   * Result: every pixel of body whitespace is covered by SOME gutter
+   * strip. Paint-order + gutter-wins hit-test priority routes any drop
+   * in body whitespace to its nearest semantic slot. The container's
+   * outer `data-drop-anchor` can only fire on the HEADER band (where
+   * no gutter renders) — preserving the Slice 8 "drop on container =
+   * insert after the container in its parent" semantic without any
+   * code change to the container's anchor scope.
+   *
+   * **Why this matters for future-proofing**: when a new container kind
+   * lands (Feistel branching, hash compression body, …), the author owes
+   * the project the tiling logic for their new primitive. The invariant
+   * is the design constraint; the geometry is the work. The current
+   * (group, iterate) cases are documented inline as the reference
+   * implementations of "tile the body."
+   *
+   * **Acceptable edge cases** (advisor pass 2026-05-15):
+   *   - Left-gutter replicas (AES groups, non-first-child consumer):
+   *     replicas sit at the consumer's leaf Y, not a gap Y. Extended
+   *     strips span only gap Y's, so no overlap with left-gutter
+   *     replicas.
+   *   - Lifted-replica row (Serpent groups + replication, or iterate
+   *     bodies + replication): ~4px overlap at the at-start strip's
+   *     top edge with the lifted replica chip. The gutter wins in that
+   *     overlap, routing a drop on the chip's bottom 4px to
+   *     `before:firstChild` instead of `after:source`. Minor; not
+   *     worth refactoring for.
+   */
+  const dropGutters = createMemo<readonly DropGutterRect[]>(() => {
+    const out: DropGutterRect[] = [];
+    const cs = consts();
+    const lay = layout();
+    const nbi = nodesById();
+    const collapsed = collapsedSet();
+    for (const container of graph().containers) {
+      if (collapsed.has(container.id)) continue;
+      if (container.childIds.length === 0) continue;
+      const cBox = lay.boxes.get(container.id);
+      if (!cBox) continue;
+      // Filter to REAL (non-replica) children, in spec order. Replicas
+      // are synthetic graph artifacts; `insertStepBefore(replicaId, ...)`
+      // would throw because the runtime walks the spec tree.
+      const realChildBoxes: { id: string; box: Box }[] = [];
+      for (const childId of container.childIds) {
+        const node = nbi.get(childId);
+        if (node?.replicaOf !== undefined) continue;
+        const cb = lay.boxes.get(childId);
+        if (!cb) continue;
+        realChildBoxes.push({ id: childId, box: cb });
+      }
+      if (realChildBoxes.length === 0) continue;
+
+      if (container.kind === "group") {
+        // Vertical stack of children → horizontal gutter strips.
+        // Cross-axis (X) span = full body inner width per the
+        // "tile the body" invariant documented on the memo above.
+        // Going only `min(child.x) → max(child.right)` left
+        // un-tiled body whitespace where the container's outer
+        // `data-drop-anchor` could win, escaping the user's intent
+        // out to the parent scope (the bug surfaced in the first
+        // browser pass — aux-xor leaked from round.2's body to
+        // root, severing the state spine).
+        const minX = cBox.x + cs.CONTAINER_PAD;
+        const maxRight = cBox.x + cBox.w - cs.CONTAINER_PAD;
+        const stripW = maxRight - minX;
+        // Between-siblings strips fill the actual STACK_GAP. Boundary
+        // strips (at-start, at-end) use CONTAINER_PAD instead: the
+        // boundary "space above the first child / below the last child"
+        // is exactly the container's inner padding, and that's also the
+        // area the user intuitively reaches for when dragging to insert
+        // at the start of the body. A 6px STACK_GAP strip was too thin
+        // to reliably hit on a real-world drop — cursors landing in the
+        // CONTAINER_PAD area above the strip fell through to the
+        // container's outer `data-drop-anchor` (which routes to
+        // insert-AFTER-container-in-parent, NOT into the body), so the
+        // step ended up at the wrong scope. Pinned by the
+        // "at-start strip thickness" test below.
+        const boundaryStripH = cs.CONTAINER_PAD;
+        // biome-ignore lint/style/noNonNullAssertion: length checked above
+        const first = realChildBoxes[0]!;
+        // biome-ignore lint/style/noNonNullAssertion: length checked above
+        const last = realChildBoxes[realChildBoxes.length - 1]!;
+        // At-start: strip in the CONTAINER_PAD area immediately above
+        // the first child. Positioning RELATIVE to first.y (not to the
+        // container header) keeps the strip clear of any lifted-replica
+        // row above the first child — when `liftH > 0` the strip sits
+        // between the lifted-replica row and the first child, NOT over
+        // the replica chip. (See `layoutNode`'s group branch for the
+        // lift mechanics.)
+        out.push({
+          id: `before:${first.id}`,
+          orientation: "horizontal",
+          x: minX,
+          y: first.box.y - boundaryStripH,
+          w: stripW,
+          h: boundaryStripH,
+        });
+        // Between consecutive siblings: fill the STACK_GAP exactly. No
+        // overflow concern because STACK_GAP is the natural inter-child
+        // spacing.
+        for (let i = 0; i < realChildBoxes.length - 1; i++) {
+          // biome-ignore lint/style/noNonNullAssertion: loop bounds
+          const prev = realChildBoxes[i]!;
+          // biome-ignore lint/style/noNonNullAssertion: loop bounds
+          const next = realChildBoxes[i + 1]!;
+          const gapTop = prev.box.y + prev.box.h;
+          const gapHeight = next.box.y - gapTop;
+          if (gapHeight <= 0) continue;
+          out.push({
+            id: `before:${next.id}`,
+            orientation: "horizontal",
+            x: minX,
+            y: gapTop,
+            w: stripW,
+            h: gapHeight,
+          });
+        }
+        // At-end: strip in the CONTAINER_PAD area immediately below
+        // the last child. Symmetric to at-start.
+        out.push({
+          id: `after:${last.id}`,
+          orientation: "horizontal",
+          x: minX,
+          y: last.box.y + last.box.h,
+          w: stripW,
+          h: boundaryStripH,
+        });
+        continue;
+      }
+
+      // Iterate: horizontal flow of children → vertical gutter strips.
+      // Mirror of the group case with x ↔ y, STACK_GAP ↔ FLOW_GAP.
+      // Cross-axis (Y) span = full body inner height per the
+      // "tile the body" invariant documented on the memo above.
+      // Children-Y-derived spans left the body padding above and
+      // below the row un-tiled, where the container's outer
+      // `data-drop-anchor` could win on near-misses.
+      const minY = cBox.y + HEADER_H + cs.CONTAINER_PAD;
+      const maxBottom = cBox.y + cBox.h - cs.CONTAINER_PAD;
+      const stripH = maxBottom - minY;
+      // Between-siblings strips use the full FLOW_GAP since that's the
+      // natural gap width. At-start / at-end strips must clamp to
+      // CONTAINER_PAD: with default density `FLOW_GAP=16 > CONTAINER_PAD=10`
+      // an unclamped at-start strip would extend ~6px past the
+      // container's left edge (and at-end past the right edge), giving
+      // the user a visible hit area outside the body it represents.
+      const boundaryStripW = Math.min(cs.FLOW_GAP, cs.CONTAINER_PAD);
+      // biome-ignore lint/style/noNonNullAssertion: length checked above
+      const first = realChildBoxes[0]!;
+      // biome-ignore lint/style/noNonNullAssertion: length checked above
+      const last = realChildBoxes[realChildBoxes.length - 1]!;
+      out.push({
+        id: `before:${first.id}`,
+        orientation: "vertical",
+        x: first.box.x - boundaryStripW,
+        y: minY,
+        w: boundaryStripW,
+        h: stripH,
+      });
+      for (let i = 0; i < realChildBoxes.length - 1; i++) {
+        // biome-ignore lint/style/noNonNullAssertion: loop bounds
+        const prev = realChildBoxes[i]!;
+        // biome-ignore lint/style/noNonNullAssertion: loop bounds
+        const next = realChildBoxes[i + 1]!;
+        const gapLeft = prev.box.x + prev.box.w;
+        const gapWidth = next.box.x - gapLeft;
+        if (gapWidth <= 0) continue;
+        out.push({
+          id: `before:${next.id}`,
+          orientation: "vertical",
+          x: gapLeft,
+          y: minY,
+          w: gapWidth,
+          h: stripH,
+        });
+      }
+      out.push({
+        id: `after:${last.id}`,
+        orientation: "vertical",
+        x: last.box.x + last.box.w,
+        y: minY,
+        w: boundaryStripW,
+        h: stripH,
+      });
+    }
+    return out;
   });
 
   /**
@@ -1317,6 +1563,36 @@ export const GraphView = () => {
   const [dragOverAnchorId, setDragOverAnchorId] = createSignal<string | null>(null);
 
   /**
+   * Slice 5 — drop-gutter live highlight.
+   *
+   * Drop gutters are thin SVG strips between sibling leaves (and at the
+   * start / end of each container body) that let the user drop a palette
+   * step at any position in the body — including the "before-first"
+   * position that was impossible pre-Slice 5 (the only drop anchors were
+   * leaves, which insert AFTER, and container outers, which insert AFTER
+   * THE CONTAINER IN ITS PARENT per Slice 8 semantics).
+   *
+   * `dragOverGutterId` carries the gutter's `data-drop-gutter` encoding
+   * (`"before:X"` for at-start / between strips, `"after:Y"` for the
+   * at-end strip) while the cursor hovers a gutter mid-drag. The gutter
+   * `<rect>` reads this signal via `classList` to paint an active
+   * highlight, and `handleDrop` reads the same encoding from the gutter
+   * under the cursor to route to `insertStepIntoSpec`'s `before` / `after`
+   * branch.
+   *
+   * Hit-test priority: gutters win over leaves and container outers.
+   * Both `handleDragOver` and `handleDrop` walk `closest("[data-drop-gutter]")`
+   * FIRST; only if that returns null do they fall back to the existing
+   * `closest("[data-drop-anchor]")` walk. SVG paint order reinforces
+   * this — gutters render AFTER leaves and containers (last children of
+   * the canvas `<svg>` body), so they sit on top for native hit-testing.
+   *
+   * `null` outside of drag, OR mid-drag when the cursor isn't over any
+   * gutter (it might be hovering an anchor instead).
+   */
+  const [dragOverGutterId, setDragOverGutterId] = createSignal<string | null>(null);
+
+  /**
    * Slice 11 — in-app help modal open state. Toggled by the toolbar's
    * `?` button; `<GraphHelpModal>` reads it to drive the native
    * `<dialog>` open/close. Local to GraphView (not in a store) because
@@ -1346,12 +1622,23 @@ export const GraphView = () => {
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
     if (!dragOverActive()) setDragOverActive(true);
-    // Resolve the same anchor the drop handler would use — `closest`
-    // walks up from the element under the cursor looking for the nearest
-    // `data-drop-anchor`. Null when the cursor is in the canvas gap
-    // (drop would root-append). Update the signal continuously so the
-    // highlight tracks the cursor in real time.
+    // Resolve the same target the drop handler would use. Gutter wins
+    // over anchor (Slice 5): a gutter under the cursor takes precedence
+    // because it represents an explicit between-positions slot, while a
+    // leaf/container anchor is the legacy after-this-thing fallback.
+    // SVG paint order reinforces this — gutters render last so native
+    // hit-testing hands us the gutter element first when both overlap.
+    // Update both signals continuously so the highlight tracks the
+    // cursor in real time.
     const target = e.target as Element | null;
+    const gutterEl = target?.closest?.("[data-drop-gutter]") ?? null;
+    const gutterId = gutterEl?.getAttribute("data-drop-gutter") ?? null;
+    if (gutterId !== null) {
+      if (gutterId !== dragOverGutterId()) setDragOverGutterId(gutterId);
+      if (dragOverAnchorId() !== null) setDragOverAnchorId(null);
+      return;
+    }
+    if (dragOverGutterId() !== null) setDragOverGutterId(null);
     const anchored = target?.closest?.("[data-drop-anchor]") ?? null;
     const anchorId = anchored?.getAttribute("data-drop-anchor") ?? null;
     if (anchorId !== dragOverAnchorId()) {
@@ -1370,28 +1657,76 @@ export const GraphView = () => {
     if (related && current && current.contains(related)) return;
     setDragOverActive(false);
     setDragOverAnchorId(null);
+    setDragOverGutterId(null);
   };
 
   const handleDrop = (e: DragEvent): void => {
     e.preventDefault();
     setDragOverActive(false);
     setDragOverAnchorId(null);
+    setDragOverGutterId(null);
     if (!e.dataTransfer) return;
     // Prefer the custom MIME (palette-authored); fall back to text/plain
     // for browsers that strip non-standard MIMEs on DnD payloads.
     const stepType =
       e.dataTransfer.getData(STEP_TYPE_DRAG_MIME) || e.dataTransfer.getData("text/plain");
     if (!stepType || !registry.has(stepType)) return;
+    // Slice 5: gutter hit-test wins over the legacy data-drop-anchor walk.
+    // A gutter under the cursor maps directly to a precise between-positions
+    // slot — `before:X` (at-start / between siblings) or `after:Y`
+    // (at-end). Without this priority a drop on the thin strip just above
+    // a leaf would resolve to the leaf's anchor (insert AFTER the leaf) —
+    // the opposite of the user's intent.
+    const target = e.target as Element | null;
+    const gutterEl = target?.closest?.("[data-drop-gutter]") ?? null;
+    const gutterEncoding = gutterEl?.getAttribute("data-drop-gutter") ?? null;
+    if (gutterEncoding !== null) {
+      // Encoding shape: `${"before" | "after"}:${siblingStepId}`. Split
+      // on the FIRST colon only — step ids are forbidden from containing
+      // colons by the runtime's `:b{i}` block-index suffix convention,
+      // but a hand-rolled spec could in principle still contain one.
+      const colonIdx = gutterEncoding.indexOf(":");
+      if (colonIdx > 0) {
+        const kind = gutterEncoding.slice(0, colonIdx);
+        const siblingId = gutterEncoding.slice(colonIdx + 1);
+        if (kind === "before" && siblingId.length > 0) {
+          insertStepIntoSpec(stepType, { kind: "before", stepId: siblingId });
+          return;
+        }
+        if (kind === "after" && siblingId.length > 0) {
+          insertStepIntoSpec(stepType, { kind: "after", stepId: siblingId });
+          return;
+        }
+      }
+      // Malformed encoding — fall through to anchor / root-append.
+    }
     // Walk up from the drop target looking for the nearest `data-drop-anchor`
     // attribute. `closest` returns the element itself if it matches, so a
     // drop directly on a `<g class="graph-leaf">` finds itself. Replicas
     // carry their `clickTargetId` (source's stepId), so the anchor is
     // always a real spec id.
-    const target = e.target as Element | null;
+    //
+    // Anchor-resolution dispatch (post-rescope, 2026-05-15):
+    //   - Anchor is a CONTAINER id (lookup hit in `graph().containers`):
+    //     the header band was hit (the only place container anchors
+    //     remain, after the rescope moved `data-drop-anchor` from the
+    //     outer `<g>` to the header `<rect>`). Route to
+    //     `{ kind: "into-start", containerId }` — "drop on header =
+    //     enter this container's body" matches user intuition. The
+    //     original Slice 8 "insert after container in parent" semantic
+    //     is dropped because the chip obscures the header and users
+    //     couldn't tell their cursor was on it.
+    //   - Anchor is a LEAF id: keep the leaf-after semantic. A drop on
+    //     a leaf still means "insert immediately after this leaf in its
+    //     parent."
     const anchored = target?.closest?.("[data-drop-anchor]") ?? null;
     const anchorId = anchored?.getAttribute("data-drop-anchor") ?? null;
     if (anchorId !== null && anchorId.length > 0) {
-      insertStepIntoSpec(stepType, { kind: "after", stepId: anchorId });
+      if (containersById().has(anchorId)) {
+        insertStepIntoSpec(stepType, { kind: "into-start", containerId: anchorId });
+      } else {
+        insertStepIntoSpec(stepType, { kind: "after", stepId: anchorId });
+      }
     } else {
       insertStepIntoSpec(stepType, { kind: "root-append" });
     }
@@ -2022,6 +2357,32 @@ export const GraphView = () => {
                 );
               }}
             </For>
+
+            {/* Slice 5 — drop gutters. Rendered LAST so they sit on top
+              of leaves and containers for native SVG hit-testing: a
+              cursor over the thin strip just above a leaf hits the
+              gutter element, not the leaf below it. CSS keeps them
+              invisible + non-interactive when no palette drag is
+              active (`pointer-events: none; opacity: 0`); the parent
+              `.graph-drop-zone-active` class flipped by
+              `handleDragOver` switches them on during drag. */}
+            <For each={dropGutters()}>
+              {(g) => (
+                <rect
+                  class="graph-drop-gutter"
+                  classList={{
+                    "graph-drop-gutter-vertical": g.orientation === "vertical",
+                    "graph-drop-gutter-horizontal": g.orientation === "horizontal",
+                    "graph-drop-gutter-active": dragOverGutterId() === g.id,
+                  }}
+                  data-drop-gutter={g.id}
+                  x={g.x}
+                  y={g.y}
+                  width={g.w}
+                  height={g.h}
+                />
+              )}
+            </For>
           </svg>
         </Show>
       </div>
@@ -2460,8 +2821,6 @@ const ContainerRect = (props: {
     <g
       class={`graph-container graph-container-${props.container.kind}`}
       classList={{ "graph-drop-target-active": props.isDropTargetActive }}
-      data-drop-anchor={props.container.id}
-      data-state-shape={props.stateShape}
       tabindex={0}
       onKeyDown={(e) => {
         if (e.key === "Delete") {
@@ -2492,7 +2851,18 @@ const ContainerRect = (props: {
       />
       {/* Header drag-handle band. Sits over the top HEADER_H pixels of the
           container rect; pointer-events="all" so it captures pointerdown
-          before the child leaves do. */}
+          before the child leaves do. Carries `data-drop-anchor` so palette
+          drops on the header route to this container — under the
+          post-Slice-5 semantic (rescoped 2026-05-15), header drops mean
+          "insert at start of this container's body," NOT "insert after
+          the container in its parent." The handler interprets the anchor
+          id by looking it up in `graph().containers`; lookups that hit a
+          container route through `{ kind: "into-start", containerId }`.
+          The outer `<g>` no longer carries `data-drop-anchor`, so body-
+          area drops resolve via gutters/leaves only — the body-tile
+          invariant on the gutter memo guarantees no body pixel is
+          un-tiled, so the only place the container's anchor can fire is
+          the header band (which is what we want). */}
       <rect
         class="graph-container-header"
         x={props.box.x}
@@ -2500,6 +2870,8 @@ const ContainerRect = (props: {
         width={Math.max(0, props.box.w - CHEVRON_W)}
         height={HEADER_H}
         fill="transparent"
+        data-drop-anchor={props.container.id}
+        data-state-shape={props.stateShape}
         onPointerDown={(e) => props.onDragStart(e)}
         data-testid={`graph-container-header-${props.container.id}`}
       />

@@ -49,6 +49,7 @@ import {
   duplicateRoundGroup,
   findStepAndParent,
   insertStepAfter,
+  insertStepBefore,
   removeStep,
   updateAllStepsByType,
   updateStepParams,
@@ -263,11 +264,26 @@ export const editAllStepsByType = (stepType: string, update: (params: Json) => J
  * `stepType` registered in the registry and an anchor that says WHERE
  * relative to the existing tree the new leaf should land.
  *
- * Two anchor flavors:
+ * Four anchor flavors:
  *   • `{ kind: "after", stepId }` — uses `insertStepAfter` to place the
  *     new leaf immediately after that node, into its parent. The anchor
  *     can be a leaf id OR a container id (group/iterate) — `findStepAndParent`
  *     handles both since Slice 4.
+ *   • `{ kind: "before", stepId }` — mirror of `after`. Routes through
+ *     `insertStepBefore`. The drop-gutter UI surface (Slice 5 of the
+ *     graph-narrative-and-zoom plan) uses this for "drop between two
+ *     siblings" (gutter anchored at the slot's next sibling).
+ *   • `{ kind: "into-start", containerId }` — inserts as the FIRST
+ *     child of the named container's body. Used by the post-rescope
+ *     header-drop semantic (2026-05-15 follow-up to Slice 5): dropping
+ *     on a container's header band means "enter this container's body
+ *     and land at position 0," NOT the original Slice 8 "insert after
+ *     the container in its parent" — user feedback showed the after-in-
+ *     parent semantic was actively confusing because the chip obscures
+ *     the header and users couldn't tell their cursor was on the
+ *     header. Falls back to root-append when the container has no
+ *     children. Walks the spec tree to find the first child; works for
+ *     groups and iterates uniformly.
  *   • `{ kind: "root-append" }` — appends to `spec.steps`. Used when the
  *     drop lands on the SVG canvas with no specific node target (today's
  *     ciphers always have at least one root node, so this is the empty-
@@ -316,7 +332,11 @@ export const removeStepFromSpec = (stepId: string): void => {
 
 export const insertStepIntoSpec = (
   stepType: string,
-  anchor: { kind: "after"; stepId: string } | { kind: "root-append" },
+  anchor:
+    | { kind: "after"; stepId: string }
+    | { kind: "before"; stepId: string }
+    | { kind: "into-start"; containerId: string }
+    | { kind: "root-append" },
 ): string => {
   const currentSpec = activeSpec();
   const newId = generateUniqueStepId(currentSpec, stepType);
@@ -328,6 +348,25 @@ export const insertStepIntoSpec = (
   };
   if (anchor.kind === "after") {
     updateActive((s) => insertStepAfter(s, anchor.stepId, newLeaf));
+  } else if (anchor.kind === "before") {
+    updateActive((s) => insertStepBefore(s, anchor.stepId, newLeaf));
+  } else if (anchor.kind === "into-start") {
+    // Resolve "first child of container" by walking the spec. The
+    // graph's `ContainerNode.childIds` would also work but reflects
+    // post-collapse state — and collapsing shouldn't change the
+    // insertion semantic. The spec tree is authoritative.
+    const loc = findStepAndParent(currentSpec, anchor.containerId);
+    const firstChild =
+      loc && loc.node.kind !== "step" && loc.node.children.length > 0 && loc.node.children[0];
+    if (firstChild) {
+      updateActive((s) => insertStepBefore(s, firstChild.id, newLeaf));
+    } else {
+      // Container has no children, or the id didn't resolve to a
+      // container at all. Falling through to root-append is the safest
+      // recovery — the dropped step still lands somewhere visible
+      // instead of vanishing.
+      updateActive((s) => ({ ...s, steps: [...s.steps, newLeaf] }));
+    }
   } else {
     // root-append: rebuild the top-level array with the new leaf at the
     // end. `insertStepAfter` would also work if there's a last element,

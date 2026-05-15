@@ -228,9 +228,13 @@ describe("GraphView — drop-anchor highlight during palette drag", () => {
 
   it("dragover on a leaf adds .graph-drop-target-active to that leaf", () => {
     const { container } = render(() => <GraphView />);
-    // Pick any leaf-level drop anchor. AES-128 root has key-expansion
-    // and the post-round ciphertext leaf; round contents are nested.
-    const anchors = container.querySelectorAll("[data-drop-anchor]");
+    // Restrict to LEAF anchors. After the 2026-05-15 rescope,
+    // `data-drop-anchor` also lives on container header `<rect>`
+    // elements (drop-on-header = enter container's body), but the
+    // highlight class for header drops attaches to the parent
+    // `<g class="graph-container">`, not the header rect itself —
+    // a leaf-only selector keeps the assertion direct.
+    const anchors = container.querySelectorAll("g.graph-leaf[data-drop-anchor]");
     expect(anchors.length).toBeGreaterThan(0);
     const leaf = anchors[0] as Element;
     expect(leaf.classList.contains("graph-drop-target-active")).toBe(false);
@@ -240,7 +244,7 @@ describe("GraphView — drop-anchor highlight during palette drag", () => {
 
   it("moving the dragover to a different anchor moves the highlight with it", () => {
     const { container } = render(() => <GraphView />);
-    const anchors = Array.from(container.querySelectorAll("[data-drop-anchor]"));
+    const anchors = Array.from(container.querySelectorAll("g.graph-leaf[data-drop-anchor]"));
     expect(anchors.length).toBeGreaterThan(1);
     const first = anchors[0] as Element;
     const second = anchors[1] as Element;
@@ -256,7 +260,7 @@ describe("GraphView — drop-anchor highlight during palette drag", () => {
 
   it("dragleave (off the canvas) clears the highlight", () => {
     const { container } = render(() => <GraphView />);
-    const leaf = container.querySelector("[data-drop-anchor]") as Element;
+    const leaf = container.querySelector("g.graph-leaf[data-drop-anchor]") as Element;
     fireGraphEvent(leaf, "dragover");
     expect(leaf.classList.contains("graph-drop-target-active")).toBe(true);
     // Dragleave bubbles up to the .graph-view wrapper; that's where

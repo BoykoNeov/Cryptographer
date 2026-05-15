@@ -291,22 +291,36 @@ describe("GraphView — palette drop integration", () => {
     expect(findStep(spec(), "byte-substitution-1"), "new leaf should be inserted").not.toBeNull();
   });
 
-  it("anchors a drop on a container header to that container (insert-after-in-parent)", () => {
+  it("dropping on a container header inserts as the first child of that container", () => {
+    // Rescoped 2026-05-15 (Slice 5 follow-up). The original Slice 8
+    // semantic — "drop on container = insert after container in parent"
+    // — was actively confusing: the dragged chip obscures the header
+    // band so users couldn't tell their cursor was over it, and aux-
+    // shape inserts at root level got auxOnlyRoot-lifted, severing the
+    // state spine. New semantic: "drop on container header = enter the
+    // container's body and land at position 0." Matches every other
+    // DAG editor's drop-on-container behavior.
+    //
+    // The data-drop-anchor moved from the outer `<g>` to the header
+    // `<rect>` (the drag-handle band), so the drop is dispatched on
+    // the header element specifically. The body of the container has
+    // no anchor — body drops resolve via gutters/leaves only.
     seedAes128Trace();
     const { container } = render(() => <GraphView />);
-    // Drop on the `round.1` container's outer `<g>` (has data-drop-anchor).
-    const group = container.querySelector<SVGGElement>(
-      'g.graph-container[data-drop-anchor="round.1"]',
+    const header = container.querySelector<SVGRectElement>(
+      'rect.graph-container-header[data-drop-anchor="round.1"]',
     );
-    expect(group, "graph should render the round.1 container").not.toBeNull();
-    if (!group) return;
-    fireDropAt(group, "generic.shift-rows@1");
+    expect(header, "graph should render the round.1 header drop-anchor").not.toBeNull();
+    if (!header) return;
+    fireDropAt(header, "generic.shift-rows@1");
     const spec = useSpec();
-    // The new leaf is inserted AFTER round.1 in the top-level spec.steps,
-    // NOT inside round.1's children. (advisor-confirmed Slice 8 semantic).
     const newLeafLoc = findStepAndParent(spec(), "shift-rows-1");
     expect(newLeafLoc, "new leaf should exist").not.toBeNull();
-    expect(newLeafLoc?.parent, "new leaf's parent should be the root, not round.1").toBeNull();
+    // New leaf's parent should be round.1 (we entered the body), and
+    // it should be at position 0 (first child) since the header drop
+    // routes to `{ kind: "into-start", containerId }`.
+    expect(newLeafLoc?.parent?.id).toBe("round.1");
+    expect(newLeafLoc?.indexInParent).toBe(0);
   });
 
   it("ignores drops that carry a non-registered step type", () => {
