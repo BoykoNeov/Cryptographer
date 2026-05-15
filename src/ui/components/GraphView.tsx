@@ -1481,28 +1481,19 @@ export const GraphView = () => {
   /**
    * Wheel handler for Ctrl/⌘ + wheel = zoom (Slice 3).
    *
-   * Step is intentionally finer (0.05) than the toolbar buttons (0.1) so
-   * trackpad pinch / wheel feels smoother — high-precision wheels emit
-   * many small events, and a coarse step would jump in chunks.
+   * Step matches the toolbar buttons (0.10) so one wheel notch on a
+   * standard mouse feels like one button click — anything finer
+   * (originally tried 0.05) felt like "nothing happened" to users
+   * expecting Chrome-page-zoom-sized jumps. The deltaY-magnitude scale
+   * factor keeps trackpads sane: standard wheel notch is |deltaY| ≈ 100
+   * → magnitude 1 (full step per notch); trackpad scrolls are tens per
+   * event but fire many events per gesture → each event a small fraction
+   * of a step, totalling about one step per visible gesture. Capped at 1
+   * so a high-precision device can't blast through the range in one tick.
    */
-  const WHEEL_ZOOM_STEP = 0.05;
+  const WHEEL_ZOOM_STEP = 0.1;
 
   const handleWheelZoom = (ev: WheelEvent): void => {
-    // TEMP DIAG — remove after Chrome-wheel-zoom is verified working in
-    // the browser. Tells us which of four failure modes the user is
-    // hitting: (a) no log = listener doesn't fire, (b) ctrlKey:false on
-    // ctrl-wheel = key not detected, (c) ctrlKey:true but page still
-    // zooms = preventDefault ignored, (d) all logs good = check
-    // SVG reactivity instead.
-    // biome-ignore lint/suspicious/noConsole: temporary diagnostic
-    console.log("[zoom-wheel]", {
-      ctrlKey: ev.ctrlKey,
-      metaKey: ev.metaKey,
-      deltaY: ev.deltaY,
-      targetTag: (ev.target as Element | null)?.tagName,
-      currentTargetClass: (ev.currentTarget as Element | null)?.className,
-      defaultPrevented: ev.defaultPrevented,
-    });
     if (!(ev.ctrlKey || ev.metaKey)) return;
     // Must preventDefault to suppress Chrome's page-zoom default. The
     // listener that fires this MUST be registered with `{ passive: false }`
@@ -1515,10 +1506,9 @@ export const GraphView = () => {
     // `deltaY < 0` is wheel-up / pinch-out → zoom in. Sign matches OS-
     // level zoom shortcuts.
     const direction = ev.deltaY < 0 ? 1 : -1;
+    const magnitude = Math.min(1, Math.abs(ev.deltaY) / 100);
     const current = getViewZoom(spec().id);
-    const next = Math.round((current + direction * WHEEL_ZOOM_STEP) * 100) / 100;
-    // biome-ignore lint/suspicious/noConsole: temporary diagnostic
-    console.log("[zoom-wheel] update", { current, next, specId: spec().id });
+    const next = Math.round((current + direction * WHEEL_ZOOM_STEP * magnitude) * 100) / 100;
     setViewZoom(spec().id, next);
   };
 
@@ -1533,11 +1523,6 @@ export const GraphView = () => {
    * preventDefault lands before any framework / browser handling.
    */
   const attachScrollWrapperRef = (el: HTMLDivElement): void => {
-    // TEMP DIAG — remove with the other [zoom-wheel] logs after browser
-    // verification. Confirms the ref callback fires at all (rules out
-    // ref-not-populated failure mode).
-    // biome-ignore lint/suspicious/noConsole: temporary diagnostic
-    console.log("[zoom-wheel] attach to", el.className, el.tagName);
     scrollWrapperEl = el;
     el.addEventListener("wheel", handleWheelZoom, { passive: false, capture: true });
     onCleanup(() => el.removeEventListener("wheel", handleWheelZoom, { capture: true }));
