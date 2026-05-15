@@ -1758,6 +1758,69 @@ button:disabled {
   border-color: var(--text);
 }
 
+/* Slice 3 (graph-narrative-and-zoom plan) — zoom toolbar group. Sits at
+   the right edge of the toolbar via `margin-left: auto`; the trailing
+   help button has its own `margin-left: auto`, but in a flex row only the
+   FIRST `margin-left: auto` absorbs the free space — subsequent ones
+   collapse — so the help button still packs snugly against the zoom
+   group's right edge. The buttons share the same small chrome as the
+   help button so the toolbar reads as one continuous control surface. */
+.graph-view-zoom {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.graph-view-zoom-button {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.graph-view-zoom-button:hover:not(:disabled) {
+  background: var(--bg);
+  border-color: var(--text);
+}
+
+.graph-view-zoom-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* `[reset]` is wider than `[−]` / `[+]` because it carries a word, not a
+   glyph. The narrower glyph buttons stay at 22px so they line up vertically
+   with the help button + the threshold input. */
+.graph-view-zoom-reset {
+  font-size: 10px;
+  text-transform: lowercase;
+  padding: 0 8px;
+}
+
+.graph-view-zoom-readout {
+  /* Fixed min-width so the readout doesn't jitter the toolbar width as
+     zoom percentage changes characters (50% / 100% / 200% all fit at 38px
+     at 11px). `text-align: center` keeps the percentage visually centered
+     between the [−] and [+] buttons. */
+  min-width: 38px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  color: var(--muted);
+}
+
 /* Slice 11 — help modal body. Inherits the base `.modal` chrome from
    the run-explorer modal styles; the body just needs prose-friendly
    spacing because the inlined Markdown can run several paragraphs. */

@@ -49,7 +49,16 @@ import {
 } from "@/core/graph";
 import { inferShapesAtAnchors, validateShapes } from "@/core/spec-shapes";
 import type { StepNode } from "@/core/types";
-import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
+import {
+  For,
+  Show,
+  createEffect,
+  createMemo,
+  createSignal,
+  on,
+  onCleanup,
+  onMount,
+} from "solid-js";
 import {
   setNodePosition,
   setReplicationMode,
@@ -86,6 +95,16 @@ import {
   useReplicationPanelOpen,
   useReplicationThreshold,
 } from "../stores/view-replication";
+import {
+  VIEW_ZOOM_DEFAULT,
+  VIEW_ZOOM_MAX,
+  VIEW_ZOOM_MIN,
+  getViewZoom,
+  resetViewZoom,
+  setViewZoom,
+  stepViewZoom,
+  useViewZoom,
+} from "../stores/view-zoom";
 import { GraphHelpModal } from "./GraphHelpModal";
 import { STEP_TYPE_DRAG_MIME, StepPalette, useActiveDragStepType } from "./StepPalette";
 
@@ -776,6 +795,32 @@ export const GraphView = () => {
   const replicationPanelOpen = useReplicationPanelOpen();
 
   /**
+   * Per-spec zoom factor for the SVG canvas (Slice 3 of the
+   * graph-narrative-and-zoom plan). Applied by scaling the SVG's rendered
+   * `width`/`height` while keeping `viewBox` fixed at the logical canvas
+   * dimensions — so pinned positions in `LayoutSpec.positions` are stored
+   * in unscaled viewBox units regardless of zoom.
+   *
+   * The drag delta math (below in `startNodeDrag`) divides client-pixel
+   * deltas by `zoom()` to recover viewBox-unit deltas; without that fix,
+   * dragging at 2× zoom would move pins twice as far as the cursor.
+   */
+  const zoom = useViewZoom(() => spec().id);
+
+  /**
+   * Ref to the `.graph-view` scroll wrapper. Used for two things:
+   *   1. Attaching a non-passive `wheel` listener (Ctrl/Meta + wheel ⇒ zoom).
+   *      Solid's `onWheel` JSX prop registers a passive listener in some
+   *      browsers, which makes `preventDefault()` a no-op — so the
+   *      browser's page-scroll fires anyway. Native `addEventListener` with
+   *      `{ passive: false }` is the only way to actually suppress that.
+   *   2. Clearing horizontal scroll on `[reset zoom]` so the user lands
+   *      back at the canvas origin, not at whatever scroll offset they
+   *      had at 2× zoom.
+   */
+  let scrollWrapperEl: HTMLDivElement | undefined;
+
+  /**
    * Size + gap constants for the active density. Memoized so the layout
    * memo below only re-runs on actual density changes (not on every
    * unrelated signal tick that flows through this component). All four
@@ -1406,8 +1451,14 @@ export const GraphView = () => {
         moved = true;
       }
       if (!moved) return;
-      // SVG viewBox is 1:1 with rendered width/height, so client-px delta
-      // maps directly onto SVG-unit delta.
+      // Pre-Slice-3 (no zoom) the SVG viewBox was 1:1 with rendered
+      // width/height, so client-px delta mapped directly onto viewBox-unit
+      // delta. Slice 3 scales rendered width/height by `zoom()` while
+      // keeping the viewBox fixed at logical dimensions, so 1 client pixel
+      // = (1 / zoom) viewBox units. Without dividing the delta here, a
+      // drag at 2× zoom would move the pin twice as far as the cursor —
+      // pins would race ahead of (or fall behind) the user's hand and
+      // get persisted into localStorage at the wrong coordinates.
       //
       // Clamp to (0, 0) so the block can't be dragged off the top or left
       // of the SVG. Negative SVG coordinates fall outside the viewBox and
@@ -1418,8 +1469,9 @@ export const GraphView = () => {
       // drawn area; even when the sticky header (z-index: 1) visually
       // overlays small SVG y values at scrollTop > 0, scrolling the
       // container back to the top always reveals the block.
-      const newX = Math.max(0, startBoxX + dx);
-      const newY = Math.max(0, startBoxY + dy);
+      const z = zoom();
+      const newX = Math.max(0, startBoxX + dx / z);
+      const newY = Math.max(0, startBoxY + dy / z);
       setNodePosition(spec().id, nodeId, newX, newY);
     };
 
@@ -1435,6 +1487,44 @@ export const GraphView = () => {
     window.addEventListener("pointercancel", onUp);
   };
 
+  /**
+   * Wheel handler for ctrl/meta + wheel = zoom (Slice 3). Registered with
+   * `{ passive: false }` via the explicit `addEventListener` below because
+   * Solid's JSX `onWheel` registers a passive listener in some browsers,
+   * which makes `preventDefault()` a no-op and lets the browser's
+   * page-scroll fire alongside our zoom change.
+   *
+   * Step is intentionally finer (0.05) than the toolbar buttons (0.1) so
+   * trackpad pinch / wheel feels smoother — high-precision wheels emit
+   * many small events, and a coarse step would jump in chunks.
+   */
+  const WHEEL_ZOOM_STEP = 0.05;
+
+  onMount(() => {
+    const el = scrollWrapperEl;
+    if (!el) return;
+    const handleWheel = (ev: WheelEvent): void => {
+      if (!(ev.ctrlKey || ev.metaKey)) return;
+      ev.preventDefault();
+      // `deltaY < 0` is wheel-up / pinch-out → zoom in. Sign convention is
+      // the same one OS-level zoom shortcuts use.
+      const direction = ev.deltaY < 0 ? 1 : -1;
+      const current = getViewZoom(spec().id);
+      const next = Math.round((current + direction * WHEEL_ZOOM_STEP) * 100) / 100;
+      setViewZoom(spec().id, next);
+    };
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    onCleanup(() => el.removeEventListener("wheel", handleWheel));
+  });
+
+  /** Click handler for `[reset zoom]`. Clears horizontal scroll too. */
+  const handleResetZoom = (): void => {
+    resetViewZoom(spec().id);
+    if (scrollWrapperEl) {
+      scrollWrapperEl.scrollLeft = 0;
+    }
+  };
+
   return (
     <div class="graph-view-layout" data-testid="graph-view-layout">
       {/* Slice 8 — step palette. Lives as a left sidebar inside the graph
@@ -1444,6 +1534,7 @@ export const GraphView = () => {
           trace signals — the registry it lists is static after module load. */}
       <StepPalette />
       <div
+        ref={scrollWrapperEl}
         class="graph-view"
         classList={{
           "graph-drop-zone-active": dragOverActive(),
@@ -1534,6 +1625,66 @@ export const GraphView = () => {
                 aria-label="Fanout threshold for replication"
               />
             </label>
+            {/* Slice 3 (graph-narrative-and-zoom plan) — zoom controls.
+            `margin-left: auto` on the group pushes the cluster to the right
+            edge alongside the help button; the help button's own
+            `margin-left: auto` then sticks to its right side (CSS flex with
+            multiple `margin-left:auto` children: the first one absorbs all
+            free space, the rest pack normally).
+
+            Buttons step by 0.1; the wheel handler uses 0.05 (finer) so
+            trackpad pinch feels smoother. Range is hard-clamped to
+            [VIEW_ZOOM_MIN, VIEW_ZOOM_MAX] in the store so the disabled
+            states here are purely a UX hint — clicking [+] at MAX is a
+            harmless no-op (the clamp returns MAX). */}
+            {/* No `role="group"` here even though the buttons form one — biome's
+            `useSemanticElements` would push us to a `<fieldset>`, but the
+            zoom controls already live inside the outer
+            `.graph-view-toolbar` `<fieldset>`, and nesting fieldsets is
+            semantically odd. Each button carries its own `aria-label`, so
+            the assistive surface is fine without an outer group element. */}
+            <div
+              class="graph-view-zoom"
+              title="Zoom the graph canvas. Ctrl + mouse wheel also zooms."
+            >
+              <button
+                type="button"
+                class="graph-view-zoom-button"
+                onClick={() => stepViewZoom(spec().id, -1)}
+                disabled={zoom() <= VIEW_ZOOM_MIN}
+                aria-label="Zoom out"
+                title={`Zoom out (min ${Math.round(VIEW_ZOOM_MIN * 100)}%)`}
+              >
+                −
+              </button>
+              <span
+                class="graph-view-zoom-readout"
+                aria-live="polite"
+                data-testid="graph-view-zoom-readout"
+              >
+                {Math.round(zoom() * 100)}%
+              </span>
+              <button
+                type="button"
+                class="graph-view-zoom-button"
+                onClick={() => stepViewZoom(spec().id, 1)}
+                disabled={zoom() >= VIEW_ZOOM_MAX}
+                aria-label="Zoom in"
+                title={`Zoom in (max ${Math.round(VIEW_ZOOM_MAX * 100)}%)`}
+              >
+                +
+              </button>
+              <button
+                type="button"
+                class="graph-view-zoom-button graph-view-zoom-reset"
+                onClick={handleResetZoom}
+                disabled={zoom() === VIEW_ZOOM_DEFAULT}
+                aria-label="Reset zoom"
+                title={`Reset zoom to ${Math.round(VIEW_ZOOM_DEFAULT * 100)}%`}
+              >
+                reset
+              </button>
+            </div>
             {/* Slice 11 — in-app help button. Pushed to the right edge of
             the toolbar via `margin-left: auto` in `.graph-view-help-button`
             so it doesn't visually compete with the density + replicate
@@ -1645,8 +1796,8 @@ export const GraphView = () => {
         >
           <svg
             class="graph-view-svg"
-            width={layout().canvasW}
-            height={layout().canvasH}
+            width={layout().canvasW * zoom()}
+            height={layout().canvasH * zoom()}
             viewBox={`0 0 ${layout().canvasW} ${layout().canvasH}`}
             role="img"
             aria-label="Aux-flow graph of the active cipher spec"
