@@ -2008,6 +2008,23 @@ button:disabled {
      panel out into horizontal scroll territory. Browser wraps the
      value row on the explicit `word-break` rule below. */
   max-width: 720px;
+  /* Reserve enough vertical space for the populated state (identity
+     row + kind badge row + value row) even when the body is empty,
+     so hovering an edge doesn't grow the panel's height and push the
+     SVG canvas down. Without this, the canvas shifts under the
+     cursor, the cursor leaves the edge, the body empties + shrinks,
+     and the canvas shifts back up — re-triggering hover. The user
+     experiences this as a flicker / cycle where the inspector keeps
+     populating and depopulating as the SVG bounces.
+     Height calc: identity (~18 px) + kind (~18 px) + value (~30 px,
+     enough for the 32-char round-key hex on one line) + 2× 4 px gap
+     = ~76 px. Round up to 84 px for a small visual buffer. */
+  min-height: 84px;
+  /* Cap the max so an extra-long value (e.g. `output-blocks` as a
+     6-block matrix array) doesn't grow the panel arbitrarily; the
+     value row scrolls internally past this height. */
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 .graph-edge-inspector-empty {
