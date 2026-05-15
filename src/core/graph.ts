@@ -39,18 +39,21 @@
  *      id as the participant: the iterate node itself becomes a node-like
  *      participant in the edge list.
  *
- *   3. **Iterate breaks the state thread.** State edges connect DFS-
- *      consecutive leaves WITHIN a single iterate-scope; groups are
- *      transparent (DFS through), iterates are opaque (their body is its
- *      own scope, no spine edge crosses the boundary in either direction).
- *      This matches runtime semantics — the iterate replaces `state` with
- *      `blocks[i]` per iteration and accumulates output into
- *      `aux[outBlocksAux]` rather than leaving it on `state`, so a state
- *      edge crossing the iterate boundary would be misleading. The runtime
- *      always passes a real state value at the boundary, but it's not the
- *      previous step's output state — the aux edges (blocks-in /
- *      output-blocks-out) are the honest depiction of the per-block data
- *      handoff, and the state spine should not double them.
+ *   3. **Iterate is a scope boundary the parent spine BRIDGES OVER.**
+ *      State edges connect DFS-consecutive leaves at the same scope;
+ *      groups are transparent (DFS through), iterates split scopes (their
+ *      body becomes its own per-iteration chain) BUT the parent chain
+ *      bridges over the iterate's position with a single state edge from
+ *      the leaf-before to the leaf-after. The runtime semantically
+ *      replaces `state` with `blocks[i]` per iteration, so the bridge
+ *      edge is a pedagogical aid rather than a literal description of
+ *      memory contents — the aux edges (blocks-in / output-blocks-out)
+ *      remain the honest depiction of the per-block data handoff, and
+ *      the bridge complements them by keeping the visible white spine
+ *      continuous from plaintext to ciphertext on the canvas. See the
+ *      `inferStateEdges` function-level docstring for the design
+ *      decision (overrode the prior "iterate is opaque" policy after
+ *      Slice 6 made the visual severance unmistakable).
  *
  *      **Feistel future**: when a Feistel-style cipher with branching
  *      state lands, the "DFS-consecutive leaves share state" assumption
@@ -394,14 +397,36 @@ const STATE_AUX_KEY = "state";
  *     step on it appeared to "do nothing" because the empty round was
  *     visually disconnected from the chain. The full transparent-group
  *     semantics return as soon as the user adds any leaf back.
- *   - **Iterates are opaque boundaries.** Hitting one FLUSHES the parent
- *     scope's accumulated leaf chain (emitting whatever edges exist so
- *     far) and recurses into the iterate body as its OWN scope. After the
- *     iterate, the parent scope resumes with a fresh empty leaf chain — no
- *     state edge bridges the iterate in either direction. See item 3 in
- *     the file header for why. An iterate inside a group's subtree makes
- *     that group NON-empty for spine purposes, because the iterate
- *     represents real (just opaque) content the user can see.
+ *   - **Iterates are scope boundaries that the parent spine BRIDGES OVER.**
+ *     The iterate's body becomes its own scope (per-iteration spine emitted
+ *     by recursing into the body), AND the parent scope's chain continues
+ *     uninterrupted across the iterate position. Concretely: in
+ *     `[A, B, iter, C, D]` at root scope, the parent chain accumulates
+ *     `[A, B, C, D]` and emits `A→B`, `B→C` (the BRIDGE edge over the
+ *     iterate), `C→D`. An iterate inside a group's subtree makes that
+ *     group NON-empty for spine purposes, because the iterate represents
+ *     real (just opaque) content the user can see.
+ *
+ *     Why bridge instead of flushing (the prior policy): without a bridge
+ *     edge the white spine visibly severs at the iterate's location on
+ *     the canvas, leaving the eye to guess the dataflow continues — and
+ *     after Slice 6 (`expandCollapsedIterates` replaces a collapsed iterate
+ *     with N parallel block-chips), the iterate's own chip is GONE so even
+ *     the visual proxy disappears. The bridge edge connects the leaves
+ *     either side of the iterate directly, so the spine reads "data
+ *     enters here, the iterate happens, data emerges there." The iterate's
+ *     id is deliberately NOT pushed into the parent's leaf chain — that
+ *     would make every block-chip post-Slice-6 a state-spine participant
+ *     and falsely suggest the chips chain into one another, when in fact
+ *     they're parallel iterations of the body.
+ *
+ *     The original "no bridge" rationale (item 3 in the file header) noted
+ *     that the runtime's state value at the iterate boundary isn't the
+ *     previous step's output (it's `blocks[i]` per iteration). True — but
+ *     the visual spine has always been a pedagogical aid, not a literal
+ *     description of memory contents. The bridge gives the user the
+ *     correct dataflow story without changing the underlying aux edges
+ *     (which still honestly depict the per-block handoff).
  *
  * The function reads only `spec`, never the trace. State edges therefore
  * appear on the structural skeleton before any run, while aux edges remain
@@ -439,13 +464,13 @@ const inferStateEdges = (spec: CipherSpec): GraphEdge[] => {
 
   /**
    * Process one iterate-scope: collect its DFS leaves into a single chain
-   * (recursing through filled groups, halting at iterates, treating empty
-   * groups as spine nodes), and recurse into each iterate body as its own
-   * scope. Returns after emitting all edges generated by this scope and
-   * its nested iterate scopes.
+   * (recursing through filled groups, treating empty groups as spine
+   * nodes, BRIDGING OVER iterates without breaking the chain), and recurse
+   * into each iterate body as its own scope. Returns after emitting all
+   * edges generated by this scope and its nested iterate scopes.
    */
   const processScope = (siblings: readonly StepNode[]): void => {
-    let leaves: string[] = [];
+    const leaves: string[] = [];
     const walk = (nodes: readonly StepNode[]): void => {
       for (const node of nodes) {
         if (node.kind === "step") {
@@ -462,10 +487,14 @@ const inferStateEdges = (spec: CipherSpec): GraphEdge[] => {
             leaves.push(node.id);
           }
         } else {
-          // Iterate is opaque — flush the chain so far, then recurse with
-          // the body as its own scope. The parent chain resumes empty.
-          emitChain(leaves);
-          leaves = [];
+          // Iterate boundary — recurse into the body as its own scope
+          // (the per-iteration spine is a separate chain), and let the
+          // parent chain BRIDGE OVER the iterate's position. The
+          // iterate's id is deliberately NOT pushed: the bridge edge
+          // connects the leaf BEFORE to the leaf AFTER directly, so
+          // the post-Slice-6 block chips don't get pulled onto the
+          // state spine. See the function-level docstring for the
+          // pedagogical rationale.
           processScope(node.children);
         }
       }

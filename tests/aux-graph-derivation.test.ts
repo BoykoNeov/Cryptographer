@@ -362,13 +362,15 @@ describe("deriveAuxGraph — empty trace", () => {
     // headline pedagogical benefit of commit 2 is that the spine is visible
     // BEFORE the first run, so the user sees what the cipher "does" up front.
     // AES-128-ECB spine count:
-    //   - top-scope pre-iterate: 3 leaves → 2 state edges
+    //   - top-scope: 4 leaves bridged across the iterate (key-expansion,
+    //     split-blocks, compute-block-count, [iterate bridge], concat-blocks)
+    //     → 3 state edges including the BRIDGE edge `compute-block-count
+    //     → concat-blocks` that visually walks the spine over the iterate.
     //   - iterate body (initial AK + 9 full rounds + 1 final round = 40 leaves)
     //     → 39 state edges
-    //   - top-scope post-iterate: 1 leaf (concat-blocks) → 0 state edges
-    //   - total: 2 + 39 + 0 = 41 state edges
+    //   - total: 3 + 39 = 42 state edges
     const stateEdges = g.edges.filter((e) => e.kind === "state");
-    expect(stateEdges.length).toBe(41);
+    expect(stateEdges.length).toBe(42);
   });
 });
 
@@ -414,12 +416,13 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
     expect(lastEdge).toBeDefined();
   });
 
-  it("AES-128-ECB: spine breaks at the iterate boundary (no edge crosses in either direction)", () => {
+  it("AES-128-ECB: spine bridges the iterate (compute-block-count → concat-blocks)", () => {
     const g = deriveAuxGraph(runAes128Ecb(), aes128EcbSpec);
     const stateEdges = g.edges.filter((e) => e.kind === "state");
 
-    // Top-scope pre-iterate: 3 leaves (key-expansion, split-blocks,
-    // compute-block-count) → 2 state edges in one chain.
+    // Top scope: 4 leaves bridged across the iterate (key-expansion,
+    // split-blocks, compute-block-count, [iterate bridge], concat-blocks)
+    // → 3 state edges in one chain.
     expect(
       stateEdges.find((e) => e.from === "key-expansion" && e.to === "split-blocks"),
     ).toBeDefined();
@@ -436,29 +439,32 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
       stateEdges.find((e) => e.from === "round.5.add-round-key" && e.to === "round.6.sub-bytes"),
     ).toBeDefined();
 
-    // The headline boundary checks: NO state edge bridges the iterate
-    // boundary in either direction. The iterate replaces `state` with
-    // `blocks[i]` per iteration and accumulates output into
-    // `aux[outBlocksAux]` — the aux edges already capture that handoff
-    // honestly, so the state spine MUST NOT double them.
-    const crossesIn = stateEdges.find(
-      (e) => e.from === "compute-block-count" && e.to === "initial.add-round-key",
-    );
-    expect(crossesIn).toBeUndefined();
-    const crossesOut = stateEdges.find(
-      (e) => e.from === "round.10.add-round-key" && e.to === "concat-blocks",
-    );
-    expect(crossesOut).toBeUndefined();
-    // Spine MUST NOT silently skip over the iterate either (compute-block-
-    // count is the last pre-iterate leaf and concat-blocks the only post;
-    // a naive impl that ignored iterates entirely would emit this edge).
-    const skipsIterate = stateEdges.find(
+    // The bridge edge — the headline behavior change. The iterate's id
+    // is NOT in the chain (so post-Slice-6 block chips don't pick up
+    // state-spine edges), but the parent chain still reads continuously
+    // from compute-block-count straight to concat-blocks, so the white
+    // spine on the canvas reads "data enters here, the iterate happens,
+    // data emerges there." Without this edge the spine visibly severs
+    // — see `inferStateEdges`' rationale.
+    const bridge = stateEdges.find(
       (e) => e.from === "compute-block-count" && e.to === "concat-blocks",
     );
-    expect(skipsIterate).toBeUndefined();
+    expect(bridge).toBeDefined();
 
-    // Total: 2 (pre) + 39 (body) + 0 (post, concat-blocks is alone) = 41.
-    expect(stateEdges.length).toBe(41);
+    // The bridge does NOT spell out the per-iteration body — those edges
+    // live in their own scope (the body chain emitted by recursing into
+    // the iterate). State edges that would naively imply state PASSES
+    // through the iterate's own runtime contract (state replaced by
+    // blocks[i]) MUST NOT exist:
+    expect(
+      stateEdges.find((e) => e.from === "compute-block-count" && e.to === "initial.add-round-key"),
+    ).toBeUndefined();
+    expect(
+      stateEdges.find((e) => e.from === "round.10.add-round-key" && e.to === "concat-blocks"),
+    ).toBeUndefined();
+
+    // Total: 3 (top scope, including bridge) + 39 (body) = 42.
+    expect(stateEdges.length).toBe(42);
   });
 
   it("Speck32/64 (flat, no groups, no iterates): 22 state edges across 23 leaves", () => {
@@ -708,27 +714,32 @@ describe("collapseGraph — view-time transform", () => {
   });
 
   it("collapses an iterate container's state spine (AES-128-ECB → ecb-blocks)", () => {
-    // Pre-collapse: AES-128-ECB has 41 state edges:
-    //   - top scope pre-iterate: 2 (KE → split, split → count)
+    // Pre-collapse: AES-128-ECB has 42 state edges:
+    //   - top scope: 3 (KE → split, split → count, count → concat — the
+    //     last is the BRIDGE edge over the iterate)
     //   - iterate body scope: 39 (40 leaves → 39 in one chain)
-    //   - top scope post-iterate: 0 (concat-blocks alone)
     // Collapsing the iterate hides all 40 body leaves, so all 39 body
     // state edges remap both endpoints to "ecb-blocks" and become
-    // self-loops → dropped. The 2 pre-iterate edges survive untouched
-    // (their endpoints are outside the iterate). 41 − 39 = 2.
+    // self-loops → dropped. The 3 top-scope edges survive untouched
+    // (their endpoints are all outside the iterate, including the
+    // bridge — which is exactly its job). 42 − 39 = 3.
     const g = deriveAuxGraph(runAes128Ecb(), aes128EcbSpec);
     const stateBefore = g.edges.filter((e) => e.kind === "state");
-    expect(stateBefore.length).toBe(41);
+    expect(stateBefore.length).toBe(42);
 
     const out = collapseGraph(g, new Set(["ecb-blocks"]));
     const stateAfter = out.edges.filter((e) => e.kind === "state");
-    expect(stateAfter.length).toBe(2);
-    // The two surviving spine edges are the pre-iterate pair.
+    expect(stateAfter.length).toBe(3);
+    // The three surviving spine edges are the top-scope chain including
+    // the bridge.
     expect(
       stateAfter.find((e) => e.from === "key-expansion" && e.to === "split-blocks"),
     ).toBeDefined();
     expect(
       stateAfter.find((e) => e.from === "split-blocks" && e.to === "compute-block-count"),
+    ).toBeDefined();
+    expect(
+      stateAfter.find((e) => e.from === "compute-block-count" && e.to === "concat-blocks"),
     ).toBeDefined();
     // No state self-loop on the iterate container.
     for (const e of stateAfter) {
