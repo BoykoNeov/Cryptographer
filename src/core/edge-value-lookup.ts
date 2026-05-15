@@ -99,6 +99,12 @@ const BLOCK_CHIP_RE = /^(.+)@block(\d+)$/;
  *  so we can't resolve a single per-block value for it. The lookup returns
  *  a `"missing"` with a descriptive reason in this case. */
 const BLOCK_MORE_SUFFIX = "@blockMore";
+/** Delimiter used in fan-out replica node ids. Replicas have ids of the
+ *  form `${sourceId}@->${consumerId}` produced by
+ *  `replicateHighFanoutSources`. The delimiter is intentionally
+ *  unmistakable (no real stepId contains `@->`), so we can detect and
+ *  unwrap by string-search. */
+const REPLICA_DELIM = "@->";
 
 /** Parsed chip-id structure when the input is a recognized chip. */
 type ChipId = { readonly iterateId: string; readonly blockIndex: number };
@@ -109,9 +115,20 @@ type ChipId = { readonly iterateId: string; readonly blockIndex: number };
  * Specifically returns `null` for the `@blockMore` ellipsis sentinel —
  * callers fall through to the "missing" path so the panel can say
  * "ellipsis chip represents multiple blocks; pick a numbered chip."
+ *
+ * Replica-id rejection is critical: a replica id like
+ * `key-expansion@->ecb-blocks@block1` ends in `@block1`, so the
+ * (otherwise greedy) regex would WRONGLY match it as a chip with
+ * `iterateId === "key-expansion@->ecb-blocks"`. That id isn't in
+ * the spec, so the chip branch would return
+ * `"iterate ... not found in spec — graph and spec out of sync"`.
+ * Detecting `@->` early keeps replica ids out of the chip branch
+ * entirely; the caller's regular-aux branches then handle them
+ * correctly via producer-side fallback.
  */
 const parseChipId = (id: string): ChipId | null => {
   if (id.endsWith(BLOCK_MORE_SUFFIX)) return null;
+  if (id.includes(REPLICA_DELIM)) return null;
   const m = BLOCK_CHIP_RE.exec(id);
   if (!m) return null;
   const iterateId = m[1] ?? "";
@@ -119,6 +136,19 @@ const parseChipId = (id: string): ChipId | null => {
   const blockIndex = Number.parseInt(idxStr, 10);
   if (!Number.isFinite(blockIndex) || blockIndex < 0) return null;
   return { iterateId, blockIndex };
+};
+
+/**
+ * Unwrap a replica node id to its underlying source stepId. Replicas
+ * are synthetic graph nodes (no trace frame), so any lookup that
+ * needs to walk back to a real producer must call this first.
+ *
+ * Returns the input unchanged for non-replica ids, so it's safe to
+ * call unconditionally on any edge.from.
+ */
+const unwrapReplicaSource = (id: string): string => {
+  const idx = id.indexOf(REPLICA_DELIM);
+  return idx >= 0 ? id.substring(0, idx) : id;
 };
 
 /** Recursively search a spec tree for an IterateGroup by id. */
@@ -384,6 +414,27 @@ const lookupChipIncoming = (
       };
     }
   }
+  // No body frame read the aux. Canonical case: a fan-out replica of
+  // a root-level aux producer (e.g. compute-block-count) targeted a
+  // chip — the runtime's iterate consumes the aux at the iterate
+  // level, NOT inside any body step's auxRead. The producer DID write
+  // the value into its own auxWritten, so unwrap any replica id and
+  // resolve through the producer side. Stamp blockIndex with the
+  // chip's index so the panel still labels "(block i)" correctly.
+  const producerStepId = unwrapReplicaSource(edge.from);
+  const producer = findProducerFrame(trace, producerStepId, undefined);
+  if (producer !== null) {
+    const v = producer.auxWritten.get(edge.auxKey);
+    if (v !== undefined) {
+      return {
+        status: "value",
+        value: v,
+        displayKind: "aux",
+        auxKey: edge.auxKey,
+        blockIndex,
+      };
+    }
+  }
   return {
     status: "missing",
     reason: `no body frame at block ${blockIndex} read aux "${edge.auxKey}"`,
@@ -472,7 +523,13 @@ const lookupAuxFromProducer = (
   trace: Trace,
   currentBlockIndex: number | undefined,
 ): EdgeValueLookup | null => {
-  const producer = findProducerFrame(trace, edge.from, currentBlockIndex);
+  // Unwrap replica ids (`${src}@->${consumer}`) — the synthetic
+  // replica node has no trace frame, but the underlying source step
+  // does. Replicas are visual duplicates of an aux flow; the value
+  // along the replica's outgoing edge is identical to what the source
+  // wrote into auxWritten.
+  const producerStepId = unwrapReplicaSource(edge.from);
+  const producer = findProducerFrame(trace, producerStepId, currentBlockIndex);
   if (producer === null) return null;
   const v = producer.auxWritten.get(edge.auxKey);
   if (v === undefined) return null;

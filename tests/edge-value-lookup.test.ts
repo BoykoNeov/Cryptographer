@@ -208,6 +208,97 @@ describe("lookupEdgeValue — regular aux edges", () => {
   });
 });
 
+// ─── Replica edges (post-Slice-7c, after fan-out replication) ───────────
+//
+// `replicateHighFanoutSources` produces synthetic node ids of the form
+// `${sourceId}@->${consumerId}`. When the consumer is a block CHIP,
+// the replica id ends with `@block<N>` — e.g.
+// `key-expansion@->ecb-blocks@block1`. The chip-id regex
+// `/^(.+)@block(\d+)$/` greedily matches such ids, so without an
+// explicit `@->` reject parseChipId would WRONGLY identify the replica
+// as a chip with iterateId === `key-expansion@->ecb-blocks` (which
+// isn't in the spec) and the inspector would show
+// "iterate ... not found in spec — graph and spec out of sync".
+//
+// These tests pin the post-fix behavior:
+//   - Replica → chip with a body-consumed aux key (roundKey.5)
+//     resolves via lookupChipIncoming's body-frame walk.
+//   - Replica → chip with an iterate-consumed aux key (blockCount,
+//     input-blocks) resolves via lookupChipIncoming's NEW
+//     producer-side fallback.
+//   - Replica → iterate-container resolves via lookupRegularAux's
+//     producer-side fallback (the existing Slice-7c-day-of fix; the
+//     unwrap-replica part is what makes it work for replica producers).
+
+describe("lookupEdgeValue — replica → chip edges (post-7c bug fix)", () => {
+  it("replica of key-expansion → chip resolves to the body-read round key", () => {
+    const trace = runAes128Ecb();
+    // Replica id: `${sourceId}@->${consumerId}` where consumer is the
+    // chip itself. The auxKey is whatever the body step inside the
+    // iterate reads — here roundKey.5 (consumed by round.5.add-round-key).
+    const edge = auxEdge("key-expansion@->ecb-blocks@block2", "ecb-blocks@block2", "roundKey.5");
+    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, undefined);
+    expect(out.status).toBe("value");
+    if (out.status !== "value") return;
+    expect(out.displayKind).toBe("aux");
+    expect(out.auxKey).toBe("roundKey.5");
+    expect(out.blockIndex).toBe(2);
+    expect(out.value).toBeInstanceOf(Uint8Array);
+    expect(out.value as Uint8Array).toHaveLength(16);
+  });
+
+  it("replica of compute-block-count → chip resolves to blockCount via producer-side fallback", () => {
+    const trace = runAes128Ecb();
+    // The runtime reads blockCount at the iterate level — no body
+    // frame's auxRead has it. Without producer-side fallback the
+    // chip-incoming branch returns "no body frame ... read aux blockCount".
+    const edge = auxEdge(
+      "compute-block-count@->ecb-blocks@block0",
+      "ecb-blocks@block0",
+      "blockCount",
+    );
+    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, undefined);
+    expect(out.status).toBe("value");
+    if (out.status !== "value") return;
+    expect(out.displayKind).toBe("aux");
+    expect(out.auxKey).toBe("blockCount");
+    expect(out.blockIndex).toBe(0);
+    expect(out.value).toBe(4);
+  });
+
+  it("replica of split-blocks → chip resolves via the iterate.blocksFromAux slice (NOT producer fallback)", () => {
+    const trace = runAes128Ecb();
+    // split-blocks's outBlocksAux === iterate.blocksFromAux === "input-blocks",
+    // so the lookupChipIncoming.aux branch's blocksFromAux special-case
+    // already slices to blocks[i] from the body frame's stateBefore.
+    // Producer-side fallback is unnecessary but the replica-id reject
+    // is what makes the dispatch reach this branch at all.
+    const edge = auxEdge("split-blocks@->ecb-blocks@block3", "ecb-blocks@block3", "input-blocks");
+    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, undefined);
+    expect(out.status).toBe("value");
+    if (out.status !== "value") return;
+    expect(out.displayKind).toBe("block-payload");
+    expect(out.blockIndex).toBe(3);
+    expect(out.value).toMatchObject({ shape: "matrix4x4-bytes" });
+    // Block 3 in `ECB_PLAINTEXT_4_BLOCKS` (4th 16-byte block).
+    const expected = bytesFromHex("f69f2445df4f9b17ad2b417be66c3710");
+    expect((out.value as MatrixState).bytes).toEqual(expected);
+  });
+
+  it("replica → iterate-container resolves via regular-aux producer-side fallback (replica unwrap)", () => {
+    const trace = runAes128Ecb();
+    // Replica targets the iterate container (un-collapsed iterate
+    // case). Without the unwrap inside lookupAuxFromProducer, the
+    // findProducerFrame call would search for a frame whose stepId is
+    // the synthetic replica id and find nothing.
+    const edge = auxEdge("compute-block-count@->ecb-blocks", "ecb-blocks", "blockCount");
+    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, undefined);
+    expect(out.status).toBe("value");
+    if (out.status !== "value") return;
+    expect(out.value).toBe(4);
+  });
+});
+
 describe("lookupEdgeValue — regular state edges", () => {
   it("returns the producer's stateAfter for a regular state edge", () => {
     const trace = runAes128Ecb();
