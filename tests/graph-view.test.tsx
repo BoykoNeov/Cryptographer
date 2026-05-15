@@ -259,7 +259,9 @@ describe("GraphView — component-level (AES-128 fixture)", () => {
 
     it("endpoint pills have no drop-anchor and no delete glyph", () => {
       // Endpoints aren't editable: they aren't spec nodes, you can't drop
-      // a palette step on them, and you can't delete them.
+      // a palette step on them, and you can't delete them. They DO carry
+      // `tabindex=0` so the value-inspector click action is keyboard-
+      // reachable, but no drag/drop/delete affordance.
       const { container } = render(() => <GraphView />);
 
       const pills = container.querySelectorAll(".graph-endpoint-pill");
@@ -273,8 +275,10 @@ describe("GraphView — component-level (AES-128 fixture)", () => {
         // No delete glyph (LeafRect renders `.graph-delete-glyph`; the
         // endpoint pill component doesn't).
         expect(pill.querySelector(".graph-delete-glyph")).toBeNull();
-        // Not in the tab order.
-        expect(pill.hasAttribute("tabindex")).toBe(false);
+        // `tabindex="0"` for the value-inspector click affordance — the
+        // pill IS keyboard-reachable post-Slice 4 expansion, just not
+        // for any spec-edit action.
+        expect(pill.getAttribute("tabindex")).toBe("0");
       }
     });
   });

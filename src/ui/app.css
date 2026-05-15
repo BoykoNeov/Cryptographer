@@ -2300,15 +2300,54 @@ button:disabled {
   stroke-opacity: 0.95;
 }
 
-/* Slice 4 — pinned edge highlight. Wraps a wide, partially-transparent
-   stroke around the edge so the user can spot the pinned target at a
-   glance even when zoomed out. Composes with the kind-specific styles
-   above (the regular stroke still draws on top, so the edge's color
-   isn't swallowed by the halo). */
+/* Selected edge halo. Wraps a wide, partially-transparent stroke around
+   the edge so the user can spot the inspected target at a glance even
+   when zoomed out. Composes with the kind-specific styles above (the
+   regular stroke still draws on top, so the edge's color isn't
+   swallowed by the halo). */
 .graph-edge-selected {
   stroke-width: 4;
   stroke-opacity: 1;
   filter: drop-shadow(0 0 4px var(--accent));
+}
+
+/* Selected leaf halo. Mirrors the edge halo so the user sees the same
+   visual language regardless of which surface they clicked. Applied to
+   the wrapping <g>, which then propagates the drop-shadow filter to
+   every painted child (rect + label + warning glyph). The class lives
+   on the group rather than directly on `.graph-leaf-rect` because we
+   want the halo to wrap the entire leaf composition, not just the
+   rectangle. Block chips use the same class — they render through
+   LeafRect via the standard For-loop branch. */
+.graph-leaf-selected {
+  filter: drop-shadow(0 0 4px var(--accent));
+}
+.graph-leaf-selected .graph-leaf-rect {
+  stroke-width: 2;
+  stroke: var(--accent);
+}
+
+/* Selected endpoint pill halo. Same visual language as edges/leaves,
+   applied at the <g> wrapper so the rounded rect + label both pick up
+   the glow. */
+.graph-endpoint-selected {
+  filter: drop-shadow(0 0 4px var(--accent));
+}
+.graph-endpoint-selected .graph-endpoint-rect {
+  stroke-width: 2;
+  stroke: var(--accent);
+}
+
+/* Endpoint pill click affordance — cursor + focus ring. The pill has no
+   scrub action; click only toggles the value-inspector selection, so we
+   want the click-hint visible without the heavier "draggable" treatment
+   the leaves use. */
+.graph-endpoint-pill {
+  cursor: pointer;
+}
+.graph-endpoint-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* Wide invisible hit-path companion. Drawn beside the visible

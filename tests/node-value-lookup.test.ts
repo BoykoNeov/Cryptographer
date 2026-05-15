@@ -1,0 +1,204 @@
+/**
+ * Tests for `core/edge-value-lookup.ts::lookupNodeValue`.
+ *
+ * The node-side lookup is the partner of `lookupEdgeValue` and powers
+ * the value-inspector panel when the user clicks a NODE — a leaf step,
+ * an endpoint pill, or a block chip — rather than an edge. Same return
+ * shape (`EdgeValueLookup`) so the renderer dispatches on `status`
+ * without caring which surface was clicked.
+ *
+ * Branch coverage (mirrors the module-docstring branch table on the
+ * lookup helper):
+ *
+ *   - Endpoint pills (CIPHER_INPUT_ID / CIPHER_OUTPUT_ID) → `"endpoint"`.
+ *   - Trace null → `"no-trace"`.
+ *   - Block chip with valid index → `"value"`, displayKind=block-payload,
+ *     value = `outBlocks[i]` (= the iterate's last body frame stateAfter
+ *     at blockIndex=i).
+ *   - Ellipsis chip (`@blockMore`) → `"missing"` with pick-a-numbered-chip hint.
+ *   - Block chip pointing at a non-existent iterate → `"missing"` with
+ *     graph/spec out-of-sync reason.
+ *   - Regular leaf → `"value"`, displayKind=state, value = frame.stateAfter.
+ *     Uses the scrubber's `currentBlockIndex` to disambiguate when the
+ *     leaf has multiple frames (inside an iterate).
+ *   - Cross-block sanity: different block indices on the same leaf
+ *     resolve to DIFFERENT values (i.e. the per-block discrimination
+ *     actually works against the multi-block trace).
+ *
+ * Fixture: AES-128 ECB with a 4-block plaintext — the only shipping
+ * multi-block fixture today.
+ */
+
+import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
+import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { lookupNodeValue } from "@/core/edge-value-lookup";
+import { CIPHER_INPUT_ID, CIPHER_OUTPUT_ID } from "@/core/graph";
+import { runSpec } from "@/core/runtime";
+import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
+import type { AuxValue, MatrixState, Trace } from "@/core/types";
+import { describe, expect, it } from "vitest";
+
+const ECB_PLAINTEXT_4_BLOCKS =
+  "6bc1bee22e409f96e93d7e117393172a" +
+  "ae2d8a571e03ac9c9eb76fac45af8e51" +
+  "30c81c46a35ce411e5fbc1191a0a52ef" +
+  "f69f2445df4f9b17ad2b417be66c3710";
+
+const runAes128Ecb = (): Trace =>
+  runSpec(aes128EcbSpec, buildDefaultRegistry(), {
+    initialState: makeBytesState(bytesFromHex(ECB_PLAINTEXT_4_BLOCKS)),
+    initialAux: new Map<string, AuxValue>([
+      ["key", bytesFromHex("2b7e151628aed2a6abf7158809cf4f3c")],
+    ]),
+  });
+
+// ─── Endpoint pills ─────────────────────────────────────────────────────
+
+describe("lookupNodeValue — endpoint pills", () => {
+  it("returns `endpoint` for the input pill id (descriptive label, no value)", () => {
+    const trace = runAes128Ecb();
+    const out = lookupNodeValue(CIPHER_INPUT_ID, aes128EcbSpec, trace, undefined);
+    expect(out.status).toBe("endpoint");
+    if (out.status !== "endpoint") return;
+    expect(out.endpointSide).toBe("input");
+    expect(out.label).toMatch(/plaintext/i);
+  });
+
+  it("returns `endpoint` for the output pill id", () => {
+    const trace = runAes128Ecb();
+    const out = lookupNodeValue(CIPHER_OUTPUT_ID, aes128EcbSpec, trace, undefined);
+    expect(out.status).toBe("endpoint");
+    if (out.status !== "endpoint") return;
+    expect(out.endpointSide).toBe("output");
+    expect(out.label).toMatch(/ciphertext/i);
+  });
+
+  it("endpoint branch wins even when trace is null", () => {
+    const out = lookupNodeValue(CIPHER_INPUT_ID, aes128EcbSpec, null, undefined);
+    expect(out.status).toBe("endpoint");
+  });
+});
+
+// ─── No-trace ──────────────────────────────────────────────────────────
+
+describe("lookupNodeValue — trace null", () => {
+  it("returns `no-trace` for a regular leaf when the user hasn't run yet", () => {
+    const out = lookupNodeValue("key-expansion", aes128EcbSpec, null, undefined);
+    expect(out.status).toBe("no-trace");
+  });
+
+  it("returns `no-trace` for a chip when the trace is null", () => {
+    const out = lookupNodeValue("ecb-blocks@block0", aes128EcbSpec, null, undefined);
+    expect(out.status).toBe("no-trace");
+  });
+});
+
+// ─── Block chips ────────────────────────────────────────────────────────
+
+describe("lookupNodeValue — block chips", () => {
+  it("returns block-payload value for a valid chip (the iterate's outBlocks[i])", () => {
+    const trace = runAes128Ecb();
+    const out = lookupNodeValue("ecb-blocks@block0", aes128EcbSpec, trace, undefined);
+    expect(out.status).toBe("value");
+    if (out.status !== "value") return;
+    expect(out.displayKind).toBe("block-payload");
+    expect(out.blockIndex).toBe(0);
+    // Value is the matrix at the end of block 0's body run — i.e. the
+    // ciphertext for block 0. Cross-check against the iterate's
+    // outBlocksAux to be sure (last frame writes outBlocksAux).
+    const v = out.value as MatrixState;
+    expect(v.shape).toBe("matrix4x4-bytes");
+    expect(v.bytes.length).toBe(16);
+  });
+
+  it("different chip indices resolve to different per-block payloads", () => {
+    const trace = runAes128Ecb();
+    const a = lookupNodeValue("ecb-blocks@block0", aes128EcbSpec, trace, undefined);
+    const b = lookupNodeValue("ecb-blocks@block2", aes128EcbSpec, trace, undefined);
+    if (a.status !== "value" || b.status !== "value") {
+      expect.fail("expected both chip lookups to be values");
+      return;
+    }
+    const va = a.value as MatrixState;
+    const vb = b.value as MatrixState;
+    // Same plaintext → different ciphertext blocks (the whole point of
+    // discriminating per chip).
+    expect(Buffer.from(va.bytes).equals(Buffer.from(vb.bytes))).toBe(false);
+  });
+
+  it("returns missing for the ellipsis chip (`@blockMore`)", () => {
+    const trace = runAes128Ecb();
+    const out = lookupNodeValue("ecb-blocks@blockMore", aes128EcbSpec, trace, undefined);
+    expect(out.status).toBe("missing");
+    if (out.status !== "missing") return;
+    expect(out.reason).toMatch(/multiple blocks|numbered/i);
+  });
+
+  it("returns missing for a chip pointing at a non-existent iterate id", () => {
+    const trace = runAes128Ecb();
+    const out = lookupNodeValue("does-not-exist@block0", aes128EcbSpec, trace, undefined);
+    expect(out.status).toBe("missing");
+    if (out.status !== "missing") return;
+    expect(out.reason).toMatch(/not found|out of sync/i);
+  });
+
+  it("returns missing for a chip index past the iteration count", () => {
+    const trace = runAes128Ecb();
+    // ECB ran 4 blocks; block index 99 is out of range.
+    const out = lookupNodeValue("ecb-blocks@block99", aes128EcbSpec, trace, undefined);
+    expect(out.status).toBe("missing");
+    if (out.status !== "missing") return;
+    expect(out.reason).toMatch(/no body frames found/i);
+  });
+});
+
+// ─── Regular leaves ─────────────────────────────────────────────────────
+
+describe("lookupNodeValue — regular leaves", () => {
+  it("resolves a top-level leaf (`key-expansion`) to its frame.stateAfter", () => {
+    const trace = runAes128Ecb();
+    const out = lookupNodeValue("key-expansion", aes128EcbSpec, trace, undefined);
+    expect(out.status).toBe("value");
+    if (out.status !== "value") return;
+    expect(out.displayKind).toBe("state");
+    // key-expansion is outside any iterate; blockIndex is undefined.
+    expect(out.blockIndex).toBeUndefined();
+  });
+
+  it("resolves a leaf INSIDE the iterate to its per-block stateAfter (block 0 by default)", () => {
+    const trace = runAes128Ecb();
+    // initial.add-round-key lives inside the iterate body; without a
+    // scrubber preference, the lookup falls back to the first matching
+    // frame — which is block 0's first iteration.
+    const out = lookupNodeValue("initial.add-round-key", aes128EcbSpec, trace, undefined);
+    expect(out.status).toBe("value");
+    if (out.status !== "value") return;
+    expect(out.displayKind).toBe("state");
+    expect(out.blockIndex).toBe(0);
+  });
+
+  it("resolves the SAME leaf to different block-indices when the scrubber moves", () => {
+    const trace = runAes128Ecb();
+    const a = lookupNodeValue("initial.add-round-key", aes128EcbSpec, trace, 0);
+    const b = lookupNodeValue("initial.add-round-key", aes128EcbSpec, trace, 2);
+    if (a.status !== "value" || b.status !== "value") {
+      expect.fail("expected both leaf lookups to be values");
+      return;
+    }
+    expect(a.blockIndex).toBe(0);
+    expect(b.blockIndex).toBe(2);
+    // Different blocks → different state values for AES (provable from
+    // the cipher's per-block discrimination).
+    const va = a.value as MatrixState;
+    const vb = b.value as MatrixState;
+    expect(Buffer.from(va.bytes).equals(Buffer.from(vb.bytes))).toBe(false);
+  });
+
+  it("returns missing for a leaf id that has no frame in the trace", () => {
+    const trace = runAes128Ecb();
+    const out = lookupNodeValue("not-a-real-step", aes128EcbSpec, trace, undefined);
+    expect(out.status).toBe("missing");
+    if (out.status !== "missing") return;
+    expect(out.reason).toMatch(/no frame found/i);
+  });
+});

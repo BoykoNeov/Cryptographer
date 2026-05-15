@@ -35,7 +35,7 @@
  * starts no drag). Above threshold, the click handler is suppressed.
  */
 
-import { type EdgeValueLookup, lookupEdgeValue } from "@/core/edge-value-lookup";
+import { type EdgeValueLookup, lookupEdgeValue, lookupNodeValue } from "@/core/edge-value-lookup";
 import { type ByteFormat, formatBytes } from "@/core/format";
 import {
   type CipherGraph,
@@ -91,12 +91,16 @@ import {
   useReplicationThreshold,
 } from "../stores/view-replication";
 import {
-  clearSelectedEdge,
+  type ValueInspectorTarget,
+  clearSelectedTarget,
   encodeEdgeKey,
+  isEdgeSelected,
+  isNodeSelected,
   toggleInspectorPanelOpen,
   toggleSelectedEdge,
+  toggleSelectedNode,
   useInspectorPanelOpen,
-  useSelectedEdgeKey,
+  useSelectedTarget,
 } from "../stores/view-value-inspector";
 import {
   VIEW_ZOOM_DEFAULT,
@@ -800,19 +804,19 @@ export const GraphView = () => {
   // `replicationPanelOpen` above: capture each accessor ONCE so the
   // reactive call sites below read the live boolean instead of a
   // truthy function reference. Click-only — no hover signal.
-  const selectedEdgeKey = useSelectedEdgeKey();
+  const selectedTarget = useSelectedTarget();
   const inspectorPanelOpen = useInspectorPanelOpen();
   const frameIndex = useFrameIndex();
   const byteFormat = useByteFormat();
   // Clear the selection whenever the user swaps to a different cipher spec.
-  // A selected edge from a prior spec points at node ids that no longer
+  // A selected target from a prior spec points at ids that no longer
   // exist in the new graph; without this reset the panel would render
   // "missing" against stale identity (see `view-value-inspector.ts`
   // module docstring).
   createEffect(
     on(
       () => spec().id,
-      () => clearSelectedEdge(),
+      () => clearSelectedTarget(),
       { defer: true },
     ),
   );
@@ -2237,10 +2241,11 @@ export const GraphView = () => {
           </Show>
           {/* Value-inspector panel. Mounted unconditionally so the
             collapsed-header toggle is always reachable; the body renders
-            value/empty content based on the selected edge (click-only —
-            no hover).
+            value/empty content based on the selected target — an edge,
+            leaf, endpoint pill, or block chip — picked via click-only
+            (no hover).
 
-            Reactivity: the value memo depends on selectedEdgeKey(), the
+            Reactivity: the value memo depends on selectedTarget(), the
             current frame index (for block-aware lookup), useTraceVersion
             (re-run swaps the trace), and the active byte format.
             Missing any of those would produce a stale render. */}
@@ -2258,11 +2263,11 @@ export const GraphView = () => {
                 ▸
               </span>
               value inspector
-              <span class="graph-value-inspector-panel-hint">click an edge</span>
+              <span class="graph-value-inspector-panel-hint">click an edge or node</span>
             </button>
             <Show when={inspectorPanelOpen()}>
               <ValueInspectorBody
-                selectedEdgeKey={selectedEdgeKey}
+                selectedTarget={selectedTarget}
                 edges={() => graph().edges}
                 spec={spec}
                 frameIndex={frameIndex}
@@ -2389,7 +2394,11 @@ export const GraphView = () => {
                       // N+1, not within-iteration flow" at a glance.
                       isFeedback={feedbackPredicate()(edge)}
                       edgeKey={eKey}
-                      isSelected={selectedEdgeKey() === eKey}
+                      // `selectedTarget()` dep ensures Solid re-runs this when
+                      // the selection changes. `isEdgeSelected` reads the
+                      // store-level signal too (redundant tracking is harmless
+                      // and keeps the helper's API stable for non-Solid callers).
+                      isSelected={selectedTarget() !== null && isEdgeSelected(eKey)}
                     />
                   </Show>
                 );
@@ -2415,9 +2424,22 @@ export const GraphView = () => {
                   // Narrow the union for the typechecker — Solid's <Show>
                   // can't carry the discriminator through without it.
                   const side = node.endpointSide;
+                  const pillId = node.stepId;
                   return (
                     <Show when={epBox()}>
-                      {(b) => <EndpointPill box={b()} side={side} label={node.label} />}
+                      {(b) => (
+                        <EndpointPill
+                          box={b()}
+                          side={side}
+                          label={node.label}
+                          // Pills aren't spec nodes (no scrub target), so the
+                          // click ONLY toggles inspector selection. Inspector
+                          // returns the "endpoint" status — descriptive label,
+                          // no value formatting.
+                          isSelected={selectedTarget() !== null && isNodeSelected(pillId)}
+                          onClick={() => toggleSelectedNode(pillId)}
+                        />
+                      )}
                     </Show>
                   );
                 }
@@ -2445,6 +2467,20 @@ export const GraphView = () => {
                 const isBlockChip = node.blockChipOf !== undefined;
                 const isReplicaLike = isAuxReplica || isBlockChip;
                 const clickTargetId = node.blockChipOf ?? node.replicaOf ?? node.stepId;
+                // Inspector identity differs from scrub identity for chips:
+                //   - Block chip: scrub routes to the iterate id (`clickTargetId`)
+                //     because chips have no trace frame of their own, but the
+                //     INSPECTOR wants the chip id (`node.stepId` =
+                //     `${iterateId}@block${i}`) so `lookupNodeValue` resolves
+                //     to that block's per-block payload.
+                //   - Aux replica: the replica's synthetic id
+                //     (`${source}@->${consumer}`) has no lookup target, so
+                //     the inspector uses the source id (= `clickTargetId`),
+                //     matching scrub behavior.
+                //   - Regular leaf: both ids coincide.
+                const inspectorTargetId = isBlockChip
+                  ? node.stepId
+                  : (node.replicaOf ?? node.stepId);
                 // exactOptionalPropertyTypes is on, so we conditionally spread
                 // blockSpan rather than passing `undefined` as a real value.
                 const blockSpanProps =
@@ -2459,7 +2495,14 @@ export const GraphView = () => {
                   isRootLevel && !isReplicaLike
                     ? {
                         onPointerDown: (e: PointerEvent) =>
-                          startNodeDrag(node.stepId, e, () => handleLeafClick(clickTargetId)),
+                          startNodeDrag(node.stepId, e, () => {
+                            // Click fallback (sub-threshold drag release) on
+                            // a draggable leaf — keep both behaviors aligned
+                            // with the non-draggable onClick path below:
+                            // scrub the trace AND toggle inspector selection.
+                            handleLeafClick(clickTargetId);
+                            toggleSelectedNode(inspectorTargetId);
+                          }),
                       }
                     : {};
                 const leafWarnings = createMemo(() => warningsByVisibleId().get(node.stepId) ?? []);
@@ -2491,7 +2534,24 @@ export const GraphView = () => {
                         isDropTargetActive={dragOverAnchorId() === clickTargetId}
                         {...blockSpanProps}
                         {...dragProps}
-                        onClick={() => handleLeafClick(clickTargetId)}
+                        onClick={() => {
+                          // Two effects on a leaf click:
+                          //   1. handleLeafClick scrubs the trace + binds
+                          //      the ParamEditor (existing behavior).
+                          //   2. toggleSelectedNode populates the value
+                          //      inspector with this leaf's state value
+                          //      (or for chips: the per-block payload).
+                          // Re-clicking the same leaf clears the inspector
+                          // selection but keeps the scrub position — the
+                          // two are intentionally independent.
+                          handleLeafClick(clickTargetId);
+                          toggleSelectedNode(inspectorTargetId);
+                        }}
+                        // `selectedTarget()` dep so Solid re-renders this leaf
+                        // when the global selection changes (and another leaf
+                        // needs to lose its halo). The `isNodeSelected` helper
+                        // reads the same signal — redundant tracking is fine.
+                        isSelected={selectedTarget() !== null && isNodeSelected(inspectorTargetId)}
                         warnings={leafWarnings()}
                         stateShape={shapesByAnchor().get(clickTargetId) ?? ""}
                       />
@@ -2772,6 +2832,13 @@ const LeafRect = (props: {
    * the drop will commit. Always false when no drag is in progress.
    */
   isDropTargetActive: boolean;
+  /**
+   * True when this leaf is the currently-selected value-inspector
+   * target. Applies the `.graph-leaf-selected` halo class so the user
+   * can find the inspected node at a glance — matches the
+   * `.graph-edge-selected` halo on edges for visual consistency.
+   */
+  isSelected: boolean;
 }) => {
   // SVG <g> can't be replaced by a semantic <button> (it'd leave the SVG
   // coordinate system). We attach pointer + keyboard handlers; biome's
@@ -2792,7 +2859,10 @@ const LeafRect = (props: {
       class={`graph-leaf${props.draggable ? " graph-leaf-draggable" : ""}${
         props.isReplica ? " graph-leaf-replica" : ""
       }`}
-      classList={{ "graph-drop-target-active": props.isDropTargetActive }}
+      classList={{
+        "graph-drop-target-active": props.isDropTargetActive,
+        "graph-leaf-selected": props.isSelected,
+      }}
       data-drop-anchor={props.dropAnchorId}
       data-state-shape={props.stateShape}
       // `tabindex="0"` puts the leaf in the natural keyboard tab order so
@@ -2870,10 +2940,12 @@ const LeafRect = (props: {
  * distinct from the rectangular leaves so a new viewer reads it as
  * "this is where data enters / exits the cipher", not as another step.
  *
- * Deliberately NO affordances:
+ * Limited affordances:
  *   - no `data-drop-anchor` (palette drops can't target the pill)
- *   - no `tabindex` (not in keyboard focus order; nothing to focus on)
- *   - no `onClick` (no trace frame to scrub to)
+ *   - no scrub-on-click (pill has no trace frame); click ONLY toggles
+ *     inspector selection
+ *   - `tabindex=0` for keyboard reachability of the click action only;
+ *     Enter/Space mirror the click
  *   - no delete glyph (it's not a spec node; can't be removed)
  *   - no warnings overlay (validation skips synthetic ids by construction)
  *
@@ -2885,8 +2957,28 @@ const EndpointPill = (props: {
   box: Box;
   side: "input" | "output";
   label: string;
+  /** Click toggles inspector selection on this pill. Endpoint pills
+   *  carry no scrub target, so this is the ONLY behavior on click. */
+  onClick: () => void;
+  /** True when the pill is the currently-selected inspector target.
+   *  Applies `.graph-endpoint-selected` halo class. */
+  isSelected: boolean;
 }) => (
-  <g class={`graph-endpoint-pill graph-endpoint-${props.side}`}>
+  <g
+    class={`graph-endpoint-pill graph-endpoint-${props.side}`}
+    classList={{ "graph-endpoint-selected": props.isSelected }}
+    tabindex={0}
+    onClick={props.onClick}
+    onKeyDown={(e) => {
+      // Mirror Enter/Space → click for keyboard users. Biome's
+      // useKeyWithClickEvents lint requires this when onClick is set on
+      // a non-button element.
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        props.onClick();
+      }
+    }}
+  >
     <title>
       {props.side === "input" ? "Cipher input — " : "Cipher output — "}
       {props.label}
@@ -3388,7 +3480,7 @@ const formatStateOneline = (state: State, fmt: ByteFormat): string => {
  * readable without inlining 50 lines of inspector code.
  *
  * Reactivity dependencies:
- *   - `selectedEdgeKey` — the user's currently-clicked edge
+ *   - `selectedTarget` — the user's currently-selected edge or node
  *   - `frameIndex` — current scrubber position drives block-aware lookup
  *   - `version` — re-run replaces the trace; without this dep, the
  *     panel would render against a stale trace after a param edit
@@ -3396,29 +3488,37 @@ const formatStateOneline = (state: State, fmt: ByteFormat): string => {
  *
  * Missing any of those produces a stale panel; pinning the list here
  * (and matching it in the memo body) is the discipline check.
+ *
+ * Dispatch: the memo branches on `selectedTarget().kind`:
+ *   - `"edge"` → `lookupEdgeValue` with the resolved GraphEdge.
+ *   - `"node"` → `lookupNodeValue` with the raw node id.
+ *
+ * Identity row also branches: edges show `from → to`; nodes show just
+ * the id (with no arrow). Kind-badge label is shape-derived (state /
+ * block-payload / aux: <key> / endpoint / no-trace / no value).
  */
 const ValueInspectorBody = (props: {
-  selectedEdgeKey: () => string | null;
+  selectedTarget: () => ValueInspectorTarget | null;
   edges: () => readonly GraphEdge[];
   spec: () => import("@/core/types").CipherSpec;
   frameIndex: () => number;
   version: () => number;
   byteFormat: () => ByteFormat;
 }) => {
-  // Resolve the active key back to a GraphEdge by looking it up in the
-  // current graph (rather than decoding the key directly). The current
-  // graph is the post-replication, post-collapse, post-chip-expansion
-  // graph the renderer is showing — so the edge we find is the same
-  // identity the user clicked, including any synthetic chip endpoints.
-  // Decoding the key without this lookup would also work (the format
-  // round-trips), but going through `edges()` makes the inspector
-  // automatically degrade to "missing" if a spec change retired the
-  // selected edge between click and render.
+  // Resolve an edge-kind target back to a GraphEdge by looking it up in
+  // the current graph (rather than decoding the key directly). The
+  // current graph is the post-replication, post-collapse, post-chip-
+  // expansion graph the renderer is showing — so the edge we find is
+  // the same identity the user clicked, including any synthetic chip
+  // endpoints. Decoding the key without this lookup would also work
+  // (the format round-trips), but going through `edges()` makes the
+  // inspector automatically degrade to "missing" if a spec change
+  // retired the selected edge between click and render.
   const activeEdge = createMemo<GraphEdge | null>(() => {
-    const key = props.selectedEdgeKey();
-    if (key === null) return null;
+    const t = props.selectedTarget();
+    if (t === null || t.kind !== "edge") return null;
     for (const e of props.edges()) {
-      if (encodeEdgeKey(e) === key) return e;
+      if (encodeEdgeKey(e) === t.key) return e;
     }
     return null;
   });
@@ -3431,41 +3531,67 @@ const ValueInspectorBody = (props: {
     // invalidation trigger.
     void props.version();
     const trace = getTrace();
-    const edge = activeEdge();
-    if (edge === null) return null;
+    const t = props.selectedTarget();
+    if (t === null) return null;
     const idx = props.frameIndex();
     const currentBlockIndex = trace !== null ? trace.frames[idx]?.blockIndex : undefined;
-    return lookupEdgeValue(edge, props.spec(), trace, currentBlockIndex);
+    if (t.kind === "edge") {
+      const edge = activeEdge();
+      if (edge === null) return null;
+      return lookupEdgeValue(edge, props.spec(), trace, currentBlockIndex);
+    }
+    return lookupNodeValue(t.id, props.spec(), trace, currentBlockIndex);
   });
 
-  // Render. The four branches match the EdgeValueLookup discriminant.
+  // Identity-row branching: edges show `from → to`; nodes show just
+  // their id. The aux key for the kind-badge is taken from the lookup
+  // result's `auxKey` field (it's `"state"` for state-derived rows and
+  // the real key for aux rows; we use it directly via `kindBadgeText`).
   return (
     <div class="graph-value-inspector-body" data-testid="value-inspector-body">
       <Show
-        when={activeEdge() !== null}
+        when={props.selectedTarget() !== null}
         fallback={
-          <div class="graph-value-inspector-empty">
-            Click an edge to see the value flowing through it.
-          </div>
+          <div class="graph-value-inspector-empty">Click an edge or node to see its value.</div>
         }
       >
         {(_present) => {
-          // _present is the truthiness; the actual edge comes from activeEdge().
-          // biome-ignore lint/style/noNonNullAssertion: <Show when={...!==null}>
-          const edge = () => activeEdge()!;
           const result = () => lookup();
+          // Memo over `selectedTarget()` to get a stable string for the
+          // node-identity span. Returns "" when the target is an edge —
+          // the edge branch renders its own from→to spans.
+          const nodeId = createMemo(() => {
+            const t = props.selectedTarget();
+            return t !== null && t.kind === "node" ? t.id : "";
+          });
           return (
             <>
               <div class="graph-value-inspector-identity">
-                <span class="graph-value-inspector-from" title={edge().from}>
-                  {edge().from}
-                </span>
-                <span class="graph-value-inspector-arrow" aria-hidden="true">
-                  →
-                </span>
-                <span class="graph-value-inspector-to" title={edge().to}>
-                  {edge().to}
-                </span>
+                <Show
+                  when={activeEdge()}
+                  fallback={
+                    // Node identity: single span, no arrow. For chips, the
+                    // id is the full synthetic form (`ecb-blocks@block0`);
+                    // for endpoint pills it's the `__cipher_*__` constant.
+                    <span class="graph-value-inspector-from" title={nodeId()}>
+                      {nodeId()}
+                    </span>
+                  }
+                >
+                  {(edge) => (
+                    <>
+                      <span class="graph-value-inspector-from" title={edge().from}>
+                        {edge().from}
+                      </span>
+                      <span class="graph-value-inspector-arrow" aria-hidden="true">
+                        →
+                      </span>
+                      <span class="graph-value-inspector-to" title={edge().to}>
+                        {edge().to}
+                      </span>
+                    </>
+                  )}
+                </Show>
               </div>
               <Show when={result()}>
                 {(r) => (
@@ -3474,7 +3600,7 @@ const ValueInspectorBody = (props: {
                       <span
                         class={`graph-value-inspector-kind-badge graph-value-inspector-kind-${r().status === "value" ? r().status : "info"}`}
                       >
-                        {kindBadgeText(r(), edge())}
+                        {kindBadgeText(r())}
                       </span>
                     </div>
                     <div class="graph-value-inspector-value-row">
@@ -3491,8 +3617,10 @@ const ValueInspectorBody = (props: {
   );
 };
 
-/** Compute the kind-badge label for an inspector row. */
-const kindBadgeText = (r: EdgeValueLookup, edge: GraphEdge): string => {
+/** Compute the kind-badge label for an inspector row. Uses the lookup
+ *  result's `auxKey` directly so the function works for both edge and
+ *  node selections (which don't carry a GraphEdge). */
+const kindBadgeText = (r: EdgeValueLookup): string => {
   if (r.status === "endpoint") {
     return r.endpointSide === "input" ? "input pill" : "output pill";
   }
@@ -3502,7 +3630,7 @@ const kindBadgeText = (r: EdgeValueLookup, edge: GraphEdge): string => {
   const blockSuffix = r.blockIndex !== undefined ? ` (block ${r.blockIndex})` : "";
   if (r.displayKind === "state") return `state${blockSuffix}`;
   if (r.displayKind === "block-payload") return `block payload${blockSuffix}`;
-  return `aux: ${edge.auxKey}${blockSuffix}`;
+  return `aux: ${r.auxKey}${blockSuffix}`;
 };
 
 /** Render the value-row content for an inspector row. Returns a string;
@@ -3512,7 +3640,7 @@ const valueRowText = (r: EdgeValueLookup, fmt: ByteFormat): string => {
     case "endpoint":
       return r.label;
     case "no-trace":
-      return "Run the cipher to see edge values.";
+      return "Run the cipher to see values.";
     case "missing":
       return r.reason;
     case "value":

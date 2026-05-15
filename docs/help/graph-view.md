@@ -101,22 +101,34 @@ internalized.
   travel with `Save` or `Share…`, so a link you share will render
   at the recipient's zoom, not yours.
 
-## Inspecting an edge's value
+## Inspecting a value
 
 Below the toolbar sits a collapsible **value inspector** panel. Open it
-and click any edge in the graph — the panel shows the value flowing
-through that edge at the current scrubber position: the round key
-(`roundKey.3`), the per-block plaintext payload (`block 2`'s 16-byte
-matrix), the cross-iteration feedback IV, or a literal `cipher input`
-label on the plaintext-pill edge. The clicked edge gets a soft halo on
-the canvas, and the panel keeps showing its value while you scrub the
-trace — the "click an edge and scrub" flow is the killer demo: watch a
-round key stay constant while the state value changes frame-to-frame,
-or click `outBlocks[1]` and step through every iteration of the iterate
-body to see how that block's matrix is being computed. Click the same
-edge again to clear, or click a different edge to move the selection.
-Selection clears automatically when you switch ciphers (otherwise it
-would point at an edge that doesn't exist in the new spec).
+and click any element on the canvas to populate it:
+
+- **An edge** shows the value flowing through it at the current
+  scrubber position — the round key (`roundKey.3`), the per-block
+  plaintext payload (`block 2`'s 16-byte matrix), the cross-iteration
+  feedback IV, etc.
+- **A leaf step** shows that step's state-after value at the current
+  scrubber position. Clicking a leaf also scrubs the trace to that
+  step (the two behaviors are additive).
+- **An endpoint pill** ("plaintext" / "ciphertext") shows a descriptive
+  label — pills aren't bound to a trace frame, so there's nothing
+  numeric to display.
+- **A block chip** (a `block 0` / `block 1` ... chip on a collapsed
+  iterate) shows that block's outgoing payload — equivalent to
+  `outBlocks[i]`.
+
+The clicked element gets a soft halo on the canvas, and the panel keeps
+showing its value while you scrub the trace — the "click and scrub"
+flow is the killer demo: watch a round key stay constant while the
+state value changes frame-to-frame, or click `block[1]` and step
+through every iteration of the iterate body to see how that block's
+matrix is being computed. Click the same element again to clear, or
+click a different element to move the selection. Selection clears
+automatically when you switch ciphers (otherwise it would point at an
+id that doesn't exist in the new spec).
 
 ## Composing your own block-cipher mode
 

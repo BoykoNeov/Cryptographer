@@ -1,13 +1,19 @@
 /**
- * Edge value lookup — resolves "what data flows through THIS edge at the
- * current scrubber position?" for the value-inspector panel.
+ * Value lookup — resolves "what data is at THIS edge / element at the
+ * current scrubber position?" for the value-inspector panel. The file
+ * is named after edges for historical reasons (Slice 4 shipped
+ * edges-only); the file now exports BOTH `lookupEdgeValue` and
+ * `lookupNodeValue`. Same return shape, different selectors. Keep them
+ * together because they share parseChipId / findIterateById /
+ * findBodyFramesAt — splitting would duplicate the chip-resolution
+ * surface area.
  *
- * Pure function over (spec, trace, edge, currentBlockIndex). The renderer
- * in `GraphView` reads the selected edge from the
- * `view-value-inspector` store, calls this, and formats the result with
- * the user-selected ByteFormat. No Solid signals, no DOM — all the
- * complexity lives here so the lookup is testable against canned traces
- * without spinning up a renderer.
+ * Pure functions over (spec, trace, target, currentBlockIndex). The
+ * renderer in `GraphView` reads the selected target from the
+ * `view-value-inspector` store, calls the matching lookup, and formats
+ * the result with the user-selected ByteFormat. No Solid signals, no
+ * DOM — all the complexity lives here so the lookups are testable
+ * against canned traces without spinning up a renderer.
  *
  * Five branches the result can take, captured by the `status` field:
  *
@@ -536,4 +542,155 @@ const lookupRegularState = (
     status: "missing",
     reason: `no frame found for either endpoint of state edge "${edge.from}" → "${edge.to}"`,
   };
+};
+
+// ─── Node-side lookup ──────────────────────────────────────────────────
+//
+// `lookupNodeValue` answers "what value sits AT this node at the current
+// scrubber position?" The selector is a single id — a leaf stepId, an
+// endpoint-pill id, or a synthetic block-chip id — and the return shape
+// reuses `EdgeValueLookup` so the renderer can switch on `status`
+// without caring whether the click was on an edge or a node.
+//
+// Semantics by node kind:
+//
+//   - **Endpoint pills** (`__cipher_input__` / `__cipher_output__`):
+//     same `"endpoint"` branch as `lookupEdgeValue`. The pills carry no
+//     trace frame, so the panel renders the descriptive label only.
+//     (Pedantically: we could resolve `cipher input` to `frame[0]
+//     .stateBefore` and `cipher output` to the last frame's stateAfter,
+//     but that overlaps with what the FIRST and LAST leaves' state
+//     resolution already shows — the pills' purpose is descriptive, not
+//     a data probe.)
+//
+//   - **Block chips** (`${iterateId}@block${i}`): the chip's "value" is
+//     the per-block ciphertext after that iteration completes — i.e.
+//     the iterate body's last frame stateAfter at `blockIndex === i`,
+//     equivalent to `outBlocks[i]`. We pick "after" rather than
+//     "before" because the chip pedagogically REPRESENTS one block's
+//     trip through the body; the natural answer to "what's at this
+//     chip" is the output of that trip, not the unencrypted input
+//     (which is already what the chip's incoming aux edge from
+//     `split-blocks` would show via the edge lookup).
+//
+//   - **Ellipsis chip** (`@blockMore`): can't resolve to a single
+//     value; returns `"missing"` with a "pick a numbered chip" hint
+//     mirroring the edge-side message.
+//
+//   - **Regular leaves**: the user's chosen contract is "the state at
+//     the leaf's own frame" — `frame.stateAfter` for the trace frame
+//     whose stepId canonicalizes to the leaf's id. When the leaf has
+//     multiple frames (it lives inside an iterate), we prefer the
+//     frame at the scrubber's `currentBlockIndex` so the panel tracks
+//     the scrub position naturally; fall back to the first matching
+//     frame when no preferred index matches.
+//
+// `displayKind` follows the edge convention: chips → `"block-payload"`
+// to emphasize per-block semantics; regular leaves → `"state"` (the
+// spine value at that point in the pipeline).
+
+/**
+ * Look up the value AT the given graph node at the current scrubber
+ * position. See the inline branch comments above for semantics by node
+ * kind. Returns the same shape as `lookupEdgeValue` so the renderer
+ * dispatches on `status` regardless of whether the user selected an
+ * edge or a node.
+ *
+ * @param nodeId    Leaf stepId, endpoint-pill id, or block-chip id.
+ * @param spec      Active cipher spec — used to resolve iterate ids
+ *                  on chip lookups.
+ * @param trace     Active trace, or null when the user hasn't run yet.
+ * @param currentBlockIndex  Scrubber's current iterate-body block
+ *                  index. Influences regular-leaf frame selection only
+ *                  — endpoint pills ignore it, chips use their own
+ *                  embedded blockIndex.
+ */
+export const lookupNodeValue = (
+  nodeId: string,
+  spec: CipherSpec,
+  trace: Trace | null,
+  currentBlockIndex: number | undefined,
+): EdgeValueLookup => {
+  // ── Endpoint pills ─────────────────────────────────────────────────
+  // Synthetic — no trace frame to read, return the same descriptive
+  // label `lookupEdgeValue` returns when an edge touches a pill. Keeps
+  // the panel's empty/endpoint copy identical regardless of which
+  // surface the user clicked.
+  if (nodeId === CIPHER_INPUT_ID) {
+    return { status: "endpoint", endpointSide: "input", label: "cipher input (plaintext)" };
+  }
+  if (nodeId === CIPHER_OUTPUT_ID) {
+    return { status: "endpoint", endpointSide: "output", label: "cipher output (ciphertext)" };
+  }
+
+  if (trace === null) return { status: "no-trace" };
+
+  // ── Block chips ────────────────────────────────────────────────────
+  // Synthetic ids of the form `${iterateId}@block${i}`. The chip's
+  // value is `outBlocks[i]` — the per-block payload after the body has
+  // run once for block i. Same path as `lookupChipOutgoing` with a
+  // state edge, factored inline because we don't have a `GraphEdge` at
+  // this entry point.
+  const chip = parseChipId(nodeId);
+  if (chip !== null) {
+    const iterate = findIterateById(spec.steps, chip.iterateId);
+    if (iterate === null) {
+      return {
+        status: "missing",
+        reason: `iterate "${chip.iterateId}" not found in spec — graph and spec out of sync`,
+      };
+    }
+    const bodyFrames = findBodyFramesAt(trace, iterate, chip.blockIndex);
+    const lastFrame = bodyFrames[bodyFrames.length - 1];
+    if (!lastFrame) {
+      return {
+        status: "missing",
+        reason: `no body frames found for block ${chip.blockIndex} of iterate "${iterate.id}"`,
+      };
+    }
+    return {
+      status: "value",
+      value: lastFrame.stateAfter,
+      displayKind: "block-payload",
+      auxKey: "state",
+      blockIndex: chip.blockIndex,
+    };
+  }
+
+  // ── Ellipsis chip ──────────────────────────────────────────────────
+  // Represents N-CAP+1 blocks; no single value to display.
+  if (nodeId.endsWith(BLOCK_MORE_SUFFIX)) {
+    return {
+      status: "missing",
+      reason: "this chip represents multiple blocks — pick a numbered block-chip to inspect",
+    };
+  }
+
+  // ── Regular leaf ───────────────────────────────────────────────────
+  // "State at the leaf's own frame": find the trace frame for this
+  // stepId at the scrubber's preferred blockIndex (when meaningful),
+  // and return its stateAfter. `findConsumerFrame` already implements
+  // this preference: scrubber-blockIndex first, fallback to any
+  // matching frame.
+  const frame = findConsumerFrame(trace, nodeId, currentBlockIndex);
+  if (frame === null) {
+    return {
+      status: "missing",
+      reason: `no frame found for step "${nodeId}"`,
+    };
+  }
+  return frame.blockIndex !== undefined
+    ? {
+        status: "value",
+        value: frame.stateAfter,
+        displayKind: "state",
+        auxKey: "state",
+        blockIndex: frame.blockIndex,
+      }
+    : {
+        status: "value",
+        value: frame.stateAfter,
+        displayKind: "state",
+        auxKey: "state",
+      };
 };

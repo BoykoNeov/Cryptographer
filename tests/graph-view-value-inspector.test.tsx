@@ -1,34 +1,38 @@
 // @vitest-environment jsdom
 
 /**
- * Component test for the value-inspector panel (formerly "edge
- * inspector" — renamed when the click model dropped hover and the
- * panel's domain expanded beyond edges).
+ * Component test for the value-inspector panel.
  *
- * The pure-function lookup is covered by `edge-value-lookup.test.ts` —
- * this file pins the UI plumbing:
+ * The pure-function lookups are covered by `edge-value-lookup.test.ts`
+ * (edges) and `node-value-lookup.test.ts` (nodes) — this file pins the
+ * UI plumbing across edges + leaves + endpoint pills:
  *
- *   1. The collapsed-by-default panel is mounted in the toolbar band.
- *   2. CLICKING an edge selects it (panel auto-opens, the visible path
- *      gets the `.graph-edge-selected` halo class) and populates the
- *      body with the resolved value (kind badge + value row).
- *   3. Clicking the SAME edge un-selects it (toggle behavior).
- *   4. Clicking a DIFFERENT edge replaces the selection.
- *   5. Swapping the cipher spec clears the selection so a stale edge
- *      from a prior spec doesn't render "missing" against stale
- *      identity.
- *   6. With no trace yet (user hasn't run), clicking an edge — if any
- *      are drawn — produces the no-trace hint copy.
+ *   1. Collapsed-by-default header is mounted in the toolbar band.
+ *   2. CLICKING an edge selects it (panel auto-opens; the visible path
+ *      gets `.graph-edge-selected`); body shows from → to identity +
+ *      kind badge + value row.
+ *   3. CLICKING a leaf selects it for the inspector AND scrubs the
+ *      trace (additive behavior); the visible leaf gets
+ *      `.graph-leaf-selected`; body shows the leaf id, kind badge, and
+ *      the leaf's state value (state-after at the leaf's own frame).
+ *   4. CLICKING an endpoint pill selects it; the pill gets
+ *      `.graph-endpoint-selected`; body shows the "input pill" / "output
+ *      pill" descriptive label.
+ *   5. Re-clicking the same target clears the inspector (toggle).
+ *   6. Clicking a DIFFERENT target replaces the selection (mixing kinds
+ *      — leaf then edge then pill — confirms the single-target model).
+ *   7. Swapping the cipher spec clears the selection so a stale target
+ *      from a prior spec doesn't render "missing" against stale ids.
  *
  * No hover tests: click-only is part of the contract.
  *
- * AES-128 is the fixture — a spec with a stable, well-known set of
- * edges (`key-expansion → initial.add-round-key` carrying
- * `roundKey.0`).
+ * AES-128 is the fixture — well-known stable id set
+ * (`key-expansion → initial.add-round-key` carrying `roundKey.0`).
  */
 
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { CIPHER_INPUT_ID, CIPHER_OUTPUT_ID } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
@@ -44,7 +48,7 @@ import { __resetReplicationForTests } from "@/ui/stores/view-replication";
 import {
   __resetValueInspectorForTests,
   setInspectorPanelOpen,
-  useSelectedEdgeKey,
+  useSelectedTarget,
 } from "@/ui/stores/view-value-inspector";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -84,14 +88,42 @@ const findEdgePathByEndpoints = (
   for (const p of paths) {
     const key = p.getAttribute("data-edge-key");
     if (key === null) continue;
-    // Two valid kinds; either matches if the from/to/auxKey triple does.
     if (key === `${fromId}|${toId}|${auxKey}|aux`) return p;
     if (key === `${fromId}|${toId}|${auxKey}|state`) return p;
   }
   return null;
 };
 
-describe("GraphView — value-inspector panel (click-only)", () => {
+/**
+ * Locate a leaf's wrapping <g> by its full stepId. Matches the existing
+ * `clicking a leaf node moves the trace scrubber` test's selector: we
+ * walk every `.graph-leaf` and check its `<title>` text. This is the
+ * stable way to find a NESTED leaf — `data-drop-anchor` matches too but
+ * the title query disambiguates leaves that share an anchor with their
+ * source (replicas / chips).
+ *
+ * Important: this test file uses NESTED leaves (e.g. `round.5.mix-columns`)
+ * deliberately. Root-level leaves are draggable, so `onClick` is wired to
+ * `undefined` on their <g> and `fireEvent.click` doesn't reach the
+ * handler — clicks for those flow through a pointerdown + sub-threshold-
+ * release path that fireEvent doesn't simulate. Nested leaves carry the
+ * onClick directly.
+ */
+const findLeafByStepId = (container: HTMLElement, stepId: string): SVGGElement | null => {
+  const leaves = container.querySelectorAll<SVGGElement>("g.graph-leaf");
+  for (const g of Array.from(leaves)) {
+    const title = g.querySelector("title")?.textContent ?? "";
+    if (title.startsWith(`${stepId} `) || title === stepId) return g;
+  }
+  return null;
+};
+
+/** Locate an endpoint pill by side — the pill's class encodes "input" or "output". */
+const findEndpointPill = (container: HTMLElement, side: "input" | "output"): SVGGElement | null => {
+  return container.querySelector<SVGGElement>(`g.graph-endpoint-${side}`);
+};
+
+describe("GraphView — value-inspector panel (click-only, edges + nodes)", () => {
   beforeEach(resetAll);
   afterEach(() => {
     cleanup();
@@ -103,7 +135,6 @@ describe("GraphView — value-inspector panel (click-only)", () => {
     const { container } = render(() => <GraphView />);
     const toggle = container.querySelector('[data-testid="value-inspector-panel-toggle"]');
     expect(toggle).not.toBeNull();
-    // Body is hidden when closed.
     expect(container.querySelector('[data-testid="value-inspector-body"]')).toBeNull();
   });
 
@@ -111,7 +142,6 @@ describe("GraphView — value-inspector panel (click-only)", () => {
     seedAes128Trace();
     const { container } = render(() => <GraphView />);
     const toggle = container.querySelector('[data-testid="value-inspector-panel-toggle"]');
-    expect(toggle).not.toBeNull();
     fireEvent.click(toggle as Element);
     expect(container.querySelector('[data-testid="value-inspector-body"]')).not.toBeNull();
   });
@@ -127,22 +157,67 @@ describe("GraphView — value-inspector panel (click-only)", () => {
     );
     expect(path).not.toBeNull();
     fireEvent.click(path as SVGPathElement);
-    // Panel auto-opens on click.
     const body = container.querySelector('[data-testid="value-inspector-body"]');
     expect(body).not.toBeNull();
-    // Halo class is on the VISIBLE `.graph-edge` sibling, not the hit-
-    // path (the hit path is invisible so the halo would render nothing).
+    // Halo on the VISIBLE `.graph-edge` sibling.
     const visibleEdge = path?.parentElement?.querySelector(".graph-edge");
     expect(visibleEdge?.classList.contains("graph-edge-selected")).toBe(true);
-    // Identity row mentions both endpoints.
     expect(body?.textContent).toContain("key-expansion");
     expect(body?.textContent).toContain("initial.add-round-key");
-    // Value row shows hex of the round key (16 bytes = 32 hex chars).
-    // The AES-128 round key 0 is the input key itself; first 4 bytes
-    // `00010203` is enough of a fingerprint.
+    // First 4 bytes of the input key as a fingerprint for round key 0.
     expect(body?.textContent).toContain("00010203");
-    // Store reflects the selection.
-    expect(useSelectedEdgeKey()()).toBe("key-expansion|initial.add-round-key|roundKey.0|aux");
+    const target = useSelectedTarget()();
+    expect(target).toEqual({
+      kind: "edge",
+      key: "key-expansion|initial.add-round-key|roundKey.0|aux",
+    });
+  });
+
+  it("clicking a leaf selects it AND scrubs the trace (scrub-plus-inspect)", () => {
+    seedAes128Trace();
+    setInspectorPanelOpen(true);
+    const { container } = render(() => <GraphView />);
+    // Nested leaf (inside round.5 group) — non-draggable, so `onClick`
+    // is wired to the <g> and `fireEvent.click` exercises it directly.
+    const leaf = findLeafByStepId(container as HTMLElement, "round.5.mix-columns");
+    expect(leaf).not.toBeNull();
+    fireEvent.click(leaf as SVGGElement);
+    // Halo on the wrapping <g>.
+    expect(leaf?.classList.contains("graph-leaf-selected")).toBe(true);
+    const body = container.querySelector('[data-testid="value-inspector-body"]');
+    expect(body).not.toBeNull();
+    // Identity row mentions the leaf id (single span, no arrow).
+    expect(body?.textContent).toContain("round.5.mix-columns");
+    // Kind badge shows "state" (the leaf produces a state value at its frame).
+    expect(body?.textContent).toMatch(/state/);
+    const target = useSelectedTarget()();
+    expect(target).toEqual({ kind: "node", id: "round.5.mix-columns" });
+  });
+
+  it("clicking an endpoint pill selects it and shows the descriptive endpoint label", () => {
+    seedAes128Trace();
+    setInspectorPanelOpen(true);
+    const { container } = render(() => <GraphView />);
+    const pill = findEndpointPill(container as HTMLElement, "input");
+    expect(pill).not.toBeNull();
+    fireEvent.click(pill as SVGGElement);
+    expect(pill?.classList.contains("graph-endpoint-selected")).toBe(true);
+    const body = container.querySelector('[data-testid="value-inspector-body"]');
+    expect(body?.textContent).toContain(CIPHER_INPUT_ID);
+    // Endpoint pill kind badge says "input pill"; descriptive value row.
+    expect(body?.textContent).toMatch(/input pill/);
+    expect(body?.textContent).toMatch(/cipher input/);
+    expect(useSelectedTarget()()).toEqual({ kind: "node", id: CIPHER_INPUT_ID });
+  });
+
+  it("clicking the output pill selects it (verifies side discrimination)", () => {
+    seedAes128Trace();
+    setInspectorPanelOpen(true);
+    const { container } = render(() => <GraphView />);
+    const pill = findEndpointPill(container as HTMLElement, "output");
+    expect(pill).not.toBeNull();
+    fireEvent.click(pill as SVGGElement);
+    expect(useSelectedTarget()()).toEqual({ kind: "node", id: CIPHER_OUTPUT_ID });
   });
 
   it("clicking the same edge twice un-selects it", () => {
@@ -155,38 +230,49 @@ describe("GraphView — value-inspector panel (click-only)", () => {
       "roundKey.0",
     );
     fireEvent.click(path as SVGPathElement);
-    expect(useSelectedEdgeKey()()).not.toBeNull();
+    expect(useSelectedTarget()()).not.toBeNull();
     fireEvent.click(path as SVGPathElement);
-    expect(useSelectedEdgeKey()()).toBeNull();
+    expect(useSelectedTarget()()).toBeNull();
   });
 
-  it("clicking a DIFFERENT edge replaces the selection", () => {
+  it("clicking the same leaf twice un-selects it", () => {
     seedAes128Trace();
+    setInspectorPanelOpen(true);
     const { container } = render(() => <GraphView />);
-    const first = findEdgePathByEndpoints(
+    const leaf = findLeafByStepId(container as HTMLElement, "round.5.mix-columns");
+    fireEvent.click(leaf as SVGGElement);
+    expect(useSelectedTarget()()).not.toBeNull();
+    fireEvent.click(leaf as SVGGElement);
+    expect(useSelectedTarget()()).toBeNull();
+  });
+
+  it("clicking a different element replaces the selection (leaf → edge → pill)", () => {
+    seedAes128Trace();
+    setInspectorPanelOpen(true);
+    const { container } = render(() => <GraphView />);
+    // Start with a nested leaf (non-draggable so fireEvent.click works).
+    const leaf = findLeafByStepId(container as HTMLElement, "round.5.mix-columns");
+    fireEvent.click(leaf as SVGGElement);
+    expect(useSelectedTarget()()).toEqual({ kind: "node", id: "round.5.mix-columns" });
+    // Switch to an edge.
+    const path = findEdgePathByEndpoints(
       container as HTMLElement,
       "key-expansion",
       "initial.add-round-key",
       "roundKey.0",
     );
-    fireEvent.click(first as SVGPathElement);
-    const initialSel = useSelectedEdgeKey()();
-    expect(initialSel).not.toBeNull();
-    // Pick a different edge from key-expansion (round 1 key).
-    const second = findEdgePathByEndpoints(
-      container as HTMLElement,
-      "key-expansion",
-      "round.1.add-round-key",
-      "roundKey.1",
-    );
-    expect(second).not.toBeNull();
-    fireEvent.click(second as SVGPathElement);
-    expect(useSelectedEdgeKey()()).not.toBe(initialSel);
-    expect(useSelectedEdgeKey()()).toBe("key-expansion|round.1.add-round-key|roundKey.1|aux");
+    fireEvent.click(path as SVGPathElement);
+    expect(useSelectedTarget()()).toEqual({
+      kind: "edge",
+      key: "key-expansion|initial.add-round-key|roundKey.0|aux",
+    });
+    // Switch to the input pill.
+    const pill = findEndpointPill(container as HTMLElement, "input");
+    fireEvent.click(pill as SVGGElement);
+    expect(useSelectedTarget()()).toEqual({ kind: "node", id: CIPHER_INPUT_ID });
   });
 
   it("renders the no-trace hint when the user hasn't run yet (trace null)", () => {
-    // aes128Spec is set by default, but no trace is seeded.
     setInspectorPanelOpen(true);
     const { container } = render(() => <GraphView />);
     const path = findEdgePathByEndpoints(
@@ -195,8 +281,6 @@ describe("GraphView — value-inspector panel (click-only)", () => {
       "initial.add-round-key",
       "roundKey.0",
     );
-    // No edges drawn if no trace; bail without failing — the panel just
-    // shows the empty hint message.
     if (path === null) {
       const body = container.querySelector('[data-testid="value-inspector-body"]');
       expect(body?.textContent).toMatch(/Click an edge|Run the cipher/);
@@ -217,22 +301,12 @@ describe("GraphView — value-inspector panel (click-only)", () => {
       "roundKey.0",
     );
     fireEvent.click(path as SVGPathElement);
-    expect(useSelectedEdgeKey()()).not.toBeNull();
-    // Swap to ECB mode — the watcher effect should clear the selection
-    // when the spec.id changes. aes128 single-block → aes128-ecb has a
-    // different spec.id, satisfying the createEffect dep.
+    expect(useSelectedTarget()()).not.toBeNull();
     setCipherMode("ecb");
-    // The clear runs in a createEffect; Solid flushes effects
-    // synchronously for signals set imperatively (no batch), so the
-    // signal reflects the change immediately.
-    expect(useSelectedEdgeKey()()).toBeNull();
+    expect(useSelectedTarget()()).toBeNull();
   });
 
-  // Note: end-to-end block-chip-click wiring is intentionally NOT
-  // covered by a component test — driving the iterate's collapse
-  // chevron in jsdom is brittle on this layout, and the lookup
-  // branches (block-chip incoming / outgoing / blocksFromAux /
-  // outBlocksAux) are already pinned by `edge-value-lookup.test.ts`.
-  // If a future regression makes the chip-edge keys differ from the
-  // pure-function expectation, the pure test will fail first.
+  // Block-chip click coverage is handled by the pure-function lookup
+  // tests in `node-value-lookup.test.ts` — driving the iterate-collapse
+  // chevron in jsdom is brittle.
 });
