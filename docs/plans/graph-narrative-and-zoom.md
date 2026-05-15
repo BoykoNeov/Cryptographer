@@ -349,23 +349,264 @@ narrative collapses to a number.
 
 ---
 
-## Slice 7 — State-edge replication policy (DESIGN PASS — no code)
+## Slice 7 — Replication chip-crowding + state-edge policy
 
-**Status:** Blocked on user decision. See "Context" §3 above.
+**User decision (2026-05-15):** **c → b sequencing.** The chip-crowding
+fix (placement-only, no policy change) is shipped first as **Slice 7c**;
+the state-edge replication policy change is shipped second as **Slice
+7b**. Feistel is the motivator for landing (b) before the next big
+cipher pass — its branching state will demand a fan-able spine — so
+(b) is no longer "design-blocked," just sequenced after (c).
 
-**Two coherent options to sketch:**
+Original options (a) and (b) for reference:
 
-- **(a) Keep current policy, hide the original when fully replicated.**
-  When ALL outgoing edges from a source are routed through replicas
-  (i.e. `replicas.length == fanout`), suppress the original node from
-  layout. Restore visibility on hover any replica. State spine stays
-  unbroken (the original's state-spine seat is empty but its state
-  edge still flows through the spine geometry — needs design).
+- ~~**(a) Keep current policy, hide the original when fully replicated.**~~
+  Rejected. (b) is structurally cleaner and aligns with Feistel-future.
 - **(b) Replicate state edges too.** Drop the `kind === "aux"` filter
   in `replicateHighFanoutSources`. State spine fans into N parallel
-  paths through the replicas. Original sits at its consumer.
+  paths through the replicas. Original is removed entirely from the
+  graph when fully replicated. Now Slice 7b below.
 
-Pick after a sketch session.
+---
+
+## Slice 7c — Replica placement (chip-crowding fix, kind-agnostic)
+
+**Goal:** Replace today's encounter-order horizontal scatter (per-
+consumer index counter that just steps replicas RIGHT by `LEAF_W +
+FLOW_GAP`) with **by-source columns above each consumer**: every
+replica from source A occupies the SAME row index above every consumer
+it touches (globally-stable rows), source B occupies the next row up,
+etc. Eye-trackable across the canonical bad case
+(N collapsed-iterate chips × M replicated sources) where today the
+replicas form a tangled lift-row mush.
+
+Written **kind-agnostic** so Slice 7b drops in additively — placement
+keys off `node.replicaOf !== undefined` only, never off the source's
+outgoing edge kinds.
+
+**Approach:**
+
+- Extend `buildReplicaPlacement` (`GraphView.tsx:298`) return shape
+  from `{ isReplica, consumerOf }` to `{ isReplica, consumerOf,
+  sourceOf, rowOfSource }`:
+  - `sourceOf: Map<replicaId, sourceId>` — read directly from
+    `node.replicaOf` during the existing single-pass walk.
+  - `rowOfSource: Map<sourceId, number>` — assign in deterministic
+    order (encounter order over `graph.nodes`, which is itself a
+    deterministic walk from `deriveAuxGraph`). Globally stable: source
+    A is always row 0 across every consumer it touches, even if some
+    consumers have no source-A replica (those consumers' row-0 slot
+    sits empty; row 1 / row 2 stack above).
+- Each placement branch (group `layoutNode`, iterate-body `layoutNode`,
+  root `layoutRoot`) reads `row = rowOfSource.get(sourceOf.get(rid))`
+  and computes `replicaY = baseY - row * (LEAF_H + STACK_GAP)` instead
+  of stepping x by the per-consumer index counter. The horizontal
+  position is the consumer's center-x (one chip wide above the
+  consumer, stacked vertically). Drop the per-consumer x-step counter
+  entirely.
+- **Container/root height adjustment:** today's replica lift adds one
+  `LEAF_H + STACK_GAP`. New formula: `(maxRowInThisContainer + 1) *
+  (LEAF_H + STACK_GAP)` where `maxRowInThisContainer` is the maximum
+  `rowOfSource` value among replicas placed in that container's body.
+  Containers without replicas keep the old single-row lift = 0.
+- **Invariant comment** at the top of `buildReplicaPlacement`: "the
+  zone above each consumer hosts ONLY replicas; non-replicated aux
+  sources route via long edges from their canvas position, regardless
+  of consumer." This is already true today; the comment makes it
+  explicit so future readers don't try to "improve" by routing
+  non-replicated short edges through the same zone.
+
+**Open micro-decision PINNED (user-confirmed 2026-05-15):**
+
+- **Globally-stable rows over per-consumer compaction.** Costs
+  vertical space when sources have non-overlapping consumer sets;
+  pays in scannability ("source A's replicas live at row 0 EVERYWHERE
+  source A appears"). For AES today (1 main `always`-source) the
+  difference is invisible; for the future N-source case (Speck/Serpent
+  + Feistel + chains) the stability becomes load-bearing.
+- **Threshold for new placement kicks in: always.** No "≥3 replicas
+  per consumer" cutoff. Even with 1 replica per consumer the
+  by-source row positioning is correct (row 0 above its consumer).
+  Removes a special case.
+
+**Tests (kind-agnostic verification — advisor's #1 sharpening point):**
+
+- New `tests/graph-view-replica-placement.test.tsx`:
+  1. **Aux-only baseline regression** — fixture matching today's
+     AES-128 ECB + `key-expansion → always` graph; assert per-replica
+     `(x, y)` matches a snapshot. Ensures the refactor doesn't shift
+     existing layout under no-state-replica conditions.
+  2. **Multi-source row stability** — synthetic graph with two
+     `always` sources A, B both fanning to 3 common consumers and
+     1 disjoint consumer. Assert source A's replicas all share one
+     y; source B's replicas all share a y one row above; the disjoint
+     consumer's row 0 sits empty (vertical gap, source B sits at row
+     1). Pins globally-stable rows.
+  3. **Synthetic state-kind replicas** — hand-build a graph with
+     `replicaOf` set on STATE-kind replica nodes (today
+     `replicateHighFanoutSources` won't produce these; we construct
+     them by hand to pre-verify Slice 7b's terrain). Assert
+     placement is identical to the aux case at the same shape. This
+     converts "kind-agnostic" from a claim to a fact and means 7b
+     can drop the filter without surprise placement bugs.
+  4. **Chip-crowding fixture** — collapsed iterate with `blockSpan
+     = 4` (Slice 6 produces 4 block-chips) × 2 `always` sources.
+     Assert each block-chip has exactly 2 replicas above it, source
+     A on row 0 and source B on row 1, all 4 source-A replicas
+     share y, all 4 source-B replicas share y. This is the
+     canonical bad case.
+- `tests/graph-view-layout.test.ts` — extend Slice 2's iterate-
+  replica-anchor test to verify the anchor still works with the
+  new row-based placement (anchor x stays at iterate's
+  first-non-replica-child x; only y changes by row).
+- Snapshot regression on `graph.test.ts` shouldn't fire because
+  graph derivation is unchanged; only `GraphView.tsx` placement
+  shifts.
+
+**Files:** `src/ui/components/GraphView.tsx` (extend
+`buildReplicaPlacement`, refactor three placement loops, add height
+formula update), `tests/graph-view-replica-placement.test.tsx` (NEW),
+`tests/graph-view-layout.test.ts` (touch up Slice 2 test).
+
+**Out of scope for 7c (deferred to 7b or later):**
+
+- State-edge replication itself (that's 7b).
+- Click-to-drag a replica to manually pin its position (today
+  pinning is per-stepId; replicas have synthetic ids that change
+  across reruns. Probably never want this — would conflict with
+  the layout pins decision below).
+- "Show original on hover any replica" (the (a) option's affordance;
+  rejected with (a) itself).
+
+---
+
+## Slice 7b — Replicate state edges too
+
+**Goal:** Drop the `kind === "aux"` filter at `src/core/graph.ts:967`
+inside `replicateHighFanoutSources`. State spine becomes fan-capable;
+the original chip is removed entirely from the graph when fully
+replicated. Slice 7c's by-source columns absorb the new state replicas
+identically to aux replicas.
+
+**Approach:**
+
+- **Edge filter:** delete `if (e.kind !== "aux") continue;` at line
+  967 of `src/core/graph.ts`. Now ALL outgoing edges (state + aux +
+  feedback) of a qualifying source get replica routing.
+- **Eligibility unchanged.** Sources still qualify by aux fanout ≥
+  threshold (or `always` override); state edges don't enter
+  eligibility. Rationale: state edges are 1:1 today (one outgoing
+  per source), so including them in eligibility is a no-op for
+  current graphs and a meaningless threshold for any future cipher.
+  When Feistel lands and a step has 2 outgoing state edges (L and R),
+  it'll typically also have aux fanout high enough to qualify
+  independently; if not, the user can flip its `always` override.
+- **Original-chip removal:** today line 1082 keeps the source in
+  `nodes`: `nodes: [...graph.nodes, ...replicas.values()]`. Change
+  to filter out fully-replicated sources:
+  `nodes: [...graph.nodes.filter(n => !fullyReplicated.has(n.stepId)),
+  ...replicas.values()]`, where `fullyReplicated` is the set of
+  source ids whose every outgoing edge was rerouted. Today (and
+  post-7b) every qualifying source IS fully replicated by
+  construction — `replicateHighFanoutSources` replicates ALL
+  outgoing edges of qualifying sources, no partial — so the set
+  equals "all qualifying source ids."
+- **Incoming-edge handling for the removed source:** the original's
+  INCOMING edges (e.g. `aes-encrypt-key → key-expansion`'s state
+  edge) have a `to: <originalId>` that no longer exists. Two
+  options; pick **redirect to first replica** (matches the spine-
+  fan visual — the `aes-encrypt-key`'s state arrow now lands on the
+  first replica chip, which IS the canonical spine entry for that
+  data flow). Implementation: in the same edge-rewriting pass,
+  rewrite `e.to` if `e.to in fullyReplicated` to the replica
+  generated for the consumer that follows in the spine
+  (`firstReplica = replicaKey(originalId, originalSpineSuccessorId)`).
+  Concretely: pick the original's first state-output edge's
+  destination as the "spine successor"; its replica is the canonical
+  spine entry.
+
+**Open micro-decision PINNED (user-confirmed 2026-05-15):**
+
+- **Original removed entirely** (advisor confirmed: linear-list
+  sidebar still finds the source via the trace, not the graph; click-
+  to-scrub via `replicaOf` on any replica still works — both already
+  shipped affordances).
+
+**Layout-pin orphan handling (advisor's #3 sharpening point):**
+
+- Today `src/ui/stores/layout.ts` stores `pinnedNodes:
+  Map<stepId, {x, y}>` per `spec.id`. After 7b, a pin on `key-
+  expansion` is orphaned because that id no longer appears in the
+  graph.
+- **Decision: silently drop orphan pins on load** (advisor option 1).
+  Implementation: in the `layoutSpec → effective pin map` resolver
+  inside `layoutNode`/`layoutRoot`, ignore pins whose stepId isn't
+  in the post-replication graph. Add a one-time `console.debug` per
+  orphan id during dev (gated by `import.meta.env.DEV`) so users
+  who flip 7b on don't get console spam in prod.
+- **Migrate to first-replica id?** Rejected: replica ids are
+  synthetic and change shape across reruns
+  (`${src}@->${consumer}` — if the consumer is renamed or the
+  graph reshapes, the migration target moves too). Cleanest is to
+  drop and let the user re-pin if needed.
+
+**Tests:**
+
+- `tests/graph-replication.test.ts` — extend with:
+  1. **State-edge replication** — fixture with a source having 1
+     state outgoing + 7 aux outgoing (above default threshold 6).
+     Assert post-replication graph has 8 replica nodes (one per
+     edge), original source is GONE from `nodes`, source's
+     incoming edges redirected to the first replica.
+  2. **Spine continuity** — same fixture; assert there's a
+     reachable path from `rootIds[0]` to the last root step
+     traversing replicas (the spine fans through the replica row,
+     no longer through a single original chip).
+  3. **No-replicate baseline** — when the source is below
+     threshold and has no `always` override, the kind filter being
+     gone has no observable effect (no replicas, original stays).
+- `tests/graph-view-layout.test.ts` — orphaned-pin handling: pin
+  `key-expansion`, set its replication to `always`, assert no
+  `[pinnedNodes].get("key-expansion")` reads land in the layout
+  output.
+- `tests/built-from-palette-roundtrip.test.tsx` — sanity round-
+  trip check: with `key-expansion → always` set, the spec saves +
+  loads cleanly (replication state lives in `LayoutSpec`, not the
+  spec; orphan-pin drop on load shouldn't affect spec round-trip).
+
+**Files:** `src/core/graph.ts` (drop filter, filter out fully-
+replicated sources, redirect incoming edges),
+`src/ui/components/GraphView.tsx` (orphan-pin filter in the
+pin resolver), `tests/graph-replication.test.ts`,
+`tests/graph-view-layout.test.ts`,
+`tests/built-from-palette-roundtrip.test.tsx`.
+
+**Post-7b retuning budget:** ~one afternoon of layout polish
+expected. With state replicas in the lift row, the `endpointLabels`
+memo (Slice 1's pill anchors) and the iterate's first-non-replica-
+child anchor (Slice 2's fix) may need their "skip past replicas"
+walks revisited. Retune in a follow-up commit if the test pass
+flags shifted positions.
+
+---
+
+## Slice 7 ship sequence
+
+Two separate commits (per commit-cadence preference + advisor's #5):
+
+1. **Commit A — Slice 7c.** Placement refactor + kind-agnostic
+   tests. Pure additive; no graph derivation change; no policy
+   change. Should ship clean through `npm run check` with no
+   pin-data migration concerns.
+2. **Commit B — Slice 7b.** Filter drop + original removal +
+   incoming-edge redirect + orphan-pin handling. The post-7b
+   retuning, if needed, lands in a third "Slice 7b polish"
+   commit on the same day.
+
+After both ship: update `MEMORY.md` to flip
+`project_graph_narrative_zoom_plan.md`'s "Slice 7 design-blocked"
+marker to "Slice 7c+7b shipped." Then the user is unblocked to
+plan Feistel.
 
 ---
 
