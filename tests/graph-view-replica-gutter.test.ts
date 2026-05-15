@@ -367,21 +367,31 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
 });
 
 /**
- * Multiple-source-per-consumer replica stacking (polish item #2).
+ * Multiple-source-per-consumer replica stacking (Slice 7c).
  *
- * The bug it prevents: when the user sets MORE than one source's
+ * The bug this prevents: when the user sets MORE than one source's
  * replication override to "always" (e.g. both `compute-block-count` AND
  * `split-blocks` for the same iterate consumer), every replica targeting
  * the same consumer used to land at exactly `(consumer.x, consumer.y -
  * LEAF_H - STACK_GAP)`. Two replicas → same box → only the last-drawn one
  * is visible, clicks land on whichever ended up on top.
  *
- * The fix: each placement loop keeps a per-consumer index counter and
- * shifts the Nth replica RIGHT by `idx * (LEAF_W + FLOW_GAP)`. Three
- * layout passes own their own loop (root, group lift, iterate body), so
- * the same fix repeats three times — and we pin all three here using
- * synthetic `CipherGraph` literals, since the real-cipher fixtures above
- * only ever produce one source (key-expansion) per consumer.
+ * **Slice 7c policy** (replaces the original per-consumer-x-step counter):
+ * by-source rows. Each source claims a globally-stable row index in
+ * `rowOfSource` (insertion order over `graph.nodes`). All replicas of
+ * source A live at row 0 above their consumer; all replicas of source B
+ * live at row 1; etc. Multiple sources targeting the SAME consumer stack
+ * VERTICALLY — `replicaA.x === replicaB.x === consumer.x`,
+ * `replicaB.y === replicaA.y - (LEAF_H + STACK_GAP)`. Three layout
+ * passes (root, group lift, iterate body) all read the same global
+ * `rowOfSource` map, so source A always sits at row 0 across the whole
+ * canvas — eye-trackable.
+ *
+ * The "don't overlap" guarantee from the original fix still holds (a
+ * fixed two replicas no longer occupy the same box). It just rotates
+ * 90° from horizontal tiling to vertical stacking. This is the first
+ * brick in the cross-consumer scannability story (Slice 7b will then
+ * fan state edges through the same row machinery).
  */
 describe("GraphView — multiple sources targeting same consumer don't overlap", () => {
   // Helper: builds a minimal CipherGraph with N replica nodes all pointing
@@ -439,10 +449,12 @@ describe("GraphView — multiple sources targeting same consumer don't overlap",
     };
   };
 
-  it("root: two replicas → same consumer get distinct x positions", () => {
+  it("root: two replicas → same consumer stack VERTICALLY at consumer.x (Slice 7c)", () => {
     // Two synthetic replicas, both at root level, both pointing at one
-    // consumer via aux edges. Pre-fix both would land at consumer.x; post-
-    // fix the second steps right by LEAF_W + FLOW_GAP.
+    // consumer via aux edges. Pre-7c both would land at the same box;
+    // the V1 fix tiled them rightward; Slice 7c stacks them vertically
+    // by source row. Source A (encountered first via graph.nodes walk)
+    // claims row 0; source B claims row 1.
     const g = makeMultiReplicaGraph("consumer", ["src-a->consumer", "src-b->consumer"]);
     const consts = layoutConstantsFor("normal");
     const { boxes } = layoutRoot(g, new Map<string, { x: number; y: number }>(), consts);
@@ -450,21 +462,18 @@ describe("GraphView — multiple sources targeting same consumer don't overlap",
     const b = boxes.get("src-b->consumer");
     const c = boxes.get("consumer");
     if (!a || !b || !c) throw new Error("missing synthetic box");
-    // Distinct x positions — the headline assertion.
-    expect(a.x).not.toBe(b.x);
-    // Specific deterministic placement (Map iteration order is insertion
-    // order, and rootIds is replica-first; first replica at consumer.x,
-    // second offset by LEAF_W + FLOW_GAP).
+    // Same x — both above the consumer's column, no horizontal scatter.
     expect(a.x).toBe(c.x);
-    expect(b.x).toBe(c.x + consts.LEAF_W + consts.FLOW_GAP);
-    // Both still above the consumer at the lifted y.
+    expect(b.x).toBe(c.x);
+    // Vertical separation: source A on row 0 (closest to spine), source
+    // B on row 1 (one chip + STACK_GAP higher).
     expect(a.y).toBeLessThan(c.y);
-    expect(b.y).toBe(a.y);
+    expect(b.y).toBe(a.y - consts.LEAF_H - consts.STACK_GAP);
   });
 
-  it("root: three replicas → same consumer tile horizontally without overlap", () => {
-    // Stress to N=3 — confirms the counter increments rather than only
-    // distinguishing first-vs-rest.
+  it("root: three replicas → same consumer stack VERTICALLY without overlap (Slice 7c)", () => {
+    // Stress to N=3 — confirms each new source claims the next row.
+    // Sources A/B/C → rows 0/1/2 respectively; all share consumer.x.
     const g = makeMultiReplicaGraph("consumer", [
       "src-a->consumer",
       "src-b->consumer",
@@ -472,20 +481,27 @@ describe("GraphView — multiple sources targeting same consumer don't overlap",
     ]);
     const consts = layoutConstantsFor("normal");
     const { boxes } = layoutRoot(g, new Map<string, { x: number; y: number }>(), consts);
-    const xs = ["src-a->consumer", "src-b->consumer", "src-c->consumer"].map(
-      (id) => boxes.get(id)?.x,
-    );
-    // All three distinct.
-    expect(new Set(xs).size).toBe(3);
-    // Strictly increasing (insertion-order ⇒ deterministic).
-    expect(xs[0]).toBeLessThan(xs[1] ?? Number.POSITIVE_INFINITY);
-    expect(xs[1]).toBeLessThan(xs[2] ?? Number.POSITIVE_INFINITY);
+    const a = boxes.get("src-a->consumer");
+    const b = boxes.get("src-b->consumer");
+    const c = boxes.get("src-c->consumer");
+    const cons = boxes.get("consumer");
+    if (!a || !b || !c || !cons) throw new Error("missing synthetic box");
+    // All three share the consumer's x.
+    expect(a.x).toBe(cons.x);
+    expect(b.x).toBe(cons.x);
+    expect(c.x).toBe(cons.x);
+    // Strictly DECREASING y (each source one row higher than the prior).
+    const rowH = consts.LEAF_H + consts.STACK_GAP;
+    expect(b.y).toBe(a.y - rowH);
+    expect(c.y).toBe(b.y - rowH);
+    // All three distinct ys (no overlap).
+    expect(new Set([a.y, b.y, c.y]).size).toBe(3);
   });
 
-  it("iterate body: two replicas → same consumer get distinct x positions", () => {
+  it("iterate body: two replicas → same consumer stack VERTICALLY (Slice 7c)", () => {
     // Build an iterate container whose body contains: replica-A, replica-B,
-    // consumer. The iterate's layoutNode pass (horizontal-flow branch) owns
-    // the placement loop; same per-consumer-index fix applies.
+    // consumer. The iterate's layoutNode pass (horizontal-flow branch)
+    // owns the placement loop; same by-source-row policy applies.
     const replicaA = "src-a->consumer";
     const replicaB = "src-b->consumer";
     const consumerId = "consumer";
@@ -513,19 +529,18 @@ describe("GraphView — multiple sources targeting same consumer don't overlap",
     const b = boxes.get(replicaB);
     const c = boxes.get(consumerId);
     if (!a || !b || !c) throw new Error("missing iterate-body synthetic box");
-    expect(a.x).not.toBe(b.x);
-    // Both replicas sit above the consumer (orthogonal lift).
-    expect(a.y).toBeLessThan(c.y);
-    expect(b.y).toBeLessThan(c.y);
-    expect(a.y).toBe(b.y);
-    // First replica sits at consumer.x; second shifted right by one step.
+    // Both at consumer.x — vertical column, no horizontal tiling.
     expect(a.x).toBe(c.x);
-    expect(b.x).toBe(c.x + consts.LEAF_W + consts.FLOW_GAP);
+    expect(b.x).toBe(c.x);
+    // Source A at row 0 (just above consumer), source B at row 1.
+    expect(a.y).toBeLessThan(c.y);
+    expect(b.y).toBe(a.y - consts.LEAF_H - consts.STACK_GAP);
   });
 
-  it("group (lift branch): two replicas → first-child consumer get distinct x positions", () => {
+  it("group (lift branch): two replicas → first-child consumer stack VERTICALLY (Slice 7c)", () => {
     // Mirror of the iterate test, but for the vertical-stack group's LIFT
-    // branch (consumer IS the first non-replica child). Same fix applies.
+    // branch (consumer IS the first non-replica child). Same by-source
+    // row policy applies — both replicas at consumer.x, separated in y.
     const replicaA = "src-a->consumer";
     const replicaB = "src-b->consumer";
     const consumerId = "consumer";
@@ -552,13 +567,12 @@ describe("GraphView — multiple sources targeting same consumer don't overlap",
     const b = boxes.get(replicaB);
     const c = boxes.get(consumerId);
     if (!a || !b || !c) throw new Error("missing group-lift synthetic box");
-    expect(a.x).not.toBe(b.x);
-    // Both above the consumer at the same lifted y.
-    expect(a.y).toBeLessThan(c.y);
-    expect(b.y).toBe(a.y);
-    // Tiles horizontally: first at consumer.x, second offset by LEAF_W + FLOW_GAP.
+    // Both share the column x — vertical stack above consumer.
     expect(a.x).toBe(c.x);
-    expect(b.x).toBe(c.x + consts.LEAF_W + consts.FLOW_GAP);
+    expect(b.x).toBe(c.x);
+    // Source A at row 0, source B at row 1 (one chip + STACK_GAP higher).
+    expect(a.y).toBeLessThan(c.y);
+    expect(b.y).toBe(a.y - consts.LEAF_H - consts.STACK_GAP);
   });
 });
 

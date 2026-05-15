@@ -281,32 +281,79 @@ type Box = { x: number; y: number; w: number; h: number };
 type ReplicaPlacement = {
   readonly isReplica: ReadonlySet<string>;
   readonly consumerOf: ReadonlyMap<string, string>;
+  /**
+   * Slice 7c: replica → originating source id (the `replicaOf` field on
+   * the GraphNode, copied here for O(1) lookup during placement). Together
+   * with `rowOfSource` this implements "by-source columns above each
+   * consumer" — one source's replicas all share a row, multiple sources
+   * stack vertically.
+   */
+  readonly sourceOf: ReadonlyMap<string, string>;
+  /**
+   * Slice 7c: source id → its globally-stable row index (0 = closest to
+   * the spine, larger = farther up). Assigned in `graph.nodes` walk
+   * order (which is itself a deterministic walk from `deriveAuxGraph`),
+   * so source A is always row 0 and source B always row 1 across EVERY
+   * consumer they touch — even consumers where A has no replica (those
+   * consumers' row 0 sits empty; B still occupies row 1, never row 0).
+   * This globally-stable property costs vertical space (a container with
+   * only row-2 replicas gets 3 rows of lift, 2 empty) and pays in
+   * scannability — the eye can track "source X always at this row."
+   */
+  readonly rowOfSource: ReadonlyMap<string, number>;
 };
 
 const EMPTY_REPLICA_PLACEMENT: ReplicaPlacement = {
   isReplica: new Set(),
   consumerOf: new Map(),
+  sourceOf: new Map(),
+  rowOfSource: new Map(),
 };
 
 /**
- * Build the replica → consumer map from the graph. The replica's
- * outgoing aux edge points at its consumer (every replica has exactly
- * one — that's the point of replication). Using the edge list (not the
- * `${src}@->${consumer}` id format) keeps the layout decoupled from
- * `graph.ts`'s replica-id convention.
+ * Build the replica → consumer + replica → source + source → row maps
+ * from the graph. The replica's outgoing edge points at its consumer
+ * (every replica has exactly one — that's the point of replication).
+ * Using the edge list (not the `${src}@->${consumer}` id format) keeps
+ * the layout decoupled from `graph.ts`'s replica-id convention.
+ *
+ * **Invariant** (Slice 7c): the zone above each consumer hosts ONLY
+ * replicas. Non-replicated aux sources route via long edges from their
+ * canvas position, regardless of which consumer they target — they
+ * never enter the lift row. Future work that wants "above-consumer"
+ * placement for a non-replica source must promote it to a replica first
+ * (which is what `replicateHighFanoutSources` already does for the
+ * always-overrides path).
+ *
+ * **Kind-agnostic** (Slice 7c, 7b prep): `consumerOf` walks edges
+ * regardless of kind, so a future state-kind replica (Slice 7b drops
+ * the `kind === "aux"` filter in `replicateHighFanoutSources`) lands
+ * here identically to today's aux-kind replicas. Today every replica
+ * has exactly one outgoing edge by construction (`replicateHighFanoutSources`
+ * produces one replica per `(src, consumer)` pair with a single rewritten
+ * edge), so `consumerOf.set(e.from, e.to)` never fights itself.
  */
 const buildReplicaPlacement = (graph: CipherGraph): ReplicaPlacement => {
   const isReplica = new Set<string>();
-  const consumerOf = new Map<string, string>();
+  const sourceOf = new Map<string, string>();
+  const rowOfSource = new Map<string, number>();
+  // Single deterministic walk: encounter order over graph.nodes is the
+  // order deriveAuxGraph emitted (spec-walk order). Each new source id
+  // claims the next row index — first source seen → row 0.
   for (const n of graph.nodes) {
-    if (n.replicaOf !== undefined) isReplica.add(n.stepId);
+    if (n.replicaOf === undefined) continue;
+    isReplica.add(n.stepId);
+    sourceOf.set(n.stepId, n.replicaOf);
+    if (!rowOfSource.has(n.replicaOf)) {
+      rowOfSource.set(n.replicaOf, rowOfSource.size);
+    }
   }
   if (isReplica.size === 0) return EMPTY_REPLICA_PLACEMENT;
+  const consumerOf = new Map<string, string>();
   for (const e of graph.edges) {
-    if (e.kind !== "aux") continue;
     if (isReplica.has(e.from)) consumerOf.set(e.from, e.to);
   }
-  return { isReplica, consumerOf };
+  return { isReplica, consumerOf, sourceOf, rowOfSource };
 };
 
 /**
@@ -400,7 +447,21 @@ const layoutNode = (
     }
 
     const gutterW = leftGutterReplicas.length > 0 ? consts.LEAF_W + consts.FLOW_GAP : 0;
-    const liftH = liftedReplicas.length > 0 ? consts.LEAF_H + consts.STACK_GAP : 0;
+    // Slice 7c: lift height now grows with the maximum source-row used by
+    // any lifted replica in this group. Single-source case (all replicas
+    // at row 0) → maxLiftRow = 0 → liftH = LEAF_H + STACK_GAP, identical
+    // to pre-7c. Multi-source case → liftH grows by one row per
+    // additional source. Computed BEFORE the third pass needs it because
+    // innerY (the in-column children's start) depends on liftH.
+    let maxLiftRow = -1;
+    for (const rId of liftedReplicas) {
+      const sId = replicas.sourceOf.get(rId);
+      if (sId === undefined) continue;
+      const row = replicas.rowOfSource.get(sId) ?? 0;
+      if (row > maxLiftRow) maxLiftRow = row;
+    }
+    const liftH =
+      liftedReplicas.length > 0 ? (maxLiftRow + 1) * (consts.LEAF_H + consts.STACK_GAP) : 0;
 
     const innerX = startX + consts.CONTAINER_PAD + gutterW;
     let innerY = startY + HEADER_H + consts.CONTAINER_PAD + liftH;
@@ -439,21 +500,30 @@ const layoutNode = (
     // shift on innerY above guarantees this y lands inside the group's
     // padded inner area, just below the header.
     //
-    // Per-consumer index counter — see `layoutRoot` for the full rationale.
-    // Multiple sources targeting the same consumer (e.g. dual `always`
-    // replication overrides) would otherwise stack at identical
-    // coordinates; step subsequent replicas RIGHT by LEAF_W + FLOW_GAP.
-    const liftedReplicaIndexByConsumer = new Map<string, number>();
+    // Slice 7c: by-source columns. Each replica's y is determined by the
+    // GLOBAL row of its source — source A at row 0 (closest to consumer),
+    // source B at row 1 (one row above), etc. Multiple sources targeting
+    // the same consumer stack VERTICALLY (one chip's worth above each
+    // other) instead of horizontally tiling. Replicas always sit at
+    // consumer.x — the gutter zone above each consumer hosts only that
+    // consumer's incoming replicas, never adjacent ones.
+    //
+    // Pre-7c the placement was a per-consumer x-step counter; the
+    // disjoint-consumer case had row 0 always full (single replica per
+    // consumer at the lifted row) and multi-source cases tiled
+    // rightward. Post-7c, source A's replicas live at the same y as
+    // each other across the entire canvas — eye-trackable.
     for (const replicaId of liftedReplicas) {
       const consumerId = replicas.consumerOf.get(replicaId);
       if (consumerId === undefined) continue;
       const consumerBox = out.get(consumerId);
       if (!consumerBox) continue;
-      const idx = liftedReplicaIndexByConsumer.get(consumerId) ?? 0;
-      liftedReplicaIndexByConsumer.set(consumerId, idx + 1);
+      const sId = replicas.sourceOf.get(replicaId);
+      const row = sId !== undefined ? (replicas.rowOfSource.get(sId) ?? 0) : 0;
+      const baseY = consumerBox.y - consts.LEAF_H - consts.STACK_GAP;
       out.set(replicaId, {
-        x: consumerBox.x + idx * (consts.LEAF_W + consts.FLOW_GAP),
-        y: consumerBox.y - consts.LEAF_H - consts.STACK_GAP,
+        x: consumerBox.x,
+        y: baseY - row * (consts.LEAF_H + consts.STACK_GAP),
         w: consts.LEAF_W,
         h: consts.LEAF_H,
       });
@@ -478,7 +548,23 @@ const layoutNode = (
   // row shifts down by LEAF_H + STACK_GAP only when at least one replica
   // is present so non-replicated bodies keep their original height.
   const hasIterateReplicas = container.childIds.some((cId) => replicas.isReplica.has(cId));
-  const replicaLiftH = hasIterateReplicas ? consts.LEAF_H + consts.STACK_GAP : 0;
+  // Slice 7c: iterate-body replica lift now scales with the maximum
+  // source-row used by any in-body replica. Single-source case
+  // (rowOfSource === 0 everywhere) → replicaLiftH = LEAF_H + STACK_GAP,
+  // identical to pre-7c. Multi-source case → one extra row per
+  // additional source, regardless of which body chip each replica
+  // targets (by-source columns are globally stable).
+  let iterateMaxRow = -1;
+  for (const childId of container.childIds) {
+    if (!replicas.isReplica.has(childId)) continue;
+    const sId = replicas.sourceOf.get(childId);
+    if (sId === undefined) continue;
+    const row = replicas.rowOfSource.get(sId) ?? 0;
+    if (row > iterateMaxRow) iterateMaxRow = row;
+  }
+  const replicaLiftH = hasIterateReplicas
+    ? (iterateMaxRow + 1) * (consts.LEAF_H + consts.STACK_GAP)
+    : 0;
 
   let innerX = startX + consts.CONTAINER_PAD;
   const innerY = startY + HEADER_H + consts.CONTAINER_PAD + replicaLiftH;
@@ -506,23 +592,24 @@ const layoutNode = (
   // the OLD innerY (the natural top of the inner content), which is
   // inside the container's box.
   //
-  // Per-consumer index counter — see `layoutRoot` for the full rationale.
-  // Multiple sources targeting the same consumer (e.g. dual `always`
-  // replication overrides) would otherwise stack at identical
-  // coordinates; step subsequent replicas RIGHT by LEAF_W + FLOW_GAP.
-  const iterateReplicaIndexByConsumer = new Map<string, number>();
+  // Slice 7c: by-source columns. row = rowOfSource[source] (globally
+  // stable across the whole canvas — source A always at row 0, source B
+  // always at row 1, etc.). replicaY steps UP by one row per
+  // (LEAF_H + STACK_GAP). Always at consumer.x — see the group-lift
+  // pass for the same convention. Pre-7c the per-consumer x-step
+  // counter tiled siblings horizontally; post-7c they stack vertically.
   for (const childId of container.childIds) {
     if (!replicas.isReplica.has(childId)) continue;
     const consumerId = replicas.consumerOf.get(childId);
     if (consumerId === undefined) continue;
     const consumerBox = out.get(consumerId);
     if (!consumerBox) continue;
-    const idx = iterateReplicaIndexByConsumer.get(consumerId) ?? 0;
-    iterateReplicaIndexByConsumer.set(consumerId, idx + 1);
-    const replicaY = consumerBox.y - consts.LEAF_H - consts.STACK_GAP;
+    const sId = replicas.sourceOf.get(childId);
+    const row = sId !== undefined ? (replicas.rowOfSource.get(sId) ?? 0) : 0;
+    const baseY = consumerBox.y - consts.LEAF_H - consts.STACK_GAP;
     out.set(childId, {
-      x: consumerBox.x + idx * (consts.LEAF_W + consts.FLOW_GAP),
-      y: replicaY,
+      x: consumerBox.x,
+      y: baseY - row * (consts.LEAF_H + consts.STACK_GAP),
       w: consts.LEAF_W,
       h: consts.LEAF_H,
     });
@@ -590,10 +677,25 @@ export const layoutRoot = (
   // Shifting once when either condition fires keeps the geometry simple
   // and means the aux-only-lift row and the replica row coincide
   // visually, reinforcing "above the spine = supporting computation."
-  const hasRootReplicas = graph.rootIds.some((id) => replicas.isReplica.has(id));
+  //
+  // Slice 7c: root-replica lift now scales with the maximum source-row
+  // used by any root replica. Aux-only-roots still want exactly 1 row
+  // of lift (they sit at CANVAS_MARGIN regardless of replica row count
+  // — the topmost lifted row). When BOTH conditions fire, the lift
+  // takes the larger of the two needs.
+  let rootReplicaMaxRow = -1;
+  for (const id of graph.rootIds) {
+    if (!replicas.isReplica.has(id)) continue;
+    const sId = replicas.sourceOf.get(id);
+    if (sId === undefined) continue;
+    const row = replicas.rowOfSource.get(sId) ?? 0;
+    if (row > rootReplicaMaxRow) rootReplicaMaxRow = row;
+  }
+  const replicaRowsNeeded = rootReplicaMaxRow >= 0 ? rootReplicaMaxRow + 1 : 0;
   const hasAuxOnlyRoots = graph.rootIds.some((id) => auxOnlyRootIds.has(id));
-  const needsSpineLift = hasRootReplicas || hasAuxOnlyRoots;
-  const rootReplicaLiftH = needsSpineLift ? consts.LEAF_H + consts.STACK_GAP : 0;
+  const auxOnlyRowsNeeded = hasAuxOnlyRoots ? 1 : 0;
+  const totalLiftRows = Math.max(replicaRowsNeeded, auxOnlyRowsNeeded);
+  const rootReplicaLiftH = totalLiftRows * (consts.LEAF_H + consts.STACK_GAP);
   const rowStartY = CANVAS_MARGIN + rootReplicaLiftH;
 
   const boxes = new Map<string, Box>();
@@ -622,31 +724,30 @@ export const layoutRoot = (
   }
 
   // Second pass: place root-level replicas above their consumers. The
-  // shift above guarantees `consumer.y - LEAF_H - STACK_GAP === CANVAS_MARGIN`
-  // for non-pinned consumers, so the replica row sits flush against the
-  // top margin (no negative-y boxes; canvas dimensions don't need
-  // re-extension).
+  // shift above guarantees the bottom replica row (row 0) sits at
+  // `CANVAS_MARGIN + (totalLiftRows - 1) * (LEAF_H + STACK_GAP)` for
+  // non-pinned consumers, with higher rows stacking up to CANVAS_MARGIN.
   //
-  // Per-consumer index counter: multiple distinct sources can target the
-  // same consumer (e.g. setting both `compute-block-count` and
+  // Slice 7c: by-source columns. Multiple distinct sources targeting
+  // the same consumer (e.g. setting both `compute-block-count` and
   // `split-blocks` to "always" in the replication-overrides panel yields
-  // two replicas pointing at the iterate). Without the counter the second
-  // replica lands directly on top of the first — same x, same y — and only
-  // one is visible / clickable. We step each subsequent replica RIGHT by
-  // LEAF_W + FLOW_GAP so they tile horizontally above the consumer.
-  // The same pattern repeats in `layoutNode`'s group + iterate branches —
-  // three sites, one fix each, because each layout pass owns its own
-  // replica-placement loop.
-  const rootReplicaIndexByConsumer = new Map<string, number>();
+  // two replicas pointing at the iterate) used to tile rightward via a
+  // per-consumer x-step counter; post-7c they stack VERTICALLY at the
+  // consumer's anchor x (or first-body-child x for iterate consumers,
+  // per Slice 2). Source A's replicas all share row 0, source B all
+  // share row 1, etc. — globally stable across every consumer they
+  // touch. The same pattern lives in `layoutNode`'s group + iterate
+  // branches; one global `rowOfSource` map drives all three sites.
   for (const id of graph.rootIds) {
     if (!replicas.isReplica.has(id)) continue;
     const consumerId = replicas.consumerOf.get(id);
     if (consumerId === undefined) continue;
     const consumerBox = boxes.get(consumerId);
     if (!consumerBox) continue;
-    const idx = rootReplicaIndexByConsumer.get(consumerId) ?? 0;
-    rootReplicaIndexByConsumer.set(consumerId, idx + 1);
-    const replicaY = consumerBox.y - consts.LEAF_H - consts.STACK_GAP;
+    const sId = replicas.sourceOf.get(id);
+    const row = sId !== undefined ? (replicas.rowOfSource.get(sId) ?? 0) : 0;
+    const baseY = consumerBox.y - consts.LEAF_H - consts.STACK_GAP;
+    const replicaY = baseY - row * (consts.LEAF_H + consts.STACK_GAP);
     // Slice-2 anchor: when the consumer is an iterate container, place
     // the replica above the iterate body's first NON-REPLICA child —
     // i.e. the first actual body step — instead of the iterate's own
@@ -682,7 +783,7 @@ export const layoutRoot = (
       firstNonReplicaChildId !== undefined ? boxes.get(firstNonReplicaChildId) : undefined;
     const anchorX = firstChildBox?.x ?? consumerBox.x;
     boxes.set(id, {
-      x: anchorX + idx * (consts.LEAF_W + consts.FLOW_GAP),
+      x: anchorX,
       y: replicaY,
       w: consts.LEAF_W,
       h: consts.LEAF_H,
