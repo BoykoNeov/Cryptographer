@@ -530,6 +530,70 @@ export const insertStepBefore = (
 };
 
 /**
+ * Prepend `newStep` as the first child of the container identified by
+ * `containerId`. Works on both empty and non-empty containers, and on
+ * both `group` and `iterate` kinds. Throws if no node has that id or if
+ * the id resolves to a leaf (mirrors the throw-on-missing contract of
+ * `insertStepAfter` / `insertStepBefore`).
+ *
+ * Why this is its own primitive: the visual editor's `into-start` drop
+ * semantic — "drop on a container header means land at position 0 of
+ * its body" — needs to work even when the body is EMPTY. The natural
+ * implementation via `insertStepBefore(firstChildId, ...)` has nothing
+ * to anchor on in that case, so the spec store's previous code path
+ * silently fell through to `root-append` and the dropped step landed at
+ * the end of the top-level spec rather than inside the targeted empty
+ * container. This helper closes that gap.
+ *
+ * Reference equality preserved on branches the operation doesn't touch
+ * — same discipline as the surrounding mutators.
+ */
+export const prependChildToContainer = (
+  spec: CipherSpec,
+  containerId: string,
+  newStep: StepNode,
+): CipherSpec => {
+  let found = false;
+  let leafCollision = false;
+
+  const visit = (nodes: readonly StepNode[]): readonly StepNode[] => {
+    let mutated = false;
+    const next = nodes.map((n) => {
+      if (found || leafCollision) return n;
+      if (n.id === containerId) {
+        if (n.kind === "step") {
+          // Caller passed a leaf's id where a container was expected. Flag
+          // and let the outer code throw with a precise message — silently
+          // doing nothing would mask a real wiring bug at the call site.
+          leafCollision = true;
+          return n;
+        }
+        found = true;
+        mutated = true;
+        return { ...n, children: [newStep, ...n.children] };
+      }
+      if (n.kind === "step") return n;
+      const updated = visit(n.children);
+      if (updated === n.children) return n;
+      mutated = true;
+      return { ...n, children: updated };
+    });
+    return mutated ? next : nodes;
+  };
+
+  const newSteps = visit(spec.steps);
+  if (leafCollision) {
+    throw new Error(
+      `prependChildToContainer: id "${containerId}" resolves to a leaf, not a container`,
+    );
+  }
+  if (!found) {
+    throw new Error(`prependChildToContainer: no node with id "${containerId}"`);
+  }
+  return { ...spec, steps: newSteps };
+};
+
+/**
  * Remove the node identified by `stepId` from its parent. Removing the
  * sole child of a group leaves an empty group standing — empty groups
  * are valid in the data model and may carry meaningful labels the user

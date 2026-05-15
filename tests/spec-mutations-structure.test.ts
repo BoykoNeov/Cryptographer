@@ -21,6 +21,7 @@ import {
   findStepAndParent,
   insertStepAfter,
   insertStepBefore,
+  prependChildToContainer,
   removeStep,
   reorderStep,
 } from "@/core/spec-mutations";
@@ -192,6 +193,92 @@ describe("insertStepBefore", () => {
     expect(() => insertStepBefore(aes128Spec, "no-such-id", fixtureLeaf("x"))).toThrow(
       /no step with id "no-such-id"/,
     );
+  });
+});
+
+describe("prependChildToContainer", () => {
+  it("inserts as the first child of a non-empty group", () => {
+    // round.1 originally has [sub-bytes, shift-rows, mix-columns, add-round-key].
+    const newStep = fixtureLeaf("prepended-into-round-1");
+    const updated = prependChildToContainer(aes128Spec, "round.1", newStep);
+    const round1 = findStepAndParent(updated, "round.1");
+    expect(round1?.node.kind).toBe("group");
+    if (round1?.node.kind === "group") {
+      expect(round1.node.children.length).toBe(5);
+      expect(round1.node.children[0]?.id).toBe("prepended-into-round-1");
+      expect(round1.node.children[1]?.id).toBe("round.1.sub-bytes");
+    }
+  });
+
+  it("inserts into an EMPTY group as the sole child", () => {
+    // The headline regression: dropping a step on an empty round used to
+    // fall through to root-append because `insertStepBefore(firstChild,...)`
+    // had nothing to anchor on. Now the empty container actually receives
+    // the new child.
+    const withEmptyRound = removeStep(
+      removeStep(
+        removeStep(removeStep(aes128Spec, "round.1.sub-bytes"), "round.1.shift-rows"),
+        "round.1.mix-columns",
+      ),
+      "round.1.add-round-key",
+    );
+    // Sanity: round.1 is now empty.
+    const emptyR1 = findStepAndParent(withEmptyRound, "round.1");
+    if (emptyR1?.node.kind === "group") {
+      expect(emptyR1.node.children.length).toBe(0);
+    }
+
+    const newStep = fixtureLeaf("dropped-into-empty-round");
+    const updated = prependChildToContainer(withEmptyRound, "round.1", newStep);
+
+    const round1 = findStepAndParent(updated, "round.1");
+    expect(round1?.node.kind).toBe("group");
+    if (round1?.node.kind === "group") {
+      expect(round1.node.children.length).toBe(1);
+      expect(round1.node.children[0]?.id).toBe("dropped-into-empty-round");
+    }
+    // And critically: the step did NOT leak to the top level.
+    const topLevelDropTarget = updated.steps.find((n) => n.id === "dropped-into-empty-round");
+    expect(topLevelDropTarget).toBeUndefined();
+  });
+
+  it("inserts into an iterate body as the first child", () => {
+    // aes-128-ecb's iterate id is "ecb-blocks"; its children begin with
+    // the round structure (initial.add-round-key, round.1, …). Prepending
+    // should slot in before initial.add-round-key.
+    const newStep = fixtureLeaf("prepended-into-ecb-body");
+    const updated = prependChildToContainer(aes128EcbSpec, "ecb-blocks", newStep);
+    const iter = findStepAndParent(updated, "ecb-blocks");
+    expect(iter?.node.kind).toBe("iterate");
+    if (iter && iter.node.kind === "iterate") {
+      expect(iter.node.children[0]?.id).toBe("prepended-into-ecb-body");
+    }
+  });
+
+  it("throws when the id resolves to a leaf, not a container", () => {
+    expect(() => prependChildToContainer(aes128Spec, "key-expansion", fixtureLeaf("x"))).toThrow(
+      /resolves to a leaf, not a container/,
+    );
+  });
+
+  it("throws when no node has that id", () => {
+    expect(() => prependChildToContainer(aes128Spec, "no-such-id", fixtureLeaf("x"))).toThrow(
+      /no node with id "no-such-id"/,
+    );
+  });
+
+  it("preserves reference equality on untouched sibling branches", () => {
+    // Prepending into round.5 should leave round.1's object reference unchanged.
+    const updated = prependChildToContainer(aes128Spec, "round.5", fixtureLeaf("new-in-r5"));
+    const originalRound1 = aes128Spec.steps.find((n) => n.id === "round.1");
+    const updatedRound1 = updated.steps.find((n) => n.id === "round.1");
+    expect(updatedRound1).toBe(originalRound1);
+  });
+
+  it("does not mutate the original spec", () => {
+    const before = JSON.stringify(aes128Spec);
+    prependChildToContainer(aes128Spec, "round.1", fixtureLeaf("ephemeral"));
+    expect(JSON.stringify(aes128Spec)).toBe(before);
   });
 });
 

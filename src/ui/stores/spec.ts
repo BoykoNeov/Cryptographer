@@ -50,6 +50,7 @@ import {
   findStepAndParent,
   insertStepAfter,
   insertStepBefore,
+  prependChildToContainer,
   removeStep,
   updateAllStepsByType,
   updateStepParams,
@@ -351,20 +352,22 @@ export const insertStepIntoSpec = (
   } else if (anchor.kind === "before") {
     updateActive((s) => insertStepBefore(s, anchor.stepId, newLeaf));
   } else if (anchor.kind === "into-start") {
-    // Resolve "first child of container" by walking the spec. The
-    // graph's `ContainerNode.childIds` would also work but reflects
-    // post-collapse state — and collapsing shouldn't change the
-    // insertion semantic. The spec tree is authoritative.
-    const loc = findStepAndParent(currentSpec, anchor.containerId);
-    const firstChild =
-      loc && loc.node.kind !== "step" && loc.node.children.length > 0 && loc.node.children[0];
-    if (firstChild) {
-      updateActive((s) => insertStepBefore(s, firstChild.id, newLeaf));
-    } else {
-      // Container has no children, or the id didn't resolve to a
-      // container at all. Falling through to root-append is the safest
-      // recovery — the dropped step still lands somewhere visible
-      // instead of vanishing.
+    // Land at position 0 of the targeted container's body. The dedicated
+    // `prependChildToContainer` primitive handles BOTH the non-empty
+    // case AND the previously-broken empty-container case in one path —
+    // the old code path (find first child → insertStepBefore) had
+    // nothing to anchor on when the container had zero children and
+    // silently fell through to root-append, mis-scoping the drop to
+    // the end of the top-level spec.
+    try {
+      updateActive((s) => prependChildToContainer(s, anchor.containerId, newLeaf));
+    } catch (err) {
+      // The drop handler only calls into-start when it has confirmed
+      // the anchor id is a container (see `containersById().has(...)`
+      // check in GraphView.handleDrop), so this throw really only
+      // fires if the spec mutated out from under us mid-drop. Recover
+      // by appending to root rather than crashing the UI.
+      console.warn(`insertStepIntoSpec(into-start, ${anchor.containerId}) failed:`, err);
       updateActive((s) => ({ ...s, steps: [...s.steps, newLeaf] }));
     }
   } else {

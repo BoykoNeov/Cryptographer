@@ -1246,9 +1246,33 @@ export const GraphView = () => {
     const collapsed = collapsedSet();
     for (const container of graph().containers) {
       if (collapsed.has(container.id)) continue;
-      if (container.childIds.length === 0) continue;
       const cBox = lay.boxes.get(container.id);
       if (!cBox) continue;
+      if (container.childIds.length === 0) {
+        // Empty container — emit ONE sentinel gutter covering the
+        // whole box. Without this, the body strip below the 22px
+        // header had no gutter and no anchor walk match, so drops
+        // there fell through to root-append and the user saw
+        // "nothing happens" (step landed off-screen at the end of
+        // the top-level spec). The full-box gutter wins over the
+        // header's data-drop-anchor (gutter hit-test runs first),
+        // and both routes resolve to into-start of the same
+        // container, so the entire empty box becomes one
+        // consistent "drop here to fill it" target with live
+        // highlight feedback.
+        out.push({
+          id: `into-start:${container.id}`,
+          // Orientation is purely a CSS hint; for a full-box gutter
+          // neither axis style applies more naturally than the
+          // other, but the value must be valid in the union.
+          orientation: "horizontal",
+          x: cBox.x,
+          y: cBox.y,
+          w: cBox.w,
+          h: cBox.h,
+        });
+        continue;
+      }
       // Filter to REAL (non-replica) children, in spec order. Replicas
       // are synthetic graph artifacts; `insertStepBefore(replicaId, ...)`
       // would throw because the runtime walks the spec tree.
@@ -1688,13 +1712,21 @@ export const GraphView = () => {
       const colonIdx = gutterEncoding.indexOf(":");
       if (colonIdx > 0) {
         const kind = gutterEncoding.slice(0, colonIdx);
-        const siblingId = gutterEncoding.slice(colonIdx + 1);
-        if (kind === "before" && siblingId.length > 0) {
-          insertStepIntoSpec(stepType, { kind: "before", stepId: siblingId });
+        const targetId = gutterEncoding.slice(colonIdx + 1);
+        if (kind === "before" && targetId.length > 0) {
+          insertStepIntoSpec(stepType, { kind: "before", stepId: targetId });
           return;
         }
-        if (kind === "after" && siblingId.length > 0) {
-          insertStepIntoSpec(stepType, { kind: "after", stepId: siblingId });
+        if (kind === "after" && targetId.length > 0) {
+          insertStepIntoSpec(stepType, { kind: "after", stepId: targetId });
+          return;
+        }
+        if (kind === "into-start" && targetId.length > 0) {
+          // Empty-container sentinel gutter (see dropGutters memo):
+          // the entire box of an empty container resolves here so the
+          // user can drop anywhere inside the visible chip, not just
+          // on the labelled header band.
+          insertStepIntoSpec(stepType, { kind: "into-start", containerId: targetId });
           return;
         }
       }

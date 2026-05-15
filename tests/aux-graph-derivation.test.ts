@@ -32,6 +32,7 @@ import {
   isEndpointId,
 } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
+import { removeStep } from "@/core/spec-mutations";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, Trace } from "@/core/types";
@@ -481,6 +482,81 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
       expect(nodeIds.has(e.from)).toBe(true);
       expect(nodeIds.has(e.to)).toBe(true);
     }
+  });
+
+  it("empty group participates in the spine via its own id (deleting all round body steps)", () => {
+    // Regression for the "delete all steps in a round → round disconnects
+    // from the chain" bug. With AES-128's round.5 emptied, the spine
+    // should route `round.4.add-round-key → round.5 → round.6.sub-bytes`
+    // rather than leapfrogging straight to round.6 (which would leave the
+    // empty round.5 box stranded on the canvas with no edges).
+    let emptiedSpec = aes128Spec;
+    // Remove all four children of round.5 in turn. Using the live mutation
+    // helpers keeps the test honest about the editor's actual flow.
+    for (const id of [
+      "round.5.sub-bytes",
+      "round.5.shift-rows",
+      "round.5.mix-columns",
+      "round.5.add-round-key",
+    ]) {
+      emptiedSpec = removeStep(emptiedSpec, id);
+    }
+    // Empty-spec derivation: no trace needed for state-edge inference.
+    const g = deriveAuxGraph(emptyTrace(), emptiedSpec);
+    const stateEdges = g.edges.filter((e) => e.kind === "state");
+
+    // The two headline edges the empty group is supposed to bridge.
+    expect(
+      stateEdges.find((e) => e.from === "round.4.add-round-key" && e.to === "round.5"),
+    ).toBeDefined();
+    expect(
+      stateEdges.find((e) => e.from === "round.5" && e.to === "round.6.sub-bytes"),
+    ).toBeDefined();
+    // And critically: the spine MUST NOT skip over round.5 entirely (the
+    // pre-fix behavior left round.5 disconnected).
+    expect(
+      stateEdges.find((e) => e.from === "round.4.add-round-key" && e.to === "round.6.sub-bytes"),
+    ).toBeUndefined();
+
+    // Edge count math: original 40 spine edges → remove 4 leaves (-4) → add
+    // 1 spine-participant for the empty group (+0 new node, but: each leaf
+    // removal cuts 1 outgoing edge; the empty group's id replaces 0 of the
+    // 4 lost positions structurally — it sits BETWEEN round.4 and round.6
+    // so it contributes 2 edges where there used to be 1 (4→5→6 instead
+    // of 4→5.sub-bytes…→5.ark→6.sub-bytes with 4 internal r5 edges).
+    // Net: 40 - 4 internal r5 edges (5.sb→5.sr, 5.sr→5.mc, 5.mc→5.ark, 5.ark→6.sb)
+    //      - 1 inbound (4.ark→5.sb) + 2 new (4.ark→r5, r5→6.sb) = 40 - 5 + 2 = 37.
+    expect(stateEdges.length).toBe(37);
+  });
+
+  it("nested empty group inside an otherwise filled outer group still participates", () => {
+    // Synthesize a spec with a populated outer group containing an empty
+    // inner group sandwiched between two leaves. The inner group should
+    // appear as a spine node between them.
+    const synthSpec: typeof aes128Spec = {
+      ...aes128Spec,
+      id: "synth-empty-nested",
+      steps: [
+        { kind: "step", id: "leafA", type: "test.fixture@1", params: {} },
+        {
+          kind: "group",
+          id: "outer",
+          label: "Outer",
+          children: [
+            { kind: "step", id: "innerLeafA", type: "test.fixture@1", params: {} },
+            { kind: "group", id: "inner-empty", label: "Empty", children: [] },
+            { kind: "step", id: "innerLeafB", type: "test.fixture@1", params: {} },
+          ],
+        },
+        { kind: "step", id: "leafB", type: "test.fixture@1", params: {} },
+      ],
+    };
+    const g = deriveAuxGraph(emptyTrace(), synthSpec);
+    const stateEdges = g.edges.filter((e) => e.kind === "state");
+    // Single chain: leafA → innerLeafA → inner-empty → innerLeafB → leafB.
+    expect(stateEdges.length).toBe(4);
+    expect(stateEdges.find((e) => e.from === "innerLeafA" && e.to === "inner-empty")).toBeDefined();
+    expect(stateEdges.find((e) => e.from === "inner-empty" && e.to === "innerLeafB")).toBeDefined();
   });
 
   it("never duplicates aux+state on the same (from, to, auxKey) triple", () => {
