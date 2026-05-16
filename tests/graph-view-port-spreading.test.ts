@@ -323,3 +323,124 @@ describe("port-spreading — composes with `buildReplicaPlacement` on real-shape
     expect(bOffsetAtC2).toBe(+5);
   });
 });
+
+// ─── REPRO: chip-head heterogeneous fan-in (port-spreading-consumer-head) ──
+//
+// Slice 7c manual smoke surfaced fan-IN ambiguity at a collapsed-iterate
+// chip head receiving heterogeneous incoming edges (mix of a non-replica
+// state edge from the previous spine leaf + aux replicas from multiple
+// distinct sources). The advisor (2026-05-16) flagged three plausible
+// mechanisms and asked: construct a failing test before fleshing the plan.
+// If we can't write the assertion, we don't know the bug.
+//
+// These two `it.fails` tests pin the two mechanisms that are testable at
+// the helper level (the third, off-chip clamping against chip-vs-leaf
+// width, lives in the EdgePath render site and needs an integration test).
+// Each asserts the desired POST-fix behavior; both currently fail under
+// the global-rows formula. When the fix lands, drop `.fails` and they
+// become regression guards.
+//
+//   - Mechanism 1 (collision-at-zero): a non-replica edge returns 0, AND
+//     the source mapped to the middle global row (`(row - (total-1)/2)
+//     = 0`) also returns 0. Two distinct logical incoming edges land at
+//     the same x on the consumer top — visual collision.
+//   - Mechanism 2 (skipped-global-rows): a consumer's local fan-in only
+//     hits a subset of the global rows; adjacent local edges land more
+//     than one `portGap` apart because the global formula counts skipped
+//     rows. Spread spans further than the local fan-in needs and reads
+//     visually uneven against the consumer width.
+//
+// **Fix-direction note:** Test B's assertion (`|offsetA - offsetB| ===
+// portGap`) is opinionated about a per-consumer fan-in fix. If we instead
+// keep global rows and only retune chip-width handling, Test B's shape
+// would change. Run as DIAGNOSTIC: a failure tells us "skipped-row
+// spread happens"; the fix-direction call is the plan-flesh-out decision.
+
+describe("port-spreading — chip-head heterogeneous fan-in (REPRO — bug)", () => {
+  it.fails(
+    "mechanism 1: a non-replica edge and a middle-row replica edge to the same consumer produce DISTINCT offsets",
+    () => {
+      // Three global sources A (row 0), B (row 1, middle), C (row 2).
+      // Consumer c1 receives:
+      //   - one non-replica state edge from `prev` → offset 0 (no row).
+      //   - one aux replica edge from source B (middle row) → offset 0
+      //     under `(row - (total-1)/2) * portGap` = (1 - 1) * 10 = 0.
+      // Both arrows arrive at the same x on c1's top edge.
+      const g = buildSyntheticGraph({
+        nodes: [
+          consumerNode("prev"),
+          consumerNode("c1"),
+          consumerNode("c2"),
+          consumerNode("c3"),
+          replicaNode("A->c2", "A"),
+          replicaNode("B->c1", "B"),
+          replicaNode("C->c3", "C"),
+        ],
+        edges: [
+          // Non-replica spine edge prev → c1.
+          { from: "prev", to: "c1", auxKey: "state", kind: "state" },
+          // Aux replica edges (B lands on c1; A and C land elsewhere so
+          // the placement registers 3 distinct global sources).
+          auxEdge("A->c2", "c2"),
+          auxEdge("B->c1", "c1"),
+          auxEdge("C->c3", "c3"),
+        ],
+        rootIds: ["prev", "A->c2", "B->c1", "C->c3", "c1", "c2", "c3"],
+      });
+      const placement = buildReplicaPlacement(g);
+      expect(placement.rowOfSource.size).toBe(3);
+
+      const spineEdge = g.edges[0];
+      const bToC1 = g.edges[2];
+      if (!spineEdge || !bToC1) throw new Error("missing edges");
+      const portGap = 10;
+
+      const spineOffset = replicaTargetXOffset(spineEdge, placement, portGap);
+      const bMiddleOffset = replicaTargetXOffset(bToC1, placement, portGap);
+
+      // Both edges target c1. Distinct logical sources MUST get distinct
+      // offsets — otherwise the arrows visually collide at the chip head.
+      // Currently FAILS: spineOffset === 0 (non-replica), bMiddleOffset
+      // === 0 (middle global row). Same value → collision.
+      expect(spineOffset).not.toBe(bMiddleOffset);
+    },
+  );
+
+  it.fails(
+    "mechanism 2: adjacent local edges at one consumer land exactly `portGap` apart (per-consumer fan-in spacing)",
+    () => {
+      // Three global sources A (row 0), B (row 1), C (row 2). Consumer
+      // c1 sees only A and C (B's replica goes to a different consumer).
+      // Under per-consumer fan-in: A and C are c1's only two incoming
+      // edges → spacing portGap. Under global rows: A at -1*portGap,
+      // C at +1*portGap → spacing 2*portGap because the skipped row B
+      // counts toward the spread.
+      const g = buildSyntheticGraph({
+        nodes: [
+          consumerNode("c1"),
+          consumerNode("c-other"),
+          replicaNode("A->c1", "A"),
+          replicaNode("B->c-other", "B"),
+          replicaNode("C->c1", "C"),
+        ],
+        edges: [auxEdge("A->c1", "c1"), auxEdge("B->c-other", "c-other"), auxEdge("C->c1", "c1")],
+        rootIds: ["A->c1", "B->c-other", "C->c1", "c1", "c-other"],
+      });
+      const placement = buildReplicaPlacement(g);
+      expect(placement.rowOfSource.size).toBe(3);
+
+      const aToC1 = g.edges[0];
+      const cToC1 = g.edges[2];
+      if (!aToC1 || !cToC1) throw new Error("missing edges");
+      const portGap = 10;
+
+      const aOffset = replicaTargetXOffset(aToC1, placement, portGap);
+      const cOffset = replicaTargetXOffset(cToC1, placement, portGap);
+
+      // Per-consumer spacing: |offsetA - offsetC| === portGap. Currently
+      // FAILS: spacing is 2 * portGap because B's skipped global row
+      // inflates the spread without contributing a visible edge.
+      expect(Math.abs(aOffset - cOffset)).toBe(portGap);
+    },
+  );
+});

@@ -1,9 +1,12 @@
 # Port-spreading at consumer head
 
-**Status:** Stub 2026-05-16. **Position in time:** next priority — bumped
-above Slice 7b after the Slice 7c manual smoke pass surfaced fan-IN
-ambiguity at chip heads. Blocks Slice 7b → Feistel-plan → first Feistel
-cipher → universal cipher-shape plan.
+**Status:** Diagnosed 2026-05-16 (two mechanisms confirmed via `it.fails`
+tests; one render-site mechanism deferred). Fix sketch agreed
+kind-agnostic per the advisor's pushback against reversing the existing
+design commitment. Implementation slice pending. **Position in time:**
+next priority — bumped above Slice 7b after the Slice 7c manual smoke
+pass surfaced fan-IN ambiguity at chip heads. Blocks Slice 7b →
+Feistel-plan → first Feistel cipher → universal cipher-shape plan.
 
 ## Context
 
@@ -32,26 +35,97 @@ Memory entries:
 - `feedback_collapsed_iterate_design.md` — Option C box-with-header
   context; two existing chip-row detection sites.
 
-## Approach (to flesh out)
+## Diagnosis (2026-05-16 — confirmed via failing tests)
 
-Provisional sketch — confirm with user before code.
+Advisor pushed back on the stub's original "pick 1 of 3 ordering options"
+framing: the visible bug at chip heads isn't one mechanism, it's two
+distinct mechanisms operating on the same `replicaTargetXOffset` helper.
+Both pinned by `it.fails` tests in `tests/graph-view-port-spreading.test.ts`
+under the `chip-head heterogeneous fan-in (REPRO — bug)` describe block.
 
-1. **Decouple consumer-head port assignment from replica-row index.**
-   When the consumer is a chip-head (or generally any consumer with
-   heterogeneous incoming sources), use a port-assignment scheme that
-   orders distinct source ids stably and distributes them across the
-   chip's top edge.
-2. **Stable port ordering.** Options to weigh:
-   - Order by canonical source id (lexicographic).
-   - Order by source's canvas x-position (left-to-right).
-   - Order by edge kind (state first, then aux, then feedback) — keeps
-     the spine arrow at a predictable port.
-3. **Preserve the existing math for leaf consumers** — only the chip-
-   head case needs the new rule (chips are narrow; their incoming-edge
-   count is higher than a normal leaf's).
-4. **Composes with Slice 7b.** Once state edges fan into chip rows
-   (7b's outcome), the chip head sees N state edges plus M aux edges.
-   Whatever rule lands here must accommodate that without re-tuning.
+- **Mechanism 1 — Collision at offset 0.** A non-replica edge (e.g. the
+  state spine arrow from the previous leaf) returns `0` from
+  `replicaTargetXOffset`. Independently, the source mapped to the middle
+  global row — `(row - (total-1)/2) === 0`, which happens whenever
+  `total` is odd — also returns `0`. Two distinct logical incoming edges
+  land at the same x on the consumer's top. **Confirmed:** the test
+  `mechanism 1: ... DISTINCT offsets` asserts `spineOffset !==
+  bMiddleOffset` and fails (both are 0).
+- **Mechanism 2 — Skipped-global-rows inflate the spread.** A consumer's
+  local fan-in only hits a subset of the global rows. Adjacent local
+  edges land farther apart than `portGap` because the global formula
+  counts skipped rows. **Confirmed:** the test `mechanism 2: ... exactly
+  portGap apart` constructs a 3-source canvas where consumer c1 sees
+  only sources A (row 0) and C (row 2). Per-consumer spacing would be
+  `portGap`; current code returns `2 * portGap`.
+- **Mechanism 3 — Off-chip clamp.** `EdgePath` clamps `targetXOffset`
+  to `LEAF_W/2 − 4` regardless of whether the consumer is a normal leaf
+  (`LEAF_W` wide) or a collapsed-iterate chip-row entry (narrower than
+  `LEAF_W`). Lives in the render site, not the helper — needs an
+  integration-level test (jsdom + measured chip geometry) to pin, not
+  a helper unit test. Logged but deferred to the implementation slice
+  if visual smoke after the helper fix still shows arrows sliding off
+  chip edges.
+
+The original stub's claim — "the math is the wrong distribution rule for
+heterogeneous sources" — wasn't quite right. The math distributes by
+**global row index**, which is correct for the cross-canvas eye-tracking
+property the existing code design-commits to (`GraphView.tsx` lines
+1124–1149). It's wrong for the chip-head case specifically because two
+side effects of the global formula — the offset-zero collision band and
+the skipped-row inflation — produce visual ambiguity that the eye reads
+as "these arrows are the same thing." The fix has to thread two needles:
+preserve enough of the global property that the cross-canvas eye-tracking
+survives, while preventing the two collision modes at the consumer.
+
+## Approach — kind-agnostic per-consumer slot assignment
+
+Direction agreed with user (2026-05-16) after the advisor flagged option 3
+("order by edge kind") as a reversal of an explicit kind-agnostic design
+commitment. Chosen path: **decide kind-awareness later, revisit at Slice
+7b when state-edge replication actually lands and we can see whether
+kind-agnostic + per-consumer fan-in reads cleanly on a real Feistel
+canvas.** The immediate fix stays kind-agnostic.
+
+Sketch — to be filled in during the implementation slice:
+
+1. **Introduce a per-consumer port-slot index.** For each consumer `c`,
+   compute the list of incoming edges (replica + non-replica), sort by
+   a stable kind-agnostic key — first proposal **source canonical id**
+   (lexicographic over `sourceOf.get(edge.from) ?? edge.from`, so
+   non-replica edges sort by their own `from` id alongside replica
+   sources). Tie-breaks: edge `from` id, then `auxKey`. Output is a
+   `Map<edgeKey, slotIndex>` where `slotIndex` runs `0..localCount-1`.
+2. **Replace the global-row formula with the local slot formula.**
+   `replicaTargetXOffset` becomes `consumerPortOffset` (renamed since
+   it no longer keys off replica rows alone), returning
+   `(slotIndex - (localCount - 1) / 2) * portGap`. Same shape,
+   different input → preserves the centered-spread property and the
+   degenerate `localCount === 1 → offset 0` short-circuit.
+3. **Cross-canvas eye-tracking is partially preserved.** A source that
+   targets multiple consumers no longer lands at the same x on every
+   consumer (because each consumer's slot index depends on its local
+   fan-in). What's preserved: a source's slot at a consumer is stable
+   under canvas-wide edits (adding an unrelated source elsewhere
+   doesn't shift it). What's lost: "source A always lands HERE." User
+   trades this for chip-head clarity — flag for visual smoke after
+   the fix to confirm the trade reads as net-better.
+4. **Preserve `replicaTargetXOffset`'s degenerate behavior** at the
+   API boundary. The two existing call sites (`EdgePath.targetXOffset`
+   + the `createMemo` at the render site) keep their shape; the
+   internal computation swaps in the per-consumer logic.
+5. **Slice 7b composability.** When state edges get replicated and
+   start fanning into chip rows, they enter the same per-consumer
+   slot bucket as aux edges. No kind-aware branch needed — the
+   ordering is still kind-agnostic. Slice 7b's "drop the
+   `kind === 'aux'` filter and machinery picks up state replicas for
+   free" promise stays valid.
+6. **Mechanism 3 (off-chip clamp) is OUT of scope for the helper fix.**
+   If the helper fix doesn't visually resolve the chip-head ambiguity
+   on the 7c manual smoke fixture, add a render-site change: detect
+   chip-row consumers via the same anchor sites Option C uses
+   (`layoutRoot` + `visualEdgeTargetId`) and clamp against chip width
+   instead of `LEAF_W`. Flagged as the highest-likelihood follow-up.
 
 ## Critical files
 
@@ -66,21 +140,28 @@ Provisional sketch — confirm with user before code.
 
 ## Open questions
 
-- **Should port assignment be cipher-aware?** Future Feistel branching
-  could produce 2 state-out edges that fan to different consumers; the
-  consumer side might see "L state + R state" from one Feistel
-  predecessor and "aux key" from another. Port ordering by edge-kind
-  groups would keep both states adjacent — pedagogically clearer than
-  interleaving with aux.
-- **Density-scale interaction.** `LEAF_W` is density-scaled; the
-  per-port gap should be a fraction of width, not a fixed pixel —
-  confirm `Math.max(6, LEAF_W / 10)` still holds for chip widths
-  (chips are narrower than full leaves).
+- **Density-scale interaction.** `LEAF_W` is density-scaled; the per-port
+  gap should be a fraction of width, not a fixed pixel — confirm
+  `Math.max(6, LEAF_W / 10)` still holds for chip widths (chips are
+  narrower than full leaves). Becomes more pressing if Mechanism 3
+  (off-chip clamp) needs the render-site fix described in step 6 of the
+  approach.
 - **Chip-row anchor sites.** Per `feedback_collapsed_iterate_design.md`,
   Option C added 2 chip-row detection sites in `layoutRoot` +
-  `visualEdgeTargetId`. Port-spreading consumer-head logic may want a
-  3rd site, OR the existing 2 may be enough if `targetXOffset` reads
-  the chip's geometry through the same anchor.
+  `visualEdgeTargetId`. The per-consumer port-slot computation doesn't
+  need a new site (it keys off `edge.to`, which is already canonical),
+  but the Mechanism 3 follow-up (clamp-against-chip-width) likely does.
+
+## Resolved questions
+
+- **Cipher-aware port assignment (edge.kind ordering)?** Resolved
+  2026-05-16: defer to Slice 7b. Per the advisor's read, option 3 in
+  the original stub ("order by edge kind: state first, aux, feedback")
+  reverses an explicit kind-agnostic design commitment at
+  `GraphView.tsx` lines 1145–1149. User picked "decide later" — make
+  the immediate fix kind-agnostic and revisit when Slice 7b lands and
+  Feistel state-edge replication is observable. Kept as a Slice 7b
+  follow-up if kind-agnostic reads visually muddy on a Feistel canvas.
 
 ## Verification
 
