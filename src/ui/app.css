@@ -1094,6 +1094,26 @@ button:disabled {
   outline-offset: 1px;
 }
 
+/* Tighter padding variant of `.sbox-warning-banner` for the Serpent
+   4×4 grid context — same red-leaning visual language, narrower padding
+   so it doesn't tower over a grid that's ~135px wide vs the AES grid's
+   ~544px. Identical color tokens so the two banners read as the same
+   warning across both cipher families. */
+.serpent-sbox-warning-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  background: rgba(220, 38, 38, 0.1);
+  border: 1px solid var(--danger, #dc2626);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.35;
+  max-width: 100%;
+}
+
 /* ─── Serpent S-box editor (4x4 grid, 16 4-bit entries) ───────────────── */
 /* Serpent's S-boxes are 16-entry 4-bit tables, so we render them as a 4x4
    grid of editable cells. Index 0 is top-left; index 15 is bottom-right,

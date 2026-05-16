@@ -14,12 +14,13 @@
 
 import { findStep } from "@/core/spec-mutations";
 import type { Json, StepLeaf } from "@/core/types";
-import { For, Match, Show, Switch, createSignal } from "solid-js";
+import { For, Match, Show, Switch, createMemo, createSignal } from "solid-js";
 import {
   editAllStepsByType,
   editStepParams,
   removeStepFromSpec,
   syncSboxInverseToCounterpart,
+  syncSboxInverseToCounterpartByIndex,
   useMode,
   useSpec,
 } from "../stores/spec";
@@ -28,7 +29,13 @@ import { ByteCellInput } from "./ByteCellInput";
 import { MatrixEditor } from "./MatrixEditor";
 import { SboxEditor } from "./SboxEditor";
 import { ShiftsEditor } from "./ShiftsEditor";
-import { countRedundantDuplicates, invertSbox } from "./sbox-validation";
+import {
+  collisionGroupsByIndex,
+  countRedundantDuplicates,
+  findDuplicateIndices,
+  invertSbox,
+  repairToPermutation,
+} from "./sbox-validation";
 
 type Props = {
   /**
@@ -618,15 +625,37 @@ const SerpentAddRoundKeyBlock = (props: BlockProps) => {
 // sboxIndex (0..7) is shown read-only as context — telling the user
 // "this is S-box 3 of the 8 Serpent S-boxes" so they can correlate
 // with the cipher description.
+//
+// Same validation suite as the AES SboxEditor — `findDuplicateIndices`,
+// `countRedundantDuplicates`, `repairToPermutation`, and `invertSbox` are
+// all size-parameterized by `values.length`, so they work at N=16 without
+// modification. The visual presentation differs (warning banner is
+// tighter to match the smaller grid; cross-mode Sync names the specific
+// S-box index because Serpent cycles 8 distinct tables across the 32
+// rounds — see `syncSboxInverseToCounterpartByIndex` in
+// `stores/spec.ts`).
 const SerpentSubBytesBlock = (props: BlockProps) => {
   const params = (): { sbox?: number[]; sboxIndex?: number } => props.step.params as never;
   const sbox = (): readonly number[] => params().sbox ?? [];
+  const sboxIndex = (): number => params().sboxIndex ?? 0;
+
+  // Memoize per-cell validation so the 16 ByteCellInputs below don't
+  // each recompute the dup-set on every render. Mirrors SboxEditor's
+  // pattern at N=256.
+  const duplicateSet = createMemo(() => findDuplicateIndices(sbox()));
+  const collisionGroups = createMemo(() => collisionGroupsByIndex(sbox()));
+  const redundantCount = createMemo(() => countRedundantDuplicates(sbox()));
+  const isBijective = (): boolean => redundantCount() === 0;
 
   const writeSbox = (next: number[]) => {
     editStepParams(props.step.id, {
       ...(props.step.params as Record<string, Json>),
       sbox: next,
     });
+  };
+
+  const handleRepair = () => {
+    writeSbox(repairToPermutation(sbox()));
   };
 
   return (
@@ -637,15 +666,50 @@ const SerpentSubBytesBlock = (props: BlockProps) => {
           <dd>S_{params().sboxIndex ?? "—"}</dd>
         </div>
       </dl>
+      <Show when={redundantCount() > 0}>
+        {/* Warning banner — same red-leaning visual language as
+            SboxEditor's, scoped to a tighter padding class so it sits
+            comfortably above a 4×4 grid instead of a 16×16 one. */}
+        <div class="serpent-sbox-warning-banner" role="alert">
+          <span class="sbox-warning-icon" aria-hidden="true">
+            ⚠
+          </span>
+          <span class="sbox-warning-text">
+            This 4-bit S-box must be a permutation of 0–15 (each value appears exactly once). With{" "}
+            {redundantCount()} duplicate {redundantCount() === 1 ? "value" : "values"}, the table is
+            not invertible.
+          </span>
+          <ActionButton
+            class="sbox-warning-repair"
+            onAction={handleRepair}
+            feedbackLabel={`Repaired Serpent S_${sboxIndex()} to a permutation`}
+          >
+            Repair to permutation
+          </ActionButton>
+        </div>
+      </Show>
       <div class="param-section">
         <div class="param-section-label">S-box (16 entries, 4-bit each)</div>
         <div class="serpent-sbox-grid">
           <For each={sbox()}>
             {(value, i) => (
-              <div class="serpent-sbox-cell-wrap" title={`S[${i()}] = ${value}`}>
+              <div
+                class="serpent-sbox-cell-wrap"
+                title={
+                  collisionGroups().get(i())
+                    ? `S[${i()}] = ${value} — duplicate value (also at ${(
+                        collisionGroups().get(i()) ?? []
+                      )
+                        .filter((j) => j !== i())
+                        .map((j) => `S[${j}]`)
+                        .join(", ")})`
+                    : `S[${i()}] = ${value}`
+                }
+              >
                 <ByteCellInput
                   compact
                   value={value}
+                  duplicate={duplicateSet().has(i())}
                   onCommit={(next) => {
                     // Clamp to 0..15 — anything outside that range isn't a
                     // valid 4-bit S-box entry. ByteCellInput will already
@@ -661,7 +725,57 @@ const SerpentSubBytesBlock = (props: BlockProps) => {
           </For>
         </div>
       </div>
+      <SerpentSyncInverseRow
+        currentSbox={sbox()}
+        sboxIndex={sboxIndex()}
+        stepType={props.step.type}
+        isBijective={isBijective()}
+      />
     </>
+  );
+};
+
+// Cross-mode mirror for Serpent SubBytes. Distinct from the AES
+// `SyncInverseRow` because Serpent cycles **8 different S-boxes** across
+// its 32 rounds — broadcasting one inverted table to every
+// `serpent.sub-bytes@1` leaf in the counterpart slot would overwrite 28
+// of the 32 rounds with the wrong inverse. The button (and its mutator)
+// filter by `sboxIndex` so editing S_3 in encrypt and clicking Sync only
+// updates the decrypt-side leaves whose `sboxIndex === 3`.
+//
+// Label names the specific S-box ("Sync inverse S_3 to decrypt") — the
+// pedagogical hook. Tooltip explicitly states the other 7 are
+// independent so users don't think the button is broken when their S_5
+// edits stay un-mirrored.
+const SerpentSyncInverseRow = (props: {
+  currentSbox: readonly number[];
+  sboxIndex: number;
+  stepType: string;
+  isBijective: boolean;
+}) => {
+  const mode = useMode();
+  const counterpartLabel = (): string => (mode() === "encrypt" ? "decrypt" : "encrypt");
+  const buttonLabel = (): string => `Sync inverse S_${props.sboxIndex} to ${counterpartLabel()}`;
+  const disabledTooltip =
+    "Repair to a permutation first — the inverse is undefined for a non-bijective table.";
+  const enabledTooltip = (): string =>
+    `Compute the inverse of this S-box (S_${props.sboxIndex}) and write it to every ${props.stepType} step in the ${counterpartLabel()} slot whose sboxIndex is ${props.sboxIndex}. The other 7 Serpent S-boxes are independent — Sync each separately when you edit it.`;
+
+  return (
+    <div class="sync-inverse-row">
+      <ActionButton
+        disabled={!props.isBijective}
+        title={props.isBijective ? enabledTooltip() : disabledTooltip}
+        feedbackLabel={`Synced inverse S_${props.sboxIndex} to ${counterpartLabel()} mode`}
+        onAction={() => {
+          if (!props.isBijective) return; // belt-and-braces; button is disabled
+          const inverted = invertSbox(props.currentSbox);
+          syncSboxInverseToCounterpartByIndex(props.stepType, props.sboxIndex, inverted);
+        }}
+      >
+        {buttonLabel()}
+      </ActionButton>
+    </div>
   );
 };
 

@@ -297,6 +297,66 @@ export const syncSboxInverseToCounterpart = (
 };
 
 /**
+ * Per-S-box-index variant of `syncSboxInverseToCounterpart`. Required for
+ * ciphers like Serpent that cycle through **multiple distinct S-boxes**
+ * across the rounds (Serpent uses 8 different 4-bit S-boxes — `S_0`..`S_7` —
+ * with round `r` using `S_{(r-1) mod 8}` for forward encryption). Every
+ * leaf in the encrypt spec carries its own `sboxIndex` (0..7) AND its own
+ * 16-entry `sbox` table; the decrypt spec mirrors the structure with the
+ * inverse tables, same indices.
+ *
+ * **Why a second mutator instead of extending the first**: the AES case
+ * has one S-box reused across all rounds — broadcasting one inverted
+ * table to every `generic.byte-substitution@1` leaf in the counterpart
+ * slot is correct. The Serpent case has 8 different S-boxes — broadcasting
+ * one inverted table to every `serpent.sub-bytes@1` leaf would overwrite
+ * 28 of the 32 decrypt-side rounds with the wrong inverse. The two
+ * verbs read as parallel siblings: "AES has one S-box, Serpent has
+ * eight, and the Sync semantics differ accordingly."
+ *
+ * Filters by `params.sboxIndex === sboxIndex` inside the updater so
+ * decrypt-side leaves whose `sboxIndex` doesn't match the edited leaf's
+ * are returned by reference (no spec rebuild). The user's "edit S_3 in
+ * encrypt → click Sync → only the S_3 inverse leaves on the decrypt
+ * side update" semantic is the pedagogical hook.
+ *
+ * **Not solved this slice (intentional, deferred):**
+ *   - Within-encrypt S_x consistency. If the user edits `round.4.sub-bytes`
+ *     (which uses S_3) and clicks Sync, encrypt rounds 12/20/28 (also S_3)
+ *     stay un-edited and now diverge from their decrypt counterparts. This
+ *     is the existing "each leaf owns its params" semantic — same as
+ *     AddRoundKey. A future "Apply S_3 to all rounds using S_3" affordance
+ *     would address it. Out of scope for cross-mode mirror Slice 2.
+ *   - Slice 4's enumeration-test registry shape will need a `groupBy?:
+ *     "sboxIndex"` field to handle this case cleanly. Today the test would
+ *     pass as long as ANY Sync button is present for the step type; the
+ *     per-index semantic is asserted by `tests/serpent-sync-inverse-store.test.ts`
+ *     instead (including the non-regression "other sboxIndex leaves are
+ *     unchanged" assertion).
+ */
+export const syncSboxInverseToCounterpartByIndex = (
+  stepType: string,
+  sboxIndex: number,
+  invertedSbox: readonly number[],
+): void => {
+  const current = specs();
+  const counterpartMode: Mode = mode() === "encrypt" ? "decrypt" : "encrypt";
+  const updated = updateAllStepsByType(current[counterpartMode], stepType, (params) => {
+    const p = params as { sboxIndex?: number };
+    // Reference-equal return for non-matching index → updateAllStepsByType's
+    // tree walker short-circuits the rebuild for this leaf, preserving
+    // structural sharing across the unchanged 7/8ths of the rounds.
+    if (p.sboxIndex !== sboxIndex) return params;
+    return {
+      ...(params as Record<string, Json>),
+      sbox: [...invertedSbox],
+    };
+  });
+  if (updated === current[counterpartMode]) return; // reference-equal → no-op
+  setSpecs({ ...current, [counterpartMode]: updated } as SpecsByMode);
+};
+
+/**
  * Insert a brand-new step leaf into the live spec (Slice 8 of the 2D
  * editor plan). The palette + GraphView drop handler call this with a
  * `stepType` registered in the registry and an anchor that says WHERE
