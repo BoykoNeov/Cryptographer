@@ -171,7 +171,8 @@ const BASE_REPLICA_ROW_X_STEP = 0;
  * edge in the vertical regime. Row k's arrow emerges from x =
  * `replicaCenter.x + (row - (total-1)/2) × step` on the replica's
  * bottom edge — monotonic spread by row, MATCHING the direction of
- * `replicaTargetXOffset`'s spread at the consumer head so each
+ * `consumerPortOffset`'s slot ordering at the consumer head (slots are
+ * assigned in row order; see `ConsumerPortAssignment` doc) so each
  * source's arrow stays on its own column side (row 0 left → left
  * port; row N-1 right → right port; no crossovers). 32 px ≈ ¼ ×
  * LEAF_W at normal density — wide enough for the start-dots to read
@@ -396,6 +397,146 @@ const EMPTY_REPLICA_PLACEMENT: ReplicaPlacement = {
   consumerOf: new Map(),
   sourceOf: new Map(),
   rowOfSource: new Map(),
+};
+
+/**
+ * Per-consumer port-slot assignment for the consumer-side x-offset
+ * (port-spreading-consumer-head plan, 2026-05-16). Replaces the global-
+ * row formula in the old `replicaTargetXOffset` with a per-consumer slot
+ * index so each consumer's incoming edges spread across its top edge
+ * regardless of canvas-wide source counts.
+ *
+ * **Why per-consumer:** Slice 7c manual smoke surfaced two distinct
+ * fan-IN ambiguity mechanisms at collapsed-iterate chip heads —
+ * confirmed via `it.fails` tests in
+ * `tests/graph-view-port-spreading.test.ts`:
+ *
+ *   1. **Collision at offset 0** — the old formula `(row - (total-1)/2)
+ *      * portGap` returns 0 for any source mapped to the middle global
+ *      row (whenever `total` is odd). A non-replica edge also returned
+ *      0 (no row). Two distinct logical incoming edges landed at the
+ *      same x on the consumer's top.
+ *   2. **Skipped-global-rows inflate the spread** — a consumer with
+ *      local fan-in N from M > N global sources got offsets spanning
+ *      more than (N-1) * portGap because skipped rows counted toward
+ *      the formula. Adjacent local edges sat 2 * portGap (or further)
+ *      apart instead of exactly portGap.
+ *
+ * Per-consumer slot assignment fixes both. Each consumer gets its own
+ * slot range 0..localCount-1, with adjacent slots exactly portGap apart.
+ *
+ * **Inherits row ordering from ReplicaPlacement** — the comparator sorts
+ * each consumer's incoming edges by `rowOfSource.get(canonicalSource)`,
+ * falling back to Infinity for non-replicas. Two consequences:
+ *
+ *   - Source-side staggering (still global-row-based in
+ *     `replicaSourceXOffset`) stays aligned with the target-side spread:
+ *     at any consumer, row N's source-x and slot's target-x sweep in
+ *     the same direction. No arrow crossovers within a consumer.
+ *   - Cross-canvas eye-tracking partially survives: a source's
+ *     RELATIVE position among its consumer's incoming edges stays
+ *     stable under canvas-wide edits that don't touch the consumer's
+ *     fan-in. What's traded: the absolute x of source A varies per
+ *     consumer (depends on which subset of sources lands there).
+ *
+ * **Kind-agnostic** — the row-ordering comparator never reads
+ * `edge.kind`. Tiebreakers (`edge.from`, `auxKey`, then `kind`) are
+ * deterministic but kind-agnostic in spirit. Pre-verifies Slice 7b's
+ * `kind === "aux"` filter drop won't surprise port-spreading: state
+ * replicas slot into the same pool as aux replicas, ordered by row.
+ *
+ * **Non-replica edges fall to the rightmost slots** (row = Infinity).
+ * Today's only common case is the state-spine edge into a leaf where
+ * everything else is an aux replica — pedagogically the state arrow
+ * sits to the right of all the round-key fan-out arrows, which mirrors
+ * how the user reads the cipher "state flows along, aux is dropped in
+ * from above-and-left."
+ */
+type ConsumerPortAssignment = {
+  /**
+   * edge reference → slot index (0..localCount-1) at its consumer.
+   * Empty entries for edges at single-incoming consumers (no spread
+   * needed; `consumerPortOffset` short-circuits to 0 via the
+   * `slot === undefined` branch). Keyed by edge reference, so each
+   * render's edge objects map directly to their assigned slots.
+   */
+  readonly slotOf: ReadonlyMap<GraphEdge, number>;
+  /**
+   * consumer id → number of incoming edges. The denominator in
+   * `(slot - (localCount - 1) / 2) * portGap`. Single-incoming
+   * consumers have an entry of 1 (used by tests for sanity checks)
+   * but no slot entries (so consumerPortOffset returns 0).
+   */
+  readonly localCountOf: ReadonlyMap<string, number>;
+};
+
+const EMPTY_PORT_ASSIGNMENT: ConsumerPortAssignment = {
+  slotOf: new Map(),
+  localCountOf: new Map(),
+};
+
+/**
+ * Build the per-consumer port-slot map. Walks edges once, buckets by
+ * `edge.to`, sorts each multi-incoming bucket by row order (inherited
+ * from `replicas.rowOfSource`), assigns slots 0..N-1 within each
+ * bucket. O(E log E) overall (the per-bucket sort cost dominates).
+ *
+ * **Comparator** (sorting incoming edges at one consumer):
+ *
+ *   1. `rowOfSource.get(canonicalSource)` ascending — replicas before
+ *      non-replicas (non-replicas get Infinity, so they sort last);
+ *      among replicas, lower global row first.
+ *   2. `edge.from` ascending — deterministic tiebreak when two edges
+ *      share a canonical source (rare: only two replicas pointing at
+ *      one consumer, which `replicateHighFanoutSources` doesn't
+ *      produce today, but the comparator stays robust).
+ *   3. `edge.auxKey` ascending — tiebreak for state-vs-aux from the
+ *      same from→to.
+ *   4. `edge.kind` ascending — final lexicographic tiebreak ("aux" <
+ *      "state"). Degenerate; only matters when 1+2+3 all tie.
+ */
+const buildConsumerPortAssignment = (
+  graph: CipherGraph,
+  replicas: ReplicaPlacement,
+): ConsumerPortAssignment => {
+  if (graph.edges.length === 0) return EMPTY_PORT_ASSIGNMENT;
+  const canonicalSource = (e: GraphEdge): string => replicas.sourceOf.get(e.from) ?? e.from;
+  const rowOf = (e: GraphEdge): number => {
+    const cs = canonicalSource(e);
+    const row = replicas.rowOfSource.get(cs);
+    return row !== undefined ? row : Number.POSITIVE_INFINITY;
+  };
+  // Bucket every edge under its consumer (`edge.to`).
+  const incomingByConsumer = new Map<string, GraphEdge[]>();
+  for (const e of graph.edges) {
+    let bucket = incomingByConsumer.get(e.to);
+    if (bucket === undefined) {
+      bucket = [];
+      incomingByConsumer.set(e.to, bucket);
+    }
+    bucket.push(e);
+  }
+  const slotOf = new Map<GraphEdge, number>();
+  const localCountOf = new Map<string, number>();
+  for (const [consumer, edges] of incomingByConsumer) {
+    localCountOf.set(consumer, edges.length);
+    // Single-incoming → no spread needed; leave slotOf empty for these.
+    // `consumerPortOffset` short-circuits via `slot === undefined → 0`.
+    if (edges.length <= 1) continue;
+    edges.sort((a, b) => {
+      const ra = rowOf(a);
+      const rb = rowOf(b);
+      if (ra !== rb) return ra < rb ? -1 : 1;
+      if (a.from !== b.from) return a.from < b.from ? -1 : 1;
+      if (a.auxKey !== b.auxKey) return a.auxKey < b.auxKey ? -1 : 1;
+      return a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0;
+    });
+    for (let i = 0; i < edges.length; i++) {
+      const e = edges[i];
+      if (e !== undefined) slotOf.set(e, i);
+    }
+  }
+  return { slotOf, localCountOf };
 };
 
 /**
@@ -1109,83 +1250,44 @@ export const visualEdgeTargetId = (
 };
 
 /**
- * Port-spreading follow-up to Slice 7c (2026-05-16, bumped above Slice 7b
- * after the 7c manual smoke pass surfaced fan-IN ambiguity at the chip head).
- *
- * Slice 7c stacks replicas vertically by globally-stable source rows —
- * scannability at the source side. But every replica's outgoing arrow lands
- * at the SAME point on the consumer's top edge, so 3+ stacked replicas
- * produce a fan-IN funnel where the arrows visually overlap at the
- * convergence point and the 12 px hit zones collapse onto each other near
- * the consumer head. Mid-arrow clicks still distinguish edges (the 12 px
- * `.graph-edge-hit` stroke runs the full path), but the convergence is
- * pedagogically muddy.
- *
- * Cure: spread the consumer-side attach x by the source's globally-stable
- * row, mirroring 7c's y-row philosophy. Source A's row-0 replica → fixed
- * x-offset on the consumer top across the entire canvas; source B's row-1
- * replica → next offset over; etc. Centered around the consumer's top-edge
- * midpoint via `(row - (total - 1) / 2) * portGap` so the spread is balanced
- * and degenerate (`total === 1`) → offset = 0 (no shift, no surprise on
- * single-source ciphers like every aux-only baseline today).
- *
- * **Why global rows, not per-consumer fan-in count:** matches the Slice 7c
- * y-stacking philosophy. A consumer that hosts only source B's replica
- * still puts B's arrow at the row-1 x-offset, leaving the row-0 column
- * empty on that consumer's top. Costs a constant per-source x-shift even
- * for single-replica consumers; pays in cross-canvas eye-tracking —
- * "source X always lands HERE on every consumer it touches."
- *
- * **Source side untouched** — replicas stay column-stacked at `consumer.x`
- * per Slice 7c. Only the target-end attach x shifts. The resulting slope
- * (from the replica's center bottom to a shifted point on the consumer's
- * top) is informative: it visually disambiguates which row the arrow came
- * from even before the eye traces the full path.
- *
- * **Kind-agnostic by construction** — keys off `replicaOf !== undefined`
- * via `replicas.sourceOf` (which only has entries for replica nodes), never
- * off `edge.kind`. Slice 7b will drop the `kind === "aux"` filter in
- * `replicateHighFanoutSources` and produce state-kind replicas; they get
- * the same offset machinery without changes here.
+ * Returns the per-consumer x-offset for one edge at its consumer's top
+ * edge (port-spreading-consumer-head plan, 2026-05-16). Centered around
+ * the consumer's top-edge midpoint via
+ * `(slot - (localCount - 1) / 2) * portGap`.
  *
  * **Returns 0 when**:
- *   - `edge.from` is not a replica (regular long-range aux or state edge —
- *     no row, no spread).
- *   - `total === 1` (single-source graph — no fan-in to disambiguate).
+ *   - The edge isn't in `slotOf` (single-incoming consumer — `buildConsumer
+ *     PortAssignment` leaves `slotOf` empty for these consumers).
+ *   - `localCount` is missing or `<= 1` (degenerate / sanity guard).
  *
- * @param edge — the edge being rendered (only `edge.from` is read).
- * @param replicas — the `ReplicaPlacement` map produced by
- *   `buildReplicaPlacement(graph)`; needs the same shape, so callers can
- *   call `buildReplicaPlacement` separately at the render site instead of
- *   threading it through the layout return.
- * @param portGap — density-scaled gap between adjacent rows' attach points.
- *   The render site computes `Math.max(6, round(LEAF_W / 10))` so the spread
- *   tracks the consumer width.
+ * @param edge — the edge being rendered (same `GraphEdge` reference that
+ *   was passed to `buildConsumerPortAssignment`).
+ * @param ports — the per-consumer port assignment from
+ *   `buildConsumerPortAssignment(graph, replicaPlacement)`.
+ * @param portGap — density-scaled gap between adjacent slots. The render
+ *   site computes `Math.max(6, round(LEAF_W / 10))` so the spread tracks
+ *   the consumer width.
  *
- * The parameter shape `{ sourceOf, rowOfSource }` is intentionally
- * structural (not a `ReplicaPlacement` literal): the tests construct
- * placements via `buildReplicaPlacement` on synthetic graphs, but the
- * helper itself only needs the two maps. Keeping the type narrow lets a
- * future caller pass a hand-rolled `{ sourceOf, rowOfSource }` (e.g. an
- * isolated unit test exercising a corner of the formula) without having
- * to invent the full `ReplicaPlacement` interface. Don't widen this back
- * to `ReplicaPlacement` — the decoupling pays in test ergonomics.
+ * Pure: reads only the precomputed assignment. The render site builds the
+ * assignment once per `graph()` change in a memo (same pattern as
+ * `replicaPlacement`).
+ *
+ * **Replaces the prior `replicaTargetXOffset` (deleted 2026-05-16).**
+ * The old function distributed by global row index — confirmed buggy at
+ * collapsed-iterate chip heads via the two `it.fails` tests now flipped
+ * to plain `it` in `tests/graph-view-port-spreading.test.ts`. See the
+ * `ConsumerPortAssignment` doc-block above for the mechanism details.
  */
-export const replicaTargetXOffset = (
+export const consumerPortOffset = (
   edge: GraphEdge,
-  replicas: {
-    readonly sourceOf: ReadonlyMap<string, string>;
-    readonly rowOfSource: ReadonlyMap<string, number>;
-  },
+  ports: ConsumerPortAssignment,
   portGap: number,
 ): number => {
-  const sId = replicas.sourceOf.get(edge.from);
-  if (sId === undefined) return 0;
-  const row = replicas.rowOfSource.get(sId);
-  if (row === undefined) return 0;
-  const total = replicas.rowOfSource.size;
-  if (total <= 1) return 0;
-  return (row - (total - 1) / 2) * portGap;
+  const slot = ports.slotOf.get(edge);
+  if (slot === undefined) return 0;
+  const total = ports.localCountOf.get(edge.to);
+  if (total === undefined || total <= 1) return 0;
+  return (slot - (total - 1) / 2) * portGap;
 };
 
 /**
@@ -1195,18 +1297,22 @@ export const replicaTargetXOffset = (
  * non-centred point on the replica's bottom edge.
  *
  * **Geometry** (2026-05-16 straight-line + offset-start-point approach):
- * uses the SAME monotonic spread formula as `replicaTargetXOffset` —
- * `(row - (total-1)/2) * step` — so source x and target x sweep in the
- * same direction by row. Row 0's source lands LEFT (same as its
- * target's left port), row N-1's source lands RIGHT (same as its
- * target's right port). Result: every arrow is a roughly parallel
- * down-and-slightly-inward line, no crossovers.
+ * uses the monotonic spread formula `(row - (total-1)/2) * step` over
+ * the GLOBAL row index, so a replica's source-x is stable across every
+ * consumer it touches. The target-side `consumerPortOffset` uses
+ * per-consumer slot indices, but those slots are assigned in row order
+ * (see `ConsumerPortAssignment` doc-block), so source-x and target-x
+ * sweep in the same direction by row at any given consumer: row 0's
+ * source lands LEFT and gets a leftward slot; row N-1's source lands
+ * RIGHT and gets a rightward slot. Result: every arrow is a roughly
+ * parallel down-and-slightly-inward line, no crossovers within a
+ * consumer.
  *
  * **Why monotonic, not alternating:** an earlier draft alternated
  * `+1, −1, +2, −2, …` so each row claimed a different side of the
  * column. Visually clean for distinguishing rows in isolation, BUT
- * since the target-side `replicaTargetXOffset` is monotonic, the two
- * spreads sweep different directions per row — row 0 source-centre +
+ * since the target-side spread is monotonic, the two spreads would
+ * sweep different directions per row — row 0 source-centre +
  * target-left = down-left; row 1 source-right + target-centre =
  * down-left; row 2 source-left + target-right = down-right → row 0's
  * arrow crosses row 2's. User observed this directly on the canonical
@@ -1223,8 +1329,9 @@ export const replicaTargetXOffset = (
  * spread would reach ±64, just inside the half-width; EdgePath clamps
  * to LEAF_W/2 − 4 = 62 as a guard for any worse pathological case.
  *
- * Param shape is structural (not `ReplicaPlacement`) for the same
- * test-ergonomics reason as `replicaTargetXOffset`.
+ * Param shape is structural (not `ReplicaPlacement`) so tests can pass
+ * a hand-rolled `{ sourceOf, rowOfSource }` literal — the helper only
+ * needs the two maps.
  */
 export const replicaSourceXOffset = (
   edge: GraphEdge,
@@ -1255,12 +1362,13 @@ export const isReplicaEdge = (
 ): boolean => replicas.isReplica.has(edge.from);
 
 /**
- * Re-exported for tests that want to drive port-spreading directly.
- * `replicaTargetXOffset` reads only `sourceOf` + `rowOfSource` off the
- * placement, so tests can either call this builder or pass a hand-rolled
- * `{ sourceOf, rowOfSource }` literal.
+ * Re-exported for tests that want to drive replica placement and the
+ * per-consumer port-spreading directly. `consumerPortOffset` reads only
+ * the `ConsumerPortAssignment` that `buildConsumerPortAssignment` builds
+ * from a `CipherGraph` + `ReplicaPlacement` pair, so tests can either
+ * call both builders or hand-roll structurally-compatible literals.
  */
-export { buildReplicaPlacement };
+export { buildConsumerPortAssignment, buildReplicaPlacement };
 
 // ─── Component ─────────────────────────────────────────────────────────────
 
@@ -1668,13 +1776,24 @@ export const GraphView = () => {
    * Port-spreading follow-up to Slice 7c (2026-05-16): the per-component
    * `ReplicaPlacement` memo, computed independently from `layoutRoot` so
    * the edge `<For>` block can read `sourceOf` + `rowOfSource` for the
-   * `replicaTargetXOffset` helper. Cheap to recompute (single pass over
-   * `graph().nodes` + `graph().edges`); memoizes against `graph()` identity
-   * so reruns only happen when the graph itself swaps. We don't return
-   * this from `layoutRoot` to avoid widening the pure-helper contract —
-   * `layoutRoot`'s consumers (test suites, future codegen) don't need it.
+   * `consumerPortOffset` / `replicaSourceXOffset` helpers. Cheap to
+   * recompute (single pass over `graph().nodes` + `graph().edges`);
+   * memoizes against `graph()` identity so reruns only happen when the
+   * graph itself swaps. We don't return this from `layoutRoot` to avoid
+   * widening the pure-helper contract — `layoutRoot`'s consumers (test
+   * suites, future codegen) don't need it.
    */
   const replicaPlacement = createMemo(() => buildReplicaPlacement(graph()));
+
+  /**
+   * Per-consumer port-slot assignment memo
+   * (port-spreading-consumer-head plan, 2026-05-16). Reads the same
+   * `graph()` identity as `replicaPlacement` and composes with it (the
+   * builder needs `rowOfSource` to align slot ordering with source-side
+   * vertical staggering). Memoizes against the pair so swapping either
+   * triggers a rebuild.
+   */
+  const portAssignment = createMemo(() => buildConsumerPortAssignment(graph(), replicaPlacement()));
 
   /**
    * Slice 5 — drop-gutter record shape. One record per gutter strip:
@@ -2900,7 +3019,7 @@ export const GraphView = () => {
                 // densities.
                 const targetXOffset = createMemo(() => {
                   const portGap = Math.max(6, Math.round(consts().LEAF_W / 10));
-                  return replicaTargetXOffset(edge, replicaPlacement(), portGap);
+                  return consumerPortOffset(edge, portAssignment(), portGap);
                 });
                 // Straight-line + offset-start-point + start-dot
                 // (2026-05-16, replacement for the curved-edge
@@ -3826,14 +3945,15 @@ const EdgePath = (props: {
   /**
    * Port-spreading offset applied to the target attach x in the vertical
    * regime (replica above consumer). Computed at the parent `<For>` site
-   * from `replicaTargetXOffset` so 3+ stacked replicas don't all converge
-   * at the consumer's top-edge midpoint. Defaults to 0, so non-replica
-   * edges and edges in single-source graphs render identically to pre-
-   * port-spreading. Only the vertical regime (replica directly above
-   * consumer) applies the offset — left-gutter replicas enter the
-   * consumer's LEFT edge at distinct y values per replica, so there's no
-   * convergence problem there and shifting x would push the arrow off
-   * the consumer's vertical center.
+   * from `consumerPortOffset` so multi-incoming consumers (replicas and
+   * non-replicas alike) distribute across the consumer's top edge
+   * instead of converging at the midpoint. Defaults to 0, so
+   * single-incoming consumers render identically to pre-port-spreading.
+   * Only the vertical regime (replica directly above consumer) applies
+   * the offset — left-gutter replicas enter the consumer's LEFT edge at
+   * distinct y values per replica, so there's no convergence problem
+   * there and shifting x would push the arrow off the consumer's
+   * vertical center.
    */
   targetXOffset?: number;
   /**
