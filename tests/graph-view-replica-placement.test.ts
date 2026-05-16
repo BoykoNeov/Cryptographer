@@ -116,14 +116,17 @@ describe("Slice 7c — aux-only baseline (single-source) regression", () => {
     const consts = layoutConstantsFor("normal");
     const { boxes } = layoutRoot(g, new Map<string, { x: number; y: number }>(), consts);
 
-    const expectedReplicaYOffset = consts.LEAF_H + consts.STACK_GAP;
+    const expectedReplicaYOffset = consts.LEAF_H + consts.REPLICA_LIFT_GAP;
     for (const cid of ["c1", "c2", "c3"]) {
       const c = boxes.get(cid);
       const r = boxes.get(`src->${cid}`);
       if (!c || !r) throw new Error(`missing box for ${cid}`);
       // Replica at consumer.x (column-stacked).
       expect(r.x).toBe(c.x);
-      // Replica at exactly row 0: consumer.y - LEAF_H - STACK_GAP.
+      // Replica at exactly row 0: consumer.y - LEAF_H - REPLICA_LIFT_GAP.
+      // REPLICA_LIFT_GAP (= 20) replaced STACK_GAP (= 6) here so the
+      // arrow shaft between dot and arrowhead has visible length after
+      // ARROW_INSET subtraction.
       expect(r.y).toBe(c.y - expectedReplicaYOffset);
     }
   });
@@ -184,12 +187,14 @@ describe("Slice 7c — multi-source row stability (globally-stable rowOfSource)"
     const consts = layoutConstantsFor("normal");
     const { boxes } = layoutRoot(g, new Map<string, { x: number; y: number }>(), consts);
 
-    // Row 0 sits `LEAF_H + STACK_GAP` above the consumer (unchanged from
-    // pre-port-spreading). Rows ≥1 stack with `LEAF_H + FLOW_GAP` between
-    // them (port-spreading polish, 2026-05-16): wider gap so the arrows
+    // Row 0 sits `LEAF_H + REPLICA_LIFT_GAP` above the consumer
+    // (REPLICA_LIFT_GAP = 20 replaced STACK_GAP = 6 on 2026-05-16 so
+    // the arrow shaft between dot and arrowhead has visible length).
+    // Rows ≥1 stack with `LEAF_H + FLOW_GAP` between them
+    // (port-spreading polish, 2026-05-16): wider gap so the arrows
     // from upper rows have visible drawing room and don't squish into a
     // 3-px sliver between chips. Tracks `replicaSlotPosition`'s y formula.
-    const row0Lift = consts.LEAF_H + consts.STACK_GAP;
+    const row0Lift = consts.LEAF_H + consts.REPLICA_LIFT_GAP;
     const rowStep = consts.LEAF_H + consts.FLOW_GAP;
 
     // All A-replicas across c1/c2/c3 share the same y (row 0 above their
@@ -346,15 +351,16 @@ describe("Slice 7c — chip-crowding fixture (canonical bad case)", () => {
     const consts = layoutConstantsFor("normal");
     const { boxes } = layoutRoot(g, new Map<string, { x: number; y: number }>(), consts);
 
-    // Row 0 lift uses STACK_GAP (close to consumer); higher rows step
-    // up by LEAF_H + FLOW_GAP (wider — port-spreading polish for visible
-    // inter-row arrow gaps). With the straight-line + offset-start
-    // approach (2026-05-16), REPLICA_ROW_X_STEP === 0 so row 1 sits at
-    // chip.x (same column); its arrow ORIGINATES from an offset point
-    // on row 1's bottom edge (via `replicaSourceXOffset`) and a
-    // start-dot marks that origin so the eye reads it as distinct
-    // from row 0's arrow.
-    const row0Lift = consts.LEAF_H + consts.STACK_GAP;
+    // Row 0 lift uses REPLICA_LIFT_GAP (= 20, wider than STACK_GAP =
+    // 6 so the arrow shaft is visible after ARROW_INSET subtraction);
+    // higher rows step up by LEAF_H + FLOW_GAP (wider — port-spreading
+    // polish for visible inter-row arrow gaps). With the straight-line
+    // + offset-start approach (2026-05-16), REPLICA_ROW_X_STEP === 0
+    // so row 1 sits at chip.x (same column); its arrow ORIGINATES from
+    // an offset point on row 1's bottom edge (via
+    // `replicaSourceXOffset`) and a start-dot marks that origin so the
+    // eye reads it as distinct from row 0's arrow.
+    const row0Lift = consts.LEAF_H + consts.REPLICA_LIFT_GAP;
     const rowStep = consts.LEAF_H + consts.FLOW_GAP;
 
     // For each chip, its 2 replicas sit at row 0 (chip.x) and row 1

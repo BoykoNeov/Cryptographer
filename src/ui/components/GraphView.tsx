@@ -176,6 +176,19 @@ const BASE_REPLICA_ROW_X_STEP = 0;
  * backstop.
  */
 const BASE_REPLICA_SOURCE_X_STEP = 32;
+/**
+ * Base (1.0×) vertical gap between the bottom of a row-0 replica and the
+ * top of its consumer (the block-chip for an iterate consumer, or the
+ * spine row for an aux-only root). Replaces STACK_GAP (= 6) at the
+ * replica-lift sites — STACK_GAP is tuned for sibling stacking inside
+ * groups (tight, ~6 px) but that turned out too tight for replicas: the
+ * `ARROW_INSET` = 6 ate the entire shaft and the arrow rendered as just
+ * an arrowhead kissing the chip's top edge. 20 px leaves a 14 px visible
+ * arrow shaft (20 − ARROW_INSET = 14) — short enough to keep replicas
+ * visually adjacent to their consumer, long enough that the arrow reads
+ * as a directed line not a flush mark.
+ */
+const BASE_REPLICA_LIFT_GAP = 20;
 /** Height of the container's header band (label + optional ×N chip). Fixed. */
 const HEADER_H = 22;
 /** Outer margin of the SVG canvas. Fixed. */
@@ -260,6 +273,12 @@ type LayoutConstants = {
    * `BASE_REPLICA_SOURCE_X_STEP = 32`.
    */
   readonly REPLICA_SOURCE_X_STEP: number;
+  /**
+   * Vertical gap between row-0 replica and consumer. See
+   * `BASE_REPLICA_LIFT_GAP` — wider than STACK_GAP (6) so the arrow
+   * shaft has visible length after `ARROW_INSET` subtraction.
+   */
+  readonly REPLICA_LIFT_GAP: number;
 };
 
 /**
@@ -281,6 +300,7 @@ const layoutConstantsFor = (density: ViewDensity): LayoutConstants => {
     CONTAINER_PAD: Math.round(BASE_CONTAINER_PAD * scale),
     REPLICA_ROW_X_STEP: Math.round(BASE_REPLICA_ROW_X_STEP * scale),
     REPLICA_SOURCE_X_STEP: Math.round(BASE_REPLICA_SOURCE_X_STEP * scale),
+    REPLICA_LIFT_GAP: Math.round(BASE_REPLICA_LIFT_GAP * scale),
   };
 };
 
@@ -377,12 +397,15 @@ const EMPTY_REPLICA_PLACEMENT: ReplicaPlacement = {
 /**
  * Position the row-k replica relative to its consumer's anchor x and top y.
  *
- * **Slice 7c row 0** lands at exactly the pre-7c spot: `consumer.y −
- * LEAF_H − STACK_GAP`, at `anchorX` (= consumer.x, or first-non-replica-
- * body-child.x for iterate consumers per Slice 2). Single-source ciphers
- * (every aux-only baseline today — AES key-expansion, Speck, Serpent)
- * have `rowOfSource[src] = 0` always, so they're byte-identical to pre-
- * port-spreading.
+ * **Row 0** lands at `consumer.y − LEAF_H − REPLICA_LIFT_GAP`, at
+ * `anchorX` (= consumer.x, or first-non-replica-body-child.x for
+ * iterate consumers per Slice 2). `REPLICA_LIFT_GAP` (= 20 px)
+ * replaced the original `STACK_GAP` (= 6 px) on 2026-05-16 so the
+ * arrow shaft between the row-0 start-dot and the consumer arrowhead
+ * has visible length after `ARROW_INSET` subtraction. Single-source
+ * ciphers (every aux-only baseline today — AES key-expansion, Speck,
+ * Serpent) have `rowOfSource[src] = 0` always, so they only ever hit
+ * this row-0 case.
  *
  * **Rows k ≥ 1** stack diagonally up-and-right (2026-05-16 port-spreading
  * polish):
@@ -410,7 +433,7 @@ const replicaSlotPosition = (
   row: number,
   consts: LayoutConstants,
 ): { x: number; y: number } => {
-  const baseY = consumerY - consts.LEAF_H - consts.STACK_GAP;
+  const baseY = consumerY - consts.LEAF_H - consts.REPLICA_LIFT_GAP;
   return {
     x: anchorX + row * consts.REPLICA_ROW_X_STEP,
     y: baseY - row * (consts.LEAF_H + consts.FLOW_GAP),
@@ -429,9 +452,12 @@ const replicaSlotPosition = (
  * to pre-port-spreading. Multi-row case grows with FLOW_GAP per extra row,
  * matching `replicaSlotPosition`'s row-spacing.
  */
+// Implementation note: row 0 uses REPLICA_LIFT_GAP (= 20) instead of
+// STACK_GAP (= 6) — the wider gap leaves visible arrow-shaft room
+// after ARROW_INSET. Matches `replicaSlotPosition`'s baseY formula.
 const replicaLiftHeight = (maxRow: number, consts: LayoutConstants): number => {
   if (maxRow < 0) return 0;
-  return consts.LEAF_H + consts.STACK_GAP + maxRow * (consts.LEAF_H + consts.FLOW_GAP);
+  return consts.LEAF_H + consts.REPLICA_LIFT_GAP + maxRow * (consts.LEAF_H + consts.FLOW_GAP);
 };
 
 /**
@@ -574,10 +600,13 @@ const layoutNode = (
     // Slice 7c + port-spreading polish (2026-05-16): lift height grows
     // with the maximum source-row used by any lifted replica in this
     // group. Single-source case (all replicas at row 0) → maxLiftRow = 0
-    // → liftH = LEAF_H + STACK_GAP, byte-identical to pre-7c. Multi-row
-    // case uses `replicaLiftHeight`, which spaces rows by FLOW_GAP
-    // (matching `replicaSlotPosition`'s y formula). Computed BEFORE the
-    // third pass needs it because innerY (the in-column children's
+    // → liftH = LEAF_H + REPLICA_LIFT_GAP (= 48 px at normal density,
+    // up from LEAF_H + STACK_GAP = 34 px before 2026-05-16 — the wider
+    // gap gives the arrow shaft visible length after ARROW_INSET).
+    // Multi-row case uses `replicaLiftHeight`, which spaces rows by
+    // FLOW_GAP (matching `replicaSlotPosition`'s y formula). Computed
+    // BEFORE the third pass needs it because innerY (the in-column
+    // children's
     // start) depends on liftH.
     let maxLiftRow = -1;
     for (const rId of liftedReplicas) {
@@ -684,10 +713,14 @@ const layoutNode = (
   // Slice 7c + port-spreading polish (2026-05-16): iterate-body replica
   // lift scales with the maximum source-row used by any in-body replica.
   // Single-source case (rowOfSource === 0 everywhere) → liftH = LEAF_H +
-  // STACK_GAP, byte-identical to pre-7c. Multi-row case uses
-  // `replicaLiftHeight`, which spaces rows by FLOW_GAP (matching
-  // `replicaSlotPosition`'s y formula). Globally stable: source A
-  // always at row 0 regardless of which body chip each replica targets.
+  // REPLICA_LIFT_GAP. (`REPLICA_LIFT_GAP` replaced the original
+  // `STACK_GAP` on 2026-05-16 so the row-0 → consumer arrow shaft
+  // doesn't collapse to zero length after `ARROW_INSET` subtraction —
+  // user-observed bug on the canonical AES-128 ECB collapsed-iterate
+  // case.) Multi-row case uses `replicaLiftHeight`, which spaces rows
+  // by FLOW_GAP (matching `replicaSlotPosition`'s y formula). Globally
+  // stable: source A always at row 0 regardless of which body chip
+  // each replica targets.
   let iterateMaxRow = -1;
   for (const childId of container.childIds) {
     if (!replicas.isReplica.has(childId)) continue;
@@ -831,12 +864,13 @@ export const layoutRoot = (
   }
   // Port-spreading polish (2026-05-16): replica lift uses
   // `replicaLiftHeight` (FLOW_GAP between rows); aux-only-roots only
-  // need one row of lift (LEAF_H + STACK_GAP). Take the larger of the
-  // two so a graph with both — replicas at row 0+ AND aux-only roots
-  // present — still has room for both pictures.
+  // need one row of lift (LEAF_H + REPLICA_LIFT_GAP — same gap the
+  // replica path uses, so the arrow shaft is visible). Take the
+  // larger of the two so a graph with both — replicas at row 0+ AND
+  // aux-only roots present — still has room for both pictures.
   const replicaLiftHRoot = replicaLiftHeight(rootReplicaMaxRow, consts);
   const hasAuxOnlyRoots = graph.rootIds.some((id) => auxOnlyRootIds.has(id));
-  const auxOnlyLiftH = hasAuxOnlyRoots ? consts.LEAF_H + consts.STACK_GAP : 0;
+  const auxOnlyLiftH = hasAuxOnlyRoots ? consts.LEAF_H + consts.REPLICA_LIFT_GAP : 0;
   const rootReplicaLiftH = Math.max(replicaLiftHRoot, auxOnlyLiftH);
   const rowStartY = CANVAS_MARGIN + rootReplicaLiftH;
 
