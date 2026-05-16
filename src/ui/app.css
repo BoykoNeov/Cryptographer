@@ -859,6 +859,40 @@ button:disabled {
   justify-content: flex-end;
 }
 
+/* Cross-mode mirror row: same horizontal alignment as `.apply-all-row`
+   so the two propagation surfaces (within-mode + across-mode) stack
+   visually. Uses the accent palette rather than red — this is a
+   constructive action ("propagate the table"), not a corrective one
+   ("fix the table"). The :disabled state matches the rest of the app
+   button vocabulary. */
+.sync-inverse-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.sync-inverse-row button {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  padding: 4px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.sync-inverse-row button:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.sync-inverse-row button:disabled {
+  background: var(--bg-elev);
+  border-color: var(--border);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
 /* ─── Byte cell input (used by S-box and matrix editors) ──────────────── */
 /* Widths sized for the worst-case display string of the current format:
    hex=2 chars, decimal=3 chars, ASCII=up to 4 (`\xNN`). The MatrixEditor

@@ -260,6 +260,43 @@ export const editAllStepsByType = (stepType: string, update: (params: Json) => J
 };
 
 /**
+ * Cross-slot inverse mirror — the *value-mirror* counterpart of
+ * `duplicateRoundInSpec`'s structural mirror.
+ *
+ * Today only one step type is value-inverse-mirrored: AES's generic
+ * `byte-substitution`. Encrypt holds the forward table, decrypt holds
+ * its inverse. The two are algebraic inverses, not equal — see the
+ * comment on `editAllStepsByType` above, and FIPS-197 §5.3.2.
+ *
+ * Writes `invertedSbox` to every step of `stepType` in the
+ * COUNTERPART slot (encrypt edits → decrypt slot; decrypt edits →
+ * encrypt slot). The caller computes the inverted array (so this
+ * module stays purely a store boundary). Mirrors `updateAllStepsByType`
+ * semantics: writes uniformly to every matching step in the
+ * counterpart slot, regardless of any per-step customizations
+ * already there — destructive by design, same as Apply-to-all.
+ *
+ * Not coupled to `aes.key-expansion@1`: that step holds the FORWARD
+ * table on both sides (FIPS-197 §5.2 — key expansion always uses the
+ * forward S-box), so it needs a different propagation operation
+ * ("copy, don't invert"). Deferred; surface as a separate mutator
+ * when the UI calls for it.
+ */
+export const syncSboxInverseToCounterpart = (
+  stepType: string,
+  invertedSbox: readonly number[],
+): void => {
+  const current = specs();
+  const counterpartMode: Mode = mode() === "encrypt" ? "decrypt" : "encrypt";
+  const updated = updateAllStepsByType(current[counterpartMode], stepType, (params) => ({
+    ...(params as Record<string, Json>),
+    sbox: [...invertedSbox],
+  }));
+  if (updated === current[counterpartMode]) return; // reference-equal → no-op
+  setSpecs({ ...current, [counterpartMode]: updated } as SpecsByMode);
+};
+
+/**
  * Insert a brand-new step leaf into the live spec (Slice 8 of the 2D
  * editor plan). The palette + GraphView drop handler call this with a
  * `stepType` registered in the registry and an anchor that says WHERE

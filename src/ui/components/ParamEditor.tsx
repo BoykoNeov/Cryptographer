@@ -15,11 +15,19 @@
 import { findStep } from "@/core/spec-mutations";
 import type { Json, StepLeaf } from "@/core/types";
 import { For, Match, Show, Switch, createSignal } from "solid-js";
-import { editAllStepsByType, editStepParams, removeStepFromSpec, useSpec } from "../stores/spec";
+import {
+  editAllStepsByType,
+  editStepParams,
+  removeStepFromSpec,
+  syncSboxInverseToCounterpart,
+  useMode,
+  useSpec,
+} from "../stores/spec";
 import { ByteCellInput } from "./ByteCellInput";
 import { MatrixEditor } from "./MatrixEditor";
 import { SboxEditor } from "./SboxEditor";
 import { ShiftsEditor } from "./ShiftsEditor";
+import { countRedundantDuplicates, invertSbox } from "./sbox-validation";
 
 type Props = {
   /**
@@ -209,6 +217,14 @@ const SbxBlock = (props: BlockProps) => {
         matchingCount={props.matchingCount}
         label="S-box"
       />
+      {/* Cross-mode mirror — only on `generic.byte-substitution@1` (the
+          AES SubBytes step type). Key-expansion's S-box editor below
+          deliberately omits this: FIPS-197 §5.2 says key expansion uses
+          the FORWARD S-box even when decrypting, so a "sync inverse"
+          would be wrong there. That step needs a different operation
+          ("copy, don't invert"), which we'll surface separately when
+          there's user demand. */}
+      <SyncInverseRow currentSbox={sbox()} stepType={props.step.type} />
     </>
   );
 };
@@ -997,6 +1013,57 @@ const StateToAuxBlock = (props: { step: StepLeaf }) => {
 };
 
 // ─── Apply-to-all button ─────────────────────────────────────────────────
+
+// ─── Sync-inverse-to-counterpart button ─────────────────────────────────
+//
+// Cross-mode value-mirror affordance for substitution tables. Sits below
+// ApplyAllRow so the two propagation surfaces — within-mode (`Apply to
+// all`) and across-mode (this) — are vertically adjacent and read as a
+// matched pair.
+//
+// Design rationale (see comment on `syncSboxInverseToCounterpart` in
+// stores/spec.ts):
+//   - Encrypt's forward S-box and decrypt's inverse S-box are *algebraic
+//     inverses*, not equal. A naive sync (copy-paste) would corrupt the
+//     decrypt path. We invert the current forward table and write the
+//     inverse to the counterpart slot.
+//   - Disabled when the current table is not a permutation — the inverse
+//     is undefined for a non-bijection. The Repair button (in
+//     SboxEditor's banner) is the prerequisite; tooltip routes users
+//     there explicitly.
+//   - Operation is involutive: invertSbox(invertSbox(x)) === x. So
+//     editing the inverse table in decrypt mode and clicking sync writes
+//     the forward back to encrypt with the same algorithm — only the
+//     label changes.
+const SyncInverseRow = (props: { currentSbox: readonly number[]; stepType: string }) => {
+  const mode = useMode();
+  const isBijective = (): boolean => countRedundantDuplicates(props.currentSbox) === 0;
+  const counterpartLabel = (): string => (mode() === "encrypt" ? "decrypt" : "encrypt");
+  const buttonLabel = (): string => `Sync inverse S-box to ${counterpartLabel()}`;
+  const disabledTooltip =
+    "Repair to a permutation first — the inverse is undefined for a non-bijective table.";
+
+  return (
+    <div class="sync-inverse-row">
+      <button
+        type="button"
+        disabled={!isBijective()}
+        title={
+          isBijective()
+            ? `Compute the inverse of this S-box and write it to every ${props.stepType} step in the ${counterpartLabel()} slot (overwrites any per-step customizations on that side).`
+            : disabledTooltip
+        }
+        onClick={() => {
+          if (!isBijective()) return; // belt-and-braces; button is disabled too
+          const inverted = invertSbox(props.currentSbox);
+          syncSboxInverseToCounterpart(props.stepType, inverted);
+        }}
+      >
+        {buttonLabel()}
+      </button>
+    </div>
+  );
+};
 
 const ApplyAllRow = (props: {
   currentParams: Json;

@@ -91,6 +91,38 @@ export function collisionGroupsByIndex(values: readonly number[]): Map<number, r
 }
 
 /**
+ * Returns the inverse permutation of `values`: a new array `inv` such
+ * that `inv[values[i]] === i` for all i. Equivalently: if `values` is
+ * the forward S-box, `invertSbox(values)` is the inverse S-box.
+ *
+ * Preconditions: `values` must be a permutation of `0..length-1`. The
+ * caller is responsible for the bijection check (see
+ * `countRedundantDuplicates` — the UI gates the Sync-inverse button on
+ * a zero count). When the precondition is violated, the result is
+ * still a length-N array but undefined entries may be filled with 0,
+ * which is not what you want algorithmically.
+ *
+ * Involutive: `invertSbox(invertSbox(x)) === x` for any permutation
+ * x. So the same operation works in either direction — call it on the
+ * forward table to get the inverse, or on the inverse to get the
+ * forward. The UI relies on this for "Sync inverse to decrypt" and
+ * "Sync inverse to encrypt" being the same algorithm with a different
+ * label.
+ */
+export function invertSbox(values: readonly number[]): number[] {
+  const n = values.length;
+  const out = new Array<number>(n).fill(0);
+  for (let i = 0; i < n; i++) {
+    const v = values[i] ?? 0;
+    // Out-of-range entries are skipped — they can't index into a
+    // length-N inverse table. The bijection precondition rules this
+    // out in practice; the guard is defensive only.
+    if (v >= 0 && v < n) out[v] = i;
+  }
+  return out;
+}
+
+/**
  * Returns a new array that is a permutation of `0..values.length-1`,
  * derived from `values` by:
  *   1. Keeping the *first* occurrence of each value (leftmost wins).

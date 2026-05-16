@@ -9,11 +9,12 @@
  * Serpent's 4-bit S-box) and larger N (mirroring AES's 8-bit case).
  */
 
-import { AES_SBOX } from "@/ciphers/aes-constants";
+import { AES_INV_SBOX, AES_SBOX } from "@/ciphers/aes-constants";
 import {
   collisionGroupsByIndex,
   countRedundantDuplicates,
   findDuplicateIndices,
+  invertSbox,
   repairToPermutation,
 } from "@/ui/components/sbox-validation";
 import { describe, expect, it } from "vitest";
@@ -147,6 +148,42 @@ describe("repairToPermutation", () => {
     // And every value in 0..255 appears exactly once.
     for (let v = 0; v < 256; v++) {
       expect(repaired.includes(v)).toBe(true);
+    }
+  });
+});
+
+describe("invertSbox", () => {
+  it("inverts the identity to itself", () => {
+    // Property: for the identity permutation, the inverse is also the
+    // identity (every value maps to its own index).
+    const identity = Array.from({ length: 8 }, (_, i) => i);
+    expect(invertSbox(identity)).toEqual(identity);
+  });
+
+  it("is involutive: invertSbox(invertSbox(x)) === x", () => {
+    // The "involutive" property is what makes the Sync button work in
+    // either direction (encrypt → decrypt or decrypt → encrypt) with
+    // the same algorithm.
+    const sample = [3, 0, 2, 5, 1, 7, 4, 6];
+    expect(invertSbox(invertSbox(sample))).toEqual(sample);
+  });
+
+  it("recovers AES_INV_SBOX from AES_SBOX (KAT)", () => {
+    // The strongest KAT we can run: the project ships both tables as
+    // independent constants (parsed from FIPS-197 Appendix B). They
+    // must be inverses of each other or the algorithm is broken; the
+    // helper proves that, and pins itself to the standard.
+    expect(invertSbox(AES_SBOX)).toEqual([...AES_INV_SBOX]);
+    expect(invertSbox(AES_INV_SBOX)).toEqual([...AES_SBOX]);
+  });
+
+  it("satisfies inv[forward[i]] === i for every i", () => {
+    // The defining property of the inverse permutation — exercised on
+    // a non-AES permutation so we're not just re-testing the KAT.
+    const forward = [5, 2, 0, 7, 1, 6, 3, 4];
+    const inv = invertSbox(forward);
+    for (let i = 0; i < forward.length; i++) {
+      expect(inv[forward[i] ?? -1]).toBe(i);
     }
   });
 });
