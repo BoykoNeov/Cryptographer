@@ -894,6 +894,19 @@ button:disabled {
   border-color: var(--changed);
 }
 
+/* Cells whose value collides with another cell's value — breaking the
+   S-box's permutation invariant. Red (not amber) because this is a
+   correctness failure, not a "you edited this" affordance. Declared
+   AFTER `.modified` so when both classes apply (a cell can be edited
+   AND duplicated), red wins via source order — duplicate is the more
+   important signal. Bottom border-bottom thickened slightly so the
+   visual weight isn't ambiguous with the focus accent. */
+.byte-cell.duplicate {
+  color: var(--danger, #dc2626);
+  border-color: var(--danger, #dc2626);
+  box-shadow: inset 0 0 0 1px var(--danger, #dc2626);
+}
+
 /* ─── Byte format toggle (segmented control) ──────────────────────────── */
 .format-toggle {
   display: inline-flex;
@@ -986,6 +999,63 @@ button:disabled {
 
 .sbox-cell-wrap {
   display: contents;
+}
+
+/* Warning banner that appears above the grid when the table is not a
+   permutation. Red-tinted to match `.byte-cell.duplicate` so the user
+   visually links the banner's "N duplicate values" count with the
+   highlighted cells. The repair button uses the danger colour as its
+   fill so it reads as "fix the red thing" rather than a generic
+   action. */
+.sbox-warning-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: rgba(220, 38, 38, 0.1);
+  border: 1px solid var(--danger, #dc2626);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+  /* Banner spans the full S-box editor width so wrapping is graceful at
+     narrow ParamEditor widths (the S-box grid is ~544px; the banner
+     can wrap text rather than overflow). */
+  max-width: 100%;
+}
+
+.sbox-warning-icon {
+  color: var(--danger, #dc2626);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.sbox-warning-text {
+  flex: 1 1 auto;
+}
+
+.sbox-warning-repair {
+  flex-shrink: 0;
+  background: var(--danger, #dc2626);
+  border: 1px solid var(--danger, #dc2626);
+  color: #ffffff;
+  padding: 4px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.sbox-warning-repair:hover {
+  /* Slightly darker on hover. Hard-coded rather than var() because we
+     don't have a --danger-strong token defined; cheap to add later. */
+  background: #b91c1c;
+  border-color: #b91c1c;
+}
+
+.sbox-warning-repair:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* ─── Serpent S-box editor (4x4 grid, 16 4-bit entries) ───────────────── */

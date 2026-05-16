@@ -8,11 +8,26 @@
  *
  * Cells highlight in red when they differ from the canonical AES S-box,
  * giving visible feedback that an experiment is in progress.
+ *
+ * Bijection enforcement: an S-box MUST be a permutation of 0..255 for
+ * the inverse table to be well-defined. The editor lets users freely
+ * type any byte (the whole point of the project is to *let them
+ * experiment*), but surfaces duplicates two ways:
+ *   - Per-cell: a red outline + tooltip naming the colliding indices.
+ *   - Top banner: count of redundant cells + a "Repair to permutation"
+ *     button that runs `repairToPermutation` (leftmost wins; missing
+ *     values fill the redundant slots in ascending order).
  */
 
 import { AES_SBOX } from "@/ciphers/aes-constants";
-import { For } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { ByteCellInput } from "./ByteCellInput";
+import {
+  collisionGroupsByIndex,
+  countRedundantDuplicates,
+  findDuplicateIndices,
+  repairToPermutation,
+} from "./sbox-validation";
 
 type Props = {
   sbox: readonly number[];
@@ -33,8 +48,39 @@ export const SboxEditor = (props: Props) => {
   // compare to AES_SBOX. Future improvement: pass canonical via props.
   const canonical = props.inverse ? AES_SBOX : AES_SBOX;
 
+  // Memoize duplicate detection — the For callback below reads from
+  // these memos for every cell, so we want them computed once per
+  // change to props.sbox rather than per-cell.
+  const duplicateSet = createMemo(() => findDuplicateIndices(props.sbox));
+  const collisionGroups = createMemo(() => collisionGroupsByIndex(props.sbox));
+  const redundantCount = createMemo(() => countRedundantDuplicates(props.sbox));
+
+  const handleRepair = (): void => {
+    props.onChange(repairToPermutation(props.sbox));
+  };
+
   return (
     <div class="sbox-editor">
+      {/* Warning banner: only renders when the table is not a permutation.
+          Decryption ambiguity isn't just a "yellow warning" — it's a
+          correctness failure, so we lean red rather than amber here
+          (amber is already taken by .modified for "you edited this"). */}
+      <Show when={redundantCount() > 0}>
+        <div class="sbox-warning-banner" role="alert">
+          <span class="sbox-warning-icon" aria-hidden="true">
+            ⚠
+          </span>
+          <span class="sbox-warning-text">
+            This S-box must be a permutation of 0–255 (each value appears exactly once). With{" "}
+            {redundantCount()} duplicate {redundantCount() === 1 ? "value" : "values"}, the table is
+            not invertible.
+          </span>
+          <button class="sbox-warning-repair" type="button" onClick={handleRepair}>
+            Repair to permutation
+          </button>
+        </div>
+      </Show>
+
       <div class="sbox-axis-label sbox-col-axis">
         <span class="muted">col →</span>
         {/* Axis labels are intentionally rendered in hex regardless of the
@@ -68,6 +114,8 @@ export const SboxEditor = (props: Props) => {
                     compact
                     value={props.sbox[idx] ?? 0}
                     modified={props.sbox[idx] !== (canonical[idx] ?? 0)}
+                    duplicate={duplicateSet().has(idx)}
+                    title={duplicateTitleFor(idx, collisionGroups())}
                     onCommit={(next) => {
                       // Always copy the array so callers can detect change
                       // by reference identity (the spec mutator relies on
@@ -88,3 +136,22 @@ export const SboxEditor = (props: Props) => {
 };
 
 const toHex1 = (n: number): string => n.toString(16);
+
+const toHex2 = (n: number): string => n.toString(16).padStart(2, "0");
+
+/**
+ * Build a per-cell tooltip when `idx` is part of a duplicate group:
+ * names the other indices its value collides with. Returns undefined
+ * for non-duplicate cells so the input element renders no `title=""`.
+ */
+function duplicateTitleFor(
+  idx: number,
+  groups: Map<number, readonly number[]>,
+): string | undefined {
+  const group = groups.get(idx);
+  if (!group) return undefined;
+  // Show all indices in the collision group, hex-formatted to match the
+  // grid's address presentation. The user is reading these as addresses.
+  const others = group.filter((i) => i !== idx).map((i) => `0x${toHex2(i)}`);
+  return `Duplicate value — also at ${others.join(", ")}`;
+}

@@ -26,6 +26,20 @@ type Props = {
   modified?: boolean;
   /** Compact rendering for the 16x16 S-box grid. */
   compact?: boolean;
+  /**
+   * Highlight this cell because its value collides with another cell's
+   * value, breaking the S-box's permutation invariant. Styled with a
+   * red outline so it stays distinct from the amber `modified` accent —
+   * the two states can co-occur (a cell can be both edited and part of
+   * a duplicate group), and duplicate is the more important signal.
+   */
+  duplicate?: boolean;
+  /**
+   * Tooltip — e.g. for SboxEditor to enumerate a cell's collision group.
+   * Typed with explicit `| undefined` so callers can pass the result of
+   * a conditional helper without exactOptionalPropertyTypes complaints.
+   */
+  title?: string | undefined;
 };
 
 export const ByteCellInput = (props: Props) => {
@@ -64,7 +78,12 @@ export const ByteCellInput = (props: Props) => {
   return (
     <input
       class="byte-cell"
-      classList={{ compact: props.compact, modified: props.modified }}
+      classList={{
+        compact: props.compact,
+        modified: props.modified,
+        duplicate: props.duplicate,
+      }}
+      title={props.title}
       type="text"
       // Cap input length to the format's max display width. Hex=2, dec=3,
       // ASCII=4 (\xNN). A literal printable char fits in 1; the cap is
