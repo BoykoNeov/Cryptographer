@@ -605,18 +605,34 @@ export const App = () => {
       });
   };
 
-  // Re-run on spec edit, but only when the user has opted into auto-rerun
-  // mode (the default). In manual mode we instead flip the dirty flag so
-  // the UI can show an "edits pending — click Run" banner, preserving the
-  // prior run snapshot for comparison in the Run Explorer until the user
-  // deliberately commits the batched edits.
+  // Re-run when ANY input that feeds the cipher changes — spec edits
+  // (S-box / param tweaks), plaintext/ciphertext, key, or IV. Only fires
+  // when the user has opted into auto-rerun mode (the default). In manual
+  // mode we instead flip the dirty flag so the UI can show an "edits
+  // pending — click Run" banner, preserving the prior run snapshot for
+  // comparison in the Run Explorer until the user deliberately commits
+  // the batched edits.
   //
-  // `on(spec, ...)` runs ONLY when the spec signal changes, not on initial
-  // setup — important because neither mode should fire before the user
-  // has hit Run once.
+  // Tracking the input/key/IV signals (not just spec) means that typing in
+  // the plaintext field or clicking "🎲 Randomize" on the IV produces the
+  // same auto-rerun behavior as a spec edit. Before this, only spec edits
+  // were watched, so the trace silently went stale on input/key/IV changes
+  // and the "edits pending" banner never appeared either.
+  //
+  // Side effect: helpers like `changeFormat`/`changeCipher`/`changePadding`
+  // and `applyDocument` call setInputText/setKeyText as a consequence of
+  // selector changes, so each of those will now trigger an extra debounced
+  // rerun on top of the spec-driven one. `pushSnapshot` dedups identical
+  // configurations so history stays clean; the worst case is one wasted
+  // sub-millisecond runtime call.
+  //
+  // The dep tuple is an array of *accessor functions* (not invoked values).
+  // Solid's `on` accepts both forms; the array form means the body fires
+  // when ANY of them change. `defer: true` keeps it from firing on initial
+  // setup — neither mode should rerun before the user has hit Run once.
   createEffect(
     on(
-      spec,
+      [spec, inputText, keyText, ivBytes],
       () => {
         if (!hasRunOnce()) return;
         if (!autoRerun()) {
