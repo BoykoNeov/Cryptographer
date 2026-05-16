@@ -393,3 +393,92 @@ describe("Slice 7c — chip-crowding fixture (canonical bad case)", () => {
     expect((aYs[0] ?? 0) - (bYs[0] ?? 0)).toBe(rowStep);
   });
 });
+
+// ─── Post-Option-C: replicas anchored at iterate center when consumer is
+// a collapsed iterate (chip-body) ──────────────────────────────────────────
+//
+// Under Option C, a collapsed iterate keeps its container box and the
+// `childIds` become block-chip ids. The earlier replica-anchor rule
+// ("place above the iterate body's first non-replica child") read those
+// chips as if they were real body steps — every replica's tip landed
+// above block 1, making the user think the aux feeds only block 1.
+// Override: when the first non-replica child is a block chip
+// (`blockChipOf !== undefined`), anchor the replica at the iterate's
+// horizontal center instead. Real body steps (expanded iterate) keep
+// the first-child anchor.
+
+describe("Option C — replica anchor for collapsed-iterate consumers", () => {
+  it("anchors replicas at iterate-center when the first body child is a block chip", () => {
+    const consts = layoutConstantsFor("normal");
+    const graph: CipherGraph = {
+      nodes: [
+        {
+          stepId: "key-expansion",
+          stepType: "ke",
+          label: "key-expansion",
+          containerPath: [],
+        },
+        // Block chips (synthetic, post-expandCollapsedIterates). Use TWO
+        // chips so the iterate's box is wider than a single LEAF_W and
+        // its center is unambiguously to the right of chip 0's x — the
+        // perception-bug we are fixing only manifests when the center
+        // diverges from chip 0.
+        {
+          stepId: "iter@block0",
+          stepType: "__block_chip__",
+          label: "block 1",
+          containerPath: ["iter"],
+          blockChipOf: "iter",
+        },
+        {
+          stepId: "iter@block1",
+          stepType: "__block_chip__",
+          label: "block 2",
+          containerPath: ["iter"],
+          blockChipOf: "iter",
+        },
+        // Replica node — `replicateHighFanoutSources` would have created
+        // this in real flow with the consumer's containerPath. Here the
+        // consumer is the iterate at root, so the replica sits at root.
+        {
+          stepId: "key-expansion@->iter",
+          stepType: "ke",
+          label: "key-expansion",
+          containerPath: [],
+          replicaOf: "key-expansion",
+        },
+      ],
+      containers: [
+        {
+          kind: "iterate",
+          id: "iter",
+          label: "iter",
+          containerPath: [],
+          childIds: ["iter@block0", "iter@block1"],
+          blockSpan: 2,
+        },
+      ],
+      edges: [{ from: "key-expansion@->iter", to: "iter", auxKey: "key", kind: "aux" }],
+      rootIds: ["key-expansion", "key-expansion@->iter", "iter"],
+    };
+
+    const { boxes } = layoutRoot(graph, new Map(), consts);
+    const iterBox = boxes.get("iter");
+    const replicaBox = boxes.get("key-expansion@->iter");
+    const block0Box = boxes.get("iter@block0");
+
+    expect(iterBox).toBeDefined();
+    expect(replicaBox).toBeDefined();
+    expect(block0Box).toBeDefined();
+    if (!iterBox || !replicaBox || !block0Box) return;
+
+    // Expected anchor: iterate-center adjusted so the chip is column-
+    // centered on the iterate's midline.
+    const expectedAnchorX = iterBox.x + (iterBox.w - consts.LEAF_W) / 2;
+    expect(replicaBox.x).toBe(expectedAnchorX);
+
+    // The replica is NOT anchored over block 1's column — that was the
+    // perception-bug we are fixing.
+    expect(replicaBox.x).not.toBe(block0Box.x);
+  });
+});

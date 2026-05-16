@@ -946,6 +946,21 @@ export const replicateHighFanoutSources = (
   const hasAnyAlwaysOverride = Object.values(modesObj).some((m) => m === "always");
   if (threshold <= 0 && !hasAnyAlwaysOverride) return graph;
 
+  // Container ids — index up front so the per-source loop can no-op
+  // container sources without re-walking `graph.containers`. Containers
+  // (groups + iterates) are themselves visible decongestion devices;
+  // replicating one produces a chip near the consumer that duplicates
+  // the existing state-spine arrow AND overflows the chip (container
+  // labels are typically long, e.g. "ECB blocks (per-block AES)"). The
+  // user can still set a container to "always" in the panel — the toggle
+  // is preserved; this loop just silently skips it. Specific motivation:
+  // post-Option-C, a collapsed iterate stays in the graph as a source
+  // with one outgoing aux edge to its successor (e.g. `concat-blocks`),
+  // and toggling it "always" in the panel produced exactly the duplicate
+  // arrow + overflowing-chip the user reported.
+  const containerIds = new Set<string>();
+  for (const c of graph.containers) containerIds.add(c.id);
+
   // Count outgoing aux edges per source. State edges are excluded.
   const fanoutBySrc = new Map<string, number>();
   for (const e of graph.edges) {
@@ -955,6 +970,7 @@ export const replicateHighFanoutSources = (
 
   const highFanoutSrcs = new Set<string>();
   for (const [srcId, count] of fanoutBySrc) {
+    if (containerIds.has(srcId)) continue;
     const m = modesObj[srcId];
     if (m === "never") continue;
     if (m === "always") {
