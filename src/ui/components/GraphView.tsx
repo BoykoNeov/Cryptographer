@@ -1094,6 +1094,17 @@ export const visualEdgeTargetId = (
   const firstNonReplicaChildId = toContainer.childIds.find(
     (cid) => nodesById.get(cid)?.replicaOf === undefined,
   );
+  // Option C: a collapsed iterate's first non-replica child is a block
+  // chip (`blockChipOf !== undefined`), not a real body step. Retargeting
+  // the arrow there would make it visually land on block 1 — wrong
+  // pedagogically, because the aux is consumed at iteration entry and
+  // feeds all blocks. When the first child is a chip, leave the arrow's
+  // target at the iterate as a whole (its top edge). Mirrors the
+  // anchor-x override in `layoutRoot`'s replica placement loop.
+  if (firstNonReplicaChildId !== undefined) {
+    const firstChildNode = nodesById.get(firstNonReplicaChildId);
+    if (firstChildNode?.blockChipOf !== undefined) return edge.to;
+  }
   return firstNonReplicaChildId ?? edge.to;
 };
 
