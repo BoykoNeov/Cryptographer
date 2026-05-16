@@ -1,12 +1,17 @@
 # Port-spreading at consumer head
 
-**Status:** Helper-level fix SHIPPED 2026-05-16 (mechanism 1 + mechanism 2;
-diagnostic `it.fails` tests flipped to regression guards). Render-site
-mechanism 3 (off-chip clamp against chip-vs-leaf width) deferred per the
-plan unless visual smoke shows arrows still sliding off chip edges.
-Browser-visual confirmation on the canonical AES-128 ECB + collapsed-iterate
-fixture pending. **Position in time:** unblocks Slice 7b → Feistel-plan →
-first Feistel cipher → universal cipher-shape plan.
+**Status:** Helper-level fix SHIPPED 2026-05-16 + visual-target bucketing
+followup SHIPPED 2026-05-17 (user-confirmed visually on AES-128 ECB
+expanded fixture with all-aux-always). Mechanisms 1+2 + the
+expanded-iterate retargeting collision are all closed. Render-site
+mechanism 3 (off-chip clamp against chip-vs-leaf width) deferred — not
+visible on the smoke fixture. A SEPARATE visual issue surfaced during
+smoke: 11 individual arrows from a `key-expansion@->iterate` replica in
+collapsed mode are visually noisy regardless of port-spreading. Not a
+port-spreading bug — captured as a high-priority follow-up: see
+[[project_arrow_bundling_priority]]. **Position in time:** unblocks
+Slice 7b → Feistel-plan → first Feistel cipher → universal cipher-shape
+plan, modulo the arrow-bundling discussion in the next session.
 
 ## Context
 

@@ -454,32 +454,56 @@ const EMPTY_REPLICA_PLACEMENT: ReplicaPlacement = {
  */
 type ConsumerPortAssignment = {
   /**
-   * edge reference → slot index (0..localCount-1) at its consumer.
-   * Empty entries for edges at single-incoming consumers (no spread
-   * needed; `consumerPortOffset` short-circuits to 0 via the
+   * edge reference → slot index (0..localCount-1) at its consumer's
+   * VISUAL target. Empty entries for edges at single-incoming consumers
+   * (no spread needed; `consumerPortOffset` short-circuits to 0 via the
    * `slot === undefined` branch). Keyed by edge reference, so each
    * render's edge objects map directly to their assigned slots.
    */
   readonly slotOf: ReadonlyMap<GraphEdge, number>;
   /**
-   * consumer id → number of incoming edges. The denominator in
-   * `(slot - (localCount - 1) / 2) * portGap`. Single-incoming
-   * consumers have an entry of 1 (used by tests for sanity checks)
-   * but no slot entries (so consumerPortOffset returns 0).
+   * edge reference → total number of edges in this edge's bucket. Same
+   * value for every edge in the same bucket; tracking per-edge (not
+   * per-target-id) keeps `consumerPortOffset` oblivious to the bucket
+   * key strategy (visual target vs raw `edge.to`). Empty for
+   * single-incoming consumers (consumerPortOffset's `slot === undefined`
+   * short-circuit handles them).
    */
-  readonly localCountOf: ReadonlyMap<string, number>;
+  readonly localCountOf: ReadonlyMap<GraphEdge, number>;
+  /**
+   * Visual target id per visible bucket (those with localCount ≥ 2),
+   * exposed so tests can assert "this consumer has N incoming edges"
+   * without needing to count via slotOf walks. Single-incoming
+   * consumers are NOT included — they have no slot entries.
+   */
+  readonly bucketSizeByTarget: ReadonlyMap<string, number>;
 };
 
 const EMPTY_PORT_ASSIGNMENT: ConsumerPortAssignment = {
   slotOf: new Map(),
   localCountOf: new Map(),
+  bucketSizeByTarget: new Map(),
 };
 
 /**
  * Build the per-consumer port-slot map. Walks edges once, buckets by
- * `edge.to`, sorts each multi-incoming bucket by row order (inherited
- * from `replicas.rowOfSource`), assigns slots 0..N-1 within each
- * bucket. O(E log E) overall (the per-bucket sort cost dominates).
+ * VISUAL target (see `visualTargetOf` below), sorts each multi-incoming
+ * bucket by row order (inherited from `replicas.rowOfSource`), assigns
+ * slots 0..N-1 within each bucket. O(E log E) overall (the per-bucket
+ * sort cost dominates).
+ *
+ * **Why visual target, not raw `edge.to`** (2026-05-17 followup):
+ * `visualEdgeTargetId` retargets replica edges whose `edge.to` is an
+ * iterate container with a non-chip first body step → the arrow visually
+ * lands at that first body step (slice-2 anchor). When the renderer
+ * does this retargeting but `buildConsumerPortAssignment` buckets by
+ * raw `edge.to`, two edges that visually converge at the same node
+ * (one with `edge.to = iterate`, retargeted; one with `edge.to =
+ * first-body-step`, direct) end up in DIFFERENT raw buckets, both at
+ * offset 0 — visible collision. Bucketing by visual target merges them
+ * into one slot pool. The optional `visualTargetOf` parameter defaults
+ * to the identity (`e => e.to`) so existing tests with synthetic
+ * graphs and no iterates keep their current behavior.
  *
  * **Comparator** (sorting incoming edges at one consumer):
  *
@@ -498,6 +522,7 @@ const EMPTY_PORT_ASSIGNMENT: ConsumerPortAssignment = {
 const buildConsumerPortAssignment = (
   graph: CipherGraph,
   replicas: ReplicaPlacement,
+  visualTargetOf?: (e: GraphEdge) => string,
 ): ConsumerPortAssignment => {
   if (graph.edges.length === 0) return EMPTY_PORT_ASSIGNMENT;
   const canonicalSource = (e: GraphEdge): string => replicas.sourceOf.get(e.from) ?? e.from;
@@ -506,23 +531,31 @@ const buildConsumerPortAssignment = (
     const row = replicas.rowOfSource.get(cs);
     return row !== undefined ? row : Number.POSITIVE_INFINITY;
   };
-  // Bucket every edge under its consumer (`edge.to`).
+  const targetKey = visualTargetOf ?? ((e: GraphEdge) => e.to);
+  // Bucket every edge under its VISUAL consumer (see doc above for why
+  // not raw edge.to). Default targetKey is identity, so callers that
+  // don't care about render-time retargeting (existing tests, future
+  // pure-data analyses) keep their current behavior.
   const incomingByConsumer = new Map<string, GraphEdge[]>();
   for (const e of graph.edges) {
-    let bucket = incomingByConsumer.get(e.to);
+    const key = targetKey(e);
+    let bucket = incomingByConsumer.get(key);
     if (bucket === undefined) {
       bucket = [];
-      incomingByConsumer.set(e.to, bucket);
+      incomingByConsumer.set(key, bucket);
     }
     bucket.push(e);
   }
   const slotOf = new Map<GraphEdge, number>();
-  const localCountOf = new Map<string, number>();
+  const localCountOf = new Map<GraphEdge, number>();
+  const bucketSizeByTarget = new Map<string, number>();
   for (const [consumer, edges] of incomingByConsumer) {
-    localCountOf.set(consumer, edges.length);
-    // Single-incoming → no spread needed; leave slotOf empty for these.
-    // `consumerPortOffset` short-circuits via `slot === undefined → 0`.
+    // Single-incoming → no spread needed; leave slotOf/localCountOf empty
+    // for these. `consumerPortOffset` short-circuits via
+    // `slot === undefined → 0`. Multi-incoming buckets get exposed via
+    // `bucketSizeByTarget` so tests can sanity-check fixture cardinality.
     if (edges.length <= 1) continue;
+    bucketSizeByTarget.set(consumer, edges.length);
     edges.sort((a, b) => {
       const ra = rowOf(a);
       const rb = rowOf(b);
@@ -533,10 +566,13 @@ const buildConsumerPortAssignment = (
     });
     for (let i = 0; i < edges.length; i++) {
       const e = edges[i];
-      if (e !== undefined) slotOf.set(e, i);
+      if (e !== undefined) {
+        slotOf.set(e, i);
+        localCountOf.set(e, edges.length);
+      }
     }
   }
-  return { slotOf, localCountOf };
+  return { slotOf, localCountOf, bucketSizeByTarget };
 };
 
 /**
@@ -1285,7 +1321,7 @@ export const consumerPortOffset = (
 ): number => {
   const slot = ports.slotOf.get(edge);
   if (slot === undefined) return 0;
-  const total = ports.localCountOf.get(edge.to);
+  const total = ports.localCountOf.get(edge);
   if (total === undefined || total <= 1) return 0;
   return (slot - (total - 1) / 2) * portGap;
 };
@@ -1786,16 +1822,6 @@ export const GraphView = () => {
   const replicaPlacement = createMemo(() => buildReplicaPlacement(graph()));
 
   /**
-   * Per-consumer port-slot assignment memo
-   * (port-spreading-consumer-head plan, 2026-05-16). Reads the same
-   * `graph()` identity as `replicaPlacement` and composes with it (the
-   * builder needs `rowOfSource` to align slot ordering with source-side
-   * vertical staggering). Memoizes against the pair so swapping either
-   * triggers a rebuild.
-   */
-  const portAssignment = createMemo(() => buildConsumerPortAssignment(graph(), replicaPlacement()));
-
-  /**
    * Slice 5 — drop-gutter record shape. One record per gutter strip:
    * id == `data-drop-gutter` encoding (the same
    * `${"before"|"after"}:${siblingId}` string the drop handler
@@ -1829,6 +1855,30 @@ export const GraphView = () => {
     for (const n of graph().nodes) m.set(n.stepId, n);
     return m;
   });
+
+  /**
+   * Per-consumer port-slot assignment memo
+   * (port-spreading-consumer-head plan, 2026-05-16; visual-target
+   * bucketing followup 2026-05-17). Reads the same `graph()` identity
+   * as `replicaPlacement` and composes with it (the builder needs
+   * `rowOfSource` to align slot ordering with source-side vertical
+   * staggering). The `visualEdgeTargetId` callback ensures retargeted
+   * replica edges (those whose visual landing point differs from raw
+   * `edge.to` — e.g. replica → iterate, retargeted to the iterate's
+   * first non-replica body step per the slice-2 anchor) bucket WITH
+   * same-visual-target direct edges (e.g. replica → first-body-step
+   * directly). Without this, the renderer would render a retargeted
+   * edge and a direct edge to the same visual node at the same x
+   * (offset 0 in their separate single-incoming and small-bucket-midpoint
+   * buckets) → visible collision. Declared AFTER `nodesById` and
+   * `containersById` because Solid's createMemo runs its body eagerly
+   * on construction (TDZ would fire if those memos weren't defined yet).
+   */
+  const portAssignment = createMemo(() =>
+    buildConsumerPortAssignment(graph(), replicaPlacement(), (e) =>
+      visualEdgeTargetId(e, nodesById(), containersById()),
+    ),
+  );
 
   /**
    * Slice 5 — drop-gutter records for every visible container.

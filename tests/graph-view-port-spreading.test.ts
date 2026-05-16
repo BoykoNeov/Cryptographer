@@ -138,9 +138,12 @@ describe("port-spreading — canonical single-source baseline", () => {
     const ports = buildConsumerPortAssignment(g, replicas);
     // Sanity guards against test rot if `replicaOf` semantics shift.
     expect(replicas.rowOfSource.size).toBe(1);
-    expect(ports.localCountOf.get("c1")).toBe(1);
-    expect(ports.localCountOf.get("c2")).toBe(1);
-    expect(ports.localCountOf.get("c3")).toBe(1);
+    // Single-incoming consumers don't appear in bucketSizeByTarget
+    // (only multi-incoming buckets are tracked there); slotOf is also
+    // empty for them, which is what consumerPortOffset short-circuits on.
+    expect(ports.bucketSizeByTarget.has("c1")).toBe(false);
+    expect(ports.bucketSizeByTarget.has("c2")).toBe(false);
+    expect(ports.bucketSizeByTarget.has("c3")).toBe(false);
     for (const edge of g.edges) {
       expect(consumerPortOffset(edge, ports, 13)).toBe(0);
     }
@@ -188,7 +191,7 @@ describe("port-spreading — multi-incoming spread at one consumer", () => {
     });
     const replicas = buildReplicaPlacement(g);
     const ports = buildConsumerPortAssignment(g, replicas);
-    expect(ports.localCountOf.get("c1")).toBe(3);
+    expect(ports.bucketSizeByTarget.get("c1")).toBe(3);
     const [eA, eB, eC] = g.edges;
     if (!eA || !eB || !eC) throw new Error("missing edges");
     expect(consumerPortOffset(eA, ports, 10)).toBe(-10);
@@ -217,7 +220,7 @@ describe("port-spreading — multi-incoming spread at one consumer", () => {
     });
     const replicas = buildReplicaPlacement(g);
     const ports = buildConsumerPortAssignment(g, replicas);
-    expect(ports.localCountOf.get("c1")).toBe(4);
+    expect(ports.bucketSizeByTarget.get("c1")).toBe(4);
     const offsets = g.edges.map((e) => consumerPortOffset(e, ports, 10));
     expect(offsets).toEqual([-15, -5, +5, +15]);
   });
@@ -368,8 +371,9 @@ describe("port-spreading — per-consumer locality in asymmetric topology", () =
     });
     const replicas = buildReplicaPlacement(g);
     const ports = buildConsumerPortAssignment(g, replicas);
-    expect(ports.localCountOf.get("c1")).toBe(1);
-    expect(ports.localCountOf.get("c2")).toBe(2);
+    // c1 is single-incoming → not in bucketSizeByTarget; c2 is multi.
+    expect(ports.bucketSizeByTarget.has("c1")).toBe(false);
+    expect(ports.bucketSizeByTarget.get("c2")).toBe(2);
     const [aToC1, aToC2] = g.edges;
     if (!aToC1 || !aToC2) throw new Error("missing edges");
     // c1 single-incoming → 0. c2 multi-incoming → A at slot 0 → -5.
@@ -437,7 +441,7 @@ describe("port-spreading — chip-head heterogeneous fan-in (regression guards)"
     const replicas = buildReplicaPlacement(g);
     const ports = buildConsumerPortAssignment(g, replicas);
     expect(replicas.rowOfSource.size).toBe(3);
-    expect(ports.localCountOf.get("c1")).toBe(2);
+    expect(ports.bucketSizeByTarget.get("c1")).toBe(2);
 
     const spineEdge = g.edges[0];
     const bToC1 = g.edges[2];
@@ -475,7 +479,7 @@ describe("port-spreading — chip-head heterogeneous fan-in (regression guards)"
     const replicas = buildReplicaPlacement(g);
     const ports = buildConsumerPortAssignment(g, replicas);
     expect(replicas.rowOfSource.size).toBe(3);
-    expect(ports.localCountOf.get("c1")).toBe(2);
+    expect(ports.bucketSizeByTarget.get("c1")).toBe(2);
 
     const aToC1 = g.edges[0];
     const cToC1 = g.edges[2];
@@ -490,5 +494,102 @@ describe("port-spreading — chip-head heterogeneous fan-in (regression guards)"
     expect(Math.abs(aOffset - cOffset)).toBe(portGap);
     expect(aOffset).toBe(-5);
     expect(cOffset).toBe(+5);
+  });
+});
+
+// ─── Regression: visual-target bucketing (2026-05-17 followup) ────────────
+//
+// Manual browser smoke on AES-128 ECB + all-aux-always (expanded iterate)
+// surfaced a collision at `initial.add-round-key`: three replica edges
+// visually converged on that step but my fix bucketed them by RAW
+// `edge.to`. Two of them had `edge.to = "initial.add-round-key"` (direct)
+// or `edge.to = "iterate"` (retargeted via visualEdgeTargetId's slice-2
+// anchor → first body step). Different raw buckets, both at offset 0 →
+// two arrows landed at the same x at the visual target.
+//
+// Fix: `buildConsumerPortAssignment` takes an optional `visualTargetOf`
+// callback so callers can bucket by the same key the renderer uses for
+// `toBox`. The render site passes `visualEdgeTargetId`-bound; tests can
+// stub the callback to exercise the convergence case without needing
+// to construct a real iterate container.
+
+describe("port-spreading — visual-target bucketing (chip-head + iterate-retarget regression)", () => {
+  it("edges that visually converge at one node bucket together regardless of raw edge.to", () => {
+    // Synthetic minimal repro: two replicas of two different sources A
+    // and B. A's edge has raw edge.to = "first-body-step" (direct). B's
+    // edge has raw edge.to = "iterate-id" (gets retargeted at render
+    // time to first-body-step via visualEdgeTargetId). Without
+    // visual-target bucketing both end up in single-incoming buckets
+    // → both offset 0 → render at the same x on first-body-step.
+    //
+    // The test stubs visualTargetOf so any edge whose `to === "iterate"`
+    // gets remapped to "first-body-step", matching what the real
+    // visualEdgeTargetId does for retargeted replica edges into
+    // collapsed/expanded iterates.
+    const g = buildSyntheticGraph({
+      nodes: [
+        consumerNode("first-body-step"),
+        consumerNode("iterate"),
+        replicaNode("A->first-body-step", "A"),
+        replicaNode("B->iterate", "B"),
+      ],
+      edges: [
+        // A replica → directly to first-body-step.
+        auxEdge("A->first-body-step", "first-body-step"),
+        // B replica → to iterate (will be retargeted by callback).
+        auxEdge("B->iterate", "iterate"),
+      ],
+      rootIds: ["A->first-body-step", "B->iterate", "first-body-step", "iterate"],
+    });
+    const replicas = buildReplicaPlacement(g);
+    const visualTargetOf = (e: GraphEdge): string =>
+      e.to === "iterate" ? "first-body-step" : e.to;
+    const ports = buildConsumerPortAssignment(g, replicas, visualTargetOf);
+
+    // Both edges should share the "first-body-step" bucket → 2 incoming
+    // edges → distinct slots.
+    expect(ports.bucketSizeByTarget.get("first-body-step")).toBe(2);
+    expect(ports.bucketSizeByTarget.has("iterate")).toBe(false);
+
+    const [aEdge, bEdge] = g.edges;
+    if (!aEdge || !bEdge) throw new Error("missing edges");
+    const aOffset = consumerPortOffset(aEdge, ports, 10);
+    const bOffset = consumerPortOffset(bEdge, ports, 10);
+
+    // 2 edges → slots 0 (row 0, source A) and 1 (row 1, source B) →
+    // offsets -5 and +5. DISTINCT — that's the post-fix property.
+    expect(aOffset).not.toBe(bOffset);
+    expect(aOffset).toBe(-5);
+    expect(bOffset).toBe(+5);
+  });
+
+  it("default (no visualTargetOf) keeps the identity bucketing — same edges land in DIFFERENT buckets", () => {
+    // Same graph, but no callback → bucketing falls back to raw edge.to.
+    // Confirms backward compat: existing tests with synthetic graphs and
+    // no iterate retargeting see identical behavior with or without
+    // the new parameter.
+    const g = buildSyntheticGraph({
+      nodes: [
+        consumerNode("first-body-step"),
+        consumerNode("iterate"),
+        replicaNode("A->first-body-step", "A"),
+        replicaNode("B->iterate", "B"),
+      ],
+      edges: [auxEdge("A->first-body-step", "first-body-step"), auxEdge("B->iterate", "iterate")],
+      rootIds: ["A->first-body-step", "B->iterate", "first-body-step", "iterate"],
+    });
+    const replicas = buildReplicaPlacement(g);
+    const ports = buildConsumerPortAssignment(g, replicas);
+
+    // Without the callback, each edge bucket has localCount=1 → no
+    // bucketSizeByTarget entries → consumerPortOffset returns 0 for
+    // both. This is the BUG state the visualTargetOf path fixes.
+    expect(ports.bucketSizeByTarget.has("first-body-step")).toBe(false);
+    expect(ports.bucketSizeByTarget.has("iterate")).toBe(false);
+
+    const [aEdge, bEdge] = g.edges;
+    if (!aEdge || !bEdge) throw new Error("missing edges");
+    expect(consumerPortOffset(aEdge, ports, 10)).toBe(0);
+    expect(consumerPortOffset(bEdge, ports, 10)).toBe(0);
   });
 });
