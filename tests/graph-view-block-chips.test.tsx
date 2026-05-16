@@ -22,7 +22,7 @@ import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetCipherModeForTests } from "@/ui/stores/cipher-mode";
 import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
-import { __resetLayoutsForTests, toggleCollapse } from "@/ui/stores/layout";
+import { __resetLayoutsForTests, toggleCollapse, useLayoutMap } from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
 import { __resetSpecForTests, setCipherMode } from "@/ui/stores/spec";
 import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
@@ -81,11 +81,12 @@ describe("GraphView — collapsed iterate becomes parallel block-chips", () => {
     const { container } = render(() => <GraphView />);
 
     // Pre-collapse there'd be one container chip (`ecb-blocks`); after
-    // Slice 6's expansion it's replaced by 4 leaf rectangles labelled
-    // `block 1` … `block 4`. Those leaves render via the standard
-    // `LeafRect` path, so they appear as `<text class="graph-leaf-label">`
-    // children of `.graph-leaf` groups (with the replica-class for the
-    // no-tabindex / no-delete styling).
+    // Slice 6's expansion + Option C, the iterate KEEPS its header band
+    // (with the chevron) and its body becomes the chip row — 4 leaf
+    // rectangles labelled `block 1` … `block 4`. Those leaves render via
+    // the standard `LeafRect` path, so they appear as
+    // `<text class="graph-leaf-label">` children of `.graph-leaf` groups
+    // (with the replica-class for the no-tabindex / no-delete styling).
     const labels = Array.from(container.querySelectorAll("text.graph-leaf-label")).map(
       (el) => el.textContent ?? "",
     );
@@ -94,14 +95,6 @@ describe("GraphView — collapsed iterate becomes parallel block-chips", () => {
     }
     // No ellipsis chip at N=4.
     expect(labels.find((l) => l.includes("more blocks"))).toBeUndefined();
-
-    // The original iterate header text ("ecb-blocks") shouldn't render
-    // anywhere — the iterate container is gone from the post-Slice-6
-    // graph, so no `<text class="graph-container-header">` carries it.
-    const headerLabels = Array.from(container.querySelectorAll("text.graph-container-header")).map(
-      (el) => el.textContent ?? "",
-    );
-    expect(headerLabels.find((l) => l === "ecb-blocks")).toBeUndefined();
   });
 
   it("does not expand a non-collapsed iterate (chips appear ONLY when collapsed)", () => {
@@ -114,5 +107,40 @@ describe("GraphView — collapsed iterate becomes parallel block-chips", () => {
     );
     // No block-chip labels when the iterate is expanded.
     expect(labels.find((l) => /^block \d+$/.test(l))).toBeUndefined();
+  });
+
+  // Regression — without retaining the iterate container, there'd be no
+  // chevron to click for re-expand after a post-Run collapse. Option C's
+  // explicit promise is that the iterate header + chevron remain
+  // rendered and clicking the chevron removes the iterate from
+  // `collapsedGroups`.
+  it("keeps the iterate's chevron clickable after a post-Run collapse", () => {
+    seedAes128EcbTrace();
+    toggleCollapse(aes128EcbSpec.id, "ecb-blocks");
+
+    const { container } = render(() => <GraphView />);
+    const chevron = container.querySelector('[data-testid="graph-container-chevron-ecb-blocks"]');
+    expect(chevron).not.toBeNull();
+
+    // Sanity: the iterate is in the collapsed set before the click.
+    expect(useLayoutMap()()[aes128EcbSpec.id]?.collapsedGroups.includes("ecb-blocks")).toBe(true);
+
+    (chevron as SVGGElement).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(useLayoutMap()()[aes128EcbSpec.id]?.collapsedGroups.includes("ecb-blocks")).toBe(false);
+  });
+
+  it("keeps the iterate's header label visible while collapsed (box-with-header)", () => {
+    seedAes128EcbTrace();
+    toggleCollapse(aes128EcbSpec.id, "ecb-blocks");
+
+    const { container } = render(() => <GraphView />);
+    const headerLabels = Array.from(container.querySelectorAll("text.graph-container-label")).map(
+      (el) => el.textContent ?? "",
+    );
+    // The iterate's label is the spec's `label` field for `ecb-blocks`
+    // ("ECB blocks (per-block AES)"). Asserting on a substring keeps the
+    // test resilient to label-copy edits.
+    expect(headerLabels.some((l) => l.toLowerCase().includes("ecb"))).toBe(true);
   });
 });
