@@ -1641,7 +1641,18 @@ button:disabled {
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 4px;
-  max-height: 600px;
+  /* Viewport-relative cap (2026-05-16, replacing the hardcoded 600 px
+     that never adapted to taller displays). On a 1080-px display this
+     allots ~860 px of canvas — ~43 % more than before. The 220-px
+     subtrahend accounts for the app's fixed chrome above and below the
+     canvas (header band, frame-header, inputs panel, byte-format
+     toggle, ParamEditor strip, footer); it's a deliberate
+     over-estimate so the canvas never pushes those out of view.
+     `min-height` floors the cap at roughly the previous fixed value
+     so short displays (800-px laptops) keep their existing canvas
+     real estate even though the calc would give them less. */
+  max-height: calc(100vh - 220px);
+  min-height: 560px;
   overflow: auto;
 }
 
@@ -1914,6 +1925,25 @@ button:disabled {
 .graph-replication-panel-hint {
   font-size: 10px;
   opacity: 0.7;
+}
+
+/* Cap the open panel's body so it can't obstruct an unbounded amount
+   of canvas behind the sticky header. `max-height` is viewport-relative
+   so the cap scales with the user's window (taller screens get more
+   rows visible before scroll). `overflow-y: auto` engages an internal
+   scrollbar only when content exceeds the cap; for the typical 3-source
+   AES-128 case the panel body sits well under 30vh and the scrollbar
+   never appears. `min-height: 0` is the standard flex-child escape
+   hatch so the inner scroller's content doesn't push the body past
+   `max-height` (without it, flex children default to `min-height:
+   auto = intrinsic content height`, which beats the cap). */
+.graph-replication-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 30vh;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .graph-replication-row {

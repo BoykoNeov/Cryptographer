@@ -2642,50 +2642,65 @@ export const GraphView = () => {
                 </span>
               </button>
               <Show when={replicationPanelOpen()}>
-                <For each={replicationSources()}>
-                  {(src) => {
-                    const currentMode = createMemo<"auto" | "always" | "never">(() => {
-                      const m = replicationModes()[src.id];
-                      return m ?? "auto";
-                    });
-                    return (
-                      <div class="graph-replication-row" data-testid={`replication-row-${src.id}`}>
-                        <span class="graph-replication-row-id" title={src.id}>
-                          {src.id}
-                        </span>
-                        <span class="graph-replication-row-fanout">
-                          {src.fanout} {src.fanout === 1 ? "edge" : "edges"}
-                        </span>
-                        <div class="format-toggle">
-                          <button
-                            type="button"
-                            classList={{ active: currentMode() === "auto" }}
-                            onClick={() => setReplicationMode(spec().id, src.id, null)}
-                            title="Defer to the global threshold"
-                          >
-                            auto
-                          </button>
-                          <button
-                            type="button"
-                            classList={{ active: currentMode() === "always" }}
-                            onClick={() => setReplicationMode(spec().id, src.id, "always")}
-                            title="Always replicate this source"
-                          >
-                            always
-                          </button>
-                          <button
-                            type="button"
-                            classList={{ active: currentMode() === "never" }}
-                            onClick={() => setReplicationMode(spec().id, src.id, "never")}
-                            title="Never replicate this source"
-                          >
-                            never
-                          </button>
+                {/* Body wrapper caps the panel's vertical real estate so
+                    the open panel can't obstruct an unbounded amount of
+                    canvas. CSS (`.graph-replication-panel-body`)
+                    applies `max-height: 30vh` + `overflow-y: auto`, so
+                    ciphers with many overridable sources scroll the
+                    list internally rather than pushing the rest of the
+                    sticky header (and the canvas it covers) further
+                    down. For the typical 3-source AES-128 case the
+                    cap never engages — the rows are ~24 px each and
+                    well under 30vh. */}
+                <div class="graph-replication-panel-body">
+                  <For each={replicationSources()}>
+                    {(src) => {
+                      const currentMode = createMemo<"auto" | "always" | "never">(() => {
+                        const m = replicationModes()[src.id];
+                        return m ?? "auto";
+                      });
+                      return (
+                        <div
+                          class="graph-replication-row"
+                          data-testid={`replication-row-${src.id}`}
+                        >
+                          <span class="graph-replication-row-id" title={src.id}>
+                            {src.id}
+                          </span>
+                          <span class="graph-replication-row-fanout">
+                            {src.fanout} {src.fanout === 1 ? "edge" : "edges"}
+                          </span>
+                          <div class="format-toggle">
+                            <button
+                              type="button"
+                              classList={{ active: currentMode() === "auto" }}
+                              onClick={() => setReplicationMode(spec().id, src.id, null)}
+                              title="Defer to the global threshold"
+                            >
+                              auto
+                            </button>
+                            <button
+                              type="button"
+                              classList={{ active: currentMode() === "always" }}
+                              onClick={() => setReplicationMode(spec().id, src.id, "always")}
+                              title="Always replicate this source"
+                            >
+                              always
+                            </button>
+                            <button
+                              type="button"
+                              classList={{ active: currentMode() === "never" }}
+                              onClick={() => setReplicationMode(spec().id, src.id, "never")}
+                              title="Never replicate this source"
+                            >
+                              never
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  }}
-                </For>
+                      );
+                    }}
+                  </For>
+                </div>
               </Show>
             </div>
           </Show>
