@@ -2311,6 +2311,30 @@ button:disabled {
   filter: drop-shadow(0 0 4px var(--accent));
 }
 
+/* Start-dot for replica edges (vertical regime). Pins the arrow's
+   visual origin to a specific point on the source replica's bottom
+   edge so the eye can disambiguate the arrow's source even when the
+   straight diagonal line crosses an intervening replica's box. The
+   dot shares its color with the parent path's stroke via inheritance
+   on `currentColor`: SVG `<circle>` defaults `fill` to the inherited
+   color, so styling the per-kind classes the same way as the paths
+   keeps the dot tonally matched to its line. */
+.graph-edge-start-dot-aux {
+  fill: var(--text);
+  fill-opacity: 0.55;
+}
+.graph-edge-start-dot-state {
+  fill: var(--text);
+  fill-opacity: 0.85;
+}
+.graph-edge-start-dot.graph-edge-feedback {
+  fill-opacity: 0.75;
+}
+.graph-edge-start-dot.graph-edge-selected {
+  fill-opacity: 1;
+  filter: drop-shadow(0 0 3px var(--accent));
+}
+
 /* Selected leaf halo. Mirrors the edge halo so the user sees the same
    visual language regardless of which surface they clicked. Applied to
    the wrapping <g>, which then propagates the drop-shadow filter to

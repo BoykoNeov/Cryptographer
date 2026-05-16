@@ -212,11 +212,15 @@ describe("Slice 7c — multi-source row stability (globally-stable rowOfSource)"
     expect(new Set(aRepYs).size).toBe(1);
 
     // All B-replicas across c1/c2/c3/c4 share the same y (row 1 above
-    // their consumers — one FLOW_GAP-spaced row above A's row 0).
-    // Including c4. Each B-replica's x shifts right by
-    // `REPLICA_ROW_X_STEP` from its consumer's x (port-spreading polish:
-    // upper rows take a diagonal slope so arrows bypass intervening
-    // replica boxes).
+    // their consumers — one (LEAF_H + FLOW_GAP)-spaced row above A's
+    // row 0). Including c4. With the straight-line + offset-start
+    // approach (2026-05-16), REPLICA_ROW_X_STEP === 0 so all rows
+    // share the consumer.x column — upper-row arrows ORIGINATE from
+    // offset x positions on the column's bottom edges (via
+    // `replicaSourceXOffset`) instead of from a diagonally-displaced
+    // source. The assertion below tolerates the column-stacked case
+    // (x === c.x + 0) identically — placement of the box stays
+    // centred regardless.
     const bRepYs: number[] = [];
     for (const cid of ["c1", "c2", "c3", "c4"]) {
       const c = boxes.get(cid);
@@ -343,9 +347,13 @@ describe("Slice 7c — chip-crowding fixture (canonical bad case)", () => {
     const { boxes } = layoutRoot(g, new Map<string, { x: number; y: number }>(), consts);
 
     // Row 0 lift uses STACK_GAP (close to consumer); higher rows step
-    // up by FLOW_GAP (wider — port-spreading polish for visible inter-
-    // row arrow gaps). Row 1 also shifts right by REPLICA_ROW_X_STEP
-    // so the upper-row arrow has a diagonal slope.
+    // up by LEAF_H + FLOW_GAP (wider — port-spreading polish for visible
+    // inter-row arrow gaps). With the straight-line + offset-start
+    // approach (2026-05-16), REPLICA_ROW_X_STEP === 0 so row 1 sits at
+    // chip.x (same column); its arrow ORIGINATES from an offset point
+    // on row 1's bottom edge (via `replicaSourceXOffset`) and a
+    // start-dot marks that origin so the eye reads it as distinct
+    // from row 0's arrow.
     const row0Lift = consts.LEAF_H + consts.STACK_GAP;
     const rowStep = consts.LEAF_H + consts.FLOW_GAP;
 
@@ -362,8 +370,10 @@ describe("Slice 7c — chip-crowding fixture (canonical bad case)", () => {
       // A on row 0: at chip.x, lifted by row0Lift.
       expect(aRep.x).toBe(chip.x);
       expect(aRep.y).toBe(chip.y - row0Lift);
-      // B on row 1: shifted right by one REPLICA_ROW_X_STEP, lifted by
-      // row0Lift + rowStep (row 0 lift + one inter-row step).
+      // B on row 1: at chip.x + REPLICA_ROW_X_STEP (= chip.x today
+      // since the curved-edge prototype zeros that constant), lifted
+      // by row0Lift + rowStep (row 0 lift + one inter-row step). The
+      // bow on row 1's arrow swings around row 0 horizontally.
       expect(bRep.x).toBe(chip.x + consts.REPLICA_ROW_X_STEP);
       expect(bRep.y).toBe(chip.y - row0Lift - rowStep);
       aYs.push(aRep.y);

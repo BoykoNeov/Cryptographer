@@ -462,9 +462,11 @@ describe("GraphView — multiple sources targeting same consumer don't overlap",
     const b = boxes.get("src-b->consumer");
     const c = boxes.get("consumer");
     if (!a || !b || !c) throw new Error("missing synthetic box");
-    // Row 0 at consumer.x; row 1 shifted right by REPLICA_ROW_X_STEP
-    // (port-spreading polish — diagonal stack so the upper-row arrow has
-    // a clear visual slope past the row-0 box).
+    // Row 0 at consumer.x; row 1 at consumer.x + REPLICA_ROW_X_STEP —
+    // which equals consumer.x today (straight-line + offset-start
+    // approach zeros the constant; upper-row arrows originate from
+    // offset x positions on the column's bottom edges via
+    // `replicaSourceXOffset` + start-dots).
     expect(a.x).toBe(c.x);
     expect(b.x).toBe(c.x + consts.REPLICA_ROW_X_STEP);
     // Vertical separation: source A on row 0 (close to consumer at
@@ -489,8 +491,11 @@ describe("GraphView — multiple sources targeting same consumer don't overlap",
     const c = boxes.get("src-c->consumer");
     const cons = boxes.get("consumer");
     if (!a || !b || !c || !cons) throw new Error("missing synthetic box");
-    // Diagonal x stack: row 0 at consumer.x; rows 1+ shift right by
-    // REPLICA_ROW_X_STEP per row so upper arrows have a visible slope.
+    // Column x stack: row 0 at consumer.x; rows 1+ at the same x
+    // (REPLICA_ROW_X_STEP === 0); the straight-line + offset-start
+    // approach uses `replicaSourceXOffset` (signed shift of the
+    // arrow's START point on the replica's bottom edge) + visible
+    // start-dot rather than diagonal source displacement.
     expect(a.x).toBe(cons.x);
     expect(b.x).toBe(cons.x + consts.REPLICA_ROW_X_STEP);
     expect(c.x).toBe(cons.x + 2 * consts.REPLICA_ROW_X_STEP);
@@ -535,8 +540,9 @@ describe("GraphView — multiple sources targeting same consumer don't overlap",
     const b = boxes.get(replicaB);
     const c = boxes.get(consumerId);
     if (!a || !b || !c) throw new Error("missing iterate-body synthetic box");
-    // Row 0 at consumer.x; row 1 shifted right by REPLICA_ROW_X_STEP
-    // (diagonal stack, port-spreading polish).
+    // Row 0 at consumer.x; row 1 at consumer.x + REPLICA_ROW_X_STEP
+    // (= consumer.x today since the curved-edge prototype zeros the
+    // step — the bow on the row-1 edge handles the visual splay).
     expect(a.x).toBe(c.x);
     expect(b.x).toBe(c.x + consts.REPLICA_ROW_X_STEP);
     // Source A at row 0 (STACK_GAP above), source B at row 1
@@ -575,7 +581,8 @@ describe("GraphView — multiple sources targeting same consumer don't overlap",
     const b = boxes.get(replicaB);
     const c = boxes.get(consumerId);
     if (!a || !b || !c) throw new Error("missing group-lift synthetic box");
-    // Row 0 at consumer.x; row 1 shifted right by REPLICA_ROW_X_STEP.
+    // Row 0 at consumer.x; row 1 at consumer.x + REPLICA_ROW_X_STEP
+    // (= consumer.x today — curved-edge prototype zeros the step).
     expect(a.x).toBe(c.x);
     expect(b.x).toBe(c.x + consts.REPLICA_ROW_X_STEP);
     // Source A at row 0 (STACK_GAP above consumer), source B at row 1

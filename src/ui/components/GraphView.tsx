@@ -148,11 +148,34 @@ const BASE_FLOW_GAP = 16;
 const BASE_CONTAINER_PAD = 10;
 /**
  * Base (1.0×) horizontal step between adjacent replica rows above a shared
- * consumer (port-spreading polish, 2026-05-16). 16 px matches `FLOW_GAP`
- * at normal density — gives a visible diagonal slope without overflowing
- * into adjacent consumers' columns for the typical 2-4 row case.
+ * consumer.
+ *
+ * **2026-05-16 pivot to straight-line + offset-start-point + start-dot:**
+ * stays at 0 so replicas remain in a clean vertical column. The visual
+ * disambiguation between stacked replicas' arrows now comes from
+ * `replicaSourceXOffset` (alternating-sign horizontal shift of the
+ * arrow's START point on the replica's bottom edge) plus a small visible
+ * dot at that start point — so even when an arrow visually crosses an
+ * intervening replica box, the eye reads "this arrow starts from the dot
+ * up here, not the box it passes through." The constant stays defined
+ * (rather than removed) so the placement helpers and their tests keep
+ * their shape.
  */
-const BASE_REPLICA_ROW_X_STEP = 16;
+const BASE_REPLICA_ROW_X_STEP = 0;
+/**
+ * Base (1.0×) horizontal step applied to the SOURCE-side x of a replica
+ * edge in the vertical regime. Row k's arrow emerges from x =
+ * `replicaCenter.x + (row - (total-1)/2) × step` on the replica's
+ * bottom edge — monotonic spread by row, MATCHING the direction of
+ * `replicaTargetXOffset`'s spread at the consumer head so each
+ * source's arrow stays on its own column side (row 0 left → left
+ * port; row N-1 right → right port; no crossovers). 32 px ≈ ¼ ×
+ * LEAF_W at normal density — wide enough for the start-dots to read
+ * as visibly distinct, narrow enough that even a 5-source spread
+ * (±64 px) stays inside LEAF_W/2 = 66 with the EdgePath clamp as a
+ * backstop.
+ */
+const BASE_REPLICA_SOURCE_X_STEP = 32;
 /** Height of the container's header band (label + optional ×N chip). Fixed. */
 const HEADER_H = 22;
 /** Outer margin of the SVG canvas. Fixed. */
@@ -222,6 +245,21 @@ type LayoutConstants = {
    * for 3-4 stacked rows).
    */
   readonly REPLICA_ROW_X_STEP: number;
+  /**
+   * Straight-line + offset-start-point + start-dot per-row step
+   * (2026-05-16). With `REPLICA_ROW_X_STEP === 0` replicas stack in
+   * a clean vertical column; their outgoing arrows ORIGINATE from
+   * offset x positions on the column's bottom edge so the eye reads
+   * "row 0's arrow starts at the column's left; row N-1's starts at
+   * the right." A visible start-dot pinned at each arrow's tail
+   * reinforces the cue even when the straight line crosses an
+   * intervening replica's box. `replicaSourceXOffset` uses the SAME
+   * monotonic spread as the target-side port-spreading, so source
+   * and target x match per row — every arrow stays in its own column
+   * side without crossover. Density-scaled from
+   * `BASE_REPLICA_SOURCE_X_STEP = 32`.
+   */
+  readonly REPLICA_SOURCE_X_STEP: number;
 };
 
 /**
@@ -242,6 +280,7 @@ const layoutConstantsFor = (density: ViewDensity): LayoutConstants => {
     FLOW_GAP: Math.round(BASE_FLOW_GAP * scale),
     CONTAINER_PAD: Math.round(BASE_CONTAINER_PAD * scale),
     REPLICA_ROW_X_STEP: Math.round(BASE_REPLICA_ROW_X_STEP * scale),
+    REPLICA_SOURCE_X_STEP: Math.round(BASE_REPLICA_SOURCE_X_STEP * scale),
   };
 };
 
@@ -1074,6 +1113,72 @@ export const replicaTargetXOffset = (
   if (total <= 1) return 0;
   return (row - (total - 1) / 2) * portGap;
 };
+
+/**
+ * Horizontal shift applied to the SOURCE x of a replica edge's path in
+ * the vertical regime. Returns a signed pixel offset; `EdgePath` adds
+ * it to the source attach x (`sx`), so the arrow emerges from a
+ * non-centred point on the replica's bottom edge.
+ *
+ * **Geometry** (2026-05-16 straight-line + offset-start-point approach):
+ * uses the SAME monotonic spread formula as `replicaTargetXOffset` —
+ * `(row - (total-1)/2) * step` — so source x and target x sweep in the
+ * same direction by row. Row 0's source lands LEFT (same as its
+ * target's left port), row N-1's source lands RIGHT (same as its
+ * target's right port). Result: every arrow is a roughly parallel
+ * down-and-slightly-inward line, no crossovers.
+ *
+ * **Why monotonic, not alternating:** an earlier draft alternated
+ * `+1, −1, +2, −2, …` so each row claimed a different side of the
+ * column. Visually clean for distinguishing rows in isolation, BUT
+ * since the target-side `replicaTargetXOffset` is monotonic, the two
+ * spreads sweep different directions per row — row 0 source-centre +
+ * target-left = down-left; row 1 source-right + target-centre =
+ * down-left; row 2 source-left + target-right = down-right → row 0's
+ * arrow crosses row 2's. User observed this directly on the canonical
+ * AES-128 ECB + 3-source case: "the arrow from key-expansion does an
+ * unnecessary crossover the other arrows coming from above."
+ *
+ * **Single-source case** (total ≤ 1): returns 0. Today's AES /
+ * Speck / Serpent key-expansion fan-outs all hit this branch — byte-
+ * identical to pre-offset rendering, so the simple case stays clean.
+ *
+ * **Magnitude rationale:** LEAF_W = 132 ⇒ half-width = 66. `step = 32`
+ * means a 3-source spread covers [-32, 0, +32] (total 64 px) — clearly
+ * distinguishable dots without crowding the box edges. A 5-source
+ * spread would reach ±64, just inside the half-width; EdgePath clamps
+ * to LEAF_W/2 − 4 = 62 as a guard for any worse pathological case.
+ *
+ * Param shape is structural (not `ReplicaPlacement`) for the same
+ * test-ergonomics reason as `replicaTargetXOffset`.
+ */
+export const replicaSourceXOffset = (
+  edge: GraphEdge,
+  replicas: {
+    readonly sourceOf: ReadonlyMap<string, string>;
+    readonly rowOfSource: ReadonlyMap<string, number>;
+  },
+  step: number,
+): number => {
+  const sId = replicas.sourceOf.get(edge.from);
+  if (sId === undefined) return 0;
+  const row = replicas.rowOfSource.get(sId);
+  if (row === undefined) return 0;
+  const total = replicas.rowOfSource.size;
+  if (total <= 1) return 0;
+  return (row - (total - 1) / 2) * step;
+};
+
+/**
+ * Predicate: is this edge a replica edge — i.e., does it originate from
+ * a fan-out replica node? Used to gate the straight-line path variant
+ * and the start-dot rendering inside `EdgePath`. Non-replica edges keep
+ * the curved cubic Bezier path that everything else in the canvas uses.
+ */
+export const isReplicaEdge = (
+  edge: GraphEdge,
+  replicas: { readonly isReplica: ReadonlySet<string> },
+): boolean => replicas.isReplica.has(edge.from);
 
 /**
  * Re-exported for tests that want to drive port-spreading directly.
@@ -2708,6 +2813,22 @@ export const GraphView = () => {
                   const portGap = Math.max(6, Math.round(consts().LEAF_W / 10));
                   return replicaTargetXOffset(edge, replicaPlacement(), portGap);
                 });
+                // Straight-line + offset-start-point + start-dot
+                // (2026-05-16, replacement for the curved-edge
+                // prototype): row-k replica edges (k ≥ 1) get a
+                // horizontal shift to their SOURCE x so the arrow
+                // tail emerges from a non-centred point on the
+                // replica's bottom edge. Row 0 stays centred. Zero
+                // for non-replicas and single-source graphs.
+                const sourceXOffset = createMemo(() =>
+                  replicaSourceXOffset(edge, replicaPlacement(), consts().REPLICA_SOURCE_X_STEP),
+                );
+                // Whether this edge originates from a fan-out replica.
+                // Gates the straight-line path variant + the
+                // start-dot render inside EdgePath. Memoized so the
+                // boolean reference is stable per <For> iteration —
+                // small win, mostly for self-documentation.
+                const isReplicaEdgeMemo = createMemo(() => isReplicaEdge(edge, replicaPlacement()));
                 return (
                   <Show when={fromBox() && toBox()}>
                     <EdgePath
@@ -2729,6 +2850,8 @@ export const GraphView = () => {
                       // and keeps the helper's API stable for non-Solid callers).
                       isSelected={selectedTarget() !== null && isEdgeSelected(eKey)}
                       targetXOffset={targetXOffset()}
+                      sourceXOffset={sourceXOffset()}
+                      isReplicaEdge={isReplicaEdgeMemo()}
                     />
                   </Show>
                 );
@@ -3607,6 +3730,33 @@ const EdgePath = (props: {
    * the consumer's vertical center.
    */
   targetXOffset?: number;
+  /**
+   * Horizontal shift applied to the SOURCE x of the path in the
+   * vertical regime — `sx = fromCx + sourceXOffset`. Replica edges of
+   * row k ≥ 1 receive a non-zero shift (alternating sign by row
+   * parity, magnitude `ceil(k/2) × REPLICA_SOURCE_X_STEP`) so the
+   * arrow's tail emerges from a non-centred point on the replica's
+   * bottom edge. Clamped inside EdgePath so the start always lands
+   * inside the source box. Defaults to 0.
+   *
+   * Only meaningful in the vertical regime; ignored in the horizontal
+   * regime (replicas in horizontal regime use the left-gutter pattern,
+   * which already spreads source y per row).
+   */
+  sourceXOffset?: number;
+  /**
+   * True when this edge originates from a fan-out replica. Two effects
+   * in the vertical regime:
+   *   1. Path is rendered as a straight `L` line instead of a cubic
+   *      Bezier `C` — user explicitly asked for "straight lines with
+   *      offset" so a passing-through-an-intervening-replica's-box
+   *      arrow reads as a clear diagonal, not a swooping curve.
+   *   2. A small `<circle>` start-dot is rendered at `(sx, sy)` so
+   *      the eye can anchor "arrow starts at this dot" even when the
+   *      line visually crosses a different replica's bounding box.
+   * Non-replica edges (default `false`) keep the curve + no dot.
+   */
+  isReplicaEdge?: boolean;
 }) => {
   // The `d` attribute is computed via createMemo so it tracks changes to
   // props.from / props.to. Without the memo, the path string would be
@@ -3637,7 +3787,11 @@ const EdgePath = (props: {
   // the arrowhead never crosses the source on tight gaps (the STACK_GAP=6
   // case inside groups would otherwise produce a zero-length or
   // negative-length path).
-  const d = createMemo(() => {
+  // Returns both the SVG path `d` string and (for replica edges in the
+  // vertical regime) the (x, y) position of the start-dot. Combined
+  // into one memo so the geometry math runs once per change — the
+  // start-dot lives at the same `(sx, sy)` the path starts from.
+  const geom = createMemo<{ path: string; startDot: { x: number; y: number } | null }>(() => {
     const { from, to } = props;
 
     // Axis overlap detection. Strict > rather than >= so two boxes that
@@ -3656,7 +3810,18 @@ const EdgePath = (props: {
       const fromCx = from.x + from.w / 2;
       const toCx = to.x + to.w / 2;
       const downward = to.y + to.h / 2 >= from.y + from.h / 2;
-      const sx = fromCx;
+      // Source x: shifted by `sourceXOffset` for replica edges so the
+      // arrow's tail emerges from a non-centred point on the source's
+      // bottom edge. Clamped to the source's inner half-width minus a
+      // 4 px margin so the start point always lands inside the source
+      // box even on degenerate inputs.
+      const rawSourceOffset = props.sourceXOffset ?? 0;
+      const sourceOffsetCap = from.w / 2 - 4;
+      const clampedSourceOffset = Math.max(
+        -sourceOffsetCap,
+        Math.min(sourceOffsetCap, rawSourceOffset),
+      );
+      const sx = fromCx + clampedSourceOffset;
       const sy = downward ? from.y + from.h : from.y;
       // Port-spreading: shift the target attach x by `targetXOffset`
       // (defaults to 0, so non-replica edges and single-source graphs
@@ -3676,14 +3841,30 @@ const EdgePath = (props: {
       // monotonic, non-self-intersecting path.
       const inset = Math.max(0, Math.min(ARROW_INSET, naturalGap / 2));
       const ty = downward ? tEdge - inset : tEdge + inset;
-      // Pull magnitude proportional to the post-inset span; degenerates
-      // to a straight line for very short edges (no floor — the loop
-      // artifact we used to get came from over-pulling on tiny gaps).
+      // Straight-line variant for replica edges (2026-05-16 pivot from
+      // the curved-edge prototype): the user explicitly asked for
+      // "straight lines with offset" so an arrow crossing through an
+      // intervening replica's box reads as a clean diagonal, not a
+      // swooping curve that adds visual noise. Combined with the
+      // start-dot rendered below, the visual story is "this dot is
+      // where the arrow starts; follow the line to where it ends."
+      if (props.isReplicaEdge) {
+        return {
+          path: `M ${sx} ${sy} L ${tx} ${ty}`,
+          startDot: { x: sx, y: sy },
+        };
+      }
+      // Non-replica vertical-regime edge: keep the curve. Pull
+      // magnitude proportional to the post-inset span; degenerates
+      // to a straight line for very short edges.
       const span = Math.abs(ty - sy);
       const pull = Math.min(20, span * 0.5);
       const c1y = downward ? sy + pull : sy - pull;
       const c2y = downward ? ty - pull : ty + pull;
-      return `M ${sx} ${sy} C ${sx} ${c1y}, ${tx} ${c2y}, ${tx} ${ty}`;
+      return {
+        path: `M ${sx} ${sy} C ${sx} ${c1y}, ${tx} ${c2y}, ${tx} ${ty}`,
+        startDot: null,
+      };
     }
 
     // Horizontal regime. Source exits whichever edge faces the target;
@@ -3703,7 +3884,14 @@ const EdgePath = (props: {
     const pull = Math.max(20, Math.abs(tx - sx) / 2);
     const c1x = rightward ? sx + pull : sx - pull;
     const c2x = rightward ? tx - pull : tx + pull;
-    return `M ${sx} ${sy} C ${c1x} ${sy}, ${c2x} ${ty}, ${tx} ${ty}`;
+    return {
+      path: `M ${sx} ${sy} C ${c1x} ${sy}, ${c2x} ${ty}, ${tx} ${ty}`,
+      // Horizontal regime: no start-dot. Horizontal-regime replicas
+      // are the "left-of-consumer" pattern from prior layout, which
+      // already disambiguates by per-row source y; a dot at the right
+      // edge would just clutter that case.
+      startDot: null,
+    };
   });
   // Keyboard handler mirrors the click so biome's a11y lint passes
   // (`useKeyWithClickEvents`). SVG `<path>` is non-focusable by default
@@ -3746,13 +3934,35 @@ const EdgePath = (props: {
           "graph-edge-feedback": props.isFeedback,
           "graph-edge-selected": props.isSelected,
         }}
-        d={d()}
+        d={geom().path}
         marker-end={`url(#graph-arrow-${props.kind})`}
         pointer-events="none"
       />
+      {/* Start-dot for replica edges: pins the visual origin of the
+          arrow to a specific point on the source replica's bottom edge
+          so the eye can disambiguate even when the straight diagonal
+          line passes through an intervening replica's box. Painted
+          AFTER the visible path so paint order puts it on top of the
+          stroke; `pointer-events="none"` so clicks fall through to the
+          hit path beneath it. */}
+      <Show when={geom().startDot}>
+        {(dot) => (
+          <circle
+            class={`graph-edge-start-dot graph-edge-start-dot-${props.kind}`}
+            classList={{
+              "graph-edge-feedback": props.isFeedback,
+              "graph-edge-selected": props.isSelected,
+            }}
+            cx={dot().x}
+            cy={dot().y}
+            r={3}
+            pointer-events="none"
+          />
+        )}
+      </Show>
       <path
         class="graph-edge-hit"
-        d={d()}
+        d={geom().path}
         data-edge-key={props.edgeKey}
         onClick={(e) => {
           // stopPropagation so the click doesn't bubble up to the
