@@ -184,7 +184,13 @@ describe("Slice 7c — multi-source row stability (globally-stable rowOfSource)"
     const consts = layoutConstantsFor("normal");
     const { boxes } = layoutRoot(g, new Map<string, { x: number; y: number }>(), consts);
 
-    const rowH = consts.LEAF_H + consts.STACK_GAP;
+    // Row 0 sits `LEAF_H + STACK_GAP` above the consumer (unchanged from
+    // pre-port-spreading). Rows ≥1 stack with `LEAF_H + FLOW_GAP` between
+    // them (port-spreading polish, 2026-05-16): wider gap so the arrows
+    // from upper rows have visible drawing room and don't squish into a
+    // 3-px sliver between chips. Tracks `replicaSlotPosition`'s y formula.
+    const row0Lift = consts.LEAF_H + consts.STACK_GAP;
+    const rowStep = consts.LEAF_H + consts.FLOW_GAP;
 
     // All A-replicas across c1/c2/c3 share the same y (row 0 above their
     // respective consumers). They differ in x (above their distinct
@@ -194,8 +200,10 @@ describe("Slice 7c — multi-source row stability (globally-stable rowOfSource)"
       const c = boxes.get(cid);
       const a = boxes.get(`A->${cid}`);
       if (!c || !a) throw new Error(`missing A-replica box for ${cid}`);
-      // Each A-replica at exactly row 0 above its consumer.
-      expect(a.y).toBe(c.y - rowH);
+      // Each A-replica at exactly row 0 above its consumer. Row 0 lives
+      // at `consumer.x` with no horizontal shift (port-spreading shifts
+      // only rows ≥1).
+      expect(a.y).toBe(c.y - row0Lift);
       expect(a.x).toBe(c.x);
       aRepYs.push(a.y);
     }
@@ -204,35 +212,41 @@ describe("Slice 7c — multi-source row stability (globally-stable rowOfSource)"
     expect(new Set(aRepYs).size).toBe(1);
 
     // All B-replicas across c1/c2/c3/c4 share the same y (row 1 above
-    // their consumers — one row above A's row 0). Including c4.
+    // their consumers — one FLOW_GAP-spaced row above A's row 0).
+    // Including c4. Each B-replica's x shifts right by
+    // `REPLICA_ROW_X_STEP` from its consumer's x (port-spreading polish:
+    // upper rows take a diagonal slope so arrows bypass intervening
+    // replica boxes).
     const bRepYs: number[] = [];
     for (const cid of ["c1", "c2", "c3", "c4"]) {
       const c = boxes.get(cid);
       const b = boxes.get(`B->${cid}`);
       if (!c || !b) throw new Error(`missing B-replica box for ${cid}`);
-      // B at row 1: consumer.y - rowH (row 0) - rowH (one row up).
-      expect(b.y).toBe(c.y - 2 * rowH);
-      expect(b.x).toBe(c.x);
+      // B at row 1: row 0 lift + one row step.
+      expect(b.y).toBe(c.y - row0Lift - rowStep);
+      expect(b.x).toBe(c.x + consts.REPLICA_ROW_X_STEP);
       bRepYs.push(b.y);
     }
     expect(new Set(bRepYs).size).toBe(1);
 
     // The headline cross-source assertion: B's row sits exactly one row
-    // above A's row, at every consumer. (Cheap derivation from above —
-    // surface it explicitly so a future regression that breaks the
+    // step above A's row, at every consumer. (Cheap derivation from above
+    // — surface it explicitly so a future regression that breaks the
     // "source X always at row Y" property fails on this line.)
-    expect(bRepYs[0]).toBe((aRepYs[0] ?? 0) - rowH);
+    expect(bRepYs[0]).toBe((aRepYs[0] ?? 0) - rowStep);
 
-    // c4 has no A-replica; its column at row 0 (c4.y - rowH) should be
-    // empty. Pin via the absence: no node's box is at that position
-    // above c4.
+    // c4 has no A-replica; its column at row 0 (c4.y - row0Lift) should
+    // be empty. Pin via the absence: no node's box is at that position
+    // above c4. Search column tolerance: post-port-spreading row 1 is
+    // at c.x + REPLICA_ROW_X_STEP, NOT c.x, so an "above c4 = same x"
+    // check still distinguishes row 0 from row 1.
     const c4 = boxes.get("c4");
     if (!c4) throw new Error("missing c4");
-    const c4Row0Y = c4.y - rowH;
+    const c4Row0Y = c4.y - row0Lift;
     let row0OccupantAtC4: string | null = null;
     for (const [nid, box] of boxes) {
       if (nid === "c4" || nid === "B->c4") continue;
-      // "Above c4" = same x column as c4, y between row 0 and row 1.
+      // "Above c4 at row 0" = same x column as c4, y matching row 0.
       if (box.x === c4.x && box.y === c4Row0Y) {
         row0OccupantAtC4 = nid;
         break;
@@ -328,9 +342,16 @@ describe("Slice 7c — chip-crowding fixture (canonical bad case)", () => {
     const consts = layoutConstantsFor("normal");
     const { boxes } = layoutRoot(g, new Map<string, { x: number; y: number }>(), consts);
 
-    const rowH = consts.LEAF_H + consts.STACK_GAP;
+    // Row 0 lift uses STACK_GAP (close to consumer); higher rows step
+    // up by FLOW_GAP (wider — port-spreading polish for visible inter-
+    // row arrow gaps). Row 1 also shifts right by REPLICA_ROW_X_STEP
+    // so the upper-row arrow has a diagonal slope.
+    const row0Lift = consts.LEAF_H + consts.STACK_GAP;
+    const rowStep = consts.LEAF_H + consts.FLOW_GAP;
 
-    // For each chip, its 2 replicas sit at (chip.x, row 0) and (chip.x, row 1).
+    // For each chip, its 2 replicas sit at row 0 (chip.x) and row 1
+    // (chip.x + REPLICA_ROW_X_STEP) — the diagonal stack that bypasses
+    // the row-0 chip when the row-1 arrow descends.
     const aYs: number[] = [];
     const bYs: number[] = [];
     for (const cid of chipIds) {
@@ -338,12 +359,13 @@ describe("Slice 7c — chip-crowding fixture (canonical bad case)", () => {
       const aRep = boxes.get(`A->${cid}`);
       const bRep = boxes.get(`B->${cid}`);
       if (!chip || !aRep || !bRep) throw new Error(`missing box for ${cid}`);
-      // Both replicas in the chip's column.
+      // A on row 0: at chip.x, lifted by row0Lift.
       expect(aRep.x).toBe(chip.x);
-      expect(bRep.x).toBe(chip.x);
-      // A on row 0 (one row above chip), B on row 1 (two rows above chip).
-      expect(aRep.y).toBe(chip.y - rowH);
-      expect(bRep.y).toBe(chip.y - 2 * rowH);
+      expect(aRep.y).toBe(chip.y - row0Lift);
+      // B on row 1: shifted right by one REPLICA_ROW_X_STEP, lifted by
+      // row0Lift + rowStep (row 0 lift + one inter-row step).
+      expect(bRep.x).toBe(chip.x + consts.REPLICA_ROW_X_STEP);
+      expect(bRep.y).toBe(chip.y - row0Lift - rowStep);
       aYs.push(aRep.y);
       bYs.push(bRep.y);
     }
@@ -351,7 +373,7 @@ describe("Slice 7c — chip-crowding fixture (canonical bad case)", () => {
     expect(new Set(aYs).size).toBe(1);
     // All 4 source-B replicas share y (row 1 is GLOBAL).
     expect(new Set(bYs).size).toBe(1);
-    // The two rows are exactly one (LEAF_H + STACK_GAP) apart.
-    expect((aYs[0] ?? 0) - (bYs[0] ?? 0)).toBe(rowH);
+    // The two rows are exactly one (LEAF_H + FLOW_GAP) apart.
+    expect((aYs[0] ?? 0) - (bYs[0] ?? 0)).toBe(rowStep);
   });
 });

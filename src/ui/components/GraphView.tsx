@@ -146,6 +146,13 @@ const BASE_STACK_GAP = 6;
 const BASE_FLOW_GAP = 16;
 /** Base (1.0×) padding inside a container (group or iterate) box. */
 const BASE_CONTAINER_PAD = 10;
+/**
+ * Base (1.0×) horizontal step between adjacent replica rows above a shared
+ * consumer (port-spreading polish, 2026-05-16). 16 px matches `FLOW_GAP`
+ * at normal density — gives a visible diagonal slope without overflowing
+ * into adjacent consumers' columns for the typical 2-4 row case.
+ */
+const BASE_REPLICA_ROW_X_STEP = 16;
 /** Height of the container's header band (label + optional ×N chip). Fixed. */
 const HEADER_H = 22;
 /** Outer margin of the SVG canvas. Fixed. */
@@ -198,6 +205,23 @@ type LayoutConstants = {
   readonly STACK_GAP: number;
   readonly FLOW_GAP: number;
   readonly CONTAINER_PAD: number;
+  /**
+   * Port-spreading polish (2026-05-16, follow-up to Slice 7c):
+   * horizontal step between stacked replica rows above the same consumer.
+   * Row 0 lives at `consumer.x`; row 1 at `consumer.x + REPLICA_ROW_X_STEP`;
+   * row k at `consumer.x + k * REPLICA_ROW_X_STEP`. Gives upper-row arrows
+   * a diagonal slope so they don't pass straight through intervening
+   * replica boxes — Slice 7c's "same x column per source" invariant
+   * weakened deliberately because the column overlap made multi-source
+   * fan-IN arrows mostly invisible (SVG paint order: edges before nodes
+   * = intervening replica fills obscured the line). Source A still
+   * always at row 0 globally, so the eye still tracks "source X = row Y."
+   *
+   * Density-scaled from `BASE_REPLICA_ROW_X_STEP = 16` (= FLOW_GAP at
+   * normal density — modest shift, keeps total horizontal spread bounded
+   * for 3-4 stacked rows).
+   */
+  readonly REPLICA_ROW_X_STEP: number;
 };
 
 /**
@@ -217,6 +241,7 @@ const layoutConstantsFor = (density: ViewDensity): LayoutConstants => {
     STACK_GAP: Math.round(BASE_STACK_GAP * scale),
     FLOW_GAP: Math.round(BASE_FLOW_GAP * scale),
     CONTAINER_PAD: Math.round(BASE_CONTAINER_PAD * scale),
+    REPLICA_ROW_X_STEP: Math.round(BASE_REPLICA_ROW_X_STEP * scale),
   };
 };
 
@@ -308,6 +333,66 @@ const EMPTY_REPLICA_PLACEMENT: ReplicaPlacement = {
   consumerOf: new Map(),
   sourceOf: new Map(),
   rowOfSource: new Map(),
+};
+
+/**
+ * Position the row-k replica relative to its consumer's anchor x and top y.
+ *
+ * **Slice 7c row 0** lands at exactly the pre-7c spot: `consumer.y −
+ * LEAF_H − STACK_GAP`, at `anchorX` (= consumer.x, or first-non-replica-
+ * body-child.x for iterate consumers per Slice 2). Single-source ciphers
+ * (every aux-only baseline today — AES key-expansion, Speck, Serpent)
+ * have `rowOfSource[src] = 0` always, so they're byte-identical to pre-
+ * port-spreading.
+ *
+ * **Rows k ≥ 1** stack diagonally up-and-right (2026-05-16 port-spreading
+ * polish):
+ *   - **y**: `baseY − k × (LEAF_H + FLOW_GAP)`. Uses FLOW_GAP (16) not
+ *     STACK_GAP (6) between rows so 3+ stacked replicas have visible
+ *     inter-row gaps and the arrows from upper rows have room to draw
+ *     through those gaps.
+ *   - **x**: `anchorX + k × REPLICA_ROW_X_STEP`. Each row shifts right
+ *     so upper-row arrows have a diagonal slope to the consumer head —
+ *     they no longer pass straight through the intervening replicas'
+ *     bounding boxes (which would obscure them under SVG paint order).
+ *
+ * **Why this beat the original Slice 7c "same x column per source"
+ * invariant:** the canonical bad case (AES-128 ECB + 3 always-overrides
+ * + collapsed iterate = 3 stacked replicas above each block-chip) showed
+ * the column-stacked arrows were mostly invisible — each arrow ran
+ * straight down through the intervening replicas' fills. The diagonal
+ * shift trades the "same x column" property for arrow visibility. Source
+ * A still occupies row 0 globally, so the eye still tracks "row Y
+ * always = source X" — only the x within a row varies by consumer.
+ */
+const replicaSlotPosition = (
+  anchorX: number,
+  consumerY: number,
+  row: number,
+  consts: LayoutConstants,
+): { x: number; y: number } => {
+  const baseY = consumerY - consts.LEAF_H - consts.STACK_GAP;
+  return {
+    x: anchorX + row * consts.REPLICA_ROW_X_STEP,
+    y: baseY - row * (consts.LEAF_H + consts.FLOW_GAP),
+  };
+};
+
+/**
+ * Vertical lift height a container needs to host `maxRow + 1` rows of
+ * replicas above its first state-consumer body step (or above the
+ * canvas's spine row, for root-level placements).
+ *
+ * Formula: row 0 takes `LEAF_H + STACK_GAP`, each row above adds
+ * `LEAF_H + FLOW_GAP`. Returns 0 when `maxRow < 0` (no replicas).
+ *
+ * Single-row case (`maxRow === 0`) = `LEAF_H + STACK_GAP`, byte-identical
+ * to pre-port-spreading. Multi-row case grows with FLOW_GAP per extra row,
+ * matching `replicaSlotPosition`'s row-spacing.
+ */
+const replicaLiftHeight = (maxRow: number, consts: LayoutConstants): number => {
+  if (maxRow < 0) return 0;
+  return consts.LEAF_H + consts.STACK_GAP + maxRow * (consts.LEAF_H + consts.FLOW_GAP);
 };
 
 /**
@@ -447,12 +532,14 @@ const layoutNode = (
     }
 
     const gutterW = leftGutterReplicas.length > 0 ? consts.LEAF_W + consts.FLOW_GAP : 0;
-    // Slice 7c: lift height now grows with the maximum source-row used by
-    // any lifted replica in this group. Single-source case (all replicas
-    // at row 0) → maxLiftRow = 0 → liftH = LEAF_H + STACK_GAP, identical
-    // to pre-7c. Multi-source case → liftH grows by one row per
-    // additional source. Computed BEFORE the third pass needs it because
-    // innerY (the in-column children's start) depends on liftH.
+    // Slice 7c + port-spreading polish (2026-05-16): lift height grows
+    // with the maximum source-row used by any lifted replica in this
+    // group. Single-source case (all replicas at row 0) → maxLiftRow = 0
+    // → liftH = LEAF_H + STACK_GAP, byte-identical to pre-7c. Multi-row
+    // case uses `replicaLiftHeight`, which spaces rows by FLOW_GAP
+    // (matching `replicaSlotPosition`'s y formula). Computed BEFORE the
+    // third pass needs it because innerY (the in-column children's
+    // start) depends on liftH.
     let maxLiftRow = -1;
     for (const rId of liftedReplicas) {
       const sId = replicas.sourceOf.get(rId);
@@ -460,8 +547,7 @@ const layoutNode = (
       const row = replicas.rowOfSource.get(sId) ?? 0;
       if (row > maxLiftRow) maxLiftRow = row;
     }
-    const liftH =
-      liftedReplicas.length > 0 ? (maxLiftRow + 1) * (consts.LEAF_H + consts.STACK_GAP) : 0;
+    const liftH = replicaLiftHeight(maxLiftRow, consts);
 
     const innerX = startX + consts.CONTAINER_PAD + gutterW;
     let innerY = startY + HEADER_H + consts.CONTAINER_PAD + liftH;
@@ -496,23 +582,19 @@ const layoutNode = (
     }
 
     // Third pass: place LIFTED replicas (consumers that ARE the first
-    // child) directly above their consumer in the column. The liftH
-    // shift on innerY above guarantees this y lands inside the group's
-    // padded inner area, just below the header.
+    // child) above their consumer in the column. The liftH shift on
+    // innerY above guarantees row 0's y lands inside the group's padded
+    // inner area, just below the header.
     //
-    // Slice 7c: by-source columns. Each replica's y is determined by the
-    // GLOBAL row of its source — source A at row 0 (closest to consumer),
-    // source B at row 1 (one row above), etc. Multiple sources targeting
-    // the same consumer stack VERTICALLY (one chip's worth above each
-    // other) instead of horizontally tiling. Replicas always sit at
-    // consumer.x — the gutter zone above each consumer hosts only that
-    // consumer's incoming replicas, never adjacent ones.
-    //
-    // Pre-7c the placement was a per-consumer x-step counter; the
-    // disjoint-consumer case had row 0 always full (single replica per
-    // consumer at the lifted row) and multi-source cases tiled
-    // rightward. Post-7c, source A's replicas live at the same y as
-    // each other across the entire canvas — eye-trackable.
+    // Slice 7c + port-spreading polish (2026-05-16): each replica's slot
+    // is `replicaSlotPosition(anchorX, anchorY, row, consts)` — y is
+    // determined by the source's GLOBAL row (source A at row 0 closest
+    // to consumer, source B at row 1 above, etc.) and x shifts right by
+    // `REPLICA_ROW_X_STEP` per row so upper rows take a diagonal slope
+    // that bypasses intervening replica boxes. See `replicaSlotPosition`
+    // for the rationale on dropping Slice 7c's "same x column per
+    // source" invariant.
+    let maxLiftReplicaRight = 0;
     for (const replicaId of liftedReplicas) {
       const consumerId = replicas.consumerOf.get(replicaId);
       if (consumerId === undefined) continue;
@@ -520,16 +602,28 @@ const layoutNode = (
       if (!consumerBox) continue;
       const sId = replicas.sourceOf.get(replicaId);
       const row = sId !== undefined ? (replicas.rowOfSource.get(sId) ?? 0) : 0;
-      const baseY = consumerBox.y - consts.LEAF_H - consts.STACK_GAP;
+      const slot = replicaSlotPosition(consumerBox.x, consumerBox.y, row, consts);
       out.set(replicaId, {
-        x: consumerBox.x,
-        y: baseY - row * (consts.LEAF_H + consts.STACK_GAP),
+        x: slot.x,
+        y: slot.y,
         w: consts.LEAF_W,
         h: consts.LEAF_H,
       });
+      const replicaRight = slot.x + consts.LEAF_W;
+      if (replicaRight > maxLiftReplicaRight) maxLiftReplicaRight = replicaRight;
     }
 
-    const columnW = Math.max(maxChildW, consts.LEAF_W);
+    // Grow the column to fit upper-row replicas that shifted right past
+    // the consumer's natural width. The diagonal stack extends rightward
+    // by `maxLiftRow * REPLICA_ROW_X_STEP`; the group's box has to
+    // contain it so the row-N replica doesn't visually leak past the
+    // group's right edge. innerX is `startX + CONTAINER_PAD + gutterW`,
+    // so the rightmost replica is at `maxLiftReplicaRight - innerX`
+    // pixels into the column from the column's left edge — that's our
+    // floor for `columnW`.
+    const innerXForCol = startX + consts.CONTAINER_PAD + gutterW;
+    const liftReplicaColumnW = maxLiftReplicaRight > 0 ? maxLiftReplicaRight - innerXForCol : 0;
+    const columnW = Math.max(maxChildW, consts.LEAF_W, liftReplicaColumnW);
     const w = gutterW + columnW + 2 * consts.CONTAINER_PAD;
     // Height formula uses lastChildBottom which already includes the
     // liftH shift via innerY; don't add liftH again.
@@ -548,12 +642,13 @@ const layoutNode = (
   // row shifts down by LEAF_H + STACK_GAP only when at least one replica
   // is present so non-replicated bodies keep their original height.
   const hasIterateReplicas = container.childIds.some((cId) => replicas.isReplica.has(cId));
-  // Slice 7c: iterate-body replica lift now scales with the maximum
-  // source-row used by any in-body replica. Single-source case
-  // (rowOfSource === 0 everywhere) → replicaLiftH = LEAF_H + STACK_GAP,
-  // identical to pre-7c. Multi-source case → one extra row per
-  // additional source, regardless of which body chip each replica
-  // targets (by-source columns are globally stable).
+  // Slice 7c + port-spreading polish (2026-05-16): iterate-body replica
+  // lift scales with the maximum source-row used by any in-body replica.
+  // Single-source case (rowOfSource === 0 everywhere) → liftH = LEAF_H +
+  // STACK_GAP, byte-identical to pre-7c. Multi-row case uses
+  // `replicaLiftHeight`, which spaces rows by FLOW_GAP (matching
+  // `replicaSlotPosition`'s y formula). Globally stable: source A
+  // always at row 0 regardless of which body chip each replica targets.
   let iterateMaxRow = -1;
   for (const childId of container.childIds) {
     if (!replicas.isReplica.has(childId)) continue;
@@ -562,9 +657,7 @@ const layoutNode = (
     const row = replicas.rowOfSource.get(sId) ?? 0;
     if (row > iterateMaxRow) iterateMaxRow = row;
   }
-  const replicaLiftH = hasIterateReplicas
-    ? (iterateMaxRow + 1) * (consts.LEAF_H + consts.STACK_GAP)
-    : 0;
+  const replicaLiftH = hasIterateReplicas ? replicaLiftHeight(iterateMaxRow, consts) : 0;
 
   let innerX = startX + consts.CONTAINER_PAD;
   const innerY = startY + HEADER_H + consts.CONTAINER_PAD + replicaLiftH;
@@ -588,16 +681,15 @@ const layoutNode = (
   }
 
   // Second pass: place iterate-body replicas above their consumers. The
-  // lifted innerY guarantees consumer.y - LEAF_H - STACK_GAP lands at
-  // the OLD innerY (the natural top of the inner content), which is
-  // inside the container's box.
+  // lifted innerY guarantees row 0's y lands at the OLD innerY (the
+  // natural top of the inner content), inside the container's box.
   //
-  // Slice 7c: by-source columns. row = rowOfSource[source] (globally
-  // stable across the whole canvas — source A always at row 0, source B
-  // always at row 1, etc.). replicaY steps UP by one row per
-  // (LEAF_H + STACK_GAP). Always at consumer.x — see the group-lift
-  // pass for the same convention. Pre-7c the per-consumer x-step
-  // counter tiled siblings horizontally; post-7c they stack vertically.
+  // Slice 7c + port-spreading polish (2026-05-16): each replica's slot
+  // comes from `replicaSlotPosition`. y stacks by source row (globally
+  // stable — source A always at row 0); x shifts right by
+  // `REPLICA_ROW_X_STEP` per row so upper-row arrows have a diagonal
+  // slope. See `replicaSlotPosition` for full rationale.
+  let maxIterateReplicaRight = 0;
   for (const childId of container.childIds) {
     if (!replicas.isReplica.has(childId)) continue;
     const consumerId = replicas.consumerOf.get(childId);
@@ -606,16 +698,23 @@ const layoutNode = (
     if (!consumerBox) continue;
     const sId = replicas.sourceOf.get(childId);
     const row = sId !== undefined ? (replicas.rowOfSource.get(sId) ?? 0) : 0;
-    const baseY = consumerBox.y - consts.LEAF_H - consts.STACK_GAP;
+    const slot = replicaSlotPosition(consumerBox.x, consumerBox.y, row, consts);
     out.set(childId, {
-      x: consumerBox.x,
-      y: baseY - row * (consts.LEAF_H + consts.STACK_GAP),
+      x: slot.x,
+      y: slot.y,
       w: consts.LEAF_W,
       h: consts.LEAF_H,
     });
+    const replicaRight = slot.x + consts.LEAF_W;
+    if (replicaRight > maxIterateReplicaRight) maxIterateReplicaRight = replicaRight;
   }
 
-  const w = lastChildRight - startX + consts.CONTAINER_PAD;
+  // Grow the iterate container to fit upper-row replicas that shifted
+  // right past `lastChildRight`. A row-N replica above the last body
+  // child extends to `lastChildBox.x + N * REPLICA_ROW_X_STEP + LEAF_W`;
+  // the iterate's box must contain it.
+  const effectiveLastRight = Math.max(lastChildRight, maxIterateReplicaRight);
+  const w = effectiveLastRight - startX + consts.CONTAINER_PAD;
   const h = HEADER_H + 2 * consts.CONTAINER_PAD + replicaLiftH + maxChildH;
   const box: Box = { x: startX, y: startY, w, h };
   out.set(id, box);
@@ -691,11 +790,15 @@ export const layoutRoot = (
     const row = replicas.rowOfSource.get(sId) ?? 0;
     if (row > rootReplicaMaxRow) rootReplicaMaxRow = row;
   }
-  const replicaRowsNeeded = rootReplicaMaxRow >= 0 ? rootReplicaMaxRow + 1 : 0;
+  // Port-spreading polish (2026-05-16): replica lift uses
+  // `replicaLiftHeight` (FLOW_GAP between rows); aux-only-roots only
+  // need one row of lift (LEAF_H + STACK_GAP). Take the larger of the
+  // two so a graph with both — replicas at row 0+ AND aux-only roots
+  // present — still has room for both pictures.
+  const replicaLiftHRoot = replicaLiftHeight(rootReplicaMaxRow, consts);
   const hasAuxOnlyRoots = graph.rootIds.some((id) => auxOnlyRootIds.has(id));
-  const auxOnlyRowsNeeded = hasAuxOnlyRoots ? 1 : 0;
-  const totalLiftRows = Math.max(replicaRowsNeeded, auxOnlyRowsNeeded);
-  const rootReplicaLiftH = totalLiftRows * (consts.LEAF_H + consts.STACK_GAP);
+  const auxOnlyLiftH = hasAuxOnlyRoots ? consts.LEAF_H + consts.STACK_GAP : 0;
+  const rootReplicaLiftH = Math.max(replicaLiftHRoot, auxOnlyLiftH);
   const rowStartY = CANVAS_MARGIN + rootReplicaLiftH;
 
   const boxes = new Map<string, Box>();
@@ -746,8 +849,6 @@ export const layoutRoot = (
     if (!consumerBox) continue;
     const sId = replicas.sourceOf.get(id);
     const row = sId !== undefined ? (replicas.rowOfSource.get(sId) ?? 0) : 0;
-    const baseY = consumerBox.y - consts.LEAF_H - consts.STACK_GAP;
-    const replicaY = baseY - row * (consts.LEAF_H + consts.STACK_GAP);
     // Slice-2 anchor: when the consumer is an iterate container, place
     // the replica above the iterate body's first NON-REPLICA child —
     // i.e. the first actual body step — instead of the iterate's own
@@ -782,12 +883,21 @@ export const layoutRoot = (
     const firstChildBox =
       firstNonReplicaChildId !== undefined ? boxes.get(firstNonReplicaChildId) : undefined;
     const anchorX = firstChildBox?.x ?? consumerBox.x;
+    // Port-spreading polish: x/y come from `replicaSlotPosition`, which
+    // applies the row-shift and FLOW_GAP row-spacing uniformly across
+    // the three placement sites.
+    const slot = replicaSlotPosition(anchorX, consumerBox.y, row, consts);
     boxes.set(id, {
-      x: anchorX,
-      y: replicaY,
+      x: slot.x,
+      y: slot.y,
       w: consts.LEAF_W,
       h: consts.LEAF_H,
     });
+    // Replica boxes can now extend right past the consumer's x-range
+    // (row k shifts by k × REPLICA_ROW_X_STEP); track that against
+    // canvas extent so the SVG width grows to fit.
+    const replicaRight = slot.x + consts.LEAF_W;
+    if (replicaRight > maxRight) maxRight = replicaRight;
   }
 
   return {
@@ -884,6 +994,94 @@ export const visualEdgeTargetId = (
   );
   return firstNonReplicaChildId ?? edge.to;
 };
+
+/**
+ * Port-spreading follow-up to Slice 7c (2026-05-16, bumped above Slice 7b
+ * after the 7c manual smoke pass surfaced fan-IN ambiguity at the chip head).
+ *
+ * Slice 7c stacks replicas vertically by globally-stable source rows —
+ * scannability at the source side. But every replica's outgoing arrow lands
+ * at the SAME point on the consumer's top edge, so 3+ stacked replicas
+ * produce a fan-IN funnel where the arrows visually overlap at the
+ * convergence point and the 12 px hit zones collapse onto each other near
+ * the consumer head. Mid-arrow clicks still distinguish edges (the 12 px
+ * `.graph-edge-hit` stroke runs the full path), but the convergence is
+ * pedagogically muddy.
+ *
+ * Cure: spread the consumer-side attach x by the source's globally-stable
+ * row, mirroring 7c's y-row philosophy. Source A's row-0 replica → fixed
+ * x-offset on the consumer top across the entire canvas; source B's row-1
+ * replica → next offset over; etc. Centered around the consumer's top-edge
+ * midpoint via `(row - (total - 1) / 2) * portGap` so the spread is balanced
+ * and degenerate (`total === 1`) → offset = 0 (no shift, no surprise on
+ * single-source ciphers like every aux-only baseline today).
+ *
+ * **Why global rows, not per-consumer fan-in count:** matches the Slice 7c
+ * y-stacking philosophy. A consumer that hosts only source B's replica
+ * still puts B's arrow at the row-1 x-offset, leaving the row-0 column
+ * empty on that consumer's top. Costs a constant per-source x-shift even
+ * for single-replica consumers; pays in cross-canvas eye-tracking —
+ * "source X always lands HERE on every consumer it touches."
+ *
+ * **Source side untouched** — replicas stay column-stacked at `consumer.x`
+ * per Slice 7c. Only the target-end attach x shifts. The resulting slope
+ * (from the replica's center bottom to a shifted point on the consumer's
+ * top) is informative: it visually disambiguates which row the arrow came
+ * from even before the eye traces the full path.
+ *
+ * **Kind-agnostic by construction** — keys off `replicaOf !== undefined`
+ * via `replicas.sourceOf` (which only has entries for replica nodes), never
+ * off `edge.kind`. Slice 7b will drop the `kind === "aux"` filter in
+ * `replicateHighFanoutSources` and produce state-kind replicas; they get
+ * the same offset machinery without changes here.
+ *
+ * **Returns 0 when**:
+ *   - `edge.from` is not a replica (regular long-range aux or state edge —
+ *     no row, no spread).
+ *   - `total === 1` (single-source graph — no fan-in to disambiguate).
+ *
+ * @param edge — the edge being rendered (only `edge.from` is read).
+ * @param replicas — the `ReplicaPlacement` map produced by
+ *   `buildReplicaPlacement(graph)`; needs the same shape, so callers can
+ *   call `buildReplicaPlacement` separately at the render site instead of
+ *   threading it through the layout return.
+ * @param portGap — density-scaled gap between adjacent rows' attach points.
+ *   The render site computes `Math.max(6, round(LEAF_W / 10))` so the spread
+ *   tracks the consumer width.
+ *
+ * The parameter shape `{ sourceOf, rowOfSource }` is intentionally
+ * structural (not a `ReplicaPlacement` literal): the tests construct
+ * placements via `buildReplicaPlacement` on synthetic graphs, but the
+ * helper itself only needs the two maps. Keeping the type narrow lets a
+ * future caller pass a hand-rolled `{ sourceOf, rowOfSource }` (e.g. an
+ * isolated unit test exercising a corner of the formula) without having
+ * to invent the full `ReplicaPlacement` interface. Don't widen this back
+ * to `ReplicaPlacement` — the decoupling pays in test ergonomics.
+ */
+export const replicaTargetXOffset = (
+  edge: GraphEdge,
+  replicas: {
+    readonly sourceOf: ReadonlyMap<string, string>;
+    readonly rowOfSource: ReadonlyMap<string, number>;
+  },
+  portGap: number,
+): number => {
+  const sId = replicas.sourceOf.get(edge.from);
+  if (sId === undefined) return 0;
+  const row = replicas.rowOfSource.get(sId);
+  if (row === undefined) return 0;
+  const total = replicas.rowOfSource.size;
+  if (total <= 1) return 0;
+  return (row - (total - 1) / 2) * portGap;
+};
+
+/**
+ * Re-exported for tests that want to drive port-spreading directly.
+ * `replicaTargetXOffset` reads only `sourceOf` + `rowOfSource` off the
+ * placement, so tests can either call this builder or pass a hand-rolled
+ * `{ sourceOf, rowOfSource }` literal.
+ */
+export { buildReplicaPlacement };
 
 // ─── Component ─────────────────────────────────────────────────────────────
 
@@ -1286,6 +1484,18 @@ export const GraphView = () => {
   });
 
   const layout = createMemo(() => layoutRoot(graph(), pinnedMap(), consts(), auxOnlyRootIds()));
+
+  /**
+   * Port-spreading follow-up to Slice 7c (2026-05-16): the per-component
+   * `ReplicaPlacement` memo, computed independently from `layoutRoot` so
+   * the edge `<For>` block can read `sourceOf` + `rowOfSource` for the
+   * `replicaTargetXOffset` helper. Cheap to recompute (single pass over
+   * `graph().nodes` + `graph().edges`); memoizes against `graph()` identity
+   * so reruns only happen when the graph itself swaps. We don't return
+   * this from `layoutRoot` to avoid widening the pure-helper contract —
+   * `layoutRoot`'s consumers (test suites, future codegen) don't need it.
+   */
+  const replicaPlacement = createMemo(() => buildReplicaPlacement(graph()));
 
   /**
    * Slice 5 — drop-gutter record shape. One record per gutter strip:
@@ -2480,6 +2690,24 @@ export const GraphView = () => {
                   return layout().boxes.get(targetId);
                 });
                 const eKey = encodeEdgeKey(edge);
+                // Port-spreading follow-up to Slice 7c (2026-05-16): for
+                // replica-sourced edges in a multi-source graph, shift the
+                // target attach point by one slot per globally-stable
+                // source row so a fan-IN of N replicas distributes across
+                // N points on the consumer's top edge instead of all
+                // converging at the center. Helper returns 0 for non-
+                // replica edges and for `total === 1` (single-source
+                // ciphers — the aux-only baseline today), so this is a
+                // no-op for every shipped spec unless the user opts more
+                // than one source into `always`. PORT_GAP scales with
+                // LEAF_W so the spread tracks density (~13 px at normal,
+                // ~10 at compact, ~16 at comfortable); clamped to ≥6 so
+                // the minimum is still visually distinct at tight
+                // densities.
+                const targetXOffset = createMemo(() => {
+                  const portGap = Math.max(6, Math.round(consts().LEAF_W / 10));
+                  return replicaTargetXOffset(edge, replicaPlacement(), portGap);
+                });
                 return (
                   <Show when={fromBox() && toBox()}>
                     <EdgePath
@@ -2500,6 +2728,7 @@ export const GraphView = () => {
                       // store-level signal too (redundant tracking is harmless
                       // and keeps the helper's API stable for non-Solid callers).
                       isSelected={selectedTarget() !== null && isEdgeSelected(eKey)}
+                      targetXOffset={targetXOffset()}
                     />
                   </Show>
                 );
@@ -3365,6 +3594,19 @@ const EdgePath = (props: {
   /** True when this edge is the currently-selected inspector target —
    *  applies the `graph-edge-selected` halo class. */
   isSelected: boolean;
+  /**
+   * Port-spreading offset applied to the target attach x in the vertical
+   * regime (replica above consumer). Computed at the parent `<For>` site
+   * from `replicaTargetXOffset` so 3+ stacked replicas don't all converge
+   * at the consumer's top-edge midpoint. Defaults to 0, so non-replica
+   * edges and edges in single-source graphs render identically to pre-
+   * port-spreading. Only the vertical regime (replica directly above
+   * consumer) applies the offset — left-gutter replicas enter the
+   * consumer's LEFT edge at distinct y values per replica, so there's no
+   * convergence problem there and shifting x would push the arrow off
+   * the consumer's vertical center.
+   */
+  targetXOffset?: number;
 }) => {
   // The `d` attribute is computed via createMemo so it tracks changes to
   // props.from / props.to. Without the memo, the path string would be
@@ -3416,7 +3658,18 @@ const EdgePath = (props: {
       const downward = to.y + to.h / 2 >= from.y + from.h / 2;
       const sx = fromCx;
       const sy = downward ? from.y + from.h : from.y;
-      const tx = toCx;
+      // Port-spreading: shift the target attach x by `targetXOffset`
+      // (defaults to 0, so non-replica edges and single-source graphs
+      // remain unaffected). Clamped to the consumer's inner half-width
+      // minus a 4 px margin so the attach point always lands inside the
+      // box even on degenerate inputs (huge `rowsTotal`, comically wide
+      // PORT_GAP). With LEAF_W=132 and PORT_GAP=13, the typical bound
+      // is ~62 — far more headroom than any realistic `rowsTotal` will
+      // need.
+      const rawOffset = props.targetXOffset ?? 0;
+      const offsetCap = to.w / 2 - 4;
+      const clampedOffset = Math.max(-offsetCap, Math.min(offsetCap, rawOffset));
+      const tx = toCx + clampedOffset;
       const tEdge = downward ? to.y : to.y + to.h;
       const naturalGap = downward ? to.y - (from.y + from.h) : from.y - (to.y + to.h);
       // Clamp inset so even adjacent siblings (gap = STACK_GAP = 6) get a

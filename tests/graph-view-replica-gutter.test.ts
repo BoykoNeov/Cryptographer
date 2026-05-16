@@ -462,13 +462,16 @@ describe("GraphView — multiple sources targeting same consumer don't overlap",
     const b = boxes.get("src-b->consumer");
     const c = boxes.get("consumer");
     if (!a || !b || !c) throw new Error("missing synthetic box");
-    // Same x — both above the consumer's column, no horizontal scatter.
+    // Row 0 at consumer.x; row 1 shifted right by REPLICA_ROW_X_STEP
+    // (port-spreading polish — diagonal stack so the upper-row arrow has
+    // a clear visual slope past the row-0 box).
     expect(a.x).toBe(c.x);
-    expect(b.x).toBe(c.x);
-    // Vertical separation: source A on row 0 (closest to spine), source
-    // B on row 1 (one chip + STACK_GAP higher).
+    expect(b.x).toBe(c.x + consts.REPLICA_ROW_X_STEP);
+    // Vertical separation: source A on row 0 (close to consumer at
+    // STACK_GAP), source B on row 1 (one LEAF_H + FLOW_GAP step higher
+    // — wider gap so the arrow has visible drawing room).
     expect(a.y).toBeLessThan(c.y);
-    expect(b.y).toBe(a.y - consts.LEAF_H - consts.STACK_GAP);
+    expect(b.y).toBe(a.y - consts.LEAF_H - consts.FLOW_GAP);
   });
 
   it("root: three replicas → same consumer stack VERTICALLY without overlap (Slice 7c)", () => {
@@ -486,14 +489,17 @@ describe("GraphView — multiple sources targeting same consumer don't overlap",
     const c = boxes.get("src-c->consumer");
     const cons = boxes.get("consumer");
     if (!a || !b || !c || !cons) throw new Error("missing synthetic box");
-    // All three share the consumer's x.
+    // Diagonal x stack: row 0 at consumer.x; rows 1+ shift right by
+    // REPLICA_ROW_X_STEP per row so upper arrows have a visible slope.
     expect(a.x).toBe(cons.x);
-    expect(b.x).toBe(cons.x);
-    expect(c.x).toBe(cons.x);
-    // Strictly DECREASING y (each source one row higher than the prior).
-    const rowH = consts.LEAF_H + consts.STACK_GAP;
-    expect(b.y).toBe(a.y - rowH);
-    expect(c.y).toBe(b.y - rowH);
+    expect(b.x).toBe(cons.x + consts.REPLICA_ROW_X_STEP);
+    expect(c.x).toBe(cons.x + 2 * consts.REPLICA_ROW_X_STEP);
+    // Strictly DECREASING y: row 0 at STACK_GAP above consumer; rows 1+
+    // step up by LEAF_H + FLOW_GAP (wider inter-row gap for arrow
+    // visibility, per port-spreading polish).
+    const rowStep = consts.LEAF_H + consts.FLOW_GAP;
+    expect(b.y).toBe(a.y - rowStep);
+    expect(c.y).toBe(b.y - rowStep);
     // All three distinct ys (no overlap).
     expect(new Set([a.y, b.y, c.y]).size).toBe(3);
   });
@@ -529,12 +535,14 @@ describe("GraphView — multiple sources targeting same consumer don't overlap",
     const b = boxes.get(replicaB);
     const c = boxes.get(consumerId);
     if (!a || !b || !c) throw new Error("missing iterate-body synthetic box");
-    // Both at consumer.x — vertical column, no horizontal tiling.
+    // Row 0 at consumer.x; row 1 shifted right by REPLICA_ROW_X_STEP
+    // (diagonal stack, port-spreading polish).
     expect(a.x).toBe(c.x);
-    expect(b.x).toBe(c.x);
-    // Source A at row 0 (just above consumer), source B at row 1.
+    expect(b.x).toBe(c.x + consts.REPLICA_ROW_X_STEP);
+    // Source A at row 0 (STACK_GAP above), source B at row 1
+    // (LEAF_H + FLOW_GAP higher than row 0).
     expect(a.y).toBeLessThan(c.y);
-    expect(b.y).toBe(a.y - consts.LEAF_H - consts.STACK_GAP);
+    expect(b.y).toBe(a.y - consts.LEAF_H - consts.FLOW_GAP);
   });
 
   it("group (lift branch): two replicas → first-child consumer stack VERTICALLY (Slice 7c)", () => {
@@ -567,12 +575,14 @@ describe("GraphView — multiple sources targeting same consumer don't overlap",
     const b = boxes.get(replicaB);
     const c = boxes.get(consumerId);
     if (!a || !b || !c) throw new Error("missing group-lift synthetic box");
-    // Both share the column x — vertical stack above consumer.
+    // Row 0 at consumer.x; row 1 shifted right by REPLICA_ROW_X_STEP.
     expect(a.x).toBe(c.x);
-    expect(b.x).toBe(c.x);
-    // Source A at row 0, source B at row 1 (one chip + STACK_GAP higher).
+    expect(b.x).toBe(c.x + consts.REPLICA_ROW_X_STEP);
+    // Source A at row 0 (STACK_GAP above consumer), source B at row 1
+    // (one LEAF_H + FLOW_GAP step higher — wider gap for arrow drawing
+    // room per port-spreading polish, 2026-05-16).
     expect(a.y).toBeLessThan(c.y);
-    expect(b.y).toBe(a.y - consts.LEAF_H - consts.STACK_GAP);
+    expect(b.y).toBe(a.y - consts.LEAF_H - consts.FLOW_GAP);
   });
 });
 
