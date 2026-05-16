@@ -16,8 +16,10 @@ gives the user a visible signal that the click registered.
 
 ## Status
 
-**Planned 2026-05-16.** No slices shipped yet. The architectural
-foundation already exists from prior work:
+**Planned 2026-05-16.** Slices 1 + 2 shipped 2026-05-16
+(commits `4fb1b6f`, `d35bd96`). Slices 3, 4, 5 still pending.
+
+The architectural foundation already exists from prior work:
 
 - `syncSboxInverseToCounterpart` (commit `d5c0949`) and the `SyncInverseRow`
   component wired into `SbxBlock` proved the pattern.
@@ -121,7 +123,30 @@ Conventions:
 
 ## Slices
 
-### Slice 1 — Action-feedback primitive + retrofit (1 commit)
+### Slice 1 — Action-feedback primitive + retrofit (1 commit) — **SHIPPED 2026-05-16 (`4fb1b6f`)**
+
+**Empirical scope cut during implementation:** the plan listed the
+graph-view round-duplicate `+` glyph as one of the retrofits. The flash
+turned out to be infeasible there — clicking the glyph triggers a spec
+mutation that reconstructs the containers array, and Solid's `<For>`
+rebuilds child instances when the array reference changes, so the new
+`DuplicateGlyph` instance starts with `flashing=false` regardless of
+timing (reordering `triggerFlash()` before `props.onDuplicate()` did not
+help — Solid's batched-update flush still replaces the DOM before the
+next paint). The click's RESULT is intensely visible anyway (new round
+group appears mid-canvas, every subsequent round renumbers, decrypt
+counterpart auto-mirrors), so no supplementary signal needed.
+Documented inline at `DuplicateGlyph` in `GraphView.tsx` and at the
+end of `src/ui/app.css` where the CSS rule would have lived.
+
+**Generalization for future SVG action affordances inside spec-derived
+`<For>` loops:** local-signal-based flash won't work. Either a stable
+`keyBy` on the `<For>` (changes Slice 8 drag-drop semantics) or a
+graph-store-level "recently-acted" set the renderer reads. Neither is
+worth doing for a single button; revisit if multiple SVG action
+glyphs ever need flash feedback.
+
+
 
 **Goal:** Every "this clicked and did something" button gives a
 ~900ms visible signal, plus an aria-live announcement.
@@ -169,7 +194,57 @@ Conventions:
   for the current footprint).
 - Sound effects (no).
 
-### Slice 2 — Serpent 4-bit S-box duplicate-detection + Repair + Sync (1 commit)
+### Slice 2 — Serpent 4-bit S-box duplicate-detection + Repair + Sync (1 commit) — **SHIPPED 2026-05-16 (`d35bd96`)**
+
+**Plan deviation (advisor-confirmed in-scope):** the original Slice 2
+declared multi-table sync out of scope, expecting a single forward
+S-box like AES. The actual Serpent data model has 8 distinct S-boxes
+cycling across the 32 rounds (`S_{(r-1) mod 8}`), and all 32 encrypt
+leaves share the `serpent.sub-bytes@1` step type — broadcasting one
+inverted table to every leaf in the counterpart slot (the existing
+`syncSboxInverseToCounterpart` semantic) would overwrite 28 of 32
+decrypt rounds with the wrong inverse.
+
+Resolution: new sibling mutator
+`syncSboxInverseToCounterpartByIndex(stepType, sboxIndex,
+invertedSbox)` in `src/ui/stores/spec.ts`. Filters by
+`params.sboxIndex === sboxIndex` inside the update fn so non-matching
+leaves return reference-equal — `updateAllStepsByType`'s tree walker
+short-circuits the rebuild for those subtrees. The two mutators
+read as parallel siblings: "AES has one S-box, Serpent has eight,
+Sync semantics differ accordingly."
+
+**Within-encrypt sboxIndex consistency is deferred** — editing
+round.4's S_3 and clicking Sync only writes to decrypt-side
+sboxIndex-3 leaves; encrypt's round.12/20/28 (also S_3) stay
+un-edited and diverge from their decrypt counterparts. Same "each
+leaf owns its params" semantic AddRoundKey has had since launch.
+A future "Apply S_3 to all rounds using S_3" affordance could
+address it, but it's a separate slice.
+
+**No ApplyAllRow on Serpent SubBytes** — broadcasting one S-box
+across 32 rounds would destroy 28 sboxIndex assignments (project's
+"skip ApplyAllRow when copying across siblings is actively harmful"
+guidance).
+
+**Implication for Slice 4 (enumeration test):** the registry shape
+described in Slice 4's section is incomplete for Serpent. A single
+entry `{ stepType: "serpent.sub-bytes@1", paramKey: "sbox",
+mirrorClass: "inverse" }` asserts "a Sync button exists" but
+cannot assert the per-index semantic — Serpent's button is per-leaf,
+not per-step-type. Slice 4 needs to extend the entry shape with
+`groupBy?: "sboxIndex"` or accept that the enumeration test only
+checks presence (and pin the per-index semantic via
+`tests/sync-serpent-sbox-inverse.test.ts` instead). The Serpent
+mutator's docstring carries this flag.
+
+**Testing gotcha** discovered during implementation (now in
+`docs/gotchas.md` under "Solid UI"): tests that call
+`setCipher("serpent-128")` to flip the active cipher MUST import
+`setCipher` from `@/ui/stores/spec`, NOT `@/ui/stores/cipher`. The
+former calls `buildCanonicalPair` and rebuilds the spec; the latter
+only flips the signal, so the spec store still serves AES-128.
+Both Serpent tests in this slice hit this bug on first iteration.
 
 **Goal:** Apply the existing AES S-box affordances to Serpent.
 Helpers are already size-parameterized; this is rollout, not new
