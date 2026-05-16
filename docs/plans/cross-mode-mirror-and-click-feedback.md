@@ -18,8 +18,10 @@ gives the user a visible signal that the click registered.
 
 **Planned 2026-05-16.** Slices 1 + 2 shipped 2026-05-16
 (commits `4fb1b6f`, `d35bd96`). Slices 3 + 4 shipped 2026-05-16
-(this commit batch). Slice 5 (MixColumns inverse-sync — needs GF(2^8)
-4×4 Gauss-Jordan inverter) still pending.
+(commit `c50a05f`). Slice 5 shipped 2026-05-16 — GF(2^8) 4×4
+Gauss-Jordan inverter (`src/core/state/gf-matrix.ts`) + Sync inverse
+MixColumns button + 18 tests across the inverter, the store mutator,
+and the UI row. **All five slices now on `main`.**
 
 The architectural foundation already exists from prior work:
 

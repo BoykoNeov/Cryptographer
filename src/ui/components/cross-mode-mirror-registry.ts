@@ -106,12 +106,25 @@ export const CROSS_MODE_MIRROR_ENTRIES: readonly CrossModeMirrorEntry[] = [
     counterpartStepType: "serpent.inv-sub-bytes@1",
   },
 
+  // AES MixColumns — class-2 (inverse). Encrypt holds `AES_MIX_MATRIX`;
+  // decrypt holds its GF(2^8) inverse `AES_INV_MIX_MATRIX` (FIPS-197
+  // §5.3.3). Same step type on both sides (unlike Serpent's
+  // `sub-bytes@1` ↔ `inv-sub-bytes@1` split) — the round structure
+  // differs between encrypt and decrypt but the executor for the matrix
+  // multiplication is the same primitive. Mutator:
+  // `syncMixColumnsInverseToCounterpart`; inverse computed by
+  // `gfMatInverse4x4` (src/core/state/gf-matrix.ts).
+  {
+    stepType: "generic.mix-columns@1",
+    paramKey: "matrix",
+    mirrorClass: "inverse",
+  },
+
   // ─── Future entries land here ──────────────────────────────────────
   //
-  // Slice 5 adds `generic.mix-columns@1` (`matrix`, inverse-mirror) when
-  // the GF(2^8) Gauss-Jordan inverter ships. Speck has no entries by
-  // design — Speck is symmetric across modes by construction (no S-box,
-  // no MixColumns). Hash / MAC / KDF / AEAD step types that land later
-  // are sibling top types to encrypt/decrypt ciphers and don't have
-  // mirror buttons; the principle degenerates to "no mirror needed."
+  // Speck has no entries by design — Speck is symmetric across modes by
+  // construction (no S-box, no MixColumns). Hash / MAC / KDF / AEAD
+  // step types that land later are sibling top types to encrypt/decrypt
+  // ciphers and don't have mirror buttons; the principle degenerates to
+  // "no mirror needed."
 ];

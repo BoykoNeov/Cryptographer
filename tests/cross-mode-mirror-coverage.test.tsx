@@ -112,6 +112,13 @@ const setupForEntry = (entry: CrossModeMirrorEntry): string => {
       // Canonical AES-128 default. Any round's sub-bytes leaf works.
       return "round.1.sub-bytes";
     }
+    case "generic.mix-columns@1": {
+      // Canonical AES-128 default. Round 1 is always present and has a
+      // MixColumns leaf (FIPS-197: MixColumns is in every round except
+      // the final one). Same step type appears on both encrypt and
+      // decrypt specs — the Sync row sits inside `MixBlock`.
+      return "round.1.mix-columns";
+    }
     case "aes.key-expansion@1": {
       // Top-level leaf on canonical AES-128.
       return "key-expansion";

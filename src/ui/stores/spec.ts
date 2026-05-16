@@ -395,6 +395,45 @@ export const syncSboxCopyToCounterpart = (stepType: string, sboxValue: readonly 
 };
 
 /**
+ * Cross-slot **inverse-matrix** mirror for MixColumns. The class-2
+ * inverse-mirror counterpart to `syncSboxInverseToCounterpart` for the
+ * `generic.mix-columns@1` step type — encrypt holds the forward mixing
+ * matrix (canonically `AES_MIX_MATRIX`), decrypt holds its GF(2^8)
+ * inverse (canonically `AES_INV_MIX_MATRIX`).
+ *
+ * Sibling to `syncSboxInverseToCounterpart`: same broadcast-to-every-
+ * matching-step-in-counterpart shape, same "active slot untouched"
+ * invariant, same direction inference from `useMode()`. The single
+ * semantic difference is the param key — writes `matrix` instead of
+ * `sbox`.
+ *
+ * The caller passes the inverted matrix verbatim (computed via
+ * `gfMatInverse4x4` in `src/core/state/gf-matrix.ts`). The split keeps
+ * this module a pure store boundary — no GF(2^8) arithmetic leaks into
+ * the spec store. The caller is also responsible for the "throw =
+ * singular = disable the button" gating logic.
+ *
+ * Unlike Serpent's per-S-box-index split, MixColumns broadcasts cleanly
+ * because the AES round structure uses the SAME mixing matrix in every
+ * round (rounds 1..Nr-1; the last round has no MixColumns). Every
+ * `generic.mix-columns@1` leaf on the counterpart side gets the same
+ * inverse, which matches the canonical AES_INV_MIX_MATRIX semantic.
+ */
+export const syncMixColumnsInverseToCounterpart = (
+  stepType: string,
+  invertedMatrix: readonly (readonly number[])[],
+): void => {
+  const current = specs();
+  const counterpartMode: Mode = mode() === "encrypt" ? "decrypt" : "encrypt";
+  const updated = updateAllStepsByType(current[counterpartMode], stepType, (params) => ({
+    ...(params as Record<string, Json>),
+    matrix: invertedMatrix.map((row) => [...row]),
+  }));
+  if (updated === current[counterpartMode]) return; // reference-equal → no-op
+  setSpecs({ ...current, [counterpartMode]: updated } as SpecsByMode);
+};
+
+/**
  * Insert a brand-new step leaf into the live spec (Slice 8 of the 2D
  * editor plan). The palette + GraphView drop handler call this with a
  * `stepType` registered in the registry and an anchor that says WHERE

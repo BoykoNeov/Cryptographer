@@ -934,6 +934,43 @@ button:disabled {
   cursor: not-allowed;
 }
 
+/* Class-2 (inverse-mirror) MixColumns Sync row. Visually identical to
+   `.sync-inverse-row` (the S-box inverse row) — they implement the
+   same propagation pattern, just for a 4×4 matrix instead of a 256-
+   entry table. The class name diverges only so test selectors and
+   future styling tweaks can target one without the other. Sits below
+   the matrix editor and ApplyAllRow in `MixBlock`, NOT inside a
+   <details> (no orphaning risk — MixColumns has no collapsible
+   editor surface). */
+.sync-mix-columns-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.sync-mix-columns-row button {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  padding: 4px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.sync-mix-columns-row button:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.sync-mix-columns-row button:disabled {
+  background: var(--bg-elev);
+  border-color: var(--border);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
 /* ─── Byte cell input (used by S-box and matrix editors) ──────────────── */
 /* Widths sized for the worst-case display string of the current format:
    hex=2 chars, decimal=3 chars, ASCII=up to 4 (`\xNN`). The MatrixEditor

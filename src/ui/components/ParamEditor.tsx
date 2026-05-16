@@ -13,12 +13,14 @@
  */
 
 import { findStep } from "@/core/spec-mutations";
+import { gfMatInverse4x4 } from "@/core/state/gf-matrix";
 import type { Json, StepLeaf } from "@/core/types";
 import { For, Match, Show, Switch, createMemo, createSignal } from "solid-js";
 import {
   editAllStepsByType,
   editStepParams,
   removeStepFromSpec,
+  syncMixColumnsInverseToCounterpart,
   syncSboxCopyToCounterpart,
   syncSboxInverseToCounterpart,
   syncSboxInverseToCounterpartByIndex,
@@ -259,6 +261,11 @@ const MixBlock = (props: BlockProps) => {
         matchingCount={props.matchingCount}
         label="MixColumns matrix"
       />
+      {/* Class-2 (inverse) cross-mode mirror. Appended outside any
+          <details>, so no orphaning concern. The Sync row encapsulates
+          its own GF(2^8) invertibility check via try/catch around
+          `gfMatInverse4x4`. */}
+      <SyncMixColumnsRow currentMatrix={matrix()} stepType={props.step.type} />
     </>
   );
 };
@@ -1243,6 +1250,73 @@ const CopySboxRow = (props: { currentSbox: readonly number[]; stepType: string }
           // here. The whole point of the Copy verb is to mirror the
           // forward S-box exactly, per FIPS-197 §5.2.
           syncSboxCopyToCounterpart(props.stepType, props.currentSbox);
+        }}
+      >
+        {buttonLabel()}
+      </ActionButton>
+    </div>
+  );
+};
+
+// ─── Sync-inverse-MixColumns-to-counterpart button ───────────────────────
+//
+// Class-2 (algebraic-inverse) cross-mode mirror for the MixColumns matrix.
+// Encrypt holds the forward mixing matrix (canonically `AES_MIX_MATRIX`);
+// decrypt holds its GF(2^8) inverse (canonically `AES_INV_MIX_MATRIX`,
+// FIPS-197 §5.3.3). The button computes the inverse via Gauss-Jordan over
+// GF(2^8) (`gfMatInverse4x4`) and broadcasts it to every counterpart-side
+// `generic.mix-columns@1` leaf.
+//
+// **Gating via try/catch (advisor pick):** the inverter throws on singular
+// matrices, so we wrap `gfMatInverse4x4` in a `createMemo` and use the
+// catch path as the disabled-state signal. No duplicated invertibility
+// check; the inverter IS the check. The memo also caches the result so
+// the onAction handler doesn't re-run the elimination.
+//
+// **No "Repair" affordance** unlike S-boxes: a singular 4×4 matrix has no
+// general repair recipe (the canonical AES matrix is one specific
+// invertible table among many). The tooltip says so honestly — the user
+// has to edit a cell to recover invertibility.
+const SyncMixColumnsRow = (props: {
+  currentMatrix: readonly (readonly number[])[];
+  stepType: string;
+}) => {
+  const mode = useMode();
+  const counterpartLabel = (): string => (mode() === "encrypt" ? "decrypt" : "encrypt");
+  const buttonLabel = (): string => `Sync inverse MixColumns to ${counterpartLabel()}`;
+
+  // Memo-wrapped inverse: either the computed inverse matrix, or null if
+  // the current matrix is singular over GF(2^8). The catch path IS the
+  // gating signal — no separate `isInvertible` predicate.
+  const inverseMatrix = createMemo<readonly (readonly number[])[] | null>(() => {
+    try {
+      return gfMatInverse4x4(props.currentMatrix);
+    } catch {
+      return null;
+    }
+  });
+  const isInvertible = (): boolean => inverseMatrix() !== null;
+
+  const disabledTooltip =
+    "This matrix has no inverse over GF(2^8) (singular). Edit a cell to restore invertibility — unlike the S-box editor, there's no general 'Repair' recipe for a 4×4 mixing matrix, since the canonical AES matrix is just one specific invertible table among many.";
+  const enabledTooltip = (): string =>
+    `Compute the GF(2^8) inverse of this matrix (Gauss-Jordan, FIPS-197 §5.3.3) and write it to every ${props.stepType} step in the ${counterpartLabel()} slot (overwrites any per-step customizations on that side).`;
+
+  return (
+    <div class="sync-mix-columns-row">
+      <ActionButton
+        disabled={!isInvertible()}
+        title={isInvertible() ? enabledTooltip() : disabledTooltip}
+        feedbackLabel={`Synced inverse MixColumns to ${counterpartLabel()} mode`}
+        // Class-2 inverse-mirror — same value the SbxBlock/SerpentSubBytes
+        // rows surface. The enumeration coverage test
+        // (`tests/cross-mode-mirror-coverage.test.tsx`) walks the registry
+        // and asserts every entry has a button with the matching class.
+        data-mirror-class="inverse"
+        onAction={() => {
+          const inverse = inverseMatrix();
+          if (!inverse) return; // belt-and-braces; button is disabled
+          syncMixColumnsInverseToCounterpart(props.stepType, inverse);
         }}
       >
         {buttonLabel()}
