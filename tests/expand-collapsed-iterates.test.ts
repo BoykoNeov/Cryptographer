@@ -2,24 +2,30 @@
  * Tests for `src/core/graph.ts::expandCollapsedIterates` (Slice 6 of the
  * graph-narrative-and-zoom plan).
  *
- * The transform turns each COLLAPSED iterate container into N synthetic
- * "block-chip" GraphNodes (capped at 6 visible items, ellipsis chip when
- * N > 6). It runs AFTER `collapseGraph` and BEFORE
- * `replicateHighFanoutSources` in the GraphView pipeline so chips become
- * replication candidates (e.g. `key-expansion@always` produces one tiny
- * replica per chip).
+ * Option C contract (current):
+ *   - Each COLLAPSED iterate is KEPT in `containers` with its `childIds`
+ *     replaced by N synthetic "block-chip" GraphNodes (capped at 6 visible
+ *     items, ellipsis chip when N > 6). The chips' `containerPath`
+ *     includes the iterate id so layout recurses into the iterate body.
+ *   - Edges to/from the iterate STAY on the iterate id — they are NOT
+ *     fanned to chips. External arrows point at the box; the chips are
+ *     a visual representation of "what runs inside," not first-class
+ *     dataflow participants.
+ *   - The iterate's header chevron handles re-expand (clicking it
+ *     removes the iterate from `collapsedGroups`).
+ *   - Pre-Option-C (Option B) contract — drop iterate, fan edges per chip
+ *     — is preserved in `expandCollapsedIterates` history; the tests below
+ *     pin Option C explicitly.
  *
  * Coverage targets:
  *   - Cap math: N ∈ {1, 2, 5, 6, 7, 10, 100}
- *   - Edge fanning: every edge with the iterate as endpoint duplicates
- *     across all chips, regardless of `kind`
- *   - rootIds / parent-childIds splice replaces the iterate slot
+ *   - Iterate is RETAINED in containers + rootIds; childIds rewired to
+ *     chip ids
+ *   - Edges with the iterate as endpoint stay untouched
  *   - Identity short-circuit: empty collapsedIds, iterate-without-blockSpan,
  *     iterate-not-in-collapsedIds — input returned by reference
- *   - End-to-end on AES-128 ECB (real spec + trace, 4 blocks): chips
- *     receive the same fanned aux edges that the iterate did
- *   - Composition: chained with `replicateHighFanoutSources(threshold=4)`
- *     yields one `key-expansion` replica per visible chip
+ *   - End-to-end on AES-128 ECB (real spec + trace, 4 blocks): chip
+ *     children inside the kept iterate container
  */
 
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
@@ -156,62 +162,52 @@ describe("expandCollapsedIterates cap math", () => {
   });
 });
 
-// ─── Edge fanning ────────────────────────────────────────────────────────
+// ─── Iterate retention + childIds rewrite (Option C contract) ────────────
 
-describe("expandCollapsedIterates edge fanning", () => {
-  it("fans an edge ending at the iterate to one edge per chip", () => {
+describe("expandCollapsedIterates iterate retention", () => {
+  it("keeps the iterate in `containers` and replaces its childIds with chip ids", () => {
     const g = makeCollapsedIterateGraph(3);
     const out = expandCollapsedIterates(g, new Set(["iter"]));
-    const incomingFromSrc = out.edges.filter((e) => e.from === "src" && e.auxKey === "blocks-in");
-    expect(incomingFromSrc).toHaveLength(3);
-    expect(incomingFromSrc.map((e) => e.to).sort()).toEqual([
-      "iter@block0",
-      "iter@block1",
-      "iter@block2",
-    ]);
-    // Each fanned edge preserves the original kind + auxKey.
-    for (const e of incomingFromSrc) {
-      expect(e.kind).toBe("aux");
+    const iter = out.containers.find((c) => c.id === "iter");
+    expect(iter).toBeDefined();
+    expect(iter?.childIds).toEqual(["iter@block0", "iter@block1", "iter@block2"]);
+  });
+
+  it("keeps the iterate's slot in `rootIds` (no splice)", () => {
+    const g = makeCollapsedIterateGraph(3);
+    const out = expandCollapsedIterates(g, new Set(["iter"]));
+    // rootIds untouched — only iterate.childIds gets rewritten.
+    expect(out.rootIds).toEqual(["src", "iter", "snk"]);
+  });
+
+  it("places chip nodes inside the iterate's containerPath", () => {
+    const g = makeCollapsedIterateGraph(2);
+    const out = expandCollapsedIterates(g, new Set(["iter"]));
+    const chips = out.nodes.filter((n) => n.blockChipOf === "iter");
+    for (const chip of chips) {
+      expect(chip.containerPath).toEqual(["iter"]);
     }
   });
 
-  it("fans an edge starting at the iterate to one edge per chip", () => {
+  it("leaves edges with the iterate as endpoint untouched (no fanning)", () => {
     const g = makeCollapsedIterateGraph(3);
     const out = expandCollapsedIterates(g, new Set(["iter"]));
-    const outgoingToSnk = out.edges.filter((e) => e.to === "snk" && e.auxKey === "blocks-out");
-    expect(outgoingToSnk).toHaveLength(3);
-    expect(outgoingToSnk.map((e) => e.from).sort()).toEqual([
-      "iter@block0",
-      "iter@block1",
-      "iter@block2",
-    ]);
-  });
-
-  it("removes the iterate from containers and from rootIds", () => {
-    const g = makeCollapsedIterateGraph(2);
-    const out = expandCollapsedIterates(g, new Set(["iter"]));
-    expect(out.containers.find((c) => c.id === "iter")).toBeUndefined();
-    expect(out.rootIds.includes("iter")).toBe(false);
-  });
-
-  it("splices chip ids in spec order at the iterate's old rootIds slot", () => {
-    const g = makeCollapsedIterateGraph(3);
-    const out = expandCollapsedIterates(g, new Set(["iter"]));
-    expect(out.rootIds).toEqual(["src", "iter@block0", "iter@block1", "iter@block2", "snk"]);
-  });
-
-  it("includes the ellipsis chip in the fanned-edge set when N > cap", () => {
-    const g = makeCollapsedIterateGraph(10);
-    const out = expandCollapsedIterates(g, new Set(["iter"]));
-    const incoming = out.edges.filter((e) => e.to === "iter@blockMore");
+    // src → iter and iter → snk both stay as single edges anchored on
+    // the iterate id. Chips don't appear in any edge endpoint.
+    const incoming = out.edges.filter((e) => e.to === "iter");
     expect(incoming).toHaveLength(1);
     expect(incoming[0]?.from).toBe("src");
+    const outgoing = out.edges.filter((e) => e.from === "iter");
+    expect(outgoing).toHaveLength(1);
+    expect(outgoing[0]?.to).toBe("snk");
+    // No edge touches any chip.
+    for (const e of out.edges) {
+      expect(e.from.startsWith("iter@")).toBe(false);
+      expect(e.to.startsWith("iter@")).toBe(false);
+    }
   });
 
-  it("fans state edges as well as aux edges (defensive against future routing)", () => {
-    // Inject a synthetic state edge ending at the iterate. Real specs
-    // don't produce this today, but the transform must not silently
-    // drop it when a future pipeline change adds one.
+  it("does not fan state edges either (state edges follow the same retention rule)", () => {
     const g = makeCollapsedIterateGraph(2);
     const withState: CipherGraph = {
       ...g,
@@ -219,8 +215,18 @@ describe("expandCollapsedIterates edge fanning", () => {
     };
     const out = expandCollapsedIterates(withState, new Set(["iter"]));
     const stateEdges = out.edges.filter((e) => e.kind === "state");
-    expect(stateEdges).toHaveLength(2);
-    expect(stateEdges.map((e) => e.to).sort()).toEqual(["iter@block0", "iter@block1"]);
+    expect(stateEdges).toHaveLength(1);
+    expect(stateEdges[0]?.to).toBe("iter");
+  });
+
+  it("never returns the input by reference when at least one iterate qualifies", () => {
+    // The transform rebuilds containers + nodes for any qualifying
+    // iterate, so identity equality must NOT hold (catches a regression
+    // where someone re-introduces a "no actual change needed" short-circuit
+    // that would skip the childIds rewrite).
+    const g = makeCollapsedIterateGraph(2);
+    const out = expandCollapsedIterates(g, new Set(["iter"]));
+    expect(out).not.toBe(g);
   });
 });
 
@@ -290,7 +296,7 @@ const runAes128Ecb = (): Trace =>
   });
 
 describe("expandCollapsedIterates on AES-128 ECB (4 blocks)", () => {
-  it("collapsing 'ecb-blocks' produces 4 chips with the iterate's edges fanned", () => {
+  it("collapsing 'ecb-blocks' keeps the iterate and adds 4 chip children", () => {
     const trace = runAes128Ecb();
     const raw = deriveAuxGraph(trace, aes128EcbSpec);
     const collapsed = collapseGraph(raw, new Set(["ecb-blocks"]));
@@ -313,65 +319,42 @@ describe("expandCollapsedIterates on AES-128 ECB (4 blocks)", () => {
     expect(chips).toHaveLength(4);
     expect(chips.map((c) => c.label)).toEqual(["block 1", "block 2", "block 3", "block 4"]);
 
-    // Iterate is gone from containers + rootIds.
-    expect(expanded.containers.find((c) => c.id === "ecb-blocks")).toBeUndefined();
-    expect(expanded.rootIds.includes("ecb-blocks")).toBe(false);
-    // …replaced in rootIds in spec order — chips appear contiguously at
-    // the iterate's old slot. Locate the first chip and assert the run.
-    const firstChipIdx = expanded.rootIds.indexOf("ecb-blocks@block0");
-    expect(firstChipIdx).toBeGreaterThanOrEqual(0);
-    expect(expanded.rootIds.slice(firstChipIdx, firstChipIdx + 4)).toEqual([
+    // Option C: iterate STAYS in containers + rootIds; childIds rewired.
+    const iterPost = expanded.containers.find((c) => c.id === "ecb-blocks");
+    expect(iterPost).toBeDefined();
+    expect(iterPost?.childIds).toEqual([
       "ecb-blocks@block0",
       "ecb-blocks@block1",
       "ecb-blocks@block2",
       "ecb-blocks@block3",
     ]);
+    expect(expanded.rootIds.includes("ecb-blocks")).toBe(true);
 
-    // Aux edges from `split-blocks` to the iterate fan to 4 (one per
-    // chip), preserving auxKey + kind. Filter by `kind === "aux"` because
-    // post-spine-fix the chips ALSO receive state-spine edges from
-    // `compute-block-count` — those are exercised in the spine-fanning
-    // test below.
-    const splitAuxEdges = expanded.edges.filter(
-      (e) => e.kind === "aux" && e.from === "split-blocks" && e.to.startsWith("ecb-blocks@block"),
+    // External edges remain on the iterate boundary (NOT fanned to
+    // chips). Chips are inside-the-box; the dataflow points at the box.
+    const splitToIter = expanded.edges.filter(
+      (e) => e.from === "split-blocks" && e.to === "ecb-blocks",
     );
-    expect(splitAuxEdges).toHaveLength(4);
-
-    // Aux edges from the iterate to `concat-blocks` fan the same way.
-    const concatAuxEdges = expanded.edges.filter(
-      (e) => e.kind === "aux" && e.from.startsWith("ecb-blocks@block") && e.to === "concat-blocks",
+    expect(splitToIter.length).toBeGreaterThanOrEqual(1);
+    const iterToConcat = expanded.edges.filter(
+      (e) => e.from === "ecb-blocks" && e.to === "concat-blocks",
     );
-    expect(concatAuxEdges).toHaveLength(4);
-
-    // State-spine edges fan through the chips too — `compute-block-count
-    // → ecb-blocks` and `ecb-blocks → concat-blocks` (the iterate-as-node
-    // chain participation set by `inferStateEdges`) become 4 edges each
-    // post-expansion, so chips carry the spine in parallel. This is the
-    // pedagogical "the data IS the per-block payload during the iterate"
-    // story.
-    const computeStateEdges = expanded.edges.filter(
-      (e) =>
-        e.kind === "state" &&
-        e.from === "compute-block-count" &&
-        e.to.startsWith("ecb-blocks@block"),
-    );
-    expect(computeStateEdges).toHaveLength(4);
-    const concatStateEdges = expanded.edges.filter(
-      (e) =>
-        e.kind === "state" && e.from.startsWith("ecb-blocks@block") && e.to === "concat-blocks",
-    );
-    expect(concatStateEdges).toHaveLength(4);
+    expect(iterToConcat.length).toBeGreaterThanOrEqual(1);
+    // No edge endpoint mentions a chip id.
+    for (const e of expanded.edges) {
+      expect(e.from.startsWith("ecb-blocks@block")).toBe(false);
+      expect(e.to.startsWith("ecb-blocks@block")).toBe(false);
+    }
   });
 
-  it("composes with replicateHighFanoutSources: key-expansion replicates per chip", () => {
-    // For today's AES-128 ECB the round keys flow into add-round-key leaves
-    // INSIDE the iterate body, so collapsing hides those consumers and
-    // key-expansion has nothing left to replicate against. Future specs
-    // that aux-feed the iterate boundary directly (e.g. a hash compression
-    // function with `key`/`schedule` as a per-block aux) WILL hit the
-    // composition. We pin that contract on a hand-built fixture rather
-    // than a real spec — keeps the assertion robust to today's ECB
-    // accidentally not exercising the path.
+  it("composes with replicateHighFanoutSources: edge count is per-iterate, not per-chip", () => {
+    // Under Option C, edges to the iterate STAY on the iterate id (no
+    // fanning). So a source with one outgoing edge to a collapsed
+    // iterate has fanout 1 regardless of N — the chips don't multiply
+    // the edge count. The earlier Option B "1 source → N chip edges"
+    // composition is intentionally absent. (Pin the edge-count contract;
+    // the replication function's threshold + tie-breaking semantics
+    // live in its own unit tests.)
 
     const fixture: CipherGraph = {
       nodes: [
@@ -392,10 +375,16 @@ describe("expandCollapsedIterates on AES-128 ECB (4 blocks)", () => {
       rootIds: ["key-expansion", "iter"],
     };
     const expandedFixture = expandCollapsedIterates(fixture, new Set(["iter"]));
-    // Now key-expansion has 3 outgoing aux edges (one per chip).
-    const replicated = replicateHighFanoutSources(expandedFixture, 2);
-    // Replication kicks in (3 > threshold 2) → 3 replicas, one per chip.
-    const replicas = replicated.nodes.filter((n) => n.replicaOf === "key-expansion");
-    expect(replicas).toHaveLength(3);
+    // key-expansion still has exactly 1 outgoing aux edge, and its
+    // endpoint is the iterate (not any chip).
+    const outEdges = expandedFixture.edges.filter((e) => e.from === "key-expansion");
+    expect(outEdges).toHaveLength(1);
+    expect(outEdges[0]?.to).toBe("iter");
+    // Reference to replicateHighFanoutSources kept so the import doesn't
+    // become unused — it's still part of the pipeline this transform
+    // composes with, even though Option C neutralizes the per-chip
+    // multiplier the old (Option B) contract used to produce.
+    const replicated = replicateHighFanoutSources(expandedFixture, 100);
+    expect(replicated.nodes.length).toBeGreaterThanOrEqual(expandedFixture.nodes.length);
   });
 });

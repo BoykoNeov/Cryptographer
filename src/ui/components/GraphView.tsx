@@ -142,8 +142,12 @@ const BASE_LEAF_W = 132;
 const BASE_LEAF_H = 28;
 /** Base (1.0×) vertical gap between siblings stacked inside a group. */
 const BASE_STACK_GAP = 6;
-/** Base (1.0×) horizontal gap between siblings flowing inside an iterate body / root. */
-const BASE_FLOW_GAP = 16;
+/** Base (1.0×) horizontal gap between siblings flowing inside an iterate body / root.
+ *  Bumped from 16 → 24 (2026-05-16) for breathing room on the collapsed-
+ *  iterate chip row — multiple chips + aux replicas above were cramping
+ *  on the AES-128 ECB canvas. Affects both root-level flow AND iterate
+ *  body flow (one constant, used both places). */
+const BASE_FLOW_GAP = 24;
 /** Base (1.0×) padding inside a container (group or iterate) box. */
 const BASE_CONTAINER_PAD = 10;
 /**
@@ -829,6 +833,15 @@ export const layoutRoot = (
 ): { boxes: Map<string, Box>; canvasW: number; canvasH: number } => {
   const containersById = new Map<string, ContainerNode>();
   for (const c of graph.containers) containersById.set(c.id, c);
+  // nodesById exists so the iterate-target replica-anchor logic below can
+  // discriminate "first child is a real body step" (anchor above it) from
+  // "first child is a block chip" (anchor at iterate center). Post-Option-C
+  // a collapsed iterate's childIds are chip ids, not body steps — the
+  // anchor needs to read as "feeds the iterate as a whole," not "feeds
+  // block 1 specifically." See the anchor branch in `layoutRoot`'s second
+  // pass for the override.
+  const nodesById = new Map<string, GraphNode>();
+  for (const n of graph.nodes) nodesById.set(n.stepId, n);
 
   // Derive replica placement info once. When replication is off (the
   // master switch in GraphView), the set is empty and the group-layout
@@ -955,7 +968,23 @@ export const layoutRoot = (
         : undefined;
     const firstChildBox =
       firstNonReplicaChildId !== undefined ? boxes.get(firstNonReplicaChildId) : undefined;
-    const anchorX = firstChildBox?.x ?? consumerBox.x;
+    // Post-Option-C, a collapsed iterate's first non-replica child is a
+    // block chip (`stepType === "__block_chip__"`), NOT a real body step.
+    // Reading the chip's x as the replica anchor places the arrow tip
+    // above block 1 — visually misleading because aux is consumed at
+    // iteration entry and feeds ALL blocks. Override to iterate-center
+    // (column-centered so multiple row-stacked replicas converge on the
+    // iterate's horizontal midline) so the arrow reads as "feeds the
+    // iterate," not "feeds block 1." Expanded iterates keep the
+    // first-body-step anchor unchanged.
+    const firstChildNode =
+      firstNonReplicaChildId !== undefined ? nodesById.get(firstNonReplicaChildId) : undefined;
+    const firstChildIsBlockChip = firstChildNode?.blockChipOf !== undefined;
+    const iterateCenterX =
+      consumerContainer?.kind === "iterate" && firstChildIsBlockChip
+        ? consumerBox.x + (consumerBox.w - consts.LEAF_W) / 2
+        : undefined;
+    const anchorX = iterateCenterX ?? firstChildBox?.x ?? consumerBox.x;
     // Port-spreading polish: x/y come from `replicaSlotPosition`, which
     // applies the row-shift and FLOW_GAP row-spacing uniformly across
     // the three placement sites.
@@ -1065,6 +1094,17 @@ export const visualEdgeTargetId = (
   const firstNonReplicaChildId = toContainer.childIds.find(
     (cid) => nodesById.get(cid)?.replicaOf === undefined,
   );
+  // Option C: a collapsed iterate's first non-replica child is a block
+  // chip (`blockChipOf !== undefined`), not a real body step. Retargeting
+  // the arrow there would make it visually land on block 1 — wrong
+  // pedagogically, because the aux is consumed at iteration entry and
+  // feeds all blocks. When the first child is a chip, leave the arrow's
+  // target at the iterate as a whole (its top edge). Mirrors the
+  // anchor-x override in `layoutRoot`'s replica placement loop.
+  if (firstNonReplicaChildId !== undefined) {
+    const firstChildNode = nodesById.get(firstNonReplicaChildId);
+    if (firstChildNode?.blockChipOf !== undefined) return edge.to;
+  }
   return firstNonReplicaChildId ?? edge.to;
 };
 

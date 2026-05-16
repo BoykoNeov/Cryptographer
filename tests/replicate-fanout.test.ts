@@ -135,4 +135,47 @@ describe("replicateHighFanoutSources", () => {
       expect(rix).toBeLessThan(cix);
     }
   });
+
+  // Container sources (iterate, group) are themselves visible decongestion
+  // devices — replicating them produces a chip near the consumer that
+  // duplicates the existing state-spine arrow AND overflows the chip
+  // (container labels are typically long). The transform silently skips
+  // them: the user's "always" panel toggle is preserved but no-ops for
+  // container ids. Specific user-reported case (2026-05-16): post-Option-C
+  // a collapsed iterate stayed as a source with one outgoing aux edge to
+  // `concat-blocks`, and toggling it "always" produced a duplicate
+  // arrow + label-overflowing chip.
+  it("skips container sources even when set to 'always' in modes", () => {
+    const g = {
+      nodes: [
+        {
+          stepId: "concat-blocks",
+          stepType: "ct",
+          label: "concat-blocks",
+          containerPath: [],
+        },
+      ],
+      containers: [
+        {
+          kind: "iterate" as const,
+          id: "ecb-blocks",
+          label: "ECB blocks (per-block AES)",
+          containerPath: [],
+          childIds: [],
+          blockSpan: 2,
+        },
+      ],
+      edges: [
+        { from: "ecb-blocks", to: "concat-blocks", auxKey: "blocks-out", kind: "aux" as const },
+      ],
+      rootIds: ["ecb-blocks", "concat-blocks"],
+    };
+    const r = replicateHighFanoutSources(g, 0, { "ecb-blocks": "always" });
+    // No replicas; "ecb-blocks" stays as the edge source.
+    expect(r.nodes.find((n) => n.replicaOf === "ecb-blocks")).toBeUndefined();
+    const edges = r.edges.filter((e) => e.kind === "aux");
+    expect(edges).toHaveLength(1);
+    expect(edges[0]?.from).toBe("ecb-blocks");
+    expect(edges[0]?.to).toBe("concat-blocks");
+  });
 });

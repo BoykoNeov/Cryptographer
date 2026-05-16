@@ -1109,4 +1109,44 @@ describe("visualEdgeTargetId — retargets replica→iterate edges to first body
       "initial.add-round-key",
     );
   });
+
+  // Option C — collapsed-iterate retarget escape hatch. When the iterate's
+  // first non-replica child is a block chip (`blockChipOf !== undefined`,
+  // produced by `expandCollapsedIterates`), the retarget MUST fall back
+  // to the iterate id. Without this, the visual edge from a replica
+  // lands on block 1's chip and the user reads "feeds only block 1" —
+  // which contradicts the runtime (aux is consumed at iteration entry
+  // and seeds every block).
+  it("does NOT retarget past a block-chip first child (Option C — collapsed iterate)", () => {
+    const replicaNode: GraphNode = {
+      stepId: "src@->iter",
+      stepType: "test.source",
+      label: "replica",
+      containerPath: [],
+      replicaOf: "src",
+    };
+    const blockChip: GraphNode = {
+      stepId: "iter@block0",
+      stepType: "__block_chip__",
+      label: "block 1",
+      containerPath: ["iter"],
+      blockChipOf: "iter",
+    };
+    const iter: ContainerNode = {
+      kind: "iterate",
+      id: "iter",
+      label: "iter",
+      containerPath: [],
+      childIds: ["iter@block0"],
+      blockSpan: 2,
+    };
+    const { nodesById, containersById } = makeMaps([replicaNode, blockChip], [iter]);
+    const edge: GraphEdge = {
+      from: "src@->iter",
+      to: "iter",
+      auxKey: "key",
+      kind: "aux",
+    };
+    expect(visualEdgeTargetId(edge, nodesById, containersById)).toBe("iter");
+  });
 });

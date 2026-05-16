@@ -807,10 +807,16 @@ export const expandCollapsedIterates = (
   // shipped cipher nests iterates), and even hypothetical nested cases
   // resolve correctly because the inner iterate would have been hidden
   // by the outer's collapse before reaching this transform.
+  //
+  // Option C keeps the iterate container in place (with chips as its
+  // childIds), so neither `rootIds` nor `edges` get reassigned in the
+  // loop — only `containers` (rewriting the iterate's childIds) and
+  // `nodes` (appending chip nodes). The other two are const spread copies
+  // so the returned graph is a fresh object (input is never mutated).
   let nodes = [...graph.nodes];
   let containers = [...graph.containers];
-  let edges = [...graph.edges];
-  let rootIds = [...graph.rootIds];
+  const edges = [...graph.edges];
+  const rootIds = [...graph.rootIds];
 
   for (const iterate of targets) {
     const N = iterate.blockSpan ?? 0;
@@ -818,17 +824,22 @@ export const expandCollapsedIterates = (
     const visibleCount = N <= BLOCK_CHIP_CAP ? N : BLOCK_CHIP_CAP - 1;
     const includeEllipsis = N > BLOCK_CHIP_CAP;
 
-    // Build chip nodes. `stepType` is a sentinel — not registered. Renderer
-    // discriminates off `blockChipOf` for behavior, off `node.label` for
-    // display text. `containerPath` matches the iterate's so the chips
-    // sit at the iterate's old depth in the spec tree.
+    // Build chip nodes. `stepType` is a sentinel — not registered.
+    // Renderer discriminates off `blockChipOf` for behavior, off
+    // `node.label` for display text.
+    //
+    // Option C: chips' `containerPath` includes the iterate id (different
+    // from Option B's "siblings of the iterate" placement). Layout's
+    // iterate-kind branch reads `container.childIds` and recurses into
+    // each child; the chips sit inside the iterate's body box. The
+    // `isInsideIterate` leaf-render check picks them up via this path.
     const chipNodes: GraphNode[] = [];
     for (let i = 0; i < visibleCount; i++) {
       chipNodes.push({
         stepId: blockChipId(iterate.id, i),
         stepType: BLOCK_CHIP_STEP_TYPE,
         label: `block ${i + 1}`,
-        containerPath: iterate.containerPath,
+        containerPath: [...iterate.containerPath, iterate.id],
         blockChipOf: iterate.id,
       });
     }
@@ -838,56 +849,30 @@ export const expandCollapsedIterates = (
         stepType: BLOCK_CHIP_STEP_TYPE,
         // Hidden-block count = N minus visible non-ellipsis chips.
         label: `+${N - visibleCount} more blocks`,
-        containerPath: iterate.containerPath,
+        containerPath: [...iterate.containerPath, iterate.id],
         blockChipOf: iterate.id,
       });
     }
     const chipIds = chipNodes.map((c) => c.stepId);
 
-    // Splice chips into rootIds OR the parent container's childIds, in
-    // place of the iterate id. Iterates always live in exactly one place;
-    // the path search is unambiguous.
-    const rootIdx = rootIds.indexOf(iterate.id);
-    if (rootIdx >= 0) {
-      rootIds = [...rootIds.slice(0, rootIdx), ...chipIds, ...rootIds.slice(rootIdx + 1)];
-    } else {
-      containers = containers.map((c) => {
-        const idx = c.childIds.indexOf(iterate.id);
-        if (idx < 0) return c;
-        return {
-          ...c,
-          childIds: [...c.childIds.slice(0, idx), ...chipIds, ...c.childIds.slice(idx + 1)],
-        };
-      });
-    }
-
-    // Drop the iterate from `containers` — the chips fully replace it
-    // visually. Anything that walked containers expecting to find this id
-    // (e.g. a long-lived container reference) would now miss it; today's
-    // downstream consumers don't hold such references across the memo
-    // boundary, so this is safe.
-    containers = containers.filter((c) => c.id !== iterate.id);
-
-    // Fan edges touching the iterate to one edge per chip. Edges that
-    // don't touch the iterate pass through unchanged.
-    const newEdges: GraphEdge[] = [];
-    for (const e of edges) {
-      const fromIsIter = e.from === iterate.id;
-      const toIsIter = e.to === iterate.id;
-      if (!fromIsIter && !toIsIter) {
-        newEdges.push(e);
-        continue;
-      }
-      for (const chipId of chipIds) {
-        newEdges.push({
-          from: fromIsIter ? chipId : e.from,
-          to: toIsIter ? chipId : e.to,
-          auxKey: e.auxKey,
-          kind: e.kind,
-        });
-      }
-    }
-    edges = newEdges;
+    // Option C — keep the iterate in `containers` and set its childIds to
+    // the chip ids. `collapseGraph` cleared `childIds` to [] on the way
+    // in, so the iterate would otherwise lay out as the compact `×N`
+    // chip (the `childIds.length === 0` branch in `layoutNode`); rewriting
+    // childIds here switches it back to the full container-with-body
+    // layout. The existing header chevron stays — clicking it removes
+    // the iterate from `collapsedGroups` and lets the next pass through
+    // this transform short-circuit, revealing the real body.
+    //
+    // Edges touching the iterate are LEFT ALONE (not fanned to chips):
+    // the chips are a visual representation of "what runs inside,"
+    // not first-class participants in the dataflow. External arrows
+    // point to/from the iterate box — one logical step, one entry, one
+    // exit. Without this, every collapsed iterate would sprout N parallel
+    // arrows, drowning out the rest of the graph for non-trivial N.
+    containers = containers.map((c) =>
+      c.id === iterate.id ? { ...c, childIds: chipIds as readonly string[] } : c,
+    );
 
     nodes = [...nodes, ...chipNodes];
   }
@@ -961,6 +946,21 @@ export const replicateHighFanoutSources = (
   const hasAnyAlwaysOverride = Object.values(modesObj).some((m) => m === "always");
   if (threshold <= 0 && !hasAnyAlwaysOverride) return graph;
 
+  // Container ids — index up front so the per-source loop can no-op
+  // container sources without re-walking `graph.containers`. Containers
+  // (groups + iterates) are themselves visible decongestion devices;
+  // replicating one produces a chip near the consumer that duplicates
+  // the existing state-spine arrow AND overflows the chip (container
+  // labels are typically long, e.g. "ECB blocks (per-block AES)"). The
+  // user can still set a container to "always" in the panel — the toggle
+  // is preserved; this loop just silently skips it. Specific motivation:
+  // post-Option-C, a collapsed iterate stays in the graph as a source
+  // with one outgoing aux edge to its successor (e.g. `concat-blocks`),
+  // and toggling it "always" in the panel produced exactly the duplicate
+  // arrow + overflowing-chip the user reported.
+  const containerIds = new Set<string>();
+  for (const c of graph.containers) containerIds.add(c.id);
+
   // Count outgoing aux edges per source. State edges are excluded.
   const fanoutBySrc = new Map<string, number>();
   for (const e of graph.edges) {
@@ -970,6 +970,7 @@ export const replicateHighFanoutSources = (
 
   const highFanoutSrcs = new Set<string>();
   for (const [srcId, count] of fanoutBySrc) {
+    if (containerIds.has(srcId)) continue;
     const m = modesObj[srcId];
     if (m === "never") continue;
     if (m === "always") {
