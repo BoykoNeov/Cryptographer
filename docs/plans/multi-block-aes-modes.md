@@ -1,6 +1,10 @@
 # Multi-block AES with ECB / CBC / CTR
 
-**Status:** Phase 1 (loop primitive + AES-128 ECB) ✅ shipped May 2026 (commit `1e144c0`). Phase 2 (CBC + IV) ✅ shipped 2026-05-14 (commits `4a91462` chaining primitives, `e9cc510` CBC factory + dropdown, `46f7ccc` IV store + IvInput + document round-trip). Implementation deviated from this plan's CBC-specific step names (`xor-with-chain`, `store-chain`, …) in favor of generic primitives (`generic.iv-load@1`, `generic.xor-aux-into-state@1`, `generic.state-to-aux@1`) that compose into CBC and will reuse for OFB/CFB without rewrites; the decrypt chain-advance reuses the existing `generic.aux-copy@1`. Phases 3 (CTR + keystream) and 4 (AES-192/256 generalization) remain on the plan; the runtime + spec-store + cipher-mode-dropdown infrastructure they need is already in place.
+**Status:** Phase 1 (loop primitive + AES-128 ECB) ✅ shipped May 2026 (commit `1e144c0`). Phase 2 (CBC + IV) ✅ shipped 2026-05-14 (commits `4a91462` chaining primitives, `e9cc510` CBC factory + dropdown, `46f7ccc` IV store + IvInput + document round-trip). Implementation deviated from this plan's CBC-specific step names (`xor-with-chain`, `store-chain`, …) in favor of generic primitives (`generic.iv-load@1`, `generic.xor-aux-into-state@1`, `generic.state-to-aux@1`) that compose into CBC and will reuse for OFB/CFB without rewrites; the decrypt chain-advance reuses the existing `generic.aux-copy@1`.
+
+> **Phases 3 + 4 superseded.** This plan's Phase 3 (CTR — `build-counter-block@1`, `xor-with-plaintext-block@1`, `truncate-to-length@1`) and Phase 4 (AES-192/256 ECB+CBC generalization) are folded into the **universal cipher-shape plan** at `~/.claude/plans/silly-brewing-sutton.md`. That plan's Phase 2 = AES-192/256 ECB+CBC; its Phase 4 = AES CTR. The infrastructure rationale (mode dropdown, padding overlay, runtime iterate) carries forward unchanged. The CTR step-type designs and KAT references below remain authoritative — they slot directly into the universal plan's Phase 4. Pick up that plan, not this one, when starting CTR or 192/256 work.
+>
+> Queue position per memory: AFTER port-spreading at consumer head, Slice 7b, the Feistel plan, and ideally the first Feistel cipher implementation.
 
 ## Context
 

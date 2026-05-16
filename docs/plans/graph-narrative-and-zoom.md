@@ -586,7 +586,14 @@ expected. With state replicas in the lift row, the `endpointLabels`
 memo (Slice 1's pill anchors) and the iterate's first-non-replica-
 child anchor (Slice 2's fix) may need their "skip past replicas"
 walks revisited. Retune in a follow-up commit if the test pass
-flags shifted positions.
+flags shifted positions. **Option C interaction (2026-05-16):**
+when a state-fan terminates on a collapsed iterate that has been
+expanded into a chip row with a box-with-header wrapper, the two
+existing chip-row detection sites (`layoutRoot` anchor +
+`visualEdgeTargetId` retarget — see `feedback_collapsed_iterate_design.md`
+memory) may need a third sibling to route fanned state edges onto
+individual chips rather than the iterate's box header. Discover
+during implementation; not worth pre-designing.
 
 ---
 
