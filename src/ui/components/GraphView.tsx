@@ -3231,6 +3231,23 @@ const WarningGlyph = (props: {
  * "duplicating the final round auto-mirrors into a nonexistent
  * counterpart" half-state.
  */
+/**
+ * No flash-on-click for this affordance — intentional. We explored
+ * adding a green-pulse parallel to the HTML ActionButton primitive
+ * (signal-driven `flashing` class), but the click triggers a spec
+ * mutation that reconstructs the containers array, and Solid's
+ * `<For>` rebuilds child instances when the array references change
+ * (we don't carry a stable keyBy here). The new DuplicateGlyph
+ * instance starts with `flashing=false`, so the user would see no
+ * pulse regardless of how the flash was timed. Reordering
+ * `triggerFlash()` before `onDuplicate()` did not help — Solid's
+ * batched-update flush still replaces the DOM before the next paint.
+ *
+ * Crucially, the click's RESULT is intensely visible: a brand-new
+ * round group appears mid-canvas (every subsequent round renumbers,
+ * the matching decrypt round auto-mirrors). No supplementary "click
+ * registered" signal is needed for this affordance.
+ */
 const DuplicateGlyph = (props: {
   x: number;
   y: number;

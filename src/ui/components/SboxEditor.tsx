@@ -21,6 +21,7 @@
 
 import { AES_SBOX } from "@/ciphers/aes-constants";
 import { For, Show, createMemo } from "solid-js";
+import { ActionButton } from "./ActionButton";
 import { ByteCellInput } from "./ByteCellInput";
 import {
   collisionGroupsByIndex,
@@ -75,9 +76,18 @@ export const SboxEditor = (props: Props) => {
             {redundantCount()} duplicate {redundantCount() === 1 ? "value" : "values"}, the table is
             not invertible.
           </span>
-          <button class="sbox-warning-repair" type="button" onClick={handleRepair}>
+          {/* Wrapped in ActionButton so the click flashes the button
+              green + announces "Repaired S-box to a permutation" to
+              assistive tech. The repair changes the table without
+              showing a status message anywhere else, so this feedback
+              is the only confirmation a user gets. */}
+          <ActionButton
+            class="sbox-warning-repair"
+            onAction={handleRepair}
+            feedbackLabel="Repaired S-box to a permutation"
+          >
             Repair to permutation
-          </button>
+          </ActionButton>
         </div>
       </Show>
 

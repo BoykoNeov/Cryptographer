@@ -23,6 +23,7 @@ import {
   useMode,
   useSpec,
 } from "../stores/spec";
+import { ActionButton } from "./ActionButton";
 import { ByteCellInput } from "./ByteCellInput";
 import { MatrixEditor } from "./MatrixEditor";
 import { SboxEditor } from "./SboxEditor";
@@ -1045,22 +1046,27 @@ const SyncInverseRow = (props: { currentSbox: readonly number[]; stepType: strin
 
   return (
     <div class="sync-inverse-row">
-      <button
-        type="button"
+      {/* Wrapped in ActionButton: clicking writes to every counterpart-
+          mode step at once, but the user is viewing the active mode's
+          panel — without the flash they have no visible signal that
+          anything happened. feedbackLabel names the operation so screen
+          readers also hear what propagated. */}
+      <ActionButton
         disabled={!isBijective()}
         title={
           isBijective()
             ? `Compute the inverse of this S-box and write it to every ${props.stepType} step in the ${counterpartLabel()} slot (overwrites any per-step customizations on that side).`
             : disabledTooltip
         }
-        onClick={() => {
+        feedbackLabel={`Synced inverse S-box to ${counterpartLabel()} mode`}
+        onAction={() => {
           if (!isBijective()) return; // belt-and-braces; button is disabled too
           const inverted = invertSbox(props.currentSbox);
           syncSboxInverseToCounterpart(props.stepType, inverted);
         }}
       >
         {buttonLabel()}
-      </button>
+      </ActionButton>
     </div>
   );
 };
@@ -1073,10 +1079,14 @@ const ApplyAllRow = (props: {
 }) => (
   <Show when={props.matchingCount > 1}>
     <div class="apply-all-row">
-      <button
-        type="button"
+      {/* The mutation writes to (matchingCount - 1) steps the user
+          isn't currently viewing. Without the flash, only the active
+          step shows a "modified" state changing, so the user can't see
+          that the propagation actually happened. */}
+      <ActionButton
         title={`Copy this step's ${props.label} to all ${props.matchingCount} steps of type ${props.stepType}`}
-        onClick={() => {
+        feedbackLabel={`Applied ${props.label} to all ${props.matchingCount} matching steps`}
+        onAction={() => {
           // The update fn replaces every matching step's params with this
           // step's exact current params. That's stronger than just copying
           // one field, but for AES our generic step types have only one
@@ -1085,7 +1095,7 @@ const ApplyAllRow = (props: {
         }}
       >
         Apply this {props.label} to all {props.matchingCount} matching steps
-      </button>
+      </ActionButton>
     </div>
   </Show>
 );

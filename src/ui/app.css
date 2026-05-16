@@ -6,6 +6,8 @@
   --muted: #7c828c;
   --accent: #6ea8ff;
   --accent-soft: #2a3852;
+  --accent-success: #4ade80;
+  --accent-success-strong: #16a34a;
   --border: #2a2f39;
   --changed: #f6c177;
   --changed-bg: #3a2d10;
@@ -2910,4 +2912,77 @@ button:disabled {
     [data-state-shape="matrix4x4-bytes"]
   ) {
   opacity: 0.35;
+}
+
+/* ─── ActionButton flash-on-click primitive ──────────────────────────────
+   Every <ActionButton> in the codebase carries the `.action-button` class.
+   On click, the component temporarily adds `.flashing` for ~900ms; the
+   rules below paint the button green + append a "✓" glyph so the user
+   sees their click registered. Layered with high enough class-specificity
+   (two classes) to win over per-call-site rules like
+   `.sync-inverse-row button` (one class + one element = lower specificity).
+
+   Why green: signals "constructive completion" universally, regardless of
+   whether the button's resting color is red (.sbox-warning-repair) or
+   blue (most other accents). The contrast carries the "yes, I clicked"
+   message even for users who skim peripherally.
+
+   prefers-reduced-motion: drop the transition (still apply the color
+   change, just instantaneously). The flash itself is informational, not
+   decorative — we don't suppress it entirely.
+
+   The `:disabled` selector is kept stronger so a flashing animation
+   never overrides a button that was disabled mid-flash by some external
+   reactive change. */
+.action-button.flashing {
+  background: var(--accent-success);
+  border-color: var(--accent-success-strong);
+  color: #0f1115;
+  transition: background-color 200ms ease-out, border-color 200ms ease-out, color 200ms ease-out;
+}
+
+.action-button.flashing::after {
+  content: " ✓";
+  margin-left: 4px;
+  font-weight: 700;
+}
+
+.action-button:disabled {
+  /* Defensive: never paint a flash over a disabled button. */
+  background: var(--bg-elev);
+  border-color: var(--border);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .action-button.flashing {
+    transition: none;
+  }
+}
+
+/* No `.graph-duplicate-button.flashing` rule — the SVG round-duplicate
+   glyph deliberately does NOT flash on click (see the comment on
+   `DuplicateGlyph` in `GraphView.tsx`). Solid's `<For>` rebuilds the
+   child instance when the spec mutates, so any signal-driven flash on
+   the source `<g>` would be lost before the next paint. The click's
+   RESULT — a new round group appearing mid-canvas — is the visible
+   feedback. The HTML ActionButton primitive is the right call site
+   for buttons whose effect is OFF-screen; this one is on-screen. */
+
+/* Standard "visually hidden" recipe (clip-path the safest cross-browser
+   form): present in the accessibility tree, removed from layout and
+   visual rendering. Used by ActionButton's aria-live announcer span so
+   the click-confirmation reaches screen readers without affecting the
+   page's visual layout (no shift, no extra space taken). */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
