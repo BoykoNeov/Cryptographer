@@ -17,7 +17,9 @@ gives the user a visible signal that the click registered.
 ## Status
 
 **Planned 2026-05-16.** Slices 1 + 2 shipped 2026-05-16
-(commits `4fb1b6f`, `d35bd96`). Slices 3, 4, 5 still pending.
+(commits `4fb1b6f`, `d35bd96`). Slices 3 + 4 shipped 2026-05-16
+(this commit batch). Slice 5 (MixColumns inverse-sync — needs GF(2^8)
+4×4 Gauss-Jordan inverter) still pending.
 
 The architectural foundation already exists from prior work:
 

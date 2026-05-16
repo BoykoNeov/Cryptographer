@@ -357,6 +357,44 @@ export const syncSboxInverseToCounterpartByIndex = (
 };
 
 /**
+ * Cross-slot **identity** (copy) mirror — the value-mirror counterpart for
+ * step types whose encrypt-side and decrypt-side params hold the **same**
+ * value, not algebraic inverses.
+ *
+ * Today's user: AES key expansion (`aes.key-expansion@1` / `@2`). Per
+ * FIPS-197 §5.2, the key schedule uses the FORWARD S-box even when
+ * decrypting — the inverse cipher consumes the same round keys in
+ * reverse order without re-deriving them with the inverse S-box. So a
+ * user who edits the key-expansion S-box on the encrypt side will want
+ * to propagate that **same** table to decrypt's key-expansion (not its
+ * inverse — that's the SubBytes case, which `syncSboxInverseToCounterpart`
+ * handles).
+ *
+ * Sibling to `syncSboxInverseToCounterpart`: same broadcast-to-every-
+ * matching-step-in-counterpart shape, same "active slot untouched"
+ * invariant, same direction inference from `useMode()`. The single
+ * semantic difference is `sbox: [...sboxValue]` instead of
+ * `sbox: [...invertedSbox]` — no algebraic inversion. The button
+ * surfacing this mutator names the operation "Copy …" (not "Sync
+ * inverse …") so users read the asymmetry between the two cases before
+ * clicking.
+ *
+ * Caller passes the table verbatim — DO NOT compose `invertSbox` here or
+ * on the caller side; that would re-introduce the AES-SubBytes semantic
+ * by accident.
+ */
+export const syncSboxCopyToCounterpart = (stepType: string, sboxValue: readonly number[]): void => {
+  const current = specs();
+  const counterpartMode: Mode = mode() === "encrypt" ? "decrypt" : "encrypt";
+  const updated = updateAllStepsByType(current[counterpartMode], stepType, (params) => ({
+    ...(params as Record<string, Json>),
+    sbox: [...sboxValue],
+  }));
+  if (updated === current[counterpartMode]) return; // reference-equal → no-op
+  setSpecs({ ...current, [counterpartMode]: updated } as SpecsByMode);
+};
+
+/**
  * Insert a brand-new step leaf into the live spec (Slice 8 of the 2D
  * editor plan). The palette + GraphView drop handler call this with a
  * `stepType` registered in the registry and an anchor that says WHERE

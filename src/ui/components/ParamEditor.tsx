@@ -19,6 +19,7 @@ import {
   editAllStepsByType,
   editStepParams,
   removeStepFromSpec,
+  syncSboxCopyToCounterpart,
   syncSboxInverseToCounterpart,
   syncSboxInverseToCounterpartByIndex,
   useMode,
@@ -355,6 +356,12 @@ const KeyExpansionBlock = (props: BlockProps) => {
       <details class="param-section param-collapsible">
         <summary class="param-section-label">S-box (256 entries — click to expand)</summary>
         <SboxEditor sbox={sbox()} onChange={(next) => writeParams({ sbox: next })} />
+        {/* Sits INSIDE the <details> so the Copy affordance lives next to
+            the table it acts on. Outside the collapsible, the button would
+            orphan when the section is collapsed (the default state) and
+            the user would have no visible link between editing the table
+            and the cross-mode operation. */}
+        <CopySboxRow currentSbox={sbox()} stepType={props.step.type} />
       </details>
 
       <ApplyAllRow
@@ -767,6 +774,9 @@ const SerpentSyncInverseRow = (props: {
         disabled={!props.isBijective}
         title={props.isBijective ? enabledTooltip() : disabledTooltip}
         feedbackLabel={`Synced inverse S_${props.sboxIndex} to ${counterpartLabel()} mode`}
+        // Surface mirror class for the cross-mode-mirror-coverage test —
+        // same rationale as the AES SyncInverseRow above.
+        data-mirror-class="inverse"
         onAction={() => {
           if (!props.isBijective) return; // belt-and-braces; button is disabled
           const inverted = invertSbox(props.currentSbox);
@@ -1173,10 +1183,66 @@ const SyncInverseRow = (props: { currentSbox: readonly number[]; stepType: strin
             : disabledTooltip
         }
         feedbackLabel={`Synced inverse S-box to ${counterpartLabel()} mode`}
+        // Surface the architectural class (inverse-mirror) on the DOM so
+        // the cross-mode-mirror-coverage enumeration test can assert "a
+        // button with the right mirror class is present for every entry
+        // in the registry." Keeps the principle mechanically enforced
+        // rather than only documented in prose.
+        data-mirror-class="inverse"
         onAction={() => {
           if (!isBijective()) return; // belt-and-braces; button is disabled too
           const inverted = invertSbox(props.currentSbox);
           syncSboxInverseToCounterpart(props.stepType, inverted);
+        }}
+      >
+        {buttonLabel()}
+      </ActionButton>
+    </div>
+  );
+};
+
+// ─── Copy-S-box-to-counterpart button ────────────────────────────────────
+//
+// Class-1 (identity) cross-mode mirror affordance. Used today by
+// `aes.key-expansion@1` / `@2`: FIPS-197 §5.2 says the key schedule uses
+// the FORWARD S-box even when decrypting, so encrypt and decrypt hold the
+// SAME table — not algebraic inverses. The button label deliberately says
+// "Copy" (not "Sync inverse") so the user reads the asymmetry between
+// SubBytes (inverse-mirrored, separate button) and KeyExpansion (identity-
+// mirrored) before clicking.
+//
+// Why we gate on bijection even though a copy is mathematically valid for
+// a non-permutation: behavioral coherence with the inverse rows. If half
+// the S-box rows lock when broken and the other half don't, users will
+// learn a noisier mental model. Repair-first is the single rule for
+// every S-box mirror row.
+const CopySboxRow = (props: { currentSbox: readonly number[]; stepType: string }) => {
+  const mode = useMode();
+  const isBijective = (): boolean => countRedundantDuplicates(props.currentSbox) === 0;
+  const counterpartLabel = (): string => (mode() === "encrypt" ? "decrypt" : "encrypt");
+  const buttonLabel = (): string => `Copy S-box to ${counterpartLabel()}`;
+  const disabledTooltip =
+    "Repair to a permutation first — copying a non-permutation still copies, but the table is unlikely to be useful and we gate every S-box mirror row the same way for consistency.";
+  const enabledTooltip = (): string =>
+    `Copy this S-box verbatim to every ${props.stepType} step in the ${counterpartLabel()} slot. FIPS-197 §5.2: key expansion uses the FORWARD S-box even when decrypting, so the same table appears on both sides (this overwrites any per-step customizations on that side).`;
+
+  return (
+    <div class="copy-sbox-row">
+      <ActionButton
+        disabled={!isBijective()}
+        title={isBijective() ? enabledTooltip() : disabledTooltip}
+        feedbackLabel={`Copied S-box to ${counterpartLabel()} mode`}
+        // Surfaced for the cross-mode-mirror-coverage test (Slice 4). The
+        // `data-mirror-class="identity"` value tells the enumeration test
+        // this row implements the class-1 (same-value) mirror, vs. the
+        // class-2 (algebraic-inverse) rows above.
+        data-mirror-class="identity"
+        onAction={() => {
+          if (!isBijective()) return; // belt-and-braces; button is disabled
+          // Pass the current table verbatim — NO `invertSbox` composition
+          // here. The whole point of the Copy verb is to mirror the
+          // forward S-box exactly, per FIPS-197 §5.2.
+          syncSboxCopyToCounterpart(props.stepType, props.currentSbox);
         }}
       >
         {buttonLabel()}

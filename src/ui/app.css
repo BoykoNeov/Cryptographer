@@ -895,6 +895,45 @@ button:disabled {
   cursor: not-allowed;
 }
 
+/* Class-1 (identity-mirror) Copy row. Visually identical to the
+   `.sync-inverse-row` above — we want the two propagation surfaces to
+   read as siblings, not as different vocabulary. The class names diverge
+   only so test selectors can target one without the other (the
+   enumeration test in tests/cross-mode-mirror-coverage.test.tsx walks
+   per-step-type and per-class).
+
+   Lives inside the key-expansion <details>, so most of the time it's
+   invisible — surfaces only when the user expands the S-box to edit it,
+   which is the same context that makes the Copy semantic meaningful. */
+.copy-sbox-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.copy-sbox-row button {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  padding: 4px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.copy-sbox-row button:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.copy-sbox-row button:disabled {
+  background: var(--bg-elev);
+  border-color: var(--border);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
 /* ─── Byte cell input (used by S-box and matrix editors) ──────────────── */
 /* Widths sized for the worst-case display string of the current format:
    hex=2 chars, decimal=3 chars, ASCII=up to 4 (`\xNN`). The MatrixEditor
