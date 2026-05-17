@@ -5,6 +5,7 @@
 
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import type { CipherGraph } from "@/core/graph";
 import { deriveAuxGraph, replicateHighFanoutSources } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex } from "@/core/state/bytes";
@@ -374,6 +375,117 @@ describe("replicateHighFanoutSources", () => {
       // Threshold 50 above key-expansion's fanout of 11, no overrides.
       const r = replicateHighFanoutSources(g, 50);
       expect(r).toBe(g);
+    });
+  });
+
+  // ─── Replica scope-aware layout (narrow, 2026-05-17) ──────────────────────
+  //
+  // The structural side of the fix: `replicateHighFanoutSources` flags
+  // the spine-replica (the single (source, spineSuccessor) replica per
+  // fully-replicated source) with `isSpineReplica: true` AND places it
+  // in SOURCE's parent scope rather than CONSUMER's parent scope.
+  //
+  // Layout-side consequences (spine-replica flows at source's old slot,
+  // not lifted) are pinned by `tests/graph-view-replica-gutter.test.ts`.
+
+  describe("replica-scope-aware layout (narrow) — spine-replica flag + scope", () => {
+    it("flags exactly one replica per fully-replicated source as isSpineReplica", () => {
+      // AES-128 single-block: key-expansion is fully replicated (11
+      // consumers above threshold). Exactly ONE of its replicas is the
+      // spine-replica (= the one targeting the spineSuccessor —
+      // `initial.add-round-key`, the first state-target). The other 10
+      // are aux-fan-out replicas without the flag.
+      const g = aes128Graph();
+      const r = replicateHighFanoutSources(g, 6);
+      const keReplicas = r.nodes.filter((n) => n.replicaOf === "key-expansion");
+      expect(keReplicas).toHaveLength(11);
+      const spineReplicas = keReplicas.filter((n) => n.isSpineReplica === true);
+      expect(spineReplicas).toHaveLength(1);
+      expect(spineReplicas[0]?.stepId).toBe("key-expansion@->initial.add-round-key");
+    });
+
+    it("spine-replica's containerPath matches the SOURCE's parent scope (not consumer's)", () => {
+      // For AES-128 single-block, both source (key-expansion) and
+      // spineSuccessor (initial.add-round-key) live at root, so their
+      // containerPaths coincide → the spine-replica's containerPath is
+      // also `[]`. The interesting structural case is the scope-aware
+      // synthetic below where source and consumer differ.
+      const g = aes128Graph();
+      const r = replicateHighFanoutSources(g, 6);
+      const spine = r.nodes.find((n) => n.stepId === "key-expansion@->initial.add-round-key");
+      const source = g.nodes.find((n) => n.stepId === "key-expansion");
+      if (!spine || !source) throw new Error("missing node");
+      expect(spine.containerPath).toEqual(source.containerPath);
+      expect(spine.isSpineReplica).toBe(true);
+    });
+
+    it("scope-aware synthetic: source in different parent than consumer — spine-replica lives in SOURCE's parent", () => {
+      // Synthetic fixture pinning the structural contract: when the
+      // spineSuccessor lives in a DIFFERENT parent than the source, the
+      // spine-replica's containerPath matches SOURCE's. Aux-fan-out
+      // replicas continue to use the CONSUMER's containerPath.
+      //
+      // Source `src` is at root. Three outgoing edges:
+      //   - state edge to `state-target` (also root) → spineSuccessor.
+      //   - aux edge to `inner` (inside `wrap` group, different parent).
+      //   - aux edge to `state-target` (just to push fanout ≥ 2 so the
+      //     source qualifies under the default threshold rules).
+      const g: CipherGraph = {
+        nodes: [
+          { stepId: "src", stepType: "test.src", label: "src", containerPath: [] },
+          {
+            stepId: "state-target",
+            stepType: "test.consumer",
+            label: "state-target",
+            containerPath: [],
+          },
+          {
+            stepId: "inner",
+            stepType: "test.consumer",
+            label: "inner",
+            containerPath: ["wrap"],
+          },
+        ],
+        containers: [
+          {
+            kind: "group",
+            id: "wrap",
+            label: "wrap",
+            containerPath: [],
+            childIds: ["inner"],
+          },
+        ],
+        edges: [
+          { from: "src", to: "state-target", auxKey: "state", kind: "state" },
+          { from: "src", to: "state-target", auxKey: "aux-1", kind: "aux" },
+          { from: "src", to: "inner", auxKey: "aux-2", kind: "aux" },
+        ],
+        rootIds: ["src", "state-target", "wrap"],
+      };
+      const r = replicateHighFanoutSources(g, 1);
+
+      const spine = r.nodes.find((n) => n.stepId === "src@->state-target");
+      const auxFanOut = r.nodes.find((n) => n.stepId === "src@->inner");
+      if (!spine || !auxFanOut) {
+        throw new Error(`missing replica node: spine=${!!spine} auxFanOut=${!!auxFanOut}`);
+      }
+
+      // Spine-replica: containerPath matches SOURCE's (root, []).
+      expect(spine.isSpineReplica).toBe(true);
+      expect(spine.containerPath).toEqual([]);
+
+      // Aux-fan-out: containerPath matches CONSUMER's (["wrap"]).
+      expect(auxFanOut.isSpineReplica).toBeUndefined();
+      expect(auxFanOut.containerPath).toEqual(["wrap"]);
+
+      // Insertion: spine-replica lands in rootIds (source's parent),
+      // before state-target. Aux-fan-out lands in wrap.childIds, before
+      // inner.
+      expect(r.rootIds).toContain("src@->state-target");
+      expect(r.rootIds).not.toContain("src@->inner");
+      const wrap = r.containers.find((c) => c.id === "wrap");
+      expect(wrap?.childIds).toContain("src@->inner");
+      expect(wrap?.childIds).not.toContain("src@->state-target");
     });
   });
 });

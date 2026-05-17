@@ -196,20 +196,26 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
     expect(replicaX).toBeLessThan(xs[0] ?? Number.POSITIVE_INFINITY);
   });
 
-  it("a root-level replica sits ABOVE its consumer at root (orthogonal to the horizontal spine)", () => {
-    // AES-128's `key-expansion → initial.add-round-key` state-spine arrow
-    // runs along the root row. The replica `key-expansion@->initial.add-
-    // round-key` is the spine entry for incoming state — it sits ABOVE
-    // its consumer, sharing the consumer's x, so the input pill's arrow
-    // drops in vertically and the spine continues rightward from the
-    // consumer.
+  it("the spine-replica flows on the spine row at the source's old slot (narrow scope-aware fix, 2026-05-17)", () => {
+    // The replica `key-expansion@->initial.add-round-key` is the SPINE
+    // replica for AES-128 — `initial.add-round-key` is the spineSuccessor
+    // (first state-target of key-expansion). The replica takes over the
+    // removed source's position on the canvas main row.
     //
-    // Slice 7b update (2026-05-17): the original `key-expansion` chip is
-    // no longer in the graph when replicated — it's been fully replaced
-    // by replicas. The earlier "no overlap with source" check is moot
-    // because there's no source to collide with. The assertion this test
-    // now pins is the simpler invariant the layout still needs to honor:
-    // the replica lives above its consumer at the same x.
+    // **Pre-fix behavior (asserted by the old version of this test):**
+    // ALL replicas of a single source — including the spine-replica —
+    // lifted above their consumer at the same x. With key-expansion=
+    // always + collapsed iterate, all replicas piled into a single
+    // column at the canvas top, which the user read as "one replica
+    // column" even though spine and aux are different dataflows.
+    //
+    // **Post-fix behavior:** the spine-replica flows on the spine row
+    // (same y as its consumer) at the source's old slot. Aux fan-out
+    // replicas (for OTHER consumers) keep stacking above their
+    // consumer — that part of the layout is unchanged. See
+    // `tests/replicate-fanout.test.ts` for the structural assertions
+    // and `GraphView.tsx::buildReplicaPlacement` for the `isReplica`
+    // exclusion that drives this layout difference.
     const g = aes128ReplicatedGraph();
     const { boxes } = layoutRoot(
       g,
@@ -219,10 +225,11 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
     const consumerBox = boxes.get("initial.add-round-key");
     const replicaBox = boxes.get("key-expansion@->initial.add-round-key");
     if (!consumerBox || !replicaBox) throw new Error("missing root box");
-    // Replica is above the consumer (smaller y) and shares x (a clean
-    // short vertical aux arrow).
-    expect(replicaBox.y).toBeLessThan(consumerBox.y);
-    expect(replicaBox.x).toBe(consumerBox.x);
+    // Spine-replica flows at the spine row (same y as consumer).
+    expect(replicaBox.y).toBe(consumerBox.y);
+    // Spine-replica sits at SOURCE's old slot — strictly left of the
+    // consumer, where `key-expansion` was before Slice 7b removal.
+    expect(replicaBox.x).toBeLessThan(consumerBox.x);
     // Slice 7b: original is gone from the graph — no overlap to worry about.
     expect(boxes.get("key-expansion")).toBeUndefined();
   });
@@ -653,15 +660,23 @@ describe("GraphView — aux-only root leaves are lifted above the spine row", ()
     expect(initial.y).toBe(60);
   });
 
-  it("composes the replica-lift row with the consumer's spine row", () => {
-    // Slice 7b update (2026-05-17): pre-7b this test pinned the "two-layer
-    // lift" interaction between the aux-only key-expansion (lifted alone)
-    // and its replicas (lifted above their consumers). After 7b, a fully-
-    // replicated source is REMOVED from the graph — it can't simultaneously
-    // be the aux-only root, so the "both layers compose" scenario is
-    // structurally impossible. What remains worth pinning is the simpler
-    // post-7b invariant: the replica sits at CANVAS_MARGIN (the lift row),
-    // and the consumer's spine row sits LEAF_H + REPLICA_LIFT_GAP below it.
+  it("spine-replica + its consumer both flow on the spine row at CANVAS_MARGIN (no lift)", () => {
+    // Replica-scope-aware fix (2026-05-17, narrow): the spine-replica
+    // `key-expansion@->initial.add-round-key` takes over the removed
+    // source's spec slot. It flows AS A REGULAR LEAF on the spine row
+    // at source's old position, instead of being lifted above its
+    // consumer like an aux-fan-out replica.
+    //
+    // Pre-fix behavior (pinned by the previous version of this test):
+    // the spine-replica was at CANVAS_MARGIN (lifted row), the consumer
+    // a LEAF_H + REPLICA_LIFT_GAP below. That two-row layout no longer
+    // applies for single-source fixtures whose only replica IS the
+    // spine-replica — both sit on the same row now.
+    //
+    // For a fixture that ALSO has aux-fan-out replicas (none at the
+    // root level in AES-128 single-block — they live inside round
+    // groups), the two-row layout still applies for those — see
+    // `tests/graph-view-replica-placement.test.ts` for that case.
     const g = aes128ReplicatedGraph();
     const consts = layoutConstantsFor("normal");
     const empty = new Map<string, { x: number; y: number }>();
@@ -670,10 +685,18 @@ describe("GraphView — aux-only root leaves are lifted above the spine row", ()
     const replica = boxes.get("key-expansion@->initial.add-round-key");
     const initial = boxes.get("initial.add-round-key");
     if (!replica || !initial) throw new Error("missing key boxes");
-    // Lifted row at CANVAS_MARGIN = 60 (the replica's row).
+    // Spine-replica flows at CANVAS_MARGIN — the spine row, no lift.
     expect(replica.y).toBe(60);
-    // Spine row sits below by exactly LEAF_H + REPLICA_LIFT_GAP.
-    expect(initial.y).toBe(60 + consts.LEAF_H + consts.REPLICA_LIFT_GAP);
+    // Consumer also sits at the spine row — both at the same y.
+    expect(initial.y).toBe(60);
+    // Spine-replica sits LEFT of consumer at source's old slot — the
+    // splice-before-spineSuccessor logic puts it where key-expansion
+    // used to be in rootIds, so layout flows source's-old-slot →
+    // consumer left-to-right.
+    expect(replica.x).toBeLessThan(initial.x);
+    // Strictly: separated by at least one column-width + FLOW_GAP
+    // (no overlap), so the spine arrow has visible length.
+    expect(initial.x - replica.x).toBeGreaterThanOrEqual(consts.LEAF_W);
     // Original key-expansion is gone (Slice 7b removal).
     expect(boxes.get("key-expansion")).toBeUndefined();
   });
@@ -699,10 +722,21 @@ describe("GraphView — aux-only root leaves are lifted above the spine row", ()
  * read," matching the runtime's read order.
  */
 describe("GraphView — root replica with iterate consumer anchors above first body child", () => {
-  it("places `compute-block-count` replica above ecb-blocks's first body child, not the iterate's left edge", () => {
-    // Force replication of compute-block-count via the per-source override.
-    // Its natural fanout is 1 (the iterate is its only consumer), so the
-    // threshold-only path doesn't trigger replication — `modes` does.
+  it("the spine-replica with iterate consumer flows at source's old root slot (NOT above the iterate)", () => {
+    // Replica-scope-aware fix (2026-05-17, narrow). `compute-block-count`
+    // has only one outgoing edge — the aux edge to `ecb-blocks` (which
+    // doubles as the fallback spineSuccessor target, since `ecb-blocks`
+    // is an iterate and `inferStateEdges`'s iterate-boundary rule
+    // suppresses any state edge to it). So `compute-block-count@->
+    // ecb-blocks` IS the spine-replica.
+    //
+    // Pre-fix behavior (asserted by the old version of this test):
+    // the replica was lifted above the iterate body's first child via
+    // the Slice-2 anchor. That anchor logic STILL EXISTS in `layoutRoot`
+    // — it just no longer applies to the spine-replica, which under
+    // the narrow fix flows at source's old root slot like any other
+    // root leaf. Aux-fan-out replicas with iterate consumers still
+    // use the Slice-2 anchor — see the sibling test below.
     const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex(ECB_PT_1_BLOCK)),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(ECB_KEY)]]),
@@ -714,29 +748,116 @@ describe("GraphView — root replica with iterate consumer anchors above first b
     const empty = new Map<string, { x: number; y: number }>();
     const { boxes } = layoutRoot(replicated, empty, consts);
 
-    // The replica id is `${source}@->${consumer}`. Consumer is the iterate
-    // container `ecb-blocks`.
     const replicaId = "compute-block-count@->ecb-blocks";
     const replicaBox = boxes.get(replicaId);
     const iterateBox = boxes.get("ecb-blocks");
-    const firstChildBox = boxes.get("initial.add-round-key");
+    const splitBlocksBox = boxes.get("split-blocks");
+    if (!replicaBox || !iterateBox || !splitBlocksBox) {
+      throw new Error(
+        `missing box: replica=${!!replicaBox} iterate=${!!iterateBox} splitBlocks=${!!splitBlocksBox}`,
+      );
+    }
+
+    // Headline: spine-replica is on the same row as its sibling root
+    // leaves (the spine row at CANVAS_MARGIN = 60), NOT lifted above
+    // the iterate. Pre-fix the assertion was `replicaBox.y < iterateBox.y`;
+    // post-fix it's the inverse — same row.
+    expect(replicaBox.y).toBe(iterateBox.y);
+    expect(replicaBox.y).toBe(splitBlocksBox.y);
+
+    // The replica sits at source's old slot in rootIds: pre-replication
+    // root was `[key-expansion, split-blocks, compute-block-count,
+    // ecb-blocks, concat-blocks]`. After replication compute-block-count
+    // is removed and the spine-replica replaces it, so layout flow puts
+    // it RIGHT of split-blocks and LEFT of the iterate.
+    expect(replicaBox.x).toBeGreaterThan(splitBlocksBox.x);
+    expect(replicaBox.x).toBeLessThan(iterateBox.x);
+
+    // Original compute-block-count is gone (Slice 7b removal — pre-fix
+    // this was already true; reasserted here for clarity).
+    expect(boxes.get("compute-block-count")).toBeUndefined();
+  });
+
+  it("an aux-fan-out replica with iterate consumer still anchors above first body child (Slice-2 invariant)", () => {
+    // Slice-2 anchor logic still applies to aux-fan-out replicas — the
+    // narrow scope-aware fix only changes spine-replica placement.
+    // Synthetic fixture mirrors the Slice-2 case but ensures the replica
+    // is NOT the spine entry: `src` emits a STATE edge to a non-iterate
+    // leaf (`spine-target`, the spineSuccessor) AND an AUX edge to an
+    // iterate (`iter`). After replication:
+    //   - `src@->spine-target` is the spine-replica (flows at source's
+    //     old slot, NOT tested here).
+    //   - `src@->iter` is an AUX-FAN-OUT replica with iterate consumer
+    //     → THIS one tests the Slice-2 anchor.
+    //
+    // The replica uses `replicateHighFanoutSources` so the spine flag
+    // is set correctly by the production code path (not hand-marked
+    // in the fixture).
+    const firstBodyId = "first-body";
+    const iterId = "iter";
+    const spineTargetId = "spine-target";
+    const srcId = "src";
+    const g: CipherGraph = {
+      nodes: [
+        { stepId: srcId, stepType: "test.source", label: srcId, containerPath: [] },
+        {
+          stepId: spineTargetId,
+          stepType: "test.consumer",
+          label: spineTargetId,
+          containerPath: [],
+        },
+        {
+          stepId: firstBodyId,
+          stepType: "test.consumer",
+          label: firstBodyId,
+          containerPath: [iterId],
+        },
+      ],
+      containers: [
+        {
+          kind: "iterate",
+          id: iterId,
+          label: iterId,
+          containerPath: [],
+          childIds: [firstBodyId],
+          blockSpan: 1,
+        },
+      ],
+      edges: [
+        // State edge from src → spine-target makes spine-target the
+        // spineSuccessor. The replica `src@->spine-target` flags
+        // isSpineReplica=true.
+        { from: srcId, to: spineTargetId, auxKey: "state", kind: "state" },
+        // Two aux edges (need fanout ≥ 2 for replication eligibility):
+        // one to the iterate, one to a throwaway leaf so total outgoing
+        // count is ≥ 2. The iterate-target one tests Slice-2 anchor.
+        { from: srcId, to: spineTargetId, auxKey: "aux-1", kind: "aux" },
+        { from: srcId, to: iterId, auxKey: "aux-2", kind: "aux" },
+      ],
+      rootIds: [srcId, spineTargetId, iterId],
+    };
+    // threshold=1 → src qualifies (fanout=2 > 1).
+    const replicated = replicateHighFanoutSources(g, 1);
+    const consts = layoutConstantsFor("normal");
+    const empty = new Map<string, { x: number; y: number }>();
+    const { boxes } = layoutRoot(replicated, empty, consts);
+
+    const auxReplicaId = "src@->iter";
+    const replicaBox = boxes.get(auxReplicaId);
+    const iterateBox = boxes.get(iterId);
+    const firstChildBox = boxes.get(firstBodyId);
     if (!replicaBox || !iterateBox || !firstChildBox) {
       throw new Error(
         `missing box: replica=${!!replicaBox} iterate=${!!iterateBox} firstChild=${!!firstChildBox}`,
       );
     }
 
-    // Slice-2 headline: replica.x equals the first body child's x — NOT
-    // the iterate's left edge. Half-leaf tolerance to absorb the future
-    // CONTAINER_PAD vs LEAF_W ratio shifts without re-baselining.
+    // Slice-2 anchor: aux-fan-out replica.x === first body child's x.
+    // Half-leaf tolerance for future CONTAINER_PAD/LEAF_W ratio shifts.
     expect(Math.abs(replicaBox.x - firstChildBox.x)).toBeLessThanOrEqual(consts.LEAF_W / 2);
-
-    // And explicitly: the replica is shifted RIGHT of the iterate's left
-    // edge (since first child sits at iterate.x + CONTAINER_PAD). This
-    // pins the regression — pre-fix, replicaBox.x === iterateBox.x.
+    // Replica is shifted RIGHT of the iterate's own left edge.
     expect(replicaBox.x).toBeGreaterThan(iterateBox.x);
-
-    // The replica still lives above its consumer (orthogonal to the spine).
+    // Replica is LIFTED above its consumer (the original Slice-2 invariant).
     expect(replicaBox.y).toBeLessThan(iterateBox.y);
   });
 

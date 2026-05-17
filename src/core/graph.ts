@@ -129,6 +129,41 @@ export type GraphNode = {
    * "expand the iterate" action restores the original chip.
    */
   readonly blockChipOf?: string;
+  /**
+   * Spine-replica marker (replica-scope-aware-layout fix, 2026-05-17).
+   * Set ONLY on the (source, spineSuccessor) replica produced by
+   * `replicateHighFanoutSources` — i.e. the single replica per
+   * fully-replicated source whose outgoing edge carries the state
+   * spine through the now-removed source. False/undefined on every
+   * non-replica node AND on aux-fan-out replicas (`${src}@->${c}` for
+   * c ≠ spineSuccessor).
+   *
+   * **Why a flag separate from `replicaOf`**: the spine-replica's
+   * pedagogical role is "stand-in for the removed source on the main
+   * canvas row" — it should NOT be lifted above its consumer like an
+   * aux-fan-out replica. The flag tells `GraphView`'s layout passes
+   * to FLOW the chip as a regular leaf at the source's old spec slot
+   * instead of stacking it in the lift gutter above the consumer.
+   * `replicaOf` stays set so the renderer still applies replica
+   * styling (chip background, hover-source highlight) and click
+   * routes through to the source's trace frame.
+   *
+   * Slice 7b context: every fully-replicated source produces both a
+   * spine-replica AND zero-or-more aux-fan-out replicas. Pre-fix all
+   * replicas of a source clumped into a single column above the
+   * leftmost shared consumer row (e.g. AES-128 ECB + key-expansion
+   * always + collapsed iterate showed `key-expansion@->split-blocks`
+   * (state-spine) clumped with `key-expansion@->{chip0..N}` (aux
+   * fan-out) at the canvas top); this flag pulls the spine-replica
+   * out of that column so the eye reads spine and aux as distinct
+   * dataflows.
+   *
+   * Narrow scope by design: only ONE replica per source carries the
+   * flag (the spineSuccessor's replica). Aux-fan-out replicas keep
+   * their current consumer-anchored placement — the user explicitly
+   * picked the NARROW interpretation when offered narrow-vs-broad.
+   */
+  readonly isSpineReplica?: true;
 };
 
 export type ContainerNode = {
@@ -1290,18 +1325,43 @@ export const replicateHighFanoutSources = (
       const consumerPath = consumerNode?.containerPath ?? consumerContainer?.containerPath ?? [];
       const sourceNode = nodeById.get(edge.from);
       const sourceContainer = containerById.get(edge.from);
+      const sourcePath = sourceNode?.containerPath ?? sourceContainer?.containerPath ?? [];
       const stepType = sourceNode?.stepType ?? sourceContainer?.kind ?? "replica";
       const label = sourceNode?.label ?? sourceContainer?.label ?? edge.from;
+      // Replica-scope-aware layout (2026-05-17, narrow interpretation):
+      // the (source, spineSuccessor) replica is the SPINE replica — it
+      // takes over the source's role on the canvas main row. It lives
+      // in SOURCE's parent scope (not consumer's) and gets a flag the
+      // layout passes consume to skip the lift-above-consumer treatment.
+      //
+      // For shipped ciphers source's parent === spineSuccessor's parent
+      // (AES-128 / AES-128-ECB / Speck / Serpent all qualify), so the
+      // splice-before-edge.to logic below still lands the spine replica
+      // at source's old spec slot. A hypothetical future cipher where
+      // source.parent ≠ spineSuccessor.parent (e.g. state edge from a
+      // root step into a step inside a group) would need an explicit
+      // "insert at source's last-known slot" insertion key — defer
+      // until something demands it.
+      const isSpine = spineSuccessorOf.get(edge.from) === edge.to;
+      const replicaContainerPath = isSpine ? sourcePath : consumerPath;
       replicas.set(rId, {
         stepId: rId,
         stepType,
         label,
-        containerPath: consumerPath,
+        containerPath: replicaContainerPath,
         replicaOf: edge.from,
+        ...(isSpine ? { isSpineReplica: true as const } : {}),
       });
       // Schedule the replica for insertion next to its ORIGINAL consumer.
+      // For the spine replica that's also where the source used to sit
+      // (source.parent === spineSuccessor.parent for shipped ciphers).
+      // For aux-fan-out replicas it's the consumer's parent (today's
+      // behavior, unchanged).
+      const insertContainerPath = isSpine ? sourcePath : consumerPath;
       const parentKey =
-        consumerPath.length > 0 ? (consumerPath[consumerPath.length - 1] ?? "") : "";
+        insertContainerPath.length > 0
+          ? (insertContainerPath[insertContainerPath.length - 1] ?? "")
+          : "";
       const map = ensureInsertionMap(parentKey);
       const list = map.get(edge.to) ?? [];
       list.push(rId);

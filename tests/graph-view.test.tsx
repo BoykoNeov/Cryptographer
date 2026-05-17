@@ -34,6 +34,7 @@ import {
   useFrameIndex,
 } from "@/ui/stores/trace";
 import { __resetViewModeForTests } from "@/ui/stores/view-mode";
+import { __resetReplicationForTests, setReplicationEnabled } from "@/ui/stores/view-replication";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -58,6 +59,7 @@ const resetAll = (): void => {
   __resetCipherForTests();
   __resetHistoryForTests();
   __resetPaddingForTests();
+  __resetReplicationForTests();
   __resetSpecForTests();
   __resetTraceForTests();
   __resetViewModeForTests();
@@ -187,6 +189,69 @@ describe("GraphView — component-level (AES-128 fixture)", () => {
     expect(container.querySelectorAll(".graph-edge-state").length).toBe(41);
     // Both endpoint pills rendered.
     expect(container.querySelectorAll(".graph-endpoint-rect").length).toBe(2);
+  });
+
+  it("replica-scope-aware: spine-replica renders ON the spine row, not lifted (production path)", () => {
+    // Production-path verification for the narrow scope-aware fix
+    // (2026-05-17). The pure-layout tests in
+    // `tests/graph-view-replica-gutter.test.ts` exercise `layoutRoot`
+    // directly with `auxOnlyRootIds` defaulting to an empty set — they
+    // bypass the `auxOnlyRootIds` classifier entirely.
+    //
+    // Advisor flagged a plausible production-only regression: the spine-
+    // replica inherits the source's `stepType` (`aes.key-expansion@1`),
+    // and `auxOnlyRootIds` classifies root leaves by `registry.getDoc(
+    // stepType)?.shapeContract.input === "any"`. If the memo walked the
+    // post-replication graph, the spine-replica would qualify as aux-only
+    // → lifted → fix becomes a no-op.
+    //
+    // It does NOT walk the post-replication graph — it walks `spec().
+    // steps`, which never contains a replica id (replicas have the
+    // synthetic `${src}@->${dst}` infix). So the classifier emits
+    // `"key-expansion"` (the source's id) into `auxOnlyRootIds`, NOT
+    // `"key-expansion@->initial.add-round-key"`. When `layoutRoot` then
+    // checks `auxOnlyRootIds.has(id)` against the post-replication
+    // rootIds, the spine-replica's synthetic id misses → not lifted.
+    //
+    // This test pins that property empirically: render through the full
+    // GraphView component with replication enabled and assert the
+    // spine-replica's rendered `y` equals its consumer's `y` — i.e.
+    // both sit on the same row, which is the user-visible signal that
+    // the fix is live in production.
+    seedAes128Trace();
+    // Replication default is OFF (`view-replication.ts::loadInitial`);
+    // enable explicitly so the replica chip actually renders.
+    setReplicationEnabled(true);
+    const { container } = render(() => <GraphView />);
+
+    const spineLeaf = container.querySelector(
+      '[data-testid="graph-leaf-key-expansion@->initial.add-round-key"] .graph-leaf-rect',
+    );
+    const consumerLeaf = container.querySelector(
+      '[data-testid="graph-leaf-initial.add-round-key"] .graph-leaf-rect',
+    );
+    if (!spineLeaf || !consumerLeaf) {
+      throw new Error(
+        `missing rendered leaf: spineReplica=${!!spineLeaf} consumer=${!!consumerLeaf}`,
+      );
+    }
+
+    const spineY = Number.parseFloat(spineLeaf.getAttribute("y") ?? "NaN");
+    const consumerY = Number.parseFloat(consumerLeaf.getAttribute("y") ?? "NaN");
+    expect(Number.isFinite(spineY)).toBe(true);
+    expect(Number.isFinite(consumerY)).toBe(true);
+
+    // Spine-replica is on the SAME row as its consumer (the spine row).
+    // Pre-fix this difference would be LEAF_H + REPLICA_LIFT_GAP (~48 px
+    // at normal density); post-fix it's 0.
+    expect(spineY).toBe(consumerY);
+
+    // And explicitly: the spine-replica is left of its consumer (at
+    // source's old spec slot). Without this, "same y" could be satisfied
+    // by both being lifted to the same lifted row.
+    const spineX = Number.parseFloat(spineLeaf.getAttribute("x") ?? "NaN");
+    const consumerX = Number.parseFloat(consumerLeaf.getAttribute("x") ?? "NaN");
+    expect(spineX).toBeLessThan(consumerX);
   });
 
   it("replication fan-out doesn't add a third inbound arrow at initial.add-round-key", () => {

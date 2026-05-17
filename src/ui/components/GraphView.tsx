@@ -541,22 +541,57 @@ const EMPTY_PORT_ASSIGNMENT: ConsumerPortAssignment = {
  *
  * **Comparator** (sorting incoming edges at one consumer):
  *
- *   1. `rowOfSource.get(canonicalSource)` ascending — replicas before
+ *   1. **(Optional, when `sourceXOf` is supplied)** Visual source x of
+ *      the canonical source, ascending — leftmost source on the canvas
+ *      lands in the leftmost slot, so an arrow from a chip sitting at
+ *      x=200 lands left of an arrow from a chip at x=350. Eliminates
+ *      the visual-crossing case where two non-replica sources (both
+ *      with `rowOfSource` undefined → Infinity) fall through to an
+ *      alphabetical `edge.from` tiebreak that has no relation to their
+ *      on-canvas position. Surfaced 2026-05-17 on AES-128 ECB: with
+ *      `split-blocks` LEFT of `compute-block-count` in the spec, the
+ *      latter (alphabetically 'c' < 's') won slot 0 and its arrow
+ *      crossed split-blocks' arrow at the iterate's top edge. Only
+ *      applies when sourceXOf returns DEFINED values for BOTH edges
+ *      AND the values differ — replica edges whose canonical source
+ *      was removed from the graph (Slice 7b) return undefined and
+ *      fall through to the row-based ordering below, preserving the
+ *      "stack closest to consumer = row 0 = leftmost slot" property
+ *      for replicas.
+ *   2. `rowOfSource.get(canonicalSource)` ascending — replicas before
  *      non-replicas (non-replicas get Infinity, so they sort last);
  *      among replicas, lower global row first.
- *   2. `edge.from` ascending — deterministic tiebreak when two edges
+ *   3. `edge.from` ascending — deterministic tiebreak when two edges
  *      share a canonical source (rare: only two replicas pointing at
  *      one consumer, which `replicateHighFanoutSources` doesn't
  *      produce today, but the comparator stays robust).
- *   3. `edge.auxKey` ascending — tiebreak for state-vs-aux from the
+ *   4. `edge.auxKey` ascending — tiebreak for state-vs-aux from the
  *      same from→to.
- *   4. `edge.kind` ascending — final lexicographic tiebreak ("aux" <
- *      "state"). Degenerate; only matters when 1+2+3 all tie.
+ *   5. `edge.kind` ascending — final lexicographic tiebreak ("aux" <
+ *      "state"). Degenerate; only matters when 1+2+3+4 all tie.
  */
 const buildConsumerPortAssignment = (
   graph: CipherGraph,
   replicas: ReplicaPlacement,
   visualTargetOf?: (e: GraphEdge) => string,
+  /**
+   * Optional callback returning the canonical source's visual x on the
+   * canvas. The renderer wires it from a baseline-layout memo
+   * (`layoutRoot(graph(), pinned, consts, auxOnlyRoots)` with no
+   * port-assignment input, so the call is non-recursive — slot ordering
+   * depends on layout but layout's `slotXShift` only consults the
+   * post-sort assignment). Returning `undefined` for a source that
+   * isn't in the layout (e.g. the canonical source of a replica edge,
+   * since `replicateHighFanoutSources` removes original sources from
+   * the node set) makes the comparator fall through to today's
+   * row-based ordering — replicas keep their row-stable slot pattern.
+   *
+   * Tests omit the callback to assert the pre-2026-05-17 baseline
+   * ordering; the field stays optional so synthetic-graph fixtures
+   * (no boxes available) still drive `buildConsumerPortAssignment`
+   * end-to-end.
+   */
+  sourceXOf?: (canonicalSource: string) => number | undefined,
 ): ConsumerPortAssignment => {
   if (graph.edges.length === 0) return EMPTY_PORT_ASSIGNMENT;
   const canonicalSource = (e: GraphEdge): string => replicas.sourceOf.get(e.from) ?? e.from;
@@ -564,6 +599,10 @@ const buildConsumerPortAssignment = (
     const cs = canonicalSource(e);
     const row = replicas.rowOfSource.get(cs);
     return row !== undefined ? row : Number.POSITIVE_INFINITY;
+  };
+  const xOf = (e: GraphEdge): number | undefined => {
+    if (sourceXOf === undefined) return undefined;
+    return sourceXOf(canonicalSource(e));
   };
   const targetKey = visualTargetOf ?? ((e: GraphEdge) => e.to);
   // Bucket every edge under its VISUAL consumer (see doc above for why
@@ -591,6 +630,15 @@ const buildConsumerPortAssignment = (
     if (edges.length <= 1) continue;
     bucketSizeByTarget.set(consumer, edges.length);
     edges.sort((a, b) => {
+      // Primary: visual source x (when supplied for BOTH edges). Lets the
+      // leftmost source on the canvas claim the leftmost slot. Replica
+      // edges whose canonical source was removed from the graph
+      // (Slice 7b) return undefined here → fall through to row.
+      const xa = xOf(a);
+      const xb = xOf(b);
+      if (xa !== undefined && xb !== undefined && xa !== xb) {
+        return xa < xb ? -1 : 1;
+      }
       const ra = rowOf(a);
       const rb = rowOf(b);
       if (ra !== rb) return ra < rb ? -1 : 1;
@@ -713,8 +761,29 @@ const buildReplicaPlacement = (graph: CipherGraph): ReplicaPlacement => {
   // Single deterministic walk: encounter order over graph.nodes is the
   // order deriveAuxGraph emitted (spec-walk order). Each new source id
   // claims the next row index — first source seen → row 0.
+  //
+  // Spine-replicas (2026-05-17 replica-scope-aware fix) are EXCLUDED
+  // from `isReplica` so the lift-above-consumer placement loops in
+  // `layoutNode` / `layoutRoot` flow them as regular leaves at the
+  // source's old spec slot. They still carry `replicaOf` for click-
+  // through-to-source-trace and for replica chip styling at the JSX
+  // boundary — `isReplica` is the LAYOUT-MACHINERY set, narrower than
+  // "all nodes with `replicaOf` set."
+  //
+  // Aux-fan-out replicas (every other `${src}@->${consumer}`) still
+  // enter `isReplica` and get stacked above their consumer as before.
+  // `rowOfSource` is keyed by SOURCE id (not replica id), so the row
+  // assignment still works correctly when the spine-replica is the
+  // first encountered replica of its source — the next aux-fan-out
+  // replica of the same source assigns the row, and all subsequent
+  // aux replicas of that source share it. The pathological case
+  // "source has ONLY a spine-replica, no aux fan-out" leaves
+  // `rowOfSource` without an entry — fine, because nothing queries
+  // it (the spine-replica isn't in `isReplica`, so the placement loops
+  // never look up its row).
   for (const n of graph.nodes) {
     if (n.replicaOf === undefined) continue;
+    if (n.isSpineReplica) continue;
     isReplica.add(n.stepId);
     sourceOf.set(n.stepId, n.replicaOf);
     if (!rowOfSource.has(n.replicaOf)) {
@@ -2049,6 +2118,24 @@ export const GraphView = () => {
    * `containersById` because Solid's createMemo runs its body eagerly
    * on construction (TDZ would fire if those memos weren't defined yet).
    */
+  // Baseline layout — same `layoutRoot` call as the final layout below
+  // but WITHOUT a `portAssignment`, so no single-replica chip x-shift
+  // is applied. Used solely as a source-x lookup for the port
+  // assignment's leftmost-source-wins comparator (2026-05-17 fix for
+  // non-replica fan-IN crossings — see `buildConsumerPortAssignment`
+  // doc-block).
+  //
+  // **No feedback loop**: the final `layout` reads `portAssignment`,
+  // which reads `baseLayout`, which is computed WITHOUT
+  // `portAssignment` — so the chain terminates after one extra
+  // `layoutRoot` call per reactive tick. The single-replica x-shift
+  // only nudges a chip by one `portGap` (~13 px at normal density);
+  // that's not enough to flip the relative left/right order of two
+  // sources whose natural-position x values are determined by the
+  // spec walk, so re-running port-assignment against the post-shift
+  // layout would produce the same slot ordering. We don't iterate.
+  const baseLayout = createMemo(() => layoutRoot(graph(), pinnedMap(), consts(), auxOnlyRootIds()));
+
   const portAssignment = createMemo(() => {
     // Port-assignment is now keyed off BUNDLES (one slot per bundle) so an
     // 11-auxKey bundle counts as one incoming edge at its consumer
@@ -2066,8 +2153,17 @@ export const GraphView = () => {
       edges: bg.bundles.map((b) => b.representativeEdge),
       rootIds: bg.rootIds,
     };
-    return buildConsumerPortAssignment(synthGraph, replicaPlacement(), (e) =>
-      visualEdgeTargetId(e, nodesById(), containersById()),
+    const boxes = baseLayout().boxes;
+    return buildConsumerPortAssignment(
+      synthGraph,
+      replicaPlacement(),
+      (e) => visualEdgeTargetId(e, nodesById(), containersById()),
+      // Source-x lookup for the leftmost-source-wins comparator. Returns
+      // undefined for sources not in the layout (replica canonical
+      // sources after Slice 7b — they're removed from `nodes`), which
+      // makes the comparator fall through to row-based ordering for
+      // those edges.
+      (canonicalSource) => boxes.get(canonicalSource)?.x,
     );
   });
 

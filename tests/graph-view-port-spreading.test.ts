@@ -563,6 +563,111 @@ describe("port-spreading — visual-target bucketing (chip-head + iterate-retarg
     expect(bOffset).toBe(+5);
   });
 
+  // ─── Regression: leftmost-source-wins (2026-05-17 followup) ──────────────
+  //
+  // User-reported on AES-128 ECB manual smoke: `split-blocks` sits LEFT of
+  // `compute-block-count` on the canvas (spec order), but `split-blocks`'
+  // aux arrow into `ecb-blocks` landed on a RIGHT-of-compute-block-count
+  // slot at the iterate's top edge, forcing visual crossing.
+  //
+  // Root cause: both `split-blocks` and `compute-block-count` are
+  // non-replicas, so `rowOfSource.get(canonicalSource)` returns undefined
+  // (= Infinity) for both. The row-tiebreak collapses → fallback to
+  // alphabetical `edge.from`: 'c' < 's', so compute-block-count wins
+  // slot 0 (leftmost). Off-canvas-order ordering.
+  //
+  // Fix: an optional `sourceXOf` callback that the renderer wires from a
+  // baseline-layout memo (no port-assignment input). When sourceXOf
+  // returns defined x for BOTH edges, comparator uses x ascending as
+  // PRIMARY key. Otherwise it falls through to row → from → auxKey →
+  // kind (existing chain), so replica-only and synthetic-graph tests
+  // stay byte-identical.
+
+  it("sourceXOf primary key: leftmost source on canvas claims the leftmost slot", () => {
+    // Two non-replica sources A (x=200) and B (x=350) both fanning to c1.
+    // Without sourceXOf, both rowOf return Infinity → tiebreak by
+    // edge.from alphabetical → "A->c1" < "B->c1" → A slot 0, B slot 1.
+    // That HAPPENS to match x order here by coincidence (lexical and
+    // x-order agree). To prove sourceXOf overrides alphabetical, name
+    // them so alphabetical INVERTS x order: source "z-split" at x=200
+    // (left), source "a-count" at x=350 (right). Without sourceXOf:
+    // a-count wins slot 0 (alphabetical). With sourceXOf: z-split
+    // wins slot 0 (leftmost on canvas).
+    const g = buildSyntheticGraph({
+      nodes: [consumerNode("c1"), consumerNode("z-split"), consumerNode("a-count")],
+      edges: [auxEdge("z-split", "c1"), auxEdge("a-count", "c1")],
+      rootIds: ["z-split", "a-count", "c1"],
+    });
+    const replicas = buildReplicaPlacement(g);
+
+    // Without sourceXOf: alphabetical tiebreak → a-count first (slot 0).
+    const portsNoX = buildConsumerPortAssignment(g, replicas);
+    const [zEdge, aEdge] = g.edges;
+    if (!zEdge || !aEdge) throw new Error("missing edges");
+    expect(consumerPortOffset(zEdge, portsNoX, 10)).toBe(+5); // slot 1
+    expect(consumerPortOffset(aEdge, portsNoX, 10)).toBe(-5); // slot 0
+
+    // With sourceXOf: z-split at x=200 < a-count at x=350 → z-split
+    // claims slot 0 (leftmost). Visual order matches canvas order.
+    const sourceXOf = (cs: string): number | undefined => {
+      if (cs === "z-split") return 200;
+      if (cs === "a-count") return 350;
+      return undefined;
+    };
+    const portsWithX = buildConsumerPortAssignment(g, replicas, undefined, sourceXOf);
+    expect(consumerPortOffset(zEdge, portsWithX, 10)).toBe(-5); // slot 0
+    expect(consumerPortOffset(aEdge, portsWithX, 10)).toBe(+5); // slot 1
+  });
+
+  it("sourceXOf returning undefined for one edge falls through to row ordering", () => {
+    // Mixed case: one non-replica edge (sourceXOf defined for its
+    // canonical source) and one replica edge (canonical source removed
+    // from layout → sourceXOf returns undefined). Comparator must NOT
+    // sort on x in this case (one side undefined → fall through).
+    // Pre-fix row-based behavior survives: replica (row 0) < non-replica
+    // (Infinity) → replica slot 0, non-replica slot 1.
+    const g = buildSyntheticGraph({
+      nodes: [consumerNode("c1"), consumerNode("prev"), replicaNode("A->c1", "A")],
+      edges: [{ from: "prev", to: "c1", auxKey: "state", kind: "state" }, auxEdge("A->c1", "c1")],
+      rootIds: ["prev", "A->c1", "c1"],
+    });
+    const replicas = buildReplicaPlacement(g);
+    // sourceXOf returns defined for "prev" (real leaf in layout) and
+    // undefined for "A" (canonical source of replica, was removed by
+    // Slice 7b → not in layout boxes).
+    const sourceXOf = (cs: string): number | undefined => {
+      if (cs === "prev") return 100;
+      return undefined; // "A" → undefined
+    };
+    const ports = buildConsumerPortAssignment(g, replicas, undefined, sourceXOf);
+    const [spineEdge, replicaEdge] = g.edges;
+    if (!spineEdge || !replicaEdge) throw new Error("missing edges");
+    // Row-based fallback: replica A (row 0) slot 0 → -5; prev (Infinity)
+    // slot 1 → +5. Same as pre-fix behavior — sourceXOf doesn't disturb
+    // the replica-on-top-of-consumer pattern when one side is undefined.
+    expect(consumerPortOffset(replicaEdge, ports, 10)).toBe(-5);
+    expect(consumerPortOffset(spineEdge, ports, 10)).toBe(+5);
+  });
+
+  it("sourceXOf with equal x values falls through to row ordering (degenerate tiebreak)", () => {
+    // Two sources at the SAME x (rare but possible after pinning).
+    // `xa !== xb` guard short-circuits; comparator falls through to row.
+    // Pins that the x-sort is strict (no NaN comparison surprises).
+    const g = buildSyntheticGraph({
+      nodes: [consumerNode("c1"), consumerNode("src-a"), consumerNode("src-b")],
+      edges: [auxEdge("src-a", "c1"), auxEdge("src-b", "c1")],
+      rootIds: ["src-a", "src-b", "c1"],
+    });
+    const replicas = buildReplicaPlacement(g);
+    const sourceXOf = (): number => 200; // both at same x
+    const ports = buildConsumerPortAssignment(g, replicas, undefined, sourceXOf);
+    const [eA, eB] = g.edges;
+    if (!eA || !eB) throw new Error("missing edges");
+    // Both Infinity rows + equal x → alphabetical edge.from → src-a slot 0.
+    expect(consumerPortOffset(eA, ports, 10)).toBe(-5);
+    expect(consumerPortOffset(eB, ports, 10)).toBe(+5);
+  });
+
   it("default (no visualTargetOf) keeps the identity bucketing — same edges land in DIFFERENT buckets", () => {
     // Same graph, but no callback → bucketing falls back to raw edge.to.
     // Confirms backward compat: existing tests with synthetic graphs and
