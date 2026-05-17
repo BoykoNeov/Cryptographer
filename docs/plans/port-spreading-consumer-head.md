@@ -2,8 +2,12 @@
 
 **Status:** Helper-level fix SHIPPED 2026-05-16 + visual-target bucketing
 followup SHIPPED 2026-05-17 (user-confirmed visually on AES-128 ECB
-expanded fixture with all-aux-always). Mechanisms 1+2 + the
-expanded-iterate retargeting collision are all closed. Render-site
+expanded fixture with all-aux-always) + horizontal-regime extension
+SHIPPED 2026-05-18 (commit `8604236`, AES-128 ECB collapsed-blocks
+context). Mechanisms 1+2 + the expanded-iterate retargeting collision
+are all closed, and port-spreading now reaches all four edges of the
+consumer (top + bottom via the vertical regime's shared `tx`-shift,
+left + right via the new `targetYOffset` prop on `EdgePath`). Render-site
 mechanism 3 (off-chip clamp against chip-vs-leaf width) deferred — not
 visible on the smoke fixture. A SEPARATE visual issue surfaced during
 smoke: 11 individual arrows from a `key-expansion@->iterate` replica in
@@ -12,6 +16,40 @@ port-spreading bug — captured as a high-priority follow-up: see
 [[project_arrow_bundling_priority]]. **Position in time:** unblocks
 Slice 7b → Feistel-plan → first Feistel cipher → universal cipher-shape
 plan, modulo the arrow-bundling discussion in the next session.
+
+## 2026-05-18 horizontal-regime extension
+
+User reported on AES-128 ECB with collapsed ECB blocks: blue arrows
+hitting the TOP of the collapsed block aligned cleanly via the
+existing vertical-regime `targetXOffset`, but arrows entering from the
+LEFT or RIGHT side of the block all converged at `toCy` (the consumer's
+vertical midpoint) because the horizontal regime hard-coded
+`ty = toCy`. Bottom-edge was already covered by the vertical regime's
+shared x-shift (computed before the `downward` branch picks `tEdge`),
+so only left/right was the real gap.
+
+Fix:
+- New `EdgePath.targetYOffset` prop, applied only in the horizontal
+  regime, clamped to `to.h / 2 − 4` (mirrors the existing x-clamp).
+- Call site computes `targetYOffset` from `consumerPortOffset(edge,
+  portAssignment(), portGap)` — **height-aware** portGap
+  `Math.max(4, Math.round(LEAF_H / 4)) ≈ 7 px`. Reusing the vertical
+  regime's `LEAF_W / 10 ≈ 13 px` would exceed `LEAF_H / 2 = 14` and pin
+  against the clamp on leaf-shaped consumers (LEAF_H = 28). Fixed (not
+  scaled to actual `to.h`) by user choice for predictability across
+  consumers; tall chip-row containers still get more spread room
+  implicitly through the `to.h`-derived clamp.
+- Slot ordering inherits the existing `ConsumerPortAssignment`
+  comparator (row-first). Slot 0 (lowest source row) lands at the TOP
+  of the consumer's left edge — same comparator the user already
+  approved for top-edge spread. If side-entries on some future canvas
+  produce tangles that the top-edge case doesn't, that's a separate
+  y-ordering refinement, not a port-spreading bug.
+- No new tests: `consumerPortOffset` is already pinned by 16 tests in
+  `tests/graph-view-port-spreading.test.ts`; the horizontal-regime
+  change just consumes the same value on the y-axis through a small,
+  direct branch in `EdgePath`. Suite at 1140 tests; bundle 109.58 KB
+  gzipped (+0.07 KB).
 
 ## Context
 
