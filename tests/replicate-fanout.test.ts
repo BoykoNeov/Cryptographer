@@ -37,11 +37,13 @@ describe("replicateHighFanoutSources", () => {
     expect(replicateHighFanoutSources(g, 50)).toBe(g);
   });
 
-  it("replicates key-expansion (11 roundKey edges) when threshold = 6", () => {
+  it("replicates key-expansion (11 unique consumers) when threshold = 6", () => {
     const g = aes128Graph();
     const r = replicateHighFanoutSources(g, 6);
 
-    // Count nodes that look like replicas of key-expansion.
+    // 11 unique (source, consumer) pairs — the state edge from
+    // key-expansion to initial.add-round-key shares its replica with
+    // the corresponding aux edge (roundKey.0 to the same consumer).
     const replicas = r.nodes.filter((n) => n.replicaOf === "key-expansion");
     expect(replicas.length).toBe(11);
     // Each replica inherits the source's stepType + label.
@@ -49,15 +51,16 @@ describe("replicateHighFanoutSources", () => {
       expect(rep.stepType).toBe("aes.key-expansion@1");
       expect(rep.label).toBe("key-expansion");
     }
-    // Every aux edge that used to come FROM `key-expansion` now comes
-    // from a replica — original source has no outgoing aux edges left.
-    const remainingFromSource = r.edges.filter(
-      (e) => e.kind === "aux" && e.from === "key-expansion",
-    );
+    // Slice 7b — every outgoing edge (aux AND state) is rerouted; the
+    // original `key-expansion` is fully replicated and removed from the
+    // graph. Linear-list sidebar click-to-scrub continues working via
+    // the trace (not via this graph), and replica chips carry
+    // `replicaOf` so click-to-scrub on a replica still reaches the
+    // source frame.
+    const remainingFromSource = r.edges.filter((e) => e.from === "key-expansion");
     expect(remainingFromSource.length).toBe(0);
-    // Original key-expansion node stays in the graph (linear-list click
-    // still works through it).
-    expect(r.nodes.find((n) => n.stepId === "key-expansion")).toBeDefined();
+    expect(r.nodes.find((n) => n.stepId === "key-expansion")).toBeUndefined();
+    expect(r.rootIds).not.toContain("key-expansion");
   });
 
   it('mode "always" replicates a low-fanout source that auto would skip', () => {
@@ -177,5 +180,200 @@ describe("replicateHighFanoutSources", () => {
     expect(edges).toHaveLength(1);
     expect(edges[0]?.from).toBe("ecb-blocks");
     expect(edges[0]?.to).toBe("concat-blocks");
+  });
+
+  // ─── Slice 7b: state-edge replication + source removal ─────────────────
+
+  describe("Slice 7b — state edges fan through replicas", () => {
+    it("replicates the source's state-out alongside its aux edges", () => {
+      const g = aes128Graph();
+      const r = replicateHighFanoutSources(g, 6);
+
+      // The state edge `key-expansion → initial.add-round-key` (single-block
+      // AES, no iterate suppression of the spine) must now flow from a
+      // replica too. Same consumer's aux replica is reused.
+      const stateFromRep = r.edges.find(
+        (e) => e.kind === "state" && e.to === "initial.add-round-key",
+      );
+      expect(stateFromRep).toBeDefined();
+      expect(stateFromRep?.from).toBe("key-expansion@->initial.add-round-key");
+    });
+
+    it("spine successor falls back to first aux consumer when state-out is suppressed", () => {
+      // Synthetic fixture mirroring the post-suppression `compute-block-count`
+      // shape: a source with NO outgoing state edges (the spine `→ iterate`
+      // edge was suppressed by `inferStateEdges`) but exactly one outgoing
+      // aux edge to the iterate.
+      const g = {
+        nodes: [
+          { stepId: "split-blocks", stepType: "sb", label: "split-blocks", containerPath: [] },
+          {
+            stepId: "compute-block-count",
+            stepType: "cbc",
+            label: "compute-block-count",
+            containerPath: [],
+          },
+        ],
+        containers: [
+          {
+            kind: "iterate" as const,
+            id: "ecb-blocks",
+            label: "ECB blocks",
+            containerPath: [],
+            childIds: [],
+            blockSpan: 2,
+          },
+        ],
+        edges: [
+          // Spine: split-blocks → compute-block-count (preserved).
+          {
+            from: "split-blocks",
+            to: "compute-block-count",
+            auxKey: "state",
+            kind: "state" as const,
+          },
+          // The state edge `compute-block-count → ecb-blocks` is ABSENT —
+          // suppressed by inferStateEdges' iterate-boundary rule.
+          // Aux: compute-block-count writes blockCount, the iterate reads.
+          {
+            from: "compute-block-count",
+            to: "ecb-blocks",
+            auxKey: "blockCount",
+            kind: "aux" as const,
+          },
+        ],
+        rootIds: ["split-blocks", "compute-block-count", "ecb-blocks"],
+      };
+
+      const r = replicateHighFanoutSources(g, 0, { "compute-block-count": "always" });
+
+      // One replica created: compute-block-count@->ecb-blocks. Fallback
+      // (option b) picked it as the spine successor when no state-out exists.
+      const replicas = r.nodes.filter((n) => n.replicaOf === "compute-block-count");
+      expect(replicas).toHaveLength(1);
+      expect(replicas[0]?.stepId).toBe("compute-block-count@->ecb-blocks");
+
+      // Original compute-block-count removed from nodes + rootIds.
+      expect(r.nodes.find((n) => n.stepId === "compute-block-count")).toBeUndefined();
+      expect(r.rootIds).not.toContain("compute-block-count");
+
+      // Incoming spine edge (`split-blocks → compute-block-count`) redirected
+      // to the replica — keeps spine continuity across the removed source.
+      const incoming = r.edges.find((e) => e.kind === "state" && e.from === "split-blocks");
+      expect(incoming?.to).toBe("compute-block-count@->ecb-blocks");
+    });
+
+    it("incoming state edge to a fully-replicated source redirects to first-replica", () => {
+      // Synthetic fixture: two leaves with a state spine + aux fanout
+      // making the second one eligible for replication. The first leaf's
+      // state-out should redirect to the second leaf's first replica.
+      const g = {
+        nodes: [
+          { stepId: "A", stepType: "ts", label: "A", containerPath: [] },
+          { stepId: "B", stepType: "ts", label: "B", containerPath: [] },
+          { stepId: "C1", stepType: "ts", label: "C1", containerPath: [] },
+          { stepId: "C2", stepType: "ts", label: "C2", containerPath: [] },
+        ],
+        containers: [],
+        edges: [
+          // Spine: A → B → C1 (C1 happens to be B's first state-output).
+          { from: "A", to: "B", auxKey: "state", kind: "state" as const },
+          { from: "B", to: "C1", auxKey: "state", kind: "state" as const },
+          // Aux fanout from B (forces it to qualify; not strictly needed
+          // because we set "always", but matches realistic shape).
+          { from: "B", to: "C1", auxKey: "k1", kind: "aux" as const },
+          { from: "B", to: "C2", auxKey: "k2", kind: "aux" as const },
+        ],
+        rootIds: ["A", "B", "C1", "C2"],
+      };
+
+      const r = replicateHighFanoutSources(g, 0, { B: "always" });
+
+      expect(r.nodes.find((n) => n.stepId === "B")).toBeUndefined();
+      expect(r.rootIds).not.toContain("B");
+
+      // A → B redirects to A → B@->C1 (state-out first wins over aux-out).
+      const incoming = r.edges.find((e) => e.kind === "state" && e.from === "A");
+      expect(incoming?.to).toBe("B@->C1");
+    });
+
+    it("removes the source from rootIds AND parent container childIds", () => {
+      // The AES-128 fixture has key-expansion at root + add-round-key
+      // consumers inside `round.X` groups. After replication the original
+      // key-expansion is gone from rootIds, and the round groups carry
+      // replicas spliced before their add-round-key children.
+      const g = aes128Graph();
+      const r = replicateHighFanoutSources(g, 6);
+
+      expect(r.rootIds).not.toContain("key-expansion");
+      // initial.add-round-key sits at root: its replica should precede it.
+      const initialRepId = "key-expansion@->initial.add-round-key";
+      const initialRepIdx = r.rootIds.indexOf(initialRepId);
+      const initialConsIdx = r.rootIds.indexOf("initial.add-round-key");
+      expect(initialRepIdx).toBeGreaterThanOrEqual(0);
+      expect(initialConsIdx).toBeGreaterThanOrEqual(0);
+      expect(initialRepIdx).toBeLessThan(initialConsIdx);
+
+      // Spot-check a round group: round.5 hosts `round.5.add-round-key`
+      // plus its key-expansion replica, both inside the group's childIds.
+      const round5 = r.containers.find((c) => c.id === "round.5");
+      expect(round5).toBeDefined();
+      const round5Replica = "key-expansion@->round.5.add-round-key";
+      expect(round5?.childIds).toContain(round5Replica);
+      expect(round5?.childIds).toContain("round.5.add-round-key");
+      // No fully-replicated source id (key-expansion) slipped through.
+      expect(round5?.childIds.includes("key-expansion")).toBe(false);
+    });
+
+    it("spine reaches the last root step through the replica chain", () => {
+      // After 7b removes the original key-expansion, walking state edges
+      // from rootIds[0] (the input-side first leaf) must still reach the
+      // last add-round-key via the replica. The spine isn't "broken" — it
+      // detours through the spine-entry replica.
+      const g = aes128Graph();
+      const r = replicateHighFanoutSources(g, 6);
+
+      // Build a state-edge adjacency list and BFS from the first non-
+      // replica root.
+      const stateOut = new Map<string, Set<string>>();
+      for (const e of r.edges) {
+        if (e.kind !== "state") continue;
+        let set = stateOut.get(e.from);
+        if (!set) {
+          set = new Set();
+          stateOut.set(e.from, set);
+        }
+        set.add(e.to);
+      }
+
+      const start = r.rootIds[0];
+      expect(start).toBeDefined();
+      const reached = new Set<string>([start as string]);
+      const queue = [start as string];
+      while (queue.length > 0) {
+        const cur = queue.shift();
+        if (cur === undefined) break;
+        const outs = stateOut.get(cur);
+        if (!outs) continue;
+        for (const next of outs) {
+          if (reached.has(next)) continue;
+          reached.add(next);
+          queue.push(next);
+        }
+      }
+
+      // The last AES round's add-round-key is the cipher's final state-
+      // shaped output — must be reachable.
+      expect(reached.has("round.10.add-round-key")).toBe(true);
+    });
+
+    it("source below threshold with no override — graph passes through unchanged", () => {
+      // Slice 7b dropped the kind filter; verify the no-replicate baseline
+      // (no source qualifies) still produces identity output.
+      const g = aes128Graph();
+      // Threshold 50 above key-expansion's fanout of 11, no overrides.
+      const r = replicateHighFanoutSources(g, 50);
+      expect(r).toBe(g);
+    });
   });
 });

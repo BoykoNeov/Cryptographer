@@ -198,12 +198,18 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
 
   it("a root-level replica sits ABOVE its consumer at root (orthogonal to the horizontal spine)", () => {
     // AES-128's `key-expansion → initial.add-round-key` state-spine arrow
-    // runs along the root row. With the replica `key-expansion@->initial.
-    // add-round-key` spliced between them in the horizontal flow, the
-    // pre-fix layout placed all three at the same y — the spine arrow
-    // passed THROUGH the replica box. The fix is to lift root-level
-    // replicas to a row ABOVE their consumer (mirror of the LEFT gutter
-    // inside vertical-stack groups).
+    // runs along the root row. The replica `key-expansion@->initial.add-
+    // round-key` is the spine entry for incoming state — it sits ABOVE
+    // its consumer, sharing the consumer's x, so the input pill's arrow
+    // drops in vertically and the spine continues rightward from the
+    // consumer.
+    //
+    // Slice 7b update (2026-05-17): the original `key-expansion` chip is
+    // no longer in the graph when replicated — it's been fully replaced
+    // by replicas. The earlier "no overlap with source" check is moot
+    // because there's no source to collide with. The assertion this test
+    // now pins is the simpler invariant the layout still needs to honor:
+    // the replica lives above its consumer at the same x.
     const g = aes128ReplicatedGraph();
     const { boxes } = layoutRoot(
       g,
@@ -217,19 +223,8 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
     // short vertical aux arrow).
     expect(replicaBox.y).toBeLessThan(consumerBox.y);
     expect(replicaBox.x).toBe(consumerBox.x);
-    // The replica's y-range and the SOURCE's y-range (key-expansion) do
-    // NOT overlap — that's what unblocks the state-spine arrow.
-    const sourceBox = boxes.get("key-expansion");
-    if (!sourceBox) throw new Error("missing key-expansion box");
-    const replicaBottom = replicaBox.y + replicaBox.h;
-    const sourceTop = sourceBox.y;
-    const sourceBottom = sourceBox.y + sourceBox.h;
-    // Either the replica is entirely above the source's y-range, or
-    // entirely below it. (Today it's above; this assertion just pins
-    // "no overlap" so the spine arrow's natural horizontal-regime path
-    // never enters the replica box.)
-    const noOverlap = replicaBottom <= sourceTop || replicaBox.y >= sourceBottom;
-    expect(noOverlap).toBe(true);
+    // Slice 7b: original is gone from the graph — no overlap to worry about.
+    expect(boxes.get("key-expansion")).toBeUndefined();
   });
 
   it("when no replicas are present, root row stays at CANVAS_MARGIN (no spurious lift)", () => {
@@ -658,25 +653,29 @@ describe("GraphView — aux-only root leaves are lifted above the spine row", ()
     expect(initial.y).toBe(60);
   });
 
-  it("composes with the root-replica lift (only one lift level is applied)", () => {
-    // When BOTH conditions fire (aux-only root + at least one root replica),
-    // the lift happens once. The replicas sit at CANVAS_MARGIN alongside
-    // the aux-only leaf; the spine row is at CANVAS_MARGIN + LEAF_H +
-    // REPLICA_LIFT_GAP (the replica path uses REPLICA_LIFT_GAP rather
-    // than STACK_GAP so the arrow shaft is visible).
+  it("composes the replica-lift row with the consumer's spine row", () => {
+    // Slice 7b update (2026-05-17): pre-7b this test pinned the "two-layer
+    // lift" interaction between the aux-only key-expansion (lifted alone)
+    // and its replicas (lifted above their consumers). After 7b, a fully-
+    // replicated source is REMOVED from the graph — it can't simultaneously
+    // be the aux-only root, so the "both layers compose" scenario is
+    // structurally impossible. What remains worth pinning is the simpler
+    // post-7b invariant: the replica sits at CANVAS_MARGIN (the lift row),
+    // and the consumer's spine row sits LEAF_H + REPLICA_LIFT_GAP below it.
     const g = aes128ReplicatedGraph();
     const consts = layoutConstantsFor("normal");
     const empty = new Map<string, { x: number; y: number }>();
-    const auxOnlyRootIds = new Set<string>(["key-expansion"]);
-    const { boxes } = layoutRoot(g, empty, consts, auxOnlyRootIds);
+    const { boxes } = layoutRoot(g, empty, consts);
 
-    const ke = boxes.get("key-expansion");
+    const replica = boxes.get("key-expansion@->initial.add-round-key");
     const initial = boxes.get("initial.add-round-key");
-    if (!ke || !initial) throw new Error("missing key boxes");
-    // Lifted row at CANVAS_MARGIN = 60.
-    expect(ke.y).toBe(60);
-    // Spine row.
+    if (!replica || !initial) throw new Error("missing key boxes");
+    // Lifted row at CANVAS_MARGIN = 60 (the replica's row).
+    expect(replica.y).toBe(60);
+    // Spine row sits below by exactly LEAF_H + REPLICA_LIFT_GAP.
     expect(initial.y).toBe(60 + consts.LEAF_H + consts.REPLICA_LIFT_GAP);
+    // Original key-expansion is gone (Slice 7b removal).
+    expect(boxes.get("key-expansion")).toBeUndefined();
   });
 });
 

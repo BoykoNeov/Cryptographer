@@ -157,6 +157,33 @@ describe("bundleEdges — collapse same-(from, to, kind, isFeedback)", () => {
     expect(stateBundles.length).toBe(rawStateCount);
   });
 
+  it("Slice 7b — replica-sourced state edges remain singleton bundles (no ×N decoration)", () => {
+    // Post-Slice-7b a fully-replicated source's state-out edge fans
+    // through the replica too. Each replica has a unique synthetic
+    // `from` (`${src}@->${consumer}`), so a `(replica, consumer)` state
+    // edge can't collide with anyone else's bundle key — it must come
+    // out as a singleton bundle that the renderer paints without the
+    // `×N` decoration. Pin this invariant so a future bundling tweak
+    // can't accidentally merge them.
+    const trace = runAes128();
+    const raw = deriveAuxGraph(trace, aes128Spec);
+    const replicated = replicateHighFanoutSources(raw, 0, { "key-expansion": "always" });
+    const fb = buildIterateFeedbackPredicate(replicated);
+
+    const bundled = bundleEdges(replicated, fb);
+
+    // Every state bundle whose `from` is a key-expansion replica is a
+    // singleton — replica ids guarantee per-(from, to) uniqueness.
+    const replicaStateBundles = bundled.bundles.filter(
+      (b) => b.kind === "state" && b.from.startsWith("key-expansion@->"),
+    );
+    expect(replicaStateBundles.length).toBeGreaterThan(0);
+    for (const b of replicaStateBundles) {
+      expect(b.auxKeys.length).toBe(1);
+      expect(b.auxKeys[0]).toBe("state");
+    }
+  });
+
   it("preserves the source graph's nodes / containers / edges / rootIds by identity", () => {
     // BundledGraph is additive — it ADDS the `bundles` field. Downstream
     // consumers that index by raw edge identity must continue to work

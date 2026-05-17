@@ -1619,8 +1619,14 @@ export const GraphView = () => {
     return contract.input;
   });
 
-  /** Map of pinned positions for the active spec (memoized). */
-  const pinnedMap = createMemo<ReadonlyMap<string, { x: number; y: number }>>(() => {
+  /**
+   * Raw pin map for the active spec — every position stored in the
+   * `LayoutSpec`. Consumers that participate in layout should read
+   * `pinnedMap` (the orphan-filtered view declared after `graph()`)
+   * instead; only callers that need the unfiltered set (drag handlers
+   * recording new pins, persistence inspectors) should reach for this.
+   */
+  const rawPinnedMap = createMemo<ReadonlyMap<string, { x: number; y: number }>>(() => {
     const l = activeLayout();
     if (!l) return new Map();
     const m = new Map<string, { x: number; y: number }>();
@@ -1860,6 +1866,53 @@ export const GraphView = () => {
     });
     if (filteredEdges.length === g.edges.length) return g;
     return { ...g, edges: filteredEdges };
+  });
+
+  /**
+   * Orphan-filtered pin map for layout consumers.
+   *
+   * **Slice 7b (2026-05-17).** When a user flips a source's replication to
+   * `"always"`, the source is removed from the post-replication graph and
+   * replaced by replicas with synthetic ids (`${src}@->${consumer}`).
+   * Replica ids are not stable across reruns and the source's stored pin
+   * has no honest target to migrate to — so we silently DROP orphan pins
+   * on read. The localStorage entry is preserved, which means flipping
+   * the override back to `"auto"` / `"never"` restores both the original
+   * chip AND its pinned position in one step (no manual re-pin needed).
+   *
+   * Dev diagnostic: one `console.debug` per orphan id, gated on
+   * `import.meta.env.DEV`, so an engineer flipping `"always"` on doesn't
+   * wonder why their dragged-position vanished — but prod stays quiet.
+   * The `debuggedOrphanPins` Set lives in component scope so the message
+   * fires once per id per session (re-firing on every memo recompute
+   * would spam).
+   */
+  const debuggedOrphanPins = new Set<string>();
+  const pinnedMap = createMemo<ReadonlyMap<string, { x: number; y: number }>>(() => {
+    const raw = rawPinnedMap();
+    if (raw.size === 0) return raw;
+    const g = graph();
+    const liveIds = new Set<string>();
+    for (const n of g.nodes) liveIds.add(n.stepId);
+    for (const c of g.containers) liveIds.add(c.id);
+    let droppedAny = false;
+    const filtered = new Map<string, { x: number; y: number }>();
+    for (const [id, p] of raw) {
+      if (!liveIds.has(id)) {
+        droppedAny = true;
+        if (import.meta.env.DEV && !debuggedOrphanPins.has(id)) {
+          debuggedOrphanPins.add(id);
+          console.debug(
+            `[GraphView] dropping orphan layout pin for "${id}" — not in post-replication graph (likely a fully-replicated source).`,
+          );
+        }
+        continue;
+      }
+      filtered.set(id, p);
+    }
+    // Identity short-circuit so layout-pass memos don't reactively
+    // recompute when no pins were filtered.
+    return droppedAny ? filtered : raw;
   });
 
   /**

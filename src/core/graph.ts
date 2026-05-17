@@ -1069,9 +1069,25 @@ export const expandCollapsedIterates = (
  * disappear, the eye reads the round body before the schedule.
  *
  * Semantics:
- *   - Counts only `kind: "aux"` edges. State edges are 1-to-1 between
- *     consecutive same-parent leaves (no fanout possible) and pass through
- *     unchanged.
+ *   - **Eligibility counts only `kind: "aux"` edges.** State edges are 1-to-1
+ *     between consecutive same-parent leaves (no fanout possible) so they're
+ *     a meaningless threshold input. A source qualifies only by its outgoing
+ *     aux fanout (or by an explicit `"always"` override).
+ *   - **All outgoing edges of a qualifying source are rerouted, regardless
+ *     of kind** (Slice 7b, 2026-05-17). A high-fanout source's outgoing
+ *     STATE edges fan through replicas the same way its aux edges do, and
+ *     the original source is REMOVED entirely from the graph (no longer
+ *     duplicates the spine chip next to its consumers). Incoming edges
+ *     whose `to` is a fully-replicated source are redirected to that
+ *     source's "spine entry" replica — defined as the replica generated
+ *     for the source's spine successor (first outgoing state edge's target,
+ *     with fallback to first outgoing aux edge's target if the iterate-
+ *     boundary suppression has eaten the only state-out — see
+ *     `inferStateEdges` for the suppression rule). Linear-list sidebar
+ *     click-to-scrub continues working because that view reads the trace,
+ *     not the graph; click-to-scrub on any replica still works via the
+ *     `replicaOf` field. See `feedback_state_spine_no_phantoms.md` for the
+ *     pedagogical principle that motivated the change.
  *   - A "source" is any id appearing in `edge.from` for at least one aux
  *     edge. Both leaves and iterate containers can be sources (the
  *     iterate boundary participates in synthetic edges; see
@@ -1100,11 +1116,12 @@ export const expandCollapsedIterates = (
  *     source's trace frame.
  *   - Replicas land in `containerPath` matching the consumer's, then are
  *     inserted as siblings immediately before the consumer in the parent's
- *     `childIds` (or `rootIds` if the consumer is at the root).
- *   - The original source node is KEPT in `nodes` so the linear-list
- *     sidebar's click-to-scrub continues to work. The source loses its
- *     replicated outgoing aux edges; if it had below-threshold outgoing
- *     aux to other consumers, those pass through unchanged.
+ *     `childIds` (or `rootIds` if the consumer is at the root). Fully-
+ *     replicated source ids are filtered out of `nodes`, `rootIds`, and
+ *     every container's `childIds` after the insertion splice runs — the
+ *     splice runs first so each replica lands relative to where the
+ *     original consumer used to sit, then the removal pass strips the
+ *     dead ids.
  *   - `threshold <= 0` with no `"always"` overrides → return the input
  *     graph by reference. Identity short-circuit keeps the createMemo
  *     chain in GraphView cheap when replication is off.
@@ -1169,20 +1186,62 @@ export const replicateHighFanoutSources = (
   const containerById = new Map<string, ContainerNode>();
   for (const c of graph.containers) containerById.set(c.id, c);
 
-  // Walk aux edges, build:
-  //   - newAuxEdges: the rewritten aux edges (replicas as source) + unchanged ones
-  //   - replicasBySource: (srcId, consumerId) → replica node
-  //   - replicaInsertBefore: parent container id (or null = root) →
-  //       (consumerId → [replicaIds]) in spec-order
-  const newAuxEdges: GraphEdge[] = [];
+  // Slice 7b: every qualifying source IS fully replicated by construction
+  // (we walk EVERY outgoing edge below, regardless of kind). So the
+  // "fully replicated" set equals `highFanoutSrcs` exactly. Naming it
+  // separately keeps the redirect / removal sites readable.
+  const fullyReplicated = highFanoutSrcs;
+
+  // Spine successor for each fully-replicated source — used to redirect
+  // incoming edges whose `to` lands on a dead source id. Definition:
+  //   1. First outgoing STATE edge's target (pre-replication graph).
+  //   2. Fallback to first outgoing AUX edge's target if (1) doesn't
+  //      exist. The fallback handles sources whose only state output
+  //      was suppressed by the iterate-boundary rule in `inferStateEdges`
+  //      — e.g. `compute-block-count` set to `"always"` in AES-128 ECB,
+  //      where the spine edge → `ecb-blocks` (the iterate) is dropped,
+  //      leaving only the aux edge → `ecb-blocks` for `blockCount`.
+  // The spine-successor's replica (`${src}@->${spineSuccessor}`) is the
+  // canonical "spine entry" for the removed source. Every qualifying
+  // source has at least one outgoing aux edge (that's how it qualified),
+  // so the fallback is always defined.
+  const spineSuccessorOf = new Map<string, string>();
+  for (const src of fullyReplicated) {
+    let stateTarget: string | undefined;
+    let auxTarget: string | undefined;
+    for (const e of graph.edges) {
+      if (e.from !== src) continue;
+      if (e.kind === "state" && stateTarget === undefined) stateTarget = e.to;
+      if (e.kind === "aux" && auxTarget === undefined) auxTarget = e.to;
+      if (stateTarget !== undefined && auxTarget !== undefined) break;
+    }
+    const successor = stateTarget ?? auxTarget;
+    if (successor !== undefined) spineSuccessorOf.set(src, successor);
+  }
+
+  // Walk every edge, build:
+  //   - newEdges: rewritten with replica `from` where applicable AND
+  //     redirected `to` where the consumer was fully replicated
+  //   - replicas: (srcId, ORIGINAL-consumerId) → replica node
+  //   - insertionsByParent: parent container id (or "" for root) →
+  //       (ORIGINAL-consumerId → [replicaIds]) in encounter order
+  const newEdges: GraphEdge[] = [];
   const replicaKey = (srcId: string, consumerId: string) => `${srcId}@->${consumerId}`;
   const replicas = new Map<string, GraphNode>(); // replicaId → node
 
-  // For each parent container id (use "" for root), and for each consumer,
-  // the ordered list of replica ids to insert immediately before that
-  // consumer. Order: insertion order of (src, consumer) encounters, so
-  // multiple high-fanout sources pointing at the same consumer line up
-  // left-to-right in encounter order.
+  // Redirect target for incoming edges whose `to` is fully replicated.
+  // Returns the spine-entry replica id (= the replica generated for the
+  // source's spine successor), or undefined when there's no successor —
+  // which can't happen for any source in `fullyReplicated` per the
+  // qualifies-by-aux-fanout argument above, but the helper returns
+  // undefined defensively so the call site can drop the edge instead of
+  // emitting a dangling reference.
+  const firstReplicaOf = (srcId: string): string | undefined => {
+    const successor = spineSuccessorOf.get(srcId);
+    if (successor === undefined) return undefined;
+    return replicaKey(srcId, successor);
+  };
+
   const insertionsByParent = new Map<string, Map<string, string[]>>();
   const ensureInsertionMap = (parentKey: string): Map<string, string[]> => {
     let m = insertionsByParent.get(parentKey);
@@ -1194,11 +1253,34 @@ export const replicateHighFanoutSources = (
   };
 
   for (const edge of graph.edges) {
-    if (edge.kind !== "aux" || !highFanoutSrcs.has(edge.from)) {
-      newAuxEdges.push(edge);
+    const fromIsReplicated = fullyReplicated.has(edge.from);
+    const toIsReplicated = fullyReplicated.has(edge.to);
+
+    // Determine the effective `to`: if the consumer is fully replicated,
+    // point at its spine-entry replica instead. Drop the edge entirely
+    // when no redirect target is computable (should be unreachable, see
+    // `firstReplicaOf`).
+    let effectiveTo = edge.to;
+    if (toIsReplicated) {
+      const redirected = firstReplicaOf(edge.to);
+      if (redirected === undefined) continue;
+      effectiveTo = redirected;
+    }
+
+    if (!fromIsReplicated) {
+      // Pass-through edge (possibly with a rewritten `to`).
+      newEdges.push(effectiveTo === edge.to ? edge : { ...edge, to: effectiveTo });
       continue;
     }
-    // High-fanout source: rewrite the edge through a replica node.
+
+    // High-fanout source: rewrite the edge through a replica node. The
+    // replica id and the insertion slot key off the ORIGINAL consumer
+    // (`edge.to`) so the splice + filter pipeline below lands each
+    // replica where the original consumer used to sit, and replicas of
+    // a source pointed at a fully-replicated consumer still get inserted
+    // in that consumer's pre-replication slot. The OUTGOING edge from
+    // the replica targets `effectiveTo`, which may be the consumer's
+    // spine-entry replica if the consumer is also fully replicated.
     const rId = replicaKey(edge.from, edge.to);
     if (!replicas.has(rId)) {
       // Determine the consumer's parent container (last in containerPath)
@@ -1217,7 +1299,7 @@ export const replicateHighFanoutSources = (
         containerPath: consumerPath,
         replicaOf: edge.from,
       });
-      // Schedule the replica for insertion next to its consumer.
+      // Schedule the replica for insertion next to its ORIGINAL consumer.
       const parentKey =
         consumerPath.length > 0 ? (consumerPath[consumerPath.length - 1] ?? "") : "";
       const map = ensureInsertionMap(parentKey);
@@ -1225,10 +1307,18 @@ export const replicateHighFanoutSources = (
       list.push(rId);
       map.set(edge.to, list);
     }
-    newAuxEdges.push({ from: rId, to: edge.to, auxKey: edge.auxKey, kind: "aux" });
+    newEdges.push({ from: rId, to: effectiveTo, auxKey: edge.auxKey, kind: edge.kind });
   }
 
   // Build replacement childIds for each affected container + rootIds.
+  // Splice runs FIRST (inserts replicas before their original-consumer
+  // anchor ids), THEN the dead-id filter strips fully-replicated source
+  // ids. Doing it in this order means replicas land in the right
+  // relative slot even when their consumer is itself fully replicated:
+  //   pre-splice  : [..., A, B, ...]                  (A and B both `always`)
+  //   post-splice : [..., A@->B, A, B@->C, B, ...]
+  //   post-filter : [..., A@->B, B@->C, ...]          (A and B removed)
+  // The resulting spine reads cleanly through the replica chain.
   const splice = (childIds: readonly string[], byConsumer: Map<string, string[]>) => {
     const out: string[] = [];
     for (const id of childIds) {
@@ -1239,26 +1329,31 @@ export const replicateHighFanoutSources = (
     return out;
   };
 
+  const stripDead = (ids: readonly string[]): string[] =>
+    ids.filter((id) => !fullyReplicated.has(id));
+
   const newContainers = graph.containers.map((c) => {
     const ins = insertionsByParent.get(c.id);
-    if (!ins) return c;
-    return { ...c, childIds: splice(c.childIds, ins) };
+    const spliced = ins ? splice(c.childIds, ins) : c.childIds;
+    const stripped = stripDead(spliced);
+    if (stripped === c.childIds) return c;
+    return { ...c, childIds: stripped };
   });
 
   const rootInsertions = insertionsByParent.get("");
-  const newRootIds = rootInsertions ? splice(graph.rootIds, rootInsertions) : graph.rootIds;
+  const rootSpliced = rootInsertions ? splice(graph.rootIds, rootInsertions) : graph.rootIds;
+  const newRootIds = stripDead(rootSpliced);
 
-  // State edges pass through unchanged (they were never aux). Concat after
-  // newAuxEdges to preserve the same ordering convention as deriveAuxGraph
-  // (aux first, state second) — keeps any existing edge-indexing tests
-  // unaffected.
-  const stateEdges = graph.edges.filter((e) => e.kind === "state");
-  const newAuxOnly = newAuxEdges.filter((e) => e.kind === "aux");
+  // Filter fully-replicated source nodes out of `nodes`. The original
+  // chip is gone from the graph; click-to-scrub on the source's trace
+  // frame still works via the linear-list sidebar (which reads the
+  // trace, not the graph) and via `replicaOf` on any replica chip.
+  const newNodes = graph.nodes.filter((n) => !fullyReplicated.has(n.stepId));
 
   return {
-    nodes: [...graph.nodes, ...replicas.values()],
+    nodes: [...newNodes, ...replicas.values()],
     containers: newContainers,
-    edges: [...newAuxOnly, ...stateEdges],
+    edges: newEdges,
     rootIds: newRootIds,
   };
 };
