@@ -17,10 +17,14 @@
  *
  * Five branches the result can take, captured by the `status` field:
  *
- *   1. `"endpoint"` — synthetic plaintext/ciphertext pill (Slice 1). The
- *      pills have no trace frame, so we return a literal label ("cipher
- *      input" / "cipher output") and skip value formatting. The panel
- *      renders this as descriptive text, not a hex/decimal dump.
+ *   1. `"endpoint"` — synthetic plaintext/ciphertext pill (Slice 1).
+ *      The pills surface the actual cipher I/O: input pill → first
+ *      frame's `stateBefore`, output pill → `trace.finalState`. The
+ *      panel formats `value` like any other state row and badges the
+ *      kind as "input pill" / "output pill" via `endpointSide`. The
+ *      `label` is retained as a fallback caption. Pre-run pill clicks
+ *      collapse to `"no-trace"` (branch 2) so the empty-trace copy is
+ *      uniform across every selectable element.
  *
  *   2. `"no-trace"` — `trace === null`. The user hasn't run the cipher
  *      yet. The panel shows a "Run the cipher to see edge values" hint.
@@ -236,7 +240,13 @@ const findProducerFrame = (
  * Result of an edge-value lookup. The renderer pattern-matches on
  * `status` and formats accordingly:
  *
- *   - `"endpoint"`: render `label` as plain text inside the panel.
+ *   - `"endpoint"`: format `value` (the cipher's plaintext for the input
+ *     pill, ciphertext for the output pill) with the active ByteFormat,
+ *     and badge with "input pill" / "output pill". `label` is retained
+ *     for a descriptive caption / accessibility hints, but the panel's
+ *     value-row uses `value`. Only emitted when the trace is non-null;
+ *     pre-run endpoint clicks return `"no-trace"` instead so the panel
+ *     reads consistently with every other un-run row.
  *   - `"no-trace"`: render the hint string ("Run the cipher to see…").
  *   - `"missing"`: render the `reason` muted, no value.
  *   - `"value"`: format `value` with the active ByteFormat. `displayKind`
@@ -247,6 +257,7 @@ export type EdgeValueLookup =
       readonly status: "endpoint";
       readonly endpointSide: "input" | "output";
       readonly label: string;
+      readonly value: AuxValue;
     }
   | { readonly status: "no-trace" }
   | { readonly status: "missing"; readonly reason: string }
@@ -282,26 +293,36 @@ export const lookupEdgeValue = (
   currentBlockIndex: number | undefined,
 ): EdgeValueLookup => {
   // ── Endpoint pills ─────────────────────────────────────────────────
-  // Synthetic — no trace frame, return a literal label. Both endpoint-
-  // input and endpoint-output get this treatment regardless of edge
-  // kind. (`buildIterateFeedbackPredicate` already filters these out of
-  // the feedback-edge classification, so kind is always "state" here in
-  // practice, but the branch doesn't depend on that.)
-  if (edge.from === CIPHER_INPUT_ID) {
-    return { status: "endpoint", endpointSide: "input", label: "cipher input (plaintext)" };
-  }
-  if (edge.to === CIPHER_OUTPUT_ID) {
-    return { status: "endpoint", endpointSide: "output", label: "cipher output (ciphertext)" };
-  }
-  // Defensive: an edge whose OTHER endpoint is an endpoint pill is
-  // structurally legal too (e.g. if a future renderer attaches the
-  // pill at a non-rootIds[0] position). Treat the same way.
-  if (isEndpointId(edge.from) || isEndpointId(edge.to)) {
-    const side: "input" | "output" = isEndpointId(edge.from) ? "input" : "output";
+  // 2026-05-17: pills now carry the actual cipher I/O value (plaintext
+  // for input pill, ciphertext for output pill — labels swap on decrypt
+  // but the resolution rule is symmetric: input = first frame's
+  // stateBefore, output = trace.finalState). Pre-run clicks return
+  // `"no-trace"` instead of a label-only `"endpoint"` row, matching the
+  // rest of the inspector's empty-trace handling.
+  //
+  // (`buildIterateFeedbackPredicate` already filters endpoint edges
+  // out of the feedback-edge classification, so kind is always "state"
+  // here in practice, but the branch doesn't depend on that.)
+  const isInputEnd = edge.from === CIPHER_INPUT_ID || isEndpointId(edge.from);
+  const isOutputEnd = edge.to === CIPHER_OUTPUT_ID || isEndpointId(edge.to);
+  if (isInputEnd || isOutputEnd) {
+    if (trace === null) return { status: "no-trace" };
+    const side: "input" | "output" = isInputEnd ? "input" : "output";
+    if (side === "input") {
+      const first = trace.frames[0];
+      if (!first) return { status: "no-trace" };
+      return {
+        status: "endpoint",
+        endpointSide: "input",
+        label: "cipher input (plaintext)",
+        value: first.stateBefore,
+      };
+    }
     return {
       status: "endpoint",
-      endpointSide: side,
-      label: side === "input" ? "cipher input (plaintext)" : "cipher output (ciphertext)",
+      endpointSide: "output",
+      label: "cipher output (ciphertext)",
+      value: trace.finalState,
     };
   }
 
@@ -665,13 +686,16 @@ const lookupRegularState = (
 // Semantics by node kind:
 //
 //   - **Endpoint pills** (`__cipher_input__` / `__cipher_output__`):
-//     same `"endpoint"` branch as `lookupEdgeValue`. The pills carry no
-//     trace frame, so the panel renders the descriptive label only.
-//     (Pedantically: we could resolve `cipher input` to `frame[0]
-//     .stateBefore` and `cipher output` to the last frame's stateAfter,
-//     but that overlaps with what the FIRST and LAST leaves' state
-//     resolution already shows — the pills' purpose is descriptive, not
-//     a data probe.)
+//     same `"endpoint"` branch as `lookupEdgeValue`. Resolves to the
+//     trace's primary I/O: input pill → `trace.frames[0].stateBefore`
+//     (the cipher's plaintext for encrypt mode, ciphertext for decrypt);
+//     output pill → `trace.finalState` (ciphertext for encrypt,
+//     plaintext for decrypt). Pre-run pills return `"no-trace"` so the
+//     panel's empty-state copy matches every other row.
+//     (Pre-2026-05-17 the pills were descriptive-only and rendered just
+//     a "cipher input (plaintext)" label; the user's feedback then was
+//     that the pill click should surface the actual value the way the
+//     spine arrows do for intermediate leaves.)
 //
 //   - **Block chips** (`${iterateId}@block${i}`): the chip's "value" is
 //     the per-block ciphertext after that iteration completes — i.e.
@@ -722,15 +746,31 @@ export const lookupNodeValue = (
   currentBlockIndex: number | undefined,
 ): EdgeValueLookup => {
   // ── Endpoint pills ─────────────────────────────────────────────────
-  // Synthetic — no trace frame to read, return the same descriptive
-  // label `lookupEdgeValue` returns when an edge touches a pill. Keeps
-  // the panel's empty/endpoint copy identical regardless of which
-  // surface the user clicked.
+  // 2026-05-17: pills surface their actual I/O value in the inspector.
+  // Input pill → first frame's `stateBefore` (= the cipher's plaintext
+  // for encrypt, ciphertext for decrypt); output pill → `trace.finalState`
+  // (= the cipher's ciphertext for encrypt, plaintext for decrypt).
+  // Pre-run clicks fall through to `"no-trace"` so the empty-trace copy
+  // is consistent with every other inspector row.
   if (nodeId === CIPHER_INPUT_ID) {
-    return { status: "endpoint", endpointSide: "input", label: "cipher input (plaintext)" };
+    if (trace === null) return { status: "no-trace" };
+    const first = trace.frames[0];
+    if (!first) return { status: "no-trace" };
+    return {
+      status: "endpoint",
+      endpointSide: "input",
+      label: "cipher input (plaintext)",
+      value: first.stateBefore,
+    };
   }
   if (nodeId === CIPHER_OUTPUT_ID) {
-    return { status: "endpoint", endpointSide: "output", label: "cipher output (ciphertext)" };
+    if (trace === null) return { status: "no-trace" };
+    return {
+      status: "endpoint",
+      endpointSide: "output",
+      label: "cipher output (ciphertext)",
+      value: trace.finalState,
+    };
   }
 
   if (trace === null) return { status: "no-trace" };

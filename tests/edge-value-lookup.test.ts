@@ -10,7 +10,9 @@
  *
  * Test coverage tracks the branch table in the module docstring:
  *
- *   - Endpoint pills → `"endpoint"` with the literal label.
+ *   - Endpoint pills → `"endpoint"` carrying the cipher's I/O value
+ *     (frames[0].stateBefore for input pill, trace.finalState for
+ *     output pill). Pre-run pill clicks → `"no-trace"`.
  *   - Trace null → `"no-trace"`.
  *   - Regular leaf, aux edge → `"value"` with the consumer's auxRead.
  *   - Regular leaf, state edge → `"value"` with predecessor.stateAfter.
@@ -65,7 +67,7 @@ const auxEdge = (from: string, to: string, auxKey: string): GraphEdge => ({
 // ─── Endpoint pills (Slice 1 composition) ───────────────────────────────
 
 describe("lookupEdgeValue — endpoint pills", () => {
-  it("returns `endpoint` with the input label for edges from __cipher_input__", () => {
+  it("returns `endpoint` carrying the plaintext for edges from __cipher_input__", () => {
     const trace = runAes128Ecb();
     const out = lookupEdgeValue(
       stateEdge(CIPHER_INPUT_ID, "split-blocks"),
@@ -76,10 +78,14 @@ describe("lookupEdgeValue — endpoint pills", () => {
     expect(out.status).toBe("endpoint");
     if (out.status !== "endpoint") return;
     expect(out.endpointSide).toBe("input");
-    expect(out.label).toMatch(/plaintext/i);
+    // The plaintext flowing in is frames[0].stateBefore (= the cipher's
+    // initialState). For the ECB fixture above that's the 64-byte BytesState.
+    const first = trace.frames[0];
+    expect(first).toBeDefined();
+    expect(out.value).toBe(first?.stateBefore);
   });
 
-  it("returns `endpoint` with the output label for edges to __cipher_output__", () => {
+  it("returns `endpoint` carrying the ciphertext for edges to __cipher_output__", () => {
     const trace = runAes128Ecb();
     const out = lookupEdgeValue(
       stateEdge("concat-blocks", CIPHER_OUTPUT_ID),
@@ -90,17 +96,22 @@ describe("lookupEdgeValue — endpoint pills", () => {
     expect(out.status).toBe("endpoint");
     if (out.status !== "endpoint") return;
     expect(out.endpointSide).toBe("output");
-    expect(out.label).toMatch(/ciphertext/i);
+    // The cipher's final state IS the ciphertext (the runtime's
+    // post-loop `finalState`).
+    expect(out.value).toBe(trace.finalState);
   });
 
-  it("returns endpoint even when the trace is null (no Run needed for pills)", () => {
+  it("returns `no-trace` for an endpoint edge when the trace is null (pre-run)", () => {
     const out = lookupEdgeValue(
       stateEdge(CIPHER_INPUT_ID, "split-blocks"),
       aes128EcbSpec,
       null,
       undefined,
     );
-    expect(out.status).toBe("endpoint");
+    // Pre-2026-05-17 the lookup returned a label-only `"endpoint"` row;
+    // post-rework, pre-run pill clicks collapse to `"no-trace"` so the
+    // empty-state copy is uniform with every other inspector row.
+    expect(out.status).toBe("no-trace");
   });
 });
 

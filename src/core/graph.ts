@@ -890,6 +890,64 @@ export const collapseGraph = (
   };
 };
 
+// ─── Aux-only state-edge suppression ────────────────────────────────────
+
+/**
+ * Drop every `kind: "state"` edge whose endpoint id is in `auxOnlyIds`.
+ *
+ * **Why this transform is its own stage.** `inferStateEdges` walks the spec
+ * in DFS order and chains every leaf to its successor — including aux-only
+ * leaves like `aes.key-expansion@1`. For those leaves the runtime contract
+ * `(state, params) → state` produces an identity passthrough (key-expansion
+ * reads `state` but doesn't modify it), so the emitted edge represents a
+ * pedagogically misleading "data flows from here into the next step" arrow.
+ * The renderer pairs every aux-only root with a `__cipher_input__` pill
+ * arrow that lands on the FIRST state-consuming leaf, making the spine edge
+ * out of the aux-only leaf redundant.
+ *
+ * **Pipeline placement: BEFORE `replicateHighFanoutSources`.** That matters
+ * because Slice 7b (2026-05-17) made replication rewrite the `from` of
+ * state edges to the source's spine-entry replica id when the source is
+ * fully replicated. If this filter runs AFTER replication, the rewritten
+ * edge slips through (its `from` is no longer the original aux-only id but
+ * `${src}@->${consumer}`) and the user sees a phantom state arrow from the
+ * tiny replica chip into the first state consumer — exactly the regression
+ * the user reported. Running the filter BEFORE replication keeps the
+ * suppression centered on the original spec ids, where the union check is
+ * trivial and Slice 7b's redirect logic naturally falls through to its
+ * aux-target fallback (documented at `replicateHighFanoutSources`'s
+ * `spineSuccessorOf` block) without losing the spine-entry replica.
+ *
+ * **Bidirectional check** so an aux-only leaf at the END of the spec (no
+ * shipped cipher has one today, but a future hash/MAC might) also gets
+ * its incoming spine edge suppressed. One-sided would only handle the
+ * usual leading-`key-expansion` case.
+ *
+ * **Identity short-circuit** when `auxOnlyIds` is empty OR no state edge
+ * touches one — returns the input by reference so the createMemo chain in
+ * `GraphView` short-circuits cheaply for ciphers without aux-only roots.
+ *
+ * Aux edges are never filtered — those represent real producer→consumer
+ * data flow (the round-key fan-out from key-expansion); the user wants
+ * to SEE those edges, that's the whole pedagogical point. Only the spine
+ * passthrough is misleading.
+ *
+ * Validation (`validateGraph`) consumes the pre-filter graph, so dropping
+ * these edges from the display doesn't change the warning surface.
+ */
+export const dropAuxOnlyStateEdges = (
+  graph: CipherGraph,
+  auxOnlyIds: ReadonlySet<string>,
+): CipherGraph => {
+  if (auxOnlyIds.size === 0) return graph;
+  const filteredEdges = graph.edges.filter((e) => {
+    if (e.kind !== "state") return true;
+    return !auxOnlyIds.has(e.from) && !auxOnlyIds.has(e.to);
+  });
+  if (filteredEdges.length === graph.edges.length) return graph;
+  return { ...graph, edges: filteredEdges };
+};
+
 // ─── Collapsed-iterate block-chip expansion (Slice 6) ────────────────────
 
 /**

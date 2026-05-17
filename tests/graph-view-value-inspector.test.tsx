@@ -194,7 +194,7 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     expect(target).toEqual({ kind: "node", id: "round.5.mix-columns" });
   });
 
-  it("clicking an endpoint pill selects it and shows the descriptive endpoint label", () => {
+  it("clicking an endpoint pill selects it and shows the plaintext bytes in the inspector", () => {
     seedAes128Trace();
     setInspectorPanelOpen(true);
     const { container } = render(() => <GraphView />);
@@ -204,9 +204,12 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     expect(pill?.classList.contains("graph-endpoint-selected")).toBe(true);
     const body = container.querySelector('[data-testid="value-inspector-body"]');
     expect(body?.textContent).toContain(CIPHER_INPUT_ID);
-    // Endpoint pill kind badge says "input pill"; descriptive value row.
+    // Endpoint pill kind badge says "input pill"; value row shows the
+    // cipher's plaintext bytes (formatted with the active ByteFormat).
+    // The AES-128 fixture uses the FIPS-197 Appendix B plaintext
+    // `00112233445566778899aabbccddeeff`.
     expect(body?.textContent).toMatch(/input pill/);
-    expect(body?.textContent).toMatch(/cipher input/);
+    expect(body?.textContent).toMatch(/00112233445566778899aabbccddeeff/);
     expect(useSelectedTarget()()).toEqual({ kind: "node", id: CIPHER_INPUT_ID });
   });
 

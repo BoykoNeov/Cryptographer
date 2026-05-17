@@ -6,7 +6,12 @@
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import type { CipherGraph } from "@/core/graph";
-import { deriveAuxGraph, replicateHighFanoutSources } from "@/core/graph";
+import {
+  CIPHER_INPUT_ID,
+  deriveAuxGraph,
+  dropAuxOnlyStateEdges,
+  replicateHighFanoutSources,
+} from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
@@ -486,6 +491,115 @@ describe("replicateHighFanoutSources", () => {
       const wrap = r.containers.find((c) => c.id === "wrap");
       expect(wrap?.childIds).toContain("src@->inner");
       expect(wrap?.childIds).not.toContain("src@->state-target");
+    });
+  });
+
+  // ─── Pipeline composition: aux-only filter BEFORE replication ──────────
+  // Regression vector reported 2026-05-17: when `key-expansion` is
+  // replicated (either via the global threshold or the per-source
+  // "always" override), the spine state edge `key-expansion →
+  // initial.add-round-key` was rerouted through the spine replica
+  // (Slice 7b semantics) and rendered as a white arrow from the tiny
+  // replica chip into `initial.add-round-key`. Pedagogically wrong:
+  // key-expansion doesn't transform state, so the state value flowing
+  // there is the (identity) plaintext, which the synthetic plaintext-pill
+  // arrow already shows.
+  //
+  // Fix: run `dropAuxOnlyStateEdges` BEFORE `replicateHighFanoutSources`,
+  // matching the GraphView pipeline order. This test pins the composition
+  // so a future shuffle of pipeline stages doesn't silently regress
+  // the spine into `initial.add-round-key`.
+  describe("dropAuxOnlyStateEdges composes correctly with replication", () => {
+    it("leaves exactly one state edge into initial.add-round-key — the plaintext pill's", () => {
+      // Build the graph the way GraphView does: with endpoint pills.
+      const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
+        initialState: matrixFromBytes(bytesFromHex(PT)),
+        initialAux: new Map<string, AuxValue>([["key", bytesFromHex(KEY)]]),
+      });
+      const raw = deriveAuxGraph(trace, aes128Spec, {
+        endpoints: {
+          inputLabel: "plaintext",
+          outputLabel: "ciphertext",
+          inputAnchorId: "initial.add-round-key",
+          outputAnchorId: "final.add-round-key",
+        },
+      });
+
+      // GraphView's pipeline: filter aux-only state edges, THEN replicate.
+      // `key-expansion` is the only aux-only root in single-block AES.
+      const filtered = dropAuxOnlyStateEdges(raw, new Set(["key-expansion"]));
+      const replicated = replicateHighFanoutSources(filtered, 0, {
+        "key-expansion": "always",
+      });
+
+      // After the pipeline: only the synthetic plaintext pill should
+      // contribute a state edge into `initial.add-round-key`. The
+      // replica chip emits an AUX edge for roundKeys[0] (kept — that's
+      // the round-key fan-out story we want visible), but NO state
+      // edge from any replica.
+      const stateIntoFirst = replicated.edges.filter(
+        (e) => e.kind === "state" && e.to === "initial.add-round-key",
+      );
+      expect(stateIntoFirst).toHaveLength(1);
+      expect(stateIntoFirst[0]?.from).toBe(CIPHER_INPUT_ID);
+
+      // Sanity: 11 aux replicas still produced (the round-key fan-out
+      // is unaffected by the spine filter).
+      const replicas = replicated.nodes.filter((n) => n.replicaOf === "key-expansion");
+      expect(replicas).toHaveLength(11);
+
+      // Sanity: the spine-entry replica still exists and still has an
+      // outgoing aux edge to `initial.add-round-key` (roundKeys[0]).
+      const spineReplicaId = "key-expansion@->initial.add-round-key";
+      expect(replicated.nodes.find((n) => n.stepId === spineReplicaId)).toBeDefined();
+      const auxOutFromSpineReplica = replicated.edges.filter(
+        (e) => e.kind === "aux" && e.from === spineReplicaId,
+      );
+      expect(auxOutFromSpineReplica.length).toBeGreaterThan(0);
+
+      // And the killer: NO state edge from ANY replica into add-round-key.
+      const stateFromAnyReplica = replicated.edges.filter(
+        (e) => e.kind === "state" && e.from.includes("@->"),
+      );
+      expect(stateFromAnyReplica).toHaveLength(0);
+    });
+
+    it("identity short-circuit: empty aux-only set returns the input graph by reference", () => {
+      const g = aes128Graph();
+      expect(dropAuxOnlyStateEdges(g, new Set())).toBe(g);
+    });
+
+    it("identity short-circuit: no matching edges returns the input graph by reference", () => {
+      const g = aes128Graph();
+      // A bogus id that doesn't appear anywhere → nothing filtered.
+      expect(dropAuxOnlyStateEdges(g, new Set(["this-id-does-not-exist"]))).toBe(g);
+    });
+
+    it("bidirectional: an aux-only step at the END of the spec also gets its incoming spine edge dropped", () => {
+      // Synthetic shape: A → B → terminal-aux. The "terminal-aux" leaf
+      // is aux-only; the spine edge `B → terminal-aux` should be
+      // suppressed once we mark terminal-aux as aux-only.
+      const g: CipherGraph = {
+        nodes: [
+          { stepId: "A", stepType: "ts", label: "A", containerPath: [] },
+          { stepId: "B", stepType: "ts", label: "B", containerPath: [] },
+          {
+            stepId: "terminal-aux",
+            stepType: "tx",
+            label: "terminal-aux",
+            containerPath: [],
+          },
+        ],
+        containers: [],
+        edges: [
+          { from: "A", to: "B", auxKey: "state", kind: "state" },
+          { from: "B", to: "terminal-aux", auxKey: "state", kind: "state" },
+        ],
+        rootIds: ["A", "B", "terminal-aux"],
+      };
+      const filtered = dropAuxOnlyStateEdges(g, new Set(["terminal-aux"]));
+      // The B → terminal-aux edge is gone; A → B survives.
+      expect(filtered.edges).toEqual([{ from: "A", to: "B", auxKey: "state", kind: "state" }]);
     });
   });
 });

@@ -47,6 +47,7 @@ import {
   bundleEdges,
   collapseGraph,
   deriveAuxGraph,
+  dropAuxOnlyStateEdges,
   expandCollapsedIterates,
   replicateHighFanoutSources,
   validateGraph,
@@ -1888,7 +1889,38 @@ export const GraphView = () => {
     expandCollapsedIterates(collapsedGraph(), collapsedSet()),
   );
 
-  /** Apply optional fanout replication on top of the expanded graph.
+  /**
+   * Drop the spine state edge through every aux-only root leaf (e.g.
+   * `aes.key-expansion@1`). This is the rendering companion to the
+   * `auxOnlyRootIds` lift in `layoutRoot` — having lifted the leaf OFF
+   * the spine row, we also take it off the spine LOGICALLY so the eye
+   * reads the canvas correctly: `initial.add-round-key` then has exactly
+   * ONE incoming state arrow, the endpoint pill's, and the round-key
+   * fan-out story (aux arrows from `key-expansion`) stays visually
+   * distinct.
+   *
+   * **Pipeline placement: BEFORE `replicateHighFanoutSources`.** Pre-7b
+   * this filter ran AFTER replication (on the final display graph) and
+   * worked correctly. Slice 7b (2026-05-17) made replication rewrite the
+   * `from` of state edges to the source's spine-entry replica id when
+   * the source is fully replicated; a post-replicate filter checks for
+   * the original spec id and misses the rewritten edge, so a phantom
+   * white arrow from the tiny `key-expansion@->initial.add-round-key`
+   * replica into `initial.add-round-key` slipped through whenever the
+   * user flipped replication to "always". Moving the filter ahead of
+   * replication keeps the suppression centered on the original spec
+   * ids — Slice 7b's `spineSuccessorOf` then falls through to its
+   * aux-target fallback (already documented in `graph.ts`) and the
+   * spine-entry replica id is unchanged.
+   *
+   * Validation (`rawWarnings`) consumes `rawGraph()`, not this view —
+   * unchanged.
+   */
+  const auxOnlyFilteredGraph = createMemo<CipherGraph>(() =>
+    dropAuxOnlyStateEdges(expandedGraph(), auxOnlyRootIds()),
+  );
+
+  /** Apply optional fanout replication on top of the filtered graph.
    * Master-switch semantic: when the global toggle is off, NO replicas
    * appear — even if the user has per-source `"always"` overrides set.
    * The override panel below is hidden in that case so the user doesn't
@@ -1896,46 +1928,20 @@ export const GraphView = () => {
    */
   const replicatedGraph = createMemo<CipherGraph>(() =>
     replicate()
-      ? replicateHighFanoutSources(expandedGraph(), replicationThreshold(), replicationModes())
-      : expandedGraph(),
+      ? replicateHighFanoutSources(
+          auxOnlyFilteredGraph(),
+          replicationThreshold(),
+          replicationModes(),
+        )
+      : auxOnlyFilteredGraph(),
   );
 
-  /**
-   * Final display graph: drop state-spine edges that touch a lifted
-   * aux-only root leaf. This is the rendering companion to the
-   * `auxOnlyRootIds` lift in `layoutRoot` — having lifted the leaf OFF
-   * the spine row, we also take it off the spine LOGICALLY so the eye
-   * reads the canvas correctly:
-   *
-   *   - For AES single-block, dropping `key-expansion → initial.add-round-key`
-   *     (state) means initial.add-round-key has exactly ONE incoming
-   *     arrow from the plaintext direction: the endpoint pill's state
-   *     edge. When replication is on, the aux replica adds a SECOND
-   *     incoming arrow (`key-expansion@->initial.add-round-key →
-   *     initial.add-round-key`) — that's the round-key fan-out story,
-   *     intentionally distinct from the spine.
-   *   - Without this filter the spine edge co-exists with the aux
-   *     replica's arrow, producing three near-parallel inbound arrows
-   *     at initial.add-round-key. Visually noisy and pedagogically
-   *     misleading: it reads as "key-expansion's state flows into
-   *     add-round-key" when in fact key-expansion's state is identity.
-   *
-   * Validation is unaffected — `rawWarnings` consumes `rawGraph()`,
-   * not this filtered view. The dropped edges are the spec-true
-   * state-passthrough edges; removing them from the display doesn't
-   * change what `validateGraph` sees.
-   */
-  const graph = createMemo<CipherGraph>(() => {
-    const g = replicatedGraph();
-    const auxOnly = auxOnlyRootIds();
-    if (auxOnly.size === 0) return g;
-    const filteredEdges = g.edges.filter((e) => {
-      if (e.kind !== "state") return true;
-      return !auxOnly.has(e.from) && !auxOnly.has(e.to);
-    });
-    if (filteredEdges.length === g.edges.length) return g;
-    return { ...g, edges: filteredEdges };
-  });
+  /** Final display graph. Identity over `replicatedGraph` — the
+   * aux-only filter now runs earlier in the pipeline (see
+   * `auxOnlyFilteredGraph` above). Kept as a separate memo so downstream
+   * code that subscribes to `graph()` doesn't have to be re-pointed
+   * every time the pipeline shifts. */
+  const graph = createMemo<CipherGraph>(() => replicatedGraph());
 
   /**
    * Orphan-filtered pin map for layout consumers.
@@ -5057,7 +5063,7 @@ const ValueInspectorBody = (props: {
                   <>
                     <div class="graph-value-inspector-kind-row">
                       <span
-                        class={`graph-value-inspector-kind-badge graph-value-inspector-kind-${r().status === "value" ? r().status : "info"}`}
+                        class={`graph-value-inspector-kind-badge graph-value-inspector-kind-${r().status === "value" || r().status === "endpoint" ? "value" : "info"}`}
                       >
                         {kindBadgeText(r())}
                       </span>
@@ -5093,11 +5099,14 @@ const kindBadgeText = (r: EdgeValueLookup): string => {
 };
 
 /** Render the value-row content for an inspector row. Returns a string;
- *  rich rendering (matrix grid etc.) is intentionally not part of v1. */
+ *  rich rendering (matrix grid etc.) is intentionally not part of v1.
+ *  Endpoint rows format the pill's I/O value (post-run only; pre-run
+ *  endpoint clicks have already collapsed to `"no-trace"` in the
+ *  lookup). */
 const valueRowText = (r: EdgeValueLookup, fmt: ByteFormat): string => {
   switch (r.status) {
     case "endpoint":
-      return r.label;
+      return formatAuxValueOneline(r.value, fmt);
     case "no-trace":
       return "Run the cipher to see values.";
     case "missing":

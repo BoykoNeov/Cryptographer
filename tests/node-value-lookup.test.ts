@@ -10,7 +10,9 @@
  * Branch coverage (mirrors the module-docstring branch table on the
  * lookup helper):
  *
- *   - Endpoint pills (CIPHER_INPUT_ID / CIPHER_OUTPUT_ID) → `"endpoint"`.
+ *   - Endpoint pills (CIPHER_INPUT_ID / CIPHER_OUTPUT_ID) → `"endpoint"`
+ *     carrying frames[0].stateBefore (input) or trace.finalState
+ *     (output) as the I/O value. Pre-run clicks → `"no-trace"`.
  *   - Trace null → `"no-trace"`.
  *   - Block chip with valid index → `"value"`, displayKind=block-payload,
  *     value = `outBlocks[i]` (= the iterate's last body frame stateAfter
@@ -55,27 +57,39 @@ const runAes128Ecb = (): Trace =>
 // ─── Endpoint pills ─────────────────────────────────────────────────────
 
 describe("lookupNodeValue — endpoint pills", () => {
-  it("returns `endpoint` for the input pill id (descriptive label, no value)", () => {
+  it("returns `endpoint` for the input pill carrying the plaintext bytes", () => {
     const trace = runAes128Ecb();
     const out = lookupNodeValue(CIPHER_INPUT_ID, aes128EcbSpec, trace, undefined);
     expect(out.status).toBe("endpoint");
     if (out.status !== "endpoint") return;
     expect(out.endpointSide).toBe("input");
-    expect(out.label).toMatch(/plaintext/i);
+    // Input pill resolves to the first frame's stateBefore — i.e. the
+    // cipher's plaintext (the initialState the runtime cloned in).
+    const first = trace.frames[0];
+    expect(first).toBeDefined();
+    expect(out.value).toBe(first?.stateBefore);
   });
 
-  it("returns `endpoint` for the output pill id", () => {
+  it("returns `endpoint` for the output pill carrying the ciphertext bytes", () => {
     const trace = runAes128Ecb();
     const out = lookupNodeValue(CIPHER_OUTPUT_ID, aes128EcbSpec, trace, undefined);
     expect(out.status).toBe("endpoint");
     if (out.status !== "endpoint") return;
     expect(out.endpointSide).toBe("output");
-    expect(out.label).toMatch(/ciphertext/i);
+    // Output pill resolves to `trace.finalState` — the runtime's
+    // post-loop state, byte-for-byte the cipher's ciphertext.
+    expect(out.value).toBe(trace.finalState);
   });
 
-  it("endpoint branch wins even when trace is null", () => {
-    const out = lookupNodeValue(CIPHER_INPUT_ID, aes128EcbSpec, null, undefined);
-    expect(out.status).toBe("endpoint");
+  it("returns `no-trace` for an endpoint pill click when trace is null (pre-run)", () => {
+    // Pre-2026-05-17 the endpoint branch returned `"endpoint"` even
+    // with a null trace (descriptive label only). Post-rework, pre-run
+    // pill clicks collapse to `"no-trace"` so the panel's empty-trace
+    // copy matches every other inspector row.
+    const inputOut = lookupNodeValue(CIPHER_INPUT_ID, aes128EcbSpec, null, undefined);
+    expect(inputOut.status).toBe("no-trace");
+    const outputOut = lookupNodeValue(CIPHER_OUTPUT_ID, aes128EcbSpec, null, undefined);
+    expect(outputOut.status).toBe("no-trace");
   });
 });
 
