@@ -21,10 +21,15 @@
  *      The pills surface the actual cipher I/O: input pill → first
  *      frame's `stateBefore`, output pill → `trace.finalState`. The
  *      panel formats `value` like any other state row and badges the
- *      kind as "input pill" / "output pill" via `endpointSide`. The
- *      `label` is retained as a fallback caption. Pre-run pill clicks
- *      collapse to `"no-trace"` (branch 2) so the empty-trace copy is
- *      uniform across every selectable element.
+ *      kind as "input pill" / "output pill" via `endpointSide`. Any
+ *      caption a future a11y / tooltip surface needs should be built
+ *      at the call site from `endpointSide` + the active cipher mode
+ *      (which swaps "plaintext"/"ciphertext" on decrypt) — the lookup
+ *      result deliberately stops at the side discriminator + value so
+ *      no consumer can render encrypt-mode copy in decrypt mode by
+ *      mistake. Pre-run pill clicks collapse to `"no-trace"` (branch 2)
+ *      so the empty-trace copy is uniform across every selectable
+ *      element.
  *
  *   2. `"no-trace"` — `trace === null`. The user hasn't run the cipher
  *      yet. The panel shows a "Run the cipher to see edge values" hint.
@@ -241,12 +246,12 @@ const findProducerFrame = (
  * `status` and formats accordingly:
  *
  *   - `"endpoint"`: format `value` (the cipher's plaintext for the input
- *     pill, ciphertext for the output pill) with the active ByteFormat,
- *     and badge with "input pill" / "output pill". `label` is retained
- *     for a descriptive caption / accessibility hints, but the panel's
- *     value-row uses `value`. Only emitted when the trace is non-null;
- *     pre-run endpoint clicks return `"no-trace"` instead so the panel
- *     reads consistently with every other un-run row.
+ *     pill in encrypt mode / ciphertext in decrypt mode, and the inverse
+ *     for the output pill) with the active ByteFormat, and badge with
+ *     "input pill" / "output pill" via `endpointSide`. Only emitted when
+ *     the trace is non-null; pre-run endpoint clicks return `"no-trace"`
+ *     instead so the panel reads consistently with every other un-run
+ *     row.
  *   - `"no-trace"`: render the hint string ("Run the cipher to see…").
  *   - `"missing"`: render the `reason` muted, no value.
  *   - `"value"`: format `value` with the active ByteFormat. `displayKind`
@@ -256,7 +261,6 @@ export type EdgeValueLookup =
   | {
       readonly status: "endpoint";
       readonly endpointSide: "input" | "output";
-      readonly label: string;
       readonly value: AuxValue;
     }
   | { readonly status: "no-trace" }
@@ -314,14 +318,12 @@ export const lookupEdgeValue = (
       return {
         status: "endpoint",
         endpointSide: "input",
-        label: "cipher input (plaintext)",
         value: first.stateBefore,
       };
     }
     return {
       status: "endpoint",
       endpointSide: "output",
-      label: "cipher output (ciphertext)",
       value: trace.finalState,
     };
   }
@@ -695,7 +697,12 @@ const lookupRegularState = (
 //     (Pre-2026-05-17 the pills were descriptive-only and rendered just
 //     a "cipher input (plaintext)" label; the user's feedback then was
 //     that the pill click should surface the actual value the way the
-//     spine arrows do for intermediate leaves.)
+//     spine arrows do for intermediate leaves. The descriptive label
+//     was carried on the lookup result as a `label` field for a release
+//     and then dropped once it was clear no consumer read it AND the
+//     hardcoded "plaintext"/"ciphertext" copy would have been wrong in
+//     decrypt mode anyway — any future caption builds from
+//     `endpointSide` + the active cipher mode at the call site.)
 //
 //   - **Block chips** (`${iterateId}@block${i}`): the chip's "value" is
 //     the per-block ciphertext after that iteration completes — i.e.
@@ -759,7 +766,6 @@ export const lookupNodeValue = (
     return {
       status: "endpoint",
       endpointSide: "input",
-      label: "cipher input (plaintext)",
       value: first.stateBefore,
     };
   }
@@ -768,7 +774,6 @@ export const lookupNodeValue = (
     return {
       status: "endpoint",
       endpointSide: "output",
-      label: "cipher output (ciphertext)",
       value: trace.finalState,
     };
   }

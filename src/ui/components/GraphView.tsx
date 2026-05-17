@@ -3481,8 +3481,10 @@ export const GraphView = () => {
                           label={node.label}
                           // Pills aren't spec nodes (no scrub target), so the
                           // click ONLY toggles inspector selection. Inspector
-                          // returns the "endpoint" status — descriptive label,
-                          // no value formatting.
+                          // returns the "endpoint" status carrying the actual
+                          // I/O value (frames[0].stateBefore for input,
+                          // trace.finalState for output) — the value-row
+                          // formats it just like any state row.
                           isSelected={selectedTarget() !== null && isNodeSelected(pillId)}
                           onClick={() => toggleSelectedNode(pillId)}
                         />
