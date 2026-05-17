@@ -3392,6 +3392,24 @@ export const GraphView = () => {
                   const portGap = Math.max(6, Math.round(consts().LEAF_W / 10));
                   return consumerPortOffset(edge, portAssignment(), portGap);
                 });
+                // Same `consumerPortOffset` math, but on the y-axis for the
+                // horizontal regime (sources to the left / right of the
+                // consumer). EdgePath consumes this prop only when its
+                // regime branch picks horizontal; vertical-regime edges
+                // ignore it. Distinct portGap because the box is much
+                // shorter than wide (LEAF_H = 28 vs LEAF_W = 132): reusing
+                // `LEAF_W / 10 ≈ 13 px` would exceed `LEAF_H / 2 = 14` and
+                // pin against the clamp inside EdgePath. `LEAF_H / 4 ≈ 7 px`
+                // at normal density gives ~2 slots of breathing room on
+                // leaf-sized consumers before the clamp kicks in; tall
+                // chip-row containers (header + multi-chip body) get more
+                // slots automatically because EdgePath clamps against the
+                // retargeted `to.h`. Fixed (not scaled to `to.h`) is
+                // deliberate — a predictable visual rule across consumers.
+                const targetYOffset = createMemo(() => {
+                  const portGap = Math.max(4, Math.round(consts().LEAF_H / 4));
+                  return consumerPortOffset(edge, portAssignment(), portGap);
+                });
                 // Straight-line + offset-start-point + start-dot
                 // (2026-05-16, replacement for the curved-edge
                 // prototype): row-k replica edges (k ≥ 1) get a
@@ -3440,6 +3458,7 @@ export const GraphView = () => {
                         (isBundled ? isBundleSelected(eKey) : isEdgeSelected(eKey))
                       }
                       targetXOffset={targetXOffset()}
+                      targetYOffset={targetYOffset()}
                       sourceXOffset={sourceXOffset()}
                       isReplicaEdge={isReplicaEdgeMemo()}
                       bundleCount={bundleCount}
@@ -4395,12 +4414,23 @@ const EdgePath = (props: {
    * instead of converging at the midpoint. Defaults to 0, so
    * single-incoming consumers render identically to pre-port-spreading.
    * Only the vertical regime (replica directly above consumer) applies
-   * the offset — left-gutter replicas enter the consumer's LEFT edge at
-   * distinct y values per replica, so there's no convergence problem
-   * there and shifting x would push the arrow off the consumer's
-   * vertical center.
+   * this offset; the horizontal regime applies `targetYOffset` instead.
    */
   targetXOffset?: number;
+  /**
+   * Port-spreading offset applied to the target attach y in the horizontal
+   * regime (source to the left or right of consumer). Same `consumerPortOffset`
+   * value as `targetXOffset`, but consumed on the y-axis so multi-incoming
+   * edges spread along the consumer's LEFT / RIGHT edge instead of all
+   * converging at the vertical midpoint (`toCy`). Defaults to 0. Clamped
+   * to `to.h / 2 − 4` inside EdgePath so the attach point stays inside
+   * the consumer box even when port-gap math overshoots. The portGap
+   * passed in should be height-aware (e.g. `LEAF_H / 4 ≈ 7 px`) — reusing
+   * the width-derived `LEAF_W / 10 ≈ 13 px` would pin against the clamp
+   * on leaf-shaped consumers (LEAF_H = 28, half-width = 14). The call
+   * site is responsible for passing the right magnitude.
+   */
+  targetYOffset?: number;
   /**
    * Horizontal shift applied to the SOURCE x of the path in the
    * vertical regime — `sx = fromCx + sourceXOffset`. Replica edges of
@@ -4595,7 +4625,18 @@ const EdgePath = (props: {
     const naturalGap = rightward ? to.x - (from.x + from.w) : from.x - (to.x + to.w);
     const inset = naturalGap > 0 ? Math.min(ARROW_INSET, naturalGap / 2) : ARROW_INSET;
     const tx = rightward ? tEdge - inset : tEdge + inset;
-    const ty = toCy;
+    // Port-spreading on the consumer's LEFT / RIGHT edge: shift `ty` by
+    // `targetYOffset` so multi-incoming edges in the horizontal regime
+    // spread along the consumer's vertical edge instead of all stacking
+    // at `toCy`. Defaults to 0 → single-incoming consumers and pre-fix
+    // graphs render unchanged. Clamped to `to.h / 2 − 4` (mirrors the
+    // x-clamp pattern at lines 4528–4530) so the attach point stays
+    // inside the box even at extreme `localCount` values where the
+    // un-clamped offset would exceed half the box height.
+    const rawYOffset = props.targetYOffset ?? 0;
+    const yOffsetCap = to.h / 2 - 4;
+    const clampedYOffset = Math.max(-yOffsetCap, Math.min(yOffsetCap, rawYOffset));
+    const ty = toCy + clampedYOffset;
     const pull = Math.max(20, Math.abs(tx - sx) / 2);
     const c1x = rightward ? sx + pull : sx - pull;
     const c2x = rightward ? tx - pull : tx + pull;
