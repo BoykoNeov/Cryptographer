@@ -41,7 +41,13 @@
  */
 
 import type { CipherGraph, ContainerNode, GraphEdge, GraphNode } from "@/core/graph";
-import { layoutConstantsFor, layoutRoot } from "@/ui/components/GraphView";
+import {
+  buildConsumerPortAssignment,
+  buildReplicaPlacement,
+  consumerPortOffset,
+  layoutConstantsFor,
+  layoutRoot,
+} from "@/ui/components/GraphView";
 import { describe, expect, it } from "vitest";
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -188,14 +194,16 @@ describe("Slice 7c — multi-source row stability (globally-stable rowOfSource)"
     const { boxes } = layoutRoot(g, new Map<string, { x: number; y: number }>(), consts);
 
     // Row 0 sits `LEAF_H + REPLICA_LIFT_GAP` above the consumer
-    // (REPLICA_LIFT_GAP = 20 replaced STACK_GAP = 6 on 2026-05-16 so
-    // the arrow shaft between dot and arrowhead has visible length).
-    // Rows ≥1 stack with `LEAF_H + FLOW_GAP` between them
-    // (port-spreading polish, 2026-05-16): wider gap so the arrows
-    // from upper rows have visible drawing room and don't squish into a
-    // 3-px sliver between chips. Tracks `replicaSlotPosition`'s y formula.
+    // (REPLICA_LIFT_GAP = 36, bumped from STACK_GAP=6 on 2026-05-16,
+    // then 20 → 36 on 2026-05-17 so the arrow shaft between the
+    // start-dot and the arrowhead has visible length).
+    // Rows ≥1 stack with `LEAF_H + REPLICA_STACK_GAP` between them
+    // (replica-stack-gap polish, 2026-05-17): the ×N bundle pills sit
+    // at arrow midpoints, so the inter-row gap was bumped from
+    // FLOW_GAP=24 to REPLICA_STACK_GAP=48 to keep adjacent pills from
+    // crowding. Tracks `replicaSlotPosition`'s y formula.
     const row0Lift = consts.LEAF_H + consts.REPLICA_LIFT_GAP;
-    const rowStep = consts.LEAF_H + consts.FLOW_GAP;
+    const rowStep = consts.LEAF_H + consts.REPLICA_STACK_GAP;
 
     // All A-replicas across c1/c2/c3 share the same y (row 0 above their
     // respective consumers). They differ in x (above their distinct
@@ -351,17 +359,19 @@ describe("Slice 7c — chip-crowding fixture (canonical bad case)", () => {
     const consts = layoutConstantsFor("normal");
     const { boxes } = layoutRoot(g, new Map<string, { x: number; y: number }>(), consts);
 
-    // Row 0 lift uses REPLICA_LIFT_GAP (= 20, wider than STACK_GAP =
-    // 6 so the arrow shaft is visible after ARROW_INSET subtraction);
-    // higher rows step up by LEAF_H + FLOW_GAP (wider — port-spreading
-    // polish for visible inter-row arrow gaps). With the straight-line
-    // + offset-start approach (2026-05-16), REPLICA_ROW_X_STEP === 0
-    // so row 1 sits at chip.x (same column); its arrow ORIGINATES from
-    // an offset point on row 1's bottom edge (via
-    // `replicaSourceXOffset`) and a start-dot marks that origin so the
-    // eye reads it as distinct from row 0's arrow.
+    // Row 0 lift uses REPLICA_LIFT_GAP (= 36 after the 2026-05-17
+    // bump from 20, wider than STACK_GAP=6 so the arrow shaft is
+    // visible after ARROW_INSET subtraction); higher rows step up by
+    // `LEAF_H + REPLICA_STACK_GAP` (REPLICA_STACK_GAP=48, replacing
+    // FLOW_GAP=24 on 2026-05-17 so adjacent bundle ×N pills don't
+    // crowd each other). With the straight-line + offset-start
+    // approach (2026-05-16), REPLICA_ROW_X_STEP === 0 so row 1 sits
+    // at chip.x (same column); its arrow ORIGINATES from an offset
+    // point on row 1's bottom edge (via `replicaSourceXOffset`) and a
+    // start-dot marks that origin so the eye reads it as distinct
+    // from row 0's arrow.
     const row0Lift = consts.LEAF_H + consts.REPLICA_LIFT_GAP;
-    const rowStep = consts.LEAF_H + consts.FLOW_GAP;
+    const rowStep = consts.LEAF_H + consts.REPLICA_STACK_GAP;
 
     // For each chip, its 2 replicas sit at row 0 (chip.x) and row 1
     // (chip.x + REPLICA_ROW_X_STEP) — the diagonal stack that bypasses
@@ -480,5 +490,144 @@ describe("Option C — replica anchor for collapsed-iterate consumers", () => {
     // The replica is NOT anchored over block 1's column — that was the
     // perception-bug we are fixing.
     expect(replicaBox.x).not.toBe(block0Box.x);
+  });
+});
+
+// ─── Single-replica vertical arrow (2026-05-17 polish) ──────────────────
+//
+// When a consumer has exactly ONE incoming replica chip but the consumer-
+// port-spread gives that chip's bundle a non-center slot (other non-
+// replica bundles also feed the consumer), `layoutRoot` shifts the
+// chip's x by `consumerPortOffset(...)`. Result: chip.x + LEAF_W/2 =
+// arrow target x at the consumer's top edge → vertical arrow. Multi-
+// replica consumers skip the shift to preserve the column-stacked
+// visual the user finds acceptable.
+
+describe("single-replica vertical-arrow shift (2026-05-17 polish)", () => {
+  it("shifts a sole replica chip's x by its bundle's port-slot offset, producing a vertical arrow", () => {
+    // Synthetic: one consumer with three incoming aux bundles. Only ONE
+    // of the producers is a replica chip; the other two are plain leaves.
+    // The port-spread orders bundles by (row asc, from asc, auxKey asc,
+    // kind asc) and centers them around the consumer-top midline; with
+    // 3 bundles, the replica's bundle gets a non-center slot. Pre-fix:
+    // the chip sat at consumer.x → arrow diagonal. Post-fix: chip.x =
+    // consumer.x + slotOffset → arrow vertical.
+    const g = buildSyntheticGraph({
+      nodes: [
+        consumerNode("consumer"),
+        consumerNode("plainA"),
+        consumerNode("plainB"),
+        replicaNode("replica->consumer", "replica"),
+      ],
+      edges: [
+        // Replica's bundle: one aux edge from the chip.
+        { from: "replica->consumer", to: "consumer", auxKey: "rk", kind: "aux" },
+        // Two non-replica bundles from other root leaves.
+        { from: "plainA", to: "consumer", auxKey: "blockCount", kind: "aux" },
+        { from: "plainB", to: "consumer", auxKey: "input-blocks", kind: "aux" },
+      ],
+      // Splice replica before its consumer; plain leaves earlier so they
+      // own their slots in the rootIds order (rendering invariant only).
+      rootIds: ["plainA", "plainB", "replica->consumer", "consumer"],
+    });
+    const consts = layoutConstantsFor("normal");
+    // Build the port assignment the layout pass needs. For this test
+    // every bundle is a singleton, so the synth graph IS its own bundle
+    // representative — we can pass the graph directly.
+    const ports = buildConsumerPortAssignment(g, buildReplicaPlacement(g));
+    const portGap = Math.max(6, Math.round(consts.LEAF_W / 10));
+
+    // First: confirm the consumer-port assignment gave the replica's
+    // bundle a non-center slot. If it didn't, the test wouldn't be
+    // exercising the new path (consumerPortOffset would return 0 for
+    // every edge and the shift wouldn't matter).
+    const replicaEdge = g.edges.find((e) => e.from === "replica->consumer");
+    if (!replicaEdge) throw new Error("missing replica edge");
+    const expectedSlotOffset = consumerPortOffset(replicaEdge, ports, portGap);
+    expect(expectedSlotOffset).not.toBe(0);
+
+    // Now run the layout WITH the port assignment.
+    const { boxes } = layoutRoot(
+      g,
+      new Map<string, { x: number; y: number }>(),
+      consts,
+      new Set(),
+      ports,
+    );
+
+    const consumer = boxes.get("consumer");
+    const chip = boxes.get("replica->consumer");
+    if (!consumer || !chip) throw new Error("missing layout box");
+
+    // The headline assertion: chip.x is shifted by the slot offset, so
+    // chip.center.x === consumer.center.x + slotOffset === arrow target x.
+    // The arrow drawn from chip-bottom-center to (consumer.x + slotOffset,
+    // consumer.y) is therefore vertical.
+    expect(chip.x).toBe(consumer.x + expectedSlotOffset);
+  });
+
+  it("does NOT shift when there are multiple replica chips feeding the same consumer (preserves the column-stacked visual)", () => {
+    // Two replicas (A + B) feeding the same consumer alongside a plain
+    // leaf. Without the shift, chips stack at consumer.x with column-
+    // diagonal arrows; user said "if we have 2 or 3 replicates it look
+    // good." Confirm the shift is suppressed in this multi-chip case.
+    const g = buildSyntheticGraph({
+      nodes: [
+        consumerNode("consumer"),
+        consumerNode("plain"),
+        replicaNode("A->consumer", "A"),
+        replicaNode("B->consumer", "B"),
+      ],
+      edges: [
+        { from: "A->consumer", to: "consumer", auxKey: "akey", kind: "aux" },
+        { from: "B->consumer", to: "consumer", auxKey: "bkey", kind: "aux" },
+        { from: "plain", to: "consumer", auxKey: "plainkey", kind: "aux" },
+      ],
+      rootIds: ["plain", "A->consumer", "B->consumer", "consumer"],
+    });
+    const consts = layoutConstantsFor("normal");
+    const ports = buildConsumerPortAssignment(g, buildReplicaPlacement(g));
+
+    const { boxes } = layoutRoot(
+      g,
+      new Map<string, { x: number; y: number }>(),
+      consts,
+      new Set(),
+      ports,
+    );
+
+    const consumer = boxes.get("consumer");
+    const a = boxes.get("A->consumer");
+    const b = boxes.get("B->consumer");
+    if (!consumer || !a || !b) throw new Error("missing layout box");
+
+    // Both replicas still sit at consumer.x (no slot shift). Stacked
+    // vertically in y by REPLICA_STACK_GAP.
+    expect(a.x).toBe(consumer.x);
+    expect(b.x).toBe(consumer.x);
+  });
+
+  it("no shift when portAssignment is undefined (test backward-compat — layoutRoot's old signature)", () => {
+    // Existing callers that don't pass the new port-assignment parameter
+    // must see byte-identical placement. This catches a regression where
+    // the new code path leaks into the no-port-assignment branch.
+    const g = buildSyntheticGraph({
+      nodes: [consumerNode("consumer"), consumerNode("plain"), replicaNode("R->consumer", "R")],
+      edges: [
+        { from: "R->consumer", to: "consumer", auxKey: "rkey", kind: "aux" },
+        { from: "plain", to: "consumer", auxKey: "pkey", kind: "aux" },
+      ],
+      rootIds: ["plain", "R->consumer", "consumer"],
+    });
+    const consts = layoutConstantsFor("normal");
+
+    // No portAssignment argument — old four-arg signature.
+    const { boxes } = layoutRoot(g, new Map<string, { x: number; y: number }>(), consts);
+
+    const consumer = boxes.get("consumer");
+    const chip = boxes.get("R->consumer");
+    if (!consumer || !chip) throw new Error("missing layout box");
+    // Chip at consumer.x exactly (no shift).
+    expect(chip.x).toBe(consumer.x);
   });
 });

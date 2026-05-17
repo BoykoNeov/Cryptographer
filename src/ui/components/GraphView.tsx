@@ -44,6 +44,7 @@ import {
   type GraphNode,
   type GraphWarning,
   buildIterateFeedbackPredicate,
+  bundleEdges,
   collapseGraph,
   deriveAuxGraph,
   expandCollapsedIterates,
@@ -93,12 +94,16 @@ import {
 import {
   type ValueInspectorTarget,
   clearSelectedTarget,
+  decodeBundleKey,
   encodeEdgeKey,
+  isBundleSelected,
   isEdgeSelected,
   isNodeSelected,
+  setActiveBundleAuxKey,
   toggleInspectorPanelOpen,
   toggleSelectedEdge,
   toggleSelectedNode,
+  useActiveBundleAuxKey,
   useInspectorPanelOpen,
   useSelectedTarget,
 } from "../stores/view-value-inspector";
@@ -193,11 +198,32 @@ const BASE_REPLICA_SOURCE_X_STEP = 32;
  * visually adjacent to their consumer, long enough that the arrow reads
  * as a directed line not a flush mark.
  */
-const BASE_REPLICA_LIFT_GAP = 20;
+const BASE_REPLICA_LIFT_GAP = 36;
+/**
+ * Base (1.0×) vertical gap BETWEEN two stacked replica chips above the
+ * same consumer. Distinct from `FLOW_GAP` (which governs sibling
+ * stacking inside groups) so we can tune replica spacing without
+ * disturbing the rest of the layout. Bumped from FLOW_GAP=24 to 48 on
+ * 2026-05-17 after the user reported "the arrow counter is almost the
+ * same size as the space between the replicates" — the ×N pill is
+ * ~32–40 px wide, so a 24 px gap made adjacent pills crowd each other.
+ * 48 px gives the pills clear separation while keeping the column of
+ * replicas readable as one stack.
+ */
+const BASE_REPLICA_STACK_GAP = 48;
 /** Height of the container's header band (label + optional ×N chip). Fixed. */
 const HEADER_H = 22;
-/** Outer margin of the SVG canvas. Fixed. */
-const CANVAS_MARGIN = 24;
+/**
+ * Outer margin of the SVG canvas. Drives both the top and left initial
+ * offset for all root content. Tuned across two rounds on 2026-05-17 in
+ * response to user feedback during the arrow-bundling smoke: first
+ * bump 24 → 44 ("all items in the canvas should spawn initially a
+ * little bit lower"), then 44 → 60 ("more space to the top" after the
+ * first smoke wasn't enough). The higher value keeps the canvas chrome
+ * (toolbar, replication panel) from feeling cramped against the
+ * topmost row of nodes.
+ */
+const CANVAS_MARGIN = 60;
 /** Pixel threshold above which a pointer event is a drag, not a click. Fixed. */
 const DRAG_THRESHOLD_PX = 4;
 /** Width of the collapse-chevron hit area inside the container header. Fixed. */
@@ -284,6 +310,13 @@ type LayoutConstants = {
    * shaft has visible length after `ARROW_INSET` subtraction.
    */
   readonly REPLICA_LIFT_GAP: number;
+  /**
+   * Vertical gap between two stacked replica chips above the same
+   * consumer. Distinct from `FLOW_GAP` so we can tune replica-stack
+   * density without disturbing the rest of the layout. See
+   * `BASE_REPLICA_STACK_GAP`.
+   */
+  readonly REPLICA_STACK_GAP: number;
 };
 
 /**
@@ -306,6 +339,7 @@ const layoutConstantsFor = (density: ViewDensity): LayoutConstants => {
     REPLICA_ROW_X_STEP: Math.round(BASE_REPLICA_ROW_X_STEP * scale),
     REPLICA_SOURCE_X_STEP: Math.round(BASE_REPLICA_SOURCE_X_STEP * scale),
     REPLICA_LIFT_GAP: Math.round(BASE_REPLICA_LIFT_GAP * scale),
+    REPLICA_STACK_GAP: Math.round(BASE_REPLICA_STACK_GAP * scale),
   };
 };
 
@@ -452,7 +486,7 @@ const EMPTY_REPLICA_PLACEMENT: ReplicaPlacement = {
  * how the user reads the cipher "state flows along, aux is dropped in
  * from above-and-left."
  */
-type ConsumerPortAssignment = {
+export type ConsumerPortAssignment = {
   /**
    * edge reference → slot index (0..localCount-1) at its consumer's
    * VISUAL target. Empty entries for edges at single-incoming consumers
@@ -617,7 +651,11 @@ const replicaSlotPosition = (
   const baseY = consumerY - consts.LEAF_H - consts.REPLICA_LIFT_GAP;
   return {
     x: anchorX + row * consts.REPLICA_ROW_X_STEP,
-    y: baseY - row * (consts.LEAF_H + consts.FLOW_GAP),
+    // Inter-row pitch uses REPLICA_STACK_GAP (48) instead of FLOW_GAP
+    // (24) since 2026-05-17 — the ×N bundle pills sit at arrow
+    // midpoints, and a 24 px gap let adjacent pills crowd each other.
+    // See `BASE_REPLICA_STACK_GAP` for the user-feedback context.
+    y: baseY - row * (consts.LEAF_H + consts.REPLICA_STACK_GAP),
   };
 };
 
@@ -629,16 +667,20 @@ const replicaSlotPosition = (
  * Formula: row 0 takes `LEAF_H + STACK_GAP`, each row above adds
  * `LEAF_H + FLOW_GAP`. Returns 0 when `maxRow < 0` (no replicas).
  *
- * Single-row case (`maxRow === 0`) = `LEAF_H + STACK_GAP`, byte-identical
- * to pre-port-spreading. Multi-row case grows with FLOW_GAP per extra row,
- * matching `replicaSlotPosition`'s row-spacing.
+ * Single-row case (`maxRow === 0`) = `LEAF_H + REPLICA_LIFT_GAP`,
+ * byte-identical to the single-replica path. Multi-row case grows with
+ * `REPLICA_STACK_GAP` per extra row, matching `replicaSlotPosition`'s
+ * row-spacing.
  */
-// Implementation note: row 0 uses REPLICA_LIFT_GAP (= 20) instead of
-// STACK_GAP (= 6) — the wider gap leaves visible arrow-shaft room
-// after ARROW_INSET. Matches `replicaSlotPosition`'s baseY formula.
+// Implementation note: row 0 uses REPLICA_LIFT_GAP (36) instead of
+// STACK_GAP (6) — the wider gap leaves visible arrow-shaft room
+// after ARROW_INSET. Higher rows use REPLICA_STACK_GAP (48) since
+// 2026-05-17 — see `BASE_REPLICA_STACK_GAP` for the rationale.
 const replicaLiftHeight = (maxRow: number, consts: LayoutConstants): number => {
   if (maxRow < 0) return 0;
-  return consts.LEAF_H + consts.REPLICA_LIFT_GAP + maxRow * (consts.LEAF_H + consts.FLOW_GAP);
+  return (
+    consts.LEAF_H + consts.REPLICA_LIFT_GAP + maxRow * (consts.LEAF_H + consts.REPLICA_STACK_GAP)
+  );
 };
 
 /**
@@ -1007,6 +1049,20 @@ export const layoutRoot = (
    * keep the same layout they always had.
    */
   auxOnlyRootIds: ReadonlySet<string> = new Set(),
+  /**
+   * Per-consumer port assignment (post-bundling). When provided, root-level
+   * replica chips that are the SOLE replica feeding their consumer get
+   * their x shifted by `consumerPortOffset(...)` so the arrow renders
+   * vertical instead of diagonal — fix for the user-flagged "arrow in
+   * single replicate is still not near vertical" (2026-05-17 polish
+   * smoke). Multi-replica consumers keep the column-stacked layout
+   * (the user said "if we have 2 or 3 replicates it looks good").
+   *
+   * Optional; tests and pre-bundle callers can omit it (no shift applied —
+   * byte-identical to the old layout). Production renderer wires this
+   * from the `portAssignment` memo so the shift is always available.
+   */
+  portAssignment?: ConsumerPortAssignment,
 ): { boxes: Map<string, Box>; canvasW: number; canvasH: number } => {
   const containersById = new Map<string, ContainerNode>();
   for (const c of graph.containers) containersById.set(c.id, c);
@@ -1104,6 +1160,19 @@ export const layoutRoot = (
   // share row 1, etc. — globally stable across every consumer they
   // touch. The same pattern lives in `layoutNode`'s group + iterate
   // branches; one global `rowOfSource` map drives all three sites.
+  //
+  // Pre-pass: count chips per consumer so the placement loop can detect
+  // the single-replica case and apply the slot-offset shift (see the
+  // `slotXShift` comment inside the loop). Multi-replica consumers skip
+  // the shift to preserve the column-stacked visual the user finds
+  // acceptable.
+  const chipCountByConsumer = new Map<string, number>();
+  for (const id of graph.rootIds) {
+    if (!replicas.isReplica.has(id)) continue;
+    const cid = replicas.consumerOf.get(id);
+    if (cid === undefined) continue;
+    chipCountByConsumer.set(cid, (chipCountByConsumer.get(cid) ?? 0) + 1);
+  }
   for (const id of graph.rootIds) {
     if (!replicas.isReplica.has(id)) continue;
     const consumerId = replicas.consumerOf.get(id);
@@ -1162,10 +1231,39 @@ export const layoutRoot = (
         ? consumerBox.x + (consumerBox.w - consts.LEAF_W) / 2
         : undefined;
     const anchorX = iterateCenterX ?? firstChildBox?.x ?? consumerBox.x;
+    // Single-replica vertical-arrow shift (2026-05-17): when this
+    // consumer has exactly one incoming replica chip, the consumer-port-
+    // spread still gives that chip's bundle a non-center slot because
+    // OTHER non-replica bundles also feed the consumer (state-spine
+    // edges, plain aux edges from non-replicated sources). The chip
+    // would sit at `anchorX` while its arrow target was at `anchorX +
+    // slotOffset` → diagonal. Shifting the chip's x by the slot
+    // offset makes the arrow vertical. Multi-replica consumers (≥2
+    // chips) skip the shift — the user finds the column-stacked
+    // diagonal-arrow pattern visually fine for 2-3 chips, and shifting
+    // each would convert the vertical stack into a horizontal row,
+    // breaking the established "stack above the consumer" visual.
+    //
+    // Slot lookup uses the bundle's representative edge — by bundleEdges'
+    // first-encounter rule, this is the first edge in graph.edges whose
+    // (from, to) matches the chip → consumer pair. Any other edge from
+    // the chip is a same-bundle sibling and wouldn't be in
+    // `portAssignment.slotOf`, so `consumerPortOffset` would return 0
+    // for it. Defensive `find` instead of indexing for robustness against
+    // a malformed graph.
+    let slotXShift = 0;
+    if (portAssignment !== undefined && chipCountByConsumer.get(consumerId) === 1) {
+      const repEdge = graph.edges.find((e) => e.from === id && e.to === consumerId);
+      if (repEdge !== undefined) {
+        const portGap = Math.max(6, Math.round(consts.LEAF_W / 10));
+        slotXShift = consumerPortOffset(repEdge, portAssignment, portGap);
+      }
+    }
     // Port-spreading polish: x/y come from `replicaSlotPosition`, which
-    // applies the row-shift and FLOW_GAP row-spacing uniformly across
-    // the three placement sites.
-    const slot = replicaSlotPosition(anchorX, consumerBox.y, row, consts);
+    // applies the row-shift and REPLICA_STACK_GAP row-spacing uniformly
+    // across the three placement sites. `slotXShift` is added on top
+    // (single-replica vertical shift; zero for multi-replica + tests).
+    const slot = replicaSlotPosition(anchorX + slotXShift, consumerBox.y, row, consts);
     boxes.set(id, {
       x: slot.x,
       y: slot.y,
@@ -1780,6 +1878,24 @@ export const GraphView = () => {
   const feedbackPredicate = createMemo(() => buildIterateFeedbackPredicate(graph()));
 
   /**
+   * Bundled view of `graph()` — same-(from, to, kind, isFeedback) edges
+   * collapsed into `EdgeBundle`s for render-time visual decongestion.
+   *
+   * Motivating case (2026-05-17 manual smoke): AES-128 ECB with iterate
+   * COLLAPSED + key-expansion source set to "always" replicate produced
+   * 11 parallel aux arrows fanning into the iterate. Post-bundle: one
+   * thicker arrow with a `×11` label. Singleton bundles (`auxKeys
+   * .length === 1`) render IDENTICALLY to the pre-bundle world — same
+   * data-edge-key format, same stroke width — so every non-bundled
+   * spec/iterate state is byte-identical to before.
+   *
+   * Recomputed when either `graph()` or `feedbackPredicate()` changes;
+   * since `feedbackPredicate` already depends on `graph()`, the effective
+   * trigger is `graph()` identity.
+   */
+  const bundledGraph = createMemo(() => bundleEdges(graph(), feedbackPredicate()));
+
+  /**
    * Sources eligible for a row in the override panel: any id appearing in
    * `edge.from` for at least one aux edge in the collapsed graph. Sorted
    * by fanout descending so the high-fanout offenders surface first.
@@ -1806,7 +1922,13 @@ export const GraphView = () => {
     return rows;
   });
 
-  const layout = createMemo(() => layoutRoot(graph(), pinnedMap(), consts(), auxOnlyRootIds()));
+  // `layout` is declared below, AFTER `portAssignment`, because the
+  // layout pass takes a `portAssignment` argument (used to shift a
+  // single-replica chip's x for a vertical arrow into the consumer).
+  // Solid memos run their body once on creation to capture deps, so
+  // forward-referencing `portAssignment` here would TDZ-fault. Moving
+  // the declaration is the cleanest fix — no other consumers between
+  // here and `portAssignment` need `layout()`.
 
   /**
    * Port-spreading follow-up to Slice 7c (2026-05-16): the per-component
@@ -1874,10 +1996,32 @@ export const GraphView = () => {
    * `containersById` because Solid's createMemo runs its body eagerly
    * on construction (TDZ would fire if those memos weren't defined yet).
    */
-  const portAssignment = createMemo(() =>
-    buildConsumerPortAssignment(graph(), replicaPlacement(), (e) =>
+  const portAssignment = createMemo(() => {
+    // Port-assignment is now keyed off BUNDLES (one slot per bundle) so an
+    // 11-auxKey bundle counts as one incoming edge at its consumer
+    // instead of 11. The builder consumes a CipherGraph; pass a thin
+    // structural shim whose `edges` array is the bundles' representative
+    // edges. Render-time helpers look up the same `bundle
+    // .representativeEdge` reference, so identity-based map keys
+    // (`slotOf.get(edge)`) hit. State edges are singleton bundles in
+    // practice, so the assignment is byte-identical for the non-bundled
+    // case.
+    const bg = bundledGraph();
+    const synthGraph: CipherGraph = {
+      nodes: bg.nodes,
+      containers: bg.containers,
+      edges: bg.bundles.map((b) => b.representativeEdge),
+      rootIds: bg.rootIds,
+    };
+    return buildConsumerPortAssignment(synthGraph, replicaPlacement(), (e) =>
       visualEdgeTargetId(e, nodesById(), containersById()),
-    ),
+    );
+  });
+
+  // Now that `portAssignment` is declared, we can build `layout` —
+  // see the placeholder comment higher up for why this lives here.
+  const layout = createMemo(() =>
+    layoutRoot(graph(), pinnedMap(), consts(), auxOnlyRootIds(), portAssignment()),
   );
 
   /**
@@ -2943,6 +3087,7 @@ export const GraphView = () => {
               <ValueInspectorBody
                 selectedTarget={selectedTarget}
                 edges={() => graph().edges}
+                bundles={() => bundledGraph().bundles}
                 spec={spec}
                 frameIndex={frameIndex}
                 version={version}
@@ -3036,9 +3181,20 @@ export const GraphView = () => {
             </For>
 
             {/* Edges between leaf/container centers. Drawn before leaves so the
-              lines tuck under the rectangle fills. */}
-            <For each={graph().edges}>
-              {(edge) => {
+              lines tuck under the rectangle fills.
+
+              Bundling pass (2026-05-17): we iterate `bundledGraph().bundles`
+              rather than `graph().edges`. Singleton bundles (the vast
+              majority — every state edge and every aux pair with only
+              one auxKey) render IDENTICALLY to the pre-bundle world; only
+              multi-auxKey bundles (post-replication, post-collapse cases
+              like AES-128 ECB key-expansion → collapsed iterate) collapse
+              into a single thicker arrow with a `×N` label. */}
+            <For each={bundledGraph().bundles}>
+              {(bundle) => {
+                const edge = bundle.representativeEdge;
+                const bundleCount = bundle.auxKeys.length;
+                const isBundled = bundleCount >= 2;
                 const fromBox = createMemo(() => layout().boxes.get(edge.from));
                 // Slice-2 follow-up: visually terminate replica→iterate-
                 // container aux edges at the iterate body's FIRST child,
@@ -3052,7 +3208,17 @@ export const GraphView = () => {
                   const targetId = visualEdgeTargetId(edge, nodesById(), containersById());
                   return layout().boxes.get(targetId);
                 });
-                const eKey = encodeEdgeKey(edge);
+                // edgeKey format:
+                //   - singleton bundle (N=1) → existing
+                //     `${from}|${to}|${auxKey}|${kind}` so the inspector
+                //     store dispatches to the per-edge value lookup
+                //     (zero regression on every non-bundled spec).
+                //   - multi bundle (N≥2) → `bundle:${from}|${to}|${kind}
+                //     |${isFeedback?1:0}` so the inspector store
+                //     dispatches to the bundle-summary lookup (Slice C).
+                const eKey = isBundled
+                  ? `bundle:${bundle.from}|${bundle.to}|${bundle.kind}|${bundle.isFeedback ? "1" : "0"}`
+                  : encodeEdgeKey(edge);
                 // Port-spreading follow-up to Slice 7c (2026-05-16): for
                 // replica-sourced edges in a multi-source graph, shift the
                 // target attach point by one slot per globally-stable
@@ -3094,22 +3260,37 @@ export const GraphView = () => {
                       from={fromBox()!}
                       // biome-ignore lint/style/noNonNullAssertion: <Show> guard above
                       to={toBox()!}
+                      // For singletons, `auxKey` is the one aux key; for
+                      // bundles it's the first one (used in the tooltip;
+                      // the bundle inspector exposes the full list).
                       auxKey={edge.auxKey}
                       kind={edge.kind}
                       // Cross-iteration aux feedback (e.g. CBC's
                       // cbc-snapshot → cbc-xor): renders dashed so the
                       // user can read "this is iteration-N → iteration-
                       // N+1, not within-iteration flow" at a glance.
-                      isFeedback={feedbackPredicate()(edge)}
+                      isFeedback={bundle.isFeedback}
                       edgeKey={eKey}
                       // `selectedTarget()` dep ensures Solid re-runs this when
-                      // the selection changes. `isEdgeSelected` reads the
-                      // store-level signal too (redundant tracking is harmless
-                      // and keeps the helper's API stable for non-Solid callers).
-                      isSelected={selectedTarget() !== null && isEdgeSelected(eKey)}
+                      // the selection changes. For singleton bundles the
+                      // `eKey` matches `encodeEdgeKey(edge)` so
+                      // `isEdgeSelected` picks it up; for multi bundles
+                      // the `eKey` carries the `bundle:` prefix so we
+                      // dispatch through `isBundleSelected` instead.
+                      // Combining the two predicates here keeps the
+                      // selection halo in sync with whichever target
+                      // shape the inspector store holds.
+                      isSelected={
+                        selectedTarget() !== null &&
+                        (isBundled ? isBundleSelected(eKey) : isEdgeSelected(eKey))
+                      }
                       targetXOffset={targetXOffset()}
                       sourceXOffset={sourceXOffset()}
                       isReplicaEdge={isReplicaEdgeMemo()}
+                      bundleCount={bundleCount}
+                      // First few aux keys for the tooltip; the bundle
+                      // inspector (Slice C) shows the full list.
+                      bundleAuxKeysSample={bundle.auxKeys}
                     />
                   </Show>
                 );
@@ -3957,6 +4138,63 @@ const ContainerRect = (props: {
   );
 };
 
+/**
+ * Pixel magnitude of the perpendicular offset applied to the bundle
+ * `×N` label so the pill sits next to the arrow shaft rather than on
+ * top of it. 16 px is enough to clear a 12-px hit-stroke companion
+ * path plus a couple of pixels of breathing room — verified visually
+ * on the AES-128 ECB + collapsed + always-replicate fixture during
+ * the 2026-05-17 manual smoke.
+ */
+const LABEL_PERP_OFFSET = 16;
+
+/**
+ * Position along the arrow (0 = source, 1 = target) where the bundle
+ * `×N` pill anchors. Was 0.5 (midpoint) in the original bundling
+ * commit; bumped to 0.25 on 2026-05-17 after user feedback during the
+ * polish smoke ("it would be better if the arrow counter is situated
+ * near arrow start, not in the middle, because now sometimes it can
+ * get obstructed by other replicates"). The midpoint of a long arrow
+ * from a row-1+ replica intersects the column of row-0+ replicas;
+ * anchoring near the source keeps the pill close to its own chip and
+ * out of the intervening replica boxes.
+ */
+const LABEL_T_ANCHOR = 0.25;
+
+/**
+ * Compute the anchor point for a bundle's `×N` pill. Linear
+ * interpolation of (sx, sy) → (tx, ty) at `LABEL_T_ANCHOR` (= 0.25,
+ * i.e. one quarter along the arrow from the source), then shifted by
+ * `LABEL_PERP_OFFSET` along the unit perpendicular `(-dy, dx)/length`.
+ * The 90° CCW choice means a downward vertical arrow gets a LEFTWARD
+ * label; a rightward horizontal arrow gets a DOWNWARD label — both
+ * side-of-shaft, which was the explicit user ask. Falls back to the
+ * raw anchor when the direction vector degenerates to zero (defensive;
+ * layout never produces zero-length edges in practice).
+ */
+const perpendicularLabelMidpoint = (
+  sx: number,
+  sy: number,
+  tx: number,
+  ty: number,
+): { x: number; y: number } => {
+  const mx = sx + (tx - sx) * LABEL_T_ANCHOR;
+  const my = sy + (ty - sy) * LABEL_T_ANCHOR;
+  const dx = tx - sx;
+  const dy = ty - sy;
+  const length = Math.sqrt(dx * dx + dy * dy);
+  if (length < 1) return { x: mx, y: my };
+  // Unit perpendicular (90° CCW): for a downward arrow (dx=0, dy>0)
+  // this is (-1, 0) → label shifts LEFT. Good direction since the
+  // canvas grows rightward and the panel/sidebar already crowds the
+  // left, so a leftward nudge keeps the label visually grouped with
+  // the source (the replica chip above) rather than with the
+  // consumer (the iterate below).
+  const px = -dy / length;
+  const py = dx / length;
+  return { x: mx + px * LABEL_PERP_OFFSET, y: my + py * LABEL_PERP_OFFSET };
+};
+
 const EdgePath = (props: {
   from: Box;
   to: Box;
@@ -4033,6 +4271,25 @@ const EdgePath = (props: {
    * Non-replica edges (default `false`) keep the curve + no dot.
    */
   isReplicaEdge?: boolean;
+  /**
+   * Number of edges collapsed into this rendered path (the bundle
+   * count). Defaults to 1; singletons render identically to the pre-
+   * bundle world. For N ≥ 2 the path is rendered with a thicker
+   * stroke (logarithmic in N, capped) AND a `×N` text label at the
+   * path midpoint. The hit zone stays a single 12 px companion path;
+   * the inspector store routes the click to the bundle-summary
+   * variant via the `bundle:` data-edge-key prefix.
+   */
+  bundleCount?: number;
+  /**
+   * The bundle's aux keys, used to populate the hover/title tooltip
+   * when the bundle is multi (N ≥ 2). For singletons this prop is
+   * ignored — the existing `auxKey` prop already carries the only
+   * key. The renderer joins these for the `<title>` so users can see
+   * the full list on hover; the in-app inspector (Slice C) renders the
+   * same list with click-to-drill behavior.
+   */
+  bundleAuxKeysSample?: readonly string[];
 }) => {
   // The `d` attribute is computed via createMemo so it tracks changes to
   // props.from / props.to. Without the memo, the path string would be
@@ -4063,11 +4320,15 @@ const EdgePath = (props: {
   // the arrowhead never crosses the source on tight gaps (the STACK_GAP=6
   // case inside groups would otherwise produce a zero-length or
   // negative-length path).
-  // Returns both the SVG path `d` string and (for replica edges in the
-  // vertical regime) the (x, y) position of the start-dot. Combined
-  // into one memo so the geometry math runs once per change — the
-  // start-dot lives at the same `(sx, sy)` the path starts from.
-  const geom = createMemo<{ path: string; startDot: { x: number; y: number } | null }>(() => {
+  // Returns the SVG path `d` string, the (x, y) position of the start-
+  // dot (vertical-regime replica edges only), and the midpoint (used
+  // for bundle `×N` label placement). Computed in one memo so the
+  // geometry math runs once per change.
+  const geom = createMemo<{
+    path: string;
+    startDot: { x: number; y: number } | null;
+    midpoint: { x: number; y: number };
+  }>(() => {
     const { from, to } = props;
 
     // Axis overlap detection. Strict > rather than >= so two boxes that
@@ -4128,6 +4389,21 @@ const EdgePath = (props: {
         return {
           path: `M ${sx} ${sy} L ${tx} ${ty}`,
           startDot: { x: sx, y: sy },
+          // Bundle-label midpoint: shifted perpendicular to the path
+          // direction so the pill sits NEXT TO the arrow shaft, not ON
+          // it. Without this, an 11-bundle's `×11` pill at the dead
+          // center of a vertical arrow completely covers the shaft —
+          // user reaction during the 2026-05-17 manual smoke:
+          // "I cannot see the arrow." Vector math: take the unit
+          // perpendicular `(-dy, dx)/length` (90° CCW rotation of the
+          // path direction) and step by `LABEL_PERP_OFFSET`. For a
+          // vertical arrow that becomes a horizontal nudge; for a
+          // horizontal arrow it becomes a downward nudge. Diagonals
+          // shift proportionally on both axes. Falls back to the raw
+          // midpoint if `length` is near zero (degenerate edge —
+          // shouldn't happen in practice since the layout enforces a
+          // gap, but the guard keeps the renderer crash-free).
+          midpoint: perpendicularLabelMidpoint(sx, sy, tx, ty),
         };
       }
       // Non-replica vertical-regime edge: keep the curve. Pull
@@ -4140,6 +4416,12 @@ const EdgePath = (props: {
       return {
         path: `M ${sx} ${sy} C ${sx} ${c1y}, ${tx} ${c2y}, ${tx} ${ty}`,
         startDot: null,
+        // Same perpendicular offset as the replica branch above. The
+        // cubic Bezier passes through the geometric midpoint by
+        // symmetry (control points are symmetric in x); the label
+        // sits perpendicular to that point so it's CLEAR of the
+        // curve at the midpoint.
+        midpoint: perpendicularLabelMidpoint(sx, sy, tx, ty),
       };
     }
 
@@ -4167,6 +4449,10 @@ const EdgePath = (props: {
       // already disambiguates by per-row source y; a dot at the right
       // edge would just clutter that case.
       startDot: null,
+      // Perpendicular-offset midpoint — same helper as the vertical
+      // regime. For a horizontal arrow the offset becomes a downward
+      // nudge so the pill sits beneath the shaft rather than on it.
+      midpoint: perpendicularLabelMidpoint(sx, sy, tx, ty),
     };
   });
   // Keyboard handler mirrors the click so biome's a11y lint passes
@@ -4209,10 +4495,22 @@ const EdgePath = (props: {
         classList={{
           "graph-edge-feedback": props.isFeedback,
           "graph-edge-selected": props.isSelected,
+          "graph-edge-bundle": (props.bundleCount ?? 1) >= 2,
         }}
         d={geom().path}
         marker-end={`url(#graph-arrow-${props.kind})`}
         pointer-events="none"
+        // Conservative log-based scaling per advisor: N=2 ~2.2 px, N=11
+        // ~2.7 px, N=100 ~3.0 px. The `×N` label does most of the
+        // communicating; the arrow shouldn't dominate. Falls back to
+        // CSS (1.5 px aux / 2 px state) for singleton bundles by
+        // returning `undefined`, which SVG treats as "use the
+        // stylesheet rule."
+        stroke-width={(() => {
+          const n = props.bundleCount ?? 1;
+          if (n < 2) return undefined;
+          return 1.5 + Math.min(1.5, Math.log2(n) * 0.7);
+        })()}
       />
       {/* Start-dot for replica edges: pins the visual origin of the
           arrow to a specific point on the source replica's bottom edge
@@ -4240,6 +4538,7 @@ const EdgePath = (props: {
         class="graph-edge-hit"
         d={geom().path}
         data-edge-key={props.edgeKey}
+        data-bundle-count={(props.bundleCount ?? 1).toString()}
         onClick={(e) => {
           // stopPropagation so the click doesn't bubble up to the
           // canvas (which would otherwise treat empty-area clicks as
@@ -4250,10 +4549,63 @@ const EdgePath = (props: {
         onKeyDown={handleKeyToggle}
       >
         <title>
-          {props.auxKey}
-          {props.isFeedback ? " — feedback (next iteration)" : ""}
+          {(() => {
+            const n = props.bundleCount ?? 1;
+            if (n < 2) {
+              return `${props.auxKey}${props.isFeedback ? " — feedback (next iteration)" : ""}`;
+            }
+            // Multi bundle: render the count + the list (truncated for
+            // very large bundles so the native tooltip doesn't overflow).
+            const sample = props.bundleAuxKeysSample ?? [];
+            const previewCap = 6;
+            const preview = sample.slice(0, previewCap).join(", ");
+            const more = sample.length > previewCap ? `, +${sample.length - previewCap} more` : "";
+            const fb = props.isFeedback ? " — feedback (next iteration)" : "";
+            return `${n} aux: ${preview}${more}${fb}`;
+          })()}
         </title>
       </path>
+      {/* ×N label for multi bundles. Rendered LAST so paint order puts
+          it on top of both the visible path and the hit path. The
+          tspan-on-rect pattern gives a small white background behind
+          the text for readability against grid lines / overlapping
+          arrows. `pointer-events="none"` lets clicks fall through to
+          the hit path beneath. Singleton bundles render no label
+          (the `<Show>` guard short-circuits). */}
+      <Show when={(props.bundleCount ?? 1) >= 2}>
+        {(() => {
+          const mp = geom().midpoint;
+          const label = `×${props.bundleCount ?? 1}`;
+          // Background rect sized to the label width (rough estimate via
+          // char count × per-char width). Centered on the midpoint.
+          const charW = 6.5;
+          const padX = 4;
+          const padY = 2;
+          const rectW = label.length * charW + padX * 2;
+          const rectH = 14;
+          return (
+            <g class="graph-edge-bundle-label" pointer-events="none">
+              <rect
+                x={mp.x - rectW / 2}
+                y={mp.y - rectH / 2}
+                width={rectW}
+                height={rectH}
+                rx={3}
+                ry={3}
+                class="graph-edge-bundle-label-bg"
+              />
+              <text
+                x={mp.x}
+                y={mp.y + padY}
+                text-anchor="middle"
+                class="graph-edge-bundle-label-text"
+              >
+                {label}
+              </text>
+            </g>
+          );
+        })()}
+      </Show>
     </g>
   );
 };
@@ -4348,6 +4700,7 @@ const formatStateOneline = (state: State, fmt: ByteFormat): string => {
 const ValueInspectorBody = (props: {
   selectedTarget: () => ValueInspectorTarget | null;
   edges: () => readonly GraphEdge[];
+  bundles: () => readonly import("@/core/graph").EdgeBundle[];
   spec: () => import("@/core/types").CipherSpec;
   frameIndex: () => number;
   version: () => number;
@@ -4371,6 +4724,43 @@ const ValueInspectorBody = (props: {
     return null;
   });
 
+  // Resolve a bundle-kind target to its `EdgeBundle` (or null if the
+  // current bundled graph no longer carries it — e.g. the user
+  // re-expanded the iterate so the 11 round-key edges no longer
+  // collapse). Lookup is by string key, matching the lookup pattern
+  // for edges.
+  const activeBundle = createMemo<import("@/core/graph").EdgeBundle | null>(() => {
+    const t = props.selectedTarget();
+    if (t === null || t.kind !== "bundle") return null;
+    const parsed = decodeBundleKey(t.key);
+    if (parsed === null) return null;
+    for (const b of props.bundles()) {
+      if (
+        b.from === parsed.from &&
+        b.to === parsed.to &&
+        b.kind === parsed.kind &&
+        b.isFeedback === parsed.isFeedback
+      ) {
+        return b;
+      }
+    }
+    return null;
+  });
+
+  const activeBundleAuxKey = useActiveBundleAuxKey();
+
+  // For a bundle target, the "effective" auxKey is either the user-
+  // selected row from the inspector list OR the first auxKey in the
+  // bundle (default). The lookup memo below uses this to resolve a
+  // GraphEdge representing the active row's flow.
+  const effectiveBundleAuxKey = createMemo<string | null>(() => {
+    const b = activeBundle();
+    if (b === null) return null;
+    const picked = activeBundleAuxKey();
+    if (picked !== null && b.auxKeys.includes(picked)) return picked;
+    return b.auxKeys[0] ?? null;
+  });
+
   const lookup = createMemo<EdgeValueLookup | null>(() => {
     // Tracked deps so the memo invalidates on every change that could
     // affect the rendered value. The block-aware lookup needs the
@@ -4387,6 +4777,22 @@ const ValueInspectorBody = (props: {
       const edge = activeEdge();
       if (edge === null) return null;
       return lookupEdgeValue(edge, props.spec(), trace, currentBlockIndex);
+    }
+    if (t.kind === "bundle") {
+      const b = activeBundle();
+      const aux = effectiveBundleAuxKey();
+      if (b === null || aux === null) return null;
+      // Synthesize a GraphEdge for the active row — `lookupEdgeValue`
+      // takes a `GraphEdge` and only reads `from / to / auxKey / kind`,
+      // so this carries the same identity the bundle's underlying
+      // edges had pre-bundling.
+      const syntheticEdge: GraphEdge = {
+        from: b.from,
+        to: b.to,
+        auxKey: aux,
+        kind: b.kind,
+      };
+      return lookupEdgeValue(syntheticEdge, props.spec(), trace, currentBlockIndex);
     }
     return lookupNodeValue(t.id, props.spec(), trace, currentBlockIndex);
   });
@@ -4416,31 +4822,87 @@ const ValueInspectorBody = (props: {
             <>
               <div class="graph-value-inspector-identity">
                 <Show
-                  when={activeEdge()}
+                  when={activeBundle()}
                   fallback={
-                    // Node identity: single span, no arrow. For chips, the
-                    // id is the full synthetic form (`ecb-blocks@block0`);
-                    // for endpoint pills it's the `__cipher_*__` constant.
-                    <span class="graph-value-inspector-from" title={nodeId()}>
-                      {nodeId()}
-                    </span>
+                    <Show
+                      when={activeEdge()}
+                      fallback={
+                        // Node identity: single span, no arrow. For chips, the
+                        // id is the full synthetic form (`ecb-blocks@block0`);
+                        // for endpoint pills it's the `__cipher_*__` constant.
+                        <span class="graph-value-inspector-from" title={nodeId()}>
+                          {nodeId()}
+                        </span>
+                      }
+                    >
+                      {(edge) => (
+                        <>
+                          <span class="graph-value-inspector-from" title={edge().from}>
+                            {edge().from}
+                          </span>
+                          <span class="graph-value-inspector-arrow" aria-hidden="true">
+                            →
+                          </span>
+                          <span class="graph-value-inspector-to" title={edge().to}>
+                            {edge().to}
+                          </span>
+                        </>
+                      )}
+                    </Show>
                   }
                 >
-                  {(edge) => (
+                  {(bundle) => (
                     <>
-                      <span class="graph-value-inspector-from" title={edge().from}>
-                        {edge().from}
+                      <span class="graph-value-inspector-from" title={bundle().from}>
+                        {bundle().from}
                       </span>
                       <span class="graph-value-inspector-arrow" aria-hidden="true">
                         →
                       </span>
-                      <span class="graph-value-inspector-to" title={edge().to}>
-                        {edge().to}
+                      <span class="graph-value-inspector-to" title={bundle().to}>
+                        {bundle().to}
+                      </span>
+                      <span class="graph-value-inspector-bundle-count">
+                        {`×${bundle().auxKeys.length}`}
                       </span>
                     </>
                   )}
                 </Show>
               </div>
+              {/* Bundle drill-down — rendered ABOVE the kind/value rows so
+                  the user reads the list first, then the active aux's
+                  value. Row click sets `activeBundleAuxKey` via the
+                  inspector store; the canvas halo stays on the bundle
+                  (advisor's recommended "halo stays" semantic). */}
+              <Show when={activeBundle()}>
+                {(bundle) => (
+                  <ul
+                    class="graph-value-inspector-bundle-list"
+                    data-testid="value-inspector-bundle-list"
+                  >
+                    <For each={bundle().auxKeys}>
+                      {(aux) => (
+                        <li
+                          class="graph-value-inspector-bundle-row"
+                          classList={{
+                            "graph-value-inspector-bundle-row-active":
+                              effectiveBundleAuxKey() === aux,
+                          }}
+                          data-aux-key={aux}
+                        >
+                          <button
+                            type="button"
+                            class="graph-value-inspector-bundle-row-button"
+                            onClick={() => setActiveBundleAuxKey(aux)}
+                          >
+                            {aux}
+                          </button>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                )}
+              </Show>
               <Show when={result()}>
                 {(r) => (
                   <>

@@ -239,13 +239,14 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
       new Map<string, { x: number; y: number }>(),
       layoutConstantsFor("normal"),
     );
-    // CANVAS_MARGIN = 24 (module-internal constant); pin via the
-    // observed top y of the leftmost root child instead of importing it.
+    // CANVAS_MARGIN = 60 (module-internal constant, bumped 24 → 44 → 60
+    // across two 2026-05-17 polish rounds); pin via the observed top y
+    // of the leftmost root child instead of importing it.
     const keyExp = boxes.get("key-expansion");
     if (!keyExp) throw new Error("missing key-expansion");
     // Without replicas, the row should sit flush against the top margin
     // — no extra LEAF_H + REPLICA_LIFT_GAP shift.
-    expect(keyExp.y).toBe(24);
+    expect(keyExp.y).toBe(60);
   });
 
   it("inside an iterate body (AES-128-ECB), replicas also lift above their consumer", () => {
@@ -476,7 +477,7 @@ describe("GraphView — multiple sources targeting same consumer don't overlap",
     // STACK_GAP), source B on row 1 (one LEAF_H + FLOW_GAP step higher
     // — wider gap so the arrow has visible drawing room).
     expect(a.y).toBeLessThan(c.y);
-    expect(b.y).toBe(a.y - consts.LEAF_H - consts.FLOW_GAP);
+    expect(b.y).toBe(a.y - consts.LEAF_H - consts.REPLICA_STACK_GAP);
   });
 
   it("root: three replicas → same consumer stack VERTICALLY without overlap (Slice 7c)", () => {
@@ -502,10 +503,11 @@ describe("GraphView — multiple sources targeting same consumer don't overlap",
     expect(a.x).toBe(cons.x);
     expect(b.x).toBe(cons.x + consts.REPLICA_ROW_X_STEP);
     expect(c.x).toBe(cons.x + 2 * consts.REPLICA_ROW_X_STEP);
-    // Strictly DECREASING y: row 0 at STACK_GAP above consumer; rows 1+
-    // step up by LEAF_H + FLOW_GAP (wider inter-row gap for arrow
-    // visibility, per port-spreading polish).
-    const rowStep = consts.LEAF_H + consts.FLOW_GAP;
+    // Strictly DECREASING y: row 0 at REPLICA_LIFT_GAP above consumer;
+    // rows 1+ step up by `LEAF_H + REPLICA_STACK_GAP` (REPLICA_STACK_GAP
+    // bumped from FLOW_GAP=24 to 48 on 2026-05-17 so the bundle ×N
+    // pills sitting at arrow midpoints don't crowd adjacent rows).
+    const rowStep = consts.LEAF_H + consts.REPLICA_STACK_GAP;
     expect(b.y).toBe(a.y - rowStep);
     expect(c.y).toBe(b.y - rowStep);
     // All three distinct ys (no overlap).
@@ -551,7 +553,7 @@ describe("GraphView — multiple sources targeting same consumer don't overlap",
     // Source A at row 0 (STACK_GAP above), source B at row 1
     // (LEAF_H + FLOW_GAP higher than row 0).
     expect(a.y).toBeLessThan(c.y);
-    expect(b.y).toBe(a.y - consts.LEAF_H - consts.FLOW_GAP);
+    expect(b.y).toBe(a.y - consts.LEAF_H - consts.REPLICA_STACK_GAP);
   });
 
   it("group (lift branch): two replicas → first-child consumer stack VERTICALLY (Slice 7c)", () => {
@@ -592,7 +594,7 @@ describe("GraphView — multiple sources targeting same consumer don't overlap",
     // (one LEAF_H + FLOW_GAP step higher — wider gap for arrow drawing
     // room per port-spreading polish, 2026-05-16).
     expect(a.y).toBeLessThan(c.y);
-    expect(b.y).toBe(a.y - consts.LEAF_H - consts.FLOW_GAP);
+    expect(b.y).toBe(a.y - consts.LEAF_H - consts.REPLICA_STACK_GAP);
   });
 });
 
@@ -627,13 +629,13 @@ describe("GraphView — aux-only root leaves are lifted above the spine row", ()
     const initial = boxes.get("initial.add-round-key");
     if (!ke || !initial) throw new Error("missing key boxes");
 
-    // key-expansion sits at the lifted row (CANVAS_MARGIN).
-    expect(ke.y).toBe(24);
+    // key-expansion sits at the lifted row (CANVAS_MARGIN = 60).
+    expect(ke.y).toBe(60);
     // The spine row sits one LEAF_H + REPLICA_LIFT_GAP below it (so
     // the arrow from a left-side endpoint pill clears the key-expansion
-    // chip with a visible shaft — REPLICA_LIFT_GAP = 20 replaced
+    // chip with a visible shaft — REPLICA_LIFT_GAP = 36 replaced
     // STACK_GAP = 6 on 2026-05-16).
-    expect(initial.y).toBe(24 + consts.LEAF_H + consts.REPLICA_LIFT_GAP);
+    expect(initial.y).toBe(60 + consts.LEAF_H + consts.REPLICA_LIFT_GAP);
     // Both still flow left-to-right horizontally: key-expansion's x
     // is to the left of initial.add-round-key's.
     expect(ke.x).toBeLessThan(initial.x);
@@ -651,9 +653,9 @@ describe("GraphView — aux-only root leaves are lifted above the spine row", ()
     const initial = boxes.get("initial.add-round-key");
     if (!ke || !initial) throw new Error("missing key boxes");
 
-    // No lift: both sit at CANVAS_MARGIN.
-    expect(ke.y).toBe(24);
-    expect(initial.y).toBe(24);
+    // No lift: both sit at CANVAS_MARGIN = 60.
+    expect(ke.y).toBe(60);
+    expect(initial.y).toBe(60);
   });
 
   it("composes with the root-replica lift (only one lift level is applied)", () => {
@@ -671,10 +673,10 @@ describe("GraphView — aux-only root leaves are lifted above the spine row", ()
     const ke = boxes.get("key-expansion");
     const initial = boxes.get("initial.add-round-key");
     if (!ke || !initial) throw new Error("missing key boxes");
-    // Lifted row.
-    expect(ke.y).toBe(24);
+    // Lifted row at CANVAS_MARGIN = 60.
+    expect(ke.y).toBe(60);
     // Spine row.
-    expect(initial.y).toBe(24 + consts.LEAF_H + consts.REPLICA_LIFT_GAP);
+    expect(initial.y).toBe(60 + consts.LEAF_H + consts.REPLICA_LIFT_GAP);
   });
 });
 

@@ -39,25 +39,23 @@
  *      id as the participant: the iterate node itself becomes a node-like
  *      participant in the edge list.
  *
- *   3. **Iterate participates in the parent spine as a node, AND opens a
- *      separate scope for its body.** State edges connect DFS-consecutive
- *      leaves at the same scope; groups are transparent (DFS through),
- *      iterates split scopes (their body becomes its own per-iteration
- *      chain) AND the iterate's id joins the parent chain so the spine
- *      threads `prev → iterate → next`. After `expandCollapsedIterates`
- *      replaces a collapsed iterate with N parallel block-chips, the
- *      defensive "fan every edge touching the iterate" rule fans the
- *      state edges one-per-chip — N parallel white spine paths where
- *      there used to be one. The runtime semantically replaces `state`
- *      with `blocks[i]` per iteration, so the spine edge is a
- *      pedagogical aid rather than a literal description of memory
- *      contents — the aux edges (blocks-in / output-blocks-out) remain
- *      the honest depiction of the per-block data handoff, and the
- *      spine complements them with the human-intuitive "data flows
- *      through here" story. See the `inferStateEdges` function-level
- *      docstring for the design decision (overrode the prior "iterate
- *      is opaque" policy and a brief detour through "iterate is bridged
- *      over" after Slice 6 made both readings visibly wrong).
+ *   3. **Iterates terminate the spine at their boundary.** State edges
+ *      connect DFS-consecutive leaves at the same scope; groups are
+ *      transparent (DFS through); iterates open a separate scope for
+ *      their body (per-iteration chain emitted by recursion) AND have
+ *      the parent spine STOP at their boundary on both sides. Concretely:
+ *      `[A, B, iter, C, D]` at root scope emits only `A→B` and `C→D`;
+ *      no `B→iter`, no `iter→C`, no bridging `B→C`. The aux arrows
+ *      (`blocksFromAux` coming in, `outBlocksAux` going out) ARE the
+ *      handoff at this boundary; the spine has nothing to add because
+ *      the runtime overwrites state from aux at iteration entry and
+ *      publishes the per-iteration output into aux at iteration exit.
+ *      Surfaced 2026-05-17: the previously-rendered phantom `compute-
+ *      block-count → ecb-blocks` state edge resolved to the plaintext
+ *      bytes (compute-block-count's passthrough stateAfter), which the
+ *      iterate doesn't actually consume — confusing pedagogically. See
+ *      `inferStateEdges`'s function-level docstring for the full
+ *      design decision and the iterate-suppression invariant.
  *
  *      **Feistel future**: when a Feistel-style cipher with branching
  *      state lands, the "DFS-consecutive leaves share state" assumption
@@ -184,6 +182,145 @@ export type CipherGraph = {
    * `childIds` gives nesting from there.
    */
   readonly rootIds: readonly string[];
+};
+
+// ─── Edge bundling (visual decongestion at render time) ───────────────────
+
+/**
+ * A group of edges that share the same `(from, to, kind, isFeedback)` tuple,
+ * collapsed for rendering. The motivation is the AES-128 key-expansion case:
+ * after `replicateHighFanoutSources` produces a local chip, that chip emits
+ * one aux edge per consumed round key — 11 distinct `auxKey`s flowing
+ * `key-expansion@->iterate → iterate`. Pre-bundling, that's 11 parallel
+ * arrows fanning into the iterate's top edge; users read the visual as noise
+ * even though every edge is semantically correct.
+ *
+ * Why the key includes `isFeedback`: the dashed iterate-feedback style
+ * applies to the WHOLE rendered edge, not per-auxKey. A bundle containing
+ * mixed feedback flags would have to either render half-dashed (visually
+ * confusing) or pick a winner (silently lossy). No spec today produces
+ * mixed-feedback same-pair edges, but the invariant is cheap to maintain
+ * and prevents a future Feistel/AEAD surprise.
+ *
+ * Singleton bundles (`auxKeys.length === 1`) are the common case — the
+ * threshold for "bundle decoration" (thicker stroke + ×N label) is
+ * `auxKeys.length >= 2`, applied at render time. The bundling pass itself
+ * is uniform across N=1 and N>1 so renderers walk a single list and the
+ * data-edge-key format stays consistent.
+ */
+export type EdgeBundle = {
+  readonly from: string;
+  readonly to: string;
+  readonly kind: EdgeKind;
+  readonly isFeedback: boolean;
+  /**
+   * All aux keys flowing on this edge group, in encounter order from the
+   * source graph. For state-kind bundles the value is `["state"]` (the
+   * sentinel auxKey on state edges — `GraphEdge.auxKey` docs).
+   */
+  readonly auxKeys: readonly string[];
+  /**
+   * A `GraphEdge` carrying this bundle's `(from, to, kind)` and
+   * `auxKeys[0]`. Used by render-time helpers that key off edge
+   * IDENTITY (port-spreading's `slotOf`, replica-row lookups) — those
+   * helpers were written for the pre-bundle world and look up by
+   * `GraphEdge` reference, so passing them a bundle requires a stable
+   * representative to consult. The renderer also builds the port
+   * assignment from these representatives, NOT from `graph.edges`, so
+   * each bundle counts as one incoming edge at its consumer (correctly
+   * centering an 11-auxKey bundle that pre-bundling would spread across
+   * 11 slots).
+   */
+  readonly representativeEdge: GraphEdge;
+};
+
+/**
+ * A `CipherGraph` view with same-(from, to, kind, isFeedback) aux edges
+ * collapsed into `EdgeBundle`s. State edges pass through as singleton
+ * bundles (each spec-derived spine edge has exactly one between any two
+ * leaves), so the renderer can walk one list — there's no second pass
+ * over the raw `edges` array.
+ *
+ * The original `edges` field is preserved unchanged so callers that index
+ * by raw GraphEdge identity (`validateGraph`, the spec-shape validator,
+ * any future test fixture) continue to work without rewrite.
+ */
+export type BundledGraph = {
+  readonly nodes: readonly GraphNode[];
+  readonly containers: readonly ContainerNode[];
+  /** Same edges as the source graph, untouched. */
+  readonly edges: readonly GraphEdge[];
+  /** Bundled view of `edges` for the renderer. */
+  readonly bundles: readonly EdgeBundle[];
+  readonly rootIds: readonly string[];
+};
+
+/**
+ * Collapse same-`(from, to, kind, isFeedback)` edges into `EdgeBundle`s.
+ * Pure — no I/O, deterministic.
+ *
+ * @param graph - the input graph (typically post-`replicateHighFanoutSources`,
+ *   so the bundling sees the replica chip's outgoing fan-out rather than the
+ *   pre-replication "one source, N consumers" case).
+ * @param isFeedback - predicate from `buildIterateFeedbackPredicate(graph)`.
+ *   Threaded as a parameter (rather than computed inside) so the renderer
+ *   can build the predicate once per graph and reuse it; also keeps this
+ *   function easy to unit-test with a stub.
+ *
+ * Encounter order is preserved both BETWEEN bundles (first-edge-encounter
+ * order in the source `edges` array) AND WITHIN each bundle's `auxKeys`
+ * (same encounter order). For aux edges originating from
+ * `key-expansion@->initial.add-round-key` the result is
+ * `["roundKey.0", "roundKey.1", ..., "roundKey.10"]`, which the inspector
+ * panel renders as a stable, human-readable list.
+ */
+export const bundleEdges = (
+  graph: CipherGraph,
+  isFeedback: (edge: GraphEdge) => boolean,
+): BundledGraph => {
+  const bundleKey = (e: GraphEdge, fb: boolean): string =>
+    // `\0` separator is safe — no spec id contains a null byte.
+    `${e.from}\0${e.to}\0${e.kind}\0${fb ? "1" : "0"}`;
+
+  const bundles: EdgeBundle[] = [];
+  const byKey = new Map<string, { bundle: EdgeBundle; auxKeys: string[] }>();
+
+  for (const edge of graph.edges) {
+    const fb = isFeedback(edge);
+    const key = bundleKey(edge, fb);
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.auxKeys.push(edge.auxKey);
+      continue;
+    }
+    // Fresh bundle. `auxKeys` is a mutable working array; we replace the
+    // bundle with a frozen-by-readonly view at the end of the pass.
+    const auxKeys: string[] = [edge.auxKey];
+    // For singletons, reuse the source GraphEdge as the representative so
+    // any caller that was passing the raw edge in pre-bundling still
+    // sees IDENTITY-stable references. For multi-edge bundles we'd
+    // happily synthesize one, but since `auxKeys[0]` already matches
+    // this first edge by construction, reusing it is cheaper and keeps
+    // ports / inspector keys identical to the pre-bundle path when N=1.
+    const bundle: EdgeBundle = {
+      from: edge.from,
+      to: edge.to,
+      kind: edge.kind,
+      isFeedback: fb,
+      auxKeys,
+      representativeEdge: edge,
+    };
+    bundles.push(bundle);
+    byKey.set(key, { bundle, auxKeys });
+  }
+
+  return {
+    nodes: graph.nodes,
+    containers: graph.containers,
+    edges: graph.edges,
+    bundles,
+    rootIds: graph.rootIds,
+  };
 };
 
 // ─── Synthetic endpoint pills (Slice 1) ───────────────────────────────────
@@ -401,39 +538,37 @@ const STATE_AUX_KEY = "state";
  *     step on it appeared to "do nothing" because the empty round was
  *     visually disconnected from the chain. The full transparent-group
  *     semantics return as soon as the user adds any leaf back.
- *   - **Iterates participate in the parent chain as a node, AND open a
- *     separate scope for their body.** The iterate's id joins the parent
- *     scope's leaf chain so the spine threads `prev → iterate → next`,
- *     while the iterate's body becomes its own scope (per-iteration spine
- *     emitted by recursing into the body). Concretely: in
- *     `[A, B, iter, C, D]` at root scope, the parent chain becomes
- *     `[A, B, iter, C, D]` and emits `A→B`, `B→iter`, `iter→C`, `C→D`.
- *     An iterate inside a group's subtree makes that group NON-empty for
- *     spine purposes, because the iterate is a real spine participant
- *     (not just a flushable boundary).
+ *   - **Iterates terminate the spine at their boundary.** The iterate's
+ *     body becomes its own scope (per-iteration spine emitted by recursing
+ *     into the body), but the parent spine is BROKEN at the iterate — no
+ *     state edge enters the iterate from its predecessor, and no state
+ *     edge leaves the iterate toward its successor. Concretely: in
+ *     `[A, B, iter, C, D]` at root scope, the parent emits only `A→B`
+ *     and `C→D`; the predecessor-to-iterate (`B→iter`), iterate-to-
+ *     successor (`iter→C`), and bridging (`B→C`) edges are all
+ *     deliberately absent.
  *
- *     **Pre-Slice-6** (iterate not collapsed): the white arrows enter
- *     the iterate container's left edge and exit its right edge,
- *     analogous to how the spine threads through round groups today.
+ *     **Why suppress.** Today's iterate runtime contract is aux-mediated:
+ *     at iteration ENTRY the runtime sets `state = aux[blocksFromAux][i]`
+ *     (the predecessor's stateAfter is discarded); at iteration EXIT it
+ *     appends `state` to `aux[outBlocksAux]` (the successor reads its
+ *     data from that aux array, NOT from the iterate's final state). The
+ *     "spine value at the boundary" is therefore dead — drawing a white
+ *     arrow there showed the plaintext "flowing into" the iterate while
+ *     the truth was "the per-block payload arrives via `aux[input-
+ *     blocks]`." The aux arrows are the honest depiction of the handoff;
+ *     the spine has nothing to add at this boundary.
  *
- *     **Post-Slice-6** (`expandCollapsedIterates` replaces a collapsed
- *     iterate with N parallel block-chips): the same edges fan one-per-
- *     chip via the transform's defensive "fan every edge touching the
- *     iterate, regardless of kind" rule. Each chip ends up with an
- *     incoming state edge from `prev` and an outgoing state edge to
- *     `next`, so the chips carry the spine in parallel — N white paths
- *     where there used to be one. Pedagogically: "after split-blocks
- *     the data IS the per-block payload, and the chips ARE where the
- *     data lives during the iterate." No `chip_i → chip_{i+1}` edges
- *     are produced — the chips are parallel paths, not chained ones.
+ *     Surfaced 2026-05-17: user clicking the previously-rendered phantom
+ *     state edge saw the plaintext value and asked "where am I wrong? The
+ *     plaintext isn't passed forward as plaintext in the cipher; it is
+ *     passed already split into blocks." Right. The fix lives in
+ *     `emitChain`'s iterate-suppression check.
  *
- *     The runtime's state value at the iterate boundary isn't literally
- *     the previous step's output (per iteration the iterate substitutes
- *     `state = blocks[i]`). The state spine has always been a pedagogical
- *     aid rather than a literal description of memory contents — the aux
- *     edges (blocks-in / output-blocks-out) honestly depict the per-block
- *     handoff, and the spine complements them by showing the human-
- *     intuitive "data flows through here" story.
+ *     **Feistel future**: a Feistel-style iterate (branching state, not
+ *     aux-mediated) would carry meaningful spine information across the
+ *     boundary and need an opt-out flag. Today every shipped iterate
+ *     (ECB / CBC iterate) is aux-mediated, so the rule is unconditional.
  *
  * The function reads only `spec`, never the trace. State edges therefore
  * appear on the structural skeleton before any run, while aux edges remain
@@ -444,11 +579,52 @@ const STATE_AUX_KEY = "state";
 const inferStateEdges = (spec: CipherSpec): GraphEdge[] => {
   const edges: GraphEdge[] = [];
 
+  // Track every iterate's id so the spine-chain emitter can suppress
+  // phantom state edges that would otherwise appear to flow INTO or
+  // OUT OF an iterate. The runtime contract for an IterateGroup is:
+  //   - at iteration ENTRY it sets `state = aux[blocksFromAux][i]`,
+  //     overwriting whatever the predecessor's stateAfter was;
+  //   - at iteration EXIT it appends `state` to `aux[outBlocksAux]`,
+  //     and the successor step reads its data from that aux array, NOT
+  //     from the iterate's final state.
+  // So the spine value at the iterate's boundary is dead — it still
+  // exists as a passthrough, but no downstream step actually consumes
+  // it. Rendering it as a white arrow into the iterate misled users
+  // ("the plaintext flows here") while the truth is "the per-block
+  // payload arrives via aux[input-blocks]." Suppressing the edges is
+  // the pedagogically honest answer: the iterate's *aux* arrows ARE
+  // the handoff; the spine simply doesn't reach across this boundary.
+  //
+  // Surfaced 2026-05-17 manual smoke ("the plaintext isn't passed
+  // forward as plaintext in the cipher. It is passed already split
+  // into blocks"). Every IterateGroup we ship today (ECB / CBC iterate)
+  // is aux-mediated, so the rule is unconditional. A future Feistel-
+  // style iterate with branching state would need an opt-out flag if
+  // its spine carries meaningful information across the boundary.
+  const iterateIds = new Set<string>();
+  const collectIterates = (nodes: readonly StepNode[]): void => {
+    for (const node of nodes) {
+      if (node.kind === "iterate") {
+        iterateIds.add(node.id);
+        collectIterates(node.children);
+      } else if (node.kind === "group") {
+        collectIterates(node.children);
+      }
+    }
+  };
+  collectIterates(spec.steps);
+
   const emitChain = (leaves: readonly string[]): void => {
     for (let i = 0; i + 1 < leaves.length; i++) {
       const from = leaves[i];
       const to = leaves[i + 1];
       if (from === undefined || to === undefined) continue;
+      // Suppress the phantom edges into / out of aux-mediated iterates
+      // (see the iterateIds doc-block above). Leaves the chain
+      // STRUCTURALLY split — A→B→iter→C→D produces only A→B and C→D,
+      // no bridging A→C edge, because no spine value actually crosses
+      // the iterate boundary either way.
+      if (iterateIds.has(from) || iterateIds.has(to)) continue;
       edges.push({ from, to, auxKey: STATE_AUX_KEY, kind: "state" });
     }
   };
@@ -495,17 +671,17 @@ const inferStateEdges = (spec: CipherSpec): GraphEdge[] => {
           }
         } else {
           // Iterate boundary — recurse into the body as its own scope
-          // (the per-iteration spine is a separate chain), AND push
-          // the iterate's id onto the parent chain so the parent
-          // spine threads `prev → iterate → next`. Pre-Slice-6 the
-          // iterate's container chip catches both arrows on its left
-          // / right edges, just like the spine threads through round
-          // groups. Post-Slice-6 `expandCollapsedIterates` fans both
-          // edges to one-per-chip (defensive "fan all kinds" rule),
-          // so each chip carries the spine in parallel — exactly the
-          // mental model that "after split-blocks the data IS the
-          // per-block payload, and the chips ARE where the data
-          // lives during the iterate."
+          // (the per-iteration spine is a separate chain) AND push the
+          // iterate's id onto the parent chain so the chain has a
+          // recognizable boundary marker. `emitChain` then SUPPRESSES
+          // any state edge whose endpoint is an iterate id (see the
+          // iterateIds doc-block above). The result: the parent spine
+          // stops at the leaf BEFORE the iterate, and resumes at the
+          // leaf AFTER it, with NO white arrow crossing the boundary
+          // and no bridging edge over the iterate. The iterate's own
+          // aux arrows (input-blocks coming in, output-blocks going
+          // out) are the honest depiction of what data crosses the
+          // boundary; the spine has nothing to add.
           processScope(node.children);
           leaves.push(node.id);
         }

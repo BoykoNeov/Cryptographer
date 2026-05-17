@@ -361,18 +361,19 @@ describe("deriveAuxGraph — empty trace", () => {
     // Spec-derived state spine appears regardless of trace state — the
     // headline pedagogical benefit of commit 2 is that the spine is visible
     // BEFORE the first run, so the user sees what the cipher "does" up front.
-    // AES-128-ECB spine count:
+    // AES-128-ECB spine count after the 2026-05-17 iterate-boundary fix:
     //   - top-scope: 5 chain participants (key-expansion, split-blocks,
-    //     compute-block-count, ecb-blocks (the iterate, IN the chain),
-    //     concat-blocks) → 4 state edges including `compute-block-count
-    //     → ecb-blocks` and `ecb-blocks → concat-blocks` (the parent
-    //     spine threads THROUGH the iterate as a node; post-Slice-6
-    //     these edges fan to one-per-chip so chips carry the spine).
+    //     compute-block-count, ecb-blocks (the iterate), concat-blocks).
+    //     Only the two pre-iterate pairs emit state edges; the iterate's
+    //     incoming + outgoing spine edges are SUPPRESSED because the
+    //     runtime is aux-mediated (state at iter entry is overwritten
+    //     from aux, state at iter exit is published into aux — the spine
+    //     value never crosses the boundary). → 2 state edges.
     //   - iterate body (initial AK + 9 full rounds + 1 final round = 40 leaves)
-    //     → 39 state edges (separate scope, recursed into the body)
-    //   - total: 4 + 39 = 43 state edges
+    //     → 39 state edges (separate scope, recursed into the body).
+    //   - total: 2 + 39 = 41 state edges.
     const stateEdges = g.edges.filter((e) => e.kind === "state");
-    expect(stateEdges.length).toBe(43);
+    expect(stateEdges.length).toBe(41);
   });
 });
 
@@ -418,12 +419,20 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
     expect(lastEdge).toBeDefined();
   });
 
-  it("AES-128-ECB: spine threads through the iterate as a node (prev → iter → next)", () => {
+  it("AES-128-ECB: the iterate TERMINATES the parent spine on both sides (no prev→iter, no iter→next, no bridging prev→next)", () => {
+    // Headline pedagogical fix (2026-05-17): an aux-mediated iterate
+    // doesn't carry the spine value across its boundary. The runtime
+    // overwrites `state` from aux[blocksFromAux] at iteration entry and
+    // publishes per-iteration output into aux[outBlocksAux] at exit, so
+    // the predecessor's stateAfter never reaches body steps and the
+    // body's stateAfter never reaches the successor. Drawing white
+    // arrows there misled users (the previously-rendered `compute-
+    // block-count → ecb-blocks` state edge resolved to the plaintext
+    // bytes — confusing pedagogically). Suppressed.
     const g = deriveAuxGraph(runAes128Ecb(), aes128EcbSpec);
     const stateEdges = g.edges.filter((e) => e.kind === "state");
 
-    // Top scope: 5 chain participants including the iterate. emitChain
-    // produces 4 edges. The first two are obvious pre-iterate pairs.
+    // Pre-iterate pairs DO emit (both endpoints are non-iterate).
     expect(
       stateEdges.find((e) => e.from === "key-expansion" && e.to === "split-blocks"),
     ).toBeDefined();
@@ -440,23 +449,21 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
       stateEdges.find((e) => e.from === "round.5.add-round-key" && e.to === "round.6.sub-bytes"),
     ).toBeDefined();
 
-    // The headline behavior change: the iterate participates in the
-    // parent chain as a node. Two state edges terminate on / emanate
-    // from the iterate id. After Slice 6's `expandCollapsedIterates`
-    // these fan one-per-chip so chips carry the spine in parallel —
-    // the pedagogical "data IS the per-block payload during the
-    // iterate" reading.
+    // The headline invariant: NO state edge crosses the iterate
+    // boundary in either direction, and NO bridging edge skips over it.
     expect(
       stateEdges.find((e) => e.from === "compute-block-count" && e.to === "ecb-blocks"),
-    ).toBeDefined();
+    ).toBeUndefined();
     expect(
       stateEdges.find((e) => e.from === "ecb-blocks" && e.to === "concat-blocks"),
-    ).toBeDefined();
+    ).toBeUndefined();
+    expect(
+      stateEdges.find((e) => e.from === "compute-block-count" && e.to === "concat-blocks"),
+    ).toBeUndefined();
 
     // State edges that would naively imply state passes through the
     // iterate's INTERNAL runtime contract (state replaced by blocks[i])
-    // MUST NOT exist — the per-iteration spine stays inside the body
-    // scope, never reaches into / out of the body across scope.
+    // MUST NOT exist either.
     expect(
       stateEdges.find((e) => e.from === "compute-block-count" && e.to === "initial.add-round-key"),
     ).toBeUndefined();
@@ -464,8 +471,8 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
       stateEdges.find((e) => e.from === "round.10.add-round-key" && e.to === "concat-blocks"),
     ).toBeUndefined();
 
-    // Total: 4 (top scope, including prev→iter→next) + 39 (body) = 43.
-    expect(stateEdges.length).toBe(43);
+    // Total: 2 (top scope, pre-iterate pairs only) + 39 (body) = 41.
+    expect(stateEdges.length).toBe(41);
   });
 
   it("Speck32/64 (flat, no groups, no iterates): 22 state edges across 23 leaves", () => {
@@ -715,38 +722,39 @@ describe("collapseGraph — view-time transform", () => {
   });
 
   it("collapses an iterate container's state spine (AES-128-ECB → ecb-blocks)", () => {
-    // Pre-collapse: AES-128-ECB has 43 state edges:
-    //   - top scope: 4 (KE → split, split → count, count → ecb-blocks,
-    //     ecb-blocks → concat — the iterate participates in the chain
-    //     as a node, threading the spine `prev → iter → next`)
-    //   - iterate body scope: 39 (40 leaves → 39 in one chain)
+    // Pre-collapse: AES-128-ECB has 41 state edges (post-2026-05-17
+    // iterate-boundary fix):
+    //   - top scope: 2 pre-iterate pairs (KE → split, split → count)
+    //     ONLY — the prev→iter and iter→next edges are suppressed
+    //     because the iterate is aux-mediated (see inferStateEdges'
+    //     iterateIds doc-block).
+    //   - iterate body scope: 39 (40 leaves → 39 in one chain).
     // Collapsing the iterate hides all 40 body leaves, so all 39 body
     // state edges remap both endpoints to "ecb-blocks" and become
-    // self-loops → dropped. The 4 top-scope edges all survive: the
-    // pre-iterate pair has both endpoints outside, and the prev→iter
-    // and iter→next pairs have one endpoint at the (still-visible)
-    // collapsed iterate chip. 43 − 39 = 4.
+    // self-loops → dropped. The 2 top-scope edges survive untouched.
+    // 41 − 39 = 2.
     const g = deriveAuxGraph(runAes128Ecb(), aes128EcbSpec);
     const stateBefore = g.edges.filter((e) => e.kind === "state");
-    expect(stateBefore.length).toBe(43);
+    expect(stateBefore.length).toBe(41);
 
     const out = collapseGraph(g, new Set(["ecb-blocks"]));
     const stateAfter = out.edges.filter((e) => e.kind === "state");
-    expect(stateAfter.length).toBe(4);
-    // The four surviving spine edges: pre-iterate pair, plus the two
-    // edges that thread through the iterate chip.
+    expect(stateAfter.length).toBe(2);
+    // The two surviving spine edges are the pre-iterate pair.
     expect(
       stateAfter.find((e) => e.from === "key-expansion" && e.to === "split-blocks"),
     ).toBeDefined();
     expect(
       stateAfter.find((e) => e.from === "split-blocks" && e.to === "compute-block-count"),
     ).toBeDefined();
+    // The previously-rendered phantom prev→iter and iter→next edges
+    // are absent (suppressed in derivation, never produced).
     expect(
       stateAfter.find((e) => e.from === "compute-block-count" && e.to === "ecb-blocks"),
-    ).toBeDefined();
+    ).toBeUndefined();
     expect(
       stateAfter.find((e) => e.from === "ecb-blocks" && e.to === "concat-blocks"),
-    ).toBeDefined();
+    ).toBeUndefined();
     // No state self-loop on the iterate container.
     for (const e of stateAfter) {
       expect(e.from === "ecb-blocks" && e.to === "ecb-blocks").toBe(false);

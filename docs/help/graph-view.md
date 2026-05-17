@@ -26,7 +26,12 @@ internalized.
   publishes (`auxWrites`) that another step reads (`auxReads`). The label
   on each edge is the aux key — `roundKey.0`, `feedback`, `iv`, etc.
 - **`×N` badges** mark iterate containers (block-cipher modes). The body
-  is one canonical copy; the runtime walks it once per block.
+  is one canonical copy; the runtime walks it once per block. The same
+  `×N` notation also appears on **bundled aux arrows** — when two or
+  more aux edges share endpoints (e.g. the 11 round keys from
+  `key-expansion` to a collapsed iterate), they collapse into one
+  thicker arrow tagged `×N`. Click the arrow to see the full list of
+  aux keys it carries.
 - **Orange `!` glyph** on a node means the validator found a wiring
   problem. Hover for the message: an orphaned read (the step asked for
   an aux key nothing produced), an unused write (this step's output is
@@ -122,6 +127,12 @@ and click any element on the canvas to populate it:
 - **A block chip** (a `block 0` / `block 1` ... chip on a collapsed
   iterate) shows that block's outgoing payload — equivalent to
   `outBlocks[i]`.
+- **A bundled edge** (a thicker arrow with a `×N` label) opens a
+  scrollable list of the N aux keys the bundle carries (e.g. all 11
+  round keys flowing from `key-expansion` into a collapsed iterate).
+  Click any row to see that aux key's value in the panel below — the
+  arrow on the canvas keeps its selection halo while you drill row to
+  row.
 
 The clicked element gets a soft halo on the canvas, and the panel keeps
 showing its value while you scrub the trace — the "click and scrub"

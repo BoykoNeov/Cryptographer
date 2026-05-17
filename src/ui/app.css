@@ -2289,6 +2289,59 @@ button:disabled {
   color: var(--muted);
 }
 
+/* Bundle inspector — count chip rendered after `from → to` for a bundle
+   target. Matches the canvas ×N label in spelling so the user reads
+   "this is the same thing I just clicked." */
+.graph-value-inspector-bundle-count {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--bg-elev-2);
+  color: var(--muted);
+}
+
+/* Bundle drill-down list — one row per auxKey carried in the bundle.
+   The active row picks up a subtle background tint via the `-active`
+   modifier; clicking a row sets `activeBundleAuxKey` in the inspector
+   store. The canvas halo stays on the bundle (Slice C decision); the
+   active row drives the per-aux value lookup shown below the list. */
+.graph-value-inspector-bundle-list {
+  list-style: none;
+  margin: 4px 0;
+  padding: 0;
+  max-height: 160px;
+  overflow-y: auto;
+  border: 1px solid var(--border, var(--bg-elev-2));
+  border-radius: 4px;
+}
+
+.graph-value-inspector-bundle-row {
+  margin: 0;
+}
+
+.graph-value-inspector-bundle-row-button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 4px 8px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.graph-value-inspector-bundle-row-button:hover {
+  background: var(--bg-elev-2);
+}
+
+.graph-value-inspector-bundle-row-active .graph-value-inspector-bundle-row-button {
+  background: var(--bg-elev-2);
+  font-weight: 600;
+}
+
 .graph-value-inspector-kind-row {
   display: flex;
   align-items: center;
@@ -2565,6 +2618,35 @@ button:disabled {
 .graph-edge-start-dot.graph-edge-selected {
   fill-opacity: 1;
   filter: drop-shadow(0 0 3px var(--accent));
+}
+
+/* Bundled-edge `×N` label. Rendered at the path midpoint (shifted
+   perpendicular to the path direction so the pill sits next to the
+   shaft rather than on it — see `perpendicularLabelMidpoint` in
+   GraphView.tsx) when N ≥ 2. Color scheme matches the iterate `×N`
+   block-count chip (`.graph-iterate-badge`): light-blue accent text
+   on the canvas background fill. User feedback during the 2026-05-17
+   manual smoke explicitly requested this palette ("light blue as the
+   color of the number of colapsed ECB blocks, with the same
+   background as the canvas") so the bundle label reads as a sibling
+   visual vocabulary item to the iterate count. `pointer-events="none"`
+   is set on the wrapping <g> in the renderer; clicks fall through to
+   the hit path beneath. */
+.graph-edge-bundle-label-bg {
+  fill: var(--bg);
+  stroke: var(--accent);
+  stroke-opacity: 0.6;
+  stroke-width: 0.75;
+}
+.graph-edge-bundle-label-text {
+  fill: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  /* SVG `text` doesn't natively vertical-center on its (x, y) anchor —
+     we use `dominant-baseline: middle` so the label sits centred on
+     the midpoint provided by `geom()`. */
+  dominant-baseline: middle;
 }
 
 /* Selected leaf halo. Mirrors the edge halo so the user sees the same
