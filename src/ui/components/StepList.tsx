@@ -17,6 +17,22 @@ import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
 import { useSpec } from "../stores/spec";
 import { getTrace, setFrame, useFrameIndex, useTraceVersion } from "../stores/trace";
 
+/**
+ * Drop the `:b{i}` per-iteration suffix off a frame stepId, leaving the
+ * canonical spec-leaf id. Multi-block modes (ECB/CBC) emit per-block
+ * frames with stepIds suffixed by `:b0`, `:b1`, … (see runtime.ts:129);
+ * UI surfaces that key off the spec tree need the unsuffixed form to
+ * match the spec leaf's own `id`. Safe for non-iterated frames — the
+ * lastIndexOf returns −1 and the slice is a no-op.
+ */
+const stripBlockSuffix = (stepId: string): string => {
+  const i = stepId.lastIndexOf(":b");
+  if (i === -1) return stepId;
+  // Only treat as block suffix when everything after `:b` is digits.
+  const tail = stepId.slice(i + 2);
+  return /^\d+$/.test(tail) ? stepId.slice(0, i) : stepId;
+};
+
 export const StepList = () => {
   const spec = useSpec();
   const frameIndex = useFrameIndex();
@@ -24,22 +40,44 @@ export const StepList = () => {
 
   // Map step id → frame index. Re-keyed when the trace is replaced
   // (post-edit) or the spec changes — both can shift indices around.
+  //
+  // Iterate-aware: multi-block modes (ECB/CBC) emit per-iteration frames
+  // with stepIds suffixed `:b{i}` (see runtime.ts:129). The spec leaf's
+  // unsuffixed id never appears as a frame stepId in that case, so the
+  // direct lookup would always miss and the leaf would render disabled.
+  // Workaround: also map the unsuffixed prefix → FIRST matching frame
+  // (block 0). Clicking a leaf jumps to block 0's frame for that step;
+  // the slider/keyboard then moves between blocks within the iteration.
   const frameIndexByStepId = createMemo(() => {
     void version();
     const map = new Map<string, number>();
     const t = getTrace();
-    if (t) for (const f of t.frames) map.set(f.stepId, f.index);
+    if (t) {
+      for (const f of t.frames) {
+        map.set(f.stepId, f.index);
+        const colonB = f.stepId.lastIndexOf(":b");
+        if (colonB !== -1) {
+          const prefix = f.stepId.slice(0, colonB);
+          // First-wins so the leaf points at block 0, not the last block.
+          if (!map.has(prefix)) map.set(prefix, f.index);
+        }
+      }
+    }
     return map;
   });
 
   // The active step's group path, including the step's own id at the end.
   // Used by NodeRow to decide which groups to auto-expand.
+  //
+  // The stepId on an iterated frame is `<spec-leaf-id>:b{i}` — strip the
+  // suffix so groups containing the active leaf still resolve as "on
+  // path" inside an iterate body.
   const activeAncestors = createMemo<readonly string[]>(() => {
     void version();
     const t = getTrace();
     const f = t?.frames[frameIndex()];
     if (!f) return [];
-    return [...f.path, f.stepId];
+    return [...f.path, stripBlockSuffix(f.stepId)];
   });
 
   return (
@@ -82,7 +120,12 @@ const NodeRow = (props: NodeRowProps) => (
 
 const LeafRow = (props: NodeRowProps & { node: Extract<StepNode, { kind: "step" }> }) => {
   const frameIdx = (): number | undefined => props.frameIndexByStepId.get(props.node.id);
-  const isActive = (): boolean => frameIdx() === props.activeFrameIndex;
+  // Active when this leaf's spec id is in the active path. Works across
+  // iterate boundaries because `activeAncestors` strips the `:b{i}`
+  // suffix from the current frame's stepId. Without this, an iterated
+  // leaf would never appear active (block-0 frame index ≠ current frame
+  // index for any block other than 0).
+  const isActive = (): boolean => props.activeAncestors.includes(props.node.id);
   // Show the last segment of the dotted id as the user-friendly name.
   // Full id remains available via the tooltip (title attr).
   const shortName = (): string => props.node.id.split(".").pop() ?? props.node.id;
