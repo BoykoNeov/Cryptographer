@@ -614,6 +614,41 @@ const buildConsumerPortAssignment = (
    * end-to-end.
    */
   sourceXOf?: (canonicalSource: string) => number | undefined,
+  /**
+   * Optional callback returning the VISUAL ENTRY SIDE the edge will
+   * actually use on the consumer's rectangle: `"top"` / `"bottom"` /
+   * `"left"` / `"right"`. When provided, slot assignment buckets edges
+   * by `(consumer, side)` instead of `(consumer)` alone — so a
+   * consumer with one incoming state-spine on its top edge AND one
+   * incoming aux from the left no longer treats them as competing for
+   * a single slot pool. Pre-2026-05-19, both edges got slot offsets
+   * (because the bucket was target-only), which shifted the state-
+   * spine arrow's target-x off centre and made the "last arrow in
+   * each column" of every AES round group render visibly crooked.
+   *
+   * **Side classification** (caller's responsibility — must match
+   * `EdgePath`'s `geom()` regime detection):
+   *   - feedback edges → "top" (the overhead arc lands on top)
+   *   - horizOverlap && !vertOverlap → vertical regime →
+   *     `"top"` if target sits below source else `"bottom"`
+   *   - otherwise → horizontal regime →
+   *     `"left"` if target sits right of source else `"right"`
+   *
+   * Returning `undefined` for a single edge falls back to consumer-
+   * keyed bucketing for that edge (today's behaviour). Tests omit the
+   * callback to assert the pre-2026-05-19 baseline; production wires
+   * it from the same `boxes` map that `sourceXOf` reads.
+   *
+   * **`bucketSizeByTarget` stays consumer-wide.** The map remains the
+   * "how many edges target this consumer, total" surface tests already
+   * use. A consumer whose 2 edges split 1+1 across two sides will
+   * still appear in the map with value 2 — the entry is added when at
+   * least ONE side has a multi-edge bucket OR the consumer's overall
+   * edge count exceeds 1, whichever is more permissive. Callers that
+   * specifically want per-side counts can compute them from `slotOf`
+   * + `localCountOf`.
+   */
+  sideOf?: (e: GraphEdge) => "top" | "bottom" | "left" | "right" | undefined,
 ): ConsumerPortAssignment => {
   if (graph.edges.length === 0) return EMPTY_PORT_ASSIGNMENT;
   const canonicalSource = (e: GraphEdge): string => replicas.sourceOf.get(e.from) ?? e.from;
@@ -628,12 +663,22 @@ const buildConsumerPortAssignment = (
   };
   const targetKey = visualTargetOf ?? ((e: GraphEdge) => e.to);
   // Bucket every edge under its VISUAL consumer (see doc above for why
-  // not raw edge.to). Default targetKey is identity, so callers that
-  // don't care about render-time retargeting (existing tests, future
-  // pure-data analyses) keep their current behavior.
+  // not raw edge.to). When `sideOf` is provided, append the entry side
+  // to the key so distinct rectangle sides get independent slot pools —
+  // a vertical-regime state-spine arrow on a consumer's TOP edge no
+  // longer competes for slots with a horizontal-regime aux arrow on
+  // the same consumer's LEFT edge. When `sideOf` is omitted or returns
+  // undefined, the key reduces to the bare consumer id — matching the
+  // pre-2026-05-19 single-bucket-per-consumer behaviour that test
+  // fixtures (no box layout available) rely on.
+  const bucketKey = (e: GraphEdge): string => {
+    if (sideOf === undefined) return targetKey(e);
+    const side = sideOf(e);
+    return side === undefined ? targetKey(e) : `${targetKey(e)}|${side}`;
+  };
   const incomingByConsumer = new Map<string, GraphEdge[]>();
   for (const e of graph.edges) {
-    const key = targetKey(e);
+    const key = bucketKey(e);
     let bucket = incomingByConsumer.get(key);
     if (bucket === undefined) {
       bucket = [];
@@ -644,13 +689,25 @@ const buildConsumerPortAssignment = (
   const slotOf = new Map<GraphEdge, number>();
   const localCountOf = new Map<GraphEdge, number>();
   const bucketSizeByTarget = new Map<string, number>();
-  for (const [consumer, edges] of incomingByConsumer) {
-    // Single-incoming → no spread needed; leave slotOf/localCountOf empty
-    // for these. `consumerPortOffset` short-circuits via
-    // `slot === undefined → 0`. Multi-incoming buckets get exposed via
-    // `bucketSizeByTarget` so tests can sanity-check fixture cardinality.
+  // Track consumer-wide edge counts so a side-split consumer (e.g.
+  // 1 top + 1 left) still appears in `bucketSizeByTarget` with value
+  // 2 even though no per-side bucket has more than one edge. This
+  // preserves the test-facing API where the map answers "is this
+  // consumer multi-incoming?" — independent of side bucketing.
+  for (const e of graph.edges) {
+    const consumer = targetKey(e);
+    bucketSizeByTarget.set(consumer, (bucketSizeByTarget.get(consumer) ?? 0) + 1);
+  }
+  // Drop single-incoming consumers — preserve the legacy "absent from
+  // the map" semantic for them.
+  for (const [consumer, count] of [...bucketSizeByTarget]) {
+    if (count <= 1) bucketSizeByTarget.delete(consumer);
+  }
+  for (const [, edges] of incomingByConsumer) {
+    // Single-incoming bucket → no spread needed; leave slotOf/
+    // localCountOf empty for these. `consumerPortOffset` short-circuits
+    // via `slot === undefined → 0`.
     if (edges.length <= 1) continue;
-    bucketSizeByTarget.set(consumer, edges.length);
     edges.sort((a, b) => {
       // Primary: visual source x (when supplied for BOTH edges). Lets the
       // leftmost source on the canvas claim the leftmost slot. Replica
@@ -2203,23 +2260,71 @@ export const GraphView = () => {
     // practice, so the assignment is byte-identical for the non-bundled
     // case.
     const bg = bundledGraph();
+    // Track which representative edges are feedback. Bundles carry the
+    // flag; the synth graph's `edges` array is just the representative
+    // edges, so we build a parallel side-table for the `sideOf`
+    // callback to consult below.
+    const isFeedbackByRep = new Map<GraphEdge, boolean>();
+    const repEdges: GraphEdge[] = [];
+    for (const b of bg.bundles) {
+      isFeedbackByRep.set(b.representativeEdge, b.isFeedback);
+      repEdges.push(b.representativeEdge);
+    }
     const synthGraph: CipherGraph = {
       nodes: bg.nodes,
       containers: bg.containers,
-      edges: bg.bundles.map((b) => b.representativeEdge),
+      edges: repEdges,
       rootIds: bg.rootIds,
     };
     const boxes = baseLayout().boxes;
+    const visualTargetOf = (e: GraphEdge): string =>
+      visualEdgeTargetId(e, nodesById(), containersById());
+    // Side classification matches `EdgePath`'s `geom()` regime detection
+    // (search for "Three regimes" in this file). The render layer
+    // dispatches the path shape off the same geometric test, so any
+    // future change to one MUST change the other in lockstep. The
+    // 2026-05-19 fix for "the last arrow in each AES round group reads
+    // as crooked" comes from this side-aware bucketing — vertical-
+    // regime state-spine arrows on a consumer's TOP edge stop sharing
+    // a slot pool with horizontal-regime aux arrows on the same
+    // consumer's LEFT edge.
+    const sideOf = (e: GraphEdge): "top" | "bottom" | "left" | "right" | undefined => {
+      // Feedback edges always route over the top (per `EdgePath`'s
+      // overhead-arc branch). The arc enters the target's TOP edge,
+      // regardless of source position.
+      if (isFeedbackByRep.get(e) === true) return "top";
+      const fromBox = boxes.get(e.from);
+      const toBox = boxes.get(visualTargetOf(e));
+      // No layout info → fall through to consumer-keyed bucketing for
+      // this edge. Returning undefined preserves the today-behaviour
+      // path inside the builder.
+      if (fromBox === undefined || toBox === undefined) return undefined;
+      const horizOverlap =
+        Math.min(fromBox.x + fromBox.w, toBox.x + toBox.w) > Math.max(fromBox.x, toBox.x);
+      const vertOverlap =
+        Math.min(fromBox.y + fromBox.h, toBox.y + toBox.h) > Math.max(fromBox.y, toBox.y);
+      if (horizOverlap && !vertOverlap) {
+        // Vertical regime: target enters TOP edge when source is above,
+        // BOTTOM edge when source is below.
+        const downward = toBox.y + toBox.h / 2 >= fromBox.y + fromBox.h / 2;
+        return downward ? "top" : "bottom";
+      }
+      // Horizontal regime: target enters LEFT edge when source is to
+      // the left, RIGHT edge when source is to the right.
+      const rightward = fromBox.x + fromBox.w / 2 <= toBox.x + toBox.w / 2;
+      return rightward ? "left" : "right";
+    };
     return buildConsumerPortAssignment(
       synthGraph,
       replicaPlacement(),
-      (e) => visualEdgeTargetId(e, nodesById(), containersById()),
+      visualTargetOf,
       // Source-x lookup for the leftmost-source-wins comparator. Returns
       // undefined for sources not in the layout (replica canonical
       // sources after Slice 7b — they're removed from `nodes`), which
       // makes the comparator fall through to row-based ordering for
       // those edges.
       (canonicalSource) => boxes.get(canonicalSource)?.x,
+      sideOf,
     );
   });
 

@@ -698,3 +698,124 @@ describe("port-spreading — visual-target bucketing (chip-head + iterate-retarg
     expect(consumerPortOffset(bEdge, ports, 10)).toBe(0);
   });
 });
+
+// ─── Regression: side-aware bucketing (2026-05-19 Q1 fix) ───────────────────
+//
+// User-reported on the manual smoke after the 2026-05-19 STACK_GAP bump:
+// "Why is the last arrow in each column seemingly crooked?" The arrow from
+// `round.1.mix-columns` → `round.1.add-round-key` (vertical regime, target
+// enters TOP edge) had its target x shifted off-centre because
+// `add-round-key` also received an aux arrow from `key-expansion`
+// (horizontal regime, target enters LEFT edge). Pre-fix, the port-assignment
+// bucketed both edges by target id alone → 2 incoming → both edges got
+// non-zero slot offsets → the state-spine arrow rendered diagonal even
+// though nothing else competed for its top-edge entry point.
+//
+// Fix: optional `sideOf` callback. When provided, bucket key becomes
+// `${target}|${side}` so distinct rectangle sides get independent slot
+// pools. Tests below pin: (a) two same-side edges still spread; (b) two
+// distinct-side edges each return offset 0; (c) backward compat when
+// `sideOf` is omitted.
+
+describe("port-spreading — side-aware bucketing (Q1 fix for crooked round arrows)", () => {
+  it("two edges entering DIFFERENT sides each get offset 0 (independent slot pools)", () => {
+    // Synthetic shape of AES round's add-round-key: receives state-spine
+    // arrow from above (top entry) AND aux arrow from the left
+    // (left entry). Pre-fix both edges got slot offsets; post-fix each
+    // is the sole occupant of its (target, side) bucket → no offset.
+    const g = buildSyntheticGraph({
+      nodes: [
+        consumerNode("add-round-key"),
+        consumerNode("mix-columns"),
+        replicaNode("key-expansion->add-round-key", "key-expansion"),
+      ],
+      edges: [
+        { from: "mix-columns", to: "add-round-key", auxKey: "state", kind: "state" },
+        auxEdge("key-expansion->add-round-key", "add-round-key"),
+      ],
+      rootIds: ["mix-columns", "key-expansion->add-round-key", "add-round-key"],
+    });
+    const replicas = buildReplicaPlacement(g);
+    const sideOf = (e: GraphEdge): "top" | "bottom" | "left" | "right" | undefined => {
+      // Hard-coded sides matching the AES-round geometry: state spine
+      // enters top, aux replica enters left.
+      if (e.kind === "state") return "top";
+      return "left";
+    };
+    const ports = buildConsumerPortAssignment(g, replicas, undefined, undefined, sideOf);
+
+    // Consumer-wide bucketSizeByTarget stays at 2 (the public surface
+    // tests rely on for "is this consumer multi-incoming?" stays
+    // accurate even when the underlying buckets split by side).
+    expect(ports.bucketSizeByTarget.get("add-round-key")).toBe(2);
+
+    // Each edge is the sole occupant of its (target, side) bucket →
+    // slotOf entry missing → consumerPortOffset returns 0.
+    const [spineEdge, auxEdgeRef] = g.edges;
+    if (!spineEdge || !auxEdgeRef) throw new Error("missing edges");
+    expect(consumerPortOffset(spineEdge, ports, 10)).toBe(0);
+    expect(consumerPortOffset(auxEdgeRef, ports, 10)).toBe(0);
+  });
+
+  it("two edges entering the SAME side still spread (within-side bucketing preserved)", () => {
+    // If two aux arrows both enter the consumer's left edge (e.g. two
+    // separate aux fan-ins from the left), they DO compete and should
+    // both receive slot offsets — the side-aware bucketing only kills
+    // cross-side fake collisions, not legitimate within-side spreads.
+    const g = buildSyntheticGraph({
+      nodes: [
+        consumerNode("consumer"),
+        replicaNode("A->consumer", "A"),
+        replicaNode("B->consumer", "B"),
+      ],
+      edges: [auxEdge("A->consumer", "consumer"), auxEdge("B->consumer", "consumer")],
+      rootIds: ["A->consumer", "B->consumer", "consumer"],
+    });
+    const replicas = buildReplicaPlacement(g);
+    const sideOf = (_e: GraphEdge): "left" => "left";
+    const ports = buildConsumerPortAssignment(g, replicas, undefined, undefined, sideOf);
+
+    expect(ports.bucketSizeByTarget.get("consumer")).toBe(2);
+    const [aEdgeRef, bEdgeRef] = g.edges;
+    if (!aEdgeRef || !bEdgeRef) throw new Error("missing edges");
+    // Both still share the left-side bucket → 2 edges → distinct
+    // slots → ±5 offsets at portGap=10.
+    const aOffset = consumerPortOffset(aEdgeRef, ports, 10);
+    const bOffset = consumerPortOffset(bEdgeRef, ports, 10);
+    expect(aOffset).not.toBe(bOffset);
+    expect(Math.abs(aOffset)).toBe(5);
+    expect(Math.abs(bOffset)).toBe(5);
+  });
+
+  it("`sideOf` omitted falls back to consumer-keyed bucketing (backward compat for synthetic tests)", () => {
+    // Same shape as the cross-side test above, but with no `sideOf`
+    // callback. Behaviour reverts to today's: both edges in one
+    // consumer-keyed bucket → distinct slot offsets. Pre-existing
+    // synthetic-graph tests in this file all hit this path; their
+    // assertions stay green because `sideOf` is optional.
+    const g = buildSyntheticGraph({
+      nodes: [
+        consumerNode("add-round-key"),
+        consumerNode("mix-columns"),
+        replicaNode("key-expansion->add-round-key", "key-expansion"),
+      ],
+      edges: [
+        { from: "mix-columns", to: "add-round-key", auxKey: "state", kind: "state" },
+        auxEdge("key-expansion->add-round-key", "add-round-key"),
+      ],
+      rootIds: ["mix-columns", "key-expansion->add-round-key", "add-round-key"],
+    });
+    const replicas = buildReplicaPlacement(g);
+    const ports = buildConsumerPortAssignment(g, replicas);
+
+    expect(ports.bucketSizeByTarget.get("add-round-key")).toBe(2);
+    const [spineEdge, auxEdgeRef] = g.edges;
+    if (!spineEdge || !auxEdgeRef) throw new Error("missing edges");
+    // Both edges share the target-only bucket → distinct slots → ±5.
+    const spineOffset = consumerPortOffset(spineEdge, ports, 10);
+    const auxOffset = consumerPortOffset(auxEdgeRef, ports, 10);
+    expect(spineOffset).not.toBe(auxOffset);
+    expect(Math.abs(spineOffset)).toBe(5);
+    expect(Math.abs(auxOffset)).toBe(5);
+  });
+});
