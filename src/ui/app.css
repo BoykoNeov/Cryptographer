@@ -1375,6 +1375,124 @@ button:disabled {
   letter-spacing: 0.02em;
 }
 
+/* ─── Round-key panel ──────────────────────────────────────────────────
+   Renders every round-key sequence found in `trace.finalAux` as a
+   horizontally-scrollable ribbon of TinyMatrix grids (or 1-row strips
+   for short subkeys like Speck32/64's 2-byte schedule). Sits in linear
+   mode between StepDescription and ParamEditor. See
+   `RoundKeyPanel.tsx` for the data-shape detection logic.
+
+   Highlight precedence (per the immutable-doodling-quokka plan):
+     1 .provenance-source     (phase 3, future — hover-driven)
+     2 .round-key-cell-current (this file — current-frame consumption)
+     3 .round-key-cell-diff   (this file — chain-XOR delta, future toggle)
+     4 .diff-vs-prev          (existing — run-to-run overlay)
+     5 .changed               (existing — within-step before→after)
+   When two would apply, the higher-priority class is the only one set
+   via `classList`. We do not compose outlines; we replace. */
+.round-key-panel {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.round-key-ribbon {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.round-key-ribbon-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.round-key-ribbon-prefix {
+  /* Mono font inherits from :root. The local override would have been a
+     no-op (the var doesn't exist) — call it out so future edits don't
+     reintroduce one. */
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.round-key-ribbon-shape {
+  /* Inherits `.muted .small` already; nothing extra needed. The class
+     exists purely so the prose can be re-styled in one place later. */
+}
+
+.round-key-ribbon-strip {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 4px 2px;
+}
+
+.round-key-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  flex: 0 0 auto;
+}
+
+.round-key-cell-label {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.round-key-cell-label sub {
+  font-size: 9px;
+  /* Pull the subscript baseline slightly so the "K_3" reads as one glyph
+     pair rather than two stacked tokens. */
+  vertical-align: -2px;
+}
+
+/* The current-frame highlight: outline the K_i the active step is
+   reading via auxRead. Subtle enough not to drown out internal
+   .diff-vs-prev / .changed cell-level highlights inside the TinyMatrix,
+   distinct enough to read from a glance. */
+.round-key-cell-current {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+/* Reserved for the "show diffs" toggle in a future iteration of this
+   phase — outlines cells that differ from K_{i-1} to surface the chain
+   XOR pattern. Wired up in CSS now so the JSX can opt-in without a CSS
+   round-trip. */
+.round-key-cell-diff {
+  outline: 1.5px dashed var(--accent);
+  outline-offset: -1.5px;
+}
+
+.round-key-cell-strip {
+  display: flex;
+  gap: 1px;
+  background: var(--border);
+  padding: 1px;
+  border-radius: 2px;
+}
+
+.round-key-cell-byte {
+  background: var(--bg-elev-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+}
+
 /* ─── Step description (markdown rendered docs) ───────────────────────── */
 .step-description {
   border-top: 1px solid var(--border);

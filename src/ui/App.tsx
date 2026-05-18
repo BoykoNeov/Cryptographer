@@ -60,6 +60,7 @@ import { GraphView } from "./components/GraphView";
 import { IvInput } from "./components/IvInput";
 import { MatrixView } from "./components/MatrixView";
 import { ParamEditor } from "./components/ParamEditor";
+import { RoundKeyPanel } from "./components/RoundKeyPanel";
 import { RunExplorerModal } from "./components/RunExplorerModal";
 import { StepDescription } from "./components/StepDescription";
 import { StepList } from "./components/StepList";
@@ -1189,6 +1190,15 @@ export const App = () => {
 
                   {/* Human-readable explanation of what this step does. */}
                   <StepDescription frame={frame()} />
+
+                  {/* Round-key schedule panel. Cipher-agnostic: scans
+                      `trace.finalAux` for `prefix.N` Uint8Array sequences
+                      (AES's `roundKey.0..Nr`, Serpent's `roundKey.0..32`,
+                      Speck's 2-byte subkeys) and renders each as a ribbon.
+                      Highlights the K_i the current frame is reading via
+                      auxRead. Hidden when no sequences exist (very-early
+                      boot, or a hypothetical no-schedule cipher). */}
+                  <RoundKeyPanel frame={frame()} />
 
                   {/* Editable params for the current step. Reads the
                       shared selection signal (kept in sync with the

@@ -1,4 +1,4 @@
-import type { Trace } from "@/core/types";
+import type { Aux, Trace } from "@/core/types";
 import { createSignal } from "solid-js";
 
 /**
@@ -184,6 +184,27 @@ export const setFrame = (n: number) => {
 
 /** Bumps when the trace is replaced. Read this in createMemo to invalidate views. */
 export const useTraceVersion = () => version;
+
+/**
+ * Reactive accessor for `Trace.finalAux` — the runtime's post-run aux snapshot
+ * (round-key sequences, IVs, computed counters, anything an executor wrote via
+ * `auxWrites`). Returns `null` on very-early boot before any trace lands.
+ *
+ * The closure reads `version()` so it invalidates whenever `setTrace` swaps a
+ * new trace in. Mirrors the `useFrameIndex` / `useHistory` convention: call the
+ * hook once to obtain the thunk, then invoke the thunk inside a `createMemo` /
+ * JSX expression to subscribe.
+ *
+ * Pedagogy panels (round-key side-by-side, key-schedule explorer) consume this
+ * to read the final aux map without coupling to the runtime or executors.
+ */
+const finalAuxThunk = (): Aux | null => {
+  // Subscribe to trace-replacement bumps. `void` to silence the
+  // expression-statement warning while still tracking the signal read.
+  void version();
+  return currentTrace?.finalAux ?? null;
+};
+export const useTraceFinalAux = () => finalAuxThunk;
 
 /**
  * Read the currently selected step id. ParamEditor mounts call this to
