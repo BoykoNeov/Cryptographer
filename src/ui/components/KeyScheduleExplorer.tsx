@@ -292,33 +292,43 @@ const formatByteInline = (b: number, fmt: ByteFormat): string => formatByte(b, f
  * short paragraph (1-2 lines) describing the transformation in terms of
  * the actual bytes — complements the type-prose legend at the top of the
  * section, which explains what the operation IS in general.
+ *
+ * Reactivity note: stage objects don't mutate (the simulator emits them
+ * frozen per frame), so we switch on `props.stage.kind` once at render
+ * time and capture `stage` as a local for terseness. But `props.fmt` IS
+ * reactive — it flows from the byte-format toggle. We read `props.fmt`
+ * directly in each JSX expression (no destructure into a local) so Solid
+ * wraps each formatted byte in its own tracked computation. Result:
+ * format toggle surgically updates text content WITHOUT re-creating the
+ * parent `<details>` element, which would lose its `open` state.
  */
 const AesStageProse = (props: { stage: AesStage; word: AesScheduleWord; fmt: ByteFormat }) => {
-  const stage = props.stage;
-  const word = props.word;
-  const fmt = props.fmt;
-  switch (stage.kind) {
+  switch (props.stage.kind) {
     case "init": {
-      const start = 4 * word.wordIndex;
+      const stage = props.stage;
+      const wordIndex = props.word.wordIndex;
+      const start = 4 * wordIndex;
       return (
         <p>
-          W<sub>{word.wordIndex}</sub> comes straight from master-key bytes [{start}..{start + 4}] ={" "}
-          {formatBytes(stage.word, fmt)}. No transformation applied.
+          W<sub>{wordIndex}</sub> comes straight from master-key bytes [{start}..{start + 4}] ={" "}
+          {formatBytes(stage.word, props.fmt)}. No transformation applied.
         </p>
       );
     }
     case "rotword": {
+      const stage = props.stage;
       const leading = stage.input[0] ?? 0;
       return (
         <p>
-          Rotate left one byte: {formatBytes(stage.input, fmt)} → {formatBytes(stage.output, fmt)}.
-          The leading byte ({formatByteInline(leading, fmt)}) moves to position 3; the other three
-          shift left.
+          Rotate left one byte: {formatBytes(stage.input, props.fmt)} →{" "}
+          {formatBytes(stage.output, props.fmt)}. The leading byte (
+          {formatByteInline(leading, props.fmt)}) moves to position 3; the other three shift left.
         </p>
       );
     }
     case "subword":
     case "extra-subword": {
+      const stage = props.stage;
       const [a, b, c, d] = stage.sboxLookups;
       const out = stage.output;
       return (
@@ -326,34 +336,35 @@ const AesStageProse = (props: { stage: AesStage; word: AesScheduleWord; fmt: Byt
           <Show when={stage.kind === "extra-subword"}>
             <em>AES-256 extra path (no RotWord, no Rcon).</em>{" "}
           </Show>
-          S-box lookup per byte: S[{formatByteInline(a, fmt)}] ={" "}
-          {formatByteInline(out[0] ?? 0, fmt)}, S[{formatByteInline(b, fmt)}] ={" "}
-          {formatByteInline(out[1] ?? 0, fmt)}, S[
-          {formatByteInline(c, fmt)}] = {formatByteInline(out[2] ?? 0, fmt)}, S[
-          {formatByteInline(d, fmt)}] = {formatByteInline(out[3] ?? 0, fmt)}. All four bytes
-          substituted in place.
+          S-box lookup per byte: S[{formatByteInline(a, props.fmt)}] ={" "}
+          {formatByteInline(out[0] ?? 0, props.fmt)}, S[{formatByteInline(b, props.fmt)}] ={" "}
+          {formatByteInline(out[1] ?? 0, props.fmt)}, S[{formatByteInline(c, props.fmt)}] ={" "}
+          {formatByteInline(out[2] ?? 0, props.fmt)}, S[{formatByteInline(d, props.fmt)}] ={" "}
+          {formatByteInline(out[3] ?? 0, props.fmt)}. All four bytes substituted in place.
         </p>
       );
     }
     case "rcon-xor": {
+      const stage = props.stage;
       // Rcon index = i / Nk (chain-start invariant).
-      const rconIdx = word.wordIndex / word.Nk;
+      const rconIdx = props.word.wordIndex / props.word.Nk;
       const rconHex = `0x${stage.rconValue.toString(16).padStart(2, "0")}`;
       const b0In = stage.input[0] ?? 0;
       const b0Out = stage.output[0] ?? 0;
       return (
         <p>
-          Rcon[{rconIdx}] = {rconHex}. XOR into byte 0 only: {formatByteInline(b0In, fmt)} ⊕{" "}
-          {rconHex} = {formatByteInline(b0Out, fmt)}. Bytes 1-3 pass through unchanged.
+          Rcon[{rconIdx}] = {rconHex}. XOR into byte 0 only: {formatByteInline(b0In, props.fmt)} ⊕{" "}
+          {rconHex} = {formatByteInline(b0Out, props.fmt)}. Bytes 1-3 pass through unchanged.
         </p>
       );
     }
     case "xor-prev": {
+      const stage = props.stage;
       return (
         <p>
-          W<sub>{stage.prevWordIndex}</sub> = {formatBytes(stage.prevWord, fmt)}. Per-byte XOR with
-          the chain output: {formatBytes(stage.input, fmt)} ⊕ {formatBytes(stage.prevWord, fmt)} ={" "}
-          {formatBytes(stage.output, fmt)}.
+          W<sub>{stage.prevWordIndex}</sub> = {formatBytes(stage.prevWord, props.fmt)}. Per-byte XOR
+          with the chain output: {formatBytes(stage.input, props.fmt)} ⊕{" "}
+          {formatBytes(stage.prevWord, props.fmt)} = {formatBytes(stage.output, props.fmt)}.
         </p>
       );
     }

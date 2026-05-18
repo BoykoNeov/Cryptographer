@@ -1781,6 +1781,31 @@ button:disabled {
   font-weight: 600;
   user-select: none;
   padding: 2px 0;
+  /* Match the stage-row disclosure pattern: hide OS marker, render
+     our own ▸ via ::before, rotate on [open]. Consistent affordance
+     vocabulary across the explorer. */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+}
+
+.key-schedule-aes-legend > summary::-webkit-details-marker {
+  display: none;
+}
+
+.key-schedule-aes-legend > summary::before {
+  content: "▸";
+  color: var(--muted);
+  font-size: 9px;
+  width: 10px;
+  display: inline-block;
+  text-align: center;
+  transition: transform 0.1s ease;
+}
+
+.key-schedule-aes-legend[open] > summary::before {
+  transform: rotate(90deg);
 }
 
 .key-schedule-aes-legend-entries {

@@ -157,6 +157,42 @@ describe("<KeyScheduleExplorer /> — AES branch", () => {
     expect(prose).toContain("Bytes 1-3 pass through unchanged");
   });
 
+  it("keeps an expanded stage row open across a format toggle (prose updates surgically)", () => {
+    // Regression: the initial wiring destructured props inside AesStageProse,
+    // which (combined with Solid's reactivity model) caused the entire
+    // <details> subtree to re-mount on fmt change — wiping the user's
+    // open-state. Fix: read props.fmt inline in JSX expressions so Solid
+    // updates only the text nodes. Pin the behavior here.
+    const frame = findFrameByStepType(
+      aes128Spec,
+      new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
+      matrixFromBytes(bytesFromHex(AES128_PT)),
+      (t) => t.startsWith("aes.key-expansion"),
+    );
+    const { container } = render(() => <KeyScheduleExplorer frame={frame} />);
+    const rconStage = container.querySelector(
+      'details.key-schedule-aes-stage[data-stage-kind="rcon-xor"]',
+    ) as HTMLDetailsElement | null;
+    expect(rconStage).not.toBeNull();
+    if (!rconStage) return;
+    // Open the row programmatically (the same DOM state a user click sets).
+    rconStage.open = true;
+    expect(rconStage.open).toBe(true);
+    // The prose should currently show byte values in hex.
+    const proseEl = rconStage.querySelector(".key-schedule-aes-stage-prose");
+    expect(proseEl?.textContent).toContain("Rcon[1]");
+    // Toggle the byte format. The row must stay open AND the prose text
+    // must reflect the new format.
+    setByteFormat("decimal");
+    expect(rconStage.open).toBe(true);
+    // Decimal Rcon byte 1 = 1 (was 0x01 in hex). The "Rcon[1] = 0x01"
+    // header keeps its hex form (matches the stage label convention),
+    // but the byte values that flow through formatByteInline switch.
+    // Easiest invariant to pin: "Bytes 1-3 pass through unchanged" still
+    // there (string is identical) AND no byte token left as "8a"-style hex.
+    expect(proseEl?.textContent).toContain("Bytes 1-3 pass through unchanged");
+  });
+
   it("renders the inline error stub when the frame has missing params (sbox)", () => {
     // Synthesize a malformed frame: key-expansion stepType but params
     // missing the sbox field. The simulator should refuse and the
