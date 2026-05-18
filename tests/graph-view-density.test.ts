@@ -81,7 +81,10 @@ describe("GraphView density — canvas size ordering", () => {
     // truncation.test.tsx need re-baselining first.
     expect(c.LEAF_W).toBe(132);
     expect(c.LEAF_H).toBe(28);
-    expect(c.STACK_GAP).toBe(6);
+    // BASE_STACK_GAP bumped 6 → 12 on 2026-05-19 so the four leaves
+    // stacked inside each AES round group get visible breathing room
+    // (the pre-bump 6 px made the rows read as one solid block).
+    expect(c.STACK_GAP).toBe(12);
     // BASE_FLOW_GAP bumped 16 → 24 on 2026-05-16 for chip-row breathing
     // room (collapsed multi-block iterate UX), then 24 → 36 on
     // 2026-05-19 after the CBC iterate body's 13-chip row read as a

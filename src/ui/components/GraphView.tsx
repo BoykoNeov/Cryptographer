@@ -147,8 +147,21 @@ import { STEP_TYPE_DRAG_MIME, StepPalette, useActiveDragStepType } from "./StepP
 const BASE_LEAF_W = 132;
 /** Base (1.0×) leaf-rectangle height. */
 const BASE_LEAF_H = 28;
-/** Base (1.0×) vertical gap between siblings stacked inside a group. */
-const BASE_STACK_GAP = 6;
+/** Base (1.0×) vertical gap between siblings stacked inside a group.
+ *  Bumped from 6 → 12 (2026-05-19) so the four leaves stacked inside
+ *  each AES round group (SubBytes → ShiftRows → MixColumns →
+ *  AddRoundKey) — and the three inside the final round — get visible
+ *  breathing room. Pre-bump, the 6 px gap put consecutive leaves
+ *  essentially flush against one another, so the four-row stack read
+ *  as a single solid block. 2× bump nearly doubles the inter-row
+ *  whitespace without dramatically growing the round group's total
+ *  height: a 4-leaf round goes from 130 px (4 × 28 + 3 × 6) to
+ *  148 px (4 × 28 + 3 × 12). User-reported on the 2026-05-19 manual
+ *  smoke after the FLOW_GAP 24 → 36 bump landed for horizontal flow.
+ *  STACK_GAP is reused at one site beyond plain group stacking
+ *  (the `innerY` advance in `layoutNode`'s group branch); see comments
+ *  there if a future bump runs into edge cases. */
+const BASE_STACK_GAP = 12;
 /** Base (1.0×) horizontal gap between siblings flowing inside an iterate body / root.
  *  Bumped from 16 → 24 (2026-05-16) for breathing room on the collapsed-
  *  iterate chip row — multiple chips + aux replicas above were cramping
