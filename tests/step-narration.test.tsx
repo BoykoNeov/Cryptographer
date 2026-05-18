@@ -19,6 +19,7 @@ import { StepNarration } from "@/ui/components/StepNarration";
 import "@/ui/narration/index"; // eagerly register Phase 1 narrators
 import { __resetByteFormatForTests, setByteFormat } from "@/ui/stores/format";
 import { cleanup, render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const makeSubBytesFrame = (): TraceFrame => {
@@ -91,5 +92,35 @@ describe("StepNarration — AES SubBytes frame", () => {
     };
     const { container } = render(() => <StepNarration frame={frame} />);
     expect(container.querySelector(".step-narration")).toBeNull();
+  });
+
+  it("preserves <details> open state when the frame REFERENCE changes (re-run path)", () => {
+    // Regression: the App's createEffect at App.tsx:680 fires a 200ms
+    // debounced re-run on byte-format toggle (via inputText change), which
+    // produces a new TraceFrame object with the SAME stepId but a fresh
+    // reference. With <For> keyed by item-reference, every NarrationUnit
+    // was treated as "new" (new closures per re-run), and every <details>
+    // was unmounted + recreated — destroying the browser's open state.
+    // <Index> keys by position, so the <details> at byte-N persists
+    // across the swap. This test simulates the path by feeding the
+    // component two distinct frame objects with identical content.
+    const [frameSignal, setFrame] = createSignal(makeSubBytesFrame());
+    const { container } = render(() => <StepNarration frame={frameSignal()} />);
+    const target = container.querySelector(
+      '.step-narration-unit[data-key="byte:1"]',
+    ) as HTMLDetailsElement | null;
+    expect(target).not.toBeNull();
+    if (!target) return;
+    target.open = true;
+    const originalElement = target;
+    // Simulate a re-run: build a new frame object with the same content
+    // and stepId. With <For>, the old <details> would unmount and the
+    // open state would be lost. With <Index>, the element persists.
+    setFrame(makeSubBytesFrame());
+    const after = container.querySelector(
+      '.step-narration-unit[data-key="byte:1"]',
+    ) as HTMLDetailsElement | null;
+    expect(after).toBe(originalElement);
+    expect(after?.open).toBe(true);
   });
 });

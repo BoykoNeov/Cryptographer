@@ -28,7 +28,8 @@
  */
 
 import type { TraceFrame } from "@/core/types";
-import { For, Show, createMemo } from "solid-js";
+import { Index, Show, createMemo } from "solid-js";
+import { Dynamic } from "solid-js/web";
 import { type NarrationUnit, lookupNarration } from "../narration/registry";
 import { useByteFormat } from "../stores/format";
 
@@ -36,17 +37,44 @@ type Props = {
   frame: TraceFrame;
 };
 
+/**
+ * Why `<Index>` not `<For>` (the critical reactivity contract):
+ *
+ * `App.tsx` runs a debounced 200ms re-run on any change to
+ * `[spec, inputText, keyText, ivBytes]`. The byte-format toggle
+ * re-renders `inputText` (parse with old format → re-format with new),
+ * which triggers that re-run. The runtime produces a new `Trace`,
+ * `App.frame()` now points to a fresh `TraceFrame` object (same
+ * `stepId`, new reference), `<StepNarration>` receives the new frame,
+ * `units` memo re-runs, and the narrator builds an entirely new units
+ * array — every `unit.Prose` is a fresh closure with new captured
+ * bytes, and every `unit` is a new object.
+ *
+ * `<For>` is keyed by item reference. After a re-run, every item is
+ * "new," so `<For>` unmounts every `<details>` and creates fresh ones —
+ * destroying the browser-native `open` state on any expanded
+ * disclosure. The format-toggle UX snaps open rows shut.
+ *
+ * `<Index>` keys by position. The `<details>` element at position N
+ * persists across re-runs; only the reactive bindings inside (the
+ * summary label, the Prose component) re-evaluate. The `open`
+ * attribute lives on the persisted element so the browser keeps the
+ * row expanded. The Prose's JSX (which reads `props.fmt` inline) then
+ * surgically updates the byte text inside the body.
+ *
+ * Per-step narrators always produce the same cardinality and order
+ * per `stepType` (16 byte units for SubBytes, 4 row units for
+ * ShiftRows, etc.), so `Index`'s position-key is conceptually stable —
+ * position N always corresponds to the same conceptual sub-unit.
+ *
+ * `<Dynamic component={unit.Prose}>` is the correct primitive for the
+ * dynamic component reference: when `unit()` returns a new unit with a
+ * new Prose closure, `<Dynamic>` swaps the inner render WITHOUT
+ * touching the `<details>` ancestor.
+ */
 export const StepNarration = (props: Props) => {
   const fmt = useByteFormat();
 
-  // Build the unit list reactively on frame swap. Format toggles do NOT
-  // rebuild the list — `fmt` flows into each Prose component via props
-  // and only re-renders the byte text inside open <details>.
-  //
-  // `visibleUnits` collapses two suppression cases (no narrator,
-  // narrator declined) into a single nullable Show predicate. The
-  // empty-array case must explicitly map to null so the Show fallback
-  // path fires (an empty array is otherwise truthy).
   const units = createMemo<readonly NarrationUnit[] | null>(() => {
     const fn = lookupNarration(props.frame.stepType);
     return fn ? fn(props.frame) : null;
@@ -60,16 +88,16 @@ export const StepNarration = (props: Props) => {
     <Show when={visibleUnits()}>
       {(getUnits) => (
         <section class="step-narration" aria-label="step narration">
-          <For each={getUnits()}>
+          <Index each={getUnits()}>
             {(unit) => (
-              <details class="step-narration-unit" data-key={unit.key}>
-                <summary class="step-narration-unit-summary">{unit.label}</summary>
+              <details class="step-narration-unit" data-key={unit().key}>
+                <summary class="step-narration-unit-summary">{unit().label}</summary>
                 <div class="step-narration-unit-prose">
-                  <unit.Prose fmt={fmt()} />
+                  <Dynamic component={unit().Prose} fmt={fmt()} />
                 </div>
               </details>
             )}
-          </For>
+          </Index>
         </section>
       )}
     </Show>
