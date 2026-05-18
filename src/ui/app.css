@@ -1421,6 +1421,55 @@ button:disabled {
   gap: 12px;
 }
 
+/* Collapsible header. Always visible when sequences exist; clicking
+   toggles the body. Renders as a `<button>` for keyboard + screen-reader
+   support but styled like an inline header strip — no button chrome. */
+.round-key-panel-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.round-key-panel-header:hover .round-key-panel-title {
+  color: var(--accent);
+}
+
+.round-key-panel-chevron {
+  font-size: 10px;
+  color: var(--muted);
+  /* Fixed-width so the title doesn't shift between ▶ and ▼ glyphs. */
+  display: inline-block;
+  width: 12px;
+  text-align: center;
+}
+
+.round-key-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.round-key-panel-hint {
+  /* Inherits `.muted .small`. Stays visible as a click affordance hint
+     since the header otherwise reads as a static label. */
+}
+
+.round-key-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .round-key-ribbon {
   display: flex;
   flex-direction: column;

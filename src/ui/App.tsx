@@ -1207,17 +1207,25 @@ export const App = () => {
                     <KeyScheduleExplorer frame={frame()} />
                   </Show>
 
-                  {/* Human-readable explanation of what this step does. */}
-                  <StepDescription frame={frame()} />
-
                   {/* Round-key schedule panel. Cipher-agnostic: scans
                       `trace.finalAux` for `prefix.N` Uint8Array sequences
                       (AES's `roundKey.0..Nr`, Serpent's `roundKey.0..32`,
                       Speck's 2-byte subkeys) and renders each as a ribbon.
                       Highlights the K_i the current frame is reading via
                       auxRead. Hidden when no sequences exist (very-early
-                      boot, or a hypothetical no-schedule cipher). */}
+                      boot, or a hypothetical no-schedule cipher).
+                      Positioned BELOW the FrameStateView (and ABOVE
+                      StepDescription) so the ribbon visually couples with
+                      the matrices it relates to during AddRoundKey hover,
+                      rather than being separated by the larger
+                      StepDescription block. Collapsible — defaults to
+                      expanded on key-expansion / AddRoundKey frames,
+                      collapsed otherwise; clicking the header overrides
+                      until the next spec change. */}
                   <RoundKeyPanel frame={frame()} />
+
+                  {/* Human-readable explanation of what this step does. */}
+                  <StepDescription frame={frame()} />
 
                   {/* Editable params for the current step. Reads the
                       shared selection signal (kept in sync with the

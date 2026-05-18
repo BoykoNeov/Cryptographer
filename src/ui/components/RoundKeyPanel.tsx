@@ -25,9 +25,10 @@
 
 import { type ByteFormat, formatByte } from "@/core/format";
 import type { Aux, TraceFrame } from "@/core/types";
-import { For, Show, createMemo } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import { useByteFormat } from "../stores/format";
 import { useProvenanceHover } from "../stores/provenance-hover";
+import { useSpec } from "../stores/spec";
 import { useTraceFinalAux } from "../stores/trace";
 import { TinyMatrix } from "./TinyMatrix";
 
@@ -59,6 +60,63 @@ type RoundKeySequence = {
 // `cipher.roundKey.3` would group under `cipher.roundKey`) — greedy `.+`
 // gives the trailing `.N` the smallest match.
 const PREFIX_INDEX_RE = /^(.+)\.(\d+)$/;
+
+/**
+ * User override for the panel's collapsed state. Module-scope so a single
+ * click "sticks" across frame scrubs within one spec session, but resets
+ * to `null` (use frame-derived default) on spec change. `null` means
+ * "no explicit user choice — derive from current frame relevance."
+ *
+ * The two-source design — frame-derived default + user override —
+ * matches the UX the user asked for during 2026-05-18 Phase 1 smoke:
+ * the panel is auto-visible on key-expansion and AddRoundKey frames
+ * (when it's *about* something the user is looking at), auto-collapsed
+ * on others (so it doesn't crowd the much-larger ParamEditor that
+ * follows), but always overridable.
+ */
+const [overrideExpanded, setOverrideExpanded] = createSignal<boolean | null>(null);
+
+/**
+ * Test-only: clear the override so cases don't leak state.
+ */
+export const __resetRoundKeyPanelOverrideForTests = (): void => {
+  setOverrideExpanded(null);
+};
+
+/**
+ * Is the current frame one for which the round-key panel is pedagogically
+ * "about" the work the user is looking at? A frame is relevant when it
+ * either CONSUMES or PRODUCES at least one of the detected schedule's
+ * keys:
+ *
+ *   - Producers: key-schedule / key-expansion frames write `prefix.N`
+ *     entries to aux. Their `auxWritten` map contains the schedule.
+ *   - Consumers: AddRoundKey-style frames read a specific `K_i` via
+ *     `auxRead`. The schedule is being mixed in right now.
+ *
+ * The read-or-write check is cipher-agnostic by construction — no
+ * hardcoded list of step types, no dependency on the key-schedule-sim
+ * registry (which only knows AES + Serpent today; Speck's
+ * `speck.key-schedule@1` would otherwise be misclassified). A future
+ * cipher whose schedule uses `prefix.N` aux naming automatically counts
+ * on both sides.
+ *
+ * Returns `false` when no frame is selected.
+ */
+const isRelevantFrame = (
+  frame: TraceFrame | null,
+  sequences: readonly RoundKeySequence[],
+): boolean => {
+  if (!frame) return false;
+  for (const seq of sequences) {
+    for (const entry of seq.entries) {
+      const name = `${seq.prefix}.${entry.index}`;
+      if (frame.auxRead.has(name)) return true;
+      if (frame.auxWritten.has(name)) return true;
+    }
+  }
+  return false;
+};
 
 /**
  * Walk the aux map and find every `prefix.N`-pattern sequence whose values
@@ -107,11 +165,26 @@ export const detectRoundKeySequences = (aux: Aux): RoundKeySequence[] => {
 export const RoundKeyPanel = (props: Props) => {
   const finalAux = useTraceFinalAux();
   const fmt = useByteFormat();
+  const spec = useSpec();
   // Subscribe to the shared provenance-hover signal once. The memo below
   // invokes the thunk to track invalidation; calling `useProvenanceHover()`
   // inside the memo body would re-bind a fresh subscription every
   // memo execution.
   const hover = useProvenanceHover();
+
+  // Spec change resets the user override so a fresh cipher inherits the
+  // frame-derived default. `defer: true` skips the initial firing — only
+  // an actual *change* should clear the override. Without defer, mounting
+  // the component would immediately blow away an override set by some
+  // earlier session (which is fine today, but the explicit defer keeps
+  // the contract honest if a future caller threads override state in).
+  createEffect(
+    on(
+      () => spec().id,
+      () => setOverrideExpanded(null),
+      { defer: true },
+    ),
+  );
 
   // Detect qualifying sequences from the post-run aux map. Tracks the trace
   // version via `useTraceFinalAux`, so re-runs invalidate this memo cleanly.
@@ -120,6 +193,18 @@ export const RoundKeyPanel = (props: Props) => {
     if (!aux) return [];
     return detectRoundKeySequences(aux);
   });
+
+  // Combined expanded-state: user override wins when set, otherwise fall
+  // back to whether the current frame is "about" the schedule.
+  const expanded = createMemo<boolean>(() => {
+    const override = overrideExpanded();
+    if (override !== null) return override;
+    return isRelevantFrame(props.frame, sequences());
+  });
+
+  const toggleExpanded = (): void => {
+    setOverrideExpanded(!expanded());
+  };
 
   // Set of aux names the current frame consumed via auxRead — fast O(1)
   // membership check per cell to decide the "current" outline. Empty when
@@ -156,16 +241,36 @@ export const RoundKeyPanel = (props: Props) => {
   return (
     <Show when={sequences().length > 0}>
       <section class="round-key-panel" aria-label="round-key schedule">
-        <For each={sequences()}>
-          {(seq) => (
-            <SequenceRibbon
-              seq={seq}
-              consumedAuxNames={consumedAuxNames()}
-              fmt={fmt()}
-              hoverHighlightsByAuxName={hoverHighlightsByAuxName()}
-            />
-          )}
-        </For>
+        {/* Clickable header — always visible when sequences exist. The
+            chevron + text both toggle. Reading `expanded()` inline so the
+            label and chevron react to scrubs (when the frame-derived
+            default flips) and to clicks (when the override flips). */}
+        <button
+          type="button"
+          class="round-key-panel-header"
+          onClick={toggleExpanded}
+          aria-expanded={expanded()}
+        >
+          <span class="round-key-panel-chevron">{expanded() ? "▼" : "▶"}</span>
+          <span class="round-key-panel-title">round-key schedule</span>
+          <span class="round-key-panel-hint muted small">
+            {expanded() ? "click to hide" : "click to show"}
+          </span>
+        </button>
+        <Show when={expanded()}>
+          <div class="round-key-panel-body">
+            <For each={sequences()}>
+              {(seq) => (
+                <SequenceRibbon
+                  seq={seq}
+                  consumedAuxNames={consumedAuxNames()}
+                  fmt={fmt()}
+                  hoverHighlightsByAuxName={hoverHighlightsByAuxName()}
+                />
+              )}
+            </For>
+          </div>
+        </Show>
       </section>
     </Show>
   );

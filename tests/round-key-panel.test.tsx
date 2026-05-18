@@ -29,10 +29,14 @@ import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
 import type { Aux, AuxValue, MatrixState } from "@/core/types";
-import { RoundKeyPanel, detectRoundKeySequences } from "@/ui/components/RoundKeyPanel";
+import {
+  RoundKeyPanel,
+  __resetRoundKeyPanelOverrideForTests,
+  detectRoundKeySequences,
+} from "@/ui/components/RoundKeyPanel";
 import { __resetByteFormatForTests, setByteFormat } from "@/ui/stores/format";
 import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
-import { cleanup, render } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const AES128_KEY = "000102030405060708090a0b0c0d0e0f";
@@ -118,16 +122,20 @@ describe("<RoundKeyPanel /> against a real AES-128 trace", () => {
   beforeEach(() => {
     __resetByteFormatForTests();
     __resetTraceForTests();
+    __resetRoundKeyPanelOverrideForTests();
   });
   afterEach(() => {
     cleanup();
     __resetByteFormatForTests();
     __resetTraceForTests();
+    __resetRoundKeyPanelOverrideForTests();
   });
 
   it("renders 11 round-key cells in one ribbon", () => {
-    seedAes128Trace();
-    const { container } = render(() => <RoundKeyPanel frame={null} />);
+    const trace = seedAes128Trace();
+    // First frame is key-expansion — a "relevant" frame, so the panel
+    // body auto-expands and the ribbon is visible without a click.
+    const { container } = render(() => <RoundKeyPanel frame={trace.frames[0] ?? null} />);
     const ribbons = container.querySelectorAll(".round-key-ribbon");
     expect(ribbons.length).toBe(1);
     const cells = container.querySelectorAll(".round-key-cell");
@@ -171,8 +179,8 @@ describe("<RoundKeyPanel /> against a real AES-128 trace", () => {
   });
 
   it("re-renders cell text on byte-format toggle", () => {
-    seedAes128Trace();
-    const { container } = render(() => <RoundKeyPanel frame={null} />);
+    const trace = seedAes128Trace();
+    const { container } = render(() => <RoundKeyPanel frame={trace.frames[0] ?? null} />);
     // K_0 is the master key bytes (FIPS-197 Appendix B: 00 01 02 … 0f).
     // The first `.tiny-cell` in the document is K_0's [0,0] cell = 0x00.
     const firstTinyCell = container.querySelector(".tiny-cell");
@@ -217,16 +225,18 @@ describe("<RoundKeyPanel /> against a real Serpent-128 trace (high-count)", () =
   beforeEach(() => {
     __resetByteFormatForTests();
     __resetTraceForTests();
+    __resetRoundKeyPanelOverrideForTests();
   });
   afterEach(() => {
     cleanup();
     __resetByteFormatForTests();
     __resetTraceForTests();
+    __resetRoundKeyPanelOverrideForTests();
   });
 
   it("renders 33 round-key cells in one ribbon at 16B each", () => {
-    seedSerpent128Trace();
-    const { container } = render(() => <RoundKeyPanel frame={null} />);
+    const trace = seedSerpent128Trace();
+    const { container } = render(() => <RoundKeyPanel frame={trace.frames[0] ?? null} />);
     const ribbons = container.querySelectorAll(".round-key-ribbon");
     expect(ribbons.length).toBe(1);
     // Serpent: 33 round keys (K_0 through K_32, one more than the 32-round
@@ -236,8 +246,8 @@ describe("<RoundKeyPanel /> against a real Serpent-128 trace (high-count)", () =
   });
 
   it("uses the TinyMatrix render path (not the fallback strip) for 16-byte keys", () => {
-    seedSerpent128Trace();
-    const { container } = render(() => <RoundKeyPanel frame={null} />);
+    const trace = seedSerpent128Trace();
+    const { container } = render(() => <RoundKeyPanel frame={trace.frames[0] ?? null} />);
     // All 33 cells take the TinyMatrix branch — 16 × 33 = 528 tiny cells.
     // The fallback strip class must be entirely absent.
     expect(container.querySelectorAll(".tiny-matrix").length).toBe(33);
@@ -261,16 +271,18 @@ describe("<RoundKeyPanel /> against a real Speck32/64 trace (fallback-strip path
   beforeEach(() => {
     __resetByteFormatForTests();
     __resetTraceForTests();
+    __resetRoundKeyPanelOverrideForTests();
   });
   afterEach(() => {
     cleanup();
     __resetByteFormatForTests();
     __resetTraceForTests();
+    __resetRoundKeyPanelOverrideForTests();
   });
 
   it("renders 22 subkey cells in one ribbon at 2B each", () => {
-    seedSpeck32_64Trace();
-    const { container } = render(() => <RoundKeyPanel frame={null} />);
+    const trace = seedSpeck32_64Trace();
+    const { container } = render(() => <RoundKeyPanel frame={trace.frames[0] ?? null} />);
     const ribbons = container.querySelectorAll(".round-key-ribbon");
     expect(ribbons.length).toBe(1);
     // Speck32/64: 22 round subkeys, each `wordBits/8 = 16/8 = 2` bytes.
@@ -283,8 +295,8 @@ describe("<RoundKeyPanel /> against a real Speck32/64 trace (fallback-strip path
     // `RoundKeyCell`. Pure detection's mixed-length test catches the
     // sequence-detection logic; this catches a Solid-reactivity or shape-
     // dispatch bug specific to the fallback path that pure tests can't see.
-    seedSpeck32_64Trace();
-    const { container } = render(() => <RoundKeyPanel frame={null} />);
+    const trace = seedSpeck32_64Trace();
+    const { container } = render(() => <RoundKeyPanel frame={trace.frames[0] ?? null} />);
     // 22 cells use the strip branch.
     expect(container.querySelectorAll(".round-key-cell-strip").length).toBe(22);
     // And TinyMatrix never gets used for 2-byte subkeys.
@@ -292,6 +304,98 @@ describe("<RoundKeyPanel /> against a real Speck32/64 trace (fallback-strip path
     // Each strip carries exactly 2 byte cells.
     const firstStrip = container.querySelector(".round-key-cell-strip");
     expect(firstStrip?.querySelectorAll(".round-key-cell-byte").length).toBe(2);
+  });
+});
+
+// ─── Collapsible behavior (Option B from 2026-05-18 smoke) ─────────────
+//
+// The panel ships with a click-to-toggle header so the ribbon doesn't
+// crowd ParamEditor on frames that aren't about the schedule. Default
+// expanded on key-relevant frames (consumers + producers of `prefix.N`
+// aux), default collapsed on others. User click overrides the default
+// until the next spec change.
+
+describe("<RoundKeyPanel /> collapsible header", () => {
+  beforeEach(() => {
+    __resetByteFormatForTests();
+    __resetTraceForTests();
+    __resetRoundKeyPanelOverrideForTests();
+  });
+  afterEach(() => {
+    cleanup();
+    __resetByteFormatForTests();
+    __resetTraceForTests();
+    __resetRoundKeyPanelOverrideForTests();
+  });
+
+  it("auto-expands on a key-expansion frame (which writes the schedule)", () => {
+    const trace = seedAes128Trace();
+    // First frame is AES key-expansion — its auxWritten contains every
+    // `roundKey.N`, so isRelevantFrame returns true → default expanded.
+    const { container } = render(() => <RoundKeyPanel frame={trace.frames[0] ?? null} />);
+    expect(container.querySelector(".round-key-panel-body")).not.toBeNull();
+    expect(container.querySelectorAll(".round-key-cell").length).toBe(11);
+    // Header chevron points down (▼) when expanded.
+    expect(container.querySelector(".round-key-panel-chevron")?.textContent).toBe("▼");
+  });
+
+  it("auto-expands on an AddRoundKey frame (which reads a schedule key)", () => {
+    const trace = seedAes128Trace();
+    const frame = trace.frames.find(
+      (f) => f.stepType === "generic.add-round-key@1" && f.auxRead.has("roundKey.3"),
+    );
+    expect(frame).toBeDefined();
+    const { container } = render(() => <RoundKeyPanel frame={frame ?? null} />);
+    expect(container.querySelector(".round-key-panel-body")).not.toBeNull();
+    expect(container.querySelectorAll(".round-key-cell").length).toBe(11);
+  });
+
+  it("auto-collapses on a non-relevant frame (SubBytes, ShiftRows, etc.)", () => {
+    const trace = seedAes128Trace();
+    const frame = trace.frames.find((f) => f.stepType === "generic.byte-substitution@1");
+    expect(frame).toBeDefined();
+    const { container } = render(() => <RoundKeyPanel frame={frame ?? null} />);
+    // Header is rendered (sequences exist) but body is gone.
+    expect(container.querySelector(".round-key-panel-header")).not.toBeNull();
+    expect(container.querySelector(".round-key-panel-body")).toBeNull();
+    expect(container.querySelectorAll(".round-key-cell").length).toBe(0);
+    // Chevron points right (▶) when collapsed.
+    expect(container.querySelector(".round-key-panel-chevron")?.textContent).toBe("▶");
+  });
+
+  it("clicking the header toggles collapsed → expanded", () => {
+    const trace = seedAes128Trace();
+    const subBytesFrame = trace.frames.find((f) => f.stepType === "generic.byte-substitution@1");
+    expect(subBytesFrame).toBeDefined();
+    const { container } = render(() => <RoundKeyPanel frame={subBytesFrame ?? null} />);
+    // Default collapsed.
+    expect(container.querySelector(".round-key-panel-body")).toBeNull();
+    // Click the header.
+    fireEvent.click(container.querySelector(".round-key-panel-header") as Element);
+    // Now expanded.
+    expect(container.querySelector(".round-key-panel-body")).not.toBeNull();
+    expect(container.querySelectorAll(".round-key-cell").length).toBe(11);
+  });
+
+  it("clicking the header toggles expanded → collapsed", () => {
+    const trace = seedAes128Trace();
+    const keyExpansionFrame = trace.frames[0];
+    expect(keyExpansionFrame).toBeDefined();
+    const { container } = render(() => <RoundKeyPanel frame={keyExpansionFrame ?? null} />);
+    // Default expanded (key-expansion frame).
+    expect(container.querySelector(".round-key-panel-body")).not.toBeNull();
+    // Click the header to hide.
+    fireEvent.click(container.querySelector(".round-key-panel-header") as Element);
+    // Now collapsed.
+    expect(container.querySelector(".round-key-panel-body")).toBeNull();
+  });
+
+  it("does not render any header chrome when no schedule exists (panel fully hidden)", () => {
+    // No trace seeded → useTraceFinalAux returns null → no sequences →
+    // outer Show short-circuits the whole panel including the header.
+    const { container } = render(() => <RoundKeyPanel frame={null} />);
+    expect(container.querySelector(".round-key-panel")).toBeNull();
+    expect(container.querySelector(".round-key-panel-header")).toBeNull();
   });
 });
 
