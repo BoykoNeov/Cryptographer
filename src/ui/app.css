@@ -3064,11 +3064,17 @@ button:disabled {
 /* Slice 1 of the graph-narrative plan — synthetic plaintext/ciphertext
    endpoint pills. Rounded shape (rx = h/2 in the SVG) distinguishes them
    from rectangular leaves; subtle accent fill marks them as "this is where
-   data enters / exits the cipher". No drag, no click, no warning glyph,
-   no delete affordance — they're not editable spec nodes. */
-.graph-endpoint-pill {
-  pointer-events: none;
-}
+   data enters / exits the cipher". No drag, no warning glyph, no delete
+   affordance — they're not editable spec nodes. Click IS wired (since
+   2026-05-17 — the pill resolves to the cipher's I/O bytes in the value
+   inspector); see the `.graph-endpoint-pill { cursor: pointer }` rule
+   further down for the click affordance, and `EndpointPill` in
+   GraphView.tsx for the handler.
+   NOTE: do NOT set `pointer-events: none` on the wrapper — the click
+   handler is on the `<g>` and an earlier revision of this stylesheet
+   disabled all pointer events here, silently killing pill clicks in real
+   browsers (jsdom's fireEvent.click bypasses CSS hit-testing so the
+   test for this passed regardless). */
 
 .graph-endpoint-rect {
   fill: var(--accent-soft);
