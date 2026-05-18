@@ -2909,6 +2909,24 @@ export const GraphView = () => {
    * fraction of a step, totalling about one step per visible gesture.
    * Capped at 1 so a high-precision device can't blast through the
    * range in one tick.
+   *
+   * Zoom anchoring (2026-05-18): the zoom focal point is the cursor
+   * position, not a fixed origin. After the zoom delta is applied we
+   * adjust the wrapper's scroll so the canvas point under the cursor
+   * stays under the cursor — Figma / Google Maps convention.
+   *
+   * Math: viewBox-space cursor coords are constant across the gesture.
+   *   vbX  = (clientX - svgRect.left) / oldZoom
+   *   ΔscrollLeft = vbX × (newZoom - oldZoom)
+   * Use `setViewZoom`'s RETURN value (post-clamp) for the delta, otherwise
+   * an unclamped overshoot at the zoom-range edges drifts the anchor.
+   *
+   * Reflow trick: Solid mutates `width`/`height` synchronously when zoom
+   * changes, but the browser defers layout until the next style recalc.
+   * Setting `scrollLeft` before that recalc clamps to the STALE max
+   * scrollable extent → visible anchor drift on zoom-in. Reading
+   * `offsetWidth` forces a synchronous reflow so the scrollable extent
+   * matches the new SVG size by the time we assign scroll positions.
    */
   const WHEEL_ZOOM_STEP = 0.1;
 
@@ -2923,13 +2941,43 @@ export const GraphView = () => {
     // Stop propagation so an outer scroll container doesn't also process
     // the same wheel event.
     ev.stopPropagation();
+
     // `deltaY < 0` is wheel-up / pinch-out → zoom in. Sign matches OS-
     // level zoom shortcuts.
     const direction = ev.deltaY < 0 ? 1 : -1;
     const magnitude = Math.min(1, Math.abs(ev.deltaY) / 100);
     const current = getViewZoom(spec().id);
     const next = Math.round((current + direction * WHEEL_ZOOM_STEP * magnitude) * 100) / 100;
-    setViewZoom(spec().id, next);
+
+    // Capture cursor anchor in viewBox-space BEFORE applying the new
+    // zoom — `getBoundingClientRect()` reads the SVG's screen rect at
+    // the current zoom, which is what `oldZoom` divides by. The wheel
+    // listener fires on the wrapper (`ev.currentTarget`), so we have to
+    // reach into it for the SVG element.
+    const wrapperEl = scrollWrapperEl;
+    const svgEl = wrapperEl?.querySelector("svg.graph-view-svg");
+    if (!wrapperEl || !(svgEl instanceof SVGSVGElement)) {
+      setViewZoom(spec().id, next);
+      return;
+    }
+    const svgRect = svgEl.getBoundingClientRect();
+    const vbX = (ev.clientX - svgRect.left) / current;
+    const vbY = (ev.clientY - svgRect.top) / current;
+    const oldScrollLeft = wrapperEl.scrollLeft;
+    const oldScrollTop = wrapperEl.scrollTop;
+
+    // Use the post-clamp value as the source of truth for the delta —
+    // an unclamped overshoot at MIN/MAX would drift the cursor anchor.
+    const clampedNext = setViewZoom(spec().id, next);
+    const zoomDelta = clampedNext - current;
+    if (zoomDelta === 0) return;
+
+    // Force synchronous layout so the wrapper knows its new
+    // scrollWidth/scrollHeight before we set the scroll target.
+    // Otherwise zoom-in clamps to the stale max and the anchor drifts.
+    void wrapperEl.offsetWidth;
+    wrapperEl.scrollLeft = oldScrollLeft + vbX * zoomDelta;
+    wrapperEl.scrollTop = oldScrollTop + vbY * zoomDelta;
   };
 
   /**
@@ -2946,6 +2994,84 @@ export const GraphView = () => {
     scrollWrapperEl = el;
     el.addEventListener("wheel", handleWheelZoom, { passive: false, capture: true });
     onCleanup(() => el.removeEventListener("wheel", handleWheelZoom, { capture: true }));
+  };
+
+  /**
+   * Drag-to-pan the canvas (2026-05-18). Mousedown on the empty SVG
+   * background and drag updates the wrapper's scroll position so the
+   * canvas slides under the pointer — Figma / design-tool convention.
+   *
+   * Empty-background detection: only fire when `ev.target === ev.currentTarget`,
+   * i.e. the pointerdown landed on the SVG root, not on any child
+   * `<rect>` / `<circle>` / `<path>`. Children all carry their own click
+   * or drag semantics (leaf scrub, container drag, edge inspect), so
+   * gating on the root keeps pan disjoint from every existing gesture.
+   *
+   * Pointer capture: setPointerCapture on the SVG (not window) so the
+   * gesture survives the cursor leaving the SVG bounds AND so the
+   * window-level pointermove listeners that container/leaf drags rely
+   * on can't accidentally pick up these events.
+   *
+   * Cursor: `cursor: grab` on `.graph-view-svg` is the resting state;
+   * the `.panning` class toggles to `grabbing` for the duration of the
+   * gesture. We don't lean on `:active` because pointer capture
+   * decouples from the document focus that drives `:active`.
+   *
+   * Scope: the gesture is a no-op when neither axis overflows the
+   * wrapper viewport — there's nothing to pan. The cursor still reads
+   * "grab," which mildly over-promises, but flipping it conditionally
+   * on overflow would require reactive tracking of the wrapper's
+   * scrollable extent across density + zoom changes. Not worth it.
+   */
+  const [isPanning, setIsPanning] = createSignal(false);
+
+  const handleCanvasPanPointerDown = (ev: PointerEvent): void => {
+    if (ev.target !== ev.currentTarget) return;
+    // Only left button (button === 0). Middle/right have other meanings
+    // (browser auto-scroll, context menu); don't hijack them.
+    if (ev.button !== 0) return;
+    const wrapperEl = scrollWrapperEl;
+    const svgEl = ev.currentTarget;
+    if (!wrapperEl || !(svgEl instanceof SVGSVGElement)) return;
+
+    // Bail early if there's nothing to pan in either axis — clicking
+    // empty canvas on a fully-visible spec shouldn't capture the pointer
+    // for nothing.
+    const overflowsX = wrapperEl.scrollWidth > wrapperEl.clientWidth;
+    const overflowsY = wrapperEl.scrollHeight > wrapperEl.clientHeight;
+    if (!overflowsX && !overflowsY) return;
+
+    ev.preventDefault();
+    svgEl.setPointerCapture(ev.pointerId);
+    setIsPanning(true);
+
+    let lastClientX = ev.clientX;
+    let lastClientY = ev.clientY;
+
+    const onMove = (mv: PointerEvent): void => {
+      const dx = mv.clientX - lastClientX;
+      const dy = mv.clientY - lastClientY;
+      lastClientX = mv.clientX;
+      lastClientY = mv.clientY;
+      // Drag pulls the canvas in the direction of the pointer, which
+      // means scrollLeft moves OPPOSITE the pointer motion.
+      wrapperEl.scrollLeft -= dx;
+      wrapperEl.scrollTop -= dy;
+    };
+
+    const onUp = (up: PointerEvent): void => {
+      svgEl.removeEventListener("pointermove", onMove);
+      svgEl.removeEventListener("pointerup", onUp);
+      svgEl.removeEventListener("pointercancel", onUp);
+      if (svgEl.hasPointerCapture(up.pointerId)) {
+        svgEl.releasePointerCapture(up.pointerId);
+      }
+      setIsPanning(false);
+    };
+
+    svgEl.addEventListener("pointermove", onMove);
+    svgEl.addEventListener("pointerup", onUp);
+    svgEl.addEventListener("pointercancel", onUp);
   };
 
   /** Click handler for `[reset zoom]`. Clears horizontal scroll too. */
@@ -3399,11 +3525,13 @@ export const GraphView = () => {
         >
           <svg
             class="graph-view-svg"
+            classList={{ panning: isPanning() }}
             width={layout().canvasW * zoom()}
             height={layout().canvasH * zoom()}
             viewBox={`0 0 ${layout().canvasW} ${layout().canvasH}`}
             role="img"
             aria-label="Aux-flow graph of the active cipher spec"
+            onPointerDown={handleCanvasPanPointerDown}
           >
             {/* Arrowhead marker definitions. One per edge kind so each can be
               tinted to match the edge stroke (state spine = solid; aux

@@ -2389,8 +2389,10 @@ button:disabled {
 
 /* ─── Graph tab: SVG container + node/edge styles ─────────────────────────
    The graph SVG sits inside a scrollable wrapper because the canvas size
-   grows with the spec (AES-128's 10-round pipeline is ~1500px wide). No
-   pan/zoom today — just native scrolling. */
+   grows with the spec (AES-128's 10-round pipeline is ~1500px wide).
+   Pan: drag-to-pan on the empty SVG background (handled in GraphView.tsx
+   via pointer capture; updates the wrapper's scrollLeft/scrollTop).
+   Zoom: wheel-over-canvas zooms toward the cursor (Figma-style). */
 
 .graph-view {
   background: var(--bg-elev);
@@ -2931,6 +2933,19 @@ button:disabled {
 .graph-view-svg {
   display: block;
   font-family: inherit;
+  /* Drag-to-pan affordance on the empty canvas background. Child
+     elements (`.graph-leaf`, `.graph-container-header`, etc.) carry
+     their own cursor rules and override via specificity, so the grab
+     cursor only shows over empty regions where the pan gesture fires.
+     The `.panning` class is toggled by JS during an active pan — we
+     can't rely on `:active` because pointer capture (used to keep the
+     pan alive after the cursor leaves the SVG) decouples from the
+     document focus that `:active` watches. */
+  cursor: grab;
+}
+
+.graph-view-svg.panning {
+  cursor: grabbing;
 }
 
 /* Container rectangles frame their children. Groups and iterates use
