@@ -1704,11 +1704,39 @@ button:disabled {
   gap: 2px;
 }
 
+/* Each stage row is a <details>; the summary IS the flex row
+   [▸] [label] [→] [bytes]. Disclosure reveals per-row value-prose. */
 .key-schedule-aes-stage {
+  font-size: 11px;
+}
+
+.key-schedule-aes-stage-summary {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+/* Hide the default disclosure marker in Safari/old WebKit — we render
+   our own ▸ via ::before so the rotation animation is consistent. */
+.key-schedule-aes-stage-summary::-webkit-details-marker {
+  display: none;
+}
+
+.key-schedule-aes-stage-summary::before {
+  content: "▸";
+  color: var(--muted);
+  font-size: 9px;
+  width: 10px;
+  display: inline-block;
+  text-align: center;
+  transition: transform 0.1s ease;
+}
+
+.key-schedule-aes-stage[open] > .key-schedule-aes-stage-summary::before {
+  transform: rotate(90deg);
 }
 
 .key-schedule-aes-stage-label {
@@ -1722,6 +1750,57 @@ button:disabled {
 
 .key-schedule-aes-stage-value {
   flex: 1 1 auto;
+}
+
+/* Per-row value-prose body. Indented under the disclosure triangle +
+   label so the eye associates it with the row it explains. */
+.key-schedule-aes-stage-prose {
+  padding: 4px 0 6px 28px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.key-schedule-aes-stage-prose p {
+  margin: 0;
+}
+
+/* Section-top collapsible legend: type-prose explaining each stage
+   kind. Reference material, collapsed by default. Adjacent to the
+   Serpent section idiom but distinct token so the per-section bg
+   doesn't bleed into the AES header. */
+.key-schedule-aes-legend {
+  background: var(--bg-elev-2);
+  border-radius: 3px;
+  padding: 6px 10px;
+  font-size: 11px;
+}
+
+.key-schedule-aes-legend > summary {
+  cursor: pointer;
+  font-weight: 600;
+  user-select: none;
+  padding: 2px 0;
+}
+
+.key-schedule-aes-legend-entries {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 12px;
+  padding: 8px 0 4px;
+  margin: 0;
+}
+
+.key-schedule-aes-legend-entries dt {
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.key-schedule-aes-legend-entries dd {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
 }
 
 /* ─── Serpent multi-stage pipeline ─────────────────────────────── */

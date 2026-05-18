@@ -143,10 +143,70 @@ const AesScheduleView = (props: { trace: AesScheduleTrace; fmt: ByteFormat }) =>
         {props.trace.roundKeys.length} round keys
       </span>
     </div>
+    <AesScheduleLegend />
     <ol class="key-schedule-aes-words">
       <For each={props.trace.words}>{(word) => <AesWordRow word={word} fmt={props.fmt} />}</For>
     </ol>
   </div>
+);
+
+/**
+ * Section-top collapsible legend. Type-prose — one entry per stage kind,
+ * shared by every row of that kind across all 44 / 52 / 60 words. The
+ * per-row `<details>` carry the *value*-prose ("here, byte 0x09 rotated
+ * to position 3"); this legend carries the *type*-prose ("what RotWord
+ * IS and why it exists in the schedule").
+ *
+ * Collapsed by default. Reference material — a learner who already knows
+ * AES doesn't need it open; one click reveals it for the curious.
+ */
+const AesScheduleLegend = () => (
+  <details class="key-schedule-aes-legend">
+    <summary>What these stages mean</summary>
+    <dl class="key-schedule-aes-legend-entries">
+      <dt>init</dt>
+      <dd>
+        The first Nk words come straight from the master key — no transformation. AES-128: W[0..3];
+        AES-192: W[0..5]; AES-256: W[0..7]. These seed the entire expansion.
+      </dd>
+
+      <dt>RotWord</dt>
+      <dd>
+        Cyclic byte rotation: [a, b, c, d] → [b, c, d, a]. Fires only on chain words (every Nk-th
+        word). Forces the chain word's bytes to mix into different column positions — without it,
+        position 0 of every round key would derive only from position 0 of the master key.
+      </dd>
+
+      <dt>SubWord</dt>
+      <dd>
+        Byte-wise S-box substitution applied to all four bytes. The same S-box SubBytes uses during
+        the round body. Provides the non-linearity that prevents the schedule from being a linear
+        function of the master key. <em>Note:</em> uses the FORWARD S-box even when decrypting
+        (FIPS-197 §5.2).
+      </dd>
+
+      <dt>⊕ Rcon</dt>
+      <dd>
+        XOR a round constant into byte 0 only; bytes 1-3 pass through. Rcon = powers of x in
+        GF(2^8): 01, 02, 04, 08, 10, 20, 40, 80, 1b, 36, … Breaks the across-round symmetry —
+        without it, a periodic master key would produce periodic round keys.
+      </dd>
+
+      <dt>SubWord (extra)</dt>
+      <dd>
+        AES-256-only wrinkle: when Nk &gt; 6 and i mod Nk == 4, run SubWord with no RotWord and no
+        Rcon. Adds non-linearity to compensate for the longer 8-word stride. AES-128 and AES-192
+        don't have this stage.
+      </dd>
+
+      <dt>⊕ W[i-Nk]</dt>
+      <dd>
+        Closes every word's derivation by XOR-ing the current chain output (or W[i-1] for plain
+        words) with the word from one full key-cycle back. This is the recurrence that threads round
+        N's key forward into round N+1.
+      </dd>
+    </dl>
+  </details>
 );
 
 const AesWordRow = (props: { word: AesScheduleWord; fmt: ByteFormat }) => (
@@ -179,20 +239,126 @@ const AesWordRow = (props: { word: AesScheduleWord; fmt: ByteFormat }) => (
       </Show>
     </div>
     <div class="key-schedule-aes-word-stages">
-      <For each={props.word.stages}>{(stage) => <AesStageRow stage={stage} fmt={props.fmt} />}</For>
+      <For each={props.word.stages}>
+        {(stage) => <AesStageRow stage={stage} word={props.word} fmt={props.fmt} />}
+      </For>
     </div>
   </li>
 );
 
-const AesStageRow = (props: { stage: AesStage; fmt: ByteFormat }) => (
-  <div class="key-schedule-aes-stage" data-stage-kind={props.stage.kind}>
-    <span class="key-schedule-aes-stage-label">{stageLabel(props.stage)}</span>
-    <span class="key-schedule-aes-stage-arrow">→</span>
-    <span class="key-schedule-aes-stage-value">
-      <ByteRow bytes={stageOutput(props.stage)} fmt={props.fmt} />
-    </span>
-  </div>
+/**
+ * One stage row. `<details>` so the user can click to expand value-prose
+ * explaining what just happened to these specific bytes. `<summary>` IS
+ * the existing flex row (label → bytes) so the visual rhythm survives
+ * across collapsed-state rows.
+ *
+ * `word` provides the parent context (wordIndex, Nk) the prose templates
+ * need — e.g. RconIndex = wordIndex/Nk, master-key byte range for `init`,
+ * W[i-Nk] label for `xor-prev`. The stage variants themselves don't carry
+ * the parent index.
+ */
+const AesStageRow = (props: { stage: AesStage; word: AesScheduleWord; fmt: ByteFormat }) => (
+  <details class="key-schedule-aes-stage" data-stage-kind={props.stage.kind}>
+    <summary class="key-schedule-aes-stage-summary">
+      <span class="key-schedule-aes-stage-label">{stageLabel(props.stage)}</span>
+      <span class="key-schedule-aes-stage-arrow">→</span>
+      <span class="key-schedule-aes-stage-value">
+        <ByteRow bytes={stageOutput(props.stage)} fmt={props.fmt} />
+      </span>
+    </summary>
+    <div class="key-schedule-aes-stage-prose">
+      <AesStageProse stage={props.stage} word={props.word} fmt={props.fmt} />
+    </div>
+  </details>
 );
+
+// ─── Value-prose: per-stage explanation of *these specific bytes* ─────
+
+/**
+ * Format a byte sequence as a bracketed list, respecting the byte-format
+ * toggle. Used inline in value-prose text where we want something denser
+ * than a `<ByteRow>` (which renders bordered cells) but still
+ * format-aware.
+ */
+const formatBytes = (bytes: Uint8Array, fmt: ByteFormat): string =>
+  `[${Array.from(bytes)
+    .map((b) => formatByte(b, fmt))
+    .join(", ")}]`;
+
+const formatByteInline = (b: number, fmt: ByteFormat): string => formatByte(b, fmt);
+
+/**
+ * Dispatch to a per-kind prose component. Each prose body is a single
+ * short paragraph (1-2 lines) describing the transformation in terms of
+ * the actual bytes — complements the type-prose legend at the top of the
+ * section, which explains what the operation IS in general.
+ */
+const AesStageProse = (props: { stage: AesStage; word: AesScheduleWord; fmt: ByteFormat }) => {
+  const stage = props.stage;
+  const word = props.word;
+  const fmt = props.fmt;
+  switch (stage.kind) {
+    case "init": {
+      const start = 4 * word.wordIndex;
+      return (
+        <p>
+          W<sub>{word.wordIndex}</sub> comes straight from master-key bytes [{start}..{start + 4}] ={" "}
+          {formatBytes(stage.word, fmt)}. No transformation applied.
+        </p>
+      );
+    }
+    case "rotword": {
+      const leading = stage.input[0] ?? 0;
+      return (
+        <p>
+          Rotate left one byte: {formatBytes(stage.input, fmt)} → {formatBytes(stage.output, fmt)}.
+          The leading byte ({formatByteInline(leading, fmt)}) moves to position 3; the other three
+          shift left.
+        </p>
+      );
+    }
+    case "subword":
+    case "extra-subword": {
+      const [a, b, c, d] = stage.sboxLookups;
+      const out = stage.output;
+      return (
+        <p>
+          <Show when={stage.kind === "extra-subword"}>
+            <em>AES-256 extra path (no RotWord, no Rcon).</em>{" "}
+          </Show>
+          S-box lookup per byte: S[{formatByteInline(a, fmt)}] ={" "}
+          {formatByteInline(out[0] ?? 0, fmt)}, S[{formatByteInline(b, fmt)}] ={" "}
+          {formatByteInline(out[1] ?? 0, fmt)}, S[
+          {formatByteInline(c, fmt)}] = {formatByteInline(out[2] ?? 0, fmt)}, S[
+          {formatByteInline(d, fmt)}] = {formatByteInline(out[3] ?? 0, fmt)}. All four bytes
+          substituted in place.
+        </p>
+      );
+    }
+    case "rcon-xor": {
+      // Rcon index = i / Nk (chain-start invariant).
+      const rconIdx = word.wordIndex / word.Nk;
+      const rconHex = `0x${stage.rconValue.toString(16).padStart(2, "0")}`;
+      const b0In = stage.input[0] ?? 0;
+      const b0Out = stage.output[0] ?? 0;
+      return (
+        <p>
+          Rcon[{rconIdx}] = {rconHex}. XOR into byte 0 only: {formatByteInline(b0In, fmt)} ⊕{" "}
+          {rconHex} = {formatByteInline(b0Out, fmt)}. Bytes 1-3 pass through unchanged.
+        </p>
+      );
+    }
+    case "xor-prev": {
+      return (
+        <p>
+          W<sub>{stage.prevWordIndex}</sub> = {formatBytes(stage.prevWord, fmt)}. Per-byte XOR with
+          the chain output: {formatBytes(stage.input, fmt)} ⊕ {formatBytes(stage.prevWord, fmt)} ={" "}
+          {formatBytes(stage.output, fmt)}.
+        </p>
+      );
+    }
+  }
+};
 
 const stageLabel = (stage: AesStage): string => {
   switch (stage.kind) {

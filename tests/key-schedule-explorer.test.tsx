@@ -106,6 +106,57 @@ describe("<KeyScheduleExplorer /> — AES branch", () => {
     expect(container.querySelector(".key-schedule-byte-cell")?.textContent).toBe("0");
   });
 
+  it("renders the section-top legend collapsed with the 'What these stages mean' summary", () => {
+    // The legend is the type-prose layer: one entry per stage kind, shared
+    // across all 44 word rows. Lock that it's present and rendered as a
+    // <details> so the disclosure affordance is consistent with the rest
+    // of the component.
+    const frame = findFrameByStepType(
+      aes128Spec,
+      new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
+      matrixFromBytes(bytesFromHex(AES128_PT)),
+      (t) => t.startsWith("aes.key-expansion"),
+    );
+    const { container } = render(() => <KeyScheduleExplorer frame={frame} />);
+    const legend = container.querySelector("details.key-schedule-aes-legend");
+    expect(legend).not.toBeNull();
+    expect(legend?.querySelector("summary")?.textContent).toContain("What these stages mean");
+    // One <dt>/<dd> pair per stage kind: init, RotWord, SubWord, ⊕ Rcon,
+    // SubWord (extra), ⊕ W[i-Nk] → 6 entries.
+    expect(legend?.querySelectorAll("dt").length).toBe(6);
+    expect(legend?.querySelectorAll("dd").length).toBe(6);
+  });
+
+  it("renders each stage as a <details> carrying value-prose for that specific row", () => {
+    // Per-row <details> is the value-prose layer (these specific bytes,
+    // this specific Rcon index). Assert (1) every stage row is a
+    // <details>, not the old <div>, (2) the Rcon-xor row's prose
+    // surfaces the actual rconIndex/value the simulator emitted — this
+    // is the property the verbose-prose option was picked to deliver.
+    const frame = findFrameByStepType(
+      aes128Spec,
+      new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
+      matrixFromBytes(bytesFromHex(AES128_PT)),
+      (t) => t.startsWith("aes.key-expansion"),
+    );
+    const { container } = render(() => <KeyScheduleExplorer frame={frame} />);
+    // Every stage row is a <details>. Sample by selector — at least one
+    // row of every kind exists in a standard AES-128 schedule.
+    const stages = container.querySelectorAll("details.key-schedule-aes-stage");
+    expect(stages.length).toBeGreaterThan(0);
+    // The first rcon-xor row is W[4]'s third stage (chain start, Rcon
+    // index = 4/4 = 1, value = 0x01). Verify the prose body interpolates
+    // those concrete values.
+    const rconStage = container.querySelector(
+      'details.key-schedule-aes-stage[data-stage-kind="rcon-xor"]',
+    );
+    expect(rconStage).not.toBeNull();
+    const prose = rconStage?.querySelector(".key-schedule-aes-stage-prose")?.textContent ?? "";
+    expect(prose).toContain("Rcon[1]");
+    expect(prose).toContain("0x01");
+    expect(prose).toContain("Bytes 1-3 pass through unchanged");
+  });
+
   it("renders the inline error stub when the frame has missing params (sbox)", () => {
     // Synthesize a malformed frame: key-expansion stepType but params
     // missing the sbox field. The simulator should refuse and the
