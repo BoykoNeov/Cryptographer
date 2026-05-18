@@ -492,6 +492,23 @@ const deriveEdges = (trace: Trace, ctx: BuildContext): GraphEdge[] => {
     edges.push({ from, to, auxKey, kind: "aux" });
   };
 
+  // Per-iterate body tracking for the structural-feedback synthesis pass
+  // below. As the trace walk visits each frame, we record which canonical
+  // stepIds wrote / read each aux key WHILE the frame was inside that
+  // iterate. After the walk completes, we cross-reference: any (writer,
+  // reader) pair in the same iterate that share an auxKey AND where the
+  // writer comes AFTER the reader in body spec order is a cross-iteration
+  // feedback dependency. If the trace had ≥ 2 iterations the natural-edge
+  // pass already emitted it (via `writerByAuxKey` at iteration N's end →
+  // iteration N+1's read); if the trace had only 1 iteration the natural
+  // pass never sees the cross-iteration handoff and the edge is missing.
+  // Synthesizing it from body topology restores parity between 1-block
+  // and N-block traces — pedagogically critical for CBC/OFB/CFB/CTR demos
+  // where the default 16-byte plaintext rounds to exactly one iteration.
+  // See the `// ─── Cross-iteration feedback synthesis ───` block below.
+  const bodyWritersByIterate = new Map<string, Map<string, Set<string>>>();
+  const bodyReadersByIterate = new Map<string, Map<string, Set<string>>>();
+
   let prevIterateIdsInPath: ReadonlySet<string> = new Set();
 
   for (const frame of trace.frames) {
@@ -535,6 +552,43 @@ const deriveEdges = (trace: Trace, ctx: BuildContext): GraphEdge[] => {
     for (const auxKey of frame.auxWritten.keys()) {
       writerByAuxKey.set(auxKey, consumer);
     }
+
+    // Body-tracking for the cross-iteration feedback-synthesis pass below.
+    // Mark this frame's writes and reads under EACH iterate ancestor it
+    // currently lives in (nested iterates accumulate independently). The
+    // canonical stepId (`consumer`, already post-`:b{i}`-strip) collapses
+    // multiple iterations of the same body step to one set entry — exactly
+    // what the post-pass pair-up wants.
+    if (currentIterateIdsInPath.size > 0) {
+      for (const iid of currentIterateIdsInPath) {
+        let writersMap = bodyWritersByIterate.get(iid);
+        if (writersMap === undefined) {
+          writersMap = new Map();
+          bodyWritersByIterate.set(iid, writersMap);
+        }
+        let readersMap = bodyReadersByIterate.get(iid);
+        if (readersMap === undefined) {
+          readersMap = new Map();
+          bodyReadersByIterate.set(iid, readersMap);
+        }
+        for (const auxKey of frame.auxWritten.keys()) {
+          let writerSet = writersMap.get(auxKey);
+          if (writerSet === undefined) {
+            writerSet = new Set();
+            writersMap.set(auxKey, writerSet);
+          }
+          writerSet.add(consumer);
+        }
+        for (const auxKey of frame.auxRead.keys()) {
+          let readerSet = readersMap.get(auxKey);
+          if (readerSet === undefined) {
+            readerSet = new Set();
+            readersMap.set(auxKey, readerSet);
+          }
+          readerSet.add(consumer);
+        }
+      }
+    }
   }
 
   // Drain still-active iterates at trace end. No more frames to read their
@@ -544,6 +598,92 @@ const deriveEdges = (trace: Trace, ctx: BuildContext): GraphEdge[] => {
     const iter = ctx.iteratesById.get(iid);
     if (!iter) continue;
     writerByAuxKey.set(iter.outBlocksAux, iid);
+  }
+
+  // ─── Cross-iteration feedback synthesis ──────────────────────────────────
+  // For each iterate whose body the trace visited, look for `(writer, reader)`
+  // pairs that share an aux key AND where the writer comes AFTER the reader
+  // in body spec order. That's the structural fingerprint of cross-iteration
+  // feedback (e.g. CBC's `cbc-snapshot → cbc-xor` on `chain`): the writer at
+  // end-of-body provides the value the reader at start-of-body consumes on
+  // the next iteration. When the trace has ≥ 2 iterations the natural-edge
+  // pass already emits this edge (and `addEdge`'s dedup turns synthesis into
+  // a no-op); when the trace has only 1 iteration the natural pass never
+  // sees the handoff, so the edge would be missing without this synthesis —
+  // breaking BOTH the renderer's feedback arc AND `validateGraph`'s
+  // unused-write check (which sees the writer with no `(writer, key)` entry
+  // in `producerEdges` and emits a false-positive warning).
+  //
+  // **Determinism.** We walk `iteratesById` in insertion order (a `Map`
+  // preserves insertion order in JS), which mirrors `walkSpec`'s DFS spec
+  // order. Inside each iterate we walk its `children` recursively in spec
+  // order so `bodyOrder` is also deterministic. Pair iteration uses two
+  // nested `for…of` over `Set`s — Set iteration order is insertion order,
+  // and we inserted entries in trace-frame order, which is the natural
+  // chronological order for the cipher under test. Synthesized edges land
+  // at the end of the `edges` array, AFTER all natural edges; downstream
+  // code that depends on edge order (bundling first-encounter, port-
+  // assignment row sort) will see them last, which keeps them out of the
+  // "first occurrence wins" slot competitions.
+  //
+  // **The synthesized edge is plain `kind: "aux"`** — `isFeedback` is
+  // stamped by `buildIterateFeedbackPredicate` (called from the bundling
+  // pass and from `validateGraph`'s cycle filter); that predicate already
+  // returns `true` for any aux edge whose endpoints share a deepest-common
+  // iterate AND go backwards in spec order, which is exactly the shape we
+  // synthesize here. No isFeedback work needed at this site.
+  if (bodyWritersByIterate.size > 0) {
+    for (const [iid, writersMap] of bodyWritersByIterate) {
+      const readersMap = bodyReadersByIterate.get(iid);
+      if (readersMap === undefined || readersMap.size === 0) continue;
+      const iter = ctx.iteratesById.get(iid);
+      if (iter === undefined) continue;
+      // Pre-order DFS spec position INSIDE this iterate's body. We index
+      // leaves (which is what shows up in `writersMap` / `readersMap` —
+      // post-`stripBlockSuffix` consumer ids) plus nested iterate ids
+      // (so a writer/reader that's an inner iterate's `outBlocksAux`
+      // pseudo-id participates in ordering correctly). Containers that
+      // aren't iterates don't appear in writersMap/readersMap, so the
+      // simpler "leaves + iterates only" position map is sufficient.
+      const bodyOrder = new Map<string, number>();
+      let nextOrder = 0;
+      const walkBody = (children: readonly StepNode[]): void => {
+        for (const child of children) {
+          if (child.kind === "step") {
+            bodyOrder.set(child.id, nextOrder++);
+          } else {
+            // group or iterate — assign the container id a position too
+            // (only iterates surface in the read/write maps via the
+            // outBlocksAux stamp, but assigning groups doesn't hurt and
+            // keeps the walk symmetric with `walkSpec`).
+            bodyOrder.set(child.id, nextOrder++);
+            walkBody(child.children);
+          }
+        }
+      };
+      walkBody(iter.children);
+      // Pair up writers × readers per shared aux key; emit a feedback edge
+      // where the writer comes after the reader in body order. The
+      // `addEdge` dedup means a 2-block (or longer) trace's natural edge
+      // is preserved unchanged — synthesis is purely additive for the
+      // 1-iteration case.
+      for (const [auxKey, writerSet] of writersMap) {
+        const readerSet = readersMap.get(auxKey);
+        if (readerSet === undefined || readerSet.size === 0) continue;
+        for (const writer of writerSet) {
+          const writerOrder = bodyOrder.get(writer);
+          if (writerOrder === undefined) continue;
+          for (const reader of readerSet) {
+            if (reader === writer) continue;
+            const readerOrder = bodyOrder.get(reader);
+            if (readerOrder === undefined) continue;
+            if (writerOrder > readerOrder) {
+              addEdge(writer, reader, auxKey);
+            }
+          }
+        }
+      }
+    }
   }
 
   return edges;

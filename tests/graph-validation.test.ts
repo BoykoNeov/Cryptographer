@@ -36,6 +36,8 @@
  */
 
 import { aes128Spec } from "@/ciphers/aes-128";
+import { aes128CbcSpec } from "@/ciphers/aes-128-cbc";
+import { aes128CbcDecryptSpec } from "@/ciphers/aes-128-cbc-decrypt";
 import { aes128DecryptSpec } from "@/ciphers/aes-128-decrypt";
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { aes192Spec } from "@/ciphers/aes-192";
@@ -82,6 +84,23 @@ const ECB_PT_4_BLOCKS =
   "30c81c46a35ce411e5fbc1191a0a52ef" +
   "f69f2445df4f9b17ad2b417be66c3710";
 const ECB_KEY = "2b7e151628aed2a6abf7158809cf4f3c";
+// CBC fixtures (NIST SP 800-38A §F.2.1). Single block exercises the
+// cross-iteration feedback-synthesis pass — without that pass the
+// `cbc-snapshot` write of `chain` would have no downstream reader in
+// the trace and a false-positive unused-write warning would fire.
+const CBC_KEY = "2b7e151628aed2a6abf7158809cf4f3c";
+const CBC_IV = "000102030405060708090a0b0c0d0e0f";
+const CBC_PT_1_BLOCK = "6bc1bee22e409f96e93d7e117393172a";
+const CBC_PT_2_BLOCKS = `${CBC_PT_1_BLOCK}ae2d8a571e03ac9c9eb76fac45af8e51`;
+
+const runCbc = (spec: typeof aes128CbcSpec, pt: string): Trace =>
+  runSpec(spec, buildDefaultRegistry(), {
+    initialState: makeBytesState(bytesFromHex(pt)),
+    initialAux: new Map<string, AuxValue>([
+      ["key", bytesFromHex(CBC_KEY)],
+      ["iv", bytesFromHex(CBC_IV)],
+    ]),
+  });
 
 const runMatrix = (spec: typeof aes128Spec, key: string, pt: string): Trace =>
   runSpec(spec, buildDefaultRegistry(), {
@@ -137,6 +156,43 @@ describe("validateGraph — zero warnings on shipped specs", () => {
     expect(validateGraph(graph, trace)).toEqual([]);
   });
 
+  it("AES-128 CBC encrypt — single block (cross-iteration feedback synthesis)", () => {
+    // 2026-05-19 follow-up. Pre-synthesis, a single-block CBC trace
+    // produced a false-positive `unused-write` warning on `cbc-snapshot`:
+    // the natural-edge pass only realises the cross-iteration handoff
+    // `cbc-snapshot → cbc-xor` (on `chain`) when iteration N+1 actually
+    // reads what iteration N wrote, which never happens with one block.
+    // The structural-feedback synthesis in `deriveEdges` adds the edge
+    // from body topology, so the unused-write detector finds the writer
+    // in `producerEdges` and stays quiet.
+    const trace = runCbc(aes128CbcSpec, CBC_PT_1_BLOCK);
+    const graph = deriveAuxGraph(trace, aes128CbcSpec);
+    expect(validateGraph(graph, trace)).toEqual([]);
+  });
+
+  it("AES-128 CBC encrypt — multi-block (natural feedback edge still wins)", () => {
+    // Multi-block CBC has the natural-edge pass emit `cbc-snapshot →
+    // cbc-xor` (because iteration 1's cbc-xor:b1 reads what cbc-snapshot:
+    // b0 wrote). The synthesis pass also produces the same edge, but
+    // `addEdge`'s dedup turns the second emission into a no-op — so the
+    // edge count and warning state match the pre-synthesis behaviour.
+    const trace = runCbc(aes128CbcSpec, CBC_PT_2_BLOCKS);
+    const graph = deriveAuxGraph(trace, aes128CbcSpec);
+    expect(validateGraph(graph, trace)).toEqual([]);
+  });
+
+  it("AES-128 CBC decrypt — single block (feedback synthesis on cross-iteration `chain` write)", () => {
+    // Decrypt's iterate body has its own cross-iteration aux dependency
+    // (`cbc-advance-chain` writes the next iteration's `chain` from the
+    // saved `next-chain` snapshot taken at body entry by
+    // `cbc-snapshot-input`). The exact writer / reader stepIds differ
+    // from encrypt, so this assertion catches a future regression that
+    // accidentally specialised the synthesis to encrypt-shaped feedback.
+    const trace = runCbc(aes128CbcDecryptSpec, CBC_PT_1_BLOCK);
+    const graph = deriveAuxGraph(trace, aes128CbcDecryptSpec);
+    expect(validateGraph(graph, trace)).toEqual([]);
+  });
+
   it("AES-128 ECB (multi-block iterate)", () => {
     // Multi-block is the trickiest case: round-keys are read inside the
     // iterate body 11× per block × 4 blocks = 44 raw read events, all
@@ -185,6 +241,74 @@ describe("validateGraph — zero warnings on shipped specs", () => {
     // before the first auto-rerun completes).
     const graph = deriveAuxGraph(emptyTrace, aes128Spec);
     expect(validateGraph(graph, emptyTrace)).toEqual([]);
+  });
+});
+
+// ─── Cross-iteration feedback edge synthesis ───────────────────────────────
+
+describe("deriveAuxGraph — cross-iteration feedback synthesis", () => {
+  // The unused-write assertions above prove the synthesis suppresses the
+  // false-positive warning. These tests pin the underlying edge mechanic
+  // directly: the synthesized aux edge `cbc-snapshot → cbc-xor` on key
+  // `chain` is present in the graph for ANY iteration count (1 or N) and
+  // the iterate-feedback predicate flags it as feedback (which is what
+  // makes the renderer paint the dashed over-the-top arc).
+
+  it("single-block CBC encrypt: aux edge cbc-snapshot → cbc-xor on `chain` is present", () => {
+    const trace = runCbc(aes128CbcSpec, CBC_PT_1_BLOCK);
+    const graph = deriveAuxGraph(trace, aes128CbcSpec);
+    const fb = graph.edges.find(
+      (e: GraphEdge) =>
+        e.from === "cbc-snapshot" && e.to === "cbc-xor" && e.kind === "aux" && e.auxKey === "chain",
+    );
+    expect(
+      fb,
+      "expected synthesized cross-iteration feedback edge cbc-snapshot → cbc-xor (chain)",
+    ).toBeDefined();
+    if (fb === undefined) return;
+    // The feedback predicate should classify this synthesized edge as
+    // feedback — that's what drives the dashed-overhead-arc render.
+    const isFeedback = buildIterateFeedbackPredicate(graph);
+    expect(isFeedback(fb)).toBe(true);
+  });
+
+  it("multi-block CBC encrypt: natural-edge pass also emits the same edge (dedup is idempotent)", () => {
+    const trace = runCbc(aes128CbcSpec, CBC_PT_2_BLOCKS);
+    const graph = deriveAuxGraph(trace, aes128CbcSpec);
+    // Should appear exactly once — the natural-edge dedup in `addEdge`
+    // turns the synthesis-pass emission into a no-op.
+    const fbEdges = graph.edges.filter(
+      (e: GraphEdge) =>
+        e.from === "cbc-snapshot" && e.to === "cbc-xor" && e.kind === "aux" && e.auxKey === "chain",
+    );
+    expect(fbEdges.length).toBe(1);
+  });
+
+  it("single-block CBC decrypt: feedback edge on `chain` is present (decrypt-side body shape)", () => {
+    // Decrypt's body emits `next-chain` via cbc-snapshot-input → next-chain
+    // (NOT a cross-iteration edge; it's read by cbc-advance-chain inside
+    // the SAME iteration). The actual cross-iteration handoff is on
+    // `chain`: cbc-advance-chain writes chain (after copying from
+    // next-chain), and the NEXT iteration's cbc-xor reads chain. So the
+    // synthesized feedback edge is cbc-advance-chain → cbc-xor on `chain`,
+    // not the encrypt-direction pair. This assertion catches a future
+    // regression that hard-codes the encrypt-shaped feedback.
+    const trace = runCbc(aes128CbcDecryptSpec, CBC_PT_1_BLOCK);
+    const graph = deriveAuxGraph(trace, aes128CbcDecryptSpec);
+    const fb = graph.edges.find(
+      (e: GraphEdge) =>
+        e.from === "cbc-advance-chain" &&
+        e.to === "cbc-xor" &&
+        e.kind === "aux" &&
+        e.auxKey === "chain",
+    );
+    expect(
+      fb,
+      "expected synthesized cross-iteration feedback edge cbc-advance-chain → cbc-xor (chain)",
+    ).toBeDefined();
+    if (fb === undefined) return;
+    const isFeedback = buildIterateFeedbackPredicate(graph);
+    expect(isFeedback(fb)).toBe(true);
   });
 });
 
