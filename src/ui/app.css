@@ -454,6 +454,29 @@ button:disabled {
   justify-content: center;
   font-size: 13px;
   letter-spacing: 0.05em;
+  /* Anchor for the absolute-positioned `.provenance-label` corner
+     annotation rendered when a MixColumns hover lights up this cell as a
+     source. No visual effect on cells without a label. */
+  position: relative;
+}
+
+/* Coefficient label rendered in the top-right of a `before` cell when
+   the user is hovering an `after` cell that derives from it through a
+   non-identity GF(2^8) coefficient (MixColumns × 0x02 / × 0x03 / × 0x0e
+   / …). Small + green to match `.provenance-source`'s accent without
+   competing visually with the byte value in the cell center. The
+   `pointer-events: none` keeps the label from interfering with the
+   parent cell's `onMouseEnter` / `onMouseLeave` chain. */
+.cell .provenance-label {
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--accent-success);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  pointer-events: none;
 }
 
 .cell.changed {

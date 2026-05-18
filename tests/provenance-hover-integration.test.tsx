@@ -125,6 +125,62 @@ describe("Provenance hover — MatrixView before-grid receives", () => {
     expect(beforeCells[1]?.classList.contains("provenance-source")).toBe(false);
   });
 
+  it("AES MixColumns: hovering an `after` cell renders coefficient labels on the 4 source cells", () => {
+    // Regression guard for the MatrixView label-drop bug discovered
+    // during the Phase 3 manual browser smoke (2026-05-18): the consumer
+    // built the highlight set as a plain `Set<number>`, throwing away
+    // the `.label` field that `aesMixColumnsProvenance` correctly emits.
+    // The provenance fn was already pinned by `provenance-aes.test.ts`,
+    // but no test covered the DOM render path — only the outline class
+    // had a visible assertion. This test pins the rendered label text
+    // through to the .provenance-label span inside each source cell.
+    const trace = seedAes128Trace();
+    const mixColsFrame = findFrameByStepType(trace, (t) => t === "generic.mix-columns@1");
+    const { container } = renderMatrixView(mixColsFrame);
+    const grids = container.querySelectorAll(".grid-block");
+    const beforeCells = grids[0]?.querySelectorAll(".cell") ?? [];
+    const afterCells = grids[1]?.querySelectorAll(".cell") ?? [];
+    expect(afterCells.length).toBe(16);
+
+    // Hover after-cell at linear index 0 (row 0, col 0). For the
+    // canonical AES_MIX_MATRIX = [[02,03,01,01], ...] the four sources
+    // in column 0 (indices 0, 1, 2, 3) carry labels:
+    //   before[0] × 0x02
+    //   before[1] × 0x03
+    //   before[2] × 0x01  (identity — no label rendered)
+    //   before[3] × 0x01  (identity — no label rendered)
+    fireEvent.mouseEnter(afterCells[0] as Element);
+
+    // All four sources outlined.
+    expect(beforeCells[0]?.classList.contains("provenance-source")).toBe(true);
+    expect(beforeCells[1]?.classList.contains("provenance-source")).toBe(true);
+    expect(beforeCells[2]?.classList.contains("provenance-source")).toBe(true);
+    expect(beforeCells[3]?.classList.contains("provenance-source")).toBe(true);
+
+    // Coefficient labels rendered on the non-identity sources.
+    const label0 = beforeCells[0]?.querySelector(".provenance-label");
+    const label1 = beforeCells[1]?.querySelector(".provenance-label");
+    expect(label0?.textContent).toBe("× 0x02");
+    expect(label1?.textContent).toBe("× 0x03");
+
+    // Identity-coefficient sources are highlighted but carry no label
+    // (the "× 0x01" annotation is dropped by the provenance fn to
+    // reduce visual noise).
+    const label2 = beforeCells[2]?.querySelector(".provenance-label");
+    const label3 = beforeCells[3]?.querySelector(".provenance-label");
+    expect(label2).toBeNull();
+    expect(label3).toBeNull();
+
+    // Cells outside column 0 are neither outlined nor labelled.
+    expect(beforeCells[4]?.classList.contains("provenance-source")).toBe(false);
+    expect(beforeCells[4]?.querySelector(".provenance-label")).toBeNull();
+
+    // Hover-leave clears both the outline AND the labels.
+    fireEvent.mouseLeave(afterCells[0] as Element);
+    expect(beforeCells[0]?.querySelector(".provenance-label")).toBeNull();
+    expect(beforeCells[1]?.querySelector(".provenance-label")).toBeNull();
+  });
+
   it("does NOT apply both `.changed` and `.provenance-source` to the same cell (precedence)", () => {
     const trace = seedAes128Trace();
     const subBytesFrame = findFrameByStepType(trace, (t) => t === "generic.byte-substitution@1");

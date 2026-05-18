@@ -90,17 +90,20 @@ export const MatrixView = (props: Props) => {
   // gate by stepId so a stale hover from a prior frame can't paint cells
   // here after the user scrubs to a different frame.
   const hover = useProvenanceHover();
-  // Set of `before` cell indices to outline. Empty when no hover, or
-  // when the hovered frame doesn't match this view's frame, or when the
-  // step has no registered provenance fn.
-  const beforeHighlights = createMemo<ReadonlySet<number>>(() => {
+  // Map of `before` cell linear index → optional coefficient label
+  // ("× 0x02" for MixColumns, undefined when the provenance source carries
+  // no annotation). `.has(i)` drives the outline class; `.get(i)` drives
+  // the small overlay label. Empty when no hover, or when the hovered
+  // frame doesn't match this view's frame, or when the step has no
+  // registered provenance fn.
+  const beforeHighlights = createMemo<ReadonlyMap<number, string | undefined>>(() => {
     const h = hover();
-    if (!h) return EMPTY_INDEX_SET;
-    if (props.frame === undefined) return EMPTY_INDEX_SET;
-    if (h.stepId !== props.frame.stepId) return EMPTY_INDEX_SET;
-    const out = new Set<number>();
+    if (!h) return EMPTY_INDEX_MAP;
+    if (props.frame === undefined) return EMPTY_INDEX_MAP;
+    if (h.stepId !== props.frame.stepId) return EMPTY_INDEX_MAP;
+    const out = new Map<number, string | undefined>();
     for (const src of h.sources) {
-      if (src.kind === "before-cell") out.add(src.index);
+      if (src.kind === "before-cell") out.set(src.index, src.label);
     }
     return out;
   });
@@ -144,10 +147,10 @@ export const MatrixView = (props: Props) => {
   );
 };
 
-/** Allocation-free empty set; shared sentinel so the memo's "no hover"
- *  branch never produces a new object. The set is mutated in the populated
- *  branch — `EMPTY_INDEX_SET` itself is treated as immutable here. */
-const EMPTY_INDEX_SET: ReadonlySet<number> = new Set();
+/** Allocation-free empty map; shared sentinel so the memo's "no hover"
+ *  branch never produces a new object. The map is mutated in the populated
+ *  branch — `EMPTY_INDEX_MAP` itself is treated as immutable here. */
+const EMPTY_INDEX_MAP: ReadonlyMap<number, string | undefined> = new Map();
 
 const Grid = (props: {
   title: string;
@@ -165,13 +168,16 @@ const Grid = (props: {
   highlightDiffPrev?: boolean;
   format: ByteFormat;
   /**
-   * Linear cell indices (row + 4*col) to outline with the
-   * `.provenance-source` class — populated only on the `before` grid
-   * when a sibling `after` cell is being hovered. Empty set otherwise.
-   * Per the declared precedence: when `.provenance-source` applies,
-   * it wins over `.changed` / `.diff-vs-prev`.
+   * Linear cell index (row + 4*col) → optional coefficient label.
+   * `.has(i)` drives the `.provenance-source` outline class — populated
+   * only on the `before` grid when a sibling `after` cell is being hovered.
+   * `.get(i)` returns the small annotation text (`× 0x02`, `× 0x0e`, …)
+   * rendered in the cell's top-right corner; undefined when the
+   * provenance source carries no label (SubBytes, ShiftRows, identity
+   * MixColumns coefficient). Per the declared precedence: when
+   * `.provenance-source` applies, it wins over `.changed` / `.diff-vs-prev`.
    */
-  provenanceSourceIndices?: ReadonlySet<number>;
+  provenanceSourceIndices?: ReadonlyMap<number, string | undefined>;
   /** Hover handler attached to each cell in the `after` grid. Receives
    *  the linear cell index (row + 4*col). */
   onCellMouseEnter?: (afterCellIndex: number) => void;
@@ -222,6 +228,14 @@ const Grid = (props: {
                   ? ""
                   : formatByte(cell.prev, props.format)
                 : formatByte(cell[props.field] as number, props.format)}
+              {/* Provenance coefficient label (MixColumns × 0x02 / × 0x03 /
+                  × 0x0e / etc.). Inline read so the label appears as soon
+                  as the hover memo updates. `<Show>`'s callback form
+                  passes a non-nullish accessor — empty string is falsy,
+                  but our labels are always non-empty when present. */}
+              <Show when={props.provenanceSourceIndices?.get(linearIndex)}>
+                {(label) => <span class="provenance-label">{label()}</span>}
+              </Show>
             </div>
           );
         }}
