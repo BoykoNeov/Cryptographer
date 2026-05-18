@@ -79,6 +79,21 @@ export const KeyScheduleExplorer = (props: Props) => {
   );
 };
 
+/**
+ * Pull the `keyAuxName` value out of a key-expansion step's params,
+ * falling back to the canonical default `"key"` when the field is
+ * missing or wrong shape. Both the AES and Serpent executors use the
+ * same `keyAuxName` field with the same `"key"` default — extracted
+ * here as a single source of truth so a future cipher addition
+ * (or a fix to one cipher's failure handling) doesn't have to be
+ * applied to two parallel copies.
+ */
+const readKeyAuxName = (params: Json): string => {
+  if (typeof params !== "object" || params === null || Array.isArray(params)) return "key";
+  const candidate = (params as Record<string, Json>).keyAuxName;
+  return typeof candidate === "string" && candidate.length > 0 ? candidate : "key";
+};
+
 // ─── AES branch ──────────────────────────────────────────────────────
 
 const AesExplorer = (props: { frame: TraceFrame; fmt: ByteFormat }) => {
@@ -89,17 +104,7 @@ const AesExplorer = (props: { frame: TraceFrame; fmt: ByteFormat }) => {
   const trace = createMemo<AesScheduleTrace | null>(() => {
     const params = extractAesParams(props.frame.params);
     if (!params) return null;
-    // The executor reads `keyAuxName` (default "key") from aux. We
-    // pull the same name out of params to find the master key in
-    // the frame's auxRead snapshot.
-    const keyAuxName =
-      typeof props.frame.params === "object" &&
-      props.frame.params !== null &&
-      !Array.isArray(props.frame.params) &&
-      typeof (props.frame.params as Record<string, Json>).keyAuxName === "string"
-        ? ((props.frame.params as Record<string, Json>).keyAuxName as string)
-        : "key";
-    const masterKey = props.frame.auxRead.get(keyAuxName);
+    const masterKey = props.frame.auxRead.get(readKeyAuxName(props.frame.params));
     if (!(masterKey instanceof Uint8Array)) return null;
     try {
       // Re-fetch the simulator (vs hoisting to the parent) so the memo
@@ -237,14 +242,7 @@ const extractAesParams = (params: Json): AesSimParams | null => {
 
 const SerpentExplorer = (props: { frame: TraceFrame; fmt: ByteFormat }) => {
   const trace = createMemo<SerpentScheduleTrace | null>(() => {
-    const keyAuxName =
-      typeof props.frame.params === "object" &&
-      props.frame.params !== null &&
-      !Array.isArray(props.frame.params) &&
-      typeof (props.frame.params as Record<string, Json>).keyAuxName === "string"
-        ? ((props.frame.params as Record<string, Json>).keyAuxName as string)
-        : "key";
-    const masterKey = props.frame.auxRead.get(keyAuxName);
+    const masterKey = props.frame.auxRead.get(readKeyAuxName(props.frame.params));
     if (!(masterKey instanceof Uint8Array)) return null;
     try {
       const sim = lookupScheduleSimulator(props.frame.stepType);

@@ -172,4 +172,25 @@ describe("<KeyScheduleExplorer /> — Serpent branch", () => {
     const groups = container.querySelectorAll(".key-schedule-serpent-sbox-groups > li");
     expect(groups.length).toBe(33);
   });
+
+  it("renders the inline error stub when the master key isn't readable from auxRead", () => {
+    // Parallel to the AES "missing params" test — Serpent's failure
+    // mode is "no master key in aux." Pin the graceful fallback so
+    // the two branches' error-handling stays in lockstep.
+    const badFrame: TraceFrame = {
+      index: 0,
+      path: [],
+      stepId: "key-expansion",
+      stepType: "serpent.key-expansion@1",
+      params: { keyAuxName: "key", outputPrefix: "roundKey", keyByteLength: 16 },
+      stateBefore: makeBytesState(new Uint8Array(0)),
+      stateAfter: makeBytesState(new Uint8Array(0)),
+      // Empty auxRead — the "key" entry the simulator needs isn't here.
+      auxRead: new Map<string, AuxValue>(),
+      auxWritten: new Map(),
+    };
+    const { container } = render(() => <KeyScheduleExplorer frame={badFrame} />);
+    expect(container.querySelector(".key-schedule-explorer-error")).not.toBeNull();
+    expect(container.querySelector(".key-schedule-serpent")).toBeNull();
+  });
 });
