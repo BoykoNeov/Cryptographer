@@ -4848,7 +4848,35 @@ const EdgePath = (props: {
       // overhead loop gets a taller arc clearly distinct from the
       // chip row beneath. Floor at 28 px so even adjacent siblings
       // produce a visible loop above the row.
-      const pull = Math.max(28, Math.abs(tx - sx) * 0.35);
+      const naturalPull = Math.max(28, Math.abs(tx - sx) * 0.35);
+      // Canvas-headroom cap (2026-05-18 follow-up). For a symmetric
+      // cubic Bezier with control points at (sy − pull) and (ty − pull)
+      // and sy ≈ ty, the on-curve peak sits at y = sy − 0.75 × pull
+      // (the Bezier point at t = 0.5 with this control geometry).
+      // We need `peak ≥ ARC_TOP_INSET` so the arrowhead-most-distant
+      // point stays inside the SVG viewBox (which starts at y = 0).
+      // Solving sy − 0.75 × pull ≥ ARC_TOP_INSET gives
+      // pull ≤ (sy − ARC_TOP_INSET) × 4 / 3.
+      //
+      // Without this cap, wide-span feedback edges (e.g. a future
+      // mode where the cross-iteration source sits many leaves away
+      // from the cross-iteration target) drove pull well past the
+      // available headroom — the chip row sits at y ≈ 96 (one
+      // CANVAS_MARGIN below the top + iterate header), so a pull of
+      // ~158 placed the arc peak at y ≈ −62, OUTSIDE the viewBox.
+      // The user surfaced this on the 2026-05-18 manual smoke after
+      // the first-pass overhead routing landed (commit fdf7fb2).
+      //
+      // The `Math.max(28, ...)` on `headroomPull` keeps the min-arc
+      // floor honoured in the degenerate case where `sy` is unusually
+      // small (e.g. the iterate were lifted to row 0 with no
+      // CANVAS_MARGIN, which doesn't happen today but keeps the
+      // fallback robust). Practically, with sy ≈ 96 the headroom
+      // cap is ~115 → narrow CBC cases (pull ≈ 28-52) are unchanged;
+      // only the wide cases that were clipping get tamed.
+      const ARC_TOP_INSET = 10;
+      const headroomPull = Math.max(28, ((sy - ARC_TOP_INSET) * 4) / 3);
+      const pull = Math.min(naturalPull, headroomPull);
       // Cubic Bezier with vertical control points above both
       // endpoints. At t=1 the tangent is `(0, +pull)` → arrowhead
       // points DOWN into the target's top edge. The symmetric pull

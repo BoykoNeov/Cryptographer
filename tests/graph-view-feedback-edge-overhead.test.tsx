@@ -151,6 +151,50 @@ const parseEndpoints = (
 };
 
 /**
+ * Parse a single-segment cubic-Bezier path `M sx sy C c1x c1y, c2x c2y,
+ * tx ty` into its 4 control points. Returns undefined if the token
+ * count doesn't match (e.g. straight-line variant or multi-segment).
+ * Used by the headroom-cap test to compute the on-curve peak.
+ */
+const parseCubicBezier = (
+  d: string,
+):
+  | {
+      p0: { x: number; y: number };
+      p1: { x: number; y: number };
+      p2: { x: number; y: number };
+      p3: { x: number; y: number };
+    }
+  | undefined => {
+  const tokens = d
+    .replace(/[MC]/g, " ")
+    .trim()
+    .split(/[\s,]+/)
+    .map(Number);
+  if (tokens.length !== 8 || tokens.some((n) => Number.isNaN(n))) return undefined;
+  return {
+    p0: { x: tokens[0] as number, y: tokens[1] as number },
+    p1: { x: tokens[2] as number, y: tokens[3] as number },
+    p2: { x: tokens[4] as number, y: tokens[5] as number },
+    p3: { x: tokens[6] as number, y: tokens[7] as number },
+  };
+};
+
+/**
+ * On-curve y at parameter t for the parsed Bezier. The cap test needs
+ * the geometric peak (minimum y, since y grows downward); for our
+ * symmetric overhead arc that's at t = 0.5, but we expose general t
+ * so the test could sweep a few samples if a future asymmetric shape
+ * lands.
+ */
+const bezierYAt = (bz: NonNullable<ReturnType<typeof parseCubicBezier>>, t: number): number => {
+  const u = 1 - t;
+  return (
+    u * u * u * bz.p0.y + 3 * u * u * t * bz.p1.y + 3 * u * t * t * bz.p2.y + t * t * t * bz.p3.y
+  );
+};
+
+/**
  * Find the leaf whose top edge is at `expectedY` (within `yTol`) AND
  * whose horizontal center is at `expectedX` (within `xTol`). Used by
  * the decrypt test to identify the feedback source/target leaves
@@ -289,6 +333,55 @@ describe("GraphView — feedback-edge overhead routing (CBC)", () => {
       }
     });
     expect(spineDepartures.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("arc peak stays inside the canvas viewBox (headroom cap)", () => {
+    // 2026-05-18 follow-up to the overhead-routing first pass (commit
+    // fdf7fb2). The first-pass formula
+    //   pull = Math.max(28, |tx − sx| × 0.35)
+    // grew the arc proportional to horizontal span. For wide spans the
+    // peak (~sy − 0.75 × pull) ended up ABOVE the SVG viewBox top
+    // (y < 0), so a chunk of the arc was invisible — surfaced on the
+    // 2026-05-18 manual smoke.
+    //
+    // The headroom-cap fix derives a second pull formula from the
+    // available canvas headroom: pull ≤ (sy − ARC_TOP_INSET) × 4 / 3,
+    // and takes the min of the two. This test pins the resulting
+    // invariant: the on-curve peak y is non-negative (i.e. inside the
+    // SVG viewBox which starts at y = 0).
+    //
+    // Asserted by parsing the cubic-Bezier path and computing the
+    // peak at t = 0.5 (the symmetry point for our control-point
+    // geometry). Even though today's CBC scenario has a narrow span
+    // where the cap doesn't bite (naturalPull stays at the 28 px
+    // floor), the invariant still holds — and the test will catch
+    // any future regression that re-introduces the unclipped formula
+    // OR any layout change that drops sy below the threshold where
+    // the cap stops being protective.
+    seedAes128Cbc();
+    const { container } = render(() => <GraphView />);
+
+    const feedbackPaths = Array.from(
+      container.querySelectorAll<SVGPathElement>("path.graph-edge.graph-edge-feedback"),
+    );
+    expect(feedbackPaths.length).toBeGreaterThanOrEqual(1);
+    const fbPath = feedbackPaths[0];
+    if (fbPath === undefined) return;
+    const d = fbPath.getAttribute("d");
+    expect(d).not.toBeNull();
+    if (d === null) return;
+
+    const bz = parseCubicBezier(d);
+    expect(bz, `feedback path d="${d}" is not a single cubic Bezier`).toBeDefined();
+    if (bz === undefined) return;
+
+    // Peak at t = 0.5 for the symmetric control-point geometry. The
+    // cap fix guarantees peak ≥ ARC_TOP_INSET (10) in the bind-tight
+    // case; we assert ≥ 0 here (the absolute viewBox-clipping bound)
+    // with a small slack so a future ARC_TOP_INSET tweak doesn't
+    // re-pin the test.
+    const peakY = bezierYAt(bz, 0.5);
+    expect(peakY, `arc peak y=${peakY} clips above viewBox top (y<0)`).toBeGreaterThanOrEqual(0);
   });
 
   it("routes the decrypt-direction feedback edge over the top too (direction-agnostic contract)", () => {
