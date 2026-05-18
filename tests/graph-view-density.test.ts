@@ -83,9 +83,11 @@ describe("GraphView density — canvas size ordering", () => {
     expect(c.LEAF_H).toBe(28);
     expect(c.STACK_GAP).toBe(6);
     // BASE_FLOW_GAP bumped 16 → 24 on 2026-05-16 for chip-row breathing
-    // room (collapsed multi-block iterate UX). FLOW_GAP is used in both
-    // root flow + iterate body flow.
-    expect(c.FLOW_GAP).toBe(24);
+    // room (collapsed multi-block iterate UX), then 24 → 36 on
+    // 2026-05-19 after the CBC iterate body's 13-chip row read as a
+    // wall at 24 px gaps. FLOW_GAP is used in both root flow + iterate
+    // body flow.
+    expect(c.FLOW_GAP).toBe(36);
     expect(c.CONTAINER_PAD).toBe(10);
   });
 

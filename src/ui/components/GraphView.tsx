@@ -152,9 +152,16 @@ const BASE_STACK_GAP = 6;
 /** Base (1.0×) horizontal gap between siblings flowing inside an iterate body / root.
  *  Bumped from 16 → 24 (2026-05-16) for breathing room on the collapsed-
  *  iterate chip row — multiple chips + aux replicas above were cramping
- *  on the AES-128 ECB canvas. Affects both root-level flow AND iterate
- *  body flow (one constant, used both places). */
-const BASE_FLOW_GAP = 24;
+ *  on the AES-128 ECB canvas. Bumped again 24 → 36 (2026-05-19) after
+ *  the user reported the CBC iterate body's chip row felt crowded —
+ *  13 sibling boxes (cbc-xor + initial.add-round-key + 9 rounds + final
+ *  round + cbc-snapshot) at 132 px wide ran flush against each other,
+ *  reading as a wall rather than a clearly-spaced sequence. 50% bump
+ *  preserves the original visual intent of "tight enough to feel like
+ *  one row" while letting the eye distinguish where one chip ends and
+ *  the next begins. Affects both root-level flow AND iterate body flow
+ *  (one constant, used both places). */
+const BASE_FLOW_GAP = 36;
 /** Base (1.0×) padding inside a container (group or iterate) box. */
 const BASE_CONTAINER_PAD = 10;
 /**
