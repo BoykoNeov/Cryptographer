@@ -22,11 +22,16 @@
  * shapes can register its own narration fn without touching the core
  * step-registration path.
  *
- * Coverage in Phase 1:
+ * Coverage after Phase 2:
  *   - AES round body: SubBytes, ShiftRows, MixColumns, AddRoundKey.
- * Phase 2 adds Serpent byte-level steps + Speck rounds; Phase 3 adds
- * padding + boundary + aux primitives. The `NARRATION_NO_OP_ALLOWLIST`
- * shrinks across phases — see the doc-string on the constant below.
+ *   - Serpent byte-level + bit-permutation: SubBytes, AddRoundKey,
+ *     Bit-Permutation (IP / FP) — the bit-permutation narrator uses
+ *     the two-tier "structural overview + per-output-byte drill"
+ *     pattern documented in `feedback_bit_level_narration_pattern.md`.
+ *   - Speck: Round (forward), Round-inverse.
+ * Phase 3 adds padding + boundary + aux primitives. The
+ * `NARRATION_NO_OP_ALLOWLIST` shrinks across phases — see the
+ * doc-string on the constant below.
  *
  * A contract test (`tests/narration-registry-contract.test.ts`) walks
  * the core registry and asserts every shipped matrix-shape AND
@@ -127,10 +132,11 @@ export const lookupNarration = (stepType: string): NarrationFn | null =>
 export const hasNarrationFn = (stepType: string): boolean => REGISTRY.has(stepType);
 
 /**
- * Step types that *intentionally* have no narration fn. Phase 1 ships
- * with a conservative 28-entry list; Phases 2 and 3 shrink it as
- * narrators land for those step types. Irreducible-after-Phase-3 set
- * is 7 entries (4 key-expansion + 3 bit-level Serpent transforms).
+ * Step types that *intentionally* have no narration fn. Phase 1 shipped
+ * with a conservative 28-entry list; Phase 2 removes the 5 Serpent +
+ * Speck entries and leaves 23 to shrink across Phase 3. The
+ * irreducible-after-Phase-3 set is 6 entries (4 key-expansion +
+ * 2 bit-level Serpent linear transforms).
  *
  * Reasons for the irreducible set:
  *
@@ -140,14 +146,20 @@ export const hasNarrationFn = (stepType: string): boolean => REGISTRY.has(stepTy
  *     than the unit-list this registry produces. Narrating them again
  *     would double up.
  *
- *   - **Bit-level Serpent** (`serpent.linear-transform@1`,
- *     `serpent.inv-linear-transform@1`, `serpent.bit-permutation@1`)
- *     — same justification as the matching
- *     `PROVENANCE_NO_OP_ALLOWLIST` entries: each output bit derives
- *     from 6–7 input bits via XOR / permutation. Byte-level prose
- *     would be misleading ("everything contributes to everything"
- *     isn't useful). A future per-bit narration surface could cover
- *     these honestly; the byte-level registry shouldn't.
+ *   - **Bit-level Serpent linear transforms**
+ *     (`serpent.linear-transform@1`, `serpent.inv-linear-transform@1`)
+ *     — same justification as the matching `PROVENANCE_NO_OP_ALLOWLIST`
+ *     entries: each output bit derives from 6–7 input bits via XOR over
+ *     GF(2). Byte-level prose would be misleading ("everything
+ *     contributes to everything" isn't useful). A future per-bit
+ *     narration surface could cover these honestly; the byte-level
+ *     registry shouldn't.
+ *
+ *     NOTE: `serpent.bit-permutation@1` is NOT in this category. Each
+ *     output bit there comes from a *single* input bit, which makes
+ *     the per-output-byte drill (8 source-bit highlights) honest and
+ *     pedagogically rich. Phase 2 narrates it with the structural-
+ *     overview + per-output-byte drill pattern.
  *
  * Adding an entry is a deliberate "we considered narration and it's
  * not worth a fn" — NOT "we forgot to write one." The contract test
@@ -159,15 +171,10 @@ export const NARRATION_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
   "aes.key-expansion@2",
   "serpent.key-expansion@1",
   "speck.key-schedule@1",
-  // Bit-level — byte-level prose would be misleading
+  // Bit-level linear transforms — byte-level prose would be misleading.
+  // (Bit-permutation is honest at byte granularity — narrated in Phase 2.)
   "serpent.linear-transform@1",
   "serpent.inv-linear-transform@1",
-  "serpent.bit-permutation@1",
-  // ─── Phase 2 will move these OFF ─────────────────────
-  "serpent.sub-bytes@1",
-  "serpent.add-round-key@1",
-  "speck.round@1",
-  "speck.round-inverse@1",
   // ─── Phase 3 will move these OFF ─────────────────────
   "generic.pkcs7-pad@1",
   "generic.pkcs7-unpad@1",

@@ -3788,3 +3788,47 @@ button:disabled {
   flex-direction: column;
   gap: 2px;
 }
+
+/* Bit-permutation drill list (Serpent IP/FP narrator). Each <li> is one
+   source-bit lookup line. Monospace + indented bullets keep the binary
+   strings vertically aligned across the 8 rows of a single drill. */
+.step-narration-bit-drill {
+  margin: 4px 0 6px;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+}
+
+/* Inline 8-bit binary string (MSB-on-left) inside the bit-permutation
+   structural overview and per-byte drill bodies. Monospace + a thin
+   border so the binary digits read as a distinct artefact from the
+   surrounding prose. */
+.step-narration-bit-overview {
+  display: block;
+  margin: 4px 0;
+  padding: 4px 6px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  word-break: break-all;
+}
+
+/* One of the 8 binary digits of a source byte highlighted as "this is
+   the bit being taken." Uses the same accent treatment as the round-key
+   "current cell" outline elsewhere in linear mode. */
+.step-narration-binary-byte {
+  display: inline-block;
+}
+
+.bit-highlighted {
+  color: var(--accent, #6cf);
+  background: color-mix(in srgb, var(--accent, #6cf) 18%, transparent);
+  border-radius: 2px;
+  padding: 0 1px;
+  font-weight: bold;
+}

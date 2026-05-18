@@ -7,12 +7,15 @@
  * Pattern mirrors `src/ui/provenance/index.ts`. Idempotent: re-importing
  * after `__resetNarrationForTests` re-runs initialization cleanly.
  *
- * Coverage at Phase 1 (cross-checked by
+ * Coverage after Phase 2 (cross-checked by
  * `tests/narration-registry-contract.test.ts`):
  *   - AES round body: SubBytes, ShiftRows, MixColumns, AddRoundKey
- * Phase 2 will add Serpent byte-level + Speck rounds; Phase 3 adds
- * padding + boundary + aux primitives. Remaining shipped matrix /
- * bytes step types live on `NARRATION_NO_OP_ALLOWLIST` with reasons.
+ *   - Serpent byte-level + bit-permutation: SubBytes, AddRoundKey,
+ *     Bit-Permutation (IP / FP)
+ *   - Speck: Round (forward), Round-inverse
+ * Phase 3 adds padding + boundary + aux primitives. Remaining shipped
+ * matrix / bytes step types live on `NARRATION_NO_OP_ALLOWLIST` with
+ * reasons (key-expansion + the 2 bit-level Serpent linear transforms).
  */
 
 import {
@@ -22,6 +25,12 @@ import {
   aesSubBytesNarration,
 } from "./aes";
 import { __resetNarrationForTests, registerNarration } from "./registry";
+import {
+  serpentAddRoundKeyNarration,
+  serpentBitPermutationNarration,
+  serpentSubBytesNarration,
+} from "./serpent";
+import { speckRoundInverseNarration, speckRoundNarration } from "./speck";
 
 let initialized = false;
 
@@ -32,10 +41,17 @@ let initialized = false;
  */
 export const initNarrationRegistry = (): void => {
   if (initialized) return;
+  // Phase 1 — AES round body.
   registerNarration("generic.byte-substitution@1", aesSubBytesNarration);
   registerNarration("generic.shift-rows@1", aesShiftRowsNarration);
   registerNarration("generic.mix-columns@1", aesMixColumnsNarration);
   registerNarration("generic.add-round-key@1", aesAddRoundKeyNarration);
+  // Phase 2 — Serpent byte-level + bit-permutation, Speck rounds.
+  registerNarration("serpent.sub-bytes@1", serpentSubBytesNarration);
+  registerNarration("serpent.add-round-key@1", serpentAddRoundKeyNarration);
+  registerNarration("serpent.bit-permutation@1", serpentBitPermutationNarration);
+  registerNarration("speck.round@1", speckRoundNarration);
+  registerNarration("speck.round-inverse@1", speckRoundInverseNarration);
   initialized = true;
 };
 

@@ -80,6 +80,17 @@ describe("narration-registry coverage contract", () => {
     expect(hasNarrationFn("generic.add-round-key@1")).toBe(true);
   });
 
+  it("registers fns for Serpent byte-level + bit-permutation steps (Phase 2)", () => {
+    expect(hasNarrationFn("serpent.sub-bytes@1")).toBe(true);
+    expect(hasNarrationFn("serpent.add-round-key@1")).toBe(true);
+    expect(hasNarrationFn("serpent.bit-permutation@1")).toBe(true);
+  });
+
+  it("registers fns for Speck round + round-inverse (Phase 2)", () => {
+    expect(hasNarrationFn("speck.round@1")).toBe(true);
+    expect(hasNarrationFn("speck.round-inverse@1")).toBe(true);
+  });
+
   it("allowlists key-expansion step types (covered by KeyScheduleExplorer)", () => {
     expect(NARRATION_NO_OP_ALLOWLIST.has("aes.key-expansion@1")).toBe(true);
     expect(NARRATION_NO_OP_ALLOWLIST.has("aes.key-expansion@2")).toBe(true);
@@ -87,9 +98,13 @@ describe("narration-registry coverage contract", () => {
     expect(NARRATION_NO_OP_ALLOWLIST.has("speck.key-schedule@1")).toBe(true);
   });
 
-  it("allowlists Serpent's bit-level steps (byte-approximation too muddled)", () => {
+  it("allowlists Serpent's bit-level LINEAR transforms (byte-approximation too muddled)", () => {
+    // After Phase 2 only the GF(2) linear transforms remain on the
+    // allowlist: their 6-7-bit fan-in defeats byte-level prose.
+    // `serpent.bit-permutation@1` moved OFF the allowlist with a
+    // dedicated narrator (single-bit-per-output drill is honest).
     expect(NARRATION_NO_OP_ALLOWLIST.has("serpent.linear-transform@1")).toBe(true);
     expect(NARRATION_NO_OP_ALLOWLIST.has("serpent.inv-linear-transform@1")).toBe(true);
-    expect(NARRATION_NO_OP_ALLOWLIST.has("serpent.bit-permutation@1")).toBe(true);
+    expect(NARRATION_NO_OP_ALLOWLIST.has("serpent.bit-permutation@1")).toBe(false);
   });
 });
