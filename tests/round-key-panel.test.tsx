@@ -23,8 +23,10 @@
 
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { serpent128Spec } from "@/ciphers/serpent-128";
+import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex } from "@/core/state/bytes";
+import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
 import type { Aux, AuxValue, MatrixState } from "@/core/types";
 import { RoundKeyPanel, detectRoundKeySequences } from "@/ui/components/RoundKeyPanel";
@@ -186,6 +188,110 @@ describe("<RoundKeyPanel /> against a real AES-128 trace", () => {
     // entirely — no orphan empty container in the DOM.
     const { container } = render(() => <RoundKeyPanel frame={null} />);
     expect(container.querySelector(".round-key-panel")).toBeNull();
+  });
+});
+
+// ─── Cipher-agnostic claim: empirical coverage at the COMPONENT layer ────
+//
+// `detectRoundKeySequences`'s pure tests cover the 16-byte and other-length
+// branches in isolation. These two integration tests pin the component-layer
+// render path for the high-count case (Serpent's 33-cell ribbon) and the
+// fallback-strip case (Speck32/64's 2-byte subkeys). Without them the
+// "cipher-agnostic by construction" headline claim would be only
+// theoretically true — a Solid-reactivity bug specific to the fallback
+// branch, or a DOM-quantity bug at N=33, would slip through unnoticed.
+
+const SERPENT128_KEY = "00112233445566778899aabbccddeeff";
+const SERPENT128_PT = "00112233445566778899aabbccddeeff";
+
+const seedSerpent128Trace = () => {
+  const trace = runSpec(serpent128Spec, buildDefaultRegistry(), {
+    initialState: makeBytesState(bytesFromHex(SERPENT128_PT)),
+    initialAux: new Map<string, AuxValue>([["key", bytesFromHex(SERPENT128_KEY)]]),
+  });
+  setTrace(trace);
+  return trace;
+};
+
+describe("<RoundKeyPanel /> against a real Serpent-128 trace (high-count)", () => {
+  beforeEach(() => {
+    __resetByteFormatForTests();
+    __resetTraceForTests();
+  });
+  afterEach(() => {
+    cleanup();
+    __resetByteFormatForTests();
+    __resetTraceForTests();
+  });
+
+  it("renders 33 round-key cells in one ribbon at 16B each", () => {
+    seedSerpent128Trace();
+    const { container } = render(() => <RoundKeyPanel frame={null} />);
+    const ribbons = container.querySelectorAll(".round-key-ribbon");
+    expect(ribbons.length).toBe(1);
+    // Serpent: 33 round keys (K_0 through K_32, one more than the 32-round
+    // count to cover the final post-whitening AddRoundKey).
+    expect(container.querySelectorAll(".round-key-cell").length).toBe(33);
+    expect(ribbons[0]?.querySelector(".round-key-ribbon-shape")?.textContent).toContain("33 × 16B");
+  });
+
+  it("uses the TinyMatrix render path (not the fallback strip) for 16-byte keys", () => {
+    seedSerpent128Trace();
+    const { container } = render(() => <RoundKeyPanel frame={null} />);
+    // All 33 cells take the TinyMatrix branch — 16 × 33 = 528 tiny cells.
+    // The fallback strip class must be entirely absent.
+    expect(container.querySelectorAll(".tiny-matrix").length).toBe(33);
+    expect(container.querySelectorAll(".round-key-cell-strip").length).toBe(0);
+  });
+});
+
+const SPECK32_64_KEY = "1918111009080100";
+const SPECK32_64_PT = "6574694c";
+
+const seedSpeck32_64Trace = () => {
+  const trace = runSpec(speck32_64BeSpec, buildDefaultRegistry(), {
+    initialState: makeBytesState(bytesFromHex(SPECK32_64_PT)),
+    initialAux: new Map<string, AuxValue>([["key", bytesFromHex(SPECK32_64_KEY)]]),
+  });
+  setTrace(trace);
+  return trace;
+};
+
+describe("<RoundKeyPanel /> against a real Speck32/64 trace (fallback-strip path)", () => {
+  beforeEach(() => {
+    __resetByteFormatForTests();
+    __resetTraceForTests();
+  });
+  afterEach(() => {
+    cleanup();
+    __resetByteFormatForTests();
+    __resetTraceForTests();
+  });
+
+  it("renders 22 subkey cells in one ribbon at 2B each", () => {
+    seedSpeck32_64Trace();
+    const { container } = render(() => <RoundKeyPanel frame={null} />);
+    const ribbons = container.querySelectorAll(".round-key-ribbon");
+    expect(ribbons.length).toBe(1);
+    // Speck32/64: 22 round subkeys, each `wordBits/8 = 16/8 = 2` bytes.
+    expect(container.querySelectorAll(".round-key-cell").length).toBe(22);
+    expect(ribbons[0]?.querySelector(".round-key-ribbon-shape")?.textContent).toContain("22 × 2B");
+  });
+
+  it("takes the byteLength !== 16 fallback branch (strip cells, no TinyMatrix)", () => {
+    // The whole point of this test: pin the *alternate* render branch in
+    // `RoundKeyCell`. Pure detection's mixed-length test catches the
+    // sequence-detection logic; this catches a Solid-reactivity or shape-
+    // dispatch bug specific to the fallback path that pure tests can't see.
+    seedSpeck32_64Trace();
+    const { container } = render(() => <RoundKeyPanel frame={null} />);
+    // 22 cells use the strip branch.
+    expect(container.querySelectorAll(".round-key-cell-strip").length).toBe(22);
+    // And TinyMatrix never gets used for 2-byte subkeys.
+    expect(container.querySelectorAll(".tiny-matrix").length).toBe(0);
+    // Each strip carries exactly 2 byte cells.
+    const firstStrip = container.querySelector(".round-key-cell-strip");
+    expect(firstStrip?.querySelectorAll(".round-key-cell-byte").length).toBe(2);
   });
 });
 
