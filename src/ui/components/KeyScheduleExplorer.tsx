@@ -28,7 +28,7 @@
  * error stub. The explorer should never crash the linear-mode pane.
  */
 
-import { type ByteFormat, formatByte } from "@/core/format";
+import type { ByteFormat } from "@/core/format";
 import type { Json, TraceFrame } from "@/core/types";
 import { For, Show, createMemo } from "solid-js";
 import type { AesScheduleTrace, AesScheduleWord, AesStage } from "../key-schedule-sim/aes";
@@ -39,6 +39,7 @@ import {
 } from "../key-schedule-sim/registry";
 import type { SerpentScheduleTrace, SerpentStage } from "../key-schedule-sim/serpent";
 import { useByteFormat } from "../stores/format";
+import { ByteRow, formatByteInline, formatBytes } from "./byte-row";
 
 type Props = {
   frame: TraceFrame;
@@ -273,19 +274,11 @@ const AesStageRow = (props: { stage: AesStage; word: AesScheduleWord; fmt: ByteF
 );
 
 // ─── Value-prose: per-stage explanation of *these specific bytes* ─────
-
-/**
- * Format a byte sequence as a bracketed list, respecting the byte-format
- * toggle. Used inline in value-prose text where we want something denser
- * than a `<ByteRow>` (which renders bordered cells) but still
- * format-aware.
- */
-const formatBytes = (bytes: Uint8Array, fmt: ByteFormat): string =>
-  `[${Array.from(bytes)
-    .map((b) => formatByte(b, fmt))
-    .join(", ")}]`;
-
-const formatByteInline = (b: number, fmt: ByteFormat): string => formatByte(b, fmt);
+//
+// `formatBytes` / `formatByteInline` / `<ByteRow>` are imported from
+// `./byte-row` — the same helpers are reused by `<StepNarration />` so
+// every per-frame prose surface in linear mode renders byte sequences
+// with one visual rhythm.
 
 /**
  * Dispatch to a per-kind prose component. Each prose body is a single
@@ -620,27 +613,6 @@ const PadStageView = (props: {
   </div>
 );
 
-// ─── Shared byte-row renderer ────────────────────────────────────────
-
-const ByteRow = (props: {
-  bytes: Uint8Array;
-  fmt: ByteFormat;
-  /** Optional index to outline with .key-schedule-byte-highlight. */
-  highlightIndex?: number;
-}) => (
-  <div class="key-schedule-byte-row">
-    <For each={Array.from(props.bytes)}>
-      {(b, i) => (
-        <div
-          class="key-schedule-byte-cell"
-          classList={{
-            "key-schedule-byte-highlight":
-              props.highlightIndex !== undefined && i() === props.highlightIndex,
-          }}
-        >
-          {formatByte(b, props.fmt)}
-        </div>
-      )}
-    </For>
-  </div>
-);
+// `<ByteRow>` lives in `./byte-row` so the StepNarration component
+// renders byte sequences with the same visual rhythm as the
+// key-schedule explorer's pad-stage / round-key views.

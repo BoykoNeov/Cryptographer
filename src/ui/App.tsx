@@ -65,12 +65,15 @@ import { RoundKeyPanel } from "./components/RoundKeyPanel";
 import { RunExplorerModal } from "./components/RunExplorerModal";
 import { StepDescription } from "./components/StepDescription";
 import { StepList } from "./components/StepList";
+import { StepNarration } from "./components/StepNarration";
 import { StepStrip } from "./components/StepStrip";
 import { TraceTimeline } from "./components/TraceTimeline";
 import { isKeyExpansionStepType } from "./key-schedule-sim/registry";
-// Side-effect import: registers the cell-level provenance fns into the
-// shared registry (Phase 3). Without this, hover handlers in MatrixView
-// would no-op for every step type. Idempotent — re-importing is a no-op.
+// Side-effect imports: register the cell-level provenance fns and the
+// per-frame narration fns into their shared registries. Without these,
+// hover handlers in MatrixView would no-op for every step type, and
+// <StepNarration /> would render nothing. Idempotent.
+import "./narration/index";
 import "./provenance/index";
 import { clearDirty, setAutoRerun, setDirty, useAutoRerun, useDirty } from "./stores/auto-rerun";
 import {
@@ -1243,6 +1246,17 @@ export const App = () => {
                   >
                     <KeyScheduleExplorer frame={frame()} />
                   </Show>
+
+                  {/* Per-frame value-prose. Cipher-agnostic dispatch via
+                      the narration registry (`src/ui/narration/`).
+                      Renders nothing for frames whose step type is on
+                      the allowlist (every key-expansion frame is, since
+                      KeyScheduleExplorer above is the richer surface).
+                      For AES round-body frames the registry returns one
+                      <details> per conceptual sub-unit — 16 byte units
+                      for SubBytes / AddRoundKey, 4 row units for
+                      ShiftRows, 4 column units for MixColumns. */}
+                  <StepNarration frame={frame()} />
 
                   {/* Round-key schedule panel. Cipher-agnostic: scans
                       `trace.finalAux` for `prefix.N` Uint8Array sequences
