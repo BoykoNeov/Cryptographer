@@ -58,6 +58,7 @@ import { BlockBadge } from "./components/BlockBadge";
 import { BytesView } from "./components/BytesView";
 import { GraphView } from "./components/GraphView";
 import { IvInput } from "./components/IvInput";
+import { KeyScheduleExplorer } from "./components/KeyScheduleExplorer";
 import { MatrixView } from "./components/MatrixView";
 import { ParamEditor } from "./components/ParamEditor";
 import { RoundKeyPanel } from "./components/RoundKeyPanel";
@@ -66,6 +67,7 @@ import { StepDescription } from "./components/StepDescription";
 import { StepList } from "./components/StepList";
 import { StepStrip } from "./components/StepStrip";
 import { TraceTimeline } from "./components/TraceTimeline";
+import { isKeyExpansionStepType } from "./key-schedule-sim/registry";
 import { clearDirty, setAutoRerun, setDirty, useAutoRerun, useDirty } from "./stores/auto-rerun";
 import {
   CIPHER_LABELS,
@@ -1185,8 +1187,21 @@ export const App = () => {
                       - both matrix       → MatrixView (today's path)
                       - both bytes        → BytesView (pad/unpad frames)
                       - mixed (boundary)  → side-by-side inline render so the
-                                            user can see the shape transition. */}
-                  <FrameStateView frame={frame()} previousRunFrame={previousRunFrame()} />
+                                            user can see the shape transition.
+
+                      EXCEPT for key-expansion frames: the executor only
+                      writes aux, so the default "before === after" matrix
+                      pair is uninformative. The KeyScheduleExplorer takes
+                      the slot instead and renders the algorithm's per-stage
+                      internal decomposition (Phase 2 of the pedagogy plan). */}
+                  <Show
+                    when={isKeyExpansionStepType(frame().stepType)}
+                    fallback={
+                      <FrameStateView frame={frame()} previousRunFrame={previousRunFrame()} />
+                    }
+                  >
+                    <KeyScheduleExplorer frame={frame()} />
+                  </Show>
 
                   {/* Human-readable explanation of what this step does. */}
                   <StepDescription frame={frame()} />
