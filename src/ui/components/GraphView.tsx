@@ -40,6 +40,7 @@ import { type ByteFormat, formatBytes } from "@/core/format";
 import {
   type CipherGraph,
   type ContainerNode,
+  type EdgeBundle,
   type GraphEdge,
   type GraphNode,
   type GraphWarning,
@@ -2024,6 +2025,35 @@ export const GraphView = () => {
   const bundledGraph = createMemo(() => bundleEdges(graph(), feedbackPredicate()));
 
   /**
+   * Two-pass paint partition of `bundledGraph().bundles`. Both arrays are
+   * recomputed only when `bundledGraph()` identity changes — a cheap
+   * single-pass split.
+   *
+   * **Why two passes:** SVG paints in document order, so the canvas
+   * body is laid out as `containers → edges → leaves` precisely so
+   * leaves cover the edge tails/heads that tuck under their box fills
+   * (clean arrowhead alignment). Feedback edges (cross-iteration aux —
+   * today only CBC's `cbc-snapshot → cbc-xor`, more arrive with OFB /
+   * CFB) are the one case where this hurts: a feedback edge has to
+   * arc backwards across the round body to reach its earlier
+   * consumer, and any unrelated node it crosses obscures it.
+   *
+   * Splitting the partition here keeps the 95%+ of bundles in their
+   * original position (preserving the tuck for forward edges) and lifts
+   * just the feedback bundles into a second `<For>` rendered AFTER the
+   * leaves. The arrowhead now lands ON TOP of the consumer leaf instead
+   * of tucking under; with `stroke-opacity: 0.55` + dashed (see
+   * `.graph-edge-feedback` in `app.css`) this reads as "subtle line
+   * overlapping the box", not "arrow stuck on the front face".
+   *
+   * Surfaced by manual smoke on AES-128 CBC 2026-05-18: feedback arrow
+   * passed behind `round.0.add-round-key` and reappeared at the
+   * `cbc-xor` consumer.
+   */
+  const nonFeedbackBundles = createMemo(() => bundledGraph().bundles.filter((b) => !b.isFeedback));
+  const feedbackBundles = createMemo(() => bundledGraph().bundles.filter((b) => b.isFeedback));
+
+  /**
    * Sources eligible for a row in the override panel: any id appearing in
    * `edge.from` for at least one aux edge in the collapsed graph. Sorted
    * by fanout descending so the high-fanout offenders surface first.
@@ -2926,6 +2956,118 @@ export const GraphView = () => {
     }
   };
 
+  /**
+   * Bundle → JSX adapter. Used by BOTH the pre-leaf `<For>` (non-feedback
+   * bundles) and the post-leaf `<For>` (feedback bundles). Extracted from
+   * the inline `<For>` callback so both passes share identical edge
+   * rendering — only their position in the SVG document order (and thus
+   * their z-stacking against leaves) differs.
+   *
+   * All `createMemo` calls below run inside the consuming `<For>`
+   * callback's reactive scope, so they remain fine-grained and re-track
+   * exactly the same dependencies as the pre-extraction inline form.
+   */
+  const renderBundle = (bundle: EdgeBundle) => {
+    const edge = bundle.representativeEdge;
+    const bundleCount = bundle.auxKeys.length;
+    const isBundled = bundleCount >= 2;
+    const fromBox = createMemo(() => layout().boxes.get(edge.from));
+    // Slice-2 follow-up: visually terminate replica→iterate-container aux
+    // edges at the iterate body's FIRST child, not at the iterate
+    // container itself. The edge data model is unchanged (`edge.to` still
+    // points at the iterate, so Slice 9's validator and Slice 4's
+    // inspector keep reading the right consumer); only the rendered
+    // arrowhead anchor shifts. For everything else this returns `edge.to`
+    // unchanged.
+    const toBox = createMemo(() => {
+      const targetId = visualEdgeTargetId(edge, nodesById(), containersById());
+      return layout().boxes.get(targetId);
+    });
+    // edgeKey format:
+    //   - singleton bundle (N=1) → existing
+    //     `${from}|${to}|${auxKey}|${kind}` so the inspector store
+    //     dispatches to the per-edge value lookup (zero regression on
+    //     every non-bundled spec).
+    //   - multi bundle (N≥2) → `bundle:${from}|${to}|${kind}|${isFeedback?1:0}`
+    //     so the inspector store dispatches to the bundle-summary lookup
+    //     (Slice C).
+    const eKey = isBundled
+      ? `bundle:${bundle.from}|${bundle.to}|${bundle.kind}|${bundle.isFeedback ? "1" : "0"}`
+      : encodeEdgeKey(edge);
+    // Port-spreading follow-up to Slice 7c (2026-05-16): for replica-
+    // sourced edges in a multi-source graph, shift the target attach
+    // point by one slot per globally-stable source row so a fan-IN of N
+    // replicas distributes across N points on the consumer's top edge
+    // instead of all converging at the center. PORT_GAP scales with
+    // LEAF_W so the spread tracks density (~13 px at normal, ~10 at
+    // compact, ~16 at comfortable); clamped to ≥6 so the minimum is
+    // still visually distinct at tight densities.
+    const targetXOffset = createMemo(() => {
+      const portGap = Math.max(6, Math.round(consts().LEAF_W / 10));
+      return consumerPortOffset(edge, portAssignment(), portGap);
+    });
+    // Same `consumerPortOffset` math, but on the y-axis for the
+    // horizontal regime (sources to the left / right of the consumer).
+    // EdgePath consumes this prop only when its regime branch picks
+    // horizontal; vertical-regime edges ignore it.
+    const targetYOffset = createMemo(() => {
+      const portGap = Math.max(4, Math.round(consts().LEAF_H / 4));
+      return consumerPortOffset(edge, portAssignment(), portGap);
+    });
+    // Straight-line + offset-start-point + start-dot (2026-05-16,
+    // replacement for the curved-edge prototype): row-k replica edges
+    // (k ≥ 1) get a horizontal shift to their SOURCE x so the arrow
+    // tail emerges from a non-centred point on the replica's bottom
+    // edge. Row 0 stays centred. Zero for non-replicas and single-
+    // source graphs.
+    const sourceXOffset = createMemo(() =>
+      replicaSourceXOffset(edge, replicaPlacement(), consts().REPLICA_SOURCE_X_STEP),
+    );
+    // Whether this edge originates from a fan-out replica. Gates the
+    // straight-line path variant + the start-dot render inside
+    // EdgePath.
+    const isReplicaEdgeMemo = createMemo(() => isReplicaEdge(edge, replicaPlacement()));
+    return (
+      <Show when={fromBox() && toBox()}>
+        <EdgePath
+          // biome-ignore lint/style/noNonNullAssertion: <Show> guard above
+          from={fromBox()!}
+          // biome-ignore lint/style/noNonNullAssertion: <Show> guard above
+          to={toBox()!}
+          // For singletons, `auxKey` is the one aux key; for bundles
+          // it's the first one (used in the tooltip; the bundle
+          // inspector exposes the full list).
+          auxKey={edge.auxKey}
+          kind={edge.kind}
+          // Cross-iteration aux feedback (e.g. CBC's
+          // cbc-snapshot → cbc-xor): renders dashed so the user can
+          // read "this is iteration-N → iteration-N+1, not
+          // within-iteration flow" at a glance. Also drives the
+          // partitioning above — feedback bundles paint AFTER leaves
+          // so they aren't hidden behind nodes they happen to cross.
+          isFeedback={bundle.isFeedback}
+          edgeKey={eKey}
+          // `selectedTarget()` dep ensures Solid re-runs this when the
+          // selection changes. For singleton bundles the `eKey` matches
+          // `encodeEdgeKey(edge)` so `isEdgeSelected` picks it up; for
+          // multi bundles the `eKey` carries the `bundle:` prefix so we
+          // dispatch through `isBundleSelected` instead.
+          isSelected={
+            selectedTarget() !== null && (isBundled ? isBundleSelected(eKey) : isEdgeSelected(eKey))
+          }
+          targetXOffset={targetXOffset()}
+          targetYOffset={targetYOffset()}
+          sourceXOffset={sourceXOffset()}
+          isReplicaEdge={isReplicaEdgeMemo()}
+          bundleCount={bundleCount}
+          // First few aux keys for the tooltip; the bundle inspector
+          // (Slice C) shows the full list.
+          bundleAuxKeysSample={bundle.auxKeys}
+        />
+      </Show>
+    );
+  };
+
   return (
     <div class="graph-view-layout" data-testid="graph-view-layout">
       {/* Slice 8 — step palette. Lives as a left sidebar inside the graph
@@ -3344,132 +3486,15 @@ export const GraphView = () => {
               one auxKey) render IDENTICALLY to the pre-bundle world; only
               multi-auxKey bundles (post-replication, post-collapse cases
               like AES-128 ECB key-expansion → collapsed iterate) collapse
-              into a single thicker arrow with a `×N` label. */}
-            <For each={bundledGraph().bundles}>
-              {(bundle) => {
-                const edge = bundle.representativeEdge;
-                const bundleCount = bundle.auxKeys.length;
-                const isBundled = bundleCount >= 2;
-                const fromBox = createMemo(() => layout().boxes.get(edge.from));
-                // Slice-2 follow-up: visually terminate replica→iterate-
-                // container aux edges at the iterate body's FIRST child,
-                // not at the iterate container itself. The edge data model
-                // is unchanged (`edge.to` still points at the iterate, so
-                // Slice 9's validator and Slice 4's inspector keep reading
-                // the right consumer); only the rendered arrowhead anchor
-                // shifts. For everything else this returns `edge.to`
-                // unchanged.
-                const toBox = createMemo(() => {
-                  const targetId = visualEdgeTargetId(edge, nodesById(), containersById());
-                  return layout().boxes.get(targetId);
-                });
-                // edgeKey format:
-                //   - singleton bundle (N=1) → existing
-                //     `${from}|${to}|${auxKey}|${kind}` so the inspector
-                //     store dispatches to the per-edge value lookup
-                //     (zero regression on every non-bundled spec).
-                //   - multi bundle (N≥2) → `bundle:${from}|${to}|${kind}
-                //     |${isFeedback?1:0}` so the inspector store
-                //     dispatches to the bundle-summary lookup (Slice C).
-                const eKey = isBundled
-                  ? `bundle:${bundle.from}|${bundle.to}|${bundle.kind}|${bundle.isFeedback ? "1" : "0"}`
-                  : encodeEdgeKey(edge);
-                // Port-spreading follow-up to Slice 7c (2026-05-16): for
-                // replica-sourced edges in a multi-source graph, shift the
-                // target attach point by one slot per globally-stable
-                // source row so a fan-IN of N replicas distributes across
-                // N points on the consumer's top edge instead of all
-                // converging at the center. Helper returns 0 for non-
-                // replica edges and for `total === 1` (single-source
-                // ciphers — the aux-only baseline today), so this is a
-                // no-op for every shipped spec unless the user opts more
-                // than one source into `always`. PORT_GAP scales with
-                // LEAF_W so the spread tracks density (~13 px at normal,
-                // ~10 at compact, ~16 at comfortable); clamped to ≥6 so
-                // the minimum is still visually distinct at tight
-                // densities.
-                const targetXOffset = createMemo(() => {
-                  const portGap = Math.max(6, Math.round(consts().LEAF_W / 10));
-                  return consumerPortOffset(edge, portAssignment(), portGap);
-                });
-                // Same `consumerPortOffset` math, but on the y-axis for the
-                // horizontal regime (sources to the left / right of the
-                // consumer). EdgePath consumes this prop only when its
-                // regime branch picks horizontal; vertical-regime edges
-                // ignore it. Distinct portGap because the box is much
-                // shorter than wide (LEAF_H = 28 vs LEAF_W = 132): reusing
-                // `LEAF_W / 10 ≈ 13 px` would exceed `LEAF_H / 2 = 14` and
-                // pin against the clamp inside EdgePath. `LEAF_H / 4 ≈ 7 px`
-                // at normal density gives ~2 slots of breathing room on
-                // leaf-sized consumers before the clamp kicks in; tall
-                // chip-row containers (header + multi-chip body) get more
-                // slots automatically because EdgePath clamps against the
-                // retargeted `to.h`. Fixed (not scaled to `to.h`) is
-                // deliberate — a predictable visual rule across consumers.
-                const targetYOffset = createMemo(() => {
-                  const portGap = Math.max(4, Math.round(consts().LEAF_H / 4));
-                  return consumerPortOffset(edge, portAssignment(), portGap);
-                });
-                // Straight-line + offset-start-point + start-dot
-                // (2026-05-16, replacement for the curved-edge
-                // prototype): row-k replica edges (k ≥ 1) get a
-                // horizontal shift to their SOURCE x so the arrow
-                // tail emerges from a non-centred point on the
-                // replica's bottom edge. Row 0 stays centred. Zero
-                // for non-replicas and single-source graphs.
-                const sourceXOffset = createMemo(() =>
-                  replicaSourceXOffset(edge, replicaPlacement(), consts().REPLICA_SOURCE_X_STEP),
-                );
-                // Whether this edge originates from a fan-out replica.
-                // Gates the straight-line path variant + the
-                // start-dot render inside EdgePath. Memoized so the
-                // boolean reference is stable per <For> iteration —
-                // small win, mostly for self-documentation.
-                const isReplicaEdgeMemo = createMemo(() => isReplicaEdge(edge, replicaPlacement()));
-                return (
-                  <Show when={fromBox() && toBox()}>
-                    <EdgePath
-                      // biome-ignore lint/style/noNonNullAssertion: <Show> guard above
-                      from={fromBox()!}
-                      // biome-ignore lint/style/noNonNullAssertion: <Show> guard above
-                      to={toBox()!}
-                      // For singletons, `auxKey` is the one aux key; for
-                      // bundles it's the first one (used in the tooltip;
-                      // the bundle inspector exposes the full list).
-                      auxKey={edge.auxKey}
-                      kind={edge.kind}
-                      // Cross-iteration aux feedback (e.g. CBC's
-                      // cbc-snapshot → cbc-xor): renders dashed so the
-                      // user can read "this is iteration-N → iteration-
-                      // N+1, not within-iteration flow" at a glance.
-                      isFeedback={bundle.isFeedback}
-                      edgeKey={eKey}
-                      // `selectedTarget()` dep ensures Solid re-runs this when
-                      // the selection changes. For singleton bundles the
-                      // `eKey` matches `encodeEdgeKey(edge)` so
-                      // `isEdgeSelected` picks it up; for multi bundles
-                      // the `eKey` carries the `bundle:` prefix so we
-                      // dispatch through `isBundleSelected` instead.
-                      // Combining the two predicates here keeps the
-                      // selection halo in sync with whichever target
-                      // shape the inspector store holds.
-                      isSelected={
-                        selectedTarget() !== null &&
-                        (isBundled ? isBundleSelected(eKey) : isEdgeSelected(eKey))
-                      }
-                      targetXOffset={targetXOffset()}
-                      targetYOffset={targetYOffset()}
-                      sourceXOffset={sourceXOffset()}
-                      isReplicaEdge={isReplicaEdgeMemo()}
-                      bundleCount={bundleCount}
-                      // First few aux keys for the tooltip; the bundle
-                      // inspector (Slice C) shows the full list.
-                      bundleAuxKeysSample={bundle.auxKeys}
-                    />
-                  </Show>
-                );
-              }}
-            </For>
+              into a single thicker arrow with a `×N` label.
+
+              Two-pass partition (2026-05-18): this `<For>` renders the
+              non-feedback bundles only — the feedback partition is
+              rendered AFTER the leaves below so cross-iteration arrows
+              (CBC's `cbc-snapshot → cbc-xor`) sit on top of any nodes
+              they happen to cross. See `nonFeedbackBundles` /
+              `feedbackBundles` memos for the rationale. */}
+            <For each={nonFeedbackBundles()}>{renderBundle}</For>
 
             {/* Leaves last so they sit on top. Root-level leaves (those with
               empty containerPath — e.g. AES's `key-expansion`,
@@ -3628,6 +3653,23 @@ export const GraphView = () => {
                 );
               }}
             </For>
+
+            {/* Feedback-edge pass (2026-05-18). Cross-iteration aux
+              arrows — today only CBC's `cbc-snapshot → cbc-xor`,
+              future OFB/CFB the same shape — paint here, AFTER the
+              leaves, so a feedback arc that crosses an unrelated node
+              (in CBC, `round.0.add-round-key`) doesn't disappear
+              behind the box fill. Shares `renderBundle` with the
+              first pass so the EdgePath / tooltip / selection-halo
+              behavior is identical; only the SVG document-order
+              position (and thus z-stacking against leaves) differs.
+
+              Tradeoff: the arrowhead tip now lands ON TOP of the
+              consumer leaf instead of tucking under. With dashed
+              stroke at 0.55 opacity the line reads as overlapping the
+              box rather than "stuck to" the front face — see
+              `.graph-edge-feedback` in `app.css`. */}
+            <For each={feedbackBundles()}>{renderBundle}</For>
 
             {/* Slice 5 — drop gutters. Rendered LAST so they sit on top
               of leaves and containers for native SVG hit-testing: a
