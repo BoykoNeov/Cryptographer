@@ -1,7 +1,13 @@
 import { type ByteFormat, formatByte } from "@/core/format";
-import type { MatrixState, State } from "@/core/types";
-import { For, Show } from "solid-js";
+import type { MatrixState, State, TraceFrame } from "@/core/types";
+import { For, Show, createMemo } from "solid-js";
+import { lookupProvenance } from "../provenance/registry";
 import { useByteFormat } from "../stores/format";
+import {
+  clearProvenanceHover,
+  setProvenanceHover,
+  useProvenanceHover,
+} from "../stores/provenance-hover";
 
 type Props = {
   before: MatrixState;
@@ -15,6 +21,16 @@ type Props = {
    * shaped states render as the third grid.
    */
   previousAfter?: State | null;
+  /**
+   * The trace frame this view is rendering. Optional — when provided,
+   * enables Phase-3 cell-level provenance hover: hovering an `after` cell
+   * lights up its source cells in `before` (and in the RoundKeyPanel, via
+   * the shared `useProvenanceHover` signal). Synthetic-MatrixState tests
+   * (round-key panel's TinyMatrix wrapper, palette previews, anywhere
+   * outside the linear-mode trace surface) omit the prop and get the
+   * pre-Phase-3 behavior with hover inert. App.tsx always passes it.
+   */
+  frame?: TraceFrame;
 };
 
 /**
@@ -68,16 +84,70 @@ export const MatrixView = (props: Props) => {
     return out;
   };
 
+  // ─── Phase-3 hover wiring ──────────────────────────────────────────
+  // Subscribe to the shared hover signal so the `before` grid lights up
+  // the provenance sources when the user hovers a cell in `after`. We
+  // gate by stepId so a stale hover from a prior frame can't paint cells
+  // here after the user scrubs to a different frame.
+  const hover = useProvenanceHover();
+  // Set of `before` cell indices to outline. Empty when no hover, or
+  // when the hovered frame doesn't match this view's frame, or when the
+  // step has no registered provenance fn.
+  const beforeHighlights = createMemo<ReadonlySet<number>>(() => {
+    const h = hover();
+    if (!h) return EMPTY_INDEX_SET;
+    if (props.frame === undefined) return EMPTY_INDEX_SET;
+    if (h.stepId !== props.frame.stepId) return EMPTY_INDEX_SET;
+    const out = new Set<number>();
+    for (const src of h.sources) {
+      if (src.kind === "before-cell") out.add(src.index);
+    }
+    return out;
+  });
+
+  // Per-cell hover handlers attached to the `after` grid. Cheap by
+  // construction — both `enter` and `leave` are stable references so
+  // the per-cell delegate doesn't allocate per render.
+  const handleAfterEnter = (afterCellIndex: number): void => {
+    const f = props.frame;
+    if (f === undefined) return;
+    const fn = lookupProvenance(f.stepType);
+    if (!fn) return;
+    const sources = fn(f, afterCellIndex);
+    if (sources.length === 0) return;
+    setProvenanceHover({ stepId: f.stepId, afterCellIndex, sources });
+  };
+  const handleAfterLeave = (): void => clearProvenanceHover();
+
   return (
     <div class="matrix-view">
-      <Grid title="before" cells={cells()} field="before" format={fmt()} />
-      <Grid title="after" cells={cells()} field="after" highlightChanged format={fmt()} />
+      <Grid
+        title="before"
+        cells={cells()}
+        field="before"
+        format={fmt()}
+        provenanceSourceIndices={beforeHighlights()}
+      />
+      <Grid
+        title="after"
+        cells={cells()}
+        field="after"
+        highlightChanged
+        format={fmt()}
+        onCellMouseEnter={handleAfterEnter}
+        onCellMouseLeave={handleAfterLeave}
+      />
       <Show when={safePreviousAfter()}>
         <Grid title="previous run" cells={cells()} field="prev" highlightDiffPrev format={fmt()} />
       </Show>
     </div>
   );
 };
+
+/** Allocation-free empty set; shared sentinel so the memo's "no hover"
+ *  branch never produces a new object. The set is mutated in the populated
+ *  branch — `EMPTY_INDEX_SET` itself is treated as immutable here. */
+const EMPTY_INDEX_SET: ReadonlySet<number> = new Set();
 
 const Grid = (props: {
   title: string;
@@ -94,33 +164,67 @@ const Grid = (props: {
   highlightChanged?: boolean;
   highlightDiffPrev?: boolean;
   format: ByteFormat;
+  /**
+   * Linear cell indices (row + 4*col) to outline with the
+   * `.provenance-source` class — populated only on the `before` grid
+   * when a sibling `after` cell is being hovered. Empty set otherwise.
+   * Per the declared precedence: when `.provenance-source` applies,
+   * it wins over `.changed` / `.diff-vs-prev`.
+   */
+  provenanceSourceIndices?: ReadonlySet<number>;
+  /** Hover handler attached to each cell in the `after` grid. Receives
+   *  the linear cell index (row + 4*col). */
+  onCellMouseEnter?: (afterCellIndex: number) => void;
+  onCellMouseLeave?: () => void;
 }) => (
   <div class="grid-block">
     <div class="grid-title">{props.title}</div>
     <div class="grid">
       <For each={props.cells}>
-        {(cell) => (
-          <div
-            class="cell"
-            classList={{
-              changed: !!props.highlightChanged && cell.changed,
-              "diff-vs-prev": !!props.highlightDiffPrev && cell.diffPrev,
-            }}
-            style={{ "grid-row": `${cell.row + 1}`, "grid-column": `${cell.col + 1}` }}
-          >
-            {/* Inline rather than via a const so `props.format` is read
-                inside JSX — that's what makes the cell text react to a
-                later setByteFormat() call. A captured const value isn't
-                reactive. The "prev" field can be null when overlay is on
-                but the prior trace lacked this stepId; render a blank
-                instead of a misleading "0". */}
-            {props.field === "prev"
-              ? cell.prev === null
-                ? ""
-                : formatByte(cell.prev, props.format)
-              : formatByte(cell[props.field] as number, props.format)}
-          </div>
-        )}
+        {(cell) => {
+          // `linearIndex` is stable per cell (the row/col never change
+          // inside one render's lifecycle), so binding it as a local
+          // const is safe. The PROVENANCE check, however, depends on
+          // a reactive prop (`provenanceSourceIndices`) — that read
+          // MUST stay inline in the classList so Solid re-evaluates it
+          // when the prop changes. See CLAUDE.md gotcha: "For callbacks
+          // aren't reactive scopes."
+          const linearIndex = cell.row + 4 * cell.col;
+          return (
+            <div
+              class="cell"
+              classList={{
+                // Precedence (per plan): provenance-source > diff-vs-prev > changed.
+                // Each predicate reads props inline so the classList object
+                // re-evaluates on hover / format / frame change.
+                "provenance-source": !!props.provenanceSourceIndices?.has(linearIndex),
+                changed:
+                  !props.provenanceSourceIndices?.has(linearIndex) &&
+                  !!props.highlightChanged &&
+                  cell.changed,
+                "diff-vs-prev":
+                  !props.provenanceSourceIndices?.has(linearIndex) &&
+                  !!props.highlightDiffPrev &&
+                  cell.diffPrev,
+              }}
+              style={{ "grid-row": `${cell.row + 1}`, "grid-column": `${cell.col + 1}` }}
+              onMouseEnter={() => props.onCellMouseEnter?.(linearIndex)}
+              onMouseLeave={() => props.onCellMouseLeave?.()}
+            >
+              {/* Inline rather than via a const so `props.format` is read
+                  inside JSX — that's what makes the cell text react to a
+                  later setByteFormat() call. A captured const value isn't
+                  reactive. The "prev" field can be null when overlay is on
+                  but the prior trace lacked this stepId; render a blank
+                  instead of a misleading "0". */}
+              {props.field === "prev"
+                ? cell.prev === null
+                  ? ""
+                  : formatByte(cell.prev, props.format)
+                : formatByte(cell[props.field] as number, props.format)}
+            </div>
+          );
+        }}
       </For>
     </div>
   </div>

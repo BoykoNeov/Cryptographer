@@ -68,6 +68,10 @@ import { StepList } from "./components/StepList";
 import { StepStrip } from "./components/StepStrip";
 import { TraceTimeline } from "./components/TraceTimeline";
 import { isKeyExpansionStepType } from "./key-schedule-sim/registry";
+// Side-effect import: registers the cell-level provenance fns into the
+// shared registry (Phase 3). Without this, hover handlers in MatrixView
+// would no-op for every step type. Idempotent — re-importing is a no-op.
+import "./provenance/index";
 import { clearDirty, setAutoRerun, setDirty, useAutoRerun, useDirty } from "./stores/auto-rerun";
 import {
   CIPHER_LABELS,
@@ -1319,6 +1323,7 @@ const FrameStateView = (props: {
         before={before() as MatrixState}
         after={after() as MatrixState}
         previousAfter={prevAfter()}
+        frame={props.frame}
       />
     </Show>
   );

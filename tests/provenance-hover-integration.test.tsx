@@ -1,0 +1,248 @@
+// @vitest-environment jsdom
+
+/**
+ * Hover-integration test for Phase 3 provenance overlay. Pins the
+ * MatrixView → provenance-hover-store → before-grid + RoundKeyPanel
+ * wiring end-to-end against a real AES-128 trace.
+ *
+ *   1. AES SubBytes: hover an `after` cell → same-index `before` cell
+ *      gets `.provenance-source`. Hover-leave clears the highlight.
+ *   2. AES ShiftRows: hover an `after` cell → SHIFTED-index `before`
+ *      cell gets the highlight (pins the param-driven formula via the
+ *      live executor's shifts [0,1,2,3]).
+ *   3. AES AddRoundKey: hover an `after` cell → same-index `before`
+ *      cell highlights AND same-index cell in the corresponding K_i
+ *      of RoundKeyPanel highlights.
+ *   4. Hover state is gated by frame.stepId — switching frames clears
+ *      stale highlights.
+ *   5. SubBytes hover: precedence — when both `.changed` and
+ *      `.provenance-source` would apply on the same `before` cell,
+ *      `.provenance-source` wins (the cell shouldn't carry both
+ *      classes simultaneously).
+ */
+
+import { aes128Spec } from "@/ciphers/aes-128";
+import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { runSpec } from "@/core/runtime";
+import { bytesFromHex } from "@/core/state/bytes";
+import { matrixFromBytes } from "@/core/state/matrix";
+import type { AuxValue, MatrixState, TraceFrame } from "@/core/types";
+import { MatrixView } from "@/ui/components/MatrixView";
+import { RoundKeyPanel } from "@/ui/components/RoundKeyPanel";
+import "@/ui/provenance/index"; // side-effect: registers fns
+import { __resetByteFormatForTests } from "@/ui/stores/format";
+import { __resetProvenanceHoverForTests } from "@/ui/stores/provenance-hover";
+import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
+import { cleanup, fireEvent, render } from "@solidjs/testing-library";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+const AES128_KEY = "000102030405060708090a0b0c0d0e0f";
+const AES128_PT = "00112233445566778899aabbccddeeff";
+
+const seedAes128Trace = () => {
+  const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
+    initialState: matrixFromBytes(bytesFromHex(AES128_PT)),
+    initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
+  });
+  setTrace(trace);
+  return trace;
+};
+
+const findFrameByStepType = (
+  trace: ReturnType<typeof seedAes128Trace>,
+  predicate: (t: string) => boolean,
+) => {
+  const f = trace.frames.find((fr) => predicate(fr.stepType));
+  if (!f) throw new Error("no matching frame");
+  return f;
+};
+
+const renderMatrixView = (frame: TraceFrame) =>
+  render(() => (
+    <MatrixView
+      before={frame.stateBefore as MatrixState}
+      after={frame.stateAfter as MatrixState}
+      frame={frame}
+    />
+  ));
+
+describe("Provenance hover — MatrixView before-grid receives", () => {
+  beforeEach(() => {
+    __resetByteFormatForTests();
+    __resetTraceForTests();
+    __resetProvenanceHoverForTests();
+  });
+  afterEach(() => {
+    cleanup();
+    __resetByteFormatForTests();
+    __resetTraceForTests();
+    __resetProvenanceHoverForTests();
+  });
+
+  it("AES SubBytes: hovering an `after` cell highlights the same-index `before` cell", () => {
+    const trace = seedAes128Trace();
+    const subBytesFrame = findFrameByStepType(trace, (t) => t === "generic.byte-substitution@1");
+    const { container } = renderMatrixView(subBytesFrame);
+    const grids = container.querySelectorAll(".grid-block");
+    expect(grids.length).toBe(2);
+    const beforeCells = grids[0]?.querySelectorAll(".cell") ?? [];
+    const afterCells = grids[1]?.querySelectorAll(".cell") ?? [];
+    expect(afterCells.length).toBe(16);
+
+    // Find the `after` cell at linear index 5 by data-grid position.
+    // The grid is row + 4*col; cell index 5 means row 1, col 1 (since
+    // 5 = 1 + 4*1). The DOM order from `For` matches the cells() array
+    // order which iterates col-then-row, so index 5 IS the 6th cell.
+    fireEvent.mouseEnter(afterCells[5] as Element);
+    // After hover, before-cells[5] should carry `.provenance-source`.
+    expect(beforeCells[5]?.classList.contains("provenance-source")).toBe(true);
+    // No other before-cells should carry it.
+    let othersWithClass = 0;
+    for (let i = 0; i < 16; i++) {
+      if (i !== 5 && beforeCells[i]?.classList.contains("provenance-source")) othersWithClass++;
+    }
+    expect(othersWithClass).toBe(0);
+
+    // mouseLeave clears the highlight.
+    fireEvent.mouseLeave(afterCells[5] as Element);
+    expect(beforeCells[5]?.classList.contains("provenance-source")).toBe(false);
+  });
+
+  it("AES ShiftRows: hovering an `after` cell highlights the SHIFTED-index `before` cell", () => {
+    const trace = seedAes128Trace();
+    const shiftRowsFrame = findFrameByStepType(trace, (t) => t === "generic.shift-rows@1");
+    const { container } = renderMatrixView(shiftRowsFrame);
+    const grids = container.querySelectorAll(".grid-block");
+    const beforeCells = grids[0]?.querySelectorAll(".cell") ?? [];
+    const afterCells = grids[1]?.querySelectorAll(".cell") ?? [];
+
+    // Hover after[1+4*0] = row 1, col 0. Forward shifts[1]=1 → source
+    // is row 1, col (0+1) mod 4 = 1, so before[1+4*1] = before[5].
+    fireEvent.mouseEnter(afterCells[1] as Element);
+    expect(beforeCells[5]?.classList.contains("provenance-source")).toBe(true);
+    expect(beforeCells[1]?.classList.contains("provenance-source")).toBe(false);
+  });
+
+  it("does NOT apply both `.changed` and `.provenance-source` to the same cell (precedence)", () => {
+    const trace = seedAes128Trace();
+    const subBytesFrame = findFrameByStepType(trace, (t) => t === "generic.byte-substitution@1");
+    const { container } = renderMatrixView(subBytesFrame);
+    const grids = container.querySelectorAll(".grid-block");
+    const afterCells = grids[1]?.querySelectorAll(".cell") ?? [];
+
+    // Hover the first `after` cell. SubBytes definitely changed the byte
+    // (master key is 00..0f; S[0x00] = 0x63 etc). So after[0] would have
+    // `.changed`. Provenance fn returns before-cell at the SAME index
+    // (index 0) — and after-cell 0 is what we hovered. The hovered cell
+    // itself is in the `after` grid, NOT the `before` grid — so the
+    // precedence collision can't fire on the after cell (it's only
+    // ever .changed, never .provenance-source by construction).
+    //
+    // But: the BEFORE cell at index 0 carries the `.provenance-source`
+    // when hovered. It does NOT have `.changed` (that's only the after
+    // grid). So this test instead pins the inverse claim: the before
+    // grid never sees `.changed`, and the after grid never sees
+    // `.provenance-source`. A future refactor that flipped the
+    // hover-target grid would surface here.
+    fireEvent.mouseEnter(afterCells[0] as Element);
+    // Hovered after cell never carries `.provenance-source` (it's the
+    // source GRID's target, not the receiver).
+    expect(afterCells[0]?.classList.contains("provenance-source")).toBe(false);
+    // The receiving before cell never carries `.changed` (which is an
+    // after-grid-only modifier).
+    const beforeCells = grids[0]?.querySelectorAll(".cell") ?? [];
+    expect(beforeCells[0]?.classList.contains("changed")).toBe(false);
+    expect(beforeCells[0]?.classList.contains("provenance-source")).toBe(true);
+  });
+});
+
+describe("Provenance hover — RoundKeyPanel highlights aux-cell sources", () => {
+  beforeEach(() => {
+    __resetByteFormatForTests();
+    __resetTraceForTests();
+    __resetProvenanceHoverForTests();
+  });
+  afterEach(() => {
+    cleanup();
+    __resetByteFormatForTests();
+    __resetTraceForTests();
+    __resetProvenanceHoverForTests();
+  });
+
+  it("AddRoundKey: hovering an `after` cell highlights the same-index cell of the consumed K_i", () => {
+    const trace = seedAes128Trace();
+    const addRoundKeyFrame = trace.frames.find(
+      (f) => f.stepType === "generic.add-round-key@1" && f.auxRead.has("roundKey.3"),
+    );
+    expect(addRoundKeyFrame).toBeDefined();
+    const frame = addRoundKeyFrame as TraceFrame;
+
+    // Render BOTH MatrixView (where hover originates) and RoundKeyPanel
+    // (where the aux-cell highlight lands). They share the
+    // provenance-hover signal.
+    const matrixDom = renderMatrixView(frame);
+    const panelDom = render(() => <RoundKeyPanel frame={frame} />);
+
+    const afterCells =
+      matrixDom.container.querySelectorAll(".grid-block")[1]?.querySelectorAll(".cell") ?? [];
+
+    // Hover after[7] — provenance points to before-cell[7] AND
+    // roundKey.3[7] (the aux-cell source).
+    fireEvent.mouseEnter(afterCells[7] as Element);
+
+    // Find K_3 cell in the round-key panel (its title is "roundKey.3")
+    // and check the tiny-cell at index 7 carries .provenance-source.
+    const k3 = Array.from(panelDom.container.querySelectorAll<HTMLElement>(".round-key-cell")).find(
+      (c) => c.getAttribute("title") === "roundKey.3",
+    );
+    expect(k3).toBeDefined();
+    const k3TinyCells = k3?.querySelectorAll(".tiny-cell") ?? [];
+    expect(k3TinyCells.length).toBe(16);
+    // Linear index 7 in column-major storage = row 3, col 1. The
+    // For loop in TinyMatrix iterates col-then-row, so DOM order index
+    // 7 = same linear index 7 by construction.
+    expect(k3TinyCells[7]?.classList.contains("provenance-source")).toBe(true);
+    // No other K_i lights up.
+    const k4 = Array.from(panelDom.container.querySelectorAll<HTMLElement>(".round-key-cell")).find(
+      (c) => c.getAttribute("title") === "roundKey.4",
+    );
+    expect(k4).toBeDefined();
+    const k4HasAny =
+      Array.from(k4?.querySelectorAll(".tiny-cell") ?? []).some((c) =>
+        c.classList.contains("provenance-source"),
+      ) ?? false;
+    expect(k4HasAny).toBe(false);
+  });
+
+  it("hover for a DIFFERENT frame clears the previous frame's highlights (stepId gate)", () => {
+    const trace = seedAes128Trace();
+    const subBytesFrame = findFrameByStepType(trace, (t) => t === "generic.byte-substitution@1");
+    const addRoundKeyFrame = trace.frames.find(
+      (f) => f.stepType === "generic.add-round-key@1" && f.auxRead.has("roundKey.3"),
+    );
+    expect(addRoundKeyFrame).toBeDefined();
+
+    // Render the round-key panel for the SUB-BYTES frame.
+    const panelDom = render(() => <RoundKeyPanel frame={subBytesFrame} />);
+
+    // Simulate hover on a DIFFERENT frame's matrix view — the
+    // round-key panel rendered against subBytesFrame should ignore
+    // hover sources keyed by the add-round-key frame's stepId.
+    const matrixDom = renderMatrixView(addRoundKeyFrame as TraceFrame);
+    const afterCells =
+      matrixDom.container.querySelectorAll(".grid-block")[1]?.querySelectorAll(".cell") ?? [];
+    fireEvent.mouseEnter(afterCells[0] as Element);
+
+    // The round-key panel's K_3 should NOT light up — its frame is
+    // the sub-bytes frame, but the hover's stepId is the add-round-key
+    // frame.
+    const k3 = Array.from(panelDom.container.querySelectorAll<HTMLElement>(".round-key-cell")).find(
+      (c) => c.getAttribute("title") === "roundKey.3",
+    );
+    const k3HasAny =
+      Array.from(k3?.querySelectorAll(".tiny-cell") ?? []).some((c) =>
+        c.classList.contains("provenance-source"),
+      ) ?? false;
+    expect(k3HasAny).toBe(false);
+  });
+});

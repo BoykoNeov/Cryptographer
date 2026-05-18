@@ -27,6 +27,7 @@ import { type ByteFormat, formatByte } from "@/core/format";
 import type { Aux, TraceFrame } from "@/core/types";
 import { For, Show, createMemo } from "solid-js";
 import { useByteFormat } from "../stores/format";
+import { useProvenanceHover } from "../stores/provenance-hover";
 import { useTraceFinalAux } from "../stores/trace";
 import { TinyMatrix } from "./TinyMatrix";
 
@@ -106,6 +107,11 @@ export const detectRoundKeySequences = (aux: Aux): RoundKeySequence[] => {
 export const RoundKeyPanel = (props: Props) => {
   const finalAux = useTraceFinalAux();
   const fmt = useByteFormat();
+  // Subscribe to the shared provenance-hover signal once. The memo below
+  // invokes the thunk to track invalidation; calling `useProvenanceHover()`
+  // inside the memo body would re-bind a fresh subscription every
+  // memo execution.
+  const hover = useProvenanceHover();
 
   // Detect qualifying sequences from the post-run aux map. Tracks the trace
   // version via `useTraceFinalAux`, so re-runs invalidate this memo cleanly.
@@ -125,16 +131,49 @@ export const RoundKeyPanel = (props: Props) => {
     return new Set(f.auxRead.keys());
   });
 
+  // Map of `${prefix}.${index}` → set of cell indices to outline as
+  // provenance sources. Built from the active hover's `aux-cell` sources;
+  // gated by stepId so a stale hover from a prior frame can't paint cells
+  // here after the user scrubs to a different frame.
+  const hoverHighlightsByAuxName = createMemo<ReadonlyMap<string, ReadonlySet<number>>>(() => {
+    const h = hover();
+    if (!h || !props.frame || h.stepId !== props.frame.stepId) {
+      return EMPTY_HIGHLIGHT_MAP;
+    }
+    const m = new Map<string, Set<number>>();
+    for (const src of h.sources) {
+      if (src.kind !== "aux-cell") continue;
+      let s = m.get(src.auxName);
+      if (s === undefined) {
+        s = new Set();
+        m.set(src.auxName, s);
+      }
+      s.add(src.index);
+    }
+    return m;
+  });
+
   return (
     <Show when={sequences().length > 0}>
       <section class="round-key-panel" aria-label="round-key schedule">
         <For each={sequences()}>
-          {(seq) => <SequenceRibbon seq={seq} consumedAuxNames={consumedAuxNames()} fmt={fmt()} />}
+          {(seq) => (
+            <SequenceRibbon
+              seq={seq}
+              consumedAuxNames={consumedAuxNames()}
+              fmt={fmt()}
+              hoverHighlightsByAuxName={hoverHighlightsByAuxName()}
+            />
+          )}
         </For>
       </section>
     </Show>
   );
 };
+
+/** Allocation-free empty highlight map; shared sentinel so the "no hover"
+ *  branch never produces a new object. */
+const EMPTY_HIGHLIGHT_MAP: ReadonlyMap<string, ReadonlySet<number>> = new Map();
 
 /**
  * One ribbon = one prefix group. Header names the prefix and the
@@ -145,6 +184,7 @@ const SequenceRibbon = (props: {
   seq: RoundKeySequence;
   consumedAuxNames: ReadonlySet<string>;
   fmt: ByteFormat;
+  hoverHighlightsByAuxName: ReadonlyMap<string, ReadonlySet<number>>;
 }) => (
   <div class="round-key-ribbon">
     <div class="round-key-ribbon-header">
@@ -156,12 +196,19 @@ const SequenceRibbon = (props: {
     <div class="round-key-ribbon-strip">
       <For each={props.seq.entries}>
         {(entry) => (
+          // Read `hoverHighlightsByAuxName.get(...)` inline so Solid
+          // re-evaluates as the active hover changes. CLAUDE.md gotcha:
+          // For callbacks aren't reactive scopes; a captured const here
+          // would freeze at first render.
           <RoundKeyCell
             prefix={props.seq.prefix}
             entry={entry}
             isCurrent={props.consumedAuxNames.has(`${props.seq.prefix}.${entry.index}`)}
             byteLength={props.seq.byteLength}
             fmt={props.fmt}
+            provenanceHighlights={props.hoverHighlightsByAuxName.get(
+              `${props.seq.prefix}.${entry.index}`,
+            )}
           />
         )}
       </For>
@@ -187,6 +234,14 @@ const RoundKeyCell = (props: {
   isCurrent: boolean;
   byteLength: number;
   fmt: ByteFormat;
+  /**
+   * Linear cell indices to outline inside THIS K_i's TinyMatrix (or
+   * strip in the fallback path). Required-but-nullable rather than
+   * optional so callers can pass the result of `Map.get()` directly
+   * without an exactOptionalPropertyTypes-driven spread. The
+   * "no hover" case is `undefined`.
+   */
+  provenanceHighlights: ReadonlySet<number> | undefined;
 }) => (
   <div
     class="round-key-cell"
@@ -201,15 +256,27 @@ const RoundKeyCell = (props: {
       fallback={
         <div class="round-key-cell-strip">
           <For each={Array.from(props.entry.bytes)}>
-            {(b) => <div class="round-key-cell-byte">{formatByte(b, props.fmt)}</div>}
+            {(b, i) => (
+              <div
+                class="round-key-cell-byte"
+                classList={{ "provenance-source": !!props.provenanceHighlights?.has(i()) }}
+              >
+                {formatByte(b, props.fmt)}
+              </div>
+            )}
           </For>
         </div>
       }
     >
       {/* Wrap the raw 16-byte buffer as a MatrixState for TinyMatrix.
           Cheap synthesis — no copy, just a discriminant + the same buffer
-          aliased under the `bytes` field. */}
-      <TinyMatrix state={{ shape: "matrix4x4-bytes", bytes: props.entry.bytes }} />
+          aliased under the `bytes` field. TinyMatrix's `provenanceHighlights`
+          is typed `ReadonlySet<number> | undefined` so we can pass the
+          map-lookup result through directly without a conditional wrapper. */}
+      <TinyMatrix
+        state={{ shape: "matrix4x4-bytes", bytes: props.entry.bytes }}
+        provenanceHighlights={props.provenanceHighlights}
+      />
     </Show>
   </div>
 );
