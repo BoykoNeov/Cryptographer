@@ -247,6 +247,43 @@ export const App = () => {
   installKeyboardShortcuts();
 
   /**
+   * Wrap a state-mutating `onInput` body so the page's vertical scroll
+   * doesn't jump. Background: when an `<input>` is focused and the user
+   * scrolls the page so the input is off-screen, then pastes (or in some
+   * cases types) into it, browsers will scroll the focused input back
+   * INTO VIEW so the caret stays visible. For the top-of-page key /
+   * plaintext fields, that scroll yanks the user back to the top —
+   * confirmed empirically on 2026-05-18 via a `scroll` event log
+   * (`scrollY: 1843 → 145` in one event after a 32-char hex paste).
+   *
+   * S-box / matrix-cell inputs don't surface the same bug: the user
+   * edits them while looking at them, so the scroll-into-view is a no-op.
+   *
+   * The fix saves `window.scrollY` before the value update and restores
+   * it on the next animation frame — late enough that the browser's own
+   * caret-into-view scroll has fired, early enough that the user doesn't
+   * see a flash. Only restores when scrollY actually changed, so the
+   * normal "type at top of page" case stays a no-op. Per-event scope:
+   * no global listeners, no module state, no test surface to maintain.
+   */
+  const preserveScroll = (fn: () => void): void => {
+    if (typeof window === "undefined") {
+      fn();
+      return;
+    }
+    const previousScrollY = window.scrollY;
+    fn();
+    window.requestAnimationFrame(() => {
+      if (window.scrollY !== previousScrollY) {
+        // Two-arg form is the synchronous one; ScrollToOptions with
+        // `behavior: "instant"` would also work but isn't universally
+        // typed in lib.dom.d.ts.
+        window.scrollTo(window.scrollX, previousScrollY);
+      }
+    });
+  };
+
+  /**
    * Run the current spec with the current inputs, push the resulting trace
    * into the trace store, and update error state. Doesn't throw — errors
    * are surfaced via setError so the UI can render them inline.
@@ -974,7 +1011,7 @@ export const App = () => {
           {inputLabel()} ({fmt()})
           <input
             value={inputText()}
-            onInput={(e) => setInputText(e.currentTarget.value)}
+            onInput={(e) => preserveScroll(() => setInputText(e.currentTarget.value))}
             spellcheck={false}
           />
         </label>
@@ -982,7 +1019,7 @@ export const App = () => {
           key ({fmt()})
           <input
             value={keyText()}
-            onInput={(e) => setKeyText(e.currentTarget.value)}
+            onInput={(e) => preserveScroll(() => setKeyText(e.currentTarget.value))}
             spellcheck={false}
           />
         </label>
