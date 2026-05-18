@@ -22,9 +22,15 @@
  */
 
 import { type ByteFormat, formatByte } from "@/core/format";
-import type { BytesState, State } from "@/core/types";
+import type { BytesState, State, TraceFrame } from "@/core/types";
 import { For, Show, createMemo } from "solid-js";
+import { lookupProvenance } from "../provenance/registry";
 import { useByteFormat } from "../stores/format";
+import {
+  clearProvenanceHover,
+  setProvenanceHover,
+  useProvenanceHover,
+} from "../stores/provenance-hover";
 
 type Props = {
   before: BytesState;
@@ -37,6 +43,17 @@ type Props = {
    * quietly suppress the overlay rather than crashing on byte reads.
    */
   previousAfter?: State | null;
+  /**
+   * The trace frame this view is rendering. Optional — when provided,
+   * enables Phase-3 cell-level provenance hover for BytesState frames
+   * (Serpent's per-step transformations). Same wiring as MatrixView's
+   * `frame` prop: hovering an `after` cell sets the shared
+   * `useProvenanceHover` signal, the `before` row reads it back to
+   * outline the source cell(s). Frames without a registered provenance
+   * fn (padding, aux primitives, boundary steps — all on the
+   * `PROVENANCE_NO_OP_ALLOWLIST`) get no hover effect.
+   */
+  frame?: TraceFrame;
 };
 
 /**
@@ -52,6 +69,35 @@ const BLOCK_BYTES = 16;
 export const BytesView = (props: Props) => {
   const fmt = useByteFormat();
 
+  // ─── Phase-3 hover wiring (BytesView counterpart of MatrixView) ────
+  // The `after` row attaches per-cell mouseEnter handlers; the `before`
+  // row reads the shared hover signal and outlines provenance sources.
+  // Gated by stepId so a stale hover from a prior frame can't paint
+  // cells here after the user scrubs.
+  const hover = useProvenanceHover();
+  const beforeHighlights = createMemo<ReadonlySet<number>>(() => {
+    const h = hover();
+    if (!h) return EMPTY_BYTES_INDEX_SET;
+    if (props.frame === undefined) return EMPTY_BYTES_INDEX_SET;
+    if (h.stepId !== props.frame.stepId) return EMPTY_BYTES_INDEX_SET;
+    const out = new Set<number>();
+    for (const src of h.sources) {
+      if (src.kind === "before-cell") out.add(src.index);
+    }
+    return out;
+  });
+
+  const handleAfterEnter = (afterCellIndex: number): void => {
+    const f = props.frame;
+    if (f === undefined) return;
+    const fn = lookupProvenance(f.stepType);
+    if (!fn) return;
+    const sources = fn(f, afterCellIndex);
+    if (sources.length === 0) return;
+    setProvenanceHover({ stepId: f.stepId, afterCellIndex, sources });
+  };
+  const handleAfterLeave = (): void => clearProvenanceHover();
+
   return (
     <div class="bytes-view">
       {/* Before row: passes after as compareTo so length-delta missing
@@ -59,13 +105,21 @@ export const BytesView = (props: Props) => {
           before row makes the expansion visible by ghosting the extra
           positions rather than just being shorter. No `highlightChanged`
           flag because the before row is the baseline. */}
-      <Row title="before" bytes={props.before.bytes} format={fmt()} compareTo={props.after.bytes} />
+      <Row
+        title="before"
+        bytes={props.before.bytes}
+        format={fmt()}
+        compareTo={props.after.bytes}
+        provenanceSourceIndices={beforeHighlights()}
+      />
       <Row
         title="after"
         bytes={props.after.bytes}
         format={fmt()}
         compareTo={props.before.bytes}
         highlightChanged
+        onCellMouseEnter={handleAfterEnter}
+        onCellMouseLeave={handleAfterLeave}
       />
       <Show when={props.previousAfter && props.previousAfter.shape === "bytes"}>
         {(_) => {
@@ -94,6 +148,10 @@ export const BytesView = (props: Props) => {
  * `highlightChanged` / `highlightDiffPrev` flags. */
 type Cell = { index: number; byte: number; flagged: boolean; missing: boolean };
 
+/** Allocation-free empty set; shared sentinel so the memo's "no hover"
+ *  branch never produces a new object. */
+const EMPTY_BYTES_INDEX_SET: ReadonlySet<number> = new Set();
+
 const Row = (props: {
   title: string;
   bytes: Uint8Array;
@@ -108,6 +166,16 @@ const Row = (props: {
   compareTo?: Uint8Array;
   highlightChanged?: boolean;
   highlightDiffPrev?: boolean;
+  /**
+   * Phase-3 hover support. `provenanceSourceIndices` populates only on the
+   * `before` row when a sibling `after` cell is being hovered; per the
+   * declared precedence, `.provenance-source` wins over `.changed` /
+   * `.diff-vs-prev`. `onCellMouseEnter` / `onCellMouseLeave` attach to
+   * the `after` row's cells.
+   */
+  provenanceSourceIndices?: ReadonlySet<number>;
+  onCellMouseEnter?: (cellIndex: number) => void;
+  onCellMouseLeave?: () => void;
 }) => {
   // Materialize cell descriptors once per render so the For loop's keyed
   // reactivity stays cheap. The byte format is read inside JSX (not here)
@@ -160,11 +228,23 @@ const Row = (props: {
     <div
       class="bytes-cell"
       classList={{
-        changed: !!props.highlightChanged && cell.flagged,
-        "diff-vs-prev": !!props.highlightDiffPrev && cell.flagged,
+        // Precedence (per plan): provenance-source > diff-vs-prev > changed.
+        // Inline prop reads so each predicate re-evaluates reactively
+        // (For-callback const-capture would freeze the value).
+        "provenance-source": !!props.provenanceSourceIndices?.has(cell.index),
+        changed:
+          !props.provenanceSourceIndices?.has(cell.index) &&
+          !!props.highlightChanged &&
+          cell.flagged,
+        "diff-vs-prev":
+          !props.provenanceSourceIndices?.has(cell.index) &&
+          !!props.highlightDiffPrev &&
+          cell.flagged,
         "bytes-cell-missing": cell.missing,
       }}
       title={`index ${cell.index}`}
+      onMouseEnter={() => !cell.missing && props.onCellMouseEnter?.(cell.index)}
+      onMouseLeave={() => props.onCellMouseLeave?.()}
     >
       {/* Inline so a format toggle re-renders. Missing cells (this
           row is shorter than the compare row) render a dim dash. */}

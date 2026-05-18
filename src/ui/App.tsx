@@ -1315,6 +1315,7 @@ const FrameStateView = (props: {
             before={before() as BytesState}
             after={after() as BytesState}
             previousAfter={prevAfter()}
+            frame={props.frame}
           />
         </Show>
       }

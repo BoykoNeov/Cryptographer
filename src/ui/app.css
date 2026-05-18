@@ -1506,7 +1506,8 @@ button:disabled {
    it pop without competing with the persistent state-change colors. */
 .cell.provenance-source,
 .tiny-cell.provenance-source,
-.round-key-cell-byte.provenance-source {
+.round-key-cell-byte.provenance-source,
+.bytes-cell.provenance-source {
   outline: 2px solid var(--accent-success);
   outline-offset: -2px;
   background: color-mix(in srgb, var(--accent-success) 22%, var(--bg-elev-2));

@@ -23,10 +23,12 @@
 
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { serpent128Spec } from "@/ciphers/serpent-128";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex } from "@/core/state/bytes";
+import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
-import type { AuxValue, MatrixState, TraceFrame } from "@/core/types";
+import type { AuxValue, BytesState, MatrixState, TraceFrame } from "@/core/types";
+import { BytesView } from "@/ui/components/BytesView";
 import { MatrixView } from "@/ui/components/MatrixView";
 import { RoundKeyPanel } from "@/ui/components/RoundKeyPanel";
 import "@/ui/provenance/index"; // side-effect: registers fns
@@ -212,6 +214,97 @@ describe("Provenance hover — RoundKeyPanel highlights aux-cell sources", () =>
         c.classList.contains("provenance-source"),
       ) ?? false;
     expect(k4HasAny).toBe(false);
+  });
+
+  // ─── Serpent BytesView path ────────────────────────────────────────
+  // Phase 3 follow-up: Serpent's per-step transformations render via
+  // BytesView. Pins that the BytesView wiring fires the registered
+  // Serpent provenance fns end-to-end.
+
+  it("Serpent SubBytes (BytesView): hovering an `after` cell highlights the same-index `before` cell", () => {
+    const trace = runSpec(serpent128Spec, buildDefaultRegistry(), {
+      initialState: makeBytesState(bytesFromHex("00112233445566778899aabbccddeeff")),
+      initialAux: new Map<string, AuxValue>([
+        ["key", bytesFromHex("00112233445566778899aabbccddeeff")],
+      ]),
+    });
+    setTrace(trace);
+    const subBytesFrame = trace.frames.find((f) => f.stepType === "serpent.sub-bytes@1");
+    expect(subBytesFrame).toBeDefined();
+    const frame = subBytesFrame as TraceFrame;
+
+    const { container } = render(() => (
+      <BytesView
+        before={frame.stateBefore as BytesState}
+        after={frame.stateAfter as BytesState}
+        frame={frame}
+      />
+    ));
+    // Two rows: before (index 0) and after (index 1).
+    const rows = container.querySelectorAll(".bytes-row-block");
+    expect(rows.length).toBe(2);
+    const beforeCells = rows[0]?.querySelectorAll(".bytes-cell") ?? [];
+    const afterCells = rows[1]?.querySelectorAll(".bytes-cell") ?? [];
+    expect(afterCells.length).toBe(16);
+
+    // Hover after-cell index 9. SubBytes provenance is same-position
+    // → before-cell 9 should outline.
+    fireEvent.mouseEnter(afterCells[9] as Element);
+    expect(beforeCells[9]?.classList.contains("provenance-source")).toBe(true);
+    // No other before cells light up.
+    let othersWithClass = 0;
+    for (let i = 0; i < 16; i++) {
+      if (i !== 9 && beforeCells[i]?.classList.contains("provenance-source")) othersWithClass++;
+    }
+    expect(othersWithClass).toBe(0);
+
+    fireEvent.mouseLeave(afterCells[9] as Element);
+    expect(beforeCells[9]?.classList.contains("provenance-source")).toBe(false);
+  });
+
+  it("Serpent AddRoundKey (BytesView): hover highlights before-cell AND consumed K_i cell in RoundKeyPanel", () => {
+    const trace = runSpec(serpent128Spec, buildDefaultRegistry(), {
+      initialState: makeBytesState(bytesFromHex("00112233445566778899aabbccddeeff")),
+      initialAux: new Map<string, AuxValue>([
+        ["key", bytesFromHex("00112233445566778899aabbccddeeff")],
+      ]),
+    });
+    setTrace(trace);
+    // Serpent's first AddRoundKey reads `roundKey.0` (K_0 → initial
+    // whitening before round 0's S-box pass).
+    const addRoundKeyFrame = trace.frames.find(
+      (f) => f.stepType === "serpent.add-round-key@1" && f.auxRead.has("roundKey.0"),
+    );
+    expect(addRoundKeyFrame).toBeDefined();
+    const frame = addRoundKeyFrame as TraceFrame;
+
+    const bytesDom = render(() => (
+      <BytesView
+        before={frame.stateBefore as BytesState}
+        after={frame.stateAfter as BytesState}
+        frame={frame}
+      />
+    ));
+    const panelDom = render(() => <RoundKeyPanel frame={frame} />);
+
+    const afterCells =
+      bytesDom.container.querySelectorAll(".bytes-row-block")[1]?.querySelectorAll(".bytes-cell") ??
+      [];
+
+    fireEvent.mouseEnter(afterCells[5] as Element);
+    // Before-cell at index 5 lights up.
+    const beforeCells =
+      bytesDom.container.querySelectorAll(".bytes-row-block")[0]?.querySelectorAll(".bytes-cell") ??
+      [];
+    expect(beforeCells[5]?.classList.contains("provenance-source")).toBe(true);
+    // K_0 cell in the panel: linear index 5 highlights.
+    const k0 = Array.from(panelDom.container.querySelectorAll<HTMLElement>(".round-key-cell")).find(
+      (c) => c.getAttribute("title") === "roundKey.0",
+    );
+    expect(k0).toBeDefined();
+    const k0TinyCells = k0?.querySelectorAll(".tiny-cell") ?? [];
+    expect(k0TinyCells.length).toBe(16);
+    expect(k0TinyCells[5]?.classList.contains("provenance-source")).toBe(true);
   });
 
   it("hover for a DIFFERENT frame clears the previous frame's highlights (stepId gate)", () => {
