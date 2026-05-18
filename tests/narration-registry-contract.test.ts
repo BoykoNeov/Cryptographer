@@ -91,6 +91,35 @@ describe("narration-registry coverage contract", () => {
     expect(hasNarrationFn("speck.round-inverse@1")).toBe(true);
   });
 
+  it("registers fns for the 6 padding step types (Phase 3)", () => {
+    expect(hasNarrationFn("generic.pkcs7-pad@1")).toBe(true);
+    expect(hasNarrationFn("generic.pkcs7-unpad@1")).toBe(true);
+    expect(hasNarrationFn("generic.zero-pad@1")).toBe(true);
+    expect(hasNarrationFn("generic.zero-unpad@1")).toBe(true);
+    expect(hasNarrationFn("generic.iso7816-4-pad@1")).toBe(true);
+    expect(hasNarrationFn("generic.iso7816-4-unpad@1")).toBe(true);
+  });
+
+  it("registers fns for the 5 boundary step types (Phase 3)", () => {
+    expect(hasNarrationFn("generic.load-block@1")).toBe(true);
+    expect(hasNarrationFn("generic.store-block@1")).toBe(true);
+    expect(hasNarrationFn("generic.split-blocks@1")).toBe(true);
+    expect(hasNarrationFn("generic.concat-blocks@1")).toBe(true);
+    expect(hasNarrationFn("generic.compute-block-count@1")).toBe(true);
+  });
+
+  it("registers fns for the 6 aux primitive step types (Phase 3)", () => {
+    // Note: 5 of these declare `input: "any"` so they wouldn't be caught
+    // by the cell-shape coverage walk above. Explicit per-step assertions
+    // are the safety net — without them a silent omission could survive.
+    expect(hasNarrationFn("generic.aux-load@1")).toBe(true);
+    expect(hasNarrationFn("generic.aux-xor@1")).toBe(true);
+    expect(hasNarrationFn("generic.aux-copy@1")).toBe(true);
+    expect(hasNarrationFn("generic.iv-load@1")).toBe(true);
+    expect(hasNarrationFn("generic.xor-aux-into-state@1")).toBe(true);
+    expect(hasNarrationFn("generic.state-to-aux@1")).toBe(true);
+  });
+
   it("allowlists key-expansion step types (covered by KeyScheduleExplorer)", () => {
     expect(NARRATION_NO_OP_ALLOWLIST.has("aes.key-expansion@1")).toBe(true);
     expect(NARRATION_NO_OP_ALLOWLIST.has("aes.key-expansion@2")).toBe(true);
@@ -106,5 +135,13 @@ describe("narration-registry coverage contract", () => {
     expect(NARRATION_NO_OP_ALLOWLIST.has("serpent.linear-transform@1")).toBe(true);
     expect(NARRATION_NO_OP_ALLOWLIST.has("serpent.inv-linear-transform@1")).toBe(true);
     expect(NARRATION_NO_OP_ALLOWLIST.has("serpent.bit-permutation@1")).toBe(false);
+  });
+
+  it("allowlist is at its irreducible Phase-3 size (4 key-expansion + 2 bit-level linear = 6)", () => {
+    // Pins the final landing place: Phase 3 brings the no-op list down
+    // to the entries that have a structural reason to opt out of byte-
+    // level narration. Any regression that re-adds a step type (instead
+    // of registering a narrator for it) trips this assertion.
+    expect(NARRATION_NO_OP_ALLOWLIST.size).toBe(6);
   });
 });

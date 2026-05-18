@@ -7,15 +7,19 @@
  * Pattern mirrors `src/ui/provenance/index.ts`. Idempotent: re-importing
  * after `__resetNarrationForTests` re-runs initialization cleanly.
  *
- * Coverage after Phase 2 (cross-checked by
+ * Coverage after Phase 3 (cross-checked by
  * `tests/narration-registry-contract.test.ts`):
- *   - AES round body: SubBytes, ShiftRows, MixColumns, AddRoundKey
- *   - Serpent byte-level + bit-permutation: SubBytes, AddRoundKey,
+ *   - AES round body (Phase 1): SubBytes, ShiftRows, MixColumns, AddRoundKey
+ *   - Serpent byte-level + bit-permutation (Phase 2): SubBytes, AddRoundKey,
  *     Bit-Permutation (IP / FP)
- *   - Speck: Round (forward), Round-inverse
- * Phase 3 adds padding + boundary + aux primitives. Remaining shipped
- * matrix / bytes step types live on `NARRATION_NO_OP_ALLOWLIST` with
- * reasons (key-expansion + the 2 bit-level Serpent linear transforms).
+ *   - Speck (Phase 2): Round (forward), Round-inverse
+ *   - Padding (Phase 3): pkcs7 pad/unpad, zero pad/unpad, iso7816-4 pad/unpad
+ *   - Boundary (Phase 3): load-block, store-block, split-blocks,
+ *     concat-blocks, compute-block-count
+ *   - Aux (Phase 3): aux-load, aux-xor, aux-copy, iv-load,
+ *     xor-aux-into-state, state-to-aux
+ * Allowlist shrinks to the irreducible 6 entries (4 key-expansion +
+ * 2 bit-level Serpent linear transforms).
  */
 
 import {
@@ -24,6 +28,29 @@ import {
   aesShiftRowsNarration,
   aesSubBytesNarration,
 } from "./aes";
+import {
+  auxCopyNarration,
+  auxLoadNarration,
+  auxXorNarration,
+  ivLoadNarration,
+  stateToAuxNarration,
+  xorAuxIntoStateNarration,
+} from "./aux-primitives";
+import {
+  computeBlockCountNarration,
+  concatBlocksNarration,
+  loadBlockNarration,
+  splitBlocksNarration,
+  storeBlockNarration,
+} from "./boundary";
+import {
+  iso78164PadNarration,
+  iso78164UnpadNarration,
+  pkcs7PadNarration,
+  pkcs7UnpadNarration,
+  zeroPadNarration,
+  zeroUnpadNarration,
+} from "./padding";
 import { __resetNarrationForTests, registerNarration } from "./registry";
 import {
   serpentAddRoundKeyNarration,
@@ -52,6 +79,24 @@ export const initNarrationRegistry = (): void => {
   registerNarration("serpent.bit-permutation@1", serpentBitPermutationNarration);
   registerNarration("speck.round@1", speckRoundNarration);
   registerNarration("speck.round-inverse@1", speckRoundInverseNarration);
+  // Phase 3 — padding + boundary + aux primitives.
+  registerNarration("generic.pkcs7-pad@1", pkcs7PadNarration);
+  registerNarration("generic.pkcs7-unpad@1", pkcs7UnpadNarration);
+  registerNarration("generic.zero-pad@1", zeroPadNarration);
+  registerNarration("generic.zero-unpad@1", zeroUnpadNarration);
+  registerNarration("generic.iso7816-4-pad@1", iso78164PadNarration);
+  registerNarration("generic.iso7816-4-unpad@1", iso78164UnpadNarration);
+  registerNarration("generic.load-block@1", loadBlockNarration);
+  registerNarration("generic.store-block@1", storeBlockNarration);
+  registerNarration("generic.split-blocks@1", splitBlocksNarration);
+  registerNarration("generic.concat-blocks@1", concatBlocksNarration);
+  registerNarration("generic.compute-block-count@1", computeBlockCountNarration);
+  registerNarration("generic.aux-load@1", auxLoadNarration);
+  registerNarration("generic.aux-xor@1", auxXorNarration);
+  registerNarration("generic.aux-copy@1", auxCopyNarration);
+  registerNarration("generic.iv-load@1", ivLoadNarration);
+  registerNarration("generic.xor-aux-into-state@1", xorAuxIntoStateNarration);
+  registerNarration("generic.state-to-aux@1", stateToAuxNarration);
   initialized = true;
 };
 

@@ -22,16 +22,20 @@
  * shapes can register its own narration fn without touching the core
  * step-registration path.
  *
- * Coverage after Phase 2:
+ * Coverage after Phase 3:
  *   - AES round body: SubBytes, ShiftRows, MixColumns, AddRoundKey.
  *   - Serpent byte-level + bit-permutation: SubBytes, AddRoundKey,
  *     Bit-Permutation (IP / FP) — the bit-permutation narrator uses
  *     the two-tier "structural overview + per-output-byte drill"
  *     pattern documented in `feedback_bit_level_narration_pattern.md`.
  *   - Speck: Round (forward), Round-inverse.
- * Phase 3 adds padding + boundary + aux primitives. The
- * `NARRATION_NO_OP_ALLOWLIST` shrinks across phases — see the
- * doc-string on the constant below.
+ *   - Padding: pkcs7 pad/unpad, zero pad/unpad, iso7816-4 pad/unpad.
+ *   - Boundary: load-block, store-block, split-blocks, concat-blocks,
+ *     compute-block-count.
+ *   - Aux primitives: aux-load, aux-xor, aux-copy, iv-load,
+ *     xor-aux-into-state, state-to-aux.
+ * The `NARRATION_NO_OP_ALLOWLIST` is now at its irreducible size
+ * (6 entries — see the doc-string on the constant below).
  *
  * A contract test (`tests/narration-registry-contract.test.ts`) walks
  * the core registry and asserts every shipped matrix-shape AND
@@ -132,11 +136,12 @@ export const lookupNarration = (stepType: string): NarrationFn | null =>
 export const hasNarrationFn = (stepType: string): boolean => REGISTRY.has(stepType);
 
 /**
- * Step types that *intentionally* have no narration fn. Phase 1 shipped
- * with a conservative 28-entry list; Phase 2 removes the 5 Serpent +
- * Speck entries and leaves 23 to shrink across Phase 3. The
- * irreducible-after-Phase-3 set is 6 entries (4 key-expansion +
- * 2 bit-level Serpent linear transforms).
+ * Step types that *intentionally* have no narration fn. After Phase 3 the
+ * list is at its irreducible 6 entries — 4 key-expansion step types
+ * (covered by `<KeyScheduleExplorer />` with much richer per-stage
+ * narration than the unit-list this registry produces) plus the
+ * 2 bit-level Serpent linear transforms (where byte-level prose would
+ * mislead — see below).
  *
  * Reasons for the irreducible set:
  *
@@ -175,24 +180,6 @@ export const NARRATION_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
   // (Bit-permutation is honest at byte granularity — narrated in Phase 2.)
   "serpent.linear-transform@1",
   "serpent.inv-linear-transform@1",
-  // ─── Phase 3 will move these OFF ─────────────────────
-  "generic.pkcs7-pad@1",
-  "generic.pkcs7-unpad@1",
-  "generic.zero-pad@1",
-  "generic.zero-unpad@1",
-  "generic.iso7816-4-pad@1",
-  "generic.iso7816-4-unpad@1",
-  "generic.load-block@1",
-  "generic.store-block@1",
-  "generic.split-blocks@1",
-  "generic.concat-blocks@1",
-  "generic.compute-block-count@1",
-  "generic.aux-load@1",
-  "generic.aux-xor@1",
-  "generic.aux-copy@1",
-  "generic.iv-load@1",
-  "generic.xor-aux-into-state@1",
-  "generic.state-to-aux@1",
 ]);
 
 /**
