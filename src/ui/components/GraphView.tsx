@@ -4529,7 +4529,7 @@ const EdgePath = (props: {
   //
   // Exit/entry sides are chosen by geometry, not hard-coded. The arrowhead
   // already conveys flow direction, so we don't need to enforce the
-  // "always right→left" rule. Two regimes:
+  // "always right→left" rule. Three regimes:
   //
   //   - **Vertical sides** (exit bottom / enter top, or the reverse): used
   //     when the boxes overlap on the x-axis but are separated on y. This
@@ -4539,6 +4539,17 @@ const EdgePath = (props: {
   //     boxes' right edges and loop back to enter from the left, passing
   //     visually BEHIND the components. Bottom→top tucks the edge into
   //     the natural inter-leaf gap.
+  //
+  //   - **Feedback overhead** (exit top / enter top, arcing above): used
+  //     for cross-iteration feedback edges (e.g. CBC's
+  //     cbc-snapshot → cbc-xor) when they fall outside the vertical
+  //     regime. The two boxes are same-row siblings, so the horizontal
+  //     regime would crash the feedback head into the consumer's right
+  //     edge — exactly where the forward state spine departs.
+  //     Structurally rerouting the feedback head to the consumer's TOP
+  //     edge separates the head from the spine tail AND draws the
+  //     "loops to next iteration" narrative explicitly above the row.
+  //     See the `props.isFeedback` branch below for full rationale.
   //
   //   - **Horizontal sides** (exit right / enter left, or reverse): the
   //     default for everything else — horizontal flow at the root, iterate
@@ -4651,6 +4662,100 @@ const EdgePath = (props: {
         // sits perpendicular to that point so it's CLEAR of the
         // curve at the midpoint.
         midpoint: perpendicularLabelMidpoint(sx, sy, tx, ty),
+      };
+    }
+
+    // Feedback-edge override (2026-05-18). When `useVertical` is false
+    // but the edge is iterate-feedback (e.g. CBC's
+    // cbc-snapshot → cbc-xor; future OFB / CFB will produce the same
+    // shape), route the path OVER THE TOP rather than through the
+    // horizontal regime's side-arc.
+    //
+    // **Why.** In CBC the feedback source (cbc-snapshot) and target
+    // (cbc-xor) are same-row siblings in the iterate chip body:
+    // `horizOverlap=false`, `vertOverlap=true`, so `useVertical=false`
+    // is forced. The horizontal regime's natural geometry has the
+    // arrowhead enter cbc-xor's RIGHT edge at right-center — the
+    // SAME POINT where the forward state spine cbc-xor → add-round-key
+    // DEPARTS. Both arrows then share one tiny region on the consumer's
+    // right edge (head + tail) and the box visually congests. The user
+    // surfaced this on the 2026-05-18 manual smoke after the z-order
+    // fix (commit 80cf29a) shipped.
+    //
+    // **The fix is structural, not a within-edge nudge.** Per the
+    // 2026-05-18 design decision: when one edge becomes overcrowded,
+    // SWITCH the incoming arrowhead to a different edge entirely. For
+    // feedback edges in horizontal regime, the perpendicular TOP edge
+    // is the natural choice — it's:
+    //   - distinct from the right edge where forward spines depart,
+    //   - the conventional "loop overhead" shape for cross-iteration
+    //     feedback (CPU pipeline diagrams, dataflow graphs etc.),
+    //   - already reinforced by the dashed feedback styling.
+    //
+    // Unconditional in horizontal regime (per user pick 2026-05-18):
+    // the conditional alternative (detect spine-departure occupancy)
+    // adds plumbing the practical case never benefits from — every
+    // feedback edge today AND every planned cross-iteration mode has
+    // a forward spine sibling, so "crowded" is always true. The
+    // unconditional rule generalises to OFB / CFB without re-tuning.
+    //
+    // **Vertical regime feedback edges**: covered above by the
+    // `useVertical` early return. They already exit top/bottom of the
+    // source and enter top/bottom of the target, so they don't crowd
+    // the right edge — no override needed.
+    if (props.isFeedback) {
+      const fromCx = from.x + from.w / 2;
+      const toCx = to.x + to.w / 2;
+      // Exit source's TOP edge. Path tangent at t=0 is `(0, -pull)`
+      // → leaves the box going UP, which is what we want.
+      const sx = fromCx;
+      const sy = from.y;
+      // Enter target's TOP edge from above. `ARROW_INSET` keeps the
+      // arrowhead tip just outside the rectangle stroke so it doesn't
+      // visually penetrate the box; the tip itself lands ON the top
+      // edge (the marker triangle hangs below the path endpoint).
+      const tx = toCx;
+      const ty = to.y - ARROW_INSET;
+      // Arc height — proportional to horizontal span so a longer
+      // overhead loop gets a taller arc clearly distinct from the
+      // chip row beneath. Floor at 28 px so even adjacent siblings
+      // produce a visible loop above the row.
+      const pull = Math.max(28, Math.abs(tx - sx) * 0.35);
+      // Cubic Bezier with vertical control points above both
+      // endpoints. At t=1 the tangent is `(0, +pull)` → arrowhead
+      // points DOWN into the target's top edge. The symmetric pull
+      // means the arc is left-right symmetric whether the source is
+      // to the left or right of the target.
+      const c1x = sx;
+      const c1y = sy - pull;
+      const c2x = tx;
+      const c2y = ty - pull;
+      // Bundle `×N` pill anchor (`LABEL_T_ANCHOR` = 0.25). For an
+      // arc, the linear-interpolation midpoint that
+      // `perpendicularLabelMidpoint` returns sits BELOW the curve (on
+      // the imaginary chord between source and target). The pill would
+      // then float in dead space between the chord and the arc.
+      // Compute the actual on-curve Bezier point at t=0.25 so the
+      // pill sits visually ON the shaft. Today's CBC feedback edge is
+      // a singleton bundle (N=1), so the label doesn't render — but
+      // future multi-aux feedback (e.g. a stream-cipher that crosses
+      // both prev-ct and prev-keystream into the next block) will
+      // need this to read correctly.
+      const t = LABEL_T_ANCHOR;
+      const oneMinusT = 1 - t;
+      const bezAt = (p0: number, p1: number, p2: number, p3: number): number =>
+        oneMinusT * oneMinusT * oneMinusT * p0 +
+        3 * oneMinusT * oneMinusT * t * p1 +
+        3 * oneMinusT * t * t * p2 +
+        t * t * t * p3;
+      return {
+        path: `M ${sx} ${sy} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${tx} ${ty}`,
+        // No start-dot — start-dots are a fan-out-replica affordance
+        // (vertical regime); the overhead arc doesn't need one because
+        // its origin point on the source's top edge is unambiguous
+        // (only feedback edges leave that edge).
+        startDot: null,
+        midpoint: { x: bezAt(sx, c1x, c2x, tx), y: bezAt(sy, c1y, c2y, ty) },
       };
     }
 
