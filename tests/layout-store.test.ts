@@ -24,11 +24,13 @@ import type { LayoutSpec } from "@/core/document";
 import {
   __resetLayoutsForTests,
   clearLayoutForSpec,
+  clearRelativePosition,
   getLayoutForSpec,
   hasUserLayout,
   rescaleAllPositions,
   setLayoutForSpec,
   setNodePosition,
+  setRelativePosition,
   setReplicationMode,
   toggleCollapse,
   useLayoutMap,
@@ -282,6 +284,28 @@ describe("layout store — hasUserLayout", () => {
       }),
     ).toBe(false);
   });
+
+  it("returns true when at least one relative pin is present", () => {
+    expect(
+      hasUserLayout({
+        positions: {},
+        collapsedGroups: [],
+        flowDirection: "ltr",
+        relativePositions: { "key-expansion@->round.1.add-round-key": { dx: 12, dy: 0 } },
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when relativePositions is present but empty", () => {
+    expect(
+      hasUserLayout({
+        positions: {},
+        collapsedGroups: [],
+        flowDirection: "ltr",
+        relativePositions: {},
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("layout store — setReplicationMode (commit 5)", () => {
@@ -362,6 +386,100 @@ describe("layout store — setReplicationMode (commit 5)", () => {
   });
 });
 
+describe("layout store — setRelativePosition / clearRelativePosition (draggable replicas)", () => {
+  // Synthetic-id pattern matches `${source}@->${consumer}` exactly because
+  // the store treats the key as opaque — but using a realistic id here keeps
+  // the test honest about the shape downstream code will write.
+  const REPLICA_ID = "key-expansion@->round.1.add-round-key";
+  const BLOCK_CHIP_ID = "ecb-blocks@block3";
+
+  it("stores a relative pin under the named spec id", () => {
+    setRelativePosition("aes-128@1", REPLICA_ID, 24, -8);
+    expect(getLayoutForSpec("aes-128@1")?.relativePositions?.[REPLICA_ID]).toEqual({
+      dx: 24,
+      dy: -8,
+    });
+    expect(getLayoutForSpec("aes-256@1")).toBeNull();
+  });
+
+  it("overwriting an existing pin replaces the delta", () => {
+    setRelativePosition("aes-128@1", REPLICA_ID, 24, -8);
+    setRelativePosition("aes-128@1", REPLICA_ID, 0, 40);
+    expect(getLayoutForSpec("aes-128@1")?.relativePositions?.[REPLICA_ID]).toEqual({
+      dx: 0,
+      dy: 40,
+    });
+  });
+
+  it("two pins on the same spec accumulate", () => {
+    setRelativePosition("aes-128@1", REPLICA_ID, 10, 0);
+    setRelativePosition("aes-128@1", BLOCK_CHIP_ID, 0, 20);
+    expect(getLayoutForSpec("aes-128@1")?.relativePositions).toEqual({
+      [REPLICA_ID]: { dx: 10, dy: 0 },
+      [BLOCK_CHIP_ID]: { dx: 0, dy: 20 },
+    });
+  });
+
+  it("clearRelativePosition removes one entry but keeps the rest", () => {
+    setRelativePosition("aes-128@1", REPLICA_ID, 10, 0);
+    setRelativePosition("aes-128@1", BLOCK_CHIP_ID, 0, 20);
+    clearRelativePosition("aes-128@1", REPLICA_ID);
+    expect(getLayoutForSpec("aes-128@1")?.relativePositions).toEqual({
+      [BLOCK_CHIP_ID]: { dx: 0, dy: 20 },
+    });
+  });
+
+  it("clearing the last pin drops the spec's entry entirely (byte stability)", () => {
+    setRelativePosition("aes-128@1", REPLICA_ID, 10, 0);
+    clearRelativePosition("aes-128@1", REPLICA_ID);
+    // Only customization → cleared → no other user-layout → entry removed.
+    expect(getLayoutForSpec("aes-128@1")).toBeNull();
+  });
+
+  it("clearing a pin while a position pin exists keeps the entry", () => {
+    setNodePosition("aes-128@1", "round.1", 100, 100);
+    setRelativePosition("aes-128@1", REPLICA_ID, 10, 0);
+    clearRelativePosition("aes-128@1", REPLICA_ID);
+    const layout = getLayoutForSpec("aes-128@1");
+    expect(layout).not.toBeNull();
+    expect(layout?.positions["round.1"]).toEqual({ x: 100, y: 100 });
+    expect(layout?.relativePositions).toBeUndefined();
+  });
+
+  it("clearRelativePosition on an absent id is a no-op", () => {
+    setNodePosition("aes-128@1", "round.1", 100, 100);
+    const before = getLayoutForSpec("aes-128@1");
+    clearRelativePosition("aes-128@1", REPLICA_ID);
+    expect(getLayoutForSpec("aes-128@1")).toBe(before);
+  });
+
+  it("persists to localStorage synchronously", () => {
+    setRelativePosition("aes-128@1", REPLICA_ID, 24, -8);
+    const raw = storage.getItem(STORAGE_KEY);
+    expect(raw).not.toBeNull();
+    const parsed = JSON.parse(raw as string);
+    expect(parsed["aes-128@1"].relativePositions[REPLICA_ID]).toEqual({ dx: 24, dy: -8 });
+  });
+
+  it("does NOT write an empty relativePositions object to disk", () => {
+    setNodePosition("aes-128@1", "round.1", 0, 0);
+    setRelativePosition("aes-128@1", REPLICA_ID, 10, 0);
+    clearRelativePosition("aes-128@1", REPLICA_ID);
+    const parsed = JSON.parse(storage.getItem(STORAGE_KEY) as string);
+    // Empty `relativePositions: {}` would defeat byte-stability for spec-
+    // only saves — must be absent, not present-empty.
+    expect(parsed["aes-128@1"].relativePositions).toBeUndefined();
+  });
+
+  it("coexists with replicationModes on the same layout", () => {
+    setReplicationMode("aes-128@1", "key-expansion", "always");
+    setRelativePosition("aes-128@1", REPLICA_ID, 10, 0);
+    const layout = getLayoutForSpec("aes-128@1");
+    expect(layout?.replicationModes).toEqual({ "key-expansion": "always" });
+    expect(layout?.relativePositions).toEqual({ [REPLICA_ID]: { dx: 10, dy: 0 } });
+  });
+});
+
 describe("layout store — rescaleAllPositions (density-flip pin scaling)", () => {
   it("multiplies every pinned position by the factor", () => {
     setNodePosition("aes-128@1", "round.1", 100, 50);
@@ -397,6 +515,27 @@ describe("layout store — rescaleAllPositions (density-flip pin scaling)", () =
     // Density-independent fields must survive untouched.
     expect(l?.collapsedGroups).toEqual(["round.5"]);
     expect(l?.replicationModes).toEqual({ "key-expansion": "always" });
+  });
+
+  it("rescales relativePositions deltas alongside absolute positions", () => {
+    // Relative deltas live in viewBox units at the layout's current
+    // density. A density flip rescales them so the chip stays logically
+    // in the same offset from its anchor.
+    setRelativePosition("aes-128@1", "key-expansion@->round.1.add-round-key", 40, -8);
+    rescaleAllPositions(0.75);
+    expect(
+      getLayoutForSpec("aes-128@1")?.relativePositions?.["key-expansion@->round.1.add-round-key"],
+    ).toEqual({ dx: 30, dy: -6 });
+  });
+
+  it("a spec with ONLY a relative pin still gets rescaled (not passed through)", () => {
+    // Edge case: the passthrough branch fires only when BOTH positions and
+    // relativePositions are empty. A relative-only layout has work to do.
+    setRelativePosition("aes-128@1", "key-expansion@->round.1.add-round-key", 40, 0);
+    rescaleAllPositions(0.5);
+    expect(
+      getLayoutForSpec("aes-128@1")?.relativePositions?.["key-expansion@->round.1.add-round-key"],
+    ).toEqual({ dx: 20, dy: 0 });
   });
 
   it("rounds to integer pixels (no fractional drift in storage)", () => {

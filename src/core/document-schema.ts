@@ -181,12 +181,24 @@ const PositionSchema = z
 // redundant defaults — keeps the byte-stability gate clean.
 const ReplicationModeSchema = z.enum(["always", "never"]);
 
+// Per-node relative offset (delta from auto-laid position). Used for
+// synthetic ids like aux replicas and block chips whose anchor follows
+// another node. See `RelativePosition` in `document.ts` and
+// `docs/plans/draggable-replicas.md`.
+const RelativePositionSchema = z
+  .object({
+    dx: z.number(),
+    dy: z.number(),
+  })
+  .strict();
+
 export const LayoutSpecSchema = z
   .object({
     positions: z.record(PositionSchema),
     collapsedGroups: z.array(z.string()),
     flowDirection: z.literal("ltr"),
     replicationModes: z.record(ReplicationModeSchema).optional(),
+    relativePositions: z.record(RelativePositionSchema).optional(),
   })
   .strict();
 

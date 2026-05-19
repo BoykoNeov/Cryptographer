@@ -29,7 +29,7 @@
  * dedicated setters that update the signal AND persist atomically.
  */
 
-import type { LayoutSpec, ReplicationMode } from "@/core/document";
+import type { LayoutSpec, RelativePosition, ReplicationMode } from "@/core/document";
 import { createSignal } from "solid-js";
 
 const STORAGE_KEY = "cryptographer.layouts";
@@ -93,6 +93,15 @@ const isLayoutSpec = (v: unknown): v is LayoutSpec => {
       return false;
     }
   }
+  if (o.relativePositions !== undefined) {
+    if (
+      o.relativePositions === null ||
+      typeof o.relativePositions !== "object" ||
+      Array.isArray(o.relativePositions)
+    ) {
+      return false;
+    }
+  }
   return true;
 };
 
@@ -135,17 +144,42 @@ const cloneReplicationModes = (layout: LayoutSpec): { [sourceId: string]: Replic
 };
 
 /**
- * Spread a possibly-empty replicationModes object onto a LayoutSpec, omitting
- * the field entirely when empty so the resulting object continues to satisfy
- * the byte-stability contract (empty maps would still serialize to `{}` —
- * present-but-empty produces different bytes than absent).
+ * Helper: snapshot a layout's `relativePositions` as a plain mutable object.
+ * Same pattern as `cloneReplicationModes` — absent field treated as empty.
  */
-const withReplicationModes = (
-  base: Omit<LayoutSpec, "replicationModes">,
-  modes: { [sourceId: string]: ReplicationMode },
+const cloneRelativePositions = (
+  layout: LayoutSpec,
+): { [syntheticId: string]: RelativePosition } => {
+  const out: { [syntheticId: string]: RelativePosition } = {};
+  if (layout.relativePositions) {
+    for (const [k, v] of Object.entries(layout.relativePositions)) {
+      out[k] = v;
+    }
+  }
+  return out;
+};
+
+/**
+ * Compose a LayoutSpec, omitting `replicationModes` / `relativePositions`
+ * entirely when empty. Empty objects would still serialize to `{}` —
+ * present-but-empty produces different bytes than absent, defeating the
+ * byte-stability gate that spec-only saves depend on. Centralized here so
+ * every setter that rebuilds a LayoutSpec follows the same discipline.
+ */
+const buildLayoutSpec = (
+  positions: { readonly [stepId: string]: { readonly x: number; readonly y: number } },
+  collapsedGroups: readonly string[],
+  flowDirection: "ltr",
+  replicationModes: { [sourceId: string]: ReplicationMode },
+  relativePositions: { [syntheticId: string]: RelativePosition },
 ): LayoutSpec => {
-  if (Object.keys(modes).length === 0) return base as LayoutSpec;
-  return { ...base, replicationModes: modes };
+  const base = { positions, collapsedGroups, flowDirection };
+  const hasModes = Object.keys(replicationModes).length > 0;
+  const hasRelatives = Object.keys(relativePositions).length > 0;
+  if (!hasModes && !hasRelatives) return base;
+  if (hasModes && !hasRelatives) return { ...base, replicationModes };
+  if (!hasModes && hasRelatives) return { ...base, relativePositions };
+  return { ...base, replicationModes, relativePositions };
 };
 
 /**
@@ -174,15 +208,81 @@ const persist = (map: LayoutMap): void => {
  */
 export const setNodePosition = (specId: string, nodeId: string, x: number, y: number): void => {
   const current = layoutMap()[specId] ?? emptyLayout();
-  const modes = cloneReplicationModes(current);
-  const next: LayoutSpec = withReplicationModes(
-    {
-      positions: { ...current.positions, [nodeId]: { x, y } },
-      collapsedGroups: current.collapsedGroups,
-      flowDirection: current.flowDirection,
-    },
-    modes,
+  const next = buildLayoutSpec(
+    { ...current.positions, [nodeId]: { x, y } },
+    current.collapsedGroups,
+    current.flowDirection,
+    cloneReplicationModes(current),
+    cloneRelativePositions(current),
   );
+  const map = { ...layoutMap(), [specId]: next };
+  setLayoutMapSignal(map);
+  persist(map);
+};
+
+/**
+ * Pin one node's RELATIVE offset (delta from its auto-laid position). Used
+ * for synthetic ids — aux replicas (`${source}@->${consumer}`) and block
+ * chips (`${iterateId}@block${i}`) — whose anchor is another node. The
+ * layout engine adds `(dx, dy)` to the anchor-derived auto position on each
+ * pass, so dragging the consumer carries the chip along.
+ *
+ * The store doesn't enforce that callers pass a synthetic id; the GraphView
+ * gates this to replica / block-chip nodes by construction. Pinning a real
+ * step id here would still work, but the layout engine only consults
+ * `relativePositions` at the replica / chip placement sites, so the entry
+ * would have no rendering effect.
+ *
+ * See `docs/plans/draggable-replicas.md` for the full design.
+ */
+export const setRelativePosition = (
+  specId: string,
+  nodeId: string,
+  dx: number,
+  dy: number,
+): void => {
+  const current = layoutMap()[specId] ?? emptyLayout();
+  const relatives = cloneRelativePositions(current);
+  relatives[nodeId] = { dx, dy };
+  const next = buildLayoutSpec(
+    current.positions,
+    current.collapsedGroups,
+    current.flowDirection,
+    cloneReplicationModes(current),
+    relatives,
+  );
+  const map = { ...layoutMap(), [specId]: next };
+  setLayoutMapSignal(map);
+  persist(map);
+};
+
+/**
+ * Remove one node's relative pin (back to algorithmic placement). Used by
+ * the per-node × reset affordance. If clearing this entry leaves the
+ * layout entirely empty (no positions, no collapsed, no modes, no other
+ * relatives), drops the spec's entry from the map — same byte-stability
+ * discipline as `setReplicationMode(null)`.
+ */
+export const clearRelativePosition = (specId: string, nodeId: string): void => {
+  const current = layoutMap()[specId];
+  if (!current) return;
+  if (!current.relativePositions || current.relativePositions[nodeId] === undefined) return;
+  const relatives = cloneRelativePositions(current);
+  delete relatives[nodeId];
+  const next = buildLayoutSpec(
+    current.positions,
+    current.collapsedGroups,
+    current.flowDirection,
+    cloneReplicationModes(current),
+    relatives,
+  );
+  if (!hasUserLayout(next)) {
+    const map = { ...layoutMap() };
+    delete (map as { [specId: string]: LayoutSpec })[specId];
+    setLayoutMapSignal(map);
+    persist(map);
+    return;
+  }
   const map = { ...layoutMap(), [specId]: next };
   setLayoutMapSignal(map);
   persist(map);
@@ -200,13 +300,12 @@ export const toggleCollapse = (specId: string, containerId: string): void => {
   } else {
     set.add(containerId);
   }
-  const next: LayoutSpec = withReplicationModes(
-    {
-      positions: current.positions,
-      collapsedGroups: [...set],
-      flowDirection: current.flowDirection,
-    },
+  const next = buildLayoutSpec(
+    current.positions,
+    [...set],
+    current.flowDirection,
     cloneReplicationModes(current),
+    cloneRelativePositions(current),
   );
   const map = { ...layoutMap(), [specId]: next };
   setLayoutMapSignal(map);
@@ -234,17 +333,17 @@ export const setReplicationMode = (
   } else {
     modes[sourceId] = mode;
   }
-  const next: LayoutSpec = withReplicationModes(
-    {
-      positions: current.positions,
-      collapsedGroups: current.collapsedGroups,
-      flowDirection: current.flowDirection,
-    },
+  const next = buildLayoutSpec(
+    current.positions,
+    current.collapsedGroups,
+    current.flowDirection,
     modes,
+    cloneRelativePositions(current),
   );
   // If the resulting layout is entirely empty (no pins, no collapsed, no
-  // modes), drop the entry from the map — same byte-stability discipline
-  // as `setLayoutForSpec(null)`. Otherwise just write through.
+  // modes, no relative pins), drop the entry from the map — same byte-
+  // stability discipline as `setLayoutForSpec(null)`. Otherwise just
+  // write through.
   if (!hasUserLayout(next)) {
     const map = { ...layoutMap() };
     delete (map as { [specId: string]: LayoutSpec })[specId];
@@ -299,8 +398,11 @@ export const rescaleAllPositions = (factor: number): void => {
   const newMap: { [specId: string]: LayoutSpec } = {};
   for (const [specId, layout] of Object.entries(map)) {
     const positionEntries = Object.entries(layout.positions);
-    if (positionEntries.length === 0) {
-      // No pins for this spec → no rescale; pass through unchanged.
+    const relativeEntries = layout.relativePositions
+      ? Object.entries(layout.relativePositions)
+      : [];
+    if (positionEntries.length === 0 && relativeEntries.length === 0) {
+      // No coords for this spec → no rescale; pass through unchanged.
       newMap[specId] = layout;
       continue;
     }
@@ -311,13 +413,25 @@ export const rescaleAllPositions = (factor: number): void => {
         y: Math.round(p.y * factor),
       };
     }
-    newMap[specId] = withReplicationModes(
-      {
-        positions: newPositions,
-        collapsedGroups: layout.collapsedGroups,
-        flowDirection: layout.flowDirection,
-      },
+    // Relative deltas are stored in viewBox units at the layout's CURRENT
+    // density, same as absolute positions — so a flip to a different
+    // density rescales them too. Without this, a chip pinned with delta
+    // (40, 0) at density 1.0 would keep that 40-px offset at density
+    // 0.75 even though the consumer's auto-position scaled to 0.75×,
+    // making the chip drift to the right relative to where the user put it.
+    const newRelatives: { [syntheticId: string]: RelativePosition } = {};
+    for (const [id, r] of relativeEntries) {
+      newRelatives[id] = {
+        dx: Math.round(r.dx * factor),
+        dy: Math.round(r.dy * factor),
+      };
+    }
+    newMap[specId] = buildLayoutSpec(
+      newPositions,
+      layout.collapsedGroups,
+      layout.flowDirection,
       cloneReplicationModes(layout),
+      newRelatives,
     );
     changed = true;
   }
@@ -348,6 +462,9 @@ export const hasUserLayout = (layout: LayoutSpec | null): boolean => {
   // when nothing has been dragged or collapsed (e.g. "force key-expansion
   // to always replicate, keep everything else auto").
   if (layout.replicationModes && Object.keys(layout.replicationModes).length > 0) return true;
+  // Draggable replicas (2026-05-19): a relative pin on a chip is a
+  // meaningful customization on its own.
+  if (layout.relativePositions && Object.keys(layout.relativePositions).length > 0) return true;
   return false;
 };
 
@@ -396,11 +513,27 @@ export const renameLayoutIds = (
     if (Object.keys(remapped).length > 0) newReplicationModes = remapped;
   }
 
+  // `relativePositions` keys are SYNTHETIC ids (`${source}@->${consumer}`,
+  // `${iterateId}@block${i}`) that embed real step ids. Parsing those out
+  // for a proper rename remap is non-trivial, and today's only rename
+  // caller (the duplicate-round mutator's contiguous numeric shift)
+  // doesn't move replica targets across rounds — it just shifts round
+  // numbers, which doesn't rename consumers. Pass the field through
+  // unchanged for now; the "no pruning of stale ids" policy already
+  // documented at the top of this file applies if a future rename DOES
+  // orphan entries. Documented in `docs/plans/draggable-replicas.md`
+  // under "Risks (acknowledged)."
+  let newRelativePositions: { [syntheticId: string]: RelativePosition } | undefined;
+  if (layout.relativePositions && Object.keys(layout.relativePositions).length > 0) {
+    newRelativePositions = { ...layout.relativePositions };
+  }
+
   return {
     positions: newPositions,
     collapsedGroups: newCollapsedGroups,
     flowDirection: layout.flowDirection,
     ...(newReplicationModes ? { replicationModes: newReplicationModes } : {}),
+    ...(newRelativePositions ? { relativePositions: newRelativePositions } : {}),
   };
 };
 

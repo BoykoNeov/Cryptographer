@@ -86,11 +86,41 @@ export type ReplicationMode = "always" | "never";
  * the layout sidecar when the modes map is empty AND no positions /
  * collapsed groups exist.
  */
+/**
+ * Per-node relative offset (Slice opened 2026-05-19). Pin model for nodes
+ * whose auto position depends on another node — aux replicas (whose
+ * "natural slot" is above their consumer) and block chips (whose slot is
+ * at the iterate's old position). Storing an ABSOLUTE pin for these would
+ * break the "follow the anchor" relationship; we store a delta from the
+ * algorithm's chosen position so the chip rides along when the consumer /
+ * iterate moves.
+ *
+ * The anchor is implicit in the node's relationship to the graph
+ * (`replicaOf` → consumer; `blockChipOf` → iterate) — no `anchorId` field
+ * needed. Layout re-derives the anchor's position each pass, then adds
+ * `(dx, dy)`.
+ *
+ * Stored in viewBox units at the layout's CURRENT density. `rescaleAllPositions`
+ * also rescales these so they stay in logical-equivalent positions across
+ * density flips. See `docs/plans/draggable-replicas.md`.
+ */
+export type RelativePosition = {
+  readonly dx: number;
+  readonly dy: number;
+};
+
 export type LayoutSpec = {
   readonly positions: { readonly [stepId: string]: StepPosition };
   readonly collapsedGroups: readonly string[];
   readonly flowDirection: "ltr";
   readonly replicationModes?: { readonly [sourceId: string]: ReplicationMode };
+  /**
+   * Relative-to-anchor pins for synthetic ids (aux replica
+   * `${source}@->${consumer}`, block chip `${iterateId}@block${i}`). See
+   * `RelativePosition` above for the model. Absent / empty when no chip
+   * has been dragged — same byte-stability discipline as `replicationModes`.
+   */
+  readonly relativePositions?: { readonly [syntheticId: string]: RelativePosition };
 };
 
 /**

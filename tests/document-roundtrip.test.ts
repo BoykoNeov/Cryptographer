@@ -152,6 +152,42 @@ describe("serializeDocument + parseDocument: documents with sidecars", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("round-trips a document with relativePositions (draggable replicas)", () => {
+    const doc: CipherDocument = {
+      schemaVersion: 1,
+      spec: aes128Spec,
+      layout: {
+        positions: {},
+        collapsedGroups: [],
+        flowDirection: "ltr",
+        relativePositions: {
+          "key-expansion@->round.1.add-round-key": { dx: 24, dy: -8 },
+          "ecb-blocks@block3": { dx: 0, dy: 40 },
+        },
+      },
+    };
+    const text = serializeDocument(doc);
+    const result = parseDocument(text);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.doc).toEqual(doc);
+  });
+
+  it("rejects a malformed relativePositions entry", () => {
+    // Wrong shape — RelativePosition is `{ dx, dy }`, not `{ x, y }`.
+    const malformed = JSON.stringify({
+      schemaVersion: 1,
+      spec: aes128Spec,
+      layout: {
+        positions: {},
+        collapsedGroups: [],
+        flowDirection: "ltr",
+        relativePositions: { "key-expansion@->round.1.add-round-key": { x: 24, y: -8 } },
+      },
+    });
+    const result = parseDocument(malformed);
+    expect(result.ok).toBe(false);
+  });
+
   it("round-trips a document with a SessionSnapshot (no bytes)", () => {
     const doc: CipherDocument = {
       schemaVersion: 1,
