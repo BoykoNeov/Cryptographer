@@ -184,11 +184,20 @@ describe("App — Share (Slice 7)", () => {
     const { container } = render(() => <App />);
     fireEvent.click(findButton(container, "share"));
 
-    await waitFor(() => {
-      const status = container.querySelector(".share-status-success");
-      expect(status).not.toBeNull();
-      expect(status?.textContent).toMatch(/link copied/);
-    });
+    // Timeout bumped 5s → 10s (2026-05-19). The render-share-encode pipeline
+    // takes ~2.7s solo on this machine — most of it spec → trace → encode
+    // through CompressionStream — and `waitFor`'s default 5s ceiling
+    // occasionally trips under full-suite parallel load. The work itself
+    // is correct; only the deadline was tight. See memory entry
+    // `feedback_url_share_flake`.
+    await waitFor(
+      () => {
+        const status = container.querySelector(".share-status-success");
+        expect(status).not.toBeNull();
+        expect(status?.textContent).toMatch(/link copied/);
+      },
+      { timeout: 10000 },
+    );
   });
 });
 
