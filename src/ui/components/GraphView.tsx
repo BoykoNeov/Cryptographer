@@ -4396,15 +4396,6 @@ export const GraphView = () => {
                     }
                   : {};
                 const leafWarnings = createMemo(() => warningsByVisibleId().get(node.stepId) ?? []);
-                // Per-node reset affordance for the relative-pin delta:
-                // gate on replica-like + has-pin so the ↺ glyph appears
-                // only on chips the user has actually nudged. The clear
-                // call removes the entry (and the whole layout entry if
-                // it was the last customization).
-                const resetPinProps =
-                  isReplicaLike && relativePinsMap().has(node.stepId)
-                    ? { onResetRelativePin: () => clearRelativePosition(spec().id, node.stepId) }
-                    : {};
                 return (
                   <Show when={box()}>
                     {(b) => (
@@ -4437,7 +4428,20 @@ export const GraphView = () => {
                         isDropTargetActive={dragOverAnchorId() === clickTargetId}
                         {...blockSpanProps}
                         {...dragProps}
-                        {...resetPinProps}
+                        // Per-node reset affordance for the relative-pin
+                        // delta: inline reactive expression so the glyph
+                        // appears the moment the user's drag writes a pin
+                        // and disappears when the pin is cleared. Mirrors
+                        // the ContainerRect onResetAbsolutePin pattern —
+                        // `<For>` row callbacks aren't reactive scopes per
+                        // CLAUDE.md, so a `const x = ...has(id) ? ... : ...`
+                        // captured at row-init time wouldn't reactively
+                        // update when relativePinsMap() changed.
+                        onResetRelativePin={
+                          isReplicaLike && relativePinsMap().has(node.stepId)
+                            ? () => clearRelativePosition(spec().id, node.stepId)
+                            : undefined
+                        }
                         onClick={() => {
                           // Two effects on a leaf click:
                           //   1. handleLeafClick scrubs the trace + binds
@@ -4824,10 +4828,14 @@ const LeafRect = (props: {
    * Per-node reset for the relative-pin delta (draggable-replicas plan,
    * Slice 4). Present ⇔ the chip currently has a pin; absent for
    * non-replica leaves and for replicas/chips with no delta. The caller
-   * gates the presence so LeafRect doesn't need to read the layout
-   * store itself.
+   * gates the presence with an INLINE REACTIVE expression
+   * (`relativePinsMap().has(id) ? fn : undefined`) so the prop appears
+   * the moment the user's drag writes a pin and disappears when cleared.
+   * Explicit `| undefined` is required because `exactOptionalPropertyTypes`
+   * forbids passing `undefined` to a bare optional prop — matching
+   * ContainerRect's `onResetAbsolutePin?: (() => void) | undefined`.
    */
-  onResetRelativePin?: () => void;
+  onResetRelativePin?: (() => void) | undefined;
   /**
    * State shape that exists at this leaf's position (i.e. AFTER it runs
    * — but for drop-anchor purposes, "after this step" == "before the
