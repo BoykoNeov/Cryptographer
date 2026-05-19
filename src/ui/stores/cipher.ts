@@ -1,7 +1,16 @@
 /**
  * Cipher-choice store. Holds which AES variant (128 / 192 / 256) is active.
- * Persisted in localStorage so the user's pick survives a reload — mirrors
- * the byte-format and padding-scheme stores next door.
+ *
+ * Session-only (2026-05-19): not persisted in localStorage. Refresh resets
+ * to "aes-128" — the same posture the inputs (plaintext, key) already had,
+ * and the same posture the Save dialog's `includeSession` checkbox defaults
+ * to OFF. We deliberately do NOT persist the user's last selector picks so
+ * that a tab refresh is equivalent to closing-and-reopening the app: a
+ * clean slate. The earlier persistent design produced a confusing
+ * asymmetry where the selector survived refresh but the input bytes (held
+ * by App.tsx local signals) reset to defaults, leaving e.g. AES-128 + ECB
+ * showing the 16-byte default plaintext instead of whatever the user had
+ * typed pre-refresh.
  *
  * Why a separate store rather than baking into `spec.ts`: the cipher choice
  * is a UI preference that re-applies to whichever (mode, padding) the user
@@ -16,7 +25,6 @@ export type SpeckCipher = "speck-32-64-be" | "speck-32-64-le";
 export type SerpentCipher = "serpent-128" | "serpent-192" | "serpent-256";
 export type Cipher = AesCipher | SpeckCipher | SerpentCipher;
 
-const STORAGE_KEY = "cryptographer.cipher";
 const ALL_CIPHERS: readonly Cipher[] = [
   "aes-128",
   "aes-192",
@@ -36,35 +44,14 @@ const ALL_CIPHERS: readonly Cipher[] = [
  */
 export const isAesCipher = (c: Cipher): c is AesCipher => c.startsWith("aes-");
 
-const loadInitial = (): Cipher => {
-  // Defensive: localStorage may be absent (vitest node env) or denied
-  // (private mode). Default to AES-128 so first-time / fresh-load users
-  // hit the canonical FIPS-197 Appendix C.1 vector.
-  try {
-    if (typeof localStorage === "undefined") return "aes-128";
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw && (ALL_CIPHERS as readonly string[]).includes(raw)) {
-      return raw as Cipher;
-    }
-  } catch {
-    // Storage denied. Fall through to default.
-  }
-  return "aes-128";
-};
-
-const [cipher, setCipherSignal] = createSignal<Cipher>(loadInitial());
+// Default to AES-128 so first-time / fresh-load users hit the canonical
+// FIPS-197 Appendix C.1 vector. Session-only — see file header.
+const [cipher, setCipherSignal] = createSignal<Cipher>("aes-128");
 
 export const useCipher = () => cipher;
 
 export const setCipher = (c: Cipher): void => {
   setCipherSignal(c);
-  try {
-    if (typeof localStorage !== "undefined") {
-      localStorage.setItem(STORAGE_KEY, c);
-    }
-  } catch {
-    // Persist failed; in-memory signal still updated.
-  }
 };
 
 /** Display labels for the selector. Keep in sync with `ALL_CIPHERS`. */
@@ -173,11 +160,4 @@ export const DEFAULT_PT_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
 /** Test-only reset; production code never calls this. */
 export const __resetCipherForTests = (): void => {
   setCipherSignal("aes-128");
-  try {
-    if (typeof localStorage !== "undefined") {
-      localStorage.removeItem(STORAGE_KEY);
-    }
-  } catch {
-    // Ignore.
-  }
 };

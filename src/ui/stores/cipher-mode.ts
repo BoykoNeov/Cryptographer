@@ -23,14 +23,18 @@
  *
  * Non-AES ciphers (Speck32/64) only support "single-block" today — the
  * cipher-mode <select> is greyed out when a Speck variant is active.
+ *
+ * Session-only (2026-05-19): not persisted in localStorage. Refresh resets
+ * to "single-block". See the matching note in cipher.ts — both selectors
+ * were demoted to session-scope together so refresh equals a clean slate
+ * (matching the inputs, which were never persisted either) instead of
+ * leaving a half-persistent UI state on reload.
  */
 
 import { createSignal } from "solid-js";
-import { type Cipher, useCipher } from "./cipher";
+import type { Cipher } from "./cipher";
 
 export type CipherMode = "single-block" | "ecb" | "cbc" | "ctr";
-
-const ALL_CIPHER_MODES: readonly CipherMode[] = ["single-block", "ecb", "cbc", "ctr"];
 
 // Phase 1 shipped ECB; Phase 2 ships CBC; CTR arrives in Phase 3. The
 // dropdown shows all four entries but disables the unsupported ones so
@@ -65,43 +69,14 @@ export const SUPPORTED_CIPHER_MODES_BY_CIPHER: Readonly<Record<Cipher, readonly 
 export const isCipherModeSupported = (cipher: Cipher, mode: CipherMode): boolean =>
   (SUPPORTED_CIPHER_MODES_BY_CIPHER[cipher] as readonly string[]).includes(mode);
 
-const STORAGE_KEY = "cryptographer.cipherMode";
-
-const loadInitial = (): CipherMode => {
-  try {
-    if (typeof localStorage === "undefined") return "single-block";
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw || !(ALL_CIPHER_MODES as readonly string[]).includes(raw)) return "single-block";
-    const m = raw as CipherMode;
-    // Two layers of validation: (1) is this mode in a shipped phase? (2)
-    // is this mode supported by the cipher the user actually has loaded?
-    // The second one catches the cross-store mismatch where a prior
-    // session persisted (cipher=aes-192, cipherMode=ecb) — without this
-    // check the spec store silently falls back to single-block but the
-    // dropdown lies, and the multi-block paddingLimits range causes a
-    // deep "load-block expected 16 got 32" error on Run.
-    if (!(SUPPORTED_CIPHER_MODES as readonly string[]).includes(m)) return "single-block";
-    if (!isCipherModeSupported(useCipher()(), m)) return "single-block";
-    return m;
-  } catch {
-    // Storage denied; fall through.
-  }
-  return "single-block";
-};
-
-const [cipherMode, setCipherModeSignal] = createSignal<CipherMode>(loadInitial());
+// Default to single-block so the first impression remains the FIPS-197
+// Appendix C.1 round-by-round demo. Session-only — see file header.
+const [cipherMode, setCipherModeSignal] = createSignal<CipherMode>("single-block");
 
 export const useCipherMode = () => cipherMode;
 
 export const setCipherMode = (m: CipherMode): void => {
   setCipherModeSignal(m);
-  try {
-    if (typeof localStorage !== "undefined") {
-      localStorage.setItem(STORAGE_KEY, m);
-    }
-  } catch {
-    // Persist failed; signal still updated.
-  }
 };
 
 /** Human-readable labels for the cipher-mode <select>. */
@@ -115,11 +90,4 @@ export const CIPHER_MODE_LABELS: Record<CipherMode, string> = {
 /** Test-only reset; production code uses setCipherMode. */
 export const __resetCipherModeForTests = (): void => {
   setCipherModeSignal("single-block");
-  try {
-    if (typeof localStorage !== "undefined") {
-      localStorage.removeItem(STORAGE_KEY);
-    }
-  } catch {
-    // Ignore.
-  }
 };
