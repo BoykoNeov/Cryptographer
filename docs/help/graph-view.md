@@ -88,6 +88,15 @@ internalized.
   and use the "Delete this step" button. Deleting a container removes
   all its descendants too. No undo — drag the step back from the
   palette if you regret it.
+- **Drag a replica chip or block chip** to nudge its position. Replicas
+  (the small dashed chips that appear above their consumer when a
+  high-fanout source is replicated) and block chips (the per-block
+  chips inside a collapsed iterate) are now movable too. The pin is
+  RELATIVE to the chip's natural anchor — drag the consumer afterwards
+  and the chip rides along. To return a chip to algorithmic placement,
+  hover it and click the small `↺` (blue) at its top-left corner.
+  Containers and root-level leaves still pin absolutely; they're
+  unchanged by this addition.
 
 ## Toolbar
 
@@ -108,6 +117,12 @@ internalized.
   preference — it's saved per-spec in your browser, but doesn't
   travel with `Save` or `Share…`, so a link you share will render
   at the recipient's zoom, not yours.
+- **Reset layout** clears every customization for the active spec
+  in one click — drag-pinned positions (containers and root leaves),
+  relative pins (replica chips and block chips), collapsed
+  containers, and per-source replication overrides. A confirm
+  prompt guards the action. The button is disabled when the spec
+  has nothing to reset.
 
 ## Inspecting a value
 
