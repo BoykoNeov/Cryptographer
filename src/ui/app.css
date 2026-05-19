@@ -2732,6 +2732,170 @@ button:disabled {
   text-align: right;
 }
 
+/* ─── Source-colors panel (2026-05-19) ───────────────────────────────────
+   Sibling to the replication panel; same visual language. Sits below
+   the replication panel inside the sticky toolbar header. The shared
+   `.graph-replication-panel-header`, `.graph-replication-row-id`, and
+   `.graph-replication-row-fanout` classes from the replication panel
+   are reused so the two panels read as a vertically-stacked pair. */
+.graph-source-colors-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+  font-size: 11px;
+}
+
+/* Per-source row: swatch + id + fanout + optional reset button. Same
+   horizontal flow as `.graph-replication-row` so the columns visually
+   line up between the two panels. */
+.graph-source-colors-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 560px;
+}
+
+/* Native `<input type="color">` styled as a flat 18×18 square swatch.
+   Browser-specific chrome (Chrome's bevel, Safari's inner border) is
+   suppressed so the swatch reads as a flat color chip. Cursor + hover
+   states signal "this is interactive — click to open the picker." */
+.graph-source-colors-swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+  /* Strip the default chrome on Chrome / Firefox / Safari so only the
+     fill color shows. The `appearance: none` is sufficient on modern
+     browsers; the per-browser pseudo-elements below are belt-and-
+     braces. */
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+}
+
+.graph-source-colors-swatch:hover {
+  border-color: var(--accent);
+}
+
+.graph-source-colors-swatch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Hatched-stripe overlay for uncoloured swatches — single-output
+   sources visible via the "include single-output" sub-toggle that
+   haven't been manually coloured yet. The diagonal stripes read as
+   "not set," contrasting visually with the solid colour of an
+   actually-set swatch so users don't mistake an unset row for one
+   coloured a desaturated grey. Browser-specific pseudo-elements
+   override both the WebKit and Firefox painted swatches; the wrapping
+   `background` is a fallback for any UA where the pseudo-elements
+   don't apply. */
+.graph-source-colors-swatch-unset {
+  background: repeating-linear-gradient(45deg, #555, #555 3px, #888 3px, #888 6px);
+}
+.graph-source-colors-swatch-unset::-webkit-color-swatch {
+  background: repeating-linear-gradient(45deg, #555, #555 3px, #888 3px, #888 6px);
+}
+.graph-source-colors-swatch-unset::-moz-color-swatch {
+  background: repeating-linear-gradient(45deg, #555, #555 3px, #888 3px, #888 6px);
+}
+
+/* Sub-toggle row inside the colors panel: "include single-output
+   sources." Sits above the row list; thin border-bottom separates it
+   from the rows themselves. Smaller font + muted colour keeps it from
+   competing with the primary swatch/id columns below. */
+.graph-source-colors-subtoggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 4px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.graph-source-colors-subtoggle:hover {
+  color: var(--fg);
+}
+
+.graph-source-colors-subtoggle input[type="checkbox"] {
+  margin: 0;
+}
+
+/* Chrome / Edge / Safari: the color preview lives in a ::-webkit-color-
+   swatch pseudo-element inside a ::-webkit-color-swatch-wrapper.
+   Stripping the wrapper's padding makes the swatch fill the input
+   box edge-to-edge. */
+.graph-source-colors-swatch::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.graph-source-colors-swatch::-webkit-color-swatch {
+  border: none;
+  border-radius: 3px;
+}
+
+/* Firefox uses ::-moz-color-swatch. */
+.graph-source-colors-swatch::-moz-color-swatch {
+  border: none;
+  border-radius: 3px;
+}
+
+/* Per-row reset button (visible only when a manual override is active).
+   Same flat-text style as the in-panel "auto / always / never" buttons
+   in the replication panel — no heavy chrome, just a clickable text
+   span that distinguishes itself on hover. */
+.graph-source-colors-reset {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font: inherit;
+  font-size: 10px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.graph-source-colors-reset:hover {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+
+/* Footer buttons: [clear all manual] + [autocolor now]. Both at the
+   bottom of the panel body, separated from the row list by a thin
+   border-top so they don't visually merge with the last row. */
+.graph-source-colors-footer {
+  display: flex;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.graph-source-colors-footer-button {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 10px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.graph-source-colors-footer-button:hover {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+
 /* Value-inspector panel (formerly "edge inspector" — renamed when the
    click model dropped hover and the panel's domain expanded beyond
    edges). Same look as the replication panel above (collapsible header
@@ -3133,6 +3297,27 @@ button:disabled {
   stroke-width: 2.5;
 }
 
+/* Source-colored edges (2026-05-19). When an edge picks up an inline
+   stroke from its canonical source's assigned color, the 0.35 aux
+   baseline would wash the picked color out. Bump the opacity to 0.85 so
+   the user-picked / auto-assigned hue reads at near-full saturation
+   while still sitting visually behind a 1.0-opacity selected halo. */
+.graph-edge-source-colored.graph-edge-aux {
+  stroke-opacity: 0.85;
+}
+
+.graph-edge-source-colored.graph-edge-aux:hover {
+  stroke-opacity: 1;
+}
+
+/* State edges already render at 0.85 opacity, so coloring them at full
+   opacity (1.0) is a slight bump that keeps the visual hierarchy
+   "source-colored state > source-colored aux > uncolored state >
+   uncolored aux". */
+.graph-edge-source-colored.graph-edge-state {
+  stroke-opacity: 1;
+}
+
 .graph-edge-state {
   stroke: var(--text);
   stroke-opacity: 0.85;
@@ -3170,6 +3355,17 @@ button:disabled {
   filter: drop-shadow(0 0 4px var(--accent));
 }
 
+/* Source-coloured pinned halo (2026-05-19). Higher specificity than
+   `.graph-edge-selected` alone — when both classes are present the
+   halo resolves via `currentColor`, which the renderer threads to
+   the source color through `style.color` on the path. Keeps the halo
+   visually consistent with a coloured stroke; the bare
+   `.graph-edge-selected` rule above still wins for un-coloured
+   edges (the `graph-edge-source-colored` class is absent there). */
+.graph-edge-source-colored.graph-edge-selected {
+  filter: drop-shadow(0 0 4px currentColor);
+}
+
 /* Start-dot for replica edges (vertical regime). Pins the arrow's
    visual origin to a specific point on the source replica's bottom
    edge so the eye can disambiguate the arrow's source even when the
@@ -3192,6 +3388,17 @@ button:disabled {
 .graph-edge-start-dot.graph-edge-selected {
   fill-opacity: 1;
   filter: drop-shadow(0 0 3px var(--accent));
+}
+
+/* Source-coloured pinned start-dot halo (2026-05-19). Same
+   pattern as the path's coloured halo above — higher specificity
+   resolves to `currentColor`, which inherits from the wrapping
+   `<g>`'s `style.color`. Without this override the start-dot of
+   a pinned coloured edge would render a light-blue accent halo
+   around a coloured fill, visually inconsistent with the path's
+   coloured halo. */
+.graph-edge-source-colored.graph-edge-start-dot.graph-edge-selected {
+  filter: drop-shadow(0 0 3px currentColor);
 }
 
 /* Bundled-edge `×N` label. Rendered at the path midpoint (shifted
@@ -3280,13 +3487,23 @@ button:disabled {
    triangles render cleanly at the small marker size we use; strokes
    would alias at this scale. */
 
+/* SVG2 `context-stroke` makes the marker's glyph fill resolve to the
+   REFERENCING path's stroke colour at render time. Result: an aux
+   arrowhead automatically inherits the path's stroke — when the path
+   stroke is `var(--accent)` (uncoloured aux), the arrowhead is light
+   blue (today's behaviour); when source-coloured, the arrowhead
+   matches the assigned colour. Same logic for state arrows. Supported
+   in Chromium / Firefox / Safari since ~2020; we don't ship a
+   fallback because every browser the rest of the app supports has it.
+   2026-05-19 — user-flagged that arrowheads weren't picking up source
+   colour. */
 .graph-arrow-glyph-aux {
-  fill: var(--accent);
+  fill: context-stroke;
   fill-opacity: 0.55;
 }
 
 .graph-arrow-glyph-state {
-  fill: var(--text);
+  fill: context-stroke;
   fill-opacity: 0.9;
 }
 

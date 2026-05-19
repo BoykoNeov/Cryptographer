@@ -50,9 +50,11 @@ import {
   deriveAuxGraph,
   dropAuxOnlyStateEdges,
   expandCollapsedIterates,
+  isEndpointId,
   replicateHighFanoutSources,
   validateGraph,
 } from "@/core/graph";
+import { allColorableSources, assignSourceColors } from "@/core/source-colors";
 import { inferShapesAtAnchors, validateShapes } from "@/core/spec-shapes";
 import type { AuxValue, State, StepNode } from "@/core/types";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
@@ -94,6 +96,18 @@ import {
   useReplicationThreshold,
 } from "../stores/view-replication";
 import {
+  clearAllSourceColorOverrides,
+  clearSourceColorOverride,
+  setSourceColorOverride,
+  toggleColorsPanelOpen,
+  toggleIncludeSingleSources,
+  toggleSourceColoringEnabled,
+  useColorsPanelOpen,
+  useIncludeSingleSources,
+  useManualSourceColors,
+  useSourceColoringEnabled,
+} from "../stores/view-source-colors";
+import {
   type ValueInspectorTarget,
   clearSelectedTarget,
   decodeBundleKey,
@@ -121,6 +135,16 @@ import {
 } from "../stores/view-zoom";
 import { GraphHelpModal } from "./GraphHelpModal";
 import { STEP_TYPE_DRAG_MIME, StepPalette, useActiveDragStepType } from "./StepPalette";
+
+/**
+ * Shared empty map for the source-color memo's OFF / no-data branch.
+ * Pre-allocated at module scope so the `effectiveSourceColors` memo
+ * doesn't churn the GC creating a new empty map on every off-state
+ * recomputation (the master toggle defaulting ON means most users
+ * never hit this branch, but it's the canonical no-op identity for
+ * tests + the fall-through path).
+ */
+const EMPTY_COLOR_MAP: ReadonlyMap<string, string> = new Map();
 
 // ─── Layout constants ──────────────────────────────────────────────────────
 // All in CSS pixels. The size-and-gap subset scales with the active view
@@ -2157,6 +2181,122 @@ export const GraphView = () => {
     return rows;
   });
 
+  // ─── Source-color coding (2026-05-19) ──────────────────────────────────
+  //
+  // Per-source color assignment for the graph view. The auto-color map is
+  // derived deterministically from `graph()` (alphabetical sort over
+  // every non-pill canonical source, palette-then-HSL — see
+  // `core/source-colors.ts`). Manual user overrides win over auto.
+  // Single-fanout sources participate (post-2026-05-19 — user-asked).
+  //
+  // Memo deps:
+  //   - `graph()`: rerun whenever the graph rewires (spec edit, replicate
+  //     toggle, collapse). Necessary AND sufficient for `autoSourceColors`
+  //     because the helper only reads structure.
+  //   - `manualSourceColors()`: per-spec map from the override store —
+  //     reactivity wires through `useManualSourceColors(specId)`. The
+  //     value memo recomposes when the override map for the active
+  //     spec.id changes.
+  //
+  // Why two separate memos: keeps the auto pass cheap to re-run on every
+  // graph change (small allocation, single pass) and the combined map
+  // cheap to re-run on every override change (one Map clone + N writes).
+  // A single fused memo would re-allocate the auto map every time a
+  // manual override flipped.
+  const sourceColoringEnabled = useSourceColoringEnabled();
+  const includeSingleSources = useIncludeSingleSources();
+  const manualSourceColors = useManualSourceColors(() => spec().id);
+  const colorsPanelOpen = useColorsPanelOpen(() => spec().id);
+  const autoSourceColors = createMemo(() => assignSourceColors(graph()));
+  // Combined map (auto + manual) — what the renderer reads. Empty when
+  // the master toggle is OFF, so the EdgePath fallback to kind-based
+  // styling takes over automatically.
+  const effectiveSourceColors = createMemo(() => {
+    if (!sourceColoringEnabled()) return EMPTY_COLOR_MAP;
+    const auto = autoSourceColors();
+    const manual = manualSourceColors();
+    if (manual.size === 0) return auto;
+    const merged = new Map(auto);
+    for (const [k, v] of manual) merged.set(k, v);
+    return merged;
+  });
+
+  // List of rows for the SourceColorsPanel. Each row carries:
+  //   - `id`: canonical source id.
+  //   - `color`: the effective colour (`undefined` for single-fanout
+  //     sources without a manual override — rendered with a hatched
+  //     swatch indicating "click to assign").
+  //   - `fanout`: outgoing-edge count (replicas roll up to canonical).
+  //   - `isManual`: whether a user override is in effect (drives the
+  //     [reset] button visibility).
+  //   - `isAutoColored`: whether the source has an auto-assigned
+  //     palette colour. False for single-fanout sources; true for
+  //     multi-fanout. Used to decide whether the swatch starts
+  //     coloured or hatched.
+  //
+  // Listing scope (post-2026-05-19):
+  //   - master toggle OFF → empty list (panel hidden).
+  //   - master ON, include-single OFF (default) → multi-fanout only.
+  //   - master ON, include-single ON → every source emitting any
+  //     outgoing edge.
+  // Manual overrides for single-fanout sources always show in the
+  // list regardless of the sub-toggle, so the user can find what they
+  // previously coloured even when the sub-toggle is off (otherwise
+  // their override would be invisible in the panel but still active
+  // on the canvas).
+  const sourceColorRows = createMemo<
+    readonly {
+      id: string;
+      color: string | undefined;
+      fanout: number;
+      isManual: boolean;
+      isAutoColored: boolean;
+    }[]
+  >(() => {
+    const auto = autoSourceColors();
+    const manual = manualSourceColors();
+    const includeSingle = includeSingleSources();
+    // Reuse `replicationSources` style fanout counting — single pass over
+    // the graph's edges, replicas counted toward their canonical source.
+    const fanout = new Map<string, number>();
+    const g = graph();
+    const replicaOf = new Map<string, string | undefined>();
+    for (const node of g.nodes) replicaOf.set(node.stepId, node.replicaOf);
+    for (const e of g.edges) {
+      const canonical = replicaOf.get(e.from) ?? e.from;
+      fanout.set(canonical, (fanout.get(canonical) ?? 0) + 1);
+    }
+    // Decide which ids to surface:
+    //   - Multi-fanout always (via `auto.keys()`).
+    //   - Anything with a manual override (so the user's previous
+    //     picks remain visible / resettable).
+    //   - Every other source when the sub-toggle is ON.
+    const ids = new Set<string>([...auto.keys(), ...manual.keys()]);
+    if (includeSingle) {
+      for (const id of allColorableSources(g)) ids.add(id);
+    }
+    const rows: {
+      id: string;
+      color: string | undefined;
+      fanout: number;
+      isManual: boolean;
+      isAutoColored: boolean;
+    }[] = [];
+    for (const id of ids) {
+      const manualColor = manual.get(id);
+      const autoColor = auto.get(id);
+      rows.push({
+        id,
+        color: manualColor ?? autoColor,
+        fanout: fanout.get(id) ?? 0,
+        isManual: manualColor !== undefined,
+        isAutoColored: autoColor !== undefined,
+      });
+    }
+    rows.sort((a, b) => a.id.localeCompare(b.id));
+    return rows;
+  });
+
   // `layout` is declared below, AFTER `portAssignment`, because the
   // layout pass takes a `portAssignment` argument (used to shift a
   // single-replica chip's x for a vertical arrow into the consumer).
@@ -3314,6 +3454,24 @@ export const GraphView = () => {
           // First few aux keys for the tooltip; the bundle inspector
           // (Slice C) shows the full list.
           bundleAuxKeysSample={bundle.auxKeys}
+          // Source-color coding (2026-05-19): inline stroke override
+          // when this edge's canonical source has an assigned color
+          // (master toggle ON + fanout ≥ 2 OR manual override).
+          // Endpoint-pill-sourced edges and single-fanout sources fall
+          // through (returns undefined → EdgePath uses kind classes).
+          //
+          // Inlined here (rather than reusing `colorForEdge` from the
+          // core helper) so we can leverage the existing `nodesById`
+          // memo for the canonical-source lookup — saves an O(N) scan
+          // over `graph.nodes` per rendered edge on every graph change.
+          sourceColor={(() => {
+            const colors = effectiveSourceColors();
+            if (colors.size === 0) return undefined;
+            if (isEndpointId(edge.from)) return undefined;
+            const node = nodesById().get(edge.from);
+            const canonical = node?.replicaOf ?? edge.from;
+            return colors.get(canonical);
+          })()}
         />
       </Show>
     );
@@ -3398,6 +3556,26 @@ export const GraphView = () => {
                 onChange={(e) => setReplicationEnabled(e.currentTarget.checked)}
               />
               replicate fan-out
+            </label>
+            {/* Source-color coding master toggle (2026-05-19). Defaults ON
+                — every source's edges paint a deterministic
+                colour so the eye can track source identity at a glance.
+                Toggling OFF reverts every edge to today's kind-based
+                styling (light-blue aux / white state). The per-source
+                colour panel (rendered below the replication panel) is
+                visible whenever this toggle is ON and the graph has at
+                least one colorable source. */}
+            <label
+              class="graph-replicate-toggle"
+              title="Paint each source's outgoing edges in a distinct colour"
+            >
+              <input
+                type="checkbox"
+                checked={sourceColoringEnabled()}
+                onChange={toggleSourceColoringEnabled}
+                data-testid="source-coloring-toggle"
+              />
+              color by source
             </label>
             <label
               class="graph-replicate-threshold"
@@ -3601,6 +3779,142 @@ export const GraphView = () => {
                       );
                     }}
                   </For>
+                </div>
+              </Show>
+            </div>
+          </Show>
+          {/* Source-colors panel (2026-05-19). Shown when the master
+              toggle is ON and at least one colorable source exists.
+              Mirrors the replication-overrides panel's header /
+              chevron / open-state shape so the two graph-level panels
+              read as siblings. One row per source: a clickable colour
+              swatch (opens a native <input type="color"> below it), the
+              source's canonical id, the fanout count, and a per-row
+              [reset] button when a manual override is active. Footer
+              has [clear all manual] and [autocolor now] (functionally
+              identical — clearing reverts every override to auto;
+              `autocolor now` is the user's mental-model phrasing for
+              the same operation, kept as a separate button for
+              discoverability). */}
+          <Show when={sourceColoringEnabled() && sourceColorRows().length > 0}>
+            <div class="graph-source-colors-panel">
+              <button
+                type="button"
+                class="graph-replication-panel-header"
+                data-testid="source-colors-panel-toggle"
+                data-open={colorsPanelOpen() ? "true" : "false"}
+                aria-expanded={colorsPanelOpen() ? "true" : "false"}
+                onClick={() => toggleColorsPanelOpen(spec().id)}
+                title={colorsPanelOpen() ? "Collapse source colors" : "Expand source colors"}
+              >
+                <span class="graph-replication-panel-chevron" aria-hidden="true">
+                  ▸
+                </span>
+                source colors
+                <span class="graph-replication-panel-hint">
+                  {sourceColorRows().length} colored source
+                  {sourceColorRows().length === 1 ? "" : "s"}
+                </span>
+              </button>
+              <Show when={colorsPanelOpen()}>
+                <div class="graph-replication-panel-body">
+                  {/* Sub-toggle: expand the listing to include
+                      single-output sources. Default OFF so the panel
+                      doesn't crowd on ciphers with many distinct
+                      sources; flipping ON adds a row per single-output
+                      source with a hatched swatch ("click to assign").
+                      Single-output sources never auto-colour — they
+                      paint only when the user picks a colour. */}
+                  <label
+                    class="graph-source-colors-subtoggle"
+                    title="Show single-output sources in the list (start uncoloured, click swatch to assign)"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={includeSingleSources()}
+                      onChange={toggleIncludeSingleSources}
+                      data-testid="source-colors-include-single-toggle"
+                    />
+                    include single-output sources
+                  </label>
+                  <For each={sourceColorRows()}>
+                    {(row) => (
+                      <div
+                        class="graph-source-colors-row"
+                        data-testid={`source-colors-row-${row.id}`}
+                      >
+                        {/* Native color picker via type=color; the
+                            swatch IS the input (CSS hides the default
+                            chrome). Clicking opens the OS-native picker
+                            on every browser we support. Persists per-
+                            spec via the override store.
+
+                            For uncoloured rows (single-fanout sources
+                            without a manual override) we tag the
+                            swatch with `-unset` so CSS paints a
+                            hatched pattern indicating "no colour yet,
+                            click to pick." The input's `value`
+                            attribute defaults to `#000000` for the
+                            picker's initial selection; user click
+                            picks any colour → `onInput` fires →
+                            override persists → row recomputes with
+                            real colour. */}
+                        <input
+                          type="color"
+                          class="graph-source-colors-swatch"
+                          classList={{
+                            "graph-source-colors-swatch-unset": row.color === undefined,
+                          }}
+                          value={row.color ?? "#888888"}
+                          aria-label={`Color for source ${row.id}`}
+                          onInput={(e) =>
+                            setSourceColorOverride(spec().id, row.id, e.currentTarget.value)
+                          }
+                          data-testid={`source-colors-swatch-${row.id}`}
+                        />
+                        <span class="graph-replication-row-id" title={row.id}>
+                          {row.id}
+                        </span>
+                        <span class="graph-replication-row-fanout">
+                          {row.fanout} {row.fanout === 1 ? "edge" : "edges"}
+                        </span>
+                        <Show when={row.isManual}>
+                          <button
+                            type="button"
+                            class="graph-source-colors-reset"
+                            onClick={() => clearSourceColorOverride(spec().id, row.id)}
+                            title={
+                              row.isAutoColored
+                                ? "Revert this source to its auto-assigned color"
+                                : "Remove this manual color (source returns to uncoloured)"
+                            }
+                          >
+                            reset
+                          </button>
+                        </Show>
+                      </div>
+                    )}
+                  </For>
+                  <div class="graph-source-colors-footer">
+                    <button
+                      type="button"
+                      class="graph-source-colors-footer-button"
+                      onClick={() => clearAllSourceColorOverrides(spec().id)}
+                      title="Remove every manual override for this spec"
+                      data-testid="source-colors-clear-all"
+                    >
+                      clear all manual
+                    </button>
+                    <button
+                      type="button"
+                      class="graph-source-colors-footer-button"
+                      onClick={() => clearAllSourceColorOverrides(spec().id)}
+                      title="Recompute the auto-assigned palette for this spec"
+                      data-testid="source-colors-autocolor"
+                    >
+                      autocolor now
+                    </button>
+                  </div>
                 </div>
               </Show>
             </div>
@@ -4772,6 +5086,36 @@ const EdgePath = (props: {
    * same list with click-to-drill behavior.
    */
   bundleAuxKeysSample?: readonly string[];
+  /**
+   * Source-color override (2026-05-19). When defined, this CSS color is
+   * applied INLINE to the visible path's stroke, the start-dot's fill,
+   * and the bundle ×N pill's text — overriding today's kind-based
+   * styling for these elements. Undefined means "fall through to the
+   * existing kind classes" (the legacy path).
+   *
+   * The arrowhead marker IS recolored to match — `.graph-arrow-glyph-*`
+   * uses SVG2's `context-stroke` fill so the marker resolves to the
+   * referencing path's stroke at render time. No prop plumbing needed
+   * for arrowheads; they follow the path automatically.
+   *
+   * The pinned-edge halo is kept consistent via `currentColor`: when
+   * `sourceColor` is defined we set `style.color` on the visible path
+   * so the higher-specificity CSS rule
+   * `.graph-edge-source-colored.graph-edge-selected` resolves
+   * `drop-shadow(0 0 4px currentColor)` to the source colour. The
+   * plain `.graph-edge-selected` rule uses `var(--accent)` (light
+   * blue) — without the override a pinned orange-coded edge would get
+   * a light-blue halo, which the user reads as "different element."
+   * For uncoloured edges the default accent halo still applies via
+   * the original CSS rule (the `.graph-edge-source-colored` class is
+   * absent, so the override doesn't match).
+   *
+   * Explicit `| undefined` (rather than `?:`) because the call site
+   * computes the value via an IIFE that returns `string | undefined`;
+   * under `exactOptionalPropertyTypes: true` the `?:` form would
+   * reject an explicit `undefined` argument.
+   */
+  sourceColor: string | undefined;
 }) => {
   // The `d` attribute is computed via createMemo so it tracks changes to
   // props.from / props.to. Without the memo, the path string would be
@@ -5115,17 +5459,46 @@ const EdgePath = (props: {
     // would render no shadow. The hit path also gets the data-edge-
     // key attribute because the component tests target `data-edge-
     // key` to locate click targets.
-    <g>
+    //
+    // The wrapping `<g>` carries `style.color = sourceColor` when
+    // colour-coding is active. SVG's `currentColor` inherits down to
+    // descendants, so the source-coloured pinned-halo rules (path's
+    // and start-dot's `.graph-edge-source-colored.graph-edge-selected`)
+    // resolve `drop-shadow(0 0 N currentColor)` to the source colour
+    // without per-element style threading. Uncoloured edges leave
+    // `color` unset, so the original `var(--accent)` halo rule wins.
+    <g style={props.sourceColor !== undefined ? { color: props.sourceColor } : undefined}>
       <path
         class={`graph-edge graph-edge-${props.kind}`}
         classList={{
           "graph-edge-feedback": props.isFeedback,
           "graph-edge-selected": props.isSelected,
           "graph-edge-bundle": (props.bundleCount ?? 1) >= 2,
+          "graph-edge-source-colored": props.sourceColor !== undefined,
         }}
         d={geom().path}
         marker-end={`url(#graph-arrow-${props.kind})`}
         pointer-events="none"
+        // Inline style.stroke overrides the kind-based CSS rule for any
+        // edge whose canonical source has an assigned color. Crucially
+        // we DO NOT use the SVG `stroke=""` PRESENTATION ATTRIBUTE here:
+        // presentation attributes have the lowest CSS specificity (per
+        // the SVG spec they translate to an originating-style rule
+        // below any author CSS), so `stroke="#E69F00"` would lose to
+        // `.graph-edge-state { stroke: var(--text); }`. The `style`
+        // attribute is real inline CSS at the highest specificity, so
+        // the assigned color wins.
+        //
+        // Undefined falls through to the kind class (today's behavior).
+        // The `graph-edge-source-colored` class above bumps opacity to
+        // 1 for aux edges so the assigned color reads at full
+        // saturation; without that override the 0.35 aux baseline
+        // would wash out the user-picked color. (The wrapping `<g>`
+        // also carries `style.color` so `currentColor` in the
+        // source-coloured halo CSS rule resolves to the same value —
+        // see the `.graph-edge-source-colored.graph-edge-selected`
+        // rule.)
+        style={props.sourceColor !== undefined ? { stroke: props.sourceColor } : undefined}
         // Conservative log-based scaling per advisor: N=2 ~2.2 px, N=11
         // ~2.7 px, N=100 ~3.0 px. The `×N` label does most of the
         // communicating; the arrow shouldn't dominate. Falls back to
@@ -5152,10 +5525,20 @@ const EdgePath = (props: {
             classList={{
               "graph-edge-feedback": props.isFeedback,
               "graph-edge-selected": props.isSelected,
+              "graph-edge-source-colored": props.sourceColor !== undefined,
             }}
             cx={dot().x}
             cy={dot().y}
             r={3}
+            // Inline style.fill matches the path's stroke when
+            // source-coloring is active. As with the path's stroke
+            // above, we use `style` rather than the `fill` presentation
+            // attribute so the inline color wins over
+            // `.graph-edge-start-dot-{aux,state} { fill: var(--text); }`.
+            // The `graph-edge-source-colored` class above also routes
+            // the pinned-dot halo through the `currentColor` override
+            // (matching the path's halo).
+            style={props.sourceColor !== undefined ? { fill: props.sourceColor } : undefined}
             pointer-events="none"
           />
         )}
@@ -5219,12 +5602,19 @@ const EdgePath = (props: {
                 rx={3}
                 ry={3}
                 class="graph-edge-bundle-label-bg"
+                // Inline style.stroke matches the assigned source color
+                // so the pill reads as "part of this source's visual
+                // group." Background fill stays at canvas-bg (--bg) for
+                // legibility. As with the path/start-dot above, `style`
+                // beats presentation attribute when fighting class CSS.
+                style={props.sourceColor !== undefined ? { stroke: props.sourceColor } : undefined}
               />
               <text
                 x={mp.x}
                 y={mp.y + padY}
                 text-anchor="middle"
                 class="graph-edge-bundle-label-text"
+                style={props.sourceColor !== undefined ? { fill: props.sourceColor } : undefined}
               >
                 {label}
               </text>
