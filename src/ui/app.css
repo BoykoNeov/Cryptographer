@@ -3581,6 +3581,45 @@ button:disabled {
   user-select: none;
 }
 
+/* Reset-pin affordance — appears at the top-LEFT of a replica or block
+   chip that carries a relative-pin delta. The corner is free for these
+   nodes because `DeleteGlyph` is suppressed on `isReplica`. Hover-
+   reveal mirrors the delete + duplicate buttons so the chip stays
+   visually quiet until the user looks for an action. The ↺ glyph
+   reads as "reset," not "delete" — important because `×` is already
+   the delete affordance on non-replica leaves. Added 2026-05-19 as
+   Slice 4 of the draggable-replicas plan. */
+.graph-leaf-reset-pin {
+  opacity: 0;
+  pointer-events: none;
+  cursor: pointer;
+  transition: opacity 0.12s ease-out;
+}
+.graph-leaf:hover .graph-leaf-reset-pin,
+.graph-leaf-reset-pin:focus-within {
+  opacity: 1;
+  pointer-events: all;
+}
+
+.graph-leaf-reset-pin-circle {
+  /* Accent-tinted (not danger red) — reset is a constructive action,
+     not a removal. Stroke matches the bg so the circle reads as a
+     button chip rather than a flat shape. */
+  fill: var(--accent, #2563eb);
+  stroke: var(--bg, #0f1115);
+  stroke-width: 1;
+}
+
+.graph-leaf-reset-pin-glyph {
+  fill: #ffffff;
+  /* The ↺ glyph is wider/taller than a single character; bump the
+     font-size slightly so it fills the chip the same way `×` does. */
+  font-size: 11px;
+  font-weight: 700;
+  pointer-events: none;
+  user-select: none;
+}
+
 /* Duplicate affordance — sister of the delete chip. Same hover-reveal,
    same chip dimensions; tinted with the accent/primary color (not
    danger red) since the click adds rather than removes. */

@@ -60,6 +60,7 @@ import type { AuxValue, State, StepNode } from "@/core/types";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { useByteFormat } from "../stores/format";
 import {
+  clearRelativePosition,
   setNodePosition,
   setRelativePosition,
   setReplicationMode,
@@ -4332,6 +4333,15 @@ export const GraphView = () => {
                     }
                   : {};
                 const leafWarnings = createMemo(() => warningsByVisibleId().get(node.stepId) ?? []);
+                // Per-node reset affordance for the relative-pin delta:
+                // gate on replica-like + has-pin so the ↺ glyph appears
+                // only on chips the user has actually nudged. The clear
+                // call removes the entry (and the whole layout entry if
+                // it was the last customization).
+                const resetPinProps =
+                  isReplicaLike && relativePinsMap().has(node.stepId)
+                    ? { onResetRelativePin: () => clearRelativePosition(spec().id, node.stepId) }
+                    : {};
                 return (
                   <Show when={box()}>
                     {(b) => (
@@ -4364,6 +4374,7 @@ export const GraphView = () => {
                         isDropTargetActive={dragOverAnchorId() === clickTargetId}
                         {...blockSpanProps}
                         {...dragProps}
+                        {...resetPinProps}
                         onClick={() => {
                           // Two effects on a leaf click:
                           //   1. handleLeafClick scrubs the trace + binds
@@ -4600,6 +4611,72 @@ const DuplicateGlyph = (props: {
   </g>
 );
 
+/**
+ * Per-node reset for a relative pin (draggable-replicas plan Slice 4,
+ * 2026-05-19). Visible only when the chip has a `relativePositions`
+ * entry — the caller passes `onResetRelativePin` only in that case,
+ * which is what gates visibility at the prop level.
+ *
+ * Placement: top-left corner of the chip. Replicas and block chips
+ * suppress `DeleteGlyph` (a replica is a visual reference, not editable),
+ * so the corner is free. The glyph is `↺` (counterclockwise arrow,
+ * U+21BA) rather than `×` to distinguish RESET from DELETE — `×` is the
+ * delete affordance elsewhere in the UI, and reusing it would invite
+ * users to click expecting deletion. Tooltip "Reset position" makes
+ * the intent explicit.
+ *
+ * CSS opacity hides the glyph until the parent `.graph-leaf` is
+ * hovered (mirrors `.graph-source-colors-reset` button discipline —
+ * see `app.css` `.graph-leaf-reset-pin`).
+ */
+const ResetPinGlyph = (props: {
+  x: number;
+  y: number;
+  /** Step id (synthetic for replicas + chips). Tooltip + testid. */
+  stepId: string;
+  onReset: () => void;
+}) => (
+  <g
+    class="graph-leaf-reset-pin"
+    data-testid={`graph-reset-pin-${props.stepId}`}
+    transform={`translate(${props.x}, ${props.y})`}
+    onClick={(e) => {
+      e.stopPropagation();
+      props.onReset();
+    }}
+    onPointerDown={(e) => {
+      // Stop pointerdown too — the chip's startNodeDrag handler is also
+      // attached to the leaf <g> and would claim the gesture if this
+      // event bubbled up.
+      e.stopPropagation();
+    }}
+    onKeyDown={(e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        e.stopPropagation();
+        props.onReset();
+      }
+    }}
+  >
+    <title>Reset position</title>
+    <circle
+      class="graph-leaf-reset-pin-circle"
+      cx={WARNING_DOT_SIZE / 2}
+      cy={WARNING_DOT_SIZE / 2}
+      r={WARNING_DOT_SIZE / 2}
+    />
+    <text
+      class="graph-leaf-reset-pin-glyph"
+      x={WARNING_DOT_SIZE / 2}
+      y={WARNING_DOT_SIZE / 2 + 0.5}
+      text-anchor="middle"
+      dominant-baseline="central"
+    >
+      ↺
+    </text>
+  </g>
+);
+
 const DeleteGlyph = (props: {
   x: number;
   y: number;
@@ -4680,6 +4757,14 @@ const LeafRect = (props: {
    * is the happy path (no indicator rendered). Multi-warning case: a
    * single glyph with all messages joined in the title tooltip. */
   warnings: readonly GraphWarning[];
+  /**
+   * Per-node reset for the relative-pin delta (draggable-replicas plan,
+   * Slice 4). Present ⇔ the chip currently has a pin; absent for
+   * non-replica leaves and for replicas/chips with no delta. The caller
+   * gates the presence so LeafRect doesn't need to read the layout
+   * store itself.
+   */
+  onResetRelativePin?: () => void;
   /**
    * State shape that exists at this leaf's position (i.e. AFTER it runs
    * — but for drop-anchor purposes, "after this step" == "before the
@@ -4797,6 +4882,19 @@ const LeafRect = (props: {
           y={props.box.y + WARNING_DOT_INSET}
           stepId={props.stepId}
           onDelete={() => removeStepFromSpec(props.stepId)}
+        />
+      </Show>
+      {/* Reset-pin affordance — top-LEFT corner of replicas + chips that
+          carry a relative-pin delta. The DeleteGlyph above is suppressed
+          for `isReplica`, so the corner is free for this. Presence is
+          gated by the parent: `onResetRelativePin` is passed only when
+          a pin exists, so the icon doesn't appear on unpinned chips. */}
+      <Show when={props.onResetRelativePin !== undefined}>
+        <ResetPinGlyph
+          x={props.box.x + WARNING_DOT_INSET}
+          y={props.box.y + WARNING_DOT_INSET}
+          stepId={props.stepId}
+          onReset={props.onResetRelativePin as () => void}
         />
       </Show>
     </g>

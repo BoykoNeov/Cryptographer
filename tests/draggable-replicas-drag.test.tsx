@@ -147,6 +147,46 @@ describe("GraphView — replica chip drag (Slice 3, draggable-replicas plan)", (
     expect(after?.relativePositions).toBeUndefined();
   });
 
+  it("clicking the per-node reset glyph clears the relative pin (Slice 4)", () => {
+    const specId = renderWithReplicas();
+    const { container } = render(() => <GraphView />);
+    const chip = container.querySelector('[data-testid*="@->"]');
+    expect(chip).not.toBeNull();
+    if (!chip) return;
+    const REPLICA_ID = (chip.getAttribute("data-testid") ?? "").replace(/^graph-leaf-/, "");
+
+    // First: drag the chip so a pin exists.
+    chip.dispatchEvent(pointerEvt("pointerdown", 100, 100));
+    window.dispatchEvent(pointerEvt("pointermove", 160, 110));
+    window.dispatchEvent(pointerEvt("pointerup", 160, 110));
+    expect(getLayoutForSpec(specId)?.relativePositions?.[REPLICA_ID]).toBeDefined();
+
+    // Reset glyph should now exist (it renders only when a pin exists).
+    const resetGlyph = container.querySelector(`[data-testid="graph-reset-pin-${REPLICA_ID}"]`);
+    expect(resetGlyph).not.toBeNull();
+    if (!resetGlyph) return;
+
+    // Click clears the pin.
+    resetGlyph.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    // The pin is gone; since this was the only customization, the whole
+    // relativePositions field is now absent (per the byte-stability
+    // discipline in the store).
+    expect(getLayoutForSpec(specId)?.relativePositions).toBeUndefined();
+  });
+
+  it("the reset glyph is NOT rendered for chips without a pin", () => {
+    renderWithReplicas();
+    const { container } = render(() => <GraphView />);
+    const chip = container.querySelector('[data-testid*="@->"]');
+    if (!chip) return;
+    const REPLICA_ID = (chip.getAttribute("data-testid") ?? "").replace(/^graph-leaf-/, "");
+    // No drag has happened, so no pin exists yet — the glyph should not
+    // render. The presence-gated render in LeafRect is the safety belt
+    // against showing a "reset" affordance with nothing to reset.
+    expect(container.querySelector(`[data-testid="graph-reset-pin-${REPLICA_ID}"]`)).toBeNull();
+  });
+
   it("a second drag accumulates onto the existing pin instead of overwriting it", () => {
     const specId = renderWithReplicas();
     const { container } = render(() => <GraphView />);
