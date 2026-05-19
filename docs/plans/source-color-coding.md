@@ -1,5 +1,9 @@
 # Source color coding for graph-view arrows
 
+**STATUS: SHIPPED 2026-05-19 (commit `f6edb7e`).** Memory entry
+`[[project-source-color-coding]]` carries the gotchas + post-ship
+notes. Plan body retained for historical context.
+
 Captured 2026-05-19 after the Q1/Q2 graph polish work landed. User
 wants per-source edge coloring as a pedagogical aid: every edge from a
 canonical source that fans out to ≥ 2 consumers takes a distinct
