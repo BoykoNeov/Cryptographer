@@ -3635,7 +3635,17 @@ button:disabled {
   transition: opacity 0.12s ease-out;
 }
 .graph-leaf:hover .graph-leaf-reset-pin,
+.graph-container:hover .graph-leaf-reset-pin,
 .graph-leaf-reset-pin:focus-within {
+  /* Two ancestor selectors so the same `.graph-leaf-reset-pin` chip
+     reveals correctly whether it's inside a LeafRect (replicas + block
+     chips, original Slice 4 site) or inside a ContainerRect (groups +
+     iterates, draggable-replicas plan Slice 4 follow-up 2026-05-19 —
+     user reported the iterate's glyph never appearing despite the
+     prop being wired). Without the `.graph-container` rule the glyph
+     stayed at opacity 0 in real browsers (jsdom doesn't honor
+     pointer-events / hover reveals, so the jsdom test missed it —
+     see memory `jsdom-pointer-events-gap`). */
   opacity: 1;
   pointer-events: all;
 }

@@ -381,6 +381,61 @@ describe("GraphView — container drag (Slice 6)", () => {
     // Glyph is gone after the reset (since the pin is gone).
     expect(container.querySelector('[data-testid="graph-reset-pin-round.5"]')).toBeNull();
   });
+
+  // ECB iterate variant of the test above — user reported during
+  // smoke that the ECB/CBC "block containers" (iterates) didn't show
+  // a ↺ glyph after dragging while the inner block-1/block-2 chips
+  // did. The fix wires ContainerRect's `onResetAbsolutePin` for all
+  // container.kind values; this test pins that the iterate kind isn't
+  // accidentally excluded (the prior round.5 test only covered the
+  // `kind === "group"` path).
+  it("shows ↺ reset glyph on a dragged ECB iterate container too (not just groups)", async () => {
+    const { setCipherMode } = await import("@/ui/stores/spec");
+    const { aes128EcbSpec } = await import("@/ciphers/aes-128-ecb");
+    const { makeBytesState } = await import("@/core/state/bytes");
+    const { buildDefaultRegistry } = await import("@/ciphers/default-registry");
+    const { runSpec } = await import("@/core/runtime");
+
+    setCipherMode("ecb");
+    const ecbKey = "000102030405060708090a0b0c0d0e0f";
+    const ecbPt = "00112233445566778899aabbccddeeff" + "00112233445566778899aabbccddeeff";
+    const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
+      initialState: makeBytesState(bytesFromHex(ecbPt)),
+      initialAux: new Map<string, AuxValue>([["key", bytesFromHex(ecbKey)]]),
+    });
+    setTrace(trace);
+
+    const { container } = render(() => <GraphView />);
+
+    // No reset glyph before the drag — the iterate is in its
+    // algorithmically-laid position.
+    expect(container.querySelector('[data-testid="graph-reset-pin-ecb-blocks"]')).toBeNull();
+
+    // Drag the iterate's header band. The data-testid follows the
+    // same `graph-container-header-${id}` shape used for groups.
+    const header = container.querySelector(
+      '[data-testid="graph-container-header-ecb-blocks"]',
+    ) as Element | null;
+    expect(header).not.toBeNull();
+    if (!header) return;
+    header.dispatchEvent(pointerEvt("pointerdown", 100, 100));
+    window.dispatchEvent(pointerEvt("pointermove", 200, 150));
+    window.dispatchEvent(pointerEvt("pointerup", 200, 150));
+
+    // Absolute pin landed (writes to `positions`, not `relativePositions`).
+    expect(getLayoutForSpec(aes128EcbSpec.id)?.positions["ecb-blocks"]).toBeDefined();
+
+    // Reset glyph now rendered on the iterate's header.
+    const resetGlyph = container.querySelector('[data-testid="graph-reset-pin-ecb-blocks"]');
+    expect(resetGlyph).not.toBeNull();
+
+    // Clicking it clears the pin and removes the glyph.
+    if (resetGlyph) {
+      fireEvent.click(resetGlyph);
+      expect(getLayoutForSpec(aes128EcbSpec.id)?.positions["ecb-blocks"]).toBeUndefined();
+      expect(container.querySelector('[data-testid="graph-reset-pin-ecb-blocks"]')).toBeNull();
+    }
+  });
 });
 
 // ─── Root-level leaf drag ─────────────────────────────────────────────────
