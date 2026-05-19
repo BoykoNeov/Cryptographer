@@ -142,10 +142,44 @@ export const IterateGroupSchema = z.object({
   children: z.array(z.lazy(() => StepNodeSchema)),
 });
 
+// Feistel branching primitive (Phase 2 of `docs/plans/des-feistel.md`).
+// The CombineKind union is mirrored as a `z.enum` so adding a new kind
+// surfaces a literal compile error here once the TS union widens. Keep the
+// list in sync with `core/types.ts::CombineKind`.
+export const CombineKindSchema = z.enum([
+  "feistel-standard",
+  "feistel-no-swap",
+  "feistel-add-into-left",
+  "feistel-add-into-right",
+]);
+
+export const BranchTrackSchema = z.object({
+  name: z.string().optional(),
+  inputBytes: z.array(z.number().int().nonnegative()),
+  children: z.array(z.lazy(() => StepNodeSchema)),
+});
+
+export const FeistelRoundGroupSchema = z.object({
+  kind: z.literal("feistel-round"),
+  id: z.string(),
+  label: z.string().optional(),
+  tracks: z.array(BranchTrackSchema),
+  combineKind: CombineKindSchema,
+});
+
+// Note on `schemaVersion`: Phase 2 of the DES + branching primitive plan
+// keeps `CURRENT_SCHEMA_VERSION = 1` and EXTENDS the union with feistel-
+// round here. The toy Feistel spec exercised by Phase 2 tests is not
+// registered in the cipher selector, so a Phase-2-built app saving an
+// AES doc produces output byte-identical to a v0.5.0 save — keeps the
+// cross-version compatibility window open. Phase 3 (when DES enters the
+// cipher selector and users can actually save a feistel-round-bearing
+// doc) bumps schemaVersion to 2.
 export const StepNodeSchema: z.ZodTypeAny = z.discriminatedUnion("kind", [
   StepLeafSchema,
   StepGroupSchema,
   IterateGroupSchema,
+  FeistelRoundGroupSchema,
 ]);
 
 // ─── CipherSpec ───────────────────────────────────────────────────────────

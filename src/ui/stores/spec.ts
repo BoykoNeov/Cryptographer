@@ -697,7 +697,16 @@ const generateUniqueStepId = (spec: CipherSpec, stepType: string): string => {
   const visit = (nodes: readonly StepNode[]): void => {
     for (const node of nodes) {
       usedIds.add(node.id);
-      if (node.kind !== "step") visit(node.children);
+      if (node.kind === "step") continue;
+      if (node.kind === "feistel-round") {
+        // Feistel-round (Phase 2 of the DES + branching primitive plan):
+        // descend into each track's children to collect ids from inside
+        // the round. Ensures auto-generated ids never collide with an
+        // id inside a Feistel track.
+        for (const track of node.tracks) visit(track.children);
+      } else {
+        visit(node.children);
+      }
     }
   };
   visit(spec.steps);

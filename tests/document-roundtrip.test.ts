@@ -31,6 +31,7 @@ import { aes192Spec } from "@/ciphers/aes-192";
 import { aes192DecryptSpec } from "@/ciphers/aes-192-decrypt";
 import { aes256Spec } from "@/ciphers/aes-256";
 import { aes256DecryptSpec } from "@/ciphers/aes-256-decrypt";
+import { FEISTEL_TOY_SPEC } from "@/ciphers/feistel-toy";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { serpent128DecryptSpec } from "@/ciphers/serpent-128-decrypt";
 import { serpent192Spec } from "@/ciphers/serpent-192";
@@ -72,6 +73,10 @@ const SHIPPED_SPECS: ReadonlyArray<{ readonly name: string; readonly spec: Ciphe
   { name: "serpent-192 decrypt", spec: serpent192DecryptSpec },
   { name: "serpent-256 encrypt", spec: serpent256Spec },
   { name: "serpent-256 decrypt", spec: serpent256DecryptSpec },
+  // Phase 2 of the DES + branching primitive plan — toy spec used to
+  // exercise the new feistel-round node kind through the document
+  // schema's discriminated union. Not a shipped user-facing cipher.
+  { name: "feistel-toy (Phase 2 test fixture)", spec: FEISTEL_TOY_SPEC },
 ];
 
 // ─── Round-trip every shipped spec ────────────────────────────────────────

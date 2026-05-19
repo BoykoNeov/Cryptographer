@@ -38,10 +38,9 @@ const findGroup = (spec: CipherSpec, id: string): StepGroup | null => {
   const visit = (nodes: readonly StepNode[]): StepGroup | null => {
     for (const node of nodes) {
       if (node.kind === "group" && node.id === id) return node;
-      if (node.kind !== "step") {
-        const found = visit(node.children);
-        if (found) return found;
-      }
+      if (node.kind === "step" || node.kind === "feistel-round") continue;
+      const found = visit(node.children);
+      if (found) return found;
     }
     return null;
   };

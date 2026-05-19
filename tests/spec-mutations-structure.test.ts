@@ -45,7 +45,12 @@ const countAllNodes = (nodes: readonly StepNode[]): number => {
   let n = 0;
   for (const node of nodes) {
     n++;
-    if (node.kind !== "step") n += countAllNodes(node.children);
+    if (node.kind === "step") continue;
+    if (node.kind === "feistel-round") {
+      for (const track of node.tracks) n += countAllNodes(track.children);
+    } else {
+      n += countAllNodes(node.children);
+    }
   }
   return n;
 };

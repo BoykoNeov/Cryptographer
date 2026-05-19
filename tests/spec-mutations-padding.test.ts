@@ -15,6 +15,11 @@ const findFirstLeaf = (spec: CipherSpec, type: string): StepLeaf | null => {
     for (const node of nodes) {
       if (node.kind === "step") {
         if (node.type === type) return node;
+      } else if (node.kind === "feistel-round") {
+        for (const track of node.tracks) {
+          const found = visit(track.children);
+          if (found) return found;
+        }
       } else {
         const found = visit(node.children);
         if (found) return found;

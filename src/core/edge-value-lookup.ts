@@ -100,6 +100,7 @@
  */
 
 import { CIPHER_INPUT_ID, CIPHER_OUTPUT_ID, type GraphEdge, isEndpointId } from "./graph";
+import { canonicalStepId } from "./step-id";
 import type { AuxValue, CipherSpec, IterateGroup, StepNode, Trace, TraceFrame } from "./types";
 
 /** Pattern matching a block-chip's synthetic id. Captures (iterateId, index). */
@@ -175,11 +176,10 @@ const findIterateById = (steps: readonly StepNode[], id: string): IterateGroup |
   return null;
 };
 
-/** Strip the runtime's `:b<digits>` suffix iterate-body frames carry, so a
- *  chip-id lookup against canonical spec stepIds works. Mirrors the helper
- *  with the same logic in `core/graph.ts` and `ui/stores/trace.ts` — kept
- *  local so this module doesn't pull a UI dep. */
-const canonicalStepId = (frameStepId: string): string => frameStepId.replace(/:b\d+$/, "");
+// Canonicalization (strip `:b{i}` / `:t{name}` / `:rejoin` / `:swap` runtime
+// suffixes off a frame stepId) lives in `@/core/step-id`. Centralized in
+// Phase 2 of the DES + branching primitive plan so all sites that resolve
+// frame stepId → spec leaf id can't drift on suffix handling.
 
 /**
  * Find iterate-body frames at a specific block index. Used by every

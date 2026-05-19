@@ -16,6 +16,7 @@ import { auxXor, auxXorDoc } from "../steps/aux-xor";
 import { byteSubstitution, byteSubstitutionDoc } from "../steps/byte-substitution";
 import { computeBlockCount, computeBlockCountDoc } from "../steps/compute-block-count";
 import { concatBlocks, concatBlocksDoc } from "../steps/concat-blocks";
+import { feistelToyAddK, feistelToyAddKDoc } from "../steps/feistel-toy-add-k";
 import { iso78164Pad, iso78164PadDoc } from "../steps/iso7816-4-pad";
 import { iso78164Unpad, iso78164UnpadDoc } from "../steps/iso7816-4-unpad";
 import { ivLoad, ivLoadDoc } from "../steps/iv-load";
@@ -160,5 +161,11 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: serpentInvLinearTransform,
     doc: serpentInvLinearTransformDoc,
   });
+  // ─── Toy Feistel F (Phase 2 of the DES + branching primitive plan) ─────
+  // Test-fixture step type exercising the branching primitive end-to-end
+  // without DES's complexity. Asymmetric F = (R + k) mod 256 per byte;
+  // see `src/steps/feistel-toy-add-k.ts` for why addition (not XOR) is
+  // chosen. NOT in the cipher selector — referenced only by Phase 2 tests.
+  r.register("feistel.toy-add-k@1", { executor: feistelToyAddK, doc: feistelToyAddKDoc });
   return r;
 };

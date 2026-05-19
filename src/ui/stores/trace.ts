@@ -1,3 +1,4 @@
+import { canonicalStepId } from "@/core/step-id";
 import type { Aux, Trace } from "@/core/types";
 import { createSignal } from "solid-js";
 
@@ -37,17 +38,10 @@ const [version, setVersion] = createSignal(0);
  */
 const [selectedStepId, setSelectedStepIdSignal] = createSignal<string | null>(null);
 
-/**
- * Strip the `:b{i}` block suffix iterate-body frames carry, returning the
- * canonical stepId that lives in the spec. Used by every place we need to
- * convert a trace-frame stepId into "what does the user-visible spec call
- * this step?" — graph leaf click, scrubber sync, and the inverse lookup
- * for `setSelectedStepId` finding a frame index.
- */
-const canonicalStepId = (frameStepId: string): string => {
-  const colonIdx = frameStepId.indexOf(":b");
-  return colonIdx >= 0 ? frameStepId.slice(0, colonIdx) : frameStepId;
-};
+// Canonicalization (strip `:b{i}` / `:t{name}` / `:rejoin` / `:swap` runtime
+// suffixes off a frame stepId) lives in `@/core/step-id`. Centralized in
+// Phase 2 of the DES + branching primitive plan so the trace store and
+// `core/edge-value-lookup` can't drift on suffix handling.
 
 /**
  * Swap in a new trace. Preserves the user's *focus* across re-runs: if the

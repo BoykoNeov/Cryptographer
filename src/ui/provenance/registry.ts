@@ -166,6 +166,11 @@ export const PROVENANCE_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
   // hover to BytesView for Speck)
   "speck.round@1",
   "speck.round-inverse@1",
+  // Phase 2 of the DES + branching primitive plan — toy F used only by
+  // `tests/feistel-primitive.test.ts`. Never user-visible (the toy spec
+  // is not in the cipher selector), so no cell-hover provenance is
+  // needed. Removed when the toy is decommissioned post-Phase 3.
+  "feistel.toy-add-k@1",
 ]);
 
 /**

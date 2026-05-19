@@ -104,6 +104,27 @@ const walk = (nodes: readonly StepNode[], current: StateShape, ctx: WalkContext)
       ctx.shapeAt.set(node.id, shape);
       continue;
     }
+    if (node.kind === "feistel-round") {
+      // Feistel-round runtime contract: the round operates on a
+      // BytesState (parent-scope state.shape === "bytes") — see
+      // `core/runtime.ts::runFeistelRound`. Each track gets a sliced
+      // BytesState; track-internal shape changes are local to that track
+      // (E-expand grows R from 4 to 6 bytes, S-boxes shrink back to 4;
+      // the combine reassembles bytes at declared inputBytes positions).
+      // Therefore:
+      //   - Body input shape is "bytes" (regardless of parent shape).
+      //   - Body exit shape is "bytes" (concatenation of track outputs
+      //     placed at declared inputBytes positions).
+      // Parent-scope shape entering / exiting the round is therefore
+      // "bytes". We still walk each track so per-track contract checks
+      // fire + shapeAt entries are populated for renderer use.
+      for (const track of node.tracks) {
+        walk(track.children, "bytes", ctx);
+      }
+      shape = "bytes";
+      ctx.shapeAt.set(node.id, shape);
+      continue;
+    }
     // Iterate is opaque to shape inference. The body always starts in
     // matrix4x4-bytes (the runtime substitutes state = blocks[i]); the
     // iterate exits leaving state in matrix4x4-bytes (the last iteration's

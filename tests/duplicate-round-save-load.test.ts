@@ -65,7 +65,8 @@ const countRoundGroups = (spec: CipherSpec, prefix: "round" | "inv-round"): numb
   const visit = (nodes: readonly StepNode[]): void => {
     for (const n of nodes) {
       if (n.kind === "group" && n.id.startsWith(`${prefix}.`)) count++;
-      if (n.kind !== "step") visit(n.children);
+      if (n.kind === "step" || n.kind === "feistel-round") continue;
+      visit(n.children);
     }
   };
   visit(spec.steps);
