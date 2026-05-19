@@ -1,8 +1,16 @@
 # DES + branching primitive — first Feistel cipher
 
-> **Status: not started.** Drafted 2026-05-19; architecture direction
-> (DES first + true branching, per Path C) approved by user. The plan
-> itself is open for further iteration. Multi-phase: ~5 phases,
+> **Status: Phases 1+2 shipped 2026-05-19** (commits `91f143d` and
+> `6a046d0`). Phase 1: oracle + KAT fixture with intermediates.
+> Phase 2: branching primitive in core (`BranchTrack` + `CombineKind`
+> + `FeistelRoundGroup`) + toy Feistel + 19 new tests. **Schema
+> version bump deferred to Phase 3** per advisor + user (the toy spec
+> isn't user-reachable, so AES docs saved from Phase 2 stay byte-
+> identical to v0.5.0). Phases 3–6 pending; advisor pass required
+> before each per `[[feedback-iterative-slice-review]]`.
+>
+> Originally drafted 2026-05-19; architecture direction (DES first +
+> true branching, per Path C) approved by user. Multi-phase: 6 phases,
 > ~3000–5000 lines including tests. The branching primitive is a load-bearing
 > architecture change (touches `core/types.ts`, `runtime.ts`, `graph.ts`)
 > deliberately designed-once against DES's harder constraints so it carries
@@ -94,7 +102,7 @@ next phase's design before code lands.
 This is a project-wide pattern for multi-phase architectural plans, not
 DES-specific — see `[[feedback-iterative-slice-review]]`.
 
-### Phase 1 — verification oracle
+### Phase 1 — verification oracle — SHIPPED 2026-05-19 (`91f143d`)
 
 Per `[[feedback-crypto-verification]]`: before pinning ANY KAT, get an
 external oracle running. Two viable choices:
@@ -112,7 +120,7 @@ A short verifier script lives at `scripts/verify-des.mjs` (or similar)
 and is not shipped with the app — its only purpose is to produce the
 intermediate KATs the tests pin against.
 
-### Phase 2 — branching primitive in core
+### Phase 2 — branching primitive in core — SHIPPED 2026-05-19 (`6a046d0`)
 
 The headline architecture change. Adds one new spec node kind, runtime
 support for executing it, and graph-derivation handling. No DES-specific
@@ -609,15 +617,18 @@ Manual browser pass on:
   the new container kind: state-spine rules, track-bounded edges,
   rejoin synthetic node placement.
 - **`tests/des-roundtrip-document.test.ts`** — save→load on a spec
-  containing `feistel-round` nodes. **Schema migration**: Phase 2
-  bumps `CipherDocument.schemaVersion` from 1 → 2. The parser branches:
-  schema 1 documents (no `feistel-round` nodes possible) are accepted
-  unchanged and re-saved as schema 2 (idempotent upgrade); schema 2
-  documents include the new node kind. Older app builds reading a
-  schema 2 document fail loudly via the existing version-check guard.
-  The byte-stability test in `tests/document-roundtrip.test.ts` is
-  updated to assert schema 2 in the output of all spec-only saves
-  once Phase 2 ships.
+  containing `feistel-round` nodes. **Schema migration (revised at
+  Phase 2 review, 2026-05-19)**: original plan bumped
+  `CipherDocument.schemaVersion` 1 → 2 in Phase 2. Per advisor +
+  user, the bump is **deferred to Phase 3** instead — Phase 2's
+  `feistel-round` node kind exists only in the toy spec (not in the
+  cipher selector), so AES docs saved during Phases 2–3 stay byte-
+  identical to v0.5.0 and remain readable by v0.5.0 builds. Phase 2
+  added `FeistelRoundGroupSchema` to the document-schema discriminated
+  union without changing `CURRENT_SCHEMA_VERSION`; the toy spec round-
+  trips through that path in `tests/document-roundtrip.test.ts`.
+  Phase 3 will bump to schema 2 when DES enters the cipher selector
+  and users can actually save a feistel-round-bearing doc.
 - **`tests/state-shape-contracts.test.ts`** — extend the existing
   walker to descend into all of `feistel-round.tracks[*].children`.
   Coverage gate stays at 100%.
