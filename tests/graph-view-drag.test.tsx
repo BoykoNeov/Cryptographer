@@ -344,6 +344,43 @@ describe("GraphView — container drag (Slice 6)", () => {
     expect(getX("round.6")).toBe(beforeR6X);
     expect(getX("round.7")).toBe(beforeR7X);
   });
+
+  // Per-container ↺ reset (draggable-replicas plan Slice 4 follow-up,
+  // 2026-05-19). The LeafRect reset affordance only covered the relative-
+  // pin path; root-draggable containers carry absolute pins and had no
+  // way back to their auto position short of clearing the whole layout.
+  // The ↺ glyph now appears on a container's header after the user
+  // drags it; clicking it removes the absolute pin entry only.
+  it("shows ↺ reset glyph on a dragged container, and clicking it clears the absolute pin", () => {
+    seedAes128Trace();
+    const { container } = render(() => <GraphView />);
+    const specId = useSpec()().id;
+
+    // Before any drag: no reset glyph on round.5.
+    expect(container.querySelector('[data-testid="graph-reset-pin-round.5"]')).toBeNull();
+
+    // Drag round.5 enough to trigger an absolute pin.
+    const header = container.querySelector(
+      '[data-testid="graph-container-header-round.5"]',
+    ) as Element;
+    header.dispatchEvent(pointerEvt("pointerdown", 100, 100));
+    window.dispatchEvent(pointerEvt("pointermove", 200, 150));
+    window.dispatchEvent(pointerEvt("pointerup", 200, 150));
+
+    // Pin landed.
+    expect(getLayoutForSpec(specId)?.positions["round.5"]).toBeDefined();
+
+    // Reset glyph now rendered.
+    const resetGlyph = container.querySelector('[data-testid="graph-reset-pin-round.5"]');
+    expect(resetGlyph).not.toBeNull();
+
+    // Clicking the glyph removes the absolute pin entry.
+    fireEvent.click(resetGlyph as Element);
+    expect(getLayoutForSpec(specId)?.positions["round.5"]).toBeUndefined();
+
+    // Glyph is gone after the reset (since the pin is gone).
+    expect(container.querySelector('[data-testid="graph-reset-pin-round.5"]')).toBeNull();
+  });
 });
 
 // ─── Root-level leaf drag ─────────────────────────────────────────────────

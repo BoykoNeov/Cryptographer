@@ -60,6 +60,7 @@ import type { AuxValue, State, StepNode } from "@/core/types";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { useByteFormat } from "../stores/format";
 import {
+  clearNodePosition,
   clearRelativePosition,
   hasUserLayout,
   setLayoutForSpec,
@@ -1528,6 +1529,26 @@ export const layoutRoot = (
     // push a chip below the spine row.
     const replicaBottom = finalY + consts.LEAF_H;
     if (replicaBottom > maxBottom) maxBottom = replicaBottom;
+  }
+
+  // Final extent pass: scan every box (including iterate-body chips and
+  // group-lifted replicas at any nesting depth) for the actual right/bottom.
+  // The two pre-passes above tracked `maxRight`/`maxBottom` from a curated
+  // subset (root containers + root replicas) — sufficient when every
+  // descendant's box stays inside its parent's natural h, but a relative-
+  // pin delta on an iterate-body chip or a group-lifted replica can push
+  // its box outside the parent's `box.h` (the parent's height is computed
+  // from natural child sizes; the pin is applied AFTER and doesn't grow
+  // the parent). Without this pass, the SVG height stayed at the natural
+  // value and the user-dragged chip rendered below `canvasH` — visually
+  // clipped (see draggable-replicas-layout.test.ts "canvasH grows to fit
+  // a block chip dragged downward"). Cost: one O(boxes) pass; trivial
+  // compared to the layout work above.
+  for (const box of boxes.values()) {
+    const right = box.x + box.w;
+    const bottom = box.y + box.h;
+    if (right > maxRight) maxRight = right;
+    if (bottom > maxBottom) maxBottom = bottom;
   }
 
   return {
@@ -4214,6 +4235,19 @@ export const GraphView = () => {
                         // container whenever the cursor's resolved anchor
                         // (`closest("[data-drop-anchor]")`) is THIS container.
                         isDropTargetActive={dragOverAnchorId() === container.id}
+                        // Per-container ↺ reset affordance (draggable-replicas
+                        // plan Slice 4 follow-up, 2026-05-19). Inlined as a
+                        // reactive prop expression — `pinnedMap()` is read on
+                        // every re-evaluation, so the glyph appears the moment
+                        // the user's drag writes a pin and disappears when the
+                        // pin is cleared. (A `const x = pinnedMap().has(...)`
+                        // captured at row-init time wouldn't be reactive — see
+                        // CLAUDE.md's "For callbacks aren't reactive scopes".)
+                        onResetAbsolutePin={
+                          pinnedMap().has(container.id)
+                            ? () => clearNodePosition(spec().id, container.id)
+                            : undefined
+                        }
                       />
                     )}
                   </Show>
@@ -5029,6 +5063,17 @@ const ContainerRect = (props: {
    * Always false when no drag is in progress.
    */
   isDropTargetActive: boolean;
+  /**
+   * Reset affordance — defined only when the container carries an
+   * absolute pin in the layout sidecar. The parent passes this as a
+   * reactive prop expression (`pinnedMap().has(id) ? fn : undefined`)
+   * so the icon appears/disappears the moment the pin is written or
+   * cleared. Counterpart to LeafRect's `onResetRelativePin` for the
+   * absolute-pin path. Explicit `| undefined` is required because
+   * `exactOptionalPropertyTypes` forbids passing `undefined` to a
+   * bare optional prop.
+   */
+  onResetAbsolutePin?: (() => void) | undefined;
 }) => {
   // Chevron sits at the right edge of the header band; clicking it doesn't
   // start a drag. The rest of the header is the drag handle.
@@ -5179,6 +5224,24 @@ const ContainerRect = (props: {
           y={props.box.y + (HEADER_H - WARNING_DOT_SIZE) / 2}
           containerId={props.container.id}
           onDuplicate={() => duplicateRoundInSpec(props.container.id)}
+        />
+      </Show>
+      {/* Reset-pin affordance — placed after the delete chip (and after
+          the duplicate chip when present) so the row reads:
+          [delete] · [duplicate?] · [reset?] · label · …
+          Visible only when the parent passed `onResetAbsolutePin`, which
+          it does iff this container carries an absolute pin in the
+          layout sidecar. Counterpart to LeafRect's per-replica reset. */}
+      <Show when={props.onResetAbsolutePin !== undefined}>
+        <ResetPinGlyph
+          x={
+            props.box.x +
+            WARNING_DOT_INSET +
+            (WARNING_DOT_SIZE + 4) * (isRoundDuplicatable(props.container.id) ? 2 : 1)
+          }
+          y={props.box.y + (HEADER_H - WARNING_DOT_SIZE) / 2}
+          stepId={props.container.id}
+          onReset={props.onResetAbsolutePin as () => void}
         />
       </Show>
       {/* Chevron hit area on the right side of the header band. Clicking

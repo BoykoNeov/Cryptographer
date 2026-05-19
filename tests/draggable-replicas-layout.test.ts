@@ -205,6 +205,65 @@ describe("draggable-replicas layout — block-chip delta application", () => {
     expect(pinnedChip.y).toBe(autoChip.y + 40);
   });
 
+  it("canvasH grows to fit a block chip dragged downward past the iterate's natural bottom", () => {
+    // Bug reproduction (2026-05-19 manual smoke): the user reports that
+    // dragging a replica chip downward leaves it visually clipped — the
+    // SVG height (driven by `canvasH`) does NOT grow to include the
+    // chip's new bottom. Other root-level drags (e.g. dragging a
+    // root-level leaf) DO grow the canvas. The asymmetry traces to
+    // `layoutRoot`'s extent tracking: root replicas update `maxBottom`
+    // (line 1530) but iterate-body chips/replicas only update an x-
+    // extent (`maxIterateReplicaRight`) and the container's `box.h` is
+    // computed from natural child sizes — so a pin that pushes the
+    // chip below the container's natural bottom escapes the canvas
+    // extent calculation entirely.
+    //
+    // Property: after dragging an iterate-body block chip 200 px down,
+    // `canvasH` must be at least the chip's new bottom + CANVAS_MARGIN.
+    const ITERATE_ID = "iter";
+    const CHIP_0 = "iter@block0";
+    const g = buildSyntheticGraph({
+      nodes: [
+        {
+          stepId: CHIP_0,
+          stepType: "__block_chip__",
+          label: "block 1",
+          containerPath: [ITERATE_ID],
+          blockChipOf: ITERATE_ID,
+        },
+      ],
+      containers: [
+        {
+          id: ITERATE_ID,
+          kind: "iterate",
+          label: "iter",
+          containerPath: [],
+          childIds: [CHIP_0],
+        },
+      ],
+      edges: [],
+      rootIds: [ITERATE_ID],
+    });
+    const consts = layoutConstantsFor("normal");
+    const auto = layoutRoot(g, EMPTY_PIN_MAP, consts);
+    const autoChip = auto.boxes.get(CHIP_0);
+    if (!autoChip) throw new Error("missing auto chip box");
+
+    const DRAG_DOWN = 200;
+    const relativePins = new Map<string, { dx: number; dy: number }>([
+      [CHIP_0, { dx: 0, dy: DRAG_DOWN }],
+    ]);
+    const pinned = layoutRoot(g, EMPTY_PIN_MAP, consts, new Set(), undefined, relativePins);
+    const pinnedChip = pinned.boxes.get(CHIP_0);
+    if (!pinnedChip) throw new Error("missing pinned chip box");
+
+    const chipBottom = pinnedChip.y + pinnedChip.h;
+    // Allow whatever CANVAS_MARGIN the layout uses by asserting the
+    // STRICT inequality: canvasH must be greater than the chip's
+    // bottom, not just equal. (Margin > 0 means a strict gap exists.)
+    expect(pinned.canvasH).toBeGreaterThan(chipBottom);
+  });
+
   it("chip pin does NOT shift sibling chips' flow positions (auto box returned for flow)", () => {
     // Two chips: chip0 then chip1. Pin chip0 with a horizontal delta;
     // chip1's auto position must stay where it would be if chip0 hadn't

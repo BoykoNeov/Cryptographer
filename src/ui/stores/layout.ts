@@ -221,6 +221,38 @@ export const setNodePosition = (specId: string, nodeId: string, x: number, y: nu
 };
 
 /**
+ * Remove one node's absolute pin (back to algorithmic flow placement). Used
+ * by the per-container ↺ reset affordance — the mirror of
+ * `clearRelativePosition` for absolute pins. If clearing this entry leaves
+ * the layout entirely empty, drops the spec's map entry to keep
+ * `cryptographer.layouts` byte-stable.
+ */
+export const clearNodePosition = (specId: string, nodeId: string): void => {
+  const current = layoutMap()[specId];
+  if (!current) return;
+  if (current.positions[nodeId] === undefined) return;
+  const positions = { ...current.positions };
+  delete positions[nodeId];
+  const next = buildLayoutSpec(
+    positions,
+    current.collapsedGroups,
+    current.flowDirection,
+    cloneReplicationModes(current),
+    cloneRelativePositions(current),
+  );
+  if (!hasUserLayout(next)) {
+    const map = { ...layoutMap() };
+    delete (map as { [specId: string]: LayoutSpec })[specId];
+    setLayoutMapSignal(map);
+    persist(map);
+    return;
+  }
+  const map = { ...layoutMap(), [specId]: next };
+  setLayoutMapSignal(map);
+  persist(map);
+};
+
+/**
  * Pin one node's RELATIVE offset (delta from its auto-laid position). Used
  * for synthetic ids — aux replicas (`${source}@->${consumer}`) and block
  * chips (`${iterateId}@block${i}`) — whose anchor is another node. The
