@@ -64,6 +64,10 @@ export const SUPPORTED_CIPHER_MODES_BY_CIPHER: Readonly<Record<Cipher, readonly 
   "serpent-128": ["single-block"],
   "serpent-192": ["single-block"],
   "serpent-256": ["single-block"],
+  // DES: single-block today (Phase 4 of `docs/plans/des-feistel.md`).
+  // ECB/CBC for DES would need block-size-aware load-block/store-block
+  // (currently 16-byte-only). See plan's "Out of scope" section.
+  des: ["single-block"],
 };
 
 export const isCipherModeSupported = (cipher: Cipher, mode: CipherMode): boolean =>

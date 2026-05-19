@@ -50,6 +50,10 @@ export const CIPHER_IDS = [
   "serpent-128",
   "serpent-192",
   "serpent-256",
+  // DES — Phase 4 of `docs/plans/des-feistel.md`. Single-block only; the
+  // tuple change here is what passes the compile-time exhaustiveness check
+  // `assertCipherCoverage` against the `Cipher` union in `ui/stores/cipher.ts`.
+  "des",
 ] as const satisfies readonly Cipher[];
 
 export const CIPHER_MODES = [
@@ -167,14 +171,14 @@ export const FeistelRoundGroupSchema = z.object({
   combineKind: CombineKindSchema,
 });
 
-// Note on `schemaVersion`: Phase 2 of the DES + branching primitive plan
-// keeps `CURRENT_SCHEMA_VERSION = 1` and EXTENDS the union with feistel-
-// round here. The toy Feistel spec exercised by Phase 2 tests is not
-// registered in the cipher selector, so a Phase-2-built app saving an
-// AES doc produces output byte-identical to a v0.5.0 save — keeps the
-// cross-version compatibility window open. Phase 3 (when DES enters the
-// cipher selector and users can actually save a feistel-round-bearing
-// doc) bumps schemaVersion to 2.
+// Note on `schemaVersion`: Phase 4 of `docs/plans/des-feistel.md` bumped
+// the literal to 2 when DES entered the cipher selector. The StepNode
+// union was already widened to accept feistel-round in Phase 2 (so the
+// schema can validate documents at either version); only the top-level
+// `schemaVersion` literal flips. Backwards compatibility for v1 docs
+// (AES `.cipher.json` files + URL-share links from prior sessions) is
+// preserved via `migrateDocument` in `document.ts`, which bumps the
+// version field before schema validation.
 export const StepNodeSchema: z.ZodTypeAny = z.discriminatedUnion("kind", [
   StepLeafSchema,
   StepGroupSchema,
@@ -270,13 +274,14 @@ export const DocumentMetadataSchema = z
   .strict();
 
 // ─── CipherDocument (top level) ───────────────────────────────────────────
-// `schemaVersion: z.literal(1)` does the structural validation; the
-// friendlier "this app reads version 1" error for cross-version files
-// lives in `document.ts::parseDocument` as a pre-check.
+// `schemaVersion: z.literal(2)` does the structural validation. The
+// friendlier "this app reads versions ..." error for cross-version files
+// lives in `document.ts::parseDocument` as a pre-check, which also
+// applies the v1 → v2 migration so older documents validate cleanly.
 
 export const CipherDocumentSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     spec: CipherSpecSchema,
     layout: LayoutSpecSchema.optional(),
     session: SessionSnapshotSchema.optional(),

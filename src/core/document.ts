@@ -46,8 +46,26 @@ import type { CipherSpec } from "./types";
 
 // ─── Schema-version anchor ────────────────────────────────────────────────
 
-/** The version this app produces and accepts on load. */
-export const CURRENT_SCHEMA_VERSION = 1 as const;
+/**
+ * The version this app produces. Phase 4 of `docs/plans/des-feistel.md`
+ * bumped this from 1 → 2 when DES entered the cipher selector and users
+ * could start saving documents containing `feistel-round` nodes.
+ *
+ * Backwards compatibility for v1 documents (every AES `.cipher.json` and
+ * URL-share link from prior sessions) is preserved via `migrateDocument`
+ * below — v1 → v2 is a pure version-bump migration since v1 documents
+ * cannot contain any `feistel-round` nodes (DES wasn't selectable),
+ * so no node-level changes are required.
+ */
+export const CURRENT_SCHEMA_VERSION = 2 as const;
+
+/**
+ * The set of historical schema versions this app can load (after
+ * applying `migrateDocument`). Used by the friendly pre-check in
+ * `parseDocument` so a v2-only build still reads v1 docs without
+ * erroring out at "schemaVersion 1 is not supported."
+ */
+export const ACCEPTED_SCHEMA_VERSIONS: readonly number[] = [1, 2];
 
 // ─── Public types ─────────────────────────────────────────────────────────
 // Hand-written so optional fields are `field?: T` (not `T | undefined`) —
@@ -244,16 +262,26 @@ export const parseDocument = (text: string): ParseDocumentResult => {
     return { ok: false, error: `invalid JSON: ${msg}` };
   }
 
-  // Phase 2: schemaVersion pre-check. A document with a numeric
-  // `schemaVersion` that doesn't match what we read gets a forward/
-  // backward-compat error rather than the raw Zod literal mismatch.
+  // Phase 2: schemaVersion pre-check + migration. A document with a
+  // numeric `schemaVersion` that the app doesn't accept gets a
+  // forward/backward-compat error; an accepted older version gets
+  // migrated forward to `CURRENT_SCHEMA_VERSION` before schema
+  // validation.
   if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
     const sv = (raw as { schemaVersion?: unknown }).schemaVersion;
-    if (typeof sv === "number" && sv !== CURRENT_SCHEMA_VERSION) {
-      return {
-        ok: false,
-        error: `schemaVersion ${sv} is not supported (this app reads version ${CURRENT_SCHEMA_VERSION}; the file may be from a different app version)`,
-      };
+    if (typeof sv === "number") {
+      if (!ACCEPTED_SCHEMA_VERSIONS.includes(sv)) {
+        return {
+          ok: false,
+          error: `schemaVersion ${sv} is not supported (this app reads versions ${ACCEPTED_SCHEMA_VERSIONS.join(", ")}; the file may be from a different app version)`,
+        };
+      }
+      if (sv !== CURRENT_SCHEMA_VERSION) {
+        // `migrateDocument` walks v1 → v2 → ... → CURRENT, applying
+        // any per-version transforms. v1 → v2 is a pure version bump
+        // since v1 documents cannot contain `feistel-round` nodes.
+        raw = migrateDocument(raw as Record<string, unknown>, sv);
+      }
     }
   }
 
@@ -267,6 +295,36 @@ export const parseDocument = (text: string): ParseDocumentResult => {
   // but our hand-written `CipherDocument` uses `field?: T` (same shape at
   // runtime — the cast is the type-level reconciliation).
   return { ok: true, doc: result.data as unknown as CipherDocument };
+};
+
+/**
+ * Migrate a document object forward from `fromVersion` to
+ * `CURRENT_SCHEMA_VERSION`. Pure: returns a new object; never mutates
+ * the input.
+ *
+ * **v1 → v2 migration** (Phase 4 of `docs/plans/des-feistel.md`): pure
+ * version bump. v1 documents predate DES being in the cipher selector,
+ * so they cannot contain any `feistel-round` nodes — the StepNode union
+ * was already widened to accept feistel-round in Phase 2 of the plan,
+ * `CipherDocumentSchema` accepts the wider union under either version.
+ * The only thing the migration does is rewrite the `schemaVersion`
+ * field so the post-bump literal validation passes.
+ *
+ * Future migrations chain here: a v2 → v3 step would land alongside
+ * the v1 → v2 step, and a v1 document would walk through both.
+ */
+const migrateDocument = (
+  doc: Record<string, unknown>,
+  fromVersion: number,
+): Record<string, unknown> => {
+  // Spread to a fresh object so the caller's input isn't mutated.
+  // Forward-compat: if `fromVersion` < 2, bump the field to 2. Future
+  // chained migrations would add their own conditionals here.
+  let migrated: Record<string, unknown> = { ...doc };
+  if (fromVersion === 1) {
+    migrated = { ...migrated, schemaVersion: 2 };
+  }
+  return migrated;
 };
 
 /**

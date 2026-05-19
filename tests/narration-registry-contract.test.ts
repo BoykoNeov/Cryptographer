@@ -137,19 +137,26 @@ describe("narration-registry coverage contract", () => {
     expect(NARRATION_NO_OP_ALLOWLIST.has("serpent.bit-permutation@1")).toBe(false);
   });
 
-  it("allowlist size: 6 irreducible + 1 toy entry + 6 DES Phase-3 entries", () => {
-    // Pins the current size as the sum of structurally-justified
-    // permanent entries (6: 4 key-expansion + 2 bit-level Serpent
-    // linear transforms) plus the temporary entries that will leave
-    // the allowlist when their narrators land:
-    //   - feistel.toy-add-k@1 — Phase 2 toy F, removed when the toy
-    //     is decommissioned post-Phase-3.
-    //   - 6 DES step types — Phase 3 (`docs/plans/des-feistel.md`)
-    //     ships them without narration; Phase 4 registers per-step
-    //     narrators (bit-level pattern for IP/FP/E/P; per-S-box for
-    //     the S-boxes) and removes these 6 entries at the same time.
-    expect(NARRATION_NO_OP_ALLOWLIST.size).toBe(13);
+  it("allowlist size: 6 irreducible + 1 toy entry + 1 DES key-schedule entry", () => {
+    // Pins the current size after Phase 4 of `docs/plans/des-feistel.md`:
+    //   - 6 permanent entries (4 key-expansion step types covered by
+    //     `<KeyScheduleExplorer />`, plus the 2 bit-level Serpent linear
+    //     transforms whose byte-level prose would mislead).
+    //   - `feistel.toy-add-k@1` — Phase 2 toy F, removed when the toy
+    //     spec is decommissioned post-DES.
+    //   - `des.key-schedule@1` — the 6 round-body DES step types moved
+    //     OFF the allowlist in Phase 4 with dedicated narrators; only
+    //     the key schedule remains because its per-frame narration is
+    //     the wrong surface (multi-round PC-1 → 16 shifts → PC-2 walk).
+    //     The future `DesKeyScheduleSimulator` (Phase 5e) replaces
+    //     `<FrameStateView />` for this step, matching how AES / Serpent
+    //     key expansions are handled.
+    expect(NARRATION_NO_OP_ALLOWLIST.size).toBe(8);
     expect(NARRATION_NO_OP_ALLOWLIST.has("feistel.toy-add-k@1")).toBe(true);
+    expect(NARRATION_NO_OP_ALLOWLIST.has("des.key-schedule@1")).toBe(true);
+    // Negative assertion: the 6 round-body DES step types must NOT be on
+    // the allowlist after Phase 4 (would mean we forgot to register a
+    // narrator and the contract test's coverage check would lie).
     for (const t of [
       "des.initial-permutation@1",
       "des.final-permutation@1",
@@ -158,7 +165,10 @@ describe("narration-registry coverage contract", () => {
       "des.s-boxes@1",
       "des.p-permutation@1",
     ]) {
-      expect(NARRATION_NO_OP_ALLOWLIST.has(t), `${t} missing from allowlist`).toBe(true);
+      expect(
+        NARRATION_NO_OP_ALLOWLIST.has(t),
+        `${t} should NOT be on allowlist after Phase 4`,
+      ).toBe(false);
     }
   });
 });

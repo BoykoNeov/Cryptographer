@@ -120,6 +120,12 @@ export const paddingLimits = (
       case "serpent-192":
       case "serpent-256":
         return { min: 16, max: 16 };
+      // DES — single 64-bit block. Like Speck and Serpent, the padding
+      // overlay's load-block step is 16-byte-only, so the padding selector
+      // is disabled and the input is fixed at one block. A future block-
+      // size-aware load/store would unlock multi-block DES (and ECB/CBC).
+      case "des":
+        return { min: 8, max: 8 };
       default: {
         const _exhaustive: never = cipher;
         throw new Error(`paddingLimits: unsupported non-AES cipher: ${_exhaustive as string}`);

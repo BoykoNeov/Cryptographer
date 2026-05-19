@@ -50,4 +50,15 @@ describe("cipher-mode × cipher support matrix", () => {
       expect(isCipherModeSupported(cipher, "ctr")).toBe(false);
     }
   });
+
+  it("DES ships single-block only (Phase 4 of des-feistel.md); ecb/cbc/ctr unsupported", () => {
+    // Canary: multi-block DES would need block-size-aware
+    // `load-block`/`store-block` (currently 16-byte-only) — same blocker
+    // as Serpent/Speck multi-block. When that lands, this test fires
+    // and the matrix gets updated.
+    expect(isCipherModeSupported("des", "single-block")).toBe(true);
+    expect(isCipherModeSupported("des", "ecb")).toBe(false);
+    expect(isCipherModeSupported("des", "cbc")).toBe(false);
+    expect(isCipherModeSupported("des", "ctr")).toBe(false);
+  });
 });

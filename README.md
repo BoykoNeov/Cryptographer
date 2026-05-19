@@ -15,8 +15,11 @@ Shipped ciphers (all with both encrypt + decrypt paths and FIPS / NIST / paper-v
 | **AES** | 128 / 192 / 256 | 16 B | 16 / 24 / 32 B | single-block, ECB + CBC (AES-128 only today) |
 | **Speck32/64** | BE (paper) + LE (NSA reference) | 4 B | 8 B | single-block |
 | **Serpent** | 128 / 192 / 256 | 16 B | 16 / 24 / 32 B | single-block |
+| **DES** | — | 8 B | 8 B (56 effective) | single-block |
 
 Padding schemes (AES only): **PKCS#7**, **zero-pad**, **ISO 7816-4**, plus a no-pad option for exact-block input.
+
+DES is the project's first Feistel cipher — its round body uses the `feistel-round` branching primitive (an L track + R track that evolve independently, recombining via a named 4-arg combine kind). Rounds 1..15 use `feistel-standard` (textbook Feistel + swap); round 16 uses `feistel-no-swap` (the textbook last-round exception that makes the cipher self-inverse under key-reversal).
 
 Interactive features:
 
@@ -70,7 +73,7 @@ For the file-by-file map, read **[`docs/key-files.md`](./docs/key-files.md)**. F
 ```
 src/
   core/            cipher-agnostic engine: types, runtime, registry, spec mutations, document format, graph
-  ciphers/         per-cipher specs + constants (AES, Speck, Serpent)
+  ciphers/         per-cipher specs + constants (AES, Speck, Serpent, DES)
   steps/           step-type executors + their StepDocumentation blocks
   ui/              Solid components, stores, app shell
 tests/             ~122 files, ~1389 tests — vitest (node + jsdom mix)

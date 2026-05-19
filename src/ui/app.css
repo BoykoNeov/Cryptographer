@@ -1249,6 +1249,31 @@ button:disabled {
   border-radius: 2px;
 }
 
+/* ─── DES S-box table (Phase 4 of des-feistel.md) ──────────────────────
+   Per S-box, render 4 rows × 16 cols (the FIPS 46-3 Appendix A layout).
+   Each `.des-sbox-row` is its own 16-column grid so the row index reads
+   top-to-bottom, matching how the standard prints the tables. Reuses
+   `.bit-table-cell` for the per-cell look. */
+.des-sbox-table {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.des-sbox-row {
+  display: grid;
+  grid-template-columns: repeat(16, 1fr);
+  gap: 2px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+.des-sbox-row .bit-table-cell {
+  text-align: right;
+  padding: 1px 4px;
+  background: var(--cell-bg, transparent);
+  border-radius: 2px;
+}
+
 /* ─── MixColumns matrix editor ────────────────────────────────────────── */
 .matrix-editor {
   display: flex;

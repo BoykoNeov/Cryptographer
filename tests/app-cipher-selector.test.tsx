@@ -83,7 +83,7 @@ describe("App — cipher selector", () => {
     resetAll();
   });
 
-  it("renders every cipher variant in the dropdown (3 AES + 2 Speck + 3 Serpent)", () => {
+  it("renders every cipher variant in the dropdown (3 AES + 2 Speck + 3 Serpent + 1 DES)", () => {
     const { container } = render(() => <App />);
     const select = findSelectByLabel(container, "cipher");
     const values = Array.from(select.querySelectorAll("option")).map((o) => o.value);
@@ -96,6 +96,9 @@ describe("App — cipher selector", () => {
       "serpent-128",
       "serpent-192",
       "serpent-256",
+      // DES added in Phase 4 of `docs/plans/des-feistel.md`. First Feistel
+      // cipher; single-block only.
+      "des",
     ]);
   });
 
@@ -269,6 +272,94 @@ describe("App — cipher selector", () => {
     // Regression guard: the Serpent ParamEditor blocks must dispatch (no
     // raw-JSON fallback).
     expect(container.querySelector(".param-raw")).toBeNull();
+  });
+
+  it("encrypts under DES end-to-end through the selector (FIPS 46-3 Appendix B)", () => {
+    // Phase 4 of `docs/plans/des-feistel.md`. The DES default key + plaintext
+    // are the FIPS 46-3 Appendix B test vector
+    //   PT=0123456789abcdef, K=133457799bbcdff1 → CT=85e813540f0ab405
+    // so a fresh selector swap + Run should land on the canonical ciphertext
+    // without any per-field edits. Verifies the full path: cipher swap →
+    // store defaults swap → spec swap → input/key text swap → Run produces
+    // a clean trace → result rendered in hex.
+    const { container } = render(() => <App />);
+
+    fireEvent.change(findSelectByLabel(container, "cipher"), {
+      target: { value: "des" },
+    });
+
+    // Auto-swap policy: the previous (AES-128) defaults sit in the fields
+    // on first load, so the swap should replace them with DES's canonical
+    // 8-byte values.
+    expect(findInputByLabel(container, "key").value).toBe("133457799bbcdff1");
+    expect(findInputByLabel(container, "plaintext").value).toBe("0123456789abcdef");
+
+    // Padding is AES-only today (load-block hardcoded to 16 bytes). DES uses
+    // BytesState, so the overlay's applyPaddingScheme early-returns and the
+    // dropdown disables — matching Speck and Serpent.
+    const paddingSelect = findSelectByLabel(container, "padding");
+    expect(paddingSelect.disabled).toBe(true);
+
+    // Cipher-mode is AES-only for the same reason.
+    const cipherModeSelect = findSelectByLabel(container, "mode of operation");
+    expect(cipherModeSelect.disabled).toBe(true);
+
+    fireEvent.click(findButton(container, "run"));
+    expect(container.querySelector(".error")).toBeNull();
+    const result = container.querySelector(".result code")?.textContent ?? "";
+    expect(result).toBe("85e813540f0ab405");
+
+    // Regression guard: the DES ParamEditor blocks must dispatch (no
+    // raw-JSON fallback for any DES step type).
+    expect(container.querySelector(".param-raw")).toBeNull();
+  });
+
+  it("swapping from AES-128 + PKCS7 to DES does not throw on the padding overlay", () => {
+    // Regression guard surfaced during Phase 4 advisor review:
+    // `setCipher("des")` rebuilds both spec slots via
+    // `buildCanonicalPair("des", "single-block", padding())`. If the user
+    // was on AES-128 + PKCS7 just before the swap, that call invokes
+    // `applyPaddingScheme(desSpec, "encrypt", "pkcs7")`. The overlay
+    // expects matrix4x4-bytes state; DES is BytesState. The early-return
+    // guard at `spec.stateShape !== "matrix4x4-bytes"` in
+    // `applyPaddingScheme` is what makes this safe — without it, the
+    // pad/load-block leaves would be prepended onto a non-matrix spec
+    // and `load-block` would throw at runtime.
+    //
+    // The plaintext field text doesn't necessarily auto-swap to DES's
+    // canonical 8-byte value here — App.tsx's swap heuristic checks the
+    // current field against DEFAULT_PT_BYTES_BY_CIPHER for the OLD
+    // cipher, and PKCS7-on-AES seeds a different (5-byte "apple")
+    // default. So the user might need to retype the plaintext after
+    // the swap; we type DES's canonical value explicitly and verify
+    // Run produces the published KAT, which proves the overlay routed
+    // around DES correctly.
+    const { container } = render(() => <App />);
+
+    // Pick PKCS7 while still on AES-128.
+    fireEvent.change(findSelectByLabel(container, "padding"), {
+      target: { value: "pkcs7" },
+    });
+
+    // Now swap to DES. No throw, no error banner.
+    fireEvent.change(findSelectByLabel(container, "cipher"), {
+      target: { value: "des" },
+    });
+    expect(container.querySelector(".error")).toBeNull();
+
+    // Explicitly retype the FIPS canonical plaintext to bypass the
+    // PKCS7-default-short residue, then Run.
+    fireEvent.input(findInputByLabel(container, "plaintext"), {
+      target: { value: "0123456789abcdef" },
+    });
+    fireEvent.input(findInputByLabel(container, "key"), {
+      target: { value: "133457799bbcdff1" },
+    });
+
+    fireEvent.click(findButton(container, "run"));
+    expect(container.querySelector(".error")).toBeNull();
+    const result = container.querySelector(".result code")?.textContent ?? "";
+    expect(result).toBe("85e813540f0ab405");
   });
 
   it("does NOT clobber a user-typed key when the cipher changes", () => {

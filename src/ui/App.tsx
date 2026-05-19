@@ -928,7 +928,7 @@ export const App = () => {
             title={
               isAesCipher(cipher())
                 ? "Block-cipher mode of operation. 'single block' keeps the canonical FIPS-197 single-block trace. ECB encrypts each block independently (educational baseline — the Tux-image leak). CBC chains blocks via the IV + previous-ciphertext XOR so identical plaintext blocks produce different ciphertext. CTR ships in Phase 3. AES-128 is the only variant with the multi-block factories wired up today — AES-192/256 lands in Phase 4."
-                : "Modes of operation are AES-only in this build; Speck runs as a single-block cipher."
+                : "Modes of operation are AES-only in this build; Speck / Serpent / DES run as single-block ciphers."
             }
           >
             <option value="single-block">{CIPHER_MODE_LABELS["single-block"]}</option>

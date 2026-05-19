@@ -183,23 +183,14 @@ export const NARRATION_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
   // Phase 2 of the DES + branching primitive plan — toy F used only by
   // `tests/feistel-primitive.test.ts`. Never user-visible (the toy spec
   // is not in the cipher selector), so no learner-facing narration is
-  // needed. When Phase 3 lands DES + real Feistel step types, those get
-  // proper narration; this entry is removed when the toy is decommissioned.
+  // needed. Removed when the toy is decommissioned.
   "feistel.toy-add-k@1",
-  // Phase 3 of the DES + branching primitive plan — DES step types
-  // shipped without narration. DES is not yet in the cipher selector
-  // (Phase 4 wiring), so no learner-facing narration is currently
-  // reachable. Phase 4 of the plan registers per-step narrators using
-  // the bit-level pattern from `[[feedback-bit-level-narration-pattern]]`
-  // (structural overview + per-output-byte drill for IP/FP/E/P; per-
-  // S-box units for the S-box step); these allowlist entries are
-  // REMOVED at the same time the narrators are added.
-  "des.initial-permutation@1",
-  "des.final-permutation@1",
-  "des.expand-R@1",
-  "des.xor-with-K@1",
-  "des.s-boxes@1",
-  "des.p-permutation@1",
+  // `des.key-schedule@1` — covered by the future `DesKeyScheduleSimulator`
+  // (Phase 5e of the plan). The per-frame narration produced by this
+  // registry is the wrong surface for a multi-round PC-1 → 16 shifts →
+  // PC-2 walk; the explorer view that replaces FrameStateView is the
+  // right one, matching how AES and Serpent key expansions are handled.
+  "des.key-schedule@1",
 ]);
 
 /**

@@ -152,6 +152,25 @@ export const ParamEditor = (props: Props) => {
             >
               <NoParamsBlock label="Linear transform has no editable parameters." />
             </Match>
+            <Match when={getStep().type === "des.key-schedule@1"}>
+              <DesKeyScheduleBlock step={getStep()} />
+            </Match>
+            <Match
+              when={
+                getStep().type === "des.initial-permutation@1" ||
+                getStep().type === "des.final-permutation@1" ||
+                getStep().type === "des.expand-R@1" ||
+                getStep().type === "des.p-permutation@1"
+              }
+            >
+              <DesPermutationBlock step={getStep()} />
+            </Match>
+            <Match when={getStep().type === "des.xor-with-K@1"}>
+              <DesXorWithKBlock step={getStep()} />
+            </Match>
+            <Match when={getStep().type === "des.s-boxes@1"}>
+              <DesSBoxesBlock step={getStep()} />
+            </Match>
             <Match when={getStep().type === "generic.aux-load@1"}>
               <AuxLoadBlock step={getStep()} />
             </Match>
@@ -800,6 +819,230 @@ const SerpentSyncInverseRow = (props: {
 // (the Serpent LT and inverse LT). Avoids the raw-JSON fallback rendering
 // `{}` for an empty params object.
 const NoParamsBlock = (props: { label: string }) => <div class="muted small">{props.label}</div>;
+
+// ─── DES step blocks (Phase 4 of docs/plans/des-feistel.md) ───────────────
+//
+// All seven DES step types ship structural FIPS-46-3 tables that the user
+// CAN edit pedagogically (swap IP for an identity, replace S1 with a "weak"
+// table) but won't typically need to. The blocks below render the tables
+// read-only — same pattern as Serpent's bit-permutation block — with a
+// scalar header showing which permutation / round key the leaf consumes.
+//
+// No ApplyAllRow on any DES block: every IP/FP/E/P/S-box step type appears
+// either zero times (key-schedule, IP/FP) or sixteen times (the per-round
+// F internals), and the per-round xor-with-K leaves intentionally reference
+// DIFFERENT round keys. Copying one step's params to every match would
+// either be a no-op or actively break the cipher (every round XOR'd with
+// K_1 wouldn't decrypt).
+
+// Generic table block — reused by IP/FP/E/P. Single param: `table: number[]`.
+// Shown as a labelled scalar (per the doc's `name` field, looked up via the
+// registry would be ideal but we hardcode per step type below since this
+// component is itself the lookup) plus a collapsed grid of source-bit
+// indices. The grid uses 16-wide rows so the FIPS tables display close to
+// the layout used in the constants file.
+const DesPermutationBlock = (props: { step: StepLeaf }) => {
+  const params = (): { table?: number[] } => props.step.params as never;
+  const table = (): readonly number[] => params().table ?? [];
+  const stepLabel = (): string => {
+    switch (props.step.type) {
+      case "des.initial-permutation@1":
+        return "Initial Permutation (IP)";
+      case "des.final-permutation@1":
+        return "Final Permutation (FP = IP⁻¹)";
+      case "des.expand-R@1":
+        return "Expansion (E)";
+      case "des.p-permutation@1":
+        return "P permutation";
+      default:
+        return props.step.type;
+    }
+  };
+
+  return (
+    <>
+      <dl class="param-scalars">
+        <div class="param-scalar-row">
+          <dt>Permutation</dt>
+          <dd>{stepLabel()}</dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Output bits</dt>
+          <dd>{table().length}</dd>
+        </div>
+      </dl>
+      <details class="param-section param-collapsible">
+        <summary class="param-section-label">
+          Source-bit table ({table().length} entries — click to expand)
+        </summary>
+        {/* Reuses the serpent-bit-table CSS class for the grid layout —
+            same visual rhythm as Serpent's IP/FP table view. Each cell is
+            the 1-indexed FIPS source-bit number for the output at that
+            position. */}
+        <div class="serpent-bit-table">
+          <For each={table()}>
+            {(value, i) => (
+              <span class="bit-table-cell" title={`output bit ${i() + 1} ← input bit ${value}`}>
+                {value}
+              </span>
+            )}
+          </For>
+        </div>
+      </details>
+    </>
+  );
+};
+
+// DES key-schedule: three structural tables (PC-1, PC-2, SHIFTS) plus two
+// aux-name scalars. Rendered the same way as the AES key-expansion block
+// (scalars + collapsible table) but with three independent tables instead
+// of one S-box.
+const DesKeyScheduleBlock = (props: { step: StepLeaf }) => {
+  const params = (): {
+    keyAuxName?: string;
+    outputPrefix?: string;
+    pc1?: readonly number[];
+    pc2?: readonly number[];
+    shifts?: readonly number[];
+  } => props.step.params as never;
+  const pc1 = (): readonly number[] => params().pc1 ?? [];
+  const pc2 = (): readonly number[] => params().pc2 ?? [];
+  const shifts = (): readonly number[] => params().shifts ?? [];
+
+  return (
+    <>
+      <dl class="param-scalars">
+        <div class="param-scalar-row">
+          <dt>Input aux</dt>
+          <dd>{params().keyAuxName ?? "—"}</dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Output prefix</dt>
+          <dd>{params().outputPrefix ?? "—"}</dd>
+        </div>
+      </dl>
+      <details class="param-section param-collapsible">
+        <summary class="param-section-label">
+          PC-1 (Permuted Choice 1, 56 entries — drops parity bits)
+        </summary>
+        <div class="serpent-bit-table">
+          <For each={pc1()}>
+            {(value, i) => (
+              <span class="bit-table-cell" title={`output bit ${i() + 1} ← input bit ${value}`}>
+                {value}
+              </span>
+            )}
+          </For>
+        </div>
+      </details>
+      <details class="param-section param-collapsible">
+        <summary class="param-section-label">
+          PC-2 (Permuted Choice 2, 48 entries — selects K_i from C_i ‖ D_i)
+        </summary>
+        <div class="serpent-bit-table">
+          <For each={pc2()}>
+            {(value, i) => (
+              <span class="bit-table-cell" title={`output bit ${i() + 1} ← input bit ${value}`}>
+                {value}
+              </span>
+            )}
+          </For>
+        </div>
+      </details>
+      <details class="param-section param-collapsible">
+        <summary class="param-section-label">
+          Per-round left shifts (16 entries — cumulative total 28)
+        </summary>
+        <div class="serpent-bit-table">
+          <For each={shifts()}>
+            {(value, i) => (
+              <span
+                class="bit-table-cell"
+                title={`round ${i() + 1}: shift halves left by ${value}`}
+              >
+                {value}
+              </span>
+            )}
+          </For>
+        </div>
+      </details>
+    </>
+  );
+};
+
+// xor-with-K: one scalar (roundKeyAux). Same shape as AES AddRoundKey's
+// block — no ApplyAllRow because each leaf intentionally references a
+// different round key (roundKey.0 … roundKey.15 for encrypt; reversed
+// order for decrypt).
+const DesXorWithKBlock = (props: { step: StepLeaf }) => {
+  const params = (): { roundKeyAux?: string } => props.step.params as never;
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>Round key aux</dt>
+        <dd>{params().roundKeyAux ?? "—"}</dd>
+      </div>
+    </dl>
+  );
+};
+
+// DES S-boxes: 8 distinct 6→4 substitution tables (S1..S8). Each is a 4-row
+// × 16-column grid; this is a brand-new UI pattern in the editor (Serpent
+// has one S-box per leaf indexed by `sboxIndex`, but DES carries all 8 as
+// `params.sboxes[8][4][16]` on a single leaf).
+//
+// Each S-box hides behind its own collapsed `<details>` so the editor isn't
+// 512 visible cells on first render. Cells are read-only — the S-boxes are
+// FIPS-46-3 Appendix A constants whose specific values are themselves the
+// subject of the cryptanalysis story. A future polish slice could make
+// them editable so users can experiment with weak-S-box vectors; today
+// the read-only view matches the bit-permutation block's read-only stance.
+const DesSBoxesBlock = (props: { step: StepLeaf }) => {
+  const params = (): { sboxes?: readonly (readonly (readonly number[])[])[] } =>
+    props.step.params as never;
+  const sboxes = (): readonly (readonly (readonly number[])[])[] => params().sboxes ?? [];
+
+  return (
+    <>
+      <dl class="param-scalars">
+        <div class="param-scalar-row">
+          <dt>S-box count</dt>
+          <dd>{sboxes().length}</dd>
+        </div>
+      </dl>
+      <For each={sboxes()}>
+        {(box, idx) => (
+          <details class="param-section param-collapsible">
+            <summary class="param-section-label">
+              S{idx() + 1} (4 rows × 16 cols, 4-bit values — click to expand)
+            </summary>
+            {/* Each row is its own grid so row indices read top-to-bottom;
+                cells are spans (read-only) styled by the existing bit-table
+                rules so we don't fork a new CSS class. */}
+            <div class="des-sbox-table">
+              <For each={box}>
+                {(row, r) => (
+                  <div class="des-sbox-row" data-row={r()}>
+                    <For each={row}>
+                      {(value, c) => (
+                        <span
+                          class="bit-table-cell"
+                          title={`S${idx() + 1}[row ${r()}][col ${c()}] = ${value}`}
+                        >
+                          {value}
+                        </span>
+                      )}
+                    </For>
+                  </div>
+                )}
+              </For>
+            </div>
+          </details>
+        )}
+      </For>
+    </>
+  );
+};
 
 // ─── Slice 10 aux primitives ─────────────────────────────────────────────
 //

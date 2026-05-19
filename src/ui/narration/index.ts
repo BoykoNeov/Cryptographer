@@ -43,6 +43,15 @@ import {
   splitBlocksNarration,
   storeBlockNarration,
 } from "./boundary";
+import { rejoinNarration } from "./combine-kinds";
+import {
+  desExpandRNarration,
+  desFinalPermutationNarration,
+  desInitialPermutationNarration,
+  desPPermutationNarration,
+  desSBoxesNarration,
+  desXorWithKNarration,
+} from "./des";
 import {
   iso78164PadNarration,
   iso78164UnpadNarration,
@@ -97,6 +106,17 @@ export const initNarrationRegistry = (): void => {
   registerNarration("generic.iv-load@1", ivLoadNarration);
   registerNarration("generic.xor-aux-into-state@1", xorAuxIntoStateNarration);
   registerNarration("generic.state-to-aux@1", stateToAuxNarration);
+  // Phase 4 of `docs/plans/des-feistel.md` — DES step types use the bit-
+  // level structural-overview + per-output-byte drill pattern (IP/FP/E/P);
+  // S-boxes get per-S-box units; xor-with-K is cell-wise XOR. The rejoin
+  // synthetic stepType `__rejoin__` carries combine-kind-specific prose.
+  registerNarration("des.initial-permutation@1", desInitialPermutationNarration);
+  registerNarration("des.final-permutation@1", desFinalPermutationNarration);
+  registerNarration("des.expand-R@1", desExpandRNarration);
+  registerNarration("des.xor-with-K@1", desXorWithKNarration);
+  registerNarration("des.s-boxes@1", desSBoxesNarration);
+  registerNarration("des.p-permutation@1", desPPermutationNarration);
+  registerNarration("__rejoin__", rejoinNarration);
   initialized = true;
 };
 

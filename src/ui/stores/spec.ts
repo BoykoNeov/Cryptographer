@@ -32,6 +32,8 @@ import { aes192Spec } from "@/ciphers/aes-192";
 import { aes192DecryptSpec } from "@/ciphers/aes-192-decrypt";
 import { aes256Spec } from "@/ciphers/aes-256";
 import { aes256DecryptSpec } from "@/ciphers/aes-256-decrypt";
+import { desSpec } from "@/ciphers/des";
+import { desDecryptSpec } from "@/ciphers/des-decrypt";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { serpent128DecryptSpec } from "@/ciphers/serpent-128-decrypt";
 import { serpent192Spec } from "@/ciphers/serpent-192";
@@ -103,6 +105,11 @@ const defaults: Record<Cipher, Partial<Record<CipherMode, Record<Mode, CipherSpe
   },
   "serpent-256": {
     "single-block": { encrypt: serpent256Spec, decrypt: serpent256DecryptSpec },
+  },
+  // DES — first Feistel cipher (Phase 4 of `docs/plans/des-feistel.md`).
+  // Single-block only; multi-block modes need block-size-aware load/store.
+  des: {
+    "single-block": { encrypt: desSpec, decrypt: desDecryptSpec },
   },
 };
 

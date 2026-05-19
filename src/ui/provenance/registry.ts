@@ -169,23 +169,8 @@ export const PROVENANCE_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
   // Phase 2 of the DES + branching primitive plan — toy F used only by
   // `tests/feistel-primitive.test.ts`. Never user-visible (the toy spec
   // is not in the cipher selector), so no cell-hover provenance is
-  // needed. Removed when the toy is decommissioned post-Phase 3.
+  // needed. Removed when the toy is decommissioned.
   "feistel.toy-add-k@1",
-  // Phase 3 of the DES + branching primitive plan — DES step types
-  // shipped without provenance. DES is not yet in the cipher selector
-  // (Phase 4 wiring), so cell-level hover is not reachable. Phase 4
-  // registers per-step provenance fns; these allowlist entries are
-  // removed at the same time. The IP/FP/E/P/S-box steps have honest
-  // per-output-byte → input-byte sources (each output bit has a single
-  // input bit source, so byte-level highlights resolve to a contributing
-  // input-byte set without the GF(2) ambiguity that keeps Serpent's
-  // linear transforms on the allowlist permanently).
-  "des.initial-permutation@1",
-  "des.final-permutation@1",
-  "des.expand-R@1",
-  "des.xor-with-K@1",
-  "des.s-boxes@1",
-  "des.p-permutation@1",
 ]);
 
 /**

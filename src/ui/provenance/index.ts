@@ -22,6 +22,14 @@ import {
   aesShiftRowsProvenance,
   aesSubBytesProvenance,
 } from "./aes";
+import {
+  desExpandRProvenance,
+  desFinalPermutationProvenance,
+  desInitialPermutationProvenance,
+  desPPermutationProvenance,
+  desSBoxesProvenance,
+  desXorWithKProvenance,
+} from "./des";
 import { __resetProvenanceForTests, registerProvenance } from "./registry";
 import { serpentAddRoundKeyProvenance, serpentSubBytesProvenance } from "./serpent";
 
@@ -40,6 +48,15 @@ export const initProvenanceRegistry = (): void => {
   registerProvenance("generic.add-round-key@1", aesAddRoundKeyProvenance);
   registerProvenance("serpent.add-round-key@1", serpentAddRoundKeyProvenance);
   registerProvenance("serpent.sub-bytes@1", serpentSubBytesProvenance);
+  // Phase 4 of `docs/plans/des-feistel.md` — six DES step types. Output
+  // byte → contributing input-byte set, computed from the FIPS table
+  // (for IP/FP/E/P) or the static S-box layout (for s-boxes).
+  registerProvenance("des.initial-permutation@1", desInitialPermutationProvenance);
+  registerProvenance("des.final-permutation@1", desFinalPermutationProvenance);
+  registerProvenance("des.expand-R@1", desExpandRProvenance);
+  registerProvenance("des.xor-with-K@1", desXorWithKProvenance);
+  registerProvenance("des.s-boxes@1", desSBoxesProvenance);
+  registerProvenance("des.p-permutation@1", desPPermutationProvenance);
   initialized = true;
 };
 
