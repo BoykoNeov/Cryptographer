@@ -7,10 +7,10 @@ Interactive cryptography explorer. The user enters plaintext + key, sees every i
 | Command | What it does |
 |---|---|
 | `npm run dev` | Vite dev server at `http://localhost:5173`. Hot-reloads on file changes. |
-| `npm test` | Vitest, single run. Currently 1097 tests across 95 files, ~20s total (jsdom UI tests dominate). |
+| `npm test` | Vitest, single run. Currently 1389 tests across 122 files, ~30s total (jsdom UI tests dominate). |
 | `npm run typecheck` | `tsc --noEmit`, strict. |
-| `npm run check` | The gate: `biome ci . && tsc --noEmit && vitest run && vite build`. Runs in ~25s on this machine. |
-| `npm run build` | Production build into `dist/`. ~107 KB gzipped JS. |
+| `npm run check` | The gate: `biome ci . && tsc --noEmit && vitest run && vite build`. Runs in ~40s on this machine. |
+| `npm run build` | Production build into `dist/`. ~132 KB gzipped JS. |
 
 The pre-commit hook in `.githooks/pre-commit` runs `npm run check`. GitHub Actions in `.github/workflows/ci.yml` runs the same on push. Don't bypass with `--no-verify` unless you have a specific reason; both gates exist for a reason.
 
