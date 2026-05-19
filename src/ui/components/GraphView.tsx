@@ -919,6 +919,18 @@ const layoutNode = (
   out: Map<string, Box>,
   consts: LayoutConstants,
   replicas: ReplicaPlacement,
+  /**
+   * Per-id `(dx, dy)` deltas applied AFTER the auto-laid position is
+   * computed (draggable-replicas plan, 2026-05-19). Targets synthetic ids
+   * — aux replicas (`${source}@->${consumer}`) and block chips
+   * (`${iterateId}@block${i}`) — whose anchor is another node and whose
+   * "natural slot" is derived from that anchor's box. The leaf-and-replica
+   * placement sites below add the delta to the rendered box while the
+   * RETURN value of `layoutNode` (used by the parent's child-flow cursor)
+   * stays at the auto position — so pinning a chip doesn't reflow its
+   * siblings to fill the vacated slot.
+   */
+  relativePins: ReadonlyMap<string, { dx: number; dy: number }>,
 ): Box => {
   const container = containersById.get(id);
   const pin = pinned.get(id);
@@ -926,21 +938,38 @@ const layoutNode = (
   const startY = pin?.y ?? cursorY;
 
   if (!container) {
-    // Leaf: fixed-size rectangle.
-    const box: Box = { x: startX, y: startY, w: consts.LEAF_W, h: consts.LEAF_H };
-    out.set(id, box);
-    return box;
+    // Leaf: fixed-size rectangle. Apply the relative delta to the
+    // rendered box only — the returned `autoBox` is used by the parent
+    // for flow advancement, so the chip's pin doesn't drag its siblings.
+    const autoBox: Box = { x: startX, y: startY, w: consts.LEAF_W, h: consts.LEAF_H };
+    const delta = relativePins.get(id);
+    if (delta) {
+      out.set(id, { x: autoBox.x + delta.dx, y: autoBox.y + delta.dy, w: autoBox.w, h: autoBox.h });
+    } else {
+      out.set(id, autoBox);
+    }
+    return autoBox;
   }
 
   // Collapsed container: render as a leaf-sized chip; skip child recursion.
   // `collapseGraph` already cleared childIds for collapsed containers, so
   // this check is `childIds.length === 0` rather than a separate flag —
   // belt and braces, since an iterate with zero body children would also
-  // hit this branch (and render correctly as an empty chip).
+  // hit this branch (and render correctly as an empty chip). The delta
+  // application is the same shape as the leaf branch above; the only
+  // dragged-chip path that flows through here is a (rare) hypothetical
+  // collapsed-container relative pin — the production drag UI gates
+  // relative pinning to replica + block-chip nodes by construction, not
+  // collapsed groups/iterates.
   if (container.childIds.length === 0) {
-    const box: Box = { x: startX, y: startY, w: consts.LEAF_W, h: consts.LEAF_H };
-    out.set(id, box);
-    return box;
+    const autoBox: Box = { x: startX, y: startY, w: consts.LEAF_W, h: consts.LEAF_H };
+    const delta = relativePins.get(id);
+    if (delta) {
+      out.set(id, { x: autoBox.x + delta.dx, y: autoBox.y + delta.dy, w: autoBox.w, h: autoBox.h });
+    } else {
+      out.set(id, autoBox);
+    }
+    return autoBox;
   }
 
   if (container.kind === "group") {
@@ -1026,6 +1055,7 @@ const layoutNode = (
         out,
         consts,
         replicas,
+        relativePins,
       );
       innerY = childBox.y + childBox.h + consts.STACK_GAP;
       lastChildBottom = childBox.y + childBox.h;
@@ -1041,7 +1071,13 @@ const layoutNode = (
       const consumerBox = out.get(consumerId);
       if (!consumerBox) continue;
       const replicaY = consumerBox.y + (consumerBox.h - consts.LEAF_H) / 2;
-      out.set(replicaId, { x: replicaX, y: replicaY, w: consts.LEAF_W, h: consts.LEAF_H });
+      const delta = relativePins.get(replicaId);
+      out.set(replicaId, {
+        x: replicaX + (delta?.dx ?? 0),
+        y: replicaY + (delta?.dy ?? 0),
+        w: consts.LEAF_W,
+        h: consts.LEAF_H,
+      });
     }
 
     // Third pass: place LIFTED replicas (consumers that ARE the first
@@ -1066,13 +1102,19 @@ const layoutNode = (
       const sId = replicas.sourceOf.get(replicaId);
       const row = sId !== undefined ? (replicas.rowOfSource.get(sId) ?? 0) : 0;
       const slot = replicaSlotPosition(consumerBox.x, consumerBox.y, row, consts);
+      const delta = relativePins.get(replicaId);
+      const finalX = slot.x + (delta?.dx ?? 0);
+      const finalY = slot.y + (delta?.dy ?? 0);
       out.set(replicaId, {
-        x: slot.x,
-        y: slot.y,
+        x: finalX,
+        y: finalY,
         w: consts.LEAF_W,
         h: consts.LEAF_H,
       });
-      const replicaRight = slot.x + consts.LEAF_W;
+      // Use the post-delta x for extent tracking — a chip dragged right
+      // grows the column to fit; dragging left can't shrink it (the column
+      // already accommodated the auto position, smaller numbers are fine).
+      const replicaRight = finalX + consts.LEAF_W;
       if (replicaRight > maxLiftReplicaRight) maxLiftReplicaRight = replicaRight;
     }
 
@@ -1141,6 +1183,7 @@ const layoutNode = (
       out,
       consts,
       replicas,
+      relativePins,
     );
     innerX = childBox.x + childBox.w + consts.FLOW_GAP;
     lastChildRight = childBox.x + childBox.w;
@@ -1166,13 +1209,16 @@ const layoutNode = (
     const sId = replicas.sourceOf.get(childId);
     const row = sId !== undefined ? (replicas.rowOfSource.get(sId) ?? 0) : 0;
     const slot = replicaSlotPosition(consumerBox.x, consumerBox.y, row, consts);
+    const delta = relativePins.get(childId);
+    const finalX = slot.x + (delta?.dx ?? 0);
+    const finalY = slot.y + (delta?.dy ?? 0);
     out.set(childId, {
-      x: slot.x,
-      y: slot.y,
+      x: finalX,
+      y: finalY,
       w: consts.LEAF_W,
       h: consts.LEAF_H,
     });
-    const replicaRight = slot.x + consts.LEAF_W;
+    const replicaRight = finalX + consts.LEAF_W;
     if (replicaRight > maxIterateReplicaRight) maxIterateReplicaRight = replicaRight;
   }
 
@@ -1235,6 +1281,17 @@ export const layoutRoot = (
    * from the `portAssignment` memo so the shift is always available.
    */
   portAssignment?: ConsumerPortAssignment,
+  /**
+   * Per-id `(dx, dy)` deltas for synthetic-id chips (aux replicas + block
+   * chips). Applied AFTER the auto position is computed; see the parameter
+   * doc on `layoutNode` for the leaf-vs-flow split. Optional and defaults
+   * to empty so the existing test suite — which passes only the first
+   * three positional args — continues to drive `layoutRoot` byte-
+   * identically.
+   *
+   * Added 2026-05-19 (draggable-replicas plan, Slice 2).
+   */
+  relativePins: ReadonlyMap<string, { dx: number; dy: number }> = new Map(),
 ): { boxes: Map<string, Box>; canvasW: number; canvasH: number } => {
   const containersById = new Map<string, ContainerNode>();
   for (const c of graph.containers) containersById.set(c.id, c);
@@ -1309,7 +1366,17 @@ export const layoutRoot = (
     // internally, so a user who manually drags an aux-only leaf to the
     // spine row keeps that pin.
     const startY = auxOnlyRootIds.has(id) ? CANVAS_MARGIN : rowStartY;
-    const box = layoutNode(id, cursorX, startY, containersById, pinned, boxes, consts, replicas);
+    const box = layoutNode(
+      id,
+      cursorX,
+      startY,
+      containersById,
+      pinned,
+      boxes,
+      consts,
+      replicas,
+      relativePins,
+    );
     cursorX = naturalX + box.w + consts.FLOW_GAP;
     const right = box.x + box.w;
     const bottom = box.y + box.h;
@@ -1436,17 +1503,27 @@ export const layoutRoot = (
     // across the three placement sites. `slotXShift` is added on top
     // (single-replica vertical shift; zero for multi-replica + tests).
     const slot = replicaSlotPosition(anchorX + slotXShift, consumerBox.y, row, consts);
+    const delta = relativePins.get(id);
+    const finalX = slot.x + (delta?.dx ?? 0);
+    const finalY = slot.y + (delta?.dy ?? 0);
     boxes.set(id, {
-      x: slot.x,
-      y: slot.y,
+      x: finalX,
+      y: finalY,
       w: consts.LEAF_W,
       h: consts.LEAF_H,
     });
     // Replica boxes can now extend right past the consumer's x-range
     // (row k shifts by k × REPLICA_ROW_X_STEP); track that against
-    // canvas extent so the SVG width grows to fit.
-    const replicaRight = slot.x + consts.LEAF_W;
+    // canvas extent so the SVG width grows to fit. Post-delta x so a
+    // user-dragged chip still grows the canvas to fit.
+    const replicaRight = finalX + consts.LEAF_W;
     if (replicaRight > maxRight) maxRight = replicaRight;
+    // Same for the bottom extent — `maxBottom` was previously only updated
+    // for non-replica root entities; pre-2026-05-19 every replica sat at
+    // or above CANVAS_MARGIN by construction, but a relative pin can now
+    // push a chip below the spine row.
+    const replicaBottom = finalY + consts.LEAF_H;
+    if (replicaBottom > maxBottom) maxBottom = replicaBottom;
   }
 
   return {
@@ -1803,6 +1880,29 @@ export const GraphView = () => {
     if (!l) return new Map();
     const m = new Map<string, { x: number; y: number }>();
     for (const [id, p] of Object.entries(l.positions)) m.set(id, p);
+    return m;
+  });
+
+  /**
+   * Per-id relative-pin map for the active spec (draggable-replicas plan,
+   * 2026-05-19). Keyed by synthetic id (`${source}@->${consumer}` for aux
+   * replicas, `${iterateId}@block${i}` for block chips); value is the
+   * `(dx, dy)` delta from the algorithm's auto-laid position. Empty when
+   * no chip has been dragged.
+   *
+   * Unlike `pinnedMap`, this memo does NOT filter orphan ids: synthetic
+   * ids are regenerated every layout pass from the post-replication
+   * graph, so an entry whose corresponding chip isn't currently rendered
+   * just falls through harmlessly — the layout engine's per-id
+   * `relativePins.get(id)` lookup returns `undefined` and no delta is
+   * applied. Same "no pruning of stale ids" policy as the absolute pin
+   * map (cf. `layout.ts` header).
+   */
+  const relativePinsMap = createMemo<ReadonlyMap<string, { dx: number; dy: number }>>(() => {
+    const l = activeLayout();
+    if (!l || !l.relativePositions) return new Map();
+    const m = new Map<string, { dx: number; dy: number }>();
+    for (const [id, r] of Object.entries(l.relativePositions)) m.set(id, r);
     return m;
   });
 
@@ -2387,6 +2487,12 @@ export const GraphView = () => {
   // sources whose natural-position x values are determined by the
   // spec walk, so re-running port-assignment against the post-shift
   // layout would produce the same slot ordering. We don't iterate.
+  // `baseLayout` deliberately OMITS portAssignment AND relativePins — it
+  // exists only as a source-x lookup table for the leftmost-source-wins
+  // comparator used inside the port-assignment builder. Including either
+  // would create a feedback loop (port assignment depends on base layout,
+  // base layout would then depend on port assignment) without changing
+  // the lookup's correctness in any cipher we've shipped or planned.
   const baseLayout = createMemo(() => layoutRoot(graph(), pinnedMap(), consts(), auxOnlyRootIds()));
 
   const portAssignment = createMemo(() => {
@@ -2471,7 +2577,14 @@ export const GraphView = () => {
   // Now that `portAssignment` is declared, we can build `layout` —
   // see the placeholder comment higher up for why this lives here.
   const layout = createMemo(() =>
-    layoutRoot(graph(), pinnedMap(), consts(), auxOnlyRootIds(), portAssignment()),
+    layoutRoot(
+      graph(),
+      pinnedMap(),
+      consts(),
+      auxOnlyRootIds(),
+      portAssignment(),
+      relativePinsMap(),
+    ),
   );
 
   /**
