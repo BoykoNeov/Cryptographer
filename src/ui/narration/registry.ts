@@ -186,6 +186,20 @@ export const NARRATION_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
   // needed. When Phase 3 lands DES + real Feistel step types, those get
   // proper narration; this entry is removed when the toy is decommissioned.
   "feistel.toy-add-k@1",
+  // Phase 3 of the DES + branching primitive plan — DES step types
+  // shipped without narration. DES is not yet in the cipher selector
+  // (Phase 4 wiring), so no learner-facing narration is currently
+  // reachable. Phase 4 of the plan registers per-step narrators using
+  // the bit-level pattern from `[[feedback-bit-level-narration-pattern]]`
+  // (structural overview + per-output-byte drill for IP/FP/E/P; per-
+  // S-box units for the S-box step); these allowlist entries are
+  // REMOVED at the same time the narrators are added.
+  "des.initial-permutation@1",
+  "des.final-permutation@1",
+  "des.expand-R@1",
+  "des.xor-with-K@1",
+  "des.s-boxes@1",
+  "des.p-permutation@1",
 ]);
 
 /**

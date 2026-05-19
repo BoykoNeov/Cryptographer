@@ -137,15 +137,28 @@ describe("narration-registry coverage contract", () => {
     expect(NARRATION_NO_OP_ALLOWLIST.has("serpent.bit-permutation@1")).toBe(false);
   });
 
-  it("allowlist size: 6 irreducible + 1 toy-test entry (Phase 2 of DES + branching primitive plan)", () => {
-    // Pins the final landing place: Phase 3 brings the no-op list down
-    // to the entries that have a structural reason to opt out of byte-
-    // level narration. Phase 2 of `docs/plans/des-feistel.md` adds the
-    // toy F (`feistel.toy-add-k@1`) — never user-visible, removed when
-    // the toy is decommissioned post-Phase 3. Any other regression that
-    // re-adds a step type (instead of registering a narrator) trips this
-    // assertion.
-    expect(NARRATION_NO_OP_ALLOWLIST.size).toBe(7);
+  it("allowlist size: 6 irreducible + 1 toy entry + 6 DES Phase-3 entries", () => {
+    // Pins the current size as the sum of structurally-justified
+    // permanent entries (6: 4 key-expansion + 2 bit-level Serpent
+    // linear transforms) plus the temporary entries that will leave
+    // the allowlist when their narrators land:
+    //   - feistel.toy-add-k@1 — Phase 2 toy F, removed when the toy
+    //     is decommissioned post-Phase-3.
+    //   - 6 DES step types — Phase 3 (`docs/plans/des-feistel.md`)
+    //     ships them without narration; Phase 4 registers per-step
+    //     narrators (bit-level pattern for IP/FP/E/P; per-S-box for
+    //     the S-boxes) and removes these 6 entries at the same time.
+    expect(NARRATION_NO_OP_ALLOWLIST.size).toBe(13);
     expect(NARRATION_NO_OP_ALLOWLIST.has("feistel.toy-add-k@1")).toBe(true);
+    for (const t of [
+      "des.initial-permutation@1",
+      "des.final-permutation@1",
+      "des.expand-R@1",
+      "des.xor-with-K@1",
+      "des.s-boxes@1",
+      "des.p-permutation@1",
+    ]) {
+      expect(NARRATION_NO_OP_ALLOWLIST.has(t), `${t} missing from allowlist`).toBe(true);
+    }
   });
 });

@@ -1,13 +1,17 @@
 # DES + branching primitive — first Feistel cipher
 
-> **Status: Phases 1+2 shipped 2026-05-19** (commits `91f143d` and
-> `6a046d0`). Phase 1: oracle + KAT fixture with intermediates.
-> Phase 2: branching primitive in core (`BranchTrack` + `CombineKind`
-> + `FeistelRoundGroup`) + toy Feistel + 19 new tests. **Schema
-> version bump deferred to Phase 3** per advisor + user (the toy spec
-> isn't user-reachable, so AES docs saved from Phase 2 stay byte-
-> identical to v0.5.0). Phases 3–6 pending; advisor pass required
-> before each per `[[feedback-iterative-slice-review]]`.
+> **Status: Phases 1+2+3 shipped 2026-05-19** (commits `91f143d`,
+> `6a046d0`, + this commit). Phase 1: oracle + KAT fixture with
+> intermediates. Phase 2: branching primitive in core (`BranchTrack` +
+> `CombineKind` + `FeistelRoundGroup`) + toy Feistel + 19 new tests.
+> **Phase 3: DES step types + encrypt/decrypt specs + KATs.** Seven new
+> step types (`des.initial-permutation@1`, `des.final-permutation@1`,
+> `des.expand-R@1`, `des.xor-with-K@1`, `des.s-boxes@1`,
+> `des.p-permutation@1`, `des.key-schedule@1`) wire FIPS 46-3 into the
+> branching primitive. Schema bump 1→2 **further deferred to Phase 4**
+> (DES isn't user-selectable yet); doc-roundtrip pinned at schema v1.
+> Phases 4–6 pending; advisor pass required before each per
+> `[[feedback-iterative-slice-review]]`.
 >
 > Originally drafted 2026-05-19; architecture direction (DES first +
 > true branching, per Path C) approved by user. Multi-phase: 6 phases,
@@ -334,11 +338,19 @@ asymmetric F means a swapped combine produces a DIFFERENT ciphertext,
 caught by the KAT assertion. Tests also pin the trace structure
 (frame count, branchPath stamps, rejoin synthetic frame).
 
-### Phase 3 — DES step types
+### Phase 3 — DES step types — SHIPPED 2026-05-19
 
-DES needs 8 new generic step types plus a key-schedule. All
-bit-permutation operations reuse `src/steps/serpent-bit-ops.ts`'s
-`applyBitPermutation`.
+DES needs 7 new step types (the optional `des.toggle-parity-bits@1` was
+skipped — explicit decision, not an oversight). **Correction to the
+original draft**: bit-permutation helpers do NOT reuse
+`src/steps/serpent-bit-ops.ts`'s `applyBitPermutation`. Serpent's helper
+is hardcoded to 16-byte input AND uses LSB-first numbering; DES uses
+MSB-first AND varies its buffer length across 4/6/8 bytes. The fix is
+option (b) from the advisor's pre-Phase-3 review: a new
+`src/steps/des-bit-ops.ts` mirrors the Phase-1 oracle's `bitOf` /
+`permute` / bit-array helpers verbatim (MSB-first, size-agnostic),
+keeping Serpent's hot path untouched and the bit-numbering convention
+literal at the call site.
 
 | Step type | What it does | Input shape | Output shape |
 |---|---|---|---|

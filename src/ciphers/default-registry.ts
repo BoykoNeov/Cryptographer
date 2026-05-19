@@ -16,6 +16,13 @@ import { auxXor, auxXorDoc } from "../steps/aux-xor";
 import { byteSubstitution, byteSubstitutionDoc } from "../steps/byte-substitution";
 import { computeBlockCount, computeBlockCountDoc } from "../steps/compute-block-count";
 import { concatBlocks, concatBlocksDoc } from "../steps/concat-blocks";
+import { desExpandR, desExpandRDoc } from "../steps/des-expand-r";
+import { desFinalPermutation, desFinalPermutationDoc } from "../steps/des-final-permutation";
+import { desInitialPermutation, desInitialPermutationDoc } from "../steps/des-initial-permutation";
+import { desKeySchedule, desKeyScheduleDoc } from "../steps/des-key-schedule";
+import { desPPermutation, desPPermutationDoc } from "../steps/des-p-permutation";
+import { desSBoxes, desSBoxesDoc } from "../steps/des-s-boxes";
+import { desXorWithK, desXorWithKDoc } from "../steps/des-xor-with-k";
 import { feistelToyAddK, feistelToyAddKDoc } from "../steps/feistel-toy-add-k";
 import { iso78164Pad, iso78164PadDoc } from "../steps/iso7816-4-pad";
 import { iso78164Unpad, iso78164UnpadDoc } from "../steps/iso7816-4-unpad";
@@ -167,5 +174,33 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // see `src/steps/feistel-toy-add-k.ts` for why addition (not XOR) is
   // chosen. NOT in the cipher selector — referenced only by Phase 2 tests.
   r.register("feistel.toy-add-k@1", { executor: feistelToyAddK, doc: feistelToyAddKDoc });
+  // ─── DES (Phase 3 of the DES + branching primitive plan) ───────────────
+  // The first cipher to use the `feistel-round` branching primitive. Seven
+  // step types implement the FIPS 46-3 algorithm: a key schedule that
+  // expands a 64-bit master key into 16 × 48-bit round keys, IP / FP at
+  // the cipher boundary, and four step types composing the F function
+  // (E-expand → XOR with K_i → 8 parallel S-boxes → P-permute) inside the
+  // R track of each Feistel round.
+  //
+  // All bit permutations use FIPS bit numbering (1-indexed, MSB-first) via
+  // helpers in `src/steps/des-bit-ops.ts` — distinct from Serpent's LSB-
+  // first convention to match the standard's tables verbatim.
+  //
+  // The DES spec is registered in `defaults` (Phase 3) but not yet exposed
+  // in the cipher selector (Phase 4). Saved documents stay at schema v1
+  // since users can't currently reach a DES Save through the UI.
+  r.register("des.key-schedule@1", { executor: desKeySchedule, doc: desKeyScheduleDoc });
+  r.register("des.initial-permutation@1", {
+    executor: desInitialPermutation,
+    doc: desInitialPermutationDoc,
+  });
+  r.register("des.final-permutation@1", {
+    executor: desFinalPermutation,
+    doc: desFinalPermutationDoc,
+  });
+  r.register("des.expand-R@1", { executor: desExpandR, doc: desExpandRDoc });
+  r.register("des.xor-with-K@1", { executor: desXorWithK, doc: desXorWithKDoc });
+  r.register("des.s-boxes@1", { executor: desSBoxes, doc: desSBoxesDoc });
+  r.register("des.p-permutation@1", { executor: desPPermutation, doc: desPPermutationDoc });
   return r;
 };
