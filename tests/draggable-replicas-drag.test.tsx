@@ -187,6 +187,88 @@ describe("GraphView — replica chip drag (Slice 3, draggable-replicas plan)", (
     expect(container.querySelector(`[data-testid="graph-reset-pin-${REPLICA_ID}"]`)).toBeNull();
   });
 
+  it("toolbar 'reset layout' button is disabled when nothing is customized (Slice 5)", () => {
+    // Spec is freshly reset → no positions, no collapses, no replication
+    // overrides, no relative pins → hasUserLayout(null) === false → button
+    // disabled. The replicationEnabled toggle is a SESSION-level flag
+    // (not stored on LayoutSpec), so flipping it on doesn't make the
+    // button live.
+    seedAes128Trace();
+    setReplicationEnabled(true);
+    const { container } = render(() => <GraphView />);
+    const btn = container.querySelector(
+      '[data-testid="graph-view-layout-reset"]',
+    ) as HTMLButtonElement | null;
+    expect(btn).not.toBeNull();
+    expect(btn?.disabled).toBe(true);
+  });
+
+  it("toolbar 'reset layout' button activates once a chip is pinned, and a confirmed click clears everything (Slice 5)", () => {
+    const specId = renderWithReplicas();
+    const { container } = render(() => <GraphView />);
+
+    // Initially button is disabled (replicationMode counts as a
+    // customization actually — let me re-check). The forced replication
+    // mode IS persisted in the layout, so hasUserLayout(activeLayout())
+    // returns true immediately. The button should be enabled even before
+    // any drag.
+    const btn = container.querySelector(
+      '[data-testid="graph-view-layout-reset"]',
+    ) as HTMLButtonElement | null;
+    expect(btn).not.toBeNull();
+    if (!btn) return;
+    expect(btn.disabled).toBe(false);
+
+    // Drag a chip so we have BOTH a replicationMode AND a relative pin.
+    const chip = container.querySelector('[data-testid*="@->"]');
+    if (!chip) return;
+    chip.dispatchEvent(pointerEvt("pointerdown", 100, 100));
+    window.dispatchEvent(pointerEvt("pointermove", 140, 110));
+    window.dispatchEvent(pointerEvt("pointerup", 140, 110));
+    expect(getLayoutForSpec(specId)?.relativePositions).toBeDefined();
+
+    // Stub window.confirm → user approves the reset.
+    const originalConfirm = window.confirm;
+    window.confirm = () => true;
+    try {
+      btn.click();
+    } finally {
+      window.confirm = originalConfirm;
+    }
+
+    // All four layers are gone — entry dropped from the map entirely.
+    expect(getLayoutForSpec(specId)).toBeNull();
+  });
+
+  it("toolbar 'reset layout' button does nothing when the confirm prompt is cancelled", () => {
+    const specId = renderWithReplicas();
+    const { container } = render(() => <GraphView />);
+    const chip = container.querySelector('[data-testid*="@->"]');
+    if (!chip) return;
+    chip.dispatchEvent(pointerEvt("pointerdown", 100, 100));
+    window.dispatchEvent(pointerEvt("pointermove", 140, 110));
+    window.dispatchEvent(pointerEvt("pointerup", 140, 110));
+    const before = getLayoutForSpec(specId);
+    expect(before).not.toBeNull();
+
+    const btn = container.querySelector(
+      '[data-testid="graph-view-layout-reset"]',
+    ) as HTMLButtonElement;
+    // Stub window.confirm → user cancels.
+    const originalConfirm = window.confirm;
+    window.confirm = () => false;
+    try {
+      btn.click();
+    } finally {
+      window.confirm = originalConfirm;
+    }
+
+    // Layout still in place — cancel keeps the user's work.
+    const after = getLayoutForSpec(specId);
+    expect(after).not.toBeNull();
+    expect(after?.relativePositions).toEqual(before?.relativePositions);
+  });
+
   it("a second drag accumulates onto the existing pin instead of overwriting it", () => {
     const specId = renderWithReplicas();
     const { container } = render(() => <GraphView />);

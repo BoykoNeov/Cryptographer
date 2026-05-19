@@ -61,6 +61,8 @@ import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from
 import { useByteFormat } from "../stores/format";
 import {
   clearRelativePosition,
+  hasUserLayout,
+  setLayoutForSpec,
   setNodePosition,
   setRelativePosition,
   setReplicationMode,
@@ -3812,6 +3814,33 @@ export const GraphView = () => {
                 reset
               </button>
             </div>
+            {/* Hard-reset of the per-spec layout sidecar (draggable-
+                replicas plan Slice 5, 2026-05-19). Clears positions,
+                relativePositions, collapsedGroups, and replicationModes
+                in one click — same envelope `setLayoutForSpec(specId,
+                null)` writes when a Load brings in a layout-less
+                document. Confirm prompt is the cheap safety net; the
+                button is disabled when there's nothing to reset so the
+                user can't accidentally trigger the prompt on an
+                already-clean spec. */}
+            <button
+              type="button"
+              class="graph-view-toolbar-button graph-view-layout-reset"
+              data-testid="graph-view-layout-reset"
+              onClick={() => {
+                if (
+                  window.confirm(
+                    "Reset graph layout?\n\nThis clears every pin, collapse, and replication override for this spec. Cannot be undone.",
+                  )
+                ) {
+                  setLayoutForSpec(spec().id, null);
+                }
+              }}
+              disabled={!hasUserLayout(activeLayout())}
+              title="Clear every pin, collapse, and replication override for this spec"
+            >
+              reset layout
+            </button>
             {/* Slice 11 — in-app help button. Pushed to the right edge of
             the toolbar via `margin-left: auto` in `.graph-view-help-button`
             so it doesn't visually compete with the density + replicate

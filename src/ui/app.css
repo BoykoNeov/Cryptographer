@@ -2584,6 +2584,45 @@ button:disabled {
   padding: 0 8px;
 }
 
+/* Hard-reset of the per-spec layout sidecar (draggable-replicas Slice 5,
+   2026-05-19). Sibling of `.graph-view-zoom-reset` typographically;
+   sits next to the zoom-reset in the toolbar. Inherits the standard
+   button chrome via `.graph-view-toolbar-button` (mirrors the same
+   border + bg-elev treatment as the zoom buttons so the cluster reads
+   as one visual group). `margin-left: 8px` separates it from the zoom
+   cluster so the eye reads "two distinct reset actions," not "one wide
+   reset zone." */
+.graph-view-toolbar-button {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  text-transform: lowercase;
+}
+
+.graph-view-toolbar-button:hover:not(:disabled) {
+  background: var(--bg);
+  border-color: var(--text);
+}
+
+.graph-view-toolbar-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.graph-view-layout-reset {
+  margin-left: 8px;
+}
+
 .graph-view-zoom-readout {
   /* Fixed min-width so the readout doesn't jitter the toolbar width as
      zoom percentage changes characters (50% / 100% / 200% all fit at 38px
