@@ -61,6 +61,7 @@ import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from
 import { useByteFormat } from "../stores/format";
 import {
   setNodePosition,
+  setRelativePosition,
   setReplicationMode,
   toggleCollapse,
   useLayoutMap,
@@ -3183,18 +3184,35 @@ export const GraphView = () => {
   };
 
   /**
-   * Begin a node drag on pointerdown. Works for any node id (container
-   * or leaf) — the layout engine treats leaves with pins the same as
-   * containers with pins. setPointerCapture is best-effort: jsdom
-   * doesn't implement it in older versions, but the window-level
-   * listeners installed below keep the drag working regardless.
+   * Begin a node drag on pointerdown. Works for any node id (container,
+   * leaf, replica, block chip).
    *
-   * If `onClickFallback` is provided, a sub-threshold pointerup (no
-   * meaningful movement) fires it — that's how leaves preserve their
-   * click-to-scrub behavior while ALSO being draggable when the user
-   * actually drags.
+   * Two modes:
+   *   - **"absolute"** (default): pins the node's top-left in viewBox
+   *     coordinates via `setNodePosition`. Used for containers and
+   *     root-level non-replica leaves. Clamped to `(0, 0)` so a chip
+   *     can't be dragged off the canvas edge and become unclickable.
+   *   - **"relative"**: pins the node's delta from its auto-laid
+   *     position via `setRelativePosition`. Used for synthetic-id chips
+   *     (aux replicas, block chips) whose anchor is another node. NOT
+   *     clamped — the auto position is already deep inside the canvas,
+   *     so a user moving the chip toward the upper-left is a legitimate
+   *     gesture. Added 2026-05-19 (draggable-replicas plan, Slice 3).
+   *
+   * Both modes use the same client-px-to-viewBox conversion (divide by
+   * `zoom()`) and the same sub-threshold pointerup → `onClickFallback`
+   * behavior so click-to-scrub on a draggable leaf still works.
+   *
+   * setPointerCapture is best-effort — jsdom older versions don't
+   * implement it, but the window-level listeners below keep the drag
+   * working either way.
    */
-  const startNodeDrag = (nodeId: string, e: PointerEvent, onClickFallback?: () => void): void => {
+  const startNodeDrag = (
+    nodeId: string,
+    e: PointerEvent,
+    onClickFallback?: () => void,
+    opts: { mode: "absolute" | "relative" } = { mode: "absolute" },
+  ): void => {
     e.stopPropagation();
     const startBox = layout().boxes.get(nodeId);
     if (!startBox) return;
@@ -3202,6 +3220,13 @@ export const GraphView = () => {
     const startClientY = e.clientY;
     const startBoxX = startBox.x;
     const startBoxY = startBox.y;
+    // Captured BEFORE the drag begins so accumulated deltas in relative
+    // mode add to the existing pin (if any) rather than overwriting it.
+    // Without this, dragging a chip that already had `dx = 30` would
+    // reset to `dx = startCursorDelta` mid-gesture.
+    const startRel = relativePinsMap().get(nodeId) ?? { dx: 0, dy: 0 };
+    const startRelDx = startRel.dx;
+    const startRelDy = startRel.dy;
     let moved = false;
 
     const target = e.currentTarget as Element | null;
@@ -3235,20 +3260,29 @@ export const GraphView = () => {
       // drag at 2× zoom would move the pin twice as far as the cursor —
       // pins would race ahead of (or fall behind) the user's hand and
       // get persisted into localStorage at the wrong coordinates.
-      //
-      // Clamp to (0, 0) so the block can't be dragged off the top or left
-      // of the SVG. Negative SVG coordinates fall outside the viewBox and
-      // are clipped by the browser — the block becomes invisible AND
-      // unclickable. The bad position would also persist in localStorage,
-      // making the block unreachable across reloads until the user
-      // manually edits storage. At y >= 0 the block stays inside the
-      // drawn area; even when the sticky header (z-index: 1) visually
-      // overlays small SVG y values at scrollTop > 0, scrolling the
-      // container back to the top always reveals the block.
       const z = zoom();
-      const newX = Math.max(0, startBoxX + dx / z);
-      const newY = Math.max(0, startBoxY + dy / z);
-      setNodePosition(spec().id, nodeId, newX, newY);
+      if (opts.mode === "relative") {
+        // Accumulate onto the start delta. No (0, 0) clamp: the chip's
+        // auto-anchor is already deep in the canvas, and dragging
+        // toward the upper-left is a valid gesture (the user might
+        // want to move a high-fanout source chip up out of the row
+        // it currently competes with).
+        setRelativePosition(spec().id, nodeId, startRelDx + dx / z, startRelDy + dy / z);
+      } else {
+        // Clamp to (0, 0) so the block can't be dragged off the top or
+        // left of the SVG. Negative SVG coordinates fall outside the
+        // viewBox and are clipped by the browser — the block becomes
+        // invisible AND unclickable. The bad position would also persist
+        // in localStorage, making the block unreachable across reloads
+        // until the user manually edits storage. At y >= 0 the block
+        // stays inside the drawn area; even when the sticky header
+        // (z-index: 1) visually overlays small SVG y values at
+        // scrollTop > 0, scrolling the container back to the top always
+        // reveals the block.
+        const newX = Math.max(0, startBoxX + dx / z);
+        const newY = Math.max(0, startBoxY + dy / z);
+        setNodePosition(spec().id, nodeId, newX, newY);
+      }
     };
 
     const onUp = (): void => {
@@ -4260,24 +4294,43 @@ export const GraphView = () => {
                   isInsideIterate && node.blockSpan !== undefined
                     ? { blockSpan: node.blockSpan }
                     : {};
-                // Conditional spread for the drag handler — only present on
-                // root-level leaves AND not replica-like (replicas + chips
-                // are both auto / synthetic placements that shouldn't be
-                // user-pinned).
-                const dragProps =
-                  isRootLevel && !isReplicaLike
-                    ? {
-                        onPointerDown: (e: PointerEvent) =>
-                          startNodeDrag(node.stepId, e, () => {
+                // Conditional spread for the drag handler.
+                //
+                //   - Root-level non-replica leaves (e.g. AES's
+                //     `key-expansion`, `initial.add-round-key`) get the
+                //     legacy ABSOLUTE-pin drag — clamped to (0,0) so they
+                //     can't be dragged off the canvas.
+                //   - Replicas (`replicaOf` set) and block chips
+                //     (`blockChipOf` set) get the RELATIVE-pin drag
+                //     (draggable-replicas plan, Slice 3 — 2026-05-19): pin
+                //     a delta from the auto position, so the chip rides
+                //     its anchor (consumer for replicas, iterate for
+                //     chips) when that anchor moves. NOT clamped — auto
+                //     position is already deep in the canvas, and moving
+                //     toward the upper-left is a valid gesture.
+                //   - Nested non-root non-replica leaves stay
+                //     non-draggable (user's explicit pick on
+                //     2026-05-19: motivation was replicas + chips only).
+                const dragMode = isReplicaLike ? ("relative" as const) : ("absolute" as const);
+                const isDraggable = isReplicaLike || isRootLevel;
+                const dragProps = isDraggable
+                  ? {
+                      onPointerDown: (e: PointerEvent) =>
+                        startNodeDrag(
+                          node.stepId,
+                          e,
+                          () => {
                             // Click fallback (sub-threshold drag release) on
                             // a draggable leaf — keep both behaviors aligned
                             // with the non-draggable onClick path below:
                             // scrub the trace AND toggle inspector selection.
                             handleLeafClick(clickTargetId);
                             toggleSelectedNode(inspectorTargetId);
-                          }),
-                      }
-                    : {};
+                          },
+                          { mode: dragMode },
+                        ),
+                    }
+                  : {};
                 const leafWarnings = createMemo(() => warningsByVisibleId().get(node.stepId) ?? []);
                 return (
                   <Show when={box()}>
@@ -4297,7 +4350,11 @@ export const GraphView = () => {
                         label={shortLeafLabel(node.label)}
                         stepType={node.stepType}
                         box={b()}
-                        draggable={isRootLevel && !isReplicaLike}
+                        // `draggable` controls the LeafRect's class + click-
+                        // vs-drag dispatch internally. Replicas + chips are
+                        // now draggable too (relative-pin mode) — see the
+                        // `dragProps` gate above for the per-mode split.
+                        draggable={isDraggable}
                         isReplica={isReplicaLike}
                         dropAnchorId={clickTargetId}
                         // Reactive: the JSX expression re-evaluates when
