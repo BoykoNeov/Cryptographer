@@ -1,0 +1,5 @@
+# All files are text and stay LF in both the index and the working tree.
+# This repo's working tree was already LF on every file; pinning here stops
+# core.autocrlf=true (Git for Windows default) from producing phantom
+# "modified" states when a tool re-stats a file with LF endings.
+* text=auto eol=lf
