@@ -71,6 +71,79 @@ const pointerEvt = (type: string, x: number, y: number): MouseEvent => {
   return e;
 };
 
+describe("GraphView — block-chip drag (Slice 3 — collapsed-iterate path)", () => {
+  // Block chips reach the renderer through a DIFFERENT path than aux replicas:
+  // collapsing an iterate via `toggleCollapse` swaps its body for N synthetic
+  // chips (`iterateId@blockI`) marked with `blockChipOf` (not `replicaOf`).
+  // The replica drag tests above exercise the `replicaOf` arm of `isReplicaLike`;
+  // this section covers the `blockChipOf` arm with the same wire-up contract,
+  // catching a hypothetical future regression where one path's gate falls out
+  // of sync with the other.
+  //
+  // Setup is bespoke: AES-128 ECB (not single-block) so an `ecb-blocks`
+  // iterate exists; 4-block plaintext so the chip-row has visible chips;
+  // toggleCollapse to surface them as leaves with `@block` ids.
+
+  // Sentinel imports + helpers (mirrored shape; ECB needs additional store
+  // resets for cipher-mode + view-density that the replica tests don't).
+
+  beforeEach(resetAll);
+  afterEach(() => {
+    cleanup();
+    resetAll();
+  });
+
+  it("dragging a block chip writes a relativePositions entry under the @block synthetic id", async () => {
+    // Inline the ECB setup so the test stays self-contained alongside the
+    // replica tests above. setCipherMode lives in stores/spec (NOT
+    // stores/cipher-mode — the former rebuilds the canonical pair).
+    const { setCipherMode } = await import("@/ui/stores/spec");
+    const { aes128EcbSpec } = await import("@/ciphers/aes-128-ecb");
+    const { makeBytesState } = await import("@/core/state/bytes");
+    const { toggleCollapse } = await import("@/ui/stores/layout");
+
+    setCipherMode("ecb");
+    const ecbKey = "000102030405060708090a0b0c0d0e0f";
+    const ecbPt =
+      "6bc1bee22e409f96e93d7e117393172a" +
+      "ae2d8a571e03ac9c9eb76fac45af8e51" +
+      "30c81c46a35ce411e5fbc1191a0a52ef" +
+      "f69f2445df4f9b17ad2b417be66c3710";
+    const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
+      initialState: makeBytesState(bytesFromHex(ecbPt)),
+      initialAux: new Map<string, AuxValue>([["key", bytesFromHex(ecbKey)]]),
+    });
+    setTrace(trace);
+
+    // Collapse the iterate so chips appear.
+    toggleCollapse(aes128EcbSpec.id, "ecb-blocks");
+
+    const { container } = render(() => <GraphView />);
+
+    // Find any block chip — id format is `ecb-blocks@block${i}`.
+    const chip = container.querySelector('[data-testid^="graph-leaf-ecb-blocks@block"]');
+    expect(chip).not.toBeNull();
+    if (!chip) return;
+    const CHIP_ID = (chip.getAttribute("data-testid") ?? "").replace(/^graph-leaf-/, "");
+    expect(CHIP_ID).toMatch(/^ecb-blocks@block\d+$/);
+
+    // Drag the chip.
+    chip.dispatchEvent(pointerEvt("pointerdown", 100, 100));
+    window.dispatchEvent(pointerEvt("pointermove", 150, 130));
+    window.dispatchEvent(pointerEvt("pointerup", 150, 130));
+
+    const layout = getLayoutForSpec(aes128EcbSpec.id);
+    // Pin lands in relativePositions under the synthetic id, not in
+    // absolute positions — same `blockChipOf` arm of `isReplicaLike` the
+    // drag wire-up uses.
+    expect(layout?.positions[CHIP_ID]).toBeUndefined();
+    const rel = layout?.relativePositions?.[CHIP_ID];
+    expect(rel).toBeDefined();
+    expect(rel?.dx).toBeCloseTo(50, 0);
+    expect(rel?.dy).toBeCloseTo(30, 0);
+  });
+});
+
 describe("GraphView — replica chip drag (Slice 3, draggable-replicas plan)", () => {
   beforeEach(resetAll);
   afterEach(() => {
