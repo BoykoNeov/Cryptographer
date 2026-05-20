@@ -23,6 +23,7 @@
 
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { desSpec } from "@/ciphers/des";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { runSpec } from "@/core/runtime";
@@ -304,6 +305,78 @@ describe("<RoundKeyPanel /> against a real Speck32/64 trace (fallback-strip path
     // Each strip carries exactly 2 byte cells.
     const firstStrip = container.querySelector(".round-key-cell-strip");
     expect(firstStrip?.querySelectorAll(".round-key-cell-byte").length).toBe(2);
+  });
+});
+
+// ─── DES (Phase 5d of `docs/plans/des-feistel.md`) ─────────────────────
+//
+// DES round keys are 48 bits = 6 bytes each. The existing fallback-strip
+// path (byteLength !== 16) handles them as-is — six side-by-side hex
+// cells per K_i, 16 keys total. Phase 5d verifies that the existing
+// shape covers DES correctly so the bit-grouped affordance the plan
+// originally proposed isn't actually needed at MVP. If a future browser
+// smoke shows users want the 8-groups-of-6-bits unfold, that's an
+// additive follow-up gated by user feedback rather than this phase.
+
+const DES_KEY = new Uint8Array([0x13, 0x34, 0x57, 0x79, 0x9b, 0xbc, 0xdf, 0xf1]);
+const DES_PT = new Uint8Array([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]);
+
+const seedDesTrace = () => {
+  const trace = runSpec(desSpec, buildDefaultRegistry(), {
+    initialState: makeBytesState(DES_PT),
+    initialAux: new Map<string, AuxValue>([["key", DES_KEY]]),
+  });
+  setTrace(trace);
+  return trace;
+};
+
+describe("<RoundKeyPanel /> against a real DES trace (fallback-strip path, 6B keys)", () => {
+  beforeEach(() => {
+    __resetByteFormatForTests();
+    __resetTraceForTests();
+    __resetRoundKeyPanelOverrideForTests();
+  });
+  afterEach(() => {
+    cleanup();
+    __resetByteFormatForTests();
+    __resetTraceForTests();
+    __resetRoundKeyPanelOverrideForTests();
+  });
+
+  it("renders 16 round-key cells in one ribbon at 6B each", () => {
+    const trace = seedDesTrace();
+    const { container } = render(() => <RoundKeyPanel frame={trace.frames[0] ?? null} />);
+    const ribbons = container.querySelectorAll(".round-key-ribbon");
+    expect(ribbons.length).toBe(1);
+    // DES: 16 round keys (K_0..K_15), each 48 bits packed into 6 bytes.
+    expect(container.querySelectorAll(".round-key-cell").length).toBe(16);
+    expect(ribbons[0]?.querySelector(".round-key-ribbon-shape")?.textContent).toContain("16 × 6B");
+  });
+
+  it("each K_i ribbon cell renders 6 byte cells via the strip branch (no TinyMatrix)", () => {
+    const trace = seedDesTrace();
+    const { container } = render(() => <RoundKeyPanel frame={trace.frames[0] ?? null} />);
+    // All 16 ribbons use the strip fallback (byteLength !== 16 path).
+    expect(container.querySelectorAll(".round-key-cell-strip").length).toBe(16);
+    // No TinyMatrix anywhere — DES K_i is 6 bytes, never 16.
+    expect(container.querySelectorAll(".tiny-matrix").length).toBe(0);
+    // Each strip carries exactly 6 byte cells.
+    const firstStrip = container.querySelector(".round-key-cell-strip");
+    expect(firstStrip?.querySelectorAll(".round-key-cell-byte").length).toBe(6);
+  });
+
+  it("outlines the current K_i when scrubbed onto an xor-K frame that reads it", () => {
+    const trace = seedDesTrace();
+    // round.3.xor-K consumes roundKey.2 (encrypt round r uses K_{r-1}).
+    const frame = trace.frames.find(
+      (f) => f.stepId.startsWith("round.3.xor-K") && f.auxRead.has("roundKey.2"),
+    );
+    expect(frame).toBeDefined();
+    const { container } = render(() => <RoundKeyPanel frame={frame ?? null} />);
+    const currentCells = container.querySelectorAll(".round-key-cell-current");
+    expect(currentCells.length).toBe(1);
+    // The outlined cell's title should reference roundKey.2.
+    expect(currentCells[0]?.getAttribute("title")).toBe("roundKey.2");
   });
 });
 
