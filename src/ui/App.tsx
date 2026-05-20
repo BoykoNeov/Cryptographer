@@ -57,6 +57,7 @@ import {
 } from "solid-js";
 import { BlockBadge } from "./components/BlockBadge";
 import { BytesView } from "./components/BytesView";
+import { FeistelTrackContext } from "./components/FeistelTrackContext";
 import { GraphView } from "./components/GraphView";
 import { IvInput } from "./components/IvInput";
 import { KeyScheduleExplorer } from "./components/KeyScheduleExplorer";
@@ -1263,6 +1264,16 @@ export const App = () => {
                   >
                     <RejoinFrameView frame={frame()} />
                   </Show>
+
+                  {/* Feistel round-context panel. Renders only when the
+                      active frame is inside a feistel-round body (i.e.
+                      `frame.branchPath` non-empty). Shows round entry
+                      (L | R), the currently-active track's evolving
+                      state, and round output (L' | R') reconstructed
+                      from the round's rejoin frame. Phase 5a of the
+                      DES + branching primitive plan; cipher-agnostic
+                      so TEA/XTEA/Twofish get it without modification. */}
+                  <FeistelTrackContext frame={frame()} />
 
                   {/* Per-frame value-prose. Cipher-agnostic dispatch via
                       the narration registry (`src/ui/narration/`).
