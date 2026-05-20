@@ -53,6 +53,7 @@ import {
   insertStepAfter,
   insertStepBefore,
   prependChildToContainer,
+  prependChildToTrack,
   removeStep,
   updateAllStepsByType,
   updateStepParams,
@@ -518,6 +519,7 @@ export const insertStepIntoSpec = (
     | { kind: "after"; stepId: string }
     | { kind: "before"; stepId: string }
     | { kind: "into-start"; containerId: string }
+    | { kind: "into-track-start"; roundId: string; trackIdx: number }
     | { kind: "root-append" },
 ): string => {
   const currentSpec = activeSpec();
@@ -549,6 +551,22 @@ export const insertStepIntoSpec = (
       // fires if the spec mutated out from under us mid-drop. Recover
       // by appending to root rather than crashing the UI.
       console.warn(`insertStepIntoSpec(into-start, ${anchor.containerId}) failed:`, err);
+      updateActive((s) => ({ ...s, steps: [...s.steps, newLeaf] }));
+    }
+  } else if (anchor.kind === "into-track-start") {
+    // DES Phase 6d-iv: per-track at-start drop. The graph view's
+    // gutter logic emits this anchor for the "drop into an empty
+    // track" sentinel (DES L track) and any future at-start track
+    // strip. Same fallback discipline as into-start above — if the
+    // spec mutated out from under us mid-drop, recover by appending
+    // to root rather than dropping the user's drop on the floor.
+    try {
+      updateActive((s) => prependChildToTrack(s, anchor.roundId, anchor.trackIdx, newLeaf));
+    } catch (err) {
+      console.warn(
+        `insertStepIntoSpec(into-track-start, ${anchor.roundId}, ${anchor.trackIdx}) failed:`,
+        err,
+      );
       updateActive((s) => ({ ...s, steps: [...s.steps, newLeaf] }));
     }
   } else {
