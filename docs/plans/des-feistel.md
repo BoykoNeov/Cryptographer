@@ -1,7 +1,12 @@
 # DES + branching primitive — first Feistel cipher
 
-> **Status: Phases 1–5 shipped 2026-05-19 / 2026-05-20** (including
-> the two 5a/5b polish items the original Phase 5 fell short on).
+> **Status: Phases 1–5 + 6a-revision + 6c + 2 universal fixes shipped
+> 2026-05-19 / 2026-05-20.** Phase 6b / 6d / 6e remain. See "Phase 6
+> session log (2026-05-20)" section at bottom of this file for the
+> commit-by-commit trail.
+>
+> **Phase 5 detail (preserved from earlier):** (including the two
+> 5a/5b polish items the original Phase 5 fell short on).
 > Commits: `91f143d` (P1 oracle), `6a046d0` (P2 primitive + toy),
 > `be0bb6a` (P3 step types), `7b584f3` (P4 selector wiring), `9d16c95`
 > (P5-pre StepList walker), `43703e9` (P5c rejoin view), `ef1cd92`
@@ -907,3 +912,64 @@ selector, so users can't drive it through the UI until Phase 4.
   `[[project-universal-cipher-shape-plan]]` was queued to absorb.
   After Phase 5 ships, revisit that plan's hybrid-type-alias-vs-union
   decision with the real data model in hand.
+
+## Phase 6 session log (2026-05-20)
+
+Phase 6 entered with a fresh advisor pass per the iterative-slice-review
+pattern. Four substantive points surfaced, two became user picks
+(full per-track structural editing for 6d; experiment-then-decide on
+`collapseFeistelRoundEdges`). Sub-slices shipped in this order:
+
+1. **6a** (`513e97e`) → superseded same day. Original L-row-top +
+   R-row-bottom layout (90° CW rotation from textbook). Browser
+   smoke revealed empty L row read as wasted space, not as a
+   passthrough track.
+2. **6c** (`4a1b8f7`). Experiment proved generic `collapseGraph`
+   already handles feistel-round collapse correctly; the planned
+   `collapseFeistelRoundEdges` transform was vestigial.
+3. **6a-revision** (`12b88e0`). Pivoted to side-by-side L/R columns
+   (user pick: textbook convention — L on left, R on right). Chips
+   stack vertically within each column.
+4. **6a-revision-fix** (`3dea9d5`). Regression from the pivot:
+   track-only iteration skipped replica synthetic ids. Right-gutter
+   placement (user pick over left-gutter / above-consumer / etc.).
+   15/16 replicas visible.
+5. **Spine-replica splice fix** (`d58202e`, NOT in original plan).
+   Pre-existing bug surfaced by DES — `source.parent ≠
+   spineSuccessor.parent` case the existing graph.ts:1786 comment
+   had flagged. One-line fix: spine-replica anchors on `edge.from`
+   (source's id) instead of `edge.to` (consumer's id).
+   Byte-equivalent for AES/Speck/Serpent; 16/16 DES replicas now visible.
+6. **Output-anchor descent fix** (`573fb50`, NOT in original plan).
+   User-flagged AES inconsistency: spine ended at `round-10`
+   container instead of `round.10.add-round-key`. Universal fix:
+   `endpointAnchors` memo recurses into terminal container to
+   find innermost last state-consumer. Iterate returns container
+   id (boundary); feistel-round returns rejoin synthetic; group
+   transparent. AES fixed; DES/Speck/AES-ECB unchanged.
+
+**Issue A noted, accepted for now** (2026-05-20): DES's 16-round
+vertical stack extends beyond visible canvas (~3.2K tall). Revisit
+when a many-round cipher like TEA (64 rounds) ships and the scroll
+becomes a real pain point.
+
+**Remaining work (future session):**
+
+- **Phase 6b** — rejoin chip + passthrough chip in L column +
+  diagonal X-crossings between rounds (user pick: diagonal X over
+  S-curves) + direction-aware placement (bottom edge for
+  vertical-flow parent like DES's "rounds" group; right edge for
+  future iterate-contained Feistel). Phase 6b will close the DES
+  spine gap (`round.16.p-permute → final-permutation` invisible
+  today because of the missing rejoin chip).
+- **Phase 6d** — per-track drop gutters. **Blocked on
+  `insertStepIntoTrack(roundId, trackIdx, position, newStep)` +
+  `StepLocation` widening** (currently `spec-mutations.ts` lines
+  548, 643, 1062 treat feistel-round as opaque). User picked
+  "build full per-track structural editing" over descope-to-readonly
+  and append-only-variant.
+- **Phase 6e** — comprehensive manual browser smoke pass.
+
+**Bundle:** 504 KB → 509.3 KB over the session. Soft Vite warning
+non-blocking; lazy-loading the Feistel components is the obvious
+response if it gets worse.
