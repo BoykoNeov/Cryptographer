@@ -2377,6 +2377,120 @@ button:disabled {
   font-style: italic;
 }
 
+/* ─── Rejoin frame inspector (Phase 5c) ───────────────────────────────
+   Renders for synthetic `__rejoin__` frames inside a feistel-round.
+   Header shows combine kind + formula; snapshots row shows the 4 track
+   states in formula order with unused ones muted; result shows new_L /
+   new_R. The visual rhythm matches `<KeyScheduleExplorer />` so all
+   "specialized inspector" views read as one family. */
+
+.rejoin-frame-view {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev-1);
+}
+
+.rejoin-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+.rejoin-header-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11px;
+}
+
+.rejoin-header-label {
+  color: var(--muted);
+  min-width: 80px;
+}
+
+.rejoin-header-kind,
+.rejoin-header-formula {
+  font-family: var(--mono, monospace);
+  color: var(--text);
+}
+
+.rejoin-snapshots {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rejoin-snapshot-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.rejoin-snapshot-label {
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  min-width: 50px;
+  color: var(--accent);
+}
+
+.rejoin-snapshot-unused {
+  opacity: 0.55;
+}
+
+.rejoin-snapshot-unused .rejoin-snapshot-label {
+  color: var(--muted);
+}
+
+.rejoin-snapshot-unused-note {
+  font-style: italic;
+}
+
+.rejoin-result {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rejoin-result-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.rejoin-result-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rejoin-result-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.rejoin-result-row-label {
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  min-width: 50px;
+  font-weight: 600;
+}
+
+.rejoin-frame-error {
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+}
+
 /* ─── Slice 2: view-mode tabs (linear / graph / JSON) ─────────────────────
    Tab bar sits above the trace-view content. Three buttons; the active one
    gets the accent border/background combo so it reads as "selected." The

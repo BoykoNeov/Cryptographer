@@ -347,13 +347,37 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
     // scope sees the round's output as its incoming state.
     state = { shape: "bytes", bytes: outputBytes };
 
+    // Stash all 4 track snapshots into the rejoin frame's params so the
+    // inspector (`<RejoinFrameView />`) can render the 4-arg combine
+    // formula's inputs without reconstructing them from the trace.
+    //
+    // Why params, not a new TraceFrame field: a new field would ripple
+    // through every TraceFrame consumer (graph derivation, frame-format
+    // helpers, document schema if we ever serialized frames). The
+    // 4 snapshots are combine-specific data, semantically equivalent to
+    // any other "what this frame was given to operate on" payload that
+    // params carries for ordinary leaves. Uint8Array → number[] for the
+    // Json contract; the view re-wraps as Uint8Array at read time.
+    //
+    // Note on redundancy: stateBefore already encodes (L_out || R_out)
+    // as a single concat, and stateAfter encodes (new_L || new_R). Two
+    // of the four params duplicate that data — kept anyway for the
+    // inspector's symmetry and to make the rejoin frame self-describing
+    // (a stale narrator looking at just `frame.params` can render the
+    // full 4-arg formula). The arrays are small (8 bytes each for DES).
     const rejoinStepId = composeStepId(`${node.id}:rejoin`, branchPath, blockIndex);
     const rejoinFrame: TraceFrame = {
       index: frameIndex++,
       path,
       stepId: rejoinStepId,
       stepType: REJOIN_STEP_TYPE,
-      params: { combineKind: node.combineKind },
+      params: {
+        combineKind: node.combineKind,
+        L_in: Array.from(L_in),
+        L_out: Array.from(L_out),
+        R_in: Array.from(R_in),
+        R_out: Array.from(R_out),
+      },
       stateBefore: rejoinStateBefore,
       stateAfter: rejoinStateAfter,
       auxRead: new Map(),

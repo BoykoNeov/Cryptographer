@@ -24,6 +24,7 @@
  * routes through scheme-aware parsing + initial-state shape selection.
  */
 
+import { REJOIN_STEP_TYPE } from "@/core/combine-kinds";
 import {
   CURRENT_SCHEMA_VERSION,
   type CipherDocument,
@@ -61,6 +62,7 @@ import { IvInput } from "./components/IvInput";
 import { KeyScheduleExplorer } from "./components/KeyScheduleExplorer";
 import { MatrixView } from "./components/MatrixView";
 import { ParamEditor } from "./components/ParamEditor";
+import { RejoinFrameView } from "./components/RejoinFrameView";
 import { RoundKeyPanel } from "./components/RoundKeyPanel";
 import { RunExplorerModal } from "./components/RunExplorerModal";
 import { StepDescription } from "./components/StepDescription";
@@ -1233,18 +1235,33 @@ export const App = () => {
                       - mixed (boundary)  → side-by-side inline render so the
                                             user can see the shape transition.
 
-                      EXCEPT for key-expansion frames: the executor only
-                      writes aux, so the default "before === after" matrix
-                      pair is uninformative. The KeyScheduleExplorer takes
-                      the slot instead and renders the algorithm's per-stage
-                      internal decomposition (Phase 2 of the pedagogy plan). */}
+                      EXCEPT for these specialized inspectors:
+                      - key-expansion frames: the executor only writes aux,
+                        so the default "before === after" matrix pair is
+                        uninformative. KeyScheduleExplorer renders the
+                        algorithm's per-stage internal decomposition (Phase
+                        2 of the pedagogy plan).
+                      - rejoin frames (synthetic, stepType "__rejoin__"
+                        from a `feistel-round` runtime expansion): the
+                        default view would render two 8-byte concat blobs.
+                        RejoinFrameView (Phase 5c of the DES + branching
+                        primitive plan) shows the 4 track snapshots in
+                        formula order plus the (new_L, new_R) split, with
+                        snapshots the combine doesn't read greyed out. */}
                   <Show
-                    when={isKeyExpansionStepType(frame().stepType)}
+                    when={frame().stepType === REJOIN_STEP_TYPE}
                     fallback={
-                      <FrameStateView frame={frame()} previousRunFrame={previousRunFrame()} />
+                      <Show
+                        when={isKeyExpansionStepType(frame().stepType)}
+                        fallback={
+                          <FrameStateView frame={frame()} previousRunFrame={previousRunFrame()} />
+                        }
+                      >
+                        <KeyScheduleExplorer frame={frame()} />
+                      </Show>
                     }
                   >
-                    <KeyScheduleExplorer frame={frame()} />
+                    <RejoinFrameView frame={frame()} />
                   </Show>
 
                   {/* Per-frame value-prose. Cipher-agnostic dispatch via

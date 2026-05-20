@@ -77,7 +77,7 @@ describe("feistel-round primitive (toy spec)", () => {
     expect(addK2).toBeDefined();
   });
 
-  it("emits rejoin frames with deterministic synthetic ids and combineKind params", () => {
+  it("emits rejoin frames with deterministic synthetic ids and combine params", () => {
     const trace = runSpec(FEISTEL_TOY_SPEC, buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: new Uint8Array(FEISTEL_TOY_KAT.plaintext) },
     });
@@ -87,8 +87,23 @@ describe("feistel-round primitive (toy spec)", () => {
     expect(r2).toBeDefined();
     expect(r1?.stepType).toBe(REJOIN_STEP_TYPE);
     expect(r2?.stepType).toBe(REJOIN_STEP_TYPE);
-    expect(r1?.params).toEqual({ combineKind: "feistel-standard" });
-    expect(r2?.params).toEqual({ combineKind: "feistel-no-swap" });
+    // Phase 5c (RejoinFrameView) stash: combineKind plus all 4 track
+    // snapshots (L_in / L_out / R_in / R_out) as number[]. The inspector
+    // reads them directly; redundant with stateBefore/stateAfter but
+    // makes the rejoin frame self-describing for any consumer.
+    expect(r1?.params).toMatchObject({ combineKind: "feistel-standard" });
+    expect(r2?.params).toMatchObject({ combineKind: "feistel-no-swap" });
+    const r1Params = r1?.params as Record<string, unknown>;
+    expect(Array.isArray(r1Params.L_in)).toBe(true);
+    expect(Array.isArray(r1Params.L_out)).toBe(true);
+    expect(Array.isArray(r1Params.R_in)).toBe(true);
+    expect(Array.isArray(r1Params.R_out)).toBe(true);
+    // Round 1 toy: L = [0x01, 0x02], R = [0x03, 0x04]; F(R, K=0x11) = R + K.
+    // So L_in = L_out = [0x01, 0x02], R_in = [0x03, 0x04], R_out = [0x14, 0x15].
+    expect(r1Params.L_in).toEqual([0x01, 0x02]);
+    expect(r1Params.L_out).toEqual([0x01, 0x02]);
+    expect(r1Params.R_in).toEqual([0x03, 0x04]);
+    expect(r1Params.R_out).toEqual([0x14, 0x15]);
     // The rejoin frame's stepId canonicalizes to the round id — that's
     // what makes "click the rejoin chip" scrub to the round's location
     // in the spec tree.
