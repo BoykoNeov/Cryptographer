@@ -28,7 +28,14 @@
  */
 
 import { desSpec } from "@/ciphers/des";
-import { insertStepAfter, insertStepBefore, removeStep, reorderStep } from "@/core/spec-mutations";
+import {
+  insertStepAfter,
+  insertStepBefore,
+  prependChildToContainer,
+  prependChildToTrack,
+  removeStep,
+  reorderStep,
+} from "@/core/spec-mutations";
 import type { FeistelRoundGroup, StepGroup, StepLeaf, StepNode } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
@@ -181,5 +188,73 @@ describe("transformParentArray — Feistel track descent (6d-i)", () => {
   });
 });
 
-// `prependChildToTrack` tests land with that primitive in the 6d-iii
-// commit (this same file).
+describe("prependChildToTrack (6d-iii)", () => {
+  it("prepends into an empty L track", () => {
+    const newLeaf = fixtureLeaf("round.1.l-prepended");
+    const updated = prependChildToTrack(desSpec, "round.1", 0, newLeaf);
+    const round1 = getRound(updated, "round.1");
+    expect(round1.tracks[0]?.children.length).toBe(1);
+    expect(round1.tracks[0]?.children[0]?.id).toBe("round.1.l-prepended");
+  });
+
+  it("prepends into a non-empty R track", () => {
+    const newLeaf = fixtureLeaf("round.1.r-prepended");
+    const updated = prependChildToTrack(desSpec, "round.1", 1, newLeaf);
+    const r = trackChildren(getRound(updated, "round.1"), 1);
+    expect(r.length).toBe(5);
+    expect(r[0]?.id).toBe("round.1.r-prepended");
+    expect(r[1]?.id).toBe("round.1.expand-R");
+  });
+
+  it("preserves L-track reference when prepending into R", () => {
+    const before = getRound(desSpec, "round.1");
+    const updated = prependChildToTrack(desSpec, "round.1", 1, fixtureLeaf("x"));
+    const after = getRound(updated, "round.1");
+    expect(after.tracks[0]).toBe(before.tracks[0]);
+  });
+
+  it("preserves sibling-round references when prepending into one round", () => {
+    const beforeR2 = getRound(desSpec, "round.2");
+    const updated = prependChildToTrack(desSpec, "round.1", 1, fixtureLeaf("x"));
+    const afterR2 = getRound(updated, "round.2");
+    expect(afterR2).toBe(beforeR2);
+  });
+
+  it("throws when the round id resolves to a non-feistel-round node", () => {
+    expect(() => prependChildToTrack(desSpec, "key-schedule", 0, fixtureLeaf("x"))).toThrow(
+      /not a feistel-round/,
+    );
+  });
+
+  it("throws when the round id doesn't exist", () => {
+    expect(() => prependChildToTrack(desSpec, "no-such-round", 0, fixtureLeaf("x"))).toThrow(
+      /no node with id "no-such-round"/,
+    );
+  });
+
+  it("throws when trackIdx is out of range (high)", () => {
+    expect(() => prependChildToTrack(desSpec, "round.1", 5, fixtureLeaf("x"))).toThrow(
+      /trackIdx 5 out of range/,
+    );
+  });
+
+  it("throws when trackIdx is out of range (negative)", () => {
+    expect(() => prependChildToTrack(desSpec, "round.1", -1, fixtureLeaf("x"))).toThrow(
+      /trackIdx -1 out of range/,
+    );
+  });
+
+  it("does not mutate the original spec", () => {
+    const snapshot = JSON.stringify(desSpec);
+    prependChildToTrack(desSpec, "round.1", 0, fixtureLeaf("ephemeral"));
+    expect(JSON.stringify(desSpec)).toBe(snapshot);
+  });
+});
+
+describe("prependChildToContainer — feistel-round error pointer (6d-iii)", () => {
+  it("throws with a pointer to prependChildToTrack when given a feistel-round id", () => {
+    expect(() => prependChildToContainer(desSpec, "round.1", fixtureLeaf("x"))).toThrow(
+      /is a feistel-round; use prependChildToTrack/,
+    );
+  });
+});

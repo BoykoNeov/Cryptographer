@@ -695,12 +695,14 @@ export const prependChildToContainer = (
           return n;
         }
         if (n.kind === "feistel-round") {
-          // No unambiguous "default track" for a round-level prepend in
-          // Phase 2 — DES (Phase 3) will introduce per-track prepend
-          // helpers when its structural editor lands. Treat the same as
-          // a leaf-collision so the caller fails loudly.
-          leafCollision = true;
-          return n;
+          // A feistel-round IS a container, but it has no unambiguous
+          // "default body" — the caller must pick a track. Routing to
+          // the new `prependChildToTrack(spec, roundId, trackIdx, ...)`
+          // primitive is the correct entry point. Throw with a
+          // pointer rather than silently doing nothing.
+          throw new Error(
+            `prependChildToContainer: id "${containerId}" is a feistel-round; use prependChildToTrack(spec, roundId, trackIdx, newStep) to target a specific track`,
+          );
         }
         found = true;
         mutated = true;
@@ -724,6 +726,97 @@ export const prependChildToContainer = (
   }
   if (!found) {
     throw new Error(`prependChildToContainer: no node with id "${containerId}"`);
+  }
+  return { ...spec, steps: newSteps };
+};
+
+/**
+ * Prepend `newStep` as the first child of the named track inside a
+ * `feistel-round` (DES Phase 6d-iii). Sibling to
+ * `prependChildToContainer` — the visual editor's
+ * `into-track-start` drop semantic needs an at-position-0 mutator for
+ * Feistel tracks the same way the group/iterate case needs one for
+ * empty containers. The empty-L-track case in DES is the headline
+ * example: dropping a palette step into the L column needs an entry
+ * point that doesn't require an existing chip to anchor against.
+ *
+ * Throws on:
+ *   - id not found in spec
+ *   - id resolves to a non-feistel-round node
+ *   - trackIdx is out of `tracks[]` range (negative or ≥ length)
+ *
+ * Reference-equality discipline: only the targeted track's `children`
+ * array + the round itself are cloned. Sibling tracks AND every node
+ * outside the touched round retain their original references — same
+ * spec-store-debounce safety net as the rest of the structural
+ * mutators (see `transformParentArray`'s 6d-i clone discipline).
+ */
+export const prependChildToTrack = (
+  spec: CipherSpec,
+  roundId: string,
+  trackIdx: number,
+  newStep: StepNode,
+): CipherSpec => {
+  let found = false;
+  let nonFeistelMatch = false;
+  let trackOutOfRange = false;
+
+  const visit = (nodes: readonly StepNode[]): readonly StepNode[] => {
+    let mutated = false;
+    const next = nodes.map((n) => {
+      if (found || nonFeistelMatch || trackOutOfRange) return n;
+      if (n.id === roundId) {
+        if (n.kind !== "feistel-round") {
+          // The caller asked to prepend to a track inside a non-feistel
+          // node. Flag and let the outer code throw with a precise
+          // pointer to the right primitive — silently no-op'ing would
+          // mask a real wiring bug.
+          nonFeistelMatch = true;
+          return n;
+        }
+        if (trackIdx < 0 || trackIdx >= n.tracks.length) {
+          trackOutOfRange = true;
+          return n;
+        }
+        found = true;
+        mutated = true;
+        // Clone only the affected track; sibling tracks keep their
+        // object references unchanged.
+        const newTracks = n.tracks.map((t, i) =>
+          i === trackIdx ? { ...t, children: [newStep, ...t.children] } : t,
+        );
+        return { ...n, tracks: newTracks };
+      }
+      if (n.kind === "step") return n;
+      if (n.kind === "feistel-round") {
+        // The target round wasn't this one. Don't descend into this
+        // round's tracks looking for a NESTED feistel-round with the
+        // requested id — no shipped or planned cipher has Feistel-
+        // inside-Feistel, and the cost of searching is needless when
+        // every shipped roundId is unique at the spec's top scopes.
+        return n;
+      }
+      const updated = visit(n.children);
+      if (updated === n.children) return n;
+      mutated = true;
+      return { ...n, children: updated };
+    });
+    return mutated ? next : nodes;
+  };
+
+  const newSteps = visit(spec.steps);
+  if (nonFeistelMatch) {
+    throw new Error(
+      `prependChildToTrack: id "${roundId}" is not a feistel-round; use prependChildToContainer or insertStepAfter/Before instead`,
+    );
+  }
+  if (trackOutOfRange) {
+    throw new Error(
+      `prependChildToTrack: trackIdx ${trackIdx} out of range for round "${roundId}"`,
+    );
+  }
+  if (!found) {
+    throw new Error(`prependChildToTrack: no node with id "${roundId}"`);
   }
   return { ...spec, steps: newSteps };
 };
