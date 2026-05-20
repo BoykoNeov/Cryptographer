@@ -1,46 +1,56 @@
 # DES + branching primitive — first Feistel cipher
 
-> **Status: Phases 1–5 shipped 2026-05-19 / 2026-05-20.** Commits
-> `91f143d` (P1 oracle), `6a046d0` (P2 primitive + toy), `be0bb6a`
-> (P3 step types), `7b584f3` (P4 selector wiring), `9d16c95` (P5-pre
-> StepList walker), `43703e9` (P5c rejoin view), `ef1cd92` (P5e DES
-> key schedule), `1542e79` (P5a track-context), `2c7508c` (P5b mini
-> diagram), `dcf291f` (P5d round-key panel coverage), and the present
-> commit (P5f scrubber badges). Phase 6 (graph-view branched layout +
-> manual smoke) pending.
+> **Status: Phases 1–5 shipped 2026-05-19 / 2026-05-20** (including
+> the two 5a/5b polish items the original Phase 5 fell short on).
+> Commits: `91f143d` (P1 oracle), `6a046d0` (P2 primitive + toy),
+> `be0bb6a` (P3 step types), `7b584f3` (P4 selector wiring), `9d16c95`
+> (P5-pre StepList walker), `43703e9` (P5c rejoin view), `ef1cd92`
+> (P5e DES key schedule), `1542e79` (P5a track-context), `2c7508c`
+> (P5b mini diagram), `dcf291f` (P5d round-key panel coverage),
+> `c2b90bd` (P5f scrubber badges), and the present commit (5a + 5b
+> polish — cross-panel provenance overlay + K_i cross-reference).
+> Phase 6 (graph-view branched layout + manual smoke) pending.
 >
-> **Phase 5 sub-commit order: 5-pre → 5c → 5e → 5a → 5b → 5d → 5f**
-> (fix-broken-UX-first per advisor: 5c and 5e replaced previously
-> meaningless FrameStateView renders; 5-pre fixed a sidebar crash on
-> DES; the rest are additive on top of working baseline). Phase 5d
-> shipped with no code change — verified the existing 16-byte fallback
-> already renders DES's 6-byte K_i ribbons correctly. Bit-grouped
-> unfold deferred per advisor's "don't over-build" guidance.
+> **Phase 5 sub-commit order: 5-pre → 5c → 5e → 5a → 5b → 5d → 5f
+> → 5a/5b polish** (fix-broken-UX-first per advisor: 5c and 5e
+> replaced previously meaningless FrameStateView renders; 5-pre
+> fixed a sidebar crash on DES; the rest are additive on top of
+> working baseline). Phase 5d shipped with no code change — verified
+> the existing 16-byte fallback already renders DES's 6-byte K_i
+> ribbons correctly. Bit-grouped unfold deferred per advisor's
+> "don't over-build" guidance.
 >
-> **Phase 5 deferred polish items** (advisor pass at "declare done"
-> caught two unflagged scope shrinks vs. the original plan prose):
-> - **5a cell-level provenance overlay** — the plan said "provenance
->   overlay carries over from existing cell-overlay machinery."
->   Shipped only the current-track accent border on the row.
->   Hovering an `after` cell in the active step's MatrixView/BytesView
->   does not yet light up sources inside the FeistelTrackContext's
->   round-entry rows. Not load-bearing for the panel's primary
->   function; rolled forward as a follow-up polish item.
-> - **5b K_i label sync with round-key panel** — the plan said
->   "the K_i label highlights in sync with the round-key panel's
->   ribbon." Shipped only the active-leaf accent fill. The xor-K
->   rect in the F-stack doesn't yet read the round-key panel's
->   active-K_i signal to render the matching K_i label next to it.
->   Small addition; deferred to follow-up.
+> **Phase 5 deferred polish items — SHIPPED 2026-05-20** (this commit):
+> - **5a cell-level provenance overlay** — `FeistelTrackContext` now
+>   subscribes to `useProvenanceHover` and paints two derived
+>   highlights: (1) `before-cell` sources mapped onto the current
+>   track's round-entry row, gated to frames whose `stateBefore`
+>   byte-matches the round-entry slice (DES expand-R is the only
+>   such frame today; later track steps have different-shape
+>   `stateBefore` so highlights suppress naturally). Transitive
+>   provenance through prior leaves is deliberately out of scope.
+>   (2) The hovered `afterCellIndex` mirrored onto the "right now"
+>   row, tightening the cross-panel coupling. Both gated by the
+>   `hover.stepId === frame.stepId` scope guard.
+> - **5b K_i label cross-reference** — `FeistelMiniDiagram` now
+>   renders a `K_N` subscript label next to any F-stack leaf with a
+>   `params.roundKeyAux` (DES's xor-K, and any future cipher using
+>   the standard `roundKeyAux` convention). Static spec read so the
+>   label appears on every frame in the round, not just the xor-K
+>   frame — the panel's per-frame active-K_i highlight already
+>   syncs dynamically via `frame.auxRead`.
 >
-> **Phase 5 manual smoke pending.** Per `[[feedback-jsdom-pointer-events-gap]]`,
+> **Phase 5 manual smoke STILL pending.** Per `[[feedback-jsdom-pointer-events-gap]]`,
 > jsdom synthetic clicks bypass CSS hit-testing — the mini diagram's
 > SVG `<g>` click handlers, the scrubber strip's `pointer-events: none`,
-> and the round-key panel's hover wiring are all jsdom-only-tested.
-> A 5-minute browser pass on DES (scrub onto a round body, click
-> leaves in the mini diagram, click a row in the key-schedule
-> explorer, hover the scrubber strip while clicking through) is the
-> discriminating check before Phase 6 starts.
+> the round-key panel's hover wiring, AND now the cross-panel
+> provenance overlay are all jsdom-only-tested. A 5-minute browser
+> pass on DES (scrub onto a round body, click leaves in the mini
+> diagram, click a row in the key-schedule explorer, hover the
+> scrubber strip while clicking through, AND hover an after-cell in
+> the active step's view to confirm the FeistelTrackContext lights
+> up the corresponding R_in cells) is the remaining gate before
+> Phase 6 starts.
 >
 > Originally drafted 2026-05-19; architecture direction (DES first +
 > true branching, per Path C) approved by user. Multi-phase: 6 phases,
@@ -586,19 +596,28 @@ appears for rejoin frames, no chip for root-scope frames.
 
 ### Phase 6 — Graph view branched layout + smoke
 
-> **Entry gate (added 2026-05-20, user-confirmed):** Do NOT start
-> Phase 6 until BOTH of the following are resolved:
+> **Entry gate (added 2026-05-20, user-confirmed; partially closed
+> same day):** Do NOT start Phase 6 until BOTH of the following are
+> resolved:
 >
-> 1. Manual browser smoke pass on Phase 5 in DES (scrub onto a round
->    body; click leaves in `<FeistelMiniDiagram />`; click a row in
->    `<DesKeyScheduleExplorer />`; hover the scrubber strip while
->    clicking through). Per `[[feedback-jsdom-pointer-events-gap]]`
->    the SVG `<g>` clicks and `pointer-events: none` strip are
->    jsdom-only-tested today — the smoke is the discriminating check.
-> 2. The two deferred 5a/5b polish items above (cell-level provenance
->    overlay on FeistelTrackContext; K_i ↔ xor-K cross-reference in
->    FeistelMiniDiagram) either land in a follow-up commit OR are
->    explicitly accepted as out-of-scope and removed from the plan.
+> 1. **STILL PENDING**: Manual browser smoke pass on Phase 5 in DES.
+>    Scrub onto a round body; click leaves in `<FeistelMiniDiagram />`
+>    (including the new K_i subscript labels — they're SVG `<text>`,
+>    not clickable, but verify they render and line up next to
+>    xor-K); click a row in `<DesKeyScheduleExplorer />`; hover the
+>    scrubber strip while clicking through; hover an `after` cell in
+>    the active step's view to confirm the FeistelTrackContext lights
+>    up the corresponding R_in cell (only for expand-R frames per the
+>    Phase 5a polish's "first-step-of-track" gate). Per
+>    `[[feedback-jsdom-pointer-events-gap]]` the SVG `<g>` clicks and
+>    `pointer-events: none` strip are jsdom-only-tested — the smoke
+>    is the discriminating check.
+> 2. **CLOSED 2026-05-20**: The two deferred 5a/5b polish items
+>    (cell-level provenance overlay on FeistelTrackContext; K_i ↔
+>    xor-K cross-reference in FeistelMiniDiagram) landed in the
+>    "Phase 5 deferred polish items" commit referenced above. 7 new
+>    tests pin both behaviors (5 in `feistel-track-context.test.tsx`,
+>    2 in `feistel-mini-diagram.test.tsx`).
 >
 > Both are pre-conditions because Phase 6 will rely on parts of the
 > Phase 5 surface (linear-mode scrubber → graph leaf click coupling,

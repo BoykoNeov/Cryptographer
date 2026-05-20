@@ -137,4 +137,38 @@ describe("FeistelMiniDiagram — DES", () => {
     expect(halfLabels[2]?.textContent).toBe("L⊕F");
     expect(halfLabels[3]?.textContent).toBe("R");
   });
+
+  // ─── Phase 5b polish: K_i cross-reference label ────────────────────
+  //
+  // The xor-K leaf in the F-stack — and ONLY that leaf, in DES — should
+  // render a "K_N" subscript label to its right where N is parsed from
+  // the leaf's `params.roundKeyAux`. Static read off the spec, so the
+  // label appears on every frame inside the round (not just on the
+  // xor-K frame itself). Cross-references the round-key panel's ribbon.
+
+  it("renders a K_i label next to the xor-K leaf (and only that leaf) in round 1", () => {
+    const { round1ExpandR } = seed();
+    const { container } = render(() => <FeistelMiniDiagram frame={round1ExpandR} />);
+    // Only the xor-K leaf has `params.roundKeyAux` set in the DES spec.
+    const keyrefs = container.querySelectorAll(".feistel-mini-diagram-leaf-keyref");
+    expect(keyrefs.length).toBe(1);
+    // Round 1 consumes K_0 (forward DES: roundKey.0).
+    // textContent collapses the K + tspan into "K0".
+    expect(keyrefs[0]?.textContent).toBe("K0");
+    // The label is keyed by the leaf id so consumers can locate it
+    // deterministically. Confirm it's anchored to the xor-K leaf.
+    const expected = document.querySelector(
+      "[data-testid='feistel-mini-diagram-leaf-keyref-round.1.xor-K']",
+    );
+    expect(expected).not.toBeNull();
+  });
+
+  it("the K_i index reflects the round (round 16 → K_15)", () => {
+    const { round16Frame } = seed();
+    const { container } = render(() => <FeistelMiniDiagram frame={round16Frame} />);
+    const keyrefs = container.querySelectorAll(".feistel-mini-diagram-leaf-keyref");
+    expect(keyrefs.length).toBe(1);
+    // Forward DES round 16 consumes roundKey.15 (zero-indexed).
+    expect(keyrefs[0]?.textContent).toBe("K15");
+  });
 });

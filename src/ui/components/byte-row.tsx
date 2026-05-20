@@ -29,6 +29,16 @@ export const ByteRow = (props: {
   fmt: ByteFormat;
   /** Optional index to outline with `.key-schedule-byte-highlight`. */
   highlightIndex?: number;
+  /**
+   * Optional set of cell indices to outline with `.provenance-source`
+   * (the shared hover-driven highlight used by MatrixView's `before`
+   * row and the RoundKeyPanel cells). Used by `FeistelTrackContext`
+   * to paint round-entry source cells when the user hovers an `after`
+   * cell in the active step's view. Per the linear-mode pedagogy plan,
+   * `.provenance-source` wins over `.key-schedule-byte-highlight` —
+   * the conditional below honors that precedence.
+   */
+  provenanceHighlights?: ReadonlySet<number>;
 }) => (
   <div class="key-schedule-byte-row">
     <For each={Array.from(props.bytes)}>
@@ -36,8 +46,11 @@ export const ByteRow = (props: {
         <div
           class="key-schedule-byte-cell"
           classList={{
+            "provenance-source": !!props.provenanceHighlights?.has(i()),
             "key-schedule-byte-highlight":
-              props.highlightIndex !== undefined && i() === props.highlightIndex,
+              !props.provenanceHighlights?.has(i()) &&
+              props.highlightIndex !== undefined &&
+              i() === props.highlightIndex,
           }}
         >
           {formatByte(b, props.fmt)}

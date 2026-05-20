@@ -30,6 +30,7 @@
 import type { BytesState, TraceFrame } from "@/core/types";
 import { For, Show, createMemo } from "solid-js";
 import { useByteFormat } from "../stores/format";
+import { useProvenanceHover } from "../stores/provenance-hover";
 import { getTrace, useTraceVersion } from "../stores/trace";
 import { ByteRow } from "./byte-row";
 
@@ -120,6 +121,11 @@ const extractRoundContext = (
 export const FeistelTrackContext = (props: Props) => {
   const fmt = useByteFormat();
   const version = useTraceVersion();
+  // Subscribe to the shared provenance-hover signal once. Reading the
+  // thunk inside the memo body would re-bind a fresh subscription on
+  // each memo execution (the same gotcha the RoundKeyPanel comment
+  // calls out at line 173).
+  const hover = useProvenanceHover();
 
   const context = createMemo<RoundContext | null>(() => {
     void version();
@@ -138,6 +144,61 @@ export const FeistelTrackContext = (props: Props) => {
     return after.bytes;
   });
 
+  // ─── Phase 5a polish: cross-panel provenance overlay ─────────────────
+  //
+  // When the user hovers an `after` cell in the active step's MatrixView
+  // or BytesView, the shared `useProvenanceHover` signal carries the
+  // resulting `ProvenanceSource[]`. This panel paints two derived
+  // highlights:
+  //
+  //   1. `roundEntryHighlights` — `before-cell` sources mapped onto the
+  //      CURRENT track's round-entry row. Only meaningful when the
+  //      active frame is the FIRST step of the track (i.e. its
+  //      `stateBefore` matches the round-entry slice for that track) —
+  //      `before-cell` indices then map 1:1 to round-entry indices.
+  //      For later track steps `stateBefore` is the post-prior-leaf
+  //      state (e.g. DES s-boxes sees 6-byte E(R)⊕K_i, not R_in), so
+  //      indices wouldn't align; we suppress the highlight rather than
+  //      paint something misleading. Transitive provenance through
+  //      prior track leaves is deliberately out of scope.
+  //
+  //   2. `currentRowHighlight` — the single hovered cell, mirrored
+  //      onto the "right now" row (which renders `stateAfter`, i.e.
+  //      the same buffer the cell-under-cursor lives in). Tightens
+  //      the cross-panel coupling so the user sees "this is the cell
+  //      you're pointing at, also rendered here in the round-as-a-whole
+  //      view".
+  //
+  // Both gates check `hover.stepId === frame.stepId` so a stale hover
+  // from a prior scrub can't paint cells here (same scope guard the
+  // RoundKeyPanel and the {Bytes,Matrix}View `before` rows use).
+  const roundEntryHighlights = createMemo<ReadonlySet<number>>(() => {
+    const h = hover();
+    if (!h || h.stepId !== props.frame.stepId) return EMPTY_INDEX_SET;
+    const ctx = context();
+    if (!ctx) return EMPTY_INDEX_SET;
+    const before = props.frame.stateBefore;
+    if (before.shape !== "bytes") return EMPTY_INDEX_SET;
+    // Pick the current track's round-entry slice; if `stateBefore`
+    // doesn't byte-match it, this is a later track step (or a track
+    // whose first step took a sliced input) — bail out.
+    const roundEntry = ctx.currentTrackName === "L" ? ctx.L_in : ctx.R_in;
+    if (!bytesEqual(before.bytes, roundEntry)) return EMPTY_INDEX_SET;
+    const out = new Set<number>();
+    for (const src of h.sources) {
+      if (src.kind === "before-cell") out.add(src.index);
+    }
+    return out;
+  });
+
+  const currentRowHighlight = createMemo<ReadonlySet<number>>(() => {
+    const h = hover();
+    if (!h || h.stepId !== props.frame.stepId) return EMPTY_INDEX_SET;
+    // The hovered cell is by definition inside `stateAfter` — render it
+    // back onto the "right now" row's single cell of the same index.
+    return new Set([h.afterCellIndex]);
+  });
+
   return (
     <Show when={context()}>
       {(getCtx) => (
@@ -152,8 +213,20 @@ export const FeistelTrackContext = (props: Props) => {
             <ContextSection
               title="round entry"
               tracks={[
-                { name: "L", bytes: getCtx().L_in, isCurrent: getCtx().currentTrackName === "L" },
-                { name: "R", bytes: getCtx().R_in, isCurrent: getCtx().currentTrackName === "R" },
+                {
+                  name: "L",
+                  bytes: getCtx().L_in,
+                  isCurrent: getCtx().currentTrackName === "L",
+                  highlights:
+                    getCtx().currentTrackName === "L" ? roundEntryHighlights() : EMPTY_INDEX_SET,
+                },
+                {
+                  name: "R",
+                  bytes: getCtx().R_in,
+                  isCurrent: getCtx().currentTrackName === "R",
+                  highlights:
+                    getCtx().currentTrackName === "R" ? roundEntryHighlights() : EMPTY_INDEX_SET,
+                },
               ]}
               fmt={fmt()}
             />
@@ -167,6 +240,7 @@ export const FeistelTrackContext = (props: Props) => {
                       bytes: getBytes(),
                       isCurrent: true,
                       note: `${shortStepName(props.frame.stepId)} → ${getBytes().length} bytes`,
+                      highlights: currentRowHighlight(),
                     },
                   ]}
                   fmt={fmt()}
@@ -176,8 +250,18 @@ export const FeistelTrackContext = (props: Props) => {
             <ContextSection
               title="round output"
               tracks={[
-                { name: "L'", bytes: getCtx().new_L, isCurrent: false },
-                { name: "R'", bytes: getCtx().new_R, isCurrent: false },
+                {
+                  name: "L'",
+                  bytes: getCtx().new_L,
+                  isCurrent: false,
+                  highlights: EMPTY_INDEX_SET,
+                },
+                {
+                  name: "R'",
+                  bytes: getCtx().new_R,
+                  isCurrent: false,
+                  highlights: EMPTY_INDEX_SET,
+                },
               ]}
               fmt={fmt()}
             />
@@ -186,6 +270,21 @@ export const FeistelTrackContext = (props: Props) => {
       )}
     </Show>
   );
+};
+
+/** Allocation-free empty highlight set; shared sentinel so the memos'
+ *  "no hover" branch never produces a new object. */
+const EMPTY_INDEX_SET: ReadonlySet<number> = new Set();
+
+/** Cheap byte-equality. Used to gate round-entry highlights to frames
+ *  whose `stateBefore` IS the round-entry slice. Two Uint8Arrays of the
+ *  same length and contents return true; anything else returns false. */
+const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean => {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 };
 
 /**
@@ -210,6 +309,11 @@ const ContextSection = (props: {
     bytes: Uint8Array;
     isCurrent: boolean;
     note?: string;
+    /** Set of cell indices to outline as provenance sources (Phase 5a
+     *  polish). Pass the shared `EMPTY_INDEX_SET` for "no highlights" —
+     *  required-not-optional under `exactOptionalPropertyTypes`
+     *  because Solid `For` callbacks can't conditionally spread props. */
+    highlights: ReadonlySet<number>;
   }>;
   fmt: ReturnType<typeof useByteFormat> extends () => infer R ? R : never;
 }) => (
@@ -222,7 +326,11 @@ const ContextSection = (props: {
           classList={{ "feistel-context-track-current": track.isCurrent }}
         >
           <span class="feistel-context-track-name">{track.name}</span>
-          <ByteRow bytes={track.bytes} fmt={props.fmt} />
+          {/* Inline read of `track.highlights` so Solid re-evaluates as
+              the active hover changes. `For` callbacks aren't reactive
+              scopes — a captured const here would freeze at first
+              render (per the CLAUDE.md Solid gotcha). */}
+          <ByteRow bytes={track.bytes} fmt={props.fmt} provenanceHighlights={track.highlights} />
           <Show when={track.note}>
             <span class="feistel-context-track-note muted small">{track.note}</span>
           </Show>

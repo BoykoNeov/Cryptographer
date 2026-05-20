@@ -232,7 +232,17 @@ const DiagramSvg = (props: {
         class="feistel-mini-diagram-wire"
       />
 
-      {/* F-stack — one rect per R-track leaf */}
+      {/* F-stack — one rect per R-track leaf. Leaves that consume a
+          round-key aux (any leaf with a `roundKeyAux` param — DES's
+          xor-K, AES's add-round-key, Serpent's add-round-key, Speck's
+          round, etc.) get a K_i subscript label to the right per the
+          5b polish item. The label is derived statically from the
+          leaf's spec params (NOT from frame.auxRead) so it appears on
+          every frame in the round — pedagogically the "this round
+          consumes K_5" callout is useful at the expand-R step too,
+          not just on the xor-K frame itself. The panel's per-frame
+          active-K_i highlight (in the round-key panel) already
+          syncs dynamically when the user lands on the xor-K frame. */}
       <For each={fStackLeaves()}>
         {(leaf, i) => (
           <FStackLeaf
@@ -240,6 +250,7 @@ const DiagramSvg = (props: {
             y={F_STACK_Y + i() * (LEAF_HEIGHT + LEAF_GAP)}
             isActive={props.activeFrameStepId === leaf.id}
             frameIndex={props.leafFrameIndexByLeafId.get(leaf.id) ?? null}
+            roundKeyIndex={extractRoundKeyIndex(leaf)}
           />
         )}
       </For>
@@ -405,6 +416,10 @@ const FStackLeaf = (props: {
   y: number;
   isActive: boolean;
   frameIndex: number | null;
+  /** Index N parsed out of the leaf's `params.roundKeyAux` (e.g.
+   *  "roundKey.5" → 5). Null when the leaf has no round-key param
+   *  (passthrough leaves like DES's expand-R / s-boxes / p-permute). */
+  roundKeyIndex: number | null;
 }) => {
   const shortName = (): string => props.leaf.id.split(".").pop() ?? props.leaf.id;
   const isClickable = (): boolean => props.frameIndex !== null;
@@ -449,8 +464,50 @@ const FStackLeaf = (props: {
       >
         {shortName()}
       </text>
+      {/* K_i subscript label — only when the leaf consumes a round key.
+          Renders at the right edge of the leaf rect. The label is
+          conditional, so leaves without `roundKeyAux` (expand-R,
+          s-boxes, p-permute for DES) render without it. */}
+      <Show when={props.roundKeyIndex !== null}>
+        <text
+          x={F_STACK_X + LEAF_WIDTH + 4}
+          y={props.y + LEAF_HEIGHT / 2}
+          class="feistel-mini-diagram-leaf-keyref"
+          text-anchor="start"
+          dominant-baseline="middle"
+          data-testid={`feistel-mini-diagram-leaf-keyref-${props.leaf.id}`}
+        >
+          K
+          <tspan baseline-shift="sub" font-size="7">
+            {props.roundKeyIndex}
+          </tspan>
+        </text>
+      </Show>
     </g>
   );
+};
+
+/**
+ * Pull the round-key index out of a leaf's `params.roundKeyAux`. The
+ * convention across DES (`des.xor-with-K@1`), AES (`generic.add-round-key@*`
+ * via the wrapper), Serpent (`serpent.add-round-key@1`), and Speck
+ * (`speck.round@1` / `speck.round-inverse@1`) is to name the aux
+ * `${prefix}.${N}` — typically `roundKey.N`. We grab the trailing
+ * integer regardless of prefix, so a future cipher using a different
+ * prefix (e.g. `subkey.N`) still works without modification.
+ *
+ * Returns null when:
+ *   - the leaf has no `params.roundKeyAux` (passthrough leaves)
+ *   - the param value isn't a string or doesn't match the `prefix.N`
+ *     shape (defensive — guards against malformed user-edited specs).
+ */
+const extractRoundKeyIndex = (leaf: StepLeaf): number | null => {
+  const p = leaf.params as { roundKeyAux?: unknown };
+  if (typeof p.roundKeyAux !== "string") return null;
+  const m = /\.(\d+)$/.exec(p.roundKeyAux);
+  if (!m || m[1] === undefined) return null;
+  const n = Number.parseInt(m[1], 10);
+  return Number.isInteger(n) ? n : null;
 };
 
 /**

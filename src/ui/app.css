@@ -1644,7 +1644,8 @@ button:disabled {
 .cell.provenance-source,
 .tiny-cell.provenance-source,
 .round-key-cell-byte.provenance-source,
-.bytes-cell.provenance-source {
+.bytes-cell.provenance-source,
+.key-schedule-byte-cell.provenance-source {
   outline: 2px solid var(--accent-success);
   outline-offset: -2px;
   background: color-mix(in srgb, var(--accent-success) 22%, var(--bg-elev-2));
@@ -2779,6 +2780,17 @@ button:disabled {
   font-size: 9px;
   font-family: var(--mono, monospace);
   fill: var(--text);
+}
+
+/* K_i subscript label next to a leaf that consumes a round key
+   (DES's xor-K, future ciphers' similar steps). Renders to the right
+   of the leaf rect. Accent color so it's visible as a cross-reference
+   to the round-key panel ribbon below. */
+.feistel-mini-diagram-leaf-keyref {
+  font-size: 9px;
+  font-family: var(--mono, monospace);
+  fill: var(--accent);
+  font-weight: 600;
 }
 
 .feistel-mini-diagram-leaf-active .feistel-mini-diagram-leaf-rect {
