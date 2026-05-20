@@ -29,9 +29,9 @@ import { __resetAutoRerunForTests } from "@/ui/stores/auto-rerun";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
-import { __resetLayoutsForTests } from "@/ui/stores/layout";
+import { __resetLayoutsForTests, toggleCollapse } from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
-import { __resetSpecForTests, setCipher } from "@/ui/stores/spec";
+import { __resetSpecForTests, setCipher, useSpec } from "@/ui/stores/spec";
 import { __resetTraceForTests } from "@/ui/stores/trace";
 import { __resetViewModeForTests } from "@/ui/stores/view-mode";
 import { cleanup, render } from "@solidjs/testing-library";
@@ -99,5 +99,37 @@ describe("GraphView — DES feistel-round rendering (Phase 6a)", () => {
     // to a new test file).
     const rejoin = container.querySelector('[data-testid="graph-leaf-round.1:rejoin"]');
     expect(rejoin).toBeNull();
+  });
+
+  // ─── Phase 6c — collapse to single round chip ──────────────────────
+  //
+  // The plan §Phase 2 proposed a dedicated `collapseFeistelRoundEdges`
+  // transform; tests/feistel-collapse-generic.test.ts proved generic
+  // `collapseGraph` is sufficient (it clears `childIds: []` on collapsed
+  // entries). That triggers the existing `childIds.length === 0`
+  // short-circuit at GraphView.tsx ~line 969 — collapsed feistel
+  // containers render as leaf-sized chips BEFORE my Phase 6a `kind ===
+  // "feistel"` branch is reached. So Phase 6c needs no new layout code;
+  // these tests pin that behavior.
+
+  it("collapsing a round renders it as a single chip; R-track leaves disappear", () => {
+    const { container } = render(() => <GraphView />);
+    // Sanity: round.1 leaves present before collapse.
+    expect(container.querySelector('[data-testid="graph-leaf-round.1.expand-R"]')).not.toBeNull();
+
+    const specId = useSpec()().id;
+    toggleCollapse(specId, "round.1");
+
+    // After collapse, the round container itself still renders (chevron + label
+    // chip), but its R-track leaves are gone from the DOM.
+    for (const leafSuffix of ["expand-R", "xor-K", "s-boxes", "p-permute"]) {
+      const node = container.querySelector(`[data-testid="graph-leaf-round.1.${leafSuffix}"]`);
+      expect(node, `round.1.${leafSuffix} should be hidden when round.1 is collapsed`).toBeNull();
+    }
+    // The collapsed container itself stays in the DOM.
+    const collapsedRound = container.querySelector(
+      '[data-testid="graph-container-header-round.1"]',
+    );
+    expect(collapsedRound, "collapsed round.1 container should still render").not.toBeNull();
   });
 });
