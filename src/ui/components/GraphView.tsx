@@ -1282,8 +1282,68 @@ const layoutNode = (
       if (replicaRight > maxFeistelReplicaRight) maxFeistelReplicaRight = replicaRight;
     }
 
-    // Grow the round container's width to fit right-gutter replicas.
-    const effectiveLastRight = Math.max(lastColRight, maxFeistelReplicaRight);
+    // Phase 6b — rejoin chip placement. The rejoin synthetic
+    // (`${id}:rejoin`) is already a graph node and a member of
+    // `container.childIds`, but Phase 6a left it without a layout box
+    // (the chip stayed invisible, the spine arrow into/out of the round
+    // had no target — most visibly the `round.16.p-permute →
+    // final-permutation` arrow on DES vanished). Direction-aware
+    // placement: vertical-flow parent (group, or root-level — DES's
+    // "rounds" group is the shipped case today) → chip below the
+    // columns, spanning their combined width. Horizontal-flow parent
+    // (iterate — no shipped cipher today, but a future
+    // iterate-contained Feistel will use this) → chip to the right of
+    // the columns + replicas, spanning their combined height. The
+    // parent's `kind` is the discriminator: group OR no-parent ⇒
+    // vertical-flow; iterate ⇒ horizontal-flow; feistel-as-parent
+    // can't actually happen because feistel's children are tracks of
+    // step / group / iterate nodes (no recursive Feistel-of-Feistel
+    // case yet).
+    const parentId = container.containerPath[container.containerPath.length - 1];
+    const parent = parentId !== undefined ? containersById.get(parentId) : undefined;
+    const parentFlow: "vertical" | "horizontal" =
+      parent?.kind === "iterate" ? "horizontal" : "vertical";
+    const rejoinId = `${id}:rejoin`;
+    let rejoinRightEdge = 0;
+    if (parentFlow === "vertical") {
+      // Chip sits BELOW all columns, spans the column block left-to-
+      // right. Replicas (placed above) are vertically centered on
+      // their consumer chips inside the columns — they don't conflict
+      // with a chip BELOW maxColBottom.
+      const leftEdge = startX + consts.CONTAINER_PAD;
+      const rejoinY = maxColBottom + consts.STACK_GAP;
+      const rejoinBox: Box = {
+        x: leftEdge,
+        y: rejoinY,
+        w: lastColRight - leftEdge,
+        h: consts.LEAF_H,
+      };
+      out.set(rejoinId, rejoinBox);
+      maxColBottom = rejoinY + rejoinBox.h;
+      rejoinRightEdge = leftEdge + rejoinBox.w;
+    } else {
+      // Chip sits to the RIGHT of replicas (which themselves sit right
+      // of the consumer chips). Spans the full column-block height so
+      // both track tails feed into it from the left. `FLOW_GAP` keeps
+      // it visually separated from the replica column.
+      const topEdge = colYStart;
+      const baseRight = Math.max(lastColRight, maxFeistelReplicaRight);
+      const rejoinBox: Box = {
+        x: baseRight + consts.FLOW_GAP,
+        y: topEdge,
+        w: consts.LEAF_W,
+        h: maxColBottom - topEdge,
+      };
+      out.set(rejoinId, rejoinBox);
+      rejoinRightEdge = rejoinBox.x + rejoinBox.w;
+    }
+
+    // Grow the round container's width to fit right-gutter replicas
+    // AND the rejoin chip (horizontal-flow case adds to the right;
+    // vertical-flow case only adds to the bottom but the chip's right
+    // edge stays inside lastColRight already, so the Math.max is a
+    // no-op there).
+    const effectiveLastRight = Math.max(lastColRight, maxFeistelReplicaRight, rejoinRightEdge);
     const w = effectiveLastRight - startX + consts.CONTAINER_PAD;
     const h = maxColBottom - startY + consts.CONTAINER_PAD;
     const box: Box = { x: startX, y: startY, w, h };
@@ -4507,6 +4567,44 @@ export const GraphView = () => {
               scrub, no delete, no warnings. */}
             <For each={graph().nodes}>
               {(node) => {
+                if (node.synthetic === "rejoin") {
+                  // Phase 6b — render the rejoin synthetic at its
+                  // direction-aware position (`layoutNode`'s feistel
+                  // branch). `containersById()` carries the
+                  // `feistelCombineKind` for the tooltip; the chip
+                  // label itself stays kind-agnostic until a second
+                  // kind ships and a per-kind glyph table is worth
+                  // adding.
+                  const rejoinBox = createMemo(() => layout().boxes.get(node.stepId));
+                  const rejoinStepId = node.stepId;
+                  const parentRoundId = node.containerPath[node.containerPath.length - 1] ?? "";
+                  const combineKind = createMemo(
+                    () => containersById().get(parentRoundId)?.feistelCombineKind,
+                  );
+                  return (
+                    <Show when={rejoinBox()}>
+                      {(b) => (
+                        <RejoinChip
+                          box={b()}
+                          stepId={rejoinStepId}
+                          combineKind={combineKind()}
+                          isSelected={selectedTarget() !== null && isNodeSelected(rejoinStepId)}
+                          onClick={() => {
+                            // Same dual effect as a LeafRect click:
+                            // scrub the trace to the rejoin frame
+                            // (its stepId IS in the trace as a
+                            // synthetic runtime emission, see
+                            // `runtime.ts`) and toggle inspector
+                            // selection so the 4-arg combine
+                            // detail opens.
+                            handleLeafClick(rejoinStepId);
+                            toggleSelectedNode(rejoinStepId);
+                          }}
+                        />
+                      )}
+                    </Show>
+                  );
+                }
                 if (node.endpointSide !== undefined) {
                   const epBox = createMemo(() => layout().boxes.get(node.stepId));
                   // Narrow the union for the typechecker — Solid's <Show>
@@ -5260,6 +5358,84 @@ const EndpointPill = (props: {
       dominant-baseline="central"
     >
       {props.label}
+    </text>
+  </g>
+);
+
+/**
+ * Synthetic rejoin chip — Phase 6b of the DES + branching primitive
+ * plan. Renders the `${roundId}:rejoin` synthetic at the bottom or
+ * right edge of a `feistel-round` container (placement chosen by
+ * `layoutNode` based on parent flow direction). The rejoin synthetic
+ * is not a spec leaf — it's a runtime-emitted frame carrying the
+ * combined output of the round's 4-arg combine — so the chip's
+ * affordances are deliberately narrower than `LeafRect`:
+ *
+ *   - No `data-drop-anchor`: palette drops walk past it to the next
+ *     ancestor (closest("[data-drop-anchor]") on the container).
+ *     Inserting "after the rejoin" doesn't have a sensible spec
+ *     meaning — the user is meant to drop into the R track or onto
+ *     the round container instead.
+ *   - No DeleteGlyph: the chip isn't user-removable.
+ *   - No warnings overlay: validation skips synthetic ids by
+ *     construction (same as endpoint pills, replicas, block chips).
+ *   - No drag handlers: the rejoin's geometry is derived from the
+ *     surrounding columns, so a free-position pin would just snap
+ *     back on the next layout pass.
+ *   - Click scrubs to the rejoin frame (its stepId IS the rejoin id)
+ *     AND toggles inspector selection so the 4-arg combine inspector
+ *     opens (`Layer 5 detail` per plan).
+ *
+ * Label uses the "⇄ rejoin" convention shared with `StepList`'s
+ * synthetic-rejoin row so the linear and graph views stay visually
+ * consistent. A future cipher with a non-swap `combineKind` may want
+ * to vary the glyph; the plan defers that to a per-kind glyph table
+ * once a second kind ships (today DES is the only Feistel user).
+ */
+const RejoinChip = (props: {
+  box: Box;
+  stepId: string;
+  combineKind: string | undefined;
+  onClick: () => void;
+  isSelected: boolean;
+}) => (
+  <g
+    class="graph-leaf graph-leaf-rejoin"
+    classList={{ "graph-leaf-selected": props.isSelected }}
+    data-testid={`graph-rejoin-${props.stepId}`}
+    tabindex={0}
+    onClick={props.onClick}
+    onKeyDown={(e) => {
+      // Mirror Enter/Space → click for keyboard users. Biome's
+      // useKeyWithClickEvents lint requires this when onClick is set
+      // on a non-button element.
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        props.onClick();
+      }
+    }}
+  >
+    <title>
+      {props.stepId}
+      {props.combineKind !== undefined ? `\n4-arg combine (${props.combineKind})` : ""}
+    </title>
+    <rect
+      class="graph-leaf-rect"
+      x={props.box.x}
+      y={props.box.y}
+      width={props.box.w}
+      height={props.box.h}
+      rx={4}
+      ry={4}
+    />
+    <text
+      class="graph-leaf-label"
+      x={props.box.x + props.box.w / 2}
+      y={props.box.y + props.box.h / 2}
+      text-anchor="middle"
+      dominant-baseline="central"
+    >
+      ⇄ rejoin
     </text>
   </g>
 );

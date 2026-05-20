@@ -955,13 +955,38 @@ becomes a real pain point.
 
 **Remaining work (future session):**
 
-- **Phase 6b** — rejoin chip + passthrough chip in L column +
-  diagonal X-crossings between rounds (user pick: diagonal X over
-  S-curves) + direction-aware placement (bottom edge for
-  vertical-flow parent like DES's "rounds" group; right edge for
-  future iterate-contained Feistel). Phase 6b will close the DES
-  spine gap (`round.16.p-permute → final-permutation` invisible
-  today because of the missing rejoin chip).
+- **Phase 6b** — three sub-commits. User pick (2026-05-20):
+  id-bearing L passthrough chip (graph.ts emits `predecessor →
+  passthrough → rejoin` instead of today's `predecessor → rejoin`
+  shortcut) over pure-visual Slice-1-style synthetic. Rationale:
+  Phase 6d's per-track drop gutters get a natural anchor; the
+  passthrough chip becomes hoverable/clickable for provenance like
+  any other leaf; semantically honest (L track IS a real algorithmic
+  step). Cost: graph.ts changes + `inferStateEdges` awareness +
+  `container.childIds` invariant audit + narration/provenance
+  registry rows + frame-preservation check + graph-derivation test
+  updates.
+  - **6b-i SHIPPED** (this commit) — rejoin chip layout box +
+    `RejoinChip` render component + direction-aware placement
+    (bottom edge for vertical-flow parent / right edge for future
+    iterate-contained Feistel, probed via `containersById.get(
+    parentId)?.kind === "iterate"`). Closes the DES spine gap
+    (`round.16.p-permute → final-permutation` arrow now lands on
+    a real chip). 2 new tests in `graph-view-des-feistel.test.tsx`
+    (chip renders per round + sits below R-track tail for
+    vertical-flow); existing "rejoin does NOT render" assertion
+    flipped to "rejoin renders". 1524 tests total, all pass; bundle
+    509.3 → 511.1 KB.
+  - **6b-ii pending** — id-bearing L passthrough chip (graph.ts +
+    layout + tests).
+  - **6b-iii pending** — diagonal X-crossings between rounds (user
+    pick: diagonal X over S-curves). Renderer routing: the
+    `roundN:rejoin → roundN+1:rejoin` (L-passthrough carrier) and
+    `roundN:rejoin → roundN+1.expand-R` (R carrier) edges are
+    already both emitted by `processFeistelRound` for empty L
+    tracks; once 6b-ii lands these edges naturally terminate at
+    the L passthrough chip and the diagonal X falls out of normal
+    layout instead of needing a renderer hack.
 - **Phase 6d** — per-track drop gutters. **Blocked on
   `insertStepIntoTrack(roundId, trackIdx, position, newStep)` +
   `StepLocation` widening** (currently `spec-mutations.ts` lines
@@ -970,6 +995,6 @@ becomes a real pain point.
   and append-only-variant.
 - **Phase 6e** — comprehensive manual browser smoke pass.
 
-**Bundle:** 504 KB → 509.3 KB over the session. Soft Vite warning
+**Bundle:** 504 KB → 511.1 KB over the session. Soft Vite warning
 non-blocking; lazy-loading the Feistel components is the obvious
 response if it gets worse.

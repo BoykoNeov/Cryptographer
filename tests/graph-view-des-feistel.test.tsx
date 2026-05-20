@@ -105,16 +105,43 @@ describe("GraphView — DES feistel-round rendering (Phase 6a)", () => {
     }
   });
 
-  it("does NOT render a leaf rectangle for the rejoin synthetic id (Phase 6a — chip lands in Phase 6b)", () => {
+  it("renders a rejoin chip for each round at its direction-aware position (Phase 6b)", () => {
     const { container } = render(() => <GraphView />);
-    // Rejoin synthetic ids are in `graph.nodes` but the Phase 6a feistel
-    // layout branch doesn't place them in `layout.boxes`. The render
-    // pass's `<Show when={box()}>` therefore omits them from the DOM.
-    // Phase 6b will add explicit placement at the container right edge;
-    // when that lands this assertion flips to `not.toBeNull()` (or moves
-    // to a new test file).
-    const rejoin = container.querySelector('[data-testid="graph-leaf-round.1:rejoin"]');
-    expect(rejoin).toBeNull();
+    // Phase 6b — rejoin synthetic now has a layout box (bottom edge
+    // for DES's vertical-flow "rounds" group parent). The chip uses
+    // a distinct testid `graph-rejoin-*` so a stray query for
+    // `graph-leaf-*` doesn't pick it up — the rejoin isn't a leaf
+    // and isn't a drop target.
+    for (const r of [1, 8, 16]) {
+      const rejoin = container.querySelector(`[data-testid="graph-rejoin-round.${r}:rejoin"]`);
+      expect(rejoin, `round.${r}:rejoin chip should render`).not.toBeNull();
+    }
+    // Old leaf-* testid should remain absent — the chip is rendered
+    // via `RejoinChip`, not `LeafRect`, so it has no drop anchor and
+    // is exempt from leaf-style affordances.
+    const asLeaf = container.querySelector('[data-testid="graph-leaf-round.1:rejoin"]');
+    expect(asLeaf).toBeNull();
+  });
+
+  it("places the rejoin chip BELOW the round's track columns (vertical-flow parent)", () => {
+    const { container } = render(() => <GraphView />);
+    // The "rounds" group is `kind: "group"` (vertical-flow), so the
+    // rejoin chip sits BELOW the columns rather than to their right.
+    // Compare the rejoin chip's `y` to a body leaf's `y`: rejoin > leaf.
+    // SVG positions live on the inner <rect>, not on the <g> wrapper.
+    const rejoinRect = container.querySelector(
+      '[data-testid="graph-rejoin-round.1:rejoin"] rect',
+    ) as SVGRectElement | null;
+    const bodyLeafRect = container.querySelector(
+      '[data-testid="graph-leaf-round.1.p-permute"] rect',
+    ) as SVGRectElement | null;
+    expect(rejoinRect, "rejoin chip should render").not.toBeNull();
+    expect(bodyLeafRect, "round.1.p-permute (R track tail) should render").not.toBeNull();
+    if (rejoinRect && bodyLeafRect) {
+      const rejoinY = Number(rejoinRect.getAttribute("y"));
+      const bodyY = Number(bodyLeafRect.getAttribute("y"));
+      expect(rejoinY, "rejoin chip should sit BELOW the R track tail").toBeGreaterThan(bodyY);
+    }
   });
 
   // ─── Phase 6c — collapse to single round chip ──────────────────────
