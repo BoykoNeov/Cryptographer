@@ -1789,14 +1789,26 @@ export const replicateHighFanoutSources = (
       // in SOURCE's parent scope (not consumer's) and gets a flag the
       // layout passes consume to skip the lift-above-consumer treatment.
       //
-      // For shipped ciphers source's parent === spineSuccessor's parent
-      // (AES-128 / AES-128-ECB / Speck / Serpent all qualify), so the
-      // splice-before-edge.to logic below still lands the spine replica
-      // at source's old spec slot. A hypothetical future cipher where
-      // source.parent ≠ spineSuccessor.parent (e.g. state edge from a
-      // root step into a step inside a group) would need an explicit
-      // "insert at source's last-known slot" insertion key — defer
-      // until something demands it.
+      // Anchor key (2026-05-20 fix, DES surfaced): the splice helper
+      // below scans each parent's `childIds` for the anchor key and
+      // prepends the queued replicas before it. For NON-SPINE replicas
+      // the anchor is the consumer's id (replica sits in consumer's
+      // parent, just before the consumer). For the SPINE replica the
+      // anchor must be the SOURCE'S id, because the spine replica
+      // lives in source's parent scope — and `edge.to` (consumer's id)
+      // is not in source's parent's childIds when source.parent ≠
+      // consumer.parent (e.g., DES key-schedule at root vs. round.1.xor-K
+      // inside the "rounds" group). Anchoring on source.id lands the
+      // spine-replica at source's old spec slot; stripDead then removes
+      // the source by id, leaving the spine-replica as its replacement.
+      //
+      // Byte-equivalent for shipped ciphers (AES, Speck, Serpent) where
+      // source.parent === consumer.parent: in those, source.id appears
+      // immediately before consumer.id in the same childIds list, so
+      // both anchor choices land the spine replica at the same final
+      // position after stripDead. Behavior changes only for ciphers
+      // with the source/consumer-parent mismatch (DES today, and any
+      // future cipher whose state-or-aux edges cross container scopes).
       const isSpine = spineSuccessorOf.get(edge.from) === edge.to;
       const replicaContainerPath = isSpine ? sourcePath : consumerPath;
       replicas.set(rId, {
@@ -1807,20 +1819,16 @@ export const replicateHighFanoutSources = (
         replicaOf: edge.from,
         ...(isSpine ? { isSpineReplica: true as const } : {}),
       });
-      // Schedule the replica for insertion next to its ORIGINAL consumer.
-      // For the spine replica that's also where the source used to sit
-      // (source.parent === spineSuccessor.parent for shipped ciphers).
-      // For aux-fan-out replicas it's the consumer's parent (today's
-      // behavior, unchanged).
       const insertContainerPath = isSpine ? sourcePath : consumerPath;
       const parentKey =
         insertContainerPath.length > 0
           ? (insertContainerPath[insertContainerPath.length - 1] ?? "")
           : "";
       const map = ensureInsertionMap(parentKey);
-      const list = map.get(edge.to) ?? [];
+      const anchorKey = isSpine ? edge.from : edge.to;
+      const list = map.get(anchorKey) ?? [];
       list.push(rId);
-      map.set(edge.to, list);
+      map.set(anchorKey, list);
     }
     newEdges.push({ from: rId, to: effectiveTo, auxKey: edge.auxKey, kind: edge.kind });
   }

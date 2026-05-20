@@ -177,25 +177,20 @@ describe("GraphView — DES feistel-round rendering (Phase 6a)", () => {
     // Replicas land in two distinct buckets by design:
     //   - 15 aux-fan-out replicas, one per round.2..round.16's xor-K,
     //     placed inside each round's RIGHT GUTTER by the new feistel
-    //     layout pass. THIS commit's regression pin.
-    //   - 1 spine-replica for round.1.xor-K, which gets the
-    //     `isSpineReplica: true` flag in `replicateHighFanoutSources`
-    //     and is supposed to be laid out at the SOURCE'S old slot.
-    //     For DES that surfaces a pre-existing splice bug in
-    //     `replicateHighFanoutSources`: source `key-schedule` lives
-    //     at root, but the spine successor (`round.1.xor-K`) lives
-    //     inside `round.1` (inside the "rounds" group), so
-    //     source.parent ≠ spineSuccessor.parent. The existing splice
-    //     anchors at consumer's id (which isn't in source's parent's
-    //     childIds), so the spine-replica gets dropped on the floor.
-    //     The code comment at graph.ts:1786 explicitly flags this:
-    //     "A hypothetical future cipher where source.parent ≠
-    //     spineSuccessor.parent would need an explicit insertion key
-    //     — defer until something demands it." DES is that cipher.
-    //     This is a follow-up fix tracked separately; for now the
-    //     round.1.xor-K replica is invisibly missing.
+    //     layout pass.
+    //   - 1 spine-replica for round.1.xor-K, laid out at the SOURCE'S
+    //     old root slot (where `key-schedule` used to render). Requires
+    //     the splice-anchor fix in `replicateHighFanoutSources` (same
+    //     day): the anchor for spine-replicas had to switch from
+    //     `edge.to` (consumer's id) to `edge.from` (source's id) so
+    //     it lands correctly when source's parent differs from
+    //     consumer's parent. DES is the first cipher with that
+    //     mismatch — `key-schedule` at root vs `round.1.xor-K` inside
+    //     `round.1` inside the "rounds" group. The code comment at
+    //     graph.ts:1786 originally flagged this as "defer until
+    //     something demands it"; DES demanded it.
     //
-    // Spot-check round-internal replicas to pin THIS commit's fix.
+    // Spot-check round-internal replicas (right-gutter pass).
     for (const roundIdx of [2, 8, 16]) {
       const replica = container.querySelector(
         `[data-testid="graph-leaf-key-schedule@->round.${roundIdx}.xor-K"]`,
@@ -206,12 +201,22 @@ describe("GraphView — DES feistel-round rendering (Phase 6a)", () => {
       ).not.toBeNull();
     }
 
-    // 15 aux-fan-out replicas (rounds 2-16) render. Round 1 missing
-    // per the spine-replica bug above — assertion below would be 16
-    // once that follow-up lands.
+    // The round.1 spine-replica is rendered at root in key-schedule's
+    // old slot. Pin explicitly so a regression in the splice-anchor
+    // fix surfaces here instead of as a silent count mismatch.
+    const round1Replica = container.querySelector(
+      '[data-testid="graph-leaf-key-schedule@->round.1.xor-K"]',
+    );
+    expect(
+      round1Replica,
+      "round.1.xor-K spine-replica should render after splice anchor fix",
+    ).not.toBeNull();
+
+    // 16 total replicas rendered = 15 aux-fan-out (rounds 2-16) +
+    // 1 spine-replica (round.1).
     const allReplicas = container.querySelectorAll(
       '[data-testid^="graph-leaf-key-schedule@->round."]',
     );
-    expect(allReplicas.length).toBe(15);
+    expect(allReplicas.length).toBe(16);
   });
 });
