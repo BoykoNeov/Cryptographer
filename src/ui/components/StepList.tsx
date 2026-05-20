@@ -224,10 +224,11 @@ const GroupRow = (
 
 /**
  * `feistel-round` sidebar row. Renders the round header (collapsible)
- * containing one sub-row per track. Tracks themselves act as nested
- * groups labelled "{name} track" (e.g. "L track", "R track" for DES);
- * a track's children are the F-internal leaves (E-expand, XOR-K, S-boxes,
- * P-permute on DES's R track) or empty (DES's L passthrough).
+ * containing one sub-row per track plus a synthetic "rejoin" row at the
+ * end. Tracks themselves act as nested groups labelled "{name} track"
+ * (e.g. "L track", "R track" for DES); a track's children are the
+ * F-internal leaves (E-expand, XOR-K, S-boxes, P-permute on DES's R
+ * track) or empty (DES's L passthrough).
  *
  * Why a nested-track sub-group, not a flat list: Phase 5 of the
  * docs/plans/des-feistel.md plan surfaces L/R track membership in every
@@ -236,13 +237,25 @@ const GroupRow = (
  * tracks would contradict the pedagogy that "L and R evolve independently
  * inside a round body."
  *
+ * Why a clickable rejoin row: the rejoin frame is a synthetic runtime
+ * emission (stepId `{roundId}:rejoin`, no spec node behind it), so it
+ * has no natural home in a spec-tree walk. Without an entry here, the
+ * user can only reach the rejoin frame by scrubbing the slider linearly
+ * — every other surface (`<FeistelMiniDiagram />`, scrubber timeline ⇄
+ * badge, RejoinFrameView in the main pane) presupposes the user knows
+ * to navigate there. Treating rejoin as a "synthetic last child of the
+ * round" matches how the runtime models it (frame index sits between
+ * the last R-track frame and the next round's first frame).
+ *
  * Auto-expand:
  *   - Round expands when its `id` is in `activeAncestors` (same rule as
- *     GroupRow), so picking a frame inside the round opens it.
- *   - Track expands when ANY of its children's ids is in
- *     `activeAncestors`. Tracks have no spec id of their own — they're a
- *     structural detail of FeistelRoundGroup — so we can't reuse the
- *     "ancestor id match" trick from GroupRow.
+ *     GroupRow), so picking a frame inside the round opens it. The
+ *     rejoin frame's canonical id IS the round's id (per
+ *     `canonicalStepId`), so scrubbing onto a rejoin frame still
+ *     auto-expands its parent round.
+ *   - Track expands by default whenever its parent round is expanded
+ *     (see FeistelTrackRow). Per user request 2026-05-20: requiring
+ *     a second click to reach the F-stack was friction.
  *
  * Empty tracks (DES's L) render with a "passthrough" hint in place of a
  * child list so users see the track exists but had no children to run.
@@ -260,6 +273,26 @@ const FeistelRow = (props: NodeRowProps & { node: FeistelRoundGroup }) => {
   // to mirror GroupRow's `children.length` count chip.
   const totalLeafCount = (): number =>
     props.node.tracks.reduce((sum, t) => sum + t.children.length, 0);
+
+  // Frame index of the round's rejoin frame. The runtime emits one per
+  // round with stepId `{roundId}:rejoin`; we look it up by that exact
+  // form rather than via canonicalStepId (which would also match the
+  // round id — works today but is the wider regex, so the explicit
+  // lookup is safer against future suffix additions). Returns undefined
+  // when no rejoin frame exists (toy specs that don't run, partial
+  // traces, etc.) — the row then renders disabled.
+  const rejoinFrameIdx = (): number | undefined =>
+    props.frameIndexByStepId.get(`${props.node.id}:rejoin`);
+
+  // Rejoin row is "active" when the scrubber currently sits on it.
+  // activeAncestors carries the canonical form, which for rejoin frames
+  // equals the round's id — exactly what we'd otherwise check, so reuse
+  // the same predicate the round-header uses.
+  const isRejoinActive = (): boolean => {
+    const idx = rejoinFrameIdx();
+    if (idx === undefined) return false;
+    return idx === props.activeFrameIndex;
+  };
 
   return (
     <>
@@ -289,6 +322,34 @@ const FeistelRow = (props: NodeRowProps & { node: FeistelRoundGroup }) => {
             />
           )}
         </For>
+        {/* Synthetic rejoin entry. Styled like a leaf (uses .step-row)
+            but with a discriminating .feistel-rejoin-row class so it
+            can be tested for separately and styled with the ⇄ glyph
+            the scrubber timeline + mini diagram both use. Disabled
+            when no rejoin frame exists in the current trace. */}
+        <button
+          type="button"
+          class="step-row feistel-rejoin-row"
+          classList={{
+            active: isRejoinActive(),
+            disabled: rejoinFrameIdx() === undefined,
+          }}
+          disabled={rejoinFrameIdx() === undefined}
+          style={{ "padding-left": `${(props.depth + 1) * 12 + 8}px` }}
+          title={`${props.node.id}:rejoin\n4-arg combine (${props.node.combineKind})`}
+          onClick={() => {
+            const i = rejoinFrameIdx();
+            if (i !== undefined) setFrame(i);
+          }}
+        >
+          <span class="step-row-name">
+            <span class="feistel-rejoin-glyph" aria-hidden="true">
+              ⇄
+            </span>{" "}
+            rejoin
+          </span>
+          <span class="step-row-type">{props.node.combineKind}</span>
+        </button>
       </Show>
     </>
   );
@@ -324,12 +385,20 @@ const FeistelTrackRow = (props: {
     return false;
   };
 
-  // Empty tracks (DES's L passthrough) start expanded — the passthrough
-  // hint is the only thing to show and there's nothing to hide.
-  // Populated tracks start collapsed unless they contain the active leaf.
-  const [expanded, setExpanded] = createSignal(
-    props.track.children.length === 0 || containsActive(),
-  );
+  // Default expanded for ALL tracks (empty L passthrough, populated R).
+  //
+  // Rationale (user request 2026-05-20): expanding the parent round and
+  // then having to click the R track to see the F-stack felt like double
+  // work — the user's intent in expanding a round is almost always
+  // "show me what's inside", and "what's inside" is the track's leaves.
+  //
+  // Tracks aren't gated on `containsActive()` for initial state because
+  // they're already conditionally rendered (the parent FeistelRow only
+  // mounts them when its own `expanded()` is true). So defaulting true
+  // means "tracks open whenever their round is open", which is the
+  // desired UX. Manual collapse still sticks within the same mount; the
+  // `createEffect` below re-opens the track on scrubs into it.
+  const [expanded, setExpanded] = createSignal(true);
 
   createEffect(() => {
     if (containsActive()) setExpanded(true);

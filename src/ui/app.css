@@ -2412,6 +2412,18 @@ button:disabled {
   font-style: italic;
 }
 
+/* Synthetic rejoin row inside a feistel-round (added 2026-05-20). Looks
+   like a leaf .step-row but with the ⇄ glyph + a subtle accent so the
+   user can spot the round boundary at a glance — matches the scrubber
+   timeline's per-frame rejoin badge. The glyph color stays accent
+   regardless of active / disabled state so the rejoin remains
+   identifiable when greyed out. */
+.feistel-rejoin-row .feistel-rejoin-glyph {
+  color: var(--accent);
+  font-weight: 600;
+  margin-right: 2px;
+}
+
 .step-row-passthrough {
   padding: 3px 8px;
   font-size: 10px;

@@ -31,8 +31,8 @@ import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetCipherModeForTests } from "@/ui/stores/cipher-mode";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
 import { __resetSpecForTests, setCipher, useSpec } from "@/ui/stores/spec";
-import { __resetTraceForTests, setFrame, setTrace } from "@/ui/stores/trace";
-import { cleanup, render } from "@solidjs/testing-library";
+import { __resetTraceForTests, setFrame, setTrace, useFrameIndex } from "@/ui/stores/trace";
+import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 // FIPS 46-3 Appendix B test vector — same as `tests/des-vectors.test.ts`.
@@ -113,5 +113,90 @@ describe("StepList — DES feistel-round rendering", () => {
     expect(container.querySelector(".step-row-passthrough")?.textContent ?? "").toContain(
       "passthrough",
     );
+  });
+
+  // ─── 2026-05-20 sidebar UX: rejoin row + track auto-expand ──────────
+
+  it("renders a clickable rejoin row inside each expanded round", () => {
+    const trace = seedDesTrace();
+    const rTrackFrameIdx = trace.frames.findIndex((f) => f.stepId.startsWith("round.1.expand-R"));
+    setFrame(rTrackFrameIdx);
+    const { container } = render(() => <StepList />);
+    // The active-ancestor auto-expand opens round 1 only; only round 1
+    // should have its rejoin row mounted in the DOM.
+    const rejoinRows = container.querySelectorAll(".feistel-rejoin-row");
+    expect(rejoinRows.length).toBe(1);
+    const row = rejoinRows[0];
+    expect(row?.getAttribute("title")).toContain("round.1:rejoin");
+    expect(row?.textContent ?? "").toContain("rejoin");
+    expect(row?.textContent ?? "").toContain("⇄");
+    // Combine kind appears in the type slot (mirrors how leaf rows show
+    // their step type).
+    expect(row?.textContent ?? "").toContain("feistel-standard");
+  });
+
+  it("clicking the rejoin row scrubs the trace to the round's rejoin frame", () => {
+    const trace = seedDesTrace();
+    const rTrackFrameIdx = trace.frames.findIndex((f) => f.stepId.startsWith("round.1.expand-R"));
+    setFrame(rTrackFrameIdx);
+    const { container } = render(() => <StepList />);
+    const rejoinRow = container.querySelector(".feistel-rejoin-row");
+    if (!rejoinRow) throw new Error("rejoin row missing");
+    fireEvent.click(rejoinRow);
+    // Expect the scrubber to land on the round.1 rejoin frame.
+    const expectedIdx = trace.frames.findIndex((f) => f.stepId === "round.1:rejoin");
+    expect(expectedIdx).toBeGreaterThan(-1);
+    expect(useFrameIndex()()).toBe(expectedIdx);
+  });
+
+  it("scrubbing to a rejoin frame marks the rejoin row active", () => {
+    const trace = seedDesTrace();
+    const rejoinIdx = trace.frames.findIndex((f) => f.stepId === "round.1:rejoin");
+    expect(rejoinIdx).toBeGreaterThan(-1);
+    setFrame(rejoinIdx);
+    const { container } = render(() => <StepList />);
+    const rejoinRow = container.querySelector(".feistel-rejoin-row");
+    expect(rejoinRow?.classList.contains("active")).toBe(true);
+  });
+
+  it("expanding a round auto-expands its R track (no extra click required)", () => {
+    // Active scrubber sits outside any round (on IP) so no round is
+    // auto-expanded initially. The user clicks round 5's header to
+    // expand it; the R track inside should render its F-stack leaves
+    // without requiring a second click on the track header.
+    const trace = seedDesTrace();
+    const ipIdx = trace.frames.findIndex((f) => f.stepType === "des.initial-permutation@1");
+    setFrame(ipIdx);
+    const { container } = render(() => <StepList />);
+
+    // No round.5 leaves should be in the DOM initially (rounds collapsed).
+    expect(container.textContent ?? "").not.toContain("round.5.expand-R");
+
+    // Expand the "rounds" group first (it's also collapsed since the
+    // active step is IP, not inside any round).
+    const groupRows = Array.from(container.querySelectorAll(".group-row"));
+    const roundsGroup = groupRows.find(
+      (r) => r.querySelector(".group-label")?.textContent === "Rounds",
+    );
+    if (!roundsGroup) throw new Error("rounds group missing");
+    fireEvent.click(roundsGroup);
+
+    // Now find the round 5 header and expand it.
+    const round5Header = Array.from(container.querySelectorAll(".feistel-round-row")).find(
+      (r) => r.querySelector(".group-label")?.textContent === "Round 5",
+    );
+    if (!round5Header) throw new Error("round 5 header missing");
+    fireEvent.click(round5Header);
+
+    // Without the auto-expand fix the R track would render collapsed
+    // and round.5.expand-R wouldn't appear. With the fix, both the L
+    // passthrough hint AND the R track's leaves should render.
+    const titles = Array.from(container.querySelectorAll("button.step-row"))
+      .map((b) => b.getAttribute("title") ?? "")
+      .filter((t) => t.startsWith("round.5"));
+    expect(titles.some((t) => t.startsWith("round.5.expand-R\n"))).toBe(true);
+    expect(titles.some((t) => t.startsWith("round.5.xor-K\n"))).toBe(true);
+    expect(titles.some((t) => t.startsWith("round.5.s-boxes\n"))).toBe(true);
+    expect(titles.some((t) => t.startsWith("round.5.p-permute\n"))).toBe(true);
   });
 });
