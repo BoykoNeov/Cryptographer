@@ -10,6 +10,7 @@
 
 import type {
   CipherSpec,
+  FeistelRoundGroup,
   IterateGroup,
   Json,
   StateShape,
@@ -456,10 +457,18 @@ export const compareSpecs = (a: CipherSpec, b: CipherSpec): readonly SpecParamDi
 
 /**
  * Structural neighborhood of a node in the spec tree.
- *  - `node` is the matched node itself (leaf, group, or iterate).
- *  - `parent` is the group/iterate container holding it, or `null` when the
- *    node lives at the top level of `spec.steps`.
+ *  - `node` is the matched node itself (leaf, group, iterate, or
+ *    feistel-round).
+ *  - `parent` is the container holding it, or `null` when the node
+ *    lives at the top level of `spec.steps`. Can be a `StepGroup`,
+ *    `IterateGroup`, or a `FeistelRoundGroup` (the latter when the
+ *    node was matched inside a Feistel track — DES Phase 6d-ii).
  *  - `indexInParent` is the node's position in its sibling array.
+ *    For Feistel parents, this is the index inside the matched
+ *    track's `children`.
+ *  - `trackIdx` is set IFF `parent` is a `FeistelRoundGroup`; tells
+ *    the caller which `parent.tracks[trackIdx]` the matched node
+ *    lives in. Always omitted for other parent kinds.
  *
  * Unlike `findStep` (leaves-only), this returns ANY node kind so the
  * visual editor can anchor inserts to groups too (e.g. "drop this new step
@@ -467,15 +476,25 @@ export const compareSpecs = (a: CipherSpec, b: CipherSpec): readonly SpecParamDi
  */
 export type StepLocation = {
   readonly node: StepNode;
-  readonly parent: StepGroup | IterateGroup | null;
+  readonly parent: StepGroup | IterateGroup | FeistelRoundGroup | null;
   readonly indexInParent: number;
+  /** Set iff `parent` is a `FeistelRoundGroup`. */
+  readonly trackIdx?: number;
 };
 
 /**
- * Find a node (leaf OR group OR iterate) by id and return its structural
- * neighborhood. Depth-first; returns null on no match. Ids are assumed
- * unique within a spec — if duplicates exist the first match in DFS order
- * wins (mirrors `findStep`).
+ * Find a node (leaf OR group OR iterate OR feistel-round) by id and
+ * return its structural neighborhood. Depth-first; returns null on no
+ * match. Ids are assumed unique within a spec — if duplicates exist the
+ * first match in DFS order wins (mirrors `findStep`).
+ *
+ * Feistel-round descent (Phase 6d-ii): the walker recurses through
+ * each track's `children` array. A leaf inside an L or R track gets a
+ * `StepLocation` whose `parent` is the round itself + `trackIdx`
+ * naming which track. Tracks are visited in declaration order, so for
+ * DES the L track is searched before the R track (the L track is
+ * always empty in canonical DES, so in practice every track-resident
+ * match comes from R).
  */
 export const findStepAndParent = (spec: CipherSpec, stepId: string): StepLocation | null => {
   const visit = (
@@ -488,15 +507,35 @@ export const findStepAndParent = (spec: CipherSpec, stepId: string): StepLocatio
       if (node.id === stepId) return { node, parent, indexInParent: i };
       if (node.kind === "step") continue;
       if (node.kind === "feistel-round") {
-        // Feistel-round descent for `findStepAndParent` lands in the
-        // next commit (6d-ii), once the `StepLocation` type is widened
-        // to carry `trackIdx` + a `FeistelRoundGroup` parent arm.
-        // Today (post-6d-i): `transformParentArray` already descends
-        // into tracks, so insertStepAfter/Before/removeStep/reorderStep
-        // work on track members. `findStepAndParent` is still a
-        // descent barrier here — track-resident leaves return null.
-        // Callers that just need "does this id exist anywhere" can use
-        // the lower-level `findStep` (which already descends).
+        // Search each track's children. The track itself isn't a
+        // structural parent in the data model (it's a record-shaped
+        // anonymous container with `inputBytes` + `children`), so
+        // we report the round as the parent and surface track
+        // membership via `trackIdx`.
+        for (let t = 0; t < node.tracks.length; t++) {
+          const track = node.tracks[t];
+          if (!track) continue;
+          for (let j = 0; j < track.children.length; j++) {
+            const child = track.children[j];
+            if (!child) continue;
+            if (child.id === stepId) {
+              return { node: child, parent: node, indexInParent: j, trackIdx: t };
+            }
+            // Recurse into a nested container inside the track body
+            // (a `group` or `iterate` inside a track is permitted by
+            // the data model). The recursion's parent slot stays
+            // group/iterate, NOT the round — only the direct match
+            // case above attributes a Feistel parent.
+            if (child.kind === "step") continue;
+            if (child.kind === "feistel-round") {
+              const nested = visit([child], null);
+              if (nested) return nested;
+              continue;
+            }
+            const nested = visit(child.children, child);
+            if (nested) return nested;
+          }
+        }
         continue;
       }
       const found = visit(node.children, node);
@@ -930,6 +969,18 @@ export const duplicateRoundGroup = (
   if (loc.node.kind !== "group") {
     throw new Error(
       `duplicateRoundGroup: source "${sourceId}" must be a group, got ${loc.node.kind}`,
+    );
+  }
+  // Defensive: rejected as impossible by today's shipped specs (AES
+  // rounds live at top level or inside an iterate; DES rounds are
+  // feistel-round, not group). A `round.N` group somehow living inside
+  // a Feistel track would imply a future spec shape we haven't
+  // designed semantics for — bail loudly so the surprise is obvious
+  // instead of silently corrupting the spec via the AES-shaped
+  // renumber walk below.
+  if (loc.parent?.kind === "feistel-round") {
+    throw new Error(
+      `duplicateRoundGroup: source "${sourceId}" lives inside a Feistel track; duplicate-round on Feistel isn't supported (key schedule is global, not per-round-indexed)`,
     );
   }
   const idRe = direction === "forward" ? ROUND_ID_RE : INV_ROUND_ID_RE;

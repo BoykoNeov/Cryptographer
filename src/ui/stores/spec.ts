@@ -678,6 +678,12 @@ export const isRoundDuplicatable = (containerId: string): boolean => {
   // prefix === "round": confirm a higher-numbered sibling exists.
   const loc = findStepAndParent(activeSpec(), containerId);
   if (!loc || loc.node.kind !== "group") return false;
+  // Duplicate-round is AES-only — parent narrows to group / iterate /
+  // top-level. A `FeistelRoundGroup` parent would mean a `round.N`
+  // group somehow lives inside a Feistel track, which no shipped or
+  // planned cipher produces. Guard for the impossible case so a
+  // future surprise doesn't crash; just bail out as non-duplicatable.
+  if (loc.parent?.kind === "feistel-round") return false;
   const siblings = loc.parent ? loc.parent.children : activeSpec().steps;
   return siblings.some((s) => s.kind === "group" && s.id === `round.${n + 1}`);
 };
