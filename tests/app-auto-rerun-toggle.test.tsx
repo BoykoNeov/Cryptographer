@@ -266,24 +266,32 @@ describe("App — auto/manual rerun toggle", () => {
     );
   });
 
-  it("manual mode: editing the IV in CBC lights the pending banner without growing history", async () => {
-    setCipherMode("cbc");
-    const { container } = render(() => <App />);
-    // Drain boot + leaked timers, flip to manual, then drain once more so
-    // any setTimeouts scheduled before the flip finish before we measure.
-    await new Promise((r) => setTimeout(r, 250));
-    setAutoRerun(false);
-    await new Promise((r) => setTimeout(r, 250));
-    __resetHistoryForTests();
-    expect(useHistory()().length).toBe(0);
-    setIvBytes(new Uint8Array(16).fill(0xcd));
-    // Dirty flag is set synchronously in manual mode — banner up immediately.
-    expect(container.querySelector(".pending-banner")).not.toBeNull();
-    // Wait past the auto-rerun debounce to confirm no late timer sneaks
-    // a snapshot in (would indicate the manual-mode branch failed).
-    await new Promise((r) => setTimeout(r, 250));
-    expect(useHistory()().length).toBe(0);
-  });
+  // Generous timeout because this test renders the full <App />, flips to
+  // manual mode, then waits 250 ms × 3 for boot timers / debounce drains —
+  // close enough to 5 s under heavy suite parallelism that the default
+  // sometimes ticks past. Same pattern as `[[feedback-url-share-flake]]`.
+  it(
+    "manual mode: editing the IV in CBC lights the pending banner without growing history",
+    { timeout: 15000 },
+    async () => {
+      setCipherMode("cbc");
+      const { container } = render(() => <App />);
+      // Drain boot + leaked timers, flip to manual, then drain once more so
+      // any setTimeouts scheduled before the flip finish before we measure.
+      await new Promise((r) => setTimeout(r, 250));
+      setAutoRerun(false);
+      await new Promise((r) => setTimeout(r, 250));
+      __resetHistoryForTests();
+      expect(useHistory()().length).toBe(0);
+      setIvBytes(new Uint8Array(16).fill(0xcd));
+      // Dirty flag is set synchronously in manual mode — banner up immediately.
+      expect(container.querySelector(".pending-banner")).not.toBeNull();
+      // Wait past the auto-rerun debounce to confirm no late timer sneaks
+      // a snapshot in (would indicate the manual-mode branch failed).
+      await new Promise((r) => setTimeout(r, 250));
+      expect(useHistory()().length).toBe(0);
+    },
+  );
 
   it("manual mode: dirty banner stays up across multiple edits before a Run", () => {
     const { container } = render(() => <App />);

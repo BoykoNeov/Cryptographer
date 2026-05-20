@@ -57,6 +57,7 @@ import {
 } from "solid-js";
 import { BlockBadge } from "./components/BlockBadge";
 import { BytesView } from "./components/BytesView";
+import { FeistelMiniDiagram } from "./components/FeistelMiniDiagram";
 import { FeistelTrackContext } from "./components/FeistelTrackContext";
 import { GraphView } from "./components/GraphView";
 import { IvInput } from "./components/IvInput";
@@ -1273,7 +1274,17 @@ export const App = () => {
                       from the round's rejoin frame. Phase 5a of the
                       DES + branching primitive plan; cipher-agnostic
                       so TEA/XTEA/Twofish get it without modification. */}
-                  <FeistelTrackContext frame={frame()} />
+                  <div class="feistel-linear-pair">
+                    <FeistelTrackContext frame={frame()} />
+                    {/* Mini diagram (Phase 5b): abstract Feistel structure
+                        (split / F-stack / combine / output). Side-by-side
+                        with the track-context panel so the user sees
+                        both the concrete bytes (panel) and the algorithm
+                        topology (diagram) for the same round. Cipher-
+                        agnostic — geometry parameterizes off the active
+                        feistel-round spec node. */}
+                    <FeistelMiniDiagram frame={frame()} />
+                  </div>
 
                   {/* Per-frame value-prose. Cipher-agnostic dispatch via
                       the narration registry (`src/ui/narration/`).

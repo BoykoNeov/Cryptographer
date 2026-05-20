@@ -2648,6 +2648,133 @@ button:disabled {
   font-size: 10px;
 }
 
+/* The pair wrapper places the track-context panel and the mini-diagram
+   side-by-side when there's room, wrapping to stacked layout on narrow
+   viewports. Both render conditionally on the same predicate so the
+   wrapper never shows empty. */
+.feistel-linear-pair {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.feistel-linear-pair > .feistel-track-context {
+  flex: 1 1 auto;
+  min-width: 280px;
+}
+
+.feistel-linear-pair > .feistel-mini-diagram {
+  flex: 0 0 auto;
+}
+
+/* ─── Feistel mini diagram (Phase 5b) ─────────────────────────────────
+   ~240×260 SVG showing the abstract Feistel structure. Cipher-agnostic
+   geometry — parameterizes off the active feistel-round's track count
+   and combineKind. Clicking a leaf in the F-stack scrubs to that
+   leaf's frame; the active frame's leaf gets an accent fill. */
+
+.feistel-mini-diagram {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev-1);
+}
+
+.feistel-mini-diagram-header {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.feistel-mini-diagram-title {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.feistel-mini-diagram-kind {
+  font-size: 10px;
+  font-family: var(--mono, monospace);
+}
+
+.feistel-mini-diagram-svg {
+  display: block;
+}
+
+.feistel-mini-diagram-half {
+  fill: var(--bg-elev-2);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.feistel-mini-diagram-half-accent {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+}
+
+.feistel-mini-diagram-half-label {
+  font-size: 11px;
+  font-family: var(--mono, monospace);
+  fill: var(--text);
+}
+
+.feistel-mini-diagram-wire {
+  stroke: var(--text);
+  stroke-width: 1;
+  opacity: 0.55;
+}
+
+.feistel-mini-diagram-leaf-rect {
+  fill: var(--bg-elev-2);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.feistel-mini-diagram-leaf-label {
+  font-size: 9px;
+  font-family: var(--mono, monospace);
+  fill: var(--text);
+}
+
+.feistel-mini-diagram-leaf-active .feistel-mini-diagram-leaf-rect {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.feistel-mini-diagram-leaf-clickable {
+  cursor: pointer;
+}
+
+.feistel-mini-diagram-leaf-clickable:hover .feistel-mini-diagram-leaf-rect {
+  fill: var(--bg-elev-3, var(--bg-elev-2));
+  stroke: var(--accent);
+}
+
+.feistel-mini-diagram-combine-node {
+  fill: var(--bg-elev-1);
+  stroke: var(--text);
+  stroke-width: 1;
+}
+
+.feistel-mini-diagram-combine-glyph {
+  font-size: 11px;
+  fill: var(--text);
+  font-weight: 600;
+}
+
+.feistel-mini-diagram-empty-track,
+.feistel-mini-diagram-warning {
+  font-size: 9px;
+  fill: var(--muted);
+  font-style: italic;
+}
+
 /* ─── Slice 2: view-mode tabs (linear / graph / JSON) ─────────────────────
    Tab bar sits above the trace-view content. Three buttons; the active one
    gets the accent border/background combo so it reads as "selected." The
