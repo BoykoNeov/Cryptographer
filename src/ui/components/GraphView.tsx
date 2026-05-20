@@ -2142,18 +2142,89 @@ export const GraphView = () => {
         // so this branch only fires for hand-rolled specs in dev.
         return !contract || contract.input !== "any";
       };
+
+      /**
+       * Walk a node to find its anchor for the endpoint-pill arrow.
+       *
+       * Container descent (2026-05-20 fix): without this, the AES-128
+       * output anchor lands on the `round-10` GROUP, making the spine
+       * arrow read `round-10-container → ciphertext` instead of the
+       * pedagogically correct `round.10.add-round-key → ciphertext`.
+       * `s.steps`'s top-level walk identified round-10 as a state
+       * consumer (containers always are) and stopped at the container
+       * boundary; the fix recurses to find the deepest last
+       * state-consuming LEAF.
+       *
+       * Per-container-kind rules:
+       *
+       *   - `step` (leaf): return its id when it's a state consumer;
+       *     null when it's aux-only (skip and let the caller continue
+       *     searching at sibling level).
+       *   - `group`: transparent — recurse on children in `direction`
+       *     order, return the first non-null match.
+       *   - `iterate`: return the iterate id directly. The spine
+       *     terminates at the iterate boundary (per
+       *     `[[feedback-state-spine-no-phantoms]]`) — the inner body
+       *     doesn't expose a spine-successor leaf that an outer edge
+       *     could land on; the iterate's id IS the boundary.
+       *   - `feistel-round`: for the OUTPUT side, return the rejoin
+       *     synthetic id (`${id}:rejoin`) — that's the round's
+       *     spine-exit point (see `processFeistelRound` in graph.ts).
+       *     For the INPUT side, descend into the first non-empty
+       *     track's first leaf — fan-in from the predecessor lands
+       *     there per the same function. If every track is empty,
+       *     fall back to the rejoin synthetic.
+       *
+       * Why mirror these to the existing inferStateEdges semantics:
+       * the endpoint pill's edge needs to land on the same node the
+       * normal-spine edge would land on if there were a sibling
+       * predecessor/successor. Otherwise the pill arrow would draw to
+       * a node that the next/prev-sibling-edge inference doesn't
+       * agree with — confusing geometry.
+       */
+      const findAnchor = (node: StepNode, direction: "first" | "last"): string | undefined => {
+        if (node.kind === "step") return isStateConsumer(node) ? node.id : undefined;
+        if (node.kind === "iterate") return node.id;
+        if (node.kind === "feistel-round") {
+          if (direction === "last") return `${node.id}:rejoin`;
+          // Input side: predecessor fans into the first non-empty
+          // track's first leaf per processFeistelRound. Walk tracks
+          // in declared order to find one with children.
+          for (const track of node.tracks) {
+            for (const child of track.children) {
+              const childAnchor = findAnchor(child, "first");
+              if (childAnchor !== undefined) return childAnchor;
+            }
+          }
+          // All tracks empty (no shipped spec hits this) — fall back
+          // to the rejoin synthetic; the predecessor → rejoin edge is
+          // already emitted by processFeistelRound for empty tracks.
+          return `${node.id}:rejoin`;
+        }
+        // Group: recurse on children in `direction` order.
+        const children = direction === "last" ? [...node.children].reverse() : node.children;
+        for (const child of children) {
+          const anchor = findAnchor(child, direction);
+          if (anchor !== undefined) return anchor;
+        }
+        return undefined;
+      };
+
       let input: string | undefined;
       let output: string | undefined;
       for (const n of s.steps) {
-        if (isStateConsumer(n)) {
-          input = n.id;
+        const a = findAnchor(n, "first");
+        if (a !== undefined) {
+          input = a;
           break;
         }
       }
       for (let i = s.steps.length - 1; i >= 0; i--) {
         const n = s.steps[i];
-        if (n && isStateConsumer(n)) {
-          output = n.id;
+        if (!n) continue;
+        const a = findAnchor(n, "last");
+        if (a !== undefined) {
+          output = a;
           break;
         }
       }

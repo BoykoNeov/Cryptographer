@@ -322,6 +322,35 @@ describe("GraphView — component-level (AES-128 fixture)", () => {
       expect(outputPill?.querySelector(".graph-endpoint-label")?.textContent).toBe("plaintext");
     });
 
+    it("output anchor descends into terminal container to the innermost last leaf (AES round 10)", () => {
+      // The original endpointAnchors picked the last TOP-LEVEL spec
+      // entry. For AES that's the `round-10` group — a container,
+      // which it treated as a state consumer and stopped there. The
+      // descent fix (2026-05-20) recurses into the picked container
+      // to land on the innermost last state-consuming leaf, which
+      // for AES round 10 is `round.10.add-round-key`. Without this
+      // the rendered output arrow read `round-10-container →
+      // ciphertext` — visually inconsistent with `round.9.add-round-key
+      // → round.10.sub-bytes` and the rest of the spine. Memory hook:
+      // user-flagged 2026-05-20.
+      seedAes128Trace();
+      const { container } = render(() => <GraphView />);
+      const edges = Array.from(container.querySelectorAll("[data-edge-key]"))
+        .map((el) => el.getAttribute("data-edge-key") ?? "")
+        .filter((k) => k.includes("__cipher_output__"));
+      // Exactly one inbound edge at the output pill: from the
+      // innermost last leaf, not from the round container.
+      expect(edges.length).toBeGreaterThanOrEqual(1);
+      expect(
+        edges.some((k) => k.startsWith("round.10.add-round-key|")),
+        `expected an edge from round.10.add-round-key to __cipher_output__; got: ${edges.join(", ")}`,
+      ).toBe(true);
+      expect(
+        edges.some((k) => k.startsWith("round.10|")),
+        "should NOT have an edge from the round-10 container itself",
+      ).toBe(false);
+    });
+
     it("endpoint pills have no drop-anchor and no delete glyph", () => {
       // Endpoints aren't editable: they aren't spec nodes, you can't drop
       // a palette step on them, and you can't delete them. They DO carry
