@@ -3037,6 +3037,164 @@ export const GraphView = () => {
       if (collapsed.has(container.id)) continue;
       const cBox = lay.boxes.get(container.id);
       if (!cBox) continue;
+      if (container.kind === "feistel") {
+        // DES Phase 6d-v — per-track drop gutters. Each `feistelTracks[t]`
+        // entry is a vertical column of chips. We emit standard
+        // before/between/after horizontal gutter strips inside a track
+        // that has real children, and a single full-column sentinel
+        // (`into-track-start:roundId#trackIdx`) for empty tracks (DES's
+        // L track is the shipped example — empty after the spec, the
+        // graph layer synthesizes a passthrough chip we filter out).
+        //
+        // Filter excludes:
+        //   - Replica synthetic ids (`replicaOf !== undefined`).
+        //   - Passthrough synthetic ids (`:passthrough-${t}`), which
+        //     are graph-layer materializations, not spec nodes.
+        //   - Defensive: any `:rejoin` id (shouldn't appear in
+        //     feistelTracks per `walkSpec`, but cheap to guard).
+        //
+        // The inter-track gap + round container border get NO gutter:
+        // the round chip's outer `data-drop-anchor` catches drops there
+        // → "insert after the round in its parent" (Slice 8 semantics,
+        // user-picked behavior). No special suppression needed.
+        //
+        // Horizontal-flow parent (Feistel inside an iterate, future
+        // path — no shipped cipher today) keeps the columns left-to-
+        // right but the rejoin chip sits to the RIGHT instead of
+        // BELOW. The geometry below assumes vertical-flow parent
+        // (rejoin BELOW); for horizontal-flow, the rejoin's left edge
+        // would cap each column's bottom in a meaningfully different
+        // way. Skip for now — no real cipher exercises it.
+        const tracks = container.feistelTracks ?? [];
+        const trackChildIds = container.childIds;
+        const rejoinBox = lay.boxes.get(`${container.id}:rejoin`);
+        for (let t = 0; t < tracks.length; t++) {
+          const track = tracks[t];
+          if (!track) continue;
+          const realInTrack: { id: string; box: Box }[] = [];
+          for (const childId of track) {
+            const node = nbi.get(childId);
+            if (node?.replicaOf !== undefined) continue;
+            if (childId.includes(":passthrough-")) continue;
+            if (childId.endsWith(":rejoin")) continue;
+            const childBox = lay.boxes.get(childId);
+            if (!childBox) continue;
+            realInTrack.push({ id: childId, box: childBox });
+          }
+          // Column inner X span. Populated column reads from its chips;
+          // empty column falls back to the synthetic passthrough's box
+          // (which gets laid out with LEAF_W in layoutNode's feistel
+          // branch).
+          let colMinX: number;
+          let colMaxRight: number;
+          if (realInTrack.length > 0) {
+            colMinX = realInTrack[0]?.box.x ?? cBox.x;
+            colMaxRight = colMinX;
+            for (const { box } of realInTrack) {
+              if (box.x < colMinX) colMinX = box.x;
+              if (box.x + box.w > colMaxRight) colMaxRight = box.x + box.w;
+            }
+          } else {
+            // Empty (passthrough-only) track. Use the passthrough box
+            // as the gutter geometry — that's the visible footprint
+            // the user sees for this track.
+            const ptId = `${container.id}:passthrough-${t}`;
+            const ptBox = lay.boxes.get(ptId);
+            if (!ptBox) {
+              // No passthrough laid out either — this track simply
+              // doesn't render anything. Skip emitting a gutter.
+              continue;
+            }
+            colMinX = ptBox.x;
+            colMaxRight = ptBox.x + ptBox.w;
+          }
+          // Column Y bounds: from just below the round's HEADER_H +
+          // CONTAINER_PAD down to the rejoin chip's TOP edge. The
+          // rejoin chip is always present after Phase 6b-i; the
+          // fallback is the round's inner bottom edge.
+          //
+          // We deliberately bound colBottom by the rejoin's top y
+          // (not `rejoin.y - STACK_GAP`) so a between-last-chip-and-
+          // rejoin drop gets a visible (if thin) gutter strip. The
+          // gap is exactly STACK_GAP wide in the canonical layout —
+          // smaller than the group case's CONTAINER_PAD-tall strip,
+          // but still hit-testable. If browser smoke shows it's too
+          // thin to reach reliably, the right fix is to add headroom
+          // in `layoutNode`'s feistel branch, not to skip the gutter.
+          const colTop = cBox.y + HEADER_H + cs.CONTAINER_PAD;
+          const colBottom = rejoinBox ? rejoinBox.y : cBox.y + cBox.h - cs.CONTAINER_PAD;
+          const stripW = colMaxRight - colMinX;
+          if (stripW <= 0 || colBottom <= colTop) continue;
+          if (realInTrack.length === 0) {
+            // Empty-track sentinel — covers the whole column body.
+            // Encoding: `into-track-start:${roundId}#${trackIdx}`.
+            // The `#` separator avoids ambiguity with the colon-as-
+            // prefix-delimiter convention; round ids like `round.3`
+            // contain dots but no colons or hashes, so this parses
+            // cleanly via slice + indexOf('#').
+            void trackChildIds; // unused but kept in scope for parity
+            out.push({
+              id: `into-track-start:${container.id}#${t}`,
+              orientation: "horizontal",
+              x: colMinX,
+              y: colTop,
+              w: stripW,
+              h: colBottom - colTop,
+            });
+            continue;
+          }
+          // Populated track — emit at-start / between / at-end strips.
+          // Sort defensively by y in case the spec's track order ever
+          // diverges from layout's y-order (it shouldn't today).
+          realInTrack.sort((a, b) => a.box.y - b.box.y);
+          const boundaryStripH = cs.CONTAINER_PAD;
+          // biome-ignore lint/style/noNonNullAssertion: realInTrack.length > 0 checked above
+          const first = realInTrack[0]!;
+          // biome-ignore lint/style/noNonNullAssertion: realInTrack.length > 0 checked above
+          const last = realInTrack[realInTrack.length - 1]!;
+          // At-start: CONTAINER_PAD strip above the first chip.
+          out.push({
+            id: `before:${first.id}`,
+            orientation: "horizontal",
+            x: colMinX,
+            y: first.box.y - boundaryStripH,
+            w: stripW,
+            h: boundaryStripH,
+          });
+          // Between siblings: fill the gap exactly (matches group case).
+          for (let i = 0; i < realInTrack.length - 1; i++) {
+            const prev = realInTrack[i];
+            const next = realInTrack[i + 1];
+            if (!prev || !next) continue;
+            const gapTop = prev.box.y + prev.box.h;
+            const gapHeight = next.box.y - gapTop;
+            if (gapHeight <= 0) continue;
+            out.push({
+              id: `before:${next.id}`,
+              orientation: "horizontal",
+              x: colMinX,
+              y: gapTop,
+              w: stripW,
+              h: gapHeight,
+            });
+          }
+          // At-end: CONTAINER_PAD strip below the last chip, capped at
+          // colBottom so it doesn't bleed into the rejoin chip area.
+          const tailY = last.box.y + last.box.h;
+          const tailH = Math.min(boundaryStripH, colBottom - tailY);
+          if (tailH > 0) {
+            out.push({
+              id: `after:${last.id}`,
+              orientation: "horizontal",
+              x: colMinX,
+              y: tailY,
+              w: stripW,
+              h: tailH,
+            });
+          }
+        }
+        continue;
+      }
       if (container.childIds.length === 0) {
         // Empty container — emit ONE sentinel gutter covering the
         // whole box. Without this, the body strip below the 22px
@@ -3517,6 +3675,24 @@ export const GraphView = () => {
           // on the labelled header band.
           insertStepIntoSpec(stepType, { kind: "into-start", containerId: targetId });
           return;
+        }
+        if (kind === "into-track-start" && targetId.length > 0) {
+          // DES Phase 6d-v — per-track at-start sentinel for an empty
+          // Feistel track. Encoding suffix: `${roundId}#${trackIdx}`.
+          // The `#` separator avoids ambiguating the first-colon split
+          // above (round ids can contain dots but never colons or
+          // hashes today). Split from the right of the suffix on `#`
+          // to extract the numeric trackIdx tail.
+          const hashIdx = targetId.lastIndexOf("#");
+          if (hashIdx > 0) {
+            const roundId = targetId.slice(0, hashIdx);
+            const trackIdxStr = targetId.slice(hashIdx + 1);
+            const trackIdx = Number.parseInt(trackIdxStr, 10);
+            if (roundId.length > 0 && Number.isFinite(trackIdx)) {
+              insertStepIntoSpec(stepType, { kind: "into-track-start", roundId, trackIdx });
+              return;
+            }
+          }
         }
       }
       // Malformed encoding — fall through to anchor / root-append.
