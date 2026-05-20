@@ -586,6 +586,25 @@ appears for rejoin frames, no chip for root-scope frames.
 
 ### Phase 6 — Graph view branched layout + smoke
 
+> **Entry gate (added 2026-05-20, user-confirmed):** Do NOT start
+> Phase 6 until BOTH of the following are resolved:
+>
+> 1. Manual browser smoke pass on Phase 5 in DES (scrub onto a round
+>    body; click leaves in `<FeistelMiniDiagram />`; click a row in
+>    `<DesKeyScheduleExplorer />`; hover the scrubber strip while
+>    clicking through). Per `[[feedback-jsdom-pointer-events-gap]]`
+>    the SVG `<g>` clicks and `pointer-events: none` strip are
+>    jsdom-only-tested today — the smoke is the discriminating check.
+> 2. The two deferred 5a/5b polish items above (cell-level provenance
+>    overlay on FeistelTrackContext; K_i ↔ xor-K cross-reference in
+>    FeistelMiniDiagram) either land in a follow-up commit OR are
+>    explicitly accepted as out-of-scope and removed from the plan.
+>
+> Both are pre-conditions because Phase 6 will rely on parts of the
+> Phase 5 surface (linear-mode scrubber → graph leaf click coupling,
+> provenance hover plumbing across views) that need to be confirmed
+> working in a real browser first.
+
 Render-time work for the `feistel-round` container on the graph
 canvas. Builds on the existing `iterate` rendering machinery —
 branches are "iterate-like" in that they're a structural container
