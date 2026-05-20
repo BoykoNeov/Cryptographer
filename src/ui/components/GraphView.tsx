@@ -1228,7 +1228,63 @@ const layoutNode = (
       // (horizontal gap matches iterate-flow convention).
       colX = colMaxRight + consts.FLOW_GAP;
     }
-    const w = lastColRight - startX + consts.CONTAINER_PAD;
+
+    // Second pass: place replicas in the RIGHT GUTTER (right of each
+    // consumer chip). Fix for the Phase 6a-revision regression: the
+    // track-iterate-only first pass above skips replica synthetic ids
+    // (they live in container.childIds but NOT in feistelTracks),
+    // leaving them without layout boxes — `<Show when={box()}>` then
+    // omits them from the DOM, so the source chip vanishes from the
+    // canvas in fully-replicated mode (DES key-schedule on
+    // replication-on was the trigger).
+    //
+    // User-picked over left-gutter (= L column space) because the L
+    // column carries a distinct semantic (the L track's passthrough
+    // role); conflating replicas into that space would mix two
+    // different visual roles. Right-gutter keeps the separation clean.
+    //
+    // Orthogonal-to-spine: within each column chips flow downward, so
+    // replicas perpendicular to that flow read naturally — they sit
+    // beside the consumer, aux arrows enter the consumer from its
+    // right edge, not interfering with the downward spine inside the
+    // column. Mirrors the iterate-branch's "replicas above consumer"
+    // logic, rotated 90°.
+    //
+    // Multi-source case: row 0 closest to consumer, row N further to
+    // the right (each row adds LEAF_W + STACK_GAP), keyed by the
+    // source id via `rowOfSource` so source A always sits at row 0
+    // globally — same convention the iterate branch already uses.
+    let maxFeistelReplicaRight = 0;
+    for (const childId of container.childIds) {
+      if (!replicas.isReplica.has(childId)) continue;
+      const consumerId = replicas.consumerOf.get(childId);
+      if (consumerId === undefined) continue;
+      const consumerBox = out.get(consumerId);
+      if (!consumerBox) continue;
+      const sId = replicas.sourceOf.get(childId);
+      const row = sId !== undefined ? (replicas.rowOfSource.get(sId) ?? 0) : 0;
+      // Right-gutter slot: consumer's right edge + FLOW_GAP, plus
+      // row × (LEAF_W + STACK_GAP) for stacked sources. y centers
+      // the replica vertically on the consumer chip.
+      const replicaX =
+        consumerBox.x + consumerBox.w + consts.FLOW_GAP + row * (consts.LEAF_W + consts.STACK_GAP);
+      const replicaY = consumerBox.y + (consumerBox.h - consts.LEAF_H) / 2;
+      const delta = relativePins.get(childId);
+      const finalX = replicaX + (delta?.dx ?? 0);
+      const finalY = replicaY + (delta?.dy ?? 0);
+      out.set(childId, {
+        x: finalX,
+        y: finalY,
+        w: consts.LEAF_W,
+        h: consts.LEAF_H,
+      });
+      const replicaRight = finalX + consts.LEAF_W;
+      if (replicaRight > maxFeistelReplicaRight) maxFeistelReplicaRight = replicaRight;
+    }
+
+    // Grow the round container's width to fit right-gutter replicas.
+    const effectiveLastRight = Math.max(lastColRight, maxFeistelReplicaRight);
+    const w = effectiveLastRight - startX + consts.CONTAINER_PAD;
     const h = maxColBottom - startY + consts.CONTAINER_PAD;
     const box: Box = { x: startX, y: startY, w, h };
     out.set(id, box);

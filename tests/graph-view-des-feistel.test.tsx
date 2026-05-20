@@ -24,18 +24,34 @@
  * regressions; this jsdom test pins the DOM shape only.
  */
 
+import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { desSpec } from "@/ciphers/des";
+import { runSpec } from "@/core/runtime";
+import { bytesFromHex } from "@/core/state/bytes";
+import type { AuxValue } from "@/core/types";
 import { GraphView } from "@/ui/components/GraphView";
 import { __resetAutoRerunForTests } from "@/ui/stores/auto-rerun";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
-import { __resetLayoutsForTests, toggleCollapse } from "@/ui/stores/layout";
+import { __resetLayoutsForTests, setReplicationMode, toggleCollapse } from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
 import { __resetSpecForTests, setCipher, useSpec } from "@/ui/stores/spec";
-import { __resetTraceForTests } from "@/ui/stores/trace";
+import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
 import { __resetViewModeForTests } from "@/ui/stores/view-mode";
+import { setReplicationEnabled } from "@/ui/stores/view-replication";
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+// FIPS 46-3 Appendix B test vector — used to seed an actual DES trace
+// so the rendered graph has aux edges (and therefore replicate-able sources).
+const seedDesTrace = (): void => {
+  const trace = runSpec(desSpec, buildDefaultRegistry(), {
+    initialState: { shape: "bytes" as const, bytes: bytesFromHex("0123456789abcdef") },
+    initialAux: new Map<string, AuxValue>([["key", bytesFromHex("133457799bbcdff1")]]),
+  });
+  setTrace(trace);
+};
 
 const resetAll = (): void => {
   __resetAutoRerunForTests();
@@ -131,5 +147,71 @@ describe("GraphView — DES feistel-round rendering (Phase 6a)", () => {
       '[data-testid="graph-container-header-round.1"]',
     );
     expect(collapsedRound, "collapsed round.1 container should still render").not.toBeNull();
+  });
+
+  // ─── Regression — replicas in feistel right gutter ─────────────────
+  //
+  // Phase 6a-revision (commit 12b88e0) introduced a layout that iterates
+  // `container.feistelTracks` only. Replica synthetic ids (e.g.
+  // `key-schedule@->round.1.xor-K`) live in flat `childIds` but NOT in
+  // any `feistelTracks` entry, so they were initially skipped — their
+  // box stayed unset and `<Show when={box()}>` omitted them from the
+  // DOM, making the source vanish in fully-replicated mode. The second
+  // pass in the kind === "feistel" branch places them in the right
+  // gutter; this test guards that fix.
+
+  it("places key-schedule replicas in the right gutter when replication is enabled", () => {
+    // DES key-schedule has 16 aux edges → exceeds default threshold of 6
+    // → auto-replicates with just master switch ON (no per-source override
+    // needed). Per [[feedback-jsdom-replication-off-default]]
+    // setReplicationEnabled must be called explicitly before render —
+    // localStorage default returns false in jsdom.
+    // Replication needs aux edges → needs a real trace.
+    seedDesTrace();
+    const specId = useSpec()().id;
+    setReplicationEnabled(true);
+    setReplicationMode(specId, "key-schedule", "always");
+
+    const { container } = render(() => <GraphView />);
+
+    // Replicas land in two distinct buckets by design:
+    //   - 15 aux-fan-out replicas, one per round.2..round.16's xor-K,
+    //     placed inside each round's RIGHT GUTTER by the new feistel
+    //     layout pass. THIS commit's regression pin.
+    //   - 1 spine-replica for round.1.xor-K, which gets the
+    //     `isSpineReplica: true` flag in `replicateHighFanoutSources`
+    //     and is supposed to be laid out at the SOURCE'S old slot.
+    //     For DES that surfaces a pre-existing splice bug in
+    //     `replicateHighFanoutSources`: source `key-schedule` lives
+    //     at root, but the spine successor (`round.1.xor-K`) lives
+    //     inside `round.1` (inside the "rounds" group), so
+    //     source.parent ≠ spineSuccessor.parent. The existing splice
+    //     anchors at consumer's id (which isn't in source's parent's
+    //     childIds), so the spine-replica gets dropped on the floor.
+    //     The code comment at graph.ts:1786 explicitly flags this:
+    //     "A hypothetical future cipher where source.parent ≠
+    //     spineSuccessor.parent would need an explicit insertion key
+    //     — defer until something demands it." DES is that cipher.
+    //     This is a follow-up fix tracked separately; for now the
+    //     round.1.xor-K replica is invisibly missing.
+    //
+    // Spot-check round-internal replicas to pin THIS commit's fix.
+    for (const roundIdx of [2, 8, 16]) {
+      const replica = container.querySelector(
+        `[data-testid="graph-leaf-key-schedule@->round.${roundIdx}.xor-K"]`,
+      );
+      expect(
+        replica,
+        `key-schedule replica for round.${roundIdx}.xor-K should render`,
+      ).not.toBeNull();
+    }
+
+    // 15 aux-fan-out replicas (rounds 2-16) render. Round 1 missing
+    // per the spine-replica bug above — assertion below would be 16
+    // once that follow-up lands.
+    const allReplicas = container.querySelectorAll(
+      '[data-testid^="graph-leaf-key-schedule@->round."]',
+    );
+    expect(allReplicas.length).toBe(15);
   });
 });
