@@ -17,6 +17,31 @@
 > already renders DES's 6-byte K_i ribbons correctly. Bit-grouped
 > unfold deferred per advisor's "don't over-build" guidance.
 >
+> **Phase 5 deferred polish items** (advisor pass at "declare done"
+> caught two unflagged scope shrinks vs. the original plan prose):
+> - **5a cell-level provenance overlay** — the plan said "provenance
+>   overlay carries over from existing cell-overlay machinery."
+>   Shipped only the current-track accent border on the row.
+>   Hovering an `after` cell in the active step's MatrixView/BytesView
+>   does not yet light up sources inside the FeistelTrackContext's
+>   round-entry rows. Not load-bearing for the panel's primary
+>   function; rolled forward as a follow-up polish item.
+> - **5b K_i label sync with round-key panel** — the plan said
+>   "the K_i label highlights in sync with the round-key panel's
+>   ribbon." Shipped only the active-leaf accent fill. The xor-K
+>   rect in the F-stack doesn't yet read the round-key panel's
+>   active-K_i signal to render the matching K_i label next to it.
+>   Small addition; deferred to follow-up.
+>
+> **Phase 5 manual smoke pending.** Per `[[feedback-jsdom-pointer-events-gap]]`,
+> jsdom synthetic clicks bypass CSS hit-testing — the mini diagram's
+> SVG `<g>` click handlers, the scrubber strip's `pointer-events: none`,
+> and the round-key panel's hover wiring are all jsdom-only-tested.
+> A 5-minute browser pass on DES (scrub onto a round body, click
+> leaves in the mini diagram, click a row in the key-schedule
+> explorer, hover the scrubber strip while clicking through) is the
+> discriminating check before Phase 6 starts.
+>
 > Originally drafted 2026-05-19; architecture direction (DES first +
 > true branching, per Path C) approved by user. Multi-phase: 6 phases,
 > ~3000–5000 lines including tests. The branching primitive is a load-bearing
