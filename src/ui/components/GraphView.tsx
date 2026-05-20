@@ -1143,6 +1143,65 @@ const layoutNode = (
     return box;
   }
 
+  // Feistel-round (Phase 6a of the DES + branching primitive plan): two
+  // (or more, for future n-way Feistel) tracks stacked vertically inside
+  // the container, each track flowing left-to-right. L track on top, R
+  // track below — matches canvas's global LTR flow with the textbook
+  // diagram's top-to-bottom semantics rotated 90° clockwise into rows.
+  //
+  // The rejoin synthetic id lives in `container.childIds` alongside the
+  // per-track children (see `graph.ts:515`), but it is NOT a member of
+  // any `feistelTracks[t]` entry. Iteration over flat `childIds` for
+  // layout purposes must therefore skip it; Phase 6b will place it
+  // explicitly at the container's right edge. For Phase 6a we lay out
+  // ONLY the per-track children — the rejoin chip is omitted from the
+  // canvas this commit and the spine arrows that touch it are still
+  // rendered by the existing edge pipeline (they just point at the id
+  // without a visible node box; harmless for a "doesn't crash" baseline).
+  //
+  // Replicas in track bodies aren't supported in this slice — the only
+  // shipped feistel cipher (DES) doesn't replicate any source into a
+  // track today. If a future cipher does, the same lift-and-stack
+  // machinery the iterate branch uses below will need to thread per-track.
+  if (container.kind === "feistel") {
+    const tracks = container.feistelTracks ?? [];
+    const trackInnerX = startX + consts.CONTAINER_PAD;
+    let trackInnerY = startY + HEADER_H + consts.CONTAINER_PAD;
+    let maxTrackRight = trackInnerX;
+    let lastTrackBottom = trackInnerY;
+    for (const trackChildren of tracks) {
+      let rowMaxBottom = trackInnerY + consts.LEAF_H;
+      let rowInnerX = trackInnerX;
+      for (const childId of trackChildren) {
+        const childBox = layoutNode(
+          childId,
+          rowInnerX,
+          trackInnerY,
+          containersById,
+          pinned,
+          out,
+          consts,
+          replicas,
+          relativePins,
+        );
+        rowInnerX = childBox.x + childBox.w + consts.FLOW_GAP;
+        const childBottom = childBox.y + childBox.h;
+        if (childBottom > rowMaxBottom) rowMaxBottom = childBottom;
+        const childRight = childBox.x + childBox.w;
+        if (childRight > maxTrackRight) maxTrackRight = childRight;
+      }
+      lastTrackBottom = rowMaxBottom;
+      // Advance to the next track's row. STACK_GAP between tracks reads
+      // as "two parallel computations" rather than a single dense row.
+      trackInnerY = rowMaxBottom + consts.STACK_GAP;
+    }
+    const w = Math.max(maxTrackRight, trackInnerX + consts.LEAF_W) - startX + consts.CONTAINER_PAD;
+    const h = lastTrackBottom - startY + consts.CONTAINER_PAD;
+    const box: Box = { x: startX, y: startY, w, h };
+    out.set(id, box);
+    return box;
+  }
+
   // Iterate: horizontal flow of children. Replica placement is the
   // horizontal-flow MIRROR of the group's vertical-flow gutter: replicas
   // go ABOVE their consumer (orthogonal to the spine direction at this
