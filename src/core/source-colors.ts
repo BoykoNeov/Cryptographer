@@ -116,12 +116,25 @@ const sourceFanoutMap = (graph: CipherGraph): Map<string, number> => {
   // non-replicas; we still record the entry so `.get()` distinguishes
   // "node exists, not a replica" from "node not in graph."
   const replicaOfByStepId = new Map<string, string | undefined>();
+  // Also remember which nodes are synthetic rejoins. A `feistel-round`'s
+  // rejoin chip emits two outgoing edges by construction (new_L → next
+  // round's L track, new_R → next round's R track), so it always trips
+  // the fanout ≥ 2 threshold — but pedagogically both arrows are halves
+  // of the SAME combined state, not distinct sources. Colouring the
+  // crossover X turns visual continuity into visual noise; user-flagged
+  // 2026-05-20 Phase 6e smoke. Exclude rejoin synthetics from the count
+  // so they don't get auto-coloured (and so they don't show up in the
+  // panel as a colourable source even when the "include single-output"
+  // sub-toggle is on — the panel walks the same map).
+  const rejoinSynthetics = new Set<string>();
   for (const node of graph.nodes) {
     replicaOfByStepId.set(node.stepId, node.replicaOf);
+    if (node.synthetic === "rejoin") rejoinSynthetics.add(node.stepId);
   }
   const counts = new Map<string, number>();
   for (const edge of graph.edges) {
     if (isEndpointId(edge.from)) continue;
+    if (rejoinSynthetics.has(edge.from)) continue;
     const canonical = replicaOfByStepId.get(edge.from) ?? edge.from;
     counts.set(canonical, (counts.get(canonical) ?? 0) + 1);
   }

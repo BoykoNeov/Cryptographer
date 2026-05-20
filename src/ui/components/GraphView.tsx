@@ -2813,6 +2813,26 @@ export const GraphView = () => {
   });
 
   /**
+   * Containers sorted by `containerPath.length` ascending so PARENT
+   * containers paint FIRST (deeper in document order → drawn first in
+   * SVG) and CHILD containers paint LAST (drawn on top). Without this
+   * sort, an outer group (e.g. DES's `Rounds`) whose entry in
+   * `graph().containers` happened to come AFTER its children's entries
+   * would have its `<rect>` painted over its children's rects,
+   * obliterating any visual treatment on the inner containers
+   * (Phase 6e smoke 2026-05-20: the individual feistel-round borders
+   * were entirely hidden behind the Rounds group's neutral rect).
+   * Stable sort: equal-depth siblings keep their original relative
+   * order, which preserves the layout-pin reset affordance's
+   * deterministic position rule.
+   */
+  const containersInPaintOrder = createMemo(() => {
+    const list = [...graph().containers];
+    list.sort((a, b) => a.containerPath.length - b.containerPath.length);
+    return list;
+  });
+
+  /**
    * O(1) lookup for `visualEdgeTargetId` — needs `replicaOf` off each
    * node to decide whether to retarget the edge endpoint. Memoized so
    * the per-edge `toBox` reads don't rebuild the map on every reactive
@@ -4773,7 +4793,16 @@ export const GraphView = () => {
               update the DOM). Same shape for edges and leaves below.
               See CLAUDE.md's "Solid `For` callbacks aren't reactive
               scopes" note. */}
-            <For each={graph().containers}>
+            {/* Sort by depth so outer containers (shallower path) paint
+                FIRST and inner containers paint ON TOP. Without this,
+                an outer group's rect (rendered last because it came
+                later in `graph().containers`'s natural order) covered
+                its children's perimeter strips — visible as "no
+                round-N border around individual DES rounds" in the
+                2026-05-20 Phase 6e smoke. SVG paint order is document
+                order, so emitting parents first puts their <rect>
+                under the children's <rect>. */}
+            <For each={containersInPaintOrder()}>
               {(container) => {
                 const box = createMemo(() => layout().boxes.get(container.id));
                 const containerWarnings = createMemo(

@@ -209,9 +209,18 @@ button:disabled {
 }
 
 .result {
-  grid-area: result;
   font-size: 13px;
   color: var(--muted);
+}
+
+/* The result row used to live as a top-level grid child (`grid-area:
+   result`) below the inputs section. Moved 2026-05-20 into `.inputs`
+   so it sits next to plaintext/key in the user's visual neighbourhood.
+   Force a full-width row so it wraps to its own line rather than
+   squeezing in between the key input and the action buttons. */
+.inputs .inputs-result {
+  flex: 0 0 100%;
+  align-self: flex-start;
 }
 
 .result code {
@@ -3670,6 +3679,33 @@ button:disabled {
 .graph-container-rect-iterate {
   stroke: var(--accent);
   stroke-dasharray: 4 3;
+}
+
+/* Feistel-round containers nest inside the parent `Rounds` group, and
+   their default `var(--bg-elev-2)` fill blended with that parent so each
+   individual round (round.1, round.2, ...) read as one undifferentiated
+   stack of chips instead of N distinct round bodies. User-flagged
+   2026-05-20 Phase 6e smoke. Two visual treatments stack here:
+     - A shifted fill (slightly lifted off the parent's bg) so the box
+       reads as a distinct surface against its container.
+     - A warm-accent stroke (orange — same hue family the warning glyphs
+       use; here at the round-frame role, not warning) so per-round
+       borders pop without colliding with the iterate's dashed accent
+       stroke or the group's neutral border. */
+.graph-container-rect-feistel {
+  /* The earlier "no border visible" report was a paint-order bug
+     (parent Rounds group's <rect> covered children); fixed via the
+     `containersInPaintOrder` sort. With that gone, the actual styling
+     wants to be SUBTLE — matching the AES group's quiet visual
+     register, not shouting. Default `.graph-container-rect` would have
+     made feistel-rounds visually identical to a regular group; this
+     rule keeps the fill identical (so feistel containers DON'T flag
+     as a stronger surface than AES groups), and uses a barely-warmer
+     stroke so the round-frame role is still hue-distinguishable from
+     the iterate's dashed accent and the plain group's neutral border.
+     (Phase 6e smoke follow-up 2026-05-20.) */
+  stroke: color-mix(in srgb, var(--border) 60%, var(--changed) 40%);
+  stroke-width: 1;
 }
 
 .graph-container-label {

@@ -1883,7 +1883,22 @@ export const replicateHighFanoutSources = (
       // position after stripDead. Behavior changes only for ciphers
       // with the source/consumer-parent mismatch (DES today, and any
       // future cipher whose state-or-aux edges cross container scopes).
-      const isSpine = spineSuccessorOf.get(edge.from) === edge.to;
+      // Cross-scope check: only treat the (source, spine-successor)
+      // pair as a "spine replica" when source AND consumer share the
+      // same parent container path. For ciphers like DES where the
+      // source lives at root and the consumer lives several scopes
+      // deeper (key-schedule at root, round.1.xor-K inside the Rounds
+      // group → inside round.1), the source's parent scope can't host
+      // a chip that visually belongs next to the consumer. Treating
+      // the cross-scope case as a regular consumer-scope replica
+      // lands round.1's xor-K replica in the round.1 body alongside
+      // round.2..16's replicas — the symmetric placement the user
+      // expects. User-flagged 2026-05-20 Phase 6e smoke ("round.1's
+      // replicate is near the plaintext pill, outside Rounds group").
+      const samePath =
+        sourcePath.length === consumerPath.length &&
+        sourcePath.every((seg, i) => seg === consumerPath[i]);
+      const isSpine = spineSuccessorOf.get(edge.from) === edge.to && samePath;
       const replicaContainerPath = isSpine ? sourcePath : consumerPath;
       replicas.set(rId, {
         stepId: rId,

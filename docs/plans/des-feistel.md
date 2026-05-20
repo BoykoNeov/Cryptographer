@@ -1,9 +1,48 @@
 # DES + branching primitive — first Feistel cipher
 
-> **Status: Phases 1–5 + 6a-revision + 6b + 6c + 6d + 2 universal fixes
-> shipped 2026-05-19 / 2026-05-20.** Only **Phase 6e (manual browser
-> smoke pass)** remains. See "Phase 6 session log (2026-05-20)"
-> section at bottom of this file for the commit-by-commit trail.
+> **Status: Phases 1–5 + 6a-revision + 6b + 6c + 6d shipped
+> 2026-05-19 / 2026-05-20. Phase 6e PARTIALLY done — Playwright
+> pre-flight smoke ran + a follow-up bug-fix batch shipped, but
+> the full manual browser walkthrough (decrypt, Save→reset→Load,
+> URL share, S-box param edit, palette drop) is still pending.**
+> See "Phase 6 session log (2026-05-20)" section at bottom of this
+> file for the commit-by-commit trail.
+>
+> **Phase 6e bug-fix batch (2026-05-20).** Playwright pre-flight on
+> `e2e/des-phase-6e-self-smoke.spec.ts` + the user's partial manual
+> pass surfaced 8 findings; 6 fixed in this batch:
+> - **Bug 1 (inspector "no frame found"):** rejoin chip + passthrough
+>   chip clicks + state-edge endpoint resolution. Fix in
+>   `src/core/edge-value-lookup.ts` (canonicalize both sides;
+>   passthrough chips resolve to L_in/R_in via shared helper).
+> - **Bug 2 (rejoin crossover X colored):** filter rejoin synthetics
+>   from `sourceFanoutMap` in `src/core/source-colors.ts`.
+> - **Bug 3 (no border on individual rounds):** root cause was SVG
+>   paint order (parent group's rect on top of children). Fix:
+>   `containersInPaintOrder` memo sorts by depth ascending in
+>   `GraphView.tsx`. CSS dialled back to subtle AES-like register.
+> - **Bug 4a (ciphertext placement):** moved into `.inputs` section
+>   as a flex-100% row above the action buttons.
+> - **Bug 10 (rejoin-source arrows showed combined 8B on both):**
+>   slice by consumer's track membership in `lookupRegularState`.
+> - **Bug 12 (slider + StepList shown in graph view):** wrapped both
+>   in `<Show when={viewMode() !== "graph"}>`.
+> - **Bug 13 (L passthrough's outgoing arrow showed 8B):** producer-
+>   side counterpart of the passthrough chip fix.
+> - **Bug 14 (round.1 ks replica outside Rounds group):** spine-
+>   replica designation now requires source.parent === consumer.parent
+>   in `replicateHighFanoutSources`.
+>
+> **Two findings DEFERRED to `docs/plans/graph-vertical-flow.md`**:
+> - Slice 6 (NEW): R-half visible split — show R_in branching into
+>   both F-function AND the bypass that becomes new_L.
+> - Slice 7 (NEW): L / R color-coding in inspector + arrows.
+>
+> **One finding pinned for future work**: `e2e/des-phase-6e-self-
+> smoke.spec.ts` checkpoint 9 pins the spec-only URL share bug
+> (recipient lands on AES-128 selector + key-size error). Memory
+> `project_share_url_cipher_selector_bug.md` carries the
+> reproduction + two proposed fix paths.
 >
 > **Phase 5 detail (preserved from earlier):** (including the two
 > 5a/5b polish items the original Phase 5 fell short on).

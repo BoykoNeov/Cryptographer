@@ -1038,6 +1038,19 @@ export const App = () => {
         <Show when={cipherMode() === "cbc"}>
           <IvInput format={fmt()} />
         </Show>
+        {/* Result line sits adjacent to plaintext/key in the inputs row
+            (was previously below the button strip — Phase 6e smoke
+            finding 2026-05-20: a single visual neighbourhood of "what
+            went in, what came out" reads faster than scanning past the
+            action buttons to find the ciphertext). The label flips to
+            "plaintext" in decrypt mode (`outputLabel()` derives from
+            `mode()`), so the result row mirrors whichever input is
+            currently the cipher's output. */}
+        <Show when={!error() && outputText()}>
+          <div class="result inputs-result">
+            {outputLabel()} ({fmt()}): <code>{outputText()}</code>
+          </div>
+        </Show>
         <button type="button" onClick={run}>
           run
         </button>
@@ -1148,19 +1161,21 @@ export const App = () => {
         </Show>
       </section>
 
-      {/* ─── Errors and result hex ───────────────────────────────────── */}
+      {/* ─── Errors (result moved into the inputs row, 2026-05-20) ──── */}
       <Show when={error()}>
         <div class="error">{error()}</div>
       </Show>
 
-      <Show when={!error() && outputText()}>
-        <div class="result">
-          {outputLabel()} ({fmt()}): <code>{outputText()}</code>
-        </div>
+      {/* ─── Trace timeline scrubber ─────────────────────────────────────
+          Hidden in graph view: graph-mode users drive the inspector by
+          clicking nodes/edges, not by scrubbing frame indices, so the
+          slider was carrying no role there. User-flagged 2026-05-20
+          Phase 6e smoke. JSON view also has no use for the slider but
+          historically kept it; preserving that for now and only gating
+          graph mode. */}
+      <Show when={viewMode() !== "graph"}>
+        <TraceTimeline />
       </Show>
-
-      {/* ─── Trace timeline scrubber ─────────────────────────────────── */}
-      <TraceTimeline />
 
       {/* ─── Main trace view: tab bar + per-mode content ─────────────── */}
       <section class="trace-view">
@@ -1359,11 +1374,17 @@ export const App = () => {
         </Switch>
       </section>
 
-      {/* ─── Sidebar: collapsible step tree ─────────────────────────── */}
-      <aside class="step-list-pane">
-        <h2>steps</h2>
-        <StepList />
-      </aside>
+      {/* ─── Sidebar: collapsible step tree ───────────────────────────
+          Hidden in graph view by user request — graph users click nodes
+          directly, so the linear-mode StepList navigation isn't doing
+          work there. Preserved in linear + JSON views. (Phase 6e smoke
+          2026-05-20.) */}
+      <Show when={viewMode() !== "graph"}>
+        <aside class="step-list-pane">
+          <h2>steps</h2>
+          <StepList />
+        </aside>
+      </Show>
 
       {/* ─── Run Explorer modal (Phase 2c). Renders as a sibling so
             it can position fixed across the entire viewport. */}
