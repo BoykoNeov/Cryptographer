@@ -1978,6 +1978,73 @@ export const isReplicaEdge = (
 ): boolean => replicas.isReplica.has(edge.from);
 
 /**
+ * Phase 6b-iii — diagonal X-crossings between Feistel rounds.
+ *
+ * When the source of a state edge is a `feistel-round`'s rejoin synthetic
+ * AND the round's combine kind has the textbook L↔R swap semantic, push
+ * the source attach point to the OPPOSITE side from the target's track
+ * column. The two outgoing edges (one to the next round's L column, one
+ * to its R column) then visually cross — encoding `L_{n+1} = R_n` and
+ * `R_{n+1} = L_n ⊕ F` as a recognizable X between rounds.
+ *
+ * Returns `-1` (push source-x to the LEFT of rejoin center), `+1` (push
+ * RIGHT), or `0` (no shift). The caller scales by a fraction of the
+ * rejoin chip's width so the magnitude matches the chip geometry without
+ * hard-coding pixels here. Sign convention matches `EdgePath`'s
+ * `sx = fromCx + sourceXOffset`.
+ *
+ *   - Target on track 0 (L): return `+1` (source from RIGHT side of
+ *     rejoin → arrow crosses leftward to the L column).
+ *   - Target on track 1 (R): return `-1` (source from LEFT side of
+ *     rejoin → arrow crosses rightward to the R column).
+ *   - All other cases (non-rejoin source, non-swap kind, target outside
+ *     a feistel-round, single-track Feistel): return `0`.
+ *
+ * Today only `feistel-standard` triggers the X. `feistel-no-swap` (DES
+ * round 16, post-Feistel output ordering) returns 0 — the natural
+ * parallel geometry IS the visual encoding of "no swap." The two add-into
+ * variants (`feistel-add-into-left` / `feistel-add-into-right`) also
+ * return 0 today; their pedagogical visual is less standardised and
+ * none of the shipped specs exercise them — add a kind-specific branch
+ * if a future cipher demands it.
+ *
+ * Param shape is structural (ReadonlyMap of the two relevant fields)
+ * so tests can pass hand-rolled fixtures without building a full graph.
+ */
+export const rejoinSwapSourceXSign = (
+  edge: GraphEdge,
+  nodesById: ReadonlyMap<string, GraphNode>,
+  containersById: ReadonlyMap<string, ContainerNode>,
+): -1 | 0 | 1 => {
+  const fromNode = nodesById.get(edge.from);
+  if (fromNode?.synthetic !== "rejoin") return 0;
+  const roundId = fromNode.containerPath[fromNode.containerPath.length - 1];
+  const round = roundId !== undefined ? containersById.get(roundId) : undefined;
+  // Only the swap-bearing kind triggers the X-crossing.
+  if (round?.feistelCombineKind !== "feistel-standard") return 0;
+  const toNode = nodesById.get(edge.to);
+  if (!toNode) return 0;
+  // Target must live INSIDE a feistel-round (the next round's
+  // passthrough or first-track-leaf). An edge to a flat successor
+  // (e.g. round.16:rejoin → final-permutation) doesn't get the X.
+  const targetRoundId = toNode.containerPath[toNode.containerPath.length - 1];
+  const targetRound = targetRoundId !== undefined ? containersById.get(targetRoundId) : undefined;
+  if (targetRound?.kind !== "feistel") return 0;
+  const tracks = targetRound.feistelTracks ?? [];
+  // 2-track Feistel only (today). N-way Feistel (Twofish) would need a
+  // generalised mapping; this helper would short-circuit until then.
+  if (tracks.length !== 2) return 0;
+  for (let i = 0; i < tracks.length; i++) {
+    if (tracks[i]?.includes(edge.to)) {
+      // L-target (i === 0): source from rejoin's RIGHT → +1.
+      // R-target (i === 1): source from rejoin's LEFT → -1.
+      return i === 0 ? 1 : -1;
+    }
+  }
+  return 0;
+};
+
+/**
  * Re-exported for tests that want to drive replica placement and the
  * per-consumer port-spreading directly. `consumerPortOffset` reads only
  * the `ConsumerPortAssignment` that `buildConsumerPortAssignment` builds
@@ -3861,9 +3928,29 @@ export const GraphView = () => {
     // tail emerges from a non-centred point on the replica's bottom
     // edge. Row 0 stays centred. Zero for non-replicas and single-
     // source graphs.
-    const sourceXOffset = createMemo(() =>
-      replicaSourceXOffset(edge, replicaPlacement(), consts().REPLICA_SOURCE_X_STEP),
-    );
+    //
+    // Phase 6b-iii — diagonal X-crossings between Feistel rounds. When
+    // the source is a `feistel-round`'s rejoin synthetic and the
+    // round's combineKind has the swap semantic, `rejoinSwapSourceXSign`
+    // returns ±1 to push the source attach to the OPPOSITE side from
+    // the target's track column. Combined here with the replica
+    // offset (additive — the two effects are independent in practice
+    // since a rejoin is never a replica). The 0.25 × box-width
+    // magnitude lands the start point well inside the chip so
+    // EdgePath's clamp doesn't kick in, while still being a clearly
+    // off-center departure that the eye reads as "this edge starts
+    // from the R side of the chip" without explanation.
+    const sourceXOffset = createMemo(() => {
+      const replicaShift = replicaSourceXOffset(
+        edge,
+        replicaPlacement(),
+        consts().REPLICA_SOURCE_X_STEP,
+      );
+      const swapSign = rejoinSwapSourceXSign(edge, nodesById(), containersById());
+      const fromB = fromBox();
+      const swapShift = swapSign === 0 || !fromB ? 0 : swapSign * fromB.w * 0.25;
+      return replicaShift + swapShift;
+    });
     // Whether this edge originates from a fan-out replica. Gates the
     // straight-line path variant + the start-dot render inside
     // EdgePath.

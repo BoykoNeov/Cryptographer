@@ -1025,14 +1025,49 @@ becomes a real pain point.
     track loop). If browser smoke says it looks asymmetric vs the
     body-bearing R column, add a layout pass that centers the
     passthrough on R's midpoint. Not in 6b-ii's scope.
-  - **6b-iii pending** — diagonal X-crossings between rounds (user
-    pick: diagonal X over S-curves). Renderer routing: the
-    `roundN:rejoin → roundN+1:rejoin` (L-passthrough carrier) and
-    `roundN:rejoin → roundN+1.expand-R` (R carrier) edges are
-    already both emitted by `processFeistelRound` for empty L
-    tracks; once 6b-ii lands these edges naturally terminate at
-    the L passthrough chip and the diagonal X falls out of normal
-    layout instead of needing a renderer hack.
+  - **6b-iii SHIPPED** (this commit) — diagonal X-crossings
+    between Feistel rounds, encoding the swap semantic visually.
+    Implementation is renderer-only — graph.ts already emits the
+    two `roundN:rejoin → roundN+1:*` edges (L target =
+    `roundN+1:passthrough-0` after 6b-ii; R target =
+    `roundN+1.expand-R`). The renderer adds a source-x shift so
+    the two arrows EXIT the rejoin chip from opposite sides:
+    L-target arrow exits the rejoin's RIGHT side (encoding
+    `L_{n+1} = R_n`); R-target arrow exits its LEFT side
+    (encoding `R_{n+1} = L_n ⊕ F`). Visually the two arrows form
+    an X between rounds.
+    - New pure helper `rejoinSwapSourceXSign(edge, nodesById,
+      containersById) → -1 | 0 | 1` in GraphView.tsx. Returns
+      `+1` for L-target-from-rejoin under `feistel-standard`
+      (push source-x right), `-1` for R-target same kind (push
+      left), `0` otherwise (non-rejoin source, non-swap kind,
+      target outside a feistel-round, not 2-track).
+    - Composed into `renderBundle`'s `sourceXOffset` memo additive
+      with `replicaSourceXOffset`: `swapShift = sign × fromBox.w
+      × 0.25` (quarter-chip-width, well inside EdgePath's clamp
+      so the start point stays in the box). A rejoin is never a
+      replica in practice so the two contributions don't compete.
+    - `feistel-no-swap` (DES round 16) returns 0 — natural
+      parallel arrows ARE the visual encoding of no-swap.
+      `feistel-add-into-{left,right}` also return 0 (no shipped
+      cipher uses them; their pedagogical visual is less
+      standardised — branch when a future cipher demands it).
+    - 6 new unit tests in `tests/rejoin-swap-source-x.test.tsx`
+      (pure helper, hand-rolled `nodesById`/`containersById`
+      fixtures, no GraphView render). Covers: standard L+R, no-swap
+      both directions, non-rejoin source, target outside feistel-round
+      (e.g. `round.16:rejoin → final-permutation`), add-into-left.
+      Test file is `.tsx` + `@vitest-environment jsdom` because
+      importing from `GraphView.tsx` pulls in Solid's
+      `delegateEvents` which touches `window`.
+    - Geometric assertion in `graph-view-des-feistel.test.tsx` (the
+      DOM-side smoke check that the SVG path's `M sx,sy` actually
+      lands on the expected side) intentionally deferred — the
+      EdgePath path-string format is brittle to regenerate; the
+      jsdom value is the BUILD result, not the visual that
+      reaches the user. Manual browser smoke at Phase 6e is the
+      discriminating check.
+    - Total: 1533 tests, bundle 513.0 → 513.6 KB.
 - **Phase 6d** — per-track drop gutters. **Blocked on
   `insertStepIntoTrack(roundId, trackIdx, position, newStep)` +
   `StepLocation` widening** (currently `spec-mutations.ts` lines
@@ -1041,6 +1076,6 @@ becomes a real pain point.
   and append-only-variant.
 - **Phase 6e** — comprehensive manual browser smoke pass.
 
-**Bundle:** 504 KB → 513.0 KB over the session. Soft Vite warning
+**Bundle:** 504 KB → 513.6 KB over the session. Soft Vite warning
 non-blocking; lazy-loading the Feistel components is the obvious
 response if it gets worse.
