@@ -1143,40 +1143,69 @@ const layoutNode = (
     return box;
   }
 
-  // Feistel-round (Phase 6a of the DES + branching primitive plan): two
-  // (or more, for future n-way Feistel) tracks stacked vertically inside
-  // the container, each track flowing left-to-right. L track on top, R
-  // track below — matches canvas's global LTR flow with the textbook
-  // diagram's top-to-bottom semantics rotated 90° clockwise into rows.
+  // Feistel-round (Phase 6 of the DES + branching primitive plan):
+  // tracks rendered as SIDE-BY-SIDE COLUMNS inside the container. L
+  // column on the left, R column on the right (textbook Feistel
+  // convention, user-confirmed 2026-05-20); within each column, chips
+  // stack VERTICALLY downward. Each round's intra-flow direction
+  // matches the project precedent — AES/Speck/Serpent all stack
+  // rounds vertically in their parent `kind: "group"`, so chips
+  // flowing downward inside a feistel round reads continuously with
+  // the inter-round spine when DES's "Rounds" group also stacks
+  // vertically.
   //
-  // The rejoin synthetic id lives in `container.childIds` alongside the
-  // per-track children (see `graph.ts:515`), but it is NOT a member of
-  // any `feistelTracks[t]` entry. Iteration over flat `childIds` for
-  // layout purposes must therefore skip it; Phase 6b will place it
-  // explicitly at the container's right edge. For Phase 6a we lay out
-  // ONLY the per-track children — the rejoin chip is omitted from the
-  // canvas this commit and the spine arrows that touch it are still
-  // rendered by the existing edge pipeline (they just point at the id
-  // without a visible node box; harmless for a "doesn't crash" baseline).
+  // Phase 6a-revision history: the original Phase 6a layout
+  // (commit `513e97e`) used stacked rows (L row on top, R row on
+  // bottom, chips flow LTR). That was the plan's "rotate 90° CW"
+  // version, picked under the assumption that Feistel rounds would
+  // live in LTR-flow parents. The interim browser smoke
+  // (2026-05-20) showed the empty L row reading as wasted space
+  // rather than "L passes through unchanged" — user reported
+  // "(c) nothing there." Per advisor's recommendation and user
+  // pick of textbook convention + side-by-side columns, this branch
+  // is the revised geometry.
   //
-  // Replicas in track bodies aren't supported in this slice — the only
-  // shipped feistel cipher (DES) doesn't replicate any source into a
-  // track today. If a future cipher does, the same lift-and-stack
-  // machinery the iterate branch uses below will need to thread per-track.
+  // The rejoin synthetic id lives in `container.childIds` alongside
+  // the per-track children (see `graph.ts:515`), but it is NOT a
+  // member of any `feistelTracks[t]` entry. Iteration over
+  // `feistelTracks` for layout purposes therefore skips it; its box
+  // stays unset, so the leaf render pass's `<Show when={box()}>`
+  // omits it from the DOM. Phase 6b will place it explicitly at the
+  // round's bottom edge (or right, for future iterate-contained
+  // Feistel — direction-aware placement per user pick Q1=C).
+  //
+  // Empty tracks (DES's L track in every round) still reserve LEAF_W
+  // of column width so the two-column structure remains visible.
+  // Phase 6b adds a passthrough chip into empty columns to label
+  // the role per user pick on L visualization (a passthrough chip
+  // beats a labeled-empty-column or a thin identity line for visual
+  // symmetry with the populated column).
+  //
+  // Replicas in track bodies aren't supported in this slice — DES
+  // doesn't replicate any source into a track today (Playwright
+  // diagnostic confirmed zero `@->` ids in the DES graph). If a
+  // future cipher does, the iterate-branch lift-and-stack machinery
+  // below will need to thread per-track.
   if (container.kind === "feistel") {
     const tracks = container.feistelTracks ?? [];
-    const trackInnerX = startX + consts.CONTAINER_PAD;
-    let trackInnerY = startY + HEADER_H + consts.CONTAINER_PAD;
-    let maxTrackRight = trackInnerX;
-    let lastTrackBottom = trackInnerY;
+    let colX = startX + consts.CONTAINER_PAD;
+    const colYStart = startY + HEADER_H + consts.CONTAINER_PAD;
+    // Floor maxColBottom at one LEAF_H below the column start so an
+    // all-empty-tracks round (hypothetical, no shipped spec produces
+    // it today) still gets a visible container box.
+    let maxColBottom = colYStart + consts.LEAF_H;
+    let lastColRight = colX + consts.LEAF_W;
     for (const trackChildren of tracks) {
-      let rowMaxBottom = trackInnerY + consts.LEAF_H;
-      let rowInnerX = trackInnerX;
+      let chipY = colYStart;
+      // Floor each column's right edge at LEAF_W so an empty column
+      // (DES's L track) still reserves visible width for the
+      // upcoming passthrough chip.
+      let colMaxRight = colX + consts.LEAF_W;
       for (const childId of trackChildren) {
         const childBox = layoutNode(
           childId,
-          rowInnerX,
-          trackInnerY,
+          colX,
+          chipY,
           containersById,
           pinned,
           out,
@@ -1184,19 +1213,23 @@ const layoutNode = (
           replicas,
           relativePins,
         );
-        rowInnerX = childBox.x + childBox.w + consts.FLOW_GAP;
-        const childBottom = childBox.y + childBox.h;
-        if (childBottom > rowMaxBottom) rowMaxBottom = childBottom;
+        chipY = childBox.y + childBox.h + consts.STACK_GAP;
         const childRight = childBox.x + childBox.w;
-        if (childRight > maxTrackRight) maxTrackRight = childRight;
+        if (childRight > colMaxRight) colMaxRight = childRight;
       }
-      lastTrackBottom = rowMaxBottom;
-      // Advance to the next track's row. STACK_GAP between tracks reads
-      // as "two parallel computations" rather than a single dense row.
-      trackInnerY = rowMaxBottom + consts.STACK_GAP;
+      // colBottom = last chip's bottom edge (chipY trails by one
+      // STACK_GAP after the loop). For empty tracks, fall back to
+      // the floor so this column doesn't collapse the round's height.
+      const colBottom =
+        trackChildren.length > 0 ? chipY - consts.STACK_GAP : colYStart + consts.LEAF_H;
+      if (colBottom > maxColBottom) maxColBottom = colBottom;
+      if (colMaxRight > lastColRight) lastColRight = colMaxRight;
+      // Advance to the next column. FLOW_GAP between columns
+      // (horizontal gap matches iterate-flow convention).
+      colX = colMaxRight + consts.FLOW_GAP;
     }
-    const w = Math.max(maxTrackRight, trackInnerX + consts.LEAF_W) - startX + consts.CONTAINER_PAD;
-    const h = lastTrackBottom - startY + consts.CONTAINER_PAD;
+    const w = lastColRight - startX + consts.CONTAINER_PAD;
+    const h = maxColBottom - startY + consts.CONTAINER_PAD;
     const box: Box = { x: startX, y: startY, w, h };
     out.set(id, box);
     return box;
