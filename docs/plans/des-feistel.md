@@ -40,17 +40,17 @@
 >   frame — the panel's per-frame active-K_i highlight already
 >   syncs dynamically via `frame.auxRead`.
 >
-> **Phase 5 manual smoke STILL pending.** Per `[[feedback-jsdom-pointer-events-gap]]`,
-> jsdom synthetic clicks bypass CSS hit-testing — the mini diagram's
-> SVG `<g>` click handlers, the scrubber strip's `pointer-events: none`,
-> the round-key panel's hover wiring, AND now the cross-panel
-> provenance overlay are all jsdom-only-tested. A 5-minute browser
-> pass on DES (scrub onto a round body, click leaves in the mini
-> diagram, click a row in the key-schedule explorer, hover the
-> scrubber strip while clicking through, AND hover an after-cell in
-> the active step's view to confirm the FeistelTrackContext lights
-> up the corresponding R_in cells) is the remaining gate before
-> Phase 6 starts.
+> **Phase 5 manual smoke CONFIRMED 2026-05-20** by user. Browser
+> pass on DES covered: scrub onto a round body; click leaves in
+> `<FeistelMiniDiagram />`; click rows in `<DesKeyScheduleExplorer />`;
+> hover the scrubber strip while clicking through; hover an
+> after-cell on the expand-R frame and confirmed the
+> `<FeistelTrackContext />` lights up the corresponding R_in cells
+> (and stayed clean on later track steps per the intentionally
+> narrow gate); clicked the new sidebar `⇄ rejoin` entries; R-track
+> auto-expanded on round expand. Phase 6 entry gate now fully
+> closed — both code-side prerequisites and the jsdom-untested
+> behavior in real browsers are verified.
 >
 > Originally drafted 2026-05-19; architecture direction (DES first +
 > true branching, per Path C) approved by user. Multi-phase: 6 phases,
@@ -596,33 +596,38 @@ appears for rejoin frames, no chip for root-scope frames.
 
 ### Phase 6 — Graph view branched layout + smoke
 
-> **Entry gate (added 2026-05-20, user-confirmed; partially closed
-> same day):** Do NOT start Phase 6 until BOTH of the following are
-> resolved:
+> **Entry gate (added 2026-05-20, user-confirmed; fully closed same
+> day):** Both prerequisites for starting Phase 6 are resolved:
 >
-> 1. **STILL PENDING**: Manual browser smoke pass on Phase 5 in DES.
->    Scrub onto a round body; click leaves in `<FeistelMiniDiagram />`
->    (including the new K_i subscript labels — they're SVG `<text>`,
->    not clickable, but verify they render and line up next to
->    xor-K); click a row in `<DesKeyScheduleExplorer />`; hover the
->    scrubber strip while clicking through; hover an `after` cell in
->    the active step's view to confirm the FeistelTrackContext lights
->    up the corresponding R_in cell (only for expand-R frames per the
->    Phase 5a polish's "first-step-of-track" gate). Per
->    `[[feedback-jsdom-pointer-events-gap]]` the SVG `<g>` clicks and
->    `pointer-events: none` strip are jsdom-only-tested — the smoke
->    is the discriminating check.
+> 1. **CLOSED 2026-05-20**: Manual browser smoke pass on Phase 5 in
+>    DES confirmed by user. Covered: scrub onto a round body; click
+>    leaves in `<FeistelMiniDiagram />` (including verifying the K_i
+>    subscript labels render and line up next to xor-K); click rows
+>    in `<DesKeyScheduleExplorer />`; hover the scrubber strip while
+>    clicking through; hover an `after` cell in the active step's
+>    view to confirm `<FeistelTrackContext />` lights up the
+>    corresponding R_in cell (and stays clean on later track steps
+>    per the intentionally narrow first-step-of-track gate); click
+>    the new sidebar `⇄ rejoin` entries; verify R-track auto-expand
+>    on round expand. Per `[[feedback-jsdom-pointer-events-gap]]` the
+>    SVG `<g>` clicks and `pointer-events: none` strip were
+>    jsdom-only-tested — the smoke was the discriminating check.
 > 2. **CLOSED 2026-05-20**: The two deferred 5a/5b polish items
 >    (cell-level provenance overlay on FeistelTrackContext; K_i ↔
 >    xor-K cross-reference in FeistelMiniDiagram) landed in the
 >    "Phase 5 deferred polish items" commit referenced above. 7 new
 >    tests pin both behaviors (5 in `feistel-track-context.test.tsx`,
->    2 in `feistel-mini-diagram.test.tsx`).
+>    2 in `feistel-mini-diagram.test.tsx`). The follow-up StepList
+>    sidebar UX commit added a clickable rejoin row + R-track
+>    default-expand (4 more tests).
 >
 > Both are pre-conditions because Phase 6 will rely on parts of the
 > Phase 5 surface (linear-mode scrubber → graph leaf click coupling,
 > provenance hover plumbing across views) that need to be confirmed
-> working in a real browser first.
+> working in a real browser first. Per
+> `[[feedback-iterative-slice-review]]`, re-consult advisor before
+> starting Phase 6 with the current state of the codebase + Phase 6
+> design in hand.
 
 Render-time work for the `feistel-round` container on the graph
 canvas. Builds on the existing `iterate` rendering machinery —
