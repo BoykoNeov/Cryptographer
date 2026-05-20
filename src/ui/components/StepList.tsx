@@ -1,6 +1,6 @@
 /**
- * Sidebar step list. Renders the spec tree (groups + leaves) — *not* the
- * flat trace frames — so groups can be collapsed.
+ * Sidebar step list. Renders the spec tree — *not* the flat trace frames —
+ * so groups (and Feistel rounds with their tracks) can be collapsed.
  *
  * Behavior:
  *   - Groups are collapsed by default
@@ -10,28 +10,26 @@
  *   - Clicking a leaf navigates the timeline to that step's frame
  *   - Disabled (greyed out) leaves indicate the spec contains a step that
  *     never produced a frame — shouldn't happen for valid runs
+ *
+ * Node-kind dispatch (see `NodeRow`):
+ *   - `step`           → LeafRow (clickable, scrubs to frame)
+ *   - `feistel-round`  → FeistelRow (round + per-track sub-rows). Tracks
+ *     have no spec id of their own; their auto-expand fires when a child
+ *     id intersects `activeAncestors`. Lands with DES (Phase 5 of
+ *     `docs/plans/des-feistel.md`); FeistelRoundGroup's `.tracks` shape
+ *     is incompatible with GroupRow's `.children` access, so a separate
+ *     renderer was required to avoid a `Cannot read properties of
+ *     undefined` crash when the active frame is inside a round body.
+ *   - `group` / `iterate` → GroupRow (both expose `.children` with the
+ *     same shape; iterate's iteration semantics are runtime concerns
+ *     and don't change the sidebar's "collapsible tree of leaves" view)
  */
 
-import type { StepNode } from "@/core/types";
+import { canonicalStepId } from "@/core/step-id";
+import type { FeistelRoundGroup, StepNode } from "@/core/types";
 import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
 import { useSpec } from "../stores/spec";
 import { getTrace, setFrame, useFrameIndex, useTraceVersion } from "../stores/trace";
-
-/**
- * Drop the `:b{i}` per-iteration suffix off a frame stepId, leaving the
- * canonical spec-leaf id. Multi-block modes (ECB/CBC) emit per-block
- * frames with stepIds suffixed by `:b0`, `:b1`, … (see runtime.ts:129);
- * UI surfaces that key off the spec tree need the unsuffixed form to
- * match the spec leaf's own `id`. Safe for non-iterated frames — the
- * lastIndexOf returns −1 and the slice is a no-op.
- */
-const stripBlockSuffix = (stepId: string): string => {
-  const i = stepId.lastIndexOf(":b");
-  if (i === -1) return stepId;
-  // Only treat as block suffix when everything after `:b` is digits.
-  const tail = stepId.slice(i + 2);
-  return /^\d+$/.test(tail) ? stepId.slice(0, i) : stepId;
-};
 
 export const StepList = () => {
   const spec = useSpec();
@@ -41,13 +39,17 @@ export const StepList = () => {
   // Map step id → frame index. Re-keyed when the trace is replaced
   // (post-edit) or the spec changes — both can shift indices around.
   //
-  // Iterate-aware: multi-block modes (ECB/CBC) emit per-iteration frames
-  // with stepIds suffixed `:b{i}` (see runtime.ts:129). The spec leaf's
-  // unsuffixed id never appears as a frame stepId in that case, so the
-  // direct lookup would always miss and the leaf would render disabled.
-  // Workaround: also map the unsuffixed prefix → FIRST matching frame
-  // (block 0). Clicking a leaf jumps to block 0's frame for that step;
-  // the slider/keyboard then moves between blocks within the iteration.
+  // Spec-leaf id → frame index. Built so a leaf's spec id (no runtime
+  // suffix) resolves to the FIRST matching frame, even when the runtime
+  // emits multiple frames per leaf with suffixes:
+  //   - `:b{i}` for per-iteration frames in ECB/CBC iterates (block 0 wins)
+  //   - `:t{name}` for per-track frames inside a feistel-round (e.g. DES's
+  //     `round.1.expand-R:tR` resolves to spec leaf `round.1.expand-R`)
+  //   - both at once for a feistel-round nested inside an iterate
+  //
+  // `canonicalStepId` from `@/core/step-id` is the single source of truth
+  // for stripping every suffix family — keeps this code from drifting as
+  // new suffix families are added (`:rejoin` already, `:swap` reserved).
   const frameIndexByStepId = createMemo(() => {
     void version();
     const map = new Map<string, number>();
@@ -55,29 +57,31 @@ export const StepList = () => {
     if (t) {
       for (const f of t.frames) {
         map.set(f.stepId, f.index);
-        const colonB = f.stepId.lastIndexOf(":b");
-        if (colonB !== -1) {
-          const prefix = f.stepId.slice(0, colonB);
-          // First-wins so the leaf points at block 0, not the last block.
-          if (!map.has(prefix)) map.set(prefix, f.index);
+        const canonical = canonicalStepId(f.stepId);
+        if (canonical !== f.stepId && !map.has(canonical)) {
+          // First-wins so the leaf points at the earliest matching
+          // frame (block 0, track 0, etc.).
+          map.set(canonical, f.index);
         }
       }
     }
     return map;
   });
 
-  // The active step's group path, including the step's own id at the end.
-  // Used by NodeRow to decide which groups to auto-expand.
+  // The active step's group path, including the step's own canonical id
+  // at the end. Used by NodeRow / FeistelTrackRow to decide which
+  // containers auto-expand.
   //
-  // The stepId on an iterated frame is `<spec-leaf-id>:b{i}` — strip the
-  // suffix so groups containing the active leaf still resolve as "on
-  // path" inside an iterate body.
+  // Strip ALL runtime suffixes via `canonicalStepId` so the lookup
+  // matches the spec leaf id regardless of whether the frame is per-block,
+  // per-track, both, or a synthetic rejoin (which canonicalizes to the
+  // round id — keeping the round container highlighted when scrubbed).
   const activeAncestors = createMemo<readonly string[]>(() => {
     void version();
     const t = getTrace();
     const f = t?.frames[frameIndex()];
     if (!f) return [];
-    return [...f.path, stripBlockSuffix(f.stepId)];
+    return [...f.path, canonicalStepId(f.stepId)];
   });
 
   return (
@@ -107,11 +111,33 @@ type NodeRowProps = {
   activeAncestors: readonly string[];
 };
 
+/**
+ * Dispatch by node.kind. The three rendered cases:
+ *   - "step"           → LeafRow (single button, scrubs to frame)
+ *   - "feistel-round"  → FeistelRow (round header + per-track sub-groups)
+ *   - "group" / "iterate" → GroupRow (both have a `.children: readonly StepNode[]`
+ *     shape, so the same renderer handles them; iterate's iteration semantics
+ *     are runtime concerns, not sidebar concerns)
+ *
+ * Read `node.kind` inline (not into a captured `const`) so Solid's reactivity
+ * picks up spec edits that swap a leaf into a group, etc.
+ */
 const NodeRow = (props: NodeRowProps) => (
   <Show
     when={props.node.kind === "step"}
     fallback={
-      <GroupRow {...(props as NodeRowProps & { node: Extract<StepNode, { kind: "group" }> })} />
+      <Show
+        when={props.node.kind === "feistel-round"}
+        fallback={
+          <GroupRow
+            {...(props as NodeRowProps & {
+              node: Extract<StepNode, { kind: "group" | "iterate" }>;
+            })}
+          />
+        }
+      >
+        <FeistelRow {...(props as NodeRowProps & { node: FeistelRoundGroup })} />
+      </Show>
     }
   >
     <LeafRow {...(props as NodeRowProps & { node: Extract<StepNode, { kind: "step" }> })} />
@@ -149,7 +175,9 @@ const LeafRow = (props: NodeRowProps & { node: Extract<StepNode, { kind: "step" 
   );
 };
 
-const GroupRow = (props: NodeRowProps & { node: Extract<StepNode, { kind: "group" }> }) => {
+const GroupRow = (
+  props: NodeRowProps & { node: Extract<StepNode, { kind: "group" | "iterate" }> },
+) => {
   // Initially expanded if this group is on the active path. A user-driven
   // collapse sticks until activeAncestors actually changes again.
   const [expanded, setExpanded] = createSignal(props.activeAncestors.includes(props.node.id));
@@ -189,6 +217,164 @@ const GroupRow = (props: NodeRowProps & { node: Extract<StepNode, { kind: "group
             />
           )}
         </For>
+      </Show>
+    </>
+  );
+};
+
+/**
+ * `feistel-round` sidebar row. Renders the round header (collapsible)
+ * containing one sub-row per track. Tracks themselves act as nested
+ * groups labelled "{name} track" (e.g. "L track", "R track" for DES);
+ * a track's children are the F-internal leaves (E-expand, XOR-K, S-boxes,
+ * P-permute on DES's R track) or empty (DES's L passthrough).
+ *
+ * Why a nested-track sub-group, not a flat list: Phase 5 of the
+ * docs/plans/des-feistel.md plan surfaces L/R track membership in every
+ * other linear-mode component (track-context panel, mini diagram, rejoin
+ * view, scrubber badges). The sidebar should match — flattening the
+ * tracks would contradict the pedagogy that "L and R evolve independently
+ * inside a round body."
+ *
+ * Auto-expand:
+ *   - Round expands when its `id` is in `activeAncestors` (same rule as
+ *     GroupRow), so picking a frame inside the round opens it.
+ *   - Track expands when ANY of its children's ids is in
+ *     `activeAncestors`. Tracks have no spec id of their own — they're a
+ *     structural detail of FeistelRoundGroup — so we can't reuse the
+ *     "ancestor id match" trick from GroupRow.
+ *
+ * Empty tracks (DES's L) render with a "passthrough" hint in place of a
+ * child list so users see the track exists but had no children to run.
+ */
+const FeistelRow = (props: NodeRowProps & { node: FeistelRoundGroup }) => {
+  const [expanded, setExpanded] = createSignal(props.activeAncestors.includes(props.node.id));
+
+  createEffect(() => {
+    if (props.activeAncestors.includes(props.node.id)) {
+      setExpanded(true);
+    }
+  });
+
+  // Total leaf count across all tracks — shown next to the round label
+  // to mirror GroupRow's `children.length` count chip.
+  const totalLeafCount = (): number =>
+    props.node.tracks.reduce((sum, t) => sum + t.children.length, 0);
+
+  return (
+    <>
+      <button
+        type="button"
+        class="group-row feistel-round-row"
+        classList={{ "on-path": props.activeAncestors.includes(props.node.id) }}
+        style={{ "padding-left": `${props.depth * 12 + 8}px` }}
+        onClick={() => setExpanded(!expanded())}
+        title={`${props.node.id}\nfeistel-round (${props.node.combineKind})`}
+      >
+        <span class="group-chevron">{expanded() ? "▼" : "▶"}</span>
+        <span class="group-label">{props.node.label ?? props.node.id}</span>
+        <span class="group-count muted">{totalLeafCount()}</span>
+      </button>
+      <Show when={expanded()}>
+        <For each={props.node.tracks}>
+          {(track, trackIdx) => (
+            <FeistelTrackRow
+              node={props.node}
+              track={track}
+              trackIndex={trackIdx()}
+              depth={props.depth + 1}
+              frameIndexByStepId={props.frameIndexByStepId}
+              activeFrameIndex={props.activeFrameIndex}
+              activeAncestors={props.activeAncestors}
+            />
+          )}
+        </For>
+      </Show>
+    </>
+  );
+};
+
+/**
+ * One track's sub-group inside a `feistel-round` row. Tracks have no spec
+ * id of their own; auto-expand is computed by intersecting child ids with
+ * `activeAncestors`. The "L track"/"R track" label uses `track.name` when
+ * present (DES declares both), falling back to "track {index}" for
+ * unnamed tracks (kept for forward compat with toy specs).
+ */
+const FeistelTrackRow = (props: {
+  node: FeistelRoundGroup;
+  track: FeistelRoundGroup["tracks"][number];
+  trackIndex: number;
+  depth: number;
+  frameIndexByStepId: Map<string, number>;
+  activeFrameIndex: number;
+  activeAncestors: readonly string[];
+}) => {
+  // Set of child ids on this track. Any membership match flips the track
+  // open. Recompute lazily to react to spec edits (a track gaining/losing
+  // a leaf should re-derive the set).
+  const childIds = createMemo<ReadonlySet<string>>(
+    () => new Set(props.track.children.map((c) => c.id)),
+  );
+  const containsActive = (): boolean => {
+    const ids = childIds();
+    for (const ancestor of props.activeAncestors) {
+      if (ids.has(ancestor)) return true;
+    }
+    return false;
+  };
+
+  // Empty tracks (DES's L passthrough) start expanded — the passthrough
+  // hint is the only thing to show and there's nothing to hide.
+  // Populated tracks start collapsed unless they contain the active leaf.
+  const [expanded, setExpanded] = createSignal(
+    props.track.children.length === 0 || containsActive(),
+  );
+
+  createEffect(() => {
+    if (containsActive()) setExpanded(true);
+  });
+
+  const trackLabel = (): string => `${props.track.name ?? `track ${props.trackIndex}`} track`;
+
+  return (
+    <>
+      <button
+        type="button"
+        class="group-row feistel-track-row"
+        classList={{ "on-path": containsActive() }}
+        style={{ "padding-left": `${props.depth * 12 + 8}px` }}
+        onClick={() => setExpanded(!expanded())}
+        title={`${props.node.id} · ${trackLabel()}`}
+      >
+        <span class="group-chevron">{expanded() ? "▼" : "▶"}</span>
+        <span class="group-label">{trackLabel()}</span>
+        <span class="group-count muted">{props.track.children.length}</span>
+      </button>
+      <Show when={expanded()}>
+        <Show
+          when={props.track.children.length > 0}
+          fallback={
+            <div
+              class="step-row-passthrough muted small"
+              style={{ "padding-left": `${(props.depth + 1) * 12 + 8}px` }}
+            >
+              (passthrough — no steps)
+            </div>
+          }
+        >
+          <For each={props.track.children}>
+            {(child) => (
+              <NodeRow
+                node={child}
+                depth={props.depth + 1}
+                frameIndexByStepId={props.frameIndexByStepId}
+                activeFrameIndex={props.activeFrameIndex}
+                activeAncestors={props.activeAncestors}
+              />
+            )}
+          </For>
+        </Show>
       </Show>
     </>
   );

@@ -2358,6 +2358,25 @@ button:disabled {
   font-style: italic;
 }
 
+/* Feistel-round + track sub-group rows. Visually subordinate to the
+   round; tracks use a slightly thinner / muted label so the round
+   header still reads as the dominant row even when both are expanded. */
+.feistel-round-row .group-label {
+  font-weight: 600;
+}
+
+.feistel-track-row .group-label {
+  font-size: 10px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.step-row-passthrough {
+  padding: 3px 8px;
+  font-size: 10px;
+  font-style: italic;
+}
+
 /* ─── Slice 2: view-mode tabs (linear / graph / JSON) ─────────────────────
    Tab bar sits above the trace-view content. Three buttons; the active one
    gets the accent border/background combo so it reads as "selected." The

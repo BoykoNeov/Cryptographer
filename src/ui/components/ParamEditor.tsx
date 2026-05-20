@@ -14,7 +14,7 @@
 
 import { findStep } from "@/core/spec-mutations";
 import { gfMatInverse4x4 } from "@/core/state/gf-matrix";
-import type { Json, StepLeaf } from "@/core/types";
+import type { Json, StepLeaf, StepNode } from "@/core/types";
 import { For, Match, Show, Switch, createMemo, createSignal } from "solid-js";
 import {
   editAllStepsByType,
@@ -70,16 +70,27 @@ export const ParamEditor = (props: Props) => {
     if (!s) return 0;
     // Count how many leaves share this step's type — used by the
     // "Apply to all N steps" button label.
+    //
+    // Must descend into every container kind: `group`, `iterate` (same
+    // `.children` shape), AND `feistel-round` (which exposes
+    // `.tracks[*].children` instead). Pre-DES this only handled `group`
+    // — so an iterate-bound leaf would under-count (latent gap; no
+    // shipped cipher exercised it) and a feistel-round-bound leaf would
+    // miss entirely. Both fixed here in the same walker so future
+    // container kinds can be added without re-discovering the pattern.
     let count = 0;
-    const visit = (
-      nodes: readonly { kind: string; type?: string; children?: readonly unknown[] }[],
-    ): void => {
+    const visit = (nodes: readonly StepNode[]): void => {
       for (const node of nodes) {
-        if (node.kind === "step" && node.type === s.type) count++;
-        else if (node.kind === "group") visit(node.children as never);
+        if (node.kind === "step") {
+          if (node.type === s.type) count++;
+        } else if (node.kind === "feistel-round") {
+          for (const track of node.tracks) visit(track.children);
+        } else {
+          visit(node.children);
+        }
       }
     };
-    visit(spec().steps as never);
+    visit(spec().steps);
     return count;
   };
 
