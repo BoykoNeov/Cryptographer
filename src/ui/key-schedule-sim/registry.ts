@@ -21,6 +21,7 @@
  */
 
 import { type AesScheduleTrace, simulateAesKeySchedule } from "./aes";
+import { type DesScheduleTrace, type DesSimParams, simulateDesKeySchedule } from "./des";
 import { type SerpentScheduleTrace, simulateSerpentKeySchedule } from "./serpent";
 
 /**
@@ -48,6 +49,10 @@ export type ScheduleSimulator =
   | {
       readonly kind: "serpent";
       readonly simulate: (masterKey: Uint8Array) => SerpentScheduleTrace;
+    }
+  | {
+      readonly kind: "des";
+      readonly simulate: (masterKey: Uint8Array, params: DesSimParams) => DesScheduleTrace;
     };
 
 /**
@@ -77,6 +82,13 @@ const REGISTRY = new Map<string, ScheduleSimulator>([
     {
       kind: "serpent",
       simulate: simulateSerpentKeySchedule,
+    },
+  ],
+  [
+    "des.key-schedule@1",
+    {
+      kind: "des",
+      simulate: simulateDesKeySchedule,
     },
   ],
 ]);

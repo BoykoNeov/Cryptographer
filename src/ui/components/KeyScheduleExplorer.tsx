@@ -30,8 +30,9 @@
 
 import type { ByteFormat } from "@/core/format";
 import type { Json, TraceFrame } from "@/core/types";
-import { For, Show, createMemo } from "solid-js";
+import { For, Match, Show, Switch, createMemo } from "solid-js";
 import type { AesScheduleTrace, AesScheduleWord, AesStage } from "../key-schedule-sim/aes";
+import type { DesScheduleRound, DesScheduleTrace } from "../key-schedule-sim/des";
 import {
   type AesSimParams,
   type ScheduleSimulator,
@@ -39,6 +40,7 @@ import {
 } from "../key-schedule-sim/registry";
 import type { SerpentScheduleTrace, SerpentStage } from "../key-schedule-sim/serpent";
 import { useByteFormat } from "../stores/format";
+import { getTrace, setFrame, useTraceVersion } from "../stores/trace";
 import { ByteRow, formatByteInline, formatBytes } from "./byte-row";
 
 type Props = {
@@ -68,12 +70,22 @@ export const KeyScheduleExplorer = (props: Props) => {
         }
       >
         {(sim) => (
-          <Show
-            when={sim().kind === "aes"}
-            fallback={<SerpentExplorer frame={props.frame} fmt={fmt()} />}
-          >
-            <AesExplorer frame={props.frame} fmt={fmt()} />
-          </Show>
+          // Per-kind dispatch. `Switch`/`Match` over `sim().kind` keeps
+          // the three branches symmetric and makes adding a fourth
+          // cipher's explorer mechanical (one Match arm). AES + Serpent
+          // were a nested Show pair when only two kinds existed; the
+          // pair couldn't extend cleanly when DES joined.
+          <Switch fallback={<div class="muted small">unknown simulator kind: {sim().kind}</div>}>
+            <Match when={sim().kind === "aes"}>
+              <AesExplorer frame={props.frame} fmt={fmt()} />
+            </Match>
+            <Match when={sim().kind === "serpent"}>
+              <SerpentExplorer frame={props.frame} fmt={fmt()} />
+            </Match>
+            <Match when={sim().kind === "des"}>
+              <DesExplorer frame={props.frame} fmt={fmt()} />
+            </Match>
+          </Switch>
         )}
       </Show>
     </section>
@@ -616,3 +628,205 @@ const PadStageView = (props: {
 // `<ByteRow>` lives in `./byte-row` so the StepNarration component
 // renders byte sequences with the same visual rhythm as the
 // key-schedule explorer's pad-stage / round-key views.
+
+// ─── DES branch (Phase 5e of `docs/plans/des-feistel.md`) ────────────
+
+/**
+ * DES key-schedule explorer. Renders the per-round table that makes
+ * the FIPS 46-3 §5 schedule legible:
+ *
+ *   | Round | Shift | C_i (28 bits) | D_i (28 bits) | K_i (48 bits = 6 bytes) |
+ *
+ * Each row is clickable — scrubs to that round's first body frame in
+ * the trace (the round's `expand-R` step in DES; falls back to the
+ * round container's first frame if expand-R isn't present, e.g. a
+ * future cipher using the same primitive with a different leaf set).
+ *
+ * The header section shows the master key bytes + C_0 / D_0 (pre-shift
+ * halves after PC-1) so the reader can see what "the schedule starts
+ * from" before the per-round shifts kick in.
+ *
+ * Pattern from AES's per-word swimlane: simulator output drives the
+ * render; click-to-scrub uses the round id (`round.{N}`) — same naming
+ * the runtime emits.
+ */
+const DesExplorer = (props: { frame: TraceFrame; fmt: ByteFormat }) => {
+  const keyAuxName = createMemo(() => readKeyAuxName(props.frame.params));
+  const masterKey = createMemo<Uint8Array | null>(() => {
+    const v = props.frame.auxRead.get(keyAuxName());
+    if (!(v instanceof Uint8Array)) return null;
+    if (v.length !== 8) return null;
+    return v;
+  });
+
+  const params = createMemo(() => readDesParams(props.frame.params));
+
+  const trace = createMemo<DesScheduleTrace | null>(() => {
+    const key = masterKey();
+    const p = params();
+    if (!key || !p) return null;
+    try {
+      const sim = lookupScheduleSimulator(props.frame.stepType);
+      if (!sim || sim.kind !== "des") return null;
+      return sim.simulate(key, p);
+    } catch {
+      // Bad params shape — render the inline fallback rather than
+      // crashing the linear pane.
+      return null;
+    }
+  });
+
+  return (
+    <Show
+      when={trace()}
+      fallback={
+        <div class="key-schedule-explorer-error muted">
+          DES key-schedule simulator could not run — verify the master key is 8 bytes and the
+          PC-1/PC-2/shifts params are present.
+        </div>
+      }
+    >
+      {(getTrace) => (
+        <div class="key-schedule-des">
+          <div class="key-schedule-des-header">
+            <div class="key-schedule-des-label">master key (8 bytes)</div>
+            <ByteRow bytes={masterKey() ?? new Uint8Array(0)} fmt={props.fmt} />
+            <div class="key-schedule-des-half-pair">
+              <div class="key-schedule-des-half">
+                <div class="key-schedule-des-label">C_0 (28 bits)</div>
+                <ByteRow bytes={packBitsForDisplay(getTrace().C0bits)} fmt={props.fmt} />
+              </div>
+              <div class="key-schedule-des-half">
+                <div class="key-schedule-des-label">D_0 (28 bits)</div>
+                <ByteRow bytes={packBitsForDisplay(getTrace().D0bits)} fmt={props.fmt} />
+              </div>
+            </div>
+            <p class="muted small">
+              PC-1 strips the 8 parity bits (positions 8, 16, …, 64) and shuffles the remaining 56
+              into two 28-bit halves. Each round left-rotates both halves by 1 or 2 positions, then
+              PC-2 selects 48 of the 56 bits as K_i.
+            </p>
+          </div>
+          <table class="key-schedule-des-table">
+            <thead>
+              <tr>
+                <th>round</th>
+                <th>shift</th>
+                <th>cumulative</th>
+                <th>C_i</th>
+                <th>D_i</th>
+                <th>K_i (48 bits)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <For each={getTrace().rounds}>
+                {(round) => <DesRoundRow round={round} fmt={props.fmt} />}
+              </For>
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Show>
+  );
+};
+
+/**
+ * Pull the DES key-schedule params (`pc1`, `pc2`, `shifts`) out of a
+ * frame's params payload. All three are number-arrays of fixed length;
+ * returns null on any shape miss so the explorer can render its inline
+ * fallback rather than throwing.
+ */
+const readDesParams = (
+  paramsJson: Json,
+): { pc1: readonly number[]; pc2: readonly number[]; shifts: readonly number[] } | null => {
+  if (typeof paramsJson !== "object" || paramsJson === null || Array.isArray(paramsJson)) {
+    return null;
+  }
+  const p = paramsJson as Record<string, unknown>;
+  const isNumArray = (v: unknown): v is number[] =>
+    Array.isArray(v) && v.every((n) => typeof n === "number");
+  if (!isNumArray(p.pc1) || !isNumArray(p.pc2) || !isNumArray(p.shifts)) return null;
+  return { pc1: p.pc1, pc2: p.pc2, shifts: p.shifts };
+};
+
+/**
+ * Pack a bit array (each entry 0 or 1) into bytes for ByteRow display.
+ * MSB-first to match FIPS convention. Used for the C_0/D_0 header rows
+ * and the per-round C_i/D_i ribbons.
+ */
+const packBitsForDisplay = (bits: readonly number[]): Uint8Array => {
+  const out = new Uint8Array(Math.ceil(bits.length / 8));
+  for (let i = 0; i < bits.length; i++) {
+    if (bits[i]) {
+      const idx = i >> 3;
+      out[idx] = (out[idx] ?? 0) | (1 << (7 - (i & 7)));
+    }
+  }
+  return out;
+};
+
+/**
+ * One row in the DES key-schedule table. Renders the round number,
+ * shift count, cumulative shifts, the two 28-bit halves, and K_i.
+ * Clicking the row scrubs the trace to that round's `expand-R` frame
+ * (the first body frame in DES's round). Falls back to the round
+ * container's id if expand-R isn't found (future Feistel ciphers with
+ * different leaf names won't have it).
+ */
+const DesRoundRow = (props: { round: DesScheduleRound; fmt: ByteFormat }) => {
+  const version = useTraceVersion();
+  const targetFrameIndex = createMemo<number | null>(() => {
+    void version();
+    const t = getTrace();
+    if (!t) return null;
+    // Prefer the round's first body frame for the click target. DES's
+    // first body frame is the R-track's expand-R; round.{N}.expand-R:tR
+    // is its full stepId.
+    const r = props.round.round;
+    const expandR = t.frames.findIndex((f) => f.stepId.startsWith(`round.${r}.expand-R`));
+    if (expandR !== -1) return expandR;
+    // Fallback: the rejoin frame (always exists for a feistel-round).
+    const rejoin = t.frames.findIndex((f) => f.stepId === `round.${r}:rejoin`);
+    return rejoin === -1 ? null : rejoin;
+  });
+
+  const handleClick = (): void => {
+    const idx = targetFrameIndex();
+    if (idx !== null) setFrame(idx);
+  };
+  // Keyboard accessibility — Enter / Space mirror the click.
+  const handleKey = (e: KeyboardEvent): void => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      handleClick();
+    }
+  };
+
+  return (
+    <tr
+      class="key-schedule-des-row"
+      classList={{ "key-schedule-des-row-clickable": targetFrameIndex() !== null }}
+      onClick={handleClick}
+      onKeyDown={handleKey}
+      tabindex={targetFrameIndex() !== null ? 0 : undefined}
+      title={
+        targetFrameIndex() !== null
+          ? `scrub to round ${props.round.round}'s first body frame`
+          : `round ${props.round.round} not in current trace`
+      }
+    >
+      <td class="key-schedule-des-round-cell">{props.round.round}</td>
+      <td class="key-schedule-des-shift-cell">{props.round.shift}</td>
+      <td class="key-schedule-des-cumulative-cell">{props.round.cumulativeShift}</td>
+      <td>
+        <ByteRow bytes={props.round.Cbytes} fmt={props.fmt} />
+      </td>
+      <td>
+        <ByteRow bytes={props.round.Dbytes} fmt={props.fmt} />
+      </td>
+      <td>
+        <ByteRow bytes={props.round.K} fmt={props.fmt} />
+      </td>
+    </tr>
+  );
+};

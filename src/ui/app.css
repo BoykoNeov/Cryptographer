@@ -2491,6 +2491,88 @@ button:disabled {
   border-radius: 4px;
 }
 
+/* ─── DES key-schedule explorer (Phase 5e) ────────────────────────────
+   Per-round table: round | shift | cumulative | C_i | D_i | K_i. Rows
+   are clickable — scrub to that round's first body frame. Shares the
+   `key-schedule-byte-cell` namespace via <ByteRow> so the byte rhythm
+   matches AES + Serpent explorers. */
+
+.key-schedule-des {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.key-schedule-des-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev-1);
+}
+
+.key-schedule-des-label {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.key-schedule-des-half-pair {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.key-schedule-des-half {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.key-schedule-des-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 11px;
+}
+
+.key-schedule-des-table th,
+.key-schedule-des-table td {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.key-schedule-des-table th {
+  background: var(--bg-elev-1);
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--muted);
+}
+
+.key-schedule-des-row-clickable {
+  cursor: pointer;
+}
+
+.key-schedule-des-row-clickable:hover {
+  background: var(--bg-elev-2);
+}
+
+.key-schedule-des-round-cell,
+.key-schedule-des-shift-cell,
+.key-schedule-des-cumulative-cell {
+  font-family: var(--mono, monospace);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  width: 1%;
+  white-space: nowrap;
+}
+
 /* ─── Slice 2: view-mode tabs (linear / graph / JSON) ─────────────────────
    Tab bar sits above the trace-view content. Three buttons; the active one
    gets the accent border/background combo so it reads as "selected." The
