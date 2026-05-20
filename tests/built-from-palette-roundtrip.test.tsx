@@ -362,4 +362,147 @@ describe("Slice 11 — palette-built spec round-trips through Save/Load", () => 
       expect(Array.from(traceAfterLoad.finalState.bytes)).toEqual(aesFinalStateBytes);
     }
   });
+
+  // DES Phase 6d-vi — same round-trip property exercised against the
+  // first cipher whose graph drops can target a Feistel track. The
+  // L track of a DES round is empty in canonical form, so the
+  // `into-track-start` anchor is the only way to author a leaf
+  // there. Aux primitives are state-passthrough, so the DES
+  // ciphertext stays byte-equal to the canonical FIPS 46-3 vector
+  // even after the L track gets a user-added step.
+  it("DES round.5 L-track palette insert + params + layout pin survive Save → reset → Load, " +
+    "and the DES ciphertext stays byte-equal across the boundary", async () => {
+    // ── Phase A — open the app, switch to DES via the cipher
+    // selector (so the App's plaintext/key auto-swap fires), then
+    // type the FIPS 46-3 Appendix B vector explicitly and run.
+    // The cipher-selector path is the one users take; the store
+    // setter alone doesn't trigger App.tsx's input auto-swap.
+    const { container, unmount } = render(() => <App />);
+    const cipherSelect = (() => {
+      const labels = Array.from(container.querySelectorAll("label"));
+      const lbl = labels.find((l) => l.textContent?.trim().startsWith("cipher"));
+      if (!lbl) throw new Error("cipher select label not found");
+      const s = lbl.querySelector("select");
+      if (!s) throw new Error("cipher select not found");
+      return s;
+    })();
+    fireEvent.change(cipherSelect, { target: { value: "des" } });
+    // Type the FIPS 46-3 Appendix B vector explicitly so we don't
+    // depend on whatever the auto-swap heuristic happened to set.
+    const ptInput = (() => {
+      const labels = Array.from(container.querySelectorAll("label"));
+      const lbl = labels.find((l) => l.textContent?.trim().startsWith("plaintext"));
+      if (!lbl) throw new Error("plaintext label not found");
+      const i = lbl.querySelector("input");
+      if (!i) throw new Error("plaintext input not found");
+      return i;
+    })();
+    fireEvent.input(ptInput, { target: { value: "0123456789abcdef" } });
+    const keyInput = (() => {
+      const labels = Array.from(container.querySelectorAll("label"));
+      const lbl = labels.find((l) => l.textContent?.trim().startsWith("key"));
+      if (!lbl) throw new Error("key label not found");
+      const i = lbl.querySelector("input");
+      if (!i) throw new Error("key input not found");
+      return i;
+    })();
+    fireEvent.input(keyInput, { target: { value: "133457799bbcdff1" } });
+    setViewMode("graph");
+    fireEvent.click(findButton(container, "run"));
+    expect(container.querySelector(".error")).toBeNull();
+    const baselineTrace = getTrace();
+    if (!baselineTrace) throw new Error("DES baseline run did not produce a trace");
+    const baselineCiphertext =
+      baselineTrace.finalState.shape === "bytes"
+        ? Array.from(baselineTrace.finalState.bytes)
+        : null;
+    expect(baselineCiphertext, "DES final state must be BytesState").not.toBeNull();
+    if (!baselineCiphertext) return;
+
+    // ── Phase B — palette-author into round.5's empty L track ─────
+    // The drop pathway via DataTransfer is already pinned by
+    // `tests/graph-view-feistel-drop-gutters.test.tsx`; this test
+    // exercises the store boundary directly to keep the assertion
+    // surface tight.
+    insertStepIntoSpec("generic.aux-load@1", {
+      kind: "into-track-start",
+      roundId: "round.5",
+      trackIdx: 0,
+    });
+    const specWithInsert = useSpec()();
+    const insertLoc = findStepAndParent(specWithInsert, "aux-load-1");
+    expect(insertLoc, "L-track insert must exist").not.toBeNull();
+    expect(insertLoc?.parent?.kind).toBe("feistel-round");
+    expect(insertLoc?.parent?.id).toBe("round.5");
+    expect(insertLoc?.trackIdx).toBe(0);
+    expect(insertLoc?.indexInParent).toBe(0);
+
+    // ── Phase C — edit the leaf's params ──────────────────────────
+    // aux-load writes the named aux without touching state; the
+    // value's literal bytes are pedagogical only. The L track's
+    // 4-byte BytesState passes through unchanged.
+    editStepParams("aux-load-1", {
+      auxName: "l-track-witness",
+      value: [0xde, 0xad, 0xbe, 0xef],
+    });
+
+    // ── Phase D — pin a layout position on the inserted id ────────
+    const specId = useSpec()().id;
+    setNodePosition(specId, "aux-load-1", 480, 220);
+
+    // ── Phase E — re-run; ciphertext must stay byte-equal ─────────
+    fireEvent.click(findButton(container, "run"));
+    const traceAfterAuthoring = getTrace();
+    if (!traceAfterAuthoring) throw new Error("DES authored-spec run did not produce a trace");
+    if (traceAfterAuthoring.finalState.shape === "bytes") {
+      expect(Array.from(traceAfterAuthoring.finalState.bytes)).toEqual(baselineCiphertext);
+    }
+
+    // ── Phase F — Save with include-session ON ────────────────────
+    fireEvent.click(findIncludeSessionCheckbox(container));
+    expect(findIncludeSessionCheckbox(container).checked).toBe(true);
+    fireEvent.click(findButton(container, "save"));
+    const savedBlob = saveCapture.blobs.at(-1);
+    if (!savedBlob) throw new Error("DES save did not produce a blob");
+    const savedText = await savedBlob.text();
+
+    // ── Phase G — full reset + remount ────────────────────────────
+    unmount();
+    cleanup();
+    resetAll();
+    const { container: c2 } = render(() => <App />);
+    expect(getLayoutForSpec(specId)).toBeNull();
+    // Default canonical spec post-reset is AES-128, not DES — the
+    // L-track insert is definitely gone.
+    expect(findStep(useSpec()(), "aux-load-1")).toBeNull();
+
+    // ── Phase H — Load + verify ───────────────────────────────────
+    driveLoad(c2, savedText);
+    await waitFor(() => {
+      expect(findStep(useSpec()(), "aux-load-1")).not.toBeNull();
+    });
+    const loadedSpec = useSpec()();
+    const loadedLoc = findStepAndParent(loadedSpec, "aux-load-1");
+    expect(loadedLoc?.parent?.kind).toBe("feistel-round");
+    expect(loadedLoc?.parent?.id).toBe("round.5");
+    expect(loadedLoc?.trackIdx).toBe(0);
+    expect(loadedLoc?.indexInParent).toBe(0);
+    if (loadedLoc?.node.kind === "step") {
+      expect(loadedLoc.node.type).toBe("generic.aux-load@1");
+      expect(loadedLoc.node.params).toEqual({
+        auxName: "l-track-witness",
+        value: [0xde, 0xad, 0xbe, 0xef],
+      });
+    }
+    const restoredLayout = getLayoutForSpec(specId);
+    expect(restoredLayout).not.toBeNull();
+    expect(restoredLayout?.positions["aux-load-1"]).toEqual({ x: 480, y: 220 });
+
+    // Ciphertext still matches the baseline FIPS vector.
+    const traceAfterLoad = getTrace();
+    if (!traceAfterLoad) throw new Error("DES load did not produce a trace");
+    if (traceAfterLoad.finalState.shape === "bytes") {
+      expect(Array.from(traceAfterLoad.finalState.bytes)).toEqual(baselineCiphertext);
+    }
+  });
 });

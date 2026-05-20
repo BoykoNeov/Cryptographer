@@ -1,9 +1,9 @@
 # DES + branching primitive — first Feistel cipher
 
-> **Status: Phases 1–5 + 6a-revision + 6c + 2 universal fixes shipped
-> 2026-05-19 / 2026-05-20.** Phase 6b / 6d / 6e remain. See "Phase 6
-> session log (2026-05-20)" section at bottom of this file for the
-> commit-by-commit trail.
+> **Status: Phases 1–5 + 6a-revision + 6b + 6c + 6d + 2 universal fixes
+> shipped 2026-05-19 / 2026-05-20.** Only **Phase 6e (manual browser
+> smoke pass)** remains. See "Phase 6 session log (2026-05-20)"
+> section at bottom of this file for the commit-by-commit trail.
 >
 > **Phase 5 detail (preserved from earlier):** (including the two
 > 5a/5b polish items the original Phase 5 fell short on).
@@ -1068,13 +1068,67 @@ becomes a real pain point.
       reaches the user. Manual browser smoke at Phase 6e is the
       discriminating check.
     - Total: 1533 tests, bundle 513.0 → 513.6 KB.
-- **Phase 6d** — per-track drop gutters. **Blocked on
-  `insertStepIntoTrack(roundId, trackIdx, position, newStep)` +
-  `StepLocation` widening** (currently `spec-mutations.ts` lines
-  548, 643, 1062 treat feistel-round as opaque). User picked
-  "build full per-track structural editing" over descope-to-readonly
-  and append-only-variant.
+- **Phase 6d SHIPPED** — per-track drop gutters across seven commits.
+  Plan file at `~/.claude/plans/swirling-meandering-barto.md` (the
+  6d-specific plan; this file is the umbrella plan). Sub-commits:
+  - **6d-i** (`474fc71`) — `transformParentArray` walker descends
+    into a feistel-round's tracks. `insertStepAfter` / `Before` /
+    `removeStep` / `reorderStep` now work on track-resident step
+    ids without new exports. Reference-equality discipline pinned
+    by test (`tracks.map(t => i === idx ? { ...t, children: new
+    } : t)` — untouched tracks keep their refs so the spec
+    store's debounced effect doesn't re-run trace on every track
+    edit). 1533 → 1544 tests.
+  - **6d-ii** (`6ae23ef`) — `StepLocation` widens its `parent`
+    union to `StepGroup | IterateGroup | FeistelRoundGroup | null`
+    + optional `trackIdx?: number`. `findStepAndParent` descends
+    per-track and reports `{ parent: roundNode, trackIdx,
+    indexInParent }` for track-resident matches. Callsite audit
+    (3 production): `isRoundDuplicatable` + `duplicateRoundGroup`
+    bail with defensive throws on the impossible-today feistel-
+    parent case; `FeistelMiniDiagram::lookupRoundForFrame`
+    unaffected (reads loc.node only). 5 new tests; 1544 → 1549.
+  - **6d-iii** (`14183cb`) — new `prependChildToTrack(spec,
+    roundId, trackIdx, newStep) → spec` primitive. Sibling to
+    `prependChildToContainer`; parameterized by `trackIdx`
+    because a feistel-round has no unambiguous default body.
+    `prependChildToContainer`'s feistel branch now throws with a
+    pointer to the new primitive (was: "resolves to a leaf"). 10
+    new tests; 1549 → 1559.
+  - **6d-iv** (`6f5714c`) — new `into-track-start` anchor variant
+    in `insertStepIntoSpec`. Routes to `prependChildToTrack` with
+    the same try/catch fallback the `into-start` branch uses for
+    unexpected throws. 5 new store-level tests; 1559 → 1564.
+  - **6d-v** (`7019b99`) — `dropGutters` memo emits per-track
+    gutters: empty L track gets ONE sentinel encoded
+    `into-track-start:roundId#trackIdx` (`#` separator avoids
+    ambiguating the existing `:`-prefix split); populated R track
+    gets standard before/between/after horizontal strips using
+    real chip ids. Synthetic ids (passthrough, rejoin) and
+    replicas filtered out of the gutter walk. `handleDrop` parses
+    the new prefix. Horizontal-flow parent (Feistel-inside-
+    iterate, no shipped cipher) documented but deferred. 6 new
+    tests; 1564 → 1570.
+  - **6d-vi** (test-only) — DES round-trip test extending
+    `tests/built-from-palette-roundtrip.test.tsx`: switch cipher
+    selector to DES, palette-author into round.5's L track,
+    edit params, pin layout, Save with include-session, reset,
+    Load, verify track membership + params + layout pin all
+    survive AND DES ciphertext stays byte-equal to baseline.
+  - **6d-vii inter-track-gap dispatch fix** (advisor-flagged blind
+    spot in self-checks). The plan promised "drop on inter-track
+    gap → insert AFTER round in parent" (user-picked). Actual
+    behavior pre-fix: chain hit `prependChildToContainer` →
+    throws on feistel (6d-iii's improved error) → store fallback
+    root-appended the leaf. `handleDrop` now special-cases
+    `anchorContainer.kind === "feistel"` to route to
+    `{kind: "after", stepId: roundId}` directly. Test
+    `inter-track-gap drop` pins the "leaf lands in `rounds` group
+    at indexInParent === roundN" semantic so a future refactor
+    can't silently regress it.
 - **Phase 6e** — comprehensive manual browser smoke pass.
+  Pre-conditions: 6a-vi roundtrip test passes (✓), inter-track
+  gap regression test passes (✓), all sub-commits on `main`.
 
 **Bundle:** 504 KB → 513.6 KB over the session. Soft Vite warning
 non-blocking; lazy-loading the Feistel components is the obvious

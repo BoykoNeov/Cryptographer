@@ -167,6 +167,35 @@ describe("GraphView — feistel per-track drop gutters (6d-v)", () => {
     expect(loc?.indexInParent).toBe(4); // after p-permute (last, was at index 3)
   });
 
+  it("drop on the feistel-round container (inter-track gap / header) inserts AFTER the round in its parent — " +
+    "not into a track, not root-appended via the prependChildToContainer-throws fallback", () => {
+    // Inter-track gap UX (DES plan Phase 6d, user-picked): drops
+    // that fall through to the round chip's outer `data-drop-anchor`
+    // should land "after this round in its parent" (the `rounds`
+    // group's children, for DES). Without the dispatch
+    // special-case, `prependChildToContainer` would throw on the
+    // feistel-round kind (6d-iii's clearer error) and the store's
+    // try/catch fallback would root-append — silently mis-scoping
+    // the drop. Pin the explicit "after" semantic so a future
+    // refactor of either branch can't silently regress it.
+    const { container } = render(() => <GraphView />);
+    // Find the round.4 container's data-drop-anchor element. The
+    // anchor lives on the round chip's outer `<g>` per
+    // ContainerRect's `data-drop-anchor={container.id}`.
+    const roundAnchor = container.querySelector('[data-drop-anchor="round.4"]');
+    expect(roundAnchor, "round.4 drop anchor must exist on the chip").not.toBeNull();
+    if (!roundAnchor) return;
+    fireDropAt(roundAnchor, "generic.byte-substitution@1");
+    // Expected landing: as a child of the `rounds` group, at the
+    // position immediately after round.4 (i.e. index 4, since the
+    // group's children are round.1..round.16 at indices 0..15).
+    const loc = findStepAndParent(useSpec()(), "byte-substitution-1");
+    expect(loc, "inter-track-gap drop must land in the spec").not.toBeNull();
+    expect(loc?.parent?.kind).toBe("group");
+    expect(loc?.parent?.id).toBe("rounds");
+    expect(loc?.indexInParent).toBe(4); // immediately after round.4
+  });
+
   it("does not emit gutters for the synthetic passthrough or rejoin ids", () => {
     const { container } = render(() => <GraphView />);
     // The L-track passthrough id is in feistelTracks[0], but the gutter

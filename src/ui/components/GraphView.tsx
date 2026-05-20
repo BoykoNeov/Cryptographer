@@ -3719,8 +3719,26 @@ export const GraphView = () => {
     const anchored = target?.closest?.("[data-drop-anchor]") ?? null;
     const anchorId = anchored?.getAttribute("data-drop-anchor") ?? null;
     if (anchorId !== null && anchorId.length > 0) {
-      if (containersById().has(anchorId)) {
-        insertStepIntoSpec(stepType, { kind: "into-start", containerId: anchorId });
+      const anchorContainer = containersById().get(anchorId);
+      if (anchorContainer !== undefined) {
+        // A feistel-round has no unambiguous "default body" (no
+        // single track to enter), so the "into-start" semantic from
+        // the group/iterate case doesn't apply. The user-picked
+        // behavior (DES plan, Phase 6d): treat drops on a feistel-
+        // round's header / inter-track gap as "insert AFTER this
+        // round in its parent" — the inverse of the group case but
+        // the correct match for the round's structural role.
+        //
+        // Without this branch the route falls into
+        // `into-start` → `prependChildToContainer` →
+        // throws-on-feistel (6d-iii) → store fallback root-appends
+        // the leaf. That's silent and surprising. Branch makes the
+        // intent explicit.
+        if (anchorContainer.kind === "feistel") {
+          insertStepIntoSpec(stepType, { kind: "after", stepId: anchorId });
+        } else {
+          insertStepIntoSpec(stepType, { kind: "into-start", containerId: anchorId });
+        }
       } else {
         insertStepIntoSpec(stepType, { kind: "after", stepId: anchorId });
       }
