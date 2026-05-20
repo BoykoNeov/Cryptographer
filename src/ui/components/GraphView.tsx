@@ -4567,6 +4567,59 @@ export const GraphView = () => {
               scrub, no delete, no warnings. */}
             <For each={graph().nodes}>
               {(node) => {
+                if (node.synthetic === "passthrough") {
+                  // Phase 6b-ii — render the per-track passthrough
+                  // chip at its track-column position (`layoutNode`'s
+                  // feistel branch places it as a regular leaf in the
+                  // empty track since `walkSpec` injected it into
+                  // `feistelTracks[trackIdx]`). Click scrubs to the
+                  // ROUND'S rejoin frame as the nearest semantic
+                  // anchor — the passthrough itself has no frame (the
+                  // identity carries zero new information). Inspector
+                  // selection still toggles on the passthrough's own
+                  // id so a future inspector row can surface the
+                  // chip's track-context.
+                  const ptBox = createMemo(() => layout().boxes.get(node.stepId));
+                  const ptStepId = node.stepId;
+                  const parentRoundId = node.containerPath[node.containerPath.length - 1] ?? "";
+                  // `synthetic === "passthrough"` only emitted from
+                  // `walkSpec`'s feistel-round branch; the id is
+                  // `${roundId}:passthrough-${trackIdx}` per
+                  // `feistelPassthroughId`. Reverse-parse the trackIdx
+                  // out of the id so we can index `feistelTrackNames`
+                  // for the human label (defensive against the
+                  // unlikely null match — fall back to track index 0).
+                  const trackIdx = (() => {
+                    const m = ptStepId.match(/:passthrough-(\d+)$/);
+                    return m?.[1] ? Number(m[1]) : 0;
+                  })();
+                  const trackLabel = createMemo(() => {
+                    const c = containersById().get(parentRoundId);
+                    const names = c?.feistelTrackNames;
+                    return names?.[trackIdx] ?? `track ${trackIdx}`;
+                  });
+                  const rejoinStepIdForRound = `${parentRoundId}:rejoin`;
+                  return (
+                    <Show when={ptBox()}>
+                      {(b) => (
+                        <PassthroughChip
+                          box={b()}
+                          stepId={ptStepId}
+                          trackLabel={trackLabel()}
+                          isSelected={selectedTarget() !== null && isNodeSelected(ptStepId)}
+                          onClick={() => {
+                            // Scrub to the round's rejoin frame
+                            // (passthrough has no frame). Inspector
+                            // selection on the passthrough's own id
+                            // so the user sees what they clicked.
+                            handleLeafClick(rejoinStepIdForRound);
+                            toggleSelectedNode(ptStepId);
+                          }}
+                        />
+                      )}
+                    </Show>
+                  );
+                }
                 if (node.synthetic === "rejoin") {
                   // Phase 6b — render the rejoin synthetic at its
                   // direction-aware position (`layoutNode`'s feistel
@@ -5392,6 +5445,78 @@ const EndpointPill = (props: {
  * to vary the glyph; the plan defers that to a per-kind glyph table
  * once a second kind ships (today DES is the only Feistel user).
  */
+/**
+ * Synthetic passthrough chip — Phase 6b-ii of the DES + branching
+ * primitive plan. Renders the `${roundId}:passthrough-${trackIdx}`
+ * synthetic that `walkSpec` injects into empty tracks (DES's L track
+ * in every round, today). The chip carries the L-track's "passes
+ * through unchanged" semantic — the L column is no longer empty.
+ *
+ * Behavior mirrors `RejoinChip` for synthetic-chip consistency:
+ *   - No `data-drop-anchor`: per-track drop gutters land in Phase 6d
+ *     via dedicated `<rect class="graph-drop-gutter">` strips around
+ *     the chip, not via leaf-level anchors here.
+ *   - No DeleteGlyph: chip isn't user-removable.
+ *   - No warnings overlay: validation skips synthetic ids.
+ *   - No drag: geometry is derived from the track column layout.
+ *   - Click scrubs to the round's rejoin frame (nearest semantic
+ *     anchor — the passthrough has no frame of its own; emitting one
+ *     would carry zero new information × 16 frames/run) AND toggles
+ *     inspector selection on the passthrough id.
+ *
+ * Label uses the track name (e.g. "L passthrough" for DES's track 0)
+ * so the chip reads correctly across N-way Feistels with named tracks.
+ * Falls back to "track {idx} passthrough" for unnamed tracks (toy spec
+ * forward-compat).
+ */
+const PassthroughChip = (props: {
+  box: Box;
+  stepId: string;
+  trackLabel: string;
+  onClick: () => void;
+  isSelected: boolean;
+}) => (
+  <g
+    class="graph-leaf graph-leaf-passthrough"
+    classList={{ "graph-leaf-selected": props.isSelected }}
+    data-testid={`graph-passthrough-${props.stepId}`}
+    tabindex={0}
+    onClick={props.onClick}
+    onKeyDown={(e) => {
+      // Mirror Enter/Space → click for keyboard users. Biome's
+      // useKeyWithClickEvents lint requires this when onClick is set
+      // on a non-button element.
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        props.onClick();
+      }
+    }}
+  >
+    <title>
+      {props.stepId}
+      {"\n"}passthrough — track carries input through unchanged
+    </title>
+    <rect
+      class="graph-leaf-rect"
+      x={props.box.x}
+      y={props.box.y}
+      width={props.box.w}
+      height={props.box.h}
+      rx={4}
+      ry={4}
+    />
+    <text
+      class="graph-leaf-label"
+      x={props.box.x + props.box.w / 2}
+      y={props.box.y + props.box.h / 2}
+      text-anchor="middle"
+      dominant-baseline="central"
+    >
+      {props.trackLabel} passthrough
+    </text>
+  </g>
+);
+
 const RejoinChip = (props: {
   box: Box;
   stepId: string;

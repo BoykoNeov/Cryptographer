@@ -123,6 +123,27 @@ describe("GraphView — DES feistel-round rendering (Phase 6a)", () => {
     expect(asLeaf).toBeNull();
   });
 
+  it("renders a passthrough chip in each round's empty L track (Phase 6b-ii)", () => {
+    const { container } = render(() => <GraphView />);
+    // Phase 6b-ii — the empty L track now carries a synthetic
+    // passthrough chip (`{roundId}:passthrough-{trackIdx}`). Distinct
+    // testid `graph-passthrough-*` so a stray query for `graph-leaf-*`
+    // doesn't pick it up — the chip isn't a leaf and isn't a drop
+    // target (drop gutters land in Phase 6d via dedicated gutter strips).
+    for (const r of [1, 8, 16]) {
+      const pt = container.querySelector(
+        `[data-testid="graph-passthrough-round.${r}:passthrough-0"]`,
+      );
+      expect(pt, `round.${r}:passthrough-0 chip should render`).not.toBeNull();
+    }
+  });
+
+  it('passthrough chip label uses the track name ("L passthrough" for DES)', () => {
+    const { container } = render(() => <GraphView />);
+    const pt = container.querySelector('[data-testid="graph-passthrough-round.1:passthrough-0"]');
+    expect(pt?.textContent).toContain("L passthrough");
+  });
+
   it("places the rejoin chip BELOW the round's track columns (vertical-flow parent)", () => {
     const { container } = render(() => <GraphView />);
     // The "rounds" group is `kind: "group"` (vertical-flow), so the

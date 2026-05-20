@@ -138,20 +138,36 @@ export type GraphNode = {
    */
   readonly blockChipOf?: string;
   /**
-   * Rejoin-synthetic marker (Phase 2 of the DES + branching primitive
-   * plan). Set to `"rejoin"` on the synthetic node representing a
-   * `feistel-round`'s combine step — clickable for the 4-arg inspector
-   * but NOT a spec leaf. The node's stepId is `{roundId}:rejoin`; the
-   * underlying round container is its `containerPath[-1]` (or the
-   * parent scope if the rejoin lives outside its enclosing container).
+   * Synthetic-node marker for `feistel-round` containers (Phase 2 +
+   * Phase 6b-ii of the DES + branching primitive plan).
+   *
+   *   - `"rejoin"` — combine-step chip at the round's bottom/right
+   *     edge. Frame: yes (runtime emits one with the 4-arg snapshots
+   *     in params). StepId: `{roundId}:rejoin`. Click scrubs to the
+   *     rejoin frame + opens the 4-arg inspector.
+   *   - `"passthrough"` — per-track stand-in for an EMPTY track
+   *     (Phase 6b-ii). Frame: no — the passthrough is the identity
+   *     (`L_in === L_out`); emitting a frame would carry zero new
+   *     information at ×16 cost per DES run. StepId:
+   *     `{roundId}:passthrough-{trackIdx}` (trackIdx, not name, so
+   *     N-way Feistel scales cleanly; `feistelTrackNames[trackIdx]`
+   *     supplies the human label). Click scrubs to the round's
+   *     rejoin frame (the nearest semantic anchor) + opens the
+   *     inspector. **Why id-bearing instead of pure-visual** (user
+   *     pick 2026-05-20): Phase 6d's per-track drop gutters get a
+   *     natural anchor, the chip is hoverable/clickable for
+   *     provenance like any other leaf, and the L track IS a real
+   *     algorithmic step (it carries `L_in` through the round).
    *
    * Why a separate discriminator (analogous to `endpointSide` and
-   * `blockChipOf`): the rejoin node renders differently (a chip at the
-   * round's right edge with a combine-kind glyph), is not drop-anchored
-   * as its own id, isn't draggable, isn't deletable. The renderer +
-   * click-routing + inspector all dispatch off this field.
+   * `blockChipOf`): synthetic chips render differently (no
+   * `data-drop-anchor`, no DeleteGlyph, no drag, no warnings overlay),
+   * is not click-deletable, click-routing dispatches off the marker.
+   * Widening from `"rejoin"` to `"rejoin" | "passthrough"` in Phase
+   * 6b-ii — audit `synthetic === "rejoin"` checks before adding
+   * passthrough-specific behavior.
    */
-  readonly synthetic?: "rejoin";
+  readonly synthetic?: "rejoin" | "passthrough";
   /**
    * Spine-replica marker (replica-scope-aware-layout fix, 2026-05-17).
    * Set ONLY on the (source, spineSuccessor) replica produced by
@@ -431,6 +447,25 @@ const ENDPOINT_STEP_TYPE = "__endpoint__";
 export const isEndpointId = (id: string): boolean =>
   id === CIPHER_INPUT_ID || id === CIPHER_OUTPUT_ID;
 
+// ─── Feistel passthrough synthetic (Phase 6b-ii) ───────────────────────
+
+/** Sentinel `stepType` set on synthetic passthrough nodes. Never registered
+ *  in the step registry — the renderer dispatches off `synthetic === "passthrough"`
+ *  instead. Mirrors `__rejoin__` and `__endpoint__`. */
+const PASSTHROUGH_STEP_TYPE = "__passthrough__";
+
+/**
+ * Canonical synthetic id for an empty-track passthrough chip inside a
+ * `feistel-round`. Shared by `walkSpec` (which materializes the node into
+ * `ctx.nodes` + the per-track child list) and `processFeistelRound`
+ * (which routes `predecessor → passthrough → rejoin` edges through it).
+ * Centralizing here keeps both producers + edge-emitters agreeing on
+ * the spelling — and a future Twofish-style N-way Feistel scales by
+ * `trackIdx` (0/1/2/3) rather than re-encoding track names.
+ */
+export const feistelPassthroughId = (roundId: string, trackIdx: number): string =>
+  `${roundId}:passthrough-${trackIdx}`;
+
 // ─── Internal helpers ──────────────────────────────────────────────────────
 
 /**
@@ -491,15 +526,42 @@ const walkSpec = (
     // feistel-round: own branch — walks per-track children and adds a
     // synthetic rejoin node inside the container's scope. Track membership
     // is preserved on the ContainerNode via `feistelTracks`.
+    //
+    // Phase 6b-ii: empty tracks (DES's L track in every round, today) get
+    // a per-track synthetic passthrough node injected into the track's
+    // child list. The passthrough is id-bearing (`{roundId}:passthrough-{trackIdx}`)
+    // so subsequent passes (layout, render, edge-routing) treat it like
+    // any other leaf — `processFeistelRound`'s `predecessor → passthrough
+    // → rejoin` chain replaces the prior `predecessor → rejoin` shortcut,
+    // so the L column's "carries L_in through unchanged" role becomes a
+    // first-class graph entity instead of being implicit in the edge skip.
+    // Passthrough nodes have no trace frame (the identity adds zero info);
+    // the renderer's click handler scrubs to the rejoin frame as the
+    // nearest semantic anchor.
     if (node.kind === "feistel-round") {
       const nestedPath = [...containerPath, node.id];
       const perTrackChildIds: string[][] = [];
       const flatChildIds: string[] = [];
-      for (const track of node.tracks) {
+      node.tracks.forEach((track, trackIdx) => {
         const trackChildren = walkSpec(track.children, nestedPath, ctx);
+        if (trackChildren.length === 0) {
+          // Empty track — synthesize a passthrough chip so the L
+          // column reads as "carries L_in through unchanged" instead
+          // of empty space. Layout treats it as a regular leaf in
+          // the column.
+          const ptId = feistelPassthroughId(node.id, trackIdx);
+          ctx.nodes.push({
+            stepId: ptId,
+            stepType: PASSTHROUGH_STEP_TYPE,
+            label: ptId,
+            containerPath: nestedPath,
+            synthetic: "passthrough",
+          });
+          trackChildren.push(ptId);
+        }
         perTrackChildIds.push(trackChildren);
         flatChildIds.push(...trackChildren);
-      }
+      });
 
       // Rejoin synthetic node — clickable for the 4-arg inspector;
       // NOT a spec leaf. Lives inside the round container's scope so
@@ -1002,8 +1064,16 @@ const inferStateEdges = (spec: CipherSpec): GraphEdge[] => {
    *       - The track's internal chain (via a nested `processScope` over
    *         the track's children).
    *       - `lastSpineId(track.children) → {node.id}:rejoin` (fan-out)
-   *   - For each empty track:
-   *       - `predecessor → {node.id}:rejoin` (passthrough, if predecessor present)
+   *   - For each empty track (Phase 6b-ii):
+   *       - `predecessor → {node.id}:passthrough-{trackIdx}` (fan-in, if predecessor present)
+   *       - `{node.id}:passthrough-{trackIdx} → {node.id}:rejoin` (fan-out)
+   *
+   * Empty-track passthroughs replace the Phase-6a `predecessor → rejoin`
+   * shortcut — the L column now reads as a real link in the spine instead
+   * of an arrow that visually skips the column entirely. The synthetic
+   * passthrough node itself is materialized by `walkSpec`; this function
+   * only routes the edges. Per-track-id consistency is enforced by both
+   * sites calling `feistelPassthroughId(node.id, trackIdx)`.
    *
    * No edge is ever drawn to or from the round's own id — the rejoin
    * synthetic id replaces the round in the parent chain.
@@ -1020,18 +1090,22 @@ const inferStateEdges = (spec: CipherSpec): GraphEdge[] => {
       predecessor !== undefined &&
       !iterateIds.has(predecessor) &&
       !feistelRoundIds.has(predecessor);
-    for (const track of node.tracks) {
+    node.tracks.forEach((track, trackIdx) => {
       const trackFirst = firstSpineId(track.children);
       const trackLast = lastSpineId(track.children);
       if (trackFirst === null) {
-        // Empty track — predecessor passes through directly to the rejoin
-        // (representing the L track's passthrough role in textbook Feistel).
-        // Skipped silently when there's no predecessor (round at the start
-        // of its parent scope).
+        // Empty track — route through the synthetic passthrough chip
+        // `walkSpec` synthesized for this (round, trackIdx) pair. Two
+        // edges: predecessor → passthrough (if predecessor present),
+        // and passthrough → rejoin (always — the chip's outgoing link
+        // is invariant). The chip's identity-of-state semantic is
+        // implicit in the absence of a transform between the two edges.
+        const ptId = feistelPassthroughId(node.id, trackIdx);
         if (canEdgeFromPredecessor && predecessor !== undefined) {
-          edges.push({ from: predecessor, to: rejoinId, auxKey: STATE_AUX_KEY, kind: "state" });
+          edges.push({ from: predecessor, to: ptId, auxKey: STATE_AUX_KEY, kind: "state" });
         }
-        continue;
+        edges.push({ from: ptId, to: rejoinId, auxKey: STATE_AUX_KEY, kind: "state" });
+        return;
       }
       // Fan-in edge: predecessor → first spine id of this track. Suppressed
       // when the predecessor is a boundary node (iterate / feistel) since
@@ -1055,7 +1129,7 @@ const inferStateEdges = (spec: CipherSpec): GraphEdge[] => {
           kind: "state",
         });
       }
-    }
+    });
   };
 
   /**

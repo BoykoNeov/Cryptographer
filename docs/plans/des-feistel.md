@@ -966,7 +966,7 @@ becomes a real pain point.
   `container.childIds` invariant audit + narration/provenance
   registry rows + frame-preservation check + graph-derivation test
   updates.
-  - **6b-i SHIPPED** (this commit) — rejoin chip layout box +
+  - **6b-i SHIPPED** (commit `9d88c49`) — rejoin chip layout box +
     `RejoinChip` render component + direction-aware placement
     (bottom edge for vertical-flow parent / right edge for future
     iterate-contained Feistel, probed via `containersById.get(
@@ -977,8 +977,54 @@ becomes a real pain point.
     vertical-flow); existing "rejoin does NOT render" assertion
     flipped to "rejoin renders". 1524 tests total, all pass; bundle
     509.3 → 511.1 KB.
-  - **6b-ii pending** — id-bearing L passthrough chip (graph.ts +
-    layout + tests).
+  - **6b-ii SHIPPED** (this commit) — id-bearing L passthrough
+    chip. Five-piece change:
+    1. `core/graph.ts` — `synthetic` discriminator widened to
+       `"rejoin" | "passthrough"`; new `feistelPassthroughId(roundId,
+       trackIdx)` helper exported so `walkSpec` (materializer) and
+       `processFeistelRound` (edge-routing) agree on spelling;
+       `walkSpec`'s feistel branch synthesizes a passthrough node
+       per empty track + appends it to `feistelTracks[trackIdx]`;
+       `processFeistelRound` replaces the `predecessor → rejoin`
+       shortcut with the 3-leg chain `predecessor → passthrough →
+       rejoin` (the passthrough → rejoin half is invariant; the
+       predecessor → passthrough half is conditional on a present
+       non-boundary predecessor — same gate as the non-empty-track
+       fan-in).
+    2. `GraphView.tsx` — new `PassthroughChip` component (modeled on
+       `RejoinChip`): no `data-drop-anchor`, no DeleteGlyph, no
+       drag, no warnings. Label `"{trackName} passthrough"` via
+       `feistelTrackNames[trackIdx]` lookup (e.g. "L passthrough"
+       for DES); falls back to `"track N passthrough"` for unnamed.
+       Click scrubs to the round's `:rejoin` frame (nearest semantic
+       anchor — the passthrough has no frame, no information to
+       carry × 16 frames/run) + toggles inspector selection on the
+       passthrough id.
+    3. `GraphView.tsx` render For loop dispatches on
+       `node.synthetic === "passthrough"` before the rejoin branch.
+       trackIdx reverse-parsed from id via `/:passthrough-(\d+)$/`.
+    4. Tests — `des-graph.test.ts` flipped `feistelTracks[0] === []`
+       to `[{roundId}:passthrough-0]` + new test asserting the
+       passthrough node exists with correct containerPath +
+       synthetic marker; `feistel-graph.test.ts` toy spec updated
+       analogously, plus the empty-L-track edge test flipped from
+       "predecessor → rejoin direct" to "predecessor →
+       passthrough-0 → rejoin chain" + a `has("pre", "round.1:rejoin")
+       === false` assertion pinning the shortcut is gone; 2 new
+       render tests in `graph-view-des-feistel.test.tsx` (per-round
+       chip presence + label text).
+    5. Audits done before edits: only ONE `synthetic === "rejoin"`
+       check existed (the one I added in 6b-i); other
+       `container.childIds` walkers in GraphView are gated on
+       `consumerContainer?.kind === "iterate"` so the feistel branch
+       doesn't reach them; `canonicalStepId`'s SUFFIX_PATTERN is
+       untouched (no frames for passthrough → no canonicalization
+       call site). Total: 1527 tests, bundle 511.1 → 513.0 KB.
+  - **6b-ii deferred:** vertical centering of the passthrough chip
+    in the L column (today top-aligned, which falls out of the
+    track loop). If browser smoke says it looks asymmetric vs the
+    body-bearing R column, add a layout pass that centers the
+    passthrough on R's midpoint. Not in 6b-ii's scope.
   - **6b-iii pending** — diagonal X-crossings between rounds (user
     pick: diagonal X over S-curves). Renderer routing: the
     `roundN:rejoin → roundN+1:rejoin` (L-passthrough carrier) and
@@ -995,6 +1041,6 @@ becomes a real pain point.
   and append-only-variant.
 - **Phase 6e** — comprehensive manual browser smoke pass.
 
-**Bundle:** 504 KB → 511.1 KB over the session. Soft Vite warning
+**Bundle:** 504 KB → 513.0 KB over the session. Soft Vite warning
 non-blocking; lazy-loading the Feistel components is the obvious
 response if it gets worse.

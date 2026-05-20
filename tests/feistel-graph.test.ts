@@ -33,7 +33,11 @@ describe("feistel-round graph derivation", () => {
     const round1 = graph.containers.find((c) => c.id === "round.1");
     expect(round1).toBeDefined();
     expect(round1?.kind).toBe("feistel");
-    expect(round1?.feistelTracks).toEqual([[], ["round.1.add-k"]]);
+    // Phase 6b-ii — empty L track now carries a per-track passthrough
+    // synthetic so the L column reads as "carries L_in through
+    // unchanged" instead of empty space. Named via
+    // `feistelPassthroughId(roundId, trackIdx)`.
+    expect(round1?.feistelTracks).toEqual([["round.1:passthrough-0"], ["round.1.add-k"]]);
     expect(round1?.feistelTrackNames).toEqual(["L", "R"]);
     expect(round1?.feistelCombineKind).toBe("feistel-standard");
   });
@@ -64,7 +68,7 @@ describe("feistel-round graph derivation", () => {
     }
   });
 
-  it("fan-in: predecessor edges to R's first leaf AND passthrough-edges to rejoin for empty L", () => {
+  it("fan-in: predecessor edges to R's first leaf AND through the L passthrough chip to rejoin", () => {
     // Build a spec where the round has a CONCRETE predecessor in the
     // parent chain so we can pin the fan-in shape. Layout: a single
     // pre-leaf, then the round, then a single post-leaf.
@@ -88,8 +92,13 @@ describe("feistel-round graph derivation", () => {
       stateEdges.some((e) => e.from === from && e.to === to);
     // Fan-in to R-track first leaf:
     expect(has("pre", "round.1.add-k")).toBe(true);
-    // Empty-L-track passthrough edge: predecessor → rejoin.
-    expect(has("pre", "round.1:rejoin")).toBe(true);
+    // Phase 6b-ii — empty L track is now routed through the
+    // synthetic passthrough chip (`{roundId}:passthrough-{trackIdx}`)
+    // instead of `predecessor → rejoin` directly. Two edges:
+    expect(has("pre", "round.1:passthrough-0")).toBe(true);
+    expect(has("round.1:passthrough-0", "round.1:rejoin")).toBe(true);
+    // The direct predecessor → rejoin shortcut from Phase 6a is gone:
+    expect(has("pre", "round.1:rejoin")).toBe(false);
     // Fan-out from R-track last leaf to rejoin:
     expect(has("round.1.add-k", "round.1:rejoin")).toBe(true);
     // Continuation from rejoin onto the successor:

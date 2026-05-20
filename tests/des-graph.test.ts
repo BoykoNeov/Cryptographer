@@ -30,17 +30,32 @@ describe("DES graph derivation — structural sanity", () => {
     }
   });
 
-  it("each round's R-track carries the 4 F-internal leaves; L-track is empty", () => {
+  it("each round's R-track carries the 4 F-internal leaves; L-track holds a synthetic passthrough chip (Phase 6b-ii)", () => {
     const graph = deriveAuxGraph(emptyTrace, desSpec);
     for (let r = 1; r <= 16; r++) {
       const round = graph.containers.find((c) => c.id === `round.${r}`);
-      expect(round?.feistelTracks?.[0], `round.${r} L track`).toEqual([]);
+      // Phase 6b-ii — empty L tracks now carry a per-track
+      // passthrough synthetic so the L column reads as
+      // "passes through unchanged" instead of empty space.
+      // Naming via `feistelPassthroughId`:
+      // `${roundId}:passthrough-${trackIdx}` (track 0 == L).
+      expect(round?.feistelTracks?.[0], `round.${r} L track`).toEqual([`round.${r}:passthrough-0`]);
       expect(round?.feistelTracks?.[1], `round.${r} R track`).toEqual([
         `round.${r}.expand-R`,
         `round.${r}.xor-K`,
         `round.${r}.s-boxes`,
         `round.${r}.p-permute`,
       ]);
+    }
+  });
+
+  it("synthesizes one passthrough node per empty L track (Phase 6b-ii)", () => {
+    const graph = deriveAuxGraph(emptyTrace, desSpec);
+    for (let r = 1; r <= 16; r++) {
+      const pt = graph.nodes.find((n) => n.stepId === `round.${r}:passthrough-0`);
+      expect(pt, `round.${r}:passthrough-0`).toBeDefined();
+      expect(pt?.synthetic).toBe("passthrough");
+      expect(pt?.containerPath).toEqual(["rounds", `round.${r}`]);
     }
   });
 
