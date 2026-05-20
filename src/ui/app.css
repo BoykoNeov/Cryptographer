@@ -234,6 +234,46 @@ button:disabled {
 
 .trace-timeline input[type="range"] {
   flex: 1;
+  width: 100%;
+}
+
+/* Slider wrap (Phase 5f): holds the range input plus an overlay strip
+   of per-frame track-membership badges. Width matches the input so
+   percentage-based badge positioning lines up with the slider thumb. */
+.trace-timeline-slider-wrap {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.trace-timeline-badge-strip {
+  position: relative;
+  height: 12px;
+  pointer-events: none;
+  margin-bottom: 1px;
+}
+
+.trace-timeline-badge {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-size: 9px;
+  line-height: 1;
+  font-family: var(--mono, monospace);
+  color: var(--muted);
+  user-select: none;
+}
+
+.trace-timeline-badge-track {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.trace-timeline-badge-rejoin {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .frame-counter {

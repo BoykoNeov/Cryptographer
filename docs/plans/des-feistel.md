@@ -1,17 +1,21 @@
 # DES + branching primitive — first Feistel cipher
 
-> **Status: Phases 1+2+3 shipped 2026-05-19** (commits `91f143d`,
-> `6a046d0`, + this commit). Phase 1: oracle + KAT fixture with
-> intermediates. Phase 2: branching primitive in core (`BranchTrack` +
-> `CombineKind` + `FeistelRoundGroup`) + toy Feistel + 19 new tests.
-> **Phase 3: DES step types + encrypt/decrypt specs + KATs.** Seven new
-> step types (`des.initial-permutation@1`, `des.final-permutation@1`,
-> `des.expand-R@1`, `des.xor-with-K@1`, `des.s-boxes@1`,
-> `des.p-permutation@1`, `des.key-schedule@1`) wire FIPS 46-3 into the
-> branching primitive. Schema bump 1→2 **further deferred to Phase 4**
-> (DES isn't user-selectable yet); doc-roundtrip pinned at schema v1.
-> Phases 4–6 pending; advisor pass required before each per
-> `[[feedback-iterative-slice-review]]`.
+> **Status: Phases 1–5 shipped 2026-05-19 / 2026-05-20.** Commits
+> `91f143d` (P1 oracle), `6a046d0` (P2 primitive + toy), `be0bb6a`
+> (P3 step types), `7b584f3` (P4 selector wiring), `9d16c95` (P5-pre
+> StepList walker), `43703e9` (P5c rejoin view), `ef1cd92` (P5e DES
+> key schedule), `1542e79` (P5a track-context), `2c7508c` (P5b mini
+> diagram), `dcf291f` (P5d round-key panel coverage), and the present
+> commit (P5f scrubber badges). Phase 6 (graph-view branched layout +
+> manual smoke) pending.
+>
+> **Phase 5 sub-commit order: 5-pre → 5c → 5e → 5a → 5b → 5d → 5f**
+> (fix-broken-UX-first per advisor: 5c and 5e replaced previously
+> meaningless FrameStateView renders; 5-pre fixed a sidebar crash on
+> DES; the rest are additive on top of working baseline). Phase 5d
+> shipped with no code change — verified the existing 16-byte fallback
+> already renders DES's 6-byte K_i ribbons correctly. Bit-grouped
+> unfold deferred per advisor's "don't over-build" guidance.
 >
 > Originally drafted 2026-05-19; architecture direction (DES first +
 > true branching, per Path C) approved by user. Multi-phase: 6 phases,
