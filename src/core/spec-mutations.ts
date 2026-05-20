@@ -488,14 +488,15 @@ export const findStepAndParent = (spec: CipherSpec, stepId: string): StepLocatio
       if (node.id === stepId) return { node, parent, indexInParent: i };
       if (node.kind === "step") continue;
       if (node.kind === "feistel-round") {
-        // Feistel-round in Phase 2: read-paths descend into tracks for
-        // findStep lookups, but the `parent` returned for a leaf inside a
-        // track must be a StepGroup or IterateGroup (not a FeistelRoundGroup)
-        // by today's `StepLocation` contract. Treat feistel-round as a
-        // descent barrier here: callers that need to locate a leaf inside
-        // a Feistel track use the lower-level `findStep` instead. DES
-        // (Phase 3) will widen the StepLocation type to carry track
-        // membership when the structural editor needs it.
+        // Feistel-round descent for `findStepAndParent` lands in the
+        // next commit (6d-ii), once the `StepLocation` type is widened
+        // to carry `trackIdx` + a `FeistelRoundGroup` parent arm.
+        // Today (post-6d-i): `transformParentArray` already descends
+        // into tracks, so insertStepAfter/Before/removeStep/reorderStep
+        // work on track members. `findStepAndParent` is still a
+        // descent barrier here — track-resident leaves return null.
+        // Callers that just need "does this id exist anywhere" can use
+        // the lower-level `findStep` (which already descends).
         continue;
       }
       const found = visit(node.children, node);
@@ -533,19 +534,33 @@ const transformParentArray = (
       found = true;
       return transform(nodes, idx);
     }
-    // Otherwise recurse into groups/iterates, threading found-state so we
-    // don't accidentally re-visit if the user's spec has an id collision.
+    // Otherwise recurse into groups/iterates/feistel-rounds, threading
+    // found-state so we don't accidentally re-visit if the user's spec
+    // has an id collision.
     let mutated = false;
     const newChildren = nodes.map((n) => {
       if (n.kind === "step" || found) return n;
-      // Feistel-round opacity (Phase 2): the structural mutators (insert,
-      // remove, reorder) treat a `feistel-round` as a leaf — they don't
-      // descend into per-track children. DES (Phase 3) will need
-      // per-track structural support (insertions into the R track of a
-      // round, etc.) which will require a track-aware StepLocation +
-      // splice-into-track helpers. The toy Feistel spec exercised by
-      // Phase 2 tests is built in one shot and never mutated.
-      if (n.kind === "feistel-round") return n;
+      // Feistel-round descent (DES Phase 6d, 2026-05-20). Each track's
+      // `children` array is its own splice site; the walker tries each
+      // track in turn and rebuilds only the affected track + the round
+      // node when a track changes. Untouched tracks must keep their
+      // original references — the spec store's debounced
+      // `createEffect(on(spec, ...))` triggers on any reference change
+      // in the tree, so a flat `tracks.map(t => ({ ...t, children: visit(...) }))`
+      // would spuriously re-run the trace on every track edit.
+      if (n.kind === "feistel-round") {
+        let trackMutated = false;
+        const newTracks = n.tracks.map((track) => {
+          if (found) return track;
+          const updatedTrackChildren = visit(track.children);
+          if (updatedTrackChildren === track.children) return track;
+          trackMutated = true;
+          return { ...track, children: updatedTrackChildren };
+        });
+        if (!trackMutated) return n;
+        mutated = true;
+        return { ...n, tracks: newTracks };
+      }
       const updatedChildren = visit(n.children);
       if (updatedChildren === n.children) return n;
       mutated = true;
@@ -1059,9 +1074,13 @@ const replaceParentChildrenByRef = (
       }
       if (n.kind === "step") return n;
       // AES-only path: `duplicateRoundGroup` (the only caller of this
-      // helper) never targets a parent inside a feistel-round. Treat
-      // feistel-round as opaque for now; Phase 3 will revisit if DES
-      // ever needs a structural splice via this helper.
+      // helper) never targets a parent inside a feistel-round.
+      // Duplicate-round semantics on Feistel aren't designed (DES's
+      // key schedule is global, not per-round-indexed like AES); the
+      // affordance isn't surfaced for DES. So this branch stays
+      // opaque even after 6d-i widened the rest of the structural
+      // mutators with track descent — touching it without a
+      // motivating feature would be premature.
       if (n.kind === "feistel-round") return n;
       const next = visit(n.children);
       if (next === n.children) return n;
