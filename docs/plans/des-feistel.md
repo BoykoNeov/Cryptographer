@@ -1,11 +1,89 @@
 # DES + branching primitive — first Feistel cipher
 
 > **Status: Phases 1–6 shipped 2026-05-19 / 2026-05-21. Phase 6e
-> closed 2026-05-21 with a second bug-fix batch driven by the user's
-> manual browser walkthrough — see "Phase 6e closing batch (2026-05-21)"
-> below for the 5 fixes that landed.** Universal-port-dataflow plan
-> (`docs/plans/universal-port-dataflow.md`) is now unblocked: its
-> "wait for DES Phase 6e to close" gate has been satisfied.
+> partial walk #2 paused 2026-05-21 (this session). M1 confirmed
+> ✅; M2–M7 deferred to a future session. Three new UX findings
+> captured for post-walk action — see "Phase 6e partial walk #2
+> (2026-05-21, mid-walk pause)" note below for details. The earlier
+> Phase 6e closing batch (5 fixes shipped) remains valid; the new
+> findings are pre-existing gaps the closing batch did not address.
+> Universal-port-dataflow plan (`docs/plans/universal-port-dataflow.md`)
+> remains unblocked — the new findings are UX polish/feature work,
+> not regressions, and don't reopen Phase 6e's "wait for DES" gate
+> for the universal-port plan.
+
+> **Phase 6e partial walk #2 (2026-05-21, mid-walk pause).** Second
+> manual session against the manual checklist of 7 items still
+> uncovered by the Playwright self-smoke (see header of
+> `e2e/des-phase-6e-self-smoke.spec.ts`). User chose to walk all 7
+> in order. M1 completed and confirmed; M2 not yet started; walk to
+> resume in a future session.
+>
+> **M1 — S-box edit narration update — ✅ CONFIRMED.** Edit S1[0][0]
+> 0e → 0f via Graph view's ParamEditor, scrub back to round.1.s-boxes
+> in Linear view: the S1 narration disclosure renders concrete
+> `(row, col) → value` prose (`S1[0][12] = 5` for the FIPS Appendix
+> B vector at round 1), no stale state, no broken byte references.
+> Auto-rerun fires (Compare Runs surfaces "round.1.s-boxes: sboxes
+> changed" delta line; new run id appears). The narrated value for
+> S1 is unchanged pre/post-edit only because round.1's lookup hits
+> S1 at (row 0, col 12), not (row 0, col 0) — narration reads the
+> current params correctly, the edit cell just isn't queried in
+> this frame.
+>
+> **Three new UX findings (captured for post-walk-close action):**
+>
+> - **UX-A — pane/disclosure labels missing.** Multiple panes in
+>   linear and graph views lack their own header labels: (1) the
+>   StepNarration pane has no own label; (2) its neighbour pane
+>   (containing Round Entry / Right Now / Round Output sub-sections)
+>   has internal sub-labels but no own label; (3) AES key-expansion's
+>   `<details>` for the S-box has no header label outside the
+>   summary text; compare with the labelled "Abstract Structure"
+>   pane that does carry a header. Single UI polish slice to add
+>   consistent labels across panes + disclosure-containing sections.
+>
+> - **UX-B — graph param editor `<details>` collapses on edit
+>   (DES-local).** Editing a cell inside an expanded S_k disclosure
+>   in `DesSBoxesBlock` causes that `<details>` to close, disrupting
+>   the user's focus. Cross-check confirmed DES-local scope: AES
+>   key-expansion's `<details>` (which wraps the 256-entry SboxEditor)
+>   stays open across cell edits, so the `<Switch>`/`<Match>` re-
+>   evaluation in `ParamEditor` is NOT re-mounting at the block
+>   boundary. Root cause hypothesis: `DesSBoxesBlock` uses
+>   `<For each={sboxes()}>` to map over the 8 S-boxes; each cell
+>   edit produces a new sboxes array with all 8 items at new
+>   references (rows + outer array are spread-copied), so Solid
+>   `<For>`'s reference-equality reconciliation re-mounts all 8
+>   `<details>` elements. Fix candidates: (a) switch `<For>` to
+>   `<Index>` (reconciles by position, item identity becomes an
+>   Accessor) — simplest, ~10 lines; (b) hoist `open` state to a
+>   `(stepId, sboxIndex)`-keyed signal in a parent store. Try (a)
+>   first unless Solid `<Index>` has gotchas with the nested
+>   accessor pattern in this block.
+>
+> - **UX-C — DES S-box Repair button missing.** Inconsistency with
+>   AES SubBytes + Serpent S_i, both of which ship a "Repair to
+>   permutation" button next to the S-box editor. The existing
+>   `DesSBoxesBlock` comment (`ParamEditor.tsx:~1006-1015`)
+>   justifies the omission as "FIPS 46-3 tables ARE the canonical
+>   state and the user can always hit Reset spec to recover" — but
+>   that argument applies word-for-word to AES SubBytes (FIPS-197)
+>   and Serpent S_i, both of which DO ship Repair. The justification
+>   doesn't distinguish DES from its precedents. Right shape: a
+>   per-S-box "Repair S_k to row-permutations" button at the top
+>   of each `<details>`, scoped to that S-box's 4 rows. `repairToPermutation`
+>   is already size-parameterized on `values.length` per the
+>   existing comment, so calling it row-by-row on length-16 rows
+>   works unchanged. Button disabled when no row has duplicates.
+>
+> **Process note:** advisor + Claude agreed mid-walk that the right
+> move was to capture-and-continue rather than detour into fixes.
+> User confirmed: build the fixes after the walk closes. Mid-walk
+> pause was the user's own call, not an advisor recommendation —
+> the walk simply spans more browser time than this session had
+> capacity for. Fix priority (post-walk): UX-B (real bug) → UX-C
+> (consistency feature) → UX-A (polish).
 
 > **Phase 6e Playwright extension (2026-05-21, commits `e9ce34a` +
 > `f44b362`).** Four new checkpoints added to
