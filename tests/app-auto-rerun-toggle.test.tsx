@@ -241,30 +241,39 @@ describe("App — auto/manual rerun toggle", () => {
     expect(useHistory()().length).toBe(baseline);
   });
 
-  it("auto mode: editing the IV in CBC produces a new run after debounce", async () => {
-    // Switch to CBC BEFORE rendering so the boot run uses the CBC spec.
-    setCipherMode("cbc");
-    render(() => <App />);
-    // Drain CBC boot + any leaked debounced timers from prior tests. After
-    // this wait, history may be at MAX_HISTORY (5), which would break a
-    // naive `baseline + 1` assertion because the next snapshot evicts the
-    // oldest and length stays at 5. Reset to a clean baseline instead.
-    await new Promise((r) => setTimeout(r, 500));
-    __resetHistoryForTests();
-    expect(useHistory()().length).toBe(0);
-    // Stand in for the user pressing the 🎲 button. Using an explicit IV
-    // (not randomizeIv) keeps the test deterministic.
-    setIvBytes(new Uint8Array(16).fill(0xab));
-    await waitFor(
-      () => {
-        expect(
-          useHistory()().length,
-          "IV edit in auto mode + CBC should produce a new snapshot",
-        ).toBeGreaterThanOrEqual(1);
-      },
-      { timeout: 1000 },
-    );
-  });
+  // Generous timeout for the same reason as the manual-mode CBC test below:
+  // full <App /> render with CBC + 500ms drain + 1s debounce-waitFor lives
+  // close enough to the default 5s that CI under load ticks past. Observed
+  // 6166ms and 6593ms on two `main` runs in May 2026. Same pattern as
+  // `[[feedback-url-share-flake]]`.
+  it(
+    "auto mode: editing the IV in CBC produces a new run after debounce",
+    { timeout: 15000 },
+    async () => {
+      // Switch to CBC BEFORE rendering so the boot run uses the CBC spec.
+      setCipherMode("cbc");
+      render(() => <App />);
+      // Drain CBC boot + any leaked debounced timers from prior tests. After
+      // this wait, history may be at MAX_HISTORY (5), which would break a
+      // naive `baseline + 1` assertion because the next snapshot evicts the
+      // oldest and length stays at 5. Reset to a clean baseline instead.
+      await new Promise((r) => setTimeout(r, 500));
+      __resetHistoryForTests();
+      expect(useHistory()().length).toBe(0);
+      // Stand in for the user pressing the 🎲 button. Using an explicit IV
+      // (not randomizeIv) keeps the test deterministic.
+      setIvBytes(new Uint8Array(16).fill(0xab));
+      await waitFor(
+        () => {
+          expect(
+            useHistory()().length,
+            "IV edit in auto mode + CBC should produce a new snapshot",
+          ).toBeGreaterThanOrEqual(1);
+        },
+        { timeout: 1000 },
+      );
+    },
+  );
 
   // Generous timeout because this test renders the full <App />, flips to
   // manual mode, then waits 250 ms × 3 for boot timers / debounce drains —
