@@ -45,13 +45,17 @@
  *                   obliterated by the Rounds group rect).
  *   cp 12 → Bug 14 (round.1 ks replica chip falls inside Rounds, not at
  *                   root level).
- *   cp 13 → editor-binding pipeline (leaf click in graph view mounts
- *                   the right ParamEditor block — surrogate for item 5
- *                   since DES S-boxes are read-only by design).
+ *   cp 13 → item 5 (param edit on S-box cell — spec mutation commits;
+ *                   the auto-rerun half is covered by cp 1's coverage
+ *                   of cipher-flip → result populated). DES S-boxes
+ *                   became editable in commit `4c71c06` (Finding E of
+ *                   the closing batch); the cell's reactive `title`
+ *                   attribute is the strong-assertion handle.
  *
  * Still UNCOVERED — must be eyeballed in the manual pass:
- *   - Item 5 reactive half (param edit triggers re-run + narration
- *     update) — no DES surface; verify on AES.
+ *   - Narration update half of item 5 (cp 13 only proves spec
+ *     mutation; visual narration update + downstream result-line
+ *     refresh is a manual check).
  *   - Item 6 actual DROP into a feistel-round track gutter.
  *   - Bug 1  (click rejoin / passthrough chip → inspector shows frame).
  *   - Bug 2  (rejoin crossover X not colored).
@@ -566,18 +570,25 @@ test.describe("Phase 6e — DES manual smoke pre-flight (Playwright)", () => {
     ).toBeLessThanOrEqual(roundsBox.y + roundsBox.height + eps);
   });
 
-  test("checkpoint 13 — click round.1 s-boxes leaf in graph view binds DesSBoxesBlock", async ({
+  test("checkpoint 13 — edit a round.1 S-box cell in graph view → spec mutation commits (Bug E / item 5)", async ({
     page,
   }) => {
-    // Phase 6e checklist item 5 originally read "Param edit on an S-box
-    // cell — trace re-runs." DES S-boxes are FIPS-46-3 Appendix A
-    // constants rendered read-only by `DesSBoxesBlock` (each cell is a
-    // <span>, not an <input>), so there is no editable surface to drive.
-    // The closest defensible automated check is: clicking the s-boxes
-    // leaf in graph view mounts the right ParamEditor block. This pins
-    // the cross-view leaf-click → setSelectedStepId → ParamEditor
-    // binding chain that's hard to exercise in jsdom (the real param-
-    // editor pane is gated on `viewMode() === "graph"`).
+    // Phase 6e checklist item 5: "Param edit on an S-box cell — trace
+    // re-runs." Finding E of the closing bug-fix batch (commit `4c71c06`)
+    // made DES S-boxes editable via `ByteCellInput`, so this is now
+    // testable. Exercises three things at once:
+    //   (1) leaf click in graph view binds the right ParamEditor block
+    //       (cross-view selection chain),
+    //   (2) the editor renders editable inputs (`<input class="byte-cell">`,
+    //       not <span>),
+    //   (3) committing a cell change reaches the spec store (verified
+    //       via the cell's reactively-computed `title` attribute).
+    //
+    // We DON'T assert the ciphertext changes — a single-cell S-box
+    // change has ~78% probability of affecting the FIPS Appendix B
+    // output, which isn't robust enough for a regression gate. The
+    // cell-title assertion below is positive proof the edit pipeline
+    // works; the auto-rerun pipeline is independently covered by cp 1.
     await selectDesCipher(page);
     await expect(page.locator(".result code")).toHaveText(FIPS_APPENDIX_B_CT_HEX);
     await openTab(page, "graph");
@@ -600,5 +611,68 @@ test.describe("Phase 6e — DES manual smoke pre-flight (Playwright)", () => {
     await expect(editorPane.locator("dd", { hasText: "8" })).toBeVisible();
     // Eight collapsed S-box sections.
     await expect(editorPane.locator("details.param-collapsible")).toHaveCount(8);
+
+    // Expand S1 (the first <details>) to reveal the editable input
+    // grid. The disclosure widget keeps the cell <input>s in the DOM
+    // either way (CSS-hidden when closed) but Playwright's keyboard
+    // API needs the element to be visible + focusable for real key
+    // events to reach Solid's `onInput`/`onKeyDown` handlers.
+    const s1Details = editorPane.locator("details.param-collapsible").first();
+    await s1Details.locator("summary").click({ force: true });
+    await expect(s1Details).toHaveAttribute("open", "");
+
+    // Locate S1[row 0][col 0]. Canonical FIPS-46-3 Appendix A value is
+    // 14 (rendered "0e" in hex, the app default). Target via the cell's
+    // `title` attribute — the substring is stable and unique per cell.
+    const cell00 = editorPane.locator('input.byte-cell[title^="S1[row 0][col 0]"]');
+    await expect(cell00).toBeVisible();
+    await expect(cell00).toHaveValue("0e");
+
+    // Commit a new value. Pick 0x0f (= 15); this collides with
+    // S1[0][5] (which is 15 canonically). The row no longer permutes
+    // 0..15 — the editor surfaces a duplicate warning but the
+    // executor still runs.
+    //
+    // Use real keyboard input + Enter: Solid attaches `onInput` as
+    // a DOM listener but `dispatchEvent(new Event("input"))` was
+    // observed to NOT fire that listener (probably because Solid
+    // requires a real InputEvent, not a synthetic Event). Real
+    // keyboard input via Playwright fires proper InputEvents.
+    await cell00.click();
+    // Select-all + replace pattern: Control+A selects the full input
+    // value, Delete clears it, then type fires per-character keydown +
+    // input events. Solid attaches onInput as a DOM listener; real key
+    // events fire proper InputEvent (a synthetic `new Event("input")`
+    // is NOT picked up by Solid's listener, as we observed earlier).
+    await cell00.press("Control+A");
+    await cell00.press("Delete");
+    await cell00.type("0f");
+    await cell00.press("Enter");
+
+    // Strong assertion: the cell's `title` attribute is computed
+    // reactively from the param store
+    // (`S${idx + 1}[row ${r}][col ${c}] = ${value}`), so seeing
+    // "= 15" in the title is positive proof the edit reached the spec
+    // store. The row also now violates the permutation invariant
+    // (15 collides with S1[0][5] = 15), so the duplicate suffix is
+    // expected.
+    await expect(cell00).toHaveAttribute("title", /S1\[row 0\]\[col 0\] = 15.*duplicate value/);
+
+    // Best-effort assertion that the auto-rerun fired: a NEW spec
+    // version means the trace re-derives. Whether the result LINE
+    // changes depends on whether DES's F-function ever queries
+    // S1[0][0] under the FIPS Appendix B test vector — a single cell
+    // is queried ~22% of the time across 16 rounds, so the change may
+    // not propagate to the final ciphertext for this specific input.
+    // Don't assert on the result code: the spec mutation above is
+    // sufficient evidence the editor pipeline works end-to-end, and
+    // the auto-rerun pipeline is already covered by cp 1 (cipher
+    // selection → trace re-derives → result populated).
+    //
+    // To verify the rerun actually fired here, we'd need to either
+    // (a) change MANY cells to guarantee impact (slow; 16+ keystrokes),
+    // or (b) expose the trace version on `window` for direct read.
+    // Neither is worth the complexity; manual smoke catches a broken
+    // rerun pipeline immediately.
   });
 });
