@@ -1,12 +1,71 @@
 # DES + branching primitive — first Feistel cipher
 
-> **Status: Phases 1–5 + 6a-revision + 6b + 6c + 6d shipped
-> 2026-05-19 / 2026-05-20. Phase 6e PARTIALLY done — Playwright
-> pre-flight smoke ran + a follow-up bug-fix batch shipped, but
-> the full manual browser walkthrough (decrypt, Save→reset→Load,
-> URL share, S-box param edit, palette drop) is still pending.**
-> See "Phase 6 session log (2026-05-20)" section at bottom of this
-> file for the commit-by-commit trail.
+> **Status: Phases 1–6 shipped 2026-05-19 / 2026-05-21. Phase 6e
+> closed 2026-05-21 with a second bug-fix batch driven by the user's
+> manual browser walkthrough — see "Phase 6e closing batch (2026-05-21)"
+> below for the 5 fixes that landed.** Universal-port-dataflow plan
+> (`docs/plans/universal-port-dataflow.md`) is now unblocked: its
+> "wait for DES Phase 6e to close" gate has been satisfied.
+
+> **Phase 6e closing batch (2026-05-21).** User's manual browser
+> walkthrough surfaced 8 findings; 5 were real bugs and got fixed,
+> 3 were working-as-designed and got documented:
+> - **Finding A (collapsed-round arrows not crossed):** `rejoinSwapSourceXSign`
+>   extended to also fire when the source is a COLLAPSED feistel-round
+>   container, not just the rejoin synthetic. `collapseGraph` clears
+>   the rejoin's children and remaps outgoing edges to start from the
+>   container id directly; the X-crossing pedagogy still applies
+>   because the eye reads two outgoing edges to the next round's two
+>   columns. 3 new regression tests in `tests/rejoin-swap-source-x.test.tsx`.
+> - **Finding B (drop replaces L-passthrough):** NOT A BUG — the
+>   passthrough's column IS the `into-track-start` gutter (Phase 6d-v
+>   shipped this), and populating the empty track removes the
+>   passthrough placeholder. The UX gap was no visual signal that the
+>   chip is the drop target. Fix: `PassthroughChip` now takes
+>   `isDropTargetActive` and lights up via the existing
+>   `.graph-drop-target-active` CSS rule when the underlying gutter is
+>   hovered. Tooltip updated to explain the replace semantic.
+> - **Finding C (drop between L and R within a round does nothing):**
+>   NOT A BUG — no inter-track drop zone exists inside a single round
+>   body. The inter-track GAP drop is at the parent Rounds-group level
+>   (Phase 6d-vii), not within a round body.
+> - **Finding D (arrows from inserted step are colored):** NOT A BUG —
+>   this is source-color-coding for a 2-consumer node (`docs/plans/
+>   source-color-coding.md`). The inserted step's output feeds both
+>   the next round's L-passthrough and expand-R, so both arrows share
+>   the inserted node's hue.
+> - **Finding E (S-box editor read-only):** Fixed. `DesSBoxesBlock` in
+>   `ParamEditor.tsx` now renders each cell as a `ByteCellInput`
+>   clamped to 0..15, with per-row duplicate detection (each row must
+>   be a permutation of 0..15). Code comment had already flagged this
+>   as a future polish slice.
+> - **Finding F (load/share doesn't flip cipher selector for non-AES):**
+>   Fixed. Added an optional top-level `cipher` hint to
+>   `CipherDocument` (option (b) from the originally proposed fix
+>   paths). `setSpecFromDocument` reads it; `applyDocument` additionally
+>   smart-swaps the input/key fields when they match the OLD cipher's
+>   canonical defaults — mirroring `changeCipher`'s manual-selector
+>   policy. 13 new tests in `tests/document-roundtrip.test.ts`.
+>   `e2e/des-phase-6e-self-smoke.spec.ts` checkpoint 9 re-baselined
+>   from "bug reproduces" to "bug fixed."
+> - **Finding G (load doesn't restore plaintext from spec-only save):**
+>   NOT A BUG — spec-only save deliberately omits `inputBytes` /
+>   `keyBytes` so a public URL share doesn't leak the user's
+>   plaintext. Toggle "include session" before saving to include them.
+> - **Finding H (rounds escape parent container + sibling drag):**
+>   Fixed as two related changes:
+>   - H(ii): group's child-layout loop captures `naturalY` BEFORE the
+>     child call and advances `innerY` using `naturalY + childBox.h +
+>     STACK_GAP`. Mirrors the root-level pattern in `layoutRoot`
+>     (line 1576/1593). Without this, pinning round.5 up shifted the
+>     cursor that placed round.6, dragging round.6..16 along.
+>   - H(i): `startNodeDrag` computes `parentInteriorBounds` at drag
+>     start and clamps `newX/newY` to them in `onMove`. Root-level
+>     nodes (no parent) keep the existing (0,0) SVG-bounds floor.
+>   - 2 new regression tests in `tests/graph-view-drag.test.tsx`.
+>
+> See "Phase 6 session log (2026-05-20)" section below for the
+> earlier bug-fix batch and the commit-by-commit trail.
 >
 > **Phase 6e bug-fix batch (2026-05-20).** Playwright pre-flight on
 > `e2e/des-phase-6e-self-smoke.spec.ts` + the user's partial manual

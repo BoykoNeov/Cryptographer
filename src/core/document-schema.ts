@@ -283,6 +283,10 @@ export const CipherDocumentSchema = z
   .object({
     schemaVersion: z.literal(2),
     spec: CipherSpecSchema,
+    // Cipher selector hint (Phase 6e of `docs/plans/des-feistel.md`). See
+    // the comment on `CipherDocument` in `document.ts` for the why. Optional
+    // so v1/v2 documents authored before this field landed still validate.
+    cipher: z.enum(CIPHER_IDS).optional(),
     layout: LayoutSpecSchema.optional(),
     session: SessionSnapshotSchema.optional(),
     metadata: DocumentMetadataSchema.optional(),

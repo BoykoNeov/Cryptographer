@@ -134,4 +134,30 @@ describe("rejoinSwapSourceXSign — Feistel X-crossing routing (Phase 6b-iii)", 
     const edge = STATE_EDGE("round.1:rejoin", "round.2:passthrough-0");
     expect(rejoinSwapSourceXSign(edge, nodesById, containersById)).toBe(0);
   });
+
+  // Phase 6e finding A — when a feistel-round is collapsed, `collapseGraph`
+  // clears its child ids and remaps outgoing edges to start from the
+  // container id instead of the (now-hidden) rejoin synthetic. The same
+  // X-crossing pedagogy still applies because the eye reads two outgoing
+  // edges to the next round's two columns — they should still cross.
+  it("collapsed feistel-standard source + L-target: returns +1 (X-crossing applies through collapsed source)", () => {
+    const { nodesById, containersById } = buildFixture("feistel-standard");
+    // Edge `from` is the round container id itself (round.1), not the
+    // rejoin synthetic — matches `collapseGraph`'s remap when round.1 is
+    // collapsed.
+    const edge = STATE_EDGE("round.1", "round.2:passthrough-0");
+    expect(rejoinSwapSourceXSign(edge, nodesById, containersById)).toBe(1);
+  });
+
+  it("collapsed feistel-standard source + R-target: returns -1", () => {
+    const { nodesById, containersById } = buildFixture("feistel-standard");
+    const edge = STATE_EDGE("round.1", "round.2.expand-R");
+    expect(rejoinSwapSourceXSign(edge, nodesById, containersById)).toBe(-1);
+  });
+
+  it("collapsed feistel-no-swap source: returns 0 (only the swap-bearing kind triggers X)", () => {
+    const { nodesById, containersById } = buildFixture("feistel-no-swap");
+    const edge = STATE_EDGE("round.1", "round.2:passthrough-0");
+    expect(rejoinSwapSourceXSign(edge, nodesById, containersById)).toBe(0);
+  });
 });

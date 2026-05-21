@@ -422,6 +422,12 @@ export const App = () => {
     const doc: CipherDocument = {
       schemaVersion: CURRENT_SCHEMA_VERSION,
       spec: spec(),
+      // Cipher selector hint (Phase 6e). Emitted on BOTH spec-only AND
+      // session-included paths so a recipient's cipher selector flips to
+      // match the loaded spec regardless of the toggle. The value is
+      // deterministic from the current `cipher()` signal — no Date.now() —
+      // so the spec-only path stays byte-stable for URL-share hashing.
+      cipher: cipher(),
       ...(hasUserLayout(layout) && layout ? { layout } : {}),
       ...(includeSession()
         ? {
@@ -605,6 +611,12 @@ export const App = () => {
    *      duplicate run is harmless because pushSnapshot dedups.
    */
   const applyDocument = (doc: CipherDocument): void => {
+    // Capture the recipient's cipher BEFORE `setSpecFromDocument` flips it,
+    // so the smart-swap below can compare the inputText/keyText against the
+    // OLD cipher's canonical defaults. Without this capture, the swap check
+    // would compare against the new cipher's defaults and never swap.
+    const prevCipher = cipher();
+
     setLayoutForSpec(doc.spec.id, doc.layout ?? null);
     setSpecFromDocument(doc);
     if (doc.session?.inputBytes) {
@@ -612,6 +624,40 @@ export const App = () => {
     }
     if (doc.session?.keyBytes) {
       setKeyText(formatBytes(new Uint8Array(doc.session.keyBytes), fmt()));
+    }
+    // Phase 6e of `docs/plans/des-feistel.md`: when the document carries
+    // the optional cipher hint AND does NOT carry saved bytes, mirror the
+    // smart-swap policy from `changeCipher` so a recipient with a fresh
+    // tab (current inputs are the OLD cipher's canonical defaults) lands
+    // with inputs sized correctly for the NEW cipher. Without this swap,
+    // a spec-only DES share loaded into an AES-128-default recipient
+    // leaves a 16-byte plaintext in the field that immediately errors
+    // "must be exactly 8 bytes." With it, the recipient sees the DES
+    // FIPS 46-3 Appendix B vector and the FIPS ciphertext appears.
+    //
+    // The "match OLD defaults?" check is exactly the same heuristic
+    // `changeCipher` uses for the manual cipher selector: user-typed
+    // values are NEVER clobbered; only literal canonical-default carry-
+    // over triggers the swap. So a load against a recipient who had
+    // already typed their own plaintext keeps their work intact.
+    //
+    // Run order: this check fires AFTER setSpecFromDocument, so
+    // `cipher()` already reads the new value. We compare against
+    // `prevCipher` captured above the spec change.
+    if (
+      doc.cipher !== undefined &&
+      doc.cipher !== prevCipher &&
+      !doc.session?.inputBytes &&
+      !doc.session?.keyBytes
+    ) {
+      const currentKey = tryParseBytes(keyText(), fmt());
+      if (currentKey && bytesEqual(currentKey, DEFAULT_KEY_BYTES_BY_CIPHER[prevCipher])) {
+        setKeyText(formatBytes(DEFAULT_KEY_BYTES_BY_CIPHER[doc.cipher], fmt()));
+      }
+      const currentPt = tryParseBytes(inputText(), fmt());
+      if (currentPt && bytesEqual(currentPt, DEFAULT_PT_BYTES_BY_CIPHER[prevCipher])) {
+        setInputText(formatBytes(DEFAULT_PT_BYTES_BY_CIPHER[doc.cipher], fmt()));
+      }
     }
     setError(null);
     run();

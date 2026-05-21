@@ -175,10 +175,33 @@ export type DocumentMetadata = {
  * The top-level file format. `spec` is required; everything else is
  * optional and gracefully absent for minimal documents (e.g. a vanilla
  * canonical spec with no customization).
+ *
+ * `cipher` is a lightweight selector hint (Phase 6e of
+ * `docs/plans/des-feistel.md`). Save always emits it so a spec-only
+ * .cipher.json or URL-share document tells the loader "this spec was
+ * authored for cipher X." Without it, loading a non-AES spec into a
+ * recipient defaulted to AES-128 left the cipher selector mismatched
+ * with the spec — DES (8-byte block) loaded against an AES-128 default
+ * key field (16 bytes) immediately erred with "expected 8 bytes."
+ *
+ * The hint is OPTIONAL so v1/v2 documents from before this field landed
+ * still load — pre-hint behavior (no selector change on load) is the
+ * absent-field fallback. When present, `setSpecFromDocument` reads it
+ * and flips the cipher selector; it also adjusts `cipherMode` to
+ * `"single-block"` if the current mode isn't supported for the loaded
+ * cipher (e.g. switching from AES-128/ecb to DES, which is single-block
+ * only).
+ *
+ * Why a top-level field vs. always including a session: the existing
+ * "include session" toggle protects users from leaking plaintext bytes
+ * into shareable URLs. The cipher selector value isn't sensitive — it's
+ * just metadata about which cipher the spec implements — so it belongs
+ * at the document root, not inside the session.
  */
 export type CipherDocument = {
   readonly schemaVersion: typeof CURRENT_SCHEMA_VERSION;
   readonly spec: CipherSpec;
+  readonly cipher?: Cipher;
   readonly layout?: LayoutSpec;
   readonly session?: SessionSnapshot;
   readonly metadata?: DocumentMetadata;

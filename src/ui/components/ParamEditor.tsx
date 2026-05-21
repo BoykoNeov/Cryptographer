@@ -997,21 +997,69 @@ const DesXorWithKBlock = (props: { step: StepLeaf }) => {
   );
 };
 
-// DES S-boxes: 8 distinct 6→4 substitution tables (S1..S8). Each is a 4-row
-// × 16-column grid; this is a brand-new UI pattern in the editor (Serpent
-// has one S-box per leaf indexed by `sboxIndex`, but DES carries all 8 as
-// `params.sboxes[8][4][16]` on a single leaf).
+// DES S-boxes: 8 distinct 6→4 substitution tables (S1..S8). Each is a
+// 4-row × 16-column grid; this is a brand-new UI pattern in the editor
+// (Serpent has one S-box per leaf indexed by `sboxIndex`, but DES carries
+// all 8 as `params.sboxes[8][4][16]` on a single leaf).
 //
-// Each S-box hides behind its own collapsed `<details>` so the editor isn't
-// 512 visible cells on first render. Cells are read-only — the S-boxes are
-// FIPS-46-3 Appendix A constants whose specific values are themselves the
-// subject of the cryptanalysis story. A future polish slice could make
-// them editable so users can experiment with weak-S-box vectors; today
-// the read-only view matches the bit-permutation block's read-only stance.
+// Each S-box hides behind its own collapsed `<details>` so the editor
+// isn't 512 visible cells on first render. Cells ARE editable (Phase 6e):
+// the pedagogical "experiment with weak S-boxes" use case is exactly
+// what the editor exists for, and AES SubBytes is editable on the same
+// principle. Each row must be a permutation of 0..15 — `findDuplicateIndices`
+// (size-parameterized on `values.length`) flags collisions per row;
+// `repairToPermutation` would compose only over a single row, but we
+// surface duplicates inline rather than offering a repair button because
+// the FIPS 46-3 tables ARE the canonical state and the user can always
+// hit "Reset spec" to recover.
+//
+// Why no ApplyAllRow here: this step type appears exactly once per spec
+// (the F-function's s-boxes leaf is a single node carrying all 8 tables
+// at once). "Apply this S-box to all matching steps" would be a no-op.
 const DesSBoxesBlock = (props: { step: StepLeaf }) => {
   const params = (): { sboxes?: readonly (readonly (readonly number[])[])[] } =>
     props.step.params as never;
   const sboxes = (): readonly (readonly (readonly number[])[])[] => params().sboxes ?? [];
+
+  // Pre-compute every row's duplicate-set in a single memoized walk so the
+  // per-row check inside the nested For loops below is a Map lookup (no
+  // per-cell allocation). Hoisting to the component level follows the
+  // project's pattern (`SerpentSubBytesBlock`) — `For` callbacks aren't
+  // reactive scopes, so a `createMemo` defined inside one wouldn't fire
+  // correctly when sboxes() updates after an edit. CLAUDE.md gotcha,
+  // codified.
+  const dupesByRow = createMemo(() =>
+    sboxes().map((box) => box.map((row) => findDuplicateIndices(row))),
+  );
+
+  // Commit a single-cell edit. Deep-clones the sboxes tensor down to the
+  // affected row so reference-equality is preserved on the untouched
+  // boxes / rows (the rest of `editStepParams`'s short-circuit logic
+  // expects that). Value is clamped to 0..15 because DES S-boxes hold
+  // 4-bit outputs; ByteCellInput already refuses non-byte input but we
+  // tighten further here.
+  const writeCell = (boxIdx: number, rowIdx: number, colIdx: number, next: number): void => {
+    const clamped = Math.max(0, Math.min(15, next));
+    const current = sboxes();
+    // Build mutable arrays (number[][][]) so the result satisfies the
+    // Json branch of `editStepParams`'s param type. The `readonly` chain
+    // on `current` doesn't propagate through .map(), so each level needs
+    // an explicit copy.
+    const nextBoxes: number[][][] = current.map((box, bi) =>
+      bi !== boxIdx
+        ? box.map((row) => [...row])
+        : box.map((row, ri) => {
+            if (ri !== rowIdx) return [...row];
+            const nextRow = [...row];
+            nextRow[colIdx] = clamped;
+            return nextRow;
+          }),
+    );
+    editStepParams(props.step.id, {
+      ...(props.step.params as Record<string, Json>),
+      sboxes: nextBoxes,
+    });
+  };
 
   return (
     <>
@@ -1027,21 +1075,30 @@ const DesSBoxesBlock = (props: { step: StepLeaf }) => {
             <summary class="param-section-label">
               S{idx() + 1} (4 rows × 16 cols, 4-bit values — click to expand)
             </summary>
-            {/* Each row is its own grid so row indices read top-to-bottom;
-                cells are spans (read-only) styled by the existing bit-table
-                rules so we don't fork a new CSS class. */}
+            {/* Each row is its own 16-col grid. ByteCellInput cells use
+                the existing compact mode (same one Serpent's 4×4 S-box
+                grid uses) so the visual rhythm stays consistent across
+                the editor surfaces. Per-row duplicate detection: each
+                row must be a permutation of 0..15, and `findDuplicateIndices`
+                is size-parameterized on `values.length` so it works
+                unchanged at N=16. */}
             <div class="des-sbox-table">
               <For each={box}>
                 {(row, r) => (
                   <div class="des-sbox-row" data-row={r()}>
                     <For each={row}>
                       {(value, c) => (
-                        <span
-                          class="bit-table-cell"
-                          title={`S${idx() + 1}[row ${r()}][col ${c()}] = ${value}`}
-                        >
-                          {value}
-                        </span>
+                        <ByteCellInput
+                          compact
+                          value={value}
+                          duplicate={dupesByRow()[idx()]?.[r()]?.has(c()) ?? false}
+                          title={
+                            dupesByRow()[idx()]?.[r()]?.has(c())
+                              ? `S${idx() + 1}[row ${r()}][col ${c()}] = ${value} — duplicate value in this row (each row must be a permutation of 0..15)`
+                              : `S${idx() + 1}[row ${r()}][col ${c()}] = ${value}`
+                          }
+                          onCommit={(next) => writeCell(idx(), r(), c(), next)}
+                        />
                       )}
                     </For>
                   </div>

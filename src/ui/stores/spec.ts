@@ -794,6 +794,30 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
     if (doc.session.ivBytes !== undefined) {
       setIvBytes(new Uint8Array(doc.session.ivBytes));
     }
+  } else if (doc.cipher !== undefined) {
+    // Spec-only path with the cipher-hint field (Phase 6e of
+    // `docs/plans/des-feistel.md`). Flip the cipher selector to match
+    // the document's cipher so non-AES specs (DES, Speck, Serpent) don't
+    // land into a recipient whose AES-128 default key field (16 bytes)
+    // immediately errors with "expected 8 bytes" against an 8-byte DES
+    // block.
+    //
+    // We also fall back `cipherMode` to "single-block" when the current
+    // mode isn't supported for the loaded cipher (DES, Speck, Serpent
+    // are all single-block today). Without this, switching from AES-128/ecb
+    // to a DES document would leave the user in a (des, ecb) combo that
+    // the canonical-defaults table doesn't have a spec for — the literal
+    // `doc.spec` still runs, but selector flips after the load (like
+    // switching mode and back) would pick up the wrong canonical default.
+    //
+    // mode/padding/byteFormat stay at the user's current values: there's
+    // no hint for those in a spec-only document, and "DES has no
+    // padding" is already enforced by the padding store's own
+    // single-block fallback.
+    setCipherSignal(doc.cipher);
+    if (!isCipherModeSupported(doc.cipher, useCipherMode()())) {
+      setCipherModeSignal("single-block");
+    }
   }
   // Document carries one spec (for the document's mode). Land it in the
   // matching slot; rebuild the OTHER slot from canonical so the

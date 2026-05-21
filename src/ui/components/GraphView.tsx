@@ -1051,6 +1051,26 @@ const layoutNode = (
     let maxChildW = 0;
     let lastChildBottom = innerY;
     for (const childId of normalChildren) {
+      // Capture innerY BEFORE the call so cursor advancement uses the
+      // NATURAL flow position, not the post-pin rendered position. Phase 6e
+      // bug fix: previously `innerY = childBox.y + childBox.h + STACK_GAP`
+      // used the child's RENDERED y, so pinning round.5 up shifted the
+      // cursor that placed round.6, dragging round.6..16 along with it.
+      // Mirrors `layoutRoot`'s root-level pattern (line 1576/1593:
+      // `const naturalX = cursorX; ... cursorX = naturalX + box.w + FLOW_GAP`)
+      // which already keeps root containers' siblings independent of one
+      // pinned sibling. The same property should hold for nested children
+      // inside a group — that's the user's "Rounds" container, where 16
+      // feistel-rounds stack vertically.
+      //
+      // `lastChildBottom` still uses the rendered position because the
+      // container's BODY height has to grow to contain the rendered
+      // (pinned) children — otherwise a user-pinned chip dragged below
+      // its auto position would visually escape the container's bottom
+      // edge. The two computations have distinct jobs: `innerY` is the
+      // next sibling's natural cursor (stable under pin); `lastChildBottom`
+      // is the container's height-extent (grows under pin).
+      const naturalY = innerY;
       const childBox = layoutNode(
         childId,
         innerX,
@@ -1062,8 +1082,11 @@ const layoutNode = (
         replicas,
         relativePins,
       );
-      innerY = childBox.y + childBox.h + consts.STACK_GAP;
-      lastChildBottom = childBox.y + childBox.h;
+      innerY = naturalY + childBox.h + consts.STACK_GAP;
+      const renderedBottom = childBox.y + childBox.h;
+      const autoBottom = naturalY + childBox.h;
+      if (renderedBottom > lastChildBottom) lastChildBottom = renderedBottom;
+      if (autoBottom > lastChildBottom) lastChildBottom = autoBottom;
       if (childBox.w > maxChildW) maxChildW = childBox.w;
     }
 
@@ -2017,11 +2040,30 @@ export const rejoinSwapSourceXSign = (
   containersById: ReadonlyMap<string, ContainerNode>,
 ): -1 | 0 | 1 => {
   const fromNode = nodesById.get(edge.from);
-  if (fromNode?.synthetic !== "rejoin") return 0;
-  const roundId = fromNode.containerPath[fromNode.containerPath.length - 1];
-  const round = roundId !== undefined ? containersById.get(roundId) : undefined;
+  // Two source shapes carry the swap semantic for X-crossings:
+  //   1. The rejoin synthetic itself (uncollapsed round — the original
+  //      6b-iii path).
+  //   2. A collapsed feistel-round container (Phase 6e finding A — when
+  //      the round is collapsed, `collapseGraph` clears its child ids
+  //      and remaps outgoing edges to start from the container id, not
+  //      the rejoin synthetic which has been hidden). The container
+  //      itself becomes the swap-bearing source; the same X-crossing
+  //      pedagogy applies because the eye still reads two outgoing
+  //      edges to the next round's two columns.
+  //
+  // The check resolves either shape into a `swapBearingRound` —
+  // whichever container carries `feistelCombineKind === "feistel-standard"`.
+  let swapBearingRound: ContainerNode | undefined;
+  if (fromNode?.synthetic === "rejoin") {
+    const roundId = fromNode.containerPath[fromNode.containerPath.length - 1];
+    swapBearingRound = roundId !== undefined ? containersById.get(roundId) : undefined;
+  } else {
+    // Maybe the source IS the collapsed feistel-round container itself.
+    const fromContainer = containersById.get(edge.from);
+    if (fromContainer?.kind === "feistel") swapBearingRound = fromContainer;
+  }
   // Only the swap-bearing kind triggers the X-crossing.
-  if (round?.feistelCombineKind !== "feistel-standard") return 0;
+  if (swapBearingRound?.feistelCombineKind !== "feistel-standard") return 0;
   const toNode = nodesById.get(edge.to);
   if (!toNode) return 0;
   // Target must live INSIDE a feistel-round (the next round's
@@ -3804,6 +3846,41 @@ export const GraphView = () => {
     const startClientY = e.clientY;
     const startBoxX = startBox.x;
     const startBoxY = startBox.y;
+
+    // Phase 6e fix for finding H(i): find the dragged node's parent
+    // container so the move handler can clamp the pin to the parent's
+    // interior bounds. Without this clamp, a feistel-round inside a
+    // group container can be dragged anywhere on the canvas — including
+    // off the parent's bottom edge — and become visually orphaned. The
+    // clamp keeps the node visible inside its declared parent, which
+    // matches the user's mental model ("the round belongs to Rounds").
+    //
+    // Only computed in absolute mode (the only mode that uses
+    // setNodePosition); relative mode pins are deltas off the auto
+    // position and rarely escape so far they need clamping.
+    //
+    // We scan `graph().containers` once at drag start (not per-move) and
+    // capture the parent box + interior constants by value, so a child
+    // pin update during the drag can't shift the clamp underneath us.
+    // Root-level nodes have no parent — clamp falls back to the existing
+    // (0, 0) SVG-bounds rule.
+    let parentInteriorBounds: { minX: number; maxX: number; minY: number; maxY: number } | null =
+      null;
+    if (opts.mode === "absolute") {
+      for (const candidate of graph().containers) {
+        if (!candidate.childIds.includes(nodeId)) continue;
+        const parentBox = layout().boxes.get(candidate.id);
+        if (!parentBox) break;
+        const PAD = consts().CONTAINER_PAD;
+        parentInteriorBounds = {
+          minX: parentBox.x + PAD,
+          maxX: parentBox.x + parentBox.w - PAD - startBox.w,
+          minY: parentBox.y + HEADER_H + PAD,
+          maxY: parentBox.y + parentBox.h - PAD - startBox.h,
+        };
+        break;
+      }
+    }
     // Captured BEFORE the drag begins so accumulated deltas in relative
     // mode add to the existing pin (if any) rather than overwriting it.
     // Without this, dragging a chip that already had `dx = 30` would
@@ -3863,8 +3940,19 @@ export const GraphView = () => {
         // (z-index: 1) visually overlays small SVG y values at
         // scrollTop > 0, scrolling the container back to the top always
         // reveals the block.
-        const newX = Math.max(0, startBoxX + dx / z);
-        const newY = Math.max(0, startBoxY + dy / z);
+        let newX = Math.max(0, startBoxX + dx / z);
+        let newY = Math.max(0, startBoxY + dy / z);
+        // Phase 6e fix for finding H(i): if this node has a parent
+        // container, additionally clamp the pin so the node stays inside
+        // the parent's interior. Without this, dragging a feistel-round
+        // inside the `Rounds` group could escape the parent entirely.
+        // Belt-and-braces: take the tighter of (0, 0) and (parent.min) so
+        // a parent whose box happens to start at negative coords still
+        // sees the SVG-bounds floor honored.
+        if (parentInteriorBounds) {
+          newX = Math.max(parentInteriorBounds.minX, Math.min(parentInteriorBounds.maxX, newX));
+          newY = Math.max(parentInteriorBounds.minY, Math.min(parentInteriorBounds.maxY, newY));
+        }
         setNodePosition(spec().id, nodeId, newX, newY);
       }
     };
@@ -4909,6 +4997,18 @@ export const GraphView = () => {
                     return names?.[trackIdx] ?? `track ${trackIdx}`;
                   });
                   const rejoinStepIdForRound = `${parentRoundId}:rejoin`;
+                  // Phase 6e UX polish — the passthrough chip IS the
+                  // visible footprint of the empty-track drop zone
+                  // (the `into-track-start` gutter covers the chip's
+                  // entire column). When that gutter is the active
+                  // drop target, the chip itself should signal
+                  // "drop here will replace me" so the user understands
+                  // the chip is the target, not just the underlying
+                  // gutter rect. Without this, dropping a palette
+                  // primitive on the passthrough appears to make the
+                  // chip "disappear" with no warning, surfaced as
+                  // finding B in the user's manual smoke pass.
+                  const expectedGutterId = `into-track-start:${parentRoundId}#${trackIdx}`;
                   return (
                     <Show when={ptBox()}>
                       {(b) => (
@@ -4917,6 +5017,7 @@ export const GraphView = () => {
                           stepId={ptStepId}
                           trackLabel={trackLabel()}
                           isSelected={selectedTarget() !== null && isNodeSelected(ptStepId)}
+                          isDropTargetActive={dragOverGutterId() === expectedGutterId}
                           onClick={() => {
                             // Scrub to the round's rejoin frame
                             // (passthrough has no frame). Inspector
@@ -5785,10 +5886,21 @@ const PassthroughChip = (props: {
   trackLabel: string;
   onClick: () => void;
   isSelected: boolean;
+  /**
+   * True when a palette-drop drag is currently hovering this chip's
+   * `into-track-start` gutter (Phase 6e UX polish — see finding B).
+   * The chip's entire column IS the empty-track drop zone, so without
+   * a chip-level signal users perceived the drop as "replacing the
+   * passthrough" with no warning.
+   */
+  isDropTargetActive: boolean;
 }) => (
   <g
     class="graph-leaf graph-leaf-passthrough"
-    classList={{ "graph-leaf-selected": props.isSelected }}
+    classList={{
+      "graph-leaf-selected": props.isSelected,
+      "graph-drop-target-active": props.isDropTargetActive,
+    }}
     data-testid={`graph-passthrough-${props.stepId}`}
     tabindex={0}
     onClick={props.onClick}
@@ -5805,6 +5917,9 @@ const PassthroughChip = (props: {
     <title>
       {props.stepId}
       {"\n"}passthrough — track carries input through unchanged
+      {props.isDropTargetActive
+        ? "\n\nDrop here to populate this track. The passthrough will be replaced by the new step."
+        : ""}
     </title>
     <rect
       class="graph-leaf-rect"

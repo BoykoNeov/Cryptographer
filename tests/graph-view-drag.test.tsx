@@ -345,6 +345,116 @@ describe("GraphView — container drag (Slice 6)", () => {
     expect(getX("round.7")).toBe(beforeR7X);
   });
 
+  // Phase 6e regression — nested feistel-round drag inside the DES
+  // `Rounds` group. Two related bugs surfaced in the manual smoke:
+  //   H(ii) — dragging round.5 up shifted round.6..16 up along with it.
+  //   H(i)  — round.5 could be dragged out of the `Rounds` container
+  //           entirely (escape).
+  // The fix lives in `GraphView.tsx`:
+  //   - Group child layout now captures `naturalY` BEFORE the child
+  //     call and advances the cursor using `naturalY + childBox.h +
+  //     STACK_GAP` (mirroring the root-level pattern at layoutRoot).
+  //   - `startNodeDrag`'s absolute-mode `onMove` clamps newX/newY to
+  //     the parent container's interior bounds when a parent is found.
+  // The two tests below pin both fixes.
+  it("dragging a nested feistel-round inside a group does NOT shift its unpinned siblings' rendered Y", async () => {
+    const { desSpec } = await import("@/ciphers/des");
+    const { setCipher } = await import("@/ui/stores/spec");
+
+    // Switch to DES so the spec carries a `Rounds` group containing 16
+    // feistel-round children — the precise nesting that exposed H(ii).
+    setCipher("des");
+    const trace = runSpec(desSpec, buildDefaultRegistry(), {
+      initialState: { shape: "bytes", bytes: bytesFromHex("0123456789abcdef") },
+      initialAux: new Map<string, AuxValue>([["key", bytesFromHex("133457799bbcdff1")]]),
+    });
+    setTrace(trace);
+
+    const { container } = render(() => <GraphView />);
+    const specId = useSpec()().id;
+    expect(specId).toBe(desSpec.id);
+
+    // Snapshot pre-drag Y coordinates of round.6 and round.7. Both are
+    // nested inside the `Rounds` group, stacked vertically.
+    const getRoundY = (id: string): number => {
+      const headerSibling = container.querySelector(
+        `[data-testid="graph-container-header-${id}"]`,
+      ) as Element;
+      const group = headerSibling.parentElement as Element;
+      const rect = group.querySelector(".graph-container-rect") as SVGRectElement;
+      return Number(rect.getAttribute("y"));
+    };
+    const beforeR6Y = getRoundY("round.6");
+    const beforeR7Y = getRoundY("round.7");
+
+    // Drag round.5 UP by 80 viewBox units (well past the threshold) so
+    // its pin sits above its natural slot.
+    const r5Header = container.querySelector(
+      '[data-testid="graph-container-header-round.5"]',
+    ) as Element;
+    r5Header.dispatchEvent(pointerEvt("pointerdown", 100, 300));
+    window.dispatchEvent(pointerEvt("pointermove", 100, 220));
+    window.dispatchEvent(pointerEvt("pointerup", 100, 220));
+
+    // Round.5 should be pinned now.
+    expect(getLayoutForSpec(specId)?.positions["round.5"]).toBeDefined();
+
+    // Round.6 and round.7's Y must NOT have moved — they're still at
+    // their auto-flow positions. Pre-fix, the group's `innerY` cursor
+    // advanced using the RENDERED y of round.5, so dragging round.5 up
+    // pulled the cursor up and shifted round.6/round.7 along with it.
+    expect(getRoundY("round.6")).toBe(beforeR6Y);
+    expect(getRoundY("round.7")).toBe(beforeR7Y);
+  });
+
+  it("dragging a nested feistel-round can NOT escape the parent container's interior bounds", async () => {
+    const { desSpec } = await import("@/ciphers/des");
+    const { setCipher } = await import("@/ui/stores/spec");
+
+    setCipher("des");
+    const trace = runSpec(desSpec, buildDefaultRegistry(), {
+      initialState: { shape: "bytes", bytes: bytesFromHex("0123456789abcdef") },
+      initialAux: new Map<string, AuxValue>([["key", bytesFromHex("133457799bbcdff1")]]),
+    });
+    setTrace(trace);
+
+    const { container } = render(() => <GraphView />);
+    const specId = useSpec()().id;
+
+    // Try to drag round.5 way off to the left (well outside Rounds'
+    // left edge). Without the parent-bounds clamp the pin would land at
+    // a large negative x (only clamped to (0, 0) at the SVG level), so
+    // the round visually escapes its parent container.
+    const r5Header = container.querySelector(
+      '[data-testid="graph-container-header-round.5"]',
+    ) as Element;
+    r5Header.dispatchEvent(pointerEvt("pointerdown", 500, 500));
+    window.dispatchEvent(pointerEvt("pointermove", -10000, 500));
+    window.dispatchEvent(pointerEvt("pointerup", -10000, 500));
+
+    // Pin landed.
+    const pinned = getLayoutForSpec(specId)?.positions["round.5"];
+    expect(pinned).toBeDefined();
+    if (!pinned) return;
+
+    // Find the Rounds container's box via its DOM rect.
+    const roundsHeader = container.querySelector(
+      '[data-testid="graph-container-header-rounds"]',
+    ) as Element;
+    const roundsGroup = roundsHeader.parentElement as Element;
+    const roundsRect = roundsGroup.querySelector(".graph-container-rect") as SVGRectElement;
+    const roundsX = Number(roundsRect.getAttribute("x"));
+    const roundsW = Number(roundsRect.getAttribute("width"));
+
+    // round.5's pinned x must be inside the parent's interior (with
+    // some CONTAINER_PAD slack). The clamp formula is
+    // `[parent.x + PAD, parent.x + parent.w - PAD - chip.w]`, so the
+    // pin sits at minX = parent.x + PAD when the user drags far left.
+    // We assert the loose property: pin.x >= parent.x (didn't escape).
+    expect(pinned.x).toBeGreaterThanOrEqual(roundsX);
+    expect(pinned.x).toBeLessThanOrEqual(roundsX + roundsW);
+  });
+
   // Per-container ↺ reset (draggable-replicas plan Slice 4 follow-up,
   // 2026-05-19). The LeafRect reset affordance only covered the relative-
   // pin path; root-draggable containers carry absolute pins and had no

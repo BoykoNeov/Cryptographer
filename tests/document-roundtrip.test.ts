@@ -423,6 +423,93 @@ describe("parseDocument: error cases", () => {
   });
 });
 
+// ─── Cipher selector hint (Phase 6e) ──────────────────────────────────────
+
+describe("CipherDocument.cipher hint field", () => {
+  // Phase 6e of `docs/plans/des-feistel.md`: spec-only documents now carry
+  // an optional `cipher` hint at the document root so a recipient's cipher
+  // selector flips to match the loaded spec. Pre-hint, loading a DES
+  // document into an AES-128-default recipient left the selector mismatched
+  // and the input fields the wrong byte length. Tests below pin the
+  // round-trip of the field through serialize/parse — the selector-flip
+  // behavior on `setSpecFromDocument` is covered by `built-from-palette-
+  // roundtrip.test.tsx` and the e2e self-smoke.
+
+  it("round-trips a spec-only document with a cipher hint", () => {
+    const doc: CipherDocument = {
+      schemaVersion: 2,
+      spec: desSpec,
+      cipher: "des",
+    };
+    const text = serializeDocument(doc);
+    const result = parseDocument(text);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.doc).toEqual(doc);
+  });
+
+  it("round-trips a document with cipher hint + layout + session (full fan-out)", () => {
+    const doc: CipherDocument = {
+      schemaVersion: 2,
+      spec: desSpec,
+      cipher: "des",
+      layout: {
+        positions: { "des.initial-permutation": { x: 0, y: 0 } },
+        collapsedGroups: ["rounds"],
+        flowDirection: "ltr",
+      },
+      session: {
+        mode: "encrypt",
+        cipher: "des",
+        cipherMode: "single-block",
+        padding: "none",
+        byteFormat: "hex",
+      },
+    };
+    const text = serializeDocument(doc);
+    const result = parseDocument(text);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.doc).toEqual(doc);
+  });
+
+  it("a document without the cipher hint still parses (back-compat)", () => {
+    // Pre-Phase-6e documents (every shipped .cipher.json before this field
+    // landed) must continue to load cleanly. The absent field is the legacy
+    // fallback path: `setSpecFromDocument` doesn't flip the selector,
+    // matching pre-fix behavior.
+    const doc: CipherDocument = { schemaVersion: 2, spec: aes128Spec };
+    const text = serializeDocument(doc);
+    const result = parseDocument(text);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.doc).toEqual(doc);
+      expect(result.doc.cipher).toBeUndefined();
+    }
+  });
+
+  it("rejects a malformed cipher hint", () => {
+    // Anything outside the closed `CIPHER_IDS` enum is malformed.
+    const malformed = JSON.stringify({
+      schemaVersion: 2,
+      spec: aes128Spec,
+      cipher: "not-a-cipher",
+    });
+    const result = parseDocument(malformed);
+    expect(result.ok).toBe(false);
+  });
+
+  for (const cipher of CIPHER_IDS) {
+    it(`accepts top-level cipher hint = ${cipher}`, () => {
+      const doc: CipherDocument = {
+        schemaVersion: 2,
+        spec: aes128Spec,
+        cipher,
+      };
+      const result = parseDocument(serializeDocument(doc));
+      expect(result.ok).toBe(true);
+    });
+  }
+});
+
 // ─── Stable serialization ─────────────────────────────────────────────────
 
 describe("serializeDocument: stable key order", () => {

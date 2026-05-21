@@ -7,10 +7,10 @@
  * this file goes away. Choice made 2026-05-20 (option 3 of 4 weighed
  * in that session: keep through the human pass, then delete).
  *
- * One assertion has a known reason to fail when fixed: checkpoint 9
- * pins the spec-only URL share bug (recipient lands on AES-128 selector
- * + AES-128 default key + "expected 8 bytes" error). Re-baseline that
- * assertion when the share-load behavior is fixed.
+ * Checkpoint 9 re-baselined 2026-05-21: the spec-only URL-share bug
+ * was fixed by adding an optional top-level `cipher` hint to
+ * `CipherDocument`. The recipient now reads the hint and flips the
+ * cipher selector to match the loaded spec; the ciphertext matches.
  *
  * Purpose: pre-flight the manual browser smoke for DES by driving the
  * same checklist via Playwright + screenshots, so the human pass starts
@@ -305,33 +305,26 @@ test.describe("Phase 6e — DES manual smoke pre-flight (Playwright)", () => {
     const fresh = await context.newPage();
     await fresh.goto(sharedUrl);
 
-    // FINDING (Phase 6e): the spec-only URL share (the default) loads
-    // the DES spec into the recipient's cipher view but does NOT flip
-    // the recipient's cipher SELECTOR to DES. Result: selector reads
-    // "Custom (was AES-128)" because the recipient's session-default
-    // cipher (AES-128) plus the loaded DES spec read as a custom AES.
-    // The plaintext + key fields stay at AES-128's 16-byte canonical
-    // defaults, so DES (8-byte block) immediately errors with
-    // "key: expected 8 bytes (16 hex chars), got 16".
+    // Phase 6e fix: spec-only documents now carry an optional
+    // top-level `cipher` hint that flips the recipient's selector to
+    // match the loaded spec. The fresh tab boots into AES-128 defaults,
+    // but `setSpecFromDocument` reads `doc.cipher === "des"` and flips
+    // both the cipher signal AND falls back cipherMode to "single-block"
+    // (since DES doesn't support ECB/CBC). The result: a DES spec
+    // loaded into an AES-128-default recipient now produces the FIPS
+    // 46-3 Appendix B ciphertext, same as the encrypt-side tab.
     //
-    // This is a user-visible defect in the share UX for non-AES
-    // ciphers. AES users wouldn't notice (the AES-128 → custom-AES
-    // case still produces compatible byte lengths); Speck and Serpent
-    // users would see similar issues with their default keys (16, 24,
-    // or 32 bytes vs. 8 / 16 bytes).
-    //
-    // The Phase 6e human pass should confirm this reproduces and
-    // decide whether spec-only share should:
-    //   (a) infer the cipher selector from the canonical match, or
-    //   (b) inline a "cipher" hint in the spec-only document so the
-    //       selector flips on load.
-    // For now, pin the OBSERVED behavior so we don't quietly fix it
-    // without noting it. If a future change makes share-load DES
-    // produce the KAT ciphertext, this assertion will fail and force
-    // the choice to be re-recorded.
-    await expect(fresh.locator(".error")).toContainText(/expected 8 bytes/i, {
+    // Before this fix, this assertion was pinning the OPPOSITE: the
+    // recipient sat at "Custom (was AES-128)" + "expected 8 bytes"
+    // error because the AES-128 default key (16 bytes) didn't match
+    // DES's 8-byte block. The bug + reproduction are documented in
+    // `docs/plans/des-feistel.md` Phase 6e bug list and the
+    // `CipherDocument.cipher` field's docstring.
+    await expect(fresh.locator(".result code")).toHaveText(FIPS_APPENDIX_B_CT_HEX, {
       timeout: 5000,
     });
+    // The cipher selector should read "des" (not "aes-128").
+    await expect(fresh.locator('select:has(option[value="des"])')).toHaveValue("des");
 
     await fresh.screenshot({
       path: "test-results/des-6e-09-share-roundtrip.png",

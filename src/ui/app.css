@@ -1301,8 +1301,10 @@ button:disabled {
 /* ─── DES S-box table (Phase 4 of des-feistel.md) ──────────────────────
    Per S-box, render 4 rows × 16 cols (the FIPS 46-3 Appendix A layout).
    Each `.des-sbox-row` is its own 16-column grid so the row index reads
-   top-to-bottom, matching how the standard prints the tables. Reuses
-   `.bit-table-cell` for the per-cell look. */
+   top-to-bottom, matching how the standard prints the tables. Cells are
+   editable ByteCellInputs (Phase 6e); each row must be a permutation of
+   0..15, with duplicates surfaced by ByteCellInput's existing red-outline
+   highlight (same affordance as AES/Serpent S-box duplicate detection). */
 .des-sbox-table {
   display: flex;
   flex-direction: column;
