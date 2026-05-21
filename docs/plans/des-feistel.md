@@ -7,6 +7,33 @@
 > (`docs/plans/universal-port-dataflow.md`) is now unblocked: its
 > "wait for DES Phase 6e to close" gate has been satisfied.
 
+> **Phase 6e Playwright extension (2026-05-21, commits `e9ce34a` +
+> `f44b362`).** Four new checkpoints added to
+> `e2e/des-phase-6e-self-smoke.spec.ts` to pin regressions of the
+> bug-fix batch + close item 5 of the original checklist:
+> - **cp 10** — graph view hides `.trace-timeline` + `.step-list-pane`
+>   from the DOM (Bug 12 regression).
+> - **cp 11** — DES Rounds group container's header rect appears in
+>   the DOM BEFORE every `round.N` header rect, asserting the
+>   depth-ascending paint order from `containersInPaintOrder`
+>   (Bug 3 regression).
+> - **cp 12** — round.1's `key-schedule@->round.1.xor-K` replica
+>   chip's bounding box falls inside the Rounds container's full
+>   `<rect>` (Bug 14 regression on spine-replica same-parent rule).
+>   Requires `cryptographer.replicationEnabled=true` in localStorage.
+> - **cp 13** — clicking the round.1 s-boxes leaf in graph view
+>   mounts `DesSBoxesBlock`; a real keyboard edit on S1[0][0] (0e →
+>   0f) reaches the spec store, verified via the cell's reactively-
+>   computed `title` attribute ("= 15 — duplicate value..."). Closes
+>   the spec-mutation half of original checklist item 5; the
+>   narration-update half stays on the manual list.
+> Selector + driver lessons captured inline: container header
+> `<rect>` carries `data-testid="graph-container-header-${id}"` (NOT
+> the outer `<g>`), so header-rect DOM index proxies parent-`<g>`
+> paint order; and Solid's `onInput` requires REAL keyboard input
+> (`cell.type()`), not `evaluate(el => el.dispatchEvent(new
+> Event("input")))`.
+
 > **Phase 6e closing batch (2026-05-21).** User's manual browser
 > walkthrough surfaced 8 findings; 5 were real bugs and got fixed,
 > 3 were working-as-designed and got documented:
