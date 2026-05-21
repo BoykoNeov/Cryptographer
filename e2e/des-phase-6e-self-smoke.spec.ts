@@ -1,11 +1,14 @@
 /**
  * TEMPORARY self-smoke for Phase 6e of `docs/plans/des-feistel.md`.
  *
- * DELETE WHEN: Phase 6e closes (manual browser smoke signed off in the
- * plan file). The spec exists to pre-flight the manual pass; after the
- * human pass confirms 6e, the dormant-Playwright stance reasserts and
- * this file goes away. Choice made 2026-05-20 (option 3 of 4 weighed
- * in that session: keep through the human pass, then delete).
+ * DELETE / SPLIT WHEN: Phase 6e closes (manual browser smoke signed off
+ * in the plan file). Original intent (2026-05-20): keep through the
+ * human pass, then delete. RECONSIDER on close: checkpoints 10–13 are
+ * regression pins for the bug-fix batch — they outlive the manual-pass
+ * purpose. On Phase 6e close, either (a) delete cp 1–9 and rename the
+ * file to a permanent DES-graph-regression spec, or (b) extract cp
+ * 10–13 into a separate permanent spec and delete this one. Don't
+ * silently delete cp 10–13 with the rest.
  *
  * Checkpoint 9 re-baselined 2026-05-21: the spec-only URL-share bug
  * was fixed by adding an optional top-level `cipher` hint to
@@ -27,6 +30,34 @@
  *   6. Drop a new step into a `feistel-round` track via the palette.
  *   7. Collapse a round — verify graph still renders.
  *   8. Scrub through trace — verify Feistel linear-mode components mount.
+ *
+ * Checkpoint → checklist mapping (the cp numbering in this file does not
+ * line up 1:1 with the checklist numbering above; they grew organically):
+ *   cp 1 → item 1.  cp 2 → item 2.  cp 3 → graph render sanity (extra).
+ *   cp 4 → item 7.  cp 5 → item 8.  cp 6 → save+share smoke (extra).
+ *   cp 7 → item 6 (palette renders; the actual DROP is left to manual).
+ *   cp 8 → item 3.  cp 9 → item 4 (pins the OBSERVED bug; see notes).
+ *
+ * Checkpoints 10–13 are NOT from the original checklist — they pin
+ * regressions of the Phase 6e bug-fix batch (commit `379c40d`):
+ *   cp 10 → Bug 12 (slider + StepList hidden in graph view).
+ *   cp 11 → Bug 3  (containers paint depth-ascending; round borders not
+ *                   obliterated by the Rounds group rect).
+ *   cp 12 → Bug 14 (round.1 ks replica chip falls inside Rounds, not at
+ *                   root level).
+ *   cp 13 → editor-binding pipeline (leaf click in graph view mounts
+ *                   the right ParamEditor block — surrogate for item 5
+ *                   since DES S-boxes are read-only by design).
+ *
+ * Still UNCOVERED — must be eyeballed in the manual pass:
+ *   - Item 5 reactive half (param edit triggers re-run + narration
+ *     update) — no DES surface; verify on AES.
+ *   - Item 6 actual DROP into a feistel-round track gutter.
+ *   - Bug 1  (click rejoin / passthrough chip → inspector shows frame).
+ *   - Bug 2  (rejoin crossover X not colored).
+ *   - Bug 4a (ciphertext layout — placed in `.inputs` row).
+ *   - Bug 10 (rejoin-source arrows show single-track bytes, not 8B).
+ *   - Bug 13 (L passthrough outgoing arrow bytes correct).
  *
  * Run: `npm run smoke -- e2e/des-phase-6e-self-smoke.spec.ts`
  * To watch: `npm run smoke:headed -- e2e/des-phase-6e-self-smoke.spec.ts`
@@ -391,5 +422,183 @@ test.describe("Phase 6e — DES manual smoke pre-flight (Playwright)", () => {
     // ship a flaky drop in this self-smoke, the human pass at Phase 6e
     // is the discriminating check. We've at least confirmed the palette
     // renders with the graph view active.
+  });
+
+  // ─── Bug-fix-batch regression pins (added 2026-05-21) ─────────────────
+  //
+  // The Phase 6e bug-fix batch (commit `379c40d`) shipped 8 graph-view
+  // fixes. These are easy to silently regress because they live in
+  // SVG-rendering territory jsdom doesn't faithfully exercise (paint
+  // order, bounding-box geometry, visibility under `<Show>` gates).
+  // The checks below pin the most load-bearing ones.
+
+  test("checkpoint 10 — graph view hides the slider + StepList (Bug 12 regression)", async ({
+    page,
+  }) => {
+    await selectDesCipher(page);
+    await expect(page.locator(".result code")).toHaveText(FIPS_APPENDIX_B_CT_HEX);
+
+    // In LINEAR view both are visible — sanity baseline before we flip.
+    await expect(page.locator(".trace-timeline")).toBeVisible();
+    await expect(page.locator(".step-list-pane")).toBeVisible();
+
+    await openTab(page, "graph");
+    await expect(page.locator(".graph-container-rect").first()).toBeVisible();
+
+    // Both wrappers are gated by `<Show when={viewMode() !== "graph"}>`,
+    // so they should be REMOVED from the DOM (not just hidden via CSS).
+    // `toHaveCount(0)` is the strictest available assertion against the
+    // `<Show>` pattern.
+    await expect(page.locator(".trace-timeline")).toHaveCount(0);
+    await expect(page.locator(".step-list-pane")).toHaveCount(0);
+  });
+
+  test("checkpoint 11 — containers paint depth-ascending so round borders aren't hidden (Bug 3 regression)", async ({
+    page,
+  }) => {
+    await selectDesCipher(page);
+    await expect(page.locator(".result code")).toHaveText(FIPS_APPENDIX_B_CT_HEX);
+    await openTab(page, "graph");
+    await expect(page.locator(".graph-container-rect").first()).toBeVisible();
+
+    // `containersInPaintOrder` in GraphView sorts by `containerPath.length`
+    // ascending so the outer "rounds" group renders BEFORE its 16 nested
+    // feistel-round containers. In SVG, later siblings paint on top — so
+    // the inner round rects (with their borders) need to come AFTER the
+    // parent rounds rect in the document. Without the sort, the outer
+    // group's neutral rect can obliterate the inner round borders
+    // (the original Phase 6e symptom).
+    //
+    // The container header <rect> carries `data-testid="graph-container-
+    // header-${id}"` (per GraphView line ~5993). Each header rect lives
+    // inside its container's outer <g>; the <g> elements are siblings
+    // under the SVG, so comparing header-rect DOM indices is equivalent
+    // to comparing parent-<g> indices.
+    const order = await page.evaluate(() => {
+      const els = Array.from(document.querySelectorAll('[data-testid^="graph-container-header-"]'));
+      const idx = new Map<string, number>();
+      els.forEach((el, i) => {
+        const testid = el.getAttribute("data-testid") ?? "";
+        const id = testid.replace(/^graph-container-header-/, "");
+        idx.set(id, i);
+      });
+      return Object.fromEntries(idx);
+    });
+    const roundsIdx = order.rounds;
+    expect(roundsIdx, "Rounds container header should exist in DOM").toBeDefined();
+    for (let r = 1; r <= 16; r++) {
+      const child = order[`round.${r}`];
+      expect(child, `round.${r} should be present in DOM`).toBeDefined();
+      expect(child, `round.${r} must paint AFTER rounds (depth-ascending order)`).toBeGreaterThan(
+        roundsIdx as number,
+      );
+    }
+  });
+
+  test("checkpoint 12 — round.1 key-schedule replica chip falls inside the Rounds container (Bug 14 regression)", async ({
+    page,
+  }) => {
+    // The replica machinery is OFF by default; the LocalStorage flag
+    // `cryptographer.replicationEnabled === "true"` flips it on at app
+    // boot. Set before navigate so the first render already has replicas.
+    await page.evaluate(() => {
+      window.localStorage.setItem("cryptographer.replicationEnabled", "true");
+    });
+    await page.reload();
+
+    await selectDesCipher(page);
+    await expect(page.locator(".result code")).toHaveText(FIPS_APPENDIX_B_CT_HEX);
+    await openTab(page, "graph");
+    await expect(page.locator(".graph-container-rect").first()).toBeVisible();
+
+    // The replica id pattern is `${source}@->${consumer}` (per
+    // `src/core/graph.ts` line ~1793). DES key-schedule fans out to all
+    // 16 round-key consumers via `aux.roundKey.N`; round.1 consumes
+    // `roundKey.0` in its `round.1.xor-K` leaf.
+    //
+    // Bug 14 was: this replica was being designated as a SPINE replica
+    // even though `key-schedule` lives at root (parent === "") and the
+    // consumer lives inside `rounds/round.1` (different parent), which
+    // landed the replica at root level — visually OUTSIDE the Rounds
+    // group. The fix requires source.parent === consumer.parent for
+    // spine designation, so the same fanout now resolves as an
+    // AUX-fanout replica which renders at the consumer's parent (inside
+    // Rounds). We assert that geometric containment.
+    const replica = page.locator('[data-testid="graph-leaf-key-schedule@->round.1.xor-K"]');
+    await expect(replica).toHaveCount(1);
+    const replicaBox = await replica.boundingBox();
+    if (!replicaBox) throw new Error("replica chip has no boundingBox");
+
+    // The Rounds container's full bbox is on the `.graph-container-rect`
+    // INSIDE the same <g> wrapper that holds the
+    // `graph-container-header-rounds` rect. Walk up from the header to
+    // its parent <g> and pick out the sibling `.graph-container-rect`.
+    // Doing it in a page.evaluate avoids round-trips and gives us the
+    // bounding-client-rect directly.
+    const roundsBox = await page.evaluate(() => {
+      const header = document.querySelector('[data-testid="graph-container-header-rounds"]');
+      if (!header) return null;
+      const wrapper = header.closest("g.graph-container");
+      if (!wrapper) return null;
+      const containerRect = wrapper.querySelector(":scope > .graph-container-rect");
+      if (!containerRect) return null;
+      const r = containerRect.getBoundingClientRect();
+      return { x: r.x, y: r.y, width: r.width, height: r.height };
+    });
+    if (!roundsBox) throw new Error("rounds container rect could not be located");
+
+    // Tolerance: a 2px outside-the-rect epsilon accommodates the
+    // container <rect>'s stroke width (the leaf rect can graze the
+    // container edge by ~1px without violating the "inside" intent).
+    const eps = 2;
+    expect(replicaBox.x, "replica left edge inside rounds").toBeGreaterThanOrEqual(
+      roundsBox.x - eps,
+    );
+    expect(replicaBox.y, "replica top edge inside rounds").toBeGreaterThanOrEqual(
+      roundsBox.y - eps,
+    );
+    expect(replicaBox.x + replicaBox.width, "replica right edge inside rounds").toBeLessThanOrEqual(
+      roundsBox.x + roundsBox.width + eps,
+    );
+    expect(
+      replicaBox.y + replicaBox.height,
+      "replica bottom edge inside rounds",
+    ).toBeLessThanOrEqual(roundsBox.y + roundsBox.height + eps);
+  });
+
+  test("checkpoint 13 — click round.1 s-boxes leaf in graph view binds DesSBoxesBlock", async ({
+    page,
+  }) => {
+    // Phase 6e checklist item 5 originally read "Param edit on an S-box
+    // cell — trace re-runs." DES S-boxes are FIPS-46-3 Appendix A
+    // constants rendered read-only by `DesSBoxesBlock` (each cell is a
+    // <span>, not an <input>), so there is no editable surface to drive.
+    // The closest defensible automated check is: clicking the s-boxes
+    // leaf in graph view mounts the right ParamEditor block. This pins
+    // the cross-view leaf-click → setSelectedStepId → ParamEditor
+    // binding chain that's hard to exercise in jsdom (the real param-
+    // editor pane is gated on `viewMode() === "graph"`).
+    await selectDesCipher(page);
+    await expect(page.locator(".result code")).toHaveText(FIPS_APPENDIX_B_CT_HEX);
+    await openTab(page, "graph");
+
+    // Use a real `.click()` (not `dispatchEvent`) — the leaf rect is the
+    // top element at its own location, so Playwright's actionability
+    // hit-test should pass. Real clicks here also surface any future
+    // regression in the leaf's hit-test surface (Bug 1 was exactly that
+    // class of bug for the rejoin chip — we want this test to FAIL
+    // loudly if the s-boxes leaf becomes un-clickable).
+    const sboxLeaf = page.locator('[data-testid="graph-leaf-round.1.s-boxes"]');
+    await expect(sboxLeaf).toBeVisible();
+    await sboxLeaf.click();
+
+    // DesSBoxesBlock renders 8 collapsed `<details>` and a "S-box count"
+    // scalar row. The scalar row is the cheapest unique handle.
+    const editorPane = page.locator(".graph-param-editor-pane");
+    await expect(editorPane).toBeVisible();
+    await expect(editorPane.locator("dt", { hasText: "S-box count" })).toBeVisible();
+    await expect(editorPane.locator("dd", { hasText: "8" })).toBeVisible();
+    // Eight collapsed S-box sections.
+    await expect(editorPane.locator("details.param-collapsible")).toHaveCount(8);
   });
 });
