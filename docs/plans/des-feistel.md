@@ -246,6 +246,48 @@
 > `round.4.expand-R`. Gate (biome + tsc + vitest 1597/1597 + vite
 > build) clean.
 >
+> **Two visual follow-ups surfaced in browser smoke, deferred to
+> future work:**
+>
+> - **UX-D-followup-1 — Chip's source-color paints both outgoing
+>   arrows.** Once the chip became a real producer (two outgoing
+>   arrows: into expand-R, into rejoin), the source-colors feature
+>   colors BOTH arrows with the same color. That's logically
+>   consistent — they're both sourced from the chip — but visually
+>   crowded across 15 rounds. Possible mitigations: (i) exclude
+>   synthetic passthrough sources from the source-color palette;
+>   (ii) thin/dash one of the two arrows so the visual hierarchy
+>   reads "primary chain → secondary bypass"; (iii) the bigger fix
+>   below (UX-D-followup-2) may incidentally help by separating the
+>   two arrows' exit points.
+>
+> - **UX-D-followup-2 — Chip → rejoin should exit the chip's LEFT
+>   side, not its BOTTOM.** Both outgoing arrows currently exit the
+>   chip's bottom edge, so the rejoin-bound arrow visually crosses
+>   the expand-R-bound arrow. The user wants the rejoin-bound arrow
+>   to leave the chip's LEFT edge (or right; the side that doesn't
+>   overlap the expand-R column) so the two arrows fan out into
+>   different geometry from the source. The general dispatcher in
+>   `EdgePath` (`src/ui/components/GraphView.tsx:~6477`) picks exit
+>   sides by box geometry alone today; a chip-specific override
+>   (or a `preferredExitSide` hint on the GraphEdge that the chip
+>   synthesis sets) is the smallest version. The bigger version
+>   below (UX-D-followup-3) subsumes this.
+>
+> - **UX-D-followup-3 — User-overrideable per-element port
+>   assignment (BIG idea, future).** Clicking any chip/leaf/chip
+>   would let the user pin "this incoming arrow enters from the
+>   LEFT, this outgoing arrow exits from the BOTTOM" etc. The
+>   port-spreading machinery already tracks per-consumer slot
+>   assignment (`src/ui/components/GraphView.tsx`'s slot-of /
+>   `targetXOffset` / `targetYOffset` plumbing — see comments at
+>   ~lines 6332–6356), so the data model is partly there; what's
+>   missing is (a) a UI surface for setting per-edge port
+>   preferences and (b) persistence alongside `LayoutSpec` in
+>   `src/ui/stores/layout.ts`. This would resolve both followups
+>   above as special cases of a general feature. Memory entry:
+>   [[project-future-ideas-user-overridable-element-ports]].
+>
 > **Fix-order update with UX-E…J added:** ~~UX-B (real bug)~~ →
 > ~~UX-D (pedagogy gap; every Feistel round)~~ → UX-G (visual bug;
 > visible the moment graph view is opened on DES) → UX-F (real UX
