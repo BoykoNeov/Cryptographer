@@ -1,16 +1,76 @@
 # DES + branching primitive — first Feistel cipher
 
 > **Status: Phases 1–6 shipped 2026-05-19 / 2026-05-21. Phase 6e
-> partial walk #2 paused 2026-05-21 (this session). M1 confirmed
-> ✅; M2–M7 deferred to a future session. Three new UX findings
-> captured for post-walk action — see "Phase 6e partial walk #2
-> (2026-05-21, mid-walk pause)" note below for details. The earlier
-> Phase 6e closing batch (5 fixes shipped) remains valid; the new
-> findings are pre-existing gaps the closing batch did not address.
-> Universal-port-dataflow plan (`docs/plans/universal-port-dataflow.md`)
-> remains unblocked — the new findings are UX polish/feature work,
-> not regressions, and don't reopen Phase 6e's "wait for DES" gate
-> for the universal-port plan.
+> partial walk #3 paused 2026-05-22 (this session). M1 ✅ (walk #2),
+> M2 ✅ + M3 ✅ (walk #3); M4–M7 deferred to a future session. Four
+> new UX findings now captured for post-walk action (UX-A/B/C from
+> walk #2 + UX-D from walk #3) — see the partial-walk notes below
+> for details. The earlier Phase 6e closing batch (5 fixes shipped)
+> remains valid; the new findings are pre-existing gaps the closing
+> batch did not address. Universal-port-dataflow plan
+> (`docs/plans/universal-port-dataflow.md`) remains unblocked — the
+> new findings are UX polish/feature work, not regressions, and
+> don't reopen Phase 6e's "wait for DES" gate for the universal-port
+> plan.
+
+> **Phase 6e partial walk #3 (2026-05-22, mid-walk pause).** Third
+> manual session against the same 7-item checklist. Two items
+> confirmed this session; walk paused after M3.
+>
+> **M2 — DnD into a feistel-round track gutter — ✅ CONFIRMED.**
+> Dragged a palette leaf onto round.5's L-passthrough chip: chip
+> lit up `.graph-drop-target-active` during hover, on release the
+> passthrough was replaced by the new step (track populated), STEPS
+> sidebar showed the step under L. Drop into the R-track gutter
+> landed under R. Auto-rerun fired in both cases (ciphertext
+> diverged from FIPS Appendix B `85e813540f0ab405`). Closes the
+> manual half of Phase 6d-v + 6e finding B.
+>
+> **M3 — Click rejoin / passthrough chip → inspector — ✅ CONFIRMED
+> (with design clarification).** Clicking a rejoin chip opens the
+> inspector with the real rejoin frame (4-arg combine detail with
+> track snapshots). Clicking a passthrough chip does NOT show a
+> "frame" — by design, passthroughs emit zero runtime frames
+> (`runtime.ts:275`); the inspector resolves the chip via
+> `lookupPassthroughBytes` and surfaces the L_in/R_in bytes as a
+> state value, not a frame envelope. User verified no "no frame
+> found" surface anywhere, confirming the Bug 1 fix in
+> `edge-value-lookup.ts` (canonicalize both sides) still holds.
+>
+> **UX-D — R_in → rejoin edge missing (new this walk).** Surfaced
+> while reviewing M3's rejoin behaviour. In feistel-standard, the
+> rejoin computes `new_L = R_in` AND `new_R = L_in ⊕ F(R_in, K_i)`.
+> Today's rejoin chip has incoming arrows from the L passthrough
+> (= L_in) and from the last F-stack step (= F(R_in, K_i)) — but no
+> visible arrow shows `R_in` flowing into the rejoin to become
+> `new_L`. The "swap" half of Feistel is therefore invisible in the
+> graph; users have to read narrators or the abstract Feistel mini-
+> diagram to learn it. Pedagogical cost is real — graph view should
+> stand on its own. Fix candidates:
+> (a) Synthesize a direct edge from the R-track's first leaf
+>     (the leaf that consumes R_in — DES's `expand-R`) → rejoin,
+>     labeled / typed so users read it as "the original R, bypassing
+>     F." Cheapest visually; minor risk of arrow tangle with the
+>     F-stack edge already terminating at rejoin.
+> (b) Promote the R-track input to its own chip (mirror of the L
+>     passthrough), so `R_in → passthrough → rejoin` is visible in
+>     parallel with `L_in → passthrough → rejoin`. Symmetric and
+>     analogous to UX-B's 6b-ii treatment, but adds a chip + a
+>     re-route for every populated R track.
+> (c) Re-shape the rejoin chip to expose `R_in` as a labelled
+>     incoming port distinct from the F-stack output port. Most
+>     pedagogically precise; biggest renderer change.
+> Combine-kind awareness matters: under `feistel-no-swap` (DES
+> round 16, possibly future variants), `new_L = L_in ⊕ F`, so
+> R_in → rejoin isn't load-bearing there. The synthesis (any
+> option) should gate on `combineKind` so round 16 stays clean.
+>
+> **Fix-order update with UX-D added:** UX-B (real bug) → UX-D
+> (real pedagogy gap; visible the moment graph view is opened on
+> DES) → UX-C (consistency feature) → UX-A (polish). UX-D promoted
+> ahead of UX-C because it affects every Feistel round 1–15 every
+> time the user opens graph view, whereas UX-C only matters when
+> the user edits S-boxes.
 
 > **Phase 6e partial walk #2 (2026-05-21, mid-walk pause).** Second
 > manual session against the manual checklist of 7 items still
