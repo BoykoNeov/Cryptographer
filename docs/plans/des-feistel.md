@@ -202,7 +202,7 @@
 > survives, so the bug is fully resolved by the outer swap. Full
 > gate (biome + tsc + vitest 1590/1590 + vite build) clean.
 >
-> **UX-D closed 2026-05-22 (commit pending).** Shipped candidate (a)
+> **UX-D closed 2026-05-22 (commit `83502de`).** Shipped candidate (a)
 > from the plan: synthesized state edge from the R-track's first
 > leaf (`round.N.expand-R` for DES) directly to `:rejoin`, gated on
 > `combineKind === "feistel-standard"`. Round 16 (`feistel-no-swap`)
