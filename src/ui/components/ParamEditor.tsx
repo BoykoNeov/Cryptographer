@@ -15,7 +15,7 @@
 import { findStep } from "@/core/spec-mutations";
 import { gfMatInverse4x4 } from "@/core/state/gf-matrix";
 import type { Json, StepLeaf, StepNode } from "@/core/types";
-import { For, Match, Show, Switch, createMemo, createSignal } from "solid-js";
+import { For, Index, Match, Show, Switch, createMemo, createSignal } from "solid-js";
 import {
   editAllStepsByType,
   editStepParams,
@@ -1069,11 +1069,20 @@ const DesSBoxesBlock = (props: { step: StepLeaf }) => {
           <dd>{sboxes().length}</dd>
         </div>
       </dl>
-      <For each={sboxes()}>
+      {/* <Index> instead of <For> so the eight <details> DOM nodes
+          reconcile by position rather than reference equality. A single
+          cell edit produces a new sboxes() array whose 8 entries all
+          have new references (writeCell deep-clones every box's rows
+          to keep editStepParams' short-circuit logic happy), so <For>
+          would re-mount all 8 <details> and collapse the user's open
+          disclosure. <Index> keeps the <details> nodes mounted; only
+          the inner cells re-render. UX-B from DES Phase 6e partial
+          walk #2 (2026-05-22). */}
+      <Index each={sboxes()}>
         {(box, idx) => (
           <details class="param-section param-collapsible">
             <summary class="param-section-label">
-              S{idx() + 1} (4 rows × 16 cols, 4-bit values — click to expand)
+              S{idx + 1} (4 rows × 16 cols, 4-bit values — click to expand)
             </summary>
             {/* Each row is its own 16-col grid. ByteCellInput cells use
                 the existing compact mode (same one Serpent's 4×4 S-box
@@ -1083,7 +1092,7 @@ const DesSBoxesBlock = (props: { step: StepLeaf }) => {
                 is size-parameterized on `values.length` so it works
                 unchanged at N=16. */}
             <div class="des-sbox-table">
-              <For each={box}>
+              <For each={box()}>
                 {(row, r) => (
                   <div class="des-sbox-row" data-row={r()}>
                     <For each={row}>
@@ -1091,13 +1100,13 @@ const DesSBoxesBlock = (props: { step: StepLeaf }) => {
                         <ByteCellInput
                           compact
                           value={value}
-                          duplicate={dupesByRow()[idx()]?.[r()]?.has(c()) ?? false}
+                          duplicate={dupesByRow()[idx]?.[r()]?.has(c()) ?? false}
                           title={
-                            dupesByRow()[idx()]?.[r()]?.has(c())
-                              ? `S${idx() + 1}[row ${r()}][col ${c()}] = ${value} — duplicate value in this row (each row must be a permutation of 0..15)`
-                              : `S${idx() + 1}[row ${r()}][col ${c()}] = ${value}`
+                            dupesByRow()[idx]?.[r()]?.has(c())
+                              ? `S${idx + 1}[row ${r()}][col ${c()}] = ${value} — duplicate value in this row (each row must be a permutation of 0..15)`
+                              : `S${idx + 1}[row ${r()}][col ${c()}] = ${value}`
                           }
-                          onCommit={(next) => writeCell(idx(), r(), c(), next)}
+                          onCommit={(next) => writeCell(idx, r(), c(), next)}
                         />
                       )}
                     </For>
@@ -1107,7 +1116,7 @@ const DesSBoxesBlock = (props: { step: StepLeaf }) => {
             </div>
           </details>
         )}
-      </For>
+      </Index>
     </>
   );
 };

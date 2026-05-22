@@ -189,7 +189,20 @@
 >   `<label>` stack layout. CSS in `app.css:221-231` needs a tweak
 >   to switch from inline display to flex-column.
 >
-> **Fix-order update with UX-E…J added:** UX-B (real bug) →
+> **UX-B closed 2026-05-22 (commit pending).** Fix candidate (a)
+> from the root-cause analysis: outer `<For each={sboxes()}>` in
+> `DesSBoxesBlock` (`src/ui/components/ParamEditor.tsx:1072`) swapped
+> to `<Index>`. With `<Index>`, the eight `<details>` DOM nodes
+> reconcile by position rather than reference equality, so a single
+> cell edit (which writes a new sboxes array whose 8 entries all
+> have new references) no longer re-mounts them — the user's open
+> disclosure stays open. Inner `<For each={box()}>` and
+> `<For each={row}>` left as-is; they re-mount cells on every edit,
+> but those are simple ByteCellInputs and the `<details>` parent
+> survives, so the bug is fully resolved by the outer swap. Full
+> gate (biome + tsc + vitest 1590/1590 + vite build) clean.
+>
+> **Fix-order update with UX-E…J added:** ~~UX-B (real bug)~~ →
 > UX-D (pedagogy gap; every Feistel round) → UX-G (visual bug;
 > visible the moment graph view is opened on DES) → UX-F (real UX
 > gap; resolution locked to path (a) per-leaf delete) →
