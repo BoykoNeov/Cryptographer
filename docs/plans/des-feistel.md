@@ -212,7 +212,7 @@
 > R_in — false. The fix's own narrative was inverted by the rendering.
 >
 > Candidate (a) reverted in the same session; candidate (b) shipped in
-> commit (pending). The R-bypass narrative now lives on a synthetic
+> commit `029caa5`. The R-bypass narrative now lives on a synthetic
 > passthrough chip materialized at the head of the R-column for
 > `feistel-standard` rounds with a populated R-track:
 >
