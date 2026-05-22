@@ -37,7 +37,18 @@ describe("feistel-round graph derivation", () => {
     // synthetic so the L column reads as "carries L_in through
     // unchanged" instead of empty space. Named via
     // `feistelPassthroughId(roundId, trackIdx)`.
-    expect(round1?.feistelTracks).toEqual([["round.1:passthrough-0"], ["round.1.add-k"]]);
+    //
+    // UX-D candidate (b), 2026-05-22 — populated R-track in a
+    // `feistel-standard` round (this fixture qualifies) prepends an
+    // R-bypass passthrough chip at the head of the R-column. The chip
+    // shares the empty-track naming convention (`:passthrough-1`)
+    // because it represents the same semantic — R_in carried unchanged
+    // to rejoin — and `lookupPassthroughBytes` resolves both via the
+    // same regex.
+    expect(round1?.feistelTracks).toEqual([
+      ["round.1:passthrough-0"],
+      ["round.1:passthrough-1", "round.1.add-k"],
+    ]);
     expect(round1?.feistelTrackNames).toEqual(["L", "R"]);
     expect(round1?.feistelCombineKind).toBe("feistel-standard");
   });
@@ -90,11 +101,18 @@ describe("feistel-round graph derivation", () => {
     const stateEdges = graph.edges.filter((e) => e.kind === "state");
     const has = (from: string, to: string): boolean =>
       stateEdges.some((e) => e.from === from && e.to === to);
-    // Fan-in to R-track first leaf:
-    expect(has("pre", "round.1.add-k")).toBe(true);
-    // Phase 6b-ii — empty L track is now routed through the
-    // synthetic passthrough chip (`{roundId}:passthrough-{trackIdx}`)
-    // instead of `predecessor → rejoin` directly. Two edges:
+    // UX-D candidate (b), 2026-05-22 — `feistel-standard` rounds with
+    // populated R-tracks splice an R-bypass passthrough chip at the
+    // head of the R-column. Fan-in is now predecessor → chip; chip's
+    // outgoing edges are chip → trackFirst AND chip → rejoin.
+    expect(has("pre", "round.1:passthrough-1")).toBe(true);
+    expect(has("round.1:passthrough-1", "round.1.add-k")).toBe(true);
+    expect(has("round.1:passthrough-1", "round.1:rejoin")).toBe(true);
+    // The pre-candidate-(b) fan-in `predecessor → trackFirst` is now
+    // routed through the chip; the direct edge should be gone.
+    expect(has("pre", "round.1.add-k")).toBe(false);
+    // Phase 6b-ii — empty L track is still routed through its own
+    // synthetic passthrough chip (`{roundId}:passthrough-{trackIdx}`).
     expect(has("pre", "round.1:passthrough-0")).toBe(true);
     expect(has("round.1:passthrough-0", "round.1:rejoin")).toBe(true);
     // The direct predecessor → rejoin shortcut from Phase 6a is gone:
@@ -160,13 +178,20 @@ describe("feistel-round graph derivation", () => {
     expect(has("round.rich.b", "round.rich.c")).toBe(true);
     // Last R-track leaf → rejoin:
     expect(has("round.rich.c", "round.rich:rejoin")).toBe(true);
-    // The first R-track leaf carries the UX-D "R_in bypasses F" arrow
-    // to rejoin (combineKind: feistel-standard). Both edges (chain
-    // successor + bypass) must coexist; nothing should leak into the
-    // L track (which is empty and routes through a passthrough chip).
+    // UX-D candidate (b), 2026-05-22 — the populated R-track in a
+    // `feistel-standard` round gets a synthetic R-bypass passthrough
+    // chip (`:passthrough-1`) at the head of the column. The chip
+    // sits upstream of round.rich.a (the F-stack head), so the chain
+    // runs chip → a → b → c with the bypass coming off the chip
+    // (chip → rejoin) in parallel with the F-stack's terminal fan-out.
+    expect(has("round.rich:passthrough-1", "round.rich.a")).toBe(true);
+    expect(has("round.rich:passthrough-1", "round.rich:rejoin")).toBe(true);
+    // round.rich.a's only outgoing edge is to round.rich.b
+    // (the chip is upstream, not parallel — the bypass arrow leaves
+    // the chip, not round.rich.a).
     for (const e of stateEdges) {
       if (e.from === "round.rich.a") {
-        expect(e.to === "round.rich.b" || e.to === "round.rich:rejoin").toBe(true);
+        expect(e.to).toBe("round.rich.b");
       }
     }
   });

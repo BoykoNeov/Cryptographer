@@ -202,24 +202,49 @@
 > survives, so the bug is fully resolved by the outer swap. Full
 > gate (biome + tsc + vitest 1590/1590 + vite build) clean.
 >
-> **UX-D closed 2026-05-22 (commit `83502de`).** Shipped candidate (a)
-> from the plan: synthesized state edge from the R-track's first
-> leaf (`round.N.expand-R` for DES) directly to `:rejoin`, gated on
-> `combineKind === "feistel-standard"`. Round 16 (`feistel-no-swap`)
-> stays clean as designed. The edge carries a dedicated
-> `R_IN_BYPASS_AUX_KEY` sentinel so (1) the SVG `<title>` tooltip
-> reads "R_in (bypass F)" instead of the generic "state", and (2)
-> `lookupRegularState` discriminates on the sentinel to return the
-> producer's `stateBefore` (= R_in, 4 bytes for DES) rather than its
-> `stateAfter` (= E(R), 6 bytes) when the user clicks the arrow —
-> mirroring the existing rejoin-OUTGOING half-slice special-case.
-> Three new graph-derivation tests (rounds 1–15 emit, round 16
-> doesn't, fan-out edge preserved) + two new lookup tests (bypass
-> returns 4-byte stateBefore; same-endpoints `auxKey: "state"` still
-> falls through to stateAfter) pin the regression. Fixture-test in
-> `feistel-graph.test.ts` updated to acknowledge the bypass as a
-> second legal outgoing edge from the R-track first leaf. Gate
-> (biome + tsc + vitest 1595/1595 + vite build) clean.
+> **UX-D shipped candidate (a) first then re-shipped candidate (b)
+> 2026-05-22.** First attempt (commit `83502de`) synthesized a direct
+> state edge from `round.N.expand-R` → `:rejoin` for `feistel-standard`
+> rounds. In-browser smoke surfaced two problems: (1) the arrow
+> inherited expand-R's source color and read as "another of expand-R's
+> outputs"; (2) more fundamentally, expand-R CONSUMES R_in and PRODUCES
+> E(R), so an arrow rooted at expand-R visually claims expand-R emits
+> R_in — false. The fix's own narrative was inverted by the rendering.
+>
+> Candidate (a) reverted in the same session; candidate (b) shipped in
+> commit (pending). The R-bypass narrative now lives on a synthetic
+> passthrough chip materialized at the head of the R-column for
+> `feistel-standard` rounds with a populated R-track:
+>
+>   - `walkSpec` synthesizes the chip with id `${roundId}:passthrough-1`
+>     and `synthetic: "passthrough"`, then prepends to
+>     `perTrackChildIds[1]` so the renderer lays it out atop the
+>     R-column.
+>   - `processFeistelRound` splices the chip into the chain:
+>     `predecessor → chip → trackFirst → … → trackLast → rejoin`, plus
+>     a parallel `chip → rejoin` for the bypass.
+>   - Reusing the empty-track chip's id and synthetic kind means
+>     `lookupPassthroughBytes` resolves the chip's outgoing arrows to
+>     `params.R_in` from the rejoin frame — the 4-byte R_in — without
+>     any new lookup branch.
+>   - The L-passthrough handles `new_R = L_in ⊕ R_out`'s L_in side
+>     symmetrically. Round 16 (`feistel-no-swap`) gets no R-bypass chip
+>     since the swap narrative doesn't apply there.
+>
+> Pedagogy: predecessor fans into the chip (R_in enters), then the
+> chip's two outgoing arrows show R_in's two destinations — the F-stack
+> (head: expand-R) and the rejoin (bypass). The arrow's origin is the
+> chip (which truly "carries" R_in), not expand-R.
+>
+> Tests rewritten: 5 new in `tests/des-graph.test.ts` for the chip
+> shape + edge routing; 2 in `tests/edge-value-lookup.test.ts` for the
+> chip's outgoing values (chip → rejoin and chip → expand-R both
+> return the 4-byte R_in). `feistel-graph.test.ts` per-track-children
+> assertion + within-track-DFS assertion updated for the chip's
+> position; `feistel-collapse-generic.test.ts` collapsed-spine
+> assertion updated to land on `round.4:passthrough-1` instead of
+> `round.4.expand-R`. Gate (biome + tsc + vitest 1597/1597 + vite
+> build) clean.
 >
 > **Fix-order update with UX-E…J added:** ~~UX-B (real bug)~~ →
 > ~~UX-D (pedagogy gap; every Feistel round)~~ → UX-G (visual bug;

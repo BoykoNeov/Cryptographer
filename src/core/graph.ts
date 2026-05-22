@@ -558,6 +558,54 @@ const walkSpec = (
             synthetic: "passthrough",
           });
           trackChildren.push(ptId);
+        } else if (trackIdx === 1 && node.combineKind === "feistel-standard") {
+          // UX-D candidate (b), 2026-05-22 — populated R-track in a
+          // `feistel-standard` round (DES rounds 1..15) gets a PARALLEL
+          // passthrough chip at the head of the R-column, representing
+          // R_in flowing unchanged to the rejoin alongside the F-stack.
+          // The chip is the visual anchor for the Feistel SWAP
+          // (`new_L = R_in`): a clickable element labelled with R_in's
+          // bytes, two outgoing arrows (one to expand-R / the F-stack,
+          // one directly to rejoin) that show R_in's two destinations.
+          //
+          // Candidate (a) — synthesize an arrow expand-R → rejoin — was
+          // tried first (commit `83502de`) and reverted because the
+          // arrow visually suggested expand-R PRODUCED R_in, whereas
+          // expand-R CONSUMES it (and produces E(R)). The chip moves
+          // the arrow's origin off expand-R, restoring "R_in flows to
+          // rejoin" as the pedagogy without putting it on top of the
+          // wrong node.
+          //
+          // We reuse the empty-track chip's id (`:passthrough-1`) and
+          // synthetic kind. Semantically the chip represents the same
+          // thing in both cases — R_in carried unchanged. The
+          // `lookupPassthroughBytes` regex in edge-value-lookup keys
+          // off `:passthrough-(\d+)` and maps trackIdx 1 → `R_in` from
+          // the rejoin frame's params, so the chip's value lookup
+          // works for free in either case. (No id collision is
+          // possible: only one branch fires per round — empty track
+          // produces the chip via the IF above, populated track
+          // produces it via this ELSE IF.)
+          //
+          // The chip is NOT added to `trackChildren` (and therefore
+          // NOT in the spec walker's view of the R-track), so the
+          // chain edges in `processFeistelRound` still run
+          // predecessor → expand-R → … → p-permute → rejoin
+          // unchanged. The chip's edges are emitted by
+          // `processFeistelRound` separately, gated on the same
+          // (combineKind, R-track populated) condition. We DO
+          // prepend the chip to `perTrackChildIds[1]` so the
+          // renderer lays it out at the top of the R-column;
+          // `feistelTracks[1]` becomes `[chip, expand-R, …]`.
+          const rBypassId = feistelPassthroughId(node.id, 1);
+          ctx.nodes.push({
+            stepId: rBypassId,
+            stepType: PASSTHROUGH_STEP_TYPE,
+            label: rBypassId,
+            containerPath: nestedPath,
+            synthetic: "passthrough",
+          });
+          trackChildren.unshift(rBypassId);
         }
         perTrackChildIds.push(trackChildren);
         flatChildIds.push(...trackChildren);
@@ -865,35 +913,6 @@ const deriveEdges = (trace: Trace, ctx: BuildContext): GraphEdge[] => {
 const STATE_AUX_KEY = "state";
 
 /**
- * Sentinel aux key carried on the synthesized "R_in bypasses F" state
- * edge inside `feistel-standard` rounds (UX-D, 2026-05-22). The edge
- * runs from the R-track's first leaf (the leaf that consumes R_in —
- * DES's `expand-R`) directly to the round's `:rejoin` synthetic, making
- * the Feistel SWAP — `new_L = R_in` — visible in the graph instead of
- * hidden behind narrators / abstract diagrams.
- *
- * Why a distinct sentinel rather than `STATE_AUX_KEY`:
- *   - The native `<title>` tooltip on the rendered path text-renders
- *     the auxKey verbatim. With `"state"` the tooltip would read
- *     "state" (uninformative); with this sentinel it reads "R_in
- *     (bypass F)", which is the pedagogy the edge exists to deliver.
- *   - `lookupRegularState` discriminates on this sentinel to return the
- *     producer's `stateBefore` (= R_in) rather than its `stateAfter`
- *     (= the post-expansion 48-bit R, which would be misleading on
- *     this arrow). Mirrors the rejoin-OUTGOING half-slice special-case
- *     that already lives in `edge-value-lookup.ts`.
- *
- * Only synthesized when the feistel round's `combineKind` is
- * `"feistel-standard"`. `feistel-no-swap` (DES round 16),
- * `feistel-add-into-left`, and `feistel-add-into-right` do NOT emit
- * this edge — by plan author's UX-D entry, the bypass narrative is
- * load-bearing only for the standard swap formula. Round 16 stays
- * visually distinct from rounds 1..15, which itself teaches "this
- * round is special."
- */
-export const R_IN_BYPASS_AUX_KEY = "R_in (bypass F)";
-
-/**
  * Spec-walk pass: emit a `kind: "state"` edge between every DFS-consecutive
  * pair of sibling leaves within the same iterate-scope.
  *
@@ -1120,14 +1139,6 @@ const inferStateEdges = (spec: CipherSpec): GraphEdge[] => {
       predecessor !== undefined &&
       !iterateIds.has(predecessor) &&
       !feistelRoundIds.has(predecessor);
-    // The "R_in bypasses F" synthesized edge is emitted only when the
-    // round's combine math is `new_L = R_in` (the textbook Feistel
-    // swap). Other combine kinds skip it — `feistel-no-swap` (DES round
-    // 16) lets R_in flow into new_R unmodified, but the plan author
-    // explicitly chose to keep that round visually clean so it reads as
-    // "the swap is gone"; TEA's `feistel-add-into-*` half-cycles don't
-    // express a bypass either. See `R_IN_BYPASS_AUX_KEY` doc.
-    const synthesizeRInBypass = node.combineKind === "feistel-standard";
     node.tracks.forEach((track, trackIdx) => {
       const trackFirst = firstSpineId(track.children);
       const trackLast = lastSpineId(track.children);
@@ -1145,13 +1156,58 @@ const inferStateEdges = (spec: CipherSpec): GraphEdge[] => {
         edges.push({ from: ptId, to: rejoinId, auxKey: STATE_AUX_KEY, kind: "state" });
         return;
       }
-      // Fan-in edge: predecessor → first spine id of this track. Suppressed
-      // when the predecessor is a boundary node (iterate / feistel) since
-      // their boundary semantics already mark "no spine value crosses here."
+      // UX-D candidate (b), 2026-05-22 — populated R-track in a
+      // `feistel-standard` round (DES rounds 1..15) carries an
+      // R-bypass passthrough chip at the head of the column. The chip
+      // is materialized in `walkSpec` and prepended to
+      // `perTrackChildIds[1]` for layout, but it's NOT in
+      // `track.children` (the spec). We splice it into the chain here
+      // so the user sees:
+      //
+      //   predecessor → chip → trackFirst (= expand-R for DES)
+      //                       → trackFirst → … → trackLast → rejoin
+      //                  chip → rejoin (the bypass)
+      //
+      // The chip "owns" R_in: it has one incoming arrow (from
+      // predecessor) and two outgoing arrows (into the F-stack head,
+      // and direct to rejoin). Both outgoing values resolve to the
+      // 4-byte R_in via `lookupPassthroughBytes` (which keys off
+      // `:passthrough-1` → `params.R_in` on the rejoin frame).
+      //
+      // Candidate (a) — synthesize an arrow expand-R → rejoin — was
+      // tried first (commit `83502de`) and reverted because the
+      // arrow visually suggested expand-R PRODUCED R_in, whereas
+      // expand-R CONSUMES it (and produces E(R)). Putting the chip
+      // upstream of expand-R restores the honest pedagogy.
+      const useRBypassChip =
+        trackIdx === 1 && node.combineKind === "feistel-standard" && track.children.length > 0;
+      const chainHead = useRBypassChip ? feistelPassthroughId(node.id, 1) : trackFirst;
+      // Fan-in edge: predecessor → chain head. With the chip, that's
+      // predecessor → chip; without, predecessor → trackFirst (the
+      // pre-candidate-(b) shape). Suppressed when the predecessor is
+      // a boundary node (iterate / feistel) — their boundary
+      // semantics already mark "no spine value crosses here."
       if (canEdgeFromPredecessor && predecessor !== undefined) {
         edges.push({
           from: predecessor,
+          to: chainHead,
+          auxKey: STATE_AUX_KEY,
+          kind: "state",
+        });
+      }
+      if (useRBypassChip) {
+        // Chip → trackFirst (chain continues into the F-stack) AND
+        // chip → rejoin (the bypass — R_in flows directly to become
+        // new_L).
+        edges.push({
+          from: chainHead,
           to: trackFirst,
+          auxKey: STATE_AUX_KEY,
+          kind: "state",
+        });
+        edges.push({
+          from: chainHead,
+          to: rejoinId,
           auxKey: STATE_AUX_KEY,
           kind: "state",
         });
@@ -1164,33 +1220,6 @@ const inferStateEdges = (spec: CipherSpec): GraphEdge[] => {
           from: trackLast,
           to: rejoinId,
           auxKey: STATE_AUX_KEY,
-          kind: "state",
-        });
-      }
-      // UX-D synthesized edge (2026-05-22): R-track first leaf → rejoin
-      // for `feistel-standard` rounds only, carrying R_in BEFORE the
-      // F-stack modifies it. This makes the Feistel swap visible in the
-      // graph — without it, the user sees F-output reaching rejoin
-      // (becomes new_R) and L_in reaching rejoin (becomes new_L by
-      // textbook reading) but the actual swap (`new_L = R_in`) is
-      // hidden. The skip guards mirror the trackLast guards above —
-      // iterate / feistel-round boundary ids are NOT in the trace, so
-      // attaching an edge to one would be unresolvable at lookup time.
-      // Track index ≥ 1 means "anything other than the L track"; by
-      // 2-track DES convention this is exactly the R track. N-way
-      // Feistel (Twofish) would need its own combine-kind entry, at
-      // which point this guard widens to whichever track the new kind's
-      // formula identifies as the "input-bypass" source.
-      if (
-        synthesizeRInBypass &&
-        trackIdx >= 1 &&
-        !iterateIds.has(trackFirst) &&
-        !feistelRoundIds.has(trackFirst)
-      ) {
-        edges.push({
-          from: trackFirst,
-          to: rejoinId,
-          auxKey: R_IN_BYPASS_AUX_KEY,
           kind: "state",
         });
       }

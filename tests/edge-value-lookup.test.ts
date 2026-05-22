@@ -31,12 +31,7 @@ import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { desSpec } from "@/ciphers/des";
 import { lookupEdgeValue } from "@/core/edge-value-lookup";
-import {
-  CIPHER_INPUT_ID,
-  CIPHER_OUTPUT_ID,
-  type GraphEdge,
-  R_IN_BYPASS_AUX_KEY,
-} from "@/core/graph";
+import { CIPHER_INPUT_ID, CIPHER_OUTPUT_ID, type GraphEdge } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue, MatrixState, Trace } from "@/core/types";
@@ -332,58 +327,64 @@ describe("lookupEdgeValue — regular state edges", () => {
   });
 });
 
-// ─── UX-D "R_in bypass F" edge (2026-05-22) ──────────────────────────────
+// ─── UX-D candidate (b) — R-bypass passthrough chip (2026-05-22) ─────────
 //
-// Synthesized state edge from the R-track's first leaf (DES `expand-R`)
-// directly to `:rejoin` for `feistel-standard` rounds. The arrow's
-// pedagogical purpose is to show R_in flowing past the F-stack to
-// become new_L. The inspector must therefore surface the leaf's
-// `stateBefore` (= R_in, 4 bytes for DES), NOT its `stateAfter`
-// (= E(R), 6 bytes). The lookup carries a dedicated `auxKey` so the
-// renderer's tooltip can text-render the bypass label and the inspector
-// can disambiguate from the conventional spine edge.
+// `feistel-standard` rounds with a populated R-track get a synthetic
+// passthrough chip (`:passthrough-1`) at the head of the R-column. Its
+// outgoing edge to `:rejoin` represents R_in flowing unchanged past the
+// F-stack — i.e. the textbook `new_L = R_in` Feistel swap. The chip
+// reuses the empty-track passthrough naming so `lookupPassthroughBytes`
+// (which keys off `:passthrough-(\d+)` and maps trackIdx 1 → R_in from
+// the rejoin frame's params) resolves the chip's value for free —
+// returning the 4-byte R_in, not the 8-byte (L_in||R_in) the chip's
+// incoming arrow would otherwise resolve to.
 
-describe("lookupEdgeValue — UX-D R_in bypass edge (DES)", () => {
-  it("returns the producer's stateBefore (= R_in, not E(R)) for the bypass edge", () => {
+describe("lookupEdgeValue — UX-D candidate (b) R-bypass chip (DES)", () => {
+  it("returns R_in (4 bytes) for the chip's outgoing edge to rejoin", () => {
     // Any 8-byte plaintext + 8-byte key; FIPS Pub 81 vector picks itself.
     const trace = runSpec(desSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex("0123456789abcdef")),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex("133457799bbcdff1")]]),
     });
-    const bypassEdge: GraphEdge = {
-      from: "round.1.expand-R",
+    const chipOutgoingEdge: GraphEdge = {
+      from: "round.1:passthrough-1",
       to: "round.1:rejoin",
-      auxKey: R_IN_BYPASS_AUX_KEY,
+      auxKey: "state",
       kind: "state",
     };
-    const out = lookupEdgeValue(bypassEdge, desSpec, trace, undefined);
+    const out = lookupEdgeValue(chipOutgoingEdge, desSpec, trace, undefined);
     expect(out.status).toBe("value");
     if (out.status !== "value") return;
     expect(out.displayKind).toBe("state");
-    expect(out.auxKey).toBe(R_IN_BYPASS_AUX_KEY);
-    // R_in is 4 bytes (DES half-block); E(R) would be 6 bytes (48 bits).
-    // The bypass edge MUST surface the 4-byte form.
+    // R_in is 4 bytes (DES half-block); the rejoin's combined L||R
+    // is 8 bytes. The chip's outgoing arrow MUST surface the 4-byte
+    // form — that's the WHOLE point of routing through a chip rather
+    // than starting the arrow at expand-R (which would have shown
+    // the 6-byte E(R) — the candidate (a) regression).
     expect(out.value).toMatchObject({ shape: "bytes" });
     expect((out.value as { bytes: Uint8Array }).bytes.length).toBe(4);
   });
 
-  it("a state edge with the same endpoints but auxKey === 'state' still uses stateAfter", () => {
-    // Belt-and-braces: the bypass branch must key on `auxKey`, NOT on
-    // the (from, to) pair. A hand-fabricated `auxKey: "state"` edge with
-    // the same endpoints (which the derivation no longer emits, but a
-    // future replicator/bundler MUST NOT mistake) should fall through
-    // to the default "producer.stateAfter" branch.
-    const trace = runAes128Ecb();
-    const edge: GraphEdge = {
-      from: "key-expansion",
-      to: "initial.add-round-key",
+  it("returns R_in (4 bytes) for the chip's outgoing edge into the F-stack head (expand-R)", () => {
+    // The chip sits at the head of the R-column, so the chain edge
+    // chip → expand-R runs in parallel with the bypass chip → rejoin.
+    // Both outgoing edges should resolve to the same R_in — they're
+    // two destinations of the same value.
+    const trace = runSpec(desSpec, buildDefaultRegistry(), {
+      initialState: makeBytesState(bytesFromHex("0123456789abcdef")),
+      initialAux: new Map<string, AuxValue>([["key", bytesFromHex("133457799bbcdff1")]]),
+    });
+    const chipChainEdge: GraphEdge = {
+      from: "round.1:passthrough-1",
+      to: "round.1.expand-R",
       auxKey: "state",
       kind: "state",
     };
-    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, 0);
+    const out = lookupEdgeValue(chipChainEdge, desSpec, trace, undefined);
     expect(out.status).toBe("value");
     if (out.status !== "value") return;
-    expect(out.auxKey).toBe("state");
+    expect(out.value).toMatchObject({ shape: "bytes" });
+    expect((out.value as { bytes: Uint8Array }).bytes.length).toBe(4);
   });
 });
 

@@ -96,8 +96,13 @@ describe("Phase 6 experiment — collapseGraph on a feistel-round (DES)", () => 
 
     // After collapse, the spine entering round.3 from round.2's rejoin.
     expect(has("round.2:rejoin", "round.3"), "spine should enter collapsed round.3").toBe(true);
-    // And the spine exiting round.3 onto round.4.
-    expect(has("round.3", "round.4.expand-R"), "spine should exit collapsed round.3").toBe(true);
+    // And the spine exiting round.3 onto round.4. UX-D candidate (b),
+    // 2026-05-22 — round.4's R-track now starts with the R-bypass
+    // chip (`:passthrough-1`), so the chain edge from round.3's
+    // (collapsed) chip exits into the chip, not directly into expand-R.
+    expect(has("round.3", "round.4:passthrough-1"), "spine should exit collapsed round.3").toBe(
+      true,
+    );
   });
 
   it("drops self-loops created by collapse (round.3.* → round.3.* edges)", () => {
