@@ -100,7 +100,13 @@
  */
 
 import { REJOIN_STEP_TYPE } from "./combine-kinds";
-import { CIPHER_INPUT_ID, CIPHER_OUTPUT_ID, type GraphEdge, isEndpointId } from "./graph";
+import {
+  CIPHER_INPUT_ID,
+  CIPHER_OUTPUT_ID,
+  type GraphEdge,
+  R_IN_BYPASS_AUX_KEY,
+  isEndpointId,
+} from "./graph";
 import { canonicalStepId } from "./step-id";
 import type {
   AuxValue,
@@ -807,6 +813,31 @@ const lookupRegularState = (
     };
   }
   const producer = findProducerFrame(trace, edge.from, currentBlockIndex);
+  // UX-D synthesized "R_in bypass F" edge (2026-05-22): the renderer
+  // attaches this edge from the R-track's first leaf to the round's
+  // rejoin synthetic. Pedagogically the arrow carries R_in — the bytes
+  // BEFORE that leaf transformed them. The leaf's `stateAfter` would
+  // show the post-transform bytes (DES: the 48-bit E(R)), which
+  // contradicts the "bypass F" narrative the arrow exists to teach.
+  // We slice from `stateBefore` instead — equivalent to the predecessor's
+  // `stateAfter` by runtime invariant. Mirrors the rejoin-OUTGOING
+  // half-slice special-case below for symmetry of the swap pedagogy.
+  if (edge.auxKey === R_IN_BYPASS_AUX_KEY && producer !== null) {
+    return producer.blockIndex !== undefined
+      ? {
+          status: "value",
+          value: producer.stateBefore,
+          displayKind: "state",
+          auxKey: R_IN_BYPASS_AUX_KEY,
+          blockIndex: producer.blockIndex,
+        }
+      : {
+          status: "value",
+          value: producer.stateBefore,
+          displayKind: "state",
+          auxKey: R_IN_BYPASS_AUX_KEY,
+        };
+  }
   if (producer !== null) {
     // Rejoin-source state edges: the producer's stateAfter is the
     // combined `(new_L || new_R)`. Each outgoing arrow pedagogically

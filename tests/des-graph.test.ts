@@ -11,7 +11,7 @@
  */
 
 import { desSpec } from "@/ciphers/des";
-import { deriveAuxGraph } from "@/core/graph";
+import { R_IN_BYPASS_AUX_KEY, deriveAuxGraph } from "@/core/graph";
 import { describe, expect, it } from "vitest";
 
 const emptyTrace = {
@@ -85,5 +85,49 @@ describe("DES graph derivation — structural sanity", () => {
     // a malformed graph (orphaned container, missing edge endpoint,
     // throw in port-spread) lands here.
     expect(() => deriveAuxGraph(emptyTrace, desSpec)).not.toThrow();
+  });
+
+  // UX-D (2026-05-22): rounds 1..15 carry a synthesized "R_in bypasses F"
+  // state edge from the R-track's first leaf (`expand-R`) directly to
+  // `:rejoin`, making the Feistel swap visible in the graph. Round 16's
+  // `feistel-no-swap` math drops the swap, so its rejoin stays clean —
+  // visually teaching "this round is special" without narration.
+  describe("UX-D — synthesized 'R_in bypasses F' edge", () => {
+    it("emits expand-R → rejoin for each of rounds 1..15", () => {
+      const graph = deriveAuxGraph(emptyTrace, desSpec);
+      for (let r = 1; r <= 15; r++) {
+        const edge = graph.edges.find(
+          (e) =>
+            e.from === `round.${r}.expand-R` &&
+            e.to === `round.${r}:rejoin` &&
+            e.auxKey === R_IN_BYPASS_AUX_KEY,
+        );
+        expect(edge, `round.${r} bypass edge`).toBeDefined();
+        expect(edge?.kind).toBe("state");
+      }
+    });
+
+    it("does NOT emit the bypass edge for round 16 (feistel-no-swap)", () => {
+      const graph = deriveAuxGraph(emptyTrace, desSpec);
+      const edge = graph.edges.find(
+        (e) =>
+          e.from === "round.16.expand-R" &&
+          e.to === "round.16:rejoin" &&
+          e.auxKey === R_IN_BYPASS_AUX_KEY,
+      );
+      expect(edge, "round.16 must not carry the bypass edge").toBeUndefined();
+    });
+
+    it("keeps the existing F-output edge (p-permute → rejoin) intact alongside the bypass", () => {
+      // Sanity: adding the bypass edge must NOT replace or suppress the
+      // pre-existing fan-out edge from the R-track's LAST leaf. Both
+      // arrows should reach rejoin — bypass carries R_in, fan-out
+      // carries F(R_in, K_i).
+      const graph = deriveAuxGraph(emptyTrace, desSpec);
+      const fanOut = graph.edges.find(
+        (e) => e.from === "round.1.p-permute" && e.to === "round.1:rejoin" && e.auxKey === "state",
+      );
+      expect(fanOut, "round.1 F-output edge").toBeDefined();
+    });
   });
 });

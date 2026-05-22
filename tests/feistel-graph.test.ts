@@ -160,12 +160,13 @@ describe("feistel-round graph derivation", () => {
     expect(has("round.rich.b", "round.rich.c")).toBe(true);
     // Last R-track leaf → rejoin:
     expect(has("round.rich.c", "round.rich:rejoin")).toBe(true);
-    // No across-track edges into L (it's empty, but the spec walker must
-    // not invent an across-track edge to a non-existent L leaf).
+    // The first R-track leaf carries the UX-D "R_in bypasses F" arrow
+    // to rejoin (combineKind: feistel-standard). Both edges (chain
+    // successor + bypass) must coexist; nothing should leak into the
+    // L track (which is empty and routes through a passthrough chip).
     for (const e of stateEdges) {
       if (e.from === "round.rich.a") {
-        // round.rich.a's only outgoing within-track edge is to round.rich.b.
-        expect(e.to).toBe("round.rich.b");
+        expect(e.to === "round.rich.b" || e.to === "round.rich:rejoin").toBe(true);
       }
     }
   });

@@ -29,8 +29,14 @@
 
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { desSpec } from "@/ciphers/des";
 import { lookupEdgeValue } from "@/core/edge-value-lookup";
-import { CIPHER_INPUT_ID, CIPHER_OUTPUT_ID, type GraphEdge } from "@/core/graph";
+import {
+  CIPHER_INPUT_ID,
+  CIPHER_OUTPUT_ID,
+  type GraphEdge,
+  R_IN_BYPASS_AUX_KEY,
+} from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue, MatrixState, Trace } from "@/core/types";
@@ -322,6 +328,61 @@ describe("lookupEdgeValue — regular state edges", () => {
     expect(out.status).toBe("value");
     if (out.status !== "value") return;
     expect(out.displayKind).toBe("state");
+    expect(out.auxKey).toBe("state");
+  });
+});
+
+// ─── UX-D "R_in bypass F" edge (2026-05-22) ──────────────────────────────
+//
+// Synthesized state edge from the R-track's first leaf (DES `expand-R`)
+// directly to `:rejoin` for `feistel-standard` rounds. The arrow's
+// pedagogical purpose is to show R_in flowing past the F-stack to
+// become new_L. The inspector must therefore surface the leaf's
+// `stateBefore` (= R_in, 4 bytes for DES), NOT its `stateAfter`
+// (= E(R), 6 bytes). The lookup carries a dedicated `auxKey` so the
+// renderer's tooltip can text-render the bypass label and the inspector
+// can disambiguate from the conventional spine edge.
+
+describe("lookupEdgeValue — UX-D R_in bypass edge (DES)", () => {
+  it("returns the producer's stateBefore (= R_in, not E(R)) for the bypass edge", () => {
+    // Any 8-byte plaintext + 8-byte key; FIPS Pub 81 vector picks itself.
+    const trace = runSpec(desSpec, buildDefaultRegistry(), {
+      initialState: makeBytesState(bytesFromHex("0123456789abcdef")),
+      initialAux: new Map<string, AuxValue>([["key", bytesFromHex("133457799bbcdff1")]]),
+    });
+    const bypassEdge: GraphEdge = {
+      from: "round.1.expand-R",
+      to: "round.1:rejoin",
+      auxKey: R_IN_BYPASS_AUX_KEY,
+      kind: "state",
+    };
+    const out = lookupEdgeValue(bypassEdge, desSpec, trace, undefined);
+    expect(out.status).toBe("value");
+    if (out.status !== "value") return;
+    expect(out.displayKind).toBe("state");
+    expect(out.auxKey).toBe(R_IN_BYPASS_AUX_KEY);
+    // R_in is 4 bytes (DES half-block); E(R) would be 6 bytes (48 bits).
+    // The bypass edge MUST surface the 4-byte form.
+    expect(out.value).toMatchObject({ shape: "bytes" });
+    expect((out.value as { bytes: Uint8Array }).bytes.length).toBe(4);
+  });
+
+  it("a state edge with the same endpoints but auxKey === 'state' still uses stateAfter", () => {
+    // Belt-and-braces: the bypass branch must key on `auxKey`, NOT on
+    // the (from, to) pair. A hand-fabricated `auxKey: "state"` edge with
+    // the same endpoints (which the derivation no longer emits, but a
+    // future replicator/bundler MUST NOT mistake) should fall through
+    // to the default "producer.stateAfter" branch.
+    const trace = runAes128Ecb();
+    const edge: GraphEdge = {
+      from: "key-expansion",
+      to: "initial.add-round-key",
+      auxKey: "state",
+      kind: "state",
+    };
+    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, 0);
+    expect(out.status).toBe("value");
+    if (out.status !== "value") return;
     expect(out.auxKey).toBe("state");
   });
 });
