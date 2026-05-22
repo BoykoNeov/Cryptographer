@@ -1,17 +1,224 @@
 # DES + branching primitive — first Feistel cipher
 
 > **Status: Phases 1–6 shipped 2026-05-19 / 2026-05-21. Phase 6e
-> partial walk #3 paused 2026-05-22 (this session). M1 ✅ (walk #2),
-> M2 ✅ + M3 ✅ (walk #3); M4–M7 deferred to a future session. Four
-> new UX findings now captured for post-walk action (UX-A/B/C from
-> walk #2 + UX-D from walk #3) — see the partial-walk notes below
-> for details. The earlier Phase 6e closing batch (5 fixes shipped)
-> remains valid; the new findings are pre-existing gaps the closing
-> batch did not address. Universal-port-dataflow plan
-> (`docs/plans/universal-port-dataflow.md`) remains unblocked — the
-> new findings are UX polish/feature work, not regressions, and
-> don't reopen Phase 6e's "wait for DES" gate for the universal-port
-> plan.
+> manual walk COMPLETE 2026-05-22 (walks #1–#4 over 2026-05-21/22).
+> All 7 checklist items (M1–M7) confirmed; the original closing
+> batch of 5 fixes (Findings A/B/E/F/H) verified clean in real
+> browser, plus 3 "not a bug" entries (C/D/G) re-confirmed as
+> working-as-designed. Ten new UX findings captured during the
+> walks for post-walk action (UX-A/B/C from walk #2, UX-D from
+> walk #3, UX-E/F/G/H/I/J from walk #4) — none are regressions of
+> the closing-batch fixes; all are pre-existing gaps the closing
+> batch did not address. The universal-port-dataflow plan's
+> "wait for DES Phase 6e" gate is now **satisfied** — that plan
+> can begin Phase 0 (the ~3-day trace-shape spike) on user
+> demand. The post-walk UX fix queue is ready for prioritised
+> implementation; see "Fix-order update with UX-E…J added"
+> below. The earlier Phase 6e closing
+> batch (5 fixes shipped) remains valid; the new findings are
+> pre-existing gaps the closing batch did not address. Universal-
+> port-dataflow plan (`docs/plans/universal-port-dataflow.md`)
+> remains unblocked — the new findings are UX polish/feature work,
+> not regressions, and don't reopen Phase 6e's "wait for DES" gate
+> for the universal-port plan.
+
+> **Phase 6e partial walk #4 (2026-05-22, in progress).** Fourth
+> manual session against the same 7-item checklist. M4 confirmed
+> this session; three new UX findings surfaced during M4's cross-
+> check; walk continuing with M5 next.
+>
+> **M4 — Rejoin crossover X arrows uncolored — ✅ CONFIRMED.** At
+> round.1's rejoin, both X-crossover arrows (`new_L → next L`,
+> `new_R → next R`) render in the default state-edge stroke, not in
+> any source-coding palette colour. Confirms the
+> `sourceFanoutMap`-excludes-rejoin-synthetics fix in
+> `src/core/source-colors.ts:129-137`. Round 16 cross-check: the
+> rejoin emits a single outgoing edge to `final-permutation`
+> (feistel-no-swap, no X-crossover); also uncoloured as expected.
+>
+> **Three new UX findings (captured for post-walk-close action):**
+>
+> - **UX-E — Rejoin not user-opt-in colorable.** Today's exclusion
+>   in `sourceFanoutMap` is pre-fanout-count, so the panel toggle
+>   "include single-output sources" never sees the rejoin and the
+>   user has no escape hatch to colour it. The opinionated default
+>   ("two halves of the same combined state, not distinct sources")
+>   is defensible for AUTO assignment, but a manual-override surface
+>   is a fair ask — e.g. a per-instance overrides set keyed by stepId
+>   that lets the user paint a rejoin manually without changing the
+>   auto-assigned palette. Lowest-impact fix candidate: keep the
+>   auto-exclusion, but plumb manual overrides through a separate
+>   path that doesn't filter rejoins. Defer until a user actually
+>   needs it.
+>
+> - **UX-F — L-passthrough drop is one-way / palette can't restore
+>   it.** Dropping a palette step onto an empty Feistel-track's
+>   passthrough chip replaces the chip (track becomes populated,
+>   passthrough disappears) — pedagogically correct since
+>   passthroughs are placeholders for empty tracks. But the palette
+>   has no `feistel.passthrough` entry, because passthroughs are
+>   runtime-synthetic placeholders, not real spec leaves. So once
+>   populated, the only way to re-empty a track is `reset spec`,
+>   which nukes everything the user has changed.
+>
+>   **Resolution: path (a) — generic per-leaf delete UX.** Advisor-
+>   confirmed 2026-05-22 (verbatim reply preserved in session
+>   transcript). Implementation shape:
+>   - **Existing mutation:** `removeStep` in
+>     `src/core/spec-mutations.ts:831` already works on any leaf id
+>     by walking the parent-array. No new core mutation needed.
+>   - **UI shape:** keyboard-first — select a leaf → Delete /
+>     Backspace removes it. Piggyback on the graph view's existing
+>     selection state (the same state that drives the inspector).
+>     Visible affordance for discoverability — `×` glyph on hover,
+>     or a context menu entry — so the gesture is reachable without
+>     reading docs.
+>   - **Scope guard for v1:** leaves only. Block delete on container
+>     nodes (`feistel-round`, `iterate`, `group`); deleting a
+>     populated container is a separate UX question with destructive
+>     consequences and a different undo/confirmation story.
+>   - **Test focus per advisor:** delete-on-leaf in an L-track →
+>     confirm the passthrough chip re-renders → click passthrough
+>     chip → inspector resolves L_in via
+>     `lookupPassthroughBytes` (`edge-value-lookup.ts:757`). Bug 1
+>     intersection (existing rejoin-frame-still-present invariant);
+>     should pass cleanly but pin it.
+>
+>   **Paths rejected:** (b) Feistel-specific "clear track" button —
+>   dead-on-arrival under the approved universal-port-dataflow plan
+>   (`docs/plans/universal-port-dataflow.md`), which slates
+>   `FeistelRoundGroup`/`BranchTrack`/`CombineKind` for Phase 5
+>   deprecation; the button would have to be removed alongside the
+>   types. (c) Palette entry that lowers to spec-time
+>   `feistel.passthrough` — largest blast radius (touches
+>   `runtime.ts:275`, `edge-value-lookup.ts:649-770`, graph
+>   derivation, layout, inspector resolution) AND writes off badly
+>   under the universal-port plan, where passthroughs become wires
+>   (absence of a node between two port endpoints), not first-class
+>   spec leaves.
+>
+>   **Status: ready for implementation post-walk.** TODO entry
+>   added to the post-walk fix queue at the priority below.
+>
+> - **UX-G — Round 16 → final-permutation long arrow.** Round 16's
+>   rejoin has a single outgoing state edge to `final-permutation`
+>   (its next sibling in the spec tree). Visually the user reports
+>   the arrow travels upward across all 16 rounds before terminating
+>   at FP, which looks bad and obscures the actual sequence
+>   (rounds → FP). Suggests the current layout places FP at a
+>   position incompatible with the bottom-of-rounds-group exit —
+>   either FP is positioned above the rounds group, or the rounds
+>   group is laid out in a flow that puts round-16 not-at-bottom.
+>   Investigation needed in `layoutRoot` / `layoutNode`'s sibling-
+>   advance logic. Concretely: when the previous sibling is a tall
+>   group with downward flow, the next sibling (FP) should anchor
+>   below the group's max-y, not above. Worth checking whether the
+>   existing `naturalY` fix from Finding H(ii) (Phase 6e closing
+>   batch) covers this case or whether it's a separate cursor-
+>   advance bug at the GROUP-EXIT boundary specifically.
+>
+> **M7 — L passthrough's outgoing arrow shows 4B — ✅ CONFIRMED.**
+> The L-passthrough chip's outgoing arrow to rejoin resolves
+> through `lookupRegularState`'s passthrough-source short-circuit
+> at `edge-value-lookup.ts:800-808`, calling the shared
+> `lookupPassthroughBytes` to slice `params.L_in` from the parent
+> rejoin frame. Same value as M3's chip-click resolution
+> (producer-side and chip-click share the helper). Confirms the
+> Bug 13 fix.
+>
+> **M6 — Rejoin-source arrows show single-track bytes — ✅ CONFIRMED.**
+> Round.5 rejoin's two outgoing arrows: L-track arrow shows 4B
+> = `new_L`, R-track arrow shows 4B = `new_R`, values are
+> distinct (no longer the combined 8B on both). Round.16 cross-
+> check: the rejoin → final-permutation single outgoing arrow
+> shows the full 8B `L_out||R_out` — `findConsumerTrackIdx`
+> returns `null` for an out-of-feistel-round consumer, falling
+> through to the default "full stateAfter" path in
+> `edge-value-lookup.ts:843-849`. Confirms the Bug 10 fix.
+>
+> **M5 — Ciphertext placement in `.inputs` section — ✅ CONFIRMED**
+> (with three new all-ciphers UX remarks; logged as UX-H/I/J).
+> The result line renders inside `.inputs` as a `flex: 0 0 100%`
+> row (label-inline `ciphertext (hex): <code>85e813540f0ab405</code>`),
+> sandwiched between the input fields and the action button strip.
+> Mode-flip to decrypt changes the label to `plaintext` per
+> `outputLabel()` derivation from `mode()` in `App.tsx:1095-1099`.
+>
+> **Three new UX findings (all-ciphers, not DES-specific):**
+>
+> - **UX-H — Mode flip should auto-swap values.** Today, flipping
+>   encrypt → decrypt re-runs the cipher on the still-present
+>   plaintext, computing it AS ciphertext (so the user sees a
+>   nonsensical result for the new mode until they manually paste
+>   in the previous output). User-flagged 2026-05-22 walk #4:
+>   the round-trip discoverability ask is "make the just-computed
+>   result the new input." Symmetric — encrypt→decrypt copies
+>   current `outputBytes` (ciphertext) into the ciphertext input;
+>   decrypt→encrypt copies current `outputBytes` (plaintext) into
+>   the plaintext input. Implementation point: mode-change handler
+>   in the spec/inputs store; needs care around the IV / padding /
+>   block-mode interactions (e.g. CBC IV: should it also flip?).
+>   Out of scope for v1: probably leave IV alone, let user adjust.
+>
+> - **UX-I — Stack input / key / result vertically with input
+>   first.** Today the inputs section is a wrapping flex row:
+>   `[selects…] [input] [key] [IV?] [result-100%-row] [buttons]`.
+>   The result row is forced full-width, so input + key sit
+>   side-by-side ABOVE the result. User-flagged 2026-05-22 walk
+>   #4: the visual sequence should be "thing-I-edit → key →
+>   what-came-out" with each on its own row. Implementation point:
+>   force `flex: 0 0 100%` on `<label>` wrappers around input,
+>   key, IV — or restructure the section as a column flex below
+>   the selects row. The selects (mode, cipher, mode-of-op,
+>   padding, bytes-format) stay together as a horizontal settings
+>   strip; the data fields (input/key/IV/result) become the
+>   vertical stack below it.
+>
+> - **UX-J — Result label-above-value (match input field styling).**
+>   Today the result row renders as inline-label
+>   `ciphertext (hex): <code>85e813540f0ab405</code>`, whereas
+>   plaintext + key fields use `<label>` wrapping a label above
+>   their `<input>`. User-flagged 2026-05-22 walk #4: visual
+>   inconsistency — the inputs and the result share a row neighbour-
+>   hood but use different label conventions, which makes the
+>   result look like a different KIND of thing (caption vs. field)
+>   when it's pedagogically the third member of the same trio.
+>   Fix: render the result as `<div class="result inputs-result">
+>   <span class="result-label">…</span><code>…</code></div>` with
+>   the label above the code block, mirroring the input-field
+>   `<label>` stack layout. CSS in `app.css:221-231` needs a tweak
+>   to switch from inline display to flex-column.
+>
+> **Fix-order update with UX-E…J added:** UX-B (real bug) →
+> UX-D (pedagogy gap; every Feistel round) → UX-G (visual bug;
+> visible the moment graph view is opened on DES) → UX-F (real UX
+> gap; resolution locked to path (a) per-leaf delete) →
+> **UX-H/I/J bundled** (all-ciphers inputs-row polish — one
+> implementation pass touches the same section in `App.tsx` +
+> `app.css`, so batch them; UX-H is the behavior change, UX-I/J
+> are layout polish on the same surface) → UX-C (consistency
+> feature) → UX-A (polish) → UX-E (opt-in surface; nice-to-have,
+> defer until user-requested). UX-G promoted high because it's
+> visible on the default DES graph view with no user interaction.
+> UX-H/I/J bundled at single priority because they all live in the
+> same code path; splitting them would mean editing the same file
+> three times.
+>
+> **Future ideas — NOT in the post-walk queue:**
+> - Drag-leaf-back-to-palette as a complementary deletion gesture
+>   (path (e) from the UX-F advisor consult). Same `removeStep`
+>   call, palette becomes a drop zone. Cheap, discoverable,
+>   composes with the keyboard-first (a) resolution. Worth
+>   revisiting once (a) is in users' hands and we see how
+>   discoverable Delete/Backspace turns out to be.
+> - Undo stack on the spec store (path (d) from the same consult).
+>   Strictly more powerful than per-leaf delete — solves "I made a
+>   change I want back" universally. Cost: real history-stack
+>   abstraction in `stores/spec.ts` + URL-share serialization story
+>   (does undo persist? does the shared link carry pre-edit
+>   state?). Overkill for UX-F alone; only worth pursuing if a
+>   broader "undo for spec edits" demand emerges. Memory entry:
+>   [[project-future-ideas-spec-edit-undo-and-drag-back]].
 
 > **Phase 6e partial walk #3 (2026-05-22, mid-walk pause).** Third
 > manual session against the same 7-item checklist. Two items
