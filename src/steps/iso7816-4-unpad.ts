@@ -18,7 +18,14 @@
  * (no length-byte arithmetic to validate — just find the sentinel).
  */
 
-import type { BytesState, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  BytesState,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 export const iso78164Unpad: StepExecutor = (state, params) => {
   if (state.shape !== "bytes") {
@@ -100,6 +107,23 @@ of bare ISO 7816-4 + CBC.
   ]),
   references: ["ISO/IEC 7816-4 §5.4.1", "Vaudenay 2002 (padding oracle attacks)"],
   shapeContract: { input: "bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.3) ───────────────
+// ISO 7816-4 unpad: pure bytes→bytes, no aux. The runtime preserves the
+// executor's loud throws on malformed input (missing 0x80 sentinel,
+// non-multiple length) — both dispatch paths exhibit the same error
+// behavior, which is the educational point.
+
+export const iso78164UnpadMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+};
+
+export const iso78164UnpadPortContract: PortContract = {
+  inputs: new Map([["state", { layout: "raw" }]]),
+  outputs: new Map([["state", { layout: "raw" }]]),
 };
 
 const readBlockSize = (params: Json): number => {

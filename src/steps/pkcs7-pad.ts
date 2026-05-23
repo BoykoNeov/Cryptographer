@@ -18,7 +18,14 @@
  * support arrives with cipher modes (ECB/CBC/CTR/GCM) in a future change.
  */
 
-import type { BytesState, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  BytesState,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 export const pkcs7Pad: StepExecutor = (state, params) => {
   if (state.shape !== "bytes") {
@@ -76,6 +83,36 @@ identical to PKCS #5 padding which is just PKCS#7 fixed at blockSize=8.`,
   ]),
   references: ["RFC 5652 §6.3", "PKCS #7 v1.5 (RSA Labs, 1993)"],
   shapeContract: { input: "bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.3) ───────────────
+// PKCS#7 pad is a pure bytes→bytes transform with no aux. The cleanest
+// possible lift batch under the ported contract:
+//   • One named state input port ("state") + one named state output port
+//     ("state"). Both layout "raw" (the inspector renders as flat bytes,
+//     not as a 4×4 matrix). byteLength ABSENT on both sides: pad output
+//     is variable-length (input.length + N where N depends on input
+//     length mod blockSize), so a fixed-length contract would be a lie.
+//   • `auxReadPorts` / `auxWritePorts` undefined — no aux traffic at all.
+//
+// Slice 1.3 also defers `load-block`, `store-block`, `split-blocks`,
+// `concat-blocks`, and `compute-block-count` for two separate reasons —
+// see `docs/plans/universal-port-phase-1-slices.md` Slice 1.3 section.
+
+export const pkcs7PadMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+};
+
+/**
+ * Declared port surface. Single `state` port in + single `state` port out,
+ * `byteLength` absent on both (padding output length is a function of
+ * input length mod blockSize, not a fixed contract value).
+ */
+export const pkcs7PadPortContract: PortContract = {
+  inputs: new Map([["state", { layout: "raw" }]]),
+  outputs: new Map([["state", { layout: "raw" }]]),
 };
 
 const readBlockSize = (params: Json): number => {

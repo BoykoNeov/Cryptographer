@@ -15,7 +15,14 @@
  * the validation.
  */
 
-import type { BytesState, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  BytesState,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 export const pkcs7Unpad: StepExecutor = (state, params) => {
   if (state.shape !== "bytes") {
@@ -95,6 +102,26 @@ docs for the full reusability story.`,
   ]),
   references: ["RFC 5652 §6.3", "Vaudenay 2002 (padding oracle attacks on CBC)"],
   shapeContract: { input: "bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.3) ───────────────
+// PKCS#7 unpad: pure bytes→bytes, no aux. Single `state` port each side,
+// layout "raw", `byteLength` absent (output is input.length − padLen
+// where padLen depends on the input's last byte — variable). The lift
+// adapter routes a throw from the executor (malformed padding, empty
+// input) up through the runtime unchanged, so the educational
+// "intentionally throws on bad input" behavior is preserved on both
+// dispatch paths.
+
+export const pkcs7UnpadMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+};
+
+export const pkcs7UnpadPortContract: PortContract = {
+  inputs: new Map([["state", { layout: "raw" }]]),
+  outputs: new Map([["state", { layout: "raw" }]]),
 };
 
 const readBlockSize = (params: Json): number => {

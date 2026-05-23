@@ -30,7 +30,14 @@
  * Generic over blockSize, like the other padding steps.
  */
 
-import type { BytesState, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  BytesState,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 export const iso78164Pad: StepExecutor = (state, params) => {
   if (state.shape !== "bytes") {
@@ -99,6 +106,24 @@ replacement for PKCS#7 in most contexts where determinism matters.
   ]),
   references: ["ISO/IEC 7816-4 §5.4.1", "ISO/IEC 9797-1 padding method 2"],
   shapeContract: { input: "bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.3) ───────────────
+// ISO 7816-4 pad: pure bytes→bytes, no aux. Single state port each side,
+// layout "raw", `byteLength` absent (input.length + N where N ∈ [1,
+// blockSize] depending on input.length mod blockSize). Always adds at
+// least one byte (the 0x80 sentinel) — never a passthrough no-op,
+// unlike `zero-pad`.
+
+export const iso78164PadMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+};
+
+export const iso78164PadPortContract: PortContract = {
+  inputs: new Map([["state", { layout: "raw" }]]),
+  outputs: new Map([["state", { layout: "raw" }]]),
 };
 
 const readBlockSize = (params: Json): number => {

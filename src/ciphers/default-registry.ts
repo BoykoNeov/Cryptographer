@@ -25,8 +25,18 @@ import { desPPermutation, desPPermutationDoc } from "../steps/des-p-permutation"
 import { desSBoxes, desSBoxesDoc } from "../steps/des-s-boxes";
 import { desXorWithK, desXorWithKDoc } from "../steps/des-xor-with-k";
 import { feistelToyAddK, feistelToyAddKDoc } from "../steps/feistel-toy-add-k";
-import { iso78164Pad, iso78164PadDoc } from "../steps/iso7816-4-pad";
-import { iso78164Unpad, iso78164UnpadDoc } from "../steps/iso7816-4-unpad";
+import {
+  iso78164Pad,
+  iso78164PadDoc,
+  iso78164PadMeta,
+  iso78164PadPortContract,
+} from "../steps/iso7816-4-pad";
+import {
+  iso78164Unpad,
+  iso78164UnpadDoc,
+  iso78164UnpadMeta,
+  iso78164UnpadPortContract,
+} from "../steps/iso7816-4-unpad";
 import { ivLoad, ivLoadDoc, ivLoadMeta, ivLoadPortContract } from "../steps/iv-load";
 import {
   keyExpansion,
@@ -36,8 +46,13 @@ import {
 } from "../steps/key-expansion";
 import { loadBlock, loadBlockDoc } from "../steps/load-block";
 import { mixColumns, mixColumnsDoc } from "../steps/mix-columns";
-import { pkcs7Pad, pkcs7PadDoc } from "../steps/pkcs7-pad";
-import { pkcs7Unpad, pkcs7UnpadDoc } from "../steps/pkcs7-unpad";
+import { pkcs7Pad, pkcs7PadDoc, pkcs7PadMeta, pkcs7PadPortContract } from "../steps/pkcs7-pad";
+import {
+  pkcs7Unpad,
+  pkcs7UnpadDoc,
+  pkcs7UnpadMeta,
+  pkcs7UnpadPortContract,
+} from "../steps/pkcs7-unpad";
 import { serpentAddRoundKey, serpentAddRoundKeyDoc } from "../steps/serpent-add-round-key";
 import { serpentBitPermutation, serpentBitPermutationDoc } from "../steps/serpent-bit-permutation";
 import {
@@ -58,8 +73,8 @@ import { splitBlocks, splitBlocksDoc } from "../steps/split-blocks";
 import { stateToAux, stateToAuxDoc } from "../steps/state-to-aux";
 import { storeBlock, storeBlockDoc } from "../steps/store-block";
 import { xorAuxIntoState, xorAuxIntoStateDoc } from "../steps/xor-aux-into-state";
-import { zeroPad, zeroPadDoc } from "../steps/zero-pad";
-import { zeroUnpad, zeroUnpadDoc } from "../steps/zero-unpad";
+import { zeroPad, zeroPadDoc, zeroPadMeta, zeroPadPortContract } from "../steps/zero-pad";
+import { zeroUnpad, zeroUnpadDoc, zeroUnpadMeta, zeroUnpadPortContract } from "../steps/zero-unpad";
 
 export const buildDefaultRegistry = (): StepRegistry => {
   const r = new StepRegistry();
@@ -85,12 +100,65 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // trace: PKCS#7 (RFC 5652), zero-pad (ISO/IEC 9797-1 method 1, lossy),
   // and ISO 7816-4 (sentinel-marked). Each pair's `doc.detail` calls out
   // the trade-offs vs. the others so the educational story is captured.
-  r.register("generic.pkcs7-pad@1", { executor: pkcs7Pad, doc: pkcs7PadDoc });
-  r.register("generic.pkcs7-unpad@1", { executor: pkcs7Unpad, doc: pkcs7UnpadDoc });
-  r.register("generic.zero-pad@1", { executor: zeroPad, doc: zeroPadDoc });
-  r.register("generic.zero-unpad@1", { executor: zeroUnpad, doc: zeroUnpadDoc });
-  r.register("generic.iso7816-4-pad@1", { executor: iso78164Pad, doc: iso78164PadDoc });
-  r.register("generic.iso7816-4-unpad@1", { executor: iso78164Unpad, doc: iso78164UnpadDoc });
+  // **Slice 1.3 (universal port-dataflow Phase 1)** — six padding step
+  // types lift as `kind: "ported"`. All bytes→bytes, no aux. The
+  // matching pair `load-block` / `store-block` stay legacy this slice:
+  // they are shape-transforming (bytes ↔ matrix4x4-bytes) and the
+  // current `ProjectionMetadata.stateLayout` single-field cannot describe
+  // a shape-transforming step. Sibling step types `split-blocks`,
+  // `concat-blocks`, `compute-block-count` also stay legacy — they
+  // produce/consume non-Uint8Array aux variants (`MatrixState[]`,
+  // `number`) that the legacy iterate runtime depends on. Both
+  // deferrals tracked in
+  // `docs/plans/universal-port-phase-1-slices.md` Slice 1.3 section.
+  r.register("generic.pkcs7-pad@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(pkcs7Pad, pkcs7PadMeta),
+    legacy: pkcs7Pad,
+    shape: pkcs7PadPortContract,
+    meta: pkcs7PadMeta,
+    doc: pkcs7PadDoc,
+  });
+  r.register("generic.pkcs7-unpad@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(pkcs7Unpad, pkcs7UnpadMeta),
+    legacy: pkcs7Unpad,
+    shape: pkcs7UnpadPortContract,
+    meta: pkcs7UnpadMeta,
+    doc: pkcs7UnpadDoc,
+  });
+  r.register("generic.zero-pad@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(zeroPad, zeroPadMeta),
+    legacy: zeroPad,
+    shape: zeroPadPortContract,
+    meta: zeroPadMeta,
+    doc: zeroPadDoc,
+  });
+  r.register("generic.zero-unpad@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(zeroUnpad, zeroUnpadMeta),
+    legacy: zeroUnpad,
+    shape: zeroUnpadPortContract,
+    meta: zeroUnpadMeta,
+    doc: zeroUnpadDoc,
+  });
+  r.register("generic.iso7816-4-pad@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(iso78164Pad, iso78164PadMeta),
+    legacy: iso78164Pad,
+    shape: iso78164PadPortContract,
+    meta: iso78164PadMeta,
+    doc: iso78164PadDoc,
+  });
+  r.register("generic.iso7816-4-unpad@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(iso78164Unpad, iso78164UnpadMeta),
+    legacy: iso78164Unpad,
+    shape: iso78164UnpadPortContract,
+    meta: iso78164UnpadMeta,
+    doc: iso78164UnpadDoc,
+  });
   r.register("generic.load-block@1", { executor: loadBlock, doc: loadBlockDoc });
   r.register("generic.store-block@1", { executor: storeBlock, doc: storeBlockDoc });
   // ─── Multi-block iteration boundary (Phase: ECB/CBC/CTR modes) ─────────

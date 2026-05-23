@@ -250,23 +250,68 @@ ported step under both flag values. Phase 2 (SHA-2 port-native) ships
 without `legacy`; the field becomes optional then disappears in Phase 5
 when the legacy contract retires.
 
-### Slice 1.3 — Padding + boundary primitives lifted
+### Slice 1.3 — Padding primitives lifted — **scope narrowed mid-slice 2026-05-23**
 
-Step types: `generic.pkcs7-pad@1`, `generic.pkcs7-unpad@1`,
-`generic.zero-pad@1`, `generic.zero-unpad@1`,
-`generic.iso7816-4-pad@1`, `generic.iso7816-4-unpad@1`,
-`generic.load-block@1`, `generic.store-block@1`,
-`generic.split-blocks@1`, `generic.concat-blocks@1`,
-`generic.compute-block-count@1`.
+> **Two-round scope discovery during slice prep.** The original draft
+> listed 11 step types: 6 padding + load-block + store-block + split-
+> blocks + concat-blocks + compute-block-count.
+>
+> **Round 1 deferral (advisor consult, before authoring):**
+> `split-blocks` writes `aux[blocksAux]` as `MatrixState[]`;
+> `concat-blocks` reads it; `compute-block-count` writes a `number`.
+> All three feed/are-read-by the **legacy iterate runtime** (invariant 2
+> of this plan — iterate stays legacy in Phase 1). Lifting them now
+> requires throwaway bridge code (array-aux encode/decode and
+> number-aux encode/decode) that Phase 2's for-each-subgraph node
+> retires. Decision: defer to Slice 1.9 (alongside the `ctx.aux` channel
+> cut) or Phase 2.
+>
+> **Round 2 deferral (advisor consult, after primary-source check):**
+> `load-block` (bytes → matrix4x4-bytes) and `store-block`
+> (matrix4x4-bytes → bytes) are SHAPE-TRANSFORMING — their state input
+> shape ≠ state output shape. The current `ProjectionMetadata.stateLayout`
+> is a SINGLE field used for both stateBefore reconstruction
+> (`bytesToState`) AND stateAfter encoding (`stateToBytes`). The latter
+> throws if `state.shape !== expected`, so a single-field meta cannot
+> describe a shape-transforming step. The natural fix (state ports
+> consult `PortContract.inputs/outputs[port].layout` instead of meta
+> carrying a separate `stateLayout` — unifying the layout mechanism
+> already used for aux ports) is its own slice's design question, not
+> Slice 1.3's. Decision: defer load-block + store-block to a future
+> slice that addresses the `ProjectionMetadata.stateLayout`
+> single-field gap.
 
-All `bytes` / `matrix4x4-bytes` state shapes. `split-blocks` is the
-first one-to-many writer (writes `aux[blocksAux]` as an array) —
-**deferred to Slice 1.9 along with the iterate-runtime concerns**, OR
-the metadata returns an empty map for state ports and the runtime
-emits `outBlocks` via aux only (legacy side-effect channel kept here
-until Phase 2's for-each-subgraph node).
+**Final Slice 1.3 scope: 6 step types.** All bytes → bytes
+(`shapeContract: { input: "bytes", output: "preserveInput" }`),
+no aux reads/writes — the cleanest possible lift batch:
 
-**Gate:** as Slice 1.2.
+- `generic.pkcs7-pad@1`, `generic.pkcs7-unpad@1`
+- `generic.zero-pad@1`, `generic.zero-unpad@1`
+- `generic.iso7816-4-pad@1`, `generic.iso7816-4-unpad@1`
+
+Each gets a colocated `<name>Meta: ProjectionMetadata` +
+`<name>PortContract: PortContract` export per Decision C. Meta declares
+`stateLayout: "bytes"`, `stateInputPort: "state"`,
+`stateOutputPort: "state"`; no aux read/write port functions. PortContract
+declares one `state` input + one `state` output, layout `"raw"`,
+`byteLength` ABSENT (padding output is variable-length — input.length +
+padLen for pad steps; input.length − padLen for unpad steps).
+
+**Deferred to a later slice (5 step types):**
+
+- `generic.load-block@1`, `generic.store-block@1` — shape-transforming;
+  blocked on `ProjectionMetadata.stateLayout` contract extension.
+- `generic.split-blocks@1`, `generic.concat-blocks@1` — array-aux
+  encode/decode; blocked on iterate runtime deferral until Slice 1.9 or
+  Phase 2.
+- `generic.compute-block-count@1` — number-aux encode/decode; same
+  deferral as split/concat (legacy iterate consumes it).
+
+**Gate:** frame-byte equivalence between `portedDispatchEnabled: true`
+and `false` for each of the 6 lifted step types on a synthetic spec.
+Existing AES-128 CBC frame-parity test from Slice 1.2 continues to
+pass (the cipher's load-block/store-block/split/concat/count stay
+legacy, so the cipher-level parity gate is unchanged).
 
 ### Slice 1.4 — AES lifted (port-per-roundkey)
 

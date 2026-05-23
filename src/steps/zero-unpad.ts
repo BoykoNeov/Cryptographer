@@ -14,7 +14,14 @@
  * unpads to an empty BytesState — odd but not invalid.
  */
 
-import type { BytesState, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  BytesState,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 export const zeroUnpad: StepExecutor = (state, params) => {
   if (state.shape !== "bytes") {
@@ -83,6 +90,25 @@ docs for the full lossiness discussion.`,
   ]),
   references: ["ISO/IEC 9797-1 §6.3.1 (padding method 1)"],
   shapeContract: { input: "bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.3) ───────────────
+// Zero unpad: pure bytes→bytes, no aux. Same shape as the other padding
+// step types lifted in Slice 1.3. Lossy by design — see the executor
+// comment for the cryptographic discussion. The "all-zeros block unpads
+// to empty BytesState" edge case is the most interesting: the runtime's
+// frame-parity gate exercises this directly so the empty-output case
+// doesn't get coerced silently on either path.
+
+export const zeroUnpadMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+};
+
+export const zeroUnpadPortContract: PortContract = {
+  inputs: new Map([["state", { layout: "raw" }]]),
+  outputs: new Map([["state", { layout: "raw" }]]),
 };
 
 const readBlockSize = (params: Json): number => {

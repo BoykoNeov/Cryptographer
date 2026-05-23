@@ -34,7 +34,14 @@
  * formula uniform.)
  */
 
-import type { BytesState, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  BytesState,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 export const zeroPad: StepExecutor = (state, params) => {
   if (state.shape !== "bytes") {
@@ -104,6 +111,24 @@ Twofish/Serpent, etc.
   ]),
   references: ["ISO/IEC 9797-1 §6.3.1 (padding method 1)"],
   shapeContract: { input: "bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.3) ───────────────
+// Zero pad: pure bytes→bytes, no aux. Variable-length output (0 or more
+// trailing zero bytes appended depending on input length mod blockSize),
+// so `byteLength` is absent on the output port. The no-op case — input
+// already block-aligned, padLen = 0 — survives the lift unchanged: the
+// runtime's outputs map carries the (unchanged) state bytes through.
+
+export const zeroPadMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+};
+
+export const zeroPadPortContract: PortContract = {
+  inputs: new Map([["state", { layout: "raw" }]]),
+  outputs: new Map([["state", { layout: "raw" }]]),
 };
 
 const readBlockSize = (params: Json): number => {
