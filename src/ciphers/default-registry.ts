@@ -72,18 +72,42 @@ import {
   pkcs7UnpadMeta,
   pkcs7UnpadPortContract,
 } from "../steps/pkcs7-unpad";
-import { serpentAddRoundKey, serpentAddRoundKeyDoc } from "../steps/serpent-add-round-key";
-import { serpentBitPermutation, serpentBitPermutationDoc } from "../steps/serpent-bit-permutation";
+import {
+  serpentAddRoundKey,
+  serpentAddRoundKeyDoc,
+  serpentAddRoundKeyMeta,
+  serpentAddRoundKeyPortContract,
+} from "../steps/serpent-add-round-key";
+import {
+  serpentBitPermutation,
+  serpentBitPermutationDoc,
+  serpentBitPermutationMeta,
+  serpentBitPermutationPortContract,
+} from "../steps/serpent-bit-permutation";
 import {
   serpentInvLinearTransform,
   serpentInvLinearTransformDoc,
+  serpentInvLinearTransformMeta,
+  serpentInvLinearTransformPortContract,
 } from "../steps/serpent-inv-linear-transform";
-import { serpentKeyExpansion, serpentKeyExpansionDoc } from "../steps/serpent-key-expansion";
+import {
+  serpentKeyExpansion,
+  serpentKeyExpansionDoc,
+  serpentKeyExpansionMeta,
+  serpentKeyExpansionPortContract,
+} from "../steps/serpent-key-expansion";
 import {
   serpentLinearTransform,
   serpentLinearTransformDoc,
+  serpentLinearTransformMeta,
+  serpentLinearTransformPortContract,
 } from "../steps/serpent-linear-transform";
-import { serpentSubBytes, serpentSubBytesDoc } from "../steps/serpent-sub-bytes";
+import {
+  serpentSubBytes,
+  serpentSubBytesDoc,
+  serpentSubBytesMeta,
+  serpentSubBytesPortContract,
+} from "../steps/serpent-sub-bytes";
 import { shiftRows, shiftRowsDoc, shiftRowsMeta, shiftRowsPortContract } from "../steps/shift-rows";
 import {
   speckKeySchedule,
@@ -408,25 +432,74 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // and forward + inverse Linear Transform. All three Serpent variants
   // (128/192/256) share the registered types; only the key length and the
   // key-expansion `keyByteLength` param differ across them.
+  //
+  // **Slice 1.7 (universal port-dataflow Phase 1)** — all six Serpent
+  // step types lift as `kind: "ported"` with colocated metadata per
+  // Decision C. Key-expansion is the THIRD one-to-many writer in the
+  // migration (after AES key-expansion in 1.4 and Speck key-schedule in
+  // 1.6): port-per-roundkey per Decision B, with 33 output ports
+  // (`key0` … `key32`) — fixed across all three Serpent key sizes,
+  // unlike AES (Nr+1 scales with `params.rounds`) and Speck (rounds keys
+  // also scale). Function form retained for uniformity with the
+  // precedents. AddRoundKey is the same shape as `aes.add-round-key@1`
+  // but with `stateLayout: "bytes"` (Serpent state is 16 flat bytes,
+  // not a 4×4 matrix). The four pure no-aux steps (bit-permutation,
+  // sub-bytes, both LTs) are the cleanest possible lift batch — bytes
+  // ↔ bytes 16-byte fixed, no aux traffic, simpler than Slice 1.3's
+  // padding primitives (which had variable output lengths).
+  //
+  // **byteLength: 16 declared on state + aux-read ports**, but absent
+  // on key-expansion's output ports — matches the user-picked
+  // (2026-05-23) split: state ports follow AES Slice 1.4 posture
+  // (honest fixed declaration when no variant exists), key-expansion's
+  // round-key output ports follow Slice 1.6 Speck posture (polymorphic
+  // for uniformity across the round-key port batch).
   r.register("serpent.key-expansion@1", {
-    executor: serpentKeyExpansion,
+    kind: "ported",
+    executor: liftLegacyExecutor(serpentKeyExpansion, serpentKeyExpansionMeta),
+    legacy: serpentKeyExpansion,
+    shape: serpentKeyExpansionPortContract,
+    meta: serpentKeyExpansionMeta,
     doc: serpentKeyExpansionDoc,
   });
   r.register("serpent.bit-permutation@1", {
-    executor: serpentBitPermutation,
+    kind: "ported",
+    executor: liftLegacyExecutor(serpentBitPermutation, serpentBitPermutationMeta),
+    legacy: serpentBitPermutation,
+    shape: serpentBitPermutationPortContract,
+    meta: serpentBitPermutationMeta,
     doc: serpentBitPermutationDoc,
   });
   r.register("serpent.add-round-key@1", {
-    executor: serpentAddRoundKey,
+    kind: "ported",
+    executor: liftLegacyExecutor(serpentAddRoundKey, serpentAddRoundKeyMeta),
+    legacy: serpentAddRoundKey,
+    shape: serpentAddRoundKeyPortContract,
+    meta: serpentAddRoundKeyMeta,
     doc: serpentAddRoundKeyDoc,
   });
-  r.register("serpent.sub-bytes@1", { executor: serpentSubBytes, doc: serpentSubBytesDoc });
+  r.register("serpent.sub-bytes@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(serpentSubBytes, serpentSubBytesMeta),
+    legacy: serpentSubBytes,
+    shape: serpentSubBytesPortContract,
+    meta: serpentSubBytesMeta,
+    doc: serpentSubBytesDoc,
+  });
   r.register("serpent.linear-transform@1", {
-    executor: serpentLinearTransform,
+    kind: "ported",
+    executor: liftLegacyExecutor(serpentLinearTransform, serpentLinearTransformMeta),
+    legacy: serpentLinearTransform,
+    shape: serpentLinearTransformPortContract,
+    meta: serpentLinearTransformMeta,
     doc: serpentLinearTransformDoc,
   });
   r.register("serpent.inv-linear-transform@1", {
-    executor: serpentInvLinearTransform,
+    kind: "ported",
+    executor: liftLegacyExecutor(serpentInvLinearTransform, serpentInvLinearTransformMeta),
+    legacy: serpentInvLinearTransform,
+    shape: serpentInvLinearTransformPortContract,
+    meta: serpentInvLinearTransformMeta,
     doc: serpentInvLinearTransformDoc,
   });
   // ─── Toy Feistel F (Phase 2 of the DES + branching primitive plan) ─────

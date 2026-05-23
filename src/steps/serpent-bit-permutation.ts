@@ -22,7 +22,14 @@
  * state words "share columns" after permutation.
  */
 
-import type { BytesState, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  BytesState,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 import { applyBitPermutation } from "./serpent-bit-ops";
 
 export const serpentBitPermutation: StepExecutor = (state, params) => {
@@ -89,6 +96,30 @@ of byte 15.`,
     "Serpent NIST submission, tstsubmtl/serpref.c (InitialPermutation, FinalPermutation tables)",
   ],
   shapeContract: { input: "bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.7) ───────────────
+// Pure bytes→bytes 16-byte fixed transform with no aux. Same shape as the
+// Slice 1.3 padding primitives, but with a HONEST fixed byteLength because
+// Serpent's state is always 128 bits across all three key sizes — no
+// variant exists that would force polymorphism here. Matches the AES
+// Slice 1.4 posture (`byte-substitution` and friends declare
+// `byteLength: 16` on their matrix4x4 ports for the same "fixed
+// contract, fixed declaration" reason).
+//
+// Single state input + single state output, layout "raw" (the inspector
+// renders Serpent's 128-bit state as a flat byte buffer, not a 4×4
+// matrix — Serpent doesn't use AES's matrix layout). No aux traffic.
+
+export const serpentBitPermutationMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+};
+
+export const serpentBitPermutationPortContract: PortContract = {
+  inputs: new Map([["state", { byteLength: 16, layout: "raw" }]]),
+  outputs: new Map([["state", { byteLength: 16, layout: "raw" }]]),
 };
 
 const readTable = (params: Json): readonly number[] => {

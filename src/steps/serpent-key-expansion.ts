@@ -44,7 +44,15 @@
  */
 
 import { SERPENT_IP, SERPENT_PHI, SERPENT_SBOXES } from "../ciphers/serpent-constants";
-import type { AuxValue, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  AuxValue,
+  Json,
+  PortContract,
+  PortShape,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 import {
   applyBitPermutation,
   readWordLE32,
@@ -229,4 +237,115 @@ const readParams = (params: Json): Params => {
     outputPrefix: p.outputPrefix,
     keyByteLength: klen,
   };
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.7) ───────────────
+// Serpent key-expansion is the THIRD one-to-many writer in the universal-
+// port migration (after AES key-expansion in 1.4 and Speck key-schedule
+// in 1.6). Same Decision B shape — one output port per round key —
+// applied to Serpent's 33 round keys (K_0 … K_32). Unlike AES (Nr+1
+// round keys, scales with the round count param) and Speck (rounds
+// keys, also param-driven), Serpent's count is FIXED at 33 across all
+// three key sizes (128/192/256). The executor itself has no `rounds`
+// param — the loop is hard-coded `for i in 0..32`.
+//
+// **Function form despite the fixed count** — kept for uniformity with
+// the AES/Speck precedents and so `outputPrefix` (the per-spec aux name
+// prefix) still threads through `auxWritePorts(params)` cleanly. A
+// static `Map` of 33 entries would also work but would force a parallel
+// static-port-name table that drifts from the executor's
+// `${outputPrefix}.${i}` write convention.
+//
+// **byteLength absent on output ports** per user pick 2026-05-23 —
+// matches Slice 1.6 Speck posture uniformly ("absent everywhere unless
+// a fixed reason"), even though Serpent has no variant. The Slice
+// 1.4 dynamic-N round-trip already pinned that absent-byteLength
+// output ports round-trip cleanly. Matches the AES key-expansion's
+// `masterKey` polymorphism (which IS variant-driven: 16/24/32).
+//
+// **Aux-only**: `stateInputPort` and `stateOutputPort` are intentionally
+// OMITTED. Serpent key-expansion's `shapeContract` is
+// `input: "any", output: "preserveInput"` — the executor returns state
+// unmodified (line: `return { state, auxReads, auxWrites }`). Matches
+// the aux-only lift pattern from Slice 1.2 (iv-load, aux-load, …) +
+// Slice 1.4 (AES key-expansion) + Slice 1.6 (Speck key-schedule). The
+// lift adapter creates a sentinel zero-length `bytes`-shape state to
+// pass to the legacy executor and discards its passthrough return;
+// the runtime preserves the caller's actual state across the ported
+// call so the subsequent leaf (typically the first `serpent.bit-
+// permutation@1` of the spec) sees its incoming 16-byte block
+// unchanged.
+//
+// **Master-key input port `masterKey`** — disambiguates from the
+// per-round output ports `key0`, `key1`, …, `key32`. Same convention
+// AES key-expansion (Slice 1.4) and Speck key-schedule (Slice 1.6)
+// adopted. byteLength absent because Serpent's master key varies
+// across the three key sizes (16/24/32 bytes); polymorphic byteLength
+// honestly captures this.
+
+const SERPENT_ROUND_KEY_COUNT = 33;
+
+const serpentKeyExpansionOutputPorts = (_params: Json) => {
+  // Output count is hardcoded at 33 in the executor (the K_0 … K_32 loop).
+  // Function-form contract for uniformity with the AES/Speck precedents
+  // even though _params is unused here. Map iteration is insertion-
+  // ordered in JS — bindings emerge in i = 0 … 32 order, matching the
+  // legacy executor's auxWrites insertion order. The frame-parity test
+  // pins this.
+  const m = new Map<string, PortShape>();
+  for (let i = 0; i < SERPENT_ROUND_KEY_COUNT; i++) {
+    m.set(`key${i}`, { layout: "raw" });
+  }
+  return m;
+};
+
+const serpentKeyExpansionAuxWritePorts = (params: Json) => {
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("serpent.key-expansion auxWritePorts: params must be an object");
+  }
+  const p = params as { outputPrefix?: unknown };
+  if (typeof p.outputPrefix !== "string" || p.outputPrefix.length === 0) {
+    throw new Error(
+      "serpent.key-expansion auxWritePorts: params.outputPrefix: non-empty string required",
+    );
+  }
+  const bindings = new Map<string, string>();
+  for (let i = 0; i < SERPENT_ROUND_KEY_COUNT; i++) {
+    bindings.set(`key${i}`, `${p.outputPrefix}.${i}`);
+  }
+  return bindings;
+};
+
+const serpentKeyExpansionAuxReadPorts = (params: Json) => {
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("serpent.key-expansion auxReadPorts: params must be an object");
+  }
+  const p = params as { keyAuxName?: unknown };
+  if (typeof p.keyAuxName !== "string" || p.keyAuxName.length === 0) {
+    throw new Error(
+      "serpent.key-expansion auxReadPorts: params.keyAuxName: non-empty string required",
+    );
+  }
+  return new Map([["masterKey", p.keyAuxName]]);
+};
+
+export const serpentKeyExpansionMeta: ProjectionMetadata = {
+  // Aux-only step — no state ports. `stateLayout: "bytes"` is the
+  // ceremonial value the type requires; the lift adapter never consults
+  // it because neither `stateInputPort` nor `stateOutputPort` is
+  // declared. Same pattern as AES/Speck key-schedules.
+  stateLayout: "bytes",
+  auxReadPorts: serpentKeyExpansionAuxReadPorts,
+  auxWritePorts: serpentKeyExpansionAuxWritePorts,
+};
+
+export const serpentKeyExpansionPortContract: PortContract = {
+  // Static `inputs`: just the master key. No state input port —
+  // shapeContract is `input: "any"`. byteLength absent — master key
+  // varies across the three Serpent key sizes (16/24/32 bytes).
+  inputs: new Map<string, PortShape>([["masterKey", { layout: "raw" }]]),
+  // Dynamic outputs: 33 ports (`key0` … `key32`), function-form for
+  // uniformity with AES/Speck precedents. byteLength absent per user
+  // pick (Slice 1.6 Speck posture, even though Serpent has no variant).
+  outputs: serpentKeyExpansionOutputPorts,
 };

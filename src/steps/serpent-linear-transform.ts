@@ -24,7 +24,13 @@
  */
 
 import { SERPENT_LT_TABLE } from "../ciphers/serpent-constants";
-import type { BytesState, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  BytesState,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 import { readBit, writeBit } from "./serpent-bit-ops";
 
 export const serpentLinearTransform: StepExecutor = (state) => {
@@ -102,4 +108,21 @@ that AES uses to share structure between encryption and decryption.`,
     "Serpent NIST submission, tstsubmtl/serpref.c (LT() function, LTTable[])",
   ],
   shapeContract: { input: "bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.7) ───────────────
+// Pure bytes→bytes 16-byte fixed transform with no aux and no params.
+// The LT table is module-scope constant; the executor's lookup is
+// data-driven but the port surface is the simplest possible — same as
+// `serpent.bit-permutation@1` and `serpent.sub-bytes@1`.
+
+export const serpentLinearTransformMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+};
+
+export const serpentLinearTransformPortContract: PortContract = {
+  inputs: new Map([["state", { byteLength: 16, layout: "raw" }]]),
+  outputs: new Map([["state", { byteLength: 16, layout: "raw" }]]),
 };

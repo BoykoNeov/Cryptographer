@@ -15,7 +15,14 @@
  * XOR aligns with the IP'd state inside the round body.
  */
 
-import type { BytesState, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  BytesState,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 export const serpentAddRoundKey: StepExecutor = (state, params, ctx) => {
   if (state.shape !== "bytes") {
@@ -76,6 +83,38 @@ naturally — see \`serpent.key-expansion@1\` for the why.`,
     "Serpent NIST submission, tstsubmtl/serpref.c (keying() function)",
   ],
   shapeContract: { input: "bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.7) ───────────────
+// State-bearing single-aux-read step. Direct analog of AES's
+// `generic.add-round-key@1` (Slice 1.4), but on a flat `bytes`-shape
+// state (16 bytes for Serpent) rather than a `matrix4x4-bytes` state.
+// Same lift adapter handles both: stateLayout encodes/decodes via the
+// `bytes` codec; the aux-read binding is identical in shape (one named
+// port → one named aux key, function form because the param names the
+// round-specific aux key per-leaf).
+//
+// **byteLength: 16 honest declaration** — Serpent's state is always 128
+// bits and round keys are always 128 bits across all three key sizes;
+// no variant exists. Matches the AES Slice 1.4 posture for fixed-length
+// cipher contracts (`aes.add-round-key@1` declares 16 on both ports).
+
+export const serpentAddRoundKeyMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+  auxReadPorts: (params: Json) => {
+    const roundKeyAux = readRoundKeyAux(params);
+    return new Map([["roundKey", roundKeyAux]]);
+  },
+};
+
+export const serpentAddRoundKeyPortContract: PortContract = {
+  inputs: new Map([
+    ["state", { byteLength: 16, layout: "raw" }],
+    ["roundKey", { byteLength: 16, layout: "raw" }],
+  ]),
+  outputs: new Map([["state", { byteLength: 16, layout: "raw" }]]),
 };
 
 const readRoundKeyAux = (params: Json): string => {

@@ -19,7 +19,14 @@
  * differs at the leaf level.
  */
 
-import type { BytesState, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  BytesState,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 export const serpentSubBytes: StepExecutor = (state, params) => {
   if (state.shape !== "bytes") {
@@ -106,6 +113,24 @@ one round's S-box doesn't bleed into any other.`,
     "Serpent NIST submission, tstsubmtl/serpref.c (SHat() function)",
   ],
   shapeContract: { input: "bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.7) ───────────────
+// Pure bytes→bytes 16-byte fixed transform with no aux. The S-box table
+// is per-leaf params (each round's leaf carries its own copy of the
+// per-round S-box S_{i mod 8}), but the per-leaf table doesn't change
+// the port surface — same shape as `serpent.bit-permutation@1`. The
+// `sboxIndex` param is display-only; the executor ignores it.
+
+export const serpentSubBytesMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+};
+
+export const serpentSubBytesPortContract: PortContract = {
+  inputs: new Map([["state", { byteLength: 16, layout: "raw" }]]),
+  outputs: new Map([["state", { byteLength: 16, layout: "raw" }]]),
 };
 
 const readSbox = (params: Json): readonly number[] => {

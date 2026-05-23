@@ -10,7 +10,13 @@
  */
 
 import { SERPENT_INV_LT_TABLE } from "../ciphers/serpent-constants";
-import type { BytesState, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  BytesState,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 import { readBit, writeBit } from "./serpent-bit-ops";
 
 export const serpentInvLinearTransform: StepExecutor = (state) => {
@@ -63,4 +69,19 @@ start with this step.`,
     "Serpent NIST submission, tstsubmtl/serpref.c (LTInverse() function, LTTableInverse[])",
   ],
   shapeContract: { input: "bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.7) ───────────────
+// Pure bytes→bytes 16-byte fixed transform with no aux and no params.
+// Mirror of `serpent.linear-transform@1`.
+
+export const serpentInvLinearTransformMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+};
+
+export const serpentInvLinearTransformPortContract: PortContract = {
+  inputs: new Map([["state", { byteLength: 16, layout: "raw" }]]),
+  outputs: new Map([["state", { byteLength: 16, layout: "raw" }]]),
 };

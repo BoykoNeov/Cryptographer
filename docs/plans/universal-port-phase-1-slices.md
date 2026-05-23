@@ -526,16 +526,75 @@ synthetic spec (key-schedule + one round) pins the lift in isolation.
 Aux-copy variant gap (Open #2) stays deferred — no Speck spec uses
 aux-copy, the `it.skip` from Slice 1.5 still tracks the latent debt.
 
-### Slice 1.7 — Serpent lifted (depends on Slice 1.0)
+### Slice 1.7 — Serpent lifted — **GREEN 2026-05-23**
 
 Step types: `serpent.key-expansion@1`, `serpent.bit-permutation@1`,
 `serpent.add-round-key@1`, `serpent.sub-bytes@1`,
 `serpent.linear-transform@1`, `serpent.inv-linear-transform@1`.
 
-Includes the bitvec layout proven in Slice 1.0. Key-expansion per
-Decision B (Serpent has 33 round subkeys).
+> **Slice 1.0 dependency note (stale) resolved.** The plan's original
+> "depends on Slice 1.0 (bitvec)" wording dates from before Slice 1.0
+> dropped bitvec mid-flight after primary-source check showed
+> `serpent.bit-permutation@1` rejects non-bytes state. Serpent uses
+> `bytes` state throughout (16-byte fixed); no shipped step exercises
+> `BitVecState`. No real dependency.
 
-**Gate:** Serpent KATs (3 key sizes) pass under ported.
+Key-expansion per Decision B — **third one-to-many writer** in the
+universal-port migration (after AES key-expansion in Slice 1.4 and Speck
+key-schedule in Slice 1.6). **33 output ports** (`key0` … `key32`),
+**FIXED across all three Serpent key sizes** unlike AES (Nr+1, scales
+with `params.rounds`) and Speck (`rounds` keys, also param-driven). The
+Serpent executor has no `rounds` param — the loop is hard-coded
+`for i in 0..32`. Function-form `PortContract.outputs` retained for
+uniformity with the precedents and so the `outputPrefix` param threads
+through `auxWritePorts(params)` cleanly.
+
+**Two contract decisions landed (both flow from prior slices, NO new
+contract evolution):**
+
+1. **byteLength split between state ports and key-expansion's
+   round-key output ports** (user pick 2026-05-23). State ports on the
+   five state-bearing step types declare `byteLength: 16` (Serpent
+   state is always 128 bits, no variant exists — matches AES Slice 1.4
+   posture "honest fixed declaration when no variant"). Key-expansion's
+   33 round-key output ports leave `byteLength` ABSENT (matches Slice
+   1.6 Speck posture uniformly across the round-key port batch, even
+   though Serpent has no variant). Master-key input port also absent
+   because the master key varies across 16/24/32 bytes per `keyByteLength`.
+2. **Aux-only key-expansion** — same lift pattern as Slice 1.4 AES
+   key-expansion and Slice 1.6 Speck key-schedule. `stateInputPort` and
+   `stateOutputPort` OMITTED; the lift adapter creates a sentinel
+   zero-length `bytes` state for the legacy executor and the runtime
+   preserves the caller's actual state across the call. All three of
+   AES/Speck/Serpent's key-schedules now share this aux-only pattern
+   verbatim.
+
+The four pure no-aux Serpent steps (`bit-permutation`, `sub-bytes`,
+`linear-transform`, `inv-linear-transform`) are the cleanest possible
+lift batch — bytes↔bytes 16-byte fixed, no aux traffic. Strictly
+simpler than Slice 1.3's padding primitives (which had variable output
+lengths) thanks to Serpent's fixed-size state. `serpent.add-round-key@1`
+is the direct analog of `generic.add-round-key@1` (AES, Slice 1.4) but
+with `stateLayout: "bytes"` instead of `"matrix4x4-bytes"` — same
+single-aux-read function-form binding.
+
+**Gate (achieved):** 1681 tests green (1667 prior + 14 new in
+`tests/runtime-ported-dispatch-serpent.test.ts`). All three Serpent
+KAT sanity floors green under `portedDispatchEnabled: true` (Serpent-128
++ Serpent-192 + Serpent-256, encrypt + decrypt). Frame-by-frame byte
+parity green across all six cipher specs (3 key sizes × {encrypt,
+decrypt}). Map insertion order on the 33 Serpent round keys pinned
+(`roundKey.0` … `roundKey.32` in order). Per-primitive synthetic spec
+(key-expansion + one add-round-key) pins the lift in isolation. Full
+check green: biome + tsc + 1681/1681 active vitest tests + vite build.
+
+**aux-copy variant gap (Open #2) stays deferred** — no shipped Serpent
+spec uses chaining primitives (single-block only across all three
+variants). The `it.skip` from Slice 1.5 (chaining test (c) — AES-128
+CBC decrypt §F.2.2 under flag-on) remains tracking the latent debt.
+DES (Slice 1.8) is the next checkpoint for the variant-preserving pick;
+DES specs also don't use aux-copy in their canonical shape, so deferral
+remains viable through 1.8 as well.
 
 ### Slice 1.8 — DES lifted
 
