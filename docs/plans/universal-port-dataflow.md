@@ -56,6 +56,9 @@ only when no shipped spec depends on them.
 | Mirrors | Cross-mode mirror registry extension | **Stay opt-in** — system *suggests* inverse mirrors when inversion is known (S-box invert, GF-matrix invert, XOR self-inverse, rotate negate); user clicks to apply. No silent auto-sync — protects pedagogy experiments where the user deliberately wires the forward operation to decrypt. |
 | Narration | Cipher-specific pedagogy preservation under rebuild | **(a) `narrationOverride: StepDocumentation` field on spec nodes**, folded into Phase 1's contract design. Falls back to step-type registry documentation when absent. Shipped AES spec carries cipher-specific overrides per leaf (e.g., `byte-substitute` → `{ name: 'SubBytes', summary: 'FIPS-197 §5.1.1...', references: [...] }`); experimental palette-dropped primitives get generic registry narration. Cipher pedagogy becomes JSON-native — forking AES to make a variant lets the author edit narration too. |
 | Feistel | Disposition of `FeistelRoundGroup` / `BranchTrack` / `CombineKind` | **No retrofit, gradual fade.** DES ships under legacy. Adapter wraps legacy types. Rebuild expresses DES via universal primitives. Types removed only when no shipped spec depends on them. |
+| Q-edges | Where do edges live in the spec? | **(c) Sink-only** — each node declares its own `inputs: { portName: { node, port } }`. Outputs are emergent via inverse query. Eliminates the dual-write corruption risk of storing edges on both endpoints; matches the typed-in-editor UX ("at this consumer, change which source it reads from"); no separate edges array to keep in sync with the node list. Decided 2026-05-23. |
+| Q-gate-9 | Phase 0 load-bearing assertion | **`deepEqual(reconstruct(project(legacyFrame), layoutTags), legacyFrame)` byte-by-byte for all three lifted steps.** The 8 other gate items pass trivially when the adapter copies legacy frames — only this round-trip tests the migration's premise ("legacy state/aux split is one projection of unified ports"). Hidden engineering inside: design `layoutTags` rich enough that all 4 State variants (bytes / matrix4x4 / bitvec / bigint) AND aux-key names round-trip losslessly. A lossy round-trip is a Phase 0 finding, not a Phase 1 problem. Decided 2026-05-23. |
+| Q-ports-add | Adding new ports to a node | **Pattern A (parameterized primitives) + Pattern B (tap/identity insertion), defer Pattern C (spec-local port extension).** A: e.g., `xor` with `params.inputCount: N` parameterizes its input port list — change params, contract refreshes. B: want a new debug-output on the post-MixColumns state? Insert an `identity`/`tap` primitive between source and consumer; tap has two outputs (`pass`, `tap`). C (each node declares extra ports beyond what its type contract says) breaks the "spec fully described by node-type contracts" invariant and is deferred indefinitely; no shipped use case demands it. Decided 2026-05-23. |
 
 ## Contract sketch
 
@@ -97,7 +100,22 @@ type StepNode = {
 declare function liftLegacyExecutor(reg: LegacyRegistration): PortedExecutor;
 ```
 
-Edges carry explicit port identity: `{ from: { nodeId, portName }, to: { nodeId, portName } }` — no aux/state distinction at the data-model layer. The `State` union (`BytesState`, `MatrixState`, `BitVecState`, `BigIntState`) collapses to `Uint8Array` at the runtime layer; `MatrixState`'s column-major convention becomes a port `layout` tag. Trace frames record per-port byte arrays in/out of each step; the legacy state/aux split becomes one projection of that — **this is the load-bearing claim Phase 0 validates.**
+Edges are stored **sink-only on each node** (Q-edges, decided 2026-05-23): every node carries `inputs: ReadonlyMap<string, { node: string; port: string }>`; the consumer side declares where its inputs come from. Fan-out is computed by inverse query (`O(N)` walk over all nodes' inputs maps; cached in graph derivation). No aux/state distinction at the data-model layer.
+
+```ts
+type EdgeEndpoint = { readonly node: string; readonly port: string };
+
+type StepNode = {
+  readonly kind: "step";
+  readonly id: string;
+  readonly type: string;
+  readonly params: Json;
+  readonly inputs: ReadonlyMap<string, EdgeEndpoint>;  // sink-only edges
+  readonly narrationOverride?: StepDocumentation;
+};
+```
+
+The `State` union (`BytesState`, `MatrixState`, `BitVecState`, `BigIntState`) collapses to `Uint8Array` at the runtime layer; `MatrixState`'s column-major convention becomes a port `layout` tag. Trace frames record per-port byte arrays in/out of each step; the legacy state/aux split becomes one projection of that — **this is the load-bearing claim Phase 0 validates via the project→reconstruct→deepEqual round-trip (Q-gate-9).**
 
 ## Phased plan
 
@@ -125,8 +143,9 @@ Each phase has an explicit pass/fail gate. **If a gate fails, planning re-opens 
 - `:b0` stepId suffix and `blockIndex` stamp preserved on iterate body frame
 - Mirror registry buttons still render for ported steps (e.g., SubBytes inverse-mirror)
 - Full 1389-test suite still passes
+- **(load-bearing, Q-gate-9):** for all three lifted frames, `deepEqual(reconstruct(project(legacyFrame), layoutTags), legacyFrame)` holds byte-by-byte. The projection is the per-port `inputs`/`outputs` Maps; the `layoutTags` sidecar carries State-variant metadata (matrix column-major flag, bitvec `bitLength`, bigint endianness + length, original aux-key names) sufficient to reconstruct the legacy frame losslessly. **If the round-trip can't be made lossless without `layoutTags` growing absurdly large, the projection's design itself is wrong — surface to user and re-open planning before Phase 1.**
 
-**If gate fails:** identify which UI layer forked, surface to user, revise plan before Phase 1.
+**If gate fails:** identify which UI layer forked OR what the projection lost, surface to user, revise plan before Phase 1.
 
 ### Phase 1 — Port contract + adapter for every existing step (1–2 weeks)
 
