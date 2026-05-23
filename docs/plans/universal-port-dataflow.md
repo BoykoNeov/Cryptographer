@@ -78,13 +78,16 @@ type PortedExecutor = (
   ctx: StepContext,
 ) => StepOutputs;
 
-type StepShapeContract = {
+// Renamed from StepShapeContract in Phase 0 to avoid collision with the
+// existing single-thread shape contract at src/core/types.ts (palette chip +
+// drop-anchor greying + validateShapes).
+type PortContract = {
   readonly inputs: ReadonlyMap<string, PortShape>;
   readonly outputs: ReadonlyMap<string, PortShape>;
 };
 
 type StepRegistration =
-  | { kind: "ported"; executor: PortedExecutor; shape: StepShapeContract; doc: StepDocumentation }
+  | { kind: "ported"; executor: PortedExecutor; shape: PortContract; doc: StepDocumentation }
   | { kind: "legacy"; executor: StepExecutor; doc: StepDocumentation };
 
 // Spec node gains optional per-leaf narration override (Phase 1).
@@ -124,11 +127,19 @@ Each phase has an explicit pass/fail gate. **If a gate fails, planning re-opens 
 ### Phase 0 — Trace-shape unification spike (~3 days)
 
 > **Progress 2026-05-23:** Tasks 1–3 complete (type additions in `core/types.ts`; `project`/`reconstruct` pure helpers in `core/port-projection.ts`; Q-gate-9 round-trip test in `tests/port-projection-q-gate-9.test.ts` — 4 assertions all green covering pure state, aux read, and iterate body × 2 step types). **Q-gate-9 PASSES**: the load-bearing assertion holds byte-by-byte against real AES-128 frames; the migration's premise is empirically supported. Naming refinement: the plan's `StepShapeContract` is renamed to **`PortContract`** to avoid collision with the existing identifier at `types.ts:319` (single-thread shape contract used by the palette chip + drop-anchor greying + `validateShapes`). Remaining Phase-0 tasks: 4 `liftLegacyExecutor` adapter, 5 runtime dual-dispatch, 6 end-to-end AES-128 ECB under ported contract, 7 walk all 9 gate items + write findings doc.
+>
+> **Decision 2026-05-23 (advisor consult after Q-gate-9):** `ProjectionMetadata` will live in a **separate side-map registry** (`Map<stepType, ProjectionMetadata>`) for Phase 0, NOT as an optional field on `StepDefinition`. Rationale: projection metadata is the lift function's *input*, not a permanent registration field — Phase 1's eventual `StepRegistration` discriminated union holds `{executor: PortedExecutor, shape: PortContract}` as the OUTPUT of lifting, so adding `projectionMetadata?` to the legacy `StepDefinition` would put it on the wrong end of the pipe and force two migrations (Phase 0 adds optional field → Phase 1 restructures). The side-map is cheaper to throw away if Phase 0 needs revising and honestly signals "this is a spike."
+>
+> **Pre-flight grep confirmed (advisor item 3, 2026-05-23):** the only consumer of `byteSubstitution` / `addRoundKey` / their doc exports is `src/ciphers/default-registry.ts:12,16`. All other matches in `src/ciphers/*-round-builder.ts` and per-key-size cipher files are spec-string references (`"generic.byte-substitution@1"`), not executor imports. Task 6's flip from legacy → ported registration is therefore NOT leaky.
+>
+> **Deferred to next session (advisor items 2 + 4):**
+> - **Item 2 — anti-trivial discipline tightening:** the Q-gate-9 test enforces anti-triviality only at the type level (`LayoutTags` has no field that could carry a `State`). A determined refactor could weaken `LayoutTags` to smuggle one. Hardening: wrap `tags` via `structuredClone(tags)` before passing to `reconstruct` in the test — forces tags through a clone barrier that wouldn't preserve any smuggled State variant's branding. **Verify first** that `structuredClone` round-trips `ReadonlyMap<string, string>` correctly under vitest config. Not a Phase-0 blocker; hardens discipline against future drift.
+> - **Item 4 — findings doc must call out the `outBlocksAux` split:** the iterate-body gate item says "validates `:b0` suffix, `blockIndex` stamping, AND `aux[outBlocksAux]` population." Q-gate-9 covers the first two at frame level; the third can't be checked at frame level because `outBlocksAux` is written by the runtime's iterate machinery as a side-effect, not by any leaf's `auxWritten`. Falls out at integration boundary (task 6: AES-128 ECB ciphertext matches FIPS-197 KAT). Findings doc (task 7) must explicitly state: *"iterate-runtime aux publication is verified at integration boundary, not frame round-trip."* Don't quietly drop the gate item.
 
 **Goal:** validate the load-bearing claim that today's UI layers consume a trace shape compatible with universal ports. **Scope widened** (per second-pass advisor review): a pure step alone (`aes.sub-bytes`) doesn't exercise the harder cases where state and aux co-flow or where iterate boundaries are involved — those are exactly the cases that would force the UI to fork.
 
 **Scope:**
-- Minimal `PortShape` / `PortedExecutor` / `StepShapeContract` types in `src/core/types.ts`.
+- Minimal `PortShape` / `PortedExecutor` / `PortContract` types in `src/core/types.ts`.
 - `liftLegacyExecutor(legacy)` exercising three legacy contract shapes:
   - **Pure state-only:** `aes.sub-bytes` (state in → state out, no aux)
   - **Aux read:** `aes.add-round-key` (state + aux read of round key → state)
