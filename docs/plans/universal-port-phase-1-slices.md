@@ -91,7 +91,7 @@ registry consumes them via the `StepRegistration` discriminated union.
 These need user picks before the named slice starts; surface at the
 right moment, do not pre-resolve here.
 
-### Open #2 — `aux-copy` variant preservation (surfaced 2026-05-23 by Slice 1.5)
+### Open #2 — `aux-copy` variant preservation — **CLOSED 2026-05-23 (Slice 1.5b shipped candidate (a))**
 
 `generic.aux-copy@1` was lifted in Slice 1.2 with a STATIC
 `PortContract.outputs["result"].layout: "raw"` — sized for the
@@ -144,6 +144,48 @@ end up touching the path. Today (2026-05-23) no Speck spec uses
 aux-copy, so deferring past Slice 1.6 is also viable.
 
 Memory entry: `project_aux_copy_variant_gap.md`.
+
+**Shipped 2026-05-23 (Slice 1.5b) — candidate (a) chosen** after a
+second advisor consult that confirmed (a)'s smallest blast radius
+given the empirical verification that no concrete plan adds a second
+variant-preserving aux-passthrough step (`aux-tee@1` is the closest
+plausible candidate and would reuse (a)'s mechanism trivially via a
+struct-form sentinel naming the donor port).
+
+**Mechanism delivered:**
+
+- `auxPortBytesToValue(bytes, layout?, sourceVariantHint?)` gained a
+  third branch: when `layout === "preserve-input-variant"`, it clones
+  the source variant's shape with a fresh-bytes copy of the output
+  bytes. Supports `Uint8Array` and the two State shapes (`bytes`,
+  `matrix4x4-bytes`) — other variants throw to surface a future gap
+  loudly rather than coercing silently.
+- Runtime write-decode loop at `runtime.ts:316-360` lazily resolves
+  the source variant hint per frame: when at least one output port
+  declares the sentinel layout, it pulls `portedAuxRead.get(<first
+  auxReadPorts binding's aux-key>)`. The hint comes from the
+  pre-executor snapshot (defensive against self-modifying steps,
+  though aux-copy doesn't do this).
+- `aux-copy.ts` swapped output port layout from `"raw"` to
+  `"preserve-input-variant"`. Single-source convention: the donor is
+  the FIRST `auxReadPorts` binding. aux-copy has exactly one read
+  port so this is unambiguous; a hypothetical multi-port-input
+  variant-preserving step would need a struct sentinel form
+  (`{ kind: "preserve-input-variant", source: "<portName>" }`)
+  — defer until a real cipher needs it.
+
+**Test coverage delivered:**
+
+- Per-primitive pin (`runtime-ported-dispatch-chaining.test.ts` block
+  `(c-pre)`): 3 it()s — MatrixState round-trip via aux-load → iv-load
+  → aux-copy, frame parity on the same fixture, negative pin that
+  Uint8Array source stays Uint8Array (no false-positive variant
+  promotion).
+- Block `(c)` UNSKIPPED — AES-128 CBC decrypt §F.2.2 KAT sanity +
+  full frame-parity across the 1200+-frame multi-block run, exactly
+  the gate Slice 1.5 deferred.
+
+Gate: 1701/1701 tests green; `npm run check` clean.
 
 ### Open #1 — `generic.split-blocks@1` `State[]` aux encoding (blocks Slice 1.3)
 

@@ -326,11 +326,37 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
             registration.kind === "ported"
               ? resolvePortMap(registration.shape.outputs, node.params)
               : undefined;
+
+          // Slice 1.5b — source-variant cache for `"preserve-input-variant"`
+          // outputs. Computed LAZILY: only allocated if at least one
+          // output port declares the sentinel layout. The donor is the
+          // FIRST entry of the step's auxReadPorts bindings (today's
+          // single-source convention; aux-copy has exactly one read port).
+          // We pull from `portedAuxRead` so we get the pre-executor
+          // snapshot — defensive against a self-modifying step (aux-copy
+          // doesn't do this today, but the contract should not depend on
+          // it). `portedAuxRead` is keyed by aux-key, matching the value
+          // side of the auxReadPorts binding.
+          let preserveVariantHint: AuxValue | undefined;
+          let preserveVariantHintComputed = false;
+          const resolvePreserveVariantHint = (): AuxValue | undefined => {
+            if (preserveVariantHintComputed) return preserveVariantHint;
+            preserveVariantHintComputed = true;
+            const readBindings = meta.auxReadPorts?.(node.params);
+            if (readBindings === undefined) return undefined;
+            const firstAuxKey = readBindings.values().next().value;
+            if (typeof firstAuxKey !== "string") return undefined;
+            preserveVariantHint = portedAuxRead.get(firstAuxKey);
+            return preserveVariantHint;
+          };
+
           for (const [portName, auxKey] of writeBindings) {
             const outBytes = outputs.get(portName);
             if (outBytes === undefined) continue;
             const layout = outputsMap?.get(portName)?.layout;
-            const value = auxPortBytesToValue(outBytes, layout);
+            const hint =
+              layout === "preserve-input-variant" ? resolvePreserveVariantHint() : undefined;
+            const value = auxPortBytesToValue(outBytes, layout, hint);
             aux.set(auxKey, value);
             auxWritten.set(auxKey, value);
           }

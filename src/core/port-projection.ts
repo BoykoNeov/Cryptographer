@@ -597,19 +597,91 @@ export const auxValueToPortBytes = (value: AuxValue, auxKey: string): Uint8Array
  * Defaults to `Uint8Array` (raw bytes) when no layout is declared or the
  * layout is `"raw"`. The current decode targets are:
  *
- *   - `"raw"` or undefined → `Uint8Array`
- *   - `"matrix-cm-4x4"`    → `MatrixState` ({shape:"matrix4x4-bytes", bytes})
+ *   - `"raw"` or undefined        → `Uint8Array`
+ *   - `"matrix-cm-4x4"`           → `MatrixState` ({shape:"matrix4x4-bytes", bytes})
+ *   - `"preserve-input-variant"`  → variant cloned from `sourceVariantHint`
  *
  * Other layouts (`"be-word"`, `"le-word"`, custom strings) are not yet
  * exercised by a shipped ported step; they throw so a future user surfaces
  * the gap loudly instead of getting silently coerced to `Uint8Array`.
+ *
+ * ## `"preserve-input-variant"` — variant-preserving aux passthrough (Slice 1.5b)
+ *
+ * Slice 1.2 lifted `generic.aux-copy@1` with a static `"raw"` layout,
+ * sized correctly for the Uint8Array case (the only flag-on path
+ * exercising it at the time). Slice 1.5's lift of `state-to-aux` made
+ * the gap reachable: CBC decrypt advances its chain via
+ * `aux-copy(next-chain → chain)` where `aux[next-chain]` is a
+ * MatrixState, and the static `"raw"` layout dropped the variant on
+ * decode. The next iteration's `xor-aux-into-state` then read
+ * `aux["chain"]` as Uint8Array and the legacy executor threw on shape
+ * validation.
+ *
+ * `"preserve-input-variant"` opts the output port into runtime-side
+ * variant lookup: the runtime captures the source AuxValue from the
+ * step's first `auxReadPorts` binding (recorded in `portedAuxRead` at
+ * read time) and passes it as `sourceVariantHint`. The decoded value
+ * gets the source's variant shape with a fresh-bytes copy of the
+ * output bytes — by-reference variant copy with by-value bytes copy.
+ *
+ * Single-source convention: the sentinel's source is the FIRST entry
+ * in `auxReadPorts(params)`. aux-copy has exactly one read port so
+ * this is unambiguous. A hypothetical future multi-port-input
+ * variant-preserving step would need a struct sentinel form
+ * (`{ kind: "preserve-input-variant", source: "<portName>" }`)
+ * naming the donor port explicitly — defer until a real cipher needs it.
+ *
+ * Supported source variants:
+ *   - `Uint8Array`            → fresh `Uint8Array` copy
+ *   - `{ shape: "bytes", … }` → fresh `BytesState`
+ *   - `{ shape: "matrix4x4-bytes", … }` → fresh `MatrixState`
+ *
+ * Throws on State[]/number/bigint sources or on missing hint —
+ * a future cipher's variant-preserving passthrough that needs one of
+ * those should widen this branch loudly rather than coercing silently.
  */
-export const auxPortBytesToValue = (bytes: Uint8Array, layout?: string): AuxValue => {
+export const auxPortBytesToValue = (
+  bytes: Uint8Array,
+  layout?: string,
+  sourceVariantHint?: AuxValue,
+): AuxValue => {
   if (layout === undefined || layout === "raw") {
     return new Uint8Array(bytes);
   }
   if (layout === "matrix-cm-4x4") {
     return { shape: "matrix4x4-bytes", bytes: new Uint8Array(bytes) };
+  }
+  if (layout === "preserve-input-variant") {
+    if (sourceVariantHint === undefined) {
+      throw new Error(
+        'auxPortBytesToValue: layout "preserve-input-variant" requires sourceVariantHint (runtime contract: pass the source aux value from the step\'s first auxReadPorts binding)',
+      );
+    }
+    if (sourceVariantHint instanceof Uint8Array) {
+      // Same as the "raw" branch — fresh-bytes copy. Listed explicitly
+      // so the call site doesn't need to special-case the
+      // hint-is-Uint8Array case before calling.
+      return new Uint8Array(bytes);
+    }
+    if (
+      typeof sourceVariantHint === "object" &&
+      sourceVariantHint !== null &&
+      "shape" in sourceVariantHint
+    ) {
+      const shape = (sourceVariantHint as { shape: string }).shape;
+      if (shape === "bytes" || shape === "matrix4x4-bytes") {
+        // Construct a fresh State of the same variant. Type narrows via
+        // the literal-string check above; the cast satisfies the union
+        // discriminator (BytesState / MatrixState) without runtime cost.
+        return { shape, bytes: new Uint8Array(bytes) } as AuxValue;
+      }
+      throw new Error(
+        `auxPortBytesToValue: layout "preserve-input-variant" doesn't yet support source variant "${shape}" (only Uint8Array, bytes, matrix4x4-bytes); widen this branch when a cipher needs it`,
+      );
+    }
+    throw new Error(
+      `auxPortBytesToValue: layout "preserve-input-variant" requires source to be Uint8Array or State; got typeof=${typeof sourceVariantHint}`,
+    );
   }
   throw new Error(
     `auxPortBytesToValue: layout "${layout}" has no decode target yet; widen this helper when the first shipped step needs it`,

@@ -176,9 +176,23 @@ export const auxCopyMeta: ProjectionMetadata = {
   },
 };
 
+// Output layout is `"preserve-input-variant"` (Slice 1.5b) rather than
+// `"raw"`. aux-copy is the ONLY shipped step whose output variant equals
+// its input variant at runtime — a Uint8Array in stays Uint8Array out,
+// a MatrixState in stays MatrixState out. A static `"raw"` layout
+// dropped the variant on decode for the State-variant case (CBC decrypt
+// advances its chain via aux-copy(next-chain → chain) where
+// aux[next-chain] is a MatrixState), corrupting the next iteration's
+// aux read. The sentinel tells the runtime to look up the source
+// variant from aux[from] and clone its shape with the output bytes.
+//
+// Input port stays `"raw"` because the bytes carry no variant
+// information by themselves — the runtime's lift adapter
+// (`auxValueToPortBytes`) already extracts bytes from any AuxValue
+// shape, and the executor only sees Uint8Array via ctx.aux.get.
 export const auxCopyPortContract: PortContract = {
   inputs: new Map([["from", { layout: "raw" }]]),
-  outputs: new Map([["result", { layout: "raw" }]]),
+  outputs: new Map([["result", { layout: "preserve-input-variant" }]]),
 };
 
 /**

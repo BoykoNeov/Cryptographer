@@ -33,13 +33,23 @@
  *       per Slice 1.3's deferral — they're outside the per-leaf
  *       dispatch.
  *
+ *   (c-pre) **Per-primitive aux-copy variant preservation** — minimal
+ *       3-step spec (aux-load → iv-load → aux-copy) pinning that aux-copy
+ *       under the `"preserve-input-variant"` layout sentinel (Slice 1.5b)
+ *       round-trips a MatrixState aux without flattening it to Uint8Array.
+ *       Failing this BEFORE (c) below is the cleaner debug signal — the
+ *       full multi-block CBC pipeline can fail for reasons other than the
+ *       variant gap.
+ *
  *   (c) **AES-128 CBC decrypt (NIST SP 800-38A §F.2.2)** — exercises a
  *       previously-untested ported codepath: `aux-copy` (ported in
  *       Slice 1.2) reading a MatrixState chain that `state-to-aux`
- *       wrote. Today without Slice 1.5's input-side widening, the
- *       ported aux-copy would have hit the strictness throw at
- *       `runtime.ts:254` on `aux[next-chain]: MatrixState`. The
- *       widening makes it work; the parity gate pins the round-trip.
+ *       wrote. UNSKIPPED 2026-05-23 once Slice 1.5b shipped the
+ *       `"preserve-input-variant"` layout sentinel — the runtime now
+ *       captures the source variant from `portedAuxRead` and clones it
+ *       with fresh output bytes, so the next iteration's
+ *       `xor-aux-into-state` finds a MatrixState exactly where the legacy
+ *       path puts one.
  *
  *   (d) **Empty-auxName parity** — fresh-palette-drop case where
  *       `auxName === ""`. xor-aux-into-state legacy declares
@@ -324,45 +334,164 @@ describe("runtime — ported dispatch, Slice 1.5 chaining primitives", () => {
     });
   });
 
-  // ─── (c) AES-128 CBC decrypt — DEFERRED (aux-copy variant gap) ─────────
+  // ─── (c-pre) Per-primitive: aux-copy preserves MatrixState variant ─────
   //
-  // **SKIPPED 2026-05-23 — Slice 1.5 surfaced a Slice-1.2 contract gap.**
-  //
-  // The decrypt CBC body advances the chain via
-  // `aux-copy(next-chain → chain)` where `aux[next-chain]` is a MatrixState
-  // (written by `state-to-aux`, ported in this slice). `aux-copy` was
-  // ported in Slice 1.2 with a STATIC `PortContract.outputs["result"].
-  // layout: "raw"` — sized for Uint8Array transit, because no shipped
-  // flag-on path exercised it with a State-variant aux at the time.
-  //
-  // Slice 1.5's lift of `state-to-aux` makes the latent gap reachable:
-  // aux-copy's lift adapter extracts MatrixState bytes correctly, but
-  // the runtime's auxWrite decode at `runtime.ts:317-330` consults the
-  // PortContract's `"raw"` layout and produces a Uint8Array. The next
-  // iteration's `xor-aux-into-state` reads aux["chain"] as Uint8Array
-  // and the legacy executor's shape validation throws.
-  //
-  // The encrypt body (b) above is clean because it never uses aux-copy
-  // (encrypt body is `cbcXorEncryptLeaf` → AES → `cbcSnapshotEncryptLeaf`
-  // — no chain advance step). That's why §F.2.1 passes and §F.2.2 doesn't.
-  //
-  // The fix is a contract extension (variant preservation in
-  // aux-passthrough steps), not a mid-slice patch. Tracked as Open #2 in
-  // `docs/plans/universal-port-phase-1-slices.md`; memory entry
-  // `project_aux_copy_variant_gap.md`. Candidates: `"preserve-input-variant"`
-  // layout sentinel that consults the live source aux value's variant;
-  // OR widen PortedExecutor return to carry a variant sidecar; OR split
-  // "variant-preserving aux passthrough" as a distinct executor semantic.
-  //
-  // Pick one in a dedicated slice (1.5b or 1.6-prereq), unskip this
-  // block as the gate. The Slice-1.5 plan's gate is encrypt-only —
-  // shipping Slice 1.5 with this deferred is plan-aligned.
-  //
-  // Not "broken in production": `portedDispatchEnabled` defaults false,
-  // no shipped UI path enables it. Latent and test-fixture-reachable
-  // only.
+  // Slice 1.5b pin. Fixture: aux-load (Uint8Array IV) → iv-load (Uint8Array
+  // → MatrixState into aux[chain-matrix]) → aux-copy (chain-matrix →
+  // chain-matrix-copy). Under flag-on, aux-copy MUST emit a MatrixState
+  // into the destination key — not a flattened Uint8Array. This is the
+  // pin that fails first if a future refactor breaks the
+  // `"preserve-input-variant"` layout sentinel; failure surfaces here
+  // BEFORE block (c) below buries it inside a 1200+-frame CBC decrypt
+  // diff.
 
-  describe.skip("(c) AES-128 CBC decrypt (NIST SP 800-38A §F.2.2) — DEFERRED on aux-copy variant gap", () => {
+  describe("(c-pre) aux-copy MatrixState round-trip (variant-preserving layout)", () => {
+    // Build the smallest spec that proves the variant survives aux-copy
+    // under flag-on. iv-load is the simplest way to get a MatrixState
+    // into aux from a byte source — it reads aux[ivAuxName] as bytes
+    // and writes aux[outAuxName] as a MatrixState (output port's layout
+    // tag = "matrix-cm-4x4").
+    const variantSpec: CipherSpec = {
+      id: "test-aux-copy-variant@1",
+      name: "Slice 1.5b aux-copy MatrixState pin",
+      stateShape: "bytes",
+      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+      steps: [
+        {
+          kind: "step",
+          id: "load-iv-bytes",
+          type: "generic.aux-load@1",
+          params: {
+            auxName: "iv-bytes",
+            // Same 16-byte IV used in the §F.2 KATs above — convenient
+            // pattern, no algorithmic significance.
+            value: [
+              0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+              0x0e, 0x0f,
+            ],
+          },
+        },
+        {
+          kind: "step",
+          id: "iv-to-matrix",
+          type: "generic.iv-load@1",
+          params: { ivAuxName: "iv-bytes", outAuxName: "chain-matrix" },
+        },
+        {
+          kind: "step",
+          id: "copy-matrix-to-destination",
+          type: "generic.aux-copy@1",
+          params: { from: "chain-matrix", to: "chain-matrix-copy" },
+        },
+      ],
+    };
+
+    const initial = () => makeBytesState(new Uint8Array(0));
+    const expectedMatrix = matrixFromBytes(
+      new Uint8Array([
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+        0x0f,
+      ]),
+    );
+
+    it("aux-copy emits a MatrixState (not Uint8Array) when source aux is a MatrixState", () => {
+      const ported = runSpec(variantSpec, buildDefaultRegistry(), {
+        initialState: initial(),
+        portedDispatchEnabled: true,
+      });
+
+      const copied = ported.finalAux.get("chain-matrix-copy");
+      // The pin: variant SHAPE must be preserved across aux-copy.
+      // Without the "preserve-input-variant" layout sentinel, this is a
+      // Uint8Array and the test fails — exactly the regression Slice
+      // 1.5b ships to prevent.
+      expect(copied).toBeDefined();
+      expect(typeof copied).toBe("object");
+      if (typeof copied !== "object" || copied === null || !("shape" in copied)) {
+        throw new Error("aux-copy variant-preservation: chain-matrix-copy not a State");
+      }
+      expect((copied as { shape: string }).shape).toBe("matrix4x4-bytes");
+      // Bytes must also be byte-equal — variant preservation without
+      // byte preservation is a different bug.
+      expect(Array.from((copied as { bytes: Uint8Array }).bytes)).toEqual(
+        Array.from(expectedMatrix.bytes),
+      );
+    });
+
+    it("emits frame-by-frame byte-equal traces vs legacy dispatch (variant + bytes)", () => {
+      const legacy = runSpec(variantSpec, buildDefaultRegistry(), {
+        initialState: initial(),
+      });
+      const ported = runSpec(variantSpec, buildDefaultRegistry(), {
+        initialState: initial(),
+        portedDispatchEnabled: true,
+      });
+
+      expectFrameStreamsEqual(ported.frames, legacy.frames, "aux-copy variant-preservation");
+    });
+
+    it("aux-copy of a Uint8Array source still emits a Uint8Array (no false-positive variant promotion)", () => {
+      // Negative pin: the "preserve-input-variant" sentinel must NOT
+      // accidentally promote a Uint8Array source into a State variant.
+      // The Uint8Array branch in auxPortBytesToValue is meant to be a
+      // pass-through; a regression that wraps it in a State would be
+      // a different kind of variant gap.
+      const rawSpec: CipherSpec = {
+        id: "test-aux-copy-raw@1",
+        name: "Slice 1.5b aux-copy Uint8Array pin",
+        stateShape: "bytes",
+        inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+        steps: [
+          {
+            kind: "step",
+            id: "load-raw",
+            type: "generic.aux-load@1",
+            params: {
+              auxName: "raw-bytes",
+              value: [0xaa, 0xbb, 0xcc, 0xdd],
+            },
+          },
+          {
+            kind: "step",
+            id: "copy-raw",
+            type: "generic.aux-copy@1",
+            params: { from: "raw-bytes", to: "raw-bytes-copy" },
+          },
+        ],
+      };
+      const ported = runSpec(rawSpec, buildDefaultRegistry(), {
+        initialState: initial(),
+        portedDispatchEnabled: true,
+      });
+      const copied = ported.finalAux.get("raw-bytes-copy");
+      expect(copied).toBeInstanceOf(Uint8Array);
+      expect(Array.from(copied as Uint8Array)).toEqual([0xaa, 0xbb, 0xcc, 0xdd]);
+    });
+  });
+
+  // ─── (c) AES-128 CBC decrypt — UNSKIPPED 2026-05-23 (Slice 1.5b GREEN) ─
+  //
+  // Originally `describe.skip`d at Slice 1.5 because the decrypt CBC body
+  // advances the chain via `aux-copy(next-chain → chain)` where
+  // `aux[next-chain]` is a MatrixState (written by `state-to-aux`, ported
+  // in 1.5). `aux-copy` was ported in Slice 1.2 with a STATIC
+  // `PortContract.outputs["result"].layout: "raw"`, which dropped the
+  // MatrixState variant on decode and corrupted the next iteration's
+  // `xor-aux-into-state` aux read.
+  //
+  // Slice 1.5b (Open #2 fix, candidate (a)) added a
+  // `"preserve-input-variant"` layout sentinel: the runtime captures the
+  // source AuxValue from `portedAuxRead.get(<first auxReadPorts binding>)`
+  // and `auxPortBytesToValue` clones the source variant shape with a
+  // fresh-bytes copy of the output bytes. aux-copy's output port now
+  // declares the sentinel; one input → one output makes the
+  // single-source convention unambiguous.
+  //
+  // This block becomes the gate: KAT sanity (decrypt produces the original
+  // plaintext under flag-on) + frame-by-frame parity with legacy across
+  // the full multi-block chain-advance path.
+
+  describe("(c) AES-128 CBC decrypt (NIST SP 800-38A §F.2.2) — variant-preserving aux passthrough", () => {
     const KEY = "2b7e151628aed2a6abf7158809cf4f3c";
     const IV = "000102030405060708090a0b0c0d0e0f";
     const PLAINTEXT_4_BLOCKS =
