@@ -343,6 +343,11 @@ export type StepDocumentation = {
  * Combined unit registered for each step type: the runtime executor plus
  * (optionally) human-readable docs. Existing call sites can still register
  * by passing just an executor — the registry coerces it to this shape.
+ *
+ * Kept as a top-level export because external test fixtures
+ * (`tests/runtime-iterate.test.ts`) annotate their step constants with
+ * this type before passing them to `registry.register`. The discriminated
+ * union (`StepRegistration`, below) wraps this shape on the legacy side.
  */
 export type StepDefinition = {
   readonly executor: StepExecutor;
@@ -425,6 +430,50 @@ export type StepOutputs = ReadonlyMap<string, Uint8Array>;
  * as raw bytes through a named port.
  */
 export type PortedExecutor = (inputs: StepInputs, params: Json, ctx: StepContext) => StepOutputs;
+
+/**
+ * The unit `StepRegistry` stores per step type, as a discriminated union
+ * over the two execution contracts that coexist during Phase 1 of the
+ * universal-port-dataflow migration (see
+ * `docs/plans/universal-port-phase-1-slices.md` — Slice 1.1).
+ *
+ *   - `kind: "legacy"` — the existing `(state, params, ctx) → StepResult`
+ *     executor contract. Every shipped step registers as this today.
+ *   - `kind: "ported"` — the universal port-based contract:
+ *     `(inputs, params, ctx) → outputs`, with `shape: PortContract`
+ *     declaring the named port surface. No shipped step registers as this
+ *     yet in Slice 1.1 — the variant exists as the foundation for Slices
+ *     1.2 onward, when the first leaves lift onto the ported path.
+ *
+ * Slice 1.1 is a NO-OP foundation slice: the union compiles, every
+ * existing `register(...)` call site keeps working unchanged via
+ * normalization in `StepRegistry.register`, and dispatch behavior is
+ * unchanged for every caller. Slice 1.2 adds the first real ported
+ * entries (aux-only primitives) and extends this variant with the
+ * `meta: ProjectionMetadata` field that the runtime needs to project
+ * state/aux into per-port byte arrays. Per the 2026-05-23 advisor
+ * consult: defer that field until the first real ported entry forces
+ * its exact shape — over-specifying the dead branch in 1.1 risks a
+ * re-edit in 1.2.
+ *
+ * `doc` is REQUIRED on the ported variant (a ported step type is a
+ * deliberately authored migration target — there's no excuse for it to
+ * lack documentation). On the legacy variant `doc` stays optional to
+ * match the pre-Slice-1.1 `StepDefinition` shape, so no existing call
+ * site is forced to invent docs in this slice.
+ */
+export type StepRegistration =
+  | {
+      readonly kind: "legacy";
+      readonly executor: StepExecutor;
+      readonly doc?: StepDocumentation;
+    }
+  | {
+      readonly kind: "ported";
+      readonly executor: PortedExecutor;
+      readonly shape: PortContract;
+      readonly doc: StepDocumentation;
+    };
 
 /**
  * Sidecar metadata sufficient to reconstruct a legacy `TraceFrame` from
