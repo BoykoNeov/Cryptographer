@@ -38,7 +38,14 @@
  * separate from a specific cipher's round function.
  */
 
-import type { AuxValue, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  AuxValue,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 export const auxXor: StepExecutor = (state, params, ctx) => {
   const { from, into } = readParams(params);
@@ -145,6 +152,55 @@ produce wrong output.`,
     "NIST SP 800-38A §6.4 (OFB mode)",
   ],
   shapeContract: { input: "any", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.2) ───────────────
+// `auxXorMeta`: aux-only step (no state ports). Two input ports (`from`,
+// `into`) project the two operand aux values; one output port (`result`)
+// receives the XOR if both operands were present at execution time.
+//
+// **Iteration order is load-bearing.** The legacy executor declares
+// `auxReads: [from, into]`. The ported runtime's `auxReadMissing` array
+// iterates the binding Map. JS Maps preserve insertion order, so
+// constructing the Map as `[["from", from], ["into", into]]` matches the
+// legacy order. Any other ordering breaks frame-parity tests.
+//
+// Empty-param handling: the legacy executor declares the reads regardless
+// of whether `from` / `into` are unset, so the binding Map declares them
+// too. `aux.get("")` is undefined → the runtime records `""` in
+// `auxReadMissing`, identical to the legacy path.
+//
+// Write side: the legacy executor only writes to `aux[into]` when both
+// reads succeeded. The ported runtime walks `auxWritePorts(params)`
+// AFTER the lift adapter returns; missing port outputs silently skip.
+// So we can safely declare the `into` binding for any non-empty `into`;
+// the runtime stays consistent with the executor's no-write branches.
+// Empty `into` returns an empty write binding for the same reason
+// `aux-copy` does.
+
+export const auxXorMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  auxReadPorts: (params: Json) => {
+    const { from, into } = readParams(params);
+    // Order matches `auxReads: [from, into]` in the legacy executor.
+    return new Map([
+      ["from", from],
+      ["into", into],
+    ]);
+  },
+  auxWritePorts: (params: Json) => {
+    const { into } = readParams(params);
+    if (into === "") return new Map();
+    return new Map([["result", into]]);
+  },
+};
+
+export const auxXorPortContract: PortContract = {
+  inputs: new Map([
+    ["from", { layout: "raw" }],
+    ["into", { layout: "raw" }],
+  ]),
+  outputs: new Map([["result", { layout: "raw" }]]),
 };
 
 /**

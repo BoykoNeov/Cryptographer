@@ -32,6 +32,7 @@ import type {
   LayoutTags,
   PortedExecutor,
   PortedFrame,
+  ProjectionMetadata,
   State,
   StateShape,
   StepExecutor,
@@ -40,40 +41,13 @@ import type {
   TraceFrame,
 } from "./types";
 
-/**
- * Per-step-type metadata needed to project a legacy TraceFrame into the
- * port-based shape. Static at the contract layer; passed to `project`
- * by the caller (Phase-0 test fixture today; the registry in Phase 1+).
- *
- * `stateInputPort` / `stateOutputPort` may be undefined for aux-only
- * steps (none of Phase 0's three targets, but possible for future
- * `aux-load` / `aux-copy` primitives once they're ported).
- */
-export type ProjectionMetadata = {
-  /**
-   * The State variant the legacy executor accepts/produces. Recorded in
-   * `LayoutTags.stateLayout` so reconstruction can rebuild the right
-   * variant from the port bytes.
-   */
-  readonly stateLayout: StateShape;
-  /**
-   * Name of the input port that carries `stateBefore`. Convention: "state".
-   * Undefined for aux-only steps (state is passthrough; no port projection).
-   */
-  readonly stateInputPort?: string;
-  /** Name of the output port that carries `stateAfter`. Convention: "state". */
-  readonly stateOutputPort?: string;
-  /**
-   * Function mapping the step's `params` to a `portName → auxKey` map.
-   * Why a function rather than a static map: aux key names are typically
-   * spec-leaf-specific (e.g., `params.auxName === "roundKey.0"` vs
-   * `"roundKey.1"`), so the binding can only be resolved after the
-   * params are in hand. Returns an empty map when the step reads no aux.
-   */
-  readonly auxReadPorts?: (params: Json) => ReadonlyMap<string, string>;
-  /** Symmetric to `auxReadPorts`, for outputs that go to aux. */
-  readonly auxWritePorts?: (params: Json) => ReadonlyMap<string, string>;
-};
+// `ProjectionMetadata` moved to `core/types.ts` in Slice 1.2 so the
+// `StepRegistration` discriminated union can carry it as the `meta` field
+// on the `kind: "ported"` variant without forcing a circular import. The
+// lift logic + side-map registry below still live here; only the type
+// definition relocated. Re-exported for callers that imported it from
+// this module's old surface.
+export type { ProjectionMetadata };
 
 /**
  * Result of `project`. Bundling the frame and tags into one return
@@ -440,6 +414,29 @@ const requirePortBytes = (
 // returns `[params.auxName]` matching the single `"key" → params.auxName`
 // binding. So the runtime's "rebuild auxRead from metadata" path produces
 // byte-identical `TraceFrame.auxRead` to the legacy path.
+//
+// ─── Slice 1.2 widening (universal-port-dataflow Phase 1) ───────────────
+// Two extensions land here in Slice 1.2 so the four aux-only primitives
+// (`aux-load`, `aux-copy`, `aux-xor`, `iv-load`) can lift:
+//
+//   1. **No state ports** — when meta omits BOTH `stateInputPort` and
+//      `stateOutputPort`, the lift adapter passes a sentinel `bytes`-shape
+//      state of length 0 to the legacy executor and DISCARDS the returned
+//      state. The aux-only primitives all carry
+//      `shapeContract: { input: "any", output: "preserveInput" }` and
+//      never inspect state — verified by reading each executor. The
+//      runtime's caller is responsible for preserving its own state
+//      variable across the ported call (it does, by skipping
+//      reconstruction when `meta.stateOutputPort` is undefined).
+//
+//   2. **Aux writes** — when meta declares `auxWritePorts`, the lift
+//      packs entries from `result.auxWrites` into output ports per the
+//      binding. The Phase-0 strict throw on any non-empty `auxWrites`
+//      remains, but is now scoped to "no `auxWritePorts` declared yet
+//      this leaf type tried to write aux" — a real metadata mismatch.
+//
+// The previous combined throw "both state ports required" is split: a
+// half-declared meta (one state port but not the other) is still a bug.
 export const liftLegacyExecutor = (
   legacy: StepExecutor,
   meta: ProjectionMetadata,
@@ -447,38 +444,144 @@ export const liftLegacyExecutor = (
   return (inputs, params, ctx) => {
     const inPort = meta.stateInputPort;
     const outPort = meta.stateOutputPort;
-    if (inPort === undefined || outPort === undefined) {
-      // Phase-0 only lifts state-carrying steps. Aux-only primitives
-      // (`aux-load`, `aux-copy`) would lift with no state port set;
-      // they're out of scope for this spike. The throw makes that
-      // explicit instead of silently producing empty outputs.
+
+    // Half-declared state ports are a meta-authoring bug. The runtime's
+    // ported path matches: it builds inputs for `stateInputPort` and
+    // reconstructs state from `stateOutputPort` independently, so a meta
+    // with one but not the other would silently corrupt one half of the
+    // round-trip. Better to surface the inconsistency here.
+    if ((inPort === undefined) !== (outPort === undefined)) {
       throw new Error(
-        `liftLegacyExecutor: Phase-0 lift requires both stateInputPort and stateOutputPort (stepId=${ctx.stepId})`,
+        `liftLegacyExecutor: meta must declare BOTH stateInputPort and stateOutputPort, or NEITHER (got inPort=${String(inPort)}, outPort=${String(outPort)}, stepId=${ctx.stepId})`,
       );
     }
-    const stateBytes = inputs.get(inPort);
-    if (stateBytes === undefined) {
-      throw new Error(`liftLegacyExecutor: input port "${inPort}" missing (stepId=${ctx.stepId})`);
+
+    // ── Reconstruct stateBefore from the state input port (if any) ─────
+    let stateBefore: State;
+    if (inPort !== undefined) {
+      const stateBytes = inputs.get(inPort);
+      if (stateBytes === undefined) {
+        throw new Error(
+          `liftLegacyExecutor: input port "${inPort}" missing (stepId=${ctx.stepId})`,
+        );
+      }
+      // Build a minimal LayoutTags carrier so we can reuse `bytesToState`.
+      const reconstructionTags: LayoutTags = { stateLayout: meta.stateLayout };
+      stateBefore = bytesToState(stateBytes, reconstructionTags);
+    } else {
+      // Aux-only step — the legacy executor's state arg is ceremonial.
+      // Pick a `bytes`-shape zero-length sentinel. `cloneState` in the
+      // runtime preserves the caller's real state across the ported call;
+      // the legacy executor's `return { state }` passthrough lands on the
+      // sentinel, which the runtime then discards (no `stateOutputPort`).
+      stateBefore = { shape: "bytes", bytes: new Uint8Array(0) };
     }
-    // Build a minimal LayoutTags carrier so we can reuse `bytesToState`.
-    // Phase-0 targets are all matrix4x4-bytes; bitLength/bigint encoding
-    // fields stay undefined.
-    const reconstructionTags: LayoutTags = { stateLayout: meta.stateLayout };
-    const stateBefore = bytesToState(stateBytes, reconstructionTags);
 
     const result = legacy(stateBefore, params, ctx);
 
-    if (result.auxWrites !== undefined && result.auxWrites.size > 0) {
-      throw new Error(
-        `liftLegacyExecutor: Phase-0 strictness — legacy executor returned auxWrites (size=${result.auxWrites.size}) but the lift adapter does not yet propagate aux writes to output ports. ` +
-          `Widen the adapter via meta.auxWritePorts before lifting an aux-writing step. (stepId=${ctx.stepId})`,
-      );
+    // ── Pack outputs: state output (if declared) + aux writes (if declared) ─
+    const outputs = new Map<string, Uint8Array>();
+    if (outPort !== undefined) {
+      outputs.set(outPort, stateToBytes(result.state, meta.stateLayout));
     }
 
-    const outputs = new Map<string, Uint8Array>();
-    outputs.set(outPort, stateToBytes(result.state, meta.stateLayout));
+    if (result.auxWrites !== undefined && result.auxWrites.size > 0) {
+      if (meta.auxWritePorts === undefined) {
+        // The legacy executor wrote aux but meta doesn't know how to
+        // route it. This is a real authoring mismatch — surface loudly.
+        throw new Error(
+          `liftLegacyExecutor: legacy executor returned auxWrites (size=${result.auxWrites.size}) but meta.auxWritePorts is undefined. Widen the metadata before lifting an aux-writing step. (stepId=${ctx.stepId})`,
+        );
+      }
+      const writeBindings = meta.auxWritePorts(params);
+      for (const [portName, auxKey] of writeBindings) {
+        const auxValue = result.auxWrites.get(auxKey);
+        if (auxValue === undefined) {
+          // The metadata declares a binding for this aux key but the
+          // executor produced none. Two legitimate causes:
+          //   - The executor branched into a no-write path (e.g.,
+          //     `aux-xor` returning passthrough on a missing read), in
+          //     which case `meta.auxWritePorts(params)` should ideally
+          //     have returned an empty Map for those params. But making
+          //     the metadata's write-binding depend on a runtime read
+          //     decision pushes too much logic into the meta.
+          //   - The metadata's binding rule is stricter than necessary.
+          //
+          // Either way, the safest behavior is "no output bytes for this
+          // port" — the runtime's auxWritten reconstruction skips ports
+          // that aren't in the outputs map. No throw, no silent loss.
+          continue;
+        }
+        outputs.set(portName, auxValueToPortBytes(auxValue, auxKey));
+      }
+    }
+
     return outputs;
   };
+};
+
+/**
+ * Encode an AuxValue for a port payload. Exported so the runtime's
+ * dispatch path can write to / read from the same byte representation
+ * the lift adapter uses on its own auxWrites pass.
+ *
+ * Slice 1.2 handles two AuxValue variants:
+ *   - `Uint8Array` — copied into a fresh buffer (the common case;
+ *     `aux-load`, `aux-xor`, `aux-copy`).
+ *   - `State` (any shape with `.bytes: Uint8Array`) — the contained bytes
+ *     are extracted. `iv-load` writes a `MatrixState` to aux; the runtime
+ *     decodes back via `auxPortBytesToValue` using the PortContract's
+ *     layout tag.
+ *
+ * Other AuxValue shapes (State[], number, bigint) throw with a
+ * descriptive message so a future mis-lifted step type surfaces
+ * immediately rather than coercing wrong bytes. Future slices that lift
+ * `split-blocks` (State[]) will widen this with the chosen encoding.
+ */
+const auxValueToPortBytes = (value: AuxValue, auxKey: string): Uint8Array => {
+  if (value instanceof Uint8Array) return new Uint8Array(value);
+  // State variant: any object with `shape` + `bytes`. Read the bytes
+  // straight off. Reconstruction at decode time uses the PortContract's
+  // layout tag (see `auxPortBytesToValue`).
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "shape" in value &&
+    "bytes" in value &&
+    (value as { bytes: unknown }).bytes instanceof Uint8Array
+  ) {
+    return new Uint8Array((value as { bytes: Uint8Array }).bytes);
+  }
+  throw new Error(
+    `liftLegacyExecutor: aux key "${auxKey}" has unsupported value (type=${typeof value}); Slice 1.2 projects Uint8Array and State aux through ports`,
+  );
+};
+
+/**
+ * Decode a port's output bytes back into the original AuxValue shape,
+ * using the PortContract's layout tag. Used by the runtime's ported-
+ * dispatch path when populating the live aux map + frame's auxWritten.
+ *
+ * Defaults to `Uint8Array` (raw bytes) when no layout is declared or the
+ * layout is `"raw"`. The current decode targets are:
+ *
+ *   - `"raw"` or undefined → `Uint8Array`
+ *   - `"matrix-cm-4x4"`    → `MatrixState` ({shape:"matrix4x4-bytes", bytes})
+ *
+ * Other layouts (`"be-word"`, `"le-word"`, custom strings) are not yet
+ * exercised by a shipped ported step; they throw so a future user surfaces
+ * the gap loudly instead of getting silently coerced to `Uint8Array`.
+ */
+export const auxPortBytesToValue = (bytes: Uint8Array, layout?: string): AuxValue => {
+  if (layout === undefined || layout === "raw") {
+    return new Uint8Array(bytes);
+  }
+  if (layout === "matrix-cm-4x4") {
+    return { shape: "matrix4x4-bytes", bytes: new Uint8Array(bytes) };
+  }
+  throw new Error(
+    `auxPortBytesToValue: layout "${layout}" has no decode target yet; widen this helper when the first shipped step needs it`,
+  );
 };
 
 // ─── Side-map projection-metadata registry ──────────────────────────────

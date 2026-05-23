@@ -26,7 +26,14 @@
  * "compose your own mode" recipe in `src/steps/CLAUDE.md`.
  */
 
-import type { AuxValue, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  AuxValue,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 export const auxLoad: StepExecutor = (state, params) => {
   const { auxName, value } = readParams(params);
@@ -108,6 +115,41 @@ rather than a privileged input.`,
     "RFC 3686 §4 (CTR mode counter block formatting)",
   ],
   shapeContract: { input: "any", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.2) ───────────────
+// `auxLoadMeta` lets the runtime project this leaf's `auxWrites` into a
+// named output port when running under `portedDispatchEnabled: true`.
+// Aux-only step: no state ports declared (state passes through unchanged,
+// matching `shapeContract: { input: "any", output: "preserveInput" }`).
+//
+// `auxWritePorts({ auxName: "" })` returns an EMPTY Map so the
+// fresh-palette-drop case (auxName unset) doesn't emit a binding to the
+// empty string — that would diverge from the legacy executor's no-write
+// passthrough and surface as a frame-parity miss. Same discipline as
+// `auxXorMeta` / `auxCopyMeta` / `ivLoadMeta` below.
+
+export const auxLoadMeta: ProjectionMetadata = {
+  // No state ports — state is passthrough. `stateLayout` is unused here
+  // but the field is required; pick `"bytes"` as the no-op convention.
+  stateLayout: "bytes",
+  auxWritePorts: (params: Json) => {
+    const { auxName } = readParams(params);
+    if (auxName === "") return new Map();
+    // Single output port named `"value"` (the natural noun for an
+    // aux-load — the value it published). Binds to whatever aux key the
+    // user picked.
+    return new Map([["value", auxName]]);
+  },
+};
+
+/**
+ * Declared port surface for the universal-port editor / inspector.
+ * `byteLength` is absent (polymorphic — user picks the literal length).
+ */
+export const auxLoadPortContract: PortContract = {
+  inputs: new Map(),
+  outputs: new Map([["value", { layout: "raw" }]]),
 };
 
 /**

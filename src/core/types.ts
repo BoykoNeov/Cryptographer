@@ -372,14 +372,26 @@ export type StepDefinition = {
 // The new shape is renamed to `PortContract` to avoid the collision.
 
 /**
- * Per-port shape descriptor. The byte length is REQUIRED (it's what the
- * editor checks for the warn-and-run coercion rule per Q2). The `layout`
- * tag is ADVISORY only — the runtime always passes raw `Uint8Array`s; the
- * tag exists so the inspector and editor can pick the right view (matrix
- * vs flat bytes vs word groups) without forking the runtime contract.
+ * Per-port shape descriptor. `byteLength` is OPTIONAL — when present, it's
+ * what the editor checks for the warn-and-run coercion rule per Q2; when
+ * ABSENT, the port is **polymorphic** (length determined by the wired
+ * source at edit time). User pick 2026-05-23 (Slice 1.2): aux-xor /
+ * aux-copy / iv-load and other dynamic-length aux primitives need
+ * `byteLength` to be absent rather than a magic-numbered sentinel like 0.
+ * Future SHA-2 (variable-length input → fixed-length output) reuses the
+ * same shape without another contract bump.
+ *
+ * The `layout` tag is ADVISORY only — the runtime always passes raw
+ * `Uint8Array`s; the tag exists so the inspector and editor can pick the
+ * right view (matrix vs flat bytes vs word groups) without forking the
+ * runtime contract.
  */
 export type PortShape = {
-  readonly byteLength: number;
+  /**
+   * Declared byte length of the port payload. Absent → polymorphic
+   * (resolved at wiring time from the source).
+   */
+  readonly byteLength?: number;
   readonly layout?: PortLayout;
 };
 
@@ -432,6 +444,62 @@ export type StepOutputs = ReadonlyMap<string, Uint8Array>;
 export type PortedExecutor = (inputs: StepInputs, params: Json, ctx: StepContext) => StepOutputs;
 
 /**
+ * Per-step-type metadata sufficient to LIFT a legacy `StepExecutor` into a
+ * `PortedExecutor` (via `liftLegacyExecutor` in `core/port-projection.ts`)
+ * AND for the runtime's ported-dispatch path to project legacy `State` /
+ * `Aux` values into per-port byte arrays + reconstruct them back.
+ *
+ * Defined here in `core/types.ts` (rather than alongside the lift logic
+ * in `port-projection.ts`) so the `StepRegistration` discriminated union
+ * below can carry it as the `meta` field on the `kind: "ported"` variant
+ * without forcing a circular import. The lift logic still lives in
+ * `port-projection.ts`; this is just the contract.
+ *
+ * - `stateInputPort` / `stateOutputPort` are UNDEFINED for aux-only steps
+ *   (e.g., `generic.aux-load@1`, `generic.aux-xor@1`, `generic.aux-copy@1`,
+ *   `generic.iv-load@1`). The lift adapter then skips state encode/decode
+ *   entirely and the runtime preserves the parent state's shape across
+ *   the call (matches each executor's `shapeContract: { input: "any",
+ *   output: "preserveInput" }`).
+ * - `auxReadPorts` / `auxWritePorts` are FUNCTIONS of `params` (not static
+ *   maps) because aux key names are spec-leaf-specific (e.g., one leaf
+ *   binds `roundKey.0`, the next `roundKey.1`). The function returns an
+ *   **empty Map** when no aux is in play — e.g., an `aux-load` whose
+ *   `params.auxName` is `""` (fresh palette drop) must NOT emit a binding
+ *   to the empty string, or frame-parity diverges from the legacy
+ *   executor's `return { state }` no-op behavior.
+ * - **Iteration order matters.** Legacy executors declare `auxReads` in a
+ *   specific order; the ported path's `auxReadMissing` array iterates the
+ *   metadata's `auxReadPorts(params)` Map. JS Maps preserve insertion
+ *   order — author the metadata's binding order to match the legacy
+ *   executor's `auxReads` literally, or frame-parity tests will fail on
+ *   the `auxReadMissing` field.
+ */
+export type ProjectionMetadata = {
+  /**
+   * The State variant the legacy executor accepts/produces. Recorded in
+   * `LayoutTags.stateLayout` so reconstruction can rebuild the right
+   * variant from the port bytes. For aux-only steps where no state port
+   * is declared, this value is unused — pick anything (convention:
+   * `"bytes"`).
+   */
+  readonly stateLayout: StateShape;
+  /** Name of the input port that carries `stateBefore`. Convention: "state". */
+  readonly stateInputPort?: string;
+  /** Name of the output port that carries `stateAfter`. Convention: "state". */
+  readonly stateOutputPort?: string;
+  /**
+   * Function mapping the step's `params` to a `portName → auxKey` map for
+   * aux INPUTS. Return an empty Map when no aux is read this call (e.g.,
+   * unset params on a fresh palette drop). The function may also throw if
+   * params are malformed — mirroring the legacy executor's validation.
+   */
+  readonly auxReadPorts?: (params: Json) => ReadonlyMap<string, string>;
+  /** Symmetric to `auxReadPorts`, for aux OUTPUTS. */
+  readonly auxWritePorts?: (params: Json) => ReadonlyMap<string, string>;
+};
+
+/**
  * The unit `StepRegistry` stores per step type, as a discriminated union
  * over the two execution contracts that coexist during Phase 1 of the
  * universal-port-dataflow migration (see
@@ -441,20 +509,18 @@ export type PortedExecutor = (inputs: StepInputs, params: Json, ctx: StepContext
  *     executor contract. Every shipped step registers as this today.
  *   - `kind: "ported"` — the universal port-based contract:
  *     `(inputs, params, ctx) → outputs`, with `shape: PortContract`
- *     declaring the named port surface. No shipped step registers as this
- *     yet in Slice 1.1 — the variant exists as the foundation for Slices
- *     1.2 onward, when the first leaves lift onto the ported path.
+ *     declaring the named port surface AND `meta: ProjectionMetadata`
+ *     carrying the binding rules the runtime needs to project legacy
+ *     `State` / `Aux` values into per-port byte arrays. Slice 1.2 lands
+ *     the first real ported entries (the four aux-only primitives —
+ *     `generic.aux-load@1`, `generic.aux-copy@1`, `generic.aux-xor@1`,
+ *     `generic.iv-load@1`).
  *
- * Slice 1.1 is a NO-OP foundation slice: the union compiles, every
- * existing `register(...)` call site keeps working unchanged via
- * normalization in `StepRegistry.register`, and dispatch behavior is
- * unchanged for every caller. Slice 1.2 adds the first real ported
- * entries (aux-only primitives) and extends this variant with the
- * `meta: ProjectionMetadata` field that the runtime needs to project
- * state/aux into per-port byte arrays. Per the 2026-05-23 advisor
- * consult: defer that field until the first real ported entry forces
- * its exact shape — over-specifying the dead branch in 1.1 risks a
- * re-edit in 1.2.
+ * Slice 1.1 was a NO-OP foundation slice: the union compiled, every
+ * existing `register(...)` call site kept working unchanged via
+ * normalization in `StepRegistry.register`, and dispatch behavior was
+ * unchanged for every caller. Slice 1.2 introduces the `meta` field
+ * AND the first real ported registrations.
  *
  * `doc` is REQUIRED on the ported variant (a ported step type is a
  * deliberately authored migration target — there's no excuse for it to
@@ -472,7 +538,26 @@ export type StepRegistration =
       readonly kind: "ported";
       readonly executor: PortedExecutor;
       readonly shape: PortContract;
+      readonly meta: ProjectionMetadata;
       readonly doc: StepDocumentation;
+      /**
+       * Legacy-shape executor preserved alongside the lifted ported
+       * executor during the Phase 1 migration window. Required for every
+       * Slice 1.2–1.8 ported entry because the runtime's frame-parity
+       * gate runs each ported step under BOTH `portedDispatchEnabled:
+       * true` (calls `executor`) and `portedDispatchEnabled: false`
+       * (calls this `legacy`) — without it the legacy path can't reach
+       * a step type that's been lifted.
+       *
+       * Phase 2 onward authors port-native executors directly; those
+       * entries genuinely have no legacy underlying. When the migration
+       * ends (Slice 1.9 cuts `ctx.aux`; later slices remove `legacy`
+       * from `kind:"ported"`), this field can become optional and then
+       * disappear. For now: required, holds the same function the step
+       * file's old `register` call passed as `executor`, and the lifted
+       * `executor` is built from it via `liftLegacyExecutor(legacy, meta)`.
+       */
+      readonly legacy: StepExecutor;
     };
 
 /**

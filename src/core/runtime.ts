@@ -1,6 +1,7 @@
 import { COMBINE_KINDS, REJOIN_STEP_TYPE } from "./combine-kinds";
 import {
   PROJECTION_METADATA,
+  auxPortBytesToValue,
   liftLegacyExecutor,
   portBytesToState,
   stateToPortBytes,
@@ -177,23 +178,47 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
       }
 
       // Leaf step.
-      const executor = registry.get(node.type);
       const stateBefore = cloneState(state);
 
-      // ─── Phase-0 dual-dispatch (universal-port-dataflow plan) ──────────
-      // When `portedDispatch` is on AND the leaf's step type has projection
-      // metadata in the side-map, route through the ported execution path:
+      // ─── Ported dispatch (universal-port-dataflow plan) ────────────────
+      // When `portedDispatch` is on AND the leaf's step type has
+      // projection metadata available, route through the ported execution
+      // path:
       //   1. Build `inputs` (state port + aux ports per `auxReadPorts`).
       //   2. Call the lifted `PortedExecutor`.
-      //   3. Reconstruct `State` from the output port.
+      //   3. Reconstruct `State` from the output port (if declared) OR
+      //      leave state untouched (aux-only primitives — Slice 1.2).
       //   4. Build the TraceFrame's `auxRead` from the metadata's input-
       //      port-to-aux-key bindings — NOT from the legacy executor's
       //      `result.auxReads`. This is the load-bearing claim: the
       //      trace can be expressed purely in port projections + tags.
+      //   5. Build `auxWritten` from output-port-to-aux-key bindings
+      //      (Slice 1.2). The runtime also writes back into the live
+      //      `aux` map so downstream legacy / ported steps see the same
+      //      Aux state.
+      //
+      // **Metadata source (Slice 1.2)** — two routes coexist through
+      // Slice 1.8:
+      //   (a) `registry.getRegistration(node.type)?.kind === "ported"` →
+      //       the ported variant carries `meta: ProjectionMetadata`. This
+      //       is the long-term home (Decision C — colocated meta).
+      //   (b) `PROJECTION_METADATA.get(node.type)` side-map → the
+      //       Phase-0 entries (`generic.byte-substitution@1`,
+      //       `generic.add-round-key@1`) still register as `kind:"legacy"`
+      //       in Slice 1.2 because their colocation lands in Slice 1.4.
+      //       The side-map is the bridge.
+      // Slice 1.9 deletes the side-map (Decision A); until then, the
+      // registry has priority and the side-map is the fallback.
       //
       // Otherwise (the default for every shipped caller): the legacy path
       // below runs unchanged.
-      const meta = portedDispatch ? PROJECTION_METADATA.get(node.type) : undefined;
+      const registration = registry.getRegistration(node.type);
+      if (!registration) throw new Error(`unknown step type: ${node.type}`);
+      const meta = portedDispatch
+        ? registration.kind === "ported"
+          ? registration.meta
+          : PROJECTION_METADATA.get(node.type)
+        : undefined;
       let auxRead: Map<string, AuxValue>;
       let auxReadMissing: string[] | undefined;
       let auxWritten: Map<string, AuxValue>;
@@ -207,6 +232,11 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
         // Aux reads: project each (portName, auxKey) binding from the live
         // aux map into the inputs map. Missing values record as orphaned
         // reads (mirrors the legacy path's `auxReadMissing` semantics).
+        //
+        // **Iteration order matters** — see ProjectionMetadata's contract.
+        // The metadata's `auxReadPorts(params)` Map must iterate in the
+        // same order the legacy executor declares `auxReads`, or
+        // `auxReadMissing` arrays diverge between the two paths.
         const readBindings = meta.auxReadPorts?.(node.params) ?? new Map<string, string>();
         const portedAuxRead = new Map<string, AuxValue>();
         for (const [portName, auxKey] of readBindings) {
@@ -216,10 +246,10 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
             auxReadMissing.push(auxKey);
             continue;
           }
-          // Phase-0 strictness: the bound aux key MUST hold a Uint8Array.
-          // The two Phase-0 targets only bind `roundKey.N` (always
-          // Uint8Array). A non-Uint8Array here means a metadata mismatch
-          // — surface loudly instead of silently coercing.
+          // Strictness: the bound aux key MUST hold a Uint8Array. The
+          // Phase-0 + Slice-1.2 targets only bind Uint8Array aux. A
+          // non-Uint8Array here means a metadata mismatch — surface
+          // loudly instead of silently coercing.
           if (!(v instanceof Uint8Array)) {
             throw new Error(
               `ported dispatch: aux "${auxKey}" bound to input port "${portName}" must be Uint8Array, got ${typeof v} (stepId=${node.id}, stepType=${node.type})`,
@@ -229,39 +259,79 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
           portedAuxRead.set(auxKey, new Uint8Array(v));
         }
 
-        // Call the lifted ported executor. `ctx.aux` still carries the
-        // live aux map — the legacy executor inside the lift reads via
-        // `ctx.aux.get(params.auxName)`. Phase 1 cuts this channel; until
+        // Call the ported executor. For Slice 1.2 every ported entry is
+        // a lifted legacy executor; we either pull the pre-lifted closure
+        // off the registration OR build one on the fly from the side-map
+        // metadata (Phase-0 fallback). `ctx.aux` still carries the live
+        // aux map — the legacy executor inside the lift reads via
+        // `ctx.aux.get(...)`. Phase 1's Slice 1.9 cuts this channel; until
         // then the dual aux read paths see the same map by construction.
-        const ported = liftLegacyExecutor(executor, meta);
+        const ported =
+          registration.kind === "ported"
+            ? registration.executor
+            : liftLegacyExecutor(registration.executor, meta);
         const outputs = ported(inputs, node.params, {
           stepId: node.id,
           path,
           aux,
         });
 
-        // Reconstruct state from the output port.
-        if (meta.stateOutputPort === undefined) {
-          throw new Error(
-            `ported dispatch: meta missing stateOutputPort (stepId=${node.id}, stepType=${node.type})`,
-          );
+        // Reconstruct state from the output port if one is declared.
+        // Aux-only steps (`generic.aux-load@1` et al.) leave state
+        // untouched — the runtime's `state` variable is preserved across
+        // the ported call so the caller's shape (matrix4x4-bytes, bytes,
+        // etc.) survives.
+        if (meta.stateOutputPort !== undefined) {
+          const outBytes = outputs.get(meta.stateOutputPort);
+          if (outBytes === undefined) {
+            throw new Error(
+              `ported dispatch: output port "${meta.stateOutputPort}" missing (stepId=${node.id}, stepType=${node.type})`,
+            );
+          }
+          state = portBytesToState(outBytes, meta.stateLayout);
         }
-        const outBytes = outputs.get(meta.stateOutputPort);
-        if (outBytes === undefined) {
-          throw new Error(
-            `ported dispatch: output port "${meta.stateOutputPort}" missing (stepId=${node.id}, stepType=${node.type})`,
-          );
-        }
-        state = portBytesToState(outBytes, meta.stateLayout);
 
         auxRead = portedAuxRead;
-        // Phase-0 strictness: lift adapter throws if the legacy executor
-        // returns auxWrites. So we can assume nothing was written and emit
-        // an empty `auxWritten` map without re-checking. Phase 1 widens
-        // the lift via `meta.auxWritePorts`.
+
+        // Aux writes (Slice 1.2). When meta declares `auxWritePorts`,
+        // walk the binding map, read each port's bytes from outputs,
+        // decode back to AuxValue, write into BOTH the live aux map AND
+        // the frame's auxWritten. Missing port bytes are fine — they
+        // mean the executor took a no-write branch (e.g., aux-xor's
+        // graceful passthrough on a missing read).
+        //
+        // Decode layout: when the registration carries a PortContract,
+        // the declared output port's `layout` drives reconstruction
+        // (`"matrix-cm-4x4"` → MatrixState, `"raw"`/undefined → Uint8Array).
+        // Side-map fallback entries (Phase-0 byte-substitution / add-
+        // round-key) don't have a contract; they default to raw bytes,
+        // which matches their existing aux shape.
         auxWritten = new Map<string, AuxValue>();
+        if (meta.auxWritePorts !== undefined) {
+          const writeBindings = meta.auxWritePorts(node.params);
+          for (const [portName, auxKey] of writeBindings) {
+            const outBytes = outputs.get(portName);
+            if (outBytes === undefined) continue;
+            const layout =
+              registration.kind === "ported"
+                ? registration.shape.outputs.get(portName)?.layout
+                : undefined;
+            const value = auxPortBytesToValue(outBytes, layout);
+            aux.set(auxKey, value);
+            auxWritten.set(auxKey, value);
+          }
+        }
       } else {
-        // ── Legacy execution path (unchanged) ─────────────────────────
+        // ── Legacy execution path ─────────────────────────────────────
+        // Pull the legacy-shape executor out of the registration. For
+        // `kind:"legacy"` this is `registration.executor` directly; for
+        // `kind:"ported"` it's the preserved `legacy` field that the
+        // ported registration carries during the Phase 1 migration
+        // window. Frame-parity tests run a ported-registered step type
+        // under BOTH dispatch flag values; this is the path the off-flag
+        // half takes.
+        const executor =
+          registration.kind === "ported" ? registration.legacy : registration.executor;
         const result = executor(state, node.params, {
           stepId: node.id,
           path,

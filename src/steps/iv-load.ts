@@ -24,7 +24,14 @@
  */
 
 import { matrixFromBytes } from "../core/state/matrix";
-import type { AuxValue, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  AuxValue,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 export const ivLoad: StepExecutor = (state, params, ctx) => {
   const { ivAuxName, outAuxName } = readParams(params);
@@ -120,6 +127,48 @@ flags the missing read with an orange \`!\` glyph.`,
     "NIST SP 800-38A §6.2 (CBC), §6.3 (CFB), §6.4 (OFB), §6.5 (CTR)",
   ],
   shapeContract: { input: "any", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.2) ───────────────
+// `ivLoadMeta`: aux-only step (no state ports). Reads a 16-byte Uint8Array
+// IV under `aux[ivAuxName]`; writes a `MatrixState` (16 bytes column-
+// major) under `aux[outAuxName]`. The MatrixState shape on the write
+// side is the load-bearing detail — downstream `xor-aux-into-state@1`
+// validates `operand.shape === "matrix4x4-bytes"`.
+//
+// **Decode layout:** the runtime reconstructs the aux value's shape from
+// the PortContract's output-port `layout` tag. `"matrix-cm-4x4"` → a
+// `MatrixState` is rebuilt; raw bytes alone would be a Uint8Array and
+// `xor-aux-into-state` would throw on the shape mismatch. See
+// `auxPortBytesToValue` in `core/port-projection.ts`.
+//
+// Iteration order: legacy declares `auxReads: [ivAuxName]`, so the read-
+// binding Map matches. Empty `ivAuxName` still emits the binding so
+// `auxReadMissing: [""]` materializes identically on both paths for the
+// fresh-palette-drop case.
+
+export const ivLoadMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  auxReadPorts: (params: Json) => {
+    const { ivAuxName } = readParams(params);
+    return new Map([["iv", ivAuxName]]);
+  },
+  auxWritePorts: (params: Json) => {
+    const { outAuxName } = readParams(params);
+    if (outAuxName === "") return new Map();
+    return new Map([["chain", outAuxName]]);
+  },
+};
+
+/**
+ * Declared port surface. `chain` is `matrix-cm-4x4` because the
+ * downstream consumer (`xor-aux-into-state`) expects MatrixState shape;
+ * the runtime uses this tag at decode time to rebuild the variant.
+ * `byteLength: 16` is the fixed AES block size — iv-load is AES-shaped.
+ */
+export const ivLoadPortContract: PortContract = {
+  inputs: new Map([["iv", { byteLength: 16, layout: "raw" }]]),
+  outputs: new Map([["chain", { byteLength: 16, layout: "matrix-cm-4x4" }]]),
 };
 
 const readParams = (params: Json): { ivAuxName: string; outAuxName: string } => {

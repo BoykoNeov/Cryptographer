@@ -198,7 +198,7 @@ ported path (which Slice 1.2+ populates).
 **Gate:** 1618 existing tests pass; no runtime behavior change because
 nothing registers as `ported` yet.
 
-### Slice 1.2 — Aux-only primitives lifted
+### Slice 1.2 — Aux-only primitives lifted — **GREEN 2026-05-23**
 
 Step types: `generic.aux-load@1`, `generic.aux-copy@1`,
 `generic.aux-xor@1`, `generic.iv-load@1`.
@@ -211,9 +211,44 @@ Each step file gains a `<name>Meta: ProjectionMetadata` export +
 `<name>PortContract: PortContract` export. `default-registry.ts`
 registers each as `kind: "ported"` with the colocated metadata.
 
-**Gate:** frame-byte equivalence across the 4 lifted step types when
-`portedDispatchEnabled === true`; 1618 existing tests still pass with
-default `portedDispatchEnabled: false`.
+**Gate (achieved):** 1629 tests green (1622 prior + 7 new in
+`tests/runtime-ported-dispatch-aux-only.test.ts`). Frame-by-frame parity
+holds across the synthetic 4-step spec, the AES-128 CBC NIST SP 800-38A
+§F.2.1 KAT (1629-frame multi-block run), and the two pre-flagged hazard
+pins (Map iteration order on `aux-xor`'s `auxReadMissing`; empty-auxName
+sentinel on all three aux writers).
+
+**Two contract decisions landed mid-slice — capture for downstream
+slices:**
+
+1. **`PortShape.byteLength` is OPTIONAL** (user pick 2026-05-23 over
+   sentinel-0 and contract-optional alternatives). Absent → polymorphic
+   port (length determined by wiring at edit time). Scales to SHA-2's
+   variable-length input → fixed-length output without another contract
+   bump. Slice 1.4+ authors of fixed-length port contracts should still
+   declare `byteLength` when the cipher demands it (AES rounds = 16);
+   only steps with genuinely dynamic length (aux-xor / aux-copy) leave
+   it absent.
+
+2. **`PortContract.layout` is LOAD-BEARING for aux decode**, not just
+   editor advisory. The runtime reads
+   `registration.shape.outputs.get(portName).layout` after a ported
+   step executes and reconstructs the AuxValue's variant from that tag.
+   Today's vocabulary: `"raw"` / undefined → `Uint8Array`;
+   `"matrix-cm-4x4"` → `MatrixState`. iv-load's output port declares
+   `"matrix-cm-4x4"` so downstream `xor-aux-into-state` finds a
+   MatrixState (which it validates). Future ports producing other State
+   shapes extend `auxPortBytesToValue` in `core/port-projection.ts`
+   with their decode targets.
+
+**One interim field added — disappears at end of Phase 1:**
+
+The `kind: "ported"` variant carries a `legacy: StepExecutor` field
+alongside the lifted `executor: PortedExecutor`. Both are required
+through Slices 1.2–1.8 so the runtime's frame-parity gate can run each
+ported step under both flag values. Phase 2 (SHA-2 port-native) ships
+without `legacy`; the field becomes optional then disappears in Phase 5
+when the legacy contract retires.
 
 ### Slice 1.3 — Padding + boundary primitives lifted
 

@@ -8,11 +8,12 @@
  * params can't be edited by the existing ParamEditor blocks.
  */
 
+import { liftLegacyExecutor } from "../core/port-projection";
 import { StepRegistry } from "../core/registry";
 import { addRoundKey, addRoundKeyDoc } from "../steps/add-round-key";
-import { auxCopy, auxCopyDoc } from "../steps/aux-copy";
-import { auxLoad, auxLoadDoc } from "../steps/aux-load";
-import { auxXor, auxXorDoc } from "../steps/aux-xor";
+import { auxCopy, auxCopyDoc, auxCopyMeta, auxCopyPortContract } from "../steps/aux-copy";
+import { auxLoad, auxLoadDoc, auxLoadMeta, auxLoadPortContract } from "../steps/aux-load";
+import { auxXor, auxXorDoc, auxXorMeta, auxXorPortContract } from "../steps/aux-xor";
 import { byteSubstitution, byteSubstitutionDoc } from "../steps/byte-substitution";
 import { computeBlockCount, computeBlockCountDoc } from "../steps/compute-block-count";
 import { concatBlocks, concatBlocksDoc } from "../steps/concat-blocks";
@@ -26,7 +27,7 @@ import { desXorWithK, desXorWithKDoc } from "../steps/des-xor-with-k";
 import { feistelToyAddK, feistelToyAddKDoc } from "../steps/feistel-toy-add-k";
 import { iso78164Pad, iso78164PadDoc } from "../steps/iso7816-4-pad";
 import { iso78164Unpad, iso78164UnpadDoc } from "../steps/iso7816-4-unpad";
-import { ivLoad, ivLoadDoc } from "../steps/iv-load";
+import { ivLoad, ivLoadDoc, ivLoadMeta, ivLoadPortContract } from "../steps/iv-load";
 import {
   keyExpansion,
   keyExpansionDoc,
@@ -112,9 +113,41 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // graph view's validateGraph (Slice 9) surfaces an orphaned-read
   // warning glyph on the node. That keeps half-wired specs debuggable
   // during palette-driven authoring instead of throwing mid-spec.
-  r.register("generic.aux-load@1", { executor: auxLoad, doc: auxLoadDoc });
-  r.register("generic.aux-xor@1", { executor: auxXor, doc: auxXorDoc });
-  r.register("generic.aux-copy@1", { executor: auxCopy, doc: auxCopyDoc });
+  //
+  // **Slice 1.2 (universal port-dataflow Phase 1)** — these three step
+  // types plus `generic.iv-load@1` below are the FIRST registrations to
+  // use the `kind: "ported"` variant. Each declares colocated
+  // `ProjectionMetadata` + `PortContract` (per Decision C — metadata
+  // lives next to the executor that owns it, not in a central side-map).
+  // The runtime branches on `portedDispatchEnabled`: when on, runs the
+  // ported execution path through `liftLegacyExecutor`'s wrapping; when
+  // off, the `legacy` field provides the legacy-shape executor for the
+  // unchanged dispatch. Frame-parity is gated by
+  // `tests/runtime-ported-dispatch-aux-only.test.ts`.
+  r.register("generic.aux-load@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(auxLoad, auxLoadMeta),
+    legacy: auxLoad,
+    shape: auxLoadPortContract,
+    meta: auxLoadMeta,
+    doc: auxLoadDoc,
+  });
+  r.register("generic.aux-xor@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(auxXor, auxXorMeta),
+    legacy: auxXor,
+    shape: auxXorPortContract,
+    meta: auxXorMeta,
+    doc: auxXorDoc,
+  });
+  r.register("generic.aux-copy@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(auxCopy, auxCopyMeta),
+    legacy: auxCopy,
+    shape: auxCopyPortContract,
+    meta: auxCopyMeta,
+    doc: auxCopyDoc,
+  });
   // ─── Chaining-mode primitives (Phase 2 of multi-block AES — CBC) ───────
   // Three step types that compose into a CBC body inside the iterate
   // loop, and generalize to OFB/CFB without rewrites:
@@ -124,7 +157,18 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // The post-AES decrypt chain-advance (chain := next-chain) reuses the
   // existing `generic.aux-copy@1` — no fourth primitive needed. See
   // `aes-cbc-builder.ts` for how they assemble.
-  r.register("generic.iv-load@1", { executor: ivLoad, doc: ivLoadDoc });
+  //
+  // `iv-load` lifts in Slice 1.2 (universal port-dataflow); its output
+  // port carries layout `"matrix-cm-4x4"` so the runtime reconstructs
+  // the MatrixState that downstream `xor-aux-into-state` expects.
+  r.register("generic.iv-load@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(ivLoad, ivLoadMeta),
+    legacy: ivLoad,
+    shape: ivLoadPortContract,
+    meta: ivLoadMeta,
+    doc: ivLoadDoc,
+  });
   r.register("generic.xor-aux-into-state@1", {
     executor: xorAuxIntoState,
     doc: xorAuxIntoStateDoc,
