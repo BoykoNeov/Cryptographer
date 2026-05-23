@@ -83,9 +83,17 @@ type PortedExecutor = (
 // Renamed from StepShapeContract in Phase 0 to avoid collision with the
 // existing single-thread shape contract at src/core/types.ts (palette chip +
 // drop-anchor greying + validateShapes).
+// **Slice 1.4 (2026-05-23) widened both sides to `PortShapeMap` —
+// `ReadonlyMap | ((params) => ReadonlyMap)` — so dynamic-N steps
+// (AES / Speck / Serpent / DES key-schedules with `params.rounds + 1`
+// round-key output ports) can declare their per-leaf port surface in
+// function form. See `docs/plans/universal-port-phase-1-slices.md` §1.4
+// for the user pick rationale (chosen over a templated-name "keyN" lie
+// and a `dynamicOutputs?` sibling field). Static contracts pass
+// unchanged through the union — no source edits required.**
 type PortContract = {
-  readonly inputs: ReadonlyMap<string, PortShape>;
-  readonly outputs: ReadonlyMap<string, PortShape>;
+  readonly inputs: PortShapeMap;
+  readonly outputs: PortShapeMap;
 };
 
 type StepRegistration =

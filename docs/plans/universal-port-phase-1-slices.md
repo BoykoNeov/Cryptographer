@@ -64,6 +64,17 @@ inverse direction.
 `des.key-schedule@1`, `serpent.key-expansion@1`,
 `speck.key-schedule@1`.
 
+**Aux-only pattern (lifted from Slice 1.4 implementation 2026-05-23):**
+all five key-schedule step types declare `shapeContract: { input:
+"any", output: "preserveInput" }`. Slice 1.4 lifted AES key-expansion
+as aux-only — `stateInputPort` and `stateOutputPort` OMITTED, the lift
+adapter creates a sentinel state for the legacy executor and discards
+its passthrough return, the runtime preserves the caller's actual
+state across the call. Slices 1.6/1.7/1.8 follow the same pattern
+uniformly (verified: all three downstream key-schedules already
+declare `input: "any"`). This is the precedent for any future cipher
+adding a key-schedule under the universal-port contract.
+
 ### Decision C — Metadata co-located with executor files, not central side-map
 
 Phase 0's `PROJECTION_METADATA` is a throw-away side-map at module

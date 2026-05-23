@@ -19,13 +19,19 @@
  *       the frames are byte-equal, every layer above the runtime works
  *       without change.
  *
- * Phase-0 only `generic.byte-substitution@1` + `generic.add-round-key@1` are
- * lifted via the side-map (`PROJECTION_METADATA` in `core/port-projection.ts`).
- * The flag-on run still routes every OTHER leaf (`aes.key-expansion@1`,
- * `generic.shift-rows@1`, `generic.mix-columns@1`, ECB boundary primitives)
- * through the legacy path. So this test exercises a mixed run — half-ported,
- * half-legacy — which is exactly the Phase-0 contract: dual-dispatch by
- * side-map presence, per leaf, in one walker pass.
+ * Phase-0 originally lifted only `generic.byte-substitution@1` +
+ * `generic.add-round-key@1` via the side-map (`PROJECTION_METADATA` in
+ * `core/port-projection.ts`). Slice 1.4 (2026-05-23) MOVED both step
+ * types — plus `aes.key-expansion@1`, `generic.shift-rows@1`, and
+ * `generic.mix-columns@1` — to `kind: "ported"` registrations with
+ * colocated metadata, so the AES forward path now runs ENTIRELY through
+ * the ported path under `portedDispatchEnabled: true`; only the ECB
+ * boundary primitives (split-blocks / concat-blocks / compute-block-
+ * count / load-block / store-block) remain on the legacy path inside
+ * the ECB spec. The side-map's KEYS still pin to the Phase-0 pair
+ * (Decision A — Slice 1.9 deletes the side-map outright); the runtime's
+ * contract-priority dispatch consults the registration first, so the
+ * side-map entries are dead code through Slices 1.4–1.8.
  *
  * The iterate-runtime's `aux[outBlocksAux]` publication is verified here at
  * integration boundary (the 4-block ECB ciphertext bytes match SP 800-38A
