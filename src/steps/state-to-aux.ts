@@ -25,7 +25,14 @@
  */
 
 import { cloneState } from "../core/state/clone";
-import type { AuxValue, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  AuxValue,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 export const stateToAux: StepExecutor = (state, params) => {
   const { auxName } = readParams(params);
@@ -104,6 +111,57 @@ authoring-time feedback.`,
   ]),
   references: ["NIST SP 800-38A §6.2 (CBC mode chaining variable)"],
   shapeContract: { input: "any", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.5) ───────────────
+// `stateToAuxMeta`: snapshots current state into an aux entry. State
+// input/output ports declared (the executor passes state through but the
+// snapshot bytes come FROM state). Aux write produces a MatrixState —
+// the output port's `layout: "matrix-cm-4x4"` drives the runtime decode
+// so `aux[auxName]` lands as a `MatrixState`, matching legacy executor's
+// `cloneState(state)` shape.
+//
+// **stateLayout pinned to `matrix4x4-bytes` despite shapeContract.input
+// === "any"`** — these two fields are decoupled. `shapeContract` is
+// editor-UX (palette chip, drop-anchor, pre-Run validation); `stateLayout`
+// is runtime port encoding. Today the only shipping use is AES-CBC where
+// state inside the iterate body is always `matrix4x4-bytes`. A future
+// Speck-CBC composition with `bytes`-shape state would register a sibling
+// step type, or this slice's `stateLayout` would widen to consult the
+// PortContract input port's layout — same shape-transforming question
+// Slice 1.3 deferred for `load-block`/`store-block`. Pinning today is
+// safe because `portedDispatchEnabled` defaults to false; the runtime
+// throws loudly if a flag-on user drags `state-to-aux` into a non-AES
+// spec.
+//
+// **Empty-auxName binding skipped** — legacy early-returns with no
+// auxWrites when `auxName === ""`. The metadata mirrors: empty Map from
+// `auxWritePorts(params)` so the runtime doesn't try to `aux.set("",
+// ...)` on an empty target. Same pattern as `iv-load`'s outAuxName.
+
+export const stateToAuxMeta: ProjectionMetadata = {
+  stateLayout: "matrix4x4-bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+  auxWritePorts: (params: Json) => {
+    const { auxName } = readParams(params);
+    if (auxName === "") return new Map();
+    return new Map([["snapshot", auxName]]);
+  },
+};
+
+/**
+ * Declared port surface. `snapshot` output declares layout
+ * `matrix-cm-4x4` so the runtime reconstructs the AuxValue as a
+ * MatrixState (matching legacy's `cloneState(state)` shape). State ports
+ * also matrix-cm-4x4 — AES block today. `byteLength: 16` everywhere.
+ */
+export const stateToAuxPortContract: PortContract = {
+  inputs: new Map([["state", { byteLength: 16, layout: "matrix-cm-4x4" }]]),
+  outputs: new Map([
+    ["state", { byteLength: 16, layout: "matrix-cm-4x4" }],
+    ["snapshot", { byteLength: 16, layout: "matrix-cm-4x4" }],
+  ]),
 };
 
 const readParams = (params: Json): { auxName: string } => {

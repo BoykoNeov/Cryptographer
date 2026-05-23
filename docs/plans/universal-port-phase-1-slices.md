@@ -91,6 +91,60 @@ registry consumes them via the `StepRegistration` discriminated union.
 These need user picks before the named slice starts; surface at the
 right moment, do not pre-resolve here.
 
+### Open #2 — `aux-copy` variant preservation (surfaced 2026-05-23 by Slice 1.5)
+
+`generic.aux-copy@1` was lifted in Slice 1.2 with a STATIC
+`PortContract.outputs["result"].layout: "raw"` — sized for the
+Uint8Array case (the only flag-on path that exercised it at the time).
+Slice 1.5's lift of `state-to-aux` makes the latent gap reachable: the
+decrypt CBC body advances the chain via `aux-copy(next-chain → chain)`
+where `aux[next-chain]` is a MatrixState. The lift adapter correctly
+extracts MatrixState bytes, but the runtime's auxWrite decode at
+`runtime.ts:317-330` consults the static `"raw"` layout and produces a
+Uint8Array, dropping the variant. The next iteration's
+`xor-aux-into-state` reads aux["chain"] as Uint8Array and the legacy
+executor throws on shape validation.
+
+Encrypt is unaffected — the encrypt body
+(`cbcXorEncryptLeaf` → AES → `cbcSnapshotEncryptLeaf`) doesn't use
+aux-copy. That's why Slice 1.5's encrypt KAT passes and decrypt is
+deferred (test block `it.skip`d with rationale in
+`tests/runtime-ported-dispatch-chaining.test.ts` (c)).
+
+**Not "broken in production":** `portedDispatchEnabled` defaults `false`
+and no shipped UI path enables it. Latent, test-fixture-reachable only.
+
+**Candidate fixes** (pick ONE in a dedicated slice; surface to user at
+slice start):
+
+- (a) **`"preserve-input-variant"` layout sentinel** — runtime treats
+  this as "consult the producer/source live aux variant" rather than
+  decoding via static layout. Requires the runtime to know the source
+  aux key at decode time; the `auxReadPorts(params)` and
+  `auxWritePorts(params)` bindings together identify which input feeds
+  which output for passthrough steps. Smallest surface change; reuses
+  existing layout-tag mechanism.
+- (b) **Variant sidecar in `PortedExecutor` return** — widen the
+  ported executor return shape from `outputs: Map<string, Uint8Array>`
+  to `{ outputs, variants?: Map<string, "auto" | StateShape> }` so the
+  lift adapter can mark passthrough aux variants without losing them
+  to layout decode. Larger contract change; more general.
+- (c) **Split "variant-preserving aux passthrough" as a distinct
+  semantic** — aux-passthrough steps (`aux-copy`, future
+  `aux-passthrough`) declare a different metadata field
+  (`auxPassthroughBindings`) that bypasses the bytes round-trip
+  entirely. Clean separation; doubles the metadata surface for the
+  one step type that needs it today.
+
+**When to slice it:** unblocks AES-CBC decrypt under flag-on AND any
+future spec that aux-copies a MatrixState/State variant. The plan's
+Slice 1.5 gate is encrypt-only, so this can land as Slice 1.5b after
+1.5 ships, OR as a prerequisite to Slice 1.6 (Speck) if Speck's specs
+end up touching the path. Today (2026-05-23) no Speck spec uses
+aux-copy, so deferring past Slice 1.6 is also viable.
+
+Memory entry: `project_aux_copy_variant_gap.md`.
+
 ### Open #1 — `generic.split-blocks@1` `State[]` aux encoding (blocks Slice 1.3)
 
 `split-blocks` writes `aux[blocksAux]` as a `readonly State[]` (array
@@ -372,14 +426,57 @@ side-map pin at `tests/runtime-ported-dispatch.test.ts:124` continues
 to pass — the side-map's KEYS are untouched; the runtime just never
 consults them for the now-ported registrations.
 
-### Slice 1.5 — Chaining primitives lifted
+### Slice 1.5 — Chaining primitives lifted — **GREEN 2026-05-23**
 
 Step types: `generic.xor-aux-into-state@1`, `generic.state-to-aux@1`.
 
-`state-to-aux` is a one-to-one aux writer — straightforward.
+Both lifted as `kind: "ported"` per Decision C colocated metadata.
+State ports declared (both have `matrix4x4-bytes` state in/out today —
+AES-CBC is the only shipping use). `xor-aux-into-state` declares a
+`auxReadPorts` binding for `operand` (the chain), emitted even when
+`auxName === ""` so `auxReadMissing: [""]` materializes identically
+under both paths. `state-to-aux` declares an `auxWritePorts` binding
+for `snapshot` (layout `matrix-cm-4x4` so the runtime decodes to
+MatrixState, matching legacy's `cloneState(state)` shape); returns an
+empty Map when `auxName === ""` (matches iv-load's outAuxName pattern).
 
-**Gate:** AES-128 CBC end-to-end (NIST SP 800-38A §F.2.1 KAT) passes
-under `portedDispatchEnabled: true`.
+**`stateLayout: "matrix4x4-bytes"` on `state-to-aux` despite
+`shapeContract.input === "any"`** — these two fields are decoupled
+(`shapeContract` is editor-UX, `stateLayout` is runtime port encoding).
+AES-CBC is the only shipping use; a future Speck-CBC composition with
+`bytes`-shape state would register a sibling step type, or `stateLayout`
+would widen to consult the PortContract input port's layout. Pinning is
+safe because `portedDispatchEnabled` defaults `false`; the runtime
+throws loudly if a flag-on user drags `state-to-aux` into a non-AES
+spec. Same gradualism Slice 1.3 applied to `load-block`/`store-block`.
+
+**Runtime input-side widening landed mid-slice:** the previous Slice-1.2
+hard throw on non-Uint8Array aux at `runtime.ts:254` ("aux ... must be
+Uint8Array") was an explicit deferral; Slice 1.5's `xor-aux-into-state`
+lift is the first ported step type to actually read a MatrixState
+through an input port. Widening: drop the throw, encode bytes via the
+existing `auxValueToPortBytes` helper (promoted from file-private to
+exported), and **alias the live AuxValue into `portedAuxRead`** (rather
+than cloning) to match the legacy path's `auxRead.set(k, v)` symmetry.
+Aliasing is the parity-preserving choice — practically `toEqual`
+deep-equals either way, but symmetry across paths is the cleaner
+mental model.
+
+**Gate (achieved):** 1657 tests green (1651 prior + 6 active in
+`tests/runtime-ported-dispatch-chaining.test.ts`; 2 deferred — see
+Open #2). AES-128 CBC encrypt KAT (NIST SP 800-38A §F.2.1) passes under
+`portedDispatchEnabled: true`; full frame-by-frame byte parity across
+all 1300+ frames. Per-primitive synthetic specs pin unit semantics
+(MatrixState aux round-trip; layout-driven decode reconstructs
+MatrixState). Empty-auxName parity pinned for both primitives.
+
+**Deferred — see Open #2:** AES-128 CBC decrypt (§F.2.2) under flag-on.
+Decrypt body advances the chain via `aux-copy(next-chain → chain)` —
+aux-copy was lifted in Slice 1.2 with static layout `"raw"`, dropping
+the MatrixState variant on decode. Needs contract design (variant
+preservation in aux-passthrough steps), not a mid-slice patch. Test
+block `it.skip`d with rationale; unskipping is the gate for the
+variant-preserving slice (1.5b or 1.6-prereq).
 
 ### Slice 1.6 — Speck lifted
 

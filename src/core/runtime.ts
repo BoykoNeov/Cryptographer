@@ -2,6 +2,7 @@ import { COMBINE_KINDS, REJOIN_STEP_TYPE } from "./combine-kinds";
 import {
   PROJECTION_METADATA,
   auxPortBytesToValue,
+  auxValueToPortBytes,
   liftLegacyExecutor,
   portBytesToState,
   resolvePortMap,
@@ -247,17 +248,22 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
             auxReadMissing.push(auxKey);
             continue;
           }
-          // Strictness: the bound aux key MUST hold a Uint8Array. The
-          // Phase-0 + Slice-1.2 targets only bind Uint8Array aux. A
-          // non-Uint8Array here means a metadata mismatch — surface
-          // loudly instead of silently coercing.
-          if (!(v instanceof Uint8Array)) {
-            throw new Error(
-              `ported dispatch: aux "${auxKey}" bound to input port "${portName}" must be Uint8Array, got ${typeof v} (stepId=${node.id}, stepType=${node.type})`,
-            );
-          }
-          inputs.set(portName, new Uint8Array(v));
-          portedAuxRead.set(auxKey, new Uint8Array(v));
+          // Slice 1.5 input-side widening — encode the live AuxValue into
+          // port bytes via `auxValueToPortBytes`, the same helper the lift
+          // adapter uses on its auxWrites pass. Handles both Uint8Array
+          // and State-variant aux values (chaining primitives —
+          // `xor-aux-into-state` reads a MatrixState chain; already-lifted
+          // `aux-copy` may now legitimately propagate one). The previous
+          // hard throw on non-Uint8Array was a Slice-1.2 deferral; this is
+          // the slice where MatrixState-in-aux actually exercises both
+          // sides of the input port.
+          inputs.set(portName, auxValueToPortBytes(v, auxKey));
+          // For `frame.auxRead`, alias the live aux value rather than
+          // cloning. Matches the legacy path's `auxRead.set(k, v)` at the
+          // line below — symmetry across paths is the parity-preserving
+          // choice. (Practically `toEqual` deep-equals either way; aliasing
+          // is the cleaner mental model and matches the legacy contract.)
+          portedAuxRead.set(auxKey, v);
         }
 
         // Call the ported executor. For Slice 1.2 every ported entry is

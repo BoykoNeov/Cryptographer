@@ -557,8 +557,20 @@ export const liftLegacyExecutor = (
  * descriptive message so a future mis-lifted step type surfaces
  * immediately rather than coercing wrong bytes. Future slices that lift
  * `split-blocks` (State[]) will widen this with the chosen encoding.
+ *
+ * **Slice 1.5 (universal port-dataflow Phase 1)** — promoted from
+ * file-private to exported so the runtime's ported-dispatch input-side
+ * (`runtime.ts`) can encode State-variant aux values into input-port
+ * bytes. This is the input-side mirror of the existing output-side path
+ * already used by the lift adapter; the unified helper keeps encode
+ * semantics symmetric (Uint8Array → copy; State → bytes-extract; other
+ * variants → throw). The previous input-side `if (!(v instanceof
+ * Uint8Array)) throw` at `runtime.ts:254` (Slice-1.2 deferral) becomes
+ * unnecessary — chaining primitives (`xor-aux-into-state`,
+ * `state-to-aux`) read/write MatrixState aux, and aux-copy's already-
+ * lifted-in-Slice-1.2 entry can now legitimately propagate them.
  */
-const auxValueToPortBytes = (value: AuxValue, auxKey: string): Uint8Array => {
+export const auxValueToPortBytes = (value: AuxValue, auxKey: string): Uint8Array => {
   if (value instanceof Uint8Array) return new Uint8Array(value);
   // State variant: any object with `shape` + `bytes`. Read the bytes
   // straight off. Reconstruction at decode time uses the PortContract's

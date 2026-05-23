@@ -31,7 +31,13 @@
  */
 
 import { cloneMatrix } from "../core/state/matrix";
-import type { Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 export const xorAuxIntoState: StepExecutor = (state, params, ctx) => {
   const { auxName } = readParams(params);
@@ -141,6 +147,53 @@ register a sibling step.`,
     "NIST SP 800-38A §6.4 (OFB mode)",
   ],
   shapeContract: { input: "matrix4x4-bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.5) ───────────────
+// `xorAuxIntoStateMeta`: state-bearing chaining primitive. Reads a
+// MatrixState from `aux[auxName]` (the chain accumulator) and XORs it
+// into the current state. State input/output ports both carry
+// `matrix-cm-4x4` — the AES block shape — because today's only consumer
+// is AES-CBC. A future Speck-CBC composition with `bytes`-shape state
+// would register a sibling step under a different stateLayout.
+//
+// **Aux-read MatrixState** — the live `aux[auxName]` is a MatrixState
+// (written by `iv-load` pre-loop and `state-to-aux` per-iteration). The
+// runtime's input-side projection (`runtime.ts:243-261`) handles the
+// variant via Slice 1.5's `auxValueToPortBytes` widening; the legacy
+// executor still reads via `ctx.aux.get(...)` until Slice 1.9 cuts the
+// dual channel.
+//
+// **Empty-auxName binding kept** — legacy declares `auxReads: [auxName]`
+// even when `auxName === ""` so `auxReadMissing: [""]` materializes for
+// the fresh-palette-drop case. The metadata mirrors that — `aux.get("")`
+// is always undefined and lands in the runtime's missing-read bookkeeping.
+
+export const xorAuxIntoStateMeta: ProjectionMetadata = {
+  stateLayout: "matrix4x4-bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+  auxReadPorts: (params: Json) => {
+    const { auxName } = readParams(params);
+    // Emit the binding even for empty `auxName` so `auxReadMissing`
+    // matches legacy's `[""]` for fresh-palette-drop frames.
+    return new Map([["operand", auxName]]);
+  },
+};
+
+/**
+ * Declared port surface. `operand` input declares layout `matrix-cm-4x4`
+ * because the live aux value IS a MatrixState — the runtime decodes
+ * downstream aux outputs by the producing port's layout, and a future
+ * port-native consumer reading from `inputs.get("operand")` would expect
+ * the same shape. `byteLength: 16` everywhere — AES block size.
+ */
+export const xorAuxIntoStatePortContract: PortContract = {
+  inputs: new Map([
+    ["state", { byteLength: 16, layout: "matrix-cm-4x4" }],
+    ["operand", { byteLength: 16, layout: "matrix-cm-4x4" }],
+  ]),
+  outputs: new Map([["state", { byteLength: 16, layout: "matrix-cm-4x4" }]]),
 };
 
 const readParams = (params: Json): { auxName: string } => {

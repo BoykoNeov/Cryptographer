@@ -89,9 +89,19 @@ import { speckKeySchedule, speckKeyScheduleDoc } from "../steps/speck-key-schedu
 import { speckRound, speckRoundDoc } from "../steps/speck-round";
 import { speckRoundInverse, speckRoundInverseDoc } from "../steps/speck-round-inverse";
 import { splitBlocks, splitBlocksDoc } from "../steps/split-blocks";
-import { stateToAux, stateToAuxDoc } from "../steps/state-to-aux";
+import {
+  stateToAux,
+  stateToAuxDoc,
+  stateToAuxMeta,
+  stateToAuxPortContract,
+} from "../steps/state-to-aux";
 import { storeBlock, storeBlockDoc } from "../steps/store-block";
-import { xorAuxIntoState, xorAuxIntoStateDoc } from "../steps/xor-aux-into-state";
+import {
+  xorAuxIntoState,
+  xorAuxIntoStateDoc,
+  xorAuxIntoStateMeta,
+  xorAuxIntoStatePortContract,
+} from "../steps/xor-aux-into-state";
 import { zeroPad, zeroPadDoc, zeroPadMeta, zeroPadPortContract } from "../steps/zero-pad";
 import { zeroUnpad, zeroUnpadDoc, zeroUnpadMeta, zeroUnpadPortContract } from "../steps/zero-unpad";
 
@@ -307,11 +317,33 @@ export const buildDefaultRegistry = (): StepRegistry => {
     meta: ivLoadMeta,
     doc: ivLoadDoc,
   });
+  // **Slice 1.5 (universal port-dataflow Phase 1)** — both chaining
+  // primitives lift as `kind: "ported"`. `xor-aux-into-state` reads a
+  // MatrixState chain (driving Slice 1.5's input-side widening in
+  // `runtime.ts:243-261` — the previous hard throw on non-Uint8Array aux
+  // becomes a wired path via `auxValueToPortBytes`). `state-to-aux`
+  // writes a MatrixState snapshot via the existing output-side
+  // `layout: "matrix-cm-4x4"` decode (same path Slice-1.2's `iv-load`
+  // already exercises). AES-128 CBC encrypt + decrypt KAT under flag-on
+  // is the cipher-level parity gate; per-primitive synthetic specs pin
+  // the unit semantics. Frame-parity is gated by
+  // `tests/runtime-ported-dispatch-chaining.test.ts`.
   r.register("generic.xor-aux-into-state@1", {
-    executor: xorAuxIntoState,
+    kind: "ported",
+    executor: liftLegacyExecutor(xorAuxIntoState, xorAuxIntoStateMeta),
+    legacy: xorAuxIntoState,
+    shape: xorAuxIntoStatePortContract,
+    meta: xorAuxIntoStateMeta,
     doc: xorAuxIntoStateDoc,
   });
-  r.register("generic.state-to-aux@1", { executor: stateToAux, doc: stateToAuxDoc });
+  r.register("generic.state-to-aux@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(stateToAux, stateToAuxMeta),
+    legacy: stateToAux,
+    shape: stateToAuxPortContract,
+    meta: stateToAuxMeta,
+    doc: stateToAuxDoc,
+  });
   // ─── Speck (ARX block cipher, second cipher family) ────────────────────
   // Three step types complete a full Speck cipher: a key-schedule that
   // expands an m-word master key into `rounds` round-key words, a forward
