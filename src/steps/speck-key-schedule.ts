@@ -21,7 +21,15 @@
  * Speck variants tune these constants; the executor itself is generic.
  */
 
-import type { AuxValue, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  AuxValue,
+  Json,
+  PortContract,
+  PortShape,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 import { type SpeckByteOrder, decodeKey, encodeWord, readByteOrder } from "./speck-word-codec";
 
 export const speckKeySchedule: StepExecutor = (state, params, ctx) => {
@@ -198,4 +206,118 @@ const readParams = (params: Json): Params => {
     beta: p.beta as number,
     byteOrder: readByteOrder(params, "speck.key-schedule"),
   };
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.6) ───────────────
+// Speck key-schedule is the SECOND one-to-many writer in the universal-
+// port migration (after AES key-expansion in Slice 1.4). Same Decision B
+// shape — one output port per round key — sized by `params.rounds`. For
+// Speck32/64 that's 22 ports (`key0` … `key21`), vs AES-128's 11 ports
+// (`key0` … `key10`). The dynamic-N PortContract.outputs function form
+// already validated in Slice 1.4 carries over verbatim.
+//
+// **Aux-only**: `stateInputPort` and `stateOutputPort` are intentionally
+// OMITTED. Speck key-schedule's `shapeContract` is `input: "any", output:
+// "preserveInput"` — the executor doesn't touch state. Matches the
+// aux-only lift pattern from Slice 1.2 (iv-load, aux-load, …) + Slice
+// 1.4 (AES key-expansion): the lift adapter creates a sentinel
+// zero-length `bytes`-shape state to pass to the legacy executor and
+// discards its passthrough return. The runtime preserves the caller's
+// actual `bytes`-shape state (Speck32/64's 4-byte block) across the
+// ported call so the subsequent `speck.round` leaf sees its incoming
+// shape unchanged.
+//
+// **Port naming convention** — `masterKey` for the aux read disambiguates
+// it from the per-round output ports `key0`, `key1`, …, `keyN`. Same
+// convention Slice 1.4 picked for AES key-expansion.
+//
+// **byteLength absent on the round-key output ports** — Speck variants
+// vary the word width (Speck32/64 = 16-bit words → 2-byte round keys;
+// Speck64/128 = 32-bit words → 4-byte round keys; etc.). Today only
+// Speck32/64 ships, but the executor is generic. Polymorphic byteLength
+// (Slice 1.2 user pick) covers exactly this case without baking a
+// variant-specific number into the contract. Same reasoning applies to
+// `masterKey` — `m * wordBits / 8` bytes (8 for Speck32/64).
+
+const speckKeyScheduleOutputPorts = (params: Json) => {
+  // Identical params validation to readParams above; we re-validate here
+  // because the contract callback may be invoked outside the executor's
+  // own validation path (e.g., during PortContract resolution at editor
+  // time). Throws keep the error surface descriptive.
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("speck.key-schedule contract: params must be an object");
+  }
+  const p = params as { rounds?: unknown };
+  if (typeof p.rounds !== "number" || !Number.isInteger(p.rounds) || p.rounds < 1) {
+    throw new Error("speck.key-schedule contract: params.rounds: positive integer required");
+  }
+  const m = new Map<string, PortShape>();
+  // Speck writes EXACTLY `rounds` round keys (k_0 … k_{rounds-1}). Unlike
+  // AES which writes Nr+1 (the initial AddRoundKey's key + one per
+  // round), Speck has no initial AddRoundKey — each round consumes
+  // exactly one round-key word. So the loop bound is `< rounds`, not
+  // `<= rounds`.
+  for (let i = 0; i < p.rounds; i++) {
+    // byteLength absent — polymorphic across Speck variants. layout
+    // "raw" → decode as Uint8Array (the round step reads via
+    // `decodeWord(rkBytes, 0, wordBits, byteOrder)`, which works on a
+    // Uint8Array of the right length).
+    m.set(`key${i}`, { layout: "raw" });
+  }
+  return m;
+};
+
+const speckKeyScheduleAuxWritePorts = (params: Json) => {
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("speck.key-schedule auxWritePorts: params must be an object");
+  }
+  const p = params as { outputPrefix?: unknown; rounds?: unknown };
+  if (typeof p.outputPrefix !== "string") {
+    throw new Error("speck.key-schedule auxWritePorts: params.outputPrefix: string required");
+  }
+  if (typeof p.rounds !== "number" || !Number.isInteger(p.rounds) || p.rounds < 1) {
+    throw new Error("speck.key-schedule auxWritePorts: params.rounds: positive integer required");
+  }
+  // Map iteration is insertion-ordered in JS — bindings emerge in
+  // i = 0 … rounds-1 order, matching the legacy executor's `auxWrites`
+  // insertion order. The frame-parity test pins this.
+  const bindings = new Map<string, string>();
+  for (let i = 0; i < p.rounds; i++) {
+    bindings.set(`key${i}`, `${p.outputPrefix}.${i}`);
+  }
+  return bindings;
+};
+
+const speckKeyScheduleAuxReadPorts = (params: Json) => {
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("speck.key-schedule auxReadPorts: params must be an object");
+  }
+  const p = params as { keyAuxName?: unknown };
+  if (typeof p.keyAuxName !== "string") {
+    throw new Error("speck.key-schedule auxReadPorts: params.keyAuxName: string required");
+  }
+  return new Map([["masterKey", p.keyAuxName]]);
+};
+
+export const speckKeyScheduleMeta: ProjectionMetadata = {
+  // Aux-only step — no state ports. `stateLayout: "bytes"` is the
+  // ceremonial value the type requires; the lift adapter never consults
+  // it because neither `stateInputPort` nor `stateOutputPort` is
+  // declared. Same pattern as AES key-expansion's meta (see
+  // `key-expansion.ts`).
+  stateLayout: "bytes",
+  auxReadPorts: speckKeyScheduleAuxReadPorts,
+  auxWritePorts: speckKeyScheduleAuxWritePorts,
+};
+
+export const speckKeySchedulePortContract: PortContract = {
+  // Static `inputs`: just the master key. No state input port —
+  // shapeContract is `input: "any"`. byteLength absent — varies with
+  // `m * wordBits / 8` across Speck variants.
+  inputs: new Map<string, PortShape>([["masterKey", { layout: "raw" }]]),
+  // Dynamic outputs: one port per round key, sized by `params.rounds`.
+  // Function form because the port count grows with the param. No state
+  // output port; the runtime preserves the caller's state across the
+  // ported call.
+  outputs: speckKeyScheduleOutputPorts,
 };

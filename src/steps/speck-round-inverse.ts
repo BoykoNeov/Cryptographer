@@ -18,7 +18,14 @@
  * the reverse-order consumption.
  */
 
-import type { BytesState, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  BytesState,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 import {
   type SpeckByteOrder,
   decodeBlock,
@@ -165,4 +172,34 @@ const readParams = (params: Json): Params => {
     wordBits: p.wordBits as number,
     byteOrder: readByteOrder(params, "speck.round-inverse"),
   };
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.6) ───────────────
+// Mirror of `speckRoundMeta` — same port shape, opposite math direction.
+// State-bearing, single round-key aux read. Decrypt specs wire
+// `params.roundKeyAux` to roundKey.21, .20, …, .0 (reverse consumption
+// order); the metadata's per-leaf `auxReadPorts` resolves each leaf's
+// specific aux key independently.
+//
+// All three concerns (state layout, byteLength polymorphism, aux read
+// binding) match `speck.round` exactly — keeping the encrypt / decrypt
+// pair shaped identically across the contract surface is the natural
+// outcome of them being math inverses over the same data layout.
+
+export const speckRoundInverseMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+  auxReadPorts: (params: Json) => {
+    const { roundKeyAux } = readParams(params);
+    return new Map([["roundKey", roundKeyAux]]);
+  },
+};
+
+export const speckRoundInversePortContract: PortContract = {
+  inputs: new Map([
+    ["state", { layout: "raw" }],
+    ["roundKey", { layout: "raw" }],
+  ]),
+  outputs: new Map([["state", { layout: "raw" }]]),
 };

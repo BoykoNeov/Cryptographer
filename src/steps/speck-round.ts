@@ -19,7 +19,14 @@
  * beta=2`; Speck64/128 would set `wordBits=32, alpha=8, beta=3`; etc.
  */
 
-import type { BytesState, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  BytesState,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 import {
   type SpeckByteOrder,
   decodeBlock,
@@ -161,4 +168,52 @@ const readParams = (params: Json): Params => {
     wordBits: p.wordBits as number,
     byteOrder: readByteOrder(params, "speck.round"),
   };
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.6) ───────────────
+// State-bearing ARX round. Reads a single round-key word from
+// `aux[roundKeyAux]` (a Uint8Array of `wordBits/8` bytes, byte-encoded
+// per `byteOrder`) and transforms a 2-word `bytes`-shape state into a
+// new 2-word block.
+//
+// **`stateLayout: "bytes"`** — Speck blocks are flat `BytesState`s
+// (4 bytes for Speck32/64, 8 for Speck64/128, …). Reusing the
+// `bytes`-shape layout is the simplest route — the lift adapter's
+// `stateToBytes`/`bytesToState` already handle `bytes` shape with no
+// length constraint.
+//
+// **byteLength absent on state + aux-read ports** — Speck variants vary
+// the block size (`2 * wordBits / 8`) and the round-key size
+// (`wordBits / 8`). Polymorphic byteLength (Slice 1.2 user pick) keeps
+// the contract honest across variants without baking Speck32/64's
+// specific numbers in. Same reasoning Slice 1.4 applied to AES
+// key-expansion's `masterKey` port.
+//
+// **Aux read binding `roundKey`** — a per-leaf binding to whatever
+// `params.roundKeyAux` names (e.g. `roundKey.5` for the 6th round).
+// Function form because every leaf names a different round-key entry;
+// the binding can only be resolved with `params` in hand. Insertion
+// order matches the legacy executor's `auxReads: [p.roundKeyAux]`
+// declaration exactly (one entry).
+
+export const speckRoundMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+  auxReadPorts: (params: Json) => {
+    const { roundKeyAux } = readParams(params);
+    return new Map([["roundKey", roundKeyAux]]);
+  },
+};
+
+export const speckRoundPortContract: PortContract = {
+  // byteLength absent on both state and aux ports — polymorphic across
+  // Speck variants. layout "raw" on the aux input → the live aux value
+  // is already a Uint8Array (written by speck.key-schedule); decode is
+  // identity. The state ports carry the flat `bytes` shape.
+  inputs: new Map([
+    ["state", { layout: "raw" }],
+    ["roundKey", { layout: "raw" }],
+  ]),
+  outputs: new Map([["state", { layout: "raw" }]]),
 };

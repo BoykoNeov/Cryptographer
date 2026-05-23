@@ -478,16 +478,53 @@ preservation in aux-passthrough steps), not a mid-slice patch. Test
 block `it.skip`d with rationale; unskipping is the gate for the
 variant-preserving slice (1.5b or 1.6-prereq).
 
-### Slice 1.6 — Speck lifted
+### Slice 1.6 — Speck lifted — **GREEN 2026-05-23**
 
 Step types: `speck.key-schedule@1`, `speck.round@1`,
 `speck.round-inverse@1`.
 
-`bytes` state shape (4-byte Speck32/64 blocks). Key-schedule is
-one-to-many writer per Decision B.
+`bytes` state shape (4-byte Speck32/64 blocks; polymorphic `byteLength`
+on state + aux-read ports to cover variant differences — Speck64/128
+would carry 8-byte blocks under the same step code). Key-schedule is
+the SECOND one-to-many writer in the universal-port migration (after
+AES key-expansion in Slice 1.4): **22 output ports for Speck32/64**
+(`key0` … `key21`) sized by `params.rounds` via the function-form
+`PortContract.outputs` already validated in Slice 1.4. Unlike AES
+key-expansion which writes `Nr+1` round keys (initial AddRoundKey + one
+per round), Speck writes EXACTLY `rounds` keys — `k_0 … k_{rounds-1}`,
+one per round consumed in spec leaf order. The Decision B
+port-per-roundkey shape carries over verbatim; the user re-confirmed at
+Speck's 22-port count before Slice 1.6 started.
 
-**Gate:** Speck32/64 KATs pass under both BE-paper and LE-NSA byte
-conventions.
+**Three port-shape decisions landed mid-slice (all flow from Slice 1.2
+/ 1.4 precedents, no new contract evolution):**
+
+1. **`stateLayout: "bytes"`** on round + round-inverse — Speck blocks
+   are flat `BytesState`s, reusing the existing `bytes`-shape encoding
+   in `port-projection.ts::stateToBytes`. No new layout token needed.
+2. **Polymorphic `byteLength`** (absent) on every state + aux port
+   that varies with Speck variant — block size = `2 × wordBits / 8`,
+   round-key size = `wordBits / 8`, master-key size = `m × wordBits / 8`.
+   The Slice 1.2 user pick (polymorphic over sentinel-0) covers this
+   without per-variant numbers baked into the contract. Mirrors AES
+   key-expansion's `masterKey` polymorphism.
+3. **Aux-only key-schedule** — `stateInputPort` and `stateOutputPort`
+   OMITTED. Same pattern as Slice 1.4's AES key-expansion: the lift
+   adapter creates a sentinel zero-length `bytes` state for the legacy
+   executor's ceremonial `state` arg, the runtime preserves the
+   caller's actual state across the call so the next leaf
+   (`speck.round@1`) sees its incoming 4-byte block unchanged.
+
+**Gate (achieved):** 1667 tests green (1657 prior + 10 new in
+`tests/runtime-ported-dispatch-speck.test.ts`). Beaulieu et al. 2013
+Table 4.1 KAT sanity floors green under `portedDispatchEnabled: true`
+for all four cipher specs (BE-paper encrypt + LE-NSA encrypt + BE-paper
+decrypt + LE-NSA decrypt). Frame-by-frame byte parity green across all
+four 23-frame traces. Map insertion order on the 22 Speck32/64 round
+keys pinned (`roundKey.0` … `roundKey.21` in order). Per-primitive
+synthetic spec (key-schedule + one round) pins the lift in isolation.
+Aux-copy variant gap (Open #2) stays deferred — no Speck spec uses
+aux-copy, the `it.skip` from Slice 1.5 still tracks the latent debt.
 
 ### Slice 1.7 — Serpent lifted (depends on Slice 1.0)
 

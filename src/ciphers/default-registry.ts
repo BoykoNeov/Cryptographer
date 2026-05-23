@@ -85,9 +85,24 @@ import {
 } from "../steps/serpent-linear-transform";
 import { serpentSubBytes, serpentSubBytesDoc } from "../steps/serpent-sub-bytes";
 import { shiftRows, shiftRowsDoc, shiftRowsMeta, shiftRowsPortContract } from "../steps/shift-rows";
-import { speckKeySchedule, speckKeyScheduleDoc } from "../steps/speck-key-schedule";
-import { speckRound, speckRoundDoc } from "../steps/speck-round";
-import { speckRoundInverse, speckRoundInverseDoc } from "../steps/speck-round-inverse";
+import {
+  speckKeySchedule,
+  speckKeyScheduleDoc,
+  speckKeyScheduleMeta,
+  speckKeySchedulePortContract,
+} from "../steps/speck-key-schedule";
+import {
+  speckRound,
+  speckRoundDoc,
+  speckRoundMeta,
+  speckRoundPortContract,
+} from "../steps/speck-round";
+import {
+  speckRoundInverse,
+  speckRoundInverseDoc,
+  speckRoundInverseMeta,
+  speckRoundInversePortContract,
+} from "../steps/speck-round-inverse";
 import { splitBlocks, splitBlocksDoc } from "../steps/split-blocks";
 import {
   stateToAux,
@@ -351,9 +366,41 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // the UI (BE-paper and LE-NSA byte orders), but the step code is one
   // copy parametric on `byteOrder`. The conventions compute the same
   // word-level cipher; only byte serialization at the boundary differs.
-  r.register("speck.key-schedule@1", { executor: speckKeySchedule, doc: speckKeyScheduleDoc });
-  r.register("speck.round@1", { executor: speckRound, doc: speckRoundDoc });
-  r.register("speck.round-inverse@1", { executor: speckRoundInverse, doc: speckRoundInverseDoc });
+  //
+  // **Slice 1.6 (universal port-dataflow Phase 1)** — all three Speck
+  // step types lift as `kind: "ported"` with colocated metadata per
+  // Decision C. Key-schedule is the SECOND one-to-many writer in the
+  // migration (after AES key-expansion in Slice 1.4): port-per-roundkey
+  // per Decision B, with `outputs(params)` in function form sized by
+  // `params.rounds` (22 ports for Speck32/64, vs AES-128's 11). The
+  // round + round-inverse step types are state-bearing single-aux-read
+  // — same shape as `aes.add-round-key@1`, but `stateLayout: "bytes"`
+  // with polymorphic byteLength to cover variant differences (block
+  // size = 2 × wordBits / 8 bytes).
+  r.register("speck.key-schedule@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(speckKeySchedule, speckKeyScheduleMeta),
+    legacy: speckKeySchedule,
+    shape: speckKeySchedulePortContract,
+    meta: speckKeyScheduleMeta,
+    doc: speckKeyScheduleDoc,
+  });
+  r.register("speck.round@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(speckRound, speckRoundMeta),
+    legacy: speckRound,
+    shape: speckRoundPortContract,
+    meta: speckRoundMeta,
+    doc: speckRoundDoc,
+  });
+  r.register("speck.round-inverse@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(speckRoundInverse, speckRoundInverseMeta),
+    legacy: speckRoundInverse,
+    shape: speckRoundInversePortContract,
+    meta: speckRoundInverseMeta,
+    doc: speckRoundInverseDoc,
+  });
   // ─── Serpent (AES-finalist SP-network, third cipher family) ────────────
   // Six step types: key expansion, a single bit-permutation step used as
   // both IP and FP (table-driven), AddRoundKey, a bitsliced 4-bit SubBytes
