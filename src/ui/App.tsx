@@ -48,6 +48,7 @@ import {
   Match,
   Show,
   Switch,
+  batch,
   createEffect,
   createMemo,
   createSignal,
@@ -923,7 +924,32 @@ export const App = () => {
           mode
           <select
             value={mode()}
-            onChange={(e) => setMode(e.currentTarget.value as "encrypt" | "decrypt")}
+            onChange={(e) => {
+              // UX-H 2026-05-23 — When flipping mode, copy the
+              // just-computed output into the input field so the user
+              // doesn't see decrypt re-run on the stale plaintext
+              // (computing it AS ciphertext) and produce a nonsense
+              // result until they manually paste the previous output.
+              // Symmetric: encrypt→decrypt copies the ciphertext in;
+              // decrypt→encrypt copies the recovered plaintext in.
+              // The IV is intentionally left alone per the plan note —
+              // CBC-IV is a separate axis the user may want to keep or
+              // edit independently of the mode flip.
+              //
+              // Captured BEFORE the mode change so we get the previous
+              // mode's output (the value the user actually sees in the
+              // result row right now), not whatever the new mode's
+              // re-run produces. `batch` ensures the spec rebuild for
+              // the new mode and the input swap land in one Solid
+              // update cycle, avoiding a flicker where decrypt
+              // momentarily runs on the encrypt-mode input.
+              const newMode = e.currentTarget.value as "encrypt" | "decrypt";
+              const swapText = outputText();
+              batch(() => {
+                setMode(newMode);
+                if (swapText) setInputText(swapText);
+              });
+            }}
           >
             <option value="encrypt">encrypt</option>
             <option value="decrypt">decrypt</option>
@@ -1060,7 +1086,17 @@ export const App = () => {
             </button>
           </div>
         </fieldset>
-        <label>
+        {/* UX-I 2026-05-23 — Data fields (input/key/IV/result) carry
+            the `data-field` class so CSS can force each onto its own
+            full-width row inside the wrapping flex container. The
+            settings dropdowns above (mode/cipher/mode-of-op/padding/
+            bytes) keep the old wrap-row behavior and continue to share
+            row(s) at the top; the data fields stack vertically below;
+            the action buttons wrap into the row(s) below that. Visual
+            sequence becomes "what-I-edit → key → IV(opt) → result",
+            each on its own line — matches the user's mental model of
+            "thing-I-edit, key, what-came-out." */}
+        <label class="data-field">
           {inputLabel()} ({fmt()})
           <input
             value={inputText()}
@@ -1068,7 +1104,7 @@ export const App = () => {
             spellcheck={false}
           />
         </label>
-        <label>
+        <label class="data-field">
           key ({fmt()})
           <input
             value={keyText()}
@@ -1080,9 +1116,13 @@ export const App = () => {
             from the iv store is replaced by NIST §F's standard test
             vector so the first-impression CBC run against the §F sample
             plaintext matches the published §F.2.1 ciphertext. The
-            randomize button uses crypto.getRandomValues. */}
+            randomize button uses crypto.getRandomValues. Wrapped in a
+            `data-field` div so the IvInput's own `<label>` root doesn't
+            need a class hook — the wrapper carries the full-row layout. */}
         <Show when={cipherMode() === "cbc"}>
-          <IvInput format={fmt()} />
+          <div class="data-field">
+            <IvInput format={fmt()} />
+          </div>
         </Show>
         {/* Result line sits adjacent to plaintext/key in the inputs row
             (was previously below the button strip — Phase 6e smoke
@@ -1092,9 +1132,21 @@ export const App = () => {
             "plaintext" in decrypt mode (`outputLabel()` derives from
             `mode()`), so the result row mirrors whichever input is
             currently the cipher's output. */}
+        {/* UX-J 2026-05-23 — Result renders as label-above-code (a
+            flex column), mirroring the input + key fields' `<label>`
+            stack. Previously the row read inline as
+            "ciphertext (hex): <code>...</code>", which made the result
+            visually look like a different KIND of thing (caption-with-
+            value) from the input fields next to it (label-above-input).
+            Now the trio of (input, key, result) shares one visual
+            grammar, reinforcing that the result is the third member of
+            the same data row — just on the output side. */}
         <Show when={!error() && outputText()}>
-          <div class="result inputs-result">
-            {outputLabel()} ({fmt()}): <code>{outputText()}</code>
+          <div class="result inputs-result data-field">
+            <span class="result-label">
+              {outputLabel()} ({fmt()})
+            </span>
+            <code>{outputText()}</code>
           </div>
         </Show>
         <button type="button" onClick={run}>

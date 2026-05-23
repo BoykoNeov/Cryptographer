@@ -104,26 +104,20 @@ describe("App — multi-block ECB round-trip (Phase 1)", () => {
     // and printable-byte rendering; we round-trip below to verify correctness).
     expect(container.querySelector(".result code")).toBeTruthy();
 
-    // 7. Switch to decrypt mode.
+    // 7. Switch to decrypt. UX-H (2026-05-23) auto-swap copies the
+    // just-computed ciphertext into the input field — no manual paste
+    // needed. The format flip + manual paste from the pre-UX-H version
+    // is now redundant.
     fireEvent.change(findSelectByLabel(container, "mode"), { target: { value: "decrypt" } });
 
-    // 8. Switch format to hex so we can paste the ciphertext deterministically.
-    fireEvent.click(findFormatButton(container, "hex"));
-    // Read the (now hex-formatted) ciphertext.
-    const ciphertextHex = container.querySelector(".result code")?.textContent?.trim();
-    expect(ciphertextHex).toBeTruthy();
-    if (!ciphertextHex) return;
-
-    // 9. Paste ciphertext into the input field (still in hex format).
-    setInputValue(findInputByLabel(container, "ciphertext"), ciphertextHex);
-
-    // 10. Run decrypt.
+    // 8. Run decrypt on the auto-swapped ciphertext. (The auto-rerun
+    // effect is debounced 200ms in production; tests trigger Run
+    // synchronously to avoid the wait.)
     fireEvent.click(findButton(container, "run"));
     const errAfterDecrypt = container.querySelector(".error");
     expect(errAfterDecrypt).toBeFalsy();
 
-    // 11. Switch back to ASCII to read the recovered plaintext.
-    fireEvent.click(findFormatButton(container, "ASCII"));
+    // 9. Read recovered plaintext (still in ASCII format from step 3).
     const recovered = container.querySelector(".result code")?.textContent?.trim();
     expect(recovered).toBe(PLAINTEXT);
   });

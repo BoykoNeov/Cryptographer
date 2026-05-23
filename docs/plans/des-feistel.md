@@ -292,16 +292,69 @@
 > ~~UX-D (pedagogy gap; every Feistel round)~~ → UX-G (visual bug;
 > visible the moment graph view is opened on DES) → UX-F (real UX
 > gap; resolution locked to path (a) per-leaf delete) →
-> **UX-H/I/J bundled** (all-ciphers inputs-row polish — one
+> ~~**UX-H/I/J bundled** (all-ciphers inputs-row polish — one
 > implementation pass touches the same section in `App.tsx` +
 > `app.css`, so batch them; UX-H is the behavior change, UX-I/J
-> are layout polish on the same surface) → UX-C (consistency
+> are layout polish on the same surface)~~ → UX-C (consistency
 > feature) → UX-A (polish) → UX-E (opt-in surface; nice-to-have,
 > defer until user-requested). UX-G promoted high because it's
 > visible on the default DES graph view with no user interaction.
 > UX-H/I/J bundled at single priority because they all live in the
 > same code path; splitting them would mean editing the same file
 > three times.
+>
+> **UX-H/I/J shipped 2026-05-23 as one commit.** All three changes
+> live in `App.tsx`'s `.inputs` section and the matching CSS in
+> `app.css:211-269`. After consulting the strategic-review framing
+> ("investment vs. churn under the universal-port rebuild"), these
+> bundled into the queue's next-priority slot because they're pure
+> investment — orthogonal to cipher architecture.
+>
+>   - **UX-H** — Mode-flip auto-swap. The mode `<select>`'s
+>     `onChange` now captures `outputText()` BEFORE switching mode
+>     and `batch`es `setMode(newMode) + setInputText(swapText)` so
+>     the next trace runs on the swapped value, not the stale one.
+>     `batch` keeps the spec rebuild and the input change in one
+>     Solid update cycle, avoiding a flicker where decrypt
+>     momentarily runs on the encrypt-mode input. IV is intentionally
+>     left alone per the plan note. Skips when `outputText()` is null
+>     (degenerate case where no trace has produced output). Regression
+>     test: `tests/app-mode-flip-autoswap.test.tsx` — three cases
+>     covering encrypt→decrypt swap, decrypt→encrypt symmetry, and
+>     the no-output skip edge.
+>     - Side effect: `tests/app-multi-block-roundtrip.test.tsx` had
+>       the OLD "flip mode, paste ciphertext" pattern. After UX-H
+>       the explicit paste step is redundant (and the format-flip-
+>       read-result step reads the decrypted plaintext instead of
+>       the ciphertext because auto-rerun has already happened).
+>       Simplified the test: flip mode → run → read recovered. The
+>       padding-roundtrip + iso7816-4-roundtrip tests still pass
+>       unchanged because they read the ciphertext from `.result
+>       code` BEFORE the flip (the auto-swap then overlaps with the
+>       redundant manual paste, no behavior change).
+>
+>   - **UX-I** — Vertical stacking. Added a `data-field` class to the
+>     input label, key label, and a wrapper div around the IvInput.
+>     CSS rule `.inputs > .data-field, .inputs > label.data-field
+>     { flex: 0 0 100% }` forces each data field onto its own row
+>     within the wrapping flex container. Settings dropdowns (mode,
+>     cipher, mode-of-op, padding, bytes) keep their default `flex:
+>     0 1 auto` and share the top row(s) as before; action buttons
+>     wrap into the row(s) below the data stack.
+>
+>   - **UX-J** — Result label-above-code. Restructured the result
+>     `<div>` from inline `"ciphertext (hex): <code>...</code>"`
+>     into a flex-column with `<span class="result-label">` above
+>     `<code>`. New CSS: `.inputs .inputs-result` becomes
+>     `display: flex; flex-direction: column; gap: 4px`. The
+>     `.result code` rule got `align-self: flex-start` (so the code
+>     pill sizes to content, not the row) and `max-width: 100%;
+>     overflow-wrap: anywhere` (so multi-block ciphertexts wrap
+>     instead of overflowing). The result trio (label → code-box)
+>     now mirrors the input/key fields' label-above-input stack.
+>
+> Gate: biome ci + tsc --noEmit + vitest 1600/1600 + vite build all
+> clean.
 >
 > **Future ideas — NOT in the post-walk queue:**
 > - Drag-leaf-back-to-palette as a complementary deletion gesture

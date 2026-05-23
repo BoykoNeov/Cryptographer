@@ -217,10 +217,25 @@ button:disabled {
    result`) below the inputs section. Moved 2026-05-20 into `.inputs`
    so it sits next to plaintext/key in the user's visual neighbourhood.
    Force a full-width row so it wraps to its own line rather than
-   squeezing in between the key input and the action buttons. */
+   squeezing in between the key input and the action buttons. The
+   flex-column + gap rules below are UX-J's label-above-code stack —
+   visually mirrors the .inputs label > input shape so the result
+   reads as the same kind of thing as the input fields above it. */
 .inputs .inputs-result {
   flex: 0 0 100%;
   align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* UX-J 2026-05-23 — label styling for the result row. Matches
+   `.inputs label`'s muted 12px label so the result trio (label →
+   code-box) lines up with the input/key fields' label-above-input
+   stack just above. */
+.result-label {
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .result code {
@@ -228,6 +243,26 @@ button:disabled {
   background: var(--bg-elev);
   padding: 2px 6px;
   border-radius: 3px;
+  /* In a flex-column parent (UX-J), the code block would otherwise
+     stretch to the row's full width. align-self keeps it sized to
+     content like a value pill — the row's whitespace is on the right,
+     not inside the box. */
+  align-self: flex-start;
+  /* Long outputs (multi-block ciphertexts, e.g. CBC 64-byte hex)
+     would overflow the page width if displayed on one line; wrap. */
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+/* UX-I 2026-05-23 — Data fields (input/key/IV/result) take the full
+   row inside `.inputs`'s wrap-flex so they stack vertically below the
+   settings strip. Settings dropdowns (`mode`, `cipher`, etc.) keep
+   their default `flex: 0 1 auto` and share the top row(s); the data
+   fields here break to their own lines; the action buttons wrap
+   below. */
+.inputs > .data-field,
+.inputs > label.data-field {
+  flex: 0 0 100%;
 }
 
 .trace-timeline {
