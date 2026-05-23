@@ -66,6 +66,16 @@ import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, Json, TraceFrame } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
+// ─── Slice 1.0 — Dynamic-N aux-write round-trip ─────────────────────────
+//
+// Why this lives alongside Q-gate-9 (and not its own file): the round-trip
+// machinery exercised here (project / reconstruct / structuredClone barrier
+// / expectFrameByteEqual) is identical; the new thing is that the
+// `auxWritePorts(params)` function returns a port-count sized by
+// `params.rounds`, validating Decision B (port-per-roundkey) for the five
+// key-schedule step types Slices 1.4–1.8 will lift. Phase 0 only had
+// static single-binding metadata.
+
 // FIPS-197 Appendix B test vectors. The fixture data is not important
 // for what's being tested (we're checking byte-identity round-trip, not
 // cipher correctness — that's the job of `aes-vectors.test.ts`). Real
@@ -270,6 +280,170 @@ describe("port-projection — Q-gate-9 round-trip (Phase 0 load-bearing)", () =>
       expect(auxKey?.startsWith("roundKey.")).toBe(true);
 
       expectFrameByteEqual(recovered, frame);
+    });
+  });
+
+  describe("aux-write round-trip — dynamic-N port count (Slice 1.0, Decision B)", () => {
+    // The first leaf in aes128Spec is `aes.key-expansion@1`. State is
+    // matrix4x4-bytes (the spec loads its initial state via matrixFromBytes
+    // before walking the spec); the executor leaves state unchanged
+    // ("preserveInput" shape contract). The aux writes are 11 entries
+    // (`roundKey.0` … `roundKey.10`) — that's the dynamic-N case the
+    // metadata's `auxWritePorts(params)` function must size by
+    // `params.rounds`. AES-192 / 256 would size to 13 / 15 respectively,
+    // and Speck (22) / Serpent (33) / DES (16) take the same shape.
+    const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
+      initialState: matrixFromBytes(bytesFromHex(FIPS_B_PLAINTEXT)),
+      initialAux: new Map<string, AuxValue>([["key", bytesFromHex(FIPS_B_KEY)]]),
+    });
+
+    // One-off metadata for AES key-expansion. Test-fixture only — Slice 1.4
+    // moves this to co-located metadata in src/steps/key-expansion.ts as
+    // part of the StepRegistration entry. The function shape on both
+    // auxReadPorts and auxWritePorts is mandatory: every leaf can have a
+    // different `keyAuxName` (read binding) and a different `outputPrefix`
+    // (write bindings), so static maps don't cut it.
+    const META_AES_KEY_EXPANSION: ProjectionMetadata = {
+      stateLayout: "matrix4x4-bytes",
+      stateInputPort: "state",
+      stateOutputPort: "state",
+      auxReadPorts: (params: Json) => {
+        if (typeof params !== "object" || params === null || Array.isArray(params)) {
+          throw new Error("aes.key-expansion projection: params must be an object");
+        }
+        const p = params as { keyAuxName?: unknown };
+        if (typeof p.keyAuxName !== "string") {
+          throw new Error("aes.key-expansion projection: params.keyAuxName: string required");
+        }
+        // Port name "masterKey" disambiguates the input from the per-round
+        // output ports (`key0`, `key1`, …) — naming a single input port
+        // `key` would conflict with the natural shape of the outputs.
+        return new Map([["masterKey", p.keyAuxName]]);
+      },
+      auxWritePorts: (params: Json) => {
+        if (typeof params !== "object" || params === null || Array.isArray(params)) {
+          throw new Error("aes.key-expansion projection: params must be an object");
+        }
+        const p = params as { outputPrefix?: unknown; rounds?: unknown };
+        if (typeof p.outputPrefix !== "string") {
+          throw new Error("aes.key-expansion projection: params.outputPrefix: string required");
+        }
+        if (typeof p.rounds !== "number" || !Number.isInteger(p.rounds) || p.rounds < 1) {
+          throw new Error("aes.key-expansion projection: params.rounds: positive integer required");
+        }
+        // N+1 round-key ports — one for the pre-round AddRoundKey plus one
+        // per round. Iteration in `r = 0..rounds` order; Map iteration
+        // preserves insertion order in JS, which the round-trip relies on
+        // to regenerate auxWritten in the original order (asserted below).
+        const bindings = new Map<string, string>();
+        for (let r = 0; r <= p.rounds; r++) {
+          bindings.set(`key${r}`, `${p.outputPrefix}.${r}`);
+        }
+        return bindings;
+      },
+    };
+
+    const KEY_EXPANSION_FRAME = findFirstFrame(trace.frames, "aes.key-expansion@1");
+
+    it("projects 11 output ports + 1 input port for AES-128 (rounds=10)", () => {
+      const { frame: ported, tags } = project(KEY_EXPANSION_FRAME, META_AES_KEY_EXPANSION);
+
+      // 1 state output port + 11 round-key output ports.
+      expect(ported.outputs.size).toBe(12);
+      expect(ported.outputs.has("state")).toBe(true);
+      for (let r = 0; r <= 10; r++) {
+        expect(ported.outputs.has(`key${r}`)).toBe(true);
+      }
+
+      // 1 state input port + 1 master-key input port.
+      expect(ported.inputs.size).toBe(2);
+      expect(ported.inputs.has("state")).toBe(true);
+      expect(ported.inputs.has("masterKey")).toBe(true);
+
+      // Each round-key output port carries exactly 16 bytes (AES round
+      // key length). Belt-and-braces against a future projection refactor
+      // that drops the byte payload while leaving the port name in place.
+      for (let r = 0; r <= 10; r++) {
+        expect(ported.outputs.get(`key${r}`)?.length).toBe(16);
+      }
+
+      // Tags carry both binding sides; sizes match the port counts so
+      // reconstruction can rebuild auxRead + auxWritten exactly.
+      expect(tags.auxInputBindings).toBeDefined();
+      expect(tags.auxInputBindings?.size).toBe(1);
+      expect(tags.auxInputBindings?.get("masterKey")).toBe("key");
+
+      expect(tags.auxOutputBindings).toBeDefined();
+      expect(tags.auxOutputBindings?.size).toBe(11);
+      for (let r = 0; r <= 10; r++) {
+        expect(tags.auxOutputBindings?.get(`key${r}`)).toBe(`roundKey.${r}`);
+      }
+    });
+
+    it("round-trips byte-for-byte (all 11 round keys recover exact bytes)", () => {
+      const { frame: ported, tags } = project(KEY_EXPANSION_FRAME, META_AES_KEY_EXPANSION);
+      // structuredClone barrier — same anti-trivial discipline as the
+      // single-binding Phase-0 round-trips. Particularly important here
+      // because tags.auxOutputBindings is a ReadonlyMap<string, string>
+      // with 11 entries; a clone failure would surface as a structurally
+      // identical but reference-different map, and the round-trip would
+      // still pass — that's the desired property (the test passes through
+      // a clone-equivalent representation, exercising "tags carry data
+      // not references").
+      const recovered = reconstruct(ported, structuredClone(tags));
+      expectFrameByteEqual(recovered, KEY_EXPANSION_FRAME);
+
+      // The whole-frame expectFrameByteEqual above subsumes the per-key
+      // check, but a dedicated per-key assertion gives a localizable
+      // failure if the round-trip ever regresses — "auxWritten[roundKey.7]
+      // bytes mismatch" is a sharper signal than "auxWritten maps differ".
+      expect(recovered.auxWritten.size).toBe(11);
+      for (let r = 0; r <= 10; r++) {
+        const recoveredKey = recovered.auxWritten.get(`roundKey.${r}`);
+        const originalKey = KEY_EXPANSION_FRAME.auxWritten.get(`roundKey.${r}`);
+        expect(recoveredKey).toBeInstanceOf(Uint8Array);
+        expect(originalKey).toBeInstanceOf(Uint8Array);
+        expect(Array.from(recoveredKey as Uint8Array)).toEqual(
+          Array.from(originalKey as Uint8Array),
+        );
+      }
+    });
+
+    it("preserves auxWritten Map insertion order across the round-trip", () => {
+      // Map iteration is insertion-ordered in JS. Consumers walking
+      // auxWritten (e.g., the round-key panel that lays out `key0` …
+      // `keyN` left-to-right; narration that says "the 11 round keys
+      // are produced in this order") depend on this. The reconstruction
+      // path iterates `tags.auxOutputBindings` in its insertion order
+      // to rebuild auxWritten — if that order ever diverges from the
+      // legacy frame's, the visual / narrated order changes silently.
+      const { frame: ported, tags } = project(KEY_EXPANSION_FRAME, META_AES_KEY_EXPANSION);
+      const recovered = reconstruct(ported, structuredClone(tags));
+
+      const originalKeyOrder = [...KEY_EXPANSION_FRAME.auxWritten.keys()];
+      const recoveredKeyOrder = [...recovered.auxWritten.keys()];
+      expect(recoveredKeyOrder).toEqual(originalKeyOrder);
+    });
+
+    it("preserves the master-key auxRead binding name across the round-trip", () => {
+      // The input-port side of Decision B: round-trip must regenerate
+      // the legacy `key` aux key (NOT `masterKey`, which is the port
+      // name). The asymmetry between port-name (contract-level, stable)
+      // and aux-key (spec-leaf-level, varies) is exactly what the
+      // tags.auxInputBindings sidecar exists to preserve.
+      const { frame: ported, tags } = project(KEY_EXPANSION_FRAME, META_AES_KEY_EXPANSION);
+      const recovered = reconstruct(ported, structuredClone(tags));
+
+      expect(recovered.auxRead.size).toBe(1);
+      expect(recovered.auxRead.has("key")).toBe(true);
+      expect(recovered.auxRead.has("masterKey")).toBe(false);
+      const recoveredMaster = recovered.auxRead.get("key");
+      const originalMaster = KEY_EXPANSION_FRAME.auxRead.get("key");
+      expect(recoveredMaster).toBeInstanceOf(Uint8Array);
+      expect(originalMaster).toBeInstanceOf(Uint8Array);
+      expect(Array.from(recoveredMaster as Uint8Array)).toEqual(
+        Array.from(originalMaster as Uint8Array),
+      );
     });
   });
 
