@@ -3205,6 +3205,46 @@ export const GraphView = () => {
             });
             continue;
           }
+          // UX-K (2026-05-23) — Populated track that ALSO has a
+          // passthrough chip (the R-bypass case in DES rounds 1..15
+          // under `feistel-standard`). The chip sits at the head of
+          // the column representing R_in's flow to rejoin; without a
+          // dedicated gutter over its box, drags on the chip fall
+          // through to the round container's outer drop-anchor and
+          // silently insert AFTER the round in its parent — not what
+          // the user expects. Emit an `into-track-start:${roundId}#${t}`
+          // gutter over EXACTLY the passthrough's box so drops there
+          // prepend to the track (same kind/encoding as the empty-
+          // track sentinel above; `insertStepIntoSpec`'s into-track-
+          // start branch handles both cases uniformly via
+          // `prependChildToTrack`). The chain becomes
+          // `predecessor → chip → new-leaf → expand-R → ...`; the
+          // bypass `chip → rejoin` arrow keeps its R_in semantic
+          // because `params.R_in` on the rejoin frame still reflects
+          // the round's input value regardless of what's at the head
+          // of the R-track. The chip's `isDropTargetActive` highlight
+          // keys off the same gutter id, so the chip visually lights
+          // up during the drag just like the L-passthrough does.
+          //
+          // No overlap with the at-start strip below: passthrough box
+          // sits at colTop with LEAF_H=28 height; expand-R starts at
+          // colTop+LEAF_H+STACK_GAP=colTop+40; the at-start strip
+          // anchors at expand-R.y - CONTAINER_PAD = colTop+30. So
+          // the passthrough gutter ends at colTop+28 and the at-
+          // start strip begins at colTop+30 — a clean 2px gap.
+          {
+            const ptBox = lay.boxes.get(`${container.id}:passthrough-${t}`);
+            if (ptBox) {
+              out.push({
+                id: `into-track-start:${container.id}#${t}`,
+                orientation: "horizontal",
+                x: ptBox.x,
+                y: ptBox.y,
+                w: ptBox.w,
+                h: ptBox.h,
+              });
+            }
+          }
           // Populated track — emit at-start / between / at-end strips.
           // Sort defensively by y in case the spec's track order ever
           // diverges from layout's y-order (it shouldn't today).
@@ -5009,6 +5049,21 @@ export const GraphView = () => {
                   // chip "disappear" with no warning, surfaced as
                   // finding B in the user's manual smoke pass.
                   const expectedGutterId = `into-track-start:${parentRoundId}#${trackIdx}`;
+                  // UX-K (2026-05-23) — Tooltip text varies on whether
+                  // the track currently has real (non-passthrough)
+                  // children. Empty track ⇒ drop replaces the chip
+                  // (L-track in DES); populated track ⇒ drop prepends
+                  // and the chip stays (R-bypass in DES rounds 1..15).
+                  // Read the parent container's `feistelTracks[trackIdx]`
+                  // (which includes the synthetic passthrough id) and
+                  // count entries that DON'T match `:passthrough-${t}$`
+                  // to detect the case.
+                  const dropMode = createMemo<"replace" | "prepend">(() => {
+                    const c = containersById().get(parentRoundId);
+                    const trackIds = c?.feistelTracks?.[trackIdx] ?? [];
+                    const realCount = trackIds.filter((id) => !id.includes(":passthrough-")).length;
+                    return realCount === 0 ? "replace" : "prepend";
+                  });
                   return (
                     <Show when={ptBox()}>
                       {(b) => (
@@ -5018,6 +5073,7 @@ export const GraphView = () => {
                           trackLabel={trackLabel()}
                           isSelected={selectedTarget() !== null && isNodeSelected(ptStepId)}
                           isDropTargetActive={dragOverGutterId() === expectedGutterId}
+                          dropMode={dropMode()}
                           onClick={() => {
                             // Scrub to the round's rejoin frame
                             // (passthrough has no frame). Inspector
@@ -5894,6 +5950,17 @@ const PassthroughChip = (props: {
    * passthrough" with no warning.
    */
   isDropTargetActive: boolean;
+  /**
+   * What kind of drop semantic applies to this chip. `"replace"` is
+   * the empty-track case (L-track in DES): drop populates the track
+   * and the passthrough chip disappears because the track is no
+   * longer empty. `"prepend"` is the populated-track case (R-track
+   * in DES feistel-standard rounds 1..15, UX-K 2026-05-23): drop
+   * prepends a new leaf to the track but the passthrough chip
+   * itself stays because the R-bypass narrative still applies. The
+   * tooltip varies so the user knows which outcome to expect.
+   */
+  dropMode: "replace" | "prepend";
 }) => (
   <g
     class="graph-leaf graph-leaf-passthrough"
@@ -5918,7 +5985,9 @@ const PassthroughChip = (props: {
       {props.stepId}
       {"\n"}passthrough — track carries input through unchanged
       {props.isDropTargetActive
-        ? "\n\nDrop here to populate this track. The passthrough will be replaced by the new step."
+        ? props.dropMode === "replace"
+          ? "\n\nDrop here to populate this track. The passthrough will be replaced by the new step."
+          : "\n\nDrop here to insert a step at the head of this track. The passthrough chip stays — it still represents the input value flowing to rejoin."
         : ""}
     </title>
     <rect

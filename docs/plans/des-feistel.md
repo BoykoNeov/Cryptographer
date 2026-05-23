@@ -369,6 +369,73 @@
 > Backspace removes it." The shipped code is Delete-only by deliberate
 > earlier choice; future work could revisit if user feedback suggests
 > the Backspace binding is missed.
+
+> **UX-K shipped 2026-05-23 — R-passthrough drop accepts palette
+> items (prepend to R-track).** Surfaced during the same-day manual
+> browser smoke after UX-F shipped: dragging a palette item onto the
+> R-passthrough chip (DES rounds 1..15 under `feistel-standard`) did
+> nothing useful. The R-track was populated, so the gutter-emission
+> code at `GraphView.tsx:3208+` fell into the at-start/between/at-end
+> strip branch and emitted strips ONLY between the REAL chips
+> (expand-R..p-permute). The R-passthrough chip's visible footprint
+> had no gutter, so drops on it fell through to the round
+> container's outer `data-drop-anchor`, which Slice 8 semantics
+> treats as "insert AFTER the round in its parent" — a step ended
+> up in the `rounds` group between round.N and round.N+1, NOT in
+> the R-track. Asymmetric with the L-passthrough drop (which
+> populates the empty track).
+>
+> Fix: emit an additional `into-track-start:${roundId}#${trackIdx}`
+> gutter over EXACTLY the R-passthrough chip's box BEFORE the
+> at-start strip emission, when the layout has a passthrough chip
+> for the track. Same encoding as the empty-track sentinel — the
+> `handleDrop` `into-track-start` branch routes to
+> `prependChildToTrack` via `insertStepIntoSpec`, so no drop-handler
+> changes needed. The geometry doesn't overlap the at-start strip:
+> passthrough box ends at `colTop + LEAF_H = colTop + 28`; at-start
+> strip begins at `expand-R.y - CONTAINER_PAD = colTop + 30` (a
+> clean 2-pixel gap).
+>
+> Visual + tooltip differentiation: `PassthroughChip` gained a
+> `dropMode: "replace" | "prepend"` prop. The call site computes
+> the mode by reading `feistelTracks[trackIdx]` from the container
+> and counting non-passthrough ids — zero = empty track = replace
+> (L-track in DES); non-zero = populated track = prepend (R-track
+> in DES rounds 1..15). The tooltip text varies accordingly:
+>
+>   - **replace** (L-track): "Drop here to populate this track. The
+>     passthrough will be replaced by the new step."
+>   - **prepend** (R-track): "Drop here to insert a step at the head
+>     of this track. The passthrough chip stays — it still
+>     represents the input value flowing to rejoin."
+>
+> Pedagogical correctness of the prepend semantic: after the drop,
+> the R-track becomes `[new-leaf, expand-R, xor-K, s-boxes, p-permute]`,
+> and `processFeistelRound`'s chain becomes
+> `predecessor → chip → new-leaf → expand-R → ... → rejoin`. The
+> chip's outgoing edges (`chip → trackFirst (now new-leaf)` and
+> `chip → rejoin`) still resolve to the 4-byte R_in via
+> `lookupPassthroughBytes` (which keys off `params.R_in` on the
+> rejoin frame — that value is the round's INPUT R, unchanged by
+> what's at the head of the R-track). The bypass arrow still
+> correctly represents the Feistel swap (`new_L = R_in`); the new
+> leaf processes R_in before the F-stack begins.
+>
+> Tests: 4 new in `tests/graph-view-feistel-drop-gutters.test.tsx`
+> under "UX-K — R-passthrough chip drop gutter (populated R-track)":
+> sentinel emission for rounds 1..15, NOT for round 16 (no
+> R-passthrough under `feistel-no-swap`), drop dispatch prepends at
+> R-track index 0, and the at-start strip for `before:expand-R`
+> coexists alongside the new sentinel. 1608/1608 tests pass after
+> these land (was 1604 after UX-F).
+>
+> Round 16 (`feistel-no-swap`): no R-passthrough chip exists per
+> the UX-D candidate (b) gating (`combineKind === "feistel-standard"`
+> AND R-track populated), so the gutter-emission `lay.boxes.get(
+> ':passthrough-1')` check returns `undefined` and the additional
+> sentinel isn't emitted. Round 16's R-track drops still use the
+> standard before/between/after strips between the 4 real chips,
+> unchanged.
 >
 > **UX-H/I/J shipped 2026-05-23 as one commit.** All three changes
 > live in `App.tsx`'s `.inputs` section and the matching CSS in

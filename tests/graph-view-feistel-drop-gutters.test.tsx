@@ -216,4 +216,77 @@ describe("GraphView — feistel per-track drop gutters (6d-v)", () => {
       expect(container.querySelector(`[data-drop-gutter="after:round.${n}:rejoin"]`)).toBeNull();
     }
   });
+
+  // UX-K (2026-05-23) — Surfaced during the manual browser smoke pass
+  // after UX-F shipped: dragging a palette item onto the R-passthrough
+  // chip (DES rounds 1..15 under feistel-standard) did nothing useful,
+  // because the populated-track gutter emission only covered the REAL
+  // chips' before/between/after strips — the R-passthrough chip's
+  // visible footprint had no gutter at all, so drops fell through to
+  // the round container's outer drop-anchor and silently inserted
+  // AFTER the round in its parent. Asymmetric with the L-passthrough
+  // drop semantic (which populates the empty track). Fix emits an
+  // `into-track-start:${roundId}#1` gutter over the R-passthrough
+  // chip's box too; drops prepend to the R-track without removing the
+  // chip (the chip still represents R_in's bypass flow regardless of
+  // what's at the head of the R-track).
+  describe("UX-K — R-passthrough chip drop gutter (populated R-track)", () => {
+    it("emits an into-track-start sentinel over the R-passthrough chip for rounds 1..15", () => {
+      const { container } = render(() => <GraphView />);
+      // Rounds 1..15 carry the R-bypass passthrough (feistel-standard).
+      for (let n = 1; n <= 15; n++) {
+        const encoding = `into-track-start:round.${n}#1`;
+        const gutters = container.querySelectorAll(`[data-drop-gutter="${encoding}"]`);
+        // ≥1 because the same encoding could be emitted once (over the
+        // passthrough box). We only assert presence; geometry is
+        // exercised by the drop-dispatch test below.
+        expect(
+          gutters.length,
+          `R-track passthrough sentinel missing for round.${n}`,
+        ).toBeGreaterThan(0);
+      }
+    });
+
+    it("does NOT emit an R-track sentinel for round 16 (feistel-no-swap, no R-passthrough)", () => {
+      const { container } = render(() => <GraphView />);
+      const encoding = "into-track-start:round.16#1";
+      const gutter = container.querySelector(`[data-drop-gutter="${encoding}"]`);
+      expect(
+        gutter,
+        "round 16 has no R-passthrough chip so it must not emit an R-track sentinel",
+      ).toBeNull();
+    });
+
+    it("drop on the R-passthrough sentinel prepends the new step at index 0 of the R-track", () => {
+      const { container } = render(() => <GraphView />);
+      // Pick a non-trivial round so we can distinguish "prepended to
+      // R-track" from "appended to rounds group" cleanly.
+      const sentinel = container.querySelector('[data-drop-gutter="into-track-start:round.5#1"]');
+      expect(sentinel, "round.5 R-passthrough sentinel must exist").not.toBeNull();
+      if (!sentinel) return;
+      fireDropAt(sentinel, "generic.byte-substitution@1");
+      const loc = findStepAndParent(useSpec()(), "byte-substitution-1");
+      expect(loc, "drop must land somewhere in the spec").not.toBeNull();
+      expect(loc?.parent?.kind).toBe("feistel-round");
+      expect(loc?.parent?.id).toBe("round.5");
+      expect(loc?.trackIdx).toBe(1); // R track
+      expect(loc?.indexInParent).toBe(0); // prepended
+    });
+
+    it("R-track at-start (`before:expand-R`) strip still exists alongside the new passthrough sentinel", () => {
+      // The fix adds the passthrough sentinel BEFORE the existing
+      // at-start strip in the gutter array. We rely on the geometry
+      // not overlapping (passthrough box ends at colTop+LEAF_H=colTop+28;
+      // at-start strip starts at colTop+LEAF_H+STACK_GAP-CONTAINER_PAD =
+      // colTop+30 — 2px clean gap). Asserting both are present so a
+      // future refactor that accidentally merges them gets caught.
+      const { container } = render(() => <GraphView />);
+      expect(
+        container.querySelector('[data-drop-gutter="into-track-start:round.1#1"]'),
+      ).not.toBeNull();
+      expect(
+        container.querySelector('[data-drop-gutter="before:round.1.expand-R"]'),
+      ).not.toBeNull();
+    });
+  });
 });
