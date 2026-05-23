@@ -290,8 +290,8 @@
 >
 > **Fix-order update with UX-E…J added:** ~~UX-B (real bug)~~ →
 > ~~UX-D (pedagogy gap; every Feistel round)~~ → UX-G (visual bug;
-> visible the moment graph view is opened on DES) → UX-F (real UX
-> gap; resolution locked to path (a) per-leaf delete) →
+> visible the moment graph view is opened on DES) → ~~UX-F (real UX
+> gap; resolution locked to path (a) per-leaf delete)~~ →
 > ~~**UX-H/I/J bundled** (all-ciphers inputs-row polish — one
 > implementation pass touches the same section in `App.tsx` +
 > `app.css`, so batch them; UX-H is the behavior change, UX-I/J
@@ -302,6 +302,73 @@
 > UX-H/I/J bundled at single priority because they all live in the
 > same code path; splitting them would mean editing the same file
 > three times.
+>
+> **UX-F closed 2026-05-23 — actually a documentation/test gap, not
+> a code gap.** The path-(a) per-leaf delete UI was already shipped
+> at commit `2e228af` (2026-05-14, alongside the original state-shape
+> contract slice). What was present at that commit and still is:
+>
+>   - `DeleteGlyph` component (`GraphView.tsx:5528`) — 12-px red
+>     circle + `×` glyph; rendered at the top-LEFT corner of every
+>     non-replica `LeafRect`.
+>   - Hover-reveal CSS (`app.css:4173-4184`) — `opacity: 0;
+>     pointer-events: none` baseline; `.graph-leaf:hover
+>     .graph-delete-button` flips it to `opacity: 1; pointer-events:
+>     all`.
+>   - Per-leaf keyboard handler (`LeafRect`'s `<g onKeyDown>` at
+>     `GraphView.tsx:5683-5694`) — `Delete` key on the focused leaf
+>     calls `removeStepFromSpec(props.stepId)`. **Delete-only by
+>     design**; the plan said "Delete / Backspace" but the code-level
+>     decision was to reserve Backspace for future navigation/back-
+>     style use rather than bind it to a destructive action. Keeping
+>     Delete-only.
+>   - Tab order (`tabindex={0}` on every leaf except replicas) — so
+>     the user can tab into a leaf and trigger Delete from the
+>     keyboard.
+>   - Same-LeafRect rendering of `.graph-leaf-selected` halo for the
+>     inspector's current selection — already the visible "this is
+>     the focused leaf you can delete" cue.
+>   - Scope guard: replicas don't render the DeleteGlyph and don't
+>     accept Delete (`!props.isReplica` guard at line 5687).
+>     Container DeleteGlyph at `GraphView.tsx:6163` is separate and
+>     out of scope for v1 (the plan deferred populated-container
+>     delete; the container UI surface is a future ask).
+>
+> What WAS missing was a specific test pinning the DES feistel-track
+> round-trip (populate L-track → remove leaf → confirm L-passthrough
+> chip re-emerges). Three new tests pin the round-trip across the
+> three layers it needs to work at:
+>
+>   1. **Pure spec mutation** (`tests/spec-mutations-feistel-track.test.ts`,
+>      "removeStep — empty-to-populated-to-empty L-track round-trip
+>      (UX-F)") — `prependChildToTrack` then `removeStep` returns a
+>      spec with an empty L-track again; R-track reference equality
+>      preserved so the spec-store debounced rerun doesn't fire on
+>      L-side mutations.
+>   2. **Graph derivation** (`tests/des-graph.test.ts`, "UX-F —
+>      L-passthrough chip re-emerges after prepend → remove
+>      round-trip") — `deriveAuxGraph` on the post-restore spec
+>      emits `round.1:passthrough-0` again and drops the inserted
+>      leaf.
+>   3. **End-to-end UI** (`tests/spec-delete.test.tsx`, "Delete
+>      keypress on a feistel-track leaf removes it and re-emits
+>      the L-passthrough chip (UX-F, DES)") — switch to DES via
+>      `setCipher("des")`, `insertStepIntoSpec` into the L-track,
+>      render `<GraphView />`, dispatch Delete keydown on the leaf,
+>      confirm both spec-level removal AND the `graph-passthrough-
+>      round.1:passthrough-0` testid re-renders (the
+>      `PassthroughChip` carries its own testid hook, distinct from
+>      `LeafRect`'s `graph-leaf-${stepId}` — small gotcha caught on
+>      the first test run).
+>
+> 1604/1604 tests pass after these land (was 1600 before the four
+> UX-F tests).
+>
+> Closure note also folds a small docs cleanup: the plan's
+> "Resolution" subsection promised "select a leaf → Delete /
+> Backspace removes it." The shipped code is Delete-only by deliberate
+> earlier choice; future work could revisit if user feedback suggests
+> the Backspace binding is missed.
 >
 > **UX-H/I/J shipped 2026-05-23 as one commit.** All three changes
 > live in `App.tsx`'s `.inputs` section and the matching CSS in

@@ -188,4 +188,55 @@ describe("DES graph derivation — structural sanity", () => {
       ).toBeUndefined();
     });
   });
+
+  // UX-F regression (2026-05-23) — the L-track passthrough chip
+  // (`round.N:passthrough-0`) is synthesized purely from spec shape
+  // (empty track ⇒ chip). So a round-trip prepend → remove on the
+  // L-track must re-produce the chip in the derived graph. Without
+  // this re-emit working, a user who experiments with a palette drop
+  // into L can never get back to the "empty track" pedagogy without
+  // `reset spec` (which nukes everything else). This test pins the
+  // graph-derivation half of UX-F's path-(a) per-leaf delete UX; the
+  // mutation half is pinned in
+  // `tests/spec-mutations-feistel-track.test.ts`.
+  describe("UX-F — L-passthrough chip re-emerges after prepend → remove round-trip", () => {
+    it("re-emits round.1:passthrough-0 after an L-track leaf is inserted and removed", async () => {
+      const { prependChildToTrack, removeStep } = await import("@/core/spec-mutations");
+      // Baseline: empty L-track produces the passthrough chip.
+      const baseGraph = deriveAuxGraph(emptyTrace, desSpec);
+      expect(
+        baseGraph.nodes.find((n) => n.stepId === "round.1:passthrough-0"),
+        "baseline: empty L-track must emit the passthrough chip",
+      ).toBeDefined();
+
+      // Populate the L-track via a palette-equivalent insert.
+      const populated = prependChildToTrack(desSpec, "round.1", 0, {
+        kind: "step",
+        id: "round.1.l-experimental",
+        type: "test.fixture@1",
+        params: {},
+      });
+      const populatedGraph = deriveAuxGraph(emptyTrace, populated);
+      expect(
+        populatedGraph.nodes.find((n) => n.stepId === "round.1:passthrough-0"),
+        "populated L-track must NOT emit a passthrough chip",
+      ).toBeUndefined();
+      expect(
+        populatedGraph.nodes.find((n) => n.stepId === "round.1.l-experimental"),
+        "populated L-track must emit the inserted leaf",
+      ).toBeDefined();
+
+      // Round-trip back to empty.
+      const restored = removeStep(populated, "round.1.l-experimental");
+      const restoredGraph = deriveAuxGraph(emptyTrace, restored);
+      expect(
+        restoredGraph.nodes.find((n) => n.stepId === "round.1:passthrough-0"),
+        "after remove, L-track empty again ⇒ passthrough chip back",
+      ).toBeDefined();
+      expect(
+        restoredGraph.nodes.find((n) => n.stepId === "round.1.l-experimental"),
+        "after remove, the inserted leaf must be gone from the graph",
+      ).toBeUndefined();
+    });
+  });
 });

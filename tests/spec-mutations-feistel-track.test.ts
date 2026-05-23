@@ -258,3 +258,49 @@ describe("prependChildToContainer — feistel-round error pointer (6d-iii)", () 
     );
   });
 });
+
+// UX-F regression — populate an empty L-track via palette drop, then
+// remove the inserted leaf. The track must be empty again so the
+// graph derivation re-emits the synthetic L-passthrough chip
+// (`round.N:passthrough-0`). Without this round-trip working, a user
+// who experiments with a palette drop into L is stuck — `reset spec`
+// nuked all their other edits. The path-(a) per-leaf delete UX
+// (advisor-confirmed 2026-05-22) rides on `removeStep`; this test
+// pins that the round-trip really lands at an empty track, not a
+// track containing an empty wrapper or some other partial state.
+describe("removeStep — empty-to-populated-to-empty L-track round-trip (UX-F)", () => {
+  it("round-trips an L-track through prepend → remove back to empty", () => {
+    const inserted = prependChildToTrack(
+      desSpec,
+      "round.1",
+      0,
+      fixtureLeaf("round.1.l-experimental"),
+    );
+    expect(trackChildren(getRound(inserted, "round.1"), 0).length).toBe(1);
+
+    const restored = removeStep(inserted, "round.1.l-experimental");
+    // L-track must be empty again so the graph derivation re-emits
+    // the synthetic L-passthrough chip (`round.1:passthrough-0`).
+    expect(trackChildren(getRound(restored, "round.1"), 0)).toEqual([]);
+  });
+
+  it("after remove, the R-track is unchanged and reference-equal to the original", () => {
+    const inserted = prependChildToTrack(
+      desSpec,
+      "round.1",
+      0,
+      fixtureLeaf("round.1.l-experimental"),
+    );
+    const restored = removeStep(inserted, "round.1.l-experimental");
+
+    const originalR = getRound(desSpec, "round.1").tracks[1];
+    const restoredR = getRound(restored, "round.1").tracks[1];
+
+    // The R-track wasn't touched by the L-side mutations, so the
+    // structural walker must return the same reference for it. This is
+    // the trace-coupling safety net: if it broke, every L-track edit
+    // would spuriously re-run the trace because the R-track's `track`
+    // object reference would change.
+    expect(restoredR).toBe(originalR);
+  });
+});
