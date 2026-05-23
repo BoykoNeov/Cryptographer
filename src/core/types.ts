@@ -348,3 +348,166 @@ export type StepDefinition = {
   readonly executor: StepExecutor;
   readonly doc?: StepDocumentation;
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Universal port-based dataflow — Phase 0 spike (2026-05-23)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Per `docs/plans/universal-port-dataflow.md` Phase 0. The contract here is
+// PROVISIONAL — it lives alongside the legacy contract while Q-gate-9
+// (project→reconstruct→deepEqual round-trip) is validated. None of these
+// types are wired into the runtime walker yet; that happens at Task 5 of
+// Phase 0 once the round-trip passes.
+//
+// IMPORTANT NAMING NOTE: the plan's contract sketch uses the identifier
+// `StepShapeContract` for the new port contract. That name is already
+// taken at line 319 above for the single-thread state-shape contract
+// (input: StateShape, output: StateShape) consumed by the palette chip,
+// drop-anchor greying, and `validateShapes` in `core/spec-shapes.ts`.
+// The new shape is renamed to `PortContract` to avoid the collision.
+
+/**
+ * Per-port shape descriptor. The byte length is REQUIRED (it's what the
+ * editor checks for the warn-and-run coercion rule per Q2). The `layout`
+ * tag is ADVISORY only — the runtime always passes raw `Uint8Array`s; the
+ * tag exists so the inspector and editor can pick the right view (matrix
+ * vs flat bytes vs word groups) without forking the runtime contract.
+ */
+export type PortShape = {
+  readonly byteLength: number;
+  readonly layout?: PortLayout;
+};
+
+/**
+ * The advisory layout vocabulary. Extensible — the type is open via the
+ * `string` branch so future ciphers can introduce their own tags without
+ * a core-types edit, but the four named entries are the round-trip
+ * targets for State→ports projection.
+ *
+ * - "raw": flat byte sequence (the default for aux values, IVs, counters)
+ * - "matrix-cm-4x4": 16 bytes interpreted as a 4×4 column-major matrix
+ *                    (the AES State convention; `state[r + 4*c]`)
+ * - "be-word": big-endian 32-bit (or 16-bit, per byteLength) word array
+ * - "le-word": little-endian word array (e.g., Speck NSA convention)
+ */
+export type PortLayout = "raw" | "matrix-cm-4x4" | "be-word" | "le-word" | string;
+
+/**
+ * Declared input/output port contract for a ported step type.
+ *
+ * Map-of-port-name → shape, not array, because port names are part of
+ * the step's UX (the inspector labels arrows by port name; the editor
+ * lets the user re-wire by typing the source port at the consumer end
+ * per Q-edges sink-only edges decision).
+ *
+ * Distinct from the existing `StepShapeContract` (line 319) which
+ * describes the single-thread state shape. The two contracts coexist
+ * during the migration: legacy step types declare `StepShapeContract`;
+ * ported step types declare `PortContract`. Once the migration completes
+ * (Phase 5), `StepShapeContract` deprecates.
+ */
+export type PortContract = {
+  readonly inputs: ReadonlyMap<string, PortShape>;
+  readonly outputs: ReadonlyMap<string, PortShape>;
+};
+
+/**
+ * Per-port byte arrays flowing into / out of a ported step execution.
+ * The runtime passes raw `Uint8Array`s; layout interpretation happens
+ * via the corresponding `PortShape.layout` tag on the contract.
+ */
+export type StepInputs = ReadonlyMap<string, Uint8Array>;
+export type StepOutputs = ReadonlyMap<string, Uint8Array>;
+
+/**
+ * Ported executor contract. Pure: `(inputs, params, ctx) → outputs`.
+ * No State union, no aux read/write — every value crosses the boundary
+ * as raw bytes through a named port.
+ */
+export type PortedExecutor = (inputs: StepInputs, params: Json, ctx: StepContext) => StepOutputs;
+
+/**
+ * Sidecar metadata sufficient to reconstruct a legacy `TraceFrame` from
+ * a `PortedFrame`. The Phase-0 load-bearing assertion (Q-gate-9) is that
+ * `deepEqual(reconstruct(project(legacyFrame), tags), legacyFrame)` holds
+ * byte-by-byte for every lifted step.
+ *
+ * The discipline: `LayoutTags` MUST carry only what's needed to interpret
+ * raw bytes back into the legacy variants — it MUST NOT carry the
+ * original `State` object verbatim under a different field. Doing so
+ * would make the round-trip trivial and would not validate the
+ * "flatten-to-Uint8Array" claim that the entire migration rests on.
+ *
+ * Phase-0 scope (per user pick 2026-05-23): only `matrix-cm-4x4` and
+ * `bytes` (raw) layouts are exercised — the three target step types
+ * (`generic.byte-substitution@1`, `generic.add-round-key@1`, one ECB
+ * iteration body) all use `MatrixState`. The fields for `bitvec` and
+ * `bigint` reconstruction are sketched here but not exercised; first
+ * cipher to use them (likely SHA-2 in Phase 2 or RSA later) forces them
+ * through the round-trip.
+ *
+ * TODO(Phase 1, bitvec): exercise round-trip with a synthetic `BitVecState`
+ * frame so `bitLength` correctly survives. Needed before any cipher that
+ * carries bit-aligned state (Serpent's bitslice form, if it ever ships).
+ *
+ * TODO(Phase 1, bigint): exercise round-trip with a synthetic `BigIntState`
+ * frame; design the endianness convention. RSA and elliptic-curve work
+ * will force the question. `bigintByteLength` is needed because a bigint
+ * value alone doesn't preserve leading zero bytes.
+ */
+export type LayoutTags = {
+  /**
+   * The State variant the legacy frame's `stateBefore`/`stateAfter` carried.
+   * Phase-0 fixture only exercises "matrix-cm-4x4"; "bytes" is reachable
+   * by other shipped step types but not in the three targets.
+   */
+  readonly stateLayout: StateShape;
+  /** For `bitvec` reconstruction. Undefined for other shapes. */
+  readonly bitLength?: number;
+  /** For `bigint` reconstruction. Undefined for other shapes. */
+  readonly bigintEndian?: "be" | "le";
+  /** For `bigint` reconstruction (preserves leading zero bytes). */
+  readonly bigintByteLength?: number;
+  /**
+   * For each input port that was sourced from an aux entry in the legacy
+   * frame, the original aux key name. The reconstruction reads
+   * `portedFrame.inputs.get(portName)` and writes it back to `auxRead`
+   * under this key. Output ports going to aux work analogously via
+   * `auxOutputBindings` below.
+   *
+   * Why this lives in the sidecar (and not on the PortedFrame): port
+   * names are *contract-level* identifiers, stable across runs of a
+   * given step type. Aux keys are *spec-level* identifiers, varying per
+   * leaf (`roundKey.0`, `roundKey.1`, …). Keeping the binding in the
+   * sidecar reflects that asymmetry: the PortedFrame is fully described
+   * by the contract; the sidecar carries the spec-specific projection
+   * details.
+   */
+  readonly auxInputBindings?: ReadonlyMap<string, string>;
+  /** For output ports that wrote to aux in the legacy frame. */
+  readonly auxOutputBindings?: ReadonlyMap<string, string>;
+};
+
+/**
+ * The port-projection of a legacy `TraceFrame`. Every legacy field
+ * either survives unchanged (index, path, stepId, stepType, params,
+ * blockIndex, branchPath, auxReadMissing) or projects through `inputs`/
+ * `outputs` (stateBefore, stateAfter, auxRead, auxWritten).
+ *
+ * Reconstructing a legacy frame from a PortedFrame requires the
+ * `LayoutTags` sidecar (see above). The Phase-0 spike validates that
+ * `(PortedFrame, LayoutTags)` is lossless against `TraceFrame` for the
+ * three lifted step types.
+ */
+export type PortedFrame = {
+  readonly index: number;
+  readonly path: readonly string[];
+  readonly stepId: string;
+  readonly stepType: string;
+  readonly params: Json;
+  readonly inputs: StepInputs;
+  readonly outputs: StepOutputs;
+  readonly auxReadMissing?: readonly string[];
+  readonly blockIndex?: number;
+  readonly branchPath?: readonly string[];
+};

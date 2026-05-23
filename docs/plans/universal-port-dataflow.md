@@ -123,6 +123,8 @@ Each phase has an explicit pass/fail gate. **If a gate fails, planning re-opens 
 
 ### Phase 0 — Trace-shape unification spike (~3 days)
 
+> **Progress 2026-05-23:** Tasks 1–3 complete (type additions in `core/types.ts`; `project`/`reconstruct` pure helpers in `core/port-projection.ts`; Q-gate-9 round-trip test in `tests/port-projection-q-gate-9.test.ts` — 4 assertions all green covering pure state, aux read, and iterate body × 2 step types). **Q-gate-9 PASSES**: the load-bearing assertion holds byte-by-byte against real AES-128 frames; the migration's premise is empirically supported. Naming refinement: the plan's `StepShapeContract` is renamed to **`PortContract`** to avoid collision with the existing identifier at `types.ts:319` (single-thread shape contract used by the palette chip + drop-anchor greying + `validateShapes`). Remaining Phase-0 tasks: 4 `liftLegacyExecutor` adapter, 5 runtime dual-dispatch, 6 end-to-end AES-128 ECB under ported contract, 7 walk all 9 gate items + write findings doc.
+
 **Goal:** validate the load-bearing claim that today's UI layers consume a trace shape compatible with universal ports. **Scope widened** (per second-pass advisor review): a pure step alone (`aes.sub-bytes`) doesn't exercise the harder cases where state and aux co-flow or where iterate boundaries are involved — those are exactly the cases that would force the UI to fork.
 
 **Scope:**
