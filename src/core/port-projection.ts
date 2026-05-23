@@ -30,8 +30,11 @@ import type {
   AuxValue,
   Json,
   LayoutTags,
+  PortedExecutor,
   PortedFrame,
+  State,
   StateShape,
+  StepExecutor,
   StepInputs,
   StepOutputs,
   TraceFrame,
@@ -252,6 +255,33 @@ export const reconstruct = (ported: PortedFrame, tags: LayoutTags): TraceFrame =
 
 // ─── State ↔ bytes ──────────────────────────────────────────────────────
 
+/**
+ * Convert a legacy `State` variant to a raw `Uint8Array` for a port
+ * payload. Exposed (along with `bytesToState`) so the runtime's
+ * Phase-0 dual-dispatch path can construct ported inputs / disassemble
+ * ported outputs without re-implementing the variant-specific encoding.
+ *
+ * `expected` is asserted against `state.shape` so a metadata mismatch
+ * surfaces at the boundary instead of silently producing wrong bytes.
+ */
+export const stateToPortBytes = (state: State, expected: StateShape): Uint8Array => {
+  return stateToBytes(state, expected);
+};
+
+/**
+ * Inverse of `stateToPortBytes` (with the `LayoutTags`-rich variants
+ * suppressed for Phase-0 simplicity — `bitvec` requires bitLength
+ * separately and `bigint` is deferred). Throws if asked to reconstruct
+ * a shape that needs more than `Uint8Array` bytes.
+ */
+export const portBytesToState = (bytes: Uint8Array, layout: StateShape): State => {
+  // Build a minimal LayoutTags so we can reuse `bytesToState`. bitvec
+  // and bigint paths require additional metadata and are out of scope
+  // for Phase 0; `bytesToState` throws if either is requested without
+  // its companion field.
+  return bytesToState(bytes, { stateLayout: layout });
+};
+
 const stateToBytes = (state: TraceFrame["stateBefore"], expected: StateShape): Uint8Array => {
   if (state.shape !== expected) {
     throw new Error(
@@ -366,3 +396,152 @@ const requirePortBytes = (
   }
   return bytes;
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase-0 task 4 — `liftLegacyExecutor` + side-map projection registry
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// `liftLegacyExecutor(legacy, meta)` produces a `PortedExecutor` that the
+// runtime's dual-dispatch path (Phase-0 task 5) can call when its side-map
+// has a matching `ProjectionMetadata` for the leaf's step type AND the
+// per-call `RuntimeInput.portedDispatchEnabled` flag is on.
+//
+// What the lift does:
+//   1. Reads the state bytes from `inputs.get(meta.stateInputPort)`,
+//      reconstructs the legacy `State` variant via `bytesToState`.
+//   2. Calls the legacy executor with that State + the leaf's `params` +
+//      the runtime's `ctx`. The `ctx.aux` channel is unchanged — the legacy
+//      add-round-key executor's `ctx.aux.get(params.auxName)` keeps working
+//      as-is. (Phase 1 cuts the ctx.aux channel; until then, dual aux read
+//      paths coexist — the runtime ALSO projects the same bytes into
+//      `inputs.get("key")` via `meta.auxReadPorts`. By construction both
+//      paths see the same map.)
+//   3. **Phase-0 strictness:** throws if the legacy result includes
+//      `auxWrites` with any entries. Neither Phase-0 target step
+//      (`generic.byte-substitution@1`, `generic.add-round-key@1`) writes
+//      aux. A throw here surfaces drift — if a future lifted step starts
+//      writing aux, the adapter needs widening (carry `auxWrites` →
+//      `outputs` via metadata's `auxWritePorts`) before we silently lose
+//      the write.
+//   4. Returns `outputs` with the new state bytes at `meta.stateOutputPort`.
+//
+// What the lift does NOT do:
+//   • It does NOT propagate `result.auxReads` — the runtime builds
+//     `TraceFrame.auxRead` from the metadata's `auxReadPorts(params)` map
+//     directly. This is the load-bearing claim: the trace can be expressed
+//     purely in port projections + tags, with NO smuggled structured
+//     auxReads piggybacking off the legacy contract.
+//   • It does NOT mutate `ctx.aux` — only the legacy executor's own
+//     side-effects on aux (none in Phase-0 targets) reach the runtime.
+//
+// **Verified by inspection (advisor consult 2026-05-23):** for the two
+// Phase-0 targets, `result.auxReads` is exactly what `meta.auxReadPorts(
+// params)` yields: byte-substitution returns no auxReads; add-round-key
+// returns `[params.auxName]` matching the single `"key" → params.auxName`
+// binding. So the runtime's "rebuild auxRead from metadata" path produces
+// byte-identical `TraceFrame.auxRead` to the legacy path.
+export const liftLegacyExecutor = (
+  legacy: StepExecutor,
+  meta: ProjectionMetadata,
+): PortedExecutor => {
+  return (inputs, params, ctx) => {
+    const inPort = meta.stateInputPort;
+    const outPort = meta.stateOutputPort;
+    if (inPort === undefined || outPort === undefined) {
+      // Phase-0 only lifts state-carrying steps. Aux-only primitives
+      // (`aux-load`, `aux-copy`) would lift with no state port set;
+      // they're out of scope for this spike. The throw makes that
+      // explicit instead of silently producing empty outputs.
+      throw new Error(
+        `liftLegacyExecutor: Phase-0 lift requires both stateInputPort and stateOutputPort (stepId=${ctx.stepId})`,
+      );
+    }
+    const stateBytes = inputs.get(inPort);
+    if (stateBytes === undefined) {
+      throw new Error(`liftLegacyExecutor: input port "${inPort}" missing (stepId=${ctx.stepId})`);
+    }
+    // Build a minimal LayoutTags carrier so we can reuse `bytesToState`.
+    // Phase-0 targets are all matrix4x4-bytes; bitLength/bigint encoding
+    // fields stay undefined.
+    const reconstructionTags: LayoutTags = { stateLayout: meta.stateLayout };
+    const stateBefore = bytesToState(stateBytes, reconstructionTags);
+
+    const result = legacy(stateBefore, params, ctx);
+
+    if (result.auxWrites !== undefined && result.auxWrites.size > 0) {
+      throw new Error(
+        `liftLegacyExecutor: Phase-0 strictness — legacy executor returned auxWrites (size=${result.auxWrites.size}) but the lift adapter does not yet propagate aux writes to output ports. ` +
+          `Widen the adapter via meta.auxWritePorts before lifting an aux-writing step. (stepId=${ctx.stepId})`,
+      );
+    }
+
+    const outputs = new Map<string, Uint8Array>();
+    outputs.set(outPort, stateToBytes(result.state, meta.stateLayout));
+    return outputs;
+  };
+};
+
+// ─── Side-map projection-metadata registry ──────────────────────────────
+//
+// Per advisor consult 2026-05-23: projection metadata lives in a SEPARATE
+// side-map keyed by step-type string — NOT as an optional field on
+// `StepDefinition`. Rationale (preserved in `project_universal_port_
+// dataflow_proposal.md`): projection metadata is the lift function's
+// INPUT, not a permanent registration field. Phase 1's eventual
+// `StepRegistration` discriminated union will hold `{executor:
+// PortedExecutor, shape: PortContract}` as the OUTPUT of lifting; if we
+// put `projectionMetadata?` on the legacy `StepDefinition` now, that
+// metadata would live on the wrong end of the pipe and force two
+// migrations (Phase 0 adds optional field → Phase 1 restructures).
+// A throw-away side-map is cheaper and honestly signals "this is a spike."
+//
+// Phase 0 registers exactly two entries (the targets named in the plan).
+// Phase 1 will replace this map entirely with a real registry of
+// `PortContract` + `PortedExecutor` pairs.
+
+const META_BYTE_SUBSTITUTION: ProjectionMetadata = {
+  // `generic.byte-substitution@1` accepts a 4×4 column-major matrix on
+  // its "state" input, returns the same shape on "state" output, reads
+  // no aux.
+  stateLayout: "matrix4x4-bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+};
+
+const META_ADD_ROUND_KEY: ProjectionMetadata = {
+  stateLayout: "matrix4x4-bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+  // The leaf's `params.auxName` (e.g., "roundKey.0") becomes the single
+  // aux-key bound to the "key" input port. Function shape (not static
+  // map) because every leaf has a different round-key name; the binding
+  // can only be resolved with `params` in hand.
+  auxReadPorts: (params: Json) => {
+    if (
+      typeof params !== "object" ||
+      params === null ||
+      Array.isArray(params) ||
+      !("auxName" in params) ||
+      typeof (params as { auxName: unknown }).auxName !== "string"
+    ) {
+      throw new Error(
+        "META_ADD_ROUND_KEY.auxReadPorts: params.auxName: string required (matches add-round-key executor's own validation)",
+      );
+    }
+    return new Map([["key", (params as { auxName: string }).auxName]]);
+  },
+};
+
+/**
+ * The side-map registry consumed by the runtime's dual-dispatch path.
+ * `has(stepType)` is the gate: present + `portedDispatchEnabled` →
+ * ported path; absent → legacy path (unchanged).
+ *
+ * Frozen at module load so the runtime's `walk` can `Map.get` directly
+ * without needing the registry instance threaded through. Phase 1's
+ * `StepRegistration` discriminated union supersedes this entirely.
+ */
+export const PROJECTION_METADATA: ReadonlyMap<string, ProjectionMetadata> = new Map([
+  ["generic.byte-substitution@1", META_BYTE_SUBSTITUTION],
+  ["generic.add-round-key@1", META_ADD_ROUND_KEY],
+]);

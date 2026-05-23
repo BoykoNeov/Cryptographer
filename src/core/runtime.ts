@@ -1,4 +1,10 @@
 import { COMBINE_KINDS, REJOIN_STEP_TYPE } from "./combine-kinds";
+import {
+  PROJECTION_METADATA,
+  liftLegacyExecutor,
+  portBytesToState,
+  stateToPortBytes,
+} from "./port-projection";
 import type { StepRegistry } from "./registry";
 import { cloneState } from "./state/clone";
 import type {
@@ -17,6 +23,30 @@ export type RuntimeInput = {
   readonly initialState: State;
   /** Aux values that should be present before any step runs (e.g. the key). */
   readonly initialAux?: ReadonlyMap<string, AuxValue>;
+  /**
+   * Phase-0 dual-dispatch flag (universal-port-dataflow plan, task 5).
+   * When true AND a leaf's step type is in `PROJECTION_METADATA`, the
+   * runtime routes that leaf through the ported execution path:
+   *
+   *   1. Project state + aux reads into per-port `Uint8Array` inputs via
+   *      metadata bindings.
+   *   2. Call the lifted `PortedExecutor` (which wraps the legacy executor
+   *      via `liftLegacyExecutor`).
+   *   3. Reconstruct `State` from the output port; build the emitted
+   *      `TraceFrame.auxRead` from the metadata's input-port-to-aux-key
+   *      bindings (NOT from the legacy executor's `result.auxReads`).
+   *
+   * Frames produced under either path are byte-equal for the two
+   * Phase-0 targets — pinned by `tests/runtime-ported-dispatch.test.ts`
+   * (task 6) via frame-by-frame deep equality.
+   *
+   * Default: `false`. Existing callers (UI, cipher specs, every shipped
+   * test) keep the legacy path until Phase 1 widens the lift to every
+   * step type. The flag lives on `RuntimeInput` (per-call) rather than
+   * a module-level global so legacy and ported runs can stand side by
+   * side in the same test file.
+   */
+  readonly portedDispatchEnabled?: boolean;
 };
 
 /**
@@ -57,6 +87,13 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
   const aux = new Map<string, AuxValue>(input.initialAux ?? []);
 
   let frameIndex = 0;
+
+  // Phase-0 dual-dispatch flag (universal-port-dataflow plan, task 5).
+  // Captured once at the call boundary so the per-leaf check in `walk` is
+  // a simple `if (portedDispatch && PROJECTION_METADATA.has(node.type))`.
+  // Defaults to false → every leaf runs the legacy path; no behavior change
+  // for any caller that doesn't opt in.
+  const portedDispatch = input.portedDispatchEnabled === true;
 
   /** Compose the per-emit stepId suffix from runtime context. Innermost-
    *  first: `:t{name}` for track membership goes before `:b{i}` for block
@@ -142,37 +179,120 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
       // Leaf step.
       const executor = registry.get(node.type);
       const stateBefore = cloneState(state);
-      const result = executor(state, node.params, {
-        stepId: node.id,
-        path,
-        aux,
-      });
 
-      const auxRead = new Map<string, AuxValue>();
-      // Track requested-but-unfulfilled aux reads separately so Slice 9's
-      // `validateGraph` can surface them as orphaned-read warnings. The
-      // happy-path produces no missing reads, so we lazily allocate the
-      // array only on the first miss to keep frame allocation light.
+      // ─── Phase-0 dual-dispatch (universal-port-dataflow plan) ──────────
+      // When `portedDispatch` is on AND the leaf's step type has projection
+      // metadata in the side-map, route through the ported execution path:
+      //   1. Build `inputs` (state port + aux ports per `auxReadPorts`).
+      //   2. Call the lifted `PortedExecutor`.
+      //   3. Reconstruct `State` from the output port.
+      //   4. Build the TraceFrame's `auxRead` from the metadata's input-
+      //      port-to-aux-key bindings — NOT from the legacy executor's
+      //      `result.auxReads`. This is the load-bearing claim: the
+      //      trace can be expressed purely in port projections + tags.
+      //
+      // Otherwise (the default for every shipped caller): the legacy path
+      // below runs unchanged.
+      const meta = portedDispatch ? PROJECTION_METADATA.get(node.type) : undefined;
+      let auxRead: Map<string, AuxValue>;
       let auxReadMissing: string[] | undefined;
-      for (const k of result.auxReads ?? []) {
-        const v = aux.get(k);
-        if (v !== undefined) {
-          auxRead.set(k, v);
-        } else {
-          if (auxReadMissing === undefined) auxReadMissing = [];
-          auxReadMissing.push(k);
-        }
-      }
+      let auxWritten: Map<string, AuxValue>;
 
-      const auxWritten = new Map<string, AuxValue>();
-      if (result.auxWrites) {
-        for (const [k, v] of result.auxWrites) {
-          aux.set(k, v);
-          auxWritten.set(k, v);
+      if (meta !== undefined) {
+        // ── Ported execution path ─────────────────────────────────────
+        const inputs = new Map<string, Uint8Array>();
+        if (meta.stateInputPort !== undefined) {
+          inputs.set(meta.stateInputPort, stateToPortBytes(state, meta.stateLayout));
         }
-      }
+        // Aux reads: project each (portName, auxKey) binding from the live
+        // aux map into the inputs map. Missing values record as orphaned
+        // reads (mirrors the legacy path's `auxReadMissing` semantics).
+        const readBindings = meta.auxReadPorts?.(node.params) ?? new Map<string, string>();
+        const portedAuxRead = new Map<string, AuxValue>();
+        for (const [portName, auxKey] of readBindings) {
+          const v = aux.get(auxKey);
+          if (v === undefined) {
+            if (auxReadMissing === undefined) auxReadMissing = [];
+            auxReadMissing.push(auxKey);
+            continue;
+          }
+          // Phase-0 strictness: the bound aux key MUST hold a Uint8Array.
+          // The two Phase-0 targets only bind `roundKey.N` (always
+          // Uint8Array). A non-Uint8Array here means a metadata mismatch
+          // — surface loudly instead of silently coercing.
+          if (!(v instanceof Uint8Array)) {
+            throw new Error(
+              `ported dispatch: aux "${auxKey}" bound to input port "${portName}" must be Uint8Array, got ${typeof v} (stepId=${node.id}, stepType=${node.type})`,
+            );
+          }
+          inputs.set(portName, new Uint8Array(v));
+          portedAuxRead.set(auxKey, new Uint8Array(v));
+        }
 
-      state = result.state;
+        // Call the lifted ported executor. `ctx.aux` still carries the
+        // live aux map — the legacy executor inside the lift reads via
+        // `ctx.aux.get(params.auxName)`. Phase 1 cuts this channel; until
+        // then the dual aux read paths see the same map by construction.
+        const ported = liftLegacyExecutor(executor, meta);
+        const outputs = ported(inputs, node.params, {
+          stepId: node.id,
+          path,
+          aux,
+        });
+
+        // Reconstruct state from the output port.
+        if (meta.stateOutputPort === undefined) {
+          throw new Error(
+            `ported dispatch: meta missing stateOutputPort (stepId=${node.id}, stepType=${node.type})`,
+          );
+        }
+        const outBytes = outputs.get(meta.stateOutputPort);
+        if (outBytes === undefined) {
+          throw new Error(
+            `ported dispatch: output port "${meta.stateOutputPort}" missing (stepId=${node.id}, stepType=${node.type})`,
+          );
+        }
+        state = portBytesToState(outBytes, meta.stateLayout);
+
+        auxRead = portedAuxRead;
+        // Phase-0 strictness: lift adapter throws if the legacy executor
+        // returns auxWrites. So we can assume nothing was written and emit
+        // an empty `auxWritten` map without re-checking. Phase 1 widens
+        // the lift via `meta.auxWritePorts`.
+        auxWritten = new Map<string, AuxValue>();
+      } else {
+        // ── Legacy execution path (unchanged) ─────────────────────────
+        const result = executor(state, node.params, {
+          stepId: node.id,
+          path,
+          aux,
+        });
+
+        auxRead = new Map<string, AuxValue>();
+        // Track requested-but-unfulfilled aux reads separately so Slice 9's
+        // `validateGraph` can surface them as orphaned-read warnings. The
+        // happy-path produces no missing reads, so we lazily allocate the
+        // array only on the first miss to keep frame allocation light.
+        for (const k of result.auxReads ?? []) {
+          const v = aux.get(k);
+          if (v !== undefined) {
+            auxRead.set(k, v);
+          } else {
+            if (auxReadMissing === undefined) auxReadMissing = [];
+            auxReadMissing.push(k);
+          }
+        }
+
+        auxWritten = new Map<string, AuxValue>();
+        if (result.auxWrites) {
+          for (const [k, v] of result.auxWrites) {
+            aux.set(k, v);
+            auxWritten.set(k, v);
+          }
+        }
+
+        state = result.state;
+      }
 
       // Per-iteration / per-track stepId suffix: ensures every frame in
       // the flat trace has a unique stepId even when the same children

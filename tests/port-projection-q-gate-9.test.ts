@@ -33,12 +33,27 @@
  *     forces them. The design accommodates them; this fixture doesn't
  *     stress them.
  *
- * Anti-trivial discipline check: the assertion calls `reconstruct` ONLY
- * with the `LayoutTags` sidecar — there's no path where `reconstruct`
- * could "cheat" by reading the original State variant from a captured
- * closure. If a future refactor adds such a path, this test must be
- * tightened to refute it (e.g., by deep-cloning the LayoutTags through
- * JSON.stringify+parse).
+ * Anti-trivial discipline check (TWO layers, 2026-05-23):
+ *
+ *   1. **Type-level**: `LayoutTags` (in `core/types.ts`) has no field that
+ *      could carry a `State` object — only the State variant tag, optional
+ *      bit-length / bigint-encoding fields, and aux-key name bindings. So
+ *      `reconstruct` literally CANNOT "cheat" by reading the original
+ *      State variant from the sidecar at compile time.
+ *
+ *   2. **Runtime structural clone barrier** (advisor item 2, bundled with
+ *      Phase 0 close): every assertion wraps the `tags` value in
+ *      `structuredClone(tags)` before passing to `reconstruct`. If a future
+ *      refactor weakens `LayoutTags` to smuggle a `State` (e.g., by
+ *      stuffing it into a generic field that survives the type system),
+ *      structuredClone would either fail (non-cloneable property) or
+ *      strip the smuggled branding — and the assertion's `expectFrameByte
+ *      Equal` would catch the resulting drift. Node ≥17 (vitest's runtime
+ *      target) supports structuredClone natively, including `ReadonlyMap`.
+ *
+ * Together, these two layers ensure the round-trip's GREEN status is
+ * EVIDENCE that the migration's premise holds, not just an artifact of
+ * a permissive type signature.
  */
 
 import { aes128Spec } from "@/ciphers/aes-128";
@@ -224,7 +239,10 @@ describe("port-projection — Q-gate-9 round-trip (Phase 0 load-bearing)", () =>
     it("pure state-only frame (generic.byte-substitution@1) round-trips byte-for-byte", () => {
       const frame = findFirstFrame(trace.frames, "generic.byte-substitution@1");
       const { frame: ported, tags } = project(frame, META_BYTE_SUBSTITUTION);
-      const recovered = reconstruct(ported, tags);
+      // structuredClone barrier — see header. Strips any smuggled State
+      // branding; non-cloneable smuggling would throw before reconstruct
+      // even sees the tags.
+      const recovered = reconstruct(ported, structuredClone(tags));
 
       // Sanity: the projection produced an input + output state port
       // and no aux bindings (byte substitution reads no aux).
@@ -240,7 +258,7 @@ describe("port-projection — Q-gate-9 round-trip (Phase 0 load-bearing)", () =>
     it("aux-reading frame (generic.add-round-key@1) round-trips byte-for-byte", () => {
       const frame = findFirstFrame(trace.frames, "generic.add-round-key@1");
       const { frame: ported, tags } = project(frame, META_ADD_ROUND_KEY);
-      const recovered = reconstruct(ported, tags);
+      const recovered = reconstruct(ported, structuredClone(tags));
 
       // Sanity: the aux read became a "key" input port; the binding
       // maps "key" back to the spec's roundKey.N name.
@@ -267,7 +285,7 @@ describe("port-projection — Q-gate-9 round-trip (Phase 0 load-bearing)", () =>
     it("byte-substitution INSIDE iterate preserves blockIndex + :b{i} stepId suffix", () => {
       const frame = findFirstFrameInIterate(trace.frames, "generic.byte-substitution@1");
       const { frame: ported, tags } = project(frame, META_BYTE_SUBSTITUTION);
-      const recovered = reconstruct(ported, tags);
+      const recovered = reconstruct(ported, structuredClone(tags));
 
       expect(ported.blockIndex).toBe(0);
       expect(ported.stepId.endsWith(":b0")).toBe(true);
@@ -277,7 +295,7 @@ describe("port-projection — Q-gate-9 round-trip (Phase 0 load-bearing)", () =>
     it("add-round-key INSIDE iterate preserves blockIndex + aux binding + :b{i} suffix", () => {
       const frame = findFirstFrameInIterate(trace.frames, "generic.add-round-key@1");
       const { frame: ported, tags } = project(frame, META_ADD_ROUND_KEY);
-      const recovered = reconstruct(ported, tags);
+      const recovered = reconstruct(ported, structuredClone(tags));
 
       expect(ported.blockIndex).toBe(0);
       expect(ported.stepId.endsWith(":b0")).toBe(true);
