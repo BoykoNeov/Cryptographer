@@ -6,8 +6,10 @@
 > Original proposal text preserved below as "Design rationale" for
 > historical context.
 >
-> **Held until:** DES Phase 6e (manual browser smoke) is complete. DES
-> ships under the legacy contract; this plan begins after.
+> **DES Phase 6e gate (manual browser smoke):** SATISFIED 2026-05-22 —
+> the `docs/plans/des-feistel.md` plan's M1–M7 checklist completed across
+> walks #1–#4. DES ships under the legacy contract; this plan unblocked
+> and Phase 0 is closed green (see findings doc).
 >
 > **Predecessor (subsumed):** `~/.claude/plans/silly-brewing-sutton.md` —
 > universal cipher-shape plan; registry consolidation falls out for free
@@ -126,7 +128,7 @@ Each phase has an explicit pass/fail gate. **If a gate fails, planning re-opens 
 
 ### Phase 0 — Trace-shape unification spike (~3 days)
 
-> **Status 2026-05-23: PHASE 0 GREEN — proceed to Phase 1.** All 7 tasks complete. All 9 gate items walked (caveat on `outBlocksAux` documented). Findings doc at [`universal-port-phase-0-findings.md`](./universal-port-phase-0-findings.md). Plan unchanged — Phase 1 (adapter for every step + runtime dual-dispatch widened + `narrationOverride` field) starts after DES Phase 6e completes.
+> **Status 2026-05-23: PHASE 0 GREEN — Phase 1 unblocked.** All 7 tasks complete. All 9 gate items walked (caveat on `outBlocksAux` documented). Findings doc at [`universal-port-phase-0-findings.md`](./universal-port-phase-0-findings.md). Plan unchanged — Phase 1 (adapter for every step + runtime dual-dispatch widened + `narrationOverride` field) starts on user demand; the DES Phase 6e gate completed 2026-05-22.
 >
 > Implementation log (closed):
 > - Tasks 1–3 (types + `project`/`reconstruct` + Q-gate-9 test) shipped earlier 2026-05-23. **Naming refinement:** plan's `StepShapeContract` renamed to **`PortContract`** (collision with the existing identifier at `types.ts:319` — single-thread shape contract used by the palette chip + drop-anchor greying + `validateShapes`).

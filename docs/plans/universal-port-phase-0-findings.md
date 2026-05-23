@@ -206,16 +206,15 @@ curve work.
 
 ## Phase-1 entry checklist
 
-Ready to start when:
+All gates green; Phase 1 starts on user demand.
 
 - [x] Q-gate-9 GREEN with anti-trivial discipline enforced.
 - [x] Runtime dual-dispatch GREEN on real AES-128 + AES-128 ECB.
 - [x] Full check (`npm run check`) GREEN — biome + tsc + 1618 tests + build.
 - [x] Findings doc written + plan doc updated.
-- [ ] DES Phase 6e (manual browser smoke) shipped under legacy contract.
-      *(Plan doc says implementation held until this is complete. Phase
-      0 was authorized as a spike inside that hold; Phase 1 reopens the
-      gate.)*
+- [x] DES Phase 6e (manual browser smoke) shipped under legacy contract —
+      completed 2026-05-22 across manual walks #1–#4 (M1–M7 checklist
+      confirmed in `docs/plans/des-feistel.md`).
 
 ## Recommendation
 
