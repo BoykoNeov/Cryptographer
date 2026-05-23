@@ -10,11 +10,21 @@
 
 import { liftLegacyExecutor } from "../core/port-projection";
 import { StepRegistry } from "../core/registry";
-import { addRoundKey, addRoundKeyDoc } from "../steps/add-round-key";
+import {
+  addRoundKey,
+  addRoundKeyDoc,
+  addRoundKeyMeta,
+  addRoundKeyPortContract,
+} from "../steps/add-round-key";
 import { auxCopy, auxCopyDoc, auxCopyMeta, auxCopyPortContract } from "../steps/aux-copy";
 import { auxLoad, auxLoadDoc, auxLoadMeta, auxLoadPortContract } from "../steps/aux-load";
 import { auxXor, auxXorDoc, auxXorMeta, auxXorPortContract } from "../steps/aux-xor";
-import { byteSubstitution, byteSubstitutionDoc } from "../steps/byte-substitution";
+import {
+  byteSubstitution,
+  byteSubstitutionDoc,
+  byteSubstitutionMeta,
+  byteSubstitutionPortContract,
+} from "../steps/byte-substitution";
 import { computeBlockCount, computeBlockCountDoc } from "../steps/compute-block-count";
 import { concatBlocks, concatBlocksDoc } from "../steps/concat-blocks";
 import { desExpandR, desExpandRDoc } from "../steps/des-expand-r";
@@ -41,11 +51,20 @@ import { ivLoad, ivLoadDoc, ivLoadMeta, ivLoadPortContract } from "../steps/iv-l
 import {
   keyExpansion,
   keyExpansionDoc,
+  keyExpansionMeta,
+  keyExpansionPortContract,
   keyExpansionV2,
   keyExpansionV2Doc,
+  keyExpansionV2Meta,
+  keyExpansionV2PortContract,
 } from "../steps/key-expansion";
 import { loadBlock, loadBlockDoc } from "../steps/load-block";
-import { mixColumns, mixColumnsDoc } from "../steps/mix-columns";
+import {
+  mixColumns,
+  mixColumnsDoc,
+  mixColumnsMeta,
+  mixColumnsPortContract,
+} from "../steps/mix-columns";
 import { pkcs7Pad, pkcs7PadDoc, pkcs7PadMeta, pkcs7PadPortContract } from "../steps/pkcs7-pad";
 import {
   pkcs7Unpad,
@@ -65,7 +84,7 @@ import {
   serpentLinearTransformDoc,
 } from "../steps/serpent-linear-transform";
 import { serpentSubBytes, serpentSubBytesDoc } from "../steps/serpent-sub-bytes";
-import { shiftRows, shiftRowsDoc } from "../steps/shift-rows";
+import { shiftRows, shiftRowsDoc, shiftRowsMeta, shiftRowsPortContract } from "../steps/shift-rows";
 import { speckKeySchedule, speckKeyScheduleDoc } from "../steps/speck-key-schedule";
 import { speckRound, speckRoundDoc } from "../steps/speck-round";
 import { speckRoundInverse, speckRoundInverseDoc } from "../steps/speck-round-inverse";
@@ -78,19 +97,70 @@ import { zeroUnpad, zeroUnpadDoc, zeroUnpadMeta, zeroUnpadPortContract } from ".
 
 export const buildDefaultRegistry = (): StepRegistry => {
   const r = new StepRegistry();
+  // ─── AES core step types (Slice 1.4 — universal port-dataflow) ─────────
+  // All six AES step types lift in Slice 1.4. byte-substitution + add-
+  // round-key MOVE out of the throw-away `PROJECTION_METADATA` side-map
+  // into colocated metadata per Decision C (the side-map entries stay as
+  // dead code through Slice 1.4 because the runtime's contract-priority
+  // dispatch shadows them; Slice 1.9 deletes the side-map outright per
+  // Decision A). shift-rows + mix-columns are pure state-only — same
+  // shape as byte-substitution. Key-expansion is the FIRST one-to-many
+  // writer in the universal-port migration — port-per-roundkey per
+  // Decision B, with `outputs(params)` in function form sized by
+  // `params.rounds` (the user-picked Slice 1.4 contract evolution).
   r.register("generic.byte-substitution@1", {
-    executor: byteSubstitution,
+    kind: "ported",
+    executor: liftLegacyExecutor(byteSubstitution, byteSubstitutionMeta),
+    legacy: byteSubstitution,
+    shape: byteSubstitutionPortContract,
+    meta: byteSubstitutionMeta,
     doc: byteSubstitutionDoc,
   });
-  r.register("generic.shift-rows@1", { executor: shiftRows, doc: shiftRowsDoc });
-  r.register("generic.mix-columns@1", { executor: mixColumns, doc: mixColumnsDoc });
-  r.register("generic.add-round-key@1", { executor: addRoundKey, doc: addRoundKeyDoc });
-  r.register("aes.key-expansion@1", { executor: keyExpansion, doc: keyExpansionDoc });
+  r.register("generic.shift-rows@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(shiftRows, shiftRowsMeta),
+    legacy: shiftRows,
+    shape: shiftRowsPortContract,
+    meta: shiftRowsMeta,
+    doc: shiftRowsDoc,
+  });
+  r.register("generic.mix-columns@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(mixColumns, mixColumnsMeta),
+    legacy: mixColumns,
+    shape: mixColumnsPortContract,
+    meta: mixColumnsMeta,
+    doc: mixColumnsDoc,
+  });
+  r.register("generic.add-round-key@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(addRoundKey, addRoundKeyMeta),
+    legacy: addRoundKey,
+    shape: addRoundKeyPortContract,
+    meta: addRoundKeyMeta,
+    doc: addRoundKeyDoc,
+  });
+  r.register("aes.key-expansion@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(keyExpansion, keyExpansionMeta),
+    legacy: keyExpansion,
+    shape: keyExpansionPortContract,
+    meta: keyExpansionMeta,
+    doc: keyExpansionDoc,
+  });
   // @2: relaxed `rounds === Nk + 6` assertion + on-the-fly Rcon extension.
   // Drives the duplicate-round feature; canonical specs stay on @1 and the
   // mutator rewrites the type to @2 when bumping rounds past the standard
   // count. ParamEditor renders both versions through the same block.
-  r.register("aes.key-expansion@2", { executor: keyExpansionV2, doc: keyExpansionV2Doc });
+  // Shares the @1 meta + contract verbatim (identical param shape).
+  r.register("aes.key-expansion@2", {
+    kind: "ported",
+    executor: liftLegacyExecutor(keyExpansionV2, keyExpansionV2Meta),
+    legacy: keyExpansionV2,
+    shape: keyExpansionV2PortContract,
+    meta: keyExpansionV2Meta,
+    doc: keyExpansionV2Doc,
+  });
   // ─── Padding chain (Phase: plaintext input + visible padding) ──────────
   // BytesState ↔ MatrixState boundary steps plus three pad/unpad pairs.
   // Each pair is generic over `blockSize` so they drop into future block

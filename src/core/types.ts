@@ -410,12 +410,37 @@ export type PortShape = {
 export type PortLayout = "raw" | "matrix-cm-4x4" | "be-word" | "le-word" | string;
 
 /**
+ * A per-port-name shape map, either as a static `ReadonlyMap` (the
+ * common case for fixed-arity steps — `byte-substitution` has one state
+ * port in, one state port out) or as a function from the leaf's
+ * `params` (for dynamic-N steps — `aes.key-expansion@1`'s output port
+ * count is `params.rounds + 1`, varying per leaf).
+ *
+ * The function form mirrors the shape `ProjectionMetadata.auxWritePorts`
+ * already uses for dynamic aux bindings — keeping the two contract
+ * layers isomorphic. User pick 2026-05-23 (Slice 1.4) over a templated-
+ * name "keyN" lie and over a `dynamicOutputs?` sibling field.
+ *
+ * Callers MUST resolve via `resolvePortMap` (in `core/port-projection.ts`)
+ * — never a raw `.get(...)` — because the function form needs `params`
+ * to materialize. Resolving once per frame and caching the result is the
+ * runtime's responsibility.
+ */
+export type PortShapeMap =
+  | ReadonlyMap<string, PortShape>
+  | ((params: Json) => ReadonlyMap<string, PortShape>);
+
+/**
  * Declared input/output port contract for a ported step type.
  *
  * Map-of-port-name → shape, not array, because port names are part of
  * the step's UX (the inspector labels arrows by port name; the editor
  * lets the user re-wire by typing the source port at the consumer end
  * per Q-edges sink-only edges decision).
+ *
+ * Each side is a `PortShapeMap` — static for the common fixed-arity
+ * case, function-form for dynamic-N steps (key-expansion: state +
+ * `params.rounds + 1` round keys).
  *
  * Distinct from the existing `StepShapeContract` (line 319) which
  * describes the single-thread state shape. The two contracts coexist
@@ -424,8 +449,8 @@ export type PortLayout = "raw" | "matrix-cm-4x4" | "be-word" | "le-word" | strin
  * (Phase 5), `StepShapeContract` deprecates.
  */
 export type PortContract = {
-  readonly inputs: ReadonlyMap<string, PortShape>;
-  readonly outputs: ReadonlyMap<string, PortShape>;
+  readonly inputs: PortShapeMap;
+  readonly outputs: PortShapeMap;
 };
 
 /**

@@ -1,4 +1,11 @@
-import type { Json, MatrixState, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  Json,
+  MatrixState,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 /**
  * Generic byte substitution: replace every byte b with sbox[b].
@@ -55,6 +62,28 @@ intact.`,
   ]),
   references: ["FIPS-197 §5.1.1 (SubBytes)", "FIPS-197 §5.3.2 (InvSubBytes)"],
   shapeContract: { input: "matrix4x4-bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.4) ───────────────
+// `byteSubstitutionMeta` + `byteSubstitutionPortContract` move out of
+// the throw-away `PROJECTION_METADATA` side-map in `core/port-projection.ts`
+// into colocated exports here per Decision C (metadata lives next to
+// the executor that owns it). The side-map entry stays as dead code
+// through Slice 1.4 because the runtime's contract-priority dispatch at
+// `runtime.ts:217-221` consults the registration's `meta` first; Slice
+// 1.9 deletes the side-map outright.
+//
+// Pure state-only: a 4×4 column-major matrix in, same shape out, no aux.
+
+export const byteSubstitutionMeta: ProjectionMetadata = {
+  stateLayout: "matrix4x4-bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+};
+
+export const byteSubstitutionPortContract: PortContract = {
+  inputs: new Map([["state", { byteLength: 16, layout: "matrix-cm-4x4" }]]),
+  outputs: new Map([["state", { byteLength: 16, layout: "matrix-cm-4x4" }]]),
 };
 
 const readSbox = (params: Json): readonly number[] => {

@@ -313,21 +313,53 @@ Existing AES-128 CBC frame-parity test from Slice 1.2 continues to
 pass (the cipher's load-block/store-block/split/concat/count stay
 legacy, so the cipher-level parity gate is unchanged).
 
-### Slice 1.4 — AES lifted (port-per-roundkey)
+### Slice 1.4 — AES lifted (port-per-roundkey) — **GREEN 2026-05-23**
 
 Step types: `generic.shift-rows@1`, `generic.mix-columns@1`,
 `generic.byte-substitution@1`, `generic.add-round-key@1`,
 `aes.key-expansion@1`, `aes.key-expansion@2`.
 
-`byte-substitution` and `add-round-key` already have throw-away metadata
-in `PROJECTION_METADATA`; this slice moves them to co-located metadata
-per Decision C.
+`byte-substitution` and `add-round-key` already had throw-away metadata
+in `PROJECTION_METADATA`; this slice moved them to co-located metadata
+per Decision C. The side-map entries stay as dead code through Slice
+1.4 because the runtime's contract-priority dispatch at
+`runtime.ts:217-221` shadows them; Slice 1.9 deletes the side-map
+outright (Decision A).
 
 Key-expansion uses **port-per-roundkey** per Decision B —
-`meta.auxWritePorts(params)` returns N bindings sized by `params.rounds`.
+`meta.auxWritePorts(params)` returns N+1 bindings sized by
+`params.rounds`. Key-expansion is **aux-only** (no state ports
+declared, matching its `shapeContract: { input: "any", output:
+"preserveInput" }`); the lift adapter creates a sentinel state and the
+runtime preserves the caller's state across the call — same pattern as
+the Slice-1.2 aux-only primitives (`iv-load`, `aux-load`, etc.).
 
-**Gate:** frame-byte equivalence + FIPS-197 Appendix C KATs (3 key
-sizes) pass for the ported path.
+**Contract evolution landed mid-slice:** the user-picked design
+question was whether `PortContract.outputs` should be widened to accept
+a function form (Option A — chosen), use a templated-name "keyN" lie
+(Option B — rejected), or get a `dynamicOutputs?` sibling field
+(Option C — rejected). Option A widens both `inputs` and `outputs` to
+`PortShapeMap = ReadonlyMap | ((params) => ReadonlyMap)` — mirroring
+`ProjectionMetadata.auxWritePorts`'s already function-only shape and
+keeping the two contract layers isomorphic. A new helper
+`resolvePortMap(spec, params)` in `core/port-projection.ts` is the
+single funnel; the runtime's layout lookup site (`runtime.ts:317`)
+calls it once per ported frame. Existing 10 static contracts pass
+unchanged through the union — no source-code edits required to those
+contracts.
+
+**Gate (achieved):** 1651 tests green (1629 prior + 8 new in
+`tests/runtime-ported-dispatch-aes-core.test.ts` + ~14 picked up from
+suite expansion). All three FIPS-197 KAT sanity floors green under
+`portedDispatchEnabled: true` (AES-128 §C.1, AES-192 §A.2 + NIST AES
+Core 192, AES-256 §A.3 + NIST AES Core 256). Frame-by-frame byte
+parity green for all three specs across 49 / 51 / 57 frames
+respectively. `aes.key-expansion@2` byte-parity green at canonical
+AES-128 rounds. Map insertion order on the 11 AES-128 round keys
+pinned (roundKey.0 … roundKey.10 in order). The pre-existing Phase-0
+side-map pin at `tests/runtime-ported-dispatch.test.ts:124` continues
+to pass — the side-map's KEYS are untouched; the runtime just never
+consults them for the now-ported registrations.
 
 ### Slice 1.5 — Chaining primitives lifted
 

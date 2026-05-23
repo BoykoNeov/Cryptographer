@@ -1,5 +1,12 @@
 import { matAt, setMatAt } from "../core/state/matrix";
-import type { Json, MatrixState, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  Json,
+  MatrixState,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 /**
  * Cyclically shift each row of the 4x4 state to the left by `shifts[r]` columns.
@@ -55,6 +62,21 @@ output is unchanged) because both are byte-position operations.`,
   ]),
   references: ["FIPS-197 §5.1.2 (ShiftRows)", "FIPS-197 §5.3.1 (InvShiftRows)"],
   shapeContract: { input: "matrix4x4-bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.4) ───────────────
+// Pure state-only step — matrix in, matrix out, no aux. Same shape as
+// `byteSubstitution`.
+
+export const shiftRowsMeta: ProjectionMetadata = {
+  stateLayout: "matrix4x4-bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+};
+
+export const shiftRowsPortContract: PortContract = {
+  inputs: new Map([["state", { byteLength: 16, layout: "matrix-cm-4x4" }]]),
+  outputs: new Map([["state", { byteLength: 16, layout: "matrix-cm-4x4" }]]),
 };
 
 const readShifts = (params: Json): readonly number[] => {

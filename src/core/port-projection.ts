@@ -30,6 +30,8 @@ import type {
   AuxValue,
   Json,
   LayoutTags,
+  PortShape,
+  PortShapeMap,
   PortedExecutor,
   PortedFrame,
   ProjectionMetadata,
@@ -40,6 +42,24 @@ import type {
   StepOutputs,
   TraceFrame,
 } from "./types";
+
+/**
+ * Resolve a `PortShapeMap` to a static `ReadonlyMap<string, PortShape>`.
+ *
+ * `PortContract.inputs` and `PortContract.outputs` are unioned with a
+ * function form (`(params) => Map`) so dynamic-N steps — AES / Speck /
+ * Serpent / DES key-schedules — can declare per-leaf port counts sized
+ * by `params.rounds`. Callers MUST funnel through this helper instead
+ * of touching `.get(...)` directly: the function form needs `params` to
+ * materialize and the static form is identity.
+ *
+ * Cheap for the static case (`typeof !== "function"` returns the map
+ * unchanged). The runtime resolves once per ported frame and reads
+ * from the returned map repeatedly. User pick 2026-05-23 over the
+ * templated-name "keyN" lie and a `dynamicOutputs?` sibling field.
+ */
+export const resolvePortMap = (spec: PortShapeMap, params: Json): ReadonlyMap<string, PortShape> =>
+  typeof spec === "function" ? spec(params) : spec;
 
 // `ProjectionMetadata` moved to `core/types.ts` in Slice 1.2 so the
 // `StepRegistration` discriminated union can carry it as the `meta` field

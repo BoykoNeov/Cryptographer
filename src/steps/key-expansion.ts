@@ -1,4 +1,12 @@
-import type { AuxValue, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  AuxValue,
+  Json,
+  PortContract,
+  PortShape,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 /**
  * AES key expansion. FIPS-197 §5.2.
@@ -375,3 +383,138 @@ const readParams = (params: Json): Params => {
     rounds: p.rounds,
   };
 };
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.4) ───────────────
+// AES key-expansion is the FIRST one-to-many writer in the universal-
+// port migration — Decision B (port-per-roundkey). The output port
+// count is `params.rounds + 1` (one for the pre-round AddRoundKey plus
+// one per round), so both `ProjectionMetadata.auxWritePorts` and
+// `PortContract.outputs` use their function-form variants — the latter
+// landing as the user-picked Slice 1.4 contract evolution (PortShapeMap).
+//
+// The same metadata shape applies to both `aes.key-expansion@1` (the
+// canonical FIPS-197 §5.2 procedure asserting `rounds === Nk + 6`) and
+// `aes.key-expansion@2` (the relaxed-rounds variant driving the
+// duplicate-round feature). Both register with this shared meta + port
+// contract because their PARAM surface is identical — the only
+// difference is the executor's relaxed `rounds >= Nk + 1` assertion +
+// on-the-fly Rcon extension.
+//
+// **Aux-only**: `stateInputPort` and `stateOutputPort` are intentionally
+// OMITTED. Key-expansion's `shapeContract` is `input: "any", output:
+// "preserveInput"` — the executor doesn't touch state. Declaring no
+// state ports matches the iv-load / aux-load / aux-xor / aux-copy
+// pattern from Slice 1.2: the lift adapter creates a sentinel state to
+// pass to the legacy executor and discards its passthrough return;
+// the runtime preserves the caller's actual state across the ported
+// call (so the next step — typically AddRoundKey on a matrix4x4-bytes
+// state — sees its own incoming shape, not a key-expansion artifact).
+//
+// **Port naming convention** — `masterKey` (NOT `key`) for the aux
+// read disambiguates it from the per-round output ports `key0`,
+// `key1`, …, `keyN`. The aux-key the input port reads from (i.e.,
+// the leaf's `params.keyAuxName`, typically `"key"`) is preserved in
+// the layout-tag `auxInputBindings` sidecar for round-trip
+// reconstruction.
+
+const KEY_EXPANSION_ROUND_KEY_PORT_SHAPE: PortShape = {
+  byteLength: 16,
+  layout: "raw",
+};
+
+/**
+ * Compute the per-leaf round-key port surface for the contract's
+ * `outputs(params)` callback. Ports are `key0` … `keyN` where N =
+ * `params.rounds`. No state output port — key-expansion is aux-only.
+ *
+ * Reused by both @1 and @2 — the param shape is identical between the
+ * two versions; only the executor's round-count assertion differs.
+ */
+const keyExpansionOutputPorts = (params: Json) => {
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("aes.key-expansion contract: params must be an object");
+  }
+  const p = params as { rounds?: unknown };
+  if (typeof p.rounds !== "number" || !Number.isInteger(p.rounds) || p.rounds < 1) {
+    throw new Error("aes.key-expansion contract: params.rounds: positive integer required");
+  }
+  const m = new Map<string, PortShape>();
+  for (let r = 0; r <= p.rounds; r++) {
+    m.set(`key${r}`, KEY_EXPANSION_ROUND_KEY_PORT_SHAPE);
+  }
+  return m;
+};
+
+/**
+ * Port-name → aux-key bindings for the per-round-key outputs.
+ * `outputPrefix` is typically `"roundKey"` so port `key3` binds to
+ * `auxWritten["roundKey.3"]`. Map iteration is insertion-ordered, so
+ * the bindings emerge in `r = 0..rounds` order — matches the legacy
+ * executor's `auxWrites` insertion order, which the frame-parity test
+ * pins.
+ */
+const keyExpansionAuxWritePorts = (params: Json) => {
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("aes.key-expansion auxWritePorts: params must be an object");
+  }
+  const p = params as { outputPrefix?: unknown; rounds?: unknown };
+  if (typeof p.outputPrefix !== "string") {
+    throw new Error("aes.key-expansion auxWritePorts: params.outputPrefix: string required");
+  }
+  if (typeof p.rounds !== "number" || !Number.isInteger(p.rounds) || p.rounds < 1) {
+    throw new Error("aes.key-expansion auxWritePorts: params.rounds: positive integer required");
+  }
+  const bindings = new Map<string, string>();
+  for (let r = 0; r <= p.rounds; r++) {
+    bindings.set(`key${r}`, `${p.outputPrefix}.${r}`);
+  }
+  return bindings;
+};
+
+/**
+ * Aux-read bindings — one `masterKey` input port bound to whichever aux
+ * key the leaf names (typically `"key"`). Function form is mandatory
+ * because every leaf could conceivably choose a different
+ * `keyAuxName`; the binding can only be resolved with `params` in hand.
+ */
+const keyExpansionAuxReadPorts = (params: Json) => {
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("aes.key-expansion auxReadPorts: params must be an object");
+  }
+  const p = params as { keyAuxName?: unknown };
+  if (typeof p.keyAuxName !== "string") {
+    throw new Error("aes.key-expansion auxReadPorts: params.keyAuxName: string required");
+  }
+  return new Map([["masterKey", p.keyAuxName]]);
+};
+
+export const keyExpansionMeta: ProjectionMetadata = {
+  // Aux-only step — no state ports. `stateLayout: "bytes"` is the
+  // ceremonial value the type requires; the lift adapter never
+  // consults it because neither `stateInputPort` nor `stateOutputPort`
+  // is declared. See `iv-load.ts` for the same pattern.
+  stateLayout: "bytes",
+  auxReadPorts: keyExpansionAuxReadPorts,
+  auxWritePorts: keyExpansionAuxWritePorts,
+};
+
+export const keyExpansionPortContract: PortContract = {
+  // Static `inputs`: just the master key. No state input port —
+  // key-expansion's shapeContract is `input: "any"`. The length of the
+  // master key varies across AES variants (16 / 24 / 32 B for AES-128 /
+  // 192 / 256), so `masterKey.byteLength` is intentionally absent —
+  // the polymorphic-port semantic (user pick 2026-05-23 Slice 1.2)
+  // covers exactly this case without a sentinel value.
+  inputs: new Map<string, PortShape>([["masterKey", { layout: "raw" }]]),
+  // Dynamic outputs: function form because the port count grows with
+  // `params.rounds`. No state output port; the runtime preserves the
+  // caller's actual state across the ported call. Shared between @1
+  // and @2 via the `keyExpansionV2PortContract` alias below.
+  outputs: keyExpansionOutputPorts,
+};
+
+// `@2` shares the meta + contract verbatim. Param shape is identical
+// to `@1`; only the executor's assertions differ. A single set of
+// exports keeps the two registrations from drifting.
+export const keyExpansionV2Meta: ProjectionMetadata = keyExpansionMeta;
+export const keyExpansionV2PortContract: PortContract = keyExpansionPortContract;

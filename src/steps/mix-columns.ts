@@ -1,5 +1,12 @@
 import { gfMul, matAt, setMatAt } from "../core/state/matrix";
-import type { Json, MatrixState, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  Json,
+  MatrixState,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 /**
  * Multiply each column of the 4x4 state by a 4x4 GF(2^8) matrix.
@@ -73,6 +80,21 @@ cipher, breakable by hand on a couple of round outputs.`,
     "FIPS-197 §4.2 (GF(2^8) arithmetic)",
   ],
   shapeContract: { input: "matrix4x4-bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.4) ───────────────
+// Pure state-only step — matrix in, matrix out, no aux. Same shape as
+// `byteSubstitution` and `shiftRows`.
+
+export const mixColumnsMeta: ProjectionMetadata = {
+  stateLayout: "matrix4x4-bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+};
+
+export const mixColumnsPortContract: PortContract = {
+  inputs: new Map([["state", { byteLength: 16, layout: "matrix-cm-4x4" }]]),
+  outputs: new Map([["state", { byteLength: 16, layout: "matrix-cm-4x4" }]]),
 };
 
 const readMatrix = (params: Json): readonly (readonly number[])[] => {

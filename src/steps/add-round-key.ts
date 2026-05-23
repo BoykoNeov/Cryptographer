@@ -1,4 +1,11 @@
-import type { Json, MatrixState, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  Json,
+  MatrixState,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 /**
  * XOR a 16-byte round key (read from aux) into the state matrix, byte-wise.
@@ -57,6 +64,35 @@ obscures what's happening.)`,
   ]),
   references: ["FIPS-197 §5.1.4 (AddRoundKey)"],
   shapeContract: { input: "matrix4x4-bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.4) ───────────────
+// `addRoundKeyMeta` + `addRoundKeyPortContract` lift this step type into
+// the ported contract. The leaf's `params.auxName` (e.g. "roundKey.0")
+// becomes the single aux-key bound to the `key` input port — same
+// function-shape `auxReadPorts` that lived in the side-map's
+// `META_ADD_ROUND_KEY`. Slice 1.9 deletes the side-map; through Slice
+// 1.4 it stays as dead code (Decision A — leave deletion to its own
+// slice for a clean diff).
+
+export const addRoundKeyMeta: ProjectionMetadata = {
+  stateLayout: "matrix4x4-bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+  auxReadPorts: (params: Json) => {
+    return new Map([["key", readAuxName(params)]]);
+  },
+};
+
+export const addRoundKeyPortContract: PortContract = {
+  inputs: new Map([
+    ["state", { byteLength: 16, layout: "matrix-cm-4x4" }],
+    // Round key is raw 16 bytes — `add-round-key` XORs into the state
+    // matrix byte-by-byte. Decoded as a `Uint8Array` per the
+    // `layout: "raw"` default in `auxPortBytesToValue`.
+    ["key", { byteLength: 16, layout: "raw" }],
+  ]),
+  outputs: new Map([["state", { byteLength: 16, layout: "matrix-cm-4x4" }]]),
 };
 
 const readAuxName = (params: Json): string => {

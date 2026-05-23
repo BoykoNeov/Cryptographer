@@ -4,6 +4,7 @@ import {
   auxPortBytesToValue,
   liftLegacyExecutor,
   portBytesToState,
+  resolvePortMap,
   stateToPortBytes,
 } from "./port-projection";
 import type { StepRegistry } from "./registry";
@@ -309,13 +310,20 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
         auxWritten = new Map<string, AuxValue>();
         if (meta.auxWritePorts !== undefined) {
           const writeBindings = meta.auxWritePorts(node.params);
+          // Resolve the contract's outputs map ONCE per frame. For
+          // dynamic-N ported steps (key-expansion's per-round-key ports
+          // sized by `params.rounds`) the outputs field is a function;
+          // for the common fixed-arity case (byte-substitution et al.)
+          // it's already a static Map and `resolvePortMap` returns it
+          // unchanged. See `PortShapeMap` in `core/types.ts`.
+          const outputsMap =
+            registration.kind === "ported"
+              ? resolvePortMap(registration.shape.outputs, node.params)
+              : undefined;
           for (const [portName, auxKey] of writeBindings) {
             const outBytes = outputs.get(portName);
             if (outBytes === undefined) continue;
-            const layout =
-              registration.kind === "ported"
-                ? registration.shape.outputs.get(portName)?.layout
-                : undefined;
+            const layout = outputsMap?.get(portName)?.layout;
             const value = auxPortBytesToValue(outBytes, layout);
             aux.set(auxKey, value);
             auxWritten.set(auxKey, value);
