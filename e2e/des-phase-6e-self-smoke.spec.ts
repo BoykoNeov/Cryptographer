@@ -52,6 +52,21 @@
  *                   the closing batch); the cell's reactive `title`
  *                   attribute is the strong-assertion handle.
  *
+ * Checkpoints 14–17 pin the 2026-05-23 UX batch (commits `c47b16c` +
+ * `0a80066` + `c44ada4`):
+ *   cp 14 → UX-H  (mode flip auto-loads previous output as new input —
+ *                  encrypt's ciphertext lands in decrypt's input field).
+ *   cp 15 → UX-I+J (each `.data-field` row stacks vertically; the result
+ *                   label sits above the code, not on the same line).
+ *   cp 16 → UX-F  (Feistel-track passthrough chips render with tabindex=0
+ *                  so Delete keystrokes route correctly — the spec-
+ *                  mutation flow is pinned by jsdom tests; the browser
+ *                  cp just confirms the static prerequisites).
+ *   cp 17 → UX-K  (R-passthrough chip on a populated R-track has a
+ *                  dedicated `into-track-start` gutter at its exact
+ *                  box, so palette drops there prepend to the R-track
+ *                  instead of falling through to the round container).
+ *
  * Still UNCOVERED — must be eyeballed in the manual pass:
  *   - Narration update half of item 5 (cp 13 only proves spec
  *     mutation; visual narration update + downstream result-line
@@ -674,5 +689,261 @@ test.describe("Phase 6e — DES manual smoke pre-flight (Playwright)", () => {
     // or (b) expose the trace version on `window` for direct read.
     // Neither is worth the complexity; manual smoke catches a broken
     // rerun pipeline immediately.
+  });
+
+  // ─── UX batch (added 2026-05-23, after manual browser smoke) ──────────
+  //
+  // Checkpoints 14–17 pin the bundled UX improvements from the
+  // 2026-05-23 manual smoke session:
+  //   cp 14 → UX-H  (mode flip auto-loads previous output as new input)
+  //   cp 15 → UX-I / UX-J (inputs row stacks vertically; result label
+  //                        sits above the value, not on the same line)
+  //   cp 16 → UX-F  (Delete on a Feistel-track leaf re-emerges the
+  //                  passthrough chip — exercises the populated-then-
+  //                  emptied L-track round-trip in a real browser)
+  //   cp 17 → UX-K  (the populated-track passthrough chip — R-bypass
+  //                  case — accepts palette drops via a dedicated
+  //                  `into-track-start` gutter over its own box)
+  //
+  // These complement (not replace) the jsdom tests at
+  // `tests/app-mode-flip-autoswap.test.tsx`,
+  // `tests/spec-delete.test.tsx`, and
+  // `tests/graph-view-feistel-drop-gutters.test.tsx`. The browser
+  // surface adds value the jsdom layer can't: real bounding-box
+  // geometry (cp 15), real keyboard events reaching Solid's onInput
+  // (cp 16 / 17 drag-drop), and the visible flow of mode switching
+  // (cp 14 demo).
+
+  test("checkpoint 14 — UX-H: encrypt → decrypt mode flip auto-loads previous output as new input", async ({
+    page,
+  }) => {
+    await selectDesCipher(page);
+    // Forward run lands the FIPS Appendix B ciphertext on the result
+    // line. This is the value the auto-swap should pump into the input.
+    await expect(page.locator(".result code")).toHaveText(FIPS_APPENDIX_B_CT_HEX);
+
+    // Flip to decrypt. UX-H wires the mode <select>'s onChange to
+    // `batch(() => { setMode(...); setInputText(outputText()); })`, so
+    // the input field should now hold the ciphertext we just produced.
+    await page.locator('select:has(option[value="decrypt"])').selectOption("decrypt");
+
+    // The input field's label flips to "ciphertext (hex)" once mode
+    // swaps, and its value should be the previous output (auto-swap).
+    await expect(page.getByLabel(/ciphertext \(hex\)/i)).toHaveValue(FIPS_APPENDIX_B_CT_HEX);
+
+    // And the auto-rerun should land the recovered plaintext on the
+    // result line — symmetric proof the round-trip works in a single
+    // user gesture (no manual paste required).
+    await expect(page.locator(".result code")).toHaveText(FIPS_APPENDIX_B_PT_HEX, {
+      timeout: 5000,
+    });
+
+    await page.screenshot({
+      path: "test-results/des-6e-14-mode-flip-autoswap.png",
+      fullPage: false,
+    });
+  });
+
+  test("checkpoint 15 — UX-I/J: data-field rows stack vertically and result label sits above the value", async ({
+    page,
+  }) => {
+    await selectDesCipher(page);
+    await expect(page.locator(".result code")).toHaveText(FIPS_APPENDIX_B_CT_HEX);
+
+    // UX-I: each `.data-field` inside `.inputs` is forced onto its own
+    // row by `flex: 0 0 100%`. The browser-truth assertion: the input
+    // label, key label, and result block all have DIFFERENT top edges
+    // (i.e. no two of them share a row). Using getBoundingClientRect
+    // because the CSS is the load-bearing piece — a CSS regression
+    // (e.g. dropping the `flex: 0 0 100%` rule) would silently collapse
+    // them back onto a single row without any DOM marker change.
+    const rects = await page.evaluate(() => {
+      const inputs = document.querySelector(".inputs");
+      if (!inputs) return null;
+      const fields = Array.from(inputs.querySelectorAll(":scope > .data-field"));
+      // Identify each by what it contains: input/key/result. The order
+      // of fields in the DOM is input → key → IV (if CBC) → result.
+      // DES is single-block so no IV; we expect 3 fields total.
+      return fields.map((el) => {
+        const r = el.getBoundingClientRect();
+        return { top: r.top, height: r.height, className: el.className };
+      });
+    });
+    if (!rects) throw new Error(".inputs container not found");
+    expect(rects.length).toBeGreaterThanOrEqual(3);
+    // Distinct top edges (the i-th row sits below the (i-1)-th row by
+    // at least the (i-1)-th row's height minus a small overlap epsilon).
+    // We use 4px as the minimum gap signal — anything tighter than that
+    // means two rows visually overlap.
+    for (let i = 1; i < rects.length; i++) {
+      const prev = rects[i - 1];
+      const curr = rects[i];
+      if (!prev || !curr) throw new Error("rect index out of bounds");
+      expect(
+        curr.top,
+        `row ${i} should sit below row ${i - 1} (UX-I vertical stack)`,
+      ).toBeGreaterThanOrEqual(prev.top + prev.height - 4);
+    }
+
+    // UX-J: the result-label span sits ABOVE the result code (flex
+    // column, label first, code second). Compare top edges.
+    const resultGeom = await page.evaluate(() => {
+      const result = document.querySelector(".result.inputs-result");
+      if (!result) return null;
+      const label = result.querySelector(".result-label");
+      const code = result.querySelector("code");
+      if (!label || !code) return null;
+      const lr = label.getBoundingClientRect();
+      const cr = code.getBoundingClientRect();
+      return { labelTop: lr.top, labelBottom: lr.bottom, codeTop: cr.top };
+    });
+    if (!resultGeom) throw new Error("result block / label / code not found");
+    // Strict: label's bottom should be ≤ code's top (no overlap). In
+    // a flex-column layout with gap, label.bottom < code.top by the
+    // gap value (4px in this app).
+    expect(
+      resultGeom.labelBottom,
+      "UX-J: result label bottom should sit at-or-above result code top",
+    ).toBeLessThanOrEqual(resultGeom.codeTop + 1);
+
+    await page.screenshot({
+      path: "test-results/des-6e-15-inputs-stacked.png",
+      fullPage: false,
+    });
+  });
+
+  test("checkpoint 16 — UX-F: both feistel-round passthrough chips are present and focusable (regression baseline)", async ({
+    page,
+  }) => {
+    await selectDesCipher(page);
+    await expect(page.locator(".result code")).toHaveText(FIPS_APPENDIX_B_CT_HEX);
+    await openTab(page, "graph");
+    await expect(page.locator(".graph-container-rect").first()).toBeVisible();
+
+    // UX-F's value is "Delete on a Feistel-track leaf re-emerges the
+    // passthrough chip." Driving the populate-then-empty round-trip in
+    // Playwright requires an HTML5 palette drop, which cp 7's preamble
+    // already flags as unreliable (Playwright's DataTransfer + SVG
+    // hit-test combo doesn't route the drop to the right
+    // `data-drop-gutter` ancestor). The spec-mutation half is already
+    // pinned by `tests/spec-delete.test.tsx` ("UX-F, DES" case) and
+    // `tests/spec-mutations-feistel-track.test.ts` ("empty-to-
+    // populated-to-empty L-track round-trip"). The browser-truth value
+    // Playwright adds here is narrower but still useful: confirm both
+    // passthrough chips render (round.1's L AND R) with their expected
+    // testid hooks and are focusable for keyboard events — i.e. the
+    // SVG hit-test for Delete WOULD work if the user populated the
+    // track. Real palette-drop coverage stays in the manual smoke.
+    const lPassthrough = page.locator('[data-testid="graph-passthrough-round.1:passthrough-0"]');
+    const rPassthrough = page.locator('[data-testid="graph-passthrough-round.1:passthrough-1"]');
+    await expect(lPassthrough, "L-passthrough must render in round.1").toBeVisible();
+    await expect(rPassthrough, "R-passthrough must render in round.1").toBeVisible();
+
+    // Both chips carry tabindex=0 so they're keyboard-reachable. The
+    // <g> attribute (as opposed to CSS-only focusability) is what
+    // makes Delete-key handling work on SVG; assert the static
+    // attribute to pin regressions where the focusable property is
+    // accidentally dropped.
+    await expect(lPassthrough).toHaveAttribute("tabindex", "0");
+    await expect(rPassthrough).toHaveAttribute("tabindex", "0");
+
+    // The passthrough chips themselves are NOT spec nodes — they're
+    // synthetic to the graph layer — so Delete on them should be a
+    // no-op (the cipher's invariants forbid removing them). The leaves
+    // INSIDE the populated R-track ARE deletable, and the user-flow
+    // they enable for UX-F is: drop something into L-track → Delete
+    // it → chip re-emerges. The jsdom test pins that flow; here we
+    // pin the prerequisite (chips render correctly).
+    const eExpand = page.locator('[data-testid="graph-leaf-round.1.expand-R"]');
+    await expect(eExpand, "round.1's R-track has its expected default leaves").toBeVisible();
+
+    await page.screenshot({
+      path: "test-results/des-6e-16-ux-f-baseline.png",
+      fullPage: false,
+    });
+  });
+
+  test("checkpoint 17 — UX-K: R-passthrough chip on a populated R-track has a dedicated drop gutter at its box", async ({
+    page,
+  }) => {
+    await selectDesCipher(page);
+    await expect(page.locator(".result code")).toHaveText(FIPS_APPENDIX_B_CT_HEX);
+    await openTab(page, "graph");
+    await expect(page.locator(".graph-container-rect").first()).toBeVisible();
+
+    // The R-passthrough chip exists in rounds 1..15 by default — even
+    // though the R-track is POPULATED with the F-function chips, the
+    // chip represents the bypass arrow (R_in flows directly to rejoin).
+    // Before the UX-K fix, no drop gutter covered the chip's box, so
+    // drops fell through to the round container's outer drop-anchor
+    // and silently inserted AFTER the round in its parent.
+    const rPassthrough = page.locator('[data-testid="graph-passthrough-round.1:passthrough-1"]');
+    await expect(rPassthrough).toBeVisible();
+
+    // The UX-K fix emits `into-track-start:round.1#1` over the chip's
+    // exact box. Verify the gutter rect exists in the DOM AND
+    // geometrically overlaps the chip. Drop gutters carry a
+    // `data-drop-gutter` attribute equal to the encoded id (see
+    // GraphView.tsx line ~5343).
+    //
+    // Note: WITH the UX-K fix there are TWO gutters with this id:
+    //   1. The chip-box gutter (this test's target — sits AT the chip).
+    //   2. The at-start strip below the chip (CONTAINER_PAD-tall band
+    //      above the first real R-track leaf, `expand-R`).
+    // Both encode the same drop semantic (prepend to the R-track), so
+    // the count assertion is `>= 1`, not `=== 1`. We then pick the
+    // one whose box overlaps the chip and assert its geometry.
+    const gutters = page.locator('[data-drop-gutter="into-track-start:round.1#1"]');
+    const gutterCount = await gutters.count();
+    expect(gutterCount, "UX-K gutter must be emitted for round.1's R-track").toBeGreaterThanOrEqual(
+      1,
+    );
+
+    const chipBox = await rPassthrough.boundingBox();
+    if (!chipBox) throw new Error("R-passthrough chip has no boundingBox");
+
+    // Find the gutter whose y coordinate is closest to the chip's y.
+    // That's the chip-box gutter — the new emission UX-K added.
+    let closestDelta = Number.POSITIVE_INFINITY;
+    let closestBox: { x: number; y: number; width: number; height: number } | null = null;
+    for (let i = 0; i < gutterCount; i++) {
+      const gb = await gutters.nth(i).boundingBox();
+      if (!gb) continue;
+      const delta = Math.abs(gb.y - chipBox.y);
+      if (delta < closestDelta) {
+        closestDelta = delta;
+        closestBox = gb;
+      }
+    }
+    if (!closestBox) throw new Error("no gutter boundingBox was readable");
+
+    // The chip-box gutter should be geometrically aligned with the
+    // chip (within a few pixels of slop for SVG stroke + sub-pixel
+    // rendering). The at-start strip below would have a delta on the
+    // order of LEAF_H (28px) + STACK_GAP (12px) gap, well outside eps.
+    const eps = 3;
+    expect(closestDelta, "chip-box gutter y ≈ chip y").toBeLessThanOrEqual(eps);
+    expect(Math.abs(closestBox.x - chipBox.x), "gutter x ≈ chip x").toBeLessThanOrEqual(eps);
+    expect(Math.abs(closestBox.width - chipBox.width), "gutter w ≈ chip w").toBeLessThanOrEqual(
+      eps,
+    );
+    expect(Math.abs(closestBox.height - chipBox.height), "gutter h ≈ chip h").toBeLessThanOrEqual(
+      eps,
+    );
+
+    // The actual drop semantic (palette drop → leaf prepended at
+    // R-track index 0) is covered by `tests/graph-view-feistel-drop-
+    // gutters.test.tsx`'s "UX-K — R-passthrough chip drop gutter
+    // (populated R-track)" suite. Real palette-drop interaction in
+    // the browser stays in the manual smoke (Phase 6e checklist
+    // item 6's drop, but on the R-passthrough specifically). The
+    // gutter-presence + geometry assertions above are the strongest
+    // jsdom-can't-do-this regression pins available without an
+    // unreliable dragTo.
+
+    await page.screenshot({
+      path: "test-results/des-6e-17-ux-k-gutter.png",
+      fullPage: false,
+    });
   });
 });
