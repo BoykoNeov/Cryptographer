@@ -21,7 +21,14 @@
  * `src/ciphers/des-constants.ts`.
  */
 
-import type { BytesState, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  BytesState,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 import { bitsToFipsBytes, fipsBytesToBits } from "./des-bit-ops";
 
 export const desSBoxes: StepExecutor = (state, params) => {
@@ -94,6 +101,27 @@ diffusion / confusion budget is spread across the input groups.`,
   ]),
   references: ["FIPS 46-3 Appendix A (Primitive functions for the data encryption algorithm)"],
   shapeContract: { input: "bytes", output: "bytes" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.8) ───────────────
+// The second asymmetric state-port declaration in the universal-port
+// migration (after `des.expand-R@1`'s 4→6). S-boxes collapse 6 bytes
+// (48 bits) → 4 bytes (32 bits) — exact inverse of E's shape map. No
+// aux. The S-box tables ride per-leaf as `params.sboxes` (the spec
+// builder deep-copies them per leaf so editing one round doesn't bleed
+// into siblings); the port shape is independent of the table values.
+
+export const desSBoxesMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+};
+
+export const desSBoxesPortContract: PortContract = {
+  // 6-byte input, 4-byte output — the second asymmetric state-port
+  // declaration in the universal-port migration.
+  inputs: new Map([["state", { byteLength: 6, layout: "raw" }]]),
+  outputs: new Map([["state", { byteLength: 4, layout: "raw" }]]),
 };
 
 const readSBoxes = (params: Json): readonly (readonly (readonly number[])[])[] => {

@@ -19,7 +19,14 @@
  * `src/ciphers/des-constants.ts`.
  */
 
-import type { BytesState, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  BytesState,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 import { fipsPermute } from "./des-bit-ops";
 
 export const desExpandR: StepExecutor = (state, params) => {
@@ -64,6 +71,30 @@ This is one of two shape-changing steps inside F.`,
   ]),
   references: ["FIPS 46-3 §3 (E Bit-Selection Table)"],
   shapeContract: { input: "bytes", output: "bytes" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.8) ───────────────
+// **The first lifted step in any slice where `input.byteLength !==
+// output.byteLength` on the state port.** DES E maps 4 bytes (32 bits)
+// → 6 bytes (48 bits). Both ports share `stateLayout: "bytes"` — the
+// `bytes`-shape codec in `port-projection.ts` (`stateToBytes` line 286)
+// copies bytes without a length check, so the asymmetric declaration
+// works without runtime contract changes. The length asymmetry is
+// honest information for the editor + future palette wiring (telling
+// the user "this step expands its input"); the runtime relies on the
+// executor's own length assertions to catch wiring errors.
+
+export const desExpandRMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+};
+
+export const desExpandRPortContract: PortContract = {
+  // 4-byte input, 6-byte output — the first asymmetric state-port
+  // declaration in the universal-port migration.
+  inputs: new Map([["state", { byteLength: 4, layout: "raw" }]]),
+  outputs: new Map([["state", { byteLength: 6, layout: "raw" }]]),
 };
 
 const readTable = (params: Json): readonly number[] => {

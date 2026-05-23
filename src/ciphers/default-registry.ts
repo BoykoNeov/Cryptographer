@@ -27,14 +27,54 @@ import {
 } from "../steps/byte-substitution";
 import { computeBlockCount, computeBlockCountDoc } from "../steps/compute-block-count";
 import { concatBlocks, concatBlocksDoc } from "../steps/concat-blocks";
-import { desExpandR, desExpandRDoc } from "../steps/des-expand-r";
-import { desFinalPermutation, desFinalPermutationDoc } from "../steps/des-final-permutation";
-import { desInitialPermutation, desInitialPermutationDoc } from "../steps/des-initial-permutation";
-import { desKeySchedule, desKeyScheduleDoc } from "../steps/des-key-schedule";
-import { desPPermutation, desPPermutationDoc } from "../steps/des-p-permutation";
-import { desSBoxes, desSBoxesDoc } from "../steps/des-s-boxes";
-import { desXorWithK, desXorWithKDoc } from "../steps/des-xor-with-k";
-import { feistelToyAddK, feistelToyAddKDoc } from "../steps/feistel-toy-add-k";
+import {
+  desExpandR,
+  desExpandRDoc,
+  desExpandRMeta,
+  desExpandRPortContract,
+} from "../steps/des-expand-r";
+import {
+  desFinalPermutation,
+  desFinalPermutationDoc,
+  desFinalPermutationMeta,
+  desFinalPermutationPortContract,
+} from "../steps/des-final-permutation";
+import {
+  desInitialPermutation,
+  desInitialPermutationDoc,
+  desInitialPermutationMeta,
+  desInitialPermutationPortContract,
+} from "../steps/des-initial-permutation";
+import {
+  desKeySchedule,
+  desKeyScheduleDoc,
+  desKeyScheduleMeta,
+  desKeySchedulePortContract,
+} from "../steps/des-key-schedule";
+import {
+  desPPermutation,
+  desPPermutationDoc,
+  desPPermutationMeta,
+  desPPermutationPortContract,
+} from "../steps/des-p-permutation";
+import {
+  desSBoxes,
+  desSBoxesDoc,
+  desSBoxesMeta,
+  desSBoxesPortContract,
+} from "../steps/des-s-boxes";
+import {
+  desXorWithK,
+  desXorWithKDoc,
+  desXorWithKMeta,
+  desXorWithKPortContract,
+} from "../steps/des-xor-with-k";
+import {
+  feistelToyAddK,
+  feistelToyAddKDoc,
+  feistelToyAddKMeta,
+  feistelToyAddKPortContract,
+} from "../steps/feistel-toy-add-k";
 import {
   iso78164Pad,
   iso78164PadDoc,
@@ -507,7 +547,16 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // without DES's complexity. Asymmetric F = (R + k) mod 256 per byte;
   // see `src/steps/feistel-toy-add-k.ts` for why addition (not XOR) is
   // chosen. NOT in the cipher selector — referenced only by Phase 2 tests.
-  r.register("feistel.toy-add-k@1", { executor: feistelToyAddK, doc: feistelToyAddKDoc });
+  // Lifted to `kind: "ported"` in Slice 1.8 alongside the seven DES steps;
+  // byteLength absent on both ports (length-polymorphic per fixture).
+  r.register("feistel.toy-add-k@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(feistelToyAddK, feistelToyAddKMeta),
+    legacy: feistelToyAddK,
+    shape: feistelToyAddKPortContract,
+    meta: feistelToyAddKMeta,
+    doc: feistelToyAddKDoc,
+  });
   // ─── DES (Phase 3 of the DES + branching primitive plan) ───────────────
   // The first cipher to use the `feistel-round` branching primitive. Seven
   // step types implement the FIPS 46-3 algorithm: a key schedule that
@@ -523,18 +572,81 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // The DES spec is registered in `defaults` (Phase 3) but not yet exposed
   // in the cipher selector (Phase 4). Saved documents stay at schema v1
   // since users can't currently reach a DES Save through the UI.
-  r.register("des.key-schedule@1", { executor: desKeySchedule, doc: desKeyScheduleDoc });
+  //
+  // ─── Slice 1.8 (universal port dataflow) ──────────────────────────────
+  // All seven DES step types lifted to `kind: "ported"`. DES is the
+  // FOURTH cipher family ported (after AES Slice 1.4, Speck Slice 1.6,
+  // Serpent Slice 1.7). Body leaves inside `feistel-round` containers
+  // run ported via the same `walk()` recursion that handles iterate-body
+  // leaves; the rejoin frame is synthesized by `runFeistelRound` from
+  // Uint8Array track outputs — byte-identical between dispatch paths
+  // for free, per the parent plan's invariant 2.
+  //
+  // **byteLength declarations** — fixed honest values everywhere (DES
+  // has no variant): IP/FP 8/8, P-permute 4/4, expand-R 4/6 (FIRST
+  // asymmetric state-port declaration in the migration), s-boxes 6/4
+  // (second asymmetric pair), xor-with-K 6/6 + 6-byte aux read. Round-
+  // key output ports on des.key-schedule@1 leave byteLength ABSENT per
+  // user pick 2026-05-23 (uniform with Slice 1.6 Speck + Slice 1.7
+  // Serpent round-key port batches, even though DES round keys are
+  // fixed at 6 bytes). Master-key input port on des.key-schedule@1 IS
+  // declared as 8 bytes (DES has no variant — different from AES/Serpent
+  // which leave master-key absent for their 16/24/32 byte variants).
+  r.register("des.key-schedule@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(desKeySchedule, desKeyScheduleMeta),
+    legacy: desKeySchedule,
+    shape: desKeySchedulePortContract,
+    meta: desKeyScheduleMeta,
+    doc: desKeyScheduleDoc,
+  });
   r.register("des.initial-permutation@1", {
-    executor: desInitialPermutation,
+    kind: "ported",
+    executor: liftLegacyExecutor(desInitialPermutation, desInitialPermutationMeta),
+    legacy: desInitialPermutation,
+    shape: desInitialPermutationPortContract,
+    meta: desInitialPermutationMeta,
     doc: desInitialPermutationDoc,
   });
   r.register("des.final-permutation@1", {
-    executor: desFinalPermutation,
+    kind: "ported",
+    executor: liftLegacyExecutor(desFinalPermutation, desFinalPermutationMeta),
+    legacy: desFinalPermutation,
+    shape: desFinalPermutationPortContract,
+    meta: desFinalPermutationMeta,
     doc: desFinalPermutationDoc,
   });
-  r.register("des.expand-R@1", { executor: desExpandR, doc: desExpandRDoc });
-  r.register("des.xor-with-K@1", { executor: desXorWithK, doc: desXorWithKDoc });
-  r.register("des.s-boxes@1", { executor: desSBoxes, doc: desSBoxesDoc });
-  r.register("des.p-permutation@1", { executor: desPPermutation, doc: desPPermutationDoc });
+  r.register("des.expand-R@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(desExpandR, desExpandRMeta),
+    legacy: desExpandR,
+    shape: desExpandRPortContract,
+    meta: desExpandRMeta,
+    doc: desExpandRDoc,
+  });
+  r.register("des.xor-with-K@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(desXorWithK, desXorWithKMeta),
+    legacy: desXorWithK,
+    shape: desXorWithKPortContract,
+    meta: desXorWithKMeta,
+    doc: desXorWithKDoc,
+  });
+  r.register("des.s-boxes@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(desSBoxes, desSBoxesMeta),
+    legacy: desSBoxes,
+    shape: desSBoxesPortContract,
+    meta: desSBoxesMeta,
+    doc: desSBoxesDoc,
+  });
+  r.register("des.p-permutation@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(desPPermutation, desPPermutationMeta),
+    legacy: desPPermutation,
+    shape: desPPermutationPortContract,
+    meta: desPPermutationMeta,
+    doc: desPPermutationDoc,
+  });
   return r;
 };

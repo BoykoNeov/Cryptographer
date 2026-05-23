@@ -28,7 +28,16 @@
  * presentation is FIPS-historical.
  */
 
-import type { AuxValue, Json, StepContext, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  AuxValue,
+  Json,
+  PortContract,
+  PortShape,
+  ProjectionMetadata,
+  StepContext,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 import { bitsToFipsBytes, fipsBytesToBits, fipsPermute, rotateBitsLeft } from "./des-bit-ops";
 
 type Params = {
@@ -117,6 +126,113 @@ rounds — see \`src/ciphers/des-decrypt.ts\`.`,
   ]),
   references: ["FIPS 46-3 §5 (Key Schedule Calculation, Tables PC-1, PC-2)"],
   shapeContract: { input: "any", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.8) ───────────────
+// DES key-schedule is the FOURTH one-to-many writer in the universal-port
+// migration (after AES key-expansion in 1.4, Speck key-schedule in 1.6,
+// and Serpent key-expansion in 1.7). Same Decision B shape — one output
+// port per round key — applied to DES's 16 round keys (K_1 … K_16,
+// 0-indexed as K_0 … K_15 in our aux convention). The count is FIXED at
+// 16 across the algorithm — DES has no key-size variant (the 64-bit
+// master key reduces to 56 effective bits via PC-1 regardless).
+//
+// **Function form despite the fixed count** — kept for uniformity with
+// the AES/Speck/Serpent precedents and so `outputPrefix` (the per-spec
+// aux name prefix) still threads through `auxWritePorts(params)` cleanly.
+//
+// **byteLength absent on output ports** per user pick 2026-05-23 —
+// matches Slice 1.6 Speck + Slice 1.7 Serpent posture uniformly across
+// the round-key port batch ("absent everywhere unless a fixed reason"),
+// even though DES round-key length is fixed at 6 bytes (48 bits each).
+//
+// **Aux-only**: `stateInputPort` and `stateOutputPort` are intentionally
+// OMITTED. DES key-schedule's `shapeContract` is
+// `input: "any", output: "preserveInput"` — the executor returns state
+// unmodified (`return { state, auxWrites, auxReads }`). Matches the
+// aux-only lift pattern from Slice 1.2 (iv-load, aux-load, …) +
+// Slice 1.4 (AES key-expansion) + Slice 1.6 (Speck key-schedule) +
+// Slice 1.7 (Serpent key-expansion). The lift adapter creates a sentinel
+// zero-length `bytes`-shape state for the legacy executor and discards
+// its passthrough return; the runtime preserves the caller's actual
+// state across the ported call so the subsequent leaf (typically the
+// first `des.initial-permutation@1` of the spec) sees its incoming
+// 8-byte block unchanged.
+//
+// **Master-key input port `masterKey`** — disambiguates from the per-
+// round output ports `key0`, `key1`, …, `key15`. Same convention as
+// AES/Speck/Serpent key-schedules. **byteLength: 8** because DES has
+// NO variant — the master key is always 64 bits per FIPS 46-3. This
+// is different from AES (variant 16/24/32) and Serpent (variant 16/24/32)
+// which leave master-key byteLength absent; it matches the AES Slice
+// 1.4 + Serpent Slice 1.7 posture "honest fixed declaration when no
+// variant" for state ports, extended to the master-key input port here
+// since DES is the first fixed-key-size cipher to land.
+
+const DES_ROUND_KEY_COUNT = 16;
+
+const desKeyScheduleOutputPorts = (_params: Json) => {
+  // Output count is hardcoded at 16 in the executor (the K_0 … K_15 loop).
+  // Function-form contract for uniformity with the AES/Speck/Serpent
+  // precedents even though _params is unused here. Map iteration is
+  // insertion-ordered in JS — bindings emerge in r = 0 … 15 order,
+  // matching the legacy executor's auxWrites insertion order. The
+  // frame-parity test pins this.
+  const m = new Map<string, PortShape>();
+  for (let i = 0; i < DES_ROUND_KEY_COUNT; i++) {
+    m.set(`key${i}`, { layout: "raw" });
+  }
+  return m;
+};
+
+const desKeyScheduleAuxWritePorts = (params: Json) => {
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("des.key-schedule auxWritePorts: params must be an object");
+  }
+  const p = params as { outputPrefix?: unknown };
+  if (typeof p.outputPrefix !== "string" || p.outputPrefix.length === 0) {
+    throw new Error(
+      "des.key-schedule auxWritePorts: params.outputPrefix: non-empty string required",
+    );
+  }
+  const bindings = new Map<string, string>();
+  for (let i = 0; i < DES_ROUND_KEY_COUNT; i++) {
+    bindings.set(`key${i}`, `${p.outputPrefix}.${i}`);
+  }
+  return bindings;
+};
+
+const desKeyScheduleAuxReadPorts = (params: Json) => {
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("des.key-schedule auxReadPorts: params must be an object");
+  }
+  const p = params as { keyAuxName?: unknown };
+  if (typeof p.keyAuxName !== "string" || p.keyAuxName.length === 0) {
+    throw new Error("des.key-schedule auxReadPorts: params.keyAuxName: non-empty string required");
+  }
+  return new Map([["masterKey", p.keyAuxName]]);
+};
+
+export const desKeyScheduleMeta: ProjectionMetadata = {
+  // Aux-only step — no state ports. `stateLayout: "bytes"` is the
+  // ceremonial value the type requires; the lift adapter never consults
+  // it because neither `stateInputPort` nor `stateOutputPort` is
+  // declared. Same pattern as AES/Speck/Serpent key-schedules.
+  stateLayout: "bytes",
+  auxReadPorts: desKeyScheduleAuxReadPorts,
+  auxWritePorts: desKeyScheduleAuxWritePorts,
+};
+
+export const desKeySchedulePortContract: PortContract = {
+  // Static `inputs`: just the master key. No state input port —
+  // shapeContract is `input: "any"`. byteLength: 8 — DES's master key
+  // is fixed at 64 bits; no variant exists. Honest declaration.
+  inputs: new Map<string, PortShape>([["masterKey", { byteLength: 8, layout: "raw" }]]),
+  // Dynamic outputs: 16 ports (`key0` … `key15`), function-form for
+  // uniformity with AES/Speck/Serpent precedents. byteLength absent per
+  // user pick (uniform with the round-key port batch posture, even
+  // though DES round keys are fixed at 6 bytes).
+  outputs: desKeyScheduleOutputPorts,
 };
 
 const readParams = (params: Json): Params => {

@@ -15,7 +15,14 @@
  * `src/ciphers/des-constants.ts`.
  */
 
-import type { BytesState, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  BytesState,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 import { fipsPermute } from "./des-bit-ops";
 
 export const desPPermutation: StepExecutor = (state, params) => {
@@ -57,6 +64,22 @@ final step before \`F(R, K)\` rejoins the L track via the round's combine.`,
   ]),
   references: ["FIPS 46-3 §3 (Permutation Function P, Table P)"],
   shapeContract: { input: "bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.8) ───────────────
+// Pure bytes→bytes 4-byte fixed transform with no aux. Runs at the end
+// of F, mapping the 32-bit S-box output back to 32 permuted bits before
+// the rejoin XOR. byteLength: 4 honest declaration; no variant.
+
+export const desPPermutationMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+};
+
+export const desPPermutationPortContract: PortContract = {
+  inputs: new Map([["state", { byteLength: 4, layout: "raw" }]]),
+  outputs: new Map([["state", { byteLength: 4, layout: "raw" }]]),
 };
 
 const readTable = (params: Json): readonly number[] => {

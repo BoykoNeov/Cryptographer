@@ -19,7 +19,14 @@
  * copy as `params.table` so saved JSON documents are self-contained.
  */
 
-import type { BytesState, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  BytesState,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 import { fipsPermute } from "./des-bit-ops";
 
 export const desInitialPermutation: StepExecutor = (state, params) => {
@@ -67,6 +74,24 @@ bytes so that every output byte mixes bits from 4 input bytes.`,
   ]),
   references: ["FIPS 46-3 §3 (Initial Permutation, Table 1)"],
   shapeContract: { input: "bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.8) ───────────────
+// Pure bytes→bytes 8-byte fixed transform with no aux. The cleanest lift
+// in Slice 1.8 — same shape as Slice 1.7's `serpent.bit-permutation@1`
+// pure transform, just at 8 bytes instead of 16. byteLength: 8 honest
+// declaration on both ports (DES block size is fixed by FIPS 46-3; no
+// variant). Matches the Slice 1.7 "honest fixed when no variant" posture.
+
+export const desInitialPermutationMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+};
+
+export const desInitialPermutationPortContract: PortContract = {
+  inputs: new Map([["state", { byteLength: 8, layout: "raw" }]]),
+  outputs: new Map([["state", { byteLength: 8, layout: "raw" }]]),
 };
 
 const readTable = (params: Json): readonly number[] => {

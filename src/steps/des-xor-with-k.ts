@@ -14,7 +14,14 @@
  * Different contract.
  */
 
-import type { BytesState, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  BytesState,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 export const desXorWithK: StepExecutor = (state, params, ctx) => {
   if (state.shape !== "bytes") {
@@ -65,6 +72,38 @@ itself a mix of expanded data bits and round-key bits.`,
   ]),
   references: ["FIPS 46-3 §3 (Cipher Function f)"],
   shapeContract: { input: "bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.8) ───────────────
+// State-bearing single-aux-read step. Direct analog of `aes.add-round-
+// key@1` (Slice 1.4) and `serpent.add-round-key@1` (Slice 1.7), but on
+// a 6-byte (48-bit, post-E expansion) `bytes`-shape state with a 6-byte
+// round key. Same lift adapter handles all three: stateLayout encodes/
+// decodes via the `bytes` codec; the aux-read binding is identical in
+// shape (one named port → one named aux key, function form because the
+// param names the round-specific aux key per-leaf).
+//
+// **byteLength: 6 honest declaration** on both state ports and the
+// aux-read port — DES has no variant; expanded R is always 48 bits and
+// round keys are always 48 bits. Matches the Serpent Slice 1.7 +
+// AES Slice 1.4 posture.
+
+export const desXorWithKMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+  auxReadPorts: (params: Json) => {
+    const auxName = readAuxName(params);
+    return new Map([["roundKey", auxName]]);
+  },
+};
+
+export const desXorWithKPortContract: PortContract = {
+  inputs: new Map([
+    ["state", { byteLength: 6, layout: "raw" }],
+    ["roundKey", { byteLength: 6, layout: "raw" }],
+  ]),
+  outputs: new Map([["state", { byteLength: 6, layout: "raw" }]]),
 };
 
 const readAuxName = (params: Json): string => {

@@ -27,7 +27,13 @@
  * registration can be removed.
  */
 
-import type { Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 export const feistelToyAddK: StepExecutor = (state, params) => {
   if (state.shape !== "bytes") {
@@ -50,6 +56,27 @@ const readK = (params: Json): number => {
     throw new Error("feistel.toy-add-k@1 param `k` must be an integer 0..255");
   }
   return k;
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.8) ───────────────
+// Lifted alongside the seven DES step types in Slice 1.8. Toy fixture
+// only — the legacy `feistel-primitive.test.ts` exercises it via
+// `runFeistelRound` inside a 2-round Feistel spec. **byteLength absent
+// on both state ports** because the toy is length-polymorphic (the
+// executor operates on any non-zero length; the track-local slice size
+// is determined by the parent `feistel-round`'s `inputBytes`). Matches
+// Slice 1.6 Speck's polymorphic bytes-port posture (block size varies
+// across Speck variants); the toy varies across test fixtures instead.
+
+export const feistelToyAddKMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+};
+
+export const feistelToyAddKPortContract: PortContract = {
+  inputs: new Map([["state", { layout: "raw" }]]),
+  outputs: new Map([["state", { layout: "raw" }]]),
 };
 
 export const feistelToyAddKDoc: StepDocumentation = {

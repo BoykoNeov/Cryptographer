@@ -596,20 +596,85 @@ DES (Slice 1.8) is the next checkpoint for the variant-preserving pick;
 DES specs also don't use aux-copy in their canonical shape, so deferral
 remains viable through 1.8 as well.
 
-### Slice 1.8 — DES lifted
+### Slice 1.8 — DES lifted — **GREEN 2026-05-23**
 
 Step types: `des.key-schedule@1`, `des.initial-permutation@1`,
 `des.final-permutation@1`, `des.expand-R@1`, `des.xor-with-K@1`,
 `des.s-boxes@1`, `des.p-permutation@1`.
 
-Plus `feistel.toy-add-k@1` (test fixture).
+Plus `feistel.toy-add-k@1` (test fixture, lifted alongside).
 
-`bytes` state shape. DES key-schedule writes 16 round keys per
-Decision B. Body leaves of `feistel-round` containers run ported; the
-rejoin frame stays as runtime synthesis (byte-identical between paths
-for free).
+`bytes` state shape throughout. **DES is the FOURTH cipher family
+ported** (after AES Slice 1.4, Speck Slice 1.6, Serpent Slice 1.7).
+Body leaves of `feistel-round` containers run ported via the same
+`walk()` recursion that handles iterate-body leaves; the rejoin frame
+stays as runtime synthesis (byte-identical between paths for free per
+invariant 2).
 
-**Gate:** DES KAT (NIST SP 800-17) passes under ported.
+Key-schedule per Decision B — **fourth one-to-many writer** in the
+universal-port migration. **16 output ports** (`key0` … `key15`),
+fixed across DES (no key-size variant — the 64-bit master key always
+reduces to 56 effective bits via PC-1). Function-form contract for
+uniformity with the AES/Speck/Serpent precedents.
+
+**Three contract decisions landed (all flow from prior slices, NO new
+contract evolution):**
+
+1. **byteLength split between state ports and key-schedule's round-key
+   output ports** (user pick 2026-05-23). State ports on six state-
+   bearing step types (IP/FP/E/S/P/xor-with-K) declare honest fixed
+   byteLength — matches the Slice 1.7 Serpent posture "honest fixed
+   declaration when no variant" (DES has none). Key-schedule's 16
+   round-key output ports leave `byteLength` ABSENT — matches Slice
+   1.6 Speck + Slice 1.7 Serpent posture uniformly across the round-
+   key port batch.
+2. **Master-key input port byteLength: 8** — declared HONESTLY because
+   DES is the first fixed-key-size cipher to land. Differs from AES
+   Slice 1.4 (16/24/32 variant — absent) and Serpent Slice 1.7
+   (16/24/32 variant — absent). Extends the "honest fixed when no
+   variant" precedent from state ports to the master-key input port.
+3. **Aux-only key-schedule** — `stateInputPort` and `stateOutputPort`
+   OMITTED. Same pattern as Slice 1.4 AES key-expansion + Slice 1.6
+   Speck key-schedule + Slice 1.7 Serpent key-expansion. All four
+   key-schedules now share this lift pattern verbatim.
+
+**The first slice with asymmetric state-port byteLength** —
+`des.expand-R@1` declares input 4 / output 6, `des.s-boxes@1`
+declares input 6 / output 4. Both share `stateLayout: "bytes"`; the
+`bytes`-shape codec in `port-projection.ts` (`stateToBytes`, line
+~286) copies bytes without a length check, so the asymmetric
+declaration works without any runtime contract changes. The
+executors' own length assertions remain the runtime gate on wiring
+errors.
+
+**Body leaves inside `feistel-round` run ported via the standard
+`walk()` recursion** — `runFeistelRound` walks each track's children
+through `walk()` (runtime.ts:493), reaching the same leaf-dispatch
+site (runtime.ts:182) that handles `kind === "ported"` for iterate-
+body leaves. No new runtime code; no special-case for Feistel body
+dispatch. The rejoin frame is synthesized by `runFeistelRound` from
+`Uint8Array` track outputs (runtime.ts:~514) — byte-identical between
+dispatch paths for free.
+
+**Gate (achieved):** 1696 tests green (1681 prior + 15 new in
+`tests/runtime-ported-dispatch-des.test.ts`). All three DES KAT
+fixture vectors (FIPS 46-3 Appendix B + all-zeros + all-ones,
+`node:crypto` cross-checked) green under `portedDispatchEnabled: true`
+for both encrypt and decrypt. Frame-by-frame byte parity green across
+all 6 specs (3 vectors × {encrypt, decrypt}). Map insertion order on
+the 16 DES round keys pinned (`roundKey.0` … `roundKey.15`).
+Per-primitive synthetic spec (key-schedule + one xor-with-K) pins
+the lift in isolation. **The `feistel.toy-add-k@1` lift coverage
+(FEISTEL_TOY_SPEC under both dispatch paths) pins the load-bearing
+invariant 2 claim** — body leaves inside `feistel-round` run ported,
+rejoin frame stays byte-identical — without any DES-side noise.
+
+**aux-copy variant gap (Open #2) stays deferred** — no DES spec uses
+aux-copy (`des-decrypt.ts` grep confirms no `aux-copy` / `state-to-
+aux` / `xor-aux-into-state`). The `it.skip` from Slice 1.5 (chaining
+test (c) — AES-128 CBC decrypt §F.2.2 under flag-on) remains tracking
+the latent debt. Pick is now scheduled before Slice 1.9 begins
+(which deletes the `PROJECTION_METADATA` side-map outright).
 
 ### Slice 1.9 — `ctx.aux` channel cut + side-map deleted
 

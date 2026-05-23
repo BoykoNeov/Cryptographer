@@ -15,7 +15,14 @@
  * "no swap on the last round, then apply FP."
  */
 
-import type { BytesState, Json, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  BytesState,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 import { fipsPermute } from "./des-bit-ops";
 
 export const desFinalPermutation: StepExecutor = (state, params) => {
@@ -62,6 +69,22 @@ cipher; preserving them keeps the FIPS standard intact.`,
   ]),
   references: ["FIPS 46-3 §3 (Inverse Initial Permutation, Table 2)"],
   shapeContract: { input: "bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 1 Slice 1.8) ───────────────
+// Pure bytes→bytes 8-byte fixed transform with no aux. Same shape as
+// `des.initial-permutation@1` — IP and FP are exact inverses applied
+// at the cipher boundary. byteLength: 8 honest declaration; no variant.
+
+export const desFinalPermutationMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+};
+
+export const desFinalPermutationPortContract: PortContract = {
+  inputs: new Map([["state", { byteLength: 8, layout: "raw" }]]),
+  outputs: new Map([["state", { byteLength: 8, layout: "raw" }]]),
 };
 
 const readTable = (params: Json): readonly number[] => {
