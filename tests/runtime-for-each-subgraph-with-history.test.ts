@@ -312,51 +312,12 @@ describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
           blocksFromAux: "in-blocks",
           outBlocksAux: "out-blocks",
           children: [
-            // The iterate seeds each block from aux as a MatrixState. But
-            // FES-with-history requires bytes-shape parent state. So the
-            // inner body has to be set up so it doesn't fail at the
-            // boundary. We test the suffix composition with a body that
-            // would-throw-on-bytes — but the suffix composition is observable
-            // even on the THROW, so we use a guard test approach.
-            //
-            // Alternative: convert the matrix to bytes inline. To avoid
-            // adding a step type, we use a `for-each-subgraph` ITEM-ARRAY
-            // mode that takes the matrix state's 16 bytes, slices into
-            // 4-byte chunks (4 iterations), and re-emits bytes — that's
-            // the cleanest way to bridge matrix → bytes without a new step.
-            //
-            // BUT for the suffix-composition test, simpler: nest under a
-            // for-each-subgraph state-thread that's a no-op shape-wise.
-            // The state-thread FES preserves bytes shape into FES-with-
-            // history.
-            //
-            // Cleanest: drop the iterate framing; use a state-thread FES
-            // as the outer instead. Outer kind `for-each-subgraph` (state-
-            // thread) doesn't add `:b{i}`, it adds `:r{i}` — which would
-            // produce `:r{outer}:r{inner}` (same letter twice). That doesn't
-            // exercise the `:b` × `:r` composition.
-            //
-            // Solution: use an outer iterate with bytes-shape state seeded
-            // via the iterate's existing aux array (the MatrixState values
-            // in aux still load as state, but we use a bytes-friendly toy
-            // body — increment_byte0 was matrix4x4-only too. So we use a
-            // body that reads matrix4x4 (since that's what iterate hands
-            // it), converts to bytes, then runs FES-with-history.
-            //
-            // Pragmatic: simplest test that pins the suffix composition is
-            // to run the inner FES-with-history under a state-thread FES
-            // and accept the `:r{outer}:r{inner}` composition — that's the
-            // type-order rule applied within the same type, which is
-            // outer-first walk-order per the established convention.
-            //
-            // ACTUAL PATH: use an outer iterate with a bytes-friendly body
-            // that does the matrix→bytes conversion in one step. The
-            // existing `iso7816-4-unpad@1` does matrix→bytes but expects
-            // padding shape — wrong contract. So we register a test-local
-            // matrix→bytes-take-first-2 step here.
-            //
-            // For brevity in this comment block: see the helper just below
-            // this spec.
+            // Outer iterate hands each iteration a MatrixState from
+            // `in-blocks` aux, but FES-with-history requires bytes-shape
+            // parent state. The `to-bytes` leaf below is a test-local
+            // matrix→bytes adapter (takes the matrix's first 2 bytes as
+            // its bytes-state output) that bridges the two contracts so
+            // the suffix-composition assertion can run.
             {
               kind: "step",
               id: "to-bytes",
