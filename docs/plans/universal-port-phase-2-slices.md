@@ -61,6 +61,40 @@
 > bug pre-implementation; KATs derived from textbook formula land on
 > `0x048D159E` instead. Suite at **1817/1817** (+26 new). Next stop:
 > **Slice 2.1b** (`xor@1` widened N-way + `add-mod-32@1`).
+> **Slice 2.1b SHIPPED 2026-05-24** — second + third port-native step
+> types land: `xor@1` (`src/steps/xor.ts`, 24 tests) and `add-mod-32@1`
+> (`src/steps/add-mod-32.ts`, 28 tests). Both follow the Slice 2.1a
+> precedent: `kind: "ported"` registration with NO `legacy`, NO `meta`,
+> NO `shapeContract`; reachable today only via direct executor
+> invocation in tests (off-flag and on-flag dispatch each throw the
+> exact 2.1a guard message). Both use function-form `PortContract.inputs`
+> (operand count varies with `params.inputCount`, port names
+> `operand0`..`operand{N-1}` per S3) and static-form `outputs` (a fixed
+> single `output` port — matches rotate-bits-right precedent per the
+> "function form only when N varies on THIS side" rule from Slice 1.4).
+>
+> **Fork 1 (xor inputCount floor): N ≥ 1.** Single-operand identity is
+> a legal authoring-time intermediate; reject N=0 because output
+> byteLength is undecidable. Pinned in xor's param-validation tests.
+>
+> **Fork 2 (add-mod-32 arity): SHIPS N-WAY, not plan-literal 2-way.**
+> The plan body's sketch reads *"params: { inputCount: 2 } (always 2
+> for SHA-256; future additions can widen)"*. User pick 2026-05-24
+> overrode this in favor of N-way symmetry with `xor@1`: addition
+> mod 2³² is associative so the math is identical, and SHA-256's
+> compression-function update `T1 = h + Σ1(e) + Ch(e,f,g) + K[i] + W[i]`
+> reads cleanly as one 5-operand node rather than four chained 2-way
+> adds. Slice 2.1b's `add-mod-32@1` accepts `inputCount` integer ≥ 2
+> (no degenerate single-operand identity case — rejected as
+> indistinguishable from passthrough; revisit if a real use case
+> appears). The asymmetric N-floor with xor (≥1) is intentional and
+> documented in both executors' headers.
+>
+> Together with rotate-bits-right@1 (Slice 2.1a) the three primitives
+> SHA-256 needs (rotate, XOR, modular-add) are all registered. Suite
+> at **1869/1869** (+52 new tests across the two files). Phase 1
+> matrix untouched. Next stop: **Slice 2.2** (Open #N5 — word-state
+> encoding decision + Q-gate-9 extension).
 >
 > **Parent plan:** [`docs/plans/universal-port-dataflow.md`](./universal-port-dataflow.md)
 > **Phase 0 findings:** [`docs/plans/universal-port-phase-0-findings.md`](./universal-port-phase-0-findings.md)
@@ -802,7 +836,26 @@ the field's optionality is reachable.
 
 **Goal:** ship the remaining two primitives SHA-256 needs.
 
-**Scope (sketched):**
+**Resolved at ship time (2026-05-24):**
+
+- **Fork 1 — xor inputCount floor: N ≥ 1.** Single-operand identity is
+  a legal authoring-time intermediate; reject N=0 (output byteLength
+  undecidable). Pinned in xor's param-validation tests.
+- **Fork 2 — add-mod-32 arity: N-way, NOT plan-literal 2-way.** The
+  pre-ship sketch below reads "always 2 for SHA-256; future additions
+  can widen" but the user-picked Fork 2 (2026-05-24) chose N-way for
+  symmetry with `xor@1`. Modular addition is associative so the math
+  is identical; SHA-256's `T1 = h + Σ1(e) + Ch + K[i] + W[i]` reads
+  cleanly as one 5-operand node. Floor is N ≥ 2 (no single-operand
+  identity case — indistinguishable from passthrough). Asymmetric
+  N-floor vs xor (≥1) is intentional and documented in both
+  executors' headers.
+- **PortContract shape:** function-form on `inputs` (N varies),
+  static-form on `outputs` (single fixed `output` port). Matches
+  rotate-bits-right precedent and the "function form only when N
+  varies on THIS side" rule from Slice 1.4.
+
+**Scope (sketched — pre-ship, before Fork 2 resolution):**
 
 - `xor@1` widened to N-way via `params.inputCount: N`.
   - **Per advisor sharpening S3:** each of N input ports reads from
@@ -815,13 +868,15 @@ the field's optionality is reachable.
     new step type, not a widening of existing.
 - `add-mod-32@1`:
   - Params: `{ inputCount: 2 }` (always 2 for SHA-256; future
-    additions can widen).
+    additions can widen). **[SUPERSEDED by Fork 2 above —
+    ships N-way.]**
   - PortContract: 2 input ports + 1 output port, each polymorphic
     `byteLength` (must be multiple of 4 for 32-bit word arithmetic).
   - Executor: BE word decode, add modulo 2^32, encode back.
 - Test files for each.
 
 **Pass/fail gate:** KAT pins per primitive; Phase 1 matrix green.
+**(Both gates met — suite 1869/1869.)**
 
 ### Slice 2.2 — Word-state encoding decision + Q-gate-9 extension
 

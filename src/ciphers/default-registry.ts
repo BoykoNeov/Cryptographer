@@ -10,6 +10,7 @@
 
 import { liftLegacyExecutor } from "../core/port-projection";
 import { StepRegistry } from "../core/registry";
+import { addMod32, addMod32Doc, addMod32PortContract } from "../steps/add-mod-32";
 import {
   addRoundKey,
   addRoundKeyDoc,
@@ -190,6 +191,7 @@ import {
   stateToAuxPortContract,
 } from "../steps/state-to-aux";
 import { storeBlock, storeBlockDoc } from "../steps/store-block";
+import { xor, xorDoc, xorPortContract } from "../steps/xor";
 import {
   xorAuxIntoState,
   xorAuxIntoStateDoc,
@@ -696,11 +698,36 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // from. Per-cipher friendly names ride along via the spec leaf's
   // `narrationOverride` field. See `src/steps/CLAUDE.md` "Naming
   // conventions" for the full rule.
+  //
+  // **Slice 2.1b (2026-05-24)** adds two more port-native primitives:
+  // `xor@1` (N-way bitwise XOR, operand0..operand{N-1}) and
+  // `add-mod-32@1` (N-way modular addition over 32-bit BE word arrays,
+  // operand0..operand{N-1}). Both ship N-way from the start — the plan
+  // specified 2-way for add-mod-32 but the user-picked Fork 2 (2026-05-
+  // 24) chose N-way for symmetry with xor and for SHA-256's 5-operand
+  // T1 update reading as one node. Both reach the same dispatch-path
+  // guards as rotate-bits-right@1 (off-flag: "requires
+  // portedDispatchEnabled: true"; on-flag without spec edge-wiring:
+  // "requires spec edge-wiring (Slice 2.6+)"). Together with
+  // rotate-bits-right@1, the SHA-256 message-schedule + compression-
+  // function arithmetic surface is complete for the Slice 2.5 build.
   r.register("rotate-bits-right@1", {
     kind: "ported",
     executor: rotateBitsRight,
     shape: rotateBitsRightPortContract,
     doc: rotateBitsRightDoc,
+  });
+  r.register("xor@1", {
+    kind: "ported",
+    executor: xor,
+    shape: xorPortContract,
+    doc: xorDoc,
+  });
+  r.register("add-mod-32@1", {
+    kind: "ported",
+    executor: addMod32,
+    shape: addMod32PortContract,
+    doc: addMod32Doc,
   });
   return r;
 };
