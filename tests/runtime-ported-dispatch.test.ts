@@ -28,10 +28,9 @@
  * the ported path under `portedDispatchEnabled: true`; only the ECB
  * boundary primitives (split-blocks / concat-blocks / compute-block-
  * count / load-block / store-block) remain on the legacy path inside
- * the ECB spec. The side-map's KEYS still pin to the Phase-0 pair
- * (Decision A — Slice 1.9 deletes the side-map outright); the runtime's
- * contract-priority dispatch consults the registration first, so the
- * side-map entries are dead code through Slices 1.4–1.8.
+ * the ECB spec. Slice 1.9 (2026-05-24) DELETED the side-map outright —
+ * the previously-pinned side-map keys are gone; the test that asserted
+ * its scope was removed in the same commit.
  *
  * The iterate-runtime's `aux[outBlocksAux]` publication is verified here at
  * integration boundary (the 4-block ECB ciphertext bytes match SP 800-38A
@@ -43,7 +42,6 @@
 import { aes128Spec } from "@/ciphers/aes-128";
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
-import { PROJECTION_METADATA } from "@/core/port-projection";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
@@ -123,16 +121,6 @@ const expectFramesEqual = (a: TraceFrame, b: TraceFrame, index: number): void =>
 // ─── Test suites ────────────────────────────────────────────────────────
 
 describe("runtime — ported dispatch (Phase 0 task 6)", () => {
-  it("side-map registers exactly the two Phase-0 target step types", () => {
-    // Pin the side-map to keep the spike's promised scope honest. Phase 1
-    // widens this; until then, if a new lift entry appears (or one
-    // disappears) without updating this test, the contract has drifted.
-    expect([...PROJECTION_METADATA.keys()].sort()).toEqual([
-      "generic.add-round-key@1",
-      "generic.byte-substitution@1",
-    ]);
-  });
-
   describe("FIPS-197 Appendix C.1 — AES-128 single block", () => {
     const plaintext = matrixFromBytes(bytesFromHex(FIPS_PLAINTEXT));
     const aux = new Map<string, AuxValue>([["key", bytesFromHex(FIPS_KEY)]]);

@@ -576,11 +576,11 @@ export type StepRegistration =
        *
        * Phase 2 onward authors port-native executors directly; those
        * entries genuinely have no legacy underlying. When the migration
-       * ends (Slice 1.9 cuts `ctx.aux`; later slices remove `legacy`
-       * from `kind:"ported"`), this field can become optional and then
-       * disappear. For now: required, holds the same function the step
-       * file's old `register` call passed as `executor`, and the lifted
-       * `executor` is built from it via `liftLegacyExecutor(legacy, meta)`.
+       * ends (Phase 5 retires the legacy contract), this field can
+       * become optional and then disappear. For now: required, holds
+       * the same function the step file's old `register` call passed
+       * as `executor`, and the lifted `executor` is built from it via
+       * `liftLegacyExecutor(legacy, meta)`.
        */
       readonly legacy: StepExecutor;
     };

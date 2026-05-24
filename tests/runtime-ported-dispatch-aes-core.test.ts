@@ -6,12 +6,12 @@
  * `portedDispatchEnabled: false` for the SIX AES core step types lifted
  * in Slice 1.4:
  *
- *   - `generic.byte-substitution@1` — pure state-only, moved out of the
- *     throw-away `PROJECTION_METADATA` side-map.
+ *   - `generic.byte-substitution@1` — pure state-only, originally lifted
+ *     via the Phase-0 `PROJECTION_METADATA` side-map (deleted in Slice 1.9).
  *   - `generic.shift-rows@1` — pure state-only.
  *   - `generic.mix-columns@1` — pure state-only.
- *   - `generic.add-round-key@1` — aux read (one round key), moved out of
- *     the side-map.
+ *   - `generic.add-round-key@1` — aux read (one round key), originally
+ *     lifted via the Phase-0 side-map (deleted in Slice 1.9).
  *   - `aes.key-expansion@1` — the FIRST one-to-many writer in the
  *     universal-port migration. Port-per-roundkey (Decision B): one
  *     output port per round key, dynamic-N sized by `params.rounds`.
@@ -38,12 +38,11 @@
  *       byte-identical output to @1 when `rounds === Nk + 6`; the
  *       ported path must preserve that property.
  *
- * The Phase-0 test file (`tests/runtime-ported-dispatch.test.ts`) still
- * covers byte-substitution + add-round-key via the side-map path. Both
- * tests pass concurrently: the runtime's contract-priority dispatch
- * (registration.kind === "ported" wins over PROJECTION_METADATA.get)
- * makes the side-map entries dead code, but the side-map's KEYS remain
- * (Decision A — Slice 1.9 deletes the whole map).
+ * The Phase-0 test file (`tests/runtime-ported-dispatch.test.ts`) also
+ * exercises byte-substitution + add-round-key at the AES-128 cipher
+ * boundary; both pass through the same `kind: "ported"` registrations
+ * the Slice 1.4 lift installed. (The original side-map fallback dispatch
+ * branch was removed in Slice 1.9.)
  */
 
 import { aes128Spec } from "@/ciphers/aes-128";

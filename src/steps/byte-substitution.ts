@@ -65,13 +65,11 @@ intact.`,
 };
 
 // ─── Universal port-dataflow metadata (Phase 1 Slice 1.4) ───────────────
-// `byteSubstitutionMeta` + `byteSubstitutionPortContract` move out of
-// the throw-away `PROJECTION_METADATA` side-map in `core/port-projection.ts`
-// into colocated exports here per Decision C (metadata lives next to
-// the executor that owns it). The side-map entry stays as dead code
-// through Slice 1.4 because the runtime's contract-priority dispatch at
-// `runtime.ts:217-221` consults the registration's `meta` first; Slice
-// 1.9 deletes the side-map outright.
+// `byteSubstitutionMeta` + `byteSubstitutionPortContract` colocate the
+// projection metadata next to the executor that owns it per Decision C.
+// (Originally lived in the throw-away Phase-0 `PROJECTION_METADATA`
+// side-map in `core/port-projection.ts`; moved here in Slice 1.4,
+// side-map deleted in Slice 1.9 per Decision A.)
 //
 // Pure state-only: a 4×4 column-major matrix in, same shape out, no aux.
 

@@ -1,9 +1,7 @@
 import { COMBINE_KINDS, REJOIN_STEP_TYPE } from "./combine-kinds";
 import {
-  PROJECTION_METADATA,
   auxPortBytesToValue,
   auxValueToPortBytes,
-  liftLegacyExecutor,
   portBytesToState,
   resolvePortMap,
   stateToPortBytes,
@@ -27,27 +25,31 @@ export type RuntimeInput = {
   /** Aux values that should be present before any step runs (e.g. the key). */
   readonly initialAux?: ReadonlyMap<string, AuxValue>;
   /**
-   * Phase-0 dual-dispatch flag (universal-port-dataflow plan, task 5).
-   * When true AND a leaf's step type is in `PROJECTION_METADATA`, the
+   * Dual-dispatch flag (universal-port-dataflow plan). When true AND a
+   * leaf's registration is `kind: "ported"` (colocated metadata + lifted
+   * executor — every shipped step type ported through Slice 1.8), the
    * runtime routes that leaf through the ported execution path:
    *
    *   1. Project state + aux reads into per-port `Uint8Array` inputs via
-   *      metadata bindings.
-   *   2. Call the lifted `PortedExecutor` (which wraps the legacy executor
-   *      via `liftLegacyExecutor`).
+   *      the ported registration's `meta` bindings.
+   *   2. Call the ported `PortedExecutor` with a SYNTHETIC `ctx.aux`
+   *      populated only from declared `auxReadPorts` bindings (Slice 1.9
+   *      — Decision A; the live aux map no longer reaches lifted
+   *      executors).
    *   3. Reconstruct `State` from the output port; build the emitted
    *      `TraceFrame.auxRead` from the metadata's input-port-to-aux-key
    *      bindings (NOT from the legacy executor's `result.auxReads`).
    *
-   * Frames produced under either path are byte-equal for the two
-   * Phase-0 targets — pinned by `tests/runtime-ported-dispatch.test.ts`
-   * (task 6) via frame-by-frame deep equality.
+   * Frames produced under either flag value are byte-equal across every
+   * shipped cipher family — pinned by the per-cipher
+   * `tests/runtime-ported-dispatch-{aes-core,chaining,speck,serpent,des}.test.ts`
+   * via frame-by-frame deep equality.
    *
    * Default: `false`. Existing callers (UI, cipher specs, every shipped
-   * test) keep the legacy path until Phase 1 widens the lift to every
-   * step type. The flag lives on `RuntimeInput` (per-call) rather than
-   * a module-level global so legacy and ported runs can stand side by
-   * side in the same test file.
+   * test) keep the legacy path until a follow-on slice flips the default.
+   * The flag lives on `RuntimeInput` (per-call) rather than a module-
+   * level global so legacy and ported runs can stand side by side in
+   * the same test file.
    */
   readonly portedDispatchEnabled?: boolean;
 };
@@ -91,11 +93,11 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
 
   let frameIndex = 0;
 
-  // Phase-0 dual-dispatch flag (universal-port-dataflow plan, task 5).
-  // Captured once at the call boundary so the per-leaf check in `walk` is
-  // a simple `if (portedDispatch && PROJECTION_METADATA.has(node.type))`.
-  // Defaults to false → every leaf runs the legacy path; no behavior change
-  // for any caller that doesn't opt in.
+  // Dual-dispatch flag (universal-port-dataflow plan). Captured once at
+  // the call boundary so the per-leaf check in `walk` is a simple
+  // `if (portedDispatch && registration.kind === "ported")`. Defaults
+  // to false → every leaf runs the legacy path; no behavior change for
+  // any caller that doesn't opt in.
   const portedDispatch = input.portedDispatchEnabled === true;
 
   /** Compose the per-emit stepId suffix from runtime context. Innermost-
@@ -183,49 +185,36 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
       const stateBefore = cloneState(state);
 
       // ─── Ported dispatch (universal-port-dataflow plan) ────────────────
-      // When `portedDispatch` is on AND the leaf's step type has
-      // projection metadata available, route through the ported execution
-      // path:
+      // When `portedDispatch` is on AND the registration is `kind: "ported"`
+      // (colocated metadata + lifted executor — the long-term home per
+      // Decision C), route through the ported execution path:
       //   1. Build `inputs` (state port + aux ports per `auxReadPorts`).
-      //   2. Call the lifted `PortedExecutor`.
+      //   2. Call the ported `executor` with a SYNTHETIC `ctx.aux`
+      //      populated only from the step's declared `auxReadPorts`
+      //      bindings (Decision A — Slice 1.9 cut the live-aux channel).
+      //      A legacy executor inside the lift that tries to read an
+      //      undeclared aux key gets `undefined` and surfaces the bug.
       //   3. Reconstruct `State` from the output port (if declared) OR
       //      leave state untouched (aux-only primitives — Slice 1.2).
       //   4. Build the TraceFrame's `auxRead` from the metadata's input-
       //      port-to-aux-key bindings — NOT from the legacy executor's
       //      `result.auxReads`. This is the load-bearing claim: the
       //      trace can be expressed purely in port projections + tags.
-      //   5. Build `auxWritten` from output-port-to-aux-key bindings
-      //      (Slice 1.2). The runtime also writes back into the live
-      //      `aux` map so downstream legacy / ported steps see the same
-      //      Aux state.
+      //   5. Build `auxWritten` from output-port-to-aux-key bindings.
+      //      The runtime also writes back into the live `aux` map so
+      //      downstream legacy / ported steps see the same Aux state.
       //
-      // **Metadata source (Slice 1.2)** — two routes coexist through
-      // Slice 1.8:
-      //   (a) `registry.getRegistration(node.type)?.kind === "ported"` →
-      //       the ported variant carries `meta: ProjectionMetadata`. This
-      //       is the long-term home (Decision C — colocated meta).
-      //   (b) `PROJECTION_METADATA.get(node.type)` side-map → the
-      //       Phase-0 entries (`generic.byte-substitution@1`,
-      //       `generic.add-round-key@1`) still register as `kind:"legacy"`
-      //       in Slice 1.2 because their colocation lands in Slice 1.4.
-      //       The side-map is the bridge.
-      // Slice 1.9 deletes the side-map (Decision A); until then, the
-      // registry has priority and the side-map is the fallback.
-      //
-      // Otherwise (the default for every shipped caller): the legacy path
-      // below runs unchanged.
+      // Otherwise (the default for every shipped caller, and every
+      // step type still registered as `kind: "legacy"`): the legacy
+      // path below runs unchanged.
       const registration = registry.getRegistration(node.type);
       if (!registration) throw new Error(`unknown step type: ${node.type}`);
-      const meta = portedDispatch
-        ? registration.kind === "ported"
-          ? registration.meta
-          : PROJECTION_METADATA.get(node.type)
-        : undefined;
       let auxRead: Map<string, AuxValue>;
       let auxReadMissing: string[] | undefined;
       let auxWritten: Map<string, AuxValue>;
 
-      if (meta !== undefined) {
+      if (portedDispatch && registration.kind === "ported") {
+        const meta = registration.meta;
         // ── Ported execution path ─────────────────────────────────────
         const inputs = new Map<string, Uint8Array>();
         if (meta.stateInputPort !== undefined) {
@@ -266,21 +255,23 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
           portedAuxRead.set(auxKey, v);
         }
 
-        // Call the ported executor. For Slice 1.2 every ported entry is
-        // a lifted legacy executor; we either pull the pre-lifted closure
-        // off the registration OR build one on the fly from the side-map
-        // metadata (Phase-0 fallback). `ctx.aux` still carries the live
-        // aux map — the legacy executor inside the lift reads via
-        // `ctx.aux.get(...)`. Phase 1's Slice 1.9 cuts this channel; until
-        // then the dual aux read paths see the same map by construction.
-        const ported =
-          registration.kind === "ported"
-            ? registration.executor
-            : liftLegacyExecutor(registration.executor, meta);
-        const outputs = ported(inputs, node.params, {
+        // Call the ported executor with a SYNTHETIC `ctx.aux` populated
+        // ONLY from this step's declared `auxReadPorts` bindings (Slice
+        // 1.9 — Decision A). `portedAuxRead` is keyed by aux-key and
+        // already aliases the live AuxValue (variants preserved —
+        // MatrixState chain stays MatrixState), so the lifted executor's
+        // `ctx.aux.get(params.auxName)` lookups hit identical values.
+        //
+        // The cut surfaces a "lifted executor reads undeclared aux" bug
+        // as a single failure mode: the synthetic map only contains
+        // declared keys; any other key yields `undefined` and the legacy
+        // executor inside the lift fails on its own shape check. The
+        // live aux map (`aux`) reaches NEITHER the lifted nor the ported
+        // executor anymore.
+        const outputs = registration.executor(inputs, node.params, {
           stepId: node.id,
           path,
-          aux,
+          aux: portedAuxRead,
         });
 
         // Reconstruct state from the output port if one is declared.
@@ -307,12 +298,11 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
         // mean the executor took a no-write branch (e.g., aux-xor's
         // graceful passthrough on a missing read).
         //
-        // Decode layout: when the registration carries a PortContract,
-        // the declared output port's `layout` drives reconstruction
-        // (`"matrix-cm-4x4"` → MatrixState, `"raw"`/undefined → Uint8Array).
-        // Side-map fallback entries (Phase-0 byte-substitution / add-
-        // round-key) don't have a contract; they default to raw bytes,
-        // which matches their existing aux shape.
+        // Decode layout: the registration's PortContract drives
+        // reconstruction. The declared output port's `layout` selects
+        // the decode target (`"matrix-cm-4x4"` → MatrixState,
+        // `"raw"`/undefined → Uint8Array, `"preserve-input-variant"`
+        // → variant-matched copy of the source aux value).
         auxWritten = new Map<string, AuxValue>();
         if (meta.auxWritePorts !== undefined) {
           const writeBindings = meta.auxWritePorts(node.params);
@@ -322,10 +312,7 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
           // for the common fixed-arity case (byte-substitution et al.)
           // it's already a static Map and `resolvePortMap` returns it
           // unchanged. See `PortShapeMap` in `core/types.ts`.
-          const outputsMap =
-            registration.kind === "ported"
-              ? resolvePortMap(registration.shape.outputs, node.params)
-              : undefined;
+          const outputsMap = resolvePortMap(registration.shape.outputs, node.params);
 
           // Slice 1.5b — source-variant cache for `"preserve-input-variant"`
           // outputs. Computed LAZILY: only allocated if at least one
@@ -353,7 +340,7 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
           for (const [portName, auxKey] of writeBindings) {
             const outBytes = outputs.get(portName);
             if (outBytes === undefined) continue;
-            const layout = outputsMap?.get(portName)?.layout;
+            const layout = outputsMap.get(portName)?.layout;
             const hint =
               layout === "preserve-input-variant" ? resolvePreserveVariantHint() : undefined;
             const value = auxPortBytesToValue(outBytes, layout, hint);

@@ -69,11 +69,10 @@ obscures what's happening.)`,
 // ─── Universal port-dataflow metadata (Phase 1 Slice 1.4) ───────────────
 // `addRoundKeyMeta` + `addRoundKeyPortContract` lift this step type into
 // the ported contract. The leaf's `params.auxName` (e.g. "roundKey.0")
-// becomes the single aux-key bound to the `key` input port — same
-// function-shape `auxReadPorts` that lived in the side-map's
-// `META_ADD_ROUND_KEY`. Slice 1.9 deletes the side-map; through Slice
-// 1.4 it stays as dead code (Decision A — leave deletion to its own
-// slice for a clean diff).
+// becomes the single aux-key bound to the `key` input port via the
+// function-shape `auxReadPorts`. (Originally lived in the throw-away
+// Phase-0 `PROJECTION_METADATA` side-map; colocated here in Slice 1.4
+// per Decision C, side-map deleted in Slice 1.9 per Decision A.)
 
 export const addRoundKeyMeta: ProjectionMetadata = {
   stateLayout: "matrix4x4-bytes",

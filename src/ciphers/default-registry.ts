@@ -188,11 +188,10 @@ export const buildDefaultRegistry = (): StepRegistry => {
   const r = new StepRegistry();
   // ─── AES core step types (Slice 1.4 — universal port-dataflow) ─────────
   // All six AES step types lift in Slice 1.4. byte-substitution + add-
-  // round-key MOVE out of the throw-away `PROJECTION_METADATA` side-map
-  // into colocated metadata per Decision C (the side-map entries stay as
-  // dead code through Slice 1.4 because the runtime's contract-priority
-  // dispatch shadows them; Slice 1.9 deletes the side-map outright per
-  // Decision A). shift-rows + mix-columns are pure state-only — same
+  // round-key were the original Phase-0 side-map targets; Slice 1.4
+  // moved them (plus the four other AES step types below) to colocated
+  // metadata per Decision C, and Slice 1.9 deleted the side-map outright
+  // per Decision A. shift-rows + mix-columns are pure state-only — same
   // shape as byte-substitution. Key-expansion is the FIRST one-to-many
   // writer in the universal-port migration — port-per-roundkey per
   // Decision B, with `outputs(params)` in function form sized by

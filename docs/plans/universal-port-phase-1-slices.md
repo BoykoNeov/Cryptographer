@@ -718,19 +718,62 @@ test (c) — AES-128 CBC decrypt §F.2.2 under flag-on) remains tracking
 the latent debt. Pick is now scheduled before Slice 1.9 begins
 (which deletes the `PROJECTION_METADATA` side-map outright).
 
-### Slice 1.9 — `ctx.aux` channel cut + side-map deleted
+### Slice 1.9 — `ctx.aux` channel cut + side-map deleted — **GREEN 2026-05-24**
 
-Per Decision A. The runtime stops passing the live `aux` map to lifted
-executors; instead, it builds a synthetic ctx.aux populated only from
-the input-port projections per metadata. Legacy executor signatures
-unchanged.
+Per Decision A. Two changes, one commit:
 
-`PROJECTION_METADATA` side-map in `port-projection.ts` is **deleted**.
-All metadata now lives in `StepRegistration` entries.
+1. **Synthetic `ctx.aux` for lifted executors.** The runtime's ported-
+   dispatch path now passes `aux: portedAuxRead` (a Map keyed by
+   aux-key, populated only from `meta.auxReadPorts(params)` bindings)
+   to the ported executor's `ctx`, instead of the live `aux` map.
+   Aliasing `portedAuxRead` (rather than re-decoding from `inputs`
+   port bytes) preserves AuxValue variants (MatrixState chain stays
+   MatrixState), keeps the legacy executor inside the lift looking up
+   by its real aux-key (`ctx.aux.get(params.auxName)`), and surfaces
+   the load-bearing failure mode loudly: a legacy executor that reads
+   an undeclared aux key gets `undefined` and falls off its own shape
+   check. The live aux map (`aux`) now reaches NEITHER the lifted
+   nor the ported executor; only the runtime's own write-decode path
+   continues to mutate it.
+2. **`PROJECTION_METADATA` side-map DELETED** from
+   `core/port-projection.ts`. The two Phase-0 entries
+   (`generic.byte-substitution@1`, `generic.add-round-key@1`) lifted
+   to `kind: "ported"` registrations with colocated metadata in
+   Slice 1.4; the side-map's runtime fallback branch had been dead
+   code through Slices 1.4–1.8 and is removed here. Runtime's meta
+   lookup collapses from a 3-way conditional to
+   `portedDispatch && registration.kind === "ported"`; the
+   `liftLegacyExecutor` import + the lift-on-the-fly fallback in the
+   dispatch site both go away (`registration.executor` is already
+   the pre-lifted closure built at registration time).
 
-**Gate:** all five cipher KATs pass under ported. Any "executor read aux
-that wasn't projected" exception surfaces a missing
-`meta.auxReadPorts` entry — fix and re-run.
+**Gate (achieved):** 1700 tests green (1701 prior − 1 deleted
+side-map-keys-pin assertion in `tests/runtime-ported-dispatch.test.ts`,
+which had pinned the now-deleted `PROJECTION_METADATA.keys()` to the
+Phase-0 pair). All per-cipher ported-dispatch tests
+(`runtime-ported-dispatch-{aes-core,chaining,speck,serpent,des}.test.ts`)
+still pass — every cipher family's frame-by-frame parity assertion now
+runs under the cut `ctx.aux` channel and matches the legacy path byte-
+for-byte. `npm run check` clean (biome + tsc + vitest 1700/1700 +
+vite build, ~75s).
+
+**No `meta.auxReadPorts` widening was needed** — the channel cut
+surfaced ZERO bugs. The Slice 1.4–1.8 lifts had already declared
+`auxReadPorts` entries for every aux key their legacy executors read
+(byte-byte parity gated them); the only thing they were doing "for
+real" through the live `aux` channel was the same lookups the meta
+declared. Decision A's predicted failure mode ("executor read aux
+that wasn't projected") was preventatively closed by the per-cipher
+parity gates of the upstream slices.
+
+**Interim `legacy` field stays** — Slice 1.9 only cuts the runtime-
+side `ctx.aux` channel; the off-flag legacy dispatch path still uses
+`registration.legacy` to call the original executor with the LIVE
+`aux` map. That's the explicit Phase-1-window contract per
+`StepRegistration`'s `legacy` field docblock. Field becomes optional
+when Phase 2 ships port-native executors that genuinely have no
+legacy underlying; disappears when Phase 5 retires the legacy
+contract.
 
 ### Slice 1.10 — `narrationOverride` field added to `StepNode`
 

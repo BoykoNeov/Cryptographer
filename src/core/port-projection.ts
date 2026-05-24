@@ -64,9 +64,10 @@ export const resolvePortMap = (spec: PortShapeMap, params: Json): ReadonlyMap<st
 // `ProjectionMetadata` moved to `core/types.ts` in Slice 1.2 so the
 // `StepRegistration` discriminated union can carry it as the `meta` field
 // on the `kind: "ported"` variant without forcing a circular import. The
-// lift logic + side-map registry below still live here; only the type
-// definition relocated. Re-exported for callers that imported it from
-// this module's old surface.
+// lift logic below still lives here; only the type definition relocated.
+// Re-exported for callers that imported it from this module's old
+// surface. (The throw-away Phase-0 `PROJECTION_METADATA` side-map that
+// also lived here was deleted in Slice 1.9.)
 export type { ProjectionMetadata };
 
 /**
@@ -392,32 +393,31 @@ const requirePortBytes = (
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Phase-0 task 4 — `liftLegacyExecutor` + side-map projection registry
+// `liftLegacyExecutor` — wraps a legacy `StepExecutor` as a `PortedExecutor`
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // `liftLegacyExecutor(legacy, meta)` produces a `PortedExecutor` that the
-// runtime's dual-dispatch path (Phase-0 task 5) can call when its side-map
-// has a matching `ProjectionMetadata` for the leaf's step type AND the
-// per-call `RuntimeInput.portedDispatchEnabled` flag is on.
+// runtime's ported-dispatch path calls when the leaf's registration is
+// `kind: "ported"` AND the per-call `RuntimeInput.portedDispatchEnabled`
+// flag is on.
 //
 // What the lift does:
-//   1. Reads the state bytes from `inputs.get(meta.stateInputPort)`,
-//      reconstructs the legacy `State` variant via `bytesToState`.
+//   1. Reads the state bytes from `inputs.get(meta.stateInputPort)` and
+//      reconstructs the legacy `State` variant via `bytesToState`. Aux-only
+//      step types (no state ports declared) get a zero-length `bytes`
+//      sentinel; the runtime preserves the caller's real state across the
+//      ported call.
 //   2. Calls the legacy executor with that State + the leaf's `params` +
-//      the runtime's `ctx`. The `ctx.aux` channel is unchanged — the legacy
-//      add-round-key executor's `ctx.aux.get(params.auxName)` keeps working
-//      as-is. (Phase 1 cuts the ctx.aux channel; until then, dual aux read
-//      paths coexist — the runtime ALSO projects the same bytes into
-//      `inputs.get("key")` via `meta.auxReadPorts`. By construction both
-//      paths see the same map.)
-//   3. **Phase-0 strictness:** throws if the legacy result includes
-//      `auxWrites` with any entries. Neither Phase-0 target step
-//      (`generic.byte-substitution@1`, `generic.add-round-key@1`) writes
-//      aux. A throw here surfaces drift — if a future lifted step starts
-//      writing aux, the adapter needs widening (carry `auxWrites` →
-//      `outputs` via metadata's `auxWritePorts`) before we silently lose
-//      the write.
-//   4. Returns `outputs` with the new state bytes at `meta.stateOutputPort`.
+//      the runtime's `ctx`. Since Slice 1.9 (Decision A), `ctx.aux` is a
+//      SYNTHETIC map populated only from the step's `auxReadPorts`
+//      bindings — the live aux map no longer reaches the legacy executor
+//      through this channel. A legacy executor that reads an undeclared
+//      aux key gets `undefined` and surfaces the meta-authoring bug.
+//   3. Packs `result.state` into `outputs.get(meta.stateOutputPort)` (when
+//      declared) and `result.auxWrites` entries into the output ports
+//      named by `meta.auxWritePorts(params)`. Throws if the legacy
+//      executor wrote aux but the meta declared no `auxWritePorts` —
+//      that's a real metadata mismatch.
 //
 // What the lift does NOT do:
 //   • It does NOT propagate `result.auxReads` — the runtime builds
@@ -426,37 +426,13 @@ const requirePortBytes = (
 //     purely in port projections + tags, with NO smuggled structured
 //     auxReads piggybacking off the legacy contract.
 //   • It does NOT mutate `ctx.aux` — only the legacy executor's own
-//     side-effects on aux (none in Phase-0 targets) reach the runtime.
+//     side-effects on aux (none in any shipped step) reach the runtime,
+//     and post-Slice-1.9 those would land on the runtime's synthetic
+//     per-call map, which is discarded after the call returns.
 //
-// **Verified by inspection (advisor consult 2026-05-23):** for the two
-// Phase-0 targets, `result.auxReads` is exactly what `meta.auxReadPorts(
-// params)` yields: byte-substitution returns no auxReads; add-round-key
-// returns `[params.auxName]` matching the single `"key" → params.auxName`
-// binding. So the runtime's "rebuild auxRead from metadata" path produces
-// byte-identical `TraceFrame.auxRead` to the legacy path.
-//
-// ─── Slice 1.2 widening (universal-port-dataflow Phase 1) ───────────────
-// Two extensions land here in Slice 1.2 so the four aux-only primitives
-// (`aux-load`, `aux-copy`, `aux-xor`, `iv-load`) can lift:
-//
-//   1. **No state ports** — when meta omits BOTH `stateInputPort` and
-//      `stateOutputPort`, the lift adapter passes a sentinel `bytes`-shape
-//      state of length 0 to the legacy executor and DISCARDS the returned
-//      state. The aux-only primitives all carry
-//      `shapeContract: { input: "any", output: "preserveInput" }` and
-//      never inspect state — verified by reading each executor. The
-//      runtime's caller is responsible for preserving its own state
-//      variable across the ported call (it does, by skipping
-//      reconstruction when `meta.stateOutputPort` is undefined).
-//
-//   2. **Aux writes** — when meta declares `auxWritePorts`, the lift
-//      packs entries from `result.auxWrites` into output ports per the
-//      binding. The Phase-0 strict throw on any non-empty `auxWrites`
-//      remains, but is now scoped to "no `auxWritePorts` declared yet
-//      this leaf type tried to write aux" — a real metadata mismatch.
-//
-// The previous combined throw "both state ports required" is split: a
-// half-declared meta (one state port but not the other) is still a bug.
+// Half-declared state ports (one of `stateInputPort` / `stateOutputPort`
+// declared but not the other) is a meta-authoring bug — the lift throws
+// loudly rather than silently producing a half-valid round-trip.
 export const liftLegacyExecutor = (
   legacy: StepExecutor,
   meta: ProjectionMetadata,
@@ -690,65 +666,13 @@ export const auxPortBytesToValue = (
 
 // ─── Side-map projection-metadata registry ──────────────────────────────
 //
-// Per advisor consult 2026-05-23: projection metadata lives in a SEPARATE
-// side-map keyed by step-type string — NOT as an optional field on
-// `StepDefinition`. Rationale (preserved in `project_universal_port_
-// dataflow_proposal.md`): projection metadata is the lift function's
-// INPUT, not a permanent registration field. Phase 1's eventual
-// `StepRegistration` discriminated union will hold `{executor:
-// PortedExecutor, shape: PortContract}` as the OUTPUT of lifting; if we
-// put `projectionMetadata?` on the legacy `StepDefinition` now, that
-// metadata would live on the wrong end of the pipe and force two
-// migrations (Phase 0 adds optional field → Phase 1 restructures).
-// A throw-away side-map is cheaper and honestly signals "this is a spike."
-//
-// Phase 0 registers exactly two entries (the targets named in the plan).
-// Phase 1 will replace this map entirely with a real registry of
-// `PortContract` + `PortedExecutor` pairs.
-
-const META_BYTE_SUBSTITUTION: ProjectionMetadata = {
-  // `generic.byte-substitution@1` accepts a 4×4 column-major matrix on
-  // its "state" input, returns the same shape on "state" output, reads
-  // no aux.
-  stateLayout: "matrix4x4-bytes",
-  stateInputPort: "state",
-  stateOutputPort: "state",
-};
-
-const META_ADD_ROUND_KEY: ProjectionMetadata = {
-  stateLayout: "matrix4x4-bytes",
-  stateInputPort: "state",
-  stateOutputPort: "state",
-  // The leaf's `params.auxName` (e.g., "roundKey.0") becomes the single
-  // aux-key bound to the "key" input port. Function shape (not static
-  // map) because every leaf has a different round-key name; the binding
-  // can only be resolved with `params` in hand.
-  auxReadPorts: (params: Json) => {
-    if (
-      typeof params !== "object" ||
-      params === null ||
-      Array.isArray(params) ||
-      !("auxName" in params) ||
-      typeof (params as { auxName: unknown }).auxName !== "string"
-    ) {
-      throw new Error(
-        "META_ADD_ROUND_KEY.auxReadPorts: params.auxName: string required (matches add-round-key executor's own validation)",
-      );
-    }
-    return new Map([["key", (params as { auxName: string }).auxName]]);
-  },
-};
-
-/**
- * The side-map registry consumed by the runtime's dual-dispatch path.
- * `has(stepType)` is the gate: present + `portedDispatchEnabled` →
- * ported path; absent → legacy path (unchanged).
- *
- * Frozen at module load so the runtime's `walk` can `Map.get` directly
- * without needing the registry instance threaded through. Phase 1's
- * `StepRegistration` discriminated union supersedes this entirely.
- */
-export const PROJECTION_METADATA: ReadonlyMap<string, ProjectionMetadata> = new Map([
-  ["generic.byte-substitution@1", META_BYTE_SUBSTITUTION],
-  ["generic.add-round-key@1", META_ADD_ROUND_KEY],
-]);
+// Deleted in Slice 1.9 (universal-port-dataflow Phase 1) per Decision A.
+// The two Phase-0 entries (`generic.byte-substitution@1`,
+// `generic.add-round-key@1`) lifted to `kind: "ported"` registrations
+// with colocated metadata in Slice 1.4 (Decision C); the side-map's
+// runtime fallback branch in `runtime.ts` shadowed them as dead code
+// through Slices 1.4–1.8, and this slice removes the dead code outright.
+// The historical rationale ("Phase 0 spike used a throw-away side-map
+// because projection metadata is the lift function's INPUT, not a
+// permanent registration field") is preserved in
+// `project_universal_port_dataflow_proposal.md`.

@@ -159,10 +159,13 @@ register a sibling step.`,
 //
 // **Aux-read MatrixState** — the live `aux[auxName]` is a MatrixState
 // (written by `iv-load` pre-loop and `state-to-aux` per-iteration). The
-// runtime's input-side projection (`runtime.ts:243-261`) handles the
-// variant via Slice 1.5's `auxValueToPortBytes` widening; the legacy
-// executor still reads via `ctx.aux.get(...)` until Slice 1.9 cuts the
-// dual channel.
+// runtime's input-side projection (`runtime.ts:227-247`) handles the
+// variant via Slice 1.5's `auxValueToPortBytes` widening. Since Slice
+// 1.9 the legacy executor inside the lift reads via the SYNTHETIC
+// `ctx.aux` the runtime now builds from `auxReadPorts` bindings — the
+// MatrixState aux value is aliased into that synthetic map (variant
+// preserved), so `ctx.aux.get(auxName)` returns the same MatrixState
+// the legacy path saw.
 //
 // **Empty-auxName binding kept** — legacy declares `auxReads: [auxName]`
 // even when `auxName === ""` so `auxReadMissing: [""]` materializes for
