@@ -1,9 +1,10 @@
 # Universal port-based dataflow — Phase 2 sub-slice plan
 
 > **Status: DRAFT 2026-05-24 + Slice 2.0a GREEN 2026-05-24 + Slice 2.0b-i
-> GREEN 2026-05-24 + Slice 2.0b-ii GREEN 2026-05-24.** Drafted after
-> Phase 1 closed (1748/1748 tests, all 13 sub-slices + caveat 1+3
-> follow-up green) and two advisor consults framed the Phase 2 surface.
+> GREEN 2026-05-24 + Slice 2.0b-ii GREEN 2026-05-24 + Slice 2.0c GREEN
+> 2026-05-24.** Drafted after Phase 1 closed (1748/1748 tests, all 13
+> sub-slices + caveat 1+3 follow-up green) and two advisor consults
+> framed the Phase 2 surface.
 > Slice 2.0a's four contract-design questions resolved + SHIPPED (suite
 > 1753/1753; surfaced the `:t < :b < :r` suffix rule as type-order +
 > outer-first-walk-order, NOT "innermost-first"). Slice 2.0b sub-
@@ -30,9 +31,16 @@
 > trip tests in `tests/port-projection-matrix-array-roundtrip.test.ts`);
 > Slice 1.11 frame-parity matrix (22 rows) auto-widens — ECB/CBC
 > encrypt/decrypt now exercise the new code through the ported path.
-> Next stop: **Slice 2.0c** (per-iteration feedback/lookback contract
-> per Open #N4) — the third forcing requirement for SHA-256's message
-> schedule.
+> **Slice 2.0c SHIPPED 2026-05-24** — `ForEachSubgraphWithHistoryNode`
+> ships as a sibling `StepNode` kind (Q2 = sibling, not third mode)
+> with declarative `lookbackOffsets` (Q1 — Open #N4 closed) +
+> per-invocation history seeded from parent state bytes + per-outer
+> reset semantics (Q3) + aux snapshot+restore. Three advisor-sharpened
+> questions (Q1/Q2/Q3) replaced the plan's original (a/b/c) framing;
+> the contract is now FINAL per Invariant 3. Suite at **1791/1791**
+> (+18 new tests). Phase 1 matrix untouched. Next stop: **Slice 2.1a**
+> (`StepRegistration.legacy` optional + first port-native registration
+> via `rotate-bits-right@1`).
 >
 > **Parent plan:** [`docs/plans/universal-port-dataflow.md`](./universal-port-dataflow.md)
 > **Phase 0 findings:** [`docs/plans/universal-port-phase-0-findings.md`](./universal-port-phase-0-findings.md)
@@ -562,49 +570,168 @@ model and resolves Phase 1's Open #1 (`split-blocks` port shape).
 **If gate fails:** the iteration-outputs port semantics is wrong;
 surface, re-open, no Slice 2.0c until fixed.
 
-### Slice 2.0c — Per-iteration feedback/lookback contract
+### Slice 2.0c — Per-iteration feedback/lookback contract — SHIPPED 2026-05-24
 
-**Goal:** widen the for-each-subgraph contract to handle the
-**message-schedule** pattern (W_t reads W_{t-2,7,15,16}). This is the
-third forcing requirement; SHA-256's message schedule cannot be
-expressed without it.
+**Status: GREEN 2026-05-24.** Three advisor-sharpened user picks
+landed before authoring (Open #N4 + two follow-on questions the plan
+prose hadn't surfaced); new `ForEachSubgraphWithHistoryNode` ships as
+a sibling `StepNode` kind with declarative lookback offsets +
+per-invocation history seeded from parent state bytes +
+snapshot+restore aux semantics. Suite at **1791/1791** (+18 new tests
+in `tests/runtime-for-each-subgraph-with-history.test.ts`); Phase 1
+frame-parity matrix untouched (no shipped cipher uses the new kind);
+bundle 554.37 KB gzipped (+~6 KB from 2.0b-ii's 548.39 KB).
 
-**Scope:**
+**Three user picks LOCKED IN 2026-05-24** (advisor consult before
+authoring sharpened the original (a/b/c) framing into ordered Q1/Q2/Q3):
 
-- For-each-subgraph contract gains feedback/lookback support per
-  **Open #N4 user pick**:
-  - (a) `aux.priorIterations: Uint8Array[]` channel populated by runtime
-    before each iteration's body walks.
-  - (b) Sibling node kind `for-each-subgraph-with-history@1` with
-    explicit lookback port declarations.
-  - (c) Hand-rolled 48 leaves (no iteration primitive for message
-    schedule).
-- Toy fixture in `tests/runtime-for-each-subgraph-feedback.test.ts`:
-  - Fibonacci-shape 10-iteration generator: each iteration's output is
-    `prior[-1] + prior[-2]` (mod 256, for 1-byte arithmetic). Starting
-    seeds: `[1, 1]`. Expected sequence: `1, 1, 2, 3, 5, 8, 13, 21, 34,
-    55`.
-  - Pass/fail gate: 10 frames emit; sequence byte-equal to expected;
-    feedback channel correctly populated per iteration.
+- **Q1 (lookback declaration, closes Open #N4) = Declarative offsets.**
+  Body declares `lookbackOffsets: readonly number[]` (e.g., `[2, 7, 15,
+  16]` for SHA-256). Runtime sizes a ring buffer to `max(offsets)` and
+  exposes only the requested priors via `aux["prior-{N}"]`. Memory
+  bounded; data dependency explicit in spec. Mirrors PortContract's
+  declarative-input posture. **Imperative full-history** option
+  (plan's original (a) — `aux.priorIterations: Uint8Array[]` channel)
+  rejected: doesn't bound buffer in advance, doesn't surface
+  dependency in spec, and offers no real simplicity once you realize
+  runtime still has to know `max(offset)` to know when to seed it.
+  **Hand-rolled 48 leaves** (plan's (c)) rejected as dominated:
+  pedagogy claim illusory (a/b emit identical `:r{t}` frames), spec
+  size blows up (~240 nodes for the schedule alone; worse for
+  SHA-512), authoring cost wildly different. Stays in plan as escape
+  hatch if the toy fixture had surfaced unrecoverable complexity (it
+  didn't).
+- **Q2 (packaging) = Sibling node kind `for-each-subgraph-with-history`.**
+  NOT a third mode on `for-each-subgraph`. The 2-mode invariant block
+  in `runtime.ts::runForEachSubgraph` (item-array vs state-thread) is
+  already ~90 lines of partial-fields × both-modes-set checks; a third
+  mode would multiply to 3-choose-2 = 3 pairwise invariants and make
+  the validator harder to read. Sibling kind keeps each kind's
+  invariants local; the type-system discriminant carries the "these
+  fields are inseparable" constraint without runtime ceremony.
+  Mechanical cost is small: one new `StepNode` discriminant, one new
+  Zod schema variant, one new `validateShapes` branch, one new walker
+  function.
+- **Q3 (reset scope) = Per-outer reset.** History buffer is a local
+  variable inside `runForEachSubgraphWithHistory` — each invocation
+  freshly initializes from parent state. When wrapped inside an outer
+  iteration kind (iterate / for-each-subgraph / a future
+  persistAcrossOuter-enabled FES-with-history), each outer iteration
+  triggers fresh history. The aux snapshot+restore protocol (snapshot
+  pre-existing `prior-{N}` values before the loop; restore after)
+  preserves the surrounding scope's aux state across the node's
+  lifetime — friendly to nesting and to specs that happen to use
+  `prior-N`-shaped keys elsewhere. **Persist-across-outer** rejected:
+  no shipped or near-future consumer needs it; YAGNI. Future cipher
+  with cross-block history would add `persistAcrossOuter?: boolean`
+  flag as the obvious mechanical extension.
 
-**User picks needed at slice start:**
+**Contract finalized for Phase 2 onward** (per Invariant 3):
 
-- **Open #N4** (feedback/lookback contract shape). Default candidate:
-  (a) single node kind with `aux.priorIterations` channel — single
-  vocabulary item handles all three patterns. (c) is the escape hatch
-  if (a) and (b) both surface unacceptable complexity.
+```ts
+type ForEachSubgraphWithHistoryNode = {
+  readonly kind: "for-each-subgraph-with-history";
+  readonly id: string;
+  readonly label?: string;
+  readonly iterationCount: number | { readonly fromParam: string };
+  readonly children: readonly StepNode[];
+  readonly lookbackOffsets: readonly number[];
+  readonly historyEntryByteLength: number;
+};
+```
 
-**Pass/fail gate:**
+Lifecycle per invocation:
+1. **Validate** — `lookbackOffsets` non-empty + all positive integers;
+   `historyEntryByteLength` positive integer; parent `state.shape ===
+   "bytes"`; `state.bytes.length % historyEntryByteLength === 0`;
+   seed count (`bytes.length / entryLen`) ≥ `max(offsets)`;
+   `iterationCount` is literal number ≥ 0 (param-form deferred per
+   Slice 2.0a precedent).
+2. **Seed** — slice parent `state.bytes` into `historyEntryByteLength`
+   chunks, defensive-copy each into local `history` array.
+3. **Snapshot** — capture pre-existing `aux["prior-{N}"]` per offset
+   (or absence) into a Map.
+4. **Per iteration** — set `aux["prior-{N}"] = history[absIndex - N]`
+   for each declared offset; reset state to zero `Uint8Array(entryLen)`;
+   walk children with `:r{t}` suffix; validate body's exit state
+   (bytes-shape AND length=entryLen); push defensive copy into history.
+5. **Restore** — delete keys that were absent before; restore prior
+   values for keys that were present.
+6. **Exit** — concatenate full history (seeds + outputs) into a flat
+   `BytesState`; assign to parent `state`.
 
-- Toy fixture passes byte-equal.
-- Phase 1 frame-parity matrix stays green.
-- For-each-subgraph contract is now FINAL — invariant 3 above.
-  Subsequent slices treat it as immutable.
-- `npm run check` green.
+**Touched files in this slice:**
+- `src/core/types.ts` — `ForEachSubgraphWithHistoryNode` added to
+  `StepNode` union with full doc-block (Q1/Q2/Q3 rationale, lifecycle
+  invariants, aux key namespace caveat).
+- `src/core/runtime.ts` — kind dispatch in `walk()`; new
+  `runForEachSubgraphWithHistory` function paralleling
+  `runForEachSubgraph` shape; widened `State` cast for TS-narrowing
+  workaround when validating body exit state.
+- `src/core/document-schema.ts` — `ForEachSubgraphWithHistorySchema`
+  variant added to the discriminated union (no schemaVersion bump —
+  pre-Slice-2.0c documents validate unchanged).
+- `src/core/spec-shapes.ts` — new kind treated as bytes-in / bytes-out
+  (body iteration starts with zero state of entryLen; node exit is
+  concatenated history bytes).
+- `src/core/graph.ts` — `ContainerNode.kind` widens to include
+  `for-each-subgraph-with-history`; `walkSpec` builds container of
+  that kind; `processScope` extends the iterate/for-each-subgraph
+  spine-termination branch to cover the new kind (parent-scope spine
+  treats it as one chain boundary; per-iteration spine inside the body
+  is its own scope).
+- `src/core/spec-mutations.ts` — `StepLocation.parent` + the visit
+  walker's `parent` argument both widen to include the new kind;
+  `duplicateRoundGroup` gains a defensive bail (same rationale as for
+  `for-each-subgraph` — per-iteration content shifts aren't a designed
+  operation); structural-diff walker (`computeStructuralChanges`)
+  extends with two new branches so param edits inside both
+  for-each-subgraph kinds surface in run-history-diff.
+- `tests/runtime-for-each-subgraph-with-history.test.ts` (NEW, 18
+  tests) — 8-iter XOR-shape happy path (cycle of period 3 with seeds
+  [0x05, 0x03]) + iterationCount=0 degenerate case + fromParam
+  deferral throw + composed `:b{i}:r{j}` suffix under iterate +
+  12 contract-invariant throw cases (one per invariant for failure
+  attribution clarity) + 2 aux-snapshot+restore behaviour tests
+  (cleanup when absent before, restore when present before).
 
-**If gate fails:** the contract can't accommodate all three patterns;
-either re-design feedback shape, OR accept (c) hand-rolled message
-schedule and skip iteration primitive for that case. Surface, re-open.
+**Note on graph-view orphan warnings.** Body leaves declare reads of
+`aux["prior-{N}"]` but no spec leaf writes those keys (the runtime
+sets them between iterations). Slice 9 validateGraph's
+`auxReadMissing` check will surface these as orange `!` glyphs on body
+leaves — the intended user-visible signal for "this read is satisfied
+by runtime, not by spec." Slice 2.10 graph-view polish lands a
+honest depiction (lookback arrows from a virtual history-buffer node
+into each body iteration); until then the orphan warning serves as
+the explanation surface.
+
+**Note on nesting two for-each-subgraph-with-history nodes.** Inner
+overwrites the outer's `aux["prior-{N}"]` keys for the duration of the
+inner's run, AND the inner's restore deletes/restores to PRE-inner
+values, which correctly preserves outer's snapshot for resumption.
+HOWEVER, an outer body leaf that ran *between* iterations and depended
+on outer's `prior-{N}` value would see the wrong value after inner
+returns (outer's runtime hasn't re-set its keys for the next outer
+iteration yet). No shipped or planned consumer exercises this pattern;
+defer the pattern audit until a real use case lands.
+
+**Pass/fail gate — MET:**
+
+- Toy fixture: 8 body frames emit with `:r0`..`:r7` suffixes; per-
+  iteration aux reads populated; final exit state byte-equal to
+  hand-computed full history. ✓
+- Composed suffix nested under iterate: `:b{i}:r{j}` produced per
+  type-order rule. ✓
+- Phase 1 frame-parity matrix (Slice 1.11) green — no shipped cipher
+  uses the new kind. ✓
+- For-each-subgraph(-with-history) contract is now FINAL per
+  Invariant 3 — Phase 2.1a+ may treat it as immutable.
+- `npm run check` GREEN: biome + tsc + **1791/1791** vitest tests +
+  vite build (~40s). Bundle 554.37 KB gzipped (+~6 KB from 2.0b-ii;
+  Open #N8 envelope intact).
+
+**Next:** Slice 2.1a — widen `StepRegistration.legacy` to optional +
+ship `rotate-bits-right@1` as the first port-native registration.
 
 ### Slice 2.1a — `StepRegistration.legacy` optional + `rotate-bits-right@1`
 

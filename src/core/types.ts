@@ -298,12 +298,118 @@ export type ForEachSubgraphNode = {
   readonly blockLayout?: StateShape;
 };
 
+/**
+ * `ForEachSubgraphWithHistoryNode` — Slice 2.0c of the universal-port
+ * dataflow plan. Per-iteration **lookback/feedback** primitive: each
+ * iteration's body reads named priors from a runtime-maintained history
+ * buffer. The forcing function is SHA-256's message schedule, where
+ * `W_t = σ1(W_{t-2}) + W_{t-7} + σ0(W_{t-15}) + W_{t-16}`.
+ *
+ * **Why a sibling kind, not a third mode on `for-each-subgraph`** (Q2 user
+ * pick 2026-05-24). The existing 2-mode discriminator in
+ * `runtime.ts::runForEachSubgraph` (item-array vs state-thread) is already
+ * a ~90-line block of partial-fields × both-modes-set invariants. A third
+ * mode multiplies the matrix to 3-choose-2 = 3 pairwise invariants and
+ * makes the validator harder to read. The discriminated-union approach
+ * keeps each kind's invariant block local; the type system carries the
+ * "these fields are inseparable" constraint without runtime ceremony.
+ *
+ * **Why declarative offsets, not full-history channel** (Q1 user pick).
+ * Body declares `lookbackOffsets: [2, 7, 15, 16]`; runtime sizes a ring
+ * buffer to `max(offsets)` and exposes only the requested priors via
+ * `aux["prior-N"]`. Memory bounded, dependency explicit in spec. Mirrors
+ * the declarative-input posture of `PortContract` elsewhere.
+ *
+ * **Per-outer reset semantics** (Q3 user pick). The history buffer
+ * resets at each *invocation* of the node — when wrapped inside an outer
+ * loop (iterate / for-each-subgraph / for-each-subgraph-with-history),
+ * each outer iteration starts with fresh history. Reset is trivially
+ * by construction: `history` is a local variable inside the runtime
+ * walker. A future cipher needing cross-outer persistence would add
+ * a `persistAcrossOuter?: boolean` flag — defer until a use case
+ * surfaces.
+ *
+ * **Aux key namespace.** Runtime sets `aux["prior-{N}"]` per offset before
+ * each iteration's body walks; **snapshot + restore semantics** preserve
+ * any pre-existing aux key under the same name across the node's
+ * lifetime (so the body of the surrounding scope can keep its own
+ * `prior-*` keys if it had any, though that's an edge case). Nested
+ * `for-each-subgraph-with-history` inside another's body is NOT
+ * recommended — the inner overwrites the outer's `prior-*` keys for
+ * the duration of the inner's run, which is fine if the outer's body
+ * doesn't read them between calls, but the design hasn't been audited
+ * for that pattern. Defer until a real consumer needs it.
+ *
+ * **Initial history sourcing.** Parent-scope `state.bytes` is sliced into
+ * `historyEntryByteLength` chunks; chunk count = seed count. Must be at
+ * least `max(lookbackOffsets)` seeds; otherwise iteration 0 can't read
+ * its longest-lookback aux key. SHA-256's message schedule will seed
+ * with W[0..15] (64 bytes at `historyEntryByteLength=4`); the toy
+ * fixture seeds with 2 bytes at `historyEntryByteLength=1`.
+ *
+ * **Body-per-iteration starting state.** Zero `Uint8Array` of
+ * `historyEntryByteLength`. Unlike state-thread mode where the body's
+ * state thread carries information, here the iteration's output is built
+ * **only** from lookback reads — the starting state is a blank slate the
+ * body writes into. Body's exit state IS the new history entry; the
+ * runtime appends it. Wrong shape / wrong length at body exit throws.
+ *
+ * **Node exit state.** Full history (seeds + all iteration outputs)
+ * concatenated as a flat `BytesState` becomes the parent-scope state.
+ * Length = `(seedCount + iterationCount) × historyEntryByteLength`.
+ *
+ * **Frame emission.** Body frames emit with `:r{t}` suffix (same as
+ * `for-each-subgraph` state-thread mode). The type-order rule
+ * (`:t < :b < :r`) governs composition when nested under iterate or
+ * Feistel — see `core/step-id.ts`.
+ */
+export type ForEachSubgraphWithHistoryNode = {
+  readonly kind: "for-each-subgraph-with-history";
+  readonly id: string;
+  readonly label?: string;
+  /**
+   * Per-invocation iteration count. Body runs N times, each iteration
+   * appending one entry to history. Literal `number` is the common case;
+   * `{ fromParam }` form is reserved for a future consumer (same
+   * deferral as `ForEachSubgraphNode.iterationCount.fromParam`).
+   */
+  readonly iterationCount: number | { readonly fromParam: string };
+  readonly children: readonly StepNode[];
+  /**
+   * Positive integer offsets relative to the current iteration's
+   * absolute history index. Each `N` in this list exposes
+   * `history[absIndex - N]` to the body via `aux["prior-{N}"]` where
+   * `absIndex = seedCount + currentIteration`. Must be non-empty; every
+   * offset must be ≥ 1 (offset 0 would read the not-yet-written current
+   * entry); `max(offsets)` must not exceed `seedCount` (otherwise
+   * iteration 0 can't satisfy the deepest lookback).
+   *
+   * SHA-256 message schedule: `[2, 7, 15, 16]`. Toy fixture: `[1, 2]`.
+   */
+  readonly lookbackOffsets: readonly number[];
+  /**
+   * Per-history-entry byte length. Each entry — initial seeds AND
+   * body-produced outputs — is exactly this many bytes. SHA-256 = 4
+   * (32-bit words); toy fixture = 1. Must be a positive integer.
+   *
+   * Drives THREE shape invariants validated at runtime entry / exit:
+   *   1. Parent state.bytes.length must be a multiple of this value
+   *      (so seeds slice cleanly).
+   *   2. Body's exit state.bytes.length must equal this value (the new
+   *      history entry has fixed width).
+   *   3. The node's exit state is `(seedCount + iterationCount) ×
+   *      historyEntryByteLength` bytes (concatenated full history).
+   */
+  readonly historyEntryByteLength: number;
+};
+
 export type StepNode =
   | StepLeaf
   | StepGroup
   | IterateGroup
   | FeistelRoundGroup
-  | ForEachSubgraphNode;
+  | ForEachSubgraphNode
+  | ForEachSubgraphWithHistoryNode;
 
 export type CipherSpec = {
   readonly id: string; // "aes-128@1"

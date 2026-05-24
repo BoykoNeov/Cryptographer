@@ -17,6 +17,7 @@ import type {
   CipherSpec,
   FeistelRoundGroup,
   ForEachSubgraphNode,
+  ForEachSubgraphWithHistoryNode,
   State,
   StepNode,
   Trace,
@@ -204,6 +205,11 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
 
       if (node.kind === "for-each-subgraph") {
         runForEachSubgraph(node, path, blockIndex, branchPath, roundPath);
+        continue;
+      }
+
+      if (node.kind === "for-each-subgraph-with-history") {
+        runForEachSubgraphWithHistory(node, path, blockIndex, branchPath, roundPath);
         continue;
       }
 
@@ -861,6 +867,219 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
       // sees whatever state existed before the for-each-subgraph node.
       walk(node.children, childPath, blockIndex, branchPath, [...roundPath, i]);
     }
+  };
+
+  /**
+   * Expand one `for-each-subgraph-with-history` node (Slice 2.0c).
+   * Per-iteration lookback primitive: body reads named priors from a
+   * runtime-maintained history buffer via `aux["prior-{N}"]` for each `N`
+   * in `lookbackOffsets`.
+   *
+   * Lifecycle per invocation:
+   *   1. **Seed** — slice parent-scope `state.bytes` into
+   *      `historyEntryByteLength` chunks; copy each into the local
+   *      `history` array. Seed count = `bytes.length / entryLen`. Must be
+   *      ≥ `max(lookbackOffsets)` so iteration 0 has something to read.
+   *   2. **Per iteration** — for each `N` in offsets, snapshot the
+   *      previous `aux["prior-{N}"]` (so a pre-existing key isn't
+   *      clobbered), then `aux.set("prior-{N}", history[absIndex - N])`.
+   *      Reset state to `Uint8Array(entryLen)` (blank slate the body
+   *      writes into via lookback reads + computation). Walk children
+   *      with `:r{t}` suffix. Validate body's exit state shape/length;
+   *      push a fresh copy into history.
+   *   3. **Restore** — after the loop, restore aux keys from the
+   *      snapshot map (delete if pre-state was absent, set otherwise).
+   *   4. **Exit** — concatenate full history (seeds + outputs) into a
+   *      flat `BytesState`; assign to parent-scope `state`.
+   *
+   * Per-outer-reset is trivial by construction: `history` is a local
+   * variable scoped to this invocation. When this node sits inside an
+   * outer loop (iterate / for-each-subgraph / a future
+   * persistAcrossOuter-enabled FES-with-history), each outer iteration
+   * triggers a fresh invocation, hence fresh history.
+   *
+   * Pre-conditions enforced loudly (noisy failure posture, matching
+   * `iterate` / `for-each-subgraph` precedent):
+   *   - `lookbackOffsets` non-empty.
+   *   - Every offset ≥ 1 and an integer (offset 0 would read the not-
+   *     yet-written current iteration's entry).
+   *   - `historyEntryByteLength` ≥ 1 and an integer.
+   *   - `state.shape === "bytes"`; `bytes.length` divisible by entry.
+   *   - `seedCount ≥ max(offsets)`.
+   *   - `iterationCount` resolves to a non-negative integer (param-form
+   *     throws as deferred, mirroring `for-each-subgraph`).
+   *   - Body exit state per iteration is bytes-shape AND length = entry.
+   */
+  const runForEachSubgraphWithHistory = (
+    node: ForEachSubgraphWithHistoryNode,
+    path: readonly string[],
+    blockIndex: number | undefined,
+    branchPath: readonly string[],
+    roundPath: readonly number[],
+  ): void => {
+    // ── Static contract validation ──────────────────────────────────────
+    if (node.lookbackOffsets.length === 0) {
+      throw new Error(
+        `for-each-subgraph-with-history '${node.id}': lookbackOffsets must be non-empty (declare at least one offset the body reads from)`,
+      );
+    }
+    for (const offset of node.lookbackOffsets) {
+      if (!Number.isInteger(offset) || offset < 1) {
+        throw new Error(
+          `for-each-subgraph-with-history '${node.id}': every lookbackOffsets entry must be a positive integer (got ${String(offset)}; offset 0 would read the not-yet-written current iteration's entry, negative offsets are not history reads)`,
+        );
+      }
+    }
+    const entryLen = node.historyEntryByteLength;
+    if (!Number.isInteger(entryLen) || entryLen < 1) {
+      throw new Error(
+        `for-each-subgraph-with-history '${node.id}': historyEntryByteLength must be a positive integer, got ${String(entryLen)}`,
+      );
+    }
+
+    // ── Parent-scope state contract ─────────────────────────────────────
+    // Initial history seeds come from parent state.bytes (Slice 2.0c
+    // sourcing pick). SHA-256 will arrange for the preceding spec leaves
+    // to populate state with W[0..15]; the toy fixture passes seeds in
+    // directly via runtime's initialState.
+    if (state.shape !== "bytes") {
+      throw new Error(
+        `for-each-subgraph-with-history '${node.id}': parent-scope state.shape must be "bytes" to source initial history seeds (got "${state.shape}")`,
+      );
+    }
+    if (state.bytes.length % entryLen !== 0) {
+      throw new Error(
+        `for-each-subgraph-with-history '${node.id}': parent state.bytes.length ${state.bytes.length} is not a multiple of historyEntryByteLength ${entryLen}`,
+      );
+    }
+    const seedCount = state.bytes.length / entryLen;
+    const maxOffset = Math.max(...node.lookbackOffsets);
+    if (seedCount < maxOffset) {
+      throw new Error(
+        `for-each-subgraph-with-history '${node.id}': need at least max(lookbackOffsets)=${maxOffset} seeds in initial history (got ${seedCount} seeds from ${state.bytes.length} bytes / entry ${entryLen}); iteration 0 cannot satisfy a lookback deeper than seed count`,
+      );
+    }
+
+    // ── Iteration count resolution (mirrors for-each-subgraph) ──────────
+    let count: number;
+    if (typeof node.iterationCount === "number") {
+      count = node.iterationCount;
+    } else {
+      // `{ fromParam }` resolution is deferred to the first param-form
+      // consumer per Slice 2.0a precedent. SHA-256's message schedule
+      // uses literal 48, so the literal form is what shipped consumers
+      // exercise.
+      throw new Error(
+        `for-each-subgraph-with-history '${node.id}': iterationCount.fromParam resolution is not implemented in Slice 2.0c — first consumer with param-form picks up the lookup mechanism`,
+      );
+    }
+    if (!Number.isInteger(count) || count < 0) {
+      throw new Error(
+        `for-each-subgraph-with-history '${node.id}': iterationCount must be a non-negative integer, got ${String(count)}`,
+      );
+    }
+
+    // ── Build initial history (defensive copies — caller bytes don't leak) ─
+    const history: Uint8Array[] = [];
+    for (let i = 0; i < seedCount; i++) {
+      history.push(new Uint8Array(state.bytes.subarray(i * entryLen, (i + 1) * entryLen)));
+    }
+
+    // ── Snapshot aux keys we're about to set, so we can restore on exit ─
+    // Map value `undefined` means "the key was absent — delete on restore."
+    // A pre-existing key with any value is preserved verbatim.
+    const auxKeyPrefix = "prior-";
+    const snapshot = new Map<string, AuxValue | undefined>();
+    for (const offset of node.lookbackOffsets) {
+      const k = `${auxKeyPrefix}${offset}`;
+      snapshot.set(k, aux.get(k));
+    }
+
+    const childPath = [...path, node.id];
+
+    // ── Per-iteration loop ──────────────────────────────────────────────
+    for (let t = 0; t < count; t++) {
+      const absIndex = seedCount + t;
+
+      // Seed aux["prior-N"] = history[absIndex - N] for each declared
+      // offset. The validation above guarantees absIndex - offset ≥ 0
+      // for every iteration (seedCount ≥ maxOffset; absIndex grows from
+      // seedCount; offset ≤ maxOffset → absIndex - offset ≥ 0).
+      for (const offset of node.lookbackOffsets) {
+        const k = `${auxKeyPrefix}${offset}`;
+        const priorEntry = history[absIndex - offset];
+        if (priorEntry === undefined) {
+          // Defensive — should be unreachable given the seedCount ≥
+          // maxOffset check, but the type system requires the guard.
+          throw new Error(
+            `for-each-subgraph-with-history '${node.id}': iteration ${t}: history[${absIndex - offset}] missing for offset ${offset} (this is a runtime invariant violation — please file a bug)`,
+          );
+        }
+        aux.set(k, priorEntry);
+      }
+
+      // Body's starting state per iteration: blank slate of entryLen
+      // zero bytes. The body builds the new history entry from the
+      // lookback aux reads + computation; it does NOT inherit running
+      // state across iterations (unlike state-thread for-each-subgraph).
+      state = { shape: "bytes", bytes: new Uint8Array(entryLen) };
+
+      walk(node.children, childPath, blockIndex, branchPath, [...roundPath, t]);
+
+      // Body exit contract: bytes-shape AND exactly entryLen bytes.
+      // Wrong shape is a body authoring bug (using a state-shape that
+      // doesn't match the history entry width); wrong length is either
+      // a body bug or a mismatched historyEntryByteLength setting.
+      //
+      // TS narrowed `state` to `BytesState` after the iteration-entry
+      // assignment `state = { shape: "bytes", ... }` and can't track
+      // that the `walk()` callback may have widened it. Re-widen via
+      // the union cast so the shape branch reads cleanly.
+      const exitState = state as State;
+      if (exitState.shape !== "bytes") {
+        throw new Error(
+          `for-each-subgraph-with-history '${node.id}': iteration ${t} body exit state.shape must be "bytes" (got "${exitState.shape}"); the body's last leaf must produce a bytes-shape state of historyEntryByteLength=${entryLen} bytes`,
+        );
+      }
+      if (exitState.bytes.length !== entryLen) {
+        throw new Error(
+          `for-each-subgraph-with-history '${node.id}': iteration ${t} body exit state.bytes.length ${exitState.bytes.length} != historyEntryByteLength ${entryLen}`,
+        );
+      }
+
+      // Append a defensive copy so subsequent iterations / aux sets
+      // can't mutate this entry through their own aliased state buffer.
+      history.push(new Uint8Array(exitState.bytes));
+    }
+
+    // ── Restore aux keys to pre-invocation values ───────────────────────
+    // Delete keys that were absent before; restore prior values for keys
+    // that were present. Keeps the surrounding scope's aux untouched
+    // across this node's lifetime — friendly to nesting and to specs
+    // that happen to use "prior-N"-shaped keys elsewhere.
+    for (const [k, prev] of snapshot) {
+      if (prev === undefined) {
+        aux.delete(k);
+      } else {
+        aux.set(k, prev);
+      }
+    }
+
+    // ── Exit state: full history concatenated as flat BytesState ────────
+    // Length = (seedCount + count) × entryLen. SHA-256 message schedule:
+    // 16 seeds + 48 iterations = 64 × 4 = 256 bytes (W[0..63]).
+    const totalLen = history.length * entryLen;
+    const totalBytes = new Uint8Array(totalLen);
+    for (let i = 0; i < history.length; i++) {
+      const entry = history[i];
+      if (entry === undefined) {
+        throw new Error(
+          `for-each-subgraph-with-history '${node.id}': history[${i}] missing during exit concatenation (runtime invariant violation — please file a bug)`,
+        );
+      }
+      totalBytes.set(entry, i * entryLen);
+    }
+    state = { shape: "bytes", bytes: totalBytes };
   };
 
   walk(spec.steps, [], undefined, [], []);

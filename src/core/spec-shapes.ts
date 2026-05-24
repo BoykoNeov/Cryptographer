@@ -170,6 +170,19 @@ const walk = (nodes: readonly StepNode[], current: StateShape, ctx: WalkContext)
       ctx.shapeAt.set(node.id, shape);
       continue;
     }
+    if (node.kind === "for-each-subgraph-with-history") {
+      // For-each-subgraph-with-history (Slice 2.0c) — body input shape is
+      // always "bytes" (the runtime resets state to a zero Uint8Array of
+      // historyEntryByteLength at iteration entry); node exit shape is
+      // also "bytes" (full history concatenated). Children walk once with
+      // the bytes input shape so per-child contracts fire + shapeAt entries
+      // populate. Mode-exclusivity / lookbackOffsets validity / seed-count
+      // adequacy are runtime contracts — surface at runtime walk, not here.
+      walk(node.children, "bytes", ctx);
+      shape = "bytes";
+      ctx.shapeAt.set(node.id, shape);
+      continue;
+    }
     // Iterate is opaque to shape inference. The body always starts in
     // matrix4x4-bytes (the runtime substitutes state = blocks[i]); the
     // iterate exits leaving state in matrix4x4-bytes (the last iteration's

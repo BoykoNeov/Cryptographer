@@ -12,6 +12,7 @@ import type {
   CipherSpec,
   FeistelRoundGroup,
   ForEachSubgraphNode,
+  ForEachSubgraphWithHistoryNode,
   IterateGroup,
   Json,
   StateShape,
@@ -415,6 +416,19 @@ export const compareSpecs = (a: CipherSpec, b: CipherSpec): readonly SpecParamDi
         // union we explicitly enumerate to keep TS happy AND preserve the
         // descent semantics across all container kinds.)
         visit(x.children, y.children);
+      } else if (x.kind === "for-each-subgraph" && y.kind === "for-each-subgraph") {
+        // Same rationale as the iterate branch — descend into bodies so
+        // param edits inside a for-each-subgraph surface in run-history-diff.
+        visit(x.children, y.children);
+      } else if (
+        x.kind === "for-each-subgraph-with-history" &&
+        y.kind === "for-each-subgraph-with-history"
+      ) {
+        // Slice 2.0c — same descent posture as the other iteration kinds.
+        // Lookback-offsets / historyEntryByteLength / iterationCount edits
+        // surface via the structural-change path (kind matches but the
+        // offset arrays differ); body param edits surface via the recursion.
+        visit(x.children, y.children);
       } else if (x.kind === "feistel-round" && y.kind === "feistel-round") {
         // Per-track recursion. Track count mismatch is already flagged
         // above as a `(structure)` change via the `x.kind !== y.kind`
@@ -477,7 +491,13 @@ export const compareSpecs = (a: CipherSpec, b: CipherSpec): readonly SpecParamDi
  */
 export type StepLocation = {
   readonly node: StepNode;
-  readonly parent: StepGroup | IterateGroup | FeistelRoundGroup | ForEachSubgraphNode | null;
+  readonly parent:
+    | StepGroup
+    | IterateGroup
+    | FeistelRoundGroup
+    | ForEachSubgraphNode
+    | ForEachSubgraphWithHistoryNode
+    | null;
   readonly indexInParent: number;
   /** Set iff `parent` is a `FeistelRoundGroup`. */
   readonly trackIdx?: number;
@@ -500,7 +520,7 @@ export type StepLocation = {
 export const findStepAndParent = (spec: CipherSpec, stepId: string): StepLocation | null => {
   const visit = (
     nodes: readonly StepNode[],
-    parent: StepGroup | IterateGroup | ForEachSubgraphNode | null,
+    parent: StepGroup | IterateGroup | ForEachSubgraphNode | ForEachSubgraphWithHistoryNode | null,
   ): StepLocation | null => {
     for (let i = 0; i < nodes.length; i++) {
       const node = nodes[i];
@@ -1087,6 +1107,16 @@ export const duplicateRoundGroup = (
   if (loc.parent?.kind === "for-each-subgraph") {
     throw new Error(
       `duplicateRoundGroup: source "${sourceId}" lives inside a for-each-subgraph body; duplicate-round there isn't supported (per-iteration content shifts aren't a designed operation)`,
+    );
+  }
+  if (loc.parent?.kind === "for-each-subgraph-with-history") {
+    // Defensive: same rationale as the for-each-subgraph guard. Slice 2.0c
+    // ships per-iteration lookback semantics; duplicating a round inside
+    // the body would shift every iteration's body content, which the
+    // renumber walk + the lookback indexing weren't designed for. Bail
+    // loudly until a motivating feature lands.
+    throw new Error(
+      `duplicateRoundGroup: source "${sourceId}" lives inside a for-each-subgraph-with-history body; duplicate-round there isn't supported (per-iteration content shifts aren't a designed operation)`,
     );
   }
   const idRe = direction === "forward" ? ROUND_ID_RE : INV_ROUND_ID_RE;

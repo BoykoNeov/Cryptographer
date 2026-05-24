@@ -227,8 +227,26 @@ export type ContainerNode = {
    *     collapse semantics) lands in Slice 2.10. Until then the container
    *     is treated like an iterate by the spine + chain emitters; the
    *     graph view shows it as a labeled box around its children.
+   *   - `"for-each-subgraph-with-history"` — per-iteration lookback
+   *     primitive (Slice 2.0c). Body reads named priors from a runtime-
+   *     maintained history buffer via `aux["prior-{N}"]`. Like the
+   *     other two iteration kinds the container piggybacks on iterate's
+   *     spine-termination semantics: the parent-scope spine treats the
+   *     node as one chain boundary; per-iteration spine within the body
+   *     is its own scope. Honest depiction is "aux lookback arrows from
+   *     the runtime-virtual history buffer into each iteration's body
+   *     leaf" — that rendering surface lands when SHA-256 graph view
+   *     polish ships (Slice 2.10); until then the lookback reads
+   *     surface as `aux["prior-{N}"]` keys missing a producer, which the
+   *     `validateGraph` orphan-read warning catches and renders as an
+   *     orange dot the user can hover for explanation.
    */
-  readonly kind: "group" | "iterate" | "feistel" | "for-each-subgraph";
+  readonly kind:
+    | "group"
+    | "iterate"
+    | "feistel"
+    | "for-each-subgraph"
+    | "for-each-subgraph-with-history";
   readonly id: string;
   readonly label: string;
   /** Ancestor container ids, root-first (excludes this container itself). */
@@ -674,6 +692,21 @@ const walkSpec = (
       ctx.containerIndex.set(node.id, cIdx);
       ctx.containers.push({
         kind: "for-each-subgraph",
+        id: node.id,
+        label: node.label ?? node.id,
+        containerPath,
+        childIds: grandChildIds,
+      });
+    } else if (node.kind === "for-each-subgraph-with-history") {
+      // For-each-subgraph-with-history (Slice 2.0c). Own container kind
+      // for the same reasons as for-each-subgraph — future renderer
+      // polish (lookback-arrow overlay, history-strip visualization)
+      // will switch on this label. Spine + chain treatment piggybacks
+      // on iterate's boundary semantics via `processScope` below.
+      const cIdx = ctx.containers.length;
+      ctx.containerIndex.set(node.id, cIdx);
+      ctx.containers.push({
+        kind: "for-each-subgraph-with-history",
         id: node.id,
         label: node.label ?? node.id,
         containerPath,
@@ -1282,23 +1315,38 @@ const inferStateEdges = (spec: CipherSpec): GraphEdge[] => {
             // with its body cleared out."
             segment.push(node.id);
           }
-        } else if (node.kind === "iterate" || node.kind === "for-each-subgraph") {
-          // Iterate / for-each-subgraph boundary — recurse into the body
-          // as its own scope (the per-iteration spine is a separate
-          // chain) AND push the container's id onto the parent chain so
-          // the chain has a recognizable boundary marker. `emitChain`
-          // then SUPPRESSES any state edge whose endpoint is one of
-          // these container ids (see the iterateIds doc-block above for
-          // iterate; for-each-subgraph piggybacks on the same suppression
-          // until Slice 2.0c's feedback contract surfaces a clearer
-          // model). The result: the parent spine stops at the leaf
+        } else if (
+          node.kind === "iterate" ||
+          node.kind === "for-each-subgraph" ||
+          node.kind === "for-each-subgraph-with-history"
+        ) {
+          // Iterate / for-each-subgraph[-with-history] boundary — recurse
+          // into the body as its own scope (the per-iteration spine is a
+          // separate chain) AND push the container's id onto the parent
+          // chain so the chain has a recognizable boundary marker.
+          // `emitChain` then SUPPRESSES any state edge whose endpoint is
+          // one of these container ids (see the iterateIds doc-block
+          // above for iterate; for-each-subgraph and
+          // for-each-subgraph-with-history both piggyback on the same
+          // suppression). The result: the parent spine stops at the leaf
           // BEFORE the container, and resumes at the leaf AFTER it.
           //
           // For-each-subgraph differs semantically (state THREADS across
           // iterations rather than being clobbered from aux) but the
           // PARENT-scope spine treatment is the same: one boundary marker
-          // per container. Inner spine within the body is handled by the
-          // recursive `processScope` call.
+          // per container.
+          //
+          // For-each-subgraph-with-history (Slice 2.0c) also has bytes-
+          // shape state at the parent boundary (initial-history seeds
+          // come from parent state.bytes; exit state is the concatenated
+          // full history). Spine termination at the boundary is honest:
+          // the data handoff is matter-of-fact "this many bytes in, this
+          // many bytes out" — but the per-iteration spine inside the
+          // body is its own scope, not connected to the parent spine.
+          // Future Slice 2.0c+ polish may surface lookback-arrow overlays
+          // distinct from the spine; until then the orphan-read warning
+          // on `aux["prior-{N}"]` reads is what surfaces the lookback to
+          // users.
           processScope(node.children);
           segment.push(node.id);
         } else {

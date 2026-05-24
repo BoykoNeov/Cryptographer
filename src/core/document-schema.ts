@@ -212,6 +212,38 @@ export const ForEachSubgraphSchema = z.object({
   blockLayout: StateShapeSchema.optional(),
 });
 
+// `for-each-subgraph-with-history` spec node kind (Slice 2.0c of
+// `docs/plans/universal-port-phase-2-slices.md`). Per-iteration lookback
+// primitive — body reads named priors from a runtime-maintained history
+// buffer via `aux["prior-{N}"]`. Sibling node kind to `for-each-subgraph`
+// (NOT a third mode) per Q2 user pick 2026-05-24: keeps each kind's
+// invariant block local rather than multiplying the mode-discriminator
+// matrix.
+//
+// `iterationCount` is REQUIRED (unlike for-each-subgraph where it's
+// optional because item-array mode auto-derives it). No item-array
+// equivalent here — the data fed into the body comes from lookback aux
+// reads, not a sliced input array. `historyEntryByteLength` is also
+// required (drives three shape invariants enforced at runtime).
+//
+// `lookbackOffsets` must be non-empty with all positive integers; the
+// runtime enforces this too. Schema validates structurally — every
+// number must be a positive integer — and leaves the "non-empty" check
+// (the more illuminating error) to the runtime, mirroring the
+// for-each-subgraph posture.
+//
+// No schemaVersion bump: pre-Slice-2.0c documents carry no node of this
+// kind and validate unchanged through the widened discriminated union.
+export const ForEachSubgraphWithHistorySchema = z.object({
+  kind: z.literal("for-each-subgraph-with-history"),
+  id: z.string(),
+  label: z.string().optional(),
+  children: z.array(z.lazy(() => StepNodeSchema)),
+  iterationCount: ForEachIterationCountSchema,
+  lookbackOffsets: z.array(z.number().int().positive()),
+  historyEntryByteLength: z.number().int().positive(),
+});
+
 // Note on `schemaVersion`: Phase 4 of `docs/plans/des-feistel.md` bumped
 // the literal to 2 when DES entered the cipher selector. The StepNode
 // union was already widened to accept feistel-round in Phase 2 (so the
@@ -226,6 +258,7 @@ export const StepNodeSchema: z.ZodTypeAny = z.discriminatedUnion("kind", [
   IterateGroupSchema,
   FeistelRoundGroupSchema,
   ForEachSubgraphSchema,
+  ForEachSubgraphWithHistorySchema,
 ]);
 
 // ─── CipherSpec ───────────────────────────────────────────────────────────

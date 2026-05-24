@@ -1,0 +1,666 @@
+/**
+ * Slice 2.0c — toy fixture for the
+ * `for-each-subgraph-with-history` spec node kind.
+ *
+ * The slice introduces a per-iteration lookback primitive — body reads
+ * named priors from a runtime-maintained history buffer via
+ * `aux["prior-{N}"]`. The forcing function is SHA-256's message schedule
+ * (W_t = σ1(W_{t-2}) + W_{t-7} + σ0(W_{t-15}) + W_{t-16}); this toy
+ * validates the runtime contract on a synthetic XOR-shape body before
+ * SHA-256 specifics land.
+ *
+ * Contract design picks baked into these tests
+ * (per `docs/plans/universal-port-phase-2-slices.md` Slice 2.0c):
+ *
+ *  - **Q1 (lookback declaration) = Declarative offsets.** Body declares
+ *    `lookbackOffsets: [N1, N2, ...]`; runtime exposes `aux["prior-{N}"]`
+ *    per offset. Memory bounded by max offset; data dependency explicit
+ *    in spec.
+ *  - **Q2 (packaging) = Sibling node kind.** New `StepNode` discriminant
+ *    `for-each-subgraph-with-history` rather than a third mode on
+ *    `for-each-subgraph`. The 2-mode invariant block on FES stays
+ *    untouched; this kind's invariants live local in its own walker.
+ *  - **Q3 (reset scope) = Per-outer reset.** History buffer is a local
+ *    variable in the runtime walker — each invocation freshly seeds
+ *    from parent state. The aux snapshot+restore protocol preserves
+ *    any pre-existing `prior-{N}` keys across the node's lifetime.
+ *
+ * Pass/fail gate:
+ *  - 8-iter XOR-shape toy: 8 frames emit with `:r0`..`:r7` suffixes;
+ *    aux["prior-1"] / aux["prior-2"] populated per iteration; body
+ *    starts each iteration with zero state of entry length; body exit
+ *    state appended to history; final exit state = full concatenated
+ *    history (seeds + iteration outputs).
+ *  - Composed suffix under `iterate`: 2-block × 3-iter case produces
+ *    `:b{i}:r{j}` per the type-order rule (`:t < :b < :r`).
+ *  - Throws cover every load-bearing contract invariant — empty
+ *    lookbackOffsets, non-positive offset, non-integer offset, bad
+ *    entry length, insufficient seeds, non-bytes parent state, length
+ *    not divisible, body exit wrong length / wrong shape.
+ *  - Aux snapshot+restore preserves prior aux state across the node
+ *    (absent stays absent; present stays present-with-original-value).
+ */
+
+import { StepRegistry } from "@/core/registry";
+import { runSpec } from "@/core/runtime";
+import { canonicalStepId } from "@/core/step-id";
+import type { AuxValue, BytesState, CipherSpec, MatrixState, StepDefinition } from "@/core/types";
+import { describe, expect, it } from "vitest";
+
+// Test-local body leaf: reads aux["prior-1"] and aux["prior-2"], XORs them,
+// writes the result as the iteration's bytes-state output. Built test-
+// local because no shipped step type combines bytes-shape state with
+// 1-byte arithmetic (the existing `xor-aux-into-state@1` is matrix4x4-
+// bytes only). Keeps the toy hand-verifiable at 1-byte entries.
+const xorPriorsIntoState: StepDefinition = {
+  executor: (state, _params, ctx) => {
+    if (state.shape !== "bytes") {
+      throw new Error("xorPriorsIntoState expects bytes state");
+    }
+    const prior1 = ctx.aux.get("prior-1");
+    const prior2 = ctx.aux.get("prior-2");
+    if (!(prior1 instanceof Uint8Array) || !(prior2 instanceof Uint8Array)) {
+      throw new Error("xorPriorsIntoState requires aux['prior-1'] + aux['prior-2'] as Uint8Array");
+    }
+    if (prior1.length !== state.bytes.length || prior2.length !== state.bytes.length) {
+      throw new Error(
+        `xorPriorsIntoState length mismatch: state=${state.bytes.length} prior-1=${prior1.length} prior-2=${prior2.length}`,
+      );
+    }
+    const out = new Uint8Array(state.bytes.length);
+    for (let i = 0; i < out.length; i++) {
+      out[i] = (prior1[i] ?? 0) ^ (prior2[i] ?? 0);
+    }
+    const next: BytesState = { shape: "bytes", bytes: out };
+    return { state: next, auxReads: ["prior-1", "prior-2"] };
+  },
+};
+
+// Test-local body leaf for the "body exits with wrong shape" throw test.
+// Returns a matrix4x4-bytes state regardless of input — exercises the
+// runtime's "body exit state.shape must be bytes" invariant.
+const returnMatrixState: StepDefinition = {
+  executor: () => {
+    const m: MatrixState = { shape: "matrix4x4-bytes", bytes: new Uint8Array(16) };
+    return { state: m };
+  },
+};
+
+// Test-local body leaf for the "body exits with wrong byte length" throw
+// test. Returns a bytes state of length 2 regardless of input — under
+// historyEntryByteLength=1 this trips the length invariant.
+const returnTwoBytes: StepDefinition = {
+  executor: () => {
+    const next: BytesState = { shape: "bytes", bytes: new Uint8Array([0xff, 0xee]) };
+    return { state: next };
+  },
+};
+
+// Test-local body leaf that asserts a named aux key is absent. Used by
+// the aux-cleanup test to verify snapshot+restore deleted runtime-set
+// keys after the FES-with-history node exits.
+const assertAuxAbsent: StepDefinition = {
+  executor: (state, params, ctx) => {
+    const key = (params as unknown as { readonly key: string }).key;
+    if (ctx.aux.has(key)) {
+      throw new Error(
+        `assertAuxAbsent: aux["${key}"] is present but expected absent (FES-with-history cleanup failed)`,
+      );
+    }
+    return { state };
+  },
+};
+
+// Test-local body leaf that asserts a named aux key has a specific byte
+// value. Used by the aux-restore test to verify pre-existing aux state
+// was restored verbatim after the FES-with-history node exits.
+const assertAuxEquals: StepDefinition = {
+  executor: (state, params, ctx) => {
+    const key = (params as unknown as { readonly key: string }).key;
+    const expectedHex = (params as unknown as { readonly expectedHex: string }).expectedHex;
+    const got = ctx.aux.get(key);
+    if (!(got instanceof Uint8Array)) {
+      throw new Error(`assertAuxEquals: aux["${key}"] is not a Uint8Array (got ${typeof got})`);
+    }
+    const gotHex = Array.from(got)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    if (gotHex !== expectedHex) {
+      throw new Error(`assertAuxEquals: aux["${key}"]=${gotHex} expected ${expectedHex}`);
+    }
+    return { state, auxReads: [key] };
+  },
+};
+
+const buildRegistry = (): StepRegistry => {
+  const r = new StepRegistry();
+  r.register("test.xor-priors-into-state@1", xorPriorsIntoState);
+  r.register("test.return-matrix-state@1", returnMatrixState);
+  r.register("test.return-two-bytes@1", returnTwoBytes);
+  r.register("test.assert-aux-absent@1", assertAuxAbsent);
+  r.register("test.assert-aux-equals@1", assertAuxEquals);
+  return r;
+};
+
+// ─── Happy path: 8-iter XOR-shape lookback ────────────────────────────────
+//
+// Seeds [0x05, 0x03] at historyEntryByteLength=1. Body XORs prior-1 +
+// prior-2 per iteration. The sequence cycles with period 3 because XOR
+// is involutive: `a, b, a^b, b^(a^b)=a, (a^b)^a=b, a^b, …`.
+//
+// Expected full history after 8 iterations (10 entries total):
+//   t=0 (absIdx=2): prior-1=hist[1]=0x03, prior-2=hist[0]=0x05 → 0x06
+//   t=1 (absIdx=3): prior-1=hist[2]=0x06, prior-2=hist[1]=0x03 → 0x05
+//   t=2 (absIdx=4): prior-1=hist[3]=0x05, prior-2=hist[2]=0x06 → 0x03
+//   t=3 (absIdx=5): prior-1=hist[4]=0x03, prior-2=hist[3]=0x05 → 0x06
+//   t=4 (absIdx=6): prior-1=hist[5]=0x06, prior-2=hist[4]=0x03 → 0x05
+//   t=5 (absIdx=7): prior-1=hist[6]=0x05, prior-2=hist[5]=0x06 → 0x03
+//   t=6 (absIdx=8): prior-1=hist[7]=0x03, prior-2=hist[6]=0x05 → 0x06
+//   t=7 (absIdx=9): prior-1=hist[8]=0x06, prior-2=hist[7]=0x03 → 0x05
+// Final state.bytes = [0x05, 0x03, 0x06, 0x05, 0x03, 0x06, 0x05, 0x03, 0x06, 0x05].
+
+const xorShapeSpec: CipherSpec = {
+  id: "test-fes-history-inner@1",
+  name: "8-iter XOR-shape lookback",
+  stateShape: "bytes",
+  inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+  steps: [
+    {
+      kind: "for-each-subgraph-with-history",
+      id: "loop",
+      label: "8x xor priors",
+      iterationCount: 8,
+      lookbackOffsets: [1, 2],
+      historyEntryByteLength: 1,
+      children: [
+        {
+          kind: "step",
+          id: "xor-priors",
+          type: "test.xor-priors-into-state@1",
+          params: {},
+        },
+      ],
+    },
+  ],
+};
+
+describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
+  it("8-iter XOR-shape lookback: emits :r{i}-suffixed frames + correct final history", () => {
+    const initial: BytesState = { shape: "bytes", bytes: new Uint8Array([0x05, 0x03]) };
+    const trace = runSpec(xorShapeSpec, buildRegistry(), { initialState: initial });
+
+    // 8 iterations × 1 body leaf = 8 frames.
+    expect(trace.frames).toHaveLength(8);
+
+    // StepId suffixes pin Slice 2.0c's `:r{i}` convention (same as
+    // for-each-subgraph state-thread mode).
+    expect(trace.frames.map((f) => f.stepId)).toEqual([
+      "xor-priors:r0",
+      "xor-priors:r1",
+      "xor-priors:r2",
+      "xor-priors:r3",
+      "xor-priors:r4",
+      "xor-priors:r5",
+      "xor-priors:r6",
+      "xor-priors:r7",
+    ]);
+
+    // Canonical stepId strips back to the spec-leaf id — same as for
+    // every other iteration kind, so `setTrace`'s frame-preservation
+    // across re-runs continues to work.
+    for (const f of trace.frames) {
+      expect(canonicalStepId(f.stepId)).toBe("xor-priors");
+    }
+
+    // Body starts each iteration with zero state of entryLen (1 byte).
+    // The aux reads + XOR are what produce the iteration's output.
+    for (const f of trace.frames) {
+      if (f.stateBefore.shape !== "bytes") throw new Error("expected bytes stateBefore");
+      expect(Array.from(f.stateBefore.bytes)).toEqual([0x00]);
+    }
+
+    // Per-iteration auxRead binding contains "prior-1" + "prior-2" in
+    // executor-declared order. (The runtime's frame-builder records the
+    // executor's `auxReads` list verbatim.)
+    for (const f of trace.frames) {
+      expect(f.auxRead.has("prior-1")).toBe(true);
+      expect(f.auxRead.has("prior-2")).toBe(true);
+    }
+
+    // Iteration outputs (XOR of declared priors per iteration) per the
+    // hand-computed cycle above.
+    const expectedOutputs = [0x06, 0x05, 0x03, 0x06, 0x05, 0x03, 0x06, 0x05];
+    for (let i = 0; i < trace.frames.length; i++) {
+      const f = trace.frames[i];
+      if (!f || f.stateAfter.shape !== "bytes") throw new Error(`frame ${i}`);
+      expect(Array.from(f.stateAfter.bytes)).toEqual([expectedOutputs[i]]);
+    }
+
+    // Final state = seeds concatenated with all iteration outputs.
+    if (trace.finalState.shape !== "bytes") throw new Error("finalState shape");
+    expect(Array.from(trace.finalState.bytes)).toEqual([
+      0x05, 0x03, 0x06, 0x05, 0x03, 0x06, 0x05, 0x03, 0x06, 0x05,
+    ]);
+  });
+
+  it("iterationCount=0 emits zero body frames; exit state = seeds verbatim", () => {
+    const zeroSpec: CipherSpec = {
+      ...xorShapeSpec,
+      steps: [
+        {
+          kind: "for-each-subgraph-with-history",
+          id: "loop",
+          iterationCount: 0,
+          lookbackOffsets: [1, 2],
+          historyEntryByteLength: 1,
+          children: [
+            { kind: "step", id: "xor-priors", type: "test.xor-priors-into-state@1", params: {} },
+          ],
+        },
+      ],
+    };
+    const initial: BytesState = { shape: "bytes", bytes: new Uint8Array([0x05, 0x03]) };
+    const trace = runSpec(zeroSpec, buildRegistry(), { initialState: initial });
+    expect(trace.frames).toHaveLength(0);
+    if (trace.finalState.shape !== "bytes") throw new Error("finalState shape");
+    expect(Array.from(trace.finalState.bytes)).toEqual([0x05, 0x03]);
+  });
+
+  it("iterationCount.fromParam throws with a clear Slice-2.0c-deferred error", () => {
+    const paramSpec: CipherSpec = {
+      ...xorShapeSpec,
+      steps: [
+        {
+          kind: "for-each-subgraph-with-history",
+          id: "loop",
+          iterationCount: { fromParam: "rounds" },
+          lookbackOffsets: [1, 2],
+          historyEntryByteLength: 1,
+          children: [
+            { kind: "step", id: "xor-priors", type: "test.xor-priors-into-state@1", params: {} },
+          ],
+        },
+      ],
+    };
+    const initial: BytesState = { shape: "bytes", bytes: new Uint8Array([0x05, 0x03]) };
+    expect(() => runSpec(paramSpec, buildRegistry(), { initialState: initial })).toThrow(
+      /Slice 2\.0c/,
+    );
+  });
+
+  // ─── Composed suffix under iterate: 2-block × 3-iter case ──────────────
+  //
+  // Pins the type-order rule `:t < :b < :r` when an outer `iterate`
+  // wraps a for-each-subgraph-with-history. Outer iterate seeds each
+  // block from an aux array per its existing contract; inner FES-with-
+  // history runs 3 iterations per block. Composition rule: outer block
+  // index appears as `:b{i}` and inner round index as `:r{j}`, in that
+  // order regardless of nesting depth (because `:b` is type-order-before
+  // `:r`). See `core/step-id.ts`.
+
+  it("composed suffix under iterate: 2-block × 3-iter emits :b{i}:r{j}", () => {
+    const nestedSpec: CipherSpec = {
+      id: "test-fes-history-nested@1",
+      name: "nested iterate × FES-with-history",
+      stateShape: "bytes",
+      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+      steps: [
+        {
+          kind: "iterate",
+          id: "blocks",
+          countFromAux: "count",
+          blocksFromAux: "in-blocks",
+          outBlocksAux: "out-blocks",
+          children: [
+            // The iterate seeds each block from aux as a MatrixState. But
+            // FES-with-history requires bytes-shape parent state. So the
+            // inner body has to be set up so it doesn't fail at the
+            // boundary. We test the suffix composition with a body that
+            // would-throw-on-bytes — but the suffix composition is observable
+            // even on the THROW, so we use a guard test approach.
+            //
+            // Alternative: convert the matrix to bytes inline. To avoid
+            // adding a step type, we use a `for-each-subgraph` ITEM-ARRAY
+            // mode that takes the matrix state's 16 bytes, slices into
+            // 4-byte chunks (4 iterations), and re-emits bytes — that's
+            // the cleanest way to bridge matrix → bytes without a new step.
+            //
+            // BUT for the suffix-composition test, simpler: nest under a
+            // for-each-subgraph state-thread that's a no-op shape-wise.
+            // The state-thread FES preserves bytes shape into FES-with-
+            // history.
+            //
+            // Cleanest: drop the iterate framing; use a state-thread FES
+            // as the outer instead. Outer kind `for-each-subgraph` (state-
+            // thread) doesn't add `:b{i}`, it adds `:r{i}` — which would
+            // produce `:r{outer}:r{inner}` (same letter twice). That doesn't
+            // exercise the `:b` × `:r` composition.
+            //
+            // Solution: use an outer iterate with bytes-shape state seeded
+            // via the iterate's existing aux array (the MatrixState values
+            // in aux still load as state, but we use a bytes-friendly toy
+            // body — increment_byte0 was matrix4x4-only too. So we use a
+            // body that reads matrix4x4 (since that's what iterate hands
+            // it), converts to bytes, then runs FES-with-history.
+            //
+            // Pragmatic: simplest test that pins the suffix composition is
+            // to run the inner FES-with-history under a state-thread FES
+            // and accept the `:r{outer}:r{inner}` composition — that's the
+            // type-order rule applied within the same type, which is
+            // outer-first walk-order per the established convention.
+            //
+            // ACTUAL PATH: use an outer iterate with a bytes-friendly body
+            // that does the matrix→bytes conversion in one step. The
+            // existing `iso7816-4-unpad@1` does matrix→bytes but expects
+            // padding shape — wrong contract. So we register a test-local
+            // matrix→bytes-take-first-2 step here.
+            //
+            // For brevity in this comment block: see the helper just below
+            // this spec.
+            {
+              kind: "step",
+              id: "to-bytes",
+              type: "test.matrix-to-first-2-bytes@1",
+              params: {},
+            },
+            {
+              kind: "for-each-subgraph-with-history",
+              id: "rounds",
+              iterationCount: 3,
+              lookbackOffsets: [1, 2],
+              historyEntryByteLength: 1,
+              children: [
+                {
+                  kind: "step",
+                  id: "xor-priors",
+                  type: "test.xor-priors-into-state@1",
+                  params: {},
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    // Test-local matrix→bytes step for the nested case. Takes the first
+    // 2 bytes of the matrix and emits them as bytes state — small enough
+    // to feed FES-with-history as 2 seeds at entry=1.
+    const matrixToFirstTwoBytes: StepDefinition = {
+      executor: (state) => {
+        if (state.shape !== "matrix4x4-bytes") throw new Error("expects matrix");
+        const head = state.bytes.subarray(0, 2);
+        const next: BytesState = { shape: "bytes", bytes: new Uint8Array(head) };
+        return { state: next };
+      },
+    };
+    const registry = buildRegistry();
+    registry.register("test.matrix-to-first-2-bytes@1", matrixToFirstTwoBytes);
+
+    const matrixWithFirstTwo = (a: number, b: number): MatrixState => {
+      const bytes = new Uint8Array(16);
+      bytes[0] = a;
+      bytes[1] = b;
+      return { shape: "matrix4x4-bytes", bytes };
+    };
+    const initial: BytesState = { shape: "bytes", bytes: new Uint8Array(0) };
+    const blocks: readonly MatrixState[] = [
+      matrixWithFirstTwo(0x05, 0x03),
+      matrixWithFirstTwo(0x0a, 0x05),
+    ];
+    const trace = runSpec(nestedSpec, registry, {
+      initialState: initial,
+      initialAux: new Map<string, AuxValue>([
+        ["count", 2],
+        ["in-blocks", blocks],
+      ]),
+    });
+
+    // Two blocks × (1 to-bytes + 3 inner rounds) = 8 frames total.
+    expect(trace.frames).toHaveLength(8);
+
+    // Suffix composition: outer iterate is `:b{i}` (type-order before
+    // `:r`), inner FES-with-history is `:r{j}`. Block 0's frames come
+    // first (iterate fully expands each block before moving to the next).
+    const expectedStepIds = [
+      "to-bytes:b0",
+      "xor-priors:b0:r0",
+      "xor-priors:b0:r1",
+      "xor-priors:b0:r2",
+      "to-bytes:b1",
+      "xor-priors:b1:r0",
+      "xor-priors:b1:r1",
+      "xor-priors:b1:r2",
+    ];
+    expect(trace.frames.map((f) => f.stepId)).toEqual(expectedStepIds);
+
+    // blockIndex stamped per outer iteration.
+    expect(trace.frames.map((f) => f.blockIndex)).toEqual([0, 0, 0, 0, 1, 1, 1, 1]);
+  });
+
+  // ─── Contract-invariant throws ───────────────────────────────────────────
+  //
+  // Each invariant gets its own test for attribution clarity — when a
+  // future contract change breaks one, the failing test name names the
+  // exact constraint that broke.
+
+  const seedsTwo: BytesState = { shape: "bytes", bytes: new Uint8Array([0x05, 0x03]) };
+  const makeSpec = (overrides: {
+    readonly lookbackOffsets?: readonly number[];
+    readonly historyEntryByteLength?: number;
+    readonly iterationCount?: number | { readonly fromParam: string };
+    readonly bodyType?: string;
+  }): CipherSpec => ({
+    id: "test-fes-history-throw@1",
+    name: "throw-case",
+    stateShape: "bytes",
+    inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+    steps: [
+      {
+        kind: "for-each-subgraph-with-history",
+        id: "loop",
+        iterationCount: overrides.iterationCount ?? 2,
+        lookbackOffsets: overrides.lookbackOffsets ?? [1, 2],
+        historyEntryByteLength: overrides.historyEntryByteLength ?? 1,
+        children: [
+          {
+            kind: "step",
+            id: "body",
+            type: overrides.bodyType ?? "test.xor-priors-into-state@1",
+            params: {},
+          },
+        ],
+      },
+    ],
+  });
+
+  it("throws when lookbackOffsets is empty", () => {
+    expect(() =>
+      runSpec(makeSpec({ lookbackOffsets: [] }), buildRegistry(), { initialState: seedsTwo }),
+    ).toThrow(/lookbackOffsets must be non-empty/);
+  });
+
+  it("throws when lookbackOffsets contains 0", () => {
+    // Offset 0 would read the not-yet-written current iteration's entry —
+    // semantically meaningless, surfaces loudly per the doc-comment.
+    expect(() =>
+      runSpec(makeSpec({ lookbackOffsets: [0, 1] }), buildRegistry(), { initialState: seedsTwo }),
+    ).toThrow(/positive integer/);
+  });
+
+  it("throws when lookbackOffsets contains a negative offset", () => {
+    expect(() =>
+      runSpec(makeSpec({ lookbackOffsets: [-1, 1] }), buildRegistry(), { initialState: seedsTwo }),
+    ).toThrow(/positive integer/);
+  });
+
+  it("throws when lookbackOffsets contains a non-integer offset", () => {
+    expect(() =>
+      runSpec(makeSpec({ lookbackOffsets: [1.5] }), buildRegistry(), { initialState: seedsTwo }),
+    ).toThrow(/positive integer/);
+  });
+
+  it("throws when historyEntryByteLength is zero", () => {
+    expect(() =>
+      runSpec(makeSpec({ historyEntryByteLength: 0 }), buildRegistry(), { initialState: seedsTwo }),
+    ).toThrow(/historyEntryByteLength must be a positive integer/);
+  });
+
+  it("throws when historyEntryByteLength is non-integer", () => {
+    expect(() =>
+      runSpec(makeSpec({ historyEntryByteLength: 0.5 }), buildRegistry(), {
+        initialState: seedsTwo,
+      }),
+    ).toThrow(/historyEntryByteLength must be a positive integer/);
+  });
+
+  it("throws when seed count is fewer than max(lookbackOffsets)", () => {
+    // 2 seeds × entry=1, but max offset = 3 → can't satisfy iteration 0's
+    // prior-3 read.
+    expect(() =>
+      runSpec(makeSpec({ lookbackOffsets: [1, 2, 3] }), buildRegistry(), {
+        initialState: seedsTwo,
+      }),
+    ).toThrow(/need at least max\(lookbackOffsets\)=3 seeds/);
+  });
+
+  it("throws when parent state.shape is not bytes", () => {
+    const matrixInitial: MatrixState = { shape: "matrix4x4-bytes", bytes: new Uint8Array(16) };
+    expect(() => runSpec(makeSpec({}), buildRegistry(), { initialState: matrixInitial })).toThrow(
+      /parent-scope state\.shape must be "bytes"/,
+    );
+  });
+
+  it("throws when parent state.bytes.length is not a multiple of historyEntryByteLength", () => {
+    // 3 bytes, entry=2 → 3 % 2 != 0.
+    const oddInitial: BytesState = { shape: "bytes", bytes: new Uint8Array([1, 2, 3]) };
+    expect(() =>
+      runSpec(makeSpec({ historyEntryByteLength: 2 }), buildRegistry(), {
+        initialState: oddInitial,
+      }),
+    ).toThrow(/is not a multiple of historyEntryByteLength/);
+  });
+
+  it("throws when body exit state is not bytes-shape", () => {
+    expect(() =>
+      runSpec(makeSpec({ bodyType: "test.return-matrix-state@1" }), buildRegistry(), {
+        initialState: seedsTwo,
+      }),
+    ).toThrow(/body exit state\.shape must be "bytes"/);
+  });
+
+  it("throws when body exit state.bytes.length != historyEntryByteLength", () => {
+    // Body returns 2 bytes; entry=1 → mismatch.
+    expect(() =>
+      runSpec(makeSpec({ bodyType: "test.return-two-bytes@1" }), buildRegistry(), {
+        initialState: seedsTwo,
+      }),
+    ).toThrow(/!= historyEntryByteLength/);
+  });
+
+  it("throws when iterationCount is negative", () => {
+    expect(() =>
+      runSpec(makeSpec({ iterationCount: -1 }), buildRegistry(), { initialState: seedsTwo }),
+    ).toThrow(/iterationCount must be a non-negative integer/);
+  });
+
+  // ─── Aux snapshot+restore semantics (per-outer-reset enforcement) ────────
+  //
+  // Q3 user pick: per-outer reset. The history buffer is local to each
+  // invocation of `runForEachSubgraphWithHistory`, so freshness across
+  // invocations is correctness-by-construction. The externally observable
+  // proxy for "the node didn't leak runtime state to its scope" is the
+  // aux key snapshot+restore protocol: `prior-{N}` keys that were absent
+  // before the node ran stay absent after; keys present with a
+  // pre-existing value get that value restored verbatim.
+
+  it("aux cleanup: prior-{N} keys absent after node exits when absent before", () => {
+    // Spec: FES-with-history, then a sibling leaf that throws if
+    // aux["prior-1"] or aux["prior-2"] is present. Verifies cleanup.
+    const cleanupSpec: CipherSpec = {
+      id: "test-fes-history-cleanup@1",
+      name: "cleanup",
+      stateShape: "bytes",
+      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+      steps: [
+        {
+          kind: "for-each-subgraph-with-history",
+          id: "loop",
+          iterationCount: 2,
+          lookbackOffsets: [1, 2],
+          historyEntryByteLength: 1,
+          children: [
+            {
+              kind: "step",
+              id: "xor-priors",
+              type: "test.xor-priors-into-state@1",
+              params: {},
+            },
+          ],
+        },
+        {
+          kind: "step",
+          id: "assert-1-absent",
+          type: "test.assert-aux-absent@1",
+          params: { key: "prior-1" },
+        },
+        {
+          kind: "step",
+          id: "assert-2-absent",
+          type: "test.assert-aux-absent@1",
+          params: { key: "prior-2" },
+        },
+      ],
+    };
+    expect(() => runSpec(cleanupSpec, buildRegistry(), { initialState: seedsTwo })).not.toThrow();
+  });
+
+  it("aux restore: pre-existing prior-{N} value preserved across node lifetime", () => {
+    // Spec: FES-with-history (which sets aux["prior-1"] inside its loop),
+    // then a sibling leaf that verifies aux["prior-1"] still equals the
+    // PRE-EXISTING value seeded via initialAux. Snapshot+restore should
+    // overwrite the runtime's intermediate values with the original.
+    const restoreSpec: CipherSpec = {
+      id: "test-fes-history-restore@1",
+      name: "restore",
+      stateShape: "bytes",
+      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+      steps: [
+        {
+          kind: "for-each-subgraph-with-history",
+          id: "loop",
+          iterationCount: 2,
+          lookbackOffsets: [1, 2],
+          historyEntryByteLength: 1,
+          children: [
+            {
+              kind: "step",
+              id: "xor-priors",
+              type: "test.xor-priors-into-state@1",
+              params: {},
+            },
+          ],
+        },
+        {
+          kind: "step",
+          id: "assert-1-restored",
+          type: "test.assert-aux-equals@1",
+          params: { key: "prior-1", expectedHex: "aa" },
+        },
+        {
+          kind: "step",
+          id: "assert-2-restored",
+          type: "test.assert-aux-equals@1",
+          params: { key: "prior-2", expectedHex: "bb" },
+        },
+      ],
+    };
+    const initialAux = new Map<string, AuxValue>([
+      ["prior-1", new Uint8Array([0xaa])],
+      ["prior-2", new Uint8Array([0xbb])],
+    ]);
+    expect(() =>
+      runSpec(restoreSpec, buildRegistry(), { initialState: seedsTwo, initialAux }),
+    ).not.toThrow();
+  });
+});
