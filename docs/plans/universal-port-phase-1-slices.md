@@ -826,7 +826,7 @@ rebuild from medium primitives is where it earns its keep.
 fallback path (no override → registry doc) and the override path
 (override present → override wins). 1702/1702 tests green.
 
-### Slice 1.11 — Frame-parity test matrix
+### Slice 1.11 — Frame-parity test matrix — **GREEN 2026-05-24**
 
 One file: `tests/runtime-ported-dispatch-frame-parity.test.ts`. Keyed
 by cipher spec. Each `it`:
@@ -837,14 +837,49 @@ by cipher spec. Each `it`:
 3. **KAT sanity floor first:** assert `trace.finalState.bytes` matches
    the published ciphertext. A failure here is a louder signal than a
    1389-frame deep-equality miss.
-4. **Then:** `expectFramesByteEqual(legacyTrace.frames, portedTrace.frames)`
+4. **Then:** `expectFrameStreamsEqual(legacyTrace.frames, portedTrace.frames)`
    — full frame stream, **no filter**. Iterate / feistel-rejoin frames
    are byte-identical for free.
 
-Coverage: AES-128/192/256, AES-128 ECB, AES-128 CBC, Speck32/64 ×2
-conventions, Serpent-128/192/256, DES (8 cipher specs total).
+**Coverage settled mid-slice (advisor consult + user pick before
+authoring):** the plan prose enumerated "AES-128/192/256, AES-128 ECB,
+AES-128 CBC, Speck32/64 ×2 conventions, Serpent-128/192/256, DES"
+which adds to **11 cipher specs** — the parenthetical "(8 cipher specs
+total)" was a miscount. User chose to enumerate verbatim (11 specs)
+AND to cover both encrypt + decrypt directions per spec (matches what
+the per-cipher files already pin). Final shape: **22 rows** — one
+`it()` per (spec, direction) pair, each row a self-contained `(KAT,
+frames-byte-equal)` triple.
 
-**Gate:** all 8 frame-parity assertions green.
+**Helper duplication intentional** — per advisor read of the existing
+`runtime-ported-dispatch-*.test.ts` files, every file inlines the four
+equality helpers (`expectStatesEqual`, `expectAuxMapsEqual`,
+`expectFramesEqual`, `expectFrameStreamsEqual`) verbatim. Slice 1.11
+mirrors that pattern; no `tests/helpers/frame-equality.ts` side-quest
+(CLAUDE.md "no abstractions beyond what the task requires").
+
+**Genuine new coverage:** AES-128 ECB encrypt + decrypt had no
+dedicated dispatch-parity pin before this slice — the closest
+existing pin (`runtime-ported-dispatch-aux-only.test.ts` block (b))
+covers CBC, not ECB. Every other row is also pinned in a per-cipher
+file; the matrix file's value is the single-file gate + the explicit
+(spec, KAT, frames-byte-equal) triple per row, so a regression in any
+cipher family surfaces here regardless of whether the family-specific
+file caught it.
+
+**KAT references:** FIPS-197 §C.1 (AES-128), §A.2 + NIST AES Core 192
+(AES-192), §A.3 + NIST AES Core 256 (AES-256), NIST SP 800-38A §F.1
+(ECB) + §F.2 (CBC), Beaulieu et al. 2013 Table 4.1 (Speck32/64
+BE-paper + LE-NSA), pyserpent / Anderson-Biham-Knudsen reference
+(Serpent 128/192/256), FIPS 46-3 Appendix B.1 (DES, cross-checked with
+`node:crypto` des-ecb per the project's external-oracle convention).
+
+**Gate (achieved):** 1724 tests green (1702 prior + 22 new). All 22
+rows pass under `portedDispatchEnabled: true` with the KAT sanity
+floor + full frame-stream byte equality. `npm run check` clean (biome
++ tsc + vitest 1724/1724 + vite build, ~75s). The bundle-size warning
+at 540 KB carries forward from Phase 5; non-blocking, no Slice 1.11
+contribution.
 
 ### Slice 1.12 — Coercion mechanism round-tripped
 
