@@ -3,7 +3,7 @@
 > **Status: DRAFT 2026-05-24 + Slice 2.0a GREEN 2026-05-24 + Slice 2.0b-i
 > GREEN 2026-05-24 + Slice 2.0b-ii GREEN 2026-05-24 + Slice 2.0c GREEN
 > 2026-05-24 + Slice 2.1a GREEN 2026-05-24 + Slice 2.1b GREEN 2026-05-24
-> + Slice 2.2 GREEN 2026-05-24.** Drafted after Phase 1 closed (1748/1748 tests, all 13
+> + Slice 2.2 GREEN 2026-05-24 + Slice 2.3 GREEN 2026-05-24.** Drafted after Phase 1 closed (1748/1748 tests, all 13
 > sub-slices + caveat 1+3 follow-up green) and two advisor consults
 > framed the Phase 2 surface.
 > Slice 2.0a's four contract-design questions resolved + SHIPPED (suite
@@ -982,21 +982,103 @@ demands word-vs-raw grey-out logic. Do not add speculatively.
 **Next stop:** Slice 2.3 — Open #N3 (SHA-256 helpers Σ0/Σ1/Ch/Maj as
 step types vs in-spec compositions vs hybrid).
 
-### Slice 2.3 — SHA-256 helpers (Σ0, Σ1, Ch, Maj)
+### Slice 2.3 — SHA-256 helpers (Σ0, Σ1, Ch, Maj) — SHIPPED 2026-05-24
 
-**Goal:** resolve **Open #N3** (step types vs compositions).
+**Status: GREEN 2026-05-24.** Open #N3 resolved via user pick **(b)
+Compositions** (the thesis-aligned answer; the advisor framing pinned
+three constraints: (a) walks back Phase 1 cipher-specific elimination
+work, (b)'s real cost is two genuinely universal primitives, and
+Maj's XOR form `(x∧y) ⊕ (x∧z) ⊕ (y∧z)` avoids needing `or@1`). Suite
+at **1968/1968** (+55 new across 3 test files); bundle **573.92 KB**
+gzipped (+~6 KB from Slice 2.2's 567.76 KB). Phase 1 matrix
+untouched. Open #N3 CLOSED.
 
-**Scope (sketched):**
+**Two new primitives ship:**
 
-- User pick on (a) / (b) / (c) at slice start.
-- If (a) step types: 4 new step types
-  (`sha2.sigma-0@1`, `sha2.sigma-1@1`, `sha2.ch@1`, `sha2.maj@1`).
-- If (b) compositions: 0 new step types; new `and@1` + `not@1`
-  primitives ship in this slice (Ch/Maj need them).
-- If (c) hybrid: Σ0/Σ1 compositions; Ch/Maj as step types.
+- **`and@1`** (`src/steps/and.ts`) — N-way bitwise AND mirroring
+  `xor@1`'s shape exactly. `inputCount` floor N≥1 (single-operand
+  identity, useful during incremental authoring); operand ports
+  `operand0..operand{N-1}`; output port `output`. Function-form input
+  PortContract, static single-port output, polymorphic byteLength,
+  `layout: "raw"`. 24 tests in `tests/and.test.ts` paralleling
+  `xor.test.ts` (KATs, idempotence, annihilation, function-form
+  exercise at multiple N values, dispatch-path guards).
+- **`not@1`** (`src/steps/not.ts`) — 1-in 1-out bitwise complement,
+  no params (NOT operates bit-by-bit; "any length" is the polymorphic
+  byteLength on the input port). Fully-static PortContract (function
+  form is overkill — N varies on neither side). 19 tests in
+  `tests/not.test.ts` covering byte-wise flip KATs, involution
+  property (¬¬x = x), length polymorphism, fresh-buffer invariant,
+  dispatch-path guards.
 
-**Pass/fail gate:** KAT pins per helper (Σ0(0x6a09e667) = …, etc.,
-verified against `node:crypto`-based oracle).
+**Composition KATs in `tests/sha256-helpers.test.ts` (12 tests):**
+
+- Σ0(0x6A09E667) = **0xCE20B47E** — hand-derived TWO ways: (1) direct
+  from textbook ROTR(H_0,2) ⊕ ROTR(H_0,13) ⊕ ROTR(H_0,22), with the
+  gotcha digit pinned in a comment (ROR(H_0, 13) = 0x333B_504F, NOT
+  0x3338_504F — the OR's nibble 4 is bits 19..16, where bit 19 of
+  `H_0 << 19` is 1 from `H_0` bit 0; an earlier draft of the
+  hand-derivation got this wrong by 0x03); (2) indirect via FIPS
+  180-4 §A.1.1 round-0 working variables (T2 = a^(1) − T1; T1 =
+  e^(1) − d^(0); Σ0(a) = T2 − Maj(a,b,c)). Both methods land on
+  0xCE20B47E.
+- Maj(H_0, H_1, H_2) = **0x3A6FE667** — hand-derived from textbook
+  formula. Cross-pinned by oracle parity over all 8 SHA-256 IV
+  words.
+- TS oracle (rorU32/Σ0/Σ1/Ch/Maj via raw JS bit ops, `>>> 0` to
+  collapse signed XOR back to unsigned) parity-checked against
+  composition for: all 8 IV words (Σ0, Σ1); 5 IV-derived triples
+  (Ch, Maj); 64 deterministic pseudo-random triples (all four
+  helpers). 6 algebraic-property checks (Σ0(0)=0, Σ1(0xFFFFFFFF) =
+  0xFFFFFFFF, Maj(x,x,x)=x, Ch(0,y,z)=z, Ch(0xFFFFFFFF,y,z)=y,
+  Ch(x,y,y)=y).
+- T2 = Σ0(a) + Maj(a,b,c) composes via `add-mod-32@1`: T2(H_0,H_1,H_2)
+  = 0x0890_9AE5 (FIPS 180-4 §6.2.2 round-0 partial). Load-bearing
+  integration check that all four port-native primitives chain
+  correctly into a single intermediate value.
+
+**Pinned trap caught (advisor consult pre-authoring):** plan's
+pass/fail prose reads *"verified against `node:crypto`-based oracle"*
+but `node:crypto` does NOT expose Σ0/Σ1/Ch/Maj — only full SHA-256.
+The honest cross-check inside this slice is a hand-coded TS oracle
+(implemented above); Slice 2.6 additionally cross-checks the full
+SHA-256 hash against `node:crypto`. Advisor warning + Slice 2.1a
+precedent (plan-cited KAT `0x12345678 ROR 2 = 0x80123456` was wrong)
+together flagged the "hand-derive twice, cross-check" gate as
+load-bearing — and it caught the ROR(H_0, 13) digit-4 error before
+the test landed.
+
+**Sign-extension gotcha:** JS `^` returns a SIGNED 32-bit number, so
+the TS oracle's `(rorU32(x,2) ^ rorU32(x,13) ^ rorU32(x,22))` produces
+a negative number when bit 31 ends up set. The composition's `beU32`
+output is unsigned (via `>>> 0`). Initial test run flagged the
+mismatch for SHA-256 IV words where the high bit comes through; fix
+was `>>> 0` on the oracle's XOR result. Same care needed for any
+future helper oracle.
+
+**Touched files:**
+- `src/steps/and.ts` (NEW, 232 lines)
+- `src/steps/not.ts` (NEW, 125 lines)
+- `src/ciphers/default-registry.ts` (+27 lines — 2 imports + 2
+  registrations + register-block comment block updated)
+- `tests/and.test.ts` (NEW, 24 tests)
+- `tests/not.test.ts` (NEW, 19 tests)
+- `tests/sha256-helpers.test.ts` (NEW, 12 tests)
+
+**Pass/fail gate — MET:**
+- `npm run check` GREEN: biome ci + tsc + **1968/1968** vitest (+55)
+  + vite build (~40s).
+- Bundle 573.92 KB gzipped — within Open #N8 envelope (Vite warns at
+  500 KB, but the threshold is informational; bundle growth is on
+  the per-slice radar).
+- Hand-derived KATs match composition output byte-equal.
+- Oracle parity holds across 64 pseudo-random triples + all 8 IV
+  words.
+- Phase 1 frame-parity matrix (Slice 1.11) green untouched — no
+  shipped cipher uses `and@1` or `not@1` yet.
+
+**Next stop:** Slice 2.4 — SHA-256 padding + length encoding + constants
+(Open #N2 user pick: leaf-params vs `constant-load@1` primitive).
 
 ### Slice 2.4 — SHA-256 padding + length encoding + constants
 

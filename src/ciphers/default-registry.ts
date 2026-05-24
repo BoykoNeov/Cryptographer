@@ -17,6 +17,7 @@ import {
   addRoundKeyMeta,
   addRoundKeyPortContract,
 } from "../steps/add-round-key";
+import { and, andDoc, andPortContract } from "../steps/and";
 import { auxCopy, auxCopyDoc, auxCopyMeta, auxCopyPortContract } from "../steps/aux-copy";
 import { auxLoad, auxLoadDoc, auxLoadMeta, auxLoadPortContract } from "../steps/aux-load";
 import { auxXor, auxXorDoc, auxXorMeta, auxXorPortContract } from "../steps/aux-xor";
@@ -111,6 +112,7 @@ import {
   mixColumnsMeta,
   mixColumnsPortContract,
 } from "../steps/mix-columns";
+import { not, notDoc, notPortContract } from "../steps/not";
 import { pkcs7Pad, pkcs7PadDoc, pkcs7PadMeta, pkcs7PadPortContract } from "../steps/pkcs7-pad";
 import {
   pkcs7Unpad,
@@ -711,6 +713,16 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // "requires spec edge-wiring (Slice 2.6+)"). Together with
   // rotate-bits-right@1, the SHA-256 message-schedule + compression-
   // function arithmetic surface is complete for the Slice 2.5 build.
+  //
+  // **Slice 2.3 (2026-05-24)** adds the two boolean primitives Ch/Maj
+  // decompose into: `and@1` (N-way bitwise AND, mirrors `xor@1`'s N≥1
+  // floor) and `not@1` (1-in 1-out bitwise complement, no params). Per
+  // Open #N3 user pick (b) Compositions — SHA-256 helpers Σ0/Σ1/Ch/Maj
+  // are expressed in the spec as compositions of these universal
+  // primitives instead of cipher-specific step types. Both reach the
+  // same dispatch-path guards. Maj's XOR form `(x∧y) ⊕ (x∧z) ⊕ (y∧z)`
+  // intentionally avoids needing `or@1` so SHA-256 ships with exactly
+  // two new primitives this slice, not three.
   r.register("rotate-bits-right@1", {
     kind: "ported",
     executor: rotateBitsRight,
@@ -728,6 +740,18 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: addMod32,
     shape: addMod32PortContract,
     doc: addMod32Doc,
+  });
+  r.register("and@1", {
+    kind: "ported",
+    executor: and,
+    shape: andPortContract,
+    doc: andDoc,
+  });
+  r.register("not@1", {
+    kind: "ported",
+    executor: not,
+    shape: notPortContract,
+    doc: notDoc,
   });
   return r;
 };
