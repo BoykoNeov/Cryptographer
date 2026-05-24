@@ -881,37 +881,151 @@ floor + full frame-stream byte equality. `npm run check` clean (biome
 at 540 KB carries forward from Phase 5; non-blocking, no Slice 1.11
 contribution.
 
-### Slice 1.12 — Coercion mechanism round-tripped
+### Slice 1.12 — Coercion mechanism round-tripped — **GREEN 2026-05-24** (closes Phase 1)
 
 Q2 of the parent plan: warn-and-run with right-pad / truncate-from-right.
-Wire a deliberately mismatched test fixture (one port declares 16-byte
-input, source produces 8 bytes; another declares 4-byte, source produces
-8 bytes). Assert:
 
-- Right-pad: source 8 bytes → input becomes 16 bytes (8 source + 8 zeros).
-- Truncate-from-right: source 8 bytes → input becomes 4 bytes (first 4
-  of source).
-- A trace step surfaces the coercion (e.g., as a synthetic frame or as
-  a `coercionApplied: { mode, sourceLen, targetLen }` field on the
-  affected frame's metadata — exact mechanism TBD in slice prep).
+**Surfacing mechanism settled mid-slice (user pick 2026-05-24 over
+`coercionApplied` metadata field + the "both" combo):** synthetic
+`__coerce__` trace frame per affected input port, emitted BEFORE the
+consumer leaf. Same shape pattern as `__rejoin__` — runtime-synthesized
+stepType, never registered with an executor, surfaces in the linear
+scrubber via the existing frame iteration. Decision rationale:
 
-**Gate:** coercion assertions green; no behavior change for any shipped
-spec (mismatch is opt-in via the fixture).
+1. Matches Q2 verbatim ("Coercion appears as a visible trace step
+   (e.g., *'coerced 8 → 16 bytes by right-zero-padding'*)").
+2. `__rejoin__` proves the synthetic-frame pattern fits this runtime
+   cleanly.
+3. Free scrubber visibility — every frame iterates; the metadata-field
+   alternative would have required new inspector chip / scrubber badge
+   plumbing in the same slice to meet Q2's "visible" bar.
+4. Pedagogically richer than a hidden field — the byte morph reads as
+   a discrete event in the scrubber sequence.
 
-## Phase 1 exit criteria
+Frame-count divergence between legacy/ported paths on fixtures that
+trigger coercion is the FEATURE under test; comparing them would defeat
+the surface. Shipped-spec frame-parity (Slice 1.11's 22-row matrix)
+remains green because no shipped spec triggers coercion.
 
-- All 13 sub-slices green individually.
-- `npm run check` green at HEAD.
-- `portedDispatchEnabled: true` produces byte-equivalent traces for all
-  five shipped cipher families (AES, Speck, Serpent, DES; AES-CBC, ECB).
-- `PROJECTION_METADATA` side-map deleted from `port-projection.ts`.
-- `narrationOverride?` field present on `StepNode`; no spec uses it yet.
-- `ctx.aux` dual-channel cut; lifted executors read aux only through
-  input ports.
-- Default `portedDispatchEnabled` remains `false`. Flipping to `true` as
-  the shipped default is a follow-on slice (post-1.12) that decides
-  the cutover gate — likely "all KATs match under ported + Phase 2 SHA-2
-  ships." Not Phase 1.
+**Mechanism delivered:**
+
+- `COERCE_STEP_TYPE = "__coerce__"` constant + `CoercionMode` +
+  `CoercionResult` types + `coerceToByteLength(source, targetLen)`
+  helper in `src/core/port-projection.ts`. Three branches:
+  `sourceLen === targetLen` → `mode: "exact"`, bytes returned
+  reference-equal (runtime short-circuits the synthetic frame emit);
+  `sourceLen < targetLen` → `mode: "right-pad"`, fresh `Uint8Array`
+  with source at offset 0 and zeros trailing; `sourceLen > targetLen`
+  → `mode: "truncate-right"`, fresh `source.slice(0, targetLen)`
+  (keeps LEFTMOST targetLen bytes; "truncate from the right" names the
+  discard side per Q2's prose).
+- Runtime coercion loop at `runtime.ts` (between input build and
+  executor call): walks `resolvePortMap(registration.shape.inputs,
+  params)`, per-port checks if (a) bytes exist in the inputs map AND
+  (b) port declares a fixed `byteLength` (polymorphic — `byteLength`
+  absent — opts out per the Slice 1.2 user pick), coerces and replaces
+  the entry, emits one synthetic `__coerce__` frame per affected port.
+  Frame stamping respects `branchPath` / `blockIndex` via the existing
+  `composeStepId`. Synthetic frame stepId: `<leafStepId>:coerce:<portName>`.
+- Narrator at `src/ui/narration/coerce.tsx` registered under
+  `"__coerce__"` in `src/ui/narration/index.ts`. Reads
+  `params.{portName, mode, sourceLen, targetLen}` and explains the
+  morph in Q2's prose style ("coerced 8 → 16 bytes by right-zero-
+  padding for input port 'port-a'") with before/after byte rows under
+  the chosen byte format.
+
+**Test coverage delivered:** `tests/runtime-ported-dispatch-coercion.test.ts`,
+5 surfaces:
+
+- (a) right-pad — source 8 → port declares 16 → padded with 8 trailing
+  zeros; synthetic frame params/state pinned.
+- (b) truncate-from-right — source 8 → port declares 4 → keeps first 4
+  bytes; discard half pinned unambiguously (Q2 names the discard side,
+  not the keep side — easy to misread).
+- (c) multiple ports on one leaf — two synthetic frames emit in
+  declaration order of `meta.auxReadPorts`; frame indices monotonic;
+  consumer leaf at index 2.
+- (d) polymorphic port (byteLength absent) → no coercion, no synthetic
+  frame regardless of source length.
+- (e) exact length match → no synthetic frame; short-circuit pinned
+  (critical for Slice 1.11's matrix gate).
+
+**Gate (achieved):** 1729 tests green (1724 prior + 5 new). All 22
+rows of the Slice 1.11 frame-parity matrix continue to pass — no
+shipped spec triggers coercion. `npm run check` clean (biome + tsc +
+vitest 1729/1729 + vite build, ~38s). The bundle-size warning at
+~543 KB carries forward from Phase 5; non-blocking, no Slice 1.12
+contribution.
+
+**Honest caveats — surfaced before commit so future readers don't
+mistake "Slice 1.12 GREEN" for "all of Q2 complete":**
+
+1. **State-port coercion path is mechanically reachable but uncovered
+   by fixture.** The runtime loop iterates the contract's full input
+   port map, which includes both state and aux input ports. The
+   fixture is aux-only (`stateInputPort` undefined). A future fixture
+   wiring a mismatched state port under a non-`bytes` layout
+   (`matrix4x4-bytes`, etc.) would hit a gap: the lift adapter's
+   `bytesToState` at `port-projection.ts:286-293` reconstructs without
+   a length check, so a coerced payload of the wrong length for the
+   target layout would produce a malformed state, throwing downstream
+   when the legacy executor's own length assertion fires. Dormant
+   because flag-on-only + no shipped spec + no fixture exercises it.
+   Worth knowing when the first cipher actually wires mismatched
+   state ports.
+
+2. **Q2's editor half is NOT in this slice.** Parent plan Q2 reads:
+   "Editor flags mismatches with a red glyph + inspector explanation.
+   Coercion appears as a visible trace step." Slice 1.12 delivers the
+   second clause; the first clause (red glyph in the graph view on
+   mismatched wirings, inspector explanation) depends on the sink-only
+   edge model (Q-edges, decided 2026-05-23 but not implemented) +
+   editor wiring UI that aren't shipped yet. Deferred until the
+   editor wiring data model lands.
+
+3. **UI surfacing is plumbed-met, not demonstrated-met.** Narrator
+   registered + default frame view will render bytes-shape
+   stateBefore/stateAfter pairs correctly. NOT covered by this slice:
+   in-browser smoke of a `__coerce__` frame in the linear scrubber +
+   timeline. `TraceTimeline.tsx` has a `⇄` glyph for `__rejoin__`;
+   `__coerce__` falls through to the default. For a foundation slice
+   with no live trigger path (`portedDispatchEnabled` defaults `false`
+   + no shipped spec uses coercion), browser smoke isn't required.
+   Live demonstration awaits the first port-native cipher with a
+   mismatched fixture.
+
+## Phase 1 exit criteria — **MET 2026-05-24**
+
+- ✅ All 13 sub-slices green individually (1.0, 1.1, 1.2, 1.3, 1.4, 1.5,
+  1.5b, 1.6, 1.7, 1.8, 1.9, 1.10, 1.11, 1.12 — 14 counting 1.5b's mid-
+  course candidate-pick split).
+- ✅ `npm run check` green at HEAD (1729 / 1729 tests).
+- ✅ `portedDispatchEnabled: true` produces byte-equivalent traces for
+  all five shipped cipher families (AES, Speck, Serpent, DES;
+  AES-CBC, ECB) — pinned by Slice 1.11's 22-row frame-parity matrix
+  AND every per-cipher dispatch test file.
+- ✅ `PROJECTION_METADATA` side-map deleted from `port-projection.ts`
+  (Slice 1.9).
+- ✅ `narrationOverride?` field present on `StepLeaf` (placement
+  refined from `StepNode` to `StepLeaf` — only leaves carry a `type`
+  for the docs to override; Slice 1.10). No shipped spec uses it yet.
+- ✅ `ctx.aux` dual-channel cut; lifted executors read aux only
+  through input ports' synthetic `ctx.aux` populated from declared
+  `auxReadPorts` bindings (Slice 1.9).
+- ✅ Coercion mechanism (Q2 runtime half) plumbed and visible via the
+  synthetic `__coerce__` frame (Slice 1.12). Editor half deferred to
+  whenever the sink-only edge model + editor wiring UI ship.
+- Default `portedDispatchEnabled` remains `false`. Flipping to `true`
+  as the shipped default is a follow-on slice (post-1.12) that decides
+  the cutover gate — likely "all KATs match under ported + Phase 2
+  SHA-2 ships." Not Phase 1.
+
+**Phase 1 closure.** Every shipped step type runs under the universal-
+port contract via `liftLegacyExecutor`; the `ctx.aux` dual channel is
+gone; the projection metadata side-map is gone; per-spec narration
+override is foundation-laid; mismatched wirings produce visible
+deterministic coercion. Phase 2 (SHA-2 native + for-each-subgraph
+node) is now unblocked.
 
 ## Out of scope for Phase 1
 

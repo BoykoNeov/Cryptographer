@@ -1,7 +1,9 @@
 import { COMBINE_KINDS, REJOIN_STEP_TYPE } from "./combine-kinds";
 import {
+  COERCE_STEP_TYPE,
   auxPortBytesToValue,
   auxValueToPortBytes,
+  coerceToByteLength,
   portBytesToState,
   resolvePortMap,
   stateToPortBytes,
@@ -253,6 +255,68 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
           // choice. (Practically `toEqual` deep-equals either way; aliasing
           // is the cleaner mental model and matches the legacy contract.)
           portedAuxRead.set(auxKey, v);
+        }
+
+        // ─── Port-length coercion (Slice 1.12 — Q2 of universal-port plan) ─
+        // Walk the registration's declared input ports; for each port that
+        // (a) has bytes in the inputs map (state input + any aux read that
+        // succeeded), (b) declares a fixed `byteLength` (polymorphic ports
+        // — `byteLength` absent — opt out of coercion per the Slice 1.2
+        // user pick "absent means wiring-determined"), and (c) the source
+        // byte count doesn't match the declared length: coerce the bytes
+        // (right-pad with zeros or truncate from the right per Q2) and
+        // emit ONE synthetic `__coerce__` frame per affected port BEFORE
+        // the consumer's leaf frame. The frame surfaces the morph via its
+        // stateBefore/stateAfter pair so the linear scrubber reads it
+        // for free (precedent: `__rejoin__`). Frames are flag-on-only;
+        // no shipped spec triggers coercion today (every shipped port's
+        // declared byteLength matches its actual source — pinned by the
+        // Slice 1.11 frame-parity matrix).
+        const inputShapes = resolvePortMap(registration.shape.inputs, node.params);
+        for (const [portName, shape] of inputShapes) {
+          if (shape.byteLength === undefined) continue;
+          const sourceBytes = inputs.get(portName);
+          if (sourceBytes === undefined) continue;
+          if (sourceBytes.length === shape.byteLength) continue;
+          const coerced = coerceToByteLength(sourceBytes, shape.byteLength);
+          // mode "exact" is filtered above by the length-equality short-
+          // circuit; the remaining modes both produced a fresh buffer.
+          inputs.set(portName, coerced.bytes);
+          // Synthetic frame uses the same path as the consumer leaf so it
+          // nests at the same depth in the linear/graph views. stepId
+          // disambiguates by portName so multiple coerced ports on the
+          // same leaf emit distinct frames in declaration order. Suffixes
+          // (`:b{i}`, `:t{name}`) ride along via composeStepId — same
+          // contract as the consumer leaf and the rejoin frame.
+          const coerceBaseId = `${node.id}:coerce:${portName}`;
+          const coerceStepId = composeStepId(coerceBaseId, branchPath, blockIndex);
+          const beforeBytes: BytesState = {
+            shape: "bytes",
+            bytes: new Uint8Array(sourceBytes),
+          };
+          const afterBytes: BytesState = {
+            shape: "bytes",
+            bytes: new Uint8Array(coerced.bytes),
+          };
+          const coerceFrame: TraceFrame = {
+            index: frameIndex++,
+            path,
+            stepId: coerceStepId,
+            stepType: COERCE_STEP_TYPE,
+            params: {
+              portName,
+              mode: coerced.mode,
+              sourceLen: coerced.sourceLen,
+              targetLen: coerced.targetLen,
+            },
+            stateBefore: beforeBytes,
+            stateAfter: afterBytes,
+            auxRead: new Map(),
+            auxWritten: new Map(),
+            ...(blockIndex !== undefined ? { blockIndex } : {}),
+            ...(branchPath.length > 0 ? { branchPath: [...branchPath] } : {}),
+          };
+          frames.push(coerceFrame);
         }
 
         // Call the ported executor with a SYNTHETIC `ctx.aux` populated

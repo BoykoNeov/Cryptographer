@@ -43,6 +43,7 @@ import {
   splitBlocksNarration,
   storeBlockNarration,
 } from "./boundary";
+import { coerceNarration } from "./coerce";
 import { rejoinNarration } from "./combine-kinds";
 import {
   desExpandRNarration,
@@ -117,6 +118,13 @@ export const initNarrationRegistry = (): void => {
   registerNarration("des.s-boxes@1", desSBoxesNarration);
   registerNarration("des.p-permutation@1", desPPermutationNarration);
   registerNarration("__rejoin__", rejoinNarration);
+  // Slice 1.12 of universal-port-dataflow plan — synthetic `__coerce__`
+  // frames are runtime-synthesized when a ported-dispatch input port's
+  // declared byteLength doesn't match the source byte count. Coercion
+  // is flag-on-only and no shipped spec triggers it, but the narrator
+  // ships so a future palette-dropped novice spec with mismatched ports
+  // gets learner-friendly prose rather than a naked default frame view.
+  registerNarration("__coerce__", coerceNarration);
   initialized = true;
 };
 

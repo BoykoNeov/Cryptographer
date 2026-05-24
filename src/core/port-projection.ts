@@ -393,6 +393,100 @@ const requirePortBytes = (
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Port-length coercion — Q2 of the universal-port-dataflow plan
+// (Slice 1.12, closes Phase 1)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Parent plan Q2: "Warn-and-run, deterministic coercion. Right-pad with zeros
+// to target length when source is shorter; truncate from the right when
+// source is longer. Coercion appears as a visible trace step."
+//
+// Surfacing mechanism (user pick 2026-05-24 over `coercionApplied` metadata
+// field): synthetic `__coerce__` trace frame per affected input port, emitted
+// BEFORE the consumer leaf. Frame carries the byte morph as
+// (stateBefore → stateAfter), with params identifying the port + mode +
+// lengths. Same pattern as `__rejoin__` (`combine-kinds.ts`) — runtime-
+// synthesized stepType not registered with an executor; renderers + narration
+// dispatch off the literal.
+//
+// Scope: input ports only (state + aux input ports both flow through the
+// same `inputs` map at `runtime.ts`'s ported-dispatch path). Output ports
+// don't coerce — a producer that emits wrong-length bytes is a meta
+// authoring bug (executor lying about its output) that should surface
+// loudly downstream when the next consumer's input contract bites,
+// not be silently smoothed over at production time.
+//
+// Polymorphic ports (PortShape with `byteLength` absent) skip coercion —
+// "absent" means "wiring-determined" per the Slice-1.2 user pick (over
+// sentinel-0 and contract-optional alternatives). Coercion only fires when
+// the target byteLength is EXPLICITLY declared.
+
+/** Synthetic stepType used on coercion frames. Same convention as
+ *  `__rejoin__` in `combine-kinds.ts` and `__endpoint__` in `graph.ts` —
+ *  never registered with an executor; renderers + narration dispatch off
+ *  the literal. */
+export const COERCE_STEP_TYPE = "__coerce__";
+
+/** Deterministic coercion modes per Q2 of the parent plan. */
+export type CoercionMode = "right-pad" | "truncate-right" | "exact";
+
+/** Result of a single port-length coercion. `mode === "exact"` means
+ *  bytes already matched targetLen — runtime skips synthetic frame
+ *  emission in that case (the bytes object is returned as-is, no copy). */
+export type CoercionResult = {
+  readonly bytes: Uint8Array;
+  readonly mode: CoercionMode;
+  readonly sourceLen: number;
+  readonly targetLen: number;
+};
+
+/**
+ * Coerce a source byte payload to a target length per Q2's deterministic
+ * rule. Returns a CoercionResult carrying the (possibly fresh) byte buffer
+ * + mode descriptor. The runtime's ported-dispatch path calls this once
+ * per declared input port whose byteLength is set, then emits a synthetic
+ * `__coerce__` frame iff `mode !== "exact"`.
+ *
+ * Three cases:
+ *   - `source.length === targetLen` → `mode: "exact"`, bytes returned
+ *     unchanged (reference-equal to caller's buffer). The runtime skips
+ *     frame emission for the no-op case so a shipped spec with matched
+ *     declarations adds zero frames to its trace.
+ *   - `source.length < targetLen`  → `mode: "right-pad"`, returns a fresh
+ *     `Uint8Array(targetLen)` with `source` at offset 0 and zeros after.
+ *   - `source.length > targetLen`  → `mode: "truncate-right"`, returns a
+ *     fresh `source.slice(0, targetLen)` — the FIRST targetLen bytes, i.e.,
+ *     the leftmost prefix. "Truncate from the right" is the discard side,
+ *     not the keep side — read Q2's prose carefully.
+ *
+ * Always returns a fresh buffer in the non-exact branches so the runtime
+ * can hand both the original-length bytes (stateBefore) and the coerced
+ * bytes (stateAfter) to the synthetic frame without aliasing.
+ */
+export const coerceToByteLength = (source: Uint8Array, targetLen: number): CoercionResult => {
+  const sourceLen = source.length;
+  if (sourceLen === targetLen) {
+    return { bytes: source, mode: "exact", sourceLen, targetLen };
+  }
+  if (sourceLen < targetLen) {
+    // Right-pad with zeros. Uint8Array's constructor zero-initializes,
+    // so we only need to copy source bytes into the [0, sourceLen) prefix.
+    const padded = new Uint8Array(targetLen);
+    padded.set(source, 0);
+    return { bytes: padded, mode: "right-pad", sourceLen, targetLen };
+  }
+  // sourceLen > targetLen — truncate from the right (discard the trailing
+  // sourceLen - targetLen bytes; keep the leftmost targetLen). `.slice`
+  // produces a fresh buffer, satisfying the no-alias invariant.
+  return {
+    bytes: source.slice(0, targetLen),
+    mode: "truncate-right",
+    sourceLen,
+    targetLen,
+  };
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
 // `liftLegacyExecutor` — wraps a legacy `StepExecutor` as a `PortedExecutor`
 // ═══════════════════════════════════════════════════════════════════════════
 //
