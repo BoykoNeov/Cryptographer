@@ -1,9 +1,14 @@
 # Universal port-based dataflow — Phase 2 sub-slice plan
 
-> **Status: DRAFT 2026-05-24** — drafted after Phase 1 closed
-> (1748/1748 tests, all 13 sub-slices + caveat 1+3 follow-up green) and
-> two advisor consults framed the Phase 2 surface. **Awaiting user
-> sign-off on Slice 2.0a's contract design** before authoring begins.
+> **Status: DRAFT 2026-05-24 + Slice 2.0a contract LOCKED IN
+> 2026-05-24.** Drafted after Phase 1 closed (1748/1748 tests, all 13
+> sub-slices + caveat 1+3 follow-up green) and two advisor consults
+> framed the Phase 2 surface. Slice 2.0a's four contract-design
+> questions resolved (node shape = mirror iterate; iterationCount =
+> number-or-fromParam; nested-suffix = `:b{i}:r{j}` composed; toy
+> fixture = 5-iter XOR-with-constant). **Slice 2.0a is ready to
+> author** when the user kicks off the implementation slice. All other
+> open spec decisions surface at their respective slice starts.
 >
 > **Parent plan:** [`docs/plans/universal-port-dataflow.md`](./universal-port-dataflow.md)
 > **Phase 0 findings:** [`docs/plans/universal-port-phase-0-findings.md`](./universal-port-phase-0-findings.md)
@@ -163,18 +168,17 @@ Three candidates:
 
 User pick at Slice 2.0c start.
 
-### Open #N6 — Nested-loop frame suffix convention (decided at Slice 2.0a, pinned in toy)
+### Open #N6 — Nested-loop frame suffix convention — **CLOSED 2026-05-24 (user picked (a))**
 
-Outer per-block × inner per-round needs canonical stepId composition.
-Phase 0/1 used `:b{i}` for blocks. Two candidates:
+Outer per-block × inner per-round canonical stepId composition: **(a)
+`<leafId>:b{i}:r{j}` — outer-first concatenation, extends existing
+`:b{i}` convention.** Each loop kind appends one coordinate; nested
+loops concatenate. Slice 2.0a's nested toy pins it in the gate test.
 
-- (a) **`<leafId>:b{i}:r{j}`** — outer-first concatenation. Reads as
-  "leaf, block i, round j." Matches existing `:b{i}` convention; extends
-  it cleanly.
-- (b) **`<leafId>:i{i,j}`** — single bracketed coordinate. More compact;
-  breaks existing `:b{i}` precedent.
-
-User pick at Slice 2.0a; toy fixture validates.
+Rejected alternatives:
+- (b) `<leafId>:i{i,j}` single bracketed coordinate (loses per-loop
+  semantic).
+- (c) Generic `:{i}` with nesting (most compact; weakest pedagogy).
 
 ### Open #N1 — `split-blocks` port shape (inherited from Phase 1 Open #1, decided at Slice 2.0b)
 
@@ -309,50 +313,97 @@ runtime walker; validate it on the simplest of three target patterns
 (state-thread round-body, the inner per-round loop SHA-256's
 compression will use).
 
+**User picks LOCKED IN 2026-05-24** (four contract-design questions
+surfaced and answered before slice authoring; pros/cons exchange visible
+in the originating session):
+
+- **Q-2.0a-1 (node shape) = (a) Mirror iterate.** Body inline as
+  `children: StepNode[]`. Same convention as existing `iterate` /
+  `feistel-round`. Implicit state-thread (first child reads `state`,
+  last child's output becomes next iteration's `state`). Branches and
+  merges inside the body are still expressible via children's `inputs`
+  edge maps (graph, not sequence) — Q4 superset / branching is free,
+  not blocked by node shape.
+- **Q-2.0a-2 (iterationCount source) = number-or-fromParam.**
+  `iterationCount: number | { fromParam: string }`. SHA-256 compression
+  uses the literal `64`; param-form anticipates per-cipher round-count
+  variation (e.g., a future SHA-256-variant spec where rounds are a
+  param). Item-array source (`{ fromInputPort: string }`) defers to
+  Slice 2.0b when that pattern lands.
+- **Q-2.0a-3 (nested-suffix convention, closes Open #N6) =
+  `:r{i}` rounds, composed `:b{i}:r{j}` when nested.** Extends the
+  existing `:b{i}` block convention from `iterate`. Each loop kind
+  appends one coordinate; nested loops concatenate. Reads as "leaf,
+  block i, round j." Generic `:{i}` and single-bracketed `:i{i,j}`
+  alternatives rejected — loses per-loop semantic.
+- **Q-2.0a-4 (toy fixture content) = 5-iter XOR-with-constant.**
+  Body: one `xor-aux-into-state@1` leaf (or equivalent port-native
+  XOR) with a fixed 4-byte constant. Each iteration XORs state with
+  the constant. Final state = start XOR (5 × constant) = start XOR
+  constant (because XOR self-inverses pairwise; 5 odd applications net
+  one XOR). Easier to reason per-iteration than ROT13⁵.
+
 **Scope:**
 
-- New spec node kind: `{ kind: "for-each-subgraph", id: string,
-  label?: string, iterationCount: number | { fromParam: string },
-  children: StepNode[], ... }`. Initial contract is round-body only;
-  iteration-outputs port (2.0b) and feedback/lookback (2.0c) widen the
-  contract in subsequent slices.
-- Runtime walker handles `kind === "for-each-subgraph"` in
-  `runtime.ts::walk`. Iterates `iterationCount` times; per-iteration:
-  - Snapshot `state` (the round-body pattern's "working variables").
-  - Walk children with the snapshot as starting state.
-  - Body's final state becomes next iteration's starting state
-    (state-thread).
-  - Emits one frame per (body step × iteration); stepId suffix per
-    **Open #N6 user pick** (default candidate: `:r{i}` — round
-    suffix, parallel to iterate's `:b{i}` block suffix).
-- New spec node kind added to `core/spec-shapes.ts` validators.
-- Toy fixture in `tests/runtime-for-each-subgraph-toy.test.ts`:
-  - 5-iteration round-body that ROT13s a 4-byte state.
-  - Pass/fail gate: 5 frames emitted with `:r{0}` through `:r{4}`
-    suffixes; state threads correctly (each iteration's input is the
-    previous iteration's output); final state matches expected
-    (ROT13⁵ — which equals ROT (5×13 mod 26) = ROT 13 of starting
-    state, since 5 odd applications net one rotation).
-
-**User picks needed at slice start:**
-
-- **Open #N6** (nested-suffix convention). Candidate: `:r{i}` for
-  rounds (inner), continue `:b{i}` for blocks (outer); composed
-  `:b{i}:r{j}` when nested. Toy fixture validates composition by
-  wrapping the round-body in a single-iteration outer-loop and
-  asserting suffix concatenation.
+- New spec node kind in `core/types.ts`:
+  ```ts
+  type ForEachSubgraphNode = {
+    readonly kind: "for-each-subgraph";
+    readonly id: string;
+    readonly label?: string;
+    readonly iterationCount: number | { readonly fromParam: string };
+    readonly children: readonly StepNode[];
+    // Slice 2.0b widens with inputArrayPort? + outputsPort?.
+    // Slice 2.0c widens with feedback/lookback fields per Open #N4.
+  };
+  ```
+- `StepNode` discriminated union gains the new `kind` variant in
+  `core/types.ts`; `core/spec-shapes.ts` validator (`validateShapes`)
+  recognizes the new variant.
+- `core/document-schema.ts` Zod schema gains the new variant — saved
+  documents using it must round-trip through Save/Share unchanged.
+- Runtime walker (`runtime.ts::walk`) handles `kind ===
+  "for-each-subgraph"`:
+  - Resolve iteration count: literal `iterationCount` if number, else
+    `params[iterationCount.fromParam]` from the closest containing leaf
+    (or from a sibling param accessor — exact mechanism settled at
+    implementation; matches `iterate`'s `countFromAux` lookup pattern
+    in shape).
+  - Iterate N times. For iteration `i`:
+    - Snapshot `state` (clone — same defensive copy `iterate` does today).
+    - Walk children topologically using their `inputs` edge maps (so
+      branched bodies work; sequential walking is just the special case
+      where every child reads from the immediate predecessor).
+    - Body's final state becomes the seed for iteration `i+1`.
+    - Each emitted frame's stepId is suffixed with `:r{i}` per Q-2.0a-3.
+      Nested under an `iterate` or outer for-each-subgraph: the outer
+      `:b{j}` prefix concatenates → `<leafId>:b{j}:r{i}`.
+- Toy fixture: `tests/runtime-for-each-subgraph-toy.test.ts`:
+  - **Inner-only:** 5-iter XOR-with-constant on a 4-byte state.
+    Expected final state = start XOR constant (5 odd applications).
+    Per-iteration frames emit with `:r{0}` through `:r{4}` suffixes;
+    state threads correctly.
+  - **Nested:** 2-block outer `iterate` wrapping a 3-iter inner
+    for-each-subgraph (or 2 outer for-each-subgraph blocks wrapping 3
+    inner — TBD; the goal is exercising suffix composition). Expected
+    frames: 2 × 3 = 6 body frames with `:b{0}:r{0}` … `:b{1}:r{2}`
+    suffixes. Pinning the nested-suffix convention in the gate test.
+- `default-registry.ts` untouched — `for-each-subgraph` is a spec node
+  kind, not a step type.
 
 **Pass/fail gate:**
 
 - Type compiles.
-- Toy fixture frames byte-equal to expected ROT13-thread sequence.
-- Suffix convention pinned in toy.
-- Phase 1 frame-parity matrix stays green (no legacy cipher uses
-  the new node kind).
+- Inner-only toy: 5 frames emit with `:r{0}` through `:r{4}`; final
+  state byte-equal to start XOR constant.
+- Nested toy: 6 frames emit with composed `:b{i}:r{j}` suffixes; final
+  state byte-equal to expected.
+- Phase 1 frame-parity matrix (Slice 1.11) stays green — no legacy
+  cipher uses the new node kind.
 - `npm run check` green.
 
-**If gate fails:** the contract design is wrong; surface, re-open
-plan, no Slice 2.0b until fixed.
+**If gate fails:** the contract design is wrong; surface to user,
+re-open plan, no Slice 2.0b until fixed.
 
 ### Slice 2.0b — Iteration-outputs port + item-array input port (Q4 superset)
 
