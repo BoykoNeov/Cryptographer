@@ -18,6 +18,11 @@ import {
   addRoundKeyPortContract,
 } from "../steps/add-round-key";
 import { and, andDoc, andPortContract } from "../steps/and";
+import {
+  appendBe64Length,
+  appendBe64LengthDoc,
+  appendBe64LengthPortContract,
+} from "../steps/append-be64-length";
 import { auxCopy, auxCopyDoc, auxCopyMeta, auxCopyPortContract } from "../steps/aux-copy";
 import { auxLoad, auxLoadDoc, auxLoadMeta, auxLoadPortContract } from "../steps/aux-load";
 import { auxXor, auxXorDoc, auxXorMeta, auxXorPortContract } from "../steps/aux-xor";
@@ -34,6 +39,7 @@ import {
   concatBlocksMeta,
   concatBlocksPortContract,
 } from "../steps/concat-blocks";
+import { constantLoad, constantLoadDoc, constantLoadPortContract } from "../steps/constant-load";
 import {
   desExpandR,
   desExpandRDoc,
@@ -113,6 +119,7 @@ import {
   mixColumnsPortContract,
 } from "../steps/mix-columns";
 import { not, notDoc, notPortContract } from "../steps/not";
+import { padWithByte, padWithByteDoc, padWithBytePortContract } from "../steps/pad-with-byte";
 import { pkcs7Pad, pkcs7PadDoc, pkcs7PadMeta, pkcs7PadPortContract } from "../steps/pkcs7-pad";
 import {
   pkcs7Unpad,
@@ -723,6 +730,23 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // same dispatch-path guards. Maj's XOR form `(x∧y) ⊕ (x∧z) ⊕ (y∧z)`
   // intentionally avoids needing `or@1` so SHA-256 ships with exactly
   // two new primitives this slice, not three.
+  //
+  // **Slice 2.4 (2026-05-24)** adds the three SHA-256-preprocessing
+  // primitives chosen by user picks at slice start:
+  //   - `pad-with-byte@1` (sentinel byte + zero fill to `padTarget` mod
+  //     `blockSize`) — user pick (a) Decompose for "padding shape".
+  //   - `append-be64-length@1` (8-byte BE encoding of original message
+  //     bit-length, via separate `length-source` port) — companion
+  //     primitive for the FIPS 180-4 §5.1.1 length suffix.
+  //   - `constant-load@1` (zero-input emitter of a declared byte
+  //     sequence; output byteLength known at spec time) — user pick (b)
+  //     Open #N2 at "72 leaves" granularity (8 H + 64 K for SHA-256).
+  // All three reach the same dispatch-path guards. The SHA-256 build at
+  // Slice 2.6 wires the padding chain (pad-with-byte → append-be64-
+  // length) plus 72 constant-load leaves (8 H + 64 K). `constant-load@1`
+  // is also the first port-native primitive whose output byteLength is
+  // KNOWN at spec time (declared via function-form PortContract); every
+  // prior port-native primitive's output length was polymorphic.
   r.register("rotate-bits-right@1", {
     kind: "ported",
     executor: rotateBitsRight,
@@ -752,6 +776,24 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: not,
     shape: notPortContract,
     doc: notDoc,
+  });
+  r.register("pad-with-byte@1", {
+    kind: "ported",
+    executor: padWithByte,
+    shape: padWithBytePortContract,
+    doc: padWithByteDoc,
+  });
+  r.register("append-be64-length@1", {
+    kind: "ported",
+    executor: appendBe64Length,
+    shape: appendBe64LengthPortContract,
+    doc: appendBe64LengthDoc,
+  });
+  r.register("constant-load@1", {
+    kind: "ported",
+    executor: constantLoad,
+    shape: constantLoadPortContract,
+    doc: constantLoadDoc,
   });
   return r;
 };

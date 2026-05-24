@@ -3,7 +3,8 @@
 > **Status: DRAFT 2026-05-24 + Slice 2.0a GREEN 2026-05-24 + Slice 2.0b-i
 > GREEN 2026-05-24 + Slice 2.0b-ii GREEN 2026-05-24 + Slice 2.0c GREEN
 > 2026-05-24 + Slice 2.1a GREEN 2026-05-24 + Slice 2.1b GREEN 2026-05-24
-> + Slice 2.2 GREEN 2026-05-24 + Slice 2.3 GREEN 2026-05-24.** Drafted after Phase 1 closed (1748/1748 tests, all 13
+> + Slice 2.2 GREEN 2026-05-24 + Slice 2.3 GREEN 2026-05-24
+> + Slice 2.4 GREEN 2026-05-24.** Drafted after Phase 1 closed (1748/1748 tests, all 13
 > sub-slices + caveat 1+3 follow-up green) and two advisor consults
 > framed the Phase 2 surface.
 > Slice 2.0a's four contract-design questions resolved + SHIPPED (suite
@@ -363,7 +364,7 @@ on `ForEachSubgraphNode`; mode-exclusivity invariants enforced at runtime
 (partial-field configs throw; both-modes-set throws; both-modes-absent
 throws).
 
-### Open #N2 — Constants entry strategy (decided at Slice 2.4)
+### Open #N2 — Constants entry strategy — **CLOSED 2026-05-24 (user picked (b) at 72-leaves granularity)**
 
 K_0..K_63 (round constants) and H_0..H_7 (initial hash values) are 32-bit
 constants needed by SHA-256. Two candidates:
@@ -377,7 +378,14 @@ constants needed by SHA-256. Two candidates:
   Pedagogically richer (constants are visible chips in the graph);
   spec is more verbose.
 
-User pick at Slice 2.4 start.
+**User picked (b) at 72-leaves granularity** — one leaf per constant
+(8 H_t leaves + 64 K_t leaves). Advisor surfaced a hidden granularity
+dimension under (b) — 72 individual leaves vs. 2 tables (256-byte K +
+32-byte H) vs. per-round bundled — and user chose the maximally thesis-
+aligned option (every constant visible as its own chip, addressable
+individually by editors). The primitive doesn't enforce granularity;
+specs that prefer compact bundles can set `params.bytes` to a longer
+array — but the SHA-256 build at Slice 2.6 uses 72 leaves.
 
 ### Open #N3 — SHA-256 helpers (Σ0, Σ1, Ch, Maj) — step types vs in-spec compositions (decided at Slice 2.3)
 
@@ -1080,28 +1088,114 @@ future helper oracle.
 **Next stop:** Slice 2.4 — SHA-256 padding + length encoding + constants
 (Open #N2 user pick: leaf-params vs `constant-load@1` primitive).
 
-### Slice 2.4 — SHA-256 padding + length encoding + constants
+### Slice 2.4 — SHA-256 padding + length encoding + constants — SHIPPED 2026-05-24
 
 **Goal:** ship SHA-256's preprocessing (padding + length) and
 constants (K_0..K_63 + H_0..H_7) per **Open #N2** (constants entry
 strategy).
 
-**Scope (sketched):**
+**Ships three port-native primitives, all under the Slice 2.1+
+posture (`kind: "ported"`, no `legacy`, no `meta`, no `shapeContract`;
+reachable today via direct executor invocation in tests + the
+dispatch-path guards):**
 
-- SHA-256 padding: append `0x80`, then `0x00` bytes until length ≡ 56
-  (mod 64), then 8-byte BE message length in bits.
-  - Could lift existing `iso7816-4-pad@1` (which is similar — append
-    `0x80` + zeros) with a parameterization for the length-suffix?
-    Decide mid-slice; default likely a new `sha2.pad@1` step type.
-- Constants per Open #N2:
-  - (a) leaf params: K's embedded in compression-round leaves.
-  - (b) `constant-load@1`: new primitive; 72 leaves in the spec
-    (8 H constants + 64 K constants).
-- Initial hash values H_0..H_7 (FIPS 180-4 §5.3.3) seeded into the
-  compression loop's starting state.
+1. **`pad-with-byte@1`** — sentinel byte + zero fill to `padTarget`
+   modulo `blockSize`. Params: `padByte`, `blockSize`, `padTarget`.
+   For SHA-256: `{padByte: 0x80, blockSize: 64, padTarget: 56}`.
+   Polymorphic byteLength on both ports (output length depends on
+   run-time input length via `((padTarget - inputLen - 1) mod
+   blockSize) + 1`).
+2. **`append-be64-length@1`** — 8-byte BE encoding of original-message
+   bit-length, appended to data. **Two static input ports** (`data`,
+   `length-source`); one static output. The two-port decoupling is the
+   load-bearing property: SHA-256 needs the length of the ORIGINAL
+   message (not the post-padding data), so `length-source` wires to the
+   pre-padding chain. No params. Polymorphic byteLength on all three
+   ports.
+3. **`constant-load@1`** — zero-input emitter of `params.bytes`. Empty
+   static input map; **function-form output** with EXACT byteLength
+   derived from `params.bytes.length`. First port-native primitive whose
+   output byteLength is known at spec time (every prior port-native
+   primitive's output length was polymorphic).
 
-**Pass/fail gate:** padding KAT (padding of `"abc"` matches FIPS 180-4
-§A.1); constant byte-equality (H_0 = `0x6a09e667`, etc.).
+**Three user picks locked at slice start (after one advisor consult):**
+
+- **Q1 (padding shape) = (a) Decompose into 3 primitives.** Advisor
+  flagged that "SHA-256 padding ≠ ISO 7816-4 padding" (they share only
+  the 0x80 sentinel; SHA-256's `mod 64 == 56` target + 8-byte length
+  suffix are structurally different). User picked thesis-aligned
+  decomposition (`pad-with-byte@1` + `append-be64-length@1`) over the
+  monolithic `sha2.pad@1` (b) or the hybrid (c). Matches Slice 2.3's
+  "(b) Compositions" precedent — primitives stay generic, the SHA-256
+  spec composes them.
+- **Q2 (constants — Open #N2 + sub-granularity) = (b) at 72 leaves.**
+  Advisor surfaced a hidden granularity dimension under (b) — 72
+  individual leaves vs. 2 tables vs. per-round bundled — user picked
+  the maximally thesis-aligned option. Every constant becomes a visible
+  chip in the graph.
+- (Implicit) The padding primitive accepts a sentinel byte (not
+  hardcoded 0x80) so the same primitive serves MD5, SHA-1, SHA-2-family
+  and ISO 7816-4 (with `padTarget=0`). Width parameterization (blockSize +
+  padTarget) covers SHA-512 / SHA-384 (`{0x80, 128, 112}`).
+
+**Plan trap caught pre-implementation:** plan prose said "could lift
+existing `iso7816-4-pad@1`" with parameterization for the length-suffix.
+Advisor caught the lie-in-the-name risk — iso7816-4-pad would become a
+step that does more than ISO 7816-4 padding. Decomposition into
+`pad-with-byte@1` (generic) + `append-be64-length@1` (separate primitive)
+sidesteps it.
+
+**Touched files (8):**
+
+- `src/steps/pad-with-byte.ts` — NEW (~230 lines incl. doc).
+- `src/steps/append-be64-length.ts` — NEW (~165 lines incl. doc).
+- `src/steps/constant-load.ts` — NEW (~205 lines incl. doc).
+- `src/ciphers/default-registry.ts` — three new imports + three
+  `r.register(...)` calls under a new "Slice 2.4" paragraph in the
+  comment block; updated "Port-native primitives" header.
+- `tests/pad-with-byte.test.ts` — NEW (24 tests).
+- `tests/append-be64-length.test.ts` — NEW (17 tests).
+- `tests/constant-load.test.ts` — NEW (31 tests).
+- `tests/sha256-padding-composition.test.ts` — NEW (8 tests) — the
+  load-bearing composition KAT, including a negative pin that flags
+  the wrong wiring (length-source = padded data, not original message).
+
+**Composition KAT** is the headline gate: `pad-with-byte@1` + then
+`append-be64-length@1` over "abc" (3 bytes) produces the canonical
+FIPS 180-4 §A.1 padded block (64 bytes, ending in `...0000 0000 0018`).
+Cross-checked via hand-derived expected hex string. The
+test file also pins H_0..H_7 = canonical FIPS 180-4 §5.3.3 sequences,
+K_0/K_15/K_47/K_63 = FIPS 180-4 §4.2.2 spot-checks (4 chosen for
+boundary coverage), and a 72-leaf-instantiation buffer-independence
+smoke test.
+
+**Sign-extension caveat** (from Slice 2.3) NOT triggered — the BE64
+length encoding goes through `encodeBE64`'s bigint API which sidesteps
+JS number-side 32-bit sign issues.
+
+**Suite at 2048/2048** (+80 from Slice 2.3's 1968). Bundle: **585.51 KB
+gzipped** (+~12 KB from Slice 2.3's 573.92 KB; carries the JS
+`tsdoc`-comments + 3 new step files + their `detail` markdown
+strings). Within Phase 2 envelope; still flags the Vite 500 KB warning
+(Open #N8 informational).
+
+**Phase 2 status:** 9 slices shipped (2.0a/b-i/b-ii/c, 2.1a/b, 2.2,
+2.3, 2.4). 4 open spec decisions remain: **N1** (split-blocks port
+shape — partially resolved at 2.0b), **N4** (lookback contract —
+closed at 2.0c per design but specific lookback choices defer to
+Slice 2.5), **N7** (cipher selector category — Slice 2.10), **N8**
+(bundle size posture — informational, ~585 KB is past 500 KB
+threshold; flag, not pre-engineer).
+
+**Pass/fail gate (delivered):** padding KAT (composition of `"abc"`
+matches FIPS 180-4 §A.1 byte-for-byte); constant byte-equality
+(H_0..H_7 round-trip through `constant-load@1`).
+
+**Next stop:** Slice 2.5 — message-schedule expansion (for-each-
+subgraph-with-history wiring; first consumer of Slice 2.0c's contract).
+σ0/σ1 helpers can either compose from existing primitives (consistent
+with the Slice 2.3 + Slice 2.4 "(b) Compositions" precedent) or
+re-open the Open #N3 framing for hash-specific helpers.
 
 ### Slice 2.5 — Message-schedule expansion
 
