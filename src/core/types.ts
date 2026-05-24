@@ -49,6 +49,21 @@ export type StepLeaf = {
   readonly id: string; // unique within spec; UI references this
   readonly type: string; // registry key, e.g. "aes.sub-bytes@1"
   readonly params: Json;
+  /**
+   * Optional per-instance docs that shadow the registry's `StepDocumentation`
+   * for this leaf only. Added in Slice 1.10 of `docs/plans/universal-port-phase-1-slices.md`
+   * as a Phase 1 foundation for Phase 3's AES-rebuild-from-medium-primitives —
+   * the rebuilt AES specs will lift each primitive's generic doc into
+   * cipher-specific prose ("ShiftRows row 1 ← rotate left by 1 byte" rather
+   * than the registry's generic "rotate row bytes by N").
+   *
+   * No schema bump — structural typing keeps existing saved documents
+   * valid. No shipped spec uses the field yet; the `<StepDescription>`
+   * renderer prefers it when present and otherwise falls back to
+   * `registry.getDoc(stepType)`. Per-port narration (if Phase 3 needs it)
+   * would extend this shape in place.
+   */
+  readonly narrationOverride?: StepDocumentation;
 };
 
 export type StepGroup = {

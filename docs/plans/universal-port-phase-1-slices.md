@@ -775,10 +775,10 @@ when Phase 2 ships port-native executors that genuinely have no
 legacy underlying; disappears when Phase 5 retires the legacy
 contract.
 
-### Slice 1.10 — `narrationOverride` field added to `StepNode`
+### Slice 1.10 — `narrationOverride` field added to `StepLeaf` — **GREEN 2026-05-24**
 
 ```ts
-type StepNode = {
+type StepLeaf = {
   readonly kind: "step";
   readonly id: string;
   readonly type: string;
@@ -787,19 +787,44 @@ type StepNode = {
 };
 ```
 
+**Landed on `StepLeaf`, not the union.** The slice prose said "`StepNode`"
+but only `kind: "step"` leaves have a `type` for the docs to override;
+group / iterate / feistel-round nodes have no equivalent registry doc
+to shadow. The plan snippet's `kind: "step"` already pointed at the
+leaf — the placement choice was confirmation, not a revision.
+
+**Renderer landed in `<StepDescription>`, not `<StepNarration>`.** The
+plan prose named `<StepNarration />` but the field's type is
+`StepDocumentation`, which is the shape `<StepDescription>` consumes
+(via `registry.getDoc`). `<StepNarration>` consumes `NarrationUnit[]`
+— a different surface entirely. The plan name was a slip; the override
+has to land in `<StepDescription>` to typecheck.
+
+**Wiring depth:** option (a) — spec-store lookup. `<StepDescription>`
+now imports `useSpec()` + `findStep` + `canonicalStepId`, looks up the
+leaf via `findStep(spec(), canonicalStepId(frame.stepId))`, prefers
+`leaf.narrationOverride` when present, and falls through to
+`registry.getDoc(frame.stepType)` otherwise. Option (b) — threading
+`narrationOverride` onto `TraceFrame` at runtime emit time — would be
+cleaner for Phase 3 but widens this slice into runtime changes. Option
+(c) — prop-pass — would change every caller. (a) is foundation-shaped:
+no runtime changes, no API widening, Phase 3 can revise if per-port
+narration emerges.
+
 **No schema bump** — structural typing keeps existing saved documents
-valid. Renderer-side: `<StepNarration />` falls back to registry
-documentation when the field is absent (the default for every existing
-spec).
+valid. The document schema (`document-schema.ts::StepLeafSchema`) does
+NOT yet accept `narrationOverride` — Zod's default strip mode silently
+drops it on load. That's fine for Slice 1.10 (no spec uses the field
+yet); Phase 3 will widen the Zod schema when shipped specs start
+carrying overrides.
 
 **Foundation-only.** No shipped spec uses the field yet. Phase 3's AES
-rebuild from medium primitives is where it earns its keep. If Phase 3
-discovers the field needs more (e.g., per-port narration), the field
-shape revises then.
+rebuild from medium primitives is where it earns its keep.
 
-**Gate:** type compiles; existing tests pass; one new test asserts the
-renderer falls back to registry doc when `narrationOverride` is
-undefined.
+**Gate:** type compiles; existing tests pass; one new test file
+`tests/step-description-narration-override.test.tsx` pins both the
+fallback path (no override → registry doc) and the override path
+(override present → override wins). 1702/1702 tests green.
 
 ### Slice 1.11 — Frame-parity test matrix
 
