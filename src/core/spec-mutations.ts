@@ -11,6 +11,7 @@
 import type {
   CipherSpec,
   FeistelRoundGroup,
+  ForEachSubgraphNode,
   IterateGroup,
   Json,
   StateShape,
@@ -476,7 +477,7 @@ export const compareSpecs = (a: CipherSpec, b: CipherSpec): readonly SpecParamDi
  */
 export type StepLocation = {
   readonly node: StepNode;
-  readonly parent: StepGroup | IterateGroup | FeistelRoundGroup | null;
+  readonly parent: StepGroup | IterateGroup | FeistelRoundGroup | ForEachSubgraphNode | null;
   readonly indexInParent: number;
   /** Set iff `parent` is a `FeistelRoundGroup`. */
   readonly trackIdx?: number;
@@ -499,7 +500,7 @@ export type StepLocation = {
 export const findStepAndParent = (spec: CipherSpec, stepId: string): StepLocation | null => {
   const visit = (
     nodes: readonly StepNode[],
-    parent: StepGroup | IterateGroup | null,
+    parent: StepGroup | IterateGroup | ForEachSubgraphNode | null,
   ): StepLocation | null => {
     for (let i = 0; i < nodes.length; i++) {
       const node = nodes[i];
@@ -1074,6 +1075,18 @@ export const duplicateRoundGroup = (
   if (loc.parent?.kind === "feistel-round") {
     throw new Error(
       `duplicateRoundGroup: source "${sourceId}" lives inside a Feistel track; duplicate-round on Feistel isn't supported (key schedule is global, not per-round-indexed)`,
+    );
+  }
+  // Defensive: same rationale as the Feistel guard above. The
+  // duplicate-round affordance is shaped around AES's per-round-indexed
+  // schedule + the renumber walk's assumption that every relevant child
+  // is a group/iterate/leaf. For-each-subgraph (Slice 2.0a) iterates a
+  // body with `:r{i}` indexing — duplicate-round semantics on its
+  // children would mean per-iteration content shifts, which isn't a
+  // designed operation. Bail loudly until a motivating feature lands.
+  if (loc.parent?.kind === "for-each-subgraph") {
+    throw new Error(
+      `duplicateRoundGroup: source "${sourceId}" lives inside a for-each-subgraph body; duplicate-round there isn't supported (per-iteration content shifts aren't a designed operation)`,
     );
   }
   const idRe = direction === "forward" ? ROUND_ID_RE : INV_ROUND_ID_RE;

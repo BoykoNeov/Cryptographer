@@ -1,14 +1,19 @@
 # Universal port-based dataflow — Phase 2 sub-slice plan
 
-> **Status: DRAFT 2026-05-24 + Slice 2.0a contract LOCKED IN
-> 2026-05-24.** Drafted after Phase 1 closed (1748/1748 tests, all 13
-> sub-slices + caveat 1+3 follow-up green) and two advisor consults
-> framed the Phase 2 surface. Slice 2.0a's four contract-design
-> questions resolved (node shape = mirror iterate; iterationCount =
-> number-or-fromParam; nested-suffix = `:b{i}:r{j}` composed; toy
-> fixture = 5-iter XOR-with-constant). **Slice 2.0a is ready to
-> author** when the user kicks off the implementation slice. All other
-> open spec decisions surface at their respective slice starts.
+> **Status: DRAFT 2026-05-24 + Slice 2.0a GREEN 2026-05-24.** Drafted
+> after Phase 1 closed (1748/1748 tests, all 13 sub-slices + caveat 1+3
+> follow-up green) and two advisor consults framed the Phase 2 surface.
+> Slice 2.0a's four contract-design questions resolved (node shape =
+> mirror iterate; iterationCount = number-or-fromParam; nested-suffix
+> = `:b{i}:r{j}` composed; toy fixture = 5-iter XOR-with-constant) and
+> SHIPPED — suite at 1753/1753, both inner-only + nested toy passing
+> byte-equal; Phase 1 parity matrix untouched. Surfaced one doc
+> correction during authoring: the `:t < :b < :r` suffix rule is
+> type-order + outer-first-walk-order, NOT "innermost-first" as the
+> prior runtime/step-id docs claimed (the existing Feistel-in-iterate
+> case happened to coincide with innermost-first by virtue of `:t`
+> being type-order-before `:b`). Next stop: Slice 2.0b (item-array
+> input + iteration-outputs port + lift `split-blocks` / `concat-blocks`).
 >
 > **Parent plan:** [`docs/plans/universal-port-dataflow.md`](./universal-port-dataflow.md)
 > **Phase 0 findings:** [`docs/plans/universal-port-phase-0-findings.md`](./universal-port-phase-0-findings.md)

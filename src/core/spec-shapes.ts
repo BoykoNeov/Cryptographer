@@ -125,6 +125,25 @@ const walk = (nodes: readonly StepNode[], current: StateShape, ctx: WalkContext)
       ctx.shapeAt.set(node.id, shape);
       continue;
     }
+    if (node.kind === "for-each-subgraph") {
+      // For-each-subgraph (Slice 2.0a) is **shape-transparent** — unlike
+      // iterate, it does NOT clobber state from an aux array between
+      // iterations. State threads across iterations, so the body's input
+      // shape on iteration 0 is the parent scope's current shape, and the
+      // node's after-shape is the shape the body produces (which becomes
+      // iteration N+1's input on subsequent iterations and the next
+      // sibling's input on node exit).
+      //
+      // The static walk runs the body ONCE with the current shape: each
+      // child contract still gets checked, and the after-shape is whatever
+      // the body's last child emits. This is correct because every shipped
+      // body produces the same after-shape regardless of iteration count
+      // (a "MatrixState in, BytesState out" body would emit the same
+      // mismatch every iteration; one walk surfaces it).
+      shape = walk(node.children, shape, ctx);
+      ctx.shapeAt.set(node.id, shape);
+      continue;
+    }
     // Iterate is opaque to shape inference. The body always starts in
     // matrix4x4-bytes (the runtime substitutes state = blocks[i]); the
     // iterate exits leaving state in matrix4x4-bytes (the last iteration's

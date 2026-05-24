@@ -171,6 +171,30 @@ export const FeistelRoundGroupSchema = z.object({
   combineKind: CombineKindSchema,
 });
 
+// `for-each-subgraph` spec node kind (Slice 2.0a of
+// `docs/plans/universal-port-phase-2-slices.md`). Threads state across
+// iterations; first shipped consumer is SHA-256's compression body.
+// iterationCount accepts either a literal `number` (the common case) or
+// `{ fromParam: string }` (param-form, runtime resolution deferred to the
+// first param-form consumer). The schema validates both forms; the runtime
+// throws on `fromParam` until Phase 2's first param-form spec lands.
+//
+// No `schemaVersion` bump: the StepNode discriminated union widens, but
+// pre-Slice-2.0a documents (every shipped v2 doc) carry no
+// `for-each-subgraph` node and continue to validate unchanged.
+const ForEachIterationCountSchema = z.union([
+  z.number().int().nonnegative(),
+  z.object({ fromParam: z.string() }),
+]);
+
+export const ForEachSubgraphSchema = z.object({
+  kind: z.literal("for-each-subgraph"),
+  id: z.string(),
+  label: z.string().optional(),
+  iterationCount: ForEachIterationCountSchema,
+  children: z.array(z.lazy(() => StepNodeSchema)),
+});
+
 // Note on `schemaVersion`: Phase 4 of `docs/plans/des-feistel.md` bumped
 // the literal to 2 when DES entered the cipher selector. The StepNode
 // union was already widened to accept feistel-round in Phase 2 (so the
@@ -184,6 +208,7 @@ export const StepNodeSchema: z.ZodTypeAny = z.discriminatedUnion("kind", [
   StepGroupSchema,
   IterateGroupSchema,
   FeistelRoundGroupSchema,
+  ForEachSubgraphSchema,
 ]);
 
 // ─── CipherSpec ───────────────────────────────────────────────────────────

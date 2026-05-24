@@ -3,33 +3,58 @@
  * runtime-context suffixes off a TraceFrame's stepId to recover the
  * spec-leaf id the UI references.
  *
- * Suffixes (in their innermost-first append order; see `runtime.ts`):
+ * Suffix vocabulary today:
  *
- *   - `:t{name}` — track membership inside a `feistel-round`. Innermost.
- *     `{name}` is the `BranchTrack.name` (default: stringified index).
- *   - `:b{i}` — block index inside an `iterate`. Outer.
+ *   - `:t{name}` — track membership inside a `feistel-round`. `{name}`
+ *     is the `BranchTrack.name` (default: stringified index).
+ *   - `:b{i}` — block index inside an `iterate`.
+ *   - `:r{i}` — round index inside a `for-each-subgraph` (Slice 2.0a of
+ *     `docs/plans/universal-port-phase-2-slices.md`). The new kind threads
+ *     state across iterations rather than seeding from an aux array;
+ *     SHA-256's 64-round compression loop is the first shipped consumer.
  *   - `:rejoin` — synthetic rejoin frame for a `feistel-round`; spec-leaf
  *     resolves to the round's id (the FeistelRoundGroup node, not a leaf).
  *   - `:swap` — reserved for future "post-swap" frames. Not emitted today;
  *     the swap is baked into the `feistel-standard` combine.
  *
+ * Note: `:coerce:{portName}` (synthetic frames from Slice 1.12's port-
+ * length coercion path) is **deliberately NOT stripped** — the coerce
+ * frame stands on its own in the scrubber, distinct from the consumer
+ * leaf it precedes (precedent: it has its own stateBefore/stateAfter
+ * pair just like a real leaf). Stripping it would collapse coerce frames
+ * into their consumers under `setTrace`'s stepId-matching, which is the
+ * opposite of the "morph is visible" design.
+ *
+ * Composition rule (see `runtime.ts::composeStepId`): **fixed type order**
+ * `:t` < `:b` < `:r`, with **outer-first walk order within a type**. So a
+ * leaf inside Feistel-A wrapping Feistel-B inside an iterate inside a
+ * for-each-subgraph emits `<leafId>:tA:tB:b3:r7`: track A (outer) appended
+ * before track B (inner), then `:b3` (iterate is outer-of-:b), then `:r7`
+ * (for-each-subgraph is outer-of-:r). The earlier doc-comment claim
+ * "innermost-first append order" was a coincidence of the one shipped
+ * nested case (Feistel-in-iterate, where Feistel happens to be `:t` and
+ * iterate happens to be `:b`); type-order + walk-order is the real rule.
+ *
  * Canonical form: every suffix stripped. So:
  *   - `round.1.expand-R:tR:b3` → `round.1.expand-R`
+ *   - `compress.body:b0:r17` → `compress.body`
  *   - `round.1:rejoin` → `round.1`
  *   - `round.1:rejoin:b3` → `round.1`
  *   - `aes.sub-bytes:b0` → `aes.sub-bytes`
  *
  * Why one util: prior to Phase 2 the canonicalization lived in two
  * places (`src/ui/stores/trace.ts:48` using `indexOf(":b")`; and
- * `src/core/edge-value-lookup.ts:182` using `/:b\d+$/`). With three
+ * `src/core/edge-value-lookup.ts:182` using `/:b\d+$/`). With multiple
  * suffix families now, the two drifting implementations would each need
  * extending; centralizing here prevents the drift.
  */
 
-// Order matters only for documentation — the regex matches any suffix
-// repeatedly until none remain. We strip from the right because suffixes
-// are appended innermost-first at the rightmost position.
-const SUFFIX_PATTERN = /(?::b\d+|:t[\w-]+|:rejoin|:swap)+$/;
+// The regex matches any suffix repeatedly until none remain — order of
+// alternatives within the group does not affect match correctness. We
+// strip from the right because suffixes are appended at the rightmost
+// position by `composeStepId` under the type-order + walk-order rule
+// documented above.
+const SUFFIX_PATTERN = /(?::b\d+|:r\d+|:t[\w-]+|:rejoin|:swap)+$/;
 
 /**
  * Strip all runtime-context suffixes off a stepId. Returns the spec-leaf

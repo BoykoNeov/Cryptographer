@@ -203,7 +203,61 @@ export type FeistelRoundGroup = {
   readonly combineKind: CombineKind;
 };
 
-export type StepNode = StepLeaf | StepGroup | IterateGroup | FeistelRoundGroup;
+/**
+ * For-each-subgraph: a port-native iteration primitive introduced in
+ * Slice 2.0a of `docs/plans/universal-port-phase-2-slices.md`. Unlike
+ * `IterateGroup` (which seeds each iteration's `state` from an aux array
+ * of pre-split blocks AND publishes per-iteration outputs back through
+ * aux), this primitive **threads state across iterations**: iteration
+ * `i+1`'s body input is iteration `i`'s body output. The construct
+ * exists to model SHA-256's 64-round compression loop (and similar
+ * state-carrying round bodies) without aux mediation.
+ *
+ * Phase 2 contract surface (this slice — 2.0a — only):
+ *
+ * - **State-thread round-body pattern.** First child of the body reads
+ *   the parent-scope `state` on iteration 0; each subsequent iteration
+ *   re-enters with the previous iteration's body-final state. No clone-
+ *   to-seed-from-aux, no per-iteration reset.
+ * - **Iteration count source.** Literal `iterationCount: number` for the
+ *   common case (SHA-256 compression: 64). `{ fromParam: string }` form
+ *   anticipates per-cipher round-count variation. (Item-array source
+ *   `{ fromInputPort: ... }` defers to Slice 2.0b; feedback/lookback
+ *   defers to Slice 2.0c.)
+ * - **Frame stepId suffix.** Each iteration appends `:r{i}` to body
+ *   leaves' stepIds. Composed with the existing `:t{name}` (Feistel
+ *   tracks) and `:b{i}` (iterate blocks) suffixes under a fixed type
+ *   order — see `core/step-id.ts` and `core/runtime.ts::composeStepId`.
+ *
+ * Why a new kind rather than a flag on `IterateGroup`: the two have
+ * opposite state-management contracts (clobber vs thread) and Phase 2
+ * goal-state for `IterateGroup` is gradual deprecation as for-each-
+ * subgraph subsumes both patterns (Slice 2.0b widens this kind to
+ * handle item-array input + iteration-outputs port). Folding both
+ * contracts into one kind would obscure the migration boundary.
+ *
+ * Slice 2.0b widens this shape with `inputArrayPort?` + `outputsPort?`.
+ * Slice 2.0c widens it with feedback/lookback support (exact shape per
+ * Open #N4 user pick — `aux.priorIterations` channel or sibling kind).
+ * Until those slices land, the literal `iterationCount: number` /
+ * `{ fromParam }` is the only iteration-source form.
+ */
+export type ForEachSubgraphNode = {
+  readonly kind: "for-each-subgraph";
+  readonly id: string;
+  readonly label?: string;
+  /** Literal count for the common case; param-form pulls from the first
+   *  enclosing leaf's `params` at runtime (see `runtime.ts`). */
+  readonly iterationCount: number | { readonly fromParam: string };
+  readonly children: readonly StepNode[];
+};
+
+export type StepNode =
+  | StepLeaf
+  | StepGroup
+  | IterateGroup
+  | FeistelRoundGroup
+  | ForEachSubgraphNode;
 
 export type CipherSpec = {
   readonly id: string; // "aes-128@1"

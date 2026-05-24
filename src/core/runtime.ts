@@ -16,6 +16,7 @@ import type {
   BytesState,
   CipherSpec,
   FeistelRoundGroup,
+  ForEachSubgraphNode,
   State,
   StepNode,
   Trace,
@@ -80,13 +81,23 @@ export type RuntimeInput = {
  * + `CombineKind` in `types.ts`, and `COMBINE_KINDS` in `combine-kinds.ts`,
  * for the contract.
  *
- * Suffix application order on per-iteration / per-track stepIds is
- * INNERMOST-FIRST: a leaf inside a feistel-round inside an iterate emits
- * `node.id:t{name}:b{i}` (track suffix first, then block suffix). The
- * walker threads `branchPath` + `blockIndex` through recursion; the
- * suffix string is assembled at frame-construction time. Canonicalization
- * (used by `setTrace` stepId-matching) lives in `@/core/step-id` and
- * strips all suffixes back to the spec-leaf id.
+ * `for-each-subgraph` nodes (Slice 2.0a of
+ * `docs/plans/universal-port-phase-2-slices.md`) are also expanded inline
+ * but **thread state across iterations** — iteration `i+1`'s body input is
+ * iteration `i`'s body output, no clone-from-aux per iteration. Each body
+ * frame gets a `:r{i}` suffix. See `ForEachSubgraphNode` in `types.ts`.
+ *
+ * Suffix application on per-iteration / per-track stepIds follows a
+ * **fixed type order** (`:t` < `:b` < `:r`) with **outer-first walk order
+ * within a type**. So a leaf inside Feistel-A wrapping Feistel-B inside an
+ * iterate inside a for-each-subgraph emits `node.id:tA:tB:b3:r7`. The
+ * earlier doc claim "innermost-first" was a coincidence of the one shipped
+ * nested case (Feistel-in-iterate, where Feistel happens to be `:t` and
+ * iterate happens to be `:b`); type-order + walk-order is the real rule.
+ * The walker threads `branchPath` + `blockIndex` + `roundPath` through
+ * recursion; the suffix string is assembled at frame-construction time.
+ * Canonicalization (used by `setTrace` stepId-matching) lives in
+ * `@/core/step-id` and strips all suffixes back to the spec-leaf id.
  */
 export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: RuntimeInput): Trace => {
   const frames: TraceFrame[] = [];
@@ -102,18 +113,21 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
   // any caller that doesn't opt in.
   const portedDispatch = input.portedDispatchEnabled === true;
 
-  /** Compose the per-emit stepId suffix from runtime context. Innermost-
-   *  first: `:t{name}` for track membership goes before `:b{i}` for block
-   *  index, so a leaf inside a Feistel inside an iterate emits
-   *  `node.id:t{name}:b{i}`. */
+  /** Compose the per-emit stepId suffix from runtime context. Fixed type
+   *  order `:t` < `:b` < `:r`; within a type, outer-first walk order.
+   *  So a leaf inside Feistel-A wrapping Feistel-B inside an iterate inside
+   *  a for-each-subgraph emits `node.id:tA:tB:b3:r7`. See
+   *  `core/step-id.ts` for the canonicalization counterpart. */
   const composeStepId = (
     baseId: string,
     branchPath: readonly string[],
     blockIndex: number | undefined,
+    roundPath: readonly number[],
   ): string => {
     let id = baseId;
     for (const name of branchPath) id += `:t${name}`;
     if (blockIndex !== undefined) id += `:b${blockIndex}`;
+    for (const r of roundPath) id += `:r${r}`;
     return id;
   };
 
@@ -123,15 +137,20 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
   // `branchPath` is the analogous thread for Feistel tracks: empty at
   // the top level; appended with the track's name (or stringified index)
   // when inside a `feistel-round`'s track body. Outer-first ordering.
+  // `roundPath` is the analogous thread for `for-each-subgraph` iterations:
+  // empty at the top level; appended with the current round index when
+  // inside a for-each-subgraph's body. Outer-first ordering (a nested
+  // for-each-subgraph emits `roundPath = [outerRound, innerRound]`).
   const walk = (
     nodes: readonly StepNode[],
     path: readonly string[],
     blockIndex: number | undefined,
     branchPath: readonly string[],
+    roundPath: readonly number[],
   ): void => {
     for (const node of nodes) {
       if (node.kind === "group") {
-        walk(node.children, [...path, node.id], blockIndex, branchPath);
+        walk(node.children, [...path, node.id], blockIndex, branchPath, roundPath);
         continue;
       }
 
@@ -170,7 +189,7 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
             );
           }
           state = cloneState(block);
-          walk(node.children, iteratePath, i, branchPath);
+          walk(node.children, iteratePath, i, branchPath, roundPath);
           outBlocks.push(cloneState(state));
         }
 
@@ -179,7 +198,12 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
       }
 
       if (node.kind === "feistel-round") {
-        runFeistelRound(node, path, blockIndex, branchPath);
+        runFeistelRound(node, path, blockIndex, branchPath, roundPath);
+        continue;
+      }
+
+      if (node.kind === "for-each-subgraph") {
+        runForEachSubgraph(node, path, blockIndex, branchPath, roundPath);
         continue;
       }
 
@@ -289,7 +313,7 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
           // (`:b{i}`, `:t{name}`) ride along via composeStepId — same
           // contract as the consumer leaf and the rejoin frame.
           const coerceBaseId = `${node.id}:coerce:${portName}`;
-          const coerceStepId = composeStepId(coerceBaseId, branchPath, blockIndex);
+          const coerceStepId = composeStepId(coerceBaseId, branchPath, blockIndex, roundPath);
           const beforeBytes: BytesState = {
             shape: "bytes",
             bytes: new Uint8Array(sourceBytes),
@@ -455,13 +479,14 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
         state = result.state;
       }
 
-      // Per-iteration / per-track stepId suffix: ensures every frame in
-      // the flat trace has a unique stepId even when the same children
-      // run N times (iterate) or in parallel tracks (Feistel). The trace
-      // store's `setTrace` preserves the scrubber by canonical stepId
-      // across re-runs — the suffixes make that work for multi-block AND
-      // multi-track. Canonicalization lives in `@/core/step-id`.
-      const emittedStepId = composeStepId(node.id, branchPath, blockIndex);
+      // Per-iteration / per-track / per-round stepId suffix: ensures every
+      // frame in the flat trace has a unique stepId even when the same
+      // children run N times (iterate, for-each-subgraph) or in parallel
+      // tracks (Feistel). The trace store's `setTrace` preserves the
+      // scrubber by canonical stepId across re-runs — the suffixes make
+      // that work for multi-block AND multi-track AND multi-round.
+      // Canonicalization lives in `@/core/step-id`.
+      const emittedStepId = composeStepId(node.id, branchPath, blockIndex, roundPath);
 
       const frame: TraceFrame = {
         index: frameIndex++,
@@ -505,6 +530,7 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
     path: readonly string[],
     blockIndex: number | undefined,
     branchPath: readonly string[],
+    roundPath: readonly number[],
   ): void => {
     if (node.tracks.length !== 2) {
       throw new Error(
@@ -515,7 +541,7 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
       throw new Error(`feistel-round '${node.id}': requires bytes-shape state, got ${state.shape}`);
     }
     const inputBytes = state.bytes;
-    const roundPath = [...path, node.id];
+    const feistelPath = [...path, node.id];
 
     // Slice each track's input and validate index coverage.
     const trackInputs: Uint8Array[] = [];
@@ -567,7 +593,7 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
       // `walk()` may reassign it through closure to any other variant,
       // making the shape-check below appear unreachable.
       state = cloneState({ shape: "bytes", bytes: new Uint8Array(trackInput) });
-      walk(track.children, roundPath, blockIndex, [...branchPath, trackName]);
+      walk(track.children, feistelPath, blockIndex, [...branchPath, trackName], roundPath);
 
       // Track exit: snapshot the final state's bytes as the track output.
       const exitState: State = state;
@@ -646,7 +672,7 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
     // inspector's symmetry and to make the rejoin frame self-describing
     // (a stale narrator looking at just `frame.params` can render the
     // full 4-arg formula). The arrays are small (8 bytes each for DES).
-    const rejoinStepId = composeStepId(`${node.id}:rejoin`, branchPath, blockIndex);
+    const rejoinStepId = composeStepId(`${node.id}:rejoin`, branchPath, blockIndex, roundPath);
     const rejoinFrame: TraceFrame = {
       index: frameIndex++,
       path,
@@ -669,7 +695,62 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
     frames.push(rejoinFrame);
   };
 
-  walk(spec.steps, [], undefined, []);
+  /**
+   * Expand one `for-each-subgraph` node (Slice 2.0a). Threads state across
+   * iterations — iteration `i+1`'s body input is iteration `i`'s body
+   * output, no clone-from-aux per iteration. Each emitted body frame's
+   * stepId is appended with `:r{i}` (the new round-suffix); composition
+   * with any enclosing `:b{i}` (iterate) / `:t{name}` (Feistel) follows the
+   * type-order rule documented on `composeStepId`.
+   *
+   * Pre-conditions:
+   *   - `node.iterationCount` is either a literal `number ≥ 0` OR
+   *     `{ fromParam }`. Slice 2.0a only resolves the number form; the
+   *     `fromParam` resolution mechanism settles at the first consumer
+   *     that needs it (per plan: SHA-256 compression uses literal 64).
+   *     Hitting the unimplemented branch throws a noisy error.
+   *
+   * Side effects: pushes one body frame per (child × iteration) and
+   * advances the parent-scope `state` to the final iteration's body
+   * output.
+   */
+  const runForEachSubgraph = (
+    node: ForEachSubgraphNode,
+    path: readonly string[],
+    blockIndex: number | undefined,
+    branchPath: readonly string[],
+    roundPath: readonly number[],
+  ): void => {
+    let count: number;
+    if (typeof node.iterationCount === "number") {
+      count = node.iterationCount;
+    } else {
+      // `{ fromParam }` resolution mechanism is deferred to the first
+      // consumer that needs it — SHA-256 compression uses literal 64,
+      // so Slice 2.0a's toy fixture exercises only the number form.
+      // Mirror `iterate`'s noisy failure mode rather than silently
+      // defaulting to 0.
+      throw new Error(
+        `for-each-subgraph '${node.id}': iterationCount.fromParam resolution is not implemented in Slice 2.0a — first consumer with param-form picks up the lookup mechanism`,
+      );
+    }
+    if (!Number.isInteger(count) || count < 0) {
+      throw new Error(
+        `for-each-subgraph '${node.id}': iterationCount must be a non-negative integer, got ${String(count)}`,
+      );
+    }
+
+    const childPath = [...path, node.id];
+    for (let i = 0; i < count; i++) {
+      // State threads across iterations: NO clone-from-aux, NO reset.
+      // The body walks with the parent-scope `state` (which equals
+      // iteration `i-1`'s body output on iteration `i > 0`). Iteration 0
+      // sees whatever state existed before the for-each-subgraph node.
+      walk(node.children, childPath, blockIndex, branchPath, [...roundPath, i]);
+    }
+  };
+
+  walk(spec.steps, [], undefined, [], []);
 
   return {
     frames,

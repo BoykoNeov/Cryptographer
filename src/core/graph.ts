@@ -219,8 +219,16 @@ export type ContainerNode = {
    *     stack them. Track membership is preserved by `feistelTracks` below.
    *     Spine fans into N edges (one per track first leaf); rejoin
    *     synthetic node is `{id}:rejoin` and exits the spine forward.
+   *   - `"for-each-subgraph"` — port-native iteration primitive (Slice 2.0a
+   *     of `docs/plans/universal-port-phase-2-slices.md`). State threads
+   *     across iterations (unlike `"iterate"`, which clobbers state from
+   *     an aux array). Slice 2.0a routes it through iterate's spine-
+   *     termination behavior; richer rendering (round-count badge,
+   *     collapse semantics) lands in Slice 2.10. Until then the container
+   *     is treated like an iterate by the spine + chain emitters; the
+   *     graph view shows it as a labeled box around its children.
    */
-  readonly kind: "group" | "iterate" | "feistel";
+  readonly kind: "group" | "iterate" | "feistel" | "for-each-subgraph";
   readonly id: string;
   readonly label: string;
   /** Ancestor container ids, root-first (excludes this container itself). */
@@ -651,6 +659,21 @@ const walkSpec = (
       ctx.containerIndex.set(node.id, cIdx);
       ctx.containers.push({
         kind: "iterate",
+        id: node.id,
+        label: node.label ?? node.id,
+        containerPath,
+        childIds: grandChildIds,
+      });
+    } else if (node.kind === "for-each-subgraph") {
+      // For-each-subgraph (Slice 2.0a). Treated as its own container kind
+      // in the graph data model so future renderer polish (round-count
+      // badge, collapse semantics) can switch on it. Slice 2.0a routes
+      // spine + chain through the iterate-shaped branch — see
+      // `inferStateEdges` for the spine-termination treatment.
+      const cIdx = ctx.containers.length;
+      ctx.containerIndex.set(node.id, cIdx);
+      ctx.containers.push({
+        kind: "for-each-subgraph",
         id: node.id,
         label: node.label ?? node.id,
         containerPath,
@@ -1259,19 +1282,23 @@ const inferStateEdges = (spec: CipherSpec): GraphEdge[] => {
             // with its body cleared out."
             segment.push(node.id);
           }
-        } else if (node.kind === "iterate") {
-          // Iterate boundary — recurse into the body as its own scope
-          // (the per-iteration spine is a separate chain) AND push the
-          // iterate's id onto the parent chain so the chain has a
-          // recognizable boundary marker. `emitChain` then SUPPRESSES
-          // any state edge whose endpoint is an iterate id (see the
-          // iterateIds doc-block above). The result: the parent spine
-          // stops at the leaf BEFORE the iterate, and resumes at the
-          // leaf AFTER it, with NO white arrow crossing the boundary
-          // and no bridging edge over the iterate. The iterate's own
-          // aux arrows (input-blocks coming in, output-blocks going
-          // out) are the honest depiction of what data crosses the
-          // boundary; the spine has nothing to add.
+        } else if (node.kind === "iterate" || node.kind === "for-each-subgraph") {
+          // Iterate / for-each-subgraph boundary — recurse into the body
+          // as its own scope (the per-iteration spine is a separate
+          // chain) AND push the container's id onto the parent chain so
+          // the chain has a recognizable boundary marker. `emitChain`
+          // then SUPPRESSES any state edge whose endpoint is one of
+          // these container ids (see the iterateIds doc-block above for
+          // iterate; for-each-subgraph piggybacks on the same suppression
+          // until Slice 2.0c's feedback contract surfaces a clearer
+          // model). The result: the parent spine stops at the leaf
+          // BEFORE the container, and resumes at the leaf AFTER it.
+          //
+          // For-each-subgraph differs semantically (state THREADS across
+          // iterations rather than being clobbered from aux) but the
+          // PARENT-scope spine treatment is the same: one boundary marker
+          // per container. Inner spine within the body is handled by the
+          // recursive `processScope` call.
           processScope(node.children);
           segment.push(node.id);
         } else {
