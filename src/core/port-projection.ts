@@ -314,12 +314,36 @@ const stateToBytes = (state: TraceFrame["stateBefore"], expected: StateShape): U
 const bytesToState = (bytes: Uint8Array, tags: LayoutTags): TraceFrame["stateBefore"] => {
   switch (tags.stateLayout) {
     case "bytes":
+      // bytes layout is wiring-determined — any length is legal. The
+      // consumer's own length assertions (if any) gate beyond this.
       return cloneState({ shape: "bytes", bytes });
     case "matrix4x4-bytes":
+      // Slice 1.12 caveat 1 defensive throw — a coerced byte stream
+      // whose length doesn't match the layout's fixed expected size
+      // would otherwise produce a malformed MatrixState that downstream
+      // consumers silently misinterpret (treating wrong-length bytes as
+      // a column-major 4×4 matrix smears values into the wrong cells).
+      // Loud throw with clear attribution lets a fixture error surface
+      // at the projection boundary, not three frames later.
+      if (bytes.length !== 16) {
+        throw new Error(
+          `port-projection: bytesToState layout "matrix4x4-bytes" expected 16 bytes, got ${bytes.length}. This usually means a ported-dispatch input port's coerced bytes don't fit the declared state-port layout. See Slice 1.12 caveat 1 in docs/plans/universal-port-phase-1-slices.md.`,
+        );
+      }
       return cloneState({ shape: "matrix4x4-bytes", bytes });
     case "bitvec": {
       if (tags.bitLength === undefined) {
         throw new Error("port-projection: bitvec reconstruction requires LayoutTags.bitLength");
+      }
+      const expectedByteLen = Math.ceil(tags.bitLength / 8);
+      // Same Slice 1.12 caveat 1 defensive throw — coerced bytes for a
+      // bitvec layout whose declared bitLength implies a fixed byte
+      // count must match exactly, else the resulting BitVecState
+      // carries bits in the wrong positions.
+      if (bytes.length !== expectedByteLen) {
+        throw new Error(
+          `port-projection: bytesToState layout "bitvec" expected ${expectedByteLen} bytes (bitLength=${tags.bitLength}), got ${bytes.length}. This usually means a ported-dispatch input port's coerced bytes don't fit the declared state-port layout. See Slice 1.12 caveat 1 in docs/plans/universal-port-phase-1-slices.md.`,
+        );
       }
       return cloneState({ shape: "bitvec", bits: bytes, bitLength: tags.bitLength });
     }
@@ -719,6 +743,15 @@ export const auxPortBytesToValue = (
     return new Uint8Array(bytes);
   }
   if (layout === "matrix-cm-4x4") {
+    // Slice 1.12 caveat 1 defensive throw — aux-side mirror of the
+    // bytesToState matrix4x4-bytes check. A coerced byte stream of
+    // wrong length would produce a malformed MatrixState that
+    // downstream consumers silently misinterpret.
+    if (bytes.length !== 16) {
+      throw new Error(
+        `auxPortBytesToValue: layout "matrix-cm-4x4" expected 16 bytes, got ${bytes.length}. This usually means a ported-dispatch aux port's coerced bytes don't fit the declared layout. See Slice 1.12 caveat 1 in docs/plans/universal-port-phase-1-slices.md.`,
+      );
+    }
     return { shape: "matrix4x4-bytes", bytes: new Uint8Array(bytes) };
   }
   if (layout === "preserve-input-variant") {
@@ -740,6 +773,16 @@ export const auxPortBytesToValue = (
     ) {
       const shape = (sourceVariantHint as { shape: string }).shape;
       if (shape === "bytes" || shape === "matrix4x4-bytes") {
+        // Slice 1.12 caveat 1 defensive throw — when the source
+        // variant is matrix4x4-bytes, the output bytes MUST be 16
+        // long for the reconstructed MatrixState to be well-formed.
+        // The "bytes" variant remains length-agnostic (any length
+        // legal) — same posture as bytesToState case "bytes".
+        if (shape === "matrix4x4-bytes" && bytes.length !== 16) {
+          throw new Error(
+            `auxPortBytesToValue: layout "preserve-input-variant" with source variant "matrix4x4-bytes" expected 16 bytes, got ${bytes.length}. This usually means a ported-dispatch aux port's coerced bytes don't fit the source variant's layout. See Slice 1.12 caveat 1 in docs/plans/universal-port-phase-1-slices.md.`,
+          );
+        }
         // Construct a fresh State of the same variant. Type narrows via
         // the literal-string check above; the cast satisfies the union
         // discriminator (BytesState / MatrixState) without runtime cost.

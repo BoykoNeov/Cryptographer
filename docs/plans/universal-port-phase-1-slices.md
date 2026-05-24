@@ -961,7 +961,7 @@ contribution.
 mistake "Slice 1.12 GREEN" for "all of Q2 complete":**
 
 1. **State-port coercion path is mechanically reachable but uncovered
-   by fixture.** The runtime loop iterates the contract's full input
+   by fixture.** ~~The runtime loop iterates the contract's full input
    port map, which includes both state and aux input ports. The
    fixture is aux-only (`stateInputPort` undefined). A future fixture
    wiring a mismatched state port under a non-`bytes` layout
@@ -972,7 +972,23 @@ mistake "Slice 1.12 GREEN" for "all of Q2 complete":**
    when the legacy executor's own length assertion fires. Dormant
    because flag-on-only + no shipped spec + no fixture exercises it.
    Worth knowing when the first cipher actually wires mismatched
-   state ports.
+   state ports.~~
+   **CLOSED 2026-05-24 (post-Phase-1 follow-up batch, per advisor's
+   "preventive insurance" recommendation).** Added defensive throws in
+   `bytesToState` (`matrix4x4-bytes` requires exactly 16 bytes;
+   `bitvec` requires `ceil(bitLength/8)` bytes) AND in
+   `auxPortBytesToValue` (`matrix-cm-4x4` and `preserve-input-variant`
+   with `matrix4x4-bytes` source both require 16 bytes). All throws
+   carry caveat-1 attribution ("See Slice 1.12 caveat 1 in
+   docs/plans/universal-port-phase-1-slices.md") so a future
+   mismatched-fixture failure has clear traceability. `bytes` layout
+   stays length-agnostic per the Slice 1.2 polymorphic-port posture.
+   Pinned by `tests/port-projection-coerce-defensive-throws.test.ts`
+   (15 surfaces — happy paths, off-by-one, short, long, and the
+   intentional `bytes`-variant negative pins). Caveat 1 stays
+   important for Phase 3 (AES rebuild is matrix-layout-heavy); the
+   throws are insurance for the first author who wires mismatched
+   state ports under matrix layout.
 
 2. **Q2's editor half is NOT in this slice.** Parent plan Q2 reads:
    "Editor flags mismatches with a red glyph + inspector explanation.
@@ -981,9 +997,12 @@ mistake "Slice 1.12 GREEN" for "all of Q2 complete":**
    mismatched wirings, inspector explanation) depends on the sink-only
    edge model (Q-edges, decided 2026-05-23 but not implemented) +
    editor wiring UI that aren't shipped yet. Deferred until the
-   editor wiring data model lands.
+   editor wiring data model lands. **Stays deferred per the 2026-05-24
+   advisor consult** — re-opening it now would mean designing two
+   data-model pieces in service of one warning glyph; reopen when the
+   sink-only edge model + editor UI ship.
 
-3. **UI surfacing is plumbed-met, not demonstrated-met.** Narrator
+3. **UI surfacing is plumbed-met, not demonstrated-met.** ~~Narrator
    registered + default frame view will render bytes-shape
    stateBefore/stateAfter pairs correctly. NOT covered by this slice:
    in-browser smoke of a `__coerce__` frame in the linear scrubber +
@@ -992,7 +1011,20 @@ mistake "Slice 1.12 GREEN" for "all of Q2 complete":**
    with no live trigger path (`portedDispatchEnabled` defaults `false`
    + no shipped spec uses coercion), browser smoke isn't required.
    Live demonstration awaits the first port-native cipher with a
-   mismatched fixture.
+   mismatched fixture.~~
+   **CLOSED 2026-05-24 (post-Phase-1 follow-up batch).** Added a
+   `⚠` glyph for `__coerce__` synthetic frames parallel to `⇄` for
+   `__rejoin__`. `TraceTimeline.tsx` extended with a new `coerce` badge
+   kind (color: `var(--changed)` — the existing amber/warning token);
+   tooltip names the port and "coerce (port byteLength mismatch)" so a
+   learner hovering the badge maps glyph → meaning without scrubbing.
+   Pinned by `tests/coerce-timeline-badge.test.tsx` (4 surfaces —
+   single mismatch right-pad, multi-port leaf, badge position pin, and
+   the exact-match short-circuit negative pin). The narrator at
+   `src/ui/narration/coerce.tsx` already renders the disclosure when
+   the user scrubs onto the frame; the badge is the additional
+   loud-on-purpose surfacing so the frame is discoverable, not just
+   reachable.
 
 ## Phase 1 exit criteria — **MET 2026-05-24**
 
@@ -1015,6 +1047,10 @@ mistake "Slice 1.12 GREEN" for "all of Q2 complete":**
 - ✅ Coercion mechanism (Q2 runtime half) plumbed and visible via the
   synthetic `__coerce__` frame (Slice 1.12). Editor half deferred to
   whenever the sink-only edge model + editor wiring UI ship.
+- ✅ Post-1.12 follow-up batch (2026-05-24) closed caveats 1 + 3 —
+  defensive throws in `bytesToState` / `auxPortBytesToValue` for
+  matrix/bitvec layouts + `⚠` glyph in `TraceTimeline` for
+  `__coerce__` frames. 1748/1748 tests, `npm run check` clean.
 - Default `portedDispatchEnabled` remains `false`. Flipping to `true`
   as the shipped default is a follow-on slice (post-1.12) that decides
   the cutover gate — likely "all KATs match under ported + Phase 2

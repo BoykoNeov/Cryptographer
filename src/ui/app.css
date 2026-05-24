@@ -320,6 +320,15 @@ button:disabled {
   font-weight: 600;
 }
 
+/* Slice 1.12 coercion badge — warning glyph for ported-dispatch input
+   port byteLength mismatches. Amber (--changed) for warn-and-run loud
+   surfacing; matches the changed-byte highlight token already in use. */
+.trace-timeline-badge-coerce {
+  color: var(--changed);
+  font-size: 11px;
+  font-weight: 600;
+}
+
 .frame-counter {
   color: var(--muted);
   font-size: 12px;

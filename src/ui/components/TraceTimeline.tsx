@@ -13,6 +13,13 @@
  *     (`frame.branchPath` non-empty — the last entry is the track name).
  *   - ⇄ for synthetic rejoin frames (`stepType === REJOIN_STEP_TYPE`).
  *     The ⇄ glyph communicates "the two halves come back together here."
+ *   - ⚠ for synthetic coercion frames (`stepType === COERCE_STEP_TYPE`)
+ *     emitted by the runtime when a ported-dispatch input port's source
+ *     bytes don't match its declared byteLength. Surfaces the
+ *     warn-and-run coercion (Slice 1.12 of the universal-port plan) so
+ *     a learner scrubbing the trace can SEE the mismatched-wiring event
+ *     before landing on its frame. Loud-on-purpose: coercion is a
+ *     warning event, not a normal pipeline step.
  *   - No badge for root-scope frames (IP, FP, key-schedule). The plain
  *     slider position already represents them — adding badges would
  *     pollute the strip with empty markers for ciphers like AES that
@@ -30,6 +37,7 @@
  */
 
 import { REJOIN_STEP_TYPE } from "@/core/combine-kinds";
+import { COERCE_STEP_TYPE } from "@/core/port-projection";
 import type { TraceFrame } from "@/core/types";
 import { For, Show, createMemo } from "solid-js";
 import { getTrace, setFrame, useFrameIndex, useTraceVersion } from "../stores/trace";
@@ -43,7 +51,7 @@ type Badge = {
   readonly index: number;
   readonly positionPercent: number;
   readonly glyph: string;
-  readonly kind: "track" | "rejoin";
+  readonly kind: "track" | "rejoin" | "coerce";
 };
 
 const computeBadges = (frames: readonly TraceFrame[]): Badge[] => {
@@ -62,6 +70,22 @@ const computeBadges = (frames: readonly TraceFrame[]): Badge[] => {
         positionPercent: (i / maxIdx) * 100,
         glyph: "⇄",
         kind: "rejoin",
+      });
+      continue;
+    }
+    // Coercion synthetic frames get the ⚠ glyph. Emitted by the
+    // ported-dispatch runtime when an input port's source bytes don't
+    // match its declared byteLength (Slice 1.12 of the universal-port
+    // plan). branchPath may or may not be set depending on whether the
+    // mismatched leaf is inside a Feistel/iterate body; the check on
+    // stepType comes first so we surface coercion uniformly across
+    // those scopes.
+    if (f.stepType === COERCE_STEP_TYPE) {
+      out.push({
+        index: i,
+        positionPercent: (i / maxIdx) * 100,
+        glyph: "⚠",
+        kind: "coerce",
       });
       continue;
     }
@@ -131,10 +155,15 @@ export const TraceTimeline = () => {
                         classList={{
                           "trace-timeline-badge-track": badge.kind === "track",
                           "trace-timeline-badge-rejoin": badge.kind === "rejoin",
+                          "trace-timeline-badge-coerce": badge.kind === "coerce",
                         }}
                         style={{ left: `${badge.positionPercent}%` }}
                         title={`frame ${badge.index + 1}: ${
-                          badge.kind === "rejoin" ? "rejoin" : `track ${badge.glyph.toUpperCase()}`
+                          badge.kind === "rejoin"
+                            ? "rejoin"
+                            : badge.kind === "coerce"
+                              ? "coerce (port byteLength mismatch)"
+                              : `track ${badge.glyph.toUpperCase()}`
                         }`}
                       >
                         {badge.glyph}
