@@ -4,7 +4,7 @@
 > GREEN 2026-05-24 + Slice 2.0b-ii GREEN 2026-05-24 + Slice 2.0c GREEN
 > 2026-05-24 + Slice 2.1a GREEN 2026-05-24 + Slice 2.1b GREEN 2026-05-24
 > + Slice 2.2 GREEN 2026-05-24 + Slice 2.3 GREEN 2026-05-24
-> + Slice 2.4 GREEN 2026-05-24.** Drafted after Phase 1 closed (1748/1748 tests, all 13
+> + Slice 2.4 GREEN 2026-05-24 + Slice 2.5 GREEN 2026-05-25.** Drafted after Phase 1 closed (1748/1748 tests, all 13
 > sub-slices + caveat 1+3 follow-up green) and two advisor consults
 > framed the Phase 2 surface.
 > Slice 2.0a's four contract-design questions resolved + SHIPPED (suite
@@ -1197,23 +1197,139 @@ subgraph-with-history wiring; first consumer of Slice 2.0c's contract).
 with the Slice 2.3 + Slice 2.4 "(b) Compositions" precedent) or
 re-open the Open #N3 framing for hash-specific helpers.
 
-### Slice 2.5 — Message-schedule expansion
+### Slice 2.5 — Message-schedule expansion — SHIPPED 2026-05-25
 
-**Goal:** assemble W_0..W_63 using the for-each-subgraph feedback
-contract from Slice 2.0c (or hand-rolled per Open #N4 (c)).
+**Status: GREEN 2026-05-25.** Ships **`shift-bits-right@1`** as the
+third foundational ARX primitive (after `rotate-bits-right@1` Slice
+2.1a and `add-mod-32@1` Slice 2.1b), plus σ0/σ1 + W_0..W_63 message
+schedule compositions per Slice 2.3 (b) precedent. Suite at
+**2094/2094** (+46 new across 2 test files); bundle **590.43 KB**
+gzipped (+~5 KB from Slice 2.4's 585.51 KB). Phase 1 matrix untouched.
+Open #N4 lookback-shape concrete pick (offsets [2, 7, 15, 16]) baked
+into the message-schedule emulation; will become a spec literal at
+Slice 2.6.
 
-**Scope (sketched):**
+**Plan-trap caught (pre-authoring advisor consult):** the plan prose
+in this section read *"σ0/σ1 are different from Σ0/Σ1 (use ROR 7/18/3
+and ROR 17/19/10 respectively)"* — wrong. Per FIPS 180-4 §4.1.2 the
+THIRD operand of σ0 and σ1 is **SHR** (logical shift right, zero-fill),
+NOT a third rotation. SHR drops the low n bits and zero-fills the top
+n; ROR wraps them. Cannot be expressed via ROR alone (would need ROR
++ AND with a per-shift constant chip, which obscures the primitive's
+identity in the trace and forces a per-shift `constant-load` for the
+mask). The slice scope grew by one primitive: `shift-bits-right@1`
+ships alongside the helper compositions. Iterative-slice-review
+[[feedback_iterative_slice_review]] paid for itself.
 
-- W_0..W_15: direct read of the 16 32-bit words of the message block.
-- W_16..W_63: each `W_t = σ1(W_{t-2}) + W_{t-7} + σ0(W_{t-15}) +
-  W_{t-16}` (mod 2^32). σ0/σ1 are different from Σ0/Σ1 (use ROR 7/18/3
-  and ROR 17/19/10 respectively). 4 new helpers OR composition (same
-  Open #N3 pattern — likely defer to Slice 2.3's pick).
-- For-each-subgraph node with feedback/lookback for the 48-iteration
-  expansion. OR hand-rolled 48 leaves if Open #N4 (c) was picked.
+**Ships one new primitive + two helper compositions + message
+schedule:**
 
-**Pass/fail gate:** W_0..W_63 byte-equal to FIPS 180-4 §A.1's
-intermediate values for `"abc"` (Table A.1).
+1. **`shift-bits-right@1`** (`src/steps/shift-bits-right.ts`, ~165
+   lines incl. doc) — logical right-shift over each big-endian word.
+   Params `{bits, wordBits ∈ 8|16|32|64}`. Mirror of `rotate-bits-
+   right@1`'s shape: one polymorphic input port, one polymorphic
+   output, `layout: "raw"` on both, per-width dispatch hoisted out of
+   the inner loop. **One semantic divergence:** SHR by `bits ≥
+   wordBits` short-circuits to all-zero output BEFORE entering the
+   per-width loop, because JS `>>>` truncates the shift amount modulo
+   32 (so raw `x >>> 32` returns `x`, not `0`). ROR is naturally
+   periodic; SHR is not. Codec helpers `shr8/16/32/64` consolidated
+   into `src/core/word-codec.ts` alongside the existing `ror*`
+   siblings.
+2. **σ0 / σ1 compositions** as test-level functions per Slice 2.3 (b)
+   "Compositions" precedent. Three primitives chain: `rotate-bits-
+   right@1` ×2 + `shift-bits-right@1` ×1 → `xor@1` (inputCount=3).
+   No spec yet — port-native body wiring is Slice 2.6's payload; the
+   composition lives in `tests/sha256-message-schedule.test.ts` for
+   now, identical math to what the Slice 2.6 spec will produce.
+3. **Message schedule W_0..W_63 emulation** — replicates the
+   `for-each-subgraph-with-history` contract finalized in Slice 2.0c
+   at test scope: seed W_0..W_15 from the 64-byte padded block (built
+   via Slice 2.4's pad-with-byte + append-be64-length composition);
+   compute W_16..W_63 via the FIPS 180-4 §6.2.2 recurrence
+   `W_t = σ1(W_{t-2}) + W_{t-7} + σ0(W_{t-15}) + W_{t-16}` mod 2^32.
+   The for-each-subgraph-with-history body would declare
+   `lookbackOffsets: [2, 7, 15, 16]` and `historyEntryByteLength: 4`
+   when wired in Slice 2.6.
+
+**Oracle choice (advisor warning baked in):** FIPS 180-4 §A.1 does NOT
+tabulate W_t directly — only the padded block, the per-round working
+variables, and the final hash. The honest oracle is a TS-direct
+re-implementation of the recurrence via raw JS bit ops (same pattern
+as Slice 2.3's Σ0/Σ1 oracle, same sign-extension `>>> 0` discipline).
+Two W_t values pinned as literal hand-derived KATs as defense against
+oracle-side regressions:
+
+- **W_16 = 0x61626380** — degenerate case (only one non-zero operand:
+  W_0). Pins recurrence structure (offsets + sum-order) before σ0/σ1
+  contribute.
+- **W_17 = 0x000F0000** — σ1(0x00000018) contribution alone (all other
+  operands are zero). The first W_t where σ1 actually fires. ROR-vs-
+  SHR substitution regressions fail loudly here.
+
+Plus σ0/σ1 themselves carry hand-derived KATs at single-bit inputs
+(0x80000000) to pin the SHR's drop-vs-wrap divergence at the algebraic
+boundary, plus oracle parity over all 8 IV words + 64 pseudo-random
+words (deterministic LCG seed `0x0BADC0DE`, distinct from Slice 2.3's
+`0xC0FFEE` so a shared latent oracle bug doesn't pass both suites).
+
+**SHR-specific algebraic checks:**
+- σ0(0xFFFFFFFF) = **0x1FFFFFFF** (NOT 0xFFFFFFFF — SHR³ zero-fills
+  top 3 bits, so XOR with two all-ones words leaves the top 3 zero).
+- σ1(0xFFFFFFFF) = **0x003FFFFF** (SHR¹⁰ zero-fills top 10 bits).
+- These are the most direct witnesses that the composition routes
+  through SHR, not ROR. A silent ROR-for-SHR substitution would
+  produce 0xFFFFFFFF for both.
+
+**Touched files (5):**
+
+- `src/core/word-codec.ts` — added `shr8 / shr16 / shr32 / shr64`
+  helpers + section block explaining the SHR-vs-ROR distinction and
+  the `bits ≥ wordBits` caveat the executor handles.
+- `src/steps/shift-bits-right.ts` — NEW (~165 lines incl. doc).
+- `src/ciphers/default-registry.ts` — alphabetic-position import
+  (between `serpent-sub-bytes` and `shift-rows`) + new
+  `r.register("shift-bits-right@1", ...)` block + register-comment
+  paragraph updated with Slice 2.5 context.
+- `tests/shift-bits-right.test.ts` — NEW (30 tests) — KATs across
+  all 4 wordBits, identity, multi-word independence, SHR ≥ wordBits
+  short-circuit, information-loss property, param validation, both
+  dispatch-path guards.
+- `tests/sha256-message-schedule.test.ts` — NEW (16 tests) — σ0/σ1
+  hand-derived KATs + algebraic SHR-divergence properties +
+  W_0..W_63 schedule emulation for "abc" + W_16/W_17 literal KATs
+  + TS-direct oracle parity over all 64 words + negative-check on
+  alternative input ("a" message).
+- `docs/plans/universal-port-phase-2-slices.md` — this Status section
+  + the plan-prose fix in the Slice 2.5 description above (SHR-not-
+  ROR correction).
+
+**Pass/fail gate — MET:**
+- `npm run check` GREEN: biome ci + tsc + **2094/2094** vitest (+46)
+  + vite build (~42s).
+- Bundle 590.43 KB gzipped (+~5 KB from Slice 2.4) — past Vite's
+  500 KB threshold per Open #N8 (informational, not pre-engineer).
+- Hand-derived KATs match composition output byte-equal (σ0 / σ1 /
+  W_16 / W_17 literal pins).
+- TS-direct oracle parity holds across all 64 W_t for "abc" + across
+  8 IV words + 64 pseudo-random words for σ0/σ1.
+- Phase 1 frame-parity matrix (Slice 1.11) green untouched — no
+  shipped cipher uses `shift-bits-right@1` yet.
+
+**Phase 2 status:** 10 slices shipped (2.0a/b-i/b-ii/c, 2.1a/b, 2.2,
+2.3, 2.4, 2.5). 4 open spec decisions remain unchanged: **N1**
+(partially resolved at 2.0b), **N4** (closed at 2.0c per design;
+lookback offsets `[2, 7, 15, 16]` concrete pick baked into this
+slice's emulation, becomes spec literal at Slice 2.6), **N7** (cipher
+selector category — Slice 2.10), **N8** (bundle size — 590 KB,
+informational).
+
+**Next stop:** Slice 2.6 — compression function + outer block loop +
+first end-to-end SHA-256. First slice where port-native primitives
+exercise real spec edge-wiring (the runtime path that throws
+*"requires spec edge-wiring (Slice 2.6+)"* today). Plus Open #N9
+surface choice (spine-termination at for-each-subgraph boundary for
+state-thread mode — SHA-256 compression is the forcing function).
 
 ### Slice 2.6 — Compression function + outer block loop + first end-to-end SHA-256
 

@@ -168,6 +168,11 @@ import {
   serpentSubBytesMeta,
   serpentSubBytesPortContract,
 } from "../steps/serpent-sub-bytes";
+import {
+  shiftBitsRight,
+  shiftBitsRightDoc,
+  shiftBitsRightPortContract,
+} from "../steps/shift-bits-right";
 import { shiftRows, shiftRowsDoc, shiftRowsMeta, shiftRowsPortContract } from "../steps/shift-rows";
 import {
   speckKeySchedule,
@@ -747,6 +752,17 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // is also the first port-native primitive whose output byteLength is
   // KNOWN at spec time (declared via function-form PortContract); every
   // prior port-native primitive's output length was polymorphic.
+  //
+  // **Slice 2.5 (2026-05-25)** adds `shift-bits-right@1` — logical
+  // right-shift over each big-endian word, paired with `rotate-bits-
+  // right@1` to make SHA-256's σ0/σ1 helpers expressible as
+  // compositions per Slice 2.3's (b) Compositions precedent:
+  //   σ0(x) = ROTR⁷(x) ⊕ ROTR¹⁸(x) ⊕ SHR³(x)
+  //   σ1(x) = ROTR¹⁷(x) ⊕ ROTR¹⁹(x) ⊕ SHR¹⁰(x)
+  // The third operand is SHR — NOT a third rotation. This was a plan-
+  // prose error caught by the iterative-slice-review pre-authoring
+  // check; an earlier draft said "ROR 7/18/3 and ROR 17/19/10". SHR
+  // also lands for ChaCha20 / BLAKE2 rebuilds in their future phases.
   r.register("rotate-bits-right@1", {
     kind: "ported",
     executor: rotateBitsRight,
@@ -794,6 +810,12 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: constantLoad,
     shape: constantLoadPortContract,
     doc: constantLoadDoc,
+  });
+  r.register("shift-bits-right@1", {
+    kind: "ported",
+    executor: shiftBitsRight,
+    shape: shiftBitsRightPortContract,
+    doc: shiftBitsRightDoc,
   });
   return r;
 };

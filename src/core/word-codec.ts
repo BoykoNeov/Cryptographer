@@ -187,3 +187,62 @@ export const ror64 = (x: bigint, n: bigint): bigint => {
   const xm = x & mask;
   return ((xm >> n) | (xm << (64n - n))) & mask;
 };
+
+// ─── Logical right-shift helpers ──────────────────────────────────────────
+//
+// Logical shift right: bits shifted off the bottom DROP; the top is
+// zero-filled. Distinct from `ror{N}` (which wraps the bottom bits to the
+// top). Math at every width:
+//
+//   SHR(w, n) = (w >> n) & mask     (top bits zero-filled)
+//
+// Where `mask = 2^B - 1`. Callers MUST canonicalize `n` to `[0, B)` — the
+// executor in `src/steps/shift-bits-right.ts` handles `n >= B` by short-
+// circuiting to all-zero output BEFORE calling these helpers, because JS
+// `>>>` truncates the shift amount modulo 32, which would silently produce
+// wrong results for `shr32(x, 32)` (returns `x`, not 0).
+//
+// Shipped in **Slice 2.5** alongside `shift-bits-right@1` as the third
+// foundational ARX primitive after `rotate-bits-right@1` (Slice 2.1a) and
+// `add-mod-32@1` (Slice 2.1b). Required for SHA-256's σ0/σ1 (FIPS 180-4
+// §4.1.2) where the third operand is SHR (not ROR — common plan-trap).
+// Also lands for ChaCha20 quarter-rounds (32-bit) and BLAKE2 (32-/64-bit)
+// in their future rebuilds.
+
+/** Logical right-shift an 8-bit word by `n` positions. `n` ∈ [0, 8). */
+export const shr8 = (x: number, n: number): number => {
+  return ((x & 0xff) >>> n) & 0xff;
+};
+
+/** Logical right-shift a 16-bit word by `n` positions. `n` ∈ [0, 16). */
+export const shr16 = (x: number, n: number): number => {
+  return ((x & 0xffff) >>> n) & 0xffff;
+};
+
+/**
+ * Logical right-shift a 32-bit word by `n` positions. `n` ∈ [0, 32).
+ *
+ * The leading `>>> 0` coerces a potentially-signed input back to its
+ * unsigned-32-bit view BEFORE the shift. Without it, a caller passing
+ * `0x80000000` as a (signed) `-2147483648` would arithmetic-shift via
+ * `>>>`'s left operand promotion and produce the wrong high bits. Output
+ * is always unsigned-32 by construction (`>>>` returns unsigned).
+ */
+export const shr32 = (x: number, n: number): number => {
+  return (x >>> 0) >>> n;
+};
+
+/**
+ * Logical right-shift a 64-bit word by `n` positions. `n` ∈ [0, 64).
+ *
+ * `n` is `bigint` for the same reason as `ror64` — JS forces both
+ * operands of `>>` to be `bigint` when either is. The mask is applied
+ * once on input to defend against callers passing values outside
+ * `[0, 2^64)`. Bigint `>>` is arithmetic for negative inputs; masking
+ * to unsigned-64 before shifting makes the result always
+ * non-negative.
+ */
+export const shr64 = (x: bigint, n: bigint): bigint => {
+  const mask = (1n << 64n) - 1n;
+  return (x & mask) >> n;
+};
