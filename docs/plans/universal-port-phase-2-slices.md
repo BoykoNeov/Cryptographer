@@ -1,19 +1,24 @@
 # Universal port-based dataflow — Phase 2 sub-slice plan
 
-> **Status: DRAFT 2026-05-24 + Slice 2.0a GREEN 2026-05-24.** Drafted
-> after Phase 1 closed (1748/1748 tests, all 13 sub-slices + caveat 1+3
-> follow-up green) and two advisor consults framed the Phase 2 surface.
-> Slice 2.0a's four contract-design questions resolved (node shape =
-> mirror iterate; iterationCount = number-or-fromParam; nested-suffix
-> = `:b{i}:r{j}` composed; toy fixture = 5-iter XOR-with-constant) and
-> SHIPPED — suite at 1753/1753, both inner-only + nested toy passing
-> byte-equal; Phase 1 parity matrix untouched. Surfaced one doc
-> correction during authoring: the `:t < :b < :r` suffix rule is
-> type-order + outer-first-walk-order, NOT "innermost-first" as the
-> prior runtime/step-id docs claimed (the existing Feistel-in-iterate
-> case happened to coincide with innermost-first by virtue of `:t`
-> being type-order-before `:b`). Next stop: Slice 2.0b (item-array
-> input + iteration-outputs port + lift `split-blocks` / `concat-blocks`).
+> **Status: DRAFT 2026-05-24 + Slice 2.0a GREEN 2026-05-24 + Slice 2.0b-i
+> GREEN 2026-05-24.** Drafted after Phase 1 closed (1748/1748 tests, all
+> 13 sub-slices + caveat 1+3 follow-up green) and two advisor consults
+> framed the Phase 2 surface. Slice 2.0a's four contract-design questions
+> resolved + SHIPPED (suite 1753/1753; surfaced the `:t < :b < :r` suffix
+> rule as type-order + outer-first-walk-order, NOT "innermost-first").
+> Slice 2.0b sub-divided into 2.0b-i (contract widening + toy fixture)
+> and 2.0b-ii (lift `split-blocks` / `concat-blocks`) per the operational
+> note "one commit per sub-slice." **Slice 2.0b-i SHIPPED** — two user
+> picks locked at slice start (Open #N1 = (b) concatenated single port;
+> Slice-2.0b sub-decision = (X) node-explicit fields per advisor consult
+> #3); `ForEachSubgraphNode` widened with four optional item-array
+> fields; runtime walker handles item-array mode (parent-scope
+> `state.bytes` split into `blockByteLength` chunks → per-iteration body
+> with `:r{i}` suffix → concat back as flat BytesState); 8-case toy
+> fixture pins behavior + 5 mode-exclusivity / length-divisibility throws.
+> Suite at 1761/1761; Phase 1 frame-parity matrix untouched. Next stop:
+> **Slice 2.0b-ii** (lift `split-blocks@1` + `concat-blocks@1` with new
+> layout vocabulary for `State[]` aux values).
 >
 > **Parent plan:** [`docs/plans/universal-port-dataflow.md`](./universal-port-dataflow.md)
 > **Phase 0 findings:** [`docs/plans/universal-port-phase-0-findings.md`](./universal-port-phase-0-findings.md)
@@ -185,21 +190,53 @@ Rejected alternatives:
   semantic).
 - (c) Generic `:{i}` with nesting (most compact; weakest pedagogy).
 
-### Open #N1 — `split-blocks` port shape (inherited from Phase 1 Open #1, decided at Slice 2.0b)
+### Open #N1 — `split-blocks` port shape — **CLOSED 2026-05-24 (user picked (b))**
 
-Q4 superset pulls this from Phase 1 (where it was deferred to Phase 2)
-into Slice 2.0b. Two candidates already enumerated in Phase 1 plan:
+Q4 superset pulled this from Phase 1 (where it was deferred to Phase 2)
+into Slice 2.0b. **User picked (b) Concatenated single port** at slice
+start after advisor flagged that Phase 1's "(a) is the precedent" carries
+a hidden premise — Decision B's per-port-per-round-key shape works
+because `PortShapeMap` is a function of *spec-time* `params.rounds`
+(fixed when the user picks AES-128/192/256). **Block count is run-time
+data** (varies with plaintext length), so picking (a) would force one of
+three contract extensions: widen `PortShapeMap` to take run-time data,
+bake a magic-number `params.maxBlocks` cap into every CBC spec, or
+invent a wildcard-edge convention. (b) needs none of these.
 
-- (a) **One output port per block** (`block0`, `block1`, …) sized by
-  computed block count. Matches Decision B from Phase 1 (Slice 1.4
-  port-per-roundkey shape). Dynamic per-spec.
-- (b) **One output port carrying concatenated bytes** (flat array).
-  Simpler metadata; loses per-block edge granularity; consumer (the
-  for-each-subgraph outer) re-splits at iteration entry.
+Graph-view fidelity worry resolved: today's legacy iterate shows ONE
+aux edge from `split-blocks` → iterate; arrow bundling collapses N
+parallel aux edges to a ×N pill anyway. (b)'s single edge with run-time
+×N annotation matches what users see today, not a regression. (b) also
+preserves the existing `MatrixState[]` "one bundled array" posture and
+makes `split-blocks` near-trivial under the lift (`matrixFromBytes` is
+identity-on-bytes; concat(blocks.map(b => b.bytes)) === original bytes).
 
-**Same character as Phase 1 Decision B** — the user already picked
-port-per-something for key-expansion in Slice 1.4. (a) is the precedent;
-confirm at Slice 2.0b start before authoring.
+Rejected alternative (a) per-block ports captured in the originating
+session for posterity.
+
+### Open #N1-a — Item-array mode field shape — **CLOSED 2026-05-24 (user picked (X) Node-explicit)**
+
+Surfaced at Slice 2.0b start after Open #N1 resolved. The advisor's
+Phase 2 consult #3 flagged that picking (b) leaves two follow-on design
+points the slice plan didn't pin: where `blockByteLength` lives, and
+how `iterationCount` derives. Two options:
+
+- (X) **Node-explicit fields.** `for-each-subgraph` carries
+  `inputArrayPort` + `outputsPort` + `blockByteLength` + `blockLayout`
+  directly. `iterationCount` auto-derives as
+  `inputs[inputArrayPort].length / blockByteLength`. Self-contained;
+  mirrors legacy iterate's `blocksFromAux/countFromAux/outBlocksAux`
+  pattern; no graph-introspection coupling.
+- (Y) **Source-port introspection.** `for-each-subgraph` carries
+  `inputArrayPort` + `outputsPort` only; reads layout + per-block size
+  from the wired source port's PortContract. Cleaner if a sequence
+  layout exists in vocabulary, but requires the runtime to walk graph
+  edges to discover shape — couples node behavior to graph topology.
+
+**User picked (X)** at slice start. Implemented via four optional fields
+on `ForEachSubgraphNode`; mode-exclusivity invariants enforced at runtime
+(partial-field configs throw; both-modes-set throws; both-modes-absent
+throws).
 
 ### Open #N2 — Constants entry strategy (decided at Slice 2.4)
 
@@ -255,6 +292,39 @@ Two candidates:
 
 User pick at Slice 2.10 start. (b) is the more honest answer but bigger
 slice scope.
+
+### Open #N9 — Spine-termination at for-each-subgraph boundary is mode-conflated (surface at Slice 2.6)
+
+Surfaced by advisor consult #4 (2026-05-24, post-Slice-2.0b-i). Slice
+2.0a widened `graph.ts::walkSpec`'s spine-termination treatment to
+include `for-each-subgraph` boundaries — mirroring legacy `iterate`,
+where state IS clobbered from aux per iteration entry (advisor consult
+during Slice 2.0a discussed this; suppression is honest there).
+
+For **item-array mode** (Slice 2.0b-i), this remains honest — state IS
+clobbered per iteration entry (the runtime calls `portBytesToState(slice,
+blockLayout)` and assigns to `state`). Spine suppression matches reality.
+
+For **state-thread mode** (Slice 2.0a, first shipped consumer = SHA-256
+compression in Slice 2.6), this is **structurally wrong** — state
+genuinely threads through iterations. Spine suppression hides the data
+flow the user wants to see. Will surface as a noticeable bug the moment
+SHA-256 compression lands in graph view at Slice 2.6.
+
+Three candidates (decide at Slice 2.6 start):
+
+- (a) **Per-mode branch in `inferStateEdges` / `walkSpec`**. State-thread
+  keeps spine; item-array suppresses (status quo). One conditional check
+  on the four item-array fields.
+- (b) **Spine-passthrough optional flag on for-each-subgraph node** —
+  `spineThreadsThroughBody?: boolean`, defaulting true (state-thread is
+  the more common case once SHA-256 + other hash compressions land).
+  Decouples graph treatment from runtime mode-discriminator.
+- (c) **Defer until SHA-256 graph treatment surfaces the bug visibly**
+  and pick mid-Slice-2.6 with full context.
+
+User pick at Slice 2.6 start. Flagged here so the bug doesn't surface
+cold to a future reader.
 
 ### Open #N8 (lower priority) — Bundle size posture (flagged, not pre-engineered)
 

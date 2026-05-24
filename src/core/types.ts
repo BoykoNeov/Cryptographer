@@ -205,51 +205,97 @@ export type FeistelRoundGroup = {
 
 /**
  * For-each-subgraph: a port-native iteration primitive introduced in
- * Slice 2.0a of `docs/plans/universal-port-phase-2-slices.md`. Unlike
- * `IterateGroup` (which seeds each iteration's `state` from an aux array
- * of pre-split blocks AND publishes per-iteration outputs back through
- * aux), this primitive **threads state across iterations**: iteration
- * `i+1`'s body input is iteration `i`'s body output. The construct
- * exists to model SHA-256's 64-round compression loop (and similar
- * state-carrying round bodies) without aux mediation.
+ * Slice 2.0a of `docs/plans/universal-port-phase-2-slices.md` and widened
+ * in Slice 2.0b. Subsumes two iteration patterns under one spec node kind:
  *
- * Phase 2 contract surface (this slice — 2.0a — only):
+ *  1. **State-thread round-body** (Slice 2.0a). First child of the body
+ *     reads the parent-scope `state` on iteration 0; each subsequent
+ *     iteration re-enters with the previous iteration's body-final state.
+ *     No clone-from-aux, no per-iteration reset. SHA-256's 64-round
+ *     compression loop is the first shipped consumer. Selected when
+ *     `iterationCount` is set AND the four item-array fields are absent.
  *
- * - **State-thread round-body pattern.** First child of the body reads
- *   the parent-scope `state` on iteration 0; each subsequent iteration
- *   re-enters with the previous iteration's body-final state. No clone-
- *   to-seed-from-aux, no per-iteration reset.
- * - **Iteration count source.** Literal `iterationCount: number` for the
- *   common case (SHA-256 compression: 64). `{ fromParam: string }` form
- *   anticipates per-cipher round-count variation. (Item-array source
- *   `{ fromInputPort: ... }` defers to Slice 2.0b; feedback/lookback
- *   defers to Slice 2.0c.)
- * - **Frame stepId suffix.** Each iteration appends `:r{i}` to body
- *   leaves' stepIds. Composed with the existing `:t{name}` (Feistel
- *   tracks) and `:b{i}` (iterate blocks) suffixes under a fixed type
- *   order — see `core/step-id.ts` and `core/runtime.ts::composeStepId`.
+ *  2. **Item-array per-block iteration** (Slice 2.0b). Parent-scope state
+ *     (BytesState) is split into `blockByteLength`-sized chunks; each chunk
+ *     becomes the body's seed `state` for one iteration (decoded via
+ *     `portBytesToState(slice, blockLayout)`); each iteration's body-final
+ *     `state` is encoded via `stateToPortBytes(state, blockLayout)` and
+ *     accumulated; on node exit the accumulator concatenates back into the
+ *     parent-scope `state` as a BytesState. Selected when the four
+ *     item-array fields are set AND `iterationCount` is absent.
  *
- * Why a new kind rather than a flag on `IterateGroup`: the two have
- * opposite state-management contracts (clobber vs thread) and Phase 2
- * goal-state for `IterateGroup` is gradual deprecation as for-each-
- * subgraph subsumes both patterns (Slice 2.0b widens this kind to
- * handle item-array input + iteration-outputs port). Folding both
- * contracts into one kind would obscure the migration boundary.
+ * Frame stepId suffix is shared across modes: each iteration appends
+ * `:r{i}` to body leaves' stepIds. Composed with `:t{name}` (Feistel
+ * tracks) and `:b{i}` (iterate blocks) under fixed type order `:t < :b <
+ * :r` with outer-first walk order within a type — see `core/step-id.ts`
+ * and `core/runtime.ts::composeStepId`.
  *
- * Slice 2.0b widens this shape with `inputArrayPort?` + `outputsPort?`.
- * Slice 2.0c widens it with feedback/lookback support (exact shape per
- * Open #N4 user pick — `aux.priorIterations` channel or sibling kind).
- * Until those slices land, the literal `iterationCount: number` /
- * `{ fromParam }` is the only iteration-source form.
+ * Why one node kind for both patterns: Phase 2 Q4 superset pick. The
+ * legacy `IterateGroup` is targeted for gradual deprecation in Phase 4/5
+ * as for-each-subgraph subsumes both its aux-seeded iteration AND
+ * SHA-256's state-thread pattern. Folding two kinds into one keeps the
+ * Phase-2 spec vocabulary small.
+ *
+ * Mode discriminator (validator-enforced in `core/spec-shapes.ts` and
+ * the runtime's per-node throw):
+ * - State-thread mode: `iterationCount` set, `inputArrayPort` /
+ *   `outputsPort` / `blockByteLength` / `blockLayout` all absent.
+ * - Item-array mode: all four item-array fields set, `iterationCount`
+ *   absent.
+ * Mixing the two (e.g., `iterationCount` + `inputArrayPort` both set)
+ * is a spec authoring bug; the validator surfaces it pre-run.
+ *
+ * Slice 2.0c widens this shape with feedback/lookback support (exact
+ * shape per Open #N4 user pick — `aux.priorIterations` channel or sibling
+ * kind). Until that slice lands, the two modes above are the only ones.
+ *
+ * Note on "ports" today: the `inputArrayPort` and `outputsPort` fields are
+ * semantic NAMES on the node's pseudo-input / pseudo-output. Slice 2.0b's
+ * runtime reads the input array from parent-scope `state.bytes` and writes
+ * the output back to parent-scope `state`; the names are anchors for the
+ * future port-edge wiring story (Phase 4+ when container nodes gain
+ * first-class PortContract). User pick 2026-05-24 (Open #N1 = (b)
+ * concatenated single port) drives the byte-flat encoding.
  */
 export type ForEachSubgraphNode = {
   readonly kind: "for-each-subgraph";
   readonly id: string;
   readonly label?: string;
-  /** Literal count for the common case; param-form pulls from the first
-   *  enclosing leaf's `params` at runtime (see `runtime.ts`). */
-  readonly iterationCount: number | { readonly fromParam: string };
   readonly children: readonly StepNode[];
+  /**
+   * State-thread mode (Slice 2.0a). Literal count for the common case;
+   * `{ fromParam }` resolution is deferred to the first param-form
+   * consumer. Set ONLY when item-array fields are absent.
+   */
+  readonly iterationCount?: number | { readonly fromParam: string };
+  /**
+   * Item-array mode (Slice 2.0b). Semantic name for the input data
+   * anchor on the node. The runtime reads parent-scope `state.bytes` as
+   * the input array. Future Phase 4+ port-edge wiring will resolve this
+   * name to an explicit upstream source.
+   */
+  readonly inputArrayPort?: string;
+  /**
+   * Item-array mode (Slice 2.0b). Semantic name for the output data
+   * anchor; the runtime writes the concatenated per-iteration outputs to
+   * parent-scope `state` as a BytesState at node exit.
+   */
+  readonly outputsPort?: string;
+  /**
+   * Item-array mode (Slice 2.0b). Per-iteration byte slice length;
+   * `iterationCount` auto-derives as `parent.state.bytes.length /
+   * blockByteLength`. Must be a positive integer that evenly divides the
+   * input array length.
+   */
+  readonly blockByteLength?: number;
+  /**
+   * Item-array mode (Slice 2.0b). State variant the body operates on
+   * per iteration. `portBytesToState(slice, blockLayout)` seeds the
+   * body's state at iteration entry; `stateToPortBytes(state,
+   * blockLayout)` collects body's exit state. AES-CBC body uses
+   * `"matrix4x4-bytes"`; the Slice-2.0b toy fixture uses `"bytes"`.
+   */
+  readonly blockLayout?: StateShape;
 };
 
 export type StepNode =

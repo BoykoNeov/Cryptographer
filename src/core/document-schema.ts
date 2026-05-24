@@ -172,15 +172,28 @@ export const FeistelRoundGroupSchema = z.object({
 });
 
 // `for-each-subgraph` spec node kind (Slice 2.0a of
-// `docs/plans/universal-port-phase-2-slices.md`). Threads state across
-// iterations; first shipped consumer is SHA-256's compression body.
+// `docs/plans/universal-port-phase-2-slices.md`, widened in Slice 2.0b).
+// Two modes:
+//   - State-thread (Slice 2.0a): `iterationCount` set; the four item-array
+//     fields all absent. First shipped consumer: SHA-256's compression.
+//   - Item-array (Slice 2.0b): four fields `inputArrayPort` /
+//     `outputsPort` / `blockByteLength` / `blockLayout` all set;
+//     `iterationCount` absent (auto-derives from parent state length /
+//     `blockByteLength`).
+//
+// Mode-exclusivity invariants are enforced in `core/spec-shapes.ts` AND
+// at runtime, NOT here — Zod's `.refine` could cover it but the duplicate
+// validator would split the error attribution between the load boundary
+// and the pre-run boundary. Keep schema validation structural; reserve
+// semantic checks for the validator that surfaces graph-view warnings.
+//
 // iterationCount accepts either a literal `number` (the common case) or
 // `{ fromParam: string }` (param-form, runtime resolution deferred to the
 // first param-form consumer). The schema validates both forms; the runtime
 // throws on `fromParam` until Phase 2's first param-form spec lands.
 //
 // No `schemaVersion` bump: the StepNode discriminated union widens, but
-// pre-Slice-2.0a documents (every shipped v2 doc) carry no
+// pre-Slice-2.0b documents (every shipped v2 doc) carry no
 // `for-each-subgraph` node and continue to validate unchanged.
 const ForEachIterationCountSchema = z.union([
   z.number().int().nonnegative(),
@@ -191,8 +204,12 @@ export const ForEachSubgraphSchema = z.object({
   kind: z.literal("for-each-subgraph"),
   id: z.string(),
   label: z.string().optional(),
-  iterationCount: ForEachIterationCountSchema,
   children: z.array(z.lazy(() => StepNodeSchema)),
+  iterationCount: ForEachIterationCountSchema.optional(),
+  inputArrayPort: z.string().optional(),
+  outputsPort: z.string().optional(),
+  blockByteLength: z.number().int().positive().optional(),
+  blockLayout: StateShapeSchema.optional(),
 });
 
 // Note on `schemaVersion`: Phase 4 of `docs/plans/des-feistel.md` bumped

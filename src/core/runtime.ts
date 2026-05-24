@@ -696,23 +696,40 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
   };
 
   /**
-   * Expand one `for-each-subgraph` node (Slice 2.0a). Threads state across
-   * iterations — iteration `i+1`'s body input is iteration `i`'s body
-   * output, no clone-from-aux per iteration. Each emitted body frame's
-   * stepId is appended with `:r{i}` (the new round-suffix); composition
-   * with any enclosing `:b{i}` (iterate) / `:t{name}` (Feistel) follows the
-   * type-order rule documented on `composeStepId`.
+   * Expand one `for-each-subgraph` node (Slice 2.0a + 2.0b). Two modes
+   * share the same node kind:
    *
-   * Pre-conditions:
-   *   - `node.iterationCount` is either a literal `number ≥ 0` OR
-   *     `{ fromParam }`. Slice 2.0a only resolves the number form; the
-   *     `fromParam` resolution mechanism settles at the first consumer
-   *     that needs it (per plan: SHA-256 compression uses literal 64).
-   *     Hitting the unimplemented branch throws a noisy error.
+   *  - **State-thread mode** (Slice 2.0a): `iterationCount` set, the four
+   *    item-array fields absent. Body inherits parent-scope `state` on
+   *    iteration 0; iteration `i+1`'s body input is iteration `i`'s body
+   *    output. No per-iteration reset.
+   *  - **Item-array mode** (Slice 2.0b): item-array fields all set,
+   *    `iterationCount` absent. Parent-scope `state.bytes` is sliced into
+   *    `blockByteLength`-sized chunks; each chunk decodes via
+   *    `portBytesToState(slice, blockLayout)` and seeds the body's
+   *    `state` for one iteration; each iteration's body-exit state
+   *    encodes via `stateToPortBytes(state, blockLayout)` and accumulates;
+   *    on node exit, the accumulator concatenates back into parent-scope
+   *    `state` as a BytesState. `iterationCount` auto-derives as
+   *    `state.bytes.length / blockByteLength`.
    *
-   * Side effects: pushes one body frame per (child × iteration) and
-   * advances the parent-scope `state` to the final iteration's body
-   * output.
+   * Each body frame's stepId appends `:r{i}` (the round-suffix);
+   * composition with any enclosing `:b{i}` (iterate) / `:t{name}`
+   * (Feistel) follows the type-order rule documented on `composeStepId`.
+   *
+   * Pre-conditions enforced loudly (mirrors `iterate`'s noisy failure
+   * posture):
+   *   - Mode-exclusivity: exactly one of {iterationCount only, all four
+   *     item-array fields} is set. Both-modes / partial-fields throw.
+   *   - State-thread: `iterationCount` is either a literal `number ≥ 0`
+   *     OR `{ fromParam }`. The number form runs; `{ fromParam }` throws
+   *     until SHA-256-variant or similar spec lands its lookup mechanism.
+   *   - Item-array: parent-scope `state.shape === "bytes"`;
+   *     `blockByteLength` divides `state.bytes.length` evenly.
+   *
+   * Side effects: pushes one frame per (child × iteration) and advances
+   * the parent-scope `state` (to body's final-iteration state in
+   * state-thread mode; to concatenated BytesState in item-array mode).
    */
   const runForEachSubgraph = (
     node: ForEachSubgraphNode,
@@ -721,6 +738,102 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
     branchPath: readonly string[],
     roundPath: readonly number[],
   ): void => {
+    // Mode discriminator: presence of ANY item-array field selects
+    // item-array mode; the runtime then enforces that ALL four are
+    // present AND iterationCount is absent (partial-field configs are
+    // authoring bugs that throw before any iteration runs).
+    const hasItemArrayMode =
+      node.inputArrayPort !== undefined ||
+      node.outputsPort !== undefined ||
+      node.blockByteLength !== undefined ||
+      node.blockLayout !== undefined;
+
+    if (hasItemArrayMode) {
+      // Mode-exclusivity invariant 1: all four item-array fields present.
+      if (
+        node.inputArrayPort === undefined ||
+        node.outputsPort === undefined ||
+        node.blockByteLength === undefined ||
+        node.blockLayout === undefined
+      ) {
+        throw new Error(
+          `for-each-subgraph '${node.id}': item-array mode requires ALL of inputArrayPort + outputsPort + blockByteLength + blockLayout to be set (got inputArrayPort=${String(node.inputArrayPort)}, outputsPort=${String(node.outputsPort)}, blockByteLength=${String(node.blockByteLength)}, blockLayout=${String(node.blockLayout)})`,
+        );
+      }
+      // Mode-exclusivity invariant 2: iterationCount must be absent in
+      // item-array mode. It auto-derives from input bytes / blockByteLength.
+      if (node.iterationCount !== undefined) {
+        throw new Error(
+          `for-each-subgraph '${node.id}': item-array mode forbids iterationCount (auto-derives from inputArrayPort byte length / blockByteLength); got iterationCount=${JSON.stringify(node.iterationCount)}`,
+        );
+      }
+
+      const blockSize = node.blockByteLength;
+      if (!Number.isInteger(blockSize) || blockSize <= 0) {
+        throw new Error(
+          `for-each-subgraph '${node.id}': blockByteLength must be a positive integer, got ${String(blockSize)}`,
+        );
+      }
+
+      // Source: parent-scope state.bytes. Slice 2.0b ships the
+      // "read from parent state" mechanism; Phase 4+ adds explicit
+      // port-edge wiring (semantic `inputArrayPort` name is the anchor).
+      if (state.shape !== "bytes") {
+        throw new Error(
+          `for-each-subgraph '${node.id}': item-array mode requires parent-scope state.shape === "bytes" (got "${state.shape}")`,
+        );
+      }
+      const inputBytes = state.bytes;
+      if (inputBytes.length % blockSize !== 0) {
+        throw new Error(
+          `for-each-subgraph '${node.id}': inputArrayPort byte length ${inputBytes.length} is not a multiple of blockByteLength ${blockSize}`,
+        );
+      }
+      const count = inputBytes.length / blockSize;
+
+      const childPath = [...path, node.id];
+      const outputBytes = new Uint8Array(inputBytes.length);
+
+      for (let i = 0; i < count; i++) {
+        // Slice + decode: per-block bytes → State variant per blockLayout.
+        // `subarray` aliases inputBytes; `portBytesToState` constructs the
+        // State via `bytesToState` which copies the underlying buffer
+        // (cloneState fresh-Uint8Array per case), so no caller-owned
+        // bytes leak into the body's state.
+        const slice = inputBytes.subarray(i * blockSize, (i + 1) * blockSize);
+        state = portBytesToState(slice, node.blockLayout);
+
+        // Body walks with the per-block state. The :r{i} suffix on
+        // emitted frames comes from `roundPath.push(i)` via composeStepId.
+        walk(node.children, childPath, blockIndex, branchPath, [...roundPath, i]);
+
+        // Encode + accumulate: body's exit state → port bytes.
+        // `stateToPortBytes` asserts shape match against blockLayout, so a
+        // body that emits a wrong-shape state surfaces here, not silently.
+        const outSlice = stateToPortBytes(state, node.blockLayout);
+        if (outSlice.length !== blockSize) {
+          throw new Error(
+            `for-each-subgraph '${node.id}': iteration ${i} body produced ${outSlice.length} bytes; expected blockByteLength=${blockSize}`,
+          );
+        }
+        outputBytes.set(outSlice, i * blockSize);
+      }
+
+      // Node exit: concatenated bytes become parent-scope state. Mirrors
+      // legacy `concat-blocks` semantics; concat-blocks downstream of an
+      // item-array for-each-subgraph becomes redundant in port-native
+      // specs but still works under the legacy aux contract.
+      state = { shape: "bytes", bytes: outputBytes };
+      return;
+    }
+
+    // ── State-thread mode (Slice 2.0a) ──────────────────────────────────
+    // No item-array fields set, so iterationCount must be present.
+    if (node.iterationCount === undefined) {
+      throw new Error(
+        `for-each-subgraph '${node.id}': state-thread mode requires iterationCount (set the four item-array fields for item-array mode instead)`,
+      );
+    }
     let count: number;
     if (typeof node.iterationCount === "number") {
       count = node.iterationCount;

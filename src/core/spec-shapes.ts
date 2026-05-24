@@ -126,7 +126,33 @@ const walk = (nodes: readonly StepNode[], current: StateShape, ctx: WalkContext)
       continue;
     }
     if (node.kind === "for-each-subgraph") {
-      // For-each-subgraph (Slice 2.0a) is **shape-transparent** — unlike
+      // For-each-subgraph has two modes (Slice 2.0a + 2.0b). Discriminator:
+      // item-array mode populates ALL four item-array fields; state-thread
+      // mode populates iterationCount alone. Mode-exclusivity invariants
+      // live in the runtime walker; this validator only routes its shape
+      // analysis. A misconfigured node (e.g., both modes' fields present)
+      // is left to surface at runtime — that's a noisier failure mode the
+      // user wants attributed to the runtime contract, not the static
+      // shape walk.
+      if (
+        node.inputArrayPort !== undefined &&
+        node.outputsPort !== undefined &&
+        node.blockByteLength !== undefined &&
+        node.blockLayout !== undefined
+      ) {
+        // Item-array mode (Slice 2.0b). The body's INPUT shape per
+        // iteration is `blockLayout` (the runtime decodes each byte slice
+        // via `portBytesToState(slice, blockLayout)` at iteration entry);
+        // the node's AFTER shape is `"bytes"` (the runtime concatenates
+        // each iteration's exit bytes back into a flat BytesState).
+        // Children still walk so per-child contracts fire + shapeAt
+        // entries populate.
+        walk(node.children, node.blockLayout, ctx);
+        shape = "bytes";
+        ctx.shapeAt.set(node.id, shape);
+        continue;
+      }
+      // State-thread mode (Slice 2.0a) — shape-transparent. Unlike
       // iterate, it does NOT clobber state from an aux array between
       // iterations. State threads across iterations, so the body's input
       // shape on iteration 0 is the parent scope's current shape, and the
