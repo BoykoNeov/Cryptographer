@@ -26,7 +26,12 @@ import {
   byteSubstitutionPortContract,
 } from "../steps/byte-substitution";
 import { computeBlockCount, computeBlockCountDoc } from "../steps/compute-block-count";
-import { concatBlocks, concatBlocksDoc } from "../steps/concat-blocks";
+import {
+  concatBlocks,
+  concatBlocksDoc,
+  concatBlocksMeta,
+  concatBlocksPortContract,
+} from "../steps/concat-blocks";
 import {
   desExpandR,
   desExpandRDoc,
@@ -167,7 +172,12 @@ import {
   speckRoundInverseMeta,
   speckRoundInversePortContract,
 } from "../steps/speck-round-inverse";
-import { splitBlocks, splitBlocksDoc } from "../steps/split-blocks";
+import {
+  splitBlocks,
+  splitBlocksDoc,
+  splitBlocksMeta,
+  splitBlocksPortContract,
+} from "../steps/split-blocks";
 import {
   stateToAux,
   stateToAuxDoc,
@@ -263,12 +273,14 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // matching pair `load-block` / `store-block` stay legacy this slice:
   // they are shape-transforming (bytes ↔ matrix4x4-bytes) and the
   // current `ProjectionMetadata.stateLayout` single-field cannot describe
-  // a shape-transforming step. Sibling step types `split-blocks`,
-  // `concat-blocks`, `compute-block-count` also stay legacy — they
-  // produce/consume non-Uint8Array aux variants (`MatrixState[]`,
-  // `number`) that the legacy iterate runtime depends on. Both
-  // deferrals tracked in
-  // `docs/plans/universal-port-phase-1-slices.md` Slice 1.3 section.
+  // a shape-transforming step. **Slice 2.0b-ii (Phase 2, 2026-05-24)**:
+  // `split-blocks` + `concat-blocks` are lifted (registered below as
+  // `kind: "ported"`) using the new `"matrix-cm-4x4-array"` aux-layout
+  // tag for `MatrixState[]` and the option-C `stateToBytes` relaxation
+  // (any non-bigint state variant decodes when expected is `"bytes"`).
+  // `compute-block-count` stays legacy — its `number` aux value still
+  // has no port-projection encoding rule. `load-block`/`store-block`
+  // still wait for asymmetric stateInput/stateOutput layout meta.
   r.register("generic.pkcs7-pad@1", {
     kind: "ported",
     executor: liftLegacyExecutor(pkcs7Pad, pkcs7PadMeta),
@@ -325,8 +337,22 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // compute-block-count writes the iteration count to aux. All three
   // are AES-shaped today (blockSize=16) — see each step's doc for the
   // generalization story when a non-matrix block cipher arrives.
-  r.register("generic.split-blocks@1", { executor: splitBlocks, doc: splitBlocksDoc });
-  r.register("generic.concat-blocks@1", { executor: concatBlocks, doc: concatBlocksDoc });
+  r.register("generic.split-blocks@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(splitBlocks, splitBlocksMeta),
+    legacy: splitBlocks,
+    shape: splitBlocksPortContract,
+    meta: splitBlocksMeta,
+    doc: splitBlocksDoc,
+  });
+  r.register("generic.concat-blocks@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(concatBlocks, concatBlocksMeta),
+    legacy: concatBlocks,
+    shape: concatBlocksPortContract,
+    meta: concatBlocksMeta,
+    doc: concatBlocksDoc,
+  });
   r.register("generic.compute-block-count@1", {
     executor: computeBlockCount,
     doc: computeBlockCountDoc,

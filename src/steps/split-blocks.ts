@@ -23,6 +23,8 @@ import type {
   BytesState,
   Json,
   MatrixState,
+  PortContract,
+  ProjectionMetadata,
   StepDocumentation,
   StepExecutor,
 } from "../core/types";
@@ -94,6 +96,50 @@ A future cipher with different geometry would register a sibling step
   ]),
   references: ["FIPS-197 §3.4 (State)", "NIST SP 800-38A §6 (Modes of Operation)"],
   shapeContract: { input: "bytes", output: "preserveInput" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 2 Slice 2.0b-ii) ───────────
+// `splitBlocksMeta`: state is bytes-passthrough (input padded plaintext,
+// output identical bytes — the live aux is the "real" output). One aux
+// write port: `"blocks"` → `params.outBlocksAux`, carrying the
+// `MatrixState[]` array encoded as concatenated bytes (16 per element)
+// and decoded back via `auxPortBytesToValue`'s `"matrix-cm-4x4-array"`
+// layout branch added in this slice. legacy executor stays the source of
+// truth for the actual splitting math; the lift is a thin port wrapper.
+//
+// The state input/output ports are polymorphic on byteLength because the
+// padded message length varies per cipher run (any multiple of 16 — the
+// pre-step padding chain enforces alignment). Coercion (Slice 1.12) is a
+// no-op here: both ports are polymorphic so the byteLength-declared
+// branch is skipped.
+//
+// **Open #N1 resolution (b)**: this is the "concatenated single port"
+// shape — one aux write port carrying all blocks in one byte sequence,
+// not N per-block ports. Matches today's `MatrixState[]` posture and
+// keeps `PortShapeMap` independent of run-time block count.
+export const splitBlocksMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+  auxWritePorts: (params: Json) => {
+    const { outBlocksAux } = readParams(params);
+    return new Map([["blocks", outBlocksAux]]);
+  },
+};
+
+/**
+ * Declared port surface. The state port is polymorphic (any multiple-of-
+ * 16 length); the `"blocks"` output port carries the concatenated bytes
+ * of every produced MatrixState under the new `"matrix-cm-4x4-array"`
+ * layout. `byteLength` is absent on the blocks port too — the produced
+ * length equals the input length, which is itself wiring-determined.
+ */
+export const splitBlocksPortContract: PortContract = {
+  inputs: new Map([["state", { layout: "raw" }]]),
+  outputs: new Map([
+    ["state", { layout: "raw" }],
+    ["blocks", { layout: "matrix-cm-4x4-array" }],
+  ]),
 };
 
 const readParams = (params: Json): { blockSize: number; outBlocksAux: string } => {

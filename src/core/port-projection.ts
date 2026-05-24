@@ -278,6 +278,34 @@ export const portBytesToState = (bytes: Uint8Array, layout: StateShape): State =
 };
 
 const stateToBytes = (state: TraceFrame["stateBefore"], expected: StateShape): Uint8Array => {
+  // Slice 2.0b-ii (universal-port Phase 2) relaxation, user pick option C
+  // (2026-05-24): when `expected === "bytes"`, accept any non-bigint State
+  // variant and read `.bytes` directly. The relaxation unblocks lifting
+  // shape-transforming steps whose input state's variant doesn't matter
+  // to the executor (concat-blocks: matrix-in/bytes-out, `_state` ignored)
+  // without forcing every such step to ship asymmetric stateInput/
+  // stateOutput layout meta. Trade-off: a meta author who mis-declares
+  // `stateLayout: "bytes"` against a state-reading executor no longer
+  // surfaces at the encode boundary — they surface inside the executor's
+  // own shape check. Narrowed-by-one-shape guardrail; documented surface.
+  // BigIntState still throws here (no encoding committed yet).
+  //
+  // Untouched: `expected === "matrix4x4-bytes"` / `"bitvec"` still enforce
+  // shape equality. "bytes" is the universal sink because every shipped
+  // State variant carries a `.bytes` Uint8Array internally.
+  if (expected === "bytes" && state.shape !== "bytes") {
+    if (state.shape === "bigint") {
+      // Same throw as the bigint case below — keep the deferral honest
+      // even on the relaxed path.
+      throw new Error(
+        "port-projection: BigIntState projection deferred to Phase 1 (no shipped cipher exercises it yet)",
+      );
+    }
+    // bitvec carries `.bits` (Uint8Array); matrix4x4-bytes carries
+    // `.bytes`. The union narrows to those two here.
+    const raw = state.shape === "bitvec" ? state.bits : state.bytes;
+    return new Uint8Array(raw);
+  }
   if (state.shape !== expected) {
     throw new Error(
       `port-projection: state shape ${state.shape} does not match expected ${expected}`,
@@ -358,19 +386,75 @@ const bytesToState = (bytes: Uint8Array, tags: LayoutTags): TraceFrame["stateBef
 // ─── Aux value ↔ bytes ──────────────────────────────────────────────────
 
 /**
- * Convert an AuxValue to a Uint8Array port payload. Phase 0 only handles
- * the `Uint8Array` variant; other AuxValue shapes (`State`, `number`,
- * `bigint`, `readonly State[]`) get a descriptive throw so a fixture
- * mistake surfaces immediately. These variants are exercised by the
- * iterate construct (count + blocks + outBlocks) and by some legacy aux
- * primitives; their projection rules need design as their step types
- * lift in Phase 1.
+ * Convert an AuxValue to a Uint8Array port payload. Phase 0 only handled
+ * the `Uint8Array` variant; subsequent slices widen as their step types
+ * lift.
+ *
+ * Slice 2.0b-ii (universal-port Phase 2) — widens to accept
+ * `readonly State[]` for `split-blocks@1`. Each element must be a State
+ * variant carrying `.bytes: Uint8Array`; all bytes are concatenated end
+ * to end. The decoder side (`auxPortBytesToValue` with layout
+ * `"matrix-cm-4x4-array"`) re-slices using a fixed 16-byte element width;
+ * this encoder is element-width-agnostic by design (a future
+ * `bytes-array` layout for `BytesState[]` would reuse the same encode
+ * branch).
+ *
+ * Other AuxValue shapes (`number`, `bigint`) still get a descriptive
+ * throw so a fixture mistake surfaces immediately. Those variants are
+ * exercised by `compute-block-count` (number) and would-be RSA / EC
+ * (bigint); their projection rules need design as their step types lift.
  */
 const auxValueToBytes = (value: AuxValue, auxKey: string): Uint8Array => {
   if (value instanceof Uint8Array) return new Uint8Array(value);
+  if (Array.isArray(value)) {
+    return encodeStateArrayToBytes(value, auxKey);
+  }
   throw new Error(
-    `port-projection: aux key "${auxKey}" has non-Uint8Array value (type=${typeof value}); only Uint8Array aux is projected in Phase 0`,
+    `port-projection: aux key "${auxKey}" has unsupported value (type=${typeof value}); only Uint8Array and State[] aux are projected so far`,
   );
+};
+
+/**
+ * Encode a `readonly State[]` aux value as concatenated bytes for a port
+ * payload. Used by both `auxValueToBytes` (the file-private encoder
+ * `project` uses) and `auxValueToPortBytes` (the exported encoder the
+ * runtime + lift adapter use). Centralised so the per-element validation
+ * and the concat logic only live in one place.
+ *
+ * Per-element validation throws on the first non-State entry — silent
+ * skipping would produce length-mismatched output bytes that
+ * `auxPortBytesToValue` then either accepts (wrong element count) or
+ * rejects (divisibility throw) several frames downstream, attributing
+ * the bug to the wrong site. Loud throw at the encoding boundary keeps
+ * authoring errors local.
+ */
+const encodeStateArrayToBytes = (value: readonly unknown[], auxKey: string): Uint8Array => {
+  let totalLen = 0;
+  for (let i = 0; i < value.length; i++) {
+    const el = value[i];
+    if (
+      !(
+        typeof el === "object" &&
+        el !== null &&
+        "shape" in el &&
+        "bytes" in el &&
+        (el as { bytes: unknown }).bytes instanceof Uint8Array
+      )
+    ) {
+      throw new Error(
+        `port-projection: aux key "${auxKey}"[${i}] is not a State variant with .bytes (got ${typeof el === "object" && el !== null ? "object missing shape/bytes" : typeof el})`,
+      );
+    }
+    totalLen += (el as { bytes: Uint8Array }).bytes.length;
+  }
+  const out = new Uint8Array(totalLen);
+  let offset = 0;
+  for (const el of value) {
+    const b = (el as { bytes: Uint8Array }).bytes;
+    out.set(b, offset);
+    offset += b.length;
+  }
+  return out;
 };
 
 // ─── Layout-tag accessors ───────────────────────────────────────────────
@@ -678,8 +762,16 @@ export const auxValueToPortBytes = (value: AuxValue, auxKey: string): Uint8Array
   ) {
     return new Uint8Array((value as { bytes: Uint8Array }).bytes);
   }
+  // Slice 2.0b-ii — `readonly State[]` widening. split-blocks writes
+  // `MatrixState[]` to its declared output port; the runtime's auxWrites
+  // pass funnels through this helper. Concat all elements' `.bytes` into
+  // one buffer; decode-side `auxPortBytesToValue` rebuilds the array
+  // given the port's `"matrix-cm-4x4-array"` layout tag.
+  if (Array.isArray(value)) {
+    return encodeStateArrayToBytes(value, auxKey);
+  }
   throw new Error(
-    `liftLegacyExecutor: aux key "${auxKey}" has unsupported value (type=${typeof value}); Slice 1.2 projects Uint8Array and State aux through ports`,
+    `liftLegacyExecutor: aux key "${auxKey}" has unsupported value (type=${typeof value}); Slice 1.2+2.0b-ii project Uint8Array, State, and State[] aux through ports`,
   );
 };
 
@@ -753,6 +845,35 @@ export const auxPortBytesToValue = (
       );
     }
     return { shape: "matrix4x4-bytes", bytes: new Uint8Array(bytes) };
+  }
+  if (layout === "matrix-cm-4x4-array") {
+    // Slice 2.0b-ii — decode the concatenated bytes back into a
+    // `MatrixState[]`. Element width is implied by the layout
+    // (`matrix-cm-4x4` = 16 bytes per element); count is derived from
+    // `bytes.length / 16` with a divisibility throw. A non-multiple
+    // length signals either a producer that wrote unaligned bytes or a
+    // port-coercion that truncated mid-element — either is a meta /
+    // wiring authoring bug worth surfacing loudly.
+    //
+    // A future `bytes-array` sibling layout will mirror this branch for
+    // non-matrix block ciphers; element width then needs an explicit
+    // param (no implied width from the tag), at which point this
+    // helper's signature widens to take params.
+    if (bytes.length % 16 !== 0) {
+      throw new Error(
+        `auxPortBytesToValue: layout "matrix-cm-4x4-array" expected bytes.length divisible by 16, got ${bytes.length}.`,
+      );
+    }
+    const count = bytes.length / 16;
+    const result: { shape: "matrix4x4-bytes"; bytes: Uint8Array }[] = [];
+    for (let i = 0; i < count; i++) {
+      // `slice` (not `subarray`) — produce an independent buffer per
+      // element so consumers can't mutate one element and accidentally
+      // touch another. Mirrors the per-element copy `split-blocks`'s
+      // legacy executor performs via `matrixFromBytes`.
+      result.push({ shape: "matrix4x4-bytes", bytes: bytes.slice(i * 16, (i + 1) * 16) });
+    }
+    return result;
   }
   if (layout === "preserve-input-variant") {
     if (sourceVariantHint === undefined) {

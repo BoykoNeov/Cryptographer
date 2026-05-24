@@ -1,24 +1,38 @@
 # Universal port-based dataflow — Phase 2 sub-slice plan
 
 > **Status: DRAFT 2026-05-24 + Slice 2.0a GREEN 2026-05-24 + Slice 2.0b-i
-> GREEN 2026-05-24.** Drafted after Phase 1 closed (1748/1748 tests, all
-> 13 sub-slices + caveat 1+3 follow-up green) and two advisor consults
-> framed the Phase 2 surface. Slice 2.0a's four contract-design questions
-> resolved + SHIPPED (suite 1753/1753; surfaced the `:t < :b < :r` suffix
-> rule as type-order + outer-first-walk-order, NOT "innermost-first").
-> Slice 2.0b sub-divided into 2.0b-i (contract widening + toy fixture)
-> and 2.0b-ii (lift `split-blocks` / `concat-blocks`) per the operational
-> note "one commit per sub-slice." **Slice 2.0b-i SHIPPED** — two user
-> picks locked at slice start (Open #N1 = (b) concatenated single port;
-> Slice-2.0b sub-decision = (X) node-explicit fields per advisor consult
-> #3); `ForEachSubgraphNode` widened with four optional item-array
-> fields; runtime walker handles item-array mode (parent-scope
-> `state.bytes` split into `blockByteLength` chunks → per-iteration body
-> with `:r{i}` suffix → concat back as flat BytesState); 8-case toy
-> fixture pins behavior + 5 mode-exclusivity / length-divisibility throws.
-> Suite at 1761/1761; Phase 1 frame-parity matrix untouched. Next stop:
-> **Slice 2.0b-ii** (lift `split-blocks@1` + `concat-blocks@1` with new
-> layout vocabulary for `State[]` aux values).
+> GREEN 2026-05-24 + Slice 2.0b-ii GREEN 2026-05-24.** Drafted after
+> Phase 1 closed (1748/1748 tests, all 13 sub-slices + caveat 1+3
+> follow-up green) and two advisor consults framed the Phase 2 surface.
+> Slice 2.0a's four contract-design questions resolved + SHIPPED (suite
+> 1753/1753; surfaced the `:t < :b < :r` suffix rule as type-order +
+> outer-first-walk-order, NOT "innermost-first"). Slice 2.0b sub-
+> divided into 2.0b-i (contract widening + toy fixture) and 2.0b-ii
+> (lift `split-blocks` / `concat-blocks`) per the operational note
+> "one commit per sub-slice." **Slice 2.0b-i SHIPPED** — two user
+> picks locked (Open #N1 = (b) concatenated single port; Slice-2.0b
+> sub-decision = (X) node-explicit fields); `ForEachSubgraphNode`
+> widened with four optional item-array fields; runtime walker handles
+> item-array mode; 8-case toy fixture + 5 mode-exclusivity throws.
+> Suite at 1761/1761. **Slice 2.0b-ii SHIPPED 2026-05-24** — plan
+> slip discovered + resolved at slice start (concat-blocks is shape-
+> transforming on state, NOT just an aux State[] widening; the runtime's
+> `stateToBytes` encode boundary at `port-projection.ts:281` throws on
+> shape mismatch upstream of the executor's `_state` indifference);
+> user picked **option C** (relax `stateToBytes` so `expected: "bytes"`
+> accepts any non-bigint State variant) over option A (split-slice)
+> and option B (ProjectionMetadata asymmetric layouts widening). New
+> aux-layout tag `"matrix-cm-4x4-array"` added to `auxPortBytesToValue`
+> + symmetric encode in `auxValueToPortBytes` + file-private
+> `auxValueToBytes` (centralized via `encodeStateArrayToBytes` helper).
+> Both `split-blocks@1` and `concat-blocks@1` lifted as `kind: "ported"`
+> with legacy fallback preserved. Suite at 1773/1773 (+12 new round-
+> trip tests in `tests/port-projection-matrix-array-roundtrip.test.ts`);
+> Slice 1.11 frame-parity matrix (22 rows) auto-widens — ECB/CBC
+> encrypt/decrypt now exercise the new code through the ported path.
+> Next stop: **Slice 2.0c** (per-iteration feedback/lookback contract
+> per Open #N4) — the third forcing requirement for SHA-256's message
+> schedule.
 >
 > **Parent plan:** [`docs/plans/universal-port-dataflow.md`](./universal-port-dataflow.md)
 > **Phase 0 findings:** [`docs/plans/universal-port-phase-0-findings.md`](./universal-port-phase-0-findings.md)
@@ -481,6 +495,24 @@ in the originating session):
 re-open plan, no Slice 2.0b until fixed.
 
 ### Slice 2.0b — Iteration-outputs port + item-array input port (Q4 superset)
+
+> **Status: 2.0b-i GREEN 2026-05-24 + 2.0b-ii GREEN 2026-05-24.** The
+> sub-slices closed in two commits. 2.0b-i widened the
+> `for-each-subgraph` node + runtime walker for item-array mode; 2.0b-ii
+> lifted `split-blocks@1` + `concat-blocks@1` to `kind: "ported"` with
+> the new `"matrix-cm-4x4-array"` aux-layout tag. **Plan amendment at
+> 2.0b-ii slice start:** the original prose lumped both step types
+> under "the State[] aux widening" but concat-blocks is genuinely
+> shape-transforming on state (matrix-in / bytes-out — the same
+> deferral surface `load-block`/`store-block` flagged at Slice 1.3).
+> User picked **option C** (relax `stateToBytes` so `expected: "bytes"`
+> accepts any non-bigint State variant) over option A (split-slice,
+> defer concat-blocks) and option B (ProjectionMetadata asymmetric
+> stateInputLayout/stateOutputLayout widening). Trade-off: a meta
+> author who mis-declares `stateLayout: "bytes"` against a state-
+> reading executor no longer surfaces at the encode boundary —
+> they surface inside the executor's own shape check. Narrowed-by-
+> one-shape guardrail; documented surface. BigIntState still throws.
 
 **Goal:** widen the for-each-subgraph contract to handle the **outer
 per-block** pattern (item-array input → iteration-outputs port). This

@@ -12,7 +12,15 @@
  * is the concatenation of ALL iterations' outputs (sitting in aux).
  */
 
-import type { BytesState, Json, State, StepDocumentation, StepExecutor } from "../core/types";
+import type {
+  BytesState,
+  Json,
+  PortContract,
+  ProjectionMetadata,
+  State,
+  StepDocumentation,
+  StepExecutor,
+} from "../core/types";
 
 export const concatBlocks: StepExecutor = (_state, params, ctx) => {
   const blocksAux = readBlocksAux(params);
@@ -79,6 +87,60 @@ the keystream-extended output back to the original plaintext length.`,
   ]),
   references: ["NIST SP 800-38A §6"],
   shapeContract: { input: "matrix4x4-bytes", output: "bytes" },
+};
+
+// ─── Universal port-dataflow metadata (Phase 2 Slice 2.0b-ii) ───────────
+// `concatBlocksMeta`: shape-transforming step — input state is whatever
+// the legacy `iterate` left behind (typically `matrix4x4-bytes` for AES
+// modes, since iterate clones the last block's final state into the
+// runtime's `state` variable), output state is a `BytesState` of
+// `blocks.length * 16` bytes. The executor IGNORES `_state`; all data
+// flows through `aux[blocksAux]: MatrixState[]`.
+//
+// **Why `stateLayout: "bytes"` works here despite the shape mismatch on
+// the input side:** Slice 2.0b-ii (user pick option C) relaxes
+// `stateToBytes` so that `expected === "bytes"` accepts any non-bigint
+// State variant by reading `.bytes` directly. The 16 bytes flowing in
+// from the matrix variant are encoded as raw bytes, reconstructed as a
+// length-16 BytesState the executor ignores, then the executor returns
+// its real BytesState output which encodes cleanly with the same
+// `"bytes"` layout. No asymmetric `stateInputLayout`/`stateOutputLayout`
+// widening required this slice — that widening still lands when
+// `load-block` / `store-block` lift in a later slice.
+//
+// One aux read port: `"blocks"` → `params.blocksAux`, decoded as
+// `MatrixState[]` via `auxPortBytesToValue`'s `"matrix-cm-4x4-array"`
+// branch... BUT in practice the runtime aliases the live `MatrixState[]`
+// directly into the synthetic `portedAuxRead` (variant preserved across
+// the call), so the legacy executor's `ctx.aux.get(blocksAux)` returns
+// the same `MatrixState[]` reference legacy dispatch would yield. The
+// port-bytes encoding/decoding still runs for coercion accounting; the
+// declared layout is honored even if the lifted-executor pathway never
+// observes the decoded result.
+export const concatBlocksMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+  auxReadPorts: (params: Json) => {
+    const blocksAux = readBlocksAux(params);
+    return new Map([["blocks", blocksAux]]);
+  },
+};
+
+/**
+ * Declared port surface. State ports polymorphic (input length is 16
+ * matrix bytes from iterate; output length is `blocks.length * 16`).
+ * The `"blocks"` input port carries the concatenated MatrixState[]
+ * bytes under the new `"matrix-cm-4x4-array"` layout — same layout
+ * `split-blocks` declares on its output port, so the producer/consumer
+ * shapes line up exactly.
+ */
+export const concatBlocksPortContract: PortContract = {
+  inputs: new Map([
+    ["state", { layout: "raw" }],
+    ["blocks", { layout: "matrix-cm-4x4-array" }],
+  ]),
+  outputs: new Map([["state", { layout: "raw" }]]),
 };
 
 const readBlocksAux = (params: Json): string => {
