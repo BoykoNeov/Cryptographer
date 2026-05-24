@@ -194,6 +194,8 @@ Each phase has an explicit pass/fail gate. **If a gate fails, planning re-opens 
 
 ### Phase 2 — SHA-2 native (first port-native cipher)
 
+> **Status 2026-05-24: SUB-SLICE PLAN DRAFTED, awaiting Slice 2.0a sign-off.** Detailed at [`universal-port-phase-2-slices.md`](./universal-port-phase-2-slices.md). 15 sub-slices; user picks locked in (Q1 full scope + Q2 for-each-subgraph contract first + Q3 spec-level opt-in + Q4 outer-loop superset); 8 open spec decisions enumerated for slice-start picks.
+
 **Goal:** ship a primitive that legitimately cannot fit single-state-thread, proving the port contract has earned its existence.
 
 **Scope:**
