@@ -2,7 +2,8 @@
 
 > **Status: DRAFT 2026-05-24 + Slice 2.0a GREEN 2026-05-24 + Slice 2.0b-i
 > GREEN 2026-05-24 + Slice 2.0b-ii GREEN 2026-05-24 + Slice 2.0c GREEN
-> 2026-05-24.** Drafted after Phase 1 closed (1748/1748 tests, all 13
+> 2026-05-24 + Slice 2.1a GREEN 2026-05-24 + Slice 2.1b GREEN 2026-05-24
+> + Slice 2.2 GREEN 2026-05-24.** Drafted after Phase 1 closed (1748/1748 tests, all 13
 > sub-slices + caveat 1+3 follow-up green) and two advisor consults
 > framed the Phase 2 surface.
 > Slice 2.0a's four contract-design questions resolved + SHIPPED (suite
@@ -93,8 +94,45 @@
 > Together with rotate-bits-right@1 (Slice 2.1a) the three primitives
 > SHA-256 needs (rotate, XOR, modular-add) are all registered. Suite
 > at **1869/1869** (+52 new tests across the two files). Phase 1
-> matrix untouched. Next stop: **Slice 2.2** (Open #N5 — word-state
-> encoding decision + Q-gate-9 extension).
+> matrix untouched.
+>
+> **Slice 2.2 SHIPPED 2026-05-24** — Open #N5 (word-state encoding)
+> resolved via user pick **(a+)**: consolidate the duplicate inline
+> BE-word codec helpers into `src/core/word-codec.ts` covering all four
+> widths (8/16/32/64), **WITHOUT** adding a `word-array-be-32`
+> PortContract layout tag. Rationale: under Q1 hybrid posture, layout
+> tags are advisory; no Phase 2 editor / graph / inspector surface
+> reads port layout-as-data (the `matrix-cm-4x4` precedent IS load-
+> bearing because it carries State[] aux-passthrough info through
+> `port-projection.ts`, but a word-array tag has no equivalent
+> consumer). Per-leaf "this is a 32-bit BE word" prose lives in
+> `narrationOverride` (Slice 1.10), not in port layout. If Phase 2.10's
+> graph view eventually needs grey-out logic between word-typed and
+> raw-typed ports, adding the tag then is a small follow-on commit
+> (~30 lines + Q-gate-9 extension).
+>
+> **API shape:** per-width fns (`decodeBE8/16/32/64`, `encodeBE8/16/32/64`,
+> `ror8/16/32/64`). 8/16/32-bit paths use plain `number`; 64-bit uses
+> `bigint` (JS number bit ops truncate to 32-bit). A unified
+> `decodeBEWord` returning `number | bigint` would force `as number`
+> casts at every 32-bit call site and BigInt allocation on the hot
+> path — per-width split is the cleaner API. Add-mod-32 (which is
+> fixed-width 32) imports only `decodeBE32` + `encodeBE32`;
+> rotate-bits-right dispatches on `wordBits` outside the loop, picks
+> the per-width triple once, runs a tight composed `decode → ror →
+> encode` loop. Width coverage carries Speck rebuild (16/32/64) +
+> SHA-512 (64), not just SHA-256.
+>
+> **Q-gate-9 extension framing:** "shared codec proves byte-equal to
+> removed inline helpers" — the existing 26 rotate-bits-right tests
+> + 28 add-mod-32 tests + the new 44 word-codec direct tests together
+> ARE the gate; no separate parity test added. Suite at **1913/1913**
+> (+44 new). Bundle 567.76 KB gzipped (+~9 KB from Slice 2.1b's
+> 558.74 KB). Phase 1 matrix untouched. **Open #N5 CLOSED.** 6 open
+> spec decisions remaining (N1/N2/N3/N4/N7/N8).
+>
+> Next stop: **Slice 2.3** (Open #N3 — SHA-256 helpers Σ0/Σ1/Ch/Maj as
+> step types vs in-spec compositions vs hybrid).
 >
 > **Parent plan:** [`docs/plans/universal-port-dataflow.md`](./universal-port-dataflow.md)
 > **Phase 0 findings:** [`docs/plans/universal-port-phase-0-findings.md`](./universal-port-phase-0-findings.md)
@@ -206,28 +244,39 @@ AND outer per-block (item-array) patterns in its first shipped use.
 These need user picks at the named slice's start. **Surface at the
 right moment; do not pre-resolve here.**
 
-### Open #N5 — Word-state encoding for SHA-256 (decided at Slice 2.2)
+### Open #N5 — Word-state encoding for SHA-256 — **CLOSED 2026-05-24 (user picked (a+))**
 
-SHA-256 works on 8×32-bit BE words. Three candidates:
+SHA-256 works on 8×32-bit BE words. The plan-time framing was three
+candidates; advisor consult at Slice 2.2 start narrowed to two
+(plan-verbatim (a) was a non-option after Slice 2.1a/2.1b's TODO
+comments explicitly flagged the inline-codec duplication for
+consolidation). Final pick: **(a+) shared codec, no layout tag.**
 
-- (a) **Flat `bytes` layout with implicit BE-word interpretation in step
-  executors.** Same posture as Speck today. Simplest; layout tag is
-  the existing `"raw"`. Step executor decodes bytes → words at entry,
-  encodes back at exit. Risk: every word-aware step duplicates the
-  byte↔word codec.
-- (b) **New `word-array-be-32` layout tag on PortContract.** Advisory
-  only per Q1 hybrid posture — runtime still passes `Uint8Array`. Step
-  executors share a codec helper. Matches `matrix-cm-4x4` precedent —
-  honest about what the bytes mean. Q-gate-9 extends to validate
-  word-array round-trip through project/reconstruct.
-- (c) **New State variant `WordArrayState`.** Larger contract change;
-  the universal-port plan's whole thesis is "State variants collapse
-  to Uint8Array at the runtime layer." A new State variant would
-  contradict that. Listed for completeness; almost certainly rejected.
+- **(a+) Codec consolidation only.** Per-width BE codec + ROR helpers
+  consolidated into `src/core/word-codec.ts` covering 8/16/32/64-bit
+  widths (Speck rebuild + SHA-512 future-readiness, not just SHA-256).
+  All three port-native primitives keep `layout: "raw"`. Q-gate-9
+  "extension" becomes "shared codec proves byte-equal to removed
+  inline helpers" — the existing 26 rotate-bits-right + 28 add-mod-32
+  tests + 44 new word-codec direct tests together ARE the gate.
+- **Rejected (b) Codec consolidation + `word-array-be-32` layout tag.**
+  Under Q1 hybrid posture the tag is advisory; no Phase 2 editor /
+  graph / inspector surface reads port layout-as-data. The
+  `matrix-cm-4x4` precedent IS load-bearing — it carries State[] aux-
+  passthrough info through `port-projection.ts` — but a word-array tag
+  has no equivalent consumer today. Per-leaf "this is a 32-bit BE word"
+  prose lives in `narrationOverride` (Slice 1.10). If Phase 2.10's
+  graph view eventually needs grey-out logic between word ports and
+  raw ports, adding the tag then is one small commit.
+- **Rejected (a) Plan-verbatim, codecs stay inline.** Doubles down on
+  duplication that 2.1a/2.1b already flagged with TODO comments.
+- **Rejected (c) New State variant `WordArrayState`.** Contradicts the
+  universal-port plan's thesis that State variants collapse to
+  Uint8Array at runtime.
 
-**Forcing function:** Phase 0 findings (`port-projection.ts:299-314`)
-already TODO-mark bitvec and bigint deferral. Word-array slots into the
-same gap; Slice 2.2 makes the canonical pick.
+**Pinned principle from this slice:** *layout tags appear when a
+consumer needs them.* (a+) sets the precedent so future slices don't
+add PortContract surface area on speculation.
 
 ### Open #N4 — Per-iteration feedback/lookback contract shape (decided at Slice 2.0c)
 
@@ -878,27 +927,60 @@ the field's optionality is reachable.
 **Pass/fail gate:** KAT pins per primitive; Phase 1 matrix green.
 **(Both gates met — suite 1869/1869.)**
 
-### Slice 2.2 — Word-state encoding decision + Q-gate-9 extension
+### Slice 2.2 — Word-state encoding decision + Q-gate-9 extension — SHIPPED 2026-05-24
 
-**Goal:** resolve **Open #N5** (word-state encoding). Extend
-`port-projection.ts` + `LayoutTags` to round-trip the chosen encoding.
+**Status: GREEN 2026-05-24.** Open #N5 resolved via user pick **(a+)**:
+codec consolidation only, NO layout tag. See updated Open #N5 entry
+above for rationale.
 
-**Scope (sketched):**
+**What landed (4 files):**
 
-- User pick on (a) / (b) / (c) at slice start.
-- If (a): no changes; `rotate-bits-right` and `add-mod-32` keep `"raw"`
-  layout; word-codec helper lives in `core/word-codec.ts` shared by
-  step executors.
-- If (b): new layout tag `"word-array-be-32"` added to `LayoutTags`
-  union; `port-projection.ts::stateToBytes` / `bytesToState` handle it
-  symmetrically; `auxPortBytesToValue` extended to decode.
-- If (c): new State variant — heavyweight; deferred unless (a) and (b)
-  both fail.
-- Q-gate-9 round-trip pin extended: synthetic frame with word-array
-  layout round-trips through project/reconstruct byte-equal.
+- `src/core/word-codec.ts` (NEW) — per-width BE word codec + ROR
+  helpers at all four canonical cryptographic word widths:
+  `decodeBE8/16/32/64`, `encodeBE8/16/32/64`, `ror8/16/32/64`.
+  32-bit-and-smaller paths use `number`; 64-bit uses `bigint` because
+  JS number bit ops truncate to 32-bit. Per-width API instead of one
+  parameterized `decodeBEWord(bytes, offset, bits)` because the unified
+  return type `number | bigint` forces casts at every call site and
+  BigInt allocation on the hot 32-bit path; per-width split also lets
+  consumers with compile-time-known widths (add-mod-32) import only
+  what they need. Width coverage extends to Speck rebuild (Phase 4b
+  needs 16-bit) and SHA-512 (Phase 2c needs 64-bit).
+- `src/steps/rotate-bits-right.ts` — inline `wordMask` / `decodeBE` /
+  `encodeBE` / `ror32orSmaller` / `ror64` helpers removed; per-width
+  helpers imported from `core/word-codec.ts`. Executor's `wordBits`
+  dispatch HOISTED OUT of the per-word loop — picks the per-width
+  triple once, runs a tight composed `decode → ror → encode` loop per
+  branch. Net effect: 4 narrow loops instead of one parameterized
+  loop, each lean enough for the JIT to inline cleanly.
+- `src/steps/add-mod-32.ts` — inline `decodeBE32` / `encodeBE32`
+  removed; imported from `core/word-codec.ts`. Header comment block
+  updated to point at Slice 2.2 consolidation.
+- `tests/word-codec.test.ts` (NEW, 44 tests) — direct unit coverage at
+  every width: decode/encode KATs, decode/encode round-trip property,
+  ROR identity (n=0), ROR small-rotation KATs hand-derived from the
+  textbook formula, ROR full-rotation pair-composes-to-identity, high-
+  bit unsigned handling (the load-bearing concern for the `>>> 0`
+  coercions on 16/32-bit decode).
 
-**Pass/fail gate:** round-trip pin green; Phase 1 matrix green;
-`npm run check` green.
+**Q-gate-9 framing (as adopted):** instead of extending Q-gate-9 to a
+hypothetical `word-array-be-32` round-trip, the existing **26 rotate-
+bits-right tests + 28 add-mod-32 tests** stand as the proof that the
+shared codec produces byte-identical output to the deleted inline
+helpers. Plus the 44 new word-codec direct tests pin the codec's own
+behaviour. No separate parity-with-old-implementation test added — the
+consumer suites already exercise every code path.
+
+**Suite at 1913/1913** (+44 from word-codec). Bundle 567.76 KB gzipped
+(+~9 KB from Slice 2.1b's 558.74 KB). Phase 1 matrix untouched.
+
+**Pinned for future readers:** *layout tags appear when a consumer
+needs them.* Adding `word-array-be-32` (or `-be-16`, `-be-64`) is a
+~30-line follow-on commit if Phase 2.10's graph view eventually
+demands word-vs-raw grey-out logic. Do not add speculatively.
+
+**Next stop:** Slice 2.3 — Open #N3 (SHA-256 helpers Σ0/Σ1/Ch/Maj as
+step types vs in-spec compositions vs hybrid).
 
 ### Slice 2.3 — SHA-256 helpers (Σ0, Σ1, Ch, Maj)
 

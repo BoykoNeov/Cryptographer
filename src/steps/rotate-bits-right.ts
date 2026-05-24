@@ -16,6 +16,14 @@
  * (Slices 2.3/2.5 use it inside Σ0/Σ1/σ0/σ1 helpers and the message schedule
  * expansion) and for any future ARX cipher rebuild from medium primitives.
  *
+ * **Slice 2.2 consolidation (2026-05-24):** the inline `decodeBE` /
+ * `encodeBE` / `wordMask` / `ror32orSmaller` / `ror64` helpers that
+ * shipped with Slice 2.1a moved to `src/core/word-codec.ts` so
+ * `add-mod-32@1` (Slice 2.1b) and future SHA-256 helpers (Slice 2.3+)
+ * can share them. The executor's `wordBits` dispatch now hoists out of
+ * the per-word loop and uses per-width primitives directly, which is
+ * tighter than the previous "one parameterized helper per call" form.
+ *
  * **Authoring conventions.** Port-native (Phase 2+) steps deliberately OMIT
  * the legacy `StepDocumentation.shapeContract` — they have a richer
  * `PortContract` instead, and the legacy single-thread state shape doesn't
@@ -26,8 +34,9 @@
  * surface (Slice 2.6+ when it first wires into a real spec).
  *
  * **wordBits=64.** JavaScript's `>>>` / `<<` operators truncate to 32-bit
- * unsigned, so the 64-bit branch uses `BigInt`. The 8/16/32 branch uses
- * the plain-number `ror` helper — same pattern as `speck-round.ts`.
+ * unsigned, so the 64-bit branch uses `BigInt` (via the shared `ror64`
+ * helper which takes/returns `bigint`). The 8/16/32-bit branches stay on
+ * plain numbers via the corresponding shared per-width helpers.
  *
  * **`bits` modulo `wordBits`.** Any non-negative integer is accepted and
  * reduced modulo the word size — `bits = 32, wordBits = 32` is the identity
@@ -36,6 +45,20 @@
  */
 
 import type { Json, PortContract, PortedExecutor, StepDocumentation } from "../core/types";
+import {
+  decodeBE8,
+  decodeBE16,
+  decodeBE32,
+  decodeBE64,
+  encodeBE8,
+  encodeBE16,
+  encodeBE32,
+  encodeBE64,
+  ror8,
+  ror16,
+  ror32,
+  ror64,
+} from "../core/word-codec";
 
 // ─── Params ───────────────────────────────────────────────────────────────
 
@@ -64,65 +87,15 @@ const readParams = (params: Json): Params => {
   return { bits, wordBits: wordBits as WordBits };
 };
 
-// ─── Word codec + ROR helpers ─────────────────────────────────────────────
-// Local copies; future Slice 2.2 may consolidate into a shared
-// `core/word-codec.ts` per Open #N5. For now keeping them inline avoids a
-// new module that would host only three trivial helpers.
-
-const wordMask = (bits: number): number => (bits === 32 ? 0xffffffff : (1 << bits) - 1);
-
-/** ROR for 8/16/32-bit words via plain-number bit ops. */
-const ror32orSmaller = (x: number, n: number, bits: number): number => {
-  const mask = wordMask(bits);
-  const xm = x & mask;
-  // n is already canonicalized to [0, bits); the (bits - n) path covers
-  // n=0 too because JS `<<` truncates the shift amount mod 32 — so
-  // `xm << 32` is `xm`, and the OR with `xm >>> 0 = xm` collapses cleanly.
-  return ((xm >>> n) | (xm << (bits - n))) & mask;
-};
-
-const decodeBE = (bytes: Uint8Array, offset: number, byteCount: number): number => {
-  let v = 0;
-  for (let j = 0; j < byteCount; j++) {
-    // Cast through Number — `bytes[i]` is `number | undefined` under
-    // noUncheckedIndexedAccess, but the caller already bounds-checked.
-    v = (v << 8) | (bytes[offset + j] as number);
-  }
-  // Force unsigned 32-bit view for 4-byte decode. `<< 0` would re-introduce
-  // signed; `>>> 0` is the canonical "as unsigned" trick.
-  return v >>> 0;
-};
-
-const encodeBE = (out: Uint8Array, offset: number, word: number, byteCount: number): void => {
-  for (let j = 0; j < byteCount; j++) {
-    out[offset + j] = (word >>> (8 * (byteCount - 1 - j))) & 0xff;
-  }
-};
-
-/** 64-bit ROR via BigInt — JS number bitwise ops only cover 32 bits. */
-const ror64 = (bytes: Uint8Array, offset: number, n: number, out: Uint8Array): void => {
-  let word = 0n;
-  for (let j = 0; j < 8; j++) {
-    word = (word << 8n) | BigInt(bytes[offset + j] as number);
-  }
-  const mask = (1n << 64n) - 1n;
-  const bigN = BigInt(n);
-  // n is already canonicalized to [0, 64); BigInt has no shift-truncation
-  // so `word << 64n` is enormous, but `& mask` collapses it. The n=0 case
-  // works because `word << 64n & mask = 0n` and `word >> 0n | 0n = word`.
-  const rotated = ((word >> bigN) | (word << (64n - bigN))) & mask;
-  for (let j = 0; j < 8; j++) {
-    out[offset + j] = Number((rotated >> BigInt(8 * (7 - j))) & 0xffn);
-  }
-};
-
 // ─── Port contract + executor ─────────────────────────────────────────────
 
 export const rotateBitsRightPortContract: PortContract = {
   // Polymorphic byteLength on both ports — wiring at the consumer
   // determines the actual length, validated at execution time against the
-  // word-size invariant. `layout: "raw"` until Slice 2.2 picks the
-  // word-array encoding (Open #N5).
+  // word-size invariant. `layout: "raw"` because no UI surface in Phase 2's
+  // scope reads layout-as-data — adding a `word-array-be-32` tag would be
+  // decoration today (see Slice 2.2 / Open #N5 rationale in
+  // `src/core/word-codec.ts`).
   inputs: new Map([["input", { layout: "raw" }]]),
   outputs: new Map([["output", { layout: "raw" }]]),
 };
@@ -145,13 +118,28 @@ export const rotateBitsRight: PortedExecutor = (inputs, params, _ctx) => {
   const n = bits % wordBits;
   const out = new Uint8Array(inputBytes.length);
 
-  for (let i = 0; i < inputBytes.length; i += bytesPerWord) {
-    if (wordBits === 64) {
-      ror64(inputBytes, i, n, out);
-    } else {
-      const word = decodeBE(inputBytes, i, bytesPerWord);
-      const rotated = ror32orSmaller(word, n, wordBits);
-      encodeBE(out, i, rotated, bytesPerWord);
+  // Dispatch on wordBits OUTSIDE the loop — picks the correct per-width
+  // codec triple once, then runs a tight loop calling only that triple.
+  // Each branch is essentially the same three-statement compose
+  // (decode → ror → encode) with width-specific primitives; the 64-bit
+  // path uses BigInt because JS number bit ops truncate to 32-bit.
+  if (wordBits === 64) {
+    const bigN = BigInt(n);
+    for (let i = 0; i < inputBytes.length; i += 8) {
+      encodeBE64(out, i, ror64(decodeBE64(inputBytes, i), bigN));
+    }
+  } else if (wordBits === 32) {
+    for (let i = 0; i < inputBytes.length; i += 4) {
+      encodeBE32(out, i, ror32(decodeBE32(inputBytes, i), n));
+    }
+  } else if (wordBits === 16) {
+    for (let i = 0; i < inputBytes.length; i += 2) {
+      encodeBE16(out, i, ror16(decodeBE16(inputBytes, i), n));
+    }
+  } else {
+    // wordBits === 8
+    for (let i = 0; i < inputBytes.length; i++) {
+      encodeBE8(out, i, ror8(decodeBE8(inputBytes, i), n));
     }
   }
 
@@ -207,16 +195,19 @@ identity.
 
 ## Implementation notes
 
-The 8/16/32-bit path uses native JavaScript bit operators (\`>>> / << / |\`),
-masked to the declared word width. The 64-bit path uses \`BigInt\` because
-JS bit ops truncate to 32-bit unsigned. Both paths produce big-endian
+The 8/16/32-bit paths use native JavaScript bit operators (\`>>> / << / |\`),
+masked to the declared word width via per-width helpers in
+\`src/core/word-codec.ts\`. The 64-bit path uses \`BigInt\` because JS
+number bit ops truncate to 32-bit unsigned. All paths produce big-endian
 encoded output, matching the typical hash-function convention.
 
 ## Phase status
 
 Shipped in Slice 2.1a of the universal-port-dataflow plan as the first
-port-native step type. Not yet wired into any cipher spec — Slice 2.6's
-SHA-256 build is the first consumer.`,
+port-native step type. Codec helpers consolidated into
+\`src/core/word-codec.ts\` in Slice 2.2 alongside \`add-mod-32@1\` (Slice
+2.1b). Not yet wired into any cipher spec — Slice 2.6's SHA-256 build is
+the first consumer.`,
   params: new Map([
     [
       "bits",

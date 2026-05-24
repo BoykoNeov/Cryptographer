@@ -51,6 +51,7 @@ import type {
   PortedExecutor,
   StepDocumentation,
 } from "../core/types";
+import { decodeBE32, encodeBE32 } from "../core/word-codec";
 
 // ─── Params ───────────────────────────────────────────────────────────────
 
@@ -101,31 +102,10 @@ export const addMod32PortContract: PortContract = {
   outputs: new Map([["output", { layout: "raw" }]]),
 };
 
-// ─── BE 32-bit word codec (inline) ────────────────────────────────────────
-// Local copies; future Slice 2.2 may consolidate into a shared
-// `core/word-codec.ts` along with rotate-bits-right's identical helpers
-// (Open #N5). Keep inline until at least three primitives need it.
-
-const decodeBE32 = (bytes: Uint8Array, offset: number): number => {
-  // Bounds already checked by the caller (offset + 4 ≤ length).
-  // `>>> 0` forces unsigned 32-bit view; without it the high-bit set
-  // case (top byte ≥ 0x80) would return a negative number under JS
-  // signed-int semantics for bitwise OR.
-  return (
-    (((bytes[offset] as number) << 24) |
-      ((bytes[offset + 1] as number) << 16) |
-      ((bytes[offset + 2] as number) << 8) |
-      (bytes[offset + 3] as number)) >>>
-    0
-  );
-};
-
-const encodeBE32 = (out: Uint8Array, offset: number, word: number): void => {
-  out[offset] = (word >>> 24) & 0xff;
-  out[offset + 1] = (word >>> 16) & 0xff;
-  out[offset + 2] = (word >>> 8) & 0xff;
-  out[offset + 3] = word & 0xff;
-};
+// BE 32-bit word codec consolidated into `src/core/word-codec.ts` in
+// Slice 2.2 (2026-05-24). `decodeBE32` / `encodeBE32` are imported above
+// alongside rotate-bits-right (Slice 2.1a)'s former inline helpers — the
+// two files were the load-bearing duplication that Slice 2.2 closed.
 
 export const addMod32: PortedExecutor = (inputs, params, _ctx) => {
   const { inputCount } = readParams(params);
