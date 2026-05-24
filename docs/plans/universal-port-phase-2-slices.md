@@ -38,9 +38,29 @@
 > reset semantics (Q3) + aux snapshot+restore. Three advisor-sharpened
 > questions (Q1/Q2/Q3) replaced the plan's original (a/b/c) framing;
 > the contract is now FINAL per Invariant 3. Suite at **1791/1791**
-> (+18 new tests). Phase 1 matrix untouched. Next stop: **Slice 2.1a**
-> (`StepRegistration.legacy` optional + first port-native registration
-> via `rotate-bits-right@1`).
+> (+18 new tests). Phase 1 matrix untouched.
+> **Slice 2.1a SHIPPED 2026-05-24** — `StepRegistration` widened:
+> `legacy` AND `meta` both optional on the `kind: "ported"` variant
+> (advisor flagged the `meta`-too-must-be-optional asymmetry pre-edit).
+> Runtime hardened with TWO explicit guards: off-flag dispatch throws
+> *"step type `<type>` is port-native; requires portedDispatchEnabled:
+> true"*; on-flag dispatch throws *"port-native and requires spec
+> edge-wiring (Slice 2.6+)"* — port-native steps are reachable today
+> only via direct executor invocation in tests. First port-native step
+> `rotate-bits-right@1` ships in `src/steps/rotate-bits-right.ts` with
+> a `PortedExecutor` + `PortContract` (one in / one out, polymorphic
+> `byteLength`, `layout: "raw"`) + `StepDocumentation` (NO
+> `shapeContract`) + 26 unit tests in `tests/rotate-bits-right.test.ts`
+> covering identity / KATs across all 4 wordBits / multi-word / modulo
+> canonicalization / round-trip property / param validation / both
+> dispatch-path guards. `state-shape-contracts.test.ts` widened to skip
+> port-native registrations (`kind: "ported"` with no `legacy`); other
+> coverage tests (narration, provenance) already gated on
+> `shapeContract` so they auto-skip. Plan's hand-cited KAT
+> `0x12345678 ROR 2 = 0x80123456` was incorrect — advisor caught the
+> bug pre-implementation; KATs derived from textbook formula land on
+> `0x048D159E` instead. Suite at **1817/1817** (+26 new). Next stop:
+> **Slice 2.1b** (`xor@1` widened N-way + `add-mod-32@1`).
 >
 > **Parent plan:** [`docs/plans/universal-port-dataflow.md`](./universal-port-dataflow.md)
 > **Phase 0 findings:** [`docs/plans/universal-port-phase-0-findings.md`](./universal-port-phase-0-findings.md)

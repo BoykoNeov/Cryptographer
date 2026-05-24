@@ -45,8 +45,9 @@ Then a `CipherSpec` references the step type by string and provides params:
 
 ## Naming conventions
 
-- **`generic.<name>@1`** — operations that aren't tied to a specific cipher. Used by AES SubBytes, but also reusable for other ciphers that do byte substitution. Keep these param-driven so different ciphers can plug in different tables.
+- **`generic.<name>@1`** — operations that aren't tied to a specific cipher. Used by AES SubBytes, but also reusable for other ciphers that do byte substitution. Keep these param-driven so different ciphers can plug in different tables. Applies to legacy-shaped step types (`kind: "legacy"` and Phase 1 lifted `kind: "ported"`).
 - **`<cipher>.<name>@1`** — specific to one cipher (e.g. `aes.key-expansion@1`). The step's logic encodes cipher-specific math that can't be reduced to params.
+- **`<bare-name>@1` (no prefix)** — port-native primitives shipped under the universal-port-dataflow plan (Phase 2+, e.g. `rotate-bits-right@1`, `xor@1`, `add-mod-32@1`, future `byte-substitute@1` / `permute@1` / `gf-matrix-multiply@1`). The ABSENCE of `generic.` is the signal that this step type is port-native (PortContract, no legacy state-shape concept) AND is part of the new vocabulary that Phase 3+ rebuilds depend on. Authored as `{ kind: "ported", executor, shape, doc }` — no `legacy`, no `meta`. Per-cipher friendly names are carried via the spec leaf's `narrationOverride` field (Slice 1.10), so a rebuilt AES spec's `byte-substitute@1` leaf renders as "SubBytes" in the inspector while the palette shows the generic doc.
 - **`@1`** version suffix is mandatory. If you ever change the parameter shape or step semantics in a backwards-incompatible way, bump to `@2` and keep `@1` for old saved specs.
 
 ## Required: contracts

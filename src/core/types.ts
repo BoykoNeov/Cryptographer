@@ -784,8 +784,22 @@ export type StepRegistration =
       readonly kind: "ported";
       readonly executor: PortedExecutor;
       readonly shape: PortContract;
-      readonly meta: ProjectionMetadata;
       readonly doc: StepDocumentation;
+      /**
+       * Sidecar projection metadata that lets the runtime build inputs to
+       * a lifted-legacy ported step from the parent's State + Aux. REQUIRED
+       * for every Phase 1 ported entry (those lifted from legacy via
+       * `liftLegacyExecutor(legacy, meta)`); OPTIONAL for Phase 2+
+       * port-native entries whose inputs come purely from the spec edge
+       * graph (Slice 2.6+) rather than from a projection of legacy state.
+       *
+       * Widened to optional in Slice 2.1a alongside `legacy` becoming
+       * optional. Until spec edge-wiring lands (Slice 2.6+), the
+       * on-flag dispatch path throws an explicit "port-native step
+       * requires spec edge-wiring" error when `meta` is absent — the
+       * step is reachable only via direct executor invocation in tests.
+       */
+      readonly meta?: ProjectionMetadata;
       /**
        * Legacy-shape executor preserved alongside the lifted ported
        * executor during the Phase 1 migration window. Required for every
@@ -796,14 +810,15 @@ export type StepRegistration =
        * a step type that's been lifted.
        *
        * Phase 2 onward authors port-native executors directly; those
-       * entries genuinely have no legacy underlying. When the migration
-       * ends (Phase 5 retires the legacy contract), this field can
-       * become optional and then disappear. For now: required, holds
-       * the same function the step file's old `register` call passed
-       * as `executor`, and the lifted `executor` is built from it via
-       * `liftLegacyExecutor(legacy, meta)`.
+       * entries genuinely have no legacy underlying. Widened to optional
+       * in Slice 2.1a (universal-port plan) — port-native registrations
+       * omit it, and the runtime's off-flag dispatch path throws an
+       * explicit "step type is port-native; requires
+       * portedDispatchEnabled: true" error when a spec wires such a
+       * step. When the migration ends (Phase 5 retires the legacy
+       * contract entirely), this field disappears.
        */
-      readonly legacy: StepExecutor;
+      readonly legacy?: StepExecutor;
     };
 
 /**

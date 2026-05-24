@@ -118,6 +118,11 @@ import {
   pkcs7UnpadPortContract,
 } from "../steps/pkcs7-unpad";
 import {
+  rotateBitsRight,
+  rotateBitsRightDoc,
+  rotateBitsRightPortContract,
+} from "../steps/rotate-bits-right";
+import {
   serpentAddRoundKey,
   serpentAddRoundKeyDoc,
   serpentAddRoundKeyMeta,
@@ -672,6 +677,30 @@ export const buildDefaultRegistry = (): StepRegistry => {
     shape: desPPermutationPortContract,
     meta: desPPermutationMeta,
     doc: desPPermutationDoc,
+  });
+  // ─── Port-native primitives (universal-port plan Phase 2, Slice 2.1a+) ──
+  // Authored against the port-native contract directly — no `legacy`
+  // executor, no `meta` projection sidecar. Reachable today only via
+  // direct executor invocation in tests (no shipped cipher spec wires
+  // them yet); the runtime's on-flag dispatch path throws an explicit
+  // "requires spec edge-wiring (Slice 2.6+)" error if a spec attempts
+  // to use them before SHA-256 lands, and the off-flag path throws
+  // "requires portedDispatchEnabled: true" if a spec wires one without
+  // the flag. This block is the long-term home for primitives lifted
+  // out of cipher-specific implementations as the migration progresses.
+  //
+  // **Naming convention (intentional).** Port-native primitives drop the
+  // `generic.` prefix that every shipped step type uses today. The
+  // ABSENCE of a prefix is the signal that this step type is part of
+  // the new port-native vocabulary that Phase 3+ rebuilds will compose
+  // from. Per-cipher friendly names ride along via the spec leaf's
+  // `narrationOverride` field. See `src/steps/CLAUDE.md` "Naming
+  // conventions" for the full rule.
+  r.register("rotate-bits-right@1", {
+    kind: "ported",
+    executor: rotateBitsRight,
+    shape: rotateBitsRightPortContract,
+    doc: rotateBitsRightDoc,
   });
   return r;
 };

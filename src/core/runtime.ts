@@ -19,6 +19,7 @@ import type {
   ForEachSubgraphNode,
   ForEachSubgraphWithHistoryNode,
   State,
+  StepExecutor,
   StepNode,
   Trace,
   TraceFrame,
@@ -246,6 +247,17 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
       let auxWritten: Map<string, AuxValue>;
 
       if (portedDispatch && registration.kind === "ported") {
+        // Port-native registrations (Phase 2 onward, post Slice 2.1a)
+        // ship without `meta` because their inputs come from the spec's
+        // edge graph (Slice 2.6+ wires this) rather than from a
+        // projection of the parent's State + Aux. Until that wiring
+        // lands, hitting one of these on the dispatch path is a wiring
+        // bug — surface it explicitly rather than null-deref `.meta`.
+        if (registration.meta === undefined) {
+          throw new Error(
+            `step type "${node.type}" is port-native and requires spec edge-wiring (universal-port plan Phase 2 Slice 2.6+); reachable today only via direct executor invocation`,
+          );
+        }
         const meta = registration.meta;
         // ── Ported execution path ─────────────────────────────────────
         const inputs = new Map<string, Uint8Array>();
@@ -451,8 +463,27 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
         // window. Frame-parity tests run a ported-registered step type
         // under BOTH dispatch flag values; this is the path the off-flag
         // half takes.
-        const executor =
-          registration.kind === "ported" ? registration.legacy : registration.executor;
+        //
+        // Slice 2.1a (universal-port plan): port-native registrations
+        // omit `legacy` entirely — they have no single-thread shape
+        // executor to fall back to. Hitting one of these here means a
+        // spec wired a port-native step but the caller forgot to enable
+        // `portedDispatchEnabled: true`. Surface it with the exact
+        // message the slice's test pins.
+        // Resolve the legacy-shape executor up-front so the narrowing is
+        // obvious to TS: the compound `kind === "ported" && legacy ===
+        // undefined` guard above doesn't propagate through the ternary.
+        let executor: StepExecutor;
+        if (registration.kind === "ported") {
+          if (registration.legacy === undefined) {
+            throw new Error(
+              `step type "${node.type}" is port-native; requires portedDispatchEnabled: true`,
+            );
+          }
+          executor = registration.legacy;
+        } else {
+          executor = registration.executor;
+        }
         const result = executor(state, node.params, {
           stepId: node.id,
           path,
