@@ -25,6 +25,12 @@ import {
 } from "../steps/append-be64-length";
 import { auxCopy, auxCopyDoc, auxCopyMeta, auxCopyPortContract } from "../steps/aux-copy";
 import { auxLoad, auxLoadDoc, auxLoadMeta, auxLoadPortContract } from "../steps/aux-load";
+import {
+  auxLoadBytes,
+  auxLoadBytesDoc,
+  auxLoadBytesMeta,
+  auxLoadBytesPortContract,
+} from "../steps/aux-load-bytes";
 import { auxXor, auxXorDoc, auxXorMeta, auxXorPortContract } from "../steps/aux-xor";
 import {
   byteSubstitution,
@@ -892,6 +898,32 @@ export const buildDefaultRegistry = (): StepRegistry => {
     shape: bytesToStatePortContract,
     meta: bytesToStateMeta,
     doc: bytesToStateDoc,
+  });
+  // ─── Aux→port bridge (Slice 2.6d — universal-port plan) ────────────────
+  // `aux-load-bytes@1`: read bytes from `aux[params.auxName]` and emit
+  // them on the `output` port. Same hybrid registration shape as
+  // `state-to-bytes@1` / `bytes-to-state@1` — `kind: "ported"` with `meta`
+  // but NO `legacy` executor. The runtime sees `meta.auxReadPorts` and
+  // projects `aux[auxName]` into the `input` port BEFORE the executor
+  // runs; the executor itself is identity-on-port. First consumers: the
+  // decomposed SHA-256 spec's per-round K-table read, the final-add
+  // step's H-table read, and (under user pick Q1 = (b)) the per-round
+  // W-table read.
+  //
+  // **Hybrid shape rationale.** Pure port-native primitives describe
+  // their surface entirely via PortContract — they have no built-in
+  // access to aux. Lifting aux access via metadata (the same path
+  // `iv-load` / `aux-load` use, except those are lifted-legacy) keeps
+  // "what bytes flow through" (the port layer) orthogonal from "what
+  // aux keys are read" (the projection metadata). Spec authors stay in
+  // the port-native dataflow surface; the metadata is invisible to the
+  // wiring grammar.
+  r.register("aux-load-bytes@1", {
+    kind: "ported",
+    executor: auxLoadBytes,
+    shape: auxLoadBytesPortContract,
+    meta: auxLoadBytesMeta,
+    doc: auxLoadBytesDoc,
   });
   // ─── SHA-256-specific helpers (Slice 2.6b — universal-port plan) ───────
   // Three SHA-256-specific lifted-legacy steps. Re-scope discovery
