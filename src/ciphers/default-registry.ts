@@ -230,6 +230,7 @@ import {
   splitBlocksMeta,
   splitBlocksPortContract,
 } from "../steps/split-blocks";
+import { splitBytes, splitBytesDoc, splitBytesPortContract } from "../steps/split-bytes";
 import {
   stateToAux,
   stateToAuxDoc,
@@ -940,6 +941,21 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: byteSlice,
     shape: byteSlicePortContract,
     doc: byteSliceDoc,
+  });
+  // `split-bytes@1`: symmetric inverse of `concat@1`. One input port,
+  // N output ports named `output0`..`output{N-1}`. Each output's
+  // byteLength comes from the corresponding entry in `params.widths`;
+  // input byteLength = sum(widths). Pure port-native — no `meta`, no
+  // `legacy`. First consumers: SHA-256's per-round working-variable
+  // extraction (32 bytes → 8 × 4-byte words a..h) and the final-add
+  // step's H-table extraction (32 bytes → H_0..H_7). Symmetric N-way at
+  // offset 0 is the ergonomic case here; arbitrary-offset single-range
+  // extraction is `byte-slice@1`'s job.
+  r.register("split-bytes@1", {
+    kind: "ported",
+    executor: splitBytes,
+    shape: splitBytesPortContract,
+    doc: splitBytesDoc,
   });
   // ─── SHA-256-specific helpers (Slice 2.6b — universal-port plan) ───────
   // Three SHA-256-specific lifted-legacy steps. Re-scope discovery
