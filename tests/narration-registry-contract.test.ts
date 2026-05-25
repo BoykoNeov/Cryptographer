@@ -137,8 +137,9 @@ describe("narration-registry coverage contract", () => {
     expect(NARRATION_NO_OP_ALLOWLIST.has("serpent.bit-permutation@1")).toBe(false);
   });
 
-  it("allowlist size: 6 irreducible + 1 toy entry + 1 DES key-schedule entry", () => {
-    // Pins the current size after Phase 4 of `docs/plans/des-feistel.md`:
+  it("allowlist size: 6 irreducible + 1 toy entry + 1 DES key-schedule entry + 3 SHA-256 helpers", () => {
+    // Pins the current size after Phase 4 of `docs/plans/des-feistel.md`
+    // + Slice 2.6b of `docs/plans/universal-port-dataflow.md`:
     //   - 6 permanent entries (4 key-expansion step types covered by
     //     `<KeyScheduleExplorer />`, plus the 2 bit-level Serpent linear
     //     transforms whose byte-level prose would mislead).
@@ -151,9 +152,16 @@ describe("narration-registry coverage contract", () => {
     //     The future `DesKeyScheduleSimulator` (Phase 5e) replaces
     //     `<FrameStateView />` for this step, matching how AES / Serpent
     //     key expansions are handled.
-    expect(NARRATION_NO_OP_ALLOWLIST.size).toBe(8);
+    //   - Three SHA-256 coarse-granularity helpers
+    //     (`sha2.message-schedule-step@1`, `sha2.compression-round@1`,
+    //     `sha2.final-add@1`) shipped in Slice 2.6b. The Slice 2.6d
+    //     decomposition into port-native primitives retires these.
+    expect(NARRATION_NO_OP_ALLOWLIST.size).toBe(11);
     expect(NARRATION_NO_OP_ALLOWLIST.has("feistel.toy-add-k@1")).toBe(true);
     expect(NARRATION_NO_OP_ALLOWLIST.has("des.key-schedule@1")).toBe(true);
+    expect(NARRATION_NO_OP_ALLOWLIST.has("sha2.message-schedule-step@1")).toBe(true);
+    expect(NARRATION_NO_OP_ALLOWLIST.has("sha2.compression-round@1")).toBe(true);
+    expect(NARRATION_NO_OP_ALLOWLIST.has("sha2.final-add@1")).toBe(true);
     // Negative assertion: the 6 round-body DES step types must NOT be on
     // the allowlist after Phase 4 (would mean we forgot to register a
     // narrator and the contract test's coverage check would lie).

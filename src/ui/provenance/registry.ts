@@ -171,6 +171,25 @@ export const PROVENANCE_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
   // is not in the cipher selector), so no cell-hover provenance is
   // needed. Removed when the toy is decommissioned.
   "feistel.toy-add-k@1",
+  // SHA-256 coarse-granularity helpers (universal-port plan Phase 2
+  // Slice 2.6b, 2026-05-25). Each helper executes one mathematically
+  // dense operation (W_t recurrence, 32-bit working-variable shuffle, or
+  // per-word modular add) over a wide state buffer (4..288 bytes). A
+  // per-byte provenance view would either:
+  //   (a) be vacuous — every output byte technically depends on every
+  //       input byte for σ0/σ1/Σ0/Σ1, defeating the "where did this
+  //       come from" pedagogy; or
+  //   (b) require cipher-specific bit-level provenance fns that don't
+  //       fit the per-byte ProvenanceCell shape today.
+  //
+  // Cipher-specific provenance lands in Slice 2.6d (post-decomposition,
+  // where each rotate/xor/and/not chip has clear cell-level provenance).
+  // The Slice 2.5 sha256-helpers + sha256-message-schedule tests pin the
+  // math at the right granularity for now; the live inspector falls back
+  // to default doc/narration for these leaves.
+  "sha2.message-schedule-step@1",
+  "sha2.compression-round@1",
+  "sha2.final-add@1",
 ]);
 
 /**

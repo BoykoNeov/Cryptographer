@@ -32,7 +32,14 @@ import {
   byteSubstitutionMeta,
   byteSubstitutionPortContract,
 } from "../steps/byte-substitution";
+import {
+  bytesToState,
+  bytesToStateDoc,
+  bytesToStateMeta,
+  bytesToStatePortContract,
+} from "../steps/bytes-to-state";
 import { computeBlockCount, computeBlockCountDoc } from "../steps/compute-block-count";
+import { concat, concatDoc, concatPortContract } from "../steps/concat";
 import {
   concatBlocks,
   concatBlocksDoc,
@@ -169,6 +176,24 @@ import {
   serpentSubBytesPortContract,
 } from "../steps/serpent-sub-bytes";
 import {
+  sha2CompressionRound,
+  sha2CompressionRoundDoc,
+  sha2CompressionRoundMeta,
+  sha2CompressionRoundPortContract,
+} from "../steps/sha2-compression-round";
+import {
+  sha2FinalAdd,
+  sha2FinalAddDoc,
+  sha2FinalAddMeta,
+  sha2FinalAddPortContract,
+} from "../steps/sha2-final-add";
+import {
+  sha2MessageScheduleStep,
+  sha2MessageScheduleStepDoc,
+  sha2MessageScheduleStepMeta,
+  sha2MessageScheduleStepPortContract,
+} from "../steps/sha2-message-schedule-step";
+import {
   shiftBitsRight,
   shiftBitsRightDoc,
   shiftBitsRightPortContract,
@@ -204,6 +229,12 @@ import {
   stateToAuxMeta,
   stateToAuxPortContract,
 } from "../steps/state-to-aux";
+import {
+  stateToBytes,
+  stateToBytesDoc,
+  stateToBytesMeta,
+  stateToBytesPortContract,
+} from "../steps/state-to-bytes";
 import { storeBlock, storeBlockDoc } from "../steps/store-block";
 import { xor, xorDoc, xorPortContract } from "../steps/xor";
 import {
@@ -816,6 +847,87 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: shiftBitsRight,
     shape: shiftBitsRightPortContract,
     doc: shiftBitsRightDoc,
+  });
+  // ─── Port-native bridges (Slice 2.6b — universal-port plan) ────────────
+  // Three port-native primitives that bridge between the port-native
+  // dataflow surface and the runtime `state` variable.
+  //
+  // `concat@1`: N-way byte concatenation — N input ports, one output port
+  // whose byteLength is the sum of input byteLengths. Pure port-native
+  // (no meta). First consumer: SHA-256's H||W state assembly between
+  // message schedule and compression.
+  //
+  // `state-to-bytes@1` + `bytes-to-state@1`: symmetric pair bridging
+  // `state` ↔ port. Registered as `kind: "ported"` with `meta` but NO
+  // `legacy` — they exercise the hybrid "port-native + projection
+  // metadata" shape Slice 2.1a's contract widening enabled. The runtime
+  // uses `meta.stateInputPort` / `meta.stateOutputPort` to drive the
+  // state read/write at leaf invocation; the executor itself is identity
+  // passthrough on the port layer (state plumbing is a runtime concern,
+  // not an executor concern).
+  //
+  // Why bridges rather than widening port-native primitives: pure port-
+  // native primitives describe their surface entirely via PortContract.
+  // Adding state read/write capabilities would conflate "what bytes flow
+  // through" (the port layer) with "side effects on runtime state" (a
+  // separate axis). The bridge primitives keep those axes orthogonal —
+  // any port-native chain can opt into state interactions by composing
+  // with these bridges at its boundaries.
+  r.register("concat@1", {
+    kind: "ported",
+    executor: concat,
+    shape: concatPortContract,
+    doc: concatDoc,
+  });
+  r.register("state-to-bytes@1", {
+    kind: "ported",
+    executor: stateToBytes,
+    shape: stateToBytesPortContract,
+    meta: stateToBytesMeta,
+    doc: stateToBytesDoc,
+  });
+  r.register("bytes-to-state@1", {
+    kind: "ported",
+    executor: bytesToState,
+    shape: bytesToStatePortContract,
+    meta: bytesToStateMeta,
+    doc: bytesToStateDoc,
+  });
+  // ─── SHA-256-specific helpers (Slice 2.6b — universal-port plan) ───────
+  // Three SHA-256-specific lifted-legacy steps. Re-scope discovery
+  // (2026-05-25): expressing SHA-256's schedule + compression as port-
+  // native compositions of the universal vocabulary (rotate/shift/xor/add
+  // /and/not) requires bridge primitives that don't yet exist (aux-key →
+  // port input, slice/index ports, multi-output container ports). Slice
+  // 2.6b re-scoped to ship the cipher at coarser granularity using these
+  // helpers; Slice 2.6c plans the bridge vocabulary, 2.6d decomposes.
+  //
+  // The math inside each helper is byte-identical to FIPS 180-4 — pinned
+  // independently by the Slice 2.3/2.5 test suites (sha256-helpers,
+  // sha256-message-schedule) which already verify the composition form.
+  r.register("sha2.message-schedule-step@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(sha2MessageScheduleStep, sha2MessageScheduleStepMeta),
+    legacy: sha2MessageScheduleStep,
+    shape: sha2MessageScheduleStepPortContract,
+    meta: sha2MessageScheduleStepMeta,
+    doc: sha2MessageScheduleStepDoc,
+  });
+  r.register("sha2.compression-round@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(sha2CompressionRound, sha2CompressionRoundMeta),
+    legacy: sha2CompressionRound,
+    shape: sha2CompressionRoundPortContract,
+    meta: sha2CompressionRoundMeta,
+    doc: sha2CompressionRoundDoc,
+  });
+  r.register("sha2.final-add@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(sha2FinalAdd, sha2FinalAddMeta),
+    legacy: sha2FinalAdd,
+    shape: sha2FinalAddPortContract,
+    meta: sha2FinalAddMeta,
+    doc: sha2FinalAddDoc,
   });
   return r;
 };

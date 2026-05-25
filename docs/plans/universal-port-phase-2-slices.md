@@ -4,7 +4,10 @@
 > GREEN 2026-05-24 + Slice 2.0b-ii GREEN 2026-05-24 + Slice 2.0c GREEN
 > 2026-05-24 + Slice 2.1a GREEN 2026-05-24 + Slice 2.1b GREEN 2026-05-24
 > + Slice 2.2 GREEN 2026-05-24 + Slice 2.3 GREEN 2026-05-24
-> + Slice 2.4 GREEN 2026-05-24 + Slice 2.5 GREEN 2026-05-25.** Drafted after Phase 1 closed (1748/1748 tests, all 13
+> + Slice 2.4 GREEN 2026-05-24 + Slice 2.5 GREEN 2026-05-25 + Slice 2.6a
+> GREEN 2026-05-25 + **Slice 2.6b GREEN 2026-05-25 (re-scoped — see
+> Slice 2.6b status section below for the discovery + decision)**.**
+> Drafted after Phase 1 closed (1748/1748 tests, all 13
 > sub-slices + caveat 1+3 follow-up green) and two advisor consults
 > framed the Phase 2 surface.
 > Slice 2.0a's four contract-design questions resolved + SHIPPED (suite
@@ -1525,38 +1528,194 @@ via builder helper, KAT against FIPS 180-4 §A.1 "abc". Open #N9
 spine-termination user pick surfaces when graph view first renders
 SHA-256 compression.
 
-### Slice 2.6b — Author SHA-256 spec + first end-to-end "abc" KAT
+### Slice 2.6b — Author SHA-256 spec + first end-to-end "abc" KAT — SHIPPED 2026-05-25
 
-**Goal:** on top of 2.6a's edge-wiring foundation, build the SHA-256
-spec via a builder helper and run the FIPS 180-4 §A.1 "abc" KAT.
-First port-native cipher.
+**Status: GREEN 2026-05-25 (RE-SCOPED).** First port-native cipher. Suite
+at **2195/2195** (+87 from 2.6a's 2108 — 40 bridge primitive tests, 9
+message-schedule-step tests, 10 compression-round tests, 12 final-add
+tests, 15 SHA-256 cipher tests, 1 narration-allowlist contract update).
+Bundle **613.66 KB** gzipped (+20.78 KB from 2.6a's 592.88 KB).
+
+**Re-scope discovery + decision** (2026-05-25, mid-orientation). The
+original plan prose framed Slice 2.6b as "compression function body (64
+rounds): T1 = h + Σ1(e) + Ch(e,f,g) + K_t + W_t … ~600 frames per block"
+with port-native compositions of `rotate-bits-right` / `shift-bits-right`
+/ `xor` / `add-mod-32` / `and` / `not`. Orientation across `runtime.ts`
++ `port-projection.ts` surfaced **five architectural gaps** that would
+need bridge primitives or runtime contract changes to express SHA-256
+as port-native compositions in this slice:
+
+1. **State-write at the end** — pure port-native leaves don't update
+   `state` (no `meta.stateOutputPort`); final hash bytes wouldn't reach
+   `trace.finalState`.
+2. **State-read at the start** — pure port-native leaves don't read
+   `state`; plaintext can't enter a port-native chain.
+3. **Aux-read in FES-with-history body** — port-native primitives can't
+   read `aux["prior-N"]` keys populated by the runtime.
+4. **State-slicing for compression-round inputs** — no primitive slices
+   a 4-byte word from a longer buffer.
+5. **Concat for assembly** — needed for H||W state composition.
+
+Together these are "more than one slice of work — a plumbing-vocabulary
+slice we haven't planned for" (advisor consult 2026-05-25). Per
+[[feedback_iterative_slice_review]] and the project's slice-discipline
+norm (one design surface per slice), re-scoped 2.6b to ship SHA-256 at
+**coarser step granularity** — three SHA-256-specific lifted-legacy
+helper steps that internally do the math — pinning the KAT and getting
+the cipher visible end-to-end. Decomposition into port-native
+compositions is split into Slices **2.6c** (design the bridge
+vocabulary) and **2.6d** (replace helpers with compositions). Slice
+2.3's "(b) Compositions" pick stands at test/helper level; the spec
+just uses coarser leaves until 2.6d.
+
+**User picks locked at slice start** (2026-05-25):
+
+- **Q-2.6b-1 (compression topology) = (A) Hand-rolled 64 round groups.**
+  Builder emits one round group per round, each with its own
+  compression-round leaf carrying `roundIndex` param. ~640 leaves for
+  compression alone but builder code stays ~50 lines. Sidesteps Open
+  #N9 entirely (no compression FES). Rejected: (B) FES state-thread
+  loop (would force 3 new runtime mechanisms in one slice); (C)
+  cipher-specific compression-round step type with `roundIndex` param
+  (walks back Phase 1's eliminate-cipher-specific-steps arc — Slice
+  2.6b ships this anyway per the re-scope, framed as "interim coarse
+  granularity, retired in 2.6d").
+- **Q-2.6b-2 (KAT scope) = Single-block "abc" only.** Multi-block KAT
+  deferred to Slice 2.11's KAT matrix. Spec has no outer per-block FES
+  wrapping; message-length must fit one 64-byte block.
+- **Q-2.6b-3 (new primitives) = α + ship state-to-bytes too.** Three
+  port-native bridges: `concat@1` (N-way concatenation), `bytes-to-
+  state@1` (port → state via meta.stateOutputPort), `state-to-bytes@1`
+  (state → port via meta.stateInputPort, symmetric counterpart). Cover
+  the load-bearing gaps 1, 2, 5 from the discovery list above. Gaps 3
+  + 4 (aux-to-port + state-slice) are deferred to Slice 2.6c+d via the
+  helper-step approach.
+
+**What ships (10 files + plan + docs):**
+
+- `src/steps/bytes-to-state.ts` (NEW, ~180 lines) — port-native + meta.
+- `src/steps/state-to-bytes.ts` (NEW, ~165 lines) — port-native + meta.
+- `src/steps/concat.ts` (NEW, ~190 lines) — port-native N-way concat.
+- `src/steps/sha2-message-schedule-step.ts` (NEW, ~220 lines) — lifted-
+  legacy body leaf for FES-with-history; reads aux["prior-2,7,15,16"],
+  computes σ1(p2) + p7 + σ0(p15) + p16 (mod 2^32).
+- `src/steps/sha2-compression-round.ts` (NEW, ~250 lines) — lifted-
+  legacy per-round leaf with `params.roundIndex`. Reads 288-byte state
+  (working_vars[0..32] || W[32..288]) and aux["K"]. Implements T1/T2/
+  shuffle. Writes new 288-byte state.
+- `src/steps/sha2-final-add.ts` (NEW, ~165 lines) — lifted-legacy
+  asymmetric (288→32 byte) state transform. Adds aux["H"] to working
+  vars per word, emits 32-byte hash.
+- `src/ciphers/sha-256.ts` (NEW, ~225 lines) — spec builder. Topology:
+  state-to-bytes → pad → length-append → bytes-to-state → FES-with-
+  history(48) → aux-load("H") → aux-load("K") → state-to-bytes(W) →
+  constant-load(H) → concat(H||W) → bytes-to-state → 64 round groups
+  → final-add. Single-block scope.
+- `src/ciphers/default-registry.ts` — 6 new imports + 6 new
+  `r.register(...)` blocks under new "Port-native bridges" and
+  "SHA-256-specific helpers" sections.
+- `src/ui/provenance/registry.ts` — 3 new entries on
+  `PROVENANCE_NO_OP_ALLOWLIST` for the SHA-256 helpers (per-byte
+  provenance vacuous or bit-level-dependent; lands in 2.6d after
+  decomposition).
+- `src/ui/narration/registry.ts` — 3 new entries on
+  `NARRATION_NO_OP_ALLOWLIST` (same rationale).
+- 7 test files: `tests/bytes-to-state.test.ts` (12), `state-to-
+  bytes.test.ts` (8), `concat.test.ts` (20), `sha2-message-schedule-
+  step.test.ts` (9), `sha2-compression-round.test.ts` (10),
+  `sha2-final-add.test.ts` (12), `sha-256.test.ts` (15).
+- `tests/narration-registry-contract.test.ts` — allowlist size pin
+  updated from 8 → 11.
+
+**KAT exit gate — MET:**
+
+```
+SHA-256("abc") = ba7816bf 8f01cfea 414140de 5dae2223
+                  b00361a3 96177a9c b410ff61 f20015ad
+```
+
+Matches FIPS 180-4 §A.1 byte-equal. Cross-checked against `node:crypto.
+createHash("sha256")` for 6 messages (empty, 0x00, 0xff, "a", "abc",
+55-byte deterministic — covering the single-block range 0–55 bytes).
+Frame count per run: **123** (4 preprocessing + 48 schedule iterations
++ 6 H/K/W/concat/bridge leaves + 64 compression rounds + 1 final-add).
+
+**What disappears under (A) and the re-scope:**
+
+- Open #N9 (spine-termination at FES boundary for state-thread mode):
+  no compression FES in 2.6b's topology, no surface for the bug. Future
+  use of state-thread FES (Slice 2.6d if it's the chosen decomposition
+  shape, or SHA-3/BLAKE2 in their own phases) will reopen.
+- Slice 2.0a's state-thread FES mode: validated by its toy fixture only;
+  no shipped cipher uses it. The toy lives on; future hash work picks
+  it up.
+
+**Trace-shape preservation, deliberate.** Each helper leaf produces ONE
+frame. Frame total = 123 for "abc" (vs the plan-prose estimate ~600);
+trace stays bisectable. After 2.6d's decomposition the count will
+balloon, justifying the hierarchical-trace deferral (Phase 2 Q3-frame
+pick).
+
+### Slice 2.6c — Design the bridge vocabulary for in-spec SHA-256 decomposition
+
+**Goal:** plan-only slice. Identify the bridge primitives + runtime
+mechanisms 2.6d needs to express SHA-256's helpers as port-native
+compositions. NO cipher work ships in 2.6c.
 
 **Scope (sketched):**
 
-- Compression function body (64 rounds): T1 = h + Σ1(e) + Ch(e,f,g) +
-  K_t + W_t; T2 = Σ0(a) + Maj(a,b,c); h=g, g=f, f=e, e=d+T1, d=c, c=b,
-  b=a, a=T1+T2.
-- After compression: 8-way add-mod-32 of working variables (a..h) into
-  hash state (H_0..H_7).
-- Outer per-block loop (`for-each-subgraph` item-array per Slice 2.0b
-  / state-thread per Slice 2.0a — exact mode picked at slice start
-  based on the topology that emerges). Outer state-thread = running
-  hash state H_0..H_7 across blocks.
-- Cipher spec authored at `src/ciphers/sha-256.ts` via builder helpers
-  (e.g., `buildCompressionRound(t: number)`) per the user pick on
-  authoring style. Saved-document JSON is fully expanded; helpers
-  exist only at spec-construction time.
-- KAT test: `tests/sha-256.test.ts` runs single-block "abc" KAT
-  (FIPS 180-4 §A.1, expected
-  `ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad`).
-- Open #N9 user pick surfaces mid-slice when graph view first renders
-  SHA-256 compression and the spine-suppression-at-for-each-subgraph
-  boundary bug becomes visible.
+- Identify a primitive for reading aux into a port input (today: no
+  port-native primitive can read aux). Candidates:
+  - (α) `aux-to-bytes@1` lifted-legacy with meta.auxReadPorts.
+  - (β) Runtime contract change: FES-with-history publishes
+    `aux["prior-N"]` values as synthetic node outputs the body can wire
+    to via portInputs (cross-scope wiring).
+  - (γ) Generalize `auxReadPorts` projection so pure port-native leaves
+    can declare aux bindings via meta even without state I/O.
+- Identify a primitive for slicing N bytes at offset M from a longer
+  input. Candidates:
+  - `byte-slice@1` (params: offset, length); polymorphic input
+    byteLength, exact output byteLength.
+- Identify if cross-scope wiring is needed (e.g., compression-body
+  leaves wiring to message-schedule's per-iteration outputs). Today's
+  scope-local `nodeOutputs` would block this — Slice 2.6a's "same-
+  scope only" rule needs widening.
+- Consider whether `for-each-subgraph` should expose per-iteration aux
+  values on declared output ports (so a downstream consumer can wire
+  to "iteration 17's prior-2" by port name).
+- Each candidate primitive: estimate LOC, surface scope, and impact on
+  existing primitives' contracts.
 
-**Pass/fail gate:** "abc" KAT passes byte-equal; per-frame trace exists
-for every leaf execution (compression: 64 rounds × ~8 ops + helpers;
-message schedule: 48 rounds × ~4 ops; padding + final = ~600 frames
-per block).
+**Pass/fail gate:** plan-document update at `docs/plans/universal-port-
+phase-2-slices.md` includes a Slice 2.6c "Design" section with explicit
+candidate vocabulary, user picks resolved, and the topology sketch for
+2.6d. No code lands.
+
+### Slice 2.6d — Decompose SHA-256 helpers into port-native compositions
+
+**Goal:** replace `sha2.message-schedule-step@1`, `sha2.compression-
+round@1`, `sha2.final-add@1` with in-spec compositions of port-native
+primitives (rotate/shift/xor/and/not/add + the bridges shipped in 2.6b
++ the bridges designed in 2.6c).
+
+**Scope (sketched, firmed at slice start after 2.6c):**
+
+- Per-round Σ0/Σ1/Ch/Maj expressed as chains of rotate-bits-right +
+  xor + and + not + add-mod-32 + the new slice primitive.
+- σ0/σ1 expressed as chains of rotate-bits-right + shift-bits-right +
+  xor (per Slice 2.5's emulation form).
+- Final-add expressed as 8 × 2-way add-mod-32 + concat → bytes-to-state.
+- Three SHA-256-specific helpers DEPRECATE — they stay registered for
+  backward compatibility with saved documents but the SHA-256 spec
+  switches to the decomposed form.
+- All existing tests stay green — bytes are identical to 2.6b's
+  output. Suite gains decomposition-specific assertions that pin the
+  per-helper sub-frames.
+
+**Pass/fail gate:** the "abc" KAT continues to pass byte-equal under
+the decomposed spec; trace frame count grows substantially (target:
+~3000–4000 frames per run, validating the hierarchical-trace
+deferral); validateShapes still emits zero warnings.
 
 ### Slice 2.7 — Spec-level `requiresPortedDispatch` opt-in plumbing
 

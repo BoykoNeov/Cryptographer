@@ -191,6 +191,21 @@ export const NARRATION_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
   // PC-2 walk; the explorer view that replaces FrameStateView is the
   // right one, matching how AES and Serpent key expansions are handled.
   "des.key-schedule@1",
+  // SHA-256 coarse-granularity helpers (universal-port plan Phase 2
+  // Slice 2.6b, 2026-05-25). Each helper executes dense algebra over a
+  // wide state buffer — narrating per-byte at this granularity would be
+  // either vacuous ("every byte depends on every input byte") or would
+  // need to be a multi-stage explorer view (per-round T1/T2 breakdown,
+  // similar to KeyScheduleExplorer's per-stage AES walk). Slice 2.6d
+  // ships the in-spec decomposition; once each rotate/xor/and/not chip
+  // exists as its own leaf in the spec, the existing port-native step
+  // narration carries the load and these black-box helpers retire.
+  //
+  // Until then, the inspector falls back to the helper's `detail` doc
+  // string, which gives the FIPS-spec-citing prose at frame granularity.
+  "sha2.message-schedule-step@1",
+  "sha2.compression-round@1",
+  "sha2.final-add@1",
 ]);
 
 /**
