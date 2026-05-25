@@ -2060,6 +2060,81 @@ warnings, parity test green.
 
 ### Slice 2.6d — Decompose SHA-256 helpers into port-native compositions
 
+> **Status: SHIPPED 2026-05-25** — all 5 commits + this doc-only close
+> commit landed. 6 commits total in slice (commits `17aee30`, `a96d51a`,
+> `293d30d`, `f80f08d`, `02a3496` + this doc commit). Suite at
+> **2255/2255 tests** (+74 vs 2.6c's 2195). Bundle 627.46 KB (+13.8 KB).
+> SHA-256 KAT continues to pass byte-equal; frame count grew 123 → 2487
+> (~20× pedagogy payoff). Live spec uses ZERO sha2.* helpers; they stay
+> registered + allowlisted per user pick Q2.
+>
+> **User picks locked 2026-05-25 (advisor consultation pre-slice):**
+> - **Q1 (W passthrough) = (b) W in aux entirely.** The 2.6c topology
+>   sketch in section A.2 carried two correctness bugs the advisor
+>   caught: zero-width split-bytes outputs at t=0/t=63 (collided with
+>   D.3's "each width ≥ 1") AND W_0..W_{t-1} loss after round t (the
+>   `_` skip slice was discarded so the 9-way concat had nothing to
+>   pass through the unused W tail). Both eliminated by routing W
+>   through aux: schedule exit publishes state (256 bytes) to aux["W"]
+>   via a new bytes-shape sibling of `generic.state-to-aux@1`; each
+>   compression round reads it via `aux-load-bytes@1` + `byte-slice@1`
+>   (parallel to K_t). State during compression carries only the
+>   32-byte working_vars.
+> - **Q2 (helper retirement) = keep registered + allowlisted.** The
+>   2.6c plan F.3 prose ("allowlist shrinks 11 → 8") was contradicted
+>   by the main scope's "stay registered for backward compatibility";
+>   the narration-registry-contract test walks the registry, so
+>   retiring from the allowlist without adding narrators would have
+>   broken CI. Resolution: the 3 sha2.* helpers stay both registered
+>   AND on the allowlist; the LIVE spec just stops referencing them.
+>   The decomposition parity test (Slice 2.6d step 5) pins legacy ≡
+>   decomposed ≡ node:crypto on all 6 KAT inputs as the long-term
+>   regression net.
+>
+> **Topology refinement (vs. 2.6c section A):**
+> - The 4th primitive question (W publishing under (b)) resolved via
+>   the existing `generic.state-to-aux@1`. Just needed a bytes-shape
+>   sibling (`stateToAuxBytesMeta` + `stateToAuxBytesPortContract`)
+>   registered as `generic.state-to-aux-bytes@1`. Same legacy executor
+>   (cloneState is shape-generic per `src/core/state/clone.ts`); the
+>   matrix variant stays unchanged for AES-CBC. Three new primitives
+>   shipped (aux-load-bytes, byte-slice, split-bytes) + this small
+>   bytes-shape registration = total new shipping surface.
+> - Frame count came in at **2487** (vs. 2.6c's 2293 estimate). The
+>   ~200-frame delta is the per-round W read pair (aux-load-bytes
+>   "fetch-W" + byte-slice "W_t") that 2.6c hadn't fully accounted for
+>   — it folds K and W under one consistent pattern. Inside the
+>   2100–3500 plan range.
+>
+> **Param-name gotcha caught during step 4:**
+> - `rotate-bits-right@1` and `shift-bits-right@1` use param key
+>   `bits` (NOT `shift`); both have NO `byteLength` param (polymorphic
+>   PortContract).
+> - `add-mod-32@1`, `xor@1`, `and@1`, `concat@1` use param key
+>   `inputCount`; none have `byteLength`.
+> - `not@1` takes empty params.
+> - First wave of test failures all had the same root cause (param
+>   name mismatch). Documented here so the next port-native composer
+>   doesn't re-trip.
+>
+> **Deferred from this slice (not blockers):**
+> - **Default-collapse for the 64 round groups.** 2.6c plan F.1 flagged
+>   this as a "concern for slice-start review"; correctness is intact
+>   without it (the rewrite ships byte-equal), but graph-view first-
+>   render readability with 1792+ chips would benefit. Layout store
+>   changes for per-spec-id default collapse. Follow-up commit.
+> - **narrationOverride content for SHA-256 leaves.** Slice 2.8's job.
+>   The live spec currently uses default doc strings for every
+>   decomposed leaf; cipher-specific prose (e.g., "Round 5: T1 = h +
+>   Σ1(e) + Ch(e,f,g) + K_5 + W_5") lands in Slice 2.8.
+> - **frameMap structural assertion** at primitive boundaries (Q-A-
+>   parity β fine-grained). The current parity test pins byte-equality
+>   at the cipher boundary (load-bearing safety net) + per-frame
+>   structural pins live in `tests/sha-256.test.ts` (28 leaves per
+>   round group, K_t offset = 4*t). True 1-helper-frame-to-N-decomposed-
+>   frames mapping is structural noise vs. the byte-equal guarantee;
+>   skip unless a future regression motivates it.
+
 **Goal:** replace `sha2.message-schedule-step@1`, `sha2.compression-
 round@1`, `sha2.final-add@1` with in-spec compositions of port-native
 primitives (rotate/shift/xor/and/not/add + the bridges shipped in 2.6b
