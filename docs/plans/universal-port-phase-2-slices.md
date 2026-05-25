@@ -2114,26 +2114,62 @@ warnings, parity test green.
 >   `inputCount`; none have `byteLength`.
 > - `not@1` takes empty params.
 > - First wave of test failures all had the same root cause (param
->   name mismatch). Documented here so the next port-native composer
->   doesn't re-trip.
+>   name mismatch). Documented in `docs/gotchas.md` (Port-native
+>   primitives section) and in memory entry
+>   `feedback_port_native_param_names.md` so the next port-native
+>   composer doesn't re-trip.
 >
-> **Deferred from this slice (not blockers):**
+> **Coverage follow-up shipped 2026-05-25 (post-close):**
+> - `tests/state-to-aux-bytes.test.ts` (commit `2df4987`) — 7 dedicated
+>   tests across the 5 axes the advisor flagged as the bytes-sibling's
+>   coverage asymmetry. The three NEW port-native primitives in this
+>   slice (aux-load-bytes, byte-slice, split-bytes) each landed with
+>   their own test file; `generic.state-to-aux-bytes@1` was bundled
+>   into step 4 with only indirect KAT coverage. Closed now. Includes
+>   a documented decision NOT to write legacy-vs-ported frame parity
+>   for the bytes sibling: `layout: "raw"` produces a bare
+>   `Uint8Array` on the ported path but the legacy path keeps the
+>   `BytesState` wrapper, so `toEqual` would not hold; no shipped
+>   spec observes this asymmetry (aux-load-bytes is port-native and
+>   forces flag-on).
+>
+> **Deliberate scope decisions (NOT "deferred" — these are the close
+> picks, surfaced so they don't resurface as gaps):**
+> - **frameMap structural assertion** at primitive boundaries (Q-A-
+>   parity β fine-grained). The plan's β contract called for
+>   "frame-equivalence at primitive boundaries + frameMap for compound
+>   decompositions + KAT parity at cipher boundary." 2.6d shipped (a)
+>   the cipher-boundary KAT (load-bearing safety net, pinned across
+>   all 6 FIPS 180-4 §A.1 inputs against legacy ≡ decomposed ≡
+>   `node:crypto`) + (b) per-round structural pins in
+>   `tests/sha-256.test.ts` (28 leaves per round group, K_t offset =
+>   4*t). The fine-grained 1-helper-frame-to-N-decomposed-frames
+>   mapping was DELIBERATELY SCOPED OUT: the KAT catches all real
+>   divergence, frameMap mostly catches structural noise (refactors
+>   that change frame ordering without changing bytes). Revisit only
+>   if a future regression motivates it (i.e., a real bug slips
+>   through KAT byte-equality — none have in 2.6d). NOT a "Slice 2.6d
+>   wasn't finished" item.
+>
+> **Deferred to follow-up work (genuine pending items):**
 > - **Default-collapse for the 64 round groups.** 2.6c plan F.1 flagged
 >   this as a "concern for slice-start review"; correctness is intact
 >   without it (the rewrite ships byte-equal), but graph-view first-
 >   render readability with 1792+ chips would benefit. Layout store
->   changes for per-spec-id default collapse. Follow-up commit.
+>   changes for per-spec-id default collapse. **Sequencing point:
+>   this MUST land BEFORE Slice 2.10.** If 2.10 ships SHA-256 to the
+>   live cipher-selector first, the user's first interaction shows
+>   the 1792+ chip wall — exactly the readability problem 2.6c plan
+>   F.1 warned about. Slice 2.7's spec-level opt-in plumbing is
+>   tempting to do first (it's "smaller"), but doing 2.7 → 2.10
+>   without default-collapse skips the readability fix. Order:
+>   default-collapse → Slice 2.7 → Slice 2.10. (Slice 2.7 still
+>   blocks 2.10; default-collapse is orthogonal to 2.7 and can land
+>   either before or in parallel.)
 > - **narrationOverride content for SHA-256 leaves.** Slice 2.8's job.
 >   The live spec currently uses default doc strings for every
 >   decomposed leaf; cipher-specific prose (e.g., "Round 5: T1 = h +
 >   Σ1(e) + Ch(e,f,g) + K_5 + W_5") lands in Slice 2.8.
-> - **frameMap structural assertion** at primitive boundaries (Q-A-
->   parity β fine-grained). The current parity test pins byte-equality
->   at the cipher boundary (load-bearing safety net) + per-frame
->   structural pins live in `tests/sha-256.test.ts` (28 leaves per
->   round group, K_t offset = 4*t). True 1-helper-frame-to-N-decomposed-
->   frames mapping is structural noise vs. the byte-equal guarantee;
->   skip unless a future regression motivates it.
 
 **Goal:** replace `sha2.message-schedule-step@1`, `sha2.compression-
 round@1`, `sha2.final-add@1` with in-spec compositions of port-native
@@ -2225,6 +2261,17 @@ provenance highlighting works in linear view.
 **Goal:** SHA-256 selectable from the live UI; graph view renders
 SHA-256 with the for-each-subgraph node visualized cleanly.
 
+> **PRE-REQUISITE: default-collapse for the 64 round groups MUST land
+> first.** See Slice 2.6d's "Deferred to follow-up work" section. If
+> 2.10 ships before default-collapse, the user's first interaction with
+> SHA-256 in the live cipher-selector shows a 1792+ chip wall on first
+> render — exactly the readability problem 2.6c plan F.1 warned about.
+> Slice 2.7's spec-level opt-in plumbing is a sibling prerequisite (no
+> opt-in → no live UI launch), but doing 2.7 → 2.10 without
+> default-collapse skips the readability fix. Order: default-collapse →
+> Slice 2.7 → Slice 2.10. (default-collapse is orthogonal to 2.7 and
+> can land either before or in parallel with 2.7.)
+
 **Scope (sketched):**
 
 - User pick on **Open #N7** (cipher selector category — sibling vs.
@@ -2238,7 +2285,8 @@ SHA-256 with the for-each-subgraph node visualized cleanly.
   inside per parent plan's Q3 pass criteria.
 
 **Pass/fail gate:** SHA-256 launches from UI; graph view renders
-without warnings; smoke test in browser.
+without warnings (no chip wall on first render — default-collapse
+landed); smoke test in browser.
 
 ### Slice 2.11 — KAT parity matrix (Phase 2 close)
 

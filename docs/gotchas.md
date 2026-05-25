@@ -75,6 +75,28 @@ Topic-grouped list of footguns specific to this codebase. The top-level `CLAUDE.
 - **Don't try to inject the URL-hash decode "before localStorage hydration."** The store modules' `loadInitial()` calls run at IMPORT time, well before App mounts. There's no realistic way to interpose without reorganizing the boot graph. Instead: decode on `onMount` and rely on `setSpecFromDocument` to override whatever localStorage hydrated with. A brief sub-frame of pre-mount state is acceptable.
 - **Clear the hash via `replaceState`, not `pushState`.** A refresh of a `#doc=…` URL would re-apply the doc and clobber any edits the user made since the initial load. Stripping the hash on success prevents that. Use `replaceState` so the back button doesn't bounce the user to a "still has the hash" history entry — they'd just bounce right back when the next decode fires.
 
+## Port-native primitives (Phase 2+ universal-port plan)
+
+The port-native primitives shipped under the universal-port-dataflow plan (Slices 2.1a–2.6d so far) DO NOT follow the legacy step-types' `auxName + byteLength` pattern. Each has its own param surface — calling them with a guessed param shape produces "params.X must be Y" errors at run time. When composing a port-native cipher (SHA-256 today; SHA-3 / BLAKE2 / Poly1305 in the future), keep this table handy:
+
+| Step type | Params | Notes |
+|---|---|---|
+| `rotate-bits-right@1` | `bits: number`, `wordBits: number` | NOT `shift`. NOT `byteLength` — `wordBits` (32 for SHA-256 σ₀/σ₁) implies it. |
+| `shift-bits-right@1` | `bits: number`, `wordBits: number` | NOT `shift`. NOT `byteLength`. |
+| `add-mod-32@1` | `inputCount: number` | NOT `byteLength` — fixed at 4 by `mod-32`. |
+| `xor@1` | `inputCount: number` | NOT `byteLength` — polymorphic on input length (all inputs must agree). |
+| `and@1` | `inputCount: number` | NOT `byteLength` — polymorphic. |
+| `not@1` | *(empty)* | No params — unary, polymorphic on input length. |
+| `concat@1` | `inputCount: number` | NOT `byteLength` — each input's length is independent; output length is the sum. |
+| `byte-slice@1` | `sourceByteLength: number`, `offset: number`, `length: number` | Bracketed indexing; `sourceByteLength + offset + length` together pin the editor's slot semantics. |
+| `split-bytes@1` | `widths: number[]` | NOT `count` — the lengths array IS the count (and pins each output's size). |
+| `aux-load-bytes@1` | `auxName: string`, `byteLength: number` | The only port-native primitive that takes `byteLength` — it asserts the loaded aux length at run-time. |
+| `generic.state-to-aux-bytes@1` | `auxName: string` | Bytes-shape sibling of `generic.state-to-aux@1`. No `byteLength` — polymorphic on state length. |
+
+**Why the asymmetry.** Legacy step types take `byteLength` because their state shape is encoded in the param block (matrix4x4-bytes = 16, AES key sizes = 16/24/32). Port-native bitops are polymorphic — `xor@1` works on any-length operands as long as all operands agree — so a fixed `byteLength` param would be over-constrained. The four-byte add-mod-32 is the exception (and even there `inputCount` parameterises arity, not width).
+
+**Composer-time fail mode.** The executors' `readParams` validators check the params they ARE looking for; they DON'T reject extras. So `{ type: "xor@1", params: { byteLength: 4 } }` throws `xor: params.inputCount must be a positive integer (≥ 1)` because `inputCount` is missing — not because `byteLength` was rejected. Same for `{ type: "rotate-bits-right@1", params: { shift: 7 } }` — fails with "params.bits must be …" because `bits` wasn't provided. The error message names the param the executor wanted, NOT the wrong one you supplied. Read it carefully when copy-pasting a spec node from a legacy step — what you thought was a renamed param is actually a missing one.
+
 ## Tooling / shell
 
 - **Don't redirect native command stderr in PowerShell with `2>&1`.** PowerShell 5.1 wraps stderr lines in `NativeCommandError` records and sets `$?` to false even on success exit code 0. Capture stdout only, or merge in a different way.
