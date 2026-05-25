@@ -1691,6 +1691,373 @@ phase-2-slices.md` includes a Slice 2.6c "Design" section with explicit
 candidate vocabulary, user picks resolved, and the topology sketch for
 2.6d. No code lands.
 
+#### Design (locked 2026-05-25)
+
+> **Status: design GREEN.** Picks below resolved via advisor consult +
+> user picks 2026-05-25. Slice 2.6c ships ZERO code — this section is
+> the contract that 2.6d implements against.
+
+##### A. Per-helper decomposition sketch
+
+Math accounting validated against FIPS 180-4 §4.1.2 + §6.2.2. The σ/Σ
+counts are easy to misread (advisor caught one mid-design): lowercase
+σ0/σ1 (message schedule) use **2 ROTR + 1 SHR** each; uppercase Σ0/Σ1
+(compression) use **3 ROTR**.
+
+**A.1. `sha2.message-schedule-step@1`** (48 iterations inside FES-with-
+history, body must exit as 4-byte BytesState per FES contract):
+
+```
+aux-load-bytes "fetch-p2"  → port output (4 bytes)  // aux["prior-2"]
+aux-load-bytes "fetch-p7"  → port output (4 bytes)
+aux-load-bytes "fetch-p15" → port output (4 bytes)
+aux-load-bytes "fetch-p16" → port output (4 bytes)
+
+// σ1(p2) = ROTR17(p2) ⊕ ROTR19(p2) ⊕ SHR10(p2)
+rotate-bits-right(p2, 17)  → r17
+rotate-bits-right(p2, 19)  → r19
+shift-bits-right(p2, 10)   → s10
+xor 3-way(r17, r19, s10)   → σ1_out
+
+// σ0(p15) = ROTR7(p15) ⊕ ROTR18(p15) ⊕ SHR3(p15)
+rotate-bits-right(p15, 7)  → r7
+rotate-bits-right(p15, 18) → r18
+shift-bits-right(p15, 3)   → s3
+xor 3-way(r7, r18, s3)     → σ0_out
+
+// W_t = σ1(p2) + p7 + σ0(p15) + p16 (mod 2^32)
+add-mod-32 4-way(σ1, p7, σ0, p16) → w_bytes (4 bytes)
+
+bytes-to-state(w_bytes)    → state (4 bytes — FES body exit)
+```
+
+**Leaf count per iteration:** 4 (aux-load) + 2 ROTR + 1 SHR (σ1) + 2
+ROTR + 1 SHR (σ0) + 2 xor + 1 add + 1 bytes-to-state = **14 leaves**.
+× 48 = **672 frames** for the schedule.
+
+**A.2. `sha2.compression-round@1`** (64 round groups, body exits as
+288-byte BytesState):
+
+Round-entry state is 288 bytes = working_vars(32) ‖ W(256). We need:
+state-to-bytes once, then extract 9 words from the 288 buffer (a, b, c,
+d, e, f, g, h, W_t) + 1 word from aux["K"] (K_t), do the math, repack
+working_vars (32 bytes) + carry-through W (256 bytes) → 288 bytes,
+bytes-to-state.
+
+```
+state-to-bytes                                → state_bytes (288)
+
+// Working-var + W_t extraction in ONE leaf (per the "ship both" pick,
+// split-bytes shines here):
+split-bytes(widths: [4,4,4,4,4,4,4,4,                  // a..h
+                     4*roundIndex, 4, rest])           // skip, W_t, tail
+  → a, b, c, d, e, f, g, h, _, W_t, W_tail            // 11 outputs
+
+// K_t extraction:
+aux-load-bytes "fetch-K"   → K_bytes (256)
+byte-slice(K_bytes, offset=4*roundIndex, length=4) → K_t
+
+// Σ1(e) = ROTR6 ⊕ ROTR11 ⊕ ROTR25
+rotate-bits-right(e, 6)   → e_r6
+rotate-bits-right(e, 11)  → e_r11
+rotate-bits-right(e, 25)  → e_r25
+xor 3-way(e_r6, e_r11, e_r25) → Σ1_out
+
+// Σ0(a) = ROTR2 ⊕ ROTR13 ⊕ ROTR22
+rotate-bits-right(a, 2)   → a_r2
+rotate-bits-right(a, 13)  → a_r13
+rotate-bits-right(a, 22)  → a_r22
+xor 3-way(a_r2, a_r13, a_r22) → Σ0_out
+
+// Ch(e,f,g) = (e ∧ f) ⊕ (¬e ∧ g)
+not(e)                    → not_e
+and(e, f)                 → e_and_f
+and(not_e, g)             → note_and_g
+xor 2-way(e_and_f, note_and_g) → Ch_out
+
+// Maj(a,b,c) = (a ∧ b) ⊕ (a ∧ c) ⊕ (b ∧ c)
+and(a, b)                 → ab
+and(a, c)                 → ac
+and(b, c)                 → bc
+xor 3-way(ab, ac, bc)     → Maj_out
+
+// T1 = h + Σ1(e) + Ch(e,f,g) + K_t + W_t  (5-way add-mod-32, one leaf)
+add-mod-32 5-way(h, Σ1_out, Ch_out, K_t, W_t) → T1
+
+// T2 = Σ0(a) + Maj(a,b,c)
+add-mod-32 2-way(Σ0_out, Maj_out) → T2
+
+// new_a = T1 + T2, new_e = d + T1; b..h are renames
+add-mod-32 2-way(T1, T2) → new_a
+add-mod-32 2-way(d, T1)  → new_e
+
+// Repack: new_a‖a‖b‖c‖new_e‖e‖f‖g  (renames are free) ‖ W_unchanged
+concat 9-way(new_a, a, b, c, new_e, e, f, g, W_passthrough) → new288
+bytes-to-state(new288) → state
+```
+
+**Leaf count per round:** 1 (state-to-bytes) + 1 (split-bytes) + 1
+(aux-load-bytes for K) + 1 (byte-slice for K_t) + 4 (Σ1) + 4 (Σ0) + 4
+(Ch) + 4 (Maj) + 1 (T1 5-way) + 1 (T2) + 2 (new_a + new_e) + 1 (concat
+9-way) + 1 (bytes-to-state) = **25 leaves**. × 64 = **1600 frames**.
+
+(Aside: aux-load-bytes("K") could be hoisted to root and re-wired
+into each round via cross-scope wiring; we keep it co-scoped per
+round in 2.6d because aux is global anyway and the per-round leaf is
+~1 frame's worth of clutter. Hoisting becomes interesting if
+cross-scope wiring ships for HMAC.)
+
+**A.3. `sha2.final-add@1`** (after the 64 round groups, state is 288
+bytes; output is 32-byte hash):
+
+```
+state-to-bytes                  → state_bytes (288)
+split-bytes(widths: [4,4,4,4,4,4,4,4, 256])  → a..h, W_tail (discarded)
+
+aux-load-bytes "fetch-H"        → H_bytes (32)
+split-bytes(widths: [4,4,4,4,4,4,4,4]) → H0..H7
+
+add-mod-32 2-way(a, H0) → s0
+add-mod-32 2-way(b, H1) → s1
+add-mod-32 2-way(c, H2) → s2
+add-mod-32 2-way(d, H3) → s3
+add-mod-32 2-way(e, H4) → s4
+add-mod-32 2-way(f, H5) → s5
+add-mod-32 2-way(g, H6) → s6
+add-mod-32 2-way(h, H7) → s7
+
+concat 8-way(s0..s7)            → hash_bytes (32)
+bytes-to-state(hash_bytes)      → state (32 — cipher final)
+```
+
+**Leaf count:** 1 + 1 + 1 + 1 + 8 + 1 + 1 = **13 leaves** (one shot,
+not per-round).
+
+##### B. Frame budget rollup
+
+| Phase                 | Leaves           | Notes                              |
+|-----------------------|------------------|------------------------------------|
+| Preprocessing (existing) | 4             | pad + length-append + 2 bridges    |
+| Schedule (×48)        | 14 × 48 = 672    | New: aux-load-bytes inside FES     |
+| H/K aux-load + bridges | 4               | Existing; unchanged                |
+| Compression (×64)     | 25 × 64 = 1600   | NEW: ~25/round                     |
+| Final-add             | 13               | NEW one-shot                       |
+| **Total**             | **2293 frames**  | vs Slice 2.6b's 123 frames         |
+
+Squarely inside the plan's 3000–4000 frame target band. (The
+estimate is a *floor*; per-frame trace metadata and any container
+exit-state publishes could push the rendered count slightly higher.)
+
+##### C. New primitives (the 2.6d wedge)
+
+User picks 2026-05-25:
+
+- **Q-2.6c-1 (slice shape) = (c) Ship both `split-bytes@1` + `byte-slice@1`.**
+  split-bytes excels at SHA-256's symmetric N-word extraction (8 words
+  out of working-vars, 8 H_i out of H, etc.) and is the conceptual
+  inverse of concat@1. byte-slice handles the single-word-at-offset
+  case (K_t from aux["K"] at offset 4*roundIndex). Rejected: (a)
+  split-only (forces awkward width arrays for single-slice use cases);
+  (b) byte-slice-only (loses ~448 compression frames AND the
+  concat/split symmetry).
+
+- **Q-2.6c-2 (helper retention) = (a) Full decomposition.** All three
+  SHA-256-specific helpers retire from the spec in 2.6d. Pedagogy
+  carried by Slice 2.8's narrationOverride on each leaf. Rejected:
+  (b) keep compression-round atomic (the worst readability case is
+  exactly the one we *want* visible — the math is the cipher); (c)
+  defer all decomposition to 2.6e (sacrifices 2.6d as the "real"
+  end-to-end milestone for an indirection).
+
+- **Q-2.6c-3 (aux-bridge name) = (a) `aux-load-bytes@1`.** Parallel to
+  `constant-load@1` — both are "load a value onto a port output". The
+  `*-load-*` family is more readable to a spec author scanning the
+  palette than `*-to-bytes` would be (`state-to-bytes` reads as a
+  transformation, `aux-to-bytes` would too — but aux-load-bytes makes
+  clear it's a SOURCE, not a transformation of something already in
+  port flow). Rejected: (b) aux-to-bytes (family-collision with
+  state-to-bytes's "transformation" reading); (c) aux-fetch (terse but
+  belongs to no family).
+
+##### D. Three new step types (full contract)
+
+**D.1. `aux-load-bytes@1`** — bridge: aux key → port output.
+
+- Registration: `kind: "ported"`, hybrid form (port-native + meta but
+  no `legacy`). Same shape as `state-to-bytes@1` / `bytes-to-state@1`
+  set the precedent for in Slice 2.6b.
+- Params: `{ auxName: string, byteLength: number }`. byteLength must
+  match the aux value's actual length; the runtime throws on mismatch.
+- `meta.stateLayout: "bytes"` (defensive default; state is unused).
+- `meta.auxReadPorts(params): Map([["input", params.auxName]])` —
+  declares ONE projection-driven input port that the runtime fills from
+  aux at frame time. The executor is identity-on-port: it copies the
+  "input" port bytes to the "output" port and returns state passthrough.
+- PortContract: inputs = `{ input: byteLength=params.byteLength }`;
+  outputs = `{ output: byteLength=params.byteLength }`.
+- Doc: `shapeContract: { input: "any", output: "any" }` — the step
+  doesn't touch state, so the shape-warning surface is "any" → "any".
+- Spec-authoring usage: spec leaf carries `params: { auxName: "K",
+  byteLength: 256 }`; downstream wires `portInputs.X: { node:
+  "fetch-K", port: "output" }`.
+- LOC estimate: ~140 (executor 30, meta 15, contract 30, doc 50, exports
+  15). Tests: ~10 (success, throw on mismatch, throw on missing aux).
+
+**D.2. `byte-slice@1`** — single-slice primitive.
+
+- Registration: `kind: "ported"`, pure port-native (no meta).
+- Params: `{ sourceByteLength: number, offset: number, length: number }`.
+  Validation: `0 ≤ offset`, `length ≥ 1`, `offset + length ≤
+  sourceByteLength`. Throws on violation.
+- PortContract: inputs = `{ input: byteLength=params.sourceByteLength,
+  layout: "raw" }`; outputs = `{ output: byteLength=params.length,
+  layout: "raw" }`.
+- Executor: pure copy via `inputs.get("input").subarray(offset, offset
+  + length).slice()`. Returns `{ outputs: Map([["output", out]]) }`.
+- LOC estimate: ~100. Tests: ~15 (boundaries, off-by-one, validation
+  throws, layout-passthrough).
+
+**D.3. `split-bytes@1`** — symmetric inverse of `concat@1`.
+
+- Registration: `kind: "ported"`, pure port-native (no meta).
+- Params: `{ widths: number[] }`. Each width ≥ 1; output port N is
+  named `output${N}` (parallel to concat@1's `input${N}`). Input port
+  byteLength = sum(widths). Throws if widths array is empty.
+- PortContract: inputs = `{ input: byteLength=sum(widths) }`;
+  outputs = dynamic-N, one per width.
+- Executor: walks widths, slices `inputs.get("input")` at the
+  running-sum offsets.
+- LOC estimate: ~120. Tests: ~15 (symmetric to concat@1's suite,
+  off-by-one, single-width identity, width-array validation).
+
+##### E. Explicitly deferred (NOT in 2.6d's scope)
+
+- **Cross-scope wiring** — Slice 2.6a's "same-scope only" rule for
+  `nodeOutputs` resolution stays. Rationale: every aux-mediated value
+  in 2.6d's topology (priors, K, H) can be source-co-scoped with its
+  consumer via an `aux-load-bytes@1` leaf, because aux is already
+  global. SHA-256's compression-body leaves do NOT need to reach
+  ROOT-scope `aux-load@1`'s port output across the round-group
+  boundary — they call their own `aux-load-bytes("K")` instead. This
+  costs ~64 redundant aux-load leaves but keeps the cross-scope
+  contract Phase 2's responsibility, not Slice 2.6d's. First real
+  consumer expected to be HMAC (Slice 2.13+) or multi-block SHA-256
+  (Slice 2.11) where outer-scope IV/state must reach inner block
+  bodies WITHOUT going through aux.
+
+- **FES per-iteration output ports** (the (β) candidate). Same
+  reasoning: aux["prior-N"] is already the runtime's pub channel for
+  lookback values; an `aux-load-bytes` co-scoped inside the FES body
+  reads it cleanly. Re-evaluate when a future hash (BLAKE2?) needs to
+  expose per-iteration outputs to AN OUTER consumer.
+
+- **`auxReadPorts` projection generalization** (the (γ) candidate).
+  The hybrid form `kind: "ported"` + meta + no legacy already does
+  this for the 2.6b bridges; `aux-load-bytes@1` follows the same
+  recipe in 2.6d. No widening required.
+
+##### F. 2.6d concerns flagged for slice-start review (NOT 2.6c's job to solve)
+
+- **Graph view density.** ~2293 leaves vs Slice 2.6b's 123. Existing
+  collapse machinery (collapse the round group, collapse Σ-helpers,
+  etc.) handles it but 2.6d MUST: (i) ensure the 64 round groups
+  default-collapse on first render, (ii) introduce mid-level group
+  wrappers inside each round body (one for Σ1, one for Σ0, one for Ch,
+  one for Maj, one for T1/T2/shuffle assembly) so a partial-collapse
+  state surfaces the algebraic structure even when fully expanded would
+  be a chip wall. The plan-prose estimate of ~3000–4000 frames remains
+  the "trace-frame" axis; the "visible-chip" axis is much smaller when
+  collapses default-on.
+- **Frame-equivalence (Q-A-parity β) assertion.** A new
+  `tests/sha-256-decomposition-parity.test.ts` must pin: for every
+  KAT message in the existing suite (empty, 0x00, 0xff, "a", "abc",
+  55-byte deterministic), the decomposed spec produces byte-identical
+  `trace.finalState` AND a `frameMap` documenting "the previous
+  message-schedule-step's single frame corresponds to these 14 frames
+  in the decomposed spec, in order." Mirrors the Q-A-parity contract
+  the Phase 2 plan prose pins.
+- **Narration coverage gap.** The three SHA-256-specific helpers come
+  off the `NARRATION_NO_OP_ALLOWLIST` (allowlist shrinks 11 → 8 as
+  they retire). Every leaf in the decomposed spec is either covered by
+  existing narration for its primitive (rotate, xor, etc.) or carries
+  a `narrationOverride` from Slice 2.8 (which 2.6d also needs to land
+  for SHA-256 since the prep-only inspector display would otherwise be
+  silent for thousands of leaves). 2.6d should ship 2.8's overrides as
+  a paired commit OR explicitly land 2.6d → 2.8 → 2.6d-narration-fixup
+  in three commits.
+
+##### G. Topology sketch for 2.6d's `buildSha256Spec`
+
+```
+state-to-bytes "plaintext-source"
+pad-with-byte "pad"                  ← portInputs.input ← plaintext-source.output
+append-be64-length "length-append"   ← data ← pad, length-source ← plaintext-source
+bytes-to-state "seed-schedule"       ← input ← length-append.output
+
+for-each-subgraph-with-history "msg-schedule"  (iterationCount=48,
+                                                lookbackOffsets=[2,7,15,16],
+                                                historyEntryByteLength=4):
+  aux-load-bytes "fetch-p2"   { auxName: "prior-2",  byteLength: 4 }
+  aux-load-bytes "fetch-p7"   { auxName: "prior-7",  byteLength: 4 }
+  aux-load-bytes "fetch-p15"  { auxName: "prior-15", byteLength: 4 }
+  aux-load-bytes "fetch-p16"  { auxName: "prior-16", byteLength: 4 }
+  rotate-bits-right "ror17"   { wordBits: 32, byteLength: 4, shift: 17 }
+    portInputs.input ← fetch-p2.output
+  ... (13 more leaves per A.1's chain)
+  bytes-to-state "schedule-out"  ← w_bytes
+
+generic.aux-load "H-to-aux"          { auxName: "H", value: SHA256_H_BYTES }
+generic.aux-load "K-to-aux"          { auxName: "K", value: SHA256_K_BYTES }
+state-to-bytes "W-source"
+constant-load "H-constant"           { bytes: SHA256_H_BYTES }
+concat "compression-state-init"      { inputCount: 2 }   ← H-constant, W-source
+bytes-to-state "compression-bridge"  ← compression-state-init.output
+
+(× 64) group "round.${t}":
+  state-to-bytes "round.${t}.state-in"
+  split-bytes    "round.${t}.extract" { widths: [4,4,4,4,4,4,4,4, 4*t, 4, rest] }
+                                       ← portInputs.input ← state-in.output
+  aux-load-bytes "round.${t}.fetch-K"  { auxName: "K", byteLength: 256 }
+  byte-slice     "round.${t}.K_t"      { sourceByteLength: 256, offset: 4t, length: 4 }
+                                       ← portInputs.input ← fetch-K.output
+  ... (21 more leaves per A.2's chain)
+  bytes-to-state "round.${t}.state-out" ← new288
+
+final-add group (decomposed, 13 leaves per A.3):
+  state-to-bytes "final.state-in"
+  split-bytes    "final.extract" { widths: [4,4,4,4,4,4,4,4, 256] }
+  aux-load-bytes "final.fetch-H" { auxName: "H", byteLength: 32 }
+  split-bytes    "final.h-split" { widths: [4,4,4,4,4,4,4,4] }
+  add-mod-32     "final.s0" ... "final.s7"   (8× 2-way add)
+  concat         "final.assemble" { inputCount: 8 }
+  bytes-to-state "final.out"
+```
+
+Total new leaves: ~2170 (672 schedule + 1600 compression + 13 final-add
+- existing pad/length-append/etc. counted once). Plus existing
+preprocessing + aux-load setup = ~2293 total.
+
+##### H. 2.6d implementation order (recommendation, not a contract)
+
+1. Ship `aux-load-bytes@1` standalone (executor + meta + contract + 10
+   tests). One commit.
+2. Ship `byte-slice@1` standalone (executor + contract + 15 tests).
+3. Ship `split-bytes@1` standalone (executor + contract + 15 tests).
+4. Rewrite `buildSha256Spec` to use compositions. KAT must continue to
+   pass byte-equal on all 6 cross-checked messages.
+5. Add `tests/sha-256-decomposition-parity.test.ts` (Q-A-parity β).
+6. Update default-collapse defaults in graph-view layout for the 64
+   round groups (concern F.i above).
+7. Retire the three SHA-256-specific helpers from the
+   `NARRATION_NO_OP_ALLOWLIST` AND the `PROVENANCE_NO_OP_ALLOWLIST`;
+   verify contract tests still pass.
+8. Optional: ship Slice 2.8's narrationOverride content as paired
+   commits or queue for 2.8 proper.
+
+Pass/fail gate for 2.6d: same "abc" KAT byte-equal, frame count in
+2100–3500 range (room for assembly overhead), validateShapes emits zero
+warnings, parity test green.
+
 ### Slice 2.6d — Decompose SHA-256 helpers into port-native compositions
 
 **Goal:** replace `sha2.message-schedule-step@1`, `sha2.compression-
