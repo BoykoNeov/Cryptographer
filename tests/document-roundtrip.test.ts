@@ -189,6 +189,70 @@ describe("serializeDocument + parseDocument: documents with sidecars", () => {
     if (result.ok) expect(result.doc).toEqual(doc);
   });
 
+  it("round-trips a document with expandedGroups (default-collapse override)", () => {
+    // Slice 2.6d follow-up (2026-05-25). `expandedGroups` records
+    // explicit user-expansions of containers the spec marks
+    // `defaultCollapsed: true`. Must round-trip losslessly so a Save +
+    // Share preserves the user's "I expanded round.5 to look at it"
+    // choice.
+    const doc: CipherDocument = {
+      schemaVersion: 2,
+      spec: aes128Spec,
+      layout: {
+        positions: {},
+        collapsedGroups: [],
+        flowDirection: "ltr",
+        expandedGroups: ["round.5", "round.10"],
+      },
+    };
+    const text = serializeDocument(doc);
+    const result = parseDocument(text);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.doc).toEqual(doc);
+  });
+
+  it("round-trips a spec whose container declares defaultCollapsed: true", () => {
+    // Slice 2.6d follow-up (2026-05-25). SHA-256's 64 round groups
+    // carry `defaultCollapsed: true`; the field must survive the
+    // schema round-trip so a Save/Share of SHA-256 keeps the
+    // affordance on the recipient's side. Authoring a minimal spec
+    // here (rather than importing SHA-256) keeps the test independent
+    // of any future SHA-256 spec churn.
+    const doc: CipherDocument = {
+      schemaVersion: 2,
+      spec: {
+        id: "test-default-collapsed@1",
+        name: "Test default collapsed",
+        stateShape: "bytes",
+        inputs: {
+          plaintext: { shape: "bytes" },
+          key: { byteLength: 0 },
+        },
+        steps: [
+          {
+            kind: "group",
+            id: "collapsed-by-default",
+            label: "Collapsed by default",
+            defaultCollapsed: true,
+            children: [],
+          },
+        ],
+      },
+    };
+    const text = serializeDocument(doc);
+    const result = parseDocument(text);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.doc).toEqual(doc);
+      // Explicit assertion: the field survives, not just the wrapping
+      // structure.
+      const node = result.doc.spec.steps[0];
+      if (node !== undefined && node.kind === "group") {
+        expect(node.defaultCollapsed).toBe(true);
+      }
+    }
+  });
+
   it("rejects a malformed relativePositions entry", () => {
     // Wrong shape — RelativePosition is `{ dx, dy }`, not `{ x, y }`.
     const malformed = JSON.stringify({

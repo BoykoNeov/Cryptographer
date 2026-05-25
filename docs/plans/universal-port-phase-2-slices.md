@@ -2152,20 +2152,40 @@ warnings, parity test green.
 >   wasn't finished" item.
 >
 > **Deferred to follow-up work (genuine pending items):**
-> - **Default-collapse for the 64 round groups.** 2.6c plan F.1 flagged
->   this as a "concern for slice-start review"; correctness is intact
->   without it (the rewrite ships byte-equal), but graph-view first-
->   render readability with 1792+ chips would benefit. Layout store
->   changes for per-spec-id default collapse. **Sequencing point:
->   this MUST land BEFORE Slice 2.10.** If 2.10 ships SHA-256 to the
->   live cipher-selector first, the user's first interaction shows
->   the 1792+ chip wall — exactly the readability problem 2.6c plan
->   F.1 warned about. Slice 2.7's spec-level opt-in plumbing is
->   tempting to do first (it's "smaller"), but doing 2.7 → 2.10
->   without default-collapse skips the readability fix. Order:
->   default-collapse → Slice 2.7 → Slice 2.10. (Slice 2.7 still
->   blocks 2.10; default-collapse is orthogonal to 2.7 and can land
->   either before or in parallel.)
+> - **Default-collapse for the 64 round groups — SHIPPED 2026-05-25.**
+>   2.6c plan F.1 flagged this as a "concern for slice-start review."
+>   Approach picked after advisor consult + user pick: Option 1 —
+>   per-container declarative `defaultCollapsed?: boolean` on
+>   `StepGroup` / `IterateGroup` / `FeistelRoundGroup` /
+>   `ForEachSubgraphNode` / `ForEachSubgraphWithHistoryNode` in
+>   `core/types.ts`, marked on every SHA-256 round group. LayoutSpec
+>   grew a sibling override set `expandedGroups?: readonly string[]`
+>   to record explicit user-expansions of default-collapsed
+>   containers. Effective collapsed set =
+>   `(spec defaults ∪ layout.collapsedGroups) − layout.expandedGroups`,
+>   computed in new `core/spec-defaults.ts` (pure walker). The
+>   `toggleCollapse(specId, containerId, inDefaults: boolean)`
+>   signature widened by one arg; the chevron handler passes
+>   `inDefaults` derived from a memoized `getDefaultCollapsedContainers`
+>   call. End-invariant maintained: an id never appears in both
+>   `collapsedGroups` and `expandedGroups` at once. Side benefit:
+>   `toggleCollapse` now drops empty layouts (matching
+>   `clearNodePosition` / `clearRelativePosition` /
+>   `setReplicationMode(null)` discipline), tightening byte-stability
+>   for the toggle-untoggle cycle. Two pre-existing tests updated to
+>   reflect the new drop-on-empty semantics (`layout-store.test.ts`
+>   "first call adds, second call removes" → expects null map entry;
+>   `graph-view-block-chips.test.tsx` chevron-clickable regression →
+>   reads via `?? []` fallback). User picked Option 1 over Option 5
+>   (helper switch on `spec.id`) per advisor's framing — Option 5 was
+>   a patch (UI-store knowing cipher ids, two-place edits per future
+>   cipher); Option 1 is declarative + travels with saved/shared
+>   specs. Bundle 627.46 → 628.81 KB (+1.35 KB). Suite 2255 → 2285
+>   (+30 tests: 12 spec-defaults, 7 layout-store toggleCollapse +
+>   hasUserLayout for expandedGroups, 2 document-roundtrip
+>   defaultCollapsed + expandedGroups, 1 sha-256 spec assertion).
+>   Sequencing intact: default-collapse landed BEFORE Slice 2.7 /
+>   2.10 as planned.
 > - **narrationOverride content for SHA-256 leaves.** Slice 2.8's job.
 >   The live spec currently uses default doc strings for every
 >   decomposed leaf; cipher-specific prose (e.g., "Round 5: T1 = h +

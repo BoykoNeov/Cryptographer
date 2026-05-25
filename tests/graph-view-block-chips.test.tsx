@@ -76,7 +76,7 @@ describe("GraphView — collapsed iterate becomes parallel block-chips", () => {
   it("renders one chip per block (4 blocks) when ecb-blocks is collapsed", () => {
     seedAes128EcbTrace();
     // Collapse the iterate via the same store API the chevron click uses.
-    toggleCollapse(aes128EcbSpec.id, "ecb-blocks");
+    toggleCollapse(aes128EcbSpec.id, "ecb-blocks", false);
 
     const { container } = render(() => <GraphView />);
 
@@ -116,7 +116,7 @@ describe("GraphView — collapsed iterate becomes parallel block-chips", () => {
   // `collapsedGroups`.
   it("keeps the iterate's chevron clickable after a post-Run collapse", () => {
     seedAes128EcbTrace();
-    toggleCollapse(aes128EcbSpec.id, "ecb-blocks");
+    toggleCollapse(aes128EcbSpec.id, "ecb-blocks", false);
 
     const { container } = render(() => <GraphView />);
     const chevron = container.querySelector('[data-testid="graph-container-chevron-ecb-blocks"]');
@@ -127,12 +127,22 @@ describe("GraphView — collapsed iterate becomes parallel block-chips", () => {
 
     (chevron as SVGGElement).dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    expect(useLayoutMap()()[aes128EcbSpec.id]?.collapsedGroups.includes("ecb-blocks")).toBe(false);
+    // After un-collapsing the only customization, the layout entry is
+    // dropped from the map entirely (Slice 2.6d follow-up brought
+    // `toggleCollapse` into line with `clearNodePosition` /
+    // `clearRelativePosition` / `setReplicationMode(null)` — all of
+    // which drop empty layouts to keep `cryptographer.layouts` byte-
+    // stable). So the assertion is "the id is no longer in the
+    // effective collapsed set," not "the field still exists but is
+    // empty." Either map entry absence or absence-from-the-field
+    // satisfies this.
+    const collapsedAfter = useLayoutMap()()[aes128EcbSpec.id]?.collapsedGroups ?? [];
+    expect(collapsedAfter.includes("ecb-blocks")).toBe(false);
   });
 
   it("keeps the iterate's header label visible while collapsed (box-with-header)", () => {
     seedAes128EcbTrace();
-    toggleCollapse(aes128EcbSpec.id, "ecb-blocks");
+    toggleCollapse(aes128EcbSpec.id, "ecb-blocks", false);
 
     const { container } = render(() => <GraphView />);
     const headerLabels = Array.from(container.querySelectorAll("text.graph-container-label")).map(

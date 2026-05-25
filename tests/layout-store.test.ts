@@ -117,7 +117,7 @@ describe("layout store — per-spec.id partitioning", () => {
   });
 
   it("toggleCollapse stores under the named spec id only", () => {
-    toggleCollapse("aes-128@1", "round.3");
+    toggleCollapse("aes-128@1", "round.3", false);
     expect(getLayoutForSpec("aes-128@1")?.collapsedGroups).toEqual(["round.3"]);
     expect(getLayoutForSpec("aes-256@1")).toBeNull();
   });
@@ -132,19 +132,111 @@ describe("layout store — per-spec.id partitioning", () => {
 
 describe("layout store — toggleCollapse", () => {
   it("first call adds the id; second call removes it (toggle semantics)", () => {
-    toggleCollapse("aes-128@1", "round.4");
+    toggleCollapse("aes-128@1", "round.4", false);
     expect(getLayoutForSpec("aes-128@1")?.collapsedGroups).toEqual(["round.4"]);
-    toggleCollapse("aes-128@1", "round.4");
-    expect(getLayoutForSpec("aes-128@1")?.collapsedGroups).toEqual([]);
+    toggleCollapse("aes-128@1", "round.4", false);
+    // Slice 2.6d follow-up brought `toggleCollapse` into line with
+    // `clearNodePosition` / `clearRelativePosition` / `setReplicationMode(null)`:
+    // when the resulting layout would be empty (no positions, no collapses,
+    // no expansions, no modes, no relative pins), the spec's entry is
+    // dropped from the map to keep `cryptographer.layouts` byte-stable.
+    // The toggle-untoggle cycle now returns to the pristine "no layout"
+    // state, not an empty-but-present LayoutSpec.
+    expect(getLayoutForSpec("aes-128@1")).toBeNull();
   });
 
   it("multiple distinct ids accumulate, not replace", () => {
-    toggleCollapse("aes-128@1", "round.4");
-    toggleCollapse("aes-128@1", "round.7");
+    toggleCollapse("aes-128@1", "round.4", false);
+    toggleCollapse("aes-128@1", "round.7", false);
     // collapsedGroups is `readonly string[]` from LayoutSpec, so spread into
     // a fresh mutable copy before sorting (Array.prototype.sort mutates).
     const got = [...(getLayoutForSpec("aes-128@1")?.collapsedGroups ?? [])].sort();
     expect(got).toEqual(["round.4", "round.7"].sort());
+  });
+});
+
+// ─── toggleCollapse with inDefaults=true (Slice 2.6d follow-up) ──────────
+// SHA-256's 64 round groups carry `defaultCollapsed: true`. The chevron
+// click handler passes `inDefaults: true` for those containers; the
+// store routes the flip into `expandedGroups` (not `collapsedGroups`),
+// preserving the "never in both sets" invariant and keeping the
+// effective-collapsed algebra clean.
+
+describe("layout store — toggleCollapse with inDefaults=true", () => {
+  it("expanding a default-collapsed container adds it to expandedGroups, NOT collapsedGroups", () => {
+    toggleCollapse("sha-256@1", "round.5", true);
+    const l = getLayoutForSpec("sha-256@1");
+    expect(l?.expandedGroups).toEqual(["round.5"]);
+    // The invariant: an id never lands in collapsedGroups when inDefaults=true.
+    expect(l?.collapsedGroups).toEqual([]);
+  });
+
+  it("re-collapsing (toggle again) removes from expandedGroups → entry returns to default", () => {
+    toggleCollapse("sha-256@1", "round.5", true);
+    toggleCollapse("sha-256@1", "round.5", true);
+    // Second toggle empties expandedGroups; with no other customization,
+    // the layout entry is dropped from the map (byte-stability).
+    expect(getLayoutForSpec("sha-256@1")).toBeNull();
+  });
+
+  it("preserves the 'never in both sets' end-invariant across rapid toggles", () => {
+    // Stress: toggle round.5 with inDefaults=true 10 times. The two sets
+    // must remain disjoint at every step.
+    for (let i = 0; i < 10; i += 1) {
+      toggleCollapse("sha-256@1", "round.5", true);
+      const l = getLayoutForSpec("sha-256@1");
+      const collapsed = new Set(l?.collapsedGroups ?? []);
+      const expanded = new Set(l?.expandedGroups ?? []);
+      // Disjoint: no id in both.
+      for (const id of collapsed) expect(expanded.has(id)).toBe(false);
+    }
+  });
+
+  it("expanding multiple default-collapsed containers accumulates them in expandedGroups", () => {
+    toggleCollapse("sha-256@1", "round.0", true);
+    toggleCollapse("sha-256@1", "round.5", true);
+    toggleCollapse("sha-256@1", "round.10", true);
+    const got = [...(getLayoutForSpec("sha-256@1")?.expandedGroups ?? [])].sort();
+    expect(got).toEqual(["round.0", "round.10", "round.5"]);
+  });
+
+  it("inDefaults=true and inDefaults=false toggle their OWN sets independently", () => {
+    // Mix: round.5 is a SHA-256 default; msg-schedule is not.
+    toggleCollapse("sha-256@1", "round.5", true);
+    toggleCollapse("sha-256@1", "msg-schedule", false);
+    const l = getLayoutForSpec("sha-256@1");
+    expect(l?.expandedGroups).toEqual(["round.5"]);
+    expect(l?.collapsedGroups).toEqual(["msg-schedule"]);
+  });
+
+  it("toggleCollapse writes expandedGroups through to localStorage synchronously", () => {
+    toggleCollapse("sha-256@1", "round.5", true);
+    const raw = storage.getItem(STORAGE_KEY);
+    expect(raw).not.toBeNull();
+    const parsed = JSON.parse(raw as string);
+    expect(parsed["sha-256@1"].expandedGroups).toEqual(["round.5"]);
+  });
+});
+
+// ─── hasUserLayout / byte-stability for expandedGroups ───────────────────
+
+describe("layout store — hasUserLayout counts expandedGroups", () => {
+  it("a layout whose only customization is expandedGroups counts as user layout", () => {
+    toggleCollapse("sha-256@1", "round.5", true);
+    const l = getLayoutForSpec("sha-256@1");
+    expect(hasUserLayout(l)).toBe(true);
+  });
+
+  it("empty expandedGroups is OMITTED from the serialized form (byte-stability)", () => {
+    // Drag a position so the layout exists at all, then exercise the path
+    // where expandedGroups would be empty.
+    setNodePosition("aes-128@1", "round.1", 100, 100);
+    const raw = storage.getItem(STORAGE_KEY);
+    const parsed = JSON.parse(raw as string);
+    // The field MUST be absent — present-but-empty (`expandedGroups: []`)
+    // would defeat the byte-stability gate that spec-only saves depend
+    // on. Same discipline as `replicationModes` / `relativePositions`.
+    expect("expandedGroups" in parsed["aes-128@1"]).toBe(false);
   });
 });
 
@@ -158,7 +250,7 @@ describe("layout store — persistence", () => {
   });
 
   it("toggleCollapse writes through to localStorage synchronously", () => {
-    toggleCollapse("aes-128@1", "round.3");
+    toggleCollapse("aes-128@1", "round.3", false);
     const raw = storage.getItem(STORAGE_KEY);
     expect(raw).not.toBeNull();
     const parsed = JSON.parse(raw as string);
@@ -167,7 +259,7 @@ describe("layout store — persistence", () => {
 
   it("survives a fresh load (simulating a page reload)", () => {
     setNodePosition("aes-128@1", "round.5", 400, 50);
-    toggleCollapse("aes-128@1", "round.7");
+    toggleCollapse("aes-128@1", "round.7", false);
     const blob = storage.getItem(STORAGE_KEY);
     expect(blob).not.toBeNull();
 
@@ -507,7 +599,7 @@ describe("layout store — rescaleAllPositions (density-flip pin scaling)", () =
 
   it("preserves collapsedGroups and replicationModes unchanged", () => {
     setNodePosition("aes-128@1", "round.1", 100, 100);
-    toggleCollapse("aes-128@1", "round.5");
+    toggleCollapse("aes-128@1", "round.5", false);
     setReplicationMode("aes-128@1", "key-expansion", "always");
     rescaleAllPositions(0.75);
     const l = getLayoutForSpec("aes-128@1");
@@ -552,7 +644,7 @@ describe("layout store — rescaleAllPositions (density-flip pin scaling)", () =
   });
 
   it("a spec with no pins is passed through unchanged (collapsed-only or modes-only layouts survive)", () => {
-    toggleCollapse("aes-128@1", "round.5");
+    toggleCollapse("aes-128@1", "round.5", false);
     const before = getLayoutForSpec("aes-128@1");
     rescaleAllPositions(0.5);
     const after = getLayoutForSpec("aes-128@1");

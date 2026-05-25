@@ -148,9 +148,19 @@ export const StepLeafSchema = z.object({
 // bytes to the parent scope's nodeOutputs under each declared
 // outputPorts entry (default `["out"]` when absent). See `StepGroup`
 // in `core/types.ts` for the full semantics.
+//
+// `defaultCollapsed` (Slice 2.6d follow-up, 2026-05-25) is the author-
+// declared default-collapse signal — see the doc comment on
+// `StepGroup.defaultCollapsed` in `core/types.ts`. Folded into the
+// shared container fields so every container kind (group, iterate,
+// feistel-round, for-each-subgraph, for-each-subgraph-with-history)
+// validates the optional field identically. Spec-level addition — no
+// schemaVersion bump (CipherSpecSchema is loose by default, so older
+// readers ignore the field on docs that lack it).
 const containerPortEdgeFields = {
   portInputs: z.record(z.string(), PortBindingSchema).optional(),
   outputPorts: z.array(z.string()).optional(),
+  defaultCollapsed: z.boolean().optional(),
 };
 
 export const StepGroupSchema = z.object({
@@ -343,6 +353,16 @@ export const LayoutSpecSchema = z
     flowDirection: z.literal("ltr"),
     replicationModes: z.record(ReplicationModeSchema).optional(),
     relativePositions: z.record(RelativePositionSchema).optional(),
+    // Explicit user-expansion override for containers that the spec
+    // declares `defaultCollapsed: true` (Slice 2.6d follow-up,
+    // 2026-05-25). Effective collapsed set =
+    //   (spec defaults ∪ collapsedGroups) − expandedGroups.
+    // Additive optional field; older readers tolerate the absence,
+    // newer docs ride through. Precedent for "additive optional on
+    // .strict() LayoutSpec without schemaVersion bump" is
+    // `relativePositions` (2026-05-19). Empty array is never
+    // serialized — see `layout.ts::buildLayoutSpec`.
+    expandedGroups: z.array(z.string()).optional(),
   })
   .strict();
 

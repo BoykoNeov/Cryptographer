@@ -55,6 +55,7 @@ import {
   validateGraph,
 } from "@/core/graph";
 import { allColorableSources, assignSourceColors } from "@/core/source-colors";
+import { getDefaultCollapsedContainers, getEffectiveCollapsedSet } from "@/core/spec-defaults";
 import { inferShapesAtAnchors, validateShapes } from "@/core/spec-shapes";
 import type { AuxValue, State, StepNode } from "@/core/types";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
@@ -2173,11 +2174,35 @@ export const GraphView = () => {
     return m[spec().id] ?? null;
   });
 
-  /** Set of collapsed container ids for the active spec (memoized). */
-  const collapsedSet = createMemo<ReadonlySet<string>>(() => {
-    const l = activeLayout();
-    return l ? new Set(l.collapsedGroups) : new Set();
-  });
+  /**
+   * Spec-author-declared default-collapsed container ids (Slice 2.6d
+   * follow-up, 2026-05-25). Walked once per spec change via
+   * `getDefaultCollapsedContainers`. SHA-256 returns 64 ids; every
+   * other shipped cipher returns the empty set. Threaded into both
+   * the effective `collapsedSet` (below) and the chevron's toggle
+   * handler so a single click correctly routes through
+   * `toggleCollapse(..., inDefaults)`.
+   */
+  const defaultCollapsedSet = createMemo<ReadonlySet<string>>(() =>
+    getDefaultCollapsedContainers(spec()),
+  );
+
+  /**
+   * Effective collapsed set: (spec defaults ∪ layout.collapsedGroups) −
+   * layout.expandedGroups. Memoized so re-derives only when the spec
+   * or the persisted layout changes.
+   *
+   * Pre-2.6d-follow-up this was just `new Set(l.collapsedGroups)`; the
+   * spec-defaults layer was added so SHA-256's 64 round groups render
+   * collapsed on first visit without writing to localStorage (the
+   * byte-stability discipline forbade the seed-on-first-render
+   * alternative). The new `expandedGroups` set lets the user override
+   * the spec defaults explicitly, and `toggleCollapse` preserves the
+   * "id never in both sets" end-invariant.
+   */
+  const collapsedSet = createMemo<ReadonlySet<string>>(() =>
+    getEffectiveCollapsedSet(spec(), activeLayout()),
+  );
 
   /**
    * Map from each spec node id (leaf stepId or container id) to the
@@ -4945,7 +4970,16 @@ export const GraphView = () => {
                         isCollapsed={collapsedSet().has(container.id)}
                         consts={consts()}
                         onDragStart={(e) => startNodeDrag(container.id, e)}
-                        onToggleCollapse={() => toggleCollapse(spec().id, container.id)}
+                        // `inDefaults` routes the flip to expandedGroups vs
+                        // collapsedGroups so the "never in both sets" invariant
+                        // holds — see `toggleCollapse` in `stores/layout.ts`.
+                        onToggleCollapse={() =>
+                          toggleCollapse(
+                            spec().id,
+                            container.id,
+                            defaultCollapsedSet().has(container.id),
+                          )
+                        }
                         warnings={containerWarnings()}
                         stateShape={shapesByAnchor().get(container.id) ?? ""}
                         // Live preview during a palette drag: highlights this

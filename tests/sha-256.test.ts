@@ -177,6 +177,23 @@ describe("SHA-256 — spec structural pins", () => {
     expect(rounds).toHaveLength(64);
   });
 
+  // Slice 2.6d follow-up (2026-05-25). Without `defaultCollapsed: true`
+  // on every round group, the graph view shows 1792 chips on first
+  // render — the chip-wall failure mode flagged in Slice 2.6c plan F.1.
+  // Pin the marker so a future SHA-256 refactor that loses it surfaces
+  // here, not as a "users complain about a chip wall" bug report.
+  it("every compression round group carries defaultCollapsed: true (chip-wall avoidance)", () => {
+    const spec = buildSha256Spec();
+    const rounds = spec.steps.filter(
+      (s): s is Extract<typeof s, { kind: "group" }> =>
+        s.kind === "group" && /^round\.\d+$/.test(s.id),
+    );
+    expect(rounds).toHaveLength(64);
+    for (const round of rounds) {
+      expect(round.defaultCollapsed).toBe(true);
+    }
+  });
+
   it("validateShapes finds zero warnings on the SHA-256 spec", async () => {
     const { validateShapes } = await import("@/core/spec-shapes");
     const warnings = validateShapes(buildSha256Spec(), buildDefaultRegistry());

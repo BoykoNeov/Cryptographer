@@ -123,6 +123,24 @@ export type StepGroup = {
   readonly label: string; // "Round 1", "Key Expansion"
   readonly children: readonly StepNode[];
   /**
+   * Author-declared default-collapse for this container in graph view
+   * (universal-port plan Phase 2 Slice 2.6d follow-up, 2026-05-25).
+   * `true` means: first render with no user layout entry shows this
+   * container collapsed; the user can expand via the chevron, and that
+   * expansion is recorded as an explicit override on `LayoutSpec.
+   * expandedGroups` so the user's choice survives subsequent re-runs.
+   *
+   * Why on the container itself, not in a UI-store switch: the "this
+   * container is too dense to render uncollapsed by default" judgment
+   * is the cipher author's, not the renderer's. Travels with saved /
+   * shared specs so a custom palette-built SHA-256-shaped spec ships
+   * the affordance to recipients. Absent / `false` ⇒ standard behavior
+   * (uncollapsed unless `LayoutSpec.collapsedGroups` records a user
+   * collapse). First consumer: SHA-256's 64 compression round groups
+   * (1792+ leaves uncollapsed → chip wall on first render).
+   */
+  readonly defaultCollapsed?: boolean;
+  /**
    * Sink-side port-edge wiring on the container itself (Slice 2.6a — Q-edges-2
    * user pick "Leaves AND containers"). A container CONSUMES at its sink (the
    * implicit state-thread fallback handles the first child's state-input
@@ -179,6 +197,8 @@ export type IterateGroup = {
   readonly blocksFromAux: string;
   readonly outBlocksAux: string;
   readonly children: readonly StepNode[];
+  /** Author-declared default-collapse (see `StepGroup` for shared semantics). */
+  readonly defaultCollapsed?: boolean;
   /** Slice 2.6a container port-edge wiring (see `StepGroup` for shared semantics). */
   readonly portInputs?: Readonly<Record<string, PortBinding>>;
   readonly outputPorts?: readonly string[];
@@ -282,6 +302,8 @@ export type FeistelRoundGroup = {
    */
   readonly tracks: readonly BranchTrack[];
   readonly combineKind: CombineKind;
+  /** Author-declared default-collapse (see `StepGroup` for shared semantics). */
+  readonly defaultCollapsed?: boolean;
   /** Slice 2.6a container port-edge wiring (see `StepGroup` for shared semantics). */
   readonly portInputs?: Readonly<Record<string, PortBinding>>;
   readonly outputPorts?: readonly string[];
@@ -380,6 +402,8 @@ export type ForEachSubgraphNode = {
    * `"matrix4x4-bytes"`; the Slice-2.0b toy fixture uses `"bytes"`.
    */
   readonly blockLayout?: StateShape;
+  /** Author-declared default-collapse (see `StepGroup` for shared semantics). */
+  readonly defaultCollapsed?: boolean;
   /** Slice 2.6a container port-edge wiring (see `StepGroup` for shared semantics). */
   readonly portInputs?: Readonly<Record<string, PortBinding>>;
   readonly outputPorts?: readonly string[];
@@ -488,6 +512,8 @@ export type ForEachSubgraphWithHistoryNode = {
    *      historyEntryByteLength` bytes (concatenated full history).
    */
   readonly historyEntryByteLength: number;
+  /** Author-declared default-collapse (see `StepGroup` for shared semantics). */
+  readonly defaultCollapsed?: boolean;
   /** Slice 2.6a container port-edge wiring (see `StepGroup` for shared semantics). */
   readonly portInputs?: Readonly<Record<string, PortBinding>>;
   readonly outputPorts?: readonly string[];

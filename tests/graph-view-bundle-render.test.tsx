@@ -60,7 +60,7 @@ const seedAes128EcbCollapsedReplicated = (): void => {
   // Collapse the iterate — this is the user-flagged state. The toggle
   // store is keyed by spec.id; the canonical aes-128 ECB spec carries
   // a stable id that matches the collapseSet lookup.
-  toggleCollapse(aes128EcbSpec.id, "ecb-blocks");
+  toggleCollapse(aes128EcbSpec.id, "ecb-blocks", false);
   // Master replication switch ON — GraphView short-circuits the
   // replication transform when this is false, regardless of per-source
   // "always" overrides. See the doc-block on `replicateHighFanoutSources`.

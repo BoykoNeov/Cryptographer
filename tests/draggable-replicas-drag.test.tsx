@@ -116,7 +116,7 @@ describe("GraphView — block-chip drag (Slice 3 — collapsed-iterate path)", (
     setTrace(trace);
 
     // Collapse the iterate so chips appear.
-    toggleCollapse(aes128EcbSpec.id, "ecb-blocks");
+    toggleCollapse(aes128EcbSpec.id, "ecb-blocks", false);
 
     const { container } = render(() => <GraphView />);
 

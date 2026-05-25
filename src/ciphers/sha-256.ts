@@ -289,6 +289,16 @@ const buildCompressionRound = (t: number): StepNode => {
     kind: "group",
     id: p,
     label: `Round ${t}`,
+    // Default-collapse on first graph-view render (universal-port plan
+    // Slice 2.6d follow-up, 2026-05-25). Slice 2.6d's decomposition
+    // grew each compression round to 28 leaves; uncollapsed the 64
+    // rounds put 1792 chips on the canvas on first visit, which is the
+    // chip-wall failure mode Slice 2.6c plan F.1 flagged. The user can
+    // expand any round via the chevron; that explicit expansion is
+    // recorded in `LayoutSpec.expandedGroups` so the choice survives
+    // subsequent re-runs. See `core/spec-defaults.ts` for the
+    // effective-set algebra.
+    defaultCollapsed: true,
     children: [
       // ── Extract a..h from state ────────────────────────────────────
       {

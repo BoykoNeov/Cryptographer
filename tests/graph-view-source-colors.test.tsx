@@ -215,7 +215,7 @@ describe("GraphView — source-color coding", () => {
     setTrace(trace);
     setReplicationEnabled(true);
     setReplicationMode(aes128EcbSpec.id, "key-expansion", "always");
-    toggleCollapse(aes128EcbSpec.id, "ecb-blocks");
+    toggleCollapse(aes128EcbSpec.id, "ecb-blocks", false);
 
     const { container } = render(() => <GraphView />);
 

@@ -182,7 +182,7 @@ describe("GraphView — DES feistel-round rendering (Phase 6a)", () => {
     expect(container.querySelector('[data-testid="graph-leaf-round.1.expand-R"]')).not.toBeNull();
 
     const specId = useSpec()().id;
-    toggleCollapse(specId, "round.1");
+    toggleCollapse(specId, "round.1", false);
 
     // After collapse, the round container itself still renders (chevron + label
     // chip), but its R-track leaves are gone from the DOM.

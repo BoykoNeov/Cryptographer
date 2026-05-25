@@ -58,7 +58,7 @@ const seedAes128EcbCollapsedReplicated = (): void => {
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
   });
   setTrace(trace);
-  toggleCollapse(aes128EcbSpec.id, "ecb-blocks");
+  toggleCollapse(aes128EcbSpec.id, "ecb-blocks", false);
   setReplicationEnabled(true);
   setReplicationMode(aes128EcbSpec.id, "key-expansion", "always");
 };

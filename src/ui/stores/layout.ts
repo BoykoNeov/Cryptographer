@@ -102,6 +102,11 @@ const isLayoutSpec = (v: unknown): v is LayoutSpec => {
       return false;
     }
   }
+  // expandedGroups (Slice 2.6d follow-up, 2026-05-25): same array-of-
+  // string shape as `collapsedGroups`. Optional — missing is fine.
+  if (o.expandedGroups !== undefined && !Array.isArray(o.expandedGroups)) {
+    return false;
+  }
   return true;
 };
 
@@ -160,11 +165,30 @@ const cloneRelativePositions = (
 };
 
 /**
- * Compose a LayoutSpec, omitting `replicationModes` / `relativePositions`
- * entirely when empty. Empty objects would still serialize to `{}` —
- * present-but-empty produces different bytes than absent, defeating the
- * byte-stability gate that spec-only saves depend on. Centralized here so
- * every setter that rebuilds a LayoutSpec follows the same discipline.
+ * Helper: snapshot a layout's `expandedGroups` as a plain mutable array.
+ * Absent field treated as empty. Mirrors the clone helpers above.
+ *
+ * `expandedGroups` records user-explicit-expansions of containers the
+ * spec declares `defaultCollapsed: true`. Empty array is never
+ * persisted (see `buildLayoutSpec` for the omission discipline).
+ */
+const cloneExpandedGroups = (layout: LayoutSpec): string[] => {
+  return layout.expandedGroups ? [...layout.expandedGroups] : [];
+};
+
+/**
+ * Compose a LayoutSpec, omitting `replicationModes` / `relativePositions` /
+ * `expandedGroups` entirely when empty. Empty objects / arrays would still
+ * serialize to `{}` / `[]` — present-but-empty produces different bytes
+ * than absent, defeating the byte-stability gate that spec-only saves
+ * depend on. Centralized here so every setter that rebuilds a LayoutSpec
+ * follows the same discipline.
+ *
+ * The 2-by-2-by-2 omission matrix is unrolled to keep the produced
+ * object literal monomorphic — V8 / SpiderMonkey can stably hidden-class
+ * the result regardless of which optional fields are present. The cost
+ * is verbose: 8 branches for the 3 independent optional fields, but
+ * each branch is one return.
  */
 const buildLayoutSpec = (
   positions: { readonly [stepId: string]: { readonly x: number; readonly y: number } },
@@ -172,14 +196,24 @@ const buildLayoutSpec = (
   flowDirection: "ltr",
   replicationModes: { [sourceId: string]: ReplicationMode },
   relativePositions: { [syntheticId: string]: RelativePosition },
+  expandedGroups: readonly string[],
 ): LayoutSpec => {
   const base = { positions, collapsedGroups, flowDirection };
   const hasModes = Object.keys(replicationModes).length > 0;
   const hasRelatives = Object.keys(relativePositions).length > 0;
-  if (!hasModes && !hasRelatives) return base;
-  if (hasModes && !hasRelatives) return { ...base, replicationModes };
-  if (!hasModes && hasRelatives) return { ...base, relativePositions };
-  return { ...base, replicationModes, relativePositions };
+  const hasExpanded = expandedGroups.length > 0;
+  // 2×2×2 = 8 branches. Each combination produces a stable object shape.
+  if (!hasModes && !hasRelatives && !hasExpanded) return base;
+  if (hasModes && !hasRelatives && !hasExpanded) return { ...base, replicationModes };
+  if (!hasModes && hasRelatives && !hasExpanded) return { ...base, relativePositions };
+  if (!hasModes && !hasRelatives && hasExpanded) return { ...base, expandedGroups };
+  if (hasModes && hasRelatives && !hasExpanded)
+    return { ...base, replicationModes, relativePositions };
+  if (hasModes && !hasRelatives && hasExpanded)
+    return { ...base, replicationModes, expandedGroups };
+  if (!hasModes && hasRelatives && hasExpanded)
+    return { ...base, relativePositions, expandedGroups };
+  return { ...base, replicationModes, relativePositions, expandedGroups };
 };
 
 /**
@@ -214,6 +248,7 @@ export const setNodePosition = (specId: string, nodeId: string, x: number, y: nu
     current.flowDirection,
     cloneReplicationModes(current),
     cloneRelativePositions(current),
+    cloneExpandedGroups(current),
   );
   const map = { ...layoutMap(), [specId]: next };
   setLayoutMapSignal(map);
@@ -239,6 +274,7 @@ export const clearNodePosition = (specId: string, nodeId: string): void => {
     current.flowDirection,
     cloneReplicationModes(current),
     cloneRelativePositions(current),
+    cloneExpandedGroups(current),
   );
   if (!hasUserLayout(next)) {
     const map = { ...layoutMap() };
@@ -282,6 +318,7 @@ export const setRelativePosition = (
     current.flowDirection,
     cloneReplicationModes(current),
     relatives,
+    cloneExpandedGroups(current),
   );
   const map = { ...layoutMap(), [specId]: next };
   setLayoutMapSignal(map);
@@ -307,6 +344,7 @@ export const clearRelativePosition = (specId: string, nodeId: string): void => {
     current.flowDirection,
     cloneReplicationModes(current),
     relatives,
+    cloneExpandedGroups(current),
   );
   if (!hasUserLayout(next)) {
     const map = { ...layoutMap() };
@@ -321,24 +359,100 @@ export const clearRelativePosition = (specId: string, nodeId: string): void => {
 };
 
 /**
- * Toggle a container's collapsed state. If currently collapsed → uncollapse;
- * if not → add to collapsed set. Used by the container header's chevron click.
+ * Toggle a container's collapsed state, operating over the EFFECTIVE
+ * collapsed view (spec defaults ∪ user collapses − user expansions),
+ * not the raw `collapsedGroups`. Used by the container header's chevron
+ * click.
+ *
+ * `inDefaults` is whether the spec marks this container `defaultCollapsed:
+ * true` — the caller has the `spec` in hand and computes this via
+ * `core/spec-defaults.ts::isDefaultCollapsed`. Threading it through
+ * here (instead of having the store import a spec walker) keeps the
+ * layout store spec-agnostic; the store doesn't need to know which
+ * cipher the user is looking at.
+ *
+ * The four-case flip below preserves a load-bearing **end-invariant**:
+ * a container id appears in AT MOST ONE of `collapsedGroups` and
+ * `expandedGroups` at any time. That keeps the effective-set algebra
+ * monotone — once you know `inDefaults` and the two sets, the effective
+ * state is fully determined.
+ *
+ * Branches:
+ *
+ *   `inDefaults === false` (the historical case — every shipped cipher
+ *   pre-2.6d-follow-up):
+ *     - If `collapsedGroups` has it: remove (user is un-collapsing
+ *       their explicit collapse). `expandedGroups` is never touched
+ *       (the invariant guarantees it can't contain this id).
+ *     - Else: add to `collapsedGroups` (user collapses what was open).
+ *
+ *   `inDefaults === true` (SHA-256 round groups, first consumer):
+ *     - If `expandedGroups` has it: remove (user is re-collapsing back
+ *       to the spec default). Net effect: returns to the default.
+ *     - Else: add to `expandedGroups` (user expands a default-collapsed
+ *       container; this is the explicit override the new set records).
+ *     - `collapsedGroups` is never touched in this branch — adding a
+ *       redundant explicit collapse on a default-collapsed container
+ *       would persist bytes that change nothing about the effective
+ *       state, defeating the byte-stability discipline.
  */
-export const toggleCollapse = (specId: string, containerId: string): void => {
+export const toggleCollapse = (specId: string, containerId: string, inDefaults: boolean): void => {
   const current = layoutMap()[specId] ?? emptyLayout();
-  const set = new Set(current.collapsedGroups);
-  if (set.has(containerId)) {
-    set.delete(containerId);
+  const collapsedSet = new Set(current.collapsedGroups);
+  const expandedSet = new Set(current.expandedGroups ?? []);
+
+  if (inDefaults) {
+    if (expandedSet.has(containerId)) {
+      // User re-collapses back to the default. Remove the explicit
+      // expansion override; the default takes over.
+      expandedSet.delete(containerId);
+    } else {
+      // User expands a default-collapsed container. Record the explicit
+      // override on `expandedGroups`; do NOT touch `collapsedGroups`
+      // (the invariant).
+      expandedSet.add(containerId);
+    }
+    // Defensive structural guard: even if the layout reached us with
+    // `containerId` in BOTH sets (hand-edited JSON, or a future spec
+    // rename that reclassified a container so a previously-explicit
+    // entry now overlaps a default), purge it from the other set
+    // unconditionally. Keeps the "never in both" invariant a hard
+    // structural property of every write, not just a flow consequence
+    // of starting clean.
+    collapsedSet.delete(containerId);
   } else {
-    set.add(containerId);
+    if (collapsedSet.has(containerId)) {
+      // User un-collapses their explicit collapse.
+      collapsedSet.delete(containerId);
+    } else {
+      // User collapses what was open. Record on `collapsedGroups`.
+      collapsedSet.add(containerId);
+    }
+    // Defensive structural guard — mirror of the inDefaults branch.
+    expandedSet.delete(containerId);
   }
+
   const next = buildLayoutSpec(
     current.positions,
-    [...set],
+    [...collapsedSet],
     current.flowDirection,
     cloneReplicationModes(current),
     cloneRelativePositions(current),
+    [...expandedSet],
   );
+  // A toggle on a default-collapsed-but-not-yet-touched container CAN
+  // produce a layout with only `expandedGroups` populated, which still
+  // counts as user customization (hasUserLayout returns true) and so
+  // persists. Conversely, re-collapsing the last explicit expansion
+  // (with no other customization) leaves the layout empty — drop the
+  // entry to keep `cryptographer.layouts` byte-stable.
+  if (!hasUserLayout(next)) {
+    const map = { ...layoutMap() };
+    delete (map as { [specId: string]: LayoutSpec })[specId];
+    setLayoutMapSignal(map);
+    persist(map);
+    return;
+  }
   const map = { ...layoutMap(), [specId]: next };
   setLayoutMapSignal(map);
   persist(map);
@@ -371,6 +485,7 @@ export const setReplicationMode = (
     current.flowDirection,
     modes,
     cloneRelativePositions(current),
+    cloneExpandedGroups(current),
   );
   // If the resulting layout is entirely empty (no pins, no collapsed, no
   // modes, no relative pins), drop the entry from the map — same byte-
@@ -464,6 +579,7 @@ export const rescaleAllPositions = (factor: number): void => {
       layout.flowDirection,
       cloneReplicationModes(layout),
       newRelatives,
+      cloneExpandedGroups(layout),
     );
     changed = true;
   }
@@ -497,6 +613,14 @@ export const hasUserLayout = (layout: LayoutSpec | null): boolean => {
   // Draggable replicas (2026-05-19): a relative pin on a chip is a
   // meaningful customization on its own.
   if (layout.relativePositions && Object.keys(layout.relativePositions).length > 0) return true;
+  // Default-collapse override (Slice 2.6d follow-up, 2026-05-25):
+  // expandedGroups carries explicit user-expansions of containers the
+  // spec marks `defaultCollapsed: true`. A SHA-256 session where the
+  // user did nothing but expand `round.5` produces a layout whose only
+  // populated field is `expandedGroups: ["round.5"]` — that's
+  // meaningful customization and must persist + ride through Save /
+  // Share.
+  if (layout.expandedGroups && layout.expandedGroups.length > 0) return true;
   return false;
 };
 
@@ -560,12 +684,22 @@ export const renameLayoutIds = (
     newRelativePositions = { ...layout.relativePositions };
   }
 
+  // `expandedGroups` (Slice 2.6d follow-up) keys real container ids,
+  // same as `collapsedGroups` — apply the rename in parallel. Empty
+  // result is omitted from the returned object per byte-stability
+  // discipline (mirrors how `newReplicationModes` is handled above).
+  let newExpandedGroups: readonly string[] | undefined;
+  if (layout.expandedGroups && layout.expandedGroups.length > 0) {
+    newExpandedGroups = layout.expandedGroups.map((id) => renames.get(id) ?? id);
+  }
+
   return {
     positions: newPositions,
     collapsedGroups: newCollapsedGroups,
     flowDirection: layout.flowDirection,
     ...(newReplicationModes ? { replicationModes: newReplicationModes } : {}),
     ...(newRelativePositions ? { relativePositions: newRelativePositions } : {}),
+    ...(newExpandedGroups ? { expandedGroups: newExpandedGroups } : {}),
   };
 };
 

@@ -733,7 +733,7 @@ describe("GraphView — layout store writes don't touch the trace signal", () =>
     const traceBefore = getTrace();
     const specId = useSpec()().id;
     setNodePosition(specId, "round.5", 500, 500);
-    toggleCollapse(specId, "round.7");
+    toggleCollapse(specId, "round.7", false);
     const traceAfter = getTrace();
     expect(traceAfter).toBe(traceBefore);
   });

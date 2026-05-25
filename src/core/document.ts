@@ -139,6 +139,29 @@ export type LayoutSpec = {
    * has been dragged — same byte-stability discipline as `replicationModes`.
    */
   readonly relativePositions?: { readonly [syntheticId: string]: RelativePosition };
+  /**
+   * Explicit user-expansion overrides for containers the spec marks
+   * `defaultCollapsed: true` (Slice 2.6d follow-up, 2026-05-25). The
+   * presence of a container id here means "the user expanded this
+   * container; show it expanded even though the spec author wanted it
+   * collapsed by default."
+   *
+   * Effective collapsed set is computed as
+   *   (spec defaults ∪ collapsedGroups) − expandedGroups
+   * in `core/spec-defaults.ts::getEffectiveCollapsedSet`. The two
+   * persisted sets are MUTUALLY EXCLUSIVE by `toggleCollapse`'s
+   * invariant: a container id never appears in BOTH at once.
+   *
+   * Why a second set instead of repurposing `collapsedGroups` as a
+   * tri-state map: the existing presence/absence semantic on
+   * `collapsedGroups` survives unchanged, every reader stays
+   * monomorphic, and the byte-stability gate (`hasUserLayout`) treats
+   * the new set the same way it treats `collapsedGroups` /
+   * `relativePositions`. Absent / empty when no default-collapsed
+   * container has been expanded by the user — same byte-stability
+   * discipline as the other optional fields.
+   */
+  readonly expandedGroups?: readonly string[];
 };
 
 /**

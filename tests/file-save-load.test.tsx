@@ -371,7 +371,7 @@ describe("App — Save/Load (Slice 5)", () => {
     // verifying the Save side here, not the drag side.
     const specId = useSpec()().id;
     setNodePosition(specId, "round.5", 400, 80);
-    toggleCollapse(specId, "round.7");
+    toggleCollapse(specId, "round.7", false);
 
     fireEvent.click(findButton(container, "save"));
 
@@ -392,7 +392,7 @@ describe("App — Save/Load (Slice 5)", () => {
     // Drag + collapse via the store directly (drag plumbing tested elsewhere).
     const specId = useSpec()().id;
     setNodePosition(specId, "round.5", 400, 80);
-    toggleCollapse(specId, "round.7");
+    toggleCollapse(specId, "round.7", false);
 
     fireEvent.click(findButton(container, "save"));
     const savedText = await latestBlob(saveCapture).text();
