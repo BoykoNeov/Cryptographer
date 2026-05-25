@@ -178,6 +178,20 @@ export const stateToAuxPortContract: PortContract = {
 // `byteLength: undefined` (polymorphic) AND `raw` layout requires two
 // separate PortContracts. A polymorphic version would lose the editor's
 // length-coercion glyphs on AES-CBC. Sibling is the minimal-risk choice.
+//
+// **Flag-off behavior is INCIDENTAL.** Today's only consumer
+// (`aux-load-bytes@1`) is port-native and throws under
+// `portedDispatchEnabled: false`, so SHA-256 only runs flag-on. Under
+// flag-on the ported path encodes the legacy executor's `BytesState`
+// snapshot to `Uint8Array` via `auxValueToPortBytes` and the runtime
+// decodes via `layout: "raw"` → `aux[auxName]` lands as a bare
+// `Uint8Array`. Under flag-off (legacy dispatch) the runtime sets
+// `aux[auxName]` to the `BytesState` directly — the wrappers diverge.
+// No shipped spec observes this asymmetry; a future cipher that needs
+// `state-to-aux-bytes` under flag-off (legacy-only spec) would have to
+// reconcile, and a dedicated parity test would become meaningful then.
+// See `tests/state-to-aux-bytes.test.ts` for the rationale on why
+// frame-stream parity is NOT pinned today.
 
 export const stateToAuxBytesMeta: ProjectionMetadata = {
   stateLayout: "bytes",
