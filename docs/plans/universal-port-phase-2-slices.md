@@ -1333,25 +1333,225 @@ state-thread mode — SHA-256 compression is the forcing function).
 
 ### Slice 2.6 — Compression function + outer block loop + first end-to-end SHA-256
 
-**Goal:** assemble the full SHA-256 spec. First end-to-end run via
-direct `runSpec({portedDispatchEnabled: true})` flag (no spec-level
-opt-in plumbing yet — that's Slice 2.7).
+**Sub-sliced at 2.6 start (2026-05-25).** Advisor consult flagged that
+the plan's prose for 2.6 glides past a load-bearing hidden foundation:
+the spec edge-wiring mechanism doesn't exist yet, and you can't author
+the SHA-256 spec without it. Splitting into:
+
+- **Slice 2.6a** (this section) — Spec edge-wiring foundation (sink-
+  side `portInputs` on leaves AND containers, runtime resolution, schema
+  + validator, container `outputPorts`). Toy fixture pins the
+  mechanism end-to-end.
+- **Slice 2.6b** (next section) — Author the SHA-256 spec at
+  `src/ciphers/sha-256.ts` on top of 2.6a's foundation; KAT against
+  FIPS 180-4 §A.1 "abc". Open #N9 (spine-termination for state-thread
+  for-each-subgraph) surfaces here when graph view first renders SHA-256
+  compression — deferred from 2.6a start per advisor's option (c).
+
+### Slice 2.6a — Spec edge-wiring foundation + toy fixture — SHIPPED 2026-05-25
+
+**Status: GREEN 2026-05-25.** First end-to-end wiring path for port-
+native primitives via sink-side `portInputs` on `StepLeaf` AND every
+container kind (`StepGroup`, `IterateGroup`, `FeistelRoundGroup`,
+`ForEachSubgraphNode`, `ForEachSubgraphWithHistoryNode`). Suite at
+**2108/2108** (+14 new in the toy test file); bundle **592.88 KB**
+gzipped (+2.45 KB from Slice 2.5's 590.43 KB). Phase 1 matrix
+untouched.
+
+**Resolved user picks (2026-05-25)** — surfaced before authoring,
+covered Q-edges-1 through Q-edges-5 + builder-style for the eventual
+SHA-256 spec:
+
+- **Q-edges-1 (field name) = `portInputs`** — avoids collision with
+  the existing `CipherSpec.inputs` (seed plaintext + key); mirrors
+  `PortContract.inputs` vocabulary.
+- **Q-edges-2 (scope) = Leaves AND containers** — containers expose
+  declared output ports for downstream wiring; matches sink-only
+  Q-edges intent fully.
+- **Q-edges-3 (state-thread interaction) = Unbound ports fall back
+  to implicit state thread** — preserves Phase 1's lift-via-projection
+  behavior on lifted-legacy ports while letting portInputs override
+  per-port. Pure port-native leaves (no `meta`) require every port
+  wired; an unbound port throws.
+- **Q-edges-4 (container output port names) = Author-declared per
+  node, defaulting to `["out"]`** — single canonical output port
+  carrying exit-state bytes; multi-output container semantics deferred
+  until a real consumer surfaces.
+- **Q-edges-5 (validation timing) = Spec-validator (pre-run, hard
+  fail)** — validator emits `port-input-unwired` / `port-input-
+  unresolvable` warnings AND runtime throws at leaf invocation if a
+  reference can't resolve. Warnings cover editor authoring; throws
+  are the Run-time gate.
+- **Authoring style = Builder helper** — 2.6b will compose SHA-256
+  via TypeScript builder functions emitting expanded leaves, mirroring
+  AES's spec-builder precedent.
+
+**Plan amendment after first author pass:** the initial 2.6a draft
+shipped leaves-only (per a self-imposed scope reduction). Post-implementation
+advisor consult caught the divergence from the Q-edges-2 pick — user
+explicitly picked containers; the extension landed in the same commit.
+Iterative-slice-review [[feedback_iterative_slice_review]] paid for
+itself: container support is load-bearing for 2.6b's message-schedule-
+into-compression handoff (the `for-each-subgraph-with-history` exit
+needs to be readable from compression-body leaves).
+
+**Ships (one slice, one commit):**
+
+1. **`PortBinding` type + `StepLeaf.portInputs` field** (`core/types.ts`).
+   Record-shaped (`Readonly<Record<string, PortBinding>>`) so the
+   wiring map round-trips through JSON serialization without a custom
+   Zod transformer (the trap that hit narrationOverride in Slice 1.10:
+   `params: ReadonlyMap` got silently stripped on document decode).
+2. **Container port-edge mixin** — every container kind (`StepGroup`,
+   `IterateGroup`, `FeistelRoundGroup`, `ForEachSubgraphNode`,
+   `ForEachSubgraphWithHistoryNode`) carries optional `portInputs?` AND
+   `outputPorts?: readonly string[]` (default `["out"]`). The `portInputs`
+   field on containers is purely forward-compatibility today — the
+   runtime doesn't yet read it at container boundaries; only `outputPorts`
+   is exercised in 2.6a.
+3. **Runtime port-edge resolution** (`core/runtime.ts`). Per `walk`
+   call (one per lexical scope), a `nodeOutputs: Map<nodeId, Map<port,
+   Uint8Array>>` records every port-native leaf's outputs AND every
+   container's exit-state bytes (via the new `publishContainerOutputs`
+   helper). At each port-native leaf invocation: (a) resolve declared
+   portInputs from `nodeOutputs` (throw on missing node or port), (b)
+   fall back to `meta.stateInputPort` / `meta.auxReadPorts` projection
+   for unbound ports on lifted-legacy steps, (c) for pure port-native
+   leaves (no meta) verify every declared input port is wired (else
+   throw with a sharper "input port X is not wired" message).
+   Scope-isolation by construction — each recursive `walk` call gets
+   its own `nodeOutputs` so iterate / for-each-subgraph iterations
+   can't accidentally leak.
+4. **Container exit-state publication** — `publishContainerOutputs(id,
+   outputPorts)` encodes the current `state` via
+   `stateToPortBytes(state, state.shape)` and writes the bytes under
+   every declared port name. All shipped exit shapes (`bytes`,
+   `matrix4x4-bytes`, `bitvec`) are encodable; bigint throws (no
+   container produces it today). Container outputs do NOT carry layout
+   metadata — downstream consumers see raw bytes regardless of whether
+   the container exited as a matrix or as flat bytes. Acknowledged
+   ship-as-is: a future cipher wiring `iterate/out` (matrix4x4-bytes,
+   16 bytes) into a port-native primitive expecting `raw` would silently
+   miss the layout mismatch. Surface when it bites; don't pre-engineer.
+5. **Schema round-trip support** (`core/document-schema.ts`). Added
+   `PortBindingSchema` + `portInputs` to `StepLeafSchema` + shared
+   `containerPortEdgeFields` (portInputs + outputPorts) spread into
+   every container schema. Pre-2.6a documents (no portInputs anywhere)
+   validate unchanged.
+6. **Validator** (`core/spec-shapes.ts`). New `GraphWarning` kinds:
+   `port-input-unwired` (pure port-native leaf has an input port with
+   no declared binding) and `port-input-unresolvable` (declared binding
+   references a missing node or a port the upstream doesn't emit). The
+   walker builds a scope-local `scopeOutputs` map matching the runtime's
+   `nodeOutputs` scoping, then validates leaf bindings against it. The
+   `<WarningGlyph>` renderer in `GraphView.tsx` formats both new kinds
+   for the in-editor tooltip.
+7. **Toy fixture** (`tests/runtime-port-edge-wiring-toy.test.ts` —
+   15 tests across 6 describe blocks):
+   - **Happy path** (4-leaf chain `constant-load → constant-load →
+     rotate-bits-right → xor`) — pins the wiring math
+     (`ROR32(0x01020304, 8) = 0x04010203`; XOR with mask = expected).
+   - **Unwired port** — validator emits warning; runtime throws.
+   - **Unresolvable refs** — both `missing-node` and `missing-port`
+     warnings; both runtime throw paths pinned.
+   - **Container outputs** — group wraps a `byte-substitution` leaf;
+     downstream `xor` reads `group/out` to verify container exit-state
+     publication. Wrong port name surfaces `missing-port`.
+   - **Mixed-mode (Q-edges-3)** — lifted-legacy `byte-substitution`
+     with `portInputs` override on the `state` port; pins that
+     portInputs override BYPASSES the state-thread projection (the
+     contrast between an all-`0xff` initial state and a constant-load
+     source `[0..15]` makes the override observable via S-box output).
+   - **Document round-trip** — `portInputs`-bearing spec encodes to
+     JSON, decodes via `CipherDocumentSchema`, leaves' portInputs maps
+     survive byte-identical. Insurance against the narrationOverride
+     silent-strip trap.
+   - **Off-flag passthrough** — running a portInputs spec with
+     `portedDispatchEnabled: false` still hits the legacy guard.
+8. **Updated 9 existing port-native step tests** — their on-flag
+   dispatch-error tests previously asserted the "requires spec edge-
+   wiring (Slice 2.6+)" placeholder throw; all updated to assert the
+   new per-port "input port X is not wired" guard. `constant-load` is
+   the special case (zero input ports) — its test now asserts success
+   (a single-frame trace) since there's nothing to throw on.
+
+**Touched files (10 src + 11 tests):**
+
+- `src/core/types.ts` — `PortBinding` type + `StepLeaf.portInputs`
+  field + container port-edge mixin on 5 container types.
+- `src/core/document-schema.ts` — `PortBindingSchema` + portInputs on
+  StepLeafSchema + shared `containerPortEdgeFields` on every container
+  schema.
+- `src/core/runtime.ts` — scope-local `nodeOutputs` map,
+  `publishContainerOutputs` helper, restructured port-native dispatch
+  to resolve portInputs first, fall back to meta projection, throw on
+  unwired ports.
+- `src/core/spec-shapes.ts` — `scopeOutputs` map + `recordContainerOutputs`
+  helper + per-leaf port-input validation emitting `port-input-unwired`
+  / `port-input-unresolvable`.
+- `src/core/graph.ts` — `GraphWarning` discriminated-union widened with
+  two new kinds.
+- `src/ui/components/GraphView.tsx` — `formatWarning` extended with
+  the two new kinds (renders inline in the warning glyph tooltip).
+- 9 existing port-native test files updated to assert the new
+  "input port X is not wired" throw instead of the placeholder
+  "requires spec edge-wiring" message (`constant-load` switches to a
+  success assertion since it has zero input ports).
+- `tests/runtime-port-edge-wiring-toy.test.ts` — NEW (15 tests).
+- `docs/plans/universal-port-phase-2-slices.md` — this status section.
+
+**Pass/fail gate — MET:**
+- `npm run check` GREEN: biome ci + tsc + **2108/2108** vitest (+14)
+  + vite build (~42s).
+- Bundle 592.88 KB gzipped (+2.45 KB from Slice 2.5) — past Vite's
+  500 KB threshold per Open #N8 (informational, not pre-engineer).
+- All four port-native primitives (rotate-bits-right, xor, add-mod-32,
+  shift-bits-right, and, not, pad-with-byte, append-be64-length,
+  constant-load) reachable end-to-end from a `runSpec` dispatch call
+  via portInputs declarations.
+- Phase 1 frame-parity matrix (Slice 1.11) still green — no shipped
+  legacy/lifted-legacy spec uses `portInputs` yet, so the off-flag
+  + on-flag parity holds unchanged.
+
+**Phase 2 status:** 11 slices shipped (2.0a/b-i/b-ii/c, 2.1a/b, 2.2,
+2.3, 2.4, 2.5, 2.6a). 4 open spec decisions remain: **N1** (closed at
+2.0b), **N4** (closed at 2.0c, baked into 2.5's emulation, becomes
+spec literal at 2.6b), **N7** (cipher selector category — Slice 2.10),
+**N8** (bundle size — 593 KB, informational), **N9** (spine-termination
+mode — deferred to mid-2.6b per the iterate-slice-review pattern).
+
+**Next stop:** Slice 2.6b — author SHA-256 spec at `src/ciphers/sha-256.ts`
+via builder helper, KAT against FIPS 180-4 §A.1 "abc". Open #N9
+spine-termination user pick surfaces when graph view first renders
+SHA-256 compression.
+
+### Slice 2.6b — Author SHA-256 spec + first end-to-end "abc" KAT
+
+**Goal:** on top of 2.6a's edge-wiring foundation, build the SHA-256
+spec via a builder helper and run the FIPS 180-4 §A.1 "abc" KAT.
+First port-native cipher.
 
 **Scope (sketched):**
 
 - Compression function body (64 rounds): T1 = h + Σ1(e) + Ch(e,f,g) +
   K_t + W_t; T2 = Σ0(a) + Maj(a,b,c); h=g, g=f, f=e, e=d+T1, d=c, c=b,
-  b=a, a=T1+T2. Wrapped in inner for-each-subgraph (state-thread per
-  Slice 2.0a).
+  b=a, a=T1+T2.
 - After compression: 8-way add-mod-32 of working variables (a..h) into
   hash state (H_0..H_7).
-- Outer for-each-subgraph (item-array per Slice 2.0b) wrapping the
-  full per-block compression. Outer state-thread = the running hash
-  state H_0..H_7 across blocks.
-- Cipher spec authored at `src/ciphers/sha-256.ts` and registered.
+- Outer per-block loop (`for-each-subgraph` item-array per Slice 2.0b
+  / state-thread per Slice 2.0a — exact mode picked at slice start
+  based on the topology that emerges). Outer state-thread = running
+  hash state H_0..H_7 across blocks.
+- Cipher spec authored at `src/ciphers/sha-256.ts` via builder helpers
+  (e.g., `buildCompressionRound(t: number)`) per the user pick on
+  authoring style. Saved-document JSON is fully expanded; helpers
+  exist only at spec-construction time.
 - KAT test: `tests/sha-256.test.ts` runs single-block "abc" KAT
   (FIPS 180-4 §A.1, expected
   `ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad`).
+- Open #N9 user pick surfaces mid-slice when graph view first renders
+  SHA-256 compression and the spine-suppression-at-for-each-subgraph
+  boundary bug becomes visible.
 
 **Pass/fail gate:** "abc" KAT passes byte-equal; per-frame trace exists
 for every leaf execution (compression: 64 rounds × ~8 ops + helpers;

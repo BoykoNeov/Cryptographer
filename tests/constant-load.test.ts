@@ -236,12 +236,23 @@ describe("constant-load@1 — runtime dispatch guards", () => {
     ).toThrow('step type "constant-load@1" is port-native; requires portedDispatchEnabled: true');
   });
 
-  it("on-flag dispatch throws 'requires spec edge-wiring (Slice 2.6+)'", () => {
-    expect(() =>
-      runSpec(buildSpec(), buildDefaultRegistry(), {
-        initialState: emptyBytes(),
-        portedDispatchEnabled: true,
-      }),
-    ).toThrow(/port-native and requires spec edge-wiring/);
+  it("on-flag dispatch SUCCEEDS for a constant-load leaf (zero input ports — Slice 2.6a)", () => {
+    // Constant-load is the ONLY port-native primitive with zero input
+    // ports (it's a constant emitter), so post-Slice-2.6a it no longer
+    // throws the unwired-port guard — it just runs and emits a frame.
+    // The runtime records its `output` port bytes into the scope-local
+    // `nodeOutputs` map so downstream wired consumers can read it; here
+    // there's no consumer, so the frame stands alone. State is not
+    // touched (no `meta` → no stateOutputPort), so stateBefore /
+    // stateAfter both carry the initial empty bytes.
+    const trace = runSpec(buildSpec(), buildDefaultRegistry(), {
+      initialState: emptyBytes(),
+      portedDispatchEnabled: true,
+    });
+    expect(trace.frames).toHaveLength(1);
+    const frame = trace.frames[0];
+    if (frame === undefined) throw new Error("trace.frames[0] is undefined");
+    expect(frame.stepType).toBe("constant-load@1");
+    expect(frame.stepId).toBe("c");
   });
 });

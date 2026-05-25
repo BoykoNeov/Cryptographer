@@ -44,6 +44,43 @@ export type Aux = ReadonlyMap<string, AuxValue>;
 
 // ─── Spec ─────────────────────────────────────────────────────────────────
 
+/**
+ * Sink-side spec edge wiring (universal-port plan Phase 2 Slice 2.6a,
+ * 2026-05-25). A `PortBinding` declares where ONE input port on a leaf
+ * sources its bytes from: the upstream node's id plus the output port
+ * name on that node.
+ *
+ * Carried on `StepLeaf.portInputs` as a `Record<inputPortName, PortBinding>`
+ * — record-shaped (not Map) so it round-trips losslessly through the
+ * `CipherDocument` JSON schema without a custom Zod transformer. The
+ * runtime resolves the binding at leaf invocation by looking up the
+ * upstream node's recorded outputs in a scope-local `nodeOutputs` map.
+ *
+ * **Resolution rules** (Q-edges-3 user pick 2026-05-25 — "unbound ports
+ * fall back to implicit state thread"):
+ *   - Pure port-native leaves (`StepRegistration.kind === "ported"`
+ *     with `meta` absent): EVERY declared input port must be wired.
+ *     A leaf with an unwired port throws at runtime entry; the
+ *     spec-shapes validator emits a `port-input-unwired` warning
+ *     pre-Run.
+ *   - Lifted-legacy ported leaves (`kind: "ported"` WITH `meta`):
+ *     unbound ports fall back to the meta-driven projection (state
+ *     port projects parent state; aux ports project from aux map).
+ *     The portInputs map can override the state projection by binding
+ *     `meta.stateInputPort` explicitly, but 2.6a does not yet exercise
+ *     this mode — flagged as a 2.6b+ feature.
+ *
+ * **Scope** (2.6a): only same-scope (sibling) wiring within one walk
+ * frame. A leaf inside an iterate/for-each-subgraph body CANNOT wire
+ * to a node outside that body. Cross-scope wiring is deferred to 2.6b
+ * when SHA-256's constant chips need to feed compression-body leaves
+ * across the for-each-subgraph boundary.
+ */
+export type PortBinding = {
+  readonly node: string; // upstream node id (StepLeaf or container)
+  readonly port: string; // output port name on that upstream node
+};
+
 export type StepLeaf = {
   readonly kind: "step";
   readonly id: string; // unique within spec; UI references this
@@ -64,6 +101,20 @@ export type StepLeaf = {
    * would extend this shape in place.
    */
   readonly narrationOverride?: StepDocumentation;
+  /**
+   * Sink-side port-edge wiring (universal-port plan Phase 2 Slice 2.6a).
+   * Key = this leaf's INPUT port name (matches a port from the step
+   * type's `PortContract.inputs`); value = `PortBinding` to an upstream
+   * node's output port.
+   *
+   * Empty / absent map means "no edges declared." Pure port-native
+   * leaves require every input port to be bound (throws at runtime
+   * if any port is unwired). Lifted-legacy leaves fall back to the
+   * `meta`-driven state/aux projection for unbound ports.
+   *
+   * See `PortBinding` doc for the full resolution semantics.
+   */
+  readonly portInputs?: Readonly<Record<string, PortBinding>>;
 };
 
 export type StepGroup = {
@@ -71,6 +122,33 @@ export type StepGroup = {
   readonly id: string;
   readonly label: string; // "Round 1", "Key Expansion"
   readonly children: readonly StepNode[];
+  /**
+   * Sink-side port-edge wiring on the container itself (Slice 2.6a — Q-edges-2
+   * user pick "Leaves AND containers"). A container CONSUMES at its sink (the
+   * implicit state-thread fallback handles the first child's state-input
+   * today; explicit `portInputs` would let a future "two-input container"
+   * shape declare its own inputs). For 2.6a no container kind reads
+   * explicit portInputs at its boundary — the field is declared on every
+   * container type so the schema + types are uniform, but the runtime
+   * doesn't yet consume it on containers. Pure forward-compatibility.
+   */
+  readonly portInputs?: Readonly<Record<string, PortBinding>>;
+  /**
+   * Container's PUBLISHED output port names (Slice 2.6a — Q-edges-4 user
+   * pick "Author-declared per node, defaulting to `out`"). Downstream
+   * siblings can wire `{ node: "this-container-id", port: portName }` and
+   * the runtime resolves to the container's exit-state bytes at exit.
+   *
+   * When absent, defaults to `["out"]` — the single canonical port that
+   * carries the container's final-state bytes (encoded from `state` via
+   * `stateToPortBytes(state, state.shape)` at container exit). Multi-
+   * output container semantics (e.g., exposing both "out" = concat AND
+   * "history" = per-iteration outputs separately) are deferred to a
+   * future slice when a real consumer surfaces; for 2.6a all declared
+   * ports get the SAME bytes (the exit state) — sufficient for SHA-256's
+   * message-schedule-into-compression handoff in Slice 2.6b.
+   */
+  readonly outputPorts?: readonly string[];
 };
 
 /**
@@ -101,6 +179,9 @@ export type IterateGroup = {
   readonly blocksFromAux: string;
   readonly outBlocksAux: string;
   readonly children: readonly StepNode[];
+  /** Slice 2.6a container port-edge wiring (see `StepGroup` for shared semantics). */
+  readonly portInputs?: Readonly<Record<string, PortBinding>>;
+  readonly outputPorts?: readonly string[];
 };
 
 /**
@@ -201,6 +282,9 @@ export type FeistelRoundGroup = {
    */
   readonly tracks: readonly BranchTrack[];
   readonly combineKind: CombineKind;
+  /** Slice 2.6a container port-edge wiring (see `StepGroup` for shared semantics). */
+  readonly portInputs?: Readonly<Record<string, PortBinding>>;
+  readonly outputPorts?: readonly string[];
 };
 
 /**
@@ -296,6 +380,9 @@ export type ForEachSubgraphNode = {
    * `"matrix4x4-bytes"`; the Slice-2.0b toy fixture uses `"bytes"`.
    */
   readonly blockLayout?: StateShape;
+  /** Slice 2.6a container port-edge wiring (see `StepGroup` for shared semantics). */
+  readonly portInputs?: Readonly<Record<string, PortBinding>>;
+  readonly outputPorts?: readonly string[];
 };
 
 /**
@@ -401,6 +488,9 @@ export type ForEachSubgraphWithHistoryNode = {
    *      historyEntryByteLength` bytes (concatenated full history).
    */
   readonly historyEntryByteLength: number;
+  /** Slice 2.6a container port-edge wiring (see `StepGroup` for shared semantics). */
+  readonly portInputs?: Readonly<Record<string, PortBinding>>;
+  readonly outputPorts?: readonly string[];
 };
 
 export type StepNode =

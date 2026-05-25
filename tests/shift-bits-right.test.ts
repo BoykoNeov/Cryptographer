@@ -301,13 +301,16 @@ describe("shift-bits-right@1 — runtime dispatch guards", () => {
     );
   });
 
-  it("on-flag dispatch (portedDispatchEnabled: true) throws edge-wiring-required error", () => {
+  it("on-flag dispatch with no portInputs throws 'input port input is not wired' (Slice 2.6a)", () => {
+    // Post-Slice-2.6a: edge-wiring landed; unwired ports surface
+    // per-port via the dispatch-path guard. End-to-end wired specs
+    // live in `runtime-port-edge-wiring-toy.test.ts`.
     const spec = buildSpec();
     expect(() =>
       runSpec(spec, buildDefaultRegistry(), {
         initialState: emptyBytes(),
         portedDispatchEnabled: true,
       }),
-    ).toThrow(/port-native and requires spec edge-wiring/);
+    ).toThrow(/input port 'input' is not wired/);
   });
 });

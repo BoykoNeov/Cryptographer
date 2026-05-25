@@ -5385,6 +5385,16 @@ const formatWarning = (w: GraphWarning): string => {
       // executor's own throw text so the warning and the Run-time
       // exception read consistently.
       return `Expects state shape '${w.expected}', but '${w.got}' arrives here.`;
+    case "port-input-unwired":
+      // Universal-port Slice 2.6a: pure port-native leaf has an input
+      // port with no `portInputs` binding. Surfaced to the user as a
+      // pre-Run warning so they can wire it before clicking Run; the
+      // runtime throws if they don't.
+      return `Input port '${w.portName}' is not wired — declare it in this step's portInputs map.`;
+    case "port-input-unresolvable":
+      return w.reason === "missing-node"
+        ? `Input port '${w.portName}' references node '${w.targetNode}' which doesn't exist in this scope.`
+        : `Input port '${w.portName}' references port '${w.targetPort}' on '${w.targetNode}' but that port isn't an output of that node.`;
   }
 };
 

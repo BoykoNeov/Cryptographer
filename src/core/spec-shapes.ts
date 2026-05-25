@@ -45,6 +45,7 @@
  */
 
 import type { GraphWarning } from "./graph";
+import { resolvePortMap } from "./port-projection";
 import type { StepRegistry } from "./registry";
 import type { CipherSpec, StateShape, StepNode } from "./types";
 
@@ -77,6 +78,12 @@ type WalkContext = {
  */
 const walk = (nodes: readonly StepNode[], current: StateShape, ctx: WalkContext): StateShape => {
   let shape = current;
+  // Scope-local map of node-id → its declared output port names.
+  // Mirrors the runtime's `nodeOutputs` scoping (universal-port plan
+  // Phase 2 Slice 2.6a): siblings within one walk frame can wire to
+  // each other; nested scopes start fresh. Used to resolve
+  // `portInputs` references for `port-input-unresolvable` warnings.
+  const scopeOutputs = new Map<string, ReadonlySet<string>>();
   for (const node of nodes) {
     if (node.kind === "step") {
       const contract = ctx.registry.getDoc(node.type)?.shapeContract;
@@ -88,6 +95,64 @@ const walk = (nodes: readonly StepNode[], current: StateShape, ctx: WalkContext)
           got: shape,
         });
       }
+      // ─── Port-edge wiring validation (Slice 2.6a) ─────────────────
+      // For port-native registrations (kind: "ported" with no `meta`)
+      // ALL declared input ports must be wired via `portInputs`. For
+      // lifted-legacy or pure-legacy registrations the wiring is
+      // optional (state/aux fallback covers unbound ports).
+      const registration = ctx.registry.getRegistration(node.type);
+      if (registration !== undefined && registration.kind === "ported") {
+        const isPureNative = registration.meta === undefined;
+        const portInputs = node.portInputs;
+
+        // Validate that every declared portInputs reference resolves.
+        if (portInputs !== undefined) {
+          for (const [portName, binding] of Object.entries(portInputs)) {
+            const upstream = scopeOutputs.get(binding.node);
+            if (upstream === undefined) {
+              ctx.warnings.push({
+                kind: "port-input-unresolvable",
+                stepId: node.id,
+                portName,
+                targetNode: binding.node,
+                targetPort: binding.port,
+                reason: "missing-node",
+              });
+            } else if (!upstream.has(binding.port)) {
+              ctx.warnings.push({
+                kind: "port-input-unresolvable",
+                stepId: node.id,
+                portName,
+                targetNode: binding.node,
+                targetPort: binding.port,
+                reason: "missing-port",
+              });
+            }
+          }
+        }
+
+        // For pure port-native leaves, every declared input port must
+        // be present in `portInputs` (else the runtime throws on Run).
+        if (isPureNative) {
+          const inputShapes = resolvePortMap(registration.shape.inputs, node.params);
+          for (const [portName] of inputShapes) {
+            if (portInputs === undefined || !(portName in portInputs)) {
+              ctx.warnings.push({
+                kind: "port-input-unwired",
+                stepId: node.id,
+                portName,
+              });
+            }
+          }
+        }
+
+        // Record this leaf's output port names in the scope map so
+        // downstream siblings can resolve against it.
+        const outputShapes = resolvePortMap(registration.shape.outputs, node.params);
+        const outPortNames = new Set<string>();
+        for (const [portName] of outputShapes) outPortNames.add(portName);
+        scopeOutputs.set(node.id, outPortNames);
+      }
       // The leaf's output drives the next sibling's "current" shape. If
       // the contract specifies a concrete output, install it; otherwise
       // (preserveInput, or no contract at all), state shape carries on.
@@ -97,9 +162,23 @@ const walk = (nodes: readonly StepNode[], current: StateShape, ctx: WalkContext)
       ctx.shapeAt.set(node.id, shape);
       continue;
     }
+    // Slice 2.6a — record this container's declared output port names
+    // into the scope-local map BEFORE descending into its children, so
+    // a downstream sibling can wire `{ node: containerId, port }`.
+    // Default port set is `["out"]` per Q-edges-4 user pick. The
+    // leaf-step branch above has already returned by this point, so
+    // `node.kind` is one of the container kinds — all five have an
+    // optional `outputPorts` field per the Slice 2.6a container-edge
+    // mixin.
+    const recordContainerOutputs = (): void => {
+      const declared = node.outputPorts ?? ["out"];
+      scopeOutputs.set(node.id, new Set(declared));
+    };
+
     if (node.kind === "group") {
       // Groups are transparent — their child chain shares the parent's
       // current shape, and the group's after-shape is its last child's.
+      recordContainerOutputs();
       shape = walk(node.children, shape, ctx);
       ctx.shapeAt.set(node.id, shape);
       continue;
@@ -118,6 +197,7 @@ const walk = (nodes: readonly StepNode[], current: StateShape, ctx: WalkContext)
       // Parent-scope shape entering / exiting the round is therefore
       // "bytes". We still walk each track so per-track contract checks
       // fire + shapeAt entries are populated for renderer use.
+      recordContainerOutputs();
       for (const track of node.tracks) {
         walk(track.children, "bytes", ctx);
       }
@@ -134,6 +214,7 @@ const walk = (nodes: readonly StepNode[], current: StateShape, ctx: WalkContext)
       // is left to surface at runtime — that's a noisier failure mode the
       // user wants attributed to the runtime contract, not the static
       // shape walk.
+      recordContainerOutputs();
       if (
         node.inputArrayPort !== undefined &&
         node.outputsPort !== undefined &&
@@ -178,6 +259,7 @@ const walk = (nodes: readonly StepNode[], current: StateShape, ctx: WalkContext)
       // the bytes input shape so per-child contracts fire + shapeAt entries
       // populate. Mode-exclusivity / lookbackOffsets validity / seed-count
       // adequacy are runtime contracts — surface at runtime walk, not here.
+      recordContainerOutputs();
       walk(node.children, "bytes", ctx);
       shape = "bytes";
       ctx.shapeAt.set(node.id, shape);
@@ -188,6 +270,7 @@ const walk = (nodes: readonly StepNode[], current: StateShape, ctx: WalkContext)
     // iterate exits leaving state in matrix4x4-bytes (the last iteration's
     // value). We still walk the body so child leaves inside the iterate
     // get their shapeAt entries + any contract checks.
+    recordContainerOutputs();
     walk(node.children, ITERATE_BODY_SHAPE, ctx);
     shape = ITERATE_BODY_SHAPE;
     ctx.shapeAt.set(node.id, shape);

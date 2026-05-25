@@ -242,17 +242,21 @@ describe("rotate-bits-right@1 — runtime dispatch guards", () => {
     );
   });
 
-  it("on-flag dispatch (portedDispatchEnabled: true) throws edge-wiring-required error", () => {
-    // Until Slice 2.6 lands spec edge-wiring, port-native steps that
-    // omit `meta` can't source their inputs from a State + Aux
-    // projection. The runtime surfaces this as an explicit "requires
-    // spec edge-wiring" error rather than a null-deref further down.
+  it("on-flag dispatch with no portInputs throws 'input port not wired'", () => {
+    // Slice 2.6a (2026-05-25) landed spec edge-wiring via
+    // `StepLeaf.portInputs`. A port-native leaf without `portInputs`
+    // declarations triggers the dispatch-path guard for the first
+    // unwired input port. The PRIOR throw ("requires spec edge-
+    // wiring (Slice 2.6+)") was the placeholder for this exact slice;
+    // it no longer fires because the mechanism is in place — the
+    // guard now points at the missing wire concretely. End-to-end
+    // wiring is exercised by `runtime-port-edge-wiring-toy.test.ts`.
     const spec = buildSpec();
     expect(() =>
       runSpec(spec, buildDefaultRegistry(), {
         initialState: emptyBytes(),
         portedDispatchEnabled: true,
       }),
-    ).toThrow(/port-native and requires spec edge-wiring/);
+    ).toThrow(/input port 'input' is not wired/);
   });
 });

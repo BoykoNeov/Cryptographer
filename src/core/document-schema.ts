@@ -120,18 +120,45 @@ export const StateShapeSchema = z.enum(["bytes", "matrix4x4-bytes", "bitvec", "b
 // which doesn't matter — `document.ts` casts `result.data` to the
 // hand-written `CipherDocument` after `safeParse` anyway.
 
+// PortBinding (universal-port plan Phase 2 Slice 2.6a). Sink-side edge
+// wiring for port-native leaves. Both fields required — a partial binding
+// is meaningless. Validated structurally here; reference-resolution
+// (target node exists, target port exists on that node) lives in the
+// spec-shapes validator + runtime, NOT here, to keep schema validation
+// purely structural and to give the user a graph-warning surface in
+// the editor before Run.
+export const PortBindingSchema = z.object({
+  node: z.string(),
+  port: z.string(),
+});
+
 export const StepLeafSchema = z.object({
   kind: z.literal("step"),
   id: z.string(),
   type: z.string(),
   params: JsonSchema,
+  // Slice 2.6a — optional sink-side port-edge wiring. Record-shaped so
+  // it serializes to JSON natively (Map keys would need a custom Zod
+  // transformer). At runtime the leaf reads this via Object.entries.
+  portInputs: z.record(z.string(), PortBindingSchema).optional(),
 });
+
+// Shared Slice 2.6a container port-edge wiring fields. Every container
+// kind below gets these; the runtime publishes container exit-state
+// bytes to the parent scope's nodeOutputs under each declared
+// outputPorts entry (default `["out"]` when absent). See `StepGroup`
+// in `core/types.ts` for the full semantics.
+const containerPortEdgeFields = {
+  portInputs: z.record(z.string(), PortBindingSchema).optional(),
+  outputPorts: z.array(z.string()).optional(),
+};
 
 export const StepGroupSchema = z.object({
   kind: z.literal("group"),
   id: z.string(),
   label: z.string(),
   children: z.array(z.lazy(() => StepNodeSchema)),
+  ...containerPortEdgeFields,
 });
 
 export const IterateGroupSchema = z.object({
@@ -144,6 +171,7 @@ export const IterateGroupSchema = z.object({
   blocksFromAux: z.string(),
   outBlocksAux: z.string(),
   children: z.array(z.lazy(() => StepNodeSchema)),
+  ...containerPortEdgeFields,
 });
 
 // Feistel branching primitive (Phase 2 of `docs/plans/des-feistel.md`).
@@ -169,6 +197,7 @@ export const FeistelRoundGroupSchema = z.object({
   label: z.string().optional(),
   tracks: z.array(BranchTrackSchema),
   combineKind: CombineKindSchema,
+  ...containerPortEdgeFields,
 });
 
 // `for-each-subgraph` spec node kind (Slice 2.0a of
@@ -210,6 +239,7 @@ export const ForEachSubgraphSchema = z.object({
   outputsPort: z.string().optional(),
   blockByteLength: z.number().int().positive().optional(),
   blockLayout: StateShapeSchema.optional(),
+  ...containerPortEdgeFields,
 });
 
 // `for-each-subgraph-with-history` spec node kind (Slice 2.0c of
@@ -242,6 +272,7 @@ export const ForEachSubgraphWithHistorySchema = z.object({
   iterationCount: ForEachIterationCountSchema,
   lookbackOffsets: z.array(z.number().int().positive()),
   historyEntryByteLength: z.number().int().positive(),
+  ...containerPortEdgeFields,
 });
 
 // Note on `schemaVersion`: Phase 4 of `docs/plans/des-feistel.md` bumped

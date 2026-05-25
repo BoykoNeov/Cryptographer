@@ -150,9 +150,56 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
     branchPath: readonly string[],
     roundPath: readonly number[],
   ): void => {
+    // ─── Scope-local node-output map (Slice 2.6a) ──────────────────────
+    // Records each leaf's emitted output-port bytes so downstream siblings
+    // can resolve declared `portInputs` references. Per `Q-edges-2` user
+    // pick: scope is one walk-frame (siblings within the same `walk` call
+    // share the map; nested scopes — group bodies, iterate iterations,
+    // for-each-subgraph iterations — start fresh). Cross-scope wiring is
+    // deferred to Slice 2.6b (SHA-256's constant chips need to feed
+    // compression-body leaves across the for-each-subgraph boundary; the
+    // scoping rule will be reconsidered then).
+    //
+    // Key = upstream node id (leaf OR container) — NOT the suffixed
+    // `stepId` — portInputs references the design-time spec id, not
+    // the runtime emit id. Value = map of output-port-name → bytes.
+    const nodeOutputs = new Map<string, Map<string, Uint8Array>>();
+
+    /**
+     * Publish a container's exit-state bytes to `nodeOutputs` under each
+     * of its declared output ports (Slice 2.6a — Q-edges-4 user pick
+     * "Author-declared per node, defaulting to `out`"). Called after
+     * each container's case body, with `state` holding the container's
+     * exit value:
+     *   - group: last child's output state.
+     *   - iterate: last iteration's matrix (matrix4x4-bytes).
+     *   - for-each-subgraph state-thread: body's final state.
+     *   - for-each-subgraph item-array: concatenated per-iteration bytes.
+     *   - for-each-subgraph-with-history: full concatenated history bytes.
+     *   - feistel-round: rejoin combined output bytes.
+     *
+     * All shipped exit shapes (bytes, matrix4x4-bytes, bitvec) are
+     * `stateToPortBytes`-encodable; bigint throws inside that helper if
+     * a future container produces one. Multi-output containers (e.g.,
+     * one with both "out" = concat AND "history" = per-iteration bytes
+     * exposed separately) all receive the SAME bytes today — sufficient
+     * for SHA-256's message-schedule-into-compression handoff in 2.6b.
+     */
+    const publishContainerOutputs = (
+      containerId: string,
+      outputPorts: readonly string[] | undefined,
+    ): void => {
+      const ports = outputPorts ?? ["out"];
+      const bytes = stateToPortBytes(state, state.shape);
+      const outMap = new Map<string, Uint8Array>();
+      for (const port of ports) outMap.set(port, bytes);
+      nodeOutputs.set(containerId, outMap);
+    };
+
     for (const node of nodes) {
       if (node.kind === "group") {
         walk(node.children, [...path, node.id], blockIndex, branchPath, roundPath);
+        publishContainerOutputs(node.id, node.outputPorts);
         continue;
       }
 
@@ -196,21 +243,25 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
         }
 
         aux.set(node.outBlocksAux, outBlocks);
+        publishContainerOutputs(node.id, node.outputPorts);
         continue;
       }
 
       if (node.kind === "feistel-round") {
         runFeistelRound(node, path, blockIndex, branchPath, roundPath);
+        publishContainerOutputs(node.id, node.outputPorts);
         continue;
       }
 
       if (node.kind === "for-each-subgraph") {
         runForEachSubgraph(node, path, blockIndex, branchPath, roundPath);
+        publishContainerOutputs(node.id, node.outputPorts);
         continue;
       }
 
       if (node.kind === "for-each-subgraph-with-history") {
         runForEachSubgraphWithHistory(node, path, blockIndex, branchPath, roundPath);
+        publishContainerOutputs(node.id, node.outputPorts);
         continue;
       }
 
@@ -247,34 +298,70 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
       let auxWritten: Map<string, AuxValue>;
 
       if (portedDispatch && registration.kind === "ported") {
-        // Port-native registrations (Phase 2 onward, post Slice 2.1a)
-        // ship without `meta` because their inputs come from the spec's
-        // edge graph (Slice 2.6+ wires this) rather than from a
-        // projection of the parent's State + Aux. Until that wiring
-        // lands, hitting one of these on the dispatch path is a wiring
-        // bug — surface it explicitly rather than null-deref `.meta`.
-        if (registration.meta === undefined) {
-          throw new Error(
-            `step type "${node.type}" is port-native and requires spec edge-wiring (universal-port plan Phase 2 Slice 2.6+); reachable today only via direct executor invocation`,
-          );
-        }
-        const meta = registration.meta;
         // ── Ported execution path ─────────────────────────────────────
+        // Two registration shapes coexist post-Slice-2.6a:
+        //   (1) Lifted-legacy ported — `meta` present. Inputs come from a
+        //       State + Aux projection driven by `meta.stateInputPort` /
+        //       `meta.auxReadPorts`. Per Q-edges-3 user pick, portInputs
+        //       (if any) OVERRIDE the projection on a per-port basis;
+        //       unbound ports fall back to the projection (the Slice 1.x
+        //       contract, preserved here byte-equal).
+        //   (2) Pure port-native — `meta` absent. ALL inputs must come
+        //       from `node.portInputs` resolved against `nodeOutputs`
+        //       (the scope-local map built up by prior siblings). An
+        //       unbound port throws.
+        //
+        // The inputs map is built once and consumed by the executor; the
+        // resolution-vs-projection ordering above keeps existing lifted-
+        // legacy specs byte-equal to their Slice 1.11 parity matrix.
+        const meta = registration.meta;
         const inputs = new Map<string, Uint8Array>();
-        if (meta.stateInputPort !== undefined) {
+
+        // Step A — portInputs (universal-port Slice 2.6a). Resolve each
+        // declared sink-side edge against `nodeOutputs`. Same-scope only
+        // in 2.6a; a reference to a node outside the current walk frame
+        // is "node not found" and throws. Cross-scope wiring is deferred
+        // to 2.6b when SHA-256 surfaces the first real consumer.
+        if (node.portInputs !== undefined) {
+          for (const [portName, binding] of Object.entries(node.portInputs)) {
+            const upstreamOutputs = nodeOutputs.get(binding.node);
+            if (upstreamOutputs === undefined) {
+              throw new Error(
+                `port-input resolution: leaf '${node.id}' input port '${portName}' references upstream node '${binding.node}' which has no recorded outputs in this scope (universal-port plan Phase 2 Slice 2.6a — same-scope wiring only)`,
+              );
+            }
+            const upstreamBytes = upstreamOutputs.get(binding.port);
+            if (upstreamBytes === undefined) {
+              throw new Error(
+                `port-input resolution: leaf '${node.id}' input port '${portName}' references upstream node '${binding.node}' port '${binding.port}' but that port was not emitted`,
+              );
+            }
+            inputs.set(portName, upstreamBytes);
+          }
+        }
+
+        // Step B — state input from meta (if lifted-legacy). Skipped
+        // when portInputs already wired this port; preserves Q-edges-3
+        // "portInputs override projection on a per-port basis".
+        if (meta?.stateInputPort !== undefined && !inputs.has(meta.stateInputPort)) {
           inputs.set(meta.stateInputPort, stateToPortBytes(state, meta.stateLayout));
         }
-        // Aux reads: project each (portName, auxKey) binding from the live
-        // aux map into the inputs map. Missing values record as orphaned
-        // reads (mirrors the legacy path's `auxReadMissing` semantics).
+
+        // Step C — aux reads from meta (if lifted-legacy). Skipped per
+        // port when portInputs already wired it (same precedence rule).
+        // `portedAuxRead` is built ONLY from successful aux projections —
+        // a port wired via portInputs contributes no `frame.auxRead`
+        // entry (it's a state edge, not an aux read), preserving the
+        // Slice 1.x contract for unwired ports.
         //
         // **Iteration order matters** — see ProjectionMetadata's contract.
         // The metadata's `auxReadPorts(params)` Map must iterate in the
         // same order the legacy executor declares `auxReads`, or
         // `auxReadMissing` arrays diverge between the two paths.
-        const readBindings = meta.auxReadPorts?.(node.params) ?? new Map<string, string>();
+        const readBindings = meta?.auxReadPorts?.(node.params) ?? new Map<string, string>();
         const portedAuxRead = new Map<string, AuxValue>();
         for (const [portName, auxKey] of readBindings) {
+          if (inputs.has(portName)) continue; // portInputs already wired it
           const v = aux.get(auxKey);
           if (v === undefined) {
             if (auxReadMissing === undefined) auxReadMissing = [];
@@ -297,6 +384,21 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
           // choice. (Practically `toEqual` deep-equals either way; aliasing
           // is the cleaner mental model and matches the legacy contract.)
           portedAuxRead.set(auxKey, v);
+        }
+
+        // Step D — pure port-native guard. With no `meta`, every declared
+        // input port MUST have been wired via portInputs. An unbound
+        // port surfaces here with a sharper message than the post-
+        // executor "input port X missing" thrown deep in the executor.
+        if (meta === undefined) {
+          const inputShapes = resolvePortMap(registration.shape.inputs, node.params);
+          for (const [portName] of inputShapes) {
+            if (!inputs.has(portName)) {
+              throw new Error(
+                `port-native step '${node.id}' (type '${node.type}'): input port '${portName}' is not wired (declare it in spec node's \`portInputs\` map — universal-port plan Phase 2 Slice 2.6a)`,
+              );
+            }
+          }
         }
 
         // ─── Port-length coercion (Slice 1.12 — Q2 of universal-port plan) ─
@@ -380,12 +482,34 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
           aux: portedAuxRead,
         });
 
+        // ─── Save outputs to scope-local nodeOutputs (Slice 2.6a) ──────
+        // Every ported leaf's outputs are recorded so downstream siblings
+        // can resolve declared `portInputs` references. Pure port-native
+        // leaves use this as their ONLY way to publish results;
+        // lifted-legacy leaves publish via this map AND via state/aux
+        // reconstruction below (the dual surfaces coexist — a downstream
+        // port-native consumer reads via portInputs, while a downstream
+        // legacy consumer reads via state/aux as before).
+        //
+        // Stored by spec-time `node.id` (NOT the suffixed runtime
+        // `emittedStepId`), matching how portInputs references its
+        // upstream (the spec author writes `{ node: "round.1.shift" }`,
+        // not a per-iteration emit id). Map values clone-on-write would
+        // be wasted — the executor's outputs are already a fresh Map of
+        // Uint8Arrays per `PortedExecutor`'s contract.
+        const recorded = new Map<string, Uint8Array>();
+        for (const [portName, bytes] of outputs) {
+          recorded.set(portName, bytes);
+        }
+        nodeOutputs.set(node.id, recorded);
+
         // Reconstruct state from the output port if one is declared.
         // Aux-only steps (`generic.aux-load@1` et al.) leave state
         // untouched — the runtime's `state` variable is preserved across
         // the ported call so the caller's shape (matrix4x4-bytes, bytes,
-        // etc.) survives.
-        if (meta.stateOutputPort !== undefined) {
+        // etc.) survives. Pure port-native steps (no meta) also leave
+        // state untouched — same preservation rule.
+        if (meta?.stateOutputPort !== undefined) {
           const outBytes = outputs.get(meta.stateOutputPort);
           if (outBytes === undefined) {
             throw new Error(
@@ -409,9 +533,14 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
         // the decode target (`"matrix-cm-4x4"` → MatrixState,
         // `"raw"`/undefined → Uint8Array, `"preserve-input-variant"`
         // → variant-matched copy of the source aux value).
+        //
+        // Pure port-native leaves (no meta) skip this entire block —
+        // their outputs reach downstream consumers ONLY via portInputs
+        // resolution against `nodeOutputs` above, never through aux.
         auxWritten = new Map<string, AuxValue>();
-        if (meta.auxWritePorts !== undefined) {
-          const writeBindings = meta.auxWritePorts(node.params);
+        if (meta?.auxWritePorts !== undefined) {
+          const auxWritePortsFn = meta.auxWritePorts;
+          const writeBindings = auxWritePortsFn(node.params);
           // Resolve the contract's outputs map ONCE per frame. For
           // dynamic-N ported steps (key-expansion's per-round-key ports
           // sized by `params.rounds`) the outputs field is a function;
@@ -435,7 +564,7 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
           const resolvePreserveVariantHint = (): AuxValue | undefined => {
             if (preserveVariantHintComputed) return preserveVariantHint;
             preserveVariantHintComputed = true;
-            const readBindings = meta.auxReadPorts?.(node.params);
+            const readBindings = meta?.auxReadPorts?.(node.params);
             if (readBindings === undefined) return undefined;
             const firstAuxKey = readBindings.values().next().value;
             if (typeof firstAuxKey !== "string") return undefined;

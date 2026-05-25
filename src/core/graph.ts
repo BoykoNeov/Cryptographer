@@ -2192,6 +2192,31 @@ export type GraphWarning =
       readonly stepId: string;
       readonly expected: StateShape | "any";
       readonly got: StateShape;
+    }
+  /**
+   * `port-input-unwired` (universal-port plan Phase 2 Slice 2.6a) — a
+   * pure port-native leaf (no `meta`) has an input port that's neither
+   * declared in `portInputs` nor wired implicitly. The runtime will
+   * throw if asked to run; the graph view surfaces an orange `!` so
+   * the user fixes it before clicking Run.
+   *
+   * `port-input-unresolvable` — the leaf declared a `portInputs` entry
+   * for `portName`, but the binding's `node` reference doesn't exist
+   * in the same scope, or `port` isn't an output of that upstream node.
+   * Catches typos + reorderings before runtime.
+   */
+  | {
+      readonly kind: "port-input-unwired";
+      readonly stepId: string;
+      readonly portName: string;
+    }
+  | {
+      readonly kind: "port-input-unresolvable";
+      readonly stepId: string;
+      readonly portName: string;
+      readonly targetNode: string;
+      readonly targetPort: string;
+      readonly reason: "missing-node" | "missing-port";
     };
 
 /**

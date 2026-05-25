@@ -279,12 +279,16 @@ describe("append-be64-length@1 — runtime dispatch guards", () => {
     );
   });
 
-  it("on-flag dispatch throws 'requires spec edge-wiring (Slice 2.6+)'", () => {
+  it("on-flag dispatch with no portInputs throws 'input port data is not wired' (Slice 2.6a)", () => {
+    // Post-Slice-2.6a: edge-wiring landed; unwired ports surface
+    // per-port via the dispatch-path guard. `data` is the first
+    // declared port (the message-to-pad). End-to-end wired specs
+    // live in `runtime-port-edge-wiring-toy.test.ts`.
     expect(() =>
       runSpec(buildSpec(), buildDefaultRegistry(), {
         initialState: emptyBytes(),
         portedDispatchEnabled: true,
       }),
-    ).toThrow(/port-native and requires spec edge-wiring/);
+    ).toThrow(/input port 'data' is not wired/);
   });
 });
