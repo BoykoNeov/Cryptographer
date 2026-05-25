@@ -214,6 +214,46 @@ export const DEFAULT_PT_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
   des: new Uint8Array([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]),
 };
 
+// ─── Hash defaults ───────────────────────────────────────────────────────
+//
+// Slice 2.10b (2026-05-25) — canonical input bytes per Hash variant. The
+// store wiring in `stores/spec.ts` consults these when constructing a
+// `kind: "hash"` SpecsByMode (today reachable only via tests; 2.10c wires
+// the user-facing entry point). They live alongside the cipher tables so
+// `App.tsx`'s smart-swap on document load can route to the right table
+// after checking `isCipher` vs `isHash`.
+//
+// **Key bytes**: hashes have no key (SHA-256's `inputs.key.byteLength`
+// is 0), so the default is an empty `Uint8Array`. App.tsx's
+// `parseBytesWithLength` accepts a zero-length expectation and renders
+// the field as empty; the user can ignore it.
+//
+// **Plaintext bytes**: SHA-256's first KAT in FIPS 180-4 §A.1 is the
+// 3-byte message "abc" (`[0x61, 0x62, 0x63]`), producing the digest
+// `ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad`.
+// First-time users hitting Run with this default reproduce that
+// textbook vector exactly, mirroring how AES's default lands on
+// FIPS-197 Appendix C.
+
+/**
+ * Canonical default key bytes per hash variant. Hashes are keyless so
+ * the value is an empty `Uint8Array`; the structure mirrors the cipher
+ * tables so callers can route `Algorithm` values to a unified lookup
+ * via `isCipher` / `isHash`.
+ */
+export const DEFAULT_KEY_BYTES_BY_HASH: Record<Hash, Uint8Array> = {
+  "sha-256": new Uint8Array(0),
+};
+
+/**
+ * Canonical default plaintext bytes per hash variant. SHA-256 lands on
+ * "abc" — the FIPS 180-4 §A.1 single-block KAT — so the first Run
+ * reproduces the textbook digest exactly.
+ */
+export const DEFAULT_PT_BYTES_BY_HASH: Record<Hash, Uint8Array> = {
+  "sha-256": new Uint8Array([0x61, 0x62, 0x63]),
+};
+
 /** Test-only reset; production code never calls this. */
 export const __resetCipherForTests = (): void => {
   setCipherSignal("aes-128");

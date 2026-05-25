@@ -36,7 +36,7 @@
  * hand-written types.
  */
 
-import type { Cipher } from "@/ui/stores/cipher";
+import type { Algorithm, Cipher } from "@/ui/stores/cipher";
 import type { CipherMode } from "@/ui/stores/cipher-mode";
 import type { Mode } from "@/ui/stores/spec";
 import { CipherDocumentSchema } from "./document-schema";
@@ -47,25 +47,32 @@ import type { CipherSpec } from "./types";
 // ─── Schema-version anchor ────────────────────────────────────────────────
 
 /**
- * The version this app produces. Phase 4 of `docs/plans/des-feistel.md`
- * bumped this from 1 → 2 when DES entered the cipher selector and users
- * could start saving documents containing `feistel-round` nodes.
+ * The version this app produces.
  *
- * Backwards compatibility for v1 documents (every AES `.cipher.json` and
- * URL-share link from prior sessions) is preserved via `migrateDocument`
- * below — v1 → v2 is a pure version-bump migration since v1 documents
- * cannot contain any `feistel-round` nodes (DES wasn't selectable),
- * so no node-level changes are required.
+ * **v1 → v2** (Phase 4 of `docs/plans/des-feistel.md`): pure version bump
+ * when DES entered the cipher selector and `feistel-round` nodes became
+ * representable. v1 documents cannot contain `feistel-round` nodes (DES
+ * wasn't selectable), so no node-level changes are required.
+ *
+ * **v2 → v3** (Slice 2.10b of `docs/plans/universal-port-dataflow.md`,
+ * 2026-05-25): the top-level cipher-hint field is renamed `cipher` →
+ * `algorithm` and widens from `Cipher` to `Algorithm = Cipher | Hash`.
+ * This is the schema change that lets SHA-256 (the first non-cipher
+ * primitive) ride through the save/load surface honestly. v2 documents
+ * carry `cipher: <Cipher>` which the v2 → v3 migration step renames to
+ * `algorithm: <Cipher>` — the value passes through unchanged since
+ * every v2 document predates the hash family. Old `.cipher.json` files
+ * and URL-share links still load via `migrateDocument` below.
  */
-export const CURRENT_SCHEMA_VERSION = 2 as const;
+export const CURRENT_SCHEMA_VERSION = 3 as const;
 
 /**
  * The set of historical schema versions this app can load (after
  * applying `migrateDocument`). Used by the friendly pre-check in
- * `parseDocument` so a v2-only build still reads v1 docs without
- * erroring out at "schemaVersion 1 is not supported."
+ * `parseDocument` so a v3-only build still reads v1/v2 docs without
+ * erroring out at "schemaVersion N is not supported."
  */
-export const ACCEPTED_SCHEMA_VERSIONS: readonly number[] = [1, 2];
+export const ACCEPTED_SCHEMA_VERSIONS: readonly number[] = [1, 2, 3];
 
 // ─── Public types ─────────────────────────────────────────────────────────
 // Hand-written so optional fields are `field?: T` (not `T | undefined`) —
@@ -199,32 +206,41 @@ export type DocumentMetadata = {
  * optional and gracefully absent for minimal documents (e.g. a vanilla
  * canonical spec with no customization).
  *
- * `cipher` is a lightweight selector hint (Phase 6e of
- * `docs/plans/des-feistel.md`). Save always emits it so a spec-only
- * .cipher.json or URL-share document tells the loader "this spec was
- * authored for cipher X." Without it, loading a non-AES spec into a
- * recipient defaulted to AES-128 left the cipher selector mismatched
+ * `algorithm` is a lightweight selector hint (Phase 6e of
+ * `docs/plans/des-feistel.md`, widened from `cipher: Cipher` to
+ * `algorithm: Algorithm = Cipher | Hash` in Slice 2.10b of
+ * `docs/plans/universal-port-dataflow.md`). Save always emits it so a
+ * spec-only .cipher.json or URL-share document tells the loader "this
+ * spec was authored for algorithm X." Without it, loading a non-AES spec
+ * into a recipient defaulted to AES-128 left the selector mismatched
  * with the spec — DES (8-byte block) loaded against an AES-128 default
  * key field (16 bytes) immediately erred with "expected 8 bytes."
  *
- * The hint is OPTIONAL so v1/v2 documents from before this field landed
- * still load — pre-hint behavior (no selector change on load) is the
- * absent-field fallback. When present, `setSpecFromDocument` reads it
- * and flips the cipher selector; it also adjusts `cipherMode` to
- * `"single-block"` if the current mode isn't supported for the loaded
- * cipher (e.g. switching from AES-128/ecb to DES, which is single-block
- * only).
+ * The hint is OPTIONAL so v1/v2/v3 documents from before this field
+ * landed (or with the absent-field fallback) still load — pre-hint
+ * behavior was "no selector change on load." When present,
+ * `setSpecFromDocument` reads it and dispatches:
+ *   - For a `Cipher` value: flips the cipher selector and adjusts
+ *     `cipherMode` to `"single-block"` if the current mode isn't
+ *     supported for the loaded cipher.
+ *   - For a `Hash` value: constructs a `kind: "hash"` SpecsByMode with
+ *     the document's spec as the single slot.
+ *
+ * Field naming history: `cipher` in schemaVersion 2; renamed to
+ * `algorithm` in schemaVersion 3 (the rename IS the v2 → v3 migration
+ * because the universe of values widened from `Cipher` to `Algorithm`).
+ * `migrateDocument` handles the field rename for older documents.
  *
  * Why a top-level field vs. always including a session: the existing
  * "include session" toggle protects users from leaking plaintext bytes
- * into shareable URLs. The cipher selector value isn't sensitive — it's
- * just metadata about which cipher the spec implements — so it belongs
- * at the document root, not inside the session.
+ * into shareable URLs. The algorithm selector value isn't sensitive —
+ * it's just metadata about which primitive the spec implements — so it
+ * belongs at the document root, not inside the session.
  */
 export type CipherDocument = {
   readonly schemaVersion: typeof CURRENT_SCHEMA_VERSION;
   readonly spec: CipherSpec;
-  readonly cipher?: Cipher;
+  readonly algorithm?: Algorithm;
   readonly layout?: LayoutSpec;
   readonly session?: SessionSnapshot;
   readonly metadata?: DocumentMetadata;
@@ -353,23 +369,46 @@ export const parseDocument = (text: string): ParseDocumentResult => {
  * so they cannot contain any `feistel-round` nodes — the StepNode union
  * was already widened to accept feistel-round in Phase 2 of the plan,
  * `CipherDocumentSchema` accepts the wider union under either version.
- * The only thing the migration does is rewrite the `schemaVersion`
- * field so the post-bump literal validation passes.
+ * The only thing the v1 step does is rewrite the `schemaVersion` field
+ * so the chained migration can continue.
  *
- * Future migrations chain here: a v2 → v3 step would land alongside
- * the v1 → v2 step, and a v1 document would walk through both.
+ * **v2 → v3 migration** (Slice 2.10b of
+ * `docs/plans/universal-port-dataflow.md`, 2026-05-25): the top-level
+ * cipher-hint field is renamed `cipher` → `algorithm`. The value passes
+ * through unchanged since every v2 document predates the hash family —
+ * `cipher: <Cipher>` becomes `algorithm: <Cipher>` (still a valid
+ * `Algorithm`). Documents with no `cipher` field (every v1 doc, plus
+ * pre-Phase-6e v2 docs) simply emerge from this step still missing the
+ * optional field — schema validation accepts the absence.
+ *
+ * Chained migrations: a v1 document walks v1 → v2 → v3 in two steps.
+ * Each conditional adds its own transform; the order matters because
+ * later steps may consume fields earlier steps produced.
  */
 const migrateDocument = (
   doc: Record<string, unknown>,
   fromVersion: number,
 ): Record<string, unknown> => {
   // Spread to a fresh object so the caller's input isn't mutated.
-  // Forward-compat: if `fromVersion` < 2, bump the field to 2. Future
-  // chained migrations would add their own conditionals here.
   let migrated: Record<string, unknown> = { ...doc };
-  if (fromVersion === 1) {
+
+  // v1 → v2: pure version-field bump. No node-level rewriting needed.
+  if (fromVersion <= 1) {
     migrated = { ...migrated, schemaVersion: 2 };
   }
+
+  // v2 → v3: rename the cipher-hint field to algorithm. Value is
+  // preserved (every v2 cipher value is still a valid Algorithm).
+  // Destructured rename keeps the type of `algorithm` carrying through
+  // without an explicit cast on the optional field.
+  if (fromVersion <= 2) {
+    const { cipher, ...rest } = migrated as { cipher?: unknown } & Record<string, unknown>;
+    migrated = { ...rest, schemaVersion: 3 };
+    if (cipher !== undefined) {
+      migrated = { ...migrated, algorithm: cipher };
+    }
+  }
+
   return migrated;
 };
 

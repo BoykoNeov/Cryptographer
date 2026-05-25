@@ -27,7 +27,7 @@
  * `z.discriminatedUnion`'s per-option constraint without explicit casts.
  */
 
-import type { Cipher } from "@/ui/stores/cipher";
+import type { Cipher, Hash } from "@/ui/stores/cipher";
 import type { CipherMode } from "@/ui/stores/cipher-mode";
 import { z } from "zod";
 import { ALL_BYTE_FORMATS } from "./format";
@@ -56,6 +56,23 @@ export const CIPHER_IDS = [
   "des",
 ] as const satisfies readonly Cipher[];
 
+/**
+ * Hash variants — Slice 2.10b of `docs/plans/universal-port-dataflow.md`.
+ * SHA-256 is the first member; SHA-3 / SHA-512 / MAC / KDF growth extends
+ * this tuple when those variants land. The compile-time check
+ * `assertHashCoverage` below pins it against the `Hash` union in
+ * `ui/stores/cipher.ts` so a future addition surfaces here at `tsc` time.
+ */
+export const HASH_IDS = ["sha-256"] as const satisfies readonly Hash[];
+
+/**
+ * Concatenation of cipher + hash ids. Used by the top-level document's
+ * `algorithm` field (v3 schema), which accepts any cryptographic-primitive
+ * family. Composed at the tuple level so the `z.enum(ALGORITHM_IDS)`
+ * below stays a static-enum schema rather than a runtime union.
+ */
+export const ALGORITHM_IDS = [...CIPHER_IDS, ...HASH_IDS] as const;
+
 export const CIPHER_MODES = [
   "single-block",
   "ecb",
@@ -82,9 +99,11 @@ export const BYTE_FORMATS = ALL_BYTE_FORMATS as readonly ByteFormat[];
 type MissingCipher = Exclude<Cipher, (typeof CIPHER_IDS)[number]>;
 type MissingCipherMode = Exclude<CipherMode, (typeof CIPHER_MODES)[number]>;
 type MissingPaddingScheme = Exclude<PaddingScheme, (typeof PADDING_SCHEMES)[number]>;
+type MissingHash = Exclude<Hash, (typeof HASH_IDS)[number]>;
 export const assertCipherCoverage: [MissingCipher] extends [never] ? true : never = true;
 export const assertCipherModeCoverage: [MissingCipherMode] extends [never] ? true : never = true;
 export const assertPaddingCoverage: [MissingPaddingScheme] extends [never] ? true : never = true;
+export const assertHashCoverage: [MissingHash] extends [never] ? true : never = true;
 
 // ─── Json (recursive) ─────────────────────────────────────────────────────
 // Mirrors the `Json` type in core/types.ts. `z.lazy` is the standard
@@ -286,13 +305,15 @@ export const ForEachSubgraphWithHistorySchema = z.object({
 });
 
 // Note on `schemaVersion`: Phase 4 of `docs/plans/des-feistel.md` bumped
-// the literal to 2 when DES entered the cipher selector. The StepNode
-// union was already widened to accept feistel-round in Phase 2 (so the
-// schema can validate documents at either version); only the top-level
-// `schemaVersion` literal flips. Backwards compatibility for v1 docs
-// (AES `.cipher.json` files + URL-share links from prior sessions) is
-// preserved via `migrateDocument` in `document.ts`, which bumps the
-// version field before schema validation.
+// the literal to 2 when DES entered the cipher selector. Slice 2.10b of
+// `docs/plans/universal-port-dataflow.md` (2026-05-25) bumped it again
+// to 3 when the top-level cipher-hint field was renamed `cipher` →
+// `algorithm` (widened from `Cipher` to `Algorithm = Cipher | Hash`)
+// to support SHA-256 in the save/load surface. Backwards compatibility
+// for v1/v2 docs (`.cipher.json` files + URL-share links from prior
+// sessions) is preserved via `migrateDocument` in `document.ts`, which
+// applies the version bump AND the field rename before schema
+// validation.
 export const StepNodeSchema: z.ZodTypeAny = z.discriminatedUnion("kind", [
   StepLeafSchema,
   StepGroupSchema,
@@ -407,12 +428,15 @@ export const DocumentMetadataSchema = z
 
 export const CipherDocumentSchema = z
   .object({
-    schemaVersion: z.literal(2),
+    schemaVersion: z.literal(3),
     spec: CipherSpecSchema,
-    // Cipher selector hint (Phase 6e of `docs/plans/des-feistel.md`). See
-    // the comment on `CipherDocument` in `document.ts` for the why. Optional
-    // so v1/v2 documents authored before this field landed still validate.
-    cipher: z.enum(CIPHER_IDS).optional(),
+    // Algorithm selector hint (Phase 6e of `docs/plans/des-feistel.md`,
+    // widened in Slice 2.10b of `docs/plans/universal-port-dataflow.md`
+    // from `cipher: Cipher` to `algorithm: Algorithm`). See the comment
+    // on `CipherDocument` in `document.ts` for the why. Optional so
+    // documents authored before this field landed still validate; the
+    // v2 → v3 migration renames `cipher` → `algorithm` for older docs.
+    algorithm: z.enum(ALGORITHM_IDS).optional(),
     layout: LayoutSpecSchema.optional(),
     session: SessionSnapshotSchema.optional(),
     metadata: DocumentMetadataSchema.optional(),

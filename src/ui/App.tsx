@@ -89,6 +89,7 @@ import {
   DEFAULT_KEY_BYTES_BY_CIPHER,
   DEFAULT_PT_BYTES_BY_CIPHER,
   isAesCipher,
+  isCipher,
   useCipher,
 } from "./stores/cipher";
 import {
@@ -433,12 +434,16 @@ export const App = () => {
     const doc: CipherDocument = {
       schemaVersion: CURRENT_SCHEMA_VERSION,
       spec: spec(),
-      // Cipher selector hint (Phase 6e). Emitted on BOTH spec-only AND
-      // session-included paths so a recipient's cipher selector flips to
-      // match the loaded spec regardless of the toggle. The value is
-      // deterministic from the current `cipher()` signal — no Date.now() —
-      // so the spec-only path stays byte-stable for URL-share hashing.
-      cipher: cipher(),
+      // Algorithm selector hint (Phase 6e, widened from `cipher: Cipher`
+      // to `algorithm: Algorithm` in Slice 2.10b of the universal-port
+      // plan). Emitted on BOTH spec-only AND session-included paths so
+      // a recipient's selector flips to match the loaded spec regardless
+      // of the toggle. The value comes from the `cipher()` signal which
+      // returns `Cipher` (a subset of `Algorithm`) — 2.10c will widen
+      // this to an algorithm signal that can also produce hash variants.
+      // Deterministic — no Date.now() — so the spec-only path stays
+      // byte-stable for URL-share hashing.
+      algorithm: cipher(),
       ...(hasUserLayout(layout) && layout ? { layout } : {}),
       ...(includeSession()
         ? {
@@ -637,14 +642,14 @@ export const App = () => {
       setKeyText(formatBytes(new Uint8Array(doc.session.keyBytes), fmt()));
     }
     // Phase 6e of `docs/plans/des-feistel.md`: when the document carries
-    // the optional cipher hint AND does NOT carry saved bytes, mirror the
-    // smart-swap policy from `changeCipher` so a recipient with a fresh
-    // tab (current inputs are the OLD cipher's canonical defaults) lands
-    // with inputs sized correctly for the NEW cipher. Without this swap,
-    // a spec-only DES share loaded into an AES-128-default recipient
-    // leaves a 16-byte plaintext in the field that immediately errors
-    // "must be exactly 8 bytes." With it, the recipient sees the DES
-    // FIPS 46-3 Appendix B vector and the FIPS ciphertext appears.
+    // the optional algorithm hint AND does NOT carry saved bytes, mirror
+    // the smart-swap policy from `changeCipher` so a recipient with a
+    // fresh tab (current inputs are the OLD cipher's canonical defaults)
+    // lands with inputs sized correctly for the NEW cipher. Without this
+    // swap, a spec-only DES share loaded into an AES-128-default
+    // recipient leaves a 16-byte plaintext in the field that immediately
+    // errors "must be exactly 8 bytes." With it, the recipient sees the
+    // DES FIPS 46-3 Appendix B vector and the FIPS ciphertext appears.
     //
     // The "match OLD defaults?" check is exactly the same heuristic
     // `changeCipher` uses for the manual cipher selector: user-typed
@@ -652,22 +657,33 @@ export const App = () => {
     // over triggers the swap. So a load against a recipient who had
     // already typed their own plaintext keeps their work intact.
     //
+    // Slice 2.10b widening: `doc.algorithm` is now `Algorithm =
+    // Cipher | Hash`. The smart-swap below only fires on the Cipher
+    // branch — looking up DEFAULT_KEY_BYTES_BY_CIPHER with a Hash value
+    // would be a type error AND a category error (hashes have a
+    // different defaults table). Hash documents are unreachable through
+    // the user-facing entry points in 2.10b (test-reachable only); 2.10c
+    // will add a sibling hash-input-swap branch using
+    // DEFAULT_KEY_BYTES_BY_HASH / DEFAULT_PT_BYTES_BY_HASH when the
+    // algorithm selector exposes hash variants.
+    //
     // Run order: this check fires AFTER setSpecFromDocument, so
     // `cipher()` already reads the new value. We compare against
     // `prevCipher` captured above the spec change.
     if (
-      doc.cipher !== undefined &&
-      doc.cipher !== prevCipher &&
+      doc.algorithm !== undefined &&
+      isCipher(doc.algorithm) &&
+      doc.algorithm !== prevCipher &&
       !doc.session?.inputBytes &&
       !doc.session?.keyBytes
     ) {
       const currentKey = tryParseBytes(keyText(), fmt());
       if (currentKey && bytesEqual(currentKey, DEFAULT_KEY_BYTES_BY_CIPHER[prevCipher])) {
-        setKeyText(formatBytes(DEFAULT_KEY_BYTES_BY_CIPHER[doc.cipher], fmt()));
+        setKeyText(formatBytes(DEFAULT_KEY_BYTES_BY_CIPHER[doc.algorithm], fmt()));
       }
       const currentPt = tryParseBytes(inputText(), fmt());
       if (currentPt && bytesEqual(currentPt, DEFAULT_PT_BYTES_BY_CIPHER[prevCipher])) {
-        setInputText(formatBytes(DEFAULT_PT_BYTES_BY_CIPHER[doc.cipher], fmt()));
+        setInputText(formatBytes(DEFAULT_PT_BYTES_BY_CIPHER[doc.algorithm], fmt()));
       }
     }
     setError(null);

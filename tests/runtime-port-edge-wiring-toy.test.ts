@@ -543,8 +543,8 @@ describe("port-edge wiring (Slice 2.6a) — document round-trip", () => {
   // that the field survives a full encode → decode cycle byte-identical.
   it("a portInputs-bearing spec round-trips through CipherDocumentSchema unchanged", () => {
     const original: CipherDocument = {
-      schemaVersion: 2,
-      cipher: "aes-128",
+      schemaVersion: 3,
+      algorithm: "aes-128",
       spec: buildHappyPathSpec(),
     };
     // Serialize → JSON string → parse → validate via Zod.

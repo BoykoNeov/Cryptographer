@@ -8,14 +8,15 @@
  *     Speck-32-64 × {BE, LE} × {encrypt, decrypt} = 4, Serpent-128/192/256
  *     × {encrypt, decrypt} = 6 — totals 18, but minimal docs are still
  *     ≤ 14 unique specs since Serpent is 3 sizes).
- *   - Reject schemaVersion 0 and ≥3 with the friendly pre-check error
- *     (not the raw Zod literal mismatch). Accept schemaVersion 1 (via
- *     the v1 → v2 migration added in Phase 4 of `docs/plans/des-feistel.md`)
- *     and schemaVersion 2 (the current literal).
+ *   - Reject schemaVersion 0 and ≥4 with the friendly pre-check error
+ *     (not the raw Zod literal mismatch). Accept schemaVersion 1 + 2
+ *     (via the v1 → v2 migration from Phase 4 of `docs/plans/des-feistel.md`
+ *     chained with the v2 → v3 migration from Slice 2.10b of the
+ *     universal-port plan) and schemaVersion 3 (the current literal).
  *   - Reject malformed JSON syntax.
  *   - Reject malformed structure (missing required fields, bad
  *     discriminator, unknown wrapper-layer key).
- *   - Optional fields really are optional: a minimal `{ schemaVersion: 2,
+ *   - Optional fields really are optional: a minimal `{ schemaVersion: 3,
  *     spec }` round-trips.
  *   - Stable key order: serialize twice → byte-for-byte identical.
  *   - Enum coverage: every Cipher / CipherMode / PaddingScheme /
@@ -52,7 +53,13 @@ import {
   parseDocument,
   serializeDocument,
 } from "@/core/document";
-import { BYTE_FORMATS, CIPHER_IDS, CIPHER_MODES, PADDING_SCHEMES } from "@/core/document-schema";
+import {
+  BYTE_FORMATS,
+  CIPHER_IDS,
+  CIPHER_MODES,
+  HASH_IDS,
+  PADDING_SCHEMES,
+} from "@/core/document-schema";
 import type { CipherSpec } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
@@ -96,7 +103,7 @@ const SHIPPED_SPECS: ReadonlyArray<{ readonly name: string; readonly spec: Ciphe
 describe("serializeDocument + parseDocument: minimal documents", () => {
   for (const { name, spec } of SHIPPED_SPECS) {
     it(`round-trips ${name} (schemaVersion + spec only)`, () => {
-      const doc: CipherDocument = { schemaVersion: 2, spec };
+      const doc: CipherDocument = { schemaVersion: 3, spec };
       const text = serializeDocument(doc);
       const result = parseDocument(text);
       expect(result.ok).toBe(true);
@@ -114,7 +121,7 @@ describe("serializeDocument + parseDocument: minimal documents", () => {
 describe("serializeDocument + parseDocument: documents with sidecars", () => {
   it("round-trips a document with a LayoutSpec", () => {
     const doc: CipherDocument = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       spec: aes128Spec,
       layout: {
         positions: {
@@ -133,7 +140,7 @@ describe("serializeDocument + parseDocument: documents with sidecars", () => {
 
   it("round-trips a document with replicationModes (commit 5)", () => {
     const doc: CipherDocument = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       spec: aes128Spec,
       layout: {
         positions: {},
@@ -156,7 +163,7 @@ describe("serializeDocument + parseDocument: documents with sidecars", () => {
     // schema's closed enum doesn't include "auto" as a serialized value.
     // A doc that tries to persist "auto" explicitly is malformed.
     const malformed = JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       spec: aes128Spec,
       layout: {
         positions: {},
@@ -171,7 +178,7 @@ describe("serializeDocument + parseDocument: documents with sidecars", () => {
 
   it("round-trips a document with relativePositions (draggable replicas)", () => {
     const doc: CipherDocument = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       spec: aes128Spec,
       layout: {
         positions: {},
@@ -196,7 +203,7 @@ describe("serializeDocument + parseDocument: documents with sidecars", () => {
     // Share preserves the user's "I expanded round.5 to look at it"
     // choice.
     const doc: CipherDocument = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       spec: aes128Spec,
       layout: {
         positions: {},
@@ -219,7 +226,7 @@ describe("serializeDocument + parseDocument: documents with sidecars", () => {
     // here (rather than importing SHA-256) keeps the test independent
     // of any future SHA-256 spec churn.
     const doc: CipherDocument = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       spec: {
         id: "test-default-collapsed@1",
         name: "Test default collapsed",
@@ -256,7 +263,7 @@ describe("serializeDocument + parseDocument: documents with sidecars", () => {
   it("rejects a malformed relativePositions entry", () => {
     // Wrong shape — RelativePosition is `{ dx, dy }`, not `{ x, y }`.
     const malformed = JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       spec: aes128Spec,
       layout: {
         positions: {},
@@ -271,7 +278,7 @@ describe("serializeDocument + parseDocument: documents with sidecars", () => {
 
   it("round-trips a document with a SessionSnapshot (no bytes)", () => {
     const doc: CipherDocument = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       spec: aes128Spec,
       session: {
         mode: "encrypt",
@@ -289,7 +296,7 @@ describe("serializeDocument + parseDocument: documents with sidecars", () => {
 
   it("round-trips a document with a SessionSnapshot including bytes", () => {
     const doc: CipherDocument = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       spec: aes128Spec,
       session: {
         mode: "decrypt",
@@ -309,7 +316,7 @@ describe("serializeDocument + parseDocument: documents with sidecars", () => {
 
   it("round-trips a document with DocumentMetadata", () => {
     const doc: CipherDocument = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       spec: aes128Spec,
       metadata: {
         name: "My custom AES-128",
@@ -325,7 +332,7 @@ describe("serializeDocument + parseDocument: documents with sidecars", () => {
 
   it("round-trips a document with all sidecars present", () => {
     const doc: CipherDocument = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       spec: aes128EcbSpec,
       layout: {
         positions: { "key-expansion": { x: 10, y: 20 } },
@@ -351,7 +358,7 @@ describe("serializeDocument + parseDocument: documents with sidecars", () => {
     // All three metadata fields are optional. An empty metadata object
     // must round-trip cleanly — it's the shape a minimal save dialog
     // produces when the user doesn't fill in name.
-    const doc: CipherDocument = { schemaVersion: 2, spec: aes128Spec, metadata: {} };
+    const doc: CipherDocument = { schemaVersion: 3, spec: aes128Spec, metadata: {} };
     const text = serializeDocument(doc);
     const result = parseDocument(text);
     expect(result.ok).toBe(true);
@@ -362,24 +369,59 @@ describe("serializeDocument + parseDocument: documents with sidecars", () => {
 // ─── schemaVersion handling ───────────────────────────────────────────────
 
 describe("parseDocument: schemaVersion handling", () => {
-  it("accepts the current schemaVersion (2 after Phase 4 of des-feistel.md)", () => {
-    expect(CURRENT_SCHEMA_VERSION).toBe(2);
-    const result = parseDocument(JSON.stringify({ schemaVersion: 2, spec: aes128Spec }));
+  it("accepts the current schemaVersion (3 after Slice 2.10b of universal-port-dataflow.md)", () => {
+    expect(CURRENT_SCHEMA_VERSION).toBe(3);
+    const result = parseDocument(JSON.stringify({ schemaVersion: 3, spec: aes128Spec }));
     expect(result.ok).toBe(true);
   });
 
-  it("accepts legacy schemaVersion 1 via the v1 → v2 migration", () => {
+  it("accepts legacy schemaVersion 1 via the v1 → v2 → v3 migration chain", () => {
     // Backwards-compat for documents saved before Phase 4 of
     // `docs/plans/des-feistel.md` bumped the schema. v1 documents
-    // cannot contain `feistel-round` nodes (DES wasn't selectable),
-    // so the migration is a pure version-field bump.
+    // cannot contain `feistel-round` nodes (DES wasn't selectable)
+    // and predate the cipher-hint field, so the chained migration
+    // is a pure version-field bump (v1 → v2) followed by a no-op
+    // (no `cipher` field to rename in v2 → v3).
     const result = parseDocument(JSON.stringify({ schemaVersion: 1, spec: aes128Spec }));
     expect(result.ok).toBe(true);
     if (result.ok) {
       // Post-migration, the loaded document carries the current
       // version literal — the rest of the app reasons in current-
       // version terms regardless of file origin.
-      expect(result.doc.schemaVersion).toBe(2);
+      expect(result.doc.schemaVersion).toBe(3);
+    }
+  });
+
+  it("accepts legacy schemaVersion 2 via the v2 → v3 migration (cipher → algorithm rename)", () => {
+    // Slice 2.10b of `docs/plans/universal-port-dataflow.md` renamed
+    // the cipher-hint field at the document root. v2 documents carry
+    // `cipher: <Cipher>`; the migration renames it to
+    // `algorithm: <Cipher>` (the value passes through unchanged since
+    // every v2 cipher value is also a valid Algorithm).
+    const result = parseDocument(
+      JSON.stringify({ schemaVersion: 2, spec: aes128Spec, cipher: "des" }),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.doc.schemaVersion).toBe(3);
+      // The legacy field is gone; the value is now at `algorithm`.
+      expect(result.doc.algorithm).toBe("des");
+      // Sanity: the strict-validating schema rejected anything in the
+      // `cipher` field post-migration, so it's removed from the parsed
+      // shape. (TS-level: `cipher` isn't on the v3 CipherDocument type.)
+      expect((result.doc as { cipher?: unknown }).cipher).toBeUndefined();
+    }
+  });
+
+  it("v2 document without a cipher field migrates to v3 cleanly (no algorithm field)", () => {
+    // Pre-Phase-6e v2 docs (no cipher field at all) walk the migration
+    // path and emerge as v3 with no algorithm field. The optional field
+    // staying absent is the correct behavior — there's no value to fabricate.
+    const result = parseDocument(JSON.stringify({ schemaVersion: 2, spec: aes128Spec }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.doc.schemaVersion).toBe(3);
+      expect(result.doc.algorithm).toBeUndefined();
     }
   });
 
@@ -391,11 +433,11 @@ describe("parseDocument: schemaVersion handling", () => {
     }
   });
 
-  it("rejects schemaVersion === 3 (forward-compat: future versions error friendly)", () => {
-    const result = parseDocument(JSON.stringify({ schemaVersion: 3, spec: aes128Spec }));
+  it("rejects schemaVersion === 4 (forward-compat: future versions error friendly)", () => {
+    const result = parseDocument(JSON.stringify({ schemaVersion: 4, spec: aes128Spec }));
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toContain("schemaVersion 3 is not supported");
+      expect(result.error).toContain("schemaVersion 4 is not supported");
     }
   });
 });
@@ -412,7 +454,7 @@ describe("parseDocument: error cases", () => {
   });
 
   it("rejects a document missing the `spec` field", () => {
-    const result = parseDocument(JSON.stringify({ schemaVersion: 2 }));
+    const result = parseDocument(JSON.stringify({ schemaVersion: 3 }));
     expect(result.ok).toBe(false);
     if (!result.ok) {
       // Path naming uses `spec` (Zod issue path joined by `.`).
@@ -424,7 +466,7 @@ describe("parseDocument: error cases", () => {
     // Wrapper is `.strict()` — unknown keys mean a forgotten
     // schemaVersion bump.
     const result = parseDocument(
-      JSON.stringify({ schemaVersion: 2, spec: aes128Spec, fancyNewField: true }),
+      JSON.stringify({ schemaVersion: 3, spec: aes128Spec, fancyNewField: true }),
     );
     expect(result.ok).toBe(false);
   });
@@ -432,7 +474,7 @@ describe("parseDocument: error cases", () => {
   it("rejects a spec step with an unknown `kind` discriminator", () => {
     const result = parseDocument(
       JSON.stringify({
-        schemaVersion: 2,
+        schemaVersion: 3,
         spec: {
           id: "fake@1",
           name: "Fake",
@@ -451,7 +493,7 @@ describe("parseDocument: error cases", () => {
   it("rejects a SessionSnapshot.cipher value not in CIPHER_IDS", () => {
     const result = parseDocument(
       JSON.stringify({
-        schemaVersion: 2,
+        schemaVersion: 3,
         spec: aes128Spec,
         session: {
           mode: "encrypt",
@@ -471,7 +513,7 @@ describe("parseDocument: error cases", () => {
   it("rejects a SessionSnapshot byte outside [0, 255]", () => {
     const result = parseDocument(
       JSON.stringify({
-        schemaVersion: 2,
+        schemaVersion: 3,
         spec: aes128Spec,
         session: {
           mode: "encrypt",
@@ -487,23 +529,26 @@ describe("parseDocument: error cases", () => {
   });
 });
 
-// ─── Cipher selector hint (Phase 6e) ──────────────────────────────────────
+// ─── Algorithm selector hint (Phase 6e, widened in Slice 2.10b) ──────────
 
-describe("CipherDocument.cipher hint field", () => {
-  // Phase 6e of `docs/plans/des-feistel.md`: spec-only documents now carry
-  // an optional `cipher` hint at the document root so a recipient's cipher
-  // selector flips to match the loaded spec. Pre-hint, loading a DES
-  // document into an AES-128-default recipient left the selector mismatched
-  // and the input fields the wrong byte length. Tests below pin the
-  // round-trip of the field through serialize/parse — the selector-flip
-  // behavior on `setSpecFromDocument` is covered by `built-from-palette-
-  // roundtrip.test.tsx` and the e2e self-smoke.
+describe("CipherDocument.algorithm hint field", () => {
+  // Phase 6e of `docs/plans/des-feistel.md` introduced an optional
+  // selector-hint field at the document root (originally `cipher: Cipher`).
+  // Slice 2.10b of `docs/plans/universal-port-dataflow.md` renamed it to
+  // `algorithm: Algorithm` and widened the enum to include Hash variants
+  // (today: sha-256). The hint lets a recipient's selector flip to match
+  // the loaded spec; without it, loading a DES doc into an AES-128-default
+  // recipient left the selector mismatched and the input fields the wrong
+  // byte length. Tests below pin the round-trip of the field through
+  // serialize/parse — the selector-flip behavior on `setSpecFromDocument`
+  // is covered by `built-from-palette-roundtrip.test.tsx` and the e2e
+  // self-smoke.
 
-  it("round-trips a spec-only document with a cipher hint", () => {
+  it("round-trips a spec-only document with an algorithm hint", () => {
     const doc: CipherDocument = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       spec: desSpec,
-      cipher: "des",
+      algorithm: "des",
     };
     const text = serializeDocument(doc);
     const result = parseDocument(text);
@@ -511,11 +556,11 @@ describe("CipherDocument.cipher hint field", () => {
     if (result.ok) expect(result.doc).toEqual(doc);
   });
 
-  it("round-trips a document with cipher hint + layout + session (full fan-out)", () => {
+  it("round-trips a document with algorithm hint + layout + session (full fan-out)", () => {
     const doc: CipherDocument = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       spec: desSpec,
-      cipher: "des",
+      algorithm: "des",
       layout: {
         positions: { "des.initial-permutation": { x: 0, y: 0 } },
         collapsedGroups: ["rounds"],
@@ -535,41 +580,59 @@ describe("CipherDocument.cipher hint field", () => {
     if (result.ok) expect(result.doc).toEqual(doc);
   });
 
-  it("a document without the cipher hint still parses (back-compat)", () => {
+  it("a document without the algorithm hint still parses (back-compat)", () => {
     // Pre-Phase-6e documents (every shipped .cipher.json before this field
     // landed) must continue to load cleanly. The absent field is the legacy
     // fallback path: `setSpecFromDocument` doesn't flip the selector,
     // matching pre-fix behavior.
-    const doc: CipherDocument = { schemaVersion: 2, spec: aes128Spec };
+    const doc: CipherDocument = { schemaVersion: 3, spec: aes128Spec };
     const text = serializeDocument(doc);
     const result = parseDocument(text);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.doc).toEqual(doc);
-      expect(result.doc.cipher).toBeUndefined();
+      expect(result.doc.algorithm).toBeUndefined();
     }
   });
 
-  it("rejects a malformed cipher hint", () => {
-    // Anything outside the closed `CIPHER_IDS` enum is malformed.
+  it("rejects a malformed algorithm hint", () => {
+    // Anything outside the closed `ALGORITHM_IDS` enum is malformed.
     const malformed = JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       spec: aes128Spec,
-      cipher: "not-a-cipher",
+      algorithm: "not-an-algorithm",
     });
     const result = parseDocument(malformed);
     expect(result.ok).toBe(false);
   });
 
   for (const cipher of CIPHER_IDS) {
-    it(`accepts top-level cipher hint = ${cipher}`, () => {
+    it(`accepts top-level algorithm hint = ${cipher}`, () => {
       const doc: CipherDocument = {
-        schemaVersion: 2,
+        schemaVersion: 3,
         spec: aes128Spec,
-        cipher,
+        algorithm: cipher,
       };
       const result = parseDocument(serializeDocument(doc));
       expect(result.ok).toBe(true);
+    });
+  }
+
+  // Hash variants — Slice 2.10b widened the algorithm enum to include
+  // Hash members. The spec field carries a cipher spec here (aes128Spec)
+  // because the schema's algorithm field is structurally independent of
+  // the spec's shape; cross-field consistency (hash hint paired with hash
+  // spec) is the document author's responsibility, not the schema's.
+  for (const hash of HASH_IDS) {
+    it(`accepts top-level algorithm hint = ${hash} (hash variant)`, () => {
+      const doc: CipherDocument = {
+        schemaVersion: 3,
+        spec: aes128Spec,
+        algorithm: hash,
+      };
+      const result = parseDocument(serializeDocument(doc));
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.doc.algorithm).toBe(hash);
     });
   }
 });
@@ -583,7 +646,7 @@ describe("serializeDocument: stable key order", () => {
     // so both calls produce identical output — this is the property
     // URL-share hashing (Slice 7) depends on.
     const docA: CipherDocument = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       spec: aes128Spec,
       metadata: { name: "x", createdAt: 1 },
     };
@@ -593,7 +656,7 @@ describe("serializeDocument: stable key order", () => {
     const docB: CipherDocument = {
       metadata: { createdAt: 1, name: "x" },
       spec: aes128Spec,
-      schemaVersion: 2,
+      schemaVersion: 3,
     } as CipherDocument;
     expect(serializeDocument(docA)).toBe(serializeDocument(docB));
   });
@@ -602,7 +665,7 @@ describe("serializeDocument: stable key order", () => {
     // sortKeysDeep MUST NOT sort arrays — params like `[1, 2, 3]` carry
     // positional meaning (S-box entries, rcon table, MixColumns matrix).
     const doc: CipherDocument = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       spec: {
         id: "test@1",
         name: "Test",
@@ -638,7 +701,7 @@ describe("schema enum coverage", () => {
   for (const cipher of CIPHER_IDS) {
     it(`accepts SessionSnapshot.cipher = ${cipher}`, () => {
       const doc: CipherDocument = {
-        schemaVersion: 2,
+        schemaVersion: 3,
         spec: aes128Spec,
         session: {
           mode: "encrypt",
@@ -656,7 +719,7 @@ describe("schema enum coverage", () => {
   for (const cipherMode of CIPHER_MODES) {
     it(`accepts SessionSnapshot.cipherMode = ${cipherMode}`, () => {
       const doc: CipherDocument = {
-        schemaVersion: 2,
+        schemaVersion: 3,
         spec: aes128Spec,
         session: {
           mode: "encrypt",
@@ -674,7 +737,7 @@ describe("schema enum coverage", () => {
   for (const padding of PADDING_SCHEMES) {
     it(`accepts SessionSnapshot.padding = ${padding}`, () => {
       const doc: CipherDocument = {
-        schemaVersion: 2,
+        schemaVersion: 3,
         spec: aes128Spec,
         session: {
           mode: "encrypt",
@@ -692,7 +755,7 @@ describe("schema enum coverage", () => {
   for (const byteFormat of BYTE_FORMATS) {
     it(`accepts SessionSnapshot.byteFormat = ${byteFormat}`, () => {
       const doc: CipherDocument = {
-        schemaVersion: 2,
+        schemaVersion: 3,
         spec: aes128Spec,
         session: {
           mode: "encrypt",

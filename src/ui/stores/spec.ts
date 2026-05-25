@@ -40,6 +40,7 @@ import { serpent192Spec } from "@/ciphers/serpent-192";
 import { serpent192DecryptSpec } from "@/ciphers/serpent-192-decrypt";
 import { serpent256Spec } from "@/ciphers/serpent-256";
 import { serpent256DecryptSpec } from "@/ciphers/serpent-256-decrypt";
+import { buildSha256Spec } from "@/ciphers/sha-256";
 import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { speck32_64BeDecryptSpec } from "@/ciphers/speck-32-64-be-decrypt";
 import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
@@ -60,7 +61,14 @@ import {
 } from "@/core/spec-mutations";
 import type { CipherSpec, Json, StepLeaf, StepNode } from "@/core/types";
 import { createSignal } from "solid-js";
-import { type Cipher, setCipher as setCipherSignal, useCipher } from "./cipher";
+import {
+  type Cipher,
+  type Hash,
+  isCipher,
+  isHash,
+  setCipher as setCipherSignal,
+  useCipher,
+} from "./cipher";
 import {
   type CipherMode,
   isCipherModeSupported,
@@ -130,6 +138,29 @@ const resolveDefault = (cipher: Cipher, cipherMode: CipherMode, mode: Mode): Cip
   return forCipherMode[mode];
 };
 
+/**
+ * Canonical-spec table for hashes — sibling of `defaults` above. Slice 2.10b
+ * of `docs/plans/universal-port-dataflow.md` introduces this table; today
+ * SHA-256 is the only entry. Hash specs have no encrypt/decrypt direction
+ * and no cipher-mode dimension (no block-cipher modes of operation), so
+ * the table is keyed by `Hash` directly — flat compared to the cipher
+ * `defaults` table's three-axis structure.
+ *
+ * Specs are built eagerly at module load (one call per registered hash),
+ * matching the cipher tables. SHA-256's builder constructs ~1800+ leaves;
+ * the cost is one-shot, paid before first paint.
+ */
+const hashDefaults: Record<Hash, CipherSpec> = {
+  "sha-256": buildSha256Spec(),
+};
+
+/**
+ * Pick the canonical hash spec for a `Hash` variant. Mirrors
+ * `resolveDefault` for ciphers — kept separate because the (mode,
+ * cipherMode, padding) axes don't apply to hashes.
+ */
+const resolveHashDefault = (hash: Hash): CipherSpec => hashDefaults[hash];
+
 // ─── Signals ─────────────────────────────────────────────────────────────
 //
 // Two-spec store: encrypt and decrypt are held simultaneously, in
@@ -167,8 +198,21 @@ type CipherSpecsByMode = {
   readonly decrypt: CipherSpec;
 };
 
+/**
+ * Hash-shape SpecsByMode. The `hash: Hash` field is the load-bearing
+ * discriminant for `resetSpec` and `isCustomSpec`: those operations need
+ * to know WHICH hash variant the active spec is so they can look up the
+ * canonical default from `hashDefaults`. Without it, the only other
+ * way to recover the identity would be string-matching `single.id` —
+ * fragile and indirect. The variant is intrinsic to the discriminated
+ * union, just like `kind`.
+ *
+ * 2.10c will wire an `algorithm` signal that the UI selector reads/writes;
+ * this field is the bridge that keeps store reads honest in the meantime.
+ */
 type HashSpecsByMode = {
   readonly kind: "hash";
+  readonly hash: Hash;
   readonly single: CipherSpec;
 };
 
@@ -182,6 +226,28 @@ const buildCanonicalPair = (
   kind: "cipher",
   encrypt: applyPaddingScheme(resolveDefault(cipher, cipherMode, "encrypt"), "encrypt", scheme),
   decrypt: applyPaddingScheme(resolveDefault(cipher, cipherMode, "decrypt"), "decrypt", scheme),
+});
+
+/**
+ * Sibling of `buildCanonicalPair` for hash variants. Slice 2.10b
+ * (2026-05-25) introduces this; today only reachable via tests (the
+ * production setters `setCipher` / `setCipherMode` / `setPadding`
+ * always go through `buildCanonicalPair`). Slice 2.10c wires the
+ * algorithm-selector path so the user can flip into a hash via the
+ * dropdown.
+ *
+ * No (mode, cipherMode, padding) parameters — none apply to hashes.
+ * The result carries the `hash` discriminant so downstream consumers
+ * can identify the variant for `resetSpec` / `isCustomSpec` lookups.
+ *
+ * Exported so the planned 2.10c selector setter (and current
+ * test helpers) can construct a hash-kind SpecsByMode without
+ * reaching into private helpers.
+ */
+export const buildCanonicalHash = (hash: Hash): SpecsByMode => ({
+  kind: "hash",
+  hash,
+  single: resolveHashDefault(hash),
 });
 
 const [mode, setModeSignal] = createSignal<Mode>("encrypt");
@@ -244,7 +310,10 @@ const updateActive = (updater: (s: CipherSpec) => CipherSpec): void => {
   if (current.kind === "hash") {
     const updated = updater(current.single);
     if (updated === current.single) return;
-    setSpecs({ kind: "hash", single: updated });
+    // Preserve the hash discriminant — without it, `resetSpec` and
+    // `isCustomSpec` would lose track of WHICH hash variant the active
+    // spec is when the user customizes (e.g. edits a leaf's params).
+    setSpecs({ kind: "hash", hash: current.hash, single: updated });
     return;
   }
   const m = mode();
@@ -270,7 +339,7 @@ const updateBoth = (updater: (s: CipherSpec, m: Mode) => CipherSpec): void => {
   if (current.kind === "hash") {
     const updated = updater(current.single, "encrypt");
     if (updated === current.single) return;
-    setSpecs({ kind: "hash", single: updated });
+    setSpecs({ kind: "hash", hash: current.hash, single: updated });
     return;
   }
   setSpecs({
@@ -906,6 +975,33 @@ const generateUniqueStepId = (spec: CipherSpec, stepType: string): string => {
  * reads `doc.session.inputBytes` / `keyBytes` directly after this call.
  */
 export const setSpecFromDocument = (doc: CipherDocument): void => {
+  // Hash short-circuit (Slice 2.10b, 2026-05-25). When the document's
+  // algorithm hint identifies a Hash variant, there is no encrypt/decrypt
+  // counterpart to construct, and the existing `resolveDefault` call below
+  // explicitly assumes a cipher universe (3-axis lookup keyed by Cipher).
+  // The advisor flagged this as the load-bearing branch: the early return
+  // here is what keeps the cipher-side construction honest. Session
+  // restoration for a hash doc is also a degenerate case — there's no
+  // `cipherMode` / `padding` / encrypt-decrypt distinction to apply, and
+  // 2.10c is where the algorithm signal that would carry the hash
+  // selector value lands. For now, we land the literal `doc.spec` into
+  // the single slot and leave selector signals as-is.
+  //
+  // Implementation note on the discriminant: the document schema's
+  // `algorithm: Algorithm` is the source of truth for WHICH hash variant
+  // the spec is — `doc.spec.id` would be a fragile alternative ("sha-256@1"
+  // string-match). When `algorithm` is absent on a hash document (a
+  // historical doc authored before v3, but containing a hash spec — not
+  // possible in practice since SHA-256 wasn't selectable pre-2.10c —
+  // OR a future doc that omits the optional hint), we have no way to
+  // identify the hash variant. Fall through to the cipher path in that
+  // case; the unidentifiable doc.spec will simply land into the active
+  // cipher slot and almost certainly fail at runtime, which is the
+  // honest signal to the user that the document is malformed.
+  if (doc.algorithm !== undefined && isHash(doc.algorithm)) {
+    setSpecs({ kind: "hash", hash: doc.algorithm, single: doc.spec });
+    return;
+  }
   if (doc.session) {
     setByteFormat(doc.session.byteFormat);
     setCipherSignal(doc.session.cipher);
@@ -918,13 +1014,14 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
     if (doc.session.ivBytes !== undefined) {
       setIvBytes(new Uint8Array(doc.session.ivBytes));
     }
-  } else if (doc.cipher !== undefined) {
-    // Spec-only path with the cipher-hint field (Phase 6e of
-    // `docs/plans/des-feistel.md`). Flip the cipher selector to match
-    // the document's cipher so non-AES specs (DES, Speck, Serpent) don't
-    // land into a recipient whose AES-128 default key field (16 bytes)
-    // immediately errors with "expected 8 bytes" against an 8-byte DES
-    // block.
+  } else if (doc.algorithm !== undefined && isCipher(doc.algorithm)) {
+    // Spec-only path with the algorithm-hint field (Phase 6e of
+    // `docs/plans/des-feistel.md`, renamed `cipher` → `algorithm` in
+    // Slice 2.10b of the universal-port plan). Flip the cipher selector
+    // to match the document's cipher so non-AES specs (DES, Speck,
+    // Serpent) don't land into a recipient whose AES-128 default key
+    // field (16 bytes) immediately errors with "expected 8 bytes"
+    // against an 8-byte DES block.
     //
     // We also fall back `cipherMode` to "single-block" when the current
     // mode isn't supported for the loaded cipher (DES, Speck, Serpent
@@ -938,8 +1035,8 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
     // no hint for those in a spec-only document, and "DES has no
     // padding" is already enforced by the padding store's own
     // single-block fallback.
-    setCipherSignal(doc.cipher);
-    if (!isCipherModeSupported(doc.cipher, useCipherMode()())) {
+    setCipherSignal(doc.algorithm);
+    if (!isCipherModeSupported(doc.algorithm, useCipherMode()())) {
       setCipherModeSignal("single-block");
     }
   }
@@ -955,10 +1052,6 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
     otherMode,
     usePaddingScheme()(),
   );
-  // 2.10a posture: every doc.spec authored to date is cipher-shape, so the
-  // hash branch is unreachable here — the construction below produces a
-  // cipher-kind SpecsByMode. 2.10b widens this when hash documents become
-  // a thing (and the document schema grows an algorithm-family discriminant).
   setSpecs(
     docMode === "encrypt"
       ? { kind: "cipher", encrypt: doc.spec, decrypt: otherCanonical }
@@ -975,8 +1068,12 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
 export const resetSpec = (): void => {
   const current = specs();
   if (current.kind === "hash") {
-    // 2.10a posture: no hash canonical resolution yet — 2.10b wires
-    // `hashDefaults`. Until then there's no target to reset to.
+    // Slice 2.10b: hash canonical lookup keyed by the variant discriminant
+    // carried in the SpecsByMode itself. Hashes have no
+    // (cipherMode, padding, mode) dimensions to apply, so the lookup is
+    // a direct table read.
+    const canonical = resolveHashDefault(current.hash);
+    updateActive(() => canonical);
     return;
   }
   const canonical = applyPaddingScheme(
@@ -1043,10 +1140,12 @@ const deepEqualJson = (a: unknown, b: unknown): boolean => {
 export const isCustomSpec = (): boolean => {
   const current = specs();
   if (current.kind === "hash") {
-    // 2.10a posture: hashDefaults lands in 2.10b — until then there's no
-    // canonical to compare against, so "custom" is always false. The UI's
-    // "Custom (was X)" indicator falls back to spec.name display.
-    return false;
+    // Slice 2.10b: compare the active hash spec against its canonical
+    // table entry, identified by the variant discriminant carried in
+    // the SpecsByMode. Same deep-equal walk used for ciphers — the
+    // hash table has no padding overlay to compose first.
+    const canonical = resolveHashDefault(current.hash);
+    return !deepEqualJson(current.single, canonical);
   }
   const canonical = applyPaddingScheme(
     resolveDefault(useCipher()(), useCipherMode()(), mode()),

@@ -108,7 +108,7 @@ describe("StepDescription — narrationOverride fallback + override", () => {
       ],
     };
     const doc: CipherDocument = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       spec: customSpec,
     };
     setSpecFromDocument(doc);

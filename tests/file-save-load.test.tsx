@@ -18,7 +18,7 @@
  *   3. Loading malformed JSON shows a friendly inline error and leaves
  *      the spec untouched — no crash, no half-applied state.
  *
- *   4. Loading a document with a future schemaVersion (≥3) shows the "this file
+ *   4. Loading a document with a future schemaVersion (≥4) shows the "this file
  *      is from a newer app version" message (forward-compat anchor).
  *
  *   5. Loading a v1 document restores the byteFormat BEFORE formatting
@@ -324,19 +324,21 @@ describe("App — Save/Load (Slice 5)", () => {
     expect(useSpec()()).toBe(specBefore);
   });
 
-  it("Load with a future schemaVersion (≥3) shows the version-mismatch error", async () => {
+  it("Load with a future schemaVersion (≥4) shows the version-mismatch error", async () => {
     const { container } = render(() => <App />);
     const specBefore = useSpec()();
     // Phase 4 of `docs/plans/des-feistel.md` bumped the current schema
-    // from 1 to 2, so a "future" doc now needs to claim 3+ to trip the
-    // forward-compat error. Bare doc; we don't care about its other
-    // fields because the pre-check fires BEFORE the full Zod schema.
-    driveLoad(container, JSON.stringify({ schemaVersion: 3, spec: {} }));
+    // from 1 to 2, and Slice 2.10b of the universal-port plan bumped it
+    // again to 3 (cipher → algorithm field rename for hash support). So a
+    // "future" doc now needs to claim 4+ to trip the forward-compat error.
+    // Bare doc; we don't care about its other fields because the pre-check
+    // fires BEFORE the full Zod schema.
+    driveLoad(container, JSON.stringify({ schemaVersion: 4, spec: {} }));
 
     await waitFor(() => {
       const err = container.querySelector(".error");
       expect(err).not.toBeNull();
-      expect(err?.textContent).toContain("schemaVersion 3 is not supported");
+      expect(err?.textContent).toContain("schemaVersion 4 is not supported");
     });
     expect(useSpec()()).toBe(specBefore);
   });
@@ -427,7 +429,7 @@ describe("App — Save/Load (Slice 5)", () => {
 
     // Build a session that pins byteFormat=ascii + the FIPS-197 plaintext.
     const doc = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       spec: useSpec()(), // current AES-128 spec
       session: {
         mode: "encrypt",
