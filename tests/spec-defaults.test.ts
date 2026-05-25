@@ -68,21 +68,24 @@ describe("getDefaultCollapsedContainers", () => {
     expect(ids.size).toBe(0);
   });
 
-  it("returns the SHA-256 round groups (round.0..round.63), and nothing else", () => {
+  it("returns the SHA-256 default-collapsed surfaces (64 round groups + msg-schedule)", () => {
     const spec = buildSha256Spec();
     const ids = getDefaultCollapsedContainers(spec);
-    // Exact set: 64 round containers, all named `round.N` for N in [0, 64).
-    expect(ids.size).toBe(64);
+    // Exact set: 64 round containers (`round.N` for N in [0, 64)) plus
+    // the `msg-schedule` for-each-subgraph-with-history container. Slice
+    // 2.10c (2026-05-25) added `defaultCollapsed: true` to msg-schedule
+    // pre-emptively before exposing SHA-256 in the cipher selector — its
+    // 48 iterations × 14 leaves = 672 chips would have produced a wall
+    // on first render otherwise.
+    expect(ids.size).toBe(65);
     for (let t = 0; t < 64; t += 1) {
       expect(ids.has(`round.${t}`)).toBe(true);
     }
-    // Sanity: a couple of other SHA-256 container ids are NOT in the set
-    // (e.g., the top-level `compression` for-each-subgraph and the
-    // `msg-schedule` for-each-subgraph-with-history). They render fine
-    // uncollapsed because their bodies are the 64 round groups which
-    // ARE collapsed.
+    expect(ids.has("msg-schedule")).toBe(true);
+    // Sanity: the top-level `compression` for-each-subgraph is NOT in
+    // the set. It renders fine uncollapsed because its body is the 64
+    // round groups which ARE collapsed.
     expect(ids.has("compression")).toBe(false);
-    expect(ids.has("msg-schedule")).toBe(false);
   });
 
   it("walks into group children (nested default-collapsed surfaces)", () => {
@@ -172,27 +175,32 @@ describe("getEffectiveCollapsedSet", () => {
   it("returns spec defaults alone when layout is null", () => {
     const spec = buildSha256Spec();
     const effective = getEffectiveCollapsedSet(spec, null);
-    expect(effective.size).toBe(64);
+    // 64 round groups + msg-schedule (Slice 2.10c) = 65 defaults.
+    expect(effective.size).toBe(65);
     expect(effective.has("round.0")).toBe(true);
+    expect(effective.has("msg-schedule")).toBe(true);
   });
 
   it("returns spec defaults alone for an empty layout", () => {
     const spec = buildSha256Spec();
     const effective = getEffectiveCollapsedSet(spec, EMPTY_LAYOUT);
-    expect(effective.size).toBe(64);
+    expect(effective.size).toBe(65);
   });
 
   it("unions layout.collapsedGroups with spec defaults", () => {
     const spec = buildSha256Spec();
-    // User explicitly collapses `msg-schedule` (which has no default).
-    // Effective set is defaults ∪ {msg-schedule}.
+    // User explicitly collapses `compression` (which has no default).
+    // Effective set is defaults ∪ {compression}. `msg-schedule` is already
+    // in the defaults (Slice 2.10c), so using IT as the layout-collapse
+    // target would not exercise the union semantic.
     const layout: LayoutSpec = {
       positions: {},
-      collapsedGroups: ["msg-schedule"],
+      collapsedGroups: ["compression"],
       flowDirection: "ltr",
     };
     const effective = getEffectiveCollapsedSet(spec, layout);
-    expect(effective.size).toBe(65);
+    expect(effective.size).toBe(66);
+    expect(effective.has("compression")).toBe(true);
     expect(effective.has("msg-schedule")).toBe(true);
     expect(effective.has("round.0")).toBe(true);
   });
@@ -208,24 +216,27 @@ describe("getEffectiveCollapsedSet", () => {
       expandedGroups: ["round.5"],
     };
     const effective = getEffectiveCollapsedSet(spec, layout);
-    expect(effective.size).toBe(63);
+    // 65 defaults − 1 expanded = 64.
+    expect(effective.size).toBe(64);
     expect(effective.has("round.5")).toBe(false);
-    // The other 63 default-collapsed rounds remain collapsed.
+    // The other 63 default-collapsed rounds + msg-schedule remain collapsed.
     expect(effective.has("round.0")).toBe(true);
     expect(effective.has("round.63")).toBe(true);
+    expect(effective.has("msg-schedule")).toBe(true);
   });
 
   it("combines union + subtraction in one pass (defaults + collapse + expand)", () => {
     const spec = buildSha256Spec();
     const layout: LayoutSpec = {
       positions: {},
-      collapsedGroups: ["msg-schedule"],
+      collapsedGroups: ["compression"],
       flowDirection: "ltr",
       expandedGroups: ["round.5"],
     };
     const effective = getEffectiveCollapsedSet(spec, layout);
-    // 64 defaults − 1 expanded + 1 explicit collapse = 64.
-    expect(effective.size).toBe(64);
+    // 65 defaults − 1 expanded + 1 explicit collapse = 65.
+    expect(effective.size).toBe(65);
+    expect(effective.has("compression")).toBe(true);
     expect(effective.has("msg-schedule")).toBe(true);
     expect(effective.has("round.5")).toBe(false);
     expect(effective.has("round.4")).toBe(true);

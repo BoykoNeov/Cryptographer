@@ -2448,22 +2448,125 @@ authoring per [[feedback_iterative_slice_review]]).
 SpecsByMode resolves to hash-shaped; SHA-256 reachable through store
 API (not UI yet).
 
-### Slice 2.10c — UI surface + manual browser smoke (planned)
+### Slice 2.10c — UI surface + manual browser smoke — SHIPPED 2026-05-25 (pre-smoke)
 
-**Scope (sketched):**
+**Status: SHIPPED at the code level 2026-05-25; manual browser smoke
+pending** (the only "outside-tests" verification step in the slice — the
+plan is unambiguous that it must close the slice). User-picked
+**Remember-last-cipher semantics** at slice start after the advisor
+consult (over "Reset to AES-128 on every category flip"): two
+independent signals + a category flag preserve each family's last
+selection, so a cipher → hash → cipher detour returns the user to the
+same cipher they were on. The same shape scales when SHA-3 / SHA-512 /
+MAC / KDF families land.
 
-- Category toggle (Cipher | Hash) above cipher dropdown in `App.tsx`.
-- Conditional render: hide cipher-mode dropdown, key field, padding
-  section when category=hash.
-- Default plaintext flips to "abc" when SHA-256 selected.
-- Plaintext input length validator hash branch.
-- Pre-emptive: add `defaultCollapsed: true` to the
-  `for-each-subgraph-with-history` msg-schedule node in `sha-256.ts`
-  (avoid the 672-chip wall on first render).
-- Manual browser smoke: SHA-256 launches → FIPS §A.1 KAT bytes visible
-  in trace → graph view renders cleanly (no chip wall).
+**Touched files (4 src + 2 test + 1 plan + 1 memory + 1 CLAUDE.md):**
 
-**Pass/fail gate:** end-to-end smoke green.
+- `src/ui/stores/cipher.ts` — added `Category = "cipher" | "hash"`,
+  `hash` signal (default "sha-256"), `category` signal (default
+  "cipher"), `useHash` / `useCategory` / `setHash` / `setCategory`
+  accessors, `useAlgorithm()` (returns the derived
+  `category() === "cipher" ? cipher() : hash()` Algorithm accessor),
+  `HASH_OPTIONS` + `HASH_LABELS` (one entry today, parallel to
+  `CIPHER_OPTIONS` / `CIPHER_LABELS` so the `<For>` shape matches).
+  `__resetCipherForTests` widened to reset all three signals.
+- `src/ui/stores/spec.ts` — added `setHash(h)` (flips category to "hash"
+  + lands canonical via `buildCanonicalHash`) and `setAlgorithm(a)` (the
+  algorithm-level dispatcher that routes to either `setCipher` or
+  `setHash`). Existing `setCipher` flips category to "cipher"
+  defensively. `setSpecFromDocument` hash branch writes the category +
+  hash signals (advisor flagged: 2.10b only wrote `setSpecs`, leaving
+  the selector mismatched); the cipher branch defensively writes
+  category="cipher" so a hash → cipher document load lands correctly.
+- `src/ui/App.tsx` — the biggest touch. Imports widened with
+  `Algorithm`, `Category`, `Hash`, `HASH_*`, `useAlgorithm`,
+  `useCategory`, `useHash`, `setAlgorithm`, `setHash`. New top-level
+  helpers `algorithmDefaultKey(a)` + `algorithmDefaultPt(a)` route to
+  the right `DEFAULT_*_BY_CIPHER` / `DEFAULT_*_BY_HASH` table. Initial-
+  signals helper widened for hash boot defaults (empty key + "abc"
+  plaintext). `run()` gates the cipher-only `paddingLimits(...)` +
+  alignment check behind `isCipher(algorithm())`; hash branch caps
+  message length at 55 bytes (the single-block SHA-256 ceiling per
+  FIPS 180-4: 64-byte block − 1 byte 0x80 sentinel − 8 bytes length
+  field). `buildSaveText` writes `algorithm: algorithm()` (was
+  `algorithm: cipher()`). `applyDocument` smart-swap generalizes to
+  `prevAlgorithm: Algorithm` so cipher↔cipher (existing) and
+  cipher↔hash (new) branches go through one path. New `changeHash(h)`
+  + `changeCategory(c)` handlers run the cross-family smart-swap and
+  call `setAlgorithm`. `inputLabel()` / `outputLabel()` override to
+  "message" / "digest" for hash. JSX adds the category `<select>` at
+  the front of the inputs row; mode + cipher-mode + padding + key
+  field all wrapped in `<Show when={isCipher(algorithm())}>`; new
+  hash `<select>` wrapped in `<Show when={category() === "hash"}>`.
+- `src/ciphers/sha-256.ts` — added `defaultCollapsed: true` to the
+  `msg-schedule` `for-each-subgraph-with-history` node. **MUST land
+  in the same commit as exposing SHA-256 in the selector**, per the
+  Slice 2.6d follow-up sequencing pin: 48 iterations × 14 leaves =
+  672 chips would have produced a wall on first graph render.
+- `tests/algorithm-selector-2-10c.test.ts` — NEW. 13 tests over five
+  scopes: `useAlgorithm` (3), Remember-last-cipher semantic (2),
+  `setAlgorithm` dispatch (3), category flip side-effect on
+  `setCipher` / `setHash` (2), `setSpecFromDocument` category sync (2),
+  raw-signal-exports paranoia (1). The "remember" semantic is the
+  load-bearing assertion — flip cipher to AES-256, flip to hash, flip
+  back, AES-256 reappears.
+- `tests/spec-defaults.test.ts` — updated for the new
+  `defaultCollapsed` count (64 → 65; added `msg-schedule` to the
+  default-collapsed set). Four tests rewritten: the
+  `getDefaultCollapsedContainers` SHA-256 enumeration, plus three
+  `getEffectiveCollapsedSet` cases that derived their numeric
+  expectations from the 64-count. The "explicit layout collapse"
+  test now targets `compression` (not `msg-schedule`) since
+  msg-schedule is in defaults — using it for the layout-collapse
+  union wouldn't exercise the union semantic.
+
+**Pass/fail gate — code level MET:**
+
+- `npm run check` GREEN: biome ci + tsc + **2334/2334** vitest (+13
+  algorithm-selector + the 4 spec-defaults rewrites) + vite build
+  (~41s warm).
+- Bundle **642.39 KB** raw / 188.79 KB gzipped (+2.18 KB / +0.62 KB
+  from 2.10b's 640.21 / 188.17 — the new helper + JSX gates +
+  category radio rendering. Marginal; the Vite 500 KB warning is the
+  long-standing post-Phase-5 advisory the user has decided to accept
+  for now per [[project_bundle_size_500kb]]).
+- Phase 1 frame-parity matrix (Slice 1.11) untouched.
+- SHA-256 KAT (`tests/sha-256.test.ts`) untouched.
+- AES-128 ECB / CBC KATs untouched.
+
+**Pass/fail gate — manual browser smoke (PENDING):**
+
+Smoke script the user runs at `http://localhost:5173`:
+
+1. Default boot: AES-128 selected, FIPS-197 16-byte plaintext + key,
+   trace shows the canonical Appendix C.1 frame walk. No regression
+   vs. pre-2.10c first impression.
+2. Click the new `kind` dropdown → select `Hash`. The cipher dropdown
+   disappears; a `hash` dropdown appears with `SHA-256`. Mode of
+   operation, padding, key field all hidden. Plaintext field
+   relabels to `message`; result row to `digest`.
+3. Plaintext field auto-swaps from the 16-byte FIPS-197 vector to
+   `61 62 63` ("abc" in hex). Hit Run → digest reads
+   `ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad`
+   (FIPS 180-4 §A.1 KAT).
+4. Switch to Graph view → top-level chips render cleanly: pad,
+   length-append, seed-schedule, the `msg-schedule` container
+   (collapsed header), `W-publish`, the `H-init` chain, the
+   `compression` for-each-subgraph (collapsed default-collapsed
+   round headers visible), and the H output chain. **No chip wall.**
+5. Click the `kind` dropdown back to `Cipher`. Cipher dropdown
+   reappears at `AES-128` (the value it remembers). Plaintext
+   auto-swaps back to the FIPS-197 vector. Run produces the AES-128
+   ciphertext again.
+6. Save (spec-only) → reset spec → reload page → Share URL paste
+   (or file-load): the saved hash document round-trips and the
+   selector lands at Hash + SHA-256 with the same trace.
+
+Last item is the riskiest — the existing `setSpecFromDocument` hash
+branch (Slice 2.10b) shipped under test reachability only; the smoke
+verifies the new category-signal write actually flips the UI.
+
+**Next:** Slice 2.11 (KAT parity matrix; Phase 2 close).
 
 ### Slice 2.11 — KAT parity matrix (Phase 2 close)
 

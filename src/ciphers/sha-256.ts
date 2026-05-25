@@ -692,6 +692,17 @@ export const buildSha256Spec = (): CipherSpec => ({
     // ─── Message schedule (48 iterations, lookbackOffsets [2,7,15,16]) ────
     // 14-leaf decomposed body per iteration. After this, state = W[0..63]
     // (256 bytes — FES exit concatenates the full history).
+    //
+    // Default-collapse on first graph-view render (Slice 2.10c, 2026-05-25,
+    // pre-emptive per Slice 2.6d follow-up's sequencing pin). 48 iterations
+    // × 14 leaves = 672 chips uncollapsed — the chip-wall failure mode the
+    // Slice 2.6c plan flagged. Same `defaultCollapsed: true` flag the 64
+    // compression rounds already use (sha-256.ts:301). The two together
+    // mean the SHA-256 graph view's first visit shows ~10 top-level chips
+    // plus 64 collapsed round headers + 1 collapsed schedule header,
+    // browseable; explicit user expansion writes through to
+    // `LayoutSpec.expandedGroups` per the same `core/spec-defaults.ts`
+    // algebra.
     {
       kind: "for-each-subgraph-with-history",
       id: "msg-schedule",
@@ -699,6 +710,7 @@ export const buildSha256Spec = (): CipherSpec => ({
       iterationCount: 48,
       lookbackOffsets: [2, 7, 15, 16],
       historyEntryByteLength: 4,
+      defaultCollapsed: true,
       children: buildScheduleBody(),
     },
     // ─── Q1 = (b): Publish W into aux["W"] ───────────────────────────────

@@ -62,11 +62,14 @@ import {
 import type { CipherSpec, Json, StepLeaf, StepNode } from "@/core/types";
 import { createSignal } from "solid-js";
 import {
+  type Algorithm,
   type Cipher,
   type Hash,
   isCipher,
   isHash,
+  setCategory as setCategorySignal,
   setCipher as setCipherSignal,
+  setHash as setHashSignal,
   useCipher,
 } from "./cipher";
 import {
@@ -369,13 +372,57 @@ export const setMode = (m: Mode): void => {
  * the cipherMode signal RESETs to "single-block" first (same rationale
  * as the prior single-spec version: keeps `paddingLimits` consistent
  * with what the spec can actually accept).
+ *
+ * Slice 2.10c (2026-05-25): also flips the category signal to "cipher"
+ * defensively. The cipher dropdown UI is gated behind category=cipher in
+ * the App so a user-facing call here is reachable only from the cipher
+ * branch, but a test or programmatic caller may have left category in
+ * "hash" — keeping the two in sync prevents a state where the live spec
+ * is a cipher but `useAlgorithm()` reads from `hash()`.
  */
 export const setCipher = (c: Cipher): void => {
+  setCategorySignal("cipher");
   setCipherSignal(c);
   if (!isCipherModeSupported(c, useCipherMode()())) {
     setCipherModeSignal("single-block");
   }
   setSpecs(buildCanonicalPair(c, useCipherMode()(), usePaddingScheme()()));
+};
+
+/**
+ * Switch the active hash variant (Slice 2.10c, 2026-05-25). Mirrors
+ * `setCipher`'s shape but lands a `kind: "hash"` SpecsByMode instead of
+ * a cipher pair. Flips the category signal to "hash" so `useAlgorithm()`
+ * resolves to the new hash value.
+ *
+ * No cipherMode / padding axes apply to hashes; the existing signals are
+ * left at their current values (UI hides those selectors when the hash
+ * category is active, so they stay inert without semantic effect).
+ */
+export const setHash = (h: Hash): void => {
+  setCategorySignal("hash");
+  setHashSignal(h);
+  setSpecs(buildCanonicalHash(h));
+};
+
+/**
+ * Algorithm-level setter that routes to `setCipher` or `setHash`
+ * depending on the category of the passed value. The single boundary
+ * the App's algorithm-selector UI calls into so cross-category flips
+ * (cipher ↔ hash) go through one place and the corresponding canonical
+ * default lands in the spec store.
+ *
+ * Returns `void`; callers reading the post-call algorithm signal need to
+ * use `useAlgorithm()`. Side effects: cipher/hash + category signals
+ * updated, `specs` signal replaced with the new canonical, cipherMode
+ * possibly demoted to "single-block" (cipher branch only).
+ */
+export const setAlgorithm = (a: Algorithm): void => {
+  if (isHash(a)) {
+    setHash(a);
+  } else {
+    setCipher(a);
+  }
 };
 
 /**
@@ -999,9 +1046,23 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
   // cipher slot and almost certainly fail at runtime, which is the
   // honest signal to the user that the document is malformed.
   if (doc.algorithm !== undefined && isHash(doc.algorithm)) {
+    // Slice 2.10c (2026-05-25): sync the category + hash signals so the
+    // selector UI lands on the right family + variant after a load. 2.10b
+    // landed only `setSpecs(...)` here because the algorithm signal hadn't
+    // been split yet; without these two extra writes, a hash document
+    // loaded into a cipher-category recipient would leave the cipher
+    // dropdown looking active even though the live spec is a hash.
+    setCategorySignal("hash");
+    setHashSignal(doc.algorithm);
     setSpecs({ kind: "hash", hash: doc.algorithm, single: doc.spec });
     return;
   }
+  // Slice 2.10c (2026-05-25): from here down is the cipher-document
+  // branch. Land in category "cipher" defensively — a recipient previously
+  // in "hash" category needs its selector flipped back so the cipher
+  // dropdown is the live surface again. The hash short-circuit above
+  // already handled the hash → hash case; this covers hash → cipher.
+  setCategorySignal("cipher");
   if (doc.session) {
     setByteFormat(doc.session.byteFormat);
     setCipherSignal(doc.session.cipher);

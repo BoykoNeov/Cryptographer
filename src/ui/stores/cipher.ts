@@ -40,10 +40,26 @@ export type Cipher = AesCipher | SpeckCipher | SerpentCipher | DesCipher;
  *
  * Slice 2.10a (2026-05-25) introduced this type alongside `Algorithm` so the
  * cipher-selector UI can carry a top-level Cipher | Hash category split per
- * Open #N7 user pick. The hash variant isn't reachable through the active
- * `cipher` signal in 2.10a; 2.10b/c wire the store + UI surfaces.
+ * Open #N7 user pick. Slice 2.10c (2026-05-25) reaches it through the live
+ * UI via the `hash` + `category` signals below.
  */
 export type Hash = "sha-256";
+
+/**
+ * Category discriminant for the algorithm selector (Slice 2.10c, 2026-05-25).
+ * The UI surfaces a top-level toggle between "cipher" and "hash"; the
+ * specific dropdown alongside renders cipher or hash options depending on
+ * which is active. The active algorithm is then
+ *   `category === "cipher" ? cipher() : hash()`
+ * (the `useAlgorithm()` accessor below).
+ *
+ * Two independent signals (cipher + hash) rather than a single algorithm
+ * signal: user picked "Remember last cipher" semantics so the cipher
+ * dropdown's selection survives a cipher → hash → cipher detour. Same
+ * shape extends cleanly when SHA-3 / SHA-512 land — each family's dropdown
+ * remembers independently.
+ */
+export type Category = "cipher" | "hash";
 
 /**
  * Public umbrella type — every cryptographic primitive the app supports.
@@ -101,6 +117,66 @@ export const useCipher = () => cipher;
 
 export const setCipher = (c: Cipher): void => {
   setCipherSignal(c);
+};
+
+// ─── Hash + category signals (Slice 2.10c, 2026-05-25) ───────────────────
+//
+// Two-signal-plus-flag model: cipher (always holds a Cipher) and hash
+// (always holds a Hash) each preserve their last value across category
+// flips, so cipher → hash → cipher returns the user to the same cipher
+// they were on. `category` is the discriminant for which of the two is
+// live. `useAlgorithm()` derives the active Algorithm by reading both
+// signals and the flag — Solid tracks each access, so consumers re-render
+// when ANY of the three changes.
+//
+// Session-only, like `cipher` above. Fresh load defaults to category
+// "cipher" + cipher "aes-128" so the first-impression FIPS-197 trace
+// stays unchanged; users opting into a hash do so deliberately via the
+// selector.
+
+const [hash, setHashSignal] = createSignal<Hash>("sha-256");
+const [category, setCategorySignal] = createSignal<Category>("cipher");
+
+export const useHash = () => hash;
+export const useCategory = () => category;
+
+/**
+ * Set the active hash variant. Does NOT flip category — flipping into the
+ * hash branch is a separate intent (`setCategory("hash")` or the
+ * higher-level `setAlgorithm` in `stores/spec.ts` which composes both).
+ * Today's hash union is a single member, so this setter is mostly
+ * forward-compat for SHA-3 / SHA-512 landings.
+ */
+export const setHash = (h: Hash): void => {
+  setHashSignal(h);
+};
+
+/** Flip the active category without changing the cipher / hash signals. */
+export const setCategory = (c: Category): void => {
+  setCategorySignal(c);
+};
+
+/**
+ * Active algorithm — the source of truth for runtime dispatch and the
+ * save-side `algorithm` field. Tracks the cipher OR hash signal depending
+ * on category; the other signal stays inert but ready for the next flip.
+ *
+ * Returned as a plain accessor (call it to read) so consumers fit the
+ * `useX()` / `useX()()` shape used everywhere else in this store. The
+ * accessor closure reads both signals + the category flag so Solid sees
+ * all three as dependencies.
+ */
+export const useAlgorithm = (): (() => Algorithm) => {
+  return () => (category() === "cipher" ? cipher() : hash());
+};
+
+/** Hash dropdown options + labels. Sized to one entry today; mirrors
+ *  CIPHER_OPTIONS / CIPHER_LABELS so the UI can render either family with
+ *  the same `<For each={options}>` shape. */
+const ALL_HASHES: readonly Hash[] = ["sha-256"];
+export const HASH_OPTIONS = ALL_HASHES;
+export const HASH_LABELS: Record<Hash, string> = {
+  "sha-256": "SHA-256",
 };
 
 /** Display labels for the selector. Keep in sync with `ALL_CIPHERS`. */
@@ -257,4 +333,6 @@ export const DEFAULT_PT_BYTES_BY_HASH: Record<Hash, Uint8Array> = {
 /** Test-only reset; production code never calls this. */
 export const __resetCipherForTests = (): void => {
   setCipherSignal("aes-128");
+  setHashSignal("sha-256");
+  setCategorySignal("cipher");
 };

@@ -83,14 +83,25 @@ import "./narration/index";
 import "./provenance/index";
 import { clearDirty, setAutoRerun, setDirty, useAutoRerun, useDirty } from "./stores/auto-rerun";
 import {
+  type Algorithm,
   CIPHER_LABELS,
   CIPHER_OPTIONS,
+  type Category,
   type Cipher,
   DEFAULT_KEY_BYTES_BY_CIPHER,
+  DEFAULT_KEY_BYTES_BY_HASH,
   DEFAULT_PT_BYTES_BY_CIPHER,
+  DEFAULT_PT_BYTES_BY_HASH,
+  HASH_LABELS,
+  HASH_OPTIONS,
+  type Hash,
   isAesCipher,
   isCipher,
+  isHash,
+  useAlgorithm,
+  useCategory,
   useCipher,
+  useHash,
 } from "./stores/cipher";
 import {
   CIPHER_MODE_LABELS,
@@ -121,8 +132,10 @@ import { registry } from "./stores/registry";
 import {
   isCustomSpec,
   resetSpec,
+  setAlgorithm,
   setCipher,
   setCipherMode,
+  setHash,
   setMode,
   setPadding,
   setSpecFromDocument,
@@ -178,6 +191,21 @@ export const App = () => {
   const cipherMode = useCipherMode();
   const ivBytes = useIvBytes();
   const viewMode = useViewMode();
+  // Slice 2.10c (2026-05-25) — algorithm-selector signals. `algorithm` is
+  // the source of truth for runtime dispatch + the save-side `algorithm`
+  // field; `category` flips the dropdown surface (cipher vs. hash); `hash`
+  // is the active hash variant when `category === "hash"`. Two independent
+  // signals (cipher + hash) preserve each family's last selection across a
+  // cross-category detour — see [[feedback_remember_last_cipher]] / the
+  // 2.10c plan's "Remember" user pick. Many of the conditional renders
+  // below pivot on `isCipher(algorithm())` so the cipher-specific
+  // controls (mode, cipher-mode, padding, key, IV) vanish when a hash is
+  // active. Hash specs have no encrypt/decrypt direction, no block mode,
+  // no padding overlay, and no key — gating each surface keeps the UI
+  // from lying about what the spec actually consumes.
+  const algorithm = useAlgorithm();
+  const category = useCategory();
+  const hash = useHash();
 
   // True when the live spec has diverged from the canonical default for
   // the current selectors (param edits, palette inserts, deletions). Drives
@@ -195,15 +223,28 @@ export const App = () => {
   // For AES, schemes that cap encrypt input below 16 bytes (pkcs7 +
   // iso7816-4) get the short "apple" so the user sees padding working
   // immediately on a fresh reload. Initial key varies by cipher.
-  const initialLimits = paddingLimits(mode(), padding(), cipher(), cipherMode());
-  const initialPtBytes =
-    isAesCipher(cipher()) && mode() === "encrypt" && initialLimits.max < 16
-      ? DEFAULT_SHORT_PT_BYTES
-      : DEFAULT_PT_BYTES_BY_CIPHER[cipher()];
+  //
+  // Slice 2.10c (2026-05-25): hash category branches off the cipher-
+  // specific resolution. Hashes have no padding overlay, no encrypt/
+  // decrypt direction, and no key — the boot defaults come from the
+  // dedicated `DEFAULT_*_BY_HASH` tables (key=empty, plaintext="abc"
+  // per FIPS 180-4 §A.1). The branch fires only on a fresh load that
+  // starts in hash category, which is not the default — but covers a
+  // hypothetical future where the initial category persists or a test
+  // boots with category="hash".
+  const initialPtBytes = isCipher(algorithm())
+    ? (() => {
+        const initialLimits = paddingLimits(mode(), padding(), cipher(), cipherMode());
+        return isAesCipher(cipher()) && mode() === "encrypt" && initialLimits.max < 16
+          ? DEFAULT_SHORT_PT_BYTES
+          : DEFAULT_PT_BYTES_BY_CIPHER[cipher()];
+      })()
+    : DEFAULT_PT_BYTES_BY_HASH[hash()];
+  const initialKeyBytes = isCipher(algorithm())
+    ? DEFAULT_KEY_BYTES_BY_CIPHER[cipher()]
+    : DEFAULT_KEY_BYTES_BY_HASH[hash()];
   const [inputText, setInputText] = createSignal(formatBytes(initialPtBytes, fmt()));
-  const [keyText, setKeyText] = createSignal(
-    formatBytes(DEFAULT_KEY_BYTES_BY_CIPHER[cipher()], fmt()),
-  );
+  const [keyText, setKeyText] = createSignal(formatBytes(initialKeyBytes, fmt()));
   const [error, setError] = createSignal<string | null>(null);
 
   // Has the user successfully run the cipher at least once? If yes, spec
@@ -314,23 +355,55 @@ export const App = () => {
       } catch (e) {
         throw new Error(`${inputLabel()}: ${e instanceof Error ? e.message : String(e)}`);
       }
-      const { min, max } = paddingLimits(mode(), padding(), cipher(), cipherMode());
-      if (inputBytes.length < min || inputBytes.length > max) {
-        throw new Error(
-          formatLengthError(mode(), padding(), cipher(), cipherMode(), inputBytes.length, min, max),
-        );
-      }
-      // Multi-block ECB/CBC require block-aligned input on decrypt OR when
-      // the padding scheme is "none" on encrypt. Catch it here with a
-      // friendly error rather than letting split-blocks throw a
-      // runtime-internals error from inside the iterate loop.
-      const needsAlignment =
-        (cipherMode() === "ecb" || cipherMode() === "cbc") &&
-        (mode() === "decrypt" || padding() === "none");
-      if (needsAlignment && inputBytes.length % 16 !== 0) {
-        throw new Error(
-          `${inputLabel()}: must be a multiple of 16 bytes (whole AES blocks); got ${inputBytes.length}.`,
-        );
+      // Slice 2.10c (2026-05-25): cipher-specific length + alignment
+      // validators are gated behind `isCipher(algorithm())`. `paddingLimits`
+      // exhaustive-switches on `Cipher` (advisor flagged this as
+      // load-bearing for the non-AES error messages — see the consult
+      // notes recorded in commit body), so calling it with a hash value
+      // would be a category error. The hash branch below produces its own
+      // friendly length error.
+      if (isCipher(algorithm())) {
+        const { min, max } = paddingLimits(mode(), padding(), cipher(), cipherMode());
+        if (inputBytes.length < min || inputBytes.length > max) {
+          throw new Error(
+            formatLengthError(
+              mode(),
+              padding(),
+              cipher(),
+              cipherMode(),
+              inputBytes.length,
+              min,
+              max,
+            ),
+          );
+        }
+        // Multi-block ECB/CBC require block-aligned input on decrypt OR when
+        // the padding scheme is "none" on encrypt. Catch it here with a
+        // friendly error rather than letting split-blocks throw a
+        // runtime-internals error from inside the iterate loop.
+        const needsAlignment =
+          (cipherMode() === "ecb" || cipherMode() === "cbc") &&
+          (mode() === "decrypt" || padding() === "none");
+        if (needsAlignment && inputBytes.length % 16 !== 0) {
+          throw new Error(
+            `${inputLabel()}: must be a multiple of 16 bytes (whole AES blocks); got ${inputBytes.length}.`,
+          );
+        }
+      } else {
+        // Hash branch — today SHA-256 only. The shipped spec is single-block
+        // (one pad-with-byte + one append-be64-length feeding one
+        // compression block), so the message length is bounded by the
+        // single-block message space: 64 bytes block minus 1 byte (0x80
+        // sentinel) minus 8 bytes (length field) = 55 max message bytes.
+        // The runtime would also throw from `pad-with-byte` if the input
+        // pushed the padded length past 56; surfacing the cap here gives
+        // the user a friendlier error than the runtime's internals.
+        const MAX_HASH_INPUT = 55;
+        if (inputBytes.length > MAX_HASH_INPUT) {
+          throw new Error(
+            `${inputLabel()}: ${HASH_LABELS[hash()]} (single-block) accepts 0..${MAX_HASH_INPUT} bytes; got ${inputBytes.length}. (Multi-block SHA-256 lands in a future slice — today's spec is the FIPS 180-4 §A.1 single-block construction.)`,
+          );
+        }
       }
 
       // Key length depends on the active cipher: 16 (AES-128) / 24 (192) /
@@ -436,14 +509,12 @@ export const App = () => {
       spec: spec(),
       // Algorithm selector hint (Phase 6e, widened from `cipher: Cipher`
       // to `algorithm: Algorithm` in Slice 2.10b of the universal-port
-      // plan). Emitted on BOTH spec-only AND session-included paths so
+      // plan; reading from the `algorithm` signal in Slice 2.10c, 2026-
+      // 05-25). Emitted on BOTH spec-only AND session-included paths so
       // a recipient's selector flips to match the loaded spec regardless
-      // of the toggle. The value comes from the `cipher()` signal which
-      // returns `Cipher` (a subset of `Algorithm`) — 2.10c will widen
-      // this to an algorithm signal that can also produce hash variants.
-      // Deterministic — no Date.now() — so the spec-only path stays
-      // byte-stable for URL-share hashing.
-      algorithm: cipher(),
+      // of the toggle. Deterministic — no Date.now() — so the spec-only
+      // path stays byte-stable for URL-share hashing.
+      algorithm: algorithm(),
       ...(hasUserLayout(layout) && layout ? { layout } : {}),
       ...(includeSession()
         ? {
@@ -627,11 +698,15 @@ export const App = () => {
    *      duplicate run is harmless because pushSnapshot dedups.
    */
   const applyDocument = (doc: CipherDocument): void => {
-    // Capture the recipient's cipher BEFORE `setSpecFromDocument` flips it,
-    // so the smart-swap below can compare the inputText/keyText against the
-    // OLD cipher's canonical defaults. Without this capture, the swap check
-    // would compare against the new cipher's defaults and never swap.
-    const prevCipher = cipher();
+    // Capture the recipient's algorithm BEFORE `setSpecFromDocument` flips
+    // it, so the smart-swap below can compare the inputText/keyText
+    // against the OLD algorithm's canonical defaults. Without this
+    // capture, the swap check would compare against the new algorithm's
+    // defaults and never swap. Slice 2.10c (2026-05-25) widened from
+    // `prevCipher: Cipher` to `prevAlgorithm: Algorithm` so the smart-
+    // swap branches symmetrically across cipher↔cipher (existing) and
+    // cipher↔hash (new).
+    const prevAlgorithm: Algorithm = algorithm();
 
     setLayoutForSpec(doc.spec.id, doc.layout ?? null);
     setSpecFromDocument(doc);
@@ -657,33 +732,33 @@ export const App = () => {
     // over triggers the swap. So a load against a recipient who had
     // already typed their own plaintext keeps their work intact.
     //
-    // Slice 2.10b widening: `doc.algorithm` is now `Algorithm =
-    // Cipher | Hash`. The smart-swap below only fires on the Cipher
-    // branch — looking up DEFAULT_KEY_BYTES_BY_CIPHER with a Hash value
-    // would be a type error AND a category error (hashes have a
-    // different defaults table). Hash documents are unreachable through
-    // the user-facing entry points in 2.10b (test-reachable only); 2.10c
-    // will add a sibling hash-input-swap branch using
-    // DEFAULT_KEY_BYTES_BY_HASH / DEFAULT_PT_BYTES_BY_HASH when the
-    // algorithm selector exposes hash variants.
+    // Slice 2.10c (2026-05-25): smart-swap inputs against the previous
+    // algorithm's canonical defaults if the doc carries a different
+    // algorithm AND has no saved session bytes. Branches over both
+    // cipher and hash sides — the helpers `algorithmDefaultKey` and
+    // `algorithmDefaultPt` resolve to the right table per `isCipher` /
+    // `isHash`. Without the swap, a non-AES doc landed into an AES-128
+    // recipient leaves stale defaults that immediately error on Run
+    // (DES needs 8-byte key, hash key field needs to be empty, etc.).
     //
     // Run order: this check fires AFTER setSpecFromDocument, so
-    // `cipher()` already reads the new value. We compare against
-    // `prevCipher` captured above the spec change.
+    // `algorithm()` already reads the new value. We compare against
+    // `prevAlgorithm` captured above the spec change.
     if (
       doc.algorithm !== undefined &&
-      isCipher(doc.algorithm) &&
-      doc.algorithm !== prevCipher &&
+      doc.algorithm !== prevAlgorithm &&
       !doc.session?.inputBytes &&
       !doc.session?.keyBytes
     ) {
       const currentKey = tryParseBytes(keyText(), fmt());
-      if (currentKey && bytesEqual(currentKey, DEFAULT_KEY_BYTES_BY_CIPHER[prevCipher])) {
-        setKeyText(formatBytes(DEFAULT_KEY_BYTES_BY_CIPHER[doc.algorithm], fmt()));
+      const prevKeyDefault = algorithmDefaultKey(prevAlgorithm);
+      if (currentKey && bytesEqual(currentKey, prevKeyDefault)) {
+        setKeyText(formatBytes(algorithmDefaultKey(doc.algorithm), fmt()));
       }
       const currentPt = tryParseBytes(inputText(), fmt());
-      if (currentPt && bytesEqual(currentPt, DEFAULT_PT_BYTES_BY_CIPHER[prevCipher])) {
-        setInputText(formatBytes(DEFAULT_PT_BYTES_BY_CIPHER[doc.algorithm], fmt()));
+      const prevPtDefault = algorithmDefaultPt(prevAlgorithm);
+      if (currentPt && bytesEqual(currentPt, prevPtDefault)) {
+        setInputText(formatBytes(algorithmDefaultPt(doc.algorithm), fmt()));
       }
     }
     setError(null);
@@ -841,6 +916,59 @@ export const App = () => {
     setCipher(next);
   };
 
+  /**
+   * Switch the active hash variant (Slice 2.10c, 2026-05-25). Same
+   * smart-swap discipline as `changeCipher`: key + plaintext fields are
+   * swapped IFF they currently hold the previous hash's canonical
+   * default. Today's hash union has one member so this is forward-compat
+   * for SHA-3 / SHA-512 landings; the function ships now so the hash
+   * dropdown's onChange has a place to call.
+   */
+  const changeHash = (next: Hash): void => {
+    const prev = hash();
+    if (prev === next) return;
+    const currentKey = tryParseBytes(keyText(), fmt());
+    if (currentKey && bytesEqual(currentKey, DEFAULT_KEY_BYTES_BY_HASH[prev])) {
+      setKeyText(formatBytes(DEFAULT_KEY_BYTES_BY_HASH[next], fmt()));
+    }
+    const currentPt = tryParseBytes(inputText(), fmt());
+    if (currentPt && bytesEqual(currentPt, DEFAULT_PT_BYTES_BY_HASH[prev])) {
+      setInputText(formatBytes(DEFAULT_PT_BYTES_BY_HASH[next], fmt()));
+    }
+    setHash(next);
+  };
+
+  /**
+   * Flip the algorithm category (Slice 2.10c, 2026-05-25). Distinct from
+   * `changeCipher` / `changeHash` because it crosses families — the smart-
+   * swap compares the current key/plaintext against the OLD family's
+   * canonical default (cipher OR hash, whichever was active) and replaces
+   * with the NEW family's canonical (the value that `useAlgorithm()` will
+   * resolve to AFTER the category flip). The two underlying signals
+   * (cipher + hash) stay at their last-set values per the user-selected
+   * "Remember" semantics, so flipping back returns to the same cipher.
+   *
+   * Routes through `setAlgorithm` in the spec store, which flips the
+   * category signal AND rebuilds the spec with the canonical for the
+   * destination family.
+   */
+  const changeCategory = (next: Category): void => {
+    const prev = category();
+    if (prev === next) return;
+    const nextAlgorithm: Algorithm = next === "cipher" ? cipher() : hash();
+    const prevKeyDefault = algorithmDefaultKey(algorithm());
+    const currentKey = tryParseBytes(keyText(), fmt());
+    if (currentKey && bytesEqual(currentKey, prevKeyDefault)) {
+      setKeyText(formatBytes(algorithmDefaultKey(nextAlgorithm), fmt()));
+    }
+    const prevPtDefault = algorithmDefaultPt(algorithm());
+    const currentPt = tryParseBytes(inputText(), fmt());
+    if (currentPt && bytesEqual(currentPt, prevPtDefault)) {
+      setInputText(formatBytes(algorithmDefaultPt(nextAlgorithm), fmt()));
+    }
+    setAlgorithm(nextAlgorithm);
+  };
+
   const changePadding = (next: PaddingScheme): void => {
     const prev = padding();
     if (prev === next) return;
@@ -924,8 +1052,20 @@ export const App = () => {
   });
 
   // Labels switch between encrypt/decrypt modes so the UI doesn't lie.
-  const inputLabel = () => (mode() === "encrypt" ? "plaintext" : "ciphertext");
-  const outputLabel = () => (mode() === "encrypt" ? "ciphertext" : "plaintext");
+  // Slice 2.10c (2026-05-25): hash branch overrides the labels — hashes
+  // are direction-less (no encrypt/decrypt; `mode()` is semantically
+  // inert in the hash spec store), so input becomes "message" and output
+  // becomes "digest". Without this override the UI would show
+  // "plaintext (hex)" and "ciphertext (hex)" for a SHA-256 run, which is
+  // a category lie.
+  const inputLabel = () => {
+    if (isHash(algorithm())) return "message";
+    return mode() === "encrypt" ? "plaintext" : "ciphertext";
+  };
+  const outputLabel = () => {
+    if (isHash(algorithm())) return "digest";
+    return mode() === "encrypt" ? "ciphertext" : "plaintext";
+  };
 
   return (
     <div class="app">
@@ -946,143 +1086,208 @@ export const App = () => {
 
       {/* ─── Inputs row ─────────────────────────────────────────────── */}
       <section class="inputs">
+        {/* Slice 2.10c (2026-05-25) — category selector. Sits at the
+            front of the inputs row so the user reads "what KIND of
+            primitive am I working with?" first; the specific dropdown
+            below (cipher OR hash) is conditional on this choice. Two
+            options today (Cipher | Hash); SHA-3 / MAC / KDF / RSA
+            families would extend the Category union without rearranging
+            the surface. The previous Cipher / Hash selections are
+            preserved per the "Remember last cipher" semantic so a
+            cipher → hash → cipher detour returns the user to the same
+            cipher they were on. */}
         <label>
-          mode
+          kind
           <select
-            value={mode()}
-            onChange={(e) => {
-              // UX-H 2026-05-23 — When flipping mode, copy the
-              // just-computed output into the input field so the user
-              // doesn't see decrypt re-run on the stale plaintext
-              // (computing it AS ciphertext) and produce a nonsense
-              // result until they manually paste the previous output.
-              // Symmetric: encrypt→decrypt copies the ciphertext in;
-              // decrypt→encrypt copies the recovered plaintext in.
-              // The IV is intentionally left alone per the plan note —
-              // CBC-IV is a separate axis the user may want to keep or
-              // edit independently of the mode flip.
-              //
-              // Captured BEFORE the mode change so we get the previous
-              // mode's output (the value the user actually sees in the
-              // result row right now), not whatever the new mode's
-              // re-run produces. `batch` ensures the spec rebuild for
-              // the new mode and the input swap land in one Solid
-              // update cycle, avoiding a flicker where decrypt
-              // momentarily runs on the encrypt-mode input.
-              const newMode = e.currentTarget.value as "encrypt" | "decrypt";
-              const swapText = outputText();
-              batch(() => {
-                setMode(newMode);
-                if (swapText) setInputText(swapText);
-              });
-            }}
+            value={category()}
+            onChange={(e) => changeCategory(e.currentTarget.value as Category)}
+            title="Cipher = encrypt/decrypt with a key. Hash = one-way digest of a message (no key, no direction)."
           >
-            <option value="encrypt">encrypt</option>
-            <option value="decrypt">decrypt</option>
+            <option value="cipher">Cipher</option>
+            <option value="hash">Hash</option>
           </select>
         </label>
-        <label>
-          cipher
-          <div class="cipher-select-row">
+        {/* Slice 2.10c — mode selector hidden for hash category. Hashes
+            have no encrypt/decrypt direction; showing the toggle would
+            be a category lie. The spec store carries a dead `mode`
+            signal in hash mode (the discriminated `HashSpecsByMode`
+            ignores `mode()`); hiding the selector here is the UI half
+            of that contract. */}
+        <Show when={isCipher(algorithm())}>
+          <label>
+            mode
             <select
-              value={cipher()}
-              onChange={(e) => changeCipher(e.currentTarget.value as Cipher)}
-              title="AES variant — 128/192/256 differ in key length and round count"
+              value={mode()}
+              onChange={(e) => {
+                // UX-H 2026-05-23 — When flipping mode, copy the
+                // just-computed output into the input field so the user
+                // doesn't see decrypt re-run on the stale plaintext
+                // (computing it AS ciphertext) and produce a nonsense
+                // result until they manually paste the previous output.
+                // Symmetric: encrypt→decrypt copies the ciphertext in;
+                // decrypt→encrypt copies the recovered plaintext in.
+                // The IV is intentionally left alone per the plan note —
+                // CBC-IV is a separate axis the user may want to keep or
+                // edit independently of the mode flip.
+                //
+                // Captured BEFORE the mode change so we get the previous
+                // mode's output (the value the user actually sees in the
+                // result row right now), not whatever the new mode's
+                // re-run produces. `batch` ensures the spec rebuild for
+                // the new mode and the input swap land in one Solid
+                // update cycle, avoiding a flicker where decrypt
+                // momentarily runs on the encrypt-mode input.
+                const newMode = e.currentTarget.value as "encrypt" | "decrypt";
+                const swapText = outputText();
+                batch(() => {
+                  setMode(newMode);
+                  if (swapText) setInputText(swapText);
+                });
+              }}
             >
-              {/* The selected option's label flips to "Custom (was AES-128)"
+              <option value="encrypt">encrypt</option>
+              <option value="decrypt">decrypt</option>
+            </select>
+          </label>
+        </Show>
+        {/* Slice 2.10c — cipher dropdown shown only when category=cipher.
+            Hash category swaps in the parallel hash dropdown below. */}
+        <Show when={category() === "cipher"}>
+          <label>
+            cipher
+            <div class="cipher-select-row">
+              <select
+                value={cipher()}
+                onChange={(e) => changeCipher(e.currentTarget.value as Cipher)}
+                title="AES variant — 128/192/256 differ in key length and round count"
+              >
+                {/* The selected option's label flips to "Custom (was AES-128)"
                   when the live spec has diverged from canonical. Picking the
                   same value from the dropdown is a no-op (no onChange) — the
                   reset button alongside is the action surface. We keep the
                   reset-to-canonical out of the dropdown to avoid hijacking
                   the cipher-switch semantics. */}
-              <For each={CIPHER_OPTIONS}>
-                {(c) => (
-                  <option value={c}>
-                    {c === cipher() && isCustom()
-                      ? `Custom (was ${CIPHER_LABELS[c]})`
-                      : CIPHER_LABELS[c]}
-                  </option>
-                )}
-              </For>
-            </select>
-            {/* Visible only when the spec has diverged. Single reset surface
+                <For each={CIPHER_OPTIONS}>
+                  {(c) => (
+                    <option value={c}>
+                      {c === cipher() && isCustom()
+                        ? `Custom (was ${CIPHER_LABELS[c]})`
+                        : CIPHER_LABELS[c]}
+                    </option>
+                  )}
+                </For>
+              </select>
+              {/* Visible only when the spec has diverged. Single reset surface
                 — placed here next to the dropdown (the action surface) rather
                 than mirrored next to the header indicator, so it doesn't
                 compete with the muted cipher-name label. */}
-            <Show when={isCustom()}>
-              <button
-                type="button"
-                class="reset-spec-button"
-                onClick={() => resetSpec()}
-                title={`Discard edits and restore the canonical ${CIPHER_LABELS[cipher()]} spec`}
+              <Show when={isCustom()}>
+                <button
+                  type="button"
+                  class="reset-spec-button"
+                  onClick={() => resetSpec()}
+                  title={`Discard edits and restore the canonical ${CIPHER_LABELS[cipher()]} spec`}
+                >
+                  reset
+                </button>
+              </Show>
+            </div>
+          </label>
+        </Show>
+        {/* Slice 2.10c (2026-05-25) — hash dropdown shown only when
+            category=hash. Today's HASH_OPTIONS has a single entry
+            (SHA-256); the same `<For>` shape scales when SHA-3 /
+            SHA-512 / SHAKE variants land. No reset-to-canonical button:
+            today's only hash spec has no UI-edit surface a user could
+            diverge into yet (the SHA-256 spec ships with no editable
+            params), so the cipher's `Custom (was …)` indicator would
+            never fire. Add the reset button alongside when the hash
+            family grows or per-step editability lands for hashes. */}
+        <Show when={category() === "hash"}>
+          <label>
+            hash
+            <select
+              value={hash()}
+              onChange={(e) => changeHash(e.currentTarget.value as Hash)}
+              title="Cryptographic hash function — produces a fixed-length digest from a message. Today: SHA-256 (FIPS 180-4)."
+            >
+              <For each={HASH_OPTIONS}>{(h) => <option value={h}>{HASH_LABELS[h]}</option>}</For>
+            </select>
+          </label>
+        </Show>
+        {/* Slice 2.10c (2026-05-25) — cipher-specific selectors. Mode of
+            operation + padding both apply only to block ciphers; for
+            hash specs they have no semantic role. Hiding (not just
+            disabling) is the UI half of the spec store's discriminated
+            union contract — `HashSpecsByMode` carries no cipherMode /
+            padding axes. The two `<label>`s are siblings inside the
+            same `<Show>` because their visibility condition is identical
+            (`isCipher(algorithm())`), so a single gate keeps the JSX
+            compact. */}
+        <Show when={isCipher(algorithm())}>
+          <label>
+            mode of operation
+            <select
+              value={cipherMode()}
+              onChange={(e) => setCipherMode(e.currentTarget.value as CipherMode)}
+              disabled={!isAesCipher(cipher())}
+              title={
+                isAesCipher(cipher())
+                  ? "Block-cipher mode of operation. 'single block' keeps the canonical FIPS-197 single-block trace. ECB encrypts each block independently (educational baseline — the Tux-image leak). CBC chains blocks via the IV + previous-ciphertext XOR so identical plaintext blocks produce different ciphertext. CTR ships in Phase 3. AES-128 is the only variant with the multi-block factories wired up today — AES-192/256 lands in Phase 4."
+                  : "Modes of operation are AES-only in this build; Speck / Serpent / DES run as single-block ciphers."
+              }
+            >
+              <option value="single-block">{CIPHER_MODE_LABELS["single-block"]}</option>
+              <option
+                value="ecb"
+                disabled={
+                  !(SUPPORTED_CIPHER_MODES as readonly string[]).includes("ecb") ||
+                  !isCipherModeSupported(cipher(), "ecb")
+                }
               >
-                reset
-              </button>
-            </Show>
-          </div>
-        </label>
-        <label>
-          mode of operation
-          <select
-            value={cipherMode()}
-            onChange={(e) => setCipherMode(e.currentTarget.value as CipherMode)}
-            disabled={!isAesCipher(cipher())}
-            title={
-              isAesCipher(cipher())
-                ? "Block-cipher mode of operation. 'single block' keeps the canonical FIPS-197 single-block trace. ECB encrypts each block independently (educational baseline — the Tux-image leak). CBC chains blocks via the IV + previous-ciphertext XOR so identical plaintext blocks produce different ciphertext. CTR ships in Phase 3. AES-128 is the only variant with the multi-block factories wired up today — AES-192/256 lands in Phase 4."
-                : "Modes of operation are AES-only in this build; Speck / Serpent / DES run as single-block ciphers."
-            }
-          >
-            <option value="single-block">{CIPHER_MODE_LABELS["single-block"]}</option>
-            <option
-              value="ecb"
-              disabled={
-                !(SUPPORTED_CIPHER_MODES as readonly string[]).includes("ecb") ||
-                !isCipherModeSupported(cipher(), "ecb")
+                {CIPHER_MODE_LABELS.ecb}
+                {isAesCipher(cipher()) && !isCipherModeSupported(cipher(), "ecb")
+                  ? " (AES-128 only in Phase 1)"
+                  : ""}
+              </option>
+              <option
+                value="cbc"
+                disabled={
+                  !(SUPPORTED_CIPHER_MODES as readonly string[]).includes("cbc") ||
+                  !isCipherModeSupported(cipher(), "cbc")
+                }
+              >
+                {CIPHER_MODE_LABELS.cbc}
+                {isAesCipher(cipher()) && !isCipherModeSupported(cipher(), "cbc")
+                  ? " (AES-128 only in Phase 2)"
+                  : ""}
+              </option>
+              <option
+                value="ctr"
+                disabled={!(SUPPORTED_CIPHER_MODES as readonly string[]).includes("ctr")}
+              >
+                {CIPHER_MODE_LABELS.ctr} (coming Phase 3)
+              </option>
+            </select>
+          </label>
+          <label>
+            padding
+            <select
+              value={padding()}
+              onChange={(e) => changePadding(e.currentTarget.value as PaddingScheme)}
+              disabled={!isAesCipher(cipher())}
+              title={
+                isAesCipher(cipher())
+                  ? "Padding scheme applied at the start of encrypt / end of decrypt"
+                  : "Padding is AES-only in this build — the overlay's load-block step assumes a 16-byte matrix. The non-AES cipher uses its natural block size as the input length."
               }
             >
-              {CIPHER_MODE_LABELS.ecb}
-              {isAesCipher(cipher()) && !isCipherModeSupported(cipher(), "ecb")
-                ? " (AES-128 only in Phase 1)"
-                : ""}
-            </option>
-            <option
-              value="cbc"
-              disabled={
-                !(SUPPORTED_CIPHER_MODES as readonly string[]).includes("cbc") ||
-                !isCipherModeSupported(cipher(), "cbc")
-              }
-            >
-              {CIPHER_MODE_LABELS.cbc}
-              {isAesCipher(cipher()) && !isCipherModeSupported(cipher(), "cbc")
-                ? " (AES-128 only in Phase 2)"
-                : ""}
-            </option>
-            <option
-              value="ctr"
-              disabled={!(SUPPORTED_CIPHER_MODES as readonly string[]).includes("ctr")}
-            >
-              {CIPHER_MODE_LABELS.ctr} (coming Phase 3)
-            </option>
-          </select>
-        </label>
-        <label>
-          padding
-          <select
-            value={padding()}
-            onChange={(e) => changePadding(e.currentTarget.value as PaddingScheme)}
-            disabled={!isAesCipher(cipher())}
-            title={
-              isAesCipher(cipher())
-                ? "Padding scheme applied at the start of encrypt / end of decrypt"
-                : "Padding is AES-only in this build — the overlay's load-block step assumes a 16-byte matrix. The non-AES cipher uses its natural block size as the input length."
-            }
-          >
-            <For each={PADDING_SCHEME_OPTIONS}>
-              {(scheme) => <option value={scheme}>{PADDING_SCHEME_LABELS[scheme]}</option>}
-            </For>
-          </select>
-        </label>
+              <For each={PADDING_SCHEME_OPTIONS}>
+                {(scheme) => <option value={scheme}>{PADDING_SCHEME_LABELS[scheme]}</option>}
+              </For>
+            </select>
+          </label>
+        </Show>
         {/* Group of buttons (not a single form control) → semantic
             <fieldset>/<legend> per biome's a11y lint. The group browses
             as one labeled chunk for screen readers. */}
@@ -1130,14 +1335,22 @@ export const App = () => {
             spellcheck={false}
           />
         </label>
-        <label class="data-field">
-          key ({fmt()})
-          <input
-            value={keyText()}
-            onInput={(e) => preserveScroll(() => setKeyText(e.currentTarget.value))}
-            spellcheck={false}
-          />
-        </label>
+        {/* Slice 2.10c (2026-05-25) — key field hidden for hash category.
+            SHA-256 (and hashes in general) consume no key; the SHA-256
+            spec declares `inputs.key.byteLength: 0`, so the value would
+            be parsed as an empty Uint8Array regardless of what's in the
+            field — but showing a "key" label invites the user to type
+            into it. Hiding the field keeps the UI honest. */}
+        <Show when={isCipher(algorithm())}>
+          <label class="data-field">
+            key ({fmt()})
+            <input
+              value={keyText()}
+              onInput={(e) => preserveScroll(() => setKeyText(e.currentTarget.value))}
+              spellcheck={false}
+            />
+          </label>
+        </Show>
         {/* IV input: shown only when CBC is active. The all-zero default
             from the iv store is replaced by NIST §F's standard test
             vector so the first-impression CBC run against the §F sample
@@ -1734,6 +1947,25 @@ const tryParseBytes = (text: string, fmt: ByteFormat): Uint8Array | null => {
     return null;
   }
 };
+
+/**
+ * Resolve the canonical-default key for any Algorithm. Branches over the
+ * cipher / hash tables. Used by the cross-category smart-swap in
+ * `changeCategory` and the document-load smart-swap in `applyDocument`
+ * (Slice 2.10c, 2026-05-25). Each table is a `Record` keyed exhaustively
+ * over its family — no fallback needed.
+ */
+const algorithmDefaultKey = (a: Algorithm): Uint8Array =>
+  isHash(a) ? DEFAULT_KEY_BYTES_BY_HASH[a] : DEFAULT_KEY_BYTES_BY_CIPHER[a];
+
+/**
+ * Resolve the canonical-default plaintext / message for any Algorithm.
+ * Symmetric to `algorithmDefaultKey` above. SHA-256's default is "abc"
+ * (FIPS 180-4 §A.1 single-block KAT), so first-time hash users land on
+ * the textbook digest.
+ */
+const algorithmDefaultPt = (a: Algorithm): Uint8Array =>
+  isHash(a) ? DEFAULT_PT_BYTES_BY_HASH[a] : DEFAULT_PT_BYTES_BY_CIPHER[a];
 
 const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean => {
   if (a.length !== b.length) return false;
