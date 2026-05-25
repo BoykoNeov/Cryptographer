@@ -2217,25 +2217,62 @@ deferral); validateShapes still emits zero warnings.
 
 ### Slice 2.7 — Spec-level `requiresPortedDispatch` opt-in plumbing
 
+> **Status 2026-05-25: GREEN.** User pick (b) **registry-derived** at
+> slice start (locked over (a) explicit field — keeps CipherSpec /
+> document schemaVersion / runtime dispatch semantics independent and
+> avoids the schema bump). Advisor consulted before authoring; four
+> checks walked: (1) no existing reusable leaf walker, hand-rolled the
+> small one in `core/dispatch.ts`; (2) walker descends into all five
+> container kinds including `feistel-round.tracks[].children`; (3)
+> helper lives in `core/dispatch.ts` (pure `(spec, registry) →
+> boolean`) and is called from `App.tsx:364` — NOT from
+> `stores/spec.ts` (keeps the UI store out of registry-coupling);
+> (4) table-driven test at `tests/requires-ported-dispatch.test.ts`
+> enumerates every shipped spec (AES-128 single-block/ECB/CBC + AES-
+> 192/256 single-block + Speck32/64 BE+LE + Serpent-128/192/256 + DES
+> = 22 specs → `false`; SHA-256 → `true`) plus a synthetic Feistel
+> with a port-native `not@1` leaf injected into the R track (proves
+> track descent) plus 3-deep nested groups + empty-spec edge cases.
+>
+> **Discriminator refinement worth pinning:** the precise condition is
+> `kind === "ported" && legacy === undefined` (pure port-native), NOT
+> just `kind === "ported"`. Every shipped AES / Speck / Serpent / DES
+> leaf registers as `kind: "ported"` with a `legacy` fallback executor
+> (lifted-legacy), and the runtime's off-flag path falls back to that
+> executor — so they MUST derive `false` to keep running under legacy
+> dispatch per the slice gate. The exact runtime condition lives at
+> `runtime.ts:607` ("requires portedDispatchEnabled: true" throw).
+>
+> Per-advisor asymmetry note: false positive degrades gracefully
+> (Phase 1 parity matrix already pins byte-equality for lifted-legacy
+> under both dispatches); false negative throws loudly. The walker
+> favors caution accordingly.
+>
+> Suite 2285 → 2311 (+26 = 23 shipped specs + 3 container-descent
+> assertions). Bundle 628.81 → 629.18 KB (+0.37 KB). No schema bump.
+> No changes to `stores/spec.ts`. SHA-256 still launchable only from
+> tests today; Slice 2.10 lands the cipher-selector entry.
+
 **Goal:** wire the spec-level opt-in mechanism so the live UI can
 launch SHA-256 (Slice 2.10's cipher selector) without a hand-rolled
 flag.
 
-**Scope (sketched, pure plumbing):**
+**Scope (as built):**
 
-- `CipherSpec` gains optional `requiresPortedDispatch?: boolean` field
-  (OR: registry-derives by walking spec and checking any leaf
-  `registration.kind === "ported"`). Pick at slice start.
-- Spec store in `src/ui/stores/spec.ts` reads the field/derivation;
-  passes `portedDispatchEnabled: true` to `runSpec` when applicable.
-- `document-schema.ts`: schema bump if Q-pick is (a) explicit field.
-  No bump needed if (b) registry-derived.
-- Per-cipher tests untouched (they already use direct flag).
+- New pure helper `core/dispatch.ts::requiresPortedDispatch(spec,
+  registry): boolean`. Walks the spec depth-first; short-circuits on
+  the first leaf whose registration is pure port-native.
+- `App.tsx`'s `runSpec` call at line 364 calls the helper and threads
+  the result as `portedDispatchEnabled`. No `stores/spec.ts` change.
+- `document-schema.ts`: untouched (option (b) needed no schema bump).
+- Tests: `tests/requires-ported-dispatch.test.ts` (26 cases — full
+  shipped-spec table + 3 container-descent synthetic checks).
 
-**Pass/fail gate:** SHA-256 spec runs end-to-end via the spec store
-without a direct test flag; AES-128 / Speck32-64 / Serpent-128 / DES
-specs continue to run under `portedDispatchEnabled: false` by default;
-Phase 1 matrix still green.
+**Pass/fail gate (walked):** SHA-256 spec runs end-to-end via the
+spec store without a direct test flag; AES-128 / Speck32-64 /
+Serpent-128 / DES specs continue to run under
+`portedDispatchEnabled: false` by default; Phase 1 matrix still
+green.
 
 ### Slice 2.8 — `narrationOverride` populated for every SHA-256 leaf
 
