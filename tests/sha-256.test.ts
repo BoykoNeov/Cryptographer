@@ -105,23 +105,32 @@ describe("SHA-256 — single-block messages against node:crypto", () => {
 
 describe("SHA-256 — frame count and state shape pins", () => {
   it("emits the expected number of frames per run", () => {
-    // Frame budget for single-block run:
-    //   - 4 preprocessing leaves: plaintext-source, pad, length-append, seed-schedule
-    //   - 48 message-schedule body iterations (each is one frame)
-    //   - 5 H/K/W/concat/bridge leaves: H-to-aux, K-to-aux, W-source,
-    //                                   H-constant, compression-state-init,
-    //                                   compression-bridge
-    //     = 6 frames
-    //   - 64 compression rounds: each round is a group with one leaf →
-    //     64 frames
-    //   - 1 final-add leaf
+    // Frame budget for single-block run under the Slice 2.6d decomposed
+    // topology (every algorithmic sub-step is now a visible chip):
+    //   - 4 preprocessing leaves: plaintext-source + pad + length-append
+    //     + seed-schedule
+    //   - 14 schedule body leaves × 48 iterations = 672 frames
+    //     (aux-load ×4 + σ1 chain ×4 + σ0 chain ×4 + W_t 4-way add
+    //     + bytes-to-state)
+    //   - 5 between-phases leaves: W-publish + K-to-aux + H-to-aux
+    //     + H-constant + init-working-vars
+    //   - 28 leaves × 64 compression rounds = 1792 frames
+    //     (state-to-bytes + split-bytes + 2×(aux-load-bytes + byte-slice)
+    //     + Σ1 ×4 + Σ0 ×4 + Ch ×4 + Maj ×4 + T1 + T2 + new_a + new_e
+    //     + concat + bytes-to-state)
+    //   - 13 final-add leaves: state-to-bytes + split-bytes + aux-load-bytes
+    //     + split-bytes + 8×add-mod-32 + concat + bytes-to-state
+    //   - +1 from runtime control flow (FES outer accounting)
     //
-    // Total: 4 + 48 + 6 + 64 + 1 = 123 frames
+    // Total: 4 + 672 + 5 + 1792 + 13 + 1 = 2487 frames
+    //
+    // Pre-2.6d (coarse helpers): 123 frames. Pedagogy payoff: ~20× more
+    // frames means every ROTR, every XOR, every modular add is visible.
     const trace = runSpec(buildSha256Spec(), buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: new Uint8Array([0x61, 0x62, 0x63]) },
       portedDispatchEnabled: true,
     });
-    expect(trace.frames).toHaveLength(123);
+    expect(trace.frames).toHaveLength(2487);
   });
 
   it("finalState is always 32 bytes BytesState (the hash)", () => {
@@ -174,17 +183,29 @@ describe("SHA-256 — spec structural pins", () => {
     expect(warnings).toEqual([]);
   });
 
-  it("each compression-round leaf carries a unique roundIndex param 0..63", () => {
+  // Under the Slice 2.6d decomposed topology, each round group no longer
+  // wraps a single `sha2.compression-round@1` leaf with `roundIndex` param
+  // — it wraps 28 leaves (state-to-bytes, split-bytes, Σ0/Σ1/Ch/Maj
+  // chains, T1/T2 adds, concat, bytes-to-state). The pin updates from
+  // "single leaf carries roundIndex" to "28 leaves per group, each
+  // round's K_t byte-slice carries offset = 4 * t". The byte-slice
+  // offset is the load-bearing per-round disambiguator in the decomposed
+  // form — different rounds extract from different positions in K and W.
+  it("each compression-round group has 28 leaves with K_t offset = 4 * t", () => {
     const spec = buildSha256Spec();
     const seenIndices = new Set<number>();
     for (const step of spec.steps) {
       if (step.kind !== "group") continue;
-      if (!/^round\.\d+$/.test(step.id)) continue;
-      const child = step.children[0];
-      if (child?.kind !== "step") throw new Error("expected leaf child");
-      const params = child.params as { readonly roundIndex?: unknown };
-      expect(typeof params.roundIndex).toBe("number");
-      seenIndices.add(params.roundIndex as number);
+      const m = /^round\.(\d+)$/.exec(step.id);
+      if (m === null) continue;
+      const t = Number.parseInt(m[1] as string, 10);
+      expect(step.children).toHaveLength(28);
+      // Locate the K_t byte-slice leaf and assert its offset.
+      const ktSlice = step.children.find((c) => c.kind === "step" && c.id === `round.${t}.K_t`);
+      if (!ktSlice || ktSlice.kind !== "step") throw new Error("expected K_t byte-slice leaf");
+      const params = ktSlice.params as { readonly offset?: unknown };
+      expect(params.offset).toBe(4 * t);
+      seenIndices.add(t);
     }
     expect(seenIndices.size).toBe(64);
     for (let t = 0; t < 64; t++) expect(seenIndices.has(t)).toBe(true);

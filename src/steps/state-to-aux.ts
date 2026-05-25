@@ -164,6 +164,43 @@ export const stateToAuxPortContract: PortContract = {
   ]),
 };
 
+// ─── Bytes-shaped sibling (Slice 2.6d, 2026-05-25) ──────────────────────
+//
+// Same executor (cloneState is shape-generic per src/core/state/clone.ts),
+// different META + PortContract for `bytes`-shape state. First consumer:
+// SHA-256's schedule exit publishing W (256 bytes) into aux["W"] under
+// the Q1 = (b) user pick (W in aux entirely). Future Speck-CBC composition
+// (which the prose above predicted) becomes a second consumer.
+//
+// Why a sibling registration (not a polymorphic widening of the matrix
+// variant): keeping the AES-CBC variant's `byteLength: 16` declarations
+// AND the `matrix-cm-4x4` layout decode at the bytes-shape variant's
+// `byteLength: undefined` (polymorphic) AND `raw` layout requires two
+// separate PortContracts. A polymorphic version would lose the editor's
+// length-coercion glyphs on AES-CBC. Sibling is the minimal-risk choice.
+
+export const stateToAuxBytesMeta: ProjectionMetadata = {
+  stateLayout: "bytes",
+  stateInputPort: "state",
+  stateOutputPort: "state",
+  auxWritePorts: (params: Json) => {
+    const { auxName } = readParams(params);
+    if (auxName === "") return new Map();
+    return new Map([["snapshot", auxName]]);
+  },
+};
+
+export const stateToAuxBytesPortContract: PortContract = {
+  // Polymorphic byteLength on all ports — bytes-shape state can be any
+  // length (SHA-256 schedule exit publishes 256 bytes; future hashes will
+  // have other sizes). Layout `"raw"` because aux receives a Uint8Array.
+  inputs: new Map([["state", { layout: "raw" }]]),
+  outputs: new Map([
+    ["state", { layout: "raw" }],
+    ["snapshot", { layout: "raw" }],
+  ]),
+};
+
 const readParams = (params: Json): { auxName: string } => {
   if (typeof params !== "object" || params === null || Array.isArray(params)) {
     throw new Error("state-to-aux: params must be an object");

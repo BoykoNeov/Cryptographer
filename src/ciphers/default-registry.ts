@@ -233,6 +233,8 @@ import {
 import { splitBytes, splitBytesDoc, splitBytesPortContract } from "../steps/split-bytes";
 import {
   stateToAux,
+  stateToAuxBytesMeta,
+  stateToAuxBytesPortContract,
   stateToAuxDoc,
   stateToAuxMeta,
   stateToAuxPortContract,
@@ -506,6 +508,21 @@ export const buildDefaultRegistry = (): StepRegistry => {
     legacy: stateToAux,
     shape: stateToAuxPortContract,
     meta: stateToAuxMeta,
+    doc: stateToAuxDoc,
+  });
+  // Bytes-shape sibling (Slice 2.6d, 2026-05-25). Same `stateToAux`
+  // executor (cloneState is shape-generic) registered under a different
+  // key with bytes-shaped meta + polymorphic PortContract. First consumer:
+  // SHA-256's schedule exit publishing W (256 bytes) into aux["W"] under
+  // user pick Q1 = (b) "W in aux entirely". The matrix variant above
+  // stays unchanged — AES-CBC keeps its byteLength=16 + matrix-cm-4x4
+  // declarations.
+  r.register("generic.state-to-aux-bytes@1", {
+    kind: "ported",
+    executor: liftLegacyExecutor(stateToAux, stateToAuxBytesMeta),
+    legacy: stateToAux,
+    shape: stateToAuxBytesPortContract,
+    meta: stateToAuxBytesMeta,
     doc: stateToAuxDoc,
   });
   // ─── Speck (ARX block cipher, second cipher family) ────────────────────
