@@ -32,6 +32,7 @@ import {
   auxLoadBytesPortContract,
 } from "../steps/aux-load-bytes";
 import { auxXor, auxXorDoc, auxXorMeta, auxXorPortContract } from "../steps/aux-xor";
+import { byteSlice, byteSliceDoc, byteSlicePortContract } from "../steps/byte-slice";
 import {
   byteSubstitution,
   byteSubstitutionDoc,
@@ -924,6 +925,21 @@ export const buildDefaultRegistry = (): StepRegistry => {
     shape: auxLoadBytesPortContract,
     meta: auxLoadBytesMeta,
     doc: auxLoadBytesDoc,
+  });
+  // `byte-slice@1`: extract a contiguous byte range from the input port
+  // at a parameterized offset. Pure port-native — no `meta`, no `legacy`.
+  // PortContract declares both input.byteLength (= params.sourceByteLength)
+  // and output.byteLength (= params.length) — exact lengths drive the
+  // editor's coercion-warning glyphs. First consumers: SHA-256's per-round
+  // K_t extraction from the 256-byte K-table (and W_t from W under user
+  // pick Q1 = (b)). Paired with `split-bytes@1` (next register block) —
+  // byte-slice handles arbitrary-offset single-range extraction;
+  // split-bytes handles symmetric N-way extraction starting at offset 0.
+  r.register("byte-slice@1", {
+    kind: "ported",
+    executor: byteSlice,
+    shape: byteSlicePortContract,
+    doc: byteSliceDoc,
   });
   // ─── SHA-256-specific helpers (Slice 2.6b — universal-port plan) ───────
   // Three SHA-256-specific lifted-legacy steps. Re-scope discovery
