@@ -151,6 +151,32 @@ export const PortBindingSchema = z.object({
   port: z.string(),
 });
 
+// Slice 2.8 (2026-05-26) — `narrationOverride: StepDocumentation` on
+// spec leaves carries cipher-specific prose that shadows the registry's
+// generic doc. The Slice 1.10 foundation added the field to
+// `core/types.ts` but did not extend the document Zod schema; Slice 2.8
+// is the first shipped use (SHA-256 spec), so the schema gains the
+// override here.
+//
+// **Why these four fields only.** `StepDocumentation` also has optional
+// `params: ReadonlyMap<string, string>` and `shapeContract:
+// StepShapeContract`. Both are reserved for future use and not present
+// on any shipped override; modeling them would require either a Map
+// transformer (params doesn't JSON.stringify natively — Map produces
+// `{}` with no enumerable own keys) or pulling the StateShape union
+// into the schema. Deferred until a real consumer ships.
+//
+// **Strict (default Zod) `.object()`** — additional fields on a future
+// override would be silently stripped on the parse path. Acceptable
+// for now: this slice's overrides only use these four fields. Bump
+// schemaVersion when a future override needs more.
+export const StepDocumentationSchema = z.object({
+  name: z.string(),
+  summary: z.string(),
+  detail: z.string(),
+  references: z.array(z.string()).optional(),
+});
+
 export const StepLeafSchema = z.object({
   kind: z.literal("step"),
   id: z.string(),
@@ -160,6 +186,8 @@ export const StepLeafSchema = z.object({
   // it serializes to JSON natively (Map keys would need a custom Zod
   // transformer). At runtime the leaf reads this via Object.entries.
   portInputs: z.record(z.string(), PortBindingSchema).optional(),
+  // Slice 2.8 — per-leaf cipher-specific narration override (see above).
+  narrationOverride: StepDocumentationSchema.optional(),
 });
 
 // Shared Slice 2.6a container port-edge wiring fields. Every container

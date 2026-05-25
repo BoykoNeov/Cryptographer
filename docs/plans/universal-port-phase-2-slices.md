@@ -2274,27 +2274,78 @@ Serpent-128 / DES specs continue to run under
 `portedDispatchEnabled: false` by default; Phase 1 matrix still
 green.
 
-### Slice 2.8 — `narrationOverride` populated for every SHA-256 leaf
+### Slice 2.8 — `narrationOverride` populated for every SHA-256 leaf — SHIPPED 2026-05-26 (pre-smoke)
 
-**Goal:** first shipped use of Slice 1.10's foundation field.
+**Status: GREEN 2026-05-26.** First shipped use of Slice 1.10's
+foundation field. Manual browser smoke is the only remaining close
+gate; `<StepDescription>` already reads `narrationOverride` per Slice
+1.10 wiring so no UI changes are needed.
 
-**Scope (sketched):**
+**What shipped:**
 
-- Every SHA-256 leaf in the spec carries `narrationOverride:
-  StepDocumentation` with cipher-specific prose. Examples:
-  - `rotate-bits-right` leaf in Σ0's first rotation: override name to
-    "ROR(x, 2) for Σ0", summary cites FIPS 180-4 §4.1.2.
-  - `add-mod-32` leaf for T1: override name to "T1 = h + Σ1(e) +
-    Ch(e,f,g) + K_t + W_t", references FIPS 180-4 §6.2.2.
-  - `for-each-subgraph` outer block leaf: override summary to
-    "SHA-256 processes the message in 512-bit blocks".
-- `<StepDescription>` already reads `narrationOverride` per Slice 1.10
-  wiring — no UI changes.
+- **58 distinct `StepDocumentation` prose objects** authored as
+  module-level consts in `src/ciphers/sha-256.ts`:
+  - 4 preprocessing (`plaintext-source`, `pad`, `length-append`,
+    `seed-schedule`)
+  - 14 schedule-body roles (4 lookback fetches + 4 σ1 components + 4
+    σ0 components + W_t add + schedule-out bridge)
+  - 5 aux + init (W-publish, K-to-aux, H-to-aux, H-constant,
+    init-working-vars)
+  - 28 compression-round roles (state-in, split, K-fetch + K_t,
+    W-fetch + W_t, Σ1 chain × 4, Σ0 chain × 4, Ch chain × 4, Maj
+    chain × 4, T1, T2, new_a, new_e, repack, state-out)
+  - 7 final-add roles (state-in, split-wv, fetch-H, split-H, s_i
+    shared across 8, assemble, out)
+- **1829 spec-leaf attachments.** The 28 compression-round overrides
+  are shared by reference across all 64 rounds (saves ~1.6 MB of
+  duplicated prose; safe because `narrationOverride` is read-only,
+  unlike params which would bite — see `feedback_share_param_objects`
+  gotcha; advisor pre-consult confirmed this is the right pattern
+  here).
+- Each override carries `name`, `summary`, `detail` (markdown), and
+  at least one FIPS 180-4 reference. Final-add `s_i` shares one prose
+  object across all 8 instances since the formula `hash_i = wv_i +
+  H_i` is i-parameterized.
+- **Document schema extended.** `src/core/document-schema.ts` gains
+  `StepDocumentationSchema` (name + summary + detail + optional
+  references) and threads it into `StepLeafSchema.narrationOverride`.
+  Without this, the serialize → parse round-trip would silently strip
+  the override (Zod default strips unknown keys). No `schemaVersion`
+  bump — backward-compatible additive field, existing docs without
+  the field continue to parse cleanly. Note: `StepDocumentation`'s
+  optional `params: ReadonlyMap` and `shapeContract` fields are
+  deliberately NOT in the schema — neither serializes natively as
+  JSON, and no shipped override uses them. A future schemaVersion
+  bump can extend the schema if a real consumer ships.
+- New test: `tests/sha-256-narration-override-2-8.test.ts` (6 tests):
+  walks `buildSha256Spec().steps` recursively through every container
+  kind (`group`, `iterate`, `for-each-subgraph`,
+  `for-each-subgraph-with-history`, `feistel-round`) and asserts (1)
+  total leaf count 1829, (2) every `kind: "step"` leaf carries a
+  non-null override, (3) every override has non-empty name/summary/
+  detail, (4) every override carries at least one FIPS 180-4
+  reference, (5) the 28 compression-round overrides are shared by
+  reference across all 64 rounds (distinct identity count = 28), (6)
+  the 14 schedule-body roles appear once in the spec tree.
 
-**Pass/fail gate:** every SHA-256 leaf renders cipher-specific
-narration in `<StepDescription>` (manual browser smoke + unit test
-walking the spec asserting `narrationOverride` is non-null on every
-leaf).
+**Pass/fail gate (per plan):** every SHA-256 leaf renders cipher-
+specific narration in `<StepDescription>` (manual browser smoke +
+unit test walking the spec asserting `narrationOverride` is non-null
+on every leaf). Test half: GREEN. Manual browser smoke: PENDING (the
+test verifies presence only, not prose CORRECTNESS — a typo in a
+FIPS section number or a Σ0/Σ1 constant swap in the prose would pass
+the test gate). Pre-merge smoke script: open SHA-256, scrub through a
+representative cross-section of leaves (preprocessing, schedule body,
+compression round 5's Σ1 chain, final-add `s_3`), confirm
+`<StepDescription>` renders cipher-specific prose (NOT the generic
+registry doc for `rotate-bits-right@1` etc.).
+
+**Counts:** suite 2334 → **2340** (+6); bundle 642.39 → **666.58 KB
+raw** / 188.79 → **195.72 KB gzipped** (+24.19 KB raw / +6.95 KB
+gzipped — the prose markdown is the dominant contributor; this is
+the largest single-slice bundle growth in Phase 2 so far but stays
+well within the pre-warned 500-KB-Vite-warning zone per
+[[project_bundle_size_500kb]]).
 
 ### Slice 2.9 — Provenance overlay registry for SHA-256
 

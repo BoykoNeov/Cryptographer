@@ -92,7 +92,7 @@
  *     Slice 2.6d implementation)
  */
 
-import type { CipherSpec, StepNode } from "../core/types";
+import type { CipherSpec, StepDocumentation, StepNode } from "../core/types";
 
 // ─── SHA-256 constants (FIPS 180-4 §4.2.2 + §5.3.3) ───────────────────────
 
@@ -140,6 +140,665 @@ const wordsToBytes = (words: readonly number[]): number[] => {
 const SHA256_K_BYTES = wordsToBytes(SHA256_K_WORDS); // 256 bytes
 const SHA256_H_BYTES = wordsToBytes(SHA256_H_WORDS); // 32 bytes
 
+// ─── narrationOverride: SHA-256-specific prose for every spec leaf ────────
+//
+// Slice 2.8 of the universal-port-dataflow plan (2026-05-25). Each spec
+// leaf carries a `StepDocumentation` override that names what THIS leaf
+// does inside SHA-256, instead of the registry's generic doc for the
+// underlying port-native primitive. The registry doc remains the
+// fallback for palette-dropped primitives that haven't been authored
+// into a cipher-specific role.
+//
+// **Reference-sharing is intentional and safe.** Every leaf in a given
+// role shares the SAME override object (e.g., all 64 compression rounds'
+// `Sigma1` leaves point at `NARR_ROUND_SIGMA1`). `narrationOverride` is
+// read-only — the runtime never mutates it, and `core/spec-mutations.ts`
+// rebuilds the tree rather than mutating in place. Unlike `params`
+// (where shared references cause silent cross-leaf edits — see the
+// `Sharing param objects across CipherSpec leaves` pitfall in
+// `src/steps/CLAUDE.md`), the override has no editor and no mutation
+// path.
+//
+// **References.** Every override carries at least one FIPS 180-4
+// citation pointing at the section that justifies its role.
+
+// ── Preprocessing (4 leaves) ──────────────────────────────────────────────
+
+const NARR_PLAINTEXT_SOURCE: StepDocumentation = {
+  name: "Plaintext source",
+  summary: "Expose the input message bytes on a port so the padding step can read them.",
+  detail: `Reads the cipher's input state (the bytes of the message
+to be hashed) and emits them on port \`output\`. This is the entry
+point — every downstream step that needs the original message reads
+from here (notably the padding step AND the length-suffix step, which
+encodes the **original** message length, not the padded length).`,
+  references: ["FIPS 180-4 §5.1.1 — Preprocessing overview"],
+};
+
+const NARR_PAD: StepDocumentation = {
+  name: "Pad with 0x80 + zeros (FIPS 180-4 §5.1.1)",
+  summary:
+    "Append 0x80 then zeros until length ≡ 56 (mod 64), reserving 8 bytes for the length suffix.",
+  detail: `SHA-256 padding rule for single-block messages (≤ 55 bytes):
+append the byte \`0x80\` (= bits \`10000000\`), then append zero bytes
+until the running length is congruent to 56 modulo 64. The trailing 8
+bytes of the final 64-byte block are reserved for the big-endian
+64-bit length suffix appended in the next step.
+
+Why the \`0x80\` sentinel: FIPS 180-4 §5.1.1 specifies "append a single
+1 bit" followed by "the minimum number of 0 bits, so that the resulting
+length is congruent to 448 mod 512." On byte-aligned messages, "a 1 bit
+plus seven 0 bits" is the byte \`0x80\`.`,
+  references: ["FIPS 180-4 §5.1.1 — Padding the message"],
+};
+
+const NARR_LENGTH_APPEND: StepDocumentation = {
+  name: "Append BE-64 length of original message (FIPS 180-4 §5.1.1)",
+  summary:
+    "Suffix the padded message with the original message length in bits, big-endian, 64 bits.",
+  detail: `The final 8 bytes of SHA-256's input block encode \`L\` —
+the **original** (pre-padding) message length, in bits, as a 64-bit
+big-endian unsigned integer. For the "abc" KAT (FIPS 180-4 §A.1) this
+is \`0x0000000000000018\` (= 24 bits). After this step the input is
+exactly 64 bytes (single-block scope of this spec).
+
+The length-source port wires back to \`plaintext-source\` — the
+original message — NOT to the padded bytes, because the length encoded
+here is the original length per the FIPS specification.`,
+  references: ["FIPS 180-4 §5.1.1 — Length suffix"],
+};
+
+const NARR_SEED_SCHEDULE: StepDocumentation = {
+  name: "Seed message schedule (bytes → state)",
+  summary:
+    "Bridge: copy the padded 64-byte block into state so the FES-with-history can seed its history.",
+  detail: `The for-each-subgraph-with-history primitive seeds its
+lookback history from parent-scope state. This bridge copies the
+64-byte padded block (output of \`length-append\`) into state.bytes
+so the FES seeding logic can populate \`prior-1\` through \`prior-16\`
+with the message words \`M_0..M_15\` before the first iteration runs.`,
+  references: ["FIPS 180-4 §6.2.2 — Message schedule preparation"],
+};
+
+// ── Schedule body (14 leaves, shared across 48 FES iterations) ────────────
+
+const NARR_SCHED_FETCH_P2: StepDocumentation = {
+  name: "Fetch W_{t-2}",
+  summary: "Load the message-schedule word from 2 iterations ago (for σ1).",
+  detail: `\`σ1\` of the message-schedule recurrence (FIPS 180-4 §6.2.2)
+operates on \`W_{t-2}\`. The FES-with-history runtime auto-publishes
+\`aux["prior-2"]\` at each iteration — the 4-byte word produced by the
+body 2 iterations back (or the seeded \`M_{16+t-2}\` word for the first
+two body iterations).`,
+  references: ["FIPS 180-4 §6.2.2 — W_t recurrence"],
+};
+
+const NARR_SCHED_FETCH_P7: StepDocumentation = {
+  name: "Fetch W_{t-7}",
+  summary: "Load the message-schedule word from 7 iterations ago (additive term).",
+  detail: `Additive term in the W_t recurrence: \`W_t = σ1(W_{t-2}) +
+W_{t-7} + σ0(W_{t-15}) + W_{t-16}\`. The FES-with-history runtime
+auto-publishes \`aux["prior-7"]\`.`,
+  references: ["FIPS 180-4 §6.2.2 — W_t recurrence"],
+};
+
+const NARR_SCHED_FETCH_P15: StepDocumentation = {
+  name: "Fetch W_{t-15}",
+  summary: "Load the message-schedule word from 15 iterations ago (for σ0).",
+  detail: `\`σ0\` of the W_t recurrence operates on \`W_{t-15}\`. The
+FES-with-history runtime auto-publishes \`aux["prior-15"]\`.`,
+  references: ["FIPS 180-4 §6.2.2 — W_t recurrence"],
+};
+
+const NARR_SCHED_FETCH_P16: StepDocumentation = {
+  name: "Fetch W_{t-16}",
+  summary: "Load the message-schedule word from 16 iterations ago (additive term).",
+  detail: `Last additive term in the W_t recurrence: ties the new
+schedule word back to the message word from 16 positions earlier
+(which, for early iterations, is one of the seeded \`M_0..M_15\`
+message words).`,
+  references: ["FIPS 180-4 §6.2.2 — W_t recurrence"],
+};
+
+const NARR_SCHED_SIGMA1_R17: StepDocumentation = {
+  name: "σ1: ROTR¹⁷(W_{t-2})",
+  summary: "First rotation of the lowercase-sigma-1 helper: rotate W_{t-2} right by 17 bits.",
+  detail: `One of three rotations that make up \`σ1\`:
+
+\`\`\`
+σ1(x) = ROTR¹⁷(x) ⊕ ROTR¹⁹(x) ⊕ SHR¹⁰(x)
+\`\`\`
+
+(FIPS 180-4 §4.1.2 equation 4.7). This leaf computes the
+\`ROTR¹⁷\` term. The XOR of all three terms lands in \`sigma1\`.`,
+  references: ["FIPS 180-4 §4.1.2 — σ1 definition"],
+};
+
+const NARR_SCHED_SIGMA1_R19: StepDocumentation = {
+  name: "σ1: ROTR¹⁹(W_{t-2})",
+  summary: "Second rotation of σ1: rotate W_{t-2} right by 19 bits.",
+  detail: `Middle term of \`σ1(x) = ROTR¹⁷(x) ⊕ ROTR¹⁹(x) ⊕ SHR¹⁰(x)\`
+(FIPS 180-4 §4.1.2 eq. 4.7).`,
+  references: ["FIPS 180-4 §4.1.2 — σ1 definition"],
+};
+
+const NARR_SCHED_SIGMA1_S10: StepDocumentation = {
+  name: "σ1: SHR¹⁰(W_{t-2})",
+  summary: "Logical right SHIFT of W_{t-2} by 10 bits (zeros enter the top).",
+  detail: `The third term of \`σ1\` is a **shift**, not a rotation —
+the bits shifted off the right disappear and zeros enter from the top.
+This is why \`σ1\` (lowercase) is distinct from \`Σ1\` (uppercase,
+which is pure rotations); they appear together in SHA-256 but compute
+different transforms.`,
+  references: ["FIPS 180-4 §4.1.2 — σ1 definition"],
+};
+
+const NARR_SCHED_SIGMA1: StepDocumentation = {
+  name: "σ1(W_{t-2}) = ROTR¹⁷ ⊕ ROTR¹⁹ ⊕ SHR¹⁰",
+  summary: "XOR-combine the three σ1 components into the schedule's σ1 contribution.",
+  detail: `3-way XOR producing the final \`σ1(W_{t-2})\` term used in
+the W_t recurrence (FIPS 180-4 §6.2.2):
+
+\`\`\`
+σ1(x) = ROTR¹⁷(x) ⊕ ROTR¹⁹(x) ⊕ SHR¹⁰(x)
+\`\`\``,
+  references: ["FIPS 180-4 §4.1.2 — σ1 definition"],
+};
+
+const NARR_SCHED_SIGMA0_R7: StepDocumentation = {
+  name: "σ0: ROTR⁷(W_{t-15})",
+  summary: "First rotation of σ0: rotate W_{t-15} right by 7 bits.",
+  detail: `One of three rotations that make up \`σ0\`:
+
+\`\`\`
+σ0(x) = ROTR⁷(x) ⊕ ROTR¹⁸(x) ⊕ SHR³(x)
+\`\`\`
+
+(FIPS 180-4 §4.1.2 eq. 4.6). Note the rotation constants are
+**different** from σ1's (7/18/3 vs. 17/19/10).`,
+  references: ["FIPS 180-4 §4.1.2 — σ0 definition"],
+};
+
+const NARR_SCHED_SIGMA0_R18: StepDocumentation = {
+  name: "σ0: ROTR¹⁸(W_{t-15})",
+  summary: "Second rotation of σ0: rotate W_{t-15} right by 18 bits.",
+  detail: `Middle term of \`σ0(x) = ROTR⁷(x) ⊕ ROTR¹⁸(x) ⊕ SHR³(x)\`
+(FIPS 180-4 §4.1.2 eq. 4.6).`,
+  references: ["FIPS 180-4 §4.1.2 — σ0 definition"],
+};
+
+const NARR_SCHED_SIGMA0_S3: StepDocumentation = {
+  name: "σ0: SHR³(W_{t-15})",
+  summary: "Logical right SHIFT of W_{t-15} by 3 bits (zeros enter the top).",
+  detail: `Third term of \`σ0\` is a SHIFT (not a rotation) — bits
+shifted off the right disappear and zeros enter from the top.`,
+  references: ["FIPS 180-4 §4.1.2 — σ0 definition"],
+};
+
+const NARR_SCHED_SIGMA0: StepDocumentation = {
+  name: "σ0(W_{t-15}) = ROTR⁷ ⊕ ROTR¹⁸ ⊕ SHR³",
+  summary: "XOR-combine the three σ0 components into the schedule's σ0 contribution.",
+  detail: `3-way XOR producing the final \`σ0(W_{t-15})\` term used in
+the W_t recurrence:
+
+\`\`\`
+σ0(x) = ROTR⁷(x) ⊕ ROTR¹⁸(x) ⊕ SHR³(x)
+\`\`\``,
+  references: ["FIPS 180-4 §4.1.2 — σ0 definition"],
+};
+
+const NARR_SCHED_W_T: StepDocumentation = {
+  name: "W_t = σ1(W_{t-2}) + W_{t-7} + σ0(W_{t-15}) + W_{t-16}",
+  summary:
+    "Combine the four schedule terms via 4-way addition mod 2³² to produce the next schedule word.",
+  detail: `The message-schedule recurrence from FIPS 180-4 §6.2.2:
+
+\`\`\`
+W_t = σ1(W_{t-2}) + W_{t-7} + σ0(W_{t-15}) + W_{t-16}   (mod 2³²)
+\`\`\`
+
+Runs 48 times (for t = 16..63) under the for-each-subgraph-with-history
+primitive; the first 16 schedule words (W_0..W_15) come directly from
+the padded message block via the FES seeding contract.`,
+  references: ["FIPS 180-4 §6.2.2 — Step 1, message schedule"],
+};
+
+const NARR_SCHED_OUT: StepDocumentation = {
+  name: "Schedule iteration exit (bytes → state)",
+  summary: "Bridge: write the new W_t word into state.bytes as the FES iteration's 4-byte output.",
+  detail: `The FES-with-history primitive validates that each
+iteration body exits with exactly \`historyEntryByteLength\` bytes in
+state (here, 4 bytes — one 32-bit word). This bridge moves the W_t
+word from its port into state, completing the iteration's contract.
+
+After all 48 iterations, state holds the concatenated 256-byte W
+buffer (W_0..W_63), ready to be published to aux for the compression
+rounds.`,
+  references: ["FIPS 180-4 §6.2.2 — Step 1"],
+};
+
+// ── Aux setup + working-variable init (5 leaves) ──────────────────────────
+
+const NARR_W_PUBLISH: StepDocumentation = {
+  name: "Publish W to aux",
+  summary: 'Snapshot the 256-byte W schedule into aux["W"] so each round can read its W_t slice.',
+  detail: `After the FES exits, state holds the full 256-byte W
+buffer. The 64 compression rounds each need to read their own W_t
+slice — but state is about to be overwritten with the working
+variables, so we snapshot W into aux first. Each round then loads
+aux["W"] and slices out 4 bytes at offset \`4*t\`.
+
+This is the Q1 = (b) "W in aux" decision (Slice 2.6d pre-slice user
+pick): W lives in aux from here on, NOT in state.`,
+  references: ["FIPS 180-4 §6.2.2 — Step 2 (working variables init)"],
+};
+
+const NARR_K_TO_AUX: StepDocumentation = {
+  name: "Load K_0..K_63 to aux",
+  summary: 'Bake the 64 SHA-256 round constants into aux["K"] as a 256-byte buffer.',
+  detail: `The 64 round constants K_0..K_63 are the first 32 bits of
+the fractional parts of the cube roots of the first 64 primes (FIPS
+180-4 §4.2.2). They are baked once into aux["K"] as a 256-byte buffer
+(K_0 at offset 0, K_63 at offset 252) so each compression round can
+read its K_t slice cheaply.`,
+  references: ["FIPS 180-4 §4.2.2 — K_0..K_63"],
+};
+
+const NARR_H_TO_AUX: StepDocumentation = {
+  name: "Load H_0..H_7 to aux",
+  summary: 'Bake the 8 SHA-256 initial-hash-value words into aux["H"] as a 32-byte buffer.',
+  detail: `The 8 initial hash values H_0..H_7 are the first 32 bits of
+the fractional parts of the square roots of the first 8 primes (FIPS
+180-4 §5.3.3). They serve two purposes: (1) they seed the working
+variables at the start of compression (a..h ← H_0..H_7) and (2) they
+are added back into the working variables at the end (the final-add
+step). This leaf places them in aux for the final-add step's use.`,
+  references: ["FIPS 180-4 §5.3.3 — Initial hash values"],
+};
+
+const NARR_H_CONSTANT: StepDocumentation = {
+  name: "Constant load H_0..H_7",
+  summary: "Emit the 8 initial-hash-value words on a port to seed the working variables.",
+  detail: `Same H_0..H_7 constants as the aux-loaded copy, but
+emitted on a port for use by the next bridge (\`init-working-vars\`),
+which writes them into state.bytes as the initial values of the 8
+working variables (a, b, c, d, e, f, g, h) before round 0.`,
+  references: ["FIPS 180-4 §5.3.3 — Initial hash values H_0..H_7"],
+};
+
+const NARR_INIT_WORKING_VARS: StepDocumentation = {
+  name: "Seed working variables (a..h ← H_0..H_7)",
+  summary:
+    "Bridge: copy H_0..H_7 into state.bytes as the initial 8 working variables before round 0.",
+  detail: `Initializes the 8 32-bit working variables a, b, c, d, e,
+f, g, h to H_0..H_7 respectively (FIPS 180-4 §6.2.2 Step 2). State
+becomes a 32-byte buffer; rounds 0..63 will repeatedly read this
+state, transform it, and write it back.`,
+  references: ["FIPS 180-4 §6.2.2 — Step 2 (working variables init)"],
+};
+
+// ── Compression round body (28 leaves, shared by reference across 64 rounds) ─
+
+const NARR_ROUND_STATE_IN: StepDocumentation = {
+  name: "Round entry: state → bytes",
+  summary: "Expose the 32-byte working-variable state on a port so the round body can split it.",
+  detail: `Bridge from state to bytes. The 32 bytes are the 8 working
+variables a, b, c, d, e, f, g, h (each 4 bytes, big-endian).`,
+  references: ["FIPS 180-4 §6.2.2 — Step 3"],
+};
+
+const NARR_ROUND_SPLIT: StepDocumentation = {
+  name: "Split into a, b, c, d, e, f, g, h",
+  summary: "Split the 32-byte working-variable buffer into 8 separate 4-byte words.",
+  detail: `Output port \`output0\` carries \`a\`, \`output1\` carries
+\`b\`, ..., \`output7\` carries \`h\`. The round body reads each of
+these ports as needed for the round's various subterms (Σ0(a),
+Σ1(e), Ch(e,f,g), Maj(a,b,c), and the new_a/new_e formulas).`,
+  references: ["FIPS 180-4 §6.2.2 — Step 3 (working variable assignment)"],
+};
+
+const NARR_ROUND_FETCH_K: StepDocumentation = {
+  name: "Fetch K array from aux",
+  summary: 'Load the 256-byte aux["K"] buffer of round constants for this round\'s K_t slice.',
+  detail: `Loads the full 256-byte K buffer into a port. The next
+leaf slices out the 4-byte K_t word for this specific round t.`,
+  references: ["FIPS 180-4 §4.2.2 — K_t"],
+};
+
+const NARR_ROUND_K_T: StepDocumentation = {
+  name: "K_t: slice round t's constant",
+  summary: 'Extract the 4-byte K_t round constant at offset 4·t within aux["K"].',
+  detail: `Selects K_t (the round constant for THIS round) from the
+shared 256-byte K buffer. Different round groups use different
+\`offset\` params (\`4 * t\`) — this is the only round-specific
+parameter (besides W_t's identical offset).`,
+  references: ["FIPS 180-4 §4.2.2 — K_t"],
+};
+
+const NARR_ROUND_FETCH_W: StepDocumentation = {
+  name: "Fetch W schedule from aux",
+  summary: 'Load the 256-byte aux["W"] message-schedule buffer for this round\'s W_t slice.',
+  detail: `Loads the full 256-byte W buffer (published by the
+schedule's \`W-publish\` leaf) into a port. The next leaf slices out
+W_t.`,
+  references: ["FIPS 180-4 §6.2.2 — Step 1"],
+};
+
+const NARR_ROUND_W_T: StepDocumentation = {
+  name: "W_t: slice round t's message-schedule word",
+  summary: 'Extract the 4-byte W_t schedule word at offset 4·t within aux["W"].',
+  detail: `Selects W_t (this round's contribution from the message
+schedule) from the shared 256-byte W buffer. W_t is one of the five
+addends in T1.`,
+  references: ["FIPS 180-4 §6.2.2 — Step 1 / W_t"],
+};
+
+const NARR_ROUND_SIGMA1_R6: StepDocumentation = {
+  name: "Σ1: ROTR⁶(e)",
+  summary: "First rotation of the uppercase-Sigma-1 helper: rotate e right by 6 bits.",
+  detail: `One of three rotations that make up \`Σ1\`:
+
+\`\`\`
+Σ1(x) = ROTR⁶(x) ⊕ ROTR¹¹(x) ⊕ ROTR²⁵(x)
+\`\`\`
+
+(FIPS 180-4 §4.1.2 eq. 4.5). Σ1 (capital) uses ROTRs only — no
+SHRs, distinguishing it from σ1 (lowercase) used by the schedule.`,
+  references: ["FIPS 180-4 §4.1.2 — Σ1 definition"],
+};
+
+const NARR_ROUND_SIGMA1_R11: StepDocumentation = {
+  name: "Σ1: ROTR¹¹(e)",
+  summary: "Second rotation of Σ1: rotate e right by 11 bits.",
+  detail: `Middle term of \`Σ1(x) = ROTR⁶(x) ⊕ ROTR¹¹(x) ⊕ ROTR²⁵(x)\`
+(FIPS 180-4 §4.1.2 eq. 4.5).`,
+  references: ["FIPS 180-4 §4.1.2 — Σ1 definition"],
+};
+
+const NARR_ROUND_SIGMA1_R25: StepDocumentation = {
+  name: "Σ1: ROTR²⁵(e)",
+  summary: "Third rotation of Σ1: rotate e right by 25 bits.",
+  detail: `Last term of \`Σ1(x) = ROTR⁶(x) ⊕ ROTR¹¹(x) ⊕ ROTR²⁵(x)\`
+(FIPS 180-4 §4.1.2 eq. 4.5).`,
+  references: ["FIPS 180-4 §4.1.2 — Σ1 definition"],
+};
+
+const NARR_ROUND_SIGMA1: StepDocumentation = {
+  name: "Σ1(e) = ROTR⁶(e) ⊕ ROTR¹¹(e) ⊕ ROTR²⁵(e)",
+  summary: "XOR-combine the three Σ1 rotations into one of T1's addends.",
+  detail: `\`Σ1(e)\` (FIPS 180-4 §4.1.2). One of the five addends in
+T1 = h + Σ1(e) + Ch(e,f,g) + K_t + W_t.`,
+  references: ["FIPS 180-4 §4.1.2 — Σ1 definition"],
+};
+
+const NARR_ROUND_SIGMA0_R2: StepDocumentation = {
+  name: "Σ0: ROTR²(a)",
+  summary: "First rotation of the uppercase-Sigma-0 helper: rotate a right by 2 bits.",
+  detail: `One of three rotations that make up \`Σ0\`:
+
+\`\`\`
+Σ0(x) = ROTR²(x) ⊕ ROTR¹³(x) ⊕ ROTR²²(x)
+\`\`\`
+
+(FIPS 180-4 §4.1.2 eq. 4.4). Σ0 (capital) uses ROTRs only — no
+SHRs, distinguishing it from σ0 (lowercase) used by the schedule.
+Note Σ0's constants (2/13/22) are DIFFERENT from Σ1's (6/11/25).`,
+  references: ["FIPS 180-4 §4.1.2 — Σ0 definition"],
+};
+
+const NARR_ROUND_SIGMA0_R13: StepDocumentation = {
+  name: "Σ0: ROTR¹³(a)",
+  summary: "Second rotation of Σ0: rotate a right by 13 bits.",
+  detail: `Middle term of \`Σ0(x) = ROTR²(x) ⊕ ROTR¹³(x) ⊕ ROTR²²(x)\`
+(FIPS 180-4 §4.1.2 eq. 4.4).`,
+  references: ["FIPS 180-4 §4.1.2 — Σ0 definition"],
+};
+
+const NARR_ROUND_SIGMA0_R22: StepDocumentation = {
+  name: "Σ0: ROTR²²(a)",
+  summary: "Third rotation of Σ0: rotate a right by 22 bits.",
+  detail: `Last term of \`Σ0(x) = ROTR²(x) ⊕ ROTR¹³(x) ⊕ ROTR²²(x)\`
+(FIPS 180-4 §4.1.2 eq. 4.4).`,
+  references: ["FIPS 180-4 §4.1.2 — Σ0 definition"],
+};
+
+const NARR_ROUND_SIGMA0: StepDocumentation = {
+  name: "Σ0(a) = ROTR²(a) ⊕ ROTR¹³(a) ⊕ ROTR²²(a)",
+  summary: "XOR-combine the three Σ0 rotations into one of T2's addends.",
+  detail: `\`Σ0(a)\` (FIPS 180-4 §4.1.2). One of the two addends in
+T2 = Σ0(a) + Maj(a,b,c).`,
+  references: ["FIPS 180-4 §4.1.2 — Σ0 definition"],
+};
+
+const NARR_ROUND_CH_NOT_E: StepDocumentation = {
+  name: "Ch helper: ¬e",
+  summary: "Bitwise NOT of e (computes the (¬e ∧ g) term of Ch).",
+  detail: `Intermediate term in the Ch (choose) helper:
+
+\`\`\`
+Ch(e, f, g) = (e ∧ f) ⊕ (¬e ∧ g)
+\`\`\`
+
+(FIPS 180-4 §4.1.2 eq. 4.2). This leaf computes \`¬e\`; the next
+leaf ANDs it with \`g\`.
+
+Intuition: for each bit position, \`Ch\` "chooses" f or g based on
+e's bit — if e's bit is 1, the result is f's bit; if e's bit is 0,
+the result is g's bit.`,
+  references: ["FIPS 180-4 §4.1.2 — Ch definition"],
+};
+
+const NARR_ROUND_CH_E_AND_F: StepDocumentation = {
+  name: "Ch helper: e ∧ f",
+  summary: "Bitwise AND of e and f.",
+  detail: `Left term of \`Ch(e, f, g) = (e ∧ f) ⊕ (¬e ∧ g)\` (FIPS
+180-4 §4.1.2 eq. 4.2).`,
+  references: ["FIPS 180-4 §4.1.2 — Ch definition"],
+};
+
+const NARR_ROUND_CH_NOTE_AND_G: StepDocumentation = {
+  name: "Ch helper: (¬e) ∧ g",
+  summary: "Bitwise AND of (¬e) and g.",
+  detail: `Right term of \`Ch(e, f, g) = (e ∧ f) ⊕ (¬e ∧ g)\` (FIPS
+180-4 §4.1.2 eq. 4.2). Wires in the \`Ch-not_e\` leaf's output.`,
+  references: ["FIPS 180-4 §4.1.2 — Ch definition"],
+};
+
+const NARR_ROUND_CH: StepDocumentation = {
+  name: "Ch(e, f, g) = (e ∧ f) ⊕ (¬e ∧ g)",
+  summary: "XOR the two Ch terms together: one of T1's addends.",
+  detail: `\`Ch\` is the bit-level conditional choose: for each bit
+position, e selects between f (when e_i = 1) and g (when e_i = 0).
+One of the five addends in T1 = h + Σ1(e) + Ch(e,f,g) + K_t + W_t.`,
+  references: ["FIPS 180-4 §4.1.2 — Ch definition"],
+};
+
+const NARR_ROUND_MAJ_AB: StepDocumentation = {
+  name: "Maj helper: a ∧ b",
+  summary: "Bitwise AND of a and b.",
+  detail: `First term of the Maj helper:
+
+\`\`\`
+Maj(a, b, c) = (a ∧ b) ⊕ (a ∧ c) ⊕ (b ∧ c)
+\`\`\`
+
+(FIPS 180-4 §4.1.2 eq. 4.3). Intuition: for each bit position, Maj
+outputs the majority bit of a, b, c.`,
+  references: ["FIPS 180-4 §4.1.2 — Maj definition"],
+};
+
+const NARR_ROUND_MAJ_AC: StepDocumentation = {
+  name: "Maj helper: a ∧ c",
+  summary: "Bitwise AND of a and c.",
+  detail: `Middle term of \`Maj(a, b, c) = (a ∧ b) ⊕ (a ∧ c) ⊕
+(b ∧ c)\` (FIPS 180-4 §4.1.2 eq. 4.3).`,
+  references: ["FIPS 180-4 §4.1.2 — Maj definition"],
+};
+
+const NARR_ROUND_MAJ_BC: StepDocumentation = {
+  name: "Maj helper: b ∧ c",
+  summary: "Bitwise AND of b and c.",
+  detail: `Last term of \`Maj(a, b, c) = (a ∧ b) ⊕ (a ∧ c) ⊕
+(b ∧ c)\` (FIPS 180-4 §4.1.2 eq. 4.3).`,
+  references: ["FIPS 180-4 §4.1.2 — Maj definition"],
+};
+
+const NARR_ROUND_MAJ: StepDocumentation = {
+  name: "Maj(a, b, c) = (a ∧ b) ⊕ (a ∧ c) ⊕ (b ∧ c)",
+  summary: "XOR the three Maj pairwise-ANDs: one of T2's addends.",
+  detail: `Bit-level majority function — each output bit is the
+majority of the three input bits at that position. One of the two
+addends in T2 = Σ0(a) + Maj(a,b,c).`,
+  references: ["FIPS 180-4 §4.1.2 — Maj definition"],
+};
+
+const NARR_ROUND_T1: StepDocumentation = {
+  name: "T1 = h + Σ1(e) + Ch(e,f,g) + K_t + W_t",
+  summary: "5-way add mod 2³² combining the five T1 addends.",
+  detail: `Per FIPS 180-4 §6.2.2 Step 3:
+
+\`\`\`
+T1 = h + Σ1(e) + Ch(e,f,g) + K_t + W_t   (mod 2³²)
+\`\`\`
+
+T1 feeds both new_a (= T1 + T2) and new_e (= d + T1). It is the
+mixing core of SHA-256's compression round.`,
+  references: ["FIPS 180-4 §6.2.2 — Step 3 (T1)"],
+};
+
+const NARR_ROUND_T2: StepDocumentation = {
+  name: "T2 = Σ0(a) + Maj(a,b,c)",
+  summary: "2-way add mod 2³² combining the two T2 addends.",
+  detail: `Per FIPS 180-4 §6.2.2 Step 3:
+
+\`\`\`
+T2 = Σ0(a) + Maj(a,b,c)   (mod 2³²)
+\`\`\`
+
+T2 contributes only to new_a, not to new_e — this asymmetry is what
+makes the working-variable cascade non-trivial.`,
+  references: ["FIPS 180-4 §6.2.2 — Step 3 (T2)"],
+};
+
+const NARR_ROUND_NEW_A: StepDocumentation = {
+  name: "new_a = T1 + T2 (next round's `a`)",
+  summary: "Compute the next round's working variable `a` as T1 + T2 mod 2³².",
+  detail: `Per FIPS 180-4 §6.2.2 Step 3, the new value of \`a\` after
+round t is \`T1 + T2\`. Then the working variables cascade by one
+slot: (a, b, c, d, e, f, g, h) ← (new_a, a, b, c, new_e, e, f, g).`,
+  references: ["FIPS 180-4 §6.2.2 — Step 3 (variable update)"],
+};
+
+const NARR_ROUND_NEW_E: StepDocumentation = {
+  name: "new_e = d + T1 (next round's `e`)",
+  summary: "Compute the next round's working variable `e` as d + T1 mod 2³².",
+  detail: `Per FIPS 180-4 §6.2.2 Step 3, the new value of \`e\` after
+round t is \`d + T1\`. Then the working variables cascade by one
+slot: (a, b, c, d, e, f, g, h) ← (new_a, a, b, c, new_e, e, f, g).`,
+  references: ["FIPS 180-4 §6.2.2 — Step 3 (variable update)"],
+};
+
+const NARR_ROUND_REPACK: StepDocumentation = {
+  name: "Cascade working variables (shift down by one slot)",
+  summary: "Repack (new_a, a, b, c, new_e, e, f, g) — the next round's (a, b, c, d, e, f, g, h).",
+  detail: `8-way concat that encodes the SHA-256 working-variable
+cascade. Per FIPS 180-4 §6.2.2 Step 3, after each round:
+
+\`\`\`
+h ← g,  g ← f,  f ← e,  e ← d + T1,
+d ← c,  c ← b,  b ← a,  a ← T1 + T2
+\`\`\`
+
+Equivalently: the next round's (a..h) is (new_a, a, b, c, new_e, e,
+f, g). The previous \`h\` falls off; \`new_a\` enters at position 0;
+\`new_e\` enters at position 4 (e's slot). This pure-rename is free
+under the universal-port model — no extra step types needed.`,
+  references: ["FIPS 180-4 §6.2.2 — Step 3 (variable cascade)"],
+};
+
+const NARR_ROUND_STATE_OUT: StepDocumentation = {
+  name: "Round exit: bytes → state",
+  summary: "Bridge: write the cascaded 32-byte working-variable buffer back into state.",
+  detail: `Closes the round. State now holds the new (a, b, c, d, e,
+f, g, h) — ready for the next round's body to read via state-to-bytes.`,
+  references: ["FIPS 180-4 §6.2.2 — Step 3 end"],
+};
+
+// ── Final-add (7 distinct prose objects; 14 leaves total) ─────────────────
+
+const NARR_FINAL_STATE_IN: StepDocumentation = {
+  name: "Final-add: state → bytes (working variables)",
+  summary: "Expose the post-round-63 working variables (32 bytes) on a port for splitting.",
+  detail: `After all 64 rounds the working variables a..h are the
+"compressed" hash for this block. Final-add will add H_0..H_7 to
+them to produce the final digest (FIPS 180-4 §6.2.2 Step 4).`,
+  references: ["FIPS 180-4 §6.2.2 — Step 4"],
+};
+
+const NARR_FINAL_SPLIT_WV: StepDocumentation = {
+  name: "Split working variables (a..h)",
+  summary: "Split the 32-byte buffer into 8 separate 4-byte working variable words.",
+  detail: `Output port \`output_i\` carries the post-round-63 value
+of the i-th working variable (for i = 0..7).`,
+  references: ["FIPS 180-4 §6.2.2 — Step 4"],
+};
+
+const NARR_FINAL_FETCH_H: StepDocumentation = {
+  name: "Final-add: fetch H array from aux",
+  summary:
+    'Load the 32-byte aux["H"] buffer of initial hash values to add back into the working variables.',
+  detail: `H_0..H_7 (the SHA-256 initial hash values, FIPS 180-4
+§5.3.3) are added back into the post-compression working variables
+to produce the final digest. This loads the full 32-byte buffer; the
+next leaf splits it.`,
+  references: ["FIPS 180-4 §5.3.3 — Initial hash values"],
+};
+
+const NARR_FINAL_SPLIT_H: StepDocumentation = {
+  name: "Split H_0..H_7",
+  summary: 'Split the 32-byte aux["H"] buffer into 8 separate 4-byte H_i words.',
+  detail: "Output port `output_i` carries H_i (for i = 0..7).",
+  references: ["FIPS 180-4 §5.3.3 — Initial hash values"],
+};
+
+const NARR_FINAL_S_I: StepDocumentation = {
+  name: "Digest word: hash_i = wv_i + H_i (mod 2³²)",
+  summary: "Add the i-th initial hash value back into the i-th post-compression working variable.",
+  detail: `Per FIPS 180-4 §6.2.2 Step 4, for each i ∈ 0..7:
+
+\`\`\`
+H_i ← H_i + a_i   (mod 2³²)
+\`\`\`
+
+where \`a_i\` is the i-th working variable after round 63 (a, b,
+c, d, e, f, g, h corresponding to i = 0..7). For single-block scope
+the new H_i IS the i-th digest word. Each of these 8 add-mod-32
+leaves applies the rule for one specific i.`,
+  references: ["FIPS 180-4 §6.2.2 — Step 4"],
+};
+
+const NARR_FINAL_ASSEMBLE: StepDocumentation = {
+  name: "Assemble 32-byte digest",
+  summary: "Concatenate hash_0..hash_7 into the final 32-byte SHA-256 output.",
+  detail: `8-way concat producing the final 32-byte SHA-256 digest:
+
+\`\`\`
+digest = hash_0 || hash_1 || ... || hash_7
+\`\`\`
+
+For the "abc" KAT (FIPS 180-4 §A.1) this yields
+\`ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\`.`,
+  references: ["FIPS 180-4 §6.2.2 — Step 4 / §A.1 KAT"],
+};
+
+const NARR_FINAL_OUT: StepDocumentation = {
+  name: "Final state (bytes → state)",
+  summary: "Bridge: write the 32-byte digest back into state as the cipher's final output.",
+  detail: `Closes the SHA-256 pipeline. State now holds the 32-byte
+digest. This is what the UI shows as the cipher's output.`,
+  references: ["FIPS 180-4 §6.2.2 — Step 4"],
+};
+
 // ─── Helper: shared port-input shapes (DRY) ───────────────────────────────
 
 const port = (node: string, port: string): { readonly node: string; readonly port: string } => ({
@@ -165,24 +824,28 @@ const buildScheduleBody = (): readonly StepNode[] => [
     id: "fetch-p2",
     type: "aux-load-bytes@1",
     params: { auxName: "prior-2", byteLength: 4 },
+    narrationOverride: NARR_SCHED_FETCH_P2,
   },
   {
     kind: "step",
     id: "fetch-p7",
     type: "aux-load-bytes@1",
     params: { auxName: "prior-7", byteLength: 4 },
+    narrationOverride: NARR_SCHED_FETCH_P7,
   },
   {
     kind: "step",
     id: "fetch-p15",
     type: "aux-load-bytes@1",
     params: { auxName: "prior-15", byteLength: 4 },
+    narrationOverride: NARR_SCHED_FETCH_P15,
   },
   {
     kind: "step",
     id: "fetch-p16",
     type: "aux-load-bytes@1",
     params: { auxName: "prior-16", byteLength: 4 },
+    narrationOverride: NARR_SCHED_FETCH_P16,
   },
   // ── σ1(W_{t-2}) = ROTR^17(W_{t-2}) ⊕ ROTR^19(W_{t-2}) ⊕ SHR^10(W_{t-2}) ─
   {
@@ -191,6 +854,7 @@ const buildScheduleBody = (): readonly StepNode[] => [
     type: "rotate-bits-right@1",
     params: { wordBits: 32, bits: 17 },
     portInputs: { input: port("fetch-p2", "output") },
+    narrationOverride: NARR_SCHED_SIGMA1_R17,
   },
   {
     kind: "step",
@@ -198,6 +862,7 @@ const buildScheduleBody = (): readonly StepNode[] => [
     type: "rotate-bits-right@1",
     params: { wordBits: 32, bits: 19 },
     portInputs: { input: port("fetch-p2", "output") },
+    narrationOverride: NARR_SCHED_SIGMA1_R19,
   },
   {
     kind: "step",
@@ -205,6 +870,7 @@ const buildScheduleBody = (): readonly StepNode[] => [
     type: "shift-bits-right@1",
     params: { wordBits: 32, bits: 10 },
     portInputs: { input: port("fetch-p2", "output") },
+    narrationOverride: NARR_SCHED_SIGMA1_S10,
   },
   {
     kind: "step",
@@ -216,6 +882,7 @@ const buildScheduleBody = (): readonly StepNode[] => [
       operand1: port("sigma1-r19", "output"),
       operand2: port("sigma1-s10", "output"),
     },
+    narrationOverride: NARR_SCHED_SIGMA1,
   },
   // ── σ0(W_{t-15}) = ROTR^7(W_{t-15}) ⊕ ROTR^18(W_{t-15}) ⊕ SHR^3(W_{t-15}) ─
   {
@@ -224,6 +891,7 @@ const buildScheduleBody = (): readonly StepNode[] => [
     type: "rotate-bits-right@1",
     params: { wordBits: 32, bits: 7 },
     portInputs: { input: port("fetch-p15", "output") },
+    narrationOverride: NARR_SCHED_SIGMA0_R7,
   },
   {
     kind: "step",
@@ -231,6 +899,7 @@ const buildScheduleBody = (): readonly StepNode[] => [
     type: "rotate-bits-right@1",
     params: { wordBits: 32, bits: 18 },
     portInputs: { input: port("fetch-p15", "output") },
+    narrationOverride: NARR_SCHED_SIGMA0_R18,
   },
   {
     kind: "step",
@@ -238,6 +907,7 @@ const buildScheduleBody = (): readonly StepNode[] => [
     type: "shift-bits-right@1",
     params: { wordBits: 32, bits: 3 },
     portInputs: { input: port("fetch-p15", "output") },
+    narrationOverride: NARR_SCHED_SIGMA0_S3,
   },
   {
     kind: "step",
@@ -249,6 +919,7 @@ const buildScheduleBody = (): readonly StepNode[] => [
       operand1: port("sigma0-r18", "output"),
       operand2: port("sigma0-s3", "output"),
     },
+    narrationOverride: NARR_SCHED_SIGMA0,
   },
   // ── W_t = σ1(W_{t-2}) + W_{t-7} + σ0(W_{t-15}) + W_{t-16} (mod 2^32) ──
   {
@@ -262,6 +933,7 @@ const buildScheduleBody = (): readonly StepNode[] => [
       operand2: port("sigma0", "output"),
       operand3: port("fetch-p16", "output"),
     },
+    narrationOverride: NARR_SCHED_W_T,
   },
   // ── FES body exit: 4-byte bytes-shape state ────────────────────────
   {
@@ -270,6 +942,7 @@ const buildScheduleBody = (): readonly StepNode[] => [
     type: "bytes-to-state@1",
     params: {},
     portInputs: { input: port("w-t", "output") },
+    narrationOverride: NARR_SCHED_OUT,
   },
 ];
 
@@ -306,6 +979,7 @@ const buildCompressionRound = (t: number): StepNode => {
         id: `${p}.state-in`,
         type: "state-to-bytes@1",
         params: {},
+        narrationOverride: NARR_ROUND_STATE_IN,
       },
       {
         kind: "step",
@@ -314,6 +988,7 @@ const buildCompressionRound = (t: number): StepNode => {
         // 8 working-variable words; output0..output7 carry a..h respectively.
         params: { widths: [4, 4, 4, 4, 4, 4, 4, 4] },
         portInputs: { input: r("state-in", "output") },
+        narrationOverride: NARR_ROUND_SPLIT,
       },
       // ── Fetch K_t from aux["K"] ────────────────────────────────────
       {
@@ -321,6 +996,7 @@ const buildCompressionRound = (t: number): StepNode => {
         id: `${p}.fetch-K`,
         type: "aux-load-bytes@1",
         params: { auxName: "K", byteLength: 256 },
+        narrationOverride: NARR_ROUND_FETCH_K,
       },
       {
         kind: "step",
@@ -328,6 +1004,7 @@ const buildCompressionRound = (t: number): StepNode => {
         type: "byte-slice@1",
         params: { sourceByteLength: 256, offset: 4 * t, length: 4 },
         portInputs: { input: r("fetch-K", "output") },
+        narrationOverride: NARR_ROUND_K_T,
       },
       // ── Fetch W_t from aux["W"] ────────────────────────────────────
       {
@@ -335,6 +1012,7 @@ const buildCompressionRound = (t: number): StepNode => {
         id: `${p}.fetch-W`,
         type: "aux-load-bytes@1",
         params: { auxName: "W", byteLength: 256 },
+        narrationOverride: NARR_ROUND_FETCH_W,
       },
       {
         kind: "step",
@@ -342,6 +1020,7 @@ const buildCompressionRound = (t: number): StepNode => {
         type: "byte-slice@1",
         params: { sourceByteLength: 256, offset: 4 * t, length: 4 },
         portInputs: { input: r("fetch-W", "output") },
+        narrationOverride: NARR_ROUND_W_T,
       },
       // ── Σ1(e) = ROTR^6(e) ⊕ ROTR^11(e) ⊕ ROTR^25(e) ────────────────
       {
@@ -350,6 +1029,7 @@ const buildCompressionRound = (t: number): StepNode => {
         type: "rotate-bits-right@1",
         params: { wordBits: 32, bits: 6 },
         portInputs: { input: r("split", "output4") }, // e
+        narrationOverride: NARR_ROUND_SIGMA1_R6,
       },
       {
         kind: "step",
@@ -357,6 +1037,7 @@ const buildCompressionRound = (t: number): StepNode => {
         type: "rotate-bits-right@1",
         params: { wordBits: 32, bits: 11 },
         portInputs: { input: r("split", "output4") },
+        narrationOverride: NARR_ROUND_SIGMA1_R11,
       },
       {
         kind: "step",
@@ -364,6 +1045,7 @@ const buildCompressionRound = (t: number): StepNode => {
         type: "rotate-bits-right@1",
         params: { wordBits: 32, bits: 25 },
         portInputs: { input: r("split", "output4") },
+        narrationOverride: NARR_ROUND_SIGMA1_R25,
       },
       {
         kind: "step",
@@ -375,6 +1057,7 @@ const buildCompressionRound = (t: number): StepNode => {
           operand1: r("Sigma1-r11", "output"),
           operand2: r("Sigma1-r25", "output"),
         },
+        narrationOverride: NARR_ROUND_SIGMA1,
       },
       // ── Σ0(a) = ROTR^2(a) ⊕ ROTR^13(a) ⊕ ROTR^22(a) ────────────────
       {
@@ -383,6 +1066,7 @@ const buildCompressionRound = (t: number): StepNode => {
         type: "rotate-bits-right@1",
         params: { wordBits: 32, bits: 2 },
         portInputs: { input: r("split", "output0") }, // a
+        narrationOverride: NARR_ROUND_SIGMA0_R2,
       },
       {
         kind: "step",
@@ -390,6 +1074,7 @@ const buildCompressionRound = (t: number): StepNode => {
         type: "rotate-bits-right@1",
         params: { wordBits: 32, bits: 13 },
         portInputs: { input: r("split", "output0") },
+        narrationOverride: NARR_ROUND_SIGMA0_R13,
       },
       {
         kind: "step",
@@ -397,6 +1082,7 @@ const buildCompressionRound = (t: number): StepNode => {
         type: "rotate-bits-right@1",
         params: { wordBits: 32, bits: 22 },
         portInputs: { input: r("split", "output0") },
+        narrationOverride: NARR_ROUND_SIGMA0_R22,
       },
       {
         kind: "step",
@@ -408,6 +1094,7 @@ const buildCompressionRound = (t: number): StepNode => {
           operand1: r("Sigma0-r13", "output"),
           operand2: r("Sigma0-r22", "output"),
         },
+        narrationOverride: NARR_ROUND_SIGMA0,
       },
       // ── Ch(e,f,g) = (e ∧ f) ⊕ (¬e ∧ g) ─────────────────────────────
       {
@@ -416,6 +1103,7 @@ const buildCompressionRound = (t: number): StepNode => {
         type: "not@1",
         params: {},
         portInputs: { input: r("split", "output4") }, // e
+        narrationOverride: NARR_ROUND_CH_NOT_E,
       },
       {
         kind: "step",
@@ -426,6 +1114,7 @@ const buildCompressionRound = (t: number): StepNode => {
           operand0: r("split", "output4"), // e
           operand1: r("split", "output5"), // f
         },
+        narrationOverride: NARR_ROUND_CH_E_AND_F,
       },
       {
         kind: "step",
@@ -436,6 +1125,7 @@ const buildCompressionRound = (t: number): StepNode => {
           operand0: r("Ch-not_e", "output"),
           operand1: r("split", "output6"), // g
         },
+        narrationOverride: NARR_ROUND_CH_NOTE_AND_G,
       },
       {
         kind: "step",
@@ -446,6 +1136,7 @@ const buildCompressionRound = (t: number): StepNode => {
           operand0: r("Ch-e_and_f", "output"),
           operand1: r("Ch-note_and_g", "output"),
         },
+        narrationOverride: NARR_ROUND_CH,
       },
       // ── Maj(a,b,c) = (a ∧ b) ⊕ (a ∧ c) ⊕ (b ∧ c) ───────────────────
       {
@@ -457,6 +1148,7 @@ const buildCompressionRound = (t: number): StepNode => {
           operand0: r("split", "output0"), // a
           operand1: r("split", "output1"), // b
         },
+        narrationOverride: NARR_ROUND_MAJ_AB,
       },
       {
         kind: "step",
@@ -467,6 +1159,7 @@ const buildCompressionRound = (t: number): StepNode => {
           operand0: r("split", "output0"), // a
           operand1: r("split", "output2"), // c
         },
+        narrationOverride: NARR_ROUND_MAJ_AC,
       },
       {
         kind: "step",
@@ -477,6 +1170,7 @@ const buildCompressionRound = (t: number): StepNode => {
           operand0: r("split", "output1"), // b
           operand1: r("split", "output2"), // c
         },
+        narrationOverride: NARR_ROUND_MAJ_BC,
       },
       {
         kind: "step",
@@ -488,6 +1182,7 @@ const buildCompressionRound = (t: number): StepNode => {
           operand1: r("Maj-ac", "output"),
           operand2: r("Maj-bc", "output"),
         },
+        narrationOverride: NARR_ROUND_MAJ,
       },
       // ── T1 = h + Σ1(e) + Ch(e,f,g) + K_t + W_t (5-way add) ─────────
       {
@@ -502,6 +1197,7 @@ const buildCompressionRound = (t: number): StepNode => {
           operand3: r("K_t", "output"),
           operand4: r("W_t", "output"),
         },
+        narrationOverride: NARR_ROUND_T1,
       },
       // ── T2 = Σ0(a) + Maj(a,b,c) (2-way add) ────────────────────────
       {
@@ -513,6 +1209,7 @@ const buildCompressionRound = (t: number): StepNode => {
           operand0: r("Sigma0", "output"),
           operand1: r("Maj", "output"),
         },
+        narrationOverride: NARR_ROUND_T2,
       },
       // ── new_a = T1 + T2, new_e = d + T1 ────────────────────────────
       {
@@ -524,6 +1221,7 @@ const buildCompressionRound = (t: number): StepNode => {
           operand0: r("T1", "output"),
           operand1: r("T2", "output"),
         },
+        narrationOverride: NARR_ROUND_NEW_A,
       },
       {
         kind: "step",
@@ -534,6 +1232,7 @@ const buildCompressionRound = (t: number): StepNode => {
           operand0: r("split", "output3"), // d
           operand1: r("T1", "output"),
         },
+        narrationOverride: NARR_ROUND_NEW_E,
       },
       // ── Repack working vars: shift down by one slot. Next round's a..h:
       //    (new_a, a, b, c, new_e, e, f, g). The previous h falls off.
@@ -552,6 +1251,7 @@ const buildCompressionRound = (t: number): StepNode => {
           input6: r("split", "output5"), // f → g
           input7: r("split", "output6"), // g → h
         },
+        narrationOverride: NARR_ROUND_REPACK,
       },
       {
         kind: "step",
@@ -559,6 +1259,7 @@ const buildCompressionRound = (t: number): StepNode => {
         type: "bytes-to-state@1",
         params: {},
         portInputs: { input: r("repack", "output") },
+        narrationOverride: NARR_ROUND_STATE_OUT,
       },
     ],
   };
@@ -575,6 +1276,7 @@ const buildFinalAddSteps = (): readonly StepNode[] => [
     id: "final.state-in",
     type: "state-to-bytes@1",
     params: {},
+    narrationOverride: NARR_FINAL_STATE_IN,
   },
   {
     kind: "step",
@@ -582,12 +1284,14 @@ const buildFinalAddSteps = (): readonly StepNode[] => [
     type: "split-bytes@1",
     params: { widths: [4, 4, 4, 4, 4, 4, 4, 4] },
     portInputs: { input: port("final.state-in", "output") },
+    narrationOverride: NARR_FINAL_SPLIT_WV,
   },
   {
     kind: "step",
     id: "final.fetch-H",
     type: "aux-load-bytes@1",
     params: { auxName: "H", byteLength: 32 },
+    narrationOverride: NARR_FINAL_FETCH_H,
   },
   {
     kind: "step",
@@ -595,6 +1299,7 @@ const buildFinalAddSteps = (): readonly StepNode[] => [
     type: "split-bytes@1",
     params: { widths: [4, 4, 4, 4, 4, 4, 4, 4] },
     portInputs: { input: port("final.fetch-H", "output") },
+    narrationOverride: NARR_FINAL_SPLIT_H,
   },
   // 8 × 2-way add-mod-32: s_i = wv_i + H_i
   ...Array.from(
@@ -608,6 +1313,7 @@ const buildFinalAddSteps = (): readonly StepNode[] => [
         operand0: port("final.split-wv", `output${i}`),
         operand1: port("final.split-H", `output${i}`),
       },
+      narrationOverride: NARR_FINAL_S_I,
     }),
   ),
   // Reassemble the 8 sums into a 32-byte hash.
@@ -619,6 +1325,7 @@ const buildFinalAddSteps = (): readonly StepNode[] => [
     portInputs: Object.fromEntries(
       Array.from({ length: 8 }, (_, i) => [`input${i}`, port(`final.s${i}`, "output")]),
     ),
+    narrationOverride: NARR_FINAL_ASSEMBLE,
   },
   {
     kind: "step",
@@ -626,6 +1333,7 @@ const buildFinalAddSteps = (): readonly StepNode[] => [
     type: "bytes-to-state@1",
     params: {},
     portInputs: { input: port("final.assemble", "output") },
+    narrationOverride: NARR_FINAL_OUT,
   },
 ];
 
@@ -657,6 +1365,7 @@ export const buildSha256Spec = (): CipherSpec => ({
       id: "plaintext-source",
       type: "state-to-bytes@1",
       params: {},
+      narrationOverride: NARR_PLAINTEXT_SOURCE,
     },
     // Padding: input = plaintext, output = msg + 0x80 + zeros to ≡ 56 (mod 64).
     {
@@ -665,6 +1374,7 @@ export const buildSha256Spec = (): CipherSpec => ({
       type: "pad-with-byte@1",
       params: { padByte: 0x80, blockSize: 64, padTarget: 56 },
       portInputs: { input: port("plaintext-source", "output") },
+      narrationOverride: NARR_PAD,
     },
     // Length suffix: data = padded bytes, length-source = ORIGINAL message
     // (per FIPS 180-4 §5.1.1, the suffix encodes the original message's
@@ -678,6 +1388,7 @@ export const buildSha256Spec = (): CipherSpec => ({
         data: port("pad", "output"),
         "length-source": port("plaintext-source", "output"),
       },
+      narrationOverride: NARR_LENGTH_APPEND,
     },
     // ─── Bridge: padded block (64 bytes) → state ─────────────────────────
     // Required so the FES-with-history can seed its history from
@@ -688,6 +1399,7 @@ export const buildSha256Spec = (): CipherSpec => ({
       type: "bytes-to-state@1",
       params: {},
       portInputs: { input: port("length-append", "output") },
+      narrationOverride: NARR_SEED_SCHEDULE,
     },
     // ─── Message schedule (48 iterations, lookbackOffsets [2,7,15,16]) ────
     // 14-leaf decomposed body per iteration. After this, state = W[0..63]
@@ -724,6 +1436,7 @@ export const buildSha256Spec = (): CipherSpec => ({
       id: "W-publish",
       type: "generic.state-to-aux-bytes@1",
       params: { auxName: "W" },
+      narrationOverride: NARR_W_PUBLISH,
     },
     // ─── Load K into aux for the compression rounds ──────────────────────
     {
@@ -731,6 +1444,7 @@ export const buildSha256Spec = (): CipherSpec => ({
       id: "K-to-aux",
       type: "generic.aux-load@1",
       params: { auxName: "K", value: SHA256_K_BYTES },
+      narrationOverride: NARR_K_TO_AUX,
     },
     // ─── Load H into aux for the final-add step ──────────────────────────
     {
@@ -738,6 +1452,7 @@ export const buildSha256Spec = (): CipherSpec => ({
       id: "H-to-aux",
       type: "generic.aux-load@1",
       params: { auxName: "H", value: SHA256_H_BYTES },
+      narrationOverride: NARR_H_TO_AUX,
     },
     // ─── Initialize working variables from H_0..H_7 ──────────────────────
     // Emit H as a constant on a port, then bridge into state. After this,
@@ -747,6 +1462,7 @@ export const buildSha256Spec = (): CipherSpec => ({
       id: "H-constant",
       type: "constant-load@1",
       params: { bytes: SHA256_H_BYTES },
+      narrationOverride: NARR_H_CONSTANT,
     },
     {
       kind: "step",
@@ -754,6 +1470,7 @@ export const buildSha256Spec = (): CipherSpec => ({
       type: "bytes-to-state@1",
       params: {},
       portInputs: { input: port("H-constant", "output") },
+      narrationOverride: NARR_INIT_WORKING_VARS,
     },
     // ─── 64 compression rounds (decomposed) ──────────────────────────────
     ...Array.from({ length: 64 }, (_, t) => buildCompressionRound(t)),
