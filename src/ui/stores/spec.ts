@@ -144,13 +144,42 @@ const resolveDefault = (cipher: Cipher, cipherMode: CipherMode, mode: Mode): Cip
 // active slot. `setCipher` / `setCipherMode` rebuild BOTH slots from
 // canonical (a cipher swap is a clean break).
 
-type SpecsByMode = { readonly encrypt: CipherSpec; readonly decrypt: CipherSpec };
+/**
+ * Slice 2.10a (2026-05-25) widened `SpecsByMode` from
+ * `{encrypt, decrypt}` to a discriminated union so the store can carry a
+ * hash-shaped spec (single, direction-agnostic) alongside cipher-shaped
+ * specs (encrypt + decrypt slots). The widening lands in 2.10a as type
+ * scaffolding only — `buildCanonicalPair` always constructs the `cipher`
+ * variant; the `hash` branch is exercised only in 2.10b once
+ * `hashDefaults` lands. Every consumer (`activeSpec`, `updateActive`,
+ * `updateBoth`, cross-mode mirror setters, `isCustomSpec`, `resetSpec`,
+ * `setSpecFromDocument`) pattern-matches on `.kind` so the type system
+ * forces them to consciously handle both shapes.
+ *
+ * Why two-variant rather than `{encrypt: T, decrypt?: T}`: the optional-
+ * decrypt shape conflates "cipher whose decrypt hasn't been built yet"
+ * (transient, never shipped) with "hash that has no decrypt by design"
+ * (the actual semantic). The discriminated union names the distinction.
+ */
+type CipherSpecsByMode = {
+  readonly kind: "cipher";
+  readonly encrypt: CipherSpec;
+  readonly decrypt: CipherSpec;
+};
+
+type HashSpecsByMode = {
+  readonly kind: "hash";
+  readonly single: CipherSpec;
+};
+
+type SpecsByMode = CipherSpecsByMode | HashSpecsByMode;
 
 const buildCanonicalPair = (
   cipher: Cipher,
   cipherMode: CipherMode,
   scheme: PaddingScheme,
 ): SpecsByMode => ({
+  kind: "cipher",
   encrypt: applyPaddingScheme(resolveDefault(cipher, cipherMode, "encrypt"), "encrypt", scheme),
   decrypt: applyPaddingScheme(resolveDefault(cipher, cipherMode, "decrypt"), "decrypt", scheme),
 });
@@ -161,8 +190,13 @@ const [specs, setSpecs] = createSignal<SpecsByMode>(
 );
 
 // Active-spec accessor — reads both signals so consumers tracking
-// `useSpec()` re-render on mode flips AND on per-slot edits.
-const activeSpec = (): CipherSpec => specs()[mode()];
+// `useSpec()` re-render on mode flips AND on per-slot edits. For hash
+// specs the mode signal is semantically meaningless (hashes have no
+// direction) so we return the single slot regardless of `mode()`.
+const activeSpec = (): CipherSpec => {
+  const s = specs();
+  return s.kind === "cipher" ? s[mode()] : s.single;
+};
 
 export const useMode = () => mode;
 export const useSpec = () => activeSpec;
@@ -172,26 +206,75 @@ export const useSpec = () => activeSpec;
  * future "save both modes' specs" flow has a clean read boundary; today
  * only the active slot ships in the document, but the two-slot store
  * makes a richer save trivial later.
+ *
+ * Returns the discriminated union — consumers pattern-match on `.kind`.
+ * Test helpers that need a guaranteed cipher-shape can call
+ * `useCipherSpecsByMode()` instead, which throws if the active spec is
+ * a hash.
  */
 export const useSpecsByMode = () => specs;
 
+/**
+ * Narrowed accessor — guarantees the cipher-kind shape, throws otherwise.
+ * Cross-mode mirror tests + duplicate-round tests use this so they can
+ * read `.encrypt` / `.decrypt` directly without per-call kind narrowing.
+ *
+ * Throws at call time (not at construction) so the accessor itself stays
+ * cheap when the cipher kind is active; consumers that genuinely need
+ * polymorphic handling should call `useSpecsByMode()` instead.
+ */
+export const useCipherSpecsByMode = (): (() => CipherSpecsByMode) => {
+  return () => {
+    const s = specs();
+    if (s.kind !== "cipher") {
+      throw new Error(
+        "useCipherSpecsByMode: active spec is a hash; use useSpecsByMode for polymorphic access",
+      );
+    }
+    return s;
+  };
+};
+
 // Internal: replace only the active mode's slot. Used by edit helpers
 // (params, palette inserts, deletes) so changes to one mode never leak
-// into the other.
+// into the other. For hash specs the single slot is the only target;
+// `mode()` is ignored.
 const updateActive = (updater: (s: CipherSpec) => CipherSpec): void => {
   const current = specs();
+  if (current.kind === "hash") {
+    const updated = updater(current.single);
+    if (updated === current.single) return;
+    setSpecs({ kind: "hash", single: updated });
+    return;
+  }
   const m = mode();
-  const updated = updater(current[m]);
-  if (updated === current[m]) return; // reference-equal → no-op write
-  setSpecs({ ...current, [m]: updated } as SpecsByMode);
+  const prev = current[m];
+  const updated = updater(prev);
+  if (updated === prev) return; // reference-equal → no-op write
+  setSpecs(
+    m === "encrypt"
+      ? { kind: "cipher", encrypt: updated, decrypt: current.decrypt }
+      : { kind: "cipher", encrypt: current.encrypt, decrypt: updated },
+  );
 };
 
 // Internal: replace both slots in one signal write. Used by selector
 // changes that rebuild canonical (cipher / cipherMode / padding) and by
-// duplicate-round's auto-mirror.
+// duplicate-round's auto-mirror. For hash specs the updater is invoked
+// once on `single` with `"encrypt"` as the direction argument — the only
+// call sites that reach here for hashes are `setPadding` (no-op for
+// hashes; padding overlay doesn't apply) and `duplicateRoundInSpec` (no-
+// op for hashes; defensive throw upstream).
 const updateBoth = (updater: (s: CipherSpec, m: Mode) => CipherSpec): void => {
   const current = specs();
+  if (current.kind === "hash") {
+    const updated = updater(current.single, "encrypt");
+    if (updated === current.single) return;
+    setSpecs({ kind: "hash", single: updated });
+    return;
+  }
   setSpecs({
+    kind: "cipher",
     encrypt: updater(current.encrypt, "encrypt"),
     decrypt: updater(current.decrypt, "decrypt"),
   });
@@ -295,13 +378,25 @@ export const syncSboxInverseToCounterpart = (
   invertedSbox: readonly number[],
 ): void => {
   const current = specs();
+  // Cross-mode mirror is only meaningful for ciphers with separate
+  // encrypt/decrypt directions; hash specs have no counterpart slot.
+  // UI gestures triggering this are gated upstream by the cross-mode
+  // mirror registry (cipher-only), so reaching here for a hash kind
+  // surfaces a programming error rather than silently mutating.
+  if (current.kind !== "cipher") {
+    throw new Error("syncSboxInverseToCounterpart not supported for hash spec");
+  }
   const counterpartMode: Mode = mode() === "encrypt" ? "decrypt" : "encrypt";
   const updated = updateAllStepsByType(current[counterpartMode], stepType, (params) => ({
     ...(params as Record<string, Json>),
     sbox: [...invertedSbox],
   }));
   if (updated === current[counterpartMode]) return; // reference-equal → no-op
-  setSpecs({ ...current, [counterpartMode]: updated } as SpecsByMode);
+  setSpecs(
+    counterpartMode === "encrypt"
+      ? { kind: "cipher", encrypt: updated, decrypt: current.decrypt }
+      : { kind: "cipher", encrypt: current.encrypt, decrypt: updated },
+  );
 };
 
 /**
@@ -348,6 +443,9 @@ export const syncSboxInverseToCounterpartByIndex = (
   invertedSbox: readonly number[],
 ): void => {
   const current = specs();
+  if (current.kind !== "cipher") {
+    throw new Error("syncSboxInverseToCounterpartByIndex not supported for hash spec");
+  }
   const counterpartMode: Mode = mode() === "encrypt" ? "decrypt" : "encrypt";
   const updated = updateAllStepsByType(current[counterpartMode], stepType, (params) => {
     const p = params as { sboxIndex?: number };
@@ -361,7 +459,11 @@ export const syncSboxInverseToCounterpartByIndex = (
     };
   });
   if (updated === current[counterpartMode]) return; // reference-equal → no-op
-  setSpecs({ ...current, [counterpartMode]: updated } as SpecsByMode);
+  setSpecs(
+    counterpartMode === "encrypt"
+      ? { kind: "cipher", encrypt: updated, decrypt: current.decrypt }
+      : { kind: "cipher", encrypt: current.encrypt, decrypt: updated },
+  );
 };
 
 /**
@@ -393,13 +495,20 @@ export const syncSboxInverseToCounterpartByIndex = (
  */
 export const syncSboxCopyToCounterpart = (stepType: string, sboxValue: readonly number[]): void => {
   const current = specs();
+  if (current.kind !== "cipher") {
+    throw new Error("syncSboxCopyToCounterpart not supported for hash spec");
+  }
   const counterpartMode: Mode = mode() === "encrypt" ? "decrypt" : "encrypt";
   const updated = updateAllStepsByType(current[counterpartMode], stepType, (params) => ({
     ...(params as Record<string, Json>),
     sbox: [...sboxValue],
   }));
   if (updated === current[counterpartMode]) return; // reference-equal → no-op
-  setSpecs({ ...current, [counterpartMode]: updated } as SpecsByMode);
+  setSpecs(
+    counterpartMode === "encrypt"
+      ? { kind: "cipher", encrypt: updated, decrypt: current.decrypt }
+      : { kind: "cipher", encrypt: current.encrypt, decrypt: updated },
+  );
 };
 
 /**
@@ -432,13 +541,20 @@ export const syncMixColumnsInverseToCounterpart = (
   invertedMatrix: readonly (readonly number[])[],
 ): void => {
   const current = specs();
+  if (current.kind !== "cipher") {
+    throw new Error("syncMixColumnsInverseToCounterpart not supported for hash spec");
+  }
   const counterpartMode: Mode = mode() === "encrypt" ? "decrypt" : "encrypt";
   const updated = updateAllStepsByType(current[counterpartMode], stepType, (params) => ({
     ...(params as Record<string, Json>),
     matrix: invertedMatrix.map((row) => [...row]),
   }));
   if (updated === current[counterpartMode]) return; // reference-equal → no-op
-  setSpecs({ ...current, [counterpartMode]: updated } as SpecsByMode);
+  setSpecs(
+    counterpartMode === "encrypt"
+      ? { kind: "cipher", encrypt: updated, decrypt: current.decrypt }
+      : { kind: "cipher", encrypt: current.encrypt, decrypt: updated },
+  );
 };
 
 /**
@@ -612,6 +728,13 @@ export const insertStepIntoSpec = (
 export const duplicateRoundInSpec = (sourceId: string): void => {
   const currentMode = mode();
   const current = specs();
+  // Duplicate-round depends on the encrypt ↔ decrypt mirror by direction;
+  // hash specs have no mirror counterpart. UI surfaces the duplicate
+  // button only on cipher-shape round groups, so reaching here for a
+  // hash kind surfaces a programming error.
+  if (current.kind !== "cipher") {
+    throw new Error("duplicateRoundInSpec not supported for hash spec");
+  }
   const activeDirection: "forward" | "reverse" = currentMode === "encrypt" ? "forward" : "reverse";
 
   // Active-side: throws propagate to the caller (UI surfaces in the
@@ -656,10 +779,11 @@ export const duplicateRoundInSpec = (sourceId: string): void => {
 
   // Single signal update: both slots land atomically. Subscribers see
   // one consistent (encrypt, decrypt) pair.
-  setSpecs({
-    [currentMode]: newActive,
-    [counterpartMode]: newCounterpart,
-  } as SpecsByMode);
+  setSpecs(
+    currentMode === "encrypt"
+      ? { kind: "cipher", encrypt: newActive, decrypt: newCounterpart }
+      : { kind: "cipher", encrypt: newCounterpart, decrypt: newActive },
+  );
 
   // Layout migration. Both specs have their own layout entry keyed by
   // spec.id; each gets the matching rename map applied.
@@ -831,10 +955,15 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
     otherMode,
     usePaddingScheme()(),
   );
-  setSpecs({
-    [docMode]: doc.spec,
-    [otherMode]: otherCanonical,
-  } as SpecsByMode);
+  // 2.10a posture: every doc.spec authored to date is cipher-shape, so the
+  // hash branch is unreachable here — the construction below produces a
+  // cipher-kind SpecsByMode. 2.10b widens this when hash documents become
+  // a thing (and the document schema grows an algorithm-family discriminant).
+  setSpecs(
+    docMode === "encrypt"
+      ? { kind: "cipher", encrypt: doc.spec, decrypt: otherCanonical }
+      : { kind: "cipher", encrypt: otherCanonical, decrypt: doc.spec },
+  );
 };
 
 /**
@@ -844,6 +973,12 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
  * "reset the thing I'm looking at."
  */
 export const resetSpec = (): void => {
+  const current = specs();
+  if (current.kind === "hash") {
+    // 2.10a posture: no hash canonical resolution yet — 2.10b wires
+    // `hashDefaults`. Until then there's no target to reset to.
+    return;
+  }
   const canonical = applyPaddingScheme(
     resolveDefault(useCipher()(), useCipherMode()(), mode()),
     mode(),
@@ -906,6 +1041,13 @@ const deepEqualJson = (a: unknown, b: unknown): boolean => {
  * caching when it's read multiple times per render.
  */
 export const isCustomSpec = (): boolean => {
+  const current = specs();
+  if (current.kind === "hash") {
+    // 2.10a posture: hashDefaults lands in 2.10b — until then there's no
+    // canonical to compare against, so "custom" is always false. The UI's
+    // "Custom (was X)" indicator falls back to spec.name display.
+    return false;
+  }
   const canonical = applyPaddingScheme(
     resolveDefault(useCipher()(), useCipherMode()(), mode()),
     mode(),
@@ -919,6 +1061,7 @@ export const __resetSpecForTests = (): void => {
   setModeSignal("encrypt");
   const scheme = usePaddingScheme()();
   setSpecs({
+    kind: "cipher",
     encrypt: applyPaddingScheme(aes128Spec, "encrypt", scheme),
     decrypt: applyPaddingScheme(aes128DecryptSpec, "decrypt", scheme),
   });

@@ -2315,35 +2315,155 @@ provenance highlighting works in linear view.
 
 ### Slice 2.10 — Graph view treatment + cipher selector entry
 
-**Goal:** SHA-256 selectable from the live UI; graph view renders
-SHA-256 with the for-each-subgraph node visualized cleanly.
+**Sub-sliced at 2.10 start (2026-05-25).** User picks Q-N7 = (b)
+**new top-level "Hash" category** (over (a) cipher-sibling) + Q-N7-follow-
+up = **hide cipher-mode dropdown** when SHA-256 is active. Two follow-on
+structural picks raised by advisor consult and resolved before authoring
+began:
+
+- **Q-2.10-types = Split `Algorithm = Cipher | Hash`** (over extending
+  the `Cipher` union with `"sha-256"`). Honest at the type-system axis;
+  many touch points but each is mechanical; the closed union forces
+  `isHash` + structurally-derived `isCipher` to grow correctly when
+  future hash variants land.
+- **Q-2.10-store = Discriminated `SpecsByMode`** (over stubbing
+  `decrypt = encrypt` for hashes). End-to-end honesty with Q-2.10-types;
+  the type system makes "hash has a decrypt" structurally unreachable.
+  Pays for itself when RSA / asymmetric algorithms arrive.
+
+Sub-slice split into 2.10a / 2.10b / 2.10c (advisor's pick after the two
+structural decisions doubled the slice surface):
+
+- **Slice 2.10a** (this section) — Type scaffolding. `Hash`,
+  `Algorithm`, `isCipher`, `isHash` in `stores/cipher.ts`; `SpecsByMode`
+  widened to discriminated union in `stores/spec.ts`; every consumer of
+  `specs()` pattern-matches on `.kind`. `buildCanonicalPair` always
+  returns `kind: 'cipher'` — hash branch is dead code, exercised only by
+  tests via the new `useCipherSpecsByMode()` accessor. Zero behavior
+  change for AES / Speck / Serpent / DES.
+- **Slice 2.10b** — Store wiring. `hashDefaults` table;
+  `buildCanonicalPair` gains hash branch; `setSpecFromDocument` handles
+  hash docs; `DEFAULT_KEY_BYTES_BY_HASH` (key=0 bytes);
+  `DEFAULT_PT_BYTES_BY_HASH` (pt="abc"). Save schema decision: widen
+  `doc.cipher` to `algorithm` (schema bump) vs sibling `hash?: Hash`
+  field. SHA-256 reachable through store API; no UI yet.
+- **Slice 2.10c** — UI surface + manual browser smoke. Category toggle
+  (Cipher | Hash) above cipher dropdown; hide cipher-mode + key field +
+  padding section when category=hash; default plaintext flips to "abc";
+  plaintext input length validator hash branch. Pre-emptive: add
+  `defaultCollapsed: true` to the `for-each-subgraph-with-history`
+  msg-schedule node in `sha-256.ts` (avoid the 672-chip wall). Manual
+  browser smoke: SHA-256 launches → FIPS §A.1 KAT bytes visible →
+  graph view renders cleanly.
 
 > **PRE-REQUISITE: default-collapse for the 64 round groups MUST land
 > first.** See Slice 2.6d's "Deferred to follow-up work" section. If
-> 2.10 ships before default-collapse, the user's first interaction with
-> SHA-256 in the live cipher-selector shows a 1792+ chip wall on first
-> render — exactly the readability problem 2.6c plan F.1 warned about.
-> Slice 2.7's spec-level opt-in plumbing is a sibling prerequisite (no
-> opt-in → no live UI launch), but doing 2.7 → 2.10 without
-> default-collapse skips the readability fix. Order: default-collapse →
-> Slice 2.7 → Slice 2.10. (default-collapse is orthogonal to 2.7 and
-> can land either before or in parallel with 2.7.)
+> 2.10c ships before default-collapse on the msg-schedule FES-with-
+> history container too, the user's first interaction shows a 672-chip
+> schedule wall on top of the otherwise-collapsed compression rounds.
+> The 64 compression rounds are already default-collapsed at
+> `sha-256.ts:301` (Slice 2.6d follow-up); the FES schedule container
+> lands its `defaultCollapsed: true` flag in 2.10c.
+
+### Slice 2.10a — Type scaffolding (Cipher | Hash, discriminated SpecsByMode) — SHIPPED 2026-05-25
+
+**Status: GREEN 2026-05-25.** Type system widened in `stores/cipher.ts`
++ `stores/spec.ts`; every consumer of `specs()` updated to pattern-match
+on `.kind`. Five test files (`duplicate-round-store`,
+`sync-serpent-sbox-inverse`, `sync-sbox-inverse`, `sync-mix-columns-
+store`, `sync-sbox-copy`) updated to use the new `useCipherSpecsByMode`
+narrowing accessor. Suite at **2311/2311** (unchanged — slice is pure
+scaffolding); bundle **630.64 KB** gzipped (+1.46 KB from Slice 2.7's
+629.18 KB for the union narrowing branches).
+
+**Touched files (8 src + 5 test + 2 doc):**
+
+- `src/ui/stores/cipher.ts` — added `Hash = "sha-256"`, `Algorithm =
+  Cipher | Hash`, `isHash(a)`, `isCipher(a) = !isHash(a)` (structurally
+  derived so future hash variants only edit `isHash`). Cipher signal
+  stays typed `Cipher`; algorithm-level UI selectors land in 2.10c.
+- `src/ui/stores/spec.ts` — `SpecsByMode` widened from
+  `{encrypt, decrypt}` to a discriminated union (`CipherSpecsByMode |
+  HashSpecsByMode`). Every consumer branched:
+  - `buildCanonicalPair` always constructs `kind: "cipher"`.
+  - `activeSpec` reads `s.kind === "cipher" ? s[mode()] : s.single`.
+  - `updateActive` / `updateBoth` branch on kind; hash branch ignores
+    `mode()` and writes the single slot.
+  - 6 `setSpecs(...)` call sites (3 in mirror setters, 1 in
+    `duplicateRoundInSpec`, 1 in `setSpecFromDocument`, 1 in
+    `__resetSpecForTests`) explicit-constructed instead of spreading.
+  - 4 cross-mode mirror setters
+    (`syncSboxInverseToCounterpart`, `syncSboxInverseToCounterpartByIndex`,
+    `syncSboxCopyToCounterpart`, `syncMixColumnsInverseToCounterpart`)
+    + `duplicateRoundInSpec` throw on hash kind with a clear "not
+    supported for hash spec" message — UI gestures triggering these
+    are gated upstream by the cipher-only registry.
+  - `isCustomSpec` / `resetSpec` return early / no-op on hash kind
+    until `hashDefaults` lands in 2.10b.
+  - New `useCipherSpecsByMode(): () => CipherSpecsByMode` accessor —
+    throws if kind isn't cipher; used by the 5 cipher-only mirror /
+    duplicate-round test files.
+- 5 test files: swap `useSpecsByMode` import to `useCipherSpecsByMode`;
+  no body changes (the narrowed accessor's return type carries
+  `.encrypt` / `.decrypt` directly).
+- `docs/plans/universal-port-phase-2-slices.md` — this status section
+  + sub-slice prose under Slice 2.10's header.
+
+**Pass/fail gate — MET:**
+- `npm run check` GREEN: biome ci + tsc + **2311/2311** vitest +
+  vite build (~37s warm).
+- Bundle 630.64 KB gzipped (+1.46 KB; Open #N8 informational).
+- Phase 1 frame-parity matrix (Slice 1.11) untouched.
+- SHA-256 KAT (`tests/sha-256.test.ts`) untouched.
+- AES / Speck / Serpent / DES all run unchanged through the discriminated
+  union (cipher branch is the only code path live in 2.10a).
+
+**Open spec decisions remaining for 2.10b/c:**
+- Save schema discriminant shape: widen `doc.cipher` to
+  `algorithm: Algorithm` (schemaVersion bump) vs add a sibling
+  `hash?: Hash` field. Pre-2.10b decision.
+- Plaintext input length validator: hash branch shape ("any length ≤55
+  bytes for single-block" vs general bytes). Pre-2.10c decision.
+- Snapshot `mode` field for hash runs: stamp `"encrypt"` and ignore vs
+  widen snapshot type. Pre-2.10b decision.
+
+**Next stop:** Slice 2.10b — store wiring (consult advisor before
+authoring per [[feedback_iterative_slice_review]]).
+
+### Slice 2.10b — Store wiring (planned)
 
 **Scope (sketched):**
 
-- User pick on **Open #N7** (cipher selector category — sibling vs.
-  hash category) at slice start.
-- Cipher selector updated per Q-pick.
-- `SUPPORTED_CIPHER_MODES_BY_CIPHER` in `stores/cipher-mode.ts`
-  updated.
-- `defaults` in `stores/spec.ts` updated.
-- Graph view's for-each-subgraph node rendering: probably mirrors
-  iterate's existing visual (collapsible container). Feedback contained
-  inside per parent plan's Q3 pass criteria.
+- `hashDefaults: Record<Hash, CipherSpec>` table.
+- `buildCanonicalPair` gains hash branch returning `{kind: "hash",
+  single: sha256Spec}`.
+- `setSpecFromDocument` handles hash docs at spec.ts (the `doc.cipher`
+  fallback path).
+- `DEFAULT_KEY_BYTES_BY_HASH` / `DEFAULT_PT_BYTES_BY_HASH` records
+  (key=0 bytes; pt="abc"=`[0x61, 0x62, 0x63]`).
+- `isCustomSpec` + `resetSpec` hash branches go live.
+- Save schema decision per the open list above.
 
-**Pass/fail gate:** SHA-256 launches from UI; graph view renders
-without warnings (no chip wall on first render — default-collapse
-landed); smoke test in browser.
+**Pass/fail gate:** spec store accepts `'sha-256'` as algorithm;
+SpecsByMode resolves to hash-shaped; SHA-256 reachable through store
+API (not UI yet).
+
+### Slice 2.10c — UI surface + manual browser smoke (planned)
+
+**Scope (sketched):**
+
+- Category toggle (Cipher | Hash) above cipher dropdown in `App.tsx`.
+- Conditional render: hide cipher-mode dropdown, key field, padding
+  section when category=hash.
+- Default plaintext flips to "abc" when SHA-256 selected.
+- Plaintext input length validator hash branch.
+- Pre-emptive: add `defaultCollapsed: true` to the
+  `for-each-subgraph-with-history` msg-schedule node in `sha-256.ts`
+  (avoid the 672-chip wall on first render).
+- Manual browser smoke: SHA-256 launches → FIPS §A.1 KAT bytes visible
+  in trace → graph view renders cleanly (no chip wall).
+
+**Pass/fail gate:** end-to-end smoke green.
 
 ### Slice 2.11 — KAT parity matrix (Phase 2 close)
 

@@ -41,8 +41,8 @@ import {
   isCustomSpec,
   setCipher,
   setMode,
+  useCipherSpecsByMode,
   useSpec,
-  useSpecsByMode,
 } from "@/ui/stores/spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -114,7 +114,7 @@ describe("duplicateRoundInSpec — auto-mirror to counterpart", () => {
   afterEach(resetAll);
 
   it("forward duplicate on encrypt mirrors to decrypt's inv-round.N", () => {
-    const all = useSpecsByMode();
+    const all = useCipherSpecsByMode();
     expect(findGroupIds(all().decrypt).filter((id) => id.startsWith("inv-round."))).toHaveLength(
       10,
     );
@@ -136,7 +136,7 @@ describe("duplicateRoundInSpec — auto-mirror to counterpart", () => {
 
   it("reverse duplicate on decrypt mirrors to encrypt's round.N", () => {
     setMode("decrypt");
-    const all = useSpecsByMode();
+    const all = useCipherSpecsByMode();
     duplicateRoundInSpec("inv-round.4");
 
     const after = all();
@@ -184,7 +184,7 @@ describe("duplicateRoundInSpec — stacking duplicates", () => {
     duplicateRoundInSpec("round.2"); // encrypt: 11 rounds; decrypt: 11 inv-rounds
     duplicateRoundInSpec("round.5"); // both sides should grow to 12
 
-    const all = useSpecsByMode();
+    const all = useCipherSpecsByMode();
     expect(findGroupIds(all().encrypt).filter((id) => id.startsWith("round."))).toHaveLength(12);
     expect(findGroupIds(all().decrypt).filter((id) => id.startsWith("inv-round."))).toHaveLength(
       12,
@@ -200,7 +200,7 @@ describe("duplicateRoundInSpec — edits are mode-local, don't invalidate counte
 
   it("editing encrypt's round.4 params doesn't reset decrypt's mirrored duplicate", () => {
     duplicateRoundInSpec("round.2");
-    const all = useSpecsByMode();
+    const all = useCipherSpecsByMode();
     expect(findGroupIds(all().decrypt).filter((id) => id.startsWith("inv-round."))).toHaveLength(
       11,
     );
@@ -227,7 +227,7 @@ describe("duplicateRoundInSpec — cipher swap discards the duplicate (clean bre
 
   it("setCipher rebuilds BOTH slots from canonical", () => {
     duplicateRoundInSpec("round.2");
-    const all = useSpecsByMode();
+    const all = useCipherSpecsByMode();
     expect(findGroupIds(all().encrypt).filter((id) => id.startsWith("round."))).toHaveLength(11);
 
     // AES-256 has 14 rounds canonical. A cipher swap should fully

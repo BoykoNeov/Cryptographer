@@ -32,7 +32,7 @@ import {
   __resetSpecForTests,
   setMode,
   syncSboxCopyToCounterpart,
-  useSpecsByMode,
+  useCipherSpecsByMode,
 } from "@/ui/stores/spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -82,7 +82,10 @@ describe("syncSboxCopyToCounterpart — cross-slot identity mirror", () => {
 
     syncSboxCopyToCounterpart("aes.key-expansion@1", edited);
 
-    const decryptTables = collectSboxParams(useSpecsByMode()().decrypt, "aes.key-expansion@1");
+    const decryptTables = collectSboxParams(
+      useCipherSpecsByMode()().decrypt,
+      "aes.key-expansion@1",
+    );
     expect(decryptTables.length).toBeGreaterThan(0);
     for (const table of decryptTables) {
       // The promise is **identity** — no inversion. The decrypt slot's
@@ -104,7 +107,10 @@ describe("syncSboxCopyToCounterpart — cross-slot identity mirror", () => {
 
     syncSboxCopyToCounterpart("aes.key-expansion@1", edited);
 
-    const encryptTables = collectSboxParams(useSpecsByMode()().encrypt, "aes.key-expansion@1");
+    const encryptTables = collectSboxParams(
+      useCipherSpecsByMode()().encrypt,
+      "aes.key-expansion@1",
+    );
     expect(encryptTables.length).toBeGreaterThan(0);
     for (const table of encryptTables) {
       expect(table).toEqual(edited);
@@ -112,9 +118,12 @@ describe("syncSboxCopyToCounterpart — cross-slot identity mirror", () => {
   });
 
   it("leaves the active slot untouched", () => {
-    const beforeEncrypt = collectSboxParams(useSpecsByMode()().encrypt, "aes.key-expansion@1");
+    const beforeEncrypt = collectSboxParams(
+      useCipherSpecsByMode()().encrypt,
+      "aes.key-expansion@1",
+    );
     syncSboxCopyToCounterpart("aes.key-expansion@1", AES_SBOX);
-    const afterEncrypt = collectSboxParams(useSpecsByMode()().encrypt, "aes.key-expansion@1");
+    const afterEncrypt = collectSboxParams(useCipherSpecsByMode()().encrypt, "aes.key-expansion@1");
     expect(afterEncrypt).toEqual(beforeEncrypt);
   });
 
@@ -123,9 +132,12 @@ describe("syncSboxCopyToCounterpart — cross-slot identity mirror", () => {
     // (FIPS-197 §5.2: key expansion always uses the FORWARD S-box,
     // even on the inverse cipher). So a canonical-input Copy must leave
     // the canonical decrypt slot byte-identical.
-    const beforeDecrypt = collectSboxParams(useSpecsByMode()().decrypt, "aes.key-expansion@1");
+    const beforeDecrypt = collectSboxParams(
+      useCipherSpecsByMode()().decrypt,
+      "aes.key-expansion@1",
+    );
     syncSboxCopyToCounterpart("aes.key-expansion@1", AES_SBOX);
-    const afterDecrypt = collectSboxParams(useSpecsByMode()().decrypt, "aes.key-expansion@1");
+    const afterDecrypt = collectSboxParams(useCipherSpecsByMode()().decrypt, "aes.key-expansion@1");
     expect(afterDecrypt).toEqual(beforeDecrypt);
     // And the canonical table is what we expect: AES_SBOX verbatim.
     for (const table of afterDecrypt) {

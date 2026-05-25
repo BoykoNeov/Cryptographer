@@ -28,7 +28,7 @@ import {
   __resetSpecForTests,
   setMode,
   syncSboxInverseToCounterpart,
-  useSpecsByMode,
+  useCipherSpecsByMode,
 } from "@/ui/stores/spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -86,7 +86,7 @@ describe("syncSboxInverseToCounterpart — cross-slot value mirror", () => {
 
     syncSboxInverseToCounterpart("generic.byte-substitution@1", expectedInverse);
 
-    const decryptSpec = useSpecsByMode()().decrypt;
+    const decryptSpec = useCipherSpecsByMode()().decrypt;
     const decryptTables = collectSboxParams(decryptSpec, "generic.byte-substitution@1");
 
     expect(decryptTables.length).toBeGreaterThan(0); // AES has 10+ SubBytes steps
@@ -113,7 +113,7 @@ describe("syncSboxInverseToCounterpart — cross-slot value mirror", () => {
 
     syncSboxInverseToCounterpart("generic.byte-substitution@1", expectedWrite);
 
-    const encryptSpec = useSpecsByMode()().encrypt;
+    const encryptSpec = useCipherSpecsByMode()().encrypt;
     const encryptTables = collectSboxParams(encryptSpec, "generic.byte-substitution@1");
 
     expect(encryptTables.length).toBeGreaterThan(0);
@@ -125,13 +125,13 @@ describe("syncSboxInverseToCounterpart — cross-slot value mirror", () => {
   it("leaves the active slot untouched", () => {
     // Capture the active slot's tables before, mutate, compare after.
     const beforeEncrypt = collectSboxParams(
-      useSpecsByMode()().encrypt,
+      useCipherSpecsByMode()().encrypt,
       "generic.byte-substitution@1",
     );
     const inverse = invertSbox(AES_SBOX);
     syncSboxInverseToCounterpart("generic.byte-substitution@1", inverse);
     const afterEncrypt = collectSboxParams(
-      useSpecsByMode()().encrypt,
+      useCipherSpecsByMode()().encrypt,
       "generic.byte-substitution@1",
     );
     expect(afterEncrypt).toEqual(beforeEncrypt);
@@ -146,7 +146,7 @@ describe("syncSboxInverseToCounterpart — cross-slot value mirror", () => {
     syncSboxInverseToCounterpart("generic.byte-substitution@1", inverse);
 
     const decryptTables = collectSboxParams(
-      useSpecsByMode()().decrypt,
+      useCipherSpecsByMode()().decrypt,
       "generic.byte-substitution@1",
     );
     for (const table of decryptTables) {

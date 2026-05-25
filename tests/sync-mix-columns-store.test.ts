@@ -34,7 +34,7 @@ import {
   __resetSpecForTests,
   setMode,
   syncMixColumnsInverseToCounterpart,
-  useSpecsByMode,
+  useCipherSpecsByMode,
 } from "@/ui/stores/spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -82,7 +82,10 @@ describe("syncMixColumnsInverseToCounterpart — cross-slot inverse-matrix mirro
 
     syncMixColumnsInverseToCounterpart("generic.mix-columns@1", customMatrix);
 
-    const decryptMatrices = collectMatrices(useSpecsByMode()().decrypt, "generic.mix-columns@1");
+    const decryptMatrices = collectMatrices(
+      useCipherSpecsByMode()().decrypt,
+      "generic.mix-columns@1",
+    );
     expect(decryptMatrices.length).toBeGreaterThan(0);
     for (const m of decryptMatrices) {
       expect(m).toEqual(customMatrix);
@@ -101,7 +104,10 @@ describe("syncMixColumnsInverseToCounterpart — cross-slot inverse-matrix mirro
 
     syncMixColumnsInverseToCounterpart("generic.mix-columns@1", customMatrix);
 
-    const encryptMatrices = collectMatrices(useSpecsByMode()().encrypt, "generic.mix-columns@1");
+    const encryptMatrices = collectMatrices(
+      useCipherSpecsByMode()().encrypt,
+      "generic.mix-columns@1",
+    );
     expect(encryptMatrices.length).toBeGreaterThan(0);
     for (const m of encryptMatrices) {
       expect(m).toEqual(customMatrix);
@@ -109,9 +115,12 @@ describe("syncMixColumnsInverseToCounterpart — cross-slot inverse-matrix mirro
   });
 
   it("leaves the active slot untouched", () => {
-    const beforeEncrypt = collectMatrices(useSpecsByMode()().encrypt, "generic.mix-columns@1");
+    const beforeEncrypt = collectMatrices(
+      useCipherSpecsByMode()().encrypt,
+      "generic.mix-columns@1",
+    );
     syncMixColumnsInverseToCounterpart("generic.mix-columns@1", AES_INV_MIX_MATRIX);
-    const afterEncrypt = collectMatrices(useSpecsByMode()().encrypt, "generic.mix-columns@1");
+    const afterEncrypt = collectMatrices(useCipherSpecsByMode()().encrypt, "generic.mix-columns@1");
     expect(afterEncrypt).toEqual(beforeEncrypt);
   });
 
@@ -127,7 +136,10 @@ describe("syncMixColumnsInverseToCounterpart — cross-slot inverse-matrix mirro
     const inverse = gfMatInverse4x4(AES_MIX_MATRIX);
     syncMixColumnsInverseToCounterpart("generic.mix-columns@1", inverse);
 
-    const decryptMatrices = collectMatrices(useSpecsByMode()().decrypt, "generic.mix-columns@1");
+    const decryptMatrices = collectMatrices(
+      useCipherSpecsByMode()().decrypt,
+      "generic.mix-columns@1",
+    );
     expect(decryptMatrices.length).toBeGreaterThan(0);
     for (const m of decryptMatrices) {
       expect(m).toEqual(AES_INV_MIX_MATRIX.map((row) => [...row]));
@@ -146,7 +158,10 @@ describe("syncMixColumnsInverseToCounterpart — cross-slot inverse-matrix mirro
     // Mutate the source AFTER the call.
     if (source[0]) source[0][0] = 0xff;
 
-    const decryptMatrices = collectMatrices(useSpecsByMode()().decrypt, "generic.mix-columns@1");
+    const decryptMatrices = collectMatrices(
+      useCipherSpecsByMode()().decrypt,
+      "generic.mix-columns@1",
+    );
     for (const m of decryptMatrices) {
       // The spec must still have the canonical value, NOT the post-mutation 0xff.
       expect(m[0]?.[0]).toBe(AES_INV_MIX_MATRIX[0]?.[0]);

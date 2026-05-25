@@ -44,7 +44,7 @@ import {
   setCipher,
   setMode,
   syncSboxInverseToCounterpartByIndex,
-  useSpecsByMode,
+  useCipherSpecsByMode,
 } from "@/ui/stores/spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -112,12 +112,15 @@ describe("syncSboxInverseToCounterpartByIndex — Serpent per-index value mirror
     // Snapshot the decrypt-side state BEFORE the mutator runs so we can
     // diff per-index. Each index 0..7 appears in ~4 leaves (32 rounds /
     // 8 S-boxes = 4 rounds per S-box).
-    const before = collectSboxLeavesByIndex(useSpecsByMode()().decrypt, "serpent.sub-bytes@1");
+    const before = collectSboxLeavesByIndex(
+      useCipherSpecsByMode()().decrypt,
+      "serpent.sub-bytes@1",
+    );
     expect(before.length).toBeGreaterThan(0);
 
     syncSboxInverseToCounterpartByIndex("serpent.sub-bytes@1", 3, expectedInverse);
 
-    const after = collectSboxLeavesByIndex(useSpecsByMode()().decrypt, "serpent.sub-bytes@1");
+    const after = collectSboxLeavesByIndex(useCipherSpecsByMode()().decrypt, "serpent.sub-bytes@1");
     expect(after.length).toBe(before.length);
 
     // The matching-index leaves received `expectedInverse`...
@@ -156,7 +159,7 @@ describe("syncSboxInverseToCounterpartByIndex — Serpent per-index value mirror
     syncSboxInverseToCounterpartByIndex("serpent.sub-bytes@1", 5, expectedWrite);
 
     const encryptLeaves = collectSboxLeavesByIndex(
-      useSpecsByMode()().encrypt,
+      useCipherSpecsByMode()().encrypt,
       "serpent.sub-bytes@1",
     );
     const matching = encryptLeaves.filter((leaf) => leaf.sboxIndex === 5);
@@ -169,14 +172,14 @@ describe("syncSboxInverseToCounterpartByIndex — Serpent per-index value mirror
   it("leaves the active slot untouched", () => {
     const inverse = invertSbox(SERPENT_SBOXES[2] ?? []);
     const beforeEncrypt = collectSboxLeavesByIndex(
-      useSpecsByMode()().encrypt,
+      useCipherSpecsByMode()().encrypt,
       "serpent.sub-bytes@1",
     );
 
     syncSboxInverseToCounterpartByIndex("serpent.sub-bytes@1", 2, inverse);
 
     const afterEncrypt = collectSboxLeavesByIndex(
-      useSpecsByMode()().encrypt,
+      useCipherSpecsByMode()().encrypt,
       "serpent.sub-bytes@1",
     );
     expect(afterEncrypt).toEqual(beforeEncrypt);
@@ -195,7 +198,7 @@ describe("syncSboxInverseToCounterpartByIndex — Serpent per-index value mirror
     }
 
     const decryptLeaves = collectSboxLeavesByIndex(
-      useSpecsByMode()().decrypt,
+      useCipherSpecsByMode()().decrypt,
       "serpent.sub-bytes@1",
     );
     for (const leaf of decryptLeaves) {

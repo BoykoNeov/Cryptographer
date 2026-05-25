@@ -32,6 +32,30 @@ export type SerpentCipher = "serpent-128" | "serpent-192" | "serpent-256";
 export type DesCipher = "des";
 export type Cipher = AesCipher | SpeckCipher | SerpentCipher | DesCipher;
 
+/**
+ * Hash family — non-cipher cryptographic primitives that consume a message
+ * and emit a fixed-length digest. SHA-256 is the first variant (Slice 2.6 of
+ * the universal-port dataflow plan); SHA-3 / SHA-512 / MAC / KDF growth
+ * extends this union when those variants land.
+ *
+ * Slice 2.10a (2026-05-25) introduced this type alongside `Algorithm` so the
+ * cipher-selector UI can carry a top-level Cipher | Hash category split per
+ * Open #N7 user pick. The hash variant isn't reachable through the active
+ * `cipher` signal in 2.10a; 2.10b/c wire the store + UI surfaces.
+ */
+export type Hash = "sha-256";
+
+/**
+ * Public umbrella type — every cryptographic primitive the app supports.
+ * Use this when the surface needs to accept any algorithm; use `Cipher` or
+ * `Hash` directly when the caller's logic is specific to one family.
+ *
+ * Predicates `isCipher` / `isHash` below narrow `Algorithm` to either branch.
+ * Implementing functions in terms of `Algorithm` and branching on category
+ * is cheaper than maintaining parallel cipher-only and hash-only overloads.
+ */
+export type Algorithm = Cipher | Hash;
+
 const ALL_CIPHERS: readonly Cipher[] = [
   "aes-128",
   "aes-192",
@@ -51,6 +75,23 @@ const ALL_CIPHERS: readonly Cipher[] = [
  * for the exhaustiveness check in `paddingLimits`'s non-AES switch.
  */
 export const isAesCipher = (c: Cipher): c is AesCipher => c.startsWith("aes-");
+
+/**
+ * True when an algorithm is a hash (non-cipher cryptographic primitive).
+ * Defined first so `isCipher` below can express itself as the negation —
+ * the union shape guarantees `!isHash(a) ⟹ isCipher(a)`. When SHA-3 or
+ * other hash variants land, only this predicate widens; `isCipher` stays
+ * untouched by virtue of the structural definition.
+ */
+export const isHash = (a: Algorithm): a is Hash => a === "sha-256";
+
+/**
+ * True when an algorithm is a cipher (the encrypt/decrypt-shaped primitives).
+ * Expressed as `!isHash(a)` so adding a new hash family member (SHA-3 etc.)
+ * needs only one edit, not two — the closed Algorithm union forces this
+ * predicate correct by construction.
+ */
+export const isCipher = (a: Algorithm): a is Cipher => !isHash(a);
 
 // Default to AES-128 so first-time / fresh-load users hit the canonical
 // FIPS-197 Appendix C.1 vector. Session-only — see file header.
