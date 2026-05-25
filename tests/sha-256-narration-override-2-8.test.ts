@@ -32,7 +32,11 @@
  * 64×28.
  */
 
+import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { buildSha256Spec } from "@/ciphers/sha-256";
+import { runSpec } from "@/core/runtime";
+import { findStep } from "@/core/spec-mutations";
+import { canonicalStepId } from "@/core/step-id";
 import type { StepDocumentation, StepNode } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
@@ -141,6 +145,50 @@ describe("SHA-256 narrationOverride coverage (Slice 2.8)", () => {
       if (leaf.narrationOverride !== undefined) distinctOverrides.add(leaf.narrationOverride);
     }
     expect(distinctOverrides.size).toBe(28);
+  });
+
+  it("trace-frame stepIds resolve back to their spec-leaf overrides through canonicalStepId + findStep", () => {
+    // This pins the lookup chain that `<StepDescription>` actually
+    // exercises at render time:
+    //
+    //   frame.stepId  →  canonicalStepId  →  findStep(spec, ...)  →  leaf.narrationOverride
+    //
+    // The earlier "every spec-leaf has an override" assertion is
+    // necessary but not sufficient — if FES-with-history (or any
+    // future container kind) emits a stepId suffix that
+    // `canonicalStepId` doesn't strip, `findStep` returns null for
+    // those frames and `<StepDescription>` falls back to the
+    // registry doc. This test runs SHA-256, walks every emitted
+    // trace frame's stepId, and asserts each resolves to a leaf
+    // whose `narrationOverride` is the SAME object identity the
+    // spec defines.
+    //
+    // The schedule-body and compression-round paths are the
+    // load-bearing ones — they exercise the FES-with-history `:r{t}`
+    // suffix and the per-round group containment respectively.
+    const registry = buildDefaultRegistry();
+    const trace = runSpec(buildSha256Spec(), registry, {
+      initialState: { shape: "bytes", bytes: new Uint8Array([0x61, 0x62, 0x63]) },
+      portedDispatchEnabled: true,
+    });
+    expect(trace.frames.length).toBeGreaterThan(100);
+
+    const unresolved: string[] = [];
+    for (const frame of trace.frames) {
+      const canonical = canonicalStepId(frame.stepId);
+      const leaf = findStep(spec, canonical);
+      if (leaf === null) {
+        // findStep returns null for container ids (e.g., :rejoin
+        // frames whose canonical id resolves to a feistel-round).
+        // SHA-256 has no feistel-round nodes; expected to never hit.
+        unresolved.push(`${frame.stepId} → canonical=${canonical} → findStep returned null`);
+        continue;
+      }
+      if (leaf.narrationOverride === undefined) {
+        unresolved.push(`${frame.stepId} → canonical=${canonical} → leaf has no override`);
+      }
+    }
+    expect(unresolved).toEqual([]);
   });
 
   it("schedule-body overrides are defined once (not duplicated across iterations)", () => {
