@@ -1910,6 +1910,19 @@ export const visualEdgeTargetId = (
  * @param portGap — density-scaled gap between adjacent slots. The render
  *   site computes `Math.max(6, round(LEAF_W / 10))` so the spread tracks
  *   the consumer width.
+ * @param cap — optional half-extent (the maximum absolute offset value the
+ *   consumer can accept on its attach edge). When supplied AND the natural
+ *   slot extent `((total - 1) / 2) * portGap` exceeds `cap`, the gap is
+ *   scaled down to `(cap * 2) / (total - 1)` so every slot lands within
+ *   `[-cap, +cap]` while remaining monotonic and evenly spaced. Mirrors
+ *   the EdgePath clamps (`to.w/2 - 4` for vertical regime, `to.h/2 - 4`
+ *   for horizontal regime) and prevents the slot-collision bug Slice S2(j)
+ *   addressed: SHA-256 `final.assemble` has 8 incoming horizontal-regime
+ *   port-flow edges; pre-S2(j) the clamp at LEAF_H/2 − 4 = ±16 collapsed
+ *   raw offsets −35/−25 → −16 and +25/+35 → +16, putting two pairs of
+ *   arrows at the same y. With the cap argument, gap scales to 32/7 ≈ 4.6
+ *   so all 8 slots stay distinct. Omitting `cap` preserves the pre-S2(j)
+ *   behavior (legacy callers in tests + the replica-chip placement site).
  *
  * Pure: reads only the precomputed assignment. The render site builds the
  * assignment once per `graph()` change in a memo (same pattern as
@@ -1925,12 +1938,24 @@ export const consumerPortOffset = (
   edge: GraphEdge,
   ports: ConsumerPortAssignment,
   portGap: number,
+  cap?: number,
 ): number => {
   const slot = ports.slotOf.get(edge);
   if (slot === undefined) return 0;
   const total = ports.localCountOf.get(edge);
   if (total === undefined || total <= 1) return 0;
-  return (slot - (total - 1) / 2) * portGap;
+  // Density-aware scaling (Slice S2(j) of the SHA-256 density-polish plan).
+  // When the natural extent exceeds `cap`, shrink the gap so the outermost
+  // slots land exactly on ±cap and inner slots stay monotonic + evenly
+  // spaced. Without this the EdgePath clamp would collapse multiple raw
+  // offsets to the same cap value, producing visually identical attach y's
+  // for distinct edges (the SHA-256 `s_i → final.assemble` pile-up).
+  let effectiveGap = portGap;
+  if (cap !== undefined && cap > 0) {
+    const maxExtent = ((total - 1) / 2) * portGap;
+    if (maxExtent > cap) effectiveGap = (cap * 2) / (total - 1);
+  }
+  return (slot - (total - 1) / 2) * effectiveGap;
 };
 
 /**
@@ -4440,7 +4465,17 @@ export const GraphView = () => {
     // still visually distinct at tight densities.
     const targetXOffset = createMemo(() => {
       const portGap = Math.max(6, Math.round(consts().LEAF_W / 10));
-      return consumerPortOffset(edge, portAssignment(), portGap);
+      // Cap mirrors EdgePath's `offsetCap = to.w/2 - 4` for the vertical
+      // regime so high-fanout consumers (≥ ~10 incoming at default LEAF_W)
+      // don't see slot-collision pile-ups when EdgePath clamps individual
+      // raw offsets. See `consumerPortOffset`'s `cap` docstring for the
+      // SHA-256 motivation. We use the LEAF_W as a proxy for the consumer's
+      // width — accurate for leaf chips (the common case) and conservative
+      // for wider container chips (cap will be smaller than the real
+      // half-width, which only matters when the natural extent already fits
+      // anyway, so the scale-down branch never fires there).
+      const cap = consts().LEAF_W / 2 - 4;
+      return consumerPortOffset(edge, portAssignment(), portGap, cap);
     });
     // Same `consumerPortOffset` math, but on the y-axis for the
     // horizontal regime (sources to the left / right of the consumer).
@@ -4448,7 +4483,14 @@ export const GraphView = () => {
     // horizontal; vertical-regime edges ignore it.
     const targetYOffset = createMemo(() => {
       const portGap = Math.max(4, Math.round(consts().LEAF_H / 4));
-      return consumerPortOffset(edge, portAssignment(), portGap);
+      // Horizontal-regime cap matches EdgePath's `yOffsetCap = to.h/2 - 4`.
+      // At LEAF_H = 40 (default density), cap = ±16 px; SHA-256
+      // `final.assemble` has 8 incoming port-flow edges and a natural
+      // ±35 px extent that pre-S2(j) clamped slots 0+1 to -16 and slots
+      // 6+7 to +16 (visible pile-up). With this cap the gap scales to
+      // 32/7 ≈ 4.6 so all 8 slots stay distinct.
+      const cap = consts().LEAF_H / 2 - 4;
+      return consumerPortOffset(edge, portAssignment(), portGap, cap);
     });
     // Straight-line + offset-start-point + start-dot (2026-05-16,
     // replacement for the curved-edge prototype): row-k replica edges
@@ -5351,6 +5393,25 @@ export const GraphView = () => {
                   const c = containersById().get(id);
                   return c?.kind === "iterate";
                 });
+                // Wider sibling of `isInsideIterate` (Slice S2(j), 2026-05-26):
+                // includes EVERY iteration-style container — `iterate`,
+                // `for-each-subgraph`, `for-each-subgraph-with-history`.
+                // Drives the gate for iterate-body draggability so leaves
+                // inside SHA-256's `msg-schedule` (a `for-each-subgraph-
+                // with-history`) become draggable too. Groups (`round.N`,
+                // AES round bodies) stay outside this set on purpose — the
+                // user's S2(j) ask was scoped to iteration bodies; group
+                // children keep the legacy onClick path that several click
+                // tests depend on.
+                const isInsideIteration = node.containerPath.some((id) => {
+                  const c = containersById().get(id);
+                  const k = c?.kind;
+                  return (
+                    k === "iterate" ||
+                    k === "for-each-subgraph" ||
+                    k === "for-each-subgraph-with-history"
+                  );
+                });
                 const isRootLevel = node.containerPath.length === 0;
                 // Two flavors of "synthetic" leaf — both suppress drag /
                 // delete and route clicks to a source id, but they reach
@@ -5404,11 +5465,29 @@ export const GraphView = () => {
                 //     chips) when that anchor moves. NOT clamped — auto
                 //     position is already deep in the canvas, and moving
                 //     toward the upper-left is a valid gesture.
-                //   - Nested non-root non-replica leaves stay
-                //     non-draggable (user's explicit pick on
-                //     2026-05-19: motivation was replicas + chips only).
-                const dragMode = isReplicaLike ? ("relative" as const) : ("absolute" as const);
-                const isDraggable = isReplicaLike || isRootLevel;
+                //   - Leaves inside iteration-style containers (iterate /
+                //     for-each-subgraph / for-each-subgraph-with-history)
+                //     also get the RELATIVE-pin drag (Slice S2(j),
+                //     2026-05-26). The user reported visual pile-ups
+                //     inside expanded SHA-256 `msg-schedule` (a
+                //     `for-each-subgraph-with-history`) where converging
+                //     arrows make it impossible to follow which edge feeds
+                //     which leaf; making the leaves draggable gives the
+                //     user a manual untangle. The layout passes already
+                //     apply `relativePins.get(childId)` deltas to
+                //     iterate/group children (cf. lines ~1299, ~1452,
+                //     ~1746), so no layout change is needed — the gate
+                //     flip alone enables persistence + reset glyph.
+                //     Group children (e.g. AES round bodies) stay
+                //     NON-draggable on purpose — the user's S2(j) ask was
+                //     scoped to iteration bodies, and group leaves keep
+                //     the legacy onClick wiring that several existing
+                //     click tests depend on.
+                const dragMode =
+                  isReplicaLike || isInsideIteration
+                    ? ("relative" as const)
+                    : ("absolute" as const);
+                const isDraggable = isReplicaLike || isRootLevel || isInsideIteration;
                 const dragProps = isDraggable
                   ? {
                       onPointerDown: (e: PointerEvent) =>
@@ -5470,7 +5549,12 @@ export const GraphView = () => {
                         // captured at row-init time wouldn't reactively
                         // update when relativePinsMap() changed.
                         onResetRelativePin={
-                          isReplicaLike && relativePinsMap().has(node.stepId)
+                          // Reset glyph appears whenever the node has a
+                          // RELATIVE pin — replicas/chips since Slice 3,
+                          // and iteration-body leaves since S2(j). Group
+                          // children and root-level leaves use absolute
+                          // pins (or no pin at all), so they're excluded.
+                          (isReplicaLike || isInsideIteration) && relativePinsMap().has(node.stepId)
                             ? () => clearRelativePosition(spec().id, node.stepId)
                             : undefined
                         }

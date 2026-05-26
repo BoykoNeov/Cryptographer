@@ -819,3 +819,127 @@ describe("port-spreading — side-aware bucketing (Q1 fix for crooked round arro
     expect(Math.abs(auxOffset)).toBe(5);
   });
 });
+
+// ─── Slice S2(j): density-aware cap (SHA-256 final.assemble pile-up fix) ──
+//
+// SHA-256's `final.assemble` (concat@1 with inputCount=8) has 8 incoming
+// port-flow edges from `final.s_0..s_7`. They enter on the LEFT side
+// (horizontal regime). The pre-S2(j) EdgePath clamp at LEAF_H/2 − 4 = ±16
+// collapsed raw offsets at the boundary (slots 0+1 both clamped to −16;
+// slots 6+7 both clamped to +16), producing visually identical attach y
+// values for distinct logical edges — the "pile-up" the user reported.
+//
+// Fix: an optional `cap` argument on `consumerPortOffset`. When the natural
+// extent `((total − 1) / 2) * portGap` exceeds `cap`, the gap is scaled to
+// `(cap * 2) / (total − 1)` so the outermost slots land exactly on ±cap
+// and inner slots remain monotonic + evenly spaced. Omitting `cap`
+// preserves legacy behavior — the replica-chip placement site at line
+// ~1738 of GraphView.tsx still calls without a cap and stays
+// byte-identical.
+
+describe("port-spreading — density-aware cap (Slice S2(j))", () => {
+  /**
+   * Build a graph where one consumer has N incoming non-replica edges so
+   * each gets a distinct slot 0..N-1. The fan-IN comes from N distinct
+   * source ids (mirrors SHA-256's s_0..s_7 sources).
+   */
+  const buildFanInGraph = (n: number): CipherGraph => {
+    const sourceIds = Array.from({ length: n }, (_, i) => `s${i}`);
+    return buildSyntheticGraph({
+      nodes: [consumerNode("sink"), ...sourceIds.map((id) => consumerNode(id))],
+      edges: sourceIds.map((id) => ({ from: id, to: "sink", auxKey: "k", kind: "aux" })),
+      rootIds: ["sink", ...sourceIds],
+    });
+  };
+
+  it("cap=undefined preserves the pre-S2(j) behavior (legacy callers byte-identical)", () => {
+    // 8 incoming edges, portGap = 10 (the SHA-256 horizontal-regime value).
+    // Without cap the natural extent runs −35..+35 — the call MUST return
+    // the un-clamped raw offsets so the replica-chip-placement site (the
+    // sole remaining cap-less caller) keeps producing its current values.
+    const g = buildFanInGraph(8);
+    const ports = buildConsumerPortAssignment(g, buildReplicaPlacement(g));
+    const offsets = g.edges.map((e) => consumerPortOffset(e, ports, 10));
+    // Offsets sorted: −35, −25, −15, −5, +5, +15, +25, +35.
+    const sorted = [...offsets].sort((a, b) => a - b);
+    expect(sorted).toEqual([-35, -25, -15, -5, 5, 15, 25, 35]);
+  });
+
+  it("cap=Infinity (or unset) yields the same value as omitting the parameter", () => {
+    // Edge case: a caller passes a huge cap. The `maxExtent > cap` branch
+    // never fires → behavior matches the cap-less path.
+    const g = buildFanInGraph(8);
+    const ports = buildConsumerPortAssignment(g, buildReplicaPlacement(g));
+    for (const e of g.edges) {
+      const noCap = consumerPortOffset(e, ports, 10);
+      const hugeCap = consumerPortOffset(e, ports, 10, 9999);
+      expect(hugeCap).toBe(noCap);
+    }
+  });
+
+  it("cap fits naturally → behavior unchanged (small fan-IN case)", () => {
+    // 3 incoming, portGap = 13, cap = 62 (the vertical-regime default at
+    // LEAF_W = 132). Natural extent = 13 → well under cap → no scaling.
+    // Pins that mid-fan-IN sinks (round.0, sigma0, w-t in SHA-256) stay
+    // byte-identical with the cap argument wired in.
+    const g = buildFanInGraph(3);
+    const ports = buildConsumerPortAssignment(g, buildReplicaPlacement(g));
+    const offsets = g.edges.map((e) => consumerPortOffset(e, ports, 13, 62));
+    const sorted = [...offsets].sort((a, b) => a - b);
+    expect(sorted).toEqual([-13, 0, 13]);
+  });
+
+  it("the SHA-256 final.assemble case (total=8, portGap=10, cap=16): all slots distinct + monotonic", () => {
+    // The bug scenario. Without S2(j) the clamp at ±16 collapsed slots
+    // 0+1 to −16 and 6+7 to +16, producing two pairs of duplicates.
+    // With cap, the gap scales to 32/7 ≈ 4.571 so the outermost slots
+    // land exactly on ±16 and inner slots remain monotonic + evenly
+    // spaced.
+    const g = buildFanInGraph(8);
+    const ports = buildConsumerPortAssignment(g, buildReplicaPlacement(g));
+    const offsets = g.edges.map((e) => consumerPortOffset(e, ports, 10, 16));
+    const sorted = [...offsets].sort((a, b) => a - b);
+    // Outermost slots land exactly on ±cap.
+    expect(sorted[0]).toBeCloseTo(-16, 6);
+    expect(sorted[7]).toBeCloseTo(16, 6);
+    // All 8 values are distinct.
+    const distinct = new Set(sorted.map((v) => v.toFixed(6)));
+    expect(distinct.size).toBe(8);
+    // Monotonic + evenly spaced (gap = 32/7 ≈ 4.571).
+    const expectedGap = 32 / 7;
+    for (let i = 1; i < sorted.length; i++) {
+      const a = sorted[i - 1];
+      const b = sorted[i];
+      if (a === undefined || b === undefined) throw new Error("bad index");
+      expect(b - a).toBeCloseTo(expectedGap, 6);
+    }
+  });
+
+  it("cap=0 is treated as 'no cap' (degenerate guard)", () => {
+    // The `cap > 0` guard in the implementation makes a zero cap a no-op
+    // (defensive — a 0 cap would otherwise scale every slot to 0, which
+    // is worse than the un-scaled raw value). Pins that a caller passing
+    // a degenerate consts() value at startup doesn't accidentally
+    // collapse every consumer's spread.
+    const g = buildFanInGraph(8);
+    const ports = buildConsumerPortAssignment(g, buildReplicaPlacement(g));
+    const offsets = g.edges.map((e) => consumerPortOffset(e, ports, 10, 0));
+    const sorted = [...offsets].sort((a, b) => a - b);
+    expect(sorted).toEqual([-35, -25, -15, -5, 5, 15, 25, 35]);
+  });
+
+  it("total ≤ 1 short-circuits before cap logic runs", () => {
+    // Single-incoming consumer → slot is undefined OR total ≤ 1 → returns
+    // 0 regardless of cap. Pins the existing `slot === undefined` and
+    // `total <= 1` early-returns aren't affected by the new branch.
+    const g = buildSyntheticGraph({
+      nodes: [consumerNode("c1"), consumerNode("c2")],
+      edges: [{ from: "c1", to: "c2", auxKey: "k", kind: "aux" }],
+      rootIds: ["c1", "c2"],
+    });
+    const ports = buildConsumerPortAssignment(g, buildReplicaPlacement(g));
+    const e = g.edges[0];
+    if (!e) throw new Error("missing edge");
+    expect(consumerPortOffset(e, ports, 10, 16)).toBe(0);
+  });
+});

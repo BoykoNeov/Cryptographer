@@ -580,6 +580,183 @@ For historical reference; not actionable now.
 - **(c) Spine-arrow z-order lift** — closed: the invisible arrows
   weren't hidden behind chips, they weren't in the derivation graph.
 
+#### S2(j) — density-aware port-slot cap + iterate-body draggability — SHIPPED 2026-05-26
+
+**Symptoms (three reported, three different root causes).** After S2(i)
+shipped, the user re-smoked and reported:
+
+1. **s_0..s_7 → final.assemble pile-up** (the S2(i) caveat — sink-side
+   fan-IN of 8).
+2. **Pile-up inside expanded `msg-schedule`** at multi-input combine
+   leaves (`sigma0` 3-in, `w-t` 4-in) — converging arrows + chips
+   "immovable, can't tell which arrow goes where."
+3. **K-to-aux + W-publish + init-working-vars → round.0 pile-up** —
+   three preamble-row sources all converging at the collapsed `round.0`
+   chip.
+
+**Probe findings (recorded in `_probe-sha256-fan-in.test.ts`, deleted
+after the design call).** Only symptom (1) was a graph-derivation /
+slot-assignment BUG. Symptoms (2) and (3) are visual-curve-overlap —
+slots are technically distinct on the consumer chip's edge, but the
+arrows traverse convergent corridors that the eye reads as a pile-up.
+
+For symptom (1), the EdgePath horizontal-regime y-offset clamp at
+`to.h / 2 - 4` (= ±16 at LEAF_H = 40) collapsed 8 raw offsets:
+
+```
+total=8, portGap=10, yOffsetCap=±16
+  slot 0: raw=-35 → clamped=-16  COLLISION w/ slot 1
+  slot 1: raw=-25 → clamped=-16
+  slot 2: raw=-15 → -15
+  slot 3: raw= -5 →  -5
+  slot 4: raw= +5 →  +5
+  slot 5: raw=+15 → +15
+  slot 6: raw=+25 → clamped=+16  COLLISION w/ slot 7
+  slot 7: raw=+35 → clamped=+16
+```
+
+Two pairs of distinct edges landed at the same y on assemble's left
+edge — exactly the visible pile-up.
+
+**Fix part 1 — density-aware portGap.** `consumerPortOffset` takes an
+optional `cap` argument. When the natural extent `((total − 1) / 2) *
+portGap` exceeds `cap`, the gap scales to `(cap * 2) / (total − 1)` so
+the outermost slots land exactly on ±cap and inner slots remain
+monotonic + evenly spaced. For SHA-256's `final.assemble` (total=8,
+cap=16), the gap scales to 32/7 ≈ 4.57 — all 8 slots distinct.
+
+Cap is wired at the two EdgePath-feeding callsites:
+- `targetXOffset` (vertical regime, top/bottom entry): cap = `LEAF_W/2 − 4`
+- `targetYOffset` (horizontal regime, left/right entry): cap = `LEAF_H/2 − 4`
+
+The third callsite (replica-chip placement at GraphView.tsx:~1738) stays
+cap-less for backward compat — replica chip positions don't need to
+honor the EdgePath clamp; only the edge attach points do.
+
+Legacy callers byte-identical (cap=undefined → original formula). AES /
+Speck / Serpent / DES: every consumer's natural extent stays well within
+the LEAF_W/2 - 4 cap (vertical regime; ±62 at default density) for any
+realistic fan-IN. The change only fires on SHA-256's horizontal-regime
+`final.assemble` today.
+
+**Fix part 2 — iterate-body draggability.** Symptoms (2) and (3) aren't
+bugs but reveal a missing UX affordance: the user can't manually
+untangle visually convergent arrows because chips inside expanded
+iterates/groups are immovable. The pre-S2(j) `isDraggable` gate
+restricted drag to `isReplicaLike || isRootLevel`; reversed here to
+make every leaf draggable.
+
+Nested non-replica leaves get the RELATIVE-pin path (same as Slice 3
+of the draggable-replicas plan). Their auto-position is the
+iterate/group flow layout, and the user delta is persisted under the
+leaf's stepId in `LayoutSpec.relativePositions`. The layout passes
+already apply `relativePins.get(childId)` deltas to nested children
+(lines ~1299, ~1452, ~1746 in GraphView.tsx), so no layout change was
+needed — only the gate flip + extending `onResetRelativePin` to fire
+for any nested leaf with a relative pin.
+
+**Tests:**
+- `tests/graph-view-port-spreading.test.ts` +6 (new describe block for
+  S2(j)): cap=undefined unchanged, cap=Infinity unchanged, small fan-IN
+  unchanged, total=8 distinct + monotonic, cap=0 degenerate guard,
+  total≤1 early-return.
+- `tests/graph-view-sha256-assemble-fan-in.test.tsx` NEW (+2): SHA-256
+  `final.assemble` 8 incoming edges have 8 distinct rendered ty values
+  (parses each edge path's `d` attribute), AND every ty lands within
+  the EdgePath clamp window so no slot would have been collapsed.
+- `tests/graph-view-nested-leaf-drag.test.tsx` NEW (+3): dragging
+  `round.0.Sigma1` inside an expanded round writes a relativePositions
+  entry, dragging `w-t` inside expanded msg-schedule writes a relative
+  pin (negative deltas exercising the no-clamp branch), sub-threshold
+  movement doesn't write a pin (click-vs-drag preserved).
+
+**Counts:** suite 2379 → 2391 (+12). Bundle 684.73 → 685.04 KB raw /
+201.12 → 201.25 KB gzipped (+0.31 KB / +0.13 KB).
+
+**Scope refinement (during implementation).** Initial draggability flip
+made every nested leaf draggable, which broke 5 click-based tests
+(`graph-view-value-inspector.test.tsx`'s click-leaf cases,
+`graph-view.test.tsx`'s "clicking a leaf moves the scrubber", and
+`graph-view-drag.test.tsx`'s "nested leaves are NOT draggable"). Root
+cause: `LeafRect`'s `onClick={props.draggable ? undefined : props.onClick}`
+gate at line 6009 — when `draggable=true` the click handler is removed
+from the `<g>` because the drag handler's `onClickFallback` covers it
+via `pointerup`. `fireEvent.click(g)` in tests only dispatches a click
+event (not the pointerdown+pointerup sequence), so the fallback never
+fired and the tests dropped their setSelectedTarget / setFrame side
+effects.
+
+Narrowed the scope to ITERATION-style containers only (`iterate`,
+`for-each-subgraph`, `for-each-subgraph-with-history`). Group children
+(AES round bodies, SHA-256 compression rounds — both `kind: "group"`)
+keep the legacy non-draggable wiring. SHA-256's `msg-schedule` (the
+user-reported case) is a `for-each-subgraph-with-history`, so it's
+inside the new gate. Other group children stay non-draggable and the
+existing click tests continue to pass unchanged.
+
+Filed as a follow-up TODO: extending draggability to group children
+needs a strategy for keeping click-vs-drag tests working — e.g.,
+keep `onClick` always attached and de-dup with a "click fired by
+fallback" flag, or migrate the click-based tests to use the
+pointerdown+pointerup sequence.
+
+**Smoke pending.** Manual 60-second pass: (a) open SHA-256, scroll to
+`final.assemble`, confirm 8 distinct arrows fan into its left edge
+with visible vertical separation; (b) expand `msg-schedule`, drag
+`sigma0` or `w-t` out of the convergent corridor and verify it stays
+put + the ↺ reset glyph appears; (c) AES-128 ECB sanity — confirm
+root-level chip drag still works (absolute-pin path unchanged) AND
+that AES round-body leaves are still click-to-scrub (group children
+stay non-draggable).
+
+#### Cases B and C — deferred TODOs (visual-curve overlap)
+
+S2(j) addressed the slot-collision BUG; the user reported two
+symptoms that remain as visual-overlap issues with distinct (but
+convergent) attach points. Filed for a future slice.
+
+**TODO: Case B — pile-up inside expanded msg-schedule iteration body.**
+
+- Each iteration's `sigma0` has 3 incoming port-flow edges (sigma0-r7,
+  sigma0-r18, sigma0-s3 → sigma0). Slots at -13, 0, +13 on sigma0's
+  top edge (LEAF_W/10 portGap). Sources are physically adjacent in
+  the dense iteration body so the 3 short curves visually overlap
+  despite distinct attach points.
+- `w-t` has 4 incoming (sigma1, fetch-p7, sigma0, fetch-p16). Slots
+  at ±13, ±39 (within ±62 cap, no clamping).
+- Iterate-body draggability (Part 2 of S2(j)) gives the user a manual
+  untangle for now. A proper fix would either:
+  (i) spread the iteration-body leaves further apart (increase
+      FLOW_GAP inside for-each-subgraph-with-history bodies);
+  (ii) add per-source curve-offset so adjacent arrows take visibly
+       distinct paths (not just distinct endpoints);
+  (iii) add a "force vertical fan-in lane" layout option that stacks
+        incoming sources above the combine leaf instead of beside it.
+- Worth a separate slice with its own smoke + design call. Don't ship
+  speculatively — the draggability affordance may suffice in practice.
+
+**TODO: Case C — 3 arrows converging at collapsed round.0 from
+preamble row.**
+
+- `K-to-aux@->round.0` (aux-K replica), `W-publish@->round.0` (aux-W
+  replica), and `init-working-vars` (state edge) all terminate at the
+  `round.0` collapsed container chip. Top-edge slots at -13, 0, +13
+  (LEAF_W/10 portGap, fits in ±62 cap). Slots distinct; the visual
+  overlap is from 3 arrows entering from above with similar curvature.
+- Aux replicas live in the preamble row alongside `init-working-vars`,
+  so all three sources are at similar y coordinates — the 3 curves
+  bunch closely above round.0.
+- Possible fixes (none cheap):
+  (i) Stagger replica y-positions per consumer so multiple replicas
+      pointing at the same round don't all sit at the same preamble row;
+  (ii) Route at least one arrow (the state-edge from `init-working-vars`)
+       through an alternate corridor (e.g. enter round.0 from the left
+       instead of the top);
+  (iii) Apply additional source-side curve offset proportional to
+        slot index so curves diverge visibly between source and target.
+- Lower priority than B (round.0 only — appears once per SHA-256 spec
+  rather than once per iteration).
+
 ### Slice S3 — narration density second pass
 
 Deferred from this session per the bucket-C scoping above. Two routes
