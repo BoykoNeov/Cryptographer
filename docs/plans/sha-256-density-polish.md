@@ -709,31 +709,98 @@ root-level chip drag still works (absolute-pin path unchanged) AND
 that AES round-body leaves are still click-to-scrub (group children
 stay non-draggable).
 
-#### Cases B and C — deferred TODOs (visual-curve overlap)
+#### Case B — pile-up inside expanded msg-schedule iteration body — SHIPPED 2026-05-26 (option ii, source-side y-offset on port-flow edges)
 
-S2(j) addressed the slot-collision BUG; the user reported two
-symptoms that remain as visual-overlap issues with distinct (but
-convergent) attach points. Filed for a future slice.
+**Symptom (re-confirmed by user before S2(k) ship).** Tried the S2(j)
+draggability affordance in the browser; the manual untangle was
+insufficient. Adjacent-source arrows feeding multi-input combines in
+the expanded `msg-schedule` body still read as a pile-up because all
+N source arrows leave their respective right-edges at the SAME y
+(row centerline). The N target slots on the consumer's left edge are
+distinct (±13 for 3-in, ±15 for 4-in at default density), but the
+EdgePath horizontal-regime curve has `c1y = sy` — every arrow exits
+its source horizontally and only bends at the target end. Adjacent-
+source arrows have similar pre-bend trajectories that the eye reads
+as overlap.
 
-**TODO: Case B — pile-up inside expanded msg-schedule iteration body.**
+**Fix (option ii from the deferred TODO above).** Mirror the existing
+`sourceXOffset` infrastructure: add a `sourceYOffset` prop on
+`EdgePath`'s horizontal regime, computed per-edge as
+`consumerPortOffset(edge, portAssignment(), portGap, cap)` — the SAME
+function call that produces `targetYOffset`. Source and target both
+shift by the same slot offset at the same magnitude, same sign →
+adjacent arrows become parallel-shifted lines instead of converging
+lines. Each arrow leaves at its slot's y on the source's right edge
+and arrives at its slot's y on the consumer's left edge.
 
-- Each iteration's `sigma0` has 3 incoming port-flow edges (sigma0-r7,
-  sigma0-r18, sigma0-s3 → sigma0). Slots at -13, 0, +13 on sigma0's
-  top edge (LEAF_W/10 portGap). Sources are physically adjacent in
-  the dense iteration body so the 3 short curves visually overlap
-  despite distinct attach points.
-- `w-t` has 4 incoming (sigma1, fetch-p7, sigma0, fetch-p16). Slots
-  at ±13, ±39 (within ±62 cap, no clamping).
-- Iterate-body draggability (Part 2 of S2(j)) gives the user a manual
-  untangle for now. A proper fix would either:
-  (i) spread the iteration-body leaves further apart (increase
-      FLOW_GAP inside for-each-subgraph-with-history bodies);
-  (ii) add per-source curve-offset so adjacent arrows take visibly
-       distinct paths (not just distinct endpoints);
-  (iii) add a "force vertical fan-in lane" layout option that stacks
-        incoming sources above the combine leaf instead of beside it.
-- Worth a separate slice with its own smoke + design call. Don't ship
-  speculatively — the draggability affordance may suffice in practice.
+**Scope: port-flow edges only.** Initial implementation applied the
+shift to every horizontal-regime edge with `consumerPortOffset != 0`.
+Caught by the failing CBC feedback-overhead test
+(`tests/graph-view-feedback-edge-overhead.test.tsx::"the forward state
+spine cbc-xor → add-round-key is unchanged — still exits cbc-xor's
+RIGHT edge"`). Diagnostic: AES-CBC's `initial.add-round-key` has TWO
+incoming edges on the LEFT side — the legacy state edge from
+`cbc-xor` AND the aux roundKey edge from the lifted root-level
+`key-expansion` (classified as horizontal-regime "left" entry because
+key-expansion sits far to the left in canvas x). Side-aware bucketing
+inside `buildConsumerPortAssignment` puts both edges in the SAME
+left-side bucket → 2 slots → both edges pick up ±3.5 px offsets.
+Pre-S2(k) the offset only shifted the TARGET attach y (a slight slant
+from source midline to slot); applying it ALSO to the source shifted
+the visible exit point on cbc-xor too.
+
+Restricted to `edge.kind === "state" && edge.auxKey ===
+PORT_FLOW_AUX_KEY`. Keeps the fix focused on SHA-256-shaped
+multi-input combines declared via `portInputs`; legacy state-spine
++ aux fan-IN appearance stays byte-identical. A future hybrid spec
+with a multi-input port-flow consumer that ALSO has aux edges
+entering the same side would need a wider predicate; the
+in-file comment block documents this seam.
+
+**Exporting the discriminator.** `PORT_FLOW_AUX_KEY` was private to
+`src/core/graph.ts`; promoted to `export const` so the GraphView memo
+can reference it without string-literal duplication. No call-site
+changes elsewhere (graph.ts internal callers continue using the
+same constant identity).
+
+**Tests (+3):**
+- `tests/graph-view-sha256-msg-schedule-source-y.test.tsx` NEW (+3):
+  (1) sigma1's 3 incoming edges leave their sources at 3 DISTINCT
+      source-y values (parses `d` attribute, asserts 3 unique sy
+      buckets at 0.5 px resolution).
+  (2) w-t's 4 incoming edges produce 4 DISTINCT source-y values.
+  (3) Source-y offset equals target-y offset for each sigma1 incoming
+      edge (parallel-shift invariant: `sy - fromCy ≈ ty - toCy`).
+- Pre-existing CBC feedback-overhead test stays GREEN under the
+  port-flow restriction — legacy state edges keep their pre-S2(k)
+  appearance.
+
+**Counts.** Suite 2392 → 2395 (+3). Bundle 687.90 → 688.16 KB raw /
+202.02 → 202.10 KB gzipped (+0.26 KB / +0.08 KB).
+
+**Smoke pending.** Manual 30-second pass: open SHA-256 in the graph
+view, expand `msg-schedule` (chevron on the container), confirm the
+3 incoming arrows on `sigma1` (and `sigma0`) leave their source
+chips at 3 visibly distinct y values on each source's right edge,
+not all bunched at midline. Same for w-t's 4 incoming. AES-CBC
+sanity: open AES-128 CBC, confirm cbc-xor → initial.add-round-key
+spine arrow still exits cbc-xor's right-edge midline (the existing
+feedback-overhead test pins this, but visual confirmation belt-and-
+braces).
+
+**Case C deferred to a future slice.** The round.0 fan-IN
+convergence (3 arrows: K-to-aux replica, W-publish replica,
+init-working-vars state edge) is structurally different from Case B
+— sources are at different y origins (preamble row), not adjacent
+siblings. S2(j2) partially shrunk the corridor. Fixes considered
+(stagger replica y per consumer; alternate-side entry for state
+edge; source-side curve offset proportional to slot) all
+non-trivial; not gating Case B's ship.
+
+#### Case C — deferred TODO (visual-curve overlap)
+
+S2(k) closed Case B from the original deferred-TODO pair; Case C
+remains a deferred follow-up.
 
 **TODO: Case C — 3 arrows converging at collapsed round.0 from
 preamble row.**

@@ -45,6 +45,7 @@ import {
   type GraphEdge,
   type GraphNode,
   type GraphWarning,
+  PORT_FLOW_AUX_KEY,
   buildIterateFeedbackPredicate,
   bundleEdges,
   collapseGraph,
@@ -4591,6 +4592,53 @@ export const GraphView = () => {
       const cap = consts().LEAF_H / 2 - 4;
       return consumerPortOffset(edge, portAssignment(), portGap, cap);
     });
+    // Source-side counterpart to `targetYOffset` (Slice S2(k) of
+    // sha-256-density-polish, 2026-05-26 — Case B). Returns the SAME
+    // slot offset for this edge so the source attach y mirrors the
+    // target attach y: adjacent sibling sources feeding one multi-input
+    // consumer (e.g. SHA-256 `sigma1-r17/r19/s10 → sigma1`, all on the
+    // same row centerline at distinct columns) now leave their right
+    // edges at three distinct y values, matching the three slot y's at
+    // sigma1's left edge → three parallel-shifted arrows instead of
+    // three lines converging on one y. The cap proxy uses LEAF_H
+    // (same as targetYOffset) since EdgePath's actual clamp uses
+    // `from.h` per-edge — accurate for leaves (the common case),
+    // conservative for taller container sources. Per-edge (NOT
+    // per-source): a single source feeding multiple multi-input
+    // consumers picks up each consumer's slot offset independently
+    // for that consumer's edge — `consumerPortOffset` reads the
+    // edge → slot mapping, not the source's identity.
+    //
+    // **Scope: port-flow edges only.** The diagnostic from the 2026-05-26
+    // ship-day smoke against `npm run check` revealed that side-aware
+    // bucketing inside `buildConsumerPortAssignment` puts AES-CBC's
+    // `cbc-xor → initial.add-round-key` (legacy state edge) in the SAME
+    // left-side bucket as `key-expansion → initial.add-round-key` (aux
+    // edge from the lifted root-level key-expansion, classified as
+    // horizontal-regime "left" entry because key-expansion sits far
+    // off to the left). That bucket holds 2 edges → 2 slots → the
+    // state edge picked up a ±3.5 px source-y shift that pulled the
+    // arrow off cbc-xor's right-edge midline. Pre-S2(k) the slot
+    // offset only affected the TARGET attach y (a slight slant from
+    // source midline to target slot); applying it ALSO to the source
+    // shifted the visible exit point on cbc-xor too. The CBC
+    // feedback-overhead test pinned the pre-S2(k) appearance, surfacing
+    // the scope creep.
+    //
+    // Restricting to port-flow edges (`kind: "state"` AND `auxKey ===
+    // PORT_FLOW_AUX_KEY`) keeps the fix focused on the SHA-256-shape
+    // case the user reported — adjacent-source multi-input combines
+    // declared via `portInputs` — and leaves every legacy cipher's
+    // state-spine + aux fan-IN appearance byte-identical to pre-S2(k).
+    // A future hybrid spec with a multi-input port-flow consumer that
+    // ALSO has aux edges entering from the same side would need a
+    // wider predicate; document this seam if it arises.
+    const sourceYOffset = createMemo(() => {
+      if (edge.kind !== "state" || edge.auxKey !== PORT_FLOW_AUX_KEY) return 0;
+      const portGap = Math.max(4, Math.round(consts().LEAF_H / 4));
+      const cap = consts().LEAF_H / 2 - 4;
+      return consumerPortOffset(edge, portAssignment(), portGap, cap);
+    });
     // Straight-line + offset-start-point + start-dot (2026-05-16,
     // replacement for the curved-edge prototype): row-k replica edges
     // (k ≥ 1) get a horizontal shift to their SOURCE x so the arrow
@@ -4655,6 +4703,7 @@ export const GraphView = () => {
           targetXOffset={targetXOffset()}
           targetYOffset={targetYOffset()}
           sourceXOffset={sourceXOffset()}
+          sourceYOffset={sourceYOffset()}
           isReplicaEdge={isReplicaEdgeMemo()}
           bundleCount={bundleCount}
           // First few aux keys for the tooltip; the bundle inspector
@@ -6826,6 +6875,31 @@ const EdgePath = (props: {
    */
   sourceXOffset?: number;
   /**
+   * Vertical shift applied to the SOURCE y of the path in the
+   * horizontal regime — `sy = fromCy + sourceYOffset`. Mirrors
+   * `targetYOffset` so that when a multi-input consumer spreads its N
+   * incoming edges across N slots on its left/right edge, the SAME
+   * slot offset shifts each edge's source-y on its source chip's
+   * right/left edge. Adjacent-source arrows leaving sibling chips at
+   * the same row centerline (e.g. SHA-256's `sigma1-r17/r19/s10→sigma1`
+   * with 3 adjacent sources) become parallel-shifted lines instead of
+   * 3 lines converging on one y, giving each arrow a visibly distinct
+   * trajectory through the inter-chip corridor.
+   *
+   * Slice S2(k) of `docs/plans/sha-256-density-polish.md` (Case B —
+   * msg-schedule iteration-body visual overlap). Full-magnitude
+   * same-sign per [[feedback_canvas_tool_conventions]]'s "monotonic
+   * spread, not alternating" precedent set by `replicaSourceXOffset`.
+   *
+   * Defaults to 0 → single-incoming consumers and non-port-flow edges
+   * render identically to pre-S2(k). Clamped to `from.h / 2 − 4` so
+   * the exit point stays inside the source box.
+   *
+   * Only meaningful in the horizontal regime; ignored in the vertical
+   * regime (vertical regime uses `sourceXOffset` for replica edges).
+   */
+  sourceYOffset?: number;
+  /**
    * True when this edge originates from a fan-out replica. Two effects
    * in the vertical regime:
    *   1. Path is rendered as a straight `L` line instead of a cubic
@@ -7163,7 +7237,25 @@ const EdgePath = (props: {
     const toCy = to.y + to.h / 2;
     const rightward = to.x + to.w / 2 >= from.x + from.w / 2;
     const sx = rightward ? from.x + from.w : from.x;
-    const sy = fromCy;
+    // Source-side port-spreading (Slice S2(k) of sha-256-density-polish,
+    // 2026-05-26 — Case B). Shift the source attach y by `sourceYOffset`
+    // so a multi-input consumer's N incoming edges leave their N source
+    // chips at N distinct y values within each source's right edge,
+    // matching the y values they ALSO land at on the consumer's left
+    // edge. With both ends shifted by the same slot offset, the curve
+    // collapses to a near-straight horizontal line at the slot's y —
+    // adjacent-source arrows become parallel-shifted rather than
+    // converging-then-diverging at the consumer. Clamped to
+    // `from.h / 2 − 4` so the exit point stays inside the source box
+    // even on degenerate inputs (matches the target-side clamp pattern
+    // a few lines below). For non-port-flow edges and single-incoming
+    // consumers, `sourceYOffset` is 0 and `sy = fromCy` exactly as
+    // before — legacy AES/Speck/Serpent/DES specs (no horizontal-regime
+    // multi-input port-flow combines) render byte-identically.
+    const rawSourceY = props.sourceYOffset ?? 0;
+    const sourceYCap = from.h / 2 - 4;
+    const clampedSourceY = Math.max(-sourceYCap, Math.min(sourceYCap, rawSourceY));
+    const sy = fromCy + clampedSourceY;
     const tEdge = rightward ? to.x : to.x + to.w;
     const naturalGap = rightward ? to.x - (from.x + from.w) : from.x - (to.x + to.w);
     const inset = naturalGap > 0 ? Math.min(ARROW_INSET, naturalGap / 2) : ARROW_INSET;

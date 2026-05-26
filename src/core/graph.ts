@@ -994,7 +994,7 @@ const STATE_AUX_KEY = "state";
  * distinct auxKey lets the filter discriminate by provenance rather
  * than by appearance.
  */
-const PORT_FLOW_AUX_KEY = "port-flow";
+export const PORT_FLOW_AUX_KEY = "port-flow";
 
 /**
  * Spec-walk pass: emit a `kind: "state"` edge between every DFS-consecutive
