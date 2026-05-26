@@ -12,6 +12,7 @@
  * updates → matrix view re-renders. No imperative re-run call from here.
  */
 
+import { formatBytes } from "@/core/format";
 import { findStep } from "@/core/spec-mutations";
 import { gfMatInverse4x4 } from "@/core/state/gf-matrix";
 import type { Json, StepLeaf, StepNode } from "@/core/types";
@@ -197,8 +198,42 @@ export const ParamEditor = (props: Props) => {
             <Match when={getStep().type === "generic.xor-aux-into-state@1"}>
               <XorAuxIntoStateBlock step={getStep()} />
             </Match>
-            <Match when={getStep().type === "generic.state-to-aux@1"}>
+            <Match
+              when={
+                getStep().type === "generic.state-to-aux@1" ||
+                getStep().type === "generic.state-to-aux-bytes@1"
+              }
+            >
               <StateToAuxBlock step={getStep()} />
+            </Match>
+            {/* ─── Port-native primitives (Slice S1 of sha-256-density-polish) ── */}
+            <Match
+              when={
+                getStep().type === "rotate-bits-right@1" || getStep().type === "shift-bits-right@1"
+              }
+            >
+              <BitOpBlock step={getStep()} matchingCount={matchingSteps()} />
+            </Match>
+            <Match when={INPUT_COUNT_PARAM_TYPES.has(getStep().type)}>
+              <InputCountBlock step={getStep()} />
+            </Match>
+            <Match when={getStep().type === "byte-slice@1"}>
+              <ByteSliceBlock step={getStep()} matchingCount={matchingSteps()} />
+            </Match>
+            <Match when={getStep().type === "aux-load-bytes@1"}>
+              <AuxLoadBytesBlock step={getStep()} />
+            </Match>
+            <Match when={getStep().type === "split-bytes@1"}>
+              <SplitBytesBlock step={getStep()} />
+            </Match>
+            <Match when={getStep().type === "constant-load@1"}>
+              <ConstantLoadBlock step={getStep()} />
+            </Match>
+            <Match when={getStep().type === "pad-with-byte@1"}>
+              <PadWithByteBlock step={getStep()} matchingCount={matchingSteps()} />
+            </Match>
+            <Match when={NO_PARAMS_PORT_NATIVE_TYPES.has(getStep().type)}>
+              <NoParamsBlock label={portNativeNoParamsLabel(getStep().type)} />
             </Match>
           </Switch>
 
@@ -1462,6 +1497,437 @@ const StateToAuxBlock = (props: { step: StepLeaf }) => {
       </div>
     </dl>
   );
+};
+
+// ─── Port-native primitive blocks (Slice S1 of sha-256-density-polish) ───
+//
+// These editors fill the raw-JSON fallback gap that SHA-256 surfaced as the
+// first reachable port-native cipher with ~1800 leaves. The editability rule
+// follows existing precedent in this file (BlockSizeBlock, KeyExpansionBlock):
+// **read-only when edit-without-rewire produces a runtime throw; editable
+// when it produces wrong-but-defined output.**
+//
+//   - `bits` on rotate/shift, `offset`/`length` on byte-slice, `auxName` on
+//     aux-load-bytes, `padByte`/`padTarget` on pad-with-byte:
+//     editable. Editing produces a divergent trace + wrong digest, visible
+//     in the KAT and via the running state — exactly the "tinker with the
+//     cipher" pedagogy the project ships.
+//   - `inputCount` on xor/and/add/concat, `widths` on split-bytes,
+//     `byteLength` on aux-load-bytes, `sourceByteLength` on byte-slice,
+//     `blockSize` on pad-with-byte, `bytes` on constant-load (large hex
+//     dump):
+//     read-only. Editing without re-wiring downstream consumers throws
+//     "port not wired" at the next run; that's a poor pedagogical surface
+//     (the user sees a hard error, not a divergent cipher).
+//   - `wordBits` on rotate/shift: read-only because all shipped consumers
+//     hard-code 32. Becomes editable when SHA-512 (which needs `wordBits:
+//     64`) lands.
+//
+// No ApplyAllRow on most of these: port-native primitives recur ~hundreds of
+// times in SHA-256 (e.g. 192 `rotate-bits-right@1` leaves across σ0/σ1/Σ0/Σ1),
+// and "apply this rotation amount to all 192" would overwrite the FIPS-180-4
+// constants. The exception is `pad-with-byte@1` (appears once per spec) and
+// `rotate-bits-right@1` (appears 192 times in SHA-256, but the row is gated
+// behind matchingCount > 1 anyway and the per-leaf bit count is the
+// pedagogical knob).
+
+/**
+ * Small editable integer input for port-native primitive params (`bits`,
+ * `offset`, `length`, `padTarget`). Mirrors `AuxNameInput`'s commit-on-blur /
+ * Enter / Escape-to-reset pattern but typed as a number; clamps to
+ * [min, max] and refuses non-integer or out-of-range input. Returns to the
+ * upstream value when commit is a no-op or input is invalid.
+ *
+ * Why local helper not a shared component: only port-native primitives need
+ * a generic integer input; AES/Speck/Serpent editors all use ByteCellInput
+ * (which is 0..255 specifically) or read-only scalars. Hoisting to
+ * `src/ui/components/` would over-generalize.
+ */
+const IntInput = (props: {
+  value: number;
+  min?: number;
+  max?: number;
+  placeholder?: string;
+  onCommit: (v: number) => void;
+}) => {
+  const [draft, setDraft] = createSignal(String(props.value));
+  // Re-sync the local draft if upstream value changes (Apply-to-all on a
+  // different step, or another tab edits the spec).
+  let lastUpstream = props.value;
+  const syncedDraft = () => {
+    if (props.value !== lastUpstream) {
+      lastUpstream = props.value;
+      setDraft(String(props.value));
+    }
+    return draft();
+  };
+  const commit = () => {
+    const parsed = Number.parseInt(draft().trim(), 10);
+    const valid =
+      Number.isFinite(parsed) &&
+      Number.isInteger(parsed) &&
+      (props.min === undefined || parsed >= props.min) &&
+      (props.max === undefined || parsed <= props.max);
+    if (!valid) {
+      setDraft(String(props.value));
+      return;
+    }
+    if (parsed !== props.value) props.onCommit(parsed);
+    setDraft(String(parsed));
+  };
+  return (
+    <input
+      type="text"
+      class="int-input"
+      inputmode="numeric"
+      spellcheck={false}
+      placeholder={props.placeholder ?? ""}
+      value={syncedDraft()}
+      onInput={(e) => setDraft(e.currentTarget.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          commit();
+          e.currentTarget.blur();
+        } else if (e.key === "Escape") {
+          setDraft(String(props.value));
+          e.currentTarget.blur();
+        }
+      }}
+    />
+  );
+};
+
+// rotate-bits-right@1 / shift-bits-right@1.
+//
+// Editable `bits` (non-negative integer; rotate semantics modulo wordBits,
+// shift semantics saturate to zero past wordBits). Read-only `wordBits`
+// (every shipped SHA-256 leaf uses 32; SHA-512 will add 64). Operation
+// labelled distinctly so the user can tell rotate from shift at a glance
+// — important because σ0/σ1 mix both (`σ0(x) = ROTR^7(x) ⊕ ROTR^18(x) ⊕
+// SHR^3(x)`, FIPS 180-4 §4.1.2).
+const BitOpBlock = (props: BlockProps) => {
+  const params = (): { bits?: number; wordBits?: number } => props.step.params as never;
+  const bits = (): number => params().bits ?? 0;
+  const wordBits = (): number => params().wordBits ?? 32;
+  const operation = (): string =>
+    props.step.type === "rotate-bits-right@1"
+      ? "Cyclic rotate right (ROTR)"
+      : "Logical shift right (SHR)";
+
+  const writeBits = (next: number) => {
+    editStepParams(props.step.id, {
+      ...(props.step.params as Record<string, Json>),
+      bits: next,
+    });
+  };
+
+  return (
+    <>
+      <dl class="param-scalars">
+        <div class="param-scalar-row">
+          <dt>Operation</dt>
+          <dd>{operation()}</dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Bits</dt>
+          <dd>
+            {/* max clamp = wordBits-1 for rotate (mod wordBits) and
+                a sensible ceiling for shift (past wordBits the output is
+                all-zeros; we leave the door open so users can prove it). */}
+            <IntInput
+              value={bits()}
+              min={0}
+              max={wordBits()}
+              placeholder="0"
+              onCommit={writeBits}
+            />
+          </dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Word bits</dt>
+          <dd>{wordBits()}</dd>
+        </div>
+      </dl>
+    </>
+  );
+};
+
+// xor@1 / and@1 / add-mod-32@1 / concat@1 — all share `{ inputCount: number }`.
+//
+// Read-only: editing `inputCount` without re-wiring downstream `input0`..
+// `inputN-1` ports throws "input port inputN not wired" at the next run.
+// That's a hard-error path with no pedagogical signal (the user sees the
+// cipher refuse to run, not a divergent digest). Locking matches the
+// existing pattern (BlockSizeBlock, AddRoundKeyBlock).
+const INPUT_COUNT_PARAM_TYPES = new Set(["xor@1", "and@1", "add-mod-32@1", "concat@1"]);
+
+const InputCountBlock = (props: { step: StepLeaf }) => {
+  const params = (): { inputCount?: number } => props.step.params as never;
+  const operation = (): string => {
+    switch (props.step.type) {
+      case "xor@1":
+        return "Bitwise XOR (⊕)";
+      case "and@1":
+        return "Bitwise AND (∧)";
+      case "add-mod-32@1":
+        return "Modular add (+ mod 2³²)";
+      case "concat@1":
+        return "Byte concatenation (‖)";
+      default:
+        return props.step.type;
+    }
+  };
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>Operation</dt>
+        <dd>{operation()}</dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Input count</dt>
+        <dd>{params().inputCount ?? "—"}</dd>
+      </div>
+    </dl>
+  );
+};
+
+// byte-slice@1.
+//
+// Editable `offset` + `length` — both produce wrong-but-defined output
+// when edited (the slice lands at a different position or carries a
+// different number of bytes; downstream consumers see a coercion warning
+// or wrong data). Read-only `sourceByteLength` — that's the declared
+// upstream length used for port-contract coercion warnings; editing it
+// changes what coercion the runtime performs but doesn't change the input
+// itself.
+const ByteSliceBlock = (props: BlockProps) => {
+  const params = (): { offset?: number; length?: number; sourceByteLength?: number } =>
+    props.step.params as never;
+  const offset = (): number => params().offset ?? 0;
+  const length = (): number => params().length ?? 0;
+
+  const writeParams = (patch: Record<string, Json>) => {
+    editStepParams(props.step.id, {
+      ...(props.step.params as Record<string, Json>),
+      ...patch,
+    });
+  };
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>Offset (bytes)</dt>
+        <dd>
+          <IntInput
+            value={offset()}
+            min={0}
+            placeholder="0"
+            onCommit={(next) => writeParams({ offset: next })}
+          />
+        </dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Length (bytes)</dt>
+        <dd>
+          <IntInput
+            value={length()}
+            min={1}
+            placeholder="1"
+            onCommit={(next) => writeParams({ length: next })}
+          />
+        </dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Source byteLength</dt>
+        <dd>{params().sourceByteLength ?? "—"}</dd>
+      </div>
+    </dl>
+  );
+};
+
+// aux-load-bytes@1.
+//
+// Editable `auxName` (renaming retargets the aux read — same pattern as
+// AuxLoadBlock for `aux-load@1`). Read-only `byteLength` — declared
+// PortContract output length used for coercion warnings; editing it without
+// matching the actual aux value's length surfaces a warning but doesn't
+// change runtime behavior, so locking it keeps the surface honest.
+const AuxLoadBytesBlock = (props: { step: StepLeaf }) => {
+  const params = (): { auxName?: string; byteLength?: number } => props.step.params as never;
+
+  const writeParams = (patch: Record<string, Json>) => {
+    editStepParams(props.step.id, {
+      ...(props.step.params as Record<string, Json>),
+      ...patch,
+    });
+  };
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>Aux name (read)</dt>
+        <dd>
+          <AuxNameInput
+            value={params().auxName ?? ""}
+            placeholder="aux key to read bytes from"
+            onCommit={(v) => writeParams({ auxName: v })}
+          />
+        </dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Declared byteLength</dt>
+        <dd>{params().byteLength ?? "—"}</dd>
+      </div>
+    </dl>
+  );
+};
+
+// split-bytes@1.
+//
+// Read-only `widths` array — same rationale as InputCountBlock: editing
+// produces "output port outputN not wired" downstream errors. Display as
+// comma-separated values to give the user a quick read of the split shape
+// (e.g. SHA-256's per-round working-variable split is `[4, 4, 4, 4, 4, 4,
+// 4, 4]` for 8 words of 4 bytes each).
+const SplitBytesBlock = (props: { step: StepLeaf }) => {
+  const params = (): { widths?: readonly number[] } => props.step.params as never;
+  const widths = (): readonly number[] => params().widths ?? [];
+  const total = (): number => widths().reduce((sum, w) => sum + w, 0);
+
+  return (
+    <>
+      <dl class="param-scalars">
+        <div class="param-scalar-row">
+          <dt>Output count</dt>
+          <dd>{widths().length}</dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Total byteLength</dt>
+          <dd>{total()}</dd>
+        </div>
+      </dl>
+      <div class="param-section">
+        <div class="param-section-label">Widths (bytes per output)</div>
+        {/* Comma-separated read-only chip row; matches the visual weight of
+            other read-only scalar rows but lets the user see the array
+            shape at a glance without a JSON dump. */}
+        <div class="param-readonly-array">
+          <For each={widths()}>
+            {(w, i) => <span class="param-readonly-cell">{`[${i()}] ${w}`}</span>}
+          </For>
+        </div>
+      </div>
+    </>
+  );
+};
+
+// constant-load@1.
+//
+// Read-only hex dump of `bytes`. Editing would conceptually be valid (the
+// PortContract declares the output length as a function of `params.bytes`),
+// but the SHA-256 spec carries two large constants (256-byte K table, 32-byte
+// H table) that aren't pedagogical to edit byte-by-byte — the user's
+// natural lever is the rotation constants in σ/Σ, not the SHA constants.
+// Locking matches the spirit of "the canonical FIPS tables are the canonical
+// state."
+const ConstantLoadBlock = (props: { step: StepLeaf }) => {
+  const params = (): { bytes?: readonly number[] } => props.step.params as never;
+  const bytes = (): readonly number[] => params().bytes ?? [];
+  const hex = (): string => formatBytes(Uint8Array.from(bytes()), "hex");
+
+  return (
+    <>
+      <dl class="param-scalars">
+        <div class="param-scalar-row">
+          <dt>Constant byteLength</dt>
+          <dd>{bytes().length}</dd>
+        </div>
+      </dl>
+      <details class="param-section param-collapsible">
+        <summary class="param-section-label">
+          Bytes ({bytes().length} entries, hex — click to expand)
+        </summary>
+        <pre class="param-hex-dump">{hex()}</pre>
+      </details>
+    </>
+  );
+};
+
+// pad-with-byte@1.
+//
+// Editable `padByte` (the sentinel byte; SHA-256 uses 0x80 per FIPS 180-4
+// §5.1.1) and `padTarget` (the byte index the padded output should end at
+// — 56 for single-block SHA-256, leaving 8 bytes for the length suffix).
+// Read-only `blockSize` (structural; load-block and append-be64-length
+// assume 64 for SHA-256).
+const PadWithByteBlock = (props: BlockProps) => {
+  const params = (): { padByte?: number; padTarget?: number; blockSize?: number } =>
+    props.step.params as never;
+
+  const writeParams = (patch: Record<string, Json>) => {
+    editStepParams(props.step.id, {
+      ...(props.step.params as Record<string, Json>),
+      ...patch,
+    });
+  };
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>Pad byte (sentinel)</dt>
+        <dd>
+          <ByteCellInput
+            value={params().padByte ?? 0}
+            onCommit={(next) => writeParams({ padByte: next })}
+          />
+        </dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Pad target (output byte index)</dt>
+        <dd>
+          <IntInput
+            value={params().padTarget ?? 0}
+            min={0}
+            max={(params().blockSize ?? 64) - 1}
+            placeholder="0"
+            onCommit={(next) => writeParams({ padTarget: next })}
+          />
+        </dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Block size</dt>
+        <dd>{params().blockSize ?? "—"} bytes</dd>
+      </div>
+    </dl>
+  );
+};
+
+// not@1 / state-to-bytes@1 / bytes-to-state@1 / append-be64-length@1 —
+// every one has empty params. Render an explanatory blurb instead of the
+// raw-JSON fallback's empty `{}`. Re-uses NoParamsBlock (defined above
+// for Serpent's linear transforms).
+const NO_PARAMS_PORT_NATIVE_TYPES = new Set([
+  "not@1",
+  "state-to-bytes@1",
+  "bytes-to-state@1",
+  "append-be64-length@1",
+]);
+
+const portNativeNoParamsLabel = (stepType: string): string => {
+  switch (stepType) {
+    case "not@1":
+      return "Bitwise NOT (¬) — flips every bit. No editable parameters; operates byte-by-byte.";
+    case "state-to-bytes@1":
+      return "Bridges runtime state → port-native bytes (identity-on-port). No editable parameters; the conversion is driven by the runtime's state codec.";
+    case "bytes-to-state@1":
+      return "Bridges port-native bytes → runtime state (identity-on-port). No editable parameters; the conversion is driven by the runtime's state codec.";
+    case "append-be64-length@1":
+      return "Appends the big-endian 64-bit bit-length of the message (FIPS 180-4 §5.1.1). No editable parameters; the length is derived from the input port's byteLength.";
+    default:
+      return "No editable parameters.";
+  }
 };
 
 // ─── Apply-to-all button ─────────────────────────────────────────────────

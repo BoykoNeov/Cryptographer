@@ -63,7 +63,69 @@ built around AES-scale legacy specs":
 
 ## Three sub-slices, can ship independently
 
-### Slice S1 — port-native ParamEditor blocks
+### Slice S1 — port-native ParamEditor blocks — SHIPPED 2026-05-26 (manual browser smoke pending)
+
+**Outcome.** 7 new ParamEditor block components + 2 extensions to existing
+matches, plus a coverage gate test (mirrors
+`tests/cross-mode-mirror-coverage.test.tsx`). The literal string "no editor
+for step type" no longer renders on any leaf in any shipped cipher/hash
+spec.
+
+**What landed:**
+
+- **Editable blocks (wrong-value-produces-divergent-trace pedagogy):**
+  - `BitOpBlock` — `rotate-bits-right@1` / `shift-bits-right@1`. Editable
+    `bits` integer + operation label + read-only `wordBits`.
+  - `ByteSliceBlock` — `byte-slice@1`. Editable `offset` + `length`;
+    read-only `sourceByteLength`.
+  - `AuxLoadBytesBlock` — `aux-load-bytes@1`. Editable `auxName` via the
+    existing `AuxNameInput`; read-only `byteLength`.
+  - `PadWithByteBlock` — `pad-with-byte@1`. Editable `padByte` (ByteCellInput)
+    + `padTarget` (IntInput); read-only `blockSize`.
+- **Read-only blocks (wrong-value-throws-at-runtime):**
+  - `InputCountBlock` — `xor@1` / `and@1` / `add-mod-32@1` / `concat@1`.
+    Operation label + read-only `inputCount`. Editing `inputCount` without
+    re-wiring downstream throws "input port inputN not wired" — that's a
+    hard-error path with no pedagogical signal, so the param is locked.
+  - `SplitBytesBlock` — `split-bytes@1`. Same rationale as InputCountBlock;
+    read-only widths chip row.
+  - `ConstantLoadBlock` — `constant-load@1`. Read-only `bytes` as a hex
+    dump inside a collapsed `<details>`. SHA-256's K table (256 bytes) and
+    H table (32 bytes) display cleanly without dominating the editor
+    panel.
+- **Match extensions (no new component):**
+  - `NoParamsBlock` extended to match `not@1` / `state-to-bytes@1` /
+    `bytes-to-state@1` / `append-be64-length@1` with type-specific blurbs.
+  - `StateToAuxBlock` match widened to include `generic.state-to-aux-bytes@1`
+    (same single-`auxName` param shape).
+- **Coverage gate:** `tests/param-editor-coverage.test.tsx` walks every
+  shipped cipher (9) + hash (1) spec and asserts no leaf renders the
+  raw-JSON fallback. 10 tests; encrypt-mode scope documented in the test
+  header (decrypt-only unpad steps already have blocks; this gate doesn't
+  cover them).
+- **CSS:** `.int-input`, `.param-readonly-array` / `.param-readonly-cell`,
+  `.param-hex-dump` added to `app.css`. Mirrors the colorway and font
+  rhythm of `.aux-name-input` / `.param-scalars`.
+- **Editability rule (codified in the in-file comment block):** "read-only
+  when edit-without-rewire produces a runtime throw; editable when it
+  produces wrong-but-defined output." This is the existing precedent from
+  `BlockSizeBlock`, `KeyExpansionBlock`, `SpeckKeyScheduleBlock` — the
+  polish plan's "default to editable" framing is overridden by the
+  precedent for params where edit-without-rewire is a hard-error path
+  (`inputCount`, `widths`, `byteLength`).
+
+**Counts:** suite 2347 → 2357 (+10). Bundle 676.10 → 683.31 KB raw / 199.29
+→ 200.67 KB gzipped (+7.21 KB / +1.38 KB — 7 new components + CSS).
+
+**Smoke pending.** The coverage test pins the negative ("no fallback string"
+never appears) but cannot catch (a) blocks rendering empty/broken-looking
+for default param values, (b) the hex-dump CSS rendering the 256-byte K
+table awkwardly, (c) IntInput keyboard commit paths (Enter/Escape/blur).
+30-second manual pass: SHA-256 → scrub a `rotate-bits-right` leaf (Bits
+field editable), an `xor` leaf (Input count read-only), the K-constant
+leaf (expand hex dump). Same close-gate pattern as Slice 2.8.
+
+### Slice S1 — port-native ParamEditor blocks (original plan, preserved)
 
 **Scope:** add `ParamEditor` blocks for the SHA-256-shaped port-native
 primitives so the param panel renders prose + read-only display

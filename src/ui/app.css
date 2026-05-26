@@ -944,6 +944,67 @@ button:disabled {
   outline-offset: 0;
 }
 
+/* Compact numeric input for port-native primitive params (`bits`, `offset`,
+   `length`, `padTarget`). Same colorway as .aux-name-input but narrower —
+   integer values are rarely more than 3 digits in this project. */
+.int-input {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 2px 6px;
+  width: 64px;
+  max-width: 100%;
+  text-align: right;
+}
+
+.int-input:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: 0;
+}
+
+/* Read-only chip row for short arrays (split-bytes widths, future similar
+   shapes). Each chip is `.param-readonly-cell`; the row wraps if the array
+   is long. */
+.param-readonly-array {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.param-readonly-cell {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 6px;
+}
+
+/* Read-only hex dump for `constant-load@1`'s `bytes` param (SHA-256's K
+   table is 256 bytes; H table 32). Pre-formatted so the natural line
+   breaks from `formatBytes` (space-separated hex bytes) wrap naturally on
+   the panel width. */
+.param-hex-dump {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  margin-top: 4px;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
 /* +byte / −byte buttons under the aux-load value row. Tiny, low-key —
    the user usually only touches these once per spec, when first wiring
    up an aux-load. */
