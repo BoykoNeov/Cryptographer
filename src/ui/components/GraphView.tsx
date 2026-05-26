@@ -472,13 +472,40 @@ type ReplicaPlacement = {
    * the spine, larger = farther up). Assigned in `graph.nodes` walk
    * order (which is itself a deterministic walk from `deriveAuxGraph`),
    * so source A is always row 0 and source B always row 1 across EVERY
-   * consumer they touch — even consumers where A has no replica (those
-   * consumers' row 0 sits empty; B still occupies row 1, never row 0).
-   * This globally-stable property costs vertical space (a container with
-   * only row-2 replicas gets 3 rows of lift, 2 empty) and pays in
-   * scannability — the eye can track "source X always at this row."
+   * consumer they touch.
+   *
+   * **Identity, not position (Slice S2(j2), 2026-05-26).** Prior to
+   * S2(j2) this also drove the visual y-lift and source-x offset for
+   * every replica. SHA-256 exposed the cost: with 4 replicated sources
+   * at root (K-to-aux=0, W-publish=1, split-wv=2, split-H=3), the
+   * s-stages (which see only split-wv + split-H) got rows 2 + 3 worth
+   * of lift (252 + 340 px above the s_i chip) even though rows 0/1
+   * sat empty there. Local densification — see `localRowOf` /
+   * `localTotalOf` — now drives placement; `rowOfSource` survives as
+   * the comparator key for `consumerPortOffset`'s within-bucket
+   * sort and as the canonical source-identity surface that the user
+   * tracks via the replica chip label (NOT by absolute y position).
    */
   readonly rowOfSource: ReadonlyMap<string, number>;
+  /**
+   * Slice S2(j2) (2026-05-26): replica id → local row index 0..M-1 at
+   * its consumer, where M = number of distinct sources targeting this
+   * consumer. Replicas at one consumer are sorted by `rowOfSource` first
+   * so the within-consumer ordering matches what the global pool would
+   * have produced — preserves "Round 5 and Round 19 see K-to-aux at the
+   * same local row" — but unused global rows are squeezed out so the
+   * s-stages no longer pay for empty rows 0+1 above them. Drives
+   * `replicaSlotPosition` y-lift + `replicaSourceXOffset` x-shift.
+   */
+  readonly localRowOf: ReadonlyMap<string, number>;
+  /**
+   * Slice S2(j2) companion: replica id → M, the total replica count at
+   * this replica's consumer. Used by `replicaSourceXOffset` to compute
+   * the `(localRow − (M − 1)/2) * step` spread — so 2 replicas at one
+   * consumer get offsets ±step/2 regardless of how many other sources
+   * are globally replicated elsewhere on the canvas.
+   */
+  readonly localTotalOf: ReadonlyMap<string, number>;
 };
 
 const EMPTY_REPLICA_PLACEMENT: ReplicaPlacement = {
@@ -486,6 +513,8 @@ const EMPTY_REPLICA_PLACEMENT: ReplicaPlacement = {
   consumerOf: new Map(),
   sourceOf: new Map(),
   rowOfSource: new Map(),
+  localRowOf: new Map(),
+  localTotalOf: new Map(),
 };
 
 /**
@@ -907,7 +936,56 @@ const buildReplicaPlacement = (graph: CipherGraph): ReplicaPlacement => {
   for (const e of graph.edges) {
     if (isReplica.has(e.from)) consumerOf.set(e.from, e.to);
   }
-  return { isReplica, consumerOf, sourceOf, rowOfSource };
+
+  // Slice S2(j2) — per-consumer LOCAL row densification.
+  //
+  // The global rowOfSource gives source A row N globally. Pre-S2(j2)
+  // that row drove BOTH the y-lift above each consumer AND the
+  // source-x offset for the diagonal arrow start. SHA-256 surfaced
+  // the cost: with 4 replicated root sources, rows 2 and 3 lift
+  // their replicas 252 / 340 px above their consumers — wasted
+  // vertical space at consumers that don't have rows 0/1 nearby.
+  //
+  // Densification: group replicas by their consumer, sort each
+  // group by the source's global row (preserves cross-consumer
+  // ordering: K-to-aux at local row 0 above Round 5 AND above
+  // Round 19), assign local rows 0..M-1. The source's identity is
+  // still trackable by the replica's chip label; what changes is
+  // the absolute y-row no longer matches across distant consumer
+  // clusters.
+  const replicasByConsumer = new Map<string, string[]>();
+  for (const replicaId of isReplica) {
+    const consumerId = consumerOf.get(replicaId);
+    if (consumerId === undefined) continue;
+    const arr = replicasByConsumer.get(consumerId) ?? [];
+    arr.push(replicaId);
+    replicasByConsumer.set(consumerId, arr);
+  }
+  const localRowOf = new Map<string, number>();
+  const localTotalOf = new Map<string, number>();
+  for (const replicaIds of replicasByConsumer.values()) {
+    // Sort by source's global row so the within-cluster ordering
+    // mirrors the pre-S2(j2) behavior for consumer clusters where
+    // every source actually has a replica (e.g., AES rounds where
+    // K-to-aux + W-publish both target every round → 2 replicas per
+    // round, local rows 0 + 1, same as their global rows).
+    replicaIds.sort((a, b) => {
+      const sa = sourceOf.get(a);
+      const sb = sourceOf.get(b);
+      const ra = sa !== undefined ? (rowOfSource.get(sa) ?? 0) : 0;
+      const rb = sb !== undefined ? (rowOfSource.get(sb) ?? 0) : 0;
+      return ra - rb;
+    });
+    const total = replicaIds.length;
+    for (let i = 0; i < total; i++) {
+      const rid = replicaIds[i];
+      if (rid === undefined) continue;
+      localRowOf.set(rid, i);
+      localTotalOf.set(rid, total);
+    }
+  }
+
+  return { isReplica, consumerOf, sourceOf, rowOfSource, localRowOf, localTotalOf };
 };
 
 /**
@@ -1041,11 +1119,16 @@ const layoutNode = (
     // BEFORE the third pass needs it because innerY (the in-column
     // children's
     // start) depends on liftH.
+    // Slice S2(j2) — read LOCAL row (per-consumer densified) instead of
+    // the source's global row. Each lifted replica's y-lift is its
+    // local row * (LEAF_H + REPLICA_STACK_GAP); the maxLiftRow tells
+    // `replicaLiftHeight` how many rows to budget. For groups whose
+    // children consume only a SUBSET of the globally-replicated sources,
+    // this collapses unused row slots — SHA-256's s-stages drop from
+    // local row 2/3 (was the global row index) back to row 0/1.
     let maxLiftRow = -1;
     for (const rId of liftedReplicas) {
-      const sId = replicas.sourceOf.get(rId);
-      if (sId === undefined) continue;
-      const row = replicas.rowOfSource.get(sId) ?? 0;
+      const row = replicas.localRowOf.get(rId) ?? 0;
       if (row > maxLiftRow) maxLiftRow = row;
     }
     const liftH = replicaLiftHeight(maxLiftRow, consts);
@@ -1131,8 +1214,9 @@ const layoutNode = (
       if (consumerId === undefined) continue;
       const consumerBox = out.get(consumerId);
       if (!consumerBox) continue;
-      const sId = replicas.sourceOf.get(replicaId);
-      const row = sId !== undefined ? (replicas.rowOfSource.get(sId) ?? 0) : 0;
+      // Slice S2(j2) — local row drives placement; see ReplicaPlacement
+      // docstring for the global-vs-local split.
+      const row = replicas.localRowOf.get(replicaId) ?? 0;
       const slot = replicaSlotPosition(consumerBox.x, consumerBox.y, row, consts);
       const delta = relativePins.get(replicaId);
       const finalX = slot.x + (delta?.dx ?? 0);
@@ -1288,8 +1372,8 @@ const layoutNode = (
       if (consumerId === undefined) continue;
       const consumerBox = out.get(consumerId);
       if (!consumerBox) continue;
-      const sId = replicas.sourceOf.get(childId);
-      const row = sId !== undefined ? (replicas.rowOfSource.get(sId) ?? 0) : 0;
+      // Slice S2(j2) — use local row.
+      const row = replicas.localRowOf.get(childId) ?? 0;
       // Right-gutter slot: consumer's right edge + FLOW_GAP, plus
       // row × (LEAF_W + STACK_GAP) for stacked sources. y centers
       // the replica vertically on the consumer chip.
@@ -1401,9 +1485,8 @@ const layoutNode = (
   let iterateMaxRow = -1;
   for (const childId of container.childIds) {
     if (!replicas.isReplica.has(childId)) continue;
-    const sId = replicas.sourceOf.get(childId);
-    if (sId === undefined) continue;
-    const row = replicas.rowOfSource.get(sId) ?? 0;
+    // Slice S2(j2) — use local row.
+    const row = replicas.localRowOf.get(childId) ?? 0;
     if (row > iterateMaxRow) iterateMaxRow = row;
   }
   const replicaLiftH = hasIterateReplicas ? replicaLiftHeight(iterateMaxRow, consts) : 0;
@@ -1446,8 +1529,8 @@ const layoutNode = (
     if (consumerId === undefined) continue;
     const consumerBox = out.get(consumerId);
     if (!consumerBox) continue;
-    const sId = replicas.sourceOf.get(childId);
-    const row = sId !== undefined ? (replicas.rowOfSource.get(sId) ?? 0) : 0;
+    // Slice S2(j2) — use local row.
+    const row = replicas.localRowOf.get(childId) ?? 0;
     const slot = replicaSlotPosition(consumerBox.x, consumerBox.y, row, consts);
     const delta = relativePins.get(childId);
     const finalX = slot.x + (delta?.dx ?? 0);
@@ -1572,9 +1655,11 @@ export const layoutRoot = (
   let rootReplicaMaxRow = -1;
   for (const id of graph.rootIds) {
     if (!replicas.isReplica.has(id)) continue;
-    const sId = replicas.sourceOf.get(id);
-    if (sId === undefined) continue;
-    const row = replicas.rowOfSource.get(sId) ?? 0;
+    // Slice S2(j2) — local row gives the actual row this replica
+    // occupies above its consumer. For SHA-256 root replicas at the
+    // s-stages this drops from 2/3 (global) back to 0/1 (local) since
+    // the s-stages don't have rows 0/1 sources targeting them.
+    const row = replicas.localRowOf.get(id) ?? 0;
     if (row > rootReplicaMaxRow) rootReplicaMaxRow = row;
   }
   // Port-spreading polish (2026-05-16): replica lift uses
@@ -1658,8 +1743,11 @@ export const layoutRoot = (
     if (consumerId === undefined) continue;
     const consumerBox = boxes.get(consumerId);
     if (!consumerBox) continue;
-    const sId = replicas.sourceOf.get(id);
-    const row = sId !== undefined ? (replicas.rowOfSource.get(sId) ?? 0) : 0;
+    // Slice S2(j2) — local row drives placement (see ReplicaPlacement
+    // docstring). For SHA-256's s-stages this collapses split-wv from
+    // y-lift = consumerY−252 to y-lift = consumerY−76, and split-H from
+    // consumerY−340 to consumerY−164.
+    const row = replicas.localRowOf.get(id) ?? 0;
     // Slice-2 anchor: when the consumer is an iterate container, place
     // the replica above the iterate body's first NON-REPLICA child —
     // i.e. the first actual body step — instead of the iterate's own
@@ -1966,15 +2054,26 @@ export const consumerPortOffset = (
  *
  * **Geometry** (2026-05-16 straight-line + offset-start-point approach):
  * uses the monotonic spread formula `(row - (total-1)/2) * step` over
- * the GLOBAL row index, so a replica's source-x is stable across every
- * consumer it touches. The target-side `consumerPortOffset` uses
- * per-consumer slot indices, but those slots are assigned in row order
- * (see `ConsumerPortAssignment` doc-block), so source-x and target-x
- * sweep in the same direction by row at any given consumer: row 0's
- * source lands LEFT and gets a leftward slot; row N-1's source lands
- * RIGHT and gets a rightward slot. Result: every arrow is a roughly
- * parallel down-and-slightly-inward line, no crossovers within a
- * consumer.
+ * the **per-consumer LOCAL row index** (Slice S2(j2), 2026-05-26). The
+ * target-side `consumerPortOffset` uses per-consumer slot indices, and
+ * those slots are assigned in `rowOfSource` (global) order — but since
+ * within a single consumer's bucket the relative ordering of local and
+ * global rows is identical (we sort by global then renumber locally),
+ * source-x and target-x still sweep in the same direction at any given
+ * consumer. Result: every arrow is a roughly parallel down-and-slightly-
+ * inward line, no crossovers within a consumer.
+ *
+ * **What S2(j2) changed (2026-05-26).** Pre-S2(j2) the formula read from
+ * `replicas.rowOfSource.get(sourceId)` (the global row) and
+ * `replicas.rowOfSource.size` (the global total). SHA-256 has 4 root
+ * replicated sources globally; the s-stages see only 2 of them
+ * (split-wv / split-H, at global rows 2 / 3). The old formula put their
+ * arrow start at `(2 − 1.5) * 32 = +16` and `(3 − 1.5) * 32 = +48` —
+ * visibly off-center (the +48 nearly clips the chip's right edge). The
+ * new formula uses local row 0 / 1 with total = 2 → offsets `±16`,
+ * arrows visibly start near the chip's vertical centerline. AES rounds
+ * see all globally-replicated sources locally (K-to-aux + W-publish,
+ * local total = 2), so AES is byte-identical.
  *
  * **Why monotonic, not alternating:** an earlier draft alternated
  * `+1, −1, +2, −2, …` so each row claimed a different side of the
@@ -1987,7 +2086,7 @@ export const consumerPortOffset = (
  * AES-128 ECB + 3-source case: "the arrow from key-expansion does an
  * unnecessary crossover the other arrows coming from above."
  *
- * **Single-source case** (total ≤ 1): returns 0. Today's AES /
+ * **Single-source case** (localTotal ≤ 1): returns 0. Today's AES /
  * Speck / Serpent key-expansion fan-outs all hit this branch — byte-
  * identical to pre-offset rendering, so the simple case stays clean.
  *
@@ -1998,23 +2097,23 @@ export const consumerPortOffset = (
  * to LEAF_W/2 − 4 = 62 as a guard for any worse pathological case.
  *
  * Param shape is structural (not `ReplicaPlacement`) so tests can pass
- * a hand-rolled `{ sourceOf, rowOfSource }` literal — the helper only
- * needs the two maps.
+ * a hand-rolled `{ localRowOf, localTotalOf }` literal — the helper
+ * only needs those two maps. (Pre-S2(j2): `{ sourceOf, rowOfSource }`
+ * — see Slice S2(j2) of the SHA-256 density-polish plan for the param
+ * migration.)
  */
 export const replicaSourceXOffset = (
   edge: GraphEdge,
   replicas: {
-    readonly sourceOf: ReadonlyMap<string, string>;
-    readonly rowOfSource: ReadonlyMap<string, number>;
+    readonly localRowOf: ReadonlyMap<string, number>;
+    readonly localTotalOf: ReadonlyMap<string, number>;
   },
   step: number,
 ): number => {
-  const sId = replicas.sourceOf.get(edge.from);
-  if (sId === undefined) return 0;
-  const row = replicas.rowOfSource.get(sId);
+  const row = replicas.localRowOf.get(edge.from);
   if (row === undefined) return 0;
-  const total = replicas.rowOfSource.size;
-  if (total <= 1) return 0;
+  const total = replicas.localTotalOf.get(edge.from);
+  if (total === undefined || total <= 1) return 0;
   return (row - (total - 1) / 2) * step;
 };
 

@@ -140,16 +140,22 @@ describe("Slice 7c — aux-only baseline (single-source) regression", () => {
 
 // ─── Test 2: Multi-source row stability ───────────────────────────────────
 
-describe("Slice 7c — multi-source row stability (globally-stable rowOfSource)", () => {
-  it("source A at row 0 across every consumer; source B at row 1 EVEN at consumers where A has no replica", () => {
+describe("Slice S2(j2) — per-consumer local row densification (revises Slice 7c global-row policy)", () => {
+  it("source A at LOCAL row 0 across every consumer that has it; source B's row depends on whether A is also present", () => {
     // Two sources A, B. Both fan to 3 common consumers c1/c2/c3; only B
-    // also fans to a disjoint c4. The headline test of the by-source-row
-    // policy: at c4 (where A has no replica), B's replica is still at
-    // row 1, NOT row 0 — c4's row 0 sits empty (vertical gap above c4).
+    // also fans to a disjoint c4. Slice S2(j2) (2026-05-26) densifies
+    // the per-consumer row pool: at c4 (where A has no replica), B's
+    // replica is at LOCAL row 0 (not the global row 1 from
+    // `rowOfSource`). Pre-S2(j2) this test pinned the opposite
+    // ("globally-stable rowOfSource: B at row 1 EVEN at c4 with c4's
+    // row 0 sitting empty"); SHA-256's s-stages — which see only
+    // split-wv / split-H at global rows 2 / 3 — were paying 252+ px
+    // of empty vertical space for unused rows 0/1.
     //
-    // Why globally stable beats per-consumer compaction: lets the eye
-    // track "every chip on this y is from source X" across the whole
-    // canvas. The cost is c4's empty row 0; the payoff is scannability.
+    // Within a consumer that DOES have both sources (c1, c2, c3), the
+    // local row order still mirrors the global row order — A first
+    // (local row 0), B second (local row 1) — so the within-cluster
+    // tracking property the original test cared about is preserved.
     const g = buildSyntheticGraph({
       nodes: [
         consumerNode("c1"),
@@ -224,52 +230,49 @@ describe("Slice 7c — multi-source row stability (globally-stable rowOfSource)"
     // siblings on the same spine row, so c.y is identical).
     expect(new Set(aRepYs).size).toBe(1);
 
-    // All B-replicas across c1/c2/c3/c4 share the same y (row 1 above
-    // their consumers — one (LEAF_H + FLOW_GAP)-spaced row above A's
-    // row 0). Including c4. With the straight-line + offset-start
-    // approach (2026-05-16), REPLICA_ROW_X_STEP === 0 so all rows
-    // share the consumer.x column — upper-row arrows ORIGINATE from
-    // offset x positions on the column's bottom edges (via
-    // `replicaSourceXOffset`) instead of from a diagonally-displaced
-    // source. The assertion below tolerates the column-stacked case
-    // (x === c.x + 0) identically — placement of the box stays
-    // centred regardless.
-    const bRepYs: number[] = [];
-    for (const cid of ["c1", "c2", "c3", "c4"]) {
+    // B-replicas at c1/c2/c3 (where A is also present) sit at LOCAL row
+    // 1 — row 0 lift + one row step above their consumer. Same as
+    // pre-S2(j2) for these consumers because the local row pool (A=0,
+    // B=1) matches the global row pool (A=0, B=1) when both sources
+    // are present.
+    const bRepYsWithA: number[] = [];
+    for (const cid of ["c1", "c2", "c3"]) {
       const c = boxes.get(cid);
       const b = boxes.get(`B->${cid}`);
       if (!c || !b) throw new Error(`missing B-replica box for ${cid}`);
-      // B at row 1: row 0 lift + one row step.
       expect(b.y).toBe(c.y - row0Lift - rowStep);
       expect(b.x).toBe(c.x + consts.REPLICA_ROW_X_STEP);
-      bRepYs.push(b.y);
+      bRepYsWithA.push(b.y);
     }
-    expect(new Set(bRepYs).size).toBe(1);
+    expect(new Set(bRepYsWithA).size).toBe(1);
 
-    // The headline cross-source assertion: B's row sits exactly one row
-    // step above A's row, at every consumer. (Cheap derivation from above
-    // — surface it explicitly so a future regression that breaks the
-    // "source X always at row Y" property fails on this line.)
-    expect(bRepYs[0]).toBe((aRepYs[0] ?? 0) - rowStep);
+    // Within-cluster tracking property: at every consumer that has BOTH
+    // sources, B sits exactly one row step above A.
+    expect(bRepYsWithA[0]).toBe((aRepYs[0] ?? 0) - rowStep);
 
-    // c4 has no A-replica; its column at row 0 (c4.y - row0Lift) should
-    // be empty. Pin via the absence: no node's box is at that position
-    // above c4. Search column tolerance: post-port-spreading row 1 is
-    // at c.x + REPLICA_ROW_X_STEP, NOT c.x, so an "above c4 = same x"
-    // check still distinguishes row 0 from row 1.
+    // Slice S2(j2) — densification headline: c4 has only B. B at c4
+    // takes LOCAL row 0 (no A present locally), so its y equals A's
+    // y at c1/c2/c3 (all "row 0 above consumer" positions). Pre-
+    // S2(j2) this would have been row 1 with c4's row 0 sitting empty.
     const c4 = boxes.get("c4");
-    if (!c4) throw new Error("missing c4");
-    const c4Row0Y = c4.y - row0Lift;
+    const bAtC4 = boxes.get("B->c4");
+    if (!c4 || !bAtC4) throw new Error("missing c4 / B->c4");
+    expect(bAtC4.y).toBe(c4.y - row0Lift);
+    // No REPLICA_ROW_X_STEP shift since this replica is at local row 0
+    // (the per-row x-shift formula uses local row, and row 0 contributes
+    // 0 * step = 0).
+    expect(bAtC4.x).toBe(c4.x);
+    // Cross-check: at c4 the row above c4 IS occupied (by B itself),
+    // unlike pre-S2(j2) where it sat empty.
     let row0OccupantAtC4: string | null = null;
     for (const [nid, box] of boxes) {
-      if (nid === "c4" || nid === "B->c4") continue;
-      // "Above c4 at row 0" = same x column as c4, y matching row 0.
-      if (box.x === c4.x && box.y === c4Row0Y) {
+      if (nid === "c4") continue;
+      if (box.x === c4.x && box.y === c4.y - row0Lift) {
         row0OccupantAtC4 = nid;
         break;
       }
     }
-    expect(row0OccupantAtC4).toBeNull();
+    expect(row0OccupantAtC4).toBe("B->c4");
   });
 });
 

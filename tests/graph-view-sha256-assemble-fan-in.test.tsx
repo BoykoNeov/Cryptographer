@@ -135,6 +135,60 @@ describe("GraphView — SHA-256 final.assemble 8-fan-IN distinct attach y", () =
     expect(buckets.size).toBe(8);
   });
 
+  it("Slice S2(j2): split-wv / split-H replicas above s-stages sit at LOCAL rows 0+1, not GLOBAL rows 2+3", () => {
+    // Pre-S2(j2) SHA-256's four root replicated sources (K-to-aux,
+    // W-publish, split-wv, split-H) shared a global rowOfSource pool;
+    // split-wv landed at row 2 (lift 252 px above s_i) and split-H at
+    // row 3 (lift 340 px). The s-stages had no replicas at rows 0/1
+    // because K-to-aux/W-publish target only the compression rounds.
+    // S2(j2)'s per-consumer densification compresses the s-stage stack
+    // to rows 0+1 (split-wv at lift 76 px, split-H at lift 164 px).
+    //
+    // This test pins the user-visible distance: the gap from the
+    // bottom of split-H to the top of s_i is bounded by the 2-row
+    // lift formula (LEAF_H + REPLICA_LIFT_GAP + LEAF_H + REPLICA_STACK_GAP
+    // = 40 + 36 + 40 + 48 = 164 px at default density), not the
+    // pre-S2(j2) 4-row lift (~340 px).
+    const { container } = render(() => <GraphView />);
+
+    // Find s_1 and its two replicas. We pick s_1 (not s_0) because s_0
+    // is the spine successor of split-wv — its replica is the special
+    // "spine replica" that sits at the source's old spec slot rather
+    // than above the consumer.
+    const s1 = container.querySelector('[data-testid="graph-leaf-final.s1"]');
+    const splitWvReplica = container.querySelector(
+      '[data-testid="graph-leaf-final.split-wv@->final.s1"]',
+    );
+    const splitHReplica = container.querySelector(
+      '[data-testid="graph-leaf-final.split-H@->final.s1"]',
+    );
+    if (!s1 || !splitWvReplica || !splitHReplica) {
+      throw new Error("missing s1 or one of its replicas");
+    }
+    const rectS1 = s1.querySelector("rect.graph-leaf-rect");
+    const rectWv = splitWvReplica.querySelector("rect.graph-leaf-rect");
+    const rectH = splitHReplica.querySelector("rect.graph-leaf-rect");
+    if (!rectS1 || !rectWv || !rectH) throw new Error("missing rects");
+
+    const yS1 = Number(rectS1.getAttribute("y"));
+    const yWv = Number(rectWv.getAttribute("y"));
+    const yH = Number(rectH.getAttribute("y"));
+
+    // split-wv at local row 0: y_s1 − (LEAF_H + REPLICA_LIFT_GAP) =
+    // y_s1 − 64 at default density (LEAF_H=28, REPLICA_LIFT_GAP=36).
+    // split-H at local row 1:
+    // y_s1 − (LEAF_H + REPLICA_LIFT_GAP) − (LEAF_H + REPLICA_STACK_GAP) =
+    // y_s1 − 64 − 76 = y_s1 − 140 (LEAF_H=28, REPLICA_STACK_GAP=48).
+    // Pre-S2(j2) (global rows 2, 3): would have been y_s1 − 216 and
+    // y_s1 − 292 respectively — a 152 / 152 px reduction from
+    // densification.
+    expect(yS1 - yWv).toBeCloseTo(64, 0);
+    expect(yS1 - yH).toBeCloseTo(140, 0);
+
+    // Sanity: split-H is above split-wv (row 1 vs row 0).
+    expect(yH).toBeLessThan(yWv);
+  });
+
   it("the 8 ty values stay within the EdgePath clamp window (±16 around toCy)", () => {
     // Belt-and-braces: confirms the scale-to-fit branch lands every slot
     // inside the EdgePath clamp window, so no slot would have been

@@ -757,6 +757,118 @@ preamble row.**
 - Lower priority than B (round.0 only — appears once per SHA-256 spec
   rather than once per iteration).
 
+#### S2(j2) — per-consumer local row densification — SHIPPED 2026-05-26
+
+**User-reported follow-up to S2(j).** After the S2(j) ship the user
+flagged TWO related anomalies on the s-stages area:
+  1. The `split-wv` + `split-H` replicas sit much higher above each
+     `s_i` than the `K-to-aux` + `W-publish` replicas sit above each
+     `Round`. Concretely: ~252 / 340 px lift above s_i vs ~76 / 164 px
+     lift above Round.
+  2. The arrows from `split-wv` / `split-H` replicas start visibly
+     off-center on the replica chip (near the right edge), not at
+     the chip's vertical midline like the K-to-aux / W-publish arrows
+     above Rounds do.
+
+**Diagnosis.** Both effects share one root cause — the
+`buildReplicaPlacement` function built a **global** `rowOfSource` pool.
+Every replicated source claimed the next available row in DFS order;
+SHA-256's order is K-to-aux=0, W-publish=1, split-wv=2, split-H=3.
+
+For `replicaSlotPosition`'s y-lift, row k = `consumerY − LEAF_H −
+REPLICA_LIFT_GAP − k * (LEAF_H + REPLICA_STACK_GAP)`. With LEAF_H=28,
+REPLICA_LIFT_GAP=36, REPLICA_STACK_GAP=48 at default density:
+  - row 0 → consumerY − 64
+  - row 1 → consumerY − 140
+  - row 2 → consumerY − 216 (s-stages' split-wv pre-S2(j2))
+  - row 3 → consumerY − 292 (s-stages' split-H pre-S2(j2))
+
+For `replicaSourceXOffset`, the source-side arrow attach uses
+`(row − (total−1)/2) * step` with step=32, total=4:
+  - row 0 → −48 px (K-to-aux above Round — left of center)
+  - row 1 → −16 px (W-publish above Round)
+  - row 2 → +16 px (split-wv above s_i)
+  - row 3 → +48 px (split-H above s_i — near right edge of the chip)
+
+The s-stages were paying for rows 0 + 1's vertical space (152 px of
+empty lift below split-wv) AND the diagonal source-x shift designed
+for cross-row arrow disambiguation — neither buys them anything,
+because rows 0 + 1 sources don't target s_i.
+
+**Fix (Option D from the design discussion).** Keep `rowOfSource` for
+**source identity** (the comparator in `buildConsumerPortAssignment`
+still sorts by global row so within-bucket ordering is stable
+canvas-wide), but introduce a separate **per-consumer local row**
+that drives PLACEMENT.
+
+Added two fields to `ReplicaPlacement`:
+  - `localRowOf: ReadonlyMap<string, number>` — replicaId → local
+    row 0..M−1
+  - `localTotalOf: ReadonlyMap<string, number>` — replicaId → M
+
+`buildReplicaPlacement` groups replicas by consumer, sorts each group
+by source's global row (preserving within-cluster ordering), then
+assigns local rows 0..M−1.
+
+All eight layout call sites that read `rowOfSource.get(sourceId)` were
+flipped to read `localRowOf.get(replicaId)`. `replicaSourceXOffset`'s
+structural-parameter type changed from `{ sourceOf, rowOfSource }` to
+`{ localRowOf, localTotalOf }`.
+
+**Result on SHA-256.**
+  - split-wv at s_1: lift = consumerY − 64 (was −216). 152 px gained.
+  - split-H at s_1: lift = consumerY − 140 (was −292). 152 px gained.
+  - Source-x: split-wv at offset 0 (was +16); split-H at +16 (was +48).
+    Arrows now start near the chip's vertical centerline.
+
+**Robust under legacy ciphers.** AES rounds see both K-to-aux and
+W-publish locally (total=2 local), same as global (total=2 of 4
+sources but K-to-aux and W-publish ARE both present). Local rows 0,1
+match global rows 0,1 → byte-identical placement. Same for Speck,
+Serpent, DES.
+
+**Tests:**
+- `tests/graph-view-replica-placement.test.ts` — the existing
+  Slice 7c "row stability" test renamed to "S2(j2) — per-consumer
+  local row densification" and rewritten: c4 (the disjoint consumer
+  in the synthetic graph) now sees B at LOCAL row 0 instead of
+  GLOBAL row 1; within-cluster c1/c2/c3 ordering preserved (A at row
+  0, B at row 1 because both sources are present locally). One
+  assertion flipped from "c4's row 0 sits empty" to "c4's row 0 IS
+  occupied by B-replica".
+- `tests/graph-view-sha256-assemble-fan-in.test.tsx` +1 new test
+  ("split-wv / split-H replicas above s-stages sit at LOCAL rows 0+1,
+  not GLOBAL rows 2+3"): pins y_s1 − y_split-wv ≈ 64 and y_s1 − y_split-H
+  ≈ 140.
+
+**Counts.** Suite 2391 → 2392 (+1). Bundle 685.04 → 685.13 KB raw /
+201.25 → 201.32 KB gzipped (+0.09 KB / +0.07 KB).
+
+**Closes Case C partially.** S2(j2) doesn't address the 3-arrow
+convergence AT round.0 directly (still 3 arrows entering similar
+curves from above), but it DOES shrink the preamble corridor that
+those arrows have to traverse — K-to-aux / W-publish are now at
+local rows above their respective Rounds rather than at the top of
+a tall global row stack. Empirically the round.0 convergence becomes
+less visually messy. Full Case C fix (per-consumer staggered
+y-offset for replicas or alternate-side entry) still queued if
+further polish is needed.
+
+**Open observation for a future slice.** The arrow x-attach geometry
+within a chip now varies based on how many local sources target each
+consumer:
+  - Consumers with 1 local source (singleton clusters) → arrow at
+    chip center (no shift).
+  - Consumers with 2 local sources → arrows at chip ± step/2 (= ±16
+    at default).
+  - Consumers with 3+ local sources → spread up to ±48 (edge case).
+  Cross-consumer the SAME source can have different visible attach
+  x's at different consumers. If this turns out to be visually
+  disruptive (e.g., readers expect "K-to-aux always emits from its
+  chip's left edge"), the fix is to lock source-x by the GLOBAL row
+  index again — keeping the LOCAL row for y-lift only. Filed but
+  no smoke evidence yet.
+
 ### Slice S3 — narration density second pass
 
 Deferred from this session per the bucket-C scoping above. Two routes
