@@ -778,15 +778,9 @@ same constant identity).
 **Counts.** Suite 2392 → 2395 (+3). Bundle 687.90 → 688.16 KB raw /
 202.02 → 202.10 KB gzipped (+0.26 KB / +0.08 KB).
 
-**Smoke pending.** Manual 30-second pass: open SHA-256 in the graph
-view, expand `msg-schedule` (chevron on the container), confirm the
-3 incoming arrows on `sigma1` (and `sigma0`) leave their source
-chips at 3 visibly distinct y values on each source's right edge,
-not all bunched at midline. Same for w-t's 4 incoming. AES-CBC
-sanity: open AES-128 CBC, confirm cbc-xor → initial.add-round-key
-spine arrow still exits cbc-xor's right-edge midline (the existing
-feedback-overhead test pins this, but visual confirmation belt-and-
-braces).
+**Smoke CONFIRMED 2026-05-26.** User opened SHA-256 in the graph view,
+expanded `msg-schedule`, confirmed the parallel-shift behavior on
+sigma1 / sigma0 / w-t fan-IN arrows. AES-CBC spine unchanged.
 
 **Case C deferred to a future slice.** The round.0 fan-IN
 convergence (3 arrows: K-to-aux replica, W-publish replica,
