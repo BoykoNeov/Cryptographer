@@ -422,41 +422,84 @@ exercises, per the user's Rule 2.
 test). Bundle 684.39 → 684.39 KB raw / 201.02 → 201.02 KB gzipped
 (6 lines deleted is below the rounded-KB display precision).
 
-#### S2(h) — dropAuxOnlyStateEdges overreach for state-thread INCOMING edges — DEFERRED to a future session
+#### S2(h) — dropAuxOnlyStateEdges asymmetric endpoint sets — SHIPPED 2026-05-26
 
-**Surfaced 2026-05-26** during S2(e)/(f) browser smoke. The filter
-drops every `kind: "state", auxKey: "state"` edge where either
-endpoint is in `auxOnlyRootIds`. For aux-only roots that are
-"entry leaves" (no state-spine producer — e.g. AES `key-expansion`),
-this is correct: the input pill substitutes for the missing
-producer arrow, and the inferred edge `key-expansion →
-split-blocks` is redundant.
+**Refined scope** during the session opener: option (a) as literally
+stated in the deferred plan doesn't fix the bug. After S2(f) suppresses
+W-publish's outgoing edges (W-publish → K-to-aux dropped at emit because
+K-to-aux is in `skipStateEdgeTo`), W-publish has zero outgoing legacy
+state edges in the pre-filter graph — option (a)'s symmetric "to is a
+true sink" check would STILL drop `msg-schedule → W-publish`. The
+discriminator option (a) needs isn't "has outgoing edges" but "actually
+reads the state thread at runtime." That's option (c) — `meta.stateInput
+Port` declared by the registration — applied per-endpoint, asymmetric.
 
-For aux-only roots that are MIDDLE-OF-SPEC consumers
-reading the state-thread (SHA-256's `W-publish`, `K-to-aux`,
-`H-to-aux`), the filter drops legitimate incoming spine edges and
-makes the predecessor look like a dead end. Concrete user-visible
-symptom: `msg-schedule → W-publish` is dropped; the user sees
-"message schedule ends with no arrows leading out from it"
-(symptom #3 from the original plan's Context block, misdiagnosed
-there as layout).
+**The fix.** `dropAuxOnlyStateEdges(graph, auxOnlyIds, auxOnlySinkIds?)`
+takes an optional third parameter. The from-side rule is unchanged
+(every aux-only root contributes identity-passthrough state on its
+outgoing edge — always misleading). The to-side rule is now narrowed
+to the smaller `auxOnlySinkIds` set: aux-only roots whose registration
+has no `meta.stateInputPort`. SHA-256's W-publish (`generic.state-to-
+aux-bytes@1`, has `stateInputPort: "state"` per `stateToAuxBytesMeta`)
+sits in the wider set (lifts to the preamble row) but NOT the narrower
+set (so its incoming `msg-schedule → W-publish` spine edge survives).
 
-**Possible fix shapes** (not committed to until the session opens):
-- (a) Refine the predicate: drop only when `from` is aux-only AND
-  has no INCOMING state-spine edge (i.e. `from` is a true spine
-  source the input pill substitutes for). Symmetric for `to` at
-  the spine sink.
-- (b) Replace the filter with a renderer-side z-order/opacity
-  tweak that DE-EMPHASIZES "consecutive aux-only chain" edges
-  without dropping them entirely.
-- (c) Per-edge predicate on the spec — keep edges where the
-  inferred state edge would map to a real state-thread handoff
-  (i.e. consumer has a meta.stateInputPort that's NOT overridden).
+The default `auxOnlySinkIds = auxOnlyIds` preserves pre-S2(h) symmetric
+behavior for the ~3 existing callsites in `tests/replicate-fanout.test.ts`
+that don't differentiate. GraphView passes both sets explicitly via two
+parallel memos (`auxOnlyRootIds` for the wider set + layout-lift,
+`auxOnlyRootSinkIds` as a registry-driven subset for the narrower
+filter).
 
-**Pass/fail gate:** SHA-256 graph view shows
-`msg-schedule → W-publish` arrow (the dead-end resolved). AES
-graph view does NOT show `key-expansion → first-state-consumer`
-arrow (the original filter intent preserved). Tests pin both.
+**Why the asymmetry is robust under legacy ciphers.** Every AES/Speck/
+Serpent/DES key-schedule registration has no `stateInputPort` (their
+executors pass state through untouched — `aes.key-expansion@1`'s meta
+explicitly omits it; same for Speck/Serpent/DES). So the narrower set
+equals the wider set on those specs, and the asymmetric filter
+collapses to the original symmetric behavior. `tests/drop-aux-only-
+state-edges-asymmetric.test.ts`'s "no change vs. pre-S2(h) symmetric
+filter behavior" case pins byte-equal output of the two-arg vs.
+three-arg call on AES-128 ECB.
+
+**Tests:**
+- `tests/drop-aux-only-state-edges-asymmetric.test.ts` (4 tests) — pins
+  the end-to-end behavior on real specs:
+  (1) SHA-256 `msg-schedule → W-publish` survives.
+  (2) W-publish is in the wide set but NOT the narrow set
+      (heuristic-and-bug pinned together).
+  (3) AES `key-expansion → split-blocks` outgoing spine edge is still
+      dropped (from-side rule preserved).
+  (4) AES-128 ECB byte-equal edges between two-arg and three-arg
+      filter calls (no regression on legacy specs).
+- `tests/replicate-fanout.test.ts` — pre-existing bidirectional test
+  RENAMED ("to-side: when terminal-aux is in BOTH source AND sink sets
+  (non-reader), its incoming spine edge is dropped") + comment block
+  explaining the S2(h) rescoping. Two new synthetic tests pin the
+  W-publish-analog (kept when excluded from sink set) and key-
+  expansion-analog (dropped via from-side rule even when in both sets)
+  cases.
+
+**Counts:** suite 2371 → 2377 (+6). Bundle 684.39 → 684.69 KB raw /
+201.02 → 201.11 KB gzipped (+0.30 KB / +0.09 KB).
+
+**Smoke pending.** The vitest run pins the edge derivation + filter
+predicate; it does NOT confirm the user-visible rendering. Manual
+30-second pass: open SHA-256 in the graph view, locate `msg-schedule`
+in the preamble row, confirm an arrow now leaves it toward `W-publish`
+(it should land at the W-publish chip on the same preamble-row top).
+AES sanity: open AES-128 in the graph view, confirm `key-expansion` is
+still lifted to its own row WITHOUT a state arrow into `initial.add-
+round-key` (only the aux fan-out arrows + the plaintext-pill arrow
+to the first state consumer remain). If both check out, S2(h) is
+closed.
+
+**Original symptom #3 from the Context block — now resolved.** "Msg-
+schedule chip discoverability: even with the outgoing arrow drawn, the
+collapsed `msg-schedule` chip reads as a dead-end visually because the
+arrow is invisible." Post-S2(h), the arrow IS drawn, terminating at
+W-publish. The original misdiagnosis ("layout problem hiding arrow
+behind chips") was the rabbit hole; the actual fix was filter
+overreach.
 
 #### S2(e)+S2(f) browser smoke outcome — 2026-05-26
 

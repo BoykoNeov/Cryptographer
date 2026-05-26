@@ -575,10 +575,20 @@ describe("replicateHighFanoutSources", () => {
       expect(dropAuxOnlyStateEdges(g, new Set(["this-id-does-not-exist"]))).toBe(g);
     });
 
-    it("bidirectional: an aux-only step at the END of the spec also gets its incoming spine edge dropped", () => {
+    it("to-side: when terminal-aux is in BOTH source AND sink sets (non-reader), its incoming spine edge is dropped", () => {
       // Synthetic shape: A → B → terminal-aux. The "terminal-aux" leaf
-      // is aux-only; the spine edge `B → terminal-aux` should be
-      // suppressed once we mark terminal-aux as aux-only.
+      // is aux-only AND does not read the state thread (caller passes
+      // it in both sets — the default sink-set fallback to the source
+      // set models this case). Spine edge `B → terminal-aux` should be
+      // suppressed.
+      //
+      // Slice S2(h), 2026-05-26: this used to be unconditional ("aux-
+      // only at the END always drops incoming"), but SHA-256 surfaced
+      // `W-publish` — an aux-only root that DOES read state via the
+      // thread (meta.stateInputPort defined). Callers now pass a
+      // narrower sink set when they want to preserve such edges; the
+      // default-fallback path (this test) keeps the original
+      // unconditional behavior for callers that don't differentiate.
       const g: CipherGraph = {
         nodes: [
           { stepId: "A", stepType: "ts", label: "A", containerPath: [] },
@@ -600,6 +610,85 @@ describe("replicateHighFanoutSources", () => {
       const filtered = dropAuxOnlyStateEdges(g, new Set(["terminal-aux"]));
       // The B → terminal-aux edge is gone; A → B survives.
       expect(filtered.edges).toEqual([{ from: "A", to: "B", auxKey: "state", kind: "state" }]);
+    });
+
+    // ─── S2(h) — asymmetric endpoint sets ─────────────────────────────
+    // Synthetic vector for the new asymmetric API: an aux-only root
+    // that READS state via meta.stateInputPort (modelled here by
+    // EXCLUDING it from the narrower sink-set) must keep its incoming
+    // legacy spine edge. Mirrors SHA-256's `msg-schedule → W-publish`
+    // arrow in graph.ts terms without dragging the full hash spec
+    // into a synthetic test.
+    it("to-side: an aux-only root EXCLUDED from the sink set keeps its incoming spine edge (W-publish analog)", () => {
+      const g: CipherGraph = {
+        nodes: [
+          {
+            stepId: "msg-schedule",
+            stepType: "container-ish",
+            label: "schedule",
+            containerPath: [],
+          },
+          {
+            stepId: "W-publish",
+            stepType: "state-to-aux-bytes",
+            label: "W-publish",
+            containerPath: [],
+          },
+          { stepId: "next", stepType: "downstream", label: "next", containerPath: [] },
+        ],
+        containers: [],
+        edges: [
+          { from: "msg-schedule", to: "W-publish", auxKey: "state", kind: "state" },
+          { from: "W-publish", to: "next", auxKey: "state", kind: "state" },
+        ],
+        rootIds: ["msg-schedule", "W-publish", "next"],
+      };
+      // W-publish is in the WIDE auxOnlyIds (gets lifted to preamble
+      // row by layoutRoot) but is EXCLUDED from the narrower sink set
+      // (has meta.stateInputPort at the registry — modelled here by
+      // omission from the second arg). Result:
+      //  - msg-schedule → W-publish: kept (W-publish not in sink set)
+      //  - W-publish → next: dropped (W-publish IS in source set, so
+      //    outgoing identity-passthrough edges still suppressed)
+      const filtered = dropAuxOnlyStateEdges(
+        g,
+        new Set(["W-publish"]),
+        new Set(), // narrower sink set excludes W-publish
+      );
+      expect(filtered.edges).toEqual([
+        { from: "msg-schedule", to: "W-publish", auxKey: "state", kind: "state" },
+      ]);
+    });
+
+    it("from-side rule unchanged: aux-only root at the START still drops outgoing spine edge (key-expansion analog)", () => {
+      // Even with the narrower sink set, an aux-only root in the
+      // SOURCE set drops its outgoing legacy spine edge. Pins the
+      // AES key-expansion → first-state-consumer suppression that
+      // S2(h) explicitly preserves.
+      const g: CipherGraph = {
+        nodes: [
+          { stepId: "key-expansion", stepType: "aux-only", label: "kx", containerPath: [] },
+          { stepId: "first-step", stepType: "downstream", label: "first", containerPath: [] },
+          { stepId: "second-step", stepType: "downstream", label: "second", containerPath: [] },
+        ],
+        containers: [],
+        edges: [
+          { from: "key-expansion", to: "first-step", auxKey: "state", kind: "state" },
+          { from: "first-step", to: "second-step", auxKey: "state", kind: "state" },
+        ],
+        rootIds: ["key-expansion", "first-step", "second-step"],
+      };
+      // key-expansion is in BOTH sets (no meta.stateInputPort, so it
+      // belongs to the narrower sink set too — but the from-side rule
+      // is what fires here).
+      const filtered = dropAuxOnlyStateEdges(
+        g,
+        new Set(["key-expansion"]),
+        new Set(["key-expansion"]),
+      );
+      expect(filtered.edges).toEqual([
+        { from: "first-step", to: "second-step", auxKey: "state", kind: "state" },
+      ]);
     });
   });
 });

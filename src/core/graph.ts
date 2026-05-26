@@ -1729,10 +1729,32 @@ export const collapseGraph = (
  * aux-target fallback (documented at `replicateHighFanoutSources`'s
  * `spineSuccessorOf` block) without losing the spine-entry replica.
  *
- * **Bidirectional check** so an aux-only leaf at the END of the spec (no
- * shipped cipher has one today, but a future hash/MAC might) also gets
- * its incoming spine edge suppressed. One-sided would only handle the
- * usual leading-`key-expansion` case.
+ * **Asymmetric endpoint check** (Slice S2(h), 2026-05-26 —
+ * `docs/plans/sha-256-density-polish.md`). The two endpoint sets answer
+ * pedagogically distinct questions:
+ *
+ *   - `auxOnlyIds` (FROM-side): every aux-only root. An outgoing legacy
+ *     state edge from one of these leaves represents an identity
+ *     passthrough — the leaf doesn't transform state; the arrow shows
+ *     the SAME bytes the input pill already shows landing at the first
+ *     real consumer. Drop them all. Load-bearing for AES `key-expansion
+ *     → initial.add-round-key` (the original target of this filter).
+ *
+ *   - `auxOnlySinkIds` (TO-side, OPTIONAL): the subset of `auxOnlyIds`
+ *     whose registration has NO `meta.stateInputPort` declared — i.e.
+ *     aux-only roots that DON'T read the state thread (AES
+ *     `key-expansion`, SHA-256 `K-to-aux` / `H-to-aux` / `H-constant`).
+ *     An incoming legacy state edge into one of these is misleading
+ *     (the consumer never reads it). Drop those. CONTRAST: an aux-only
+ *     root WITH `meta.stateInputPort` (SHA-256's `W-publish` =
+ *     `generic.state-to-aux-bytes@1`) DOES read state via the thread
+ *     even though it never transforms it; its incoming spine edge
+ *     (`msg-schedule → W-publish`) is the legitimate handoff and must
+ *     survive — drop it and the schedule looks like a dead-end (the
+ *     S2(h) bug). When omitted, `auxOnlySinkIds` defaults to
+ *     `auxOnlyIds` so the symmetric pre-S2(h) behavior is preserved
+ *     for callers that don't differentiate (the tests in
+ *     `tests/replicate-fanout.test.ts` exercise this path).
  *
  * **Identity short-circuit** when `auxOnlyIds` is empty OR no state edge
  * touches one — returns the input by reference so the createMemo chain in
@@ -1749,8 +1771,9 @@ export const collapseGraph = (
 export const dropAuxOnlyStateEdges = (
   graph: CipherGraph,
   auxOnlyIds: ReadonlySet<string>,
+  auxOnlySinkIds: ReadonlySet<string> = auxOnlyIds,
 ): CipherGraph => {
-  if (auxOnlyIds.size === 0) return graph;
+  if (auxOnlyIds.size === 0 && auxOnlySinkIds.size === 0) return graph;
   const filteredEdges = graph.edges.filter((e) => {
     // Only the LEGACY passthrough state edges (kind:"state" +
     // auxKey:STATE_AUX_KEY) are pedagogically misleading from an
@@ -1763,7 +1786,7 @@ export const dropAuxOnlyStateEdges = (
     // discriminator was added 2026-05-26 — see PORT_FLOW_AUX_KEY's
     // doc-block.
     if (e.kind !== "state" || e.auxKey !== STATE_AUX_KEY) return true;
-    return !auxOnlyIds.has(e.from) && !auxOnlyIds.has(e.to);
+    return !auxOnlyIds.has(e.from) && !auxOnlySinkIds.has(e.to);
   });
   if (filteredEdges.length === graph.edges.length) return graph;
   return { ...graph, edges: filteredEdges };
