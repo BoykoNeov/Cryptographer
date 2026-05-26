@@ -2488,12 +2488,37 @@ export const GraphView = () => {
   });
 
   /**
-   * Root-level leaves whose `shapeContract.input === "any"` — i.e. they
-   * don't consume cipher state. Today's examples: `aes.key-expansion@1`,
-   * `generic.iv-load@1`, `generic.aux-load@1` (when used as a literal
-   * source at root level). These get lifted above the spine row by
-   * `layoutRoot` so the synthetic plaintext-pill → first-state-consumer
-   * arrow doesn't visually pass through them.
+   * Root-level leaves that don't consume cipher state. These get lifted
+   * above the spine row by `layoutRoot` so the synthetic plaintext-pill →
+   * first-state-consumer arrow doesn't visually pass through them.
+   *
+   * Two paths to qualify:
+   *
+   * 1. **Legacy / lifted-ported** — `shapeContract.input === "any"`.
+   *    Today's examples: `aes.key-expansion@1`, `generic.iv-load@1`,
+   *    `generic.aux-load@1`, `generic.state-to-aux-bytes@1`.
+   * 2. **Port-native pure source** (universal-port-dataflow plan, Phase 2+):
+   *    `kind: "ported"` registration whose `meta` declares neither
+   *    `stateInputPort` nor `stateOutputPort`. The step neither reads
+   *    nor writes the spine state — it sources bytes onto a port (or
+   *    routes them between ports). Today's examples: `constant-load@1`
+   *    and `aux-load-bytes@1` at the SHA-256 preamble row (`H-constant`,
+   *    `K-to-aux`, `H-to-aux`). The legacy heuristic skipped these
+   *    because port-native step types omit `shapeContract` — fixed S2(d)
+   *    of `docs/plans/sha-256-density-polish.md`, 2026-05-26.
+   *
+   * **Why a state-port-presence check (not "no port inputs at all"):**
+   * `bytes-to-state@1` has no spec-time `portInputs` (the runtime
+   * projects its input via `meta.stateOutputPort`) but it WRITES state;
+   * lifting it would break the spine. The `stateInputPort` /
+   * `stateOutputPort` check is the conservative signal that "this leaf
+   * is a true off-spine source," matching exactly the case the lift was
+   * designed for.
+   *
+   * No-contract LEGACY leaves stay on the spine — they might consume
+   * state, we can't tell, and a wrong lift is more jarring than a missed
+   * one. The port-native branch is safe to widen because port-native
+   * step types declare their state involvement explicitly via `meta`.
    *
    * Scoped to ROOT level only: nested aux-only steps live inside a
    * container the user has already navigated into, so the visual clash
@@ -2505,11 +2530,25 @@ export const GraphView = () => {
     const out = new Set<string>();
     for (const n of s.steps) {
       if (n.kind !== "step") continue;
+      // Path 1 — legacy/lifted-ported shapeContract.
       const contract = registry.getDoc(n.type)?.shapeContract;
-      // Only "any" lifts. No-contract leaves stay on the spine — they
-      // might consume state, we can't tell, and a wrong lift is more
-      // jarring than a missed one.
-      if (contract && contract.input === "any") out.add(n.id);
+      if (contract && contract.input === "any") {
+        out.add(n.id);
+        continue;
+      }
+      // Path 2 — port-native pure source. The registration is "ported"
+      // and its projection metadata declares no spine-state involvement.
+      // Reading meta is safe across both shapes: legacy registrations
+      // have no `meta` field, the access is undefined, and the predicate
+      // short-circuits.
+      const reg = registry.getRegistration(n.type);
+      if (
+        reg?.kind === "ported" &&
+        reg.meta?.stateInputPort === undefined &&
+        reg.meta?.stateOutputPort === undefined
+      ) {
+        out.add(n.id);
+      }
     }
     return out;
   });

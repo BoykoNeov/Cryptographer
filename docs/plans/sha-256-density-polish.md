@@ -167,34 +167,79 @@ the break." Locking specific params is a future concern.
 
 Three obstruction symptoms above; root cause is shared
 ("H-row siblings on the same horizontal row obstruct sibling-arrow
-visibility"). Three candidate fixes, pick during planning:
+visibility"). Advisor framing 2026-05-26: the three symptoms have
+three distinct root causes, the right shape is a hybrid not a
+pick-one, and option (d) below addresses a real gap the port-native
+migration left.
 
-- **(a) Force preamble verticalize.** Detect "aux-only setup row" by
-  the `auxOnlyRootIds` heuristic already in GraphView and stack those
-  leaves vertically along the canvas left side (like a "setup column")
-  instead of horizontally. State-bearing spine continues horizontally
-  to the right of the setup column.
-- **(b) Replicate the preamble sources at consumer head.** Today's
-  replication for `K-to-aux` / `W-publish` / `H-to-aux` already does
-  this at high fanout — for the H-row, lower the threshold so a single
-  long arrow (H-to-aux → final.fetch-H is the worst) is replicated
-  even without crossing the fanout-6 threshold. Quick win but doesn't
-  fix the spine-arrow-behind-H-row issue.
+#### S2(d) — extend auxOnlyRootIds for port-native pure sources — SHIPPED 2026-05-26
+
+**The gap.** `auxOnlyRootIds` only lifted root leaves whose
+`shapeContract.input === "any"` (legacy/lifted-ported entries:
+`aes.key-expansion@1`, `generic.iv-load@1`, `generic.aux-load@1`,
+`generic.state-to-aux-bytes@1`). Port-native primitives
+(`constant-load@1`, `aux-load-bytes@1`) omit `shapeContract` entirely
+— their surface is described by `PortContract` — so the heuristic
+skipped them and the H-row preamble half-lifted: `K-to-aux` /
+`H-to-aux` / `W-publish` floated up via the legacy path, but
+`H-constant` (a pure 32-byte constant emitter) stayed pinned to the
+spine alongside `init-working-vars` (the actual state writer).
+
+**The fix.** Widen the `auxOnlyRootIds` memo with a second
+predicate: a root leaf whose registration is `kind: "ported"` with
+neither `meta.stateInputPort` nor `meta.stateOutputPort` lifts too.
+Captures `constant-load@1` (no `meta` at all) and `aux-load-bytes@1`
+(`meta` declares `auxReadPorts` only) while still excluding the
+genuine state bridges — `bytes-to-state@1` has
+`meta.stateOutputPort` so `init-working-vars` / `seed-schedule`
+correctly stay on the spine.
+
+**Test:** `tests/graph-view-sha256-preamble-lift.test.tsx` (3 tests).
+Pins `H-constant` lifts to the same y as `H-to-aux` (legacy lift
+reference), and pins both `init-working-vars` and `seed-schedule`
+stay strictly below the lifted row.
+
+**Counts:** suite 2357 → 2360 (+3). Bundle 683.31 → 683.52 KB raw /
+200.67 → 200.74 KB gzipped (+0.21 KB / +0.07 KB).
+
+**Smoke pending.** This is the "verify-then-decide" step the advisor
+asked for before pulling in (b) or (c). Open SHA-256 in the graph
+view, check the H-row: `H-constant` should now sit at the top row
+alongside `H-to-aux`, and the spine should flow only through state
+writers. Then re-evaluate which of the three smoke symptoms persist
+— a clean preamble row may make the remaining issues easier to
+characterize, or may resolve some of them outright.
+
+#### Remaining candidates — re-evaluate after S2(d) smoke
+
+- **(b) Replicate preamble sources at consumer head with lower
+  threshold.** Today's replication for `K-to-aux` / `W-publish` /
+  `H-to-aux` already fires at high fanout — for the H-row, lower the
+  threshold so a single long arrow (`H-to-aux → final.fetch-H` is
+  the worst) is replicated even without crossing the fanout-6
+  threshold. Quick win for the long-arrow symptom; doesn't fix the
+  spine-arrow-behind-H-row case.
 - **(c) Spine-arrow z-order lift.** Render the state spine edges
-  ABOVE the chip rects (today they render below). This is the cheapest
-  fix for the "msg-schedule has no arrow out" symptom — the arrow
-  exists but is under the H-row chips; bringing it on top makes it
-  visible without changing layout. Risk: also lifts spine arrows over
-  other chips throughout the canvas. Per-edge z-order or
-  per-edge-kind z-order may be needed.
+  ABOVE the chip rects (today they render below). Cheapest fix for
+  "msg-schedule has no arrow out" — the arrow exists but is under
+  H-row chips; bringing it on top makes it visible without changing
+  layout. Risk: also lifts spine arrows over other chips throughout
+  the canvas; may need scoping to ported specs (via
+  `requiresPortedDispatch`) or per-edge selection.
+- **(a) Force preamble verticalize.** Stack aux-only roots in a
+  "setup column" along canvas left, state spine continues right.
+  Plan-author flagged this as biggest regression risk for smallest
+  discriminating evidence; advisor agreed — skip unless (b)+(c)+(d)
+  together can't close the symptoms.
 
-**Discriminating question to answer in planning:** does (c) regress
-the layout for non-port-native ciphers? If lifting spine arrows above
-chips makes AES look worse, scope the lift to ported specs or to the
-specific edges that pass behind chips.
+**Discriminating question to answer before picking (c):** does
+lifting state-edge z-order regress non-port-native ciphers? Toggle in
+a throwaway branch, screenshot AES / Speck / Serpent. If none
+regress, (c) is the obvious win for symptoms 1 and 2. If any
+regresses, scope (c) to ported specs.
 
-**Pass/fail gate:** manual smoke on SHA-256: the
-`msg-schedule → W-publish` state arrow is visible. The
+**Pass/fail gate (full S2):** manual smoke on SHA-256: the
+`msg-schedule → init-working-vars` state arrow is visible. The
 `W-publish → first round` and `K-to-aux → first round` aux arrows
 don't visually pass behind unrelated chips. The `H-to-aux →
 final.fetch-H` arrow is either (a) replicated near the consumer or
