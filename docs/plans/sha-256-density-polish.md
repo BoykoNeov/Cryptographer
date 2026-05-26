@@ -930,6 +930,43 @@ consumer:
   index again — keeping the LOCAL row for y-lift only. Filed but
   no smoke evidence yet.
 
+#### S2(l) — history-seed synthetic edges + replication-threshold lowering — SHIPPED 2026-05-26
+
+**Symptom.** Pedagogical hole surfaced 2026-05-26 mid-session: user asked "where do `fetch-p2` / `fetch-p7` / `fetch-p15` / `fetch-p16` get their values from?" The fetches inside the expanded `msg-schedule` have zero incoming arrows — visually reading as "values from thin air" even though the seed window has a real provenance (the 64-byte padded block from `seed-schedule`, split into 16 four-byte seeds and consumed by the for-each-subgraph-with-history runtime's auto-publish of `aux["prior-N"]`).
+
+**Root cause.** The runtime's auto-publish (`runtime.ts:1170`, `aux.set(k, priorEntry)`) is silent — no `TraceFrame` records it, so the natural `inferAuxEdges` pass (which matches each `frame.auxRead` against `writerByAuxKey`) finds no producer for `prior-N` and emits no edge.
+
+**Fix.** New spec-walk pass `inferHistorySeedEdges(spec)` in `src/core/graph.ts`, parallel to `inferPortEdges`. For every `for-each-subgraph-with-history` container:
+
+1. Find the **spine predecessor**: the previous sibling in spec order. (Generalizes to SHA-512 / MD5 / any future hash using the same primitive without per-cipher hardcoding. SHA-256's predecessor is `seed-schedule`.)
+2. Walk the body, find every `aux-load-bytes@1` leaf whose `params.auxName` matches `prior-{N}` for some `N ∈ lookbackOffsets`.
+3. Emit `{ from: predecessor.id, to: leaf.id, kind: "aux", auxKey: HISTORY_SEED_AUX_KEY }`.
+
+**Shared `auxKey: "history-seed"`.** All N edges share the discriminator so `collapseGraph`'s `(kind, from, to, auxKey)` dedup collapses them to a single visible arrow when the container is collapsed (msg-schedule's default-collapsed first-load shape).
+
+**Edge `kind: "aux"`.** Counted by `replicateHighFanoutSources`'s fanout-eligibility predicate, surfaced in the replication-overrides panel. Closes the user's add-on ("items inside a container should also be available to be represented as replications"): with the threshold change below, the four edges auto-replicate inside the expanded msg-schedule body on first load, placing a `seed-schedule@->fetch-pN` chip next to each fetch.
+
+**Replication threshold lowered: 6 → 3.** Predicate at `graph.ts:2136` is strict `>`, so threshold 3 means "fanout ≥ 4 auto-replicates." Smallest setting that fans `seed-schedule`'s 4 history-seed edges out on first load. Blast radius on shipped specs is empty — every other fanout source on AES / Speck / Serpent / DES / SHA-256 is already ≥ 11, so no auto-replication behavior changes elsewhere. (Verified: full suite still green at 2395 → 2403 tests with the change.)
+
+**Filter-interaction checks (probed before implementation):**
+
+- `seed-schedule` (`bytes-to-state@1`, has `stateOutputPort: "output"`) is NOT in `auxOnlyRootIds` — fails S2(d) predicate #2 (meta declares `stateOutputPort`) AND fails legacy lift path (no `shapeContract`). So `dropAuxOnlyStateEdges`'s from-side rule doesn't touch the new edges.
+- `validateGraph` is safe: synthetic edges have no `frame.auxReadMissing` for `prior-N` (the runtime's auto-publish satisfies the reads) and no `frame.auxWritten` for `"history-seed"` (the producer-set check is vacuous), so neither `orphaned-read` nor `unused-write` warnings fire on the synthetic edges.
+
+**Tests (+8).** `tests/graph-history-seed-edges.test.ts`:
+- SHA-256: 4 history-seed edges, sourced from `seed-schedule`, targeting `fetch-p2/p7/p15/p16`.
+- AES-128 ECB: 0 history-seed edges (no FES-with-history).
+- Collapsed msg-schedule: 4 edges dedupe to 1 visible arrow.
+- Fanout eligibility: 4 aux-eligible edges from seed-schedule, all sharing `auxKey: "history-seed"`.
+- Edge kind = `"aux"` (distinguishes from `PORT_FLOW_AUX_KEY` state edges).
+- At default threshold (3): seed-schedule auto-replicates into msg-schedule — 5 replicas total = 4 inside `msg-schedule` (the user's add-on) + 1 spine replica at root scope (the state edge to msg-schedule container).
+
+**Counts.** Suite 2395 → **2403** (+8). Bundle TBD after `npm run check` — pure derivation + threshold tweak, no new components.
+
+**Label honesty (renderer follow-up not in this slice).** The synthetic edge is literally accurate for iterations `0..seedCount-1` (the seed window). For later iterations the actual prior comes from this body's own earlier W_t exits via the recurrence (`W_t = …; W_{t-2}` after `t ≥ 18` is a previous body's W_{t-2}, not a seed byte). The graph is iteration-agnostic; the edge stays drawn as the seed-window source. The edge-inspector tooltip can carry the recurrence story in a future polish pass — not in this slice's scope.
+
+**Smoke pending.** Manual 30-second pass: (a) open SHA-256 in graph view, observe a single arrow `seed-schedule → msg-schedule` (the dedupe path). (b) Expand msg-schedule by clicking its chevron; observe 4 replica chips `seed-schedule@->fetch-pN` landing next to each fetch leaf with short arrows (the auto-replication path). (c) Open the replication-overrides panel; observe `seed-schedule` appears in the source list with fanout 4. (d) AES-128 sanity: confirm no behavior change (no history-seed edges, threshold change irrelevant since AES sources are already ≥ 11).
+
 ### Slice S3 — narration density second pass — SHIPPED 2026-05-26 (route (a))
 
 **Route picked.** Option (a) (additive prose) over option (b) (collapse

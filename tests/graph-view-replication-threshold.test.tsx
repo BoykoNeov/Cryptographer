@@ -5,7 +5,8 @@
  * toolbar (post-commit-5 follow-up).
  *
  * Verifies:
- *   1. The input renders with the default (DEFAULT_REPLICATION_THRESHOLD = 6).
+ *   1. The input renders with the default (DEFAULT_REPLICATION_THRESHOLD = 3
+ *      as of 2026-05-26 Slice S2(l); was 6 prior).
  *   2. Typing a new value clamps to the [MIN, MAX] range and flows into
  *      `useReplicationThreshold()`.
  *   3. The input is `disabled` when the master toggle is OFF — the user

@@ -1542,6 +1542,143 @@ const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
 };
 
 /**
+ * Shared auxKey for synthetic "history seed" edges emitted by
+ * `inferHistorySeedEdges`. Single key across every lookback offset so
+ * `collapseGraph`'s `(kind, from, to, auxKey)` dedup collapses all N
+ * edges to one visible arrow when the FES-with-history container is
+ * collapsed (msg-schedule's default-collapsed first-load shape on
+ * SHA-256). When the container is expanded, the N edges resolve to
+ * distinct (from, to) pairs and render as N independent arrows into
+ * each body fetch.
+ */
+export const HISTORY_SEED_AUX_KEY = "history-seed";
+
+/**
+ * Spec-walk pass: synthesize "history seed" aux edges for every
+ * `for-each-subgraph-with-history` container (Slice S2(l) of
+ * `docs/plans/sha-256-density-polish.md`, 2026-05-26).
+ *
+ * **Why this exists.** The FES-with-history runtime auto-publishes
+ * `aux["prior-{N}"]` for each `N ∈ lookbackOffsets` before each
+ * iteration body runs (`runtime.ts:1170` — `aux.set(k, priorEntry)`).
+ * That call is silent: no `TraceFrame` records the auto-publish, so
+ * `inferAuxEdges`'s natural `auxRead → writerByAuxKey` matching finds
+ * no producer for `prior-{N}` and emits no edge. The body's
+ * `aux-load-bytes@1` fetch leaves end up with zero incoming arrows,
+ * pedagogically reading as "values from thin air" — but the seed
+ * window does have a real provenance: the FES-with-history container's
+ * spine predecessor supplies the seed bytes (in SHA-256 that's
+ * `seed-schedule`, the `bytes-to-state@1` that produces the 64-byte
+ * padded block split into 16 four-byte history seeds).
+ *
+ * **Anchor rule.** "Spine predecessor of the FES-with-history container
+ * in spec order." Generalizes to SHA-512 / MD5 / any future hash using
+ * the same primitive without per-cipher knowledge. If the FES-with-
+ * history container is the first sibling at its scope (no predecessor),
+ * we skip — there's no chip to anchor the edge to.
+ *
+ * **Targets.** Body leaves whose `type === "aux-load-bytes@1"` AND
+ * whose `params.auxName` matches `prior-{N}` for some `N` in the
+ * container's `lookbackOffsets`. Other primitives that might read
+ * priors don't exist today; if one ships, extend this analyzer.
+ *
+ * **Shared auxKey.** Every emitted edge carries the same
+ * `auxKey: HISTORY_SEED_AUX_KEY` so the collapse pass dedupes the N
+ * edges to a single visible arrow when the container is collapsed.
+ *
+ * **Edge kind.** `"aux"` (not `"state"` / not `"port-flow"`). Counted
+ * by `replicateHighFanoutSources`'s fanout-eligibility predicate and
+ * surfaced in the replication-overrides panel's source list, so the
+ * user can flip the predecessor (e.g. `seed-schedule`) to `"always"`
+ * to fan replicas into the expanded body. Filtered untouched by
+ * `dropAuxOnlyStateEdges` (which only acts on `kind: "state"`).
+ *
+ * **Label honesty (deferred to renderer tooltip).** The edge is
+ * literally accurate for iterations 0..seedCount-1. For later
+ * iterations the actual prior comes from this body's own earlier
+ * exit state via the recurrence (W_t = …; W_{t-2} after t≥18 is a
+ * previous body's W_{t-2}, not a seed byte). The graph is iteration-
+ * agnostic; the edge stays drawn as the seed-window source and the
+ * edge-inspector tooltip surfaces the recurrence story.
+ *
+ * **Nesting.** Walks into all container kinds so a future FES-with-
+ * history nested inside an iterate or group still picks up its
+ * synthetic edges. The runtime forbids FES-with-history inside another
+ * FES-with-history (types.ts:448) but doesn't restrict other kinds of
+ * nesting; this walk doesn't need to either.
+ */
+const inferHistorySeedEdges = (spec: CipherSpec): GraphEdge[] => {
+  const edges: GraphEdge[] = [];
+  const visitLeavesInBody = (
+    bodyNodes: readonly StepNode[],
+    offsetSet: ReadonlySet<number>,
+    predecessorId: string,
+  ): void => {
+    for (const child of bodyNodes) {
+      if (child.kind === "step") {
+        // Only the canonical aux-load-bytes lookback fetch is matched.
+        if (child.type === "aux-load-bytes@1") {
+          const params = child.params as { auxName?: unknown };
+          const auxName = params.auxName;
+          if (typeof auxName === "string" && auxName.startsWith("prior-")) {
+            const offsetStr = auxName.slice("prior-".length);
+            const offset = Number(offsetStr);
+            if (Number.isInteger(offset) && offsetSet.has(offset)) {
+              edges.push({
+                from: predecessorId,
+                to: child.id,
+                auxKey: HISTORY_SEED_AUX_KEY,
+                kind: "aux",
+              });
+            }
+          }
+        }
+        continue;
+      }
+      if (child.kind === "feistel-round") {
+        for (const track of child.tracks) {
+          visitLeavesInBody(track.children, offsetSet, predecessorId);
+        }
+        continue;
+      }
+      // group | iterate | for-each-subgraph | for-each-subgraph-with-history
+      // all carry `children: readonly StepNode[]`.
+      visitLeavesInBody(child.children, offsetSet, predecessorId);
+    }
+  };
+
+  const walk = (siblings: readonly StepNode[]): void => {
+    for (let i = 0; i < siblings.length; i++) {
+      const node = siblings[i];
+      if (node === undefined) continue;
+      if (node.kind === "for-each-subgraph-with-history") {
+        // Spine predecessor = previous sibling in spec order. If absent
+        // (FES-with-history is the first sibling at this scope) there's
+        // no chip to anchor the synthetic edge to; skip.
+        const predecessor = i > 0 ? siblings[i - 1] : undefined;
+        if (predecessor !== undefined) {
+          const offsetSet = new Set<number>(node.lookbackOffsets);
+          visitLeavesInBody(node.children, offsetSet, predecessor.id);
+        }
+        // Recurse into the body for any nested FES-with-history (rare
+        // but the type system permits, runtime contract aside).
+        walk(node.children);
+        continue;
+      }
+      if (node.kind === "feistel-round") {
+        for (const track of node.tracks) walk(track.children);
+        continue;
+      }
+      if (node.kind !== "step") {
+        walk(node.children);
+      }
+    }
+  };
+  walk(spec.steps);
+  return edges;
+};
+
+/**
  * Compute `blockSpan` for every leaf inside an iterate and for every
  * iterate container. The runtime stamps `frame.blockIndex` on each frame
  * emitted inside an iterate, so blockSpan = max(blockIndex) + 1 over
@@ -2823,7 +2960,20 @@ export const deriveAuxGraph = (
   // consumers that don't actually read state-thread).
   const portFlowEdges = inferPortEdges(spec);
   const legacyStateEdges = inferStateEdges(spec, opts?.registry);
-  const edges = [...deriveEdges(trace, ctx), ...portFlowEdges, ...legacyStateEdges];
+  // History-seed edges (S2(l), 2026-05-26): synthesize aux edges from
+  // each `for-each-subgraph-with-history` container's spine predecessor
+  // to every body lookback fetch. The runtime's auto-publish of
+  // `aux["prior-{N}"]` is silent (no TraceFrame), so the natural
+  // `deriveEdges` pass can't see this provenance. Counted by
+  // `replicateHighFanoutSources` (kind: "aux"); shared auxKey so the
+  // edges dedupe to one visible arrow when the container is collapsed.
+  const historySeedEdges = inferHistorySeedEdges(spec);
+  const edges = [
+    ...deriveEdges(trace, ctx),
+    ...portFlowEdges,
+    ...legacyStateEdges,
+    ...historySeedEdges,
+  ];
 
   // ─── Optional endpoint pill injection (Slice 1) ──────────────────────────
   //

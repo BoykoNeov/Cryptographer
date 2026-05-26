@@ -29,9 +29,19 @@ import { createSignal } from "solid-js";
 /**
  * Default fanout threshold above which a source is eligible for "auto"
  * replication. Catches AES-128 key-expansion (11 round keys), Speck (22
- * round keys), Serpent (32 round keys) while leaving small-fanout sources
- * untouched. The user can override this at runtime via the toolbar number
- * input — see `useReplicationThreshold`.
+ * round keys), Serpent (32 round keys), SHA-256's K/W/H-aux constants (64
+ * each), AND SHA-256's `seed-schedule` history-seed fanout (4 — the four
+ * lookback fetches inside `msg-schedule`). The user can override this at
+ * runtime via the toolbar number input — see `useReplicationThreshold`.
+ *
+ * Lowered from 6 → 3 on 2026-05-26 alongside the introduction of the
+ * `history-seed` synthetic aux edges (Slice S2(l) of
+ * `docs/plans/sha-256-density-polish.md`). Predicate is strict `>`
+ * (graph.ts:2136), so threshold 3 means "fanout ≥ 4 auto-replicates" —
+ * the smallest setting that fans seed-schedule's 4 history-seed edges
+ * out into the expanded msg-schedule body on first load. Blast radius
+ * on shipped specs is empty: every other fanout source on AES / Speck /
+ * Serpent / DES / SHA-256 is already ≥ 11.
  *
  * Why "default" (not "the" threshold): per-spec persistence of a numeric
  * threshold would land in `LayoutSpec`, which is the byte-stability surface
@@ -40,7 +50,7 @@ import { createSignal } from "solid-js";
  * won't change. Session-only is the pragmatic v1 — power users adjust it,
  * the default ships everywhere else.
  */
-export const DEFAULT_REPLICATION_THRESHOLD = 6;
+export const DEFAULT_REPLICATION_THRESHOLD = 3;
 
 /**
  * Back-compat alias. Older call sites read `REPLICATION_THRESHOLD` as a
