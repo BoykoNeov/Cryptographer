@@ -225,12 +225,27 @@ with the message words \`M_0..M_15\` before the first iteration runs.`,
 const NARR_SCHED_FETCH_P2: StepDocumentation = {
   name: "Fetch W_{t-2}",
   summary: "Load the message-schedule word from 2 iterations ago (for σ1).",
-  detail: `\`σ1\` of the message-schedule recurrence (FIPS 180-4 §6.2.2)
-operates on \`W_{t-2}\`. The FES-with-history runtime auto-publishes
-\`aux["prior-2"]\` at each iteration — the 4-byte word produced by the
-body 2 iterations back (or the seeded \`M_{16+t-2}\` word for the first
-two body iterations).`,
-  references: ["FIPS 180-4 §6.2.2 — W_t recurrence"],
+  detail: `Loads \`W_{t-2}\` — the schedule word produced two iterations
+back — via \`aux["prior-2"]\`. This is one of two inputs the \`σ1\`
+mixing helper will operate on inside this iteration body.
+
+How the lookback works mechanically: the FES-with-history primitive
+maintains a sliding window of the most recent \`lookbackOffsets\`
+outputs as \`aux["prior-N"]\` entries. For the SHA-256 schedule the
+container declares \`lookbackOffsets: [2, 7, 15, 16]\`, so at every
+iteration the runtime auto-publishes \`prior-2\`, \`prior-7\`,
+\`prior-15\`, and \`prior-16\`. No explicit "store the last 16 words"
+plumbing is needed in the spec.
+
+Seeding: for early iterations where the lookback would reach BEFORE
+iteration 0, the FES seeds the history from the parent-scope state.
+For SHA-256 that means \`W_0..W_15\` (the first 16 schedule words)
+come directly from the padded message block, then iterations 16..63
+extend the schedule via the σ1+σ0 recurrence.
+
+Role in the larger recurrence: feeds the \`σ1\` chain (3 rotations
++ 1 shift + XOR + addition into \`W_t\`).`,
+  references: ["FIPS 180-4 §6.2.2 — W_t recurrence", "FIPS 180-4 §6.2.2 — Message schedule"],
 };
 
 const NARR_SCHED_FETCH_P7: StepDocumentation = {
@@ -296,13 +311,29 @@ different transforms.`,
 const NARR_SCHED_SIGMA1: StepDocumentation = {
   name: "σ1(W_{t-2}) = ROTR¹⁷ ⊕ ROTR¹⁹ ⊕ SHR¹⁰",
   summary: "XOR-combine the three σ1 components into the schedule's σ1 contribution.",
-  detail: `3-way XOR producing the final \`σ1(W_{t-2})\` term used in
-the W_t recurrence (FIPS 180-4 §6.2.2):
+  detail: `Per FIPS 180-4 §4.1.2 eq. 4.7:
 
 \`\`\`
 σ1(x) = ROTR¹⁷(x) ⊕ ROTR¹⁹(x) ⊕ SHR¹⁰(x)
-\`\`\``,
-  references: ["FIPS 180-4 §4.1.2 — σ1 definition"],
+\`\`\`
+
+What it does cryptographically: \`σ1\` is one of two **mixing helpers**
+in the message schedule. By XORing three different bit-displaced views
+of \`W_{t-2}\`, it spreads each input bit across many output positions,
+so the recurrence can't be inverted just by undoing additions. The
+asymmetric mix of two rotations PLUS a logical shift (the \`SHR¹⁰\`,
+which loses high bits to zero) deliberately breaks rotational symmetry —
+without it, the schedule could be transposed bit-cyclically and still
+satisfy the recurrence.
+
+Role in the larger recurrence: this is the first of four addends in
+
+\`\`\`
+W_t = σ1(W_{t-2}) + W_{t-7} + σ0(W_{t-15}) + W_{t-16}   (mod 2³²)
+\`\`\`
+
+Runs once per FES iteration (t = 16..63) — 48 evaluations per single-block hash.`,
+  references: ["FIPS 180-4 §4.1.2 — σ1 definition", "FIPS 180-4 §6.2.2 — W_t recurrence"],
 };
 
 const NARR_SCHED_SIGMA0_R7: StepDocumentation = {
@@ -338,13 +369,32 @@ shifted off the right disappear and zeros enter from the top.`,
 const NARR_SCHED_SIGMA0: StepDocumentation = {
   name: "σ0(W_{t-15}) = ROTR⁷ ⊕ ROTR¹⁸ ⊕ SHR³",
   summary: "XOR-combine the three σ0 components into the schedule's σ0 contribution.",
-  detail: `3-way XOR producing the final \`σ0(W_{t-15})\` term used in
-the W_t recurrence:
+  detail: `Per FIPS 180-4 §4.1.2 eq. 4.6:
 
 \`\`\`
 σ0(x) = ROTR⁷(x) ⊕ ROTR¹⁸(x) ⊕ SHR³(x)
-\`\`\``,
-  references: ["FIPS 180-4 §4.1.2 — σ0 definition"],
+\`\`\`
+
+What it does cryptographically: \`σ0\` is the schedule's second
+mixing helper (sibling of \`σ1\`). Same shape — two rotations XOR'd
+with one logical shift — but DIFFERENT constants (7/18/3 vs σ1's
+17/19/10). The constant pair was chosen so that \`σ0\` and \`σ1\` together
+diffuse bits across the full 32-bit word: any single input bit of
+\`W_{t-2}\` or \`W_{t-15}\` ends up influencing many bits of the new
+\`W_t\`. Pairing two different mixers (rather than one) and applying
+them to two different lookback positions is what gives the message
+schedule its avalanche property.
+
+Role in the larger recurrence: this is the third of four addends in
+
+\`\`\`
+W_t = σ1(W_{t-2}) + W_{t-7} + σ0(W_{t-15}) + W_{t-16}   (mod 2³²)
+\`\`\`
+
+The \`W_{t-15}\` argument is what couples the new word to a different
+lookback distance than σ1's — so the two mixers don't collapse into a
+single combined helper.`,
+  references: ["FIPS 180-4 §4.1.2 — σ0 definition", "FIPS 180-4 §6.2.2 — W_t recurrence"],
 };
 
 const NARR_SCHED_W_T: StepDocumentation = {
@@ -396,24 +446,52 @@ pick): W lives in aux from here on, NOT in state.`,
 const NARR_K_TO_AUX: StepDocumentation = {
   name: "Load K_0..K_63 to aux",
   summary: 'Bake the 64 SHA-256 round constants into aux["K"] as a 256-byte buffer.',
-  detail: `The 64 round constants K_0..K_63 are the first 32 bits of
-the fractional parts of the cube roots of the first 64 primes (FIPS
-180-4 §4.2.2). They are baked once into aux["K"] as a 256-byte buffer
-(K_0 at offset 0, K_63 at offset 252) so each compression round can
-read its K_t slice cheaply.`,
-  references: ["FIPS 180-4 §4.2.2 — K_0..K_63"],
+  detail: `Publishes the 64 SHA-256 round constants \`K_0..K_63\` into
+\`aux["K"]\` as a single 256-byte buffer (K_0 at offset 0, K_63 at
+offset 252) so each compression round can fetch + slice its own K_t
+in two cheap steps.
+
+Provenance of the constants: per FIPS 180-4 §4.2.2, each \`K_t\` is
+the first 32 bits of the FRACTIONAL part of the cube root of the
+\`(t+1)\`-th prime. So \`K_0\` derives from cbrt(2), \`K_1\` from
+cbrt(3), and so on through cbrt(311) for \`K_63\`. These are called
+"nothing-up-my-sleeve" constants: a fixed, mechanical derivation that
+anyone can reproduce, so no hidden trapdoor can be smuggled in via the
+round-constant choice. The same provenance rule is used by SHA-1
+(square roots of small primes) and SHA-512 (cube roots, 64-bit
+truncations of the first 80 primes).
+
+Role in the larger recurrence: each round t reads K_t from this
+buffer and uses it as the round constant in T1's 5-way addition.`,
+  references: ["FIPS 180-4 §4.2.2 — K_0..K_63", "Wikipedia — Nothing-up-my-sleeve number"],
 };
 
 const NARR_H_TO_AUX: StepDocumentation = {
   name: "Load H_0..H_7 to aux",
   summary: 'Bake the 8 SHA-256 initial-hash-value words into aux["H"] as a 32-byte buffer.',
-  detail: `The 8 initial hash values H_0..H_7 are the first 32 bits of
-the fractional parts of the square roots of the first 8 primes (FIPS
-180-4 §5.3.3). They serve two purposes: (1) they seed the working
-variables at the start of compression (a..h ← H_0..H_7) and (2) they
-are added back into the working variables at the end (the final-add
-step). This leaf places them in aux for the final-add step's use.`,
-  references: ["FIPS 180-4 §5.3.3 — Initial hash values"],
+  detail: `Publishes the 8 SHA-256 initial-hash-value words
+\`H_0..H_7\` into \`aux["H"]\` as a 32-byte buffer (H_0 at offset 0,
+H_7 at offset 28) for the final-add step to read.
+
+Provenance of the constants: per FIPS 180-4 §5.3.3, each \`H_i\` is
+the first 32 bits of the FRACTIONAL part of the SQUARE root of the
+\`(i+1)\`-th prime — so \`H_0 = sqrt(2)\` truncated, \`H_1 = sqrt(3)\`,
+through \`H_7 = sqrt(19)\`. Same "nothing-up-my-sleeve" rationale as
+the round constants \`K_t\` (which use cube roots): a mechanical,
+reproducible derivation that prevents trapdoors hidden in arbitrary
+constant choices.
+
+Why two copies of H — one in aux here, one as a port-source at
+\`H-constant\` next: the two uses are structurally different.
+\`H-constant\` feeds the WORKING-VARIABLE INIT (state ← H_0..H_7
+before round 0); \`aux["H"]\` feeds the FINAL ADD (digest[i] = H_i +
+a_i after round 63). Keeping them as separate spec leaves makes the
+two roles visible in the trace instead of conflating them into one
+constant pool.`,
+  references: [
+    "FIPS 180-4 §5.3.3 — Initial hash values",
+    "Wikipedia — Nothing-up-my-sleeve number",
+  ],
 };
 
 const NARR_H_CONSTANT: StepDocumentation = {
@@ -460,37 +538,83 @@ these ports as needed for the round's various subterms (Σ0(a),
 const NARR_ROUND_FETCH_K: StepDocumentation = {
   name: "Fetch K array from aux",
   summary: 'Load the 256-byte aux["K"] buffer of round constants for this round\'s K_t slice.',
-  detail: `Loads the full 256-byte K buffer into a port. The next
-leaf slices out the 4-byte K_t word for this specific round t.`,
+  detail: `Loads the full 256-byte K buffer (the 64 round constants
+K_0..K_63, baked at \`K-to-aux\` once per spec run) into a port. The
+next leaf slices out the 4-byte K_t word for THIS round.
+
+Why fetch the whole buffer then slice: under the universal port-native
+model, every leaf operates on bytes flowing through ports — there's no
+"random index into aux" primitive. Fetching + slicing keeps the cipher
+expressible from a small primitive vocabulary at the cost of one extra
+visible step per round.`,
   references: ["FIPS 180-4 §4.2.2 — K_t"],
 };
 
 const NARR_ROUND_K_T: StepDocumentation = {
   name: "K_t: slice round t's constant",
   summary: 'Extract the 4-byte K_t round constant at offset 4·t within aux["K"].',
-  detail: `Selects K_t (the round constant for THIS round) from the
-shared 256-byte K buffer. Different round groups use different
-\`offset\` params (\`4 * t\`) — this is the only round-specific
-parameter (besides W_t's identical offset).`,
-  references: ["FIPS 180-4 §4.2.2 — K_t"],
+  detail: `Selects \`K_t\` (the round constant for THIS round) from the
+shared 256-byte K buffer:
+
+\`\`\`
+K_t = aux["K"][4*t .. 4*t+4]
+\`\`\`
+
+Different round groups use different \`offset\` params (\`4 * t\`) —
+this is the only round-specific parameter (besides W_t's identical
+offset). Per FIPS 180-4 §4.2.2, each \`K_t\` is the first 32 bits of
+the fractional part of the cube root of the t-th prime, ensuring the
+constants are "nothing-up-my-sleeve" — derivable from a mathematical
+process anyone can replicate, so no hidden trapdoor can be smuggled
+through round-constant choice.
+
+Role in the larger recurrence: contributes to T1:
+
+\`\`\`
+T1 = h + Σ1(e) + Ch(e, f, g) + K_t + W_t   (mod 2³²)
+\`\`\`
+
+Different per round (so each round runs a "different function"),
+ensuring identical-input rounds don't produce identical outputs.`,
+  references: ["FIPS 180-4 §4.2.2 — K_t", "FIPS 180-4 §6.2.2 — Step 3 (T1)"],
 };
 
 const NARR_ROUND_FETCH_W: StepDocumentation = {
   name: "Fetch W schedule from aux",
   summary: 'Load the 256-byte aux["W"] message-schedule buffer for this round\'s W_t slice.',
   detail: `Loads the full 256-byte W buffer (published by the
-schedule's \`W-publish\` leaf) into a port. The next leaf slices out
-W_t.`,
+schedule's \`W-publish\` leaf at the top of the cipher) into a port.
+The next leaf slices out \`W_t\` for this round.
+
+Note that W changes with every input message — unlike K which is fixed.
+That's WHY the schedule exists: to expand the 16-word message block
+into 64 distinct round inputs, one per round, all derived from the
+input via the σ0/σ1 recurrence.`,
   references: ["FIPS 180-4 §6.2.2 — Step 1"],
 };
 
 const NARR_ROUND_W_T: StepDocumentation = {
   name: "W_t: slice round t's message-schedule word",
   summary: 'Extract the 4-byte W_t schedule word at offset 4·t within aux["W"].',
-  detail: `Selects W_t (this round's contribution from the message
-schedule) from the shared 256-byte W buffer. W_t is one of the five
-addends in T1.`,
-  references: ["FIPS 180-4 §6.2.2 — Step 1 / W_t"],
+  detail: `Selects \`W_t\` (this round's message-schedule contribution)
+from the shared 256-byte W buffer:
+
+\`\`\`
+W_t = aux["W"][4*t .. 4*t+4]
+\`\`\`
+
+Role in the larger recurrence: paired with \`K_t\` as one of the five
+T1 addends:
+
+\`\`\`
+T1 = h + Σ1(e) + Ch(e, f, g) + K_t + W_t   (mod 2³²)
+\`\`\`
+
+The pair \`(K_t, W_t)\` together gives each round its identity: \`K_t\`
+varies BY round (fixed across messages), \`W_t\` varies BY message
+(fixed across hashes of the same message). Their sum injects both
+fresh round-key material AND message material into T1 every round.`,
+  references: ["FIPS 180-4 §6.2.2 — Step 1 / W_t", "FIPS 180-4 §6.2.2 — Step 3 (T1)"],
 };
 
 const NARR_ROUND_SIGMA1_R6: StepDocumentation = {
@@ -526,9 +650,33 @@ const NARR_ROUND_SIGMA1_R25: StepDocumentation = {
 const NARR_ROUND_SIGMA1: StepDocumentation = {
   name: "Σ1(e) = ROTR⁶(e) ⊕ ROTR¹¹(e) ⊕ ROTR²⁵(e)",
   summary: "XOR-combine the three Σ1 rotations into one of T1's addends.",
-  detail: `\`Σ1(e)\` (FIPS 180-4 §4.1.2). One of the five addends in
-T1 = h + Σ1(e) + Ch(e,f,g) + K_t + W_t.`,
-  references: ["FIPS 180-4 §4.1.2 — Σ1 definition"],
+  detail: `Per FIPS 180-4 §4.1.2 eq. 4.5:
+
+\`\`\`
+Σ1(x) = ROTR⁶(x) ⊕ ROTR¹¹(x) ⊕ ROTR²⁵(x)
+\`\`\`
+
+What it does cryptographically: \`Σ1\` is the **diffusion helper for
+\`e\`** inside the compression round. Three different rotations XOR'd
+together so that every bit of \`e\` influences many bits of the output
+— this is what couples T1 to the high-bit positions of \`e\` and
+prevents trivial linear shortcuts through the round.
+
+Why pure rotations (no SHR): \`Σ1\` (uppercase) operates on a single
+32-bit working variable that we WANT preserved through the round; a
+SHR would lose information. By contrast, the schedule's lowercase
+\`σ1\` includes an SHR because it's mixing into the *recurrence*, not
+into a feedback path.
+
+Role in the larger recurrence: this is one of the five addends in
+
+\`\`\`
+T1 = h + Σ1(e) + Ch(e, f, g) + K_t + W_t   (mod 2³²)
+\`\`\`
+
+T1 then feeds both \`new_a\` (= T1 + T2) and \`new_e\` (= d + T1) —
+so \`Σ1(e)\` reaches BOTH outputs of the round, not just one.`,
+  references: ["FIPS 180-4 §4.1.2 — Σ1 definition", "FIPS 180-4 §6.2.2 — Step 3 (T1)"],
 };
 
 const NARR_ROUND_SIGMA0_R2: StepDocumentation = {
@@ -565,9 +713,31 @@ const NARR_ROUND_SIGMA0_R22: StepDocumentation = {
 const NARR_ROUND_SIGMA0: StepDocumentation = {
   name: "Σ0(a) = ROTR²(a) ⊕ ROTR¹³(a) ⊕ ROTR²²(a)",
   summary: "XOR-combine the three Σ0 rotations into one of T2's addends.",
-  detail: `\`Σ0(a)\` (FIPS 180-4 §4.1.2). One of the two addends in
-T2 = Σ0(a) + Maj(a,b,c).`,
-  references: ["FIPS 180-4 §4.1.2 — Σ0 definition"],
+  detail: `Per FIPS 180-4 §4.1.2 eq. 4.4:
+
+\`\`\`
+Σ0(x) = ROTR²(x) ⊕ ROTR¹³(x) ⊕ ROTR²²(x)
+\`\`\`
+
+What it does cryptographically: \`Σ0\` is the **diffusion helper for
+\`a\`** (sibling of \`Σ1\`, which diffuses \`e\`). Pure rotations only —
+no SHR — so it preserves all 32 bits of \`a\` while spreading each
+input bit across the output. The constant pair (2/13/22) is
+intentionally different from \`Σ1\`'s (6/11/25); using two distinct
+mixers prevents the round body from collapsing into a single weaker
+function.
+
+Role in the larger recurrence: this is one of two addends in
+
+\`\`\`
+T2 = Σ0(a) + Maj(a, b, c)   (mod 2³²)
+\`\`\`
+
+T2 contributes ONLY to \`new_a\` (= T1 + T2), NOT to \`new_e\`. That
+asymmetry between \`a\` and \`e\`'s update paths is what makes the
+working-variable cascade non-trivial — \`Σ0\` is on the \`a\`-only
+branch.`,
+  references: ["FIPS 180-4 §4.1.2 — Σ0 definition", "FIPS 180-4 §6.2.2 — Step 3 (T2)"],
 };
 
 const NARR_ROUND_CH_NOT_E: StepDocumentation = {
@@ -646,10 +816,31 @@ const NARR_ROUND_MAJ_BC: StepDocumentation = {
 const NARR_ROUND_MAJ: StepDocumentation = {
   name: "Maj(a, b, c) = (a ∧ b) ⊕ (a ∧ c) ⊕ (b ∧ c)",
   summary: "XOR the three Maj pairwise-ANDs: one of T2's addends.",
-  detail: `Bit-level majority function — each output bit is the
-majority of the three input bits at that position. One of the two
-addends in T2 = Σ0(a) + Maj(a,b,c).`,
-  references: ["FIPS 180-4 §4.1.2 — Maj definition"],
+  detail: `Per FIPS 180-4 §4.1.2 eq. 4.3:
+
+\`\`\`
+Maj(a, b, c) = (a ∧ b) ⊕ (a ∧ c) ⊕ (b ∧ c)
+\`\`\`
+
+What it does cryptographically: \`Maj\` is the bit-level **majority**
+function — for each bit position, the output bit equals the majority
+of the three input bits at that position (1 if two or three of
+\`a_i, b_i, c_i\` are 1; otherwise 0). The XOR of three pairwise ANDs
+is the standard non-linear realization: \`Maj\` provides the
+non-linearity on the \`a\`-side branch of the round, complementing
+\`Ch\`'s non-linearity on the \`e\`-side.
+
+Role in the larger recurrence: paired with \`Σ0(a)\` to produce T2:
+
+\`\`\`
+T2 = Σ0(a) + Maj(a, b, c)   (mod 2³²)
+\`\`\`
+
+T2 contributes only to \`new_a\` (= T1 + T2). \`Maj\` is one of two
+sources of round non-linearity (the other is \`Ch\` inside T1); without
+either, the entire round would be linear over GF(2) and trivially
+invertible.`,
+  references: ["FIPS 180-4 §4.1.2 — Maj definition", "FIPS 180-4 §6.2.2 — Step 3 (T2)"],
 };
 
 const NARR_ROUND_T1: StepDocumentation = {
@@ -683,18 +874,53 @@ makes the working-variable cascade non-trivial.`,
 const NARR_ROUND_NEW_A: StepDocumentation = {
   name: "new_a = T1 + T2 (next round's `a`)",
   summary: "Compute the next round's working variable `a` as T1 + T2 mod 2³².",
-  detail: `Per FIPS 180-4 §6.2.2 Step 3, the new value of \`a\` after
-round t is \`T1 + T2\`. Then the working variables cascade by one
-slot: (a, b, c, d, e, f, g, h) ← (new_a, a, b, c, new_e, e, f, g).`,
+  detail: `Per FIPS 180-4 §6.2.2 Step 3:
+
+\`\`\`
+a' = T1 + T2   (mod 2³²)
+\`\`\`
+
+This is the "loaded" side of the working-variable update — it sums
+BOTH the T1 mixing core (which carries \`Σ1(e), Ch(e,f,g), K_t, W_t\`,
+\`h\`) AND the T2 helper (\`Σ0(a), Maj(a,b,c)\`). Every Σ, Ch, Maj, K_t,
+and W_t contribution funnels here, so \`new_a\` is where the round's
+diffusion concentrates.
+
+The asymmetry vs \`new_e\` (which adds only T1 to d): the \`a\` slot
+gets the maximum mixing on each round, the \`e\` slot only gets T1's
+contribution. That asymmetry, combined with the slot-by-slot cascade
+below, is what gives the cipher its avalanche after just a few rounds.
+
+Cascade after this leaf: (a, b, c, d, e, f, g, h) ←
+(new_a, a, b, c, new_e, e, f, g). new_a enters position 0; the old
+\`h\` falls off.`,
   references: ["FIPS 180-4 §6.2.2 — Step 3 (variable update)"],
 };
 
 const NARR_ROUND_NEW_E: StepDocumentation = {
   name: "new_e = d + T1 (next round's `e`)",
   summary: "Compute the next round's working variable `e` as d + T1 mod 2³².",
-  detail: `Per FIPS 180-4 §6.2.2 Step 3, the new value of \`e\` after
-round t is \`d + T1\`. Then the working variables cascade by one
-slot: (a, b, c, d, e, f, g, h) ← (new_a, a, b, c, new_e, e, f, g).`,
+  detail: `Per FIPS 180-4 §6.2.2 Step 3:
+
+\`\`\`
+e' = d + T1   (mod 2³²)
+\`\`\`
+
+The "light" side of the working-variable update — \`new_e\` receives
+T1 (which carries the round's primary mixing) but NOT T2. The base
+value is just \`d\`, the third working variable from the previous
+round, with no extra mixing applied.
+
+Why this asymmetry: \`d\` shifted into the \`e\` slot guarantees that
+information from earlier rounds reaches the \`e\`-side branch
+unmodified, while T1's contribution adds fresh mixing on top. Combined
+with the \`a\`-side's heavier mixing (T1 + T2), this gives the round a
+two-track structure — one track preserves old state, the other mixes
+aggressively — that defeats simple algebraic attacks.
+
+Cascade after this leaf: (a, b, c, d, e, f, g, h) ←
+(new_a, a, b, c, new_e, e, f, g). new_e enters position 4 (the e slot);
+the old \`d\` is consumed but its value lives on as the new \`e\`.`,
   references: ["FIPS 180-4 §6.2.2 — Step 3 (variable update)"],
 };
 
