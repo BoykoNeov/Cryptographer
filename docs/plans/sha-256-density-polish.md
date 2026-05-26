@@ -967,6 +967,24 @@ consumer:
 
 **Smoke pending.** Manual 30-second pass: (a) open SHA-256 in graph view, observe a single arrow `seed-schedule → msg-schedule` (the dedupe path). (b) Expand msg-schedule by clicking its chevron; observe 4 replica chips `seed-schedule@->fetch-pN` landing next to each fetch leaf with short arrows (the auto-replication path). (c) Open the replication-overrides panel; observe `seed-schedule` appears in the source list with fanout 4. (d) AES-128 sanity: confirm no behavior change (no history-seed edges, threshold change irrelevant since AES sources are already ≥ 11).
 
+#### S2(l-follow-up) — replication panel includes port-flow sources — SHIPPED 2026-05-26
+
+**Symptom (user-reported same-day after S2(l) ship).** "seed-schedule replicates. Fetches don't replicate and don't show [in the replication panel]. fetch-p2 has 3 arrows coming from it and is not present in replication overrides."
+
+**Root cause.** Pre-fix, the replication-overrides panel's `replicationSources` memo at `src/ui/components/GraphView.tsx:2993` filtered `e.kind !== "aux"`. But Slice S2(i) (2026-05-26 earlier in the day) widened `replicateHighFanoutSources`'s eligibility predicate to also count `kind: "state"` edges with `auxKey === PORT_FLOW_AUX_KEY` — the panel-inclusion memo was missed at the time. As a result, SHA-256's port-native sources (every leaf that emits port-flow but no aux: `fetch-p2/p7/p15/p16`, `final.s_i`, `final.split-wv/H`, `H-constant`, etc.) showed panel-fanout 0 and were hidden from the override panel even though those same edges WERE eligible for the actual replication transform.
+
+**The fix.** Widen the panel's filter to match the replication predicate exactly. Both now count `kind: "aux"` OR (`kind: "state"` AND `auxKey === PORT_FLOW_AUX_KEY`). Legacy passthrough state edges (`auxKey: "state"`) stay excluded — they're 1-to-1 between consecutive same-parent leaves by construction and would inflate the panel with every spine participant.
+
+**Tests (+2).** `tests/graph-view-replication-panel-port-flow.test.tsx` NEW (jsdom): SHA-256 with `msg-schedule` force-expanded via `toggleCollapse(..., inDefaults: true)`:
+- `fetch-p2` (3 port-flow edges to `sigma1-r17/r19/s10`) appears as a panel row labelled "3 edges."
+- `seed-schedule` (4 history-seed aux edges, sanity-check for additive widening) appears with fanout 4 — the widening is additive, not replacement.
+
+**Robust under legacy ciphers.** AES/Speck/Serpent/DES have zero `kind: "state"` edges with `auxKey: "port-flow"` (no port-native steps anywhere), so the widened predicate collapses to the original `kind: "aux"` behavior. Byte-identical.
+
+**Counts.** Suite 2403 → **2405** (+2). Bundle 688.94 → **688.98 KB** raw / 202.33 → **202.35 KB** gzipped (essentially flat — predicate widening + 2 new tests).
+
+**Smoke pending.** Manual 30-second pass: open SHA-256, expand msg-schedule, open the replication-overrides panel, confirm `fetch-p2` (3 edges), `fetch-p15` (3 edges), `final.split-wv` (8 edges), `final.split-H` (8 edges), `H-constant` (1 edge), and other port-native sources now appear alongside the legacy `K-to-aux` / `W-publish` / `H-to-aux` rows. Flipping `fetch-p2` to `"always"` should produce 3 replica chips next to `sigma1-r17`, `sigma1-r19`, `sigma1-s10`.
+
 ### Slice S3 — narration density second pass — SHIPPED 2026-05-26 (route (a))
 
 **Route picked.** Option (a) (additive prose) over option (b) (collapse

@@ -2980,21 +2980,38 @@ export const GraphView = () => {
 
   /**
    * Sources eligible for a row in the override panel: any id appearing in
-   * `edge.from` for at least one aux edge in the collapsed graph. Sorted
-   * by fanout descending so the high-fanout offenders surface first.
-   * Includes both leaf stepIds and iterate-container ids.
+   * `edge.from` for at least one fanout-eligible edge in the collapsed
+   * graph. Sorted by fanout descending so the high-fanout offenders
+   * surface first. Includes both leaf stepIds and iterate-container ids.
+   *
+   * Fanout-eligibility predicate mirrors `replicateHighFanoutSources`
+   * exactly (graph.ts:2118): `kind: "aux"` OR (`kind: "state"` AND
+   * `auxKey === PORT_FLOW_AUX_KEY`). Slice S2(i) widened the replication
+   * predicate to count port-flow state edges; this panel-inclusion memo
+   * was missed at the time, so SHA-256's port-native sources
+   * (e.g. `fetch-p2` with 3 outgoing port-flow edges to
+   * `sigma1-r17/r19/s10`) wouldn't surface in the override panel even
+   * though they ARE eligible for the actual replication transform.
+   * Fixed 2026-05-26 same-day after Slice S2(l) ship surfaced the gap.
+   *
+   * Legacy passthrough state edges (`kind: "state"`, `auxKey: "state"`)
+   * stay excluded — they're 1-to-1 between consecutive same-parent
+   * leaves and would inflate the panel with every spine participant
+   * (same reasoning as in `replicateHighFanoutSources`).
    *
    * Includes single-edge sources (fanout = 1). A user with a long arrow
    * crossing the canvas may want to replicate even a one-consumer source
    * to shorten that arrow — the original `fanout >= 2` cutoff hid that
    * use case. The visual cost is a longer override panel; tradeoff
-   * favored the discoverability of "any aux edge can be locally replicated".
+   * favored the discoverability of "any fanout-eligible edge can be
+   * locally replicated".
    */
   const replicationSources = createMemo<{ readonly id: string; readonly fanout: number }[]>(() => {
     const g = collapsedGraph();
     const counts = new Map<string, number>();
     for (const e of g.edges) {
-      if (e.kind !== "aux") continue;
+      const eligible = e.kind === "aux" || (e.kind === "state" && e.auxKey === PORT_FLOW_AUX_KEY);
+      if (!eligible) continue;
       counts.set(e.from, (counts.get(e.from) ?? 0) + 1);
     }
     const rows: { id: string; fanout: number }[] = [];
