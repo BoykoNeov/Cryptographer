@@ -501,6 +501,52 @@ W-publish. The original misdiagnosis ("layout problem hiding arrow
 behind chips") was the rabbit hole; the actual fix was filter
 overreach.
 
+#### S2(i) — port-flow state edges count toward replication fanout — SHIPPED 2026-05-26
+
+**Symptom.** User-reported: `final.split-wv` and `final.split-H` "produce
+a lot of arrows that are essentially one on the other" on the SHA-256
+graph. The s-row inter-stage gaps (s_0 → s_1 → … → s_7 → assemble) also
+pile up several arrows on the same horizontal line.
+
+**Root cause.** `replicateHighFanoutSources` counted only `kind: "aux"`
+edges for fanout eligibility. SHA-256's `final.split-wv` and
+`final.split-H` each emit 8 port-flow edges to `final.s_0..s_7` (one per
+output port), but port-flow edges have `kind: "state"` (auxKey
+`"port-flow"`) per Slice S2(e). So both sources scored fanout 0 and never
+qualified for replication — leaving 8 long lines fanning from one origin
+horizontally through the s-row.
+
+**The fix.** Eligibility predicate widened to
+`kind === "aux" || (kind === "state" && auxKey === PORT_FLOW_AUX_KEY)`.
+Legacy passthrough state edges (auxKey === `"state"`) stay excluded —
+they're 1-to-1 between consecutive same-parent leaves by construction
+and would inflate counts for every spine participant. AES/Speck/Serpent/
+DES have no port-flow edges and remain byte-identical.
+
+**Tests:**
+- `tests/replicate-fanout.test.ts` new "Slice S2(i) — port-flow fanout
+  eligibility (SHA-256 split-wv / split-H)" describe block (2 tests):
+  (1) Synthetic split-wv-analog: 8 port-flow state edges from one
+      source to 8 distinct consumers replicates at threshold 6;
+  (2) Negation: 8 legacy passthrough state edges (auxKey: "state")
+      from one source identity-short-circuit even at threshold 1
+      (the lowest non-trivial setting) — pins that the discriminator
+      doesn't drift loose and start counting legacy spine.
+
+**Counts:** suite 2377 → 2379 (+2). Bundle 684.69 → 684.73 KB raw /
+201.11 → 201.12 KB gzipped (essentially flat — +10 LOC + tests).
+
+**Open caveat (NOT addressed by this slice).** The s_i → assemble
+fan-IN pile-up surfaced in the user's image 2 is structurally
+different: each `final.s_i` has fanout = 1 (only to `final.assemble`),
+so no s_i source qualifies for replication. The 8 port-flow edges
+funneling into `assemble` from increasingly-distant sources remain a
+visual cluster — `final.s_0 → final.assemble` physically traverses the
+s_1..s_7 corridor. If still visually annoying after S2(i), this needs
+its own slice (sink-side replication, or layout rethink). Filed here
+rather than rolled into S2(i) per advisor's "don't bundle structurally
+different changes" guidance.
+
 #### S2(e)+S2(f) browser smoke outcome — 2026-05-26
 
 **Confirmed working:** H-constant → init-working-vars arrow visible;
