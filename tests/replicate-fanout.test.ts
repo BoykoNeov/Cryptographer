@@ -691,4 +691,110 @@ describe("replicateHighFanoutSources", () => {
       ]);
     });
   });
+
+  // ─── Slice S2(i) — port-flow state edges count toward fanout ──────────
+  // Before S2(i), `replicateHighFanoutSources` counted only `kind: "aux"`
+  // edges, so SHA-256's `final.split-wv` / `final.split-H` (each with 8
+  // outgoing port-flow edges to `final.s_0..s_7`) scored fanout = 0 and
+  // never qualified for replication — the long lines overlapped through
+  // the s-row. The new rule includes port-flow state edges
+  // (`kind:"state"` + `auxKey === PORT_FLOW_AUX_KEY`) while leaving legacy
+  // passthrough state edges (`auxKey === "state"`) excluded as before.
+  describe("Slice S2(i) — port-flow fanout eligibility (SHA-256 split-wv / split-H)", () => {
+    it("port-native source with 8 port-flow consumers replicates at threshold 6 (split-wv analog)", () => {
+      // Synthetic vector mirroring SHA-256's `final.split-wv` topology:
+      // one source emits 8 port-flow STATE edges (auxKey === "port-flow")
+      // — one per output port — to 8 distinct downstream consumers. With
+      // a default threshold of 6, all 8 consumers should pick up a local
+      // replica and the original source should be removed.
+      const consumers = Array.from({ length: 8 }, (_, i) => `final.s${i}`);
+      const g: CipherGraph = {
+        nodes: [
+          {
+            stepId: "final.split-wv",
+            stepType: "split-bytes@1",
+            label: "split-wv",
+            containerPath: [],
+          },
+          ...consumers.map((id) => ({
+            stepId: id,
+            stepType: "add-mod-32@1",
+            label: id,
+            containerPath: [],
+          })),
+        ],
+        containers: [],
+        edges: consumers.map((id) => ({
+          from: "final.split-wv",
+          to: id,
+          // The port-flow sentinel — what `inferPortEdges` stamps on
+          // every binding it walks.
+          auxKey: "port-flow",
+          kind: "state" as const,
+        })),
+        rootIds: ["final.split-wv", ...consumers],
+      };
+
+      const r = replicateHighFanoutSources(g, 6);
+
+      // One replica per consumer (`final.split-wv@->final.s_i`).
+      const replicas = r.nodes.filter((n) => n.replicaOf === "final.split-wv");
+      expect(replicas).toHaveLength(8);
+      for (const rep of replicas) {
+        expect(rep.stepType).toBe("split-bytes@1");
+        expect(rep.label).toBe("split-wv");
+      }
+      // Original source is fully replicated → removed from nodes + rootIds.
+      expect(r.nodes.find((n) => n.stepId === "final.split-wv")).toBeUndefined();
+      expect(r.rootIds).not.toContain("final.split-wv");
+      // No edge still emits from the dead source id.
+      expect(r.edges.filter((e) => e.from === "final.split-wv")).toHaveLength(0);
+    });
+
+    it("legacy passthrough state spine does NOT count toward fanout (negation)", () => {
+      // 8 consecutive legacy state spine edges from a single source — but
+      // `auxKey === "state"` (the passthrough sentinel), NOT "port-flow".
+      // These represent the implicit (state, params) → state thread, are
+      // 1-to-1 by construction in the real spec, and must not inflate
+      // the fanout count. Even at threshold 1 (the floor — replicate
+      // anything above 1), this source MUST NOT replicate.
+      const consumers = Array.from({ length: 8 }, (_, i) => `step${i}`);
+      const g: CipherGraph = {
+        nodes: [
+          {
+            stepId: "legacy-source",
+            stepType: "ts",
+            label: "legacy-source",
+            containerPath: [],
+          },
+          ...consumers.map((id) => ({
+            stepId: id,
+            stepType: "ts",
+            label: id,
+            containerPath: [],
+          })),
+        ],
+        containers: [],
+        edges: consumers.map((id) => ({
+          from: "legacy-source",
+          to: id,
+          // Legacy passthrough sentinel — the one the new rule still
+          // excludes from fanout eligibility.
+          auxKey: "state",
+          kind: "state" as const,
+        })),
+        rootIds: ["legacy-source", ...consumers],
+      };
+
+      // Threshold 1 (the lowest non-trivial setting) — would replicate
+      // anything with fanout > 1 if state edges were eligible. The
+      // legacy spine must remain unreplicated.
+      const r = replicateHighFanoutSources(g, 1);
+
+      // Identity short-circuit by reference: no source qualified.
+      expect(r).toBe(g);
+      const replicas = r.nodes.filter((n) => n.replicaOf === "legacy-source");
+      expect(replicas).toHaveLength(0);
+    });
+  });
 });

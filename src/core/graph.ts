@@ -2006,10 +2006,22 @@ export const expandCollapsedIterates = (
  * disappear, the eye reads the round body before the schedule.
  *
  * Semantics:
- *   - **Eligibility counts only `kind: "aux"` edges.** State edges are 1-to-1
- *     between consecutive same-parent leaves (no fanout possible) so they're
- *     a meaningless threshold input. A source qualifies only by its outgoing
- *     aux fanout (or by an explicit `"always"` override).
+ *   - **Eligibility counts every aux edge plus every port-flow state edge**
+ *     (Slice S2(i) of `docs/plans/sha-256-density-polish.md`, 2026-05-26).
+ *     Aux edges are the original fanout vector — one source, many consumers
+ *     reading the same `auxKey`. Port-flow state edges (`kind:"state"` +
+ *     `auxKey === PORT_FLOW_AUX_KEY`) are the port-native equivalent: a
+ *     source's output port read by N downstream `portInputs` produces N
+ *     port-flow edges, structurally the same fan as N aux reads. Legacy
+ *     passthrough state edges (`kind:"state"` + `auxKey === STATE_AUX_KEY`)
+ *     stay excluded — they're 1-to-1 between consecutive same-parent leaves
+ *     by construction (no fanout possible), so including them would
+ *     over-count. The pre-S2(i) rule excluded all state edges; SHA-256
+ *     surfaced the gap when `final.split-wv` / `final.split-H` (each with
+ *     8 outgoing port-flow edges to `final.s_0..s_7`) failed to qualify
+ *     and produced the long-line overlap the user reported. A source
+ *     qualifies only by its outgoing fanout-eligible count (or by an
+ *     explicit `"always"` override).
  *   - **All outgoing edges of a qualifying source are rerouted, regardless
  *     of kind** (Slice 7b, 2026-05-17). A high-fanout source's outgoing
  *     STATE edges fan through replicas the same way its aux edges do, and
@@ -2091,10 +2103,20 @@ export const replicateHighFanoutSources = (
   const containerIds = new Set<string>();
   for (const c of graph.containers) containerIds.add(c.id);
 
-  // Count outgoing aux edges per source. State edges are excluded.
+  // Count outgoing fanout-eligible edges per source: every aux edge, plus
+  // every port-flow state edge (kind:"state" + auxKey === PORT_FLOW_AUX_KEY).
+  // Legacy passthrough state edges (kind:"state" + auxKey === STATE_AUX_KEY)
+  // stay excluded — they're 1-to-1 between consecutive same-parent leaves by
+  // construction and would otherwise inflate the count for every spine
+  // participant. The port-flow inclusion was added 2026-05-26 (Slice S2(i)):
+  // SHA-256's `final.split-wv` and `final.split-H` each emit 8 port-flow
+  // edges and need to qualify for replication, but the original aux-only
+  // rule scored them as fanout 0 and the long lines overlapped horizontally
+  // through the s_0..s_7 row.
   const fanoutBySrc = new Map<string, number>();
   for (const e of graph.edges) {
-    if (e.kind !== "aux") continue;
+    const eligible = e.kind === "aux" || (e.kind === "state" && e.auxKey === PORT_FLOW_AUX_KEY);
+    if (!eligible) continue;
     fanoutBySrc.set(e.from, (fanoutBySrc.get(e.from) ?? 0) + 1);
   }
 
