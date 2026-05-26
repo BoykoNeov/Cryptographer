@@ -2595,6 +2595,15 @@ export const GraphView = () => {
         ...(anchors.input !== undefined ? { inputAnchorId: anchors.input } : {}),
         ...(anchors.output !== undefined ? { outputAnchorId: anchors.output } : {}),
       },
+      // Slice S2(f), 2026-05-26 — pass the registry so port-native
+      // specs (SHA-256 today, every future hash and the eventual AES
+      // rebuild) suppress the legacy consecutive-siblings state-spine
+      // inference. Port-flow edges from `inferPortEdges` (S2(e)) own
+      // the spine on those specs. Legacy ciphers (AES/Speck/Serpent/
+      // DES) have no port-native leaves so `requiresPortedDispatch`
+      // returns false and the gate is a no-op — byte-identical to
+      // pre-S2(e)/(f) behavior.
+      registry,
     });
   });
 

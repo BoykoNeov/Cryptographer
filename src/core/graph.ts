@@ -70,6 +70,7 @@
  * container interleave at the root.
  */
 
+import type { StepRegistry } from "./registry";
 import { canonicalStepId } from "./step-id";
 import type {
   CipherSpec,
@@ -969,6 +970,33 @@ const deriveEdges = (trace: Trace, ctx: BuildContext): GraphEdge[] => {
 const STATE_AUX_KEY = "state";
 
 /**
+ * Sentinel aux key carried on every port-flow edge (Slice S2(e), 2026-05-26
+ * — `docs/plans/sha-256-density-polish.md`). Distinguishes a port-flow
+ * edge (declared by `portInputs`, carries real bytes from an upstream
+ * output port to a downstream input port) from a legacy passthrough
+ * state edge (consecutive-siblings inference, an implicit `(state,
+ * params) → state` thread).
+ *
+ * Both edge classes share `kind: "state"` so the renderer paints them
+ * identically as the cipher's primary spine. The discriminator lives on
+ * `auxKey` so `dropAuxOnlyStateEdges` can KEEP port-flow edges from
+ * lifted aux-only roots (e.g. `H-constant → init-working-vars` on
+ * SHA-256) while still DROPPING the misleading passthrough edges that
+ * filter was originally designed to suppress.
+ *
+ * Surfaced 2026-05-26 manual smoke: after S2(d) lifted `H-constant`
+ * into `auxOnlyRootIds`, `dropAuxOnlyStateEdges` was dropping its
+ * outgoing port-flow edge alongside the legacy spine edge it was
+ * meant to drop — SHA-256 graph view showed H-constant with no
+ * outgoing arrow at all. Same fate awaited `final.fetch-H` (an
+ * `aux-load-bytes@1` lifted via the legacy `shapeContract.input ===
+ * "any"` path) and its port-flow edge to `final.split-H`. The
+ * distinct auxKey lets the filter discriminate by provenance rather
+ * than by appearance.
+ */
+const PORT_FLOW_AUX_KEY = "port-flow";
+
+/**
  * Spec-walk pass: emit a `kind: "state"` edge between every DFS-consecutive
  * pair of sibling leaves within the same iterate-scope.
  *
@@ -1025,8 +1053,63 @@ const STATE_AUX_KEY = "state";
  * user reads as "this is what the cipher does", and it should be visible
  * the moment they load a spec.
  */
-const inferStateEdges = (spec: CipherSpec): GraphEdge[] => {
+const inferStateEdges = (spec: CipherSpec, registry?: StepRegistry): GraphEdge[] => {
   const edges: GraphEdge[] = [];
+
+  // ─── Per-edge S2(f) gate: skip state edges to non-state consumers ────────
+  // Build a set of leaf ids that should NOT receive an inferred
+  // consecutive-siblings state edge — consumers whose semantics don't
+  // include reading state via the state-thread. Three flavors of
+  // "doesn't read state":
+  //   1. Pure port-native registration (`kind: "ported"` AND `meta`
+  //      absent) — has no state-input at all; all inputs come from
+  //      `portInputs`.
+  //   2. Lifted-legacy ported registration whose `meta.stateInputPort`
+  //      is undefined — the meta-driven projection has no state input.
+  //   3. Lifted-legacy ported registration whose `meta.stateInputPort`
+  //      IS defined but the spec leaf declares `portInputs[stateInputPort]`
+  //      — the explicit port-flow binding overrides the state-thread
+  //      projection (per runtime.ts:343-347 "Step B — Skipped when
+  //      portInputs already wired this port").
+  // Otherwise — legacy registrations, lifted-legacy ported without
+  // override — the consumer DOES read state-thread, and the inferred
+  // edge is the depiction of the real handoff. KEEP those.
+  //
+  // Without a registry the gate is a no-op (skipSet stays empty),
+  // matching the ~110 existing test callsites that don't pass one.
+  const skipStateEdgeTo = new Set<string>();
+  if (registry !== undefined) {
+    const collectSkips = (nodes: readonly StepNode[]): void => {
+      for (const node of nodes) {
+        if (node.kind === "step") {
+          const reg = registry.getRegistration(node.type);
+          if (reg !== undefined && reg.kind === "ported") {
+            const meta = reg.meta;
+            if (meta === undefined) {
+              // Pure port-native — no state-thread.
+              skipStateEdgeTo.add(node.id);
+            } else if (meta.stateInputPort === undefined) {
+              // Lifted-legacy with no state input — pure source like
+              // `aux-load-bytes@1` / `aux-load@1` / `constant-load@1`.
+              skipStateEdgeTo.add(node.id);
+            } else if (node.portInputs?.[meta.stateInputPort] !== undefined) {
+              // Lifted-legacy with explicit portInputs override —
+              // port-flow edge represents the real input, inferred
+              // state edge would be redundant noise on the spine.
+              skipStateEdgeTo.add(node.id);
+            }
+          }
+          continue;
+        }
+        if (node.kind === "feistel-round") {
+          for (const track of node.tracks) collectSkips(track.children);
+          continue;
+        }
+        collectSkips(node.children);
+      }
+    };
+    collectSkips(spec.steps);
+  }
 
   // Track every iterate's id so the spine-chain emitter can suppress
   // phantom state edges that would otherwise appear to flow INTO or
@@ -1091,6 +1174,11 @@ const inferStateEdges = (spec: CipherSpec): GraphEdge[] => {
       // doesn't appear in any flat chain; the rejoin synthetic id takes
       // its place — see `processScope` below.)
       if (feistelRoundIds.has(to)) continue;
+      // Per-edge S2(f) gate: skip edges to consumers that don't read
+      // state via state-thread (pure port-native, or ported leaves with
+      // an explicit portInputs override for their state-input port).
+      // See `skipStateEdgeTo`'s doc-block above for the full rule.
+      if (skipStateEdgeTo.has(to)) continue;
       edges.push({ from, to, auxKey: STATE_AUX_KEY, kind: "state" });
     }
   };
@@ -1371,6 +1459,89 @@ const inferStateEdges = (spec: CipherSpec): GraphEdge[] => {
 };
 
 /**
+ * Spec-walk pass: emit a `kind: "state"` edge for every `portInputs`
+ * binding the spec declares (universal-port plan Phase 2 Slice S2(e),
+ * 2026-05-26 — see `docs/plans/sha-256-density-polish.md`).
+ *
+ * For each leaf with `portInputs`, every entry `(inputPortName →
+ * { node, port })` produces a single edge `{ from: node, to: leaf.id,
+ * kind: "state", auxKey: STATE_AUX_KEY }`. The kind reuses `"state"`
+ * rather than introducing a new `"port"` kind so the renderer paints
+ * port-flow as the spine (thicker, darker — exactly the "this is the
+ * cipher's primary dataflow" reading the user expects). Post-S2(f)
+ * the legacy consecutive-siblings inference is suppressed for port-
+ * native specs, so on SHA-256 the spine is composed ENTIRELY of port-
+ * derived edges; on legacy AES/Speck/Serpent/DES specs (no
+ * `portInputs` anywhere) this pass returns an empty list and the
+ * legacy inference still owns the spine. Byte-identical for any spec
+ * that doesn't declare port-edge wiring.
+ *
+ * **Why this needed to exist.** Pre-S2(e) `deriveAuxGraph` did not
+ * consume `portInputs` — Slice 2.6a wired the runtime + spec-shapes
+ * validator to honor declared port edges, but the graph derivation
+ * was missed. Symptom on SHA-256: `final.s_0` (which reads from
+ * `split-wv.output0` AND `split-H.output0`) showed zero or one
+ * incoming edge instead of two; `final.assemble` showed one instead
+ * of eight; `H-constant` showed no outgoing edges at all. The visible
+ * "state" edges in port-native scopes came from the legacy
+ * consecutive-siblings rule and were mislabeled — they represented
+ * port-flow, not the implicit (state, params) → state thread.
+ *
+ * **Edge scope.** Same-scope (sibling) wiring only — runtime contract
+ * documented at `runtime.ts:155-161`. The runtime throws on cross-
+ * scope `portInputs` resolution; the spec-shapes validator emits
+ * `port-input-unresolvable` pre-Run. By the time `deriveAuxGraph`
+ * runs on a valid spec, every binding's `node` reference is a sibling
+ * in the same walk frame. We emit one edge per declaration; an
+ * upstream guard catches malformed ones before they reach here.
+ *
+ * **Container `portInputs` consciously skipped.** Types declare the
+ * field on every container kind (group, iterate, feistel-round,
+ * for-each-subgraph, for-each-subgraph-with-history) but the runtime
+ * documents "no container kind reads explicit portInputs at its
+ * boundary — the field is declared on every container type so the
+ * schema + types are uniform, but the runtime doesn't yet consume
+ * it on containers. Pure forward-compatibility" (`types.ts:144-152`).
+ * Walking container portInputs here would draw edges the runtime
+ * doesn't honor. Revisit when the first container kind starts
+ * reading them.
+ */
+const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
+  const edges: GraphEdge[] = [];
+  const walk = (nodes: readonly StepNode[]): void => {
+    for (const node of nodes) {
+      if (node.kind === "step") {
+        if (node.portInputs !== undefined) {
+          for (const binding of Object.values(node.portInputs)) {
+            edges.push({
+              from: binding.node,
+              to: node.id,
+              // Distinct auxKey distinguishes port-flow from legacy
+              // passthrough state edges so `dropAuxOnlyStateEdges`
+              // doesn't filter out port-flow edges from lifted aux-
+              // only roots (H-constant, aux-load-bytes leaves) — the
+              // misdiagnosis the same-day smoke surfaced 2026-05-26.
+              // See PORT_FLOW_AUX_KEY's doc-block for the full
+              // discriminator rationale.
+              auxKey: PORT_FLOW_AUX_KEY,
+              kind: "state",
+            });
+          }
+        }
+        continue;
+      }
+      if (node.kind === "feistel-round") {
+        for (const track of node.tracks) walk(track.children);
+        continue;
+      }
+      walk(node.children);
+    }
+  };
+  walk(spec.steps);
+  return edges;
+};
+
+/**
  * Compute `blockSpan` for every leaf inside an iterate and for every
  * iterate container. The runtime stamps `frame.blockIndex` on each frame
  * emitted inside an iterate, so blockSpan = max(blockIndex) + 1 over
@@ -1581,7 +1752,17 @@ export const dropAuxOnlyStateEdges = (
 ): CipherGraph => {
   if (auxOnlyIds.size === 0) return graph;
   const filteredEdges = graph.edges.filter((e) => {
-    if (e.kind !== "state") return true;
+    // Only the LEGACY passthrough state edges (kind:"state" +
+    // auxKey:STATE_AUX_KEY) are pedagogically misleading from an
+    // aux-only root — those represent the implicit (state, params) →
+    // state thread, which the aux-only root never actually transforms.
+    // Port-flow state edges (kind:"state" + auxKey:PORT_FLOW_AUX_KEY)
+    // are declared by `portInputs` and carry real bytes; dropping them
+    // hides the H-constant → init-working-vars handoff (and the
+    // analogous final.fetch-H → final.split-H handoff). The auxKey
+    // discriminator was added 2026-05-26 — see PORT_FLOW_AUX_KEY's
+    // doc-block.
+    if (e.kind !== "state" || e.auxKey !== STATE_AUX_KEY) return true;
     return !auxOnlyIds.has(e.from) && !auxOnlyIds.has(e.to);
   });
   if (filteredEdges.length === graph.edges.length) return graph;
@@ -2540,11 +2721,39 @@ export type EndpointOptions = {
  * and `kind: "state"` edges connect them to the configured anchors.
  * The pills are prepended/appended to `rootIds` so the layout pass
  * places them at the canvas extremes naturally.
+ *
+ * When `opts.registry` is provided, the consecutive-siblings state-
+ * spine inference applies a PER-EDGE suppression rule (Slice S2(f)
+ * refined — `docs/plans/sha-256-density-polish.md`, 2026-05-26): an
+ * inferred state edge `predecessor → consumer` is suppressed when the
+ * consumer doesn't actually read state via the state-thread (pure
+ * port-native consumer; or lifted-legacy ported consumer whose
+ * `meta.stateInputPort` is undefined; or lifted-legacy ported
+ * consumer whose `meta.stateInputPort` is overridden by an explicit
+ * `portInputs` binding — making the inferred edge redundant with the
+ * port-flow edge from `inferPortEdges`). The earlier whole-spec gate
+ * (suppress every inferred state edge on any port-native spec) was
+ * too aggressive on 2026-05-26: SHA-256's lifted-legacy ported leaves
+ * (W-publish, K-to-aux, H-to-aux, seed-schedule, init-working-vars,
+ * round bodies) still rely on state-thread to receive their input,
+ * so a whole-spec gate broke the visible round chain (round.0 →
+ * round.1 → … → round.63 → final.state-in) the user reads as the
+ * cipher's primary spine. The per-edge rule preserves those
+ * handoffs while suppressing the spurious chain through parallel
+ * port-native leaves (e.g. `final.s_0 → final.s_1 → … → final.s_7`
+ * where the real flow is `split-wv.output_i` + `split-H.output_i`
+ * → `final.s_i` via port-flow).
+ * Callers that omit `opts.registry` get the pre-S2(f) behavior
+ * (state-spine inference always fires, no per-edge gate) — keeps
+ * existing tests byte-identical.
  */
 export const deriveAuxGraph = (
   trace: Trace,
   spec: CipherSpec,
-  opts?: { readonly endpoints?: EndpointOptions },
+  opts?: {
+    readonly endpoints?: EndpointOptions;
+    readonly registry?: StepRegistry;
+  },
 ): CipherGraph => {
   const ctx: BuildContext = {
     nodes: [],
@@ -2561,8 +2770,15 @@ export const deriveAuxGraph = (
   // edges come from spec-walking (always present, even pre-run). Append
   // state edges AFTER aux edges so existing tests that index the edge
   // list by position continue to work, and so a reader scanning the
-  // dataflow sees the annotations first and the spine last.
-  const edges = [...deriveEdges(trace, ctx), ...inferStateEdges(spec)];
+  // dataflow sees the annotations first and the spine last. Port-flow
+  // edges (S2(e)) join the "state" bucket — they paint as the spine,
+  // distinguished by `auxKey: "port-flow"` so `dropAuxOnlyStateEdges`
+  // doesn't filter them. `inferStateEdges` takes the registry so it
+  // can apply the per-edge S2(f) gate (skip emitting state edges to
+  // consumers that don't actually read state-thread).
+  const portFlowEdges = inferPortEdges(spec);
+  const legacyStateEdges = inferStateEdges(spec, opts?.registry);
+  const edges = [...deriveEdges(trace, ctx), ...portFlowEdges, ...legacyStateEdges];
 
   // ─── Optional endpoint pill injection (Slice 1) ──────────────────────────
   //

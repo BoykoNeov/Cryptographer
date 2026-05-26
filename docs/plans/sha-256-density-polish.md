@@ -264,40 +264,96 @@ relationship is port-flow. So:
 **Original (b)/(c)/(a) options are obsolete.** None of them address
 the derivation gap. Re-scoped as three new sub-slices below.
 
-#### S2(e) — port-flow edge derivation — DEFERRED to a future session
+#### S2(e) — port-flow edge derivation — SHIPPED 2026-05-26
 
-**Scope:** extend `deriveAuxGraph` in `src/core/graph.ts` to walk
-every step's `portInputs` and emit a graph edge per binding (from
-upstream node's output port → this node's input port). Likely 30-60
-lines of code. Test pinning SHA-256's `final.s_0` shows two incoming
-edges (from `split-wv.output0` and `split-H.output0`); `final.assemble`
-shows 8 incoming edges; `H-constant` shows one outgoing edge to
-`init-working-vars`.
+**Outcome.** `inferPortEdges(spec)` walks every leaf's `portInputs`
+and emits a `kind: "state"` edge `{ from: binding.node, to: leaf.id,
+auxKey: PORT_FLOW_AUX_KEY }` per binding. Port-flow edges share `kind:
+"state"` with legacy passthrough state edges so the renderer paints
+both as the cipher's primary spine — but a DISTINCT `auxKey:
+"port-flow"` sentinel discriminates them so `dropAuxOnlyStateEdges`
+can filter legacy passthroughs from lifted aux-only roots without
+also dropping the real port-flow handoffs.
 
-**Pass/fail gate:** manual smoke on SHA-256 shows every real port-flow
-arrow rendered. Duplicate edges between consecutive siblings (one
-state-spine, one port-flow) accepted as known noise; S2(f) cleans up.
+**Discriminator was load-bearing.** Initial implementation used a
+shared `STATE_AUX_KEY` and was caught by the manual browser smoke:
+`H-constant`'s outgoing edge to `init-working-vars` (port-flow) was
+being dropped by `dropAuxOnlyStateEdges` because the filter saw
+`H-constant` in `auxOnlyRootIds` (lifted via S2(d)) and dropped every
+`kind: "state"` edge touching it. Same fate would await
+`final.fetch-H → final.split-H` and other port-flow edges from any
+future lifted aux-only root. The auxKey discriminator (added after
+the smoke surfaced the issue) lets the filter discriminate by
+provenance.
 
-#### S2(f) — whole-spec suppression of legacy state-spine inference — DEFERRED to a future session
+**Test:** `tests/graph-port-edge-derivation.test.ts` (9 tests). Pins
+`final.s_0` has exactly 2 incoming edges (`split-wv.output0`,
+`split-H.output0`); `final.assemble` has 8 incoming edges (one per
+word); `H-constant → init-working-vars` edge exists; all port-flow
+edges from a port-native source carry `kind: "state"` + `auxKey:
+"port-flow"`.
 
-**Scope:** add a predicate (e.g. `requiresPortedDispatch(spec)` or
-equivalent — read "does this spec contain any port-native step") and
-gate the legacy consecutive-siblings state-spine inference behind
-`!predicate`. When true, skip the inference entirely.
+#### S2(f) — per-edge state-spine suppression on port-native consumers — SHIPPED 2026-05-26
 
-**Safety rationale.** Per user architectural decision 2026-05-26
-(`docs/plans/universal-port-dataflow.md` "Architectural decisions"
-addendum + `feedback_all_specs_port_native.md` memory): every shipped
-spec is either 100% legacy OR 100% port-native; no hybrids. The
-whole-spec suppression strategy is therefore permanently safe — there
-is no shipped spec where the legacy inference is needed for some
-leaves but not others. Per-edge suppression would have been more
-defensive but is unnecessary under this rule.
+**Refined scope.** The original plan (whole-spec suppression via
+`requiresPortedDispatch(spec, registry) === true`) was implemented
+first and caught by the same manual browser smoke: it ALSO suppressed
+legitimate state-thread handoffs into lifted-legacy ported consumers
+(W-publish, init-working-vars, the 64 per-round `state-in`/
+`state-out` pairs). Result: the visible round chain
+`init-working-vars → round.0 → round.1 → … → round.63 → final.state-in`
+disappeared from the SHA-256 graph view. The whole-spec gate violated
+the assumption it was built on — that "port-native spec" implies
+"every consumer reads inputs via portInputs." SHA-256's lifted-legacy
+ported leaves (bytes-to-state, state-to-aux-bytes, state-to-bytes)
+still consume state via the state-thread; the whole-spec gate broke
+those handoffs.
 
-**Pass/fail gate:** AES / Speck / Serpent / DES graph views render
-byte-identically to today (legacy specs → predicate false → inference
-fires unchanged). SHA-256 graph view shows port-flow arrows only — no
-duplicate "state" edges between consecutive port-native siblings.
+**Per-edge gate.** `inferStateEdges(spec, registry?)` now builds a
+`skipStateEdgeTo: Set<string>` of leaf ids that should NOT receive an
+inferred consecutive-siblings state edge — three flavors of
+"doesn't read state via state-thread":
+1. Pure port-native registration (`kind: "ported"` AND `meta` absent).
+2. Lifted-legacy ported registration whose `meta.stateInputPort` is
+   undefined (pure source like `aux-load-bytes@1`).
+3. Lifted-legacy ported registration whose `meta.stateInputPort`
+   exists but the spec leaf declares `portInputs[stateInputPort]`
+   (per-port override — the explicit port-flow binding represents
+   the real input).
+
+`emitChain` skips emitting edges to ids in this set. Without a
+registry the set stays empty (backward-compat for the ~110 existing
+callsites). Containers aren't in the set — group/iterate/feistel/
+for-each-subgraph consumers continue to participate in the state-
+spine.
+
+**Test:** the same `tests/graph-port-edge-derivation.test.ts` pins:
+- Spurious chain through `final.s_0 → … → final.s_7` suppressed.
+- `final.split-wv → final.fetch-H` and `final.assemble → final.out`
+  spurious edges suppressed.
+- `init-working-vars → round.0.state-in` KEPT.
+- `round.0.state-out → round.1.state-in` and the analogous
+  `round.62 → round.63` inter-round handoffs KEPT.
+- `round.63.state-out → final.state-in` KEPT.
+- AES-128 ECB byte-identical between `{ registry }` and no-opts
+  calls (legacy specs have no port-native leaves → skipStateEdgeTo
+  empty → behavior unchanged).
+
+**Counts:** suite 2362 → 2371 (+9). Bundle 683.58 → 684.39 KB raw /
+200.77 → 201.02 KB gzipped (+0.81 KB / +0.25 KB).
+
+**Pre-existing follow-up surfaced by the smoke (NOT a S2 regression).**
+`msg-schedule → W-publish` state-spine edge is emitted by
+`inferStateEdges` (msg-schedule is a container, not in skipStateEdgeTo;
+W-publish reads state-thread, not in skipStateEdgeTo either) — but
+then DROPPED by `dropAuxOnlyStateEdges` because W-publish is in
+`auxOnlyRootIds` (Path 1: `shapeContract.input === "any"`). The
+filter is too aggressive for state-thread INCOMING edges into
+aux-only roots that have a real state-writing predecessor. This is
+the original plan's symptom #3 ("msg-schedule looks like a dead
+end") — the plan misdiagnosed it as a layout issue. The filter
+overreach predates S2(e)/(f) and survives them unchanged. Filed as
+S2(h) below.
 
 #### S2(g) — polymorphic-state-shape dead-code cleanup — DEFERRED to a future session
 
@@ -317,6 +373,62 @@ after S2(e) lands.
 
 **Pass/fail gate:** test suite stays green; bundle size shrinks
 proportionally to whatever dead code was removed.
+
+#### S2(h) — dropAuxOnlyStateEdges overreach for state-thread INCOMING edges — DEFERRED to a future session
+
+**Surfaced 2026-05-26** during S2(e)/(f) browser smoke. The filter
+drops every `kind: "state", auxKey: "state"` edge where either
+endpoint is in `auxOnlyRootIds`. For aux-only roots that are
+"entry leaves" (no state-spine producer — e.g. AES `key-expansion`),
+this is correct: the input pill substitutes for the missing
+producer arrow, and the inferred edge `key-expansion →
+split-blocks` is redundant.
+
+For aux-only roots that are MIDDLE-OF-SPEC consumers
+reading the state-thread (SHA-256's `W-publish`, `K-to-aux`,
+`H-to-aux`), the filter drops legitimate incoming spine edges and
+makes the predecessor look like a dead end. Concrete user-visible
+symptom: `msg-schedule → W-publish` is dropped; the user sees
+"message schedule ends with no arrows leading out from it"
+(symptom #3 from the original plan's Context block, misdiagnosed
+there as layout).
+
+**Possible fix shapes** (not committed to until the session opens):
+- (a) Refine the predicate: drop only when `from` is aux-only AND
+  has no INCOMING state-spine edge (i.e. `from` is a true spine
+  source the input pill substitutes for). Symmetric for `to` at
+  the spine sink.
+- (b) Replace the filter with a renderer-side z-order/opacity
+  tweak that DE-EMPHASIZES "consecutive aux-only chain" edges
+  without dropping them entirely.
+- (c) Per-edge predicate on the spec — keep edges where the
+  inferred state edge would map to a real state-thread handoff
+  (i.e. consumer has a meta.stateInputPort that's NOT overridden).
+
+**Pass/fail gate:** SHA-256 graph view shows
+`msg-schedule → W-publish` arrow (the dead-end resolved). AES
+graph view does NOT show `key-expansion → first-state-consumer`
+arrow (the original filter intent preserved). Tests pin both.
+
+#### S2(e)+S2(f) browser smoke outcome — 2026-05-26
+
+**Confirmed working:** H-constant → init-working-vars arrow visible;
+final.assemble shows 8 incoming port-flow arrows from final.s_0..s_7;
+init-working-vars → round.0.state-in (state-thread) visible; round.X
+→ round.X+1 inter-round state handoffs visible via the collapsed-
+round container chain; round.63 → final.state-in visible; AES-128
+ECB sanity-check legacy spine intact (key-expansion in lifted
+gutter row, fan-out aux edges to each round).
+
+**Pre-existing issue surfaced (NOT a S2 regression):**
+`msg-schedule → W-publish` still missing — `dropAuxOnlyStateEdges`
+overreach (S2(h)). The plan's original symptom #3 traces to this
+filter rather than to a layout problem.
+
+**Edges to follow up on if pursued:** the chain through
+`W-publish → K-to-aux → H-to-aux → H-constant` (the "loading
+phase" of aux constants) is also currently filtered; S2(h) would
+restore visibility.
 
 #### Original (a)/(b)/(c) options — closed as misdiagnosed
 
