@@ -185,22 +185,39 @@ skipped them and the H-row preamble half-lifted: `K-to-aux` /
 `H-constant` (a pure 32-byte constant emitter) stayed pinned to the
 spine alongside `init-working-vars` (the actual state writer).
 
-**The fix.** Widen the `auxOnlyRootIds` memo with a second
-predicate: a root leaf whose registration is `kind: "ported"` with
-neither `meta.stateInputPort` nor `meta.stateOutputPort` lifts too.
-Captures `constant-load@1` (no `meta` at all) and `aux-load-bytes@1`
-(`meta` declares `auxReadPorts` only) while still excluding the
-genuine state bridges — `bytes-to-state@1` has
-`meta.stateOutputPort` so `init-working-vars` / `seed-schedule`
-correctly stay on the spine.
+**The fix.** Widen the `auxOnlyRootIds` memo with a second predicate
+— three conjuncts, all required:
 
-**Test:** `tests/graph-view-sha256-preamble-lift.test.tsx` (3 tests).
+1. Registration's `kind === "ported"`.
+2. `meta` declares neither `stateInputPort` nor `stateOutputPort` —
+   the step neither reads nor writes the spine state variable.
+3. The spec leaf declares no `portInputs` — it's a true source in the
+   spec-edge graph, not a port-chain consumer.
+
+The first two conjuncts together capture all port-native step types
+that don't touch the runtime state variable. The third (added in a
+same-day tightening after advisor surfaced the blind spot) excludes
+port-chain consumers like `pad-with-byte@1` and `append-be64-length@1`
+— port-native with no state-port meta, but they declare spec-level
+`portInputs` (`pad`'s input wires to `plaintext-source.output`).
+Without the third conjunct the SHA-256 spec's `pad` and `length-append`
+would have incorrectly lifted to the top row alongside the actual
+constant emitters.
+
+Final captured set on SHA-256: `H-constant` (`constant-load@1`, no
+`meta` at all, no `portInputs`) and `aux-load-bytes@1` leaves (legacy
+lift path also applies). Excluded: state bridges (`bytes-to-state@1`
+has `stateOutputPort`; `state-to-bytes@1` has `stateInputPort`),
+port-chain consumers (`pad`, `length-append`).
+
+**Test:** `tests/graph-view-sha256-preamble-lift.test.tsx` (5 tests).
 Pins `H-constant` lifts to the same y as `H-to-aux` (legacy lift
-reference), and pins both `init-working-vars` and `seed-schedule`
-stay strictly below the lifted row.
+reference); pins both `init-working-vars` and `seed-schedule`
+(state writers) stay strictly below the lifted row; pins `pad`
+and `length-append` (port-chain consumers) stay on the spine.
 
-**Counts:** suite 2357 → 2360 (+3). Bundle 683.31 → 683.52 KB raw /
-200.67 → 200.74 KB gzipped (+0.21 KB / +0.07 KB).
+**Counts:** suite 2357 → 2362 (+5). Bundle 683.31 → 683.58 KB raw /
+200.67 → 200.77 KB gzipped (+0.27 KB / +0.10 KB).
 
 **Smoke pending.** This is the "verify-then-decide" step the advisor
 asked for before pulling in (b) or (c). Open SHA-256 in the graph

@@ -132,4 +132,28 @@ describe("GraphView — SHA-256 preamble lifts port-native pure sources", () => 
     const hToAuxY = leafY(container, "H-to-aux");
     expect(seedY).toBeGreaterThan(hToAuxY);
   });
+
+  it("pad (pad-with-byte@1) STAYS on the spine row — port-chain consumer, not pure source", () => {
+    const { container } = render(() => <GraphView />);
+    // `pad-with-byte@1` is port-native with NO state-port meta —
+    // candidate (a + b) of the port-native pure-source predicate
+    // match. But the spec wires `portInputs: { input:
+    // port("plaintext-source", "output") }`, so it's a port-chain
+    // consumer (downstream of `plaintext-source`). The empty-portInputs
+    // condition keeps it on the spine. Without this condition the
+    // S2(d) original ship would have lifted `pad` alongside the actual
+    // constant emitters, which is a layout regression.
+    const padY = leafY(container, "pad");
+    const hToAuxY = leafY(container, "H-to-aux");
+    expect(padY).toBeGreaterThan(hToAuxY);
+  });
+
+  it("length-append (append-be64-length@1) STAYS on the spine row — port-chain consumer", () => {
+    const { container } = render(() => <GraphView />);
+    // Same shape as `pad` — port-native, no state-port meta, but
+    // declares `portInputs.data` + `portInputs.length-source`.
+    const lengthAppendY = leafY(container, "length-append");
+    const hToAuxY = leafY(container, "H-to-aux");
+    expect(lengthAppendY).toBeGreaterThan(hToAuxY);
+  });
 });

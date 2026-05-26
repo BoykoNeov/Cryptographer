@@ -2498,27 +2498,41 @@ export const GraphView = () => {
    *    Today's examples: `aes.key-expansion@1`, `generic.iv-load@1`,
    *    `generic.aux-load@1`, `generic.state-to-aux-bytes@1`.
    * 2. **Port-native pure source** (universal-port-dataflow plan, Phase 2+):
-   *    `kind: "ported"` registration whose `meta` declares neither
-   *    `stateInputPort` nor `stateOutputPort`. The step neither reads
-   *    nor writes the spine state — it sources bytes onto a port (or
-   *    routes them between ports). Today's examples: `constant-load@1`
-   *    and `aux-load-bytes@1` at the SHA-256 preamble row (`H-constant`,
-   *    `K-to-aux`, `H-to-aux`). The legacy heuristic skipped these
-   *    because port-native step types omit `shapeContract` — fixed S2(d)
-   *    of `docs/plans/sha-256-density-polish.md`, 2026-05-26.
+   *    THREE conditions, all required —
+   *      a. `kind: "ported"` registration.
+   *      b. `meta` declares neither `stateInputPort` nor
+   *         `stateOutputPort` — the step neither reads nor writes the
+   *         spine state variable.
+   *      c. The spec leaf declares no `portInputs` — i.e. it's a true
+   *         source in the spec-edge graph, not a port-chain consumer.
+   *    Today's examples: `constant-load@1` and `aux-load-bytes@1` at the
+   *    SHA-256 preamble row (`H-constant`, `K-to-aux`, `H-to-aux`). The
+   *    legacy heuristic skipped these because port-native step types
+   *    omit `shapeContract` — fixed S2(d) of
+   *    `docs/plans/sha-256-density-polish.md`, 2026-05-26.
    *
-   * **Why a state-port-presence check (not "no port inputs at all"):**
-   * `bytes-to-state@1` has no spec-time `portInputs` (the runtime
-   * projects its input via `meta.stateOutputPort`) but it WRITES state;
-   * lifting it would break the spine. The `stateInputPort` /
-   * `stateOutputPort` check is the conservative signal that "this leaf
-   * is a true off-spine source," matching exactly the case the lift was
-   * designed for.
+   * **Why each condition matters:**
+   *
+   * - The `stateInputPort` / `stateOutputPort` check excludes the
+   *   genuine state bridges. `bytes-to-state@1` has no spec-time
+   *   `portInputs` (the runtime projects its input via
+   *   `meta.stateOutputPort`) but it WRITES state; lifting it would
+   *   break the spine.
+   * - The `portInputs`-empty check excludes port-chain CONSUMERS.
+   *   `pad-with-byte@1` and `append-be64-length@1` are port-native with
+   *   no state-port meta, but they declare spec-level `portInputs`
+   *   (`pad`'s input wires to `plaintext-source.output`); they're
+   *   downstream nodes in a port-flow chain, not sources. Without this
+   *   check the SHA-256 spec's `pad` and `length-append` would
+   *   incorrectly lift to the top row alongside the actual constant
+   *   emitters. (Advisor-flagged fallout from S2(d) original ship,
+   *   tightened same day.)
    *
    * No-contract LEGACY leaves stay on the spine — they might consume
    * state, we can't tell, and a wrong lift is more jarring than a missed
    * one. The port-native branch is safe to widen because port-native
-   * step types declare their state involvement explicitly via `meta`.
+   * step types declare their state involvement explicitly via `meta`
+   * AND their port-graph involvement explicitly via `portInputs`.
    *
    * Scoped to ROOT level only: nested aux-only steps live inside a
    * container the user has already navigated into, so the visual clash
@@ -2536,16 +2550,19 @@ export const GraphView = () => {
         out.add(n.id);
         continue;
       }
-      // Path 2 — port-native pure source. The registration is "ported"
-      // and its projection metadata declares no spine-state involvement.
-      // Reading meta is safe across both shapes: legacy registrations
-      // have no `meta` field, the access is undefined, and the predicate
-      // short-circuits.
+      // Path 2 — port-native pure source. Three conjuncts — see the
+      // memo doc above for why each one is load-bearing. Reading
+      // `meta` and `portInputs` is safe across both shapes: legacy
+      // registrations have no `meta`, the access is undefined, and the
+      // predicate short-circuits; `portInputs` is optional on every
+      // step leaf, so the absent-or-empty check works uniformly.
       const reg = registry.getRegistration(n.type);
+      const hasPortInputs = n.portInputs !== undefined && Object.keys(n.portInputs).length > 0;
       if (
         reg?.kind === "ported" &&
         reg.meta?.stateInputPort === undefined &&
-        reg.meta?.stateOutputPort === undefined
+        reg.meta?.stateOutputPort === undefined &&
+        !hasPortInputs
       ) {
         out.add(n.id);
       }
