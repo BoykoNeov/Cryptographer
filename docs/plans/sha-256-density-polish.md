@@ -869,12 +869,122 @@ consumer:
   index again — keeping the LOCAL row for y-lift only. Filed but
   no smoke evidence yet.
 
-### Slice S3 — narration density second pass
+### Slice S3 — narration density second pass — SHIPPED 2026-05-26 (route (a))
 
-Deferred from this session per the bucket-C scoping above. Two routes
-(a) or (b) per the "Context" section. Defer until S1 + S2 ship — the
-ParamEditor + layout fixes change what the user sees per scrub, which
-may change which leaves "need more prose."
+**Route picked.** Option (a) (additive prose) over option (b) (collapse
+three rotation leaves into one frame). Route (b) would require a new
+"narration grouping" spec field + trace-frame hiding mechanism + KAT
+frame-count fixture updates — far heavier than (a)'s pure prose
+additions. Route (a) stays in the same shape as Slice 2.8's same-day
+uplift on the combine leaves.
+
+**Inventory clarification.** The "~30 leaves" in the Context section
+counted **occurrences across iterations** (round body × 64 + schedule
+body × 48). The actual count of **distinct StepDocumentation objects**
+in scope is **10** — each round/schedule body is one spec subtree
+that the runtime iterates, so editing one doc updates all 64/48
+visible trace frames.
+
+**Scope (10 leaves):** the "Middle term" / "Last term" / "Left term" /
+"Right term" one-liners on the second / third terms of the four
+mixing helpers (σ0, σ1, Σ0, Σ1) and the AND-based helpers (Ch, Maj).
+
+  Schedule (`σ0` / `σ1`, lowercase):
+  - `NARR_SCHED_SIGMA1_R19` — Middle term, ROTR¹⁹(W_{t-2})
+  - `NARR_SCHED_SIGMA0_R18` — Middle term, ROTR¹⁸(W_{t-15})
+
+  Compression round (`Σ0` / `Σ1`, uppercase):
+  - `NARR_ROUND_SIGMA1_R11` — Middle term, ROTR¹¹(e)
+  - `NARR_ROUND_SIGMA1_R25` — Last term, ROTR²⁵(e)
+  - `NARR_ROUND_SIGMA0_R13` — Middle term, ROTR¹³(a)
+  - `NARR_ROUND_SIGMA0_R22` — Last term, ROTR²²(a)
+
+  Ch / Maj helpers (AND leaves):
+  - `NARR_ROUND_CH_E_AND_F` — Left term, `e ∧ f`
+  - `NARR_ROUND_CH_NOTE_AND_G` — Right term, `(¬e) ∧ g`
+  - `NARR_ROUND_MAJ_AC` — Middle term, `a ∧ c`
+  - `NARR_ROUND_MAJ_BC` — Last term, `b ∧ c`
+
+**Leaves intentionally NOT uplifted (advisor call-out 2026-05-26):**
+
+- `NARR_ROUND_MAJ_AB` (First term) already carries the majority-bit
+  intuition for the whole Maj helper — keeping it at the original
+  "richer setup" tier was deliberate.
+- `NARR_SCHED_SIGMA1_S10` / `NARR_SCHED_SIGMA0_S3` (SHR shift leaves)
+  already have 3-line shift-vs-rotate explanations, a tier above the
+  pure-rotation siblings. They explain the σ-vs-Σ distinction at the
+  right altitude for their role.
+- `NARR_ROUND_CH_NOT_E` already has the "for each bit position, Ch
+  chooses f or g based on e's bit" intuition wired into its detail.
+
+**Prose template — ROTR leaves (6 of 10):**
+
+```
+[Middle/Last] term of `<combine formula>` (FIPS 180-4 §<section> eq. <N>).
+
+Where bits go: ROTR<k> sends input bit n to output position
+(n − k) mod 32. Concretely, input bits 31..k land at output
+positions (31−k)..0; input bits (k−1)..0 wrap to positions 31..(32−k).
+
+XOR'd with `<term1>` and `<term2>` in `<combine>`.
+```
+
+**Prose template — AND leaves (4 of 10):**
+
+```
+[Left/Right/Middle/Last] term of `<combine formula>` (FIPS 180-4
+§<section> eq. <N>).
+
+Bit-level: output bit i = <operand>_i ∧ <operand>_i, computed in
+parallel across all 32 positions. <one-sentence intuition about
+what this term selects / contributes>.
+
+XOR'd with `<other terms>` in `<combine>`.
+```
+
+**Why this altitude (and what's NOT in the prose):**
+
+- **No "why this rotation amount" / "why this constant"** — checked
+  by the advisor; the NIST/NSA design rationale for `{6, 11, 25}` /
+  `{2, 13, 22}` / `{17, 19, 10}` / `{7, 18, 3}` was never canonically
+  published. Earlier draft prose included a "pairwise differences
+  avoid divisors of 32" rationale; advisor verified the math
+  (`gcd(14, 32) = 2`, so the Σ1 differences {5, 14, 19} aren't all
+  coprime to 32 — the criterion is misleading) and we dropped it.
+  Baking a shaky "why" into 10 places at once would be worse than
+  leaving the design rationale to a future, single, well-cited
+  discussion if the user asks for one.
+- **No duplication of the combine leaf's diffusion narrative** —
+  `NARR_ROUND_SIGMA1` (and the other combines) already explains "Σ1
+  is the diffusion helper for e," "every bit of e influences many
+  bits of the output," "pure rotations (no SHR) so it preserves all
+  32 bits." Repeating that on each sub-leaf would be noise. The
+  per-leaf prose stays narrowly mechanical: "where this specific
+  rotation puts the bits" / "what this specific AND term selects."
+
+**Tests:** no test changes. The 10 docs are referenced exactly once
+in the SHA-256 spec; the runtime instantiates them per-iteration.
+Coverage tests (`param-editor-coverage.test.tsx`, ported-dispatch
+contracts) don't pin prose content — only structural properties.
+Suite stays at **2392 / 2392 passing**.
+
+**Counts.** Suite 2392 → 2392 (no test changes). Bundle 685.13 →
+687.90 KB raw / 201.32 → 202.02 KB gzipped (+2.77 KB / +0.70 KB —
+pure prose, no new components or imports).
+
+**Smoke pending.** Manual 30-second pass: open SHA-256 in linear
+mode, scrub through one compression round, expand the param panel
+on (a) `Σ1.ROTR¹¹` (verify the "where bits go" section reads
+correctly + the XOR'd-with line names the other two terms),
+(b) `Maj.b ∧ c` (verify the "this is the only Maj term that
+doesn't involve a" intuition). The 8 round-body leaves repeat
+identically across all 64 rounds; the 2 schedule leaves repeat
+across the 48 schedule iterations.
+
+**This closes S3 and the whole `sha-256-density-polish` plan
+modulo the queued visual-overlap follow-ups (Case B / Case C from
+S2(j)), which are deferred TODOs and don't gate this plan's
+close.**
 
 ## Order
 

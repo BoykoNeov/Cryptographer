@@ -293,7 +293,13 @@ const NARR_SCHED_SIGMA1_R19: StepDocumentation = {
   name: "σ1: ROTR¹⁹(W_{t-2})",
   summary: "Second rotation of σ1: rotate W_{t-2} right by 19 bits.",
   detail: `Middle term of \`σ1(x) = ROTR¹⁷(x) ⊕ ROTR¹⁹(x) ⊕ SHR¹⁰(x)\`
-(FIPS 180-4 §4.1.2 eq. 4.7).`,
+(FIPS 180-4 §4.1.2 eq. 4.7).
+
+Where bits go: ROTR¹⁹ sends input bit n to output position
+(n − 19) mod 32. Concretely, input bits 31..19 land at output
+positions 12..0; input bits 18..0 wrap to positions 31..13.
+
+XOR'd with \`ROTR¹⁷(W_{t-2})\` and \`SHR¹⁰(W_{t-2})\` in \`σ1(W_{t-2})\`.`,
   references: ["FIPS 180-4 §4.1.2 — σ1 definition"],
 };
 
@@ -354,7 +360,13 @@ const NARR_SCHED_SIGMA0_R18: StepDocumentation = {
   name: "σ0: ROTR¹⁸(W_{t-15})",
   summary: "Second rotation of σ0: rotate W_{t-15} right by 18 bits.",
   detail: `Middle term of \`σ0(x) = ROTR⁷(x) ⊕ ROTR¹⁸(x) ⊕ SHR³(x)\`
-(FIPS 180-4 §4.1.2 eq. 4.6).`,
+(FIPS 180-4 §4.1.2 eq. 4.6).
+
+Where bits go: ROTR¹⁸ sends input bit n to output position
+(n − 18) mod 32. Concretely, input bits 31..18 land at output
+positions 13..0; input bits 17..0 wrap to positions 31..14.
+
+XOR'd with \`ROTR⁷(W_{t-15})\` and \`SHR³(W_{t-15})\` in \`σ0(W_{t-15})\`.`,
   references: ["FIPS 180-4 §4.1.2 — σ0 definition"],
 };
 
@@ -635,7 +647,13 @@ const NARR_ROUND_SIGMA1_R11: StepDocumentation = {
   name: "Σ1: ROTR¹¹(e)",
   summary: "Second rotation of Σ1: rotate e right by 11 bits.",
   detail: `Middle term of \`Σ1(x) = ROTR⁶(x) ⊕ ROTR¹¹(x) ⊕ ROTR²⁵(x)\`
-(FIPS 180-4 §4.1.2 eq. 4.5).`,
+(FIPS 180-4 §4.1.2 eq. 4.5).
+
+Where bits go: ROTR¹¹ sends input bit n to output position
+(n − 11) mod 32. Concretely, input bits 31..11 land at output
+positions 20..0; input bits 10..0 wrap to positions 31..21.
+
+XOR'd with \`ROTR⁶(e)\` and \`ROTR²⁵(e)\` in \`Σ1(e)\`.`,
   references: ["FIPS 180-4 §4.1.2 — Σ1 definition"],
 };
 
@@ -643,7 +661,13 @@ const NARR_ROUND_SIGMA1_R25: StepDocumentation = {
   name: "Σ1: ROTR²⁵(e)",
   summary: "Third rotation of Σ1: rotate e right by 25 bits.",
   detail: `Last term of \`Σ1(x) = ROTR⁶(x) ⊕ ROTR¹¹(x) ⊕ ROTR²⁵(x)\`
-(FIPS 180-4 §4.1.2 eq. 4.5).`,
+(FIPS 180-4 §4.1.2 eq. 4.5).
+
+Where bits go: ROTR²⁵ sends input bit n to output position
+(n − 25) mod 32. Concretely, input bits 31..25 land at output
+positions 6..0; input bits 24..0 wrap to positions 31..7.
+
+XOR'd with \`ROTR⁶(e)\` and \`ROTR¹¹(e)\` in \`Σ1(e)\`.`,
   references: ["FIPS 180-4 §4.1.2 — Σ1 definition"],
 };
 
@@ -698,7 +722,13 @@ const NARR_ROUND_SIGMA0_R13: StepDocumentation = {
   name: "Σ0: ROTR¹³(a)",
   summary: "Second rotation of Σ0: rotate a right by 13 bits.",
   detail: `Middle term of \`Σ0(x) = ROTR²(x) ⊕ ROTR¹³(x) ⊕ ROTR²²(x)\`
-(FIPS 180-4 §4.1.2 eq. 4.4).`,
+(FIPS 180-4 §4.1.2 eq. 4.4).
+
+Where bits go: ROTR¹³ sends input bit n to output position
+(n − 13) mod 32. Concretely, input bits 31..13 land at output
+positions 18..0; input bits 12..0 wrap to positions 31..19.
+
+XOR'd with \`ROTR²(a)\` and \`ROTR²²(a)\` in \`Σ0(a)\`.`,
   references: ["FIPS 180-4 §4.1.2 — Σ0 definition"],
 };
 
@@ -706,7 +736,13 @@ const NARR_ROUND_SIGMA0_R22: StepDocumentation = {
   name: "Σ0: ROTR²²(a)",
   summary: "Third rotation of Σ0: rotate a right by 22 bits.",
   detail: `Last term of \`Σ0(x) = ROTR²(x) ⊕ ROTR¹³(x) ⊕ ROTR²²(x)\`
-(FIPS 180-4 §4.1.2 eq. 4.4).`,
+(FIPS 180-4 §4.1.2 eq. 4.4).
+
+Where bits go: ROTR²² sends input bit n to output position
+(n − 22) mod 32. Concretely, input bits 31..22 land at output
+positions 9..0; input bits 21..0 wrap to positions 31..10.
+
+XOR'd with \`ROTR²(a)\` and \`ROTR¹³(a)\` in \`Σ0(a)\`.`,
   references: ["FIPS 180-4 §4.1.2 — Σ0 definition"],
 };
 
@@ -762,7 +798,13 @@ const NARR_ROUND_CH_E_AND_F: StepDocumentation = {
   name: "Ch helper: e ∧ f",
   summary: "Bitwise AND of e and f.",
   detail: `Left term of \`Ch(e, f, g) = (e ∧ f) ⊕ (¬e ∧ g)\` (FIPS
-180-4 §4.1.2 eq. 4.2).`,
+180-4 §4.1.2 eq. 4.2).
+
+Bit-level: output bit i = e_i ∧ f_i, computed in parallel across
+all 32 positions. So this leaf passes through f's bits exactly
+where e has a 1, and forces a 0 wherever e has a 0.
+
+XOR'd with \`(¬e) ∧ g\` in \`Ch(e, f, g)\`.`,
   references: ["FIPS 180-4 §4.1.2 — Ch definition"],
 };
 
@@ -770,7 +812,17 @@ const NARR_ROUND_CH_NOTE_AND_G: StepDocumentation = {
   name: "Ch helper: (¬e) ∧ g",
   summary: "Bitwise AND of (¬e) and g.",
   detail: `Right term of \`Ch(e, f, g) = (e ∧ f) ⊕ (¬e ∧ g)\` (FIPS
-180-4 §4.1.2 eq. 4.2). Wires in the \`Ch-not_e\` leaf's output.`,
+180-4 §4.1.2 eq. 4.2). Wires in the upstream \`Ch-not_e\` leaf's
+output as the left operand.
+
+Bit-level: output bit i = (¬e_i) ∧ g_i, computed in parallel
+across all 32 positions. So this leaf passes through g's bits
+exactly where e has a 0, and forces a 0 wherever e has a 1 —
+the mirror image of \`e ∧ f\`.
+
+XOR'd with \`e ∧ f\` in \`Ch(e, f, g)\`. Together the two terms
+realize the bit-level conditional choose: e_i picks between
+f_i and g_i.`,
   references: ["FIPS 180-4 §4.1.2 — Ch definition"],
 };
 
@@ -801,7 +853,13 @@ const NARR_ROUND_MAJ_AC: StepDocumentation = {
   name: "Maj helper: a ∧ c",
   summary: "Bitwise AND of a and c.",
   detail: `Middle term of \`Maj(a, b, c) = (a ∧ b) ⊕ (a ∧ c) ⊕
-(b ∧ c)\` (FIPS 180-4 §4.1.2 eq. 4.3).`,
+(b ∧ c)\` (FIPS 180-4 §4.1.2 eq. 4.3).
+
+Bit-level: output bit i = a_i ∧ c_i, computed in parallel across
+all 32 positions. This term contributes a 1 at position i iff
+BOTH a_i and c_i are 1, regardless of b_i.
+
+XOR'd with \`a ∧ b\` and \`b ∧ c\` in \`Maj(a, b, c)\`.`,
   references: ["FIPS 180-4 §4.1.2 — Maj definition"],
 };
 
@@ -809,7 +867,15 @@ const NARR_ROUND_MAJ_BC: StepDocumentation = {
   name: "Maj helper: b ∧ c",
   summary: "Bitwise AND of b and c.",
   detail: `Last term of \`Maj(a, b, c) = (a ∧ b) ⊕ (a ∧ c) ⊕
-(b ∧ c)\` (FIPS 180-4 §4.1.2 eq. 4.3).`,
+(b ∧ c)\` (FIPS 180-4 §4.1.2 eq. 4.3).
+
+Bit-level: output bit i = b_i ∧ c_i, computed in parallel across
+all 32 positions. This is the only Maj term that doesn't involve
+\`a\` — together with \`a ∧ b\` and \`a ∧ c\`, the three pairwise
+ANDs cover all three two-of-three combinations, which is what
+makes the XOR of all three compute the majority bit.
+
+XOR'd with \`a ∧ b\` and \`a ∧ c\` in \`Maj(a, b, c)\`.`,
   references: ["FIPS 180-4 §4.1.2 — Maj definition"],
 };
 
