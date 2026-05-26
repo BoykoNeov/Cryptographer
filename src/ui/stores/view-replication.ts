@@ -72,7 +72,29 @@ const [replicationEnabled, setReplicationEnabledSignal] = createSignal<boolean>(
 
 export const useReplicationEnabled = () => replicationEnabled;
 
+/**
+ * Session-only tracker: has the user explicitly toggled the replication
+ * checkbox in THIS session? Used by GraphView to force replication ON for
+ * port-native specs (e.g. SHA-256) where the high-fanout source-coloring
+ * payoff is essential for legibility — but ONLY until the user makes their
+ * own choice, after which we respect it across every spec.
+ *
+ * Why per-session (not persisted): the auto-on default for ported specs
+ * is itself a pedagogical default; we don't want a user who toggled off
+ * for AES six months ago to land on SHA-256 today with replication off,
+ * confused by the chip wall. Each page reload re-prompts the auto-on
+ * behavior; explicit in-session intent wins.
+ *
+ * Read in `GraphView`'s `effectiveReplicationEnabled` memo, alongside
+ * `requiresPortedDispatch(spec, registry)`.
+ */
+const [replicationUserToggledThisSession, setReplicationUserToggledThisSessionSignal] =
+  createSignal<boolean>(false);
+
+export const useReplicationUserToggledThisSession = () => replicationUserToggledThisSession;
+
 export const setReplicationEnabled = (enabled: boolean): void => {
+  setReplicationUserToggledThisSessionSignal(true);
   setReplicationEnabledSignal(enabled);
   try {
     if (typeof localStorage !== "undefined") {
@@ -150,6 +172,7 @@ export const toggleReplicationPanelOpen = (): void => {
 /** Test hard-reset. Production code never calls this. */
 export const __resetReplicationForTests = (): void => {
   setReplicationEnabledSignal(false);
+  setReplicationUserToggledThisSessionSignal(false);
   setReplicationThresholdSignal(DEFAULT_REPLICATION_THRESHOLD);
   setReplicationPanelOpenSignal(false);
   try {

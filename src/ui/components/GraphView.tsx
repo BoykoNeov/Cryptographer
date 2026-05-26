@@ -35,6 +35,7 @@
  * starts no drag). Above threshold, the click handler is suppressed.
  */
 
+import { requiresPortedDispatch } from "@/core/dispatch";
 import { type EdgeValueLookup, lookupEdgeValue, lookupNodeValue } from "@/core/edge-value-lookup";
 import { type ByteFormat, formatBytes } from "@/core/format";
 import {
@@ -59,6 +60,7 @@ import { getDefaultCollapsedContainers, getEffectiveCollapsedSet } from "@/core/
 import { inferShapesAtAnchors, validateShapes } from "@/core/spec-shapes";
 import type { AuxValue, State, StepNode } from "@/core/types";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
+import { isHash, useAlgorithm } from "../stores/cipher";
 import { useByteFormat } from "../stores/format";
 import {
   clearNodePosition,
@@ -100,6 +102,7 @@ import {
   useReplicationEnabled,
   useReplicationPanelOpen,
   useReplicationThreshold,
+  useReplicationUserToggledThisSession,
 } from "../stores/view-replication";
 import {
   clearAllSourceColorOverrides,
@@ -2103,7 +2106,34 @@ export const GraphView = () => {
   const version = useTraceVersion();
   const layoutMap = useLayoutMap();
   const density = useViewDensity();
-  const replicate = useReplicationEnabled();
+  const rawReplicate = useReplicationEnabled();
+  const replicationUserToggled = useReplicationUserToggledThisSession();
+  /**
+   * Effective replication switch. Returns `true` if EITHER the user
+   * explicitly toggled it on this session, OR they haven't touched it
+   * yet AND the current spec is port-native (`requiresPortedDispatch`).
+   *
+   * Why force-on for ported specs: port-native ciphers like SHA-256
+   * decompose into thousands of fine-grained leaves with high-fanout
+   * sources (e.g. `K-to-aux` fans out to 64 rounds, `W-publish` to 64).
+   * With replication OFF the canvas is a dense thicket of crossing long
+   * arrows that obscures the data flow. Replication ON splits each
+   * source into per-consumer chips that read as a sequence. Default-off
+   * remained correct for the legacy AES/Speck/Serpent ciphers (one
+   * key-expansion source, large but manageable); ported specs upgrade
+   * the default to on.
+   *
+   * Why "user hasn't touched it" gates the auto-on: if a user toggled
+   * off mid-session (across any spec), they made an explicit choice;
+   * honour it everywhere until they reload the page. The session-only
+   * tracker `replicationUserToggledThisSession` flips to true the
+   * moment `setReplicationEnabled` is called from the toolbar checkbox.
+   */
+  const replicate = createMemo<boolean>(() => {
+    if (replicationUserToggled()) return rawReplicate();
+    if (requiresPortedDispatch(spec(), registry)) return true;
+    return rawReplicate();
+  });
   const replicationThreshold = useReplicationThreshold();
   // `useReplicationPanelOpen` follows the same accessor-factory shape as
   // its siblings above — call it ONCE here to capture the live accessor,
@@ -2427,27 +2457,35 @@ export const GraphView = () => {
   );
 
   /**
-   * Endpoint pill labels. Encrypt mode: plaintext → ciphertext.
-   * Decrypt mode: labels swap (input pill reads "ciphertext", output
-   * reads "plaintext"). The layout / spec direction itself does NOT
-   * mirror — decryption already flows left-to-right with the inverse
-   * round body, so only the I/O labels need to swap. This matches the
-   * design decision from 2026-05-15 (memory: feedback_graph_design_decisions).
+   * Endpoint pill labels. Three branches:
+   *   - Hash specs (SHA-256 shipped 2026-05-25): "message" → "digest".
+   *     Hashes are direction-less; `mode()` is semantically inert in the
+   *     hash spec store, so we short-circuit on `isHash(algorithm())`
+   *     BEFORE the encrypt/decrypt dispatch.
+   *   - Cipher encrypt: "plaintext" → "ciphertext".
+   *   - Cipher decrypt: labels swap ("ciphertext" → "plaintext"). The
+   *     layout / spec direction itself does NOT mirror — decryption
+   *     flows left-to-right with the inverse round body, only the I/O
+   *     labels swap. This matches the 2026-05-15 design decision
+   *     (memory: feedback_graph_design_decisions).
    *
-   * **Hash-future seam.** When hash specs, MACs, or KDFs ship (planned),
-   * extend this dispatch with another branch keyed off whatever cipher
-   * attribute is most natural at that point. Nomenclature varies:
-   * hashes use `message` / `digest`, MACs use `message` / `tag`, KDFs
-   * use `ikm + salt + info` / `okm`, AEAD ciphers have TWO outputs
-   * (ciphertext + tag). The shape can't be locked in today — wait for
-   * the first hash spec, then add the branch. Memory pointer:
-   * [[project_hash_future]].
+   * Mirrors the `inputLabel()` / `outputLabel()` pattern shipped in
+   * `App.tsx` (~line 1061) so the linear sidebar and graph endpoint
+   * pills agree on what the user is putting in and getting out.
+   *
+   * **Future seams.** MACs use `message` / `tag`; KDFs use
+   * `ikm + salt + info` / `okm`; AEAD ciphers have TWO outputs
+   * (ciphertext + tag). Each new category gets its own branch here
+   * when the first spec lands. Memory pointer: [[project_hash_future]].
    */
-  const endpointLabels = createMemo<{ inputLabel: string; outputLabel: string }>(() =>
-    useMode()() === "encrypt"
+  const endpointLabels = createMemo<{ inputLabel: string; outputLabel: string }>(() => {
+    if (isHash(useAlgorithm()())) {
+      return { inputLabel: "message", outputLabel: "digest" };
+    }
+    return useMode()() === "encrypt"
       ? { inputLabel: "plaintext", outputLabel: "ciphertext" }
-      : { inputLabel: "ciphertext", outputLabel: "plaintext" },
-  );
+      : { inputLabel: "ciphertext", outputLabel: "plaintext" };
+  });
 
   /**
    * Root-level leaves whose `shapeContract.input === "any"` — i.e. they
@@ -5857,10 +5895,11 @@ const LeafRect = (props: {
  * Synthetic endpoint pill — Slice 1 of the graph-narrative plan.
  *
  * Rounded rectangle (rx = h/2 produces a pill shape) at the canvas left
- * (`side="input"`, labelled "plaintext" / "ciphertext") or canvas right
- * (`side="output"`, labelled "ciphertext" / "plaintext"). Visually
- * distinct from the rectangular leaves so a new viewer reads it as
- * "this is where data enters / exits the cipher", not as another step.
+ * (`side="input"`, labelled "plaintext" / "ciphertext" / "message") or
+ * canvas right (`side="output"`, labelled "ciphertext" / "plaintext" /
+ * "digest"). Visually distinct from the rectangular leaves so a new
+ * viewer reads it as "this is where data enters / exits the cipher",
+ * not as another step.
  *
  * Limited affordances:
  *   - no `data-drop-anchor` (palette drops can't target the pill)
