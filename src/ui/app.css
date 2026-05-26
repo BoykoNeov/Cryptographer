@@ -4017,6 +4017,26 @@ button:disabled {
   stroke-width: 2.5;
 }
 
+/* Focus-dim v0 (Slice S2(m) of sha-256-density-polish, 2026-05-26).
+   Applied to the outer `<g>` wrapping each edge's path + start-dot +
+   hit path + bundle label. Fades the entire edge visualization to
+   ~0.18 opacity when the user has a non-incident node selected via
+   the value inspector. The hit path still receives clicks (CSS opacity
+   doesn't gate pointer-events), and a short transition prevents a
+   harsh snap when the user re-clicks a chip.
+
+   Composes with all the kind-specific styles below: the underlying
+   stroke colour, halo on selection, dashed feedback pattern, and
+   source-colour override all keep their relative appearance — they
+   just render at lower opacity. Bumping opacity to 1.0 on hover of
+   the dimmed group would reveal the path, but that's hover-state
+   work for a future slice; selection-only v0 leaves opacity at 0.18
+   for the whole non-incident set. */
+.graph-edge-dimmed {
+  opacity: 0.18;
+  transition: opacity 0.12s ease-out;
+}
+
 /* Cross-iteration aux feedback (CBC's `cbc-snapshot → cbc-xor`, future
    OFB/CFB equivalents). Dashed stroke distinguishes "this loops to the
    next iteration" from "within-iteration flow". Hover bumps opacity +

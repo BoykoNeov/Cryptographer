@@ -3160,6 +3160,82 @@ export const GraphView = () => {
   const replicaPlacement = createMemo(() => buildReplicaPlacement(graph()));
 
   /**
+   * Focus-dim v0 (Slice S2(m) of sha-256-density-polish, 2026-05-26 —
+   * selection-only). When the user has a NODE selected via the value
+   * inspector, every non-incident edge is dimmed to ~0.18 opacity so
+   * the incident arrows pop visually. Address: SHA-256's high-fanout
+   * consumers (`final.assemble`'s 8 incoming port-flow edges, expanded
+   * msg-schedule's 3–4-input combines like `sigma1` / `w-t`) where
+   * even after S2(j)/(j2)/(k) the steady-state read still feels
+   * crowded. Now interactive: click the consumer chip → its incoming
+   * arrows pop.
+   *
+   * Three memos:
+   *   - `focusedNodeId` — extracts the node id from `selectedTarget`,
+   *     null when no node is selected (edge / bundle / nothing).
+   *   - `focusedIncidentIds` — the focused id PLUS every replica whose
+   *     canonical source is the focused id. So clicking the canonical
+   *     `K-to-aux` chip OR any of its `K-to-aux@->round.X` replicas
+   *     highlights ALL related arrows. Without this expansion the
+   *     replica edges (whose `from` is the synth id, not the canonical)
+   *     would dim alongside everything else, which is pedagogically
+   *     wrong.
+   *   - `focusDimActive` — true ONLY when at least one edge is
+   *     incident. Guards the block-chip case: clicking a block chip
+   *     sets `selectedTarget.id = "${iterateId}@block${i}"` (a synth
+   *     id with no edges), which without this guard would dim
+   *     everything ("no incident edge" → "the predicate dims all").
+   *     Falling back to "no dim" preserves the existing scrub + halo
+   *     behavior on block chips.
+   *
+   * Selection-only by design (v0); a follow-up slice may add hover-
+   * primary plumbing on chip pointer events. Per advisor:
+   * selection-only ships with ~10 lines instead of ~30+ pointer
+   * handlers across 5 render paths, no pan/drag gate needed, no
+   * jsdom-vs-browser pointer-event discrepancy to verify. The spec.id
+   * watcher above (line ~2283) already clears `selectedTarget` on
+   * cipher swap, so a stale focused id can't leak across specs.
+   */
+  const focusedNodeId = createMemo<string | null>(() => {
+    const t = selectedTarget();
+    return t !== null && t.kind === "node" ? t.id : null;
+  });
+
+  const focusedIncidentIds = createMemo<ReadonlySet<string> | null>(() => {
+    const focused = focusedNodeId();
+    if (focused === null) return null;
+    const ids = new Set<string>([focused]);
+    // Replica expansion: walk every node, include any whose
+    // `replicaOf` field points at the focused id. Covers BOTH
+    // spine-replicas and aux fan-out replicas — `replicaPlacement.
+    // sourceOf` only captures the latter (its build pass at
+    // `buildReplicaPlacement` line ~928 skips spine-replicas with
+    // `continue`), but a spine-replica's outgoing edge still carries
+    // its synth `${src}@->${consumer}` id as `edge.from` and the
+    // user pedagogically wants its dim state tied to the canonical
+    // source the same as an aux replica. `graph().nodes` is the
+    // authoritative replica list since every replica chip is added
+    // there by the replication pass.
+    for (const node of graph().nodes) {
+      if (node.replicaOf === focused) ids.add(node.stepId);
+    }
+    return ids;
+  });
+
+  const focusDimActive = createMemo<boolean>(() => {
+    const ids = focusedIncidentIds();
+    if (ids === null) return false;
+    // Bail out when the focused id has no incident edges (block-chip
+    // synth ids, orphan-id selections, future chip kinds with no
+    // graph representation). Otherwise the dim predicate would tag
+    // every edge, fading the entire canvas.
+    for (const edge of graph().edges) {
+      if (ids.has(edge.from) || ids.has(edge.to)) return true;
+    }
+    return false;
+  });
+
+  /**
    * Slice 5 — drop-gutter record shape. One record per gutter strip:
    * id == `data-drop-gutter` encoding (the same
    * `${"before"|"after"}:${siblingId}` string the drop handler
@@ -4689,6 +4765,17 @@ export const GraphView = () => {
     // straight-line path variant + the start-dot render inside
     // EdgePath.
     const isReplicaEdgeMemo = createMemo(() => isReplicaEdge(edge, replicaPlacement()));
+    // Focus-dim v0 (S2(m)): this edge fades to ~0.18 opacity when the
+    // user has a non-incident node selected. Inside the bundle row so
+    // the memo tracks selectedTarget()/replicaPlacement() changes
+    // per-edge — flipping focus on/off restyles only the edges whose
+    // dim flag actually changed.
+    const dimmedMemo = createMemo(() => {
+      if (!focusDimActive()) return false;
+      const ids = focusedIncidentIds();
+      if (ids === null) return false;
+      return !ids.has(edge.from) && !ids.has(edge.to);
+    });
     return (
       <Show when={fromBox() && toBox()}>
         <EdgePath
@@ -4722,6 +4809,7 @@ export const GraphView = () => {
           sourceXOffset={sourceXOffset()}
           sourceYOffset={sourceYOffset()}
           isReplicaEdge={isReplicaEdgeMemo()}
+          dimmed={dimmedMemo()}
           bundleCount={bundleCount}
           // First few aux keys for the tooltip; the bundle inspector
           // (Slice C) shows the full list.
@@ -6930,6 +7018,21 @@ const EdgePath = (props: {
    */
   isReplicaEdge?: boolean;
   /**
+   * Focus-dim v0 (Slice S2(m) of sha-256-density-polish). When true,
+   * this edge fades to ~0.18 opacity via the `graph-edge-dimmed`
+   * class on the outer `<g>`. Drives the "click a chip → its
+   * incident arrows pop, everything else fades" pedagogy for
+   * high-fanout consumers like SHA-256's `final.assemble`. Defaults
+   * to false → pre-S2(m) appearance.
+   *
+   * Applied on the wrapping `<g>` so opacity inherits down to the
+   * visible path, start-dot, hit path, and bundle ×N label
+   * uniformly. Hit path's clicks still register because CSS opacity
+   * does not affect pointer-events (only `pointer-events: none`
+   * does).
+   */
+  dimmed?: boolean;
+  /**
    * Number of edges collapsed into this rendered path (the bundle
    * count). Defaults to 1; singletons render identically to the pre-
    * bundle world. For N ≥ 2 the path is rendered with a thicker
@@ -7347,7 +7450,10 @@ const EdgePath = (props: {
     // resolve `drop-shadow(0 0 N currentColor)` to the source colour
     // without per-element style threading. Uncoloured edges leave
     // `color` unset, so the original `var(--accent)` halo rule wins.
-    <g style={props.sourceColor !== undefined ? { color: props.sourceColor } : undefined}>
+    <g
+      classList={{ "graph-edge-dimmed": props.dimmed === true }}
+      style={props.sourceColor !== undefined ? { color: props.sourceColor } : undefined}
+    >
       <path
         class={`graph-edge graph-edge-${props.kind}`}
         classList={{

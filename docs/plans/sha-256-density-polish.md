@@ -1102,6 +1102,104 @@ modulo the queued visual-overlap follow-ups (Case B / Case C from
 S2(j)), which are deferred TODOs and don't gate this plan's
 close.**
 
+#### S2(m) — focus-dim v0 (selection-only) — SHIPPED 2026-05-26
+
+**Re-opened context.** Even after S2(j)/(j2)/(k) the user reported
+the SHA-256 graph still feels crowded — specifically the s-row
+fan-IN to `final.assemble` (8 arrows funneling into one consumer
+through a shared corridor; each s_i has fanout=1 so none of them
+qualify for replication) and the multi-input combines inside the
+expanded msg-schedule body (sigma1, w-t, etc — even with S2(k)'s
+parallel-shift the corridors converge). Steady-state, no interaction
+yet possible. User suggested "z-offset or something other" — the
+deliberation surfaced 3 distinct mechanisms (focus-dim / curve-
+altitude staggering / paint-order by length); user picked focus-dim
+first, with curve-altitude staggering queued as a possible follow-up
+if steady-state crowding remains after this slice.
+
+**Design.** Per advisor (#4 below), shipped as **selection-only v0**
+rather than hover-primary first:
+
+- Reuses the existing `selectedTarget` signal (no new store needed,
+  no pointer-event plumbing across 5+ render paths, no pan/drag
+  gate).
+- When `selectedTarget.kind === "node"`, every non-incident edge
+  picks up a new `graph-edge-dimmed` CSS class on its outer `<g>`
+  (opacity 0.18, 0.12s transition).
+- "Incident" expands the focused id to include every replica whose
+  `replicaOf === focused` (walked via `graph().nodes`, not via
+  `replicaPlacement.sourceOf` — the latter skips spine-replicas by
+  design, and we want spine-replica edges to highlight too).
+- Bail-out: if NO edge is incident (block-chip clicks, orphan
+  selections, any synth id that doesn't appear as an edge endpoint),
+  `focusDimActive` returns false and no edge is dimmed — preserves
+  pre-S2(m) behavior on chip kinds with no graph representation.
+- Edge selections (not node) leave focus-dim inactive — the existing
+  selected-edge halo handles those, and overlapping the two
+  mechanisms would add complexity for no pedagogical win.
+- spec.id watcher already clears `selectedTarget` on cipher swap,
+  so no separate spec-swap reset is needed for the dim state.
+
+**Advisor's 7 sharpening points (recorded for the transcript):**
+(1) Carve selected-edge halo out of the dim predicate — moot under
+selection-only since selectedTarget is single-slot. (2) Clear on
+spec.id swap — already handled. (3) Verify replica chip id ↔
+edge.from mapping — replicas' outgoing edges carry the synth id;
+expansion via node.replicaOf walks them correctly. (4) Ship
+selection-only v0 first — picked. (5) Skip container hover for V2 —
+done. (6) Test gaps — covered. (7) Real-browser smoke after vitest
+green — pending; per `feedback_jsdom_pointer_events_gap` jsdom can
+pass while CSS kills it in Chrome.
+
+**Acknowledged limitation.** Focus-dim shines for *interactive* fan-IN
+reads (click `final.assemble` → its 8 arrows pop). The *steady-state*
+"open SHA-256 and just look" crowding is unchanged — that's the
+class of read that argues for B (curve-altitude staggering) as a
+future slice. Don't over-promise S2(m) as the s-row endgame.
+
+**Tests (+7).** `tests/graph-view-focus-dim.test.tsx`:
+- No selection → no edge dimmed.
+- Selecting `final.assemble` dims non-incidents; its 8 incoming
+  port-flow edges stay un-dimmed.
+- Selecting an orphan / synth id (no incident edges) → bail-out,
+  nothing dimmed.
+- `clearSelectedTarget()` restores every edge.
+- Selecting an EDGE (not a node) does not dim anything.
+- Replica expansion: selecting canonical `K-to-aux` marks ALL its
+  `K-to-aux@->round.N` replicas' outgoing edges as incident (caught
+  the spine-replica gap during the test write — fixed by walking
+  `graph().nodes` instead of `replicaPlacement.sourceOf`).
+- Selecting `sigma1-r17` inside expanded `msg-schedule` keeps its
+  incident edges un-dimmed.
+
+**Counts.** Suite 2405 → **2412** (+7). Bundle 688.98 → **689.53 KB**
+raw / 202.35 → **202.48 KB** gzipped (+0.55 KB / +0.13 KB — pure
+predicate + tests + ~6 lines of CSS).
+
+**Smoke pending.** Manual 60-second pass:
+- Open SHA-256 in graph view. Click `final.assemble`: 8 arrows from
+  s_0..s_7 stay at full opacity, every other edge on canvas fades.
+  Click `final.assemble` again: all back to normal.
+- Expand `msg-schedule`. Click `sigma1`: its 3 incoming + 1 outgoing
+  edges pop, msg-schedule's other arrows fade.
+- AES-128 ECB sanity: click `initial.add-round-key`. Its incoming
+  state edge + the aux key edge stay vivid; the round bodies' arrows
+  fade. Click `key-expansion`: its spine replica's edge AND all
+  fan-out replicas' edges stay vivid (replica expansion case).
+- Click any edge instead of a chip: focus-dim inactive (only halo
+  shows). Confirms the node-only gate.
+
+#### S2(m) follow-up — hover-primary (DEFERRED)
+
+A future slice may add `onPointerEnter`/`Leave` plumbing on
+LeafRect, ContainerRect, EndpointPill, passthrough chip, block chip,
+replica chips. New `view-graph-focus.ts` store with a session-only
+`hoveredNodeId` signal, gated by `!isPanning() && !isDraggingAnyNode()`.
+Hover would override selection when both exist (mouse-out falls
+back to selection). Adds ~30 lines of plumbing + a jsdom-vs-browser
+pointer-events smoke surface to verify. Defer until selection-only
+v0's smoke confirms the mechanism is worth the polish.
+
 ## Order
 
 S1 first — it's pure additive editor work, no risk of regression to
