@@ -364,3 +364,153 @@ on top of the current contract. The proposed migration:
 
 This preserves shipped work, doesn't freeze the project for months, and gets
 to the unified destination with new ciphers leading the way.
+
+## Architectural decisions — 2026-05-26 user-set rules
+
+> **Status: USER DECISIONS, 2026-05-26.** Crystallized during the
+> SHA-256 density polish S2 session when the manual smoke surfaced a
+> graph-derivation gap (port-flow edges missing from
+> `deriveAuxGraph`). Picking between "per-edge" vs "whole-spec"
+> suppression of legacy state-spine inference forced the user to
+> state their long-term position on hybrid specs. The position
+> below extends — does not contradict — the plan's existing
+> migration-philosophy paragraph; it tightens the destination state.
+
+### Rule 1 — All shipped ciphers and hashes are port-native byte-flat
+
+**Long-term state:** every shipped cipher / hash in this project is
+authored as a pure port-native spec. No hybrid specs — meaning no
+spec that mixes `kind: "legacy"` leaves with `kind: "ported"`
+leaves — ever ship to `main`. Phase 5's "deprecate legacy when
+nothing depends on it" is the final state; this rule commits to
+that destination ahead of time and locks future authoring to it.
+
+**Permissive byte-flat dataflow.** The contract between nodes is
+*always bytes*. Quoting the user directly so the framing is
+preserved:
+
+> A output byte array, B reads byte array. A may provide additional
+> information to B, but since we can connect in theory everything
+> there, B may not care about the additional info, and that's okay,
+> this shouldn't break the program, padding and truncating should
+> happen. (it may break the cipher or hash, that's okay).
+
+Two corollaries baked into the framing:
+
+1. **Any node can wire to any other node.** The editor is a true
+   dataflow canvas — wiring `xor@1.output` into `aes.sub-bytes@1`
+   input is geometrically allowed even if the consumer's expected
+   byteLength differs. The runtime's coercion-warning-and-run path
+   (Slice 1.12) handles the mismatch by padding or truncating;
+   the cipher's resulting output may be wrong, but the program
+   doesn't throw. That's pedagogically the point — the user sees
+   the wrong digest and learns *why* it was wrong.
+2. **Metadata is optional, ignorable, never load-bearing.** The
+   `layout` tag on a port (`raw`, `matrix-cm-4x4`, `be-word`, …) is
+   advisory only. A consumer is free to ignore the producer's tag,
+   reinterpret the bytes, and produce a wrong (but defined) result.
+   This was already Q1's resolution at the plan's design-decisions
+   table — restated here in user-vision framing.
+
+**Why this rule:** the "tinker with the cipher and watch the trace
+diverge" pedagogy depends on the user being able to wire anything
+to anything. Hybrid specs would force the spec author to think in
+two contracts simultaneously and limit which connections are
+visually meaningful. Pure port-native means one mental model.
+
+**How to apply:**
+- New cipher authoring: must be 100% port-native from day one. No
+  exceptions for "this operation doesn't fit the vocabulary" — see
+  Rule 2 for how specialized math is handled.
+- Phase 3 / Phase 4d rebuilds (AES, DES, etc.): each rebuild
+  delivers a fully port-native spec. User-accepted incremental
+  development is fine — intermediate commits during a rebuild may
+  produce hybrid-shape WIP specs; the dev's graph view will look
+  broken during those windows and the user does not care. Once
+  shipped, the spec must be 100% port-native.
+- Graph derivation, validation, mirror registry, narration: all
+  may assume "either fully legacy OR fully port-native" at the
+  spec level (no per-node mixing in shipped specs).
+
+### Rule 2 — Specialized math is internal to a node; ports stay byte-flat
+
+**RSA shape, by user pick (Q3 of 2026-05-26 follow-up questions):**
+modular exponentiation does NOT cross a port boundary as a BigInt.
+Instead, the RSA spec wires byte-flat primitives at the boundary —
+e.g., `bytes-to-bigint-BE@1` (or similar) consumes byte-flat
+plaintext, internally constructs a BigInt, and emits a single
+byte-flat representation. The `rsa.modular-exponentiation@1` node
+consumes those bytes, parses internally into a BigInt, exponentiates,
+serializes back to bytes, emits. A symmetric `bigint-to-bytes-BE@1`
+(or whatever the canonical RSA byte format is) sits on the output
+side.
+
+**Generalization:** any future cipher whose internal math needs a
+specialized state shape (BigInt for RSA, GF(2^k) elements for ECC,
+polynomial coefficient vectors for lattice-based KEMs) handles that
+shape *inside* the node executor. The node's port surface is always
+`Uint8Array`. Serialization choices (big-endian vs little-endian,
+fixed-length vs variable-length, padding rules) become explicit
+spec-level primitives — visible chips in the graph, editable,
+pedagogically named.
+
+**Why this rule:** keeps the port contract simple (always bytes)
+and pushes serialization decisions into the spec author's
+explicit choice. The author can't accidentally use a node that
+"only works with BigInt input" — there's no such thing. Every
+node consumes bytes; what it does with them internally is a
+matter of the executor's logic.
+
+**Consequence:** the publicly-declared `BigIntState` and
+`BitVecState` types in `core/types.ts` are dead — they describe a
+state shape that crosses port boundaries, but under Rule 2 no
+state shape does. Per user decision Q1 of 2026-05-26, both are
+scheduled for **deprecation in Phase 5 cleanup**. The
+"polymorphic state shape" branches in `deriveAuxGraph` and
+adjacent code that exist to handle these shapes become dead code
+at the same time — to be audited and removed as part of the S2
+follow-up work in `docs/plans/sha-256-density-polish.md`.
+
+### Rule 3 — Whole-spec suppression of legacy state-spine inference is safe
+
+**Direct consequence of Rules 1+2.** Under "no hybrids ever," the
+two-state-of-the-world picture for graph derivation is binary:
+
+| Spec kind | Predicate (e.g. `requiresPortedDispatch`) | Legacy state-spine inference |
+|---|---|---|
+| Pure legacy (today's AES / Speck / Serpent / DES) | false | fires — arrows visible ✓ |
+| Pure port-native (today's SHA-256, future everything) | true | skipped — port-flow arrows are the truth ✓ |
+
+There is no third row. Hybrid is not a shipped state. The
+"whole-spec suppression" implementation strategy — `if
+requiresPortedDispatch(spec) then skip legacy state-spine
+inference` — is permanently safe under this rule set.
+
+**Incremental rebuilds in development:** Phase 3 AES (and similar)
+may produce hybrid intermediate states during a rebuild. The dev
+running those experiments will see broken graphs for the legacy
+portion in their feature branch. The user has explicitly accepted
+this (Q2 pick of 2026-05-26) — broken dev windows are fine; main
+never holds a hybrid.
+
+### Follow-up questions logged (not blocking)
+
+- **Q3 deferred-to-author-time (RSA serialization specifics):** the
+  exact set of byte-flat RSA serialization primitives (BE/LE,
+  PKCS#1 v1.5 padding, OAEP padding, key-length padding) is
+  designed when RSA is actually authored. Rule 2 fixes the
+  *shape* (serialization is spec-level primitives, not internal
+  to modexp) but leaves the *vocabulary* to author-time.
+- **Q4 polymorphic-state cleanup:** the audit of `deriveAuxGraph`
+  for dead `BigIntState` / `BitVecState` branches is folded into
+  the S2 follow-up plan (`docs/plans/sha-256-density-polish.md`,
+  Slice S2(g)). May overlap with S2(f) suppression work; reassess
+  scope when that lands.
+
+### Cross-references
+
+- `docs/plans/sha-256-density-polish.md` — S2 follow-up tracking
+  the port-flow edge derivation work (S2(e), S2(f), S2(g)) these
+  rules unblock.
+- `feedback_all_specs_port_native.md` (memory) — user-vision
+  directional preference, sibling to this addendum.

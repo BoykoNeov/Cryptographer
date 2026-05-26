@@ -227,40 +227,109 @@ writers. Then re-evaluate which of the three smoke symptoms persist
 — a clean preamble row may make the remaining issues easier to
 characterize, or may resolve some of them outright.
 
-#### Remaining candidates — re-evaluate after S2(d) smoke
+#### S2(d) smoke re-evaluation — 2026-05-26
 
-- **(b) Replicate preamble sources at consumer head with lower
-  threshold.** Today's replication for `K-to-aux` / `W-publish` /
-  `H-to-aux` already fires at high fanout — for the H-row, lower the
-  threshold so a single long arrow (`H-to-aux → final.fetch-H` is
-  the worst) is replicated even without crossing the fanout-6
-  threshold. Quick win for the long-arrow symptom; doesn't fix the
-  spine-arrow-behind-H-row case.
-- **(c) Spine-arrow z-order lift.** Render the state spine edges
-  ABOVE the chip rects (today they render below). Cheapest fix for
-  "msg-schedule has no arrow out" — the arrow exists but is under
-  H-row chips; bringing it on top makes it visible without changing
-  layout. Risk: also lifts spine arrows over other chips throughout
-  the canvas; may need scoping to ported specs (via
-  `requiresPortedDispatch`) or per-edge selection.
-- **(a) Force preamble verticalize.** Stack aux-only roots in a
-  "setup column" along canvas left, state spine continues right.
-  Plan-author flagged this as biggest regression risk for smallest
-  discriminating evidence; advisor agreed — skip unless (b)+(c)+(d)
-  together can't close the symptoms.
+**Outcome:** S2(d)'s lift worked correctly (H-constant lifted to top
+row; pad, length-append, seed-schedule, init-working-vars stayed on
+spine). But the smoke surfaced that the original three symptoms were
+**misdiagnosed as layout problems** — they're actually a **graph
+derivation gap**.
 
-**Discriminating question to answer before picking (c):** does
-lifting state-edge z-order regress non-port-native ciphers? Toggle in
-a throwaway branch, screenshot AES / Speck / Serpent. If none
-regress, (c) is the obvious win for symptoms 1 and 2. If any
-regresses, scope (c) to ported specs.
+**The probe.** A test that dumped every rendered `data-edge-key`
+showed:
 
-**Pass/fail gate (full S2):** manual smoke on SHA-256: the
-`msg-schedule → init-working-vars` state arrow is visible. The
-`W-publish → first round` and `K-to-aux → first round` aux arrows
-don't visually pass behind unrelated chips. The `H-to-aux →
-final.fetch-H` arrow is either (a) replicated near the consumer or
-(b) routed around the round bodies, not through them.
+- `H-constant edges: []` — no outgoing edges at all
+- `final.fetch-H edges: []` — no outgoing edges
+- `final.split-wv edges: []` — should have 8 (one per output port)
+- `final.split-H edges: [final.split-H|final.s0|state|state]` — only 1 visible, should have 8 outgoing port-flow edges
+- `final.state-in edges: [final.state-in|final.split-wv|state|state]` — only the spurious "state" edge from consecutive-siblings inference
+
+**Diagnosis.** `grep -rna "portInputs" src/core/` confirms `portInputs`
+is consumed by `runtime.ts` (execution) and `spec-shapes.ts`
+(validation), but **NOT by `graph.ts`'s `deriveAuxGraph`**. Slice 2.6a
+introduced `portInputs` and explicitly touched `graph.ts` only to add
+new warning kinds — the edge-emission half was never shipped.
+
+The visible "state" edges in the final-add area come from the legacy
+"consecutive-siblings get a state arrow" rule, even though the real
+relationship is port-flow. So:
+
+1. ~22 real port-flow edges (`H-constant → init-working-vars`,
+   `fetch-H → split-H`, `split-wv.output_i → s_i`,
+   `split-H.output_i → s_i`, `s_i → assemble`, `assemble → out`) are
+   missing from the graph entirely.
+2. The few visible "state" edges in port-native scopes are
+   mislabeled — they're actually port-flow.
+
+**Original (b)/(c)/(a) options are obsolete.** None of them address
+the derivation gap. Re-scoped as three new sub-slices below.
+
+#### S2(e) — port-flow edge derivation — DEFERRED to a future session
+
+**Scope:** extend `deriveAuxGraph` in `src/core/graph.ts` to walk
+every step's `portInputs` and emit a graph edge per binding (from
+upstream node's output port → this node's input port). Likely 30-60
+lines of code. Test pinning SHA-256's `final.s_0` shows two incoming
+edges (from `split-wv.output0` and `split-H.output0`); `final.assemble`
+shows 8 incoming edges; `H-constant` shows one outgoing edge to
+`init-working-vars`.
+
+**Pass/fail gate:** manual smoke on SHA-256 shows every real port-flow
+arrow rendered. Duplicate edges between consecutive siblings (one
+state-spine, one port-flow) accepted as known noise; S2(f) cleans up.
+
+#### S2(f) — whole-spec suppression of legacy state-spine inference — DEFERRED to a future session
+
+**Scope:** add a predicate (e.g. `requiresPortedDispatch(spec)` or
+equivalent — read "does this spec contain any port-native step") and
+gate the legacy consecutive-siblings state-spine inference behind
+`!predicate`. When true, skip the inference entirely.
+
+**Safety rationale.** Per user architectural decision 2026-05-26
+(`docs/plans/universal-port-dataflow.md` "Architectural decisions"
+addendum + `feedback_all_specs_port_native.md` memory): every shipped
+spec is either 100% legacy OR 100% port-native; no hybrids. The
+whole-spec suppression strategy is therefore permanently safe — there
+is no shipped spec where the legacy inference is needed for some
+leaves but not others. Per-edge suppression would have been more
+defensive but is unnecessary under this rule.
+
+**Pass/fail gate:** AES / Speck / Serpent / DES graph views render
+byte-identically to today (legacy specs → predicate false → inference
+fires unchanged). SHA-256 graph view shows port-flow arrows only — no
+duplicate "state" edges between consecutive port-native siblings.
+
+#### S2(g) — polymorphic-state-shape dead-code cleanup — DEFERRED to a future session
+
+**Scope:** audit `src/core/graph.ts` (and adjacent files in
+`src/core/`) for branches handling `BigIntState` / `BitVecState`.
+Under the user's Rule 2 (specialized math is internal to a node;
+ports stay byte-flat), these state shapes don't cross port
+boundaries. They're slated for deprecation in Phase 5; the branches
+that handle them are likely dead code at graph-derivation level
+already.
+
+**Folding rationale.** User pick Q4 of 2026-05-26 — fold into S2 work
+since we're touching `deriveAuxGraph` anyway. Scope may be small
+(no current consumer in `graph.ts`) or non-trivial (the polymorphic
+branch might be load-bearing for some test path). Reassess scope
+after S2(e) lands.
+
+**Pass/fail gate:** test suite stays green; bundle size shrinks
+proportionally to whatever dead code was removed.
+
+#### Original (a)/(b)/(c) options — closed as misdiagnosed
+
+For historical reference; not actionable now.
+
+- **(a) Force preamble verticalize** — closed: original symptom was
+  derivation, not layout. Verticalize was the wrong tool.
+- **(b) Lower replication threshold for preamble sources** — closed:
+  the "long arrow" symptom (`H-to-aux → final.fetch-H`) was actually
+  the source's outgoing edges being routed misleadingly because the
+  consumer-side port edges weren't being emitted at all.
+- **(c) Spine-arrow z-order lift** — closed: the invisible arrows
+  weren't hidden behind chips, they weren't in the derivation graph.
 
 ### Slice S3 — narration density second pass
 
