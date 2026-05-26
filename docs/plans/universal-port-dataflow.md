@@ -238,8 +238,21 @@ Each phase has an explicit pass/fail gate. **If a gate fails, planning re-opens 
 - **4b:** Speck32/64 rebuild — introduces `add-mod-16`, validates ARX vocabulary
 - **4c:** Serpent rebuild — introduces `lookup-substitute` for 4→4 S-boxes; IP/FP as `permute`
 - **4d:** DES rebuild — introduces native `split`/`concat`; validates that Feistel needs no special primitive
+- **4d-bis (port-wiring editor):** **Plan AND ship the port-wiring editor UI** — the in-canvas affordance for the user to select a node and change which upstream output port each of its input ports reads from (and, symmetrically, which downstream `portInputs` reference its outputs). Until this slice lands, port wiring is **source-file-only**: every shipped cipher spec declares `portInputs` in TypeScript and the user has no in-app way to rewire. This sub-phase delivers:
+  - a `setPortBinding(spec, stepId, portName, { node, port })` mutation helper in `spec-mutations.ts`, with reference-equality preservation matching `updateStepParams`
+  - a graph-canvas gesture (drag from output port → input port, or click-to-arm) with port-contract compatibility checks (byteLength match, layout compatibility) at edit time — Q2 editor half lands here (red glyph on mismatched wirings + inspector explanation), closing the Phase 1 deferral at `docs/plans/universal-port-phase-1-slices.md:993-1003`
+  - per-input dropdown fallback for keyboard / accessibility paths
+  - integration with the existing `applyDocument` save/load round-trip (no schema bump — `portInputs` is already part of `StepLeaf`)
+  - **firm position: after 4a–4d, before 4e–4f.** The cipher rebuilds (4a–4d) execute UNDER the source-file-only wiring regime; compose-and-save (4f) cannot ship without it, so it must land in between. The sub-phase gets its own plan file (`docs/plans/port-wiring-editor.md`) drafted at the start of 4d-bis with its own advisor consult — the design space (gesture, compatibility surface, layout-sidecar interaction) is open and warrants explicit slicing.
 - **4e:** Fine-grained primitive vocabulary shipped + AES-fine exploration spec authored (parallel to AES-medium canonical) — Q-A's "fine primitives as exploration construct" commitment delivered here
-- **4f:** Compose-and-save (b) — user wires N primitives, names them, saves as a new named element appearing in the palette
+- **4f:** Compose-and-save (b) — user wires N primitives, names them, saves as a new named element appearing in the palette. **Depends on 4d-bis** (user cannot compose without a wiring affordance).
+
+**Constraint on 4a–4d (cipher rebuilds): keep the port-wiring editor in mind.** The rebuilds happen *before* 4d-bis, but they are the corpus the editor will rewire at runtime. Two specific authoring disciplines apply to every rebuilt spec:
+
+- **`portInputs` shapes must round-trip cleanly through edit mutations.** Prefer flat, named-string bindings (`{ node: "id", port: "outputN" }`) over computed/dynamic constructions that read awkwardly after an edit replaces one entry. Today's specs already meet this — call out any rebuild that's tempted to deviate.
+- **Port names should be stable and learner-readable.** Avoid generated port names that look fine at authoring time but become opaque in a "rewire from..." dropdown listing every output port in the canvas. `output0..output{N-1}` (the split-bytes/concat convention) is fine; ad-hoc names like `_t7` are not.
+
+If a rebuild discovers a port-shape or naming constraint that would make the editor's compatibility check awkward, raise it as a 4d-bis blocker and adjust the spec — don't paper over it.
 
 **Gate for each sub-phase:**
 - KAT parity with legacy spec at cipher boundary
