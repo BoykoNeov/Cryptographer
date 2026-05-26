@@ -355,24 +355,72 @@ end") — the plan misdiagnosed it as a layout issue. The filter
 overreach predates S2(e)/(f) and survives them unchanged. Filed as
 S2(h) below.
 
-#### S2(g) — polymorphic-state-shape dead-code cleanup — DEFERRED to a future session
+#### S2(g) — polymorphic-state-shape dead-code cleanup — SHIPPED 2026-05-26 (audit-only)
 
-**Scope:** audit `src/core/graph.ts` (and adjacent files in
-`src/core/`) for branches handling `BigIntState` / `BitVecState`.
-Under the user's Rule 2 (specialized math is internal to a node;
-ports stay byte-flat), these state shapes don't cross port
-boundaries. They're slated for deprecation in Phase 5; the branches
-that handle them are likely dead code at graph-derivation level
-already.
+**Outcome.** The audit IS the deliverable. `graph.ts` has zero
+references to `BigIntState`/`BitVecState`/`bigint`/`bitvec` — the
+plan's primary hypothesis ("dead code at graph-derivation level")
+confirmed. Graph derivation is shape-agnostic: it walks aux maps +
+port bindings, neither of which discriminates on `State.shape`.
+The single piece of genuinely dead code surfaced — `makeBitVec` in
+`src/core/state/bitvec.ts`, exported with zero importers in `src/`
+or `tests/` — was deleted; `cloneBitVec` stays as the live branch
+the universal `cloneState` switch dispatches into.
 
-**Folding rationale.** User pick Q4 of 2026-05-26 — fold into S2 work
-since we're touching `deriveAuxGraph` anyway. Scope may be small
-(no current consumer in `graph.ts`) or non-trivial (the polymorphic
-branch might be load-bearing for some test path). Reassess scope
-after S2(e) lands.
+**The audit (recorded here so the future Phase 5 reader inherits
+the scope rather than redoing this walk):**
 
-**Pass/fail gate:** test suite stays green; bundle size shrinks
-proportionally to whatever dead code was removed.
+- `src/core/graph.ts` — ZERO references. No polymorphic branches.
+- `src/core/state/bitvec.ts::makeBitVec` — DEAD, deleted in this
+  slice (6 lines + 1 blank).
+- `src/core/state/bitvec.ts::cloneBitVec` — LIVE (consumed by
+  `clone.ts`'s switch).
+- `src/core/port-projection.ts` lines 297-308, 322-339, 362-383,
+  467-486 — LOAD-BEARING. Pinned by
+  `tests/port-projection-matrix-array-roundtrip.test.ts:150-172`
+  (the bitvec encode-as-bytes contract + the bigint deferral
+  throw). The `readBigintEncoding` Phase-1 stub (line 479) that
+  returns `{}` is a deliberate anchor for the future encoding
+  decision; its empty-object spread at the call site (line 149) is
+  intentional. Leave both in place.
+- `src/core/types.ts` — the `State` union with `BitVecState`/
+  `BigIntState` variants. Schema-breaking to remove (saved
+  `CipherDocument` JSON may reference these shapes). PHASE 5.
+- `src/core/document-schema.ts:126` — `StateShapeSchema` Zod enum
+  including `"bitvec"`/`"bigint"`. Schema-breaking. PHASE 5.
+- `src/core/state/clone.ts` lines 12-15 — `cloneState` switch
+  cases. Tied to the union. PHASE 5.
+- `tests/state-shape-contracts.test.ts:50-63` — `VALID_INPUT_VALUES`
+  and `VALID_OUTPUT_VALUES` enumerate `"bitvec"`/`"bigint"`. Tied to
+  the union typings. PHASE 5.
+- `src/ui/components/GraphView.tsx:7212-7218` —
+  `formatStateOneline` cases. Display surface. PHASE 5.
+- `src/ui/components/StepPalette.tsx:66-67` — `SHAPE_LABELS` map
+  entries. Display surface. PHASE 5.
+- 9 test files under `tests/runtime-ported-dispatch-*.test.ts` —
+  each carries a `case "bitvec":` arm in a shape-discriminator
+  switch (helper for ported-dispatch frame comparison). Tied to
+  the union. PHASE 5.
+
+**Phase 5 deprecation scope (recorded for the future reader).**
+Removing `BitVecState`/`BigIntState` is a coordinated migration:
+(a) bump the document schema (`schemaVersion`) and write a migration
+that errors / rewrites any saved `CipherDocument` referencing
+these shapes; (b) remove the union variants from `types.ts`;
+(c) remove the dispatch arms from `clone.ts`, `port-projection.ts`,
+`GraphView.tsx`, `StepPalette.tsx`; (d) remove the
+`port-projection-matrix-array-roundtrip.test.ts` cases that pin the
+current contract; (e) shrink `VALID_INPUT_VALUES`/
+`VALID_OUTPUT_VALUES` in `state-shape-contracts.test.ts` and the
+shape-discriminator switches in `runtime-ported-dispatch-*.test.ts`;
+(f) drop `src/core/state/bitvec.ts` entirely (`cloneBitVec` dies
+with the union variant). Bundle savings will be modest — the
+real value is removing a polymorphic surface that no shipped cipher
+exercises, per the user's Rule 2.
+
+**Counts:** suite 2371 → 2371 (no test changes; `makeBitVec` had no
+test). Bundle 684.39 → 684.39 KB raw / 201.02 → 201.02 KB gzipped
+(6 lines deleted is below the rounded-KB display precision).
 
 #### S2(h) — dropAuxOnlyStateEdges overreach for state-thread INCOMING edges — DEFERRED to a future session
 
