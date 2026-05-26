@@ -1073,13 +1073,26 @@ export const App = () => {
         <h1>Cryptographer</h1>
         {/* When the live spec matches the canonical default for the current
             selectors, show the spec's own name ("AES-128", "AES-128 ECB",
-            etc.). After any user edit (param tweak, palette insert, delete)
-            switch to "Custom (was <variant>)" so the user can see at a glance
-            that they've diverged. The variant comes from CIPHER_LABELS rather
-            than spec.name on purpose — the indicator next to the dropdown
-            uses the same source, keeping the two surfaces in sync. */}
+            "SHA-256", etc.). After any user edit (param tweak, palette
+            insert, delete) switch to "Custom (was <variant>)" so the user
+            can see at a glance that they've diverged. The variant comes
+            from CIPHER_LABELS / HASH_LABELS rather than spec.name on
+            purpose — the indicator next to the dropdown uses the same
+            source, keeping the two surfaces in sync.
+
+            Category branch (fixed 2026-05-26): originally this read
+            `CIPHER_LABELS[cipher()]` unconditionally, which produced
+            "Custom (was AES-128)" while the user was editing SHA-256 —
+            cipher() still held its last-selected value while category
+            was "hash". The S1 ParamEditor work made port-native
+            primitives editable, so SHA-256 leaves CAN now diverge and
+            this label was actively wrong. Branch on category(). */}
         <span class="cipher-name" classList={{ "is-custom": isCustom() }}>
-          {isCustom() ? `Custom (was ${CIPHER_LABELS[cipher()]})` : spec().name}
+          {isCustom()
+            ? `Custom (was ${
+                category() === "hash" ? HASH_LABELS[hash()] : CIPHER_LABELS[cipher()]
+              })`
+            : spec().name}
         </span>
         <span class="muted small kbd-hint">←/→ step · Home/End jump · PgUp/PgDn round</span>
       </header>
@@ -1197,12 +1210,14 @@ export const App = () => {
         {/* Slice 2.10c (2026-05-25) — hash dropdown shown only when
             category=hash. Today's HASH_OPTIONS has a single entry
             (SHA-256); the same `<For>` shape scales when SHA-3 /
-            SHA-512 / SHAKE variants land. No reset-to-canonical button:
-            today's only hash spec has no UI-edit surface a user could
-            diverge into yet (the SHA-256 spec ships with no editable
-            params), so the cipher's `Custom (was …)` indicator would
-            never fire. Add the reset button alongside when the hash
-            family grows or per-step editability lands for hashes. */}
+            SHA-512 / SHAKE variants land. The cipher dropdown's reset-
+            to-canonical button isn't mirrored here yet — Slice S1 of
+            sha-256-density-polish (2026-05-26) added ParamEditor blocks
+            for port-native primitives, so SHA-256 leaves CAN now diverge
+            and the `Custom (was SHA-256)` indicator DOES fire (the
+            header label was fixed in the same session to branch on
+            category()). Add the reset button alongside when reset-to-
+            canonical for hashes is wired up. */}
         <Show when={category() === "hash"}>
           <label>
             hash

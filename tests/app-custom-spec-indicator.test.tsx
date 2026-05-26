@@ -34,7 +34,13 @@ import { __resetCipherModeForTests } from "@/ui/stores/cipher-mode";
 import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
-import { __resetSpecForTests, editStepParams, isCustomSpec, useSpec } from "@/ui/stores/spec";
+import {
+  __resetSpecForTests,
+  editStepParams,
+  isCustomSpec,
+  setHash,
+  useSpec,
+} from "@/ui/stores/spec";
 import { __resetTraceForTests } from "@/ui/stores/trace";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -138,6 +144,35 @@ describe("App — custom-spec indicator", () => {
     expect(isCustomSpec()).toBe(false);
     expect(headerCipherName(container).textContent?.trim()).toBe("AES-192");
     expect(resetButton(container)).toBeNull();
+  });
+
+  it("hash category: header reads 'Custom (was SHA-256)' after editing a SHA-256 leaf (NOT '(was AES-128)')", () => {
+    // Regression for the 2026-05-26 bug: header label was unconditionally
+    // built from CIPHER_LABELS[cipher()] — when the user flipped to a
+    // hash and then edited a SHA-256 leaf, cipher() still held its
+    // last-selected value (default AES-128) and the header said
+    // "Custom (was AES-128)" even though the user was editing SHA-256.
+    // Fixed by branching on category() so the hash branch reads from
+    // HASH_LABELS[hash()] instead.
+    setHash("sha-256");
+    const { container } = render(() => <App />);
+
+    // Pre-condition: canonical SHA-256 spec, no custom indicator yet.
+    expect(headerCipherName(container).textContent?.trim()).toBe("SHA-256");
+    expect(isCustomSpec()).toBe(false);
+
+    // Drive a param edit on the first editable SHA-256 leaf. S1 of
+    // sha-256-density-polish (2026-05-26) made port-native primitive
+    // params editable, so this divergence path is now reachable.
+    const firstLeaf = findFirstEditableLeafId();
+    editStepParams(firstLeaf, { __tweak: true });
+
+    expect(isCustomSpec()).toBe(true);
+    const header = headerCipherName(container);
+    // The killer: the label must name SHA-256, NOT AES-128.
+    expect(header.textContent?.trim()).toBe("Custom (was SHA-256)");
+    expect(header.textContent?.trim()).not.toContain("AES-128");
+    expect(header.classList.contains("is-custom")).toBe(true);
   });
 
   it("flipping padding scheme on unmodified spec does NOT flag Custom", () => {
