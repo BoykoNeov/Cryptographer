@@ -329,10 +329,177 @@ Composed in via the optional slice (Slice 4 of this plan):
   Independent of routing — affects where chips sit, not how arrows
   travel between them.
 
+## Tuning surface
+
+Every numeric constant in the algorithm above is a knob with a
+**plausible-but-not-obvious** default. The router branch ran into this
+empirically — 30 lines of comment-debate over whether `CLEARANCE_MARGIN`
+should be 6, 8, or 10 px, with no way to tell except code-edit + reload.
+This plan front-loads a small UI surface so the user can tune in-browser
+during smoke and iterate fast.
+
+### Architecture
+
+A new per-spec store `src/ui/stores/routing-tuning.ts`. Pattern follows
+`src/ui/stores/layout.ts` — per-spec values keyed by `spec.id`, persisted
+to localStorage, with a reset-to-defaults helper. Each knob is a
+`createSignal<number>` (or `createSignal<number>` with `Infinity`
+encoded as `null` for class costs) exported alongside its setter.
+
+**Reactivity architecture (locked):** routing functions take a
+`TuningSnapshot` object parameter — a plain frozen record of current
+values — NOT direct signal reads. Snapshot construction lives in a
+single `createMemo` at the GraphView level that reads every relevant
+signal and emits a fresh frozen object whenever any input changes.
+Routing modules (`edge-bundling.ts`, future helpers) stay pure: same
+snapshot in → same path out, deterministic, unit-testable without
+Solid runtime. The render layer is the only place where the
+reactive-to-pure boundary lives. This pinning replaces the earlier
+"parameter OR signals" phrasing.
+
+**Per-spec scope** is the user's pick: SHA-256's density may need
+different knobs than DES's sparser graph. Two tiers only: per-spec
+entry in localStorage if present, plan defaults otherwise. No
+cipher-family inheritance — keep the lookup mechanism simple.
+
+**Pedagogical bonus** of shipping the panel to all users (the user's
+explicit pick over dev-only): readers can experiment with the algorithm
+the same way they experiment with cipher parameters today. Drag
+`CLEARANCE_MARGIN` from 8 to 24 and watch the routing detour around
+chips by a wider arc — the constraint visibility is the lesson.
+
+### Knob inventory
+
+| Knob | Default | Slider range | Notes |
+|---|---|---|---|
+| `CLEARANCE_MARGIN` | 8 px | 0–32 | Obstacle bbox inflation before A\*. |
+| `GRID_CELL_SIZE` | 24 px | 8–48 | A\* grid resolution. Coarser = faster, blockier. |
+| `LANE_WIDTH` | 6 px | 2–16 | Per-edge perpendicular offset in bundle. |
+| `FLARE_LENGTH_PX` | 30 px | 0–80 | Endpoint flare length cap. |
+| `FLARE_LENGTH_FRAC` | 0.2 | 0–0.5 | Endpoint flare as fraction of edge length (min applies). |
+| `CR_TENSION_DEFAULT` | 0.5 | 0–1 | Catmull-Rom tension at obtuse bends. |
+| `CR_TENSION_SHARP` | 0.25 | 0–1 | Catmull-Rom tension at sharp bends. |
+| `SHARP_BEND_ANGLE` | 90° | 30–135 | Threshold for switching to sharp tension. |
+| `PULL_NORTHWARD_BIAS` | 0.30 | 0–1 | A\* feedback-edge northward heuristic strength. |
+| `PULL_STAGGER_STEP` | 0.18 | 0–0.5 | Altitude apex variation per slot (Slice 4). |
+| `MIN_CLUSTER_SIZE` | 2 | 1–8 | Singleton-bundle cutoff (1 = bundle everything). |
+| `BUNDLE_PILL_T` | 0.25 | 0–1 | Position of ×N pill along midline. |
+
+### Per-class obstacle costs
+
+Generalizes the current "hard / soft" two-tier rule into a slider per
+obstacle class. Each class has a cost-multiplier slider with the max
+position rendered as `∞` (truly impassable, today's hard behavior);
+finite positions become A\* cell-cost multipliers.
+
+| Class | Default | Slider range | Today's plan behavior |
+|---|---|---|---|
+| Non-incident leaf chip | ∞ (impassable) | 1.0–100, then `∞` | Hard. Slide down → A\* may cross chip bboxes if no detour exists. |
+| Replica chip | ∞ (impassable) | 1.0–100, then `∞` | Hard. Slide down → routing may cross replica chips (replica's own arrow is unaffected). |
+| Replica-arrow corridor | 10.0 | 1.0–100, then `∞` | Soft. Slider lets you push to ∞ ("treat replica arrows as inviolable") or down ("let other arrows cross freely"). |
+
+The `∞` slot is the rightmost slider position with a visible "∞" label;
+the next-rightmost position is `100` so the user can see the gradient
+between "very expensive but possible" and "impassable". Internally,
+`Infinity` triggers the obstacle-impassable code path; finite values
+multiply the cell cost in A\*'s priority queue.
+
+**Serialization:** localStorage stores cost values as `number | null`,
+where `null` represents `Infinity`. Deserializer maps `null → Infinity`
+on load; serializer maps `Infinity → null` on save. Keeps the field
+type uniform (`number | null`) and avoids the validation overhead of
+a custom object sentinel.
+
+### Panel placement
+
+A collapsible `<details>` block in the graph toolbar, labelled "Routing
+tuning" with a wrench glyph. Collapsed by default (no surface impact
+for users who don't touch it). Inside the panel: each knob is a
+`<input type="range">` paired with a numeric `<input type="number">`
+(matching the existing `ParamEditor` aesthetic). Per-class obstacle
+costs render as the same range-input pattern with `∞` as the rightmost
+labelled tick.
+
+**Knob grouping** — flat lists at 15+ entries read as noise. Six
+labelled sub-sections inside the panel, in this order:
+
+1. **Routing** — `CLEARANCE_MARGIN`, `GRID_CELL_SIZE`, `LANE_WIDTH`
+2. **Curve** — `CR_TENSION_DEFAULT`, `CR_TENSION_SHARP`,
+   `SHARP_BEND_ANGLE`, `FLARE_LENGTH_PX`, `FLARE_LENGTH_FRAC`
+3. **Bundling** — `MIN_CLUSTER_SIZE`, `BUNDLE_PILL_T`
+4. **Feedback** — `PULL_NORTHWARD_BIAS`
+5. **Obstacles** — `obstacleCostLeafChip`, `obstacleCostReplicaChip`,
+   `obstacleCostReplicaCorridor`
+6. **Altitude** — `PULL_STAGGER_STEP` (added Slice 4)
+
+Each sub-section is itself a nested `<details>` (collapsed by default
+inside the parent panel — drilling progressively reveals knobs the
+user is actually interested in, instead of dumping all 15+ at once).
+
+**Escape hatch:** `?tune=hidden` URL parameter forces the panel to not
+render at all. Useful for demos, screenshots, or first-time-user runs
+where the panel reads as overwhelming. Documented in
+`docs/help/graph-view.md` after Slice 6 ships.
+
+Two reset buttons at the panel footer:
+- **Reset this spec** — clears the localStorage entry for the current
+  `spec.id` and falls back to plan defaults.
+- **Reset all routing** — clears all per-spec entries; useful when
+  the user wants to start fresh.
+
+Tuning values are NOT bundled into the shareable URL or Save/Load
+envelope — they're viewer prefs per
+[[feedback_viewer_preference_pattern]]. (A Copy-as-JSON export
+button was considered but deferred — see Slice 5b notes.)
+
+### Diagnostic hatch × tuning interaction
+
+`?no-bundle=1` (the A/B comparison hatch) **ignores tuning entirely**.
+Under the hatch, every edge falls back to `{ kind: "default" }` —
+today's `EdgePath.geom()` path — regardless of what the user has dialed
+in the panel. Reason: the hatch's purpose is "what does shipped main
+look like without this plan", so polluting it with tuned values
+defeats the comparison. Hatched mode is effectively read-only against
+the plan's machinery.
+
+### What this changes in the slices
+
+The slice list below stays largely the same, but:
+
+- **Slice 1** introduces `CLEARANCE_MARGIN`, `GRID_CELL_SIZE`,
+  `MIN_CLUSTER_SIZE` as signals in the new
+  `src/ui/stores/routing-tuning.ts`, NOT as module-level constants in
+  `edge-bundling.ts`. The routing functions accept a `tuning`
+  parameter (or read signals directly).
+- **Slice 2** adds `FLARE_LENGTH_PX`, `FLARE_LENGTH_FRAC`,
+  `CR_TENSION_DEFAULT`, `CR_TENSION_SHARP`, `SHARP_BEND_ANGLE`,
+  `BUNDLE_PILL_T` to the store.
+- **Slice 3** mounts the panel UI as part of the wire-up; user-visible
+  knobs work from this slice onward. Adds `PULL_NORTHWARD_BIAS` and
+  the three per-class obstacle costs to the store.
+- **Slice 4** adds `PULL_STAGGER_STEP` to the store when altitude
+  composes in.
+- A new **Slice 5b** (small, peer to current Slice 5) polishes the
+  panel: per-class cost slider's `∞` tick rendering, Copy-as-JSON
+  button, panel description tooltip, reset-button affordance polish,
+  panel-collapsed-by-default invariant test.
+
+### Tests added
+
+- `tests/routing-tuning-store.test.ts`: per-spec persistence, default
+  fallback, `Infinity` cost round-trip (`Infinity → null → Infinity`
+  in localStorage), `TuningSnapshot` immutability (frozen object).
+- `tests/routing-tuning-panel.test.tsx`: panel collapses by default,
+  slider changes trigger memo recomputation, reset buttons restore
+  defaults, Copy-as-JSON produces parseable blob.
+- Each signal-driven knob gets a unit test in the relevant
+  Slice 1/2/3/4 test file showing the routing function honors a
+  non-default value.
+
 ## Slices
 
-Five slices. Probes first (no code commits). Smoke gates each visible
-slice.
+Six slices (was five — Slice 5b inserted for tuning panel polish).
+Probes first (no code commits). Smoke gates each visible slice.
 
 ### Slice 0 — Probes
 
@@ -417,14 +584,18 @@ new code lives in `src/ui/graph/`.
 
 - New module `src/ui/graph/edge-bundling.ts`:
   - `clusterEdges(edges, spec): Map<ClusterKey, RouterEdge[]>`
-  - `routeClusterMidline(cluster, obstacles, options): Polyline | null`
+  - `routeClusterMidline(cluster, obstacles, tuning): Polyline | null`
     (null = A* infeasible; caller falls back to straight line)
 - Reuse `RouterBox`, `RouterEdge`, `buildObstacleSet` from existing
   `edge-router.ts`.
-- New constants:
-  - `CLEARANCE_MARGIN = 8` (or whatever 0c probe settles on)
-  - `GRID_CELL_SIZE = 24`
-  - `MIN_CLUSTER_SIZE = 2` (singleton clusters skip bundling)
+- New store `src/ui/stores/routing-tuning.ts` (per-spec, localStorage
+  persisted — see **Tuning surface** section above for full
+  architecture). Initial signals exposed in this slice:
+  - `CLEARANCE_MARGIN` (default 8 px, or whatever 0c probe settles on)
+  - `GRID_CELL_SIZE` (default 24 px)
+  - `MIN_CLUSTER_SIZE` (default 2 — singleton clusters skip bundling)
+- The routing functions accept a `tuning` parameter (a snapshot of
+  current signal values) so they remain pure for unit testing.
 
 **Tests:**
 - Synthetic: 3 edges sharing a cluster pair produce one shared midline
@@ -444,15 +615,20 @@ new code lives in `src/ui/graph/`.
 **Pure geometry slice.** Still no rendering wired.
 
 - Extend `edge-bundling.ts`:
-  - `smoothPolyline(polyline, corridor): SmoothPath` — Catmull-Rom
-    with corridor-aware tension at sharp bends.
-  - `composeEdgePath(edge, midline, lane, flareLength): SVGPath` —
-    builds the flare-in + midline + flare-out composite SVG path.
-- New constants:
-  - `FLARE_LENGTH_PX = 30` (or `0.2 * edgeLength`, whichever smaller)
-  - `SHARP_BEND_ANGLE = 90` (degrees; threshold for tension reduction)
-  - `CR_TENSION_DEFAULT = 0.5`
-  - `CR_TENSION_SHARP = 0.25`
+  - `smoothPolyline(polyline, corridor, tuning): SmoothPath` —
+    Catmull-Rom with corridor-aware tension at sharp bends.
+  - `composeEdgePath(edge, midline, lane, tuning): SVGPath` — builds
+    the flare-in + midline + flare-out composite SVG path.
+- New signals in `routing-tuning.ts`:
+  - `FLARE_LENGTH_PX` (default 30 px; cap on flare absolute length)
+  - `FLARE_LENGTH_FRAC` (default 0.2; flare as fraction of edge length,
+    min applies)
+  - `SHARP_BEND_ANGLE` (default 90°; threshold for tension reduction)
+  - `CR_TENSION_DEFAULT` (default 0.5)
+  - `CR_TENSION_SHARP` (default 0.25)
+  - `BUNDLE_PILL_T` (default 0.25; position of ×N pill along midline)
+- `LANE_WIDTH` signal added (default 6 px) — referenced by Slice 4
+  when lanes start applying per-edge offsets in rendered output.
 
 **Property tests:**
 - Smoothed curve stays inside inflated corridor on 32 sample points
@@ -493,6 +669,21 @@ old in the actual rendered DOM.
 - `bundle-by-default` localStorage flag — default ON for SHA-256,
   default OFF for AES/Speck/Serpent/DES (legacy ciphers; user can
   flip the global toggle in the graph toolbar). Settled after smoke.
+- **Mount the Routing-tuning panel** in the graph toolbar (the
+  collapsed `<details>` block described in the **Tuning surface**
+  section). Panel ships in this slice so the user can A/B knob values
+  in-browser during smoke. New signals added in this slice:
+  - `PULL_NORTHWARD_BIAS` (default 0.30; A\* feedback-edge bias)
+  - **Per-class obstacle costs** — three signals:
+    - `obstacleCostLeafChip` (default `Infinity`)
+    - `obstacleCostReplicaChip` (default `Infinity`)
+    - `obstacleCostReplicaCorridor` (default `10.0`)
+  - The A\* core reads these costs from the tuning snapshot per cell;
+    `Infinity` triggers the impassable code path verbatim, finite
+    values multiply cell cost in the priority queue. Test that the
+    finite-cost branch produces a path that DOES cross the obstacle
+    when no detour exists, and the `Infinity` branch produces `null`
+    in the same scenario.
 
 **Smoke checklist (manual, ~5 minutes):**
 
@@ -522,7 +713,9 @@ and wires them to apply at the BUNDLE MIDLINE level rather than the
 individual-edge level.
 
 - Cherry-pick `EdgePath`'s `pullSlot` / `pullSlotTotal` props (~30 LOC).
-- Cherry-pick `PULL_STAGGER_STEP = 0.18` constant.
+- Add `PULL_STAGGER_STEP` (default 0.18) signal to `routing-tuning.ts`
+  store. Slider lets the user dial altitude variation from 0 (flat
+  bundle) to 0.5 (extreme apex spread).
 - In `composeEdgePath` (from Slice 2), apply the apex variation to the
   Catmull-Rom midline's control points proportionally to `pullSlot`.
   Endpoint flares are unaffected.
@@ -568,6 +761,38 @@ individual-edge level.
 **Counts target:** +30 LOC predicate widening, +50 LOC of tests
 (~5 tests). Bundle target: essentially flat.
 
+### Slice 5b — Tuning panel polish
+
+**Small UI slice; runs in parallel with Slices 4 / 5.** The panel was
+mounted minimally in Slice 3 so the user could tune during smoke; this
+slice polishes it for shipping.
+
+- **`∞` slider tick** rendering for per-class obstacle costs. The
+  rightmost slider position renders the literal label `∞`; the
+  next-rightmost is `100`. Internally the `∞` position serializes
+  to `null` in localStorage (load: `null → Infinity`, save:
+  `Infinity → null`).
+- **Sub-section grouping** lands in this slice (see the panel-placement
+  table). Each group is a nested collapsed `<details>`.
+- **`?tune=hidden` URL parameter** — forces the panel to not render at
+  all. Escape hatch for demos / screenshots / first-time users.
+- **Panel description tooltip** — each knob's label has a `<title>`
+  attribute describing what the knob does (the rightmost column from
+  the **Knob inventory** table). Hover-to-see-effect tooltip pattern.
+- **Reset-button affordance polish** — `Reset this spec` button is
+  disabled when the current spec is already at defaults (avoids
+  user clicking a no-op button); `Reset all routing` always enabled.
+- **Panel-collapsed-by-default invariant test** —
+  `tests/routing-tuning-panel.test.tsx` confirms first paint has the
+  outer `<details>` element closed AND every sub-section `<details>`
+  closed, so the toolbar baseline footprint doesn't grow.
+
+**Deferred (NOT in this slice):** Copy-as-JSON export button. If smoke
+shows users want to share or back up tuned configs, add as a follow-up.
+
+**Counts target:** +80 LOC panel polish, +60 LOC tests (~6 tests).
+Bundle target: +1 KB raw / +0.3 KB gzipped.
+
 ### Slice 6 — Remove diagnostic hatch + close plan
 
 After all five slices ship and smoke green:
@@ -587,6 +812,9 @@ ship in either order after Slice 3 lands.
 
 The plan can pause-and-evaluate after Slice 3: if the smoke shows
 bundling is enough on its own, Slices 4 and 5 become optional polish.
+
+Slice 5b (tuning panel polish) is independent of 4 and 5 — it polishes
+the panel mounted in Slice 3. Can ship any time after Slice 3 lands.
 
 ## Smoke watchpoints
 
@@ -616,10 +844,11 @@ verification:
    confirm the `cbc-snapshot → cbc-xor` feedback arrow still reads
    as a clear overhead loop with no visible regression. If the new
    shape diverges meaningfully (e.g. A\* picks an asymmetric path or
-   a side route), the directional-bias strength needs tuning.
-   Fallback: bias coefficient on `PULL_NORTHWARD_BIAS` constant —
-   start at 0.3 (30 % cost reduction for northward cells), bump to
-   0.5 if the side-route problem appears.
+   a side route), the directional-bias strength needs tuning. **Now
+   trivial via the Tuning panel** — drag `PULL_NORTHWARD_BIAS` from
+   0.30 up toward 0.5, watch the arc re-route in real-time. The
+   "fallback constant bump" of the original plan turns into an
+   in-browser slider drag.
 
 ## What this plan does NOT cover
 
