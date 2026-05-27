@@ -1200,6 +1200,115 @@ back to selection). Adds ~30 lines of plumbing + a jsdom-vs-browser
 pointer-events smoke surface to verify. Defer until selection-only
 v0's smoke confirms the mechanism is worth the polish.
 
+#### S2-next exploration — altitude staggering + obstacle router (PARALLEL BRANCHES, neither merged) — 2026-05-27
+
+After S2(m) shipped, the user surfaced the queued curve-altitude
+staggering question (S2(m)'s acknowledged limitation at lines 1154–1158
+named it as the future-slice answer to steady-state crowding) and
+asked the advisor whether to also explore a real obstacle-aware edge
+router as Approach B. Advisor's strong pre-empirical recommendation:
+ship altitude staggering on `main`, **don't open the router**.
+User opted to explore BOTH as parallel branches before deciding,
+with the explicit goal of comparing them empirically on the dense
+SHA-256 case.
+
+**Branches pushed to origin (neither merged to main):**
+
+- `explore/altitude-staggering` (tip `56a3f52`) — per-edge slot-indexed
+  curve-pull-magnitude multiplier in `EdgePath.geom()`. ~60 lines
+  of code + 3 tests. New `PULL_STAGGER_STEP = 0.18` constant + two
+  new EdgePath props (`pullSlot` / `pullSlotTotal`) sourced from the
+  same `ConsumerPortAssignment.slotOf` map that drives the existing
+  endpoint port-spreading offsets. Predicate scope mirrors
+  `sourceYOffset`'s port-flow-only fence (kind === "state" && auxKey
+  === PORT_FLOW_AUX_KEY) so legacy aux-keyed ciphers stay byte-
+  identical. Plus a `6f0973f` biome+gitignore housekeeping commit
+  needed to keep the gate green with the parallel router worktree
+  active; the housekeeping was cherry-picked separately to `main`
+  as commit `ce8c2f7` (it's generally useful infrastructure
+  independent of either experimental approach).
+
+- `explore/edge-routing-router` (tip `20fea2e`) — single-bend L-shape
+  + U-shape fallback obstacle router. ~620 LOC pure function in
+  `src/ui/graph/edge-router.ts` with `{ kind: "default" | "polyline" }`
+  discriminated-union sentinel so most edges stay byte-identical to
+  default geometry. Polyline-aware midpoint helper anchors the bundle
+  ×N pill on the longest segment (advisor flagged this as the
+  load-bearing criterion). Includes 12 unit tests + Playwright smoke
+  + perf-budget test (router itself: 7 ms unit, 12 ms rAF round-trip,
+  well under the 200 ms re-run target). Includes a `?no-router=1`
+  URL diagnostic hatch around `GraphView.tsx:7546` marked `TEMP
+  DIAGNOSTIC` — **must be removed before any merge to main**.
+
+**3-way A/B/C smoke comparison** (Playwright on the explore worktree,
+crossings = edge sample points inside non-incident leaf bboxes,
+32 samples × 2939 edges = 91,109 total for SHA-256 expanded;
+1,736 for AES-128 ECB collapsed):
+
+| Variant | SHA-256 expanded paths-with-any-hit | AES-128 ECB paths-with-any-hit |
+|---|---|---|
+| A — Baseline (`?no-router=1` on `20fea2e`) | 1,244 / 2,939 (42 %) | 12 / 56 (21 %) |
+| B — Altitude staggering (`56a3f52`) | 1,244 / 2,939 (42 %) | 12 / 56 (21 %) |
+| C — Router (`20fea2e` default URL) | 1,162 / 2,939 (40 %) | 1 / 56 (1.8 %) |
+
+**Empirical conclusions:**
+
+- The **router wins materially on AES** (99 % reduction in path-
+  with-any-hit, 12 → 1) and **modestly on the dense SHA-256
+  corridor** (~6 % reduction, 1,244 → 1,162).
+- **Altitude staggering reads as essentially a no-op under this
+  metric** — 0.5 % SHA-256 reduction, zero AES change. **Important
+  caveat**: the metric ("does any sample of any edge sit inside any
+  non-incident leaf bbox") doesn't reward "the 8 sibling curves into
+  `final.assemble` now bow at distinct altitudes so the eye can
+  separate them." Visual benefit on the 8-edge fan-IN case is
+  consistent with the metric undercounting; a visual A/B on the
+  screenshot is the right way to assess. The slice targets visual
+  separability in a shared corridor, not crossings reduction.
+- **Neither mechanism solves the dense SHA-256 corridor** — even
+  with the router, 40 % of paths still touch unrelated leaves. The
+  agent flagged this as topology-level (2,939 edges through narrow
+  inter-column gutters), not routing-level. **Open follow-up plan
+  needed if the dense view's pain matters** — column-gutter widening,
+  layer-aware orthogonal routing, or topology rethink (e.g. fold
+  the message-schedule body so the s-stages don't all feed one
+  consumer through a single corridor).
+
+**User decision** (after smoke ran): keep both as separate branches
+on origin, revert main to session-start (`4a45794`) plus the
+biome/gitignore housekeeping (`ce8c2f7`). Branches stay parallel
+for future revisit. **Advisor's pre-empirical "don't open Approach B"
+was empirically contradicted on the AES case**; the visual benefit
+of altitude staggering on the 8-edge case remains unmeasured by the
+hit-counter metric.
+
+**Open follow-ups if either branch is revisited:**
+
+- **Visual A/B (eyeball)** on altitude staggering's SHA-256 fan-IN
+  case using screenshots already in
+  `D:\claude projects\Cryptographer\.claude\worktrees\agent-a5553d0920b96da8f\e2e\.artifacts\`
+  (sha-256-dense-{A-baseline,B-altitude,C-router}.png + JSON
+  sidecars). Eyeball will say whether the metric is undercounting
+  or altitude is genuinely a no-op visually.
+- **Corner-rounded polylines** or small-Bezier-near-bends postprocess
+  on the router to tame the orthogonal-vs-curved aesthetic clash
+  the agent flagged.
+- **Reserve router for highest-impact edges** (straight line crosses
+  ≥ 2 leaves) so the polyline visual contrast is "earned" — currently
+  3.6 % of edges (105/2,939) get routed; reducing the trigger threshold
+  would concentrate the contrast where it pays off.
+- **Stacking router + altitude staggering** not yet tested — they
+  target different cases (router: medium-density crossings; altitude:
+  high-density shared-corridor visual separability) and might
+  compose without conflict.
+- **Dense SHA-256 corridor as plan-level structural problem** —
+  open if the >40 % residual hit-count under all variants becomes
+  user-visible pain.
+
+The untracked dense smoke spec `e2e/edge-router-smoke-dense.spec.ts`
+is left in the explore worktree (hardcoded `TAG` and `ROUTER_OFF_DEFAULT`
+constants from the last run; amend or delete on revisit).
+
 ## Order
 
 S1 first — it's pure additive editor work, no risk of regression to
