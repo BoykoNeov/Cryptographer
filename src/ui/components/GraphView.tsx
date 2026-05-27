@@ -191,6 +191,7 @@ const BASE_LEAF_W = 132;
 /** Base (1.0×) leaf-rectangle height. */
 const BASE_LEAF_H = 28;
 /** Base (1.0×) vertical gap between siblings stacked inside a group.
+ *  History trail: 6 → 12 → 60.
  *  Bumped from 6 → 12 (2026-05-19) so the four leaves stacked inside
  *  each AES round group (SubBytes → ShiftRows → MixColumns →
  *  AddRoundKey) — and the three inside the final round — get visible
@@ -201,11 +202,20 @@ const BASE_LEAF_H = 28;
  *  height: a 4-leaf round goes from 130 px (4 × 28 + 3 × 6) to
  *  148 px (4 × 28 + 3 × 12). User-reported on the 2026-05-19 manual
  *  smoke after the FLOW_GAP 24 → 36 bump landed for horizontal flow.
+ *  Bumped again 12 → 60 (2026-05-27, 5×) on user request for "much
+ *  more breathing room inside expanded round/group bodies" — the
+ *  4-leaf AES round body now stands ~292 px tall (4 × 28 + 3 × 60),
+ *  trading verticality for clarity inside dense groups (notably
+ *  SHA-256's expanded message-schedule round members, where the
+ *  prior 12 px gap still let neighbouring leaves blur visually).
+ *  Canvas auto-sizes from layout (canvasH = maxBottom + CANVAS_MARGIN),
+ *  so the larger body grows the SVG viewBox automatically.
  *  STACK_GAP is reused at one site beyond plain group stacking
  *  (the `innerY` advance in `layoutNode`'s group branch); see comments
  *  there if a future bump runs into edge cases. */
-const BASE_STACK_GAP = 12;
+const BASE_STACK_GAP = 60;
 /** Base (1.0×) horizontal gap between siblings flowing inside an iterate body / root.
+ *  History trail: 16 → 24 → 36 → 72.
  *  Bumped from 16 → 24 (2026-05-16) for breathing room on the collapsed-
  *  iterate chip row — multiple chips + aux replicas above were cramping
  *  on the AES-128 ECB canvas. Bumped again 24 → 36 (2026-05-19) after
@@ -215,9 +225,15 @@ const BASE_STACK_GAP = 12;
  *  reading as a wall rather than a clearly-spaced sequence. 50% bump
  *  preserves the original visual intent of "tight enough to feel like
  *  one row" while letting the eye distinguish where one chip ends and
- *  the next begins. Affects both root-level flow AND iterate body flow
+ *  the next begins. Bumped again 36 → 72 (2026-05-27, 2×) on user
+ *  request for "much more breathing room" between leaves flowing
+ *  horizontally — AES round chips and SHA-256 message-schedule chips
+ *  in particular benefit from the wider inter-chip whitespace at the
+ *  cost of a wider canvas. Canvas auto-sizes from layout (canvasW =
+ *  maxRight + CANVAS_MARGIN), so the SVG viewBox grows with content.
+ *  Affects both root-level flow AND iterate body flow
  *  (one constant, used both places). */
-const BASE_FLOW_GAP = 36;
+const BASE_FLOW_GAP = 72;
 /** Base (1.0×) padding inside a container (group or iterate) box. */
 const BASE_CONTAINER_PAD = 10;
 /**
