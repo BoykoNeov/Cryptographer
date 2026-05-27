@@ -66,6 +66,7 @@ import { IvInput } from "./components/IvInput";
 import { KeyScheduleExplorer } from "./components/KeyScheduleExplorer";
 import { MatrixView } from "./components/MatrixView";
 import { ParamEditor } from "./components/ParamEditor";
+import { PortFlowView, isPortNativeFrame } from "./components/PortFlowView";
 import { RejoinFrameView } from "./components/RejoinFrameView";
 import { RoundKeyPanel } from "./components/RoundKeyPanel";
 import { RunExplorerModal } from "./components/RunExplorerModal";
@@ -1774,29 +1775,44 @@ const FrameStateView = (props: {
   const after = () => props.frame.stateAfter;
   const prevAfter = () => props.previousRunFrame?.stateAfter ?? null;
 
+  // Port-aware dispatch (Slice 2.9b). When the runtime captured port I/O
+  // on this frame (pure port-native step — `meta === undefined` branch at
+  // `runtime.ts:502`), the existing matrix/bytes/mixed dispatch would
+  // render an empty before/after pair because port-native steps emit
+  // `stateBefore === stateAfter`. `PortFlowView` reads the captured port
+  // I/O instead. Lifted-legacy ported frames (AES SubBytes etc.) carry
+  // `meta` so their port fields stay undefined and the predicate falls
+  // through to the legacy 3-way dispatch.
   return (
     <Show
-      when={before().shape === "matrix4x4-bytes" && after().shape === "matrix4x4-bytes"}
+      when={isPortNativeFrame(props.frame)}
       fallback={
         <Show
-          when={before().shape === "bytes" && after().shape === "bytes"}
-          fallback={<MixedShapeView before={before()} after={after()} />}
+          when={before().shape === "matrix4x4-bytes" && after().shape === "matrix4x4-bytes"}
+          fallback={
+            <Show
+              when={before().shape === "bytes" && after().shape === "bytes"}
+              fallback={<MixedShapeView before={before()} after={after()} />}
+            >
+              <BytesView
+                before={before() as BytesState}
+                after={after() as BytesState}
+                previousAfter={prevAfter()}
+                frame={props.frame}
+              />
+            </Show>
+          }
         >
-          <BytesView
-            before={before() as BytesState}
-            after={after() as BytesState}
+          <MatrixView
+            before={before() as MatrixState}
+            after={after() as MatrixState}
             previousAfter={prevAfter()}
             frame={props.frame}
           />
         </Show>
       }
     >
-      <MatrixView
-        before={before() as MatrixState}
-        after={after() as MatrixState}
-        previousAfter={prevAfter()}
-        frame={props.frame}
-      />
+      <PortFlowView frame={props.frame} />
     </Show>
   );
 };

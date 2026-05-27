@@ -1,0 +1,159 @@
+/**
+ * Port-aware inspector view for pure port-native trace frames
+ * (Slice 2.9b of the universal-port-dataflow plan —
+ * `docs/plans/slice-2-9-port-aware-provenance.md`).
+ *
+ * **What this renders.** A vertical stack of port rows: every entry in
+ * `frame.portInputs` becomes one input row, followed by every entry in
+ * `frame.portOutputs` as an output row. Each row carries the port's name
+ * (left-aligned label) and a cell strip — one `.bytes-cell` per byte —
+ * laid out with the same visual vocabulary as `BytesView` so the user's
+ * eye carries forward from legacy frames.
+ *
+ * **Why this exists.** Pure port-native steps (SHA-256's `xor@1`,
+ * `add-mod-32@1`, `rotate-bits-right@1`, etc.) emit `stateBefore ===
+ * stateAfter` frames — the actual transformation happens in the port
+ * I/O, not in state. The matrix/bytes dispatch in `FrameStateView` would
+ * render before/after pairs that are byte-equal and pedagogically empty.
+ * `PortFlowView` surfaces what the step actually computed by reading the
+ * port-I/O captured on the frame in Slice 2.9a.
+ *
+ * **What this does NOT do (yet).** Cells are display-only — no hover, no
+ * click, no provenance highlighting. Slice 2.9c widens
+ * `ProvenanceSource` to carry port-cell variants and wires the hover
+ * plumbing; Slice 2.9d registers the per-primitive provenance fns. This
+ * slice is cells-first by deliberate scope discipline (advisor verdict
+ * 2026-05-27: cells deliver ~80% of pedagogical value; overlays + hover
+ * earn their architecture after the user has scrubbed cells-only for a
+ * few sessions). The byte-format toggle IS honored — that's already
+ * cheap and the cells are otherwise unreadable without it.
+ *
+ * **Dispatch predicate** (`isPortNativeFrame`): a frame is port-native
+ * iff `portInputs !== undefined || portOutputs !== undefined`. Slice
+ * 2.9a's runtime gate (`meta === undefined` at `runtime.ts:502`) only
+ * populates these fields on pure port-native steps; lifted-legacy
+ * ported frames (AES SubBytes, AES key-expansion, `bytes-to-state@1`,
+ * `state-to-bytes@1`) all carry `meta` and leave both fields undefined,
+ * so the predicate naturally routes them through the existing
+ * matrix/bytes dispatch. Future port-native steps that publish only
+ * outputs (constants) or only inputs (sinks) still match via the `||`.
+ */
+
+import { formatByte } from "@/core/format";
+import type { TraceFrame } from "@/core/types";
+import { For, Show, createMemo } from "solid-js";
+import { useByteFormat } from "../stores/format";
+
+/**
+ * Discriminator for the port-aware dispatch. True iff the runtime
+ * captured port I/O on this frame (Slice 2.9a's `meta === undefined`
+ * branch). Lives next to the consumer so a future port-native step
+ * shape that lands only on one side still matches.
+ */
+export const isPortNativeFrame = (frame: TraceFrame): boolean =>
+  frame.portInputs !== undefined || frame.portOutputs !== undefined;
+
+type Props = {
+  frame: TraceFrame;
+};
+
+export const PortFlowView = (props: Props) => {
+  // Materialize port lists once per frame change. Map iteration is
+  // insertion order in ES, and the runtime inserts in port-declaration
+  // order (see `runtime.ts:502-505`), so the row order matches the
+  // executor's contract authoring order — no sort needed. `createMemo`
+  // because both lists are read TWICE in JSX below (`<Show when>` +
+  // `<For each>`) and we don't want to allocate a fresh array per read.
+  const inputRows = createMemo<readonly [string, Uint8Array][]>(() => {
+    const m = props.frame.portInputs;
+    if (m === undefined) return EMPTY_PORT_ROWS;
+    return Array.from(m);
+  });
+  const outputRows = createMemo<readonly [string, Uint8Array][]>(() => {
+    const m = props.frame.portOutputs;
+    if (m === undefined) return EMPTY_PORT_ROWS;
+    return Array.from(m);
+  });
+
+  return (
+    <div class="port-flow-view">
+      {/* Inputs section. Skipped entirely when there are no input
+          ports (e.g. `constant-load@1` — outputs-only). */}
+      <Show when={inputRows().length > 0}>
+        <div class="port-flow-section" data-section="inputs">
+          <For each={inputRows()}>
+            {([portName, bytes]) => <PortRow side="input" portName={portName} bytes={bytes} />}
+          </For>
+        </div>
+      </Show>
+
+      {/* Separator: rendered only when BOTH sides have ports. A
+          single-sided port frame would otherwise show a lone divider
+          floating above or below the only section. */}
+      <Show when={inputRows().length > 0 && outputRows().length > 0}>
+        <div class="port-flow-divider" aria-hidden="true" />
+      </Show>
+
+      {/* Outputs section. Symmetric to inputs — skipped on a
+          (hypothetical) sink leaf with no outputs. */}
+      <Show when={outputRows().length > 0}>
+        <div class="port-flow-section" data-section="outputs">
+          <For each={outputRows()}>
+            {([portName, bytes]) => <PortRow side="output" portName={portName} bytes={bytes} />}
+          </For>
+        </div>
+      </Show>
+    </div>
+  );
+};
+
+/** Shared sentinel so the "no port fields" branch of the memos never
+ *  produces a new array — keeps Solid's reactive equality cheap when
+ *  the user scrubs between two port-empty frames in a row. */
+const EMPTY_PORT_ROWS: readonly [string, Uint8Array][] = [];
+
+/**
+ * One labelled row of byte cells for a single port.
+ *
+ * Cells reuse `.bytes-cell` so visual rhythm matches BytesView's flat
+ * rows. The label sits to the left at fixed width so multi-row stacks
+ * align column-wise (operand0 / operand1 / … cells start at the same x).
+ *
+ * Byte-format toggle (`useByteFormat`) is read inline on each cell so a
+ * format flip re-renders text without unmounting the row.
+ */
+const PortRow = (props: { side: "input" | "output"; portName: string; bytes: Uint8Array }) => {
+  const fmt = useByteFormat();
+  // Materialize byte indices once for the For loop. Keyed by index
+  // (which is monotonic and stable across re-renders for a given
+  // byte length) so Solid re-uses cell nodes when scrubbing between
+  // same-length frames. `createMemo` because the array is read twice
+  // (`<Show when={...length > 0}>` + `<For each>`).
+  const cells = createMemo<readonly { index: number; byte: number }[]>(() => {
+    const out: { index: number; byte: number }[] = [];
+    for (let i = 0; i < props.bytes.length; i++) {
+      out.push({ index: i, byte: props.bytes[i] ?? 0 });
+    }
+    return out;
+  });
+
+  return (
+    <div class="port-row" data-side={props.side} data-port-name={props.portName}>
+      <div class="port-label" title={`${props.side} port`}>
+        {props.portName}
+        <span class="port-row-count"> ({props.bytes.length} bytes)</span>
+      </div>
+      <div class="port-row-cells">
+        <Show when={props.bytes.length > 0} fallback={<span class="muted small">(empty)</span>}>
+          <For each={cells()}>
+            {(cell) => (
+              <div class="bytes-cell" title={`index ${cell.index}`}>
+                {formatByte(cell.byte, fmt())}
+              </div>
+            )}
+          </For>
+        </Show>
+      </div>
+    </div>
+  );
+};

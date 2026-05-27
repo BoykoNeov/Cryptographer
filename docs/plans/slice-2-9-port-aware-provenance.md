@@ -1,7 +1,9 @@
 # Slice 2.9 — Port-aware inspector + provenance for SHA-256
 
-> **Status: DRAFTED 2026-05-27. Slice 2.9a SHIPPED 2026-05-27 PM
-> (+9 tests, +0.12 KB raw bundle). Slices 2.9b–e NOT STARTED.** Drafted
+> **Status: Slice 2.9a SHIPPED 2026-05-27 PM (+9 tests, +0.12 KB raw).
+> Slice 2.9b SHIPPED 2026-05-27 evening (+9 tests, +1.98 KB raw /
+> +0.43 KB gzipped — well under <3 KB target; manual browser smoke
+> deferred to next session). Slices 2.9c–e NOT STARTED.** Drafted
 > after a session that surveyed today's frame shape for port-native
 > SHA-256 leaves, ran an empirical probe, and consulted the advisor
 > twice. Replaces the original three-bullet Slice 2.9 sketch in
@@ -131,7 +133,71 @@ changes.
 **Sequencing note:** must land before 2.9b. Pure runtime + types
 change; no UI consumer wires up yet.
 
-### 2.9b — Port-aware inspector view (cells only)
+### 2.9b — Port-aware inspector view (cells only) — SHIPPED 2026-05-27 evening
+
+**Status:** code + tests on `main`; manual browser smoke deferred to
+next session per user pick.
+
+**What landed:**
+
+- `src/ui/components/PortFlowView.tsx` — vertical stack of port rows.
+  Two memo'd lists (`inputRows` / `outputRows`) materialize from
+  `frame.portInputs` / `frame.portOutputs`; one section per side with a
+  divider between, both gated so single-sided port frames
+  (`constant-load@1` outputs-only) render without an orphan divider.
+  `PortRow` sub-component is label-left + cells-right via flex-row
+  with a 96 px fixed-width label gutter — the column-align is
+  load-bearing for fan-in pedagogy (σ1 byte 0 sourced from operand0/
+  operand1/operand2's byte 0 column-aligns down the page).
+- `isPortNativeFrame(frame)` predicate exported next to the consumer
+  (`portInputs !== undefined || portOutputs !== undefined`). Wrapped
+  around the existing matrix/bytes/mixed dispatch in
+  `src/ui/App.tsx::FrameStateView` (note: the plan named
+  `SingleFrameView`; actual is `FrameStateView`).
+- CSS additions in `src/ui/app.css` — `.port-flow-view`,
+  `.port-flow-section`, `.port-flow-divider`, `.port-row`,
+  `.port-label`, `.port-row-count`, `.port-row-cells`. Cells reuse the
+  existing `.bytes-cell` class (`.byte-cell` singular was unavailable
+  — taken by `ByteCellInput`'s editable cells, per advisor pre-impl
+  flag).
+- `tests/port-flow-view.test.tsx` — 9 jsdom tests pinning the
+  contract: 5-way `add-mod-32@1` renders 5 input + 1 output rows with
+  the correct cell count (4 per port) and labels (`operand0..4` /
+  `output`), 3-way `xor@1` generalises to 3+1, outputs-only synthetic
+  frame skips the inputs section + divider, byte-format toggle
+  re-renders cell text, predicate returns false for a legacy frame.
+- Predicate naturally filters lifted-legacy frames out: `bytes-to-state@1`
+  / `state-to-bytes@1` have `meta` defined so 2.9a's runtime gate
+  skips port-field capture → the existing matrix/bytes dispatch wins.
+  Plan smoke step 5 is automatic, not a special case in `PortFlowView`.
+
+**Counts (post-impl):** suite 2421 → **2430** (+9). Bundle 689.65 →
+**691.63 KB raw** / 202.49 → **202.92 KB gzipped** (+1.98 / +0.43).
+
+**Advisor-driven course corrections during impl:**
+
+- First-pass CSS used `flex-direction: column` (label above cells).
+  Advisor caught the mismatch with the plan's "left-aligned,
+  fixed-width" intent — flipped to row direction with 96 px label
+  gutter. The column-align matters because the pedagogical claim of
+  this view is "cell i across operand0/operand1/operand2 contributes
+  to cell i of output" — labels-above breaks that scan with a label
+  band between rows.
+- First-pass derived signals were plain functions (`inputRows()` /
+  `outputRows()` / `cells()`); advisor flagged the `createMemo`
+  convention from CLAUDE.md (signals read multiple times in JSX
+  should be memoised — both lists are read in `<Show when>` + `<For
+  each>`). Wrapped all three.
+
+**Deferred to next session:**
+
+- Manual browser smoke (7 steps in 2.9e's gate, plus σ-family +
+  bytes-to-state checks + AES/Speck/DES no-regression check). Code is
+  in `main` already; the smoke is empirically distinct from the
+  automated test coverage.
+
+**Original 2.9b scope text — kept below for context, supersedes the
+2.9a sequencing note:**
 
 **Goal:** render port-native frames in the linear inspector as a
 vertical stack of port-input rows + port-output rows. No provenance

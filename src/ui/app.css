@@ -701,6 +701,72 @@ button:disabled {
   gap: 12px;
 }
 
+/* ─── Port-aware inspector view ────────────────────────────────────────── */
+/* Slice 2.9b of the universal-port-dataflow plan
+   (`docs/plans/slice-2-9-port-aware-provenance.md`). Renders pure
+   port-native frames as a vertical stack of port rows: input ports first,
+   then a divider, then output ports. Cells reuse `.bytes-cell` so the
+   visual rhythm matches BytesView; labels are new.
+
+   Layout: one outer column (port-flow-view) holds two sections separated
+   by a horizontal divider. Each section is a column of port rows. Each
+   row places its label to the left at fixed width so multi-row stacks
+   align cell columns at the same x — the user's eye reads cell i across
+   operand0/operand1/… without re-anchoring. */
+.port-flow-view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.port-flow-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.port-flow-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+/* One port row = label left + cell strip right. Fixed label width
+   so multi-row stacks column-align — the user's eye scans down cell
+   index i across operand0/operand1/operand2/output without re-anchoring.
+   This is the load-bearing layout for fan-in pedagogy (SHA-256's σ1 =
+   rotate^17 ⊕ rotate^19 ⊕ shift^10 — byte 0 of each operand maps to
+   byte 0 of output). */
+.port-row {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.port-label {
+  flex: 0 0 96px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  padding-top: 12px;
+}
+
+.port-row-count {
+  display: block;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 10px;
+  margin-top: 2px;
+}
+
+.port-row-cells {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
 /* ─── Mixed-shape boundary frames ─────────────────────────────────────── */
 /* When a step transitions between bytes and matrix shapes (load-block /
    store-block), we render the two sides side-by-side in a single block.
