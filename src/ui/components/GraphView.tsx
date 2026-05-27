@@ -73,6 +73,7 @@ import {
   applyLaneOffset,
   assignLanes,
   type PathSpec,
+  polylineToRoundedPath,
   type RouterEdge,
   routeOneEdge,
 } from "@/ui/graph/edge-router";
@@ -7749,19 +7750,21 @@ const EdgePath = (props: {
       // Defensive — applyLaneOffset passes default through unchanged.
       return { path: g.path, startDot: g.startDot, midpoint: g.midpoint };
     }
-    // Polyline override. Build the SVG path as `M ... L ... L ...`. The
-    // start-dot stays at `g.startDot` (the source attach point) — only
-    // the shape between start and end changes.
+    // Polyline override. Build the SVG path with ROUNDED CORNERS at
+    // each interior bend (via `polylineToRoundedPath`). Pure-L-shape
+    // corners are pedagogically clear but visually clash with the
+    // canvas's cubic-curve aesthetic on every non-routed edge; the
+    // rounding (default radius 6 px, capped at half-leg-length so
+    // adjacent corners don't fight) softens the transition without
+    // hiding the obstacle-aware detour shape. Start-dot stays at
+    // `g.startDot` (the source attach point) — only the shape
+    // between start and end changes.
     const pts = spec.points;
     if (pts.length < 2) {
       return { path: g.path, startDot: g.startDot, midpoint: g.midpoint };
     }
-    const [first, ...rest] = pts;
-    // biome-ignore lint/style/noNonNullAssertion: length check above
-    const head = `M ${first!.x} ${first!.y}`;
-    const tail = rest.map((p) => `L ${p.x} ${p.y}`).join(" ");
     return {
-      path: `${head} ${tail}`,
+      path: polylineToRoundedPath(pts, DEFAULT_ROUTER_OPTIONS.cornerRadius),
       startDot: g.startDot,
       midpoint: spec.midpoint,
     };

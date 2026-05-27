@@ -26,11 +26,12 @@
 
 import {
   DEFAULT_ROUTER_OPTIONS,
-  type RouterBox,
-  type RouterEdge,
   polylineMidpoint,
+  polylineToRoundedPath,
   routeEdges,
   routeOneEdge,
+  type RouterBox,
+  type RouterEdge,
 } from "@/ui/graph/edge-router";
 import { describe, expect, it } from "vitest";
 
@@ -277,6 +278,101 @@ describe("edge-router — polyline midpoint", () => {
   it("returns origin defensively for a polyline with fewer than 2 points", () => {
     expect(polylineMidpoint([])).toEqual({ x: 0, y: 0 });
     expect(polylineMidpoint([{ x: 5, y: 7 }])).toEqual({ x: 0, y: 0 });
+  });
+});
+
+describe("edge-router — rounded-corner path emission", () => {
+  // polylineToRoundedPath converts a sequence of vertices into an SVG
+  // path string with quadratic Bezier corners at each interior bend.
+  // Used by EdgePath to render routed polylines with a softer aesthetic
+  // that integrates with the canvas's cubic-curve regimes.
+
+  it("a two-point polyline emits a plain M…L path (no rounding to apply)", () => {
+    // No interior corner → no rounding. Plain straight line.
+    const d = polylineToRoundedPath([{ x: 0, y: 0 }, { x: 100, y: 0 }], 6);
+    expect(d).toBe("M 0 0 L 100 0");
+  });
+
+  it("a three-point L emits L→Q→L with the corner replaced by a quadratic curve", () => {
+    // Standard 90° corner at (100, 0). Radius 6: lead-in at (94, 0),
+    // lead-out at (100, 6), control point at (100, 0).
+    const d = polylineToRoundedPath(
+      [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+        { x: 100, y: 50 },
+      ],
+      6,
+    );
+    expect(d).toBe("M 0 0 L 94 0 Q 100 0 100 6 L 100 50");
+  });
+
+  it("radius 0 emits a sharp M…L…L path (rounding disabled)", () => {
+    // Diagnostic toggle: passing radius=0 yields the pre-rounding
+    // path so a regression A/B can compare visual impact.
+    const d = polylineToRoundedPath(
+      [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+        { x: 100, y: 50 },
+      ],
+      0,
+    );
+    expect(d).toBe("M 0 0 L 100 0 L 100 50");
+  });
+
+  it("radius is capped at half the smaller adjacent leg (no over-bite into a stub)", () => {
+    // Short leg: 4 px from (100, 0) to (100, 4). Radius 6 capped to 2.
+    const d = polylineToRoundedPath(
+      [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+        { x: 100, y: 4 },
+      ],
+      6,
+    );
+    // The lead-in along (100,0)→(0,0) direction from (100,0) for r=2:
+    // (98, 0). Lead-out toward (100, 4) for r=2: (100, 2). Then L to
+    // the last point (100, 4).
+    expect(d).toBe("M 0 0 L 98 0 Q 100 0 100 2 L 100 4");
+  });
+
+  it("degenerate corners (collapsed radius) emit sharp L (not NaN)", () => {
+    // 0.5 px leg → radius would be 0.25 → below the 0.5 threshold →
+    // helper falls back to a sharp `L` rather than a sub-pixel curve.
+    const d = polylineToRoundedPath(
+      [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+        { x: 100, y: 0.5 },
+      ],
+      6,
+    );
+    // The bottom leg can host r=0.25; capped to 0.25; below 0.5 floor
+    // → sharp L at the corner. Final string is plain M…L…L.
+    expect(d).toBe("M 0 0 L 100 0 L 100 0.5");
+  });
+
+  it("a four-point U-shape emits two rounded corners", () => {
+    // U-over polyline: source (40, 14), bend-up to (40, -18), straight
+    // to (300, -18), bend-down to (300, 14). Two interior corners
+    // (at index 1 and 2), both rounded.
+    const d = polylineToRoundedPath(
+      [
+        { x: 40, y: 14 },
+        { x: 40, y: -18 },
+        { x: 300, y: -18 },
+        { x: 300, y: 14 },
+      ],
+      6,
+    );
+    // Expect 2x `Q` commands. Just check structure rather than exact
+    // coords (multiple legs).
+    const qCount = (d.match(/Q /g) ?? []).length;
+    expect(qCount).toBe(2);
+    // Path must start at the first vertex and end at the last.
+    expect(d.startsWith("M 40 14")).toBe(true);
+    expect(d.endsWith("L 300 14")).toBe(true);
   });
 });
 

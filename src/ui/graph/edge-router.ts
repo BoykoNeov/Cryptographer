@@ -206,6 +206,15 @@ export type RouterOptions = {
  *   distance to the first interior bend so we never overshoot the bend
  *   on degenerately-short paths.
  *
+ * `cornerRadius` (default 6) — radius (px) for the rounded corners
+ *   applied to every interior bend of a routed polyline via
+ *   `polylineToRoundedPath`. Softens the orthogonal L-shape look so
+ *   routed edges integrate visually with the cubic curves used on
+ *   clear-line edges. Capped at half the smaller adjacent leg so
+ *   adjacent corners don't overlap; with default exit-stub length
+ *   8 px the source/target corner radii cap at 4 px effectively.
+ *   Pass 0 to disable rounding (regression diagnostic).
+ *
  * `laneWidth` (default 6) — perpendicular offset (px) applied per lane
  *   when two or more routed edges would otherwise share the same long
  *   straight segment. Lane index 0 sits on the unmodified corridor;
@@ -221,6 +230,7 @@ export const DEFAULT_ROUTER_OPTIONS = {
   maxBendsPerEdge: 2,
   exitStubLength: 8,
   laneWidth: 6,
+  cornerRadius: 6,
 } as const;
 
 /**
@@ -1070,6 +1080,105 @@ const offsetCorridor = (
     a.x += delta;
     b.x += delta;
   }
+  return out;
+};
+
+/**
+ * Convert a polyline (sequence of vertices) into an SVG path string with
+ * ROUNDED CORNERS at every interior bend. Pure function.
+ *
+ * **Why this exists.** Routed polylines emit sharp 90° L-corners that
+ * visually clash with the rest of the canvas's cubic-curve aesthetic.
+ * The eye reads the corners as "this edge is angular, made of straight
+ * pipes" — pedagogically OK but stylistically jarring next to the
+ * smooth curves on every clear-line edge. Rounding the corners with
+ * a small radius softens the transition and integrates the routed
+ * edges with the curved ones.
+ *
+ * **Geometry.** For each interior vertex `B` between `A` and `C`, we
+ * replace the sharp turn at `B` with a quadratic Bezier (`Q`) whose
+ * control point is `B`. The Bezier starts `r` px BEFORE `B` along
+ * the A-B segment and ends `r` px AFTER `B` along the B-C segment.
+ * The result is a smooth circular-ish arc tangent to both legs at
+ * the start / end of the Bezier. Standard SVG technique used by
+ * Graphviz, mxGraph, and reactflow for orthogonal-with-rounded-
+ * corners renders.
+ *
+ * **Radius cap.** `r` is capped at the smaller of (half of leg A-B,
+ * half of leg B-C, `radius`). This prevents adjacent corners from
+ * overlapping on short legs (e.g., the 8 px exit stubs — a 6 px
+ * radius would gobble the entire stub). Tiny legs effectively skip
+ * the rounding for that corner — they emit a flat `L` instead.
+ *
+ * Returned string starts with `M` and uses `L` / `Q` exclusively.
+ * Suitable for direct use as the `d` attribute of an SVG `<path>`.
+ */
+export const polylineToRoundedPath = (
+  points: readonly { readonly x: number; readonly y: number }[],
+  radius: number,
+): string => {
+  if (points.length < 2) return "";
+  const first = points[0];
+  if (!first) return "";
+  if (points.length === 2 || radius <= 0) {
+    // Fast path: straight line OR rounding disabled. Plain M…L… form.
+    let out = `M ${first.x} ${first.y}`;
+    for (let i = 1; i < points.length; i++) {
+      const p = points[i];
+      if (!p) continue;
+      out += ` L ${p.x} ${p.y}`;
+    }
+    return out;
+  }
+  // Per-corner rounding. We emit:
+  //   M first
+  //   L (first-leg-end-cap)
+  //   Q corner (next-leg-start-cap)
+  //   L (next-leg-end-cap)
+  //   Q corner (next-leg-start-cap)
+  //   ...
+  //   L last
+  let out = `M ${first.x} ${first.y}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    const c = points[i + 1];
+    if (!a || !b || !c) continue;
+    // Vector A→B, length.
+    const abx = b.x - a.x;
+    const aby = b.y - a.y;
+    const abLen = Math.sqrt(abx * abx + aby * aby);
+    // Vector B→C, length.
+    const bcx = c.x - b.x;
+    const bcy = c.y - b.y;
+    const bcLen = Math.sqrt(bcx * bcx + bcy * bcy);
+    if (abLen < 1e-6 || bcLen < 1e-6) {
+      // Degenerate corner — fall back to a sharp L for safety.
+      out += ` L ${b.x} ${b.y}`;
+      continue;
+    }
+    // Effective radius: cap at half-leg-length so adjacent corners
+    // don't fight over the same straight section.
+    const r = Math.min(radius, abLen / 2, bcLen / 2);
+    if (r < 0.5) {
+      // Radius collapsed below visible — emit a sharp corner.
+      out += ` L ${b.x} ${b.y}`;
+      continue;
+    }
+    // Lead-in point: r before B along A→B.
+    const lx = b.x - (abx / abLen) * r;
+    const ly = b.y - (aby / abLen) * r;
+    // Lead-out point: r after B along B→C.
+    const ox = b.x + (bcx / bcLen) * r;
+    const oy = b.y + (bcy / bcLen) * r;
+    // L to the lead-in, then quadratic Bezier with B as the control
+    // point ending at the lead-out. Bezier tangent at start = A→B
+    // direction, tangent at end = B→C direction → smooth transition.
+    out += ` L ${lx} ${ly} Q ${b.x} ${b.y} ${ox} ${oy}`;
+  }
+  // Final straight to the last vertex.
+  const last = points[points.length - 1];
+  if (last) out += ` L ${last.x} ${last.y}`;
   return out;
 };
 
