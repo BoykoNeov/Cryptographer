@@ -60,6 +60,15 @@ import { allColorableSources, assignSourceColors } from "@/core/source-colors";
 import { getDefaultCollapsedContainers, getEffectiveCollapsedSet } from "@/core/spec-defaults";
 import { inferShapesAtAnchors, validateShapes } from "@/core/spec-shapes";
 import type { AuxValue, State, StepNode } from "@/core/types";
+// Obstacle-aware edge router (exploration branch `explore/edge-routing-router`).
+// Pure pass that runs AFTER layout produces `boxes` and BEFORE EdgePath
+// renders. For most edges it emits a `default` sentinel meaning "use today's
+// geometry verbatim" — those edges render byte-identically to pre-router.
+// Only the edges whose straight line crosses a non-incident leaf chip get a
+// routed polyline; EdgePath renders those with an `L`-only polyline path
+// and uses the polyline midpoint helper for the bundle ×N pill anchor.
+// See `src/ui/graph/edge-router.ts` for the full algorithm + tradeoff notes.
+import { type PathSpec, type RouterEdge, routeOneEdge } from "@/ui/graph/edge-router";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { isHash, useAlgorithm } from "../stores/cipher";
 import { useByteFormat } from "../stores/format";
@@ -439,6 +448,19 @@ const labelTextLength = (
 // ─── Layout ────────────────────────────────────────────────────────────────
 
 type Box = { x: number; y: number; w: number; h: number };
+
+/**
+ * Adapter from the in-component `Box` to the router's structurally-typed
+ * `RouterBox` (`src/ui/graph/edge-router.ts`). Both are `{ x, y, w, h }`,
+ * so the call is an identity at the value level — this wrapper exists
+ * only so the per-edge memo inside `EdgePath` can stay tidy without
+ * fighting TypeScript's "is `Box` assignable to `RouterBox`?" inference
+ * on a different module's exported type alias. Lives at module scope so
+ * tree-shaking can drop it if the router import gets feature-flagged
+ * off in the future.
+ */
+const routeOneEdgeFromProps = (edge: RouterEdge, allBoxes: ReadonlyMap<string, Box>): PathSpec =>
+  routeOneEdge(edge, allBoxes);
 
 /**
  * Replica placement info, derived once at the top of `layoutRoot` from the
@@ -4832,6 +4854,42 @@ export const GraphView = () => {
             const canonical = node?.replicaOf ?? edge.from;
             return colors.get(canonical);
           })()}
+          // Obstacle-aware router inputs (exploration branch
+          // `explore/edge-routing-router`). EdgePath uses these to call
+          // `routeOneEdge` after `geom()` and, if the result is a
+          // polyline, overrides the path geometry + bundle-pill anchor
+          // with the routed versions. When the router returns `default`
+          // (the clear-line case, ~most edges) the EdgePath output is
+          // BYTE-IDENTICAL to pre-router — those edges keep their
+          // existing curve and the existing test suite passes unchanged.
+          //
+          // `allBoxes` is the full layout box map (every leaf chip + every
+          // container header) — the router scans it for obstacles
+          // intersecting the straight line. `routerInfo` carries the
+          // spec ids + container ancestry the router needs to exclude
+          // the edge's own source/target/ancestors from the obstacle set.
+          allBoxes={layout().boxes}
+          routerInfo={{
+            fromId: edge.from,
+            toId: visualEdgeTargetId(edge, nodesById(), containersById()),
+            // Container ancestry for source and target. The router uses
+            // these to skip ancestor-container boxes (a `key-expansion`
+            // -> body-leaf edge legitimately crosses the `rounds`
+            // container rectangle and shouldn't be detoured around it).
+            // Endpoint-pill ids and synth replica ids have no entry in
+            // `nodesById()` / `containersById()` — falling back to an
+            // empty array means the router won't exclude any ancestor,
+            // which is correct because pill / synth ids have no honest
+            // ancestor to exclude.
+            containerPathFrom:
+              nodesById().get(edge.from)?.containerPath ??
+              containersById().get(edge.from)?.containerPath ??
+              [],
+            containerPathTo:
+              nodesById().get(edge.to)?.containerPath ??
+              containersById().get(edge.to)?.containerPath ??
+              [],
+          }}
         />
       </Show>
     );
@@ -7081,6 +7139,33 @@ const EdgePath = (props: {
    * reject an explicit `undefined` argument.
    */
   sourceColor: string | undefined;
+  /**
+   * Obstacle-aware edge routing inputs (exploration branch
+   * `explore/edge-routing-router`). All four fields must be supplied
+   * together OR all omitted; when present, EdgePath calls
+   * `routeOneEdge(...)` on the computed (sx, sy, tx, ty) and, if the
+   * result is a polyline, switches the path geometry to that polyline
+   * (using a polyline-aware midpoint for the bundle ×N pill). When the
+   * router returns `{ kind: "default" }` OR when the props are absent,
+   * EdgePath falls through to its original `geom()` regimes — byte-
+   * identical to pre-router for those edges.
+   *
+   * `allBoxes` is the full layout boxes map (every leaf chip plus every
+   * container header) so the router can scan obstacles. Source/target
+   * boxes and ancestor-container boxes are filtered out by the router
+   * via the `fromId`/`toId`/`containerPathFrom`/`containerPathTo`
+   * fields.
+   *
+   * `routerInfo` carries the spec ids + container ancestry that the
+   * router needs to compute the obstacle exclusion set per edge.
+   */
+  allBoxes?: ReadonlyMap<string, Box>;
+  routerInfo?: {
+    readonly fromId: string;
+    readonly toId: string;
+    readonly containerPathFrom: readonly string[];
+    readonly containerPathTo: readonly string[];
+  };
 }) => {
   // The `d` attribute is computed via createMemo so it tracks changes to
   // props.from / props.to. Without the memo, the path string would be
@@ -7130,6 +7215,15 @@ const EdgePath = (props: {
     path: string;
     startDot: { x: number; y: number } | null;
     midpoint: { x: number; y: number };
+    // Source/target attach points used to compute `path`. Exposed so the
+    // router pass (`routedGeom` below) can use the SAME endpoints when
+    // deciding whether to override the path with an obstacle-clearing
+    // polyline. Without this the router would need to duplicate the
+    // entire three-regime geometry — error-prone and a divergence risk.
+    sx: number;
+    sy: number;
+    tx: number;
+    ty: number;
   }>(() => {
     const { from, to } = props;
 
@@ -7206,6 +7300,10 @@ const EdgePath = (props: {
           // shouldn't happen in practice since the layout enforces a
           // gap, but the guard keeps the renderer crash-free).
           midpoint: perpendicularLabelMidpoint(sx, sy, tx, ty),
+          sx,
+          sy,
+          tx,
+          ty,
         };
       }
       // Non-replica vertical-regime edge: keep the curve. Pull
@@ -7224,6 +7322,10 @@ const EdgePath = (props: {
         // sits perpendicular to that point so it's CLEAR of the
         // curve at the midpoint.
         midpoint: perpendicularLabelMidpoint(sx, sy, tx, ty),
+        sx,
+        sy,
+        tx,
+        ty,
       };
     }
 
@@ -7346,6 +7448,10 @@ const EdgePath = (props: {
         // (only feedback edges leave that edge).
         startDot: null,
         midpoint: { x: bezAt(sx, c1x, c2x, tx), y: bezAt(sy, c1y, c2y, ty) },
+        sx,
+        sy,
+        tx,
+        ty,
       };
     }
 
@@ -7406,6 +7512,80 @@ const EdgePath = (props: {
       // regime. For a horizontal arrow the offset becomes a downward
       // nudge so the pill sits beneath the shaft rather than on it.
       midpoint: perpendicularLabelMidpoint(sx, sy, tx, ty),
+      sx,
+      sy,
+      tx,
+      ty,
+    };
+  });
+  /**
+   * Router pass — exploration branch `explore/edge-routing-router`.
+   *
+   * Runs AFTER `geom()` so we get the same source/target attach points
+   * the legacy regimes computed (port-spreading, replica source-x shifts,
+   * feedback overhead-arc detection are all already applied). If the
+   * router returns a polyline, we OVERRIDE `geom()`'s `path` + `midpoint`
+   * with the routed versions; otherwise we pass `geom()` through.
+   *
+   * Memoized so re-runs only fire when (a) `geom()`'s endpoints actually
+   * changed OR (b) the obstacle map changed. Two-layer memo so dragging
+   * an unrelated chip doesn't force every edge to re-route when its own
+   * endpoints didn't move.
+   *
+   * Default-sentinel (or absent router-info) → byte-identical fall-through
+   * to `geom()`. Existing tests over the EdgePath output should keep
+   * passing for those edges. The only new render path is the polyline
+   * branch.
+   */
+  const routedGeom = createMemo<{
+    path: string;
+    startDot: { x: number; y: number } | null;
+    midpoint: { x: number; y: number };
+  }>(() => {
+    const g = geom();
+    // No router inputs supplied → pre-router behavior.
+    if (props.allBoxes === undefined || props.routerInfo === undefined) {
+      return { path: g.path, startDot: g.startDot, midpoint: g.midpoint };
+    }
+    // Feedback-overhead arcs are intentionally routed over the top of
+    // the canvas; we don't want the router to second-guess that
+    // structural decision. Pass them through unchanged.
+    if (props.isFeedback) {
+      return { path: g.path, startDot: g.startDot, midpoint: g.midpoint };
+    }
+    const routerEdge: RouterEdge = {
+      edgeKey: props.edgeKey,
+      fromId: props.routerInfo.fromId,
+      toId: props.routerInfo.toId,
+      containerPathFrom: props.routerInfo.containerPathFrom,
+      containerPathTo: props.routerInfo.containerPathTo,
+      sx: g.sx,
+      sy: g.sy,
+      tx: g.tx,
+      ty: g.ty,
+    };
+    const spec: PathSpec = routeOneEdgeFromProps(routerEdge, props.allBoxes);
+    if (spec.kind === "default") {
+      // Router said "no obstacle — use today's curve verbatim." This is
+      // the byte-identical fall-through: g.path stays unchanged so the
+      // existing tests pass for non-rerouted edges.
+      return { path: g.path, startDot: g.startDot, midpoint: g.midpoint };
+    }
+    // Polyline override. Build the SVG path as `M ... L ... L ...`. The
+    // start-dot stays at `g.startDot` (the source attach point) — only
+    // the shape between start and end changes.
+    const pts = spec.points;
+    if (pts.length < 2) {
+      return { path: g.path, startDot: g.startDot, midpoint: g.midpoint };
+    }
+    const [first, ...rest] = pts;
+    // biome-ignore lint/style/noNonNullAssertion: length check above
+    const head = `M ${first!.x} ${first!.y}`;
+    const tail = rest.map((p) => `L ${p.x} ${p.y}`).join(" ");
+    return {
+      path: `${head} ${tail}`,
+      startDot: g.startDot,
+      midpoint: spec.midpoint,
     };
   });
   // Keyboard handler mirrors the click so biome's a11y lint passes
@@ -7462,7 +7642,7 @@ const EdgePath = (props: {
           "graph-edge-bundle": (props.bundleCount ?? 1) >= 2,
           "graph-edge-source-colored": props.sourceColor !== undefined,
         }}
-        d={geom().path}
+        d={routedGeom().path}
         marker-end={`url(#graph-arrow-${props.kind})`}
         pointer-events="none"
         // Inline style.stroke overrides the kind-based CSS rule for any
@@ -7504,7 +7684,7 @@ const EdgePath = (props: {
           AFTER the visible path so paint order puts it on top of the
           stroke; `pointer-events="none"` so clicks fall through to the
           hit path beneath it. */}
-      <Show when={geom().startDot}>
+      <Show when={routedGeom().startDot}>
         {(dot) => (
           <circle
             class={`graph-edge-start-dot graph-edge-start-dot-${props.kind}`}
@@ -7531,7 +7711,7 @@ const EdgePath = (props: {
       </Show>
       <path
         class="graph-edge-hit"
-        d={geom().path}
+        d={routedGeom().path}
         data-edge-key={props.edgeKey}
         data-bundle-count={(props.bundleCount ?? 1).toString()}
         onClick={(e) => {
@@ -7569,7 +7749,7 @@ const EdgePath = (props: {
           (the `<Show>` guard short-circuits). */}
       <Show when={(props.bundleCount ?? 1) >= 2}>
         {(() => {
-          const mp = geom().midpoint;
+          const mp = routedGeom().midpoint;
           const label = `×${props.bundleCount ?? 1}`;
           // Background rect sized to the label width (rough estimate via
           // char count × per-char width). Centered on the midpoint.
