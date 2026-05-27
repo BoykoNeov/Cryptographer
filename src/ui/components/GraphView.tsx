@@ -68,7 +68,14 @@ import type { AuxValue, State, StepNode } from "@/core/types";
 // routed polyline; EdgePath renders those with an `L`-only polyline path
 // and uses the polyline midpoint helper for the bundle ×N pill anchor.
 // See `src/ui/graph/edge-router.ts` for the full algorithm + tradeoff notes.
-import { type PathSpec, type RouterEdge, routeOneEdge } from "@/ui/graph/edge-router";
+import {
+  DEFAULT_ROUTER_OPTIONS,
+  applyLaneOffset,
+  assignLanes,
+  type PathSpec,
+  type RouterEdge,
+  routeOneEdge,
+} from "@/ui/graph/edge-router";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { isHash, useAlgorithm } from "../stores/cipher";
 import { useByteFormat } from "../stores/format";
@@ -3463,6 +3470,124 @@ export const GraphView = () => {
   );
 
   /**
+   * Lane-assignment memo for the obstacle-aware router (exploration
+   * branch `explore/edge-routing-router`).
+   *
+   * **Why this lives at the parent level.** Each `<EdgePath>` runs its
+   * own `routeOneEdge` call inside a per-edge memo to compute its
+   * routed polyline using the EXACT `sx, sy, tx, ty` from `geom()`
+   * (port-spreading, replica shifts, feedback overhead all already
+   * applied). That gives correct per-edge geometry but knows nothing
+   * about OTHER edges — N edges routing around the same blocking
+   * cluster would all sit on the same long corridor and visually pile
+   * up. Lane assignment is inherently cross-edge: it needs to see all
+   * routed polylines at once to detect overlap and assign distinct
+   * lane indices.
+   *
+   * **Approximate endpoints.** The lane bucketing key is `(orientation,
+   * rounded-axis)` of each polyline's primary corridor. The corridor
+   * axis coordinate is determined by the BLOCKING CLUSTER bounding
+   * rect — not by the exact ±5 px port-spreading offset. So this memo
+   * computes RouterEdges using BOX-CENTER ENDPOINTS (a quick
+   * approximation) just for the routing pass. The resulting lane
+   * indices are passed down as a prop; each EdgePath applies its
+   * lane offset via `applyLaneOffset` AFTER its own (precise) per-
+   * edge `routeOneEdge` returns.
+   *
+   * **Diagnostic hatch.** The `?no-router=1` URL escape skips this
+   * memo entirely (returns an empty map → every EdgePath sees lane 0
+   * → no offset) so the A/B smoke can compare router-on vs router-off
+   * without a second code path.
+   *
+   * **Memoization triggers.** Reruns when `bundledGraph()`,
+   * `layout().boxes`, or the obstacle set (= layout boxes) changes.
+   * Identity-stable across unrelated graph-store mutations (e.g.,
+   * selection changes don't invalidate this).
+   */
+  const routerLaneMap = createMemo<ReadonlyMap<string, number>>(() => {
+    // Diagnostic hatch — match the same URL test EdgePath uses below.
+    if (typeof window !== "undefined" && window.location?.search?.includes("no-router=1")) {
+      return new Map();
+    }
+    const boxes = layout().boxes;
+    const bundles = nonFeedbackBundles();
+    // Build approximate RouterEdges per bundle. Endpoint heuristic:
+    // pick the source/target box-edge that faces the OTHER box (the
+    // shorter of two opposing edges' distance to the other box's
+    // center). Box-center proxy is fine for the lane bucket key.
+    const routerEdges: RouterEdge[] = [];
+    for (const bundle of bundles) {
+      const edge = bundle.representativeEdge;
+      const fromB = boxes.get(edge.from);
+      const targetId = visualEdgeTargetId(edge, nodesById(), containersById());
+      const toB = boxes.get(targetId);
+      if (!fromB || !toB) continue;
+      const bundleCount = bundle.auxKeys.length;
+      const isBundled = bundleCount >= 2;
+      const eKey = isBundled
+        ? `bundle:${bundle.from}|${bundle.to}|${bundle.kind}|${bundle.isFeedback ? "1" : "0"}`
+        : encodeEdgeKey(edge);
+      // Pick the source-edge facing the target. y-axis grows DOWN,
+      // so "downward" means target's center y > source's center y.
+      const fromCx = fromB.x + fromB.w / 2;
+      const fromCy = fromB.y + fromB.h / 2;
+      const toCx = toB.x + toB.w / 2;
+      const toCy = toB.y + toB.h / 2;
+      const dx = toCx - fromCx;
+      const dy = toCy - fromCy;
+      // Choose the dominant axis (matches the geom() regime selection
+      // — vertical regime when |dy| > |dx|, horizontal regime
+      // otherwise — well enough for lane-bucket purposes).
+      let sx: number;
+      let sy: number;
+      let tx: number;
+      let ty: number;
+      if (Math.abs(dy) >= Math.abs(dx)) {
+        // Vertical regime: exit bottom / top, enter top / bottom.
+        sx = fromCx;
+        sy = dy >= 0 ? fromB.y + fromB.h : fromB.y;
+        tx = toCx;
+        ty = dy >= 0 ? toB.y : toB.y + toB.h;
+      } else {
+        // Horizontal regime: exit right / left, enter left / right.
+        sx = dx >= 0 ? fromB.x + fromB.w : fromB.x;
+        sy = fromCy;
+        tx = dx >= 0 ? toB.x : toB.x + toB.w;
+        ty = toCy;
+      }
+      routerEdges.push({
+        edgeKey: eKey,
+        fromId: edge.from,
+        toId: targetId,
+        containerPathFrom:
+          nodesById().get(edge.from)?.containerPath ??
+          containersById().get(edge.from)?.containerPath ??
+          [],
+        containerPathTo:
+          nodesById().get(edge.to)?.containerPath ??
+          containersById().get(edge.to)?.containerPath ??
+          [],
+        sx,
+        sy,
+        tx,
+        ty,
+      });
+    }
+    // Route every edge into a temporary map, then run the lane
+    // assignment pass over the polyline subset. We discard the routed
+    // geometry — only the lane indices are propagated downstream.
+    // routeEdges already does both passes internally, but using it
+    // here would over-allocate (we'd build then discard ~N PathSpecs);
+    // a future tidy could split the lane pass out into a public
+    // helper that takes only the polyline summary it needs.
+    const tempMap = new Map<string, PathSpec>();
+    for (const re of routerEdges) {
+      tempMap.set(re.edgeKey, routeOneEdge(re, boxes));
+    }
+    return assignLanes(tempMap);
+  });
+
+  /**
    * Slice 5 — drop-gutter records for every visible container.
    *
    * Three gutter flavors per container, in a single pass:
@@ -4885,6 +5010,11 @@ export const GraphView = () => {
           // spec ids + container ancestry the router needs to exclude
           // the edge's own source/target/ancestors from the obstacle set.
           allBoxes={layout().boxes}
+          // Lane index for parallel-corridor spreading. The parent-
+          // level `routerLaneMap` memo computes lane indices over all
+          // visible edges at once; we look this edge's index up by its
+          // `eKey`. Missing → lane 0 (no offset).
+          laneIndex={routerLaneMap().get(eKey) ?? 0}
           routerInfo={{
             fromId: edge.from,
             toId: visualEdgeTargetId(edge, nodesById(), containersById()),
@@ -7182,6 +7312,17 @@ const EdgePath = (props: {
     readonly containerPathFrom: readonly string[];
     readonly containerPathTo: readonly string[];
   };
+  /**
+   * Lane index for parallel-corridor spreading. When the router
+   * pre-pass (parent-level `routerLaneMap`) detects N edges all
+   * routing around the same blocking cluster, each edge gets a
+   * distinct lane index 0..N-1; we offset this edge's primary
+   * corridor by `laneIndex * laneWidth` perpendicular so the N
+   * arrows read as parallel rather than smeared into one shaft.
+   * Defaults to 0 (no offset) — every edge in a non-crowded
+   * bucket is lane 0 and renders byte-identically to no-lane.
+   */
+  laneIndex?: number;
 }) => {
   // The `d` attribute is computed via createMemo so it tracks changes to
   // props.from / props.to. Without the memo, the path string would be
@@ -7588,11 +7729,24 @@ const EdgePath = (props: {
       tx: g.tx,
       ty: g.ty,
     };
-    const spec: PathSpec = routeOneEdgeFromProps(routerEdge, props.allBoxes);
-    if (spec.kind === "default") {
+    const rawSpec: PathSpec = routeOneEdgeFromProps(routerEdge, props.allBoxes);
+    if (rawSpec.kind === "default") {
       // Router said "no obstacle — use today's curve verbatim." This is
       // the byte-identical fall-through: g.path stays unchanged so the
       // existing tests pass for non-rerouted edges.
+      return { path: g.path, startDot: g.startDot, midpoint: g.midpoint };
+    }
+    // Apply the parent-assigned lane offset. When `laneIndex` is 0
+    // (the no-overlap case) `applyLaneOffset` is a no-op — pre-lane
+    // polyline geometry is preserved. When > 0, the primary corridor
+    // segment shifts perpendicular by `laneIndex * LANE_WIDTH` so
+    // parallel arrows in the same bucket spread visually.
+    const laneIndex = props.laneIndex ?? 0;
+    // LANE_WIDTH lives in `edge-router`'s DEFAULT_ROUTER_OPTIONS so
+    // future re-tuning lands in one place.
+    const spec = applyLaneOffset(rawSpec, laneIndex, DEFAULT_ROUTER_OPTIONS.laneWidth);
+    if (spec.kind === "default") {
+      // Defensive — applyLaneOffset passes default through unchanged.
       return { path: g.path, startDot: g.startDot, midpoint: g.midpoint };
     }
     // Polyline override. Build the SVG path as `M ... L ... L ...`. The

@@ -961,8 +961,13 @@ const corridorBucketKey = (c: CorridorSegment, axisTolerance = 4): string => {
  *
  * Returns a `Map<edgeKey, laneIndex>`. Edges with no entry get lane 0
  * (no offset).
+ *
+ * Exported so the GraphView render path can compute lane indices at
+ * the top level (where it sees all edges at once) and pass them down
+ * to per-edge components — each EdgePath then applies its assigned
+ * lane offset to its locally-routed polyline via `applyLaneOffset`.
  */
-const assignLanes = (
+export const assignLanes = (
   routes: ReadonlyMap<string, PathSpec>,
 ): ReadonlyMap<string, number> => {
   // 1+2: build buckets.
@@ -1030,11 +1035,11 @@ const assignLanes = (
  * (we don't generate those today — `assignLanes` always returns >= 0).
  *
  * The offset is applied to BOTH endpoints of the primary corridor
- * segment. The neighbor segments at those endpoints become slightly
- * slanted (e.g., the source-side approach to a lane-offset U-over
- * corridor goes UP-AND-RIGHT instead of pure UP). That's the desired
- * visual: the eye reads "this edge goes to lane N" via the slanted
- * approach.
+ * segment. Neighboring segments stay axis-aligned because they share
+ * the corridor endpoints' UNSHIFTED secondary-axis coordinate (e.g.
+ * an H corridor's endpoints are shifted in y, but the V neighbors
+ * to either side share the same x, so they remain vertical, just
+ * longer or shorter by `delta`).
  *
  * For an H corridor we offset perpendicular in the y direction
  * (negative y = up, since y grows downward on the canvas — lanes
@@ -1066,6 +1071,45 @@ const offsetCorridor = (
     b.x += delta;
   }
   return out;
+};
+
+/**
+ * Apply a lane offset to a single PathSpec. Returns a new PathSpec
+ * with the primary corridor shifted by `laneIndex * laneWidth` px
+ * perpendicular. Default-sentinel PathSpecs pass through unchanged
+ * (a "default" edge uses today's curve geometry — no corridor to
+ * offset).
+ *
+ * Exported as the per-edge counterpart to the batch lane assignment.
+ * Callers that do their OWN per-edge `routeOneEdge` call (rather than
+ * the batch `routeEdges`) can still get lane spreading by:
+ *
+ *   1. Calling a top-level `assignLanes(map_of_pre_routed_specs)` to
+ *      get a `Map<edgeKey, laneIndex>`.
+ *   2. Calling this helper per edge with the lane index from step 1.
+ *
+ * That's the path the Solid `GraphView` takes today — per-edge memos
+ * compute the routed PathSpec inline (so the exact source/target
+ * attach-y values from `geom()` flow into the polyline), and a
+ * top-level memo computes the lane map using APPROXIMATE endpoints
+ * (box-edge centers — accurate enough for the corridor-y bucketing
+ * since blocking-cluster bounds are independent of the ±5 px
+ * port-spreading offset). Each EdgePath then applies its lane
+ * offset via this helper.
+ */
+export const applyLaneOffset = (
+  spec: PathSpec,
+  laneIndex: number,
+  laneWidth: number,
+): PathSpec => {
+  if (spec.kind !== "polyline") return spec;
+  if (laneIndex <= 0 || laneWidth <= 0) return spec;
+  const offset = offsetCorridor(spec.points, laneIndex, laneWidth);
+  return {
+    kind: "polyline",
+    points: offset,
+    midpoint: polylineMidpoint(offset),
+  };
 };
 
 /**
