@@ -20,3 +20,8 @@ dist
 test-results/
 playwright-report/
 .playwright/
+
+# Ad-hoc screenshot dumps from coordinator-driven multi-branch UX
+# captures (e.g. visual comparison of layout-constant bumps across
+# main + explore branches). Useful while iterating but not checked in.
+screenshots-gap-bump/
