@@ -84,13 +84,18 @@ describe("GraphView density — canvas size ordering", () => {
     // BASE_STACK_GAP bumped 6 → 12 on 2026-05-19 so the four leaves
     // stacked inside each AES round group get visible breathing room
     // (the pre-bump 6 px made the rows read as one solid block).
-    expect(c.STACK_GAP).toBe(12);
+    // Bumped again 12 → 60 (5×) on 2026-05-27 at user request: "much
+    // more breathing room inside expanded round/group bodies." History:
+    // 6 → 12 → 60.
+    expect(c.STACK_GAP).toBe(60);
     // BASE_FLOW_GAP bumped 16 → 24 on 2026-05-16 for chip-row breathing
     // room (collapsed multi-block iterate UX), then 24 → 36 on
     // 2026-05-19 after the CBC iterate body's 13-chip row read as a
-    // wall at 24 px gaps. FLOW_GAP is used in both root flow + iterate
-    // body flow.
-    expect(c.FLOW_GAP).toBe(36);
+    // wall at 24 px gaps. Bumped again 36 → 72 (2×) on 2026-05-27 at
+    // user request, pairing with the 5× STACK_GAP bump for breathing
+    // room in both axes. FLOW_GAP is used in both root flow + iterate
+    // body flow. History: 16 → 24 → 36 → 72.
+    expect(c.FLOW_GAP).toBe(72);
     expect(c.CONTAINER_PAD).toBe(10);
   });
 

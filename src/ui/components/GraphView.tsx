@@ -192,10 +192,16 @@ const BASE_LEAF_H = 28;
  *  height: a 4-leaf round goes from 130 px (4 × 28 + 3 × 6) to
  *  148 px (4 × 28 + 3 × 12). User-reported on the 2026-05-19 manual
  *  smoke after the FLOW_GAP 24 → 36 bump landed for horizontal flow.
+ *  Bumped again 12 → 60 (2026-05-27, 5×) at user request: "much more
+ *  breathing room inside expanded round/group bodies." A 4-leaf AES
+ *  round group now occupies 4 × 28 + 3 × 60 = 292 px tall, vs 148 px
+ *  before — the inter-row whitespace is now visually dominant, so
+ *  each leaf reads as its own row rather than part of a stripe stack.
+ *  Same applies to SHA-256 expanded message-schedule round members.
  *  STACK_GAP is reused at one site beyond plain group stacking
  *  (the `innerY` advance in `layoutNode`'s group branch); see comments
- *  there if a future bump runs into edge cases. */
-const BASE_STACK_GAP = 12;
+ *  there if a future bump runs into edge cases. History: 6 → 12 → 60. */
+const BASE_STACK_GAP = 60;
 /** Base (1.0×) horizontal gap between siblings flowing inside an iterate body / root.
  *  Bumped from 16 → 24 (2026-05-16) for breathing room on the collapsed-
  *  iterate chip row — multiple chips + aux replicas above were cramping
@@ -206,9 +212,13 @@ const BASE_STACK_GAP = 12;
  *  reading as a wall rather than a clearly-spaced sequence. 50% bump
  *  preserves the original visual intent of "tight enough to feel like
  *  one row" while letting the eye distinguish where one chip ends and
- *  the next begins. Affects both root-level flow AND iterate body flow
- *  (one constant, used both places). */
-const BASE_FLOW_GAP = 36;
+ *  the next begins. Bumped again 36 → 72 (2026-05-27, 2×) at user
+ *  request for more breathing room — pairs with the 5× STACK_GAP bump
+ *  landing in the same change to give expanded bodies room to breathe
+ *  horizontally as well as vertically. Affects both root-level flow
+ *  AND iterate body flow (one constant, used both places — AES round
+ *  chips, SHA-256 message-schedule chips). History: 16 → 24 → 36 → 72. */
+const BASE_FLOW_GAP = 72;
 /** Base (1.0×) padding inside a container (group or iterate) box. */
 const BASE_CONTAINER_PAD = 10;
 /**
