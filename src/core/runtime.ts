@@ -296,6 +296,15 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
       let auxRead: Map<string, AuxValue>;
       let auxReadMissing: string[] | undefined;
       let auxWritten: Map<string, AuxValue>;
+      // Slice 2.9a — port-aware inspector. Populated ONLY on the
+      // pure-port-native dispatch branch (meta === undefined &&
+      // legacy === undefined); lifted-legacy ported frames and legacy
+      // frames keep both undefined so the 2.9b inspector predicate
+      // (`portInputs !== undefined || portOutputs !== undefined`) routes
+      // AES/Speck/Serpent/DES to the existing matrix/bytes renderer.
+      // See TraceFrame's port-fields doc comment for the rationale.
+      let framePortInputs: ReadonlyMap<string, Uint8Array> | undefined;
+      let framePortOutputs: ReadonlyMap<string, Uint8Array> | undefined;
 
       if (portedDispatch && registration.kind === "ported") {
         // ── Ported execution path ─────────────────────────────────────
@@ -482,6 +491,19 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
           aux: portedAuxRead,
         });
 
+        // ─── Slice 2.9a — capture port I/O for the inspector ──────────
+        // Pure port-native steps only (no meta). `inputs` here carries
+        // POST-coercion bytes — Slice 1.12 mutates the map in place at
+        // line ~428 above, which is what we want (matches what the
+        // executor actually saw). Map values are aliased; the runtime
+        // does not mutate Uint8Array buffers after the frame is pushed.
+        // Lifted-legacy frames (meta defined) deliberately leave both
+        // fields undefined — see TraceFrame's port-fields doc comment.
+        if (meta === undefined) {
+          framePortInputs = inputs;
+          framePortOutputs = outputs;
+        }
+
         // ─── Save outputs to scope-local nodeOutputs (Slice 2.6a) ──────
         // Every ported leaf's outputs are recorded so downstream siblings
         // can resolve declared `portInputs` references. Pure port-native
@@ -667,6 +689,8 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
         ...(auxReadMissing !== undefined ? { auxReadMissing } : {}),
         ...(blockIndex !== undefined ? { blockIndex } : {}),
         ...(branchPath.length > 0 ? { branchPath: [...branchPath] } : {}),
+        ...(framePortInputs !== undefined ? { portInputs: framePortInputs } : {}),
+        ...(framePortOutputs !== undefined ? { portOutputs: framePortOutputs } : {}),
       };
       frames.push(frame);
     }

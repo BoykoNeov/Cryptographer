@@ -596,6 +596,35 @@ export type TraceFrame = {
    * frame-construction time. Pin in `tests/frame-preservation-feistel`.
    */
   readonly branchPath?: readonly string[];
+  /**
+   * Port inputs / outputs captured at frame-emit time on the port-native
+   * dispatch path (Slice 2.9a of the universal-port-dataflow plan —
+   * `docs/plans/slice-2-9-port-aware-provenance.md`).
+   *
+   * Present iff the registration was `kind: "ported"` AND `legacy ===
+   * undefined` (i.e. a pure port-native leaf — see runtime.ts line 607
+   * for the same discriminator). Lifted-legacy ported steps (legacy
+   * defined) deliberately leave BOTH fields undefined so 2.9b's
+   * port-aware inspector predicate
+   * `frame.portInputs !== undefined || frame.portOutputs !== undefined`
+   * keeps dispatching AES/Speck/Serpent/DES (today's lifted ciphers)
+   * through the existing matrix/bytes renderer.
+   *
+   * Legacy-path frames (`kind: "legacy"`, or `kind: "ported"` running
+   * with `portedDispatchEnabled: false`) leave both undefined.
+   *
+   * `portInputs` carries POST-coercion bytes (after the Slice 1.12
+   * `__coerce__` morph). This matches what the executor actually saw,
+   * not what the wiring upstream produced. Don't "fix" this to
+   * pre-coercion — the post-coercion bytes are the honest record of the
+   * step's input.
+   *
+   * Map values are not defensively cloned — the runtime owns the
+   * underlying Uint8Array buffers and does not mutate them after the
+   * frame is pushed. Consumers must not mutate.
+   */
+  readonly portInputs?: ReadonlyMap<string, Uint8Array>;
+  readonly portOutputs?: ReadonlyMap<string, Uint8Array>;
 };
 
 export type Trace = {

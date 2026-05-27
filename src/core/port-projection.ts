@@ -501,6 +501,36 @@ const requirePortBytes = (
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Slice 2.9a — frame port-value lookup helper
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Reads a TraceFrame's captured port I/O — the input/output Uint8Array a
+// pure-port-native step saw at frame-emit time. Returns null when the frame
+// is on the legacy path (no port fields populated) OR when the named port
+// is absent on the chosen side. Single boundary so 2.9b's PortFlowView and
+// 2.9d's provenance fns don't each re-implement the optional-chain.
+//
+// Side discriminator is a string literal rather than two separate functions
+// because the caller often picks dynamically (one per row label in the
+// vertical stack renderer).
+
+/**
+ * Look up a port's bytes on a TraceFrame.
+ *
+ * @returns `null` for legacy/lifted-legacy frames (port fields undefined)
+ *          or when the named port doesn't exist on the chosen side.
+ */
+export const framePortBytes = (
+  frame: TraceFrame,
+  portName: string,
+  side: "input" | "output",
+): Uint8Array | null => {
+  const map = side === "input" ? frame.portInputs : frame.portOutputs;
+  if (map === undefined) return null;
+  return map.get(portName) ?? null;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Port-length coercion — Q2 of the universal-port-dataflow plan
 // (Slice 1.12, closes Phase 1)
 // ═══════════════════════════════════════════════════════════════════════════

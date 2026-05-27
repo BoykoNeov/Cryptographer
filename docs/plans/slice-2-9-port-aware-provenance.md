@@ -1,11 +1,28 @@
 # Slice 2.9 — Port-aware inspector + provenance for SHA-256
 
-> **Status: DRAFTED 2026-05-27. Slice 2.9a–e NOT STARTED.** Drafted
+> **Status: DRAFTED 2026-05-27. Slice 2.9a SHIPPED 2026-05-27 PM
+> (+9 tests, +0.12 KB raw bundle). Slices 2.9b–e NOT STARTED.** Drafted
 > after a session that surveyed today's frame shape for port-native
 > SHA-256 leaves, ran an empirical probe, and consulted the advisor
 > twice. Replaces the original three-bullet Slice 2.9 sketch in
 > [`universal-port-phase-2-slices.md`](./universal-port-phase-2-slices.md)
 > with a five-sub-slice arc.
+>
+> **2.9a-shipped notes.** Advisor pre-impl flagged the critical
+> predicate trap: the runtime's `kind === "ported"` branch (line 300)
+> is entered by BOTH pure port-native AND lifted-legacy steps. Gating
+> port-field capture on `kind === "ported"` alone would have populated
+> portInputs/portOutputs for AES SubBytes (lifted-legacy with `legacy`
+> defined), which 2.9b's predicate would then dispatch into
+> PortFlowView. The implementation uses `meta === undefined` as the
+> port-native discriminator (equivalent to `legacy === undefined` at
+> line 607; both fall out of the same "pure port-native = no projection
+> metadata" Slice 1.2 contract). Negative test covers AES SubBytes
+> + key-expansion under flag-on; legacy-path test sweeps every AES
+> frame under flag-off. Frame-parity matrix
+> (`tests/runtime-ported-dispatch-frame-parity.test.ts`)
+> field-iterates rather than shape-iterates, so the new optional fields
+> are invisible to it — parity stays untouched.
 
 ## Context — why the original sketch couldn't ship
 
@@ -82,13 +99,18 @@ changes.
   readonly portInputs?: ReadonlyMap<string, Uint8Array>;
   readonly portOutputs?: ReadonlyMap<string, Uint8Array>;
   ```
-- Runtime (`src/core/runtime.ts`) populates these for port-native
-  dispatch (`portedDispatch && registration.kind === "ported"`). The
-  `inputs` map already exists at frame-emit time (line 419-483); the
-  `outputs` map already exists (line 479-504). Copy both into the frame.
+- Runtime (`src/core/runtime.ts`) populates these for **pure port-native**
+  dispatch (`portedDispatch && registration.kind === "ported" &&
+  meta === undefined`). The `inputs` map already exists at frame-emit
+  time (line 419-483); the `outputs` map already exists (line 479-504).
+  Copy both into the frame.
 - For legacy frames + lifted-legacy frames: leave both fields
-  `undefined`. The existing stateBefore/stateAfter projection handles
-  those.
+  `undefined`. **Critical:** lifted-legacy is ALSO `kind: "ported"`
+  (just with `meta` + `legacy` defined). Gating only on `kind === "ported"`
+  would corrupt AES/Speck/Serpent/DES inspector dispatch in 2.9b.
+  The actual gate is `meta === undefined` (= "no projection metadata"
+  = "pure port-native" per the Slice 1.2 contract), equivalent to
+  `legacy === undefined` at runtime.ts line 607.
 - Helper: `framePortBytes(frame, portName, side: "input" | "output")`
   → `Uint8Array | null`. Lives in `src/core/port-projection.ts` (the
   module that already owns port↔state conversions).
@@ -99,10 +121,12 @@ changes.
     has 5 entries (operand0..4) of 4 bytes each.
   - `frame.portOutputs` has 1 entry (`output`) of 4 bytes.
   - The output bytes equal the manual modular-add of the 5 inputs.
-- Existing 2347-test suite still green.
-- Frame parity matrix (Slice 1.11) untouched — legacy + lifted frames
-  carry no port fields.
-- No bundle size growth at the UI layer (no UI changes).
+- Existing 2412-test suite still green (post-impl: **2421**, +9).
+- Frame parity matrix (Slice 1.11) untouched — `expectFramesEqual`
+  field-iterates rather than shape-iterates, so the new optional
+  fields are invisible to it.
+- No bundle size growth at the UI layer (no UI changes). Measured
+  post-impl: 689.53 → 689.65 KB raw / 202.48 → 202.49 KB gzipped.
 
 **Sequencing note:** must land before 2.9b. Pure runtime + types
 change; no UI consumer wires up yet.
