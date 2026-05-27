@@ -4732,6 +4732,34 @@ export const GraphView = () => {
       const cap = consts().LEAF_H / 2 - 4;
       return consumerPortOffset(edge, portAssignment(), portGap, cap);
     });
+    // Curve-altitude staggering slot (S2-next of sha-256-density-polish).
+    // Reads the SAME slot index as the endpoint port-spreading offsets
+    // above, so each edge's altitude lines up with its endpoint slot —
+    // slot 0 (top-most endpoint) gets the flattest curve, slot N-1
+    // (bottom-most) the highest bow. Adjacent siblings differ by exactly
+    // PULL_STAGGER_STEP × basePull, producing parallel-shifted curves
+    // visible in the SHA-256 fan-IN corridor that previously stacked
+    // on one altitude.
+    //
+    // Scope mirrors `sourceYOffset` above: port-flow edges only. The
+    // 2026-05-26 diagnostic recorded in `sourceYOffset`'s comment
+    // (lines 4705–4728) showed that side-aware bucketing puts AES-CBC's
+    // legacy state edge in the same bucket as an aux edge — applying
+    // altitude staggering there would tilt the state arrow's curve
+    // off-axis without the user's consent. Restricting to port-flow
+    // keeps the SHA-256-shape case in scope and every legacy cipher
+    // (AES, Speck, Serpent, DES) byte-identical. Returns undefined
+    // (not 0) for excluded edges so `EdgePath`'s `pullMultiplier`
+    // short-circuits to 1 via the `slot === undefined` guard — leaving
+    // no per-edge multiplicative noise even at multiplier ≈ 1.
+    const pullSlot = createMemo(() => {
+      if (edge.kind !== "state" || edge.auxKey !== PORT_FLOW_AUX_KEY) return undefined;
+      return portAssignment().slotOf.get(edge);
+    });
+    const pullSlotTotal = createMemo(() => {
+      if (edge.kind !== "state" || edge.auxKey !== PORT_FLOW_AUX_KEY) return undefined;
+      return portAssignment().localCountOf.get(edge);
+    });
     // Straight-line + offset-start-point + start-dot (2026-05-16,
     // replacement for the curved-edge prototype): row-k replica edges
     // (k ≥ 1) get a horizontal shift to their SOURCE x so the arrow
@@ -4808,6 +4836,8 @@ export const GraphView = () => {
           targetYOffset={targetYOffset()}
           sourceXOffset={sourceXOffset()}
           sourceYOffset={sourceYOffset()}
+          pullSlot={pullSlot()}
+          pullSlotTotal={pullSlotTotal()}
           isReplicaEdge={isReplicaEdgeMemo()}
           dimmed={dimmedMemo()}
           bundleCount={bundleCount}
@@ -6905,6 +6935,45 @@ const perpendicularLabelMidpoint = (
   return { x: mx + px * LABEL_PERP_OFFSET, y: my + py * LABEL_PERP_OFFSET };
 };
 
+/**
+ * Curve-altitude staggering step (S2-next of `sha-256-density-polish.md`,
+ * the queued sibling of S2(m) focus-dim). When N sibling edges share the
+ * same per-consumer port-spread bucket — the SHA-256 `final.assemble`
+ * fan-IN being the canonical case — they would today all bow at the
+ * same curve-pull magnitude and overlap as a parallel-curve stack inside
+ * a shared corridor (port-spreading already separates them at the
+ * endpoints, but the *middle* of each curve still piles up). This
+ * constant introduces a per-slot multiplier centred on 1.0 so each
+ * slot's pull is `basePull × (1 + STEP × (slot − (total − 1) / 2))`.
+ *
+ * Slot 0 of an 8-edge bucket: multiplier = 1 + 0.18 × −3.5 = 0.37 →
+ * flat-ish curve. Slot 7: multiplier = 1.63 → big bow. Adjacent slots
+ * differ by exactly 0.18 × basePull, which at SHA-256's horizontal-
+ * regime basePull ≈ 100 px gives ~18 px of altitude separation between
+ * adjacent siblings — clearly distinguishable curves without going so
+ * extreme that the steepest bow eats half the canvas.
+ *
+ * **Why 0.18 specifically.** With 8 slots the multiplier range is
+ * 0.37×..1.63×, comfortably symmetric around 1.0 and small enough that
+ * the lowest-slot curve still reads as "curved" (multiplier 0.37 ×
+ * basePull 20 = 7.4 px, above the visual flat threshold for our 1.5–2 px
+ * stroke). Smaller STEP values produce indistinct stacks; larger values
+ * make the slot-0 curve nearly straight and the slot-N-1 curve loop
+ * dramatically — visually noisy. 0.18 is the sweet spot from the
+ * advisor's "altitude staggering" pitch, picked to match S2(k)'s
+ * `replicaSourceXOffset` magnitude convention (small, symmetric, visible).
+ *
+ * Applied multiplicatively at the two cubic-Bezier regimes (vertical
+ * and horizontal) inside `EdgePath`'s `geom()` memo. **Skipped** for the
+ * feedback-overhead regime (its `headroomPull` cap math is geometry-
+ * specific and doesn't tolerate slot-keyed scaling) and for replica
+ * edges (straight L-lines with start-dot affordance — no pull to
+ * stagger). Scoped to port-flow edges only at the call site (mirrors
+ * `sourceYOffset`'s predicate) so legacy aux-keyed ciphers stay
+ * byte-identical.
+ */
+const PULL_STAGGER_STEP = 0.18;
+
 const EdgePath = (props: {
   from: Box;
   to: Box;
@@ -7081,6 +7150,43 @@ const EdgePath = (props: {
    * reject an explicit `undefined` argument.
    */
   sourceColor: string | undefined;
+  /**
+   * Curve-altitude staggering slot — this edge's index inside its
+   * per-consumer port-spread bucket. Sibling of `targetYOffset` /
+   * `sourceYOffset` (those spread the *endpoints*; this spreads the
+   * curve *altitude*). Undefined for single-incoming consumers, for
+   * non-port-flow edges, and for edges outside any multi-edge bucket —
+   * in all those cases `geom()` short-circuits the multiplier to 1.0
+   * and the path is byte-identical to pre-slice.
+   *
+   * Read together with `pullSlotTotal` to compute a centred multiplier
+   * `1 + PULL_STAGGER_STEP × (slot − (total − 1) / 2)` applied to the
+   * cubic Bezier pull magnitude in the vertical and horizontal regimes.
+   * See `PULL_STAGGER_STEP`'s doc-block for the picked-step rationale.
+   *
+   * Skipped in the feedback-overhead regime (its `headroomPull` cap
+   * math is geometry-specific) and the replica vertical branch
+   * (straight L-lines, no pull to stagger). Source from the same
+   * `ConsumerPortAssignment.slotOf` map that `consumerPortOffset` reads
+   * — so endpoint spread and altitude spread share one slot index per
+   * edge, ensuring slot 0's flatter-curve start lands at slot 0's
+   * lowest endpoint, slot N-1's higher-bow start at slot N-1's
+   * highest endpoint. The pedagogy is "slot index = position in the
+   * fan-IN row, top-to-bottom" — eye reads each curve as the parallel-
+   * shifted neighbour of the one above and below.
+   */
+  pullSlot?: number | undefined;
+  /**
+   * Total edge count in this edge's per-consumer port-spread bucket
+   * (`ConsumerPortAssignment.localCountOf.get(edge)`). Used together
+   * with `pullSlot` to centre the multiplier around 1.0 — without
+   * `total` the slot index alone can't say "where is the middle." For
+   * `total === 1` the multiplier is 1 (degenerate single-edge bucket;
+   * `buildConsumerPortAssignment` actually skips such buckets so this
+   * case shouldn't fire, but the defensive guard keeps the renderer
+   * crash-free if the call site changes).
+   */
+  pullSlotTotal?: number | undefined;
 }) => {
   // The `d` attribute is computed via createMemo so it tracks changes to
   // props.from / props.to. Without the memo, the path string would be
@@ -7132,6 +7238,28 @@ const EdgePath = (props: {
     midpoint: { x: number; y: number };
   }>(() => {
     const { from, to } = props;
+
+    // Curve-altitude staggering multiplier. Centred on 1.0 so the
+    // middle slot keeps today's pull, slots below the middle get a
+    // smaller pull (flatter curve), slots above get a larger pull
+    // (bigger bow). Undefined slot / total or single-edge bucket →
+    // multiplier 1.0 → byte-identical pre-slice behaviour. Read once
+    // at the top of the memo since both surviving regimes (vertical
+    // non-replica and horizontal) consume it identically; the
+    // feedback-overhead and replica branches deliberately ignore it
+    // (see their inline comments).
+    const pullMultiplier = (() => {
+      const slot = props.pullSlot;
+      const total = props.pullSlotTotal;
+      if (slot === undefined || total === undefined || total <= 1) return 1;
+      // Centred slot index: e.g. for total=8, slots 0..7 produce centred
+      // values −3.5, −2.5, ..., +3.5; multipliers span 0.37×..1.63× at
+      // STEP=0.18. For total=2 (the common 2-edge bucket), slots 0/1
+      // produce −0.5/+0.5; multipliers 0.91×/1.09× — a barely-visible
+      // ±9 % nudge that still resolves the parallel-curve overlap on
+      // 2-edge fan-INs without dramatic asymmetry.
+      return 1 + PULL_STAGGER_STEP * (slot - (total - 1) / 2);
+    })();
 
     // Axis overlap detection. Strict > rather than >= so two boxes that
     // merely touch at one edge (e.g., adjacent siblings in a flow with
@@ -7210,9 +7338,17 @@ const EdgePath = (props: {
       }
       // Non-replica vertical-regime edge: keep the curve. Pull
       // magnitude proportional to the post-inset span; degenerates
-      // to a straight line for very short edges.
+      // to a straight line for very short edges. Multiplied by
+      // `pullMultiplier` for curve-altitude staggering — sibling
+      // edges in the same per-consumer bucket bow at distinct
+      // altitudes instead of stacking. Default multiplier is 1.0
+      // (single-edge bucket / non-port-flow), so this is
+      // byte-identical to pre-slice for those edges. The 20 px
+      // cap is multiplied AFTER the min, so slots above the
+      // centre can exceed 20 px — that's the intent (we want
+      // the higher slots to bow more, not be capped).
       const span = Math.abs(ty - sy);
-      const pull = Math.min(20, span * 0.5);
+      const pull = Math.min(20, span * 0.5) * pullMultiplier;
       const c1y = downward ? sy + pull : sy - pull;
       const c2y = downward ? ty - pull : ty + pull;
       return {
@@ -7392,7 +7528,15 @@ const EdgePath = (props: {
     const yOffsetCap = to.h / 2 - 4;
     const clampedYOffset = Math.max(-yOffsetCap, Math.min(yOffsetCap, rawYOffset));
     const ty = toCy + clampedYOffset;
-    const pull = Math.max(20, Math.abs(tx - sx) / 2);
+    // Pull magnitude with curve-altitude staggering applied. For the
+    // SHA-256 `final.assemble` 8-fan-IN case (the motivating fixture),
+    // basePull ≈ 100 px (half the natural |tx − sx|), multipliers span
+    // 0.37×..1.63× → per-edge pulls span ~37..163 px. Sibling curves
+    // bow at clearly distinct altitudes and the parallel-curve overlap
+    // in the corridor between the s_i row and assemble's left edge
+    // dissolves. Default multiplier 1.0 → single-edge buckets and
+    // legacy-aux ciphers render byte-identically.
+    const pull = Math.max(20, Math.abs(tx - sx) / 2) * pullMultiplier;
     const c1x = rightward ? sx + pull : sx - pull;
     const c2x = rightward ? tx - pull : tx + pull;
     return {
