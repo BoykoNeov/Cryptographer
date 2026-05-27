@@ -279,6 +279,58 @@ describe("edge-router — polyline midpoint", () => {
   });
 });
 
+describe("edge-router — perf sanity", () => {
+  it("handles a SHA-256-scale fixture (~80 boxes, ~200 edges) in well under 200ms", () => {
+    // Synthetic fixture sized like the post-expansion SHA-256 graph the
+    // router will see in production: 80 leaf boxes laid out in a 10x8
+    // grid, 200 randomized edges between them. Pinning the wall-clock
+    // budget here protects criterion 5 (frame budget stays under the
+    // project's ~200 ms re-run target). On the dev machine this
+    // typically runs in single-digit milliseconds.
+    const fixtureBoxes = new Map<string, RouterBox>();
+    for (let row = 0; row < 8; row++) {
+      for (let col = 0; col < 10; col++) {
+        fixtureBoxes.set(`leaf-${row}-${col}`, {
+          x: col * 50,
+          y: row * 40,
+          w: 40,
+          h: 28,
+        });
+      }
+    }
+    // Generate 200 edges with deterministic source/target pairs.
+    const edges: RouterEdge[] = [];
+    for (let i = 0; i < 200; i++) {
+      const r1 = i % 8;
+      const c1 = (i * 7) % 10;
+      const r2 = (i + 3) % 8;
+      const c2 = (i * 11) % 10;
+      if (r1 === r2 && c1 === c2) continue;
+      edges.push({
+        edgeKey: `e-${i}`,
+        fromId: `leaf-${r1}-${c1}`,
+        toId: `leaf-${r2}-${c2}`,
+        containerPathFrom: [],
+        containerPathTo: [],
+        sx: c1 * 50 + 40,
+        sy: r1 * 40 + 14,
+        tx: c2 * 50,
+        ty: r2 * 40 + 14,
+      });
+    }
+    const t0 = performance.now();
+    const result = routeEdges(edges, fixtureBoxes);
+    const elapsed = performance.now() - t0;
+    expect(result.size).toBeGreaterThan(0);
+    // Hard ceiling — even a 10x slowdown stays well within 200 ms.
+    expect(elapsed).toBeLessThan(200);
+    // eslint-disable-next-line no-console
+    console.log(
+      `routeEdges(${edges.length} edges, ${fixtureBoxes.size} boxes) = ${elapsed.toFixed(2)} ms`,
+    );
+  });
+});
+
 describe("edge-router — batch routeEdges API", () => {
   it("returns a map keyed by edgeKey, with one entry per input edge", () => {
     const allBoxes = boxes([
