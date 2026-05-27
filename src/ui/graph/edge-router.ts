@@ -176,16 +176,153 @@ export type RouterOptions = {
   readonly obstacleMargin?: number;
   readonly bendClearance?: number;
   readonly maxBendsPerEdge?: number;
+  /**
+   * Length (px) of the exit-direction stub at each polyline endpoint.
+   * See `DEFAULT_ROUTER_OPTIONS.exitStubLength` for the rationale.
+   * Pass 0 to disable stubs entirely (regression toggle for A/B tests).
+   */
+  readonly exitStubLength?: number;
+  /**
+   * Perpendicular offset (px) per lane in the lane-spreading pass.
+   * See `DEFAULT_ROUTER_OPTIONS.laneWidth`. Pass 0 to disable lane
+   * spreading entirely (regression toggle for A/B tests).
+   */
+  readonly laneWidth?: number;
 };
 
 /**
  * Default routing knobs. Exported so tests can reference them.
+ *
+ * `exitStubLength` (default 8) — the distance the polyline travels in
+ *   the source's exit-direction (or the target's entry-direction) BEFORE
+ *   bending toward the next interior vertex. Without this, a routed
+ *   polyline whose first interior bend is perpendicular to the source's
+ *   exit direction begins with a 90° turn flush against the box's edge.
+ *   The eye then can't tell which side of the box the arrow left from —
+ *   the corner reads as "this arrow originated at the chip's corner."
+ *   8 px gives the arrow shaft a brief straight prelude in its natural
+ *   exit direction so the corner is read as "leaves the bottom edge
+ *   and then turns right" rather than "ambiguous." Capped at half the
+ *   distance to the first interior bend so we never overshoot the bend
+ *   on degenerately-short paths.
+ *
+ * `laneWidth` (default 6) — perpendicular offset (px) applied per lane
+ *   when two or more routed edges would otherwise share the same long
+ *   straight segment. Lane index 0 sits on the unmodified corridor;
+ *   lane indices 1, 2, ... each add another `laneWidth` of offset to
+ *   the LEFT of the corridor's travel direction. 6 px matches roughly
+ *   one stroke-width plus a hairline gap so adjacent shafts read as
+ *   "parallel arrows" rather than "smeared single arrow." Tuned for the
+ *   1.5 px aux-edge stroke; finer strokes would warrant a smaller value.
  */
 export const DEFAULT_ROUTER_OPTIONS = {
   obstacleMargin: 6,
   bendClearance: 12,
   maxBendsPerEdge: 2,
+  exitStubLength: 8,
+  laneWidth: 6,
 } as const;
+
+/**
+ * Cardinal direction enum used by exit-stub geometry. Encodes which
+ * side of a source/target box an attach point sits on. `none` means
+ * the heuristic couldn't decide (e.g., the box itself is missing from
+ * the obstacle map, or the attach point is on a corner equally close
+ * to two edges); the caller treats `none` as "skip the stub."
+ */
+type CardinalDir = "left" | "right" | "up" | "down" | "none";
+
+/**
+ * Translate a cardinal direction into a unit (dx, dy) vector. y axis
+ * grows DOWNWARD on the canvas — so `down` is `(0, +1)`.
+ */
+const dirVec = (d: CardinalDir): { readonly dx: number; readonly dy: number } => {
+  switch (d) {
+    case "left":
+      return { dx: -1, dy: 0 };
+    case "right":
+      return { dx: 1, dy: 0 };
+    case "up":
+      return { dx: 0, dy: -1 };
+    case "down":
+      return { dx: 0, dy: 1 };
+    case "none":
+      return { dx: 0, dy: 0 };
+  }
+};
+
+/**
+ * Decide which edge of `box` the attach point `(ax, ay)` sits on (or
+ * closest to). Returns the cardinal direction the path should depart
+ * the box in — i.e., AWAY from the closest edge. If the box is
+ * undefined (caller couldn't resolve fromId/toId in the box map), or
+ * the point sits clearly inside the box's interior (which shouldn't
+ * happen for legitimate attach points but defensively might), returns
+ * `none`.
+ *
+ * Why "AWAY from": an attach point on the right edge of the source
+ * box (`ax === box.x + box.w`) means the path is LEAVING the box
+ * rightward, so the exit direction is `right`. Same logic mirrored
+ * for target-entry: the path enters the target's left edge so its
+ * entry direction approaches from the right — for the stub we want
+ * the path to travel `right` IN before the bend, i.e., still `right`.
+ * Caller flips for target-side when needed (it doesn't — the entry
+ * stub uses the same direction the path is travelling, which is the
+ * negation of the box-departure direction; see `computeEntryDir`).
+ */
+const computeExitDir = (
+  box: RouterBox | undefined,
+  ax: number,
+  ay: number,
+  tolerance = 0.5,
+): CardinalDir => {
+  if (box === undefined) return "none";
+  // Distance from the attach point to each of the box's four edges.
+  // Smallest distance wins — that's the edge the point sits on.
+  const dLeft = Math.abs(ax - box.x);
+  const dRight = Math.abs(ax - (box.x + box.w));
+  const dTop = Math.abs(ay - box.y);
+  const dBottom = Math.abs(ay - (box.y + box.h));
+  const dMin = Math.min(dLeft, dRight, dTop, dBottom);
+  // Tolerance: attach points are usually exact-on-edge but ARROW_INSET
+  // can pull them a few px inside, so allow a small slop. If the
+  // smallest distance is > tolerance the point isn't really on any
+  // edge and we abstain.
+  if (dMin > Math.max(tolerance, Math.min(box.w, box.h) / 2)) return "none";
+  if (dMin === dLeft) return "left";
+  if (dMin === dRight) return "right";
+  if (dMin === dTop) return "up";
+  return "down";
+};
+
+/**
+ * Entry direction for the target box — the direction the path is
+ * TRAVELLING as it approaches the target's edge. An attach point on
+ * the target's LEFT edge means the path arrives rightward, so the
+ * approach direction is `right`. Symmetric to `computeExitDir` with
+ * the cardinal flipped (departure-from-left = `left`; approach-to-left
+ * = `right`).
+ */
+const computeEntryDir = (
+  box: RouterBox | undefined,
+  ax: number,
+  ay: number,
+  tolerance = 0.5,
+): CardinalDir => {
+  const depart = computeExitDir(box, ax, ay, tolerance);
+  switch (depart) {
+    case "left":
+      return "right";
+    case "right":
+      return "left";
+    case "up":
+      return "down";
+    case "down":
+      return "up";
+    case "none":
+      return "none";
+  }
+};
 
 // ─── Internal geometric primitives ──────────────────────────────────────
 
@@ -361,6 +498,115 @@ export const polylineMidpoint = (
   const px = -dy / len;
   const py = dx / len;
   return { x: mx + px * perpOffset, y: my + py * perpOffset };
+};
+
+/**
+ * Apply exit-direction stubs to a routed polyline. Returns a new array
+ * whose first segment travels in the source's exit direction for at
+ * least `stubLen` px, and whose LAST segment travels in the target's
+ * entry direction for at least `stubLen` px.
+ *
+ * **Why these matter visually:** without the stubs the first interior
+ * bend can sit flush against the source box's edge. The eye then can't
+ * tell which side of the box the arrow left from — the corner reads
+ * as "this arrow originated at the chip's corner." With a stub, the
+ * shaft has a short prelude in its natural exit direction before
+ * bending, so the user reads "leaves the bottom edge, then turns
+ * right" rather than "ambiguous."
+ *
+ * **Geometry strategy** — *shift the corner*, don't *prepend a vertex*.
+ * If the first segment is perpendicular to the exit direction, we
+ * push the first interior bend `stubLen` px in the exit direction, so
+ * the new polyline starts with a short stub IN the exit direction
+ * followed by the original (now shorter) perpendicular leg. Same
+ * mirrored at the target.
+ *
+ * Example: U-over with source on right-edge.
+ *   - Before: `(sx,sy) → (sx, overY) → (tx, overY) → (tx, ty)`
+ *     (segment 1 goes UP from a RIGHT-exiting box → perpendicular,
+ *     wants a stub)
+ *   - After source stub: `(sx,sy) → (sx+stub, sy) → (sx+stub, overY) → ...`
+ *     (segment 1 now goes RIGHT — aligned with exit; corridor shifted)
+ *
+ * Skipped on either end when:
+ *   - The first/last segment is ALREADY aligned with the exit/entry
+ *     direction (the segment IS the stub).
+ *   - The exit/entry direction is `none` (heuristic abstained).
+ *   - The next-neighbour segment is too short to absorb the corner-shift
+ *     without going negative. Conservatively skip when the geometry
+ *     would self-cross.
+ *
+ * Why shifting the corner vs. extending the endpoint: SVG arrow markers
+ * orient by the LAST segment's direction. Extending the last segment
+ * would silently rotate the arrowhead. By inserting a NEW final segment
+ * in the entry direction (and shortening the prior perpendicular leg),
+ * the final-segment direction is now exactly the entry direction —
+ * which is what we want the arrowhead to point along anyway.
+ */
+const applyExitStubs = (
+  points: readonly { readonly x: number; readonly y: number }[],
+  exitDir: CardinalDir,
+  entryDir: CardinalDir,
+  stubLen: number,
+): readonly { readonly x: number; readonly y: number }[] => {
+  if (points.length < 2 || stubLen <= 0) return points;
+  const out: { x: number; y: number }[] = points.map((p) => ({ x: p.x, y: p.y }));
+
+  // ─── Source-side stub ────────────────────────────────────────────
+  // Push the first interior vertex `stubLen` px in the exit direction,
+  // then insert a new vertex at the post-stub source position. This
+  // turns the first segment into a stub aligned with the exit direction.
+  if (exitDir !== "none" && out.length >= 2) {
+    const src = out[0];
+    const next = out[1];
+    if (src !== undefined && next !== undefined) {
+      const segDx = next.x - src.x;
+      const segDy = next.y - src.y;
+      const segLen = Math.sqrt(segDx * segDx + segDy * segDy);
+      const v = dirVec(exitDir);
+      const aligned = segLen > 1e-6 && (segDx * v.dx + segDy * v.dy) / segLen > 1 - 1e-3;
+      if (!aligned && segLen > 1e-6) {
+        // Shift the FIRST INTERIOR VERTEX by stub * exitDir. The vertex
+        // is moved (not duplicated) so the corridor's "stem" coordinate
+        // changes — e.g., the vertical leg of a U-over moves stubLen
+        // px to the right when exitDir is "right". Then insert a NEW
+        // source-side vertex at the post-stub source position so the
+        // first segment travels in the exit direction.
+        const sLen = stubLen;
+        next.x += v.dx * sLen;
+        next.y += v.dy * sLen;
+        out.splice(1, 0, { x: src.x + v.dx * sLen, y: src.y + v.dy * sLen });
+      }
+    }
+  }
+
+  // ─── Target-side stub ────────────────────────────────────────────
+  // Push the LAST interior vertex stubLen back in the entry direction
+  // (i.e., AWAY from the target along the negative entry direction)
+  // and insert a new target-side vertex so the final segment travels
+  // in the entry direction.
+  if (entryDir !== "none" && out.length >= 2) {
+    const lastIdx = out.length - 1;
+    const tgt = out[lastIdx];
+    const prev = out[lastIdx - 1];
+    if (tgt !== undefined && prev !== undefined) {
+      const segDx = tgt.x - prev.x;
+      const segDy = tgt.y - prev.y;
+      const segLen = Math.sqrt(segDx * segDx + segDy * segDy);
+      const v = dirVec(entryDir);
+      const aligned = segLen > 1e-6 && (segDx * v.dx + segDy * v.dy) / segLen > 1 - 1e-3;
+      if (!aligned && segLen > 1e-6) {
+        const sLen = stubLen;
+        // Move `prev` against the entry direction by `sLen` — this
+        // shortens the prior perpendicular leg by sLen and shifts its
+        // endpoint to where the new entry-aligned stub will start.
+        prev.x -= v.dx * sLen;
+        prev.y -= v.dy * sLen;
+        out.splice(lastIdx, 0, { x: tgt.x - v.dx * sLen, y: tgt.y - v.dy * sLen });
+      }
+    }
+  }
+  return out;
 };
 
 // ─── Detour-candidate generation ─────────────────────────────────────────
@@ -541,6 +787,7 @@ export const routeOneEdge = (
   const margin = options.obstacleMargin ?? DEFAULT_ROUTER_OPTIONS.obstacleMargin;
   const clearance = options.bendClearance ?? DEFAULT_ROUTER_OPTIONS.bendClearance;
   const maxBends = options.maxBendsPerEdge ?? DEFAULT_ROUTER_OPTIONS.maxBendsPerEdge;
+  const stubLen = options.exitStubLength ?? DEFAULT_ROUTER_OPTIONS.exitStubLength;
 
   const obstacles = buildObstacleSet(edge, allBoxes, margin);
 
@@ -583,10 +830,30 @@ export const routeOneEdge = (
     return { kind: "default" };
   }
 
+  // Step 4: apply exit-direction stubs so the first segment travels
+  // briefly in the source's natural exit direction (and symmetrically
+  // for the target). This breaks the visual ambiguity at corners — the
+  // user sees "leaves the box rightward, then bends down" instead of
+  // "leaves the box at an unidentifiable corner." Stubs are skipped
+  // when the first/last segment is already aligned with that direction
+  // (no visual change to add); see `applyExitStubs`.
+  //
+  // Re-validate the stubbed polyline against obstacles. An 8 px stub
+  // pointing AWAY from a box rarely re-introduces an obstacle, but a
+  // pathologically tight obstacle right next to the source box could
+  // catch it — fall back to the un-stubbed polyline rather than ship
+  // a stubbed shape that crosses an obstacle.
+  const sourceBox = allBoxes.get(edge.fromId);
+  const targetBox = allBoxes.get(edge.toId);
+  const exitDir = computeExitDir(sourceBox, edge.sx, edge.sy);
+  const entryDir = computeEntryDir(targetBox, edge.tx, edge.ty);
+  const stubbed = applyExitStubs(best, exitDir, entryDir, stubLen);
+  const finalPoints = polylineClear(stubbed, obstacles) ? stubbed : best;
+
   return {
     kind: "polyline",
-    points: best,
-    midpoint: polylineMidpoint(best),
+    points: finalPoints,
+    midpoint: polylineMidpoint(finalPoints),
   };
 };
 
