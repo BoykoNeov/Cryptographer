@@ -81,16 +81,19 @@ describe("GraphView density — canvas size ordering", () => {
     // truncation.test.tsx need re-baselining first.
     expect(c.LEAF_W).toBe(132);
     expect(c.LEAF_H).toBe(28);
-    // BASE_STACK_GAP bumped 6 → 12 on 2026-05-19 so the four leaves
-    // stacked inside each AES round group get visible breathing room
-    // (the pre-bump 6 px made the rows read as one solid block).
-    expect(c.STACK_GAP).toBe(12);
-    // BASE_FLOW_GAP bumped 16 → 24 on 2026-05-16 for chip-row breathing
-    // room (collapsed multi-block iterate UX), then 24 → 36 on
-    // 2026-05-19 after the CBC iterate body's 13-chip row read as a
-    // wall at 24 px gaps. FLOW_GAP is used in both root flow + iterate
-    // body flow.
-    expect(c.FLOW_GAP).toBe(36);
+    // BASE_STACK_GAP history: 6 → 12 (2026-05-19, 2×) → 60 (2026-05-27, 5×).
+    // 6 → 12 gave the four AES-round-group leaves visible breathing
+    // room (pre-bump the rows read as one solid block). 12 → 60 was
+    // a user request for "much more breathing room" once expanded
+    // SHA-256 message-schedule rounds shared canvases with AES rounds.
+    expect(c.STACK_GAP).toBe(60);
+    // BASE_FLOW_GAP history: 16 → 24 (2026-05-16) → 36 (2026-05-19) →
+    // 72 (2026-05-27, 2×). 16 → 24 added breathing room to the
+    // collapsed multi-block iterate chip row; 24 → 36 fixed CBC's
+    // 13-chip row reading as a wall; 36 → 72 doubled horizontal gaps
+    // across root + iterate bodies per user request. FLOW_GAP is used
+    // in both root flow + iterate body flow.
+    expect(c.FLOW_GAP).toBe(72);
     expect(c.CONTAINER_PAD).toBe(10);
   });
 
