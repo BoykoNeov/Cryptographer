@@ -13,3 +13,7 @@ dist
 test-results/
 playwright-report/
 .playwright/
+# Local screenshot scratchpad emitted by e2e specs that call page.screenshot()
+# with a path under e2e/.artifacts/ (e.g. the explore/edge-routing-router
+# router smoke). Pixel-by-pixel images on disk shouldn't land in git.
+e2e/.artifacts/

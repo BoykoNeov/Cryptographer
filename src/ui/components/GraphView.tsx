@@ -7543,6 +7543,14 @@ const EdgePath = (props: {
     midpoint: { x: number; y: number };
   }>(() => {
     const g = geom();
+    // Diagnostic escape hatch: `?no-router=1` in the URL forces the
+    // router pass off so the user can A/B the visual / metric impact
+    // (e2e/edge-router-smoke.spec.ts uses this to compare hit-rates).
+    // Cheap to keep in production — single string include test on a
+    // memoized boolean — and useful for future debugging.
+    if (typeof window !== "undefined" && window.location?.search?.includes("no-router=1")) {
+      return { path: g.path, startDot: g.startDot, midpoint: g.midpoint };
+    }
     // No router inputs supplied → pre-router behavior.
     if (props.allBoxes === undefined || props.routerInfo === undefined) {
       return { path: g.path, startDot: g.startDot, midpoint: g.midpoint };

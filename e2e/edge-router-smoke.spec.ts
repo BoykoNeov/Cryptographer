@@ -158,3 +158,157 @@ test("AES-128 ECB graph view — screenshot + sanity check", async ({ page }) =>
     fullPage: true,
   });
 });
+
+/**
+ * Criterion 1 programmatic check: walk every rendered edge path, sample
+ * points along it, and confirm none of those points fall inside a
+ * non-incident leaf chip's bounding rectangle. We don't try to compute
+ * incidence per-edge in the DOM (would require following data-edge-key
+ * → source/target ids and reconstructing the obstacle-exclusion logic);
+ * instead we report the count of "edge sampled point intersects ANY
+ * non-source/non-target leaf" and flag if it's high. A few false
+ * positives are expected (e.g. an edge legitimately entering a leaf's
+ * box at the arrowhead inset), but ZERO crossings is the right ceiling
+ * for criterion 1.
+ *
+ * This test isn't strictly an assertion — it logs the count for human
+ * review. Hardening it into an assert is a follow-up.
+ */
+// Runs the criterion-1 diagnostic in one configuration (router on/off,
+// chosen by the `?no-router=1` URL hatch added temporarily to GraphView).
+// Returns the count so the calling test can A/B against a baseline.
+const runCrossingsDiagnostic = async (
+  page: Page,
+  goto: string,
+): Promise<{
+  leaves: number;
+  totalSamples: number;
+  hitSamples: number;
+  pathsWithAnyHit: number;
+}> => {
+  await page.goto(goto);
+  await clearAppStorage(page);
+  await page.goto(goto);
+  await expect(page.locator("select").first()).toBeVisible();
+  await setKind(page, "hash");
+  await setHash(page, "sha-256");
+  await openGraphView(page);
+  const chevrons = await page.locator('[data-testid^="graph-container-chevron-"]').all();
+  for (const c of chevrons.slice(0, 10)) {
+    try {
+      await c.click({ timeout: 800, force: true });
+    } catch {
+      // skip stale
+    }
+  }
+  await page.waitForTimeout(500);
+  return await page.evaluate(() => {
+    const leaves: { x: number; y: number; w: number; h: number; id: string }[] = [];
+    for (const r of Array.from(document.querySelectorAll<SVGRectElement>(".graph-leaf-rect"))) {
+      const x = Number.parseFloat(r.getAttribute("x") ?? "0");
+      const y = Number.parseFloat(r.getAttribute("y") ?? "0");
+      const w = Number.parseFloat(r.getAttribute("width") ?? "0");
+      const h = Number.parseFloat(r.getAttribute("height") ?? "0");
+      const id = r.getAttribute("data-leaf-id") ?? r.getAttribute("data-chip-id") ?? "";
+      if (w > 0 && h > 0) leaves.push({ x, y, w, h, id });
+    }
+    let totalSamples = 0;
+    let hitSamples = 0;
+    let pathsWithAnyHit = 0;
+    for (const p of Array.from(document.querySelectorAll<SVGPathElement>(".graph-edge"))) {
+      const totalLen = p.getTotalLength();
+      if (totalLen <= 0) continue;
+      let pathHits = 0;
+      for (let i = 1; i < 31; i++) {
+        const pt = p.getPointAtLength((totalLen * i) / 32);
+        totalSamples++;
+        for (const l of leaves) {
+          if (pt.x >= l.x && pt.x <= l.x + l.w && pt.y >= l.y && pt.y <= l.y + l.h) {
+            pathHits++;
+            break;
+          }
+        }
+      }
+      if (pathHits > 0) pathsWithAnyHit++;
+      hitSamples += pathHits;
+    }
+    return { leaves: leaves.length, totalSamples, hitSamples, pathsWithAnyHit };
+  });
+};
+
+test("SHA-256 — A/B: edge samples inside leaf boxes (router on vs off)", async ({ page }) => {
+  test.setTimeout(180_000);
+  const baseline = await runCrossingsDiagnostic(page, "/?no-router=1");
+  console.log("BASELINE (router off):", baseline);
+  const routed = await runCrossingsDiagnostic(page, "/");
+  console.log("ROUTED  (router on): ", routed);
+  console.log(
+    `Hit-rate baseline = ${((baseline.hitSamples / baseline.totalSamples) * 100).toFixed(1)}%, ` +
+      `routed = ${((routed.hitSamples / routed.totalSamples) * 100).toFixed(1)}%`,
+  );
+});
+
+test("SHA-256 fan-IN — count edges crossing non-incident leaf boxes (single config)", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  await freshLoad(page);
+  await setKind(page, "hash");
+  await setHash(page, "sha-256");
+  await openGraphView(page);
+  const chevrons = await page.locator('[data-testid^="graph-container-chevron-"]').all();
+  for (const c of chevrons.slice(0, 10)) {
+    try {
+      await c.click({ timeout: 800, force: true });
+    } catch {
+      // skip stale
+    }
+  }
+  await page.waitForTimeout(500);
+
+  // Collect leaf boxes (the obstacles) and edge paths. For each path,
+  // sample 32 points along its length and check each against every
+  // non-incident leaf box. We can't easily filter "non-incident" without
+  // following the edge's endpoints, so this is a coarse signal: how
+  // many sample points sit inside ANY rendered leaf chip's bounding
+  // box. A pre-router baseline would have a high count (every straight-
+  // line crossing produces ~5-15 sample hits depending on segment
+  // length); a routed-pass baseline should be much lower.
+  const result = await page.evaluate(() => {
+    const leaves: { x: number; y: number; w: number; h: number; id: string }[] = [];
+    for (const r of Array.from(document.querySelectorAll<SVGRectElement>(".graph-leaf-rect"))) {
+      const x = Number.parseFloat(r.getAttribute("x") ?? "0");
+      const y = Number.parseFloat(r.getAttribute("y") ?? "0");
+      const w = Number.parseFloat(r.getAttribute("width") ?? "0");
+      const h = Number.parseFloat(r.getAttribute("height") ?? "0");
+      const id = r.getAttribute("data-leaf-id") ?? r.getAttribute("data-chip-id") ?? "";
+      if (w > 0 && h > 0) leaves.push({ x, y, w, h, id });
+    }
+    let totalSamples = 0;
+    let hitSamples = 0;
+    let pathsWithAnyHit = 0;
+    for (const p of Array.from(document.querySelectorAll<SVGPathElement>(".graph-edge"))) {
+      const totalLen = p.getTotalLength();
+      if (totalLen <= 0) continue;
+      let pathHits = 0;
+      for (let i = 1; i < 31; i++) {
+        // Skip the endpoints — they ARE on/inside source/target boxes
+        // by construction. Sample strictly interior points.
+        const pt = p.getPointAtLength((totalLen * i) / 32);
+        totalSamples++;
+        for (const l of leaves) {
+          if (pt.x >= l.x && pt.x <= l.x + l.w && pt.y >= l.y && pt.y <= l.y + l.h) {
+            pathHits++;
+            break;
+          }
+        }
+      }
+      if (pathHits > 0) pathsWithAnyHit++;
+      hitSamples += pathHits;
+    }
+    return { totalSamples, hitSamples, pathsWithAnyHit, leaves: leaves.length };
+  });
+  console.log(
+    `SHA-256 (top-level expanded): ${result.leaves} leaves, ${result.totalSamples} edge samples, ${result.hitSamples} hit a leaf box (${result.pathsWithAnyHit} paths had >=1 sample inside a leaf). Lower is better. Includes legitimate source/target endpoint hits we couldn't filter out without per-edge metadata.`,
+  );
+});
