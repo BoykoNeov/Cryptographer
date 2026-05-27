@@ -7,6 +7,13 @@ dist
 # Per-user Claude Code overrides — should not be committed
 .claude/settings.local.json
 
+# Background-agent isolated worktrees (harness-managed; transient).
+# When the user spawns a parallel agent in worktree-isolation mode the
+# harness creates `.claude/worktrees/<agent-id>/`; the entries are full
+# checkouts and would otherwise leak into git status / biome scan /
+# commit selection on the main worktree.
+.claude/worktrees/
+
 # Playwright artifacts (`npm run smoke`). The .spec files in `e2e/` ARE
 # checked in; only the run output (HTML reporter dump, trace zips,
 # screenshots from failed runs) is excluded.

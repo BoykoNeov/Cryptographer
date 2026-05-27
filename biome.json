@@ -1,7 +1,14 @@
 {
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
   "files": {
-    "ignore": ["dist", "node_modules", "test-results", "playwright-report", ".playwright"]
+    "ignore": [
+      "dist",
+      "node_modules",
+      "test-results",
+      "playwright-report",
+      ".playwright",
+      ".claude/worktrees"
+    ]
   },
   "organizeImports": {
     "enabled": true
