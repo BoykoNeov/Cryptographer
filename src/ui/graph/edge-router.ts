@@ -857,9 +857,230 @@ export const routeOneEdge = (
   };
 };
 
+// ─── Lane-assignment post-pass ───────────────────────────────────────────
+
+/**
+ * Identify the "primary corridor segment" of a routed polyline — the
+ * longest interior segment that isn't a stub. This is the segment we'll
+ * offset perpendicular when multiple edges share it.
+ *
+ * Returns null when the polyline is too short to have a meaningful
+ * corridor (e.g. just source+target with one bend, no clearly-dominant
+ * leg).
+ */
+type CorridorSegment = {
+  /** Index of the START point of the segment in `points`. END is `+1`. */
+  readonly idx: number;
+  /** Cached orientation — H means y is constant, V means x is constant. */
+  readonly orientation: "H" | "V";
+  /** The constant axis coordinate (y for H, x for V). */
+  readonly axis: number;
+  /** Min / max along the other axis (the segment's extent). */
+  readonly lo: number;
+  readonly hi: number;
+};
+
+const findPrimaryCorridor = (
+  points: readonly { readonly x: number; readonly y: number }[],
+): CorridorSegment | null => {
+  if (points.length < 3) return null;
+  // Walk all interior segments; pick the longest one that's
+  // axis-aligned (H or V). We require axis alignment because lane
+  // offsets are perpendicular to the corridor — a slanted segment has
+  // no well-defined lane direction. In practice every interior segment
+  // the router produces is axis-aligned (L + U candidates only use
+  // horizontal / vertical bends), so this is just a defensive guard.
+  let best: CorridorSegment | null = null;
+  let bestLen = -1;
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    if (!a || !b) continue;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    // Strict equality check on the OFF-axis ensures the segment is
+    // axis-aligned. (Stubs may produce tiny fractional offsets but
+    // only on the axis they travel on, never on the perpendicular.)
+    const isH = dy === 0 && dx !== 0;
+    const isV = dx === 0 && dy !== 0;
+    if (!isH && !isV) continue;
+    const len = Math.abs(isH ? dx : dy);
+    if (len <= bestLen) continue;
+    if (isH) {
+      best = {
+        idx: i,
+        orientation: "H",
+        axis: a.y,
+        lo: Math.min(a.x, b.x),
+        hi: Math.max(a.x, b.x),
+      };
+    } else {
+      best = {
+        idx: i,
+        orientation: "V",
+        axis: a.x,
+        lo: Math.min(a.y, b.y),
+        hi: Math.max(a.y, b.y),
+      };
+    }
+    bestLen = len;
+  }
+  return best;
+};
+
+/**
+ * Group corridors by `(orientation, rounded-axis)` so corridors at the
+ * same H-y (or V-x) within a small tolerance share a bucket. Within a
+ * bucket we then need to detect which edges actually OVERLAP along the
+ * other axis (two H-corridors at the same y but disjoint x-ranges
+ * don't visually pile up and don't need lane separation).
+ *
+ * Tolerance: round axis to nearest 4 px. The router produces corridors
+ * at integer-ish coordinates; 4 px tolerance accommodates the stub-
+ * length shifts (8 px shouldn't merge unrelated corridors but might
+ * merge near-duplicates produced by slightly different blocking
+ * clusters).
+ */
+const corridorBucketKey = (c: CorridorSegment, axisTolerance = 4): string => {
+  const ax = Math.round(c.axis / axisTolerance) * axisTolerance;
+  return `${c.orientation}:${ax}`;
+};
+
+/**
+ * Assign each polyline-routed edge a lane index within its bucket.
+ *
+ * Algorithm:
+ *   1. Compute the primary corridor for every polyline-routed edge.
+ *   2. Group by bucket key.
+ *   3. Within each bucket, sort overlapping edges by `lo` (ascending);
+ *      tiebreak by edgeKey for stable lane assignment.
+ *   4. Sweep along the secondary axis and assign each edge the lowest
+ *      free lane index (interval-scheduling-style: an edge reuses a lane
+ *      when the previous edge in that lane finishes before this one
+ *      starts).
+ *
+ * Returns a `Map<edgeKey, laneIndex>`. Edges with no entry get lane 0
+ * (no offset).
+ */
+const assignLanes = (
+  routes: ReadonlyMap<string, PathSpec>,
+): ReadonlyMap<string, number> => {
+  // 1+2: build buckets.
+  type Item = {
+    edgeKey: string;
+    corridor: CorridorSegment;
+  };
+  const buckets = new Map<string, Item[]>();
+  for (const [edgeKey, spec] of routes) {
+    if (spec.kind !== "polyline") continue;
+    const corridor = findPrimaryCorridor(spec.points);
+    if (corridor === null) continue;
+    const key = corridorBucketKey(corridor);
+    let arr = buckets.get(key);
+    if (arr === undefined) {
+      arr = [];
+      buckets.set(key, arr);
+    }
+    arr.push({ edgeKey, corridor });
+  }
+
+  // 3+4: lane assignment within each bucket via interval scheduling.
+  // Two edges share a lane only when their corridor extents don't
+  // overlap on the other axis.
+  const laneByEdgeKey = new Map<string, number>();
+  for (const items of buckets.values()) {
+    if (items.length <= 1) continue; // singleton bucket; lane 0 (no offset).
+    // Stable sort by `lo`, tiebreak by edgeKey alphabetical.
+    items.sort((a, b) => {
+      const dl = a.corridor.lo - b.corridor.lo;
+      if (dl !== 0) return dl;
+      return a.edgeKey < b.edgeKey ? -1 : a.edgeKey > b.edgeKey ? 1 : 0;
+    });
+    // `lanes[i]` is the `hi` of the last edge currently in lane i.
+    const laneHis: number[] = [];
+    for (const item of items) {
+      // Find the lowest lane whose tail (`hi`) is BEFORE this item's
+      // `lo` — that lane is free to reuse. Otherwise allocate a new lane.
+      let found = -1;
+      for (let li = 0; li < laneHis.length; li++) {
+        if ((laneHis[li] ?? 0) < item.corridor.lo) {
+          found = li;
+          break;
+        }
+      }
+      if (found === -1) {
+        found = laneHis.length;
+        laneHis.push(item.corridor.hi);
+      } else {
+        laneHis[found] = item.corridor.hi;
+      }
+      // Only edges with a non-zero lane need an entry. Lane-0 edges
+      // get the bucket's "natural" corridor — no offset — so we save
+      // map space by leaving them absent (caller treats missing as 0).
+      if (found !== 0) laneByEdgeKey.set(item.edgeKey, found);
+    }
+  }
+  return laneByEdgeKey;
+};
+
+/**
+ * Offset a polyline's primary corridor segment perpendicular by
+ * `laneIndex * laneWidth` px. Returns a new polyline; the input is
+ * untouched. Negative `laneIndex` would offset the opposite direction
+ * (we don't generate those today — `assignLanes` always returns >= 0).
+ *
+ * The offset is applied to BOTH endpoints of the primary corridor
+ * segment. The neighbor segments at those endpoints become slightly
+ * slanted (e.g., the source-side approach to a lane-offset U-over
+ * corridor goes UP-AND-RIGHT instead of pure UP). That's the desired
+ * visual: the eye reads "this edge goes to lane N" via the slanted
+ * approach.
+ *
+ * For an H corridor we offset perpendicular in the y direction
+ * (negative y = up, since y grows downward on the canvas — lanes
+ * stack ABOVE the natural corridor). For a V corridor we offset in
+ * the x direction (positive x = right).
+ */
+const offsetCorridor = (
+  points: readonly { readonly x: number; readonly y: number }[],
+  laneIndex: number,
+  laneWidth: number,
+): readonly { readonly x: number; readonly y: number }[] => {
+  if (laneIndex <= 0) return points;
+  const corridor = findPrimaryCorridor(points);
+  if (corridor === null) return points;
+  const delta = laneIndex * laneWidth;
+  const out: { x: number; y: number }[] = points.map((p) => ({ x: p.x, y: p.y }));
+  const a = out[corridor.idx];
+  const b = out[corridor.idx + 1];
+  if (!a || !b) return out;
+  if (corridor.orientation === "H") {
+    // Stack lanes ABOVE the natural corridor (negative y direction).
+    // Visually: lane 0 sits where the original corridor was, lane 1
+    // sits laneWidth px above it, lane 2 sits 2*laneWidth above, etc.
+    a.y -= delta;
+    b.y -= delta;
+  } else {
+    // V corridor: stack lanes to the RIGHT of the natural corridor.
+    a.x += delta;
+    b.x += delta;
+  }
+  return out;
+};
+
 /**
  * Route every edge in a batch. Pure function — same inputs always
  * produce the same `Map`. Memoize this at the caller site.
+ *
+ * Two passes:
+ *   1. Per-edge routing (independent — each call to `routeOneEdge`
+ *      sees the full obstacle set, ignores other edges).
+ *   2. Lane assignment (cross-edge — polyline-routed edges that share
+ *      a long corridor get assigned distinct lane indices and their
+ *      primary corridor is offset perpendicular by `laneIndex *
+ *      laneWidth`). Without this, N edges all routing around the same
+ *      blocking cluster would all sit on the same corridor and
+ *      overlap into one smeared shaft.
  *
  * The map's keys are `RouterEdge.edgeKey` values; absent keys signal
  * "the renderer should fall through to `EdgePath`'s default geom" (the
@@ -867,10 +1088,11 @@ export const routeOneEdge = (
  * caller skip the lookup when no router pass ran at all — e.g. when
  * the router is feature-flagged off).
  *
- * Performance: O(E x O x B) where E = edges, O = obstacles per edge,
- * B = candidates per blocked edge (<= 6). For SHA-256 expanded (~200
- * edges, ~80 leaves, with maybe 30% needing routing) this is well under
- * 50k ops — single-digit milliseconds in practice.
+ * Performance: O(E x O x B) for pass 1 where E = edges, O = obstacles
+ * per edge, B = candidates per blocked edge (<= 6). Pass 2 is O(E log E)
+ * for the bucket sort + linear sweep. For SHA-256 expanded (~200 edges,
+ * ~80 leaves, with maybe 30% needing routing) this is well under 50k
+ * ops — single-digit milliseconds in practice.
  */
 export const routeEdges = (
   edges: readonly RouterEdge[],
@@ -878,8 +1100,23 @@ export const routeEdges = (
   options: RouterOptions = {},
 ): ReadonlyMap<string, PathSpec> => {
   const result = new Map<string, PathSpec>();
+  // Pass 1: independent per-edge routing.
   for (const edge of edges) {
     result.set(edge.edgeKey, routeOneEdge(edge, allBoxes, options));
+  }
+  // Pass 2: lane assignment over the polyline-routed subset.
+  const laneWidth = options.laneWidth ?? DEFAULT_ROUTER_OPTIONS.laneWidth;
+  if (laneWidth <= 0) return result; // disabled via toggle.
+  const lanes = assignLanes(result);
+  for (const [edgeKey, laneIndex] of lanes) {
+    const spec = result.get(edgeKey);
+    if (spec === undefined || spec.kind !== "polyline") continue;
+    const offset = offsetCorridor(spec.points, laneIndex, laneWidth);
+    result.set(edgeKey, {
+      kind: "polyline",
+      points: offset,
+      midpoint: polylineMidpoint(offset),
+    });
   }
   return result;
 };

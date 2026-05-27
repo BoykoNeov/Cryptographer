@@ -553,6 +553,200 @@ describe("edge-router — batch routeEdges API", () => {
     expect(result.get("e2")?.kind).toBe("default");
   });
 
+  it("two parallel U-over edges around the same cluster get assigned distinct lanes", () => {
+    // Two source boxes feed two target boxes around the SAME blocking
+    // cluster. Both edges produce U-over polylines that — pre-lane —
+    // would sit on the same horizontal corridor at y = by - clearance.
+    // After the lane pass, the second edge's corridor should be
+    // shifted UP by `laneWidth` so the two arrows read as parallel.
+    const allBoxes = boxes([
+      // Two source chips stacked vertically on the left.
+      ["src-a", { x: 0, y: 0, w: 40, h: 28 }],
+      ["src-b", { x: 0, y: 40, w: 40, h: 28 }],
+      // Single blocking leaf squarely between sources and targets.
+      ["block", { x: 130, y: 0, w: 40, h: 68 }],
+      // Two target chips on the right.
+      ["tgt-a", { x: 300, y: 0, w: 40, h: 28 }],
+      ["tgt-b", { x: 300, y: 40, w: 40, h: 28 }],
+    ]);
+    const edges: RouterEdge[] = [
+      {
+        edgeKey: "a",
+        fromId: "src-a",
+        toId: "tgt-a",
+        containerPathFrom: [],
+        containerPathTo: [],
+        sx: 40,
+        sy: 14,
+        tx: 300,
+        ty: 14,
+      },
+      {
+        edgeKey: "b",
+        fromId: "src-b",
+        toId: "tgt-b",
+        containerPathFrom: [],
+        containerPathTo: [],
+        sx: 40,
+        sy: 54,
+        tx: 300,
+        ty: 54,
+      },
+    ];
+    const result = routeEdges(edges, allBoxes);
+    const a = result.get("a");
+    const b = result.get("b");
+    expect(a?.kind).toBe("polyline");
+    expect(b?.kind).toBe("polyline");
+    if (a?.kind !== "polyline" || b?.kind !== "polyline") return;
+    // Find the longest interior segment of each polyline. They must
+    // sit at DIFFERENT y values (offset by at least one laneWidth).
+    const longestY = (pts: readonly { readonly x: number; readonly y: number }[]): number => {
+      let bestLen = -1;
+      let bestY = Number.NaN;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const p = pts[i];
+        const q = pts[i + 1];
+        if (!p || !q) continue;
+        if (p.y !== q.y) continue; // horizontal segments only
+        const len = Math.abs(q.x - p.x);
+        if (len > bestLen) {
+          bestLen = len;
+          bestY = p.y;
+        }
+      }
+      return bestY;
+    };
+    const yA = longestY(a.points);
+    const yB = longestY(b.points);
+    expect(yA).not.toEqual(yB);
+    expect(Math.abs(yA - yB)).toBeGreaterThanOrEqual(DEFAULT_ROUTER_OPTIONS.laneWidth);
+  });
+
+  it("disjoint corridors at the same y do NOT get a lane shift (intervals don't overlap)", () => {
+    // Two H corridors at the same y but disjoint x-ranges. They look
+    // like parallel lines from afar but never visually pile up — the
+    // interval scheduler should keep both at lane 0 (no offset).
+    //
+    // Source/target pairs are arranged so each edge's blocking cluster
+    // is in a different x-range; both U-overs land on the same y but
+    // the corridor x-ranges don't overlap.
+    const allBoxes = boxes([
+      ["src-a", { x: 0, y: 0, w: 40, h: 28 }],
+      ["tgt-a", { x: 250, y: 0, w: 40, h: 28 }],
+      ["block-a", { x: 100, y: 0, w: 40, h: 28 }],
+      ["src-b", { x: 400, y: 0, w: 40, h: 28 }],
+      ["tgt-b", { x: 700, y: 0, w: 40, h: 28 }],
+      ["block-b", { x: 540, y: 0, w: 40, h: 28 }],
+    ]);
+    const edges: RouterEdge[] = [
+      {
+        edgeKey: "a",
+        fromId: "src-a",
+        toId: "tgt-a",
+        containerPathFrom: [],
+        containerPathTo: [],
+        sx: 40,
+        sy: 14,
+        tx: 250,
+        ty: 14,
+      },
+      {
+        edgeKey: "b",
+        fromId: "src-b",
+        toId: "tgt-b",
+        containerPathFrom: [],
+        containerPathTo: [],
+        sx: 440,
+        sy: 14,
+        tx: 700,
+        ty: 14,
+      },
+    ];
+    const result = routeEdges(edges, allBoxes);
+    const a = result.get("a");
+    const b = result.get("b");
+    if (a?.kind !== "polyline" || b?.kind !== "polyline") return;
+    // Both should still be at the same corridor y (no offset) because
+    // their x-ranges don't overlap — the interval scheduler puts them
+    // both in lane 0.
+    const longestY = (pts: readonly { readonly x: number; readonly y: number }[]): number => {
+      let bestLen = -1;
+      let bestY = Number.NaN;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const p = pts[i];
+        const q = pts[i + 1];
+        if (!p || !q) continue;
+        if (p.y !== q.y) continue;
+        const len = Math.abs(q.x - p.x);
+        if (len > bestLen) {
+          bestLen = len;
+          bestY = p.y;
+        }
+      }
+      return bestY;
+    };
+    expect(longestY(a.points)).toBe(longestY(b.points));
+  });
+
+  it("laneWidth: 0 toggles lane assignment off (regression diagnostic)", () => {
+    // Same setup as the lane-spread test, but with laneWidth: 0. Both
+    // edges' corridors should sit on the same y — pre-lane overlap is
+    // restored. Useful for A/B comparing the lane pass's visual benefit.
+    const allBoxes = boxes([
+      ["src-a", { x: 0, y: 0, w: 40, h: 28 }],
+      ["src-b", { x: 0, y: 40, w: 40, h: 28 }],
+      ["block", { x: 130, y: 0, w: 40, h: 68 }],
+      ["tgt-a", { x: 300, y: 0, w: 40, h: 28 }],
+      ["tgt-b", { x: 300, y: 40, w: 40, h: 28 }],
+    ]);
+    const edges: RouterEdge[] = [
+      {
+        edgeKey: "a",
+        fromId: "src-a",
+        toId: "tgt-a",
+        containerPathFrom: [],
+        containerPathTo: [],
+        sx: 40,
+        sy: 14,
+        tx: 300,
+        ty: 14,
+      },
+      {
+        edgeKey: "b",
+        fromId: "src-b",
+        toId: "tgt-b",
+        containerPathFrom: [],
+        containerPathTo: [],
+        sx: 40,
+        sy: 54,
+        tx: 300,
+        ty: 54,
+      },
+    ];
+    const result = routeEdges(edges, allBoxes, { laneWidth: 0 });
+    const a = result.get("a");
+    const b = result.get("b");
+    if (a?.kind !== "polyline" || b?.kind !== "polyline") return;
+    const longestY = (pts: readonly { readonly x: number; readonly y: number }[]): number => {
+      let bestLen = -1;
+      let bestY = Number.NaN;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const p = pts[i];
+        const q = pts[i + 1];
+        if (!p || !q) continue;
+        if (p.y !== q.y) continue;
+        const len = Math.abs(q.x - p.x);
+        if (len > bestLen) {
+          bestLen = len;
+          bestY = p.y;
+        }
+      }
+      return bestY;
+    };
+    expect(longestY(a.points)).toBe(longestY(b.points));
+  });
+
   it("the SHA-256-shaped fan-IN case routes around the offending sibling", () => {
     // Synthetic fixture roughly like SHA-256's s-row fan-IN, scaled down.
     // Mid-corridor blocker between a left-side source row and a right-
