@@ -2347,22 +2347,41 @@ the largest single-slice bundle growth in Phase 2 so far but stays
 well within the pre-warned 500-KB-Vite-warning zone per
 [[project_bundle_size_500kb]]).
 
-### Slice 2.9 — Provenance overlay registry for SHA-256
+### Slice 2.9 — Port-aware inspector + provenance for SHA-256
 
-**Goal:** wire cell-level provenance for SHA-256 words — hovering an
-output word lights up source words in the consumed inputs (e.g.,
-hovering T1 lights up h, e, f, g, K_t, W_t).
+> **Re-scoped 2026-05-27** after a survey + empirical probe + two
+> advisor consults. The original three-bullet sketch (preserved below)
+> presumed SHA-256-specific compound leaves that **no longer exist
+> post-Slice 2.6d** — the spec is built from generic port-native
+> primitives, and port-native frames carry `stateBefore === stateAfter`
+> (16 of 17 step types confirmed by probe), so today's inspector has
+> no port I/O to surface for hover.
+>
+> User pick: build a port-aware inspector first, sliced across
+> sessions. Sub-slice plan: **[`slice-2-9-port-aware-provenance.md`](./slice-2-9-port-aware-provenance.md)**.
+> Five sub-slices — 2.9a port-value lookup, 2.9b port-aware inspector
+> view (cells only), 2.9c ProvenanceSource port-cell variant, 2.9d
+> per-primitive provenance fns, 2.9e contract test widen + close. The
+> overlay surface (formula chips, labeled state rows) is **OUT OF
+> SCOPE** for 2.9; deferred pending empirical evidence and hierarchical-
+> frame design (see sub-slice plan's "Deferred for future planning"
+> section).
 
-**Scope (sketched):**
+**Original three-bullet sketch (kept for historical context):**
 
-- New `src/ui/provenance/sha-256.ts` module registers provenance
-  callbacks for SHA-256-specific leaves.
-- Contract test at `tests/provenance-registry-contract.test.ts`
-  (existing) walks the registry; SHA-256's leaf types either register
-  provenance OR land on `PROVENANCE_NO_OP_ALLOWLIST`.
-
-**Pass/fail gate:** contract test green; manual browser smoke confirms
-provenance highlighting works in linear view.
+> Goal: wire cell-level provenance for SHA-256 words — hovering an
+> output word lights up source words in the consumed inputs (e.g.,
+> hovering T1 lights up h, e, f, g, K_t, W_t).
+>
+> Scope (sketched):
+> - New `src/ui/provenance/sha-256.ts` module registers provenance
+>   callbacks for SHA-256-specific leaves.
+> - Contract test at `tests/provenance-registry-contract.test.ts`
+>   (existing) walks the registry; SHA-256's leaf types either register
+>   provenance OR land on `PROVENANCE_NO_OP_ALLOWLIST`.
+>
+> Pass/fail gate: contract test green; manual browser smoke confirms
+> provenance highlighting works in linear view.
 
 ### Slice 2.10 — Graph view treatment + cipher selector entry
 
