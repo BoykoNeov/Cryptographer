@@ -74,6 +74,7 @@ import {
   toggleCollapse,
   useLayoutMap,
 } from "../stores/layout";
+import { isOffsetsEnabledForLayout } from "../stores/offsets-hatch";
 import { registry } from "../stores/registry";
 import {
   duplicateRoundInSpec,
@@ -1027,6 +1028,16 @@ const layoutNode = (
    * siblings to fill the vacated slot.
    */
   relativePins: ReadonlyMap<string, { dx: number; dy: number }>,
+  /**
+   * OFFSETS-HATCH (2026-05-28 experiment, `?offsets=1`). When true, the
+   * group branch staircases its children right (+LEAF_W/2 cumulative,
+   * vertical-flow context) and the iterate branch alternates its
+   * children up/down (+LEAF_H on odd index, horizontal-flow context).
+   * Defaults to false so existing tests that drive `layoutNode` /
+   * `layoutRoot` with the pre-hatch positional arity keep byte-identical
+   * layout.
+   */
+  offsetsEnabled = false,
 ): Box => {
   const container = containersById.get(id);
   const pin = pinned.get(id);
@@ -1146,6 +1157,14 @@ const layoutNode = (
     let innerY = startY + HEADER_H + consts.CONTAINER_PAD + liftH;
     let maxChildW = 0;
     let lastChildBottom = innerY;
+    // OFFSETS-HATCH: a group is a VERTICAL-flow context, so its children
+    // staircase RIGHT — child i shifted +LEAF_W/2 × i from the column's
+    // left edge, cumulative, on top of the normal vertical advance.
+    // `maxStaircaseRight` tracks the rightmost staircased child so the
+    // box width below can grow to contain the diagonal.
+    const staircaseStep = offsetsEnabled ? Math.round(consts.LEAF_W / 2) : 0;
+    let childIndex = 0;
+    let maxStaircaseRight = innerX;
     for (const childId of normalChildren) {
       // Capture innerY BEFORE the call so cursor advancement uses the
       // NATURAL flow position, not the post-pin rendered position. Phase 6e
@@ -1167,9 +1186,10 @@ const layoutNode = (
       // next sibling's natural cursor (stable under pin); `lastChildBottom`
       // is the container's height-extent (grows under pin).
       const naturalY = innerY;
+      const childX = innerX + childIndex * staircaseStep;
       const childBox = layoutNode(
         childId,
-        innerX,
+        childX,
         innerY,
         containersById,
         pinned,
@@ -1177,6 +1197,7 @@ const layoutNode = (
         consts,
         replicas,
         relativePins,
+        offsetsEnabled,
       );
       innerY = naturalY + childBox.h + consts.STACK_GAP;
       const renderedBottom = childBox.y + childBox.h;
@@ -1184,6 +1205,9 @@ const layoutNode = (
       if (renderedBottom > lastChildBottom) lastChildBottom = renderedBottom;
       if (autoBottom > lastChildBottom) lastChildBottom = autoBottom;
       if (childBox.w > maxChildW) maxChildW = childBox.w;
+      const childRight = childX + childBox.w;
+      if (childRight > maxStaircaseRight) maxStaircaseRight = childRight;
+      childIndex += 1;
     }
 
     // Second pass: place LEFT-gutter replicas (consumers that are NOT
@@ -1253,7 +1277,12 @@ const layoutNode = (
     // floor for `columnW`.
     const innerXForCol = startX + consts.CONTAINER_PAD + gutterW;
     const liftReplicaColumnW = maxLiftReplicaRight > 0 ? maxLiftReplicaRight - innerXForCol : 0;
-    const columnW = Math.max(maxChildW, consts.LEAF_W, liftReplicaColumnW);
+    // OFFSETS-HATCH: the staircase pushes the last child right by
+    // `(N-1) × LEAF_W/2`; `maxStaircaseRight - innerXForCol` is that
+    // child's right edge measured from the column's left edge, so the
+    // column must be at least that wide to contain the diagonal.
+    const staircaseColumnW = offsetsEnabled ? maxStaircaseRight - innerXForCol : 0;
+    const columnW = Math.max(maxChildW, consts.LEAF_W, liftReplicaColumnW, staircaseColumnW);
     const w = gutterW + columnW + 2 * consts.CONTAINER_PAD;
     // Height formula uses lastChildBottom which already includes the
     // liftH shift via innerY; don't add liftH again.
@@ -1332,6 +1361,7 @@ const layoutNode = (
           consts,
           replicas,
           relativePins,
+          offsetsEnabled,
         );
         chipY = childBox.y + childBox.h + consts.STACK_GAP;
         const childRight = childBox.x + childBox.w;
@@ -1504,22 +1534,32 @@ const layoutNode = (
   const innerY = startY + HEADER_H + consts.CONTAINER_PAD + replicaLiftH;
   let maxChildH = 0;
   let lastChildRight = innerX;
+  // OFFSETS-HATCH: an iterate body is a HORIZONTAL-flow context, so its
+  // children alternate up/down — even index at `innerY`, odd index one
+  // LEAF_H lower. `altRowExtra` budgets the extra LEAF_H of body height
+  // the odd rows need so the container box grows to contain them.
+  let iterateChildIndex = 0;
+  let altRowExtra = 0;
   for (const childId of container.childIds) {
     if (replicas.isReplica.has(childId)) continue;
+    const childAltY = offsetsEnabled && iterateChildIndex % 2 === 1 ? consts.LEAF_H : 0;
+    if (childAltY > altRowExtra) altRowExtra = childAltY;
     const childBox = layoutNode(
       childId,
       innerX,
-      innerY,
+      innerY + childAltY,
       containersById,
       pinned,
       out,
       consts,
       replicas,
       relativePins,
+      offsetsEnabled,
     );
     innerX = childBox.x + childBox.w + consts.FLOW_GAP;
     lastChildRight = childBox.x + childBox.w;
     if (childBox.h > maxChildH) maxChildH = childBox.h;
+    iterateChildIndex += 1;
   }
 
   // Second pass: place iterate-body replicas above their consumers. The
@@ -1560,7 +1600,9 @@ const layoutNode = (
   // the iterate's box must contain it.
   const effectiveLastRight = Math.max(lastChildRight, maxIterateReplicaRight);
   const w = effectiveLastRight - startX + consts.CONTAINER_PAD;
-  const h = HEADER_H + 2 * consts.CONTAINER_PAD + replicaLiftH + maxChildH;
+  // `altRowExtra` (0 unless the offsets hatch dropped odd-index children
+  // by LEAF_H) extends the body so the lowered rows don't crop.
+  const h = HEADER_H + 2 * consts.CONTAINER_PAD + replicaLiftH + maxChildH + altRowExtra;
   const box: Box = { x: startX, y: startY, w, h };
   out.set(id, box);
   return box;
@@ -1687,6 +1729,30 @@ export const layoutRoot = (
   let cursorX = CANVAS_MARGIN;
   let maxRight = CANVAS_MARGIN;
   let maxBottom = CANVAS_MARGIN;
+
+  // ── OFFSETS-HATCH (2026-05-28 experiment) ───────────────────────────
+  //
+  // Reads `?offsets=1` from `window.location.search`. The rule a member
+  // gets depends on the FLOW ORIENTATION of the context it sits in:
+  //
+  //   - HORIZONTAL-flow context (root flow here; iterate body in
+  //     `layoutNode`): members alternate y up/down — even index at the
+  //     base row, odd index one LEAF_H lower. Collapsed round chips at
+  //     root therefore zig-zag rather than staircase.
+  //   - VERTICAL-flow context (expanded group body in `layoutNode`):
+  //     members staircase right — each child shifted +LEAF_W/2 from the
+  //     previous, cumulative, on top of the existing vertical advance.
+  //
+  // Root is a horizontal-flow context, so the rule HERE is alternation.
+  // The staircase + iterate-cascade live in `layoutNode`'s group +
+  // iterate branches (threaded via the `offsetsEnabled` param below).
+  //
+  // OFF (default): `altCounter` stays unread and `startY` keeps the
+  // original `auxOnlyRootIds ? CANVAS_MARGIN : rowStartY` value — layout
+  // byte-identical to before the hatch.
+  const offsetsEnabled = isOffsetsEnabledForLayout();
+  let altCounter = 0;
+
   for (const id of graph.rootIds) {
     if (replicas.isReplica.has(id)) continue;
     // Capture the cursor BEFORE layoutNode — that's the natural-flow X
@@ -1698,8 +1764,13 @@ export const layoutRoot = (
     // Aux-only root leaves lay out at the lifted row (CANVAS_MARGIN), the
     // rest at the spine row (rowStartY). `layoutNode` honors pins
     // internally, so a user who manually drags an aux-only leaf to the
-    // spine row keeps that pin.
-    const startY = auxOnlyRootIds.has(id) ? CANVAS_MARGIN : rowStartY;
+    // spine row keeps that pin. Aux-only roots are excluded from the
+    // alternation (they're supporting computation on a dedicated lifted
+    // row, not spine members) and don't advance the counter.
+    const isAuxOnly = auxOnlyRootIds.has(id);
+    const baseY = isAuxOnly ? CANVAS_MARGIN : rowStartY;
+    const altOffset = offsetsEnabled && !isAuxOnly && altCounter % 2 === 1 ? consts.LEAF_H : 0;
+    const startY = baseY + altOffset;
     const box = layoutNode(
       id,
       cursorX,
@@ -1710,8 +1781,10 @@ export const layoutRoot = (
       consts,
       replicas,
       relativePins,
+      offsetsEnabled,
     );
     cursorX = naturalX + box.w + consts.FLOW_GAP;
+    if (offsetsEnabled && !isAuxOnly) altCounter += 1;
     const right = box.x + box.w;
     const bottom = box.y + box.h;
     if (right > maxRight) maxRight = right;
