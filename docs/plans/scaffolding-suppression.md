@@ -492,6 +492,52 @@ collapsed round chain fully connected — no islands.)*
   (`round.t.repack` output === `round.{t+1}.split` input at every boundary,
   both visible); connected round chain; frame/leaf pins updated.
 
+***A3b follow-ups — queued from advisor review (2026-05-28).*** *(Verdict:
+ship-it, design + carry-fork-port-to-port confirmed right, no creep. One
+minor defect + four cheap test gaps; none blocking, all deferred per user
+"queue and SESSION END". Do the ⓐ+ⓑ pair before A4/B1 — they pin the exact
+failure modes A3b's risk section named.)*
+- **ⓐ [minor defect] self-referential `seedInput` slips the static
+  validator.** `spec-shapes.ts` group case calls `recordContainerOutputs()`
+  (records the group's own `out`) BEFORE `validateContainerBinding(...,
+  "seedInput", ..., scopeOutputs)`, so a group with `seedInput:
+  port("<self>","out")` finds its own freshly-recorded output → NO pre-Run
+  warning, while the runtime throws at run. Fix: validate `seedInput`
+  against the scope as it stood *before* recording this node, or
+  special-case `binding.node === node.id` as always-warn. (FES branch has
+  the same ordering but is less exposed — authored, not palette-dragged.)
+- **ⓑ [test] collapsed-graph carry parity.** Committed
+  `graph-port-edge-derivation.test.ts` asserts the carry edges on the
+  *uncollapsed* derivation only; the user's stated biggest risk was the
+  *collapsed* view (verified only by a since-deleted throwaway probe). Add a
+  test: `collapseGraph(graph, allRoundIds)` then assert `round.{t-1} →
+  round.{t}` survives for a couple of t, plus `init.fetch-H → round.0` and
+  `round.63 → final.split-wv`. Guards against a future collapse/layout
+  refactor silently re-islanding the chain.
+- **ⓒ [test] for ⓐ:** a `validateShapes` test asserting a group with
+  `seedInput: port("<self>","out")` emits a `port-input-unresolvable`
+  warning (currently emits none — the test that would have caught ⓐ).
+- **ⓓ [test] explicit `validateGraph` clean assertion** for SHA-256
+  post-A3b (orphaned-read / unused-write / cycle) on both collapsed +
+  uncollapsed — the plan claims it; no committed assertion pins it.
+- **ⓔ [test] grandchild `bodyOutput` throws.** Negative test that a
+  `bodyOutput` pointing at a nested (grandchild) node throws — pins the
+  direct-only contract of `collectDirectChildOutputs` against a future
+  "recurse into nested groups" regression.
+- **ⓕ [comment] single-hop seed resolver.** One-line note in `graph.ts`
+  `inferPortEdges` that the `port(groupId,"in")` → `seedInput.node`
+  resolution is deliberately single-hop (a future seed-of-a-seed would need
+  to chase the chain). Also latent: `inferPortEdges` resolves
+  `port(groupId,"in")` for any leaf regardless of body membership, so a
+  hand-malformed cross-scope read draws an unreachable edge — cosmetic
+  (that spec can't run), note don't fix.
+- **→ B1 [cleanup] consolidate binding resolution.** runtime.ts group
+  `seedInput` / group `bodyOutput` / FES `bodyOutput` / `outputFrom` are
+  4 near-duplicate "resolve a `PortBinding` against a `nodeOutputs` map,
+  throw if missing" blocks. When B1 lifts `iterate`/`for-each-subgraph`
+  onto the contract (the 3rd real consumer), extract a
+  `resolveBinding(map, binding, ctxLabel)` helper. Don't churn it before.
+
 **A4 — Anti-creep contract test.**
 - New test walks the step registry; **fails** if any registered leaf
   step type declares a non-bytes port shape (today: any
