@@ -131,22 +131,77 @@ inference). The cross-iteration recurrence visibility gap (W_{t-N}
 across iterations) is **unchanged** — still a separate follow-up in the
 universal-port-dataflow plan family.
 
-## Scaffolding inventory — SHA-256 spec, today
+## Scaffolding inventory — SHA-256 spec, today (A0-CONFIRMED 2026-05-28)
 
-Source: `src/ciphers/sha-256.ts:1684–1772`. Five categories, sized
-hand-count (confirm exact figures in Slice A0):
+Source: `src/ciphers/sha-256.ts`. Slice A0 (a throwaway probe that walked
+every shipped spec + ran the "abc" KAT trace) replaced the original
+hand-count with the measured figures below. The hand-count conflated
+two different units in one column; A0 splits them.
 
-| Category | Leaves | Count | Fate |
+**Two units, kept separate** (the original single "Count" column hid this):
+
+- **Spec leaves to remove** = distinct `kind: "step"` nodes in the spec
+  tree. This is the **A3 cleanup target** — what gets physically deleted
+  from `sha-256.ts`.
+- **Trace frames removed** = the runtime footprint on a single-block run.
+  The FES message-schedule body runs 48×, so one spec leaf there
+  (`schedule-out`) contributes 48 frames. This is the **density/UX claim**.
+
+| Category | Leaves (spec) | Frames ("abc") | Fate |
 |---|---|---|---|
-| Boundary bridges | `state-to-bytes "plaintext-source"`, final `bytes-to-state` | 2 | Runtime-owned at cipher boundary; spec drops them (A3) |
-| Container bridges | FES `seed-schedule`, FES body-exit `bytes-to-state` ×48, `W-publish` | 50 | Replaced by `seedInput`/`bodyOutput`/`outputPorts` (A2+A3) |
-| Round-body bridges | round.t entry `state-to-bytes` ×64, exit `bytes-to-state` ×64, final-add entry/exit | 130 | Round groups gain port boundaries; runtime auto-bridges or absorbs (A3) |
-| Constant loaders | `K-to-aux`, `H-to-aux`, `H-constant`, `init-working-vars` | 4 | Move to `cipherConstants` (A1) |
-| **Total** | | **~186** | |
+| Boundary bridges — `state-to-bytes "plaintext-source"` + `bytes-to-state "final.out"` | 2 | 2 | Runtime-owned at cipher boundary; spec drops them (A3) |
+| Container bridges — FES `seed-schedule` + FES body-exit `schedule-out` (×48 frames) + `W-publish` | 3 | 50 | Replaced by `seedInput`/`bodyOutput`/`outputPorts` (A2+A3) |
+| Round-body bridges — round.t entry `state-in` ×64 + exit `state-out` ×64 + final-add entry `final.state-in` | 129 | 129 | Round groups gain port boundaries; runtime auto-bridges or absorbs (A3) |
+| Constant loaders — `K-to-aux`, `H-to-aux`, `H-constant`, `init-working-vars` | 4 | 4 | Move to `cipherConstants` (A1) |
+| **Total** | **138** | **185** | |
 
-**Frame-drop estimate:** ~250–400 of ~2486. Real density gain, but the
-*headline* win is that the scrubber can no longer land on a frame whose
-state value contradicts what the student just watched.
+**Corrections A0 made to the locked draft:**
+
+- **`final.out` was double-counted.** The original "Boundary bridges"
+  row listed "final `bytes-to-state`" and the "Round-body bridges" row
+  listed "final-add entry/**exit**" — both pointing at the same leaf
+  (`final.out`). It is the cipher's terminal `bytes-to-state`, so A0
+  assigns it to **boundary only**. That drops round-body from 130 → 129
+  frames and the grand total from 186 → **185**.
+- **Total frames is 2487, not "~2486".** Pinned by
+  `tests/sha-256.test.ts:133` (frame-budget regression test). The probe
+  asserts `frames.length === 2487` as a bucketing sanity check.
+  Frame-drop = **185 / 2487 ≈ 7.4 %**.
+- **The "~250–400 frame drop" estimate was too high.** The bridge
+  frames removed are exactly **185**. The gap to 250–400 is the **321
+  `aux-load-bytes@1` READ frames** (the per-iteration `fetch-p2/7/15/16`
+  ×48 = 192, the per-round `fetch-K`/`fetch-W` ×64 = 128, and
+  `final.fetch-H` ×1). Those are **not bridges** — they read W/K/H into
+  the body and stay as legitimate port reads under the A1–A3 contract.
+  Whether A3's round-group port boundary lets some of them collapse is
+  open item #2 below; A0 does **not** count them as scaffolding.
+- **`init-working-vars` is a `bytes-to-state` bridge, grouped under
+  "constant loaders" for fate, not step type.** It semantically loads
+  the H constant into state, so A1 retires it alongside the three true
+  loaders (`K-to-aux`/`H-to-aux` are `generic.aux-load@1`, `H-constant`
+  is `constant-load@1`). When A1 "deletes the 4 constant loaders," one
+  of the four is a `bytes-to-state@1`, not a load step type.
+
+**Full SHA-256 leaf inventory (A0 probe, 1829 spec leaves total):** the
+138 scaffolding leaves are `bytes-to-state@1` ×68, `state-to-bytes@1`
+×66, `generic.aux-load@1` ×2, `generic.state-to-aux-bytes@1` ×1,
+`constant-load@1` ×1. The non-scaffolding remainder is genuine
+computation: `rotate-bits-right@1` ×388, `and@1` ×320, `add-mod-32@1`
+×265, `xor@1` ×258, `aux-load-bytes@1` ×133, `byte-slice@1` ×128,
+`split-bytes@1` ×66, `concat@1` ×65, `not@1` ×64, `shift-bits-right@1`
+×2, `pad-with-byte@1` ×1, `append-be64-length@1` ×1.
+
+**Other shipped specs use ZERO of the 5 scaffold step types.** A0
+walked all 22 AES/Speck/Serpent/DES specs (enc + dec): grand total 0
+scaffold leaves. SHA-256 is the only port-native-primitive spec today
+(the registry-`kind` discriminator does *not* distinguish them — every
+step type is `kind: "ported"` since Slice 1.8 — so the step-type-set
+predicate above is the meaningful one). A3's SHA-256 cleanup therefore
+cannot touch another cipher.
+
+**Headline win** is still qualitative, not the 7.4 %: the scrubber can
+no longer land on a frame whose `state` value contradicts what the
+student just watched (the smoke confusion in "Context" above).
 
 ## The arc — 10 slices, 3 phases
 
@@ -155,12 +210,17 @@ before each phase boundary, and before each Phase B cipher.
 
 ### Phase A — Contract + SHA-256 cleanup + anti-creep (4 slices)
 
-**A0 — Probe (pure measurement).** AST-walk `sha-256.ts`; confirm the
-inventory counts above; trace-time count of frames per scaffolding
-category on the "abc" KAT; confirm no *other* shipped spec uses
-port-native primitives (AES/Speck/Serpent/DES are legacy → probe
-returns 0 elsewhere). Output: actual numbers committed to this plan. No
-code change.
+**A0 — Probe (pure measurement). ✅ DONE 2026-05-28.** A throwaway
+vitest probe walked `sha-256.ts` (grouped all 1829 leaves by `stepType`
+to *discover* rather than just verify the categorization), ran the
+"abc" KAT trace and bucketed frames per scaffolding category, and
+scanned the 22 other shipped specs. Findings folded into the inventory
+section above: **138 scaffolding spec leaves / 185 trace frames** (was
+"~186"), total **2487** frames (was "~2486"), the `final.out`
+double-count resolved, the "~250–400" frame-drop corrected to 185 (the
+321 `aux-load-bytes` reads are not bridges), and **0 scaffold leaves in
+any non-SHA spec**. Probe deleted after capture; no committed code
+change.
 
 **A1 — `cipherConstants` + editor + sidebar.**
 - `CipherSpec.cipherConstants?: Record<string, Uint8Array>`
