@@ -59,6 +59,7 @@ import {
 } from "solid-js";
 import { BlockBadge } from "./components/BlockBadge";
 import { BytesView } from "./components/BytesView";
+import { ConstantsPanel } from "./components/ConstantsPanel";
 import { FeistelMiniDiagram } from "./components/FeistelMiniDiagram";
 import { FeistelTrackContext } from "./components/FeistelTrackContext";
 import { GraphView } from "./components/GraphView";
@@ -1685,6 +1686,12 @@ export const App = () => {
                   {/* Human-readable explanation of what this step does. */}
                   <StepDescription frame={frame()} />
 
+                  {/* Editable published cipher constants (SHA-256's K/H;
+                      AES S-box later). Renders nothing for specs without
+                      `cipherConstants`. Sits above the per-step ParamEditor
+                      so "constants" and "params" read as a pair. */}
+                  <ConstantsPanel />
+
                   {/* Editable params for the current step. Reads the
                       shared selection signal (kept in sync with the
                       scrubber by stores/trace.ts) rather than the frame
@@ -1699,6 +1706,12 @@ export const App = () => {
 
           <Match when={viewMode() === "graph"}>
             <GraphView />
+            {/* Cipher-constants panel — shown in graph view too (the
+                linear-mode step tree is hidden here, so this is the only
+                constants surface while wiring ports). Independent of any
+                node selection, so it sits outside the selection-gated
+                editor pane below. */}
+            <ConstantsPanel />
             {/* Slice 10 + trace-coupling-bug-fix follow-up: the graph
                 view's editor pane reads the shared `selectedStepId`
                 signal rather than the trace frame. Clicking a leaf in

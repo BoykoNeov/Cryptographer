@@ -57,6 +57,7 @@ import {
   prependChildToTrack,
   removeStep,
   updateAllStepsByType,
+  updateCipherConstant,
   updateStepParams,
 } from "@/core/spec-mutations";
 import type { CipherSpec, Json, StepLeaf, StepNode } from "@/core/types";
@@ -454,6 +455,18 @@ export const setPadding = (scheme: PaddingScheme): void => {
  */
 export const editStepParams = (stepId: string, params: Json): void => {
   updateActive((s) => updateStepParams(s, stepId, params));
+};
+
+/**
+ * Edit one published cipher constant's bytes (scaffolding-suppression A1).
+ * Writes to the ACTIVE slot — for hashes that's the single slot; for
+ * ciphers, encrypt/decrypt hold their constants independently (the same
+ * never-auto-sync rule as step params). Goes through `updateActive`, so the
+ * App-level debounced `createEffect(on(spec, …))` re-runs the cipher and the
+ * edited constant re-materializes into aux for every consumer.
+ */
+export const editCipherConstant = (name: string, bytes: Uint8Array): void => {
+  updateActive((s) => updateCipherConstant(s, name, bytes));
 };
 
 /**

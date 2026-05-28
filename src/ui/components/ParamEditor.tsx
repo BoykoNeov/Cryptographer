@@ -1755,6 +1755,7 @@ const ByteSliceBlock = (props: BlockProps) => {
 // matching the actual aux value's length surfaces a warning but doesn't
 // change runtime behavior, so locking it keeps the surface honest.
 const AuxLoadBytesBlock = (props: { step: StepLeaf }) => {
+  const spec = useSpec();
   const params = (): { auxName?: string; byteLength?: number } => props.step.params as never;
 
   const writeParams = (patch: Record<string, Json>) => {
@@ -1763,6 +1764,16 @@ const AuxLoadBytesBlock = (props: { step: StepLeaf }) => {
       ...patch,
     });
   };
+
+  // Back-ref (scaffolding-suppression A1): if this leaf reads an aux key
+  // that's a published cipher constant, name it as a clickable link that
+  // scrolls the constants panel's matching row into view. Closes the loop
+  // with the panel's forward cross-ref (which links the other direction).
+  const constantName = createMemo<string | null>(() => {
+    const n = params().auxName;
+    const constants = spec().cipherConstants;
+    return n && constants && n in constants ? n : null;
+  });
 
   return (
     <dl class="param-scalars">
@@ -1780,6 +1791,27 @@ const AuxLoadBytesBlock = (props: { step: StepLeaf }) => {
         <dt>Declared byteLength</dt>
         <dd>{params().byteLength ?? "—"}</dd>
       </div>
+      <Show when={constantName()}>
+        {(name) => (
+          <div class="param-scalar-row">
+            <dt>Reads constant</dt>
+            <dd>
+              <button
+                type="button"
+                class="constant-backref-link"
+                title={`Scroll to "${name()}" in the cipher-constants panel`}
+                onClick={() => {
+                  document
+                    .querySelector(`[data-constant-row="${name()}"]`)
+                    ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                }}
+              >
+                {name()}
+              </button>
+            </dd>
+          </div>
+        )}
+      </Show>
     </dl>
   );
 };

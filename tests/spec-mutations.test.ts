@@ -1,12 +1,14 @@
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { serpent128Spec } from "@/ciphers/serpent-128";
+import { buildSha256Spec } from "@/ciphers/sha-256";
 import { runSpec } from "@/core/runtime";
 import {
   type ParamCellDiff,
   compareSpecs,
   findStep,
   updateAllStepsByType,
+  updateCipherConstant,
   updateStepParams,
 } from "@/core/spec-mutations";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
@@ -245,6 +247,52 @@ describe("spec mutation helpers", () => {
       const modified = runSpec(swapped, buildDefaultRegistry(), {
         initialState: pt,
         initialAux,
+      });
+      if (baseline.finalState.shape !== "bytes" || modified.finalState.shape !== "bytes") {
+        throw new Error("bad shape");
+      }
+      expect(hexFromBytes(modified.finalState.bytes)).not.toBe(
+        hexFromBytes(baseline.finalState.bytes),
+      );
+    });
+  });
+
+  describe("updateCipherConstant (A1)", () => {
+    it("replaces one constant's bytes, preserving the others by reference", () => {
+      const spec = buildSha256Spec();
+      const newH = new Uint8Array(32).fill(0xab);
+      const updated = updateCipherConstant(spec, "H", newH);
+      expect(updated).not.toBe(spec);
+      expect(updated.cipherConstants?.H).toBe(newH);
+      // K is untouched — same reference as the source spec.
+      expect(updated.cipherConstants?.K).toBe(spec.cipherConstants?.K);
+    });
+
+    it("returns the spec by reference (no-op) for an unknown constant name", () => {
+      const spec = buildSha256Spec();
+      const updated = updateCipherConstant(spec, "does-not-exist", new Uint8Array([1]));
+      expect(updated).toBe(spec);
+    });
+
+    it("returns the spec by reference when the spec has no cipherConstants", () => {
+      // AES has no cipherConstants in A1 (its S-box moves there in B1).
+      const updated = updateCipherConstant(aes128Spec, "K", new Uint8Array([1]));
+      expect(updated).toBe(aes128Spec);
+    });
+
+    it("an edited constant changes the digest (the run actually consumes it)", () => {
+      const spec = buildSha256Spec();
+      const pt = { shape: "bytes", bytes: new Uint8Array([0x61, 0x62, 0x63]) } as const;
+      const baseline = runSpec(spec, buildDefaultRegistry(), {
+        initialState: pt,
+        portedDispatchEnabled: true,
+      });
+      // Flip every byte of H — the initial working vars (and final add) change.
+      const flippedH = Uint8Array.from(spec.cipherConstants?.H as Uint8Array, (b) => b ^ 0xff);
+      const edited = updateCipherConstant(spec, "H", flippedH);
+      const modified = runSpec(edited, buildDefaultRegistry(), {
+        initialState: pt,
+        portedDispatchEnabled: true,
       });
       if (baseline.finalState.shape !== "bytes" || modified.finalState.shape !== "bytes") {
         throw new Error("bad shape");

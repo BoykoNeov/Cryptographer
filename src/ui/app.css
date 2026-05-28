@@ -988,6 +988,81 @@ button:disabled {
   border-top: 1px solid var(--border);
 }
 
+/* ─── Cipher-constants panel (scaffolding-suppression A1) ─────────────────
+   Editable published constants (SHA-256's K/H). Sits above the per-step
+   ParamEditor in linear + graph views. The outer <details> uses the same
+   uppercase-muted label language as the param editor's sections so the two
+   read as siblings. */
+.constants-panel {
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.constants-panel-title {
+  cursor: pointer;
+  list-style: none;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.constants-panel-title::-webkit-details-marker {
+  display: none;
+}
+
+.constants-panel-title::before {
+  content: "▾ ";
+  display: inline-block;
+  width: 1em;
+}
+
+.constants-panel:not([open]) > .constants-panel-title::before {
+  content: "▸ ";
+}
+
+.constants-panel-hint {
+  margin: 0;
+}
+
+.constant-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+
+/* Forward cross-ref: inline wrapping list of consumer-leaf links. K's ~64
+   fetch-K readers wrap to multiple lines rather than truncating (user pick). */
+.constant-consumers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 4px;
+  line-height: 1.5;
+}
+
+.constant-consumer-link,
+.constant-backref-link {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.constant-consumer-link:hover,
+.constant-backref-link:hover {
+  text-decoration: underline;
+}
+
 /* Editable aux-name text input used by the Slice 10 aux primitive blocks
    (aux-load / aux-xor / aux-copy). Same monospace/colorway as .byte-cell
    so the param editor stays visually consistent across cell-shaped and

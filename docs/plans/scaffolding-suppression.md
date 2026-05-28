@@ -222,8 +222,13 @@ double-count resolved, the "~250–400" frame-drop corrected to 185 (the
 any non-SHA spec**. Probe deleted after capture; no committed code
 change.
 
-**A1 — `cipherConstants` + editor + panel.** *(UX + leaf-delta resolved
-2026-05-28 via advisor — see corrections below.)*
+**A1 — `cipherConstants` + editor + panel. ✅ SHIPPED 2026-05-28.**
+*(UX + leaf-delta resolved 2026-05-28 via advisor — see corrections
+below. Shipped in two commits: mechanism + persistence first, then the
+editor panel + cross-refs. SHA-256 KAT byte-equal; frame total
+2487→2485; `ConstantsPanel.tsx` in main column for linear + graph; both
+cross-ref directions wired + tested. Live browser eyeball still
+recommended — covered by jsdom component tests, not a real-browser pass.)*
 - `CipherSpec.cipherConstants?: Record<string, Uint8Array>`
   (`core/types.ts`); runtime materializes each entry into `aux` (one
   loop before `walk()`).

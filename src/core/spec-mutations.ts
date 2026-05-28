@@ -148,6 +148,31 @@ export const updateAllStepsByType = (
   return { ...spec, steps: newSteps };
 };
 
+// ─── Editing a published cipher constant ──────────────────────────────────
+
+/**
+ * Replace the bytes of one named entry in `spec.cipherConstants`
+ * (scaffolding-suppression A1). Returns a NEW spec; the original is
+ * untouched. No-op (returns `spec` by reference) when the spec has no
+ * `cipherConstants` or no entry named `name` — the constants editor only
+ * surfaces names that exist, so a miss means a stale id.
+ *
+ * Other constants are preserved by reference. The runtime re-materializes
+ * the edited bytes into `aux[name]` on the next run, so every consumer
+ * (every `aux-load-bytes@1` that reads `name`) sees the new value in
+ * lockstep — that single-source-of-truth property is the whole point of
+ * moving constants off per-step params.
+ */
+export const updateCipherConstant = (
+  spec: CipherSpec,
+  name: string,
+  bytes: Uint8Array,
+): CipherSpec => {
+  const current = spec.cipherConstants;
+  if (!current || !(name in current)) return spec;
+  return { ...spec, cipherConstants: { ...current, [name]: bytes } };
+};
+
 // ─── Comparing two specs ──────────────────────────────────────────────────
 
 /**
