@@ -578,7 +578,19 @@ validator/runtime divergence as ⓐ.)*
 - **Gate:** green with the allowlist; a deliberately-broken fixture leaf
   (`matrix-cm-4x4` port, not on allowlist) makes the checker red — plus a
   raw-only fixture confirms no over-reporting. Both directional asserts
-  verified to bite via a temporary allowlist mutation. 6 tests, suite 2477→2483.
+  verified to bite via a temporary allowlist mutation.
+- **Legacy-contract tripwire (advisor catch — extension beyond the literal
+  A4 text).** The port-shape walk only sees `kind: "ported"` registrations;
+  a bare `kind: "legacy"` step has no `PortContract`, so a matrix-creeping
+  legacy executor would be **invisible** to the layout checks — the exact
+  creep vector the plan exists to close. Adding the tripwire **disproved the
+  "every step type is ported since Slice 1.8" assumption**: three legacy
+  registrations remain (`compute-block-count`, `load-block`, `store-block` —
+  the ECB/CBC multi-block mode primitives; `load-block`/`store-block` are
+  genuinely matrix-interpreting, `bytes ↔ matrix4x4-bytes`). They get a
+  second `LEGACY_CONTRACT_ALLOWLIST` with the same exact-equality two-
+  directional discipline, removed in B1 when AES modes go byte-native.
+- 9 tests total, suite 2477→**2486**.
 
 ### Phase B — Per-cipher byte-native rebuilds (4 slices, feature branches)
 
