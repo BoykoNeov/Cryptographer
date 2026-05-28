@@ -222,13 +222,17 @@ double-count resolved, the "~250–400" frame-drop corrected to 185 (the
 any non-SHA spec**. Probe deleted after capture; no committed code
 change.
 
-**A1 — `cipherConstants` + editor + panel. ✅ SHIPPED 2026-05-28.**
+**A1 — `cipherConstants` + editor + panel. ✅ SHIPPED + SMOKED 2026-05-28.**
 *(UX + leaf-delta resolved 2026-05-28 via advisor — see corrections
-below. Shipped in two commits: mechanism + persistence first, then the
-editor panel + cross-refs. SHA-256 KAT byte-equal; frame total
-2487→2485; `ConstantsPanel.tsx` in main column for linear + graph; both
-cross-ref directions wired + tested. Live browser eyeball still
-recommended — covered by jsdom component tests, not a real-browser pass.)*
+below. Shipped in two commits: mechanism + persistence first
+(`6ec88e3`), then the editor panel + cross-refs (`3eaad35`). SHA-256 KAT
+byte-equal; frame total 2487→2485; leaf count 1829→1827;
+`ConstantsPanel.tsx` in main column for linear + graph; both cross-ref
+directions wired + tested. **Browser smoke PASSED** (throwaway Playwright,
+deleted): panel renders, K expands to 256 wrapping cells, editing
+K[0]=00 changed the digest `ba7816…`→`6f5c08…` end-to-end through the
+200 ms debounce, consumer link selects the leaf, back-ref visible, AES
+inert with no layout artifact. Gate met.)*
 - `CipherSpec.cipherConstants?: Record<string, Uint8Array>`
   (`core/types.ts`); runtime materializes each entry into `aux` (one
   loop before `walk()`).
@@ -241,10 +245,14 @@ recommended — covered by jsdom component tests, not a real-browser pass.)*
   wrap, not truncate); the leaf inspector shows a clickable
   `reads: [K]` line that scrolls to the panel.
 - **Document schema: additive, NO `schemaVersion` bump.** Add
-  `cipherConstants?: Record<string, hex-string>` to the Zod schema;
-  legacy specs without the field are unchanged. Hex matches the app's
-  byte serialization convention; Save/Load/URL-share carry constants.
-  (A2 owns the 2→3 bump for container port fields.)
+  `cipherConstants?: Record<string, hex-string>` to the Zod schema
+  (`CipherSpecSchema` — note Zod STRIPS undeclared keys, so it MUST be
+  declared explicitly or it's dropped on round-trip); legacy specs
+  without the field are unchanged. Hex matches the app's byte
+  serialization convention; Save/Load/URL-share carry constants. (The
+  current `CURRENT_SCHEMA_VERSION` is already 3 from Slice 2.10b's
+  `algorithm` rename — NOT bumped by A1; A2's schema-version decision is
+  spelled out in the A2 slice below.)
 - **Cross-mode mirror re-homing is DEFERRED to B1, not A1.** SHA-256 has
   no mirror constants (the S-box class is AES, rebuilt in B1). Per
   [[feedback_all_specs_port_native]] `main` never holds half-converted
@@ -281,12 +289,25 @@ recommended — covered by jsdom component tests, not a real-browser pass.)*
 - `seedInput` / `bodyOutput` optional `PortBinding` fields on `iterate`
   / `for-each-subgraph` / `for-each-subgraph-with-history`
   (`core/types.ts`); runtime resolves them in place of state I/O.
-- `document-schema.ts` Zod extension; `schemaVersion` 2→3 (legacy specs
-  leave fields undefined — additive migration).
+- `document-schema.ts` Zod extension. **schemaVersion decision (advisor
+  flag, resolve at A2 START):** the plan's original "2→3 bump" is stale —
+  `CURRENT_SCHEMA_VERSION` is ALREADY 3 (Slice 2.10b's `cipher`→
+  `algorithm` rename; A1 added `cipherConstants` additively within 3).
+  So A2 picks one: **(a) additive within 3** (like A1 — legacy specs
+  leave the fields undefined; no migration; old apps silently drop the
+  new container fields when reading a new doc) or **(b) bump 3→4** (the
+  container-contract change "deserves a version"; old apps reading a new
+  doc error *friendly* via the `ACCEPTED_SCHEMA_VERSIONS` pre-check
+  instead of silently dropping). Different forward-compat semantics —
+  decide before implementing, don't leave ambiguous.
 - `inferHistorySeedEdges` retargets seed source to `seedInput`.
 - **Gate:** FES contract test passes against both old (state) and new
   (port) seeding during the transition; toy fixture
   (`tests/runtime-for-each-subgraph-with-history.test.ts`) updated.
+- **Pre-A2 advisor consult** (per [[feedback_iterative_slice_review]]) —
+  A2 is a load-bearing data-model change (new `PortBinding` fields on
+  three container kinds + runtime resolution rewrite + the schema
+  decision above). Consult before implementing.
 
 **A3 — SHA-256 spec cleanup.**
 - Rewrite `sha-256.ts` to use `cipherConstants` (A1) + container ports
