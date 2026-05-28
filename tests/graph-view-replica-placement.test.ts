@@ -48,7 +48,15 @@ import {
   layoutConstantsFor,
   layoutRoot,
 } from "@/ui/components/GraphView";
-import { describe, expect, it } from "vitest";
+import { __setOffsetsEnabledForTest } from "@/ui/stores/offsets-hatch";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+// Offset-based layout ships ON by default (2026-05-28), but these are
+// baseline replica-placement geometry tests — they pin by-source-row
+// placement against the un-offset layout. Their interaction WITH offsets
+// is covered by the pending visual smoke, not here. Pin OFF for the file.
+beforeEach(() => __setOffsetsEnabledForTest(false));
+afterEach(() => __setOffsetsEnabledForTest(null));
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 

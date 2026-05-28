@@ -24,6 +24,7 @@ import { __resetAutoRerunForTests } from "@/ui/stores/auto-rerun";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
+import { __setOffsetsEnabledForTest } from "@/ui/stores/offsets-hatch";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
 import { __resetSpecForTests, setMode } from "@/ui/stores/spec";
 import {
@@ -75,10 +76,17 @@ const findButton = (container: HTMLElement, textPrefix: string): HTMLButtonEleme
 // ─── Component-level GraphView tests ──────────────────────────────────────
 
 describe("GraphView — component-level (AES-128 fixture)", () => {
-  beforeEach(resetAll);
+  beforeEach(() => {
+    resetAll();
+    // Baseline replica/spine geometry — pin offsets OFF (they ship ON by
+    // default as of 2026-05-28; offsets-interaction coverage is the
+    // pending visual smoke's job, not these unit assertions).
+    __setOffsetsEnabledForTest(false);
+  });
   afterEach(() => {
     cleanup();
     resetAll();
+    __setOffsetsEnabledForTest(null);
   });
 
   it("renders one leaf rectangle per leaf in the spec (41 for AES-128)", () => {

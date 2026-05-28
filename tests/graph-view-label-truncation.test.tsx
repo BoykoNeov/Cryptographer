@@ -44,6 +44,7 @@ import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
 import { __resetLayoutsForTests } from "@/ui/stores/layout";
+import { __setOffsetsEnabledForTest } from "@/ui/stores/offsets-hatch";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
 import { __resetSpecForTests } from "@/ui/stores/spec";
 import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
@@ -96,10 +97,18 @@ const findContainerLabel = (root: HTMLElement, labelPrefix: string): SVGTextElem
 // ─── Tests ────────────────────────────────────────────────────────────────
 
 describe("GraphView — container label truncation (V1, SVG textLength)", () => {
-  beforeEach(resetAll);
+  beforeEach(() => {
+    resetAll();
+    // Truncation only fires when the round container is narrow. Offsets
+    // (ON by default as of 2026-05-28) staircase group children and widen
+    // the box enough that the verbose label fits un-clipped — so pin OFF
+    // to keep this test exercising the truncation path it was written for.
+    __setOffsetsEnabledForTest(false);
+  });
   afterEach(() => {
     cleanup();
     resetAll();
+    __setOffsetsEnabledForTest(null);
   });
 
   it("clips the verbose 'Round 10 (final, no MixColumns)' label via textLength", () => {

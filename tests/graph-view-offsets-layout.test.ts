@@ -26,7 +26,7 @@
 
 import type { CipherGraph, ContainerNode, GraphNode } from "@/core/graph";
 import { layoutConstantsFor, layoutRoot } from "@/ui/components/GraphView";
-import { __setOffsetsEnabledForTest } from "@/ui/stores/offsets-hatch";
+import { __setOffsetsEnabledForTest, isOffsetsEnabledForLayout } from "@/ui/stores/offsets-hatch";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────
@@ -228,7 +228,7 @@ describe("offsets-hatch — iterate alternation (horizontal-flow context)", () =
 
 // ─── OFF (default) regression guard ───────────────────────────────────────
 
-describe("offsets-hatch — OFF (default)", () => {
+describe("offsets-hatch — explicitly OFF (?offsets=0)", () => {
   beforeEach(() => {
     __setOffsetsEnabledForTest(false);
   });
@@ -261,5 +261,35 @@ describe("offsets-hatch — OFF (default)", () => {
     // All children share the same x (plain vertical stack).
     expect(xs[1]).toBe(xs[0]);
     expect(xs[2]).toBe(xs[0]);
+  });
+});
+
+// ─── Default: ON when no URL flag is present ───────────────────────────────
+
+describe("offsets-hatch — ON by default (no flag)", () => {
+  afterEach(() => {
+    __setOffsetsEnabledForTest(null);
+  });
+
+  it("treats the absence of any ?offsets param as enabled", () => {
+    // Clear the test override so the layout gate falls through to URL
+    // parsing. jsdom's default `window.location.search` is "" — i.e. no
+    // ?offsets flag — which must now read as ON.
+    __setOffsetsEnabledForTest(null);
+    expect(isOffsetsEnabledForLayout()).toBe(true);
+  });
+
+  it("alternates root leaves with no override pinned", () => {
+    __setOffsetsEnabledForTest(null);
+    const consts = layoutConstantsFor("normal");
+    const graph = makeGraph({
+      nodes: [leaf("L1"), leaf("L2"), leaf("L3")],
+      rootIds: ["L1", "L2", "L3"],
+    });
+    const { boxes } = layoutRoot(graph, emptyPinned, consts);
+    const ys = ["L1", "L2", "L3"].map((id) => boxes.get(id)?.y);
+    expect(ys[0]).toBeDefined();
+    expect(ys[1]).toBe((ys[0] as number) + consts.LEAF_H);
+    expect(ys[2]).toBe(ys[0]);
   });
 });
