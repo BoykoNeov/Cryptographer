@@ -49,7 +49,7 @@ import {
   deriveAuxGraph,
   replicateHighFanoutSources,
 } from "@/core/graph";
-import type { Trace } from "@/core/types";
+import type { CipherSpec, Trace } from "@/core/types";
 import { DEFAULT_REPLICATION_THRESHOLD } from "@/ui/stores/view-replication";
 import { describe, expect, it } from "vitest";
 
@@ -188,5 +188,69 @@ describe("deriveAuxGraph — history-seed edge derivation (S2(l))", () => {
       // styles aux edges differently from state edges.
       expect(edge.kind).toBe("aux");
     }
+  });
+});
+
+// ─── A2 retarget: seedInput overrides the spine-predecessor anchor ─────────
+//
+// Scaffolding-suppression A2 lets a FES-with-history declare `seedInput`
+// (the explicit upstream producer the runtime seeds the history from). When
+// present, `inferHistorySeedEdges` must anchor the synthetic seed edges at
+// `seedInput.node`, NOT at the spine predecessor. SHA-256 doesn't carry
+// `seedInput` until A3, so the SHA-256 tests above (spine predecessor =
+// `seed-schedule`) continue to pass unchanged; this synthetic spec pins the
+// new branch.
+
+describe("deriveAuxGraph — history-seed retarget to seedInput (A2)", () => {
+  // `producer` (the seedInput target) sits BEFORE `middle`, which is the
+  // FES's spine predecessor. If the retarget works, edges source from
+  // `producer`; if it regressed to the legacy rule, they'd source from
+  // `middle`.
+  const buildSeedInputSpec = (): CipherSpec => ({
+    id: "test-seedinput-retarget@1",
+    name: "A2 seedInput retarget",
+    stateShape: "bytes",
+    inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+    steps: [
+      { kind: "step", id: "producer", type: "constant-load@1", params: { bytes: [0x00, 0x01] } },
+      { kind: "step", id: "middle", type: "constant-load@1", params: { bytes: [0x00, 0x01] } },
+      {
+        kind: "for-each-subgraph-with-history",
+        id: "loop",
+        iterationCount: 2,
+        lookbackOffsets: [1, 2],
+        historyEntryByteLength: 1,
+        seedInput: { node: "producer", port: "output" },
+        children: [
+          {
+            kind: "step",
+            id: "fp1",
+            type: "aux-load-bytes@1",
+            params: { auxName: "prior-1", byteLength: 1 },
+          },
+          {
+            kind: "step",
+            id: "fp2",
+            type: "aux-load-bytes@1",
+            params: { auxName: "prior-2", byteLength: 1 },
+          },
+        ],
+      },
+    ],
+  });
+
+  it("anchors history-seed edges at seedInput.node, not the spine predecessor", () => {
+    const registry = buildDefaultRegistry();
+    const graph = deriveAuxGraph(emptyTrace(), buildSeedInputSpec(), { registry });
+    const seedEdges = graph.edges.filter(
+      (e) => e.kind === "aux" && e.auxKey === HISTORY_SEED_AUX_KEY,
+    );
+    // One edge per lookback offset whose fetch leaf exists (prior-1, prior-2).
+    expect(seedEdges).toHaveLength(2);
+    for (const edge of seedEdges) {
+      expect(edge.from).toBe("producer");
+      expect(edge.from).not.toBe("middle");
+    }
+    expect(seedEdges.map((e) => e.to).sort()).toEqual(["fp1", "fp2"]);
   });
 });

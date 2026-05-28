@@ -202,6 +202,18 @@ export type IterateGroup = {
   /** Slice 2.6a container port-edge wiring (see `StepGroup` for shared semantics). */
   readonly portInputs?: Readonly<Record<string, PortBinding>>;
   readonly outputPorts?: readonly string[];
+  /**
+   * Container port contract (scaffolding-suppression A2). See
+   * `ForEachSubgraphWithHistoryNode.seedInput`/`bodyOutput` for the full
+   * semantics. **Runtime resolution is deferred to Phase B1 (AES rebuild),
+   * when `iterate` adopts `seedInput` in place of `blocksFromAux` and
+   * `outputPorts` in place of the `concat-blocks@1` boundary.** Until then
+   * the runtime THROWS if either field is set on an `iterate` node (loud
+   * failure beats silently ignoring the wiring) — keep using
+   * `countFromAux`/`blocksFromAux`/`outBlocksAux`.
+   */
+  readonly seedInput?: PortBinding;
+  readonly bodyOutput?: PortBinding;
 };
 
 /**
@@ -407,6 +419,16 @@ export type ForEachSubgraphNode = {
   /** Slice 2.6a container port-edge wiring (see `StepGroup` for shared semantics). */
   readonly portInputs?: Readonly<Record<string, PortBinding>>;
   readonly outputPorts?: readonly string[];
+  /**
+   * Container port contract (scaffolding-suppression A2). See
+   * `ForEachSubgraphWithHistoryNode.seedInput`/`bodyOutput` for the full
+   * semantics. **Runtime resolution is deferred to Phase B1**, same as
+   * `IterateGroup` — the runtime THROWS if either field is set on a
+   * `for-each-subgraph` node until B1 wires item-array/state-thread modes
+   * to ports. Use `inputArrayPort`/`outputsPort`/`iterationCount` for now.
+   */
+  readonly seedInput?: PortBinding;
+  readonly bodyOutput?: PortBinding;
 };
 
 /**
@@ -517,6 +539,37 @@ export type ForEachSubgraphWithHistoryNode = {
   /** Slice 2.6a container port-edge wiring (see `StepGroup` for shared semantics). */
   readonly portInputs?: Readonly<Record<string, PortBinding>>;
   readonly outputPorts?: readonly string[];
+  /**
+   * **Container port contract — scaffolding-suppression plan Phase A Slice
+   * A2.** The looping containers historically moved data across their
+   * boundary through `state`: the spec author inserted a `bytes-to-state@1`
+   * bridge before the container (to seed it from a sibling's bytes) and the
+   * body's last leaf was another `bytes-to-state@1` so its exit `state`
+   * became the per-iteration result. `seedInput` / `bodyOutput` retire those
+   * bridge leaves by naming the byte sources directly:
+   *
+   *   - `seedInput` — a `PortBinding` to a **same-scope preceding sibling's**
+   *     output port. When set, the runtime slices that port's bytes into
+   *     `historyEntryByteLength` chunks to seed the initial history, instead
+   *     of reading parent-scope `state.bytes`. (SHA-256 A3:
+   *     `{ node: "length-append", port: "output" }`, replacing the
+   *     `seed-schedule` bridge.)
+   *   - `bodyOutput` — a `PortBinding` to a **direct child of the body**
+   *     whose output port carries each iteration's result. When set, the
+   *     runtime appends that port's bytes to history per iteration instead
+   *     of reading the body's exit `state`. (SHA-256 A3: `{ node: "w-t",
+   *     port: "output" }`, replacing the `schedule-out` bridge.)
+   *
+   * Both are OPTIONAL and ADDITIVE (no `schemaVersion` bump — same posture
+   * as `cipherConstants`/`portInputs`; deliberate, see `document.ts`). When
+   * absent, the legacy state-mediated path runs unchanged — that's why
+   * A2 ships before the SHA-256 cleanup (A3) without breaking any spec.
+   * The container still writes the concatenated history to `state` at exit,
+   * so `outputPorts` publication and downstream state-thread consumers keep
+   * working; the state-write is retired later, in Phase C.
+   */
+  readonly seedInput?: PortBinding;
+  readonly bodyOutput?: PortBinding;
 };
 
 export type StepNode =

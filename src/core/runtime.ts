@@ -164,7 +164,13 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
     blockIndex: number | undefined,
     branchPath: readonly string[],
     roundPath: readonly number[],
-  ): void => {
+    // Returns this scope's `nodeOutputs` map so a caller that owns the
+    // surrounding loop (today only `runForEachSubgraphWithHistory`, for
+    // `bodyOutput` resolution — scaffolding-suppression A2) can read a
+    // named body node's port output after the body completes. The 6
+    // statement-position callers ignore the return; B1 adds iterate + FES
+    // consumers (`bodyOutput` for the rebuilt AES/ECB body).
+  ): Map<string, Map<string, Uint8Array>> => {
     // ─── Scope-local node-output map (Slice 2.6a) ──────────────────────
     // Records each leaf's emitted output-port bytes so downstream siblings
     // can resolve declared `portInputs` references. Per `Q-edges-2` user
@@ -219,6 +225,14 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
       }
 
       if (node.kind === "iterate") {
+        // A2 container port contract: `seedInput`/`bodyOutput` resolution
+        // on `iterate` is deferred to Phase B1 (AES rebuild). Fail loudly
+        // rather than silently ignoring author-declared wiring.
+        if (node.seedInput !== undefined || node.bodyOutput !== undefined) {
+          throw new Error(
+            `iterate '${node.id}': seedInput/bodyOutput port-seeding is deferred to Phase B1 (AES rebuild); use countFromAux/blocksFromAux/outBlocksAux for now`,
+          );
+        }
         const rawCount = aux.get(node.countFromAux);
         if (typeof rawCount !== "number" || !Number.isInteger(rawCount) || rawCount < 0) {
           throw new Error(
@@ -269,13 +283,36 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
       }
 
       if (node.kind === "for-each-subgraph") {
+        // A2: `seedInput`/`bodyOutput` resolution on `for-each-subgraph` is
+        // deferred to Phase B1. Fail loudly rather than silently ignore.
+        if (node.seedInput !== undefined || node.bodyOutput !== undefined) {
+          throw new Error(
+            `for-each-subgraph '${node.id}': seedInput/bodyOutput port-seeding is deferred to Phase B1 (AES rebuild); use inputArrayPort/outputsPort/iterationCount for now`,
+          );
+        }
         runForEachSubgraph(node, path, blockIndex, branchPath, roundPath);
         publishContainerOutputs(node.id, node.outputPorts);
         continue;
       }
 
       if (node.kind === "for-each-subgraph-with-history") {
-        runForEachSubgraphWithHistory(node, path, blockIndex, branchPath, roundPath);
+        // A2 container port contract: resolve `seedInput` HERE, where the
+        // parent scope's `nodeOutputs` is live (the helper is defined
+        // outside `walk` and can't see it). Pass the resolved seed bytes
+        // into the helper; absent seedInput → helper falls back to
+        // parent-scope `state.bytes` (legacy path, until A3).
+        let seedBytes: Uint8Array | undefined;
+        if (node.seedInput !== undefined) {
+          const upstream = nodeOutputs.get(node.seedInput.node);
+          const resolved = upstream?.get(node.seedInput.port);
+          if (resolved === undefined) {
+            throw new Error(
+              `for-each-subgraph-with-history '${node.id}': seedInput references '${node.seedInput.node}.${node.seedInput.port}', which is not a same-scope upstream output (declare the producer as a preceding sibling exposing that output port)`,
+            );
+          }
+          seedBytes = resolved;
+        }
+        runForEachSubgraphWithHistory(node, path, blockIndex, branchPath, roundPath, seedBytes);
         publishContainerOutputs(node.id, node.outputPorts);
         continue;
       }
@@ -709,6 +746,7 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
       };
       frames.push(frame);
     }
+    return nodeOutputs;
   };
 
   /**
@@ -1115,6 +1153,11 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
     blockIndex: number | undefined,
     branchPath: readonly string[],
     roundPath: readonly number[],
+    // A2 container port contract: when the node declares `seedInput`, the
+    // caller (in `walk`, where the parent `nodeOutputs` is live) resolves
+    // it to the upstream output bytes and passes them here. `undefined`
+    // means no `seedInput` → seed from parent-scope `state.bytes` (legacy).
+    seedBytes: Uint8Array | undefined,
   ): void => {
     // ── Static contract validation ──────────────────────────────────────
     if (node.lookbackOffsets.length === 0) {
@@ -1136,26 +1179,39 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
       );
     }
 
-    // ── Parent-scope state contract ─────────────────────────────────────
-    // Initial history seeds come from parent state.bytes (Slice 2.0c
-    // sourcing pick). SHA-256 will arrange for the preceding spec leaves
-    // to populate state with W[0..15]; the toy fixture passes seeds in
-    // directly via runtime's initialState.
-    if (state.shape !== "bytes") {
-      throw new Error(
-        `for-each-subgraph-with-history '${node.id}': parent-scope state.shape must be "bytes" to source initial history seeds (got "${state.shape}")`,
-      );
+    // ── Initial-history seed source ─────────────────────────────────────
+    // Two paths (A2 container port contract):
+    //  - Port mode: `seedBytes` resolved from `seedInput` by the caller.
+    //    State is not consulted (it may be a matrix from a prior step).
+    //  - State mode (legacy, until A3): parent-scope `state.bytes`. SHA-256
+    //    arranges for the preceding `seed-schedule` bridge to put W[0..15]
+    //    into state; the toy fixture passes seeds via runtime initialState.
+    let seedSource: Uint8Array;
+    if (seedBytes !== undefined) {
+      seedSource = seedBytes;
+      if (seedSource.length % entryLen !== 0) {
+        throw new Error(
+          `for-each-subgraph-with-history '${node.id}': seedInput output length ${seedSource.length} is not a multiple of historyEntryByteLength ${entryLen}`,
+        );
+      }
+    } else {
+      if (state.shape !== "bytes") {
+        throw new Error(
+          `for-each-subgraph-with-history '${node.id}': parent-scope state.shape must be "bytes" to source initial history seeds (got "${state.shape}")`,
+        );
+      }
+      if (state.bytes.length % entryLen !== 0) {
+        throw new Error(
+          `for-each-subgraph-with-history '${node.id}': parent state.bytes.length ${state.bytes.length} is not a multiple of historyEntryByteLength ${entryLen}`,
+        );
+      }
+      seedSource = state.bytes;
     }
-    if (state.bytes.length % entryLen !== 0) {
-      throw new Error(
-        `for-each-subgraph-with-history '${node.id}': parent state.bytes.length ${state.bytes.length} is not a multiple of historyEntryByteLength ${entryLen}`,
-      );
-    }
-    const seedCount = state.bytes.length / entryLen;
+    const seedCount = seedSource.length / entryLen;
     const maxOffset = Math.max(...node.lookbackOffsets);
     if (seedCount < maxOffset) {
       throw new Error(
-        `for-each-subgraph-with-history '${node.id}': need at least max(lookbackOffsets)=${maxOffset} seeds in initial history (got ${seedCount} seeds from ${state.bytes.length} bytes / entry ${entryLen}); iteration 0 cannot satisfy a lookback deeper than seed count`,
+        `for-each-subgraph-with-history '${node.id}': need at least max(lookbackOffsets)=${maxOffset} seeds in initial history (got ${seedCount} seeds from ${seedSource.length} bytes / entry ${entryLen}); iteration 0 cannot satisfy a lookback deeper than seed count`,
       );
     }
 
@@ -1181,7 +1237,7 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
     // ── Build initial history (defensive copies — caller bytes don't leak) ─
     const history: Uint8Array[] = [];
     for (let i = 0; i < seedCount; i++) {
-      history.push(new Uint8Array(state.bytes.subarray(i * entryLen, (i + 1) * entryLen)));
+      history.push(new Uint8Array(seedSource.subarray(i * entryLen, (i + 1) * entryLen)));
     }
 
     // ── Snapshot aux keys we're about to set, so we can restore on exit ─
@@ -1223,32 +1279,56 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
       // state across iterations (unlike state-thread for-each-subgraph).
       state = { shape: "bytes", bytes: new Uint8Array(entryLen) };
 
-      walk(node.children, childPath, blockIndex, branchPath, [...roundPath, t]);
+      const bodyOutputs = walk(node.children, childPath, blockIndex, branchPath, [...roundPath, t]);
 
-      // Body exit contract: bytes-shape AND exactly entryLen bytes.
-      // Wrong shape is a body authoring bug (using a state-shape that
-      // doesn't match the history entry width); wrong length is either
-      // a body bug or a mismatched historyEntryByteLength setting.
-      //
-      // TS narrowed `state` to `BytesState` after the iteration-entry
-      // assignment `state = { shape: "bytes", ... }` and can't track
-      // that the `walk()` callback may have widened it. Re-widen via
-      // the union cast so the shape branch reads cleanly.
-      const exitState = state as State;
-      if (exitState.shape !== "bytes") {
-        throw new Error(
-          `for-each-subgraph-with-history '${node.id}': iteration ${t} body exit state.shape must be "bytes" (got "${exitState.shape}"); the body's last leaf must produce a bytes-shape state of historyEntryByteLength=${entryLen} bytes`,
-        );
-      }
-      if (exitState.bytes.length !== entryLen) {
-        throw new Error(
-          `for-each-subgraph-with-history '${node.id}': iteration ${t} body exit state.bytes.length ${exitState.bytes.length} != historyEntryByteLength ${entryLen}`,
-        );
+      // The new history entry comes from one of two places (A2):
+      //  - Port mode: the byte output of the `bodyOutput` body node. The
+      //    body's exit `state` is NOT consulted — `bodyOutput` decouples
+      //    the history entry from "whatever the last leaf left in state".
+      //  - State mode (legacy, until A3): the body's exit `state`, which is
+      //    bytes-shape because the body's last leaf is a `bytes-to-state@1`.
+      let entryBytes: Uint8Array;
+      if (node.bodyOutput !== undefined) {
+        const producer = bodyOutputs.get(node.bodyOutput.node);
+        const resolved = producer?.get(node.bodyOutput.port);
+        if (resolved === undefined) {
+          throw new Error(
+            `for-each-subgraph-with-history '${node.id}': bodyOutput references '${node.bodyOutput.node}.${node.bodyOutput.port}', which is not a same-scope body output (the target must be a direct child of the body exposing that output port)`,
+          );
+        }
+        if (resolved.length !== entryLen) {
+          throw new Error(
+            `for-each-subgraph-with-history '${node.id}': iteration ${t} bodyOutput length ${resolved.length} != historyEntryByteLength ${entryLen}`,
+          );
+        }
+        entryBytes = new Uint8Array(resolved);
+      } else {
+        // Body exit contract: bytes-shape AND exactly entryLen bytes.
+        // Wrong shape is a body authoring bug (using a state-shape that
+        // doesn't match the history entry width); wrong length is either
+        // a body bug or a mismatched historyEntryByteLength setting.
+        //
+        // TS narrowed `state` to `BytesState` after the iteration-entry
+        // assignment `state = { shape: "bytes", ... }` and can't track
+        // that the `walk()` callback may have widened it. Re-widen via
+        // the union cast so the shape branch reads cleanly.
+        const exitState = state as State;
+        if (exitState.shape !== "bytes") {
+          throw new Error(
+            `for-each-subgraph-with-history '${node.id}': iteration ${t} body exit state.shape must be "bytes" (got "${exitState.shape}"); the body's last leaf must produce a bytes-shape state of historyEntryByteLength=${entryLen} bytes`,
+          );
+        }
+        if (exitState.bytes.length !== entryLen) {
+          throw new Error(
+            `for-each-subgraph-with-history '${node.id}': iteration ${t} body exit state.bytes.length ${exitState.bytes.length} != historyEntryByteLength ${entryLen}`,
+          );
+        }
+        entryBytes = new Uint8Array(exitState.bytes);
       }
 
       // Append a defensive copy so subsequent iterations / aux sets
       // can't mutate this entry through their own aliased state buffer.
-      history.push(new Uint8Array(exitState.bytes));
+      history.push(entryBytes);
     }
 
     // ── Restore aux keys to pre-invocation values ───────────────────────

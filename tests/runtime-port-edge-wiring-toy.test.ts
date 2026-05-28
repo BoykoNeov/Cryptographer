@@ -580,3 +580,78 @@ describe("port-edge wiring (Slice 2.6a) — document round-trip", () => {
     });
   });
 });
+
+// ─── Document round-trip: A2 container seedInput/bodyOutput ───────────────
+
+describe("container port contract (A2) — document round-trip", () => {
+  // `seedInput`/`bodyOutput` are declared explicitly in
+  // `document-schema.ts`'s `loopingContainerSeedFields` PRECISELY because
+  // Zod's default object handling STRIPS undeclared keys (the gotcha A1's
+  // `cipherConstants` hit). This test pins that they survive a full
+  // encode → Zod-decode cycle — without it, a future edit that drops the
+  // field from a container schema would fail silently, and an A3 SHA-256
+  // doc would reload with the wiring stripped + fall back to a state path
+  // whose bridges A3 deleted (silent corruption). Sibling of the
+  // `portInputs` round-trip above.
+  it("a FES-with-history spec carrying seedInput/bodyOutput round-trips through CipherDocumentSchema unchanged", () => {
+    const original: CipherDocument = {
+      schemaVersion: 3,
+      algorithm: "sha-256",
+      spec: {
+        id: "toy-a2-roundtrip@1",
+        name: "A2 container-port round-trip",
+        stateShape: "bytes",
+        inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+        steps: [
+          { kind: "step", id: "seeds", type: "constant-load@1", params: { bytes: [0x00, 0x01] } },
+          {
+            kind: "for-each-subgraph-with-history",
+            id: "loop",
+            iterationCount: 2,
+            lookbackOffsets: [1, 2],
+            historyEntryByteLength: 1,
+            seedInput: { node: "seeds", port: "output" },
+            bodyOutput: { node: "xor", port: "output" },
+            children: [
+              {
+                kind: "step",
+                id: "p1",
+                type: "aux-load-bytes@1",
+                params: { auxName: "prior-1", byteLength: 1 },
+              },
+              {
+                kind: "step",
+                id: "p2",
+                type: "aux-load-bytes@1",
+                params: { auxName: "prior-2", byteLength: 1 },
+              },
+              {
+                kind: "step",
+                id: "xor",
+                type: "xor@1",
+                params: { inputCount: 2 },
+                portInputs: {
+                  operand0: { node: "p1", port: "output" },
+                  operand1: { node: "p2", port: "output" },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const reparsed = JSON.parse(JSON.stringify(original));
+    const result = CipherDocumentSchema.safeParse(reparsed);
+    if (!result.success) {
+      throw new Error(`document failed to validate: ${JSON.stringify(result.error.issues)}`);
+    }
+    const decodedSpec = result.data.spec as unknown as CipherSpec;
+    const loop = decodedSpec.steps.find((n) => n.id === "loop");
+    if (loop === undefined || loop.kind !== "for-each-subgraph-with-history") {
+      throw new Error("loop node missing or wrong kind in decoded spec");
+    }
+    // The fields the explicit schema declaration protects from Zod-strip.
+    expect(loop.seedInput).toEqual({ node: "seeds", port: "output" });
+    expect(loop.bodyOutput).toEqual({ node: "xor", port: "output" });
+  });
+});

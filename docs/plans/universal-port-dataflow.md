@@ -212,6 +212,18 @@ Each phase has an explicit pass/fail gate. **If a gate fails, planning re-opens 
 
 ### Phase 3 — AES rebuild from medium primitives
 
+> **Inherits the container port contract from
+> `docs/plans/scaffolding-suppression.md` (Phase A, Slice A2 — SHIPPED
+> 2026-05-28).** Do NOT re-derive container seeding ad-hoc: the looping
+> containers now carry optional `seedInput` / `bodyOutput` `PortBinding`
+> fields (`core/types.ts`). AES's `iterate` (ECB/CBC) adopts `seedInput`
+> (replacing `generic.split-blocks@1`/`blocksFromAux`) and `outputPorts`
+> (replacing `generic.concat-blocks@1`) when rebuilt here — that's the
+> "Phase B1" runtime resolution the A2 slice deferred for iterate/FES (A2
+> currently THROWS if those fields are set on `iterate`/`for-each-subgraph`,
+> so wiring them is part of this rebuild). Constants (S-box/Rcon) move to
+> `cipherConstants` (A1). See the scaffolding-suppression plan's Phase B1.
+
 **Goal:** prove the universal-primitive vocabulary expresses AES; achieve KAT parity at the cipher boundary with explicit `frameMap` documenting legacy-compound → ported-decomposed relationships per (β).
 
 **Scope:**

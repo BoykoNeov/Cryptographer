@@ -47,7 +47,7 @@
 import type { GraphWarning } from "./graph";
 import { resolvePortMap } from "./port-projection";
 import type { StepRegistry } from "./registry";
-import type { CipherSpec, StateShape, StepNode } from "./types";
+import type { CipherSpec, PortBinding, StateShape, StepNode } from "./types";
 
 /**
  * A read-only lookup from a node id (leaf stepId or container id) to the
@@ -64,6 +64,74 @@ type WalkContext = {
   readonly registry: StepRegistry;
   readonly shapeAt: Map<string, StateShape>;
   readonly warnings: GraphWarning[];
+};
+
+/**
+ * Output-port names of the DIRECT children of a body scope, keyed by node
+ * id. Used to resolve a looping container's `bodyOutput` `PortBinding`
+ * (scaffolding-suppression A2) — the runtime reads the body's full
+ * `nodeOutputs` map AFTER the body completes, so `bodyOutput` may name any
+ * direct child (forward references are valid here, unlike sink-side
+ * `portInputs` which only sees preceding siblings). Mirrors the
+ * scope-output recording in `walk`. Ported leaves expose their
+ * registration's output ports; containers expose `outputPorts ?? ["out"]`.
+ */
+const collectDirectChildOutputs = (
+  nodes: readonly StepNode[],
+  registry: StepRegistry,
+): Map<string, ReadonlySet<string>> => {
+  const out = new Map<string, ReadonlySet<string>>();
+  for (const node of nodes) {
+    if (node.kind === "step") {
+      const registration = registry.getRegistration(node.type);
+      if (registration !== undefined && registration.kind === "ported") {
+        const names = new Set<string>();
+        for (const [portName] of resolvePortMap(registration.shape.outputs, node.params)) {
+          names.add(portName);
+        }
+        out.set(node.id, names);
+      }
+      continue;
+    }
+    out.set(node.id, new Set(node.outputPorts ?? ["out"]));
+  }
+  return out;
+};
+
+/**
+ * Validate one container `PortBinding` field (`seedInput` / `bodyOutput`,
+ * scaffolding-suppression A2) against a scope's output-port map, reusing
+ * the `port-input-unresolvable` warning so no new warning kind / renderer
+ * branch is needed. `fieldName` ("seedInput" | "bodyOutput") rides through
+ * as the warning's `portName`.
+ */
+const validateContainerBinding = (
+  containerId: string,
+  fieldName: string,
+  binding: PortBinding,
+  scope: ReadonlyMap<string, ReadonlySet<string>>,
+  ctx: WalkContext,
+): void => {
+  const upstream = scope.get(binding.node);
+  if (upstream === undefined) {
+    ctx.warnings.push({
+      kind: "port-input-unresolvable",
+      stepId: containerId,
+      portName: fieldName,
+      targetNode: binding.node,
+      targetPort: binding.port,
+      reason: "missing-node",
+    });
+  } else if (!upstream.has(binding.port)) {
+    ctx.warnings.push({
+      kind: "port-input-unresolvable",
+      stepId: containerId,
+      portName: fieldName,
+      targetNode: binding.node,
+      targetPort: binding.port,
+      reason: "missing-port",
+    });
+  }
 };
 
 /**
@@ -260,6 +328,19 @@ const walk = (nodes: readonly StepNode[], current: StateShape, ctx: WalkContext)
       // populate. Mode-exclusivity / lookbackOffsets validity / seed-count
       // adequacy are runtime contracts — surface at runtime walk, not here.
       recordContainerOutputs();
+      // A2 container port contract: validate the `seedInput` (same-scope
+      // preceding-sibling) and `bodyOutput` (direct body child) bindings so
+      // an unresolvable reference surfaces as a pre-Run graph warning rather
+      // than only a runtime throw. `scopeOutputs` already holds preceding
+      // siblings at this point (incremental, same as `portInputs`); the body
+      // scope is collected fresh.
+      if (node.seedInput !== undefined) {
+        validateContainerBinding(node.id, "seedInput", node.seedInput, scopeOutputs, ctx);
+      }
+      if (node.bodyOutput !== undefined) {
+        const bodyScope = collectDirectChildOutputs(node.children, ctx.registry);
+        validateContainerBinding(node.id, "bodyOutput", node.bodyOutput, bodyScope, ctx);
+      }
       walk(node.children, "bytes", ctx);
       shape = "bytes";
       ctx.shapeAt.set(node.id, shape);

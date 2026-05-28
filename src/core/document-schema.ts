@@ -210,6 +210,22 @@ const containerPortEdgeFields = {
   defaultCollapsed: z.boolean().optional(),
 };
 
+// Container port contract (scaffolding-suppression A2). `seedInput` /
+// `bodyOutput` name the byte sources that the looping containers used to
+// move through `state` via `bytes-to-state@1` bridge leaves. Declared
+// explicitly (NOT left to the loose CipherSpec object) because per-kind
+// container schemas are default `z.object()` which STRIPS undeclared keys —
+// the same gotcha `cipherConstants` hit in A1; without this the wiring would
+// silently vanish on save/load round-trip. Spread ONLY into the three
+// looping container schemas (group/feistel have no body-loop, so the fields
+// are meaningless there). Additive within schemaVersion 3 — no bump, same
+// posture as `cipherConstants` and the other container fields; see
+// `document.ts` for the deliberate decision.
+const loopingContainerSeedFields = {
+  seedInput: PortBindingSchema.optional(),
+  bodyOutput: PortBindingSchema.optional(),
+};
+
 export const StepGroupSchema = z.object({
   kind: z.literal("group"),
   id: z.string(),
@@ -229,6 +245,7 @@ export const IterateGroupSchema = z.object({
   outBlocksAux: z.string(),
   children: z.array(z.lazy(() => StepNodeSchema)),
   ...containerPortEdgeFields,
+  ...loopingContainerSeedFields,
 });
 
 // Feistel branching primitive (Phase 2 of `docs/plans/des-feistel.md`).
@@ -297,6 +314,7 @@ export const ForEachSubgraphSchema = z.object({
   blockByteLength: z.number().int().positive().optional(),
   blockLayout: StateShapeSchema.optional(),
   ...containerPortEdgeFields,
+  ...loopingContainerSeedFields,
 });
 
 // `for-each-subgraph-with-history` spec node kind (Slice 2.0c of
@@ -330,6 +348,7 @@ export const ForEachSubgraphWithHistorySchema = z.object({
   lookbackOffsets: z.array(z.number().int().positive()),
   historyEntryByteLength: z.number().int().positive(),
   ...containerPortEdgeFields,
+  ...loopingContainerSeedFields,
 });
 
 // Note on `schemaVersion`: Phase 4 of `docs/plans/des-feistel.md` bumped

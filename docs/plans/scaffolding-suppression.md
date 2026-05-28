@@ -1,6 +1,6 @@
 # Scaffolding suppression — every leaf speaks only in byte arrays
 
-> **Status: PLAN LOCKED 2026-05-28. NOT STARTED.** Drafted after the
+> **Status: Phase A in progress — A0+A1+A2 SHIPPED 2026-05-28; A3 next.** Drafted after the
 > Slice 2.9b smoke (2026-05-28) surfaced a structural pedagogy gap, then
 > shaped through a 7-decision walkthrough with the user (Position +
 > Q1–Q5 + state-concept) and an advisor calendar-risk pushback that
@@ -285,29 +285,48 @@ inert with no layout artifact. Gate met.)*
   no `generic.aux-load@1` / `constant-load@1` leaves remain in the
   SHA-256 spec; `validateShapes` clean.
 
-**A2 — Container port contract.**
-- `seedInput` / `bodyOutput` optional `PortBinding` fields on `iterate`
-  / `for-each-subgraph` / `for-each-subgraph-with-history`
-  (`core/types.ts`); runtime resolves them in place of state I/O.
-- `document-schema.ts` Zod extension. **schemaVersion decision (advisor
-  flag, resolve at A2 START):** the plan's original "2→3 bump" is stale —
-  `CURRENT_SCHEMA_VERSION` is ALREADY 3 (Slice 2.10b's `cipher`→
-  `algorithm` rename; A1 added `cipherConstants` additively within 3).
-  So A2 picks one: **(a) additive within 3** (like A1 — legacy specs
-  leave the fields undefined; no migration; old apps silently drop the
-  new container fields when reading a new doc) or **(b) bump 3→4** (the
-  container-contract change "deserves a version"; old apps reading a new
-  doc error *friendly* via the `ACCEPTED_SCHEMA_VERSIONS` pre-check
-  instead of silently dropping). Different forward-compat semantics —
-  decide before implementing, don't leave ambiguous.
-- `inferHistorySeedEdges` retargets seed source to `seedInput`.
-- **Gate:** FES contract test passes against both old (state) and new
-  (port) seeding during the transition; toy fixture
-  (`tests/runtime-for-each-subgraph-with-history.test.ts`) updated.
-- **Pre-A2 advisor consult** (per [[feedback_iterative_slice_review]]) —
-  A2 is a load-bearing data-model change (new `PortBinding` fields on
-  three container kinds + runtime resolution rewrite + the schema
-  decision above). Consult before implementing.
+**A2 — Container port contract. ✅ SHIPPED 2026-05-28.**
+*(Pre-A2 advisor consult done; schema decision resolved (a); scope
+narrowed per advisor — fields uniform on all three looping containers but
+runtime resolution wired only for the A3 consumer (FES-with-history), with
+loud throws on the deferred kinds. Full gate green: 2468 tests, biome +
+tsc + build clean.)*
+- `seedInput` / `bodyOutput` optional `PortBinding` fields added to
+  `IterateGroup` / `ForEachSubgraphNode` / `ForEachSubgraphWithHistoryNode`
+  (`core/types.ts`) — uniform shape, like `portInputs`/`outputPorts`. NOT
+  on `group`/`feistel-round` (no body-loop there).
+- **Runtime resolution wired for `for-each-subgraph-with-history` only**
+  (the A3 consumer): `seedInput` resolved at the call site in `walk` (where
+  the parent scope's `nodeOutputs` is live) and passed into the helper;
+  `bodyOutput` resolved from the body scope via `walk` now **returning its
+  `nodeOutputs` map** (the 6 statement-position callers ignore it; B1 adds
+  iterate+FES consumers). Both paths are ADDITIVE — absent fields ⇒ the
+  legacy state-mediated path runs unchanged (that's why A2 ships before A3
+  without breaking SHA-256). The container still writes the concatenated
+  history to `state` at exit, so `outputPorts` publication + downstream
+  state-thread consumers keep working; the state-write is retired in Phase C.
+- **Deferred kinds fail loudly** (advisor footgun fix): the runtime THROWS
+  if `seedInput`/`bodyOutput` is set on `iterate` or `for-each-subgraph`
+  ("deferred to Phase B1") rather than silently ignoring author wiring.
+  B1 wires their resolution alongside the AES rebuild.
+- **schemaVersion decision = (a) additive within 3.** Documented
+  deliberately in `document.ts` (the bump would friendly-error
+  *unchanged-cipher* docs to protect a near-nonexistent old-reader
+  population; the reliance hazard only arrives in A3). `seedInput`/
+  `bodyOutput` declared explicitly in `document-schema.ts`'s shared
+  `loopingContainerSeedFields` (Zod default `z.object()` STRIPS undeclared
+  keys — same gotcha A1's `cipherConstants` hit) → they survive Save/Load.
+- `inferHistorySeedEdges` retargets the seed-edge anchor to `seedInput.node`
+  when present, else spine predecessor (`graph.ts`). SHA-256 has no
+  `seedInput` until A3, so its existing tests stay green.
+- **spec-shapes pre-Run validation** reuses the `port-input-unresolvable`
+  warning for `seedInput` (same-scope) + `bodyOutput` (direct body child),
+  so unresolvable references surface in the graph editor before Run (no new
+  warning kind / renderer branch).
+- **Tests:** port-mode `seedInput`+`bodyOutput` KAT (matches state mode);
+  same-scope throws for both; deferred-kind throws for iterate + FES;
+  seed-edge retarget; spec-shapes binding resolution (missing-node /
+  missing-port / clean). +10 tests. Existing state-path tests unchanged.
 
 **A3 — SHA-256 spec cleanup.**
 - Rewrite `sha-256.ts` to use `cipherConstants` (A1) + container ports

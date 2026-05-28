@@ -1571,11 +1571,15 @@ export const HISTORY_SEED_AUX_KEY = "history-seed";
  * `seed-schedule`, the `bytes-to-state@1` that produces the 64-byte
  * padded block split into 16 four-byte history seeds).
  *
- * **Anchor rule.** "Spine predecessor of the FES-with-history container
- * in spec order." Generalizes to SHA-512 / MD5 / any future hash using
- * the same primitive without per-cipher knowledge. If the FES-with-
- * history container is the first sibling at its scope (no predecessor),
- * we skip — there's no chip to anchor the edge to.
+ * **Anchor rule.** When the container declares `seedInput` (scaffolding-
+ * suppression A2), the edge anchors at `seedInput.node` — the explicit
+ * upstream producer the runtime seeds the history from. Otherwise it falls
+ * back to "spine predecessor of the FES-with-history container in spec
+ * order" (the legacy `bytes-to-state@1` bridge). Both generalize to
+ * SHA-512 / MD5 / any future hash using the same primitive without
+ * per-cipher knowledge. If neither resolves (FES-with-history is the first
+ * sibling at its scope, no `seedInput`), we skip — there's no chip to
+ * anchor the edge to.
  *
  * **Targets.** Body leaves whose `type === "aux-load-bytes@1"` AND
  * whose `params.auxName` matches `prior-{N}` for some `N` in the
@@ -1652,13 +1656,24 @@ const inferHistorySeedEdges = (spec: CipherSpec): GraphEdge[] => {
       const node = siblings[i];
       if (node === undefined) continue;
       if (node.kind === "for-each-subgraph-with-history") {
-        // Spine predecessor = previous sibling in spec order. If absent
-        // (FES-with-history is the first sibling at this scope) there's
-        // no chip to anchor the synthetic edge to; skip.
-        const predecessor = i > 0 ? siblings[i - 1] : undefined;
-        if (predecessor !== undefined) {
+        // Seed-edge anchor. Two sources (scaffolding-suppression A2):
+        //  - Port mode: `seedInput.node` — the explicit upstream producer
+        //    the runtime slices the initial history from. Used once the
+        //    SHA-256 `seed-schedule` bridge is retired (A3) and the FES
+        //    declares `seedInput: { node: "length-append", ... }`.
+        //  - Legacy: the spine predecessor (previous sibling in spec
+        //    order), which is the `bytes-to-state@1` bridge that puts the
+        //    seed bytes into state. If absent (FES-with-history is the
+        //    first sibling) there's no chip to anchor to; skip.
+        const anchorId =
+          node.seedInput !== undefined
+            ? node.seedInput.node
+            : i > 0
+              ? siblings[i - 1]?.id
+              : undefined;
+        if (anchorId !== undefined) {
           const offsetSet = new Set<number>(node.lookbackOffsets);
-          visitLeavesInBody(node.children, offsetSet, predecessor.id);
+          visitLeavesInBody(node.children, offsetSet, anchorId);
         }
         // Recurse into the body for any nested FES-with-history (rare
         // but the type system permits, runtime contract aside).

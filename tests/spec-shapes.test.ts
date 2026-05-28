@@ -211,3 +211,112 @@ describe("inferShapesAtAnchors", () => {
     expect(map.get(concatId)).toBe("bytes");
   });
 });
+
+describe("validateShapes — A2 container port-binding resolution", () => {
+  // A FES-with-history declaring `seedInput` (same-scope preceding sibling)
+  // and `bodyOutput` (direct body child). The validator reuses the
+  // `port-input-unresolvable` warning so an unresolvable reference surfaces
+  // pre-Run; `portName` carries the field name ("seedInput"/"bodyOutput").
+  const buildSpec = (overrides?: {
+    readonly seedInput?: { readonly node: string; readonly port: string };
+    readonly bodyOutput?: { readonly node: string; readonly port: string };
+  }): CipherSpec => ({
+    id: "test-a2-bindings@1",
+    name: "A2 binding resolution",
+    stateShape: "bytes",
+    inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+    steps: [
+      { kind: "step", id: "producer", type: "constant-load@1", params: { bytes: [0x00, 0x01] } },
+      {
+        kind: "for-each-subgraph-with-history",
+        id: "loop",
+        iterationCount: 2,
+        lookbackOffsets: [1, 2],
+        historyEntryByteLength: 1,
+        seedInput: overrides?.seedInput ?? { node: "producer", port: "output" },
+        bodyOutput: overrides?.bodyOutput ?? { node: "xor-priors", port: "output" },
+        children: [
+          {
+            kind: "step",
+            id: "p1",
+            type: "aux-load-bytes@1",
+            params: { auxName: "prior-1", byteLength: 1 },
+          },
+          {
+            kind: "step",
+            id: "p2",
+            type: "aux-load-bytes@1",
+            params: { auxName: "prior-2", byteLength: 1 },
+          },
+          {
+            kind: "step",
+            id: "xor-priors",
+            type: "xor@1",
+            params: { inputCount: 2 },
+            portInputs: {
+              operand0: { node: "p1", port: "output" },
+              operand1: { node: "p2", port: "output" },
+            },
+          },
+        ],
+      },
+    ] satisfies readonly StepNode[],
+  });
+
+  const bindingWarnings = (spec: CipherSpec) =>
+    validateShapes(spec, registry).filter(
+      (w) =>
+        w.kind === "port-input-unresolvable" &&
+        (w.portName === "seedInput" || w.portName === "bodyOutput"),
+    );
+
+  it("flags seedInput referencing a nonexistent node (missing-node)", () => {
+    const warnings = validateShapes(
+      buildSpec({ seedInput: { node: "nope", port: "output" } }),
+      registry,
+    );
+    expect(warnings).toContainEqual({
+      kind: "port-input-unresolvable",
+      stepId: "loop",
+      portName: "seedInput",
+      targetNode: "nope",
+      targetPort: "output",
+      reason: "missing-node",
+    });
+  });
+
+  it("flags seedInput referencing a real node but wrong port (missing-port)", () => {
+    const warnings = validateShapes(
+      buildSpec({ seedInput: { node: "producer", port: "result" } }),
+      registry,
+    );
+    expect(warnings).toContainEqual({
+      kind: "port-input-unresolvable",
+      stepId: "loop",
+      portName: "seedInput",
+      targetNode: "producer",
+      targetPort: "result",
+      reason: "missing-port",
+    });
+  });
+
+  it("flags bodyOutput referencing a node outside the body's direct children (missing-node)", () => {
+    // `producer` is a top-level sibling, not a direct child of the body.
+    const warnings = validateShapes(
+      buildSpec({ bodyOutput: { node: "producer", port: "output" } }),
+      registry,
+    );
+    expect(warnings).toContainEqual({
+      kind: "port-input-unresolvable",
+      stepId: "loop",
+      portName: "bodyOutput",
+      targetNode: "producer",
+      targetPort: "output",
+      reason: "missing-node",
+    });
+  });
+
+  it("emits no seedInput/bodyOutput warning when both bindings resolve", () => {
+    expect(bindingWarnings(buildSpec())).toEqual([]);
+  });
+});

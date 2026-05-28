@@ -41,6 +41,7 @@
  *    (absent stays absent; present stays present-with-original-value).
  */
 
+import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { StepRegistry } from "@/core/registry";
 import { runSpec } from "@/core/runtime";
 import { canonicalStepId } from "@/core/step-id";
@@ -623,5 +624,181 @@ describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
     expect(() =>
       runSpec(restoreSpec, buildRegistry(), { initialState: seedsTwo, initialAux }),
     ).not.toThrow();
+  });
+});
+
+// ─── A2 container port contract (scaffolding-suppression plan) ─────────────
+//
+// A2 lets the FES-with-history source its initial history from an explicit
+// upstream output port (`seedInput`) and capture each iteration's result
+// from a named body node's output port (`bodyOutput`), instead of moving
+// data through `state` via `bytes-to-state@1` bridge leaves. These tests
+// pin the new port path AND the deferred-kind loud failures, using real
+// port-native steps (`constant-load@1` / `aux-load-bytes@1` / `xor@1`) from
+// the default registry so the dispatch path matches the shipped SHA-256
+// message schedule it's modeled on.
+//
+// The body mirrors the state-mode XOR toy above (seeds [0x05, 0x03],
+// offsets [1, 2]) so the same hand-computed cycle is the KAT — if seedInput
+// or bodyOutput resolution is wrong, the final concatenated history diverges
+// from the value the legacy state path already pins.
+
+const port = (node: string, p: string) => ({ node, port: p });
+
+describe("runtime — FES-with-history container port contract (A2)", () => {
+  // constant-load "seeds" → seedInput; body XORs prior-1 + prior-2; the
+  // xor leaf's output → bodyOutput. Same 8-iteration cycle as the
+  // state-mode happy-path test, so the expected history is identical.
+  const buildPortModeSpec = (overrides?: {
+    readonly seedInput?: { readonly node: string; readonly port: string };
+    readonly bodyOutput?: { readonly node: string; readonly port: string };
+  }): CipherSpec => ({
+    id: "test-fes-history-port@1",
+    name: "A2 port-mode FES-with-history",
+    stateShape: "bytes",
+    inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+    steps: [
+      {
+        kind: "step",
+        id: "seeds",
+        type: "constant-load@1",
+        params: { bytes: [0x05, 0x03] },
+      },
+      {
+        kind: "for-each-subgraph-with-history",
+        id: "loop",
+        iterationCount: 8,
+        lookbackOffsets: [1, 2],
+        historyEntryByteLength: 1,
+        seedInput: overrides?.seedInput ?? port("seeds", "output"),
+        bodyOutput: overrides?.bodyOutput ?? port("xor-priors", "output"),
+        children: [
+          {
+            kind: "step",
+            id: "fetch-p1",
+            type: "aux-load-bytes@1",
+            params: { auxName: "prior-1", byteLength: 1 },
+          },
+          {
+            kind: "step",
+            id: "fetch-p2",
+            type: "aux-load-bytes@1",
+            params: { auxName: "prior-2", byteLength: 1 },
+          },
+          {
+            kind: "step",
+            id: "xor-priors",
+            type: "xor@1",
+            params: { inputCount: 2 },
+            portInputs: {
+              operand0: port("fetch-p1", "output"),
+              operand1: port("fetch-p2", "output"),
+            },
+          },
+        ],
+      },
+    ],
+  });
+
+  it("port mode: seedInput seeds history + bodyOutput captures per-iteration result (KAT matches state mode)", () => {
+    const trace = runSpec(buildPortModeSpec(), buildDefaultRegistry(), {
+      initialState: { shape: "bytes", bytes: new Uint8Array(0) },
+      portedDispatchEnabled: true,
+    });
+    // Exit state = full concatenated history (seeds + 8 outputs) — the
+    // SAME value the legacy state-mode test pins, proving seedInput +
+    // bodyOutput resolution carries the right bytes.
+    if (trace.finalState.shape !== "bytes") throw new Error("finalState shape");
+    expect(Array.from(trace.finalState.bytes)).toEqual([
+      0x05, 0x03, 0x06, 0x05, 0x03, 0x06, 0x05, 0x03, 0x06, 0x05,
+    ]);
+    // Body still emits :r{i}-suffixed frames; the bodyOutput capture
+    // doesn't change frame emission.
+    const xorFrames = trace.frames.filter((f) => canonicalStepId(f.stepId) === "xor-priors");
+    expect(xorFrames).toHaveLength(8);
+    expect(xorFrames.map((f) => f.stepId)).toEqual([
+      "xor-priors:r0",
+      "xor-priors:r1",
+      "xor-priors:r2",
+      "xor-priors:r3",
+      "xor-priors:r4",
+      "xor-priors:r5",
+      "xor-priors:r6",
+      "xor-priors:r7",
+    ]);
+  });
+
+  it("port mode throws when seedInput references a non-same-scope node", () => {
+    expect(() =>
+      runSpec(
+        buildPortModeSpec({ seedInput: port("no-such-producer", "output") }),
+        buildDefaultRegistry(),
+        {
+          initialState: { shape: "bytes", bytes: new Uint8Array(0) },
+          portedDispatchEnabled: true,
+        },
+      ),
+    ).toThrow(/seedInput references 'no-such-producer\.output'.*not a same-scope upstream output/);
+  });
+
+  it("port mode throws when bodyOutput references a node outside the body's direct children", () => {
+    // `seeds` is a top-level sibling, NOT a direct child of the body, so
+    // it's absent from the body-scope nodeOutputs map.
+    expect(() =>
+      runSpec(buildPortModeSpec({ bodyOutput: port("seeds", "output") }), buildDefaultRegistry(), {
+        initialState: { shape: "bytes", bytes: new Uint8Array(0) },
+        portedDispatchEnabled: true,
+      }),
+    ).toThrow(/bodyOutput references 'seeds\.output'.*not a same-scope body output/);
+  });
+
+  it("deferred-kind: iterate with seedInput throws a Phase-B1-deferred error", () => {
+    const spec: CipherSpec = {
+      id: "test-iterate-seedinput@1",
+      name: "iterate seedInput deferred",
+      stateShape: "bytes",
+      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+      steps: [
+        {
+          kind: "iterate",
+          id: "blocks",
+          countFromAux: "count",
+          blocksFromAux: "in-blocks",
+          outBlocksAux: "out-blocks",
+          seedInput: port("nowhere", "output"),
+          children: [],
+        },
+      ],
+    };
+    expect(() =>
+      runSpec(spec, buildDefaultRegistry(), {
+        initialState: { shape: "bytes", bytes: new Uint8Array(0) },
+      }),
+    ).toThrow(/iterate 'blocks': seedInput\/bodyOutput port-seeding is deferred to Phase B1/);
+  });
+
+  it("deferred-kind: for-each-subgraph with bodyOutput throws a Phase-B1-deferred error", () => {
+    const spec: CipherSpec = {
+      id: "test-fes-bodyoutput@1",
+      name: "for-each-subgraph bodyOutput deferred",
+      stateShape: "bytes",
+      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+      steps: [
+        {
+          kind: "for-each-subgraph",
+          id: "fes",
+          iterationCount: 2,
+          bodyOutput: port("nowhere", "output"),
+          children: [],
+        },
+      ],
+    };
+    expect(() =>
+      runSpec(spec, buildDefaultRegistry(), {
+        initialState: { shape: "bytes", bytes: new Uint8Array(0) },
+      }),
+    ).toThrow(
+      /for-each-subgraph 'fes': seedInput\/bodyOutput port-seeding is deferred to Phase B1/,
+    );
   });
 });

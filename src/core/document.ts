@@ -63,6 +63,21 @@ import type { CipherSpec } from "./types";
  * `algorithm: <Cipher>` — the value passes through unchanged since
  * every v2 document predates the hash family. Old `.cipher.json` files
  * and URL-share links still load via `migrateDocument` below.
+ *
+ * **No v3 → v4 bump for the container port contract** (scaffolding-
+ * suppression plan Phase A Slice A2, 2026-05-28). A2 adds optional
+ * `seedInput` / `bodyOutput` `PortBinding` fields to the looping container
+ * node kinds. The decision (deliberate, after weighing a 3→4 bump) is
+ * **additive within schemaVersion 3**, consistent with every prior node-
+ * kind/field addition (`for-each-subgraph`, `defaultCollapsed`,
+ * `portInputs`, `narrationOverride`, `cipherConstants`). A bump would
+ * friendly-error *unchanged-cipher* docs (AES/Speck/Serpent/DES) in old
+ * apps to protect a near-nonexistent old-reader population, and the
+ * reliance hazard (a spec that actually depends on the fields) only
+ * arrives in A3 (SHA-256 cleanup), not A2 — at A2 no shipped spec carries
+ * the fields. Old apps reading a future A3 doc would strip the unknown
+ * container fields and fall back to state-seeding; we accept that
+ * forward-only-degrade risk for a solo-dev, forward-evolving tool.
  */
 export const CURRENT_SCHEMA_VERSION = 3 as const;
 
