@@ -1594,6 +1594,18 @@ const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
             // Resolve a `port(groupId, "in")` seed reference through the
             // enclosing group's seedInput to the real upstream producer; all
             // other bindings keep their declared source.
+            //
+            // A3b follow-up ⓕ: this resolution is deliberately SINGLE-HOP — it
+            // rewrites `port(groupId,"in")` to the group's `seedInput.node`,
+            // but does not chase a seed-of-a-seed (were that producer itself
+            // another group's `port(_,"in")`, the chain would need walking). No
+            // shipped spec nests seeds that way, so single-hop suffices.
+            // Also latent (cosmetic, intentionally not fixed): we rewrite
+            // `port(groupId,"in")` for ANY leaf that reads it, regardless of
+            // whether the leaf actually lives in that group's body — a
+            // hand-malformed cross-scope read would draw an unreachable edge
+            // here. Such a spec can't run (the runtime rejects the cross-scope
+            // reference first), so the stray edge is purely visual.
             const seed = binding.port === "in" ? groupSeedByGroupId.get(binding.node) : undefined;
             const from = seed !== undefined ? seed.node : binding.node;
             edges.push({

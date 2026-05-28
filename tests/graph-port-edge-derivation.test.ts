@@ -31,7 +31,8 @@
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { buildSha256Spec } from "@/ciphers/sha-256";
-import { deriveAuxGraph } from "@/core/graph";
+import { collapseGraph, deriveAuxGraph, validateGraph } from "@/core/graph";
+import { runSpec } from "@/core/runtime";
 import type { Trace } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
@@ -209,5 +210,66 @@ describe("deriveAuxGraph — per-edge state-spine suppression on port-native con
     // alone. AES-128 ECB has multiple consecutive-sibling pairs at root
     // and inside rounds; the count must be > 0.
     expect(stateEdges.length).toBeGreaterThan(0);
+  });
+});
+
+describe("deriveAuxGraph — A3b follow-ups: collapsed round-carry parity + validateGraph clean", () => {
+  // The uncollapsed round carry (init.fetch-H → round.0, round.{t-1} →
+  // round.{t}, round.63 → final.split-wv) is pinned above on an empty trace.
+  // These two tests close the A3b advisor follow-ups ⓑ + ⓓ:
+  //   ⓑ — the carry survives `collapseGraph` over all 64 rounds (the user's
+  //       stated biggest A3b risk: a collapse/layout refactor silently
+  //       re-islanding the chain — previously verified only by a deleted probe).
+  //   ⓓ — `validateGraph` is clean (orphaned-read / unused-write / cycle) on
+  //       BOTH the uncollapsed and the collapsed graph.
+  // A real "abc" trace is built so `validateGraph` has the recorded aux
+  // reads/writes it inspects; the port-flow carry edges themselves are
+  // spec-derived (`inferPortEdges`), so they're present regardless of trace.
+  const buildSha256Graph = () => {
+    const spec = buildSha256Spec();
+    const registry = buildDefaultRegistry();
+    const trace = runSpec(spec, registry, {
+      initialState: { shape: "bytes", bytes: new TextEncoder().encode("abc") },
+      portedDispatchEnabled: true,
+    });
+    return { spec, registry, trace, graph: deriveAuxGraph(trace, spec, { registry }) };
+  };
+  // The 64 compression-round group ids.
+  const allRoundIds = (): ReadonlySet<string> =>
+    new Set(Array.from({ length: 64 }, (_, t) => `round.${t}`));
+
+  it("ⓑ: round-to-round carry survives collapsing all 64 rounds", () => {
+    // After collapse, each `round.{t}.split` leaf remaps to its `round.{t}`
+    // container; the carry source `round.{t-1}` (a group id) is a collapsed
+    // container that stays itself. So the uncollapsed `round.{t-1} →
+    // round.{t}.split` becomes `round.{t-1} → round.{t}`. `init.fetch-H` and
+    // `final.split-wv` aren't rounds → they stay as visible leaves.
+    const { graph } = buildSha256Graph();
+    const collapsed = collapseGraph(graph, allRoundIds());
+    const hasEdge = (from: string, to: string): boolean =>
+      collapsed.edges.some((e) => e.from === from && e.to === to && e.kind === "state");
+    // Preamble seed into round 0.
+    expect(hasEdge("init.fetch-H", "round.0")).toBe(true);
+    // Exit from the round chain into the final-add block.
+    expect(hasEdge("round.63", "final.split-wv")).toBe(true);
+    // Every inter-round boundary carries — no island anywhere in the chain.
+    for (let t = 1; t < 64; t++) {
+      expect(hasEdge(`round.${t - 1}`, `round.${t}`)).toBe(true);
+    }
+  });
+
+  it("ⓓ: validateGraph emits zero warnings on SHA-256, uncollapsed AND collapsed", () => {
+    // The plan claims a clean validateGraph post-A3b but committed no
+    // assertion. GraphView validates the POST-collapse graph, so the collapsed
+    // assertion is the load-bearing one: `validateGraph`'s unused-write check
+    // reads uncollapsed `trace.frames` but looks them up in the collapsed
+    // graph's edges. It stays clean because the rounds only READ K/W from aux
+    // (they never write aux), so collapsing them can't orphan a consumed write.
+    // If collapsed ever warns where uncollapsed doesn't, that's a real app bug,
+    // not a test artifact.
+    const { graph, trace } = buildSha256Graph();
+    expect(validateGraph(graph, trace)).toEqual([]);
+    const collapsed = collapseGraph(graph, allRoundIds());
+    expect(validateGraph(collapsed, trace)).toEqual([]);
   });
 });

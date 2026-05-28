@@ -1,7 +1,7 @@
 # Scaffolding suppression — every leaf speaks only in byte arrays
 
-> **Status: Phase A in progress — A0+A1+A2+A3a+A3b SHIPPED 2026-05-28;
-> A4 (anti-creep contract test) next.** A3 split into A3a+A3b with Q1–Q4
+> **Status: Phase A in progress — A0+A1+A2+A3a+A3b SHIPPED + A3b follow-ups
+> ⓐ–ⓕ DONE 2026-05-28; A4 (anti-creep contract test) next.** A3 split into A3a+A3b with Q1–Q4
 > resolved (advisor pass + user co-design 2026-05-28); A3b's open carry
 > fork resolved **port-to-port** (user pick 2026-05-28). Drafted after the
 > Slice 2.9b smoke (2026-05-28) surfaced a structural pedagogy gap, then
@@ -492,45 +492,61 @@ collapsed round chain fully connected — no islands.)*
   (`round.t.repack` output === `round.{t+1}.split` input at every boundary,
   both visible); connected round chain; frame/leaf pins updated.
 
-***A3b follow-ups — queued from advisor review (2026-05-28).*** *(Verdict:
-ship-it, design + carry-fork-port-to-port confirmed right, no creep. One
-minor defect + four cheap test gaps; none blocking, all deferred per user
-"queue and SESSION END". Do the ⓐ+ⓑ pair before A4/B1 — they pin the exact
-failure modes A3b's risk section named.)*
-- **ⓐ [minor defect] self-referential `seedInput` slips the static
-  validator.** `spec-shapes.ts` group case calls `recordContainerOutputs()`
-  (records the group's own `out`) BEFORE `validateContainerBinding(...,
-  "seedInput", ..., scopeOutputs)`, so a group with `seedInput:
-  port("<self>","out")` finds its own freshly-recorded output → NO pre-Run
-  warning, while the runtime throws at run. Fix: validate `seedInput`
-  against the scope as it stood *before* recording this node, or
-  special-case `binding.node === node.id` as always-warn. (FES branch has
-  the same ordering but is less exposed — authored, not palette-dragged.)
-- **ⓑ [test] collapsed-graph carry parity.** Committed
-  `graph-port-edge-derivation.test.ts` asserts the carry edges on the
-  *uncollapsed* derivation only; the user's stated biggest risk was the
-  *collapsed* view (verified only by a since-deleted throwaway probe). Add a
-  test: `collapseGraph(graph, allRoundIds)` then assert `round.{t-1} →
-  round.{t}` survives for a couple of t, plus `init.fetch-H → round.0` and
-  `round.63 → final.split-wv`. Guards against a future collapse/layout
-  refactor silently re-islanding the chain.
-- **ⓒ [test] for ⓐ:** a `validateShapes` test asserting a group with
-  `seedInput: port("<self>","out")` emits a `port-input-unresolvable`
-  warning (currently emits none — the test that would have caught ⓐ).
-- **ⓓ [test] explicit `validateGraph` clean assertion** for SHA-256
-  post-A3b (orphaned-read / unused-write / cycle) on both collapsed +
-  uncollapsed — the plan claims it; no committed assertion pins it.
-- **ⓔ [test] grandchild `bodyOutput` throws.** Negative test that a
-  `bodyOutput` pointing at a nested (grandchild) node throws — pins the
-  direct-only contract of `collectDirectChildOutputs` against a future
-  "recurse into nested groups" regression.
-- **ⓕ [comment] single-hop seed resolver.** One-line note in `graph.ts`
-  `inferPortEdges` that the `port(groupId,"in")` → `seedInput.node`
-  resolution is deliberately single-hop (a future seed-of-a-seed would need
-  to chase the chain). Also latent: `inferPortEdges` resolves
-  `port(groupId,"in")` for any leaf regardless of body membership, so a
-  hand-malformed cross-scope read draws an unreachable edge — cosmetic
-  (that spec can't run), note don't fix.
+***A3b follow-ups — ✅ DONE 2026-05-28.*** *(Advisor verdict: ship-it,
+design + carry-fork-port-to-port confirmed right, no creep. One minor defect
++ four cheap test gaps + one comment; none blocking. All six closed in one
+batch after the A3b ship; full `npm run check` green — biome + tsc + **2477
+vitest tests** (+5) + build. SHA-256 NOT touched, so the 2303/1692
+frame/leaf pins stayed stable. Pre-implementation advisor pass added one
+real coverage gap: ⓔ became **two** tests — runtime-throws + a `validateShapes`
+half — because the plan named `collectDirectChildOutputs` (the validator),
+which my runtime test alone wouldn't exercise; a future "recurse into nested
+groups" change to that helper would otherwise silently re-open the same
+validator/runtime divergence as ⓐ.)*
+- **✅ ⓐ [minor defect] self-referential `seedInput` slips the static
+  validator.** Was: `spec-shapes.ts` records the container's own `out` (via
+  `recordContainerOutputs()`) BEFORE `validateContainerBinding(...,
+  "seedInput", ...)`, so `seedInput: port("<self>","out")` matched the
+  freshly-recorded own output → NO pre-Run warning while the runtime threw at
+  run. **Fix shipped:** a self-reference guard at the top of
+  `validateContainerBinding` — `if (binding.node === containerId)` pushes a
+  `port-input-unresolvable`/`missing-node` warning and returns. Chosen over
+  the reorder option because it covers **both** the `group` and FES branches
+  and **both** binding fields in one localized place and documents the
+  invariant. Red-green confirmed (ⓒ was RED pre-fix).
+- **✅ ⓑ [test] collapsed-graph carry parity.** Added to
+  `graph-port-edge-derivation.test.ts`: builds the SHA-256 graph from a real
+  "abc" trace, `collapseGraph(graph, round.0..63)`, asserts the carry
+  survives — `init.fetch-H → round.0`, every `round.{t-1} → round.{t}` for
+  t∈1..63 (no island), `round.63 → final.split-wv`. (Uncollapsed
+  `round.{t}.split` remaps to `round.{t}`; the collapsed group source stays
+  itself.) Pins the user's stated biggest A3b risk against a future
+  collapse/layout refactor.
+- **✅ ⓒ [test] for ⓐ.** `validateShapes` test: a group with `seedInput:
+  port("<self>","out")` now emits the `port-input-unresolvable`/`seedInput`/
+  `missing-node` warning. RED before the ⓐ guard, GREEN after — the
+  regression that pins the defect.
+- **✅ ⓓ [test] explicit `validateGraph` clean assertion.** `validateGraph`
+  emits `[]` on SHA-256 (orphaned-read / unused-write / cycle) on **both**
+  uncollapsed and collapsed graphs. **Confirmed empirically** — the
+  collapsed assertion (the one GraphView actually validates) stays clean
+  because rounds only READ K/W from aux and never write aux, so collapsing
+  them can't orphan a consumed write into a false unused-write. The advisor's
+  flagged failure mode did not materialize; no app bug surfaced.
+- **✅ ⓔ [test] grandchild `bodyOutput` throws — runtime + validator.**
+  Runtime half (`runtime-for-each-subgraph-with-history.test.ts`): a group
+  whose `bodyOutput` names `g.inner.leaf` (a leaf inside a child group)
+  throws "not a same-scope body output". Validator half
+  (`spec-shapes.test.ts`): the same shape emits a `port-input-unresolvable`/
+  `bodyOutput`/`missing-node` warning. The two pin the parallel "direct child
+  only" implementations (`collectDirectChildOutputs` vs the runtime's body
+  `nodeOutputs`) against a recurse-into-nested-groups regression.
+- **✅ ⓕ [comment] single-hop seed resolver.** Comment added in `graph.ts`
+  `inferPortEdges`: the `port(groupId,"in")` → `seedInput.node` resolution is
+  deliberately single-hop (a seed-of-a-seed would need the chain walked), and
+  the latent "resolves `port(groupId,"in")` for any leaf regardless of body
+  membership → hand-malformed cross-scope read draws an unreachable edge" is
+  noted as cosmetic-only (that spec can't run), not fixed.
 - **→ B1 [cleanup] consolidate binding resolution.** runtime.ts group
   `seedInput` / group `bodyOutput` / FES `bodyOutput` / `outputFrom` are
   4 near-duplicate "resolve a `PortBinding` against a `nodeOutputs` map,

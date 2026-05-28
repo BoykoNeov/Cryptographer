@@ -897,4 +897,55 @@ describe("runtime — group container port contract (A3b)", () => {
       ),
     ).toThrow(/group 'g': bodyOutput references 'seeds\.output'.*not a same-scope body output/);
   });
+
+  it("port mode throws when group bodyOutput references a grandchild (nested) node, not a direct child", () => {
+    // ⓔ (runtime half — validator half lives in tests/spec-shapes.test.ts).
+    // `bodyOutput` must name a DIRECT child of the body. `g.inner.leaf` lives
+    // inside `g.inner` (a child group), one scope deeper than g's body, so
+    // it's absent from g's body-scope `nodeOutputs` (which records `g.inner`,
+    // the direct child container, not its descendants). The runtime resolves
+    // bodyOutput against that body scope AFTER walking the body, so the body
+    // runs fine and the throw isolates the direct-only contract — pinning it
+    // against a future "recurse into nested scopes" regression.
+    const spec: CipherSpec = {
+      id: "test-group-bodyoutput-grandchild@1",
+      name: "A3b group bodyOutput grandchild",
+      stateShape: "bytes",
+      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+      steps: [
+        { kind: "step", id: "seeds", type: "constant-load@1", params: { bytes: [0x05, 0x03] } },
+        {
+          kind: "group",
+          id: "g",
+          label: "G",
+          seedInput: port("seeds", "output"),
+          bodyOutput: port("g.inner.leaf", "output"),
+          children: [
+            {
+              kind: "group",
+              id: "g.inner",
+              label: "inner",
+              children: [
+                {
+                  kind: "step",
+                  id: "g.inner.leaf",
+                  type: "constant-load@1",
+                  params: { bytes: [0xab] },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      outputFrom: port("g", "out"),
+    };
+    expect(() =>
+      runSpec(spec, buildDefaultRegistry(), {
+        initialState: { shape: "bytes", bytes: new Uint8Array(0) },
+        portedDispatchEnabled: true,
+      }),
+    ).toThrow(
+      /group 'g': bodyOutput references 'g\.inner\.leaf\.output'.*not a same-scope body output/,
+    );
+  });
 });

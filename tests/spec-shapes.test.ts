@@ -320,3 +320,102 @@ describe("validateShapes — A2 container port-binding resolution", () => {
     expect(bindingWarnings(buildSpec())).toEqual([]);
   });
 });
+
+describe("validateShapes — A3b group seedInput/bodyOutput self-reference + grandchild guards", () => {
+  // ⓐ regression. A `group` whose `seedInput` references its OWN output
+  // (`port("<self>","out")`) must warn pre-Run. The runtime throws on this at
+  // run, but the walker's `recordContainerOutputs()` records the group's own
+  // `out` into the scope map BEFORE the seedInput binding is validated — so
+  // without the explicit self-reference guard in `validateContainerBinding`
+  // the validator finds the freshly-recorded own output and stays silent. That
+  // silent-validator/loud-runtime split is the exact divergence class this
+  // plan exists to prevent. This test was RED before the guard landed.
+  it("flags a group seedInput that references its own output (self-reference)", () => {
+    const selfRefSpec: CipherSpec = {
+      id: "test-group-selfref-seed@1",
+      name: "group self-ref seedInput",
+      stateShape: "bytes",
+      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+      steps: [
+        { kind: "step", id: "producer", type: "constant-load@1", params: { bytes: [0x00] } },
+        {
+          kind: "group",
+          id: "g",
+          label: "G",
+          // Self-reference: a container's own `out` is published only on
+          // exit, so it can never seed itself.
+          seedInput: { node: "g", port: "out" },
+          children: [
+            {
+              kind: "step",
+              id: "g.leaf",
+              type: "not@1",
+              params: {},
+              portInputs: { input: { node: "g", port: "in" } },
+            },
+          ],
+        },
+      ] satisfies readonly StepNode[],
+    };
+    expect(validateShapes(selfRefSpec, registry)).toContainEqual({
+      kind: "port-input-unresolvable",
+      stepId: "g",
+      portName: "seedInput",
+      targetNode: "g",
+      targetPort: "out",
+      reason: "missing-node",
+    });
+  });
+
+  // ⓔ (validator half — runtime half lives in
+  // tests/runtime-for-each-subgraph-with-history.test.ts). `bodyOutput` must
+  // name a DIRECT child of the body. A grandchild (a leaf nested inside a
+  // child group) is absent from `collectDirectChildOutputs`'s non-recursing
+  // scope, so it warns. This pins the direct-only contract against a future
+  // "recurse into nested groups" change to that helper — which would silently
+  // start accepting a grandchild that the runtime still throws on (the same
+  // validator/runtime divergence as the self-ref case above). Green today.
+  it("flags a group bodyOutput that references a grandchild (nested) node", () => {
+    const grandchildSpec: CipherSpec = {
+      id: "test-group-bodyoutput-grandchild@1",
+      name: "group bodyOutput grandchild",
+      stateShape: "bytes",
+      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+      steps: [
+        { kind: "step", id: "producer", type: "constant-load@1", params: { bytes: [0x00] } },
+        {
+          kind: "group",
+          id: "g",
+          label: "G",
+          seedInput: { node: "producer", port: "output" },
+          // `g.inner.leaf` lives inside `g.inner`, one level deeper than g's
+          // direct children — not a same-scope body output.
+          bodyOutput: { node: "g.inner.leaf", port: "output" },
+          children: [
+            {
+              kind: "group",
+              id: "g.inner",
+              label: "inner",
+              children: [
+                {
+                  kind: "step",
+                  id: "g.inner.leaf",
+                  type: "constant-load@1",
+                  params: { bytes: [0xab] },
+                },
+              ],
+            },
+          ],
+        },
+      ] satisfies readonly StepNode[],
+    };
+    expect(validateShapes(grandchildSpec, registry)).toContainEqual({
+      kind: "port-input-unresolvable",
+      stepId: "g",
+      portName: "bodyOutput",
+      targetNode: "g.inner.leaf",
+      targetPort: "output",
+      reason: "missing-node",
+    });
+  });
+});

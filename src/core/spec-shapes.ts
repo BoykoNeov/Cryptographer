@@ -113,6 +113,26 @@ const validateContainerBinding = (
   scope: ReadonlyMap<string, ReadonlySet<string>>,
   ctx: WalkContext,
 ): void => {
+  // A3b follow-up ⓐ: a container can never reference its OWN output. Its `out`
+  // is published only on exit, so `seedInput`/`bodyOutput: port("<self>","out")`
+  // is unresolvable at the point the runtime resolves the binding (it throws at
+  // run). Guard explicitly because the caller records the container's own
+  // output into `scope` (via `recordContainerOutputs`) BEFORE this validation
+  // runs — without this check a self-reference would match that freshly-recorded
+  // own output and slip silently, a validator-silent/runtime-loud divergence.
+  // Covers both the `group` and the FES branches (they share this helper) and
+  // both binding fields.
+  if (binding.node === containerId) {
+    ctx.warnings.push({
+      kind: "port-input-unresolvable",
+      stepId: containerId,
+      portName: fieldName,
+      targetNode: binding.node,
+      targetPort: binding.port,
+      reason: "missing-node",
+    });
+    return;
+  }
   const upstream = scope.get(binding.node);
   if (upstream === undefined) {
     ctx.warnings.push({
