@@ -222,22 +222,55 @@ double-count resolved, the "~250–400" frame-drop corrected to 185 (the
 any non-SHA spec**. Probe deleted after capture; no committed code
 change.
 
-**A1 — `cipherConstants` + editor + sidebar.**
+**A1 — `cipherConstants` + editor + panel.** *(UX + leaf-delta resolved
+2026-05-28 via advisor — see corrections below.)*
 - `CipherSpec.cipherConstants?: Record<string, Uint8Array>`
-  (`core/types.ts`); runtime materializes into aux before walking the
-  tree.
-- Editable in a new sidebar panel (ParamEditor-style cells, byte-format
-  honored, 200 ms debounce → re-run via the existing spec-mutations
-  path). Save/Load/URL-share carry constants.
-- Sidebar shows **forward refs** (which leaves consume each constant);
-  leaf inspector shows **back refs** (which constants a leaf reads).
-- Cross-mode mirror buttons for S-box-class constants re-home here
-  (`cross-mode-mirror-registry.ts` entries point at constant names, not
-  step params). `tests/cross-mode-mirror-coverage.test.tsx` updated.
-- SHA-256 drops `K-to-aux`, `H-to-aux`, `H-constant`,
-  `init-working-vars` (4 leaves).
-- **Gate:** "abc" KAT byte-equal; constants editable + re-run; cross-ref
-  both directions; no constant-loader leaves in spec.
+  (`core/types.ts`); runtime materializes each entry into `aux` (one
+  loop before `walk()`).
+- Editable in a new **main-column collapsible "cipher constants"
+  section** (user pick — visible in every view incl. graph, rendered
+  near `ParamEditor`). ParamEditor-style cells, byte-format honored,
+  200 ms debounce → re-run via the existing spec-mutations path.
+- Cross-refs render as **inline clickable links** (user pick): each
+  constant lists its consuming leaves inline (K's ~64 `fetch-K` readers
+  wrap, not truncate); the leaf inspector shows a clickable
+  `reads: [K]` line that scrolls to the panel.
+- **Document schema: additive, NO `schemaVersion` bump.** Add
+  `cipherConstants?: Record<string, hex-string>` to the Zod schema;
+  legacy specs without the field are unchanged. Hex matches the app's
+  byte serialization convention; Save/Load/URL-share carry constants.
+  (A2 owns the 2→3 bump for container port fields.)
+- **Cross-mode mirror re-homing is DEFERRED to B1, not A1.** SHA-256 has
+  no mirror constants (the S-box class is AES, rebuilt in B1). Per
+  [[feedback_all_specs_port_native]] `main` never holds half-converted
+  state, so `cross-mode-mirror-registry.ts` +
+  `tests/cross-mode-mirror-coverage.test.tsx` change *with* their first
+  consumer (B1's AES S-box → `cipherConstants`), not here.
+- **SHA-256 leaf delta is −2, NOT −4** (the inventory's "4 constant
+  loaders" was a *fate* grouping, not a same-slice retirement set; one
+  of the four — `init-working-vars` — is a load-bearing `bytes-to-state`
+  state-seed, and `H` is dual-role: it seeds the working vars AND feeds
+  the final add):
+  - Drop `K-to-aux` + `H-to-aux` (`generic.aux-load@1` — true loaders;
+    `cipherConstants["K"]`/`["H"]` now materialize K/H into aux).
+  - **Replace** `H-constant` (`constant-load@1`) with `init.fetch-H`
+    (`aux-load-bytes@1`, `auxName: "H"`) — seeds the working vars from
+    the *same* materialized `aux["H"]` that `final.fetch-H` reads, so
+    editing `cipherConstants["H"]` moves BOTH H consumers in lockstep.
+    (Leaving `H-constant`'s hardcoded `params.bytes` in place would make
+    round.0 start from a stale H while the final add used the edited one
+    — a digest that changes for the wrong reason: the exact creep this
+    plan exists to prevent.)
+  - **Keep** `init-working-vars` (`bytes-to-state@1`), retargeted to read
+    `init.fetch-H`. Until A3 rewires round-group port boundaries,
+    `bytes-to-state` is the only thing that seeds round.0's state. It
+    retires in A3.
+  - **Frame total: 2487 → 2485.** Update the `tests/sha-256.test.ts:133`
+    frame-budget pin in the same commit.
+- **Gate:** "abc" KAT byte-equal (digest unchanged); editing a constant
+  re-runs and changes the digest; cross-refs render both directions;
+  no `generic.aux-load@1` / `constant-load@1` leaves remain in the
+  SHA-256 spec; `validateShapes` clean.
 
 **A2 — Container port contract.**
 - `seedInput` / `bodyOutput` optional `PortBinding` fields on `iterate`
