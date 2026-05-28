@@ -1,6 +1,8 @@
 # Scaffolding suppression — every leaf speaks only in byte arrays
 
-> **Status: Phase A in progress — A0+A1+A2 SHIPPED 2026-05-28; A3 next.** Drafted after the
+> **Status: Phase A in progress — A0+A1+A2 SHIPPED 2026-05-28; A3 split
+> into A3a+A3b with Q1–Q4 resolved (advisor pass + user co-design
+> 2026-05-28); A3a next.** Drafted after the
 > Slice 2.9b smoke (2026-05-28) surfaced a structural pedagogy gap, then
 > shaped through a 7-decision walkthrough with the user (Position +
 > Q1–Q5 + state-concept) and an advisor calendar-risk pushback that
@@ -328,15 +330,125 @@ tsc + build clean.)*
   seed-edge retarget; spec-shapes binding resolution (missing-node /
   missing-port / clean). +10 tests. Existing state-path tests unchanged.
 
-**A3 — SHA-256 spec cleanup.**
-- Rewrite `sha-256.ts` to use `cipherConstants` (A1) + container ports
-  (A2); delete all boundary / container / round-body bridges (~182
-  leaves after A1's 4).
-- Runtime owns cipher entry/exit bridging for the (still-existing-but-
-  bytes-only) state at the boundary.
-- **Gate:** "abc" KAT byte-equal; scrubber can't reproduce the smoke
-  confusion (trace it explicitly per the smoke walkthrough); graph view
-  shows the cleaned DAG; AES/Speck/Serpent/DES untouched.
+**A3 — SHA-256 spec cleanup. SPLIT into A3a + A3b (advisor pass +
+user co-design, 2026-05-28).** Original single-slice A3 was too risky:
+deleting leaves is cheap, but the 128 round-body bridges depend on a
+genuinely-new `group` port contract, and bundling that with the
+container/boundary cleanup means a red "abc" KAT can't be bisected to a
+*mechanism* bug vs a *wiring* bug. Split so each tripwire (the KAT + the
+frame-budget pin) isolates one change class.
+
+**Resolved design (Q1–Q4 from the advisor brief + user picks):**
+
+- **The unifying model (user, 2026-05-28).** A port endpoint is *either*
+  another node's port *or* a named scratchpad cell. "Scratchpads outside
+  the graph, accessed through standard ports": reads already work this
+  way (`aux-load-bytes@1` = an input port whose address is a scratchpad
+  cell); writes = "set the port's address to the scratchpad." Point-to-
+  point data flows port-to-port (`portInputs` ⇄ `outputPorts`); broadcast
+  values (K, W) live in `aux` and are read/written by addressing a port
+  at the cell. This collapses the advisor's "three near-identical naming
+  mechanisms" worry into one rule. **Decision rule for B-phase authors:**
+  port-to-port for point-to-point single-consumer edges; a scratchpad
+  (aux) cell for any value with many consumers (round constants, the
+  expanded message schedule). Caveat: a *general leaf-level* port→aux
+  write primitive is deferred — pure port-native leaves can't write aux
+  today (only meta-carrying steps can, see `runtime.ts` aux-write block),
+  so the scratchpad-write currently lives at the container boundary
+  (`outputAux`, below). A leaf-level `aux-store-bytes@1` is a clean
+  B-phase follow-up if a leaf ever needs it.
+
+- **Q1 — round-to-round handoff.** The runtime ALREADY publishes a
+  `group`'s exit bytes to the parent scope (`runtime.ts` `walk`'s `group`
+  case → `publishContainerOutputs(node.id, …)`); the 64 rounds are
+  top-scope siblings, so `round.{t+1}` can already see `round.t`'s
+  output. The ONLY thing the `state-in`/`state-out` bridges do is cross
+  the *body* scope wall. Fix (A3b): extend `group` with
+  `seedInput`/`bodyOutput` (exactly mirroring A2's FES contract).
+  `seedInput` resolves in the parent scope and the runtime injects the
+  bytes into the body scope under a reserved source — keep it dead
+  simple: `nodeOutputs.set(node.id, new Map([["in", seedBytes]]))` so the
+  body's first leaf reads `port(groupId, "in")` with zero new resolver
+  concepts. `bodyOutput` names which body leaf (`repack`) becomes the
+  group's published exit. **Open A3b fork:** carry port-to-port between
+  sibling rounds (deletes the 128 bridges) vs. through a `carry`
+  scratchpad cell (uniform with the model but keeps ~128 load/store
+  leaves). Both keep the carried a..h visible at `repack`/`split`.
+  Resolve at A3b start.
+
+- **Q1 visibility (USER, hard requirement).** The working variables
+  carried between rounds MUST remain visible in the linear scrubber so a
+  learner sees how they change. Satisfied because `repack` (round *t*
+  output) and `split` (round *t+1* input) are real computational frames.
+  A3b gate adds: *scrub a round boundary and confirm the carried a..h are
+  visible AND consistent* (the deleted bridges were the opposite — they
+  showed stale `state` contradicting the ports; that's the smoke bug).
+
+- **Q2 — W reaches the 64 rounds.** `W-publish` (`state-to-aux-bytes`,
+  reads `state`) is replaced by addressing the FES's output port at
+  scratchpad `W`: a new optional `outputAux?: string` on the FES-with-
+  history container. Runtime writes the concatenated history into
+  `aux["W"]` at FES exit; rounds keep reading `aux["W"]` via
+  `aux-load-bytes` unchanged. Same category as A1's K — an honest named
+  broadcast table, not a hidden side channel.
+
+- **Q3 — cipher entry/exit (USER framing).** Entry: the runtime exposes
+  `initialState` bytes as a reserved top-scope source (`"$input"`, port
+  `"out"`); `pad` + `length-append` wire to it; `plaintext-source`
+  deleted. Exit: a new spec-level `outputFrom?: PortBinding` names the
+  port whose bytes become `finalState` (`final.assemble`, port
+  `"output"`); `final.out` deleted. Implementation note (advisor): the
+  top scope's `nodeOutputs` is local to the top `walk` call — `runSpec`
+  must read the returned map (walk already returns it) to resolve
+  `outputFrom` before returning.
+
+***A3a — boundary + container bridges (low-risk; mostly consumes A2).***
+- `types.ts`: add `CipherSpec.outputFrom?: PortBinding`; add
+  `outputAux?: string` to `ForEachSubgraphWithHistoryNode` (A3a consumer;
+  deferral note on the other looping kinds, matching A2's posture).
+- `runtime.ts`: seed top-scope `nodeOutputs` with `$input`; resolve
+  `spec.outputFrom` → `finalState`; FES `outputAux` → `aux[name]` at exit.
+- `document-schema.ts`: declare `outputFrom` + `outputAux` explicitly
+  (Zod strips undeclared keys — same gotcha as `cipherConstants`);
+  additive, NO `schemaVersion` bump (same posture as A1/A2).
+- `graph.ts`: `$input` source node; W now reaches rounds via the FES's
+  `outputAux` write (not the deleted `W-publish` leaf) — confirm the
+  aux-edge derivation still draws W's 64 readers; `inferHistorySeedEdges`
+  seed anchor already retargets to `seedInput.node` (A2).
+- `sha-256.ts`: delete `plaintext-source` (pad/length-append read
+  `port("$input","out")`); FES gains `seedInput {length-append,output}` +
+  `bodyOutput {w-t,output}` + `outputAux: "W"`; delete `seed-schedule`,
+  `schedule-out`, `W-publish`; add `spec.outputFrom {final.assemble,
+  output}`; delete `final.out`. Keep `init.fetch-H` + `init-working-vars`
+  (A3b territory). Remove the now-dead narration objects.
+- **Frame delta: −52** (`plaintext-source` 1 + `seed-schedule` 1 +
+  `schedule-out` 48 + `W-publish` 1 + `final.out` 1). 2485 → **2433**;
+  update the `tests/sha-256.test.ts` frame-budget pin in the same commit.
+  Leaf delta −5: 1827 → **1822**.
+- **Gate:** "abc" KAT byte-equal (`ba7816bf…`); `validateShapes` clean;
+  no `state-to-bytes`/`bytes-to-state`/`state-to-aux-bytes` leaf at the
+  cipher boundary or schedule boundary; AES/Speck/Serpent/DES untouched;
+  graph view still connects the schedule → W → rounds.
+
+***A3b — round-body bridges (the new `group` port contract; KAT + graph
+risk).***
+- `types.ts`: add `seedInput`/`bodyOutput` to `StepGroup` (Q1).
+- `runtime.ts`: `group` resolves `seedInput` in parent scope, injects as
+  `port(groupId,"in")` in the body scope; `bodyOutput` selects the body
+  node whose port becomes the group's published exit.
+- `sha-256.ts`: delete the 64 `round.t.state-in` + 64 `round.t.state-out`
+  + `final.state-in` + `init-working-vars` (~130 leaves); rounds gain
+  `seedInput`/`bodyOutput`; resolve the carry fork (port-to-port vs
+  `carry` scratchpad).
+- `graph.ts`: **biggest risk** (advisor) — `inferStateEdges` / the spine
+  assume the state thread we're deleting; the round chain could render as
+  disconnected islands (inter-round edge is now a port edge between
+  sibling *collapsed* groups, which port-edge inference may not draw).
+  Trace explicitly.
+- **Gate:** "abc" KAT byte-equal; **the Q1-visibility scrub** (carried
+  a..h visible + consistent at a round boundary); graph shows a connected
+  round chain (no islands); frame-budget pin updated; the open-item-#2
+  question (do the 321 `aux-load-bytes` reads collapse?) answered here.
 
 **A4 — Anti-creep contract test.**
 - New test walks the step registry; **fails** if any registered leaf
@@ -429,9 +541,11 @@ notes to point here for the contract.
 1. **A1 sidebar UX details** — exact layout of the constants panel,
    how the forward/back cross-refs render (inline links? hover?).
    Resolve with a mockup at A1 start.
-2. **A3 round-group port boundary** — whether the 64 compression-round
-   groups each declare port boundaries or the runtime auto-bridges at
-   group entry/exit. Decide once A2's container contract is concrete.
+2. **A3 round-group port boundary** — RESOLVED 2026-05-28 (see the A3
+   "Resolved design" Q1 above): extend `StepGroup` with
+   `seedInput`/`bodyOutput` mirroring A2; the runtime injects the seed as
+   `port(groupId,"in")` into the body scope. One sub-fork remains for A3b
+   start: round carry port-to-port vs through a `carry` scratchpad cell.
 3. **B4 / DES Feistel** — `FeistelRoundGroup`'s branching contract under
    ports is the least-explored container; coordinate with the
    universal-port plan's Phase 4d before B4.
