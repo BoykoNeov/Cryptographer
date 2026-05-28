@@ -1,7 +1,8 @@
 # Scaffolding suppression — every leaf speaks only in byte arrays
 
-> **Status: Phase A in progress — A0+A1+A2+A3a+A3b SHIPPED + A3b follow-ups
-> ⓐ–ⓕ DONE 2026-05-28; A4 (anti-creep contract test) next.** A3 split into A3a+A3b with Q1–Q4
+> **Status: Phase A COMPLETE — A0+A1+A2+A3a+A3b SHIPPED + A3b follow-ups
+> ⓐ–ⓕ DONE + A4 (anti-creep contract test) SHIPPED 2026-05-28; Phase B (per-cipher
+> byte-native rebuilds) next, B1 AES first.** A3 split into A3a+A3b with Q1–Q4
 > resolved (advisor pass + user co-design 2026-05-28); A3b's open carry
 > fork resolved **port-to-port** (user pick 2026-05-28). Drafted after the
 > Slice 2.9b smoke (2026-05-28) surfaced a structural pedagogy gap, then
@@ -554,16 +555,30 @@ validator/runtime divergence as ⓐ.)*
   onto the contract (the 3rd real consumer), extract a
   `resolveBinding(map, binding, ctxLabel)` helper. Don't churn it before.
 
-**A4 — Anti-creep contract test.**
-- New test walks the step registry; **fails** if any registered leaf
-  step type declares a non-bytes port shape (today: any
-  `PortContract` input/output that isn't `bytes`). Allowlist of
-  legacy lifted-matrix steps that haven't been rebuilt yet
-  (AES/Serpent/DES executors) — the allowlist **shrinks** as Phase B
-  ships, and a Phase B cipher's rebuild PR must remove its allowlist
-  entry.
-- **Gate:** test green with the legacy allowlist; a deliberately-broken
-  fixture leaf (non-bytes port) makes it red.
+**A4 — Anti-creep contract test. ✅ SHIPPED 2026-05-28.**
+- `tests/byte-native-ports-contract.test.ts` walks the step registry and
+  **fails** if any registered `kind: "ported"` leaf declares a non-bytes
+  port shape. **Terminology bridge:** the plan said "isn't `bytes`", but
+  `PortLayout` has no `"bytes"` member — its byte-native layout is `"raw"`
+  (absent ⇒ raw); `"bytes"` belongs to the *other* contract (`StateShape`).
+  So non-bytes ≡ `layout` present and ≠ `"raw"`.
+- **Allowlist seeded empirically** (throwaway probe vs `buildDefaultRegistry()`,
+  not file greps — the grep missed two string-branch layouts). The 10 offenders
+  are all `[legacy meta]` lifts; every port-native step is already raw-only:
+  AES core (`add-round-key`, `byte-substitution`, `mix-columns`, `shift-rows`,
+  `state-to-aux`, `xor-aux-into-state` — `matrix-cm-4x4`), AES mode boundary
+  (`split-blocks`/`concat-blocks` — `matrix-cm-4x4-array`, `iv-load` — `matrix-cm-4x4`),
+  and `aux-copy` (`preserve-input-variant` sentinel). Allowlist **shrinks** as
+  Phase B ships; a rebuild PR must delete its entry.
+- **Strengthened beyond the literal gate (advisor pick):** exact set-equality
+  via two directional assertions — (1) offenders ∖ allowlist empty ("crept in"),
+  (2) allowlist ∖ offenders empty ("rebuilt; drop the entry"). The subset-only
+  gate couldn't enforce the prose requirement that each rebuild PR removes its
+  entry. Escalates to compiler-enforced at C1.
+- **Gate:** green with the allowlist; a deliberately-broken fixture leaf
+  (`matrix-cm-4x4` port, not on allowlist) makes the checker red — plus a
+  raw-only fixture confirms no over-reporting. Both directional asserts
+  verified to bite via a temporary allowlist mutation. 6 tests, suite 2477→2483.
 
 ### Phase B — Per-cipher byte-native rebuilds (4 slices, feature branches)
 
