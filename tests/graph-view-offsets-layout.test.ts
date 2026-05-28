@@ -6,26 +6,22 @@
 // test only calls `layoutRoot` + `layoutConstantsFor`.
 
 /**
- * Offsets-hatch layout (2026-05-28 experiment).
+ * Offsets-hatch layout (2026-05-28 experiment, `?offsets=1`).
  *
- * Pins the three rules the `?offsets=1` URL hatch applies to `layoutRoot`:
+ * The rule a member gets depends on the FLOW ORIENTATION of the context
+ * it sits in:
  *
- *   1. **Alternation** — non-group, non-iterate root members alternate
- *      between base y and `base + LEAF_H`. Counter resets after every
- *      iterate or run-of-groups.
- *   2. **Iterate cascade** — an iterate at root has its immediate
- *      children (block chips, or expanded body children) shifted to
- *      cascade vertically inside the container box.
- *   3. **Group staircase** — consecutive root-level groups form a
- *      down-and-right diagonal: each shifted by
- *      `(LEAF_W/2, prevGroup.h + STACK_GAP)` from the previous. After
- *      the run ends, the next non-group sibling resumes the horizontal
- *      flow with `altCounter = 0`.
+ *   - HORIZONTAL-flow context (root flow; iterate body): members
+ *     alternate y up/down — even index at base, odd index one LEAF_H
+ *     lower. Collapsed round chips at root therefore zig-zag, they do
+ *     NOT staircase.
+ *   - VERTICAL-flow context (expanded group body): members staircase
+ *     right — child i shifted +LEAF_W/2 × i from the column's left
+ *     edge, cumulative, on top of the normal vertical advance.
  *
  * Hatch OFF (default) layout is byte-identical to the pre-hatch path and
- * is covered by `tests/graph-view-replica-placement.test.ts` and the
- * other existing layout tests — we don't re-pin that here. We do pin
- * one OFF-case as a regression guard against accidental coupling.
+ * is covered by the other layout tests — we pin one OFF case here as a
+ * regression guard against accidental coupling.
  */
 
 import type { CipherGraph, ContainerNode, GraphNode } from "@/core/graph";
@@ -35,11 +31,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────
 
-const leaf = (id: string): GraphNode => ({
+const leaf = (id: string, containerPath: readonly string[] = []): GraphNode => ({
   stepId: id,
   stepType: "test.leaf",
   label: id,
-  containerPath: [],
+  containerPath,
 });
 
 const groupContainer = (id: string, children: readonly string[]): ContainerNode => ({
@@ -71,9 +67,9 @@ const makeGraph = (parts: {
 
 const emptyPinned = new Map<string, { x: number; y: number }>();
 
-// ─── Tests ───────────────────────────────────────────────────────────────
+// ─── Rule: root horizontal-flow alternation ───────────────────────────────
 
-describe("offsets-hatch — Rule 1 alternation (root leaves)", () => {
+describe("offsets-hatch — root alternation (horizontal-flow context)", () => {
   beforeEach(() => {
     __setOffsetsEnabledForTest(true);
   });
@@ -89,7 +85,6 @@ describe("offsets-hatch — Rule 1 alternation (root leaves)", () => {
     });
     const { boxes } = layoutRoot(graph, emptyPinned, consts);
     const ys = ["L1", "L2", "L3", "L4", "L5"].map((id) => boxes.get(id)?.y);
-    // L1 at base, L2 at base + LEAF_H, L3 at base, L4 at base + LEAF_H, L5 at base.
     expect(ys[0]).toBeDefined();
     expect(ys[1]).toBe((ys[0] as number) + consts.LEAF_H);
     expect(ys[2]).toBe(ys[0]);
@@ -97,29 +92,40 @@ describe("offsets-hatch — Rule 1 alternation (root leaves)", () => {
     expect(ys[4]).toBe(ys[0]);
   });
 
-  it("alternation counter resets after an iterate", () => {
+  it("collapsed root groups alternate up/down — they do NOT staircase", () => {
     const consts = layoutConstantsFor("normal");
-    // L1 (base), L2 (+H), iterate (base — counts but resets after),
-    // L3 should be at BASE (counter reset), L4 at +H.
+    // Collapsed groups have empty childIds (collapseGraph clears them).
+    // They render as chip-sized boxes and must zig-zag like any other
+    // root member — the screenshot-1 regression this experiment fixes.
     const graph = makeGraph({
-      nodes: [leaf("L1"), leaf("L2"), leaf("L3"), leaf("L4"), leaf("body")],
-      containers: [iterateContainer("IT", ["body"])],
-      rootIds: ["L1", "L2", "IT", "L3", "L4"],
+      containers: [
+        groupContainer("R0", []),
+        groupContainer("R1", []),
+        groupContainer("R2", []),
+        groupContainer("R3", []),
+      ],
+      rootIds: ["R0", "R1", "R2", "R3"],
     });
     const { boxes } = layoutRoot(graph, emptyPinned, consts);
-    const yL1 = boxes.get("L1")?.y;
-    const yL2 = boxes.get("L2")?.y;
-    const yL3 = boxes.get("L3")?.y;
-    const yL4 = boxes.get("L4")?.y;
-    expect(yL1).toBeDefined();
-    expect(yL2).toBe((yL1 as number) + consts.LEAF_H);
-    // Post-iterate reset: L3 at base again.
-    expect(yL3).toBe(yL1);
-    expect(yL4).toBe((yL1 as number) + consts.LEAF_H);
+    const r0 = boxes.get("R0");
+    const r1 = boxes.get("R1");
+    const r2 = boxes.get("R2");
+    const r3 = boxes.get("R3");
+    // y alternates (NOT a monotonic descent).
+    expect((r1 as { y: number }).y).toBe((r0 as { y: number }).y + consts.LEAF_H);
+    expect((r2 as { y: number }).y).toBe((r0 as { y: number }).y);
+    expect((r3 as { y: number }).y).toBe((r0 as { y: number }).y + consts.LEAF_H);
+    // x strictly increases left-to-right (regular horizontal flow, no
+    // staircase indent reuse).
+    expect((r1 as { x: number }).x).toBeGreaterThan((r0 as { x: number }).x);
+    expect((r2 as { x: number }).x).toBeGreaterThan((r1 as { x: number }).x);
+    expect((r3 as { x: number }).x).toBeGreaterThan((r2 as { x: number }).x);
   });
 });
 
-describe("offsets-hatch — Rule 2 iterate cascade", () => {
+// ─── Rule: expanded group vertical-flow staircase ─────────────────────────
+
+describe("offsets-hatch — group staircase (vertical-flow context)", () => {
   beforeEach(() => {
     __setOffsetsEnabledForTest(true);
   });
@@ -127,118 +133,102 @@ describe("offsets-hatch — Rule 2 iterate cascade", () => {
     __setOffsetsEnabledForTest(null);
   });
 
-  it("cascades iterate immediate children down by LEAF_H + STACK_GAP", () => {
+  it("staircases an expanded group's children right by LEAF_W/2 cumulatively", () => {
     const consts = layoutConstantsFor("normal");
-    const children = ["b0", "b1", "b2", "b3"];
+    const children = ["c0", "c1", "c2", "c3"];
     const graph = makeGraph({
-      nodes: children.map((id) => ({
-        stepId: id,
-        stepType: "block-chip",
-        label: id,
-        containerPath: ["IT"],
-      })),
+      nodes: children.map((id) => leaf(id, ["G"])),
+      containers: [groupContainer("G", children)],
+      rootIds: ["G"],
+    });
+    const { boxes } = layoutRoot(graph, emptyPinned, consts);
+    const xs = children.map((id) => boxes.get(id)?.x);
+    const ys = children.map((id) => boxes.get(id)?.y);
+    expect(xs[0]).toBeDefined();
+    const step = Math.round(consts.LEAF_W / 2);
+    // x grows by step per child (cumulative staircase).
+    expect(xs[1]).toBe((xs[0] as number) + step);
+    expect(xs[2]).toBe((xs[0] as number) + 2 * step);
+    expect(xs[3]).toBe((xs[0] as number) + 3 * step);
+    // y still advances downward (vertical flow preserved).
+    expect(ys[1] as number).toBeGreaterThan(ys[0] as number);
+    expect(ys[2] as number).toBeGreaterThan(ys[1] as number);
+    expect(ys[3] as number).toBeGreaterThan(ys[2] as number);
+  });
+
+  it("grows the group box width to contain the staircase diagonal", () => {
+    const consts = layoutConstantsFor("normal");
+    const children = ["c0", "c1", "c2", "c3", "c4"];
+    const graph = makeGraph({
+      nodes: children.map((id) => leaf(id, ["G"])),
+      containers: [groupContainer("G", children)],
+      rootIds: ["G"],
+    });
+    const { boxes } = layoutRoot(graph, emptyPinned, consts);
+    const gBox = boxes.get("G");
+    const last = boxes.get("c4");
+    expect(gBox).toBeDefined();
+    expect(last).toBeDefined();
+    const gRight = (gBox as { x: number; w: number }).x + (gBox as { w: number }).w;
+    const lastRight = (last as { x: number; w: number }).x + (last as { w: number }).w;
+    expect(gRight).toBeGreaterThanOrEqual(lastRight);
+  });
+});
+
+// ─── Rule: expanded iterate horizontal-flow alternation ───────────────────
+
+describe("offsets-hatch — iterate alternation (horizontal-flow context)", () => {
+  beforeEach(() => {
+    __setOffsetsEnabledForTest(true);
+  });
+  afterEach(() => {
+    __setOffsetsEnabledForTest(null);
+  });
+
+  it("alternates an iterate's children up/down by LEAF_H", () => {
+    const consts = layoutConstantsFor("normal");
+    const children = ["m0", "m1", "m2", "m3"];
+    const graph = makeGraph({
+      nodes: children.map((id) => leaf(id, ["IT"])),
       containers: [iterateContainer("IT", children)],
       rootIds: ["IT"],
     });
     const { boxes } = layoutRoot(graph, emptyPinned, consts);
+    const xs = children.map((id) => boxes.get(id)?.x);
     const ys = children.map((id) => boxes.get(id)?.y);
     expect(ys[0]).toBeDefined();
-    const step = consts.LEAF_H + consts.STACK_GAP;
-    expect(ys[1]).toBe((ys[0] as number) + step);
-    expect(ys[2]).toBe((ys[0] as number) + 2 * step);
-    expect(ys[3]).toBe((ys[0] as number) + 3 * step);
+    // y alternates: even index at base, odd index +LEAF_H.
+    expect(ys[1]).toBe((ys[0] as number) + consts.LEAF_H);
+    expect(ys[2]).toBe(ys[0]);
+    expect(ys[3]).toBe((ys[0] as number) + consts.LEAF_H);
+    // x advances left-to-right (horizontal flow preserved).
+    expect(xs[1] as number).toBeGreaterThan(xs[0] as number);
+    expect(xs[2] as number).toBeGreaterThan(xs[1] as number);
+    expect(xs[3] as number).toBeGreaterThan(xs[2] as number);
   });
 
-  it("grows the iterate container box H to contain the cascaded children", () => {
+  it("grows the iterate box height to contain the lowered odd rows", () => {
     const consts = layoutConstantsFor("normal");
-    const children = ["b0", "b1", "b2"];
+    const children = ["m0", "m1"];
     const graph = makeGraph({
-      nodes: children.map((id) => ({
-        stepId: id,
-        stepType: "block-chip",
-        label: id,
-        containerPath: ["IT"],
-      })),
+      nodes: children.map((id) => leaf(id, ["IT"])),
       containers: [iterateContainer("IT", children)],
       rootIds: ["IT"],
     });
     const { boxes } = layoutRoot(graph, emptyPinned, consts);
     const itBox = boxes.get("IT");
-    const lastChild = boxes.get("b2");
+    const m1 = boxes.get("m1");
     expect(itBox).toBeDefined();
-    expect(lastChild).toBeDefined();
-    // Iterate's bottom must enclose the last cascaded child.
+    expect(m1).toBeDefined();
     const itBottom = (itBox as { y: number; h: number }).y + (itBox as { h: number }).h;
-    const childBottom = (lastChild as { y: number; h: number }).y + (lastChild as { h: number }).h;
-    expect(itBottom).toBeGreaterThanOrEqual(childBottom);
+    const m1Bottom = (m1 as { y: number; h: number }).y + (m1 as { h: number }).h;
+    expect(itBottom).toBeGreaterThanOrEqual(m1Bottom);
   });
 });
 
-describe("offsets-hatch — Rule 3 group staircase", () => {
-  beforeEach(() => {
-    __setOffsetsEnabledForTest(true);
-  });
-  afterEach(() => {
-    __setOffsetsEnabledForTest(null);
-  });
+// ─── OFF (default) regression guard ───────────────────────────────────────
 
-  it("descends consecutive root groups by (LEAF_W/2, prevH + STACK_GAP)", () => {
-    const consts = layoutConstantsFor("normal");
-    // Three group containers each with one leaf inside (so they have
-    // non-zero h). Default-collapsed-at-render machinery isn't invoked
-    // here — the test exercises the staircase rule for any kind="group".
-    const graph = makeGraph({
-      nodes: [leaf("body1"), leaf("body2"), leaf("body3")],
-      containers: [
-        groupContainer("G1", ["body1"]),
-        groupContainer("G2", ["body2"]),
-        groupContainer("G3", ["body3"]),
-      ],
-      rootIds: ["G1", "G2", "G3"],
-    });
-    const { boxes } = layoutRoot(graph, emptyPinned, consts);
-    const g1 = boxes.get("G1");
-    const g2 = boxes.get("G2");
-    const g3 = boxes.get("G3");
-    expect(g1).toBeDefined();
-    expect(g2).toBeDefined();
-    expect(g3).toBeDefined();
-    const stepX = Math.round(consts.LEAF_W / 2);
-    expect((g2 as { x: number }).x).toBe((g1 as { x: number }).x + stepX);
-    expect((g3 as { x: number }).x).toBe((g2 as { x: number }).x + stepX);
-    // Vertical descent: each group below the previous one's bottom + STACK_GAP.
-    const g1Bottom = (g1 as { y: number; h: number }).y + (g1 as { h: number }).h;
-    expect((g2 as { y: number }).y).toBe(g1Bottom + consts.STACK_GAP);
-    const g2Bottom = (g2 as { y: number; h: number }).y + (g2 as { h: number }).h;
-    expect((g3 as { y: number }).y).toBe(g2Bottom + consts.STACK_GAP);
-  });
-
-  it("resumes horizontal flow at base y with reset counter after group run", () => {
-    const consts = layoutConstantsFor("normal");
-    const graph = makeGraph({
-      nodes: [leaf("body1"), leaf("body2"), leaf("post1"), leaf("post2"), leaf("post3")],
-      containers: [groupContainer("G1", ["body1"]), groupContainer("G2", ["body2"])],
-      rootIds: ["G1", "G2", "post1", "post2", "post3"],
-    });
-    const { boxes } = layoutRoot(graph, emptyPinned, consts);
-    const post1 = boxes.get("post1");
-    const post2 = boxes.get("post2");
-    const post3 = boxes.get("post3");
-    expect(post1).toBeDefined();
-    expect(post2).toBeDefined();
-    expect(post3).toBeDefined();
-    // post1 starts a fresh alternation: base y; post2 at +LEAF_H; post3 back at base.
-    expect((post2 as { y: number }).y).toBe((post1 as { y: number }).y + consts.LEAF_H);
-    expect((post3 as { y: number }).y).toBe((post1 as { y: number }).y);
-    // post1's x starts AFTER the last group's right edge.
-    const g2 = boxes.get("G2");
-    expect(g2).toBeDefined();
-    const g2Right = (g2 as { x: number; w: number }).x + (g2 as { w: number }).w;
-    expect((post1 as { x: number }).x).toBeGreaterThanOrEqual(g2Right);
-  });
-});
-
-describe("offsets-hatch — OFF (default) regression guard", () => {
+describe("offsets-hatch — OFF (default)", () => {
   beforeEach(() => {
     __setOffsetsEnabledForTest(false);
   });
@@ -246,7 +236,7 @@ describe("offsets-hatch — OFF (default) regression guard", () => {
     __setOffsetsEnabledForTest(null);
   });
 
-  it("does not alternate when hatch is off", () => {
+  it("does not alternate root members when hatch is off", () => {
     const consts = layoutConstantsFor("normal");
     const graph = makeGraph({
       nodes: [leaf("L1"), leaf("L2"), leaf("L3")],
@@ -254,8 +244,22 @@ describe("offsets-hatch — OFF (default) regression guard", () => {
     });
     const { boxes } = layoutRoot(graph, emptyPinned, consts);
     const ys = ["L1", "L2", "L3"].map((id) => boxes.get(id)?.y);
-    // All three at the SAME y — no alternation.
     expect(ys[1]).toBe(ys[0]);
     expect(ys[2]).toBe(ys[0]);
+  });
+
+  it("does not staircase group children when hatch is off", () => {
+    const consts = layoutConstantsFor("normal");
+    const children = ["c0", "c1", "c2"];
+    const graph = makeGraph({
+      nodes: children.map((id) => leaf(id, ["G"])),
+      containers: [groupContainer("G", children)],
+      rootIds: ["G"],
+    });
+    const { boxes } = layoutRoot(graph, emptyPinned, consts);
+    const xs = children.map((id) => boxes.get(id)?.x);
+    // All children share the same x (plain vertical stack).
+    expect(xs[1]).toBe(xs[0]);
+    expect(xs[2]).toBe(xs[0]);
   });
 });

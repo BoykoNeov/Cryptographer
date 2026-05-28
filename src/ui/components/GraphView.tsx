@@ -1028,6 +1028,16 @@ const layoutNode = (
    * siblings to fill the vacated slot.
    */
   relativePins: ReadonlyMap<string, { dx: number; dy: number }>,
+  /**
+   * OFFSETS-HATCH (2026-05-28 experiment, `?offsets=1`). When true, the
+   * group branch staircases its children right (+LEAF_W/2 cumulative,
+   * vertical-flow context) and the iterate branch alternates its
+   * children up/down (+LEAF_H on odd index, horizontal-flow context).
+   * Defaults to false so existing tests that drive `layoutNode` /
+   * `layoutRoot` with the pre-hatch positional arity keep byte-identical
+   * layout.
+   */
+  offsetsEnabled = false,
 ): Box => {
   const container = containersById.get(id);
   const pin = pinned.get(id);
@@ -1147,6 +1157,14 @@ const layoutNode = (
     let innerY = startY + HEADER_H + consts.CONTAINER_PAD + liftH;
     let maxChildW = 0;
     let lastChildBottom = innerY;
+    // OFFSETS-HATCH: a group is a VERTICAL-flow context, so its children
+    // staircase RIGHT — child i shifted +LEAF_W/2 × i from the column's
+    // left edge, cumulative, on top of the normal vertical advance.
+    // `maxStaircaseRight` tracks the rightmost staircased child so the
+    // box width below can grow to contain the diagonal.
+    const staircaseStep = offsetsEnabled ? Math.round(consts.LEAF_W / 2) : 0;
+    let childIndex = 0;
+    let maxStaircaseRight = innerX;
     for (const childId of normalChildren) {
       // Capture innerY BEFORE the call so cursor advancement uses the
       // NATURAL flow position, not the post-pin rendered position. Phase 6e
@@ -1168,9 +1186,10 @@ const layoutNode = (
       // next sibling's natural cursor (stable under pin); `lastChildBottom`
       // is the container's height-extent (grows under pin).
       const naturalY = innerY;
+      const childX = innerX + childIndex * staircaseStep;
       const childBox = layoutNode(
         childId,
-        innerX,
+        childX,
         innerY,
         containersById,
         pinned,
@@ -1178,6 +1197,7 @@ const layoutNode = (
         consts,
         replicas,
         relativePins,
+        offsetsEnabled,
       );
       innerY = naturalY + childBox.h + consts.STACK_GAP;
       const renderedBottom = childBox.y + childBox.h;
@@ -1185,6 +1205,9 @@ const layoutNode = (
       if (renderedBottom > lastChildBottom) lastChildBottom = renderedBottom;
       if (autoBottom > lastChildBottom) lastChildBottom = autoBottom;
       if (childBox.w > maxChildW) maxChildW = childBox.w;
+      const childRight = childX + childBox.w;
+      if (childRight > maxStaircaseRight) maxStaircaseRight = childRight;
+      childIndex += 1;
     }
 
     // Second pass: place LEFT-gutter replicas (consumers that are NOT
@@ -1254,7 +1277,12 @@ const layoutNode = (
     // floor for `columnW`.
     const innerXForCol = startX + consts.CONTAINER_PAD + gutterW;
     const liftReplicaColumnW = maxLiftReplicaRight > 0 ? maxLiftReplicaRight - innerXForCol : 0;
-    const columnW = Math.max(maxChildW, consts.LEAF_W, liftReplicaColumnW);
+    // OFFSETS-HATCH: the staircase pushes the last child right by
+    // `(N-1) × LEAF_W/2`; `maxStaircaseRight - innerXForCol` is that
+    // child's right edge measured from the column's left edge, so the
+    // column must be at least that wide to contain the diagonal.
+    const staircaseColumnW = offsetsEnabled ? maxStaircaseRight - innerXForCol : 0;
+    const columnW = Math.max(maxChildW, consts.LEAF_W, liftReplicaColumnW, staircaseColumnW);
     const w = gutterW + columnW + 2 * consts.CONTAINER_PAD;
     // Height formula uses lastChildBottom which already includes the
     // liftH shift via innerY; don't add liftH again.
@@ -1333,6 +1361,7 @@ const layoutNode = (
           consts,
           replicas,
           relativePins,
+          offsetsEnabled,
         );
         chipY = childBox.y + childBox.h + consts.STACK_GAP;
         const childRight = childBox.x + childBox.w;
@@ -1505,22 +1534,32 @@ const layoutNode = (
   const innerY = startY + HEADER_H + consts.CONTAINER_PAD + replicaLiftH;
   let maxChildH = 0;
   let lastChildRight = innerX;
+  // OFFSETS-HATCH: an iterate body is a HORIZONTAL-flow context, so its
+  // children alternate up/down — even index at `innerY`, odd index one
+  // LEAF_H lower. `altRowExtra` budgets the extra LEAF_H of body height
+  // the odd rows need so the container box grows to contain them.
+  let iterateChildIndex = 0;
+  let altRowExtra = 0;
   for (const childId of container.childIds) {
     if (replicas.isReplica.has(childId)) continue;
+    const childAltY = offsetsEnabled && iterateChildIndex % 2 === 1 ? consts.LEAF_H : 0;
+    if (childAltY > altRowExtra) altRowExtra = childAltY;
     const childBox = layoutNode(
       childId,
       innerX,
-      innerY,
+      innerY + childAltY,
       containersById,
       pinned,
       out,
       consts,
       replicas,
       relativePins,
+      offsetsEnabled,
     );
     innerX = childBox.x + childBox.w + consts.FLOW_GAP;
     lastChildRight = childBox.x + childBox.w;
     if (childBox.h > maxChildH) maxChildH = childBox.h;
+    iterateChildIndex += 1;
   }
 
   // Second pass: place iterate-body replicas above their consumers. The
@@ -1561,7 +1600,9 @@ const layoutNode = (
   // the iterate's box must contain it.
   const effectiveLastRight = Math.max(lastChildRight, maxIterateReplicaRight);
   const w = effectiveLastRight - startX + consts.CONTAINER_PAD;
-  const h = HEADER_H + 2 * consts.CONTAINER_PAD + replicaLiftH + maxChildH;
+  // `altRowExtra` (0 unless the offsets hatch dropped odd-index children
+  // by LEAF_H) extends the body so the lowered rows don't crop.
+  const h = HEADER_H + 2 * consts.CONTAINER_PAD + replicaLiftH + maxChildH + altRowExtra;
   const box: Box = { x: startX, y: startY, w, h };
   out.set(id, box);
   return box;
@@ -1689,215 +1730,65 @@ export const layoutRoot = (
   let maxRight = CANVAS_MARGIN;
   let maxBottom = CANVAS_MARGIN;
 
-  // ── OFFSETS-HATCH STATE (2026-05-28 experiment) ─────────────────────
+  // ── OFFSETS-HATCH (2026-05-28 experiment) ───────────────────────────
   //
-  // Reads `?offsets=1` from `window.location.search`. When ON, three
-  // rules layer on top of the horizontal root flow:
+  // Reads `?offsets=1` from `window.location.search`. The rule a member
+  // gets depends on the FLOW ORIENTATION of the context it sits in:
   //
-  //   - Rule 1 (alternation): every non-group root member's y alternates
-  //     between `rowStartY` (counter even) and `rowStartY + LEAF_H`
-  //     (counter odd). Counter resets after any iterate or group run.
-  //   - Rule 2 (iterate cascade): an iterate's immediate children
-  //     cascade DOWN inside the iterate container (post-pass below);
-  //     iterate itself participates in root alternation but doesn't
-  //     advance the counter past 0.
-  //   - Rule 3 (group staircase): consecutive root-level groups (e.g.
-  //     SHA-256's 64 default-collapsed round.t containers) form a
-  //     descending diagonal staircase — each shifted by
-  //     (LEAF_W/2, prevGroup.h + STACK_GAP) from the previous. The run
-  //     ends at the first non-group sibling, at which point cursorX
-  //     resumes at the last group's right edge and the alternation
-  //     counter resets to 0.
+  //   - HORIZONTAL-flow context (root flow here; iterate body in
+  //     `layoutNode`): members alternate y up/down — even index at the
+  //     base row, odd index one LEAF_H lower. Collapsed round chips at
+  //     root therefore zig-zag rather than staircase.
+  //   - VERTICAL-flow context (expanded group body in `layoutNode`):
+  //     members staircase right — each child shifted +LEAF_W/2 from the
+  //     previous, cumulative, on top of the existing vertical advance.
   //
-  // OFF (default): byte-identical to the original loop above this
-  // comment block — `altCounter` / `prevGroupInRun` stay unread and the
-  // branches the hatch gates do nothing.
+  // Root is a horizontal-flow context, so the rule HERE is alternation.
+  // The staircase + iterate-cascade live in `layoutNode`'s group +
+  // iterate branches (threaded via the `offsetsEnabled` param below).
+  //
+  // OFF (default): `altCounter` stays unread and `startY` keeps the
+  // original `auxOnlyRootIds ? CANVAS_MARGIN : rowStartY` value — layout
+  // byte-identical to before the hatch.
   const offsetsEnabled = isOffsetsEnabledForLayout();
   let altCounter = 0;
-  let prevGroupInRun: { box: Box; id: string } | null = null;
 
   for (const id of graph.rootIds) {
     if (replicas.isReplica.has(id)) continue;
-    const container = containersById.get(id);
-    // Treat collapsed/empty containers as non-group for staircase purposes —
-    // they render as chip-sized boxes and should participate in the regular
-    // alternation rather than break out into the staircase. The 64 SHA-256
-    // round.t groups are default-collapsed BUT their childIds were just
-    // emptied by `collapseGraph`; we still want them in the staircase
-    // because they're semantically expandable. Use `kind === "group"` as
-    // the truth regardless of current childIds length.
-    const isGroup = offsetsEnabled && container?.kind === "group";
-    const isIterate = offsetsEnabled && container?.kind === "iterate";
-
-    // Compute start position for this root entity. The captured naturalX
-    // is the cursor BEFORE any post-pin shift — used for cursor advancement
-    // even when the entity is pinned somewhere else (see comment on the
-    // original loop above for the byte-identical case).
-    let useX = cursorX;
-    let useY = auxOnlyRootIds.has(id) ? CANVAS_MARGIN : rowStartY;
-    let naturalX = cursorX;
-
-    if (offsetsEnabled) {
-      if (isGroup) {
-        if (prevGroupInRun) {
-          // Rule 3 continuation: shift down-and-right from previous group.
-          // Vertical step uses LEAF_H + STACK_GAP for breathing room (advisor
-          // pick over bare LEAF_H — matches other vertical stacks). Horizontal
-          // step is LEAF_W/2 per user's "half a block size to the right."
-          useX = prevGroupInRun.box.x + Math.round(consts.LEAF_W / 2);
-          useY = prevGroupInRun.box.y + prevGroupInRun.box.h + consts.STACK_GAP;
-          naturalX = useX;
-        } else {
-          // Rule 3 start: first group in a (possibly singleton) run.
-          // Sits at the current cursor at the base spine row.
-          // Don't apply alternation Y — the group breaks out of the
-          // alternation pattern by definition.
-          useX = cursorX;
-          useY = auxOnlyRootIds.has(id) ? CANVAS_MARGIN : rowStartY;
-          naturalX = cursorX;
-        }
-      } else {
-        // Non-group: close any open group run first.
-        if (prevGroupInRun) {
-          cursorX = prevGroupInRun.box.x + prevGroupInRun.box.w + consts.FLOW_GAP;
-          altCounter = 0;
-          prevGroupInRun = null;
-        }
-        useX = cursorX;
-        naturalX = cursorX;
-        const baseY = auxOnlyRootIds.has(id) ? CANVAS_MARGIN : rowStartY;
-        // Rule 1: even counter → base y, odd → +LEAF_H.
-        const altOffset = altCounter % 2 === 1 ? consts.LEAF_H : 0;
-        useY = baseY + altOffset;
-      }
-    }
-
+    // Capture the cursor BEFORE layoutNode — that's the natural-flow X
+    // for this root entity, used for cursor advancement even when the
+    // entity is pinned somewhere else. box.w is content-derived (depends
+    // on children, not on this entity's pin), so it's safe to use as the
+    // natural width for the advancement step.
+    const naturalX = cursorX;
+    // Aux-only root leaves lay out at the lifted row (CANVAS_MARGIN), the
+    // rest at the spine row (rowStartY). `layoutNode` honors pins
+    // internally, so a user who manually drags an aux-only leaf to the
+    // spine row keeps that pin. Aux-only roots are excluded from the
+    // alternation (they're supporting computation on a dedicated lifted
+    // row, not spine members) and don't advance the counter.
+    const isAuxOnly = auxOnlyRootIds.has(id);
+    const baseY = isAuxOnly ? CANVAS_MARGIN : rowStartY;
+    const altOffset = offsetsEnabled && !isAuxOnly && altCounter % 2 === 1 ? consts.LEAF_H : 0;
+    const startY = baseY + altOffset;
     const box = layoutNode(
       id,
-      useX,
-      useY,
+      cursorX,
+      startY,
       containersById,
       pinned,
       boxes,
       consts,
       replicas,
       relativePins,
+      offsetsEnabled,
     );
-
-    if (offsetsEnabled && isGroup) {
-      // Stay in the group run; don't advance cursorX yet. The run's
-      // contributions to maxRight/maxBottom still need to land below.
-      prevGroupInRun = { box, id };
-    } else {
-      cursorX = naturalX + box.w + consts.FLOW_GAP;
-      if (offsetsEnabled) {
-        // Rule 2 (iterate at root): iterate participates in alternation
-        // but the counter resets AFTER the iterate so post-iterate
-        // siblings start fresh at base y.
-        if (isIterate) {
-          altCounter = 0;
-        } else {
-          altCounter += 1;
-        }
-      }
-    }
-
+    cursorX = naturalX + box.w + consts.FLOW_GAP;
+    if (offsetsEnabled && !isAuxOnly) altCounter += 1;
     const right = box.x + box.w;
     const bottom = box.y + box.h;
     if (right > maxRight) maxRight = right;
     if (bottom > maxBottom) maxBottom = bottom;
-  }
-
-  // Flush an unclosed group run at the end (the last root child(ren)
-  // were group(s), no non-group sibling followed).
-  if (offsetsEnabled && prevGroupInRun) {
-    cursorX = prevGroupInRun.box.x + prevGroupInRun.box.w + consts.FLOW_GAP;
-  }
-
-  // ── OFFSETS-HATCH RULE 2 POST-PASS ──────────────────────────────────
-  //
-  // Iterate at root level: shift its immediate children to cascade down
-  // by `LEAF_H + STACK_GAP` per child. Replica children are skipped (the
-  // second pass below places them). Grows the iterate container box H
-  // to fit the cascade so the bottom border doesn't crop. Each shifted
-  // child also shifts ALL of its descendants (recursively via
-  // `containerPath`) so the chip's internal contents move with it.
-  //
-  // The cascade replaces today's horizontal flow INSIDE the iterate's
-  // body for root-level iterates only. Nested iterates (an iterate inside
-  // a group/another iterate) keep horizontal flow because their layout
-  // ran through `layoutNode`'s iterate branch and this post-pass is
-  // scoped to root. Per advisor 2026-05-28: minimal blast radius.
-  if (offsetsEnabled) {
-    const shiftSubtree = (rootId: string, dy: number): void => {
-      if (dy === 0) return;
-      const root = boxes.get(rootId);
-      if (root) {
-        boxes.set(rootId, { x: root.x, y: root.y + dy, w: root.w, h: root.h });
-      }
-      // Descendant nodes: anything whose `containerPath` includes `rootId`.
-      for (const n of graph.nodes) {
-        if (!n.containerPath.includes(rootId)) continue;
-        const b = boxes.get(n.stepId);
-        if (!b) continue;
-        boxes.set(n.stepId, { x: b.x, y: b.y + dy, w: b.w, h: b.h });
-      }
-      // Descendant containers.
-      for (const c of graph.containers) {
-        if (c.id === rootId) continue;
-        if (!c.containerPath.includes(rootId)) continue;
-        const b = boxes.get(c.id);
-        if (!b) continue;
-        boxes.set(c.id, { x: b.x, y: b.y + dy, w: b.w, h: b.h });
-      }
-    };
-
-    for (const id of graph.rootIds) {
-      if (replicas.isReplica.has(id)) continue;
-      const container = containersById.get(id);
-      if (container?.kind !== "iterate") continue;
-      const iterateBox = boxes.get(id);
-      if (!iterateBox) continue;
-
-      const nonReplicaChildren = container.childIds.filter((cId) => !replicas.isReplica.has(cId));
-      if (nonReplicaChildren.length === 0) continue;
-
-      const startY = iterateBox.y + HEADER_H + consts.CONTAINER_PAD;
-      const stepY = consts.LEAF_H + consts.STACK_GAP;
-
-      for (let i = 0; i < nonReplicaChildren.length; i += 1) {
-        const childId = nonReplicaChildren[i];
-        if (childId === undefined) continue;
-        const childBox = boxes.get(childId);
-        if (!childBox) continue;
-        const desiredY = startY + i * stepY;
-        const dy = desiredY - childBox.y;
-        shiftSubtree(childId, dy);
-      }
-
-      // Grow iterate's container box to fit the cascade.
-      let lastChildBottom = iterateBox.y;
-      for (const childId of nonReplicaChildren) {
-        const childBox = boxes.get(childId);
-        if (!childBox) continue;
-        const bottom = childBox.y + childBox.h;
-        if (bottom > lastChildBottom) lastChildBottom = bottom;
-      }
-      const requiredH = lastChildBottom - iterateBox.y + consts.CONTAINER_PAD;
-      const finalIterateBox = boxes.get(id);
-      if (finalIterateBox !== undefined && requiredH > finalIterateBox.h) {
-        boxes.set(id, { ...finalIterateBox, h: requiredH });
-      }
-    }
-
-    // Re-compute maxRight / maxBottom after the cascade shifts the
-    // contents downward and possibly off the original extent.
-    for (const [, b] of boxes) {
-      const right = b.x + b.w;
-      const bottom = b.y + b.h;
-      if (right > maxRight) maxRight = right;
-      if (bottom > maxBottom) maxBottom = bottom;
-    }
   }
 
   // Second pass: place root-level replicas above their consumers. The
