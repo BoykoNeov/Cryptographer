@@ -1,8 +1,8 @@
 # Scaffolding suppression — every leaf speaks only in byte arrays
 
-> **Status: Phase A in progress — A0+A1+A2 SHIPPED 2026-05-28; A3 split
-> into A3a+A3b with Q1–Q4 resolved (advisor pass + user co-design
-> 2026-05-28); A3a next.** Drafted after the
+> **Status: Phase A in progress — A0+A1+A2+A3a SHIPPED 2026-05-28; A3
+> split into A3a+A3b with Q1–Q4 resolved (advisor pass + user co-design
+> 2026-05-28); A3b next.** Drafted after the
 > Slice 2.9b smoke (2026-05-28) surfaced a structural pedagogy gap, then
 > shaped through a 7-decision walkthrough with the user (Position +
 > Q1–Q5 + state-concept) and an advisor calendar-risk pushback that
@@ -402,7 +402,20 @@ frame-budget pin) isolates one change class.
   must read the returned map (walk already returns it) to resolve
   `outputFrom` before returning.
 
-***A3a — boundary + container bridges (low-risk; mostly consumes A2).***
+***A3a — boundary + container bridges (low-risk; mostly consumes A2). ✅
+SHIPPED 2026-05-28.*** *(Full gate green: biome + tsc + 2468 vitest tests +
+build. "abc" KAT byte-equal `ba7816bf…`; frame total 2485→2433; leaf count
+1827→1822; `validateShapes` clean. New behaviors: runtime `$input` top-scope
+source + `spec.outputFrom`→finalState + FES `outputAux`→`aux[name]`; graph
+`$input` synthetic input pill (replaces `__cipher_input__` for port-native
+specs, recognized by `isEndpointId` + `edge-value-lookup`) + FES-as-W-writer
+stamping in `deriveEdges` (containers are excluded from replication, so W's
+schedule→rounds connection is an aux edge from the `msg-schedule` container,
+pinned by a new test). spec-shapes validator special-cases `$input`. Test
+churn: frame/leaf pins updated; history-seed source `seed-schedule`→
+`length-append`; two `W-publish`-specific `drop-aux-only-state-edges` cases
+removed (no `state-to-aux-bytes@1` leaf left); preamble-lift + focus-dim +
+replication-panel retargeted to surviving leaves.)*
 - `types.ts`: add `CipherSpec.outputFrom?: PortBinding`; add
   `outputAux?: string` to `ForEachSubgraphWithHistoryNode` (A3a consumer;
   deferral note on the other looping kinds, matching A2's posture).

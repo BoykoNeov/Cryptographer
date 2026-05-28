@@ -81,6 +81,22 @@ export type PortBinding = {
   readonly port: string; // output port name on that upstream node
 };
 
+/**
+ * Reserved top-scope source exposing the cipher's `initialState` bytes
+ * (scaffolding-suppression plan Phase A Slice A3a). The runtime seeds the
+ * top-scope `nodeOutputs` map with one synthetic producer under this id,
+ * carrying the initial state bytes on port `INPUT_SOURCE_PORT`. Specs wire
+ * their first byte-consumers to it (`portInputs: { input: { node:
+ * INPUT_SOURCE_ID, port: INPUT_SOURCE_PORT } }`) instead of routing through a
+ * standalone `state-to-bytes@1` "plaintext-source" bridge leaf. The graph
+ * derivation materializes a synthetic input pill for it.
+ *
+ * The leading `$` keeps the id outside the spec-id namespace (spec ids use
+ * lowercase + dots + dashes only), so it can never collide with a real node.
+ */
+export const INPUT_SOURCE_ID = "$input";
+export const INPUT_SOURCE_PORT = "out";
+
 export type StepLeaf = {
   readonly kind: "step";
   readonly id: string; // unique within spec; UI references this
@@ -570,6 +586,24 @@ export type ForEachSubgraphWithHistoryNode = {
    */
   readonly seedInput?: PortBinding;
   readonly bodyOutput?: PortBinding;
+  /**
+   * **Container-to-scratchpad output — scaffolding-suppression plan Phase A
+   * Slice A3a.** When set, the runtime writes the container's exit value (the
+   * full concatenated history) into `aux[outputAux]` at exit, so many
+   * downstream consumers can read it by name via `aux-load-bytes@1`. This
+   * retires the standalone `generic.state-to-aux-bytes@1` "publish" bridge
+   * leaf that used to read the container's exit `state` and copy it into aux.
+   *
+   * It is the broadcast counterpart of `bodyOutput`: `bodyOutput` is a
+   * point-to-point per-iteration result; `outputAux` is the whole-history
+   * fan-out (SHA-256 A3a: `outputAux: "W"`, replacing the `W-publish` bridge —
+   * the 64 compression rounds keep reading `aux["W"]` unchanged). Optional +
+   * additive (no `schemaVersion` bump — same posture as `seedInput`/
+   * `bodyOutput`). A future leaf-level `aux-store-bytes@1` primitive would
+   * generalize this for non-container writers; deferred to a B-phase
+   * follow-up (pure port-native leaves can't write aux today).
+   */
+  readonly outputAux?: string;
 };
 
 export type StepNode =
@@ -610,6 +644,22 @@ export type CipherSpec = {
    * hex-encoded in `CipherDocument` (additive, no `schemaVersion` bump).
    */
   readonly cipherConstants?: Record<string, Uint8Array>;
+  /**
+   * **Cipher exit port — scaffolding-suppression plan Phase A Slice A3a.**
+   * Names the port whose bytes become the trace's `finalState`. When set, the
+   * runtime resolves this binding against the top-scope `nodeOutputs` after
+   * walking the tree and decodes the bytes into `finalState` via the spec's
+   * `stateShape`. This retires the terminal `bytes-to-state@1` "final.out"
+   * bridge leaf that used to convert the assembled output bytes back into the
+   * cipher's state shape.
+   *
+   * The entry counterpart is `INPUT_SOURCE_ID` (`$input`): entry is a reserved
+   * runtime-seeded source; exit is an author-declared binding to whatever leaf
+   * produced the final bytes (SHA-256 A3a: `{ node: "final.assemble", port:
+   * "output" }`). Optional + additive (no `schemaVersion` bump). When absent,
+   * `finalState` is the walk's exit `state`, exactly as before.
+   */
+  readonly outputFrom?: PortBinding;
 };
 
 // ─── Trace ────────────────────────────────────────────────────────────────

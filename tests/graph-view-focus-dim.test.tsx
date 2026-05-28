@@ -193,26 +193,28 @@ describe("GraphView — focus-dim v0 (selection-only)", () => {
     }
   });
 
-  it("replica expansion: selecting the canonical source W-publish marks ALL of its replicas' outgoing edges as incident", () => {
-    // Force replication ON so W-publish's replicas are in the rendered
+  it("replica expansion: selecting the canonical source final.split-wv marks ALL of its replicas' outgoing edges as incident", () => {
+    // Force replication ON so final.split-wv's replicas are in the rendered
     // graph (auto-on is per-spec gated; this is the explicit toggle).
     setReplicationEnabled(true);
 
     const { container } = render(() => <GraphView />);
 
-    // W-publish writes aux["W"], read by all 64 rounds' `fetch-W` (fanout
-    // 64 > threshold), so it replicates into synth ids like
-    // `W-publish@->round.N` whose outgoing edges carry the synth id as
-    // `edge.from`. Selecting the canonical `W-publish` should mark the
-    // spine edge AND every replica's outgoing edge as incident (via the
-    // sourceOf expansion). (Was `K-to-aux` before scaffolding-suppression
-    // A1 retired the K loader — W-publish is the surviving high-fanout
-    // aux source.)
-    toggleSelectedNode("W-publish");
+    // `final.split-wv` (split-bytes@1) emits 8 port-flow edges — one per
+    // working-variable word, to `final.s0`..`final.s7` (fanout 8 > threshold,
+    // per Slice S2(i)) — so it replicates into synth ids like
+    // `final.split-wv@->final.s3` whose outgoing edges carry the synth id as
+    // `edge.from`. Selecting the canonical `final.split-wv` should mark every
+    // replica's outgoing edge as incident (via the sourceOf expansion).
+    // (Was the aux-writing `W-publish` before scaffolding-suppression A3a
+    // retired that bridge — W now broadcasts from the `msg-schedule`
+    // container, which `replicateHighFanoutSources` excludes from
+    // replication, so we anchor on a surviving high-fanout *leaf* source.)
+    toggleSelectedNode("final.split-wv");
 
     const groups = collectAllEdgeGroups(container);
 
-    // Look for at least one edge whose `from` is `W-publish@->...`
+    // Look for at least one edge whose `from` is `final.split-wv@->...`
     // (replica synth id) and assert it is NOT dimmed.
     let replicaEdgeChecked = false;
     for (const [key, g] of groups) {
@@ -220,14 +222,14 @@ describe("GraphView — focus-dim v0 (selection-only)", () => {
         ? key.substring("bundle:".length).split("|")
         : key.split("|");
       const from = tokens[0];
-      if (from === undefined || !from.startsWith("W-publish@->")) continue;
+      if (from === undefined || !from.startsWith("final.split-wv@->")) continue;
       // Replica edge — must not be dimmed.
       expect(g.classList.contains("graph-edge-dimmed")).toBe(false);
       replicaEdgeChecked = true;
     }
-    // Guard against trivial pass: at least one W-publish replica edge
+    // Guard against trivial pass: at least one final.split-wv replica edge
     // must have been examined. If SHA-256's replication ever stops
-    // creating W-publish replicas (e.g. threshold change), this fails
+    // creating final.split-wv replicas (e.g. threshold change), this fails
     // loudly rather than silently passing.
     expect(replicaEdgeChecked).toBe(true);
   });

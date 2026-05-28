@@ -99,11 +99,12 @@ describe("GraphView — SHA-256 preamble lifts port-native pure sources", () => 
     // `auxReadPorts` only — no `stateInputPort`/`stateOutputPort`) and
     // has no `portInputs` (it reads the materialized aux["H"]). So the
     // widened S2(d) heuristic must lift it to the preamble row, strictly
-    // above the spine. `seed-schedule` is a known spine leaf (it writes
-    // state) used as the spine-row reference.
+    // above the spine. `init-working-vars` is a known spine leaf (it
+    // writes state) used as the spine-row reference. (Was `seed-schedule`
+    // before scaffolding-suppression A3a retired that bridge.)
     const initFetchHY = leafY(container, "init.fetch-H");
-    const seedY = leafY(container, "seed-schedule");
-    expect(initFetchHY).toBeLessThan(seedY);
+    const spineY = leafY(container, "init-working-vars");
+    expect(initFetchHY).toBeLessThan(spineY);
   });
 
   it("init-working-vars (bytes-to-state@1) STAYS on the spine row — it writes state", () => {
@@ -119,26 +120,21 @@ describe("GraphView — SHA-256 preamble lifts port-native pure sources", () => 
     expect(initWorkingVarsY).toBeGreaterThan(initFetchHY);
   });
 
-  it("seed-schedule (bytes-to-state@1) STAYS on the spine row — pre-schedule state writer", () => {
-    const { container } = render(() => <GraphView />);
-    // Same `bytes-to-state@1` class as `init-working-vars`. Pins that
-    // the widened heuristic doesn't accidentally lift either of the
-    // two state-bridge leaves on the SHA-256 preamble row.
-    const seedY = leafY(container, "seed-schedule");
-    const initFetchHY = leafY(container, "init.fetch-H");
-    expect(seedY).toBeGreaterThan(initFetchHY);
-  });
+  // (The pre-A3a `seed-schedule (bytes-to-state@1) STAYS on the spine row`
+  // case was removed when A3a retired the `seed-schedule` bridge — the
+  // `init-working-vars` case above already pins the bytes-to-state@1
+  // stays-on-spine property.)
 
   it("pad (pad-with-byte@1) STAYS on the spine row — port-chain consumer, not pure source", () => {
     const { container } = render(() => <GraphView />);
     // `pad-with-byte@1` is port-native with NO state-port meta —
     // candidate (a + b) of the port-native pure-source predicate
-    // match. But the spec wires `portInputs: { input:
-    // port("plaintext-source", "output") }`, so it's a port-chain
-    // consumer (downstream of `plaintext-source`). The empty-portInputs
-    // condition keeps it on the spine. Without this condition the
-    // S2(d) original ship would have lifted `pad` alongside the actual
-    // constant emitters, which is a layout regression.
+    // match. But the spec wires `portInputs: { input: port("$input",
+    // "out") }` (scaffolding-suppression A3a — was `plaintext-source`),
+    // so it's a port-chain consumer downstream of the `$input` source.
+    // The non-empty-portInputs condition keeps it on the spine. Without
+    // it the S2(d) original ship would have lifted `pad` alongside the
+    // actual constant emitters, which is a layout regression.
     const padY = leafY(container, "pad");
     const initFetchHY = leafY(container, "init.fetch-H");
     expect(padY).toBeGreaterThan(initFetchHY);

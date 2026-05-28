@@ -10,28 +10,31 @@
  * **Topology overview (Slice 2.6d, user picks 2026-05-25):**
  *
  * ```
- * 1.  state-to-bytes "plaintext-source"   → output = plaintext bytes
- * 2.  pad-with-byte "pad"                  → output = padded bytes
+ * 0.  $input (reserved runtime source)     → out = message bytes
+ *                                            [A3a — replaces the old
+ *                                            state-to-bytes "plaintext-source"]
+ * 1.  pad-with-byte "pad"                   → output = padded bytes
  *                                            (msg + 0x80 + zeros to ≡ 56 mod 64)
- * 3.  append-be64-length "length-append"   → output = 64-byte padded block
+ * 2.  append-be64-length "length-append"    → output = 64-byte padded block
  *                                            (single-block "abc")
- * 4.  bytes-to-state "seed-schedule"       → state = padded block (64 bytes)
- * 5.  for-each-subgraph-with-history "msg-schedule" → state = W (256 bytes)
- *       body (14 leaves per iteration): aux-load-bytes ×4 (prior-2/-7/-15/-16)
+ * 3.  for-each-subgraph-with-history "msg-schedule" → exit state = W (256 bytes)
+ *       seedInput  = length-append.output  (sliced into 16 four-byte W seeds;
+ *                                            A3a — replaces the "seed-schedule" bridge)
+ *       bodyOutput = w-t.output            (each iteration's W_t word)
+ *       outputAux  = "W"                   → aux["W"] = W (256 bytes), broadcast to
+ *                                            the 64 rounds (A3a — replaces the
+ *                                            state-to-aux "W-publish" bridge)
+ *       body (13 leaves per iteration): aux-load-bytes ×4 (prior-2/-7/-15/-16)
  *                                       + σ1 chain (2 ROTR + 1 SHR + 1 XOR)
  *                                       + σ0 chain (2 ROTR + 1 SHR + 1 XOR)
  *                                       + 4-way add-mod-32 (W_t)
- *                                       + bytes-to-state (FES body exit)
  *       iterationCount=48, lookbackOffsets=[2,7,15,16], entryLen=4
- * 6.  state-to-aux "W-publish"             → aux["W"] = W (256 bytes)
- *                                            [Q1 = (b): W lives in aux from
- *                                            here on, not in state]
- * 7.  aux-load "K-to-aux"                  → aux["K"] = K_0..K_63 (256 bytes)
- * 8.  aux-load "H-to-aux"                  → aux["H"] = H_0..H_7 (32 bytes,
- *                                            used by final-add)
- * 9.  constant-load "H-constant"           → output = H_0..H_7 (32 bytes)
- * 10. bytes-to-state "init-working-vars"   → state = working_vars (32 bytes)
- * 11. (× 64) group "round.t":              28 leaves per round
+ *       [K and H live on spec.cipherConstants since A1; the runtime
+ *        materializes aux["K"] (256 bytes) + aux["H"] (32 bytes) before the walk]
+ * 4.  aux-load-bytes "init.fetch-H"         → output = H (32 bytes, from aux["H"])
+ * 5.  bytes-to-state "init-working-vars"    → state = working_vars (32 bytes)
+ *                                            [A3b will retire this state bridge]
+ * 6.  (× 64) group "round.t":               28 leaves per round
  *       state-to-bytes → split-bytes(×8 widths=4)
  *       aux-load-bytes K + byte-slice K_t
  *       aux-load-bytes W + byte-slice W_t
@@ -53,12 +56,14 @@
  *       (new_a, a, b, c, new_e, e, f, g) — i.e., the working variables
  *       cascade DOWN one slot, with new_a entering at position 0 and h
  *       falling off the end. This is what the 8-way concat encodes.
- * 12. final-add (13 leaves):
- *       state-to-bytes → split-bytes(×8) → a..h
- *       aux-load-bytes "fetch-H" → split-bytes(×8) → H_0..H_7
+ * 7.  final-add (12 leaves):
+ *       state-to-bytes "final.state-in" → split-bytes(×8) → a..h
+ *                                          [A3b will retire this state bridge]
+ *       aux-load-bytes "final.fetch-H" → split-bytes(×8) → H_0..H_7
  *       × 8 add-mod-32 2-way: s_i = a_i + H_i
- *       concat 8-way → 32-byte hash
- *       bytes-to-state (final cipher state)
+ *       concat 8-way "final.assemble" → 32-byte digest
+ *     spec.outputFrom = final.assemble.output → finalState (A3a — replaces
+ *                                          the terminal bytes-to-state "final.out")
  * ```
  *
  * **Single-block scope.** This spec assumes the message fits in ONE
@@ -93,6 +98,7 @@
  */
 
 import type { CipherSpec, StepDocumentation, StepNode } from "../core/types";
+import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "../core/types";
 
 // ─── SHA-256 constants (FIPS 180-4 §4.2.2 + §5.3.3) ───────────────────────
 
@@ -167,18 +173,7 @@ const SHA256_H_BYTES = wordsToBytes(SHA256_H_WORDS); // 32 bytes
 // **References.** Every override carries at least one FIPS 180-4
 // citation pointing at the section that justifies its role.
 
-// ── Preprocessing (4 leaves) ──────────────────────────────────────────────
-
-const NARR_PLAINTEXT_SOURCE: StepDocumentation = {
-  name: "Plaintext source",
-  summary: "Expose the input message bytes on a port so the padding step can read them.",
-  detail: `Reads the cipher's input state (the bytes of the message
-to be hashed) and emits them on port \`output\`. This is the entry
-point — every downstream step that needs the original message reads
-from here (notably the padding step AND the length-suffix step, which
-encodes the **original** message length, not the padded length).`,
-  references: ["FIPS 180-4 §5.1.1 — Preprocessing overview"],
-};
+// ── Preprocessing (2 leaves) ──────────────────────────────────────────────
 
 const NARR_PAD: StepDocumentation = {
   name: "Pad with 0x80 + zeros (FIPS 180-4 §5.1.1)",
@@ -207,25 +202,13 @@ big-endian unsigned integer. For the "abc" KAT (FIPS 180-4 §A.1) this
 is \`0x0000000000000018\` (= 24 bits). After this step the input is
 exactly 64 bytes (single-block scope of this spec).
 
-The length-source port wires back to \`plaintext-source\` — the
+The length-source port wires back to the \`$input\` message source — the
 original message — NOT to the padded bytes, because the length encoded
 here is the original length per the FIPS specification.`,
   references: ["FIPS 180-4 §5.1.1 — Length suffix"],
 };
 
-const NARR_SEED_SCHEDULE: StepDocumentation = {
-  name: "Seed message schedule (bytes → state)",
-  summary:
-    "Bridge: copy the padded 64-byte block into state so the FES-with-history can seed its history.",
-  detail: `The for-each-subgraph-with-history primitive seeds its
-lookback history from parent-scope state. This bridge copies the
-64-byte padded block (output of \`length-append\`) into state.bytes
-so the FES seeding logic can populate \`prior-1\` through \`prior-16\`
-with the message words \`M_0..M_15\` before the first iteration runs.`,
-  references: ["FIPS 180-4 §6.2.2 — Message schedule preparation"],
-};
-
-// ── Schedule body (14 leaves, shared across 48 FES iterations) ────────────
+// ── Schedule body (13 leaves, shared across 48 FES iterations) ────────────
 
 const NARR_SCHED_FETCH_P2: StepDocumentation = {
   name: "Fetch W_{t-2}",
@@ -430,35 +413,12 @@ the padded message block via the FES seeding contract.`,
   references: ["FIPS 180-4 §6.2.2 — Step 1, message schedule"],
 };
 
-const NARR_SCHED_OUT: StepDocumentation = {
-  name: "Schedule iteration exit (bytes → state)",
-  summary: "Bridge: write the new W_t word into state.bytes as the FES iteration's 4-byte output.",
-  detail: `The FES-with-history primitive validates that each
-iteration body exits with exactly \`historyEntryByteLength\` bytes in
-state (here, 4 bytes — one 32-bit word). This bridge moves the W_t
-word from its port into state, completing the iteration's contract.
-
-After all 48 iterations, state holds the concatenated 256-byte W
-buffer (W_0..W_63), ready to be published to aux for the compression
-rounds.`,
-  references: ["FIPS 180-4 §6.2.2 — Step 1"],
-};
-
-// ── Aux setup + working-variable init (5 leaves) ──────────────────────────
-
-const NARR_W_PUBLISH: StepDocumentation = {
-  name: "Publish W to aux",
-  summary: 'Snapshot the 256-byte W schedule into aux["W"] so each round can read its W_t slice.',
-  detail: `After the FES exits, state holds the full 256-byte W
-buffer. The 64 compression rounds each need to read their own W_t
-slice — but state is about to be overwritten with the working
-variables, so we snapshot W into aux first. Each round then loads
-aux["W"] and slices out 4 bytes at offset \`4*t\`.
-
-This is the Q1 = (b) "W in aux" decision (Slice 2.6d pre-slice user
-pick): W lives in aux from here on, NOT in state.`,
-  references: ["FIPS 180-4 §6.2.2 — Step 2 (working variables init)"],
-};
+// ── Working-variable init (2 leaves) ──────────────────────────────────────
+//
+// The 256-byte message schedule W is published into aux["W"] by the
+// message-schedule FES itself (scaffolding-suppression A3a `outputAux: "W"`),
+// so the old standalone `W-publish` state-to-aux bridge leaf (and its
+// narration) are gone. The 64 compression rounds read aux["W"] as before.
 
 // Note (scaffolding-suppression A1): K and H are no longer injected by
 // standalone "loader" leaves. They live on `spec.cipherConstants` and the
@@ -572,9 +532,9 @@ ensuring identical-input rounds don't produce identical outputs.`,
 const NARR_ROUND_FETCH_W: StepDocumentation = {
   name: "Fetch W schedule from aux",
   summary: 'Load the 256-byte aux["W"] message-schedule buffer for this round\'s W_t slice.',
-  detail: `Loads the full 256-byte W buffer (published by the
-schedule's \`W-publish\` leaf at the top of the cipher) into a port.
-The next leaf slices out \`W_t\` for this round.
+  detail: `Loads the full 256-byte W buffer (published into aux["W"] by
+the message-schedule container's \`outputAux\` at the top of the cipher)
+into a port. The next leaf slices out \`W_t\` for this round.
 
 Note that W changes with every input message — unlike K which is fixed.
 That's WHY the schedule exists: to expand the 16-word message block
@@ -1061,14 +1021,6 @@ For the "abc" KAT (FIPS 180-4 §A.1) this yields
   references: ["FIPS 180-4 §6.2.2 — Step 4 / §A.1 KAT"],
 };
 
-const NARR_FINAL_OUT: StepDocumentation = {
-  name: "Final state (bytes → state)",
-  summary: "Bridge: write the 32-byte digest back into state as the cipher's final output.",
-  detail: `Closes the SHA-256 pipeline. State now holds the 32-byte
-digest. This is what the UI shows as the cipher's output.`,
-  references: ["FIPS 180-4 §6.2.2 — Step 4"],
-};
-
 // ─── Helper: shared port-input shapes (DRY) ───────────────────────────────
 
 const port = (node: string, port: string): { readonly node: string; readonly port: string } => ({
@@ -1076,16 +1028,16 @@ const port = (node: string, port: string): { readonly node: string; readonly por
   port,
 });
 
-// ─── Schedule body: 14 leaves per FES iteration ──────────────────────────
+// ─── Schedule body: 13 leaves per FES iteration ──────────────────────────
 //
 // Implements σ0/σ1 per FIPS 180-4 §4.1.2 + W_t = σ1(W_{t-2}) + W_{t-7}
 // + σ0(W_{t-15}) + W_{t-16} per §6.2.2. The four lookback values come
 // from aux["prior-N"] (auto-published by the FES-with-history runtime
 // based on `lookbackOffsets=[2,7,15,16]`).
 //
-// Body exit state must be exactly `historyEntryByteLength = 4` bytes
-// (the FES contract validates this). The final `bytes-to-state` leaf
-// satisfies that.
+// Each iteration's 4-byte result (one 32-bit word) is `w-t`'s output port,
+// named directly by the FES `bodyOutput` binding (scaffolding-suppression
+// A3a) — no trailing `bytes-to-state "schedule-out"` bridge leaf.
 
 const buildScheduleBody = (): readonly StepNode[] => [
   // ── Lookback fetches (4 leaves) ────────────────────────────────────
@@ -1205,15 +1157,8 @@ const buildScheduleBody = (): readonly StepNode[] => [
     },
     narrationOverride: NARR_SCHED_W_T,
   },
-  // ── FES body exit: 4-byte bytes-shape state ────────────────────────
-  {
-    kind: "step",
-    id: "schedule-out",
-    type: "bytes-to-state@1",
-    params: {},
-    portInputs: { input: port("w-t", "output") },
-    narrationOverride: NARR_SCHED_OUT,
-  },
+  // FES body exit is `w-t`'s output port directly (scaffolding-suppression
+  // A3a `bodyOutput`) — no `bytes-to-state "schedule-out"` bridge leaf.
 ];
 
 // ─── Compression round body: 28 leaves per round ──────────────────────────
@@ -1597,14 +1542,9 @@ const buildFinalAddSteps = (): readonly StepNode[] => [
     ),
     narrationOverride: NARR_FINAL_ASSEMBLE,
   },
-  {
-    kind: "step",
-    id: "final.out",
-    type: "bytes-to-state@1",
-    params: {},
-    portInputs: { input: port("final.assemble", "output") },
-    narrationOverride: NARR_FINAL_OUT,
-  },
+  // The 32-byte digest leaves the cipher straight off `final.assemble`'s
+  // output port via `spec.outputFrom` (scaffolding-suppression A3a) — no
+  // terminal `bytes-to-state "final.out"` bridge leaf.
 ];
 
 // ─── Spec builder ──────────────────────────────────────────────────────────
@@ -1628,22 +1568,17 @@ export const buildSha256Spec = (): CipherSpec => ({
   },
   steps: [
     // ─── Preprocessing ───────────────────────────────────────────────────
-    // Plaintext entry bridge: expose initialState bytes on a port so
-    // port-native primitives downstream can wire to them.
-    {
-      kind: "step",
-      id: "plaintext-source",
-      type: "state-to-bytes@1",
-      params: {},
-      narrationOverride: NARR_PLAINTEXT_SOURCE,
-    },
-    // Padding: input = plaintext, output = msg + 0x80 + zeros to ≡ 56 (mod 64).
+    // The message bytes arrive on the reserved `$input` source
+    // (scaffolding-suppression A3a): the runtime publishes initialState on
+    // port INPUT_SOURCE_PORT, so the old `state-to-bytes "plaintext-source"`
+    // entry bridge is gone — `pad` and `length-append` wire straight to it.
+    // Padding: input = message, output = msg + 0x80 + zeros to ≡ 56 (mod 64).
     {
       kind: "step",
       id: "pad",
       type: "pad-with-byte@1",
       params: { padByte: 0x80, blockSize: 64, padTarget: 56 },
-      portInputs: { input: port("plaintext-source", "output") },
+      portInputs: { input: port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT) },
       narrationOverride: NARR_PAD,
     },
     // Length suffix: data = padded bytes, length-source = ORIGINAL message
@@ -1656,20 +1591,9 @@ export const buildSha256Spec = (): CipherSpec => ({
       params: {},
       portInputs: {
         data: port("pad", "output"),
-        "length-source": port("plaintext-source", "output"),
+        "length-source": port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT),
       },
       narrationOverride: NARR_LENGTH_APPEND,
-    },
-    // ─── Bridge: padded block (64 bytes) → state ─────────────────────────
-    // Required so the FES-with-history can seed its history from
-    // parent-scope state.bytes.
-    {
-      kind: "step",
-      id: "seed-schedule",
-      type: "bytes-to-state@1",
-      params: {},
-      portInputs: { input: port("length-append", "output") },
-      narrationOverride: NARR_SEED_SCHEDULE,
     },
     // ─── Message schedule (48 iterations, lookbackOffsets [2,7,15,16]) ────
     // 14-leaf decomposed body per iteration. After this, state = W[0..63]
@@ -1693,20 +1617,16 @@ export const buildSha256Spec = (): CipherSpec => ({
       lookbackOffsets: [2, 7, 15, 16],
       historyEntryByteLength: 4,
       defaultCollapsed: true,
+      // Container port contract (scaffolding-suppression A3a). The seed
+      // history is sliced from `length-append`'s 64-byte block (16 four-byte
+      // W seeds) — no `seed-schedule` bytes-to-state bridge. Each iteration's
+      // result is `w-t`'s output port (no `schedule-out` bridge). The full
+      // 256-byte W is published into aux["W"] at exit (no `W-publish`
+      // state-to-aux bridge); the 64 compression rounds read aux["W"] as before.
+      seedInput: port("length-append", "output"),
+      bodyOutput: port("w-t", "output"),
+      outputAux: "W",
       children: buildScheduleBody(),
-    },
-    // ─── Q1 = (b): Publish W into aux["W"] ───────────────────────────────
-    // State is the 256-byte W after the schedule exit. State-to-aux clones
-    // it into aux["W"], where each compression round will read it from
-    // (via aux-load-bytes + byte-slice). After this leaf, state is still
-    // W (state-to-aux is identity on state); the next bridge below
-    // overwrites state with the initial working variables.
-    {
-      kind: "step",
-      id: "W-publish",
-      type: "generic.state-to-aux-bytes@1",
-      params: { auxName: "W" },
-      narrationOverride: NARR_W_PUBLISH,
     },
     // ─── Initialize working variables from H_0..H_7 ──────────────────────
     // Scaffolding-suppression A1: K and H are no longer injected by
@@ -1745,6 +1665,10 @@ export const buildSha256Spec = (): CipherSpec => ({
   // track one source. Provenance: K = cube roots of the first 64 primes
   // (FIPS 180-4 §4.2.2); H = square roots of the first 8 primes (§5.3.3).
   cipherConstants: { K: SHA256_K_BYTES, H: SHA256_H_BYTES },
+  // Cipher exit port (scaffolding-suppression A3a): the 32-byte digest
+  // assembled by `final.assemble` becomes the trace's finalState, decoded
+  // via stateShape "bytes". Retires the terminal `final.out` bridge leaf.
+  outputFrom: port("final.assemble", "output"),
 });
 
 // ─── Public re-exports (consumers and tests) ──────────────────────────────

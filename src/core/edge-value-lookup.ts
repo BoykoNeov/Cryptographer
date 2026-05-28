@@ -111,6 +111,7 @@ import type {
   Trace,
   TraceFrame,
 } from "./types";
+import { INPUT_SOURCE_ID } from "./types";
 
 /** Pattern matching a block-chip's synthetic id. Captures (iterateId, index). */
 const BLOCK_CHIP_RE = /^(.+)@block(\d+)$/;
@@ -970,7 +971,10 @@ export const lookupNodeValue = (
   // (= the cipher's ciphertext for encrypt, plaintext for decrypt).
   // Pre-run clicks fall through to `"no-trace"` so the empty-trace copy
   // is consistent with every other inspector row.
-  if (nodeId === CIPHER_INPUT_ID) {
+  // INPUT_SOURCE_ID (`$input`) is the scaffolding-suppression A3a synthetic
+  // input source; it renders as the input pill for port-native specs, so it
+  // resolves to the same first-frame `stateBefore` value as CIPHER_INPUT_ID.
+  if (nodeId === CIPHER_INPUT_ID || nodeId === INPUT_SOURCE_ID) {
     if (trace === null) return { status: "no-trace" };
     const first = trace.frames[0];
     if (!first) return { status: "no-trace" };

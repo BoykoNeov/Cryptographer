@@ -13,14 +13,16 @@
  * finds no producer for `prior-{N}` and emits no edge. The body's
  * lookback fetches end up with zero incoming arrows — pedagogically
  * reading as "values from thin air" even though their seed window
- * has a real provenance: the container's spine predecessor (in
- * SHA-256: `seed-schedule`, the `bytes-to-state@1` that produces the
- * 64-byte padded block split into 16 four-byte seeds).
+ * has a real provenance. After scaffolding-suppression A3a the
+ * SHA-256 FES declares `seedInput: { node: "length-append", … }`, so
+ * the anchor is `length-append` directly (the `append-be64-length@1`
+ * leaf producing the 64-byte padded block split into 16 four-byte
+ * seeds) — the old `seed-schedule` bytes-to-state bridge is gone.
  *
  * **What this file pins:**
  *   1. SHA-256: four history-seed edges exist, one per
- *      `lookbackOffsets` entry, sourced from the spine predecessor
- *      (`seed-schedule`) and targeting the four fetch-pN body leaves.
+ *      `lookbackOffsets` entry, sourced from the FES `seedInput.node`
+ *      (`length-append`) and targeting the four fetch-pN body leaves.
  *   2. AES-128 ECB (legacy, no FES-with-history): zero history-seed
  *      edges — the pass is a no-op for specs without the primitive.
  *   3. Shared `auxKey: "history-seed"` so that when `msg-schedule`
@@ -31,7 +33,7 @@
  *      fanout-eligibility predicate counts them (the user's "items
  *      inside a container should also be available to be
  *      represented as replications" ask — at the new default
- *      threshold of 3, seed-schedule's fanout=4 auto-replicates
+ *      threshold of 3, length-append's fanout=4 auto-replicates
  *      into the expanded msg-schedule body).
  *   5. `validateGraph` does not fire `orphaned-read` /
  *      `unused-write` warnings on the synthetic edges (no
@@ -49,6 +51,7 @@ import {
   deriveAuxGraph,
   replicateHighFanoutSources,
 } from "@/core/graph";
+import { runSpec } from "@/core/runtime";
 import type { CipherSpec, Trace } from "@/core/types";
 import { DEFAULT_REPLICATION_THRESHOLD } from "@/ui/stores/view-replication";
 import { describe, expect, it } from "vitest";
@@ -70,19 +73,19 @@ describe("deriveAuxGraph — history-seed edge derivation (S2(l))", () => {
     expect(seedEdges).toHaveLength(4);
   });
 
-  it("SHA-256: every history-seed edge originates from `seed-schedule` (the FES-with-history spine predecessor)", () => {
+  it("SHA-256: every history-seed edge originates from `length-append` (the FES-with-history `seedInput.node`)", () => {
     const spec = buildSha256Spec();
     const registry = buildDefaultRegistry();
     const graph = deriveAuxGraph(emptyTrace(), spec, { registry });
     const seedEdges = graph.edges.filter(
       (e) => e.kind === "aux" && e.auxKey === HISTORY_SEED_AUX_KEY,
     );
-    // Anchor rule: spine predecessor of the FES-with-history container
-    // in spec order. In SHA-256, the immediate sibling before
-    // `msg-schedule` is `seed-schedule` (the bytes-to-state@1 that
-    // produces the 64-byte padded block split into 16 four-byte seeds).
+    // Anchor rule (A3a): `seedInput.node`. The SHA-256 FES declares
+    // `seedInput: { node: "length-append", port: "output" }`, so the
+    // synthetic seed edges anchor at `length-append` (the
+    // append-be64-length@1 producing the 64-byte padded block).
     for (const edge of seedEdges) {
-      expect(edge.from).toBe("seed-schedule");
+      expect(edge.from).toBe("length-append");
     }
   });
 
@@ -97,6 +100,31 @@ describe("deriveAuxGraph — history-seed edge derivation (S2(l))", () => {
     // Spec's `lookbackOffsets: [2, 7, 15, 16]` aligns with the four
     // body fetch leaves of the same names. Sorted alphabetically:
     expect(seedEdgeTargets).toEqual(["fetch-p15", "fetch-p16", "fetch-p2", "fetch-p7"]);
+  });
+
+  it('SHA-256: msg-schedule publishes aux["W"] (outputAux) — schedule→W→rounds stays connected after the W-publish bridge removal (A3a)', () => {
+    const spec = buildSha256Spec();
+    const registry = buildDefaultRegistry();
+    // A real trace is required: the W-writer stamping happens in
+    // `deriveEdges`'s trace walk. The runtime's `outputAux` write carries no
+    // TraceFrame, so the container is stamped as aux["W"]'s writer at its
+    // trace-exit boundary, and each round's `fetch-W` read then draws a
+    // natural edge from it (instead of orphaning, as a producerless aux
+    // constant like K does).
+    const trace = runSpec(spec, registry, {
+      initialState: { shape: "bytes", bytes: new Uint8Array([0x61, 0x62, 0x63]) },
+      portedDispatchEnabled: true,
+    });
+    const graph = deriveAuxGraph(trace, spec, { registry });
+    const wEdges = graph.edges.filter((e) => e.kind === "aux" && e.auxKey === "W");
+    // One edge per compression round's W_t fetch (64 rounds), all sourced
+    // from the msg-schedule container — the honest depiction of the W
+    // broadcast that the deleted `W-publish` leaf used to anchor.
+    expect(wEdges).toHaveLength(64);
+    for (const e of wEdges) {
+      expect(e.from).toBe("msg-schedule");
+      expect(e.to).toMatch(/^round\.\d+\.fetch-W$/);
+    }
   });
 
   it("AES-128 ECB: no history-seed edges (legacy spec, no for-each-subgraph-with-history)", () => {
@@ -115,7 +143,7 @@ describe("deriveAuxGraph — history-seed edge derivation (S2(l))", () => {
     // Collapse the msg-schedule container; collapseGraph rewrites every
     // edge whose `to` is inside the container to land at the container
     // id itself, then dedupes by (kind, from, to, auxKey). All four
-    // history-seed edges share `from: seed-schedule`, `to: msg-schedule`
+    // history-seed edges share `from: length-append`, `to: msg-schedule`
     // (after rewrite), `kind: "aux"`, `auxKey: "history-seed"` — so
     // dedup collapses them to one.
     const collapsed = collapseGraph(graph, new Set(["msg-schedule"]));
@@ -123,43 +151,42 @@ describe("deriveAuxGraph — history-seed edge derivation (S2(l))", () => {
       (e) => e.kind === "aux" && e.auxKey === HISTORY_SEED_AUX_KEY,
     );
     expect(seedEdges).toHaveLength(1);
-    expect(seedEdges[0]?.from).toBe("seed-schedule");
+    expect(seedEdges[0]?.from).toBe("length-append");
     expect(seedEdges[0]?.to).toBe("msg-schedule");
   });
 
-  it("SHA-256: shared auxKey makes the edges fanout-eligible for replication (seed-schedule fanout = 4)", () => {
+  it("SHA-256: shared auxKey makes the edges fanout-eligible for replication (length-append fanout = 4)", () => {
     const spec = buildSha256Spec();
     const registry = buildDefaultRegistry();
     const graph = deriveAuxGraph(emptyTrace(), spec, { registry });
     // Mirror `replicateHighFanoutSources`'s fanout-eligibility predicate
-    // (graph.ts:2118: kind:"aux" OR kind:"state" + auxKey:PORT_FLOW_AUX_KEY).
-    // `seed-schedule`'s outgoing edges should include the four aux edges;
-    // the state edge to msg-schedule is auxKey:"state" (legacy passthrough)
-    // and does NOT count.
-    const seedScheduleOutgoing = graph.edges.filter((e) => e.from === "seed-schedule");
-    const auxOnly = seedScheduleOutgoing.filter((e) => e.kind === "aux");
+    // (kind:"aux" OR kind:"state" + auxKey:PORT_FLOW_AUX_KEY). `length-append`'s
+    // outgoing aux edges are exactly the four history-seed edges (its byte
+    // output feeds the FES via `seedInput`, not a port-flow edge).
+    const lengthAppendOutgoing = graph.edges.filter((e) => e.from === "length-append");
+    const auxOnly = lengthAppendOutgoing.filter((e) => e.kind === "aux");
     expect(auxOnly).toHaveLength(4);
     for (const edge of auxOnly) {
       expect(edge.auxKey).toBe(HISTORY_SEED_AUX_KEY);
     }
   });
 
-  it("SHA-256: at the default threshold, seed-schedule auto-replicates inside the expanded msg-schedule body (replicas land in consumer scope)", () => {
+  it("SHA-256: at the default threshold, length-append auto-replicates inside the expanded msg-schedule body (replicas land in consumer scope)", () => {
     const spec = buildSha256Spec();
     const registry = buildDefaultRegistry();
     const graph = deriveAuxGraph(emptyTrace(), spec, { registry });
     // No msg-schedule collapse: the four fetch-pN consumers remain
     // distinct, so each gets its own replica chip. Threshold 3 (strict
     // `>`) means "fanout ≥ 4 auto-replicates" — exactly what
-    // seed-schedule's four history-seed edges trip. Without the user
+    // length-append's four history-seed edges trip. Without the user
     // touching the panel, the four arrows should fan out into the
     // msg-schedule body (one replica per consumer, sitting inside the
     // body alongside its fetch leaf).
     const replicated = replicateHighFanoutSources(graph, DEFAULT_REPLICATION_THRESHOLD);
-    const seedReplicas = replicated.nodes.filter((n) => n.replicaOf === "seed-schedule");
+    const seedReplicas = replicated.nodes.filter((n) => n.replicaOf === "length-append");
     // Five total: 4 aux (history-seed) replicas inside msg-schedule + 1
-    // spine replica at root scope for the state edge to msg-schedule
-    // itself (different consumer, no shared replica per Slice 7b).
+    // spine replica at root scope for length-append's spine-successor edge
+    // into msg-schedule (different consumer, no shared replica per Slice 7b).
     expect(seedReplicas).toHaveLength(5);
     // The four IN-CONTAINER replicas (the user's add-on: "items inside
     // a container should also be available to be represented as
@@ -170,7 +197,7 @@ describe("deriveAuxGraph — history-seed edge derivation (S2(l))", () => {
     );
     expect(insideMsgSchedule).toHaveLength(4);
     // The spine replica lives at root scope (consumer = msg-schedule
-    // container, sibling of seed-schedule).
+    // container, sibling of length-append).
     const atRoot = seedReplicas.filter((n) => n.containerPath.length === 0);
     expect(atRoot).toHaveLength(1);
   });

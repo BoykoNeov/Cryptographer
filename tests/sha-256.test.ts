@@ -107,26 +107,32 @@ describe("SHA-256 — frame count and state shape pins", () => {
   it("emits the expected number of frames per run", () => {
     // Frame budget for single-block run under the Slice 2.6d decomposed
     // topology (every algorithmic sub-step is now a visible chip):
-    //   - 4 preprocessing leaves: plaintext-source + pad + length-append
-    //     + seed-schedule
-    //   - 14 schedule body leaves × 48 iterations = 672 frames
-    //     (aux-load ×4 + σ1 chain ×4 + σ0 chain ×4 + W_t 4-way add
-    //     + bytes-to-state)
-    //   - 3 between-phases leaves: W-publish + init.fetch-H
-    //     + init-working-vars. Scaffolding-suppression A1 dropped 2 here:
-    //     K-to-aux + H-to-aux are gone (K/H now materialized from
-    //     `spec.cipherConstants` into aux by the runtime), and H-constant
-    //     (constant-load) was replaced by init.fetch-H (aux-load-bytes
-    //     reading the materialized aux["H"]) — net −2 frames vs 2.6d's 5.
+    //   - 2 preprocessing leaves: pad + length-append. Scaffolding-
+    //     suppression A3a dropped 2 here: `plaintext-source` (state-to-bytes)
+    //     is gone — pad/length-append read the reserved `$input` source —
+    //     and `seed-schedule` (bytes-to-state) is gone — the message-schedule
+    //     FES seeds its history from `length-append.output` via `seedInput`.
+    //   - 13 schedule body leaves × 48 iterations = 624 frames
+    //     (aux-load ×4 + σ1 chain ×4 + σ0 chain ×4 + W_t 4-way add). A3a
+    //     dropped the per-iteration `schedule-out` (bytes-to-state) bridge:
+    //     the FES `bodyOutput` names `w-t.output` directly (−48 frames).
+    //   - 2 between-phases leaves: init.fetch-H + init-working-vars. A3a
+    //     dropped `W-publish` (state-to-aux-bytes) here — the FES `outputAux`
+    //     publishes the 256-byte W into aux["W"] at exit (−1 frame). (A1 had
+    //     already retired K-to-aux/H-to-aux/H-constant via cipherConstants.)
     //   - 28 leaves × 64 compression rounds = 1792 frames
     //     (state-to-bytes + split-bytes + 2×(aux-load-bytes + byte-slice)
     //     + Σ1 ×4 + Σ0 ×4 + Ch ×4 + Maj ×4 + T1 + T2 + new_a + new_e
     //     + concat + bytes-to-state)
-    //   - 13 final-add leaves: state-to-bytes + split-bytes + aux-load-bytes
-    //     + split-bytes + 8×add-mod-32 + concat + bytes-to-state
+    //   - 12 final-add leaves: state-to-bytes + split-bytes + aux-load-bytes
+    //     + split-bytes + 8×add-mod-32 + concat. A3a dropped the terminal
+    //     `final.out` (bytes-to-state): `spec.outputFrom` names
+    //     `final.assemble.output` as the cipher's finalState (−1 frame).
     //   - +1 from runtime control flow (FES outer accounting)
     //
-    // Total: 4 + 672 + 3 + 1792 + 13 + 1 = 2485 frames (was 2487 pre-A1)
+    // Total: 2 + 624 + 2 + 1792 + 12 + 1 = 2433 frames (was 2485 pre-A3a,
+    // 2487 pre-A1). A3a frame delta: −52 (plaintext-source + seed-schedule
+    // + schedule-out×48 + W-publish + final.out).
     //
     // Pre-2.6d (coarse helpers): 123 frames. Pedagogy payoff: ~20× more
     // frames means every ROTR, every XOR, every modular add is visible.
@@ -134,7 +140,7 @@ describe("SHA-256 — frame count and state shape pins", () => {
       initialState: { shape: "bytes", bytes: new Uint8Array([0x61, 0x62, 0x63]) },
       portedDispatchEnabled: true,
     });
-    expect(trace.frames).toHaveLength(2485);
+    expect(trace.frames).toHaveLength(2433);
   });
 
   it("finalState is always 32 bytes BytesState (the hash)", () => {

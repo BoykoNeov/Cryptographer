@@ -48,6 +48,7 @@ import type { GraphWarning } from "./graph";
 import { resolvePortMap } from "./port-projection";
 import type { StepRegistry } from "./registry";
 import type { CipherSpec, PortBinding, StateShape, StepNode } from "./types";
+import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "./types";
 
 /**
  * A read-only lookup from a node id (leaf stepId or container id) to the
@@ -176,6 +177,24 @@ const walk = (nodes: readonly StepNode[], current: StateShape, ctx: WalkContext)
         // Validate that every declared portInputs reference resolves.
         if (portInputs !== undefined) {
           for (const [portName, binding] of Object.entries(portInputs)) {
+            // Reserved `$input` source (scaffolding-suppression A3a): the
+            // runtime seeds it into the top scope, so it always resolves on
+            // port INPUT_SOURCE_PORT. (No shipped spec wires `$input` from a
+            // nested body, which the runtime would reject; if one ever does,
+            // tighten this to a top-scope-only check.)
+            if (binding.node === INPUT_SOURCE_ID) {
+              if (binding.port !== INPUT_SOURCE_PORT) {
+                ctx.warnings.push({
+                  kind: "port-input-unresolvable",
+                  stepId: node.id,
+                  portName,
+                  targetNode: binding.node,
+                  targetPort: binding.port,
+                  reason: "missing-port",
+                });
+              }
+              continue;
+            }
             const upstream = scopeOutputs.get(binding.node);
             if (upstream === undefined) {
               ctx.warnings.push({

@@ -349,6 +349,13 @@ export const ForEachSubgraphWithHistorySchema = z.object({
   historyEntryByteLength: z.number().int().positive(),
   ...containerPortEdgeFields,
   ...loopingContainerSeedFields,
+  // Container-to-scratchpad output (scaffolding-suppression A3a). Names the
+  // aux key the runtime publishes the full history into at exit, retiring
+  // the `state-to-aux-bytes` "publish" bridge. Declared only here (the type
+  // adds `outputAux` to `ForEachSubgraphWithHistoryNode` alone, not the
+  // other looping kinds); Zod strips undeclared keys, so this is required
+  // for the field to survive round-trip. Additive within schemaVersion 3.
+  outputAux: z.string().optional(),
 });
 
 // Note on `schemaVersion`: Phase 4 of `docs/plans/des-feistel.md` bumped
@@ -394,6 +401,11 @@ export const CipherSpecSchema = z.object({
       z.string().regex(/^([0-9a-fA-F]{2})*$/, "cipherConstants values must be hex byte pairs"),
     )
     .optional(),
+  // Cipher exit port (scaffolding-suppression A3a). Names the port whose
+  // bytes become `finalState`, retiring the terminal `bytes-to-state@1`
+  // bridge. Declared explicitly (Zod strips undeclared keys — same gotcha
+  // as `cipherConstants`); additive within schemaVersion 3, no bump.
+  outputFrom: PortBindingSchema.optional(),
 });
 
 // ─── LayoutSpec ───────────────────────────────────────────────────────────

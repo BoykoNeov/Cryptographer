@@ -3,18 +3,21 @@
  *
  * Pins the asymmetric endpoint semantics of `dropAuxOnlyStateEdges`:
  * the FROM-side suppression keeps AES `key-expansion → first-state-
- * consumer` redundancy out of the graph; the narrower TO-side
- * suppression keeps SHA-256's `msg-schedule → W-publish` legitimate
- * state-thread handoff visible.
+ * consumer` redundancy out of the graph, while the narrower TO-side set
+ * preserves a legitimate state-thread handoff INTO an aux-only-root sink.
  *
- * Why this test lives at the integration layer (real specs, real
- * registry) rather than as a unit-level synthetic vector: the
- * pedagogical bug ("message schedule has no outgoing arrows") was
- * surfaced by manual browser smoke on the actual SHA-256 graph view,
- * and a synthetic test wouldn't catch a future regression where the
- * `auxOnlyRootSinkIds` memo's `meta.stateInputPort` heuristic drifts
- * away from how the registry actually classifies `state-to-aux-bytes@1`.
- * Real specs + real registry = test agrees with what the user sees.
+ * **History note (scaffolding-suppression A3a).** The original TO-side
+ * coverage used SHA-256's `msg-schedule → W-publish` handoff (W-publish
+ * = `generic.state-to-aux-bytes@1`, in the WIDE aux-only set via
+ * `shapeContract.input === "any"` but excluded from the NARROW sink set
+ * because it declares `meta.stateInputPort`). A3a retired the `W-publish`
+ * bridge — the message-schedule FES now publishes W into `aux["W"]`
+ * directly via `outputAux`, and the schedule→rounds connection is drawn
+ * by the `outputAux`-writer stamping in `deriveEdges`. With no
+ * `state-to-aux-bytes@1` leaf left in any shipped spec, the TO-side
+ * sink-preservation path is no longer exercised by a real cipher; those
+ * two SHA-256 cases were removed. The AES from-side cases below still
+ * pin the original filter intent + the legacy-spec regression budget.
  *
  * Surface tested:
  *   - `deriveAuxGraph` (real spec → graph w/ inferred edges)
@@ -89,62 +92,19 @@ const computeAuxOnlyRootSinkIds = (
 };
 
 describe("dropAuxOnlyStateEdges — asymmetric endpoint sets (S2(h))", () => {
-  it("SHA-256: `msg-schedule → W-publish` legacy state edge survives filtering", () => {
-    // Pre-S2(h) regression: the symmetric filter saw W-publish in
-    // auxOnlyRootIds (Path 1, shapeContract.input === "any") and
-    // dropped the edge wholesale — the user saw the schedule as a
-    // dead end. The narrower sink set excludes W-publish because
-    // `generic.state-to-aux-bytes@1` has `meta.stateInputPort: "state"`
-    // (it really does read the state thread to clone bytes into aux).
-    const spec = buildSha256Spec();
-    const registry = buildDefaultRegistry();
-    const raw = deriveAuxGraph(emptyTrace(), spec, { registry });
-
-    const wide = computeAuxOnlyRootIds(spec, registry);
-    const narrow = computeAuxOnlyRootSinkIds(spec, registry, wide);
-
-    // Pre-condition: the legacy state edge IS emitted by inferStateEdges
-    // (msg-schedule is a container — not in skipStateEdgeTo; W-publish
-    // has stateInputPort defined, also not in skipStateEdgeTo).
-    const preFilter = raw.edges.some(
-      (e) =>
-        e.from === "msg-schedule" &&
-        e.to === "W-publish" &&
-        e.kind === "state" &&
-        e.auxKey === "state",
-    );
-    expect(preFilter).toBe(true);
-
-    // The new asymmetric API must KEEP it.
-    const filtered = dropAuxOnlyStateEdges(raw, wide, narrow);
-    const postFilter = filtered.edges.some(
-      (e) =>
-        e.from === "msg-schedule" &&
-        e.to === "W-publish" &&
-        e.kind === "state" &&
-        e.auxKey === "state",
-    );
-    expect(postFilter).toBe(true);
-  });
-
-  it("SHA-256: W-publish appears in the WIDER aux-only set (lifts to preamble row) but NOT the narrower sink set", () => {
-    // Pins the registry-driven heuristic that gates the asymmetric
-    // behavior. If `state-to-aux-bytes@1`'s registration ever loses
-    // its `stateInputPort` declaration, this test fails alongside
-    // the user-visible regression — the heuristic and the bug are
-    // pinned together.
+  it("SHA-256: a pure aux-reading root (`init.fetch-H`) belongs to BOTH the wide and narrow sets", () => {
+    // The wide/narrow distinction only diverges for a leaf that lifts to
+    // the preamble (wide) yet still reads the state thread (excluded from
+    // narrow). Post scaffolding-suppression A3a, SHA-256 has no such leaf
+    // (the `W-publish` state-to-aux-bytes bridge that used to is gone — W
+    // now broadcasts via the FES `outputAux`). What remains is the
+    // symmetric case: `init.fetch-H` (`aux-load-bytes@1`) reads the
+    // materialized aux["H"], declares no `stateInputPort`, and so sits in
+    // BOTH sets — the from-side filter applies to it uniformly.
     const spec = buildSha256Spec();
     const registry = buildDefaultRegistry();
     const wide = computeAuxOnlyRootIds(spec, registry);
     const narrow = computeAuxOnlyRootSinkIds(spec, registry, wide);
-    expect(wide.has("W-publish")).toBe(true);
-    expect(narrow.has("W-publish")).toBe(false);
-    // Sanity: a pure aux-reading root leaf DOESN'T read state (no
-    // stateInputPort on its meta), so it belongs to BOTH sets — the
-    // symmetric contrast to W-publish's asymmetry. Post scaffolding-
-    // suppression A1 the standalone aux source is `init.fetch-H`
-    // (`aux-load-bytes@1` reading the materialized aux["H"]); the old
-    // `K-to-aux`/`H-to-aux` generic.aux-load@1 loaders were retired.
     expect(wide.has("init.fetch-H")).toBe(true);
     expect(narrow.has("init.fetch-H")).toBe(true);
   });

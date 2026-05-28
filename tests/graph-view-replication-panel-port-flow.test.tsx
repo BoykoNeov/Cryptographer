@@ -90,7 +90,7 @@ describe("GraphView — replication panel port-flow source eligibility", () => {
     expect(row?.textContent ?? "").toContain("3");
   });
 
-  it("SHA-256 with expanded msg-schedule: `seed-schedule` (4 history-seed aux edges) appears in the panel with fanout 4", () => {
+  it("SHA-256 with expanded msg-schedule: `length-append` (4 history-seed aux edges) appears in the panel with fanout 4", () => {
     setHash("sha-256");
     seedSha256Trace();
     // 3rd arg `inDefaults: true` because msg-schedule has `defaultCollapsed: true`
@@ -101,7 +101,10 @@ describe("GraphView — replication panel port-flow source eligibility", () => {
     setReplicationPanelOpen(true);
     // Sanity: the Slice S2(l) path (aux edges) still works under the
     // widened predicate — the widening is additive, not replacement.
-    const row = container.querySelector('[data-testid="replication-row-seed-schedule"]');
+    // Post scaffolding-suppression A3a the history-seed source is
+    // `length-append` (the FES `seedInput.node`), not the retired
+    // `seed-schedule` bridge.
+    const row = container.querySelector('[data-testid="replication-row-length-append"]');
     expect(row).not.toBeNull();
     expect(row?.textContent ?? "").toContain("4");
   });

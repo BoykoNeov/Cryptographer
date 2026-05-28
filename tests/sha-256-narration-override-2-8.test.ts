@@ -75,21 +75,22 @@ const leaves = [...spec.steps.flatMap((s) => [...walkLeaves(s)])];
 
 describe("SHA-256 narrationOverride coverage (Slice 2.8)", () => {
   it("spec produces at least one leaf (sanity)", () => {
-    // After Slice 2.6d's decomposition + scaffolding-suppression A1 the
-    // spec contains:
-    //   - 4 preprocessing leaves
-    //   - 14 schedule-body leaves (defined ONCE in the FES body — the
+    // After Slice 2.6d's decomposition + scaffolding-suppression A1 + A3a
+    // the spec contains:
+    //   - 2 preprocessing leaves: pad + length-append. A3a dropped
+    //     plaintext-source (→ `$input` source) + seed-schedule (→ FES
+    //     `seedInput`).
+    //   - 13 schedule-body leaves (defined ONCE in the FES body — the
     //     runtime instantiates them 48 times, but they appear once in
-    //     the spec tree)
-    //   - 3 between-phases leaves: W-publish + init.fetch-H +
-    //     init-working-vars. A1 dropped 2 here (K-to-aux + H-to-aux: K/H
-    //     now materialized from `spec.cipherConstants`), and replaced
-    //     H-constant with init.fetch-H — net 5 → 3.
+    //     the spec tree). A3a dropped schedule-out (→ FES `bodyOutput`).
+    //   - 2 between-phases leaves: init.fetch-H + init-working-vars. A3a
+    //     dropped W-publish (→ FES `outputAux: "W"`); A1 had earlier
+    //     dropped K-to-aux + H-to-aux + H-constant via cipherConstants.
     //   - 64 compression rounds × 28 leaves = 1792 leaves
-    //   - 14 final-add leaves (state-in, split-wv, fetch-H, split-H,
-    //     8 × s_i, assemble, out)
-    //   = 1827 leaves in the spec tree (was 1829 pre-A1).
-    expect(leaves.length).toBe(1827);
+    //   - 13 final-add leaves (state-in, split-wv, fetch-H, split-H,
+    //     8 × s_i, assemble). A3a dropped final.out (→ `spec.outputFrom`).
+    //   = 1822 leaves in the spec tree (was 1827 pre-A3a, 1829 pre-A1).
+    expect(leaves.length).toBe(1822);
   });
 
   it("every leaf carries a non-null narrationOverride", () => {
@@ -198,9 +199,11 @@ describe("SHA-256 narrationOverride coverage (Slice 2.8)", () => {
   it("schedule-body overrides are defined once (not duplicated across iterations)", () => {
     // The FES-with-history body is defined ONCE in the spec tree — the
     // runtime expands it 48 times at runtime, but the spec tree contains
-    // exactly 14 schedule-body leaves. This assertion pins that — if a
-    // future refactor accidentally unrolled the body into the spec tree,
-    // the leaf count would jump and we'd want to know.
+    // exactly 13 schedule-body leaves (A3a retired the `schedule-out`
+    // bytes-to-state body-exit bridge — the FES `bodyOutput` names
+    // `w-t.output` directly). This assertion pins that — if a future
+    // refactor accidentally unrolled the body into the spec tree, the
+    // leaf count would jump and we'd want to know.
     const schedLeaves = leaves.filter((l) =>
       [
         "fetch-p2",
@@ -216,9 +219,8 @@ describe("SHA-256 narrationOverride coverage (Slice 2.8)", () => {
         "sigma0-s3",
         "sigma0",
         "w-t",
-        "schedule-out",
       ].includes(l.id),
     );
-    expect(schedLeaves.length).toBe(14);
+    expect(schedLeaves.length).toBe(13);
   });
 });

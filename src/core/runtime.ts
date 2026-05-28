@@ -24,6 +24,7 @@ import type {
   Trace,
   TraceFrame,
 } from "./types";
+import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "./types";
 
 export type RuntimeInput = {
   readonly initialState: State;
@@ -164,6 +165,13 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
     blockIndex: number | undefined,
     branchPath: readonly string[],
     roundPath: readonly number[],
+    // Pre-seeded producer outputs visible to this scope's first leaf.
+    // Used ONLY by the top-level call to inject the reserved `$input`
+    // source (scaffolding-suppression A3a) — the cipher's `initialState`
+    // bytes published on port `INPUT_SOURCE_PORT` so `pad`/`length-append`
+    // can wire to them via `portInputs` instead of a `state-to-bytes@1`
+    // bridge leaf. Recursive (nested-scope) calls omit it → fresh empty map.
+    seedOutputs?: ReadonlyMap<string, Map<string, Uint8Array>>,
     // Returns this scope's `nodeOutputs` map so a caller that owns the
     // surrounding loop (today only `runForEachSubgraphWithHistory`, for
     // `bodyOutput` resolution — scaffolding-suppression A2) can read a
@@ -184,7 +192,8 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
     // Key = upstream node id (leaf OR container) — NOT the suffixed
     // `stepId` — portInputs references the design-time spec id, not
     // the runtime emit id. Value = map of output-port-name → bytes.
-    const nodeOutputs = new Map<string, Map<string, Uint8Array>>();
+    // Pre-seeded with `$input` at the top scope (A3a); empty otherwise.
+    const nodeOutputs = new Map<string, Map<string, Uint8Array>>(seedOutputs);
 
     /**
      * Publish a container's exit-state bytes to `nodeOutputs` under each
@@ -1359,13 +1368,49 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
       totalBytes.set(entry, i * entryLen);
     }
     state = { shape: "bytes", bytes: totalBytes };
+
+    // A3a container-to-scratchpad output: publish the full history into
+    // aux[outputAux] so many downstream consumers can read it by name via
+    // `aux-load-bytes@1` (SHA-256: aux["W"], read by the 64 compression
+    // rounds). Replaces the standalone `state-to-aux-bytes` "publish" bridge
+    // leaf. A fresh copy keeps the aux entry independent of the `state`
+    // buffer above. Absent `outputAux` ⇒ no-op (legacy path).
+    if (node.outputAux !== undefined) {
+      aux.set(node.outputAux, totalBytes.slice());
+    }
   };
 
-  walk(spec.steps, [], undefined, [], []);
+  // Reserved top-scope `$input` source (scaffolding-suppression A3a): publish
+  // the cipher's initialState bytes on port `INPUT_SOURCE_PORT` so the first
+  // byte-consumers (SHA-256's `pad` / `length-append`) wire to it via
+  // `portInputs` rather than a standalone `state-to-bytes@1` bridge leaf.
+  const inputSourceBytes = stateToPortBytes(input.initialState, input.initialState.shape);
+  const topSeedOutputs = new Map<string, Map<string, Uint8Array>>([
+    [INPUT_SOURCE_ID, new Map([[INPUT_SOURCE_PORT, inputSourceBytes]])],
+  ]);
+  const topOutputs = walk(spec.steps, [], undefined, [], [], topSeedOutputs);
+
+  // Cipher exit port (A3a): when the spec declares `outputFrom`, the named
+  // top-scope port's bytes become `finalState` (decoded via `stateShape`),
+  // retiring the terminal `bytes-to-state@1` "final.out" bridge. The top
+  // scope's `nodeOutputs` is local to the top `walk` call, so we resolve
+  // against its returned map here. Absent `outputFrom` ⇒ the walk's exit
+  // `state` is the final state, exactly as before.
+  let finalState: State = state;
+  if (spec.outputFrom !== undefined) {
+    const producer = topOutputs.get(spec.outputFrom.node);
+    const resolved = producer?.get(spec.outputFrom.port);
+    if (resolved === undefined) {
+      throw new Error(
+        `spec.outputFrom references '${spec.outputFrom.node}.${spec.outputFrom.port}', which is not a top-scope output (the producer must be a top-level node exposing that output port)`,
+      );
+    }
+    finalState = portBytesToState(resolved, spec.stateShape);
+  }
 
   return {
     frames,
-    finalState: state,
+    finalState,
     finalAux: aux as Aux,
   };
 };

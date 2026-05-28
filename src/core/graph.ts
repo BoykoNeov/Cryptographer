@@ -80,6 +80,7 @@ import type {
   StepNode,
   Trace,
 } from "./types";
+import { INPUT_SOURCE_ID } from "./types";
 
 // ─── Public types ─────────────────────────────────────────────────────────
 
@@ -468,11 +469,13 @@ export const CIPHER_OUTPUT_ID = "__cipher_output__";
  *  the step registry — the renderer dispatches off `endpointSide` instead. */
 const ENDPOINT_STEP_TYPE = "__endpoint__";
 
-/** True iff `id` is one of the two synthetic endpoint pills. Cheap branch
- *  test reused by `buildIterateFeedbackPredicate` and `validateGraph` to
- *  short-circuit any edge that touches a pill. */
+/** True iff `id` is a synthetic endpoint pill. Cheap branch test reused by
+ *  `buildIterateFeedbackPredicate` and `validateGraph` to short-circuit any
+ *  edge that touches a pill. `INPUT_SOURCE_ID` (`$input`, scaffolding-
+ *  suppression A3a) renders as the input pill for port-native specs and so
+ *  joins the family. */
 export const isEndpointId = (id: string): boolean =>
-  id === CIPHER_INPUT_ID || id === CIPHER_OUTPUT_ID;
+  id === CIPHER_INPUT_ID || id === CIPHER_OUTPUT_ID || id === INPUT_SOURCE_ID;
 
 // ─── Feistel passthrough synthetic (Phase 6b-ii) ───────────────────────
 
@@ -519,6 +522,16 @@ type BuildContext = {
   readonly leafIndex: Map<string, number>;
   /** Iterate-container indices, also for blockSpan annotation. */
   readonly containerIndex: Map<string, number>;
+  /**
+   * Looping containers that publish their exit value into an aux scratchpad
+   * via `outputAux` (scaffolding-suppression A3a), indexed by container id →
+   * aux key. The runtime's `outputAux` write is silent (no `TraceFrame`), so
+   * `deriveEdges` stamps the container as that aux key's writer at the
+   * container's trace-exit boundary — mirroring how `iterate.outBlocksAux` is
+   * stamped — so downstream `aux-load-bytes@1` reads (SHA-256's 64 rounds
+   * reading `aux["W"]`) draw an edge from the container instead of orphaning.
+   */
+  readonly outputAuxByContainerId: Map<string, string>;
 };
 
 /**
@@ -713,6 +726,12 @@ const walkSpec = (
         containerPath,
         childIds: grandChildIds,
       });
+      // A3a: record the aux scratchpad this container publishes to at exit,
+      // so `deriveEdges` can stamp it as that key's writer (no TraceFrame
+      // carries the runtime's `outputAux` write).
+      if (node.outputAux !== undefined) {
+        ctx.outputAuxByContainerId.set(node.id, node.outputAux);
+      }
     } else {
       ctx.containers.push({
         kind: "group",
@@ -778,6 +797,14 @@ const deriveEdges = (trace: Trace, ctx: BuildContext): GraphEdge[] => {
 
   let prevIterateIdsInPath: ReadonlySet<string> = new Set();
 
+  // A3a: parallel tracking for looping containers that publish to an aux
+  // scratchpad via `outputAux`. On the container's trace-exit boundary we
+  // stamp it as that aux key's writer, so downstream `aux-load-bytes@1` reads
+  // (SHA-256's 64 rounds reading `aux["W"]`) draw a natural edge from the
+  // container — the runtime's `outputAux` write carries no TraceFrame, so the
+  // natural `auxWritten` pass below never sees it.
+  let prevOutputAuxIdsInPath: ReadonlySet<string> = new Set();
+
   for (const frame of trace.frames) {
     // Snapshot which iterate containers the current frame lives inside.
     // Filtering against iteratesById keeps plain `group` ids out of the set.
@@ -809,6 +836,22 @@ const deriveEdges = (trace: Trace, ctx: BuildContext): GraphEdge[] => {
     }
 
     prevIterateIdsInPath = currentIterateIdsInPath;
+
+    // outputAux-container exit (A3a): same boundary detection as the iterate
+    // `outBlocksAux` stamp above, but for FES-with-history containers that
+    // publish their full history into `aux[outputAux]`. On exit, stamp the
+    // container id as that aux key's writer so downstream reads (the rounds'
+    // `aux["W"]` fetches) get a natural edge from the schedule container.
+    const currentOutputAuxIdsInPath = new Set<string>();
+    for (const id of frame.path) {
+      if (ctx.outputAuxByContainerId.has(id)) currentOutputAuxIdsInPath.add(id);
+    }
+    for (const cid of prevOutputAuxIdsInPath) {
+      if (currentOutputAuxIdsInPath.has(cid)) continue;
+      const auxKey = ctx.outputAuxByContainerId.get(cid);
+      if (auxKey !== undefined) writerByAuxKey.set(auxKey, cid);
+    }
+    prevOutputAuxIdsInPath = currentOutputAuxIdsInPath;
 
     // Natural aux flow for this leaf frame.
     const consumer = stripBlockSuffix(frame.stepId);
@@ -865,6 +908,12 @@ const deriveEdges = (trace: Trace, ctx: BuildContext): GraphEdge[] => {
     const iter = ctx.iteratesById.get(iid);
     if (!iter) continue;
     writerByAuxKey.set(iter.outBlocksAux, iid);
+  }
+  // Symmetric drain for outputAux containers still active at trace end
+  // (no-op for SHA-256, where the schedule exits before the rounds run).
+  for (const cid of prevOutputAuxIdsInPath) {
+    const auxKey = ctx.outputAuxByContainerId.get(cid);
+    if (auxKey !== undefined) writerByAuxKey.set(auxKey, cid);
   }
 
   // ─── Cross-iteration feedback synthesis ──────────────────────────────────
@@ -2944,6 +2993,38 @@ export type EndpointOptions = {
  * (state-spine inference always fires, no per-edge gate) — keeps
  * existing tests byte-identical.
  */
+/**
+ * True iff any leaf in the spec wires an input port to the reserved
+ * `$input` source (`INPUT_SOURCE_ID`, scaffolding-suppression A3a). Drives
+ * whether `deriveAuxGraph` materializes the `$input` synthetic input pill.
+ */
+const specReferencesInputSource = (spec: CipherSpec): boolean => {
+  let found = false;
+  const walk = (nodes: readonly StepNode[]): void => {
+    for (const node of nodes) {
+      if (found) return;
+      if (node.kind === "step") {
+        if (node.portInputs !== undefined) {
+          for (const binding of Object.values(node.portInputs)) {
+            if (binding.node === INPUT_SOURCE_ID) {
+              found = true;
+              return;
+            }
+          }
+        }
+        continue;
+      }
+      if (node.kind === "feistel-round") {
+        for (const track of node.tracks) walk(track.children);
+        continue;
+      }
+      walk(node.children);
+    }
+  };
+  walk(spec.steps);
+  return found;
+};
+
 export const deriveAuxGraph = (
   trace: Trace,
   spec: CipherSpec,
@@ -2959,6 +3040,7 @@ export const deriveAuxGraph = (
     feistelsById: new Map(),
     leafIndex: new Map(),
     containerIndex: new Map(),
+    outputAuxByContainerId: new Map(),
   };
 
   const rootIds = walkSpec(spec.steps, [], ctx);
@@ -2990,6 +3072,32 @@ export const deriveAuxGraph = (
     ...historySeedEdges,
   ];
 
+  // ─── $input synthetic source pill (scaffolding-suppression A3a) ───────────
+  //
+  // When the spec wires its first byte-consumers to the reserved `$input`
+  // source (SHA-256's `pad` / `length-append`, replacing the deleted
+  // `state-to-bytes "plaintext-source"` bridge), materialize a synthetic node
+  // for it. It renders as the input pill (`endpointSide: "input"`) and the
+  // real port-flow edges from `inferPortEdges` (`$input → pad`, `$input →
+  // length-append`) connect it to the body — so it REPLACES the legacy
+  // `CIPHER_INPUT_ID` pill for these specs (no duplicate input pill, no
+  // synthetic input state edge). Materialized whenever referenced (not gated
+  // on `opts.endpoints`) so direct `deriveAuxGraph` callers resolve the port
+  // edges too; the label falls back to "input" when no endpoint labels exist.
+  const usesInputSource = specReferencesInputSource(spec);
+  const inputSourceNodes: GraphNode[] = usesInputSource
+    ? [
+        {
+          stepId: INPUT_SOURCE_ID,
+          stepType: ENDPOINT_STEP_TYPE,
+          label: opts?.endpoints?.inputLabel ?? "input",
+          containerPath: [],
+          endpointSide: "input",
+        },
+      ]
+    : [];
+  const frontRootIds: string[] = usesInputSource ? [INPUT_SOURCE_ID] : [];
+
   // ─── Optional endpoint pill injection (Slice 1) ──────────────────────────
   //
   // Order matters relative to the consumers downstream:
@@ -3006,17 +3114,9 @@ export const deriveAuxGraph = (
   // would be confusing.
   if (opts?.endpoints && rootIds.length > 0) {
     const ep = opts.endpoints;
-    const inputAnchor = ep.inputAnchorId ?? rootIds[0];
     const outputAnchor = ep.outputAnchorId ?? rootIds[rootIds.length - 1];
 
     const endpointNodes: GraphNode[] = [
-      {
-        stepId: CIPHER_INPUT_ID,
-        stepType: ENDPOINT_STEP_TYPE,
-        label: ep.inputLabel,
-        containerPath: [],
-        endpointSide: "input",
-      },
       {
         stepId: CIPHER_OUTPUT_ID,
         stepType: ENDPOINT_STEP_TYPE,
@@ -3032,14 +3132,6 @@ export const deriveAuxGraph = (
     // pipeline. State edges are forward-only and never feedback; the
     // explicit guards in `buildIterateFeedbackPredicate` and validation
     // back this up so a future re-classification can't silently regress.
-    if (inputAnchor !== undefined) {
-      edges.push({
-        from: CIPHER_INPUT_ID,
-        to: inputAnchor,
-        auxKey: STATE_AUX_KEY,
-        kind: "state",
-      });
-    }
     if (outputAnchor !== undefined) {
       edges.push({
         from: outputAnchor,
@@ -3048,19 +3140,45 @@ export const deriveAuxGraph = (
         kind: "state",
       });
     }
+    // Legacy input pill only for specs that DON'T use the `$input` source
+    // (AES / Speck / Serpent / DES). When `$input` is in play it IS the input
+    // pill and the body connects via real port edges, so we skip the
+    // synthetic `CIPHER_INPUT_ID → rootIds[0]` state edge entirely.
+    if (!usesInputSource) {
+      const inputAnchor = ep.inputAnchorId ?? rootIds[0];
+      endpointNodes.push({
+        stepId: CIPHER_INPUT_ID,
+        stepType: ENDPOINT_STEP_TYPE,
+        label: ep.inputLabel,
+        containerPath: [],
+        endpointSide: "input",
+      });
+      if (inputAnchor !== undefined) {
+        edges.push({
+          from: CIPHER_INPUT_ID,
+          to: inputAnchor,
+          auxKey: STATE_AUX_KEY,
+          kind: "state",
+        });
+      }
+    }
 
+    // Front-of-rootIds input id: the `$input` pill when the spec uses it,
+    // else the legacy `CIPHER_INPUT_ID` pill. Both render at the canvas's
+    // left edge; the output pill is appended at the right.
+    const inputFrontRootIds = usesInputSource ? [INPUT_SOURCE_ID] : [CIPHER_INPUT_ID];
     return {
-      nodes: [...ctx.nodes, ...endpointNodes],
+      nodes: [...ctx.nodes, ...inputSourceNodes, ...endpointNodes],
       containers: ctx.containers,
       edges,
-      rootIds: [CIPHER_INPUT_ID, ...rootIds, CIPHER_OUTPUT_ID],
+      rootIds: [...inputFrontRootIds, ...rootIds, CIPHER_OUTPUT_ID],
     };
   }
 
   return {
-    nodes: ctx.nodes,
+    nodes: [...ctx.nodes, ...inputSourceNodes],
     containers: ctx.containers,
     edges,
-    rootIds,
+    rootIds: [...frontRootIds, ...rootIds],
   };
 };
