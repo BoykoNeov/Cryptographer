@@ -210,15 +210,17 @@ const containerPortEdgeFields = {
   defaultCollapsed: z.boolean().optional(),
 };
 
-// Container port contract (scaffolding-suppression A2). `seedInput` /
-// `bodyOutput` name the byte sources that the looping containers used to
-// move through `state` via `bytes-to-state@1` bridge leaves. Declared
-// explicitly (NOT left to the loose CipherSpec object) because per-kind
-// container schemas are default `z.object()` which STRIPS undeclared keys —
-// the same gotcha `cipherConstants` hit in A1; without this the wiring would
-// silently vanish on save/load round-trip. Spread ONLY into the three
-// looping container schemas (group/feistel have no body-loop, so the fields
-// are meaningless there). Additive within schemaVersion 3 — no bump, same
+// Container port contract (scaffolding-suppression A2 + A3b). `seedInput` /
+// `bodyOutput` name the byte sources that the containers used to move through
+// `state` via `bytes-to-state@1` bridge leaves. Declared explicitly (NOT left
+// to the loose CipherSpec object) because per-kind container schemas are
+// default `z.object()` which STRIPS undeclared keys — the same gotcha
+// `cipherConstants` hit in A1; without this the wiring would silently vanish
+// on save/load round-trip. A2 spread these into the three looping containers;
+// A3b extends them to plain `group` too (a single body walk, no iteration —
+// SHA-256's compression rounds carry port-to-port through `seedInput`/
+// `bodyOutput`). `feistel-round` still omits them (its branch tracks have
+// their own contract). Additive within schemaVersion 3 — no bump, same
 // posture as `cipherConstants` and the other container fields; see
 // `document.ts` for the deliberate decision.
 const loopingContainerSeedFields = {
@@ -232,6 +234,7 @@ export const StepGroupSchema = z.object({
   label: z.string(),
   children: z.array(z.lazy(() => StepNodeSchema)),
   ...containerPortEdgeFields,
+  ...loopingContainerSeedFields,
 });
 
 export const IterateGroupSchema = z.object({

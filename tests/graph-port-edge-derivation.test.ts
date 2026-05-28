@@ -74,15 +74,17 @@ describe("deriveAuxGraph — port-flow edge derivation (S2(e))", () => {
     ]);
   });
 
-  it("SHA-256: `init.fetch-H → init-working-vars` port-flow edge exists", () => {
+  it("SHA-256: round 0 is seeded port-to-port from `init.fetch-H` (A3b)", () => {
     const spec = buildSha256Spec();
     const registry = buildDefaultRegistry();
     const graph = deriveAuxGraph(emptyTrace(), spec, { registry });
-    // Post scaffolding-suppression A1: `init-working-vars` declares
-    // `portInputs: { input: port("init.fetch-H", "output") }` (was
-    // `H-constant` before A1 retired the standalone constant-load leaf).
+    // Scaffolding-suppression A3b retired the `init-working-vars`
+    // bytes-to-state bridge: round 0's `seedInput` is `port("init.fetch-H",
+    // "output")`, and `round.0.split` reads `port("round.0", "in")`. The
+    // port-edge derivation resolves that seed reference THROUGH the group's
+    // seedInput, so the edge runs `init.fetch-H → round.0.split`.
     const match = graph.edges.some(
-      (e) => e.from === "init.fetch-H" && e.to === "init-working-vars" && e.kind === "state",
+      (e) => e.from === "init.fetch-H" && e.to === "round.0.split" && e.kind === "state",
     );
     expect(match).toBe(true);
   });
@@ -97,7 +99,8 @@ describe("deriveAuxGraph — port-flow edge derivation (S2(e))", () => {
     // doesn't filter them out from lifted aux-only roots. Spot-check
     // that the discriminator is consistently applied to every port-
     // flow edge from a known port-native source leaf (`init.fetch-H`
-    // since A1 — an aux-load-bytes@1 leaf feeding init-working-vars).
+    // — an aux-load-bytes@1 leaf; since A3b it seeds round 0 via the
+    // group seedInput, so its edge targets `round.0.split`).
     const portFlowFromInitFetchH = graph.edges.filter((e) => e.from === "init.fetch-H");
     expect(portFlowFromInitFetchH.length).toBeGreaterThan(0);
     for (const edge of portFlowFromInitFetchH) {
@@ -131,30 +134,38 @@ describe("deriveAuxGraph — per-edge state-spine suppression on port-native con
     expect(hasEdge("final.assemble", "final.out")).toBe(false);
   });
 
-  it("SHA-256: legitimate state-thread handoffs into round bodies are KEPT", () => {
-    // Round groups are transparent in `inferStateEdges` — the chain
-    // descends through `hasSpineContent`'s children rather than
-    // pushing the group id as a chain element. So the spine through
-    // rounds reads `init-working-vars → round.0.state-in →
-    // (port-flow inside round.0) → round.0.state-out →
-    // round.1.state-in → ...`. The state-thread handoff is between
-    // the round's exit (bytes-to-state@1, writes state) and the next
-    // round's entry (state-to-bytes@1, reads state).
+  it("SHA-256: round-to-round carry is port-to-port, not a state-thread (A3b)", () => {
+    // Scaffolding-suppression A3b retired the `state-in`/`state-out` bridge
+    // leaves. The working variables now carry port-to-port: round t+1's
+    // `seedInput` reads round t's published `bodyOutput` (round 0 from
+    // `init.fetch-H`), and the port-edge derivation resolves each
+    // `port("round.{t}", "in")` seed reference THROUGH the group's seedInput.
+    // So the round chain is connected by PORT-FLOW edges (auxKey "port-flow"),
+    // and NO legacy consecutive-siblings state edge touches any round. (This
+    // replaces the pre-A3b state-thread spine that threaded through the
+    // now-deleted bridges; the connectivity is the same shape, in port edges.
+    // The one surviving legacy state edge, `length-append → msg-schedule`, is
+    // the preamble→schedule handoff and touches no round.)
     const spec = buildSha256Spec();
     const registry = buildDefaultRegistry();
     const graph = deriveAuxGraph(emptyTrace(), spec, { registry });
-    const legacyStateEdges = graph.edges.filter((e) => e.kind === "state" && e.auxKey === "state");
-    const hasEdge = (from: string, to: string): boolean =>
-      legacyStateEdges.some((e) => e.from === from && e.to === to);
-    // Entry into the round body — init-working-vars (writes state)
-    // feeds the first round's state-in.
-    expect(hasEdge("init-working-vars", "round.0.state-in")).toBe(true);
-    // Inter-round handoff via state-thread (each round's exit →
-    // next round's entry).
-    expect(hasEdge("round.0.state-out", "round.1.state-in")).toBe(true);
-    expect(hasEdge("round.62.state-out", "round.63.state-in")).toBe(true);
+    const portFlow = graph.edges.filter((e) => e.kind === "state" && e.auxKey === "port-flow");
+    const hasPort = (from: string, to: string): boolean =>
+      portFlow.some((e) => e.from === from && e.to === to);
+    // Round 0 seeded from init.fetch-H (resolved through round.0.seedInput).
+    expect(hasPort("init.fetch-H", "round.0.split")).toBe(true);
+    // Inter-round carry: round t's published exit ("out") → round t+1's split.
+    expect(hasPort("round.0", "round.1.split")).toBe(true);
+    expect(hasPort("round.62", "round.63.split")).toBe(true);
     // Exit from the round chain into the final-add block.
-    expect(hasEdge("round.63.state-out", "final.state-in")).toBe(true);
+    expect(hasPort("round.63", "final.split-wv")).toBe(true);
+    // No legacy consecutive-siblings state edge touches any round — the
+    // round-to-round carry is purely port-flow.
+    const legacyStateEdges = graph.edges.filter((e) => e.kind === "state" && e.auxKey === "state");
+    const roundTouching = legacyStateEdges.filter(
+      (e) => e.from.startsWith("round.") || e.to.startsWith("round."),
+    );
+    expect(roundTouching).toEqual([]);
   });
 
   it("SHA-256: pure port-native leaves (aux-load-bytes@1, split-bytes@1) do NOT receive inferred state edges", () => {

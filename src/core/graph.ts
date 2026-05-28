@@ -76,6 +76,7 @@ import type {
   CipherSpec,
   FeistelRoundGroup,
   IterateGroup,
+  PortBinding,
   StateShape,
   StepNode,
   Trace,
@@ -1557,13 +1558,46 @@ const inferStateEdges = (spec: CipherSpec, registry?: StepRegistry): GraphEdge[]
  */
 const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
   const edges: GraphEdge[] = [];
+
+  // A3b: a `group` with `seedInput` injects the carried bytes into its body as
+  // `port(groupId, "in")` (the runtime seeds the body scope; spec-shapes
+  // mirrors it). A body leaf that reads `{ node: groupId, port: "in" }` is
+  // therefore really consuming `seedInput.node`'s output, so we resolve the
+  // edge source THROUGH the group's seedInput — turning the otherwise self-
+  // referential `groupId → leaf` edge into a real cross-group edge. For
+  // SHA-256 this IS the port-to-port round carry: `round.{t}.split` reads
+  // `port("round.{t}", "in")`, which resolves to `round.{t-1}`'s published
+  // exit (round 0 to `init.fetch-H`) — the connective tissue of the collapsed
+  // round chain now that the `state-in`/`state-out` bridges are gone. Without
+  // this the rounds would render as disconnected islands.
+  const groupSeedByGroupId = new Map<string, PortBinding>();
+  const collectGroupSeeds = (nodes: readonly StepNode[]): void => {
+    for (const node of nodes) {
+      if (node.kind === "step") continue;
+      if (node.kind === "group" && node.seedInput !== undefined) {
+        groupSeedByGroupId.set(node.id, node.seedInput);
+      }
+      if (node.kind === "feistel-round") {
+        for (const track of node.tracks) collectGroupSeeds(track.children);
+        continue;
+      }
+      collectGroupSeeds(node.children);
+    }
+  };
+  collectGroupSeeds(spec.steps);
+
   const walk = (nodes: readonly StepNode[]): void => {
     for (const node of nodes) {
       if (node.kind === "step") {
         if (node.portInputs !== undefined) {
           for (const binding of Object.values(node.portInputs)) {
+            // Resolve a `port(groupId, "in")` seed reference through the
+            // enclosing group's seedInput to the real upstream producer; all
+            // other bindings keep their declared source.
+            const seed = binding.port === "in" ? groupSeedByGroupId.get(binding.node) : undefined;
+            const from = seed !== undefined ? seed.node : binding.node;
             edges.push({
-              from: binding.node,
+              from,
               to: node.id,
               // Distinct auxKey distinguishes port-flow from legacy
               // passthrough state edges so `dropAuxOnlyStateEdges`

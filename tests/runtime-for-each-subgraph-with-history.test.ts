@@ -802,3 +802,99 @@ describe("runtime — FES-with-history container port contract (A2)", () => {
     );
   });
 });
+
+// ─── A3b group port contract (scaffolding-suppression plan) ────────────────
+//
+// A3b extends `seedInput`/`bodyOutput` to a plain `group` (a single body walk,
+// no iteration) so a round body can cross its scope wall in bytes instead of
+// through `state-to-bytes@1` (entry) + `bytes-to-state@1` (exit) bridge leaves.
+// The runtime injects `seedInput`'s bytes into the body scope as
+// `port(groupId, "in")`, and `bodyOutput` names the body node whose port
+// becomes the group's published exit. This is the mechanism SHA-256's 64
+// compression rounds use to carry the working variables port-to-port.
+
+describe("runtime — group container port contract (A3b)", () => {
+  // seeds → group{ seedInput: seeds.output; body NOTs the seed; bodyOutput:
+  // not.output }. The group publishes not's output on "out"; spec.outputFrom
+  // surfaces it as finalState. NOT([0x05, 0x03]) = [0xFA, 0xFC].
+  const buildGroupPortModeSpec = (overrides?: {
+    readonly seedInput?: { readonly node: string; readonly port: string };
+    readonly bodyOutput?: { readonly node: string; readonly port: string };
+  }): CipherSpec => ({
+    id: "test-group-port@1",
+    name: "A3b group port-mode",
+    stateShape: "bytes",
+    inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+    steps: [
+      {
+        kind: "step",
+        id: "seeds",
+        type: "constant-load@1",
+        params: { bytes: [0x05, 0x03] },
+      },
+      {
+        kind: "group",
+        id: "g",
+        label: "G",
+        seedInput: overrides?.seedInput ?? port("seeds", "output"),
+        bodyOutput: overrides?.bodyOutput ?? port("g.not", "output"),
+        children: [
+          {
+            kind: "step",
+            id: "g.not",
+            type: "not@1",
+            params: {},
+            // Reads the carried bytes off the group's seedInput port.
+            portInputs: { input: port("g", "in") },
+          },
+        ],
+      },
+    ],
+    outputFrom: port("g", "out"),
+  });
+
+  it("port mode: seedInput injects bytes as port(groupId,'in'); bodyOutput becomes the group's published exit", () => {
+    const trace = runSpec(buildGroupPortModeSpec(), buildDefaultRegistry(), {
+      initialState: { shape: "bytes", bytes: new Uint8Array(0) },
+      portedDispatchEnabled: true,
+    });
+    // finalState = spec.outputFrom = port("g","out") = bodyOutput = NOT(seed).
+    if (trace.finalState.shape !== "bytes") throw new Error("finalState shape");
+    expect(Array.from(trace.finalState.bytes)).toEqual([0xfa, 0xfc]);
+    // The body leaf saw the seed bytes on its input port (proving the
+    // runtime injected seedInput as port(groupId,"in")).
+    const notFrame = trace.frames.find((f) => canonicalStepId(f.stepId) === "g.not");
+    if (!notFrame || notFrame.stateBefore.shape !== "bytes") throw new Error("g.not frame");
+    expect(notFrame.portInputs?.get("input")).toEqual(new Uint8Array([0x05, 0x03]));
+  });
+
+  it("port mode throws when group seedInput references a non-same-scope node", () => {
+    expect(() =>
+      runSpec(
+        buildGroupPortModeSpec({ seedInput: port("no-such-producer", "output") }),
+        buildDefaultRegistry(),
+        {
+          initialState: { shape: "bytes", bytes: new Uint8Array(0) },
+          portedDispatchEnabled: true,
+        },
+      ),
+    ).toThrow(
+      /group 'g': seedInput references 'no-such-producer\.output'.*not a same-scope upstream output/,
+    );
+  });
+
+  it("port mode throws when group bodyOutput references a node outside the body's direct children", () => {
+    // `seeds` is a top-level sibling, NOT a direct child of the group body,
+    // so it's absent from the body-scope nodeOutputs map.
+    expect(() =>
+      runSpec(
+        buildGroupPortModeSpec({ bodyOutput: port("seeds", "output") }),
+        buildDefaultRegistry(),
+        {
+          initialState: { shape: "bytes", bytes: new Uint8Array(0) },
+          portedDispatchEnabled: true,
+        },
+      ),
+    ).toThrow(/group 'g': bodyOutput references 'seeds\.output'.*not a same-scope body output/);
+  });
+});

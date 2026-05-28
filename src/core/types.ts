@@ -183,6 +183,36 @@ export type StepGroup = {
    * message-schedule-into-compression handoff in Slice 2.6b.
    */
   readonly outputPorts?: readonly string[];
+  /**
+   * **Group port contract — scaffolding-suppression plan Phase A Slice A3b.**
+   * The looping containers got `seedInput`/`bodyOutput` in A2; a plain
+   * `group` (a single body walk, no iteration) gets the same pair here so a
+   * round body can cross its scope wall in bytes instead of through a
+   * `state-to-bytes@1` entry bridge + `bytes-to-state@1` exit bridge.
+   *
+   *   - `seedInput` — a `PortBinding` to a **same-scope preceding sibling's**
+   *     output port. When set, the runtime injects that port's bytes into the
+   *     body scope as `port(groupId, "in")`, so the body's first leaf reads
+   *     `{ node: <groupId>, port: "in" }` instead of a `state-to-bytes@1`
+   *     bridge. (SHA-256 A3b: `round.0.seedInput = { node: "init.fetch-H",
+   *     port: "output" }`; `round.t.seedInput = { node: "round.{t-1}",
+   *     port: "out" }` — the previous round's published exit. This is the
+   *     port-to-port round carry: round t+1's input edge IS round t's output.)
+   *   - `bodyOutput` — a `PortBinding` to a **direct child of the body** whose
+   *     output port becomes the group's published exit (under `outputPorts`,
+   *     default `"out"`), instead of `state` at body exit. (SHA-256 A3b:
+   *     `{ node: "round.{t}.repack", port: "output" }`, replacing the
+   *     `state-out` bridge.)
+   *
+   * Both are OPTIONAL and ADDITIVE (no `schemaVersion` bump — same posture as
+   * `cipherConstants`/`portInputs`/the FES `seedInput`/`bodyOutput`). When
+   * absent, the legacy path runs unchanged: the body reads/writes `state` and
+   * the group publishes its exit `state` bytes. The decision rule (plan A3b):
+   * a single-consumer point-to-point carry goes port-to-port via this pair; a
+   * many-consumer broadcast (K, W) lives in an `aux` scratchpad cell.
+   */
+  readonly seedInput?: PortBinding;
+  readonly bodyOutput?: PortBinding;
 };
 
 /**

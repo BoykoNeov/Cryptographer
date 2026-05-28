@@ -654,4 +654,55 @@ describe("container port contract (A2) — document round-trip", () => {
     expect(loop.seedInput).toEqual({ node: "seeds", port: "output" });
     expect(loop.bodyOutput).toEqual({ node: "xor", port: "output" });
   });
+
+  // A3b extends the same `loopingContainerSeedFields` to plain `group`
+  // (StepGroupSchema). Same Zod-strip hazard, same protection — pin it for
+  // the group kind too, so a future edit that drops the spread from the group
+  // schema fails here rather than silently reloading SHA-256's rounds with
+  // the port-to-port carry stripped (→ fall back to a state path whose
+  // bridges A3b deleted).
+  it("a group carrying seedInput/bodyOutput round-trips through CipherDocumentSchema unchanged (A3b)", () => {
+    const original: CipherDocument = {
+      schemaVersion: 3,
+      algorithm: "sha-256",
+      spec: {
+        id: "toy-a3b-roundtrip@1",
+        name: "A3b group-port round-trip",
+        stateShape: "bytes",
+        inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+        steps: [
+          { kind: "step", id: "seeds", type: "constant-load@1", params: { bytes: [0x05, 0x03] } },
+          {
+            kind: "group",
+            id: "g",
+            label: "G",
+            seedInput: { node: "seeds", port: "output" },
+            bodyOutput: { node: "g.not", port: "output" },
+            children: [
+              {
+                kind: "step",
+                id: "g.not",
+                type: "not@1",
+                params: {},
+                portInputs: { input: { node: "g", port: "in" } },
+              },
+            ],
+          },
+        ],
+        outputFrom: { node: "g", port: "out" },
+      },
+    };
+    const reparsed = JSON.parse(JSON.stringify(original));
+    const result = CipherDocumentSchema.safeParse(reparsed);
+    if (!result.success) {
+      throw new Error(`document failed to validate: ${JSON.stringify(result.error.issues)}`);
+    }
+    const decodedSpec = result.data.spec as unknown as CipherSpec;
+    const g = decodedSpec.steps.find((n) => n.id === "g");
+    if (g === undefined || g.kind !== "group") {
+      throw new Error("group node missing or wrong kind in decoded spec");
+    }
+    expect(g.seedInput).toEqual({ node: "seeds", port: "output" });
+    expect(g.bodyOutput).toEqual({ node: "g.not", port: "output" });
+  });
 });

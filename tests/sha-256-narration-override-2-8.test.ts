@@ -22,14 +22,14 @@
  * in the prose itself, would pass this gate. Content correctness is
  * the manual-browser-smoke half of Slice 2.8's gate.
  *
- * **Reference-sharing tracked separately.** The 28 compression-round
+ * **Reference-sharing tracked separately.** The 26 compression-round
  * roles each have ONE prose object that's shared by reference across
  * all 64 rounds (saves memory, intentional per Slice 2.8 advisor
  * pre-consult; safe because `narrationOverride` is read-only). One
  * extra assertion at the bottom of the file verifies this sharing —
  * the test counts distinct override identities across rounds and
- * asserts the count equals the number of distinct roles (28), not
- * 64×28.
+ * asserts the count equals the number of distinct roles (26 since
+ * scaffolding-suppression A3b retired state-in/state-out), not 64×26.
  */
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
@@ -76,21 +76,24 @@ const leaves = [...spec.steps.flatMap((s) => [...walkLeaves(s)])];
 describe("SHA-256 narrationOverride coverage (Slice 2.8)", () => {
   it("spec produces at least one leaf (sanity)", () => {
     // After Slice 2.6d's decomposition + scaffolding-suppression A1 + A3a
-    // the spec contains:
+    // + A3b the spec contains:
     //   - 2 preprocessing leaves: pad + length-append. A3a dropped
     //     plaintext-source (→ `$input` source) + seed-schedule (→ FES
     //     `seedInput`).
     //   - 13 schedule-body leaves (defined ONCE in the FES body — the
     //     runtime instantiates them 48 times, but they appear once in
     //     the spec tree). A3a dropped schedule-out (→ FES `bodyOutput`).
-    //   - 2 between-phases leaves: init.fetch-H + init-working-vars. A3a
-    //     dropped W-publish (→ FES `outputAux: "W"`); A1 had earlier
-    //     dropped K-to-aux + H-to-aux + H-constant via cipherConstants.
-    //   - 64 compression rounds × 28 leaves = 1792 leaves
-    //   - 13 final-add leaves (state-in, split-wv, fetch-H, split-H,
-    //     8 × s_i, assemble). A3a dropped final.out (→ `spec.outputFrom`).
-    //   = 1822 leaves in the spec tree (was 1827 pre-A3a, 1829 pre-A1).
-    expect(leaves.length).toBe(1822);
+    //   - 1 between-phases leaf: init.fetch-H. A3b dropped init-working-vars
+    //     (→ round 0 seedInput); A3a dropped W-publish (→ FES `outputAux`);
+    //     A1 dropped K-to-aux + H-to-aux + H-constant via cipherConstants.
+    //   - 64 compression rounds × 26 leaves = 1664 leaves. A3b dropped
+    //     state-in + state-out per round (→ group seedInput/bodyOutput).
+    //   - 12 final-add leaves (split-wv, fetch-H, split-H, 8 × s_i,
+    //     assemble). A3b dropped final.state-in (→ port(round.63,"out"));
+    //     A3a dropped final.out (→ `spec.outputFrom`).
+    //   = 1692 leaves in the spec tree (was 1822 pre-A3b, 1827 pre-A3a,
+    //     1829 pre-A1).
+    expect(leaves.length).toBe(1692);
   });
 
   it("every leaf carries a non-null narrationOverride", () => {
@@ -133,15 +136,16 @@ describe("SHA-256 narrationOverride coverage (Slice 2.8)", () => {
   });
 
   it("compression-round overrides are shared by reference across all 64 rounds", () => {
-    // The 28 distinct round-body roles each have ONE prose object that's
+    // The 26 distinct round-body roles each have ONE prose object that's
     // attached to all 64 rounds' instantiations. Verify this by counting
-    // distinct override identities across the rounds: should be 28
-    // (one per role), not 64×28 = 1792.
+    // distinct override identities across the rounds: should be 26
+    // (one per role), not 64×26 = 1664. (Was 28 before scaffolding-
+    // suppression A3b retired the `state-in`/`state-out` bridge roles.)
     //
     // We identify "round leaves" by their id prefix `round.<t>.<role>` —
     // strip the `round.<t>.` prefix and group leaves by role.
     const roundLeaves = leaves.filter((l) => /^round\.\d+\./.test(l.id));
-    expect(roundLeaves.length).toBe(64 * 28);
+    expect(roundLeaves.length).toBe(64 * 26);
 
     const distinctOverrides = new Set<StepDocumentation>();
     for (const leaf of roundLeaves) {
@@ -149,7 +153,7 @@ describe("SHA-256 narrationOverride coverage (Slice 2.8)", () => {
       // defensively so this assertion's failure mode is clean.
       if (leaf.narrationOverride !== undefined) distinctOverrides.add(leaf.narrationOverride);
     }
-    expect(distinctOverrides.size).toBe(28);
+    expect(distinctOverrides.size).toBe(26);
   });
 
   it("trace-frame stepIds resolve back to their spec-leaf overrides through canonicalStepId + findStep", () => {

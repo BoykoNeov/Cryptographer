@@ -145,14 +145,22 @@ const validateContainerBinding = (
  * visited, and pushes a `state-shape-mismatch` warning whenever a leaf's
  * declared input disagrees with the current shape.
  */
-const walk = (nodes: readonly StepNode[], current: StateShape, ctx: WalkContext): StateShape => {
+const walk = (
+  nodes: readonly StepNode[],
+  current: StateShape,
+  ctx: WalkContext,
+  // Pre-seeded scope outputs visible to this scope's first leaf. Used by a
+  // `group` with `seedInput` (A3b) to inject `port(groupId, "in")` so the
+  // body's first leaf resolves — mirrors the runtime's `seedOutputs` arg.
+  seedScopeOutputs?: ReadonlyMap<string, ReadonlySet<string>>,
+): StateShape => {
   let shape = current;
   // Scope-local map of node-id → its declared output port names.
   // Mirrors the runtime's `nodeOutputs` scoping (universal-port plan
   // Phase 2 Slice 2.6a): siblings within one walk frame can wire to
   // each other; nested scopes start fresh. Used to resolve
   // `portInputs` references for `port-input-unresolvable` warnings.
-  const scopeOutputs = new Map<string, ReadonlySet<string>>();
+  const scopeOutputs = new Map<string, ReadonlySet<string>>(seedScopeOutputs);
   for (const node of nodes) {
     if (node.kind === "step") {
       const contract = ctx.registry.getDoc(node.type)?.shapeContract;
@@ -266,7 +274,22 @@ const walk = (nodes: readonly StepNode[], current: StateShape, ctx: WalkContext)
       // Groups are transparent — their child chain shares the parent's
       // current shape, and the group's after-shape is its last child's.
       recordContainerOutputs();
-      shape = walk(node.children, shape, ctx);
+      // A3b group port contract: validate `seedInput` (same-scope preceding
+      // sibling) + `bodyOutput` (direct body child), mirroring the FES branch
+      // below, so an unresolvable reference surfaces as a pre-Run warning. And
+      // when `seedInput` is present, seed the body scope with
+      // `port(groupId, "in")` — the runtime injects the carried bytes there,
+      // so the body's first leaf reads it and must resolve.
+      let seedScope: ReadonlyMap<string, ReadonlySet<string>> | undefined;
+      if (node.seedInput !== undefined) {
+        validateContainerBinding(node.id, "seedInput", node.seedInput, scopeOutputs, ctx);
+        seedScope = new Map([[node.id, new Set(["in"])]]);
+      }
+      if (node.bodyOutput !== undefined) {
+        const bodyScope = collectDirectChildOutputs(node.children, ctx.registry);
+        validateContainerBinding(node.id, "bodyOutput", node.bodyOutput, bodyScope, ctx);
+      }
+      shape = walk(node.children, shape, ctx, seedScope);
       ctx.shapeAt.set(node.id, shape);
       continue;
     }

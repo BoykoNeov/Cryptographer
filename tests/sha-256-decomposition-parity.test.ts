@@ -235,7 +235,7 @@ describe("SHA-256 decomposition parity — legacy helpers vs decomposed primitiv
 // here AS WELL AS in tests/sha-256.test.ts's frame-count pin).
 
 describe("SHA-256 decomposition parity — frame counts diverge as expected", () => {
-  it("legacy = 123 frames (Slice 2.6b coarse helpers); decomposed = 2433 frames (Slice 2.6d primitives, post-A3a)", () => {
+  it("legacy = 123 frames (Slice 2.6b coarse helpers); decomposed = 2303 frames (Slice 2.6d primitives, post-A3b)", () => {
     const plaintext = new Uint8Array([0x61, 0x62, 0x63]); // "abc"
     const traceLegacy = runSpec(buildSha256SpecLegacy(), buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: plaintext },
@@ -246,12 +246,13 @@ describe("SHA-256 decomposition parity — frame counts diverge as expected", ()
       portedDispatchEnabled: true,
     });
     expect(traceLegacy.frames).toHaveLength(123);
-    // 2433 post scaffolding-suppression A3a (was 2485 post-A1, 2487 pre-A1).
-    // A3a dropped the 5 bridge leaves: plaintext-source + seed-schedule +
-    // schedule-out (×48) + W-publish + final.out = −52 frames. The legacy
-    // fixture below still builds its own coarse spec, so 123 is unaffected.
-    expect(traceDecomposed.frames).toHaveLength(2433);
-    // ~20× ratio is the pedagogy payoff — every ROTR / XOR / add-mod is visible.
+    // 2303 post scaffolding-suppression A3b (was 2433 post-A3a, 2485 post-A1,
+    // 2487 pre-A1). A3b dropped the round-body + final state bridges:
+    // init-working-vars + state-in (×64) + state-out (×64) + final.state-in
+    // = −130 frames. The legacy fixture below still builds its own coarse
+    // spec, so 123 is unaffected.
+    expect(traceDecomposed.frames).toHaveLength(2303);
+    // ~19× ratio is the pedagogy payoff — every ROTR / XOR / add-mod is visible.
     expect(traceDecomposed.frames.length / traceLegacy.frames.length).toBeGreaterThan(15);
   });
 });

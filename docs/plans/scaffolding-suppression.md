@@ -1,8 +1,9 @@
 # Scaffolding suppression — every leaf speaks only in byte arrays
 
-> **Status: Phase A in progress — A0+A1+A2+A3a SHIPPED 2026-05-28; A3
-> split into A3a+A3b with Q1–Q4 resolved (advisor pass + user co-design
-> 2026-05-28); A3b next.** Drafted after the
+> **Status: Phase A in progress — A0+A1+A2+A3a+A3b SHIPPED 2026-05-28;
+> A4 (anti-creep contract test) next.** A3 split into A3a+A3b with Q1–Q4
+> resolved (advisor pass + user co-design 2026-05-28); A3b's open carry
+> fork resolved **port-to-port** (user pick 2026-05-28). Drafted after the
 > Slice 2.9b smoke (2026-05-28) surfaced a structural pedagogy gap, then
 > shaped through a 7-decision walkthrough with the user (Position +
 > Q1–Q5 + state-concept) and an advisor calendar-risk pushback that
@@ -444,24 +445,52 @@ replication-panel retargeted to surviving leaves.)*
   graph view still connects the schedule → W → rounds.
 
 ***A3b — round-body bridges (the new `group` port contract; KAT + graph
-risk).***
-- `types.ts`: add `seedInput`/`bodyOutput` to `StepGroup` (Q1).
-- `runtime.ts`: `group` resolves `seedInput` in parent scope, injects as
-  `port(groupId,"in")` in the body scope; `bodyOutput` selects the body
-  node whose port becomes the group's published exit.
-- `sha-256.ts`: delete the 64 `round.t.state-in` + 64 `round.t.state-out`
-  + `final.state-in` + `init-working-vars` (~130 leaves); rounds gain
-  `seedInput`/`bodyOutput`; resolve the carry fork (port-to-port vs
-  `carry` scratchpad).
-- `graph.ts`: **biggest risk** (advisor) — `inferStateEdges` / the spine
-  assume the state thread we're deleting; the round chain could render as
-  disconnected islands (inter-round edge is now a port edge between
-  sibling *collapsed* groups, which port-edge inference may not draw).
-  Trace explicitly.
-- **Gate:** "abc" KAT byte-equal; **the Q1-visibility scrub** (carried
-  a..h visible + consistent at a round boundary); graph shows a connected
-  round chain (no islands); frame-budget pin updated; the open-item-#2
-  question (do the 321 `aux-load-bytes` reads collapse?) answered here.
+risk). ✅ SHIPPED 2026-05-28.*** *(Full gate green: biome + tsc + 2473
+vitest tests + build. "abc" KAT byte-equal `ba7816bf…`; frame total
+2433→2303 (−130); leaf count 1822→1692 (−130). Carry fork resolved
+**port-to-port** (user pick). `validateShapes` + `validateGraph` clean;
+collapsed round chain fully connected — no islands.)*
+- `types.ts`: added `seedInput`/`bodyOutput` to `StepGroup` (Q1), mirroring
+  the A2 FES fields.
+- `runtime.ts`: `group` case resolves `seedInput` in the parent scope and
+  injects it into the body scope as `port(groupId,"in")` (via the existing
+  `seedOutputs` walk arg); captures `walk`'s returned body `nodeOutputs`;
+  when `bodyOutput` is set, publishes THAT port's bytes under `outputPorts`
+  (default `"out"`) instead of the legacy `state`-derived publish. Absent
+  fields ⇒ legacy path (AES round groups unchanged). Loud throws on
+  unresolvable seedInput (parent scope) / bodyOutput (body direct-child).
+- `sha-256.ts`: deleted the 64 `round.t.state-in` + 64 `round.t.state-out`
+  + `final.state-in` + `init-working-vars` (130 leaves). Rounds gain
+  `seedInput` (round 0 ← `init.fetch-H.output`; round t ← `round.{t-1}.out`)
+  + `bodyOutput` (`repack.output`); `split` reads `port(round.t,"in")`;
+  `final.split-wv` reads `port(round.63,"out")`. Removed the 4 dead
+  narration objects; updated the file-header topology + counts.
+- **Carry fork → port-to-port** (the plan's own decision rule: a
+  single-consumer point-to-point edge goes port-to-port; only many-consumer
+  broadcasts like K/W live in an aux scratchpad). Round t+1's input edge IS
+  round t's output edge — max scaffolding suppression, honest pedagogy.
+- `document-schema.ts`: spread `loopingContainerSeedFields` into
+  `StepGroupSchema` (Zod strips undeclared keys); additive, no
+  `schemaVersion` bump. Round-trip pinned by a new test.
+- `spec-shapes.ts`: `walk` gained a `seedScopeOutputs` param; the group case
+  validates `seedInput`/`bodyOutput` and seeds the body scope with
+  `port(groupId,"in")` so the body's first leaf resolves pre-Run.
+- `graph.ts`: **the advisor's biggest risk, resolved.** `inferStateEdges`
+  already skips all (pure-port-native) SHA-256 leaves, so the deleted state
+  thread carried no edges. `inferPortEdges` now resolves a leaf's
+  `port(groupId,"in")` seed reference THROUGH the enclosing group's
+  `seedInput` to the real producer — turning the self-referential
+  `groupId → leaf` edge into the cross-round carry (`round.{t-1} → round.t`,
+  `init.fetch-H → round.0.split`). Empirically verified: collapsed chain
+  connected (all 64 inter-round edges + preamble seed + final exit), zero
+  graph islands, `validateGraph` clean on both collapsed + uncollapsed.
+- **Open-item #2 answered:** the 321 `aux-load-bytes` reads (K/W/H) do NOT
+  collapse — they're legitimate many-consumer broadcast reads from aux,
+  exactly the case the decision rule keeps as scratchpad cells. A3b only
+  retired the point-to-point bridges.
+- **Gate met:** "abc" KAT byte-equal; the Q1-visibility scrub pinned
+  (`round.t.repack` output === `round.{t+1}.split` input at every boundary,
+  both visible); connected round chain; frame/leaf pins updated.
 
 **A4 — Anti-creep contract test.**
 - New test walks the step registry; **fails** if any registered leaf

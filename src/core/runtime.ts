@@ -228,8 +228,50 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
 
     for (const node of nodes) {
       if (node.kind === "group") {
-        walk(node.children, [...path, node.id], blockIndex, branchPath, roundPath);
-        publishContainerOutputs(node.id, node.outputPorts);
+        // A3b group port contract: resolve `seedInput` HERE (the parent
+        // scope, where the producing sibling's output is recorded) and inject
+        // its bytes into the body scope as `port(groupId, "in")`, so the
+        // body's first leaf reads `{ node: groupId, port: "in" }` instead of
+        // a `state-to-bytes@1` entry bridge. Absent `seedInput` ⇒ no seed
+        // (legacy bodies read `state`, left in place by the surrounding flow).
+        let groupSeed: ReadonlyMap<string, Map<string, Uint8Array>> | undefined;
+        if (node.seedInput !== undefined) {
+          const upstream = nodeOutputs.get(node.seedInput.node);
+          const resolved = upstream?.get(node.seedInput.port);
+          if (resolved === undefined) {
+            throw new Error(
+              `group '${node.id}': seedInput references '${node.seedInput.node}.${node.seedInput.port}', which is not a same-scope upstream output (declare the producer as a preceding sibling exposing that output port)`,
+            );
+          }
+          groupSeed = new Map([[node.id, new Map([["in", resolved]])]]);
+        }
+        const bodyOutputs = walk(
+          node.children,
+          [...path, node.id],
+          blockIndex,
+          branchPath,
+          roundPath,
+          groupSeed,
+        );
+        // `bodyOutput` names the body node + port whose bytes become the
+        // group's published exit, decoupling it from "whatever the last leaf
+        // left in state" (no `bytes-to-state@1` exit bridge). Absent ⇒ legacy
+        // `state`-derived publish via `publishContainerOutputs`.
+        if (node.bodyOutput !== undefined) {
+          const producer = bodyOutputs.get(node.bodyOutput.node);
+          const resolved = producer?.get(node.bodyOutput.port);
+          if (resolved === undefined) {
+            throw new Error(
+              `group '${node.id}': bodyOutput references '${node.bodyOutput.node}.${node.bodyOutput.port}', which is not a same-scope body output (the target must be a direct child of the body exposing that output port)`,
+            );
+          }
+          const ports = node.outputPorts ?? ["out"];
+          const outMap = new Map<string, Uint8Array>();
+          for (const p of ports) outMap.set(p, resolved);
+          nodeOutputs.set(node.id, outMap);
+        } else {
+          publishContainerOutputs(node.id, node.outputPorts);
+        }
         continue;
       }
 

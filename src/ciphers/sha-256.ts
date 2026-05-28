@@ -31,11 +31,14 @@
  *       iterationCount=48, lookbackOffsets=[2,7,15,16], entryLen=4
  *       [K and H live on spec.cipherConstants since A1; the runtime
  *        materializes aux["K"] (256 bytes) + aux["H"] (32 bytes) before the walk]
- * 4.  aux-load-bytes "init.fetch-H"         → output = H (32 bytes, from aux["H"])
- * 5.  bytes-to-state "init-working-vars"    → state = working_vars (32 bytes)
- *                                            [A3b will retire this state bridge]
- * 6.  (× 64) group "round.t":               28 leaves per round
- *       state-to-bytes → split-bytes(×8 widths=4)
+ * 4.  aux-load-bytes "init.fetch-H"         → output = H (32 bytes, from aux["H"]);
+ *                                            round 0's seedInput wires to this
+ *                                            [A3b — replaces the bytes-to-state
+ *                                            "init-working-vars" state seed]
+ * 5.  (× 64) group "round.t":               26 leaves per round
+ *       seedInput = round{t-1}.out (round 0 = init.fetch-H.output): carried a..h
+ *         injected on port(round.t,"in")    [A3b — replaces state-to-bytes "state-in"]
+ *       split-bytes(×8 widths=4)            ← port(round.t,"in")
  *       aux-load-bytes K + byte-slice K_t
  *       aux-load-bytes W + byte-slice W_t
  *       Σ1(e): 3 × rotate-bits-right(2,11,25) + xor 3-way
@@ -50,15 +53,16 @@
  *       new_a = T1 + T2 (2-way add-mod-32)
  *       new_e = d + T1 (2-way add-mod-32)
  *       Repack: concat 8-way(new_a, a, b, c, new_e, e, f, g)
- *                                  → bytes-to-state (32 bytes)
+ *       bodyOutput = repack.output: repacked a..h leave port-to-port to the next
+ *         round's seedInput                 [A3b — replaces bytes-to-state "state-out"]
  *
  *       Renames are FREE: the next round's `a..h` are this round's
  *       (new_a, a, b, c, new_e, e, f, g) — i.e., the working variables
  *       cascade DOWN one slot, with new_a entering at position 0 and h
  *       falling off the end. This is what the 8-way concat encodes.
- * 7.  final-add (12 leaves):
- *       state-to-bytes "final.state-in" → split-bytes(×8) → a..h
- *                                          [A3b will retire this state bridge]
+ * 6.  final-add (12 leaves):
+ *       split-bytes "final.split-wv" ← port(round.63,"out") → a..h
+ *                                          [A3b — replaces state-to-bytes "final.state-in"]
  *       aux-load-bytes "final.fetch-H" → split-bytes(×8) → H_0..H_7
  *       × 8 add-mod-32 2-way: s_i = a_i + H_i
  *       concat 8-way "final.assemble" → 32-byte digest
@@ -433,9 +437,9 @@ const NARR_INIT_FETCH_H: StepDocumentation = {
   name: "Fetch H to seed working variables",
   summary: 'Read the 8 initial-hash-value words from aux["H"] to seed a..h before round 0.',
   detail: `Reads the 32-byte \`aux["H"]\` buffer (H_0..H_7, each a
-big-endian 32-bit word) and emits it on a port so the next bridge
-(\`init-working-vars\`) can write it into state as the initial working
-variables before round 0.
+big-endian 32-bit word) and emits it on a port. Round 0's \`seedInput\`
+wires straight to this output (A3b), so H_0..H_7 are the initial 8
+working variables a..h — no \`bytes-to-state\` bridge into state.
 
 \`aux["H"]\` is materialized once by the runtime from
 \`spec.cipherConstants["H"]\` — the SAME source the final-add step
@@ -454,26 +458,16 @@ the fractional part of the square root of the \`(i+1)\`-th prime
   ],
 };
 
-const NARR_INIT_WORKING_VARS: StepDocumentation = {
-  name: "Seed working variables (a..h ← H_0..H_7)",
-  summary:
-    "Bridge: copy H_0..H_7 into state.bytes as the initial 8 working variables before round 0.",
-  detail: `Initializes the 8 32-bit working variables a, b, c, d, e,
-f, g, h to H_0..H_7 respectively (FIPS 180-4 §6.2.2 Step 2). State
-becomes a 32-byte buffer; rounds 0..63 will repeatedly read this
-state, transform it, and write it back.`,
-  references: ["FIPS 180-4 §6.2.2 — Step 2 (working variables init)"],
-};
-
-// ── Compression round body (28 leaves, shared by reference across 64 rounds) ─
-
-const NARR_ROUND_STATE_IN: StepDocumentation = {
-  name: "Round entry: state → bytes",
-  summary: "Expose the 32-byte working-variable state on a port so the round body can split it.",
-  detail: `Bridge from state to bytes. The 32 bytes are the 8 working
-variables a, b, c, d, e, f, g, h (each 4 bytes, big-endian).`,
-  references: ["FIPS 180-4 §6.2.2 — Step 3"],
-};
+// ── Compression round body (26 leaves, shared by reference across 64 rounds) ─
+//
+// Scaffolding-suppression A3b: round t reads its 8 working variables (a..h)
+// straight off the group's `seedInput` port — `port("round.{t}", "in")`, which
+// the runtime injects from the previous round's published exit (round 0 from
+// `init.fetch-H`). No `state-to-bytes "state-in"` entry bridge. The repacked
+// a..h leave on `repack`'s output port, named as the group's `bodyOutput`, so
+// the next round's `seedInput` reads them directly — no `bytes-to-state
+// "state-out"` exit bridge. The carry is port-to-port: round t+1's input edge
+// IS round t's output edge.
 
 const NARR_ROUND_SPLIT: StepDocumentation = {
   name: "Split into a, b, c, d, e, f, g, h",
@@ -946,24 +940,11 @@ under the universal-port model — no extra step types needed.`,
   references: ["FIPS 180-4 §6.2.2 — Step 3 (variable cascade)"],
 };
 
-const NARR_ROUND_STATE_OUT: StepDocumentation = {
-  name: "Round exit: bytes → state",
-  summary: "Bridge: write the cascaded 32-byte working-variable buffer back into state.",
-  detail: `Closes the round. State now holds the new (a, b, c, d, e,
-f, g, h) — ready for the next round's body to read via state-to-bytes.`,
-  references: ["FIPS 180-4 §6.2.2 — Step 3 end"],
-};
-
-// ── Final-add (7 distinct prose objects; 14 leaves total) ─────────────────
-
-const NARR_FINAL_STATE_IN: StepDocumentation = {
-  name: "Final-add: state → bytes (working variables)",
-  summary: "Expose the post-round-63 working variables (32 bytes) on a port for splitting.",
-  detail: `After all 64 rounds the working variables a..h are the
-"compressed" hash for this block. Final-add will add H_0..H_7 to
-them to produce the final digest (FIPS 180-4 §6.2.2 Step 4).`,
-  references: ["FIPS 180-4 §6.2.2 — Step 4"],
-};
+// ── Final-add (5 distinct prose objects; 12 leaves total) ─────────────────
+//
+// Scaffolding-suppression A3b: `final.split-wv` reads the post-round-63
+// working variables directly off `port("round.63", "out")` (round 63's
+// published `bodyOutput`) — no `state-to-bytes "final.state-in"` bridge.
 
 const NARR_FINAL_SPLIT_WV: StepDocumentation = {
   name: "Split working variables (a..h)",
@@ -1188,21 +1169,18 @@ const buildCompressionRound = (t: number): StepNode => {
     // effective-set algebra.
     defaultCollapsed: true,
     children: [
-      // ── Extract a..h from state ────────────────────────────────────
-      {
-        kind: "step",
-        id: `${p}.state-in`,
-        type: "state-to-bytes@1",
-        params: {},
-        narrationOverride: NARR_ROUND_STATE_IN,
-      },
+      // ── Split the carried a..h off the round's seedInput port ──────
+      // The runtime injects the 8 working variables on `port("round.{t}",
+      // "in")` from the previous round's published exit (round 0 from
+      // `init.fetch-H`) — see the group's `seedInput` below. No
+      // `state-to-bytes "state-in"` entry bridge (A3b).
       {
         kind: "step",
         id: `${p}.split`,
         type: "split-bytes@1",
         // 8 working-variable words; output0..output7 carry a..h respectively.
         params: { widths: [4, 4, 4, 4, 4, 4, 4, 4] },
-        portInputs: { input: r("state-in", "output") },
+        portInputs: { input: port(p, "in") },
         narrationOverride: NARR_ROUND_SPLIT,
       },
       // ── Fetch K_t from aux["K"] ────────────────────────────────────
@@ -1468,15 +1446,14 @@ const buildCompressionRound = (t: number): StepNode => {
         },
         narrationOverride: NARR_ROUND_REPACK,
       },
-      {
-        kind: "step",
-        id: `${p}.state-out`,
-        type: "bytes-to-state@1",
-        params: {},
-        portInputs: { input: r("repack", "output") },
-        narrationOverride: NARR_ROUND_STATE_OUT,
-      },
     ],
+    // A3b group port contract: the carried a..h enter the body on
+    // `port("round.{t}", "in")` and the repacked result leaves on `repack`'s
+    // output — port-to-port, no state bridges. Round 0 seeds from
+    // `init.fetch-H` (H_0..H_7); round t (t>0) from round t-1's published exit
+    // ("out"). The next round's `seedInput` reads this round's `bodyOutput`.
+    seedInput: t === 0 ? port("init.fetch-H", "output") : port(`round.${t - 1}`, "out"),
+    bodyOutput: r("repack", "output"),
   };
 };
 
@@ -1488,17 +1465,12 @@ const buildCompressionRound = (t: number): StepNode => {
 const buildFinalAddSteps = (): readonly StepNode[] => [
   {
     kind: "step",
-    id: "final.state-in",
-    type: "state-to-bytes@1",
-    params: {},
-    narrationOverride: NARR_FINAL_STATE_IN,
-  },
-  {
-    kind: "step",
     id: "final.split-wv",
     type: "split-bytes@1",
     params: { widths: [4, 4, 4, 4, 4, 4, 4, 4] },
-    portInputs: { input: port("final.state-in", "output") },
+    // Read the post-round-63 working variables straight off round 63's
+    // published exit port (A3b) — no `state-to-bytes "final.state-in"` bridge.
+    portInputs: { input: port("round.63", "out") },
     narrationOverride: NARR_FINAL_SPLIT_WV,
   },
   {
@@ -1628,28 +1600,21 @@ export const buildSha256Spec = (): CipherSpec => ({
       outputAux: "W",
       children: buildScheduleBody(),
     },
-    // ─── Initialize working variables from H_0..H_7 ──────────────────────
-    // Scaffolding-suppression A1: K and H are no longer injected by
-    // standalone loader leaves — they're declared once on
+    // ─── Initial working variables (H_0..H_7) for round 0 ────────────────
+    // Scaffolding-suppression A1: K and H are declared once on
     // `cipherConstants` (below) and materialized into aux["K"]/aux["H"] by
-    // the runtime before any step runs. Here we read aux["H"] (the SAME
-    // buffer the final-add step reads via `final.fetch-H`) and bridge it
-    // into state as the initial working variables. After this, state =
-    // working_vars (32 bytes) and the compression rounds can begin.
+    // the runtime before any step runs. `init.fetch-H` reads aux["H"] (the
+    // SAME buffer the final-add reads via `final.fetch-H`, so editing the H
+    // constant moves both consumers in lockstep) and exposes the 8 initial
+    // working variables on its output port. Round 0's `seedInput` wires
+    // straight to it (A3b) — no `bytes-to-state "init-working-vars"` bridge
+    // seeding state; the compression rounds never touch `state`.
     {
       kind: "step",
       id: "init.fetch-H",
       type: "aux-load-bytes@1",
       params: { auxName: "H", byteLength: 32 },
       narrationOverride: NARR_INIT_FETCH_H,
-    },
-    {
-      kind: "step",
-      id: "init-working-vars",
-      type: "bytes-to-state@1",
-      params: {},
-      portInputs: { input: port("init.fetch-H", "output") },
-      narrationOverride: NARR_INIT_WORKING_VARS,
     },
     // ─── 64 compression rounds (decomposed) ──────────────────────────────
     ...Array.from({ length: 64 }, (_, t) => buildCompressionRound(t)),

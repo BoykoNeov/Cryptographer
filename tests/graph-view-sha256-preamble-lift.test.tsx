@@ -14,9 +14,9 @@
  * Post-fix: any root step whose registration is `kind: "ported"` with
  * neither `meta.stateInputPort` nor `meta.stateOutputPort` also lifts.
  * That captures `aux-load-bytes@1` (meta declares `auxReadPorts` only)
- * while still excluding the genuine state bridges — `bytes-to-state@1`
- * has `meta.stateOutputPort` so `init-working-vars` correctly stays on
- * the spine.
+ * while still excluding the genuine state bridges and port-chain
+ * consumers — `pad-with-byte@1` / `append-be64-length@1` declare
+ * `portInputs`, so they stay on the spine row.
  *
  * Updated post scaffolding-suppression A1 (2026-05-28): the old lifted
  * preamble row had three standalone constant sources — `H-constant`
@@ -25,6 +25,12 @@
  * into aux by the runtime). The surviving standalone lifted source is
  * `init.fetch-H` (`aux-load-bytes@1`, reading the materialized aux["H"]
  * to seed the working variables). It's the lifted-row anchor here.
+ *
+ * Updated post scaffolding-suppression A3b (2026-05-28): A3b retired the
+ * `init-working-vars` (`bytes-to-state@1`) state-seed bridge — round 0's
+ * `seedInput` now reads `init.fetch-H` directly. SHA-256 no longer has any
+ * `bytes-to-state@1` leaf, so the spine-row reference here is `pad`
+ * (a port-chain consumer that stays on the spine).
  *
  * Coverage: this test pins the geometric assertion that the SHA-256
  * preamble lifts pure aux sources above the spine, and the spine row
@@ -99,31 +105,18 @@ describe("GraphView — SHA-256 preamble lifts port-native pure sources", () => 
     // `auxReadPorts` only — no `stateInputPort`/`stateOutputPort`) and
     // has no `portInputs` (it reads the materialized aux["H"]). So the
     // widened S2(d) heuristic must lift it to the preamble row, strictly
-    // above the spine. `init-working-vars` is a known spine leaf (it
-    // writes state) used as the spine-row reference. (Was `seed-schedule`
-    // before scaffolding-suppression A3a retired that bridge.)
+    // above the spine. `pad` is a known spine leaf (a port-chain consumer)
+    // used as the spine-row reference. (Was `init-working-vars` before
+    // scaffolding-suppression A3b retired that bytes-to-state bridge.)
     const initFetchHY = leafY(container, "init.fetch-H");
-    const spineY = leafY(container, "init-working-vars");
+    const spineY = leafY(container, "pad");
     expect(initFetchHY).toBeLessThan(spineY);
   });
 
-  it("init-working-vars (bytes-to-state@1) STAYS on the spine row — it writes state", () => {
-    const { container } = render(() => <GraphView />);
-    // `bytes-to-state@1` declares `meta.stateOutputPort = "output"`, so
-    // the widened heuristic must NOT lift it. A wrong lift here would
-    // visually orphan the only step that turns H bytes into the
-    // initial working variables — the spine would skip from
-    // msg-schedule straight to round.0 with no visible transition.
-    const initWorkingVarsY = leafY(container, "init-working-vars");
-    const initFetchHY = leafY(container, "init.fetch-H");
-    // Spine row is strictly below the lifted row.
-    expect(initWorkingVarsY).toBeGreaterThan(initFetchHY);
-  });
-
-  // (The pre-A3a `seed-schedule (bytes-to-state@1) STAYS on the spine row`
-  // case was removed when A3a retired the `seed-schedule` bridge — the
-  // `init-working-vars` case above already pins the bytes-to-state@1
-  // stays-on-spine property.)
+  // (The pre-A3b `init-working-vars (bytes-to-state@1) STAYS on the spine
+  // row` case was removed when A3b retired that bridge — SHA-256 no longer
+  // has any bytes-to-state@1 leaf. The `pad` / `length-append` cases below
+  // pin the port-chain-consumer-stays-on-spine property instead.)
 
   it("pad (pad-with-byte@1) STAYS on the spine row — port-chain consumer, not pure source", () => {
     const { container } = render(() => <GraphView />);
