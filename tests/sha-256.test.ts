@@ -112,8 +112,12 @@ describe("SHA-256 — frame count and state shape pins", () => {
     //   - 14 schedule body leaves × 48 iterations = 672 frames
     //     (aux-load ×4 + σ1 chain ×4 + σ0 chain ×4 + W_t 4-way add
     //     + bytes-to-state)
-    //   - 5 between-phases leaves: W-publish + K-to-aux + H-to-aux
-    //     + H-constant + init-working-vars
+    //   - 3 between-phases leaves: W-publish + init.fetch-H
+    //     + init-working-vars. Scaffolding-suppression A1 dropped 2 here:
+    //     K-to-aux + H-to-aux are gone (K/H now materialized from
+    //     `spec.cipherConstants` into aux by the runtime), and H-constant
+    //     (constant-load) was replaced by init.fetch-H (aux-load-bytes
+    //     reading the materialized aux["H"]) — net −2 frames vs 2.6d's 5.
     //   - 28 leaves × 64 compression rounds = 1792 frames
     //     (state-to-bytes + split-bytes + 2×(aux-load-bytes + byte-slice)
     //     + Σ1 ×4 + Σ0 ×4 + Ch ×4 + Maj ×4 + T1 + T2 + new_a + new_e
@@ -122,7 +126,7 @@ describe("SHA-256 — frame count and state shape pins", () => {
     //     + split-bytes + 8×add-mod-32 + concat + bytes-to-state
     //   - +1 from runtime control flow (FES outer accounting)
     //
-    // Total: 4 + 672 + 5 + 1792 + 13 + 1 = 2487 frames
+    // Total: 4 + 672 + 3 + 1792 + 13 + 1 = 2485 frames (was 2487 pre-A1)
     //
     // Pre-2.6d (coarse helpers): 123 frames. Pedagogy payoff: ~20× more
     // frames means every ROTR, every XOR, every modular add is visible.
@@ -130,7 +134,7 @@ describe("SHA-256 — frame count and state shape pins", () => {
       initialState: { shape: "bytes", bytes: new Uint8Array([0x61, 0x62, 0x63]) },
       portedDispatchEnabled: true,
     });
-    expect(trace.frames).toHaveLength(2487);
+    expect(trace.frames).toHaveLength(2485);
   });
 
   it("finalState is always 32 bytes BytesState (the hash)", () => {
@@ -143,7 +147,7 @@ describe("SHA-256 — frame count and state shape pins", () => {
     expect(trace.finalState.bytes.length).toBe(32);
   });
 
-  it("aux['H'] and aux['K'] survive end-to-end in finalAux (loaded via aux-load, never deleted)", () => {
+  it("aux['H'] and aux['K'] survive end-to-end in finalAux (materialized from cipherConstants, never deleted)", () => {
     const trace = runSpec(buildSha256Spec(), buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: new Uint8Array([0x61, 0x62, 0x63]) },
       portedDispatchEnabled: true,

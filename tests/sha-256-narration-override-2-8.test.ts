@@ -75,17 +75,21 @@ const leaves = [...spec.steps.flatMap((s) => [...walkLeaves(s)])];
 
 describe("SHA-256 narrationOverride coverage (Slice 2.8)", () => {
   it("spec produces at least one leaf (sanity)", () => {
-    // After Slice 2.6d's decomposition the spec contains:
+    // After Slice 2.6d's decomposition + scaffolding-suppression A1 the
+    // spec contains:
     //   - 4 preprocessing leaves
     //   - 14 schedule-body leaves (defined ONCE in the FES body — the
     //     runtime instantiates them 48 times, but they appear once in
     //     the spec tree)
-    //   - 3 aux setup + 2 init = 5 leaves
+    //   - 3 between-phases leaves: W-publish + init.fetch-H +
+    //     init-working-vars. A1 dropped 2 here (K-to-aux + H-to-aux: K/H
+    //     now materialized from `spec.cipherConstants`), and replaced
+    //     H-constant with init.fetch-H — net 5 → 3.
     //   - 64 compression rounds × 28 leaves = 1792 leaves
     //   - 14 final-add leaves (state-in, split-wv, fetch-H, split-H,
     //     8 × s_i, assemble, out)
-    //   = 1829 leaves in the spec tree.
-    expect(leaves.length).toBe(1829);
+    //   = 1827 leaves in the spec tree (was 1829 pre-A1).
+    expect(leaves.length).toBe(1827);
   });
 
   it("every leaf carries a non-null narrationOverride", () => {

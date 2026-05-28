@@ -43,6 +43,7 @@ import { serpent192Spec } from "@/ciphers/serpent-192";
 import { serpent192DecryptSpec } from "@/ciphers/serpent-192-decrypt";
 import { serpent256Spec } from "@/ciphers/serpent-256";
 import { serpent256DecryptSpec } from "@/ciphers/serpent-256-decrypt";
+import { buildSha256Spec } from "@/ciphers/sha-256";
 import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { speck32_64BeDecryptSpec } from "@/ciphers/speck-32-64-be-decrypt";
 import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
@@ -769,4 +770,70 @@ describe("schema enum coverage", () => {
       expect(result.ok).toBe(true);
     });
   }
+});
+
+// ─── cipherConstants persistence (scaffolding-suppression A1) ──────────────
+// SHA-256 is the first spec carrying `spec.cipherConstants` (K + H). The
+// constants are Uint8Array at runtime but JSON has no byte type, so
+// document.ts hex-encodes on serialize and decodes on parse. Pin that the
+// round-trip preserves them byte-equal AND as Uint8Array (not the
+// `{"0":..}` object JSON.stringify would emit for a raw typed array).
+
+describe("cipherConstants persistence (A1)", () => {
+  const sha256Doc = (): CipherDocument => ({
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    spec: buildSha256Spec(),
+  });
+
+  it("round-trips SHA-256 K + H as byte-equal Uint8Array", () => {
+    const doc = sha256Doc();
+    const result = parseDocument(serializeDocument(doc));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const constants = result.doc.spec.cipherConstants;
+    expect(constants).toBeDefined();
+    if (!constants) return;
+    const k = constants.K;
+    const h = constants.H;
+    expect(k).toBeInstanceOf(Uint8Array);
+    expect(h).toBeInstanceOf(Uint8Array);
+    expect(k?.length).toBe(256);
+    expect(h?.length).toBe(32);
+    // Byte-equal to the source spec's constants.
+    const src = doc.spec.cipherConstants;
+    if (!src) throw new Error("source spec has no cipherConstants");
+    expect(Array.from(k as Uint8Array)).toEqual(Array.from(src.K as Uint8Array));
+    expect(Array.from(h as Uint8Array)).toEqual(Array.from(src.H as Uint8Array));
+  });
+
+  it("serializes constants as hex strings, not numeric-keyed objects", () => {
+    const json = serializeDocument(sha256Doc());
+    // H_0 = 0x6a09e667 — the hex form must appear; the typed-array object
+    // form (`"cipherConstants":{"H":{"0":106,...}}`) must NOT.
+    expect(json).toContain("6a09e667");
+    expect(json).not.toContain('"0":106');
+  });
+
+  it("is byte-stable: serializing twice yields identical output", () => {
+    const a = serializeDocument(sha256Doc());
+    const b = serializeDocument(sha256Doc());
+    expect(a).toBe(b);
+  });
+
+  it("round-trips an EDITED constant (user changes a byte in the panel)", () => {
+    const base = buildSha256Spec();
+    if (!base.cipherConstants) throw new Error("expected cipherConstants on SHA-256");
+    const editedH = Uint8Array.from(base.cipherConstants.H as Uint8Array);
+    editedH[0] = (editedH[0] ?? 0) ^ 0xff; // flip the first byte
+    const doc: CipherDocument = {
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      spec: { ...base, cipherConstants: { ...base.cipherConstants, H: editedH } },
+    };
+    const result = parseDocument(serializeDocument(doc));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const h = result.doc.spec.cipherConstants?.H;
+    expect(h).toBeInstanceOf(Uint8Array);
+    expect(Array.from(h as Uint8Array)).toEqual(Array.from(editedH));
+  });
 });

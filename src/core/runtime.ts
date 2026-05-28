@@ -106,6 +106,21 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
   let state: State = cloneState(input.initialState);
   const aux = new Map<string, AuxValue>(input.initialAux ?? []);
 
+  // ─── Materialize cipher constants into aux (scaffolding-suppression A1) ──
+  // Published constants (SHA's K/H, AES's S-box/Rcon once B1 lands) live on
+  // `spec.cipherConstants` and are seeded into aux once, before any step
+  // runs. After this, a leaf reads a constant via `aux-load-bytes@1` exactly
+  // like any other aux value — no per-spec "constant loader" leaf needed.
+  // Cloned so a downstream aux mutation can never write back into the
+  // (immutable) spec object. Set after `initialAux` so a spec constant is
+  // authoritative on the (today nonexistent) name collision with a
+  // runtime-provided aux entry.
+  if (spec.cipherConstants) {
+    for (const [name, bytes] of Object.entries(spec.cipherConstants)) {
+      aux.set(name, bytes.slice());
+    }
+  }
+
   let frameIndex = 0;
 
   // Dual-dispatch flag (universal-port-dataflow plan). Captured once at

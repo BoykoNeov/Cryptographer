@@ -9,23 +9,26 @@
  * (`constant-load@1`, `aux-load-bytes@1`) omit `shapeContract` entirely
  * — their surface is described by `PortContract` — so the heuristic
  * skipped them and they stayed pinned to the spine row alongside the
- * actual state writers/consumers. On SHA-256's preamble row this meant
- * `H-constant` (a pure 32-byte constant emitter) rendered next to
- * `init-working-vars` (a real state writer), and the lifted siblings
- * `K-to-aux` / `H-to-aux` / `W-publish` floated above with a visual
- * gap below them.
+ * actual state writers/consumers.
  *
  * Post-fix: any root step whose registration is `kind: "ported"` with
  * neither `meta.stateInputPort` nor `meta.stateOutputPort` also lifts.
- * That captures `constant-load@1` (no meta at all) and `aux-load-bytes@1`
- * (meta declares `auxReadPorts` only) while still excluding the genuine
- * state bridges — `bytes-to-state@1` has `meta.stateOutputPort` so
- * `init-working-vars` correctly stays on the spine.
+ * That captures `aux-load-bytes@1` (meta declares `auxReadPorts` only)
+ * while still excluding the genuine state bridges — `bytes-to-state@1`
+ * has `meta.stateOutputPort` so `init-working-vars` correctly stays on
+ * the spine.
  *
- * Coverage: this test pins the geometric assertion that after the fix
- * the SHA-256 preamble row collapses up cleanly — every lifted root
- * shares one y, and the spine row contains only steps that actually
- * read or write state.
+ * Updated post scaffolding-suppression A1 (2026-05-28): the old lifted
+ * preamble row had three standalone constant sources — `H-constant`
+ * (constant-load@1), `K-to-aux` + `H-to-aux` (generic.aux-load@1). A1
+ * retired all three (K/H now live on `spec.cipherConstants`, materialized
+ * into aux by the runtime). The surviving standalone lifted source is
+ * `init.fetch-H` (`aux-load-bytes@1`, reading the materialized aux["H"]
+ * to seed the working variables). It's the lifted-row anchor here.
+ *
+ * Coverage: this test pins the geometric assertion that the SHA-256
+ * preamble lifts pure aux sources above the spine, and the spine row
+ * contains only steps that actually read or write state.
  */
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
@@ -90,24 +93,17 @@ describe("GraphView — SHA-256 preamble lifts port-native pure sources", () => 
     resetAll();
   });
 
-  it("H-constant (constant-load@1) lifts to the same y as H-to-aux (existing legacy lift)", () => {
+  it("init.fetch-H (aux-load-bytes@1) lifts ABOVE the spine row — pure aux source", () => {
     const { container } = render(() => <GraphView />);
-    // `H-to-aux` uses `generic.aux-load@1` (legacy, shapeContract.input
-    // === "any") — was already lifted pre-fix and survives replication
-    // because it has exactly one consumer (`final.fetch-H`), below the
-    // default fanout threshold. It's the reference y for the lifted row.
-    //
-    // Note: `K-to-aux` and `W-publish` are not present as standalone
-    // leaves in the rendered graph — both fan out to all 64 compression
-    // rounds (fanout = 64), well past the default replication threshold
-    // (6), so `replicateHighFanoutSources` removes the originals and
-    // emits per-consumer chips (`K-to-aux@->round.0`, etc.) instead.
-    // Their lift behavior is implied by the same code path.
-    const hToAuxY = leafY(container, "H-to-aux");
-    const hConstantY = leafY(container, "H-constant");
-    // Both sit on the lifted row (CANVAS_MARGIN). The legacy lift
-    // establishes the row; the new port-native lift must join it.
-    expect(hConstantY).toBe(hToAuxY);
+    // `init.fetch-H` uses `aux-load-bytes@1` (ported, meta declares
+    // `auxReadPorts` only — no `stateInputPort`/`stateOutputPort`) and
+    // has no `portInputs` (it reads the materialized aux["H"]). So the
+    // widened S2(d) heuristic must lift it to the preamble row, strictly
+    // above the spine. `seed-schedule` is a known spine leaf (it writes
+    // state) used as the spine-row reference.
+    const initFetchHY = leafY(container, "init.fetch-H");
+    const seedY = leafY(container, "seed-schedule");
+    expect(initFetchHY).toBeLessThan(seedY);
   });
 
   it("init-working-vars (bytes-to-state@1) STAYS on the spine row — it writes state", () => {
@@ -118,9 +114,9 @@ describe("GraphView — SHA-256 preamble lifts port-native pure sources", () => 
     // initial working variables — the spine would skip from
     // msg-schedule straight to round.0 with no visible transition.
     const initWorkingVarsY = leafY(container, "init-working-vars");
-    const hToAuxY = leafY(container, "H-to-aux");
+    const initFetchHY = leafY(container, "init.fetch-H");
     // Spine row is strictly below the lifted row.
-    expect(initWorkingVarsY).toBeGreaterThan(hToAuxY);
+    expect(initWorkingVarsY).toBeGreaterThan(initFetchHY);
   });
 
   it("seed-schedule (bytes-to-state@1) STAYS on the spine row — pre-schedule state writer", () => {
@@ -129,8 +125,8 @@ describe("GraphView — SHA-256 preamble lifts port-native pure sources", () => 
     // the widened heuristic doesn't accidentally lift either of the
     // two state-bridge leaves on the SHA-256 preamble row.
     const seedY = leafY(container, "seed-schedule");
-    const hToAuxY = leafY(container, "H-to-aux");
-    expect(seedY).toBeGreaterThan(hToAuxY);
+    const initFetchHY = leafY(container, "init.fetch-H");
+    expect(seedY).toBeGreaterThan(initFetchHY);
   });
 
   it("pad (pad-with-byte@1) STAYS on the spine row — port-chain consumer, not pure source", () => {
@@ -144,8 +140,8 @@ describe("GraphView — SHA-256 preamble lifts port-native pure sources", () => 
     // S2(d) original ship would have lifted `pad` alongside the actual
     // constant emitters, which is a layout regression.
     const padY = leafY(container, "pad");
-    const hToAuxY = leafY(container, "H-to-aux");
-    expect(padY).toBeGreaterThan(hToAuxY);
+    const initFetchHY = leafY(container, "init.fetch-H");
+    expect(padY).toBeGreaterThan(initFetchHY);
   });
 
   it("length-append (append-be64-length@1) STAYS on the spine row — port-chain consumer", () => {
@@ -153,7 +149,7 @@ describe("GraphView — SHA-256 preamble lifts port-native pure sources", () => 
     // Same shape as `pad` — port-native, no state-port meta, but
     // declares `portInputs.data` + `portInputs.length-source`.
     const lengthAppendY = leafY(container, "length-append");
-    const hToAuxY = leafY(container, "H-to-aux");
-    expect(lengthAppendY).toBeGreaterThan(hToAuxY);
+    const initFetchHY = leafY(container, "init.fetch-H");
+    expect(lengthAppendY).toBeGreaterThan(initFetchHY);
   });
 });

@@ -281,6 +281,54 @@ const sortKeysDeep = (v: unknown): unknown => {
   return sorted;
 };
 
+// ─── cipherConstants hex codec (scaffolding-suppression A1) ────────────────
+// `spec.cipherConstants` holds `Uint8Array` at runtime, but JSON has no byte
+// type — `JSON.stringify` would emit a typed array as `{"0":..,"1":..}` and
+// `parseDocument`'s Zod schema (which validates hex strings) would reject it.
+// So we hex-encode on the way out and decode on the way back in. Hex matches
+// the app's byte-display convention and keeps the serialized form compact +
+// byte-stable for URL-share.
+
+const bytesToHex = (bytes: Uint8Array): string =>
+  Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+
+const hexToBytes = (hex: string): Uint8Array => {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+};
+
+/**
+ * Return a structural clone of `doc` with `spec.cipherConstants` hex-encoded
+ * (`Uint8Array` → hex string), or `doc` untouched when there are no
+ * constants. The result is no longer a typed `CipherDocument` (the constants
+ * are now strings), so it's typed `unknown` for the stringify path.
+ */
+const encodeCipherConstants = (doc: CipherDocument): unknown => {
+  const constants = doc.spec.cipherConstants;
+  if (!constants) return doc;
+  const encoded: Record<string, string> = {};
+  for (const [name, bytes] of Object.entries(constants)) encoded[name] = bytesToHex(bytes);
+  return { ...doc, spec: { ...doc.spec, cipherConstants: encoded } };
+};
+
+/**
+ * Inverse of `encodeCipherConstants` for the parse path: rebuild
+ * `spec.cipherConstants` as `Uint8Array` from the validated hex strings.
+ * Operates on the post-Zod object (where constants are `Record<string,
+ * string>`); returns the object unchanged when there are no constants.
+ */
+const decodeCipherConstants = (data: unknown): unknown => {
+  if (data === null || typeof data !== "object") return data;
+  const spec = (data as { spec?: { cipherConstants?: Record<string, string> } }).spec;
+  if (!spec || !spec.cipherConstants) return data;
+  const decoded: Record<string, Uint8Array> = {};
+  for (const [name, hex] of Object.entries(spec.cipherConstants)) decoded[name] = hexToBytes(hex);
+  return { ...data, spec: { ...spec, cipherConstants: decoded } };
+};
+
 /**
  * Serialize a `CipherDocument` to a deterministic JSON string. Calling
  * twice on inputs that compare deep-equal produces byte-identical output,
@@ -290,7 +338,8 @@ const sortKeysDeep = (v: unknown): unknown => {
  * pretty-print on the way to disk if that's preferred, but the canonical
  * form for hashing / comparison is the compact one.
  */
-export const serializeDocument = (doc: CipherDocument): string => JSON.stringify(sortKeysDeep(doc));
+export const serializeDocument = (doc: CipherDocument): string =>
+  JSON.stringify(sortKeysDeep(encodeCipherConstants(doc)));
 
 // ─── Parsing ──────────────────────────────────────────────────────────────
 
@@ -356,7 +405,9 @@ export const parseDocument = (text: string): ParseDocumentResult => {
   // Cast: Zod's inferred type uses `T | undefined` for optional fields,
   // but our hand-written `CipherDocument` uses `field?: T` (same shape at
   // runtime — the cast is the type-level reconciliation).
-  return { ok: true, doc: result.data as unknown as CipherDocument };
+  // Decode `spec.cipherConstants` hex strings back to Uint8Array (the
+  // runtime form). No-op for docs without constants (every legacy doc).
+  return { ok: true, doc: decodeCipherConstants(result.data) as unknown as CipherDocument };
 };
 
 /**

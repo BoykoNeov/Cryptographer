@@ -125,8 +125,13 @@ const SHA256_H_WORDS: readonly number[] = [
   0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
 ];
 
-const wordsToBytes = (words: readonly number[]): number[] => {
-  const out = new Array<number>(words.length * 4);
+// Big-endian word → byte expansion. Returns a Uint8Array so the result
+// can seed `spec.cipherConstants` directly (the runtime materializes those
+// into aux as Uint8Array — scaffolding-suppression A1). Previously returned
+// number[] when the values were fed through `generic.aux-load@1`, which
+// normalized them on store; the constants path needs real bytes up front.
+const wordsToBytes = (words: readonly number[]): Uint8Array => {
+  const out = new Uint8Array(words.length * 4);
   for (let i = 0; i < words.length; i++) {
     const w = words[i] as number;
     out[i * 4 + 0] = (w >>> 24) & 0xff;
@@ -455,65 +460,38 @@ pick): W lives in aux from here on, NOT in state.`,
   references: ["FIPS 180-4 §6.2.2 — Step 2 (working variables init)"],
 };
 
-const NARR_K_TO_AUX: StepDocumentation = {
-  name: "Load K_0..K_63 to aux",
-  summary: 'Bake the 64 SHA-256 round constants into aux["K"] as a 256-byte buffer.',
-  detail: `Publishes the 64 SHA-256 round constants \`K_0..K_63\` into
-\`aux["K"]\` as a single 256-byte buffer (K_0 at offset 0, K_63 at
-offset 252) so each compression round can fetch + slice its own K_t
-in two cheap steps.
+// Note (scaffolding-suppression A1): K and H are no longer injected by
+// standalone "loader" leaves. They live on `spec.cipherConstants` and the
+// runtime materializes `aux["K"]` (256 bytes) + `aux["H"]` (32 bytes) once,
+// before walking the tree — so the old `K-to-aux` / `H-to-aux` /
+// `H-constant` leaves (and their narration) are gone. K's provenance
+// (FIPS 180-4 §4.2.2 — cube roots of the first 64 primes, truncated) and
+// H's provenance (§5.3.3 — square roots of the first 8 primes) now live on
+// the constants-panel legend rather than in per-leaf narration.
 
-Provenance of the constants: per FIPS 180-4 §4.2.2, each \`K_t\` is
-the first 32 bits of the FRACTIONAL part of the cube root of the
-\`(t+1)\`-th prime. So \`K_0\` derives from cbrt(2), \`K_1\` from
-cbrt(3), and so on through cbrt(311) for \`K_63\`. These are called
-"nothing-up-my-sleeve" constants: a fixed, mechanical derivation that
-anyone can reproduce, so no hidden trapdoor can be smuggled in via the
-round-constant choice. The same provenance rule is used by SHA-1
-(square roots of small primes) and SHA-512 (cube roots, 64-bit
-truncations of the first 80 primes).
+const NARR_INIT_FETCH_H: StepDocumentation = {
+  name: "Fetch H to seed working variables",
+  summary: 'Read the 8 initial-hash-value words from aux["H"] to seed a..h before round 0.',
+  detail: `Reads the 32-byte \`aux["H"]\` buffer (H_0..H_7, each a
+big-endian 32-bit word) and emits it on a port so the next bridge
+(\`init-working-vars\`) can write it into state as the initial working
+variables before round 0.
 
-Role in the larger recurrence: each round t reads K_t from this
-buffer and uses it as the round constant in T1's 5-way addition.`,
-  references: ["FIPS 180-4 §4.2.2 — K_0..K_63", "Wikipedia — Nothing-up-my-sleeve number"],
-};
+\`aux["H"]\` is materialized once by the runtime from
+\`spec.cipherConstants["H"]\` — the SAME source the final-add step
+reads via \`final.fetch-H\`. H plays two roles in SHA-256 (seed the
+working variables here; add into the digest after round 63), and both
+now read one editable constant, so changing H in the constants panel
+moves both uses in lockstep.
 
-const NARR_H_TO_AUX: StepDocumentation = {
-  name: "Load H_0..H_7 to aux",
-  summary: 'Bake the 8 SHA-256 initial-hash-value words into aux["H"] as a 32-byte buffer.',
-  detail: `Publishes the 8 SHA-256 initial-hash-value words
-\`H_0..H_7\` into \`aux["H"]\` as a 32-byte buffer (H_0 at offset 0,
-H_7 at offset 28) for the final-add step to read.
-
-Provenance of the constants: per FIPS 180-4 §5.3.3, each \`H_i\` is
-the first 32 bits of the FRACTIONAL part of the SQUARE root of the
-\`(i+1)\`-th prime — so \`H_0 = sqrt(2)\` truncated, \`H_1 = sqrt(3)\`,
-through \`H_7 = sqrt(19)\`. Same "nothing-up-my-sleeve" rationale as
-the round constants \`K_t\` (which use cube roots): a mechanical,
-reproducible derivation that prevents trapdoors hidden in arbitrary
-constant choices.
-
-Why two copies of H — one in aux here, one as a port-source at
-\`H-constant\` next: the two uses are structurally different.
-\`H-constant\` feeds the WORKING-VARIABLE INIT (state ← H_0..H_7
-before round 0); \`aux["H"]\` feeds the FINAL ADD (digest[i] = H_i +
-a_i after round 63). Keeping them as separate spec leaves makes the
-two roles visible in the trace instead of conflating them into one
-constant pool.`,
+Provenance: per FIPS 180-4 §5.3.3, each \`H_i\` is the first 32 bits of
+the fractional part of the square root of the \`(i+1)\`-th prime
+(\`H_0 = sqrt(2)\` truncated, … \`H_7 = sqrt(19)\`) — a
+"nothing-up-my-sleeve" derivation.`,
   references: [
-    "FIPS 180-4 §5.3.3 — Initial hash values",
-    "Wikipedia — Nothing-up-my-sleeve number",
+    "FIPS 180-4 §5.3.3 — Initial hash values H_0..H_7",
+    "FIPS 180-4 §6.2.2 — Step 2 (working variables init)",
   ],
-};
-
-const NARR_H_CONSTANT: StepDocumentation = {
-  name: "Constant load H_0..H_7",
-  summary: "Emit the 8 initial-hash-value words on a port to seed the working variables.",
-  detail: `Same H_0..H_7 constants as the aux-loaded copy, but
-emitted on a port for use by the next bridge (\`init-working-vars\`),
-which writes them into state.bytes as the initial values of the 8
-working variables (a, b, c, d, e, f, g, h) before round 0.`,
-  references: ["FIPS 180-4 §5.3.3 — Initial hash values H_0..H_7"],
 };
 
 const NARR_INIT_WORKING_VARS: StepDocumentation = {
@@ -1730,38 +1708,27 @@ export const buildSha256Spec = (): CipherSpec => ({
       params: { auxName: "W" },
       narrationOverride: NARR_W_PUBLISH,
     },
-    // ─── Load K into aux for the compression rounds ──────────────────────
-    {
-      kind: "step",
-      id: "K-to-aux",
-      type: "generic.aux-load@1",
-      params: { auxName: "K", value: SHA256_K_BYTES },
-      narrationOverride: NARR_K_TO_AUX,
-    },
-    // ─── Load H into aux for the final-add step ──────────────────────────
-    {
-      kind: "step",
-      id: "H-to-aux",
-      type: "generic.aux-load@1",
-      params: { auxName: "H", value: SHA256_H_BYTES },
-      narrationOverride: NARR_H_TO_AUX,
-    },
     // ─── Initialize working variables from H_0..H_7 ──────────────────────
-    // Emit H as a constant on a port, then bridge into state. After this,
-    // state = working_vars (32 bytes) and compression rounds can begin.
+    // Scaffolding-suppression A1: K and H are no longer injected by
+    // standalone loader leaves — they're declared once on
+    // `cipherConstants` (below) and materialized into aux["K"]/aux["H"] by
+    // the runtime before any step runs. Here we read aux["H"] (the SAME
+    // buffer the final-add step reads via `final.fetch-H`) and bridge it
+    // into state as the initial working variables. After this, state =
+    // working_vars (32 bytes) and the compression rounds can begin.
     {
       kind: "step",
-      id: "H-constant",
-      type: "constant-load@1",
-      params: { bytes: SHA256_H_BYTES },
-      narrationOverride: NARR_H_CONSTANT,
+      id: "init.fetch-H",
+      type: "aux-load-bytes@1",
+      params: { auxName: "H", byteLength: 32 },
+      narrationOverride: NARR_INIT_FETCH_H,
     },
     {
       kind: "step",
       id: "init-working-vars",
       type: "bytes-to-state@1",
       params: {},
-      portInputs: { input: port("H-constant", "output") },
+      portInputs: { input: port("init.fetch-H", "output") },
       narrationOverride: NARR_INIT_WORKING_VARS,
     },
     // ─── 64 compression rounds (decomposed) ──────────────────────────────
@@ -1769,6 +1736,15 @@ export const buildSha256Spec = (): CipherSpec => ({
     // ─── Final add (decomposed): state (32 bytes wv) + aux["H"] → 32-byte hash
     ...buildFinalAddSteps(),
   ],
+  // ─── Published cryptographic constants (scaffolding-suppression A1) ─────
+  // The 64 round constants K and the 8 initial-hash-value words H. The
+  // runtime materializes these into aux["K"] (256 bytes) + aux["H"] (32
+  // bytes) once, before walking the tree, so every consumer reads them via
+  // `aux-load-bytes@1` and no per-spec loader leaf is needed. Editable in
+  // the constants panel; both H consumers (working-vars seed + final add)
+  // track one source. Provenance: K = cube roots of the first 64 primes
+  // (FIPS 180-4 §4.2.2); H = square roots of the first 8 primes (§5.3.3).
+  cipherConstants: { K: SHA256_K_BYTES, H: SHA256_H_BYTES },
 });
 
 // ─── Public re-exports (consumers and tests) ──────────────────────────────

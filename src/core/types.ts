@@ -537,6 +537,26 @@ export type CipherSpec = {
     readonly key: { readonly byteLength: number };
   };
   readonly steps: readonly StepNode[];
+  /**
+   * Named published cryptographic constants (FIPS S-boxes, SHA round
+   * constants K, SHA initial hash values H, …). Scaffolding-suppression
+   * plan Phase A Slice A1.
+   *
+   * The runtime materializes each entry into `aux[name]` once, before
+   * walking the step tree — so a leaf reads a constant the same way it
+   * reads any other aux value (`aux-load-bytes@1`), and the four
+   * standalone "constant loader" leaves (`generic.aux-load@1` /
+   * `constant-load@1`) that used to inject these by hand disappear from
+   * the spec. The constant becomes a single editable source of truth:
+   * editing `cipherConstants["H"]` moves every consumer in lockstep,
+   * which is why H's two roles (working-vars seed + final add) both read
+   * the materialized `aux["H"]` rather than a hardcoded `params.bytes`.
+   *
+   * Optional + additive: legacy specs omit it and behave exactly as
+   * before (no entries → the materialization loop is a no-op). Persisted
+   * hex-encoded in `CipherDocument` (additive, no `schemaVersion` bump).
+   */
+  readonly cipherConstants?: Record<string, Uint8Array>;
 };
 
 // ─── Trace ────────────────────────────────────────────────────────────────

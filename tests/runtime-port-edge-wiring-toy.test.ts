@@ -554,8 +554,13 @@ describe("port-edge wiring (Slice 2.6a) — document round-trip", () => {
     if (!result.success) {
       throw new Error(`document failed to validate: ${JSON.stringify(result.error.issues)}`);
     }
-    // Walk back to the leaves and verify portInputs is intact.
-    const decodedSpec = result.data.spec as CipherSpec;
+    // Walk back to the leaves and verify portInputs is intact. Double-cast
+    // through `unknown`: the Zod schema infers `cipherConstants` as hex
+    // strings (the serialized form), which doesn't directly overlap with
+    // CipherSpec's runtime `Record<string, Uint8Array>` — `document.ts`
+    // bridges the same gap when it decodes. This toy spec has no constants,
+    // so the cast is purely a type-level reconciliation.
+    const decodedSpec = result.data.spec as unknown as CipherSpec;
     // Find the `rot.a` leaf and check its portInputs.
     const rotLeaf = decodedSpec.steps.find((n) => n.kind === "step" && n.id === "rot.a");
     if (rotLeaf === undefined || rotLeaf.kind !== "step") {

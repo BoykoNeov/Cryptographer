@@ -139,12 +139,14 @@ describe("dropAuxOnlyStateEdges — asymmetric endpoint sets (S2(h))", () => {
     const narrow = computeAuxOnlyRootSinkIds(spec, registry, wide);
     expect(wide.has("W-publish")).toBe(true);
     expect(narrow.has("W-publish")).toBe(false);
-    // Sanity: aux-load@1 leaves DON'T read state (no stateInputPort
-    // declared on auxLoadMeta), so they belong to BOTH sets.
-    expect(wide.has("K-to-aux")).toBe(true);
-    expect(narrow.has("K-to-aux")).toBe(true);
-    expect(wide.has("H-to-aux")).toBe(true);
-    expect(narrow.has("H-to-aux")).toBe(true);
+    // Sanity: a pure aux-reading root leaf DOESN'T read state (no
+    // stateInputPort on its meta), so it belongs to BOTH sets — the
+    // symmetric contrast to W-publish's asymmetry. Post scaffolding-
+    // suppression A1 the standalone aux source is `init.fetch-H`
+    // (`aux-load-bytes@1` reading the materialized aux["H"]); the old
+    // `K-to-aux`/`H-to-aux` generic.aux-load@1 loaders were retired.
+    expect(wide.has("init.fetch-H")).toBe(true);
+    expect(narrow.has("init.fetch-H")).toBe(true);
   });
 
   it("AES-128: `key-expansion → split-blocks` outgoing spine edge is suppressed (from-side rule)", () => {

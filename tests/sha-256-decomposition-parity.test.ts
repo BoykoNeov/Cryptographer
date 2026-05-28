@@ -23,7 +23,7 @@
  *
  * **What this test does NOT pin:** per-frame correspondence (the
  * "frameMap" the plan mentions). Frame-level alignment between a 123-
- * frame run and a 2487-frame run is structural (1 helper frame ≈ 14 or
+ * frame run and a 2485-frame run is structural (1 helper frame ≈ 14 or
  * 28 decomposed frames in known shapes), but the byte-equality at the
  * cipher boundary is the load-bearing safety net. Per-frame structural
  * pins live in `tests/sha-256.test.ts` (28 leaves per round group +
@@ -235,7 +235,7 @@ describe("SHA-256 decomposition parity — legacy helpers vs decomposed primitiv
 // here AS WELL AS in tests/sha-256.test.ts's frame-count pin).
 
 describe("SHA-256 decomposition parity — frame counts diverge as expected", () => {
-  it("legacy = 123 frames (Slice 2.6b coarse helpers); decomposed = 2487 frames (Slice 2.6d primitives)", () => {
+  it("legacy = 123 frames (Slice 2.6b coarse helpers); decomposed = 2485 frames (Slice 2.6d primitives, post-A1)", () => {
     const plaintext = new Uint8Array([0x61, 0x62, 0x63]); // "abc"
     const traceLegacy = runSpec(buildSha256SpecLegacy(), buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: plaintext },
@@ -246,7 +246,10 @@ describe("SHA-256 decomposition parity — frame counts diverge as expected", ()
       portedDispatchEnabled: true,
     });
     expect(traceLegacy.frames).toHaveLength(123);
-    expect(traceDecomposed.frames).toHaveLength(2487);
+    // 2485 post scaffolding-suppression A1 (was 2487 — K-to-aux + H-to-aux
+    // dropped, H-constant→init.fetch-H swap is net 0). The legacy fixture
+    // below still builds its own coarse spec, so 123 is unaffected.
+    expect(traceDecomposed.frames).toHaveLength(2485);
     // ~20× ratio is the pedagogy payoff — every ROTR / XOR / add-mod is visible.
     expect(traceDecomposed.frames.length / traceLegacy.frames.length).toBeGreaterThan(15);
   });

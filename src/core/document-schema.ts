@@ -364,6 +364,17 @@ export const CipherSpecSchema = z.object({
     key: z.object({ byteLength: z.number().int().nonnegative() }),
   }),
   steps: z.array(StepNodeSchema),
+  // Published cipher constants (scaffolding-suppression A1). Serialized as
+  // hex byte-pairs — `document.ts` encodes the runtime `Uint8Array` form to
+  // hex on save and decodes back on load. Additive within schemaVersion 3
+  // (legacy specs omit it). Declared explicitly (not just left to the
+  // loose object) because Zod STRIPS undeclared keys, which would silently
+  // drop the constants on round-trip.
+  cipherConstants: z
+    .record(
+      z.string().regex(/^([0-9a-fA-F]{2})*$/, "cipherConstants values must be hex byte pairs"),
+    )
+    .optional(),
 });
 
 // ─── LayoutSpec ───────────────────────────────────────────────────────────

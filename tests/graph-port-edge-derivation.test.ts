@@ -74,13 +74,15 @@ describe("deriveAuxGraph — port-flow edge derivation (S2(e))", () => {
     ]);
   });
 
-  it("SHA-256: `H-constant → init-working-vars` port-flow edge exists", () => {
+  it("SHA-256: `init.fetch-H → init-working-vars` port-flow edge exists", () => {
     const spec = buildSha256Spec();
     const registry = buildDefaultRegistry();
     const graph = deriveAuxGraph(emptyTrace(), spec, { registry });
-    // `init-working-vars` declares `portInputs: { input: port("H-constant", "output") }`.
+    // Post scaffolding-suppression A1: `init-working-vars` declares
+    // `portInputs: { input: port("init.fetch-H", "output") }` (was
+    // `H-constant` before A1 retired the standalone constant-load leaf).
     const match = graph.edges.some(
-      (e) => e.from === "H-constant" && e.to === "init-working-vars" && e.kind === "state",
+      (e) => e.from === "init.fetch-H" && e.to === "init-working-vars" && e.kind === "state",
     );
     expect(match).toBe(true);
   });
@@ -94,10 +96,11 @@ describe("deriveAuxGraph — port-flow edge derivation (S2(e))", () => {
     // DISTINCT `auxKey: "port-flow"` so `dropAuxOnlyStateEdges`
     // doesn't filter them out from lifted aux-only roots. Spot-check
     // that the discriminator is consistently applied to every port-
-    // flow edge from a known port-native source leaf.
-    const portFlowFromHConstant = graph.edges.filter((e) => e.from === "H-constant");
-    expect(portFlowFromHConstant.length).toBeGreaterThan(0);
-    for (const edge of portFlowFromHConstant) {
+    // flow edge from a known port-native source leaf (`init.fetch-H`
+    // since A1 — an aux-load-bytes@1 leaf feeding init-working-vars).
+    const portFlowFromInitFetchH = graph.edges.filter((e) => e.from === "init.fetch-H");
+    expect(portFlowFromInitFetchH.length).toBeGreaterThan(0);
+    for (const edge of portFlowFromInitFetchH) {
       expect(edge.kind).toBe("state");
       expect(edge.auxKey).toBe("port-flow");
     }
@@ -154,15 +157,16 @@ describe("deriveAuxGraph — per-edge state-spine suppression on port-native con
     expect(hasEdge("round.63.state-out", "final.state-in")).toBe(true);
   });
 
-  it("SHA-256: pure port-native leaves (constant-load@1, byte-slice@1) do NOT receive inferred state edges", () => {
+  it("SHA-256: pure port-native leaves (aux-load-bytes@1, split-bytes@1) do NOT receive inferred state edges", () => {
     const spec = buildSha256Spec();
     const registry = buildDefaultRegistry();
     const graph = deriveAuxGraph(emptyTrace(), spec, { registry });
     const legacyStateEdges = graph.edges.filter((e) => e.kind === "state" && e.auxKey === "state");
-    // `H-constant` is `constant-load@1` (pure port-native, no meta). No
-    // inferred state edge should target it.
-    const hConstantIncoming = legacyStateEdges.filter((e) => e.to === "H-constant");
-    expect(hConstantIncoming).toEqual([]);
+    // `init.fetch-H` is `aux-load-bytes@1` (reads aux["H"]; no state meta).
+    // It's a root aux source — no inferred legacy state edge should target
+    // it. (Was `H-constant` / constant-load@1 before A1 retired that leaf.)
+    const initFetchHIncoming = legacyStateEdges.filter((e) => e.to === "init.fetch-H");
+    expect(initFetchHIncoming).toEqual([]);
     // `final.split-H` is `split-bytes@1` (pure port-native). Same.
     const splitHIncoming = legacyStateEdges.filter((e) => e.to === "final.split-H");
     expect(splitHIncoming).toEqual([]);
