@@ -752,20 +752,22 @@ describe("runtime — FES-with-history container port contract (A2)", () => {
     ).toThrow(/bodyOutput references 'seeds\.output'.*not a same-scope body output/);
   });
 
-  it("deferred-kind: iterate with seedInput throws a Phase-B1-deferred error", () => {
+  // Port-mode iterate (B1.4): `seedInput` is now WIRED (no longer deferred).
+  // It resolves the binding in the parent scope, so an unresolvable reference
+  // throws the same same-scope-upstream error the group/FES branches use.
+  it("port-mode iterate: unresolvable seedInput throws the same-scope upstream error", () => {
     const spec: CipherSpec = {
       id: "test-iterate-seedinput@1",
-      name: "iterate seedInput deferred",
+      name: "iterate seedInput unresolvable",
       stateShape: "bytes",
       inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
       steps: [
         {
           kind: "iterate",
           id: "blocks",
-          countFromAux: "count",
-          blocksFromAux: "in-blocks",
-          outBlocksAux: "out-blocks",
           seedInput: port("nowhere", "output"),
+          blockByteLength: 4,
+          bodyOutput: port("leaf", "output"),
           children: [],
         },
       ],
@@ -774,7 +776,36 @@ describe("runtime — FES-with-history container port contract (A2)", () => {
       runSpec(spec, buildDefaultRegistry(), {
         initialState: { shape: "bytes", bytes: new Uint8Array(0) },
       }),
-    ).toThrow(/iterate 'blocks': seedInput\/bodyOutput port-seeding is deferred to Phase B1/);
+    ).toThrow(
+      /iterate 'blocks': seedInput references 'nowhere\.output'.*not a same-scope upstream output/,
+    );
+  });
+
+  // Port mode requires `blockByteLength` (the split width); a `seedInput`
+  // without it is a half-wired port-mode iterate and throws loudly.
+  it("port-mode iterate: seedInput without blockByteLength throws", () => {
+    const spec: CipherSpec = {
+      id: "test-iterate-no-blocklen@1",
+      name: "iterate missing blockByteLength",
+      stateShape: "bytes",
+      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+      steps: [
+        {
+          kind: "iterate",
+          id: "blocks",
+          // blockByteLength is validated before seedInput resolves, so the
+          // (unresolvable) seed value is irrelevant to this assertion.
+          seedInput: port("nowhere", "output"),
+          bodyOutput: port("leaf", "output"),
+          children: [],
+        },
+      ],
+    };
+    expect(() =>
+      runSpec(spec, buildDefaultRegistry(), {
+        initialState: { shape: "bytes", bytes: new Uint8Array(0) },
+      }),
+    ).toThrow(/iterate 'blocks': blockByteLength must be a positive integer in port mode/);
   });
 
   it("deferred-kind: for-each-subgraph with bodyOutput throws a Phase-B1-deferred error", () => {

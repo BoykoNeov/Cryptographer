@@ -223,25 +223,10 @@ const ROWS: readonly Row[] = [
   // against. This matrix's contract is "legacy == ported", which is vacuous for
   // a genuinely port-native spec. The byte-native KATs + frame streams live in
   // `aes-vectors.test.ts` (128 encrypt), `aes-decrypt.test.ts` (128 decrypt),
-  // and `aes-192-vectors` / `aes-256-vectors`. Only the AES-128 ECB/CBC modes
-  // remain matrix/lifted-legacy (until Slice B1.4).
-  // AES-128 ECB × 2 directions = 2 rows (the genuinely-new coverage)
-  {
-    label: "aes-128 ECB encrypt (NIST SP 800-38A §F.1.1)",
-    spec: aes128EcbSpec,
-    stateBuilder: buildBytesState,
-    inputHex: SP38A_PT_4_BLOCKS,
-    expectedOutputHex: SP38A_ECB_CT_4_BLOCKS,
-    auxInputs: [["key", SP38A_KEY]],
-  },
-  {
-    label: "aes-128 ECB decrypt (NIST SP 800-38A §F.1.2)",
-    spec: aes128EcbDecryptSpec,
-    stateBuilder: buildBytesState,
-    inputHex: SP38A_ECB_CT_4_BLOCKS,
-    expectedOutputHex: SP38A_PT_4_BLOCKS,
-    auxInputs: [["key", SP38A_KEY]],
-  },
+  // and `aes-192-vectors` / `aes-256-vectors`. The AES-128 ECB rows were ALSO
+  // removed in Slice B1.4 — ECB is now byte-native (port-mode iterate +
+  // port-native body, no legacy path), KAT-pinned in `aes-128-ecb-kat.test.ts`.
+  // Only the AES-128 CBC mode remains matrix/lifted-legacy (until Slice B1.4b).
   // AES-128 CBC × 2 directions = 2 rows
   {
     label: "aes-128 CBC encrypt (NIST SP 800-38A §F.2.1)",

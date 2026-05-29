@@ -47,11 +47,14 @@ describe("validateShapes — zero false positives on shipped specs", () => {
     expect(validateShapes(aes128DecryptSpec, registry)).toEqual([]);
   });
 
-  it("AES-128 ECB (with iterate primitive)", () => {
-    // The riskiest case: state is bytes → bytes (load-block→matrix
-    // inside the iterate body) → bytes (concat-blocks→bytes after the
-    // iterate). If iterate scope handling were wrong, concat-blocks
-    // would be flagged because its input contract is matrix4x4-bytes.
+  it("AES-128 ECB (with port-mode iterate)", () => {
+    // Byte-native (B1.4): the ECB iterate is port mode — `seedInput` from
+    // `$input`, body reads `port(ecb-blocks,"in")`, `bodyOutput` collected and
+    // published on `outputPorts`. The validator validates both bindings and
+    // seeds the body scope with `port(ecb-blocks,"in")` so the body head's
+    // portInputs resolve; if that scope-seeding were wrong, the head leaf would
+    // be flagged `port-input-unresolvable`. A clean run pins it stays bytes
+    // end-to-end with no warnings.
     expect(validateShapes(aes128EcbSpec, registry)).toEqual([]);
   });
 
@@ -196,22 +199,21 @@ describe("inferShapesAtAnchors", () => {
     expect(map.get(roundLeaf)).toBe("bytes");
   });
 
-  it("leaves the iterate's exit shape at matrix4x4-bytes for ECB", () => {
-    // The iterate's id maps to matrix4x4-bytes (last block's state), and
-    // the subsequent concat-blocks leaf maps to bytes (matrix→bytes).
+  it("maps the port-mode ECB iterate's exit shape to bytes", () => {
+    // Byte-native (B1.4): the ECB iterate is port mode — it operates on byte
+    // blocks and publishes concatenated bytes, so its exit shape is "bytes"
+    // (NOT the aux-mode matrix4x4-bytes the matrix ECB had). There is no
+    // concat-blocks leaf any more; the cipher exit is `spec.outputFrom`.
     const map = inferShapesAtAnchors(aes128EcbSpec, registry);
-    // Find the iterate node id.
     const iterId = aes128EcbSpec.steps.find((n) => n.kind === "iterate")?.id;
     expect(iterId).toBeDefined();
     if (!iterId) throw new Error("unreachable");
-    expect(map.get(iterId)).toBe("matrix4x4-bytes");
-    // The concat-blocks leaf following it should map to bytes.
-    const concatId = aes128EcbSpec.steps.find(
+    expect(map.get(iterId)).toBe("bytes");
+    // No matrix boundary leaves survive in the byte-native ECB spec.
+    const hasConcat = aes128EcbSpec.steps.some(
       (n) => n.kind === "step" && n.type === "generic.concat-blocks@1",
-    )?.id;
-    expect(concatId).toBeDefined();
-    if (!concatId) throw new Error("unreachable");
-    expect(map.get(concatId)).toBe("bytes");
+    );
+    expect(hasConcat).toBe(false);
   });
 });
 

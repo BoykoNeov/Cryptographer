@@ -133,6 +133,22 @@ const validateContainerBinding = (
     });
     return;
   }
+  // Reserved `$input` source (A3a): the runtime seeds it into the top scope,
+  // so a container `seedInput` pointing at it always resolves on its port.
+  // (Byte-native ECB's port-mode iterate reads `port($input, out)` — B1.4.)
+  if (binding.node === INPUT_SOURCE_ID) {
+    if (binding.port !== INPUT_SOURCE_PORT) {
+      ctx.warnings.push({
+        kind: "port-input-unresolvable",
+        stepId: containerId,
+        portName: fieldName,
+        targetNode: binding.node,
+        targetPort: binding.port,
+        reason: "missing-port",
+      });
+    }
+    return;
+  }
   const upstream = scope.get(binding.node);
   if (upstream === undefined) {
     ctx.warnings.push({

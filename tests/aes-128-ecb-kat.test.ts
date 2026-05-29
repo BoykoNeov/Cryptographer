@@ -13,6 +13,10 @@
  * 64-byte multiple of the block size, so we feed it directly into the
  * unpadded ECB spec. PKCS#7 + multi-block boundary cases get their own
  * test file once `paddingLimits` is updated.
+ *
+ * Byte-native (scaffolding-suppression Slice B1.4): the ECB spec is now a
+ * port-graph (port-mode `iterate`), so every run sets `portedDispatchEnabled:
+ * true` — `requiresPortedDispatch` returns true for these specs.
  */
 
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
@@ -47,6 +51,7 @@ describe("AES-128 ECB (NIST SP 800-38A §F.1)", () => {
     const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
       initialState: initial,
       initialAux: aux,
+      portedDispatchEnabled: true,
     });
 
     expect(trace.finalState.shape).toBe("bytes");
@@ -61,6 +66,7 @@ describe("AES-128 ECB (NIST SP 800-38A §F.1)", () => {
     const trace = runSpec(aes128EcbDecryptSpec, buildDefaultRegistry(), {
       initialState: initial,
       initialAux: aux,
+      portedDispatchEnabled: true,
     });
 
     expect(trace.finalState.shape).toBe("bytes");
@@ -74,16 +80,18 @@ describe("AES-128 ECB (NIST SP 800-38A §F.1)", () => {
     const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
       initialState: initial,
       initialAux: aux,
+      portedDispatchEnabled: true,
     });
 
-    // Expected non-iterating frames:
-    //   key-expansion (1) + split-blocks (1) + compute-block-count (1) +
-    //   concat-blocks (1) = 4
-    // Per-block AES body emits the same 40 frames as single-block aes-128:
-    //   initial AddRoundKey (1) + rounds 1..9 × 4 (36) + final round × 3 (3) = 40
-    // 4 blocks × 40 = 160 iterating frames
-    // Total = 164
-    expect(trace.frames.length).toBe(164);
+    // Byte-native (B1.4): the matrix split-blocks/compute-block-count/
+    // concat-blocks boundary is gone — the only non-iterating frame is
+    // key-expansion (1). Each per-block body emits the same 51 frames as
+    // byte-native single-block aes-128:
+    //   init.fetch-rk (1) + initial AddRoundKey (1)
+    //   + rounds 1..9 × 5 (sub/shift/mix/fetch-rk/add — 45)
+    //   + final round × 4 (sub/shift/fetch-rk/add — 4) = 51
+    // 4 blocks × 51 = 204 iterating frames. Total = 205.
+    expect(trace.frames.length).toBe(205);
 
     // Spot-check: the first AddRoundKey inside iteration 0 must end in :b0.
     const firstAddRoundKey = trace.frames.find(
@@ -107,6 +115,7 @@ describe("AES-128 ECB (NIST SP 800-38A §F.1)", () => {
     const encTrace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(plaintext),
       initialAux: new Map<string, AuxValue>([["key", key]]),
+      portedDispatchEnabled: true,
     });
     expect(encTrace.finalState.shape).toBe("bytes");
     if (encTrace.finalState.shape !== "bytes") return;
@@ -114,6 +123,7 @@ describe("AES-128 ECB (NIST SP 800-38A §F.1)", () => {
     const decTrace = runSpec(aes128EcbDecryptSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(encTrace.finalState.bytes),
       initialAux: new Map<string, AuxValue>([["key", key]]),
+      portedDispatchEnabled: true,
     });
     expect(decTrace.finalState.shape).toBe("bytes");
     if (decTrace.finalState.shape !== "bytes") return;
