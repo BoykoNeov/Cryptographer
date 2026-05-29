@@ -79,6 +79,8 @@ const runAes128Ecb = (): Trace =>
     // `split-blocks` slices it inside the spec.
     initialState: makeBytesState(bytesFromHex(ECB_PLAINTEXT_4_BLOCKS)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
+    // Byte-native ECB (B1.4) — port-mode iterate + port-native body.
+    portedDispatchEnabled: true,
   });
 
 describe("bundleEdges — collapse same-(from, to, kind, isFeedback)", () => {

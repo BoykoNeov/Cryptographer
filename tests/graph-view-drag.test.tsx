@@ -519,6 +519,8 @@ describe("GraphView — container drag (Slice 6)", () => {
     const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex(ecbPt)),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(ecbKey)]]),
+      // Byte-native ECB (B1.4) — port-mode iterate + port-native body.
+      portedDispatchEnabled: true,
     });
     setTrace(trace);
 

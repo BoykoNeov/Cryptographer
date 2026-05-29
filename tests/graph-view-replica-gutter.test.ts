@@ -92,6 +92,8 @@ const aes128EcbReplicatedGraph = (): CipherGraph => {
   const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(ECB_PT_1_BLOCK)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(ECB_KEY)]]),
+    // Byte-native ECB (B1.4) — port-mode iterate + port-native body.
+    portedDispatchEnabled: true,
   });
   return replicateHighFanoutSources(deriveAuxGraph(trace, aes128EcbSpec), 6);
 };
@@ -311,17 +313,18 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
   it("inside an iterate body (AES-128-ECB), replicas also lift above their consumer", () => {
     // Symmetric to the root-level test: the iterate body is also a
     // horizontal flow, so its spliced-before-consumer replicas need the
-    // same orthogonal lift. AES-128-ECB's `key-expansion@->initial.add-
-    // round-key` replica lands at iterate-body level (the consumer is
-    // INSIDE the iterate, unlike single-block AES where it's at root).
+    // same orthogonal lift. Byte-native ECB (B1.4): key-expansion's per-round
+    // consumers are the `*.fetch-rk` (`aux-load-bytes@1`) leaves inside the
+    // iterate; the first is `init.fetch-rk`, so the replica is
+    // `key-expansion@->init.fetch-rk` and it lifts above that consumer.
     const g = aes128EcbReplicatedGraph();
     const { boxes } = layoutRoot(
       g,
       new Map<string, { x: number; y: number }>(),
       layoutConstantsFor("normal"),
     );
-    const consumerBox = boxes.get("initial.add-round-key");
-    const replicaBox = boxes.get("key-expansion@->initial.add-round-key");
+    const consumerBox = boxes.get("init.fetch-rk");
+    const replicaBox = boxes.get("key-expansion@->init.fetch-rk");
     if (!consumerBox || !replicaBox) {
       throw new Error("missing iterate-body box (consumer or replica)");
     }
@@ -781,61 +784,16 @@ describe("GraphView — aux-only root leaves are lifted above the spine row", ()
  * read," matching the runtime's read order.
  */
 describe("GraphView — root replica with iterate consumer anchors above first body child", () => {
-  it("the spine-replica with iterate consumer flows at source's old root slot (NOT above the iterate)", () => {
-    // Replica-scope-aware fix (2026-05-17, narrow). `compute-block-count`
-    // has only one outgoing edge — the aux edge to `ecb-blocks` (which
-    // doubles as the fallback spineSuccessor target, since `ecb-blocks`
-    // is an iterate and `inferStateEdges`'s iterate-boundary rule
-    // suppresses any state edge to it). So `compute-block-count@->
-    // ecb-blocks` IS the spine-replica.
-    //
-    // Pre-fix behavior (asserted by the old version of this test):
-    // the replica was lifted above the iterate body's first child via
-    // the Slice-2 anchor. That anchor logic STILL EXISTS in `layoutRoot`
-    // — it just no longer applies to the spine-replica, which under
-    // the narrow fix flows at source's old root slot like any other
-    // root leaf. Aux-fan-out replicas with iterate consumers still
-    // use the Slice-2 anchor — see the sibling test below.
-    const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
-      initialState: makeBytesState(bytesFromHex(ECB_PT_1_BLOCK)),
-      initialAux: new Map<string, AuxValue>([["key", bytesFromHex(ECB_KEY)]]),
-    });
-    const replicated = replicateHighFanoutSources(deriveAuxGraph(trace, aes128EcbSpec), 6, {
-      "compute-block-count": "always",
-    });
-    const consts = layoutConstantsFor("normal");
-    const empty = new Map<string, { x: number; y: number }>();
-    const { boxes } = layoutRoot(replicated, empty, consts);
-
-    const replicaId = "compute-block-count@->ecb-blocks";
-    const replicaBox = boxes.get(replicaId);
-    const iterateBox = boxes.get("ecb-blocks");
-    const splitBlocksBox = boxes.get("split-blocks");
-    if (!replicaBox || !iterateBox || !splitBlocksBox) {
-      throw new Error(
-        `missing box: replica=${!!replicaBox} iterate=${!!iterateBox} splitBlocks=${!!splitBlocksBox}`,
-      );
-    }
-
-    // Headline: spine-replica is on the same row as its sibling root
-    // leaves (the spine row at CANVAS_MARGIN = 60), NOT lifted above
-    // the iterate. Pre-fix the assertion was `replicaBox.y < iterateBox.y`;
-    // post-fix it's the inverse — same row.
-    expect(replicaBox.y).toBe(iterateBox.y);
-    expect(replicaBox.y).toBe(splitBlocksBox.y);
-
-    // The replica sits at source's old slot in rootIds: pre-replication
-    // root was `[key-expansion, split-blocks, compute-block-count,
-    // ecb-blocks, concat-blocks]`. After replication compute-block-count
-    // is removed and the spine-replica replaces it, so layout flow puts
-    // it RIGHT of split-blocks and LEFT of the iterate.
-    expect(replicaBox.x).toBeGreaterThan(splitBlocksBox.x);
-    expect(replicaBox.x).toBeLessThan(iterateBox.x);
-
-    // Original compute-block-count is gone (Slice 7b removal — pre-fix
-    // this was already true; reasserted here for clarity).
-    expect(boxes.get("compute-block-count")).toBeUndefined();
-  });
+  // [DELETED B1.4a] The AES-128-ECB integration test that force-replicated
+  // `compute-block-count` (an aux-mode multi-block plumbing leaf) and asserted
+  // the matrix spine-replica-to-iterate placement / `visualEdgeTargetId`
+  // retarget is gone: byte-native ECB (port-mode iterate) has no
+  // compute-block-count / split-blocks and produces no replica edge pointing
+  // AT the iterate (key-expansion replicates to the in-body `*.fetch-rk`
+  // leaves instead). The underlying layout machinery stays covered by the
+  // SYNTHETIC fixtures in this file (sibling tests below). Per the sweep
+  // discriminator we do NOT retarget this matrix-structure integration onto
+  // soon-to-convert CBC; it retires with Phase C / the matrix iterate.
 
   it("an aux-fan-out replica with iterate consumer still anchors above first body child (Slice-2 invariant)", () => {
     // Slice-2 anchor logic still applies to aux-fan-out replicas — the
@@ -1259,37 +1217,6 @@ describe("visualEdgeTargetId — retargets replica→iterate edges to first body
     expect(visualEdgeTargetId(edge, nodesById, containersById)).toBe("ecb-blocks");
   });
 
-  it("AES-128 ECB integration: compute-block-count replica retargets to initial.add-round-key", () => {
-    // The headline end-to-end check: force replication of
-    // `compute-block-count` and verify the helper produces the right
-    // visual target against the real derived graph. Combined with
-    // Slice 2's source-side anchor (also at `initial.add-round-key`'s
-    // x), this yields a perfectly vertical arrow on AES-128 ECB
-    // since `initial.add-round-key` is a leaf — replica.center.x ==
-    // firstChild.center.x.
-    const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
-      initialState: makeBytesState(bytesFromHex(ECB_PT_1_BLOCK)),
-      initialAux: new Map<string, AuxValue>([["key", bytesFromHex(ECB_KEY)]]),
-    });
-    const replicated = replicateHighFanoutSources(deriveAuxGraph(trace, aes128EcbSpec), 6, {
-      "compute-block-count": "always",
-    });
-    const nodesById = new Map<string, GraphNode>();
-    for (const n of replicated.nodes) nodesById.set(n.stepId, n);
-    const containersById = new Map<string, ContainerNode>();
-    for (const c of replicated.containers) containersById.set(c.id, c);
-    const replicaEdge = replicated.edges.find(
-      (e) => e.from === "compute-block-count@->ecb-blocks" && e.to === "ecb-blocks",
-    );
-    if (!replicaEdge) {
-      throw new Error(
-        "missing replica edge compute-block-count@->ecb-blocks → ecb-blocks in derived graph",
-      );
-    }
-    expect(visualEdgeTargetId(replicaEdge, nodesById, containersById)).toBe(
-      "initial.add-round-key",
-    );
-  });
 
   // Option C — collapsed-iterate retarget escape hatch. When the iterate's
   // first non-replica child is a block chip (`blockChipOf !== undefined`,

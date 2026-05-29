@@ -112,6 +112,8 @@ describe("GraphView — block-chip drag (Slice 3 — collapsed-iterate path)", (
     const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex(ecbPt)),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(ecbKey)]]),
+      // Byte-native ECB (B1.4) — port-mode iterate + port-native body.
+      portedDispatchEnabled: true,
     });
     setTrace(trace);
 

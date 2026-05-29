@@ -293,6 +293,8 @@ const runAes128Ecb = (): Trace =>
     initialAux: new Map<string, AuxValue>([
       ["key", bytesFromHex("2b7e151628aed2a6abf7158809cf4f3c")],
     ]),
+    // Byte-native ECB (B1.4) — port-mode iterate + port-native body.
+    portedDispatchEnabled: true,
   });
 
 describe("expandCollapsedIterates on AES-128 ECB (4 blocks)", () => {
@@ -301,16 +303,12 @@ describe("expandCollapsedIterates on AES-128 ECB (4 blocks)", () => {
     const raw = deriveAuxGraph(trace, aes128EcbSpec);
     const collapsed = collapseGraph(raw, new Set(["ecb-blocks"]));
 
-    // Sanity: the iterate is present pre-expansion with blockSpan=4 and
-    // edges from `split-blocks → ecb-blocks → concat-blocks`.
+    // Sanity: the iterate is present pre-expansion with blockSpan=4. (Byte-
+    // native ECB — B1.4 — has no `split-blocks`/`concat-blocks` boundary
+    // leaves; blockSpan is driven by `frame.blockIndex`, which the port-mode
+    // iterate still stamps, so the chip mechanics below are unchanged.)
     const iterPre = collapsed.containers.find((c) => c.id === "ecb-blocks");
     expect(iterPre?.blockSpan).toBe(4);
-    expect(collapsed.edges.some((e) => e.from === "split-blocks" && e.to === "ecb-blocks")).toBe(
-      true,
-    );
-    expect(collapsed.edges.some((e) => e.from === "ecb-blocks" && e.to === "concat-blocks")).toBe(
-      true,
-    );
 
     const expanded = expandCollapsedIterates(collapsed, new Set(["ecb-blocks"]));
 
@@ -330,17 +328,9 @@ describe("expandCollapsedIterates on AES-128 ECB (4 blocks)", () => {
     ]);
     expect(expanded.rootIds.includes("ecb-blocks")).toBe(true);
 
-    // External edges remain on the iterate boundary (NOT fanned to
-    // chips). Chips are inside-the-box; the dataflow points at the box.
-    const splitToIter = expanded.edges.filter(
-      (e) => e.from === "split-blocks" && e.to === "ecb-blocks",
-    );
-    expect(splitToIter.length).toBeGreaterThanOrEqual(1);
-    const iterToConcat = expanded.edges.filter(
-      (e) => e.from === "ecb-blocks" && e.to === "concat-blocks",
-    );
-    expect(iterToConcat.length).toBeGreaterThanOrEqual(1);
-    // No edge endpoint mentions a chip id.
+    // The Option-C invariant that matters regardless of cipher shape: external
+    // edges stay on the iterate boundary (NOT fanned to chips). Chips are
+    // inside-the-box; no edge endpoint mentions a chip id.
     for (const e of expanded.edges) {
       expect(e.from.startsWith("ecb-blocks@block")).toBe(false);
       expect(e.to.startsWith("ecb-blocks@block")).toBe(false);

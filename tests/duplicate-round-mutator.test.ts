@@ -191,8 +191,10 @@ describe("duplicateRoundGroup — forward (AES-128 ECB, nested inside iterate)",
       "round.11",
     ]);
     // Verify the clone reads roundKey.3 (not .2 — easy bug if the auxName
-    // bump on the clone itself is forgotten).
-    expect(auxNameOf(spec, "round.3.add-round-key")).toBe("roundKey.3");
+    // bump on the clone itself is forgotten). Byte-native (B1.4): the round
+    // key lives on the `fetch-rk` (`aux-load-bytes@1`) leaf, not the `xor@1`
+    // `add-round-key`.
+    expect(auxNameOf(spec, "round.3.fetch-rk")).toBe("roundKey.3");
   });
 
   it("still bumps the top-level key-expansion (outside the iterate)", () => {
@@ -201,11 +203,12 @@ describe("duplicateRoundGroup — forward (AES-128 ECB, nested inside iterate)",
     expect(keyExpansionType(spec)).toBe("aes.key-expansion@2");
   });
 
-  it("does not rename top-level multi-block plumbing (split/concat/iterate)", () => {
+  it("does not rename top-level multi-block plumbing (iterate / key-expansion)", () => {
     const { renames } = duplicateRoundGroup(aes128EcbSpec, "round.2", "forward");
-    expect(renames.get("split-blocks")).toBeUndefined();
-    expect(renames.get("compute-block-count")).toBeUndefined();
-    expect(renames.get("concat-blocks")).toBeUndefined();
+    // Byte-native ECB (B1.4) has no split/concat/compute-block-count leaves any
+    // more — the port-mode iterate handles the block boundary — but the
+    // iterate container id and the top-level key-expansion must still be
+    // untouched by a round duplicate.
     expect(renames.get("ecb-blocks")).toBeUndefined();
     expect(renames.get("key-expansion")).toBeUndefined();
   });

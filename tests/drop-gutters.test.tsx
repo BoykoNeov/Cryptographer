@@ -77,6 +77,8 @@ const seedAes128EcbTrace = (): void => {
   const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(AES128_ECB_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_ECB_KEY)]]),
+    // Byte-native ECB (B1.4) — port-mode iterate + port-native body.
+    portedDispatchEnabled: true,
   });
   setTrace(trace);
 };
@@ -492,7 +494,9 @@ describe("GraphView — drop-gutter render inside an iterate", () => {
   it("drop on the at-start gutter of the iterate inserts at position 0 of the iterate body", () => {
     seedAes128EcbTrace();
     const { container } = render(() => <GraphView />);
-    const gutter = container.querySelector('[data-drop-gutter="before:initial.add-round-key"]');
+    // Byte-native ECB (B1.4): the iterate body's first child is `init.fetch-rk`
+    // (the round-key fetch), so the at-start gutter is `before:init.fetch-rk`.
+    const gutter = container.querySelector('[data-drop-gutter="before:init.fetch-rk"]');
     expect(gutter, "iterate at-start gutter must render").not.toBeNull();
     if (!gutter) return;
     fireDropAt(gutter, "generic.shift-rows@1");
@@ -514,7 +518,7 @@ describe("GraphView — drop-gutter render inside an iterate", () => {
     seedAes128EcbTrace();
     const { container } = render(() => <GraphView />);
     const startGutter = container.querySelector<SVGRectElement>(
-      '[data-drop-gutter="before:initial.add-round-key"]',
+      '[data-drop-gutter="before:init.fetch-rk"]',
     );
     const endGutter = container.querySelector<SVGRectElement>(
       '[data-drop-gutter="after:round.10"]',
