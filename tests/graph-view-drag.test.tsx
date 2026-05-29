@@ -27,8 +27,7 @@
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
+import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue } from "@/core/types";
 import { GraphView } from "@/ui/components/GraphView";
 import { __resetAutoRerunForTests } from "@/ui/stores/auto-rerun";
@@ -45,6 +44,7 @@ import { __resetPaddingForTests } from "@/ui/stores/padding";
 import { __resetSpecForTests, useSpec } from "@/ui/stores/spec";
 import { __resetTraceForTests, getTrace, setTrace } from "@/ui/stores/trace";
 import { __resetViewModeForTests } from "@/ui/stores/view-mode";
+import { __resetReplicationForTests, setReplicationEnabled } from "@/ui/stores/view-replication";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -53,13 +53,20 @@ const AES128_PT = "00112233445566778899aabbccddeeff";
 
 const seedAes128Trace = (): void => {
   const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-    initialState: matrixFromBytes(bytesFromHex(AES128_PT)),
+    initialState: makeBytesState(bytesFromHex(AES128_PT)),
+    portedDispatchEnabled: true,
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
   });
   setTrace(trace);
+  // Byte-native AES-128 (Slice B1) auto-ON's replication for ported specs.
+  // That replaces the single root `key-expansion` leaf with 11 replicas (no
+  // drag target) and inflates the `.graph-leaf-rect` count. Force replication
+  // OFF so the drag-target and child-count assertions below stay deterministic.
+  setReplicationEnabled(false);
 };
 
 const resetAll = (): void => {
+  __resetReplicationForTests();
   __resetAutoRerunForTests();
   __resetByteFormatForTests();
   __resetCipherForTests();
@@ -660,10 +667,12 @@ describe("GraphView — container collapse (Slice 6)", () => {
   it("renders all child leaves of a round group when not collapsed", () => {
     seedAes128Trace();
     const { container } = render(() => <GraphView />);
-    // round.5 has 4 leaves (sub-bytes, shift-rows, mix-columns, add-round-key).
-    // We can't easily count "round.5's children" from the rendered SVG
-    // alone, but total leaf count across the whole AES-128 graph is 41.
-    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(41);
+    // Byte-native round.5 has 5 leaves (sub-bytes, shift-rows, mix-columns,
+    // fetch-rk, add-round-key). We can't easily count "round.5's children"
+    // from the rendered SVG alone, but the whole byte-native AES-128 graph has
+    // 52 leaves: key-expansion + init.fetch-rk + initial.add-round-key (3) +
+    // 9 full rounds × 5 (45) + final round.10 × 4 (4).
+    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(52);
   });
 
   it("clicking the chevron collapses the container; child leaves disappear from the SVG", () => {
@@ -677,8 +686,8 @@ describe("GraphView — container collapse (Slice 6)", () => {
     expect(chevron).not.toBeNull();
     fireEvent.click(chevron);
 
-    // Post-collapse: total leaves dropped by 4 (round.5's 4 children).
-    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(37);
+    // Post-collapse: total leaves dropped by 5 (round.5's 5 children).
+    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(47);
 
     // The container itself is still present as a chip.
     const collapsedRect = container.querySelector(".graph-container-rect-collapsed");
@@ -699,9 +708,9 @@ describe("GraphView — container collapse (Slice 6)", () => {
     };
 
     fireEvent.click(findChevron()); // collapse
-    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(37);
+    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(47);
     fireEvent.click(findChevron()); // expand
-    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(41);
+    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(52);
     expect(container.querySelector(".graph-container-rect-collapsed")).toBeNull();
   });
 });

@@ -24,9 +24,7 @@ import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
 import { findStep, findStepAndParent } from "@/core/spec-mutations";
-import { makeBytesState } from "@/core/state/bytes";
-import { bytesFromHex } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
+import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue } from "@/core/types";
 import { GraphView } from "@/ui/components/GraphView";
 import { STEP_TYPE_DRAG_MIME } from "@/ui/components/StepPalette";
@@ -41,7 +39,7 @@ import { __resetSpecForTests, insertStepIntoSpec, setCipherMode, useSpec } from 
 import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
 import { __resetViewDensityForTests } from "@/ui/stores/view-density";
 import { __resetViewModeForTests } from "@/ui/stores/view-mode";
-import { __resetReplicationForTests } from "@/ui/stores/view-replication";
+import { __resetReplicationForTests, setReplicationEnabled } from "@/ui/stores/view-replication";
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -55,10 +53,16 @@ const AES128_ECB_PT = "00112233445566778899aabbccddeeff112233445566778899aabbccd
 
 const seedAes128Trace = (): void => {
   const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-    initialState: matrixFromBytes(bytesFromHex(AES128_PT)),
+    initialState: makeBytesState(bytesFromHex(AES128_PT)),
+    portedDispatchEnabled: true,
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
   });
   setTrace(trace);
+  // Byte-native AES-128 (Slice B1) auto-ON's replication for ported specs,
+  // which adds a key-expansion replica side-gutter and widens the round box.
+  // Default this file to replication OFF so the body-tiling geometry measures
+  // the bare body; the "skips replica chips" test re-enables it explicitly.
+  setReplicationEnabled(false);
 };
 
 /**
@@ -270,7 +274,7 @@ describe("GraphView — drop-gutter render", () => {
     const round1Strips = container.querySelectorAll<SVGRectElement>(
       '[data-drop-gutter^="before:round.1."], [data-drop-gutter^="after:round.1."]',
     );
-    expect(round1Strips.length, "at-start + 3 between + at-end = 5 strips").toBe(5);
+    expect(round1Strips.length, "at-start + 4 between + at-end = 6 strips").toBe(6);
     // Read the container's box from the backing outer `<rect>` (class
     // `graph-container-rect`). `querySelector("rect")` returns the
     // FIRST rect descendant which is the outer container rect.
@@ -367,20 +371,23 @@ describe("GraphView — drop-gutter render", () => {
   });
 
   it("skips replica chips inside childIds when building gutters", () => {
-    // AES-128 single-block has no iterate body, but the round groups
-    // include a `round.N.add-round-key` leaf that pulls `roundKey.N` from
-    // a high-fanout source. Without replicas enabled, gutters should be
-    // exactly the spec-child count + 1 (between-count + start + end).
-    // With replicas the graph splices synthetic replica chips into
-    // childIds — gutters should still be the spec-child count + 1
-    // because the filter excludes replicas.
+    // Byte-native AES-128 single-block has no iterate body, but each round
+    // group includes a `round.N.fetch-rk` leaf that pulls `roundKey.N` from
+    // the high-fanout `key-expansion` source. With replicas the graph splices
+    // synthetic replica chips into childIds — gutters should still be the
+    // spec-child count + 1 because the filter excludes replicas.
     seedAes128Trace();
+    // This test specifically exercises the replica-skip path, so re-enable
+    // replication (seedAes128Trace forced it off for the geometry tests).
+    setReplicationEnabled(true);
     const { container } = render(() => <GraphView />);
-    // round.1's body has 4 spec children → 3 between + start + end = 5 gutters.
+    // round.1's body has 5 spec children (sub-bytes, shift-rows, mix-columns,
+    // fetch-rk, add-round-key) → 4 between + start + end = 6 gutters; the
+    // spliced key-expansion replica chip must NOT add a gutter.
     const round1Gutters = container.querySelectorAll(
       "[data-drop-gutter^='before:round.1.'], [data-drop-gutter^='after:round.1.']",
     );
-    expect(round1Gutters.length).toBe(5);
+    expect(round1Gutters.length).toBe(6);
   });
 });
 
