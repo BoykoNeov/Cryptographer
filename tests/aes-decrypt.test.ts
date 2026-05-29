@@ -2,7 +2,7 @@ import { aes128Spec } from "@/ciphers/aes-128";
 import { aes128DecryptSpec } from "@/ciphers/aes-128-decrypt";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex, hexFromBytes } from "@/core/state/bytes";
+import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue } from "@/core/types";
 import { describe, expect, it } from "vitest";
@@ -42,12 +42,16 @@ describe("AES-128 decryption (FIPS-197 §5.3)", () => {
     const registry = buildDefaultRegistry();
     const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(k)]]);
 
-    // Forward: pt -> ct
+    // Forward: pt -> ct. The forward spec is byte-native (Slice B1) — bytes
+    // state in/out, port-native dispatch — while the decrypt spec below stays
+    // matrix until Slice B1.2. Same ciphertext bytes either way (KAT-equal),
+    // so the round-trip still recovers pt.
     const fwd = runSpec(aes128Spec, registry, {
-      initialState: matrixFromBytes(bytesFromHex(pt)),
+      initialState: makeBytesState(bytesFromHex(pt)),
       initialAux,
+      portedDispatchEnabled: true,
     });
-    if (fwd.finalState.shape !== "matrix4x4-bytes") throw new Error("bad shape");
+    if (fwd.finalState.shape !== "bytes") throw new Error("bad shape");
     const ct = hexFromBytes(fwd.finalState.bytes);
     expect(ct).not.toBe(pt); // sanity: encryption did *something*
 

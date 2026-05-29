@@ -1,55 +1,71 @@
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex, hexFromBytes } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
-import type { AuxValue, StepNode } from "@/core/types";
+import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
+import type { AuxValue } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
+/**
+ * Known-answer test for byte-native AES-128 (scaffolding-suppression Slice B1,
+ * 2026-05-29). The spec is now built from port-native primitives
+ * (`byte-substitute@1` / `permute@1` / `gf-matrix-multiply@1` / `xor@1` +
+ * `aux-load-bytes@1`) with no legacy executor, so it runs ONLY under
+ * `portedDispatchEnabled: true` and produces a `bytes` finalState.
+ *
+ * After the ported-dispatch parity tests dropped their byte-native AES-128
+ * rows (no legacy path to compare against), THIS file is the primary pin on
+ * the byte-native AES-128 frame stream: 52 frames, all 11 round keys, and the
+ * FIPS-197 Appendix B intermediate after the initial AddRoundKey. Keep these
+ * as frame-stream assertions, not a KAT-only check.
+ */
 describe("AES-128 (FIPS-197 Appendix C.1)", () => {
   const plaintextHex = "00112233445566778899aabbccddeeff";
   const keyHex = "000102030405060708090a0b0c0d0e0f";
   const expectedHex = "69c4e0d86a7b0430d8cdb78070b4c55a";
 
   it("encrypts the canonical test vector", () => {
-    const plaintext = matrixFromBytes(bytesFromHex(plaintextHex));
+    const plaintext = makeBytesState(bytesFromHex(plaintextHex));
     const key = bytesFromHex(keyHex);
     const initialAux = new Map<string, AuxValue>([["key", key]]);
 
     const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux,
+      portedDispatchEnabled: true,
     });
 
-    expect(trace.finalState.shape).toBe("matrix4x4-bytes");
-    if (trace.finalState.shape !== "matrix4x4-bytes") return;
+    expect(trace.finalState.shape).toBe("bytes");
+    if (trace.finalState.shape !== "bytes") return;
     expect(hexFromBytes(trace.finalState.bytes)).toBe(expectedHex);
   });
 
   it("emits a frame for every leaf step", () => {
-    const plaintext = matrixFromBytes(bytesFromHex(plaintextHex));
+    const plaintext = makeBytesState(bytesFromHex(plaintextHex));
     const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]);
 
     const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux,
+      portedDispatchEnabled: true,
     });
 
-    // Expected frames:
+    // Byte-native AES-128 leaves (one frame each):
     //   key-expansion (1)
-    //   initial AddRoundKey (1)
-    //   rounds 1..9 × 4 sub-steps = 36
-    //   final round × 3 sub-steps = 3
-    //   = 41 frames
-    expect(trace.frames.length).toBe(41);
+    //   init.fetch-rk (1) + initial.add-round-key (1)
+    //   rounds 1..9 × 5 sub-steps (sub-bytes, shift-rows, mix-columns,
+    //     fetch-rk, add-round-key) = 45
+    //   final round.10 × 4 sub-steps (no mix-columns) = 4
+    //   = 52 frames
+    expect(trace.frames.length).toBe(52);
   });
 
   it("produces all 11 round keys in aux", () => {
-    const plaintext = matrixFromBytes(bytesFromHex(plaintextHex));
+    const plaintext = makeBytesState(bytesFromHex(plaintextHex));
     const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]);
     const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux,
+      portedDispatchEnabled: true,
     });
 
     for (let r = 0; r <= 10; r++) {
@@ -71,13 +87,14 @@ describe("AES-128 (FIPS-197 Appendix C.1)", () => {
 
   it("intermediate state after initial AddRoundKey matches FIPS-197 Appendix B", () => {
     // Appendix B uses plaintext 3243f6a8...e0370734 with key 2b7e1516...3c4f3c09c.
-    const plaintext = matrixFromBytes(bytesFromHex("3243f6a8885a308d313198a2e0370734"));
+    const plaintext = makeBytesState(bytesFromHex("3243f6a8885a308d313198a2e0370734"));
     const key = bytesFromHex("2b7e151628aed2a6abf7158809cf4f3c");
     const initialAux = new Map<string, AuxValue>([["key", key]]);
 
     const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux,
+      portedDispatchEnabled: true,
     });
 
     // Appendix B: state after the initial round key add (start of round 1):
@@ -85,38 +102,28 @@ describe("AES-128 (FIPS-197 Appendix C.1)", () => {
     //   col 1: 3d f4 c6 f8
     //   col 2: e3 e2 8d 48
     //   col 3: be 2b 2a 08
+    // Byte-native: the initial AddRoundKey is an `xor@1` leaf; its 16-byte
+    // output (plaintext ⊕ roundKey.0, in input/column-major byte order) is
+    // read from the frame's `portOutputs` "output" port, not `stateAfter`.
     const initialAddFrame = trace.frames.find((f) => f.stepId === "initial.add-round-key");
     expect(initialAddFrame).toBeDefined();
     if (!initialAddFrame) return;
-    if (initialAddFrame.stateAfter.shape !== "matrix4x4-bytes") return;
-    expect(hexFromBytes(initialAddFrame.stateAfter.bytes)).toBe("193de3bea0f4e22b9ac68d2ae9f84808");
+    const out = initialAddFrame.portOutputs?.get("output");
+    expect(out).toBeInstanceOf(Uint8Array);
+    if (!out) return;
+    expect(hexFromBytes(out)).toBe("193de3bea0f4e22b9ac68d2ae9f84808");
   });
 
-  it("changes ciphertext when ShiftRows and MixColumns are reordered", () => {
-    // Note: SubBytes and ShiftRows actually *commute* — both are byte-wise
-    // permutations, so swapping them gives identical output. ShiftRows and
-    // MixColumns do NOT commute, because MixColumns mixes within columns
-    // and ShiftRows changes which bytes occupy each column.
-    const plaintext = matrixFromBytes(bytesFromHex(plaintextHex));
-    const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]);
-
-    const swapped = structuredClone(aes128Spec) as typeof aes128Spec;
-    const round1 = swapped.steps[2];
-    if (!round1 || round1.kind !== "group") throw new Error("expected round 1 group");
-    // children layout: [sub-bytes, shift-rows, mix-columns, add-round-key]
-    const children = round1.children as StepNode[];
-    const sr = children[1];
-    const mc = children[2];
-    if (!sr || !mc) throw new Error("missing children");
-    children[1] = mc;
-    children[2] = sr;
-
-    const trace = runSpec(swapped, buildDefaultRegistry(), {
-      initialState: plaintext,
-      initialAux,
-    });
-
-    if (trace.finalState.shape !== "matrix4x4-bytes") return;
-    expect(hexFromBytes(trace.finalState.bytes)).not.toBe(expectedHex);
-  });
+  // The legacy "changes ciphertext when ShiftRows and MixColumns are reordered"
+  // test (which swapped two entries of the round's children ARRAY) is moot
+  // under byte-native port wiring: execution dataflow is determined by each
+  // leaf's explicit `portInputs` bindings (sub-bytes → shift-rows → mix-columns
+  // → add-round-key), not by array position. Swapping array entries without
+  // rewiring the bindings would only break dataflow (a later leaf reading a
+  // not-yet-computed output), not faithfully reorder the operations — a
+  // misleading "differs" for the wrong reason. The ShiftRows/MixColumns
+  // non-commutativity it demonstrated is preserved by the unchanged §C.1 KAT
+  // above (any reorder of the published spec breaks that exact ciphertext). A
+  // faithful port-era reorder test would rewire all three bindings AND the
+  // children array; deferred — not a frame-stream pin.
 });
