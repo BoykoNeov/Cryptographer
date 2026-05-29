@@ -266,12 +266,18 @@ const encryptFinalRound = (rounds: number): StepNode => {
  * `rounds = 10` → AES-128, `12` → AES-192, `14` → AES-256.
  *
  * Shape: `[ init.fetch-rk, initial.add-round-key, round.1, …, round.{rounds}(final) ]`.
- * The body reads the plaintext from the reserved `$input` source. The caller's
- * spec sets `outputFrom = aesNativeOutputFrom(rounds)`.
+ * The body reads the plaintext from `inputSource` (the reserved `$input`
+ * source for single-block specs; `port(iterateId, "in")` for an ECB/CBC
+ * iterate that injects the per-block bytes — Slice B1.4). The caller's spec
+ * sets `outputFrom = aesNativeOutputFrom(rounds)` (single-block) or names the
+ * iterate's `bodyOutput`/`outputPorts` (multi-block).
  */
-export function buildAesEncryptBodyNative(rounds: number): readonly StepNode[] {
+export function buildAesEncryptBodyNative(
+  rounds: number,
+  inputSource: PortBinding = port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT),
+): readonly StepNode[] {
   return [
-    // Initial AddRoundKey (round key 0), at top scope — reads $input directly.
+    // Initial AddRoundKey (round key 0), at body scope — reads `inputSource`.
     fetchRoundKeyLeaf("init", 0),
     {
       kind: "step",
@@ -279,7 +285,7 @@ export function buildAesEncryptBodyNative(rounds: number): readonly StepNode[] {
       type: "xor@1",
       params: { inputCount: 2 },
       portInputs: {
-        operand0: port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT),
+        operand0: inputSource,
         operand1: port("init.fetch-rk", "output"),
       },
       narrationOverride: NARR_INITIAL_ARK,
@@ -452,12 +458,17 @@ const decryptFinalRound = (): StepNode => {
  *           inv-round.{rounds-1}, …, inv-round.1, inv-round.0(final) ]`.
  * Round keys are consumed in reverse: the initial AddRoundKey reads
  * `roundKey.{rounds}` and each inverse round `n` reads `roundKey.{n}` down to
- * `roundKey.0`. The ciphertext arrives on `$input`; the caller sets
- * `outputFrom = aesNativeDecryptOutputFrom()`.
+ * `roundKey.0`. The ciphertext arrives on `inputSource` (`$input` single-block;
+ * `port(iterateId, "in")` for an ECB iterate — Slice B1.4); the caller sets
+ * `outputFrom = aesNativeDecryptOutputFrom()` (single-block) or names the
+ * iterate's `bodyOutput`/`outputPorts` (multi-block).
  */
-export function buildAesDecryptBodyNative(rounds: number): readonly StepNode[] {
+export function buildAesDecryptBodyNative(
+  rounds: number,
+  inputSource: PortBinding = port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT),
+): readonly StepNode[] {
   return [
-    // Initial AddRoundKey (the LAST round key), at top scope — reads $input.
+    // Initial AddRoundKey (the LAST round key), at body scope — reads `inputSource`.
     fetchRoundKeyLeaf("inv-initial", rounds),
     {
       kind: "step",
@@ -465,7 +476,7 @@ export function buildAesDecryptBodyNative(rounds: number): readonly StepNode[] {
       type: "xor@1",
       params: { inputCount: 2 },
       portInputs: {
-        operand0: port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT),
+        operand0: inputSource,
         operand1: port("inv-initial.fetch-rk", "output"),
       },
       narrationOverride: NARR_INV_INITIAL_ARK,

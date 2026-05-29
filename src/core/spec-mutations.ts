@@ -1606,10 +1606,20 @@ const rewriteAllPortInputs = (
       if (nc !== n.children) withChildren = { ...n, children: nc };
     }
     const newPi = rewritePortInputs(withChildren.portInputs);
-    if (newPi !== undefined && newPi !== withChildren.portInputs) {
-      return { ...withChildren, portInputs: newPi };
+    let result: StepNode =
+      newPi !== undefined && newPi !== withChildren.portInputs
+        ? { ...withChildren, portInputs: newPi }
+        : withChildren;
+    // Container `seedInput` is the OTHER place a `$input` reference can live
+    // (the byte-native ECB iterate reads `$input` there, not via portInputs —
+    // Slice B1.4). Only looping containers + `group` carry it; `step` /
+    // `feistel-round` don't. Round-group seedInputs point at sibling rounds,
+    // never `$input`, so the pad repoint/restore is identity for them.
+    if (result.kind !== "step" && result.kind !== "feistel-round" && result.seedInput !== undefined) {
+      const ns = rewriteBinding(result.seedInput);
+      if (ns !== result.seedInput) result = { ...result, seedInput: ns };
     }
-    return withChildren;
+    return result;
   };
 
   const visit = (nodes: readonly StepNode[]): readonly StepNode[] => {
@@ -1679,6 +1689,18 @@ const hasIterateNode = (steps: readonly StepNode[]): boolean =>
   steps.some((n) => n.kind === "iterate");
 
 /**
+ * Detect a byte-native (port-mode) iterate — `seedInput` set rather than the
+ * legacy `blocksFromAux` aux split (Slice B1.4). Used to route byte-native
+ * ECB *away* from the matrix multi-block padding branch (Branch 1): a
+ * port-mode iterate reads its blocks from a port (`$input`/pad), not from a
+ * `state` thread, so the matrix branch's no-portInputs pad prepend would be
+ * ignored. Byte-native ECB instead splices the pad into the port graph in
+ * the byte-native branch (Branch 2), repointing the iterate's `seedInput`.
+ */
+const hasByteNativeIterate = (steps: readonly StepNode[]): boolean =>
+  steps.some((n) => n.kind === "iterate" && n.seedInput !== undefined);
+
+/**
  * Layer a padding chain onto a cipher spec.
  *
  * Idempotent: any pre-existing padding leaves are stripped before the new
@@ -1708,11 +1730,14 @@ export const applyPaddingScheme = (
 ): CipherSpec => {
   const stripped = stripPaddingLeaves(spec.steps);
 
-  // ── Branch 1: multi-block (ECB/CBC/CTR) ────────────────────────────────
+  // ── Branch 1: matrix multi-block (matrix CBC/CTR) ──────────────────────
   // The iterate node already handles BytesState ↔ MatrixState transitions
   // via the split-blocks / concat-blocks boundary steps inside the spec.
   // All we add here is the pad/unpad at the outer BytesState boundary.
-  if (hasIterateNode(stripped)) {
+  // Byte-native ECB (port-mode iterate) is EXCLUDED — it has no `state`
+  // thread to splice a no-portInputs pad into; it falls through to the
+  // byte-native branch below, which repoints the iterate's `seedInput`.
+  if (hasIterateNode(stripped) && !hasByteNativeIterate(stripped)) {
     if (scheme === "none") {
       return { ...spec, steps: stripped };
     }
@@ -1736,7 +1761,7 @@ export const applyPaddingScheme = (
     return { ...spec, steps: [...stripped, unpadLeaf] };
   }
 
-  // ── Branch 2: byte-native single-block AES (Slice B1) ──────────────────
+  // ── Branch 2: byte-native AES (single-block + ECB) (Slice B1) ──────────
   // The port-native AES rebuild carries a flat 16-byte state on raw ports
   // (no `MatrixState` thread): the plaintext arrives on the reserved
   // `$input` source and the cipher exit is named by `spec.outputFrom`. The
@@ -1744,9 +1769,11 @@ export const applyPaddingScheme = (
   // doesn't apply — there is no state thread to splice into and no
   // bytes↔matrix bridge to insert. Instead we splice the pad directly into
   // the port graph: prepend a pad reading `$input`, then repoint every
-  // `$input` consumer (the initial AddRoundKey's `operand0`) to the pad's
-  // output. The pad is a Phase-1 lifted step, so its output port is named
-  // `"state"` (LIFTED_STATE_PORT), not `"output"`.
+  // `$input` consumer to the pad's output. For single-block that consumer is
+  // the initial AddRoundKey's `operand0` (a `portInputs` binding); for ECB
+  // (B1.4) it's the port-mode iterate's `seedInput` — `repointInputSource-
+  // Consumers` rewrites both. The pad is a Phase-1 lifted step, so its output
+  // port is named `"state"` (LIFTED_STATE_PORT), not `"output"`.
   if (isByteNativeAesSpec(spec)) {
     // Idempotency: a prior call may have repointed `$input` consumers to a
     // pad (encrypt) or moved `outputFrom` onto an unpad (decrypt). `stripped`

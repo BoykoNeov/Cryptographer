@@ -18,6 +18,7 @@ import type {
   FeistelRoundGroup,
   ForEachSubgraphNode,
   ForEachSubgraphWithHistoryNode,
+  PortBinding,
   State,
   StepExecutor,
   StepNode,
@@ -25,6 +26,43 @@ import type {
   TraceFrame,
 } from "./types";
 import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "./types";
+
+/**
+ * Resolve a `PortBinding` against a `node → port → bytes` map, throwing a
+ * scope-appropriate error when the reference is unresolvable.
+ *
+ * Extracted (scaffolding-suppression B1.4) from four near-identical blocks:
+ * group `seedInput`/`bodyOutput`, FES-with-history `seedInput`/`bodyOutput`,
+ * the port-mode `iterate`'s `seedInput`/`bodyOutput`, and the spec-level
+ * `outputFrom`. Each resolved a binding against either the parent scope's
+ * `nodeOutputs` or a body scope's returned outputs and threw a bespoke
+ * message; the only real variation is the human hint, captured by `scope`.
+ * The exact message text (prefix `${ctxLabel} references '<node>.<port>'`
+ * plus the per-scope hint) is preserved so existing error-message assertions
+ * keep matching.
+ */
+type BindingScope = "upstream" | "body" | "top-scope";
+const BINDING_HINTS: Record<BindingScope, string> = {
+  upstream:
+    "which is not a same-scope upstream output (declare the producer as a preceding sibling exposing that output port)",
+  body: "which is not a same-scope body output (the target must be a direct child of the body exposing that output port)",
+  "top-scope":
+    "which is not a top-scope output (the producer must be a top-level node exposing that output port)",
+};
+const resolveBinding = (
+  map: ReadonlyMap<string, ReadonlyMap<string, Uint8Array>>,
+  binding: PortBinding,
+  ctxLabel: string,
+  scope: BindingScope,
+): Uint8Array => {
+  const resolved = map.get(binding.node)?.get(binding.port);
+  if (resolved === undefined) {
+    throw new Error(
+      `${ctxLabel} references '${binding.node}.${binding.port}', ${BINDING_HINTS[scope]}`,
+    );
+  }
+  return resolved;
+};
 
 export type RuntimeInput = {
   readonly initialState: State;
@@ -236,13 +274,12 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
         // (legacy bodies read `state`, left in place by the surrounding flow).
         let groupSeed: ReadonlyMap<string, Map<string, Uint8Array>> | undefined;
         if (node.seedInput !== undefined) {
-          const upstream = nodeOutputs.get(node.seedInput.node);
-          const resolved = upstream?.get(node.seedInput.port);
-          if (resolved === undefined) {
-            throw new Error(
-              `group '${node.id}': seedInput references '${node.seedInput.node}.${node.seedInput.port}', which is not a same-scope upstream output (declare the producer as a preceding sibling exposing that output port)`,
-            );
-          }
+          const resolved = resolveBinding(
+            nodeOutputs,
+            node.seedInput,
+            `group '${node.id}': seedInput`,
+            "upstream",
+          );
           groupSeed = new Map([[node.id, new Map([["in", resolved]])]]);
         }
         const bodyOutputs = walk(
@@ -258,13 +295,12 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
         // left in state" (no `bytes-to-state@1` exit bridge). Absent ⇒ legacy
         // `state`-derived publish via `publishContainerOutputs`.
         if (node.bodyOutput !== undefined) {
-          const producer = bodyOutputs.get(node.bodyOutput.node);
-          const resolved = producer?.get(node.bodyOutput.port);
-          if (resolved === undefined) {
-            throw new Error(
-              `group '${node.id}': bodyOutput references '${node.bodyOutput.node}.${node.bodyOutput.port}', which is not a same-scope body output (the target must be a direct child of the body exposing that output port)`,
-            );
-          }
+          const resolved = resolveBinding(
+            bodyOutputs,
+            node.bodyOutput,
+            `group '${node.id}': bodyOutput`,
+            "body",
+          );
           const ports = node.outputPorts ?? ["out"];
           const outMap = new Map<string, Uint8Array>();
           for (const p of ports) outMap.set(p, resolved);
@@ -276,12 +312,83 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
       }
 
       if (node.kind === "iterate") {
-        // A2 container port contract: `seedInput`/`bodyOutput` resolution
-        // on `iterate` is deferred to Phase B1 (AES rebuild). Fail loudly
-        // rather than silently ignoring author-declared wiring.
-        if (node.seedInput !== undefined || node.bodyOutput !== undefined) {
+        // ── Port mode (scaffolding-suppression B1.4) ──────────────────────
+        // `seedInput` set ⇒ pure port-graph iterate (byte-native ECB). The
+        // runtime resolves the full input byte array in the parent scope,
+        // splits it into `blockByteLength` chunks, injects each chunk into the
+        // body scope as `port(iterateId, "in")` (mirroring the A3b group
+        // seed), collects each iteration's `bodyOutput` bytes, concatenates
+        // them, and publishes on `outputPorts`. `state` is never threaded;
+        // the aux `countFromAux`/`blocksFromAux`/`outBlocksAux` fields are
+        // unused. (`for-each-subgraph`/non-history `iterate`'s aux fields stay
+        // for matrix CBC/CTR until those convert.)
+        if (node.seedInput !== undefined) {
+          const blockLen = node.blockByteLength;
+          if (blockLen === undefined || !Number.isInteger(blockLen) || blockLen < 1) {
+            throw new Error(
+              `iterate '${node.id}': blockByteLength must be a positive integer in port mode (seedInput set), got ${String(blockLen)}`,
+            );
+          }
+          if (node.bodyOutput === undefined) {
+            throw new Error(
+              `iterate '${node.id}': bodyOutput is required in port mode (seedInput set) — name the body node+port whose bytes are each iteration's result`,
+            );
+          }
+          const seedSource = resolveBinding(
+            nodeOutputs,
+            node.seedInput,
+            `iterate '${node.id}': seedInput`,
+            "upstream",
+          );
+          if (seedSource.length % blockLen !== 0) {
+            throw new Error(
+              `iterate '${node.id}': seedInput output length ${seedSource.length} is not a multiple of blockByteLength ${blockLen}`,
+            );
+          }
+          const count = seedSource.length / blockLen;
+          const iteratePath = [...path, node.id];
+          const collected: Uint8Array[] = [];
+          for (let i = 0; i < count; i++) {
+            aux.set("blockIndex", i);
+            const block = new Uint8Array(seedSource.subarray(i * blockLen, (i + 1) * blockLen));
+            // Inject the per-block bytes as `port(iterateId, "in")` so the
+            // body's head leaf reads `{ node: iterateId, port: "in" }`.
+            const iterSeed = new Map([[node.id, new Map([["in", block]])]]);
+            const bodyOutputs = walk(node.children, iteratePath, i, branchPath, roundPath, iterSeed);
+            collected.push(
+              new Uint8Array(
+                resolveBinding(
+                  bodyOutputs,
+                  node.bodyOutput,
+                  `iterate '${node.id}': bodyOutput`,
+                  "body",
+                ),
+              ),
+            );
+          }
+          // Concatenate per-iteration outputs → the container's exit bytes.
+          const total = collected.reduce((n, b) => n + b.length, 0);
+          const concatenated = new Uint8Array(total);
+          let off = 0;
+          for (const b of collected) {
+            concatenated.set(b, off);
+            off += b.length;
+          }
+          const ports = node.outputPorts ?? ["out"];
+          const outMap = new Map<string, Uint8Array>();
+          for (const p of ports) outMap.set(p, concatenated);
+          nodeOutputs.set(node.id, outMap);
+          continue;
+        }
+
+        // ── Aux mode (legacy — matrix CBC/CTR) ────────────────────────────
+        if (
+          node.countFromAux === undefined ||
+          node.blocksFromAux === undefined ||
+          node.outBlocksAux === undefined
+        ) {
           throw new Error(
-            `iterate '${node.id}': seedInput/bodyOutput port-seeding is deferred to Phase B1 (AES rebuild); use countFromAux/blocksFromAux/outBlocksAux for now`,
+            `iterate '${node.id}': aux mode requires countFromAux/blocksFromAux/outBlocksAux (or set seedInput/blockByteLength/bodyOutput for port mode)`,
           );
         }
         const rawCount = aux.get(node.countFromAux);
@@ -354,14 +461,12 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
         // parent-scope `state.bytes` (legacy path, until A3).
         let seedBytes: Uint8Array | undefined;
         if (node.seedInput !== undefined) {
-          const upstream = nodeOutputs.get(node.seedInput.node);
-          const resolved = upstream?.get(node.seedInput.port);
-          if (resolved === undefined) {
-            throw new Error(
-              `for-each-subgraph-with-history '${node.id}': seedInput references '${node.seedInput.node}.${node.seedInput.port}', which is not a same-scope upstream output (declare the producer as a preceding sibling exposing that output port)`,
-            );
-          }
-          seedBytes = resolved;
+          seedBytes = resolveBinding(
+            nodeOutputs,
+            node.seedInput,
+            `for-each-subgraph-with-history '${node.id}': seedInput`,
+            "upstream",
+          );
         }
         runForEachSubgraphWithHistory(node, path, blockIndex, branchPath, roundPath, seedBytes);
         publishContainerOutputs(node.id, node.outputPorts);
@@ -1340,13 +1445,12 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
       //    bytes-shape because the body's last leaf is a `bytes-to-state@1`.
       let entryBytes: Uint8Array;
       if (node.bodyOutput !== undefined) {
-        const producer = bodyOutputs.get(node.bodyOutput.node);
-        const resolved = producer?.get(node.bodyOutput.port);
-        if (resolved === undefined) {
-          throw new Error(
-            `for-each-subgraph-with-history '${node.id}': bodyOutput references '${node.bodyOutput.node}.${node.bodyOutput.port}', which is not a same-scope body output (the target must be a direct child of the body exposing that output port)`,
-          );
-        }
+        const resolved = resolveBinding(
+          bodyOutputs,
+          node.bodyOutput,
+          `for-each-subgraph-with-history '${node.id}': bodyOutput`,
+          "body",
+        );
         if (resolved.length !== entryLen) {
           throw new Error(
             `for-each-subgraph-with-history '${node.id}': iteration ${t} bodyOutput length ${resolved.length} != historyEntryByteLength ${entryLen}`,
@@ -1440,13 +1544,7 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
   // `state` is the final state, exactly as before.
   let finalState: State = state;
   if (spec.outputFrom !== undefined) {
-    const producer = topOutputs.get(spec.outputFrom.node);
-    const resolved = producer?.get(spec.outputFrom.port);
-    if (resolved === undefined) {
-      throw new Error(
-        `spec.outputFrom references '${spec.outputFrom.node}.${spec.outputFrom.port}', which is not a top-scope output (the producer must be a top-level node exposing that output port)`,
-      );
-    }
+    const resolved = resolveBinding(topOutputs, spec.outputFrom, "spec.outputFrom", "top-scope");
     finalState = portBytesToState(resolved, spec.stateShape);
   }
 

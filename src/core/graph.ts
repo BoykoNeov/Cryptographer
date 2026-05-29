@@ -821,7 +821,11 @@ const deriveEdges = (trace: Trace, ctx: BuildContext): GraphEdge[] => {
       if (prevIterateIdsInPath.has(iid)) continue;
       const iter = ctx.iteratesById.get(iid);
       if (!iter) continue;
+      // Aux mode only — port-mode iterates (byte-native ECB, B1.4) have no
+      // count/blocks aux keys; their seed/output edges are port edges drawn
+      // by `inferPortEdges`.
       for (const auxKey of [iter.countFromAux, iter.blocksFromAux]) {
+        if (auxKey === undefined) continue;
         const producer = writerByAuxKey.get(auxKey);
         if (producer !== undefined) addEdge(producer, iid, auxKey);
       }
@@ -833,7 +837,7 @@ const deriveEdges = (trace: Trace, ctx: BuildContext): GraphEdge[] => {
       if (currentIterateIdsInPath.has(iid)) continue;
       const iter = ctx.iteratesById.get(iid);
       if (!iter) continue;
-      writerByAuxKey.set(iter.outBlocksAux, iid);
+      if (iter.outBlocksAux !== undefined) writerByAuxKey.set(iter.outBlocksAux, iid);
     }
 
     prevIterateIdsInPath = currentIterateIdsInPath;
@@ -908,7 +912,7 @@ const deriveEdges = (trace: Trace, ctx: BuildContext): GraphEdge[] => {
   for (const iid of prevIterateIdsInPath) {
     const iter = ctx.iteratesById.get(iid);
     if (!iter) continue;
-    writerByAuxKey.set(iter.outBlocksAux, iid);
+    if (iter.outBlocksAux !== undefined) writerByAuxKey.set(iter.outBlocksAux, iid);
   }
   // Symmetric drain for outputAux containers still active at trace end
   // (no-op for SHA-256, where the schedule exits before the rounds run).
@@ -1574,7 +1578,15 @@ const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
   const collectGroupSeeds = (nodes: readonly StepNode[]): void => {
     for (const node of nodes) {
       if (node.kind === "step") continue;
-      if (node.kind === "group" && node.seedInput !== undefined) {
+      // A port-mode `iterate` (byte-native ECB, B1.4) injects its per-block
+      // bytes as `port(iterateId, "in")` the same way A3b groups inject their
+      // seed — so a body head reading `port(iterateId, "in")` resolves through
+      // the iterate's `seedInput` to the real producer ($input / the pad),
+      // rather than drawing a self-referential `iterateId → leaf` island edge.
+      if (
+        (node.kind === "group" || node.kind === "iterate") &&
+        node.seedInput !== undefined
+      ) {
         groupSeedByGroupId.set(node.id, node.seedInput);
       }
       if (node.kind === "feistel-round") {

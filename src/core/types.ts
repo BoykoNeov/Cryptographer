@@ -221,13 +221,32 @@ export type StepGroup = {
  * to run the AES round body once per plaintext block without unrolling
  * the JSON spec.
  *
- * Contract:
+ * Two modes (mutually exclusive; discriminated by `seedInput` presence —
+ * mirrors `ForEachSubgraphNode`'s state-thread-vs-item-array split):
+ *
+ * **Aux mode (legacy — matrix CBC/CTR until Phase B):** the per-iteration
+ * input is pre-split into `aux[blocksFromAux]` and the runtime threads
+ * `state`:
  *  - `aux[countFromAux]` must hold a `number` — the iteration count.
- *  - `aux[blocksFromAux]` must hold a `MatrixState[]` of length `count` —
- *    the per-iteration input. The runtime sets `state = blocks[i]` at the
- *    start of each iteration.
+ *  - `aux[blocksFromAux]` must hold a `State[]` of length `count` — the
+ *    per-iteration input. The runtime sets `state = blocks[i]` at the start
+ *    of each iteration.
  *  - The runtime initializes `aux[outBlocksAux] = []` once before the loop
  *    and appends each iteration's final state to it.
+ *
+ * **Port mode (byte-native — scaffolding-suppression B1.4):** the iterate
+ * is a pure port-graph container, like `group` (A3b):
+ *  - `seedInput` resolves (in the parent scope) to the full input byte array;
+ *    the runtime splits it into `blockByteLength`-sized chunks (count =
+ *    `seedInput.length / blockByteLength`) and injects each chunk into the
+ *    body scope as `port(iterateId, "in")` — so the body's head reads
+ *    `{ node: iterateId, port: "in" }` instead of `aux[blocksFromAux]`.
+ *  - `bodyOutput` names the body node + port whose bytes are the per-iteration
+ *    result; the runtime concatenates them and publishes on `outputPorts`
+ *    (default `["out"]`), retiring the `concat-blocks@1` boundary. `state` is
+ *    never threaded; `countFromAux`/`blocksFromAux`/`outBlocksAux` are unused.
+ *
+ * Common to both modes:
  *  - Per-iteration step ids get a `:b{i}` suffix in the emitted frames so
  *    the flat trace stays uniquely keyed. Each frame is also stamped with
  *    `blockIndex: i` for renderers that want to display block context.
@@ -239,9 +258,12 @@ export type IterateGroup = {
   readonly kind: "iterate";
   readonly id: string;
   readonly label?: string;
-  readonly countFromAux: string;
-  readonly blocksFromAux: string;
-  readonly outBlocksAux: string;
+  /** Aux mode only — the iteration count's aux key. Absent in port mode. */
+  readonly countFromAux?: string;
+  /** Aux mode only — the pre-split per-iteration input aux key. Absent in port mode. */
+  readonly blocksFromAux?: string;
+  /** Aux mode only — the aux key the per-iteration output is appended to. Absent in port mode. */
+  readonly outBlocksAux?: string;
   readonly children: readonly StepNode[];
   /** Author-declared default-collapse (see `StepGroup` for shared semantics). */
   readonly defaultCollapsed?: boolean;
@@ -249,17 +271,22 @@ export type IterateGroup = {
   readonly portInputs?: Readonly<Record<string, PortBinding>>;
   readonly outputPorts?: readonly string[];
   /**
-   * Container port contract (scaffolding-suppression A2). See
-   * `ForEachSubgraphWithHistoryNode.seedInput`/`bodyOutput` for the full
-   * semantics. **Runtime resolution is deferred to Phase B1 (AES rebuild),
-   * when `iterate` adopts `seedInput` in place of `blocksFromAux` and
-   * `outputPorts` in place of the `concat-blocks@1` boundary.** Until then
-   * the runtime THROWS if either field is set on an `iterate` node (loud
-   * failure beats silently ignoring the wiring) — keep using
-   * `countFromAux`/`blocksFromAux`/`outBlocksAux`.
+   * Container port contract (scaffolding-suppression A2 + B1.4). Setting
+   * `seedInput` switches the iterate into **port mode** (above): the runtime
+   * resolves it in the parent scope, splits the bytes into `blockByteLength`
+   * chunks, and injects each as `port(iterateId, "in")`. `bodyOutput` names
+   * the per-iteration result port. See `ForEachSubgraphWithHistoryNode` for
+   * the shared resolution semantics.
    */
   readonly seedInput?: PortBinding;
   readonly bodyOutput?: PortBinding;
+  /**
+   * Port mode only — the byte width of each per-iteration block `seedInput`
+   * is split into (16 for AES). Required when `seedInput` is set; the
+   * iteration count auto-derives as `seedInput.length / blockByteLength`
+   * (which must divide evenly). Unused in aux mode.
+   */
+  readonly blockByteLength?: number;
 };
 
 /**

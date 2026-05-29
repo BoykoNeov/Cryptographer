@@ -408,12 +408,31 @@ const walk = (
       ctx.shapeAt.set(node.id, shape);
       continue;
     }
-    // Iterate is opaque to shape inference. The body always starts in
-    // matrix4x4-bytes (the runtime substitutes state = blocks[i]); the
-    // iterate exits leaving state in matrix4x4-bytes (the last iteration's
-    // value). We still walk the body so child leaves inside the iterate
-    // get their shapeAt entries + any contract checks.
+    // Iterate has two modes (B1.4).
     recordContainerOutputs();
+    if (node.seedInput !== undefined) {
+      // Port mode (byte-native ECB): a pure port-graph container like `group`.
+      // The body reads the per-block bytes on `port(iterateId, "in")`; the
+      // node's output bytes are the concatenated per-iteration `bodyOutput`.
+      // Validate both bindings + seed the body scope with `port(iterateId,
+      // "in")` so the body's head leaf's portInputs resolve pre-Run.
+      validateContainerBinding(node.id, "seedInput", node.seedInput, scopeOutputs, ctx);
+      if (node.bodyOutput !== undefined) {
+        const bodyScope = collectDirectChildOutputs(node.children, ctx.registry);
+        validateContainerBinding(node.id, "bodyOutput", node.bodyOutput, bodyScope, ctx);
+      }
+      const seedScope = new Map([[node.id, new Set(["in"])]]);
+      // Body operates on byte blocks; node exit is the concatenated bytes.
+      walk(node.children, "bytes", ctx, seedScope);
+      shape = "bytes";
+      ctx.shapeAt.set(node.id, shape);
+      continue;
+    }
+    // Aux mode (legacy matrix CBC/CTR) is opaque to shape inference. The body
+    // always starts in matrix4x4-bytes (the runtime substitutes
+    // state = blocks[i]); the iterate exits leaving state in matrix4x4-bytes
+    // (the last iteration's value). We still walk the body so child leaves
+    // inside the iterate get their shapeAt entries + any contract checks.
     walk(node.children, ITERATE_BODY_SHAPE, ctx);
     shape = ITERATE_BODY_SHAPE;
     ctx.shapeAt.set(node.id, shape);
