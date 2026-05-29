@@ -32,8 +32,7 @@ import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
 import { PADDING_STEP_TYPES, findStep, findStepAndParent } from "@/core/spec-mutations";
-import { bytesFromHex } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
+import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue } from "@/core/types";
 import { GraphView } from "@/ui/components/GraphView";
 import { STEP_TYPE_DRAG_MIME, StepPalette } from "@/ui/components/StepPalette";
@@ -57,7 +56,8 @@ const AES128_PT = "00112233445566778899aabbccddeeff";
 
 const seedAes128Trace = (): void => {
   const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-    initialState: matrixFromBytes(bytesFromHex(AES128_PT)),
+    initialState: makeBytesState(bytesFromHex(AES128_PT)),
+    portedDispatchEnabled: true,
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
   });
   setTrace(trace);
