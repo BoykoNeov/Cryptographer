@@ -827,6 +827,147 @@ byte-native AES-128 forward; (6) then B1.2 decrypt, B1.3 192/256, B1.4 modes
 A4 allowlist removals). Original full B1 plan: `~/.claude/plans/tidy-honking-
 stearns.md`.
 
+#### Session 3 (2026-05-29) — mechanical sweep underway; 227 → 89 failures; 5 batches green-committed
+
+The functional/topology items (batches 1–3 of session 2) were already done; this
+session is the **fixture sweep**. Started at **227 failing / 45 files**, now at
+**89 failing / 21 files**. Five commits on `origin/b1-aes-byte-native` (push at
+session end): `6829e8a` ParamEditor blocks (app source), `fc1102f` batch-1 (9
+graph fixtures), `7f8b5fe` batch-2 (drag/gutters/replicas geometry), `e581b4f`
+batch-3 (cross-mode mirror → AES-192 + url-share threshold), `b7cbe7c` batch-4
+(graph/panel fixtures). Each was `--no-verify` (sanctioned red-WIP window). The
+suite is **still intentionally red** — finish the sweep, then a normal commit
+closes the window.
+
+**The reusable toolbox (every pattern below is already applied somewhere — copy it):**
+
+1. **Mechanical (the bulk).** In a `runSpec(aes128Spec, …)` fixture:
+   `matrixFromBytes(bytesFromHex(X))` → `makeBytesState(bytesFromHex(X))`, add
+   `portedDispatchEnabled: true` (the fixture hardcodes the byte-native default —
+   `true` is correct and self-documenting), and **drop the now-unused
+   `import { matrixFromBytes }`** (biome fails otherwise; keep it only if the file
+   still uses it for ECB/Serpent/DES/synthetic frames). ECB/192/256/decrypt stay
+   matrix — leave their `matrixFromBytes` paths alone.
+2. **Byte-native leaf-id remaps** (matrix → port-native): round-key consumer
+   `round.N.add-round-key` → `round.N.fetch-rk` (the `aux-load-bytes@1` that reads
+   `roundKey.N`); SubBytes `generic.byte-substitution@1` → `byte-substitute@1`;
+   MixColumns `generic.mix-columns@1` → `gf-matrix-multiply@1`; ShiftRows
+   `generic.shift-rows@1` → `permute@1`; cipher input `CIPHER_INPUT_ID`
+   (`__cipher_input__`) → `INPUT_SOURCE_ID` (`$input`, import from `@/core/types`).
+   **Counts:** whole byte-native AES-128 = **52 leaves** (key-expansion +
+   init.fetch-rk + initial.add-round-key = 3, + 9 full rounds × 5, + final
+   round.10 × 4); a round group has **5 children** (was 4 — `fetch-rk` added);
+   collapsing one round drops 5 (52→47). round.10 is **still the final round**
+   (byte-native AES-128 is still 10 rounds).
+3. **Force replication OFF for geometry/count tests.** Byte-native (ported) specs
+   auto-ON replication via GraphView's `effectiveReplicate`, which adds
+   key-expansion replica chips (inflates leaf-rect counts, widens round boxes,
+   replaces the single drag target with 11 replicas). Call
+   `setReplicationEnabled(false)` after seeding (it sets the session-toggle so
+   `effectiveReplicate` honours the explicit value). Re-enable per-test where a
+   test specifically needs replicas (e.g. drop-gutters' "skips replica chips").
+4. **Retarget to AES-192** — ONLY for cross-mode-mirror tests (Option D): AES-192
+   stays matrix on both sides until B1.3, so `generic.byte-substitution@1` /
+   `generic.mix-columns@1` + their Sync rows still exist. `setCipher("aes-192")`
+   in `resetAll`. **Do NOT use aes-192 for state-spine tests** (it converts in
+   B1.3 — pure can-kicking; advisor-confirmed).
+5. **Retarget to Serpent** — for state-edge / clean-spine **machinery** tests.
+   Byte-native AES has no clean spine: each internal connection yields BOTH a
+   port-flow state edge (`auxKey:"port-flow"`, from `inferPortEdges`) AND a spine
+   state edge (`auxKey:"state"`), so (from,to,kind) groups duplicate. Serpent is
+   legacy/matrix — clean 1:1 `auxKey:"state"` spine, key-expansion fanout, no
+   port-flow companions. (Used in `graph-bundle.test.ts`.)
+6. **Synthetic graph fixture** — for **pure-layout** spine tests (call
+   `layoutRoot` directly, not the component). `isSpineReplica` nodes are excluded
+   from `isReplica` in `buildReplicaPlacement`, so a hand-built graph (source +
+   root consumer + `kind:"state"` edge + `isSpineReplica:true` replica node) drives
+   the no-lift/source's-old-slot branch. See `syntheticSpineReplicaGraph` in
+   `graph-view-replica-gutter.test.ts`.
+7. **Delete-with-Phase-C-comment** — sanctioned retreat ONLY for **uniquely-AES,
+   component-level** state-spine tests that no cipher can retarget to (Serpent
+   uses the lift branch, DES is Feistel) AND whose machinery is covered elsewhere.
+   Used for two `graph-view.test.tsx` tests (spine-replica-on-spine-row +
+   spine-edge-filter) — covered by the synthetic layout test + Serpent bundle
+   tests. Leave a `// Phase C: re-pin when inferStateEdges retires` note.
+
+**Key facts discovered this session:**
+- Byte-native port-flow carry edges are `kind:"state"` + `auxKey === PORT_FLOW_AUX_KEY`,
+  so they still render as `.graph-edge-state`. Byte-native AES-128 no-trace graph
+  has **52 `.graph-edge-state`** edges (was 41 matrix).
+- ParamEditor needed new `<Match>` blocks for `byte-substitute@1` /
+  `gf-matrix-multiply@1` / `permute@1` — they reuse `SboxEditor`/`MatrixEditor` but
+  **omit the cross-mode sync rows** (Option D false-affordance avoidance).
+- url-share spec-only payload grew ~1.6 KB → ~4.4 KB (more leaves + per-leaf
+  narrationOverride); threshold bumped 4096 → 8192.
+
+**Remaining 21 files (with planned treatment) — RESUME HERE:**
+
+*Ported-dispatch / predicate (expectation updates — byte-native AES IS ported now):*
+- `requires-ported-dispatch.test.ts` — add byte-native aes-128 to the "requires
+  dispatch" expectation (it now does).
+- `runtime-ported-dispatch.test.ts`, `runtime-ported-dispatch-aes-core.test.ts`,
+  `runtime-ported-dispatch-frame-parity.test.ts` — core dispatch tests; update
+  expectations for byte-native AES (`frame.portOutputs` not `stateAfter`; 52
+  frames; ported flag).
+- `frame-port-values.test.ts` — read intermediate values via
+  `frame.portOutputs.get("output")`, not `frame.stateAfter`.
+- `graph-view-replication-force-on-ported.test.tsx` — byte-native aes-128 now
+  triggers auto-ON (was the "AES default-off" control case). Use a still-matrix
+  cipher (aes-192) for the "default OFF" assertion; keep SHA / byte-native AES for
+  "auto-ON". (Memory `project_universal_port_dataflow_proposal.md` describes the
+  4 cases.)
+
+*Bucket B — AES vectors (pin the real FIPS-197 ciphertext `69c4e0d8…`, not just "runs"):*
+- `aes-vectors.test.ts` — rewrite KAT byte-native (bytes + ported, `69c4e0d8…`);
+  the "reorder steps by array swap" test is MOOT under port wiring — drop it or
+  convert to a binding rewire.
+- `aes-decrypt.test.ts` — **MIXED**: encrypt half byte-native (flag + bytes
+  reads), decrypt half **still matrix** (`matrixFromBytes`, `finalState.shape
+  === "matrix4x4-bytes"`). Don't blanket-convert. Round-trip pins plaintext.
+
+*Bucket C — state-spine machinery:*
+- `aux-graph-derivation.test.ts` — structural AES counts ("one node per leaf",
+  node counts) AND state-spine ("40 state edges", "spine crosses round
+  boundaries"). The spine-derivation tests test `inferStateEdges` **deriving from
+  a spec** → can't be synthetic → **retarget those to Serpent** (round groups +
+  spine, "spine crosses round boundaries" fits Serpent better than DES/Speck).
+  The structural-count tests adapt to byte-native counts. Big file — split per-test.
+- `replicate-fanout.test.ts` — fanout count adapts (key-expansion → 11 `fetch-rk`
+  consumers); the "state edge from key-expansion to initial.add-round-key shares
+  its replica" assertion is state-spine → synthetic-or-delete (same split as
+  `graph-view-replica-gutter`).
+
+*Mechanical / functional (per-file, mostly toolbox #1–#3):*
+- `key-schedule-explorer.test.tsx` — `matrixFromBytes` used 10× incl. a
+  `ReturnType<typeof matrixFromBytes>` type union; convert the aes calls, KEEP the
+  import (Serpent/Speck + the type union still need it).
+- `step-description-narration-override.test.tsx` — synthetic stateBefore/stateAfter
+  frames KEEP `matrixFromBytes`; only the aes `runSpec` (line ~68) converts. May
+  also need narration-id remaps (the round leaves changed type).
+- `graph-validation.test.ts` — `matrixFromBytes` in a generic `runSpec(spec,…)`
+  helper; convert the aes path + check validation expectations.
+- `provenance-hover-integration.test.tsx` — matrix CELL provenance overlay; reads
+  `frame.stateAfter as MatrixState`. Byte-native AES has no matrix stateAfter
+  (accepted regression, scope decision #1). **Retarget the AES provenance test to
+  Serpent** (still matrix) — the Serpent test in the file already shows the path.
+- `port-projection-q-gate-9.test.ts` — reads `stateAfter`; byte-native. Inspect;
+  likely retarget or read port outputs.
+- `built-from-palette-roundtrip.test.tsx` — the default spec changed; check what
+  it builds/asserts (palette-drop + save/load roundtrip).
+- `run-history.test.ts` — likely a frame-count / spec-shape expectation.
+- `spec-mutations.test.ts`, `spec-mutations-structure.test.ts` — mutations on the
+  byte-native spec (counts/structure expectations).
+- `spec-delete.test.tsx` — delete-step on byte-native spec.
+- `spec-shapes.test.ts` — pre-Run validation expectations on byte-native spec.
+
+**Process reminders:** re-run each file after editing (second-order failures hide
+behind the dispatch error — counts, `stateAfter` reads, frame pins surface only
+after the flag is added). Commit in logical batches with `--no-verify`. **Don't
+touch the A4 allowlist** (matrix `generic.*` still live on decrypt/192/256/modes).
+When the sweep is green → `npm run check` → a normal (non-`--no-verify`) commit
+closes the red window → then B1.2 (decrypt + the deferred byte-native mirror
+registry entries) / B1.3 (192/256) / B1.4 (modes).
+
 ### Phase C — State retirement falls out (2 slices)
 
 **C1 — Retire legacy state types.** With no executor consuming them,
