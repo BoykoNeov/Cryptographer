@@ -1102,13 +1102,22 @@ const renumberRoundGroup = (
 };
 
 /**
- * Bump the `roundKey.K` auxName on `inv-initial.add-round-key` by 1.
- * Returns the original leaf reference if no bump applies (params shape
- * unexpected, auxName doesn't match the pattern) so reference equality
+ * Bump the `roundKey.K` auxName on the inverse-initial AddRoundKey by 1.
+ * The auxName lives on different leaves in the two AES shapes: the legacy
+ * matrix decrypt carries it on `inv-initial.add-round-key`
+ * (`generic.add-round-key@1`); the byte-native decrypt (Slice B1.2) carries
+ * it on `inv-initial.fetch-rk` (`aux-load-bytes@1`) while the
+ * `inv-initial.add-round-key` xor reads the fetched bytes off a port. This
+ * helper accepts both leaf types and only acts on the one whose params
+ * actually hold a matching `auxName` — passing the byte-native xor leaf (no
+ * auxName) through it is a safe no-op.
+ *
+ * Returns the original leaf reference if no bump applies (wrong type, params
+ * shape unexpected, auxName doesn't match the pattern) so reference equality
  * holds when the surrounding mutation is a no-op.
  */
 const bumpInvInitialAuxName = (leaf: StepLeaf): StepLeaf => {
-  if (leaf.type !== ADD_ROUND_KEY_TYPE) return leaf;
+  if (leaf.type !== ADD_ROUND_KEY_TYPE && leaf.type !== AUX_LOAD_BYTES_TYPE) return leaf;
   const p = leaf.params as { readonly auxName?: unknown };
   if (!p || typeof p.auxName !== "string") return leaf;
   const m = p.auxName.match(/^roundKey\.(\d+)$/);
@@ -1156,6 +1165,53 @@ const bumpKeyExpansion = (spec: CipherSpec): CipherSpec => {
     );
   }
   return { ...spec, steps: newSteps };
+};
+
+/**
+ * Recompute the byte-native decrypt `seedInput` chain across a freshly
+ * assembled list of reverse-direction children (Slice B1.2).
+ *
+ * The forward duplicate recomputes each round's `seedInput` inline during the
+ * renumber walk because the predecessor (`round.{toN-1}`) is a pure function
+ * of the new index. The reverse chain is the dual and DESCENDS — the highest
+ * inverse round seeds from `inv-initial.add-round-key`, every lower one from
+ * the next-HIGHER round's exit — so a renumbered round's correct seed depends
+ * on the post-insert neighbour set, which the per-group renumber walk can't
+ * see. Three positions would otherwise need bespoke handling: the clone, the
+ * renumbered siblings, AND the (unchanged) source round when it WAS the anchor
+ * (duplicating the highest inverse round bumps the clone into the anchor slot,
+ * leaving the source needing to seed from the clone). Recomputing the whole
+ * chain positionally here erases all three special cases.
+ *
+ * No-op for the legacy matrix decrypt: its inverse round groups carry no
+ * `seedInput` (the matrix state threads implicitly), so this returns the same
+ * children reference. Only the byte-native rebuild has `seedInput` to fix.
+ */
+const rewireReverseSeedInputChain = (children: readonly StepNode[]): readonly StepNode[] => {
+  const invRoundIndices = children
+    .filter(
+      (n): n is StepGroup =>
+        n.kind === "group" && n.seedInput !== undefined && INV_ROUND_ID_RE.test(n.id),
+    )
+    .map((g) => Number.parseInt(INV_ROUND_ID_RE.exec(g.id)?.[1] ?? "", 10));
+  if (invRoundIndices.length === 0) return children; // matrix decrypt: nothing to rewire
+  const maxIdx = Math.max(...invRoundIndices);
+
+  let changed = false;
+  const next = children.map((n) => {
+    if (n.kind !== "group" || n.seedInput === undefined) return n;
+    const m = INV_ROUND_ID_RE.exec(n.id);
+    if (!m || !m[1]) return n;
+    const idx = Number.parseInt(m[1], 10);
+    const newSeed =
+      idx === maxIdx
+        ? port("inv-initial.add-round-key", "output")
+        : port(`inv-round.${idx + 1}`, "out");
+    if (newSeed.node === n.seedInput.node && newSeed.port === n.seedInput.port) return n;
+    changed = true;
+    return { ...n, seedInput: newSeed };
+  });
+  return changed ? next : children;
 };
 
 /**
@@ -1267,7 +1323,13 @@ export const duplicateRoundGroup = (
     for (let i = 0; i < sourceIdx; i++) {
       const n = oldChildren[i];
       if (!n) continue;
-      if (n.kind === "step" && n.id === "inv-initial.add-round-key") {
+      // The inverse-initial round-key reference lives on `inv-initial.add-round-key`
+      // (matrix) or `inv-initial.fetch-rk` (byte-native, Slice B1.2). Try the
+      // bump on either — it no-ops on the leaf that doesn't hold the auxName.
+      if (
+        n.kind === "step" &&
+        (n.id === "inv-initial.add-round-key" || n.id === "inv-initial.fetch-rk")
+      ) {
         newChildren.push(bumpInvInitialAuxName(n));
         continue;
       }
@@ -1292,6 +1354,13 @@ export const duplicateRoundGroup = (
     }
   }
 
+  // Byte-native decrypt (reverse) carries an explicit descending `seedInput`
+  // chain that the per-group renumber walk can't fix locally — recompute it
+  // positionally across the assembled children. No-op for matrix decrypt
+  // (no `seedInput`) and for the forward direction (handled inline above).
+  const splicedChildren =
+    direction === "reverse" ? rewireReverseSeedInputChain(newChildren) : newChildren;
+
   // Splice the rebuilt array back into the spec. If source was at the
   // top level (no parent), we replace `spec.steps` directly. Otherwise
   // walk the tree once to replace the parent's children — reusing the
@@ -1299,9 +1368,9 @@ export const duplicateRoundGroup = (
   // child-array transform fits its signature cleanly.
   let specAfterSplice: CipherSpec;
   if (loc.parent === null) {
-    specAfterSplice = { ...spec, steps: newChildren };
+    specAfterSplice = { ...spec, steps: splicedChildren };
   } else {
-    const replaced = replaceParentChildrenByRef(spec, loc.parent, newChildren);
+    const replaced = replaceParentChildrenByRef(spec, loc.parent, splicedChildren);
     if (!replaced) {
       throw new Error("duplicateRoundGroup: internal — could not splice children back into parent");
     }

@@ -54,12 +54,13 @@ const registry = buildDefaultRegistry();
 
 // One row per shipped spec from `defaults` in `stores/spec.ts`, plus
 // SHA-256 (which Slice 2.10 will add to the selector). Expected column
-// pins the gate: SHA-256 and byte-native AES-128 single-block encrypt
-// are `true`; all still-matrix specs are `false`.
+// pins the gate: SHA-256 and byte-native AES-128 single-block (both
+// directions) are `true`; all still-matrix specs are `false`.
 const shippedSpecs: ReadonlyArray<readonly [string, CipherSpec, boolean]> = [
-  // Byte-native (Slice B1) — port-native primitives, no legacy path → true.
+  // Byte-native (Slice B1.1 encrypt / B1.2 decrypt) — port-native primitives,
+  // no legacy path → true.
   ["aes-128 single-block encrypt", aes128Spec, true],
-  ["aes-128 single-block decrypt", aes128DecryptSpec, false],
+  ["aes-128 single-block decrypt", aes128DecryptSpec, true],
   ["aes-128 ecb encrypt", aes128EcbSpec, false],
   ["aes-128 ecb decrypt", aes128EcbDecryptSpec, false],
   ["aes-128 cbc encrypt", aes128CbcSpec, false],

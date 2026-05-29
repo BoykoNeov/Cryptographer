@@ -1,6 +1,6 @@
 /**
  * Byte-native AES round-body construction — scaffolding-suppression Phase B
- * Slice B1.1 (2026-05-29).
+ * Slices B1.1 (encrypt, 2026-05-29) + B1.2 (decrypt, 2026-05-29).
  *
  * The port-native replacement for `aes-round-builder.ts`. Where the legacy
  * builder threaded a `MatrixState` through `generic.{byte-substitution,
@@ -39,7 +39,14 @@
 
 import type { PortBinding, StepDocumentation, StepNode } from "../core/types";
 import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "../core/types";
-import { AES_MIX_MATRIX, AES_SBOX, AES_SHIFT_ROWS } from "./aes-constants";
+import {
+  AES_INV_MIX_MATRIX,
+  AES_INV_SBOX,
+  AES_INV_SHIFT_ROWS,
+  AES_MIX_MATRIX,
+  AES_SBOX,
+  AES_SHIFT_ROWS,
+} from "./aes-constants";
 
 const AES_BLOCK_BYTES = 16;
 
@@ -285,4 +292,190 @@ export function buildAesEncryptBodyNative(rounds: number): readonly StepNode[] {
 /** The cipher exit port: the final round's published `out`. */
 export function aesNativeOutputFrom(rounds: number): PortBinding {
   return port(`round.${rounds}`, "out");
+}
+
+// ─── Inverse (decrypt) narrationOverride docs (FIPS-197 §5.3) ────────────────
+
+const NARR_INV_SUB_BYTES: StepDocumentation = {
+  name: "InvSubBytes",
+  summary: "Substitute every state byte through the inverse AES S-box (FIPS-197 §5.3.2).",
+  detail: `## InvSubBytes
+
+Each of the 16 state bytes \`b\` is replaced by \`invSbox[b]\`, the inverse AES
+S-box. It exactly undoes forward SubBytes: \`invSbox[sbox[x]] = x\`. The same
+\`byte-substitute@1\` executor runs forward and inverse — only the table param
+differs — which is the modularity claim the inverse cipher exists to prove.
+
+Byte-local and position-preserving: output byte \`i\` depends only on input
+byte \`i\`.`,
+  references: ["FIPS-197 §5.3.2 (InvSubBytes)"],
+};
+
+const NARR_INV_SHIFT_ROWS: StepDocumentation = {
+  name: "InvShiftRows",
+  summary: "Cyclically shift state rows right by 0/1/2/3 (FIPS-197 §5.3.1).",
+  detail: `## InvShiftRows
+
+Row \`r\` of the 4×4 state is cyclically shifted **right** by \`r\` bytes —
+the inverse of forward ShiftRows' left shift. Expressed on the flat
+column-major byte array it is the fixed permutation
+\`out[r+4c] = in[r + 4·((c + invShift[r]) mod 4)]\` with
+\`invShift = [0,3,2,1]\` (a left shift by \`[0,3,2,1]\` equals a right shift
+by \`[0,1,2,3]\`).`,
+  references: ["FIPS-197 §5.3.1 (InvShiftRows)"],
+};
+
+const NARR_INV_MIX_COLUMNS: StepDocumentation = {
+  name: "InvMixColumns",
+  summary: "Mix each column by the inverse AES matrix in GF(2⁸) (FIPS-197 §5.3.3).",
+  detail: `## InvMixColumns
+
+Each 4-byte column is multiplied by the inverse of the forward MixColumns
+matrix over GF(2⁸):
+
+\`\`\`
+[14 11 13  9]
+[ 9 14 11 13]
+[13  9 14 11]
+[11 13  9 14]
+\`\`\`
+
+This is the GF(2⁸) inverse of the forward \`{2,3,1,1}\` matrix, so it undoes
+MixColumns exactly. Omitted in the final inverse round (FIPS-197 §5.3).`,
+  references: ["FIPS-197 §5.3.3 (InvMixColumns)", "FIPS-197 §4.2 (GF(2⁸))"],
+};
+
+const NARR_INV_INITIAL_ARK: StepDocumentation = {
+  name: "Initial AddRoundKey (decrypt)",
+  summary: "XOR the ciphertext with the LAST round key before the inverse rounds (FIPS-197 §5.3).",
+  detail: `## Initial AddRoundKey (decrypt)
+
+The inverse cipher consumes the round keys in reverse order, so it begins by
+XORing the ciphertext with \`roundKey.{rounds}\` — the very key the forward
+cipher applied last. Because XOR is its own inverse, this peels off the
+forward cipher's final AddRoundKey and sets up the first inverse round.`,
+  references: ["FIPS-197 §5.3 (Inverse Cipher)"],
+};
+
+// ─── Inverse (decrypt) leaf factories ────────────────────────────────────────
+// Same three port-native primitives as the forward body, with the inverse
+// tables and the FIPS-197 §5.3 leaf ids (`inv-sub-bytes`, `inv-shift-rows`,
+// `inv-mix-columns`). The ids deliberately match the legacy matrix decrypt
+// builder so the duplicate-round mirror (`round.N ↔ inv-round.N`) and the
+// `inv-round.N` layout pins keep resolving. fetch-rk + AddRoundKey reuse the
+// forward factories verbatim (the round-key fetch + 2-way xor are identical).
+
+const invSubBytesLeaf = (p: string, inputBinding: PortBinding): StepNode => ({
+  kind: "step",
+  id: `${p}.inv-sub-bytes`,
+  type: "byte-substitute@1",
+  params: { sbox: [...AES_INV_SBOX] },
+  portInputs: { input: inputBinding },
+  narrationOverride: NARR_INV_SUB_BYTES,
+});
+
+const invShiftRowsLeaf = (p: string, inputBinding: PortBinding): StepNode => ({
+  kind: "step",
+  id: `${p}.inv-shift-rows`,
+  type: "permute@1",
+  params: { indices: shiftRowsIndices(AES_INV_SHIFT_ROWS) },
+  portInputs: { input: inputBinding },
+  narrationOverride: NARR_INV_SHIFT_ROWS,
+});
+
+const invMixColumnsLeaf = (p: string, inputBinding: PortBinding): StepNode => ({
+  kind: "step",
+  id: `${p}.inv-mix-columns`,
+  type: "gf-matrix-multiply@1",
+  params: { matrix: AES_INV_MIX_MATRIX.map((row) => [...row]) },
+  portInputs: { input: inputBinding },
+  narrationOverride: NARR_INV_MIX_COLUMNS,
+});
+
+// ─── Inverse round groups (FIPS-197 §5.3) ────────────────────────────────────
+//
+// Note the order: InvShiftRows → InvSubBytes → AddRoundKey → InvMixColumns.
+// AddRoundKey sits BEFORE InvMixColumns (unlike the forward body's
+// SubBytes → ShiftRows → MixColumns → AddRoundKey). This is intrinsic to the
+// inverse cipher and cannot be hidden behind a "reverse the order"
+// abstraction. The descending seedInput chain (inv-round.{rounds-1} seeds
+// from the initial AddRoundKey; each lower round from the next-HIGHER round's
+// exit) mirrors the reverse round-key consumption order.
+
+/** Full inverse round: InvShiftRows → InvSubBytes → AddRoundKey → InvMixColumns. */
+const decryptRound = (n: number, rounds: number): StepNode => {
+  const p = `inv-round.${n}`;
+  return {
+    kind: "group",
+    id: p,
+    label: `Inverse Round ${n}`,
+    children: [
+      invShiftRowsLeaf(p, port(p, "in")), // carried state injected on port(inv-round.n,"in")
+      invSubBytesLeaf(p, port(`${p}.inv-shift-rows`, "output")),
+      fetchRoundKeyLeaf(p, n),
+      addRoundKeyLeaf(p, port(`${p}.inv-sub-bytes`, "output")),
+      invMixColumnsLeaf(p, port(`${p}.add-round-key`, "output")),
+    ],
+    // Descending chain: the highest inverse round seeds from the initial
+    // AddRoundKey; every lower one from the next-higher round's exit.
+    seedInput:
+      n === rounds - 1
+        ? port("inv-initial.add-round-key", "output")
+        : port(`inv-round.${n + 1}`, "out"),
+    bodyOutput: port(`${p}.inv-mix-columns`, "output"),
+  };
+};
+
+/** Final inverse round (no InvMixColumns): InvShiftRows → InvSubBytes → AddRoundKey. */
+const decryptFinalRound = (): StepNode => {
+  const p = "inv-round.0";
+  return {
+    kind: "group",
+    id: p,
+    label: "Inverse Round 0 (final, no InvMixColumns)",
+    children: [
+      invShiftRowsLeaf(p, port(p, "in")),
+      invSubBytesLeaf(p, port(`${p}.inv-shift-rows`, "output")),
+      fetchRoundKeyLeaf(p, 0),
+      addRoundKeyLeaf(p, port(`${p}.inv-sub-bytes`, "output")),
+    ],
+    seedInput: port("inv-round.1", "out"),
+    bodyOutput: port(`${p}.add-round-key`, "output"),
+  };
+};
+
+/**
+ * Build the byte-native inverse (decrypt) AES body for the given round count.
+ * `rounds = 10` → AES-128, `12` → AES-192, `14` → AES-256.
+ *
+ * Shape: `[ inv-initial.fetch-rk, inv-initial.add-round-key,
+ *           inv-round.{rounds-1}, …, inv-round.1, inv-round.0(final) ]`.
+ * Round keys are consumed in reverse: the initial AddRoundKey reads
+ * `roundKey.{rounds}` and each inverse round `n` reads `roundKey.{n}` down to
+ * `roundKey.0`. The ciphertext arrives on `$input`; the caller sets
+ * `outputFrom = aesNativeDecryptOutputFrom()`.
+ */
+export function buildAesDecryptBodyNative(rounds: number): readonly StepNode[] {
+  return [
+    // Initial AddRoundKey (the LAST round key), at top scope — reads $input.
+    fetchRoundKeyLeaf("inv-initial", rounds),
+    {
+      kind: "step",
+      id: "inv-initial.add-round-key",
+      type: "xor@1",
+      params: { inputCount: 2 },
+      portInputs: {
+        operand0: port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT),
+        operand1: port("inv-initial.fetch-rk", "output"),
+      },
+      narrationOverride: NARR_INV_INITIAL_ARK,
+    },
+    ...Array.from({ length: rounds - 1 }, (_, i) => decryptRound(rounds - 1 - i, rounds)),
+    decryptFinalRound(),
+  ];
+}
+
+/** The inverse cipher exit port: the final inverse round's published `out`. */
+export function aesNativeDecryptOutputFrom(): PortBinding {
+  return port("inv-round.0", "out");
 }

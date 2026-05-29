@@ -28,7 +28,6 @@ import { requiresPortedDispatch } from "@/core/dispatch";
 import { runSpec } from "@/core/runtime";
 import { duplicateRoundGroup, findStep } from "@/core/spec-mutations";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, CipherSpec, IterateGroup, StepGroup, StepNode } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
@@ -224,18 +223,21 @@ describe("duplicateRoundGroup — reverse (AES-128 decrypt single-block)", () =>
     }
     expect(findGroup(spec, "inv-round.11")).toBeNull();
 
+    // Byte-native (Slice B1.2): the round key index lives on the
+    // `aux-load-bytes@1` fetch-rk leaf (AddRoundKey is an `xor@1` reading the
+    // fetched bytes off a port, with no auxName), so assert via `*.fetch-rk`.
     // The original inv-round.2 stays as inv-round.2, reading roundKey.2.
-    expect(auxNameOf(spec, "inv-round.2.add-round-key")).toBe("roundKey.2");
+    expect(auxNameOf(spec, "inv-round.2.fetch-rk")).toBe("roundKey.2");
     // The clone (inv-round.3) reads roundKey.3.
-    expect(auxNameOf(spec, "inv-round.3.add-round-key")).toBe("roundKey.3");
+    expect(auxNameOf(spec, "inv-round.3.fetch-rk")).toBe("roundKey.3");
     // What was inv-round.3 is now inv-round.4 and reads roundKey.4.
-    expect(auxNameOf(spec, "inv-round.4.add-round-key")).toBe("roundKey.4");
+    expect(auxNameOf(spec, "inv-round.4.fetch-rk")).toBe("roundKey.4");
     // What was inv-round.9 (the highest in 10-round AES) is now inv-round.10.
-    expect(auxNameOf(spec, "inv-round.10.add-round-key")).toBe("roundKey.10");
+    expect(auxNameOf(spec, "inv-round.10.fetch-rk")).toBe("roundKey.10");
     // inv-round.0 / inv-round.1 are untouched (they have lower indexes
     // than source).
-    expect(auxNameOf(spec, "inv-round.0.add-round-key")).toBe("roundKey.0");
-    expect(auxNameOf(spec, "inv-round.1.add-round-key")).toBe("roundKey.1");
+    expect(auxNameOf(spec, "inv-round.0.fetch-rk")).toBe("roundKey.0");
+    expect(auxNameOf(spec, "inv-round.1.fetch-rk")).toBe("roundKey.1");
 
     // Rename map covers the shifted earlier siblings.
     expect(renames.get("inv-round.3")).toBe("inv-round.4");
@@ -243,10 +245,13 @@ describe("duplicateRoundGroup — reverse (AES-128 decrypt single-block)", () =>
     expect(renames.get("inv-round.3.inv-sub-bytes")).toBe("inv-round.4.inv-sub-bytes");
   });
 
-  it("bumps inv-initial.add-round-key auxName roundKey.{rounds} → roundKey.{rounds+1}", () => {
+  it("bumps inv-initial.fetch-rk auxName roundKey.{rounds} → roundKey.{rounds+1}", () => {
     const { spec } = duplicateRoundGroup(aes128DecryptSpec, "inv-round.2", "reverse");
     // 10 rounds → 11, so inv-initial reads roundKey.11 after the bump.
-    expect(auxNameOf(spec, "inv-initial.add-round-key")).toBe("roundKey.11");
+    // Byte-native (B1.2): the LAST round key is fetched on `inv-initial.fetch-rk`
+    // (`aux-load-bytes@1`); the xor `inv-initial.add-round-key` reads it off a
+    // port and carries no auxName.
+    expect(auxNameOf(spec, "inv-initial.fetch-rk")).toBe("roundKey.11");
   });
 
   it("bumps key-expansion's rounds + morphs type to @2 in reverse mode too", () => {
@@ -274,15 +279,19 @@ describe("duplicateRoundGroup — rename map exhaustiveness", () => {
 
   it("reverse: contains every renamed inv-round + inv-round children, but NOT inv-initial leaf", () => {
     const { renames } = duplicateRoundGroup(aes128DecryptSpec, "inv-round.3", "reverse");
-    // Affected: inv-round.4..inv-round.9 (each has 4 children).
+    // Affected: inv-round.4..inv-round.9 (each a FULL byte-native inverse round
+    // with FIVE children: InvShiftRows, InvSubBytes, fetch-rk, AddRoundKey,
+    // InvMixColumns — only inv-round.0, the final round, drops InvMixColumns,
+    // and it isn't renumbered).
     let expectedEntries = 0;
     for (let n = 4; n <= 9; n++) {
-      expectedEntries += 1 + 4;
+      expectedEntries += 1 + 5;
     }
-    // inv-initial.add-round-key has its auxName bumped (a PARAM change),
-    // but its ID doesn't change — so it's correctly absent from the
-    // rename map. The map only tracks layout-relevant id rewrites.
+    // inv-initial.fetch-rk has its auxName bumped (a PARAM change), but its ID
+    // doesn't change — so it's correctly absent from the rename map. The map
+    // only tracks layout-relevant id rewrites.
     expect(renames.size).toBe(expectedEntries);
+    expect(renames.get("inv-initial.fetch-rk")).toBeUndefined();
     expect(renames.get("inv-initial.add-round-key")).toBeUndefined();
   });
 });
@@ -338,14 +347,49 @@ describe("duplicateRoundGroup — end-to-end round-trip on a duplicated AES-128"
     const ciphertextBytes = encryptTrace.finalState.bytes;
     expect(ciphertextBytes.length).toBe(16);
 
-    // Run the decrypt (still matrix until Slice B1.2) on the ciphertext.
+    // Run the decrypt on the ciphertext. Byte-native (Slice B1.2): the
+    // duplicated inverse round body uses port-native primitives and the
+    // descending seedInput chain, so it requires ported dispatch and yields a
+    // flat BytesState.
     const decryptTrace = runSpec(decryptSpec, registry, {
-      initialState: matrixFromBytes(ciphertextBytes),
+      initialState: makeBytesState(ciphertextBytes),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
+      portedDispatchEnabled: requiresPortedDispatch(decryptSpec, registry),
     });
-    expect(decryptTrace.finalState.shape).toBe("matrix4x4-bytes");
-    if (decryptTrace.finalState.shape !== "matrix4x4-bytes") return;
+    expect(decryptTrace.finalState.shape).toBe("bytes");
+    if (decryptTrace.finalState.shape !== "bytes") return;
     expect(hexFromBytes(decryptTrace.finalState.bytes)).toBe(plaintextHex);
+  });
+
+  it("round-trips when the HIGHEST round is duplicated (anchor-repoint + auxName bump)", () => {
+    // Duplicating round.9 (encrypt) mirrors to inv-round.9 (decrypt) — the
+    // highest/anchor inverse round, which seeds from the initial AddRoundKey.
+    // The reverse path must (a) bump `inv-initial.fetch-rk` roundKey.10 →
+    // roundKey.11 and (b) repoint the unchanged source round to seed from the
+    // clone that took over the anchor slot. A structure-only test passes while
+    // both are broken; only this byte-equal round-trip catches it (the
+    // batch-3 lesson: structure dumps say "looks right", the cipher computes
+    // wrong).
+    const plaintextHex = "00112233445566778899aabbccddeeff";
+    const keyHex = "000102030405060708090a0b0c0d0e0f";
+    const { spec: encryptSpec } = duplicateRoundGroup(aes128Spec, "round.9", "forward");
+    const { spec: decryptSpec } = duplicateRoundGroup(aes128DecryptSpec, "inv-round.9", "reverse");
+    const registry = buildDefaultRegistry();
+
+    const ct = runSpec(encryptSpec, registry, {
+      initialState: makeBytesState(bytesFromHex(plaintextHex)),
+      initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
+      portedDispatchEnabled: requiresPortedDispatch(encryptSpec, registry),
+    });
+    if (ct.finalState.shape !== "bytes") throw new Error("bad encrypt shape");
+
+    const pt = runSpec(decryptSpec, registry, {
+      initialState: makeBytesState(ct.finalState.bytes),
+      initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
+      portedDispatchEnabled: requiresPortedDispatch(decryptSpec, registry),
+    });
+    if (pt.finalState.shape !== "bytes") throw new Error("bad decrypt shape");
+    expect(hexFromBytes(pt.finalState.bytes)).toBe(plaintextHex);
   });
 
   it("the duplicated spec computes a DIFFERENT ciphertext from canonical AES-128", () => {

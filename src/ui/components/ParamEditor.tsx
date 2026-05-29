@@ -379,15 +379,15 @@ const ShiftsBlock = (props: BlockProps) => {
 
 // ─── Byte-native AES round primitives (Slice B1 — scaffolding-suppression
 // Phase B) ───────────────────────────────────────────────────────────────
-// These reuse the shared SboxEditor / MatrixEditor and the ApplyAllRow but
-// deliberately OMIT the cross-mode sync rows SbxBlock / MixBlock carry. The
-// byte-native encrypt body's decrypt counterpart is still the matrix
-// `generic.*` step until B1.2/B1.4, and `syncSboxInverseToCounterpart` /
-// `syncMixColumnsInverseToCounterpart` key on a SINGLE stepType — so a sync
-// button here would write to zero `byte-substitute@1` / `gf-matrix-multiply@1`
-// steps on the matrix decrypt side: a button that silently does nothing. The
-// mirror affordance (with its registry entry) ships in B1.2 once both modes
-// share the byte-native type.
+// These reuse the shared SboxEditor / MatrixEditor and the ApplyAllRow, and
+// — as of Slice B1.2, when AES-128 decrypt also went byte-native — carry the
+// SAME cross-mode sync rows SbxBlock / MixBlock carry. Both modes now share
+// the byte-native `byte-substitute@1` / `gf-matrix-multiply@1` type, so the
+// single-stepType `syncSboxInverseToCounterpart` /
+// `syncMixColumnsInverseToCounterpart` broadcast lands on the real decrypt
+// counterpart (in B1.1, when only encrypt was byte-native, the sync would
+// have written to zero steps — a false affordance — so the rows were
+// deferred to B1.2 along with their `cross-mode-mirror-registry.ts` entries).
 
 // SubBytes on a flat 16-byte array. Same `params.sbox` (256 entries) as the
 // matrix `generic.byte-substitution@1`, so the SboxEditor renders unchanged.
@@ -412,6 +412,11 @@ const ByteSubstituteBlock = (props: BlockProps) => {
         matchingCount={props.matchingCount}
         label="S-box"
       />
+      {/* Class-2 (inverse) cross-mode mirror — encrypt holds AES_SBOX,
+          decrypt holds AES_INV_SBOX. Both AES-128 modes are byte-native as
+          of Slice B1.2, so the same-type sync writes to the real decrypt
+          `byte-substitute@1` leaves. */}
+      <SyncInverseRow currentSbox={sbox()} stepType={props.step.type} />
     </>
   );
 };
@@ -439,6 +444,10 @@ const GfMatrixMultiplyBlock = (props: BlockProps) => {
         matchingCount={props.matchingCount}
         label="MixColumns matrix"
       />
+      {/* Class-2 (inverse) cross-mode mirror — encrypt holds AES_MIX_MATRIX,
+          decrypt holds its GF(2⁸) inverse. Both AES-128 modes byte-native as
+          of Slice B1.2 (see ByteSubstituteBlock above). */}
+      <SyncMixColumnsRow currentMatrix={matrix()} stepType={props.step.type} />
     </>
   );
 };

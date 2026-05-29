@@ -49,7 +49,6 @@ import {
 import { runSpec } from "@/core/runtime";
 import { duplicateRoundGroup, findStep } from "@/core/spec-mutations";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, CipherSpec, StepNode } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
@@ -129,11 +128,14 @@ describe("duplicate-round save/load — run-correctness survives round-trip", ()
     if (encryptTrace.finalState.shape !== "bytes") throw new Error("bytes expected");
     const ciphertext = encryptTrace.finalState.bytes;
 
+    // Decrypt is byte-native (Slice B1.2): flat BytesState in/out, ported
+    // dispatch required, survives the save/load round-trip.
     const decryptTrace = runSpec(decryptParse.doc.spec, registry, {
-      initialState: matrixFromBytes(ciphertext),
+      initialState: makeBytesState(ciphertext),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(KEY_HEX)]]),
+      portedDispatchEnabled: requiresPortedDispatch(decryptParse.doc.spec, registry),
     });
-    if (decryptTrace.finalState.shape !== "matrix4x4-bytes") throw new Error("matrix expected");
+    if (decryptTrace.finalState.shape !== "bytes") throw new Error("bytes expected");
     expect(hexFromBytes(decryptTrace.finalState.bytes)).toBe(PLAINTEXT_HEX);
   });
 });

@@ -176,3 +176,43 @@ describe("syncMixColumnsInverseToCounterpart — cross-slot inverse-matrix mirro
     }
   });
 });
+
+// ─── Byte-native AES-128 (Slice B1.2) — MixColumns is `gf-matrix-multiply@1` ─
+// Both AES-128 modes are byte-native now, so the SAME mutator that mirrors the
+// matrix `generic.mix-columns@1` type also mirrors the port-native
+// `gf-matrix-multiply@1` type end-to-end — the behavior the B1.2
+// cross-mode-mirror registry entry + ParamEditor SyncMixColumnsRow promise.
+describe("syncMixColumnsInverseToCounterpart — byte-native gf-matrix-multiply@1 (default AES-128)", () => {
+  const resetByteNative = (): void => {
+    __resetPaddingForTests();
+    __resetSpecForTests();
+    __resetCipherForTests();
+    __resetCipherModeForTests();
+    __resetLayoutsForTests();
+    // Leave the cipher at the AES-128 default — byte-native on BOTH modes.
+  };
+  beforeEach(resetByteNative);
+  afterEach(resetByteNative);
+
+  it("KAT integration — gfMatInverse4x4(AES_MIX_MATRIX) lands AES_INV_MIX_MATRIX on every decrypt gf-matrix-multiply@1 leaf", () => {
+    const inverse = gfMatInverse4x4(AES_MIX_MATRIX);
+    syncMixColumnsInverseToCounterpart("gf-matrix-multiply@1", inverse);
+
+    const decryptMatrices = collectMatrices(
+      useCipherSpecsByMode()().decrypt,
+      "gf-matrix-multiply@1",
+    );
+    expect(decryptMatrices.length).toBeGreaterThan(0);
+    for (const m of decryptMatrices) {
+      expect(m).toEqual(AES_INV_MIX_MATRIX.map((row) => [...row]));
+    }
+    // The active (encrypt) slot still holds the forward matrix.
+    const encryptMatrices = collectMatrices(
+      useCipherSpecsByMode()().encrypt,
+      "gf-matrix-multiply@1",
+    );
+    for (const m of encryptMatrices) {
+      expect(m).toEqual(AES_MIX_MATRIX.map((row) => [...row]));
+    }
+  });
+});

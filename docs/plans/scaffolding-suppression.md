@@ -827,6 +827,79 @@ byte-native AES-128 forward; (6) then B1.2 decrypt, B1.3 192/256, B1.4 modes
 A4 allowlist removals). Original full B1 plan: `~/.claude/plans/tidy-honking-
 stearns.md`.
 
+#### Session 5 (2026-05-29) — B1.2 (byte-native AES-128 DECRYPT) DONE; gate GREEN
+
+Byte-native AES-128 decrypt shipped. **Full `npm run check` GREEN (2519 tests,
+213 files, vite build clean).** No A4 allowlist change — the matrix `generic.*`
+round steps + `load-block`/`store-block` are still consumed by AES-192/256
+(both modes) + ECB/CBC, so the offender/legacy sets are unchanged (the contract
+test confirms set-equality). One commit closes B1.2.
+
+**What landed:**
+- **`buildAesDecryptBodyNative(rounds)` + `aesNativeDecryptOutputFrom()`** in
+  `aes-round-builder-native.ts` (mirrors the encrypt builder). Inverse round =
+  InvShiftRows → InvSubBytes → AddRoundKey → **InvMixColumns** (AddRoundKey
+  BEFORE InvMixColumns, intrinsic to §5.3); final `inv-round.0` drops
+  InvMixColumns. Inverse leaf factories reuse the 3 primitives with the inverse
+  tables (`AES_INV_SBOX`, `shiftRowsIndices(AES_INV_SHIFT_ROWS)`,
+  `AES_INV_MIX_MATRIX`) + inverse narrationOverride docs. Reuses
+  `fetchRoundKeyLeaf`/`addRoundKeyLeaf` verbatim. **Leaf ids match the legacy
+  matrix decrypt** (`inv-round.N.{inv-shift-rows,inv-sub-bytes,add-round-key,
+  inv-mix-columns}` + byte-native `fetch-rk`, `inv-initial.{fetch-rk,
+  add-round-key}`) so the duplicate-round mirror + `inv-round.N` layout pins
+  keep resolving.
+- **Descending seedInput chain:** the highest inverse round (`inv-round.{rounds-1}`)
+  seeds from `inv-initial.add-round-key`; each lower one from `inv-round.{n+1}`'s
+  `out`. `spec.outputFrom = port("inv-round.0","out")`.
+- **`aes-128-decrypt.ts` rebuilt byte-native** (`stateShape:"bytes"`, plaintext
+  shape `"bytes"`, `outputFrom`). KAT byte-equal (decrypt §C.1 → plaintext, 52
+  frames) + round-trip pinned in `aes-decrypt.test.ts`.
+- **Cross-mode mirror entries + buttons (the deferred B1.1 descope):** added
+  `{byte-substitute@1,sbox,inverse}` + `{gf-matrix-multiply@1,matrix,inverse}`
+  to `cross-mode-mirror-registry.ts`; wired `SyncInverseRow`/`SyncMixColumnsRow`
+  into `ByteSubstituteBlock`/`GfMatrixMultiplyBlock` (the same-type mutators now
+  land on the real byte-native decrypt counterpart). Kept the old `generic.*`
+  entries (still live on 192/256 + ECB/CBC). Coverage test gained
+  `byte-substitute@1`/`gf-matrix-multiply@1` `setupForEntry` branches (default
+  AES-128, no `setCipher`). Functional pins added to
+  `sync-sbox-inverse`/`sync-mix-columns-store` (the byte-native broadcast
+  end-to-end, beyond button presence).
+
+**Two duplicate-round REVERSE-path fixes the advisor flagged (both load-bearing,
+verified by a throwaway round-trip probe — `round.5` mid + `round.9` highest):**
+1. **`bumpInvInitialAuxName` silently no-op'd on byte-native.** It guarded
+   `type !== ADD_ROUND_KEY_TYPE`, but byte-native carries the LAST round key on
+   `inv-initial.fetch-rk` (`aux-load-bytes@1`), not on the `xor@1`
+   `inv-initial.add-round-key`. Extended the helper to accept
+   `ADD_ROUND_KEY_TYPE || AUX_LOAD_BYTES_TYPE` (no-ops on the leaf without an
+   auxName) + matched both `inv-initial.{add-round-key,fetch-rk}` ids in the
+   reverse loop. Without this the inv-initial kept reading `roundKey.10` after a
+   duplicate → wrong decrypt.
+2. **Reverse seedInput chain** can't be fixed per-group in the renumber walk
+   (the predecessor depends on the post-insert neighbour set, and duplicating
+   the HIGHEST inverse round leaves the unchanged SOURCE round needing to seed
+   from the clone that took over the anchor slot). New
+   `rewireReverseSeedInputChain(children)` recomputes the whole descending chain
+   positionally (highest ← inv-initial; each other ← `inv-round.{idx+1}`) after
+   assembly; no-ops for matrix decrypt (no `seedInput`). The
+   `round.9`/`inv-round.9` round-trip is pinned in `duplicate-round-mutator.test.ts`.
+
+**Sweep (8 files, all GREEN, mirrors the Session-4 criterion):** `aes-decrypt`
+(shape→bytes, frame 41→52, bytes+ported), `requires-ported-dispatch`
+(aes-128 decrypt false→**true**), `runtime-ported-dispatch-frame-parity`
+(aes-128 decrypt row REMOVED — byte-native has no legacy path, like the encrypt
+row in B1.1; 22→20 rows), `graph-validation` (decrypt → `runPorted`),
+`spec-mutations-padding` (decrypt branch now appends ONLY unpad + repoints
+`outputFrom`, no store-block — the forward-compat branch from B1.1 batch 1 is
+now exercised), `duplicate-round-{mutator,store,save-load}` (auxName assertions
+`*.add-round-key` → `*.fetch-rk`, child count 4→5, round-trip runs byte-native).
+
+**Next: B1.3** (AES-192/256 byte-native enc+dec — drains the aes-192 retargets
+enumerated in Session 4 + the A4 allowlist 192/256 entries) → **B1.4** (ECB/CBC
+modes: iterate `seedInput`/`outputPorts`, `resolveBinding` extraction, remaining
+A4 + LEGACY_CONTRACT allowlist removals). The B1.4 endpoint-pill vs `$input`
+collision (Session 4 FOLLOW-UP) still has its hard deadline there.
+
 #### Session 4 (2026-05-29) — fixture SWEEP COMPLETE; suite GREEN; B1 core DONE
 
 The sweep is finished. Started session at 89 failing / 21 files; ended at

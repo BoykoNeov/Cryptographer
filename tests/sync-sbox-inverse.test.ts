@@ -162,3 +162,39 @@ describe("syncSboxInverseToCounterpart — cross-slot value mirror", () => {
     }
   });
 });
+
+// ─── Byte-native AES-128 (Slice B1.2) — SubBytes is `byte-substitute@1` ──────
+// Both AES-128 modes are byte-native now, so the SAME mutator that mirrors the
+// matrix `generic.byte-substitution@1` type also mirrors the port-native
+// `byte-substitute@1` type end-to-end. This is the behavior the B1.2
+// cross-mode-mirror registry entry + ParamEditor SyncInverseRow promise: a
+// functional pin beyond the button-presence coverage test.
+describe("syncSboxInverseToCounterpart — byte-native byte-substitute@1 (default AES-128)", () => {
+  const resetByteNative = (): void => {
+    __resetPaddingForTests();
+    __resetSpecForTests();
+    __resetCipherForTests();
+    __resetCipherModeForTests();
+    __resetLayoutsForTests();
+    // Leave the cipher at the AES-128 default — byte-native on BOTH modes.
+  };
+  beforeEach(resetByteNative);
+  afterEach(resetByteNative);
+
+  it("active=encrypt mirrors the inverse onto every decrypt byte-substitute@1 leaf", () => {
+    const inverse = invertSbox(AES_SBOX);
+    syncSboxInverseToCounterpart("byte-substitute@1", inverse);
+
+    const decryptTables = collectSboxParams(useCipherSpecsByMode()().decrypt, "byte-substitute@1");
+    expect(decryptTables.length).toBeGreaterThan(0);
+    for (const table of decryptTables) {
+      // invertSbox(AES_SBOX) === AES_INV_SBOX (the canonical decrypt table).
+      expect(table).toEqual([...AES_INV_SBOX]);
+    }
+    // The active (encrypt) slot still holds the forward table.
+    const encryptTables = collectSboxParams(useCipherSpecsByMode()().encrypt, "byte-substitute@1");
+    for (const table of encryptTables) {
+      expect(table).toEqual([...AES_SBOX]);
+    }
+  });
+});

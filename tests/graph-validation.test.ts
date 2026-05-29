@@ -115,8 +115,8 @@ const runBytes = (spec: typeof aes128EcbSpec, key: string, pt: string): Trace =>
   });
 
 // Byte-native AES-128 (Slice B1): bytes state + ported dispatch (port-native
-// primitives have no legacy executor). Single-block encrypt only — decrypt and
-// 192/256 stay matrix (`runMatrix`) until Slices B1.2 / B1.3.
+// primitives have no legacy executor). Both directions of single-block AES-128
+// (encrypt B1.1, decrypt B1.2) — 192/256 stay matrix (`runMatrix`) until B1.3.
 const runPorted = (spec: typeof aes128Spec, key: string, pt: string): Trace =>
   runSpec(spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(pt)),
@@ -146,10 +146,11 @@ describe("validateGraph — zero warnings on shipped specs", () => {
   });
 
   it("AES-128 decrypt", () => {
-    // Use a trivially-valid ciphertext+key pair; the SPECIFIC ciphertext
-    // doesn't matter — only that the run completes and the graph derives.
+    // Byte-native (Slice B1.2). Use a trivially-valid ciphertext+key pair; the
+    // SPECIFIC ciphertext doesn't matter — only that the run completes and the
+    // graph derives.
     const ct = "69c4e0d86a7b0430d8cdb78070b4c55a";
-    const trace = runMatrix(aes128DecryptSpec, AES128_KEY, ct);
+    const trace = runPorted(aes128DecryptSpec, AES128_KEY, ct);
     const graph = deriveAuxGraph(trace, aes128DecryptSpec);
     expect(validateGraph(graph, trace)).toEqual([]);
   });

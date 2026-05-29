@@ -120,6 +120,35 @@ export const CROSS_MODE_MIRROR_ENTRIES: readonly CrossModeMirrorEntry[] = [
     mirrorClass: "inverse",
   },
 
+  // Byte-native AES SubBytes (scaffolding-suppression Phase B, Slice B1.2) —
+  // class-2 (inverse). The port-native rebuild of AES-128 single-block
+  // (encrypt: Slice B1.1; decrypt: B1.2) carries SubBytes on the
+  // `byte-substitute@1` primitive instead of the matrix
+  // `generic.byte-substitution@1` lift. Encrypt holds AES_SBOX; decrypt holds
+  // AES_INV_SBOX. Same `params.sbox` shape and same `syncSboxInverseToCounterpart`
+  // mutator as the matrix entry — now that BOTH modes share the byte-native
+  // type, the same-type broadcast lands on the decrypt counterpart (in B1 the
+  // encrypt-only conversion would have made this a no-op sync button, so the
+  // entry was deferred to B1.2). The matrix entry above stays for AES-192/256
+  // (both modes) + ECB/CBC, which are still matrix until B1.3/B1.4.
+  {
+    stepType: "byte-substitute@1",
+    paramKey: "sbox",
+    mirrorClass: "inverse",
+  },
+
+  // Byte-native AES MixColumns (Slice B1.2) — class-2 (inverse). Encrypt holds
+  // AES_MIX_MATRIX; decrypt holds its GF(2⁸) inverse AES_INV_MIX_MATRIX
+  // (FIPS-197 §5.3.3). Same `params.matrix` shape and
+  // `syncMixColumnsInverseToCounterpart` mutator as the matrix
+  // `generic.mix-columns@1` entry above. Deferred from B1 for the same
+  // both-modes-share-the-type reason as the SubBytes entry.
+  {
+    stepType: "gf-matrix-multiply@1",
+    paramKey: "matrix",
+    mirrorClass: "inverse",
+  },
+
   // ─── Future entries land here ──────────────────────────────────────
   //
   // Speck has no entries by design — Speck is symmetric across modes by

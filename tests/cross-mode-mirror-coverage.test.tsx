@@ -154,6 +154,18 @@ const setupForEntry = (entry: CrossModeMirrorEntry): string => {
       setCipher("serpent-128");
       return "round.1.sub-bytes";
     }
+    case "byte-substitute@1": {
+      // Byte-native AES SubBytes (Slice B1.2). AES-128 single-block is the
+      // app default and byte-native on BOTH modes now, so `round.1.sub-bytes`
+      // is `byte-substitute@1` with no `setCipher` needed. The sync writes to
+      // the byte-native decrypt counterpart.
+      return "round.1.sub-bytes";
+    }
+    case "gf-matrix-multiply@1": {
+      // Byte-native AES MixColumns (Slice B1.2). Default AES-128, round 1
+      // always has a MixColumns leaf (every round except the final).
+      return "round.1.mix-columns";
+    }
     default:
       throw new Error(
         `cross-mode-mirror-coverage: unhandled stepType ${entry.stepType} — add a setup branch for it`,

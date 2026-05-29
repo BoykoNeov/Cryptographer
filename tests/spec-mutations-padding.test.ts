@@ -98,13 +98,25 @@ describe("applyPaddingScheme(spec, encrypt, 'pkcs7')", () => {
 });
 
 describe("applyPaddingScheme(spec, decrypt, 'pkcs7')", () => {
-  it("appends store-block and pkcs7-unpad in that order", () => {
+  it("appends ONLY pkcs7-unpad (no store-block, byte-native B1.2)", () => {
     const result = applyPaddingScheme(aes128DecryptSpec, "decrypt", "pkcs7");
     const types = topLevelLeafTypes(result);
-    expect(types[types.length - 2]).toBe("generic.store-block@1");
+    // Byte-native decrypt: no bytes↔matrix bridge (store-block), the unpad is
+    // spliced directly onto the port graph at the tail.
+    expect(types).not.toContain("generic.store-block@1");
     expect(types[types.length - 1]).toBe("generic.pkcs7-unpad@1");
-    // Input shape stays matrix (ciphertext is one block).
-    expect(result.inputs.plaintext.shape).toBe("matrix4x4-bytes");
+    // Shape stays bytes (byte-native carries a flat 16-byte block).
+    expect(result.inputs.plaintext.shape).toBe("bytes");
+  });
+
+  it("wires the unpad to read the old cipher exit and repoints outputFrom to it", () => {
+    // The byte-native branch appends an unpad reading the spec's prior
+    // `outputFrom` (the final inverse round's `out` port) on its `state` input
+    // port, then moves `outputFrom` onto the unpad's `state` output port.
+    const result = applyPaddingScheme(aes128DecryptSpec, "decrypt", "pkcs7");
+    const unpad = findFirstLeaf(result, "generic.pkcs7-unpad@1");
+    expect(unpad?.portInputs).toEqual({ state: { node: "inv-round.0", port: "out" } });
+    expect(result.outputFrom).toEqual({ node: "pkcs7-unpad", port: "state" });
   });
 });
 
@@ -131,11 +143,14 @@ describe("applyPaddingScheme idempotency", () => {
     const decryptPadded = applyPaddingScheme(aes128DecryptSpec, "decrypt", "pkcs7");
     // Strip and re-apply as encrypt — overlay leaves move from tail to head.
     // (This is what happens internally when the user flips encrypt↔decrypt
-    // and the active padding scheme is re-applied.)
+    // and the active padding scheme is re-applied.) Byte-native (B1.2): the
+    // unpad at the tail is stripped (and `outputFrom` restored to the canonical
+    // cipher exit), then a pad is prepended at the head — no load/store-block
+    // bridge in either direction.
     const reApplied = applyPaddingScheme(decryptPadded, "encrypt", "pkcs7");
     const types = topLevelLeafTypes(reApplied);
     expect(types[0]).toBe("generic.pkcs7-pad@1");
-    expect(types[1]).toBe("generic.load-block@1");
+    expect(types).not.toContain("generic.load-block@1");
     expect(types).not.toContain("generic.store-block@1");
     expect(types).not.toContain("generic.pkcs7-unpad@1");
   });
@@ -163,12 +178,12 @@ describe("applyPaddingScheme(spec, encrypt, 'zero-pad')", () => {
 });
 
 describe("applyPaddingScheme(spec, decrypt, 'zero-pad')", () => {
-  it("appends store-block and zero-unpad in that order", () => {
+  it("appends ONLY zero-unpad (no store-block, byte-native B1.2)", () => {
     const result = applyPaddingScheme(aes128DecryptSpec, "decrypt", "zero-pad");
     const types = topLevelLeafTypes(result);
-    expect(types[types.length - 2]).toBe("generic.store-block@1");
+    expect(types).not.toContain("generic.store-block@1");
     expect(types[types.length - 1]).toBe("generic.zero-unpad@1");
-    expect(result.inputs.plaintext.shape).toBe("matrix4x4-bytes");
+    expect(result.inputs.plaintext.shape).toBe("bytes");
   });
 });
 
@@ -194,11 +209,12 @@ describe("applyPaddingScheme(spec, encrypt, 'iso7816-4')", () => {
 });
 
 describe("applyPaddingScheme(spec, decrypt, 'iso7816-4')", () => {
-  it("appends store-block and iso7816-4-unpad in that order", () => {
+  it("appends ONLY iso7816-4-unpad (no store-block, byte-native B1.2)", () => {
     const result = applyPaddingScheme(aes128DecryptSpec, "decrypt", "iso7816-4");
     const types = topLevelLeafTypes(result);
-    expect(types[types.length - 2]).toBe("generic.store-block@1");
+    expect(types).not.toContain("generic.store-block@1");
     expect(types[types.length - 1]).toBe("generic.iso7816-4-unpad@1");
+    expect(result.inputs.plaintext.shape).toBe("bytes");
   });
 });
 
