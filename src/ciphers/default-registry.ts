@@ -34,6 +34,11 @@ import {
 import { auxXor, auxXorDoc, auxXorMeta, auxXorPortContract } from "../steps/aux-xor";
 import { byteSlice, byteSliceDoc, byteSlicePortContract } from "../steps/byte-slice";
 import {
+  byteSubstitute,
+  byteSubstituteDoc,
+  byteSubstitutePortContract,
+} from "../steps/byte-substitute";
+import {
   byteSubstitution,
   byteSubstitutionDoc,
   byteSubstitutionMeta,
@@ -103,6 +108,11 @@ import {
   feistelToyAddKPortContract,
 } from "../steps/feistel-toy-add-k";
 import {
+  gfMatrixMultiply,
+  gfMatrixMultiplyDoc,
+  gfMatrixMultiplyPortContract,
+} from "../steps/gf-matrix-multiply";
+import {
   iso78164Pad,
   iso78164PadDoc,
   iso78164PadMeta,
@@ -134,6 +144,7 @@ import {
 } from "../steps/mix-columns";
 import { not, notDoc, notPortContract } from "../steps/not";
 import { padWithByte, padWithByteDoc, padWithBytePortContract } from "../steps/pad-with-byte";
+import { permute, permuteDoc, permutePortContract } from "../steps/permute";
 import { pkcs7Pad, pkcs7PadDoc, pkcs7PadMeta, pkcs7PadPortContract } from "../steps/pkcs7-pad";
 import {
   pkcs7Unpad,
@@ -872,6 +883,33 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: shiftBitsRight,
     shape: shiftBitsRightPortContract,
     doc: shiftBitsRightDoc,
+  });
+  // ─── AES round primitives (Slice B1.1 — scaffolding-suppression Phase B) ─
+  // Byte-native replacements for the matrix round body. `byte-substitute@1`
+  // (SubBytes), `permute@1` (ShiftRows), `gf-matrix-multiply@1` (MixColumns)
+  // each do the identical math the legacy `generic.byte-substitution@1` /
+  // `generic.shift-rows@1` / `generic.mix-columns@1` did, but on a flat
+  // `Uint8Array` with `layout:"raw"` ports — so they stay off the A4
+  // `NON_BYTES_ALLOWLIST` (the matrix lifts get removed from it when ECB/CBC
+  // are converted in B1.4). AddRoundKey needs no new step type — it's
+  // `aux-load-bytes@1` (roundKey.N) + `xor@1`.
+  r.register("byte-substitute@1", {
+    kind: "ported",
+    executor: byteSubstitute,
+    shape: byteSubstitutePortContract,
+    doc: byteSubstituteDoc,
+  });
+  r.register("permute@1", {
+    kind: "ported",
+    executor: permute,
+    shape: permutePortContract,
+    doc: permuteDoc,
+  });
+  r.register("gf-matrix-multiply@1", {
+    kind: "ported",
+    executor: gfMatrixMultiply,
+    shape: gfMatrixMultiplyPortContract,
+    doc: gfMatrixMultiplyDoc,
   });
   // ─── Port-native bridges (Slice 2.6b — universal-port plan) ────────────
   // Three port-native primitives that bridge between the port-native
