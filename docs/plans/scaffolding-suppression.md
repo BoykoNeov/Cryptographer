@@ -1021,11 +1021,21 @@ in Phase C.
   `chainFeedback` surviving the Zod round-trip (ECB only covered seedInput/
   blockByteLength/bodyOutput).
 
-**Remaining before B1 MERGE:** the 2-minute browser smoke of the byte-native
-ECB+CBC port-mode iterate topology (carried over from Session 7; B1.4b adds the
-NEW chain-port topology — `cbc-xor` at body head/tail, the injected `chain` port,
-no rendered feedback arc yet). NOT a per-slice blocker (jsdom verified structure +
-no false graph warnings; flat bytes until C2). Do before merging `b1-aes-byte-native`.
+**Remaining before B1 MERGE (HARD precondition, not a test-count green light —
+advisor):** the browser smoke of the byte-native ECB+CBC port-mode iterate
+topology. **The sharp edge (advisor):** the smoke must check whether CBC's
+chaining is still *legible*, not just "renders without errors." The matrix CBC
+drew block i's dependency on C_{i-1} as the dashed `cbc-snapshot → cbc-xor`
+over-the-top arc — B1.4b DELETED that render (the port-chain recurrence edge is
+deferred), so `cbc-xor` now reads a `chain` port whose source **is not drawn** and
+may render as a dangling/unexplained input — i.e. the chaining CBC exists to teach
+could be visually invisible. This is exactly [[feedback_visual_smoke_vs_property_tests]]
+applied to the feature most needing legibility: jsdom confirms no-crash + no false
+graph warnings but CANNOT see this. If the chaining reads as unreadable, decide
+deliberately — deferred-acceptable (consistent with the deferred recurrence-
+visibility decision + [[feedback_all_specs_port_native]]) vs. worth surfacing to
+the user before merge. Do NOT merge `b1-aes-byte-native` on the strength of "gate
+GREEN / B1 core complete" without this pass.
 
 #### Session 6 (2026-05-29) — B1.3 (byte-native AES-192 + AES-256 enc+dec) DONE; gate GREEN
 
