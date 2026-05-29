@@ -10,6 +10,12 @@
  * derives `false` so they continue running under the legacy dispatch
  * path. This file walks the full set and pins both directions.
  *
+ * UPDATE (scaffolding-suppression Slice B1, 2026-05-29): the AES-128
+ * single-block ENCRYPT spec is now byte-native (port-native primitives
+ * with no legacy executor), so it derives `true` — it CANNOT run under
+ * legacy dispatch. AES-128 decrypt + ECB/CBC + AES-192/256 stay matrix
+ * (legacy) until Slices B1.2 / B1.3 / B1.4, so they remain `false`.
+ *
  * A separate synthetic-Feistel test ensures the helper descends into
  * `FeistelRoundGroup.tracks[].children` — the easy container kind to
  * miss because DES today only carries lifted-legacy leaves (so the
@@ -48,9 +54,11 @@ const registry = buildDefaultRegistry();
 
 // One row per shipped spec from `defaults` in `stores/spec.ts`, plus
 // SHA-256 (which Slice 2.10 will add to the selector). Expected column
-// pins the slice gate: only SHA-256 is `true` today.
+// pins the gate: SHA-256 and byte-native AES-128 single-block encrypt
+// are `true`; all still-matrix specs are `false`.
 const shippedSpecs: ReadonlyArray<readonly [string, CipherSpec, boolean]> = [
-  ["aes-128 single-block encrypt", aes128Spec, false],
+  // Byte-native (Slice B1) — port-native primitives, no legacy path → true.
+  ["aes-128 single-block encrypt", aes128Spec, true],
   ["aes-128 single-block decrypt", aes128DecryptSpec, false],
   ["aes-128 ecb encrypt", aes128EcbSpec, false],
   ["aes-128 ecb decrypt", aes128EcbDecryptSpec, false],

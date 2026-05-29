@@ -18,11 +18,14 @@
  * in any cipher family surfaces here whether or not its family-specific
  * file also caught it.
  *
- * Coverage (11 specs × 2 directions = 22 rows):
+ * Coverage (21 rows — was 22; aes-128 encrypt dropped in Slice B1, see below):
  *
- *   AES single-block:  aes-128 / aes-192 / aes-256 + decrypt counterparts
- *                      (FIPS-197 §C.1, §A.2 + NIST AES Core 192, §A.3 +
- *                      NIST AES Core 256)                          [6 rows]
+ *   AES single-block:  aes-192 / aes-256 + decrypt counterparts, plus
+ *                      aes-128 DECRYPT (FIPS-197 §C.1, §A.2 + NIST AES
+ *                      Core 192, §A.3 + NIST AES Core 256). The aes-128
+ *                      ENCRYPT row is byte-native (no legacy path) → removed;
+ *                      its KAT + frame stream live in aes-vectors.test.ts.
+ *                                                                   [5 rows]
  *   AES modes:         aes-128-ecb + decrypt (NIST SP 800-38A §F.1),
  *                      aes-128-cbc + decrypt (NIST SP 800-38A §F.2) [4 rows]
  *   Speck:             speck-32-64-be + decrypt, -le + decrypt
@@ -47,7 +50,6 @@
  * tests that use them.
  */
 
-import { aes128Spec } from "@/ciphers/aes-128";
 import { aes128CbcSpec } from "@/ciphers/aes-128-cbc";
 import { aes128CbcDecryptSpec } from "@/ciphers/aes-128-cbc-decrypt";
 import { aes128DecryptSpec } from "@/ciphers/aes-128-decrypt";
@@ -230,15 +232,14 @@ const DES_CT = "85e813540f0ab405";
 // ─── The 22-row matrix ─────────────────────────────────────────────────
 
 const ROWS: readonly Row[] = [
-  // AES single-block × 3 sizes × 2 directions = 6 rows
-  {
-    label: "aes-128 encrypt (FIPS-197 §C.1)",
-    spec: aes128Spec,
-    stateBuilder: buildMatrixState,
-    inputHex: AES128_PT,
-    expectedOutputHex: AES128_CT,
-    auxInputs: [["key", AES128_KEY]],
-  },
+  // AES single-block: 5 rows (3 sizes × 2 directions, minus aes-128 encrypt).
+  // The aes-128 ENCRYPT row was removed in Slice B1 — it is now byte-native
+  // (port-native primitives, no legacy executor), so it cannot run under
+  // `portedDispatchEnabled: false` and has no legacy frame stream to compare
+  // against. This matrix's contract is "legacy == ported", which is vacuous
+  // for a genuinely port-native spec. The byte-native AES-128 frame stream +
+  // KAT are pinned in `aes-vectors.test.ts`. AES-128 DECRYPT and AES-192/256
+  // stay matrix/lifted-legacy (until Slices B1.2 / B1.3), so they remain here.
   {
     label: "aes-128 decrypt (FIPS-197 §C.1)",
     spec: aes128DecryptSpec,

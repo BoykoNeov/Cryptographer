@@ -28,10 +28,11 @@
  *       failure here is a louder signal than a deep-equality miss across
  *       50+ frames.
  *
- *   (b) **Frame-by-frame byte parity** vs legacy dispatch for the same
- *       three specs. AES-128 has 11 round keys (rounds=10), AES-192 has
- *       13 (rounds=12), AES-256 has 15 (rounds=14) — three different
- *       dynamic-N port counts validated.
+ *   (b) **Frame-by-frame byte parity** vs legacy dispatch. AES-192 has 13
+ *       round keys (rounds=12), AES-256 has 15 (rounds=14) — two different
+ *       dynamic-N port counts validated. (AES-128's parity row was removed
+ *       in Slice B1 — it is byte-native with no legacy path to compare
+ *       against; its frame stream is pinned in `aes-vectors.test.ts`.)
  *
  *   (c) **`aes.key-expansion@2` parity at canonical rounds** under the
  *       ported path. @2's relaxed assertion + Rcon extension produce
@@ -137,13 +138,15 @@ describe("runtime — ported dispatch, Slice 1.4 AES core step types", () => {
 
   describe("(a) FIPS-197 KATs under portedDispatchEnabled: true (sanity floor)", () => {
     it("AES-128 (FIPS-197 §C.1) — published ciphertext under ported", () => {
+      // Byte-native (Slice B1): bytes state in, bytes finalState out. Port-
+      // native primitives, so `portedDispatchEnabled: true` is the only path.
       const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-        initialState: matrixFromBytes(bytesFromHex(AES128_PLAINTEXT)),
+        initialState: makeBytesState(bytesFromHex(AES128_PLAINTEXT)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
         portedDispatchEnabled: true,
       });
-      expect(trace.finalState.shape).toBe("matrix4x4-bytes");
-      if (trace.finalState.shape !== "matrix4x4-bytes") return;
+      expect(trace.finalState.shape).toBe("bytes");
+      if (trace.finalState.shape !== "bytes") return;
       expect(hexFromBytes(trace.finalState.bytes)).toBe(AES128_CIPHERTEXT);
     });
 
@@ -178,20 +181,13 @@ describe("runtime — ported dispatch, Slice 1.4 AES core step types", () => {
   // ─── (b) Frame-by-frame byte parity ───────────────────────────────────
 
   describe("(b) frame-by-frame byte parity vs legacy dispatch", () => {
-    it("AES-128 — every frame byte-equal across all 49 frames", () => {
-      const initialState = matrixFromBytes(bytesFromHex(AES128_PLAINTEXT));
-      const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]);
-      const legacy = runSpec(aes128Spec, buildDefaultRegistry(), {
-        initialState,
-        initialAux,
-      });
-      const ported = runSpec(aes128Spec, buildDefaultRegistry(), {
-        initialState,
-        initialAux,
-        portedDispatchEnabled: true,
-      });
-      expectFrameStreamsEqual(ported.frames, legacy.frames, "aes-128");
-    });
+    // AES-128's legacy-vs-ported parity row was REMOVED in Slice B1: the
+    // byte-native AES-128 spec has no legacy executor, so there is no legacy
+    // dispatch run to compare against. The parity property only ever applied
+    // to lifted-legacy steps; AES-192/256 below are still matrix/lifted-legacy
+    // (they convert in Slice B1.3), so they keep exercising the dynamic-N
+    // round-key port surface here. Byte-native AES-128's frame stream is
+    // pinned in `aes-vectors.test.ts`.
 
     it("AES-192 — dynamic-N=13 round-key ports round-trip across all frames", () => {
       // AES-192's port surface has 13 round-key output ports (rounds=12,

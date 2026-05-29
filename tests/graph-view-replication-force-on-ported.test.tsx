@@ -18,7 +18,7 @@
  * Smoke surfaced 2026-05-26; see [[project_universal_port_dataflow_proposal]].
  */
 
-import { aes128Spec } from "@/ciphers/aes-128";
+import { aes192Spec } from "@/ciphers/aes-192";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { buildSha256Spec } from "@/ciphers/sha-256";
 import { runSpec } from "@/core/runtime";
@@ -34,20 +34,31 @@ import { __resetLayoutsForTests } from "@/ui/stores/layout";
 // via `buildCanonicalHash` and flips category. We need the spec-store
 // boundary so `useSpec()` returns the SHA-256 spec post-call.
 // (Same gotcha as [[feedback_setcipher_test_import]] for `setCipher`.)
-import { __resetSpecForTests, setHash } from "@/ui/stores/spec";
+import { __resetSpecForTests, setCipher, setHash } from "@/ui/stores/spec";
 import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
 import { __resetViewDensityForTests } from "@/ui/stores/view-density";
 import { __resetReplicationForTests, setReplicationEnabled } from "@/ui/stores/view-replication";
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-const AES128_KEY = "000102030405060708090a0b0c0d0e0f";
-const AES128_PT = "00112233445566778899aabbccddeeff";
+// Non-ported control carrier. AES-128 single-block was the original control
+// case, but its byte-native B1 rebuild makes it ported (auto-on) — so the
+// "non-ported, default-off" assertions retarget to AES-192, which stays
+// matrix/legacy until Slice B1.3. 24-byte key (FIPS-197 §A.2), 16-byte block.
+// B1.3: when aes-192 converts byte-native, these two tests re-break — retarget
+// the control then (grep `aes192Spec` / `aes-192` across tests/).
+const AES192_KEY = "8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b";
+const AES192_PT = "6bc1bee22e409f96e93d7e117393172a";
 
-const seedAes128Trace = (): void => {
-  const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-    initialState: matrixFromBytes(bytesFromHex(AES128_PT)),
-    initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
+const seedAes192Trace = (): void => {
+  // `effectiveReplicate` reads the STORE spec (`useSpec()`), not the trace, so
+  // the store spec must be the non-ported control too. The post-reset default
+  // is byte-native AES-128 (ported → auto-on); flip the store to AES-192 via
+  // the spec-store boundary (rebuilds the canonical spec — [[feedback_setcipher_test_import]]).
+  setCipher("aes-192");
+  const trace = runSpec(aes192Spec, buildDefaultRegistry(), {
+    initialState: matrixFromBytes(bytesFromHex(AES192_PT)),
+    initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES192_KEY)]]),
   });
   setTrace(trace);
 };
@@ -90,10 +101,10 @@ describe("GraphView replication — force-on for port-native specs", () => {
     resetAll();
   });
 
-  it("non-ported spec (AES-128) keeps the default-off raw signal", () => {
-    seedAes128Trace();
+  it("non-ported spec (AES-192) keeps the default-off raw signal", () => {
+    seedAes192Trace();
     const { container } = render(() => <GraphView />);
-    // Raw default false + no user toggle + AES-128 is NOT ported →
+    // Raw default false + no user toggle + AES-192 is NOT ported →
     // effective replication stays off.
     expect(isReplicationCheckboxChecked(container)).toBe(false);
   });
@@ -120,9 +131,11 @@ describe("GraphView replication — force-on for port-native specs", () => {
     expect(isReplicationCheckboxChecked(container)).toBe(false);
   });
 
-  it("user toggle on AES-128 also wins when they later switch to SHA-256", () => {
+  it("user toggle on AES-192 also wins when they later switch to SHA-256", () => {
     // User toggles ON while looking at AES (raw → true, userToggled → true).
-    seedAes128Trace();
+    // AES-192 (non-ported) makes the toggle genuinely the user's choice, not
+    // the ported auto-on — preserving the test's discriminating power.
+    seedAes192Trace();
     setReplicationEnabled(true);
     // ... then switches to SHA-256. Effective should be raw = true (matches
     // their explicit choice, NOT forced-on by the ported branch — userToggled
