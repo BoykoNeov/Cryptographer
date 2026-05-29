@@ -3,7 +3,9 @@
  *
  * Builds the multi-block CBC spec via `buildAesCbcSpec`. Differs from
  * `aes-128-ecb.ts` only in the per-block iterate body — the per-block
- * AES round structure is identical (shared via `aes-round-builder`).
+ * AES round structure is the same byte-native body (shared via
+ * `aes-round-builder-native`), wrapped with a chaining XOR and the
+ * iterate's `chainInput`/`chainFeedback` ports.
  *
  * Headline pedagogical use: type a multi-block plaintext, watch each
  * iteration's first XOR fold in the previous ciphertext (or IV for

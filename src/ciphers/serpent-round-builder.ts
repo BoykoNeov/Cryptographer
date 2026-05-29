@@ -1,8 +1,8 @@
 /**
- * Serpent round-body construction. Mirrors `aes-round-builder.ts` in shape:
- * a forward (encrypt) builder and an inverse (decrypt) builder, each
- * returning the flat StepNode list that sits between the key-expansion
- * step and the optional multi-block iterate wrapper.
+ * Serpent round-body construction. Same shape as the AES round-body builders
+ * (`aes-round-builder-native.ts`): a forward (encrypt) builder and an inverse
+ * (decrypt) builder, each returning the flat StepNode list that sits between
+ * the key-expansion step and the optional multi-block iterate wrapper.
  *
  * Forward (encrypt) body:
  *   IP

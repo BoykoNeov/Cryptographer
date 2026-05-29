@@ -2,12 +2,15 @@
 
 > **Status: Phase A COMPLETE. Phase B IN PROGRESS — B1 (AES) on branch
 > `b1-aes-byte-native`. B1.1 (128 enc) + B1.2 (128 dec) + B1.3 (192/256 enc+dec)
-> + B1.4a (ECB enc+dec) all DONE — every single-block AES AND ECB is byte-native,
-> KAT byte-equal, full `npm run check` GREEN (2507 tests). RESUME AT B1.4b (CBC:
-> needs an advisor re-consult on the cross-iteration chaining mechanism FIRST).
-> See "B1 progress + next-session continuation" → Session 7 for B1.4a + the
-> allowlist-divergence finding (the plan's "B1.4 drains the allowlists" is now
-> WRONG — the matrix-aes-{192,ecb} fixtures defer all draining to Phase C).**
+> + B1.4a (ECB enc+dec) + B1.4b (CBC enc+dec) all DONE — EVERY shipped AES is now
+> byte-native, KAT byte-equal, full `npm run check` GREEN (2489 tests). B1 CORE
+> COMPLETE; remaining before B1 MERGE: a 2-min browser smoke of the byte-native
+> ECB+CBC port-mode iterate topology. See "B1 progress + next-session
+> continuation" → Session 8 for B1.4b (the chain-port mechanism + the
+> mis-targeting sweep). The plan's "B1.4 drains the allowlists" was WRONG — the
+> matrix-aes-{192,ecb} fixtures defer all matrix-primitive draining to Phase C;
+> B1.4b deletes only `aes-round-builder.ts` (zero consumers) and DEFERS iv-load
+> (it has synthetic-test + palette consumers — advisor-confirmed defer).**
 > Phase A: A0+A1+A2+A3a+A3b SHIPPED + A3b follow-ups
 > ⓐ–ⓕ DONE + A4 (anti-creep contract test) SHIPPED 2026-05-28. A3 split into A3a+A3b with Q1–Q4
 > resolved (advisor pass + user co-design 2026-05-28); A3b's open carry
@@ -924,6 +927,105 @@ chaining bug). Then delete `aes-round-builder.ts` (check `src/core/spec-mutation
 reference first — a consumer the original plan didn't name). The `$input`-vs-
 endpoint-pill decision is DEFUSED (B1.3 retargeted those tests onto matrix-aes-192;
 the in-app feature question defers to 2.9c-e).
+
+#### Session 8 (2026-05-29) — B1.4b (byte-native AES CBC enc+dec) DONE; B1 CORE COMPLETE; gate GREEN
+
+Byte-native AES CBC (encrypt + decrypt) shipped via a **chain-port extension to
+the port-mode `iterate`**. **Full `npm run check` GREEN (2489 tests, 211 files,
+vite build clean)** on `b1-aes-byte-native`. **EVERY shipped AES is now
+byte-native.** CBC KAT byte-equal vs NIST SP 800-38A §F.2 (enc+dec, 4 blocks) +
+a new `node:crypto` aes-128-cbc cross-check (enc+dec, 3 blocks — feedback-of-
+feedback) + a 3-block round-trip. Advisor re-consulted FIRST (as the handoff
+required); they green-lit the chain-port mechanism over the deferred
+`aux-store-bytes@1` leaf and worked the CBC math both directions.
+
+**The chain-port mechanism (the core deliverable).** `IterateGroup` (port mode)
+gained `chainInput?: PortBinding` + `chainFeedback?: PortBinding`. Runtime
+(in the existing port-mode loop): resolve `chainInput` once in the PARENT scope
+→ `prevChain` for iteration 0 (the IV); inject BOTH `port(iterateId,"in")` (the
+block) AND `port(iterateId,"chain")` (`prevChain`) into the body scope; after
+the body walk, resolve `chainFeedback` from the body's returned `nodeOutputs` →
+`prevChain` for the NEXT iteration. Both-or-neither guard. The encrypt/decrypt
+**asymmetry lives entirely in the spec** — the runtime carry is uniform:
+- **Encrypt** (`C_i = E(P_i ⊕ C_{i-1})`): body head `cbc-xor` (`xor@1`:
+  `port(it,"in") ⊕ port(it,"chain")`) feeds `buildAesEncryptBodyNative(rounds,
+  inputSource=port("cbc-xor","output"))`; `bodyOutput = chainFeedback =
+  round.N.out` (= C_i, the output feeds the next chain).
+- **Decrypt** (`P_i = D(C_i) ⊕ C_{i-1}`): `buildAesDecryptBodyNative(rounds,
+  inputSource=port(it,"in"))` then body-tail `cbc-xor` (`aesNativeDecryptOutputFrom()
+  ⊕ port(it,"chain")`); `bodyOutput = cbc-xor.output` (= P_i); `chainFeedback =
+  port(it,"in")` (the raw C_i feeds the next chain). The advisor's load-bearing
+  verify: `chainFeedback = port(it,"in")` resolves because `walk` seeds its
+  scope-local map via `new Map(seedOutputs)`, so the injected `in`/`chain` ports
+  survive the walk — confirmed by reading `runtime.ts:234`, not via KAT.
+
+**IV source:** a pre-loop `fetch-iv` leaf (`aux-load-bytes@1` reading
+`aux["iv"]`) publishes the IV on a port; `chainInput = port("fetch-iv","output")`.
+The byte-native replacement for `generic.iv-load@1` (no MatrixState). The padding
+overlay's `repointInputSourceConsumers` only rewrites `$input` bindings, so
+`fetch-iv` (reads `aux["iv"]`) is untouched — confirmed.
+
+**Allowlist: NO change (the Session-7 finding held).** Deleted `aes-round-builder.ts`
+(the matrix round-body builder — confirmed ZERO src consumers after the CBC
+rebuild; the handoff's `spec-mutations.ts` worry was unfounded). **iv-load DEFERRED
+to Phase C** (advisor-confirmed): the grep (the handoff's gate) found `iv-load`
+keeps 7 test-file consumers (synthetic specs use it as MatrixState-into-aux
+scaffolding) + ParamEditor/narration/provenance/GraphView + it's a live palette
+primitive; deleting it buys one allowlist line for zero goal-gain (the goal —
+every *shipped* spec byte-native — holds the moment CBC lands). **Correction to a
+mid-session error:** `xor-aux-into-state`/`state-to-aux`/`aux-copy` are NOT used
+by SHA-256 (a grep matched a comment); like iv-load they're now orphaned-from-
+shipped-specs but kept as palette primitives + synthetic-test surfaces. A4 is
+registry-based so it stays green regardless. All matrix primitives drain together
+in Phase C.
+
+**The mis-targeting sweep (24 fails + the audit of non-failing files).**
+- **Mechanical (legacy-path-gone removal):** `requires-ported-dispatch` CBC
+  rows false→**true**; `runtime-ported-dispatch-{frame-parity,aux-only,chaining}`
+  REMOVED their shipped-CBC blocks (no legacy frame stream for byte-native CBC;
+  the synthetic lifted-primitive blocks (a)/(c-pre)/(d) stay — they're what those
+  files are actually for).
+- **Graph:** `graph-validation`'s "zero warnings on shipped specs" CBC tests
+  KEPT + updated to byte-native (this IS the orphaned-read/unused-write gate the
+  cbc-kat cycle-only filter doesn't cover — `toEqual([])` catches any false
+  warning on the injected `chain` port). The `deriveAuxGraph — cross-iteration
+  feedback synthesis` describe + the two `graph-view-feedback-edge-{overhead,
+  z-order}.test.tsx` files asserted the matrix-CBC AUX feedback edge
+  (`cbc-snapshot → cbc-xor` on `chain`) which byte-native CBC doesn't produce
+  (the chain is a port; the dashed-arc render is the DEFERRED recurrence-
+  visibility work). No matrix CBC fixture to retarget to → REMOVED with a pointer.
+  The feedback-predicate / cycle-filter MECHANISM stays unit-pinned by the
+  hand-built describes in graph-validation.
+- **MIS-TARGETING AUDIT (advisor's flagged "real risk").** Walked every
+  non-failing CBC-referencing file. **Vacuous-pass found in `cross-mode-mirror-
+  coverage`** (the matrix `generic.byte-substitution@1`/`generic.mix-columns@1`
+  registry entries' setup selected `round.1.sub-bytes` which is now `byte-
+  substitute@1` → the byte-native button passed against the wrong leaf). Removed
+  the two stale matrix entries from `CROSS_MODE_MIRROR_ENTRIES` (no src consumer —
+  it's purely a test manifest; ParamEditor renders the Sync rows unconditionally)
+  + their `setupForEntry` cases. The planted-landmine **`sync-inverse-row` +
+  `sync-mix-columns-row`** (their own comments said "re-breaks at B1.4b"):
+  retargeted to default byte-native AES-128 (the `SyncInverseRow`/`SyncMixColumnsRow`
+  gating is a SHARED component — byte-native coverage is equivalent). The
+  store-based **`sync-sbox-inverse` + `sync-mix-columns-store`** matrix describes
+  converted to byte-native types (default AES-128) preserving the rich both-
+  directions/active-untouched/KAT/deep-copy coverage; redundant byte-native
+  describes deleted. **Verified-safe (genuine, not vacuous):** chaining-primitives
+  / narration-aux / aux-primitives (unit tests of still-registered primitives),
+  port-projection-* / replicate-fanout / replica-{gutter,placement} (hand-built
+  synthetic fixtures), app-cbc-iv-flow / app-multi-block-roundtrip / app-auto-rerun
+  / app-mode-flip (behavioral `<App/>` integration), duplicate-round-mutator +
+  drop-gutters (insert-mechanism / no CBC spec dependency).
+- **document-roundtrip:** added CBC enc+dec to `SHIPPED_SPECS` (advisor ask) — the
+  `toEqual(doc)` deep equality is the loud regression gate for `chainInput`/
+  `chainFeedback` surviving the Zod round-trip (ECB only covered seedInput/
+  blockByteLength/bodyOutput).
+
+**Remaining before B1 MERGE:** the 2-minute browser smoke of the byte-native
+ECB+CBC port-mode iterate topology (carried over from Session 7; B1.4b adds the
+NEW chain-port topology — `cbc-xor` at body head/tail, the injected `chain` port,
+no rendered feedback arc yet). NOT a per-slice blocker (jsdom verified structure +
+no false graph warnings; flat bytes until C2). Do before merging `b1-aes-byte-native`.
 
 #### Session 6 (2026-05-29) — B1.3 (byte-native AES-192 + AES-256 enc+dec) DONE; gate GREEN
 

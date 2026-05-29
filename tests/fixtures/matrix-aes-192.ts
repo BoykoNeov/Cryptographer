@@ -18,13 +18,13 @@
  *
  * This is the `frame-port-values.test.ts` `liftedLegacySubBytesSpec` precedent
  * generalized from a single leaf to the full AES-192 round structure. It is
- * hand-built from the still-registered `generic.*` lifted-legacy step types —
- * deliberately NOT imported from `src/ciphers/aes-round-builder.ts` (the matrix
- * builder), because that builder loses its last consumers and is slated for
- * deletion when ECB/CBC convert in Slice B1.4. This fixture instead depends
- * only on the `generic.*` registrations + `CipherSpec` shape, so it survives
- * until Phase C retires the matrix machinery (the MatrixView/projection
- * concepts these tests cover retire at the same time).
+ * hand-built from the still-registered `generic.*` lifted-legacy step types.
+ * The matrix builder (`src/ciphers/aes-round-builder.ts`) lost its last
+ * consumer when CBC went byte-native and was deleted in Slice B1.4b; this
+ * fixture never imported it. It depends only on the `generic.*` registrations
+ * + `CipherSpec` shape, so it survives until Phase C retires the matrix
+ * machinery (the MatrixView/projection concepts these tests cover retire at
+ * the same time).
  *
  * Structurally identical to the pre-B1.3 `src/ciphers/aes-192.ts`: Nk=6
  * (24-byte key), ROUNDS=12, matrix4x4-bytes state, `generic.byte-substitution`

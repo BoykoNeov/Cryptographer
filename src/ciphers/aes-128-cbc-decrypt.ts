@@ -1,12 +1,12 @@
 /**
  * AES-128 in CBC mode, decrypt direction.
  *
- * Inverse of `aes-128-cbc.ts`. The per-block iterate body snapshots the
- * incoming ciphertext into `aux["next-chain"]`, runs the AES inverse
- * round body, XORs in `aux["chain"]` (the previous block's ciphertext
- * or the IV for block 0), then advances `chain := next-chain` for the
- * next iteration via `aux-copy`. See `buildAesCbcSpec` for the full
- * dance.
+ * Inverse of `aes-128-cbc.ts`. Byte-native (Slice B1.4b): the per-block
+ * iterate body runs the AES inverse round body on the raw ciphertext block,
+ * then XORs in the chain (`port("cbc-blocks","chain")` — the previous block's
+ * ciphertext, or the IV for block 0) to recover the plaintext. The chain
+ * rides the iterate's `chainInput`/`chainFeedback` ports, not an aux slot;
+ * decrypt's `chainFeedback` is the raw input block. See `buildAesCbcSpec`.
  *
  * NIST SP 800-38A §F.2.2 supplies the known-answer test for this spec
  * — covered in `tests/aes-128-cbc-kat.test.ts`.

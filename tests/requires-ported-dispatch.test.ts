@@ -61,11 +61,12 @@ const shippedSpecs: ReadonlyArray<readonly [string, CipherSpec, boolean]> = [
   // no legacy path → true.
   ["aes-128 single-block encrypt", aes128Spec, true],
   ["aes-128 single-block decrypt", aes128DecryptSpec, true],
-  // Byte-native (Slice B1.4) — port-mode iterate + port-native body → true.
+  // Byte-native (Slice B1.4a ECB / B1.4b CBC) — port-mode iterate + port-native
+  // body → true. CBC adds the cross-iteration chain port; still all port-native.
   ["aes-128 ecb encrypt", aes128EcbSpec, true],
   ["aes-128 ecb decrypt", aes128EcbDecryptSpec, true],
-  ["aes-128 cbc encrypt", aes128CbcSpec, false],
-  ["aes-128 cbc decrypt", aes128CbcDecryptSpec, false],
+  ["aes-128 cbc encrypt", aes128CbcSpec, true],
+  ["aes-128 cbc decrypt", aes128CbcDecryptSpec, true],
   // Byte-native (Slice B1.3) — port-native primitives, no legacy path → true.
   ["aes-192 single-block encrypt", aes192Spec, true],
   ["aes-192 single-block decrypt", aes192DecryptSpec, true],

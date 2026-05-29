@@ -251,6 +251,12 @@ export const IterateGroupSchema = z.object({
   outBlocksAux: z.string().optional(),
   // Port mode — block split width (16 for AES). Required when `seedInput` set.
   blockByteLength: z.number().int().positive().optional(),
+  // Cross-iteration feedback (B1.4b — byte-native CBC). `chainInput` (parent
+  // scope, the IV) + `chainFeedback` (body scope, per-iteration carry). Both
+  // optional + both-or-neither at runtime; declared so they survive Save/Load
+  // (Zod strips undeclared keys — same gotcha as `seedInput`/`cipherConstants`).
+  chainInput: PortBindingSchema.optional(),
+  chainFeedback: PortBindingSchema.optional(),
   children: z.array(z.lazy(() => StepNodeSchema)),
   ...containerPortEdgeFields,
   ...loopingContainerSeedFields,

@@ -50,13 +50,7 @@ import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
 import { __resetLayoutsForTests } from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
-import {
-  __resetSpecForTests,
-  duplicateRoundInSpec,
-  setCipher,
-  setCipherMode,
-  useSpec,
-} from "@/ui/stores/spec";
+import { __resetSpecForTests, duplicateRoundInSpec, setCipher, useSpec } from "@/ui/stores/spec";
 import { __resetTraceForTests, setSelectedStepId } from "@/ui/stores/trace";
 import { __resetViewDensityForTests } from "@/ui/stores/view-density";
 import { __resetViewModeForTests } from "@/ui/stores/view-mode";
@@ -114,31 +108,11 @@ const findFirstLeafIdOfType = (stepType: string): string | null => {
 // (e.g. v2 needs a successful duplicateRoundInSpec).
 const setupForEntry = (entry: CrossModeMirrorEntry): string => {
   switch (entry.stepType) {
-    case "generic.byte-substitution@1": {
-      // Every single-block AES (B1.3) AND ECB (B1.4a) is byte-native, so their
-      // `round.1.sub-bytes` leaf is now `byte-substitute@1` — NOT this type.
-      // The legacy matrix `generic.byte-substitution@1` now survives only on
-      // the AES-128 **CBC** mode (still matrix until Slice B1.4b), so select CBC
-      // to genuinely exercise THIS entry's button. The matrix round body lives
-      // inside the iterate but its spec leaf id is still `round.1.sub-bytes`.
-      // (Retargeting to ECB or any byte-native AES would MIS-TARGET: the
-      // `byte-substitute@1` button shares mirrorClass "inverse", so the
-      // assertion would pass against the wrong leaf's button — the B1.3
-      // vacuous-pass trap. When CBC converts in B1.4b this matrix entry loses
-      // its last selectable carrier and should be removed.)
-      setCipher("aes-128");
-      setCipherMode("cbc");
-      return "round.1.sub-bytes";
-    }
-    case "generic.mix-columns@1": {
-      // Same as above: every single-block AES + ECB MixColumns is now
-      // `gf-matrix-multiply@1` (byte-native). The matrix `generic.mix-columns@1`
-      // survives only on the AES-128 CBC mode; round 1 always has a MixColumns
-      // leaf (FIPS-197: every round except the final). Removed in B1.4b.
-      setCipher("aes-128");
-      setCipherMode("cbc");
-      return "round.1.mix-columns";
-    }
+    // NOTE: the matrix `generic.byte-substitution@1` + `generic.mix-columns@1`
+    // cases were removed in Slice B1.4b along with their registry entries —
+    // every shipped AES is byte-native, so there is no selectable matrix leaf
+    // to exercise. Their live replacements are the `byte-substitute@1` /
+    // `gf-matrix-multiply@1` cases below (default byte-native AES-128).
     case "aes.key-expansion@1": {
       // Top-level leaf on canonical AES-128.
       return "key-expansion";

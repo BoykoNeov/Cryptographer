@@ -25,13 +25,7 @@ import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
 import { __resetLayoutsForTests } from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
-import {
-  __resetSpecForTests,
-  editStepParams,
-  setCipher,
-  setCipherMode,
-  useSpec,
-} from "@/ui/stores/spec";
+import { __resetSpecForTests, editStepParams, setCipher, useSpec } from "@/ui/stores/spec";
 import { __resetTraceForTests, setSelectedStepId } from "@/ui/stores/trace";
 import { __resetViewDensityForTests } from "@/ui/stores/view-density";
 import { __resetViewModeForTests } from "@/ui/stores/view-mode";
@@ -52,20 +46,17 @@ const resetAll = (): void => {
   __resetTraceForTests();
   __resetViewDensityForTests();
   __resetViewModeForTests();
-  // Retarget to AES-128 CBC: every single-block AES (B1.3) AND ECB (B1.4a) is
-  // byte-native, so their `round.1.sub-bytes` is `byte-substitute@1` whose
-  // editor ALSO renders a SyncInverseRow with the same button text — selecting
-  // a byte-native leaf here would MIS-TARGET (the assertion would pass against
-  // the wrong block, leaving the matrix `generic.byte-substitution@1` SbxBlock
-  // path uncovered — the vacuous-pass trap). The AES-128 **CBC** mode is the
-  // last selectable spec keeping the matrix `generic.*` round body
-  // (`aes-round-builder.ts`) until Slice B1.4b, so CBC's `round.1.sub-bytes` is
-  // a genuine `generic.byte-substitution@1` leaf rendering the matrix SbxBlock +
-  // its Sync-inverse row. (The matrix body lives inside the iterate, but the
-  // spec leaf id is still `round.1.sub-bytes`.) When CBC converts in B1.4b this
-  // retarget re-breaks and the matrix path retires with Phase C.
+  // Default AES-128 single-block (byte-native since B1.1/B1.2). Slice B1.4b
+  // made CBC byte-native too, so NO shipped spec carries the matrix
+  // `generic.byte-substitution@1` leaf anymore — every selectable
+  // `round.1.sub-bytes` is `byte-substitute@1` rendering the byte-native
+  // `ByteSubstituteBlock`. The SyncInverseRow gating this test pins (disabled
+  // when the S-box isn't bijective, re-enabled after repair) is the SAME
+  // shared component the matrix `SbxBlock` rendered, so exercising it through
+  // the byte-native block is equivalent coverage. (The matrix `SbxBlock` is
+  // dead UI until Phase C deletes the matrix step types.) The cross-slot WRITE
+  // is covered at the store boundary in `sync-sbox-inverse.test.ts`.
   setCipher("aes-128");
-  setCipherMode("cbc");
 };
 
 describe("SyncInverseRow — gating on bijection", () => {

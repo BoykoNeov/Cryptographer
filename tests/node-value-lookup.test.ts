@@ -121,11 +121,12 @@ describe("lookupNodeValue — block chips", () => {
   // the same class as the deferred `$input`-vs-endpoint-pill question
   // (graph-narrative Slice 1) — scheduled with Slice 2.9c-e / Phase C, not
   // built in B1.4a (locked decision: flat bytes until C2; accept the temporary
-  // block-chip-value regression). The aux/state path still serves matrix CBC
-  // until B1.4b. The two former payload-value tests (matrix4x4-bytes per-block
-  // value + per-chip discrimination) are dropped here rather than retargeted
-  // onto soon-to-convert CBC. The MISSING-path chip tests below are
-  // index-driven and stay valid for the byte-native iterate.
+  // block-chip-value regression). Both ECB (B1.4a) and CBC (B1.4b) are now
+  // port-mode iterates, so NO shipped spec has the aux/state block-payload
+  // path anymore. The two former payload-value tests (matrix4x4-bytes per-block
+  // value + per-chip discrimination) were dropped rather than retargeted. The
+  // MISSING-path chip tests below are index-driven and stay valid for the
+  // byte-native iterate.
 
   it("returns missing for the ellipsis chip (`@blockMore`)", () => {
     const trace = runAes128Ecb();

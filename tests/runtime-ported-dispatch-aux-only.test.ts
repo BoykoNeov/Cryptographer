@@ -18,17 +18,18 @@
  *                              `xor-aux-into-state` downstream finds a
  *                              MatrixState rather than a Uint8Array.
  *
- * Three test surfaces:
+ * Two test surfaces (was three — (b) removed in Slice B1.4b):
  *
  *   (a) **Synthetic 4-step spec** — exercises each lifted step type in
- *       turn under both flag values. Frame-by-frame deep-equality.
+ *       turn (including `iv-load`) under both flag values. Frame-by-frame
+ *       deep-equality.
  *
- *   (b) **AES-128 CBC KAT under `portedDispatchEnabled: true`** — the
- *       only place a shipped spec exercises `iv-load`. Validates that
- *       the cipher's algebra survives the ported path (KAT sanity floor
- *       per the slice plan's "KAT first, deep equality next" guidance)
- *       AND that frame-parity holds across all 1300+ frames of a real
- *       multi-block cipher run.
+ *   (b) **REMOVED in Slice B1.4b.** Was the AES-128 CBC KAT + frame-parity
+ *       smoke — the only shipped spec that exercised the matrix `iv-load`.
+ *       CBC is now byte-native (no legacy frame stream; the IV rides a
+ *       port-native `aux-load-bytes@1` "fetch-iv" leaf), so there's nothing
+ *       to compare against. The CBC KAT lives in aes-128-cbc-kat; `iv-load`'s
+ *       ported-vs-legacy parity is still pinned by the synthetic (a) spec.
  *
  *   (c) **Targeted invariant pins** for the two hazards the advisor
  *       flagged before Slice 1.2 work began:
@@ -48,10 +49,9 @@
  * Slice-1.2 sibling.
  */
 
-import { aes128CbcSpec } from "@/ciphers/aes-128-cbc";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
+import { makeBytesState } from "@/core/state/bytes";
 import type { AuxValue, CipherSpec, State, TraceFrame } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
@@ -239,54 +239,11 @@ describe("runtime — ported dispatch, Slice 1.2 aux-only primitives", () => {
     });
   });
 
-  // ─── (b) AES-128 CBC — real-spec smoke under portedDispatchEnabled: true ─
-
-  describe("(b) AES-128 CBC (NIST SP 800-38A §F.2.1) — full frame parity", () => {
-    const KEY = "2b7e151628aed2a6abf7158809cf4f3c";
-    const IV = "000102030405060708090a0b0c0d0e0f";
-    const PLAINTEXT_4_BLOCKS =
-      "6bc1bee22e409f96e93d7e117393172a" +
-      "ae2d8a571e03ac9c9eb76fac45af8e51" +
-      "30c81c46a35ce411e5fbc1191a0a52ef" +
-      "f69f2445df4f9b17ad2b417be66c3710";
-    const CBC_CIPHERTEXT_4_BLOCKS =
-      "7649abac8119b246cee98e9b12e9197d" +
-      "5086cb9b507219ee95db113a917678b2" +
-      "73bed6b8e3c1743b7116e69e22229516" +
-      "3ff1caa1681fac09120eca307586e1a7";
-
-    const initial = () => makeBytesState(bytesFromHex(PLAINTEXT_4_BLOCKS));
-    const buildAux = (): Map<string, AuxValue> =>
-      new Map<string, AuxValue>([
-        ["key", bytesFromHex(KEY)],
-        ["iv", bytesFromHex(IV)],
-      ]);
-
-    it("produces the published ciphertext under portedDispatchEnabled: true (KAT sanity floor)", () => {
-      const trace = runSpec(aes128CbcSpec, buildDefaultRegistry(), {
-        initialState: initial(),
-        initialAux: buildAux(),
-        portedDispatchEnabled: true,
-      });
-      expect(trace.finalState.shape).toBe("bytes");
-      if (trace.finalState.shape !== "bytes") return;
-      expect(hexFromBytes(trace.finalState.bytes)).toBe(CBC_CIPHERTEXT_4_BLOCKS);
-    });
-
-    it("emits frame-by-frame byte-equal traces vs legacy dispatch (iv-load + Phase-0 entries combined)", () => {
-      const legacy = runSpec(aes128CbcSpec, buildDefaultRegistry(), {
-        initialState: initial(),
-        initialAux: buildAux(),
-      });
-      const ported = runSpec(aes128CbcSpec, buildDefaultRegistry(), {
-        initialState: initial(),
-        initialAux: buildAux(),
-        portedDispatchEnabled: true,
-      });
-
-      expectFrameStreamsEqual(ported.frames, legacy.frames, "aes-128 cbc");
-    });
-  });
+  // ─── (b) AES-128 CBC — REMOVED in Slice B1.4b ───────────────────────────
+  // Was the real-spec legacy-vs-ported frame-parity smoke (iv-load + the AES
+  // core + chaining on the matrix CBC spec). CBC is now byte-native (no legacy
+  // frame stream); its KAT lives in aes-128-cbc-kat. The iv-load primitive
+  // stays parity-pinned by the synthetic (a) spec above.
 
   // ─── (c) Targeted invariants for the two pre-Slice-1.2 hazards ──────────
 

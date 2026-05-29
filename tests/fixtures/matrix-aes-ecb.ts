@@ -15,9 +15,9 @@
  * This is the multi-block analogue of `tests/fixtures/matrix-aes-192.ts`:
  * hand-built from the still-registered `generic.*` lifted-legacy step types
  * plus the `generic.{split,concat}-blocks@1` / `generic.compute-block-count@1`
- * mode-boundary steps, deliberately NOT imported from `aes-ecb-builder.ts`
- * (now byte-native) or `aes-round-builder.ts` (the matrix body builder, slated
- * for deletion in B1.4b). It depends only on the `generic.*` registrations +
+ * mode-boundary steps. The matrix body builder (`aes-round-builder.ts`) was
+ * deleted in B1.4b, so this fixture inlines its own `generic.*` round nodes
+ * (it never imported it). It depends only on the `generic.*` registrations +
  * `CipherSpec` shape, so it survives until Phase C retires the matrix +
  * aux-mode-iterate machinery.
  *

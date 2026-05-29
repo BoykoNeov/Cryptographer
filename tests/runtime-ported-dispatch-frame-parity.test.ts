@@ -27,8 +27,10 @@
  *                      removed; the encrypt KATs + frame streams live in
  *                      aes-vectors / aes-192-vectors / aes-256-vectors, the
  *                      AES-128 decrypt KAT in aes-decrypt.test.ts.   [0 rows]
- *   AES modes:         aes-128-ecb + decrypt (NIST SP 800-38A §F.1),
- *                      aes-128-cbc + decrypt (NIST SP 800-38A §F.2) [4 rows]
+ *   AES modes:         none. AES-128 ECB (Slice B1.4a) and CBC (B1.4b) are
+ *                      byte-native (port-mode iterate, no legacy path) →
+ *                      removed; their KATs live in aes-128-ecb-kat /
+ *                      aes-128-cbc-kat.                              [0 rows]
  *   Speck:             speck-32-64-be + decrypt, -le + decrypt
  *                      (Beaulieu et al. 2013 Table 4.1)             [4 rows]
  *   Serpent:           serpent-128/-192/-256 + decrypt counterparts
@@ -36,12 +38,9 @@
  *                                                                   [6 rows]
  *   DES:               des + des-decrypt (FIPS 46-3 Appendix B.1)  [2 rows]
  *
- * Genuine new coverage relative to the per-cipher files: AES-128 ECB
- * encrypt + decrypt have no dedicated dispatch-parity pin today — the
- * closest existing pin (`runtime-ported-dispatch-aux-only.test.ts` block
- * (b)) covers CBC, not ECB. Every other row is also pinned in a
- * per-cipher file; the matrix file's value is the single-file gate + the
- * explicit (spec, KAT, frames-byte-equal) triple per row.
+ * Every remaining row is also pinned in a per-cipher dispatch file; the
+ * matrix file's value is the single-file gate + the explicit (spec, KAT,
+ * frames-byte-equal) triple per row.
  *
  * Helper duplication intentional: per project convention every
  * `runtime-ported-dispatch-*.test.ts` file inlines its own
@@ -51,8 +50,6 @@
  * tests that use them.
  */
 
-import { aes128CbcSpec } from "@/ciphers/aes-128-cbc";
-import { aes128CbcDecryptSpec } from "@/ciphers/aes-128-cbc-decrypt";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { desSpec } from "@/ciphers/des";
 import { desDecryptSpec } from "@/ciphers/des-decrypt";
@@ -160,22 +157,9 @@ type Row = {
 // against. Their KATs live in aes-vectors / aes-192-vectors / aes-256-vectors /
 // aes-decrypt. Only the AES-128 ECB/CBC modes remain matrix here.
 
-// NIST SP 800-38A §F.1 (ECB) + §F.2 (CBC) share a 4-block plaintext
-// sample and a key. ECB §F.1.1 (encrypt) / §F.1.2 (decrypt); CBC §F.2.1
-// (encrypt) / §F.2.2 (decrypt). The §F PT sample is concatenated 4 × 16 B
-// = 64 B with no padding.
-const SP38A_KEY = "2b7e151628aed2a6abf7158809cf4f3c";
-const SP38A_IV = "000102030405060708090a0b0c0d0e0f";
-const SP38A_PT_4_BLOCKS =
-  "6bc1bee22e409f96e93d7e117393172a" +
-  "ae2d8a571e03ac9c9eb76fac45af8e51" +
-  "30c81c46a35ce411e5fbc1191a0a52ef" +
-  "f69f2445df4f9b17ad2b417be66c3710";
-const SP38A_CBC_CT_4_BLOCKS =
-  "7649abac8119b246cee98e9b12e9197d" +
-  "5086cb9b507219ee95db113a917678b2" +
-  "73bed6b8e3c1743b7116e69e22229516" +
-  "3ff1caa1681fac09120eca307586e1a7";
+// AES-128 ECB + CBC KAT constants moved out with their rows — both modes
+// are byte-native (Slice B1.4a/B1.4b), pinned in aes-128-ecb-kat /
+// aes-128-cbc-kat.
 
 // Speck32/64 — Beaulieu et al. 2013 Table 4.1 KAT under both byte
 // conventions. BE-paper is the paper's MSB-first presentation; LE-NSA
@@ -205,7 +189,8 @@ const DES_PT = "0123456789abcdef";
 const DES_KEY = "133457799bbcdff1";
 const DES_CT = "85e813540f0ab405";
 
-// ─── The 20-row matrix ─────────────────────────────────────────────────
+// ─── The 12-row matrix (Speck 4 + Serpent 6 + DES 2; all AES rows are now
+//     byte-native and live in their own KAT files) ──────────────────────
 
 const ROWS: readonly Row[] = [
   // AES single-block: 0 rows. The aes-128 ENCRYPT row was removed in Slice
@@ -216,33 +201,10 @@ const ROWS: readonly Row[] = [
   // against. This matrix's contract is "legacy == ported", which is vacuous for
   // a genuinely port-native spec. The byte-native KATs + frame streams live in
   // `aes-vectors.test.ts` (128 encrypt), `aes-decrypt.test.ts` (128 decrypt),
-  // and `aes-192-vectors` / `aes-256-vectors`. The AES-128 ECB rows were ALSO
-  // removed in Slice B1.4 — ECB is now byte-native (port-mode iterate +
-  // port-native body, no legacy path), KAT-pinned in `aes-128-ecb-kat.test.ts`.
-  // Only the AES-128 CBC mode remains matrix/lifted-legacy (until Slice B1.4b).
-  // AES-128 CBC × 2 directions = 2 rows
-  {
-    label: "aes-128 CBC encrypt (NIST SP 800-38A §F.2.1)",
-    spec: aes128CbcSpec,
-    stateBuilder: buildBytesState,
-    inputHex: SP38A_PT_4_BLOCKS,
-    expectedOutputHex: SP38A_CBC_CT_4_BLOCKS,
-    auxInputs: [
-      ["key", SP38A_KEY],
-      ["iv", SP38A_IV],
-    ],
-  },
-  {
-    label: "aes-128 CBC decrypt (NIST SP 800-38A §F.2.2)",
-    spec: aes128CbcDecryptSpec,
-    stateBuilder: buildBytesState,
-    inputHex: SP38A_CBC_CT_4_BLOCKS,
-    expectedOutputHex: SP38A_PT_4_BLOCKS,
-    auxInputs: [
-      ["key", SP38A_KEY],
-      ["iv", SP38A_IV],
-    ],
-  },
+  // and `aes-192-vectors` / `aes-256-vectors`. The AES-128 ECB rows were
+  // removed in Slice B1.4a and the CBC rows in B1.4b — both modes are now
+  // byte-native (port-mode iterate + port-native body, no legacy path),
+  // KAT-pinned in `aes-128-ecb-kat` / `aes-128-cbc-kat`. No AES rows remain.
   // Speck32/64 × 2 conventions × 2 directions = 4 rows
   {
     label: "speck-32-64 BE-paper encrypt (Beaulieu et al. 2013 Table 4.1)",

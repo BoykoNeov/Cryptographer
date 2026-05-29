@@ -27,6 +27,8 @@
  */
 
 import { aes128Spec } from "@/ciphers/aes-128";
+import { aes128CbcSpec } from "@/ciphers/aes-128-cbc";
+import { aes128CbcDecryptSpec } from "@/ciphers/aes-128-cbc-decrypt";
 import { aes128DecryptSpec } from "@/ciphers/aes-128-decrypt";
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { aes128EcbDecryptSpec } from "@/ciphers/aes-128-ecb-decrypt";
@@ -71,6 +73,14 @@ const SHIPPED_SPECS: ReadonlyArray<{ readonly name: string; readonly spec: Ciphe
   { name: "aes-128 decrypt", spec: aes128DecryptSpec },
   { name: "aes-128 ECB encrypt", spec: aes128EcbSpec },
   { name: "aes-128 ECB decrypt", spec: aes128EcbDecryptSpec },
+  // CBC (Slice B1.4b): byte-native port-mode iterate carrying the chain on
+  // `chainInput`/`chainFeedback` PortBindings. The `toEqual` deep-equality
+  // below is the loud regression gate for those fields — if a future change
+  // drops them from `IterateGroupSchema`, Zod strips them on parse and the
+  // round-trip mismatches. (ECB above covers seedInput/blockByteLength/
+  // bodyOutput; only CBC sets the chain fields.)
+  { name: "aes-128 CBC encrypt", spec: aes128CbcSpec },
+  { name: "aes-128 CBC decrypt", spec: aes128CbcDecryptSpec },
   { name: "aes-192 encrypt", spec: aes192Spec },
   { name: "aes-192 decrypt", spec: aes192DecryptSpec },
   { name: "aes-256 encrypt", spec: aes256Spec },

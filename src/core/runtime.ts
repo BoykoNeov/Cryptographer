@@ -334,6 +334,14 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
               `iterate '${node.id}': bodyOutput is required in port mode (seedInput set) — name the body node+port whose bytes are each iteration's result`,
             );
           }
+          // Cross-iteration chain (B1.4b CBC): both-or-neither. A half-wired
+          // chain (an IV seed with no feedback, or vice versa) is a spec bug —
+          // fail loud rather than silently dropping the carry.
+          if ((node.chainInput === undefined) !== (node.chainFeedback === undefined)) {
+            throw new Error(
+              `iterate '${node.id}': chainInput and chainFeedback must both be set (CBC-style feedback) or both absent (plain per-block loop)`,
+            );
+          }
           const seedSource = resolveBinding(
             nodeOutputs,
             node.seedInput,
@@ -348,12 +356,30 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
           const count = seedSource.length / blockLen;
           const iteratePath = [...path, node.id];
           const collected: Uint8Array[] = [];
+          // The chain value for iteration i (CBC: the previous ciphertext block,
+          // bootstrapped from the IV). Resolved once in the PARENT scope for
+          // iteration 0, then advanced per iteration from `chainFeedback`.
+          // `undefined` ⇒ no chaining (plain ECB-style loop).
+          let prevChain: Uint8Array | undefined =
+            node.chainInput !== undefined
+              ? new Uint8Array(
+                  resolveBinding(
+                    nodeOutputs,
+                    node.chainInput,
+                    `iterate '${node.id}': chainInput`,
+                    "upstream",
+                  ),
+                )
+              : undefined;
           for (let i = 0; i < count; i++) {
             aux.set("blockIndex", i);
             const block = new Uint8Array(seedSource.subarray(i * blockLen, (i + 1) * blockLen));
             // Inject the per-block bytes as `port(iterateId, "in")` so the
-            // body's head leaf reads `{ node: iterateId, port: "in" }`.
-            const iterSeed = new Map([[node.id, new Map([["in", block]])]]);
+            // body's head leaf reads `{ node: iterateId, port: "in" }`. In CBC
+            // mode also inject the chain value as `port(iterateId, "chain")`.
+            const portMap = new Map<string, Uint8Array>([["in", block]]);
+            if (prevChain !== undefined) portMap.set("chain", prevChain);
+            const iterSeed = new Map([[node.id, portMap]]);
             const bodyOutputs = walk(
               node.children,
               iteratePath,
@@ -372,6 +398,21 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
                 ),
               ),
             );
+            // Advance the chain for the next iteration. `chainFeedback`
+            // resolves against the body's returned `nodeOutputs` — which still
+            // holds the injected `iterateId → {in, chain}` ports (seeded via
+            // `new Map(seedOutputs)`), so decrypt's `port(iterateId,"in")`
+            // feedback (the raw ciphertext block) resolves correctly.
+            if (node.chainFeedback !== undefined) {
+              prevChain = new Uint8Array(
+                resolveBinding(
+                  bodyOutputs,
+                  node.chainFeedback,
+                  `iterate '${node.id}': chainFeedback`,
+                  "body",
+                ),
+              );
+            }
           }
           // Concatenate per-iteration outputs → the container's exit bytes.
           const total = collected.reduce((n, b) => n + b.length, 0);

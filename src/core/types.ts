@@ -287,6 +287,33 @@ export type IterateGroup = {
    * (which must divide evenly). Unused in aux mode.
    */
   readonly blockByteLength?: number;
+  /**
+   * Cross-iteration feedback (scaffolding-suppression B1.4b — byte-native
+   * CBC). Distinct from `seedInput` (which carries the *whole* multi-block
+   * input, split per iteration): the chain port carries a *single-block*
+   * value that updates each iteration — the previous ciphertext block in CBC.
+   * Both required together (port mode), or both absent (plain ECB-style loop).
+   *
+   *  - `chainInput` — a `PortBinding` resolved in the **parent scope**
+   *    (a preceding sibling, like `seedInput`). Its bytes are the chain value
+   *    for iteration 0 — the IV in CBC. The runtime injects it as
+   *    `port(iterateId, "chain")` into the body scope so the body's chaining
+   *    XOR can wire to `{ node: iterateId, port: "chain" }`.
+   *  - `chainFeedback` — a `PortBinding` resolved in the **body scope** at the
+   *    END of each iteration; its bytes become the `chain` port injected into
+   *    the NEXT iteration. CBC's encrypt/decrypt asymmetry lives entirely here:
+   *    encrypt feeds the previous *output* (`round.N.out`), decrypt feeds the
+   *    previous *input* (`port(iterateId, "in")`, the raw ciphertext block).
+   *    Resolving the latter relies on the injected `chain`/`in` ports surviving
+   *    in the body's returned `nodeOutputs` map (they do — see `walk`'s
+   *    `nodeOutputs = new Map(seedOutputs)` seeding).
+   *
+   * The general "value carried from iteration i to i+1" shape (CTR counter,
+   * OFB/CFB feedback) would reuse this; B1.4b builds it CBC-shaped and the
+   * plan's deferred recurrence-visibility work owns the general graph edge.
+   */
+  readonly chainInput?: PortBinding;
+  readonly chainFeedback?: PortBinding;
 };
 
 /**

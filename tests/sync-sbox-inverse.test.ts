@@ -26,7 +26,6 @@ import { __resetLayoutsForTests } from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
 import {
   __resetSpecForTests,
-  setCipherMode,
   setMode,
   syncSboxInverseToCounterpart,
   useCipherSpecsByMode,
@@ -39,18 +38,15 @@ const resetAll = (): void => {
   __resetCipherForTests();
   __resetCipherModeForTests();
   __resetLayoutsForTests();
-  // Retarget to AES-128 CBC: every single-block AES (128/192/256, B1.3) AND
-  // ECB (B1.4a) is now byte-native and no longer carries
-  // `generic.byte-substitution@1` steps, so a cross-slot mirror test on those
-  // would collect 0 matching steps. The CBC mode still threads the matrix
-  // round body (`aes-round-builder.ts` → `generic.*`) on BOTH encrypt and
-  // decrypt until Slice B1.4b — the last selectable matrix carrier, keeping
-  // this test exercising the still-live matrix mirror mutator. (The mutator +
-  // `collectSboxParams` both recurse into the iterate body, so the multi-block
-  // wrapping is transparent here.) When CBC converts in B1.4b no matrix AES
-  // remains and this matrix-path describe retires with Phase C / the matrix
-  // mirror entry is dropped.
-  setCipherMode("cbc");
+  // Default AES-128 single-block (byte-native on BOTH modes since B1.1/B1.2).
+  // Slice B1.4b made CBC byte-native too, so NO shipped spec carries the matrix
+  // `generic.byte-substitution@1` type anymore — there is no selectable matrix
+  // AES to mirror. This file therefore exercises the mutator against the
+  // byte-native `byte-substitute@1` type, which is the live cross-mode-mirror
+  // path. The mutator is stepType-agnostic (same function for matrix +
+  // byte-native), so the both-directions / active-untouched / canonical
+  // round-trip coverage below pins the mutator's full contract. The matrix
+  // `generic.byte-substitution@1` mirror entry retires with Phase C.
 };
 
 // Visit every leaf with the given type and collect its `sbox` param.
@@ -97,10 +93,10 @@ describe("syncSboxInverseToCounterpart — cross-slot value mirror", () => {
     }
     const expectedInverse = invertSbox(rotated);
 
-    syncSboxInverseToCounterpart("generic.byte-substitution@1", expectedInverse);
+    syncSboxInverseToCounterpart("byte-substitute@1", expectedInverse);
 
     const decryptSpec = useCipherSpecsByMode()().decrypt;
-    const decryptTables = collectSboxParams(decryptSpec, "generic.byte-substitution@1");
+    const decryptTables = collectSboxParams(decryptSpec, "byte-substitute@1");
 
     expect(decryptTables.length).toBeGreaterThan(0); // AES has 10+ SubBytes steps
     for (const table of decryptTables) {
@@ -124,10 +120,10 @@ describe("syncSboxInverseToCounterpart — cross-slot value mirror", () => {
     }
     const expectedWrite = invertSbox(rotated);
 
-    syncSboxInverseToCounterpart("generic.byte-substitution@1", expectedWrite);
+    syncSboxInverseToCounterpart("byte-substitute@1", expectedWrite);
 
     const encryptSpec = useCipherSpecsByMode()().encrypt;
-    const encryptTables = collectSboxParams(encryptSpec, "generic.byte-substitution@1");
+    const encryptTables = collectSboxParams(encryptSpec, "byte-substitute@1");
 
     expect(encryptTables.length).toBeGreaterThan(0);
     for (const table of encryptTables) {
@@ -137,16 +133,10 @@ describe("syncSboxInverseToCounterpart — cross-slot value mirror", () => {
 
   it("leaves the active slot untouched", () => {
     // Capture the active slot's tables before, mutate, compare after.
-    const beforeEncrypt = collectSboxParams(
-      useCipherSpecsByMode()().encrypt,
-      "generic.byte-substitution@1",
-    );
+    const beforeEncrypt = collectSboxParams(useCipherSpecsByMode()().encrypt, "byte-substitute@1");
     const inverse = invertSbox(AES_SBOX);
-    syncSboxInverseToCounterpart("generic.byte-substitution@1", inverse);
-    const afterEncrypt = collectSboxParams(
-      useCipherSpecsByMode()().encrypt,
-      "generic.byte-substitution@1",
-    );
+    syncSboxInverseToCounterpart("byte-substitute@1", inverse);
+    const afterEncrypt = collectSboxParams(useCipherSpecsByMode()().encrypt, "byte-substitute@1");
     expect(afterEncrypt).toEqual(beforeEncrypt);
   });
 
@@ -156,50 +146,11 @@ describe("syncSboxInverseToCounterpart — cross-slot value mirror", () => {
     // canonical/canonical relationship — if invertSbox or the spec
     // factory ever drifts, this catches it.
     const inverse = invertSbox(AES_SBOX);
-    syncSboxInverseToCounterpart("generic.byte-substitution@1", inverse);
-
-    const decryptTables = collectSboxParams(
-      useCipherSpecsByMode()().decrypt,
-      "generic.byte-substitution@1",
-    );
-    for (const table of decryptTables) {
-      expect(table).toEqual([...AES_INV_SBOX]);
-    }
-  });
-});
-
-// ─── Byte-native AES-128 (Slice B1.2) — SubBytes is `byte-substitute@1` ──────
-// Both AES-128 modes are byte-native now, so the SAME mutator that mirrors the
-// matrix `generic.byte-substitution@1` type also mirrors the port-native
-// `byte-substitute@1` type end-to-end. This is the behavior the B1.2
-// cross-mode-mirror registry entry + ParamEditor SyncInverseRow promise: a
-// functional pin beyond the button-presence coverage test.
-describe("syncSboxInverseToCounterpart — byte-native byte-substitute@1 (default AES-128)", () => {
-  const resetByteNative = (): void => {
-    __resetPaddingForTests();
-    __resetSpecForTests();
-    __resetCipherForTests();
-    __resetCipherModeForTests();
-    __resetLayoutsForTests();
-    // Leave the cipher at the AES-128 default — byte-native on BOTH modes.
-  };
-  beforeEach(resetByteNative);
-  afterEach(resetByteNative);
-
-  it("active=encrypt mirrors the inverse onto every decrypt byte-substitute@1 leaf", () => {
-    const inverse = invertSbox(AES_SBOX);
     syncSboxInverseToCounterpart("byte-substitute@1", inverse);
 
     const decryptTables = collectSboxParams(useCipherSpecsByMode()().decrypt, "byte-substitute@1");
-    expect(decryptTables.length).toBeGreaterThan(0);
     for (const table of decryptTables) {
-      // invertSbox(AES_SBOX) === AES_INV_SBOX (the canonical decrypt table).
       expect(table).toEqual([...AES_INV_SBOX]);
-    }
-    // The active (encrypt) slot still holds the forward table.
-    const encryptTables = collectSboxParams(useCipherSpecsByMode()().encrypt, "byte-substitute@1");
-    for (const table of encryptTables) {
-      expect(table).toEqual([...AES_SBOX]);
     }
   });
 });
