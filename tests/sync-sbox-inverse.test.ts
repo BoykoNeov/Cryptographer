@@ -26,6 +26,7 @@ import { __resetLayoutsForTests } from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
 import {
   __resetSpecForTests,
+  setCipher,
   setMode,
   syncSboxInverseToCounterpart,
   useCipherSpecsByMode,
@@ -38,6 +39,13 @@ const resetAll = (): void => {
   __resetCipherForTests();
   __resetCipherModeForTests();
   __resetLayoutsForTests();
+  // Retarget to AES-192: the default AES-128 ENCRYPT spec is byte-native
+  // (Slice B1) and no longer carries `generic.byte-substitution@1` steps, so a
+  // cross-slot mirror test on AES-128 would collect 0 matching steps in the
+  // encrypt slot. AES-192 stays matrix on BOTH sides until B1.3 — keeping this
+  // test exercising the still-live matrix mirror mutator. (Byte-native mirror
+  // entries land in B1.2 when both modes share the byte-native type.)
+  setCipher("aes-192");
 };
 
 // Visit every leaf with the given type and collect its `sbox` param.

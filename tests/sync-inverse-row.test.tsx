@@ -25,7 +25,7 @@ import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
 import { __resetLayoutsForTests } from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
-import { __resetSpecForTests, editStepParams, useSpec } from "@/ui/stores/spec";
+import { __resetSpecForTests, editStepParams, setCipher, useSpec } from "@/ui/stores/spec";
 import { __resetTraceForTests, setSelectedStepId } from "@/ui/stores/trace";
 import { __resetViewDensityForTests } from "@/ui/stores/view-density";
 import { __resetViewModeForTests } from "@/ui/stores/view-mode";
@@ -46,6 +46,13 @@ const resetAll = (): void => {
   __resetTraceForTests();
   __resetViewDensityForTests();
   __resetViewModeForTests();
+  // Retarget to AES-192: the default AES-128 ENCRYPT body is byte-native
+  // (Slice B1), so `round.1.sub-bytes` is now `byte-substitute@1` whose editor
+  // intentionally omits the cross-mode sync row (false-affordance avoidance —
+  // the decrypt counterpart is still matrix until B1.2). AES-192 stays matrix
+  // on both sides, so the matrix `generic.byte-substitution@1` SubBytes editor
+  // with its Sync-inverse row still renders.
+  setCipher("aes-192");
 };
 
 describe("SyncInverseRow — gating on bijection", () => {

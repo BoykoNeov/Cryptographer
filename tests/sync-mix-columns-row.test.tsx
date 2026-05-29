@@ -31,7 +31,7 @@ import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
 import { __resetLayoutsForTests } from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
-import { __resetSpecForTests, editStepParams, useSpec } from "@/ui/stores/spec";
+import { __resetSpecForTests, editStepParams, setCipher, useSpec } from "@/ui/stores/spec";
 import { __resetTraceForTests, setSelectedStepId } from "@/ui/stores/trace";
 import { __resetViewDensityForTests } from "@/ui/stores/view-density";
 import { __resetViewModeForTests } from "@/ui/stores/view-mode";
@@ -52,6 +52,13 @@ const resetAll = (): void => {
   __resetTraceForTests();
   __resetViewDensityForTests();
   __resetViewModeForTests();
+  // Retarget to AES-192: the default AES-128 ENCRYPT body is byte-native
+  // (Slice B1), so `round.1.mix-columns` is now `gf-matrix-multiply@1` whose
+  // editor intentionally omits the cross-mode sync row (false-affordance
+  // avoidance — the decrypt counterpart is still matrix until B1.2). AES-192
+  // stays matrix on both sides, so the matrix `generic.mix-columns@1`
+  // MixColumns editor with its Sync-inverse-MixColumns row still renders.
+  setCipher("aes-192");
 };
 
 // Canonical AES-128 has a MixColumns leaf in every non-final round at
