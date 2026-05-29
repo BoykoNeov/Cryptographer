@@ -39,6 +39,7 @@
 import { aes128Spec } from "@/ciphers/aes-128";
 import { aes128DecryptSpec } from "@/ciphers/aes-128-decrypt";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { requiresPortedDispatch } from "@/core/dispatch";
 import {
   CURRENT_SCHEMA_VERSION,
   type CipherDocument,
@@ -47,7 +48,7 @@ import {
 } from "@/core/document";
 import { runSpec } from "@/core/runtime";
 import { duplicateRoundGroup, findStep } from "@/core/spec-mutations";
-import { bytesFromHex, hexFromBytes } from "@/core/state/bytes";
+import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, CipherSpec, StepNode } from "@/core/types";
 import { describe, expect, it } from "vitest";
@@ -117,11 +118,15 @@ describe("duplicate-round save/load — run-correctness survives round-trip", ()
 
     const registry = buildDefaultRegistry();
 
+    // Byte-native encrypt (Slice B1): flat BytesState + ported dispatch.
+    // Confirms serialize/parse preserved portInputs/seedInput/outputFrom
+    // faithfully — a dropped binding would surface as a runtime throw here.
     const encryptTrace = runSpec(encryptParse.doc.spec, registry, {
-      initialState: matrixFromBytes(bytesFromHex(PLAINTEXT_HEX)),
+      initialState: makeBytesState(bytesFromHex(PLAINTEXT_HEX)),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(KEY_HEX)]]),
+      portedDispatchEnabled: requiresPortedDispatch(encryptParse.doc.spec, registry),
     });
-    if (encryptTrace.finalState.shape !== "matrix4x4-bytes") throw new Error("matrix expected");
+    if (encryptTrace.finalState.shape !== "bytes") throw new Error("bytes expected");
     const ciphertext = encryptTrace.finalState.bytes;
 
     const decryptTrace = runSpec(decryptParse.doc.spec, registry, {

@@ -633,6 +633,78 @@ removes its A4-allowlist entry on merge.
 > next session. A future session should be able to resume entirely from this
 > section + the memory file `project_scaffolding_suppression_plan.md`.
 
+#### Session 2 (2026-05-29) — topology commits landed; mechanical sweep is next
+
+Three of the planned five steps are DONE and committed (red-WIP `--no-verify`,
+sanctioned). The suite is still broadly red (the ~50-file fixture sweep is the
+remaining work — the advisor-designated session boundary). Findings that
+**override the session-1 playbook** are flagged ⚠️.
+
+- **Batch 1 `685b748` — byte-native AES-128 + topology-aware padding.**
+  Re-applied the byte-native `aes-128.ts` (KAT re-confirmed `69c4e0d8…`, 52
+  frames, ported-dispatch auto-on). Reworked `applyPaddingScheme` with a new
+  **Branch 2** for byte-native AES: prepend pad reading `$input`, repoint
+  `$input` consumers to the pad's output. ⚠️ **The lifted pad's output port is
+  `"state"`, NOT `"output"`** (plan said "output" — wrong; lifted Phase-1 steps
+  publish under `meta.stateOutputPort="state"`, see `port-projection.ts:713`).
+  ⚠️ **Idempotency needs an EDGE restore**, not just leaf strip:
+  `restoreInputSourceConsumers` repoints pad-output bindings back to `$input`
+  before a strip removes the pad leaf (else dangling). `isByteNativeAesSpec`
+  gates on the **AES family (id prefix)** — the hardcoded `AES_BLOCK_SIZE=16` is
+  the real constraint, so Speck(4)/DES(8) must stay no-op (B3/B4 seam). Decrypt
+  branch implemented symmetrically (forward-compat for B1.2, NOT exercised).
+  `spec-mutations-padding.test.ts` rewritten + green.
+- **Batch 2 `0405949` — cross-mode mirror: Option D descope (advisor-reviewed).**
+  ⚠️ **Did NOT add byte-native mirror entries/buttons.** The sync mutators are
+  same-type (`updateAllStepsByType` keys on ONE stepType); a B1 byte-native sync
+  button would silently no-op against the matrix decrypt counterpart — a FALSE
+  AFFORDANCE. `byte-substitute@1`'s natural home is B1.2 (once decrypt is also
+  byte-native, both sides share the type and the existing mutator works with
+  ZERO new code). The "class-2 can't ship without a mirror" rule is a
+  merge-to-main gate; deferring within the branch is fine. Only change: the
+  coverage test's `setupForEntry` now `setCipher("aes-192")` (still matrix) for
+  the two legacy AES entries so they exercise the still-live matrix buttons.
+  Registry UNTOUCHED. **→ B1.2 MUST add `{byte-substitute@1,sbox,inverse}` +
+  `{gf-matrix-multiply@1,matrix,inverse}` entries + ParamEditor buttons.**
+- **Batch 3 (duplicate-round) — EDITED + logic-validated, test-run PENDING a
+  tooling outage.** Extended `renumberRoundGroup` (forward, presence-guarded so
+  legacy matrix rounds untouched): bump `aux-load-bytes@1` auxName (byte-native
+  carries roundKey.N on `fetch-rk`, not on the xor AddRoundKey); remap each
+  child's `portInputs` + the group's `bodyOutput` by prefix; ⚠️ **RECOMPUTE
+  `seedInput`** (`toN===1 ? initial.add-round-key/"output" : round.{toN-1}/"out"`)
+  rather than rename-map remap — the predecessor shifts +1 for BOTH the clone
+  and every renumbered sibling, which the rename map can't express (plan said
+  "remap through rename map" — wrong for seedInput). ⚠️ **ALSO: `duplicateRoundGroup`
+  must REMAP `spec.outputFrom` through the rename map** (`round.10`→`round.11` on a
+  forward dup of the final round). Found via a parity probe: byte-native dup
+  produced `d961a1…` vs matrix dup `bbcd9a…` despite IDENTICAL round structure
+  (same keys/mix/seed-chain/internal-wiring, zero dangling) — the spec exit
+  still pointed at the OLD final round (`round.10`, now a full mid-round),
+  silently SKIPPING the real final round. After the fix both = `bbcd9a…`. Legacy
+  matrix specs have no `outputFrom` (no-op); reverse keeps `inv-round.0` (not
+  renamed). This is the difference between "the spec looks right" and "the cipher
+  computes right" — structure dumps weren't enough; the byte-equal parity probe
+  caught it. Validated: 11 rounds, auxNames bumped, full seedInput chain correct,
+  **zero dangling bindings**, clean ported run, byte-native dup == matrix dup.
+  Updated
+  `duplicate-round-{mutator,store,save-load}.test.ts` + `graph-duplicate-button`
+  for byte-native (auxName→`fetch-rk`, child-type list, rename count 5/round,
+  encrypt run→bytes+ported; decrypt stays matrix). **NOT yet run/committed** —
+  the bash/powershell safety classifier went unavailable mid-session. Re-run
+  those 4 files + `tsc` + `biome` and commit before the sweep.
+
+**Remaining (mechanical sweep — next session's bulk):** ~50 test files
+reference `aes128Spec`/`aes-128`. Each that runs it via `matrixFromBytes` +
+no `portedDispatchEnabled` needs: `makeBytesState` + `requiresPortedDispatch`,
+and `finalState.shape` `"matrix4x4-bytes"`→`"bytes"`, intermediate reads via
+`frame.portOutputs.get("output")` not `stateAfter`. Rewrite
+`aes-vectors.test.ts` (reorder-by-array-swap test is moot under ports). The
+(C) legacy-concept tests (`aux-graph-derivation` "40 state edges / spine
+crosses rounds") have NO byte-native state spine — retarget to a still-legacy
+cipher (Speck/DES) rather than reflexively rewrite. Do NOT touch the A4
+allowlist this session (matrix `generic.*` still live on decrypt + 192/256 +
+modes → still offenders → allowlist stays; drains in B1.2/B1.4).
+
 **Shipped this session (commit `45eff12`, full gate green, suite 2486→2520):**
 - Three byte-native primitives + `aes-round-builder-native.ts` (unused so far)
   + 34 tests. `byte-substitute@1` (SubBytes), `permute@1` (ShiftRows,

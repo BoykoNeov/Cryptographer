@@ -960,6 +960,8 @@ const INV_ROUND_ID_RE = /^inv-round\.(\d+)$/;
 const ROUND_LABEL_RE = /^Round (\d+)/;
 const INV_ROUND_LABEL_RE = /^Inverse Round (\d+)/;
 const ADD_ROUND_KEY_TYPE = "generic.add-round-key@1";
+/** Byte-native AddRoundKey's round-key fetch leaf (carries `auxName: roundKey.N`). */
+const AUX_LOAD_BYTES_TYPE = "aux-load-bytes@1";
 const KEY_EXPANSION_V1 = "aes.key-expansion@1";
 const KEY_EXPANSION_V2 = "aes.key-expansion@2";
 
@@ -991,6 +993,35 @@ const renumberRoundGroup = (
   const oldAuxName = `roundKey.${fromN}`;
   const newAuxName = `roundKey.${toN}`;
 
+  // Port-binding node remap (byte-native rounds, Slice B1). A round's
+  // internal port edges reference either the group's own `in` port (the
+  // group id) or a sibling leaf by its `round.N.*` id. Both renumber
+  // mechanically: `port(round.N, …) → port(round.toN, …)` and
+  // `port(round.N.x, …) → port(round.toN.x, …)`. Cross-boundary `seedInput`
+  // is NOT mechanical (it points at the PREVIOUS round, which shifts +1) and
+  // is recomputed below. Returns the same reference when nothing changes so
+  // legacy matrix rounds (no portInputs) stay reference-stable.
+  const remapBindingNode = (b: PortBinding): PortBinding => {
+    if (b.node === oldGroupId) return port(newGroupId, b.port);
+    if (b.node.startsWith(oldChildPrefix)) {
+      return port(newChildPrefix + b.node.slice(oldChildPrefix.length), b.port);
+    }
+    return b;
+  };
+  const remapPortInputs = (
+    pi: Readonly<Record<string, PortBinding>> | undefined,
+  ): Readonly<Record<string, PortBinding>> | undefined => {
+    if (pi === undefined) return undefined;
+    let changed = false;
+    const next: Record<string, PortBinding> = {};
+    for (const [k, b] of Object.entries(pi)) {
+      const nb = remapBindingNode(b);
+      if (nb !== b) changed = true;
+      next[k] = nb;
+    }
+    return changed ? next : pi;
+  };
+
   const newChildren = group.children.map((child) => {
     if (child.kind !== "step") {
       // Nested groups inside a round group aren't a shape any canonical
@@ -1003,14 +1034,27 @@ const renumberRoundGroup = (
       newId = newChildPrefix + child.id.slice(oldChildPrefix.length);
       renames.set(child.id, newId);
     }
+    // Bump the round-key auxName on whichever leaf consumes it. Legacy
+    // matrix rounds carry it on `generic.add-round-key@1`; byte-native
+    // rounds carry it on the `aux-load-bytes@1` fetch-rk leaf (the xor
+    // AddRoundKey reads the fetched bytes off a port, not aux).
     let newParams = child.params;
-    if (child.type === ADD_ROUND_KEY_TYPE) {
+    if (child.type === ADD_ROUND_KEY_TYPE || child.type === AUX_LOAD_BYTES_TYPE) {
       const p = child.params as { readonly auxName?: unknown };
       if (p && typeof p.auxName === "string" && p.auxName === oldAuxName) {
         newParams = { ...(p as Record<string, Json>), auxName: newAuxName };
       }
     }
-    return { ...child, id: newId, params: newParams };
+    // Byte-native rounds wire their internal data flow via portInputs;
+    // remap those references to the renumbered ids. Absent on legacy
+    // matrix rounds ⇒ reference-stable no-op.
+    const newPortInputs = remapPortInputs(child.portInputs);
+    return {
+      ...child,
+      id: newId,
+      params: newParams,
+      ...(newPortInputs !== undefined ? { portInputs: newPortInputs } : {}),
+    };
   });
 
   // Update the label if it follows the canonical pattern, preserving any
@@ -1026,11 +1070,34 @@ const renumberRoundGroup = (
     }
   }
 
+  // Byte-native group port contract (Slice B1). `bodyOutput` points at a
+  // direct child (`round.N.add-round-key`) and renumbers mechanically.
+  // `seedInput` crosses the group boundary to the PREVIOUS round's output,
+  // so it can't be remapped through the rename map — the predecessor shifts
+  // +1 for BOTH the clone (which seeds from its source, = toN-1) and every
+  // renumbered sibling. Recompute it from the new index instead. Forward
+  // only: the byte-native decrypt rounds (with their own seedInput chain)
+  // land in Slice B1.2; today's reverse path is matrix (no seedInput).
+  const newBodyOutput =
+    group.bodyOutput !== undefined ? remapBindingNode(group.bodyOutput) : undefined;
+  let newSeedInput = group.seedInput;
+  if (group.seedInput !== undefined && direction === "forward") {
+    // round 1 seeds from the initial AddRoundKey LEAF (its output port is
+    // "output"); rounds ≥2 seed from the previous round GROUP's published
+    // "out" port — matching `buildAesEncryptBodyNative`. `toN === 1` is
+    // unreachable via duplicate (clone/renumber targets are always ≥2) but
+    // kept correct for completeness.
+    newSeedInput =
+      toN === 1 ? port("initial.add-round-key", "output") : port(`round.${toN - 1}`, "out");
+  }
+
   return {
     ...group,
     id: newGroupId,
     ...(newLabel !== undefined ? { label: newLabel } : {}),
     children: newChildren,
+    ...(newSeedInput !== undefined ? { seedInput: newSeedInput } : {}),
+    ...(newBodyOutput !== undefined ? { bodyOutput: newBodyOutput } : {}),
   };
 };
 
@@ -1241,10 +1308,26 @@ export const duplicateRoundGroup = (
     specAfterSplice = replaced;
   }
 
-  // Finally, bump the key schedule. This is independent of which parent
-  // held the source — key-expansion is always at the top level (single-
-  // block and ECB both put it there, outside the iterate).
-  const finalSpec = bumpKeyExpansion(specAfterSplice);
+  // Bump the key schedule. This is independent of which parent held the
+  // source — key-expansion is always at the top level (single-block and ECB
+  // both put it there, outside the iterate).
+  let finalSpec = bumpKeyExpansion(specAfterSplice);
+
+  // Byte-native AES (Slice B1) names its cipher exit via `spec.outputFrom`
+  // (= `port(round.{last}, "out")`). A FORWARD duplicate shifts the final
+  // round up (round.10 → round.11), so the exit binding must follow the
+  // rename or the cipher would publish a mid-round's output (taking the
+  // result from a now-full round and SKIPPING the real final round). Legacy
+  // matrix specs have no `outputFrom` (final state = walk exit) so this is a
+  // no-op there; in reverse the final inv-round.0 isn't renamed so it's also
+  // untouched. Remap through the same rename map the renumber built.
+  if (finalSpec.outputFrom !== undefined) {
+    const renamed = renames.get(finalSpec.outputFrom.node);
+    if (renamed !== undefined) {
+      finalSpec = { ...finalSpec, outputFrom: { ...finalSpec.outputFrom, node: renamed } };
+    }
+  }
+
   return { spec: finalSpec, renames };
 };
 

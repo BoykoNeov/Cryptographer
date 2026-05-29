@@ -24,9 +24,10 @@ import { aes128Spec } from "@/ciphers/aes-128";
 import { aes128DecryptSpec } from "@/ciphers/aes-128-decrypt";
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { requiresPortedDispatch } from "@/core/dispatch";
 import { runSpec } from "@/core/runtime";
 import { duplicateRoundGroup, findStep } from "@/core/spec-mutations";
-import { bytesFromHex, hexFromBytes } from "@/core/state/bytes";
+import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, CipherSpec, IterateGroup, StepGroup, StepNode } from "@/core/types";
 import { describe, expect, it } from "vitest";
@@ -91,14 +92,24 @@ describe("duplicateRoundGroup — forward (AES-128 single-block)", () => {
     // No leftover round.12 (we only inserted one).
     expect(findGroup(spec, "round.12")).toBeNull();
 
-    // round.2 still reads roundKey.2 (unchanged).
-    expect(auxNameOf(spec, "round.2.add-round-key")).toBe("roundKey.2");
-    // The clone (now round.3) reads roundKey.3.
-    expect(auxNameOf(spec, "round.3.add-round-key")).toBe("roundKey.3");
-    // round.4 (was round.3) reads roundKey.4 (was .3).
-    expect(auxNameOf(spec, "round.4.add-round-key")).toBe("roundKey.4");
-    // round.11 (was round.10, the final) reads roundKey.11.
-    expect(auxNameOf(spec, "round.11.add-round-key")).toBe("roundKey.11");
+    // Byte-native AES-128 (Slice B1): the round key is fetched by the
+    // `aux-load-bytes@1` `fetch-rk` leaf (the AddRoundKey itself is an
+    // `xor@1` reading that port, with no auxName). So the roundKey index
+    // bump lands on `round.N.fetch-rk`, not `round.N.add-round-key`.
+    expect(auxNameOf(spec, "round.2.fetch-rk")).toBe("roundKey.2"); // source unchanged
+    expect(auxNameOf(spec, "round.3.fetch-rk")).toBe("roundKey.3"); // the clone
+    expect(auxNameOf(spec, "round.4.fetch-rk")).toBe("roundKey.4"); // was round.3
+    expect(auxNameOf(spec, "round.11.fetch-rk")).toBe("roundKey.11"); // was round.10 (final)
+
+    // The port-to-port seedInput chain is rewired so each round seeds from
+    // its (new) predecessor: the clone (round.3) seeds from the source
+    // (round.2); the shifted old-round.3 (now round.4) seeds from the clone.
+    expect(findGroup(spec, "round.3")?.seedInput).toEqual({ node: "round.2", port: "out" });
+    expect(findGroup(spec, "round.4")?.seedInput).toEqual({ node: "round.3", port: "out" });
+    expect(findGroup(spec, "round.1")?.seedInput).toEqual({
+      node: "initial.add-round-key",
+      port: "output",
+    });
 
     // The rename map must include every shifted round and its children.
     expect(renames.get("round.3")).toBe("round.4");
@@ -110,6 +121,25 @@ describe("duplicateRoundGroup — forward (AES-128 single-block)", () => {
     expect(renames.get("round.2")).toBeUndefined();
   });
 
+  it("rewires the clone's internal portInputs to the renumbered ids (no dangling)", () => {
+    const { spec } = duplicateRoundGroup(aes128Spec, "round.2", "forward");
+    // The clone is round.3; its leaves must reference round.3.* / round.3,
+    // never the source round.2.* ids.
+    const pi = (id: string) => findStep(spec, id)?.portInputs;
+    expect(pi("round.3.sub-bytes")).toEqual({ input: { node: "round.3", port: "in" } });
+    expect(pi("round.3.shift-rows")).toEqual({
+      input: { node: "round.3.sub-bytes", port: "output" },
+    });
+    expect(pi("round.3.add-round-key")).toEqual({
+      operand0: { node: "round.3.mix-columns", port: "output" },
+      operand1: { node: "round.3.fetch-rk", port: "output" },
+    });
+    expect(findGroup(spec, "round.3")?.bodyOutput).toEqual({
+      node: "round.3.add-round-key",
+      port: "output",
+    });
+  });
+
   it("bumps key-expansion's rounds param and morphs the type to @2", () => {
     const { spec } = duplicateRoundGroup(aes128Spec, "round.2", "forward");
     expect(keyExpansionRounds(spec)).toBe(11);
@@ -118,17 +148,13 @@ describe("duplicateRoundGroup — forward (AES-128 single-block)", () => {
 
   it("preserves the final round's no-MixColumns shape on the shifted final", () => {
     // The old round.10 (final round, no MixColumns) became round.11. Its
-    // children should still be sub-bytes, shift-rows, add-round-key — no
-    // mix-columns leaf.
+    // byte-native children should still be SubBytes → ShiftRows → (fetch
+    // round key) → AddRoundKey, with NO MixColumns leaf.
     const { spec } = duplicateRoundGroup(aes128Spec, "round.2", "forward");
     const finalGroup = findGroup(spec, "round.11");
     expect(finalGroup).not.toBeNull();
     const childTypes = finalGroup?.children.map((c) => (c.kind === "step" ? c.type : "group"));
-    expect(childTypes).toEqual([
-      "generic.byte-substitution@1",
-      "generic.shift-rows@1",
-      "generic.add-round-key@1",
-    ]);
+    expect(childTypes).toEqual(["byte-substitute@1", "permute@1", "aux-load-bytes@1", "xor@1"]);
   });
 
   it("re-labels shifted rounds when they follow the canonical 'Round N' pattern", () => {
@@ -236,12 +262,13 @@ describe("duplicateRoundGroup — rename map exhaustiveness", () => {
   it("forward: contains every renamed group AND every renamed child leaf", () => {
     const { renames } = duplicateRoundGroup(aes128Spec, "round.3", "forward");
     // Affected rounds: round.4..round.10 (originally) → round.5..round.11.
-    // Each round has 4 children except the final (3 children).
+    // Byte-native rounds have FIVE children (SubBytes, ShiftRows, MixColumns,
+    // fetch-rk, AddRoundKey); the final round has four (no MixColumns).
     let expectedEntries = 0;
     for (let n = 4; n <= 9; n++) {
-      expectedEntries += 1 + 4; // group + 4 leaves
+      expectedEntries += 1 + 5; // group + 5 leaves
     }
-    expectedEntries += 1 + 3; // round.10 (final) → round.11 group + 3 leaves
+    expectedEntries += 1 + 4; // round.10 (final) → round.11 group + 4 leaves
     expect(renames.size).toBe(expectedEntries);
   });
 
@@ -296,17 +323,22 @@ describe("duplicateRoundGroup — end-to-end round-trip on a duplicated AES-128"
 
     const registry = buildDefaultRegistry();
 
-    // Run the encrypt.
+    // Run the encrypt. Byte-native AES-128 (Slice B1): the plaintext arrives
+    // as a flat BytesState on `$input`, ported dispatch is required, and the
+    // cipher exit (`outputFrom`) yields a BytesState. The byte-native encrypt
+    // is byte-equal to the legacy matrix encrypt, so it still inverts under
+    // the matrix reverse-duplicated decrypt below.
     const encryptTrace = runSpec(encryptSpec, registry, {
-      initialState: matrixFromBytes(bytesFromHex(plaintextHex)),
+      initialState: makeBytesState(bytesFromHex(plaintextHex)),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
+      portedDispatchEnabled: requiresPortedDispatch(encryptSpec, registry),
     });
-    expect(encryptTrace.finalState.shape).toBe("matrix4x4-bytes");
-    if (encryptTrace.finalState.shape !== "matrix4x4-bytes") return;
+    expect(encryptTrace.finalState.shape).toBe("bytes");
+    if (encryptTrace.finalState.shape !== "bytes") return;
     const ciphertextBytes = encryptTrace.finalState.bytes;
     expect(ciphertextBytes.length).toBe(16);
 
-    // Run the decrypt on the ciphertext we just produced.
+    // Run the decrypt (still matrix until Slice B1.2) on the ciphertext.
     const decryptTrace = runSpec(decryptSpec, registry, {
       initialState: matrixFromBytes(ciphertextBytes),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
@@ -328,10 +360,11 @@ describe("duplicateRoundGroup — end-to-end round-trip on a duplicated AES-128"
     const registry = buildDefaultRegistry();
 
     const trace = runSpec(encryptSpec, registry, {
-      initialState: matrixFromBytes(bytesFromHex(plaintextHex)),
+      initialState: makeBytesState(bytesFromHex(plaintextHex)),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
+      portedDispatchEnabled: requiresPortedDispatch(encryptSpec, registry),
     });
-    if (trace.finalState.shape !== "matrix4x4-bytes") return;
+    if (trace.finalState.shape !== "bytes") return;
     expect(hexFromBytes(trace.finalState.bytes)).not.toBe(canonicalCiphertext);
   });
 });

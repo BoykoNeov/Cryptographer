@@ -26,9 +26,9 @@
 
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { requiresPortedDispatch } from "@/core/dispatch";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
+import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue } from "@/core/types";
 import { GraphView } from "@/ui/components/GraphView";
 import { __resetAutoRerunForTests } from "@/ui/stores/auto-rerun";
@@ -47,9 +47,12 @@ const AES128_KEY = "000102030405060708090a0b0c0d0e0f";
 const AES128_PT = "00112233445566778899aabbccddeeff";
 
 const seedAes128Trace = (): void => {
-  const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-    initialState: matrixFromBytes(bytesFromHex(AES128_PT)),
+  // Byte-native AES-128 (Slice B1): flat BytesState in, ported dispatch on.
+  const registry = buildDefaultRegistry();
+  const trace = runSpec(aes128Spec, registry, {
+    initialState: makeBytesState(bytesFromHex(AES128_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
+    portedDispatchEnabled: requiresPortedDispatch(aes128Spec, registry),
   });
   setTrace(trace);
 };
