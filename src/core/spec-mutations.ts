@@ -1615,7 +1615,11 @@ const rewriteAllPortInputs = (
     // Slice B1.4). Only looping containers + `group` carry it; `step` /
     // `feistel-round` don't. Round-group seedInputs point at sibling rounds,
     // never `$input`, so the pad repoint/restore is identity for them.
-    if (result.kind !== "step" && result.kind !== "feistel-round" && result.seedInput !== undefined) {
+    if (
+      result.kind !== "step" &&
+      result.kind !== "feistel-round" &&
+      result.seedInput !== undefined
+    ) {
       const ns = rewriteBinding(result.seedInput);
       if (ns !== result.seedInput) result = { ...result, seedInput: ns };
     }

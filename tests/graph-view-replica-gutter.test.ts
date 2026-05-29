@@ -1217,7 +1217,6 @@ describe("visualEdgeTargetId — retargets replica→iterate edges to first body
     expect(visualEdgeTargetId(edge, nodesById, containersById)).toBe("ecb-blocks");
   });
 
-
   // Option C — collapsed-iterate retarget escape hatch. When the iterate's
   // first non-replica child is a block chip (`blockChipOf !== undefined`,
   // produced by `expandCollapsedIterates`), the retarget MUST fall back

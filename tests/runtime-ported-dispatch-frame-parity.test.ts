@@ -53,8 +53,6 @@
 
 import { aes128CbcSpec } from "@/ciphers/aes-128-cbc";
 import { aes128CbcDecryptSpec } from "@/ciphers/aes-128-cbc-decrypt";
-import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
-import { aes128EcbDecryptSpec } from "@/ciphers/aes-128-ecb-decrypt";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { desSpec } from "@/ciphers/des";
 import { desDecryptSpec } from "@/ciphers/des-decrypt";
@@ -173,11 +171,6 @@ const SP38A_PT_4_BLOCKS =
   "ae2d8a571e03ac9c9eb76fac45af8e51" +
   "30c81c46a35ce411e5fbc1191a0a52ef" +
   "f69f2445df4f9b17ad2b417be66c3710";
-const SP38A_ECB_CT_4_BLOCKS =
-  "3ad77bb40d7a3660a89ecaf32466ef97" +
-  "f5d3d58503b9699de785895a96fdbaaf" +
-  "43b1cd7f598ece23881b00e3ed030688" +
-  "7b0c785e27e8ad3f8223207104725dd4";
 const SP38A_CBC_CT_4_BLOCKS =
   "7649abac8119b246cee98e9b12e9197d" +
   "5086cb9b507219ee95db113a917678b2" +

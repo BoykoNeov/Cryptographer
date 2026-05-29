@@ -143,7 +143,6 @@ const findFirstFrame = (frames: readonly TraceFrame[], stepType: string): TraceF
   return frame;
 };
 
-
 /**
  * Custom byte-equality for the round-trip assertion. Vitest's default
  * `toEqual` performs deep-equality but compares Uint8Array via reference

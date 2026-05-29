@@ -354,7 +354,14 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
             // Inject the per-block bytes as `port(iterateId, "in")` so the
             // body's head leaf reads `{ node: iterateId, port: "in" }`.
             const iterSeed = new Map([[node.id, new Map([["in", block]])]]);
-            const bodyOutputs = walk(node.children, iteratePath, i, branchPath, roundPath, iterSeed);
+            const bodyOutputs = walk(
+              node.children,
+              iteratePath,
+              i,
+              branchPath,
+              roundPath,
+              iterSeed,
+            );
             collected.push(
               new Uint8Array(
                 resolveBinding(

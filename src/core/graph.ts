@@ -1583,10 +1583,7 @@ const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
       // seed — so a body head reading `port(iterateId, "in")` resolves through
       // the iterate's `seedInput` to the real producer ($input / the pad),
       // rather than drawing a self-referential `iterateId → leaf` island edge.
-      if (
-        (node.kind === "group" || node.kind === "iterate") &&
-        node.seedInput !== undefined
-      ) {
+      if ((node.kind === "group" || node.kind === "iterate") && node.seedInput !== undefined) {
         groupSeedByGroupId.set(node.id, node.seedInput);
       }
       if (node.kind === "feistel-round") {

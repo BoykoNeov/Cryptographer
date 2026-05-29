@@ -34,8 +34,8 @@ import { CIPHER_INPUT_ID, CIPHER_OUTPUT_ID, type GraphEdge } from "@/core/graph"
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue, MatrixState, Trace } from "@/core/types";
-import { matrixAesEcbSpec } from "./fixtures/matrix-aes-ecb";
 import { describe, expect, it } from "vitest";
+import { matrixAesEcbSpec } from "./fixtures/matrix-aes-ecb";
 
 const ECB_PLAINTEXT_4_BLOCKS =
   "6bc1bee22e409f96e93d7e117393172a" +

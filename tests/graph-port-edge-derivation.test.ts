@@ -33,8 +33,8 @@ import { buildSha256Spec } from "@/ciphers/sha-256";
 import { collapseGraph, deriveAuxGraph, validateGraph } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import type { Trace } from "@/core/types";
-import { matrixAesEcbSpec } from "./fixtures/matrix-aes-ecb";
 import { describe, expect, it } from "vitest";
+import { matrixAesEcbSpec } from "./fixtures/matrix-aes-ecb";
 
 const emptyTrace = (): Trace => ({
   frames: [],
