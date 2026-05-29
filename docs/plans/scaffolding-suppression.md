@@ -1,8 +1,12 @@
 # Scaffolding suppression — every leaf speaks only in byte arrays
 
-> **Status: Phase A COMPLETE — A0+A1+A2+A3a+A3b SHIPPED + A3b follow-ups
-> ⓐ–ⓕ DONE + A4 (anti-creep contract test) SHIPPED 2026-05-28; Phase B (per-cipher
-> byte-native rebuilds) next, B1 AES first.** A3 split into A3a+A3b with Q1–Q4
+> **Status: Phase A COMPLETE. Phase B IN PROGRESS — B1 (AES) started
+> 2026-05-29 on branch `b1-aes-byte-native`: 3 byte-native primitives shipped
+> (`45eff12`), byte-native AES-128 KAT-validated then reverted to keep the
+> floor green; 259-test fixture fallout + padding/duplicate-round design items
+> queued for next session (see "B1 progress + next-session continuation").**
+> Phase A: A0+A1+A2+A3a+A3b SHIPPED + A3b follow-ups
+> ⓐ–ⓕ DONE + A4 (anti-creep contract test) SHIPPED 2026-05-28. A3 split into A3a+A3b with Q1–Q4
 > resolved (advisor pass + user co-design 2026-05-28); A3b's open carry
 > fork resolved **port-to-port** (user pick 2026-05-28). Drafted after the
 > Slice 2.9b smoke (2026-05-28) surfaced a structural pedagogy gap, then
@@ -600,9 +604,18 @@ half-converted cipher (per [[feedback_all_specs_port_native]]). Each
 removes its A4-allowlist entry on merge.
 
 - **B1 — AES** (deepest matrix coupling — the contract stress test).
-  SubBytes/ShiftRows/MixColumns/AddRoundKey + key schedule byte-native;
-  `iterate` adopts `seedInput`/`outputPorts` for ECB/CBC; S-box/Rcon
-  move to `cipherConstants`. KAT: FIPS-197 Appendix C.
+  SubBytes/ShiftRows/MixColumns/AddRoundKey byte-native; `iterate` adopts
+  `seedInput`/`outputPorts` for ECB/CBC. KAT: FIPS-197 Appendix C.
+  **🔶 IN PROGRESS — branch `b1-aes-byte-native`. Slice B1.1 partially
+  shipped (3 primitives committed `45eff12`). See the "B1 progress + next-
+  session continuation" section below for the full state, the four resolved
+  scope decisions, and the two cross-cutting work items discovered.**
+  *Scope corrections vs the original bullet (resolved 2026-05-29):*
+  key schedule stays the **monolithic** `aes.key-expansion@1` (already
+  A4-clean — gate doesn't require touching it); the S-box/mix-matrix/permute
+  indices stay **leaf params**, NOT `cipherConstants` (the A1 lockstep lesson —
+  see below); `cipherConstants` migration + mirror re-homing defer to a later
+  key-expansion-decomposition slice.
 - **B2 — Speck** (easiest — already byte-flat `BytesState(4)`). Mostly
   conformance + contract adoption. KAT: both BE-paper + LE-NSA vectors.
 - **B3 — Serpent.** Standard form (explicit IP/FP); S_i tables to
@@ -612,6 +625,94 @@ removes its A4-allowlist entry on merge.
   `seedInput`/`bodyOutput` analogue. This is the universal-port plan's
   Phase 4d DES rebuild — coordinate, don't duplicate. KAT: published
   DES vectors.
+
+### B1 progress + next-session continuation (2026-05-29, session 1)
+
+> Branch `b1-aes-byte-native`, base `684a112`. **End-of-session save** — the
+> user approved the two design decisions below and asked to implement the rest
+> next session. A future session should be able to resume entirely from this
+> section + the memory file `project_scaffolding_suppression_plan.md`.
+
+**Shipped this session (commit `45eff12`, full gate green, suite 2486→2520):**
+- Three byte-native primitives + `aes-round-builder-native.ts` (unused so far)
+  + 34 tests. `byte-substitute@1` (SubBytes), `permute@1` (ShiftRows,
+  column-major indices via `shiftRowsIndices`), `gf-matrix-multiply@1`
+  (MixColumns, reuses `gfMul`). All static `layout:"raw"` ports → A4-clean.
+  AddRoundKey needs no new type (`aux-load-bytes@1` roundKey.N + `xor@1`).
+- **Byte-native AES-128 VALIDATED then reverted to keep the floor green.** A
+  throwaway probe ran the byte-native `aes-128.ts` (stateShape/plaintext →
+  `"bytes"`, body = `buildAesEncryptBodyNative(10)`, `outputFrom =
+  aesNativeOutputFrom(10)`): FIPS-197 §C.1 ciphertext **byte-equal**
+  `69c4e0d8…`, frame count **52**, roundKey.10 correct, initial-ARK port
+  output = PT⊕key. `aes-128.ts` is currently MATRIX again (reverted) so the
+  primitives commit sits on a green suite. Re-applying the swap is a ~5-line
+  edit using the committed native builder.
+
+**Four resolved scope decisions (user, 2026-05-29):**
+1. **Rendering:** flat bytes until Phase C2 (NO `PortFlowView` change in B1;
+   AES renders as a flat 16-byte row — accepted temporary regression).
+2. **MixColumns:** medium `gf-matrix-multiply@1` (GF math inside the executor).
+3. **Key-expansion:** stays monolithic `aes.key-expansion@1` (A4-clean).
+4. **Constants stay leaf params** (NOT `cipherConstants`) in B1 — key-expansion
+   also consumes the forward S-box (SubWord); moving only the round S-box to a
+   constant would diverge the two consumers (the A1 creep lesson). No worse
+   than today (already two independent S-box params). Unify in the later
+   key-expansion-decomposition slice.
+
+**The big finding — converting `aes128Spec` (the app's universal default
+fixture) breaks 259 tests.** Inherent cost, NOT a wrong approach (KAT byte-
+equal; graph/UI infra already handles byte-native via SHA-256). Per
+[[feedback_all_specs_port_native]] a red WIP window on this branch is
+sanctioned — **stop optimizing for green-per-commit on `b1-aes-byte-native`.**
+Triage (advisor 2026-05-29) — **resolve the (B) functional/design items FIRST;
+they can change topology and would re-break a mechanical sweep:**
+
+- **(A) Mechanical (do last):** `matrixFromBytes` initialState → `BytesState`;
+  `finalState.shape === "matrix4x4-bytes"` → `"bytes"`; frame-count pins;
+  read intermediate values via `frame.portOutputs.get("output")` not
+  `stateAfter`. Rewrite `tests/aes-vectors.test.ts` this way (the reorder-by-
+  array-swap test is moot under port wiring — drop or convert to a binding
+  rewire).
+- **(B) Functional / design — DECIDED, implement next session:**
+  1. **Padding overlay → make topology-aware** (user pick). `applyPaddingScheme`
+     (`src/core/spec-mutations.ts:1423`) branches on
+     `stateShape === "matrix4x4-bytes"`; byte-native AES (`"bytes"`) falls into
+     the no-op "non-AES" branch, AND the cipher head reads `$input` directly so
+     a prepended pad is ignored. Fix: a byte-native branch that prepends `pad`
+     (reads `$input`) + **repoints every `portInputs` binding pointing at
+     `port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT)` to `port(padId,"output")`**; on
+     decrypt append `unpad` reading the old `outputFrom` + set `outputFrom` to
+     `port(unpadId,"output")`. Drop `load-block`/`store-block` for byte-native
+     single-block. Fixes `app-padding-roundtrip.test.tsx`.
+  2. **cross-mode-mirror coverage spans BOTH modes** → cannot split to B1.2.
+     In the aes-128-byte-native conversion commit: ADD entries
+     `{byte-substitute@1, sbox, inverse}` + `{gf-matrix-multiply@1, matrix,
+     inverse}` to `cross-mode-mirror-registry.ts` + wire their ParamEditor
+     buttons; KEEP the old `generic.byte-substitution@1`/`generic.mix-columns@1`
+     entries (decrypt + ECB/CBC stay matrix until B1.2/B1.4). Fixes
+     `cross-mode-mirror-coverage.test.tsx`.
+  3. **duplicate-round → fix within B1** (user pick). `duplicateRoundGroup`
+     (`src/core/spec-mutations.ts:1101`) renames ids via a rename map but does
+     NOT rewire `seedInput`/`bodyOutput`/`portInputs`, so a cloned byte-native
+     round points its bindings at stale ids. Extend it to remap those bindings
+     through the rename map + the renumber shift. Fixes the `duplicate-round-*`
+     test files.
+- **(C) Legacy-concept tests using AES as a matrix fixture:** e.g.
+  `tests/aux-graph-derivation.test.ts` asserts "40 state edges / spine crosses
+  round boundaries" — byte-native AES has NO state spine (port-to-port carry).
+  Per-test decision: retarget the state-spine machinery tests to a still-legacy
+  cipher (Speck/DES survive until B2–B4) so they keep exercising that code
+  until Phase C, **vs** rewrite as port-edge assertions. Don't reflexively
+  rewrite — the state-spine code outlives AES's use of it.
+
+**Recommended next-session order:** (1) re-apply byte-native `aes-128.ts`;
+(2) padding-overlay topology-aware rework + tests; (3) cross-mode-mirror
+entries+buttons (old+new); (4) duplicate-round binding rewire; (5) rewrite
+`aes-vectors.test.ts` + sweep (A)/(C) by pattern until the suite is green with
+byte-native AES-128 forward; (6) then B1.2 decrypt, B1.3 192/256, B1.4 modes
+(iterate `seedInput`/`outputPorts` + `resolveBinding` helper extraction + all
+A4 allowlist removals). Original full B1 plan: `~/.claude/plans/tidy-honking-
+stearns.md`.
 
 ### Phase C — State retirement falls out (2 slices)
 
