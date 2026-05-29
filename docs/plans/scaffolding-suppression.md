@@ -1,10 +1,13 @@
 # Scaffolding suppression — every leaf speaks only in byte arrays
 
-> **Status: Phase A COMPLETE. Phase B IN PROGRESS — B1 (AES) started
-> 2026-05-29 on branch `b1-aes-byte-native`: 3 byte-native primitives shipped
-> (`45eff12`), byte-native AES-128 KAT-validated then reverted to keep the
-> floor green; 259-test fixture fallout + padding/duplicate-round design items
-> queued for next session (see "B1 progress + next-session continuation").**
+> **Status: Phase A COMPLETE. Phase B IN PROGRESS — B1 (AES) on branch
+> `b1-aes-byte-native`. B1.1 (128 enc) + B1.2 (128 dec) + B1.3 (192/256 enc+dec)
+> + B1.4a (ECB enc+dec) all DONE — every single-block AES AND ECB is byte-native,
+> KAT byte-equal, full `npm run check` GREEN (2507 tests). RESUME AT B1.4b (CBC:
+> needs an advisor re-consult on the cross-iteration chaining mechanism FIRST).
+> See "B1 progress + next-session continuation" → Session 7 for B1.4a + the
+> allowlist-divergence finding (the plan's "B1.4 drains the allowlists" is now
+> WRONG — the matrix-aes-{192,ecb} fixtures defer all draining to Phase C).**
 > Phase A: A0+A1+A2+A3a+A3b SHIPPED + A3b follow-ups
 > ⓐ–ⓕ DONE + A4 (anti-creep contract test) SHIPPED 2026-05-28. A3 split into A3a+A3b with Q1–Q4
 > resolved (advisor pass + user co-design 2026-05-28); A3b's open carry
@@ -826,6 +829,101 @@ byte-native AES-128 forward; (6) then B1.2 decrypt, B1.3 192/256, B1.4 modes
 (iterate `seedInput`/`outputPorts` + `resolveBinding` helper extraction + all
 A4 allowlist removals). Original full B1 plan: `~/.claude/plans/tidy-honking-
 stearns.md`.
+
+#### Session 7 (2026-05-29) — B1.4a (byte-native AES ECB enc+dec) DONE; gate GREEN
+
+Byte-native AES ECB (encrypt + decrypt) shipped via a new **port-mode `iterate`**.
+**Full `npm run check` GREEN (2507 tests, 213 files, vite build clean)**, on
+`b1-aes-byte-native`. B1.4 was SPLIT (advisor): **B1.4a = ECB (this session);
+B1.4b = CBC (next, needs an advisor re-consult on the chaining mechanism FIRST).**
+ECB KAT byte-equal vs NIST SP 800-38A §F.1 (enc+dec, 4 blocks) + the PKCS#7-padded
+round-trip byte-equal vs `node:crypto` (len 1/16/17/31). 205 frames.
+
+**The port-mode `iterate` contract (the core mechanism).** `IterateGroup` gained
+a port mode discriminated by `seedInput` (mirrors FES's two-mode split):
+`seedInput` + `blockByteLength` + `bodyOutput` + `outputPorts`; the aux fields
+(`countFromAux`/`blocksFromAux`/`outBlocksAux`) became optional (legacy aux mode,
+still used by matrix CBC). Runtime: resolve `seedInput` → split into
+`blockByteLength` chunks → inject each as `port(iterateId,"in")` (like the A3b
+group seed) → walk body (preserving `:b{i}` blockIndex + `aux["blockIndex"]`) →
+collect `bodyOutput` per iteration → concat → publish on `outputPorts`. The A2
+deferred-throw is gone. Extracted **`resolveBinding(map, binding, ctxLabel, scope)`**
+and refactored the 4 near-duplicate blocks (group/FES seedInput+bodyOutput,
+spec.outputFrom). `aes-round-builder-native.ts` gained an `inputSource` param
+(default `$input`) so ECB passes `port(iterateId,"in")`. Padding overlay routes
+byte-native ECB to the byte-native branch via a new `hasByteNativeIterate` guard
+(matrix CBC stays on the matrix branch) + `rewriteAllPortInputs` now also rewrites
+container `seedInput` so the pad repoints the iterate's seed. graph.ts +
+spec-shapes.ts handle port-mode iterate (seed-edge resolution through the iterate's
+`seedInput`; body-scope `port(iterateId,"in")` seeding; `$input` special-case in
+`validateContainerBinding`; aux-mode-only edge derivations guarded).
+
+**THE LOAD-BEARING FINDING — the plan's "B1.4 drains the A4 + LEGACY_CONTRACT
+allowlists" is now WRONG. B1.4a drains NOTHING, and B1.4b drains almost nothing.**
+The A4 contract walks the *registry*, not specs. B1.3 created
+`tests/fixtures/matrix-aes-192.ts` (pins the matrix core transforms to Phase C);
+B1.4a adds `tests/fixtures/matrix-aes-ecb.ts` (pins `split-blocks`/`concat-blocks`/
+`compute-block-count` to Phase C). So those stay registered+consumed → stay
+A4 offenders → the allowlist correctly stays put (set-equality passes). **Draining
+is a Phase-C consequence, not a B1.4 deliverable** (advisor-affirmed: "let the
+allowlist mirror the registry"). At **B1.4b start, grep** whether `generic.iv-load@1`
++ `generic.load-block@1` + `generic.store-block@1` have any consumer after CBC
+converts (matrix-aes-ecb doesn't use them — ECB has no IV); those are the only
+plausible B1.4b drains, and only if no fixture/test references them.
+
+**`tests/fixtures/matrix-aes-ecb.ts` (new) — the hand-built aux-mode iterate
+fixture.** The pre-B1.4a matrix ECB spec, self-contained from `generic.*` nodes +
+the mode-boundary steps (NOT from `aes-round-builder.ts`, which dies in B1.4b).
+The advisor's "hand-built aux-mode fixture" option, amortized across 4 files whose
+machinery is genuinely live for matrix CBC until B1.4b: `edge-value-lookup`,
+`drop-aux-only-state-edges-asymmetric`, `graph-port-edge-derivation` (the "legacy
+ECB" tests), and `aux-graph-derivation` (the matrix-iterate describe + spine/
+collapse/endpoint/blockSpan tests) all retarget `aes128EcbSpec` → `matrixAesEcbSpec`.
+
+**The sweep discriminator (advisor, reusable for B1.4b/B2–B4):** blockIndex-driven
+features (block-chips, drop-gutters, `blockSpan`, fetch-rk bundles, padding) →
+**adapt on byte-native ECB** (the B1.1–1.3 playbook: `portedDispatchEnabled`, frame
+count 164→205, leaf-id remaps, body's first child is now `init.fetch-rk`).
+aux-mode-structure-specific (`blocksFromAux`/`outBlocksAux` slicing, split→iterate→
+concat edges, compute-block-count spine-replica) → **matrix-aes-ecb fixture OR
+delete-with-Phase-C-comment; NOT retargeted onto soon-to-convert CBC.** **Block-chip
+VALUE resolution for a port-mode iterate is DEFERRED to Phase C** (port-native
+leaves don't write `state`, so per-block values live in ports — a port-based path,
+same class as the `$input`-vs-endpoint-pill question; accepted regression per the
+locked "flat bytes until C2").
+
+**MIS-TARGETING AUDIT (the B1.3 lesson, re-applied — advisor catch).** A green gate
+can't see a test that selects an ECB leaf expecting a `generic.*` type/matrix-row
+and passes against the now-byte-native leaf. Audited every ECB-referencing test
+NOT touched this session. **2 real vacuous holes found** (`cross-mode-mirror-coverage`
+was caught while fixing it; the audit then found `sync-inverse-row` +
+`sync-mix-columns-row` — same trap, their own comments anticipated it) → retargeted
+ECB→**CBC** (last selectable matrix carrier). **Verified-safe:** `file-save-load`
+(B1.3 already widened its shape guard to `bytes | matrix4x4-bytes`),
+`document-roundtrip` (genuine `expect(parsed).toEqual(original)` — positively
+confirms the new port-mode iterate fields survive Save/Load), graph-history-seed-
+edges / runtime-iterate / spec-defaults / cipher-mode-fallback / view-source-colors-
+store (synthetic / opaque-id / structural).
+
+**Remaining before B1 merge:** a 2-minute browser smoke of the port-mode iterate
+(advisor: B1.3's smoke-skip was justified — same render path — but B1.4a introduces
+NEW topology: `$input → body-head`, no split/concat nodes, block chips on a
+port-mode iterate; jsdom verifies structure not geometry, and
+[[feedback_visual_smoke_vs_property_tests]] is in memory for exactly this). NOT a
+B1.4a blocker (flat bytes until C2), do before merge.
+
+**Next: B1.4b (CBC).** RE-CONSULT THE ADVISOR FIRST — CBC is genuinely novel +
+out of the plan's literal scope: cross-iteration feedback, **asymmetric** (encrypt
+feeds the previous *output* block, decrypt the previous *input* block — the reason
+matrix CBC decrypt has the `next-chain`/`aux-copy` dance). Two mechanisms: (a) an
+iterate feedback/chain port (advisor leans here — incremental on the iterate
+runtime, keeps leaves pure, chain stays visible; must expose the correct previous
+value per direction) vs (b) the deferred `aux-store-bytes@1` leaf. Verify CBC KAT
+vs `node:crypto` enc+dec+round-trip with **≥3 blocks** (a 1-block test hides every
+chaining bug). Then delete `aes-round-builder.ts` (check `src/core/spec-mutations.ts`'s
+reference first — a consumer the original plan didn't name). The `$input`-vs-
+endpoint-pill decision is DEFUSED (B1.3 retargeted those tests onto matrix-aes-192;
+the in-app feature question defers to 2.9c-e).
 
 #### Session 6 (2026-05-29) — B1.3 (byte-native AES-192 + AES-256 enc+dec) DONE; gate GREEN
 
