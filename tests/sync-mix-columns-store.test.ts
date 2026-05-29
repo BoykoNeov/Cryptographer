@@ -45,17 +45,17 @@ const resetAll = (): void => {
   __resetCipherForTests();
   __resetCipherModeForTests();
   __resetLayoutsForTests();
-  // Retarget to AES-128 ECB: every single-block AES spec (128/192/256, both
-  // modes) is byte-native as of Slice B1.3 and no longer carries
-  // `generic.mix-columns@1` steps, so a cross-slot mirror test on a
-  // single-block AES would collect 0 matching steps. The ECB/CBC modes still
-  // thread the matrix round body (`aes-round-builder.ts` → `generic.*`) on
-  // BOTH encrypt and decrypt until Slice B1.4 — keeping this test exercising
-  // the still-live matrix mirror mutator. (The mutator + `collectMatrices`
-  // both recurse into the iterate body, so the multi-block wrapping is
-  // transparent here.) At B1.4 no matrix AES remains and this matrix-path
-  // describe converts to a synthetic carrier or retires with Phase C.
-  setCipherMode("ecb");
+  // Retarget to AES-128 CBC: every single-block AES (128/192/256, B1.3) AND
+  // ECB (B1.4a) is now byte-native and no longer carries `generic.mix-columns@1`
+  // steps, so a cross-slot mirror test on those would collect 0 matching steps.
+  // The CBC mode still threads the matrix round body (`aes-round-builder.ts` →
+  // `generic.*`) on BOTH encrypt and decrypt until Slice B1.4b — the last
+  // selectable matrix carrier, keeping this test exercising the still-live
+  // matrix mirror mutator. (The mutator + `collectMatrices` both recurse into
+  // the iterate body, so the multi-block wrapping is transparent here.) When
+  // CBC converts in B1.4b no matrix AES remains and this matrix-path describe
+  // retires with Phase C / the matrix mirror entry is dropped.
+  setCipherMode("cbc");
 };
 
 // AES has one `generic.mix-columns@1` leaf per non-final round. We walk

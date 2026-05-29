@@ -115,26 +115,28 @@ const findFirstLeafIdOfType = (stepType: string): string | null => {
 const setupForEntry = (entry: CrossModeMirrorEntry): string => {
   switch (entry.stepType) {
     case "generic.byte-substitution@1": {
-      // Every single-block AES is byte-native as of Slice B1.3, so its
+      // Every single-block AES (B1.3) AND ECB (B1.4a) is byte-native, so their
       // `round.1.sub-bytes` leaf is now `byte-substitute@1` — NOT this type.
-      // The legacy matrix `generic.byte-substitution@1` only survives on the
-      // AES-128 ECB/CBC modes (still matrix until Slice B1.4), so select ECB
+      // The legacy matrix `generic.byte-substitution@1` now survives only on
+      // the AES-128 **CBC** mode (still matrix until Slice B1.4b), so select CBC
       // to genuinely exercise THIS entry's button. The matrix round body lives
       // inside the iterate but its spec leaf id is still `round.1.sub-bytes`.
-      // (Retargeting to a byte-native AES would mis-target: the
+      // (Retargeting to ECB or any byte-native AES would MIS-TARGET: the
       // `byte-substitute@1` button shares mirrorClass "inverse", so the
-      // assertion would pass against the wrong leaf's button.)
+      // assertion would pass against the wrong leaf's button — the B1.3
+      // vacuous-pass trap. When CBC converts in B1.4b this matrix entry loses
+      // its last selectable carrier and should be removed.)
       setCipher("aes-128");
-      setCipherMode("ecb");
+      setCipherMode("cbc");
       return "round.1.sub-bytes";
     }
     case "generic.mix-columns@1": {
-      // Same as above: every single-block AES MixColumns is now
+      // Same as above: every single-block AES + ECB MixColumns is now
       // `gf-matrix-multiply@1` (byte-native). The matrix `generic.mix-columns@1`
-      // survives only on the AES-128 ECB/CBC modes; round 1 always has a
-      // MixColumns leaf (FIPS-197: every round except the final).
+      // survives only on the AES-128 CBC mode; round 1 always has a MixColumns
+      // leaf (FIPS-197: every round except the final). Removed in B1.4b.
       setCipher("aes-128");
-      setCipherMode("ecb");
+      setCipherMode("cbc");
       return "round.1.mix-columns";
     }
     case "aes.key-expansion@1": {

@@ -48,6 +48,7 @@ import { serpent192Spec } from "@/ciphers/serpent-192";
 import { serpent256Spec } from "@/ciphers/serpent-256";
 import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
+import { requiresPortedDispatch } from "@/core/dispatch";
 import {
   type CipherGraph,
   type GraphEdge,
@@ -101,11 +102,16 @@ const runCbc = (spec: typeof aes128CbcSpec, pt: string): Trace =>
     ]),
   });
 
-const runBytes = (spec: typeof aes128EcbSpec, key: string, pt: string): Trace =>
-  runSpec(spec, buildDefaultRegistry(), {
+const runBytes = (spec: typeof aes128EcbSpec, key: string, pt: string): Trace => {
+  const registry = buildDefaultRegistry();
+  // Byte-native ECB (B1.4) needs ported dispatch; Speck/Serpent (legacy)
+  // must NOT use it — `requiresPortedDispatch` picks correctly per spec.
+  return runSpec(spec, registry, {
     initialState: makeBytesState(bytesFromHex(pt)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(key)]]),
+    portedDispatchEnabled: requiresPortedDispatch(spec, registry),
   });
+};
 
 // Byte-native single-block AES (Slices B1.1–B1.3): bytes state + ported
 // dispatch (port-native primitives have no legacy executor). Covers every
