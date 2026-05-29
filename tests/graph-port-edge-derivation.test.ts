@@ -28,12 +28,12 @@
  *     ~110 existing callsites that don't pass a registry).
  */
 
-import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { buildSha256Spec } from "@/ciphers/sha-256";
 import { collapseGraph, deriveAuxGraph, validateGraph } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import type { Trace } from "@/core/types";
+import { matrixAesEcbSpec } from "./fixtures/matrix-aes-ecb";
 import { describe, expect, it } from "vitest";
 
 const emptyTrace = (): Trace => ({
@@ -186,15 +186,15 @@ describe("deriveAuxGraph — per-edge state-spine suppression on port-native con
 
   it("AES-128 ECB (legacy): byte-identical edges with or without registry", () => {
     // AES has zero `portInputs` declarations, so `inferPortEdges`
-    // returns []. With `requiresPortedDispatch(aes128EcbSpec) === false`,
+    // returns []. With `requiresPortedDispatch(matrixAesEcbSpec) === false`,
     // `inferStateEdges` still fires regardless of whether registry is
     // passed. Pin byte-equality of the structural edges between the two
     // call signatures — using an empty trace avoids needing a fully
     // valid initialAux; the spine + container-mediated edges are
     // spec-derived, not trace-derived.
     const registry = buildDefaultRegistry();
-    const withRegistry = deriveAuxGraph(emptyTrace(), aes128EcbSpec, { registry });
-    const withoutRegistry = deriveAuxGraph(emptyTrace(), aes128EcbSpec);
+    const withRegistry = deriveAuxGraph(emptyTrace(), matrixAesEcbSpec, { registry });
+    const withoutRegistry = deriveAuxGraph(emptyTrace(), matrixAesEcbSpec);
     expect(withRegistry.edges.length).toBe(withoutRegistry.edges.length);
     expect(withRegistry.edges).toEqual(withoutRegistry.edges);
   });
@@ -204,7 +204,7 @@ describe("deriveAuxGraph — per-edge state-spine suppression on port-native con
     // test suite don't pass a registry; they must continue to see the
     // pre-S2 behavior. Concretely: AES-128 ECB without registry still
     // emits the consecutive-siblings spine.
-    const graph = deriveAuxGraph(emptyTrace(), aes128EcbSpec);
+    const graph = deriveAuxGraph(emptyTrace(), matrixAesEcbSpec);
     const stateEdges = graph.edges.filter((e) => e.kind === "state");
     // Even on an empty trace, the spine is derived from spec structure
     // alone. AES-128 ECB has multiple consecutive-sibling pairs at root
