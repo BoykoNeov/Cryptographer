@@ -57,7 +57,6 @@
  */
 
 import { aes128Spec } from "@/ciphers/aes-128";
-import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { type ProjectionMetadata, project, reconstruct } from "@/core/port-projection";
 import { runSpec } from "@/core/runtime";
@@ -94,8 +93,6 @@ const FIPS_B_KEY = "2b7e151628aed2a6abf7158809cf4f3c";
 const AES192_KEY = "8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b";
 
 // SP 800-38A §F.1.1 — one block extracted from the four-block ECB fixture.
-const ECB_BLOCK_KEY = "2b7e151628aed2a6abf7158809cf4f3c";
-const ECB_ONE_BLOCK_PLAINTEXT = "6bc1bee22e409f96e93d7e117393172a";
 
 // ─── Projection metadata for the two Phase-0 lifted step types ─────────
 //
@@ -146,25 +143,6 @@ const findFirstFrame = (frames: readonly TraceFrame[], stepType: string): TraceF
   return frame;
 };
 
-const findFirstFrameInIterate = (frames: readonly TraceFrame[], stepType: string): TraceFrame => {
-  // "Inside iterate" is observable on the frame as `blockIndex !== undefined`
-  // AND the stepId carrying the `:b{i}` suffix. We assert both so the
-  // fixture choice is self-validating.
-  const frame = frames.find((f) => f.stepType === stepType && f.blockIndex !== undefined);
-  if (!frame) {
-    throw new Error(`fixture missing an iterate-body frame for stepType=${stepType}`);
-  }
-  if (!frame.stepId.includes(":b")) {
-    throw new Error(
-      `iterate-body frame for stepType=${stepType} should carry :b{i} suffix; got stepId=${frame.stepId}`,
-    );
-  }
-  if (frame.blockIndex === undefined) {
-    // Belt-and-braces: the find() predicate already guarantees this.
-    throw new Error("iterate-body frame missing blockIndex");
-  }
-  return frame;
-};
 
 /**
  * Custom byte-equality for the round-trip assertion. Vitest's default
@@ -465,34 +443,16 @@ describe("port-projection — Q-gate-9 round-trip (Phase 0 load-bearing)", () =>
     });
   });
 
-  describe("iterate body — AES-128 ECB (single block)", () => {
-    // ONE 16-byte block — the iterate runs once, so iterate-body frames
-    // carry blockIndex=0 and :b0 stepId suffix. Round-trip must
-    // preserve both.
-    const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
-      initialState: makeBytesState(bytesFromHex(ECB_ONE_BLOCK_PLAINTEXT)),
-      initialAux: new Map<string, AuxValue>([["key", bytesFromHex(ECB_BLOCK_KEY)]]),
-    });
-
-    it("byte-substitution INSIDE iterate preserves blockIndex + :b{i} stepId suffix", () => {
-      const frame = findFirstFrameInIterate(trace.frames, "generic.byte-substitution@1");
-      const { frame: ported, tags } = project(frame, META_BYTE_SUBSTITUTION);
-      const recovered = reconstruct(ported, structuredClone(tags));
-
-      expect(ported.blockIndex).toBe(0);
-      expect(ported.stepId.endsWith(":b0")).toBe(true);
-      expectFrameByteEqual(recovered, frame);
-    });
-
-    it("add-round-key INSIDE iterate preserves blockIndex + aux binding + :b{i} suffix", () => {
-      const frame = findFirstFrameInIterate(trace.frames, "generic.add-round-key@1");
-      const { frame: ported, tags } = project(frame, META_ADD_ROUND_KEY);
-      const recovered = reconstruct(ported, structuredClone(tags));
-
-      expect(ported.blockIndex).toBe(0);
-      expect(ported.stepId.endsWith(":b0")).toBe(true);
-      expect(tags.auxInputBindings?.get("key")).toBeDefined();
-      expectFrameByteEqual(recovered, frame);
-    });
-  });
+  // [DELETED B1.4a → Phase C] "iterate body — AES-128 ECB (single block)".
+  // This described the lifted-legacy projection round-trip (project /
+  // reconstruct) over `generic.byte-substitution@1` / `generic.add-round-key@1`
+  // frames INSIDE an iterate. Byte-native ECB (B1.4a) has no matrix `generic.*`
+  // frames and is a port-mode iterate, so a matrix-`generic.*`-iterate fixture
+  // exists only in matrix CBC now — which we do NOT retarget onto (it converts
+  // in B1.4b; the discriminator keeps legacy-machinery tests off soon-to-convert
+  // specs). The projection round-trip itself stays covered by the matrix-aes-192
+  // single-block describe above; the byte-native iterate's blockIndex + :b{i}
+  // preservation is pinned in `runtime-ported-dispatch.test.ts` and
+  // `aes-128-ecb-kat.test.ts`. The Phase-0 projection machinery retires with the
+  // lifted-legacy steps at Phase C.
 });
