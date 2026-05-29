@@ -114,6 +114,16 @@ const runBytes = (spec: typeof aes128EcbSpec, key: string, pt: string): Trace =>
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(key)]]),
   });
 
+// Byte-native AES-128 (Slice B1): bytes state + ported dispatch (port-native
+// primitives have no legacy executor). Single-block encrypt only — decrypt and
+// 192/256 stay matrix (`runMatrix`) until Slices B1.2 / B1.3.
+const runPorted = (spec: typeof aes128Spec, key: string, pt: string): Trace =>
+  runSpec(spec, buildDefaultRegistry(), {
+    initialState: makeBytesState(bytesFromHex(pt)),
+    initialAux: new Map<string, AuxValue>([["key", bytesFromHex(key)]]),
+    portedDispatchEnabled: true,
+  });
+
 const emptyTrace: Trace = {
   frames: [],
   finalState: { shape: "bytes", bytes: new Uint8Array(0) },
@@ -130,7 +140,7 @@ describe("validateGraph — zero warnings on shipped specs", () => {
   // up first.
 
   it("AES-128 encrypt", () => {
-    const trace = runMatrix(aes128Spec, AES128_KEY, AES128_PT);
+    const trace = runPorted(aes128Spec, AES128_KEY, AES128_PT);
     const graph = deriveAuxGraph(trace, aes128Spec);
     expect(validateGraph(graph, trace)).toEqual([]);
   });
@@ -442,7 +452,7 @@ describe("runtime — auxReadMissing capture", () => {
   // it), the frame's auxReadMissing stays undefined (no allocation).
 
   it("frames whose reads succeed carry no auxReadMissing field", () => {
-    const trace = runMatrix(aes128Spec, AES128_KEY, AES128_PT);
+    const trace = runPorted(aes128Spec, AES128_KEY, AES128_PT);
     for (const frame of trace.frames) {
       expect(frame.auxReadMissing).toBeUndefined();
     }

@@ -179,10 +179,13 @@ describe("inferShapesAtAnchors", () => {
     expect(map.get("store")).toBe("bytes");
   });
 
-  it("records matrix4x4-bytes on every leaf inside an AES round group", () => {
-    // The shipped AES-128 spec is the cleanest existing example: every
-    // round step is matrix4x4-bytes (preserveInput), and the spec
-    // starts in matrix (inputs.plaintext.shape).
+  it("records bytes on every leaf inside a byte-native AES round group", () => {
+    // The byte-native AES-128 spec (Slice B1) is bytes end-to-end: the spec
+    // starts in bytes (inputs.plaintext.shape) and every round primitive
+    // (byte-substitute / permute / gf-matrix-multiply / xor) is a port-native
+    // bytes→bytes leaf. (Matrix-shape inference is still covered by the
+    // synthetic load/store-block test above and the still-matrix ECB test
+    // below, until those convert in Slices B1.2 / B1.4.)
     const map = inferShapesAtAnchors(aes128Spec, registry);
     // Pick a leaf known to be inside a round (id format: "round.N.sub-bytes").
     const roundLeaf = aes128Spec.steps.flatMap((n) =>
@@ -190,7 +193,7 @@ describe("inferShapesAtAnchors", () => {
     )[0];
     expect(roundLeaf).toBeDefined();
     if (!roundLeaf) throw new Error("unreachable");
-    expect(map.get(roundLeaf)).toBe("matrix4x4-bytes");
+    expect(map.get(roundLeaf)).toBe("bytes");
   });
 
   it("leaves the iterate's exit shape at matrix4x4-bytes for ECB", () => {

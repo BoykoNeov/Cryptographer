@@ -170,8 +170,10 @@ describe("Slice 11 — palette-built spec round-trips through Save/Load", () => 
     fireEvent.click(findButton(container, "run"));
     const traceBeforeAuthoring = getTrace();
     if (!traceBeforeAuthoring) throw new Error("initial run did not produce a trace");
+    // Byte-native AES-128 (Slice B1) produces a `bytes` finalState (the App
+    // auto-enables ported dispatch via requiresPortedDispatch).
     const aesFinalStateBytes =
-      traceBeforeAuthoring.finalState.shape === "matrix4x4-bytes"
+      traceBeforeAuthoring.finalState.shape === "bytes"
         ? Array.from(traceBeforeAuthoring.finalState.bytes)
         : null;
     expect(aesFinalStateBytes).not.toBeNull();
@@ -267,7 +269,7 @@ describe("Slice 11 — palette-built spec round-trips through Save/Load", () => 
     if (!traceAfterAuthoring) throw new Error("authored-spec run did not produce a trace");
     // Aux primitives are state-passthrough; the AES final state must be
     // byte-equal to the pre-authoring run.
-    if (traceAfterAuthoring.finalState.shape === "matrix4x4-bytes") {
+    if (traceAfterAuthoring.finalState.shape === "bytes") {
       expect(Array.from(traceAfterAuthoring.finalState.bytes)).toEqual(aesFinalStateBytes);
     }
 
@@ -358,7 +360,7 @@ describe("Slice 11 — palette-built spec round-trips through Save/Load", () => 
     // ciphertext regardless of how the user composed the aux side.
     const traceAfterLoad = getTrace();
     if (!traceAfterLoad) throw new Error("load did not produce a trace");
-    if (traceAfterLoad.finalState.shape === "matrix4x4-bytes") {
+    if (traceAfterLoad.finalState.shape === "bytes") {
       expect(Array.from(traceAfterLoad.finalState.bytes)).toEqual(aesFinalStateBytes);
     }
   });
