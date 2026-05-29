@@ -52,18 +52,20 @@ const resetAll = (): void => {
   __resetTraceForTests();
   __resetViewDensityForTests();
   __resetViewModeForTests();
-  // Retarget to AES-128 ECB: every single-block AES is byte-native as of Slice
-  // B1.3, so its `round.1.sub-bytes` is `byte-substitute@1` whose editor ALSO
-  // renders a SyncInverseRow with the same button text — selecting a byte-native
-  // leaf here would mis-target (the assertion would pass against the wrong
-  // block, leaving the matrix `generic.byte-substitution@1` SbxBlock path
-  // uncovered). The AES-128 ECB/CBC modes keep the matrix `generic.*` round body
-  // (`aes-round-builder.ts`) until Slice B1.4, so ECB's `round.1.sub-bytes` is a
-  // genuine `generic.byte-substitution@1` leaf rendering the matrix SbxBlock +
+  // Retarget to AES-128 CBC: every single-block AES (B1.3) AND ECB (B1.4a) is
+  // byte-native, so their `round.1.sub-bytes` is `byte-substitute@1` whose
+  // editor ALSO renders a SyncInverseRow with the same button text — selecting
+  // a byte-native leaf here would MIS-TARGET (the assertion would pass against
+  // the wrong block, leaving the matrix `generic.byte-substitution@1` SbxBlock
+  // path uncovered — the vacuous-pass trap). The AES-128 **CBC** mode is the
+  // last selectable spec keeping the matrix `generic.*` round body
+  // (`aes-round-builder.ts`) until Slice B1.4b, so CBC's `round.1.sub-bytes` is
+  // a genuine `generic.byte-substitution@1` leaf rendering the matrix SbxBlock +
   // its Sync-inverse row. (The matrix body lives inside the iterate, but the
-  // spec leaf id is still `round.1.sub-bytes`.)
+  // spec leaf id is still `round.1.sub-bytes`.) When CBC converts in B1.4b this
+  // retarget re-breaks and the matrix path retires with Phase C.
   setCipher("aes-128");
-  setCipherMode("ecb");
+  setCipherMode("cbc");
 };
 
 describe("SyncInverseRow — gating on bijection", () => {
