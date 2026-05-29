@@ -15,11 +15,13 @@ import type {
   ForEachSubgraphWithHistoryNode,
   IterateGroup,
   Json,
+  PortBinding,
   StateShape,
   StepGroup,
   StepLeaf,
   StepNode,
 } from "./types";
+import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "./types";
 
 // ─── Walking the tree ─────────────────────────────────────────────────────
 
@@ -1377,6 +1379,133 @@ export const PADDING_STEP_TYPES: ReadonlySet<string> = new Set<string>([
 const AES_BLOCK_SIZE = 16;
 
 /**
+ * The port name a Phase-1 *lifted* legacy step (`generic.pkcs7-pad@1` et al.)
+ * publishes its transformed bytes under. The lift's `ProjectionMetadata`
+ * declares `stateInputPort`/`stateOutputPort: "state"`, and the runtime
+ * records ported outputs under that name (`port-projection.ts` →
+ * `runtime.ts` `nodeOutputs`). So a byte-native consumer wiring to a pad's
+ * output reads `port(padId, "state")` — NOT `"output"` (which is the
+ * convention only for the new no-prefix port-native primitives like
+ * `xor@1`/`byte-substitute@1`).
+ */
+const LIFTED_STATE_PORT = "state";
+
+const port = (node: string, portName: string): PortBinding => ({ node, port: portName });
+
+/**
+ * Byte-native AES detection for the padding overlay. Byte-native AES
+ * (scaffolding-suppression Phase B) carries a flat 16-byte state on raw
+ * ports (`stateShape: "bytes"`), unlike the legacy matrix AES
+ * (`"matrix4x4-bytes"`). It shares the `"bytes"` shape with Speck (4-byte
+ * block) / Serpent (16) / DES (8), so shape alone can't gate the overlay:
+ * the pad's `blockSize` is hardcoded to `AES_BLOCK_SIZE` (16), which is a
+ * lie for Speck/DES. We therefore scope the byte-native padding branch to
+ * the AES family by id prefix — the honest scope for the hardcoded 16.
+ * When Serpent (B3, block 16) / DES (B4, block 8) go byte-native they add
+ * their own branch (Serpent could reuse this once block size is read off
+ * the spec; DES needs an 8-byte block). This is the clear B3/B4 seam.
+ */
+const isByteNativeAesSpec = (spec: CipherSpec): boolean =>
+  spec.stateShape === "bytes" && spec.id.startsWith("aes");
+
+/**
+ * Recursively rewrite every `portInputs` binding in the tree through
+ * `rewriteBinding` (identity ⇒ no-op for a binding). Pure — returns a fresh
+ * tree only where a rewrite occurred (reference-stable on untouched
+ * branches). The byte-native padding branch uses this to splice a pad into
+ * the port graph (repoint `$input` consumers to the pad) and — on the
+ * reverse — to restore the canonical `$input` wiring before a strip leaves a
+ * dangling reference to a removed pad leaf.
+ */
+const rewriteAllPortInputs = (
+  steps: readonly StepNode[],
+  rewriteBinding: (b: PortBinding) => PortBinding,
+): readonly StepNode[] => {
+  const rewritePortInputs = (
+    pi: Readonly<Record<string, PortBinding>> | undefined,
+  ): Readonly<Record<string, PortBinding>> | undefined => {
+    if (pi === undefined) return undefined;
+    let changed = false;
+    const next: Record<string, PortBinding> = {};
+    for (const [k, b] of Object.entries(pi)) {
+      const nb = rewriteBinding(b);
+      if (nb !== b) changed = true;
+      next[k] = nb;
+    }
+    return changed ? next : pi;
+  };
+
+  // Recurse into a node's children FIRST, on the intact discriminant (a
+  // union-spread would erase the `kind`↔fields correlation and break the
+  // narrowing). Then rewrite the node's own portInputs.
+  const rewriteNode = (n: StepNode): StepNode => {
+    let withChildren: StepNode = n;
+    if (n.kind === "feistel-round") {
+      const newTracks = n.tracks.map((t) => {
+        const nc = visit(t.children);
+        return nc === t.children ? t : { ...t, children: nc };
+      });
+      if (newTracks.some((t, i) => t !== n.tracks[i])) {
+        withChildren = { ...n, tracks: newTracks };
+      }
+    } else if (n.kind !== "step") {
+      // group / iterate / for-each-subgraph / for-each-subgraph-with-history
+      const nc = visit(n.children);
+      if (nc !== n.children) withChildren = { ...n, children: nc };
+    }
+    const newPi = rewritePortInputs(withChildren.portInputs);
+    if (newPi !== undefined && newPi !== withChildren.portInputs) {
+      return { ...withChildren, portInputs: newPi };
+    }
+    return withChildren;
+  };
+
+  const visit = (nodes: readonly StepNode[]): readonly StepNode[] => {
+    let anyChanged = false;
+    const out = nodes.map((n) => {
+      const next = rewriteNode(n);
+      if (next !== n) anyChanged = true;
+      return next;
+    });
+    return anyChanged ? out : nodes;
+  };
+
+  return visit(steps);
+};
+
+/** The pad-leaf ids the byte-native branch may have spliced in (for restore). */
+const PADDING_PAD_IDS: ReadonlySet<string> = new Set<string>(
+  Object.values(SCHEME_STEP_TYPES).map((s) => s.padId),
+);
+const PADDING_UNPAD_IDS: ReadonlySet<string> = new Set<string>(
+  Object.values(SCHEME_STEP_TYPES).map((s) => s.unpadId),
+);
+
+/** Repoint `$input` consumers to `port(padNode, "state")` (pad-splice). */
+const repointInputSourceConsumers = (
+  steps: readonly StepNode[],
+  padNode: string,
+): readonly StepNode[] =>
+  rewriteAllPortInputs(steps, (b) =>
+    b.node === INPUT_SOURCE_ID && b.port === INPUT_SOURCE_PORT
+      ? port(padNode, LIFTED_STATE_PORT)
+      : b,
+  );
+
+/**
+ * Restore the canonical `$input` wiring: any binding that points at a known
+ * pad leaf's `state` output is repointed back to `$input`. Run BEFORE a
+ * strip so removing the pad leaf can't leave a dangling reference. Pad ids
+ * are reserved (`PADDING_PAD_IDS`), so this only ever touches overlay edges.
+ */
+const restoreInputSourceConsumers = (steps: readonly StepNode[]): readonly StepNode[] =>
+  rewriteAllPortInputs(steps, (b) =>
+    PADDING_PAD_IDS.has(b.node) && b.port === LIFTED_STATE_PORT
+      ? port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT)
+      : b,
+  );
+
+/**
  * Strip every top-level leaf whose `type` is in `PADDING_STEP_TYPES`. We
  * walk only the top level: the canonical AES specs put all their per-round
  * work inside `group` nodes, and the overlay's pad/load/unpad/store leaves
@@ -1453,6 +1582,78 @@ export const applyPaddingScheme = (
       params: { blockSize: AES_BLOCK_SIZE },
     };
     return { ...spec, steps: [...stripped, unpadLeaf] };
+  }
+
+  // ── Branch 2: byte-native single-block AES (Slice B1) ──────────────────
+  // The port-native AES rebuild carries a flat 16-byte state on raw ports
+  // (no `MatrixState` thread): the plaintext arrives on the reserved
+  // `$input` source and the cipher exit is named by `spec.outputFrom`. The
+  // legacy matrix branch's [pad → load-block] / [store-block → unpad] chain
+  // doesn't apply — there is no state thread to splice into and no
+  // bytes↔matrix bridge to insert. Instead we splice the pad directly into
+  // the port graph: prepend a pad reading `$input`, then repoint every
+  // `$input` consumer (the initial AddRoundKey's `operand0`) to the pad's
+  // output. The pad is a Phase-1 lifted step, so its output port is named
+  // `"state"` (LIFTED_STATE_PORT), not `"output"`.
+  if (isByteNativeAesSpec(spec)) {
+    // Idempotency: a prior call may have repointed `$input` consumers to a
+    // pad (encrypt) or moved `outputFrom` onto an unpad (decrypt). `stripped`
+    // removed those LEAVES; we must also repair the EDGES before re-applying,
+    // or a leftover binding dangles at the removed pad/unpad. Restore both
+    // first, then re-derive from that canonical wiring.
+    const inputRestored = restoreInputSourceConsumers(stripped);
+    // Restore `outputFrom`: if it points at a known unpad, recover the
+    // unpad's captured cipher-exit binding from the PRE-strip spec.
+    let canonicalOutputFrom = spec.outputFrom;
+    if (canonicalOutputFrom !== undefined && PADDING_UNPAD_IDS.has(canonicalOutputFrom.node)) {
+      const priorUnpad = findStep(spec, canonicalOutputFrom.node);
+      const captured = priorUnpad?.portInputs?.[LIFTED_STATE_PORT];
+      canonicalOutputFrom = captured ?? canonicalOutputFrom;
+    }
+    const restoredSpec: CipherSpec = {
+      ...spec,
+      steps: inputRestored,
+      ...(canonicalOutputFrom !== undefined ? { outputFrom: canonicalOutputFrom } : {}),
+    };
+
+    if (scheme === "none") {
+      // No `load-block`/`store-block` ever existed in the byte-native spec,
+      // so the restored wiring IS the canonical spec. Shape stays `"bytes"`.
+      return restoredSpec;
+    }
+    const { padType, unpadType, padId, unpadId } = SCHEME_STEP_TYPES[scheme];
+    if (mode === "encrypt") {
+      const padLeaf: StepLeaf = {
+        kind: "step",
+        id: padId,
+        type: padType,
+        params: { blockSize: AES_BLOCK_SIZE },
+        // Pad reads the raw plaintext from `$input` on its `state` input port.
+        portInputs: { [LIFTED_STATE_PORT]: port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT) },
+      };
+      // The body's `$input` consumers now read the padded bytes instead.
+      const repointed = repointInputSourceConsumers(inputRestored, padId);
+      return { ...restoredSpec, steps: [padLeaf, ...repointed] };
+    }
+    // mode === "decrypt": NOT exercised in B1 (the shipped decrypt spec is
+    // still matrix → handled by the matrix branch below). Implemented
+    // symmetrically for forward-compat with Slice B1.2's byte-native
+    // decrypt: append an unpad reading the current cipher exit, then move
+    // `outputFrom` to the unpad's output. B1.2 will exercise + verify this.
+    const unpadLeaf: StepLeaf = {
+      kind: "step",
+      id: unpadId,
+      type: unpadType,
+      params: { blockSize: AES_BLOCK_SIZE },
+      ...(canonicalOutputFrom !== undefined
+        ? { portInputs: { [LIFTED_STATE_PORT]: canonicalOutputFrom } }
+        : {}),
+    };
+    return {
+      ...restoredSpec,
+      steps: [...inputRestored, unpadLeaf],
+      outputFrom: port(unpadId, LIFTED_STATE_PORT),
+    };
   }
 
   // ── Branch 3: non-AES single-block (Speck) ─────────────────────────────
