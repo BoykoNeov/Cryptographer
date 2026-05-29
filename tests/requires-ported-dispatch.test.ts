@@ -10,11 +10,11 @@
  * derives `false` so they continue running under the legacy dispatch
  * path. This file walks the full set and pins both directions.
  *
- * UPDATE (scaffolding-suppression Slice B1, 2026-05-29): the AES-128
- * single-block ENCRYPT spec is now byte-native (port-native primitives
- * with no legacy executor), so it derives `true` — it CANNOT run under
- * legacy dispatch. AES-128 decrypt + ECB/CBC + AES-192/256 stay matrix
- * (legacy) until Slices B1.2 / B1.3 / B1.4, so they remain `false`.
+ * UPDATE (scaffolding-suppression Slices B1.1–B1.3, 2026-05-29): every
+ * single-block AES spec (128/192/256, both directions) is now byte-native
+ * (port-native primitives with no legacy executor), so it derives `true` —
+ * it CANNOT run under legacy dispatch. Only the AES-128 ECB/CBC modes stay
+ * matrix (legacy) until Slice B1.4, so they remain `false`.
  *
  * A separate synthetic-Feistel test ensures the helper descends into
  * `FeistelRoundGroup.tracks[].children` — the easy container kind to
@@ -65,10 +65,11 @@ const shippedSpecs: ReadonlyArray<readonly [string, CipherSpec, boolean]> = [
   ["aes-128 ecb decrypt", aes128EcbDecryptSpec, false],
   ["aes-128 cbc encrypt", aes128CbcSpec, false],
   ["aes-128 cbc decrypt", aes128CbcDecryptSpec, false],
-  ["aes-192 single-block encrypt", aes192Spec, false],
-  ["aes-192 single-block decrypt", aes192DecryptSpec, false],
-  ["aes-256 single-block encrypt", aes256Spec, false],
-  ["aes-256 single-block decrypt", aes256DecryptSpec, false],
+  // Byte-native (Slice B1.3) — port-native primitives, no legacy path → true.
+  ["aes-192 single-block encrypt", aes192Spec, true],
+  ["aes-192 single-block decrypt", aes192DecryptSpec, true],
+  ["aes-256 single-block encrypt", aes256Spec, true],
+  ["aes-256 single-block decrypt", aes256DecryptSpec, true],
   ["speck-32-64-be encrypt", speck32_64BeSpec, false],
   ["speck-32-64-be decrypt", speck32_64BeDecryptSpec, false],
   ["speck-32-64-le encrypt", speck32_64LeSpec, false],

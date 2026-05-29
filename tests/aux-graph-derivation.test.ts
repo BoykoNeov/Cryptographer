@@ -20,7 +20,6 @@
 
 import { aes128Spec } from "@/ciphers/aes-128";
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
-import { aes192Spec } from "@/ciphers/aes-192";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
@@ -38,6 +37,7 @@ import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import { INPUT_SOURCE_ID } from "@/core/types";
 import type { AuxValue, Trace } from "@/core/types";
 import { describe, expect, it } from "vitest";
+import { matrixAes192Spec } from "./fixtures/matrix-aes-192";
 
 // ─── Shared test fixtures ──────────────────────────────────────────────────
 
@@ -783,13 +783,16 @@ describe("deriveAuxGraph — synthetic endpoint pills (Slice 1)", () => {
   // sees the same shape it always did — these tests opt in and check the
   // injected pieces.
 
-  // Retargeted to AES-192 (still matrix until B1.3). Byte-native AES-128
-  // injects a `$input` port-flow source node that occupies rootIds[0],
-  // colliding with the synthetic endpoint-pill placement these tests pin.
-  // AES-192 (matrix, no source node) preserves the exact pill semantics;
-  // its final round is round.12 (vs round.10 for AES-128). B1.3: when aes-192
-  // converts byte-native, the `$input`-vs-endpoint-pill interaction becomes a
-  // real feature question for every cipher — re-evaluate then (grep aes192Spec).
+  // Retargeted to the shared MATRIX AES-192 fixture (`tests/fixtures/
+  // matrix-aes-192.ts`). Every shipped single-block AES is byte-native as of
+  // Slice B1.3 and injects a `$input` port-flow source node that occupies
+  // rootIds[0], colliding with the synthetic endpoint-pill placement these
+  // tests pin. The matrix fixture (no `$input` source node) preserves the exact
+  // pill semantics — a top-level aux-only `key-expansion` root, a standalone
+  // `initial.add-round-key`, and `round.12` as the final round. The
+  // `$input`-vs-endpoint-pill interaction for byte-native specs is the real
+  // feature question deferred to the B1.4 follow-up (Slice 2.9c-e / universal
+  // inspector), tracked in the scaffolding-suppression plan.
   const ENCRYPT_OPTS = {
     endpoints: {
       inputLabel: "plaintext",
@@ -804,7 +807,7 @@ describe("deriveAuxGraph — synthetic endpoint pills (Slice 1)", () => {
   };
 
   it("injects two endpoint nodes when opts.endpoints is provided", () => {
-    const g = deriveAuxGraph(emptyTrace(), aes192Spec, ENCRYPT_OPTS);
+    const g = deriveAuxGraph(emptyTrace(), matrixAes192Spec, ENCRYPT_OPTS);
 
     const input = g.nodes.find((n) => n.stepId === CIPHER_INPUT_ID);
     const output = g.nodes.find((n) => n.stepId === CIPHER_OUTPUT_ID);
@@ -822,19 +825,19 @@ describe("deriveAuxGraph — synthetic endpoint pills (Slice 1)", () => {
   it("omits endpoint nodes when opts is undefined (back-compat)", () => {
     // Every existing test in this file calls deriveAuxGraph with no opts.
     // This pins that contract: no opts ⇒ no pills, ever.
-    const g = deriveAuxGraph(emptyTrace(), aes192Spec);
+    const g = deriveAuxGraph(emptyTrace(), matrixAes192Spec);
     expect(g.nodes.some((n) => isEndpointId(n.stepId))).toBe(false);
     expect(g.edges.some((e) => isEndpointId(e.from) || isEndpointId(e.to))).toBe(false);
   });
 
   it("prepends + appends pills to rootIds (canvas-extreme placement hook)", () => {
-    const g = deriveAuxGraph(emptyTrace(), aes192Spec, ENCRYPT_OPTS);
+    const g = deriveAuxGraph(emptyTrace(), matrixAes192Spec, ENCRYPT_OPTS);
     expect(g.rootIds[0]).toBe(CIPHER_INPUT_ID);
     expect(g.rootIds[g.rootIds.length - 1]).toBe(CIPHER_OUTPUT_ID);
   });
 
   it("emits two state-kind edges connecting the pills to the anchors", () => {
-    const g = deriveAuxGraph(emptyTrace(), aes192Spec, ENCRYPT_OPTS);
+    const g = deriveAuxGraph(emptyTrace(), matrixAes192Spec, ENCRYPT_OPTS);
 
     const inputEdge = g.edges.find((e) => e.from === CIPHER_INPUT_ID);
     const outputEdge = g.edges.find((e) => e.to === CIPHER_OUTPUT_ID);
@@ -847,7 +850,7 @@ describe("deriveAuxGraph — synthetic endpoint pills (Slice 1)", () => {
   });
 
   it("falls back to rootIds[0] / rootIds[last] when anchors are omitted", () => {
-    const g = deriveAuxGraph(emptyTrace(), aes192Spec, {
+    const g = deriveAuxGraph(emptyTrace(), matrixAes192Spec, {
       endpoints: { inputLabel: "plaintext", outputLabel: "ciphertext" },
     });
 
@@ -864,7 +867,7 @@ describe("deriveAuxGraph — synthetic endpoint pills (Slice 1)", () => {
   it("swaps labels on decrypt-style invocation", () => {
     // Decrypt mode: the caller's labels themselves swap. The function
     // doesn't introspect direction; it just renders what it's given.
-    const g = deriveAuxGraph(emptyTrace(), aes192Spec, {
+    const g = deriveAuxGraph(emptyTrace(), matrixAes192Spec, {
       endpoints: {
         inputLabel: "ciphertext",
         outputLabel: "plaintext",
@@ -882,7 +885,7 @@ describe("deriveAuxGraph — synthetic endpoint pills (Slice 1)", () => {
     // key-expansion. This test validates the *intent* by exercising the
     // helper directly with the value the renderer would pass — pinning
     // that the function honors a non-rootIds[0] anchor when supplied.
-    const g = deriveAuxGraph(emptyTrace(), aes192Spec, ENCRYPT_OPTS);
+    const g = deriveAuxGraph(emptyTrace(), matrixAes192Spec, ENCRYPT_OPTS);
     const inputEdge = g.edges.find((e) => e.from === CIPHER_INPUT_ID);
     // initial.add-round-key, NOT key-expansion (which is the literal rootIds[0]).
     expect(inputEdge?.to).toBe("initial.add-round-key");

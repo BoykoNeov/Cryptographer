@@ -21,7 +21,6 @@
  *      classes simultaneously).
  */
 
-import { aes192Spec } from "@/ciphers/aes-192";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { runSpec } from "@/core/runtime";
@@ -31,6 +30,7 @@ import type { AuxValue, BytesState, MatrixState, TraceFrame } from "@/core/types
 import { BytesView } from "@/ui/components/BytesView";
 import { MatrixView } from "@/ui/components/MatrixView";
 import { RoundKeyPanel } from "@/ui/components/RoundKeyPanel";
+import { matrixAes192Spec } from "./fixtures/matrix-aes-192";
 import "@/ui/provenance/index"; // side-effect: registers fns
 import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetProvenanceHoverForTests } from "@/ui/stores/provenance-hover";
@@ -39,20 +39,21 @@ import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 // Matrix-cell provenance is a MatrixView-path feature (`generic.*` step types
-// + MatrixState before/after). Byte-native AES-128 (Slice B1) has bytes
-// stateAfter and port-native step types, so it no longer drives the MatrixView
-// overlay (accepted regression — port-native cell provenance is deferred to
-// Slice 2.9c-e). AES-192 stays matrix/legacy until Slice B1.3, so it preserves
-// the exact MatrixView coverage with the same `generic.*` step types. 24-byte
-// key (FIPS-197 §A.2), 16-byte block. B1.3: when aes-192 converts byte-native,
-// these 6 MatrixView tests re-break — retarget then (grep `aes192Spec` /
-// `aes-192` across tests/); by B1.4 no matrix cipher remains, so they convert
-// to the BytesView path (like the Serpent tests below) once 2.9c-e ships.
+// + MatrixState before/after). Every shipped single-block AES is byte-native as
+// of Slice B1.3 — bytes stateAfter and port-native step types — so it no longer
+// drives the MatrixView overlay (accepted regression — port-native cell
+// provenance is deferred to Slice 2.9c-e). These 6 MatrixView tests therefore
+// run on the shared MATRIX AES-192 fixture (`tests/fixtures/matrix-aes-192.ts`),
+// hand-built from the still-registered `generic.*` lifted-legacy step types so
+// it preserves the exact MatrixView coverage. 24-byte key (FIPS-197 §A.2),
+// 16-byte block. The fixture survives to Phase C (when MatrixView provenance
+// retires); the byte-native ciphers move to the BytesView path (like the
+// Serpent tests below) once 2.9c-e ships.
 const AES192_KEY = "8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b";
 const AES192_PT = "6bc1bee22e409f96e93d7e117393172a";
 
 const seedAes192Trace = () => {
-  const trace = runSpec(aes192Spec, buildDefaultRegistry(), {
+  const trace = runSpec(matrixAes192Spec, buildDefaultRegistry(), {
     initialState: matrixFromBytes(bytesFromHex(AES192_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES192_KEY)]]),
   });

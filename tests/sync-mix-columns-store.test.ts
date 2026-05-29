@@ -32,7 +32,7 @@ import { __resetLayoutsForTests } from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
 import {
   __resetSpecForTests,
-  setCipher,
+  setCipherMode,
   setMode,
   syncMixColumnsInverseToCounterpart,
   useCipherSpecsByMode,
@@ -45,13 +45,17 @@ const resetAll = (): void => {
   __resetCipherForTests();
   __resetCipherModeForTests();
   __resetLayoutsForTests();
-  // Retarget to AES-192: the default AES-128 ENCRYPT spec is byte-native
-  // (Slice B1) and no longer carries `generic.mix-columns@1` steps, so a
-  // cross-slot mirror test on AES-128 would collect 0 matching steps in the
-  // encrypt slot. AES-192 stays matrix on BOTH sides until B1.3 — keeping this
-  // test exercising the still-live matrix mirror mutator. (Byte-native mirror
-  // entries land in B1.2 when both modes share the byte-native type.)
-  setCipher("aes-192");
+  // Retarget to AES-128 ECB: every single-block AES spec (128/192/256, both
+  // modes) is byte-native as of Slice B1.3 and no longer carries
+  // `generic.mix-columns@1` steps, so a cross-slot mirror test on a
+  // single-block AES would collect 0 matching steps. The ECB/CBC modes still
+  // thread the matrix round body (`aes-round-builder.ts` → `generic.*`) on
+  // BOTH encrypt and decrypt until Slice B1.4 — keeping this test exercising
+  // the still-live matrix mirror mutator. (The mutator + `collectMatrices`
+  // both recurse into the iterate body, so the multi-block wrapping is
+  // transparent here.) At B1.4 no matrix AES remains and this matrix-path
+  // describe converts to a synthetic carrier or retires with Phase C.
+  setCipherMode("ecb");
 };
 
 // AES has one `generic.mix-columns@1` leaf per non-final round. We walk

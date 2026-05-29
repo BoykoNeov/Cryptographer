@@ -58,7 +58,6 @@
 
 import { aes128Spec } from "@/ciphers/aes-128";
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
-import { aes192Spec } from "@/ciphers/aes-192";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { type ProjectionMetadata, project, reconstruct } from "@/core/port-projection";
 import { runSpec } from "@/core/runtime";
@@ -66,6 +65,7 @@ import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, Json, TraceFrame } from "@/core/types";
 import { describe, expect, it } from "vitest";
+import { matrixAes192Spec } from "./fixtures/matrix-aes-192";
 
 // ─── Slice 1.0 — Dynamic-N aux-write round-trip ─────────────────────────
 //
@@ -85,10 +85,12 @@ import { describe, expect, it } from "vitest";
 const FIPS_B_PLAINTEXT = "3243f6a8885a308d313198a2e0370734";
 const FIPS_B_KEY = "2b7e151628aed2a6abf7158809cf4f3c";
 // AES-192 key (FIPS-197 §A.2, 24 bytes). The single-block projection describe
-// retargets to AES-192 — still matrix/lifted-legacy (it keeps the
-// `generic.byte-substitution@1` / `generic.add-round-key@1` step types the
-// projection METAs describe), whereas byte-native AES-128 (Slice B1) replaced
-// them with port-native primitives. B1.3: re-target when aes-192 converts.
+// runs on the shared MATRIX AES-192 fixture (`tests/fixtures/matrix-aes-192.ts`)
+// — hand-built from the still-registered `generic.byte-substitution@1` /
+// `generic.add-round-key@1` lifted-legacy step types the projection METAs
+// describe. Every shipped single-block AES is byte-native as of Slice B1.3
+// (port-native primitives, matrix4x4-bytes frames gone), so the fixture is the
+// durable carrier; it survives to Phase C when the matrix projection retires.
 const AES192_KEY = "8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b";
 
 // SP 800-38A §F.1.1 — one block extracted from the four-block ECB fixture.
@@ -248,11 +250,12 @@ const expectAuxMapByteEqual = (
 
 describe("port-projection — Q-gate-9 round-trip (Phase 0 load-bearing)", () => {
   describe("single-block AES-192 (no iterate)", () => {
-    // Retargeted to AES-192 (matrix/lifted-legacy) — byte-native AES-128 no
-    // longer emits `generic.byte-substitution@1` / `generic.add-round-key@1`
-    // frames (replaced by port-native primitives in Slice B1). AES-192 still
-    // does, and its frames are matrix4x4-bytes, matching the METAs below.
-    const trace = runSpec(aes192Spec, buildDefaultRegistry(), {
+    // Runs on the shared MATRIX AES-192 fixture (matrix/lifted-legacy) — every
+    // shipped single-block AES is byte-native as of Slice B1.3 and no longer
+    // emits `generic.byte-substitution@1` / `generic.add-round-key@1` frames
+    // (replaced by port-native primitives). The fixture still does, and its
+    // frames are matrix4x4-bytes, matching the METAs below.
+    const trace = runSpec(matrixAes192Spec, buildDefaultRegistry(), {
       initialState: matrixFromBytes(bytesFromHex(FIPS_B_PLAINTEXT)),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES192_KEY)]]),
     });

@@ -1,13 +1,19 @@
 /**
- * AES-192 known-answer tests.
+ * AES-192 known-answer tests (byte-native, scaffolding-suppression Slice B1.3,
+ * 2026-05-29).
+ *
+ * The spec is now built from port-native primitives (`byte-substitute@1` /
+ * `permute@1` / `gf-matrix-multiply@1` / `xor@1` + `aux-load-bytes@1`) with no
+ * legacy executor, so it runs ONLY under `portedDispatchEnabled: true` and
+ * produces a `bytes` finalState. Mirrors `aes-vectors.test.ts` (AES-128).
  *
  * Two anchor vectors, both backed by primary NIST sources:
  *
  *   1. FIPS-197 §A.2 — verifies the *key expansion* matches the standard's
  *      worked example byte-for-byte (w[0..51]). We assert the canonical
  *      round-12 key e98ba06f448c773c8ecc720401002202 directly out of the
- *      aux map. This pins the AES-192 path through `aes.key-expansion@1`
- *      without relying on the end-to-end ciphertext to catch a regression.
+ *      aux map. Key expansion is unchanged by the byte-native rebuild (still
+ *      the monolithic `aes.key-expansion@1`), so this pins the same path.
  *
  *   2. NIST AES Core 192 (CSRC example PDF) — verifies the full forward
  *      cipher with the same FIPS §A.2 key against a fixed plaintext, and
@@ -22,9 +28,8 @@ import { aes192Spec } from "@/ciphers/aes-192";
 import { aes192DecryptSpec } from "@/ciphers/aes-192-decrypt";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex, hexFromBytes } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
-import type { AuxValue, MatrixState } from "@/core/types";
+import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
+import type { AuxValue } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 const KEY_HEX = "8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b";
@@ -34,45 +39,49 @@ const ROUND_KEY_12_HEX = "e98ba06f448c773c8ecc720401002202"; // FIPS-197 §A.2 w
 
 describe("AES-192 (FIPS-197 §A.2 + NIST AES Core 192)", () => {
   it("encrypts the NIST AES Core 192 test vector", () => {
-    const plaintext = matrixFromBytes(bytesFromHex(PLAINTEXT_HEX));
+    const plaintext = makeBytesState(bytesFromHex(PLAINTEXT_HEX));
     const key = bytesFromHex(KEY_HEX);
     const initialAux = new Map<string, AuxValue>([["key", key]]);
 
     const trace = runSpec(aes192Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux,
+      portedDispatchEnabled: true,
     });
 
-    expect(trace.finalState.shape).toBe("matrix4x4-bytes");
-    if (trace.finalState.shape !== "matrix4x4-bytes") return;
+    expect(trace.finalState.shape).toBe("bytes");
+    if (trace.finalState.shape !== "bytes") return;
     expect(hexFromBytes(trace.finalState.bytes)).toBe(CIPHERTEXT_HEX);
   });
 
   it("emits a frame for every leaf step", () => {
-    // Expected frame count:
-    //   key-expansion              1
-    //   initial AddRoundKey        1
-    //   rounds 1..11 × 4 sub-steps 44
-    //   final round × 3 sub-steps   3
-    //   = 49 frames
-    const plaintext = matrixFromBytes(bytesFromHex(PLAINTEXT_HEX));
+    // Byte-native AES-192 leaves (one frame each):
+    //   key-expansion (1)
+    //   init.fetch-rk (1) + initial.add-round-key (1)
+    //   rounds 1..11 × 5 sub-steps (sub-bytes, shift-rows, mix-columns,
+    //     fetch-rk, add-round-key) = 55
+    //   final round.12 × 4 sub-steps (no mix-columns) = 4
+    //   = 62 frames
+    const plaintext = makeBytesState(bytesFromHex(PLAINTEXT_HEX));
     const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(KEY_HEX)]]);
 
     const trace = runSpec(aes192Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux,
+      portedDispatchEnabled: true,
     });
 
-    expect(trace.frames.length).toBe(49);
+    expect(trace.frames.length).toBe(62);
   });
 
   it("produces all 13 round keys in aux and roundKey.12 matches FIPS-197 §A.2", () => {
-    const plaintext = matrixFromBytes(bytesFromHex(PLAINTEXT_HEX));
+    const plaintext = makeBytesState(bytesFromHex(PLAINTEXT_HEX));
     const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(KEY_HEX)]]);
 
     const trace = runSpec(aes192Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux,
+      portedDispatchEnabled: true,
     });
 
     // 13 round keys: index 0 (initial AddRoundKey) through index 12 (final).
@@ -92,22 +101,24 @@ describe("AES-192 (FIPS-197 §A.2 + NIST AES Core 192)", () => {
   });
 
   it("round-trips: aes192Spec encrypt → aes192DecryptSpec recovers plaintext", () => {
-    const plaintext = matrixFromBytes(bytesFromHex(PLAINTEXT_HEX));
+    const plaintext = makeBytesState(bytesFromHex(PLAINTEXT_HEX));
     const key = bytesFromHex(KEY_HEX);
 
     const encTrace = runSpec(aes192Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux: new Map<string, AuxValue>([["key", key]]),
+      portedDispatchEnabled: true,
     });
-    expect(encTrace.finalState.shape).toBe("matrix4x4-bytes");
-    if (encTrace.finalState.shape !== "matrix4x4-bytes") return;
+    expect(encTrace.finalState.shape).toBe("bytes");
+    if (encTrace.finalState.shape !== "bytes") return;
 
     const decTrace = runSpec(aes192DecryptSpec, buildDefaultRegistry(), {
       initialState: encTrace.finalState,
       initialAux: new Map<string, AuxValue>([["key", key]]),
+      portedDispatchEnabled: true,
     });
-    expect(decTrace.finalState.shape).toBe("matrix4x4-bytes");
-    if (decTrace.finalState.shape !== "matrix4x4-bytes") return;
-    expect(hexFromBytes((decTrace.finalState as MatrixState).bytes)).toBe(PLAINTEXT_HEX);
+    expect(decTrace.finalState.shape).toBe("bytes");
+    if (decTrace.finalState.shape !== "bytes") return;
+    expect(hexFromBytes(decTrace.finalState.bytes)).toBe(PLAINTEXT_HEX);
   });
 });

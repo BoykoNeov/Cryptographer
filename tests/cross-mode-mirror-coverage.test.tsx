@@ -50,7 +50,13 @@ import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
 import { __resetLayoutsForTests } from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
-import { __resetSpecForTests, duplicateRoundInSpec, setCipher, useSpec } from "@/ui/stores/spec";
+import {
+  __resetSpecForTests,
+  duplicateRoundInSpec,
+  setCipher,
+  setCipherMode,
+  useSpec,
+} from "@/ui/stores/spec";
 import { __resetTraceForTests, setSelectedStepId } from "@/ui/stores/trace";
 import { __resetViewDensityForTests } from "@/ui/stores/view-density";
 import { __resetViewModeForTests } from "@/ui/stores/view-mode";
@@ -109,24 +115,26 @@ const findFirstLeafIdOfType = (stepType: string): string | null => {
 const setupForEntry = (entry: CrossModeMirrorEntry): string => {
   switch (entry.stepType) {
     case "generic.byte-substitution@1": {
-      // AES-128 single-block ENCRYPT is byte-native as of Slice B1, so its
-      // `round.1.sub-bytes` leaf is now `byte-substitute@1` — NOT this
-      // type. The legacy matrix `generic.byte-substitution@1` still ships
-      // on every un-converted AES spec (AES-192/256 both modes, AES-128
-      // decrypt, ECB/CBC), so pick a still-matrix cipher to exercise this
-      // entry's button. AES-192 keeps the stable `round.1.sub-bytes` id.
-      // (The byte-native `byte-substitute@1` mirror entry lands in B1.2,
-      // when decrypt is ALSO byte-native and the same-type mutator works
-      // end-to-end — adding it in B1 would ship a no-op sync button.)
-      setCipher("aes-192");
+      // Every single-block AES is byte-native as of Slice B1.3, so its
+      // `round.1.sub-bytes` leaf is now `byte-substitute@1` — NOT this type.
+      // The legacy matrix `generic.byte-substitution@1` only survives on the
+      // AES-128 ECB/CBC modes (still matrix until Slice B1.4), so select ECB
+      // to genuinely exercise THIS entry's button. The matrix round body lives
+      // inside the iterate but its spec leaf id is still `round.1.sub-bytes`.
+      // (Retargeting to a byte-native AES would mis-target: the
+      // `byte-substitute@1` button shares mirrorClass "inverse", so the
+      // assertion would pass against the wrong leaf's button.)
+      setCipher("aes-128");
+      setCipherMode("ecb");
       return "round.1.sub-bytes";
     }
     case "generic.mix-columns@1": {
-      // Same as above: AES-128 single-block encrypt MixColumns is now
-      // `gf-matrix-multiply@1` (byte-native). AES-192 is still matrix and
-      // round 1 always has a MixColumns leaf (FIPS-197: every round except
-      // the final). Same step type on both AES-192 encrypt/decrypt specs.
-      setCipher("aes-192");
+      // Same as above: every single-block AES MixColumns is now
+      // `gf-matrix-multiply@1` (byte-native). The matrix `generic.mix-columns@1`
+      // survives only on the AES-128 ECB/CBC modes; round 1 always has a
+      // MixColumns leaf (FIPS-197: every round except the final).
+      setCipher("aes-128");
+      setCipherMode("ecb");
       return "round.1.mix-columns";
     }
     case "aes.key-expansion@1": {

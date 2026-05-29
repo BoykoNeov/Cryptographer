@@ -827,6 +827,99 @@ byte-native AES-128 forward; (6) then B1.2 decrypt, B1.3 192/256, B1.4 modes
 A4 allowlist removals). Original full B1 plan: `~/.claude/plans/tidy-honking-
 stearns.md`.
 
+#### Session 6 (2026-05-29) — B1.3 (byte-native AES-192 + AES-256 enc+dec) DONE; gate GREEN
+
+Byte-native AES-192 + AES-256, both directions, shipped. **Full `npm run check`
+GREEN (2515 tests, 213 files, vite build clean).** **No A4 / LEGACY_CONTRACT
+allowlist change** (confirmed by the contract test): converting the four spec
+*files* doesn't change the *registry* — the matrix `generic.*` round steps +
+`load-block`/`store-block` stay registered + consumed by the AES-128 ECB/CBC
+modes, so the offender/legacy sets are unchanged. The allowlist drains only at
+B1.4 (when ECB/CBC convert and those step types deregister).
+
+**Source change was tiny (4 spec files).** `aes-round-builder-native.ts` is
+already variant-agnostic (`buildAes{Encrypt,Decrypt}BodyNative(rounds)`), the
+ParamEditor `<Match>` blocks exist (B1.1), and the cross-mode mirror entries
+exist (B1.2). So `aes-192.ts` / `aes-256.ts` / `aes-192-decrypt.ts` /
+`aes-256-decrypt.ts` each became the AES-128 spec with ROUNDS=12/14 +
+`stateShape:"bytes"` + plaintext `shape:"bytes"` + `outputFrom`. KAT byte-equal
+(192 `bd334f1d…`, 256 `f3eed1bd…`), 62 / 72 frames, round-trips pinned. The
+whole rest of the slice was the test sweep.
+
+**The bulk = test sweep + a mis-targeting audit (advisor-driven, the real value).**
+The mechanical sweep mirrored the B1.2 playbook: `requires-ported-dispatch`
+(192/256 enc+dec false→**true**); `runtime-ported-dispatch-frame-parity` (the 4
+192/256 rows REMOVED — byte-native has no legacy path; 20→16 rows);
+`runtime-ported-dispatch-aes-core` block (a) shape matrix→bytes + block (b)
+frame-parity-vs-legacy → ported-only round-key-order check at N=11/13/15 (the
+dynamic-N port surface the parity rows uniquely validated, preserved without a
+legacy path); `graph-validation` 192/256 → `runPorted`; `aes-192-vectors` /
+`aes-256-vectors` byte-native rewrite; `url-share` AES-256 threshold 4096→8192
+(byte-native spec ~5 KB).
+
+**The single-block matrix carrier disappears at B1.3** — so the Session-4
+"aes-192 retargets" needed real homes, not just a swap:
+- **Structure-dependent tests** (`provenance-hover-integration` MatrixView,
+  `port-projection-q-gate-9` single-block, `aux-graph-derivation` endpoint pills)
+  → new **shared hand-built matrix fixture `tests/fixtures/matrix-aes-192.ts`**
+  (the `frame-port-values` `liftedLegacySubBytesSpec` precedent generalized to a
+  full 12-round AES-192). Built from the still-registered `generic.*` nodes,
+  NOT imported from `aes-round-builder.ts` (which dies at B1.4) → survives to
+  Phase C when MatrixView/projection retire. Reproduces the exact matrix graph
+  shape the pills pin: top-level aux-only `key-expansion` root, standalone
+  `initial.add-round-key`, `round.12` final, NO `$input` source node.
+- **`graph-view-replication-force-on-ported`** (needs a *non-ported* control) →
+  **Speck** (legacy, `requiresPortedDispatch===false`). Re-breaks at B2.
+
+**The mis-targeting audit (advisor catch — load-bearing).** A green gate CANNOT
+see mis-targeting: a test that selects an aes-192/256 leaf expecting a `generic.*`
+type, then asserts something the now-`byte-substitute@1`/`gf-matrix-multiply@1`
+leaf ALSO satisfies, passes *vacuously* — staying out of the failing list while
+silently abandoning the matrix `generic.*` coverage B1.4 still needs. Found by
+auditing every aes-192/256-referencing file that did NOT fail. **Four real holes
+fixed** (all retargeted to AES-128 **ECB**, the only surviving matrix `generic.*`
+carrier — its round body lives inside the iterate but the spec leaf id is still
+`round.1.{sub-bytes,mix-columns}`, and the mutators/walks recurse into iterate
+children):
+- `cross-mode-mirror-coverage` — the `generic.byte-substitution@1` /
+  `generic.mix-columns@1` entries (mirror-class `inverse`) were finding the
+  byte-native `byte-substitute@1` / `gf-matrix-multiply@1` buttons (ALSO class
+  `inverse`) on aes-192 and passing against the wrong button.
+- `sync-inverse-row` / `sync-mix-columns-row` — the ParamEditor-row siblings:
+  selecting `round.1.{sub-bytes,mix-columns}` on byte-native aes-192 landed on
+  the byte-native block whose SyncInverse/SyncMixColumns row shares the same
+  label/`.sync-mix-columns-row` class. (Also had to extend `sync-inverse-row`'s
+  `findRound1SubBytes` walk to recurse into the ECB `iterate`.)
+- `file-save-load` — its byte-comparison was guarded by
+  `finalState.shape === "matrix4x4-bytes"`; byte-native aes-192 produces `"bytes"`
+  so the guard went FALSE and the comparison was SILENTLY skipped. Widened to
+  accept both shapes.
+- Also fixed `sync-sbox-inverse` / `sync-mix-columns-store` (the store-mutator
+  siblings) the same ECB way — those WERE in the failing list (collected 0
+  matching steps), but belong with the audit class.
+
+**Verified-safe (audited, no change needed):** `app-cipher-selector` (genuinely
+verifies byte-native 192/256 KAT end-to-end through `<App/>` — an in-jsdom App
+smoke); `runtime-ported-dispatch` Phase-0 (runs only aes-128 + aes-128-ecb);
+`duplicate-round-store` (counts round-group ids by prefix — 14/14 holds for
+byte-native; e2e already byte-native-aware); `document-roundtrip` / `app-url-share`
+/ `layout-store` / `app-custom-spec-indicator` / `algorithm-selector` /
+`cipher-mode-fallback` / `graph-view-replica-gutter` (opaque payload / id-string /
+signal / synthetic); the two key-schedule tests (synthetic specs, no real-spec
+refs — key-expansion is unchanged by B1.3).
+
+**Browser smoke skipped (advisor-concurred):** B1.3 reuses the identical
+byte-native render path already smoked in B1.1/B1.2 — only the round count
+differs, no new visual code. `app-cipher-selector`'s `<App/>`-level KAT checks
+cover the App run path in jsdom.
+
+**Next: B1.4** (ECB/CBC modes: iterate `seedInput`/`outputPorts`,
+`resolveBinding` extraction, the A4 + LEGACY_CONTRACT allowlist removals, and
+`aes-round-builder.ts` deletion). At B1.4 there is NO matrix carrier left — the
+ECB retargets above + the `matrix-aes-192` fixture become the ONLY matrix
+`generic.*` exercisers, and the B1.4 FOLLOW-UP `$input`-vs-endpoint-pill decision
+comes due (no matrix carrier to retarget the endpoint-pill tests to).
+
 #### Session 5 (2026-05-29) — B1.2 (byte-native AES-128 DECRYPT) DONE; gate GREEN
 
 Byte-native AES-128 decrypt shipped. **Full `npm run check` GREEN (2519 tests,

@@ -1,75 +1,37 @@
 /**
- * AES-256 encryption spec, FIPS-197 §5.1.
+ * AES-256 forward cipher, FIPS-197 §5.1 (single-block).
  *
- * Same step types as AES-128 and AES-192; the only differences are Nk=8
- * (32-byte cipher key) and ROUNDS=14. Nk=8 is also what triggers the
- * "SubWord every Nk/2 words" branch inside `aes.key-expansion@1` — that
- * branch fires solely for AES-256 (Nk>6). See the key-expansion source
- * comments + doc block for the FIPS-197 §5.2 reference.
+ * **Byte-native (scaffolding-suppression Phase B Slice B1.3, 2026-05-29).**
+ * Structurally identical to byte-native AES-128/192: the per-block body
+ * composes from port-native primitives whose ports are all `layout:"raw"` —
+ * `byte-substitute@1` (SubBytes), `permute@1` (ShiftRows),
+ * `gf-matrix-multiply@1` (MixColumns), `aux-load-bytes@1` + `xor@1`
+ * (AddRoundKey) — built by the variant-agnostic `buildAesEncryptBodyNative`.
+ * The only differences from AES-128 are Nk=8 (32-byte cipher key) and
+ * ROUNDS=14. Nk=8 (Nk>6) is also what triggers the extra "SubWord every Nk/2
+ * words" branch inside `aes.key-expansion@1` — that branch fires solely for
+ * AES-256. See the key-expansion source comments + doc block for the
+ * FIPS-197 §5.2 reference.
+ *
+ * The 16-byte working state carries port-to-port between round groups via the
+ * A3b `StepGroup` `seedInput`/`bodyOutput` contract; the plaintext arrives on
+ * the reserved `$input` source and the cipher exit is named by `outputFrom`.
+ * Key expansion stays the monolithic `aes.key-expansion@1` (A4-clean),
+ * writing `roundKey.0..14` into the aux map once total.
  */
 
-import type { CipherSpec, StepNode } from "../core/types";
-import { AES_MIX_MATRIX, AES_RCON, AES_SBOX, AES_SHIFT_ROWS } from "./aes-constants";
+import type { CipherSpec } from "../core/types";
+import { AES_RCON, AES_SBOX } from "./aes-constants";
+import { aesNativeOutputFrom, buildAesEncryptBodyNative } from "./aes-round-builder-native";
 
 const ROUNDS = 14;
-
-const subBytesStep = (idPrefix: string): StepNode => ({
-  kind: "step",
-  id: `${idPrefix}.sub-bytes`,
-  type: "generic.byte-substitution@1",
-  params: { sbox: [...AES_SBOX] },
-});
-
-const shiftRowsStep = (idPrefix: string): StepNode => ({
-  kind: "step",
-  id: `${idPrefix}.shift-rows`,
-  type: "generic.shift-rows@1",
-  params: { shifts: [...AES_SHIFT_ROWS] },
-});
-
-const mixColumnsStep = (idPrefix: string): StepNode => ({
-  kind: "step",
-  id: `${idPrefix}.mix-columns`,
-  type: "generic.mix-columns@1",
-  params: { matrix: AES_MIX_MATRIX.map((row) => [...row]) },
-});
-
-const addRoundKeyStep = (idPrefix: string, roundIndex: number): StepNode => ({
-  kind: "step",
-  id: `${idPrefix}.add-round-key`,
-  type: "generic.add-round-key@1",
-  params: { auxName: `roundKey.${roundIndex}` },
-});
-
-const round = (n: number): StepNode => ({
-  kind: "group",
-  id: `round.${n}`,
-  label: `Round ${n}`,
-  children: [
-    subBytesStep(`round.${n}`),
-    shiftRowsStep(`round.${n}`),
-    mixColumnsStep(`round.${n}`),
-    addRoundKeyStep(`round.${n}`, n),
-  ],
-});
-
-const finalRound: StepNode = {
-  kind: "group",
-  id: `round.${ROUNDS}`,
-  label: `Round ${ROUNDS} (final, no MixColumns)`,
-  children: [
-    subBytesStep(`round.${ROUNDS}`),
-    shiftRowsStep(`round.${ROUNDS}`),
-    addRoundKeyStep(`round.${ROUNDS}`, ROUNDS),
-  ],
-};
 
 export const aes256Spec: CipherSpec = {
   id: "aes-256@1",
   name: "AES-256",
-  stateShape: "matrix4x4-bytes",
+  stateShape: "bytes",
   inputs: {
-    plaintext: { shape: "matrix4x4-bytes" },
+    plaintext: { shape: "bytes" },
     key: { byteLength: 32 },
   },
   steps: [
@@ -85,8 +47,7 @@ export const aes256Spec: CipherSpec = {
         rounds: ROUNDS,
       },
     },
-    addRoundKeyStep("initial", 0),
-    ...Array.from({ length: ROUNDS - 1 }, (_, i) => round(i + 1)),
-    finalRound,
+    ...buildAesEncryptBodyNative(ROUNDS),
   ],
+  outputFrom: aesNativeOutputFrom(ROUNDS),
 };

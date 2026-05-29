@@ -297,15 +297,17 @@ describe("App — Save/Load (Slice 5)", () => {
     const traceAfterLoad = getTrace();
     if (!traceAfterLoad) throw new Error("load did not produce a trace");
     // Final state bytes match — same plaintext + key under same spec
-    // produces the same ciphertext (FIPS-197 §A.2 / §C.2 territory).
+    // produces the same ciphertext (FIPS-197 §A.2 territory). Byte-native
+    // AES-192 (Slice B1.3) produces a `bytes` finalState, not `matrix4x4-bytes`;
+    // both shapes expose `.bytes`, so accept either (a guard restricted to
+    // `matrix4x4-bytes` would now silently skip the byte comparison).
     expect(traceAfterLoad.finalState.shape).toBe(finalStateBefore.shape);
+    const after = traceAfterLoad.finalState;
     if (
-      finalStateBefore.shape === "matrix4x4-bytes" &&
-      traceAfterLoad.finalState.shape === "matrix4x4-bytes"
+      (finalStateBefore.shape === "bytes" || finalStateBefore.shape === "matrix4x4-bytes") &&
+      (after.shape === "bytes" || after.shape === "matrix4x4-bytes")
     ) {
-      expect(Array.from(traceAfterLoad.finalState.bytes)).toEqual(
-        Array.from(finalStateBefore.bytes),
-      );
+      expect(Array.from(after.bytes)).toEqual(Array.from(finalStateBefore.bytes));
     }
   });
 

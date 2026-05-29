@@ -1,13 +1,17 @@
 /**
- * AES-256 known-answer tests.
+ * AES-256 known-answer tests (byte-native, scaffolding-suppression Slice B1.3,
+ * 2026-05-29).
  *
- * The structure mirrors aes-192-vectors.test.ts, with one extra assertion:
+ * The spec is now built from port-native primitives with no legacy executor,
+ * so it runs ONLY under `portedDispatchEnabled: true` and produces a `bytes`
+ * finalState. Mirrors `aes-192-vectors.test.ts`, with one extra assertion:
  * roundKey.3 (w[12..15] in FIPS-197 §A.3 terms) directly pins the AES-256
  * "SubWord every i%Nk==4 words" branch in the key-expansion executor. The
  * value of w[12] depends on the SubWord-only branch firing for i=12 — if a
  * future edit accidentally guards that branch on `Nk === 8 && i === 4`
  * instead of `Nk > 6 && i % Nk === 4`, the end-to-end KAT might still pass
- * by coincidence, but roundKey.3 would not match.
+ * by coincidence, but roundKey.3 would not match. Key expansion is unchanged
+ * by the byte-native rebuild (still the monolithic `aes.key-expansion@1`).
  *
  * (FIPS-197 Appendix C.3 was removed in the May 2023 upd1; the NIST CSRC
  *  "AES Core 256" example file is the current authoritative published
@@ -18,9 +22,8 @@ import { aes256Spec } from "@/ciphers/aes-256";
 import { aes256DecryptSpec } from "@/ciphers/aes-256-decrypt";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex, hexFromBytes } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
-import type { AuxValue, MatrixState } from "@/core/types";
+import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
+import type { AuxValue } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 const KEY_HEX = "603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4";
@@ -35,45 +38,48 @@ const ROUND_KEY_14_HEX = "fe4890d1e6188d0b046df344706c631e";
 
 describe("AES-256 (FIPS-197 §A.3 + NIST AES Core 256)", () => {
   it("encrypts the NIST AES Core 256 test vector", () => {
-    const plaintext = matrixFromBytes(bytesFromHex(PLAINTEXT_HEX));
+    const plaintext = makeBytesState(bytesFromHex(PLAINTEXT_HEX));
     const key = bytesFromHex(KEY_HEX);
     const initialAux = new Map<string, AuxValue>([["key", key]]);
 
     const trace = runSpec(aes256Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux,
+      portedDispatchEnabled: true,
     });
 
-    expect(trace.finalState.shape).toBe("matrix4x4-bytes");
-    if (trace.finalState.shape !== "matrix4x4-bytes") return;
+    expect(trace.finalState.shape).toBe("bytes");
+    if (trace.finalState.shape !== "bytes") return;
     expect(hexFromBytes(trace.finalState.bytes)).toBe(CIPHERTEXT_HEX);
   });
 
   it("emits a frame for every leaf step", () => {
-    // Expected frame count:
-    //   key-expansion              1
-    //   initial AddRoundKey        1
-    //   rounds 1..13 × 4 sub-steps 52
-    //   final round × 3 sub-steps   3
-    //   = 57 frames
-    const plaintext = matrixFromBytes(bytesFromHex(PLAINTEXT_HEX));
+    // Byte-native AES-256 leaves (one frame each):
+    //   key-expansion (1)
+    //   init.fetch-rk (1) + initial.add-round-key (1)
+    //   rounds 1..13 × 5 sub-steps = 65
+    //   final round.14 × 4 sub-steps (no mix-columns) = 4
+    //   = 72 frames
+    const plaintext = makeBytesState(bytesFromHex(PLAINTEXT_HEX));
     const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(KEY_HEX)]]);
 
     const trace = runSpec(aes256Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux,
+      portedDispatchEnabled: true,
     });
 
-    expect(trace.frames.length).toBe(57);
+    expect(trace.frames.length).toBe(72);
   });
 
   it("produces all 15 round keys; roundKey.3 pins the Nk>6 SubWord-only branch", () => {
-    const plaintext = matrixFromBytes(bytesFromHex(PLAINTEXT_HEX));
+    const plaintext = makeBytesState(bytesFromHex(PLAINTEXT_HEX));
     const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(KEY_HEX)]]);
 
     const trace = runSpec(aes256Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux,
+      portedDispatchEnabled: true,
     });
 
     // 15 round keys: index 0 through index 14.
@@ -102,29 +108,31 @@ describe("AES-256 (FIPS-197 §A.3 + NIST AES Core 256)", () => {
   });
 
   it("round-trips: aes256Spec encrypt → aes256DecryptSpec recovers plaintext", () => {
-    const plaintext = matrixFromBytes(bytesFromHex(PLAINTEXT_HEX));
+    const plaintext = makeBytesState(bytesFromHex(PLAINTEXT_HEX));
     const key = bytesFromHex(KEY_HEX);
 
     const encTrace = runSpec(aes256Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux: new Map<string, AuxValue>([["key", key]]),
+      portedDispatchEnabled: true,
     });
-    expect(encTrace.finalState.shape).toBe("matrix4x4-bytes");
-    if (encTrace.finalState.shape !== "matrix4x4-bytes") return;
+    expect(encTrace.finalState.shape).toBe("bytes");
+    if (encTrace.finalState.shape !== "bytes") return;
 
     const decTrace = runSpec(aes256DecryptSpec, buildDefaultRegistry(), {
       initialState: encTrace.finalState,
       initialAux: new Map<string, AuxValue>([["key", key]]),
+      portedDispatchEnabled: true,
     });
-    expect(decTrace.finalState.shape).toBe("matrix4x4-bytes");
-    if (decTrace.finalState.shape !== "matrix4x4-bytes") return;
-    expect(hexFromBytes((decTrace.finalState as MatrixState).bytes)).toBe(PLAINTEXT_HEX);
+    expect(decTrace.finalState.shape).toBe("bytes");
+    if (decTrace.finalState.shape !== "bytes") return;
+    expect(hexFromBytes(decTrace.finalState.bytes)).toBe(PLAINTEXT_HEX);
   });
 
   it("throws when rounds disagrees with the key length", () => {
     // Pair a 32-byte key with rounds=10 to trip the Nk+6===rounds assertion
     // in the shared key-expansion executor.
-    const plaintext = matrixFromBytes(bytesFromHex(PLAINTEXT_HEX));
+    const plaintext = makeBytesState(bytesFromHex(PLAINTEXT_HEX));
     const key = bytesFromHex(KEY_HEX);
     const initialAux = new Map<string, AuxValue>([["key", key]]);
 
@@ -141,6 +149,7 @@ describe("AES-256 (FIPS-197 §A.3 + NIST AES Core 256)", () => {
       runSpec(corrupted, buildDefaultRegistry(), {
         initialState: plaintext,
         initialAux,
+        portedDispatchEnabled: true,
       }),
     ).toThrow(/rounds.*must equal Nk\+6/);
   });

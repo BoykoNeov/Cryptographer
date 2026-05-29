@@ -98,11 +98,16 @@ describe("url-share — encode/decode round-trip", () => {
     expect(encoded.length).toBeLessThan(8192);
   });
 
-  it("produces compact payloads — AES-256 + layout + session under 4 KB", async () => {
-    // Largest realistic case shipped today. If this fails after a future
-    // schema change, time to revisit the compression strategy.
+  it("produces compact payloads — AES-256 + layout + session under 8 KB", async () => {
+    // Largest realistic case shipped today. Byte-native AES-256 (Slice B1.3) is
+    // a much larger spec than the matrix form — 14 rounds of port-native leaves,
+    // each carrying its own sbox/matrix/indices params plus a `narrationOverride`
+    // block — so the measured baseline rose from ~1.6 KB to ~5 KB (matching the
+    // AES-128 byte-native growth above, scaled by the extra rounds). Still
+    // trivially URL-safe. If this fails after a future schema change, time to
+    // revisit the compression strategy.
     const encoded = await encodeDocumentToHash(aes256WithLayout);
-    expect(encoded.length).toBeLessThan(4096);
+    expect(encoded.length).toBeLessThan(8192);
   });
 });
 

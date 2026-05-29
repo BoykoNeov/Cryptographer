@@ -25,7 +25,13 @@ import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
 import { __resetLayoutsForTests } from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
-import { __resetSpecForTests, editStepParams, setCipher, useSpec } from "@/ui/stores/spec";
+import {
+  __resetSpecForTests,
+  editStepParams,
+  setCipher,
+  setCipherMode,
+  useSpec,
+} from "@/ui/stores/spec";
 import { __resetTraceForTests, setSelectedStepId } from "@/ui/stores/trace";
 import { __resetViewDensityForTests } from "@/ui/stores/view-density";
 import { __resetViewModeForTests } from "@/ui/stores/view-mode";
@@ -46,13 +52,18 @@ const resetAll = (): void => {
   __resetTraceForTests();
   __resetViewDensityForTests();
   __resetViewModeForTests();
-  // Retarget to AES-192: the default AES-128 ENCRYPT body is byte-native
-  // (Slice B1), so `round.1.sub-bytes` is now `byte-substitute@1` whose editor
-  // intentionally omits the cross-mode sync row (false-affordance avoidance —
-  // the decrypt counterpart is still matrix until B1.2). AES-192 stays matrix
-  // on both sides, so the matrix `generic.byte-substitution@1` SubBytes editor
-  // with its Sync-inverse row still renders.
-  setCipher("aes-192");
+  // Retarget to AES-128 ECB: every single-block AES is byte-native as of Slice
+  // B1.3, so its `round.1.sub-bytes` is `byte-substitute@1` whose editor ALSO
+  // renders a SyncInverseRow with the same button text — selecting a byte-native
+  // leaf here would mis-target (the assertion would pass against the wrong
+  // block, leaving the matrix `generic.byte-substitution@1` SbxBlock path
+  // uncovered). The AES-128 ECB/CBC modes keep the matrix `generic.*` round body
+  // (`aes-round-builder.ts`) until Slice B1.4, so ECB's `round.1.sub-bytes` is a
+  // genuine `generic.byte-substitution@1` leaf rendering the matrix SbxBlock +
+  // its Sync-inverse row. (The matrix body lives inside the iterate, but the
+  // spec leaf id is still `round.1.sub-bytes`.)
+  setCipher("aes-128");
+  setCipherMode("ecb");
 };
 
 describe("SyncInverseRow — gating on bijection", () => {
@@ -157,7 +168,9 @@ const findRound1SubBytes = (): Node | null => {
     for (const n of nodes) {
       if (n.kind === "step" && n.id === "round.1.sub-bytes") {
         found = n;
-      } else if (n.kind === "group" && n.children) {
+      } else if ((n.kind === "group" || n.kind === "iterate") && n.children) {
+        // ECB wraps the round body in an `iterate`; recurse into it too so the
+        // round.1.sub-bytes leaf inside the per-block body is reachable.
         visit(n.children);
       }
     }

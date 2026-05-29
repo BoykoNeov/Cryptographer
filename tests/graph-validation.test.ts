@@ -57,7 +57,6 @@ import {
 } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, Trace, TraceFrame } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
@@ -102,21 +101,16 @@ const runCbc = (spec: typeof aes128CbcSpec, pt: string): Trace =>
     ]),
   });
 
-const runMatrix = (spec: typeof aes128Spec, key: string, pt: string): Trace =>
-  runSpec(spec, buildDefaultRegistry(), {
-    initialState: matrixFromBytes(bytesFromHex(pt)),
-    initialAux: new Map<string, AuxValue>([["key", bytesFromHex(key)]]),
-  });
-
 const runBytes = (spec: typeof aes128EcbSpec, key: string, pt: string): Trace =>
   runSpec(spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(pt)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(key)]]),
   });
 
-// Byte-native AES-128 (Slice B1): bytes state + ported dispatch (port-native
-// primitives have no legacy executor). Both directions of single-block AES-128
-// (encrypt B1.1, decrypt B1.2) — 192/256 stay matrix (`runMatrix`) until B1.3.
+// Byte-native single-block AES (Slices B1.1–B1.3): bytes state + ported
+// dispatch (port-native primitives have no legacy executor). Covers every
+// single-block AES — 128/192/256, both directions. Only the AES-128 ECB/CBC
+// modes stay matrix (`runBytes`/`runCbc`) until B1.4.
 const runPorted = (spec: typeof aes128Spec, key: string, pt: string): Trace =>
   runSpec(spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(pt)),
@@ -156,13 +150,13 @@ describe("validateGraph — zero warnings on shipped specs", () => {
   });
 
   it("AES-192 encrypt", () => {
-    const trace = runMatrix(aes192Spec, AES192_KEY, AES128_PT);
+    const trace = runPorted(aes192Spec, AES192_KEY, AES128_PT);
     const graph = deriveAuxGraph(trace, aes192Spec);
     expect(validateGraph(graph, trace)).toEqual([]);
   });
 
   it("AES-256 encrypt", () => {
-    const trace = runMatrix(aes256Spec, AES256_KEY, AES128_PT);
+    const trace = runPorted(aes256Spec, AES256_KEY, AES128_PT);
     const graph = deriveAuxGraph(trace, aes256Spec);
     expect(validateGraph(graph, trace)).toEqual([]);
   });
