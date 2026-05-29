@@ -58,6 +58,7 @@
 
 import { aes128Spec } from "@/ciphers/aes-128";
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
+import { aes192Spec } from "@/ciphers/aes-192";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { type ProjectionMetadata, project, reconstruct } from "@/core/port-projection";
 import { runSpec } from "@/core/runtime";
@@ -83,6 +84,12 @@ import { describe, expect, it } from "vitest";
 // inspectable in `git blame`.
 const FIPS_B_PLAINTEXT = "3243f6a8885a308d313198a2e0370734";
 const FIPS_B_KEY = "2b7e151628aed2a6abf7158809cf4f3c";
+// AES-192 key (FIPS-197 §A.2, 24 bytes). The single-block projection describe
+// retargets to AES-192 — still matrix/lifted-legacy (it keeps the
+// `generic.byte-substitution@1` / `generic.add-round-key@1` step types the
+// projection METAs describe), whereas byte-native AES-128 (Slice B1) replaced
+// them with port-native primitives. B1.3: re-target when aes-192 converts.
+const AES192_KEY = "8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b";
 
 // SP 800-38A §F.1.1 — one block extracted from the four-block ECB fixture.
 const ECB_BLOCK_KEY = "2b7e151628aed2a6abf7158809cf4f3c";
@@ -240,10 +247,14 @@ const expectAuxMapByteEqual = (
 // ─── The round-trip test ───────────────────────────────────────────────
 
 describe("port-projection — Q-gate-9 round-trip (Phase 0 load-bearing)", () => {
-  describe("single-block AES-128 (no iterate)", () => {
-    const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
+  describe("single-block AES-192 (no iterate)", () => {
+    // Retargeted to AES-192 (matrix/lifted-legacy) — byte-native AES-128 no
+    // longer emits `generic.byte-substitution@1` / `generic.add-round-key@1`
+    // frames (replaced by port-native primitives in Slice B1). AES-192 still
+    // does, and its frames are matrix4x4-bytes, matching the METAs below.
+    const trace = runSpec(aes192Spec, buildDefaultRegistry(), {
       initialState: matrixFromBytes(bytesFromHex(FIPS_B_PLAINTEXT)),
-      initialAux: new Map<string, AuxValue>([["key", bytesFromHex(FIPS_B_KEY)]]),
+      initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES192_KEY)]]),
     });
 
     it("pure state-only frame (generic.byte-substitution@1) round-trips byte-for-byte", () => {
@@ -284,17 +295,18 @@ describe("port-projection — Q-gate-9 round-trip (Phase 0 load-bearing)", () =>
   });
 
   describe("aux-write round-trip — dynamic-N port count (Slice 1.0, Decision B)", () => {
-    // The first leaf in aes128Spec is `aes.key-expansion@1`. State is
-    // matrix4x4-bytes (the spec loads its initial state via matrixFromBytes
-    // before walking the spec); the executor leaves state unchanged
+    // The first leaf in byte-native aes128Spec is `aes.key-expansion@1`
+    // (unchanged by Slice B1 — key expansion stays monolithic). State is now
+    // `bytes` (byte-native); the executor leaves state unchanged
     // ("preserveInput" shape contract). The aux writes are 11 entries
     // (`roundKey.0` … `roundKey.10`) — that's the dynamic-N case the
     // metadata's `auxWritePorts(params)` function must size by
     // `params.rounds`. AES-192 / 256 would size to 13 / 15 respectively,
     // and Speck (22) / Serpent (33) / DES (16) take the same shape.
     const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-      initialState: matrixFromBytes(bytesFromHex(FIPS_B_PLAINTEXT)),
+      initialState: makeBytesState(bytesFromHex(FIPS_B_PLAINTEXT)),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(FIPS_B_KEY)]]),
+      portedDispatchEnabled: true,
     });
 
     // One-off metadata for AES key-expansion. Test-fixture only — Slice 1.4
@@ -304,7 +316,10 @@ describe("port-projection — Q-gate-9 round-trip (Phase 0 load-bearing)", () =>
     // different `keyAuxName` (read binding) and a different `outputPrefix`
     // (write bindings), so static maps don't cut it.
     const META_AES_KEY_EXPANSION: ProjectionMetadata = {
-      stateLayout: "matrix4x4-bytes",
+      // Byte-native AES-128: the key-expansion frame's state is `bytes`
+      // (the plaintext passes through unchanged). The 11-roundkey aux-write
+      // dynamic-N shape this describe pins is independent of the state layout.
+      stateLayout: "bytes",
       stateInputPort: "state",
       stateOutputPort: "state",
       auxReadPorts: (params: Json) => {

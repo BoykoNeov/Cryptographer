@@ -6,25 +6,24 @@
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import type { CipherGraph } from "@/core/graph";
-import {
-  CIPHER_INPUT_ID,
-  deriveAuxGraph,
-  dropAuxOnlyStateEdges,
-  replicateHighFanoutSources,
-} from "@/core/graph";
+import { deriveAuxGraph, dropAuxOnlyStateEdges, replicateHighFanoutSources } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
+import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 const KEY = "000102030405060708090a0b0c0d0e0f";
 const PT = "00112233445566778899aabbccddeeff";
 
+// Byte-native AES-128 (Slice B1): bytes state + ported dispatch. Round keys
+// are consumed by `aux-load-bytes@1` fetch-rk leaves (init.fetch-rk +
+// round.N.fetch-rk), so key-expansion's 11 aux fan-out consumers are the
+// fetch-rk leaves, not add-round-key.
 const aes128Graph = () => {
   const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-    initialState: matrixFromBytes(bytesFromHex(PT)),
+    initialState: makeBytesState(bytesFromHex(PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(KEY)]]),
+    portedDispatchEnabled: true,
   });
   return deriveAuxGraph(trace, aes128Spec);
 };
@@ -195,14 +194,12 @@ describe("replicateHighFanoutSources", () => {
       const g = aes128Graph();
       const r = replicateHighFanoutSources(g, 6);
 
-      // The state edge `key-expansion → initial.add-round-key` (single-block
-      // AES, no iterate suppression of the spine) must now flow from a
-      // replica too. Same consumer's aux replica is reused.
-      const stateFromRep = r.edges.find(
-        (e) => e.kind === "state" && e.to === "initial.add-round-key",
-      );
+      // The state edge `key-expansion → init.fetch-rk` (byte-native: the DFS
+      // successor of key-expansion is the initial round-key fetch leaf) must
+      // now flow from a replica too. Same consumer's aux replica is reused.
+      const stateFromRep = r.edges.find((e) => e.kind === "state" && e.to === "init.fetch-rk");
       expect(stateFromRep).toBeDefined();
-      expect(stateFromRep?.from).toBe("key-expansion@->initial.add-round-key");
+      expect(stateFromRep?.from).toBe("key-expansion@->init.fetch-rk");
     });
 
     it("spine successor falls back to first aux consumer when state-out is suppressed", () => {
@@ -304,29 +301,30 @@ describe("replicateHighFanoutSources", () => {
     });
 
     it("removes the source from rootIds AND parent container childIds", () => {
-      // The AES-128 fixture has key-expansion at root + add-round-key
-      // consumers inside `round.X` groups. After replication the original
-      // key-expansion is gone from rootIds, and the round groups carry
-      // replicas spliced before their add-round-key children.
+      // The byte-native AES-128 fixture has key-expansion at root + fetch-rk
+      // consumers (init.fetch-rk at root, round.N.fetch-rk inside `round.X`
+      // groups). After replication the original key-expansion is gone from
+      // rootIds, and the round groups carry replicas spliced before their
+      // fetch-rk children.
       const g = aes128Graph();
       const r = replicateHighFanoutSources(g, 6);
 
       expect(r.rootIds).not.toContain("key-expansion");
-      // initial.add-round-key sits at root: its replica should precede it.
-      const initialRepId = "key-expansion@->initial.add-round-key";
+      // init.fetch-rk sits at root: its replica should precede it.
+      const initialRepId = "key-expansion@->init.fetch-rk";
       const initialRepIdx = r.rootIds.indexOf(initialRepId);
-      const initialConsIdx = r.rootIds.indexOf("initial.add-round-key");
+      const initialConsIdx = r.rootIds.indexOf("init.fetch-rk");
       expect(initialRepIdx).toBeGreaterThanOrEqual(0);
       expect(initialConsIdx).toBeGreaterThanOrEqual(0);
       expect(initialRepIdx).toBeLessThan(initialConsIdx);
 
-      // Spot-check a round group: round.5 hosts `round.5.add-round-key`
+      // Spot-check a round group: round.5 hosts `round.5.fetch-rk`
       // plus its key-expansion replica, both inside the group's childIds.
       const round5 = r.containers.find((c) => c.id === "round.5");
       expect(round5).toBeDefined();
-      const round5Replica = "key-expansion@->round.5.add-round-key";
+      const round5Replica = "key-expansion@->round.5.fetch-rk";
       expect(round5?.childIds).toContain(round5Replica);
-      expect(round5?.childIds).toContain("round.5.add-round-key");
+      expect(round5?.childIds).toContain("round.5.fetch-rk");
       // No fully-replicated source id (key-expansion) slipped through.
       expect(round5?.childIds.includes("key-expansion")).toBe(false);
     });
@@ -395,29 +393,29 @@ describe("replicateHighFanoutSources", () => {
 
   describe("replica-scope-aware layout (narrow) — spine-replica flag + scope", () => {
     it("flags exactly one replica per fully-replicated source as isSpineReplica", () => {
-      // AES-128 single-block: key-expansion is fully replicated (11
-      // consumers above threshold). Exactly ONE of its replicas is the
-      // spine-replica (= the one targeting the spineSuccessor —
-      // `initial.add-round-key`, the first state-target). The other 10
-      // are aux-fan-out replicas without the flag.
+      // Byte-native AES-128: key-expansion is fully replicated (11 consumers
+      // above threshold). Exactly ONE of its replicas is the spine-replica
+      // (= the one targeting the spineSuccessor — `init.fetch-rk`, the DFS-
+      // next leaf and key-expansion's only state-target). The other 10 are
+      // aux-fan-out replicas without the flag.
       const g = aes128Graph();
       const r = replicateHighFanoutSources(g, 6);
       const keReplicas = r.nodes.filter((n) => n.replicaOf === "key-expansion");
       expect(keReplicas).toHaveLength(11);
       const spineReplicas = keReplicas.filter((n) => n.isSpineReplica === true);
       expect(spineReplicas).toHaveLength(1);
-      expect(spineReplicas[0]?.stepId).toBe("key-expansion@->initial.add-round-key");
+      expect(spineReplicas[0]?.stepId).toBe("key-expansion@->init.fetch-rk");
     });
 
     it("spine-replica's containerPath matches the SOURCE's parent scope (not consumer's)", () => {
-      // For AES-128 single-block, both source (key-expansion) and
-      // spineSuccessor (initial.add-round-key) live at root, so their
-      // containerPaths coincide → the spine-replica's containerPath is
-      // also `[]`. The interesting structural case is the scope-aware
-      // synthetic below where source and consumer differ.
+      // For byte-native AES-128, both source (key-expansion) and
+      // spineSuccessor (init.fetch-rk) live at root, so their containerPaths
+      // coincide → the spine-replica's containerPath is also `[]`. The
+      // interesting structural case is the scope-aware synthetic below where
+      // source and consumer differ.
       const g = aes128Graph();
       const r = replicateHighFanoutSources(g, 6);
-      const spine = r.nodes.find((n) => n.stepId === "key-expansion@->initial.add-round-key");
+      const spine = r.nodes.find((n) => n.stepId === "key-expansion@->init.fetch-rk");
       const source = g.nodes.find((n) => n.stepId === "key-expansion");
       if (!spine || !source) throw new Error("missing node");
       expect(spine.containerPath).toEqual(source.containerPath);
@@ -510,18 +508,20 @@ describe("replicateHighFanoutSources", () => {
   // so a future shuffle of pipeline stages doesn't silently regress
   // the spine into `initial.add-round-key`.
   describe("dropAuxOnlyStateEdges composes correctly with replication", () => {
-    it("leaves exactly one state edge into initial.add-round-key — the plaintext pill's", () => {
+    it("dropAuxOnly→replicate leaves NO state edge from any key-expansion replica", () => {
       // Build the graph the way GraphView does: with endpoint pills.
+      // Byte-native AES-128 (Slice B1): bytes state + ported dispatch.
       const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-        initialState: matrixFromBytes(bytesFromHex(PT)),
+        initialState: makeBytesState(bytesFromHex(PT)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(KEY)]]),
+        portedDispatchEnabled: true,
       });
       const raw = deriveAuxGraph(trace, aes128Spec, {
         endpoints: {
           inputLabel: "plaintext",
           outputLabel: "ciphertext",
           inputAnchorId: "initial.add-round-key",
-          outputAnchorId: "final.add-round-key",
+          outputAnchorId: "round.10",
         },
       });
 
@@ -532,16 +532,18 @@ describe("replicateHighFanoutSources", () => {
         "key-expansion": "always",
       });
 
-      // After the pipeline: only the synthetic plaintext pill should
-      // contribute a state edge into `initial.add-round-key`. The
-      // replica chip emits an AUX edge for roundKeys[0] (kept — that's
-      // the round-key fan-out story we want visible), but NO state
-      // edge from any replica.
-      const stateIntoFirst = replicated.edges.filter(
-        (e) => e.kind === "state" && e.to === "initial.add-round-key",
+      // The 2026-05-17 regression vector: replicating key-expansion rerouted
+      // its aux-only spine state-out through the replica, rendering a spurious
+      // white arrow from the replica chip. Running dropAuxOnlyStateEdges
+      // BEFORE replicate removes that state-out first. The dup-agnostic pin:
+      // NO state edge originates from ANY replica chip.
+      // (We do NOT count state edges INTO initial.add-round-key — byte-native
+      // AES carries port-flow companions there from $input + init.fetch-rk, so
+      // an exact count is dup-coupled and not the property under test.)
+      const stateFromAnyReplica = replicated.edges.filter(
+        (e) => e.kind === "state" && e.from.includes("@->"),
       );
-      expect(stateIntoFirst).toHaveLength(1);
-      expect(stateIntoFirst[0]?.from).toBe(CIPHER_INPUT_ID);
+      expect(stateFromAnyReplica).toHaveLength(0);
 
       // Sanity: 11 aux replicas still produced (the round-key fan-out
       // is unaffected by the spine filter).
@@ -549,19 +551,13 @@ describe("replicateHighFanoutSources", () => {
       expect(replicas).toHaveLength(11);
 
       // Sanity: the spine-entry replica still exists and still has an
-      // outgoing aux edge to `initial.add-round-key` (roundKeys[0]).
-      const spineReplicaId = "key-expansion@->initial.add-round-key";
+      // outgoing aux edge to its consumer (roundKey.0 → init.fetch-rk).
+      const spineReplicaId = "key-expansion@->init.fetch-rk";
       expect(replicated.nodes.find((n) => n.stepId === spineReplicaId)).toBeDefined();
       const auxOutFromSpineReplica = replicated.edges.filter(
         (e) => e.kind === "aux" && e.from === spineReplicaId,
       );
       expect(auxOutFromSpineReplica.length).toBeGreaterThan(0);
-
-      // And the killer: NO state edge from ANY replica into add-round-key.
-      const stateFromAnyReplica = replicated.edges.filter(
-        (e) => e.kind === "state" && e.from.includes("@->"),
-      );
-      expect(stateFromAnyReplica).toHaveLength(0);
     });
 
     it("identity short-circuit: empty aux-only set returns the input graph by reference", () => {
