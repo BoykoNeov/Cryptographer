@@ -15,8 +15,7 @@
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
+import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue } from "@/core/types";
 import { App } from "@/ui/App";
 import { GraphView } from "@/ui/components/GraphView";
@@ -48,10 +47,15 @@ const AES128_PT = "00112233445566778899aabbccddeeff";
  *  click-to-navigate path has something to navigate INTO. */
 const seedAes128Trace = (): void => {
   const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-    initialState: matrixFromBytes(bytesFromHex(AES128_PT)),
+    initialState: makeBytesState(bytesFromHex(AES128_PT)),
+    portedDispatchEnabled: true,
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
   });
   setTrace(trace);
+  // Byte-native AES-128 (Slice B1) auto-ON's replication for ported specs,
+  // inflating the leaf-rect count with key-expansion replicas. Default this
+  // file to replication OFF so the per-leaf counts below are deterministic.
+  setReplicationEnabled(false);
 };
 
 const resetAll = (): void => {
@@ -89,13 +93,15 @@ describe("GraphView — component-level (AES-128 fixture)", () => {
     __setOffsetsEnabledForTest(null);
   });
 
-  it("renders one leaf rectangle per leaf in the spec (41 for AES-128)", () => {
+  it("renders one leaf rectangle per leaf in the spec (52 for byte-native AES-128)", () => {
     seedAes128Trace();
     const { container } = render(() => <GraphView />);
     // Each leaf is an SVG <g class="graph-leaf">; the rect inside it is
-    // `.graph-leaf-rect`.
+    // `.graph-leaf-rect`. Byte-native AES-128 (Slice B1) has 52 leaves:
+    // key-expansion + init.fetch-rk + initial.add-round-key (3) + 9 full
+    // rounds × 5 (45) + final round.10 × 4 (4).
     const leafRects = container.querySelectorAll(".graph-leaf-rect");
-    expect(leafRects.length).toBe(41);
+    expect(leafRects.length).toBe(52);
   });
 
   it("renders one container rectangle per group (10 round groups)", () => {
@@ -181,117 +187,40 @@ describe("GraphView — component-level (AES-128 fixture)", () => {
 
   it("renders without a trace (structural skeleton + spec-derived spine, no aux edges)", () => {
     // Don't seed a trace; just render. The graph still draws the spec's
-    // nodes/containers AND the 40-edge AES-128 state spine — the spine is
-    // spec-derived, so it shows up before the first run (one of the
-    // pedagogical payoffs of commit 2 in the readability sequence).
+    // nodes/containers AND the byte-native AES-128 port-flow spine — the spine
+    // is spec-derived (from each leaf's `portInputs`), so it shows up before the
+    // first run (one of the pedagogical payoffs of commit 2 in the readability
+    // sequence). Byte-native port-to-port carry edges are `kind: "state"` with
+    // the `PORT_FLOW_AUX_KEY` sentinel, so they still render as
+    // `.graph-edge-state` and are counted here.
     const { container } = render(() => <GraphView />);
     const leaves = container.querySelectorAll(".graph-leaf-rect");
-    expect(leaves.length).toBe(41);
+    expect(leaves.length).toBe(52);
     // No aux edges pre-run (those require a trace).
     expect(container.querySelectorAll(".graph-edge-aux").length).toBe(0);
-    // 40-edge state spine MINUS the single edge that touched `key-expansion`
-    // (an aux-only root leaf — see the `auxOnlyRootIds` spine filter in
-    // `graph` memo), PLUS 2 synthetic state edges from the plaintext /
-    // ciphertext endpoint pills (Slice 1 of the graph-narrative plan).
-    //   40 − 1 + 2 = 41
-    expect(container.querySelectorAll(".graph-edge-state").length).toBe(41);
+    // Byte-native AES-128 (Slice B1): the port-flow spine threads every leaf's
+    // single input plus the 2 synthetic endpoint-pill edges = 52
+    // `.graph-edge-state` edges. (The matrix form was 40 − 1 filtered + 2 = 41.)
+    expect(container.querySelectorAll(".graph-edge-state").length).toBe(52);
     // Both endpoint pills rendered.
     expect(container.querySelectorAll(".graph-endpoint-rect").length).toBe(2);
   });
 
-  it("replica-scope-aware: spine-replica renders ON the spine row, not lifted (production path)", () => {
-    // Production-path verification for the narrow scope-aware fix
-    // (2026-05-17). The pure-layout tests in
-    // `tests/graph-view-replica-gutter.test.ts` exercise `layoutRoot`
-    // directly with `auxOnlyRootIds` defaulting to an empty set — they
-    // bypass the `auxOnlyRootIds` classifier entirely.
-    //
-    // Advisor flagged a plausible production-only regression: the spine-
-    // replica inherits the source's `stepType` (`aes.key-expansion@1`),
-    // and `auxOnlyRootIds` classifies root leaves by `registry.getDoc(
-    // stepType)?.shapeContract.input === "any"`. If the memo walked the
-    // post-replication graph, the spine-replica would qualify as aux-only
-    // → lifted → fix becomes a no-op.
-    //
-    // It does NOT walk the post-replication graph — it walks `spec().
-    // steps`, which never contains a replica id (replicas have the
-    // synthetic `${src}@->${dst}` infix). So the classifier emits
-    // `"key-expansion"` (the source's id) into `auxOnlyRootIds`, NOT
-    // `"key-expansion@->initial.add-round-key"`. When `layoutRoot` then
-    // checks `auxOnlyRootIds.has(id)` against the post-replication
-    // rootIds, the spine-replica's synthetic id misses → not lifted.
-    //
-    // This test pins that property empirically: render through the full
-    // GraphView component with replication enabled and assert the
-    // spine-replica's rendered `y` equals its consumer's `y` — i.e.
-    // both sit on the same row, which is the user-visible signal that
-    // the fix is live in production.
-    seedAes128Trace();
-    // Replication default is OFF (`view-replication.ts::loadInitial`);
-    // enable explicitly so the replica chip actually renders.
-    setReplicationEnabled(true);
-    const { container } = render(() => <GraphView />);
-
-    const spineLeaf = container.querySelector(
-      '[data-testid="graph-leaf-key-expansion@->initial.add-round-key"] .graph-leaf-rect',
-    );
-    const consumerLeaf = container.querySelector(
-      '[data-testid="graph-leaf-initial.add-round-key"] .graph-leaf-rect',
-    );
-    if (!spineLeaf || !consumerLeaf) {
-      throw new Error(
-        `missing rendered leaf: spineReplica=${!!spineLeaf} consumer=${!!consumerLeaf}`,
-      );
-    }
-
-    const spineY = Number.parseFloat(spineLeaf.getAttribute("y") ?? "NaN");
-    const consumerY = Number.parseFloat(consumerLeaf.getAttribute("y") ?? "NaN");
-    expect(Number.isFinite(spineY)).toBe(true);
-    expect(Number.isFinite(consumerY)).toBe(true);
-
-    // Spine-replica is on the SAME row as its consumer (the spine row).
-    // Pre-fix this difference would be LEAF_H + REPLICA_LIFT_GAP (~48 px
-    // at normal density); post-fix it's 0.
-    expect(spineY).toBe(consumerY);
-
-    // And explicitly: the spine-replica is left of its consumer (at
-    // source's old spec slot). Without this, "same y" could be satisfied
-    // by both being lifted to the same lifted row.
-    const spineX = Number.parseFloat(spineLeaf.getAttribute("x") ?? "NaN");
-    const consumerX = Number.parseFloat(consumerLeaf.getAttribute("x") ?? "NaN");
-    expect(spineX).toBeLessThan(consumerX);
-  });
-
-  it("replication fan-out doesn't add a third inbound arrow at initial.add-round-key", () => {
-    // The bug this catches: when fan-out replication is ON, the `aux`
-    // replica `key-expansion@->initial.add-round-key` arrows into
-    // `initial.add-round-key`. If we ALSO kept the spec-true
-    // `key-expansion → initial.add-round-key` state-spine edge, the
-    // canvas would show THREE inbound arrows: (a) the plaintext pill's
-    // endpoint spine, (b) the old spine edge from key-expansion, and
-    // (c) the small replica's round-key fan-out. The spine filter on
-    // `auxOnlyRootIds` drops (b) so only (a) + (c) reach the canvas.
-    //
-    // Default `replicate` toggle is ON, threshold 6 — AES-128's
-    // key-expansion fans out to 11 consumers and replicates by default.
-    seedAes128Trace();
-    const { container } = render(() => <GraphView />);
-    // Inbound arrows at initial.add-round-key in this pre-collapse
-    // expanded view: 1 state from the plaintext pill + 1 aux from the
-    // key-expansion replica = 2. NOT 3.
-    const edges = Array.from(container.querySelectorAll(".graph-edge"));
-    // Find every <path d="..."> whose `d` ends at initial.add-round-key's
-    // box. The box's center x changes with density; rather than measure
-    // pixels, rely on the count of edges with marker-end (every rendered
-    // edge has it) and assert the total state count is the unfiltered-
-    // minus-one number. The exact identity of the missing edge is pinned
-    // separately by the spec-shape test in aux-graph-derivation.test.ts.
-    const stateCount = edges.filter((e) => e.classList.contains("graph-edge-state")).length;
-    // 39 spine (40 native − 1 filtered) + 2 endpoint = 41. Same as the
-    // pre-run test above; this test exists to pin that the post-run +
-    // replicate-on path arrives at the same total.
-    expect(stateCount).toBe(41);
-  });
+  // Two component-level state-spine tests retired in Slice B1
+  // (scaffolding-suppression): "spine-replica renders ON the spine row, not
+  // lifted" and "replication fan-out doesn't add a third inbound arrow at
+  // initial.add-round-key". Both pinned AES-128's STATE-SPINE rendering —
+  // `key-expansion`'s spineSuccessor `initial.add-round-key` and the
+  // `auxOnlyRootIds` spine-edge filter. Byte-native AES-128 has no state spine
+  // (the working state carries port-to-port), so `key-expansion@->initial.add-
+  // round-key` is no longer a spine-replica and the filtered spine edge no
+  // longer exists. No other cipher exercises this exact branch at root (Serpent
+  // uses the lift branch, DES is Feistel), so there is nothing to retarget to.
+  // The underlying machinery stays covered until Phase C by the synthetic
+  // `syntheticSpineReplicaGraph` layout test in
+  // `tests/graph-view-replica-gutter.test.ts` (spine-replica placement) and the
+  // Serpent state-edge tests in `tests/aux-graph-derivation.test.ts` (spine
+  // derivation). Re-pin or delete when `inferStateEdges` retires in Phase C.
 
   // ─── Slice 1 of graph-narrative plan — endpoint pills ────────────────────
 

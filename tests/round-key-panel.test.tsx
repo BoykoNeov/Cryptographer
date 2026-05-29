@@ -28,7 +28,6 @@ import { serpent128Spec } from "@/ciphers/serpent-128";
 import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
 import type { Aux, AuxValue, MatrixState } from "@/core/types";
 import {
   RoundKeyPanel,
@@ -45,7 +44,8 @@ const AES128_PT = "00112233445566778899aabbccddeeff";
 
 const seedAes128Trace = () => {
   const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-    initialState: matrixFromBytes(bytesFromHex(AES128_PT)),
+    initialState: makeBytesState(bytesFromHex(AES128_PT)),
+    portedDispatchEnabled: true,
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
   });
   setTrace(trace);
@@ -414,8 +414,12 @@ describe("<RoundKeyPanel /> collapsible header", () => {
 
   it("auto-expands on an AddRoundKey frame (which reads a schedule key)", () => {
     const trace = seedAes128Trace();
+    // Byte-native AES-128 (Slice B1): the round key is pulled into the round by
+    // a dedicated `aux-load-bytes@1` fetch leaf (`round.3.fetch-rk`), whose
+    // frame carries `auxRead: roundKey.3`. The panel auto-expands on any frame
+    // that reads a schedule key, so this fetch frame is the trigger.
     const frame = trace.frames.find(
-      (f) => f.stepType === "generic.add-round-key@1" && f.auxRead.has("roundKey.3"),
+      (f) => f.stepType === "aux-load-bytes@1" && f.auxRead.has("roundKey.3"),
     );
     expect(frame).toBeDefined();
     const { container } = render(() => <RoundKeyPanel frame={frame ?? null} />);
@@ -425,7 +429,7 @@ describe("<RoundKeyPanel /> collapsible header", () => {
 
   it("auto-collapses on a non-relevant frame (SubBytes, ShiftRows, etc.)", () => {
     const trace = seedAes128Trace();
-    const frame = trace.frames.find((f) => f.stepType === "generic.byte-substitution@1");
+    const frame = trace.frames.find((f) => f.stepType === "byte-substitute@1");
     expect(frame).toBeDefined();
     const { container } = render(() => <RoundKeyPanel frame={frame ?? null} />);
     // Header is rendered (sequences exist) but body is gone.
@@ -438,7 +442,7 @@ describe("<RoundKeyPanel /> collapsible header", () => {
 
   it("clicking the header toggles collapsed → expanded", () => {
     const trace = seedAes128Trace();
-    const subBytesFrame = trace.frames.find((f) => f.stepType === "generic.byte-substitution@1");
+    const subBytesFrame = trace.frames.find((f) => f.stepType === "byte-substitute@1");
     expect(subBytesFrame).toBeDefined();
     const { container } = render(() => <RoundKeyPanel frame={subBytesFrame ?? null} />);
     // Default collapsed.

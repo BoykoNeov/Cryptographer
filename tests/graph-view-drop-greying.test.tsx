@@ -25,8 +25,7 @@
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
+import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue } from "@/core/types";
 import { GraphView } from "@/ui/components/GraphView";
 import { __resetAutoRerunForTests } from "@/ui/stores/auto-rerun";
@@ -49,7 +48,8 @@ const AES128_PT = "00112233445566778899aabbccddeeff";
 
 const seedAes128Trace = (): void => {
   const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-    initialState: matrixFromBytes(bytesFromHex(AES128_PT)),
+    initialState: makeBytesState(bytesFromHex(AES128_PT)),
+    portedDispatchEnabled: true,
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
   });
   setTrace(trace);
@@ -173,13 +173,15 @@ describe("GraphView — drop-anchor greying class on .graph-view", () => {
     const { container } = render(() => <GraphView />);
     const anchors = container.querySelectorAll("[data-drop-anchor][data-state-shape]");
     expect(anchors.length).toBeGreaterThan(0);
-    // For the AES-128 single-block spec (state is matrix4x4-bytes throughout),
-    // every leaf-level anchor should carry matrix4x4-bytes.
-    let matrixAnchors = 0;
+    // Byte-native AES-128 (Slice B1): every round leaf is a port-native
+    // primitive whose input port is `layout:"raw"`, so the inferred drop-anchor
+    // state shape is `bytes` throughout (the matrix form carried
+    // `matrix4x4-bytes`). At least one leaf anchor should carry `bytes`.
+    let bytesAnchors = 0;
     for (const a of anchors) {
-      if (a.getAttribute("data-state-shape") === "matrix4x4-bytes") matrixAnchors++;
+      if (a.getAttribute("data-state-shape") === "bytes") bytesAnchors++;
     }
-    expect(matrixAnchors).toBeGreaterThan(0);
+    expect(bytesAnchors).toBeGreaterThan(0);
   });
 });
 
