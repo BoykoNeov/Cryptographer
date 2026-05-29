@@ -689,21 +689,62 @@ remaining work — the advisor-designated session boundary). Findings that
   Updated
   `duplicate-round-{mutator,store,save-load}.test.ts` + `graph-duplicate-button`
   for byte-native (auxName→`fetch-rk`, child-type list, rename count 5/round,
-  encrypt run→bytes+ported; decrypt stays matrix). **NOT yet run/committed** —
-  the bash/powershell safety classifier went unavailable mid-session. Re-run
-  those 4 files + `tsc` + `biome` and commit before the sweep.
+  encrypt run→bytes+ported; decrypt stays matrix). **DONE — committed `f055703`;
+  46/46 duplicate-round tests green, `tsc` + `biome` clean.**
 
-**Remaining (mechanical sweep — next session's bulk):** ~50 test files
-reference `aes128Spec`/`aes-128`. Each that runs it via `matrixFromBytes` +
-no `portedDispatchEnabled` needs: `makeBytesState` + `requiresPortedDispatch`,
-and `finalState.shape` `"matrix4x4-bytes"`→`"bytes"`, intermediate reads via
-`frame.portOutputs.get("output")` not `stateAfter`. Rewrite
-`aes-vectors.test.ts` (reorder-by-array-swap test is moot under ports). The
-(C) legacy-concept tests (`aux-graph-derivation` "40 state edges / spine
-crosses rounds") have NO byte-native state spine — retarget to a still-legacy
-cipher (Speck/DES) rather than reflexively rewrite. Do NOT touch the A4
-allowlist this session (matrix `generic.*` still live on decrypt + 192/256 +
-modes → still offenders → allowlist stays; drains in B1.2/B1.4).
+**Batch 3 was COMMITTED `f055703` (pushed).** The whole session (batches 1–3)
+is on `origin/b1-aes-byte-native` at `f055703`.
+
+**Remaining (mechanical sweep — next session's bulk; THIS IS WHERE TO RESUME):**
+
+The suite is broadly red because the byte-native `aes128Spec` swap changed the
+app's universal default fixture. **First action next session:** run the full
+`npx vitest run` (or `npm run check`) and triage the failures by the three
+buckets below. (Session-1 measured ~259 failures pre-rework; batches 1–3 fixed
+the padding/mirror/duplicate-round subset, so the live number is lower — re-count.)
+
+**Bucket A — mechanical (the bulk).** ~50 files reference `aes128Spec`/`aes-128`
+(grep them). Any that BUILD A TRACE from it via `matrixFromBytes(...)` +
+no `portedDispatchEnabled` now throw `aux-load-bytes@1 ... requires
+portedDispatchEnabled: true`. Per-file transform (the exact pattern batches 1+3
+already applied in `duplicate-round-*.test.ts` — copy it):
+  - import `makeBytesState` from `@/core/state/bytes` + `requiresPortedDispatch`
+    from `@/core/dispatch`;
+  - `initialState: matrixFromBytes(ptBytes)` → `makeBytesState(ptBytes)`;
+  - add `portedDispatchEnabled: requiresPortedDispatch(spec, registry)`;
+  - `finalState.shape === "matrix4x4-bytes"` → `"bytes"`; read the 16 output
+    bytes from `finalState.bytes` (still a `Uint8Array`);
+  - intermediate per-step values: read `frame.portOutputs.get("output")` (or the
+    relevant port) — NOT `frame.stateAfter` (byte-native leaves leave `state`
+    untouched; the matrix `stateAfter` is gone).
+  NOTE: the DECRYPT spec (`aes128DecryptSpec`) + AES-192/256 (both modes) +
+  ECB/CBC are STILL MATRIX — leave their `matrixFromBytes` paths alone. Only the
+  AES-128 single-block ENCRYPT path is byte-native. Many files exercise both.
+
+**Bucket B — rewrite `aes-vectors.test.ts`.** It KATs the matrix encrypt and has
+a "reorder steps by array swap" test that is MOOT under port wiring (order is
+data-dependency, not array position). Rewrite the KAT for byte-native (bytes +
+ported, `69c4e0d8…`); drop or convert the reorder test to a binding-rewire.
+
+**Bucket C — legacy-CONCEPT tests using AES as a matrix fixture.** e.g.
+`aux-graph-derivation.test.ts` asserts "40 state edges / spine crosses round
+boundaries" — byte-native AES has NO state spine (port-to-port carry), so these
+assertions are now false. Per-test decision: **retarget the state-spine machinery
+tests to a STILL-LEGACY cipher (Speck/DES survive until B2–B4)** so they keep
+exercising that code until Phase C — DON'T reflexively rewrite them as port-edge
+assertions (the state-spine code outlives AES's use of it). Only rewrite if the
+test is specifically about AES's graph, not about the spine machinery generally.
+
+**Do NOT touch the A4 allowlist this session.** The matrix `generic.*` steps
+(byte-substitution / mix-columns / shift-rows / add-round-key) are STILL LIVE on
+decrypt + AES-192/256 + ECB/CBC → still A4 offenders → the allowlist stays exact.
+It drains in B1.2 (decrypt) / B1.3 (192/256) / B1.4 (modes).
+
+**After the sweep is green:** `npm run check` should pass → then a normal
+(non-`--no-verify`) commit closes B1.2a–c's red window. Then continue to B1.2
+(byte-native decrypt + the deferred cross-mode mirror entries, see batch 2),
+B1.3 (192/256), B1.4 (modes: iterate `seedInput`/`outputPorts` + `resolveBinding`
+extraction + A4 allowlist removals).
 
 **Shipped this session (commit `45eff12`, full gate green, suite 2486→2520):**
 - Three byte-native primitives + `aes-round-builder-native.ts` (unused so far)
