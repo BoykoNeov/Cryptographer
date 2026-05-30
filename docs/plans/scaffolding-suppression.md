@@ -32,7 +32,14 @@
 > Sits **before** Slice 2.9c–e (those depend on a stable spec shape,
 > which this plan settles).
 
-## B1.5 — graph-view follow-up (NEXT SESSION, 2026-05-30 diagnosis; NO code yet)
+## B1.5 — graph-view follow-up (2026-05-30)
+
+> **STATUS (2026-05-30):** F1 + F2 shipped (`ae00489`), F5 shipped (`b3c2919`),
+> and the **USER confirmed the ECB+CBC graph looks good in their own browser
+> pass** — F1/F2/F5 are DONE. F4 (round-body draggability) IN PROGRESS this
+> session; F3 (merge `fetch-rk`) still queued for its own session + advisor
+> consult. The diagnosis prose below is the original handoff; the per-finding
+> SHIPPED markers are authoritative.
 
 Branch `b1-aes-byte-native`, working tree clean. A user browser-look at the
 byte-native CBC graph surfaced four issues. **All four were confirmed

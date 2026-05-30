@@ -82,6 +82,30 @@ const resetAll = (): void => {
   __resetValueInspectorForTests();
 };
 
+/**
+ * Synthetic pointer event. jsdom lacks a real `PointerEvent`, so we build a
+ * `MouseEvent` and graft a `pointerId` — the same shim the drag tests use.
+ */
+const pointerEvt = (type: string, x: number, y: number): MouseEvent => {
+  const e = new MouseEvent(type, { clientX: x, clientY: y, bubbles: true });
+  Object.defineProperty(e, "pointerId", { value: 1 });
+  return e;
+};
+
+/**
+ * Click a leaf the way a real browser does. Post-Finding 4 every AES leaf is
+ * draggable, so the `<g>` carries `onPointerDown` instead of `onClick` — a
+ * click is a pointerdown + sub-threshold (no-move) pointerup, after which the
+ * drag handler's `onClickFallback` runs the same scrub + inspector-select the
+ * old `onClick` did. `fireEvent.click` does NOT traverse that path, so leaf
+ * selections must be driven through here. (Edges + endpoint pills keep their
+ * direct `onClick`, so those still use `fireEvent.click`.)
+ */
+const clickLeaf = (leaf: SVGGElement): void => {
+  leaf.dispatchEvent(pointerEvt("pointerdown", 100, 100));
+  window.dispatchEvent(pointerEvt("pointerup", 100, 100));
+};
+
 const findEdgePathByEndpoints = (
   container: HTMLElement,
   fromId: string,
@@ -109,12 +133,12 @@ const findEdgePathByEndpoints = (
  * the title query disambiguates leaves that share an anchor with their
  * source (replicas / chips).
  *
- * Important: this test file uses NESTED leaves (e.g. `round.5.mix-columns`)
- * deliberately. Root-level leaves are draggable, so `onClick` is wired to
- * `undefined` on their <g> and `fireEvent.click` doesn't reach the
- * handler — clicks for those flow through a pointerdown + sub-threshold-
- * release path that fireEvent doesn't simulate. Nested leaves carry the
- * onClick directly.
+ * Note: post-Finding 4 EVERY AES leaf is draggable (root-level, iteration-
+ * body, and now `group`-nested round-body leaves alike), so `onClick` is
+ * wired to `undefined` on the <g> and `fireEvent.click` doesn't reach the
+ * handler — clicks flow through a pointerdown + sub-threshold-release path
+ * that fireEvent doesn't simulate. Leaf clicks in this file therefore go
+ * through the `clickLeaf` helper above; this lookup just resolves the <g>.
  */
 const findLeafByStepId = (container: HTMLElement, stepId: string): SVGGElement | null => {
   const leaves = container.querySelectorAll<SVGGElement>("g.graph-leaf");
@@ -184,11 +208,12 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     seedAes128Trace();
     setInspectorPanelOpen(true);
     const { container } = render(() => <GraphView />);
-    // Nested leaf (inside round.5 group) — non-draggable, so `onClick`
-    // is wired to the <g> and `fireEvent.click` exercises it directly.
+    // Nested group leaf (inside round.5) — draggable post-Finding 4, so the
+    // click is driven through the pointer path (`clickLeaf`), which fires the
+    // drag handler's sub-threshold `onClickFallback`.
     const leaf = findLeafByStepId(container as HTMLElement, "round.5.mix-columns");
     expect(leaf).not.toBeNull();
-    fireEvent.click(leaf as SVGGElement);
+    clickLeaf(leaf as SVGGElement);
     // Halo on the wrapping <g>.
     expect(leaf?.classList.contains("graph-leaf-selected")).toBe(true);
     const body = container.querySelector('[data-testid="value-inspector-body"]');
@@ -250,9 +275,9 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     setInspectorPanelOpen(true);
     const { container } = render(() => <GraphView />);
     const leaf = findLeafByStepId(container as HTMLElement, "round.5.mix-columns");
-    fireEvent.click(leaf as SVGGElement);
+    clickLeaf(leaf as SVGGElement);
     expect(useSelectedTarget()()).not.toBeNull();
-    fireEvent.click(leaf as SVGGElement);
+    clickLeaf(leaf as SVGGElement);
     expect(useSelectedTarget()()).toBeNull();
   });
 
@@ -260,9 +285,9 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     seedAes128Trace();
     setInspectorPanelOpen(true);
     const { container } = render(() => <GraphView />);
-    // Start with a nested leaf (non-draggable so fireEvent.click works).
+    // Start with a nested group leaf (draggable post-Finding 4 → pointer path).
     const leaf = findLeafByStepId(container as HTMLElement, "round.5.mix-columns");
-    fireEvent.click(leaf as SVGGElement);
+    clickLeaf(leaf as SVGGElement);
     expect(useSelectedTarget()()).toEqual({ kind: "node", id: "round.5.mix-columns" });
     // Switch to an edge.
     const path = findEdgePathByEndpoints(

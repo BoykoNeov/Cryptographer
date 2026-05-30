@@ -43,6 +43,19 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 const AES128_KEY = "000102030405060708090a0b0c0d0e0f";
 const AES128_PT = "00112233445566778899aabbccddeeff";
 
+/**
+ * Synthetic pointer event (jsdom lacks `PointerEvent`). A sub-threshold
+ * pointerdown + pointerup is how a draggable leaf receives a "click": the
+ * drag handler's `onClickFallback` fires the scrub. Post-Finding 4 group
+ * round-body leaves are draggable, so `fireEvent.click` no longer reaches
+ * their handler.
+ */
+const pointerEvt = (type: string, x: number, y: number): MouseEvent => {
+  const e = new MouseEvent(type, { clientX: x, clientY: y, bubbles: true });
+  Object.defineProperty(e, "pointerId", { value: 1 });
+  return e;
+};
+
 /** Populate the trace store with a real AES-128 trace so GraphView's
  *  click-to-navigate path has something to navigate INTO. */
 const seedAes128Trace = (): void => {
@@ -171,12 +184,17 @@ describe("GraphView — component-level (AES-128 fixture)", () => {
 
     // Find the leaf rect for round.5.mix-columns and click it. The <title>
     // inside the leaf <g> carries the full stepId, so we use it to disambiguate.
+    // round.5.mix-columns is a `group` round-body leaf → draggable since
+    // Finding 4, so its <g> carries onPointerDown (not onClick). Drive the
+    // click through the pointer path: a sub-threshold pointerdown + pointerup
+    // triggers the drag handler's onClickFallback → handleLeafClick → scrub.
     const leaves = container.querySelectorAll(".graph-leaf");
     const target = Array.from(leaves).find((g) =>
       g.querySelector("title")?.textContent?.startsWith("round.5.mix-columns"),
     );
     expect(target).toBeDefined();
-    fireEvent.click(target as Element);
+    (target as Element).dispatchEvent(pointerEvt("pointerdown", 100, 100));
+    window.dispatchEvent(pointerEvt("pointerup", 100, 100));
 
     // After click, the scrubber must point at the trace frame for round.5.mix-columns.
     const trace = getTrace();

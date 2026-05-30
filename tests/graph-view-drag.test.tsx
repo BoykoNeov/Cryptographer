@@ -557,12 +557,15 @@ describe("GraphView — container drag (Slice 6)", () => {
   });
 });
 
-// ─── Root-level leaf drag ─────────────────────────────────────────────────
+// ─── Root-level + group-nested leaf drag ──────────────────────────────────
 // Root-level leaves like AES-128's `key-expansion` and
-// `initial.add-round-key` are now draggable (sibling of the container
-// drag). Nested leaves like `round.5.sub-bytes` keep their click-only
-// behavior so users can't accidentally pull a single step out of its
-// parent round.
+// `initial.add-round-key` are draggable (sibling of the container drag),
+// using the ABSOLUTE-pin path. Nested leaves inside a `group` container
+// (AES round bodies like `round.5.sub-bytes`) became draggable in
+// Finding 4 (2026-05-30) — the user asked to make round-body chips
+// movable — and ride the RELATIVE-pin path (a delta off the auto layout
+// position, same as the S2(j) iteration-body leaves), so a drag writes
+// `relativePositions`, not the absolute `positions` map.
 
 describe("GraphView — root-level leaf drag", () => {
   beforeEach(resetAll);
@@ -607,7 +610,7 @@ describe("GraphView — root-level leaf drag", () => {
     expect(afterY - beforeY).toBeCloseTo(130, 0);
   });
 
-  it("nested leaves (e.g. round.5.sub-bytes) are NOT draggable", () => {
+  it("nested group leaves (e.g. round.5.sub-bytes) ARE draggable and pin a RELATIVE delta (Finding 4)", () => {
     seedAes128Trace();
     const { container } = render(() => <GraphView />);
     const specId = useSpec()().id;
@@ -618,15 +621,22 @@ describe("GraphView — root-level leaf drag", () => {
     ) as Element | undefined;
     if (!nested) throw new Error("round.5.sub-bytes leaf not found");
 
-    // No draggable class.
-    expect(nested.classList.contains("graph-leaf-draggable")).toBe(false);
+    // Finding 4 (2026-05-30): leaves inside a `group` container (AES round
+    // bodies) are now draggable, same as the S2(j) iteration-body leaves.
+    expect(nested.classList.contains("graph-leaf-draggable")).toBe(true);
 
-    // pointerdown + move should not write any leaf pin to the store
-    // (because the onPointerDown handler isn't wired).
+    // A pointerdown + above-threshold move writes a RELATIVE pin (group
+    // children use relative mode), NOT the absolute `positions` map.
     nested.dispatchEvent(pointerEvt("pointerdown", 50, 50));
     window.dispatchEvent(pointerEvt("pointermove", 200, 180));
     window.dispatchEvent(pointerEvt("pointerup", 200, 180));
-    expect(getLayoutForSpec(specId)?.positions["round.5.sub-bytes"]).toBeUndefined();
+
+    const layout = getLayoutForSpec(specId);
+    expect(layout?.positions["round.5.sub-bytes"]).toBeUndefined();
+    const rel = layout?.relativePositions?.["round.5.sub-bytes"];
+    expect(rel).toBeDefined();
+    expect(rel?.dx).toBeCloseTo(150, 0);
+    expect(rel?.dy).toBeCloseTo(130, 0);
   });
 
   it("sub-threshold click on a draggable leaf still scrubs the trace", async () => {

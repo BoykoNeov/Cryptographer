@@ -1,24 +1,31 @@
 // @vitest-environment jsdom
 
 /**
- * GraphView — nested-leaf draggability (Slice S2(j)).
+ * GraphView — nested-leaf draggability (Slice S2(j) + Finding 4).
  *
  * SHA-256's expanded `msg-schedule` for-each-subgraph body contains
  * leaves with multi-input fan-IN (`sigma0` 3-in, `w-t` 4-in). Pre-S2(j)
  * the user reported "all the blocks are immovable" — couldn't manually
  * untangle the converging arrows. The `isDraggable` gate at GraphView
- * line ~5453 restricted drag to `isReplicaLike || isRootLevel`; nested
- * non-replica leaves were excluded.
+ * restricted drag to `isReplicaLike || isRootLevel`; nested non-replica
+ * leaves were excluded.
  *
- * Post-S2(j): every leaf is draggable. Nested non-replica leaves get
- * the RELATIVE-pin path (same as replicas/chips, Slice 3) — their
- * auto-position is the iterate-flow layout, and the user delta is
- * persisted in `LayoutSpec.relativePositions`. The layout passes
- * already apply the delta to nested children (lines ~1299, ~1452,
- * ~1746 in GraphView.tsx), so no layout change is needed.
+ * S2(j) widened the gate to iteration-style containers (iterate /
+ * for-each-subgraph / for-each-subgraph-with-history). **Finding 4
+ * (2026-05-30) widened it again to non-looping `group` containers** —
+ * AES round bodies + SHA-256 compression rounds — so their leaves are
+ * now draggable too (the first test below pins this; it replaced an
+ * earlier "groups stay non-draggable" scope-boundary assertion).
  *
- * This test pins the user-visible contract: simulate a drag on a SHA-256
- * nested non-replica leaf, assert a `relativePositions` entry is written.
+ * Every non-replica leaf now gets the RELATIVE-pin path (same as
+ * replicas/chips, Slice 3) — its auto-position is the iterate/group-flow
+ * layout, and the user delta is persisted in
+ * `LayoutSpec.relativePositions`. The layout passes already apply the
+ * delta to nested children (lines ~1299, ~1452, ~1746 in GraphView.tsx),
+ * so no layout change is needed — the gate flip alone enabled it.
+ *
+ * These tests pin the user-visible contract: simulate a drag on a SHA-256
+ * nested leaf, assert a `relativePositions` entry is written.
  */
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
@@ -72,14 +79,17 @@ describe("GraphView — nested non-replica leaf draggability (Slice S2(j))", () 
     resetAll();
   });
 
-  it("leaves inside a GROUP (e.g. round.0.Sigma1) stay NON-draggable (S2(j) scope boundary)", () => {
-    // S2(j)'s draggability flip is narrow: iteration-style containers
-    // only (iterate, for-each-subgraph, for-each-subgraph-with-history).
-    // Group children (AES round bodies, SHA-256 compression rounds —
-    // both `kind: "group"`) keep the legacy non-draggable wiring so the
-    // onClick path several click-based tests depend on stays intact.
-    // This test pins the scope boundary so a future widening doesn't
-    // silently break those click tests.
+  it("leaves inside a GROUP (e.g. round.0.Sigma1) ARE draggable and persist a RELATIVE pin (Finding 4)", () => {
+    // Finding 4 (2026-05-30) widened the draggable gate beyond S2(j)'s
+    // iteration-style containers to non-looping `group` containers too —
+    // AES round bodies AND SHA-256 compression rounds (both
+    // `kind: "group"`). The user asked to make round-body chips movable
+    // for the same converging-arrow untangle reason. Group children join
+    // the RELATIVE-pin path (like iteration leaves), and their `<g>` swaps
+    // onClick for the pointerdown + sub-threshold-fallback wiring — so the
+    // value-inspector / graph-view click tests now drive them via the
+    // pointer path. This test pins the new POSITIVE contract; it replaced
+    // the deliberately-deleted "stay non-draggable" scope boundary.
     toggleCollapse(SHA256_SPEC_ID, "round.0", true);
 
     const { container } = render(() => <GraphView />);
@@ -87,18 +97,22 @@ describe("GraphView — nested non-replica leaf draggability (Slice S2(j))", () 
     expect(leaf).not.toBeNull();
     if (!leaf) return;
 
-    // No draggable class on group children.
-    expect(leaf.classList.contains("graph-leaf-draggable")).toBe(false);
+    // The draggable class IS present on group children now.
+    expect(leaf.classList.contains("graph-leaf-draggable")).toBe(true);
 
-    // A pointerdown + move sequence on a non-draggable leaf writes
-    // nothing to either pin map.
+    // A pointerdown + above-threshold move persists a RELATIVE pin
+    // (group children ride the iterate/relative path, not absolute).
     leaf.dispatchEvent(pointerEvt("pointerdown", 200, 200));
     window.dispatchEvent(pointerEvt("pointermove", 250, 225));
     window.dispatchEvent(pointerEvt("pointerup", 250, 225));
 
     const layout = getLayoutForSpec(SHA256_SPEC_ID);
+    // No ABSOLUTE pin — that path is root-level only.
     expect(layout?.positions["round.0.Sigma1"]).toBeUndefined();
-    expect(layout?.relativePositions?.["round.0.Sigma1"]).toBeUndefined();
+    const rel = layout?.relativePositions?.["round.0.Sigma1"];
+    expect(rel).toBeDefined();
+    expect(rel?.dx).toBeCloseTo(50, 0);
+    expect(rel?.dy).toBeCloseTo(25, 0);
   });
 
   it("dragging a leaf inside an EXPANDED for-each-subgraph iteration body persists a relative pin", () => {

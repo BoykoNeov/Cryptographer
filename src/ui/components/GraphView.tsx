@@ -5732,11 +5732,10 @@ export const GraphView = () => {
                 // `for-each-subgraph`, `for-each-subgraph-with-history`.
                 // Drives the gate for iterate-body draggability so leaves
                 // inside SHA-256's `msg-schedule` (a `for-each-subgraph-
-                // with-history`) become draggable too. Groups (`round.N`,
-                // AES round bodies) stay outside this set on purpose — the
-                // user's S2(j) ask was scoped to iteration bodies; group
-                // children keep the legacy onClick path that several click
-                // tests depend on.
+                // with-history`) become draggable too. Non-looping `group`
+                // containers (`round.N`, AES round bodies) are handled by
+                // the separate `isInsideGroup` predicate below — they were
+                // added to the draggable gate in Finding 4 (2026-05-30).
                 const isInsideIteration = node.containerPath.some((id) => {
                   const c = containersById().get(id);
                   const k = c?.kind;
@@ -5745,6 +5744,28 @@ export const GraphView = () => {
                     k === "for-each-subgraph" ||
                     k === "for-each-subgraph-with-history"
                   );
+                });
+                // Non-looping `group` sibling of `isInsideIteration`
+                // (Finding 4, 2026-05-30). AES round bodies (`round.N`) are
+                // `group` containers, so their leaves (sub-bytes / shift-rows /
+                // mix-columns / add-round-key) were excluded from the draggable
+                // gate below — the user asked to make them movable, same as the
+                // iteration-body leaves enabled in S2(j). The layout passes
+                // already apply `relativePins.get(childId)` deltas to GROUP
+                // children too (same code path as iterate children, cf. lines
+                // ~1299, ~1452, ~1746), so enabling drag here is a pure gate
+                // flip + relative-pin mode — no layout change. The only
+                // behavioral shift is the click path: a draggable leaf drops
+                // its `<g onClick>` and instead synthesizes the click on
+                // sub-threshold pointer release via the drag handler's
+                // `onClickFallback` (see LeafRect ~6360). Real-browser scrub /
+                // select behavior is preserved (the fallback runs the same
+                // `handleLeafClick` + `toggleSelectedNode`); jsdom `fireEvent.
+                // click` does NOT traverse that path, so the group-child click
+                // tests were audited + re-pointed at the pointer-event path.
+                const isInsideGroup = node.containerPath.some((id) => {
+                  const c = containersById().get(id);
+                  return c?.kind === "group";
                 });
                 const isRootLevel = node.containerPath.length === 0;
                 // Two flavors of "synthetic" leaf — both suppress drag /
@@ -5812,16 +5833,19 @@ export const GraphView = () => {
                 //     iterate/group children (cf. lines ~1299, ~1452,
                 //     ~1746), so no layout change is needed — the gate
                 //     flip alone enables persistence + reset glyph.
-                //     Group children (e.g. AES round bodies) stay
-                //     NON-draggable on purpose — the user's S2(j) ask was
-                //     scoped to iteration bodies, and group leaves keep
-                //     the legacy onClick wiring that several existing
-                //     click tests depend on.
+                //   - Leaves inside non-looping `group` containers (AES
+                //     `round.N` bodies) ALSO get the relative-pin drag
+                //     since Finding 4 (2026-05-30). Previously excluded so
+                //     their leaves kept the legacy `<g onClick>` wiring;
+                //     the user asked to make round-body leaves movable, so
+                //     `isInsideGroup` now joins the gate and the click
+                //     tests were re-pointed at the pointer-event path.
                 const dragMode =
-                  isReplicaLike || isInsideIteration
+                  isReplicaLike || isInsideIteration || isInsideGroup
                     ? ("relative" as const)
                     : ("absolute" as const);
-                const isDraggable = isReplicaLike || isRootLevel || isInsideIteration;
+                const isDraggable =
+                  isReplicaLike || isRootLevel || isInsideIteration || isInsideGroup;
                 const dragProps = isDraggable
                   ? {
                       onPointerDown: (e: PointerEvent) =>
@@ -5885,10 +5909,12 @@ export const GraphView = () => {
                         onResetRelativePin={
                           // Reset glyph appears whenever the node has a
                           // RELATIVE pin — replicas/chips since Slice 3,
-                          // and iteration-body leaves since S2(j). Group
-                          // children and root-level leaves use absolute
-                          // pins (or no pin at all), so they're excluded.
-                          (isReplicaLike || isInsideIteration) && relativePinsMap().has(node.stepId)
+                          // iteration-body leaves since S2(j), and group
+                          // (AES round body) leaves since Finding 4.
+                          // Root-level leaves use absolute pins (or no pin
+                          // at all), so they're excluded.
+                          (isReplicaLike || isInsideIteration || isInsideGroup) &&
+                          relativePinsMap().has(node.stepId)
                             ? () => clearRelativePosition(spec().id, node.stepId)
                             : undefined
                         }
