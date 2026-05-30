@@ -67,22 +67,16 @@ import { describe, expect, it } from "vitest";
  * assertion (2) fails.
  */
 const NON_BYTES_ALLOWLIST: readonly string[] = [
-  // ── B1 (AES) — `matrix-cm-4x4` core transforms ──
-  "generic.add-round-key@1",
-  "generic.byte-substitution@1",
-  "generic.mix-columns@1",
-  "generic.shift-rows@1",
-  "generic.state-to-aux@1",
-  "generic.xor-aux-into-state@1",
-  // ── B1 (AES) — ECB/CBC mode boundary steps ──
-  "generic.concat-blocks@1", // out:blocks = "matrix-cm-4x4-array"
-  "generic.iv-load@1", // out:chain = "matrix-cm-4x4"
-  "generic.split-blocks@1", // out:blocks = "matrix-cm-4x4-array"
+  // The matrix `matrix-cm-4x4` transforms + ECB/CBC boundary steps
+  // (add-round-key / byte-substitution / mix-columns / shift-rows /
+  // state-to-aux / xor-aux-into-state / concat-blocks / iv-load /
+  // split-blocks) retired in Phase 5 Slice 5.1 (2026-05-30) with the
+  // MatrixState shape. The sole remaining non-bytes port:
   // ── Generic aux primitive (variant-preserving passthrough) ──
   // `out:result = "preserve-input-variant"` — a passthrough sentinel, not
-  // a matrix interpretation. Drops to raw once the State variants are gone
-  // (the sentinel only exists to mirror the legacy executor's variant
-  // preservation). Removed when the aux primitives go port-native.
+  // a matrix interpretation. Drops to raw once the State variants are fully
+  // gone (the sentinel mirrors the legacy executor's variant preservation).
+  // Removed when the aux primitives go port-native in Slice 5.2.
   "generic.aux-copy@1",
 ];
 
@@ -101,10 +95,10 @@ const NON_BYTES_ALLOWLIST: readonly string[] = [
  * modes are rebuilt byte-native (B1: `iterate` adopts seedInput/outputPorts).
  */
 const LEGACY_CONTRACT_ALLOWLIST: readonly string[] = [
-  // ── B1 (AES ECB/CBC multi-block mode boundary) ──
-  "generic.compute-block-count@1", // bytes → preserveInput (iterate count)
-  "generic.load-block@1", // bytes → matrix4x4-bytes
-  "generic.store-block@1", // matrix4x4-bytes → bytes
+  // The three multi-block mode boundary primitives (compute-block-count /
+  // load-block / store-block) were the last `kind: "legacy"` registrations.
+  // They retired in Phase 5 Slice 5.1 (2026-05-30) with the MatrixState
+  // shape + the aux-mode matrix iterate, so NO legacy-contract step remains.
 ];
 
 /**

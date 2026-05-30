@@ -12,8 +12,6 @@
  * If a regression there ever lands, this test catches it.
  */
 
-import { AES_SBOX } from "@/ciphers/aes-constants";
-import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, TraceFrame } from "@/core/types";
 import { StepNarration } from "@/ui/components/StepNarration";
 import "@/ui/narration/index"; // eagerly register Phase 1 narrators
@@ -22,40 +20,47 @@ import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+// Serpent SubBytes is the surviving 16-unit per-byte narrator used to
+// exercise StepNarration's component-level behavior (one disclosure per
+// byte, open-state preservation across format toggle + frame-reference
+// swap). The matrix AES SubBytes narrator that originally drove these tests
+// retired in Phase 5 Slice 5.1 (2026-05-30) with the MatrixState shape.
 const makeSubBytesFrame = (): TraceFrame => {
   const before = new Uint8Array(16);
   for (let i = 0; i < 16; i++) before[i] = i * 17;
-  const after = new Uint8Array(16);
-  for (let i = 0; i < 16; i++) after[i] = AES_SBOX[before[i] ?? 0] ?? 0;
+  // The narrator derives its prose from the before/after bytes alone, so an
+  // identity after-state is sufficient for the structural tests below.
+  const after = new Uint8Array(before);
   return {
     index: 0,
     path: [],
     stepId: "test.sub-bytes",
-    stepType: "generic.byte-substitution@1",
-    params: { sbox: [...AES_SBOX] },
-    stateBefore: matrixFromBytes(before),
-    stateAfter: matrixFromBytes(after),
+    stepType: "serpent.sub-bytes@1",
+    params: {},
+    stateBefore: { shape: "bytes", bytes: before },
+    stateAfter: { shape: "bytes", bytes: after },
     auxRead: new Map<string, AuxValue>(),
     auxWritten: new Map(),
   };
 };
 
-describe("StepNarration — AES SubBytes frame", () => {
+describe("StepNarration — Serpent SubBytes frame", () => {
   beforeEach(() => __resetByteFormatForTests());
   afterEach(() => {
     cleanup();
     __resetByteFormatForTests();
   });
 
-  it("renders 16 <details> elements, one per cell", () => {
+  it("renders 16 <details> elements, one per byte", () => {
     const frame = makeSubBytesFrame();
     const { container } = render(() => <StepNarration frame={frame} />);
     const details = container.querySelectorAll(".step-narration-unit");
     expect(details.length).toBe(16);
-    // Spot-check summaries.
-    expect(details[0]?.querySelector("summary")?.textContent).toBe("byte 0 (row 0, col 0)");
-    expect(details[5]?.querySelector("summary")?.textContent).toBe("byte 5 (row 1, col 1)");
-    expect(details[15]?.querySelector("summary")?.textContent).toBe("byte 15 (row 3, col 3)");
+    // Spot-check summaries (Serpent's BytesState narrator labels by linear
+    // byte index, no row/col; sboxIndex omitted → no "(uses S_N)" suffix).
+    expect(details[0]?.querySelector("summary")?.textContent).toBe("byte 0");
+    expect(details[5]?.querySelector("summary")?.textContent).toBe("byte 5");
+    expect(details[15]?.querySelector("summary")?.textContent).toBe("byte 15");
   });
 
   it("preserves <details> open state across byte-format toggle", () => {

@@ -23,7 +23,6 @@ import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, TraceFrame } from "@/core/types";
 import { KeyScheduleExplorer } from "@/ui/components/KeyScheduleExplorer";
 import { __resetByteFormatForTests, setByteFormat } from "@/ui/stores/format";
@@ -39,7 +38,7 @@ const SERPENT128_PT = "00112233445566778899aabbccddeeff";
 const findFrameByStepType = (
   spec: typeof aes128Spec | typeof serpent128Spec,
   initialAux: Map<string, AuxValue>,
-  initialState: ReturnType<typeof matrixFromBytes> | ReturnType<typeof makeBytesState>,
+  initialState: ReturnType<typeof makeBytesState>,
   predicate: (stepType: string) => boolean,
 ): TraceFrame => {
   // `portedDispatchEnabled: true` is universally safe: lifted-legacy steps
@@ -67,7 +66,7 @@ describe("<KeyScheduleExplorer /> — AES branch", () => {
     const frame = findFrameByStepType(
       aes128Spec,
       new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
-      matrixFromBytes(bytesFromHex(AES128_PT)),
+      makeBytesState(bytesFromHex(AES128_PT)),
       (t) => t.startsWith("aes.key-expansion"),
     );
     const { container } = render(() => <KeyScheduleExplorer frame={frame} />);
@@ -82,7 +81,7 @@ describe("<KeyScheduleExplorer /> — AES branch", () => {
     const frame = findFrameByStepType(
       aes128Spec,
       new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
-      matrixFromBytes(bytesFromHex(AES128_PT)),
+      makeBytesState(bytesFromHex(AES128_PT)),
       (t) => t.startsWith("aes.key-expansion"),
     );
     const { container } = render(() => <KeyScheduleExplorer frame={frame} />);
@@ -102,7 +101,7 @@ describe("<KeyScheduleExplorer /> — AES branch", () => {
     const frame = findFrameByStepType(
       aes128Spec,
       new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
-      matrixFromBytes(bytesFromHex(AES128_PT)),
+      makeBytesState(bytesFromHex(AES128_PT)),
       (t) => t.startsWith("aes.key-expansion"),
     );
     const { container } = render(() => <KeyScheduleExplorer frame={frame} />);
@@ -122,7 +121,7 @@ describe("<KeyScheduleExplorer /> — AES branch", () => {
     const frame = findFrameByStepType(
       aes128Spec,
       new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
-      matrixFromBytes(bytesFromHex(AES128_PT)),
+      makeBytesState(bytesFromHex(AES128_PT)),
       (t) => t.startsWith("aes.key-expansion"),
     );
     const { container } = render(() => <KeyScheduleExplorer frame={frame} />);
@@ -144,7 +143,7 @@ describe("<KeyScheduleExplorer /> — AES branch", () => {
     const frame = findFrameByStepType(
       aes128Spec,
       new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
-      matrixFromBytes(bytesFromHex(AES128_PT)),
+      makeBytesState(bytesFromHex(AES128_PT)),
       (t) => t.startsWith("aes.key-expansion"),
     );
     const { container } = render(() => <KeyScheduleExplorer frame={frame} />);
@@ -174,7 +173,7 @@ describe("<KeyScheduleExplorer /> — AES branch", () => {
     const frame = findFrameByStepType(
       aes128Spec,
       new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
-      matrixFromBytes(bytesFromHex(AES128_PT)),
+      makeBytesState(bytesFromHex(AES128_PT)),
       (t) => t.startsWith("aes.key-expansion"),
     );
     const { container } = render(() => <KeyScheduleExplorer frame={frame} />);
@@ -211,8 +210,8 @@ describe("<KeyScheduleExplorer /> — AES branch", () => {
       stepId: "key-expansion",
       stepType: "aes.key-expansion@1",
       params: { rounds: 10 }, // no sbox/rcon/keyAuxName
-      stateBefore: matrixFromBytes(new Uint8Array(16)),
-      stateAfter: matrixFromBytes(new Uint8Array(16)),
+      stateBefore: makeBytesState(new Uint8Array(16)),
+      stateAfter: makeBytesState(new Uint8Array(16)),
       auxRead: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
       auxWritten: new Map(),
     };

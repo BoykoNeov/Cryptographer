@@ -67,8 +67,7 @@ import { describe, expect, it } from "vitest";
 const expectStatesEqual = (a: State, b: State, label: string): void => {
   expect(a.shape, `${label}: shape`).toBe(b.shape);
   switch (a.shape) {
-    case "bytes":
-    case "matrix4x4-bytes": {
+    case "bytes": {
       if (b.shape !== a.shape) return;
       expect(Array.from(a.bytes), `${label}: bytes`).toEqual(Array.from(b.bytes));
       return;

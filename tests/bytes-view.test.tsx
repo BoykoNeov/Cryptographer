@@ -9,7 +9,7 @@
  *      overlay" rather than throwing (the shape-mismatch guard)
  */
 
-import type { BytesState, State } from "@/core/types";
+import type { BytesState } from "@/core/types";
 import { BytesView } from "@/ui/components/BytesView";
 import { __resetByteFormatForTests, setByteFormat } from "@/ui/stores/format";
 import { cleanup, render } from "@solidjs/testing-library";
@@ -179,22 +179,8 @@ describe("BytesView", () => {
     expect(container.querySelectorAll(".bytes-block-group").length).toBe(0);
   });
 
-  // Defensive: the shape-mismatch guard is App-level (the dispatch filters
-  // before passing). But if a future caller threads a non-bytes State
-  // through TypeScript by casting, BytesView shouldn't blow up.
-  it("ignores a prop typed as State that isn't BytesState (defensive)", () => {
-    const matrixLike: State = { shape: "matrix4x4-bytes", bytes: new Uint8Array(16) };
-    const before = bs(0x01);
-    const after = bs(0x01);
-    // Cast through unknown to simulate a caller that bypassed the dispatch.
-    expect(() =>
-      render(() => (
-        <BytesView
-          before={before}
-          after={after}
-          previousAfter={matrixLike as unknown as BytesState}
-        />
-      )),
-    ).not.toThrow();
-  });
+  // The "ignores a non-BytesState prop (defensive)" test was retired in
+  // Phase 5 Slice 5.1 (2026-05-30) with the MatrixState shape — `bytes` is
+  // the only State variant now, so there is no other variant to thread
+  // through as a `previousAfter` and exercise the defensive branch.
 });

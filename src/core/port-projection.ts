@@ -268,62 +268,20 @@ export const portBytesToState = (bytes: Uint8Array, layout: StateShape): State =
   return bytesToState(bytes, { stateLayout: layout });
 };
 
-const stateToBytes = (state: TraceFrame["stateBefore"], expected: StateShape): Uint8Array => {
-  // Slice 2.0b-ii (universal-port Phase 2) relaxation, user pick option C
-  // (2026-05-24): when `expected === "bytes"`, accept the other State
-  // variant (`matrix4x4-bytes`) and read `.bytes` directly. The relaxation
-  // unblocks lifting shape-transforming steps whose input state's variant
-  // doesn't matter to the executor (concat-blocks: matrix-in/bytes-out,
-  // `_state` ignored) without forcing every such step to ship asymmetric
-  // stateInput/stateOutput layout meta. Trade-off: a meta author who
-  // mis-declares `stateLayout: "bytes"` against a state-reading executor no
-  // longer surfaces at the encode boundary — they surface inside the
-  // executor's own shape check.
-  //
-  // Untouched: `expected === "matrix4x4-bytes"` still enforces shape
-  // equality. "bytes" is the universal sink because every State variant
-  // carries a `.bytes` Uint8Array internally.
-  if (expected === "bytes" && state.shape !== "bytes") {
-    // The union narrows to `matrix4x4-bytes` here; it carries `.bytes`.
-    return new Uint8Array(state.bytes);
-  }
-  if (state.shape !== expected) {
-    throw new Error(
-      `port-projection: state shape ${state.shape} does not match expected ${expected}`,
-    );
-  }
-  switch (state.shape) {
-    case "bytes":
-    case "matrix4x4-bytes":
-      // Defensive copy: the runtime's `cloneState` already produces
-      // a fresh Uint8Array for each frame, but `project` must not
-      // alias the caller's bytes either — the PortedFrame is a
-      // separate value owned by the ported pipeline.
-      return new Uint8Array(state.bytes);
-  }
+const stateToBytes = (state: TraceFrame["stateBefore"], _expected: StateShape): Uint8Array => {
+  // Post-Slice-5.1 the only State shape is "bytes" (and `_expected` is
+  // likewise always "bytes"), so there's nothing to assert — just take a
+  // defensive copy. `cloneState` already produces a fresh Uint8Array per
+  // frame, but `project` must not alias the caller's bytes either: the
+  // PortedFrame is a separate value owned by the ported pipeline.
+  return new Uint8Array(state.bytes);
 };
 
-const bytesToState = (bytes: Uint8Array, tags: LayoutTags): TraceFrame["stateBefore"] => {
-  switch (tags.stateLayout) {
-    case "bytes":
-      // bytes layout is wiring-determined — any length is legal. The
-      // consumer's own length assertions (if any) gate beyond this.
-      return cloneState({ shape: "bytes", bytes });
-    case "matrix4x4-bytes":
-      // Slice 1.12 caveat 1 defensive throw — a coerced byte stream
-      // whose length doesn't match the layout's fixed expected size
-      // would otherwise produce a malformed MatrixState that downstream
-      // consumers silently misinterpret (treating wrong-length bytes as
-      // a column-major 4×4 matrix smears values into the wrong cells).
-      // Loud throw with clear attribution lets a fixture error surface
-      // at the projection boundary, not three frames later.
-      if (bytes.length !== 16) {
-        throw new Error(
-          `port-projection: bytesToState layout "matrix4x4-bytes" expected 16 bytes, got ${bytes.length}. This usually means a ported-dispatch input port's coerced bytes don't fit the declared state-port layout. See Slice 1.12 caveat 1 in docs/plans/universal-port-phase-1-slices.md.`,
-        );
-      }
-      return cloneState({ shape: "matrix4x4-bytes", bytes });
-  }
+const bytesToState = (bytes: Uint8Array, _tags: LayoutTags): TraceFrame["stateBefore"] => {
+  // Post-Slice-5.1 the only State shape is "bytes" — wiring-determined
+  // length, any length is legal. The consumer's own length assertions
+  // (if any) gate beyond this.
+  return cloneState({ shape: "bytes", bytes });
 };
 
 // ─── Aux value ↔ bytes ──────────────────────────────────────────────────
@@ -779,47 +737,12 @@ export const auxPortBytesToValue = (
   if (layout === undefined || layout === "raw") {
     return new Uint8Array(bytes);
   }
-  if (layout === "matrix-cm-4x4") {
-    // Slice 1.12 caveat 1 defensive throw — aux-side mirror of the
-    // bytesToState matrix4x4-bytes check. A coerced byte stream of
-    // wrong length would produce a malformed MatrixState that
-    // downstream consumers silently misinterpret.
-    if (bytes.length !== 16) {
-      throw new Error(
-        `auxPortBytesToValue: layout "matrix-cm-4x4" expected 16 bytes, got ${bytes.length}. This usually means a ported-dispatch aux port's coerced bytes don't fit the declared layout. See Slice 1.12 caveat 1 in docs/plans/universal-port-phase-1-slices.md.`,
-      );
-    }
-    return { shape: "matrix4x4-bytes", bytes: new Uint8Array(bytes) };
-  }
-  if (layout === "matrix-cm-4x4-array") {
-    // Slice 2.0b-ii — decode the concatenated bytes back into a
-    // `MatrixState[]`. Element width is implied by the layout
-    // (`matrix-cm-4x4` = 16 bytes per element); count is derived from
-    // `bytes.length / 16` with a divisibility throw. A non-multiple
-    // length signals either a producer that wrote unaligned bytes or a
-    // port-coercion that truncated mid-element — either is a meta /
-    // wiring authoring bug worth surfacing loudly.
-    //
-    // A future `bytes-array` sibling layout will mirror this branch for
-    // non-matrix block ciphers; element width then needs an explicit
-    // param (no implied width from the tag), at which point this
-    // helper's signature widens to take params.
-    if (bytes.length % 16 !== 0) {
-      throw new Error(
-        `auxPortBytesToValue: layout "matrix-cm-4x4-array" expected bytes.length divisible by 16, got ${bytes.length}.`,
-      );
-    }
-    const count = bytes.length / 16;
-    const result: { shape: "matrix4x4-bytes"; bytes: Uint8Array }[] = [];
-    for (let i = 0; i < count; i++) {
-      // `slice` (not `subarray`) — produce an independent buffer per
-      // element so consumers can't mutate one element and accidentally
-      // touch another. Mirrors the per-element copy `split-blocks`'s
-      // legacy executor performs via `matrixFromBytes`.
-      result.push({ shape: "matrix4x4-bytes", bytes: bytes.slice(i * 16, (i + 1) * 16) });
-    }
-    return result;
-  }
+  // The `"matrix-cm-4x4"` (single MatrixState) and `"matrix-cm-4x4-array"`
+  // (MatrixState[]) decode targets were retired in Phase 5 Slice 5.1
+  // (2026-05-30) with the `MatrixState` shape. Their only producers were
+  // the now-deleted `iv-load@1` and `split-blocks@1`. The advisory
+  // `PortLayout "matrix-cm-4x4"` rendering tag survives, but no aux value
+  // decodes to a matrix variant any more.
   if (layout === "preserve-input-variant") {
     if (sourceVariantHint === undefined) {
       throw new Error(
@@ -838,24 +761,15 @@ export const auxPortBytesToValue = (
       "shape" in sourceVariantHint
     ) {
       const shape = (sourceVariantHint as { shape: string }).shape;
-      if (shape === "bytes" || shape === "matrix4x4-bytes") {
-        // Slice 1.12 caveat 1 defensive throw — when the source
-        // variant is matrix4x4-bytes, the output bytes MUST be 16
-        // long for the reconstructed MatrixState to be well-formed.
-        // The "bytes" variant remains length-agnostic (any length
-        // legal) — same posture as bytesToState case "bytes".
-        if (shape === "matrix4x4-bytes" && bytes.length !== 16) {
-          throw new Error(
-            `auxPortBytesToValue: layout "preserve-input-variant" with source variant "matrix4x4-bytes" expected 16 bytes, got ${bytes.length}. This usually means a ported-dispatch aux port's coerced bytes don't fit the source variant's layout. See Slice 1.12 caveat 1 in docs/plans/universal-port-phase-1-slices.md.`,
-          );
-        }
-        // Construct a fresh State of the same variant. Type narrows via
-        // the literal-string check above; the cast satisfies the union
-        // discriminator (BytesState / MatrixState) without runtime cost.
+      if (shape === "bytes") {
+        // Post-Slice-5.1 the only State variant is `bytes` (length-agnostic,
+        // any length legal — same posture as the `bytesToState` "bytes"
+        // case). Construct a fresh State so the decoded value owns its
+        // buffer.
         return { shape, bytes: new Uint8Array(bytes) } as AuxValue;
       }
       throw new Error(
-        `auxPortBytesToValue: layout "preserve-input-variant" doesn't yet support source variant "${shape}" (only Uint8Array, bytes, matrix4x4-bytes); widen this branch when a cipher needs it`,
+        `auxPortBytesToValue: layout "preserve-input-variant" doesn't support source variant "${shape}" (only Uint8Array and bytes survive after Slice 5.1); widen this branch when a cipher needs it`,
       );
     }
     throw new Error(

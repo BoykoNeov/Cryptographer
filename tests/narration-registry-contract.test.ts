@@ -73,12 +73,9 @@ describe("narration-registry coverage contract", () => {
     expect(uncovered).toEqual([]);
   });
 
-  it("registers fns for the four AES round operations (Phase 1)", () => {
-    expect(hasNarrationFn("generic.byte-substitution@1")).toBe(true);
-    expect(hasNarrationFn("generic.shift-rows@1")).toBe(true);
-    expect(hasNarrationFn("generic.mix-columns@1")).toBe(true);
-    expect(hasNarrationFn("generic.add-round-key@1")).toBe(true);
-  });
+  // The four matrix AES round-operation narrators (byte-substitution /
+  // shift-rows / mix-columns / add-round-key) were retired in Phase 5
+  // Slice 5.1 (2026-05-30) with their step types + the MatrixState shape.
 
   it("registers fns for Serpent byte-level + bit-permutation steps (Phase 2)", () => {
     expect(hasNarrationFn("serpent.sub-bytes@1")).toBe(true);
@@ -100,24 +97,19 @@ describe("narration-registry coverage contract", () => {
     expect(hasNarrationFn("generic.iso7816-4-unpad@1")).toBe(true);
   });
 
-  it("registers fns for the 5 boundary step types (Phase 3)", () => {
-    expect(hasNarrationFn("generic.load-block@1")).toBe(true);
-    expect(hasNarrationFn("generic.store-block@1")).toBe(true);
-    expect(hasNarrationFn("generic.split-blocks@1")).toBe(true);
-    expect(hasNarrationFn("generic.concat-blocks@1")).toBe(true);
-    expect(hasNarrationFn("generic.compute-block-count@1")).toBe(true);
-  });
+  // The 5 matrix boundary narrators (load-block / store-block / split-blocks
+  // / concat-blocks / compute-block-count) were retired in Phase 5 Slice 5.1
+  // (2026-05-30) with their step types + the MatrixState shape.
 
-  it("registers fns for the 6 aux primitive step types (Phase 3)", () => {
-    // Note: 5 of these declare `input: "any"` so they wouldn't be caught
-    // by the cell-shape coverage walk above. Explicit per-step assertions
-    // are the safety net — without them a silent omission could survive.
+  it("registers fns for the 3 aux primitive step types (Phase 3)", () => {
+    // These declare `input: "any"` so they wouldn't be caught by the
+    // cell-shape coverage walk above. Explicit per-step assertions are the
+    // safety net — without them a silent omission could survive. (The matrix
+    // chaining narrators iv-load / xor-aux-into-state / state-to-aux retired
+    // in Phase 5 Slice 5.1 with their step types.)
     expect(hasNarrationFn("generic.aux-load@1")).toBe(true);
     expect(hasNarrationFn("generic.aux-xor@1")).toBe(true);
     expect(hasNarrationFn("generic.aux-copy@1")).toBe(true);
-    expect(hasNarrationFn("generic.iv-load@1")).toBe(true);
-    expect(hasNarrationFn("generic.xor-aux-into-state@1")).toBe(true);
-    expect(hasNarrationFn("generic.state-to-aux@1")).toBe(true);
   });
 
   it("allowlists key-expansion step types (covered by KeyScheduleExplorer)", () => {
@@ -137,31 +129,23 @@ describe("narration-registry coverage contract", () => {
     expect(NARRATION_NO_OP_ALLOWLIST.has("serpent.bit-permutation@1")).toBe(false);
   });
 
-  it("allowlist size: 6 irreducible + 1 toy entry + 1 DES key-schedule entry + 3 SHA-256 helpers", () => {
-    // Pins the current size after Phase 4 of `docs/plans/des-feistel.md`
-    // + Slice 2.6b of `docs/plans/universal-port-dataflow.md`:
+  it("allowlist size: 6 irreducible + 1 toy entry + 1 DES key-schedule entry", () => {
+    // Pins the current size after Phase 5 Slice 5.1 (2026-05-30):
     //   - 6 permanent entries (4 key-expansion step types covered by
     //     `<KeyScheduleExplorer />`, plus the 2 bit-level Serpent linear
     //     transforms whose byte-level prose would mislead).
     //   - `feistel.toy-add-k@1` — Phase 2 toy F, removed when the toy
-    //     spec is decommissioned post-DES.
+    //     spec is decommissioned (reserved through Phase 5 for the
+    //     port-native Feistel/swap viz rebuild).
     //   - `des.key-schedule@1` — the 6 round-body DES step types moved
     //     OFF the allowlist in Phase 4 with dedicated narrators; only
     //     the key schedule remains because its per-frame narration is
     //     the wrong surface (multi-round PC-1 → 16 shifts → PC-2 walk).
-    //     The future `DesKeyScheduleSimulator` (Phase 5e) replaces
-    //     `<FrameStateView />` for this step, matching how AES / Serpent
-    //     key expansions are handled.
-    //   - Three SHA-256 coarse-granularity helpers
-    //     (`sha2.message-schedule-step@1`, `sha2.compression-round@1`,
-    //     `sha2.final-add@1`) shipped in Slice 2.6b. The Slice 2.6d
-    //     decomposition into port-native primitives retires these.
-    expect(NARRATION_NO_OP_ALLOWLIST.size).toBe(11);
+    //   - The 3 SHA-256 coarse-granularity helpers (sha2.*) retired in
+    //     Slice 5.1 with the Slice 2.6d port-native decomposition.
+    expect(NARRATION_NO_OP_ALLOWLIST.size).toBe(8);
     expect(NARRATION_NO_OP_ALLOWLIST.has("feistel.toy-add-k@1")).toBe(true);
     expect(NARRATION_NO_OP_ALLOWLIST.has("des.key-schedule@1")).toBe(true);
-    expect(NARRATION_NO_OP_ALLOWLIST.has("sha2.message-schedule-step@1")).toBe(true);
-    expect(NARRATION_NO_OP_ALLOWLIST.has("sha2.compression-round@1")).toBe(true);
-    expect(NARRATION_NO_OP_ALLOWLIST.has("sha2.final-add@1")).toBe(true);
     // Negative assertion: the 6 round-body DES step types must NOT be on
     // the allowlist after Phase 4 (would mean we forgot to register a
     // narrator and the contract test's coverage check would lie).

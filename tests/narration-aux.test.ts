@@ -1,24 +1,19 @@
 /**
  * Per-step narration tests for the Phase-3 aux narrators.
  *
- * Six narrators: aux-load, aux-xor, aux-copy, iv-load,
- * xor-aux-into-state, state-to-aux. All graceful on missing aux
- * (return null), so the test fabricates a fully-wired frame for the
+ * Three narrators: aux-load, aux-xor, aux-copy. All graceful on missing
+ * aux (return null), so the test fabricates a fully-wired frame for the
  * happy path and a half-wired frame for the null path on a sample.
+ *
+ * The matrix chaining narrators (iv-load, xor-aux-into-state, state-to-aux)
+ * were retired in Phase 5 Slice 5.1 (2026-05-30) with their step types +
+ * the MatrixState shape.
  */
 
 // @vitest-environment jsdom
 
-import { matrixFromBytes } from "@/core/state/matrix";
-import type { AuxValue, BytesState, MatrixState, TraceFrame } from "@/core/types";
-import {
-  auxCopyNarration,
-  auxLoadNarration,
-  auxXorNarration,
-  ivLoadNarration,
-  stateToAuxNarration,
-  xorAuxIntoStateNarration,
-} from "@/ui/narration/aux-primitives";
+import type { AuxValue, BytesState, TraceFrame } from "@/core/types";
+import { auxCopyNarration, auxLoadNarration, auxXorNarration } from "@/ui/narration/aux-primitives";
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -157,115 +152,6 @@ describe("auxCopyNarration", () => {
         makeFrame({
           stepType: "generic.aux-copy@1",
           params: { from: "iv", to: "feedback" },
-        }),
-      ),
-    ).toBeNull();
-  });
-});
-
-// ─── iv-load ─────────────────────────────────────────────────────────
-
-describe("ivLoadNarration", () => {
-  it("emits 1 unit showing the bytes→MatrixState shape bridge", () => {
-    const ivBytes = new Uint8Array(16);
-    for (let i = 0; i < 16; i++) ivBytes[i] = i;
-    const matrix = matrixFromBytes(ivBytes);
-    const auxRead = new Map<string, AuxValue>([["iv", ivBytes]]);
-    const auxWritten = new Map<string, AuxValue>([["chain", matrix]]);
-    const units = ivLoadNarration(
-      makeFrame({
-        stepType: "generic.iv-load@1",
-        params: { ivAuxName: "iv", outAuxName: "chain" },
-        auxRead,
-        auxWritten,
-      }),
-    );
-    expect(units).not.toBeNull();
-    if (!units) return;
-    expect(units.length).toBe(1);
-    expect(units[0]?.label).toContain("aux[chain]");
-    expect(units[0]?.label).toContain("aux[iv]");
-    const text = proseText(units[0]?.Prose ?? (() => null));
-    expect(text).toContain("16-byte IV");
-    expect(text).toContain("FIPS-197");
-  });
-});
-
-// ─── xor-aux-into-state ──────────────────────────────────────────────
-
-describe("xorAuxIntoStateNarration", () => {
-  it("emits 1 unit (NOT 16 per the Phase 3 plan)", () => {
-    const before = new Uint8Array(16);
-    const operand = new Uint8Array(16);
-    for (let i = 0; i < 16; i++) {
-      before[i] = i;
-      operand[i] = 0xff - i;
-    }
-    const after = new Uint8Array(16);
-    for (let i = 0; i < 16; i++) after[i] = (before[i] ?? 0) ^ (operand[i] ?? 0);
-    const operandMatrix: MatrixState = matrixFromBytes(operand);
-    const auxRead = new Map<string, AuxValue>([["chain", operandMatrix]]);
-    const units = xorAuxIntoStateNarration(
-      makeFrame({
-        stepType: "generic.xor-aux-into-state@1",
-        params: { auxName: "chain" },
-        stateBefore: matrixFromBytes(before),
-        stateAfter: matrixFromBytes(after),
-        auxRead,
-      }),
-    );
-    expect(units).not.toBeNull();
-    if (!units) return;
-    expect(units.length).toBe(1); // single conceptual XOR, not per-cell
-    expect(units[0]?.label).toContain("state ⊕= aux[chain]");
-    const text = proseText(units[0]?.Prose ?? (() => null));
-    expect(text).toMatch(/self-inverse/i);
-    expect(text).toMatch(/CBC/);
-  });
-
-  it("returns null when state isn't MatrixState", () => {
-    expect(
-      xorAuxIntoStateNarration(
-        makeFrame({
-          stepType: "generic.xor-aux-into-state@1",
-          params: { auxName: "chain" },
-          // stateBefore is BytesState by default in makeFrame
-        }),
-      ),
-    ).toBeNull();
-  });
-});
-
-// ─── state-to-aux ────────────────────────────────────────────────────
-
-describe("stateToAuxNarration", () => {
-  it("emits 1 unit naming the snapshot key and shape", () => {
-    const matrix = matrixFromBytes(new Uint8Array(16));
-    const auxWritten = new Map<string, AuxValue>([["chain", matrix]]);
-    const units = stateToAuxNarration(
-      makeFrame({
-        stepType: "generic.state-to-aux@1",
-        params: { auxName: "chain" },
-        stateBefore: matrix,
-        stateAfter: matrix,
-        auxWritten,
-      }),
-    );
-    expect(units).not.toBeNull();
-    if (!units) return;
-    expect(units.length).toBe(1);
-    expect(units[0]?.label).toContain("aux[chain]");
-    const text = proseText(units[0]?.Prose ?? (() => null));
-    expect(text).toContain("matrix4x4-bytes");
-    expect(text).toMatch(/CBC/);
-  });
-
-  it("returns null when no snapshot was written", () => {
-    expect(
-      stateToAuxNarration(
-        makeFrame({
-          stepType: "generic.state-to-aux@1",
-          params: { auxName: "chain" },
         }),
       ),
     ).toBeNull();

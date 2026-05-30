@@ -9,20 +9,23 @@ export type Json = null | boolean | number | string | Json[] | { [k: string]: Js
 // Discriminated union. Each variant carries the bytes plus enough shape
 // metadata for the UI to pick the right view without a runtime cast.
 
-export type StateShape = "bytes" | "matrix4x4-bytes";
+// Phase 5 Slice 5.1 (2026-05-30) retired the `matrix4x4-bytes` variant
+// (`MatrixState`) along with the test-only matrix AES round primitives. The
+// only surviving State shape is raw bytes — every shipped cipher/hash is
+// port-native byte-flat (see `feedback_all_specs_port_native`). A node that
+// wants a 4×4 reading of its 16 bytes carries the advisory `PortLayout` tag
+// `"matrix-cm-4x4"` (a rendering hint, NOT a State variant) and renders via
+// `TinyMatrix`. A future cipher needing a bit-aligned or bignum shape
+// handles it INSIDE its executor and exchanges `Uint8Array` at the port
+// boundary.
+export type StateShape = "bytes";
 
 export type BytesState = {
   readonly shape: "bytes";
   readonly bytes: Uint8Array;
 };
 
-export type MatrixState = {
-  readonly shape: "matrix4x4-bytes";
-  /** Column-major, 16 bytes. AES convention: state[r + 4*c]. */
-  readonly bytes: Uint8Array;
-};
-
-export type State = BytesState | MatrixState;
+export type State = BytesState;
 
 // ─── Auxiliary lanes ──────────────────────────────────────────────────────
 // Some steps need data alongside the main state — round keys, IVs, counters.
@@ -1180,20 +1183,21 @@ export type StepRegistration =
  * would make the round-trip trivial and would not validate the
  * "flatten-to-Uint8Array" claim that the entire migration rests on.
  *
- * Scope (Phase 5 / Slice 5.0, 2026-05-30): the only two State variants
- * left are `matrix4x4-bytes` (AES round/key bytes) and `bytes` (raw); the
- * never-shipped `bitvec` / `bigint` variants and their reconstruction
- * fields were retired with the `State` union. A future cipher needing a
- * bit-aligned or bignum state shape handles it INSIDE the executor and
- * exchanges `Uint8Array` at the port boundary (see
- * `feedback_all_specs_port_native` — specialized math never crosses a
- * port as a non-bytes value), so `LayoutTags` stays bytes-and-matrix only.
+ * Scope (Phase 5 / Slice 5.1, 2026-05-30): `MatrixState` was retired with
+ * the test-only matrix AES primitives, so the ONLY surviving State shape is
+ * `bytes` (raw). The `matrix4x4-bytes` / `bitvec` / `bigint` variants and
+ * their reconstruction fields are gone. A future cipher needing a
+ * bit-aligned, matrix, or bignum state shape handles it INSIDE the executor
+ * and exchanges `Uint8Array` at the port boundary (see
+ * `feedback_all_specs_port_native` — specialized math never crosses a port
+ * as a non-bytes value), so `LayoutTags` stays bytes-only.
  */
 export type LayoutTags = {
   /**
-   * The State variant the legacy frame's `stateBefore`/`stateAfter` carried.
-   * Phase-0 fixture only exercises "matrix-cm-4x4"; "bytes" is reachable
-   * by other shipped step types but not in the three targets.
+   * The State shape the legacy frame's `stateBefore`/`stateAfter` carried.
+   * Post-Slice-5.1 this is always `"bytes"` — the field is retained for the
+   * surviving lifted-legacy steps (padding, aux, key-schedules) until the
+   * legacy contract is fully retired.
    */
   readonly stateLayout: StateShape;
   /**

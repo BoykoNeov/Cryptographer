@@ -95,112 +95,20 @@ describe("validateShapes — zero false positives on shipped specs", () => {
   });
 });
 
-describe("validateShapes — headline mismatch repro", () => {
-  // Reproduces the user's reported bug: a `compute-block-count` leaf
-  // inserted into a position where state has already become
-  // matrix4x4-bytes. The walker should emit exactly one warning naming
-  // that leaf with the right expected/got pair.
-
-  it("flags compute-block-count inserted after the load-block boundary", () => {
-    // Synthesize a tiny spec resembling the post-drop AES state: the
-    // first step converts bytes → matrix, then we inject a stray
-    // bytes-input step. The walker should flag the second leaf.
-    const badSpec: CipherSpec = {
-      id: "test-bad-shape@1",
-      name: "Bad Shape Test",
-      stateShape: "bytes",
-      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 16 } },
-      steps: [
-        // Bytes → matrix (legal at the start).
-        {
-          kind: "step",
-          id: "load",
-          type: "generic.load-block@1",
-          params: { blockSize: 16 },
-        },
-        // Bytes-input step landed in a matrix-state position. SHOULD
-        // flag.
-        {
-          kind: "step",
-          id: "bad-bcc",
-          type: "generic.compute-block-count@1",
-          params: { blockSize: 16, countAux: "blockCount" },
-        },
-      ] satisfies readonly StepNode[],
-    };
-    const warnings = validateShapes(badSpec, registry);
-    expect(warnings).toHaveLength(1);
-    const w = warnings[0];
-    expect(w).toBeDefined();
-    if (!w) throw new Error("unreachable");
-    expect(w.kind).toBe("state-shape-mismatch");
-    if (w.kind !== "state-shape-mismatch") throw new Error("unreachable");
-    expect(w.stepId).toBe("bad-bcc");
-    expect(w.expected).toBe("bytes");
-    expect(w.got).toBe("matrix4x4-bytes");
-  });
-
-  it("flags a matrix-input step landed where state is still bytes", () => {
-    // The inverse: an AES round step inserted at the root of a
-    // bytes-input spec, before any load-block. Realistically what
-    // happens when the user drops `sub-bytes` into the empty area
-    // above the rounds.
-    const badSpec: CipherSpec = {
-      id: "test-bad-shape-2@1",
-      name: "Bad Shape Test 2",
-      stateShape: "bytes",
-      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 16 } },
-      steps: [
-        {
-          kind: "step",
-          id: "stray-sub-bytes",
-          type: "generic.byte-substitution@1",
-          // SBox value doesn't matter — the walker stops at the shape
-          // mismatch before any executor runs.
-          params: { sbox: Array.from({ length: 256 }, (_, i) => i) },
-        },
-      ] satisfies readonly StepNode[],
-    };
-    const warnings = validateShapes(badSpec, registry);
-    expect(warnings).toHaveLength(1);
-    const w = warnings[0];
-    expect(w).toBeDefined();
-    if (!w) throw new Error("unreachable");
-    if (w.kind !== "state-shape-mismatch") throw new Error("unreachable");
-    expect(w.stepId).toBe("stray-sub-bytes");
-    expect(w.expected).toBe("matrix4x4-bytes");
-    expect(w.got).toBe("bytes");
-  });
-});
+// The "validateShapes — headline mismatch repro" describe (a bytes-input
+// step landed in a matrix-state position, and the inverse) was retired in
+// Phase 5 Slice 5.1 (2026-05-30) with the MatrixState shape + the matrix
+// load-block / byte-substitution step types. With `bytes` the only state
+// shape, every shipped step's shapeContract input is `bytes`/`any`, so a
+// `state-shape-mismatch` between bytes and a non-bytes shape can no longer
+// occur. The zero-false-positives suite above (which still runs against the
+// shipped byte-native specs) is the surviving coverage of `validateShapes`.
 
 describe("inferShapesAtAnchors", () => {
-  it("threads bytes → matrix → bytes through the load/store boundary", () => {
-    // Hand-crafted spec exercising both shape-changing boundary steps in
-    // sequence. Each leaf id gets a shape-after entry.
-    const spec: CipherSpec = {
-      id: "test-load-store@1",
-      name: "Load/Store Test",
-      stateShape: "bytes",
-      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 16 } },
-      steps: [
-        { kind: "step", id: "load", type: "generic.load-block@1", params: { blockSize: 16 } },
-        {
-          kind: "step",
-          id: "shift",
-          type: "generic.shift-rows@1",
-          params: { shifts: [0, 1, 2, 3] },
-        },
-        { kind: "step", id: "store", type: "generic.store-block@1", params: {} },
-      ],
-    };
-    const map = inferShapesAtAnchors(spec, registry);
-    // After load-block: bytes → matrix.
-    expect(map.get("load")).toBe("matrix4x4-bytes");
-    // shift-rows is matrix → matrix (preserveInput).
-    expect(map.get("shift")).toBe("matrix4x4-bytes");
-    // After store-block: matrix → bytes.
-    expect(map.get("store")).toBe("bytes");
-  });
+  // The "threads bytes → matrix → bytes through the load/store boundary" test
+  // retired in Phase 5 Slice 5.1 (2026-05-30) with the load-block/store-block
+  // boundary steps + the MatrixState shape. The byte-native cases below carry
+  // the surviving coverage (every leaf threads `bytes`).
 
   it("records bytes on every leaf inside a byte-native AES round group", () => {
     // The byte-native AES-128 spec (Slice B1) is bytes end-to-end: the spec

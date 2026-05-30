@@ -17,12 +17,6 @@
  */
 
 import {
-  aesAddRoundKeyProvenance,
-  aesMixColumnsProvenance,
-  aesShiftRowsProvenance,
-  aesSubBytesProvenance,
-} from "./aes";
-import {
   desExpandRProvenance,
   desFinalPermutationProvenance,
   desInitialPermutationProvenance,
@@ -42,10 +36,11 @@ let initialized = false;
  */
 export const initProvenanceRegistry = (): void => {
   if (initialized) return;
-  registerProvenance("generic.byte-substitution@1", aesSubBytesProvenance);
-  registerProvenance("generic.shift-rows@1", aesShiftRowsProvenance);
-  registerProvenance("generic.mix-columns@1", aesMixColumnsProvenance);
-  registerProvenance("generic.add-round-key@1", aesAddRoundKeyProvenance);
+  // The matrix AES provenance fns (byte-substitution / shift-rows /
+  // mix-columns / add-round-key) were retired in Phase 5 Slice 5.1
+  // (2026-05-30) with their step types + the MatrixState shape. The shipped
+  // port-native AES primitives surface provenance through the port-aware
+  // (Slice 2.9) path, not this cell-level registry.
   registerProvenance("serpent.add-round-key@1", serpentAddRoundKeyProvenance);
   registerProvenance("serpent.sub-bytes@1", serpentSubBytesProvenance);
   // Phase 4 of `docs/plans/des-feistel.md` — six DES step types. Output

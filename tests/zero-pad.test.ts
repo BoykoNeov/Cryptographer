@@ -64,10 +64,11 @@ describe("zero-pad", () => {
     expect(() => zeroPad(bytes(), { blockSize: 1.5 }, ctx)).toThrow(/blockSize/);
   });
 
-  it("rejects non-bytes state", () => {
-    const matrixState = { shape: "matrix4x4-bytes" as const, bytes: new Uint8Array(16) };
-    expect(() => zeroPad(matrixState, { blockSize: 16 }, ctx)).toThrow(/bytes state/);
-  });
+  // The "rejects non-bytes state" guard test was retired in Phase 5
+  // Slice 5.1 (2026-05-30) with the MatrixState shape — `bytes` is the only
+  // State shape now, so a non-bytes input can't be constructed to exercise
+  // the guard (and the guard itself disappears when padding lifts to a true
+  // PortedExecutor in Slice 5.2).
 });
 
 describe("zero-unpad", () => {

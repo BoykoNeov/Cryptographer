@@ -1,28 +1,12 @@
-import type { MatrixState } from "../types";
-
-/**
- * AES state is a 4×4 byte matrix in column-major order: byte at row r, col c
- * lives at index r + 4*c. FIPS-197 §3.4.
- */
-
-export const matrixFromBytes = (bytes: Uint8Array): MatrixState => {
-  if (bytes.length !== 16) throw new Error("matrix4x4 needs 16 bytes");
-  return { shape: "matrix4x4-bytes", bytes: new Uint8Array(bytes) };
-};
-
-export const cloneMatrix = (m: MatrixState): MatrixState => ({
-  shape: "matrix4x4-bytes",
-  bytes: new Uint8Array(m.bytes),
-});
-
-export const matAt = (m: MatrixState, row: number, col: number): number =>
-  m.bytes[row + 4 * col] ?? 0;
-
-export const setMatAt = (buf: Uint8Array, row: number, col: number, value: number): void => {
-  buf[row + 4 * col] = value & 0xff;
-};
-
-// ─── GF(2^8) arithmetic over the AES polynomial x^8 + x^4 + x^3 + x + 1 ───
+// GF(2^8) arithmetic over the AES polynomial x^8 + x^4 + x^3 + x + 1.
+//
+// Phase 5 Slice 5.1 (2026-05-30) retired the `MatrixState`-typed helpers
+// (`matrixFromBytes` / `cloneMatrix` / `matAt` / `setMatAt`) along with the
+// `matrix4x4-bytes` State shape and the test-only matrix AES round
+// primitives. The GF field math below is shape-agnostic and still used by
+// the shipped port-native `gf-matrix-multiply@1` MixColumns primitive, so it
+// stays. (FIPS-197 §3.4's column-major byte layout — `state[r + 4*c]` — now
+// lives only as the advisory `PortLayout "matrix-cm-4x4"` rendering tag.)
 
 /** GF(2^8) multiply by 2 (xtime). FIPS-197 §4.2.1. */
 export const xtime = (b: number): number => {

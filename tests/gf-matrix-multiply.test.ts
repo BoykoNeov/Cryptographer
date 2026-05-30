@@ -17,9 +17,8 @@
 import { AES_INV_MIX_MATRIX, AES_MIX_MATRIX } from "@/ciphers/aes-constants";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
-import type { BytesState, CipherSpec, Json, MatrixState, StepContext } from "@/core/types";
+import type { BytesState, CipherSpec, Json, StepContext } from "@/core/types";
 import { gfMatrixMultiply, gfMatrixMultiplyPortContract } from "@/steps/gf-matrix-multiply";
-import { mixColumns } from "@/steps/mix-columns";
 import { describe, expect, it } from "vitest";
 
 const mat = (m: readonly (readonly number[])[]): number[][] => m.map((row) => [...row]);
@@ -55,23 +54,11 @@ describe("gf-matrix-multiply@1 — executor (direct invocation)", () => {
     expect(callGf([0xaa, 0xbb, 0xcc, 0xdd], identity)).toEqual([0xaa, 0xbb, 0xcc, 0xdd]);
   });
 
-  it("byte-equal parity with the legacy mixColumns executor (16-byte AES block)", () => {
-    // The legacy executor is matrix-shaped + already KAT-tested; use it as
-    // an in-repo oracle. A fixed pseudo-random 16-byte block exercises all
-    // four columns.
-    const block = Array.from({ length: 16 }, (_, i) => (i * 53 + 7) & 0xff);
-    const legacy: MatrixState = { shape: "matrix4x4-bytes", bytes: new Uint8Array(block) };
-    const legacyOut = Array.from(
-      (
-        mixColumns(legacy, { matrix: mat(AES_MIX_MATRIX) } as unknown as Json, {
-          stepId: "t",
-          path: [],
-          aux: new Map(),
-        }).state as MatrixState
-      ).bytes,
-    );
-    expect(callGf(block, AES_MIX_MATRIX)).toEqual(legacyOut);
-  });
+  // The "byte-equal parity with the legacy mixColumns executor" oracle test
+  // was retired in Phase 5 Slice 5.1 (2026-05-30) when the matrix
+  // `generic.mix-columns@1` step was deleted. `gf-matrix-multiply@1` stays
+  // validated by the known-vector tests above (the FIPS-197 MixColumns
+  // column [0xdb,0x13,0x53,0x45] and the identity-matrix passthrough).
 
   it("processes multiple 4-byte columns independently (8 bytes = 2 columns)", () => {
     const col = callGf([0xdb, 0x13, 0x53, 0x45], AES_MIX_MATRIX);

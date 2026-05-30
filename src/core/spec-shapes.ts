@@ -58,8 +58,10 @@ import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "./types";
 export type ShapeAtAnchor = ReadonlyMap<string, StateShape>;
 
 /** The shape the runtime always installs at the start of each iterate
- *  body iteration (per `runtime.ts:81`). Same shape on iterate exit. */
-const ITERATE_BODY_SHAPE: StateShape = "matrix4x4-bytes";
+ *  body iteration. Post-Slice-5.1 the only State shape is `bytes` (the
+ *  byte-native port-mode iterate; the aux-mode matrix iterate retired with
+ *  the MatrixState shape). Same shape on iterate exit. */
+const ITERATE_BODY_SHAPE: StateShape = "bytes";
 
 type WalkContext = {
   readonly registry: StepRegistry;

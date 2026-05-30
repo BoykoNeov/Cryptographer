@@ -9,8 +9,7 @@
 
 import { StepRegistry } from "@/core/registry";
 import { runSpec } from "@/core/runtime";
-import { matrixFromBytes } from "@/core/state/matrix";
-import type { AuxValue, BytesState, CipherSpec, MatrixState, StepDefinition } from "@/core/types";
+import type { AuxValue, BytesState, CipherSpec, StepDefinition } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 // Tiny "passthrough then write a marker to aux" step. Lets us tell each
@@ -22,14 +21,14 @@ const markerStep: StepDefinition = {
   },
 };
 
-// Identity-ish step that increments a byte in a 16-byte matrix so each
+// Identity-ish step that increments byte 0 of a 16-byte block so each
 // iteration produces a distinct output.
 const incrementByte0: StepDefinition = {
   executor: (state) => {
-    if (state.shape !== "matrix4x4-bytes") throw new Error("expects matrix");
+    if (state.shape !== "bytes") throw new Error("expects bytes");
     const out = new Uint8Array(state.bytes);
     out[0] = ((out[0] ?? 0) + 1) & 0xff;
-    const result: MatrixState = { shape: "matrix4x4-bytes", bytes: out };
+    const result: BytesState = { shape: "bytes", bytes: out };
     return { state: result };
   },
 };
@@ -41,12 +40,12 @@ const buildRegistry = (): StepRegistry => {
   return r;
 };
 
-const makeBlocks = (count: number): MatrixState[] => {
-  const blocks: MatrixState[] = [];
+const makeBlocks = (count: number): BytesState[] => {
+  const blocks: BytesState[] = [];
   for (let i = 0; i < count; i++) {
     const bytes = new Uint8Array(16);
     bytes[0] = i; // distinguishable per-block
-    blocks.push(matrixFromBytes(bytes));
+    blocks.push({ shape: "bytes", bytes });
   }
   return blocks;
 };
@@ -118,7 +117,7 @@ describe("runtime — iterate node", () => {
 
     const out = trace.finalAux.get("out-blocks");
     expect(Array.isArray(out)).toBe(true);
-    const arr = out as readonly MatrixState[];
+    const arr = out as readonly BytesState[];
     expect(arr.length).toBe(3);
     // Each block had byte0 = i; increment adds 1; expect byte0 = i+1.
     expect(arr[0]?.bytes[0]).toBe(1);
@@ -153,7 +152,7 @@ describe("runtime — iterate node", () => {
     expect(trace.frames.length).toBe(0);
     const out = trace.finalAux.get("out-blocks");
     expect(Array.isArray(out)).toBe(true);
-    expect((out as readonly MatrixState[]).length).toBe(0);
+    expect((out as readonly BytesState[]).length).toBe(0);
   });
 
   it("throws if aux[countFromAux] is missing or not a number", () => {

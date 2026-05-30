@@ -86,12 +86,11 @@ describe("provenance-registry coverage contract", () => {
     expect(uncovered).toEqual([]);
   });
 
-  it("registers fns for the four AES round operations", () => {
-    expect(hasProvenanceFn("generic.byte-substitution@1")).toBe(true);
-    expect(hasProvenanceFn("generic.shift-rows@1")).toBe(true);
-    expect(hasProvenanceFn("generic.mix-columns@1")).toBe(true);
-    expect(hasProvenanceFn("generic.add-round-key@1")).toBe(true);
-  });
+  // The four matrix AES round-operation provenance fns (byte-substitution /
+  // shift-rows / mix-columns / add-round-key) were retired in Phase 5
+  // Slice 5.1 (2026-05-30) with their step types + the MatrixState shape.
+  // The shipped port-native AES surfaces provenance through the Slice 2.9
+  // port-aware path, not this cell-level registry.
 
   it("registers fns for the Serpent byte-level steps (AddRoundKey, SubBytes)", () => {
     expect(hasProvenanceFn("serpent.add-round-key@1")).toBe(true);

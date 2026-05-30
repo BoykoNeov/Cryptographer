@@ -9,7 +9,7 @@
  * neighbor is rendered as a placeholder.
  */
 
-import type { MatrixState, TraceFrame } from "@/core/types";
+import type { TraceFrame } from "@/core/types";
 import { Show, createMemo } from "solid-js";
 import { findPreviousRunFrameByStepId, useHistory, useShowPreviousRun } from "../stores/history";
 import { getTrace, setFrame, useFrameIndex, useTraceVersion } from "../stores/trace";
@@ -58,21 +58,26 @@ export const StepStrip = () => {
 };
 
 /**
- * Resolve the previous-run after-state for a given frame, honoring the
+ * Resolve the previous-run after-bytes for a given frame, honoring the
  * "compare to previous run" toggle. Pulls from the history store; returns
- * null when the toggle is off or there's no prior run. Shared by every
- * thumbnail in the strip so the per-step comparison is consistent.
+ * null when the toggle is off, there's no prior run, or the prior state
+ * isn't a 16-byte block. Shared by every thumbnail in the strip so the
+ * per-step comparison is consistent.
+ *
+ * Post-Slice-5.1 (MatrixState retired) the 4×4 thumbnail renders any
+ * 16-byte state (AES, Serpent) as a column-major grid; the length-16 gate
+ * stands in for the old `shape === "matrix4x4-bytes"` discriminant.
  */
-const usePreviousMatrixFor = (frame: () => TraceFrame | null) => {
+const usePreviousBytesFor = (frame: () => TraceFrame | null) => {
   const history = useHistory();
   const showPrev = useShowPreviousRun();
-  return createMemo<MatrixState | null>(() => {
+  return createMemo<Uint8Array | null>(() => {
     if (!showPrev()) return null;
     const f = frame();
     if (!f) return null;
     const prev = findPreviousRunFrameByStepId(history(), f.stepId);
-    if (!prev || prev.stateAfter.shape !== "matrix4x4-bytes") return null;
-    return prev.stateAfter as MatrixState;
+    if (!prev || prev.stateAfter.bytes.length !== 16) return null;
+    return prev.stateAfter.bytes;
   });
 };
 
@@ -86,17 +91,17 @@ type ThumbnailProps = {
 };
 
 const Thumbnail = (props: ThumbnailProps) => {
-  // Only render the matrix view when we actually have a matrix state.
-  // The other state shape (bytes) falls through to a placeholder.
-  const matrixState = (): MatrixState | null => {
+  // Render the 4×4 grid only for 16-byte block states (AES, Serpent);
+  // other widths (DES 8, SHA 32, Speck 4) fall through to a placeholder.
+  const gridBytes = (): Uint8Array | null => {
     const f = props.frame;
-    if (!f || f.stateAfter.shape !== "matrix4x4-bytes") return null;
-    return f.stateAfter as MatrixState;
+    if (!f || f.stateAfter.bytes.length !== 16) return null;
+    return f.stateAfter.bytes;
   };
 
   // Phase 2b — per-thumbnail previous-run comparison. Reads the same toggle
-  // the main MatrixView uses so the strip stays in sync.
-  const previousMatrix = usePreviousMatrixFor(() => props.frame);
+  // the inspector uses so the strip stays in sync.
+  const previousBytes = usePreviousBytesFor(() => props.frame);
 
   // The visible label for the step. We trim path noise — usually the
   // last segment of the path plus the step name conveys plenty.
@@ -147,8 +152,8 @@ const Thumbnail = (props: ThumbnailProps) => {
           <>
             <div class="step-thumb-label">{label()}</div>
             <div class="step-thumb-type">{frame().stepType}</div>
-            <Show when={matrixState()} fallback={<div class="muted small">(non-matrix state)</div>}>
-              {(state) => <TinyMatrix state={state()} previousState={previousMatrix()} />}
+            <Show when={gridBytes()} fallback={<div class="muted small">(no 4×4 view)</div>}>
+              {(bytes) => <TinyMatrix bytes={bytes()} previousBytes={previousBytes()} />}
             </Show>
           </>
         )}

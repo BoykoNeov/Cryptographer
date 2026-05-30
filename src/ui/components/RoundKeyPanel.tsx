@@ -373,15 +373,11 @@ const RoundKeyCell = (props: {
         </div>
       }
     >
-      {/* Wrap the raw 16-byte buffer as a MatrixState for TinyMatrix.
-          Cheap synthesis — no copy, just a discriminant + the same buffer
-          aliased under the `bytes` field. TinyMatrix's `provenanceHighlights`
-          is typed `ReadonlySet<number> | undefined` so we can pass the
+      {/* Render the raw 16-byte round-key buffer as a 4×4 grid. TinyMatrix
+          takes bytes directly (post-Slice-5.1); `provenanceHighlights` is
+          typed `ReadonlySet<number> | undefined` so we can pass the
           map-lookup result through directly without a conditional wrapper. */}
-      <TinyMatrix
-        state={{ shape: "matrix4x4-bytes", bytes: props.entry.bytes }}
-        provenanceHighlights={props.provenanceHighlights}
-      />
+      <TinyMatrix bytes={props.entry.bytes} provenanceHighlights={props.provenanceHighlights} />
     </Show>
   </div>
 );

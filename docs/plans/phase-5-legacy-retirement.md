@@ -52,8 +52,8 @@ user-required follow-up to B4). Advisor-confirmed.
 | Slice | What | Status |
 |---|---|---|
 | **5.0** | Underbrush: delete `BitVecState`/`BigIntState` + the dead `REPLICATION_THRESHOLD` alias + refresh stale `CLAUDE.md` stats. Zero crypto risk. | **DONE 2026-05-30** |
-| 5.1 | Retire `MatrixState` (Phase C1-matrix): drain the test-only `generic.*` matrix primitives + the `sha2.*` monolithic steps, retarget/delete their MatrixView/projection tests (`provenance-hover-integration`, `port-projection-q-gate-9`, `aux-graph-derivation`, the matrix-aes fixtures), drive the 4×4 render off an advisory layout tag, then delete the type. No crypto risk; broad UI surface. | Sequenced |
-| 5.2 | Convert the 4 lifted key-schedules (`aes.key-expansion@1/@2`, `speck.key-schedule@1`, `serpent.key-expansion@1`, `des.key-schedule@1`) + the padding/aux/boundary/iv primitives to true `PortedExecutor`s; drop the `legacy:` fields + `liftLegacyExecutor`. **Crypto KAT gates; own advisor pass** per `feedback_iterative_slice_review`. | Sequenced |
+| **5.1** | Retire `MatrixState` (Phase C1-matrix): drain the test-only `generic.*` matrix primitives + the `sha2.*` monolithic steps, retarget/delete their MatrixView/projection tests, drive the 4×4 render off raw bytes, then delete the type. No crypto risk; broad UI surface. | **DONE 2026-05-30** |
+| 5.2 | Convert the lifted key-schedules (`aes.key-expansion@1/@2`, `speck.key-schedule@1`, `serpent.key-expansion@1`, `des.key-schedule@1`) + the padding/aux primitives to true `PortedExecutor`s; drop their `legacy:` fields. **`liftLegacyExecutor` SURVIVES** as a bytes-only helper for `feistel.toy-add-k@1` (the reserved-through-Phase-5 toy — advisor verdict 2026-05-30: converting it would drop `legacy:` and flip the toy onto the PortFlowView capture path, doing the deferred Feistel-viz rebuild piecemeal). **Crypto KAT gates; own advisor pass** per `feedback_iterative_slice_review`. | Sequenced |
 | 5.3 | Phase C2: retire `TraceFrame.stateBefore`/`stateAfter` + `inferStateEdges` + `dropAuxOnlyStateEdges`; collapse the residual `BytesState`; `PortFlowView` becomes the universal inspector default. | Sequenced |
 | — | Feistel types + toy fixture: reserved for the **next phase** (port-native Feistel/swap viz rebuild). | Deferred |
 
@@ -93,6 +93,48 @@ load-bearing distinction: the standalone **`bigint` in `AuxValue`**
 **Gate:** `npm run check` GREEN — biome clean, tsc passed, **2546 tests /
 219 files** all passing, build OK. (Pre-commit hook is OFF in this env per
 `feedback_precommit_hook_not_installed`; ran manually.)
+
+## Slice 5.1 — what shipped (2026-05-30)
+
+Retired `MatrixState` + the `matrix4x4-bytes` `StateShape`. `State` is now
+`BytesState` only; `StateShape` is `"bytes"`.
+
+- **Deleted 15 test-only step files** (registry imports + registrations
+  removed): the 4 matrix AES round prims (`generic.byte-substitution@1` /
+  `shift-rows@1` / `mix-columns@1` / `add-round-key@1`), the matrix multi-block
+  boundary prims (`split-blocks@1` / `concat-blocks@1` / `compute-block-count@1`
+  / `load-block@1` / `store-block@1`), the matrix chaining prims (`iv-load@1` /
+  `xor-aux-into-state@1` / `state-to-aux@1` + `state-to-aux-bytes@1`), and the
+  3 `sha2.*` monolithic helpers. **`compute-block-count`/`load`/`store-block`
+  were the last `kind: "legacy"` registrations — no legacy-contract step
+  remains.**
+- **Render layer:** `MatrixView.tsx` deleted (it was only the legacy-matrix
+  fallback; shipped port-native frames already route to `PortFlowView`).
+  `TinyMatrix` props narrowed from `MatrixState` to raw `Uint8Array` (the live
+  consumer is `RoundKeyPanel`, rendering round keys 4×4); `StepStrip` /
+  `RunExplorerModal` gate the 4×4 thumbnail on a 16-byte state. `App.tsx`
+  `FrameStateView` collapsed to `PortFlowView | BytesView` (`MixedShapeView` +
+  the matrix branch deleted).
+- **Core:** `port-projection.ts` lost the `matrix4x4-bytes` encode/decode arms
+  (`bytesToState`/`stateToBytes`/`auxPortBytesToValue` `matrix-cm-4x4` +
+  `matrix-cm-4x4-array`); `clone.ts` collapsed to `cloneBytes`; `matrix.ts`
+  trimmed to `gfMul`/`xtime` (still used by the **shipped** port-native
+  `gf-matrix-multiply@1`). The advisory `PortLayout "matrix-cm-4x4"` rendering
+  tag SURVIVES — it's distinct from the deleted State variant.
+- **Narration/provenance:** deleted `narration/aes.tsx` + `narration/boundary.tsx`
+  + `provenance/aes.ts` (all keyed only to deleted step types); trimmed
+  `narration/aux-primitives.tsx` to the 3 surviving byte-typed aux narrators;
+  removed the 3 `sha2.*` entries from `NARRATION_NO_OP_ALLOWLIST` (8 entries now).
+- **Tests:** deleted ~14 test files whose subject was a deleted step/view
+  (chaining-primitives, load-store-block, state-to-aux-bytes, the 3 sha2-*,
+  runtime-ported-dispatch-chaining, narration-aes/boundary, matrix-array-roundtrip,
+  provenance-hover-integration, matrix-view, sha-256-decomposition-parity, the
+  2 matrix-aes fixtures); retargeted the rest by the advisor's rule — **delete
+  matrix `it`s, keep byte-native `it`s** (aux-graph-derivation, edge-value-lookup,
+  q-gate-9, the drop/greying suites retargeted to `byte-substitute@1` /
+  `feistel.toy-add-k@1` / synthetic byte specs).
+- **Gate:** `npm run check` GREEN — **2348 tests / 205 files**, build 656.71 KB
+  raw / 192.95 KB gzipped (down ~20 KB).
 
 ## Verification (for 5.1+)
 

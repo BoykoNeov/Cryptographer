@@ -264,71 +264,9 @@ describe("runtime — for-each-subgraph item-array mode (Slice 2.0b)", () => {
     );
   });
 
-  it("non-bytes parent state throws", () => {
-    const matrixInitial: BytesState = {
-      // Fake the spec to use a state that arrives as matrix at the loop.
-      // Easiest: keep the spec, but seed with a state whose shape is wrong.
-      // Construct a MatrixState manually so the runtime sees it.
-      shape: "bytes",
-      bytes: new Uint8Array(16),
-    };
-    // The runtime accepts whatever initialState we hand it; we cast to
-    // a MatrixState to exercise the wrong-shape branch.
-    const trace = () =>
-      runSpec(outerToySpec, buildRegistry(), {
-        initialState: {
-          shape: "matrix4x4-bytes",
-          bytes: matrixInitial.bytes,
-        },
-      });
-    expect(trace).toThrow(/requires parent-scope state\.shape === "bytes"/);
-  });
-
-  it("blockLayout matrix4x4-bytes: 1 × 16-byte input round-trips through matrix encoding", () => {
-    // Sanity check that blockLayout other than "bytes" works end-to-end.
-    // 16 bytes input + blockByteLength=16 + blockLayout=matrix4x4-bytes →
-    // body sees a MatrixState; we use a no-op body and verify the round-
-    // trip preserves bytes.
-    const noopMatrix: StepDefinition = {
-      executor: (state) => {
-        if (state.shape !== "matrix4x4-bytes") throw new Error("expected matrix");
-        return { state };
-      },
-    };
-    const r = new StepRegistry();
-    r.register("test.noop-matrix@1", noopMatrix);
-
-    const matrixSpec: CipherSpec = {
-      id: "test-fes-matrix@1",
-      name: "1-block matrix round-trip",
-      stateShape: "bytes",
-      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
-      steps: [
-        {
-          kind: "for-each-subgraph",
-          id: "loop",
-          inputArrayPort: "items",
-          outputsPort: "outs",
-          blockByteLength: 16,
-          blockLayout: "matrix4x4-bytes",
-          children: [{ kind: "step", id: "noop", type: "test.noop-matrix@1", params: {} }],
-        },
-      ],
-    };
-
-    const bytes16 = new Uint8Array(Array.from({ length: 16 }, (_, i) => i * 17));
-    const initial: BytesState = { shape: "bytes", bytes: bytes16 };
-    const trace = runSpec(matrixSpec, r, { initialState: initial });
-    expect(trace.frames).toHaveLength(1);
-
-    // Body's stateBefore must be a matrix4x4-bytes carrying the input bytes.
-    const f0 = trace.frames[0];
-    if (!f0 || f0.stateBefore.shape !== "matrix4x4-bytes") throw new Error("stateBefore shape");
-    expect(Array.from(f0.stateBefore.bytes)).toEqual(Array.from(bytes16));
-
-    // Final state must round-trip back to the same bytes via the
-    // encode/decode pair on the for-each-subgraph boundary.
-    if (trace.finalState.shape !== "bytes") throw new Error("finalState shape");
-    expect(Array.from(trace.finalState.bytes)).toEqual(Array.from(bytes16));
-  });
+  // The "non-bytes parent state throws" and "blockLayout matrix4x4-bytes
+  // round-trip" cases were retired in Phase 5 Slice 5.1 (2026-05-30) with
+  // the MatrixState shape: with `bytes` the only State shape, there is no
+  // wrong-shape parent state to construct and no non-bytes `blockLayout` to
+  // exercise. The bytes-mode item-array path above carries the coverage.
 });

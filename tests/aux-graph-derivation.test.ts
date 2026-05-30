@@ -34,10 +34,8 @@ import { runSpec } from "@/core/runtime";
 import { removeStep } from "@/core/spec-mutations";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import { INPUT_SOURCE_ID } from "@/core/types";
-import type { AuxValue, Trace } from "@/core/types";
+import type { AuxValue, CipherSpec, Trace } from "@/core/types";
 import { describe, expect, it } from "vitest";
-import { matrixAes192Spec } from "./fixtures/matrix-aes-192";
-import { matrixAesEcbSpec } from "./fixtures/matrix-aes-ecb";
 
 // ─── Shared test fixtures ──────────────────────────────────────────────────
 
@@ -57,21 +55,6 @@ const runAes128 = (): Trace =>
     initialState: makeBytesState(bytesFromHex(AES128_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
     portedDispatchEnabled: true,
-  });
-
-// 4-block plaintext (NIST SP 800-38A §F.1.1) → 4 ECB iterations.
-const ECB_PLAINTEXT_4_BLOCKS =
-  "6bc1bee22e409f96e93d7e117393172a" +
-  "ae2d8a571e03ac9c9eb76fac45af8e51" +
-  "30c81c46a35ce411e5fbc1191a0a52ef" +
-  "f69f2445df4f9b17ad2b417be66c3710";
-
-const runAes128Ecb = (): Trace =>
-  runSpec(matrixAesEcbSpec, buildDefaultRegistry(), {
-    initialState: makeBytesState(bytesFromHex(ECB_PLAINTEXT_4_BLOCKS)),
-    initialAux: new Map<string, AuxValue>([
-      ["key", bytesFromHex("2b7e151628aed2a6abf7158809cf4f3c")],
-    ]),
   });
 
 const runSpeck = (): Trace =>
@@ -225,83 +208,13 @@ describe("deriveAuxGraph — AES-128 (single block, no iterate)", () => {
   });
 });
 
-// ─── AES-128-ECB (iterate) ─────────────────────────────────────────────────
-
-describe("deriveAuxGraph — AES-128-ECB (multi-block iterate)", () => {
-  it("collapses :b{i} suffixes — leaf count matches spec, not trace", () => {
-    const trace = runAes128Ecb();
-    const g = deriveAuxGraph(trace, matrixAesEcbSpec);
-
-    // Spec leaves: key-expansion + split-blocks + compute-block-count +
-    //   concat-blocks + (initial.add-round-key + 9 × 4 + 1 × 3 inside iterate)
-    //   = 4 + 40 = 44.
-    // Trace, by contrast, has 164 frames — the :b{i} suffix multiplies each
-    // iterate-body leaf by 4. Confirm the graph collapses.
-    expect(g.nodes.length).toBe(44);
-    // Sanity: trace really has 164 frames, so the collapse is non-trivial.
-    expect(trace.frames.length).toBe(164);
-  });
-
-  it("includes one iterate container plus the 10 round groups inside it", () => {
-    const g = deriveAuxGraph(runAes128Ecb(), matrixAesEcbSpec);
-    // 1 iterate container + 10 round groups (groups are also inside the iterate).
-    expect(g.containers.length).toBe(11);
-    const iterate = g.containers.find((c) => c.kind === "iterate");
-    expect(iterate?.id).toBe("ecb-blocks");
-    const groups = g.containers.filter((c) => c.kind === "group");
-    expect(groups.length).toBe(10);
-    // Every group sits inside the iterate.
-    for (const grp of groups) {
-      expect(grp.containerPath).toEqual(["ecb-blocks"]);
-    }
-  });
-
-  it("synthesizes split-blocks → iterate → concat-blocks edges across the boundary", () => {
-    const g = deriveAuxGraph(runAes128Ecb(), matrixAesEcbSpec);
-
-    // Iterate consumes input-blocks (written by split-blocks) and blockCount
-    // (written by compute-block-count). Both must show up as edges to
-    // `ecb-blocks` even though no FRAME records the read.
-    const inputEdge = g.edges.find((e) => e.to === "ecb-blocks" && e.auxKey === "input-blocks");
-    expect(inputEdge?.from).toBe("split-blocks");
-
-    const countEdge = g.edges.find((e) => e.to === "ecb-blocks" && e.auxKey === "blockCount");
-    expect(countEdge?.from).toBe("compute-block-count");
-
-    // The iterate produces output-blocks (written by the runtime, not by a
-    // frame). concat-blocks reads it.
-    const outputEdge = g.edges.find((e) => e.from === "ecb-blocks" && e.auxKey === "output-blocks");
-    expect(outputEdge?.to).toBe("concat-blocks");
-  });
-
-  it("dedups iteration replicas — key-expansion → round.N.add-round-key shows ONE edge per N", () => {
-    const g = deriveAuxGraph(runAes128Ecb(), matrixAesEcbSpec);
-    // Filter to aux edges — key-expansion also carries a `kind: "state"`
-    // spine edge to the next DFS-consecutive leaf (split-blocks at top
-    // scope in ECB), which isn't what this dedup test pins.
-    const keyExpEdges = g.edges.filter((e) => e.kind === "aux" && e.from === "key-expansion");
-    // Each round's add-round-key consumes one roundKey.N regardless of which
-    // block. After collapsing :b0..:b3 there must be exactly 11 fan-out
-    // edges from key-expansion, the same as single-block AES-128.
-    expect(keyExpEdges.length).toBe(11);
-    // And every (from,to,auxKey) triple is unique — paranoia against dedup
-    // regressions when iteration replicas multiplied.
-    const triples = new Set(keyExpEdges.map((e) => `${e.from}|${e.to}|${e.auxKey}`));
-    expect(triples.size).toBe(11);
-  });
-
-  it("annotates blockSpan = 4 on the iterate container and on every leaf inside it", () => {
-    const g = deriveAuxGraph(runAes128Ecb(), matrixAesEcbSpec);
-    const iterate = g.containers.find((c) => c.id === "ecb-blocks");
-    expect(iterate?.blockSpan).toBe(4);
-    // A leaf inside the iterate: round.1.sub-bytes.
-    const insideNode = g.nodes.find((n) => n.stepId === "round.1.sub-bytes");
-    expect(insideNode?.blockSpan).toBe(4);
-    // A leaf outside the iterate: split-blocks. No blockSpan.
-    const outsideNode = g.nodes.find((n) => n.stepId === "split-blocks");
-    expect(outsideNode?.blockSpan).toBeUndefined();
-  });
-});
+// The "AES-128-ECB (multi-block iterate)" describe block tested the matrix
+// aux-mode iterate graph (:b{i} collapse, split→iterate→concat aux-edge
+// synthesis, blockSpan, replica dedup) against the matrix ECB fixture. It
+// was retired in Phase 5 Slice 5.1 (2026-05-30) with the MatrixState shape +
+// the split/concat/compute-block-count boundary steps — the shipped ECB spec
+// runs the byte-native port-mode iterate now. The byte-native single-block /
+// Speck / Serpent graph derivations below carry the surviving coverage.
 
 // ─── Speck32/64 (flat, no containers, ARX) ────────────────────────────────
 
@@ -359,9 +272,11 @@ describe("deriveAuxGraph — Serpent-128 (SP-network, 32 round groups)", () => {
 
 describe("deriveAuxGraph — edge deduplication", () => {
   it("collapses identical (from, to, auxKey) triples to a single edge", () => {
-    // The natural case: 4-block ECB produces 4 copies of every iterate-body
-    // edge before dedup. The graph must keep exactly one.
-    const g = deriveAuxGraph(runAes128Ecb(), matrixAesEcbSpec);
+    // Structural guard: deriveAuxGraph must never emit two edges with the
+    // same (from, to, auxKey) triple. (The original 4-block matrix ECB
+    // multi-replica case retired with the MatrixState shape in Slice 5.1;
+    // single-block AES still exercises the dedup path across its fan-out.)
+    const g = deriveAuxGraph(runAes128(), aes128Spec);
     const seen = new Set<string>();
     for (const e of g.edges) {
       const k = `${e.from}|${e.to}|${e.auxKey}`;
@@ -371,37 +286,11 @@ describe("deriveAuxGraph — edge deduplication", () => {
   });
 });
 
-// ─── Trace-less derivation (pre-run state) ────────────────────────────────
-
-describe("deriveAuxGraph — empty trace", () => {
-  it("returns spec-derived spine but no aux edges or blockSpan annotations", () => {
-    const g = deriveAuxGraph(emptyTrace(), matrixAesEcbSpec);
-    // Spec walk is independent of trace: still 44 nodes + 11 containers.
-    expect(g.nodes.length).toBe(44);
-    expect(g.containers.length).toBe(11);
-    // No frames → no aux edges and no blockSpan annotations.
-    const auxEdges = g.edges.filter((e) => e.kind === "aux");
-    expect(auxEdges.length).toBe(0);
-    for (const node of g.nodes) expect(node.blockSpan).toBeUndefined();
-    for (const c of g.containers) expect(c.blockSpan).toBeUndefined();
-    // Spec-derived state spine appears regardless of trace state — the
-    // headline pedagogical benefit of commit 2 is that the spine is visible
-    // BEFORE the first run, so the user sees what the cipher "does" up front.
-    // AES-128-ECB spine count after the 2026-05-17 iterate-boundary fix:
-    //   - top-scope: 5 chain participants (key-expansion, split-blocks,
-    //     compute-block-count, ecb-blocks (the iterate), concat-blocks).
-    //     Only the two pre-iterate pairs emit state edges; the iterate's
-    //     incoming + outgoing spine edges are SUPPRESSED because the
-    //     runtime is aux-mediated (state at iter entry is overwritten
-    //     from aux, state at iter exit is published into aux — the spine
-    //     value never crosses the boundary). → 2 state edges.
-    //   - iterate body (initial AK + 9 full rounds + 1 final round = 40 leaves)
-    //     → 39 state edges (separate scope, recursed into the body).
-    //   - total: 2 + 39 = 41 state edges.
-    const stateEdges = g.edges.filter((e) => e.kind === "state");
-    expect(stateEdges.length).toBe(41);
-  });
-});
+// The matrix-ECB "empty trace" describe (spec-derived spine without a trace,
+// pinning matrix-ECB-specific node/container/state-edge counts) was retired
+// in Phase 5 Slice 5.1 (2026-05-30) with the matrix ECB fixture. The
+// trace-less spine-derivation behavior is covered by the state-edge-inference
+// block below and by `graph-port-edge-derivation.test.ts`.
 
 // ─── State-edge inference (round-to-round spine, commit 2) ────────────────
 
@@ -420,61 +309,13 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
   // below (98 edges across 32 round groups). Re-pin on AES if/when a port-flow
   // spine assertion is wanted (Phase C, once inferStateEdges retires).
 
-  it("AES-128-ECB: the iterate TERMINATES the parent spine on both sides (no prev→iter, no iter→next, no bridging prev→next)", () => {
-    // Headline pedagogical fix (2026-05-17): an aux-mediated iterate
-    // doesn't carry the spine value across its boundary. The runtime
-    // overwrites `state` from aux[blocksFromAux] at iteration entry and
-    // publishes per-iteration output into aux[outBlocksAux] at exit, so
-    // the predecessor's stateAfter never reaches body steps and the
-    // body's stateAfter never reaches the successor. Drawing white
-    // arrows there misled users (the previously-rendered `compute-
-    // block-count → ecb-blocks` state edge resolved to the plaintext
-    // bytes — confusing pedagogically). Suppressed.
-    const g = deriveAuxGraph(runAes128Ecb(), matrixAesEcbSpec);
-    const stateEdges = g.edges.filter((e) => e.kind === "state");
-
-    // Pre-iterate pairs DO emit (both endpoints are non-iterate).
-    expect(
-      stateEdges.find((e) => e.from === "key-expansion" && e.to === "split-blocks"),
-    ).toBeDefined();
-    expect(
-      stateEdges.find((e) => e.from === "split-blocks" && e.to === "compute-block-count"),
-    ).toBeDefined();
-
-    // Iterate-body scope: 40 leaves → 39 state edges. Spot-check the
-    // expected endpoints inside the body.
-    expect(
-      stateEdges.find((e) => e.from === "initial.add-round-key" && e.to === "round.1.sub-bytes"),
-    ).toBeDefined();
-    expect(
-      stateEdges.find((e) => e.from === "round.5.add-round-key" && e.to === "round.6.sub-bytes"),
-    ).toBeDefined();
-
-    // The headline invariant: NO state edge crosses the iterate
-    // boundary in either direction, and NO bridging edge skips over it.
-    expect(
-      stateEdges.find((e) => e.from === "compute-block-count" && e.to === "ecb-blocks"),
-    ).toBeUndefined();
-    expect(
-      stateEdges.find((e) => e.from === "ecb-blocks" && e.to === "concat-blocks"),
-    ).toBeUndefined();
-    expect(
-      stateEdges.find((e) => e.from === "compute-block-count" && e.to === "concat-blocks"),
-    ).toBeUndefined();
-
-    // State edges that would naively imply state passes through the
-    // iterate's INTERNAL runtime contract (state replaced by blocks[i])
-    // MUST NOT exist either.
-    expect(
-      stateEdges.find((e) => e.from === "compute-block-count" && e.to === "initial.add-round-key"),
-    ).toBeUndefined();
-    expect(
-      stateEdges.find((e) => e.from === "round.10.add-round-key" && e.to === "concat-blocks"),
-    ).toBeUndefined();
-
-    // Total: 2 (top scope, pre-iterate pairs only) + 39 (body) = 41.
-    expect(stateEdges.length).toBe(41);
-  });
+  // The "AES-128-ECB: the iterate TERMINATES the parent spine on both sides"
+  // test pinned the aux-mediated iterate boundary spine-suppression against
+  // the matrix ECB fixture (the `compute-block-count → ecb-blocks` /
+  // `ecb-blocks → concat-blocks` phantom edges). It was retired in Phase 5
+  // Slice 5.1 (2026-05-30) with the matrix ECB fixture + the aux-mode iterate
+  // boundary steps. The byte-native port-mode iterate carries its own
+  // boundary semantics (covered by the runtime + graph-port-edge tests).
 
   it("Speck32/64 (flat, no groups, no iterates): 22 state edges across 23 leaves", () => {
     const g = deriveAuxGraph(runSpeck(), speck32_64BeSpec);
@@ -575,7 +416,7 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
     // specific). This pins the no-collision invariant explicitly so a
     // future aux-write of literal "state" doesn't silently merge with
     // the spine in collapseGraph's dedup.
-    const g = deriveAuxGraph(runAes128Ecb(), matrixAesEcbSpec);
+    const g = deriveAuxGraph(runAes128(), aes128Spec);
     const auxKeysOnAuxEdges = new Set(g.edges.filter((e) => e.kind === "aux").map((e) => e.auxKey));
     expect(auxKeysOnAuxEdges.has("state")).toBe(false);
   });
@@ -720,65 +561,13 @@ describe("collapseGraph — view-time transform", () => {
     ).toBe(false);
   });
 
-  it("collapses an iterate container's state spine (AES-128-ECB → ecb-blocks)", () => {
-    // Pre-collapse: AES-128-ECB has 41 state edges (post-2026-05-17
-    // iterate-boundary fix):
-    //   - top scope: 2 pre-iterate pairs (KE → split, split → count)
-    //     ONLY — the prev→iter and iter→next edges are suppressed
-    //     because the iterate is aux-mediated (see inferStateEdges'
-    //     iterateIds doc-block).
-    //   - iterate body scope: 39 (40 leaves → 39 in one chain).
-    // Collapsing the iterate hides all 40 body leaves, so all 39 body
-    // state edges remap both endpoints to "ecb-blocks" and become
-    // self-loops → dropped. The 2 top-scope edges survive untouched.
-    // 41 − 39 = 2.
-    const g = deriveAuxGraph(runAes128Ecb(), matrixAesEcbSpec);
-    const stateBefore = g.edges.filter((e) => e.kind === "state");
-    expect(stateBefore.length).toBe(41);
-
-    const out = collapseGraph(g, new Set(["ecb-blocks"]));
-    const stateAfter = out.edges.filter((e) => e.kind === "state");
-    expect(stateAfter.length).toBe(2);
-    // The two surviving spine edges are the pre-iterate pair.
-    expect(
-      stateAfter.find((e) => e.from === "key-expansion" && e.to === "split-blocks"),
-    ).toBeDefined();
-    expect(
-      stateAfter.find((e) => e.from === "split-blocks" && e.to === "compute-block-count"),
-    ).toBeDefined();
-    // The previously-rendered phantom prev→iter and iter→next edges
-    // are absent (suppressed in derivation, never produced).
-    expect(
-      stateAfter.find((e) => e.from === "compute-block-count" && e.to === "ecb-blocks"),
-    ).toBeUndefined();
-    expect(
-      stateAfter.find((e) => e.from === "ecb-blocks" && e.to === "concat-blocks"),
-    ).toBeUndefined();
-    // No state self-loop on the iterate container.
-    for (const e of stateAfter) {
-      expect(e.from === "ecb-blocks" && e.to === "ecb-blocks").toBe(false);
-    }
-  });
-
-  it("collapses an iterate container (AES-128-ECB → ecb-blocks)", () => {
-    const trace = runAes128Ecb();
-    const g = deriveAuxGraph(trace, matrixAesEcbSpec);
-    // Pre-collapse: 44 nodes total, of which 4 are top-level (key-expansion,
-    // split-blocks, compute-block-count, concat-blocks) and 40 live inside
-    // the iterate.
-    expect(g.nodes.length).toBe(44);
-    const out = collapseGraph(g, new Set(["ecb-blocks"]));
-    // After collapse: only the 4 top-level leaves remain visible.
-    expect(out.nodes.length).toBe(4);
-    // The iterate container survives in the container list as a chip;
-    // its childIds is cleared.
-    const it = out.containers.find((c) => c.id === "ecb-blocks");
-    expect(it).toBeDefined();
-    expect(it?.childIds.length).toBe(0);
-    // Round groups (round.1..round.10) live INSIDE the iterate; they're
-    // hidden after collapse.
-    expect(out.containers.some((c) => c.id === "round.1")).toBe(false);
-  });
+  // The two "collapses an iterate container" tests (state-spine remap to
+  // self-loops; node/container hiding) ran against the matrix ECB fixture's
+  // aux-mode `ecb-blocks` iterate. They were retired in Phase 5 Slice 5.1
+  // (2026-05-30) with the matrix ECB fixture. `collapseGraph`'s container
+  // collapse is still covered by the AES-128 single-block group-collapse
+  // tests above and the synthetic-container collapse in the endpoint-pills
+  // block below.
 });
 
 // ─── Slice 1 of graph-narrative plan — synthetic endpoint pills ──────────
@@ -789,31 +578,53 @@ describe("deriveAuxGraph — synthetic endpoint pills (Slice 1)", () => {
   // sees the same shape it always did — these tests opt in and check the
   // injected pieces.
 
-  // Retargeted to the shared MATRIX AES-192 fixture (`tests/fixtures/
-  // matrix-aes-192.ts`). Every shipped single-block AES is byte-native as of
-  // Slice B1.3 and injects a `$input` port-flow source node that occupies
-  // rootIds[0], colliding with the synthetic endpoint-pill placement these
-  // tests pin. The matrix fixture (no `$input` source node) preserves the exact
-  // pill semantics — a top-level aux-only `key-expansion` root, a standalone
-  // `initial.add-round-key`, and `round.12` as the final round. The
-  // `$input`-vs-endpoint-pill interaction for byte-native specs is the real
-  // feature question deferred to the B1.4 follow-up (Slice 2.9c-e / universal
-  // inspector), tracked in the scaffolding-suppression plan.
+  // Phase 5 Slice 5.1 (2026-05-30): retargeted from the matrix AES-192/ECB
+  // fixtures (retired with the MatrixState shape) to a synthetic
+  // lifted-legacy spec. The pill-placement semantics need a spec WITHOUT a
+  // `$input` port-flow source node (byte-native AES injects one at rootIds[0],
+  // colliding with the pill — a deferred feature question per Slice 2.9c-e).
+  // This `pillSpec` wires nothing to `$input`, so no source node is injected:
+  // a leading aux-only root (`load-iv`, mirrors AES key-expansion), a real
+  // state consumer (`transform`, the input anchor), and a trailing group
+  // (`final-group`, the output anchor — collapsible like the old iterate).
+  const pillSpec: CipherSpec = {
+    id: "pill-spec@1",
+    name: "Endpoint pill fixture (no $input source)",
+    stateShape: "bytes",
+    inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+    steps: [
+      {
+        kind: "step",
+        id: "load-iv",
+        type: "generic.aux-load@1",
+        params: { auxName: "iv", value: [] },
+      },
+      { kind: "step", id: "transform", type: "feistel.toy-add-k@1", params: { k: 1 } },
+      {
+        kind: "group",
+        id: "final-group",
+        label: "Final",
+        children: [
+          { kind: "step", id: "final-group.x", type: "feistel.toy-add-k@1", params: { k: 2 } },
+        ],
+      },
+    ],
+  };
   const ENCRYPT_OPTS = {
     endpoints: {
       inputLabel: "plaintext",
       outputLabel: "ciphertext",
-      // The renderer skips aux-only leaves (key-expansion). The unit
-      // tests pass the desired anchor directly — they don't have the
-      // registry handy and the fallback to rootIds[0] would point at
-      // key-expansion, which is what Option B is designed to avoid.
-      inputAnchorId: "initial.add-round-key",
-      outputAnchorId: "round.12",
+      // The renderer skips aux-only leaves (load-iv). The unit tests pass
+      // the desired anchor directly — they don't have the registry handy
+      // and the fallback to rootIds[0] would point at load-iv, which is
+      // what Option B is designed to avoid.
+      inputAnchorId: "transform",
+      outputAnchorId: "final-group",
     },
   };
 
   it("injects two endpoint nodes when opts.endpoints is provided", () => {
-    const g = deriveAuxGraph(emptyTrace(), matrixAes192Spec, ENCRYPT_OPTS);
+    const g = deriveAuxGraph(emptyTrace(), pillSpec, ENCRYPT_OPTS);
 
     const input = g.nodes.find((n) => n.stepId === CIPHER_INPUT_ID);
     const output = g.nodes.find((n) => n.stepId === CIPHER_OUTPUT_ID);
@@ -831,19 +642,19 @@ describe("deriveAuxGraph — synthetic endpoint pills (Slice 1)", () => {
   it("omits endpoint nodes when opts is undefined (back-compat)", () => {
     // Every existing test in this file calls deriveAuxGraph with no opts.
     // This pins that contract: no opts ⇒ no pills, ever.
-    const g = deriveAuxGraph(emptyTrace(), matrixAes192Spec);
+    const g = deriveAuxGraph(emptyTrace(), pillSpec);
     expect(g.nodes.some((n) => isEndpointId(n.stepId))).toBe(false);
     expect(g.edges.some((e) => isEndpointId(e.from) || isEndpointId(e.to))).toBe(false);
   });
 
   it("prepends + appends pills to rootIds (canvas-extreme placement hook)", () => {
-    const g = deriveAuxGraph(emptyTrace(), matrixAes192Spec, ENCRYPT_OPTS);
+    const g = deriveAuxGraph(emptyTrace(), pillSpec, ENCRYPT_OPTS);
     expect(g.rootIds[0]).toBe(CIPHER_INPUT_ID);
     expect(g.rootIds[g.rootIds.length - 1]).toBe(CIPHER_OUTPUT_ID);
   });
 
   it("emits two state-kind edges connecting the pills to the anchors", () => {
-    const g = deriveAuxGraph(emptyTrace(), matrixAes192Spec, ENCRYPT_OPTS);
+    const g = deriveAuxGraph(emptyTrace(), pillSpec, ENCRYPT_OPTS);
 
     const inputEdge = g.edges.find((e) => e.from === CIPHER_INPUT_ID);
     const outputEdge = g.edges.find((e) => e.to === CIPHER_OUTPUT_ID);
@@ -851,34 +662,34 @@ describe("deriveAuxGraph — synthetic endpoint pills (Slice 1)", () => {
     expect(outputEdge).toBeDefined();
     expect(inputEdge?.kind).toBe("state");
     expect(outputEdge?.kind).toBe("state");
-    expect(inputEdge?.to).toBe("initial.add-round-key");
-    expect(outputEdge?.from).toBe("round.12");
+    expect(inputEdge?.to).toBe("transform");
+    expect(outputEdge?.from).toBe("final-group");
   });
 
   it("falls back to rootIds[0] / rootIds[last] when anchors are omitted", () => {
-    const g = deriveAuxGraph(emptyTrace(), matrixAes192Spec, {
+    const g = deriveAuxGraph(emptyTrace(), pillSpec, {
       endpoints: { inputLabel: "plaintext", outputLabel: "ciphertext" },
     });
 
     const inputEdge = g.edges.find((e) => e.from === CIPHER_INPUT_ID);
     const outputEdge = g.edges.find((e) => e.to === CIPHER_OUTPUT_ID);
     // Without anchor overrides, the function points at the spec's literal
-    // top-level extremes. For matrix AES-192 that means key-expansion at the
-    // input side and the final round (round.12) at the output side. The
-    // renderer's job is to pass smarter anchors that skip aux-only leaves.
-    expect(inputEdge?.to).toBe("key-expansion");
-    expect(outputEdge?.from).toBe("round.12");
+    // top-level extremes: the leading aux-only `load-iv` at the input side
+    // and the final group at the output side. The renderer's job is to pass
+    // smarter anchors that skip aux-only leaves.
+    expect(inputEdge?.to).toBe("load-iv");
+    expect(outputEdge?.from).toBe("final-group");
   });
 
   it("swaps labels on decrypt-style invocation", () => {
     // Decrypt mode: the caller's labels themselves swap. The function
     // doesn't introspect direction; it just renders what it's given.
-    const g = deriveAuxGraph(emptyTrace(), matrixAes192Spec, {
+    const g = deriveAuxGraph(emptyTrace(), pillSpec, {
       endpoints: {
         inputLabel: "ciphertext",
         outputLabel: "plaintext",
-        inputAnchorId: "initial.add-round-key",
-        outputAnchorId: "round.12",
+        inputAnchorId: "transform",
+        outputAnchorId: "final-group",
       },
     });
     expect(g.nodes.find((n) => n.stepId === CIPHER_INPUT_ID)?.label).toBe("ciphertext");
@@ -887,16 +698,16 @@ describe("deriveAuxGraph — synthetic endpoint pills (Slice 1)", () => {
 
   it("renderer's anchor heuristic skips aux-only leaves (regression pin)", () => {
     // The renderer (GraphView.tsx) walks rootIds forward to find the
-    // first leaf whose shapeContract.input is NOT "any", skipping
-    // key-expansion. This test validates the *intent* by exercising the
+    // first leaf whose shapeContract.input is NOT "any", skipping the
+    // aux-only `load-iv`. This test validates the *intent* by exercising the
     // helper directly with the value the renderer would pass — pinning
     // that the function honors a non-rootIds[0] anchor when supplied.
-    const g = deriveAuxGraph(emptyTrace(), matrixAes192Spec, ENCRYPT_OPTS);
+    const g = deriveAuxGraph(emptyTrace(), pillSpec, ENCRYPT_OPTS);
     const inputEdge = g.edges.find((e) => e.from === CIPHER_INPUT_ID);
-    // initial.add-round-key, NOT key-expansion (which is the literal rootIds[0]).
-    expect(inputEdge?.to).toBe("initial.add-round-key");
+    // transform, NOT load-iv (which is the literal aux-only rootIds[0]).
+    expect(inputEdge?.to).toBe("transform");
     // Visually: the plaintext-pill arrow lands at the leaf that actually
-    // reads state, not at the key schedule.
+    // reads state, not at the aux-only preamble.
   });
 
   it("endpoint edges are never classified as feedback", () => {
@@ -904,7 +715,7 @@ describe("deriveAuxGraph — synthetic endpoint pills (Slice 1)", () => {
     // endpoint ids means the renderer never dashes the spine edges into
     // the pills. State edges are already excluded from feedback by kind,
     // so this is belt-and-suspenders against a future re-classification.
-    const g = deriveAuxGraph(runAes128Ecb(), matrixAesEcbSpec, ENCRYPT_OPTS);
+    const g = deriveAuxGraph(emptyTrace(), pillSpec, ENCRYPT_OPTS);
     const isFeedback = buildIterateFeedbackPredicate(g);
     for (const e of g.edges) {
       if (isEndpointId(e.from) || isEndpointId(e.to)) {
@@ -913,24 +724,17 @@ describe("deriveAuxGraph — synthetic endpoint pills (Slice 1)", () => {
     }
   });
 
-  it("collapsing the entire iterate body still leaves the input pill visible", () => {
+  it("collapsing a container still leaves the pills visible", () => {
     // The pedagogical payoff of Slice 1: even when the user collapses
-    // away the round body, "plaintext enters here" is still self-evident.
-    const g = deriveAuxGraph(runAes128Ecb(), matrixAesEcbSpec, {
-      endpoints: {
-        inputLabel: "plaintext",
-        outputLabel: "ciphertext",
-        inputAnchorId: "split-blocks",
-        outputAnchorId: "concat-blocks",
-      },
-    });
-    const collapsed = collapseGraph(g, new Set(["ecb-blocks"]));
+    // away a container, "plaintext enters here" is still self-evident.
+    const g = deriveAuxGraph(emptyTrace(), pillSpec, ENCRYPT_OPTS);
+    const collapsed = collapseGraph(g, new Set(["final-group"]));
     // Both pills survive the collapse.
     expect(collapsed.nodes.some((n) => n.stepId === CIPHER_INPUT_ID)).toBe(true);
     expect(collapsed.nodes.some((n) => n.stepId === CIPHER_OUTPUT_ID)).toBe(true);
-    // Both endpoint edges survive too (their anchors are outside the
-    // iterate, so collapse's "remap inside-collapsed endpoints" pass
-    // doesn't touch them).
+    // Both endpoint edges survive too (the input anchor is outside the
+    // collapsed container; the output anchor IS the container, which stays
+    // as a collapsed chip).
     expect(collapsed.edges.some((e) => e.from === CIPHER_INPUT_ID)).toBe(true);
     expect(collapsed.edges.some((e) => e.to === CIPHER_OUTPUT_ID)).toBe(true);
   });
@@ -938,7 +742,7 @@ describe("deriveAuxGraph — synthetic endpoint pills (Slice 1)", () => {
   it("suppresses pill injection when the spec is empty", () => {
     // No rootIds → no anchors possible → no pills. Cheaper than
     // rendering a floating "plaintext" arrow into nothing.
-    const emptySpec = { ...aes128Spec, steps: [] };
+    const emptySpec = { ...pillSpec, steps: [] };
     const g = deriveAuxGraph(emptyTrace(), emptySpec, ENCRYPT_OPTS);
     expect(g.nodes.some((n) => isEndpointId(n.stepId))).toBe(false);
     expect(g.edges.some((e) => isEndpointId(e.from) || isEndpointId(e.to))).toBe(false);

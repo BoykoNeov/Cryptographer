@@ -47,13 +47,12 @@
  * node surfaces the same kind with `reason: "missing-port"`.
  */
 
-import { AES_SBOX } from "@/ciphers/aes-constants";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import type { CipherDocument } from "@/core/document";
 import { CipherDocumentSchema } from "@/core/document-schema";
 import { runSpec } from "@/core/runtime";
 import { validateShapes } from "@/core/spec-shapes";
-import type { BytesState, CipherSpec, MatrixState } from "@/core/types";
+import type { BytesState, CipherSpec } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 const emptyBytes = (): BytesState => ({ shape: "bytes", bytes: new Uint8Array() });
@@ -350,38 +349,33 @@ describe("port-edge wiring (Slice 2.6a) — off-flag passthrough unchanged", () 
 // ─── Container output port wiring (Slice 2.6a — Q-edges-2 user pick) ─────
 
 describe("port-edge wiring (Slice 2.6a) — container output ports", () => {
-  // A `group` wraps a `byte-substitution` (lifted-legacy) leaf. After the
-  // group runs, parent-scope `state` holds the substituted matrix; the
-  // runtime publishes those bytes on the group's default `out` port.
-  // Downstream a `xor` leaf reads `group/out` + a `constant-load` to
-  // verify that container output wiring carries real data (not just
-  // empty bytes from a state-unchanged group).
-  const initialMatrixBytes = new Uint8Array(16);
-  for (let i = 0; i < 16; i++) initialMatrixBytes[i] = i; // [0..15]
-  const initialMatrix: MatrixState = {
-    shape: "matrix4x4-bytes",
-    // Column-major: each column is a 4-byte slice. Row r col c is byte
-    // index 4*c + r. For the test it doesn't matter what's where —
-    // verify against the same encoding the runtime uses.
-    bytes: initialMatrixBytes,
-  };
+  // A `group` wraps a `feistel.toy-add-k@1` (lifted-legacy) leaf — the
+  // durable lifted-legacy carrier after the matrix `byte-substitution`
+  // retired in Phase 5 Slice 5.1. After the group runs, parent-scope
+  // `state` holds the (input + k) bytes; the runtime publishes them on the
+  // group's default `out` port. Downstream a `xor` leaf reads `group/out` +
+  // a `constant-load` to verify that container output wiring carries real
+  // data (not just empty bytes from a state-unchanged group).
+  const initialBytes = new Uint8Array(16);
+  for (let i = 0; i < 16; i++) initialBytes[i] = i; // [0..15]
+  const initialState: BytesState = { shape: "bytes", bytes: initialBytes };
 
   const buildContainerOutputSpec = (): CipherSpec => ({
     id: "toy-container-output",
     name: "Container output wiring (Slice 2.6a)",
-    stateShape: "matrix4x4-bytes",
-    inputs: { plaintext: { shape: "matrix4x4-bytes" }, key: { byteLength: 0 } },
+    stateShape: "bytes",
+    inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
     steps: [
       {
         kind: "group",
         id: "subst-group",
-        label: "Substitution wrapper",
+        label: "Add-K wrapper",
         children: [
           {
             kind: "step",
             id: "sub",
-            type: "generic.byte-substitution@1",
-            params: { sbox: [...AES_SBOX] },
+            type: "feistel.toy-add-k@1",
+            params: { k: 0x10 },
           },
         ],
         // outputPorts absent → defaults to ["out"].
@@ -413,7 +407,7 @@ describe("port-edge wiring (Slice 2.6a) — container output ports", () => {
 
   it("runtime publishes container exit-state to nodeOutputs; downstream consumer reads it", () => {
     const trace = runSpec(buildContainerOutputSpec(), buildDefaultRegistry(), {
-      initialState: initialMatrix,
+      initialState,
       portedDispatchEnabled: true,
     });
     // Frames: sub (inside group) + mask + xor.result = 3.
@@ -463,18 +457,20 @@ describe("port-edge wiring (Slice 2.6a) — container output ports", () => {
 describe("port-edge wiring (Slice 2.6a) — mixed-mode (Q-edges-3)", () => {
   // Q-edges-3 user pick: "Unbound ports fall back to implicit state
   // thread." This test pins the OVERRIDE direction: a lifted-legacy
-  // `byte-substitution` whose `meta.stateInputPort = "state"` is
-  // explicitly wired via portInputs to a `constant-load` upstream,
-  // bypassing the state-thread projection. The downstream sub-bytes
-  // runs against the constant's bytes (not the spec's initial state)
-  // — verifying that portInputs takes precedence per the user pick.
+  // `feistel.toy-add-k@1` (the durable lifted-legacy carrier after the
+  // matrix `byte-substitution` retired in Phase 5 Slice 5.1) whose
+  // `meta.stateInputPort = "state"` is explicitly wired via portInputs to a
+  // `constant-load` upstream, bypassing the state-thread projection. The
+  // downstream add-k runs against the constant's bytes (not the spec's
+  // initial state) — verifying portInputs takes precedence per the pick.
   it("portInputs override on a lifted-legacy state port BYPASSES the state-thread projection", () => {
     const sourceBytes = Array.from({ length: 16 }, (_, i) => i); // [0..15]
+    const K = 0x10;
     const spec: CipherSpec = {
       id: "toy-mixed-mode",
       name: "Mixed-mode override (Slice 2.6a)",
-      stateShape: "matrix4x4-bytes",
-      inputs: { plaintext: { shape: "matrix4x4-bytes" }, key: { byteLength: 0 } },
+      stateShape: "bytes",
+      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
       steps: [
         {
           kind: "step",
@@ -485,26 +481,25 @@ describe("port-edge wiring (Slice 2.6a) — mixed-mode (Q-edges-3)", () => {
         {
           kind: "step",
           id: "sub",
-          type: "generic.byte-substitution@1",
-          params: { sbox: [...AES_SBOX] },
+          type: "feistel.toy-add-k@1",
+          params: { k: K },
           portInputs: {
             // Override `meta.stateInputPort = "state"` with constant-
-            // load's output. The state-thread projection (initial
-            // matrix derived from spec.inputs.plaintext.shape) is
-            // suppressed for this port by the override.
+            // load's output. The state-thread projection (initial state
+            // derived from spec.inputs.plaintext.shape) is suppressed for
+            // this port by the override.
             state: { node: "load.state-source", port: "output" },
           },
         },
       ],
     };
 
-    // Initial state is the all-0xff matrix — DELIBERATELY different
-    // from the constant-load source — so we can prove the override
-    // worked by checking the sub-bytes input was [0..15] (S-box
-    // output: [0x63, 0x7c, ...]), not the all-0xff projection
-    // (S-box output: [0x16, 0x16, ...]).
-    const initialAllFF: MatrixState = {
-      shape: "matrix4x4-bytes",
+    // Initial state is all-0xff — DELIBERATELY different from the
+    // constant-load source — so we can prove the override worked by
+    // checking the add-k input was [0..15] ((i + K) mod 256), not the
+    // all-0xff projection ((0xff + K) mod 256 = K - 1).
+    const initialAllFF: BytesState = {
+      shape: "bytes",
       bytes: new Uint8Array(16).fill(0xff),
     };
 
@@ -518,18 +513,15 @@ describe("port-edge wiring (Slice 2.6a) — mixed-mode (Q-edges-3)", () => {
     const subFrame = trace.frames[1];
     if (subFrame === undefined) throw new Error("subFrame undefined");
     expect(subFrame.stepId).toBe("sub");
-    // The state AFTER sub should be S-box([0..15]) — proving portInputs
-    // override carried the constant-load bytes, NOT S-box(all-0xff).
+    // The state AFTER sub should be ([0..15] + K) mod 256 — proving
+    // portInputs override carried the constant-load bytes, NOT
+    // (all-0xff + K).
     const after = subFrame.stateAfter;
-    if (after.shape !== "matrix4x4-bytes") {
-      throw new Error(`expected matrix4x4-bytes stateAfter, got ${after.shape}`);
+    if (after.shape !== "bytes") {
+      throw new Error(`expected bytes stateAfter, got ${after.shape}`);
     }
     const expected = new Uint8Array(16);
-    for (let i = 0; i < 16; i++) {
-      const v = AES_SBOX[i];
-      if (v === undefined) throw new Error("AES_SBOX index out of range");
-      expected[i] = v;
-    }
+    for (let i = 0; i < 16; i++) expected[i] = (i + K) & 0xff;
     expect(after.bytes).toEqual(expected);
   });
 });

@@ -110,8 +110,10 @@ describe("GraphView — drop-anchor greying class on .graph-view", () => {
     expect(view.classList.contains("dragging-bytes")).toBe(false);
     expect(view.classList.contains("dragging-matrix")).toBe(false);
 
-    // Pick a bytes-input step's palette entry.
-    const bytesEntry = container.querySelector('[data-step-type="generic.compute-block-count@1"]');
+    // Pick a bytes-input step's palette entry (Serpent SubBytes —
+    // `shapeContract.input === "bytes"`). The matrix `generic.compute-block-
+    // count@1` example retired in Phase 5 Slice 5.1 with the MatrixState shape.
+    const bytesEntry = container.querySelector('[data-step-type="serpent.sub-bytes@1"]');
     expect(bytesEntry).not.toBeNull();
     if (!bytesEntry) throw new Error("unreachable");
     fireDragStart(bytesEntry);
@@ -120,21 +122,10 @@ describe("GraphView — drop-anchor greying class on .graph-view", () => {
     expect(view.classList.contains("dragging-matrix")).toBe(false);
   });
 
-  it("starting a drag of a matrix-input step flips dragging-matrix", () => {
-    const { container } = render(() => <GraphView />);
-    const view = container.querySelector(".graph-view");
-    expect(view).not.toBeNull();
-    if (!view) throw new Error("unreachable");
-
-    // An AES round step expects matrix4x4-bytes.
-    const matrixEntry = container.querySelector('[data-step-type="generic.byte-substitution@1"]');
-    expect(matrixEntry).not.toBeNull();
-    if (!matrixEntry) throw new Error("unreachable");
-    fireDragStart(matrixEntry);
-
-    expect(view.classList.contains("dragging-matrix")).toBe(true);
-    expect(view.classList.contains("dragging-bytes")).toBe(false);
-  });
+  // The "matrix-input step flips dragging-matrix" test was retired in Phase 5
+  // Slice 5.1 (2026-05-30): with the MatrixState shape gone, no step declares
+  // `shapeContract.input === "matrix4x4-bytes"`, so the `dragging-matrix`
+  // class can never fire. (The GraphView classList entry is now dead.)
 
   it("starting a drag of an any-input step adds no dragging class", () => {
     // The aux primitives + key expansions are "any" — they can land
@@ -157,7 +148,7 @@ describe("GraphView — drop-anchor greying class on .graph-view", () => {
     const { container } = render(() => <GraphView />);
     const view = container.querySelector(".graph-view");
     if (!view) throw new Error("unreachable");
-    const bytesEntry = container.querySelector('[data-step-type="generic.compute-block-count@1"]');
+    const bytesEntry = container.querySelector('[data-step-type="serpent.sub-bytes@1"]');
     if (!bytesEntry) throw new Error("unreachable");
 
     fireDragStart(bytesEntry);

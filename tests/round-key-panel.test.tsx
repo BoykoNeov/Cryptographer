@@ -28,7 +28,7 @@ import { serpent128Spec } from "@/ciphers/serpent-128";
 import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
-import type { Aux, AuxValue, MatrixState } from "@/core/types";
+import type { Aux, AuxValue } from "@/core/types";
 import {
   RoundKeyPanel,
   __resetRoundKeyPanelOverrideForTests,
@@ -481,12 +481,6 @@ describe("<RoundKeyPanel /> collapsible header", () => {
   });
 });
 
-// Discarded-export sanity: the `MatrixState` synthesis path inside
-// RoundKeyCell relies on the buffer being readable as a column-major 16B
-// matrix. Pin the type-import here so a future tightening of `MatrixState`
-// (e.g. requiring a non-aliased buffer) is visible at the test file.
-const _matrixStateTypeFootprint: MatrixState = {
-  shape: "matrix4x4-bytes",
-  bytes: new Uint8Array(16),
-};
-void _matrixStateTypeFootprint;
+// (The `MatrixState` type-footprint pin was removed in Phase 5 Slice 5.1
+// (2026-05-30) with the MatrixState shape — RoundKeyCell now renders round
+// keys via TinyMatrix's raw-bytes prop, no MatrixState synthesis.)

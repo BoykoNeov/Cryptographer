@@ -45,7 +45,7 @@ import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { StepRegistry } from "@/core/registry";
 import { runSpec } from "@/core/runtime";
 import { canonicalStepId } from "@/core/step-id";
-import type { AuxValue, BytesState, CipherSpec, MatrixState, StepDefinition } from "@/core/types";
+import type { AuxValue, BytesState, CipherSpec, StepDefinition } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 // Test-local body leaf: reads aux["prior-1"] and aux["prior-2"], XORs them,
@@ -77,15 +77,10 @@ const xorPriorsIntoState: StepDefinition = {
   },
 };
 
-// Test-local body leaf for the "body exits with wrong shape" throw test.
-// Returns a matrix4x4-bytes state regardless of input — exercises the
-// runtime's "body exit state.shape must be bytes" invariant.
-const returnMatrixState: StepDefinition = {
-  executor: () => {
-    const m: MatrixState = { shape: "matrix4x4-bytes", bytes: new Uint8Array(16) };
-    return { state: m };
-  },
-};
+// (The "body exits with wrong shape" throw test was retired in Phase 5
+// Slice 5.1 (2026-05-30) with the MatrixState shape — with `bytes` the only
+// State shape there is no wrong-shape state to return. The wrong-byte-length
+// invariant below still exercises the body-exit shape guard.)
 
 // Test-local body leaf for the "body exits with wrong byte length" throw
 // test. Returns a bytes state of length 2 regardless of input — under
@@ -136,7 +131,6 @@ const assertAuxEquals: StepDefinition = {
 const buildRegistry = (): StepRegistry => {
   const r = new StepRegistry();
   r.register("test.xor-priors-into-state@1", xorPriorsIntoState);
-  r.register("test.return-matrix-state@1", returnMatrixState);
   r.register("test.return-two-bytes@1", returnTwoBytes);
   r.register("test.assert-aux-absent@1", assertAuxAbsent);
   r.register("test.assert-aux-equals@1", assertAuxEquals);
@@ -345,30 +339,30 @@ describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
       ],
     };
 
-    // Test-local matrix→bytes step for the nested case. Takes the first
-    // 2 bytes of the matrix and emits them as bytes state — small enough
-    // to feed FES-with-history as 2 seeds at entry=1.
-    const matrixToFirstTwoBytes: StepDefinition = {
+    // Test-local head-slice step for the nested case. Takes the first
+    // 2 bytes of the 16-byte block and emits them as bytes state — small
+    // enough to feed FES-with-history as 2 seeds at entry=1.
+    const firstTwoBytes: StepDefinition = {
       executor: (state) => {
-        if (state.shape !== "matrix4x4-bytes") throw new Error("expects matrix");
+        if (state.shape !== "bytes") throw new Error("expects bytes");
         const head = state.bytes.subarray(0, 2);
         const next: BytesState = { shape: "bytes", bytes: new Uint8Array(head) };
         return { state: next };
       },
     };
     const registry = buildRegistry();
-    registry.register("test.matrix-to-first-2-bytes@1", matrixToFirstTwoBytes);
+    registry.register("test.matrix-to-first-2-bytes@1", firstTwoBytes);
 
-    const matrixWithFirstTwo = (a: number, b: number): MatrixState => {
+    const block16WithFirstTwo = (a: number, b: number): BytesState => {
       const bytes = new Uint8Array(16);
       bytes[0] = a;
       bytes[1] = b;
-      return { shape: "matrix4x4-bytes", bytes };
+      return { shape: "bytes", bytes };
     };
     const initial: BytesState = { shape: "bytes", bytes: new Uint8Array(0) };
-    const blocks: readonly MatrixState[] = [
-      matrixWithFirstTwo(0x05, 0x03),
-      matrixWithFirstTwo(0x0a, 0x05),
+    const blocks: readonly BytesState[] = [
+      block16WithFirstTwo(0x05, 0x03),
+      block16WithFirstTwo(0x0a, 0x05),
     ];
     const trace = runSpec(nestedSpec, registry, {
       initialState: initial,
@@ -486,13 +480,6 @@ describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
     ).toThrow(/need at least max\(lookbackOffsets\)=3 seeds/);
   });
 
-  it("throws when parent state.shape is not bytes", () => {
-    const matrixInitial: MatrixState = { shape: "matrix4x4-bytes", bytes: new Uint8Array(16) };
-    expect(() => runSpec(makeSpec({}), buildRegistry(), { initialState: matrixInitial })).toThrow(
-      /parent-scope state\.shape must be "bytes"/,
-    );
-  });
-
   it("throws when parent state.bytes.length is not a multiple of historyEntryByteLength", () => {
     // 3 bytes, entry=2 → 3 % 2 != 0.
     const oddInitial: BytesState = { shape: "bytes", bytes: new Uint8Array([1, 2, 3]) };
@@ -501,14 +488,6 @@ describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
         initialState: oddInitial,
       }),
     ).toThrow(/is not a multiple of historyEntryByteLength/);
-  });
-
-  it("throws when body exit state is not bytes-shape", () => {
-    expect(() =>
-      runSpec(makeSpec({ bodyType: "test.return-matrix-state@1" }), buildRegistry(), {
-        initialState: seedsTwo,
-      }),
-    ).toThrow(/body exit state\.shape must be "bytes"/);
   });
 
   it("throws when body exit state.bytes.length != historyEntryByteLength", () => {

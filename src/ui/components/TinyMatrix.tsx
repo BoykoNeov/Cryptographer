@@ -1,24 +1,30 @@
 /**
- * Compact 4×4 byte grid for thumbnails in the neighborhood strip.
- * Renders the bytes of a MatrixState in the global byte format — no
- * editing. Optionally compares each cell against an equivalent "previous
- * run" state and outlines cells whose value differs (the Phase 2b
+ * Compact 4×4 byte grid for thumbnails — renders 16 bytes in the global
+ * byte format, column-major (FIPS-197 §3.4: cell (r,c) at index `r + 4*c`),
+ * no editing. Optionally compares each cell against an equivalent "previous
+ * run" byte sequence and outlines cells whose value differs (the Phase 2b
  * run-to-run diff overlay, in miniature).
+ *
+ * Phase 5 Slice 5.1 (2026-05-30): the props were narrowed from `MatrixState`
+ * to raw `Uint8Array` when the `matrix4x4-bytes` State shape was retired.
+ * The "this 16-byte sequence reads as a 4×4 matrix" judgment is now the
+ * caller's (the surviving live consumer is `RoundKeyPanel`, rendering
+ * round keys) — exactly the advisory layout-tag posture the plan called for.
  */
 
 import { formatByte } from "@/core/format";
-import type { MatrixState } from "@/core/types";
 import { For } from "solid-js";
 import { useByteFormat } from "../stores/format";
 
 type Props = {
-  state: MatrixState;
+  /** 16 bytes, column-major (AES State convention). */
+  bytes: Uint8Array;
   /**
-   * Same-stepId after-state from the prior run, when overlay mode is on.
-   * Cells where this differs from `state` get a ring. Pass null/undefined
+   * Same-stepId after-bytes from the prior run, when overlay mode is on.
+   * Cells where this differs from `bytes` get a ring. Pass null/undefined
    * to disable the overlay for this thumbnail.
    */
-  previousState?: MatrixState | null;
+  previousBytes?: Uint8Array | null;
   /**
    * Linear cell indices (r + 4*c) to outline with the `.provenance-source`
    * class — populated by the RoundKeyPanel when an active hover's
@@ -40,8 +46,8 @@ export const TinyMatrix = (props: Props) => {
     for (let c = 0; c < 4; c++) {
       for (let r = 0; r < 4; r++) {
         const idx = r + 4 * c;
-        const v = props.state.bytes[idx] ?? 0;
-        const p = props.previousState ? (props.previousState.bytes[idx] ?? 0) : null;
+        const v = props.bytes[idx] ?? 0;
+        const p = props.previousBytes ? (props.previousBytes[idx] ?? 0) : null;
         out.push({ row: r, col: c, byte: v, diffPrev: p !== null && p !== v });
       }
     }

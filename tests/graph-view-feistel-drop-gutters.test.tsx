@@ -125,9 +125,9 @@ describe("GraphView — feistel per-track drop gutters (6d-v)", () => {
     const sentinel = container.querySelector('[data-drop-gutter="into-track-start:round.3#0"]');
     expect(sentinel, "round.3 L-track sentinel not found").not.toBeNull();
     if (!sentinel) return;
-    fireDropAt(sentinel, "generic.byte-substitution@1");
+    fireDropAt(sentinel, "byte-substitute@1");
     // The new leaf should land at position 0 of round.3's L track.
-    const loc = findStepAndParent(useSpec()(), "byte-substitution-1");
+    const loc = findStepAndParent(useSpec()(), "byte-substitute-1");
     expect(loc).not.toBeNull();
     expect(loc?.parent?.kind).toBe("feistel-round");
     expect(loc?.parent?.id).toBe("round.3");
@@ -141,8 +141,8 @@ describe("GraphView — feistel per-track drop gutters (6d-v)", () => {
     const gutter = container.querySelector('[data-drop-gutter="before:round.5.s-boxes"]');
     expect(gutter, "between-siblings R-track gutter not found").not.toBeNull();
     if (!gutter) return;
-    fireDropAt(gutter, "generic.byte-substitution@1");
-    const loc = findStepAndParent(useSpec()(), "byte-substitution-1");
+    fireDropAt(gutter, "byte-substitute@1");
+    const loc = findStepAndParent(useSpec()(), "byte-substitute-1");
     expect(loc?.parent?.id).toBe("round.5");
     expect(loc?.trackIdx).toBe(1); // R track
     expect(loc?.indexInParent).toBe(2); // before s-boxes (which was at 2)
@@ -153,8 +153,8 @@ describe("GraphView — feistel per-track drop gutters (6d-v)", () => {
     const gutter = container.querySelector('[data-drop-gutter="after:round.2.p-permute"]');
     expect(gutter).not.toBeNull();
     if (!gutter) return;
-    fireDropAt(gutter, "generic.byte-substitution@1");
-    const loc = findStepAndParent(useSpec()(), "byte-substitution-1");
+    fireDropAt(gutter, "byte-substitute@1");
+    const loc = findStepAndParent(useSpec()(), "byte-substitute-1");
     expect(loc?.parent?.id).toBe("round.2");
     expect(loc?.trackIdx).toBe(1); // R track
     expect(loc?.indexInParent).toBe(4); // after p-permute (last, was at index 3)
@@ -178,11 +178,11 @@ describe("GraphView — feistel per-track drop gutters (6d-v)", () => {
     const roundAnchor = container.querySelector('[data-drop-anchor="round.4"]');
     expect(roundAnchor, "round.4 drop anchor must exist on the chip").not.toBeNull();
     if (!roundAnchor) return;
-    fireDropAt(roundAnchor, "generic.byte-substitution@1");
+    fireDropAt(roundAnchor, "byte-substitute@1");
     // Expected landing: as a child of the `rounds` group, at the
     // position immediately after round.4 (i.e. index 4, since the
     // group's children are round.1..round.16 at indices 0..15).
-    const loc = findStepAndParent(useSpec()(), "byte-substitution-1");
+    const loc = findStepAndParent(useSpec()(), "byte-substitute-1");
     expect(loc, "inter-track-gap drop must land in the spec").not.toBeNull();
     expect(loc?.parent?.kind).toBe("group");
     expect(loc?.parent?.id).toBe("rounds");
@@ -257,8 +257,8 @@ describe("GraphView — feistel per-track drop gutters (6d-v)", () => {
       const sentinel = container.querySelector('[data-drop-gutter="into-track-start:round.5#1"]');
       expect(sentinel, "round.5 R-passthrough sentinel must exist").not.toBeNull();
       if (!sentinel) return;
-      fireDropAt(sentinel, "generic.byte-substitution@1");
-      const loc = findStepAndParent(useSpec()(), "byte-substitution-1");
+      fireDropAt(sentinel, "byte-substitute@1");
+      const loc = findStepAndParent(useSpec()(), "byte-substitute-1");
       expect(loc, "drop must land somewhere in the spec").not.toBeNull();
       expect(loc?.parent?.kind).toBe("feistel-round");
       expect(loc?.parent?.id).toBe("round.5");

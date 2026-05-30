@@ -3,8 +3,9 @@
  * (`docs/plans/universal-port-phase-1-slices.md`).
  *
  * Pins frame-byte equivalence between `portedDispatchEnabled: true` and
- * `portedDispatchEnabled: false` for the FOUR aux-only step types lifted
- * in Slice 1.2:
+ * `portedDispatchEnabled: false` for the THREE byte-typed aux-only step
+ * types lifted in Slice 1.2 (the fourth, the matrix `generic.iv-load@1`,
+ * retired in Phase 5 Slice 5.1 with the MatrixState shape):
  *
  *   - `generic.aux-load@1`  — pure source (no state, no aux read).
  *   - `generic.aux-copy@1`  — aux read + aux write, Uint8Array shape.
@@ -12,17 +13,11 @@
  *                              load-bearing case for the Map-iteration-
  *                              order invariant called out in
  *                              `ProjectionMetadata`'s contract comment.
- *   - `generic.iv-load@1`   — aux read (Uint8Array) → aux write
- *                              (MatrixState). Exercises the PortContract
- *                              `layout: "matrix-cm-4x4"` decode path so
- *                              `xor-aux-into-state` downstream finds a
- *                              MatrixState rather than a Uint8Array.
  *
  * Two test surfaces (was three — (b) removed in Slice B1.4b):
  *
- *   (a) **Synthetic 4-step spec** — exercises each lifted step type in
- *       turn (including `iv-load`) under both flag values. Frame-by-frame
- *       deep-equality.
+ *   (a) **Synthetic 3-step spec** — exercises each lifted step type in
+ *       turn under both flag values. Frame-by-frame deep-equality.
  *
  *   (b) **REMOVED in Slice B1.4b.** Was the AES-128 CBC KAT + frame-parity
  *       smoke — the only shipped spec that exercised the matrix `iv-load`.
@@ -60,8 +55,7 @@ import { describe, expect, it } from "vitest";
 const expectStatesEqual = (a: State, b: State, label: string): void => {
   expect(a.shape, `${label}: shape`).toBe(b.shape);
   switch (a.shape) {
-    case "bytes":
-    case "matrix4x4-bytes": {
+    case "bytes": {
       if (b.shape !== a.shape) return;
       expect(Array.from(a.bytes), `${label}: bytes`).toEqual(Array.from(b.bytes));
       return;
@@ -153,12 +147,10 @@ const auxOnlySpec: CipherSpec = {
       type: "generic.aux-xor@1",
       params: { from: "plaintext-block", into: "chain-bytes" },
     },
-    {
-      kind: "step",
-      id: "iv-load-to-matrix",
-      type: "generic.iv-load@1",
-      params: { ivAuxName: "chain-bytes", outAuxName: "chain-matrix" },
-    },
+    // The matrix `generic.iv-load@1` step (chain-bytes → MatrixState
+    // chain-matrix) retired in Phase 5 Slice 5.1 (2026-05-30) with the
+    // MatrixState shape; the three surviving byte-typed aux primitives keep
+    // the frame-parity coverage.
   ],
 };
 
@@ -176,8 +168,8 @@ const auxOnlyInitialAux = (): Map<string, AuxValue> =>
   ]);
 
 describe("runtime — ported dispatch, Slice 1.2 aux-only primitives", () => {
-  describe("(a) synthetic 4-step spec — frame-by-frame parity", () => {
-    it("emits byte-equal frames across all four lifted step types", () => {
+  describe("(a) synthetic 3-step spec — frame-by-frame parity", () => {
+    it("emits byte-equal frames across the three lifted aux step types", () => {
       const legacy = runSpec(auxOnlySpec, buildDefaultRegistry(), {
         initialState: auxOnlyInitialState(),
         initialAux: auxOnlyInitialAux(),
@@ -191,7 +183,7 @@ describe("runtime — ported dispatch, Slice 1.2 aux-only primitives", () => {
       expectFrameStreamsEqual(ported.frames, legacy.frames, "aux-only synthetic");
     });
 
-    it("end-to-end aux state matches: chain-bytes is iv XOR plaintext, chain-matrix is the matrix form", () => {
+    it("end-to-end aux state matches: chain-bytes is iv XOR plaintext", () => {
       const ported = runSpec(auxOnlySpec, buildDefaultRegistry(), {
         initialState: auxOnlyInitialState(),
         initialAux: auxOnlyInitialAux(),
@@ -220,18 +212,6 @@ describe("runtime — ported dispatch, Slice 1.2 aux-only primitives", () => {
       const chainBytes = ported.finalAux.get("chain-bytes");
       expect(chainBytes).toBeInstanceOf(Uint8Array);
       expect(Array.from(chainBytes as Uint8Array)).toEqual(Array.from(expectedChain));
-
-      // iv-load wraps the same bytes into a MatrixState — the
-      // PortContract's `layout: "matrix-cm-4x4"` ensures the runtime
-      // reconstructs the variant, not a raw Uint8Array.
-      const chainMatrix = ported.finalAux.get("chain-matrix");
-      expect(typeof chainMatrix).toBe("object");
-      if (typeof chainMatrix !== "object" || chainMatrix === null || !("shape" in chainMatrix)) {
-        throw new Error("chain-matrix not a State");
-      }
-      expect((chainMatrix as { shape: string }).shape).toBe("matrix4x4-bytes");
-      const matrixBytes = (chainMatrix as { bytes: Uint8Array }).bytes;
-      expect(Array.from(matrixBytes)).toEqual(Array.from(expectedChain));
     });
   });
 
@@ -328,14 +308,14 @@ describe("runtime — ported dispatch, Slice 1.2 aux-only primitives", () => {
       expect(ported.finalAux.has("")).toBe(false);
     });
 
-    it("aux-copy / iv-load with empty target produce NO auxWrites and don't pollute aux", () => {
-      // Same sentinel test for the other two writers. aux-xor's write
-      // never fires (missing reads → no write); aux-copy and iv-load
-      // could plausibly mis-bind their `to`/`outAuxName` empty-string
-      // case if their auxWritePorts didn't gate.
+    it("aux-copy with empty target produces NO auxWrites and doesn't pollute aux", () => {
+      // Sentinel test for the writer: aux-xor's write never fires (missing
+      // reads → no write); aux-copy could plausibly mis-bind its `to`
+      // empty-string case if its auxWritePorts didn't gate. (The matrix
+      // `iv-load` empty-target case retired in Phase 5 Slice 5.1.)
       const spec: CipherSpec = {
-        id: "test-copy-iv-unset@1",
-        name: "Aux-copy/iv-load unset writers",
+        id: "test-copy-unset@1",
+        name: "Aux-copy unset writer",
         stateShape: "bytes",
         inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
         steps: [
@@ -352,22 +332,6 @@ describe("runtime — ported dispatch, Slice 1.2 aux-only primitives", () => {
             id: "copy-unset-target",
             type: "generic.aux-copy@1",
             params: { from: "seed", to: "" }, // empty target
-          },
-          // 16-byte seed for iv-load's structural validation.
-          {
-            kind: "step",
-            id: "seed-16",
-            type: "generic.aux-load@1",
-            params: {
-              auxName: "seed16",
-              value: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-            },
-          },
-          {
-            kind: "step",
-            id: "iv-load-unset-target",
-            type: "generic.iv-load@1",
-            params: { ivAuxName: "seed16", outAuxName: "" },
           },
         ],
       };

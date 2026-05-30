@@ -128,12 +128,12 @@ describe("insertStepIntoSpec — `before` anchor", () => {
     const spec = useSpec();
     // AES-128 spec has `initial.add-round-key` as the second top-level leaf
     // (immediately after `key-expansion`). Insert before it.
-    insertStepIntoSpec("generic.byte-substitution@1", {
+    insertStepIntoSpec("byte-substitute@1", {
       kind: "before",
       stepId: "initial.add-round-key",
     });
     const after = spec();
-    const located = findStepAndParent(after, "byte-substitution-1");
+    const located = findStepAndParent(after, "byte-substitute-1");
     expect(located, "new leaf must be findable").not.toBeNull();
     expect(located?.parent, "new leaf's parent must be the root").toBeNull();
     // Sibling-order assertion: inserted directly before the anchor.
@@ -146,23 +146,23 @@ describe("insertStepIntoSpec — `before` anchor", () => {
     // round.1's first body leaf is `round.1.sub-bytes`. Inserting before it
     // is the canonical "drop at start of round.1's body" case that was
     // impossible pre-Slice 5 (there was no drop anchor for that position).
-    insertStepIntoSpec("generic.byte-substitution@1", {
+    insertStepIntoSpec("byte-substitute@1", {
       kind: "before",
       stepId: "round.1.sub-bytes",
     });
-    const located = findStepAndParent(useSpec()(), "byte-substitution-1");
+    const located = findStepAndParent(useSpec()(), "byte-substitute-1");
     expect(located).not.toBeNull();
     expect(located?.parent?.id, "must land inside round.1, not at root").toBe("round.1");
     expect(located?.indexInParent, "must be the first child of round.1").toBe(0);
   });
 
   it("returns the generated id so the caller can route trace focus", () => {
-    const newId = insertStepIntoSpec("generic.shift-rows@1", {
+    const newId = insertStepIntoSpec("byte-substitute@1", {
       kind: "before",
       stepId: "key-expansion",
     });
-    expect(newId).toBe("shift-rows-1");
-    expect(findStep(useSpec()(), "shift-rows-1")).not.toBeNull();
+    expect(newId).toBe("byte-substitute-1");
+    expect(findStep(useSpec()(), "byte-substitute-1")).not.toBeNull();
   });
 });
 
@@ -410,8 +410,8 @@ describe("GraphView — drop on a gutter routes to insertStepBefore/After", () =
     const gutter = container.querySelector('[data-drop-gutter="before:round.1.sub-bytes"]');
     expect(gutter, "at-start gutter must render").not.toBeNull();
     if (!gutter) return;
-    fireDropAt(gutter, "generic.shift-rows@1");
-    const located = findStepAndParent(useSpec()(), "shift-rows-1");
+    fireDropAt(gutter, "byte-substitute@1");
+    const located = findStepAndParent(useSpec()(), "byte-substitute-1");
     expect(located, "new leaf must exist").not.toBeNull();
     expect(located?.parent?.id, "must land inside round.1, not at root").toBe("round.1");
     expect(located?.indexInParent, "must be the first child of round.1").toBe(0);
@@ -425,9 +425,9 @@ describe("GraphView — drop on a gutter routes to insertStepBefore/After", () =
     const gutter = container.querySelector('[data-drop-gutter="before:round.1.shift-rows"]');
     expect(gutter, "between-siblings gutter must render").not.toBeNull();
     if (!gutter) return;
-    fireDropAt(gutter, "generic.byte-substitution@1");
+    fireDropAt(gutter, "byte-substitute@1");
     const after = useSpec()();
-    const located = findStepAndParent(after, "byte-substitution-1");
+    const located = findStepAndParent(after, "byte-substitute-1");
     expect(located?.parent?.id).toBe("round.1");
     const subBytesLoc = findStepAndParent(after, "round.1.sub-bytes");
     const shiftRowsLoc = findStepAndParent(after, "round.1.shift-rows");
@@ -442,9 +442,9 @@ describe("GraphView — drop on a gutter routes to insertStepBefore/After", () =
     const gutter = container.querySelector('[data-drop-gutter="after:round.1.add-round-key"]');
     expect(gutter, "at-end gutter must render").not.toBeNull();
     if (!gutter) return;
-    fireDropAt(gutter, "generic.shift-rows@1");
+    fireDropAt(gutter, "byte-substitute@1");
     const after = useSpec()();
-    const located = findStepAndParent(after, "shift-rows-1");
+    const located = findStepAndParent(after, "byte-substitute-1");
     expect(located?.parent?.id, "must land inside round.1").toBe("round.1");
     const ark = findStepAndParent(after, "round.1.add-round-key");
     expect(located?.indexInParent).toBe((ark?.indexInParent ?? -1) + 1);
@@ -502,8 +502,8 @@ describe("GraphView — drop-gutter render inside an iterate", () => {
     const gutter = container.querySelector('[data-drop-gutter="before:initial.add-round-key"]');
     expect(gutter, "iterate at-start gutter must render").not.toBeNull();
     if (!gutter) return;
-    fireDropAt(gutter, "generic.shift-rows@1");
-    const located = findStepAndParent(useSpec()(), "shift-rows-1");
+    fireDropAt(gutter, "byte-substitute@1");
+    const located = findStepAndParent(useSpec()(), "byte-substitute-1");
     expect(located, "new leaf must exist").not.toBeNull();
     // The parent should be the iterate body, NOT the root. The iterate
     // node's id is `ecb-blocks`.

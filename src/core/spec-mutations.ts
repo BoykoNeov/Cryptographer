@@ -16,7 +16,6 @@ import type {
   IterateGroup,
   Json,
   PortBinding,
-  StateShape,
   StepGroup,
   StepLeaf,
   StepNode,
@@ -1860,87 +1859,15 @@ export const applyPaddingScheme = (
     };
   }
 
-  // ── Branch 3: non-AES single-block (Speck) ─────────────────────────────
-  // The padding overlay's load-block/store-block leaves are hardcoded for
-  // AES's 4×4 byte matrix. For any cipher whose state shape isn't that
-  // matrix (today: Speck32/64, which uses BytesState) the overlay can't
-  // apply meaningfully — silently skip it and return the canonical spec.
-  // The padding store still carries the user's preference, so flipping
-  // back to an AES variant re-applies the choice without losing it.
-  // A future block-size-aware load/store rework will let Speck adopt the
-  // same padding chain.
-  if (spec.stateShape !== "matrix4x4-bytes") {
-    return { ...spec, steps: stripped };
-  }
-
-  if (scheme === "none") {
-    // Canonical path: matrix-direct input, no padding chain. Keep the
-    // original `inputs.plaintext.shape` and `stateShape` since the
-    // canonical specs already describe the matrix-direct flow.
-    return {
-      ...spec,
-      stateShape: "matrix4x4-bytes",
-      inputs: {
-        ...spec.inputs,
-        plaintext: { shape: "matrix4x4-bytes" },
-      },
-      steps: stripped,
-    };
-  }
-
-  const { padType, unpadType, padId, unpadId } = SCHEME_STEP_TYPES[scheme];
-
-  if (mode === "encrypt") {
-    const padLeaf: StepLeaf = {
-      kind: "step",
-      id: padId,
-      type: padType,
-      params: { blockSize: AES_BLOCK_SIZE },
-    };
-    const loadLeaf: StepLeaf = {
-      kind: "step",
-      id: "load-block",
-      type: "generic.load-block@1",
-      params: { blockSize: AES_BLOCK_SIZE },
-    };
-    // Input now arrives as BytesState (variable length, range depends on
-    // scheme — see paddingLimits in the UI store). The load-block frame
-    // is the visible transition into the AES 4×4 matrix.
-    const plaintextShape: StateShape = "bytes";
-    return {
-      ...spec,
-      stateShape: "matrix4x4-bytes",
-      inputs: {
-        ...spec.inputs,
-        plaintext: { shape: plaintextShape },
-      },
-      steps: [padLeaf, loadLeaf, ...stripped],
-    };
-  }
-
-  // mode === "decrypt"
-  const storeLeaf: StepLeaf = {
-    kind: "step",
-    id: "store-block",
-    type: "generic.store-block@1",
-    params: {},
-  };
-  const unpadLeaf: StepLeaf = {
-    kind: "step",
-    id: unpadId,
-    type: unpadType,
-    params: { blockSize: AES_BLOCK_SIZE },
-  };
-  // Decrypt input is still the 16-byte ciphertext block — matrix-direct.
-  // The unpad chain runs at the END, after AES has finished, producing
-  // a BytesState of the recovered plaintext.
-  return {
-    ...spec,
-    stateShape: "matrix4x4-bytes",
-    inputs: {
-      ...spec.inputs,
-      plaintext: { shape: "matrix4x4-bytes" },
-    },
-    steps: [...stripped, storeLeaf, unpadLeaf],
-  };
+  // ── Branch 3: any other spec the overlay can't target ─────────────────
+  // The legacy matrix padding overlay ([pad → load-block] / [store-block →
+  // unpad] around a `matrix4x4-bytes` state thread) was retired in Phase 5
+  // Slice 5.1 (2026-05-30) with the MatrixState shape + the load-block /
+  // store-block step types. Every shipped AES variant is byte-native now
+  // (handled by Branch 2 above); anything reaching here (Speck/Serpent/DES/
+  // hash) has a state shape the overlay can't meaningfully target — skip it
+  // and return the canonical (stripped) spec. The padding store still
+  // carries the user's preference, so flipping back to a byte-native AES
+  // variant re-applies the choice without losing it.
+  return { ...spec, steps: stripped };
 };

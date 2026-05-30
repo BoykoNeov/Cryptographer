@@ -286,9 +286,9 @@ describe("GraphView — palette drop integration", () => {
     );
     expect(leaf, "graph should render the key-expansion leaf").not.toBeNull();
     if (!leaf) return;
-    fireDropAt(leaf, "generic.byte-substitution@1");
+    fireDropAt(leaf, "byte-substitute@1");
     const spec = useSpec();
-    expect(findStep(spec(), "byte-substitution-1"), "new leaf should be inserted").not.toBeNull();
+    expect(findStep(spec(), "byte-substitute-1"), "new leaf should be inserted").not.toBeNull();
   });
 
   it("dropping on a container header inserts as the first child of that container", () => {
@@ -312,9 +312,9 @@ describe("GraphView — palette drop integration", () => {
     );
     expect(header, "graph should render the round.1 header drop-anchor").not.toBeNull();
     if (!header) return;
-    fireDropAt(header, "generic.shift-rows@1");
+    fireDropAt(header, "byte-substitute@1");
     const spec = useSpec();
-    const newLeafLoc = findStepAndParent(spec(), "shift-rows-1");
+    const newLeafLoc = findStepAndParent(spec(), "byte-substitute-1");
     expect(newLeafLoc, "new leaf should exist").not.toBeNull();
     // New leaf's parent should be round.1 (we entered the body), and
     // it should be at position 0 (first child) since the header drop

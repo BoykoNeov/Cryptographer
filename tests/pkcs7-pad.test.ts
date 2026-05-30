@@ -78,10 +78,8 @@ describe("pkcs7-pad", () => {
     expect(() => pkcs7Pad(bytes(), { blockSize: 1.5 }, ctx)).toThrow(/blockSize/);
   });
 
-  it("rejects non-bytes state", () => {
-    const matrixState = { shape: "matrix4x4-bytes" as const, bytes: new Uint8Array(16) };
-    expect(() => pkcs7Pad(matrixState, { blockSize: 16 }, ctx)).toThrow(/bytes state/);
-  });
+  // The "rejects non-bytes state" guard test was retired in Phase 5
+  // Slice 5.1 (2026-05-30) with the MatrixState shape (see zero-pad.test.ts).
 });
 
 describe("pkcs7-unpad", () => {

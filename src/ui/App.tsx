@@ -32,17 +32,10 @@ import {
   parseDocument,
   serializeDocument,
 } from "@/core/document";
-import {
-  type ByteFormat,
-  formatByte,
-  formatBytes,
-  parseBytes,
-  parseBytesWithLength,
-} from "@/core/format";
+import { type ByteFormat, formatBytes, parseBytes, parseBytesWithLength } from "@/core/format";
 import { runSpec } from "@/core/runtime";
 import { makeBytesState } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
-import type { AuxValue, BytesState, MatrixState, State, TraceFrame } from "@/core/types";
+import type { AuxValue, State, TraceFrame } from "@/core/types";
 import { APP_VERSION } from "@/version";
 import {
   For,
@@ -65,7 +58,6 @@ import { FeistelTrackContext } from "./components/FeistelTrackContext";
 import { GraphView } from "./components/GraphView";
 import { IvInput } from "./components/IvInput";
 import { KeyScheduleExplorer } from "./components/KeyScheduleExplorer";
-import { MatrixView } from "./components/MatrixView";
 import { ParamEditor } from "./components/ParamEditor";
 import { PortFlowView, isPortNativeFrame } from "./components/PortFlowView";
 import { RejoinFrameView } from "./components/RejoinFrameView";
@@ -418,16 +410,11 @@ export const App = () => {
         throw new Error(`key: ${e instanceof Error ? e.message : String(e)}`);
       }
 
-      // Initial state shape: read directly from the active spec. For AES+
-      // padding the spec declares `inputs.plaintext.shape === "bytes"` so
-      // pad/load can wrap it; for AES+none and decrypt it's a 16-byte
-      // matrix; for Speck (no padding overlay) it's always bytes (4-byte
-      // block). The spec is the single source of truth, so we no longer
-      // hardcode the (mode, padding) heuristic here.
-      const initialState: State =
-        spec().inputs.plaintext.shape === "bytes"
-          ? makeBytesState(inputBytes)
-          : matrixFromBytes(inputBytes);
+      // Initial state is always a BytesState — post-Slice-5.1 the only
+      // State shape is `bytes` (every shipped cipher/hash is port-native
+      // byte-flat; `inputs.plaintext.shape` is always `"bytes"`). The
+      // runtime seeds the first byte-consumer from these bytes.
+      const initialState: State = makeBytesState(inputBytes);
 
       const initialAux = new Map<string, AuxValue>([["key", keyBytes]]);
       // CBC seeds the IV from the dedicated `iv` store (the IvInput
@@ -1017,7 +1004,7 @@ export const App = () => {
     const t = getTrace();
     if (!t) return null;
     const s = t.finalState;
-    if (s.shape !== "matrix4x4-bytes" && s.shape !== "bytes") return null;
+    if (s.shape !== "bytes") return null;
     return formatBytes(s.bytes, fmt());
   });
 
@@ -1790,164 +1777,28 @@ const FrameStateView = (props: {
 
   // Port-aware dispatch (Slice 2.9b). When the runtime captured port I/O
   // on this frame (pure port-native step — `meta === undefined` branch at
-  // `runtime.ts:502`), the existing matrix/bytes/mixed dispatch would
-  // render an empty before/after pair because port-native steps emit
-  // `stateBefore === stateAfter`. `PortFlowView` reads the captured port
-  // I/O instead. Lifted-legacy ported frames (AES SubBytes etc.) carry
-  // `meta` so their port fields stay undefined and the predicate falls
-  // through to the legacy 3-way dispatch.
+  // `runtime.ts:502`), the before/after pair would be empty because
+  // port-native steps emit `stateBefore === stateAfter`. `PortFlowView`
+  // reads the captured port I/O instead. Lifted-legacy ported frames (AES
+  // key-expansion, padding) carry `meta` so their port fields stay
+  // undefined and the predicate falls through to `BytesView`.
+  //
+  // Post-Slice-5.1 the only State shape is `bytes`, so the legacy 3-way
+  // (matrix / bytes / mixed-boundary) dispatch collapsed to BytesView —
+  // `MatrixView` + `MixedShapeView` were retired with the MatrixState shape.
   return (
     <Show
       when={isPortNativeFrame(props.frame)}
       fallback={
-        <Show
-          when={before().shape === "matrix4x4-bytes" && after().shape === "matrix4x4-bytes"}
-          fallback={
-            <Show
-              when={before().shape === "bytes" && after().shape === "bytes"}
-              fallback={<MixedShapeView before={before()} after={after()} />}
-            >
-              <BytesView
-                before={before() as BytesState}
-                after={after() as BytesState}
-                previousAfter={prevAfter()}
-                frame={props.frame}
-              />
-            </Show>
-          }
-        >
-          <MatrixView
-            before={before() as MatrixState}
-            after={after() as MatrixState}
-            previousAfter={prevAfter()}
-            frame={props.frame}
-          />
-        </Show>
+        <BytesView
+          before={before()}
+          after={after()}
+          previousAfter={prevAfter()}
+          frame={props.frame}
+        />
       }
     >
       <PortFlowView frame={props.frame} />
-    </Show>
-  );
-};
-
-/**
- * Boundary-frame view for shape transitions (BytesState ↔ MatrixState).
- * Renders the bytes side as a single row and the matrix side as a 4×4 grid,
- * side-by-side, so the user can see the layout swap (which is what
- * load-block and store-block represent). The byte values themselves don't
- * change across these frames — only the shape does.
- */
-const MixedShapeView = (props: { before: State; after: State }) => {
-  return (
-    <div class="mixed-shape-view">
-      <SingleStateView title="before" state={props.before} />
-      <SingleStateView title="after" state={props.after} />
-    </div>
-  );
-};
-
-const SINGLE_STATE_BLOCK_BYTES = 16;
-
-const SingleStateView = (props: { title: string; state: State }) => {
-  const fmt = useByteFormat();
-
-  // Derive cell descriptors per shape. Reading props.state inside the
-  // memos keeps the views reactive to scrubber changes.
-  const bytesCells = createMemo(() => {
-    if (props.state.shape !== "bytes") return null;
-    const bytes = props.state.bytes;
-    return { length: bytes.length, indices: Array.from({ length: bytes.length }, (_, i) => i) };
-  });
-
-  // When the bytes sequence exceeds one block, slice the indices into
-  // 16-cell groups so multi-block outputs (notably `concat-blocks`) render
-  // as visually-separated blocks. This is what surfaces ECB's pedagogical
-  // weakness — identical plaintext blocks → identical ciphertext blocks.
-  const bytesBlockGroups = createMemo<number[][] | null>(() => {
-    const c = bytesCells();
-    if (!c) return null;
-    if (c.length <= SINGLE_STATE_BLOCK_BYTES) return null;
-    const out: number[][] = [];
-    for (let i = 0; i < c.indices.length; i += SINGLE_STATE_BLOCK_BYTES) {
-      out.push(c.indices.slice(i, i + SINGLE_STATE_BLOCK_BYTES));
-    }
-    return out;
-  });
-
-  const matrixCells = createMemo(() => {
-    if (props.state.shape !== "matrix4x4-bytes") return null;
-    const out: { row: number; col: number; idx: number }[] = [];
-    for (let c = 0; c < 4; c++) {
-      for (let r = 0; r < 4; r++) {
-        out.push({ row: r, col: c, idx: r + 4 * c });
-      }
-    }
-    return out;
-  });
-
-  // Shared cell renderer for both the flat and grouped bytes branches.
-  const renderByteCell = (i: number) => (
-    <div class="bytes-cell">
-      {/* Inline format read so a format toggle re-renders. */}
-      {formatByte((props.state as BytesState).bytes[i] ?? 0, fmt())}
-    </div>
-  );
-
-  return (
-    <Show
-      when={matrixCells()}
-      fallback={
-        <Show when={bytesCells()}>
-          {(getCells) => (
-            <div class="bytes-row-block">
-              <div class="grid-title">
-                {props.title}
-                <span class="bytes-row-count"> ({getCells().length} bytes)</span>
-              </div>
-              <div class="bytes-row">
-                <Show
-                  when={bytesBlockGroups()}
-                  fallback={<For each={getCells().indices}>{renderByteCell}</For>}
-                >
-                  {(getGroups) => (
-                    <For each={getGroups()}>
-                      {(group, gi) => (
-                        <div class="bytes-block-group">
-                          <div class="bytes-block-label">Block {gi() + 1}</div>
-                          <div class="bytes-block-cells">
-                            <For each={group}>{renderByteCell}</For>
-                          </div>
-                        </div>
-                      )}
-                    </For>
-                  )}
-                </Show>
-              </div>
-            </div>
-          )}
-        </Show>
-      }
-    >
-      {(getCells) => (
-        <div class="grid-block">
-          <div class="grid-title">{props.title} (matrix)</div>
-          <div class="grid">
-            <For each={getCells()}>
-              {(cell) => (
-                <div
-                  class="cell"
-                  style={{
-                    "grid-row": `${cell.row + 1}`,
-                    "grid-column": `${cell.col + 1}`,
-                  }}
-                >
-                  {formatByte((props.state as MatrixState).bytes[cell.idx] ?? 0, fmt())}
-                </div>
-              )}
-            </For>
-          </div>
-        </div>
-      )}
     </Show>
   );
 };

@@ -41,7 +41,7 @@
 import { StepRegistry } from "@/core/registry";
 import { runSpec } from "@/core/runtime";
 import { canonicalStepId } from "@/core/step-id";
-import type { AuxValue, BytesState, CipherSpec, MatrixState, StepDefinition } from "@/core/types";
+import type { AuxValue, BytesState, CipherSpec, StepDefinition } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 // XOR-with-constant body. The constant is hardcoded per-test; we surface
@@ -68,10 +68,10 @@ const xorWithConstant: StepDefinition = {
 // threading, after 3 inner iterations byte 0 advances from i → i+3.
 const incrementByte0: StepDefinition = {
   executor: (state) => {
-    if (state.shape !== "matrix4x4-bytes") throw new Error("expects matrix");
+    if (state.shape !== "bytes") throw new Error("expects bytes");
     const out = new Uint8Array(state.bytes);
     out[0] = ((out[0] ?? 0) + 1) & 0xff;
-    const next: MatrixState = { shape: "matrix4x4-bytes", bytes: out };
+    const next: BytesState = { shape: "bytes", bytes: out };
     return { state: next };
   },
 };
@@ -253,10 +253,10 @@ describe("runtime — for-each-subgraph node (Slice 2.0a)", () => {
   // regardless of nesting depth — see `core/step-id.ts`.
 
   it("nested toy: 2-block iterate wrapping 3-iter for-each-subgraph composes :b{i}:r{j}", () => {
-    const matrixZero = (b0: number): MatrixState => {
+    const block16 = (b0: number): BytesState => {
       const bytes = new Uint8Array(16);
       bytes[0] = b0;
-      return { shape: "matrix4x4-bytes", bytes };
+      return { shape: "bytes", bytes };
     };
     const nestedSpec: CipherSpec = {
       id: "test-fes-nested@1",
@@ -283,7 +283,7 @@ describe("runtime — for-each-subgraph node (Slice 2.0a)", () => {
     };
 
     const initial: BytesState = { shape: "bytes", bytes: new Uint8Array(0) };
-    const blocks: readonly MatrixState[] = [matrixZero(0), matrixZero(0x10)];
+    const blocks: readonly BytesState[] = [block16(0), block16(0x10)];
     const trace = runSpec(nestedSpec, buildRegistry(), {
       initialState: initial,
       initialAux: new Map<string, AuxValue>([
@@ -321,7 +321,7 @@ describe("runtime — for-each-subgraph node (Slice 2.0a)", () => {
     // state to blocks[1]), so byte0 restarts at 0x10 and threads to 0x13.
     const byte0After = (i: number): number => {
       const f = trace.frames[i];
-      if (!f || f.stateAfter.shape !== "matrix4x4-bytes") throw new Error(`frame ${i}`);
+      if (!f || f.stateAfter.shape !== "bytes") throw new Error(`frame ${i}`);
       return f.stateAfter.bytes[0] ?? -1;
     };
     expect(byte0After(0)).toBe(0x01); // block 0, round 0: 0 + 1

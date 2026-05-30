@@ -26,13 +26,13 @@
  *   - `dropAuxOnlyStateEdges` with both sets
  */
 
+import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { buildSha256Spec } from "@/ciphers/sha-256";
 import { deriveAuxGraph, dropAuxOnlyStateEdges } from "@/core/graph";
 import type { StepRegistry } from "@/core/registry";
 import type { CipherSpec, Trace } from "@/core/types";
 import { describe, expect, it } from "vitest";
-import { matrixAesEcbSpec } from "./fixtures/matrix-aes-ecb";
 
 const emptyTrace = (): Trace => ({
   frames: [],
@@ -109,18 +109,21 @@ describe("dropAuxOnlyStateEdges — asymmetric endpoint sets (S2(h))", () => {
     expect(narrow.has("init.fetch-H")).toBe(true);
   });
 
-  it("AES-128: `key-expansion → split-blocks` outgoing spine edge is suppressed (from-side rule)", () => {
-    // The original filter intent — AES's leading aux-only root drops
-    // its outgoing identity-passthrough spine edge, because the
-    // synthetic plaintext-input pill already shows the real state
-    // landing at the first consumer. S2(h) must preserve this.
+  it("AES-128: key-expansion has no outgoing state spine edge (from-side invariant)", () => {
+    // The original filter intent — AES's leading aux-only root must not
+    // carry an outgoing identity-passthrough spine edge, because the real
+    // state lands at the first consumer via the `$input` source, not via
+    // key-expansion's (aux-only) state passthrough.
     //
-    // AES-128 ECB's root-scope DFS chain is `[key-expansion, split-
-    // blocks, compute-block-count, ecb-blocks (iterate), concat-blocks]`.
-    // The iterate terminates the spine on both sides, so the only edge
-    // touching key-expansion from inferStateEdges is `key-expansion →
-    // split-blocks`.
-    const spec = matrixAesEcbSpec;
+    // Retargeted to the byte-native `aes128Spec` in Phase 5 Slice 5.1
+    // (2026-05-30) when the matrix ECB fixture retired. Byte-native AES is
+    // structurally cleaner than the matrix era: key-expansion's first-sibling
+    // consumer reads `$input` (a portInputs binding), so `inferStateEdges`
+    // never emits a key-expansion → successor spine edge in the first place
+    // — and `dropAuxOnlyStateEdges` is a no-op belt over it. Either way the
+    // headline invariant holds: NO outgoing state spine edge from the
+    // leading aux-only root in the final graph.
+    const spec = aes128Spec;
     const registry = buildDefaultRegistry();
     const raw = deriveAuxGraph(emptyTrace(), spec, { registry });
 
@@ -130,18 +133,9 @@ describe("dropAuxOnlyStateEdges — asymmetric endpoint sets (S2(h))", () => {
     // key-expansion has no stateInputPort → in BOTH sets.
     expect(narrow.has("key-expansion")).toBe(true);
 
-    // Pre-condition: the legacy consecutive-siblings spine edge from
-    // key-expansion to its DFS successor at root scope is emitted.
-    const preFilter = raw.edges.some(
-      (e) =>
-        e.from === "key-expansion" &&
-        e.to === "split-blocks" &&
-        e.kind === "state" &&
-        e.auxKey === "state",
-    );
-    expect(preFilter).toBe(true);
-
-    // After filtering: no outgoing legacy spine edge from key-expansion.
+    // The invariant, robust to whether suppression happens at inference time
+    // or in the filter: after `dropAuxOnlyStateEdges` there is no outgoing
+    // state spine edge from key-expansion.
     const filtered = dropAuxOnlyStateEdges(raw, wide, narrow);
     const postFilter = filtered.edges.filter(
       (e) => e.from === "key-expansion" && e.kind === "state" && e.auxKey === "state",
@@ -150,13 +144,13 @@ describe("dropAuxOnlyStateEdges — asymmetric endpoint sets (S2(h))", () => {
   });
 
   it("AES-128: NO change vs. the pre-S2(h) symmetric filter behavior (regression budget zero for legacy specs)", () => {
-    // S2(h) is purely additive on legacy ciphers — every aux-only
-    // root in an AES/Speck/Serpent spec has no `stateInputPort` (none
-    // of their key-schedules read the state thread), so the narrower
-    // sink set equals the wider source set, and the asymmetric filter
-    // collapses to the original symmetric behavior. Pin byte-equal
-    // edge set between the old (two-arg) and new (three-arg) calls.
-    const spec = matrixAesEcbSpec;
+    // S2(h) is purely additive on these ciphers — every aux-only root in
+    // an AES/Speck/Serpent spec has no `stateInputPort` (none of their
+    // key-schedules read the state thread), so the narrower sink set
+    // equals the wider source set, and the asymmetric filter collapses to
+    // the original symmetric behavior. Pin byte-equal edge set between the
+    // old (two-arg) and new (three-arg) calls.
+    const spec = aes128Spec;
     const registry = buildDefaultRegistry();
     const raw = deriveAuxGraph(emptyTrace(), spec, { registry });
 

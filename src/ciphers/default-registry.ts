@@ -11,12 +11,6 @@
 import { liftLegacyExecutor } from "../core/port-projection";
 import { StepRegistry } from "../core/registry";
 import { addMod32, addMod32Doc, addMod32PortContract } from "../steps/add-mod-32";
-import {
-  addRoundKey,
-  addRoundKeyDoc,
-  addRoundKeyMeta,
-  addRoundKeyPortContract,
-} from "../steps/add-round-key";
 import { and, andDoc, andPortContract } from "../steps/and";
 import {
   appendBe64Length,
@@ -39,25 +33,12 @@ import {
   byteSubstitutePortContract,
 } from "../steps/byte-substitute";
 import {
-  byteSubstitution,
-  byteSubstitutionDoc,
-  byteSubstitutionMeta,
-  byteSubstitutionPortContract,
-} from "../steps/byte-substitution";
-import {
   bytesToState,
   bytesToStateDoc,
   bytesToStateMeta,
   bytesToStatePortContract,
 } from "../steps/bytes-to-state";
-import { computeBlockCount, computeBlockCountDoc } from "../steps/compute-block-count";
 import { concat, concatDoc, concatPortContract } from "../steps/concat";
-import {
-  concatBlocks,
-  concatBlocksDoc,
-  concatBlocksMeta,
-  concatBlocksPortContract,
-} from "../steps/concat-blocks";
 import { constantLoad, constantLoadDoc, constantLoadPortContract } from "../steps/constant-load";
 import { desExpandR, desExpandRDoc, desExpandRPortContract } from "../steps/des-expand-r";
 import {
@@ -111,7 +92,6 @@ import {
   iso78164UnpadMeta,
   iso78164UnpadPortContract,
 } from "../steps/iso7816-4-unpad";
-import { ivLoad, ivLoadDoc, ivLoadMeta, ivLoadPortContract } from "../steps/iv-load";
 import {
   keyExpansion,
   keyExpansionDoc,
@@ -122,13 +102,6 @@ import {
   keyExpansionV2Meta,
   keyExpansionV2PortContract,
 } from "../steps/key-expansion";
-import { loadBlock, loadBlockDoc } from "../steps/load-block";
-import {
-  mixColumns,
-  mixColumnsDoc,
-  mixColumnsMeta,
-  mixColumnsPortContract,
-} from "../steps/mix-columns";
 import { not, notDoc, notPortContract } from "../steps/not";
 import { padWithByte, padWithByteDoc, padWithBytePortContract } from "../steps/pad-with-byte";
 import { permute, permuteDoc, permutePortContract } from "../steps/permute";
@@ -181,29 +154,10 @@ import {
   serpentSubBytesPortContract,
 } from "../steps/serpent-sub-bytes";
 import {
-  sha2CompressionRound,
-  sha2CompressionRoundDoc,
-  sha2CompressionRoundMeta,
-  sha2CompressionRoundPortContract,
-} from "../steps/sha2-compression-round";
-import {
-  sha2FinalAdd,
-  sha2FinalAddDoc,
-  sha2FinalAddMeta,
-  sha2FinalAddPortContract,
-} from "../steps/sha2-final-add";
-import {
-  sha2MessageScheduleStep,
-  sha2MessageScheduleStepDoc,
-  sha2MessageScheduleStepMeta,
-  sha2MessageScheduleStepPortContract,
-} from "../steps/sha2-message-schedule-step";
-import {
   shiftBitsRight,
   shiftBitsRightDoc,
   shiftBitsRightPortContract,
 } from "../steps/shift-bits-right";
-import { shiftRows, shiftRowsDoc, shiftRowsMeta, shiftRowsPortContract } from "../steps/shift-rows";
 import {
   speckKeySchedule,
   speckKeyScheduleDoc,
@@ -222,35 +176,14 @@ import {
   speckRoundInverseMeta,
   speckRoundInversePortContract,
 } from "../steps/speck-round-inverse";
-import {
-  splitBlocks,
-  splitBlocksDoc,
-  splitBlocksMeta,
-  splitBlocksPortContract,
-} from "../steps/split-blocks";
 import { splitBytes, splitBytesDoc, splitBytesPortContract } from "../steps/split-bytes";
-import {
-  stateToAux,
-  stateToAuxBytesMeta,
-  stateToAuxBytesPortContract,
-  stateToAuxDoc,
-  stateToAuxMeta,
-  stateToAuxPortContract,
-} from "../steps/state-to-aux";
 import {
   stateToBytes,
   stateToBytesDoc,
   stateToBytesMeta,
   stateToBytesPortContract,
 } from "../steps/state-to-bytes";
-import { storeBlock, storeBlockDoc } from "../steps/store-block";
 import { xor, xorDoc, xorPortContract } from "../steps/xor";
-import {
-  xorAuxIntoState,
-  xorAuxIntoStateDoc,
-  xorAuxIntoStateMeta,
-  xorAuxIntoStatePortContract,
-} from "../steps/xor-aux-into-state";
 import {
   xorWithAux,
   xorWithAuxDoc,
@@ -262,48 +195,15 @@ import { zeroUnpad, zeroUnpadDoc, zeroUnpadMeta, zeroUnpadPortContract } from ".
 
 export const buildDefaultRegistry = (): StepRegistry => {
   const r = new StepRegistry();
-  // ─── AES core step types (Slice 1.4 — universal port-dataflow) ─────────
-  // All six AES step types lift in Slice 1.4. byte-substitution + add-
-  // round-key were the original Phase-0 side-map targets; Slice 1.4
-  // moved them (plus the four other AES step types below) to colocated
-  // metadata per Decision C, and Slice 1.9 deleted the side-map outright
-  // per Decision A. shift-rows + mix-columns are pure state-only — same
-  // shape as byte-substitution. Key-expansion is the FIRST one-to-many
-  // writer in the universal-port migration — port-per-roundkey per
-  // Decision B, with `outputs(params)` in function form sized by
-  // `params.rounds` (the user-picked Slice 1.4 contract evolution).
-  r.register("generic.byte-substitution@1", {
-    kind: "ported",
-    executor: liftLegacyExecutor(byteSubstitution, byteSubstitutionMeta),
-    legacy: byteSubstitution,
-    shape: byteSubstitutionPortContract,
-    meta: byteSubstitutionMeta,
-    doc: byteSubstitutionDoc,
-  });
-  r.register("generic.shift-rows@1", {
-    kind: "ported",
-    executor: liftLegacyExecutor(shiftRows, shiftRowsMeta),
-    legacy: shiftRows,
-    shape: shiftRowsPortContract,
-    meta: shiftRowsMeta,
-    doc: shiftRowsDoc,
-  });
-  r.register("generic.mix-columns@1", {
-    kind: "ported",
-    executor: liftLegacyExecutor(mixColumns, mixColumnsMeta),
-    legacy: mixColumns,
-    shape: mixColumnsPortContract,
-    meta: mixColumnsMeta,
-    doc: mixColumnsDoc,
-  });
-  r.register("generic.add-round-key@1", {
-    kind: "ported",
-    executor: liftLegacyExecutor(addRoundKey, addRoundKeyMeta),
-    legacy: addRoundKey,
-    shape: addRoundKeyPortContract,
-    meta: addRoundKeyMeta,
-    doc: addRoundKeyDoc,
-  });
+  // ─── AES key expansion (lifted; Slice 1.4 — universal port-dataflow) ───
+  // The matrix AES round primitives (generic.byte-substitution@1 /
+  // shift-rows@1 / mix-columns@1 / add-round-key@1) were retired in
+  // Phase 5 Slice 5.1 (2026-05-30) along with the MatrixState shape — the
+  // shipped AES specs run the port-native byte-flat primitives
+  // (byte-substitute@1 / permute@1 / gf-matrix-multiply@1 / xor-with-aux@1)
+  // registered below. Key-expansion stays lifted here (Slice 5.2 converts
+  // it to a true PortedExecutor); it is the one-to-many round-key writer,
+  // with `outputs(params)` in function form sized by `params.rounds`.
   r.register("aes.key-expansion@1", {
     kind: "ported",
     executor: liftLegacyExecutor(keyExpansion, keyExpansionMeta),
@@ -395,34 +295,12 @@ export const buildDefaultRegistry = (): StepRegistry => {
     meta: iso78164UnpadMeta,
     doc: iso78164UnpadDoc,
   });
-  r.register("generic.load-block@1", { executor: loadBlock, doc: loadBlockDoc });
-  r.register("generic.store-block@1", { executor: storeBlock, doc: storeBlockDoc });
-  // ─── Multi-block iteration boundary (Phase: ECB/CBC/CTR modes) ─────────
-  // split-blocks turns a padded BytesState into MatrixState[] for the
-  // `iterate` runtime; concat-blocks reverses that after the loop;
-  // compute-block-count writes the iteration count to aux. All three
-  // are AES-shaped today (blockSize=16) — see each step's doc for the
-  // generalization story when a non-matrix block cipher arrives.
-  r.register("generic.split-blocks@1", {
-    kind: "ported",
-    executor: liftLegacyExecutor(splitBlocks, splitBlocksMeta),
-    legacy: splitBlocks,
-    shape: splitBlocksPortContract,
-    meta: splitBlocksMeta,
-    doc: splitBlocksDoc,
-  });
-  r.register("generic.concat-blocks@1", {
-    kind: "ported",
-    executor: liftLegacyExecutor(concatBlocks, concatBlocksMeta),
-    legacy: concatBlocks,
-    shape: concatBlocksPortContract,
-    meta: concatBlocksMeta,
-    doc: concatBlocksDoc,
-  });
-  r.register("generic.compute-block-count@1", {
-    executor: computeBlockCount,
-    doc: computeBlockCountDoc,
-  });
+  // The matrix multi-block boundary primitives (generic.load-block@1 /
+  // store-block@1 / split-blocks@1 / concat-blocks@1 / compute-block-count@1)
+  // were retired in Phase 5 Slice 5.1 (2026-05-30) with the MatrixState
+  // shape. The shipped ECB/CBC specs run the byte-native `iterate` port
+  // mode (seedInput/bodyOutput/chainInput/chainFeedback) instead of the
+  // aux-mediated split→iterate→concat machinery these supported.
   // ─── Aux operation primitives (Slice 10 of the 2D editor plan) ─────────
   // Three small steps that let a user *compose* block-cipher chaining
   // modes (CBC, OFB, CFB) inside the visual editor instead of choosing
@@ -466,69 +344,15 @@ export const buildDefaultRegistry = (): StepRegistry => {
     meta: auxCopyMeta,
     doc: auxCopyDoc,
   });
-  // ─── Chaining-mode primitives (Phase 2 of multi-block AES — CBC) ───────
-  // Three step types that compose into a CBC body inside the iterate
-  // loop, and generalize to OFB/CFB without rewrites:
-  //   • iv-load: Uint8Array aux → MatrixState aux (one-shot, pre-loop).
-  //   • xor-aux-into-state: state ⊕= aux[name]; the chaining XOR.
-  //   • state-to-aux: clone state into aux[name]; the chain snapshot.
-  // The post-AES decrypt chain-advance (chain := next-chain) reuses the
-  // existing `generic.aux-copy@1` — no fourth primitive needed. See
-  // `aes-cbc-builder.ts` for how they assemble.
-  //
-  // `iv-load` lifts in Slice 1.2 (universal port-dataflow); its output
-  // port carries layout `"matrix-cm-4x4"` so the runtime reconstructs
-  // the MatrixState that downstream `xor-aux-into-state` expects.
-  r.register("generic.iv-load@1", {
-    kind: "ported",
-    executor: liftLegacyExecutor(ivLoad, ivLoadMeta),
-    legacy: ivLoad,
-    shape: ivLoadPortContract,
-    meta: ivLoadMeta,
-    doc: ivLoadDoc,
-  });
-  // **Slice 1.5 (universal port-dataflow Phase 1)** — both chaining
-  // primitives lift as `kind: "ported"`. `xor-aux-into-state` reads a
-  // MatrixState chain (driving Slice 1.5's input-side widening in
-  // `runtime.ts:243-261` — the previous hard throw on non-Uint8Array aux
-  // becomes a wired path via `auxValueToPortBytes`). `state-to-aux`
-  // writes a MatrixState snapshot via the existing output-side
-  // `layout: "matrix-cm-4x4"` decode (same path Slice-1.2's `iv-load`
-  // already exercises). AES-128 CBC encrypt + decrypt KAT under flag-on
-  // is the cipher-level parity gate; per-primitive synthetic specs pin
-  // the unit semantics. Frame-parity is gated by
-  // `tests/runtime-ported-dispatch-chaining.test.ts`.
-  r.register("generic.xor-aux-into-state@1", {
-    kind: "ported",
-    executor: liftLegacyExecutor(xorAuxIntoState, xorAuxIntoStateMeta),
-    legacy: xorAuxIntoState,
-    shape: xorAuxIntoStatePortContract,
-    meta: xorAuxIntoStateMeta,
-    doc: xorAuxIntoStateDoc,
-  });
-  r.register("generic.state-to-aux@1", {
-    kind: "ported",
-    executor: liftLegacyExecutor(stateToAux, stateToAuxMeta),
-    legacy: stateToAux,
-    shape: stateToAuxPortContract,
-    meta: stateToAuxMeta,
-    doc: stateToAuxDoc,
-  });
-  // Bytes-shape sibling (Slice 2.6d, 2026-05-25). Same `stateToAux`
-  // executor (cloneState is shape-generic) registered under a different
-  // key with bytes-shaped meta + polymorphic PortContract. First consumer:
-  // SHA-256's schedule exit publishing W (256 bytes) into aux["W"] under
-  // user pick Q1 = (b) "W in aux entirely". The matrix variant above
-  // stays unchanged — AES-CBC keeps its byteLength=16 + matrix-cm-4x4
-  // declarations.
-  r.register("generic.state-to-aux-bytes@1", {
-    kind: "ported",
-    executor: liftLegacyExecutor(stateToAux, stateToAuxBytesMeta),
-    legacy: stateToAux,
-    shape: stateToAuxBytesPortContract,
-    meta: stateToAuxBytesMeta,
-    doc: stateToAuxDoc,
-  });
+  // The matrix chaining-mode primitives (generic.iv-load@1 /
+  // xor-aux-into-state@1 / state-to-aux@1 / state-to-aux-bytes@1) were
+  // retired in Phase 5 Slice 5.1 (2026-05-30) with the MatrixState shape.
+  // They produced/consumed MatrixState aux values for the aux-mediated
+  // matrix CBC body; the shipped CBC spec now chains in bytes through the
+  // `iterate` port mode's `chainInput`/`chainFeedback` (see
+  // `aes-cbc-builder.ts`). The user-facing "compose your own mode" palette
+  // primitives `generic.aux-load@1` / `aux-xor@1` / `aux-copy@1` above stay
+  // (byte-typed; Slice 5.2 converts them to true PortedExecutors).
   // ─── Speck (ARX block cipher, second cipher family) ────────────────────
   // Three step types complete a full Speck cipher: a key-schedule that
   // expands an m-word master key into `rounds` round-key words, a forward
@@ -1028,41 +852,11 @@ export const buildDefaultRegistry = (): StepRegistry => {
     shape: splitBytesPortContract,
     doc: splitBytesDoc,
   });
-  // ─── SHA-256-specific helpers (Slice 2.6b — universal-port plan) ───────
-  // Three SHA-256-specific lifted-legacy steps. Re-scope discovery
-  // (2026-05-25): expressing SHA-256's schedule + compression as port-
-  // native compositions of the universal vocabulary (rotate/shift/xor/add
-  // /and/not) requires bridge primitives that don't yet exist (aux-key →
-  // port input, slice/index ports, multi-output container ports). Slice
-  // 2.6b re-scoped to ship the cipher at coarser granularity using these
-  // helpers; Slice 2.6c plans the bridge vocabulary, 2.6d decomposes.
-  //
-  // The math inside each helper is byte-identical to FIPS 180-4 — pinned
-  // independently by the Slice 2.3/2.5 test suites (sha256-helpers,
-  // sha256-message-schedule) which already verify the composition form.
-  r.register("sha2.message-schedule-step@1", {
-    kind: "ported",
-    executor: liftLegacyExecutor(sha2MessageScheduleStep, sha2MessageScheduleStepMeta),
-    legacy: sha2MessageScheduleStep,
-    shape: sha2MessageScheduleStepPortContract,
-    meta: sha2MessageScheduleStepMeta,
-    doc: sha2MessageScheduleStepDoc,
-  });
-  r.register("sha2.compression-round@1", {
-    kind: "ported",
-    executor: liftLegacyExecutor(sha2CompressionRound, sha2CompressionRoundMeta),
-    legacy: sha2CompressionRound,
-    shape: sha2CompressionRoundPortContract,
-    meta: sha2CompressionRoundMeta,
-    doc: sha2CompressionRoundDoc,
-  });
-  r.register("sha2.final-add@1", {
-    kind: "ported",
-    executor: liftLegacyExecutor(sha2FinalAdd, sha2FinalAddMeta),
-    legacy: sha2FinalAdd,
-    shape: sha2FinalAddPortContract,
-    meta: sha2FinalAddMeta,
-    doc: sha2FinalAddDoc,
-  });
+  // The monolithic SHA-256 helpers (sha2.message-schedule-step@1 /
+  // compression-round@1 / final-add@1) were the Slice 2.6b coarse-grained
+  // lifts, superseded by the Slice 2.6d port-native decomposition of
+  // SHA-256 into the universal vocabulary (rotate/shift/xor/add/and/not +
+  // the bridge primitives). With no shipped spec referencing them, they
+  // were retired in Phase 5 Slice 5.1 (2026-05-30).
   return r;
 };

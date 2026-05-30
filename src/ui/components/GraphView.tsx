@@ -8125,12 +8125,9 @@ const formatAuxValueOneline = (value: AuxValue, fmt: ByteFormat): string => {
 };
 
 const formatStateOneline = (state: State, fmt: ByteFormat): string => {
-  switch (state.shape) {
-    case "bytes":
-      return formatBytes(state.bytes, fmt);
-    case "matrix4x4-bytes":
-      return formatBytes(state.bytes, fmt);
-  }
+  // Post-Slice-5.1 the only State shape is `bytes` (the matrix4x4-bytes
+  // arm retired with the MatrixState shape).
+  return formatBytes(state.bytes, fmt);
 };
 
 /**

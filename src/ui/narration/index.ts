@@ -22,27 +22,7 @@
  * 2 bit-level Serpent linear transforms).
  */
 
-import {
-  aesAddRoundKeyNarration,
-  aesMixColumnsNarration,
-  aesShiftRowsNarration,
-  aesSubBytesNarration,
-} from "./aes";
-import {
-  auxCopyNarration,
-  auxLoadNarration,
-  auxXorNarration,
-  ivLoadNarration,
-  stateToAuxNarration,
-  xorAuxIntoStateNarration,
-} from "./aux-primitives";
-import {
-  computeBlockCountNarration,
-  concatBlocksNarration,
-  loadBlockNarration,
-  splitBlocksNarration,
-  storeBlockNarration,
-} from "./boundary";
+import { auxCopyNarration, auxLoadNarration, auxXorNarration } from "./aux-primitives";
 import { coerceNarration } from "./coerce";
 import { rejoinNarration } from "./combine-kinds";
 import {
@@ -78,11 +58,11 @@ let initialized = false;
  */
 export const initNarrationRegistry = (): void => {
   if (initialized) return;
-  // Phase 1 — AES round body.
-  registerNarration("generic.byte-substitution@1", aesSubBytesNarration);
-  registerNarration("generic.shift-rows@1", aesShiftRowsNarration);
-  registerNarration("generic.mix-columns@1", aesMixColumnsNarration);
-  registerNarration("generic.add-round-key@1", aesAddRoundKeyNarration);
+  // The Phase-1 matrix AES round-body narrators (byte-substitution /
+  // shift-rows / mix-columns / add-round-key) were retired in Phase 5
+  // Slice 5.1 (2026-05-30) with their step types + the MatrixState shape.
+  // The shipped port-native AES primitives narrate via PortFlowView + the
+  // per-leaf `narrationOverride`, not a registered cell-narrator.
   // Phase 2 — Serpent byte-level + bit-permutation, Speck rounds.
   registerNarration("serpent.sub-bytes@1", serpentSubBytesNarration);
   registerNarration("serpent.add-round-key@1", serpentAddRoundKeyNarration);
@@ -96,17 +76,14 @@ export const initNarrationRegistry = (): void => {
   registerNarration("generic.zero-unpad@1", zeroUnpadNarration);
   registerNarration("generic.iso7816-4-pad@1", iso78164PadNarration);
   registerNarration("generic.iso7816-4-unpad@1", iso78164UnpadNarration);
-  registerNarration("generic.load-block@1", loadBlockNarration);
-  registerNarration("generic.store-block@1", storeBlockNarration);
-  registerNarration("generic.split-blocks@1", splitBlocksNarration);
-  registerNarration("generic.concat-blocks@1", concatBlocksNarration);
-  registerNarration("generic.compute-block-count@1", computeBlockCountNarration);
+  // The matrix boundary + chaining narrators (load-block / store-block /
+  // split-blocks / concat-blocks / compute-block-count / iv-load /
+  // xor-aux-into-state / state-to-aux) were retired in Phase 5 Slice 5.1
+  // (2026-05-30) with their step types + the MatrixState shape. The
+  // user-composable byte-typed aux primitives stay.
   registerNarration("generic.aux-load@1", auxLoadNarration);
   registerNarration("generic.aux-xor@1", auxXorNarration);
   registerNarration("generic.aux-copy@1", auxCopyNarration);
-  registerNarration("generic.iv-load@1", ivLoadNarration);
-  registerNarration("generic.xor-aux-into-state@1", xorAuxIntoStateNarration);
-  registerNarration("generic.state-to-aux@1", stateToAuxNarration);
   // Phase 4 of `docs/plans/des-feistel.md` — DES step types use the bit-
   // level structural-overview + per-output-byte drill pattern (IP/FP/E/P);
   // S-boxes get per-S-box units; xor-with-K is cell-wise XOR. The rejoin

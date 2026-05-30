@@ -23,7 +23,6 @@
  */
 
 import { type ByteFormat, formatBytes } from "@/core/format";
-import type { MatrixState } from "@/core/types";
 import { For, Show, createEffect, createMemo } from "solid-js";
 import { useByteFormat } from "../stores/format";
 import {
@@ -61,7 +60,10 @@ export const RunExplorerModal = (props: Props) => {
   // pass a "diff baseline" through the For loop.
   type TileData = {
     snapshot: RunSnapshot;
-    stateAtStep: MatrixState | null;
+    // 16-byte block state rendered as a 4×4 grid (AES, Serpent); null for
+    // other widths. Post-Slice-5.1 the length-16 gate replaces the old
+    // `shape === "matrix4x4-bytes"` discriminant.
+    stateAtStep: Uint8Array | null;
     isCurrent: boolean;
   };
 
@@ -72,9 +74,7 @@ export const RunExplorerModal = (props: Props) => {
     return snaps.map((snapshot, i) => {
       const frame = stepId ? snapshot.trace.frames.find((f) => f.stepId === stepId) : undefined;
       const stateAtStep =
-        frame && frame.stateAfter.shape === "matrix4x4-bytes"
-          ? (frame.stateAfter as MatrixState)
-          : null;
+        frame && frame.stateAfter.bytes.length === 16 ? frame.stateAfter.bytes : null;
       return { snapshot, stateAtStep, isCurrent: i === lastIdx };
     });
   });
@@ -144,7 +144,7 @@ export const RunExplorerModal = (props: Props) => {
                   // to highlight cells that newly changed in THIS tile).
                   // Walking backwards through tiles() so hidden tiles
                   // pass through without re-anchoring the baseline.
-                  const previousVisibleState = (): MatrixState | null => {
+                  const previousVisibleState = (): Uint8Array | null => {
                     const all = tiles();
                     for (let j = i() - 1; j >= 0; j--) {
                       const t = all[j];
@@ -187,9 +187,9 @@ export const RunExplorerModal = (props: Props) => {
 
 const RunTile = (props: {
   snapshot: RunSnapshot;
-  stateAtStep: MatrixState | null;
+  stateAtStep: Uint8Array | null;
   isCurrent: boolean;
-  previousVisibleState: MatrixState | null;
+  previousVisibleState: Uint8Array | null;
   format: ByteFormat;
 }) => {
   const inputSummary = (): string => formatBytes(props.snapshot.inputBytes, props.format);
@@ -238,7 +238,7 @@ const RunTile = (props: {
           when={props.stateAtStep}
           fallback={<div class="run-tile-matrix-empty muted small">(stepId not in this run)</div>}
         >
-          {(state) => <TinyMatrix state={state()} previousState={props.previousVisibleState} />}
+          {(bytes) => <TinyMatrix bytes={bytes()} previousBytes={props.previousVisibleState} />}
         </Show>
       </Show>
 

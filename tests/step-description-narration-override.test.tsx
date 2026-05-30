@@ -25,7 +25,6 @@ import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import type { CipherDocument } from "@/core/document";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
 import type { CipherSpec, StepDocumentation, TraceFrame } from "@/core/types";
 import { StepDescription } from "@/ui/components/StepDescription";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
@@ -96,9 +95,9 @@ describe("StepDescription — narrationOverride fallback + override", () => {
     const customSpec: CipherSpec = {
       id: "test.custom@1",
       name: "Test Custom",
-      stateShape: "matrix4x4-bytes",
+      stateShape: "bytes",
       inputs: {
-        plaintext: { shape: "matrix4x4-bytes" },
+        plaintext: { shape: "bytes" },
         key: { byteLength: 16 },
       },
       steps: [
@@ -125,8 +124,8 @@ describe("StepDescription — narrationOverride fallback + override", () => {
       stepId: "custom-leaf",
       stepType: "aes.sub-bytes@1",
       params: { sbox: [] },
-      stateBefore: matrixFromBytes(bytesFromHex(PLAINTEXT_HEX)),
-      stateAfter: matrixFromBytes(bytesFromHex(PLAINTEXT_HEX)),
+      stateBefore: makeBytesState(bytesFromHex(PLAINTEXT_HEX)),
+      stateAfter: makeBytesState(bytesFromHex(PLAINTEXT_HEX)),
       auxRead: new Map(),
       auxWritten: new Map(),
     };

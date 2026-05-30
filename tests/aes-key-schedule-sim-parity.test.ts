@@ -27,8 +27,7 @@
 import { AES_RCON, AES_SBOX } from "@/ciphers/aes-constants";
 import { StepRegistry } from "@/core/registry";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
+import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue, CipherSpec } from "@/core/types";
 import { keyExpansion, keyExpansionV2 } from "@/steps/key-expansion";
 import { simulateAesKeySchedule } from "@/ui/key-schedule-sim/aes";
@@ -71,9 +70,9 @@ const runKeyExpansionExecutor = (
   const spec: CipherSpec = {
     id: "test-aes-keyexp",
     name: "test",
-    stateShape: "matrix4x4-bytes",
+    stateShape: "bytes",
     inputs: {
-      plaintext: { shape: "matrix4x4-bytes" },
+      plaintext: { shape: "bytes" },
       key: { byteLength: masterKeyHex.length / 2 },
     },
     steps: [
@@ -93,9 +92,9 @@ const runKeyExpansionExecutor = (
   };
 
   const trace = runSpec(spec, registry, {
-    // State is irrelevant — key-expansion is aux-only — but we need SOME
-    // matrix value so runSpec's shape validator doesn't trip.
-    initialState: matrixFromBytes(new Uint8Array(16)),
+    // State is irrelevant — key-expansion is aux-only — but runSpec needs
+    // SOME initial state to seed the walk.
+    initialState: makeBytesState(new Uint8Array(16)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(masterKeyHex)]]),
   });
 

@@ -126,13 +126,10 @@ describe("feistel-round primitive (toy spec)", () => {
     expect(hexFromBytes(r1.stateAfter.bytes)).toBe("03041517");
   });
 
-  it("throws when the input state is not bytes-shape", () => {
-    expect(() =>
-      runSpec(FEISTEL_TOY_SPEC, buildDefaultRegistry(), {
-        initialState: { shape: "matrix4x4-bytes", bytes: new Uint8Array(16) },
-      }),
-    ).toThrow(/requires bytes-shape state/);
-  });
+  // The "throws when input state is not bytes-shape" test was retired in
+  // Phase 5 Slice 5.1 (2026-05-30) with the MatrixState shape — `bytes` is
+  // the only State variant now, so a non-bytes initial state can't be
+  // constructed to exercise the toy's guard.
 
   it("throws when a track's inputBytes index is out of range", () => {
     const badSpec = {

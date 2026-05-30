@@ -61,10 +61,8 @@ import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { type ProjectionMetadata, project, reconstruct } from "@/core/port-projection";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, Json, TraceFrame } from "@/core/types";
 import { describe, expect, it } from "vitest";
-import { matrixAes192Spec } from "./fixtures/matrix-aes-192";
 
 // ─── Slice 1.0 — Dynamic-N aux-write round-trip ─────────────────────────
 //
@@ -83,55 +81,12 @@ import { matrixAes192Spec } from "./fixtures/matrix-aes-192";
 // inspectable in `git blame`.
 const FIPS_B_PLAINTEXT = "3243f6a8885a308d313198a2e0370734";
 const FIPS_B_KEY = "2b7e151628aed2a6abf7158809cf4f3c";
-// AES-192 key (FIPS-197 §A.2, 24 bytes). The single-block projection describe
-// runs on the shared MATRIX AES-192 fixture (`tests/fixtures/matrix-aes-192.ts`)
-// — hand-built from the still-registered `generic.byte-substitution@1` /
-// `generic.add-round-key@1` lifted-legacy step types the projection METAs
-// describe. Every shipped single-block AES is byte-native as of Slice B1.3
-// (port-native primitives, matrix4x4-bytes frames gone), so the fixture is the
-// durable carrier; it survives to Phase C when the matrix projection retires.
-const AES192_KEY = "8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b";
 
-// SP 800-38A §F.1.1 — one block extracted from the four-block ECB fixture.
-
-// ─── Projection metadata for the two Phase-0 lifted step types ─────────
-//
-// These are the only two contracts the round-trip exercises. Inlined here
-// (rather than in a registry) because Phase 0's scope is intentionally
-// small — Phase 1 will fold metadata into the StepRegistration union
-// itself, eliminating the need for the test to know contracts.
-
-const META_BYTE_SUBSTITUTION: ProjectionMetadata = {
-  stateLayout: "matrix4x4-bytes",
-  stateInputPort: "state",
-  stateOutputPort: "state",
-  // No aux read/write — byte substitution is purely state-local.
-};
-
-/**
- * `add-round-key`'s aux key name lives in `params.auxName` (typically
- * "roundKey.0" through "roundKey.N"). The function shape is mandatory
- * here, not a static map: the same step type's leaves have DIFFERENT
- * aux key names per round, so the binding can only be resolved with
- * `params` in hand.
- */
-const META_ADD_ROUND_KEY: ProjectionMetadata = {
-  stateLayout: "matrix4x4-bytes",
-  stateInputPort: "state",
-  stateOutputPort: "state",
-  auxReadPorts: (params: Json) => {
-    if (
-      typeof params !== "object" ||
-      params === null ||
-      Array.isArray(params) ||
-      !("auxName" in params) ||
-      typeof (params as { auxName: unknown }).auxName !== "string"
-    ) {
-      throw new Error("add-round-key projection metadata expected params.auxName: string");
-    }
-    return new Map([["key", (params as { auxName: string }).auxName]]);
-  },
-};
+// The matrix `META_BYTE_SUBSTITUTION` / `META_ADD_ROUND_KEY` projection
+// metadata (and the AES-192 matrix fixture they ran against) were retired in
+// Phase 5 Slice 5.1 (2026-05-30) with the MatrixState shape + those step
+// types. The surviving aux-write round-trip below defines its key-expansion
+// metadata inline.
 
 // ─── Helpers ────────────────────────────────────────────────────────────
 
@@ -179,21 +134,13 @@ const expectStateBytesEqual = (
   recovered: TraceFrame["stateBefore"],
   original: TraceFrame["stateBefore"],
 ): void => {
-  // The State union is just bytes / matrix4x4-bytes; the switch below is
-  // exhaustive over it.
+  // Post-Slice-5.1 the only State shape is `bytes`.
   if (recovered.shape !== original.shape) {
     throw new Error(
       `state shape mismatch: recovered=${recovered.shape} original=${original.shape}`,
     );
   }
-  switch (original.shape) {
-    case "bytes":
-    case "matrix4x4-bytes": {
-      if (recovered.shape !== original.shape) return;
-      expect(Array.from(recovered.bytes)).toEqual(Array.from(original.bytes));
-      return;
-    }
-  }
+  expect(Array.from(recovered.bytes)).toEqual(Array.from(original.bytes));
 };
 
 const expectAuxMapByteEqual = (
@@ -221,54 +168,12 @@ const expectAuxMapByteEqual = (
 // ─── The round-trip test ───────────────────────────────────────────────
 
 describe("port-projection — Q-gate-9 round-trip (Phase 0 load-bearing)", () => {
-  describe("single-block AES-192 (no iterate)", () => {
-    // Runs on the shared MATRIX AES-192 fixture (matrix/lifted-legacy) — every
-    // shipped single-block AES is byte-native as of Slice B1.3 and no longer
-    // emits `generic.byte-substitution@1` / `generic.add-round-key@1` frames
-    // (replaced by port-native primitives). The fixture still does, and its
-    // frames are matrix4x4-bytes, matching the METAs below.
-    const trace = runSpec(matrixAes192Spec, buildDefaultRegistry(), {
-      initialState: matrixFromBytes(bytesFromHex(FIPS_B_PLAINTEXT)),
-      initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES192_KEY)]]),
-    });
-
-    it("pure state-only frame (generic.byte-substitution@1) round-trips byte-for-byte", () => {
-      const frame = findFirstFrame(trace.frames, "generic.byte-substitution@1");
-      const { frame: ported, tags } = project(frame, META_BYTE_SUBSTITUTION);
-      // structuredClone barrier — see header. Strips any smuggled State
-      // branding; non-cloneable smuggling would throw before reconstruct
-      // even sees the tags.
-      const recovered = reconstruct(ported, structuredClone(tags));
-
-      // Sanity: the projection produced an input + output state port
-      // and no aux bindings (byte substitution reads no aux).
-      expect(ported.inputs.has("state")).toBe(true);
-      expect(ported.outputs.has("state")).toBe(true);
-      expect(tags.auxInputBindings).toBeUndefined();
-      expect(tags.auxOutputBindings).toBeUndefined();
-      expect(tags.stateLayout).toBe("matrix4x4-bytes");
-
-      expectFrameByteEqual(recovered, frame);
-    });
-
-    it("aux-reading frame (generic.add-round-key@1) round-trips byte-for-byte", () => {
-      const frame = findFirstFrame(trace.frames, "generic.add-round-key@1");
-      const { frame: ported, tags } = project(frame, META_ADD_ROUND_KEY);
-      const recovered = reconstruct(ported, structuredClone(tags));
-
-      // Sanity: the aux read became a "key" input port; the binding
-      // maps "key" back to the spec's roundKey.N name.
-      expect(ported.inputs.has("state")).toBe(true);
-      expect(ported.inputs.has("key")).toBe(true);
-      expect(tags.auxInputBindings).toBeDefined();
-      const auxKey = tags.auxInputBindings?.get("key");
-      expect(typeof auxKey).toBe("string");
-      expect(auxKey?.startsWith("roundKey.")).toBe(true);
-
-      expectFrameByteEqual(recovered, frame);
-    });
-  });
-
+  // The "single-block AES-192 (no iterate)" block round-tripped the matrix
+  // `generic.byte-substitution@1` / `generic.add-round-key@1` frames through
+  // project/reconstruct. It was retired in Phase 5 Slice 5.1 (2026-05-30)
+  // with the MatrixState shape + those step types. The byte-native
+  // key-expansion projection round-trip below is the surviving coverage of
+  // the project/reconstruct contract.
   describe("aux-write round-trip — dynamic-N port count (Slice 1.0, Decision B)", () => {
     // The first leaf in byte-native aes128Spec is `aes.key-expansion@1`
     // (unchanged by Slice B1 — key expansion stays monolithic). State is now
