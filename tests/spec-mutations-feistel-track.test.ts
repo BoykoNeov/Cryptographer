@@ -27,7 +27,6 @@
  * `tests/spec-mutations-structure.test.ts` once 6d-ii lands.
  */
 
-import { desSpec } from "@/ciphers/des";
 import {
   insertStepAfter,
   insertStepBefore,
@@ -36,7 +35,13 @@ import {
   removeStep,
   reorderStep,
 } from "@/core/spec-mutations";
-import type { FeistelRoundGroup, StepGroup, StepLeaf, StepNode } from "@/core/types";
+import type {
+  CipherSpec,
+  FeistelRoundGroup,
+  StepGroup,
+  StepLeaf,
+  StepNode,
+} from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 /** Same throwaway leaf shape every structural mutation test uses. */
@@ -48,13 +53,61 @@ const fixtureLeaf = (id: string): StepLeaf => ({
 });
 
 /**
+ * Synthetic Feistel spec — replaces `desSpec` for these structural-mutation
+ * tests in B4 (universal-port Phase 4d). The port-native DES no longer uses
+ * `feistel-round` (its `rounds` group now holds port-mode round GROUPS), but
+ * `transformParentArray`'s track descent + `prependChildToTrack` survive
+ * until Phase 5 and are exercised here against a spec that DOES use the
+ * primitive. Built to mirror the OLD DES layout exactly — a `rounds` group of
+ * `feistel-round`s, each with a 4-leaf R track and an empty L track, plus a
+ * non-feistel `key-schedule` node — so every assertion below stands unchanged.
+ * The mutators operate on the spec tree structurally (no run), so the leaf
+ * type is irrelevant.
+ */
+const synthRound = (roundIdx: number): FeistelRoundGroup => ({
+  kind: "feistel-round",
+  id: `round.${roundIdx}`,
+  label: `Round ${roundIdx}`,
+  tracks: [
+    { name: "L", inputBytes: [0, 1, 2, 3], children: [] },
+    {
+      name: "R",
+      inputBytes: [4, 5, 6, 7],
+      children: [
+        fixtureLeaf(`round.${roundIdx}.expand-R`),
+        fixtureLeaf(`round.${roundIdx}.xor-K`),
+        fixtureLeaf(`round.${roundIdx}.s-boxes`),
+        fixtureLeaf(`round.${roundIdx}.p-permute`),
+      ],
+    },
+  ],
+  combineKind: roundIdx === 16 ? "feistel-no-swap" : "feistel-standard",
+});
+
+const SYNTH_SPEC: CipherSpec = {
+  id: "synth-feistel-track@1",
+  name: "Synthetic Feistel (track-mutation tests)",
+  stateShape: "bytes",
+  inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 8 } },
+  steps: [
+    fixtureLeaf("key-schedule"),
+    {
+      kind: "group",
+      id: "rounds",
+      label: "Rounds",
+      children: Array.from({ length: 5 }, (_, i) => synthRound(i + 1)),
+    },
+  ],
+};
+
+/**
  * Locate the `rounds` group + a specific round inside it. Pre-6d-ii
  * `findStepAndParent` doesn't descend into feistel-round tracks, so we
  * walk the spec tree manually here. After 6d-ii, the equivalent
  * lookups via `findStepAndParent` join `tests/spec-mutations-structure
  * .test.ts`.
  */
-const getRound = (spec: typeof desSpec, roundId: string): FeistelRoundGroup => {
+const getRound = (spec: CipherSpec, roundId: string): FeistelRoundGroup => {
   const roundsGroup = spec.steps.find(
     (n): n is StepGroup => n.kind === "group" && n.id === "rounds",
   );
@@ -77,7 +130,7 @@ describe("transformParentArray — Feistel track descent (6d-i)", () => {
     it("inserts after the first chip in R track", () => {
       // round.1's R track children: expand-R, xor-K, s-boxes, p-permute.
       const updated = insertStepAfter(
-        desSpec,
+        SYNTH_SPEC,
         "round.1.expand-R",
         fixtureLeaf("round.1.r-injected"),
       );
@@ -90,7 +143,7 @@ describe("transformParentArray — Feistel track descent (6d-i)", () => {
     });
 
     it("inserts after the last chip in R track", () => {
-      const updated = insertStepAfter(desSpec, "round.1.p-permute", fixtureLeaf("round.1.r-tail"));
+      const updated = insertStepAfter(SYNTH_SPEC, "round.1.p-permute", fixtureLeaf("round.1.r-tail"));
       const r = trackChildren(getRound(updated, "round.1"), 1);
       expect(r.length).toBe(5);
       expect(r[4]?.id).toBe("round.1.r-tail");
@@ -100,13 +153,13 @@ describe("transformParentArray — Feistel track descent (6d-i)", () => {
       // The passthrough chip is materialized by `walkSpec` (graph layer),
       // not a real spec node. transformParentArray walks the spec tree
       // and won't find it.
-      expect(() => insertStepAfter(desSpec, "round.1:passthrough-0", fixtureLeaf("x"))).toThrow(
+      expect(() => insertStepAfter(SYNTH_SPEC, "round.1:passthrough-0", fixtureLeaf("x"))).toThrow(
         /no step with id/,
       );
     });
 
     it("throws when the anchor is the synthetic rejoin id", () => {
-      expect(() => insertStepAfter(desSpec, "round.1:rejoin", fixtureLeaf("x"))).toThrow(
+      expect(() => insertStepAfter(SYNTH_SPEC, "round.1:rejoin", fixtureLeaf("x"))).toThrow(
         /no step with id/,
       );
     });
@@ -114,7 +167,7 @@ describe("transformParentArray — Feistel track descent (6d-i)", () => {
 
   describe("insertStepBefore inside an R track", () => {
     it("inserts before the first chip in R track", () => {
-      const updated = insertStepBefore(desSpec, "round.1.expand-R", fixtureLeaf("round.1.r-head"));
+      const updated = insertStepBefore(SYNTH_SPEC, "round.1.expand-R", fixtureLeaf("round.1.r-head"));
       const r = trackChildren(getRound(updated, "round.1"), 1);
       expect(r.length).toBe(5);
       expect(r[0]?.id).toBe("round.1.r-head");
@@ -124,7 +177,7 @@ describe("transformParentArray — Feistel track descent (6d-i)", () => {
 
   describe("removeStep inside an R track", () => {
     it("removes a single R-track chip", () => {
-      const updated = removeStep(desSpec, "round.1.s-boxes");
+      const updated = removeStep(SYNTH_SPEC, "round.1.s-boxes");
       const r = trackChildren(getRound(updated, "round.1"), 1);
       expect(r.length).toBe(3);
       expect(r.map((n) => n.id)).toEqual([
@@ -135,8 +188,8 @@ describe("transformParentArray — Feistel track descent (6d-i)", () => {
     });
 
     it("leaves the L track empty AND reference-equal after R-track removal", () => {
-      const before = getRound(desSpec, "round.1");
-      const updated = removeStep(desSpec, "round.1.s-boxes");
+      const before = getRound(SYNTH_SPEC, "round.1");
+      const updated = removeStep(SYNTH_SPEC, "round.1.s-boxes");
       const after = getRound(updated, "round.1");
       // L track wasn't touched, so its `track` object reference must be
       // identical. This is the spec-store-debounce safety net.
@@ -149,7 +202,7 @@ describe("transformParentArray — Feistel track descent (6d-i)", () => {
   describe("reorderStep inside an R track", () => {
     it("moves an R-track chip to a new index", () => {
       // Move p-permute (index 3) to index 0 inside R track.
-      const updated = reorderStep(desSpec, "round.1.p-permute", 0);
+      const updated = reorderStep(SYNTH_SPEC, "round.1.p-permute", 0);
       const r = trackChildren(getRound(updated, "round.1"), 1);
       expect(r.map((n) => n.id)).toEqual([
         "round.1.p-permute",
@@ -160,8 +213,8 @@ describe("transformParentArray — Feistel track descent (6d-i)", () => {
     });
 
     it("preserves L-track reference identity after R-track reorder", () => {
-      const before = getRound(desSpec, "round.1");
-      const updated = reorderStep(desSpec, "round.1.p-permute", 0);
+      const before = getRound(SYNTH_SPEC, "round.1");
+      const updated = reorderStep(SYNTH_SPEC, "round.1.p-permute", 0);
       const after = getRound(updated, "round.1");
       expect(after.tracks[0]).toBe(before.tracks[0]);
     });
@@ -171,19 +224,19 @@ describe("transformParentArray — Feistel track descent (6d-i)", () => {
     it("does not clone untouched rounds when one round's track is edited", () => {
       // Insert into round.5's R track; round.1's reference must be unchanged.
       const updated = insertStepAfter(
-        desSpec,
+        SYNTH_SPEC,
         "round.5.expand-R",
         fixtureLeaf("round.5.r-injected"),
       );
-      const beforeR1 = getRound(desSpec, "round.1");
+      const beforeR1 = getRound(SYNTH_SPEC, "round.1");
       const afterR1 = getRound(updated, "round.1");
       expect(afterR1).toBe(beforeR1);
     });
 
     it("does not mutate the original spec", () => {
-      const snapshot = JSON.stringify(desSpec);
-      insertStepAfter(desSpec, "round.1.expand-R", fixtureLeaf("ephemeral"));
-      expect(JSON.stringify(desSpec)).toBe(snapshot);
+      const snapshot = JSON.stringify(SYNTH_SPEC);
+      insertStepAfter(SYNTH_SPEC, "round.1.expand-R", fixtureLeaf("ephemeral"));
+      expect(JSON.stringify(SYNTH_SPEC)).toBe(snapshot);
     });
   });
 });
@@ -191,7 +244,7 @@ describe("transformParentArray — Feistel track descent (6d-i)", () => {
 describe("prependChildToTrack (6d-iii)", () => {
   it("prepends into an empty L track", () => {
     const newLeaf = fixtureLeaf("round.1.l-prepended");
-    const updated = prependChildToTrack(desSpec, "round.1", 0, newLeaf);
+    const updated = prependChildToTrack(SYNTH_SPEC, "round.1", 0, newLeaf);
     const round1 = getRound(updated, "round.1");
     expect(round1.tracks[0]?.children.length).toBe(1);
     expect(round1.tracks[0]?.children[0]?.id).toBe("round.1.l-prepended");
@@ -199,7 +252,7 @@ describe("prependChildToTrack (6d-iii)", () => {
 
   it("prepends into a non-empty R track", () => {
     const newLeaf = fixtureLeaf("round.1.r-prepended");
-    const updated = prependChildToTrack(desSpec, "round.1", 1, newLeaf);
+    const updated = prependChildToTrack(SYNTH_SPEC, "round.1", 1, newLeaf);
     const r = trackChildren(getRound(updated, "round.1"), 1);
     expect(r.length).toBe(5);
     expect(r[0]?.id).toBe("round.1.r-prepended");
@@ -207,53 +260,53 @@ describe("prependChildToTrack (6d-iii)", () => {
   });
 
   it("preserves L-track reference when prepending into R", () => {
-    const before = getRound(desSpec, "round.1");
-    const updated = prependChildToTrack(desSpec, "round.1", 1, fixtureLeaf("x"));
+    const before = getRound(SYNTH_SPEC, "round.1");
+    const updated = prependChildToTrack(SYNTH_SPEC, "round.1", 1, fixtureLeaf("x"));
     const after = getRound(updated, "round.1");
     expect(after.tracks[0]).toBe(before.tracks[0]);
   });
 
   it("preserves sibling-round references when prepending into one round", () => {
-    const beforeR2 = getRound(desSpec, "round.2");
-    const updated = prependChildToTrack(desSpec, "round.1", 1, fixtureLeaf("x"));
+    const beforeR2 = getRound(SYNTH_SPEC, "round.2");
+    const updated = prependChildToTrack(SYNTH_SPEC, "round.1", 1, fixtureLeaf("x"));
     const afterR2 = getRound(updated, "round.2");
     expect(afterR2).toBe(beforeR2);
   });
 
   it("throws when the round id resolves to a non-feistel-round node", () => {
-    expect(() => prependChildToTrack(desSpec, "key-schedule", 0, fixtureLeaf("x"))).toThrow(
+    expect(() => prependChildToTrack(SYNTH_SPEC, "key-schedule", 0, fixtureLeaf("x"))).toThrow(
       /not a feistel-round/,
     );
   });
 
   it("throws when the round id doesn't exist", () => {
-    expect(() => prependChildToTrack(desSpec, "no-such-round", 0, fixtureLeaf("x"))).toThrow(
+    expect(() => prependChildToTrack(SYNTH_SPEC, "no-such-round", 0, fixtureLeaf("x"))).toThrow(
       /no node with id "no-such-round"/,
     );
   });
 
   it("throws when trackIdx is out of range (high)", () => {
-    expect(() => prependChildToTrack(desSpec, "round.1", 5, fixtureLeaf("x"))).toThrow(
+    expect(() => prependChildToTrack(SYNTH_SPEC, "round.1", 5, fixtureLeaf("x"))).toThrow(
       /trackIdx 5 out of range/,
     );
   });
 
   it("throws when trackIdx is out of range (negative)", () => {
-    expect(() => prependChildToTrack(desSpec, "round.1", -1, fixtureLeaf("x"))).toThrow(
+    expect(() => prependChildToTrack(SYNTH_SPEC, "round.1", -1, fixtureLeaf("x"))).toThrow(
       /trackIdx -1 out of range/,
     );
   });
 
   it("does not mutate the original spec", () => {
-    const snapshot = JSON.stringify(desSpec);
-    prependChildToTrack(desSpec, "round.1", 0, fixtureLeaf("ephemeral"));
-    expect(JSON.stringify(desSpec)).toBe(snapshot);
+    const snapshot = JSON.stringify(SYNTH_SPEC);
+    prependChildToTrack(SYNTH_SPEC, "round.1", 0, fixtureLeaf("ephemeral"));
+    expect(JSON.stringify(SYNTH_SPEC)).toBe(snapshot);
   });
 });
 
 describe("prependChildToContainer — feistel-round error pointer (6d-iii)", () => {
   it("throws with a pointer to prependChildToTrack when given a feistel-round id", () => {
-    expect(() => prependChildToContainer(desSpec, "round.1", fixtureLeaf("x"))).toThrow(
+    expect(() => prependChildToContainer(SYNTH_SPEC, "round.1", fixtureLeaf("x"))).toThrow(
       /is a feistel-round; use prependChildToTrack/,
     );
   });
@@ -271,7 +324,7 @@ describe("prependChildToContainer — feistel-round error pointer (6d-iii)", () 
 describe("removeStep — empty-to-populated-to-empty L-track round-trip (UX-F)", () => {
   it("round-trips an L-track through prepend → remove back to empty", () => {
     const inserted = prependChildToTrack(
-      desSpec,
+      SYNTH_SPEC,
       "round.1",
       0,
       fixtureLeaf("round.1.l-experimental"),
@@ -286,14 +339,14 @@ describe("removeStep — empty-to-populated-to-empty L-track round-trip (UX-F)",
 
   it("after remove, the R-track is unchanged and reference-equal to the original", () => {
     const inserted = prependChildToTrack(
-      desSpec,
+      SYNTH_SPEC,
       "round.1",
       0,
       fixtureLeaf("round.1.l-experimental"),
     );
     const restored = removeStep(inserted, "round.1.l-experimental");
 
-    const originalR = getRound(desSpec, "round.1").tracks[1];
+    const originalR = getRound(SYNTH_SPEC, "round.1").tracks[1];
     const restoredR = getRound(restored, "round.1").tracks[1];
 
     // The R-track wasn't touched by the L-side mutations, so the
