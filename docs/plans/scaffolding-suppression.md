@@ -10,7 +10,11 @@
 > mis-targeting sweep). The plan's "B1.4 drains the allowlists" was WRONG — the
 > matrix-aes-{192,ecb} fixtures defer all matrix-primitive draining to Phase C;
 > B1.4b deletes only `aes-round-builder.ts` (zero consumers) and DEFERS iv-load
-> (it has synthetic-test + palette consumers — advisor-confirmed defer).**
+> (it has synthetic-test + palette consumers — advisor-confirmed defer).
+> **NEXT: B1.5 graph-view follow-up (4 confirmed findings — see the "B1.5"
+> section immediately below; dangling plaintext pill in ECB+CBC, fetch-iv
+> unconnected / spurious container→cbc-xor arrow in CBC, merge fetch-rk into one
+> AddRoundKey step, make round-body group leaves draggable).**
 > Phase A: A0+A1+A2+A3a+A3b SHIPPED + A3b follow-ups
 > ⓐ–ⓕ DONE + A4 (anti-creep contract test) SHIPPED 2026-05-28. A3 split into A3a+A3b with Q1–Q4
 > resolved (advisor pass + user co-design 2026-05-28); A3b's open carry
@@ -22,6 +26,94 @@
 >
 > Sits **before** Slice 2.9c–e (those depend on a stable spec shape,
 > which this plan settles).
+
+## B1.5 — graph-view follow-up (NEXT SESSION, 2026-05-30 diagnosis; NO code yet)
+
+Branch `b1-aes-byte-native`, working tree clean. A user browser-look at the
+byte-native CBC graph surfaced four issues. **All four were confirmed
+EMPIRICALLY** this session via a throwaway probe (`deriveAuxGraph` on the real
+specs, then deleted — nothing committed). User decisions captured; the advisor
+was *not* consulted (it was intended but never invoked — re-consult before
+building, per [[feedback_iterative_slice_review]]).
+
+**Scope chosen by user (do all four):** fix CBC/ECB graph edges + merge
+`fetch-rk` into one AddRoundKey step + make round-body chips draggable.
+
+### Finding 1 — plaintext pill dangles (ECB *and* CBC, not just CBC)
+`specReferencesInputSource(spec)` (graph.ts ~3056) walks only **leaf**
+`portInputs`. The port-mode iterate references `$input` via the iterate's
+**`seedInput` field**, not via any leaf — so the `$input` synthetic node is
+never materialized (`has $input node? false`), yet `inferPortEdges` resolves
+`port(iterate,"in")`→`$input` and emits a **dangling** edge to a non-existent
+node. Probe output (both modes):
+`DANGLING $input --[state/port-flow]--> {cbc-xor | initial.add-round-key} (from?false)`.
+**Fix:** extend `specReferencesInputSource` to also check container
+`seedInput`/`chainInput`/`chainFeedback` bindings for `INPUT_SOURCE_ID` (same
+walk already recurses containers — just inspect those fields). Then `$input` is
+materialized and the plaintext pill connects.
+
+### Finding 2 — fetch-iv unconnected + "whole block body → cbc-xor" arrow (CBC)
+`cbc-xor.operand1 = port("cbc-blocks","chain")`. `inferPortEdges`
+(graph.ts ~1563) resolves `port(iter,"in")` through the iterate's `seedInput`
+(`groupSeedByGroupId`), but does **not** resolve `port(iter,"chain")` through
+`chainInput`. So the chain edge points at the **container** `cbc-blocks`
+(probe: `cbc-blocks --[state/port-flow]--> cbc-xor` — the spurious
+"whole-round → cbc-xor" arrow), and `fetch-iv`'s output is read by nobody →
+floats unconnected. **Fix:** in `inferPortEdges`, add a `chainSeedByIterateId`
+map (mirror `groupSeedByGroupId`) so `port(iter,"chain")` resolves through
+`chainInput.node` → `fetch-iv`. Net: the container-origin arrow disappears,
+`fetch-iv → cbc-xor` appears. (Decrypt CBC `chainFeedback = port(it,"in")`
+already resolves through the existing `"in"` path — verify it still does.)
+
+### Finding 3 — fetch-rk is not an official AES step (USER: merge into one step)
+Byte-native AddRoundKey is two leaves today: `${p}.fetch-rk`
+(`aux-load-bytes@1` reads `roundKey.N` onto a port) + `${p}.add-round-key`
+(`xor@1`), mirroring SHA-256's fetch-then-combine. **User wants AddRoundKey to
+read as ONE step** (FIPS-197 §5.1.4 is a single operation). **User pick: MERGE**
+— replace the two leaves with a single port-native AddRoundKey primitive that
+reads its round key internally (from `aux["roundKey.N"]` by a param, e.g.
+`roundKeyAux`). This is a new step type (executor + StepDocumentation +
+narration + ParamEditor block if params need editing) and touches:
+- `aes-round-builder-native.ts` — `addRoundKeyLeaf` + `fetchRoundKeyLeaf` → one
+  leaf; `init`/`inv-initial` initial-ARK too. Per-round leaf count 5→4 (full),
+  4→3 (final). Body shape `[init.add-round-key, round.1…]` (no separate
+  `init.fetch-rk`).
+- KAT/frame-count tests that pin `*.fetch-rk` ids + child counts:
+  `aes-vectors`, `aes-decrypt`, `aes-192/256-vectors`, `aes-128-ecb-kat`,
+  `aes-128-cbc-kat`, `aux-graph-derivation` (the "11 fetch-rk consumers" fan-out
+  test — becomes 11 add-round-key consumers), `duplicate-round-*`
+  (bumpInvInitial matched `fetch-rk` — revisit), `replicate-fanout`.
+- The A4 anti-creep test: the new step MUST be `kind:"ported"` raw-only (no
+  allowlist entry). key-expansion still publishes `roundKey.N` to aux, so the
+  new step reads aux like the old `fetch-rk` did — the fanout from key-expansion
+  is preserved (now lands on `add-round-key`, not `fetch-rk`).
+- **Crypto must stay byte-equal** — KAT vs FIPS-197 §C / node:crypto after.
+  ⚠️ This is the heaviest of the four; consider sequencing it last.
+
+### Finding 4 — round-body leaves not draggable (USER: make movable)
+`GraphView.tsx:5824`:
+`isDraggable = isReplicaLike || isRootLevel || isInsideIteration`.
+`isInsideIteration` (5740) matches `iterate`/`for-each-subgraph`/`-with-history`
+**but deliberately EXCLUDES `group`** — so leaves inside AES `round.N` group
+bodies (sub-bytes/shift-rows/mix-columns/add-round-key) can't be dragged. The
+comment (5815-5819) says group children were left non-draggable because they
+"keep the legacy onClick wiring that several existing click tests depend on."
+The layout passes already apply `relativePins.get(childId)` to group children
+(comment at 5810-5814 confirms), so **enabling is a gate flip** — but the
+onClick-path tests are the catch. **Fix:** add `isInsideGroup` (containerPath
+has a `kind==="group"` ancestor), include it in `isDraggable` with
+`dragMode:"relative"`, and audit/repair the group-child onClick tests
+(grep for click tests on `round.*.` leaves; the draggable path synthesizes the
+click on sub-threshold release, so behavior should hold — verify, don't assume,
+per [[feedback_jsdom_pointer_events_gap]]). Reset glyph + persistence come free
+(relativePositions already plumbed through layout store + Save/Share).
+
+**Process reminders:** re-consult advisor first; KAT byte-equal after Finding 3;
+browser smoke (not just jsdom) for Findings 1/2/4 per
+[[feedback_visual_smoke_vs_property_tests]] — the dangling-pill / wrong-arrow /
+drag are visual, and jsdom won't see geometry. These four are independent;
+Findings 1+2 are small graph-derivation fixes (start there), 4 is a gate flip +
+test audit, 3 is the big one.
 
 ## The goal, stated plainly
 
