@@ -105,7 +105,17 @@ internalized.
 - **Replicate fan-out**, when on, splits any source whose aux output
   fans out to many consumers (typically a key schedule) into small
   per-consumer chips. Trades horizontal width for vertical height; the
-  long fan-out lines collapse into local stubs.
+  long fan-out lines collapse into local stubs. The `>` number next to
+  it is the **replication threshold** — a source replicates only when it
+  fans out to *more than* this many consumers (default 3).
+- **Color by source**, when on, paints each source's outgoing edges in
+  a distinct color so you can track "all these arrows came from here" at
+  a glance. The `≥` number next to it is the **coloring threshold** — a
+  source gets a color when it fans out to *at least* this many consumers.
+  **Set it to 0 to color every edge** (including single-output sources);
+  the default of 3 colors only the larger fan-outs. (Endpoint pills —
+  plaintext / ciphertext / message / digest — are never colored: they
+  *are* the source.)
 - **Zoom** scales the rendered canvas from 50% to 200%. Use the
   toolbar's `−` / `+` buttons (or `reset` to return to 100%), or
   **just roll the mouse wheel while the cursor is over the canvas**

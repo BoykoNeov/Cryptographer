@@ -142,22 +142,28 @@ const sourceFanoutMap = (graph: CipherGraph): Map<string, number> => {
 };
 
 /**
- * Return the alphabetically-sorted canonical sources with fanout ≥ 2.
- * These are the sources `assignSourceColors` auto-assigns palette
- * entries to, AND the sources the panel lists by default.
+ * Return the alphabetically-sorted canonical sources with fanout ≥
+ * `threshold` (default 2). These are the sources `assignSourceColors`
+ * auto-assigns palette entries to, AND the sources the panel lists by
+ * default.
  *
- * Why the threshold: a single-fanout source's one edge is already
+ * Why a threshold: a single-fanout source's one edge is already
  * unambiguously traceable to its origin, so colouring it adds visual
- * noise without pedagogical gain. The user can still manually colour
- * single-fanout sources by flipping the "include single-output
- * sources" panel toggle (2026-05-19 follow-up — see
- * `view-source-colors`'s `useIncludeSingleSources`).
+ * noise without pedagogical gain — hence the default 2. The "color by
+ * source" toolbar control (2026-05-30) lets the user override it:
+ * lowering to 0/1 colours every source (single-fanout included); raising
+ * it restricts colouring to the biggest fan-outs. The `threshold`
+ * parameter is optional + defaults to 2 so the pure unit tests and any
+ * legacy caller stay byte-identical. (The "include single-output
+ * sources" panel toggle — `view-source-colors`'s `useIncludeSingleSources`
+ * — remains the way to LIST single-fanout sources for manual colouring
+ * when the threshold is high.)
  */
-export const multiFanoutSources = (graph: CipherGraph): readonly string[] => {
+export const multiFanoutSources = (graph: CipherGraph, threshold = 2): readonly string[] => {
   const counts = sourceFanoutMap(graph);
   const result: string[] = [];
   for (const [id, count] of counts) {
-    if (count >= 2) result.push(id);
+    if (count >= threshold) result.push(id);
   }
   // Alphabetical so the assignment is deterministic across renders /
   // sessions. Locale-naive `Array.sort()` (lexicographic) is intentional:
@@ -253,15 +259,19 @@ export const colorForSourceIndex = (index: number): string => {
 
 /**
  * Build the auto-color map for one graph. Deterministic on graph
- * structure: identical graphs produce identical maps, so a screenshot
- * recorded today still matches the canvas tomorrow.
+ * structure (+ `threshold`): identical inputs produce identical maps, so a
+ * screenshot recorded today still matches the canvas tomorrow.
  *
- * The returned map covers ONLY multi-fanout sources. Callers must fall
- * through to today's kind-based styling for any edge whose canonical
- * source isn't in the map.
+ * The returned map covers sources with fanout ≥ `threshold` (default 2).
+ * Callers must fall through to today's kind-based styling for any edge
+ * whose canonical source isn't in the map. With `threshold` ≤ 1 the map
+ * covers every non-endpoint source (every colourable edge gets a colour).
  */
-export const assignSourceColors = (graph: CipherGraph): ReadonlyMap<string, string> => {
-  const sources = multiFanoutSources(graph);
+export const assignSourceColors = (
+  graph: CipherGraph,
+  threshold = 2,
+): ReadonlyMap<string, string> => {
+  const sources = multiFanoutSources(graph, threshold);
   const map = new Map<string, string>();
   for (let i = 0; i < sources.length; i++) {
     const src = sources[i];

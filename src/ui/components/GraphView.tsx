@@ -107,12 +107,17 @@ import {
   useReplicationUserToggledThisSession,
 } from "../stores/view-replication";
 import {
+  COLOR_THRESHOLD_MAX,
+  COLOR_THRESHOLD_MIN,
+  DEFAULT_COLOR_THRESHOLD,
   clearAllSourceColorOverrides,
   clearSourceColorOverride,
+  setColorThreshold,
   setSourceColorOverride,
   toggleColorsPanelOpen,
   toggleIncludeSingleSources,
   toggleSourceColoringEnabled,
+  useColorThreshold,
   useColorsPanelOpen,
   useIncludeSingleSources,
   useManualSourceColors,
@@ -3311,9 +3316,13 @@ export const GraphView = () => {
   // manual override flipped.
   const sourceColoringEnabled = useSourceColoringEnabled();
   const includeSingleSources = useIncludeSingleSources();
+  const colorThreshold = useColorThreshold();
   const manualSourceColors = useManualSourceColors(() => spec().id);
   const colorsPanelOpen = useColorsPanelOpen(() => spec().id);
-  const autoSourceColors = createMemo(() => assignSourceColors(graph()));
+  // Auto-color map honours the user-set fanout threshold (2026-05-30). At
+  // the default (3) only sources fanning out to ≥ 3 consumers auto-colour;
+  // at 0/1 every source does → every edge gets a colour.
+  const autoSourceColors = createMemo(() => assignSourceColors(graph(), colorThreshold()));
   // Combined map (auto + manual) — what the renderer reads. Empty when
   // the master toggle is OFF, so the EdgePath fallback to kind-based
   // styling takes over automatically.
@@ -5277,6 +5286,31 @@ export const GraphView = () => {
               />
               replicate fan-out
             </label>
+            {/* Replication threshold — lives right next to its OWN checkbox
+                (2026-05-30 reorg). Previously it rendered after the "color by
+                source" checkbox, so it read as a coloring control when it
+                actually governs replica splitting. The `>` glyph + strict
+                "more than" semantics are unchanged. */}
+            <label
+              class="graph-replicate-threshold"
+              title={`Sources with more than this many outgoing aux edges become replication candidates (default ${DEFAULT_REPLICATION_THRESHOLD}). Per-source overrides in the panel below take precedence.`}
+            >
+              <span class="graph-replicate-threshold-label">&gt;</span>
+              <input
+                type="number"
+                class="graph-replicate-threshold-input"
+                min={REPLICATION_THRESHOLD_MIN}
+                max={REPLICATION_THRESHOLD_MAX}
+                step={1}
+                value={replicationThreshold()}
+                disabled={!replicate()}
+                onInput={(e) => {
+                  const parsed = Number.parseInt(e.currentTarget.value, 10);
+                  setReplicationThreshold(parsed);
+                }}
+                aria-label="Fanout threshold for replication"
+              />
+            </label>
             {/* Source-color coding master toggle (2026-05-19). Defaults ON
                 — every source's edges paint a deterministic
                 colour so the eye can track source identity at a glance.
@@ -5297,24 +5331,32 @@ export const GraphView = () => {
               />
               color by source
             </label>
+            {/* Coloring fanout threshold (2026-05-30) — the REAL "color by
+                source" knob, next to its own checkbox. A source auto-colours
+                when its fanout is ≥ this value. Min 0 (colour every edge),
+                default 3, max 99. `≥` glyph matches the inclusive semantics
+                (vs the replication threshold's strict `>`). Disabled when the
+                master coloring toggle is OFF so the knob's no-op state is
+                visible at a glance. */}
             <label
               class="graph-replicate-threshold"
-              title={`Sources with more than this many outgoing aux edges become replication candidates (default ${DEFAULT_REPLICATION_THRESHOLD}). Per-source overrides in the panel below take precedence.`}
+              title={`Sources fanning out to at least this many consumers get an auto colour (default ${DEFAULT_COLOR_THRESHOLD}). 0 colours every edge; raise it to colour only the biggest fan-outs.`}
             >
-              <span class="graph-replicate-threshold-label">&gt;</span>
+              <span class="graph-replicate-threshold-label">&ge;</span>
               <input
                 type="number"
-                class="graph-replicate-threshold-input"
-                min={REPLICATION_THRESHOLD_MIN}
-                max={REPLICATION_THRESHOLD_MAX}
+                class="graph-color-threshold-input"
+                min={COLOR_THRESHOLD_MIN}
+                max={COLOR_THRESHOLD_MAX}
                 step={1}
-                value={replicationThreshold()}
-                disabled={!replicate()}
+                value={colorThreshold()}
+                disabled={!sourceColoringEnabled()}
                 onInput={(e) => {
                   const parsed = Number.parseInt(e.currentTarget.value, 10);
-                  setReplicationThreshold(parsed);
+                  setColorThreshold(parsed);
                 }}
-                aria-label="Fanout threshold for replication"
+                aria-label="Fanout threshold for source coloring"
+                data-testid="color-threshold-input"
               />
             </label>
             {/* Slice 3 (graph-narrative-and-zoom plan) — zoom controls.

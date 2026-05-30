@@ -358,6 +358,66 @@ describe("assignSourceColors", () => {
   });
 });
 
+// ─── 4b. fanout threshold parameter (2026-05-30) ──────────────────────────
+
+describe("multiFanoutSources / assignSourceColors — threshold parameter", () => {
+  // Fixture: `big` fanout 3, `mid` fanout 2, `single` fanout 1.
+  const fixture = (): CipherGraph =>
+    graph(
+      [
+        leaf("big"),
+        leaf("mid"),
+        leaf("single"),
+        leaf("c1"),
+        leaf("c2"),
+        leaf("c3"),
+        leaf("c4"),
+        leaf("c5"),
+        leaf("c6"),
+      ],
+      [
+        auxEdge("big", "c1"),
+        auxEdge("big", "c2"),
+        auxEdge("big", "c3"),
+        auxEdge("mid", "c4"),
+        auxEdge("mid", "c5"),
+        auxEdge("single", "c6"),
+      ],
+    );
+
+  it("defaults to >= 2 when no threshold is passed (backward-compatible)", () => {
+    expect(multiFanoutSources(fixture())).toEqual(["big", "mid"]);
+  });
+
+  it("threshold 3 includes only fanout >= 3 sources", () => {
+    expect(multiFanoutSources(fixture(), 3)).toEqual(["big"]);
+  });
+
+  it("threshold 0 includes EVERY non-endpoint source (all edges colorable)", () => {
+    // fanout 0 cutoff → every source with at least one outgoing edge.
+    expect(multiFanoutSources(fixture(), 0)).toEqual(["big", "mid", "single"]);
+  });
+
+  it("threshold 1 also includes single-fanout sources", () => {
+    expect(multiFanoutSources(fixture(), 1)).toEqual(["big", "mid", "single"]);
+  });
+
+  it("assignSourceColors honors the threshold (single-fanout colored at 0)", () => {
+    const colorsDefault = assignSourceColors(fixture());
+    expect(colorsDefault.has("single")).toBe(false);
+    const colorsAll = assignSourceColors(fixture(), 0);
+    expect(colorsAll.has("single")).toBe(true);
+    expect(colorsAll.has("mid")).toBe(true);
+    expect(colorsAll.has("big")).toBe(true);
+  });
+
+  it("assignSourceColors at threshold 3 drops the fanout-2 source's color", () => {
+    const colors = assignSourceColors(fixture(), 3);
+    expect(colors.has("big")).toBe(true);
+    expect(colors.has("mid")).toBe(false);
+  });
+});
+
 // ─── 5. colorForEdge ──────────────────────────────────────────────────────
 
 describe("colorForEdge", () => {
