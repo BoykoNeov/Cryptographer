@@ -54,12 +54,13 @@ describe("AES-256 (FIPS-197 §A.3 + NIST AES Core 256)", () => {
   });
 
   it("emits a frame for every leaf step", () => {
-    // Byte-native AES-256 leaves (one frame each):
+    // Byte-native AES-256 leaves (one frame each), after Finding F3 merged
+    // AddRoundKey's fetch-rk + xor pair into one `xor-with-aux@1` leaf:
     //   key-expansion (1)
-    //   init.fetch-rk (1) + initial.add-round-key (1)
-    //   rounds 1..13 × 5 sub-steps = 65
-    //   final round.14 × 4 sub-steps (no mix-columns) = 4
-    //   = 72 frames
+    //   initial.add-round-key (1)
+    //   rounds 1..13 × 4 sub-steps = 52
+    //   final round.14 × 3 sub-steps (no mix-columns) = 3
+    //   = 57 frames
     const plaintext = makeBytesState(bytesFromHex(PLAINTEXT_HEX));
     const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(KEY_HEX)]]);
 
@@ -69,7 +70,7 @@ describe("AES-256 (FIPS-197 §A.3 + NIST AES Core 256)", () => {
       portedDispatchEnabled: true,
     });
 
-    expect(trace.frames.length).toBe(72);
+    expect(trace.frames.length).toBe(57);
   });
 
   it("produces all 15 round keys; roundKey.3 pins the Nk>6 SubWord-only branch", () => {

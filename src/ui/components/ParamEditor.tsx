@@ -223,6 +223,13 @@ export const ParamEditor = (props: Props) => {
             <Match when={getStep().type === "permute@1"}>
               <PermuteBlock step={getStep()} />
             </Match>
+            <Match when={getStep().type === "xor-with-aux@1"}>
+              {/* Byte-native AddRoundKey (Finding F3): one read-only `auxName`
+                  scalar ("roundKey.N"). Reuses AddRoundKeyBlock — same param,
+                  same no-ApplyAllRow reasoning (each round references a
+                  distinct round key). */}
+              <AddRoundKeyBlock step={getStep()} matchingCount={matchingSteps()} />
+            </Match>
             {/* ─── Port-native primitives (Slice S1 of sha-256-density-polish) ── */}
             <Match
               when={

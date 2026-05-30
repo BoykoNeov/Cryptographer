@@ -414,12 +414,12 @@ describe("<RoundKeyPanel /> collapsible header", () => {
 
   it("auto-expands on an AddRoundKey frame (which reads a schedule key)", () => {
     const trace = seedAes128Trace();
-    // Byte-native AES-128 (Slice B1): the round key is pulled into the round by
-    // a dedicated `aux-load-bytes@1` fetch leaf (`round.3.fetch-rk`), whose
-    // frame carries `auxRead: roundKey.3`. The panel auto-expands on any frame
-    // that reads a schedule key, so this fetch frame is the trigger.
+    // Byte-native AES-128 (Slice B1; merged in F3): the round key is read
+    // internally by the `xor-with-aux@1` AddRoundKey leaf (`round.3.add-round-key`),
+    // whose frame carries `auxRead: roundKey.3`. The panel auto-expands on any
+    // frame that reads a schedule key, so this AddRoundKey frame is the trigger.
     const frame = trace.frames.find(
-      (f) => f.stepType === "aux-load-bytes@1" && f.auxRead.has("roundKey.3"),
+      (f) => f.stepType === "xor-with-aux@1" && f.auxRead.has("roundKey.3"),
     );
     expect(frame).toBeDefined();
     const { container } = render(() => <RoundKeyPanel frame={frame ?? null} />);

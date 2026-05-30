@@ -251,11 +251,12 @@ describe("compareSpecs", () => {
   it("returns empty array when two distinct spec objects have equal params", () => {
     // Re-applying the same params produces a different object reference but
     // semantically identical contents — compareSpecs should treat as equal.
-    // Byte-native `initial.add-round-key` is an `xor@1` leaf whose params are
-    // `{ inputCount: 2 }` (was the matrix add-round-key's `{auxName:...}`).
+    // Byte-native `initial.add-round-key` is a `xor-with-aux@1` leaf (Finding
+    // F3) whose params are `{ auxName: "roundKey.0" }` (the round-key index it
+    // reads from aux).
     const target = "initial.add-round-key";
     const original = aes128Spec;
-    const sameAgain = updateStepParams(aes128Spec, target, { inputCount: 2 });
+    const sameAgain = updateStepParams(aes128Spec, target, { auxName: "roundKey.0" });
     expect(compareSpecs(original, sameAgain)).toEqual([]);
   });
 

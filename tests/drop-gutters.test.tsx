@@ -276,7 +276,9 @@ describe("GraphView — drop-gutter render", () => {
     const round1Strips = container.querySelectorAll<SVGRectElement>(
       '[data-drop-gutter^="before:round.1."], [data-drop-gutter^="after:round.1."]',
     );
-    expect(round1Strips.length, "at-start + 4 between + at-end = 6 strips").toBe(6);
+    // round.1 has 4 children (AddRoundKey merged in F3): at-start + 3 between
+    // + at-end = 5 strips.
+    expect(round1Strips.length, "at-start + 3 between + at-end = 5 strips").toBe(5);
     // Read the container's box from the backing outer `<rect>` (class
     // `graph-container-rect`). `querySelector("rect")` returns the
     // FIRST rect descendant which is the outer container rect.
@@ -374,22 +376,22 @@ describe("GraphView — drop-gutter render", () => {
 
   it("skips replica chips inside childIds when building gutters", () => {
     // Byte-native AES-128 single-block has no iterate body, but each round
-    // group includes a `round.N.fetch-rk` leaf that pulls `roundKey.N` from
-    // the high-fanout `key-expansion` source. With replicas the graph splices
-    // synthetic replica chips into childIds — gutters should still be the
-    // spec-child count + 1 because the filter excludes replicas.
+    // group's `xor-with-aux@1` AddRoundKey leaf pulls `roundKey.N` from the
+    // high-fanout `key-expansion` source (the recorded auxRead). With replicas
+    // the graph splices synthetic replica chips into childIds — gutters should
+    // still be the spec-child count + 1 because the filter excludes replicas.
     seedAes128Trace();
     // This test specifically exercises the replica-skip path, so re-enable
     // replication (seedAes128Trace forced it off for the geometry tests).
     setReplicationEnabled(true);
     const { container } = render(() => <GraphView />);
-    // round.1's body has 5 spec children (sub-bytes, shift-rows, mix-columns,
-    // fetch-rk, add-round-key) → 4 between + start + end = 6 gutters; the
+    // round.1's body has 4 spec children (sub-bytes, shift-rows, mix-columns,
+    // add-round-key — merged in F3) → 3 between + start + end = 5 gutters; the
     // spliced key-expansion replica chip must NOT add a gutter.
     const round1Gutters = container.querySelectorAll(
       "[data-drop-gutter^='before:round.1.'], [data-drop-gutter^='after:round.1.']",
     );
-    expect(round1Gutters.length).toBe(6);
+    expect(round1Gutters.length).toBe(5);
   });
 });
 
@@ -494,9 +496,10 @@ describe("GraphView — drop-gutter render inside an iterate", () => {
   it("drop on the at-start gutter of the iterate inserts at position 0 of the iterate body", () => {
     seedAes128EcbTrace();
     const { container } = render(() => <GraphView />);
-    // Byte-native ECB (B1.4): the iterate body's first child is `init.fetch-rk`
-    // (the round-key fetch), so the at-start gutter is `before:init.fetch-rk`.
-    const gutter = container.querySelector('[data-drop-gutter="before:init.fetch-rk"]');
+    // Byte-native ECB (B1.4; merged in F3): the iterate body's first child is
+    // `initial.add-round-key` (the initial AddRoundKey), so the at-start gutter
+    // is `before:initial.add-round-key`.
+    const gutter = container.querySelector('[data-drop-gutter="before:initial.add-round-key"]');
     expect(gutter, "iterate at-start gutter must render").not.toBeNull();
     if (!gutter) return;
     fireDropAt(gutter, "generic.shift-rows@1");
@@ -518,7 +521,7 @@ describe("GraphView — drop-gutter render inside an iterate", () => {
     seedAes128EcbTrace();
     const { container } = render(() => <GraphView />);
     const startGutter = container.querySelector<SVGRectElement>(
-      '[data-drop-gutter="before:init.fetch-rk"]',
+      '[data-drop-gutter="before:initial.add-round-key"]',
     );
     const endGutter = container.querySelector<SVGRectElement>(
       '[data-drop-gutter="after:round.10"]',

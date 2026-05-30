@@ -55,13 +55,14 @@ describe("AES-192 (FIPS-197 §A.2 + NIST AES Core 192)", () => {
   });
 
   it("emits a frame for every leaf step", () => {
-    // Byte-native AES-192 leaves (one frame each):
+    // Byte-native AES-192 leaves (one frame each), after Finding F3 merged
+    // AddRoundKey's fetch-rk + xor pair into one `xor-with-aux@1` leaf:
     //   key-expansion (1)
-    //   init.fetch-rk (1) + initial.add-round-key (1)
-    //   rounds 1..11 × 5 sub-steps (sub-bytes, shift-rows, mix-columns,
-    //     fetch-rk, add-round-key) = 55
-    //   final round.12 × 4 sub-steps (no mix-columns) = 4
-    //   = 62 frames
+    //   initial.add-round-key (1)
+    //   rounds 1..11 × 4 sub-steps (sub-bytes, shift-rows, mix-columns,
+    //     add-round-key) = 44
+    //   final round.12 × 3 sub-steps (no mix-columns) = 3
+    //   = 49 frames
     const plaintext = makeBytesState(bytesFromHex(PLAINTEXT_HEX));
     const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(KEY_HEX)]]);
 
@@ -71,7 +72,7 @@ describe("AES-192 (FIPS-197 §A.2 + NIST AES Core 192)", () => {
       portedDispatchEnabled: true,
     });
 
-    expect(trace.frames.length).toBe(62);
+    expect(trace.frames.length).toBe(49);
   });
 
   it("produces all 13 round keys in aux and roundKey.12 matches FIPS-197 §A.2", () => {

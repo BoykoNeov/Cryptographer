@@ -679,12 +679,12 @@ describe("GraphView — container collapse (Slice 6)", () => {
   it("renders all child leaves of a round group when not collapsed", () => {
     seedAes128Trace();
     const { container } = render(() => <GraphView />);
-    // Byte-native round.5 has 5 leaves (sub-bytes, shift-rows, mix-columns,
-    // fetch-rk, add-round-key). We can't easily count "round.5's children"
-    // from the rendered SVG alone, but the whole byte-native AES-128 graph has
-    // 52 leaves: key-expansion + init.fetch-rk + initial.add-round-key (3) +
-    // 9 full rounds × 5 (45) + final round.10 × 4 (4).
-    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(52);
+    // Byte-native round.5 has 4 leaves (sub-bytes, shift-rows, mix-columns,
+    // add-round-key — AddRoundKey merged in F3). We can't easily count
+    // "round.5's children" from the rendered SVG alone, but the whole
+    // byte-native AES-128 graph has 41 leaves: key-expansion +
+    // initial.add-round-key (2) + 9 full rounds × 4 (36) + final round.10 × 3 (3).
+    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(41);
   });
 
   it("clicking the chevron collapses the container; child leaves disappear from the SVG", () => {
@@ -698,8 +698,8 @@ describe("GraphView — container collapse (Slice 6)", () => {
     expect(chevron).not.toBeNull();
     fireEvent.click(chevron);
 
-    // Post-collapse: total leaves dropped by 5 (round.5's 5 children).
-    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(47);
+    // Post-collapse: total leaves dropped by 4 (round.5's 4 children).
+    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(37);
 
     // The container itself is still present as a chip.
     const collapsedRect = container.querySelector(".graph-container-rect-collapsed");
@@ -720,9 +720,9 @@ describe("GraphView — container collapse (Slice 6)", () => {
     };
 
     fireEvent.click(findChevron()); // collapse
-    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(47);
+    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(37);
     fireEvent.click(findChevron()); // expand
-    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(52);
+    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(41);
     expect(container.querySelector(".graph-container-rect-collapsed")).toBeNull();
   });
 });

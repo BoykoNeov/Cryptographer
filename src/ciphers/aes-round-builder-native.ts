@@ -11,7 +11,7 @@
  *   SubBytes      → byte-substitute@1   (params.sbox)
  *   ShiftRows     → permute@1           (params.indices, column-major)
  *   MixColumns    → gf-matrix-multiply@1 (params.matrix)
- *   AddRoundKey   → aux-load-bytes@1 (roundKey.N) + xor@1 (2-way)
+ *   AddRoundKey   → xor-with-aux@1      (reads roundKey.N from aux internally)
  *
  * Topology mirrors the byte-native SHA-256 spec (`sha-256.ts`): the 16-byte
  * working state carries port-to-port between round groups via the A3b
@@ -25,10 +25,12 @@
  * Round keys live in `aux["roundKey.0..N"]`, written by the untouched
  * monolithic `aes.key-expansion@1` (its forward S-box stays a param — see
  * `byte-substitute.ts` for why B1 does NOT move the S-box to
- * `cipherConstants`). Each AddRoundKey reads its key via `aux-load-bytes@1`
- * — the SHA-256 K/W fetch-then-combine pattern, since each `roundKey.N` has
- * exactly one consumer it would also be valid port-to-port, but key-
- * expansion publishes to aux today and stays untouched in B1.
+ * `cipherConstants`). Each AddRoundKey reads its key directly from aux via
+ * the `xor-with-aux@1` primitive (Finding F3, 2026-05-30) — one leaf that
+ * projects `aux["roundKey.N"]` onto its `operand` port and XORs it into the
+ * carried state, replacing the earlier `aux-load-bytes@1` + `xor@1` pair so
+ * the graph reads AddRoundKey as a single FIPS-197 §5.1.4 operation. The
+ * recorded aux-read preserves the key-expansion → AddRoundKey fan-out edge.
  *
  * AES-variant agnostic: only the round count differs (10/12/14). The S-box,
  * mix matrix, and shift schedule are identical across variants (FIPS-197 §5).
@@ -134,18 +136,6 @@ diffusion across the block. Omitted in the final round (FIPS-197 §5.1).`,
   references: ["FIPS-197 §5.1.3 (MixColumns)", "FIPS-197 §4.2 (GF(2⁸))"],
 };
 
-const NARR_FETCH_RK: StepDocumentation = {
-  name: "Fetch round key",
-  summary: "Read this round's 16-byte round key from aux (key schedule output).",
-  detail: `## Fetch round key
-
-Reads the round key \`roundKey.N\` from the aux map — the per-round 16-byte
-subkey produced by the key schedule (\`aes.key-expansion@1\`). Exposed on a
-port so AddRoundKey can XOR it into the state. Editing the key schedule's
-output (or the master key) changes these bytes.`,
-  references: ["FIPS-197 §5.2 (Key Expansion)"],
-};
-
 const NARR_ADD_ROUND_KEY: StepDocumentation = {
   name: "AddRoundKey",
   summary: "XOR the round key into the state (FIPS-197 §5.1.4).",
@@ -201,22 +191,30 @@ const mixColumnsLeaf = (p: string): StepNode => ({
   narrationOverride: NARR_MIX_COLUMNS,
 });
 
-const fetchRoundKeyLeaf = (p: string, roundIndex: number): StepNode => ({
-  kind: "step",
-  id: `${p}.fetch-rk`,
-  type: "aux-load-bytes@1",
-  params: { auxName: `roundKey.${roundIndex}`, byteLength: AES_BLOCK_BYTES },
-  narrationOverride: NARR_FETCH_RK,
-});
-
-/** AddRoundKey xor: operand0 = the state from `stateBinding`, operand1 = the fetched round key. */
-const addRoundKeyLeaf = (p: string, stateBinding: PortBinding): StepNode => ({
+/**
+ * AddRoundKey (FIPS-197 §5.1.4) as ONE port-native leaf (Finding F3,
+ * 2026-05-30). The `xor-with-aux@1` primitive reads `aux["roundKey.{roundIndex}"]`
+ * on its `operand` port internally (via `meta.auxReadPorts`) and XORs it into
+ * the carried `input` port. Keeps the `${p}.add-round-key` id and `output`
+ * port of the old xor leaf, so every downstream `port(${p}.add-round-key,
+ * "output")` reference (seedInput / bodyOutput / the next round's input) is
+ * unchanged. The round-key fan-out from `aes.key-expansion@1` now lands on
+ * this leaf (via the recorded auxRead), replacing the separate
+ * `${p}.fetch-rk` leaf. `narr` overrides the inspector doc — the initial and
+ * inverse-initial AddRoundKeys narrate differently from the per-round ones.
+ */
+const addRoundKeyLeaf = (
+  p: string,
+  stateBinding: PortBinding,
+  roundIndex: number,
+  narr: StepDocumentation = NARR_ADD_ROUND_KEY,
+): StepNode => ({
   kind: "step",
   id: `${p}.add-round-key`,
-  type: "xor@1",
-  params: { inputCount: 2 },
-  portInputs: { operand0: stateBinding, operand1: port(`${p}.fetch-rk`, "output") },
-  narrationOverride: NARR_ADD_ROUND_KEY,
+  type: "xor-with-aux@1",
+  params: { auxName: `roundKey.${roundIndex}` },
+  portInputs: { input: stateBinding },
+  narrationOverride: narr,
 });
 
 // ─── Round groups ────────────────────────────────────────────────────────────
@@ -232,8 +230,7 @@ const encryptRound = (n: number): StepNode => {
       subBytesLeaf(p, port(p, "in")), // carried state injected on port(round.n,"in")
       shiftRowsLeaf(p),
       mixColumnsLeaf(p),
-      fetchRoundKeyLeaf(p, n),
-      addRoundKeyLeaf(p, port(`${p}.mix-columns`, "output")),
+      addRoundKeyLeaf(p, port(`${p}.mix-columns`, "output"), n),
     ],
     // A3b group port contract: round 1 seeds from the initial AddRoundKey;
     // round n (>1) from round n-1's published exit. Port-to-port carry.
@@ -252,8 +249,7 @@ const encryptFinalRound = (rounds: number): StepNode => {
     children: [
       subBytesLeaf(p, port(p, "in")),
       shiftRowsLeaf(p),
-      fetchRoundKeyLeaf(p, rounds),
-      addRoundKeyLeaf(p, port(`${p}.shift-rows`, "output")),
+      addRoundKeyLeaf(p, port(`${p}.shift-rows`, "output"), rounds),
     ],
     seedInput:
       rounds === 1 ? port("initial.add-round-key", "output") : port(`round.${rounds - 1}`, "out"),
@@ -265,7 +261,7 @@ const encryptFinalRound = (rounds: number): StepNode => {
  * Build the byte-native forward (encrypt) AES body for the given round count.
  * `rounds = 10` → AES-128, `12` → AES-192, `14` → AES-256.
  *
- * Shape: `[ init.fetch-rk, initial.add-round-key, round.1, …, round.{rounds}(final) ]`.
+ * Shape: `[ initial.add-round-key, round.1, …, round.{rounds}(final) ]`.
  * The body reads the plaintext from `inputSource` (the reserved `$input`
  * source for single-block specs; `port(iterateId, "in")` for an ECB/CBC
  * iterate that injects the per-block bytes — Slice B1.4). The caller's spec
@@ -277,19 +273,9 @@ export function buildAesEncryptBodyNative(
   inputSource: PortBinding = port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT),
 ): readonly StepNode[] {
   return [
-    // Initial AddRoundKey (round key 0), at body scope — reads `inputSource`.
-    fetchRoundKeyLeaf("init", 0),
-    {
-      kind: "step",
-      id: "initial.add-round-key",
-      type: "xor@1",
-      params: { inputCount: 2 },
-      portInputs: {
-        operand0: inputSource,
-        operand1: port("init.fetch-rk", "output"),
-      },
-      narrationOverride: NARR_INITIAL_ARK,
-    },
+    // Initial AddRoundKey (round key 0), at body scope — reads `inputSource`
+    // on its `input` port and `aux["roundKey.0"]` on its `operand` port.
+    addRoundKeyLeaf("initial", inputSource, 0, NARR_INITIAL_ARK),
     ...Array.from({ length: rounds - 1 }, (_, i) => encryptRound(i + 1)),
     encryptFinalRound(rounds),
   ];
@@ -368,8 +354,9 @@ forward cipher's final AddRoundKey and sets up the first inverse round.`,
 // tables and the FIPS-197 §5.3 leaf ids (`inv-sub-bytes`, `inv-shift-rows`,
 // `inv-mix-columns`). The ids deliberately match the legacy matrix decrypt
 // builder so the duplicate-round mirror (`round.N ↔ inv-round.N`) and the
-// `inv-round.N` layout pins keep resolving. fetch-rk + AddRoundKey reuse the
-// forward factories verbatim (the round-key fetch + 2-way xor are identical).
+// `inv-round.N` layout pins keep resolving. AddRoundKey reuses the forward
+// `addRoundKeyLeaf` factory verbatim (the merged `xor-with-aux@1` leaf is
+// identical forward and inverse — XOR the round key into the carried state).
 
 const invSubBytesLeaf = (p: string, inputBinding: PortBinding): StepNode => ({
   kind: "step",
@@ -418,8 +405,7 @@ const decryptRound = (n: number, rounds: number): StepNode => {
     children: [
       invShiftRowsLeaf(p, port(p, "in")), // carried state injected on port(inv-round.n,"in")
       invSubBytesLeaf(p, port(`${p}.inv-shift-rows`, "output")),
-      fetchRoundKeyLeaf(p, n),
-      addRoundKeyLeaf(p, port(`${p}.inv-sub-bytes`, "output")),
+      addRoundKeyLeaf(p, port(`${p}.inv-sub-bytes`, "output"), n),
       invMixColumnsLeaf(p, port(`${p}.add-round-key`, "output")),
     ],
     // Descending chain: the highest inverse round seeds from the initial
@@ -442,8 +428,7 @@ const decryptFinalRound = (): StepNode => {
     children: [
       invShiftRowsLeaf(p, port(p, "in")),
       invSubBytesLeaf(p, port(`${p}.inv-shift-rows`, "output")),
-      fetchRoundKeyLeaf(p, 0),
-      addRoundKeyLeaf(p, port(`${p}.inv-sub-bytes`, "output")),
+      addRoundKeyLeaf(p, port(`${p}.inv-sub-bytes`, "output"), 0),
     ],
     seedInput: port("inv-round.1", "out"),
     bodyOutput: port(`${p}.add-round-key`, "output"),
@@ -454,7 +439,7 @@ const decryptFinalRound = (): StepNode => {
  * Build the byte-native inverse (decrypt) AES body for the given round count.
  * `rounds = 10` → AES-128, `12` → AES-192, `14` → AES-256.
  *
- * Shape: `[ inv-initial.fetch-rk, inv-initial.add-round-key,
+ * Shape: `[ inv-initial.add-round-key,
  *           inv-round.{rounds-1}, …, inv-round.1, inv-round.0(final) ]`.
  * Round keys are consumed in reverse: the initial AddRoundKey reads
  * `roundKey.{rounds}` and each inverse round `n` reads `roundKey.{n}` down to
@@ -468,19 +453,9 @@ export function buildAesDecryptBodyNative(
   inputSource: PortBinding = port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT),
 ): readonly StepNode[] {
   return [
-    // Initial AddRoundKey (the LAST round key), at body scope — reads `inputSource`.
-    fetchRoundKeyLeaf("inv-initial", rounds),
-    {
-      kind: "step",
-      id: "inv-initial.add-round-key",
-      type: "xor@1",
-      params: { inputCount: 2 },
-      portInputs: {
-        operand0: inputSource,
-        operand1: port("inv-initial.fetch-rk", "output"),
-      },
-      narrationOverride: NARR_INV_INITIAL_ARK,
-    },
+    // Initial AddRoundKey (the LAST round key), at body scope — reads
+    // `inputSource` on `input` and `aux["roundKey.{rounds}"]` on `operand`.
+    addRoundKeyLeaf("inv-initial", inputSource, rounds, NARR_INV_INITIAL_ARK),
     ...Array.from({ length: rounds - 1 }, (_, i) => decryptRound(rounds - 1 - i, rounds)),
     decryptFinalRound(),
   ];

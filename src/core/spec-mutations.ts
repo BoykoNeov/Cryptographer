@@ -960,8 +960,14 @@ const INV_ROUND_ID_RE = /^inv-round\.(\d+)$/;
 const ROUND_LABEL_RE = /^Round (\d+)/;
 const INV_ROUND_LABEL_RE = /^Inverse Round (\d+)/;
 const ADD_ROUND_KEY_TYPE = "generic.add-round-key@1";
-/** Byte-native AddRoundKey's round-key fetch leaf (carries `auxName: roundKey.N`). */
+/** Pre-F3 byte-native AddRoundKey's round-key fetch leaf (carried `auxName:
+ *  roundKey.N`). Superseded by `xor-with-aux@1` below; kept in the bump
+ *  predicates as a harmless no-op for any older in-flight spec. */
 const AUX_LOAD_BYTES_TYPE = "aux-load-bytes@1";
+/** Byte-native AddRoundKey (Finding F3, 2026-05-30): a single `xor-with-aux@1`
+ *  leaf that reads `roundKey.N` from aux via `params.auxName` (replaced the
+ *  fetch-rk + xor pair). Its `auxName` is what the round renumber bumps. */
+const XOR_WITH_AUX_TYPE = "xor-with-aux@1";
 const KEY_EXPANSION_V1 = "aes.key-expansion@1";
 const KEY_EXPANSION_V2 = "aes.key-expansion@2";
 
@@ -1035,11 +1041,16 @@ const renumberRoundGroup = (
       renames.set(child.id, newId);
     }
     // Bump the round-key auxName on whichever leaf consumes it. Legacy
-    // matrix rounds carry it on `generic.add-round-key@1`; byte-native
-    // rounds carry it on the `aux-load-bytes@1` fetch-rk leaf (the xor
-    // AddRoundKey reads the fetched bytes off a port, not aux).
+    // matrix rounds carry it on `generic.add-round-key@1`; byte-native rounds
+    // carry it on the merged `xor-with-aux@1` AddRoundKey leaf (Finding F3)
+    // via `params.auxName`. (`aux-load-bytes@1` was the pre-F3 fetch-rk leaf
+    // — kept in the predicate as a harmless no-op for older in-flight specs.)
     let newParams = child.params;
-    if (child.type === ADD_ROUND_KEY_TYPE || child.type === AUX_LOAD_BYTES_TYPE) {
+    if (
+      child.type === ADD_ROUND_KEY_TYPE ||
+      child.type === AUX_LOAD_BYTES_TYPE ||
+      child.type === XOR_WITH_AUX_TYPE
+    ) {
       const p = child.params as { readonly auxName?: unknown };
       if (p && typeof p.auxName === "string" && p.auxName === oldAuxName) {
         newParams = { ...(p as Record<string, Json>), auxName: newAuxName };
@@ -1105,19 +1116,25 @@ const renumberRoundGroup = (
  * Bump the `roundKey.K` auxName on the inverse-initial AddRoundKey by 1.
  * The auxName lives on different leaves in the two AES shapes: the legacy
  * matrix decrypt carries it on `inv-initial.add-round-key`
- * (`generic.add-round-key@1`); the byte-native decrypt (Slice B1.2) carries
- * it on `inv-initial.fetch-rk` (`aux-load-bytes@1`) while the
- * `inv-initial.add-round-key` xor reads the fetched bytes off a port. This
- * helper accepts both leaf types and only acts on the one whose params
- * actually hold a matching `auxName` — passing the byte-native xor leaf (no
- * auxName) through it is a safe no-op.
+ * (`generic.add-round-key@1`); the byte-native decrypt (Finding F3) carries
+ * it on the SAME id `inv-initial.add-round-key`, now a `xor-with-aux@1` leaf
+ * whose `params.auxName` holds `roundKey.{rounds}`. (Pre-F3 byte-native
+ * decrypt carried it on a separate `inv-initial.fetch-rk` `aux-load-bytes@1`
+ * leaf — that type stays in the predicate as a harmless no-op.) This helper
+ * accepts all three leaf types and only acts on the one whose params actually
+ * hold a matching `auxName`.
  *
  * Returns the original leaf reference if no bump applies (wrong type, params
  * shape unexpected, auxName doesn't match the pattern) so reference equality
  * holds when the surrounding mutation is a no-op.
  */
 const bumpInvInitialAuxName = (leaf: StepLeaf): StepLeaf => {
-  if (leaf.type !== ADD_ROUND_KEY_TYPE && leaf.type !== AUX_LOAD_BYTES_TYPE) return leaf;
+  if (
+    leaf.type !== ADD_ROUND_KEY_TYPE &&
+    leaf.type !== AUX_LOAD_BYTES_TYPE &&
+    leaf.type !== XOR_WITH_AUX_TYPE
+  )
+    return leaf;
   const p = leaf.params as { readonly auxName?: unknown };
   if (!p || typeof p.auxName !== "string") return leaf;
   const m = p.auxName.match(/^roundKey\.(\d+)$/);
@@ -1324,8 +1341,10 @@ export const duplicateRoundGroup = (
       const n = oldChildren[i];
       if (!n) continue;
       // The inverse-initial round-key reference lives on `inv-initial.add-round-key`
-      // (matrix) or `inv-initial.fetch-rk` (byte-native, Slice B1.2). Try the
-      // bump on either — it no-ops on the leaf that doesn't hold the auxName.
+      // — `generic.add-round-key@1` (matrix) or `xor-with-aux@1` (byte-native,
+      // Finding F3). The pre-F3 `inv-initial.fetch-rk` (`aux-load-bytes@1`) is
+      // gone, but matching it stays harmless. The bump no-ops on a leaf that
+      // doesn't actually hold a matching auxName.
       if (
         n.kind === "step" &&
         (n.id === "inv-initial.add-round-key" || n.id === "inv-initial.fetch-rk")
@@ -1774,10 +1793,12 @@ export const applyPaddingScheme = (
   // bytes↔matrix bridge to insert. Instead we splice the pad directly into
   // the port graph: prepend a pad reading `$input`, then repoint every
   // `$input` consumer to the pad's output. For single-block that consumer is
-  // the initial AddRoundKey's `operand0` (a `portInputs` binding); for ECB
-  // (B1.4) it's the port-mode iterate's `seedInput` — `repointInputSource-
-  // Consumers` rewrites both. The pad is a Phase-1 lifted step, so its output
-  // port is named `"state"` (LIFTED_STATE_PORT), not `"output"`.
+  // the initial AddRoundKey's `input` port (a `portInputs` binding — the
+  // merged `xor-with-aux@1` leaf since Finding F3); for ECB (B1.4) it's the
+  // port-mode iterate's `seedInput` — `repointInputSourceConsumers` rewrites
+  // both generically (it walks every portInputs key). The pad is a Phase-1
+  // lifted step, so its output port is named `"state"` (LIFTED_STATE_PORT),
+  // not `"output"`.
   if (isByteNativeAesSpec(spec)) {
     // Idempotency: a prior call may have repointed `$input` consumers to a
     // pad (encrypt) or moved `outputFrom` onto an unpad (decrypt). `stripped`

@@ -85,13 +85,14 @@ describe("AES-128 ECB (NIST SP 800-38A §F.1)", () => {
 
     // Byte-native (B1.4): the matrix split-blocks/compute-block-count/
     // concat-blocks boundary is gone — the only non-iterating frame is
-    // key-expansion (1). Each per-block body emits the same 51 frames as
-    // byte-native single-block aes-128:
-    //   init.fetch-rk (1) + initial AddRoundKey (1)
-    //   + rounds 1..9 × 5 (sub/shift/mix/fetch-rk/add — 45)
-    //   + final round × 4 (sub/shift/fetch-rk/add — 4) = 51
-    // 4 blocks × 51 = 204 iterating frames. Total = 205.
-    expect(trace.frames.length).toBe(205);
+    // key-expansion (1). Each per-block body emits the same 40 frames as
+    // byte-native single-block aes-128 (AddRoundKey merged to one leaf in
+    // Finding F3):
+    //   initial AddRoundKey (1)
+    //   + rounds 1..9 × 4 (sub/shift/mix/add — 36)
+    //   + final round × 3 (sub/shift/add — 3) = 40
+    // 4 blocks × 40 = 160 iterating frames. Total = 161.
+    expect(trace.frames.length).toBe(161);
 
     // Spot-check: the first AddRoundKey inside iteration 0 must end in :b0.
     const firstAddRoundKey = trace.frames.find(

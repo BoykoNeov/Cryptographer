@@ -106,15 +106,16 @@ describe("GraphView — component-level (AES-128 fixture)", () => {
     __setOffsetsEnabledForTest(null);
   });
 
-  it("renders one leaf rectangle per leaf in the spec (52 for byte-native AES-128)", () => {
+  it("renders one leaf rectangle per leaf in the spec (41 for byte-native AES-128)", () => {
     seedAes128Trace();
     const { container } = render(() => <GraphView />);
     // Each leaf is an SVG <g class="graph-leaf">; the rect inside it is
-    // `.graph-leaf-rect`. Byte-native AES-128 (Slice B1) has 52 leaves:
-    // key-expansion + init.fetch-rk + initial.add-round-key (3) + 9 full
-    // rounds × 5 (45) + final round.10 × 4 (4).
+    // `.graph-leaf-rect`. Byte-native AES-128 (Slice B1; AddRoundKey merged to
+    // one `xor-with-aux@1` leaf in Finding F3) has 41 leaves:
+    // key-expansion + initial.add-round-key (2) + 9 full rounds × 4 (36)
+    // + final round.10 × 3 (3).
     const leafRects = container.querySelectorAll(".graph-leaf-rect");
-    expect(leafRects.length).toBe(52);
+    expect(leafRects.length).toBe(41);
   });
 
   it("renders one container rectangle per group (10 round groups)", () => {
@@ -213,13 +214,15 @@ describe("GraphView — component-level (AES-128 fixture)", () => {
     // `.graph-edge-state` and are counted here.
     const { container } = render(() => <GraphView />);
     const leaves = container.querySelectorAll(".graph-leaf-rect");
-    expect(leaves.length).toBe(52);
+    expect(leaves.length).toBe(41);
     // No aux edges pre-run (those require a trace).
     expect(container.querySelectorAll(".graph-edge-aux").length).toBe(0);
-    // Byte-native AES-128 (Slice B1): the port-flow spine threads every leaf's
-    // single input plus the 2 synthetic endpoint-pill edges = 52
-    // `.graph-edge-state` edges. (The matrix form was 40 − 1 filtered + 2 = 41.)
-    expect(container.querySelectorAll(".graph-edge-state").length).toBe(52);
+    // Byte-native AES-128 (Slice B1; AddRoundKey merged in Finding F3): the
+    // port-flow spine threads every leaf's port input plus the 2 synthetic
+    // endpoint-pill edges. Merging dropped the 11 `fetch-rk → add-round-key`
+    // operand edges (the round-key fetch is now an internal aux read, not a
+    // port edge), so the state-edge count falls 52 → 41.
+    expect(container.querySelectorAll(".graph-edge-state").length).toBe(41);
     // Both endpoint pills rendered.
     expect(container.querySelectorAll(".graph-endpoint-rect").length).toBe(2);
   });

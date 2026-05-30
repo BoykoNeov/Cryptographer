@@ -99,16 +99,16 @@ describe("deriveAuxGraph — AES-128 (single block, no iterate)", () => {
     const trace = runAes128();
     const g = deriveAuxGraph(trace, aes128Spec);
 
-    // Byte-native AES-128 leaves: 1 key-expansion + 1 init.fetch-rk
-    //   + 1 initial.add-round-key
-    //   + 9 normal rounds × 5 leaves (sub-bytes, shift-rows, mix-columns,
-    //     fetch-rk, add-round-key) = 45
-    //   + 1 final round × 4 leaves (no mix-columns) = 4
-    //   = 52 leaves.
+    // Byte-native AES-128 leaves (AddRoundKey merged to one `xor-with-aux@1`
+    // leaf in Finding F3): 1 key-expansion + 1 initial.add-round-key
+    //   + 9 normal rounds × 4 leaves (sub-bytes, shift-rows, mix-columns,
+    //     add-round-key) = 36
+    //   + 1 final round × 3 leaves (no mix-columns) = 3
+    //   = 41 leaves.
     // The graph ALSO carries the reserved `$input` source node (A3a) — filter
     // it so "one node per leaf" stays honest. (SHA-256's graph has it too.)
     const leafNodes = g.nodes.filter((n) => n.stepId !== INPUT_SOURCE_ID);
-    expect(leafNodes.length).toBe(52);
+    expect(leafNodes.length).toBe(41);
   });
 
   it("emits one container per group (round.1 .. round.10)", () => {
@@ -134,13 +134,12 @@ describe("deriveAuxGraph — AES-128 (single block, no iterate)", () => {
 
   it("rootIds interleaves the top-level leaf with each round group, in spec order", () => {
     const g = deriveAuxGraph(runAes128(), aes128Spec);
-    // Byte-native top-scope shape: [$input source, key-expansion,
-    // init.fetch-rk, initial.add-round-key, round.1, ..., round.10].
+    // Byte-native top-scope shape (AddRoundKey merged in F3): [$input source,
+    // key-expansion, initial.add-round-key, round.1, ..., round.10].
     expect(g.rootIds[0]).toBe(INPUT_SOURCE_ID);
     expect(g.rootIds[1]).toBe("key-expansion");
-    expect(g.rootIds[2]).toBe("init.fetch-rk");
-    expect(g.rootIds[3]).toBe("initial.add-round-key");
-    expect(g.rootIds.slice(4)).toEqual([
+    expect(g.rootIds[2]).toBe("initial.add-round-key");
+    expect(g.rootIds.slice(3)).toEqual([
       "round.1",
       "round.2",
       "round.3",
@@ -154,14 +153,15 @@ describe("deriveAuxGraph — AES-128 (single block, no iterate)", () => {
     ]);
   });
 
-  it("fans out an edge from key-expansion to every fetch-rk consumer", () => {
+  it("fans out an edge from key-expansion to every AddRoundKey consumer", () => {
     const g = deriveAuxGraph(runAes128(), aes128Spec);
-    // Byte-native: round keys are consumed by `aux-load-bytes@1` fetch-rk
-    // leaves (one per round + the initial one), not by add-round-key directly.
-    // 11 consumers: init.fetch-rk + round.{1..10}.fetch-rk.
+    // Byte-native (merged in F3): round keys are read internally by the
+    // `xor-with-aux@1` AddRoundKey leaves (the recorded auxRead is what keeps
+    // this fan-out edge). 11 consumers: initial.add-round-key +
+    // round.{1..10}.add-round-key.
     const expectedConsumers = new Set<string>([
-      "init.fetch-rk",
-      ...Array.from({ length: 10 }, (_, i) => `round.${i + 1}.fetch-rk`),
+      "initial.add-round-key",
+      ...Array.from({ length: 10 }, (_, i) => `round.${i + 1}.add-round-key`),
     ]);
     // Filter to aux edges — key-expansion is also the first leaf in DFS
     // order, so it carries an outgoing `kind: "state"` spine edge. That edge
@@ -402,12 +402,12 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
   // Phase B/C: the two AES-128 single-block pure-spine tests ("produces 40
   // state edges, one per consecutive-leaf pair" and "spine crosses round-group
   // boundaries") were REMOVED for the byte-native rebuild. Byte-native AES has
-  // 102 state edges — 51 spec-derived spine ("state") PLUS 51 port-flow
-  // companions ("port-flow") from inferPortEdges — so the clean "one edge per
-  // consecutive pair" count is dup-broken, and the matrix leaf order they
-  // asserted (key-expansion → initial.add-round-key; round.N.shift-rows →
-  // round.N.add-round-key) no longer holds (init.fetch-rk / fetch-rk leaves
-  // are interposed). The clean spec-derived spine property — a single chain
+  // dup state edges — a spec-derived spine ("state") PLUS port-flow companions
+  // ("port-flow") from inferPortEdges — so the clean "one edge per consecutive
+  // pair" count is dup-broken, and the matrix leaf order they asserted
+  // (key-expansion → initial.add-round-key; round.N.shift-rows →
+  // round.N.add-round-key) no longer holds for the byte-native body. The clean
+  // spec-derived spine property — a single chain
   // threading every leaf with all endpoints present, transparent through round
   // groups — is pinned on a still-matrix cipher by the Serpent-128 spine test
   // below (98 edges across 32 round groups). Re-pin on AES if/when a port-flow
@@ -499,14 +499,13 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
     // rather than leapfrogging straight to round.6 (which would leave the
     // empty round.5 box stranded on the canvas with no edges).
     let emptiedSpec = aes128Spec;
-    // Remove all FIVE children of byte-native round.5 in turn (fetch-rk is the
-    // extra leaf vs the matrix round). Using the live mutation helpers keeps
-    // the test honest about the editor's actual flow.
+    // Remove all FOUR children of byte-native round.5 in turn (AddRoundKey is
+    // one `xor-with-aux@1` leaf since F3). Using the live mutation helpers
+    // keeps the test honest about the editor's actual flow.
     for (const id of [
       "round.5.sub-bytes",
       "round.5.shift-rows",
       "round.5.mix-columns",
-      "round.5.fetch-rk",
       "round.5.add-round-key",
     ]) {
       emptiedSpec = removeStep(emptiedSpec, id);
@@ -588,10 +587,10 @@ describe("collapseGraph — view-time transform", () => {
   it("hides every leaf inside a collapsed container (AES-128 round.5 collapse)", () => {
     const g = deriveAuxGraph(runAes128(), aes128Spec);
     const out = collapseGraph(g, new Set(["round.5"]));
-    // Byte-native round.5 has 5 leaves (sub-bytes, shift-rows, mix-columns,
-    // fetch-rk, add-round-key); they vanish from the node list. Pre: 53
-    // (52 leaves + $input source), post: 53 - 5 = 48.
-    expect(out.nodes.length).toBe(48);
+    // Byte-native round.5 has 4 leaves (sub-bytes, shift-rows, mix-columns,
+    // add-round-key — merged in F3); they vanish from the node list. Pre: 42
+    // (41 leaves + $input source), post: 42 - 4 = 38.
+    expect(out.nodes.length).toBe(38);
     // The container itself stays — renderer draws it as a collapsed chip.
     expect(out.containers.find((c) => c.id === "round.5")).toBeDefined();
     // But its childIds is now empty so the layout walk treats it as leaf-sized.
@@ -607,10 +606,10 @@ describe("collapseGraph — view-time transform", () => {
     expect(before).toBe(11);
 
     const out = collapseGraph(g, new Set(["round.3"]));
-    // After collapse: round.3.fetch-rk (the byte-native roundKey.3 consumer)
-    // is hidden, but the edge key-expansion → round.3.fetch-rk remaps to
-    // key-expansion → round.3. No edge count change for this fan-out (the
-    // remap doesn't collide with anything else).
+    // After collapse: round.3.add-round-key (the byte-native roundKey.3
+    // consumer since F3) is hidden, but the edge key-expansion →
+    // round.3.add-round-key remaps to key-expansion → round.3. No edge count
+    // change for this fan-out (the remap doesn't collide with anything else).
     const after = out.edges.filter((e) => e.kind === "aux" && e.from === "key-expansion").length;
     expect(after).toBe(11);
     // The specific re-routed edge exists.
@@ -619,8 +618,8 @@ describe("collapseGraph — view-time transform", () => {
         (e) => e.from === "key-expansion" && e.to === "round.3" && e.auxKey === "roundKey.3",
       ),
     ).toBe(true);
-    // And the pre-collapse target (the hidden fetch-rk leaf) is gone.
-    expect(out.edges.some((e) => e.to === "round.3.fetch-rk")).toBe(false);
+    // And the pre-collapse target (the hidden add-round-key leaf) is gone.
+    expect(out.edges.some((e) => e.to === "round.3.add-round-key")).toBe(false);
   });
 
   it("drops self-loop edges produced by collapse (aux that lived entirely inside the container)", () => {
@@ -643,8 +642,8 @@ describe("collapseGraph — view-time transform", () => {
   it("collapses multiple containers at once (round.5 + round.6)", () => {
     const g = deriveAuxGraph(runAes128(), aes128Spec);
     const out = collapseGraph(g, new Set(["round.5", "round.6"]));
-    // Two byte-native rounds × 5 leaves = 10 fewer nodes.
-    expect(out.nodes.length).toBe(g.nodes.length - 10);
+    // Two byte-native rounds × 4 leaves (merged in F3) = 8 fewer nodes.
+    expect(out.nodes.length).toBe(g.nodes.length - 8);
     // Both containers still present in the container list.
     expect(out.containers.some((c) => c.id === "round.5")).toBe(true);
     expect(out.containers.some((c) => c.id === "round.6")).toBe(true);

@@ -248,14 +248,14 @@ describe("insertStepBefore", () => {
 
 describe("prependChildToContainer", () => {
   it("inserts as the first child of a non-empty group", () => {
-    // Byte-native round.1 has 5 children:
-    // [sub-bytes, shift-rows, mix-columns, fetch-rk, add-round-key].
+    // Byte-native round.1 has 4 children (AddRoundKey merged in F3):
+    // [sub-bytes, shift-rows, mix-columns, add-round-key].
     const newStep = fixtureLeaf("prepended-into-round-1");
     const updated = prependChildToContainer(aes128Spec, "round.1", newStep);
     const round1 = findStepAndParent(updated, "round.1");
     expect(round1?.node.kind).toBe("group");
     if (round1?.node.kind === "group") {
-      expect(round1.node.children.length).toBe(6);
+      expect(round1.node.children.length).toBe(5);
       expect(round1.node.children[0]?.id).toBe("prepended-into-round-1");
       expect(round1.node.children[1]?.id).toBe("round.1.sub-bytes");
     }
@@ -266,14 +266,11 @@ describe("prependChildToContainer", () => {
     // fall through to root-append because `insertStepBefore(firstChild,...)`
     // had nothing to anchor on. Now the empty container actually receives
     // the new child.
-    // Byte-native round.1 has 5 children — fetch-rk must also be removed.
+    // Byte-native round.1 has 4 children (AddRoundKey merged to one leaf in F3).
     const withEmptyRound = removeStep(
       removeStep(
-        removeStep(
-          removeStep(removeStep(aes128Spec, "round.1.sub-bytes"), "round.1.shift-rows"),
-          "round.1.mix-columns",
-        ),
-        "round.1.fetch-rk",
+        removeStep(removeStep(aes128Spec, "round.1.sub-bytes"), "round.1.shift-rows"),
+        "round.1.mix-columns",
       ),
       "round.1.add-round-key",
     );
@@ -478,7 +475,6 @@ describe("structural mutations preserve runtime correctness", () => {
         "round.1.sub-bytes",
         "round.1.shift-rows",
         "round.1.mix-columns",
-        "round.1.fetch-rk",
         "round.1.add-round-key",
       ]);
     }

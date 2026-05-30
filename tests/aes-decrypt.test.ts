@@ -88,10 +88,10 @@ describe("AES-128 decryption (FIPS-197 §5.3)", () => {
   });
 
   it("emits the same number of frames as the forward cipher", () => {
-    // Byte-native (Slice B1.2): 1 key-expansion + 1 inv-initial fetch-rk + 1
-    // inv-initial AddRoundKey(xor) + 9 inverse rounds × 5 substeps
-    // (InvShiftRows, InvSubBytes, fetch-rk, AddRoundKey, InvMixColumns) + 1
-    // final inverse round × 4 substeps (no InvMixColumns) = 52 frames. Same
+    // Byte-native (Slice B1.2; AddRoundKey merged to one leaf in Finding F3):
+    // 1 key-expansion + 1 inv-initial AddRoundKey + 9 inverse rounds × 4
+    // substeps (InvShiftRows, InvSubBytes, AddRoundKey, InvMixColumns) + 1
+    // final inverse round × 3 substeps (no InvMixColumns) = 41 frames. Same
     // shape as the byte-native forward cipher, which makes the side-by-side
     // comparison meaningful in the UI.
     const ct = makeBytesState(bytesFromHex(ciphertextHex));
@@ -101,6 +101,6 @@ describe("AES-128 decryption (FIPS-197 §5.3)", () => {
       initialAux,
       portedDispatchEnabled: true,
     });
-    expect(trace.frames.length).toBe(52);
+    expect(trace.frames.length).toBe(41);
   });
 });

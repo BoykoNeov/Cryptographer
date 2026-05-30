@@ -168,10 +168,10 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
     const { boxes } = layoutRoot(g, empty, layoutConstantsFor("normal"));
 
     // Sample a handful of rounds — the property holds for every round in
-    // byte-native AES-128 because every round.N.fetch-rk pulls a round key
+    // byte-native AES-128 because every round.N.add-round-key pulls a round key
     // from the high-fanout key-expansion source.
     for (const n of [1, 5, 10]) {
-      const consumerId = `round.${n}.fetch-rk`;
+      const consumerId = `round.${n}.add-round-key`;
       const replicaId = `key-expansion@->${consumerId}`;
       const consumerBox = boxes.get(consumerId);
       const replicaBox = boxes.get(replicaId);
@@ -193,7 +193,7 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
       new Map<string, { x: number; y: number }>(),
       layoutConstantsFor("normal"),
     );
-    const consumerId = "round.5.fetch-rk";
+    const consumerId = "round.5.add-round-key";
     const replicaId = `key-expansion@->${consumerId}`;
     const c = boxes.get(consumerId);
     const r = boxes.get(replicaId);
@@ -224,12 +224,13 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
     expect(r5_yes.w - r5_no.w).toBeGreaterThanOrEqual(consts.LEAF_W);
   });
 
-  it("the in-column children (sub-bytes / shift-rows / mix-columns / fetch-rk / add-round-key) stay vertically aligned with each other", () => {
+  it("the in-column children (sub-bytes / shift-rows / mix-columns / add-round-key) stay vertically aligned with each other", () => {
     // The pedagogical headline: the working state flows through one clean
     // column. After the gutter fix, the non-replica children of each round
     // should share an x-coordinate (or share width and start) — same column.
-    // Byte-native round.5 has five children (the matrix form's four plus the
-    // `fetch-rk` aux-load leaf); all live in the column, the replica in the gutter.
+    // Byte-native round.5 has four children (Finding F3 merged the round-key
+    // fetch into the single `xor-with-aux@1` AddRoundKey); all live in the
+    // column, the key-expansion replica in the gutter.
     const g = aes128ReplicatedGraph();
     const { boxes } = layoutRoot(
       g,
@@ -240,14 +241,13 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
       "round.5.sub-bytes",
       "round.5.shift-rows",
       "round.5.mix-columns",
-      "round.5.fetch-rk",
       "round.5.add-round-key",
     ];
     const xs = ids.map((id) => boxes.get(id)?.x);
     // All x-coordinates are the same number (they share the column).
     expect(new Set(xs).size).toBe(1);
     // And the replica's x is strictly less than that shared column x.
-    const replicaX = boxes.get("key-expansion@->round.5.fetch-rk")?.x;
+    const replicaX = boxes.get("key-expansion@->round.5.add-round-key")?.x;
     expect(replicaX).toBeDefined();
     expect(replicaX).toBeLessThan(xs[0] ?? Number.POSITIVE_INFINITY);
   });
@@ -314,17 +314,17 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
     // Symmetric to the root-level test: the iterate body is also a
     // horizontal flow, so its spliced-before-consumer replicas need the
     // same orthogonal lift. Byte-native ECB (B1.4): key-expansion's per-round
-    // consumers are the `*.fetch-rk` (`aux-load-bytes@1`) leaves inside the
-    // iterate; the first is `init.fetch-rk`, so the replica is
-    // `key-expansion@->init.fetch-rk` and it lifts above that consumer.
+    // consumers are the `*.add-round-key` (`aux-load-bytes@1`) leaves inside the
+    // iterate; the first is `initial.add-round-key`, so the replica is
+    // `key-expansion@->initial.add-round-key` and it lifts above that consumer.
     const g = aes128EcbReplicatedGraph();
     const { boxes } = layoutRoot(
       g,
       new Map<string, { x: number; y: number }>(),
       layoutConstantsFor("normal"),
     );
-    const consumerBox = boxes.get("init.fetch-rk");
-    const replicaBox = boxes.get("key-expansion@->init.fetch-rk");
+    const consumerBox = boxes.get("initial.add-round-key");
+    const replicaBox = boxes.get("key-expansion@->initial.add-round-key");
     if (!consumerBox || !replicaBox) {
       throw new Error("missing iterate-body box (consumer or replica)");
     }
@@ -789,7 +789,7 @@ describe("GraphView — root replica with iterate consumer anchors above first b
   // the matrix spine-replica-to-iterate placement / `visualEdgeTargetId`
   // retarget is gone: byte-native ECB (port-mode iterate) has no
   // compute-block-count / split-blocks and produces no replica edge pointing
-  // AT the iterate (key-expansion replicates to the in-body `*.fetch-rk`
+  // AT the iterate (key-expansion replicates to the in-body `*.add-round-key`
   // leaves instead). The underlying layout machinery stays covered by the
   // SYNTHETIC fixtures in this file (sibling tests below). Per the sweep
   // discriminator we do NOT retarget this matrix-structure integration onto

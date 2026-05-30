@@ -7,14 +7,15 @@ import { describe, expect, it } from "vitest";
 
 /**
  * Known-answer test for byte-native AES-128 (scaffolding-suppression Slice B1,
- * 2026-05-29). The spec is now built from port-native primitives
- * (`byte-substitute@1` / `permute@1` / `gf-matrix-multiply@1` / `xor@1` +
- * `aux-load-bytes@1`) with no legacy executor, so it runs ONLY under
- * `portedDispatchEnabled: true` and produces a `bytes` finalState.
+ * 2026-05-29; AddRoundKey merged to one leaf in Finding F3, 2026-05-30). The
+ * spec is built from port-native primitives (`byte-substitute@1` / `permute@1`
+ * / `gf-matrix-multiply@1` / `xor-with-aux@1`) with no legacy executor, so it
+ * runs ONLY under `portedDispatchEnabled: true` and produces a `bytes`
+ * finalState.
  *
  * After the ported-dispatch parity tests dropped their byte-native AES-128
  * rows (no legacy path to compare against), THIS file is the primary pin on
- * the byte-native AES-128 frame stream: 52 frames, all 11 round keys, and the
+ * the byte-native AES-128 frame stream: 41 frames, all 11 round keys, and the
  * FIPS-197 Appendix B intermediate after the initial AddRoundKey. Keep these
  * as frame-stream assertions, not a KAT-only check.
  */
@@ -49,14 +50,15 @@ describe("AES-128 (FIPS-197 Appendix C.1)", () => {
       portedDispatchEnabled: true,
     });
 
-    // Byte-native AES-128 leaves (one frame each):
+    // Byte-native AES-128 leaves (one frame each), after Finding F3 merged
+    // AddRoundKey's fetch-rk + xor pair into the single `xor-with-aux@1` leaf:
     //   key-expansion (1)
-    //   init.fetch-rk (1) + initial.add-round-key (1)
-    //   rounds 1..9 × 5 sub-steps (sub-bytes, shift-rows, mix-columns,
-    //     fetch-rk, add-round-key) = 45
-    //   final round.10 × 4 sub-steps (no mix-columns) = 4
-    //   = 52 frames
-    expect(trace.frames.length).toBe(52);
+    //   initial.add-round-key (1)
+    //   rounds 1..9 × 4 sub-steps (sub-bytes, shift-rows, mix-columns,
+    //     add-round-key) = 36
+    //   final round.10 × 3 sub-steps (no mix-columns) = 3
+    //   = 41 frames
+    expect(trace.frames.length).toBe(41);
   });
 
   it("produces all 11 round keys in aux", () => {

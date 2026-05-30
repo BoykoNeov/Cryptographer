@@ -264,6 +264,12 @@ import {
   xorAuxIntoStateMeta,
   xorAuxIntoStatePortContract,
 } from "../steps/xor-aux-into-state";
+import {
+  xorWithAux,
+  xorWithAuxDoc,
+  xorWithAuxMeta,
+  xorWithAuxPortContract,
+} from "../steps/xor-with-aux";
 import { zeroPad, zeroPadDoc, zeroPadMeta, zeroPadPortContract } from "../steps/zero-pad";
 import { zeroUnpad, zeroUnpadDoc, zeroUnpadMeta, zeroUnpadPortContract } from "../steps/zero-unpad";
 
@@ -891,8 +897,10 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // `generic.shift-rows@1` / `generic.mix-columns@1` did, but on a flat
   // `Uint8Array` with `layout:"raw"` ports — so they stay off the A4
   // `NON_BYTES_ALLOWLIST` (the matrix lifts get removed from it when ECB/CBC
-  // are converted in B1.4). AddRoundKey needs no new step type — it's
-  // `aux-load-bytes@1` (roundKey.N) + `xor@1`.
+  // are converted in B1.4). AddRoundKey is `xor-with-aux@1` (Finding F3,
+  // 2026-05-30) — a single port-native step that reads its `roundKey.N` from
+  // aux internally, replacing the earlier `aux-load-bytes@1` (fetch-rk) +
+  // `xor@1` pair so the graph reads AddRoundKey as one FIPS-197 §5.1.4 op.
   r.register("byte-substitute@1", {
     kind: "ported",
     executor: byteSubstitute,
@@ -910,6 +918,17 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: gfMatrixMultiply,
     shape: gfMatrixMultiplyPortContract,
     doc: gfMatrixMultiplyDoc,
+  });
+  // AddRoundKey: XOR the round key (read from `aux["roundKey.N"]` internally
+  // via `meta.auxReadPorts`) into the carried `input` port. Hybrid ported
+  // shape (executor + meta, no legacy) — same registration posture as
+  // `aux-load-bytes@1`. Raw-only ports → off the A4 allowlist.
+  r.register("xor-with-aux@1", {
+    kind: "ported",
+    executor: xorWithAux,
+    shape: xorWithAuxPortContract,
+    meta: xorWithAuxMeta,
+    doc: xorWithAuxDoc,
   });
   // ─── Port-native bridges (Slice 2.6b — universal-port plan) ────────────
   // Three port-native primitives that bridge between the port-native

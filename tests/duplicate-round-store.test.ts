@@ -90,9 +90,9 @@ describe("duplicateRoundInSpec — active-side mutation", () => {
     const roundIds = findGroupIds(after).filter((id) => id.startsWith("round."));
     expect(roundIds).toHaveLength(11);
     expect(roundIds).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((n) => `round.${n}`));
-    // Byte-native encrypt (Slice B1): the round-key index lives on the
-    // `aux-load-bytes@1` fetch-rk leaf, not the `xor@1` AddRoundKey.
-    expect(auxNameOf(after, "round.3.fetch-rk")).toBe("roundKey.3");
+    // Byte-native encrypt (Slice B1; merged in Finding F3): the round-key
+    // index lives on the single `xor-with-aux@1` AddRoundKey leaf's auxName.
+    expect(auxNameOf(after, "round.3.add-round-key")).toBe("roundKey.3");
   });
 
   it("reverse: duplicating inv-round.2 on decrypt grows decrypt to 11 inverse rounds", () => {
@@ -105,9 +105,9 @@ describe("duplicateRoundInSpec — active-side mutation", () => {
     const after = spec();
     const invIds = findGroupIds(after).filter((id) => id.startsWith("inv-round."));
     expect(invIds).toHaveLength(11);
-    // Byte-native decrypt (Slice B1.2): the LAST round key is fetched on
-    // `inv-initial.fetch-rk` (`aux-load-bytes@1`).
-    expect(auxNameOf(after, "inv-initial.fetch-rk")).toBe("roundKey.11");
+    // Byte-native decrypt (Slice B1.2; merged in F3): the LAST round key's
+    // index lives on `inv-initial.add-round-key` (`xor-with-aux@1`).
+    expect(auxNameOf(after, "inv-initial.add-round-key")).toBe("roundKey.11");
   });
 });
 
@@ -133,11 +133,12 @@ describe("duplicateRoundInSpec — auto-mirror to counterpart", () => {
       11,
     );
     // Key index alignment: clone reads key.3 on BOTH sides. Both directions
-    // are byte-native (Slice B1.1 encrypt / B1.2 decrypt), so the round key
-    // index lives on the `fetch-rk` (`aux-load-bytes@1`) leaf on each side.
-    expect(auxNameOf(after.encrypt, "round.3.fetch-rk")).toBe("roundKey.3");
-    expect(auxNameOf(after.decrypt, "inv-round.3.fetch-rk")).toBe("roundKey.3");
-    expect(auxNameOf(after.decrypt, "inv-initial.fetch-rk")).toBe("roundKey.11");
+    // are byte-native (Slice B1.1 encrypt / B1.2 decrypt; merged in F3), so
+    // the round key index lives on the `*.add-round-key` (`xor-with-aux@1`)
+    // leaf on each side.
+    expect(auxNameOf(after.encrypt, "round.3.add-round-key")).toBe("roundKey.3");
+    expect(auxNameOf(after.decrypt, "inv-round.3.add-round-key")).toBe("roundKey.3");
+    expect(auxNameOf(after.decrypt, "inv-initial.add-round-key")).toBe("roundKey.11");
   });
 
   it("reverse duplicate on decrypt mirrors to encrypt's round.N", () => {
@@ -151,9 +152,10 @@ describe("duplicateRoundInSpec — auto-mirror to counterpart", () => {
       11,
     );
     // Clone reads key.5 (source was round 4, clone is N+1). Both directions
-    // byte-native (B1.1/B1.2) → round key index on the `fetch-rk` leaf.
-    expect(auxNameOf(after.encrypt, "round.5.fetch-rk")).toBe("roundKey.5");
-    expect(auxNameOf(after.decrypt, "inv-round.5.fetch-rk")).toBe("roundKey.5");
+    // byte-native (B1.1/B1.2; merged in F3) → round key index on the
+    // `*.add-round-key` (`xor-with-aux@1`) leaf.
+    expect(auxNameOf(after.encrypt, "round.5.add-round-key")).toBe("roundKey.5");
+    expect(auxNameOf(after.decrypt, "inv-round.5.add-round-key")).toBe("roundKey.5");
   });
 });
 
@@ -219,11 +221,11 @@ describe("duplicateRoundInSpec — edits are mode-local, don't invalidate counte
     editStepParams("round.4.add-round-key", { auxName: "roundKey.4-custom" });
 
     // Decrypt's mirror is still intact. Byte-native (B1.2): the round key
-    // index lives on `inv-round.4.fetch-rk`.
+    // index lives on `inv-round.4.add-round-key`.
     expect(findGroupIds(all().decrypt).filter((id) => id.startsWith("inv-round."))).toHaveLength(
       11,
     );
-    expect(auxNameOf(all().decrypt, "inv-round.4.fetch-rk")).toBe("roundKey.4");
+    expect(auxNameOf(all().decrypt, "inv-round.4.add-round-key")).toBe("roundKey.4");
   });
 });
 

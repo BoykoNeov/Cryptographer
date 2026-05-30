@@ -26,9 +26,11 @@
  *
  * No hover tests: click-only is part of the contract.
  *
- * Byte-native AES-128 (Slice B1) is the fixture — well-known stable id set
- * (`key-expansion → init.fetch-rk` carrying `roundKey.0`; the `aux-load-bytes`
- * fetch leaf is the round-key consumer now, not the matrix AddRoundKey).
+ * Byte-native AES-128 (Slice B1; AddRoundKey merged to one `xor-with-aux@1`
+ * leaf in Finding F3) is the fixture — well-known stable id set: the
+ * `key-expansion → initial.add-round-key` aux edge carries `roundKey.0`, which
+ * the merged AddRoundKey leaf reads internally (so it IS the round-key fan-out
+ * consumer now).
  */
 
 import { aes128Spec } from "@/ciphers/aes-128";
@@ -183,7 +185,7 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     const path = findEdgePathByEndpoints(
       container as HTMLElement,
       "key-expansion",
-      "init.fetch-rk",
+      "initial.add-round-key",
       "roundKey.0",
     );
     expect(path).not.toBeNull();
@@ -194,13 +196,13 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     const visibleEdge = path?.parentElement?.querySelector(".graph-edge");
     expect(visibleEdge?.classList.contains("graph-edge-selected")).toBe(true);
     expect(body?.textContent).toContain("key-expansion");
-    expect(body?.textContent).toContain("init.fetch-rk");
+    expect(body?.textContent).toContain("initial.add-round-key");
     // First 4 bytes of the input key as a fingerprint for round key 0.
     expect(body?.textContent).toContain("00010203");
     const target = useSelectedTarget()();
     expect(target).toEqual({
       kind: "edge",
-      key: "key-expansion|init.fetch-rk|roundKey.0|aux",
+      key: "key-expansion|initial.add-round-key|roundKey.0|aux",
     });
   });
 
@@ -261,7 +263,7 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     const path = findEdgePathByEndpoints(
       container as HTMLElement,
       "key-expansion",
-      "init.fetch-rk",
+      "initial.add-round-key",
       "roundKey.0",
     );
     fireEvent.click(path as SVGPathElement);
@@ -293,13 +295,13 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     const path = findEdgePathByEndpoints(
       container as HTMLElement,
       "key-expansion",
-      "init.fetch-rk",
+      "initial.add-round-key",
       "roundKey.0",
     );
     fireEvent.click(path as SVGPathElement);
     expect(useSelectedTarget()()).toEqual({
       kind: "edge",
-      key: "key-expansion|init.fetch-rk|roundKey.0|aux",
+      key: "key-expansion|initial.add-round-key|roundKey.0|aux",
     });
     // Switch to the input pill.
     const pill = findEndpointPill(container as HTMLElement, "input");
@@ -313,7 +315,7 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     const path = findEdgePathByEndpoints(
       container as HTMLElement,
       "key-expansion",
-      "init.fetch-rk",
+      "initial.add-round-key",
       "roundKey.0",
     );
     if (path === null) {
@@ -332,7 +334,7 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     const path = findEdgePathByEndpoints(
       container as HTMLElement,
       "key-expansion",
-      "init.fetch-rk",
+      "initial.add-round-key",
       "roundKey.0",
     );
     fireEvent.click(path as SVGPathElement);

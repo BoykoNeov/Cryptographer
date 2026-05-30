@@ -91,9 +91,10 @@ describe("applyPaddingScheme(spec, encrypt, 'pkcs7')", () => {
     // The pad itself reads $input; every OTHER node must not.
     const withoutPad = result.steps.filter((n) => n.id !== "pkcs7-pad");
     expect(readsRawInput(withoutPad)).toBe(false);
-    // The initial AddRoundKey now reads the pad's output.
-    const initialArk = findFirstLeaf(result, "xor@1");
-    expect(initialArk?.portInputs?.operand0).toEqual({ node: "pkcs7-pad", port: "state" });
+    // The initial AddRoundKey now reads the pad's output. After Finding F3 it
+    // is a `xor-with-aux@1` leaf whose state arrives on the `input` port.
+    const initialArk = findFirstLeaf(result, "xor-with-aux@1");
+    expect(initialArk?.portInputs?.input).toEqual({ node: "pkcs7-pad", port: "state" });
   });
 });
 
@@ -230,9 +231,10 @@ describe("applyPaddingScheme cross-scheme swaps", () => {
     expect(types[0]).toBe("generic.zero-pad@1");
     expect(types).not.toContain("generic.load-block@1");
     expect(types[1]).toBe("aes.key-expansion@1");
-    // The initial AddRoundKey was repointed onto the NEW pad, not the old one.
-    const initialArk = findFirstLeaf(zero, "xor@1");
-    expect(initialArk?.portInputs?.operand0).toEqual({ node: "zero-pad", port: "state" });
+    // The initial AddRoundKey (a `xor-with-aux@1` leaf since F3) was repointed
+    // onto the NEW pad, not the old one — its state arrives on the `input` port.
+    const initialArk = findFirstLeaf(zero, "xor-with-aux@1");
+    expect(initialArk?.portInputs?.input).toEqual({ node: "zero-pad", port: "state" });
   });
 
   it("iso7816-4 → none returns canonical-equivalent (no overlay leaves)", () => {
@@ -243,9 +245,10 @@ describe("applyPaddingScheme cross-scheme swaps", () => {
     expect(types).not.toContain("generic.load-block@1");
     expect(types[0]).toBe("aes.key-expansion@1");
     expect(canonical.inputs.plaintext.shape).toBe("bytes");
-    // The initial AddRoundKey's $input wiring was restored on strip.
-    const initialArk = findFirstLeaf(canonical, "xor@1");
-    expect(initialArk?.portInputs?.operand0).toEqual({ node: "$input", port: "out" });
+    // The initial AddRoundKey's $input wiring was restored on strip (the
+    // `xor-with-aux@1` leaf's `input` port points back at the raw source).
+    const initialArk = findFirstLeaf(canonical, "xor-with-aux@1");
+    expect(initialArk?.portInputs?.input).toEqual({ node: "$input", port: "out" });
   });
 
   it("all three non-none schemes produce structurally parallel encrypt overlays", () => {
