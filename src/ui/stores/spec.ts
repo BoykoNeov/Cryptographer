@@ -1239,3 +1239,17 @@ export const __resetSpecForTests = (): void => {
     decrypt: applyPaddingScheme(aes128DecryptSpec, "decrypt", scheme),
   });
 };
+
+/**
+ * Test-only: land an arbitrary spec into BOTH cipher slots so `useSpec()`
+ * returns it regardless of mode. Used by the Feistel linear-mode component
+ * tests (FeistelMiniDiagram / FeistelTrackContext / RejoinFrameView /
+ * scrubber badges) to inject the `feistel-toy` fixture — `feistel-round`
+ * is not in the cipher selector, so `setCipher` can't reach it, and after
+ * the B4 DES rebuild no shipped cipher uses the primitive at all. The toy
+ * is the only construct exercising those (Phase-5-doomed) components, and
+ * this is the minimal injection path.
+ */
+export const __setSpecForTests = (spec: CipherSpec): void => {
+  setSpecs({ kind: "cipher", encrypt: spec, decrypt: spec });
+};

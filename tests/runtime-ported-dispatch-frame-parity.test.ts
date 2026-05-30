@@ -56,8 +56,7 @@
  */
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
-import { desSpec } from "@/ciphers/des";
-import { desDecryptSpec } from "@/ciphers/des-decrypt";
+import { FEISTEL_TOY_SPEC } from "@/ciphers/feistel-toy";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue, CipherSpec, State, TraceFrame } from "@/core/types";
@@ -168,51 +167,35 @@ type Row = {
 // against. KATs + the golden frame-stream checksum live in
 // serpent-vectors / serpent-roundtrip and runtime-ported-dispatch-serpent.
 
-// DES — FIPS 46-3 Appendix B.1 worked example, cross-checked with
-// `node:crypto` des-ecb (--openssl-legacy-provider). One vector here;
-// the per-cipher DES dispatch file exercises all 3 fixture vectors.
-const DES_PT = "0123456789abcdef";
-const DES_KEY = "133457799bbcdff1";
-const DES_CT = "85e813540f0ab405";
+// Toy Feistel — the LAST lifted-legacy-AND-port-runnable construct after
+// the cipher migration completed (B4 made DES port-native). `feistel.toy-
+// add-k@1` keeps both a `legacy` executor (runs under flag-off) and the
+// ported path (runs under flag-on), and `FEISTEL_TOY_SPEC` wraps it in a
+// `feistel-round`, so this single row still exercises the matrix's reason
+// for existing: invariant 2 of the Phase 1 plan — lift-adapter frames AND
+// the runtime's feistel-round / rejoin synthesis are byte-identical across
+// dispatch paths. KAT hand-derived in `feistel-toy.ts` (FEISTEL_TOY_KAT).
+const TOY_PT = "01020304";
+const TOY_CT = "343d1517";
 
-// ─── The 8-row matrix (Serpent 6 + DES 2; all AES + Speck rows are now
-//     byte-native and live in their own KAT files) ──────────────────────
+// ─── The matrix (toy Feistel only) ──────────────────────────────────────
+// All shipped cipher/hash specs are now byte-native port-native and have no
+// legacy frame stream to compare against — their KATs + golden frame
+// streams live in the per-cipher KAT files (aes-*-vectors, speck-*-vectors,
+// serpent-vectors/roundtrip, des-vectors/des-decrypt + the per-leaf parity
+// nets). AES rows were removed across B1.1–B1.4b, Speck in B2, Serpent in
+// B3, and DES in B4. The toy Feistel fixture is the only surviving spec that
+// runs under BOTH dispatch flags, so it carries the matrix's invariant-2
+// check forward.
 
 const ROWS: readonly Row[] = [
-  // AES single-block: 0 rows. The aes-128 ENCRYPT row was removed in Slice
-  // B1.1, the aes-128 DECRYPT row in Slice B1.2, and all four aes-192/256
-  // single-block rows in Slice B1.3 — every single-block AES is now byte-native
-  // (port-native primitives, no legacy executor), so it cannot run under
-  // `portedDispatchEnabled: false` and has no legacy frame stream to compare
-  // against. This matrix's contract is "legacy == ported", which is vacuous for
-  // a genuinely port-native spec. The byte-native KATs + frame streams live in
-  // `aes-vectors.test.ts` (128 encrypt), `aes-decrypt.test.ts` (128 decrypt),
-  // and `aes-192-vectors` / `aes-256-vectors`. The AES-128 ECB rows were
-  // removed in Slice B1.4a and the CBC rows in B1.4b — both modes are now
-  // byte-native (port-mode iterate + port-native body, no legacy path),
-  // KAT-pinned in `aes-128-ecb-kat` / `aes-128-cbc-kat`. No AES rows remain.
-  // Serpent: 0 rows. All six specs (3 key sizes × 2 directions) were removed
-  // in Slice B3 — the five round-body executors are now port-native (no legacy
-  // executor), so they cannot run under `portedDispatchEnabled: false` and have
-  // no legacy frame stream to compare against. The KATs + a golden frame-stream
-  // checksum live in serpent-vectors / serpent-roundtrip and
-  // runtime-ported-dispatch-serpent.
-  // DES × 2 directions = 2 rows
   {
-    label: "des encrypt (FIPS 46-3 Appendix B.1)",
-    spec: desSpec,
+    label: "toy feistel (lift-adapter + feistel-round synthesis frame parity)",
+    spec: FEISTEL_TOY_SPEC,
     stateBuilder: buildBytesState,
-    inputHex: DES_PT,
-    expectedOutputHex: DES_CT,
-    auxInputs: [["key", DES_KEY]],
-  },
-  {
-    label: "des decrypt (FIPS 46-3 Appendix B.1)",
-    spec: desDecryptSpec,
-    stateBuilder: buildBytesState,
-    inputHex: DES_CT,
-    expectedOutputHex: DES_PT,
-    auxInputs: [["key", DES_KEY]],
+    inputHex: TOY_PT,
+    expectedOutputHex: TOY_CT,
+    auxInputs: [],
   },
 ];
 

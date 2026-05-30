@@ -29,6 +29,7 @@ const runDesExecutorAndExtractKeys = (key: Uint8Array): Uint8Array[] => {
   const trace = runSpec(desSpec, buildDefaultRegistry(), {
     initialState: { shape: "bytes", bytes: new Uint8Array(8) },
     initialAux: new Map([["key", key]]),
+    portedDispatchEnabled: true,
   });
   const out: Uint8Array[] = [];
   for (let i = 0; i < 16; i++) {

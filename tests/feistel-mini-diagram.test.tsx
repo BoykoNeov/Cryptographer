@@ -1,22 +1,26 @@
 // @vitest-environment jsdom
 
 /**
- * Phase 5b of `docs/plans/des-feistel.md` — `FeistelMiniDiagram` regression.
+ * `FeistelMiniDiagram` smoke — retargeted to the toy Feistel fixture in B4
+ * (universal-port Phase 4d). After the DES rebuild no SHIPPED cipher uses
+ * the `feistel-round` primitive, so this component is app-unreachable and
+ * Phase-5-doomed (a port-native Feistel/swap diagram is the obligatory
+ * rebuild follow-up). It remains in the tree until Phase 5, and the
+ * cipher-agnostic component (it derives structure from R-track children +
+ * the combine kind, not from DES specifics) is exercised here against
+ * `FEISTEL_TOY_SPEC` — the only surviving `feistel-round` construct.
  *
- * The mini diagram is an abstract SVG showing the Feistel structure
- * (split / F-stack / combine / output) — distinct from the graph view
- * which shows spec topology. This file pins:
- *
- *   - Hidden when frame.branchPath is empty.
- *   - Renders the SVG when inside a Feistel round body.
- *   - The F-stack contains one leaf-rect per R-track leaf (4 for DES).
- *   - The active frame's leaf gets `.feistel-mini-diagram-leaf-active`.
- *   - Clicking a leaf in the F-stack moves the scrubber to that frame.
- *   - Output labels reflect the combine kind (feistel-standard → "R" + "L⊕F";
- *     feistel-no-swap → "L⊕F" + "R").
+ * Toy shape (see `src/ciphers/feistel-toy.ts`): 2 rounds, each R-track has
+ * ONE leaf (`add-k`); round 1 = `feistel-standard`, round 2 =
+ * `feistel-no-swap`. So this smoke keeps everything the toy supports
+ * (render gate, SVG, leaf count = 1, active-leaf class, click-scrub, both
+ * combine kinds) and DROPS the DES-only assertions (the 4 named F-leaves
+ * and the K_i cross-reference labels — the toy F uses a param `k`, no
+ * `roundKeyAux`).
  */
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { FEISTEL_TOY_SPEC } from "@/ciphers/feistel-toy";
 import { runSpec } from "@/core/runtime";
 import type { TraceFrame } from "@/core/types";
 import { FeistelMiniDiagram } from "@/ui/components/FeistelMiniDiagram";
@@ -24,13 +28,12 @@ import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetCipherModeForTests } from "@/ui/stores/cipher-mode";
 import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
-import { __resetSpecForTests, setCipher, useSpec } from "@/ui/stores/spec";
+import { __resetSpecForTests, __setSpecForTests } from "@/ui/stores/spec";
 import { __resetTraceForTests, setTrace, useFrameIndex } from "@/ui/stores/trace";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-const DES_PT = new Uint8Array([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]);
-const DES_KEY = new Uint8Array([0x13, 0x34, 0x57, 0x79, 0x9b, 0xbc, 0xdf, 0xf1]);
+const TOY_PT = new Uint8Array([0x01, 0x02, 0x03, 0x04]);
 
 const resetAll = (): void => {
   __resetByteFormatForTests();
@@ -42,31 +45,28 @@ const resetAll = (): void => {
 };
 
 type SeedResult = {
-  ipFrame: TraceFrame;
-  round1ExpandR: TraceFrame;
-  round1SBoxes: TraceFrame;
-  round16Frame: TraceFrame; // any frame inside round 16 (feistel-no-swap)
+  round1AddK: TraceFrame; // R-track body frame, round 1 (feistel-standard)
+  round2AddK: TraceFrame; // R-track body frame, round 2 (feistel-no-swap)
+  rejoinFrame: TraceFrame; // round.1:rejoin — no branchPath (root-scope)
   traceFrames: readonly TraceFrame[];
 };
 
 const seed = (): SeedResult => {
-  setCipher("des");
-  const trace = runSpec(useSpec()(), buildDefaultRegistry(), {
-    initialState: { shape: "bytes", bytes: DES_PT },
-    initialAux: new Map([["key", DES_KEY]]),
+  __setSpecForTests(FEISTEL_TOY_SPEC);
+  const trace = runSpec(FEISTEL_TOY_SPEC, buildDefaultRegistry(), {
+    initialState: { shape: "bytes", bytes: TOY_PT },
   });
   setTrace(trace);
-  const ipFrame = trace.frames.find((f) => f.stepType === "des.initial-permutation@1");
-  const round1ExpandR = trace.frames.find((f) => f.stepId.startsWith("round.1.expand-R"));
-  const round1SBoxes = trace.frames.find((f) => f.stepId.startsWith("round.1.s-boxes"));
-  const round16Frame = trace.frames.find((f) => f.stepId.startsWith("round.16.expand-R"));
-  if (!ipFrame || !round1ExpandR || !round1SBoxes || !round16Frame) {
-    throw new Error("expected frames missing from seed");
+  const round1AddK = trace.frames.find((f) => f.stepId.startsWith("round.1.add-k"));
+  const round2AddK = trace.frames.find((f) => f.stepId.startsWith("round.2.add-k"));
+  const rejoinFrame = trace.frames.find((f) => f.stepId === "round.1:rejoin");
+  if (!round1AddK || !round2AddK || !rejoinFrame) {
+    throw new Error("expected toy frames missing from seed");
   }
-  return { ipFrame, round1ExpandR, round1SBoxes, round16Frame, traceFrames: trace.frames };
+  return { round1AddK, round2AddK, rejoinFrame, traceFrames: trace.frames };
 };
 
-describe("FeistelMiniDiagram — DES", () => {
+describe("FeistelMiniDiagram — toy Feistel", () => {
   beforeEach(resetAll);
   afterEach(() => {
     cleanup();
@@ -74,101 +74,59 @@ describe("FeistelMiniDiagram — DES", () => {
   });
 
   it("renders nothing on root-scope frames (no branchPath)", () => {
-    const { ipFrame } = seed();
-    const { container } = render(() => <FeistelMiniDiagram frame={ipFrame} />);
+    const { rejoinFrame } = seed();
+    const { container } = render(() => <FeistelMiniDiagram frame={rejoinFrame} />);
     expect(container.querySelector(".feistel-mini-diagram")).toBeNull();
   });
 
   it("renders the SVG and shows the combine kind in the header", () => {
-    const { round1ExpandR } = seed();
-    const { container } = render(() => <FeistelMiniDiagram frame={round1ExpandR} />);
+    const { round1AddK } = seed();
+    const { container } = render(() => <FeistelMiniDiagram frame={round1AddK} />);
     const wrapper = container.querySelector(".feistel-mini-diagram");
     expect(wrapper).not.toBeNull();
     expect(container.querySelector("svg.feistel-mini-diagram-svg")).not.toBeNull();
     expect(wrapper?.textContent ?? "").toContain("feistel-standard");
   });
 
-  it("F-stack has exactly 4 leaves for DES (expand-R, xor-K, s-boxes, p-permute)", () => {
-    const { round1ExpandR } = seed();
-    const { container } = render(() => <FeistelMiniDiagram frame={round1ExpandR} />);
+  it("F-stack has exactly 1 leaf for the toy (add-k)", () => {
+    const { round1AddK } = seed();
+    const { container } = render(() => <FeistelMiniDiagram frame={round1AddK} />);
     const leafGroups = container.querySelectorAll(".feistel-mini-diagram-leaf-group");
-    expect(leafGroups.length).toBe(4);
-    // Verify the leaf labels (last dot-segment of each id).
+    expect(leafGroups.length).toBe(1);
     const labels = Array.from(container.querySelectorAll(".feistel-mini-diagram-leaf-label")).map(
       (el) => el.textContent ?? "",
     );
-    expect(labels).toEqual(["expand-R", "xor-K", "s-boxes", "p-permute"]);
+    expect(labels).toEqual(["add-k"]);
   });
 
   it("active frame's leaf has .feistel-mini-diagram-leaf-active", () => {
-    const { round1SBoxes } = seed();
-    const { container } = render(() => <FeistelMiniDiagram frame={round1SBoxes} />);
+    const { round1AddK } = seed();
+    const { container } = render(() => <FeistelMiniDiagram frame={round1AddK} />);
     const activeGroups = container.querySelectorAll(".feistel-mini-diagram-leaf-active");
     expect(activeGroups.length).toBe(1);
-    // The active group should contain the s-boxes label.
     const label = activeGroups[0]?.querySelector(".feistel-mini-diagram-leaf-label")?.textContent;
-    expect(label).toBe("s-boxes");
+    expect(label).toBe("add-k");
   });
 
-  it("clicking a non-active leaf scrubs the trace to its frame", () => {
-    const { round1ExpandR, traceFrames } = seed();
-    const { container } = render(() => <FeistelMiniDiagram frame={round1ExpandR} />);
-    // Click the s-boxes leaf (3rd in the F-stack). Frame index should
-    // match the trace's first round.1.s-boxes:tR.
-    const leafGroups = Array.from(container.querySelectorAll(".feistel-mini-diagram-leaf-group"));
-    const sboxesLeaf = leafGroups[2];
-    if (!sboxesLeaf) throw new Error("s-boxes leaf missing");
-    fireEvent.click(sboxesLeaf);
-    const expectedIdx = traceFrames.findIndex((f) => f.stepId.startsWith("round.1.s-boxes"));
+  it("clicking a leaf scrubs the trace to its frame", () => {
+    const { round1AddK, traceFrames } = seed();
+    const { container } = render(() => <FeistelMiniDiagram frame={round1AddK} />);
+    const leaf = container.querySelector(".feistel-mini-diagram-leaf-group");
+    if (!leaf) throw new Error("add-k leaf missing");
+    fireEvent.click(leaf);
+    const expectedIdx = traceFrames.findIndex((f) => f.stepId.startsWith("round.1.add-k"));
     expect(useFrameIndex()()).toBe(expectedIdx);
   });
 
-  it("round 16 (feistel-no-swap) renders different output labels", () => {
-    const { round16Frame } = seed();
-    const { container } = render(() => <FeistelMiniDiagram frame={round16Frame} />);
-    // The header reports the kind.
+  it("round 2 (feistel-no-swap) renders the swapped output labels", () => {
+    const { round2AddK } = seed();
+    const { container } = render(() => <FeistelMiniDiagram frame={round2AddK} />);
     expect(container.textContent).toContain("feistel-no-swap");
     // Output labels for feistel-no-swap: leftLabel = "L⊕F", rightLabel = "R".
-    // Round 1 (feistel-standard) would have the reverse. Collect the two
-    // bottom-most half-label texts.
+    // 4 halves: L, R (top inputs); then 2 outputs (the last 2).
     const halfLabels = Array.from(container.querySelectorAll(".feistel-mini-diagram-half-label"));
-    // 4 halves: L, R (top inputs); then 2 outputs. Outputs are the last 2.
     expect(halfLabels.length).toBe(4);
     expect(halfLabels[2]?.textContent).toBe("L⊕F");
     expect(halfLabels[3]?.textContent).toBe("R");
-  });
-
-  // ─── Phase 5b polish: K_i cross-reference label ────────────────────
-  //
-  // The xor-K leaf in the F-stack — and ONLY that leaf, in DES — should
-  // render a "K_N" subscript label to its right where N is parsed from
-  // the leaf's `params.roundKeyAux`. Static read off the spec, so the
-  // label appears on every frame inside the round (not just on the
-  // xor-K frame itself). Cross-references the round-key panel's ribbon.
-
-  it("renders a K_i label next to the xor-K leaf (and only that leaf) in round 1", () => {
-    const { round1ExpandR } = seed();
-    const { container } = render(() => <FeistelMiniDiagram frame={round1ExpandR} />);
-    // Only the xor-K leaf has `params.roundKeyAux` set in the DES spec.
-    const keyrefs = container.querySelectorAll(".feistel-mini-diagram-leaf-keyref");
-    expect(keyrefs.length).toBe(1);
-    // Round 1 consumes K_0 (forward DES: roundKey.0).
-    // textContent collapses the K + tspan into "K0".
-    expect(keyrefs[0]?.textContent).toBe("K0");
-    // The label is keyed by the leaf id so consumers can locate it
-    // deterministically. Confirm it's anchored to the xor-K leaf.
-    const expected = document.querySelector(
-      "[data-testid='feistel-mini-diagram-leaf-keyref-round.1.xor-K']",
-    );
-    expect(expected).not.toBeNull();
-  });
-
-  it("the K_i index reflects the round (round 16 → K_15)", () => {
-    const { round16Frame } = seed();
-    const { container } = render(() => <FeistelMiniDiagram frame={round16Frame} />);
-    const keyrefs = container.querySelectorAll(".feistel-mini-diagram-leaf-keyref");
-    expect(keyrefs.length).toBe(1);
-    // Forward DES round 16 consumes roundKey.15 (zero-indexed).
-    expect(keyrefs[0]?.textContent).toBe("K15");
   });
 });

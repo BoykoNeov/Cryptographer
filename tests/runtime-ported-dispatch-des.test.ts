@@ -83,7 +83,7 @@ import { desDecryptSpec } from "@/ciphers/des-decrypt";
 import { FEISTEL_TOY_KAT, FEISTEL_TOY_SPEC } from "@/ciphers/feistel-toy";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
-import type { AuxValue, CipherSpec, State, TraceFrame } from "@/core/types";
+import type { AuxValue, State, TraceFrame } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 // ─── Frame-equality helpers (mirror the Slice 1.7 dispatch tests) ──────
@@ -193,37 +193,14 @@ describe("runtime — ported dispatch, Slice 1.8 DES + feistel-toy step types", 
     }
   });
 
-  // ─── (b) Frame-by-frame byte parity vs legacy ─────────────────────────
-
-  describe("(b) Frame parity vs legacy dispatch — DES encrypt + decrypt × 3 vectors", () => {
-    for (const vec of DES_KATS) {
-      it(`encrypt PT=${vec.pt} K=${vec.key} — frame-by-frame byte equality`, () => {
-        const legacy = runSpec(desSpec, buildDefaultRegistry(), {
-          initialState: makeBytesState(bytesFromHex(vec.pt)),
-          initialAux: new Map<string, AuxValue>([["key", bytesFromHex(vec.key)]]),
-        });
-        const ported = runSpec(desSpec, buildDefaultRegistry(), {
-          initialState: makeBytesState(bytesFromHex(vec.pt)),
-          initialAux: new Map<string, AuxValue>([["key", bytesFromHex(vec.key)]]),
-          portedDispatchEnabled: true,
-        });
-        expectFrameStreamsEqual(ported.frames, legacy.frames, `DES encrypt PT=${vec.pt}`);
-      });
-
-      it(`decrypt CT=${vec.ct} K=${vec.key} — frame-by-frame byte equality`, () => {
-        const legacy = runSpec(desDecryptSpec, buildDefaultRegistry(), {
-          initialState: makeBytesState(bytesFromHex(vec.ct)),
-          initialAux: new Map<string, AuxValue>([["key", bytesFromHex(vec.key)]]),
-        });
-        const ported = runSpec(desDecryptSpec, buildDefaultRegistry(), {
-          initialState: makeBytesState(bytesFromHex(vec.ct)),
-          initialAux: new Map<string, AuxValue>([["key", bytesFromHex(vec.key)]]),
-          portedDispatchEnabled: true,
-        });
-        expectFrameStreamsEqual(ported.frames, legacy.frames, `DES decrypt CT=${vec.ct}`);
-      });
-    }
-  });
+  // ─── (b) Frame parity vs legacy — REMOVED in B4 ──────────────────────
+  // DES is now port-native (universal-port Phase 4d): the F-function leaves
+  // demand `portInputs` and have no legacy executor, so a flag-OFF run
+  // throws — there is no legacy frame stream to compare against. The B2/B3
+  // precedent (Speck/Serpent removed their parity rows for the same reason).
+  // The per-leaf parity net against the FIPS oracle fixture lives in
+  // `des-vectors.test.ts` (every IP/E/X/S/P/split/fxor/recombine output
+  // asserted across all 16 rounds) — the real replacement for frame parity.
 
   // ─── (c) Round-key port insertion order ──────────────────────────────
 
@@ -262,76 +239,14 @@ describe("runtime — ported dispatch, Slice 1.8 DES + feistel-toy step types", 
     });
   });
 
-  // ─── (d) Per-primitive synthetic spec ────────────────────────────────
-
-  describe("(d) per-primitive synthetic — key-schedule + one xor-with-K", () => {
-    // Two-step spec: schedule expands the master key, then a single
-    // xor-with-K consumes roundKey.0 against a 6-byte state seeded as
-    // the initial state. Pins the lift in isolation — the cipher-level
-    // KAT (a) and full frame parity (b) above layer 16 rounds + IP/FP/E
-    // /S/P + Feistel branching on top; this fixture is the smallest
-    // fixture that exercises both ported leaves (aux-only key-schedule +
-    // single-aux-read state-bearing xor) end-to-end without Feistel
-    // semantics. Matches Slice 1.7 (d) synthetic shape.
-    const spec: CipherSpec = {
-      id: "test-des-xor-with-k@1",
-      name: "Slice 1.8 — DES schedule + one xor-with-K synthetic",
-      stateShape: "bytes",
-      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 8 } },
-      steps: [
-        {
-          kind: "step",
-          id: "schedule",
-          type: "des.key-schedule@1",
-          params: {
-            keyAuxName: "key",
-            outputPrefix: "roundKey",
-            // Use the standard PC-1 / PC-2 / SHIFTS so the schedule
-            // matches the canonical aux contents at roundKey.0..15. We
-            // could inline shorter test tables, but reusing the real
-            // ones keeps the per-primitive test diagnostic vs. the full
-            // cipher when one fails and the other passes.
-            pc1: [
-              57, 49, 41, 33, 25, 17, 9, 1, 58, 50, 42, 34, 26, 18, 10, 2, 59, 51, 43, 35, 27, 19,
-              11, 3, 60, 52, 44, 36, 63, 55, 47, 39, 31, 23, 15, 7, 62, 54, 46, 38, 30, 22, 14, 6,
-              61, 53, 45, 37, 29, 21, 13, 5, 28, 20, 12, 4,
-            ],
-            pc2: [
-              14, 17, 11, 24, 1, 5, 3, 28, 15, 6, 21, 10, 23, 19, 12, 4, 26, 8, 16, 7, 27, 20, 13,
-              2, 41, 52, 31, 37, 47, 55, 30, 40, 51, 45, 33, 48, 44, 49, 39, 56, 34, 53, 46, 42, 50,
-              36, 29, 32,
-            ],
-            shifts: [1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1],
-          },
-        },
-        {
-          kind: "step",
-          id: "round.0.xor-K",
-          type: "des.xor-with-K@1",
-          params: { roundKeyAux: "roundKey.0" },
-        },
-      ],
-    };
-
-    it("frame-by-frame byte equality across both dispatch paths", () => {
-      // Seed a 6-byte (48-bit, post-E) state directly — bypasses E so
-      // we exercise xor-with-K's 6-byte aux read in isolation.
-      const stateSeed = new Uint8Array([0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc]);
-      const keySeed = bytesFromHex("133457799bbcdff1");
-
-      const legacy = runSpec(spec, buildDefaultRegistry(), {
-        initialState: { shape: "bytes", bytes: new Uint8Array(stateSeed) },
-        initialAux: new Map<string, AuxValue>([["key", keySeed]]),
-      });
-      const ported = runSpec(spec, buildDefaultRegistry(), {
-        initialState: { shape: "bytes", bytes: new Uint8Array(stateSeed) },
-        initialAux: new Map<string, AuxValue>([["key", keySeed]]),
-        portedDispatchEnabled: true,
-      });
-
-      expectFrameStreamsEqual(ported.frames, legacy.frames, "DES schedule + one xor-with-K");
-    });
-  });
+  // ─── (d) Per-primitive synthetic spec — REMOVED in B4 ────────────────
+  // The old (d) wired a bare `des.xor-with-K@1` leaf on a state thread and
+  // compared lift-vs-ported frames. Post-B4 that leaf is port-native (no
+  // legacy path; reads `state` via portInputs), so the lift-comparison is
+  // gone and a thread-fed leaf no longer runs. The isolated native behavior
+  // of every DES leaf — including xor-K's 6-byte aux read recorded in
+  // `frame.auxRead` — is pinned per-round against the FIPS oracle in
+  // `des-vectors.test.ts`.
 
   // ─── (e) feistel.toy-add-k@1 lift via FEISTEL_TOY_SPEC ───────────────
 
