@@ -1,9 +1,11 @@
 # Scaffolding suppression — every leaf speaks only in byte arrays
 
 > **Status: Phase A COMPLETE. Phase B IN PROGRESS — B1 (AES) MERGED TO MAIN
-> 2026-05-30 (`f896f3c`); B2 (Speck) DONE on branch `b2-speck-byte-native`,
-> gate GREEN (2564 tests / 216 files), pending browser smoke + merge. Next
-> after merge: B3 (Serpent). See "## B2 — Speck byte-native" below.**
+> 2026-05-30 (`f896f3c`); B2 (Speck) MERGED TO MAIN 2026-05-30 (`--no-ff`
+> merge `d791c35`), gate GREEN on merged main (2567 tests / 217 files), browser
+> eyeball done, branch `b2-speck-byte-native` deleted. Next: B3 (Serpent) —
+> advisor consult first, fresh branch off main. See "## B2 — Speck byte-native"
+> below.**
 >
 > **(historical B1 status)** Phase B IN PROGRESS — B1 (AES) on branch
 > `b1-aes-byte-native`. B1.1 (128 enc) + B1.2 (128 dec) + B1.3 (192/256 enc+dec)
@@ -114,10 +116,17 @@ still populated). New durable jsdom pin `tests/step-narration-speck-port-native.
 (3 tests): isPortNativeFrame true, the 3 ARX disclosures + ROR/α=7 prose render,
 PortFlowView renders the `state`(4) + `roundKey`(2) inputs and `state` output.
 
-**Remaining:** optional 2-min browser eyeball of the replication auto-on
-(22-way key-schedule fan-out → 22 replicas — same shipped path as AES/SHA-256,
-low-risk per advisor) → confirm merge with user → merge to `main`.
-**Did NOT touch** Serpent/DES (B3/B4).
+**Browser eyeball DONE (2026-05-30, throwaway Playwright, deleted).** Speck
+selected → graph: replication auto-on (checkbox checked), correct KAT
+`a86842f2`, clean entry topology (plaintext → key-schedule dashed aux box →
+round 1 via the colored key-schedule edge); linear round.3: PortFlowView port
+boxes (state / roundKey / state-out) + the ARX "Speck Round" narration (3
+sub-ops, ROR + α prose) + the 22-subkey round-key ribbon. The 22-way fan-out is
+the same shipped replication mechanism as AES (11-way) / SHA-256 (64-way) —
+accepted, user-toggleable. **MERGED to `main` 2026-05-30 (`--no-ff` `d791c35`),
+gate GREEN on merged main (2567/217), branch deleted.** **Did NOT touch**
+Serpent/DES (B3/B4). **Next: B3 (Serpent)** — advisor consult first, fresh
+branch off main.
 
 ## B1.5 — graph-view follow-up (2026-05-30)
 
@@ -927,8 +936,9 @@ removes its A4-allowlist entry on merge.
   see below); `cipherConstants` migration + mirror re-homing defer to a later
   key-expansion-decomposition slice.
 - **B2 — Speck** (easiest — already byte-flat `BytesState(4)`).
-  **✅ DONE 2026-05-30 — branch `b2-speck-byte-native`, gate GREEN, pending
-  browser smoke + merge.** Scope B (body only): the two ARX rounds went native
+  **✅ MERGED TO MAIN 2026-05-30 (`--no-ff` `d791c35`); gate GREEN on merged
+  main (2567/217); browser eyeball done; branch deleted.** Scope B (body only):
+  the two ARX rounds went native
   (`PortedExecutor`, no lift/legacy); key-schedule stays lifted (like AES). KAT
   byte-identical (BE-paper + LE-NSA, enc+dec) via a golden frame-stream pin. See
   "## B2 — Speck byte-native" above for the full write-up.
