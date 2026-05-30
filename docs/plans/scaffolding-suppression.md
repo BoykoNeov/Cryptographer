@@ -36,9 +36,11 @@
 
 > **STATUS (2026-05-30):** F1 + F2 shipped (`ae00489`), F5 shipped (`b3c2919`),
 > and the **USER confirmed the ECB+CBC graph looks good in their own browser
-> pass** — F1/F2/F5 are DONE. F4 (round-body draggability) IN PROGRESS this
-> session; F3 (merge `fetch-rk`) still queued for its own session + advisor
-> consult. The diagnosis prose below is the original handoff; the per-finding
+> pass** — F1/F2/F5 are DONE. **F4 (round-body draggability) shipped (`4bb9635`)
+> + real-browser-verified** (throwaway Playwright smoke: group leaf drags →
+> relative pin; sub-threshold click → `onClickFallback` selects; deleted after).
+> F3 (merge `fetch-rk`) is the last B1.5 item — re-consult advisor + KAT
+> byte-equal. The diagnosis prose below is the original handoff; the per-finding
 > SHIPPED markers are authoritative.
 
 Branch `b1-aes-byte-native`, working tree clean. A user browser-look at the
@@ -102,7 +104,21 @@ narration + ParamEditor block if params need editing) and touches:
 - **Crypto must stay byte-equal** — KAT vs FIPS-197 §C / node:crypto after.
   ⚠️ This is the heaviest of the four; consider sequencing it last.
 
-### Finding 4 — round-body leaves not draggable (USER: make movable)
+### Finding 4 — round-body leaves not draggable (USER: make movable) — SHIPPED (`4bb9635`)
+**Done 2026-05-30.** New `isInsideGroup` predicate (containerPath has a
+`kind:"group"` ancestor) folded into `isDraggable` + `dragMode` (→ relative) +
+the `onResetRelativePin` gate. The audit found exactly the predicted onClick
+breakage: 2 jsdom tests asserting group leaves "stay non-draggable" (flipped to
+positive: draggable + persists a relative pin) and 5 `fireEvent.click`-on-group-
+leaf calls across `graph-view` + `graph-view-value-inspector` (converted to the
+pointerdown + sub-threshold-pointerup path that fires `onClickFallback`). Full
+suite green (212 files / 2533 tests) was the completeness gate (a missed file
+fails loudly: onClick → undefined). Real-browser verified via throwaway
+Playwright (deleted): drag → relative pin, sub-threshold click → selects.
+Consciously shipped: relative mode skips the absolute-mode parent-interior
+clamp, so a round leaf can be dragged outside its box (same as S2(j) iteration
+leaves). Original diagnosis below.
+
 `GraphView.tsx:5824`:
 `isDraggable = isReplicaLike || isRootLevel || isInsideIteration`.
 `isInsideIteration` (5740) matches `iterate`/`for-each-subgraph`/`-with-history`
