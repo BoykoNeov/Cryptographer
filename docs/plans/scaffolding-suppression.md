@@ -115,6 +115,62 @@ drag are visual, and jsdom won't see geometry. These four are independent;
 Findings 1+2 are small graph-derivation fixes (start there), 4 is a gate flip +
 test audit, 3 is the big one.
 
+### Sequenced execution plan (advisor-confirmed 2026-05-30)
+
+Advisor checked the code behind all four findings (not just this prose) and
+confirmed the diagnoses + the 1+2 → 4 → 3 order. This is execution sequencing,
+not a re-plan.
+
+**Order + commit boundaries:**
+1. **Findings 1+2 — ONE commit.** Both are small `graph.ts` edits and both are
+   verified by the *same* CBC browser look, so they land together.
+2. **Finding 4 — its own commit** (gate flip + onClick test audit).
+3. **Finding 3 — its own commit, likely its own session.** It's heavy enough
+   that 1+2+4 should be landed and smoked as a clean intermediate first, so the
+   id-churn (`*.fetch-rk` deletion) rebases on finished work, not the reverse.
+   **Re-consult advisor before starting Finding 3** — it's the only one with
+   crypto-correctness surface (per [[feedback_iterative_slice_review]]).
+
+**Verification gates (the suite is NOT the gate for 1/2/4):**
+- **After 1+2** — open *both* ECB and CBC graphs in the browser and confirm:
+  (a) the plaintext pill connects (F1), (b) `fetch-iv` connects (F2), (c) the
+  spurious container→`cbc-xor` arrow is gone (F2). jsdom can't see geometry or
+  whether endpoints connect — tests green ≠ done here. (Slice 3 routing precedent:
+  ~60 tests green including hard-clearance property tests, smoke caught a
+  catastrophic shape failure — [[feedback_visual_smoke_vs_property_tests]].)
+- **After 4** — verify *scrub-on-click still fires* on a `round.*` group leaf in
+  a real browser. The draggable path synthesizes the click on sub-threshold
+  release, and jsdom bypasses CSS hit-testing
+  ([[feedback_jsdom_pointer_events_gap]]), so this can pass jsdom and still kill
+  click-to-scrub. Verify, don't assume.
+- **For 3** — pin AES-128/192/256 + ECB + CBC KAT *before* touching anything,
+  confirm byte-identical after.
+
+**Per-finding execution traps (advisor):**
+- **F1 (graph.ts:3056):** clean addition — also inspect container-node
+  `seedInput`/`chainInput`/`chainFeedback` for `INPUT_SOURCE_ID`. In shipped
+  specs only `seedInput` actually points at `$input`, but checking all three is
+  correct + future-proof. The walk already recurses containers; just inspect
+  those fields.
+- **F2 (graph.ts:1563):** mirror `groupSeedByGroupId` exactly — build
+  `chainSeedByIterateId` in `collectGroupSeeds`, resolve `binding.port ===
+  "chain"` through it to `chainInput.node` (→ `fetch-iv`) **only**. Do **NOT**
+  also draw the per-iteration `chainFeedback` recurrence — `types.ts:312`
+  explicitly defers that to separate recurrence-visibility work; drawing it now
+  is gold-plating that fights a future pass. Confirm decrypt's `port(it,"in")`
+  reads stay untouched (the branch fires only on `"chain"`, so they should —
+  verify in browser).
+- **F4 (GraphView.tsx ~5740–5895):** read the *whole* block before coding — the
+  `dragMode` logic + the onClick-wiring comment at 5810–5819, not just the grep
+  hits. The entire risk is the onClick audit. Grep the actual click tests on
+  `round.*` leaves; verify scrub-on-click in the browser.
+- **F3 (heaviest):** KAT byte-equal is the gate (above). New step must be
+  `kind:"ported"` raw-only so A4 anti-creep stays green. **Non-obvious coupling
+  the plan flags but is easy to skip past:** `duplicate-round`'s `bumpInvInitial`
+  matches on the `fetch-rk` id — removing `fetch-rk` silently breaks it; find and
+  fix. Check whether the new `roundKeyAux` param needs a ParamEditor block
+  (mirror `aux-load-bytes@1`'s).
+
 ## The goal, stated plainly
 
 **Every leaf executor consumes and emits only `Uint8Array`.** No leaf
