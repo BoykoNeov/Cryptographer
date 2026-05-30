@@ -101,8 +101,22 @@ surfaced in the failing set. `graph-validation`'s `runBytes` already uses
 comment fixed). Graph topology is unchanged (Speck wires no `portInputs` → no
 `$input` node, no port-flow edges; spine + aux fan-out identical).
 
-**Remaining:** 2-min browser smoke (Speck renders sensibly under the new auto-on
-replication; inspector shows port values on round frames) → merge to `main`.
+**Inspector rendering verified (advisor done-check catch).** Port-native Speck
+round frames flip `isPortNativeFrame` true → `FrameStateView` now routes them to
+**PortFlowView** (not BytesView), the same path byte-native AES took in B1.
+Speck is a *hybrid* — port-native AND state-threading (keeps
+`meta.stateOutputPort`, so `stateBefore !== stateAfter`), unlike the pure-port
+SHA/AES frames. The pedagogy risk (does linear-mode `<StepNarration>` still
+render the ARX prose, given Speck rounds carry NO `narrationOverride` and rely on
+the registry-keyed fn?) was verified GREEN: narration renders unconditionally
+below the state view, keyed by `stepType`, reading `stateBefore`/`auxRead` (both
+still populated). New durable jsdom pin `tests/step-narration-speck-port-native.test.tsx`
+(3 tests): isPortNativeFrame true, the 3 ARX disclosures + ROR/α=7 prose render,
+PortFlowView renders the `state`(4) + `roundKey`(2) inputs and `state` output.
+
+**Remaining:** optional 2-min browser eyeball of the replication auto-on
+(22-way key-schedule fan-out → 22 replicas — same shipped path as AES/SHA-256,
+low-risk per advisor) → confirm merge with user → merge to `main`.
 **Did NOT touch** Serpent/DES (B3/B4).
 
 ## B1.5 — graph-view follow-up (2026-05-30)
