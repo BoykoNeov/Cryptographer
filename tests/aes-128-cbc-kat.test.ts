@@ -11,21 +11,30 @@
  * What this file pins, beyond the obvious "encrypt then decrypt
  * round-trips":
  *
- *   1. The published §F.2.1 ciphertext is byte-identical.
- *   2. The chaining works: identical plaintext halves produce DIFFERENT
+ *   1. The published §F.2.1 ciphertext is byte-identical (≥3 blocks, so the
+ *      cross-iteration chain feedback is exercised feedback-of-feedback).
+ *   2. The spec output is byte-equal to `node:crypto`'s aes-128-cbc (enc+dec),
+ *      an independent oracle alongside the published vector.
+ *   3. The chaining works: identical plaintext halves produce DIFFERENT
  *      ciphertext halves (the structural difference vs ECB).
- *   3. The CBC trace's per-iteration frames carry `:b{i}` stepId suffixes
+ *   4. The CBC trace's per-iteration frames carry `:b{i}` stepId suffixes
  *      so the trace store's `setTrace` can preserve focus by stepId
  *      across re-runs — same invariant the ECB KAT tests pin.
+ *
+ * Byte-native (scaffolding-suppression Slice B1.4b): the CBC spec is now a
+ * port-graph (port-mode `iterate` with `chainInput`/`chainFeedback` carrying
+ * the previous-ciphertext value on a port instead of an aux slot), so every
+ * run sets `portedDispatchEnabled: true`.
  */
 
+import { createCipheriv, createDecipheriv } from "node:crypto";
 import { aes128CbcSpec } from "@/ciphers/aes-128-cbc";
 import { aes128CbcDecryptSpec } from "@/ciphers/aes-128-cbc-decrypt";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { deriveAuxGraph, validateGraph } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
-import type { AuxValue } from "@/core/types";
+import type { AuxValue, CipherSpec } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 const KEY = "2b7e151628aed2a6abf7158809cf4f3c";
@@ -51,29 +60,80 @@ const buildAux = (): Map<string, AuxValue> =>
     ["iv", bytesFromHex(IV)],
   ]);
 
+// Run a byte-native CBC spec with ported dispatch (required — the spec is a
+// port-graph). Returns the final ciphertext/plaintext bytes as hex.
+const runCbc = (spec: CipherSpec, inputHex: string, aux: Map<string, AuxValue>): string => {
+  const trace = runSpec(spec, buildDefaultRegistry(), {
+    initialState: makeBytesState(bytesFromHex(inputHex)),
+    initialAux: aux,
+    portedDispatchEnabled: true,
+  });
+  expect(trace.finalState.shape).toBe("bytes");
+  if (trace.finalState.shape !== "bytes") throw new Error("expected bytes final state");
+  return hexFromBytes(trace.finalState.bytes);
+};
+
 describe("AES-128 CBC (NIST SP 800-38A §F.2)", () => {
   it("F.2.1: encrypts the 4-block plaintext to the published ciphertext", () => {
-    const initial = makeBytesState(bytesFromHex(PLAINTEXT_4_BLOCKS));
-    const trace = runSpec(aes128CbcSpec, buildDefaultRegistry(), {
-      initialState: initial,
-      initialAux: buildAux(),
-    });
-
-    expect(trace.finalState.shape).toBe("bytes");
-    if (trace.finalState.shape !== "bytes") return;
-    expect(hexFromBytes(trace.finalState.bytes)).toBe(CBC_CIPHERTEXT_4_BLOCKS);
+    expect(runCbc(aes128CbcSpec, PLAINTEXT_4_BLOCKS, buildAux())).toBe(CBC_CIPHERTEXT_4_BLOCKS);
   });
 
   it("F.2.2: decrypts the 4-block ciphertext to the original plaintext", () => {
-    const initial = makeBytesState(bytesFromHex(CBC_CIPHERTEXT_4_BLOCKS));
-    const trace = runSpec(aes128CbcDecryptSpec, buildDefaultRegistry(), {
-      initialState: initial,
-      initialAux: buildAux(),
-    });
+    expect(runCbc(aes128CbcDecryptSpec, CBC_CIPHERTEXT_4_BLOCKS, buildAux())).toBe(
+      PLAINTEXT_4_BLOCKS,
+    );
+  });
 
-    expect(trace.finalState.shape).toBe("bytes");
-    if (trace.finalState.shape !== "bytes") return;
-    expect(hexFromBytes(trace.finalState.bytes)).toBe(PLAINTEXT_4_BLOCKS);
+  it("matches node:crypto aes-128-cbc on an arbitrary 3-block message (enc + dec)", () => {
+    // Independent oracle. ≥3 blocks so the chain feedback is exercised
+    // feedback-of-feedback (block 2's chain = block 1's, which depended on
+    // block 0's) — a wrong carry would show as a wrong block 2 onward.
+    const plaintextHex =
+      "00112233445566778899aabbccddeeff" +
+      "0f1e2d3c4b5a69788796a5b4c3d2e1f0" +
+      "fedcba98765432100123456789abcdef";
+    const keyHex = "0123456789abcdef0123456789abcdef";
+    const ivHex = "f0e1d2c3b4a5968778695a4b3c2d1e0f";
+
+    // node:crypto reference (no padding — the message is an exact multiple).
+    const cipher = createCipheriv(
+      "aes-128-cbc",
+      Buffer.from(keyHex, "hex"),
+      Buffer.from(ivHex, "hex"),
+    );
+    cipher.setAutoPadding(false);
+    const nodeCipherHex = Buffer.concat([
+      cipher.update(Buffer.from(plaintextHex, "hex")),
+      cipher.final(),
+    ]).toString("hex");
+
+    const aux = new Map<string, AuxValue>([
+      ["key", bytesFromHex(keyHex)],
+      ["iv", bytesFromHex(ivHex)],
+    ]);
+
+    // Our encrypt must equal node:crypto's ciphertext.
+    expect(runCbc(aes128CbcSpec, plaintextHex, aux)).toBe(nodeCipherHex);
+
+    // node:crypto decrypt of OUR ciphertext must equal the original plaintext.
+    const decipher = createDecipheriv(
+      "aes-128-cbc",
+      Buffer.from(keyHex, "hex"),
+      Buffer.from(ivHex, "hex"),
+    );
+    decipher.setAutoPadding(false);
+    const nodePlainHex = Buffer.concat([
+      decipher.update(Buffer.from(nodeCipherHex, "hex")),
+      decipher.final(),
+    ]).toString("hex");
+    expect(nodePlainHex).toBe(plaintextHex);
+
+    // And our decrypt of node:crypto's ciphertext must equal the plaintext.
+    const aux2 = new Map<string, AuxValue>([
+      ["key", bytesFromHex(keyHex)],
+      ["iv", bytesFromHex(ivHex)],
+    ]);
+    expect(runCbc(aes128CbcDecryptSpec, nodeCipherHex, aux2)).toBe(plaintextHex);
   });
 
   it("identical plaintext halves produce DIFFERENT ciphertext halves (the chaining difference vs ECB)", () => {
@@ -81,22 +141,17 @@ describe("AES-128 CBC (NIST SP 800-38A §F.2)", () => {
     // produce identical ciphertext halves — the famous leak. Under CBC,
     // the second half's XOR with the previous ciphertext block makes the
     // two halves diverge.
-    const plaintext = bytesFromHex("00112233445566778899aabbccddeeff".repeat(2));
-    const trace = runSpec(aes128CbcSpec, buildDefaultRegistry(), {
-      initialState: makeBytesState(plaintext),
-      initialAux: buildAux(),
-    });
-    expect(trace.finalState.shape).toBe("bytes");
-    if (trace.finalState.shape !== "bytes") return;
-    const ciphertextHex = hexFromBytes(trace.finalState.bytes);
+    const ciphertextHex = runCbc(
+      aes128CbcSpec,
+      "00112233445566778899aabbccddeeff".repeat(2),
+      buildAux(),
+    );
     const half1 = ciphertextHex.slice(0, 32);
     const half2 = ciphertextHex.slice(32, 64);
     expect(half1).not.toBe(half2);
   });
 
   it("changing the IV produces different ciphertext for the same plaintext+key", () => {
-    const plaintext = makeBytesState(bytesFromHex(PLAINTEXT_4_BLOCKS));
-
     const auxA = new Map<string, AuxValue>([
       ["key", bytesFromHex(KEY)],
       ["iv", new Uint8Array(16)],
@@ -105,60 +160,54 @@ describe("AES-128 CBC (NIST SP 800-38A §F.2)", () => {
       ["key", bytesFromHex(KEY)],
       ["iv", bytesFromHex(IV)],
     ]);
-
-    const traceA = runSpec(aes128CbcSpec, buildDefaultRegistry(), {
-      initialState: plaintext,
-      initialAux: auxA,
-    });
-    const traceB = runSpec(aes128CbcSpec, buildDefaultRegistry(), {
-      initialState: plaintext,
-      initialAux: auxB,
-    });
-
-    if (traceA.finalState.shape !== "bytes" || traceB.finalState.shape !== "bytes") return;
-    expect(hexFromBytes(traceA.finalState.bytes)).not.toBe(hexFromBytes(traceB.finalState.bytes));
+    expect(runCbc(aes128CbcSpec, PLAINTEXT_4_BLOCKS, auxA)).not.toBe(
+      runCbc(aes128CbcSpec, PLAINTEXT_4_BLOCKS, auxB),
+    );
   });
 
   it("emits :b{i} stepId suffixes for every iterating frame (preserves the trace-store invariant)", () => {
     const trace = runSpec(aes128CbcSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex(PLAINTEXT_4_BLOCKS)),
       initialAux: buildAux(),
+      portedDispatchEnabled: true,
     });
 
-    // Spot-check: a per-iter step (cbc-xor) shows up at every block index.
+    // Spot-check: the chaining XOR (cbc-xor) shows up at every block index.
     for (let i = 0; i < 4; i++) {
       const xorFrame = trace.frames.find((f) => f.stepId === `cbc-xor:b${i}` && f.blockIndex === i);
       expect(xorFrame).toBeDefined();
     }
 
-    // The pre-loop iv-load step does NOT get a suffix (it lives outside
-    // the iterate node).
-    const ivFrame = trace.frames.find((f) => f.stepId === "iv-load");
+    // The pre-loop fetch-iv step does NOT get a suffix (it lives outside the
+    // iterate node — it reads aux["iv"] once and bootstraps the chain).
+    const ivFrame = trace.frames.find((f) => f.stepId === "fetch-iv");
     expect(ivFrame).toBeDefined();
   });
 
   it("multi-block trace produces NO cycle warnings (iterate-feedback regression)", () => {
-    // The `:b{i}` collapse merges per-iteration aux writes / reads onto
-    // one canonical stepId. For CBC, cbc-snapshot's chain-write in
-    // iteration N merges with cbc-xor's chain-read in iteration N+1,
-    // producing a backwards aux edge in canonical-id space. Combined
-    // with the forward state spine through the AES body, the naive
-    // cycle detector would flag the entire iterate body. This test pins
-    // the iterate-feedback exclusion in validateGraph that suppresses
-    // the false alarm.
+    // The `:b{i}` collapse merges per-iteration port reads/writes onto one
+    // canonical stepId. For byte-native CBC the chain rides the iterate's
+    // `chain` port: encrypt's round.N output in block i feeds cbc-xor's chain
+    // read in block i+1, a backwards edge in canonical-id space. Combined with
+    // the forward port-flow spine through the AES body, a naive cycle detector
+    // would flag the iterate body. This pins that validateGraph suppresses the
+    // false alarm (no aux mutation involved anymore — the old state-to-aux /
+    // aux-copy dance is gone).
     const trace = runSpec(aes128CbcSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex(PLAINTEXT_4_BLOCKS)),
       initialAux: buildAux(),
+      portedDispatchEnabled: true,
     });
     const graph = deriveAuxGraph(trace, aes128CbcSpec);
     const warnings = validateGraph(graph, trace);
     expect(warnings.filter((w) => w.kind === "cycle")).toEqual([]);
 
-    // Same for decrypt — the aux-copy(next-chain → chain) advance is
-    // ALSO a backwards aux edge once collapsed.
+    // Same for decrypt — chainFeedback reads the raw input block, which is
+    // ALSO a backwards edge once collapsed.
     const decTrace = runSpec(aes128CbcDecryptSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex(CBC_CIPHERTEXT_4_BLOCKS)),
       initialAux: buildAux(),
+      portedDispatchEnabled: true,
     });
     const decGraph = deriveAuxGraph(decTrace, aes128CbcDecryptSpec);
     const decWarnings = validateGraph(decGraph, decTrace);
@@ -166,41 +215,24 @@ describe("AES-128 CBC (NIST SP 800-38A §F.2)", () => {
   });
 
   it("round-trips an arbitrary 48-byte plaintext (3 blocks) through encrypt → decrypt", () => {
-    const plaintext = bytesFromHex(
+    const plaintextHex =
       "deadbeefcafebabe0011223344556677" +
-        "8899aabbccddeefffeeddccbbaa99887" +
-        "766554433221100ffeedccbbaa998877",
-    );
-    const key = bytesFromHex("0123456789abcdef0123456789abcdef");
-    const iv = bytesFromHex("f0e1d2c3b4a5968778695a4b3c2d1e0f");
+      "8899aabbccddeeff0123456789abcdef" +
+      "fedcba9876543210aabbccddeeff0011";
+    const keyHex = "0123456789abcdef0123456789abcdef";
+    const ivHex = "f0e1d2c3b4a5968778695a4b3c2d1e0f";
 
     const aux = new Map<string, AuxValue>([
-      ["key", key],
-      ["iv", iv],
+      ["key", bytesFromHex(keyHex)],
+      ["iv", bytesFromHex(ivHex)],
     ]);
+    const cipherHex = runCbc(aes128CbcSpec, plaintextHex, aux);
 
-    const encTrace = runSpec(aes128CbcSpec, buildDefaultRegistry(), {
-      initialState: makeBytesState(plaintext),
-      initialAux: aux,
-    });
-    expect(encTrace.finalState.shape).toBe("bytes");
-    if (encTrace.finalState.shape !== "bytes") return;
-
-    // Decrypt needs a FRESH aux map — encrypt's pass left aux["chain"]
-    // pointing at the last ciphertext block, but decrypt's iv-load
-    // overwrites chain from aux["iv"] anyway, so this isn't strictly
-    // required. Building a fresh map mirrors the real App's per-Run
-    // initialAux construction.
+    // Decrypt needs a fresh aux map (mirrors the App's per-Run construction).
     const decAux = new Map<string, AuxValue>([
-      ["key", key],
-      ["iv", iv],
+      ["key", bytesFromHex(keyHex)],
+      ["iv", bytesFromHex(ivHex)],
     ]);
-    const decTrace = runSpec(aes128CbcDecryptSpec, buildDefaultRegistry(), {
-      initialState: makeBytesState(encTrace.finalState.bytes),
-      initialAux: decAux,
-    });
-    expect(decTrace.finalState.shape).toBe("bytes");
-    if (decTrace.finalState.shape !== "bytes") return;
-    expect(hexFromBytes(decTrace.finalState.bytes)).toBe(hexFromBytes(plaintext));
+    expect(runCbc(aes128CbcDecryptSpec, cipherHex, decAux)).toBe(plaintextHex);
   });
 });

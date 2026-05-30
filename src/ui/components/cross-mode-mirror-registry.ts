@@ -64,13 +64,16 @@ export type CrossModeMirrorEntry = {
 };
 
 export const CROSS_MODE_MIRROR_ENTRIES: readonly CrossModeMirrorEntry[] = [
-  // AES SubBytes — class-2 (inverse). Encrypt holds AES_SBOX; decrypt
-  // holds AES_INV_SBOX. Mutator: `syncSboxInverseToCounterpart`.
-  {
-    stepType: "generic.byte-substitution@1",
-    paramKey: "sbox",
-    mirrorClass: "inverse",
-  },
+  // NOTE: the matrix `generic.byte-substitution@1` + `generic.mix-columns@1`
+  // entries were REMOVED in Slice B1.4b. They described the AES SubBytes /
+  // MixColumns Sync buttons on the matrix `SbxBlock` / MixColumns editors —
+  // but every shipped AES (single-block B1.1–B1.3, ECB B1.4a, CBC B1.4b) is
+  // byte-native now, so no shipped spec renders those matrix editors and there
+  // is no selectable leaf to assert a button on. The live AES mirror surfaces
+  // are the byte-native `byte-substitute@1` / `gf-matrix-multiply@1` entries
+  // below. (The matrix step types stay registered for test fixtures until
+  // Phase C; ParamEditor still renders the matrix editors' Sync rows
+  // unconditionally — that UI is just unreachable from any shipped spec.)
 
   // AES key-expansion v1 — class-1 (identity). FIPS-197 §5.2: the key
   // schedule uses the FORWARD S-box even when decrypting, so both
@@ -106,16 +109,32 @@ export const CROSS_MODE_MIRROR_ENTRIES: readonly CrossModeMirrorEntry[] = [
     counterpartStepType: "serpent.inv-sub-bytes@1",
   },
 
-  // AES MixColumns — class-2 (inverse). Encrypt holds `AES_MIX_MATRIX`;
-  // decrypt holds its GF(2^8) inverse `AES_INV_MIX_MATRIX` (FIPS-197
-  // §5.3.3). Same step type on both sides (unlike Serpent's
-  // `sub-bytes@1` ↔ `inv-sub-bytes@1` split) — the round structure
-  // differs between encrypt and decrypt but the executor for the matrix
-  // multiplication is the same primitive. Mutator:
-  // `syncMixColumnsInverseToCounterpart`; inverse computed by
-  // `gfMatInverse4x4` (src/core/state/gf-matrix.ts).
+  // Byte-native AES SubBytes (scaffolding-suppression Phase B, Slice B1.2) —
+  // class-2 (inverse). The port-native rebuild of AES-128 single-block
+  // (encrypt: Slice B1.1; decrypt: B1.2) carries SubBytes on the
+  // `byte-substitute@1` primitive instead of the matrix
+  // `generic.byte-substitution@1` lift. Encrypt holds AES_SBOX; decrypt holds
+  // AES_INV_SBOX. Same `params.sbox` shape and same `syncSboxInverseToCounterpart`
+  // mutator as the former matrix entry — now that BOTH modes share the
+  // byte-native type, the same-type broadcast lands on the decrypt counterpart
+  // (in B1 the encrypt-only conversion would have made this a no-op sync
+  // button, so the entry was deferred to B1.2). This is now the ONLY AES
+  // SubBytes mirror entry — every shipped AES is byte-native (B1.4b).
   {
-    stepType: "generic.mix-columns@1",
+    stepType: "byte-substitute@1",
+    paramKey: "sbox",
+    mirrorClass: "inverse",
+  },
+
+  // Byte-native AES MixColumns (Slice B1.2) — class-2 (inverse). Encrypt holds
+  // AES_MIX_MATRIX; decrypt holds its GF(2⁸) inverse AES_INV_MIX_MATRIX
+  // (FIPS-197 §5.3.3). `params.matrix` shape + `syncMixColumnsInverseToCounterpart`
+  // mutator (inverse via `gfMatInverse4x4`, src/core/state/gf-matrix.ts).
+  // Now the ONLY AES MixColumns mirror entry (the matrix `generic.mix-columns@1`
+  // entry was removed in B1.4b). Deferred from B1 for the same
+  // both-modes-share-the-type reason as the SubBytes entry.
+  {
+    stepType: "gf-matrix-multiply@1",
     paramKey: "matrix",
     mirrorClass: "inverse",
   },

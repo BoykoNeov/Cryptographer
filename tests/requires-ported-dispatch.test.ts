@@ -10,6 +10,12 @@
  * derives `false` so they continue running under the legacy dispatch
  * path. This file walks the full set and pins both directions.
  *
+ * UPDATE (scaffolding-suppression Slices B1.1–B1.3, 2026-05-29): every
+ * single-block AES spec (128/192/256, both directions) is now byte-native
+ * (port-native primitives with no legacy executor), so it derives `true` —
+ * it CANNOT run under legacy dispatch. Only the AES-128 ECB/CBC modes stay
+ * matrix (legacy) until Slice B1.4, so they remain `false`.
+ *
  * A separate synthetic-Feistel test ensures the helper descends into
  * `FeistelRoundGroup.tracks[].children` — the easy container kind to
  * miss because DES today only carries lifted-legacy leaves (so the
@@ -48,18 +54,24 @@ const registry = buildDefaultRegistry();
 
 // One row per shipped spec from `defaults` in `stores/spec.ts`, plus
 // SHA-256 (which Slice 2.10 will add to the selector). Expected column
-// pins the slice gate: only SHA-256 is `true` today.
+// pins the gate: SHA-256 and byte-native AES-128 single-block (both
+// directions) are `true`; all still-matrix specs are `false`.
 const shippedSpecs: ReadonlyArray<readonly [string, CipherSpec, boolean]> = [
-  ["aes-128 single-block encrypt", aes128Spec, false],
-  ["aes-128 single-block decrypt", aes128DecryptSpec, false],
-  ["aes-128 ecb encrypt", aes128EcbSpec, false],
-  ["aes-128 ecb decrypt", aes128EcbDecryptSpec, false],
-  ["aes-128 cbc encrypt", aes128CbcSpec, false],
-  ["aes-128 cbc decrypt", aes128CbcDecryptSpec, false],
-  ["aes-192 single-block encrypt", aes192Spec, false],
-  ["aes-192 single-block decrypt", aes192DecryptSpec, false],
-  ["aes-256 single-block encrypt", aes256Spec, false],
-  ["aes-256 single-block decrypt", aes256DecryptSpec, false],
+  // Byte-native (Slice B1.1 encrypt / B1.2 decrypt) — port-native primitives,
+  // no legacy path → true.
+  ["aes-128 single-block encrypt", aes128Spec, true],
+  ["aes-128 single-block decrypt", aes128DecryptSpec, true],
+  // Byte-native (Slice B1.4a ECB / B1.4b CBC) — port-mode iterate + port-native
+  // body → true. CBC adds the cross-iteration chain port; still all port-native.
+  ["aes-128 ecb encrypt", aes128EcbSpec, true],
+  ["aes-128 ecb decrypt", aes128EcbDecryptSpec, true],
+  ["aes-128 cbc encrypt", aes128CbcSpec, true],
+  ["aes-128 cbc decrypt", aes128CbcDecryptSpec, true],
+  // Byte-native (Slice B1.3) — port-native primitives, no legacy path → true.
+  ["aes-192 single-block encrypt", aes192Spec, true],
+  ["aes-192 single-block decrypt", aes192DecryptSpec, true],
+  ["aes-256 single-block encrypt", aes256Spec, true],
+  ["aes-256 single-block decrypt", aes256DecryptSpec, true],
   ["speck-32-64-be encrypt", speck32_64BeSpec, false],
   ["speck-32-64-be decrypt", speck32_64BeDecryptSpec, false],
   ["speck-32-64-le encrypt", speck32_64LeSpec, false],

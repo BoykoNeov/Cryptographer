@@ -18,7 +18,6 @@ import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { desSpec } from "@/ciphers/des";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue } from "@/core/types";
 import { TraceTimeline } from "@/ui/components/TraceTimeline";
 import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
@@ -38,7 +37,8 @@ const seedDes = () => {
 
 const seedAes = () => {
   const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-    initialState: matrixFromBytes(bytesFromHex("00112233445566778899aabbccddeeff")),
+    initialState: makeBytesState(bytesFromHex("00112233445566778899aabbccddeeff")),
+    portedDispatchEnabled: true,
     initialAux: new Map<string, AuxValue>([
       ["key", bytesFromHex("000102030405060708090a0b0c0d0e0f")],
     ]),

@@ -25,10 +25,10 @@
  */
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { requiresPortedDispatch } from "@/core/dispatch";
 import { runSpec } from "@/core/runtime";
 import { findStep } from "@/core/spec-mutations";
-import { bytesFromHex, hexFromBytes } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
+import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue, CipherSpec, StepNode } from "@/core/types";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetCipherModeForTests } from "@/ui/stores/cipher-mode";
@@ -90,6 +90,8 @@ describe("duplicateRoundInSpec — active-side mutation", () => {
     const roundIds = findGroupIds(after).filter((id) => id.startsWith("round."));
     expect(roundIds).toHaveLength(11);
     expect(roundIds).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((n) => `round.${n}`));
+    // Byte-native encrypt (Slice B1; merged in Finding F3): the round-key
+    // index lives on the single `xor-with-aux@1` AddRoundKey leaf's auxName.
     expect(auxNameOf(after, "round.3.add-round-key")).toBe("roundKey.3");
   });
 
@@ -103,6 +105,8 @@ describe("duplicateRoundInSpec — active-side mutation", () => {
     const after = spec();
     const invIds = findGroupIds(after).filter((id) => id.startsWith("inv-round."));
     expect(invIds).toHaveLength(11);
+    // Byte-native decrypt (Slice B1.2; merged in F3): the LAST round key's
+    // index lives on `inv-initial.add-round-key` (`xor-with-aux@1`).
     expect(auxNameOf(after, "inv-initial.add-round-key")).toBe("roundKey.11");
   });
 });
@@ -128,7 +132,10 @@ describe("duplicateRoundInSpec — auto-mirror to counterpart", () => {
     expect(findGroupIds(after.decrypt).filter((id) => id.startsWith("inv-round."))).toHaveLength(
       11,
     );
-    // Key index alignment: clone reads key.3 on BOTH sides.
+    // Key index alignment: clone reads key.3 on BOTH sides. Both directions
+    // are byte-native (Slice B1.1 encrypt / B1.2 decrypt; merged in F3), so
+    // the round key index lives on the `*.add-round-key` (`xor-with-aux@1`)
+    // leaf on each side.
     expect(auxNameOf(after.encrypt, "round.3.add-round-key")).toBe("roundKey.3");
     expect(auxNameOf(after.decrypt, "inv-round.3.add-round-key")).toBe("roundKey.3");
     expect(auxNameOf(after.decrypt, "inv-initial.add-round-key")).toBe("roundKey.11");
@@ -144,7 +151,9 @@ describe("duplicateRoundInSpec — auto-mirror to counterpart", () => {
     expect(findGroupIds(after.decrypt).filter((id) => id.startsWith("inv-round."))).toHaveLength(
       11,
     );
-    // Clone reads key.5 (source was round 4, clone is N+1).
+    // Clone reads key.5 (source was round 4, clone is N+1). Both directions
+    // byte-native (B1.1/B1.2; merged in F3) → round key index on the
+    // `*.add-round-key` (`xor-with-aux@1`) leaf.
     expect(auxNameOf(after.encrypt, "round.5.add-round-key")).toBe("roundKey.5");
     expect(auxNameOf(after.decrypt, "inv-round.5.add-round-key")).toBe("roundKey.5");
   });
@@ -211,7 +220,8 @@ describe("duplicateRoundInSpec — edits are mode-local, don't invalidate counte
     expect(encryptLeaf).not.toBeNull();
     editStepParams("round.4.add-round-key", { auxName: "roundKey.4-custom" });
 
-    // Decrypt's mirror is still intact.
+    // Decrypt's mirror is still intact. Byte-native (B1.2): the round key
+    // index lives on `inv-round.4.add-round-key`.
     expect(findGroupIds(all().decrypt).filter((id) => id.startsWith("inv-round."))).toHaveLength(
       11,
     );
@@ -259,22 +269,32 @@ describe("duplicateRoundInSpec — end-to-end round-trip via the store boundary"
     duplicateRoundInSpec("round.2");
 
     const registry = buildDefaultRegistry();
-    const encryptTrace = runSpec(spec(), registry, {
-      initialState: matrixFromBytes(bytesFromHex(plaintextHex)),
+    // Encrypt is byte-native (Slice B1.1): flat BytesState in/out, ported
+    // dispatch required. Byte-equal to the legacy matrix encrypt, so it
+    // inverts under the mirrored byte-native decrypt below.
+    const encryptSpec = spec();
+    const encryptTrace = runSpec(encryptSpec, registry, {
+      initialState: makeBytesState(bytesFromHex(plaintextHex)),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
+      portedDispatchEnabled: requiresPortedDispatch(encryptSpec, registry),
     });
-    if (encryptTrace.finalState.shape !== "matrix4x4-bytes") throw new Error("expected matrix");
+    if (encryptTrace.finalState.shape !== "bytes") throw new Error("expected bytes");
     const ciphertextBytes = encryptTrace.finalState.bytes;
 
     // Flip to decrypt — store returns the mirrored spec without
     // rebuilding from canonical.
     setMode("decrypt");
 
-    const decryptTrace = runSpec(spec(), registry, {
-      initialState: matrixFromBytes(ciphertextBytes),
+    // Decrypt is byte-native too (Slice B1.2): flat BytesState in/out, ported
+    // dispatch required, descending seedInput chain through the mirrored
+    // inverse rounds.
+    const decryptSpec = spec();
+    const decryptTrace = runSpec(decryptSpec, registry, {
+      initialState: makeBytesState(ciphertextBytes),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
+      portedDispatchEnabled: requiresPortedDispatch(decryptSpec, registry),
     });
-    if (decryptTrace.finalState.shape !== "matrix4x4-bytes") throw new Error("expected matrix");
+    if (decryptTrace.finalState.shape !== "bytes") throw new Error("expected bytes");
     expect(hexFromBytes(decryptTrace.finalState.bytes)).toBe(plaintextHex);
   });
 });

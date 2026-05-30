@@ -37,7 +37,7 @@ import { lookupNodeValue } from "@/core/edge-value-lookup";
 import { CIPHER_INPUT_ID, CIPHER_OUTPUT_ID } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
-import type { AuxValue, MatrixState, Trace } from "@/core/types";
+import type { AuxValue, Trace } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 const ECB_PLAINTEXT_4_BLOCKS =
@@ -52,6 +52,8 @@ const runAes128Ecb = (): Trace =>
     initialAux: new Map<string, AuxValue>([
       ["key", bytesFromHex("2b7e151628aed2a6abf7158809cf4f3c")],
     ]),
+    // Byte-native ECB (B1.4) — port-mode iterate + port-native body.
+    portedDispatchEnabled: true,
   });
 
 // ─── Endpoint pills ─────────────────────────────────────────────────────
@@ -110,35 +112,21 @@ describe("lookupNodeValue — trace null", () => {
 // ─── Block chips ────────────────────────────────────────────────────────
 
 describe("lookupNodeValue — block chips", () => {
-  it("returns block-payload value for a valid chip (the iterate's outBlocks[i])", () => {
-    const trace = runAes128Ecb();
-    const out = lookupNodeValue("ecb-blocks@block0", aes128EcbSpec, trace, undefined);
-    expect(out.status).toBe("value");
-    if (out.status !== "value") return;
-    expect(out.displayKind).toBe("block-payload");
-    expect(out.blockIndex).toBe(0);
-    // Value is the matrix at the end of block 0's body run — i.e. the
-    // ciphertext for block 0. Cross-check against the iterate's
-    // outBlocksAux to be sure (last frame writes outBlocksAux).
-    const v = out.value as MatrixState;
-    expect(v.shape).toBe("matrix4x4-bytes");
-    expect(v.bytes.length).toBe(16);
-  });
-
-  it("different chip indices resolve to different per-block payloads", () => {
-    const trace = runAes128Ecb();
-    const a = lookupNodeValue("ecb-blocks@block0", aes128EcbSpec, trace, undefined);
-    const b = lookupNodeValue("ecb-blocks@block2", aes128EcbSpec, trace, undefined);
-    if (a.status !== "value" || b.status !== "value") {
-      expect.fail("expected both chip lookups to be values");
-      return;
-    }
-    const va = a.value as MatrixState;
-    const vb = b.value as MatrixState;
-    // Same plaintext → different ciphertext blocks (the whole point of
-    // discriminating per chip).
-    expect(Buffer.from(va.bytes).equals(Buffer.from(vb.bytes))).toBe(false);
-  });
+  // PHASE C / B1.4b: block-chip PAYLOAD-value resolution is an aux/state-mode
+  // feature — it reads the per-block ciphertext from the body's `stateAfter`
+  // at `blockIndex === i` (equivalently `aux[outBlocksAux][i]`). Byte-native
+  // ECB (B1.4) is a port-mode iterate: leaves never write `state`, and there
+  // is no `outBlocksAux` — each block's result lives in the body's port
+  // outputs. Resolving a chip's payload therefore needs a PORT-based path,
+  // the same class as the deferred `$input`-vs-endpoint-pill question
+  // (graph-narrative Slice 1) — scheduled with Slice 2.9c-e / Phase C, not
+  // built in B1.4a (locked decision: flat bytes until C2; accept the temporary
+  // block-chip-value regression). Both ECB (B1.4a) and CBC (B1.4b) are now
+  // port-mode iterates, so NO shipped spec has the aux/state block-payload
+  // path anymore. The two former payload-value tests (matrix4x4-bytes per-block
+  // value + per-chip discrimination) were dropped rather than retargeted. The
+  // MISSING-path chip tests below are index-driven and stay valid for the
+  // byte-native iterate.
 
   it("returns missing for the ellipsis chip (`@blockMore`)", () => {
     const trace = runAes128Ecb();
@@ -199,13 +187,15 @@ describe("lookupNodeValue — regular leaves", () => {
       expect.fail("expected both leaf lookups to be values");
       return;
     }
+    // The scrubber-blockIndex preference is what this pins: the SAME leaf id
+    // resolves to the frame at the requested block. (The per-block VALUE no
+    // longer differs by block under byte-native ECB — port-native leaves leave
+    // `state` untouched, so the resolved `stateAfter` is the same leftover for
+    // every block. The honest per-block value lives in the leaf's port output;
+    // surfacing it is the Phase-C port-based value path — see the block-chips
+    // describe above.)
     expect(a.blockIndex).toBe(0);
     expect(b.blockIndex).toBe(2);
-    // Different blocks → different state values for AES (provable from
-    // the cipher's per-block discrimination).
-    const va = a.value as MatrixState;
-    const vb = b.value as MatrixState;
-    expect(Buffer.from(va.bytes).equals(Buffer.from(vb.bytes))).toBe(false);
   });
 
   it("returns missing for a leaf id that has no frame in the trace", () => {

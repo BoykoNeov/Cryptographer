@@ -27,7 +27,6 @@
  * — the only shipping multi-block fixture today.
  */
 
-import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { desSpec } from "@/ciphers/des";
 import { lookupEdgeValue } from "@/core/edge-value-lookup";
@@ -36,6 +35,7 @@ import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue, MatrixState, Trace } from "@/core/types";
 import { describe, expect, it } from "vitest";
+import { matrixAesEcbSpec } from "./fixtures/matrix-aes-ecb";
 
 const ECB_PLAINTEXT_4_BLOCKS =
   "6bc1bee22e409f96e93d7e117393172a" +
@@ -44,7 +44,7 @@ const ECB_PLAINTEXT_4_BLOCKS =
   "f69f2445df4f9b17ad2b417be66c3710";
 
 const runAes128Ecb = (): Trace =>
-  runSpec(aes128EcbSpec, buildDefaultRegistry(), {
+  runSpec(matrixAesEcbSpec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(ECB_PLAINTEXT_4_BLOCKS)),
     initialAux: new Map<string, AuxValue>([
       ["key", bytesFromHex("2b7e151628aed2a6abf7158809cf4f3c")],
@@ -72,7 +72,7 @@ describe("lookupEdgeValue — endpoint pills", () => {
     const trace = runAes128Ecb();
     const out = lookupEdgeValue(
       stateEdge(CIPHER_INPUT_ID, "split-blocks"),
-      aes128EcbSpec,
+      matrixAesEcbSpec,
       trace,
       undefined,
     );
@@ -90,7 +90,7 @@ describe("lookupEdgeValue — endpoint pills", () => {
     const trace = runAes128Ecb();
     const out = lookupEdgeValue(
       stateEdge("concat-blocks", CIPHER_OUTPUT_ID),
-      aes128EcbSpec,
+      matrixAesEcbSpec,
       trace,
       undefined,
     );
@@ -105,7 +105,7 @@ describe("lookupEdgeValue — endpoint pills", () => {
   it("returns `no-trace` for an endpoint edge when the trace is null (pre-run)", () => {
     const out = lookupEdgeValue(
       stateEdge(CIPHER_INPUT_ID, "split-blocks"),
-      aes128EcbSpec,
+      matrixAesEcbSpec,
       null,
       undefined,
     );
@@ -122,7 +122,7 @@ describe("lookupEdgeValue — trace null", () => {
   it("returns `no-trace` for non-endpoint edges when trace is null", () => {
     const out = lookupEdgeValue(
       auxEdge("key-expansion", "initial.add-round-key", "round-key-0"),
-      aes128EcbSpec,
+      matrixAesEcbSpec,
       null,
       undefined,
     );
@@ -140,7 +140,7 @@ describe("lookupEdgeValue — regular aux edges", () => {
     // Pre-iterate, the only consumer is also inside the iterate, so we
     // pass blockIndex=0 to match the first iteration.
     const edge = auxEdge("key-expansion", "initial.add-round-key", "roundKey.0");
-    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, 0);
+    const out = lookupEdgeValue(edge, matrixAesEcbSpec, trace, 0);
     expect(out.status).toBe("value");
     if (out.status !== "value") return;
     expect(out.auxKey).toBe("roundKey.0");
@@ -154,7 +154,7 @@ describe("lookupEdgeValue — regular aux edges", () => {
     const trace = runAes128Ecb();
     const out = lookupEdgeValue(
       auxEdge("key-expansion", "no-such-step", "round-key-0"),
-      aes128EcbSpec,
+      matrixAesEcbSpec,
       trace,
       0,
     );
@@ -183,7 +183,7 @@ describe("lookupEdgeValue — regular aux edges", () => {
     const trace = runAes128Ecb();
     // ECB plaintext is 4 × 16 bytes → block count is 4.
     const edge = auxEdge("compute-block-count", "ecb-blocks", "blockCount");
-    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, undefined);
+    const out = lookupEdgeValue(edge, matrixAesEcbSpec, trace, undefined);
     expect(out.status).toBe("value");
     if (out.status !== "value") return;
     expect(out.displayKind).toBe("aux");
@@ -197,7 +197,7 @@ describe("lookupEdgeValue — regular aux edges", () => {
     // `aux[outBlocksAux]` (default key: "input-blocks"). With the
     // 4-block test plaintext, the lookup returns an array of length 4.
     const edge = auxEdge("split-blocks", "ecb-blocks", "input-blocks");
-    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, undefined);
+    const out = lookupEdgeValue(edge, matrixAesEcbSpec, trace, undefined);
     expect(out.status).toBe("value");
     if (out.status !== "value") return;
     expect(out.displayKind).toBe("aux");
@@ -212,7 +212,7 @@ describe("lookupEdgeValue — regular aux edges", () => {
     // doesn't. The fallback should still return missing without throwing.
     const out = lookupEdgeValue(
       auxEdge("no-such-producer", "ecb-blocks", "no-such-aux"),
-      aes128EcbSpec,
+      matrixAesEcbSpec,
       trace,
       undefined,
     );
@@ -249,7 +249,7 @@ describe("lookupEdgeValue — replica → chip edges (post-7c bug fix)", () => {
     // chip itself. The auxKey is whatever the body step inside the
     // iterate reads — here roundKey.5 (consumed by round.5.add-round-key).
     const edge = auxEdge("key-expansion@->ecb-blocks@block2", "ecb-blocks@block2", "roundKey.5");
-    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, undefined);
+    const out = lookupEdgeValue(edge, matrixAesEcbSpec, trace, undefined);
     expect(out.status).toBe("value");
     if (out.status !== "value") return;
     expect(out.displayKind).toBe("aux");
@@ -269,7 +269,7 @@ describe("lookupEdgeValue — replica → chip edges (post-7c bug fix)", () => {
       "ecb-blocks@block0",
       "blockCount",
     );
-    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, undefined);
+    const out = lookupEdgeValue(edge, matrixAesEcbSpec, trace, undefined);
     expect(out.status).toBe("value");
     if (out.status !== "value") return;
     expect(out.displayKind).toBe("aux");
@@ -286,7 +286,7 @@ describe("lookupEdgeValue — replica → chip edges (post-7c bug fix)", () => {
     // Producer-side fallback is unnecessary but the replica-id reject
     // is what makes the dispatch reach this branch at all.
     const edge = auxEdge("split-blocks@->ecb-blocks@block3", "ecb-blocks@block3", "input-blocks");
-    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, undefined);
+    const out = lookupEdgeValue(edge, matrixAesEcbSpec, trace, undefined);
     expect(out.status).toBe("value");
     if (out.status !== "value") return;
     expect(out.displayKind).toBe("block-payload");
@@ -304,7 +304,7 @@ describe("lookupEdgeValue — replica → chip edges (post-7c bug fix)", () => {
     // findProducerFrame call would search for a frame whose stepId is
     // the synthetic replica id and find nothing.
     const edge = auxEdge("compute-block-count@->ecb-blocks", "ecb-blocks", "blockCount");
-    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, undefined);
+    const out = lookupEdgeValue(edge, matrixAesEcbSpec, trace, undefined);
     expect(out.status).toBe("value");
     if (out.status !== "value") return;
     expect(out.value).toBe(4);
@@ -319,7 +319,7 @@ describe("lookupEdgeValue — regular state edges", () => {
     // the BytesState input passed through unchanged, identical to its
     // stateBefore — but the lookup is what matters here, not the value.
     const edge = stateEdge("key-expansion", "initial.add-round-key");
-    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, 0);
+    const out = lookupEdgeValue(edge, matrixAesEcbSpec, trace, 0);
     expect(out.status).toBe("value");
     if (out.status !== "value") return;
     expect(out.displayKind).toBe("state");
@@ -398,7 +398,7 @@ describe("lookupEdgeValue — block-chip incoming edges", () => {
     // care whether the graph is collapsed — it parses the chip-id
     // directly from the edge endpoints.
     const edge = stateEdge("compute-block-count", "ecb-blocks@block2");
-    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, undefined);
+    const out = lookupEdgeValue(edge, matrixAesEcbSpec, trace, undefined);
     expect(out.status).toBe("value");
     if (out.status !== "value") return;
     expect(out.displayKind).toBe("block-payload");
@@ -414,7 +414,7 @@ describe("lookupEdgeValue — block-chip incoming edges", () => {
     // The post-Slice-6 fanned edge `split-blocks → ecb-blocks@block1`
     // carrying auxKey `input-blocks` (the iterate's `blocksFromAux`).
     const edge = auxEdge("split-blocks", "ecb-blocks@block1", "input-blocks");
-    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, undefined);
+    const out = lookupEdgeValue(edge, matrixAesEcbSpec, trace, undefined);
     expect(out.status).toBe("value");
     if (out.status !== "value") return;
     expect(out.displayKind).toBe("block-payload");
@@ -431,7 +431,7 @@ describe("lookupEdgeValue — block-chip incoming edges", () => {
     // by `round.3.add-round-key` deep in the iterate body). The lookup
     // walks body frames at blockIndex=0 until one matches.
     const edge = auxEdge("key-expansion", "ecb-blocks@block0", "roundKey.3");
-    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, undefined);
+    const out = lookupEdgeValue(edge, matrixAesEcbSpec, trace, undefined);
     expect(out.status).toBe("value");
     if (out.status !== "value") return;
     expect(out.displayKind).toBe("aux");
@@ -446,7 +446,7 @@ describe("lookupEdgeValue — block-chip outgoing edges", () => {
   it("state edge out of chip_i resolves to the iterate body's final stateAfter at block i", () => {
     const trace = runAes128Ecb();
     const edge = stateEdge("ecb-blocks@block0", "concat-blocks");
-    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, undefined);
+    const out = lookupEdgeValue(edge, matrixAesEcbSpec, trace, undefined);
     expect(out.status).toBe("value");
     if (out.status !== "value") return;
     expect(out.displayKind).toBe("block-payload");
@@ -462,7 +462,7 @@ describe("lookupEdgeValue — block-chip outgoing edges", () => {
   it("aux edge out of chip_i with auxKey === outBlocksAux slices to outBlocks[i]", () => {
     const trace = runAes128Ecb();
     const edge = auxEdge("ecb-blocks@block3", "concat-blocks", "output-blocks");
-    const out = lookupEdgeValue(edge, aes128EcbSpec, trace, undefined);
+    const out = lookupEdgeValue(edge, matrixAesEcbSpec, trace, undefined);
     expect(out.status).toBe("value");
     if (out.status !== "value") return;
     expect(out.displayKind).toBe("block-payload");
@@ -476,7 +476,7 @@ describe("lookupEdgeValue — ellipsis chip", () => {
     const trace = runAes128Ecb();
     const out = lookupEdgeValue(
       stateEdge("compute-block-count", "ecb-blocks@blockMore"),
-      aes128EcbSpec,
+      matrixAesEcbSpec,
       trace,
       undefined,
     );
@@ -491,7 +491,7 @@ describe("lookupEdgeValue — chip id pointing at a non-existent iterate", () =>
     const trace = runAes128Ecb();
     const out = lookupEdgeValue(
       stateEdge("compute-block-count", "no-such-iterate@block0"),
-      aes128EcbSpec,
+      matrixAesEcbSpec,
       trace,
       undefined,
     );
@@ -506,13 +506,13 @@ describe("lookupEdgeValue — block-index sensitivity", () => {
     const trace = runAes128Ecb();
     const block0 = lookupEdgeValue(
       stateEdge("compute-block-count", "ecb-blocks@block0"),
-      aes128EcbSpec,
+      matrixAesEcbSpec,
       trace,
       undefined,
     );
     const block2 = lookupEdgeValue(
       stateEdge("compute-block-count", "ecb-blocks@block2"),
-      aes128EcbSpec,
+      matrixAesEcbSpec,
       trace,
       undefined,
     );

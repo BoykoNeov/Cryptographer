@@ -2,8 +2,7 @@ import { aes128Spec } from "@/ciphers/aes-128";
 import { aes128DecryptSpec } from "@/ciphers/aes-128-decrypt";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex, hexFromBytes } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
+import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
@@ -12,6 +11,13 @@ import { describe, expect, it } from "vitest";
  *   - aes128DecryptSpec uses the SAME registry as aes128Spec
  *   - No new step executors needed for decryption
  *   - Both forward and inverse share the same key-expansion step verbatim
+ *
+ * Both directions are byte-native as of Slice B1.2 (scaffolding-suppression
+ * Phase B): the inverse round body composes from the port-native primitives
+ * (byte-substitute@1 / permute@1 / gf-matrix-multiply@1 / xor@1 /
+ * aux-load-bytes@1), so the spec carries a flat `bytes` state and must run
+ * under `portedDispatchEnabled: true`. The cipher output is read off
+ * `finalState.bytes` (still a `Uint8Array`).
  */
 
 describe("AES-128 decryption (FIPS-197 §5.3)", () => {
@@ -21,16 +27,17 @@ describe("AES-128 decryption (FIPS-197 §5.3)", () => {
   const ciphertextHex = "69c4e0d86a7b0430d8cdb78070b4c55a";
 
   it("decrypts the FIPS-197 C.1 ciphertext back to its plaintext", () => {
-    const ct = matrixFromBytes(bytesFromHex(ciphertextHex));
+    const ct = makeBytesState(bytesFromHex(ciphertextHex));
     const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]);
 
     const trace = runSpec(aes128DecryptSpec, buildDefaultRegistry(), {
       initialState: ct,
       initialAux,
+      portedDispatchEnabled: true,
     });
 
-    expect(trace.finalState.shape).toBe("matrix4x4-bytes");
-    if (trace.finalState.shape !== "matrix4x4-bytes") return;
+    expect(trace.finalState.shape).toBe("bytes");
+    if (trace.finalState.shape !== "bytes") return;
     expect(hexFromBytes(trace.finalState.bytes)).toBe(plaintextHex);
   });
 
@@ -42,21 +49,24 @@ describe("AES-128 decryption (FIPS-197 §5.3)", () => {
     const registry = buildDefaultRegistry();
     const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(k)]]);
 
-    // Forward: pt -> ct
+    // Forward: pt -> ct. Byte-native (Slice B1.1).
     const fwd = runSpec(aes128Spec, registry, {
-      initialState: matrixFromBytes(bytesFromHex(pt)),
+      initialState: makeBytesState(bytesFromHex(pt)),
       initialAux,
+      portedDispatchEnabled: true,
     });
-    if (fwd.finalState.shape !== "matrix4x4-bytes") throw new Error("bad shape");
+    if (fwd.finalState.shape !== "bytes") throw new Error("bad shape");
     const ct = hexFromBytes(fwd.finalState.bytes);
     expect(ct).not.toBe(pt); // sanity: encryption did *something*
 
-    // Inverse: ct -> pt (using the same key, which the inverse re-expands)
+    // Inverse: ct -> pt (using the same key, which the inverse re-expands).
+    // Byte-native (Slice B1.2).
     const inv = runSpec(aes128DecryptSpec, registry, {
-      initialState: matrixFromBytes(bytesFromHex(ct)),
+      initialState: makeBytesState(bytesFromHex(ct)),
       initialAux,
+      portedDispatchEnabled: true,
     });
-    if (inv.finalState.shape !== "matrix4x4-bytes") throw new Error("bad shape");
+    if (inv.finalState.shape !== "bytes") throw new Error("bad shape");
     expect(hexFromBytes(inv.finalState.bytes)).toBe(pt);
   });
 
@@ -65,23 +75,31 @@ describe("AES-128 decryption (FIPS-197 §5.3)", () => {
     // for the inverse cipher too. If this test ever needs a registry tweak
     // to pass, something has accidentally hardcoded "encrypt" assumptions.
     const registry = buildDefaultRegistry();
-    const ct = matrixFromBytes(bytesFromHex(ciphertextHex));
+    const ct = makeBytesState(bytesFromHex(ciphertextHex));
     const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]);
 
     expect(() =>
-      runSpec(aes128DecryptSpec, registry, { initialState: ct, initialAux }),
+      runSpec(aes128DecryptSpec, registry, {
+        initialState: ct,
+        initialAux,
+        portedDispatchEnabled: true,
+      }),
     ).not.toThrow();
   });
 
   it("emits the same number of frames as the forward cipher", () => {
-    // 1 key-expansion + 1 initial AddRoundKey + 9 rounds × 4 substeps + 1
-    // final round × 3 substeps = 41 frames. Same shape as forward, which
-    // makes the side-by-side comparison meaningful in the UI.
-    const ct = matrixFromBytes(bytesFromHex(ciphertextHex));
+    // Byte-native (Slice B1.2; AddRoundKey merged to one leaf in Finding F3):
+    // 1 key-expansion + 1 inv-initial AddRoundKey + 9 inverse rounds × 4
+    // substeps (InvShiftRows, InvSubBytes, AddRoundKey, InvMixColumns) + 1
+    // final inverse round × 3 substeps (no InvMixColumns) = 41 frames. Same
+    // shape as the byte-native forward cipher, which makes the side-by-side
+    // comparison meaningful in the UI.
+    const ct = makeBytesState(bytesFromHex(ciphertextHex));
     const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]);
     const trace = runSpec(aes128DecryptSpec, buildDefaultRegistry(), {
       initialState: ct,
       initialAux,
+      portedDispatchEnabled: true,
     });
     expect(trace.frames.length).toBe(41);
   });

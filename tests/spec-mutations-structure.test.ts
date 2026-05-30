@@ -248,7 +248,8 @@ describe("insertStepBefore", () => {
 
 describe("prependChildToContainer", () => {
   it("inserts as the first child of a non-empty group", () => {
-    // round.1 originally has [sub-bytes, shift-rows, mix-columns, add-round-key].
+    // Byte-native round.1 has 4 children (AddRoundKey merged in F3):
+    // [sub-bytes, shift-rows, mix-columns, add-round-key].
     const newStep = fixtureLeaf("prepended-into-round-1");
     const updated = prependChildToContainer(aes128Spec, "round.1", newStep);
     const round1 = findStepAndParent(updated, "round.1");
@@ -265,6 +266,7 @@ describe("prependChildToContainer", () => {
     // fall through to root-append because `insertStepBefore(firstChild,...)`
     // had nothing to anchor on. Now the empty container actually receives
     // the new child.
+    // Byte-native round.1 has 4 children (AddRoundKey merged to one leaf in F3).
     const withEmptyRound = removeStep(
       removeStep(
         removeStep(removeStep(aes128Spec, "round.1.sub-bytes"), "round.1.shift-rows"),

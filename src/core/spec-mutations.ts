@@ -15,11 +15,13 @@ import type {
   ForEachSubgraphWithHistoryNode,
   IterateGroup,
   Json,
+  PortBinding,
   StateShape,
   StepGroup,
   StepLeaf,
   StepNode,
 } from "./types";
+import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "./types";
 
 // ─── Walking the tree ─────────────────────────────────────────────────────
 
@@ -958,6 +960,14 @@ const INV_ROUND_ID_RE = /^inv-round\.(\d+)$/;
 const ROUND_LABEL_RE = /^Round (\d+)/;
 const INV_ROUND_LABEL_RE = /^Inverse Round (\d+)/;
 const ADD_ROUND_KEY_TYPE = "generic.add-round-key@1";
+/** Pre-F3 byte-native AddRoundKey's round-key fetch leaf (carried `auxName:
+ *  roundKey.N`). Superseded by `xor-with-aux@1` below; kept in the bump
+ *  predicates as a harmless no-op for any older in-flight spec. */
+const AUX_LOAD_BYTES_TYPE = "aux-load-bytes@1";
+/** Byte-native AddRoundKey (Finding F3, 2026-05-30): a single `xor-with-aux@1`
+ *  leaf that reads `roundKey.N` from aux via `params.auxName` (replaced the
+ *  fetch-rk + xor pair). Its `auxName` is what the round renumber bumps. */
+const XOR_WITH_AUX_TYPE = "xor-with-aux@1";
 const KEY_EXPANSION_V1 = "aes.key-expansion@1";
 const KEY_EXPANSION_V2 = "aes.key-expansion@2";
 
@@ -989,6 +999,35 @@ const renumberRoundGroup = (
   const oldAuxName = `roundKey.${fromN}`;
   const newAuxName = `roundKey.${toN}`;
 
+  // Port-binding node remap (byte-native rounds, Slice B1). A round's
+  // internal port edges reference either the group's own `in` port (the
+  // group id) or a sibling leaf by its `round.N.*` id. Both renumber
+  // mechanically: `port(round.N, …) → port(round.toN, …)` and
+  // `port(round.N.x, …) → port(round.toN.x, …)`. Cross-boundary `seedInput`
+  // is NOT mechanical (it points at the PREVIOUS round, which shifts +1) and
+  // is recomputed below. Returns the same reference when nothing changes so
+  // legacy matrix rounds (no portInputs) stay reference-stable.
+  const remapBindingNode = (b: PortBinding): PortBinding => {
+    if (b.node === oldGroupId) return port(newGroupId, b.port);
+    if (b.node.startsWith(oldChildPrefix)) {
+      return port(newChildPrefix + b.node.slice(oldChildPrefix.length), b.port);
+    }
+    return b;
+  };
+  const remapPortInputs = (
+    pi: Readonly<Record<string, PortBinding>> | undefined,
+  ): Readonly<Record<string, PortBinding>> | undefined => {
+    if (pi === undefined) return undefined;
+    let changed = false;
+    const next: Record<string, PortBinding> = {};
+    for (const [k, b] of Object.entries(pi)) {
+      const nb = remapBindingNode(b);
+      if (nb !== b) changed = true;
+      next[k] = nb;
+    }
+    return changed ? next : pi;
+  };
+
   const newChildren = group.children.map((child) => {
     if (child.kind !== "step") {
       // Nested groups inside a round group aren't a shape any canonical
@@ -1001,14 +1040,32 @@ const renumberRoundGroup = (
       newId = newChildPrefix + child.id.slice(oldChildPrefix.length);
       renames.set(child.id, newId);
     }
+    // Bump the round-key auxName on whichever leaf consumes it. Legacy
+    // matrix rounds carry it on `generic.add-round-key@1`; byte-native rounds
+    // carry it on the merged `xor-with-aux@1` AddRoundKey leaf (Finding F3)
+    // via `params.auxName`. (`aux-load-bytes@1` was the pre-F3 fetch-rk leaf
+    // — kept in the predicate as a harmless no-op for older in-flight specs.)
     let newParams = child.params;
-    if (child.type === ADD_ROUND_KEY_TYPE) {
+    if (
+      child.type === ADD_ROUND_KEY_TYPE ||
+      child.type === AUX_LOAD_BYTES_TYPE ||
+      child.type === XOR_WITH_AUX_TYPE
+    ) {
       const p = child.params as { readonly auxName?: unknown };
       if (p && typeof p.auxName === "string" && p.auxName === oldAuxName) {
         newParams = { ...(p as Record<string, Json>), auxName: newAuxName };
       }
     }
-    return { ...child, id: newId, params: newParams };
+    // Byte-native rounds wire their internal data flow via portInputs;
+    // remap those references to the renumbered ids. Absent on legacy
+    // matrix rounds ⇒ reference-stable no-op.
+    const newPortInputs = remapPortInputs(child.portInputs);
+    return {
+      ...child,
+      id: newId,
+      params: newParams,
+      ...(newPortInputs !== undefined ? { portInputs: newPortInputs } : {}),
+    };
   });
 
   // Update the label if it follows the canonical pattern, preserving any
@@ -1024,22 +1081,60 @@ const renumberRoundGroup = (
     }
   }
 
+  // Byte-native group port contract (Slice B1). `bodyOutput` points at a
+  // direct child (`round.N.add-round-key`) and renumbers mechanically.
+  // `seedInput` crosses the group boundary to the PREVIOUS round's output,
+  // so it can't be remapped through the rename map — the predecessor shifts
+  // +1 for BOTH the clone (which seeds from its source, = toN-1) and every
+  // renumbered sibling. Recompute it from the new index instead. Forward
+  // only: the byte-native decrypt rounds (with their own seedInput chain)
+  // land in Slice B1.2; today's reverse path is matrix (no seedInput).
+  const newBodyOutput =
+    group.bodyOutput !== undefined ? remapBindingNode(group.bodyOutput) : undefined;
+  let newSeedInput = group.seedInput;
+  if (group.seedInput !== undefined && direction === "forward") {
+    // round 1 seeds from the initial AddRoundKey LEAF (its output port is
+    // "output"); rounds ≥2 seed from the previous round GROUP's published
+    // "out" port — matching `buildAesEncryptBodyNative`. `toN === 1` is
+    // unreachable via duplicate (clone/renumber targets are always ≥2) but
+    // kept correct for completeness.
+    newSeedInput =
+      toN === 1 ? port("initial.add-round-key", "output") : port(`round.${toN - 1}`, "out");
+  }
+
   return {
     ...group,
     id: newGroupId,
     ...(newLabel !== undefined ? { label: newLabel } : {}),
     children: newChildren,
+    ...(newSeedInput !== undefined ? { seedInput: newSeedInput } : {}),
+    ...(newBodyOutput !== undefined ? { bodyOutput: newBodyOutput } : {}),
   };
 };
 
 /**
- * Bump the `roundKey.K` auxName on `inv-initial.add-round-key` by 1.
- * Returns the original leaf reference if no bump applies (params shape
- * unexpected, auxName doesn't match the pattern) so reference equality
+ * Bump the `roundKey.K` auxName on the inverse-initial AddRoundKey by 1.
+ * The auxName lives on different leaves in the two AES shapes: the legacy
+ * matrix decrypt carries it on `inv-initial.add-round-key`
+ * (`generic.add-round-key@1`); the byte-native decrypt (Finding F3) carries
+ * it on the SAME id `inv-initial.add-round-key`, now a `xor-with-aux@1` leaf
+ * whose `params.auxName` holds `roundKey.{rounds}`. (Pre-F3 byte-native
+ * decrypt carried it on a separate `inv-initial.fetch-rk` `aux-load-bytes@1`
+ * leaf — that type stays in the predicate as a harmless no-op.) This helper
+ * accepts all three leaf types and only acts on the one whose params actually
+ * hold a matching `auxName`.
+ *
+ * Returns the original leaf reference if no bump applies (wrong type, params
+ * shape unexpected, auxName doesn't match the pattern) so reference equality
  * holds when the surrounding mutation is a no-op.
  */
 const bumpInvInitialAuxName = (leaf: StepLeaf): StepLeaf => {
-  if (leaf.type !== ADD_ROUND_KEY_TYPE) return leaf;
+  if (
+    leaf.type !== ADD_ROUND_KEY_TYPE &&
+    leaf.type !== AUX_LOAD_BYTES_TYPE &&
+    leaf.type !== XOR_WITH_AUX_TYPE
+  )
+    return leaf;
   const p = leaf.params as { readonly auxName?: unknown };
   if (!p || typeof p.auxName !== "string") return leaf;
   const m = p.auxName.match(/^roundKey\.(\d+)$/);
@@ -1087,6 +1182,53 @@ const bumpKeyExpansion = (spec: CipherSpec): CipherSpec => {
     );
   }
   return { ...spec, steps: newSteps };
+};
+
+/**
+ * Recompute the byte-native decrypt `seedInput` chain across a freshly
+ * assembled list of reverse-direction children (Slice B1.2).
+ *
+ * The forward duplicate recomputes each round's `seedInput` inline during the
+ * renumber walk because the predecessor (`round.{toN-1}`) is a pure function
+ * of the new index. The reverse chain is the dual and DESCENDS — the highest
+ * inverse round seeds from `inv-initial.add-round-key`, every lower one from
+ * the next-HIGHER round's exit — so a renumbered round's correct seed depends
+ * on the post-insert neighbour set, which the per-group renumber walk can't
+ * see. Three positions would otherwise need bespoke handling: the clone, the
+ * renumbered siblings, AND the (unchanged) source round when it WAS the anchor
+ * (duplicating the highest inverse round bumps the clone into the anchor slot,
+ * leaving the source needing to seed from the clone). Recomputing the whole
+ * chain positionally here erases all three special cases.
+ *
+ * No-op for the legacy matrix decrypt: its inverse round groups carry no
+ * `seedInput` (the matrix state threads implicitly), so this returns the same
+ * children reference. Only the byte-native rebuild has `seedInput` to fix.
+ */
+const rewireReverseSeedInputChain = (children: readonly StepNode[]): readonly StepNode[] => {
+  const invRoundIndices = children
+    .filter(
+      (n): n is StepGroup =>
+        n.kind === "group" && n.seedInput !== undefined && INV_ROUND_ID_RE.test(n.id),
+    )
+    .map((g) => Number.parseInt(INV_ROUND_ID_RE.exec(g.id)?.[1] ?? "", 10));
+  if (invRoundIndices.length === 0) return children; // matrix decrypt: nothing to rewire
+  const maxIdx = Math.max(...invRoundIndices);
+
+  let changed = false;
+  const next = children.map((n) => {
+    if (n.kind !== "group" || n.seedInput === undefined) return n;
+    const m = INV_ROUND_ID_RE.exec(n.id);
+    if (!m || !m[1]) return n;
+    const idx = Number.parseInt(m[1], 10);
+    const newSeed =
+      idx === maxIdx
+        ? port("inv-initial.add-round-key", "output")
+        : port(`inv-round.${idx + 1}`, "out");
+    if (newSeed.node === n.seedInput.node && newSeed.port === n.seedInput.port) return n;
+    changed = true;
+    return { ...n, seedInput: newSeed };
+  });
+  return changed ? next : children;
 };
 
 /**
@@ -1198,7 +1340,15 @@ export const duplicateRoundGroup = (
     for (let i = 0; i < sourceIdx; i++) {
       const n = oldChildren[i];
       if (!n) continue;
-      if (n.kind === "step" && n.id === "inv-initial.add-round-key") {
+      // The inverse-initial round-key reference lives on `inv-initial.add-round-key`
+      // — `generic.add-round-key@1` (matrix) or `xor-with-aux@1` (byte-native,
+      // Finding F3). The pre-F3 `inv-initial.fetch-rk` (`aux-load-bytes@1`) is
+      // gone, but matching it stays harmless. The bump no-ops on a leaf that
+      // doesn't actually hold a matching auxName.
+      if (
+        n.kind === "step" &&
+        (n.id === "inv-initial.add-round-key" || n.id === "inv-initial.fetch-rk")
+      ) {
         newChildren.push(bumpInvInitialAuxName(n));
         continue;
       }
@@ -1223,6 +1373,13 @@ export const duplicateRoundGroup = (
     }
   }
 
+  // Byte-native decrypt (reverse) carries an explicit descending `seedInput`
+  // chain that the per-group renumber walk can't fix locally — recompute it
+  // positionally across the assembled children. No-op for matrix decrypt
+  // (no `seedInput`) and for the forward direction (handled inline above).
+  const splicedChildren =
+    direction === "reverse" ? rewireReverseSeedInputChain(newChildren) : newChildren;
+
   // Splice the rebuilt array back into the spec. If source was at the
   // top level (no parent), we replace `spec.steps` directly. Otherwise
   // walk the tree once to replace the parent's children — reusing the
@@ -1230,19 +1387,35 @@ export const duplicateRoundGroup = (
   // child-array transform fits its signature cleanly.
   let specAfterSplice: CipherSpec;
   if (loc.parent === null) {
-    specAfterSplice = { ...spec, steps: newChildren };
+    specAfterSplice = { ...spec, steps: splicedChildren };
   } else {
-    const replaced = replaceParentChildrenByRef(spec, loc.parent, newChildren);
+    const replaced = replaceParentChildrenByRef(spec, loc.parent, splicedChildren);
     if (!replaced) {
       throw new Error("duplicateRoundGroup: internal — could not splice children back into parent");
     }
     specAfterSplice = replaced;
   }
 
-  // Finally, bump the key schedule. This is independent of which parent
-  // held the source — key-expansion is always at the top level (single-
-  // block and ECB both put it there, outside the iterate).
-  const finalSpec = bumpKeyExpansion(specAfterSplice);
+  // Bump the key schedule. This is independent of which parent held the
+  // source — key-expansion is always at the top level (single-block and ECB
+  // both put it there, outside the iterate).
+  let finalSpec = bumpKeyExpansion(specAfterSplice);
+
+  // Byte-native AES (Slice B1) names its cipher exit via `spec.outputFrom`
+  // (= `port(round.{last}, "out")`). A FORWARD duplicate shifts the final
+  // round up (round.10 → round.11), so the exit binding must follow the
+  // rename or the cipher would publish a mid-round's output (taking the
+  // result from a now-full round and SKIPPING the real final round). Legacy
+  // matrix specs have no `outputFrom` (final state = walk exit) so this is a
+  // no-op there; in reverse the final inv-round.0 isn't renamed so it's also
+  // untouched. Remap through the same rename map the renumber built.
+  if (finalSpec.outputFrom !== undefined) {
+    const renamed = renames.get(finalSpec.outputFrom.node);
+    if (renamed !== undefined) {
+      finalSpec = { ...finalSpec, outputFrom: { ...finalSpec.outputFrom, node: renamed } };
+    }
+  }
+
   return { spec: finalSpec, renames };
 };
 
@@ -1377,6 +1550,147 @@ export const PADDING_STEP_TYPES: ReadonlySet<string> = new Set<string>([
 const AES_BLOCK_SIZE = 16;
 
 /**
+ * The port name a Phase-1 *lifted* legacy step (`generic.pkcs7-pad@1` et al.)
+ * publishes its transformed bytes under. The lift's `ProjectionMetadata`
+ * declares `stateInputPort`/`stateOutputPort: "state"`, and the runtime
+ * records ported outputs under that name (`port-projection.ts` →
+ * `runtime.ts` `nodeOutputs`). So a byte-native consumer wiring to a pad's
+ * output reads `port(padId, "state")` — NOT `"output"` (which is the
+ * convention only for the new no-prefix port-native primitives like
+ * `xor@1`/`byte-substitute@1`).
+ */
+const LIFTED_STATE_PORT = "state";
+
+const port = (node: string, portName: string): PortBinding => ({ node, port: portName });
+
+/**
+ * Byte-native AES detection for the padding overlay. Byte-native AES
+ * (scaffolding-suppression Phase B) carries a flat 16-byte state on raw
+ * ports (`stateShape: "bytes"`), unlike the legacy matrix AES
+ * (`"matrix4x4-bytes"`). It shares the `"bytes"` shape with Speck (4-byte
+ * block) / Serpent (16) / DES (8), so shape alone can't gate the overlay:
+ * the pad's `blockSize` is hardcoded to `AES_BLOCK_SIZE` (16), which is a
+ * lie for Speck/DES. We therefore scope the byte-native padding branch to
+ * the AES family by id prefix — the honest scope for the hardcoded 16.
+ * When Serpent (B3, block 16) / DES (B4, block 8) go byte-native they add
+ * their own branch (Serpent could reuse this once block size is read off
+ * the spec; DES needs an 8-byte block). This is the clear B3/B4 seam.
+ */
+const isByteNativeAesSpec = (spec: CipherSpec): boolean =>
+  spec.stateShape === "bytes" && spec.id.startsWith("aes");
+
+/**
+ * Recursively rewrite every `portInputs` binding in the tree through
+ * `rewriteBinding` (identity ⇒ no-op for a binding). Pure — returns a fresh
+ * tree only where a rewrite occurred (reference-stable on untouched
+ * branches). The byte-native padding branch uses this to splice a pad into
+ * the port graph (repoint `$input` consumers to the pad) and — on the
+ * reverse — to restore the canonical `$input` wiring before a strip leaves a
+ * dangling reference to a removed pad leaf.
+ */
+const rewriteAllPortInputs = (
+  steps: readonly StepNode[],
+  rewriteBinding: (b: PortBinding) => PortBinding,
+): readonly StepNode[] => {
+  const rewritePortInputs = (
+    pi: Readonly<Record<string, PortBinding>> | undefined,
+  ): Readonly<Record<string, PortBinding>> | undefined => {
+    if (pi === undefined) return undefined;
+    let changed = false;
+    const next: Record<string, PortBinding> = {};
+    for (const [k, b] of Object.entries(pi)) {
+      const nb = rewriteBinding(b);
+      if (nb !== b) changed = true;
+      next[k] = nb;
+    }
+    return changed ? next : pi;
+  };
+
+  // Recurse into a node's children FIRST, on the intact discriminant (a
+  // union-spread would erase the `kind`↔fields correlation and break the
+  // narrowing). Then rewrite the node's own portInputs.
+  const rewriteNode = (n: StepNode): StepNode => {
+    let withChildren: StepNode = n;
+    if (n.kind === "feistel-round") {
+      const newTracks = n.tracks.map((t) => {
+        const nc = visit(t.children);
+        return nc === t.children ? t : { ...t, children: nc };
+      });
+      if (newTracks.some((t, i) => t !== n.tracks[i])) {
+        withChildren = { ...n, tracks: newTracks };
+      }
+    } else if (n.kind !== "step") {
+      // group / iterate / for-each-subgraph / for-each-subgraph-with-history
+      const nc = visit(n.children);
+      if (nc !== n.children) withChildren = { ...n, children: nc };
+    }
+    const newPi = rewritePortInputs(withChildren.portInputs);
+    let result: StepNode =
+      newPi !== undefined && newPi !== withChildren.portInputs
+        ? { ...withChildren, portInputs: newPi }
+        : withChildren;
+    // Container `seedInput` is the OTHER place a `$input` reference can live
+    // (the byte-native ECB iterate reads `$input` there, not via portInputs —
+    // Slice B1.4). Only looping containers + `group` carry it; `step` /
+    // `feistel-round` don't. Round-group seedInputs point at sibling rounds,
+    // never `$input`, so the pad repoint/restore is identity for them.
+    if (
+      result.kind !== "step" &&
+      result.kind !== "feistel-round" &&
+      result.seedInput !== undefined
+    ) {
+      const ns = rewriteBinding(result.seedInput);
+      if (ns !== result.seedInput) result = { ...result, seedInput: ns };
+    }
+    return result;
+  };
+
+  const visit = (nodes: readonly StepNode[]): readonly StepNode[] => {
+    let anyChanged = false;
+    const out = nodes.map((n) => {
+      const next = rewriteNode(n);
+      if (next !== n) anyChanged = true;
+      return next;
+    });
+    return anyChanged ? out : nodes;
+  };
+
+  return visit(steps);
+};
+
+/** The pad-leaf ids the byte-native branch may have spliced in (for restore). */
+const PADDING_PAD_IDS: ReadonlySet<string> = new Set<string>(
+  Object.values(SCHEME_STEP_TYPES).map((s) => s.padId),
+);
+const PADDING_UNPAD_IDS: ReadonlySet<string> = new Set<string>(
+  Object.values(SCHEME_STEP_TYPES).map((s) => s.unpadId),
+);
+
+/** Repoint `$input` consumers to `port(padNode, "state")` (pad-splice). */
+const repointInputSourceConsumers = (
+  steps: readonly StepNode[],
+  padNode: string,
+): readonly StepNode[] =>
+  rewriteAllPortInputs(steps, (b) =>
+    b.node === INPUT_SOURCE_ID && b.port === INPUT_SOURCE_PORT
+      ? port(padNode, LIFTED_STATE_PORT)
+      : b,
+  );
+
+/**
+ * Restore the canonical `$input` wiring: any binding that points at a known
+ * pad leaf's `state` output is repointed back to `$input`. Run BEFORE a
+ * strip so removing the pad leaf can't leave a dangling reference. Pad ids
+ * are reserved (`PADDING_PAD_IDS`), so this only ever touches overlay edges.
+ */
+const restoreInputSourceConsumers = (steps: readonly StepNode[]): readonly StepNode[] =>
+  rewriteAllPortInputs(steps, (b) =>
+    PADDING_PAD_IDS.has(b.node) && b.port === LIFTED_STATE_PORT
+      ? port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT)
+      : b,
+  );
+
+/**
  * Strip every top-level leaf whose `type` is in `PADDING_STEP_TYPES`. We
  * walk only the top level: the canonical AES specs put all their per-round
  * work inside `group` nodes, and the overlay's pad/load/unpad/store leaves
@@ -1396,6 +1710,18 @@ const stripPaddingLeaves = (steps: readonly StepNode[]): readonly StepNode[] =>
  */
 const hasIterateNode = (steps: readonly StepNode[]): boolean =>
   steps.some((n) => n.kind === "iterate");
+
+/**
+ * Detect a byte-native (port-mode) iterate — `seedInput` set rather than the
+ * legacy `blocksFromAux` aux split (Slice B1.4). Used to route byte-native
+ * ECB *away* from the matrix multi-block padding branch (Branch 1): a
+ * port-mode iterate reads its blocks from a port (`$input`/pad), not from a
+ * `state` thread, so the matrix branch's no-portInputs pad prepend would be
+ * ignored. Byte-native ECB instead splices the pad into the port graph in
+ * the byte-native branch (Branch 2), repointing the iterate's `seedInput`.
+ */
+const hasByteNativeIterate = (steps: readonly StepNode[]): boolean =>
+  steps.some((n) => n.kind === "iterate" && n.seedInput !== undefined);
 
 /**
  * Layer a padding chain onto a cipher spec.
@@ -1427,11 +1753,14 @@ export const applyPaddingScheme = (
 ): CipherSpec => {
   const stripped = stripPaddingLeaves(spec.steps);
 
-  // ── Branch 1: multi-block (ECB/CBC/CTR) ────────────────────────────────
+  // ── Branch 1: matrix multi-block (matrix CBC/CTR) ──────────────────────
   // The iterate node already handles BytesState ↔ MatrixState transitions
   // via the split-blocks / concat-blocks boundary steps inside the spec.
   // All we add here is the pad/unpad at the outer BytesState boundary.
-  if (hasIterateNode(stripped)) {
+  // Byte-native ECB (port-mode iterate) is EXCLUDED — it has no `state`
+  // thread to splice a no-portInputs pad into; it falls through to the
+  // byte-native branch below, which repoints the iterate's `seedInput`.
+  if (hasIterateNode(stripped) && !hasByteNativeIterate(stripped)) {
     if (scheme === "none") {
       return { ...spec, steps: stripped };
     }
@@ -1453,6 +1782,82 @@ export const applyPaddingScheme = (
       params: { blockSize: AES_BLOCK_SIZE },
     };
     return { ...spec, steps: [...stripped, unpadLeaf] };
+  }
+
+  // ── Branch 2: byte-native AES (single-block + ECB) (Slice B1) ──────────
+  // The port-native AES rebuild carries a flat 16-byte state on raw ports
+  // (no `MatrixState` thread): the plaintext arrives on the reserved
+  // `$input` source and the cipher exit is named by `spec.outputFrom`. The
+  // legacy matrix branch's [pad → load-block] / [store-block → unpad] chain
+  // doesn't apply — there is no state thread to splice into and no
+  // bytes↔matrix bridge to insert. Instead we splice the pad directly into
+  // the port graph: prepend a pad reading `$input`, then repoint every
+  // `$input` consumer to the pad's output. For single-block that consumer is
+  // the initial AddRoundKey's `input` port (a `portInputs` binding — the
+  // merged `xor-with-aux@1` leaf since Finding F3); for ECB (B1.4) it's the
+  // port-mode iterate's `seedInput` — `repointInputSourceConsumers` rewrites
+  // both generically (it walks every portInputs key). The pad is a Phase-1
+  // lifted step, so its output port is named `"state"` (LIFTED_STATE_PORT),
+  // not `"output"`.
+  if (isByteNativeAesSpec(spec)) {
+    // Idempotency: a prior call may have repointed `$input` consumers to a
+    // pad (encrypt) or moved `outputFrom` onto an unpad (decrypt). `stripped`
+    // removed those LEAVES; we must also repair the EDGES before re-applying,
+    // or a leftover binding dangles at the removed pad/unpad. Restore both
+    // first, then re-derive from that canonical wiring.
+    const inputRestored = restoreInputSourceConsumers(stripped);
+    // Restore `outputFrom`: if it points at a known unpad, recover the
+    // unpad's captured cipher-exit binding from the PRE-strip spec.
+    let canonicalOutputFrom = spec.outputFrom;
+    if (canonicalOutputFrom !== undefined && PADDING_UNPAD_IDS.has(canonicalOutputFrom.node)) {
+      const priorUnpad = findStep(spec, canonicalOutputFrom.node);
+      const captured = priorUnpad?.portInputs?.[LIFTED_STATE_PORT];
+      canonicalOutputFrom = captured ?? canonicalOutputFrom;
+    }
+    const restoredSpec: CipherSpec = {
+      ...spec,
+      steps: inputRestored,
+      ...(canonicalOutputFrom !== undefined ? { outputFrom: canonicalOutputFrom } : {}),
+    };
+
+    if (scheme === "none") {
+      // No `load-block`/`store-block` ever existed in the byte-native spec,
+      // so the restored wiring IS the canonical spec. Shape stays `"bytes"`.
+      return restoredSpec;
+    }
+    const { padType, unpadType, padId, unpadId } = SCHEME_STEP_TYPES[scheme];
+    if (mode === "encrypt") {
+      const padLeaf: StepLeaf = {
+        kind: "step",
+        id: padId,
+        type: padType,
+        params: { blockSize: AES_BLOCK_SIZE },
+        // Pad reads the raw plaintext from `$input` on its `state` input port.
+        portInputs: { [LIFTED_STATE_PORT]: port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT) },
+      };
+      // The body's `$input` consumers now read the padded bytes instead.
+      const repointed = repointInputSourceConsumers(inputRestored, padId);
+      return { ...restoredSpec, steps: [padLeaf, ...repointed] };
+    }
+    // mode === "decrypt": NOT exercised in B1 (the shipped decrypt spec is
+    // still matrix → handled by the matrix branch below). Implemented
+    // symmetrically for forward-compat with Slice B1.2's byte-native
+    // decrypt: append an unpad reading the current cipher exit, then move
+    // `outputFrom` to the unpad's output. B1.2 will exercise + verify this.
+    const unpadLeaf: StepLeaf = {
+      kind: "step",
+      id: unpadId,
+      type: unpadType,
+      params: { blockSize: AES_BLOCK_SIZE },
+      ...(canonicalOutputFrom !== undefined
+        ? { portInputs: { [LIFTED_STATE_PORT]: canonicalOutputFrom } }
+        : {}),
+    };
+    return {
+      ...restoredSpec,
+      steps: [...inputRestored, unpadLeaf],
+      outputFrom: port(unpadId, LIFTED_STATE_PORT),
+    };
   }
 
   // ── Branch 3: non-AES single-block (Speck) ─────────────────────────────

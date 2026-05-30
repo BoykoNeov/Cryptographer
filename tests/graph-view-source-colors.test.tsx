@@ -57,6 +57,8 @@ const seedAes128Ecb = (): void => {
   const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(ECB_PLAINTEXT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
+    // Byte-native ECB (B1.4) — port-mode iterate + port-native body.
+    portedDispatchEnabled: true,
   });
   setTrace(trace);
 };
@@ -211,6 +213,8 @@ describe("GraphView — source-color coding", () => {
     const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex(ECB_PLAINTEXT)),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
+      // Byte-native ECB (B1.4) — port-mode iterate + port-native body.
+      portedDispatchEnabled: true,
     });
     setTrace(trace);
     setReplicationEnabled(true);

@@ -33,25 +33,27 @@ const findFirstLeaf = (spec: CipherSpec, type: string): StepLeaf | null => {
 describe("applyPaddingScheme(spec, encrypt, 'none')", () => {
   it("returns a spec structurally equivalent to the canonical one", () => {
     const result = applyPaddingScheme(aes128Spec, "encrypt", "none");
-    // No pad/load leaves at top level.
+    // No pad/load leaves at top level. (Byte-native AES never had a
+    // load-block; the port graph reads `$input` directly — Slice B1.)
     const types = topLevelLeafTypes(result);
     expect(types).not.toContain("generic.pkcs7-pad@1");
     expect(types).not.toContain("generic.load-block@1");
     // Canonical structure preserved: key-expansion is the first top-level
     // leaf in the encrypt spec.
     expect(types[0]).toBe("aes.key-expansion@1");
-    // Input shape stays matrix.
-    expect(result.inputs.plaintext.shape).toBe("matrix4x4-bytes");
+    // Byte-native AES carries a flat 16-byte state on raw ports.
+    expect(result.inputs.plaintext.shape).toBe("bytes");
   });
 });
 
 describe("applyPaddingScheme(spec, encrypt, 'pkcs7')", () => {
-  it("prepends pkcs7-pad and load-block in that order", () => {
+  it("prepends ONLY pkcs7-pad before key-expansion (no load-block, byte-native B1)", () => {
     const result = applyPaddingScheme(aes128Spec, "encrypt", "pkcs7");
     const types = topLevelLeafTypes(result);
     expect(types[0]).toBe("generic.pkcs7-pad@1");
-    expect(types[1]).toBe("generic.load-block@1");
-    expect(types[2]).toBe("aes.key-expansion@1");
+    // No bytes↔matrix bridge: byte-native AES has no load-block.
+    expect(types).not.toContain("generic.load-block@1");
+    expect(types[1]).toBe("aes.key-expansion@1");
   });
 
   it("declares input shape as 'bytes' so the runtime accepts BytesState", () => {
@@ -59,23 +61,63 @@ describe("applyPaddingScheme(spec, encrypt, 'pkcs7')", () => {
     expect(result.inputs.plaintext.shape).toBe("bytes");
   });
 
-  it("uses blockSize=16 in pad/load params", () => {
+  it("uses blockSize=16 in the pad params", () => {
     const result = applyPaddingScheme(aes128Spec, "encrypt", "pkcs7");
     const pad = findFirstLeaf(result, "generic.pkcs7-pad@1");
     expect(pad?.params).toEqual({ blockSize: 16 });
-    const load = findFirstLeaf(result, "generic.load-block@1");
-    expect(load?.params).toEqual({ blockSize: 16 });
+  });
+
+  it("wires the pad to read $input and repoints the body's $input consumer to the pad", () => {
+    // The byte-native branch splices the pad directly into the port graph:
+    // the pad reads the raw plaintext from `$input` on its `state` input
+    // port, and the initial AddRoundKey (which read `$input` directly) is
+    // repointed to the pad's `state` output port.
+    const result = applyPaddingScheme(aes128Spec, "encrypt", "pkcs7");
+    const pad = findFirstLeaf(result, "generic.pkcs7-pad@1");
+    expect(pad?.portInputs).toEqual({ state: { node: "$input", port: "out" } });
+
+    // No leaf anywhere still reads the raw $input source — the pad owns it.
+    const readsRawInput = (nodes: readonly StepNode[]): boolean =>
+      nodes.some((n) => {
+        const pi = n.portInputs;
+        const here =
+          pi !== undefined &&
+          Object.values(pi).some((b) => b.node === "$input" && b.port === "out");
+        if (here) return true;
+        if (n.kind === "feistel-round") return n.tracks.some((t) => readsRawInput(t.children));
+        if (n.kind !== "step") return readsRawInput(n.children);
+        return false;
+      });
+    // The pad itself reads $input; every OTHER node must not.
+    const withoutPad = result.steps.filter((n) => n.id !== "pkcs7-pad");
+    expect(readsRawInput(withoutPad)).toBe(false);
+    // The initial AddRoundKey now reads the pad's output. After Finding F3 it
+    // is a `xor-with-aux@1` leaf whose state arrives on the `input` port.
+    const initialArk = findFirstLeaf(result, "xor-with-aux@1");
+    expect(initialArk?.portInputs?.input).toEqual({ node: "pkcs7-pad", port: "state" });
   });
 });
 
 describe("applyPaddingScheme(spec, decrypt, 'pkcs7')", () => {
-  it("appends store-block and pkcs7-unpad in that order", () => {
+  it("appends ONLY pkcs7-unpad (no store-block, byte-native B1.2)", () => {
     const result = applyPaddingScheme(aes128DecryptSpec, "decrypt", "pkcs7");
     const types = topLevelLeafTypes(result);
-    expect(types[types.length - 2]).toBe("generic.store-block@1");
+    // Byte-native decrypt: no bytes↔matrix bridge (store-block), the unpad is
+    // spliced directly onto the port graph at the tail.
+    expect(types).not.toContain("generic.store-block@1");
     expect(types[types.length - 1]).toBe("generic.pkcs7-unpad@1");
-    // Input shape stays matrix (ciphertext is one block).
-    expect(result.inputs.plaintext.shape).toBe("matrix4x4-bytes");
+    // Shape stays bytes (byte-native carries a flat 16-byte block).
+    expect(result.inputs.plaintext.shape).toBe("bytes");
+  });
+
+  it("wires the unpad to read the old cipher exit and repoints outputFrom to it", () => {
+    // The byte-native branch appends an unpad reading the spec's prior
+    // `outputFrom` (the final inverse round's `out` port) on its `state` input
+    // port, then moves `outputFrom` onto the unpad's `state` output port.
+    const result = applyPaddingScheme(aes128DecryptSpec, "decrypt", "pkcs7");
+    const unpad = findFirstLeaf(result, "generic.pkcs7-unpad@1");
+    expect(unpad?.portInputs).toEqual({ state: { node: "inv-round.0", port: "out" } });
+    expect(result.outputFrom).toEqual({ node: "pkcs7-unpad", port: "state" });
   });
 });
 
@@ -95,30 +137,33 @@ describe("applyPaddingScheme idempotency", () => {
     expect(types).not.toContain("generic.pkcs7-pad@1");
     expect(types).not.toContain("generic.load-block@1");
     expect(types[0]).toBe("aes.key-expansion@1");
-    expect(unpadded.inputs.plaintext.shape).toBe("matrix4x4-bytes");
+    expect(unpadded.inputs.plaintext.shape).toBe("bytes");
   });
 
   it("decrypt → encrypt scheme swap: pkcs7 decrypt strips, then applies as encrypt", () => {
     const decryptPadded = applyPaddingScheme(aes128DecryptSpec, "decrypt", "pkcs7");
     // Strip and re-apply as encrypt — overlay leaves move from tail to head.
     // (This is what happens internally when the user flips encrypt↔decrypt
-    // and the active padding scheme is re-applied.)
+    // and the active padding scheme is re-applied.) Byte-native (B1.2): the
+    // unpad at the tail is stripped (and `outputFrom` restored to the canonical
+    // cipher exit), then a pad is prepended at the head — no load/store-block
+    // bridge in either direction.
     const reApplied = applyPaddingScheme(decryptPadded, "encrypt", "pkcs7");
     const types = topLevelLeafTypes(reApplied);
     expect(types[0]).toBe("generic.pkcs7-pad@1");
-    expect(types[1]).toBe("generic.load-block@1");
+    expect(types).not.toContain("generic.load-block@1");
     expect(types).not.toContain("generic.store-block@1");
     expect(types).not.toContain("generic.pkcs7-unpad@1");
   });
 });
 
 describe("applyPaddingScheme(spec, encrypt, 'zero-pad')", () => {
-  it("prepends zero-pad and load-block in that order", () => {
+  it("prepends ONLY zero-pad before key-expansion (no load-block, byte-native B1)", () => {
     const result = applyPaddingScheme(aes128Spec, "encrypt", "zero-pad");
     const types = topLevelLeafTypes(result);
     expect(types[0]).toBe("generic.zero-pad@1");
-    expect(types[1]).toBe("generic.load-block@1");
-    expect(types[2]).toBe("aes.key-expansion@1");
+    expect(types).not.toContain("generic.load-block@1");
+    expect(types[1]).toBe("aes.key-expansion@1");
   });
 
   it("declares input shape as 'bytes' so the runtime accepts BytesState", () => {
@@ -134,22 +179,22 @@ describe("applyPaddingScheme(spec, encrypt, 'zero-pad')", () => {
 });
 
 describe("applyPaddingScheme(spec, decrypt, 'zero-pad')", () => {
-  it("appends store-block and zero-unpad in that order", () => {
+  it("appends ONLY zero-unpad (no store-block, byte-native B1.2)", () => {
     const result = applyPaddingScheme(aes128DecryptSpec, "decrypt", "zero-pad");
     const types = topLevelLeafTypes(result);
-    expect(types[types.length - 2]).toBe("generic.store-block@1");
+    expect(types).not.toContain("generic.store-block@1");
     expect(types[types.length - 1]).toBe("generic.zero-unpad@1");
-    expect(result.inputs.plaintext.shape).toBe("matrix4x4-bytes");
+    expect(result.inputs.plaintext.shape).toBe("bytes");
   });
 });
 
 describe("applyPaddingScheme(spec, encrypt, 'iso7816-4')", () => {
-  it("prepends iso7816-4-pad and load-block in that order", () => {
+  it("prepends ONLY iso7816-4-pad before key-expansion (no load-block, byte-native B1)", () => {
     const result = applyPaddingScheme(aes128Spec, "encrypt", "iso7816-4");
     const types = topLevelLeafTypes(result);
     expect(types[0]).toBe("generic.iso7816-4-pad@1");
-    expect(types[1]).toBe("generic.load-block@1");
-    expect(types[2]).toBe("aes.key-expansion@1");
+    expect(types).not.toContain("generic.load-block@1");
+    expect(types[1]).toBe("aes.key-expansion@1");
   });
 
   it("declares input shape as 'bytes'", () => {
@@ -165,11 +210,12 @@ describe("applyPaddingScheme(spec, encrypt, 'iso7816-4')", () => {
 });
 
 describe("applyPaddingScheme(spec, decrypt, 'iso7816-4')", () => {
-  it("appends store-block and iso7816-4-unpad in that order", () => {
+  it("appends ONLY iso7816-4-unpad (no store-block, byte-native B1.2)", () => {
     const result = applyPaddingScheme(aes128DecryptSpec, "decrypt", "iso7816-4");
     const types = topLevelLeafTypes(result);
-    expect(types[types.length - 2]).toBe("generic.store-block@1");
+    expect(types).not.toContain("generic.store-block@1");
     expect(types[types.length - 1]).toBe("generic.iso7816-4-unpad@1");
+    expect(result.inputs.plaintext.shape).toBe("bytes");
   });
 });
 
@@ -181,9 +227,14 @@ describe("applyPaddingScheme cross-scheme swaps", () => {
     // No PKCS#7 residue.
     expect(types).not.toContain("generic.pkcs7-pad@1");
     expect(types).not.toContain("generic.pkcs7-unpad@1");
-    // New zero-pad chain present.
+    // New zero-pad chain present (byte-native: pad only, no load-block).
     expect(types[0]).toBe("generic.zero-pad@1");
-    expect(types[1]).toBe("generic.load-block@1");
+    expect(types).not.toContain("generic.load-block@1");
+    expect(types[1]).toBe("aes.key-expansion@1");
+    // The initial AddRoundKey (a `xor-with-aux@1` leaf since F3) was repointed
+    // onto the NEW pad, not the old one — its state arrives on the `input` port.
+    const initialArk = findFirstLeaf(zero, "xor-with-aux@1");
+    expect(initialArk?.portInputs?.input).toEqual({ node: "zero-pad", port: "state" });
   });
 
   it("iso7816-4 → none returns canonical-equivalent (no overlay leaves)", () => {
@@ -193,7 +244,11 @@ describe("applyPaddingScheme cross-scheme swaps", () => {
     expect(types).not.toContain("generic.iso7816-4-pad@1");
     expect(types).not.toContain("generic.load-block@1");
     expect(types[0]).toBe("aes.key-expansion@1");
-    expect(canonical.inputs.plaintext.shape).toBe("matrix4x4-bytes");
+    expect(canonical.inputs.plaintext.shape).toBe("bytes");
+    // The initial AddRoundKey's $input wiring was restored on strip (the
+    // `xor-with-aux@1` leaf's `input` port points back at the raw source).
+    const initialArk = findFirstLeaf(canonical, "xor-with-aux@1");
+    expect(initialArk?.portInputs?.input).toEqual({ node: "$input", port: "out" });
   });
 
   it("all three non-none schemes produce structurally parallel encrypt overlays", () => {
@@ -205,8 +260,9 @@ describe("applyPaddingScheme cross-scheme swaps", () => {
     const c = topLevelLeafTypes(applyPaddingScheme(aes128Spec, "encrypt", "iso7816-4"));
     expect(a.length).toBe(b.length);
     expect(b.length).toBe(c.length);
-    // Position 0 = the pad step (differs by scheme); 1 = load-block; rest =
-    // canonical AES tail and is identical across schemes.
+    // Position 0 = the pad step (differs by scheme); the rest is the
+    // canonical byte-native AES tail (key-expansion, …) — identical across
+    // schemes (no load-block under byte-native, Slice B1).
     expect(a.slice(1)).toEqual(b.slice(1));
     expect(b.slice(1)).toEqual(c.slice(1));
   });

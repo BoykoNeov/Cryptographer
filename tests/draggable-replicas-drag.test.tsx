@@ -25,8 +25,7 @@
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
+import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue } from "@/core/types";
 import { GraphView } from "@/ui/components/GraphView";
 import { __resetAutoRerunForTests } from "@/ui/stores/auto-rerun";
@@ -47,7 +46,8 @@ const AES128_PT = "00112233445566778899aabbccddeeff";
 
 const seedAes128Trace = (): void => {
   const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-    initialState: matrixFromBytes(bytesFromHex(AES128_PT)),
+    initialState: makeBytesState(bytesFromHex(AES128_PT)),
+    portedDispatchEnabled: true,
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
   });
   setTrace(trace);
@@ -112,6 +112,8 @@ describe("GraphView — block-chip drag (Slice 3 — collapsed-iterate path)", (
     const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex(ecbPt)),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(ecbKey)]]),
+      // Byte-native ECB (B1.4) — port-mode iterate + port-native body.
+      portedDispatchEnabled: true,
     });
     setTrace(trace);
 

@@ -4,6 +4,23 @@
 `[[project-source-color-coding]]` carries the gotchas + post-ship
 notes. Plan body retained for historical context.
 
+**2026-05-30 follow-up — user-facing coloring threshold.** The
+auto-coloring fanout cutoff was hardcoded `>= 2` with no knob; the only
+number in the toolbar (rendered next to "color by source") was actually
+the *replication* threshold, so users read it as a coloring control that
+did nothing for coloring. Fix: (1) added a real coloring threshold
+(`view-source-colors`'s `useColorThreshold` / `setColorThreshold`, persisted,
+min 0 / default 3 / max 99) wired into `assignSourceColors(graph,
+threshold)`; (2) gave it its own `≥ N` input next to "color by source";
+(3) moved the replication `> N` input back beside "replicate fan-out".
+Setting the coloring threshold to **0 colors every non-endpoint edge**;
+default 3 narrows the old `>= 2` behaviour (fanout-2 sources no longer
+auto-color at the default — drag to 2 for the prior look). The core
+helpers take the threshold as an OPTIONAL param defaulting to 2 so
+`tests/source-colors.test.ts` stays byte-identical. Tests:
+`tests/graph-view-color-threshold.test.tsx` + threshold cases in
+`tests/source-colors.test.ts`.
+
 Captured 2026-05-19 after the Q1/Q2 graph polish work landed. User
 wants per-source edge coloring as a pedagogical aid: every edge from a
 canonical source that fans out to ≥ 2 consumers takes a distinct

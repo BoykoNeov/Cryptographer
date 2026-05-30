@@ -133,6 +133,22 @@ const validateContainerBinding = (
     });
     return;
   }
+  // Reserved `$input` source (A3a): the runtime seeds it into the top scope,
+  // so a container `seedInput` pointing at it always resolves on its port.
+  // (Byte-native ECB's port-mode iterate reads `port($input, out)` — B1.4.)
+  if (binding.node === INPUT_SOURCE_ID) {
+    if (binding.port !== INPUT_SOURCE_PORT) {
+      ctx.warnings.push({
+        kind: "port-input-unresolvable",
+        stepId: containerId,
+        portName: fieldName,
+        targetNode: binding.node,
+        targetPort: binding.port,
+        reason: "missing-port",
+      });
+    }
+    return;
+  }
   const upstream = scope.get(binding.node);
   if (upstream === undefined) {
     ctx.warnings.push({
@@ -408,12 +424,43 @@ const walk = (
       ctx.shapeAt.set(node.id, shape);
       continue;
     }
-    // Iterate is opaque to shape inference. The body always starts in
-    // matrix4x4-bytes (the runtime substitutes state = blocks[i]); the
-    // iterate exits leaving state in matrix4x4-bytes (the last iteration's
-    // value). We still walk the body so child leaves inside the iterate
-    // get their shapeAt entries + any contract checks.
+    // Iterate has two modes (B1.4).
     recordContainerOutputs();
+    if (node.seedInput !== undefined) {
+      // Port mode (byte-native ECB): a pure port-graph container like `group`.
+      // The body reads the per-block bytes on `port(iterateId, "in")`; the
+      // node's output bytes are the concatenated per-iteration `bodyOutput`.
+      // Validate both bindings + seed the body scope with `port(iterateId,
+      // "in")` so the body's head leaf's portInputs resolve pre-Run.
+      validateContainerBinding(node.id, "seedInput", node.seedInput, scopeOutputs, ctx);
+      if (node.bodyOutput !== undefined) {
+        const bodyScope = collectDirectChildOutputs(node.children, ctx.registry);
+        validateContainerBinding(node.id, "bodyOutput", node.bodyOutput, bodyScope, ctx);
+      }
+      // Seed the body scope with the ports the runtime injects: always
+      // `port(iterateId, "in")` (the per-block bytes), and — for a chaining
+      // iterate (byte-native CBC, B1.4b) — `port(iterateId, "chain")` (the
+      // IV / previous-block value). Without seeding "chain", `cbc-xor`'s
+      // `operand1 = port(iterateId, "chain")` read fails to resolve and the
+      // validator emits a false-positive `port-input-unresolvable` even though
+      // the runtime injects the port and the KAT passes (B1.5 Finding 5).
+      // Gating on `chainInput` mirrors the runtime's own injection (chainInput
+      // /chainFeedback are a pair, types.ts) and preserves the CORRECT warning
+      // for a hypothetical iterate that reads "chain" without declaring it.
+      const bodyPorts = new Set(["in"]);
+      if (node.chainInput !== undefined) bodyPorts.add("chain");
+      const seedScope = new Map([[node.id, bodyPorts]]);
+      // Body operates on byte blocks; node exit is the concatenated bytes.
+      walk(node.children, "bytes", ctx, seedScope);
+      shape = "bytes";
+      ctx.shapeAt.set(node.id, shape);
+      continue;
+    }
+    // Aux mode (legacy matrix CBC/CTR) is opaque to shape inference. The body
+    // always starts in matrix4x4-bytes (the runtime substitutes
+    // state = blocks[i]); the iterate exits leaving state in matrix4x4-bytes
+    // (the last iteration's value). We still walk the body so child leaves
+    // inside the iterate get their shapeAt entries + any contract checks.
     walk(node.children, ITERATE_BODY_SHAPE, ctx);
     shape = ITERATE_BODY_SHAPE;
     ctx.shapeAt.set(node.id, shape);

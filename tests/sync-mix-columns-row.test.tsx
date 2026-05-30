@@ -31,7 +31,7 @@ import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
 import { __resetLayoutsForTests } from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
-import { __resetSpecForTests, editStepParams, useSpec } from "@/ui/stores/spec";
+import { __resetSpecForTests, editStepParams, setCipher, useSpec } from "@/ui/stores/spec";
 import { __resetTraceForTests, setSelectedStepId } from "@/ui/stores/trace";
 import { __resetViewDensityForTests } from "@/ui/stores/view-density";
 import { __resetViewModeForTests } from "@/ui/stores/view-mode";
@@ -52,6 +52,17 @@ const resetAll = (): void => {
   __resetTraceForTests();
   __resetViewDensityForTests();
   __resetViewModeForTests();
+  // Default AES-128 single-block (byte-native since B1.1/B1.2). Slice B1.4b
+  // made CBC byte-native too, so NO shipped spec carries the matrix
+  // `generic.mix-columns@1` leaf anymore — every selectable `round.1.mix-columns`
+  // is `gf-matrix-multiply@1` rendering the byte-native `GfMatrixMultiplyBlock`.
+  // The SyncMixColumnsRow gating this test pins (disabled when the matrix isn't
+  // GF(2^8)-invertible, re-enabled after repair) is the SAME shared component
+  // the matrix MixColumns editor rendered, so exercising it through the
+  // byte-native block is equivalent coverage. (The matrix editor is dead UI
+  // until Phase C.) The cross-slot WRITE is covered at the store boundary in
+  // `sync-mix-columns-store.test.ts`.
+  setCipher("aes-128");
 };
 
 // Canonical AES-128 has a MixColumns leaf in every non-final round at

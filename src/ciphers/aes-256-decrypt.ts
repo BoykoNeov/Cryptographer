@@ -1,81 +1,37 @@
 /**
- * AES-256 decryption (inverse cipher), FIPS-197 §5.3.
+ * AES-256 decryption (inverse cipher), FIPS-197 §5.3 (single-block).
  *
- * Mirror of `aes-128-decrypt.ts` and `aes-192-decrypt.ts`. ROUNDS=14, 32-byte
- * key. Key expansion is shared with the forward AES-256 spec — uses the
- * FORWARD S-box and the AES-256-only `i%Nk==4` SubWord branch even when
- * decrypting (the inverse cipher consumes the same round keys in reverse,
- * never re-derives them).
+ * **Byte-native (scaffolding-suppression Phase B Slice B1.3, 2026-05-29).**
+ * Mirror of byte-native `aes-128-decrypt.ts` / `aes-192-decrypt.ts`: the
+ * inverse round body composes from the same port-native primitives the forward
+ * cipher uses (`byte-substitute@1` / `permute@1` / `gf-matrix-multiply@1` with
+ * the inverse tables, `aux-load-bytes@1` + `xor@1`), built by the
+ * variant-agnostic `buildAesDecryptBodyNative`. ROUNDS=14, 32-byte key.
+ *
+ * The 16-byte working state carries port-to-port between inverse round groups
+ * via the A3b `StepGroup` `seedInput`/`bodyOutput` contract; the ciphertext
+ * arrives on the reserved `$input` source and the cipher exit is named by
+ * `outputFrom`. The initial AddRoundKey reads `roundKey.14`, then inverse
+ * rounds 13..1, then a final inverse round at 0 (no InvMixColumns).
+ *
+ * Key expansion is shared with the forward AES-256 spec — uses the FORWARD
+ * S-box and the AES-256-only `i%Nk==4` SubWord branch even when decrypting (the
+ * inverse cipher consumes the same round keys in reverse, never re-derives
+ * them).
  */
 
-import type { CipherSpec, StepNode } from "../core/types";
-import {
-  AES_INV_MIX_MATRIX,
-  AES_INV_SBOX,
-  AES_INV_SHIFT_ROWS,
-  AES_RCON,
-  AES_SBOX,
-} from "./aes-constants";
+import type { CipherSpec } from "../core/types";
+import { AES_RCON, AES_SBOX } from "./aes-constants";
+import { aesNativeDecryptOutputFrom, buildAesDecryptBodyNative } from "./aes-round-builder-native";
 
 const ROUNDS = 14;
-
-const invSubBytesStep = (idPrefix: string): StepNode => ({
-  kind: "step",
-  id: `${idPrefix}.inv-sub-bytes`,
-  type: "generic.byte-substitution@1",
-  params: { sbox: [...AES_INV_SBOX] },
-});
-
-const invShiftRowsStep = (idPrefix: string): StepNode => ({
-  kind: "step",
-  id: `${idPrefix}.inv-shift-rows`,
-  type: "generic.shift-rows@1",
-  params: { shifts: [...AES_INV_SHIFT_ROWS] },
-});
-
-const invMixColumnsStep = (idPrefix: string): StepNode => ({
-  kind: "step",
-  id: `${idPrefix}.inv-mix-columns`,
-  type: "generic.mix-columns@1",
-  params: { matrix: AES_INV_MIX_MATRIX.map((row) => [...row]) },
-});
-
-const addRoundKeyStep = (idPrefix: string, roundIndex: number): StepNode => ({
-  kind: "step",
-  id: `${idPrefix}.add-round-key`,
-  type: "generic.add-round-key@1",
-  params: { auxName: `roundKey.${roundIndex}` },
-});
-
-const invRound = (n: number): StepNode => ({
-  kind: "group",
-  id: `inv-round.${n}`,
-  label: `Inverse Round ${n}`,
-  children: [
-    invShiftRowsStep(`inv-round.${n}`),
-    invSubBytesStep(`inv-round.${n}`),
-    addRoundKeyStep(`inv-round.${n}`, n),
-    invMixColumnsStep(`inv-round.${n}`),
-  ],
-});
-
-const invFinalRound: StepNode = {
-  kind: "group",
-  id: "inv-round.0",
-  label: "Inverse Round 0 (no InvMixColumns)",
-  children: [
-    invShiftRowsStep("inv-round.0"),
-    invSubBytesStep("inv-round.0"),
-    addRoundKeyStep("inv-round.0", 0),
-  ],
-};
 
 export const aes256DecryptSpec: CipherSpec = {
   id: "aes-256-decrypt@1",
   name: "AES-256 (decrypt)",
-  stateShape: "matrix4x4-bytes",
+  stateShape: "bytes",
   inputs: {
-    plaintext: { shape: "matrix4x4-bytes" },
+    plaintext: { shape: "bytes" },
     key: { byteLength: 32 },
   },
   steps: [
@@ -91,8 +47,7 @@ export const aes256DecryptSpec: CipherSpec = {
         rounds: ROUNDS,
       },
     },
-    addRoundKeyStep("inv-initial", ROUNDS),
-    ...Array.from({ length: ROUNDS - 1 }, (_, i) => invRound(ROUNDS - 1 - i)),
-    invFinalRound,
+    ...buildAesDecryptBodyNative(ROUNDS),
   ],
+  outputFrom: aesNativeDecryptOutputFrom(),
 };

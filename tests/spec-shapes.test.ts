@@ -22,6 +22,8 @@
  */
 
 import { aes128Spec } from "@/ciphers/aes-128";
+import { aes128CbcSpec } from "@/ciphers/aes-128-cbc";
+import { aes128CbcDecryptSpec } from "@/ciphers/aes-128-cbc-decrypt";
 import { aes128DecryptSpec } from "@/ciphers/aes-128-decrypt";
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { aes192Spec } from "@/ciphers/aes-192";
@@ -47,12 +49,33 @@ describe("validateShapes — zero false positives on shipped specs", () => {
     expect(validateShapes(aes128DecryptSpec, registry)).toEqual([]);
   });
 
-  it("AES-128 ECB (with iterate primitive)", () => {
-    // The riskiest case: state is bytes → bytes (load-block→matrix
-    // inside the iterate body) → bytes (concat-blocks→bytes after the
-    // iterate). If iterate scope handling were wrong, concat-blocks
-    // would be flagged because its input contract is matrix4x4-bytes.
+  it("AES-128 ECB (with port-mode iterate)", () => {
+    // Byte-native (B1.4): the ECB iterate is port mode — `seedInput` from
+    // `$input`, body reads `port(ecb-blocks,"in")`, `bodyOutput` collected and
+    // published on `outputPorts`. The validator validates both bindings and
+    // seeds the body scope with `port(ecb-blocks,"in")` so the body head's
+    // portInputs resolve; if that scope-seeding were wrong, the head leaf would
+    // be flagged `port-input-unresolvable`. A clean run pins it stays bytes
+    // end-to-end with no warnings.
     expect(validateShapes(aes128EcbSpec, registry)).toEqual([]);
+  });
+
+  it("AES-128 CBC encrypt (port-mode chaining iterate)", () => {
+    // Byte-native CBC (B1.4b): the iterate is port mode AND chaining —
+    // `cbc-xor` reads `operand0 = port(cbc-blocks,"in")` (the block) and
+    // `operand1 = port(cbc-blocks,"chain")` (the IV / previous block). The
+    // runtime injects BOTH ports, but the validator originally seeded only
+    // "in" into the body scope, so the "chain" read raised a false-positive
+    // `port-input-unresolvable` (B1.5 Finding 5 — the orange "!" on cbc-xor).
+    // Seeding "chain" when `chainInput` is present clears it; pin zero warnings.
+    expect(validateShapes(aes128CbcSpec, registry)).toEqual([]);
+  });
+
+  it("AES-128 CBC decrypt (port-mode chaining iterate)", () => {
+    // Same chaining shape, decrypt asymmetry: `cbc-xor` is the body tail and
+    // still reads `port(cbc-blocks,"chain")`. Pin zero warnings here too — the
+    // "chain"-seed fix is direction-agnostic.
+    expect(validateShapes(aes128CbcDecryptSpec, registry)).toEqual([]);
   });
 
   it("AES-192 encrypt", () => {
@@ -179,10 +202,13 @@ describe("inferShapesAtAnchors", () => {
     expect(map.get("store")).toBe("bytes");
   });
 
-  it("records matrix4x4-bytes on every leaf inside an AES round group", () => {
-    // The shipped AES-128 spec is the cleanest existing example: every
-    // round step is matrix4x4-bytes (preserveInput), and the spec
-    // starts in matrix (inputs.plaintext.shape).
+  it("records bytes on every leaf inside a byte-native AES round group", () => {
+    // The byte-native AES-128 spec (Slice B1) is bytes end-to-end: the spec
+    // starts in bytes (inputs.plaintext.shape) and every round primitive
+    // (byte-substitute / permute / gf-matrix-multiply / xor) is a port-native
+    // bytes→bytes leaf. (Matrix-shape inference is still covered by the
+    // synthetic load/store-block test above and the still-matrix ECB test
+    // below, until those convert in Slices B1.2 / B1.4.)
     const map = inferShapesAtAnchors(aes128Spec, registry);
     // Pick a leaf known to be inside a round (id format: "round.N.sub-bytes").
     const roundLeaf = aes128Spec.steps.flatMap((n) =>
@@ -190,25 +216,24 @@ describe("inferShapesAtAnchors", () => {
     )[0];
     expect(roundLeaf).toBeDefined();
     if (!roundLeaf) throw new Error("unreachable");
-    expect(map.get(roundLeaf)).toBe("matrix4x4-bytes");
+    expect(map.get(roundLeaf)).toBe("bytes");
   });
 
-  it("leaves the iterate's exit shape at matrix4x4-bytes for ECB", () => {
-    // The iterate's id maps to matrix4x4-bytes (last block's state), and
-    // the subsequent concat-blocks leaf maps to bytes (matrix→bytes).
+  it("maps the port-mode ECB iterate's exit shape to bytes", () => {
+    // Byte-native (B1.4): the ECB iterate is port mode — it operates on byte
+    // blocks and publishes concatenated bytes, so its exit shape is "bytes"
+    // (NOT the aux-mode matrix4x4-bytes the matrix ECB had). There is no
+    // concat-blocks leaf any more; the cipher exit is `spec.outputFrom`.
     const map = inferShapesAtAnchors(aes128EcbSpec, registry);
-    // Find the iterate node id.
     const iterId = aes128EcbSpec.steps.find((n) => n.kind === "iterate")?.id;
     expect(iterId).toBeDefined();
     if (!iterId) throw new Error("unreachable");
-    expect(map.get(iterId)).toBe("matrix4x4-bytes");
-    // The concat-blocks leaf following it should map to bytes.
-    const concatId = aes128EcbSpec.steps.find(
+    expect(map.get(iterId)).toBe("bytes");
+    // No matrix boundary leaves survive in the byte-native ECB spec.
+    const hasConcat = aes128EcbSpec.steps.some(
       (n) => n.kind === "step" && n.type === "generic.concat-blocks@1",
-    )?.id;
-    expect(concatId).toBeDefined();
-    if (!concatId) throw new Error("unreachable");
-    expect(map.get(concatId)).toBe("bytes");
+    );
+    expect(hasConcat).toBe(false);
   });
 });
 

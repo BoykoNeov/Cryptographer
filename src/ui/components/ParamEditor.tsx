@@ -206,6 +206,30 @@ export const ParamEditor = (props: Props) => {
             >
               <StateToAuxBlock step={getStep()} />
             </Match>
+            {/* ─── Byte-native AES round primitives (Slice B1 —
+                scaffolding-suppression Phase B). They reuse the same
+                SboxEditor/MatrixEditor the matrix `generic.*` steps use, but
+                deliberately OMIT the cross-mode sync rows that SbxBlock/
+                MixBlock carry: the decrypt counterpart is still the matrix
+                step until B1.2/B1.4, so a same-type sync button would write to
+                zero steps on the matrix side — a false affordance. The mirror
+                entry ships in B1.2 once both modes share the byte-native type. */}
+            <Match when={getStep().type === "byte-substitute@1"}>
+              <ByteSubstituteBlock step={getStep()} matchingCount={matchingSteps()} />
+            </Match>
+            <Match when={getStep().type === "gf-matrix-multiply@1"}>
+              <GfMatrixMultiplyBlock step={getStep()} matchingCount={matchingSteps()} />
+            </Match>
+            <Match when={getStep().type === "permute@1"}>
+              <PermuteBlock step={getStep()} />
+            </Match>
+            <Match when={getStep().type === "xor-with-aux@1"}>
+              {/* Byte-native AddRoundKey (Finding F3): one read-only `auxName`
+                  scalar ("roundKey.N"). Reuses AddRoundKeyBlock — same param,
+                  same no-ApplyAllRow reasoning (each round references a
+                  distinct round key). */}
+              <AddRoundKeyBlock step={getStep()} matchingCount={matchingSteps()} />
+            </Match>
             {/* ─── Port-native primitives (Slice S1 of sha-256-density-polish) ── */}
             <Match
               when={
@@ -356,6 +380,123 @@ const ShiftsBlock = (props: BlockProps) => {
         matchingCount={props.matchingCount}
         label="row shifts"
       />
+    </>
+  );
+};
+
+// ─── Byte-native AES round primitives (Slice B1 — scaffolding-suppression
+// Phase B) ───────────────────────────────────────────────────────────────
+// These reuse the shared SboxEditor / MatrixEditor and the ApplyAllRow, and
+// — as of Slice B1.2, when AES-128 decrypt also went byte-native — carry the
+// SAME cross-mode sync rows SbxBlock / MixBlock carry. Both modes now share
+// the byte-native `byte-substitute@1` / `gf-matrix-multiply@1` type, so the
+// single-stepType `syncSboxInverseToCounterpart` /
+// `syncMixColumnsInverseToCounterpart` broadcast lands on the real decrypt
+// counterpart (in B1.1, when only encrypt was byte-native, the sync would
+// have written to zero steps — a false affordance — so the rows were
+// deferred to B1.2 along with their `cross-mode-mirror-registry.ts` entries).
+
+// SubBytes on a flat 16-byte array. Same `params.sbox` (256 entries) as the
+// matrix `generic.byte-substitution@1`, so the SboxEditor renders unchanged.
+const ByteSubstituteBlock = (props: BlockProps) => {
+  const sbox = (): readonly number[] =>
+    ((props.step.params as { sbox?: number[] }).sbox ?? []) as readonly number[];
+
+  return (
+    <>
+      <SboxEditor
+        sbox={sbox()}
+        onChange={(next) => {
+          editStepParams(props.step.id, {
+            ...(props.step.params as Record<string, Json>),
+            sbox: next,
+          });
+        }}
+      />
+      <ApplyAllRow
+        currentParams={props.step.params}
+        stepType={props.step.type}
+        matchingCount={props.matchingCount}
+        label="S-box"
+      />
+      {/* Class-2 (inverse) cross-mode mirror — encrypt holds AES_SBOX,
+          decrypt holds AES_INV_SBOX. Both AES-128 modes are byte-native as
+          of Slice B1.2, so the same-type sync writes to the real decrypt
+          `byte-substitute@1` leaves. */}
+      <SyncInverseRow currentSbox={sbox()} stepType={props.step.type} />
+    </>
+  );
+};
+
+// MixColumns as a GF(2^8) matrix multiply on a flat 16-byte array. Same
+// `params.matrix` (4×4) as the matrix `generic.mix-columns@1`.
+const GfMatrixMultiplyBlock = (props: BlockProps) => {
+  const matrix = (): readonly (readonly number[])[] =>
+    (props.step.params as { matrix?: number[][] }).matrix ?? [];
+
+  return (
+    <>
+      <MatrixEditor
+        matrix={matrix()}
+        onChange={(next) => {
+          editStepParams(props.step.id, {
+            ...(props.step.params as Record<string, Json>),
+            matrix: next,
+          });
+        }}
+      />
+      <ApplyAllRow
+        currentParams={props.step.params}
+        stepType={props.step.type}
+        matchingCount={props.matchingCount}
+        label="MixColumns matrix"
+      />
+      {/* Class-2 (inverse) cross-mode mirror — encrypt holds AES_MIX_MATRIX,
+          decrypt holds its GF(2⁸) inverse. Both AES-128 modes byte-native as
+          of Slice B1.2 (see ByteSubstituteBlock above). */}
+      <SyncMixColumnsRow currentMatrix={matrix()} stepType={props.step.type} />
+    </>
+  );
+};
+
+// ShiftRows expressed as a flat-byte permutation: `params.indices` is the
+// 16-entry column-major source-position table (output byte i ← input byte
+// indices[i]). Rendered read-only, like the DES permutation tables — the
+// ShiftRows permutation is structural, not a free parameter a learner edits
+// cell-by-cell (the matrix form used `shifts`; the byte-native form bakes the
+// same rotation into explicit indices).
+const PermuteBlock = (props: { step: StepLeaf }) => {
+  const indices = (): readonly number[] =>
+    ((props.step.params as { indices?: number[] }).indices ?? []) as readonly number[];
+
+  return (
+    <>
+      <dl class="param-scalars">
+        <div class="param-scalar-row">
+          <dt>Permutation</dt>
+          <dd>ShiftRows (column-major byte indices)</dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Output bytes</dt>
+          <dd>{indices().length}</dd>
+        </div>
+      </dl>
+      <details class="param-section param-collapsible">
+        <summary class="param-section-label">
+          Source-index table ({indices().length} entries — click to expand)
+        </summary>
+        {/* Reuses the serpent-bit-table grid CSS, same as DesPermutationBlock —
+            each cell is the source byte position for the output at that slot. */}
+        <div class="serpent-bit-table">
+          <For each={indices()}>
+            {(value, i) => (
+              <span class="bit-table-cell" title={`output byte ${i()} ← input byte ${value}`}>
+                {value}
+              </span>
+            )}
+          </For>
+        </div>
+      </details>
     </>
   );
 };

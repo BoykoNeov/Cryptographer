@@ -26,6 +26,7 @@
 import { aes128Spec } from "@/ciphers/aes-128";
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { serpent128Spec } from "@/ciphers/serpent-128";
 import {
   type GraphEdge,
   buildIterateFeedbackPredicate,
@@ -36,10 +37,6 @@ import {
 } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
-// matrixFromBytes is used by the single-block AES-128 fixture; ECB uses
-// makeBytesState because the spec's `split-blocks` step consumes a flat
-// bytes payload and slices it into 16-byte block matrices internally.
 import type { AuxValue, Trace } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
@@ -54,8 +51,26 @@ const ECB_PLAINTEXT_4_BLOCKS =
 
 const runAes128 = (): Trace =>
   runSpec(aes128Spec, buildDefaultRegistry(), {
-    initialState: matrixFromBytes(bytesFromHex(AES128_PT)),
+    initialState: makeBytesState(bytesFromHex(AES128_PT)),
+    portedDispatchEnabled: true,
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
+  });
+
+// Serpent-128 fixture for the state-edge bundling tests. Byte-native AES-128
+// (Slice B1) is no longer a clean single-edge-per-connection graph: each
+// internal connection now yields BOTH a port-flow state edge (auxKey
+// "port-flow", from `inferPortEdges`) AND a spine state edge (auxKey "state"),
+// so (from,to,kind) groups duplicate and bundling collapses them. Serpent is
+// still legacy/matrix — its spine is a clean 1:1 `auxKey:"state"` thread with
+// no port-flow companion — so it preserves the "no duplicates" / "state edges
+// pass 1:1" properties these two tests pin. Retarget to byte-native or delete
+// when Serpent converts in B3.
+const SERPENT128_PT = "00112233445566778899aabbccddeeff";
+const SERPENT128_KEY = "00112233445566778899aabbccddeeff";
+const runSerpent128 = (): Trace =>
+  runSpec(serpent128Spec, buildDefaultRegistry(), {
+    initialState: makeBytesState(bytesFromHex(SERPENT128_PT)),
+    initialAux: new Map<string, AuxValue>([["key", bytesFromHex(SERPENT128_KEY)]]),
   });
 
 const runAes128Ecb = (): Trace =>
@@ -64,16 +79,18 @@ const runAes128Ecb = (): Trace =>
     // `split-blocks` slices it inside the spec.
     initialState: makeBytesState(bytesFromHex(ECB_PLAINTEXT_4_BLOCKS)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
+    // Byte-native ECB (B1.4) — port-mode iterate + port-native body.
+    portedDispatchEnabled: true,
   });
 
 describe("bundleEdges — collapse same-(from, to, kind, isFeedback)", () => {
   it("returns a singleton bundle for each unique edge when no duplicates exist", () => {
-    // AES-128 single-block, NO replication. Every aux edge from
-    // key-expansion goes to a UNIQUE consumer (roundKey.0 to
-    // initial.add-round-key, roundKey.1 to round.1.add-round-key, …).
-    // Bundling should produce one bundle per edge.
-    const trace = runAes128();
-    const raw = deriveAuxGraph(trace, aes128Spec);
+    // Serpent-128 single-block, NO replication (see `runSerpent128` note on why
+    // byte-native AES no longer has a duplicate-free edge set). Every aux edge
+    // from key-expansion goes to a UNIQUE consumer and the spine is a clean 1:1
+    // `auxKey:"state"` thread, so bundling produces one bundle per edge.
+    const trace = runSerpent128();
+    const raw = deriveAuxGraph(trace, serpent128Spec);
     const fb = buildIterateFeedbackPredicate(raw);
 
     const bundled = bundleEdges(raw, fb);
@@ -139,8 +156,11 @@ describe("bundleEdges — collapse same-(from, to, kind, isFeedback)", () => {
   });
 
   it("passes state edges through 1:1 as singleton bundles", () => {
-    const trace = runAes128();
-    const raw = deriveAuxGraph(trace, aes128Spec);
+    // Serpent (legacy/matrix) — clean `auxKey:"state"` spine with no port-flow
+    // companion edges, so state bundles stay singleton. Byte-native AES pairs a
+    // port-flow + state edge per connection (see `runSerpent128`).
+    const trace = runSerpent128();
+    const raw = deriveAuxGraph(trace, serpent128Spec);
     const fb = buildIterateFeedbackPredicate(raw);
 
     const bundled = bundleEdges(raw, fb);

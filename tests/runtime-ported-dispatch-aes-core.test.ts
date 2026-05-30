@@ -28,10 +28,13 @@
  *       failure here is a louder signal than a deep-equality miss across
  *       50+ frames.
  *
- *   (b) **Frame-by-frame byte parity** vs legacy dispatch for the same
- *       three specs. AES-128 has 11 round keys (rounds=10), AES-192 has
- *       13 (rounds=12), AES-256 has 15 (rounds=14) — three different
- *       dynamic-N port counts validated.
+ *   (b) **Dynamic-N round-key port surface** under ported dispatch. Every
+ *       single-block AES is byte-native (Slices B1.1–B1.3) with no legacy
+ *       path, so the old frame-parity-vs-legacy rows are gone; what they
+ *       uniquely validated — `aes.key-expansion@1`'s function-form output
+ *       contract sizing its round-key ports to `params.rounds` — survives as
+ *       a ported-only check of the emitted round keys at N=11/13/15
+ *       (AES-128/192/256). Frame streams are pinned in the *-vectors files.
  *
  *   (c) **`aes.key-expansion@2` parity at canonical rounds** under the
  *       ported path. @2's relaxed assertion + Rcon extension produce
@@ -52,7 +55,6 @@ import { AES_RCON, AES_SBOX } from "@/ciphers/aes-constants";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, CipherSpec, State, TraceFrame } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
@@ -137,117 +139,96 @@ describe("runtime — ported dispatch, Slice 1.4 AES core step types", () => {
 
   describe("(a) FIPS-197 KATs under portedDispatchEnabled: true (sanity floor)", () => {
     it("AES-128 (FIPS-197 §C.1) — published ciphertext under ported", () => {
+      // Byte-native (Slice B1): bytes state in, bytes finalState out. Port-
+      // native primitives, so `portedDispatchEnabled: true` is the only path.
       const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-        initialState: matrixFromBytes(bytesFromHex(AES128_PLAINTEXT)),
+        initialState: makeBytesState(bytesFromHex(AES128_PLAINTEXT)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
         portedDispatchEnabled: true,
       });
-      expect(trace.finalState.shape).toBe("matrix4x4-bytes");
-      if (trace.finalState.shape !== "matrix4x4-bytes") return;
+      expect(trace.finalState.shape).toBe("bytes");
+      if (trace.finalState.shape !== "bytes") return;
       expect(hexFromBytes(trace.finalState.bytes)).toBe(AES128_CIPHERTEXT);
     });
 
     it("AES-192 (FIPS-197 §A.2 + NIST AES Core 192) — published ciphertext under ported", () => {
+      // Byte-native (Slice B1.3): bytes state in, bytes finalState out.
       const trace = runSpec(aes192Spec, buildDefaultRegistry(), {
-        initialState: matrixFromBytes(bytesFromHex(AES192_PLAINTEXT)),
+        initialState: makeBytesState(bytesFromHex(AES192_PLAINTEXT)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES192_KEY)]]),
         portedDispatchEnabled: true,
       });
-      expect(trace.finalState.shape).toBe("matrix4x4-bytes");
-      if (trace.finalState.shape !== "matrix4x4-bytes") return;
+      expect(trace.finalState.shape).toBe("bytes");
+      if (trace.finalState.shape !== "bytes") return;
       expect(hexFromBytes(trace.finalState.bytes)).toBe(AES192_CIPHERTEXT);
     });
 
     it("AES-256 (FIPS-197 §A.3 + NIST AES Core 256) — published ciphertext under ported", () => {
       // The AES-256 ported KAT also stresses the Nk>6 SubWord-only branch
-      // (every word at `i % Nk === 4`) — that branch is INSIDE the legacy
-      // executor, so the lift's adapter only sees its output, but a port
-      // metadata bug that corrupted key-expansion's Map ordering would
-      // surface as a wrong ciphertext here.
+      // (every word at `i % Nk === 4`) inside `aes.key-expansion@1`; a port
+      // metadata bug that corrupted key-expansion's round-key Map ordering
+      // would surface as a wrong ciphertext here. Byte-native (Slice B1.3):
+      // bytes state in, bytes finalState out.
       const trace = runSpec(aes256Spec, buildDefaultRegistry(), {
-        initialState: matrixFromBytes(bytesFromHex(AES256_PLAINTEXT)),
+        initialState: makeBytesState(bytesFromHex(AES256_PLAINTEXT)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES256_KEY)]]),
         portedDispatchEnabled: true,
       });
-      expect(trace.finalState.shape).toBe("matrix4x4-bytes");
-      if (trace.finalState.shape !== "matrix4x4-bytes") return;
+      expect(trace.finalState.shape).toBe("bytes");
+      if (trace.finalState.shape !== "bytes") return;
       expect(hexFromBytes(trace.finalState.bytes)).toBe(AES256_CIPHERTEXT);
     });
   });
 
   // ─── (b) Frame-by-frame byte parity ───────────────────────────────────
 
-  describe("(b) frame-by-frame byte parity vs legacy dispatch", () => {
-    it("AES-128 — every frame byte-equal across all 49 frames", () => {
-      const initialState = matrixFromBytes(bytesFromHex(AES128_PLAINTEXT));
-      const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]);
-      const legacy = runSpec(aes128Spec, buildDefaultRegistry(), {
-        initialState,
-        initialAux,
-      });
-      const ported = runSpec(aes128Spec, buildDefaultRegistry(), {
-        initialState,
-        initialAux,
-        portedDispatchEnabled: true,
-      });
-      expectFrameStreamsEqual(ported.frames, legacy.frames, "aes-128");
-    });
+  describe("(b) dynamic-N round-key port surface under ported dispatch", () => {
+    // The legacy-vs-ported frame-parity rows were REMOVED across Slices B1.1
+    // (AES-128 encrypt), B1.2 (AES-128 decrypt), and B1.3 (AES-192/256): every
+    // single-block AES spec is byte-native with no legacy executor, so there is
+    // no legacy dispatch run to compare against. The parity property only ever
+    // applied to lifted-legacy steps. What these rows uniquely validated — the
+    // `aes.key-expansion@1` PortContract.outputs FUNCTION form sizing its
+    // round-key output ports to `params.rounds` at N ≠ 11 — survives as a
+    // ported-only check: the number + insertion order of the round keys the
+    // function emits, at N=13 (AES-192) and N=15 (AES-256). The end-to-end KATs
+    // in block (a) already prove those keys are wired correctly to AddRoundKey;
+    // these pin the function actually consults `params.rounds` rather than
+    // hard-coding AES-128's 11. (Byte-native frame streams are pinned in
+    // `aes-vectors` / `aes-192-vectors` / `aes-256-vectors`.)
 
-    it("AES-192 — dynamic-N=13 round-key ports round-trip across all frames", () => {
-      // AES-192's port surface has 13 round-key output ports (rounds=12,
-      // 12+1 = 13). The PortContract.outputs FUNCTION form (Slice 1.4's
-      // contract evolution) is exercised here at a different N than
-      // AES-128's 11 — proves the function actually consults `params.
-      // rounds` rather than hard-coding a constant.
-      const initialState = matrixFromBytes(bytesFromHex(AES192_PLAINTEXT));
-      const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(AES192_KEY)]]);
-      const legacy = runSpec(aes192Spec, buildDefaultRegistry(), {
-        initialState,
-        initialAux,
-      });
-      const ported = runSpec(aes192Spec, buildDefaultRegistry(), {
-        initialState,
-        initialAux,
-        portedDispatchEnabled: true,
-      });
-      expectFrameStreamsEqual(ported.frames, legacy.frames, "aes-192");
-    });
-
-    it("AES-256 — dynamic-N=15 round-key ports round-trip across all frames", () => {
-      const initialState = matrixFromBytes(bytesFromHex(AES256_PLAINTEXT));
-      const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(AES256_KEY)]]);
-      const legacy = runSpec(aes256Spec, buildDefaultRegistry(), {
-        initialState,
-        initialAux,
-      });
-      const ported = runSpec(aes256Spec, buildDefaultRegistry(), {
-        initialState,
-        initialAux,
-        portedDispatchEnabled: true,
-      });
-      expectFrameStreamsEqual(ported.frames, legacy.frames, "aes-256");
-    });
-
-    it("preserves auxWritten Map insertion order for the 11 AES-128 round keys", () => {
-      // Map iteration is insertion-ordered in JS; downstream consumers
-      // (round-key panel layout, narration ordering) depend on it. The
-      // function-form `outputs(params)` insertion order MUST match the
-      // legacy executor's `auxWrites.set(...)` insertion order (r =
-      // 0..rounds). A drift here would break visual order silently.
-      const initialState = matrixFromBytes(bytesFromHex(AES128_PLAINTEXT));
-      const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]);
-      const ported = runSpec(aes128Spec, buildDefaultRegistry(), {
-        initialState,
-        initialAux,
+    // Map iteration is insertion-ordered in JS; downstream consumers (round-key
+    // panel layout, narration ordering) depend on `roundKey.0..N` order. The
+    // function-form `outputs(params)` insertion order MUST be ascending.
+    const expectRoundKeyOrder = (spec: CipherSpec, key: string, rounds: number, label: string) => {
+      // A full 16-byte block is required: byte-native AES reads its plaintext
+      // from `$input`, and the initial AddRoundKey xor's the round key into it
+      // (a 0-length state would length-mismatch the 16-byte key). The actual
+      // plaintext value is irrelevant — we only inspect the key-expansion
+      // frame's auxWritten, which doesn't depend on the plaintext.
+      const ported = runSpec(spec, buildDefaultRegistry(), {
+        initialState: makeBytesState(new Uint8Array(16)),
+        initialAux: new Map<string, AuxValue>([["key", bytesFromHex(key)]]),
         portedDispatchEnabled: true,
       });
       const keyExpansionFrame = ported.frames.find((f) => f.stepType === "aes.key-expansion@1");
-      if (!keyExpansionFrame) throw new Error("no key-expansion frame found");
+      if (!keyExpansionFrame) throw new Error(`${label}: no key-expansion frame found`);
       const writtenKeys = [...keyExpansionFrame.auxWritten.keys()];
-      // Expected order: roundKey.0, roundKey.1, ..., roundKey.10.
       const expected: string[] = [];
-      for (let r = 0; r <= 10; r++) expected.push(`roundKey.${r}`);
-      expect(writtenKeys).toEqual(expected);
+      for (let r = 0; r <= rounds; r++) expected.push(`roundKey.${r}`);
+      expect(writtenKeys, label).toEqual(expected);
+    };
+
+    it("AES-192 emits 13 round keys (rounds=12) in ascending order under ported", () => {
+      expectRoundKeyOrder(aes192Spec, AES192_KEY, 12, "aes-192");
+    });
+
+    it("AES-256 emits 15 round keys (rounds=14) in ascending order under ported", () => {
+      expectRoundKeyOrder(aes256Spec, AES256_KEY, 14, "aes-256");
+    });
+
+    it("AES-128 emits 11 round keys (rounds=10) in ascending order under ported", () => {
+      expectRoundKeyOrder(aes128Spec, AES128_KEY, 10, "aes-128");
     });
   });
 

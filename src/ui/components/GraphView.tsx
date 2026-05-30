@@ -107,12 +107,17 @@ import {
   useReplicationUserToggledThisSession,
 } from "../stores/view-replication";
 import {
+  COLOR_THRESHOLD_MAX,
+  COLOR_THRESHOLD_MIN,
+  DEFAULT_COLOR_THRESHOLD,
   clearAllSourceColorOverrides,
   clearSourceColorOverride,
+  setColorThreshold,
   setSourceColorOverride,
   toggleColorsPanelOpen,
   toggleIncludeSingleSources,
   toggleSourceColoringEnabled,
+  useColorThreshold,
   useColorsPanelOpen,
   useIncludeSingleSources,
   useManualSourceColors,
@@ -806,6 +811,142 @@ const buildConsumerPortAssignment = (
     }
   }
   return { slotOf, localCountOf, bucketSizeByTarget };
+};
+
+/**
+ * Producer-side mirror of `ConsumerPortAssignment`. Where the consumer
+ * assignment buckets edges by their TARGET and spreads N incoming arrows
+ * across the consumer's attach edge, this buckets edges by their SOURCE and
+ * spreads N outgoing arrows across the producer's attach edge — so a node
+ * that fans out to several consumers (e.g. AES `key-expansion` with 11 round
+ * keys when replication is OFF) emits each tail from a distinct point on its
+ * bottom / right edge instead of stacking them all at one centre.
+ *
+ * Same field shapes as `ConsumerPortAssignment` (keyed by edge reference) so
+ * `producerPortOffset` reuses the centred slot math via `slotCenteredOffset`.
+ * `bucketSizeBySource` is the source-keyed analogue of `bucketSizeByTarget`.
+ */
+export type ProducerPortAssignment = {
+  /** edge → slot index (0..localCount-1) at its producer's exit edge. */
+  readonly slotOf: ReadonlyMap<GraphEdge, number>;
+  /** edge → number of sibling edges leaving the same producer edge. */
+  readonly localCountOf: ReadonlyMap<GraphEdge, number>;
+  /** source id → total outgoing-edge count, for multi-out sources only. */
+  readonly bucketSizeBySource: ReadonlyMap<string, number>;
+};
+
+const EMPTY_PRODUCER_PORT_ASSIGNMENT: ProducerPortAssignment = {
+  slotOf: new Map(),
+  localCountOf: new Map(),
+  bucketSizeBySource: new Map(),
+};
+
+/**
+ * Build the per-producer port-slot map — the outgoing-edge counterpart to
+ * `buildConsumerPortAssignment`. Walks edges once, buckets by
+ * `(source, exit-side)`, sorts each multi-outgoing bucket so the tails fan
+ * out in the same direction their targets sit (no crossovers at the source),
+ * and assigns slots 0..N-1. O(E log E) overall.
+ *
+ * **Bucket key `(source, side)`.** A node can exit edges from more than one
+ * side (some targets below → bottom edge, some to the right → right edge).
+ * Keying by `(source, side)` keeps each rectangle side an independent slot
+ * pool — exactly mirroring the consumer builder's `(target, side)` keying.
+ * `side` is the PRODUCER's exit side (computed by the caller to match
+ * `EdgePath`'s regime detection): vertical regime → `"bottom"` if the target
+ * sits below the source else `"top"`; horizontal regime → `"right"` if the
+ * target sits to the right else `"left"`; feedback → `"top"`.
+ *
+ * **Bucketing by raw `edge.from`, NOT a canonical source.** Replica nodes
+ * each own a single outgoing edge, so they land in size-1 buckets →
+ * `producerPortOffset` returns 0 for them. That is the desired no-op:
+ * fan-out replicas already disambiguate via `replicaSourceXOffset`'s
+ * diagonal stagger; producer-spread must not double-shift them.
+ *
+ * **Comparator** (sorting one producer's outgoing edges):
+ *   1. **(Optional, when `targetCoordOf` is supplied)** Cross-axis target
+ *      coordinate ascending — for a vertical exit (top/bottom edge, tails
+ *      spread along X) order by the target's centre X; for a horizontal exit
+ *      (left/right edge, tails spread along Y) order by the target's centre
+ *      Y. So the slot nearest the consumer's side claims the matching end of
+ *      the producer edge → arrows leave in target order and don't cross near
+ *      the source. Falls through when coordinates are undefined or equal.
+ *   2. `edge.to` ascending — deterministic tiebreak.
+ *   3. `edge.auxKey` ascending — tiebreak for two ports to the same target.
+ *   4. `edge.kind` ascending — final lexicographic tiebreak.
+ *
+ * Tests may omit `targetCoordOf` / `sideOf` to drive the deterministic
+ * `edge.to`-ordered baseline against synthetic graphs with no layout.
+ */
+const buildProducerPortAssignment = (
+  graph: CipherGraph,
+  /**
+   * Optional cross-axis target coordinate for the ordering above. Returns
+   * the value the bucket should sort on given the edge's exit side — the
+   * caller picks target-centre-X for vertical exits and target-centre-Y for
+   * horizontal exits. `undefined` (no layout) falls through to the tiebreaks.
+   */
+  targetCoordOf?: (e: GraphEdge) => number | undefined,
+  /**
+   * Producer exit side — mirrors the consumer builder's `sideOf` but from
+   * the source's perspective. Returning `undefined` for an edge falls back
+   * to source-only bucketing for it (today's no-layout test path).
+   */
+  sideOf?: (e: GraphEdge) => "top" | "bottom" | "left" | "right" | undefined,
+): ProducerPortAssignment => {
+  if (graph.edges.length === 0) return EMPTY_PRODUCER_PORT_ASSIGNMENT;
+  const bucketKey = (e: GraphEdge): string => {
+    if (sideOf === undefined) return e.from;
+    const side = sideOf(e);
+    return side === undefined ? e.from : `${e.from}|${side}`;
+  };
+  const coordOf = (e: GraphEdge): number | undefined =>
+    targetCoordOf === undefined ? undefined : targetCoordOf(e);
+  const outgoingByProducer = new Map<string, GraphEdge[]>();
+  for (const e of graph.edges) {
+    const key = bucketKey(e);
+    let bucket = outgoingByProducer.get(key);
+    if (bucket === undefined) {
+      bucket = [];
+      outgoingByProducer.set(key, bucket);
+    }
+    bucket.push(e);
+  }
+  const slotOf = new Map<GraphEdge, number>();
+  const localCountOf = new Map<GraphEdge, number>();
+  // Source-wide outgoing count (ignoring side), so a source that exits 1 edge
+  // bottom + 1 edge right still reports 2 here — the source-keyed analogue of
+  // the consumer builder's `bucketSizeByTarget`.
+  const bucketSizeBySource = new Map<string, number>();
+  for (const e of graph.edges) {
+    bucketSizeBySource.set(e.from, (bucketSizeBySource.get(e.from) ?? 0) + 1);
+  }
+  for (const [source, count] of [...bucketSizeBySource]) {
+    if (count <= 1) bucketSizeBySource.delete(source);
+  }
+  for (const [, edges] of outgoingByProducer) {
+    // Single-outgoing bucket → nothing to spread; leave slotOf/localCountOf
+    // empty so `producerPortOffset` short-circuits via `slot === undefined`.
+    if (edges.length <= 1) continue;
+    edges.sort((a, b) => {
+      const ca = coordOf(a);
+      const cb = coordOf(b);
+      if (ca !== undefined && cb !== undefined && ca !== cb) {
+        return ca < cb ? -1 : 1;
+      }
+      if (a.to !== b.to) return a.to < b.to ? -1 : 1;
+      if (a.auxKey !== b.auxKey) return a.auxKey < b.auxKey ? -1 : 1;
+      return a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0;
+    });
+    for (let i = 0; i < edges.length; i++) {
+      const e = edges[i];
+      if (e !== undefined) {
+        slotOf.set(e, i);
+        localCountOf.set(e, edges.length);
+      }
+    }
+  }
+  return { slotOf, localCountOf, bucketSizeBySource };
 };
 
 /**
@@ -2104,6 +2245,31 @@ export const visualEdgeTargetId = (
  * to plain `it` in `tests/graph-view-port-spreading.test.ts`. See the
  * `ConsumerPortAssignment` doc-block above for the mechanism details.
  */
+/**
+ * Centered, cap-aware slot offset shared by `consumerPortOffset` (incoming
+ * arrows at a consumer's edge) and `producerPortOffset` (outgoing arrows at
+ * a producer's edge). Given a 0-based `slot` among `total` siblings, returns
+ * `(slot - (total - 1) / 2) * effectiveGap` so the slots fan out symmetrically
+ * around the edge midpoint.
+ *
+ * **Density-aware scaling** (Slice S2(j) of the SHA-256 density-polish plan).
+ * When the natural extent `((total - 1) / 2) * portGap` exceeds `cap`, shrink
+ * the gap so the outermost slots land exactly on ±cap and inner slots stay
+ * monotonic + evenly spaced. Without this the EdgePath clamp would collapse
+ * multiple raw offsets to the same cap value, producing visually identical
+ * attach points for distinct edges (the SHA-256 `s_i → final.assemble`
+ * pile-up). Omitting `cap` preserves the pre-S2(j) behavior.
+ */
+const slotCenteredOffset = (slot: number, total: number, portGap: number, cap?: number): number => {
+  if (total <= 1) return 0;
+  let effectiveGap = portGap;
+  if (cap !== undefined && cap > 0) {
+    const maxExtent = ((total - 1) / 2) * portGap;
+    if (maxExtent > cap) effectiveGap = (cap * 2) / (total - 1);
+  }
+  return (slot - (total - 1) / 2) * effectiveGap;
+};
+
 export const consumerPortOffset = (
   edge: GraphEdge,
   ports: ConsumerPortAssignment,
@@ -2114,18 +2280,41 @@ export const consumerPortOffset = (
   if (slot === undefined) return 0;
   const total = ports.localCountOf.get(edge);
   if (total === undefined || total <= 1) return 0;
-  // Density-aware scaling (Slice S2(j) of the SHA-256 density-polish plan).
-  // When the natural extent exceeds `cap`, shrink the gap so the outermost
-  // slots land exactly on ±cap and inner slots stay monotonic + evenly
-  // spaced. Without this the EdgePath clamp would collapse multiple raw
-  // offsets to the same cap value, producing visually identical attach y's
-  // for distinct edges (the SHA-256 `s_i → final.assemble` pile-up).
-  let effectiveGap = portGap;
-  if (cap !== undefined && cap > 0) {
-    const maxExtent = ((total - 1) / 2) * portGap;
-    if (maxExtent > cap) effectiveGap = (cap * 2) / (total - 1);
-  }
-  return (slot - (total - 1) / 2) * effectiveGap;
+  return slotCenteredOffset(slot, total, portGap, cap);
+};
+
+/**
+ * Outgoing-edge counterpart to `consumerPortOffset`. Returns the per-producer
+ * offset for one edge at its source's exit edge, centred via the shared
+ * `slotCenteredOffset`. Applied to the source-x in the vertical regime (tails
+ * along the bottom/top edge) and to the source-y in the horizontal regime
+ * (tails along the right/left edge) — see the `sourceXOffset` / `sourceYOffset`
+ * memos in `renderBundle`.
+ *
+ * **Returns 0 when** the edge isn't in `slotOf` (single-outgoing producer —
+ * `buildProducerPortAssignment` leaves the map empty for those) or `localCount`
+ * is missing / `<= 1`. So fan-out replicas (one outgoing edge each) and any
+ * source with a lone consumer render byte-identically to pre-producer-spread.
+ *
+ * @param edge — the rendered edge (same `GraphEdge` reference that was passed
+ *   to `buildProducerPortAssignment`).
+ * @param ports — the assignment from `buildProducerPortAssignment`.
+ * @param portGap — density-scaled gap between adjacent slots.
+ * @param cap — optional half-extent (the source's inner half-width for the
+ *   vertical regime, half-height for the horizontal regime). See
+ *   `slotCenteredOffset` for the scale-down behavior.
+ */
+export const producerPortOffset = (
+  edge: GraphEdge,
+  ports: ProducerPortAssignment,
+  portGap: number,
+  cap?: number,
+): number => {
+  const slot = ports.slotOf.get(edge);
+  if (slot === undefined) return 0;
+  const total = ports.localCountOf.get(edge);
+  if (total === undefined || total <= 1) return 0;
+  return slotCenteredOffset(slot, total, portGap, cap);
 };
 
 /**
@@ -2303,7 +2492,7 @@ export const rejoinSwapSourceXSign = (
  * from a `CipherGraph` + `ReplicaPlacement` pair, so tests can either
  * call both builders or hand-roll structurally-compatible literals.
  */
-export { buildConsumerPortAssignment, buildReplicaPlacement };
+export { buildConsumerPortAssignment, buildProducerPortAssignment, buildReplicaPlacement };
 
 // ─── Component ─────────────────────────────────────────────────────────────
 
@@ -3127,9 +3316,13 @@ export const GraphView = () => {
   // manual override flipped.
   const sourceColoringEnabled = useSourceColoringEnabled();
   const includeSingleSources = useIncludeSingleSources();
+  const colorThreshold = useColorThreshold();
   const manualSourceColors = useManualSourceColors(() => spec().id);
   const colorsPanelOpen = useColorsPanelOpen(() => spec().id);
-  const autoSourceColors = createMemo(() => assignSourceColors(graph()));
+  // Auto-color map honours the user-set fanout threshold (2026-05-30). At
+  // the default (3) only sources fanning out to ≥ 3 consumers auto-colour;
+  // at 0/1 every source does → every edge gets a colour.
+  const autoSourceColors = createMemo(() => assignSourceColors(graph(), colorThreshold()));
   // Combined map (auto + manual) — what the renderer reads. Empty when
   // the master toggle is OFF, so the EdgePath fallback to kind-based
   // styling takes over automatically.
@@ -3490,6 +3683,66 @@ export const GraphView = () => {
       (canonicalSource) => boxes.get(canonicalSource)?.x,
       sideOf,
     );
+  });
+
+  // Producer-side port assignment — the outgoing-edge mirror of
+  // `portAssignment`. Spreads a multi-out source's N tails across its exit
+  // edge so they leave from N distinct points instead of stacking at one
+  // centre (e.g. AES `key-expansion` → 11 round keys with replication OFF).
+  // Built off the SAME bundled graph + baseline layout so the per-edge
+  // identity map keys line up with the render loop's `representativeEdge`,
+  // and so it never feeds `layout` (no feedback loop — producer offsets only
+  // shift attach points, never box positions).
+  const producerAssignment = createMemo(() => {
+    const bg = bundledGraph();
+    const isFeedbackByRep = new Map<GraphEdge, boolean>();
+    const repEdges: GraphEdge[] = [];
+    for (const b of bg.bundles) {
+      isFeedbackByRep.set(b.representativeEdge, b.isFeedback);
+      repEdges.push(b.representativeEdge);
+    }
+    const synthGraph: CipherGraph = {
+      nodes: bg.nodes,
+      containers: bg.containers,
+      edges: repEdges,
+      rootIds: bg.rootIds,
+    };
+    const boxes = baseLayout().boxes;
+    const visualTargetOf = (e: GraphEdge): string =>
+      visualEdgeTargetId(e, nodesById(), containersById());
+    // Producer exit side — the SOURCE's perspective of the same geometry
+    // `EdgePath`'s `geom()` uses to pick where the tail leaves the source
+    // box (search "Three regimes"). Vertical regime → source exits BOTTOM
+    // when the target is below, TOP when above. Horizontal regime → source
+    // exits RIGHT when the target is to the right, LEFT when to the left.
+    // Feedback edges leave the source's TOP edge (`sy = from.y`).
+    const sideOf = (e: GraphEdge): "top" | "bottom" | "left" | "right" | undefined => {
+      if (isFeedbackByRep.get(e) === true) return "top";
+      const fromBox = boxes.get(e.from);
+      const toBox = boxes.get(visualTargetOf(e));
+      if (fromBox === undefined || toBox === undefined) return undefined;
+      const horizOverlap =
+        Math.min(fromBox.x + fromBox.w, toBox.x + toBox.w) > Math.max(fromBox.x, toBox.x);
+      const vertOverlap =
+        Math.min(fromBox.y + fromBox.h, toBox.y + toBox.h) > Math.max(fromBox.y, toBox.y);
+      if (horizOverlap && !vertOverlap) {
+        const downward = toBox.y + toBox.h / 2 >= fromBox.y + fromBox.h / 2;
+        return downward ? "bottom" : "top";
+      }
+      const rightward = fromBox.x + fromBox.w / 2 <= toBox.x + toBox.w / 2;
+      return rightward ? "right" : "left";
+    };
+    // Cross-axis sort coordinate: vertical exits (top/bottom) spread along
+    // X → order by the target's centre X; horizontal exits (left/right)
+    // spread along Y → order by the target's centre Y. Lets each tail leave
+    // in its target's direction so the fan-out doesn't cross at the source.
+    const targetCoordOf = (e: GraphEdge): number | undefined => {
+      const b = boxes.get(visualTargetOf(e));
+      if (b === undefined) return undefined;
+      const side = sideOf(e);
+      return side === "top" || side === "bottom" ? b.x + b.w / 2 : b.y + b.h / 2;
+    };
+    return buildProducerPortAssignment(synthGraph, targetCoordOf, sideOf);
   });
 
   // Now that `portAssignment` is declared, we can build `layout` —
@@ -4808,8 +5061,28 @@ export const GraphView = () => {
     // ALSO has aux edges entering from the same side would need a
     // wider predicate; document this seam if it arises.
     const sourceYOffset = createMemo(() => {
-      if (edge.kind !== "state" || edge.auxKey !== PORT_FLOW_AUX_KEY) return 0;
       const portGap = Math.max(4, Math.round(consts().LEAF_H / 4));
+      // Producer-tail spreading (horizontal regime) — the outgoing-edge
+      // mirror of `targetYOffset`. When a source fans ≥2 tails out of the
+      // same (left/right) edge, distribute them along the source's vertical
+      // extent. This TAKES PRECEDENCE over the consumer-mirror below: the
+      // two key off mutually exclusive conditions (source fanout ≥2 here vs
+      // the fanout-1 adjacent-sibling case S2(k) targets), so for SHA-256's
+      // fanout-1 sigma/Sigma sources `producerSpread` is 0 and the
+      // consumer-mirror still runs — keeping that shipped behavior
+      // byte-identical. The win-when-nonzero rule also fixes the case the
+      // consumer-mirror can't: a single source feeding two DIFFERENT
+      // multi-input consumers whose slots happen to coincide would mirror
+      // both tails onto the same source-y; the source-keyed bucket here
+      // spreads them apart instead.
+      const fromB = fromBox();
+      if (fromB) {
+        const cap = fromB.h / 2 - 4;
+        const producerSpread = producerPortOffset(edge, producerAssignment(), portGap, cap);
+        if (producerSpread !== 0) return producerSpread;
+      }
+      // Consumer-mirror (Slice S2(k)) — port-flow edges only.
+      if (edge.kind !== "state" || edge.auxKey !== PORT_FLOW_AUX_KEY) return 0;
       const cap = consts().LEAF_H / 2 - 4;
       return consumerPortOffset(edge, portAssignment(), portGap, cap);
     });
@@ -4840,7 +5113,22 @@ export const GraphView = () => {
       const swapSign = rejoinSwapSourceXSign(edge, nodesById(), containersById());
       const fromB = fromBox();
       const swapShift = swapSign === 0 || !fromB ? 0 : swapSign * fromB.w * 0.25;
-      return replicaShift + swapShift;
+      // Producer-tail spreading (vertical regime) — the outgoing-edge mirror
+      // of `targetXOffset`. Spreads a multi-out source's tails across its
+      // bottom/top edge. Additive with `replicaShift` (disjoint: a replica
+      // owns exactly one outgoing edge → size-1 producer bucket → 0), but
+      // GATED OFF when the Feistel swap is active: `rejoinSwapSourceXSign`
+      // already pushes that source's two tails to opposite sides for the
+      // L↔R X-crossing pedagogy, and producer-spread would double-shift
+      // them. Caps to the source's inner half-width (matches EdgePath's
+      // own source-x clamp).
+      let producerShift = 0;
+      if (swapSign === 0 && fromB) {
+        const portGap = Math.max(6, Math.round(consts().LEAF_W / 10));
+        const cap = fromB.w / 2 - 4;
+        producerShift = producerPortOffset(edge, producerAssignment(), portGap, cap);
+      }
+      return replicaShift + swapShift + producerShift;
     });
     // Whether this edge originates from a fan-out replica. Gates the
     // straight-line path variant + the start-dot render inside
@@ -4998,6 +5286,31 @@ export const GraphView = () => {
               />
               replicate fan-out
             </label>
+            {/* Replication threshold — lives right next to its OWN checkbox
+                (2026-05-30 reorg). Previously it rendered after the "color by
+                source" checkbox, so it read as a coloring control when it
+                actually governs replica splitting. The `>` glyph + strict
+                "more than" semantics are unchanged. */}
+            <label
+              class="graph-replicate-threshold"
+              title={`Sources with more than this many outgoing aux edges become replication candidates (default ${DEFAULT_REPLICATION_THRESHOLD}). Per-source overrides in the panel below take precedence.`}
+            >
+              <span class="graph-replicate-threshold-label">&gt;</span>
+              <input
+                type="number"
+                class="graph-replicate-threshold-input"
+                min={REPLICATION_THRESHOLD_MIN}
+                max={REPLICATION_THRESHOLD_MAX}
+                step={1}
+                value={replicationThreshold()}
+                disabled={!replicate()}
+                onInput={(e) => {
+                  const parsed = Number.parseInt(e.currentTarget.value, 10);
+                  setReplicationThreshold(parsed);
+                }}
+                aria-label="Fanout threshold for replication"
+              />
+            </label>
             {/* Source-color coding master toggle (2026-05-19). Defaults ON
                 — every source's edges paint a deterministic
                 colour so the eye can track source identity at a glance.
@@ -5018,24 +5331,32 @@ export const GraphView = () => {
               />
               color by source
             </label>
+            {/* Coloring fanout threshold (2026-05-30) — the REAL "color by
+                source" knob, next to its own checkbox. A source auto-colours
+                when its fanout is ≥ this value. Min 0 (colour every edge),
+                default 3, max 99. `≥` glyph matches the inclusive semantics
+                (vs the replication threshold's strict `>`). Disabled when the
+                master coloring toggle is OFF so the knob's no-op state is
+                visible at a glance. */}
             <label
               class="graph-replicate-threshold"
-              title={`Sources with more than this many outgoing aux edges become replication candidates (default ${DEFAULT_REPLICATION_THRESHOLD}). Per-source overrides in the panel below take precedence.`}
+              title={`Sources fanning out to at least this many consumers get an auto colour (default ${DEFAULT_COLOR_THRESHOLD}). 0 colours every edge; raise it to colour only the biggest fan-outs.`}
             >
-              <span class="graph-replicate-threshold-label">&gt;</span>
+              <span class="graph-replicate-threshold-label">&ge;</span>
               <input
                 type="number"
-                class="graph-replicate-threshold-input"
-                min={REPLICATION_THRESHOLD_MIN}
-                max={REPLICATION_THRESHOLD_MAX}
+                class="graph-color-threshold-input"
+                min={COLOR_THRESHOLD_MIN}
+                max={COLOR_THRESHOLD_MAX}
                 step={1}
-                value={replicationThreshold()}
-                disabled={!replicate()}
+                value={colorThreshold()}
+                disabled={!sourceColoringEnabled()}
                 onInput={(e) => {
                   const parsed = Number.parseInt(e.currentTarget.value, 10);
-                  setReplicationThreshold(parsed);
+                  setColorThreshold(parsed);
                 }}
-                aria-label="Fanout threshold for replication"
+                aria-label="Fanout threshold for source coloring"
+                data-testid="color-threshold-input"
               />
             </label>
             {/* Slice 3 (graph-narrative-and-zoom plan) — zoom controls.
@@ -5732,11 +6053,10 @@ export const GraphView = () => {
                 // `for-each-subgraph`, `for-each-subgraph-with-history`.
                 // Drives the gate for iterate-body draggability so leaves
                 // inside SHA-256's `msg-schedule` (a `for-each-subgraph-
-                // with-history`) become draggable too. Groups (`round.N`,
-                // AES round bodies) stay outside this set on purpose — the
-                // user's S2(j) ask was scoped to iteration bodies; group
-                // children keep the legacy onClick path that several click
-                // tests depend on.
+                // with-history`) become draggable too. Non-looping `group`
+                // containers (`round.N`, AES round bodies) are handled by
+                // the separate `isInsideGroup` predicate below — they were
+                // added to the draggable gate in Finding 4 (2026-05-30).
                 const isInsideIteration = node.containerPath.some((id) => {
                   const c = containersById().get(id);
                   const k = c?.kind;
@@ -5745,6 +6065,28 @@ export const GraphView = () => {
                     k === "for-each-subgraph" ||
                     k === "for-each-subgraph-with-history"
                   );
+                });
+                // Non-looping `group` sibling of `isInsideIteration`
+                // (Finding 4, 2026-05-30). AES round bodies (`round.N`) are
+                // `group` containers, so their leaves (sub-bytes / shift-rows /
+                // mix-columns / add-round-key) were excluded from the draggable
+                // gate below — the user asked to make them movable, same as the
+                // iteration-body leaves enabled in S2(j). The layout passes
+                // already apply `relativePins.get(childId)` deltas to GROUP
+                // children too (same code path as iterate children, cf. lines
+                // ~1299, ~1452, ~1746), so enabling drag here is a pure gate
+                // flip + relative-pin mode — no layout change. The only
+                // behavioral shift is the click path: a draggable leaf drops
+                // its `<g onClick>` and instead synthesizes the click on
+                // sub-threshold pointer release via the drag handler's
+                // `onClickFallback` (see LeafRect ~6360). Real-browser scrub /
+                // select behavior is preserved (the fallback runs the same
+                // `handleLeafClick` + `toggleSelectedNode`); jsdom `fireEvent.
+                // click` does NOT traverse that path, so the group-child click
+                // tests were audited + re-pointed at the pointer-event path.
+                const isInsideGroup = node.containerPath.some((id) => {
+                  const c = containersById().get(id);
+                  return c?.kind === "group";
                 });
                 const isRootLevel = node.containerPath.length === 0;
                 // Two flavors of "synthetic" leaf — both suppress drag /
@@ -5812,16 +6154,19 @@ export const GraphView = () => {
                 //     iterate/group children (cf. lines ~1299, ~1452,
                 //     ~1746), so no layout change is needed — the gate
                 //     flip alone enables persistence + reset glyph.
-                //     Group children (e.g. AES round bodies) stay
-                //     NON-draggable on purpose — the user's S2(j) ask was
-                //     scoped to iteration bodies, and group leaves keep
-                //     the legacy onClick wiring that several existing
-                //     click tests depend on.
+                //   - Leaves inside non-looping `group` containers (AES
+                //     `round.N` bodies) ALSO get the relative-pin drag
+                //     since Finding 4 (2026-05-30). Previously excluded so
+                //     their leaves kept the legacy `<g onClick>` wiring;
+                //     the user asked to make round-body leaves movable, so
+                //     `isInsideGroup` now joins the gate and the click
+                //     tests were re-pointed at the pointer-event path.
                 const dragMode =
-                  isReplicaLike || isInsideIteration
+                  isReplicaLike || isInsideIteration || isInsideGroup
                     ? ("relative" as const)
                     : ("absolute" as const);
-                const isDraggable = isReplicaLike || isRootLevel || isInsideIteration;
+                const isDraggable =
+                  isReplicaLike || isRootLevel || isInsideIteration || isInsideGroup;
                 const dragProps = isDraggable
                   ? {
                       onPointerDown: (e: PointerEvent) =>
@@ -5885,10 +6230,12 @@ export const GraphView = () => {
                         onResetRelativePin={
                           // Reset glyph appears whenever the node has a
                           // RELATIVE pin — replicas/chips since Slice 3,
-                          // and iteration-body leaves since S2(j). Group
-                          // children and root-level leaves use absolute
-                          // pins (or no pin at all), so they're excluded.
-                          (isReplicaLike || isInsideIteration) && relativePinsMap().has(node.stepId)
+                          // iteration-body leaves since S2(j), and group
+                          // (AES round body) leaves since Finding 4.
+                          // Root-level leaves use absolute pins (or no pin
+                          // at all), so they're excluded.
+                          (isReplicaLike || isInsideIteration || isInsideGroup) &&
+                          relativePinsMap().has(node.stepId)
                             ? () => clearRelativePosition(spec().id, node.stepId)
                             : undefined
                         }

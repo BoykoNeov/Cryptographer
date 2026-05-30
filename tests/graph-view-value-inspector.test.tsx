@@ -26,17 +26,20 @@
  *
  * No hover tests: click-only is part of the contract.
  *
- * AES-128 is the fixture — well-known stable id set
- * (`key-expansion → initial.add-round-key` carrying `roundKey.0`).
+ * Byte-native AES-128 (Slice B1; AddRoundKey merged to one `xor-with-aux@1`
+ * leaf in Finding F3) is the fixture — well-known stable id set: the
+ * `key-expansion → initial.add-round-key` aux edge carries `roundKey.0`, which
+ * the merged AddRoundKey leaf reads internally (so it IS the round-key fan-out
+ * consumer now).
  */
 
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
-import { CIPHER_INPUT_ID, CIPHER_OUTPUT_ID } from "@/core/graph";
+import { CIPHER_OUTPUT_ID } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
+import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue } from "@/core/types";
+import { INPUT_SOURCE_ID } from "@/core/types";
 import { GraphView } from "@/ui/components/GraphView";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetByteFormatForTests } from "@/ui/stores/format";
@@ -44,7 +47,7 @@ import { __resetLayoutsForTests } from "@/ui/stores/layout";
 import { __resetSpecForTests, setCipherMode } from "@/ui/stores/spec";
 import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
 import { __resetViewDensityForTests } from "@/ui/stores/view-density";
-import { __resetReplicationForTests } from "@/ui/stores/view-replication";
+import { __resetReplicationForTests, setReplicationEnabled } from "@/ui/stores/view-replication";
 import {
   __resetValueInspectorForTests,
   setInspectorPanelOpen,
@@ -58,10 +61,16 @@ const AES128_PT = "00112233445566778899aabbccddeeff";
 
 const seedAes128Trace = (): void => {
   const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-    initialState: matrixFromBytes(bytesFromHex(AES128_PT)),
+    initialState: makeBytesState(bytesFromHex(AES128_PT)),
+    portedDispatchEnabled: true,
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
   });
   setTrace(trace);
+  // Byte-native AES-128 (Slice B1) auto-ON's replication via GraphView's
+  // `effectiveReplicate` (ported spec). Force it OFF — simulating an explicit
+  // user toggle — so `key-expansion`'s 11 round-key edges stay un-replicated
+  // and the edge-key selectors below remain stable.
+  setReplicationEnabled(false);
 };
 
 const resetAll = (): void => {
@@ -73,6 +82,30 @@ const resetAll = (): void => {
   __resetReplicationForTests();
   __resetLayoutsForTests();
   __resetValueInspectorForTests();
+};
+
+/**
+ * Synthetic pointer event. jsdom lacks a real `PointerEvent`, so we build a
+ * `MouseEvent` and graft a `pointerId` — the same shim the drag tests use.
+ */
+const pointerEvt = (type: string, x: number, y: number): MouseEvent => {
+  const e = new MouseEvent(type, { clientX: x, clientY: y, bubbles: true });
+  Object.defineProperty(e, "pointerId", { value: 1 });
+  return e;
+};
+
+/**
+ * Click a leaf the way a real browser does. Post-Finding 4 every AES leaf is
+ * draggable, so the `<g>` carries `onPointerDown` instead of `onClick` — a
+ * click is a pointerdown + sub-threshold (no-move) pointerup, after which the
+ * drag handler's `onClickFallback` runs the same scrub + inspector-select the
+ * old `onClick` did. `fireEvent.click` does NOT traverse that path, so leaf
+ * selections must be driven through here. (Edges + endpoint pills keep their
+ * direct `onClick`, so those still use `fireEvent.click`.)
+ */
+const clickLeaf = (leaf: SVGGElement): void => {
+  leaf.dispatchEvent(pointerEvt("pointerdown", 100, 100));
+  window.dispatchEvent(pointerEvt("pointerup", 100, 100));
 };
 
 const findEdgePathByEndpoints = (
@@ -102,12 +135,12 @@ const findEdgePathByEndpoints = (
  * the title query disambiguates leaves that share an anchor with their
  * source (replicas / chips).
  *
- * Important: this test file uses NESTED leaves (e.g. `round.5.mix-columns`)
- * deliberately. Root-level leaves are draggable, so `onClick` is wired to
- * `undefined` on their <g> and `fireEvent.click` doesn't reach the
- * handler — clicks for those flow through a pointerdown + sub-threshold-
- * release path that fireEvent doesn't simulate. Nested leaves carry the
- * onClick directly.
+ * Note: post-Finding 4 EVERY AES leaf is draggable (root-level, iteration-
+ * body, and now `group`-nested round-body leaves alike), so `onClick` is
+ * wired to `undefined` on the <g> and `fireEvent.click` doesn't reach the
+ * handler — clicks flow through a pointerdown + sub-threshold-release path
+ * that fireEvent doesn't simulate. Leaf clicks in this file therefore go
+ * through the `clickLeaf` helper above; this lookup just resolves the <g>.
  */
 const findLeafByStepId = (container: HTMLElement, stepId: string): SVGGElement | null => {
   const leaves = container.querySelectorAll<SVGGElement>("g.graph-leaf");
@@ -177,11 +210,12 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     seedAes128Trace();
     setInspectorPanelOpen(true);
     const { container } = render(() => <GraphView />);
-    // Nested leaf (inside round.5 group) — non-draggable, so `onClick`
-    // is wired to the <g> and `fireEvent.click` exercises it directly.
+    // Nested group leaf (inside round.5) — draggable post-Finding 4, so the
+    // click is driven through the pointer path (`clickLeaf`), which fires the
+    // drag handler's sub-threshold `onClickFallback`.
     const leaf = findLeafByStepId(container as HTMLElement, "round.5.mix-columns");
     expect(leaf).not.toBeNull();
-    fireEvent.click(leaf as SVGGElement);
+    clickLeaf(leaf as SVGGElement);
     // Halo on the wrapping <g>.
     expect(leaf?.classList.contains("graph-leaf-selected")).toBe(true);
     const body = container.querySelector('[data-testid="value-inspector-body"]');
@@ -203,14 +237,14 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     fireEvent.click(pill as SVGGElement);
     expect(pill?.classList.contains("graph-endpoint-selected")).toBe(true);
     const body = container.querySelector('[data-testid="value-inspector-body"]');
-    expect(body?.textContent).toContain(CIPHER_INPUT_ID);
+    expect(body?.textContent).toContain(INPUT_SOURCE_ID);
     // Endpoint pill kind badge says "input pill"; value row shows the
     // cipher's plaintext bytes (formatted with the active ByteFormat).
     // The AES-128 fixture uses the FIPS-197 Appendix B plaintext
     // `00112233445566778899aabbccddeeff`.
     expect(body?.textContent).toMatch(/input pill/);
     expect(body?.textContent).toMatch(/00112233445566778899aabbccddeeff/);
-    expect(useSelectedTarget()()).toEqual({ kind: "node", id: CIPHER_INPUT_ID });
+    expect(useSelectedTarget()()).toEqual({ kind: "node", id: INPUT_SOURCE_ID });
   });
 
   it("clicking the output pill selects it (verifies side discrimination)", () => {
@@ -243,9 +277,9 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     setInspectorPanelOpen(true);
     const { container } = render(() => <GraphView />);
     const leaf = findLeafByStepId(container as HTMLElement, "round.5.mix-columns");
-    fireEvent.click(leaf as SVGGElement);
+    clickLeaf(leaf as SVGGElement);
     expect(useSelectedTarget()()).not.toBeNull();
-    fireEvent.click(leaf as SVGGElement);
+    clickLeaf(leaf as SVGGElement);
     expect(useSelectedTarget()()).toBeNull();
   });
 
@@ -253,9 +287,9 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     seedAes128Trace();
     setInspectorPanelOpen(true);
     const { container } = render(() => <GraphView />);
-    // Start with a nested leaf (non-draggable so fireEvent.click works).
+    // Start with a nested group leaf (draggable post-Finding 4 → pointer path).
     const leaf = findLeafByStepId(container as HTMLElement, "round.5.mix-columns");
-    fireEvent.click(leaf as SVGGElement);
+    clickLeaf(leaf as SVGGElement);
     expect(useSelectedTarget()()).toEqual({ kind: "node", id: "round.5.mix-columns" });
     // Switch to an edge.
     const path = findEdgePathByEndpoints(
@@ -272,7 +306,7 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     // Switch to the input pill.
     const pill = findEndpointPill(container as HTMLElement, "input");
     fireEvent.click(pill as SVGGElement);
-    expect(useSelectedTarget()()).toEqual({ kind: "node", id: CIPHER_INPUT_ID });
+    expect(useSelectedTarget()()).toEqual({ kind: "node", id: INPUT_SOURCE_ID });
   });
 
   it("renders the no-trace hint when the user hasn't run yet (trace null)", () => {

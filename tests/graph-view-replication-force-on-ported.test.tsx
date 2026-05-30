@@ -18,12 +18,11 @@
  * Smoke surfaced 2026-05-26; see [[project_universal_port_dataflow_proposal]].
  */
 
-import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { buildSha256Spec } from "@/ciphers/sha-256";
+import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
+import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue } from "@/core/types";
 import { GraphView } from "@/ui/components/GraphView";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
@@ -34,20 +33,31 @@ import { __resetLayoutsForTests } from "@/ui/stores/layout";
 // via `buildCanonicalHash` and flips category. We need the spec-store
 // boundary so `useSpec()` returns the SHA-256 spec post-call.
 // (Same gotcha as [[feedback_setcipher_test_import]] for `setCipher`.)
-import { __resetSpecForTests, setHash } from "@/ui/stores/spec";
+import { __resetSpecForTests, setCipher, setHash } from "@/ui/stores/spec";
 import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
 import { __resetViewDensityForTests } from "@/ui/stores/view-density";
 import { __resetReplicationForTests, setReplicationEnabled } from "@/ui/stores/view-replication";
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-const AES128_KEY = "000102030405060708090a0b0c0d0e0f";
-const AES128_PT = "00112233445566778899aabbccddeeff";
+// Non-ported control carrier. AES-128/192/256 single-block were all candidates,
+// but their byte-native B1.1–B1.3 rebuilds make them ported (auto-on) — so the
+// "non-ported, default-off" assertions retarget to Speck32/64, a still-legacy
+// (lifted, NOT port-native) cipher. 8-byte key + 4-byte block (Beaulieu et al.
+// 2013 Table 4.1). B2 (Speck byte-native) re-breaks these two tests — retarget
+// the control then (grep `speck32_64BeSpec` / `speck-32-64` across tests/).
+const SPECK_KEY = "1918111009080100";
+const SPECK_PT = "6574694c";
 
-const seedAes128Trace = (): void => {
-  const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-    initialState: matrixFromBytes(bytesFromHex(AES128_PT)),
-    initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
+const seedSpeckTrace = (): void => {
+  // `effectiveReplicate` reads the STORE spec (`useSpec()`), not the trace, so
+  // the store spec must be the non-ported control too. The post-reset default
+  // is byte-native AES-128 (ported → auto-on); flip the store to Speck via the
+  // spec-store boundary (rebuilds the canonical spec — [[feedback_setcipher_test_import]]).
+  setCipher("speck-32-64-be");
+  const trace = runSpec(speck32_64BeSpec, buildDefaultRegistry(), {
+    initialState: makeBytesState(bytesFromHex(SPECK_PT)),
+    initialAux: new Map<string, AuxValue>([["key", bytesFromHex(SPECK_KEY)]]),
   });
   setTrace(trace);
 };
@@ -90,10 +100,10 @@ describe("GraphView replication — force-on for port-native specs", () => {
     resetAll();
   });
 
-  it("non-ported spec (AES-128) keeps the default-off raw signal", () => {
-    seedAes128Trace();
+  it("non-ported spec (Speck32/64) keeps the default-off raw signal", () => {
+    seedSpeckTrace();
     const { container } = render(() => <GraphView />);
-    // Raw default false + no user toggle + AES-128 is NOT ported →
+    // Raw default false + no user toggle + Speck is NOT ported →
     // effective replication stays off.
     expect(isReplicationCheckboxChecked(container)).toBe(false);
   });
@@ -120,9 +130,11 @@ describe("GraphView replication — force-on for port-native specs", () => {
     expect(isReplicationCheckboxChecked(container)).toBe(false);
   });
 
-  it("user toggle on AES-128 also wins when they later switch to SHA-256", () => {
-    // User toggles ON while looking at AES (raw → true, userToggled → true).
-    seedAes128Trace();
+  it("user toggle on Speck32/64 also wins when they later switch to SHA-256", () => {
+    // User toggles ON while looking at Speck (raw → true, userToggled → true).
+    // Speck (non-ported) makes the toggle genuinely the user's choice, not the
+    // ported auto-on — preserving the test's discriminating power.
+    seedSpeckTrace();
     setReplicationEnabled(true);
     // ... then switches to SHA-256. Effective should be raw = true (matches
     // their explicit choice, NOT forced-on by the ported branch — userToggled

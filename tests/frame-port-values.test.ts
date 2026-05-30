@@ -28,14 +28,43 @@
  */
 
 import { aes128Spec } from "@/ciphers/aes-128";
+import { AES_SBOX } from "@/ciphers/aes-constants";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { buildSha256Spec } from "@/ciphers/sha-256";
 import { framePortBytes } from "@/core/port-projection";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
-import type { TraceFrame } from "@/core/types";
+import type { CipherSpec, TraceFrame } from "@/core/types";
 import { describe, expect, it } from "vitest";
+
+// Durable lifted-legacy carrier (scaffolding-suppression Slice B1, 2026-05-29).
+// The negative + legacy-path tests below need a `kind: "ported"` step that
+// ALSO carries a `legacy` executor — the matrix-shaped `generic.byte-
+// substitution@1`. AES-128 used to be that carrier, but the byte-native B1
+// rebuild replaced it with the genuinely port-native `byte-substitute@1`
+// (no legacy executor), so AES-128 no longer exhibits the lifted-legacy or
+// legacy-path behavior. A single-leaf synthetic spec is the maximally durable
+// carrier: `generic.byte-substitution@1` stays registered as a lifted-legacy
+// step through all of Phase B (it only retires with MatrixState in Phase C),
+// so this fixture outlives the B1.3 aes-192/256 conversions that would
+// otherwise re-break an aes-192 retarget every sub-phase.
+const liftedLegacySubBytesSpec: CipherSpec = {
+  id: "synthetic-lifted-legacy-subbytes@1",
+  name: "synthetic lifted-legacy SubBytes",
+  stateShape: "matrix4x4-bytes",
+  inputs: { plaintext: { shape: "matrix4x4-bytes" }, key: { byteLength: 0 } },
+  steps: [
+    {
+      kind: "step",
+      id: "sub-bytes",
+      type: "generic.byte-substitution@1",
+      params: { sbox: [...AES_SBOX] },
+    },
+  ],
+};
+
+const SUBBYTES_INPUT = matrixFromBytes(bytesFromHex("00112233445566778899aabbccddeeff"));
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -131,12 +160,10 @@ describe("TraceFrame port-fields — pure port-native (SHA-256 add-mod-32@1)", (
 // ─── Negative: lifted-legacy ported frame leaves port fields undefined ────
 
 describe("TraceFrame port-fields — lifted-legacy ported (AES byte-substitution)", () => {
-  it("AES SubBytes frame under portedDispatchEnabled:true has portInputs and portOutputs both undefined", () => {
-    // FIPS-197 §C.1 AES-128 KAT vectors. Direct AES boot mirrors the per-
-    // cipher dispatch test files; key in aux, plaintext as initial state.
-    const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-      initialState: matrixFromBytes(bytesFromHex("00112233445566778899aabbccddeeff")),
-      initialAux: new Map([["key", bytesFromHex("000102030405060708090a0b0c0d0e0f")]]),
+  it("lifted-legacy SubBytes frame under portedDispatchEnabled:true has portInputs and portOutputs both undefined", () => {
+    // Run the synthetic lifted-legacy carrier under the ported path.
+    const trace = runSpec(liftedLegacySubBytesSpec, buildDefaultRegistry(), {
+      initialState: SUBBYTES_INPUT,
       portedDispatchEnabled: true,
     });
 
@@ -163,10 +190,9 @@ describe("TraceFrame port-fields — lifted-legacy ported (AES byte-substitution
 // ─── Legacy path: flag-off leaves port fields undefined everywhere ────────
 
 describe("TraceFrame port-fields — legacy dispatch path", () => {
-  it("portedDispatchEnabled:false (default) leaves port fields undefined on every AES frame", () => {
-    const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-      initialState: matrixFromBytes(bytesFromHex("00112233445566778899aabbccddeeff")),
-      initialAux: new Map([["key", bytesFromHex("000102030405060708090a0b0c0d0e0f")]]),
+  it("portedDispatchEnabled:false (default) leaves port fields undefined on every frame", () => {
+    const trace = runSpec(liftedLegacySubBytesSpec, buildDefaultRegistry(), {
+      initialState: SUBBYTES_INPUT,
       // portedDispatchEnabled omitted — default false.
     });
     for (const f of trace.frames) {
@@ -218,9 +244,8 @@ describe("framePortBytes helper", () => {
   });
 
   it("returns null for a legacy-path frame (port fields undefined)", () => {
-    const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-      initialState: matrixFromBytes(bytesFromHex("00112233445566778899aabbccddeeff")),
-      initialAux: new Map([["key", bytesFromHex("000102030405060708090a0b0c0d0e0f")]]),
+    const trace = runSpec(liftedLegacySubBytesSpec, buildDefaultRegistry(), {
+      initialState: SUBBYTES_INPUT,
     });
     const subBytes = findFrameByStepType(trace.frames, "generic.byte-substitution@1");
     expect(framePortBytes(subBytes, "state", "input")).toBeNull();

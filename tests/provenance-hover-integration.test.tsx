@@ -21,7 +21,6 @@
  *      classes simultaneously).
  */
 
-import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { runSpec } from "@/core/runtime";
@@ -31,6 +30,7 @@ import type { AuxValue, BytesState, MatrixState, TraceFrame } from "@/core/types
 import { BytesView } from "@/ui/components/BytesView";
 import { MatrixView } from "@/ui/components/MatrixView";
 import { RoundKeyPanel } from "@/ui/components/RoundKeyPanel";
+import { matrixAes192Spec } from "./fixtures/matrix-aes-192";
 import "@/ui/provenance/index"; // side-effect: registers fns
 import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetProvenanceHoverForTests } from "@/ui/stores/provenance-hover";
@@ -38,20 +38,31 @@ import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-const AES128_KEY = "000102030405060708090a0b0c0d0e0f";
-const AES128_PT = "00112233445566778899aabbccddeeff";
+// Matrix-cell provenance is a MatrixView-path feature (`generic.*` step types
+// + MatrixState before/after). Every shipped single-block AES is byte-native as
+// of Slice B1.3 — bytes stateAfter and port-native step types — so it no longer
+// drives the MatrixView overlay (accepted regression — port-native cell
+// provenance is deferred to Slice 2.9c-e). These 6 MatrixView tests therefore
+// run on the shared MATRIX AES-192 fixture (`tests/fixtures/matrix-aes-192.ts`),
+// hand-built from the still-registered `generic.*` lifted-legacy step types so
+// it preserves the exact MatrixView coverage. 24-byte key (FIPS-197 §A.2),
+// 16-byte block. The fixture survives to Phase C (when MatrixView provenance
+// retires); the byte-native ciphers move to the BytesView path (like the
+// Serpent tests below) once 2.9c-e ships.
+const AES192_KEY = "8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b";
+const AES192_PT = "6bc1bee22e409f96e93d7e117393172a";
 
-const seedAes128Trace = () => {
-  const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-    initialState: matrixFromBytes(bytesFromHex(AES128_PT)),
-    initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
+const seedAes192Trace = () => {
+  const trace = runSpec(matrixAes192Spec, buildDefaultRegistry(), {
+    initialState: matrixFromBytes(bytesFromHex(AES192_PT)),
+    initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES192_KEY)]]),
   });
   setTrace(trace);
   return trace;
 };
 
 const findFrameByStepType = (
-  trace: ReturnType<typeof seedAes128Trace>,
+  trace: ReturnType<typeof seedAes192Trace>,
   predicate: (t: string) => boolean,
 ) => {
   const f = trace.frames.find((fr) => predicate(fr.stepType));
@@ -81,8 +92,8 @@ describe("Provenance hover — MatrixView before-grid receives", () => {
     __resetProvenanceHoverForTests();
   });
 
-  it("AES SubBytes: hovering an `after` cell highlights the same-index `before` cell", () => {
-    const trace = seedAes128Trace();
+  it("AES-192 SubBytes: hovering an `after` cell highlights the same-index `before` cell", () => {
+    const trace = seedAes192Trace();
     const subBytesFrame = findFrameByStepType(trace, (t) => t === "generic.byte-substitution@1");
     const { container } = renderMatrixView(subBytesFrame);
     const grids = container.querySelectorAll(".grid-block");
@@ -110,8 +121,8 @@ describe("Provenance hover — MatrixView before-grid receives", () => {
     expect(beforeCells[5]?.classList.contains("provenance-source")).toBe(false);
   });
 
-  it("AES ShiftRows: hovering an `after` cell highlights the SHIFTED-index `before` cell", () => {
-    const trace = seedAes128Trace();
+  it("AES-192 ShiftRows: hovering an `after` cell highlights the SHIFTED-index `before` cell", () => {
+    const trace = seedAes192Trace();
     const shiftRowsFrame = findFrameByStepType(trace, (t) => t === "generic.shift-rows@1");
     const { container } = renderMatrixView(shiftRowsFrame);
     const grids = container.querySelectorAll(".grid-block");
@@ -125,7 +136,7 @@ describe("Provenance hover — MatrixView before-grid receives", () => {
     expect(beforeCells[1]?.classList.contains("provenance-source")).toBe(false);
   });
 
-  it("AES MixColumns: hovering an `after` cell renders coefficient labels on the 4 source cells", () => {
+  it("AES-192 MixColumns: hovering an `after` cell renders coefficient labels on the 4 source cells", () => {
     // Regression guard for the MatrixView label-drop bug discovered
     // during the Phase 3 manual browser smoke (2026-05-18): the consumer
     // built the highlight set as a plain `Set<number>`, throwing away
@@ -134,7 +145,7 @@ describe("Provenance hover — MatrixView before-grid receives", () => {
     // but no test covered the DOM render path — only the outline class
     // had a visible assertion. This test pins the rendered label text
     // through to the .provenance-label span inside each source cell.
-    const trace = seedAes128Trace();
+    const trace = seedAes192Trace();
     const mixColsFrame = findFrameByStepType(trace, (t) => t === "generic.mix-columns@1");
     const { container } = renderMatrixView(mixColsFrame);
     const grids = container.querySelectorAll(".grid-block");
@@ -182,7 +193,7 @@ describe("Provenance hover — MatrixView before-grid receives", () => {
   });
 
   it("does NOT apply both `.changed` and `.provenance-source` to the same cell (precedence)", () => {
-    const trace = seedAes128Trace();
+    const trace = seedAes192Trace();
     const subBytesFrame = findFrameByStepType(trace, (t) => t === "generic.byte-substitution@1");
     const { container } = renderMatrixView(subBytesFrame);
     const grids = container.querySelectorAll(".grid-block");
@@ -228,7 +239,7 @@ describe("Provenance hover — RoundKeyPanel highlights aux-cell sources", () =>
   });
 
   it("AddRoundKey: hovering an `after` cell highlights the same-index cell of the consumed K_i", () => {
-    const trace = seedAes128Trace();
+    const trace = seedAes192Trace();
     const addRoundKeyFrame = trace.frames.find(
       (f) => f.stepType === "generic.add-round-key@1" && f.auxRead.has("roundKey.3"),
     );
@@ -364,7 +375,7 @@ describe("Provenance hover — RoundKeyPanel highlights aux-cell sources", () =>
   });
 
   it("hover for a DIFFERENT frame clears the previous frame's highlights (stepId gate)", () => {
-    const trace = seedAes128Trace();
+    const trace = seedAes192Trace();
     const subBytesFrame = findFrameByStepType(trace, (t) => t === "generic.byte-substitution@1");
     const addRoundKeyFrame = trace.frames.find(
       (f) => f.stepType === "generic.add-round-key@1" && f.auxRead.has("roundKey.3"),

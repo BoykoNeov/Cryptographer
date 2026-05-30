@@ -25,7 +25,7 @@ import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
 import { __resetLayoutsForTests } from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
-import { __resetSpecForTests, editStepParams, useSpec } from "@/ui/stores/spec";
+import { __resetSpecForTests, editStepParams, setCipher, useSpec } from "@/ui/stores/spec";
 import { __resetTraceForTests, setSelectedStepId } from "@/ui/stores/trace";
 import { __resetViewDensityForTests } from "@/ui/stores/view-density";
 import { __resetViewModeForTests } from "@/ui/stores/view-mode";
@@ -46,6 +46,17 @@ const resetAll = (): void => {
   __resetTraceForTests();
   __resetViewDensityForTests();
   __resetViewModeForTests();
+  // Default AES-128 single-block (byte-native since B1.1/B1.2). Slice B1.4b
+  // made CBC byte-native too, so NO shipped spec carries the matrix
+  // `generic.byte-substitution@1` leaf anymore — every selectable
+  // `round.1.sub-bytes` is `byte-substitute@1` rendering the byte-native
+  // `ByteSubstituteBlock`. The SyncInverseRow gating this test pins (disabled
+  // when the S-box isn't bijective, re-enabled after repair) is the SAME
+  // shared component the matrix `SbxBlock` rendered, so exercising it through
+  // the byte-native block is equivalent coverage. (The matrix `SbxBlock` is
+  // dead UI until Phase C deletes the matrix step types.) The cross-slot WRITE
+  // is covered at the store boundary in `sync-sbox-inverse.test.ts`.
+  setCipher("aes-128");
 };
 
 describe("SyncInverseRow — gating on bijection", () => {
@@ -150,7 +161,9 @@ const findRound1SubBytes = (): Node | null => {
     for (const n of nodes) {
       if (n.kind === "step" && n.id === "round.1.sub-bytes") {
         found = n;
-      } else if (n.kind === "group" && n.children) {
+      } else if ((n.kind === "group" || n.kind === "iterate") && n.children) {
+        // ECB wraps the round body in an `iterate`; recurse into it too so the
+        // round.1.sub-bytes leaf inside the per-block body is reachable.
         visit(n.children);
       }
     }

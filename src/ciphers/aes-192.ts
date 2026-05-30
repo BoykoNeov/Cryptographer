@@ -1,79 +1,39 @@
 /**
- * AES-192 encryption spec, FIPS-197 §5.1.
+ * AES-192 forward cipher, FIPS-197 §5.1 (single-block).
  *
- * Structurally identical to AES-128: same step types, same MixColumn matrix,
- * same S-box. The only differences are Nk=6 (24-byte cipher key) and
- * ROUNDS=12 (vs 10 / Nk=4 for AES-128). The shared `aes.key-expansion@1`
- * executor derives Nk from the actual key length at runtime; this file
- * just tells the runtime to expect a 24-byte key and to assemble 12 rounds.
+ * **Byte-native (scaffolding-suppression Phase B Slice B1.3, 2026-05-29).**
+ * Structurally identical to byte-native AES-128 (`aes-128.ts`): the per-block
+ * body composes from port-native primitives whose ports are all `layout:"raw"`
+ * — `byte-substitute@1` (SubBytes), `permute@1` (ShiftRows),
+ * `gf-matrix-multiply@1` (MixColumns), `aux-load-bytes@1` + `xor@1`
+ * (AddRoundKey) — built by the variant-agnostic `buildAesEncryptBodyNative`.
+ * The ONLY differences from AES-128 are Nk=6 (24-byte cipher key) and
+ * ROUNDS=12 (vs 10). The 16-byte working state carries port-to-port between
+ * round groups via the A3b `StepGroup` `seedInput`/`bodyOutput` contract; the
+ * plaintext arrives on the reserved `$input` source and the cipher exit is
+ * named by `outputFrom`.
  *
- * Constructed off the same step factories as `aes-128.ts` — kept as a
- * separate file (rather than parameterizing aes-128) so each variant has
- * a discoverable, named CipherSpec the UI/registry can pick by id.
+ * Key expansion stays the monolithic `aes.key-expansion@1` (already A4-clean).
+ * The shared executor derives Nk from the actual key length at runtime; this
+ * file just tells the runtime to expect a 24-byte key and to assemble 12
+ * rounds. It runs once total, writing `roundKey.0..12` into the aux map.
+ *
+ * Kept as a separate file (rather than parameterizing aes-128) so each variant
+ * has a discoverable, named CipherSpec the UI/registry can pick by id.
  */
 
-import type { CipherSpec, StepNode } from "../core/types";
-import { AES_MIX_MATRIX, AES_RCON, AES_SBOX, AES_SHIFT_ROWS } from "./aes-constants";
+import type { CipherSpec } from "../core/types";
+import { AES_RCON, AES_SBOX } from "./aes-constants";
+import { aesNativeOutputFrom, buildAesEncryptBodyNative } from "./aes-round-builder-native";
 
 const ROUNDS = 12;
-
-const subBytesStep = (idPrefix: string): StepNode => ({
-  kind: "step",
-  id: `${idPrefix}.sub-bytes`,
-  type: "generic.byte-substitution@1",
-  params: { sbox: [...AES_SBOX] },
-});
-
-const shiftRowsStep = (idPrefix: string): StepNode => ({
-  kind: "step",
-  id: `${idPrefix}.shift-rows`,
-  type: "generic.shift-rows@1",
-  params: { shifts: [...AES_SHIFT_ROWS] },
-});
-
-const mixColumnsStep = (idPrefix: string): StepNode => ({
-  kind: "step",
-  id: `${idPrefix}.mix-columns`,
-  type: "generic.mix-columns@1",
-  params: { matrix: AES_MIX_MATRIX.map((row) => [...row]) },
-});
-
-const addRoundKeyStep = (idPrefix: string, roundIndex: number): StepNode => ({
-  kind: "step",
-  id: `${idPrefix}.add-round-key`,
-  type: "generic.add-round-key@1",
-  params: { auxName: `roundKey.${roundIndex}` },
-});
-
-const round = (n: number): StepNode => ({
-  kind: "group",
-  id: `round.${n}`,
-  label: `Round ${n}`,
-  children: [
-    subBytesStep(`round.${n}`),
-    shiftRowsStep(`round.${n}`),
-    mixColumnsStep(`round.${n}`),
-    addRoundKeyStep(`round.${n}`, n),
-  ],
-});
-
-const finalRound: StepNode = {
-  kind: "group",
-  id: `round.${ROUNDS}`,
-  label: `Round ${ROUNDS} (final, no MixColumns)`,
-  children: [
-    subBytesStep(`round.${ROUNDS}`),
-    shiftRowsStep(`round.${ROUNDS}`),
-    addRoundKeyStep(`round.${ROUNDS}`, ROUNDS),
-  ],
-};
 
 export const aes192Spec: CipherSpec = {
   id: "aes-192@1",
   name: "AES-192",
-  stateShape: "matrix4x4-bytes",
+  stateShape: "bytes",
   inputs: {
-    plaintext: { shape: "matrix4x4-bytes" },
+    plaintext: { shape: "bytes" },
     key: { byteLength: 24 },
   },
   steps: [
@@ -89,8 +49,7 @@ export const aes192Spec: CipherSpec = {
         rounds: ROUNDS,
       },
     },
-    addRoundKeyStep("initial", 0),
-    ...Array.from({ length: ROUNDS - 1 }, (_, i) => round(i + 1)),
-    finalRound,
+    ...buildAesEncryptBodyNative(ROUNDS),
   ],
+  outputFrom: aesNativeOutputFrom(ROUNDS),
 };

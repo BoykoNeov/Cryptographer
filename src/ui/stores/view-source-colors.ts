@@ -143,6 +143,78 @@ export const toggleIncludeSingleSources = (): void => {
   });
 };
 
+// ─── Auto-coloring fanout threshold (2026-05-30) ─────────────────────────
+//
+// A source is auto-coloured when its fanout (outgoing-edge count, replicas
+// rolled up to the canonical source) is `>=` this threshold. The "color by
+// source" toolbar control owns this number — DISTINCT from the replication
+// threshold in `view-replication.ts`, which governs replica splitting, not
+// colour. (Before 2026-05-30 the cutoff was hardcoded `>= 2` with no
+// user-facing knob, and the only number in the toolbar — visually next to
+// "color by source" — was actually the replication threshold.)
+//
+// Range: min 0, default 3, max 99.
+//   - 0 (or 1) → colour EVERY non-endpoint source: every edge gets a
+//     colour, including single-fanout sources. This is what "all edges can
+//     be colored" means.
+//   - 3 (default) → only sources fanning out to ≥ 3 consumers. NOTE this
+//     narrows the pre-2026-05-30 `>= 2` behaviour: fanout-2 sources (e.g.
+//     SHA-256 `length-append`) no longer auto-colour at the default — drag
+//     to 2 for the old behaviour, 0 for everything.
+//
+// Persisted (like the master toggle + include-single sub-toggle) so the
+// user's pick sticks across reloads. NOT in `LayoutSpec` — it's a global
+// viewer preference, not a document fact, so it never travels via
+// Save/Share.
+
+const COLOR_THRESHOLD_STORAGE_KEY = "cryptographer.viewSourceColorThreshold";
+
+export const DEFAULT_COLOR_THRESHOLD = 3;
+export const COLOR_THRESHOLD_MIN = 0;
+export const COLOR_THRESHOLD_MAX = 99;
+
+const loadInitialColorThreshold = (): number => {
+  try {
+    if (typeof localStorage === "undefined") return DEFAULT_COLOR_THRESHOLD;
+    const raw = localStorage.getItem(COLOR_THRESHOLD_STORAGE_KEY);
+    if (raw === null) return DEFAULT_COLOR_THRESHOLD;
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed)) return DEFAULT_COLOR_THRESHOLD;
+    return Math.max(COLOR_THRESHOLD_MIN, Math.min(COLOR_THRESHOLD_MAX, parsed));
+  } catch {
+    return DEFAULT_COLOR_THRESHOLD;
+  }
+};
+
+const [colorThreshold, setColorThresholdSignal] = createSignal<number>(loadInitialColorThreshold());
+
+export const useColorThreshold = () => colorThreshold;
+
+/**
+ * Set the auto-coloring fanout threshold. Out-of-range inputs clamp to
+ * [MIN, MAX]; non-finite (`NaN`, `Infinity`) falls back to the default —
+ * mirrors `setReplicationThreshold`'s defensive shape so a pasted "999" or
+ * cleared field doesn't wedge the control.
+ */
+export const setColorThreshold = (value: number): void => {
+  let next: number;
+  if (!Number.isFinite(value)) {
+    next = DEFAULT_COLOR_THRESHOLD;
+  } else {
+    next = Math.round(value);
+    if (next < COLOR_THRESHOLD_MIN) next = COLOR_THRESHOLD_MIN;
+    if (next > COLOR_THRESHOLD_MAX) next = COLOR_THRESHOLD_MAX;
+  }
+  setColorThresholdSignal(next);
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(COLOR_THRESHOLD_STORAGE_KEY, String(next));
+    }
+  } catch {
+    // Persist failed; in-memory signal still updated.
+  }
+};
+
 // ─── Per-spec manual overrides ────────────────────────────────────────────
 
 const OVERRIDES_STORAGE_KEY = "cryptographer.viewSourceColorOverrides";
@@ -302,11 +374,13 @@ export const __resetSourceColorsForTests = (): void => {
   setOverridesMapSignal({});
   setColorsPanelOpenMap({});
   setIncludeSingleSourcesSignal(false);
+  setColorThresholdSignal(DEFAULT_COLOR_THRESHOLD);
   try {
     if (typeof localStorage !== "undefined") {
       localStorage.removeItem(ENABLED_STORAGE_KEY);
       localStorage.removeItem(OVERRIDES_STORAGE_KEY);
       localStorage.removeItem(INCLUDE_SINGLE_STORAGE_KEY);
+      localStorage.removeItem(COLOR_THRESHOLD_STORAGE_KEY);
     }
   } catch {
     // Ignore.

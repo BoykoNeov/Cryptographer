@@ -26,8 +26,7 @@ import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
 import { findStep } from "@/core/spec-mutations";
-import { bytesFromHex } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
+import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue } from "@/core/types";
 import { GraphView } from "@/ui/components/GraphView";
 import { ParamEditor } from "@/ui/components/ParamEditor";
@@ -50,9 +49,12 @@ const AES128_KEY = "000102030405060708090a0b0c0d0e0f";
 const AES128_PT = "00112233445566778899aabbccddeeff";
 
 const seedAes128Trace = (): void => {
+  // Byte-native AES-128 (Slice B1): bytes state + ported dispatch (port-native
+  // primitives have no legacy executor).
   const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-    initialState: matrixFromBytes(bytesFromHex(AES128_PT)),
+    initialState: makeBytesState(bytesFromHex(AES128_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
+    portedDispatchEnabled: true,
   });
   setTrace(trace);
 };

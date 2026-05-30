@@ -24,14 +24,14 @@
  *       equality. Pins isolated unit semantics without the algebra of a
  *       full cipher on top.
  *
- *   (b) **AES-128 CBC encrypt (NIST SP 800-38A §F.2.1)** — the load-
- *       bearing cipher gate per the Slice 1.5 plan. After this slice,
- *       every step type the CBC encrypt body uses is ported (iv-load
- *       Slice 1.2, key-expansion + AES core Slice 1.4, padding Slice
- *       1.3, plus today's xor-aux-into-state + state-to-aux). Iterate,
- *       split-blocks, concat-blocks, compute-block-count remain legacy
- *       per Slice 1.3's deferral — they're outside the per-leaf
- *       dispatch.
+ *   (b) and (c) **REMOVED in Slice B1.4b.** They were the shipped-CBC
+ *       "real cipher gate" — legacy-vs-ported frame parity on the matrix
+ *       AES-128 CBC encrypt/decrypt specs. CBC is now byte-native (port-mode
+ *       iterate, no legacy executor path), so there is no legacy frame stream
+ *       to compare against; its KAT lives in `aes-128-cbc-kat.test.ts`. The
+ *       lifted chaining primitives (`xor-aux-into-state`/`state-to-aux`/
+ *       `aux-copy`) stay registered and stay parity-pinned by the synthetic
+ *       specs in (a) + (c-pre) below, which is what this file is actually for.
  *
  *   (c-pre) **Per-primitive aux-copy variant preservation** — minimal
  *       3-step spec (aux-load → iv-load → aux-copy) pinning that aux-copy
@@ -58,19 +58,11 @@
  *       legacy early-returns with no auxWrites; the metadata's
  *       `auxWritePorts` returns an empty Map so the runtime doesn't
  *       try to `aux.set("", ...)`.
- *
- * The existing Slice-1.2 test (b) already exercises AES-128 CBC encrypt
- * under flag-on — but `xor-aux-into-state` + `state-to-aux` were both
- * still legacy then, so the per-leaf dispatch took the legacy branch for
- * those steps. After Slice 1.5 they take the ported branch; the gate
- * re-runs the same KAT to confirm the cipher's algebra still holds.
  */
 
-import { aes128CbcSpec } from "@/ciphers/aes-128-cbc";
-import { aes128CbcDecryptSpec } from "@/ciphers/aes-128-cbc-decrypt";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
+import { makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, CipherSpec, State, TraceFrame } from "@/core/types";
 import { describe, expect, it } from "vitest";
@@ -279,60 +271,9 @@ describe("runtime — ported dispatch, Slice 1.5 chaining primitives", () => {
     });
   });
 
-  // ─── (b) AES-128 CBC encrypt — full frame parity ────────────────────────
-
-  describe("(b) AES-128 CBC encrypt (NIST SP 800-38A §F.2.1)", () => {
-    const KEY = "2b7e151628aed2a6abf7158809cf4f3c";
-    const IV = "000102030405060708090a0b0c0d0e0f";
-    const PLAINTEXT_4_BLOCKS =
-      "6bc1bee22e409f96e93d7e117393172a" +
-      "ae2d8a571e03ac9c9eb76fac45af8e51" +
-      "30c81c46a35ce411e5fbc1191a0a52ef" +
-      "f69f2445df4f9b17ad2b417be66c3710";
-    const CBC_CIPHERTEXT_4_BLOCKS =
-      "7649abac8119b246cee98e9b12e9197d" +
-      "5086cb9b507219ee95db113a917678b2" +
-      "73bed6b8e3c1743b7116e69e22229516" +
-      "3ff1caa1681fac09120eca307586e1a7";
-
-    const initial = () => makeBytesState(bytesFromHex(PLAINTEXT_4_BLOCKS));
-    const buildAux = (): Map<string, AuxValue> =>
-      new Map<string, AuxValue>([
-        ["key", bytesFromHex(KEY)],
-        ["iv", bytesFromHex(IV)],
-      ]);
-
-    it("produces the published ciphertext under portedDispatchEnabled: true (KAT sanity floor)", () => {
-      const trace = runSpec(aes128CbcSpec, buildDefaultRegistry(), {
-        initialState: initial(),
-        initialAux: buildAux(),
-        portedDispatchEnabled: true,
-      });
-      expect(trace.finalState.shape).toBe("bytes");
-      if (trace.finalState.shape !== "bytes") return;
-      expect(hexFromBytes(trace.finalState.bytes)).toBe(CBC_CIPHERTEXT_4_BLOCKS);
-    });
-
-    it("emits frame-by-frame byte-equal traces vs legacy dispatch (all chaining primitives ported)", () => {
-      // After Slice 1.5, every leaf the CBC encrypt body touches is on
-      // the ported path: key-expansion + AES core (Slice 1.4), padding
-      // (Slice 1.3), iv-load (Slice 1.2), and now xor-aux-into-state +
-      // state-to-aux (Slice 1.5). split/concat/count and the iterate
-      // runtime stay legacy per Slice 1.3 deferral, but they sit
-      // OUTSIDE the per-leaf dispatch so they're invariant to the flag.
-      const legacy = runSpec(aes128CbcSpec, buildDefaultRegistry(), {
-        initialState: initial(),
-        initialAux: buildAux(),
-      });
-      const ported = runSpec(aes128CbcSpec, buildDefaultRegistry(), {
-        initialState: initial(),
-        initialAux: buildAux(),
-        portedDispatchEnabled: true,
-      });
-
-      expectFrameStreamsEqual(ported.frames, legacy.frames, "aes-128 cbc encrypt");
-    });
-  });
+  // ─── (b) AES-128 CBC encrypt — REMOVED in Slice B1.4b ───────────────────
+  // CBC is now byte-native (no legacy frame stream); KAT in aes-128-cbc-kat.
+  // The chaining primitives stay parity-pinned by the synthetic (a)/(c-pre).
 
   // ─── (c-pre) Per-primitive: aux-copy preserves MatrixState variant ─────
   //
@@ -469,74 +410,12 @@ describe("runtime — ported dispatch, Slice 1.5 chaining primitives", () => {
     });
   });
 
-  // ─── (c) AES-128 CBC decrypt — UNSKIPPED 2026-05-23 (Slice 1.5b GREEN) ─
-  //
-  // Originally `describe.skip`d at Slice 1.5 because the decrypt CBC body
-  // advances the chain via `aux-copy(next-chain → chain)` where
-  // `aux[next-chain]` is a MatrixState (written by `state-to-aux`, ported
-  // in 1.5). `aux-copy` was ported in Slice 1.2 with a STATIC
-  // `PortContract.outputs["result"].layout: "raw"`, which dropped the
-  // MatrixState variant on decode and corrupted the next iteration's
-  // `xor-aux-into-state` aux read.
-  //
-  // Slice 1.5b (Open #2 fix, candidate (a)) added a
-  // `"preserve-input-variant"` layout sentinel: the runtime captures the
-  // source AuxValue from `portedAuxRead.get(<first auxReadPorts binding>)`
-  // and `auxPortBytesToValue` clones the source variant shape with a
-  // fresh-bytes copy of the output bytes. aux-copy's output port now
-  // declares the sentinel; one input → one output makes the
-  // single-source convention unambiguous.
-  //
-  // This block becomes the gate: KAT sanity (decrypt produces the original
-  // plaintext under flag-on) + frame-by-frame parity with legacy across
-  // the full multi-block chain-advance path.
-
-  describe("(c) AES-128 CBC decrypt (NIST SP 800-38A §F.2.2) — variant-preserving aux passthrough", () => {
-    const KEY = "2b7e151628aed2a6abf7158809cf4f3c";
-    const IV = "000102030405060708090a0b0c0d0e0f";
-    const PLAINTEXT_4_BLOCKS =
-      "6bc1bee22e409f96e93d7e117393172a" +
-      "ae2d8a571e03ac9c9eb76fac45af8e51" +
-      "30c81c46a35ce411e5fbc1191a0a52ef" +
-      "f69f2445df4f9b17ad2b417be66c3710";
-    const CBC_CIPHERTEXT_4_BLOCKS =
-      "7649abac8119b246cee98e9b12e9197d" +
-      "5086cb9b507219ee95db113a917678b2" +
-      "73bed6b8e3c1743b7116e69e22229516" +
-      "3ff1caa1681fac09120eca307586e1a7";
-
-    const initial = () => makeBytesState(bytesFromHex(CBC_CIPHERTEXT_4_BLOCKS));
-    const buildAux = (): Map<string, AuxValue> =>
-      new Map<string, AuxValue>([
-        ["key", bytesFromHex(KEY)],
-        ["iv", bytesFromHex(IV)],
-      ]);
-
-    it("produces the original plaintext under portedDispatchEnabled: true (KAT sanity floor)", () => {
-      const trace = runSpec(aes128CbcDecryptSpec, buildDefaultRegistry(), {
-        initialState: initial(),
-        initialAux: buildAux(),
-        portedDispatchEnabled: true,
-      });
-      expect(trace.finalState.shape).toBe("bytes");
-      if (trace.finalState.shape !== "bytes") return;
-      expect(hexFromBytes(trace.finalState.bytes)).toBe(PLAINTEXT_4_BLOCKS);
-    });
-
-    it("emits frame-by-frame byte-equal traces vs legacy dispatch (chain-advance path covered)", () => {
-      const legacy = runSpec(aes128CbcDecryptSpec, buildDefaultRegistry(), {
-        initialState: initial(),
-        initialAux: buildAux(),
-      });
-      const ported = runSpec(aes128CbcDecryptSpec, buildDefaultRegistry(), {
-        initialState: initial(),
-        initialAux: buildAux(),
-        portedDispatchEnabled: true,
-      });
-
-      expectFrameStreamsEqual(ported.frames, legacy.frames, "aes-128 cbc decrypt");
-    });
-  });
+  // ─── (c) AES-128 CBC decrypt — REMOVED in Slice B1.4b ───────────────────
+  // Was the legacy-vs-ported gate for the matrix decrypt chain-advance
+  // (`aux-copy(next-chain → chain)`). Byte-native CBC decrypt has no aux chain
+  // (the chain rides the iterate's `chain` port) and no legacy frame stream;
+  // its KAT lives in aes-128-cbc-kat. The `aux-copy` variant-preservation it
+  // exercised is still pinned by the (c-pre) synthetic spec above.
 
   // ─── (d) Empty-auxName parity (fresh-palette-drop sentinel) ─────────────
 

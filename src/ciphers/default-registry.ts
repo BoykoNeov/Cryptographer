@@ -34,6 +34,11 @@ import {
 import { auxXor, auxXorDoc, auxXorMeta, auxXorPortContract } from "../steps/aux-xor";
 import { byteSlice, byteSliceDoc, byteSlicePortContract } from "../steps/byte-slice";
 import {
+  byteSubstitute,
+  byteSubstituteDoc,
+  byteSubstitutePortContract,
+} from "../steps/byte-substitute";
+import {
   byteSubstitution,
   byteSubstitutionDoc,
   byteSubstitutionMeta,
@@ -103,6 +108,11 @@ import {
   feistelToyAddKPortContract,
 } from "../steps/feistel-toy-add-k";
 import {
+  gfMatrixMultiply,
+  gfMatrixMultiplyDoc,
+  gfMatrixMultiplyPortContract,
+} from "../steps/gf-matrix-multiply";
+import {
   iso78164Pad,
   iso78164PadDoc,
   iso78164PadMeta,
@@ -134,6 +144,7 @@ import {
 } from "../steps/mix-columns";
 import { not, notDoc, notPortContract } from "../steps/not";
 import { padWithByte, padWithByteDoc, padWithBytePortContract } from "../steps/pad-with-byte";
+import { permute, permuteDoc, permutePortContract } from "../steps/permute";
 import { pkcs7Pad, pkcs7PadDoc, pkcs7PadMeta, pkcs7PadPortContract } from "../steps/pkcs7-pad";
 import {
   pkcs7Unpad,
@@ -253,6 +264,12 @@ import {
   xorAuxIntoStateMeta,
   xorAuxIntoStatePortContract,
 } from "../steps/xor-aux-into-state";
+import {
+  xorWithAux,
+  xorWithAuxDoc,
+  xorWithAuxMeta,
+  xorWithAuxPortContract,
+} from "../steps/xor-with-aux";
 import { zeroPad, zeroPadDoc, zeroPadMeta, zeroPadPortContract } from "../steps/zero-pad";
 import { zeroUnpad, zeroUnpadDoc, zeroUnpadMeta, zeroUnpadPortContract } from "../steps/zero-unpad";
 
@@ -872,6 +889,46 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: shiftBitsRight,
     shape: shiftBitsRightPortContract,
     doc: shiftBitsRightDoc,
+  });
+  // ─── AES round primitives (Slice B1.1 — scaffolding-suppression Phase B) ─
+  // Byte-native replacements for the matrix round body. `byte-substitute@1`
+  // (SubBytes), `permute@1` (ShiftRows), `gf-matrix-multiply@1` (MixColumns)
+  // each do the identical math the legacy `generic.byte-substitution@1` /
+  // `generic.shift-rows@1` / `generic.mix-columns@1` did, but on a flat
+  // `Uint8Array` with `layout:"raw"` ports — so they stay off the A4
+  // `NON_BYTES_ALLOWLIST` (the matrix lifts get removed from it when ECB/CBC
+  // are converted in B1.4). AddRoundKey is `xor-with-aux@1` (Finding F3,
+  // 2026-05-30) — a single port-native step that reads its `roundKey.N` from
+  // aux internally, replacing the earlier `aux-load-bytes@1` (fetch-rk) +
+  // `xor@1` pair so the graph reads AddRoundKey as one FIPS-197 §5.1.4 op.
+  r.register("byte-substitute@1", {
+    kind: "ported",
+    executor: byteSubstitute,
+    shape: byteSubstitutePortContract,
+    doc: byteSubstituteDoc,
+  });
+  r.register("permute@1", {
+    kind: "ported",
+    executor: permute,
+    shape: permutePortContract,
+    doc: permuteDoc,
+  });
+  r.register("gf-matrix-multiply@1", {
+    kind: "ported",
+    executor: gfMatrixMultiply,
+    shape: gfMatrixMultiplyPortContract,
+    doc: gfMatrixMultiplyDoc,
+  });
+  // AddRoundKey: XOR the round key (read from `aux["roundKey.N"]` internally
+  // via `meta.auxReadPorts`) into the carried `input` port. Hybrid ported
+  // shape (executor + meta, no legacy) — same registration posture as
+  // `aux-load-bytes@1`. Raw-only ports → off the A4 allowlist.
+  r.register("xor-with-aux@1", {
+    kind: "ported",
+    executor: xorWithAux,
+    shape: xorWithAuxPortContract,
+    meta: xorWithAuxMeta,
+    doc: xorWithAuxDoc,
   });
   // ─── Port-native bridges (Slice 2.6b — universal-port plan) ────────────
   // Three port-native primitives that bridge between the port-native

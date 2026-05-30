@@ -243,9 +243,20 @@ export const IterateGroupSchema = z.object({
   // `label` is optional in the TS contract — `.optional()` accepts the
   // key being absent (the serialized form omits undefined values).
   label: z.string().optional(),
-  countFromAux: z.string(),
-  blocksFromAux: z.string(),
-  outBlocksAux: z.string(),
+  // Aux mode (legacy matrix CBC/CTR) — required there, absent in port mode
+  // (byte-native ECB, scaffolding-suppression B1.4) where `seedInput` +
+  // `blockByteLength` + `bodyOutput` drive the loop instead.
+  countFromAux: z.string().optional(),
+  blocksFromAux: z.string().optional(),
+  outBlocksAux: z.string().optional(),
+  // Port mode — block split width (16 for AES). Required when `seedInput` set.
+  blockByteLength: z.number().int().positive().optional(),
+  // Cross-iteration feedback (B1.4b — byte-native CBC). `chainInput` (parent
+  // scope, the IV) + `chainFeedback` (body scope, per-iteration carry). Both
+  // optional + both-or-neither at runtime; declared so they survive Save/Load
+  // (Zod strips undeclared keys — same gotcha as `seedInput`/`cipherConstants`).
+  chainInput: PortBindingSchema.optional(),
+  chainFeedback: PortBindingSchema.optional(),
   children: z.array(z.lazy(() => StepNodeSchema)),
   ...containerPortEdgeFields,
   ...loopingContainerSeedFields,

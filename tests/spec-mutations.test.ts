@@ -12,7 +12,6 @@ import {
   updateStepParams,
 } from "@/core/spec-mutations";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue, Json } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
@@ -22,7 +21,7 @@ describe("spec mutation helpers", () => {
       // round.1.sub-bytes lives inside the round.1 group.
       const found = findStep(aes128Spec, "round.1.sub-bytes");
       expect(found).not.toBeNull();
-      expect(found?.type).toBe("generic.byte-substitution@1");
+      expect(found?.type).toBe("byte-substitute@1");
     });
 
     it("returns null for a non-existent id", () => {
@@ -68,7 +67,7 @@ describe("spec mutation helpers", () => {
       // type aes.key-expansion@1, not byte-substitution. So 10 round
       // SubBytes steps will be updated.
       const identitySbox = Array.from({ length: 256 }, (_, i) => i);
-      const updated = updateAllStepsByType(aes128Spec, "generic.byte-substitution@1", (params) => ({
+      const updated = updateAllStepsByType(aes128Spec, "byte-substitute@1", (params) => ({
         ...(params as { sbox: number[] }),
         sbox: identitySbox,
       }));
@@ -84,7 +83,7 @@ describe("spec mutation helpers", () => {
         }[],
       ): void => {
         for (const node of nodes) {
-          if (node.kind === "step" && node.type === "generic.byte-substitution@1") {
+          if (node.kind === "step" && node.type === "byte-substitute@1") {
             count++;
             const sbox = (node.params as { sbox: number[] }).sbox;
             expect(sbox).toEqual(identitySbox);
@@ -121,7 +120,7 @@ describe("spec mutation helpers", () => {
       const d = diffs[0];
       expect(d?.stepId).toBe("round.1.sub-bytes");
       expect(d?.paramName).toBe("sbox");
-      expect(d?.stepType).toBe("generic.byte-substitution@1");
+      expect(d?.stepType).toBe("byte-substitute@1");
       const cells = d?.cells ?? [];
       expect(cells.length).toBe(1);
       const c = cells[0] as ParamCellDiff;
@@ -187,12 +186,13 @@ describe("spec mutation helpers", () => {
       // The headline modularity test. Swap every S-box for the identity
       // permutation, run encryption, expect a different ciphertext.
       const identitySbox = Array.from({ length: 256 }, (_, i) => i);
-      const swapped = updateAllStepsByType(aes128Spec, "generic.byte-substitution@1", (params) => ({
+      const swapped = updateAllStepsByType(aes128Spec, "byte-substitute@1", (params) => ({
         ...(params as { sbox: number[] }),
         sbox: identitySbox,
       }));
 
-      const pt = matrixFromBytes(bytesFromHex("00112233445566778899aabbccddeeff"));
+      // Byte-native AES-128 (Slice B1): bytes state + ported dispatch.
+      const pt = makeBytesState(bytesFromHex("00112233445566778899aabbccddeeff"));
       const initialAux = new Map<string, AuxValue>([
         ["key", bytesFromHex("000102030405060708090a0b0c0d0e0f")],
       ]);
@@ -200,9 +200,10 @@ describe("spec mutation helpers", () => {
       const trace = runSpec(swapped, buildDefaultRegistry(), {
         initialState: pt,
         initialAux,
+        portedDispatchEnabled: true,
       });
 
-      if (trace.finalState.shape !== "matrix4x4-bytes") throw new Error("bad shape");
+      if (trace.finalState.shape !== "bytes") throw new Error("bad shape");
       // Output should NOT be the standard AES ciphertext anymore.
       expect(hexFromBytes(trace.finalState.bytes)).not.toBe("69c4e0d86a7b0430d8cdb78070b4c55a");
     });

@@ -30,12 +30,14 @@ const runRoundTrip = (rawInput: Uint8Array): Uint8Array => {
   const encTrace = runSpec(encSpec, buildDefaultRegistry(), {
     initialState: makeBytesState(rawInput),
     initialAux: new Map<string, AuxValue>([["key", keyBytes]]),
+    portedDispatchEnabled: true,
   });
   if (encTrace.finalState.shape !== "bytes") throw new Error("encrypt did not produce bytes");
 
   const decTrace = runSpec(decSpec, buildDefaultRegistry(), {
     initialState: makeBytesState(encTrace.finalState.bytes),
     initialAux: new Map<string, AuxValue>([["key", keyBytes]]),
+    portedDispatchEnabled: true,
   });
   if (decTrace.finalState.shape !== "bytes") throw new Error("decrypt did not produce bytes");
   return decTrace.finalState.bytes;
@@ -71,6 +73,7 @@ describe("multi-block ECB + PKCS#7 boundary cases", () => {
     const trace = runSpec(encSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(input),
       initialAux: new Map<string, AuxValue>([["key", keyBytes]]),
+      portedDispatchEnabled: true,
     });
     if (trace.finalState.shape !== "bytes") return;
     // 16 bytes input → 32 bytes padded → 32 bytes ciphertext (2 blocks).

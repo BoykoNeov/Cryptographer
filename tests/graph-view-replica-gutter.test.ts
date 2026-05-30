@@ -53,7 +53,6 @@ import {
 } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
-import { matrixFromBytes } from "@/core/state/matrix";
 import type { AuxValue } from "@/core/types";
 import { layoutConstantsFor, layoutRoot, visualEdgeTargetId } from "@/ui/components/GraphView";
 import { __setOffsetsEnabledForTest } from "@/ui/stores/offsets-hatch";
@@ -73,7 +72,8 @@ const AES128_PT = "00112233445566778899aabbccddeeff";
 
 const aes128Graph = (): CipherGraph => {
   const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
-    initialState: matrixFromBytes(bytesFromHex(AES128_PT)),
+    initialState: makeBytesState(bytesFromHex(AES128_PT)),
+    portedDispatchEnabled: true,
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
   });
   return deriveAuxGraph(trace, aes128Spec);
@@ -92,6 +92,8 @@ const aes128EcbReplicatedGraph = (): CipherGraph => {
   const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(ECB_PT_1_BLOCK)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(ECB_KEY)]]),
+    // Byte-native ECB (B1.4) — port-mode iterate + port-native body.
+    portedDispatchEnabled: true,
   });
   return replicateHighFanoutSources(deriveAuxGraph(trace, aes128EcbSpec), 6);
 };
@@ -114,6 +116,49 @@ const serpent128ReplicatedGraph = (): CipherGraph => {
   return replicateHighFanoutSources(deriveAuxGraph(trace, serpent128Spec), 6);
 };
 
+// Synthetic spine-replica graph — scaffolding-suppression Slice B1.
+//
+// Byte-native AES-128 (the former matrix fixture for the two spine-replica
+// tests below) has NO state spine: the working state carries port-to-port, so
+// `inferStateEdges` emits nothing and the spine-replica
+// `key-expansion@->initial.add-round-key` no longer exists. No other shipped
+// cipher exercises this exact branch either — Serpent uses the lift branch
+// (consumer-is-first-child), DES is Feistel, and aes-192/256 go byte-native in
+// B1.3. Per the Bucket-C policy ("keep state-spine machinery covered until
+// Phase C"), drive `layoutRoot`'s spine-replica path with a hand-built graph —
+// the same pattern `makeMultiReplicaGraph` (below) uses for aux replicas.
+//
+// The mechanism under test: `buildReplicaPlacement` EXCLUDES `isSpineReplica`
+// nodes from `isReplica` (GraphView.tsx ~937), so the spine-replica flows as a
+// REGULAR leaf at the source's old root slot — on the spine row, no lift.
+// Retire alongside `inferStateEdges` in Phase C.
+const SPINE_CONSUMER_ID = "initial.add-round-key";
+const SPINE_REPLICA_ID = `key-expansion@->${SPINE_CONSUMER_ID}`;
+const syntheticSpineReplicaGraph = (): CipherGraph => ({
+  nodes: [
+    {
+      stepId: SPINE_CONSUMER_ID,
+      stepType: "test.consumer",
+      label: SPINE_CONSUMER_ID,
+      containerPath: [],
+    },
+    {
+      stepId: SPINE_REPLICA_ID,
+      stepType: "test.source",
+      label: SPINE_REPLICA_ID,
+      containerPath: [],
+      replicaOf: "key-expansion",
+      isSpineReplica: true,
+    },
+  ],
+  containers: [],
+  // The spine edge the replica carries into its consumer (state-kind; for
+  // `kind: "state"` the auxKey sentinel is "state").
+  edges: [{ from: SPINE_REPLICA_ID, to: SPINE_CONSUMER_ID, auxKey: "state", kind: "state" }],
+  // Source's old slot first — Slice 7b removed the original `key-expansion`.
+  rootIds: [SPINE_REPLICA_ID, SPINE_CONSUMER_ID],
+});
+
 // ─── Tests ─────────────────────────────────────────────────────────────────
 
 describe("GraphView — replica side-gutter inside vertical-stack groups", () => {
@@ -123,7 +168,8 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
     const { boxes } = layoutRoot(g, empty, layoutConstantsFor("normal"));
 
     // Sample a handful of rounds — the property holds for every round in
-    // AES-128 because every round.N.add-round-key consumes a round key.
+    // byte-native AES-128 because every round.N.add-round-key pulls a round key
+    // from the high-fanout key-expansion source.
     for (const n of [1, 5, 10]) {
       const consumerId = `round.${n}.add-round-key`;
       const replicaId = `key-expansion@->${consumerId}`;
@@ -179,10 +225,12 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
   });
 
   it("the in-column children (sub-bytes / shift-rows / mix-columns / add-round-key) stay vertically aligned with each other", () => {
-    // The pedagogical headline: state spine flows through one clean
-    // column. After the gutter fix, the four non-replica children of
-    // each round should share an x-coordinate (or share width and start)
-    // — same column.
+    // The pedagogical headline: the working state flows through one clean
+    // column. After the gutter fix, the non-replica children of each round
+    // should share an x-coordinate (or share width and start) — same column.
+    // Byte-native round.5 has four children (Finding F3 merged the round-key
+    // fetch into the single `xor-with-aux@1` AddRoundKey); all live in the
+    // column, the key-expansion replica in the gutter.
     const g = aes128ReplicatedGraph();
     const { boxes } = layoutRoot(
       g,
@@ -196,7 +244,7 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
       "round.5.add-round-key",
     ];
     const xs = ids.map((id) => boxes.get(id)?.x);
-    // All four x-coordinates are the same number (they share the column).
+    // All x-coordinates are the same number (they share the column).
     expect(new Set(xs).size).toBe(1);
     // And the replica's x is strictly less than that shared column x.
     const replicaX = boxes.get("key-expansion@->round.5.add-round-key")?.x;
@@ -224,14 +272,17 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
     // `tests/replicate-fanout.test.ts` for the structural assertions
     // and `GraphView.tsx::buildReplicaPlacement` for the `isReplica`
     // exclusion that drives this layout difference.
-    const g = aes128ReplicatedGraph();
+    //
+    // Synthetic fixture (Slice B1): byte-native AES has no state spine, so this
+    // branch is driven by a hand-built graph — see `syntheticSpineReplicaGraph`.
+    const g = syntheticSpineReplicaGraph();
     const { boxes } = layoutRoot(
       g,
       new Map<string, { x: number; y: number }>(),
       layoutConstantsFor("normal"),
     );
-    const consumerBox = boxes.get("initial.add-round-key");
-    const replicaBox = boxes.get("key-expansion@->initial.add-round-key");
+    const consumerBox = boxes.get(SPINE_CONSUMER_ID);
+    const replicaBox = boxes.get(SPINE_REPLICA_ID);
     if (!consumerBox || !replicaBox) throw new Error("missing root box");
     // Spine-replica flows at the spine row (same y as consumer).
     expect(replicaBox.y).toBe(consumerBox.y);
@@ -262,9 +313,10 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
   it("inside an iterate body (AES-128-ECB), replicas also lift above their consumer", () => {
     // Symmetric to the root-level test: the iterate body is also a
     // horizontal flow, so its spliced-before-consumer replicas need the
-    // same orthogonal lift. AES-128-ECB's `key-expansion@->initial.add-
-    // round-key` replica lands at iterate-body level (the consumer is
-    // INSIDE the iterate, unlike single-block AES where it's at root).
+    // same orthogonal lift. Byte-native ECB (B1.4): key-expansion's per-round
+    // consumers are the `*.add-round-key` (`aux-load-bytes@1`) leaves inside the
+    // iterate; the first is `initial.add-round-key`, so the replica is
+    // `key-expansion@->initial.add-round-key` and it lifts above that consumer.
     const g = aes128EcbReplicatedGraph();
     const { boxes } = layoutRoot(
       g,
@@ -685,13 +737,15 @@ describe("GraphView — aux-only root leaves are lifted above the spine row", ()
     // root level in AES-128 single-block — they live inside round
     // groups), the two-row layout still applies for those — see
     // `tests/graph-view-replica-placement.test.ts` for that case.
-    const g = aes128ReplicatedGraph();
+    // Synthetic fixture (Slice B1): byte-native AES has no state spine, so this
+    // branch is driven by a hand-built graph — see `syntheticSpineReplicaGraph`.
+    const g = syntheticSpineReplicaGraph();
     const consts = layoutConstantsFor("normal");
     const empty = new Map<string, { x: number; y: number }>();
     const { boxes } = layoutRoot(g, empty, consts);
 
-    const replica = boxes.get("key-expansion@->initial.add-round-key");
-    const initial = boxes.get("initial.add-round-key");
+    const replica = boxes.get(SPINE_REPLICA_ID);
+    const initial = boxes.get(SPINE_CONSUMER_ID);
     if (!replica || !initial) throw new Error("missing key boxes");
     // Spine-replica flows at CANVAS_MARGIN — the spine row, no lift.
     expect(replica.y).toBe(60);
@@ -730,61 +784,16 @@ describe("GraphView — aux-only root leaves are lifted above the spine row", ()
  * read," matching the runtime's read order.
  */
 describe("GraphView — root replica with iterate consumer anchors above first body child", () => {
-  it("the spine-replica with iterate consumer flows at source's old root slot (NOT above the iterate)", () => {
-    // Replica-scope-aware fix (2026-05-17, narrow). `compute-block-count`
-    // has only one outgoing edge — the aux edge to `ecb-blocks` (which
-    // doubles as the fallback spineSuccessor target, since `ecb-blocks`
-    // is an iterate and `inferStateEdges`'s iterate-boundary rule
-    // suppresses any state edge to it). So `compute-block-count@->
-    // ecb-blocks` IS the spine-replica.
-    //
-    // Pre-fix behavior (asserted by the old version of this test):
-    // the replica was lifted above the iterate body's first child via
-    // the Slice-2 anchor. That anchor logic STILL EXISTS in `layoutRoot`
-    // — it just no longer applies to the spine-replica, which under
-    // the narrow fix flows at source's old root slot like any other
-    // root leaf. Aux-fan-out replicas with iterate consumers still
-    // use the Slice-2 anchor — see the sibling test below.
-    const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
-      initialState: makeBytesState(bytesFromHex(ECB_PT_1_BLOCK)),
-      initialAux: new Map<string, AuxValue>([["key", bytesFromHex(ECB_KEY)]]),
-    });
-    const replicated = replicateHighFanoutSources(deriveAuxGraph(trace, aes128EcbSpec), 6, {
-      "compute-block-count": "always",
-    });
-    const consts = layoutConstantsFor("normal");
-    const empty = new Map<string, { x: number; y: number }>();
-    const { boxes } = layoutRoot(replicated, empty, consts);
-
-    const replicaId = "compute-block-count@->ecb-blocks";
-    const replicaBox = boxes.get(replicaId);
-    const iterateBox = boxes.get("ecb-blocks");
-    const splitBlocksBox = boxes.get("split-blocks");
-    if (!replicaBox || !iterateBox || !splitBlocksBox) {
-      throw new Error(
-        `missing box: replica=${!!replicaBox} iterate=${!!iterateBox} splitBlocks=${!!splitBlocksBox}`,
-      );
-    }
-
-    // Headline: spine-replica is on the same row as its sibling root
-    // leaves (the spine row at CANVAS_MARGIN = 60), NOT lifted above
-    // the iterate. Pre-fix the assertion was `replicaBox.y < iterateBox.y`;
-    // post-fix it's the inverse — same row.
-    expect(replicaBox.y).toBe(iterateBox.y);
-    expect(replicaBox.y).toBe(splitBlocksBox.y);
-
-    // The replica sits at source's old slot in rootIds: pre-replication
-    // root was `[key-expansion, split-blocks, compute-block-count,
-    // ecb-blocks, concat-blocks]`. After replication compute-block-count
-    // is removed and the spine-replica replaces it, so layout flow puts
-    // it RIGHT of split-blocks and LEFT of the iterate.
-    expect(replicaBox.x).toBeGreaterThan(splitBlocksBox.x);
-    expect(replicaBox.x).toBeLessThan(iterateBox.x);
-
-    // Original compute-block-count is gone (Slice 7b removal — pre-fix
-    // this was already true; reasserted here for clarity).
-    expect(boxes.get("compute-block-count")).toBeUndefined();
-  });
+  // [DELETED B1.4a] The AES-128-ECB integration test that force-replicated
+  // `compute-block-count` (an aux-mode multi-block plumbing leaf) and asserted
+  // the matrix spine-replica-to-iterate placement / `visualEdgeTargetId`
+  // retarget is gone: byte-native ECB (port-mode iterate) has no
+  // compute-block-count / split-blocks and produces no replica edge pointing
+  // AT the iterate (key-expansion replicates to the in-body `*.add-round-key`
+  // leaves instead). The underlying layout machinery stays covered by the
+  // SYNTHETIC fixtures in this file (sibling tests below). Per the sweep
+  // discriminator we do NOT retarget this matrix-structure integration onto
+  // soon-to-convert CBC; it retires with Phase C / the matrix iterate.
 
   it("an aux-fan-out replica with iterate consumer still anchors above first body child (Slice-2 invariant)", () => {
     // Slice-2 anchor logic still applies to aux-fan-out replicas — the
@@ -1206,38 +1215,6 @@ describe("visualEdgeTargetId — retargets replica→iterate edges to first body
       kind: "aux",
     };
     expect(visualEdgeTargetId(edge, nodesById, containersById)).toBe("ecb-blocks");
-  });
-
-  it("AES-128 ECB integration: compute-block-count replica retargets to initial.add-round-key", () => {
-    // The headline end-to-end check: force replication of
-    // `compute-block-count` and verify the helper produces the right
-    // visual target against the real derived graph. Combined with
-    // Slice 2's source-side anchor (also at `initial.add-round-key`'s
-    // x), this yields a perfectly vertical arrow on AES-128 ECB
-    // since `initial.add-round-key` is a leaf — replica.center.x ==
-    // firstChild.center.x.
-    const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
-      initialState: makeBytesState(bytesFromHex(ECB_PT_1_BLOCK)),
-      initialAux: new Map<string, AuxValue>([["key", bytesFromHex(ECB_KEY)]]),
-    });
-    const replicated = replicateHighFanoutSources(deriveAuxGraph(trace, aes128EcbSpec), 6, {
-      "compute-block-count": "always",
-    });
-    const nodesById = new Map<string, GraphNode>();
-    for (const n of replicated.nodes) nodesById.set(n.stepId, n);
-    const containersById = new Map<string, ContainerNode>();
-    for (const c of replicated.containers) containersById.set(c.id, c);
-    const replicaEdge = replicated.edges.find(
-      (e) => e.from === "compute-block-count@->ecb-blocks" && e.to === "ecb-blocks",
-    );
-    if (!replicaEdge) {
-      throw new Error(
-        "missing replica edge compute-block-count@->ecb-blocks → ecb-blocks in derived graph",
-      );
-    }
-    expect(visualEdgeTargetId(replicaEdge, nodesById, containersById)).toBe(
-      "initial.add-round-key",
-    );
   });
 
   // Option C — collapsed-iterate retarget escape hatch. When the iterate's

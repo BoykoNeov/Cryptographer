@@ -7,62 +7,71 @@
  * blocks → identical ciphertext blocks" ECB leak. The IV bootstraps the
  * chain (block 0's "previous ciphertext" is the IV).
  *
- * Spec shape (encrypt):
+ * **Byte-native (scaffolding-suppression Slice B1.4b).** Like ECB, CBC is now
+ * a pure port-graph spec — every leaf consumes/emits only `Uint8Array`. The
+ * matrix `split-blocks`/`iv-load`/`concat-blocks` boundary, the matrix round
+ * body, and the aux-mediated chain (`state-to-aux`/`xor-aux-into-state`/
+ * `aux-copy`) are all gone. The cross-iteration chain rides a **port** instead
+ * of an aux slot, via the port-mode `iterate`'s `chainInput`/`chainFeedback`
+ * fields (B1.4b runtime):
  *
  *   [
- *     key-expansion              (writes roundKey.0..N to aux; passthrough)
- *     split-blocks               (writes aux[input-blocks]: MatrixState[])
- *     compute-block-count        (writes aux[blockCount])
- *     iv-load                    (aux[iv] (bytes) → aux[chain] (MatrixState))
- *     iterate count=blockCount,
- *             blocks=input-blocks,
- *             out=output-blocks {
- *       xor-aux-into-state(chain)        ← state ⊕= prev-ciphertext (or IV)
- *       initial AddRoundKey               ┐
- *       round.1..N-1                       │ AES core (same body as ECB)
- *       round.N (no MixColumns)           ┘
- *       state-to-aux(chain)              ← snapshot ciphertext for next iter
+ *     key-expansion (aux-only — writes roundKey.0..N once, before the loop)
+ *     fetch-iv      (aux-load-bytes@1 — reads aux["iv"] (16 bytes) onto a port)
+ *     iterate "cbc-blocks" {
+ *       seedInput:     $input                  // the (padded) plaintext bytes
+ *       blockByteLength: 16                     // split into 16-byte AES blocks
+ *       chainInput:    port(fetch-iv,"output")  // IV bootstraps the chain
+ *       chainFeedback: <see below>              // advances the chain per block
+ *       bodyOutput:    <see below>              // each block's result
+ *       outputPorts:   ["out"]                  // concatenated output
+ *       children:      [ byte-native CBC body ]
  *     }
- *     concat-blocks              (aux[output-blocks] → BytesState)
  *   ]
+ *   spec.outputFrom = port("cbc-blocks", "out")
  *
- * Decrypt (same shell, inverted body):
+ * The runtime injects each 16-byte input block as `port("cbc-blocks","in")`
+ * AND the running chain value as `port("cbc-blocks","chain")` (the IV for
+ * block 0, then `chainFeedback` of the previous iteration). The encrypt /
+ * decrypt asymmetry lives entirely in the spec — same uniform runtime carry:
  *
- *   [
- *     key-expansion, split-blocks, compute-block-count, iv-load,
- *     iterate { … inverse body … },
- *     concat-blocks
- *   ]
+ * **Encrypt body** (`C_i = E(P_i ⊕ C_{i-1})`, `C_{-1} = IV`):
+ *   cbc-xor  (xor@1: port(it,"in") ⊕ port(it,"chain"))  → P_i ⊕ C_{i-1}
+ *   AES encrypt body, reading the cbc-xor output           → C_i
+ *   bodyOutput = chainFeedback = round.N.out (= C_i)        // output feeds chain
  *
- * Inverse body:
+ * **Decrypt body** (`P_i = D(C_i) ⊕ C_{i-1}`, `C_{-1} = IV`):
+ *   AES decrypt body, reading port(it,"in") (the raw C_i)  → D(C_i)
+ *   cbc-xor  (xor@1: D(C_i) ⊕ port(it,"chain"))            → P_i
+ *   bodyOutput = cbc-xor.output (= P_i)
+ *   chainFeedback = port(it,"in") (= raw C_i)               // input feeds chain
  *
- *   state-to-aux(next-chain)     ← snapshot incoming ciphertext C_i
- *   inv-initial AddRoundKey
- *   inv-round.{N-1}..1
- *   inv-round.0 (no InvMixColumns)
- *   xor-aux-into-state(chain)    ← state ⊕= prev ciphertext (or IV)
- *   aux-copy(next-chain → chain) ← advance chain := C_i for next iter
+ * That `chainFeedback = port(it,"in")` resolves because the runtime seeds the
+ * body scope's node-output map with the injected `in`/`chain` ports and they
+ * survive the body walk (see `runtime.ts` `walk`).
  *
- * Cycle proof (iter i): chain holds C_{i-1} (or IV for i=0). After
- * state-to-aux(next-chain), aux[next-chain]=C_i and the running state is
- * still C_i. Inverse AES gives state=P_i ⊕ C_{i-1}. XOR with chain
- * (=C_{i-1}) yields P_i — that's the plaintext block. aux-copy then
- * advances chain := next-chain = C_i so the next iteration's XOR uses
- * the correct previous ciphertext. The padding/concat shell collects each
- * P_i into the final BytesState.
+ * Padding is layered on top by `applyPaddingScheme` exactly as for byte-native
+ * ECB (the `hasByteNativeIterate` branch): encrypt prepends `pkcs7-pad` and
+ * repoints the iterate's `seedInput` to it; decrypt appends `pkcs7-unpad` and
+ * moves `spec.outputFrom` onto it. `fetch-iv` reads `aux["iv"]`, never
+ * `$input`, so the pad-input repoint leaves it untouched.
  *
- * Reuses `aes-ecb-builder.ts`'s key-expansion + split/concat/count leaves
- * and the round-body helper in `aes-round-builder.ts`. The only NEW spec
- * code here is the chaining-XOR pre/post-round leaves and the iv-load
- * pre-loop step.
+ * Variant-aware (AES-128/192/256) — only the round count differs (10/12/14);
+ * the byte-native body is variant-agnostic.
  *
  * References: NIST SP 800-38A §6.2 (CBC mode definition).
  */
 
-import type { CipherSpec, StepNode } from "../core/types";
+import type { CipherSpec, PortBinding, StepDocumentation, StepNode } from "../core/types";
+import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "../core/types";
 import { AES_RCON, AES_SBOX } from "./aes-constants";
 import type { AesVariant, CipherDirection } from "./aes-ecb-builder";
-import { buildAesDecryptBody, buildAesEncryptBody } from "./aes-round-builder";
+import {
+  aesNativeDecryptOutputFrom,
+  aesNativeOutputFrom,
+  buildAesDecryptBodyNative,
+  buildAesEncryptBodyNative,
+} from "./aes-round-builder-native";
 
 const ROUNDS_BY_VARIANT: Readonly<Record<AesVariant, number>> = {
   "aes-128": 10,
@@ -82,17 +91,22 @@ const VARIANT_DISPLAY: Readonly<Record<AesVariant, string>> = {
   "aes-256": "AES-256",
 };
 
-// Aux key names. Held in one place so the chain plumbing reads
-// consistently across encrypt + decrypt and matches the App-level seed
-// (`aux["iv"]`).
-const AUX_INPUT_BLOCKS = "input-blocks";
-const AUX_OUTPUT_BLOCKS = "output-blocks";
-const AUX_BLOCK_COUNT = "blockCount";
-const AUX_IV = "iv";
-const AUX_CHAIN = "chain";
-const AUX_NEXT_CHAIN = "next-chain"; // decrypt-only — the in-loop snapshot.
-
 const BLOCK_SIZE = 16;
+
+// Aux key the App seeds the IV under (alongside aux["key"]). `fetch-iv` reads
+// it; nothing writes it during the run.
+const AUX_IV = "iv";
+
+// The iterate node's id — the per-block dispatch boundary. The runtime injects
+// each 16-byte block as `port(CBC_ITERATE_ID,"in")` and the running chain value
+// as `port(CBC_ITERATE_ID,"chain")`; the body's leaves read those ports.
+const CBC_ITERATE_ID = "cbc-blocks";
+
+// The chaining-XOR leaf id. Held in one place because both encrypt (body head)
+// and decrypt (body tail) use it, and the KAT pins `cbc-xor:b{i}`.
+const CBC_XOR_ID = "cbc-xor";
+
+const port = (node: string, portName: string): PortBinding => ({ node, port: portName });
 
 const keyExpansionLeaf = (rounds: number): StepNode => ({
   kind: "step",
@@ -107,96 +121,129 @@ const keyExpansionLeaf = (rounds: number): StepNode => ({
   },
 });
 
-const splitBlocksLeaf = (): StepNode => ({
-  kind: "step",
-  id: "split-blocks",
-  type: "generic.split-blocks@1",
-  params: { blockSize: BLOCK_SIZE, outBlocksAux: AUX_INPUT_BLOCKS },
-});
+const NARR_FETCH_IV: StepDocumentation = {
+  name: "Load IV",
+  summary: "Read the 16-byte initialization vector from aux onto a port (NIST SP 800-38A §6.2).",
+  detail: `## Load IV
 
-const computeBlockCountLeaf = (): StepNode => ({
-  kind: "step",
-  id: "compute-block-count",
-  type: "generic.compute-block-count@1",
-  params: { blockSize: BLOCK_SIZE, countAux: AUX_BLOCK_COUNT },
-});
+Reads the initialization vector from \`aux["iv"]\` and publishes it on a port so
+the first block's chaining XOR can fold it in. The IV is the chain's bootstrap:
+block 0 has no "previous ciphertext", so CBC uses the IV in its place.
 
-const concatBlocksLeaf = (): StepNode => ({
-  kind: "step",
-  id: "concat-blocks",
-  type: "generic.concat-blocks@1",
-  params: { blocksAux: AUX_OUTPUT_BLOCKS },
-});
+The IV must be unpredictable (random) per message for CBC to be secure, but it
+is **not** secret — it travels with the ciphertext. Editing it here changes
+every ciphertext block (the chain diverges from block 0 onward).`,
+  references: ["NIST SP 800-38A §6.2 (CBC)", "NIST SP 800-38A Appendix C (IV generation)"],
+};
 
-const ivLoadLeaf = (): StepNode => ({
-  kind: "step",
-  id: "iv-load",
-  type: "generic.iv-load@1",
-  params: { ivAuxName: AUX_IV, outAuxName: AUX_CHAIN },
-});
+const NARR_CBC_XOR_ENCRYPT: StepDocumentation = {
+  name: "Chain XOR (CBC)",
+  summary: "XOR this plaintext block with the previous ciphertext block before encryption.",
+  detail: `## Chain XOR (encrypt)
 
-// In-loop encrypt leaves. Named with the "cbc-" prefix so they don't
-// collide with anything in the AES round body (round.N.*).
-const cbcXorEncryptLeaf = (): StepNode => ({
-  kind: "step",
-  id: "cbc-xor",
-  type: "generic.xor-aux-into-state@1",
-  params: { auxName: AUX_CHAIN },
-});
+Before AES runs, the current plaintext block \`P_i\` is XORed with the previous
+ciphertext block \`C_{i-1}\` (or the IV for block 0):
 
-const cbcSnapshotEncryptLeaf = (): StepNode => ({
-  kind: "step",
-  id: "cbc-snapshot",
-  type: "generic.state-to-aux@1",
-  params: { auxName: AUX_CHAIN },
-});
+\`\`\`
+C_i = AES_encrypt(P_i ⊕ C_{i-1})
+\`\`\`
 
-// In-loop decrypt leaves.
-const cbcSnapshotInputLeaf = (): StepNode => ({
-  kind: "step",
-  id: "cbc-snapshot-input",
-  type: "generic.state-to-aux@1",
-  params: { auxName: AUX_NEXT_CHAIN },
-});
+This is what makes CBC chain: each block's encryption depends on every block
+before it, so two identical plaintext blocks encrypt to different ciphertext —
+the structural fix for the ECB "Tux leak". The chained value carries to the
+next iteration on the iterate's \`chain\` port (the AES output \`C_i\`).`,
+  references: ["NIST SP 800-38A §6.2 (CBC-Encrypt)"],
+};
 
-const cbcXorDecryptLeaf = (): StepNode => ({
-  kind: "step",
-  id: "cbc-xor",
-  type: "generic.xor-aux-into-state@1",
-  params: { auxName: AUX_CHAIN },
-});
+const NARR_CBC_XOR_DECRYPT: StepDocumentation = {
+  name: "Chain XOR (CBC)",
+  summary: "XOR the decrypted block with the previous ciphertext block to recover plaintext.",
+  detail: `## Chain XOR (decrypt)
 
-const cbcAdvanceChainLeaf = (): StepNode => ({
+CBC decryption inverts the chain in the opposite order: first run the AES
+inverse cipher on the raw ciphertext block \`C_i\`, *then* XOR with the previous
+ciphertext block \`C_{i-1}\` (or the IV for block 0):
+
+\`\`\`
+P_i = AES_decrypt(C_i) ⊕ C_{i-1}
+\`\`\`
+
+Note the asymmetry vs encrypt: here the chain value that carries to the next
+iteration is the *raw input* block \`C_i\` (not the decrypted output) — the
+iterate's \`chainFeedback\` reads \`port("cbc-blocks","in")\`.`,
+  references: ["NIST SP 800-38A §6.2 (CBC-Decrypt)"],
+};
+
+/** aux["iv"] (16 bytes) → port output. The byte-native replacement for `generic.iv-load@1`. */
+const fetchIvLeaf = (): StepNode => ({
   kind: "step",
-  id: "cbc-advance-chain",
-  type: "generic.aux-copy@1",
-  params: { from: AUX_NEXT_CHAIN, to: AUX_CHAIN },
+  id: "fetch-iv",
+  type: "aux-load-bytes@1",
+  params: { auxName: AUX_IV, byteLength: BLOCK_SIZE },
+  narrationOverride: NARR_FETCH_IV,
 });
 
 export function buildAesCbcSpec(variant: AesVariant, direction: CipherDirection): CipherSpec {
   const rounds = ROUNDS_BY_VARIANT[variant];
   const keyBytes = KEY_BYTES_BY_VARIANT[variant];
   const isDecrypt = direction === "decrypt";
-  const aesBody = isDecrypt ? buildAesDecryptBody(rounds) : buildAesEncryptBody(rounds);
 
-  // Encrypt: XOR first (mix in previous ciphertext) → AES → snapshot.
-  // Decrypt: snapshot first (save current ciphertext) → AES⁻¹ → XOR →
-  //          advance chain := saved snapshot.
-  const iterateChildren: StepNode[] = isDecrypt
-    ? [cbcSnapshotInputLeaf(), ...aesBody, cbcXorDecryptLeaf(), cbcAdvanceChainLeaf()]
-    : [cbcXorEncryptLeaf(), ...aesBody, cbcSnapshotEncryptLeaf()];
+  const blockIn = port(CBC_ITERATE_ID, "in"); // the per-block input bytes
+  const chainIn = port(CBC_ITERATE_ID, "chain"); // the previous-ciphertext / IV
+
+  // Build the per-block body + the iterate's bodyOutput/chainFeedback wiring.
+  let children: StepNode[];
+  let bodyOutput: PortBinding;
+  let chainFeedback: PortBinding;
+
+  if (isDecrypt) {
+    // AES⁻¹ on the raw ciphertext block, then XOR with the chain → plaintext.
+    const aesBody = buildAesDecryptBodyNative(rounds, blockIn);
+    const cbcXor: StepNode = {
+      kind: "step",
+      id: CBC_XOR_ID,
+      type: "xor@1",
+      params: { inputCount: 2 },
+      // operand0 = the AES inverse output (the GROUP's published "out" port —
+      // use the helper, not the inner leaf's "output"); operand1 = the chain.
+      portInputs: { operand0: aesNativeDecryptOutputFrom(), operand1: chainIn },
+      narrationOverride: NARR_CBC_XOR_DECRYPT,
+    };
+    children = [...aesBody, cbcXor];
+    bodyOutput = port(CBC_XOR_ID, "output"); // P_i
+    chainFeedback = blockIn; // next chain = the raw ciphertext block C_i
+  } else {
+    // XOR the plaintext block with the chain, then encrypt → ciphertext.
+    const cbcXor: StepNode = {
+      kind: "step",
+      id: CBC_XOR_ID,
+      type: "xor@1",
+      params: { inputCount: 2 },
+      portInputs: { operand0: blockIn, operand1: chainIn },
+      narrationOverride: NARR_CBC_XOR_ENCRYPT,
+    };
+    const aesBody = buildAesEncryptBodyNative(rounds, port(CBC_XOR_ID, "output"));
+    children = [cbcXor, ...aesBody];
+    bodyOutput = aesNativeOutputFrom(rounds); // C_i
+    chainFeedback = aesNativeOutputFrom(rounds); // next chain = the output C_i
+  }
 
   const specId = `${variant}-cbc${isDecrypt ? "-decrypt" : ""}@1`;
   const name = `${VARIANT_DISPLAY[variant]} CBC${isDecrypt ? " (decrypt)" : ""}`;
 
   const iterateNode: StepNode = {
     kind: "iterate",
-    id: "cbc-blocks",
+    id: CBC_ITERATE_ID,
     label: "CBC blocks (per-block chained AES)",
-    countFromAux: AUX_BLOCK_COUNT,
-    blocksFromAux: AUX_INPUT_BLOCKS,
-    outBlocksAux: AUX_OUTPUT_BLOCKS,
-    children: iterateChildren,
+    // Port mode (B1.4): split the (padded) input from `$input` into 16-byte
+    // blocks; the chain carries the previous-ciphertext value across blocks.
+    seedInput: port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT),
+    blockByteLength: BLOCK_SIZE,
+    chainInput: port("fetch-iv", "output"),
+    chainFeedback,
+    bodyOutput,
+    outputPorts: ["out"],
+    children,
   };
 
   return {
@@ -205,25 +252,21 @@ export function buildAesCbcSpec(variant: AesVariant, direction: CipherDirection)
     stateShape: "bytes",
     inputs: {
       plaintext: { shape: "bytes" },
-      // Both encrypt and decrypt expect `aux["iv"]` to be seeded by the
-      // App alongside `aux["key"]`. The IV input field in the UI is the
+      // Both encrypt and decrypt expect `aux["iv"]` to be seeded by the App
+      // alongside `aux["key"]`. The IV input field in the UI is the
       // user-facing source; localStorage persists it across reloads.
       key: { byteLength: keyBytes },
     },
     steps: [
-      // Key expansion runs once, outside the loop. State passes through.
+      // Key expansion runs once, outside the loop. Writes roundKey.0..N to aux.
       keyExpansionLeaf(rounds),
-      // BytesState → MatrixState[] boundary; passthrough state.
-      splitBlocksLeaf(),
-      computeBlockCountLeaf(),
-      // Pre-loop chain bootstrap: aux["iv"] (Uint8Array, 16) → aux[
-      // "chain"] (MatrixState). The first iteration's XOR reads this.
-      ivLoadLeaf(),
-      // Per-block CBC body. Encrypt: XOR → AES → snapshot. Decrypt:
-      // snapshot → AES⁻¹ → XOR → advance.
+      // Pre-loop chain bootstrap: aux["iv"] (Uint8Array, 16) → a port the
+      // iterate's `chainInput` reads. The first iteration's chain XOR uses it.
+      fetchIvLeaf(),
+      // Per-block CBC body (see file header for the encrypt/decrypt asymmetry).
       iterateNode,
-      // Mirror of ECB's post-loop: aux[output-blocks] → BytesState.
-      concatBlocksLeaf(),
     ],
+    // The cipher's output is the iterate's concatenated per-block exit.
+    outputFrom: port(CBC_ITERATE_ID, "out"),
   };
 }

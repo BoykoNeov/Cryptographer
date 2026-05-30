@@ -42,7 +42,15 @@ const findFrameByStepType = (
   initialState: ReturnType<typeof matrixFromBytes> | ReturnType<typeof makeBytesState>,
   predicate: (stepType: string) => boolean,
 ): TraceFrame => {
-  const trace = runSpec(spec, buildDefaultRegistry(), { initialState, initialAux });
+  // `portedDispatchEnabled: true` is universally safe: lifted-legacy steps
+  // (Serpent here) run via the adapter to identical frames, and byte-native
+  // AES-128 (Slice B1) REQUIRES it (its port-native primitives have no legacy
+  // executor and throw under the default legacy path).
+  const trace = runSpec(spec, buildDefaultRegistry(), {
+    initialState,
+    initialAux,
+    portedDispatchEnabled: true,
+  });
   const f = trace.frames.find((fr) => predicate(fr.stepType));
   if (!f) throw new Error("no matching frame in trace");
   return f;

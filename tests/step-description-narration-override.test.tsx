@@ -24,7 +24,7 @@ import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import type { CipherDocument } from "@/core/document";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex } from "@/core/state/bytes";
+import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import { matrixFromBytes } from "@/core/state/matrix";
 import type { CipherSpec, StepDocumentation, TraceFrame } from "@/core/types";
 import { StepDescription } from "@/ui/components/StepDescription";
@@ -64,10 +64,14 @@ describe("StepDescription — narrationOverride fallback + override", () => {
     // so every frame's docs come from `registry.getDoc(stepType)`. Picking
     // the key-expansion frame because its registry doc has a stable, easy-
     // to-assert heading ("Key Expansion").
-    const initial = matrixFromBytes(bytesFromHex(PLAINTEXT_HEX));
+    // Byte-native AES-128 (Slice B1): bytes state + ported dispatch. The
+    // `key-expansion` leaf stays monolithic with NO narrationOverride, so it
+    // still exercises the registry-doc fallback ("Key Expansion").
+    const initial = makeBytesState(bytesFromHex(PLAINTEXT_HEX));
     const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
       initialState: initial,
       initialAux: new Map([["key", bytesFromHex(KEY_HEX)]]),
+      portedDispatchEnabled: true,
     });
     const frame = findFrameByStepId(trace.frames, "key-expansion");
 

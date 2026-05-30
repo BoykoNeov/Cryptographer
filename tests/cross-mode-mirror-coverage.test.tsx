@@ -108,17 +108,11 @@ const findFirstLeafIdOfType = (stepType: string): string | null => {
 // (e.g. v2 needs a successful duplicateRoundInSpec).
 const setupForEntry = (entry: CrossModeMirrorEntry): string => {
   switch (entry.stepType) {
-    case "generic.byte-substitution@1": {
-      // Canonical AES-128 default. Any round's sub-bytes leaf works.
-      return "round.1.sub-bytes";
-    }
-    case "generic.mix-columns@1": {
-      // Canonical AES-128 default. Round 1 is always present and has a
-      // MixColumns leaf (FIPS-197: MixColumns is in every round except
-      // the final one). Same step type appears on both encrypt and
-      // decrypt specs — the Sync row sits inside `MixBlock`.
-      return "round.1.mix-columns";
-    }
+    // NOTE: the matrix `generic.byte-substitution@1` + `generic.mix-columns@1`
+    // cases were removed in Slice B1.4b along with their registry entries —
+    // every shipped AES is byte-native, so there is no selectable matrix leaf
+    // to exercise. Their live replacements are the `byte-substitute@1` /
+    // `gf-matrix-multiply@1` cases below (default byte-native AES-128).
     case "aes.key-expansion@1": {
       // Top-level leaf on canonical AES-128.
       return "key-expansion";
@@ -143,6 +137,18 @@ const setupForEntry = (entry: CrossModeMirrorEntry): string => {
       // (S_{(r-1) mod 8} for r=1 → S_0).
       setCipher("serpent-128");
       return "round.1.sub-bytes";
+    }
+    case "byte-substitute@1": {
+      // Byte-native AES SubBytes (Slice B1.2). AES-128 single-block is the
+      // app default and byte-native on BOTH modes now, so `round.1.sub-bytes`
+      // is `byte-substitute@1` with no `setCipher` needed. The sync writes to
+      // the byte-native decrypt counterpart.
+      return "round.1.sub-bytes";
+    }
+    case "gf-matrix-multiply@1": {
+      // Byte-native AES MixColumns (Slice B1.2). Default AES-128, round 1
+      // always has a MixColumns leaf (every round except the final).
+      return "round.1.mix-columns";
     }
     default:
       throw new Error(
