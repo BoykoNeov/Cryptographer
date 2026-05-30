@@ -627,42 +627,48 @@ export const buildDefaultRegistry = (): StepRegistry => {
     meta: serpentKeyExpansionMeta,
     doc: serpentKeyExpansionDoc,
   });
+  // ─── Serpent round body — port-native since scaffolding-suppression B3
+  //     (2026-05-30). The five round-body executors are true PortedExecutors
+  //     (Uint8Array in/out, no `legacy` fallback, no lift adapter); a single
+  //     port-native leaf flips `requiresPortedDispatch` true for all six
+  //     Serpent specs. `meta` is retained verbatim so the runtime still
+  //     projects the threaded state onto each `state` port and (for
+  //     add-round-key) `aux[roundKeyAux]` onto the `roundKey` port — exactly
+  //     as the lift adapter did, so the flat Serpent specs need ZERO
+  //     `portInputs` and the graph topology is unchanged. Mirrors B1 (AES) /
+  //     B2 (Speck); `serpent.key-expansion@1` above stays lifted (its native
+  //     conversion is the cross-cutting key-schedule slice). ───────────────
   r.register("serpent.bit-permutation@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(serpentBitPermutation, serpentBitPermutationMeta),
-    legacy: serpentBitPermutation,
+    executor: serpentBitPermutation,
     shape: serpentBitPermutationPortContract,
     meta: serpentBitPermutationMeta,
     doc: serpentBitPermutationDoc,
   });
   r.register("serpent.add-round-key@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(serpentAddRoundKey, serpentAddRoundKeyMeta),
-    legacy: serpentAddRoundKey,
+    executor: serpentAddRoundKey,
     shape: serpentAddRoundKeyPortContract,
     meta: serpentAddRoundKeyMeta,
     doc: serpentAddRoundKeyDoc,
   });
   r.register("serpent.sub-bytes@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(serpentSubBytes, serpentSubBytesMeta),
-    legacy: serpentSubBytes,
+    executor: serpentSubBytes,
     shape: serpentSubBytesPortContract,
     meta: serpentSubBytesMeta,
     doc: serpentSubBytesDoc,
   });
   r.register("serpent.linear-transform@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(serpentLinearTransform, serpentLinearTransformMeta),
-    legacy: serpentLinearTransform,
+    executor: serpentLinearTransform,
     shape: serpentLinearTransformPortContract,
     meta: serpentLinearTransformMeta,
     doc: serpentLinearTransformDoc,
   });
   r.register("serpent.inv-linear-transform@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(serpentInvLinearTransform, serpentInvLinearTransformMeta),
-    legacy: serpentInvLinearTransform,
+    executor: serpentInvLinearTransform,
     shape: serpentInvLinearTransformPortContract,
     meta: serpentInvLinearTransformMeta,
     doc: serpentInvLinearTransformDoc,

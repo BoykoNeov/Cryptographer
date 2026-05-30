@@ -25,21 +25,26 @@
 
 import { SERPENT_LT_TABLE } from "../ciphers/serpent-constants";
 import type {
-  BytesState,
   PortContract,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "../core/types";
 import { readBit, writeBit } from "./serpent-bit-ops";
 
-export const serpentLinearTransform: StepExecutor = (state) => {
-  if (state.shape !== "bytes") {
-    throw new Error("serpent.linear-transform expects bytes state");
-  }
-  if (state.bytes.length !== 16) {
+// Port-native executor (scaffolding-suppression Phase B, slice B3, 2026-05-30).
+// Consumes and emits ONLY `Uint8Array` — the 128-bit block on the `state` port,
+// projected by the runtime from the threaded state via `meta.stateInputPort`.
+export const serpentLinearTransform: PortedExecutor = (inputs) => {
+  const stateBytes = inputs.get("state");
+  if (stateBytes === undefined) {
     throw new Error(
-      `serpent.linear-transform expects 16-byte state; got ${state.bytes.length} bytes`,
+      "serpent.linear-transform: 'state' input port is not wired (the runtime projects the carried block onto it via meta.stateInputPort)",
+    );
+  }
+  if (stateBytes.length !== 16) {
+    throw new Error(
+      `serpent.linear-transform expects 16-byte state; got ${stateBytes.length} bytes`,
     );
   }
 
@@ -48,13 +53,12 @@ export const serpentLinearTransform: StepExecutor = (state) => {
     const sources = SERPENT_LT_TABLE[i] ?? [];
     let bit = 0;
     for (const src of sources) {
-      bit ^= readBit(state.bytes, src);
+      bit ^= readBit(stateBytes, src);
     }
     writeBit(out, i, bit);
   }
 
-  const result: BytesState = { shape: "bytes", bytes: out };
-  return { state: result };
+  return new Map([["state", out]]);
 };
 
 export const serpentLinearTransformDoc: StepDocumentation = {

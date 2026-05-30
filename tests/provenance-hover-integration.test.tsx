@@ -294,6 +294,8 @@ describe("Provenance hover — RoundKeyPanel highlights aux-cell sources", () =>
       initialAux: new Map<string, AuxValue>([
         ["key", bytesFromHex("00112233445566778899aabbccddeeff")],
       ]),
+      // Serpent's round body is port-native since B3 → ported dispatch required.
+      portedDispatchEnabled: true,
     });
     setTrace(trace);
     const subBytesFrame = trace.frames.find((f) => f.stepType === "serpent.sub-bytes@1");
@@ -335,6 +337,8 @@ describe("Provenance hover — RoundKeyPanel highlights aux-cell sources", () =>
       initialAux: new Map<string, AuxValue>([
         ["key", bytesFromHex("00112233445566778899aabbccddeeff")],
       ]),
+      // Serpent's round body is port-native since B3 → ported dispatch required.
+      portedDispatchEnabled: true,
     });
     setTrace(trace);
     // Serpent's first AddRoundKey reads `roundKey.0` (K_0 → initial

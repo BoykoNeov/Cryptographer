@@ -18,10 +18,10 @@
  * in any cipher family surfaces here whether or not its family-specific
  * file also caught it.
  *
- * Coverage (8 rows — was 22; aes-128 encrypt dropped in Slice B1.1,
+ * Coverage (2 rows — was 22; aes-128 encrypt dropped in Slice B1.1,
  * aes-128 decrypt in Slice B1.2, all four aes-192/256 single-block rows
- * in Slice B1.3, AES ECB/CBC in B1.4, and the four Speck rows in Slice B2,
- * see below):
+ * in Slice B1.3, AES ECB/CBC in B1.4, the four Speck rows in Slice B2, and
+ * the six Serpent rows in Slice B3, see below):
  *
  *   AES single-block:  none. Every single-block AES (128/192/256, both
  *                      directions) is byte-native (no legacy path) →
@@ -36,9 +36,11 @@
  *                      no legacy path) → removed; the KATs + frame streams
  *                      live in speck-32-64-vectors / -decrypt and
  *                      runtime-ported-dispatch-speck.                [0 rows]
- *   Serpent:           serpent-128/-192/-256 + decrypt counterparts
- *                      (pyserpent / Anderson-Biham-Knudsen reference)
- *                                                                   [6 rows]
+ *   Serpent:           none. The five round-body executors are byte-native
+ *                      (Slice B3, no legacy path) → removed; the KATs + a
+ *                      golden frame-stream checksum live in serpent-vectors /
+ *                      serpent-roundtrip and
+ *                      runtime-ported-dispatch-serpent.              [0 rows]
  *   DES:               des + des-decrypt (FIPS 46-3 Appendix B.1)  [2 rows]
  *
  * Every remaining row is also pinned in a per-cipher dispatch file; the
@@ -56,12 +58,6 @@
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { desSpec } from "@/ciphers/des";
 import { desDecryptSpec } from "@/ciphers/des-decrypt";
-import { serpent128Spec } from "@/ciphers/serpent-128";
-import { serpent128DecryptSpec } from "@/ciphers/serpent-128-decrypt";
-import { serpent192Spec } from "@/ciphers/serpent-192";
-import { serpent192DecryptSpec } from "@/ciphers/serpent-192-decrypt";
-import { serpent256Spec } from "@/ciphers/serpent-256";
-import { serpent256DecryptSpec } from "@/ciphers/serpent-256-decrypt";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue, CipherSpec, State, TraceFrame } from "@/core/types";
@@ -166,16 +162,11 @@ type Row = {
 // against. KATs + frame streams live in speck-32-64-vectors / -decrypt and
 // runtime-ported-dispatch-speck.
 
-// Serpent — pyserpent.py / Anderson-Biham-Knudsen reference. All-zero
-// plaintext + one-bit key for each key size (the conventional Serpent
-// reference fixture).
-const SERPENT_PT = "00000000000000000000000000000000";
-const SERPENT_KEY_128 = "80000000000000000000000000000000";
-const SERPENT_KEY_192 = "800000000000000000000000000000000000000000000000";
-const SERPENT_KEY_256 = "8000000000000000000000000000000000000000000000000000000000000000";
-const SERPENT_CT_128 = "264e5481eff42a4606abda06c0bfda3d";
-const SERPENT_CT_192 = "9e274ead9b737bb21efcfca548602689";
-const SERPENT_CT_256 = "a223aa1288463c0e2be38ebd825616c0";
+// Serpent rows were removed in Slice B3 — the five round-body executors are
+// now port-native (no legacy executor), so the specs can't run under
+// `portedDispatchEnabled: false` and have no legacy frame stream to compare
+// against. KATs + the golden frame-stream checksum live in
+// serpent-vectors / serpent-roundtrip and runtime-ported-dispatch-serpent.
 
 // DES — FIPS 46-3 Appendix B.1 worked example, cross-checked with
 // `node:crypto` des-ecb (--openssl-legacy-provider). One vector here;
@@ -200,55 +191,12 @@ const ROWS: readonly Row[] = [
   // removed in Slice B1.4a and the CBC rows in B1.4b — both modes are now
   // byte-native (port-mode iterate + port-native body, no legacy path),
   // KAT-pinned in `aes-128-ecb-kat` / `aes-128-cbc-kat`. No AES rows remain.
-  // Serpent × 3 key sizes × 2 directions = 6 rows
-  {
-    label: "serpent-128 encrypt (pyserpent reference)",
-    spec: serpent128Spec,
-    stateBuilder: buildBytesState,
-    inputHex: SERPENT_PT,
-    expectedOutputHex: SERPENT_CT_128,
-    auxInputs: [["key", SERPENT_KEY_128]],
-  },
-  {
-    label: "serpent-128 decrypt (pyserpent reference)",
-    spec: serpent128DecryptSpec,
-    stateBuilder: buildBytesState,
-    inputHex: SERPENT_CT_128,
-    expectedOutputHex: SERPENT_PT,
-    auxInputs: [["key", SERPENT_KEY_128]],
-  },
-  {
-    label: "serpent-192 encrypt (pyserpent reference)",
-    spec: serpent192Spec,
-    stateBuilder: buildBytesState,
-    inputHex: SERPENT_PT,
-    expectedOutputHex: SERPENT_CT_192,
-    auxInputs: [["key", SERPENT_KEY_192]],
-  },
-  {
-    label: "serpent-192 decrypt (pyserpent reference)",
-    spec: serpent192DecryptSpec,
-    stateBuilder: buildBytesState,
-    inputHex: SERPENT_CT_192,
-    expectedOutputHex: SERPENT_PT,
-    auxInputs: [["key", SERPENT_KEY_192]],
-  },
-  {
-    label: "serpent-256 encrypt (pyserpent reference)",
-    spec: serpent256Spec,
-    stateBuilder: buildBytesState,
-    inputHex: SERPENT_PT,
-    expectedOutputHex: SERPENT_CT_256,
-    auxInputs: [["key", SERPENT_KEY_256]],
-  },
-  {
-    label: "serpent-256 decrypt (pyserpent reference)",
-    spec: serpent256DecryptSpec,
-    stateBuilder: buildBytesState,
-    inputHex: SERPENT_CT_256,
-    expectedOutputHex: SERPENT_PT,
-    auxInputs: [["key", SERPENT_KEY_256]],
-  },
+  // Serpent: 0 rows. All six specs (3 key sizes × 2 directions) were removed
+  // in Slice B3 — the five round-body executors are now port-native (no legacy
+  // executor), so they cannot run under `portedDispatchEnabled: false` and have
+  // no legacy frame stream to compare against. The KATs + a golden frame-stream
+  // checksum live in serpent-vectors / serpent-roundtrip and
+  // runtime-ported-dispatch-serpent.
   // DES × 2 directions = 2 rows
   {
     label: "des encrypt (FIPS 46-3 Appendix B.1)",

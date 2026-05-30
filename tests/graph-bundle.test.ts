@@ -71,6 +71,8 @@ const runSerpent128 = (): Trace =>
   runSpec(serpent128Spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(SERPENT128_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(SERPENT128_KEY)]]),
+    // Serpent's round body is port-native since B3 → ported dispatch required.
+    portedDispatchEnabled: true,
   });
 
 const runAes128Ecb = (): Trace =>

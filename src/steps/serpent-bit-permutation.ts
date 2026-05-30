@@ -23,27 +23,35 @@
  */
 
 import type {
-  BytesState,
   Json,
   PortContract,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "../core/types";
 import { applyBitPermutation } from "./serpent-bit-ops";
 
-export const serpentBitPermutation: StepExecutor = (state, params) => {
-  if (state.shape !== "bytes") {
-    throw new Error("serpent.bit-permutation expects bytes state");
-  }
-  if (state.bytes.length !== 16) {
+// Port-native executor (scaffolding-suppression Phase B, slice B3, 2026-05-30).
+// Consumes and emits ONLY `Uint8Array` — no `State` wrapper, no lift adapter.
+// The `state` port carries the 128-bit (16-byte) block, projected by the
+// runtime from the threaded state via `meta.stateInputPort` (the Serpent specs
+// are flat pipelines; no `portInputs` wiring). Returns the permuted block on
+// the `state` output port; the runtime reconstructs the threaded `BytesState`
+// from it via `meta.stateOutputPort`.
+export const serpentBitPermutation: PortedExecutor = (inputs, params) => {
+  const stateBytes = inputs.get("state");
+  if (stateBytes === undefined) {
     throw new Error(
-      `serpent.bit-permutation expects 16-byte state; got ${state.bytes.length} bytes`,
+      "serpent.bit-permutation: 'state' input port is not wired (the runtime projects the carried block onto it via meta.stateInputPort)",
+    );
+  }
+  if (stateBytes.length !== 16) {
+    throw new Error(
+      `serpent.bit-permutation expects 16-byte state; got ${stateBytes.length} bytes`,
     );
   }
   const table = readTable(params);
-  const next: BytesState = { shape: "bytes", bytes: applyBitPermutation(state.bytes, table) };
-  return { state: next };
+  return new Map([["state", applyBitPermutation(stateBytes, table)]]);
 };
 
 export const serpentBitPermutationDoc: StepDocumentation = {

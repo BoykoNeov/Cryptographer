@@ -2,10 +2,13 @@
 
 > **Status: Phase A COMPLETE. Phase B IN PROGRESS — B1 (AES) MERGED TO MAIN
 > 2026-05-30 (`f896f3c`); B2 (Speck) MERGED TO MAIN 2026-05-30 (`--no-ff`
-> merge `d791c35`), gate GREEN on merged main (2567 tests / 217 files), browser
-> eyeball done, branch `b2-speck-byte-native` deleted. Next: B3 (Serpent) —
-> advisor consult first, fresh branch off main. See "## B2 — Speck byte-native"
-> below.**
+> merge `d791c35`); B3 (Serpent) DONE on branch `b3-serpent-byte-native`
+> (commit `7016892`), full `npm run check` GREEN (2565 tests / 218 files),
+> browser eyeball done (Serpent-128 KAT `264e5481…`, replication auto-on,
+> 33-way fan-out legible, IP + mid-round PortFlowView + narration), merging
+> `--no-ff` to main. Next: B4 (DES) — NOT a Scope-B flip; it's the
+> universal-port plan's Phase 4d Feistel rebuild. See "## B3 — Serpent
+> byte-native" below.**
 >
 > **(historical B1 status)** Phase B IN PROGRESS — B1 (AES) on branch
 > `b1-aes-byte-native`. B1.1 (128 enc) + B1.2 (128 dec) + B1.3 (192/256 enc+dec)
@@ -128,13 +131,49 @@ gate GREEN on merged main (2567/217), branch deleted.** **Did NOT touch**
 Serpent/DES (B3/B4). **Next: B3 (Serpent)** — advisor consult first, fresh
 branch off main.
 
-## B3 — Serpent byte-native: HANDOFF (orientation done, NOT started, 2026-05-30)
+## B3 — Serpent byte-native: SHIPPED (2026-05-30)
 
-> **Status: orientation-only session — NO code written, working tree CLEAN on
-> `main` @ `914cfc2`. The `advisor` tool was UNAVAILABLE this session, so the
-> mandated pre-Phase-B advisor consult could not run. NEXT SESSION: call
-> `advisor()` FIRST (this section is the brief to hand it), then a fresh branch
-> `b3-serpent-byte-native` off `main`.**
+> **Status: DONE on branch `b3-serpent-byte-native` (commit `7016892`), full
+> `npm run check` GREEN (2565 tests / 218 files), browser eyeball done, merging
+> `--no-ff` to main. Advisor consulted first (green light: "proven replay of
+> B2"). The brief below was executed verbatim with two deviations, both
+> recorded under "What shipped" — the golden-parity capture mechanism and a
+> narration-allowlist correction.**
+>
+> **What shipped.** The five round-body executors
+> (`serpent.{bit-permutation,sub-bytes,linear-transform,inv-linear-transform,add-round-key}@1`)
+> are now true `PortedExecutor`s (Uint8Array Map in/out, no `legacy`, no lift
+> wrapper); `serpent.key-expansion@1` stays lifted. The meta-not-legacy finding
+> held exactly as B2 predicted — zero `portInputs`, graph topology unchanged,
+> `requiresPortedDispatch` true for all six specs. A4 untouched (Serpent ports
+> were already all-`raw`). The 8-file B2 sweep generalized to ~14 files (every
+> Serpent-running test got `portedDispatchEnabled`; the 6 frame-parity rows were
+> removed; the non-ported control in `graph-view-replication-force-on-ported`
+> retargeted Serpent → **DES**; the malformed-key negative tests stayed flag-off,
+> throwing at the lifted key-expansion frame 0 before any native round).
+>
+> **Parity net (the open "decision for advisor").** Used a **per-spec frame-stream
+> checksum** (advisor pick over bulky 594-frame literals): SHA-256 over each
+> frame's ordered `(stepId, hex(stateAfter), sorted(auxRead))`, with `auxRead`
+> folded in so the net itself guards the highest-risk change (add-round-key's
+> `roundKey.N` read now sourced from `meta.auxReadPorts`, not a manual
+> `auxReads` return). Captured from the **lifted impl BEFORE conversion** via a
+> throwaway dump, and **cross-checked flag-off == flag-on** so the digest is
+> proven dispatch-independent on lifted code; the native rewrite reproduces it
+> byte-for-byte. ⚠️ A first-pass scratch produced a wrong digest (`1c53…`) from a
+> buggy *inline* hash that differed from the dump formatter; reconciled by
+> digesting the pre-conversion dump *file* directly (→ `824f…` for s-128-enc),
+> which native + the pre-existing `ported==legacy` frame-parity rows both
+> corroborate. Lesson: capture the golden from a single, reused formatter — don't
+> hand-roll a second one.
+>
+> **Narration-allowlist correction.** The brief said "IP/FP/LT/inv-LT stay on
+> `NARRATION_NO_OP_ALLOWLIST`." Primary source (`narration/registry.ts`) says
+> only `serpent.linear-transform@1` / `inv-linear-transform@1` are no-op;
+> `serpent.bit-permutation@1` (IP/FP) IS narrated (1 overview + 16 byte drills =
+> 17 units — each output bit comes from a single input bit). The new
+> `tests/step-narration-serpent-port-native.test.tsx` pins the actual behaviour
+> (SubBytes 16 / AddRoundKey 16 / IP 17 units; LT empty).
 
 **B3 = Scope B, identical in shape to B2 (Speck).** All six Serpent step types
 are TODAY `kind:"ported"` but **lifted-legacy** (`liftLegacyExecutor(...)` +

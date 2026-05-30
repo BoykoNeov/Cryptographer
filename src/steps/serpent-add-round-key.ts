@@ -16,32 +16,45 @@
  */
 
 import type {
-  BytesState,
   Json,
   PortContract,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "../core/types";
 
-export const serpentAddRoundKey: StepExecutor = (state, params, ctx) => {
-  if (state.shape !== "bytes") {
-    throw new Error("serpent.add-round-key expects bytes state");
+// Port-native executor (scaffolding-suppression Phase B, slice B3, 2026-05-30).
+// Consumes and emits ONLY `Uint8Array`. Two input ports:
+//   - `state`    — the carried 128-bit block, projected by the runtime from the
+//                  threaded state via `meta.stateInputPort` (the Serpent specs
+//                  are flat pipelines; no `portInputs` wiring).
+//   - `roundKey` — this round's 16-byte key, projected by the runtime from
+//                  `aux[params.roundKeyAux]` via `meta.auxReadPorts` (the
+//                  still-lifted `serpent.key-expansion@1` writes those aux
+//                  values). The runtime records the aux read on the frame from
+//                  the same meta binding, so the executor no longer touches
+//                  `ctx.aux` or returns `auxReads` — mirrors the B2 Speck round.
+export const serpentAddRoundKey: PortedExecutor = (inputs) => {
+  const stateBytes = inputs.get("state");
+  if (stateBytes === undefined) {
+    throw new Error(
+      "serpent.add-round-key: 'state' input port is not wired (the runtime projects the carried block onto it via meta.stateInputPort)",
+    );
   }
-  if (state.bytes.length !== 16) {
-    throw new Error(`serpent.add-round-key expects 16-byte state; got ${state.bytes.length} bytes`);
+  if (stateBytes.length !== 16) {
+    throw new Error(`serpent.add-round-key expects 16-byte state; got ${stateBytes.length} bytes`);
   }
-  const roundKeyAux = readRoundKeyAux(params);
-  const rk = ctx.aux.get(roundKeyAux);
+  const rk = inputs.get("roundKey");
   if (!(rk instanceof Uint8Array) || rk.length !== 16) {
-    throw new Error(`serpent.add-round-key: aux '${roundKeyAux}' must be a 16-byte Uint8Array`);
+    throw new Error(
+      "serpent.add-round-key: 'roundKey' port must carry a 16-byte word (projected from aux[roundKeyAux] via meta.auxReadPorts)",
+    );
   }
   const next = new Uint8Array(16);
   for (let i = 0; i < 16; i++) {
-    next[i] = (state.bytes[i] ?? 0) ^ (rk[i] ?? 0);
+    next[i] = (stateBytes[i] ?? 0) ^ (rk[i] ?? 0);
   }
-  const result: BytesState = { shape: "bytes", bytes: next };
-  return { state: result, auxReads: [roundKeyAux] };
+  return new Map([["state", next]]);
 };
 
 export const serpentAddRoundKeyDoc: StepDocumentation = {
