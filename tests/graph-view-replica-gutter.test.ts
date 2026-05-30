@@ -112,6 +112,8 @@ const serpent128ReplicatedGraph = (): CipherGraph => {
   const trace = runSpec(serpent128Spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(SERPENT128_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(SERPENT128_KEY)]]),
+    // Serpent's round body is port-native since B3 → ported dispatch required.
+    portedDispatchEnabled: true,
   });
   return replicateHighFanoutSources(deriveAuxGraph(trace, serpent128Spec), 6);
 };
@@ -396,6 +398,8 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
     const trace = runSpec(serpent128Spec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex(SERPENT128_PT)),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(SERPENT128_KEY)]]),
+      // Serpent's round body is port-native since B3 → ported dispatch required.
+      portedDispatchEnabled: true,
     });
     const noRep = deriveAuxGraph(trace, serpent128Spec);
     const withRep = replicateHighFanoutSources(noRep, 6);

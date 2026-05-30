@@ -32,9 +32,12 @@ import { describe, expect, it } from "vitest";
 // Helper: encrypt a 16-byte plaintext under the given spec and key, return
 // the 16-byte ciphertext as a hex string.
 const encrypt = (spec: CipherSpec, keyHex: string, plaintextHex: string): string => {
+  // Serpent's round body is port-native since Slice B3 → ported dispatch
+  // required (the native rounds throw under the legacy path).
   const trace = runSpec(spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(plaintextHex)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
+    portedDispatchEnabled: true,
   });
   if (trace.finalState.shape !== "bytes") throw new Error("expected bytes state");
   return hexFromBytes(trace.finalState.bytes);
@@ -95,6 +98,7 @@ describe.each(variants)("$name trace structure", (v) => {
     const trace = runSpec(v.encryptSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex("00000000000000000000000000000000")),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(v.keyHex)]]),
+      portedDispatchEnabled: true,
     });
     expect(trace.frames.length).toBe(99);
   });
@@ -103,6 +107,7 @@ describe.each(variants)("$name trace structure", (v) => {
     const trace = runSpec(v.encryptSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex("00000000000000000000000000000000")),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(v.keyHex)]]),
+      portedDispatchEnabled: true,
     });
     for (let i = 0; i <= 32; i++) {
       const rk = trace.finalAux.get(`roundKey.${i}`);
@@ -115,6 +120,7 @@ describe.each(variants)("$name trace structure", (v) => {
     const trace = runSpec(v.encryptSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex("00000000000000000000000000000000")),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(v.keyHex)]]),
+      portedDispatchEnabled: true,
     });
     const uniqueRoundKeys = new Set<string>();
     for (let i = 0; i <= 32; i++) {

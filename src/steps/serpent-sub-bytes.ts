@@ -20,20 +20,25 @@
  */
 
 import type {
-  BytesState,
   Json,
   PortContract,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "../core/types";
 
-export const serpentSubBytes: StepExecutor = (state, params) => {
-  if (state.shape !== "bytes") {
-    throw new Error("serpent.sub-bytes expects bytes state");
+// Port-native executor (scaffolding-suppression Phase B, slice B3, 2026-05-30).
+// Consumes and emits ONLY `Uint8Array` — the 128-bit block on the `state` port,
+// projected by the runtime from the threaded state via `meta.stateInputPort`.
+export const serpentSubBytes: PortedExecutor = (inputs, params) => {
+  const stateBytes = inputs.get("state");
+  if (stateBytes === undefined) {
+    throw new Error(
+      "serpent.sub-bytes: 'state' input port is not wired (the runtime projects the carried block onto it via meta.stateInputPort)",
+    );
   }
-  if (state.bytes.length !== 16) {
-    throw new Error(`serpent.sub-bytes expects 16-byte state; got ${state.bytes.length} bytes`);
+  if (stateBytes.length !== 16) {
+    throw new Error(`serpent.sub-bytes expects 16-byte state; got ${stateBytes.length} bytes`);
   }
   const sbox = readSbox(params);
 
@@ -41,7 +46,7 @@ export const serpentSubBytes: StepExecutor = (state, params) => {
   // then high nibble — matching the LSB-first bitstream view.
   const next = new Uint8Array(16);
   for (let b = 0; b < 16; b++) {
-    const input = state.bytes[b] ?? 0;
+    const input = stateBytes[b] ?? 0;
     const loIn = input & 0x0f;
     const hiIn = (input >> 4) & 0x0f;
     const loOut = sbox[loIn] ?? 0;
@@ -49,8 +54,7 @@ export const serpentSubBytes: StepExecutor = (state, params) => {
     next[b] = (loOut & 0x0f) | ((hiOut & 0x0f) << 4);
   }
 
-  const result: BytesState = { shape: "bytes", bytes: next };
-  return { state: result };
+  return new Map([["state", next]]);
 };
 
 export const serpentSubBytesDoc: StepDocumentation = {

@@ -54,9 +54,9 @@ const registry = buildDefaultRegistry();
 
 // One row per shipped spec from `defaults` in `stores/spec.ts`, plus
 // SHA-256 (which Slice 2.10 will add to the selector). Expected column
-// pins the gate: SHA-256, byte-native AES (all sizes + ECB/CBC), and the
-// byte-native Speck rounds (B2) are `true`; the still-lifted ciphers
-// (Serpent, DES) are `false`.
+// pins the gate: SHA-256, byte-native AES (all sizes + ECB/CBC), the
+// byte-native Speck rounds (B2), and the byte-native Serpent round body (B3)
+// are `true`; only the still-lifted DES is `false`.
 const shippedSpecs: ReadonlyArray<readonly [string, CipherSpec, boolean]> = [
   // Byte-native (Slice B1.1 encrypt / B1.2 decrypt) — port-native primitives,
   // no legacy path → true.
@@ -80,12 +80,17 @@ const shippedSpecs: ReadonlyArray<readonly [string, CipherSpec, boolean]> = [
   ["speck-32-64-be decrypt", speck32_64BeDecryptSpec, true],
   ["speck-32-64-le encrypt", speck32_64LeSpec, true],
   ["speck-32-64-le decrypt", speck32_64LeDecryptSpec, true],
-  ["serpent-128 encrypt", serpent128Spec, false],
-  ["serpent-128 decrypt", serpent128DecryptSpec, false],
-  ["serpent-192 encrypt", serpent192Spec, false],
-  ["serpent-192 decrypt", serpent192DecryptSpec, false],
-  ["serpent-256 encrypt", serpent256Spec, false],
-  ["serpent-256 decrypt", serpent256DecryptSpec, false],
+  // Byte-native (Slice B3) — the five round-body executors are port-native
+  // (no legacy path); the key-expansion stays lifted but a single port-native
+  // leaf flips the whole spec → true.
+  ["serpent-128 encrypt", serpent128Spec, true],
+  ["serpent-128 decrypt", serpent128DecryptSpec, true],
+  ["serpent-192 encrypt", serpent192Spec, true],
+  ["serpent-192 decrypt", serpent192DecryptSpec, true],
+  ["serpent-256 encrypt", serpent256Spec, true],
+  ["serpent-256 decrypt", serpent256DecryptSpec, true],
+  // DES stays lifted (Feistel + legacy contract; its byte-native rebuild is
+  // the universal-port plan's Phase 4d) → false.
   ["des encrypt", desSpec, false],
   ["des decrypt", desDecryptSpec, false],
   ["sha-256", buildSha256Spec(), true],

@@ -19,7 +19,7 @@
  */
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
-import { serpent128Spec } from "@/ciphers/serpent-128";
+import { desSpec } from "@/ciphers/des";
 import { buildSha256Spec } from "@/ciphers/sha-256";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
@@ -40,25 +40,25 @@ import { __resetReplicationForTests, setReplicationEnabled } from "@/ui/stores/v
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-// Non-ported control carrier. AES single-block (B1.1–B1.3) and Speck rounds
-// (B2) are all byte-native now (ported → auto-on), so the "non-ported,
-// default-off" assertions retarget to Serpent-128 — still lifted (NOT
-// port-native) until its B3 rebuild. 16-byte key + 16-byte block (pyserpent /
-// Anderson-Biham-Knudsen reference fixture). B3 (Serpent byte-native) will
-// re-break these two tests — retarget the control to DES then (grep
-// `serpent128Spec` / `serpent-128` across tests/).
-const SERPENT_KEY = "80000000000000000000000000000000";
-const SERPENT_PT = "00000000000000000000000000000000";
+// Non-ported control carrier. AES single-block (B1.1–B1.3), Speck rounds (B2),
+// and the Serpent round body (B3) are all byte-native now (ported → auto-on),
+// so the "non-ported, default-off" assertions retarget to DES — still lifted
+// (Feistel + legacy contract) until its universal-port Phase 4d rebuild.
+// 8-byte key + 8-byte block (FIPS 46-3 Appendix B.1 worked example). DES's
+// byte-native rebuild will re-break these two tests — retarget the control to
+// whatever lifted cipher survives then (grep `desSpec` / `setCipher("des")`).
+const DES_KEY = "133457799bbcdff1";
+const DES_PT = "0123456789abcdef";
 
-const seedSerpentTrace = (): void => {
+const seedDesTrace = (): void => {
   // `effectiveReplicate` reads the STORE spec (`useSpec()`), not the trace, so
   // the store spec must be the non-ported control too. The post-reset default
-  // is byte-native AES-128 (ported → auto-on); flip the store to Serpent via the
+  // is byte-native AES-128 (ported → auto-on); flip the store to DES via the
   // spec-store boundary (rebuilds the canonical spec — [[feedback_setcipher_test_import]]).
-  setCipher("serpent-128");
-  const trace = runSpec(serpent128Spec, buildDefaultRegistry(), {
-    initialState: makeBytesState(bytesFromHex(SERPENT_PT)),
-    initialAux: new Map<string, AuxValue>([["key", bytesFromHex(SERPENT_KEY)]]),
+  setCipher("des");
+  const trace = runSpec(desSpec, buildDefaultRegistry(), {
+    initialState: makeBytesState(bytesFromHex(DES_PT)),
+    initialAux: new Map<string, AuxValue>([["key", bytesFromHex(DES_KEY)]]),
   });
   setTrace(trace);
 };
@@ -101,10 +101,10 @@ describe("GraphView replication — force-on for port-native specs", () => {
     resetAll();
   });
 
-  it("non-ported spec (Serpent-128) keeps the default-off raw signal", () => {
-    seedSerpentTrace();
+  it("non-ported spec (DES) keeps the default-off raw signal", () => {
+    seedDesTrace();
     const { container } = render(() => <GraphView />);
-    // Raw default false + no user toggle + Serpent is NOT ported →
+    // Raw default false + no user toggle + DES is NOT ported →
     // effective replication stays off.
     expect(isReplicationCheckboxChecked(container)).toBe(false);
   });
@@ -131,11 +131,11 @@ describe("GraphView replication — force-on for port-native specs", () => {
     expect(isReplicationCheckboxChecked(container)).toBe(false);
   });
 
-  it("user toggle on Serpent-128 also wins when they later switch to SHA-256", () => {
-    // User toggles ON while looking at Serpent (raw → true, userToggled → true).
-    // Serpent (non-ported) makes the toggle genuinely the user's choice, not the
+  it("user toggle on DES also wins when they later switch to SHA-256", () => {
+    // User toggles ON while looking at DES (raw → true, userToggled → true).
+    // DES (non-ported) makes the toggle genuinely the user's choice, not the
     // ported auto-on — preserving the test's discriminating power.
-    seedSerpentTrace();
+    seedDesTrace();
     setReplicationEnabled(true);
     // ... then switches to SHA-256. Effective should be raw = true (matches
     // their explicit choice, NOT forced-on by the ported branch — userToggled

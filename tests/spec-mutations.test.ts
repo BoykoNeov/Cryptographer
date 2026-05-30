@@ -241,13 +241,17 @@ describe("spec mutation helpers", () => {
       const initialAux = new Map<string, AuxValue>([
         ["key", bytesFromHex("000102030405060708090a0b0c0d0e0f")],
       ]);
+      // Serpent's round body (incl. sub-bytes) is port-native since B3 →
+      // ported dispatch required on both runs.
       const baseline = runSpec(serpent128Spec, buildDefaultRegistry(), {
         initialState: pt,
         initialAux,
+        portedDispatchEnabled: true,
       });
       const modified = runSpec(swapped, buildDefaultRegistry(), {
         initialState: pt,
         initialAux,
+        portedDispatchEnabled: true,
       });
       if (baseline.finalState.shape !== "bytes" || modified.finalState.shape !== "bytes") {
         throw new Error("bad shape");

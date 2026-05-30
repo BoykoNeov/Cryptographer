@@ -37,9 +37,12 @@ import type { AuxValue, CipherSpec } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 const runCipher = (spec: CipherSpec, keyHex: string, inputHex: string): string => {
+  // Serpent's round body is port-native since Slice B3 → the specs require
+  // ported dispatch (the native rounds throw under the legacy path).
   const trace = runSpec(spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(inputHex)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
+    portedDispatchEnabled: true,
   });
   if (trace.finalState.shape !== "bytes") throw new Error("expected bytes state");
   return hexFromBytes(trace.finalState.bytes);

@@ -1,63 +1,52 @@
 /**
- * Slice 1.7 of the universal-port-dataflow plan
- * (`docs/plans/universal-port-phase-1-slices.md`).
+ * Per-cipher dispatch + correctness pins for the six Serpent step types.
  *
- * Pins frame-byte equivalence between `portedDispatchEnabled: true` and
- * `portedDispatchEnabled: false` for the SIX Serpent step types lifted
- * in Slice 1.7:
+ * History: lifted in Slice 1.7 of the universal-port-dataflow plan, then
+ * the five round-body executors taken **byte-native in Slice B3**
+ * (scaffolding-suppression Phase B, 2026-05-30). `serpent.bit-permutation@1`,
+ * `serpent.sub-bytes@1`, `serpent.linear-transform@1`,
+ * `serpent.inv-linear-transform@1`, and `serpent.add-round-key@1` are now
+ * true `PortedExecutor`s — Uint8Array in/out, no legacy fallback — so every
+ * shipped Serpent spec requires `portedDispatchEnabled: true`. The
+ * **key-schedule stays lifted** (`serpent.key-expansion@1` keeps its `legacy`
+ * fallback), mirroring B1/B2's decision to leave `aes.key-expansion@1` /
+ * `speck.key-schedule@1` lifted; under ported dispatch it runs its lift
+ * adapter and writes the 33 round keys to aux unchanged.
  *
- *   - `serpent.key-expansion@1` — the THIRD one-to-many writer in the
- *     universal-port migration (after `aes.key-expansion@1` in Slice 1.4
- *     and `speck.key-schedule@1` in Slice 1.6). **33 output ports**
- *     (`key0` … `key32`), fixed across all three Serpent key sizes
- *     unlike AES (Nr+1, scales with `params.rounds`) and Speck (rounds,
- *     also scales). Function-form contract for uniformity with the
- *     precedents. Aux-only — no state ports; lift adapter creates a
- *     sentinel state and the runtime preserves the caller's
- *     `bytes`-shape across the call.
- *   - `serpent.add-round-key@1` — state-bearing single-aux-read step.
- *     Direct analog of `generic.add-round-key@1` (AES, Slice 1.4) but
- *     with `stateLayout: "bytes"` instead of `"matrix4x4-bytes"`.
- *     `byteLength: 16` on both state and aux-read ports (Serpent has
- *     no variant — 128-bit state and 128-bit round keys across all
- *     three key sizes).
- *   - `serpent.bit-permutation@1` / `serpent.sub-bytes@1` /
- *     `serpent.linear-transform@1` / `serpent.inv-linear-transform@1`
- *     — four pure bytes→bytes 16-byte fixed transforms, no aux. The
- *     cleanest possible lift batch (strictly simpler than Slice 1.3's
- *     padding primitives, which had variable output lengths).
+ * Because there is no longer a legacy single-thread path for the round body,
+ * the old "ported == legacy frame parity" surface is gone (it was vacuous for
+ * a genuinely port-native step). The B3 rewrite was validated against a
+ * **golden frame-stream checksum** captured from the lifted implementation
+ * before conversion — and that capture cross-checked flag-off (true legacy)
+ * == flag-on (lift adapter) so the digest is proven dispatch-independent on
+ * lifted code. The native rewrite reproduces it byte-for-byte; the digests
+ * are pinned permanently in suite (b) below.
  *
- * Four test surfaces (mirror the Slice 1.6 Speck test structure):
+ * Four surfaces (mirror the Slice B2 byte-native Speck test structure):
  *
  *   (a) **Reference KATs under flag-on** for all three Serpent variants
- *       (encrypt + decrypt). The "single-bit key, all-zero plaintext"
- *       vectors come from the Python reference (CryptoPlus pyserpent.py,
- *       a direct transcription of the Anderson/Biham/Knudsen reference
- *       code). KAT sanity floor — a failure here is a louder signal
- *       than a deep-equality miss across the dozens of frames per
- *       cipher.
+ *       (encrypt + decrypt) — the correctness floor.
  *
- *   (b) **Frame-by-frame byte parity** vs legacy dispatch for all 6
- *       specs (3 variants × {encrypt, decrypt}). Each Serpent variant's
- *       trace exercises key expansion + IP + 32 rounds (31 of them
- *       with full S-box + LT + AddRoundKey, the last with an extra
- *       AddRoundKey instead of LT) + FP, so the frame stream is dozens
- *       of frames each.
+ *   (b) **Golden frame-stream checksum** — a per-spec SHA-256 over the ordered
+ *       `(stepId, hex(stateAfter), sorted(auxRead))` of every frame, for all 6
+ *       specs. Folding `auxRead` into the hash makes the parity net itself
+ *       guard the highest-risk change in the B3 conversion: that
+ *       `serpent.add-round-key@1`'s `roundKey.N` aux read is still recorded on
+ *       the frame from `meta.auxReadPorts` after the executor dropped its
+ *       manual `auxReads` return. A frame-structure regression (wrong
+ *       intermediate, dropped/relabelled frame, lost aux read) shows here even
+ *       when the final KAT still matches. The frame-count prefix surfaces a
+ *       count change immediately.
  *
- *   (c) **Round-key port ordering** — verifies that Map insertion order
- *       on the 33 emitted round keys matches the legacy `auxWrites`
- *       insertion order (`roundKey.0`, `roundKey.1`, …, `roundKey.32`).
- *       Mirrors the Slice 1.4/1.6 pins on AES/Speck key-expansion
- *       insertion order. Load-bearing for visualizations that iterate
- *       `frame.auxWritten.entries()` in spec order.
+ *   (c) **Round-key port ordering** — the still-lifted key-schedule emits its
+ *       33 round keys in `roundKey.0 … roundKey.32` insertion order.
  *
- *   (d) **Per-primitive synthetic spec** — minimal spec exercising
- *       just `serpent.key-expansion@1` + one `serpent.add-round-key@1`
- *       leaf, to pin the isolated lift semantics without the algebra
- *       of all 32 rounds on top. Mirrors the Slice 1.5/1.6 per-primitive
- *       synthetic structure.
+ *   (d) **Isolated native AddRoundKey** — a minimal schedule + one
+ *       AddRoundKey spec, pinning the port-native AddRoundKey (and its
+ *       meta-driven aux read) in isolation from the 32-round algebra.
  */
 
+import { createHash } from "node:crypto";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { serpent128DecryptSpec } from "@/ciphers/serpent-128-decrypt";
@@ -67,65 +56,8 @@ import { serpent256Spec } from "@/ciphers/serpent-256";
 import { serpent256DecryptSpec } from "@/ciphers/serpent-256-decrypt";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
-import type { AuxValue, CipherSpec, State, TraceFrame } from "@/core/types";
+import type { AuxValue, CipherSpec } from "@/core/types";
 import { describe, expect, it } from "vitest";
-
-// ─── Frame-equality helpers (mirror the Slice 1.4 / 1.5 / 1.6 dispatch tests) ─
-
-const expectStatesEqual = (a: State, b: State, label: string): void => {
-  expect(a.shape, `${label}: shape`).toBe(b.shape);
-  switch (a.shape) {
-    case "bytes":
-    case "matrix4x4-bytes": {
-      if (b.shape !== a.shape) return;
-      expect(Array.from(a.bytes), `${label}: bytes`).toEqual(Array.from(b.bytes));
-      return;
-    }
-    case "bitvec":
-      throw new Error(`${label}: bitvec not exercised by Slice 1.7 Serpent fixtures`);
-    case "bigint":
-      throw new Error(`${label}: bigint not exercised by Slice 1.7 Serpent fixtures`);
-  }
-};
-
-const expectAuxMapsEqual = (
-  a: ReadonlyMap<string, AuxValue>,
-  b: ReadonlyMap<string, AuxValue>,
-  label: string,
-): void => {
-  expect([...a.keys()].sort(), `${label}: keys`).toEqual([...b.keys()].sort());
-  expect(a, `${label}: aux value`).toEqual(b);
-};
-
-const expectFramesEqual = (a: TraceFrame, b: TraceFrame, index: number): void => {
-  const label = `frame ${index} (${a.stepType} @ ${a.stepId})`;
-  expect(a.index, `${label}: index`).toBe(b.index);
-  expect(a.path, `${label}: path`).toEqual(b.path);
-  expect(a.stepId, `${label}: stepId`).toBe(b.stepId);
-  expect(a.stepType, `${label}: stepType`).toBe(b.stepType);
-  expect(a.params, `${label}: params`).toEqual(b.params);
-  expect(a.blockIndex, `${label}: blockIndex`).toBe(b.blockIndex);
-  expect(a.branchPath, `${label}: branchPath`).toEqual(b.branchPath);
-  expect(a.auxReadMissing, `${label}: auxReadMissing`).toEqual(b.auxReadMissing);
-  expectStatesEqual(a.stateBefore, b.stateBefore, `${label}: stateBefore`);
-  expectStatesEqual(a.stateAfter, b.stateAfter, `${label}: stateAfter`);
-  expectAuxMapsEqual(a.auxRead, b.auxRead, `${label}: auxRead`);
-  expectAuxMapsEqual(a.auxWritten, b.auxWritten, `${label}: auxWritten`);
-};
-
-const expectFrameStreamsEqual = (
-  a: readonly TraceFrame[],
-  b: readonly TraceFrame[],
-  label: string,
-): void => {
-  expect(a.length, `${label}: frame count`).toBe(b.length);
-  for (let i = 0; i < a.length; i++) {
-    const af = a[i];
-    const bf = b[i];
-    if (!af || !bf) throw new Error(`${label}: fixture missing frame at index ${i}`);
-    expectFramesEqual(af, bf, i);
-  }
-};
 
 // ─── Serpent reference KATs (pyserpent.py / Anderson-Biham-Knudsen reference) ─
 
@@ -137,9 +69,41 @@ const CIPHERTEXT_128 = "264e5481eff42a4606abda06c0bfda3d";
 const CIPHERTEXT_192 = "9e274ead9b737bb21efcfca548602689";
 const CIPHERTEXT_256 = "a223aa1288463c0e2be38ebd825616c0";
 
+// ─── Frame-stream checksum helper ──────────────────────────────────────────
+
+const auxValueToString = (v: AuxValue): string => {
+  if (v instanceof Uint8Array) return hexFromBytes(v);
+  if (typeof v === "number" || typeof v === "bigint") return String(v);
+  // State / readonly State[] — not present in any Serpent auxRead (round keys
+  // are Uint8Array), but keep the function total.
+  return JSON.stringify(v);
+};
+
+/** Run a Serpent spec under ported dispatch and reduce its frame stream to a
+ *  `${count}:${sha256}` digest over each frame's
+ *  `(stepId, hex(stateAfter), sorted(auxRead))`. */
+const frameDigest = (spec: CipherSpec, stateHex: string, keyHex: string): string => {
+  const trace = runSpec(spec, buildDefaultRegistry(), {
+    initialState: makeBytesState(bytesFromHex(stateHex)),
+    initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
+    portedDispatchEnabled: true,
+  });
+  const h = createHash("sha256");
+  for (const f of trace.frames) {
+    const after =
+      f.stateAfter.shape === "bytes" ? hexFromBytes(f.stateAfter.bytes) : `?${f.stateAfter.shape}`;
+    const aux = [...f.auxRead.entries()]
+      .map(([k, v]) => `${k}=${auxValueToString(v)}`)
+      .sort()
+      .join(",");
+    h.update(`${f.stepId} ${after} ${aux}\n`);
+  }
+  return `${trace.frames.length}:${h.digest("hex")}`;
+};
+
 // ─── Suites ─────────────────────────────────────────────────────────────
 
-describe("runtime — ported dispatch, Slice 1.7 Serpent step types", () => {
+describe("runtime — ported dispatch, byte-native Serpent (Slice B3)", () => {
   // ─── (a) KAT sanity floor under flag-on ──────────────────────────────
 
   describe("(a) Reference KATs under portedDispatchEnabled: true", () => {
@@ -210,66 +174,69 @@ describe("runtime — ported dispatch, Slice 1.7 Serpent step types", () => {
     });
   });
 
-  // ─── (b) Frame-by-frame byte parity vs legacy ─────────────────────────
+  // ─── (b) Golden frame-stream checksum (byte-equal to the pre-B3 lifted impl) ─
 
-  describe("(b) Frame parity vs legacy dispatch — all 6 specs", () => {
-    const runs: ReadonlyArray<{
+  describe("(b) per-spec frame-stream checksum matches the lifted golden", () => {
+    // Captured from the lifted (pre-B3) Serpent and confirmed byte-identical
+    // to the native rewrite. 99 frames each: 1 key-expansion + IP + 32 rounds
+    // (rounds 0..30 = AddRoundKey + SubBytes + LT = 96 frames; round 31 =
+    // AddRoundKey + SubBytes + AddRoundKey) + FP. The capture cross-checked
+    // that lifted flag-off == flag-on, so the digest is proven
+    // dispatch-independent on lifted code — the native impl must reproduce it.
+    const GOLDEN: ReadonlyArray<{
       label: string;
       spec: CipherSpec;
       stateHex: string;
       keyHex: string;
+      digest: string;
     }> = [
       {
         label: "Serpent-128 encrypt",
         spec: serpent128Spec,
         stateHex: PLAINTEXT_ZERO,
         keyHex: KEY_128,
-      },
-      {
-        label: "Serpent-192 encrypt",
-        spec: serpent192Spec,
-        stateHex: PLAINTEXT_ZERO,
-        keyHex: KEY_192,
-      },
-      {
-        label: "Serpent-256 encrypt",
-        spec: serpent256Spec,
-        stateHex: PLAINTEXT_ZERO,
-        keyHex: KEY_256,
+        digest: "99:824f3e1258fabbcb15784297dff9250d221a7421769396739f2bf9d167e03519",
       },
       {
         label: "Serpent-128 decrypt",
         spec: serpent128DecryptSpec,
         stateHex: CIPHERTEXT_128,
         keyHex: KEY_128,
+        digest: "99:5a027a702bc03c18090a83cc638ebf9e95d4866a265bb29ce59dd39d7904cced",
+      },
+      {
+        label: "Serpent-192 encrypt",
+        spec: serpent192Spec,
+        stateHex: PLAINTEXT_ZERO,
+        keyHex: KEY_192,
+        digest: "99:d8e7420f7c8296088f46fd622d50fe64de5678f00680456942bdee834dac8285",
       },
       {
         label: "Serpent-192 decrypt",
         spec: serpent192DecryptSpec,
         stateHex: CIPHERTEXT_192,
         keyHex: KEY_192,
+        digest: "99:77c9244fec54b1be946775aeb3a797f55c0b426732f0eba1c9c5e172388442d3",
+      },
+      {
+        label: "Serpent-256 encrypt",
+        spec: serpent256Spec,
+        stateHex: PLAINTEXT_ZERO,
+        keyHex: KEY_256,
+        digest: "99:1c8d557ec6201e2343ccb0619dfc358d5b7515be20ef5a9307de856a823c451f",
       },
       {
         label: "Serpent-256 decrypt",
         spec: serpent256DecryptSpec,
         stateHex: CIPHERTEXT_256,
         keyHex: KEY_256,
+        digest: "99:c48a1074226d679aeecbda73aa84dd4cd7526478c306736ef91cec273c391132",
       },
     ];
 
-    for (const run of runs) {
-      it(`${run.label} — frame-by-frame byte equality`, () => {
-        const legacy = runSpec(run.spec, buildDefaultRegistry(), {
-          initialState: makeBytesState(bytesFromHex(run.stateHex)),
-          initialAux: new Map<string, AuxValue>([["key", bytesFromHex(run.keyHex)]]),
-        });
-        const ported = runSpec(run.spec, buildDefaultRegistry(), {
-          initialState: makeBytesState(bytesFromHex(run.stateHex)),
-          initialAux: new Map<string, AuxValue>([["key", bytesFromHex(run.keyHex)]]),
-          portedDispatchEnabled: true,
-        });
-
-        expectFrameStreamsEqual(ported.frames, legacy.frames, run.label);
+    for (const g of GOLDEN) {
+      it(`${g.label} — 99-frame stream digest byte-equal to golden`, () => {
+        expect(frameDigest(g.spec, g.stateHex, g.keyHex)).toBe(g.digest);
       });
     }
   });
@@ -284,10 +251,9 @@ describe("runtime — ported dispatch, Slice 1.7 Serpent step types", () => {
         portedDispatchEnabled: true,
       });
 
-      // Find the key-expansion frame (typically frame 0 — the schedule
-      // runs once at the start of every Serpent spec). Locating by
-      // stepType keeps the test robust to any future leading aux-load
-      // additions to the builder.
+      // Find the key-expansion frame (typically frame 0 — the schedule runs
+      // once at the start of every Serpent spec). Locating by stepType keeps
+      // the test robust to any future leading aux-load additions.
       const ksFrame = trace.frames.find((f) => f.stepType === "serpent.key-expansion@1");
       if (!ksFrame) throw new Error("expected one serpent.key-expansion@1 frame");
 
@@ -297,11 +263,10 @@ describe("runtime — ported dispatch, Slice 1.7 Serpent step types", () => {
       for (let i = 0; i < 33; i++) expected.push(`roundKey.${i}`);
       expect(keys).toEqual(expected);
 
-      // Cross-check: each round-key value is a 16-byte Uint8Array
-      // (Serpent round keys are always 128 bits). Pins that the ported
-      // path didn't accidentally widen a single round key into a
-      // MatrixState or other variant — layout "raw" on the output
-      // ports must decode back to Uint8Array.
+      // Cross-check: each round-key value is a 16-byte Uint8Array (Serpent
+      // round keys are always 128 bits). Pins that the still-lifted
+      // key-schedule didn't accidentally widen a round key into a MatrixState
+      // or other variant under ported dispatch.
       for (const k of keys) {
         const v = ksFrame.auxWritten.get(k);
         expect(v).toBeInstanceOf(Uint8Array);
@@ -310,18 +275,18 @@ describe("runtime — ported dispatch, Slice 1.7 Serpent step types", () => {
     });
   });
 
-  // ─── (d) Per-primitive synthetic spec ────────────────────────────────
+  // ─── (d) Isolated native AddRoundKey ─────────────────────────────────
 
-  describe("(d) per-primitive synthetic — key-expansion + one add-round-key", () => {
-    // Two-step spec: schedule expands the master key, then a single
-    // AddRoundKey consumes roundKey.0 against the plaintext. Pins the
-    // lift in isolation — the cipher-level KAT (a) and full frame
-    // parity (b) above layer 31 more rounds + IP/FP/LT/SubBytes on top;
-    // this fixture is the smallest fixture that exercises both ported
-    // leaves end-to-end. Matches Slice 1.6 (d) synthetic shape.
+  describe("(d) per-primitive synthetic — key-expansion + one native AddRoundKey", () => {
+    // Two-step spec: the lifted schedule expands the master key, then a single
+    // port-native AddRoundKey consumes roundKey.0 against the all-zero
+    // plaintext. Pins the native AddRoundKey in isolation — the cipher-level
+    // KAT (a) and full frame digest (b) layer 31 more rounds + IP/FP/LT/SubBytes
+    // on top; this fixture is the smallest one that exercises both the lifted
+    // schedule and the native AddRoundKey end-to-end.
     const spec: CipherSpec = {
       id: "test-serpent-add-round-key@1",
-      name: "Slice 1.7 — serpent schedule + one AddRoundKey synthetic",
+      name: "Slice B3 — serpent schedule + one native AddRoundKey synthetic",
       stateShape: "bytes",
       inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 16 } },
       steps: [
@@ -344,18 +309,34 @@ describe("runtime — ported dispatch, Slice 1.7 Serpent step types", () => {
       ],
     };
 
-    it("frame-by-frame byte equality across both dispatch paths", () => {
-      const legacy = runSpec(spec, buildDefaultRegistry(), {
-        initialState: makeBytesState(bytesFromHex(PLAINTEXT_ZERO)),
-        initialAux: new Map<string, AuxValue>([["key", bytesFromHex(KEY_128)]]),
-      });
-      const ported = runSpec(spec, buildDefaultRegistry(), {
+    it("native AddRoundKey reads roundKey.0 from aux via meta and XORs it into the state", () => {
+      const trace = runSpec(spec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(PLAINTEXT_ZERO)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(KEY_128)]]),
         portedDispatchEnabled: true,
       });
 
-      expectFrameStreamsEqual(ported.frames, legacy.frames, "serpent schedule + one AddRoundKey");
+      // schedule frame + one AddRoundKey frame.
+      expect(trace.frames.length).toBe(2);
+      const ksFrame = trace.frames[0];
+      const arkFrame = trace.frames[1];
+      if (!ksFrame || !arkFrame) throw new Error("expected schedule + AddRoundKey frames");
+      expect(arkFrame.stepId).toBe("round.0.add-round-key");
+      expect(arkFrame.stepType).toBe("serpent.add-round-key@1");
+
+      // THE highest-value B3 check: the roundKey.0 aux read is still recorded
+      // on the native frame — sourced from `meta.auxReadPorts`, NOT from a
+      // manual `auxReads` return (the conversion dropped that + the ctx.aux
+      // access). This is what preserves the key-expansion → AddRoundKey
+      // fan-out edge in the graph.
+      expect([...arkFrame.auxRead.keys()]).toContain("roundKey.0");
+
+      // All-zero plaintext ⇒ AddRoundKey output == roundKey.0 byte-for-byte.
+      const rk0 = ksFrame.auxWritten.get("roundKey.0");
+      expect(rk0).toBeInstanceOf(Uint8Array);
+      expect(arkFrame.stateAfter.shape).toBe("bytes");
+      if (arkFrame.stateAfter.shape !== "bytes") return;
+      expect(Array.from(arkFrame.stateAfter.bytes)).toEqual(Array.from(rk0 as Uint8Array));
     });
   });
 });
