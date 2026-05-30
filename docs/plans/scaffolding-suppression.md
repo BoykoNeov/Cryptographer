@@ -34,14 +34,16 @@
 
 ## B1.5 — graph-view follow-up (2026-05-30)
 
-> **STATUS (2026-05-30):** F1 + F2 shipped (`ae00489`), F5 shipped (`b3c2919`),
-> and the **USER confirmed the ECB+CBC graph looks good in their own browser
-> pass** — F1/F2/F5 are DONE. **F4 (round-body draggability) shipped (`4bb9635`)
-> + real-browser-verified** (throwaway Playwright smoke: group leaf drags →
-> relative pin; sub-threshold click → `onClickFallback` selects; deleted after).
-> F3 (merge `fetch-rk`) is the last B1.5 item — re-consult advisor + KAT
-> byte-equal. The diagnosis prose below is the original handoff; the per-finding
-> SHIPPED markers are authoritative.
+> **STATUS (2026-05-30): B1.5 COMPLETE — all findings shipped.** F1 + F2
+> (`ae00489`), F5 (`b3c2919`), **user-browser-confirmed**. **F4** (round-body
+> draggability) shipped + real-browser-verified (`4bb9635`). **F3** (merge
+> `fetch-rk` → one `xor-with-aux@1` AddRoundKey leaf) shipped (`e827b16`),
+> preceded by a runtime contract fix (`0e7e635`, port-I/O capture for hybrid
+> ported steps). Every AES KAT byte-identical (zero expected-ciphertext hex
+> changed); duplicate-round round-trip gates pass; full suite green (213/2543).
+> **With B1.5 done, B1 (AES byte-native) is fully complete — next is B2
+> (Speck) per the Phase B plan.** The diagnosis prose below is the original
+> handoff; the per-finding SHIPPED markers are authoritative.
 
 Branch `b1-aes-byte-native`, working tree clean. A user browser-look at the
 byte-native CBC graph surfaced four issues. **All four were confirmed
@@ -79,7 +81,25 @@ map (mirror `groupSeedByGroupId`) so `port(iter,"chain")` resolves through
 `fetch-iv → cbc-xor` appears. (Decrypt CBC `chainFeedback = port(it,"in")`
 already resolves through the existing `"in"` path — verify it still does.)
 
-### Finding 3 — fetch-rk is not an official AES step (USER: merge into one step)
+### Finding 3 — fetch-rk is not an official AES step (USER: merge into one step) — SHIPPED (`e827b16`)
+**Done 2026-05-30.** Merged into a new generic port-native primitive
+**`xor-with-aux@1`** (hybrid ported: `input` port for state via portInputs +
+`operand` port projected from `aux[params.auxName]` via `meta.auxReadPorts` →
+`output`). The merged leaf keeps the `*.add-round-key` id + `output` port, so
+downstream refs are unchanged; the recorded `auxRead` preserves the
+key-expansion fan-out. Param is the generic `auxName` (matches the sibling aux
+primitives + simplifies the duplicate-round bump). **A runtime contract fix
+landed first** (`0e7e635`): the Slice 2.9a port-I/O capture gated on
+`meta === undefined`, which excluded hybrid steps (meta, no legacy) against the
+documented `legacy === undefined` TraceFrame contract — so the merged
+AddRoundKey's result wasn't on its frame. Flipping the discriminator restored
+it (frame metadata only; KAT byte-equal unaffected). The `duplicate-round`
+coupling (`bumpInvInitial` / `renumberRoundGroup`) was updated + verified by
+the existing byte-equal round-trip gates (mutator e2e + store property 7).
+ParamEditor reuses `AddRoundKeyBlock`. Swept ~16 test files; full suite green.
+**Did NOT migrate DES/Serpent** (they keep legacy lifted AddRoundKey until
+their rebuild phases). Original diagnosis below.
+
 Byte-native AddRoundKey is two leaves today: `${p}.fetch-rk`
 (`aux-load-bytes@1` reads `roundKey.N` onto a port) + `${p}.add-round-key`
 (`xor@1`), mirroring SHA-256's fetch-then-combine. **User wants AddRoundKey to
