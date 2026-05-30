@@ -4859,42 +4859,63 @@ export const GraphView = () => {
   };
 
   /**
-   * Drag-to-pan the canvas (2026-05-18). Mousedown on the empty SVG
-   * background and drag updates the wrapper's scroll position so the
-   * canvas slides under the pointer — Figma / design-tool convention.
+   * Drag-to-pan the canvas (2026-05-18; rehomed to the scroll wrapper
+   * 2026-05-30). Mousedown on the empty canvas background and drag
+   * updates the wrapper's scroll position so the canvas slides under the
+   * pointer — Figma / design-tool convention.
    *
-   * Empty-background detection: only fire when `ev.target === ev.currentTarget`,
-   * i.e. the pointerdown landed on the SVG root, not on any child
-   * `<rect>` / `<circle>` / `<path>`. Children all carry their own click
-   * or drag semantics (leaf scrub, container drag, edge inspect), so
-   * gating on the root keeps pan disjoint from every existing gesture.
+   * Attach point: the handler lives on the `.graph-view` SCROLL WRAPPER,
+   * not on the `<svg>`. The SVG is sized to its content
+   * (`height = canvasH * zoom`), but the wrapper has `min-height: 560px`,
+   * so a short spec leaves a DEAD ZONE below the SVG that belongs to the
+   * wrapper. With the handler on the SVG that band couldn't start a pan
+   * (the reported bug: panning worked at the top, over the SVG, but not
+   * the bottom, until a tall container was expanded and the SVG grew to
+   * cover it). Listening on the wrapper covers both regions.
    *
-   * Pointer capture: setPointerCapture on the SVG (not window) so the
-   * gesture survives the cursor leaving the SVG bounds AND so the
-   * window-level pointermove listeners that container/leaf drags rely
-   * on can't accidentally pick up these events.
+   * Empty-background detection: fire only when the pointerdown landed on
+   * the wrapper's own background (`ev.target === scrollWrapperEl`, the
+   * dead zone) OR on the SVG root element itself (`instanceof
+   * SVGSVGElement`, the canvas background) — NOT on a child
+   * `<rect>` / `<path>` / `<g>`. Children carry their own gestures (leaf
+   * scrub, container drag, edge inspect), so this keeps pan disjoint from
+   * every existing interaction. The sticky toolbar/panels are ordinary
+   * descendants too, so clicks there fall through this guard unharmed.
    *
-   * Cursor: `cursor: grab` on `.graph-view-svg` is the resting state;
-   * the `.panning` class toggles to `grabbing` for the duration of the
-   * gesture. We don't lean on `:active` because pointer capture
-   * decouples from the document focus that drives `:active`.
+   * Pointer capture: setPointerCapture on the wrapper (not window) so the
+   * gesture survives the cursor leaving the wrapper bounds AND so the
+   * window-level pointermove listeners that container/leaf drags rely on
+   * can't accidentally pick up these events.
    *
-   * Scope: the gesture is a no-op when neither axis overflows the
-   * wrapper viewport — there's nothing to pan. The cursor still reads
-   * "grab," which mildly over-promises, but flipping it conditionally
-   * on overflow would require reactive tracking of the wrapper's
-   * scrollable extent across density + zoom changes. Not worth it.
+   * Cursor: `cursor: grab` on `.graph-view` is the resting state (the SVG
+   * and dead zone inherit it; interactive children override); the
+   * `.panning` class on the wrapper toggles to `grabbing` for the
+   * duration of the gesture. We don't lean on `:active` because pointer
+   * capture decouples from the document focus that drives `:active`.
+   *
+   * Scope: the gesture is a no-op when neither axis overflows the wrapper
+   * viewport — there's nothing to pan. The cursor still reads "grab,"
+   * which mildly over-promises, but flipping it conditionally on overflow
+   * would require reactive tracking of the wrapper's scrollable extent
+   * across density + zoom changes. Not worth it.
    */
   const [isPanning, setIsPanning] = createSignal(false);
 
   const handleCanvasPanPointerDown = (ev: PointerEvent): void => {
-    if (ev.target !== ev.currentTarget) return;
     // Only left button (button === 0). Middle/right have other meanings
     // (browser auto-scroll, context menu); don't hijack them.
     if (ev.button !== 0) return;
     const wrapperEl = scrollWrapperEl;
-    const svgEl = ev.currentTarget;
-    if (!wrapperEl || !(svgEl instanceof SVGSVGElement)) return;
+    if (!wrapperEl) return;
+
+    // Empty-canvas guard: pan only when the gesture started on a
+    // background, never on a node/edge/toolbar control. Two backgrounds
+    // qualify — (a) the wrapper's own background (the dead zone below a
+    // short SVG) and (b) the SVG root element itself. Any descendant
+    // (`<rect>`, `<path>`, `<g>`, a toolbar button) owns its own gesture.
+    const target = ev.target;
+    const onEmptyCanvas = target === wrapperEl || target instanceof SVGSVGElement;
+    if (!onEmptyCanvas) return;
 
     // Bail early if there's nothing to pan in either axis — clicking
     // empty canvas on a fully-visible spec shouldn't capture the pointer
@@ -4904,7 +4925,15 @@ export const GraphView = () => {
     if (!overflowsX && !overflowsY) return;
 
     ev.preventDefault();
-    svgEl.setPointerCapture(ev.pointerId);
+    // Pointer capture keeps the gesture alive when the cursor leaves the
+    // wrapper. Best-effort — jsdom (and very old browsers) may not
+    // implement it or may reject a non-active pointerId; the listeners
+    // below keep the pan working either way (same stance as startNodeDrag).
+    try {
+      wrapperEl.setPointerCapture(ev.pointerId);
+    } catch {
+      // capture is an enhancement, not a requirement
+    }
     setIsPanning(true);
 
     let lastClientX = ev.clientX;
@@ -4922,18 +4951,22 @@ export const GraphView = () => {
     };
 
     const onUp = (up: PointerEvent): void => {
-      svgEl.removeEventListener("pointermove", onMove);
-      svgEl.removeEventListener("pointerup", onUp);
-      svgEl.removeEventListener("pointercancel", onUp);
-      if (svgEl.hasPointerCapture(up.pointerId)) {
-        svgEl.releasePointerCapture(up.pointerId);
+      wrapperEl.removeEventListener("pointermove", onMove);
+      wrapperEl.removeEventListener("pointerup", onUp);
+      wrapperEl.removeEventListener("pointercancel", onUp);
+      try {
+        if (wrapperEl.hasPointerCapture?.(up.pointerId)) {
+          wrapperEl.releasePointerCapture(up.pointerId);
+        }
+      } catch {
+        // release is best-effort; mirror the capture guard above
       }
       setIsPanning(false);
     };
 
-    svgEl.addEventListener("pointermove", onMove);
-    svgEl.addEventListener("pointerup", onUp);
-    svgEl.addEventListener("pointercancel", onUp);
+    wrapperEl.addEventListener("pointermove", onMove);
+    wrapperEl.addEventListener("pointerup", onUp);
+    wrapperEl.addEventListener("pointercancel", onUp);
   };
 
   /** Click handler for `[reset zoom]`. Clears horizontal scroll too. */
@@ -5218,6 +5251,11 @@ export const GraphView = () => {
         ref={attachScrollWrapperRef}
         class="graph-view"
         classList={{
+          // Drag-to-pan grabbing cursor while a pan gesture is active.
+          // The gesture is owned by this wrapper (not the SVG) so the
+          // dead zone below a short SVG is pannable too — see
+          // `handleCanvasPanPointerDown`.
+          panning: isPanning(),
           "graph-drop-zone-active": dragOverActive(),
           // Activated by the module-level signal in StepPalette during a
           // palette drag. CSS rules in app.css read the data-state-shape
@@ -5226,6 +5264,7 @@ export const GraphView = () => {
           "dragging-bytes": draggedInputShape() === "bytes",
           "dragging-matrix": draggedInputShape() === "matrix4x4-bytes",
         }}
+        onPointerDown={handleCanvasPanPointerDown}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -5753,13 +5792,11 @@ export const GraphView = () => {
         >
           <svg
             class="graph-view-svg"
-            classList={{ panning: isPanning() }}
             width={layout().canvasW * zoom()}
             height={layout().canvasH * zoom()}
             viewBox={`0 0 ${layout().canvasW} ${layout().canvasH}`}
             role="img"
             aria-label="Aux-flow graph of the active cipher spec"
-            onPointerDown={handleCanvasPanPointerDown}
           >
             {/* Arrowhead marker definitions. One per edge kind so each can be
               tinted to match the edge stroke (state spine = solid; aux

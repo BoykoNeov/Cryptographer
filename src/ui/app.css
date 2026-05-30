@@ -3174,6 +3174,20 @@ button:disabled {
   max-height: calc(100vh - 220px);
   min-height: 560px;
   overflow: auto;
+  /* Drag-to-pan affordance. The pan gesture is owned by this scroll
+     wrapper (not the inner `<svg>`) so the dead zone below a short SVG —
+     the wrapper's own background, exposed because `min-height: 560px`
+     floors the wrapper taller than the content — is grabbable too. The
+     SVG and that dead zone inherit `grab`; interactive descendants
+     (leaves, container headers, toolbar buttons) carry their own cursor
+     rules and override. `.panning` is toggled by JS for the gesture's
+     duration; we can't use `:active` because pointer capture decouples
+     from the document focus that drives it. */
+  cursor: grab;
+}
+
+.graph-view.panning {
+  cursor: grabbing;
 }
 
 /* Sticky-header wrapper. Holds the density toolbar AND the per-source
@@ -3191,6 +3205,10 @@ button:disabled {
   left: 0;
   background: var(--bg-elev);
   z-index: 1;
+  /* Not pannable — reset the `grab` cursor inherited from `.graph-view`
+     so the toolbar band doesn't read as grabbable (its buttons set their
+     own `pointer`). */
+  cursor: default;
 }
 
 /* Toolbar above the SVG. Stays inside the scrolling wrapper via its
@@ -3899,19 +3917,11 @@ button:disabled {
 .graph-view-svg {
   display: block;
   font-family: inherit;
-  /* Drag-to-pan affordance on the empty canvas background. Child
-     elements (`.graph-leaf`, `.graph-container-header`, etc.) carry
-     their own cursor rules and override via specificity, so the grab
-     cursor only shows over empty regions where the pan gesture fires.
-     The `.panning` class is toggled by JS during an active pan — we
-     can't rely on `:active` because pointer capture (used to keep the
-     pan alive after the cursor leaves the SVG) decouples from the
-     document focus that `:active` watches. */
-  cursor: grab;
-}
-
-.graph-view-svg.panning {
-  cursor: grabbing;
+  /* No cursor of its own: the drag-to-pan `grab`/`grabbing` cursor is
+     owned by the `.graph-view` scroll wrapper (the SVG inherits it), so
+     the dead zone below a short SVG and the SVG background read the same.
+     Child elements (`.graph-leaf`, `.graph-container-header`, etc.) carry
+     their own cursor rules and override. */
 }
 
 /* Container rectangles frame their children. Groups and iterates use
