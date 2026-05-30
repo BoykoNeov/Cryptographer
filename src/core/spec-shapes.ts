@@ -437,7 +437,19 @@ const walk = (
         const bodyScope = collectDirectChildOutputs(node.children, ctx.registry);
         validateContainerBinding(node.id, "bodyOutput", node.bodyOutput, bodyScope, ctx);
       }
-      const seedScope = new Map([[node.id, new Set(["in"])]]);
+      // Seed the body scope with the ports the runtime injects: always
+      // `port(iterateId, "in")` (the per-block bytes), and — for a chaining
+      // iterate (byte-native CBC, B1.4b) — `port(iterateId, "chain")` (the
+      // IV / previous-block value). Without seeding "chain", `cbc-xor`'s
+      // `operand1 = port(iterateId, "chain")` read fails to resolve and the
+      // validator emits a false-positive `port-input-unresolvable` even though
+      // the runtime injects the port and the KAT passes (B1.5 Finding 5).
+      // Gating on `chainInput` mirrors the runtime's own injection (chainInput
+      // /chainFeedback are a pair, types.ts) and preserves the CORRECT warning
+      // for a hypothetical iterate that reads "chain" without declaring it.
+      const bodyPorts = new Set(["in"]);
+      if (node.chainInput !== undefined) bodyPorts.add("chain");
+      const seedScope = new Map([[node.id, bodyPorts]]);
       // Body operates on byte blocks; node exit is the concatenated bytes.
       walk(node.children, "bytes", ctx, seedScope);
       shape = "bytes";

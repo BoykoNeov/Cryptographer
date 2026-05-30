@@ -11,10 +11,15 @@
 > matrix-aes-{192,ecb} fixtures defer all matrix-primitive draining to Phase C;
 > B1.4b deletes only `aes-round-builder.ts` (zero consumers) and DEFERS iv-load
 > (it has synthetic-test + palette consumers — advisor-confirmed defer).
-> **NEXT: B1.5 graph-view follow-up (4 confirmed findings — see the "B1.5"
-> section immediately below; dangling plaintext pill in ECB+CBC, fetch-iv
-> unconnected / spurious container→cbc-xor arrow in CBC, merge fetch-rk into one
-> AddRoundKey step, make round-body group leaves draggable).**
+> **B1.5 graph-view follow-up IN PROGRESS. F1 (dangling plaintext pill,
+> ECB+CBC) + F2 (fetch-iv unconnected / spurious container→cbc-xor arrow, CBC)
+> SHIPPED + browser-smoked GREEN 2026-05-30 (commit `ae00489`). The smoke
+> surfaced a pre-existing B1.4b blemish — F5: a false-positive
+> `port-input-unresolvable` warning on `cbc-xor` (the validator seeded only
+> "in", not "chain", into the iterate body scope) — fixed minimally
+> (advisor-confirmed). REMAINING: F4 (make round-body group leaves draggable),
+> F3 (merge fetch-rk into one AddRoundKey step — heaviest, own session,
+> re-consult advisor first).**
 > Phase A: A0+A1+A2+A3a+A3b SHIPPED + A3b follow-ups
 > ⓐ–ⓕ DONE + A4 (anti-creep contract test) SHIPPED 2026-05-28. A3 split into A3a+A3b with Q1–Q4
 > resolved (advisor pass + user co-design 2026-05-28); A3b's open carry
@@ -107,6 +112,27 @@ has a `kind==="group"` ancestor), include it in `isDraggable` with
 click on sub-threshold release, so behavior should hold — verify, don't assume,
 per [[feedback_jsdom_pointer_events_gap]]). Reset glyph + persistence come free
 (relativePositions already plumbed through layout store + Save/Share).
+
+### Finding 5 — false-positive `port-input-unresolvable` on cbc-xor (SMOKE-SURFACED, SHIPPED)
+The F1/F2 browser smoke (2026-05-30) revealed an orange "!" warning glyph on
+`cbc-xor` in **both** CBC encrypt and decrypt — NOT in the original 4-finding
+diagnosis, and pre-existing from B1.4b (the F1/F2 commit never touched
+`spec-shapes.ts`). Root cause: the iterate's port-mode body-scope seed
+(`spec-shapes.ts` ~440) injected only `port(iterateId,"in")`, never
+`port(iterateId,"chain")`. So `validateShapes` couldn't resolve
+`cbc-xor.operand1 = port("cbc-blocks","chain")` and emitted
+`{ kind:"port-input-unresolvable", reason:"missing-port" }` — a false positive,
+since the runtime DOES inject `"chain"` (B1.4b) and the KAT passes. **Fix
+(advisor-confirmed minimal):** seed `"chain"` into the body scope when
+`chainInput !== undefined`, mirroring the runtime's own injection. **Did NOT**
+also add `chainInput`/`chainFeedback` binding validation — decrypt's
+`chainFeedback = port(it,"in")` resolves through the *injected* port, which
+`collectDirectChildOutputs` doesn't contain, so validating it would manufacture
+a NEW false-positive. That binding-validation hardening is a **deferred
+follow-up**. Verification is a unit assertion (`validateShapes` clean for CBC
+enc+dec, ECB stays clean) — NOT a second browser pass: the badge is driven by
+`validateShapes ∪ validateGraph`, and `spec-shapes.ts` can't affect graph
+geometry (edges/layout come from `graph.ts`, untouched here).
 
 **Process reminders:** re-consult advisor first; KAT byte-equal after Finding 3;
 browser smoke (not just jsdom) for Findings 1/2/4 per

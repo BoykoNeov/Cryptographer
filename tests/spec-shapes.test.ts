@@ -22,6 +22,8 @@
  */
 
 import { aes128Spec } from "@/ciphers/aes-128";
+import { aes128CbcSpec } from "@/ciphers/aes-128-cbc";
+import { aes128CbcDecryptSpec } from "@/ciphers/aes-128-cbc-decrypt";
 import { aes128DecryptSpec } from "@/ciphers/aes-128-decrypt";
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { aes192Spec } from "@/ciphers/aes-192";
@@ -56,6 +58,24 @@ describe("validateShapes — zero false positives on shipped specs", () => {
     // be flagged `port-input-unresolvable`. A clean run pins it stays bytes
     // end-to-end with no warnings.
     expect(validateShapes(aes128EcbSpec, registry)).toEqual([]);
+  });
+
+  it("AES-128 CBC encrypt (port-mode chaining iterate)", () => {
+    // Byte-native CBC (B1.4b): the iterate is port mode AND chaining —
+    // `cbc-xor` reads `operand0 = port(cbc-blocks,"in")` (the block) and
+    // `operand1 = port(cbc-blocks,"chain")` (the IV / previous block). The
+    // runtime injects BOTH ports, but the validator originally seeded only
+    // "in" into the body scope, so the "chain" read raised a false-positive
+    // `port-input-unresolvable` (B1.5 Finding 5 — the orange "!" on cbc-xor).
+    // Seeding "chain" when `chainInput` is present clears it; pin zero warnings.
+    expect(validateShapes(aes128CbcSpec, registry)).toEqual([]);
+  });
+
+  it("AES-128 CBC decrypt (port-mode chaining iterate)", () => {
+    // Same chaining shape, decrypt asymmetry: `cbc-xor` is the body tail and
+    // still reads `port(cbc-blocks,"chain")`. Pin zero warnings here too — the
+    // "chain"-seed fix is direction-agnostic.
+    expect(validateShapes(aes128CbcDecryptSpec, registry)).toEqual([]);
   });
 
   it("AES-192 encrypt", () => {
