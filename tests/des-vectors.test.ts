@@ -1,29 +1,35 @@
 /**
- * DES known-answer tests pinning the cipher to the Phase-1 oracle fixture
+ * DES encrypt known-answer + per-leaf parity tests, pinning the port-native
+ * DES rebuild (B4 — universal-port Phase 4d) to the Phase-1 oracle fixture
  * at `tests/fixtures/des-kat.json`.
  *
  * Per `[[feedback-crypto-verification]]`: the fixture was produced by
  * `scripts/verify-des.mjs` and cross-checked against `node:crypto` for the
- * final ciphertext. Three vectors (FIPS Appendix B + two boundary cases:
- * all-zeros and all-ones) each carry the IP output, per-round F
- * intermediates (E, X, S, P, F_out), and the final pre-FP value. The DES
- * spec's trace MUST match every recorded value.
+ * final ciphertext. Three vectors (FIPS Appendix B + all-zeros + all-ones)
+ * each carry the IP output, per-round F intermediates (E, X, S, P, F_out),
+ * L_out/R_out, and the final pre-FP value.
  *
- * **Round-16 alignment gotcha.** The oracle's per-round records use
- * textbook Feistel-standard semantics for ALL 16 rounds: `L_out = R_in`
- * and `R_out = L_in ⊕ F_out`. After the loop, it computes
- * `preFp = R_16 || L_16` (a final swap) and applies FP.
+ * **Per-leaf parity net (the B2/B3 golden-frame-stream analog).** The
+ * port-native rebuild changed the trace TOPOLOGY (no `feistel-round`, no
+ * `:rejoin` frames, new split/xor/concat leaves), so a B2/B3-style whole
+ * frame-stream equality no longer applies. Instead each fixture intermediate
+ * is asserted against the matching native leaf's OUTPUT PORT
+ * (`frame.portOutputs`, NOT `stateAfter` — port-native leaves don't thread
+ * `state`):
+ *   - `ip`    → `initial-permutation.state`
+ *   - `E`     → `round.r.expand-R.state`
+ *   - `X`     → `round.r.xor-K.state`
+ *   - `S`     → `round.r.s-boxes.state`
+ *   - `P/F_out` → `round.r.p-permute.state`
+ *   - `L_in/R_in` → `round.r.split.output0/output1`
+ *   - `R_out` (= L_in ⊕ F) → `round.r.fxor.output`
+ *   - `preFp` → `round.16.recombine.output`
  *
- * Our spec uses `combineKind: "feistel-no-swap"` for round 16 — equivalent
- * to "don't record the final swap." So:
- *   - Rounds 1..15: rejoin stateAfter bytes [0..3] == oracle.L_out,
- *     bytes [4..7] == oracle.R_out (matches the fixture verbatim).
- *   - Round 16: rejoin stateAfter == oracle.preFp (NOT oracle.L_out||R_out;
- *     no-swap inverts the order). This is what the test asserts.
- *
- * Both encodings produce the same ciphertext after FP — the difference is
- * purely "where the final swap lives" (in the post-loop step vs. baked
- * into the round-16 combine kind).
+ * **The swap-order trap (advisor done-check).** The Feistel swap is nothing
+ * but the `concat@1` argument order. Rounds 1..15 emit `R_in || (L_in⊕F)`
+ * (= `L_out || R_out`); round 16 (the no-swap exception) emits
+ * `(L_in⊕F) || R_in` (= `preFp`). `round.16.recombine.output == preFp` is the
+ * single place a standard/no-swap order slip would hide — pinned explicitly.
  */
 
 import { readFileSync } from "node:fs";
@@ -32,7 +38,7 @@ import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { desSpec } from "@/ciphers/des";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes } from "@/core/state/bytes";
-import type { AuxValue, BytesState } from "@/core/types";
+import type { AuxValue, BytesState, TraceFrame } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 type RoundFixture = {
@@ -68,15 +74,40 @@ const FIXTURE: Fixture = JSON.parse(readFileSync(FIXTURE_PATH, "utf8")) as Fixtu
 const bytesShape = (state: { readonly shape: string }): state is BytesState =>
   state.shape === "bytes";
 
-/** Run the DES encrypt spec on a single fixture vector. */
+/**
+ * Run the port-native DES encrypt spec on a single fixture vector. The spec
+ * has port-native leaves, so `portedDispatchEnabled: true` is required (the
+ * runtime throws otherwise).
+ */
 const runVector = (vec: VectorFixture) => {
   const plaintext: BytesState = { shape: "bytes", bytes: bytesFromHex(vec.pt) };
   const key = bytesFromHex(vec.key);
   const initialAux = new Map<string, AuxValue>([["key", key]]);
-  return runSpec(desSpec, buildDefaultRegistry(), { initialState: plaintext, initialAux });
+  return runSpec(desSpec, buildDefaultRegistry(), {
+    initialState: plaintext,
+    initialAux,
+    portedDispatchEnabled: true,
+  });
 };
 
-describe("DES — final ciphertext", () => {
+/** Map every frame by its stepId for direct lookup. */
+const byId = (frames: readonly TraceFrame[]): Map<string, TraceFrame> => {
+  const m = new Map<string, TraceFrame>();
+  for (const f of frames) m.set(f.stepId, f);
+  return m;
+};
+
+/** Hex of a leaf's named OUTPUT port (port-native leaves publish here). */
+const portHex = (
+  frames: Map<string, TraceFrame>,
+  stepId: string,
+  portName: string,
+): string | undefined => {
+  const bytes = frames.get(stepId)?.portOutputs?.get(portName);
+  return bytes === undefined ? undefined : hexFromBytes(bytes);
+};
+
+describe("DES (port-native) — final ciphertext", () => {
   for (const vec of FIXTURE.vectors) {
     it(`PT=${vec.pt} K=${vec.key} → CT=${vec.ct}`, () => {
       const trace = runVector(vec);
@@ -87,7 +118,7 @@ describe("DES — final ciphertext", () => {
   }
 });
 
-describe("DES — key schedule produces 16 round keys (FIPS Appendix B vector)", () => {
+describe("DES (port-native) — key schedule produces 16 round keys (FIPS Appendix B)", () => {
   const vec = FIXTURE.vectors[0];
   if (!vec) throw new Error("fixture missing");
   it("aux carries roundKey.0..15, each a 6-byte Uint8Array equal to fixture K_i", () => {
@@ -105,123 +136,105 @@ describe("DES — key schedule produces 16 round keys (FIPS Appendix B vector)",
   });
 });
 
-describe("DES — initial-permutation frame matches fixture IP output", () => {
+describe("DES (port-native) — initial-permutation output port matches fixture IP", () => {
   for (const vec of FIXTURE.vectors) {
-    it(`PT=${vec.pt}: IP output == ${vec.ip}`, () => {
-      const trace = runVector(vec);
-      const ip = trace.frames.find((f) => f.stepId === "initial-permutation");
-      expect(ip, "initial-permutation frame missing").toBeDefined();
-      if (!ip) return;
-      expect(bytesShape(ip.stateAfter)).toBe(true);
-      if (!bytesShape(ip.stateAfter)) return;
-      expect(hexFromBytes(ip.stateAfter.bytes)).toBe(vec.ip);
+    it(`PT=${vec.pt}: IP.state == ${vec.ip}`, () => {
+      const frames = byId(runVector(vec).frames);
+      expect(portHex(frames, "initial-permutation", "state")).toBe(vec.ip);
     });
   }
 });
 
-describe("DES — F-function intermediates match fixture per round", () => {
+describe("DES (port-native) — per-leaf parity vs fixture, ALL 16 rounds", () => {
   const vec = FIXTURE.vectors[0];
   if (!vec) throw new Error("fixture missing");
-  // Spot-check 4 rounds to keep this test focused; if all checks pass
-  // here AND the final ciphertext + IP/FP match, the cipher is correct.
-  // Rounds 1 (entry) and 16 (last with the no-swap kind), plus a couple
-  // in the middle to exercise the standard combine across the loop.
-  const ROUNDS_TO_CHECK = [1, 2, 8, 16];
-  for (const r of ROUNDS_TO_CHECK) {
-    const round = vec.rounds[r - 1];
-    if (!round) throw new Error(`fixture missing round ${r}`);
 
-    it(`round ${r}: expand-R(R_in) == ${round.E}`, () => {
-      const trace = runVector(vec);
-      const f = trace.frames.find((fr) => fr.stepId === `round.${r}.expand-R:tR`);
-      expect(f, `round.${r}.expand-R:tR missing`).toBeDefined();
-      if (!f) return;
-      if (!bytesShape(f.stateAfter)) return;
-      expect(hexFromBytes(f.stateAfter.bytes)).toBe(round.E);
-    });
+  it("split.output0/output1 == L_in/R_in for every round", () => {
+    const frames = byId(runVector(vec).frames);
+    for (let r = 1; r <= 16; r++) {
+      const round = vec.rounds[r - 1];
+      if (!round) throw new Error(`fixture missing round ${r}`);
+      expect(portHex(frames, `round.${r}.split`, "output0"), `round ${r} L_in`).toBe(round.L_in);
+      expect(portHex(frames, `round.${r}.split`, "output1"), `round ${r} R_in`).toBe(round.R_in);
+    }
+  });
 
-    it(`round ${r}: xor-K(E) == ${round.X}`, () => {
-      const trace = runVector(vec);
-      const f = trace.frames.find((fr) => fr.stepId === `round.${r}.xor-K:tR`);
-      expect(f, `round.${r}.xor-K:tR missing`).toBeDefined();
-      if (!f) return;
-      if (!bytesShape(f.stateAfter)) return;
-      expect(hexFromBytes(f.stateAfter.bytes)).toBe(round.X);
-    });
+  it("expand-R.state == E for every round", () => {
+    const frames = byId(runVector(vec).frames);
+    for (let r = 1; r <= 16; r++) {
+      const round = vec.rounds[r - 1];
+      if (!round) throw new Error(`fixture missing round ${r}`);
+      expect(portHex(frames, `round.${r}.expand-R`, "state"), `round ${r} E`).toBe(round.E);
+    }
+  });
 
-    it(`round ${r}: s-boxes(X) == ${round.S}`, () => {
-      const trace = runVector(vec);
-      const f = trace.frames.find((fr) => fr.stepId === `round.${r}.s-boxes:tR`);
-      expect(f, `round.${r}.s-boxes:tR missing`).toBeDefined();
-      if (!f) return;
-      if (!bytesShape(f.stateAfter)) return;
-      expect(hexFromBytes(f.stateAfter.bytes)).toBe(round.S);
-    });
+  it("xor-K.state == X (E ⊕ K_i) for every round", () => {
+    const frames = byId(runVector(vec).frames);
+    for (let r = 1; r <= 16; r++) {
+      const round = vec.rounds[r - 1];
+      if (!round) throw new Error(`fixture missing round ${r}`);
+      expect(portHex(frames, `round.${r}.xor-K`, "state"), `round ${r} X`).toBe(round.X);
+    }
+  });
 
-    it(`round ${r}: p-permute(S) == ${round.P} (== F_out)`, () => {
-      const trace = runVector(vec);
-      const f = trace.frames.find((fr) => fr.stepId === `round.${r}.p-permute:tR`);
-      expect(f, `round.${r}.p-permute:tR missing`).toBeDefined();
-      if (!f) return;
-      if (!bytesShape(f.stateAfter)) return;
-      // F_out == P_out (P is the last step inside F).
-      expect(hexFromBytes(f.stateAfter.bytes)).toBe(round.P);
-      expect(round.F_out).toBe(round.P);
-    });
-  }
+  it("s-boxes.state == S for every round", () => {
+    const frames = byId(runVector(vec).frames);
+    for (let r = 1; r <= 16; r++) {
+      const round = vec.rounds[r - 1];
+      if (!round) throw new Error(`fixture missing round ${r}`);
+      expect(portHex(frames, `round.${r}.s-boxes`, "state"), `round ${r} S`).toBe(round.S);
+    }
+  });
+
+  it("p-permute.state == P (== F_out) for every round", () => {
+    const frames = byId(runVector(vec).frames);
+    for (let r = 1; r <= 16; r++) {
+      const round = vec.rounds[r - 1];
+      if (!round) throw new Error(`fixture missing round ${r}`);
+      expect(portHex(frames, `round.${r}.p-permute`, "state"), `round ${r} P`).toBe(round.P);
+      expect(round.F_out, `round ${r} F_out==P`).toBe(round.P);
+    }
+  });
+
+  it("fxor.output == R_out (= L_in ⊕ F) for every round", () => {
+    const frames = byId(runVector(vec).frames);
+    for (let r = 1; r <= 16; r++) {
+      const round = vec.rounds[r - 1];
+      if (!round) throw new Error(`fixture missing round ${r}`);
+      expect(portHex(frames, `round.${r}.fxor`, "output"), `round ${r} R_out`).toBe(round.R_out);
+    }
+  });
+
+  it("xor-K records the per-round roundKey aux read", () => {
+    const frames = byId(runVector(vec).frames);
+    for (let r = 1; r <= 16; r++) {
+      const f = frames.get(`round.${r}.xor-K`);
+      expect(f, `round.${r}.xor-K frame missing`).toBeDefined();
+      expect(
+        f?.auxRead?.has(`roundKey.${r - 1}`),
+        `round ${r} should record auxRead roundKey.${r - 1}`,
+      ).toBe(true);
+    }
+  });
 });
 
-describe("DES — rejoin frame matches expected (L_out || R_out) per round", () => {
+describe("DES (port-native) — the swap IS the concat argument order", () => {
   const vec = FIXTURE.vectors[0];
   if (!vec) throw new Error("fixture missing");
-  it("rounds 1..15 (feistel-standard): rejoin stateAfter == L_out || R_out", () => {
-    const trace = runVector(vec);
+
+  it("rounds 1..15 recombine == R_in || (L_in⊕F) == L_out || R_out (textbook swap)", () => {
+    const frames = byId(runVector(vec).frames);
     for (let r = 1; r <= 15; r++) {
       const round = vec.rounds[r - 1];
       if (!round) throw new Error(`fixture missing round ${r}`);
-      const rejoin = trace.frames.find((f) => f.stepId === `round.${r}:rejoin`);
-      expect(rejoin, `round.${r}:rejoin missing`).toBeDefined();
-      if (!rejoin) continue;
-      if (!bytesShape(rejoin.stateAfter)) continue;
-      // Fixture records L_out and R_out under textbook Feistel-standard
-      // semantics; our rounds 1..15 use the same combine, so direct match.
-      expect(hexFromBytes(rejoin.stateAfter.bytes)).toBe(round.L_out + round.R_out);
+      expect(portHex(frames, `round.${r}.recombine`, "output"), `round ${r} recombine`).toBe(
+        round.L_out + round.R_out,
+      );
     }
   });
 
-  it("round 16 (feistel-no-swap): rejoin stateAfter == preFp (NOT L_out||R_out)", () => {
-    const trace = runVector(vec);
-    const round16 = vec.rounds[15];
-    expect(round16, "fixture missing round 16").toBeDefined();
-    if (!round16) return;
-    const rejoin = trace.frames.find((f) => f.stepId === "round.16:rejoin");
-    expect(rejoin, "round.16:rejoin missing").toBeDefined();
-    if (!rejoin) return;
-    if (!bytesShape(rejoin.stateAfter)) return;
-    // feistel-no-swap puts (L_in ⊕ R_out_track, R_in) into the rejoin
-    // output, equivalent to oracle's (R_out, L_out) for round 16 ==
-    // oracle's preFp by construction.
-    expect(hexFromBytes(rejoin.stateAfter.bytes)).toBe(vec.preFp);
-  });
-});
-
-describe("DES — branchPath stamping on track frames", () => {
-  it("R-track frames carry branchPath=['R']; rejoin frames carry it too", () => {
-    const vec = FIXTURE.vectors[0];
-    if (!vec) throw new Error("fixture missing");
-    const trace = runVector(vec);
-    for (const frame of trace.frames) {
-      const inTrack = /:tR$/.test(frame.stepId);
-      const isRejoin = /:rejoin$/.test(frame.stepId);
-      if (inTrack) {
-        expect(frame.branchPath, `${frame.stepId} should have branchPath`).toEqual(["R"]);
-      } else if (isRejoin) {
-        // Synthetic rejoin frame: branchPath omitted (the rejoin sits at
-        // the round's parent scope, not inside a track). See runtime.ts.
-        expect(frame.branchPath, `${frame.stepId} should NOT have branchPath`).toBeUndefined();
-      } else {
-        expect(frame.branchPath, `${frame.stepId} should not have branchPath`).toBeUndefined();
-      }
-    }
+  it("round 16 recombine == (L_in⊕F) || R_in == preFp (NO swap) — the swap-order trap", () => {
+    const frames = byId(runVector(vec).frames);
+    expect(portHex(frames, "round.16.recombine", "output")).toBe(vec.preFp);
   });
 });

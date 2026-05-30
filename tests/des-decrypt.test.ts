@@ -2,12 +2,12 @@
  * DES decrypt tests. Inverse KAT against the same FIPS 46-3 vectors as
  * `des-vectors.test.ts`, plus a random-roundtrip pin.
  *
- * The decrypt spec (`src/ciphers/des-decrypt.ts`) is the same Feistel
- * structure as encrypt with round keys consumed in reverse order
- * (roundKey.15, roundKey.14, …, roundKey.0). Round 16 keeps the
- * `feistel-no-swap` combine kind — the "no swap on last round" exception
- * applies to each direction independently and is what makes the cipher
- * self-inverse under key-reversal.
+ * The decrypt spec (`src/ciphers/des-decrypt.ts`) is the same port-native
+ * structure as encrypt (B4 — universal-port Phase 4d) with round keys
+ * consumed in reverse order (roundKey.15, roundKey.14, …, roundKey.0).
+ * Round 16 keeps the no-swap recombine order — the "no swap on last round"
+ * exception applies to each direction independently and is what makes the
+ * cipher self-inverse under key-reversal.
  */
 
 import { readFileSync } from "node:fs";
@@ -17,7 +17,7 @@ import { desSpec } from "@/ciphers/des";
 import { desDecryptSpec } from "@/ciphers/des-decrypt";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes } from "@/core/state/bytes";
-import type { AuxValue, BytesState } from "@/core/types";
+import type { AuxValue, BytesState, PortBinding, StepNode } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 type VectorFixture = {
@@ -33,6 +33,30 @@ type Fixture = {
 const FIXTURE_PATH = join(process.cwd(), "tests", "fixtures", "des-kat.json");
 const FIXTURE: Fixture = JSON.parse(readFileSync(FIXTURE_PATH, "utf8")) as Fixture;
 
+/** Depth-first search for a leaf by id across nested groups. */
+const findLeaf = (nodes: readonly StepNode[], id: string): StepNode | undefined => {
+  for (const n of nodes) {
+    if (n.id === id) return n;
+    if (n.kind === "group") {
+      const hit = findLeaf(n.children, id);
+      if (hit) return hit;
+    }
+  }
+  return undefined;
+};
+
+const roundKeyAuxOf = (id: string): string | undefined => {
+  const leaf = findLeaf(desDecryptSpec.steps, id);
+  if (leaf?.kind !== "step") return undefined;
+  return (leaf.params as { roundKeyAux?: string }).roundKeyAux;
+};
+
+const recombineInput0 = (id: string): PortBinding | undefined => {
+  const leaf = findLeaf(desDecryptSpec.steps, id);
+  if (leaf?.kind !== "step") return undefined;
+  return leaf.portInputs?.input0;
+};
+
 describe("DES decrypt — inverse of encrypt on FIPS test vectors", () => {
   for (const vec of FIXTURE.vectors) {
     it(`CT=${vec.ct} K=${vec.key} → PT=${vec.pt}`, () => {
@@ -42,6 +66,7 @@ describe("DES decrypt — inverse of encrypt on FIPS test vectors", () => {
       const trace = runSpec(desDecryptSpec, buildDefaultRegistry(), {
         initialState: ciphertext,
         initialAux,
+        portedDispatchEnabled: true,
       });
       expect(trace.finalState.shape).toBe("bytes");
       if (trace.finalState.shape !== "bytes") return;
@@ -69,6 +94,7 @@ describe("DES roundtrip — encrypt then decrypt is the identity", () => {
       const encTrace = runSpec(desSpec, registry, {
         initialState: { shape: "bytes", bytes: bytesFromHex(pt) },
         initialAux,
+        portedDispatchEnabled: true,
       });
       if (encTrace.finalState.shape !== "bytes") throw new Error("encrypt shape");
       const ct = encTrace.finalState.bytes;
@@ -78,6 +104,7 @@ describe("DES roundtrip — encrypt then decrypt is the identity", () => {
       const decTrace = runSpec(desDecryptSpec, registry, {
         initialState: { shape: "bytes", bytes: ct },
         initialAux: decAux,
+        portedDispatchEnabled: true,
       });
       if (decTrace.finalState.shape !== "bytes") throw new Error("decrypt shape");
       expect(
@@ -88,40 +115,31 @@ describe("DES roundtrip — encrypt then decrypt is the identity", () => {
   });
 });
 
-describe("DES decrypt — consumes round keys in REVERSE order", () => {
+describe("DES decrypt — consumes round keys in REVERSE order (port-native spec)", () => {
   // Pin the spec-visible property: decrypt round 1 references roundKey.15;
   // decrypt round 16 references roundKey.0. The "no swap on last round"
   // applies to round 16 of EACH direction (and uses K_1, not K_16, for
   // decrypt).
   it("round 1 xor-K consumes roundKey.15", () => {
-    const round1 = desDecryptSpec.steps[2];
-    expect(round1?.kind).toBe("group");
-    if (round1?.kind !== "group") return;
-    const r1 = round1.children[0];
-    expect(r1?.kind).toBe("feistel-round");
-    if (r1?.kind !== "feistel-round") return;
-    const rTrack = r1.tracks[1];
-    expect(rTrack?.name).toBe("R");
-    if (!rTrack) return;
-    const xorK = rTrack.children.find((c) => c.kind === "step" && c.type === "des.xor-with-K@1");
-    expect(xorK).toBeDefined();
-    if (!xorK || xorK.kind !== "step") return;
-    const params = xorK.params as { roundKeyAux?: string };
-    expect(params.roundKeyAux).toBe("roundKey.15");
+    expect(roundKeyAuxOf("round.1.xor-K")).toBe("roundKey.15");
   });
 
-  it("round 16 uses combineKind 'feistel-no-swap' AND consumes roundKey.0", () => {
-    const rounds = desDecryptSpec.steps[2];
-    if (rounds?.kind !== "group") throw new Error("rounds group missing");
-    const r16 = rounds.children[15];
-    expect(r16?.kind).toBe("feistel-round");
-    if (r16?.kind !== "feistel-round") return;
-    expect(r16.combineKind).toBe("feistel-no-swap");
-    const rTrack = r16.tracks[1];
-    if (!rTrack) return;
-    const xorK = rTrack.children.find((c) => c.kind === "step" && c.type === "des.xor-with-K@1");
-    if (!xorK || xorK.kind !== "step") return;
-    const params = xorK.params as { roundKeyAux?: string };
-    expect(params.roundKeyAux).toBe("roundKey.0");
+  it("round 16 xor-K consumes roundKey.0", () => {
+    expect(roundKeyAuxOf("round.16.xor-K")).toBe("roundKey.0");
+  });
+
+  // The Feistel swap IS the concat argument order. Rounds 1..15 feed the
+  // split's R half (output1) into the recombine's input0 (the swap); round
+  // 16 (no-swap) feeds the L⊕F xor into input0 instead.
+  it("round 1 recombine uses the swap order (input0 ← split.output1)", () => {
+    const b = recombineInput0("round.1.recombine");
+    expect(b?.node).toBe("round.1.split");
+    expect(b?.port).toBe("output1");
+  });
+
+  it("round 16 recombine uses the NO-swap order (input0 ← fxor.output)", () => {
+    const b = recombineInput0("round.16.recombine");
+    expect(b?.node).toBe("round.16.fxor");
+    expect(b?.port).toBe("output");
   });
 });

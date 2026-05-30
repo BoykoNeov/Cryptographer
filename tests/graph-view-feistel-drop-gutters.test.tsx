@@ -23,12 +23,7 @@
  * for real-world hit-testing.
  */
 
-import { buildDefaultRegistry } from "@/ciphers/default-registry";
-import { desSpec } from "@/ciphers/des";
-import { runSpec } from "@/core/runtime";
 import { findStepAndParent } from "@/core/spec-mutations";
-import { bytesFromHex } from "@/core/state/bytes";
-import type { AuxValue } from "@/core/types";
 import { GraphView } from "@/ui/components/GraphView";
 import { STEP_TYPE_DRAG_MIME } from "@/ui/components/StepPalette";
 import { __resetAutoRerunForTests } from "@/ui/stores/auto-rerun";
@@ -38,20 +33,19 @@ import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
 import { __resetLayoutsForTests } from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
-import { __resetSpecForTests, setCipher, useSpec } from "@/ui/stores/spec";
-import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
+import { __resetSpecForTests, __setSpecForTests, useSpec } from "@/ui/stores/spec";
+import { __resetTraceForTests } from "@/ui/stores/trace";
 import { __resetViewModeForTests } from "@/ui/stores/view-mode";
 import { __resetReplicationForTests } from "@/ui/stores/view-replication";
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { buildSyntheticFeistelSpec } from "./fixtures/synthetic-feistel-rounds";
 
-const seedDesTrace = (): void => {
-  const trace = runSpec(desSpec, buildDefaultRegistry(), {
-    initialState: { shape: "bytes" as const, bytes: bytesFromHex("0123456789abcdef") },
-    initialAux: new Map<string, AuxValue>([["key", bytesFromHex("133457799bbcdff1")]]),
-  });
-  setTrace(trace);
-};
+// B4 (universal-port Phase 4d): the port-native DES no longer uses
+// `feistel-round`, but GraphView's per-track drop gutters survive until
+// Phase 5. The synthetic Feistel fixture (16 rounds, 4-leaf R tracks shaped
+// like the old DES) drives them; gutters render structurally, so no trace is
+// needed (GraphView defaults to an empty trace, as graph-view-des-feistel does).
 
 const resetAll = (): void => {
   __resetAutoRerunForTests();
@@ -90,8 +84,7 @@ const fireDropAt = (target: Element, stepType: string): void => {
 describe("GraphView — feistel per-track drop gutters (6d-v)", () => {
   beforeEach(() => {
     resetAll();
-    setCipher("des");
-    seedDesTrace();
+    __setSpecForTests(buildSyntheticFeistelSpec(16));
   });
 
   afterEach(() => {

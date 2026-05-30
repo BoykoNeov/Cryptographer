@@ -1,14 +1,13 @@
 # Scaffolding suppression — every leaf speaks only in byte arrays
 
-> **Status: Phase A COMPLETE. Phase B IN PROGRESS — B1 (AES) MERGED TO MAIN
-> 2026-05-30 (`f896f3c`); B2 (Speck) MERGED TO MAIN 2026-05-30 (`--no-ff`
-> merge `d791c35`); B3 (Serpent) DONE on branch `b3-serpent-byte-native`
-> (commit `7016892`), full `npm run check` GREEN (2565 tests / 218 files),
-> browser eyeball done (Serpent-128 KAT `264e5481…`, replication auto-on,
-> 33-way fan-out legible, IP + mid-round PortFlowView + narration), merging
-> `--no-ff` to main. Next: B4 (DES) — NOT a Scope-B flip; it's the
-> universal-port plan's Phase 4d Feistel rebuild. See "## B3 — Serpent
-> byte-native" below.**
+> **Status: Phase A COMPLETE. Phase B COMPLETE — B1 (AES) + B2 (Speck) +
+> B3 (Serpent) + B4 (DES) all byte-native + merged to main 2026-05-30. Every
+> shipped cipher/hash is now port-native; no shipped spec uses `feistel-round`.
+> Next: Phase C (state-union retirement) per the universal-port plan's Phase 5.
+> See "## B4 — DES byte-native" (the Phase 4d Feistel rebuild) below.**
+>
+> **(historical) B1–B3:** B1 (AES) MERGED `f896f3c`; B2 (Speck) MERGED `d791c35`;
+> B3 (Serpent) MERGED `024b8f4`. See the per-cipher sections below.
 >
 > **(historical B1 status)** Phase B IN PROGRESS — B1 (AES) on branch
 > `b1-aes-byte-native`. B1.1 (128 enc) + B1.2 (128 dec) + B1.3 (192/256 enc+dec)
@@ -41,6 +40,67 @@
 >
 > Sits **before** Slice 2.9c–e (those depend on a stable spec shape,
 > which this plan settles).
+
+## B4 — DES byte-native (2026-05-30): DONE; gate GREEN; browser-smoked; merged
+
+**NOT a Scope-B flip** (unlike B2/B3). DES was the last cipher on the legacy
+Feistel contract (`FeistelRoundGroup` + `runFeistelRound` + `:rejoin` synthesis).
+B4 = the universal-port plan's **Phase 4d**: rebuild DES from native primitives
+so it stops using `feistel-round`, proving the thesis that **Feistel needs no
+special primitive**. Plan file: `~/.claude/plans/radiant-petting-orbit.md`.
+
+**The rebuild.** Each round is now a port-mode `group` (the SHA-256
+compression-round template) wiring `split-bytes(widths=[4,4])` → `des.expand-R`
+→ `des.xor-with-K` → `des.s-boxes` → `des.p-permutation` → `xor@1` (L⊕F) →
+`concat@1`. **The Feistel swap IS the concat argument order**: rounds 1–15
+`concat(R, L⊕F)`, round 16 (no-swap) `concat(L⊕F, R)`. The outer `rounds`
+group is itself port-mode (`seedInput` from IP, `bodyOutput` from round.16) so
+round 1 seeds across the group boundary. `$input → IP → rounds → FP →
+outputFrom`. Key-schedule stays lifted (aux-only, mirrors AES). **No
+`applyPaddingScheme` change** — single-block DES stays the Branch-3 no-op (same
+as the feistel build); the AES+PKCS7→DES swap e2e test confirms it.
+
+**Executor conversion.** The 6 F-leaves dropped `liftLegacyExecutor`/`legacy`
+for true `PortedExecutor`s. IP/FP/E/S/P are pure port-native (**dropped
+`stateInputPort`/`stateOutputPort`** — bytes flow on the `state` port via
+`portInputs`). `des.xor-with-K@1` keeps `meta.auxReadPorts` only (the
+`xor-with-aux@1` hybrid shape — reads `state` via portInputs + `roundKey` from
+aux). KAT byte-equal (FIPS 46-3 Appendix B `85e813540f0ab405`) via a **per-leaf
+parity net** in `des-vectors.test.ts` (every IP/E/X/S/P/split/fxor/recombine
+output asserted against `des-kat.json` across all 16 rounds + the swap-order
+trap `round.16.recombine == preFp`).
+
+**Sweep (~25 files).** Dispatch rows flipped; `runtime-ported-dispatch-frame-parity`
+retargeted to the surviving toy fixture (the only lifted-AND-port-runnable
+construct left). The advisor's decision tree: tests asserting *DES uses feistel*
+→ rewritten port-native (`des-graph` → 16 port-mode round groups, no feistel
+container); tests exercising *surviving primitive machinery* → retargeted to a
+synthetic feistel fixture (`tests/fixtures/synthetic-feistel-rounds.ts`, runnable
+via `feistel.toy-add-k`) or the toy (component smokes). New test helper
+`__setSpecForTests` injects the toy/synthetic since `feistel-round` isn't a
+selector cipher. `graph-view-replication-force-on-ported`'s non-ported control
+moved to the toy (DES was the last lifted cipher).
+
+**Done-check catch (advisor).** DES is the FIRST cipher to drop the state-thread
+projection meta, so the runtime never updates threaded `state` through the
+rounds → every DES frame's `stateBefore`/`stateAfter` is the stale plaintext.
+The DES narrators read `stateBefore` → fixed to read port I/O (`frameStateIn`/
+`frameStateOut` in `ui/narration/des.tsx`); pinned by
+`step-narration-des-port-native.test.tsx`. Provenance is byte-value-independent
+(reads the FIPS table) → unaffected.
+
+**OBLIGATORY follow-up (user-required):** the `feistel-round`-keyed linear/graph
+visualizations (FeistelMiniDiagram, FeistelTrackContext, RejoinFrameView,
+scrubber track badges, graph feistel container) go dark for port-native DES —
+the user chose "accept loss + minimal narration" for B4 but flagged a
+port-native-aware Feistel/swap diagram rebuild as a hard follow-up (its own
+plan + advisor pass).
+
+Gate GREEN on branch `b4-des-byte-native`: 2548 tests / 219 files, biome+tsc+build
+clean. Browser-smoked (throwaway Playwright, deleted): DES graph mounts with
+split/recombine leaves, zero feistel containers, KAT `85e813540f0ab405`. Merging
+`--no-ff` to main, re-running `npm run check` on merged main before push, then
+deleting the branch.
 
 ## B2 — Speck byte-native (2026-05-30): DONE; gate GREEN; pending browser smoke + merge
 

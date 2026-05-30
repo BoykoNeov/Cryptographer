@@ -21,25 +21,24 @@
  * `src/ciphers/des-constants.ts`.
  */
 
-import type {
-  BytesState,
-  Json,
-  PortContract,
-  ProjectionMetadata,
-  StepDocumentation,
-  StepExecutor,
-} from "../core/types";
+import type { Json, PortContract, PortedExecutor, StepDocumentation } from "../core/types";
 import { bitsToFipsBytes, fipsBytesToBits } from "./des-bit-ops";
 
-export const desSBoxes: StepExecutor = (state, params) => {
-  if (state.shape !== "bytes") {
-    throw new Error("des.s-boxes expects bytes state");
+/**
+ * Port-native since B4 (universal-port Phase 4d DES rebuild). Reads the
+ * 6-byte (48-bit) E⊕K_i value from the `state` input port and emits the
+ * 4-byte (32-bit) substituted result on the `state` output port. No aux.
+ */
+export const desSBoxes: PortedExecutor = (inputs, params) => {
+  const bytes = inputs.get("state");
+  if (bytes === undefined) {
+    throw new Error("des.s-boxes: missing required input port 'state'");
   }
-  if (state.bytes.length !== 6) {
-    throw new Error(`des.s-boxes expects 6-byte (48-bit) state; got ${state.bytes.length}`);
+  if (bytes.length !== 6) {
+    throw new Error(`des.s-boxes expects 6-byte (48-bit) state; got ${bytes.length}`);
   }
   const sboxes = readSBoxes(params);
-  const inBits = fipsBytesToBits(state.bytes, 48);
+  const inBits = fipsBytesToBits(bytes, 48);
   const outBits = new Array<number>(32);
   for (let s = 0; s < 8; s++) {
     // 6 bits b1..b6 = inBits[s*6 .. s*6+5]
@@ -62,8 +61,7 @@ export const desSBoxes: StepExecutor = (state, params) => {
     outBits[s * 4 + 2] = (val >> 1) & 1;
     outBits[s * 4 + 3] = val & 1;
   }
-  const next: BytesState = { shape: "bytes", bytes: bitsToFipsBytes(outBits) };
-  return { state: next };
+  return new Map([["state", bitsToFipsBytes(outBits)]]);
 };
 
 export const desSBoxesDoc: StepDocumentation = {
@@ -103,19 +101,13 @@ diffusion / confusion budget is spread across the input groups.`,
   shapeContract: { input: "bytes", output: "bytes" },
 };
 
-// ─── Universal port-dataflow metadata (Phase 1 Slice 1.8) ───────────────
-// The second asymmetric state-port declaration in the universal-port
-// migration (after `des.expand-R@1`'s 4→6). S-boxes collapse 6 bytes
-// (48 bits) → 4 bytes (32 bits) — exact inverse of E's shape map. No
-// aux. The S-box tables ride per-leaf as `params.sboxes` (the spec
-// builder deep-copies them per leaf so editing one round doesn't bleed
-// into siblings); the port shape is independent of the table values.
-
-export const desSBoxesMeta: ProjectionMetadata = {
-  stateLayout: "bytes",
-  stateInputPort: "state",
-  stateOutputPort: "state",
-};
+// ─── Port contract (B4 — pure port-native, no projection meta) ──────────
+// S-boxes collapse 6 bytes (48 bits) → 4 bytes (32 bits) — exact inverse
+// of E's shape map. No aux. B4 dropped the projection meta (bytes arrive on
+// the `state` port via portInputs). The S-box tables ride per-leaf as
+// `params.sboxes` (the spec builder deep-copies them per leaf so editing
+// one round doesn't bleed into siblings); the port shape is independent of
+// the table values.
 
 export const desSBoxesPortContract: PortContract = {
   // 6-byte input, 4-byte output — the second asymmetric state-port

@@ -18,8 +18,9 @@
  *
  * A separate synthetic-Feistel test ensures the helper descends into
  * `FeistelRoundGroup.tracks[].children` — the easy container kind to
- * miss because DES today only carries lifted-legacy leaves (so the
- * shipped DES rows above would NOT detect a missed track descent).
+ * miss. After B4, no SHIPPED spec uses `feistel-round` anymore (DES is
+ * port-native), so this synthetic spec is the only remaining coverage of
+ * track descent (the `FeistelRoundGroup` type survives until Phase 5).
  */
 
 import { aes128Spec } from "@/ciphers/aes-128";
@@ -54,9 +55,10 @@ const registry = buildDefaultRegistry();
 
 // One row per shipped spec from `defaults` in `stores/spec.ts`, plus
 // SHA-256 (which Slice 2.10 will add to the selector). Expected column
-// pins the gate: SHA-256, byte-native AES (all sizes + ECB/CBC), the
-// byte-native Speck rounds (B2), and the byte-native Serpent round body (B3)
-// are `true`; only the still-lifted DES is `false`.
+// pins the gate: every shipped cipher/hash is now byte-native port-native
+// → `true`. B4 made DES the last to convert, so there is no shipped spec
+// left that requires the legacy path (the synthetic-Feistel descent test
+// below is the only `false`-vs-`true` discriminator now).
 const shippedSpecs: ReadonlyArray<readonly [string, CipherSpec, boolean]> = [
   // Byte-native (Slice B1.1 encrypt / B1.2 decrypt) — port-native primitives,
   // no legacy path → true.
@@ -89,10 +91,12 @@ const shippedSpecs: ReadonlyArray<readonly [string, CipherSpec, boolean]> = [
   ["serpent-192 decrypt", serpent192DecryptSpec, true],
   ["serpent-256 encrypt", serpent256Spec, true],
   ["serpent-256 decrypt", serpent256DecryptSpec, true],
-  // DES stays lifted (Feistel + legacy contract; its byte-native rebuild is
-  // the universal-port plan's Phase 4d) → false.
-  ["des encrypt", desSpec, false],
-  ["des decrypt", desDecryptSpec, false],
+  // Byte-native (Slice B4 — universal-port Phase 4d) — the F-function leaves
+  // are port-native (no legacy path); the round body is wired from native
+  // split/xor/concat. The key-schedule stays lifted but a single port-native
+  // leaf flips the whole spec → true.
+  ["des encrypt", desSpec, true],
+  ["des decrypt", desDecryptSpec, true],
   ["sha-256", buildSha256Spec(), true],
 ];
 

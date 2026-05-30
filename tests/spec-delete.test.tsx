@@ -174,10 +174,14 @@ describe("GraphView — × button removes nodes", () => {
   // Delete and round-trip back to the synthetic L-passthrough chip.
   // Specifically pinning the DES case because UX-F was raised against
   // DES — populating L-track via a palette drop, then re-emptying it.
-  it("Delete keypress on a feistel-track leaf removes it and re-emits the L-passthrough chip (UX-F, DES)", async () => {
-    const { setCipher, useSpec, insertStepIntoSpec } = await import("@/ui/stores/spec");
+  it("Delete keypress on a feistel-track leaf removes it and re-emits the L-passthrough chip (UX-F)", async () => {
+    const { __setSpecForTests, useSpec, insertStepIntoSpec } = await import("@/ui/stores/spec");
+    const { buildSyntheticFeistelSpec } = await import("./fixtures/synthetic-feistel-rounds");
     const spec = useSpec();
-    setCipher("des");
+    // B4 (universal-port Phase 4d): the port-native DES no longer uses
+    // `feistel-round`, so we inject the synthetic Feistel fixture (which does)
+    // to exercise the surviving GraphView L-track delete + passthrough re-emit.
+    __setSpecForTests(buildSyntheticFeistelSpec());
 
     // Populate round.1's L-track via the same store API the graph
     // view's drop handler uses, so the test mirrors the real user

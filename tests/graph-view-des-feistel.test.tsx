@@ -1,57 +1,38 @@
 // @vitest-environment jsdom
 
 /**
- * Phase 6a of the DES + branching primitive plan
- * (`docs/plans/des-feistel.md`).
+ * GraphView rendering of `feistel-round` containers — retargeted to the
+ * synthetic Feistel fixture in B4 (universal-port Phase 4d). After the DES
+ * rebuild no shipped cipher uses `feistel-round`, but GraphView's
+ * `kind === "feistel"` container layout (round containers, L/R passthrough
+ * chips, rejoin chip, collapse) is a SURVIVING render path (Phase-5-doomed,
+ * pending the obligatory port-native Feistel-diagram rebuild). It is the only
+ * coverage of that render path, so it is exercised here against
+ * `buildSyntheticFeistelSpec(16)` — shaped exactly like the old DES (16
+ * feistel-rounds, 4-leaf R tracks `expand-R/xor-K/s-boxes/p-permute`, empty
+ * L tracks, round 16 = no-swap), injected via `__setSpecForTests`.
  *
- * Pins that GraphView renders without throwing for a DES spec — the
- * minimum bar for the new `kind === "feistel"` container layout
- * branch — and that the per-track children of each round get a layout
- * box (so they're visible chips inside the round, not collapsed into
- * a single horizontal row alongside the rejoin synthetic id).
- *
- * What this test does NOT check (deferred to Phase 6b / 6c / 6e):
- *
- *   - Rejoin chip rendering at the container right edge (Phase 6b).
- *   - Single-chip collapse of a feistel-round (Phase 6c — generic
- *     `collapseGraph` likely covers it; experiment pending).
- *   - Vertical stacking layout (L track above R track) — geometric
- *     assertions belong in the linear/component-test pair once the
- *     visual is settled in Phase 6b. Phase 6a's bar is "doesn't crash."
- *
- * Per `[[feedback-jsdom-pointer-events-gap]]` the smoke pass at the
- * end of Phase 6 is the discriminating check for SVG hit-testing
- * regressions; this jsdom test pins the DOM shape only.
+ * The DES-only "key-schedule replicas in the feistel right gutter" test was
+ * dropped: it needs a RUNNABLE feistel spec with an aux fan-out (16 round
+ * keys), which no construct provides post-B4 (the toy F uses a param, the
+ * synthetic uses inert leaves). The generic replica-placement mechanism is
+ * covered by `replicate-fanout` tests; the feistel right-gutter placement is
+ * Phase-5-doomed and will be re-covered by the diagram rebuild.
  */
 
-import { buildDefaultRegistry } from "@/ciphers/default-registry";
-import { desSpec } from "@/ciphers/des";
-import { runSpec } from "@/core/runtime";
-import { bytesFromHex } from "@/core/state/bytes";
-import type { AuxValue } from "@/core/types";
 import { GraphView } from "@/ui/components/GraphView";
 import { __resetAutoRerunForTests } from "@/ui/stores/auto-rerun";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
-import { __resetLayoutsForTests, setReplicationMode, toggleCollapse } from "@/ui/stores/layout";
+import { __resetLayoutsForTests, toggleCollapse } from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
-import { __resetSpecForTests, setCipher, useSpec } from "@/ui/stores/spec";
-import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
+import { __resetSpecForTests, __setSpecForTests, useSpec } from "@/ui/stores/spec";
+import { __resetTraceForTests } from "@/ui/stores/trace";
 import { __resetViewModeForTests } from "@/ui/stores/view-mode";
-import { setReplicationEnabled } from "@/ui/stores/view-replication";
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
-// FIPS 46-3 Appendix B test vector — used to seed an actual DES trace
-// so the rendered graph has aux edges (and therefore replicate-able sources).
-const seedDesTrace = (): void => {
-  const trace = runSpec(desSpec, buildDefaultRegistry(), {
-    initialState: { shape: "bytes" as const, bytes: bytesFromHex("0123456789abcdef") },
-    initialAux: new Map<string, AuxValue>([["key", bytesFromHex("133457799bbcdff1")]]),
-  });
-  setTrace(trace);
-};
+import { buildSyntheticFeistelSpec } from "./fixtures/synthetic-feistel-rounds";
 
 const resetAll = (): void => {
   __resetAutoRerunForTests();
@@ -65,12 +46,12 @@ const resetAll = (): void => {
   __resetLayoutsForTests();
 };
 
-describe("GraphView — DES feistel-round rendering (Phase 6a)", () => {
+describe("GraphView — feistel-round rendering (synthetic spec)", () => {
   beforeEach(() => {
     resetAll();
-    // Use the spec-store setter so both encrypt/decrypt slots get rebuilt
-    // via buildCanonicalPair — per [[feedback-setcipher-test-import]].
-    setCipher("des");
+    // feistel-round is not a selector cipher; inject the synthetic Feistel
+    // fixture (shaped like the old DES) so GraphView's feistel layout renders.
+    __setSpecForTests(buildSyntheticFeistelSpec(16));
   });
 
   afterEach(() => {
@@ -78,58 +59,44 @@ describe("GraphView — DES feistel-round rendering (Phase 6a)", () => {
     resetAll();
   });
 
-  it("does not throw when rendering the full DES spec", () => {
+  it("does not throw when rendering the full feistel spec", () => {
     expect(() => render(() => <GraphView />)).not.toThrow();
   });
 
   it("renders 16 round containers (one per feistel-round)", () => {
     const { container } = render(() => <GraphView />);
-    // Container rects carry class `graph-container-feistel`.
     const feistelContainers = container.querySelectorAll(".graph-container-feistel");
     expect(feistelContainers.length).toBe(16);
   });
 
-  it("renders the 4 R-track leaves inside each round (64 leaves total across rounds)", () => {
+  it("renders the 4 R-track leaves inside each round", () => {
     const { container } = render(() => <GraphView />);
-    // Spot-check round.1 — every R-track leaf should resolve to a LeafRect
-    // with the matching data-testid.
+    // Spot-check round.1 — every R-track leaf resolves to a LeafRect.
     for (const leafSuffix of ["expand-R", "xor-K", "s-boxes", "p-permute"]) {
       const node = container.querySelector(`[data-testid="graph-leaf-round.1.${leafSuffix}"]`);
       expect(node, `round.1.${leafSuffix} should render as a leaf`).not.toBeNull();
     }
-    // And round.16, the no-swap round, to confirm the combineKind variant
-    // doesn't change the per-track leaf rendering.
+    // And round.16 (no-swap) to confirm the combineKind variant doesn't
+    // change the per-track leaf rendering.
     for (const leafSuffix of ["expand-R", "xor-K", "s-boxes", "p-permute"]) {
       const node = container.querySelector(`[data-testid="graph-leaf-round.16.${leafSuffix}"]`);
       expect(node, `round.16.${leafSuffix} should render as a leaf`).not.toBeNull();
     }
   });
 
-  it("renders a rejoin chip for each round at its direction-aware position (Phase 6b)", () => {
+  it("renders a rejoin chip for each round at its direction-aware position", () => {
     const { container } = render(() => <GraphView />);
-    // Phase 6b — rejoin synthetic now has a layout box (bottom edge
-    // for DES's vertical-flow "rounds" group parent). The chip uses
-    // a distinct testid `graph-rejoin-*` so a stray query for
-    // `graph-leaf-*` doesn't pick it up — the rejoin isn't a leaf
-    // and isn't a drop target.
     for (const r of [1, 8, 16]) {
       const rejoin = container.querySelector(`[data-testid="graph-rejoin-round.${r}:rejoin"]`);
       expect(rejoin, `round.${r}:rejoin chip should render`).not.toBeNull();
     }
-    // Old leaf-* testid should remain absent — the chip is rendered
-    // via `RejoinChip`, not `LeafRect`, so it has no drop anchor and
-    // is exempt from leaf-style affordances.
+    // The chip is rendered via RejoinChip, not LeafRect — no leaf testid.
     const asLeaf = container.querySelector('[data-testid="graph-leaf-round.1:rejoin"]');
     expect(asLeaf).toBeNull();
   });
 
-  it("renders a passthrough chip in each round's empty L track (Phase 6b-ii)", () => {
+  it("renders a passthrough chip in each round's empty L track", () => {
     const { container } = render(() => <GraphView />);
-    // Phase 6b-ii — the empty L track now carries a synthetic
-    // passthrough chip (`{roundId}:passthrough-{trackIdx}`). Distinct
-    // testid `graph-passthrough-*` so a stray query for `graph-leaf-*`
-    // doesn't pick it up — the chip isn't a leaf and isn't a drop
-    // target (drop gutters land in Phase 6d via dedicated gutter strips).
     for (const r of [1, 8, 16]) {
       const pt = container.querySelector(
         `[data-testid="graph-passthrough-round.${r}:passthrough-0"]`,
@@ -138,7 +105,7 @@ describe("GraphView — DES feistel-round rendering (Phase 6a)", () => {
     }
   });
 
-  it('passthrough chip label uses the track name ("L passthrough" for DES)', () => {
+  it('passthrough chip label uses the track name ("L passthrough")', () => {
     const { container } = render(() => <GraphView />);
     const pt = container.querySelector('[data-testid="graph-passthrough-round.1:passthrough-0"]');
     expect(pt?.textContent).toContain("L passthrough");
@@ -146,10 +113,9 @@ describe("GraphView — DES feistel-round rendering (Phase 6a)", () => {
 
   it("places the rejoin chip BELOW the round's track columns (vertical-flow parent)", () => {
     const { container } = render(() => <GraphView />);
-    // The "rounds" group is `kind: "group"` (vertical-flow), so the
-    // rejoin chip sits BELOW the columns rather than to their right.
-    // Compare the rejoin chip's `y` to a body leaf's `y`: rejoin > leaf.
-    // SVG positions live on the inner <rect>, not on the <g> wrapper.
+    // The "rounds" group is `kind: "group"` (vertical-flow), so the rejoin
+    // chip sits BELOW the columns. Compare the rejoin chip's y to a body
+    // leaf's y: rejoin > leaf. SVG positions live on the inner <rect>.
     const rejoinRect = container.querySelector(
       '[data-testid="graph-rejoin-round.1:rejoin"] rect',
     ) as SVGRectElement | null;
@@ -165,106 +131,24 @@ describe("GraphView — DES feistel-round rendering (Phase 6a)", () => {
     }
   });
 
-  // ─── Phase 6c — collapse to single round chip ──────────────────────
-  //
-  // The plan §Phase 2 proposed a dedicated `collapseFeistelRoundEdges`
-  // transform; tests/feistel-collapse-generic.test.ts proved generic
-  // `collapseGraph` is sufficient (it clears `childIds: []` on collapsed
-  // entries). That triggers the existing `childIds.length === 0`
-  // short-circuit at GraphView.tsx ~line 969 — collapsed feistel
-  // containers render as leaf-sized chips BEFORE my Phase 6a `kind ===
-  // "feistel"` branch is reached. So Phase 6c needs no new layout code;
-  // these tests pin that behavior.
-
+  // Collapse — generic `collapseGraph` clears `childIds: []` on a collapsed
+  // feistel-round, triggering GraphView's `childIds.length === 0`
+  // short-circuit so the round renders as a single chip. No feistel-specific
+  // layout code needed (proved by feistel-collapse-generic.test.ts).
   it("collapsing a round renders it as a single chip; R-track leaves disappear", () => {
     const { container } = render(() => <GraphView />);
-    // Sanity: round.1 leaves present before collapse.
     expect(container.querySelector('[data-testid="graph-leaf-round.1.expand-R"]')).not.toBeNull();
 
     const specId = useSpec()().id;
     toggleCollapse(specId, "round.1", false);
 
-    // After collapse, the round container itself still renders (chevron + label
-    // chip), but its R-track leaves are gone from the DOM.
     for (const leafSuffix of ["expand-R", "xor-K", "s-boxes", "p-permute"]) {
       const node = container.querySelector(`[data-testid="graph-leaf-round.1.${leafSuffix}"]`);
       expect(node, `round.1.${leafSuffix} should be hidden when round.1 is collapsed`).toBeNull();
     }
-    // The collapsed container itself stays in the DOM.
     const collapsedRound = container.querySelector(
       '[data-testid="graph-container-header-round.1"]',
     );
     expect(collapsedRound, "collapsed round.1 container should still render").not.toBeNull();
-  });
-
-  // ─── Regression — replicas in feistel right gutter ─────────────────
-  //
-  // Phase 6a-revision (commit 12b88e0) introduced a layout that iterates
-  // `container.feistelTracks` only. Replica synthetic ids (e.g.
-  // `key-schedule@->round.1.xor-K`) live in flat `childIds` but NOT in
-  // any `feistelTracks` entry, so they were initially skipped — their
-  // box stayed unset and `<Show when={box()}>` omitted them from the
-  // DOM, making the source vanish in fully-replicated mode. The second
-  // pass in the kind === "feistel" branch places them in the right
-  // gutter; this test guards that fix.
-
-  it("places key-schedule replicas in the right gutter when replication is enabled", () => {
-    // DES key-schedule has 16 aux edges → exceeds default threshold of 6
-    // → auto-replicates with just master switch ON (no per-source override
-    // needed). Per [[feedback-jsdom-replication-off-default]]
-    // setReplicationEnabled must be called explicitly before render —
-    // localStorage default returns false in jsdom.
-    // Replication needs aux edges → needs a real trace.
-    seedDesTrace();
-    const specId = useSpec()().id;
-    setReplicationEnabled(true);
-    setReplicationMode(specId, "key-schedule", "always");
-
-    const { container } = render(() => <GraphView />);
-
-    // Replicas land in two distinct buckets by design:
-    //   - 15 aux-fan-out replicas, one per round.2..round.16's xor-K,
-    //     placed inside each round's RIGHT GUTTER by the new feistel
-    //     layout pass.
-    //   - 1 spine-replica for round.1.xor-K, laid out at the SOURCE'S
-    //     old root slot (where `key-schedule` used to render). Requires
-    //     the splice-anchor fix in `replicateHighFanoutSources` (same
-    //     day): the anchor for spine-replicas had to switch from
-    //     `edge.to` (consumer's id) to `edge.from` (source's id) so
-    //     it lands correctly when source's parent differs from
-    //     consumer's parent. DES is the first cipher with that
-    //     mismatch — `key-schedule` at root vs `round.1.xor-K` inside
-    //     `round.1` inside the "rounds" group. The code comment at
-    //     graph.ts:1786 originally flagged this as "defer until
-    //     something demands it"; DES demanded it.
-    //
-    // Spot-check round-internal replicas (right-gutter pass).
-    for (const roundIdx of [2, 8, 16]) {
-      const replica = container.querySelector(
-        `[data-testid="graph-leaf-key-schedule@->round.${roundIdx}.xor-K"]`,
-      );
-      expect(
-        replica,
-        `key-schedule replica for round.${roundIdx}.xor-K should render`,
-      ).not.toBeNull();
-    }
-
-    // The round.1 spine-replica is rendered at root in key-schedule's
-    // old slot. Pin explicitly so a regression in the splice-anchor
-    // fix surfaces here instead of as a silent count mismatch.
-    const round1Replica = container.querySelector(
-      '[data-testid="graph-leaf-key-schedule@->round.1.xor-K"]',
-    );
-    expect(
-      round1Replica,
-      "round.1.xor-K spine-replica should render after splice anchor fix",
-    ).not.toBeNull();
-
-    // 16 total replicas rendered = 15 aux-fan-out (rounds 2-16) +
-    // 1 spine-replica (round.1).
-    const allReplicas = container.querySelectorAll(
-      '[data-testid^="graph-leaf-key-schedule@->round."]',
-    );
-    expect(allReplicas.length).toBe(16);
   });
 });

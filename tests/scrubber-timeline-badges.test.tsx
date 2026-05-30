@@ -8,14 +8,21 @@
  *   - ⇄ for synthetic rejoin frames
  *   - nothing for root-scope frames (IP, FP, key-schedule)
  *
- * For non-Feistel ciphers the badge strip stays empty (no badges
- * render) since the trace has no track or rejoin frames at all. AES
- * gets no strip; DES gets the full L/R + ⇄ overlay.
+ * For non-Feistel ciphers the badge strip stays empty (no badges render)
+ * since the trace has no track or rejoin frames. AES gets no strip; a
+ * `feistel-round` trace gets the full track + ⇄ overlay.
+ *
+ * Retargeted to the toy Feistel fixture in B4 (universal-port Phase 4d):
+ * after the DES rebuild no shipped cipher emits track/rejoin frames, so the
+ * `feistel-round` badge path is exercised against `FEISTEL_TOY_SPEC` — 2
+ * rounds, each with one R-track leaf (`add-k`) → 2 track badges + 2 rejoin
+ * badges (vs DES's 64 + 16). TraceTimeline is trace-driven (no spec store),
+ * so the toy trace drives it directly.
  */
 
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
-import { desSpec } from "@/ciphers/des";
+import { FEISTEL_TOY_SPEC } from "@/ciphers/feistel-toy";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue } from "@/core/types";
@@ -24,12 +31,9 @@ import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-const seedDes = () => {
-  const trace = runSpec(desSpec, buildDefaultRegistry(), {
-    initialState: makeBytesState(new Uint8Array([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef])),
-    initialAux: new Map<string, AuxValue>([
-      ["key", new Uint8Array([0x13, 0x34, 0x57, 0x79, 0x9b, 0xbc, 0xdf, 0xf1])],
-    ]),
+const seedToy = () => {
+  const trace = runSpec(FEISTEL_TOY_SPEC, buildDefaultRegistry(), {
+    initialState: makeBytesState(new Uint8Array([0x01, 0x02, 0x03, 0x04])),
   });
   setTrace(trace);
   return trace;
@@ -60,14 +64,14 @@ describe("TraceTimeline — Phase 5f track badges", () => {
     expect(container.querySelector(".trace-timeline-badge-strip")).toBeNull();
   });
 
-  it("renders an R badge for every in-track DES frame", () => {
-    const trace = seedDes();
+  it("renders an R badge for every in-track Feistel frame", () => {
+    const trace = seedToy();
     const { container } = render(() => <TraceTimeline />);
     expect(container.querySelector(".trace-timeline-badge-strip")).not.toBeNull();
-    // DES has 16 rounds × 4 R-track leaves = 64 in-track frames. Each
-    // renders a track badge labelled "R" (L track is empty, so no L badges).
+    // The toy has 2 rounds × 1 R-track leaf = 2 in-track frames. Each renders
+    // a track badge labelled "R" (the L track is empty, so no L badges).
     const trackBadges = container.querySelectorAll(".trace-timeline-badge-track");
-    expect(trackBadges.length).toBe(64);
+    expect(trackBadges.length).toBe(2);
     for (const b of Array.from(trackBadges)) {
       expect(b.textContent).toBe("R");
     }
@@ -78,18 +82,18 @@ describe("TraceTimeline — Phase 5f track badges", () => {
     expect(trackBadges.length).toBe(inTrackFrameCount);
   });
 
-  it("renders a ⇄ badge for each rejoin frame (16 in DES)", () => {
-    seedDes();
+  it("renders a ⇄ badge for each rejoin frame (2 in the toy)", () => {
+    seedToy();
     const { container } = render(() => <TraceTimeline />);
     const rejoinBadges = container.querySelectorAll(".trace-timeline-badge-rejoin");
-    expect(rejoinBadges.length).toBe(16);
+    expect(rejoinBadges.length).toBe(2);
     for (const b of Array.from(rejoinBadges)) {
       expect(b.textContent).toBe("⇄");
     }
   });
 
-  it("badges position by frame index — first L/R badge at small percent, last near 100%", () => {
-    const trace = seedDes();
+  it("badges position by frame index — first track badge at small percent, last near 100%", () => {
+    const trace = seedToy();
     const { container } = render(() => <TraceTimeline />);
     const badges = Array.from(container.querySelectorAll(".trace-timeline-badge")) as HTMLElement[];
     expect(badges.length).toBeGreaterThan(0);

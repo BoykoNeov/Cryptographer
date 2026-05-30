@@ -5,18 +5,25 @@
  * `prependChildToTrack` with the same try/catch fallback the
  * `into-start` branch uses for unexpected throws.
  *
- * Node env — no DOM. We flip the store to DES via `setCipher("des")`
- * (the `stores/spec` entry that rebuilds via `buildCanonicalPair`,
- * NOT the cipher-signal-only one in `stores/cipher` — see
- * `[[feedback-setcipher-test-import]]`).
+ * Node env — no DOM. B4 (universal-port Phase 4d) made DES port-native, so
+ * `setCipher("des")` no longer yields a `feistel-round` spec. We inject the
+ * shared synthetic Feistel fixture into the store via `__setSpecForTests`
+ * instead — `feistel-round` is not in the selector, but the `into-track-start`
+ * routing survives until Phase 5 and needs a spec that uses the primitive.
  */
 
 import { findStepAndParent } from "@/core/spec-mutations";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetCipherModeForTests } from "@/ui/stores/cipher-mode";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
-import { __resetSpecForTests, insertStepIntoSpec, setCipher, useSpec } from "@/ui/stores/spec";
+import {
+  __resetSpecForTests,
+  __setSpecForTests,
+  insertStepIntoSpec,
+  useSpec,
+} from "@/ui/stores/spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { buildSyntheticFeistelSpec } from "./fixtures/synthetic-feistel-rounds";
 
 const resetAll = (): void => {
   __resetCipherForTests();
@@ -26,7 +33,7 @@ const resetAll = (): void => {
 };
 
 const selectDes = (): void => {
-  setCipher("des");
+  __setSpecForTests(buildSyntheticFeistelSpec());
 };
 
 describe("insertStepIntoSpec — into-track-start anchor (6d-iv)", () => {

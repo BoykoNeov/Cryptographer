@@ -47,6 +47,7 @@ const seedDes = (): TraceFrame => {
   const trace = runSpec(useSpec()(), buildDefaultRegistry(), {
     initialState: { shape: "bytes", bytes: DES_PT },
     initialAux: new Map([["key", DES_KEY]]),
+    portedDispatchEnabled: true,
   });
   setTrace(trace);
   const f = trace.frames.find((fr) => fr.stepType === "des.key-schedule@1");
@@ -110,6 +111,7 @@ describe("KeyScheduleExplorer — DES dispatch", () => {
     const trace = runSpec(useSpec()(), buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: DES_PT },
       initialAux: new Map([["key", DES_KEY]]),
+      portedDispatchEnabled: true,
     });
     const expectedIdx = trace.frames.findIndex((f) => f.stepId.startsWith("round.5.expand-R"));
     expect(idx).toBe(expectedIdx);
