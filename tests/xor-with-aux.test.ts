@@ -37,9 +37,19 @@ describe("xor-with-aux@1 — executor", () => {
   it("is self-inverse: XORing the same operand twice recovers the input", () => {
     const input = new Uint8Array([0x12, 0x34, 0x56, 0x78]);
     const operand = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
-    const once = xorWithAux(new Map([["input", input], ["operand", operand]]), { auxName: "k" }, ctx);
+    const once = xorWithAux(
+      new Map([
+        ["input", input],
+        ["operand", operand],
+      ]),
+      { auxName: "k" },
+      ctx,
+    );
     const twice = xorWithAux(
-      new Map([["input", once.get("output") as Uint8Array], ["operand", operand]]),
+      new Map([
+        ["input", once.get("output") as Uint8Array],
+        ["operand", operand],
+      ]),
       { auxName: "k" },
       ctx,
     );
@@ -61,7 +71,10 @@ describe("xor-with-aux@1 — executor", () => {
   it("throws on a length mismatch between input and operand", () => {
     expect(() =>
       xorWithAux(
-        new Map([["input", new Uint8Array([0x01, 0x02])], ["operand", new Uint8Array([0x01])]]),
+        new Map([
+          ["input", new Uint8Array([0x01, 0x02])],
+          ["operand", new Uint8Array([0x01])],
+        ]),
         { auxName: "k" },
         ctx,
       ),
@@ -71,7 +84,10 @@ describe("xor-with-aux@1 — executor", () => {
   it("throws when params.auxName is not a string", () => {
     expect(() =>
       xorWithAux(
-        new Map([["input", new Uint8Array([0x01])], ["operand", new Uint8Array([0x01])]]),
+        new Map([
+          ["input", new Uint8Array([0x01])],
+          ["operand", new Uint8Array([0x01])],
+        ]),
         { auxName: 5 as unknown as string },
         ctx,
       ),
@@ -93,7 +109,10 @@ describe("xor-with-aux@1 — projection metadata + port contract", () => {
   });
 
   it("declares raw, polymorphic (no byteLength) ports so it is variant-agnostic", () => {
-    const inputs = xorWithAuxPortContract.inputs as Map<string, { layout: string; byteLength?: number }>;
+    const inputs = xorWithAuxPortContract.inputs as Map<
+      string,
+      { layout: string; byteLength?: number }
+    >;
     expect(inputs.get("input")).toEqual({ layout: "raw" });
     expect(inputs.get("operand")).toEqual({ layout: "raw" });
     const outputs = xorWithAuxPortContract.outputs as Map<string, { layout: string }>;
