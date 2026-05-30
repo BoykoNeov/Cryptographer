@@ -20,6 +20,8 @@ const decrypt = (spec: CipherSpec, ctHex: string, keyHex: string): string => {
   const trace = runSpec(spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(ctHex)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
+    // Speck rounds are port-native since B2 → the spec requires ported dispatch.
+    portedDispatchEnabled: true,
   });
   if (trace.finalState.shape !== "bytes") throw new Error("expected bytes final state");
   return hexFromBytes(trace.finalState.bytes);
@@ -60,6 +62,7 @@ describe("Speck32/64 decryption", () => {
     const trace = runSpec(speck32_64BeDecryptSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex("a86842f2")),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex("1918111009080100")]]),
+      portedDispatchEnabled: true,
     });
     expect(trace.frames.length).toBe(23);
   });

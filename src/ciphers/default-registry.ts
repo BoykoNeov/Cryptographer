@@ -550,16 +550,24 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // copy parametric on `byteOrder`. The conventions compute the same
   // word-level cipher; only byte serialization at the boundary differs.
   //
-  // **Slice 1.6 (universal port-dataflow Phase 1)** — all three Speck
-  // step types lift as `kind: "ported"` with colocated metadata per
-  // Decision C. Key-schedule is the SECOND one-to-many writer in the
-  // migration (after AES key-expansion in Slice 1.4): port-per-roundkey
-  // per Decision B, with `outputs(params)` in function form sized by
-  // `params.rounds` (22 ports for Speck32/64, vs AES-128's 11). The
-  // round + round-inverse step types are state-bearing single-aux-read
-  // — same shape as `aes.add-round-key@1`, but `stateLayout: "bytes"`
-  // with polymorphic byteLength to cover variant differences (block
-  // size = 2 × wordBits / 8 bytes).
+  // **Slice 1.6 (universal port-dataflow Phase 1)** lifted all three Speck
+  // step types as `kind: "ported"` with colocated metadata per Decision C.
+  // **Slice B2 (scaffolding-suppression, 2026-05-30)** then took the two
+  // ARX rounds byte-native: their executors are now true `PortedExecutor`s
+  // (Uint8Array in/out, no lift adapter, no `legacy` fallback), which flips
+  // every shipped Speck spec onto ported dispatch (`requiresPortedDispatch`
+  // → true). The metadata is unchanged — the runtime threads the block via
+  // `stateInputPort`/`stateOutputPort` and projects `aux[roundKeyAux]` onto
+  // the `roundKey` port via `auxReadPorts`, the same projection it ran for
+  // the lift adapter.
+  //
+  // The **key-schedule stays lifted/monolithic** (still carries `legacy:`),
+  // mirroring B1's decision to leave `aes.key-expansion@1` lifted — its
+  // byte-native conversion belongs to the cross-cutting key-schedule slice
+  // (all ciphers at once), not per-cipher B-phase work. Under ported
+  // dispatch the lifted key-schedule runs its lift fallback and writes the
+  // 22 round keys to aux exactly as before (dispatch.ts: a lifted leaf
+  // degrades gracefully under the on-flag path).
   r.register("speck.key-schedule@1", {
     kind: "ported",
     executor: liftLegacyExecutor(speckKeySchedule, speckKeyScheduleMeta),
@@ -570,16 +578,14 @@ export const buildDefaultRegistry = (): StepRegistry => {
   });
   r.register("speck.round@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(speckRound, speckRoundMeta),
-    legacy: speckRound,
+    executor: speckRound,
     shape: speckRoundPortContract,
     meta: speckRoundMeta,
     doc: speckRoundDoc,
   });
   r.register("speck.round-inverse@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(speckRoundInverse, speckRoundInverseMeta),
-    legacy: speckRoundInverse,
+    executor: speckRoundInverse,
     shape: speckRoundInversePortContract,
     meta: speckRoundInverseMeta,
     doc: speckRoundInverseDoc,

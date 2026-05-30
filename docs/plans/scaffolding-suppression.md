@@ -1,6 +1,11 @@
 # Scaffolding suppression — every leaf speaks only in byte arrays
 
-> **Status: Phase A COMPLETE. Phase B IN PROGRESS — B1 (AES) on branch
+> **Status: Phase A COMPLETE. Phase B IN PROGRESS — B1 (AES) MERGED TO MAIN
+> 2026-05-30 (`f896f3c`); B2 (Speck) DONE on branch `b2-speck-byte-native`,
+> gate GREEN (2564 tests / 216 files), pending browser smoke + merge. Next
+> after merge: B3 (Serpent). See "## B2 — Speck byte-native" below.**
+>
+> **(historical B1 status)** Phase B IN PROGRESS — B1 (AES) on branch
 > `b1-aes-byte-native`. B1.1 (128 enc) + B1.2 (128 dec) + B1.3 (192/256 enc+dec)
 > + B1.4a (ECB enc+dec) + B1.4b (CBC enc+dec) all DONE — EVERY shipped AES is now
 > byte-native, KAT byte-equal, full `npm run check` GREEN (2489 tests). B1 CORE
@@ -31,6 +36,74 @@
 >
 > Sits **before** Slice 2.9c–e (those depend on a stable spec shape,
 > which this plan settles).
+
+## B2 — Speck byte-native (2026-05-30): DONE; gate GREEN; pending browser smoke + merge
+
+Branch `b2-speck-byte-native` off `main` (`ffef4d7`). Advisor consulted first
+(per [[feedback_iterative_slice_review]]); user picked **Scope B — body only**.
+
+**What B2 did.** Converted the two Speck ARX rounds — `speck.round@1` +
+`speck.round-inverse@1` — from lifted-legacy (`liftLegacyExecutor` + `legacy:`
+fallback over `BytesState`) to **true `PortedExecutor`s** (Uint8Array in/out:
+read `inputs.get("state")` + `inputs.get("roundKey")`, return
+`new Map([["state", out]])`). Registrations drop `legacy:` and the lift wrapper;
+`meta` (stateInputPort/stateOutputPort + auxReadPorts) + `shape` + `doc`
+(incl. `shapeContract`) kept verbatim. The math (decode→ARX→encode) is unchanged.
+
+**The load-bearing finding (why no spec changes were needed).** The runtime's
+ported input-assembly gates on **`meta`, not `legacy`** (`runtime.ts` Step B
+`if (meta?.stateInputPort !== undefined …)`, Step C `meta.auxReadPorts`, Step D
+`if (meta === undefined)` is the only place that demands `portInputs`). So a
+native round that **keeps its `meta`** gets `state` projected from the threaded
+state and `roundKey` projected from `aux[roundKeyAux]` exactly as the lift
+adapter did — the flat Speck spec needs **zero `portInputs`**. This is a
+state-threading hybrid-ported step (meta present, legacy absent), like
+`xor-with-aux@1` but threading state.
+
+**Key-schedule stays LIFTED** (`speck.key-schedule@1` keeps `legacy:`),
+mirroring B1's decision to leave `aes.key-expansion@1` lifted. Under ported
+dispatch it runs its lift fallback and writes the 22 round keys to aux
+unchanged. The native key-schedule path is viable (the runtime applies
+`meta.auxWritePorts` to any ported executor's returned ports at
+`runtime.ts:829`, independent of the lift adapter) — deferred to the
+cross-cutting key-schedule slice, not per-cipher B-phase work.
+
+**Dispatch flip.** A single port-native leaf makes `requiresPortedDispatch`
+true → all four shipped Speck specs (BE/LE × enc/dec) now run **ported** in the
+app (replication auto-ONs, port I/O captured on round frames). KAT
+byte-identical: a golden frame-stream (every intermediate `stateAfter`, all 23
+frames × 4 specs) was captured from the lifted impl **before** conversion and
+the native rewrite verified byte-equal against it (advisor's parity-net
+requirement). The golden is pinned permanently in
+`runtime-ported-dispatch-speck.test.ts` (b).
+
+**A4 unchanged.** Speck's port contracts were already all-`raw` → it never
+contributed an allowlist entry; the conversion (dropping `legacy`) doesn't touch
+the contracts. No `NON_BYTES_ALLOWLIST` / `LEGACY_CONTRACT_ALLOWLIST` edit.
+
+**Test sweep (8 files).** (1) `speck-32-64-vectors` / `-decrypt` /
+`round-key-panel` / `aux-graph-derivation` — added `portedDispatchEnabled: true`
+(the specs now require it; the negative key-length test still throws from the
+lifted key-schedule before the native round, so it was left untouched).
+(2) `requires-ported-dispatch` — flipped the 4 Speck rows `false → true`.
+(3) `runtime-ported-dispatch-frame-parity` — REMOVED the 4 Speck rows (no legacy
+path to compare against, B1 precedent), dropping the now-orphaned imports +
+`SPECK_*` constants. (4) `runtime-ported-dispatch-speck` — kept (a) KAT + (c)
+round-key ordering; replaced (b) legacy-vs-ported parity with the durable golden
+frame-stream pin; replaced (d) with an isolated native-round assertion.
+(5) `graph-view-replication-force-on-ported` — retargeted the **non-ported
+control** from Speck → **Serpent-128** (the test's own header predicted this
+re-break; B3 will retarget it to DES). **Mis-targeting audit clean**: Speck
+kept its `speck.*@1` type strings + bytes shape (no AES-style "wrong type"
+vacuous pass), and every un-flagged Speck run throws loudly, so all breakages
+surfaced in the failing set. `graph-validation`'s `runBytes` already uses
+`requiresPortedDispatch(spec, registry)` → auto-adapted (only a stale "(legacy)"
+comment fixed). Graph topology is unchanged (Speck wires no `portInputs` → no
+`$input` node, no port-flow edges; spine + aux fan-out identical).
+
+**Remaining:** 2-min browser smoke (Speck renders sensibly under the new auto-on
+replication; inspector shows port values on round frames) → merge to `main`.
+**Did NOT touch** Serpent/DES (B3/B4).
 
 ## B1.5 — graph-view follow-up (2026-05-30)
 
@@ -839,8 +912,12 @@ removes its A4-allowlist entry on merge.
   indices stay **leaf params**, NOT `cipherConstants` (the A1 lockstep lesson —
   see below); `cipherConstants` migration + mirror re-homing defer to a later
   key-expansion-decomposition slice.
-- **B2 — Speck** (easiest — already byte-flat `BytesState(4)`). Mostly
-  conformance + contract adoption. KAT: both BE-paper + LE-NSA vectors.
+- **B2 — Speck** (easiest — already byte-flat `BytesState(4)`).
+  **✅ DONE 2026-05-30 — branch `b2-speck-byte-native`, gate GREEN, pending
+  browser smoke + merge.** Scope B (body only): the two ARX rounds went native
+  (`PortedExecutor`, no lift/legacy); key-schedule stays lifted (like AES). KAT
+  byte-identical (BE-paper + LE-NSA, enc+dec) via a golden frame-stream pin. See
+  "## B2 — Speck byte-native" above for the full write-up.
 - **B3 — Serpent.** Standard form (explicit IP/FP); S_i tables to
   `cipherConstants`. KAT: all three key sizes.
 - **B4 — DES.** F-function / S-boxes / P-permutation / IP/FP

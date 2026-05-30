@@ -54,8 +54,9 @@ const registry = buildDefaultRegistry();
 
 // One row per shipped spec from `defaults` in `stores/spec.ts`, plus
 // SHA-256 (which Slice 2.10 will add to the selector). Expected column
-// pins the gate: SHA-256 and byte-native AES-128 single-block (both
-// directions) are `true`; all still-matrix specs are `false`.
+// pins the gate: SHA-256, byte-native AES (all sizes + ECB/CBC), and the
+// byte-native Speck rounds (B2) are `true`; the still-lifted ciphers
+// (Serpent, DES) are `false`.
 const shippedSpecs: ReadonlyArray<readonly [string, CipherSpec, boolean]> = [
   // Byte-native (Slice B1.1 encrypt / B1.2 decrypt) — port-native primitives,
   // no legacy path → true.
@@ -72,10 +73,13 @@ const shippedSpecs: ReadonlyArray<readonly [string, CipherSpec, boolean]> = [
   ["aes-192 single-block decrypt", aes192DecryptSpec, true],
   ["aes-256 single-block encrypt", aes256Spec, true],
   ["aes-256 single-block decrypt", aes256DecryptSpec, true],
-  ["speck-32-64-be encrypt", speck32_64BeSpec, false],
-  ["speck-32-64-be decrypt", speck32_64BeDecryptSpec, false],
-  ["speck-32-64-le encrypt", speck32_64LeSpec, false],
-  ["speck-32-64-le decrypt", speck32_64LeDecryptSpec, false],
+  // Byte-native (Slice B2) — the two ARX rounds are port-native (no legacy
+  // path); the key-schedule stays lifted but a single port-native leaf flips
+  // the whole spec → true.
+  ["speck-32-64-be encrypt", speck32_64BeSpec, true],
+  ["speck-32-64-be decrypt", speck32_64BeDecryptSpec, true],
+  ["speck-32-64-le encrypt", speck32_64LeSpec, true],
+  ["speck-32-64-le decrypt", speck32_64LeDecryptSpec, true],
   ["serpent-128 encrypt", serpent128Spec, false],
   ["serpent-128 decrypt", serpent128DecryptSpec, false],
   ["serpent-192 encrypt", serpent192Spec, false],

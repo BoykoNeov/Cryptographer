@@ -20,12 +20,11 @@
  */
 
 import type {
-  BytesState,
   Json,
   PortContract,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "../core/types";
 import {
   type SpeckByteOrder,
@@ -35,34 +34,46 @@ import {
   readByteOrder,
 } from "./speck-word-codec";
 
-export const speckRound: StepExecutor = (state, params, ctx) => {
-  if (state.shape !== "bytes") {
-    throw new Error("speck.round expects bytes state");
-  }
+// Port-native executor (scaffolding-suppression Phase B, slice B2, 2026-05-30).
+// Consumes and emits ONLY `Uint8Array` — no `State` wrapper, no lift adapter.
+//   - `state`    — the carried 2-word block, projected by the runtime from the
+//                  threaded state onto this port via `meta.stateInputPort`
+//                  (the Speck spec is a flat pipeline; no `portInputs` wiring).
+//   - `roundKey` — this round's key word, projected by the runtime from
+//                  `aux[params.roundKeyAux]` via `meta.auxReadPorts` (the
+//                  still-lifted `speck.key-schedule@1` writes those aux values).
+// Returns the new block on the `state` output port; the runtime reconstructs
+// the threaded `BytesState` from it via `meta.stateOutputPort`.
+export const speckRound: PortedExecutor = (inputs, params, _ctx) => {
   const p = readParams(params);
-  const expectedBytes = 2 * (p.wordBits / 8);
-  if (state.bytes.length !== expectedBytes) {
+  const stateBytes = inputs.get("state");
+  if (stateBytes === undefined) {
     throw new Error(
-      `speck.round: block must be ${expectedBytes} bytes for wordBits=${p.wordBits}; got ${state.bytes.length}`,
+      "speck.round: 'state' input port is not wired (the runtime projects the carried block onto it via meta.stateInputPort)",
+    );
+  }
+  const expectedBytes = 2 * (p.wordBits / 8);
+  if (stateBytes.length !== expectedBytes) {
+    throw new Error(
+      `speck.round: block must be ${expectedBytes} bytes for wordBits=${p.wordBits}; got ${stateBytes.length}`,
     );
   }
 
-  const rkBytes = ctx.aux.get(p.roundKeyAux);
+  const rkBytes = inputs.get("roundKey");
   if (!(rkBytes instanceof Uint8Array) || rkBytes.length !== p.wordBits / 8) {
     throw new Error(
-      `speck.round: aux '${p.roundKeyAux}' must be a ${p.wordBits / 8}-byte Uint8Array`,
+      `speck.round: 'roundKey' port must carry a ${p.wordBits / 8}-byte word (projected from aux['${p.roundKeyAux}'] via meta.auxReadPorts)`,
     );
   }
   const k = decodeWord(rkBytes, 0, p.wordBits, p.byteOrder);
 
-  const [x0, y0] = decodeBlock(state.bytes, p.wordBits, p.byteOrder);
+  const [x0, y0] = decodeBlock(stateBytes, p.wordBits, p.byteOrder);
   const mask = wordMask(p.wordBits);
   const xNew = ((ror(x0, p.alpha, p.wordBits) + y0) & mask) ^ k;
   const yNew = rol(y0, p.beta, p.wordBits) ^ xNew;
 
   const out = encodeBlock(p.wordBits, p.byteOrder, xNew & mask, yNew & mask);
-  const next: BytesState = { shape: "bytes", bytes: out };
-  return { state: next, auxReads: [p.roundKeyAux] };
+  return new Map([["state", out]]);
 };
 
 // ─── Documentation ────────────────────────────────────────────────────────
@@ -170,17 +181,20 @@ const readParams = (params: Json): Params => {
   };
 };
 
-// ─── Universal port-dataflow metadata (Phase 1 Slice 1.6) ───────────────
-// State-bearing ARX round. Reads a single round-key word from
-// `aux[roundKeyAux]` (a Uint8Array of `wordBits/8` bytes, byte-encoded
-// per `byteOrder`) and transforms a 2-word `bytes`-shape state into a
-// new 2-word block.
+// ─── Universal port-dataflow metadata (port-native since slice B2) ──────
+// State-bearing ARX round. The metadata is unchanged from the Slice 1.6
+// lift — only the executor above went native (B2) — because the runtime's
+// projection (`runtime.ts` Steps B/C) drives a native ported step the same
+// way it drove the lift adapter: `stateInputPort`/`stateOutputPort` thread
+// the carried block, `auxReadPorts` projects `aux[roundKeyAux]` onto the
+// `roundKey` input port. Reads a single round-key word (a Uint8Array of
+// `wordBits/8` bytes, byte-encoded per `byteOrder`) and transforms a 2-word
+// `bytes`-shape state into a new 2-word block.
 //
-// **`stateLayout: "bytes"`** — Speck blocks are flat `BytesState`s
-// (4 bytes for Speck32/64, 8 for Speck64/128, …). Reusing the
-// `bytes`-shape layout is the simplest route — the lift adapter's
-// `stateToBytes`/`bytesToState` already handle `bytes` shape with no
-// length constraint.
+// **`stateLayout: "bytes"`** — Speck blocks are flat byte arrays (4 bytes
+// for Speck32/64, 8 for Speck64/128, …). The runtime's `bytes`-layout
+// state projection is identity, so the executor sees the block bytes
+// directly on the `state` port.
 //
 // **byteLength absent on state + aux-read ports** — Speck variants vary
 // the block size (`2 * wordBits / 8`) and the round-key size
@@ -192,9 +206,9 @@ const readParams = (params: Json): Params => {
 // **Aux read binding `roundKey`** — a per-leaf binding to whatever
 // `params.roundKeyAux` names (e.g. `roundKey.5` for the 6th round).
 // Function form because every leaf names a different round-key entry;
-// the binding can only be resolved with `params` in hand. Insertion
-// order matches the legacy executor's `auxReads: [p.roundKeyAux]`
-// declaration exactly (one entry).
+// the binding can only be resolved with `params` in hand. The runtime
+// records it in `frame.auxRead`, preserving the key-schedule → round
+// fan-out edge in the graph.
 
 export const speckRoundMeta: ProjectionMetadata = {
   stateLayout: "bytes",

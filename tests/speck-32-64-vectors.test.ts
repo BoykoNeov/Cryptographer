@@ -26,6 +26,8 @@ describe("Speck32/64 (Beaulieu et al. 2013, Table 4.1)", () => {
       const trace = runSpec(speck32_64BeSpec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(plaintextHex)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
+        // Speck rounds are port-native since B2 → the spec requires ported dispatch.
+        portedDispatchEnabled: true,
       });
       expect(trace.finalState.shape).toBe("bytes");
       if (trace.finalState.shape !== "bytes") return;
@@ -36,6 +38,8 @@ describe("Speck32/64 (Beaulieu et al. 2013, Table 4.1)", () => {
       const trace = runSpec(speck32_64BeSpec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(plaintextHex)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
+        // Speck rounds are port-native since B2 → the spec requires ported dispatch.
+        portedDispatchEnabled: true,
       });
       expect(trace.frames.length).toBe(23);
     });
@@ -44,6 +48,8 @@ describe("Speck32/64 (Beaulieu et al. 2013, Table 4.1)", () => {
       const trace = runSpec(speck32_64BeSpec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(plaintextHex)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
+        // Speck rounds are port-native since B2 → the spec requires ported dispatch.
+        portedDispatchEnabled: true,
       });
       for (let i = 0; i < 22; i++) {
         const rk = trace.finalAux.get(`roundKey.${i}`);
@@ -66,6 +72,8 @@ describe("Speck32/64 (Beaulieu et al. 2013, Table 4.1)", () => {
       const trace = runSpec(speck32_64LeSpec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(plaintextHex)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
+        // Speck rounds are port-native since B2 → the spec requires ported dispatch.
+        portedDispatchEnabled: true,
       });
       if (trace.finalState.shape !== "bytes") return;
       expect(hexFromBytes(trace.finalState.bytes)).toBe(expectedHex);
@@ -75,6 +83,8 @@ describe("Speck32/64 (Beaulieu et al. 2013, Table 4.1)", () => {
       const trace = runSpec(speck32_64LeSpec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(plaintextHex)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
+        // Speck rounds are port-native since B2 → the spec requires ported dispatch.
+        portedDispatchEnabled: true,
       });
       // BE rk0 is 01 00; LE rk0 is the same word (0x0100) written low-first → 00 01.
       const rk0 = trace.finalAux.get("roundKey.0") as Uint8Array;

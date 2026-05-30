@@ -19,8 +19,8 @@
  */
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { serpent128Spec } from "@/ciphers/serpent-128";
 import { buildSha256Spec } from "@/ciphers/sha-256";
-import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue } from "@/core/types";
@@ -40,24 +40,25 @@ import { __resetReplicationForTests, setReplicationEnabled } from "@/ui/stores/v
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-// Non-ported control carrier. AES-128/192/256 single-block were all candidates,
-// but their byte-native B1.1–B1.3 rebuilds make them ported (auto-on) — so the
-// "non-ported, default-off" assertions retarget to Speck32/64, a still-legacy
-// (lifted, NOT port-native) cipher. 8-byte key + 4-byte block (Beaulieu et al.
-// 2013 Table 4.1). B2 (Speck byte-native) re-breaks these two tests — retarget
-// the control then (grep `speck32_64BeSpec` / `speck-32-64` across tests/).
-const SPECK_KEY = "1918111009080100";
-const SPECK_PT = "6574694c";
+// Non-ported control carrier. AES single-block (B1.1–B1.3) and Speck rounds
+// (B2) are all byte-native now (ported → auto-on), so the "non-ported,
+// default-off" assertions retarget to Serpent-128 — still lifted (NOT
+// port-native) until its B3 rebuild. 16-byte key + 16-byte block (pyserpent /
+// Anderson-Biham-Knudsen reference fixture). B3 (Serpent byte-native) will
+// re-break these two tests — retarget the control to DES then (grep
+// `serpent128Spec` / `serpent-128` across tests/).
+const SERPENT_KEY = "80000000000000000000000000000000";
+const SERPENT_PT = "00000000000000000000000000000000";
 
-const seedSpeckTrace = (): void => {
+const seedSerpentTrace = (): void => {
   // `effectiveReplicate` reads the STORE spec (`useSpec()`), not the trace, so
   // the store spec must be the non-ported control too. The post-reset default
-  // is byte-native AES-128 (ported → auto-on); flip the store to Speck via the
+  // is byte-native AES-128 (ported → auto-on); flip the store to Serpent via the
   // spec-store boundary (rebuilds the canonical spec — [[feedback_setcipher_test_import]]).
-  setCipher("speck-32-64-be");
-  const trace = runSpec(speck32_64BeSpec, buildDefaultRegistry(), {
-    initialState: makeBytesState(bytesFromHex(SPECK_PT)),
-    initialAux: new Map<string, AuxValue>([["key", bytesFromHex(SPECK_KEY)]]),
+  setCipher("serpent-128");
+  const trace = runSpec(serpent128Spec, buildDefaultRegistry(), {
+    initialState: makeBytesState(bytesFromHex(SERPENT_PT)),
+    initialAux: new Map<string, AuxValue>([["key", bytesFromHex(SERPENT_KEY)]]),
   });
   setTrace(trace);
 };
@@ -100,10 +101,10 @@ describe("GraphView replication — force-on for port-native specs", () => {
     resetAll();
   });
 
-  it("non-ported spec (Speck32/64) keeps the default-off raw signal", () => {
-    seedSpeckTrace();
+  it("non-ported spec (Serpent-128) keeps the default-off raw signal", () => {
+    seedSerpentTrace();
     const { container } = render(() => <GraphView />);
-    // Raw default false + no user toggle + Speck is NOT ported →
+    // Raw default false + no user toggle + Serpent is NOT ported →
     // effective replication stays off.
     expect(isReplicationCheckboxChecked(container)).toBe(false);
   });
@@ -130,11 +131,11 @@ describe("GraphView replication — force-on for port-native specs", () => {
     expect(isReplicationCheckboxChecked(container)).toBe(false);
   });
 
-  it("user toggle on Speck32/64 also wins when they later switch to SHA-256", () => {
-    // User toggles ON while looking at Speck (raw → true, userToggled → true).
-    // Speck (non-ported) makes the toggle genuinely the user's choice, not the
+  it("user toggle on Serpent-128 also wins when they later switch to SHA-256", () => {
+    // User toggles ON while looking at Serpent (raw → true, userToggled → true).
+    // Serpent (non-ported) makes the toggle genuinely the user's choice, not the
     // ported auto-on — preserving the test's discriminating power.
-    seedSpeckTrace();
+    seedSerpentTrace();
     setReplicationEnabled(true);
     // ... then switches to SHA-256. Effective should be raw = true (matches
     // their explicit choice, NOT forced-on by the ported branch — userToggled
