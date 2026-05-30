@@ -128,6 +128,80 @@ gate GREEN on merged main (2567/217), branch deleted.** **Did NOT touch**
 Serpent/DES (B3/B4). **Next: B3 (Serpent)** — advisor consult first, fresh
 branch off main.
 
+## B3 — Serpent byte-native: HANDOFF (orientation done, NOT started, 2026-05-30)
+
+> **Status: orientation-only session — NO code written, working tree CLEAN on
+> `main` @ `914cfc2`. The `advisor` tool was UNAVAILABLE this session, so the
+> mandated pre-Phase-B advisor consult could not run. NEXT SESSION: call
+> `advisor()` FIRST (this section is the brief to hand it), then a fresh branch
+> `b3-serpent-byte-native` off `main`.**
+
+**B3 = Scope B, identical in shape to B2 (Speck).** All six Serpent step types
+are TODAY `kind:"ported"` but **lifted-legacy** (`liftLegacyExecutor(...)` +
+`legacy:` fallback over `BytesState`) — the same pre-conversion posture B2 Speck
+was in. Convert the **5 round-body executors** to true `PortedExecutor`s
+(Uint8Array in/out); **leave `serpent.key-expansion@1` LIFTED** (mirrors
+`aes.key-expansion@1` / `speck.key-schedule@1` — native key-schedule conversion
+is the cross-cutting key-schedule slice, all ciphers at once).
+
+**The 5 targets** (`src/steps/`; each keeps `meta` + `shape` + `doc` incl.
+`shapeContract`; in `default-registry.ts` ~630–669 drop `legacy:` +
+`liftLegacyExecutor`, set `executor:` to the bare native fn):
+
+| File | Type | Shape |
+|---|---|---|
+| `serpent-bit-permutation.ts` | `serpent.bit-permutation@1` (IP+FP) | pure, no aux; `applyBitPermutation(inputs.get("state"), readTable(params))` |
+| `serpent-sub-bytes.ts` | `serpent.sub-bytes@1` | pure, no aux; per-nibble S-box from `params.sbox` |
+| `serpent-linear-transform.ts` | `serpent.linear-transform@1` | pure, no aux, no params; `SERPENT_LT_TABLE` |
+| `serpent-inv-linear-transform.ts` | `serpent.inv-linear-transform@1` | pure, no aux, no params; `SERPENT_INV_LT_TABLE` |
+| `serpent-add-round-key.ts` | `serpent.add-round-key@1` | hybrid; read `state` + `roundKey` ports, XOR. **Keep `meta.auxReadPorts`**; DROP `ctx.aux.get` + `auxReads:[...]` (runtime records auxRead from meta — Speck precedent). |
+
+Each native executor returns `new Map([["state", out]])`.
+
+**Load-bearing finding (B2-confirmed):** runtime ported input-assembly gates on
+**`meta`, not `legacy`** — keeping `meta` means the flat Serpent specs need
+**zero `portInputs`** and graph topology is unchanged (no `$input` node, no
+port-flow edges; spine + 33-way round-key aux fan-out identical).
+`requiresPortedDispatch` flips true for all 6 specs → the app runs Serpent
+ported.
+
+**A4 anti-creep — expect NO allowlist edit.** Serpent's `PortContract`s are
+already all `layout:"raw"` → never contributed a `NON_BYTES_ALLOWLIST` entry, and
+dropping `legacy` doesn't touch contracts. The `LEGACY_CONTRACT_ALLOWLIST`
+tripwire only flags bare `kind:"legacy"` steps; Serpent steps stay
+`kind:"ported"`. Verify `byte-native-ports-contract.test.ts` green untouched.
+
+**Test sweep (mirror B2's 8-file sweep; larger surface):**
+- `requires-ported-dispatch.test.ts` — flip the 6 Serpent rows `false→true`.
+- `runtime-ported-dispatch-frame-parity.test.ts` — REMOVE the Serpent rows (no
+  legacy path) + orphaned imports/consts.
+- `runtime-ported-dispatch-serpent.test.ts` — REWRITE: keep (a) KATs-under-ported
+  + (c) round-key order; replace (b) legacy-parity with a **golden frame-stream
+  pin captured from the lifted impl BEFORE conversion** (advisor parity-net);
+  replace (d) with an isolated native-round assertion. *Decision for advisor:* 6
+  specs × 99 frames = 594 frames — full Speck-style golden strings are bulky;
+  consider a per-spec checksum of the `stateAfter` stream.
+- `graph-view-replication-force-on-ported.test.tsx` — retarget the non-ported
+  control **Serpent → DES** (the file's own header predicts this). Verify DES is
+  reachable via `setCipher`.
+- Add `portedDispatchEnabled: true` to any other Serpent-running file
+  (`serpent-vectors`, `serpent-roundtrip`, etc.). **Leave the malformed-key
+  negative tests untouched** — the still-lifted key-schedule (frame 0) throws the
+  key-length error under flag-off before any native round leaf.
+- **Mis-targeting audit:** expect clean (Serpent keeps its `serpent.*@1` type
+  strings + bytes shape, no AES-style vacuous-pass risk) — do it anyway.
+
+**Done-checks:** native round frames route to PortFlowView (hybrid: port-native +
+state-threading); verify `<StepNarration>` still renders (SubBytes + AddRoundKey
+have fns; IP/FP/LT/inv-LT stay on `NARRATION_NO_OP_ALLOWLIST` by stepType) and
+add `tests/step-narration-serpent-port-native.test.tsx`; full `npm run check`
+GREEN (gate is off in this env — run manually); browser eyeball (Serpent-128 KAT
+`264e5481…`, replication auto-on, PortFlowView mid-round); merge `--no-ff`.
+
+**After B3:** B4 = DES is NOT a Scope-B flip — DES uses `feistel-round` + the
+legacy contract, and its byte-native form is the universal-port plan's Phase 4d
+rebuild from native split/concat/xor primitives (its own plan + advisor pass).
+
 ## B1.5 — graph-view follow-up (2026-05-30)
 
 > **STATUS (2026-05-30): B1.5 COMPLETE — all findings shipped.** F1 + F2
