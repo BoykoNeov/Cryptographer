@@ -1,17 +1,26 @@
 /**
- * Phase 3 of the DES + branching primitive plan: graph-derivation smoke
- * for the full DES spec. The toy fixture in `feistel-graph.test.ts`
- * exercises the container *kind* but not (a) 16 feistel-round containers
- * sharing a parent group, (b) consumer-side aux fanning of `key-schedule`
- * across 16 `xor-with-K` leaves spread across track bodies, or (c) the
- * F-internals chain (4 leaves per round in the R track). This file pins
- * those shapes WITHOUT recomputing the whole graph contract — Phase 6's
- * manual smoke pass is the comprehensive check; this is the structural
- * sanity that catches a derivation regression cheaply.
+ * Graph-derivation structural sanity for the PORT-NATIVE DES spec
+ * (B4 — universal-port Phase 4d). DES no longer uses `feistel-round`: each
+ * round is a port-mode `group` wiring split / des.expand-R / des.xor-with-K /
+ * des.s-boxes / des.p-permutation / xor / concat. This file pins that
+ * shipped topology — 16 round-group containers, the F-function leaf chain,
+ * the key-schedule → xor-K aux fan-out, and the ABSENCE of any feistel
+ * container or rejoin/passthrough synthetic.
+ *
+ * The Feistel graph derivation itself (feistel-kind containers, L/R
+ * passthrough chips, rejoin synthesis, the R-bypass chip, all edge classes)
+ * is still covered against the surviving primitive by
+ * `tests/feistel-graph.test.ts` (the toy fixture) — this file is the
+ * port-native counterpart, mirroring how SHA-256's port-native graph is
+ * pinned.
  */
 
+import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { desSpec } from "@/ciphers/des";
 import { deriveAuxGraph } from "@/core/graph";
+import { runSpec } from "@/core/runtime";
+import { bytesFromHex } from "@/core/state/bytes";
+import type { AuxValue } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 const emptyTrace = {
@@ -20,223 +29,79 @@ const emptyTrace = {
   finalAux: new Map(),
 };
 
-describe("DES graph derivation — structural sanity", () => {
-  it("emits 16 feistel-kind containers (one per round)", () => {
-    const graph = deriveAuxGraph(emptyTrace, desSpec);
-    const feistelContainers = graph.containers.filter((c) => c.kind === "feistel");
-    expect(feistelContainers.length).toBe(16);
-    for (let r = 1; r <= 16; r++) {
-      expect(feistelContainers.find((c) => c.id === `round.${r}`)).toBeDefined();
-    }
-  });
+// A real (ported) trace so the aux-edge assertions have frame.auxRead entries
+// to bite on. FIPS 46-3 Appendix B vector — same one des-vectors.test.ts uses.
+const desTrace = runSpec(desSpec, buildDefaultRegistry(), {
+  initialState: { shape: "bytes" as const, bytes: bytesFromHex("0123456789abcdef") },
+  initialAux: new Map<string, AuxValue>([["key", bytesFromHex("133457799bbcdff1")]]),
+  portedDispatchEnabled: true,
+});
 
-  it("each round's R-track carries the 4 F-internal leaves; L-track holds a synthetic passthrough chip (Phase 6b-ii)", () => {
+describe("DES (port-native) graph derivation — structural sanity", () => {
+  it("emits 16 round-group containers (one per round) inside the rounds group", () => {
     const graph = deriveAuxGraph(emptyTrace, desSpec);
     for (let r = 1; r <= 16; r++) {
       const round = graph.containers.find((c) => c.id === `round.${r}`);
-      // Phase 6b-ii — empty L tracks now carry a per-track
-      // passthrough synthetic so the L column reads as
-      // "passes through unchanged" instead of empty space.
-      // Naming via `feistelPassthroughId`:
-      // `${roundId}:passthrough-${trackIdx}` (track 0 == L).
-      expect(round?.feistelTracks?.[0], `round.${r} L track`).toEqual([`round.${r}:passthrough-0`]);
-      // UX-D candidate (b), 2026-05-22 — rounds 1..15 (`feistel-standard`)
-      // prepend a passthrough chip at the head of the R-track that
-      // represents R_in flowing unchanged to the rejoin alongside the
-      // F-stack. Round 16 (`feistel-no-swap`) keeps the legacy 4-leaf
-      // shape since the bypass narrative doesn't apply.
-      const expectedRTrack =
-        r === 16
-          ? [
-              `round.${r}.expand-R`,
-              `round.${r}.xor-K`,
-              `round.${r}.s-boxes`,
-              `round.${r}.p-permute`,
-            ]
-          : [
-              `round.${r}:passthrough-1`,
-              `round.${r}.expand-R`,
-              `round.${r}.xor-K`,
-              `round.${r}.s-boxes`,
-              `round.${r}.p-permute`,
-            ];
-      expect(round?.feistelTracks?.[1], `round.${r} R track`).toEqual(expectedRTrack);
+      expect(round, `round.${r} container`).toBeDefined();
+      expect(round?.containerPath).toEqual(["rounds"]);
     }
+    // The outer rounds group is a container too.
+    expect(graph.containers.find((c) => c.id === "rounds")).toBeDefined();
   });
 
-  it("synthesizes one passthrough node per empty L track (Phase 6b-ii)", () => {
+  it("emits NO feistel-kind containers (DES is port-native now)", () => {
     const graph = deriveAuxGraph(emptyTrace, desSpec);
+    expect(graph.containers.filter((c) => c.kind === "feistel").length).toBe(0);
+  });
+
+  it("synthesizes NO rejoin or passthrough nodes (the combine is a concat leaf)", () => {
+    const graph = deriveAuxGraph(emptyTrace, desSpec);
+    const synthetics = graph.nodes.filter((n) => n.synthetic !== undefined);
+    expect(synthetics.map((n) => n.stepId)).toEqual([]);
+  });
+
+  it("each round carries the 7 port-native F-body leaves", () => {
+    const graph = deriveAuxGraph(emptyTrace, desSpec);
+    const suffixes = [
+      "split",
+      "expand-R",
+      "xor-K",
+      "s-boxes",
+      "p-permute",
+      "fxor",
+      "recombine",
+    ];
     for (let r = 1; r <= 16; r++) {
-      const pt = graph.nodes.find((n) => n.stepId === `round.${r}:passthrough-0`);
-      expect(pt, `round.${r}:passthrough-0`).toBeDefined();
-      expect(pt?.synthetic).toBe("passthrough");
-      expect(pt?.containerPath).toEqual(["rounds", `round.${r}`]);
+      for (const s of suffixes) {
+        const id = `round.${r}.${s}`;
+        expect(graph.nodes.find((n) => n.stepId === id), id).toBeDefined();
+      }
     }
   });
 
-  it("round 16 uses combineKind 'feistel-no-swap'; rounds 1..15 use 'feistel-standard'", () => {
+  it("carries the $input source + IP/FP cipher-boundary leaves", () => {
     const graph = deriveAuxGraph(emptyTrace, desSpec);
-    for (let r = 1; r <= 15; r++) {
-      expect(graph.containers.find((c) => c.id === `round.${r}`)?.feistelCombineKind).toBe(
-        "feistel-standard",
+    expect(graph.nodes.find((n) => n.stepId === "$input"), "$input source").toBeDefined();
+    expect(graph.nodes.find((n) => n.stepId === "initial-permutation"), "IP").toBeDefined();
+    expect(graph.nodes.find((n) => n.stepId === "final-permutation"), "FP").toBeDefined();
+  });
+
+  it("fans the key-schedule out to all 16 xor-K leaves with the right round key", () => {
+    const graph = deriveAuxGraph(desTrace, desSpec);
+    for (let r = 1; r <= 16; r++) {
+      const edge = graph.edges.find(
+        (e) =>
+          e.from === "key-schedule" &&
+          e.to === `round.${r}.xor-K` &&
+          e.kind === "aux" &&
+          e.auxKey === `roundKey.${r - 1}`,
       );
-    }
-    expect(graph.containers.find((c) => c.id === "round.16")?.feistelCombineKind).toBe(
-      "feistel-no-swap",
-    );
-  });
-
-  it("synthesizes one rejoin node per round", () => {
-    const graph = deriveAuxGraph(emptyTrace, desSpec);
-    for (let r = 1; r <= 16; r++) {
-      const rejoin = graph.nodes.find((n) => n.stepId === `round.${r}:rejoin`);
-      expect(rejoin, `round.${r}:rejoin`).toBeDefined();
-      expect(rejoin?.synthetic).toBe("rejoin");
+      expect(edge, `key-schedule → round.${r}.xor-K (roundKey.${r - 1})`).toBeDefined();
     }
   });
 
-  it("does not throw on the full 16-round DES spec", () => {
-    // Cheap blanket assertion: any derivation regression that produces
-    // a malformed graph (orphaned container, missing edge endpoint,
-    // throw in port-spread) lands here.
+  it("does not throw on the full 16-round port-native DES spec", () => {
     expect(() => deriveAuxGraph(emptyTrace, desSpec)).not.toThrow();
-  });
-
-  // UX-D candidate (b), 2026-05-22 — rounds 1..15 (`feistel-standard`)
-  // get a synthetic R-bypass passthrough chip (`:passthrough-1`) sitting
-  // at the head of the R-column. The chip's incoming arrow is from the
-  // round's predecessor, outgoing arrow is directly to `:rejoin`,
-  // running in parallel with the F-stack. Together with the existing
-  // L-passthrough this makes both halves of the Feistel swap visible:
-  // L_in → :rejoin via the L chip, R_in → :rejoin via the R chip,
-  // F(R_in, K_i) → :rejoin via the F-stack. Round 16 (`feistel-no-swap`)
-  // skips the R chip — the bypass narrative doesn't apply there.
-  //
-  // Candidate (a) — synthesized arrow expand-R → rejoin — was tried
-  // first (commit `83502de`) and reverted because the arrow visually
-  // suggested expand-R PRODUCED R_in. expand-R consumes R_in and
-  // produces E(R); the chip moves the arrow's origin off expand-R.
-  describe("UX-D candidate (b) — R-bypass passthrough chip", () => {
-    it("synthesizes a passthrough chip at the head of the R-track for each of rounds 1..15", () => {
-      const graph = deriveAuxGraph(emptyTrace, desSpec);
-      for (let r = 1; r <= 15; r++) {
-        const chip = graph.nodes.find((n) => n.stepId === `round.${r}:passthrough-1`);
-        expect(chip, `round.${r}:passthrough-1`).toBeDefined();
-        expect(chip?.synthetic).toBe("passthrough");
-        expect(chip?.containerPath).toEqual(["rounds", `round.${r}`]);
-      }
-    });
-
-    it("does NOT synthesize an R-bypass chip for round 16 (feistel-no-swap)", () => {
-      const graph = deriveAuxGraph(emptyTrace, desSpec);
-      const chip = graph.nodes.find((n) => n.stepId === "round.16:passthrough-1");
-      expect(chip, "round.16 must not carry the R-bypass chip").toBeUndefined();
-    });
-
-    it("routes predecessor → chip → rejoin around the F-stack for each of rounds 1..15", () => {
-      const graph = deriveAuxGraph(emptyTrace, desSpec);
-      const stateEdges = graph.edges.filter((e) => e.kind === "state");
-      const has = (from: string, to: string): boolean =>
-        stateEdges.some((e) => e.from === from && e.to === to && e.auxKey === "state");
-      for (let r = 1; r <= 15; r++) {
-        // The predecessor is whatever leaf sits before the round in
-        // the parent spine — for round 1 that's `initial-permutation`,
-        // for round k>1 that's `round.k-1:rejoin`. Outgoing edge is
-        // always to the round's chip (which is the chain head now).
-        const predecessor = r === 1 ? "initial-permutation" : `round.${r - 1}:rejoin`;
-        expect(
-          has(predecessor, `round.${r}:passthrough-1`),
-          `predecessor → round.${r}:passthrough-1`,
-        ).toBe(true);
-        expect(
-          has(`round.${r}:passthrough-1`, `round.${r}:rejoin`),
-          `round.${r}:passthrough-1 → rejoin`,
-        ).toBe(true);
-        // Chip is now upstream of expand-R, so the chain edge
-        // chip → expand-R must exist too.
-        expect(
-          has(`round.${r}:passthrough-1`, `round.${r}.expand-R`),
-          `round.${r}:passthrough-1 → expand-R`,
-        ).toBe(true);
-      }
-    });
-
-    it("keeps the existing F-output edge (p-permute → rejoin) intact alongside the chip", () => {
-      // Sanity: adding the R-bypass chip and its edges must NOT
-      // replace or suppress the pre-existing fan-out edge from the
-      // R-track's LAST leaf. Both arrows should reach rejoin —
-      // chip carries R_in, fan-out carries F(R_in, K_i).
-      const graph = deriveAuxGraph(emptyTrace, desSpec);
-      const fanOut = graph.edges.find(
-        (e) => e.from === "round.1.p-permute" && e.to === "round.1:rejoin" && e.auxKey === "state",
-      );
-      expect(fanOut, "round.1 F-output edge").toBeDefined();
-    });
-
-    it("does NOT route predecessor → R-bypass-chip for round 16 (feistel-no-swap)", () => {
-      const graph = deriveAuxGraph(emptyTrace, desSpec);
-      // The chip doesn't exist for round 16, so neither edge should.
-      const incoming = graph.edges.find((e) => e.to === "round.16:passthrough-1");
-      const outgoing = graph.edges.find((e) => e.from === "round.16:passthrough-1");
-      expect(
-        incoming,
-        "round.16 must not have an incoming edge to a non-existent chip",
-      ).toBeUndefined();
-      expect(
-        outgoing,
-        "round.16 must not have an outgoing edge from a non-existent chip",
-      ).toBeUndefined();
-    });
-  });
-
-  // UX-F regression (2026-05-23) — the L-track passthrough chip
-  // (`round.N:passthrough-0`) is synthesized purely from spec shape
-  // (empty track ⇒ chip). So a round-trip prepend → remove on the
-  // L-track must re-produce the chip in the derived graph. Without
-  // this re-emit working, a user who experiments with a palette drop
-  // into L can never get back to the "empty track" pedagogy without
-  // `reset spec` (which nukes everything else). This test pins the
-  // graph-derivation half of UX-F's path-(a) per-leaf delete UX; the
-  // mutation half is pinned in
-  // `tests/spec-mutations-feistel-track.test.ts`.
-  describe("UX-F — L-passthrough chip re-emerges after prepend → remove round-trip", () => {
-    it("re-emits round.1:passthrough-0 after an L-track leaf is inserted and removed", async () => {
-      const { prependChildToTrack, removeStep } = await import("@/core/spec-mutations");
-      // Baseline: empty L-track produces the passthrough chip.
-      const baseGraph = deriveAuxGraph(emptyTrace, desSpec);
-      expect(
-        baseGraph.nodes.find((n) => n.stepId === "round.1:passthrough-0"),
-        "baseline: empty L-track must emit the passthrough chip",
-      ).toBeDefined();
-
-      // Populate the L-track via a palette-equivalent insert.
-      const populated = prependChildToTrack(desSpec, "round.1", 0, {
-        kind: "step",
-        id: "round.1.l-experimental",
-        type: "test.fixture@1",
-        params: {},
-      });
-      const populatedGraph = deriveAuxGraph(emptyTrace, populated);
-      expect(
-        populatedGraph.nodes.find((n) => n.stepId === "round.1:passthrough-0"),
-        "populated L-track must NOT emit a passthrough chip",
-      ).toBeUndefined();
-      expect(
-        populatedGraph.nodes.find((n) => n.stepId === "round.1.l-experimental"),
-        "populated L-track must emit the inserted leaf",
-      ).toBeDefined();
-
-      // Round-trip back to empty.
-      const restored = removeStep(populated, "round.1.l-experimental");
-      const restoredGraph = deriveAuxGraph(emptyTrace, restored);
-      expect(
-        restoredGraph.nodes.find((n) => n.stepId === "round.1:passthrough-0"),
-        "after remove, L-track empty again ⇒ passthrough chip back",
-      ).toBeDefined();
-      expect(
-        restoredGraph.nodes.find((n) => n.stepId === "round.1.l-experimental"),
-        "after remove, the inserted leaf must be gone from the graph",
-      ).toBeUndefined();
-    });
+    expect(() => deriveAuxGraph(desTrace, desSpec)).not.toThrow();
   });
 });
