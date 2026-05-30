@@ -106,8 +106,9 @@ const runCbc = (spec: typeof aes128CbcSpec, pt: string): Trace =>
 
 const runBytes = (spec: typeof aes128EcbSpec, key: string, pt: string): Trace => {
   const registry = buildDefaultRegistry();
-  // Byte-native ECB (B1.4) needs ported dispatch; Speck/Serpent (legacy)
-  // must NOT use it — `requiresPortedDispatch` picks correctly per spec.
+  // Dispatch mode varies per spec: byte-native ECB (B1.4) + byte-native Speck
+  // rounds (B2) need ported dispatch; still-lifted Serpent does not.
+  // `requiresPortedDispatch` picks correctly per spec.
   return runSpec(spec, registry, {
     initialState: makeBytesState(bytesFromHex(pt)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(key)]]),

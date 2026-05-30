@@ -78,6 +78,11 @@ const runSpeck = (): Trace =>
   runSpec(speck32_64BeSpec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(SPECK_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(SPECK_KEY)]]),
+    // Speck rounds are port-native since B2 → the spec requires ported dispatch.
+    // The graph shape is unchanged: Speck wires no `portInputs`, so no `$input`
+    // source node or port-flow edges appear — only the spec-derived spine + the
+    // key-schedule → round aux fan-out (both identical to the lifted trace).
+    portedDispatchEnabled: true,
   });
 
 const runSerpent128 = (): Trace =>

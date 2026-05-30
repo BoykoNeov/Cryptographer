@@ -18,9 +18,10 @@
  * in any cipher family surfaces here whether or not its family-specific
  * file also caught it.
  *
- * Coverage (16 rows — was 22; aes-128 encrypt dropped in Slice B1.1,
- * aes-128 decrypt in Slice B1.2, and all four aes-192/256 single-block rows
- * in Slice B1.3, see below):
+ * Coverage (8 rows — was 22; aes-128 encrypt dropped in Slice B1.1,
+ * aes-128 decrypt in Slice B1.2, all four aes-192/256 single-block rows
+ * in Slice B1.3, AES ECB/CBC in B1.4, and the four Speck rows in Slice B2,
+ * see below):
  *
  *   AES single-block:  none. Every single-block AES (128/192/256, both
  *                      directions) is byte-native (no legacy path) →
@@ -31,8 +32,10 @@
  *                      byte-native (port-mode iterate, no legacy path) →
  *                      removed; their KATs live in aes-128-ecb-kat /
  *                      aes-128-cbc-kat.                              [0 rows]
- *   Speck:             speck-32-64-be + decrypt, -le + decrypt
- *                      (Beaulieu et al. 2013 Table 4.1)             [4 rows]
+ *   Speck:             none. The two ARX rounds are byte-native (Slice B2,
+ *                      no legacy path) → removed; the KATs + frame streams
+ *                      live in speck-32-64-vectors / -decrypt and
+ *                      runtime-ported-dispatch-speck.                [0 rows]
  *   Serpent:           serpent-128/-192/-256 + decrypt counterparts
  *                      (pyserpent / Anderson-Biham-Knudsen reference)
  *                                                                   [6 rows]
@@ -59,10 +62,6 @@ import { serpent192Spec } from "@/ciphers/serpent-192";
 import { serpent192DecryptSpec } from "@/ciphers/serpent-192-decrypt";
 import { serpent256Spec } from "@/ciphers/serpent-256";
 import { serpent256DecryptSpec } from "@/ciphers/serpent-256-decrypt";
-import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
-import { speck32_64BeDecryptSpec } from "@/ciphers/speck-32-64-be-decrypt";
-import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
-import { speck32_64LeDecryptSpec } from "@/ciphers/speck-32-64-le-decrypt";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue, CipherSpec, State, TraceFrame } from "@/core/types";
@@ -161,15 +160,11 @@ type Row = {
 // are byte-native (Slice B1.4a/B1.4b), pinned in aes-128-ecb-kat /
 // aes-128-cbc-kat.
 
-// Speck32/64 — Beaulieu et al. 2013 Table 4.1 KAT under both byte
-// conventions. BE-paper is the paper's MSB-first presentation; LE-NSA
-// is the NSA reference implementation's LSB-first byte order.
-const SPECK_BE_KEY = "1918111009080100";
-const SPECK_BE_PT = "6574694c";
-const SPECK_BE_CT = "a86842f2";
-const SPECK_LE_KEY = "0001080910111819";
-const SPECK_LE_PT = "4c697465";
-const SPECK_LE_CT = "f24268a8";
+// Speck32/64 rows were removed in Slice B2 — the two ARX rounds are now
+// port-native (no legacy executor), so the spec can't run under
+// `portedDispatchEnabled: false` and has no legacy frame stream to compare
+// against. KATs + frame streams live in speck-32-64-vectors / -decrypt and
+// runtime-ported-dispatch-speck.
 
 // Serpent — pyserpent.py / Anderson-Biham-Knudsen reference. All-zero
 // plaintext + one-bit key for each key size (the conventional Serpent
@@ -189,7 +184,7 @@ const DES_PT = "0123456789abcdef";
 const DES_KEY = "133457799bbcdff1";
 const DES_CT = "85e813540f0ab405";
 
-// ─── The 12-row matrix (Speck 4 + Serpent 6 + DES 2; all AES rows are now
+// ─── The 8-row matrix (Serpent 6 + DES 2; all AES + Speck rows are now
 //     byte-native and live in their own KAT files) ──────────────────────
 
 const ROWS: readonly Row[] = [
@@ -205,39 +200,6 @@ const ROWS: readonly Row[] = [
   // removed in Slice B1.4a and the CBC rows in B1.4b — both modes are now
   // byte-native (port-mode iterate + port-native body, no legacy path),
   // KAT-pinned in `aes-128-ecb-kat` / `aes-128-cbc-kat`. No AES rows remain.
-  // Speck32/64 × 2 conventions × 2 directions = 4 rows
-  {
-    label: "speck-32-64 BE-paper encrypt (Beaulieu et al. 2013 Table 4.1)",
-    spec: speck32_64BeSpec,
-    stateBuilder: buildBytesState,
-    inputHex: SPECK_BE_PT,
-    expectedOutputHex: SPECK_BE_CT,
-    auxInputs: [["key", SPECK_BE_KEY]],
-  },
-  {
-    label: "speck-32-64 BE-paper decrypt (Beaulieu et al. 2013 Table 4.1)",
-    spec: speck32_64BeDecryptSpec,
-    stateBuilder: buildBytesState,
-    inputHex: SPECK_BE_CT,
-    expectedOutputHex: SPECK_BE_PT,
-    auxInputs: [["key", SPECK_BE_KEY]],
-  },
-  {
-    label: "speck-32-64 LE-NSA encrypt (Beaulieu et al. 2013 Table 4.1)",
-    spec: speck32_64LeSpec,
-    stateBuilder: buildBytesState,
-    inputHex: SPECK_LE_PT,
-    expectedOutputHex: SPECK_LE_CT,
-    auxInputs: [["key", SPECK_LE_KEY]],
-  },
-  {
-    label: "speck-32-64 LE-NSA decrypt (Beaulieu et al. 2013 Table 4.1)",
-    spec: speck32_64LeDecryptSpec,
-    stateBuilder: buildBytesState,
-    inputHex: SPECK_LE_CT,
-    expectedOutputHex: SPECK_LE_PT,
-    auxInputs: [["key", SPECK_LE_KEY]],
-  },
   // Serpent × 3 key sizes × 2 directions = 6 rows
   {
     label: "serpent-128 encrypt (pyserpent reference)",

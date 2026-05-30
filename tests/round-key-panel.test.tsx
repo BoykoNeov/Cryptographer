@@ -263,6 +263,8 @@ const seedSpeck32_64Trace = () => {
   const trace = runSpec(speck32_64BeSpec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(SPECK32_64_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(SPECK32_64_KEY)]]),
+    // Speck rounds are port-native since B2 → the spec requires ported dispatch.
+    portedDispatchEnabled: true,
   });
   setTrace(trace);
   return trace;

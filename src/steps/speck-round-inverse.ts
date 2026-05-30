@@ -19,12 +19,11 @@
  */
 
 import type {
-  BytesState,
   Json,
   PortContract,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "../core/types";
 import {
   type SpeckByteOrder,
@@ -34,27 +33,36 @@ import {
   readByteOrder,
 } from "./speck-word-codec";
 
-export const speckRoundInverse: StepExecutor = (state, params, ctx) => {
-  if (state.shape !== "bytes") {
-    throw new Error("speck.round-inverse expects bytes state");
-  }
+// Port-native executor (scaffolding-suppression Phase B, slice B2, 2026-05-30).
+// Mirror of the forward `speckRound`: consumes/emits only `Uint8Array`. The
+// `state` port carries the carried block (threaded via `meta.stateInputPort`)
+// and `roundKey` carries `aux[params.roundKeyAux]` (projected via
+// `meta.auxReadPorts`). Decrypt specs wire the round keys in reverse leaf
+// order; the executor itself is direction-symmetric with the forward round.
+export const speckRoundInverse: PortedExecutor = (inputs, params, _ctx) => {
   const p = readParams(params);
-  const expectedBytes = 2 * (p.wordBits / 8);
-  if (state.bytes.length !== expectedBytes) {
+  const stateBytes = inputs.get("state");
+  if (stateBytes === undefined) {
     throw new Error(
-      `speck.round-inverse: block must be ${expectedBytes} bytes for wordBits=${p.wordBits}; got ${state.bytes.length}`,
+      "speck.round-inverse: 'state' input port is not wired (the runtime projects the carried block onto it via meta.stateInputPort)",
+    );
+  }
+  const expectedBytes = 2 * (p.wordBits / 8);
+  if (stateBytes.length !== expectedBytes) {
+    throw new Error(
+      `speck.round-inverse: block must be ${expectedBytes} bytes for wordBits=${p.wordBits}; got ${stateBytes.length}`,
     );
   }
 
-  const rkBytes = ctx.aux.get(p.roundKeyAux);
+  const rkBytes = inputs.get("roundKey");
   if (!(rkBytes instanceof Uint8Array) || rkBytes.length !== p.wordBits / 8) {
     throw new Error(
-      `speck.round-inverse: aux '${p.roundKeyAux}' must be a ${p.wordBits / 8}-byte Uint8Array`,
+      `speck.round-inverse: 'roundKey' port must carry a ${p.wordBits / 8}-byte word (projected from aux['${p.roundKeyAux}'] via meta.auxReadPorts)`,
     );
   }
   const k = decodeWord(rkBytes, 0, p.wordBits, p.byteOrder);
 
-  const [xNew, yNew] = decodeBlock(state.bytes, p.wordBits, p.byteOrder);
+  const [xNew, yNew] = decodeBlock(stateBytes, p.wordBits, p.byteOrder);
   const mask = wordMask(p.wordBits);
   // y = ROR(y' XOR x', beta)
   const y = ror(yNew ^ xNew, p.beta, p.wordBits);
@@ -66,8 +74,7 @@ export const speckRoundInverse: StepExecutor = (state, params, ctx) => {
   const x = rol(sub, p.alpha, p.wordBits);
 
   const out = encodeBlock(p.wordBits, p.byteOrder, x, y);
-  const next: BytesState = { shape: "bytes", bytes: out };
-  return { state: next, auxReads: [p.roundKeyAux] };
+  return new Map([["state", out]]);
 };
 
 // ─── Documentation ────────────────────────────────────────────────────────
@@ -174,9 +181,12 @@ const readParams = (params: Json): Params => {
   };
 };
 
-// ─── Universal port-dataflow metadata (Phase 1 Slice 1.6) ───────────────
+// ─── Universal port-dataflow metadata (port-native since slice B2) ──────
 // Mirror of `speckRoundMeta` — same port shape, opposite math direction.
-// State-bearing, single round-key aux read. Decrypt specs wire
+// State-bearing, single round-key aux read. Unchanged from the Slice 1.6
+// lift (only the executor went native): the runtime threads the block via
+// `stateInputPort`/`stateOutputPort` and projects `aux[roundKeyAux]` onto
+// the `roundKey` port via `auxReadPorts`. Decrypt specs wire
 // `params.roundKeyAux` to roundKey.21, .20, …, .0 (reverse consumption
 // order); the metadata's per-leaf `auxReadPorts` resolves each leaf's
 // specific aux key independently.
