@@ -55,60 +55,16 @@ import { AES_RCON, AES_SBOX } from "@/ciphers/aes-constants";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
-import type { AuxValue, CipherSpec, State, TraceFrame } from "@/core/types";
+import type { AuxValue, CipherSpec } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
-// ─── Frame-equality helpers (mirror the Slice 1.2 dispatch tests) ───────
-
-const expectStatesEqual = (a: State, b: State, label: string): void => {
-  expect(a.shape, `${label}: shape`).toBe(b.shape);
-  switch (a.shape) {
-    case "bytes": {
-      if (b.shape !== a.shape) return;
-      expect(Array.from(a.bytes), `${label}: bytes`).toEqual(Array.from(b.bytes));
-      return;
-    }
-  }
-};
-
-const expectAuxMapsEqual = (
-  a: ReadonlyMap<string, AuxValue>,
-  b: ReadonlyMap<string, AuxValue>,
-  label: string,
-): void => {
-  expect([...a.keys()].sort(), `${label}: keys`).toEqual([...b.keys()].sort());
-  expect(a, `${label}: aux value`).toEqual(b);
-};
-
-const expectFramesEqual = (a: TraceFrame, b: TraceFrame, index: number): void => {
-  const label = `frame ${index} (${a.stepType} @ ${a.stepId})`;
-  expect(a.index, `${label}: index`).toBe(b.index);
-  expect(a.path, `${label}: path`).toEqual(b.path);
-  expect(a.stepId, `${label}: stepId`).toBe(b.stepId);
-  expect(a.stepType, `${label}: stepType`).toBe(b.stepType);
-  expect(a.params, `${label}: params`).toEqual(b.params);
-  expect(a.blockIndex, `${label}: blockIndex`).toBe(b.blockIndex);
-  expect(a.branchPath, `${label}: branchPath`).toEqual(b.branchPath);
-  expect(a.auxReadMissing, `${label}: auxReadMissing`).toEqual(b.auxReadMissing);
-  expectStatesEqual(a.stateBefore, b.stateBefore, `${label}: stateBefore`);
-  expectStatesEqual(a.stateAfter, b.stateAfter, `${label}: stateAfter`);
-  expectAuxMapsEqual(a.auxRead, b.auxRead, `${label}: auxRead`);
-  expectAuxMapsEqual(a.auxWritten, b.auxWritten, `${label}: auxWritten`);
-};
-
-const expectFrameStreamsEqual = (
-  a: readonly TraceFrame[],
-  b: readonly TraceFrame[],
-  label: string,
-): void => {
-  expect(a.length, `${label}: frame count`).toBe(b.length);
-  for (let i = 0; i < a.length; i++) {
-    const af = a[i];
-    const bf = b[i];
-    if (!af || !bf) throw new Error(`${label}: fixture missing frame at index ${i}`);
-    expectFramesEqual(af, bf, i);
-  }
-};
+// The legacy-vs-ported frame-stream equality helpers (expectStatesEqual /
+// expectAuxMapsEqual / expectFramesEqual / expectFrameStreamsEqual) were
+// removed in Slice 5.2: `aes.key-expansion@1/@2` are now pure port-native
+// (no `legacy` fallback), so no AES step in this file can run under
+// `portedDispatchEnabled: false` — there is no legacy frame stream left to
+// compare against. The surviving correctness gates are the FIPS-197 KATs
+// (block a) and the round-key port/parity checks (blocks b + c).
 
 // ─── FIPS-197 / NIST AES Core fixtures ──────────────────────────────────
 
@@ -227,26 +183,27 @@ describe("runtime — ported dispatch, Slice 1.4 AES core step types", () => {
     });
   });
 
-  // ─── (c) aes.key-expansion@2 parity at canonical rounds ───────────────
+  // ─── (c) aes.key-expansion@2 round-key parity with @1 ─────────────────
 
-  describe("(c) aes.key-expansion@2 — frame parity at canonical AES-128 rounds", () => {
-    // Build a one-leaf spec that exercises ONLY @2 with rounds=10 (the
-    // canonical AES-128 count). At this round count @2 + @1 are byte-
-    // identical (the relaxed assertion accepts but doesn't change
-    // anything; the Rcon table covers all 11 indices the executor needs).
-    // The ported path must preserve that property — a meta-shape drift
-    // between @1 and @2 (e.g., wrong output port count) would diverge
-    // here even at canonical rounds.
-    const v2Spec: CipherSpec = {
-      id: "aes-key-expansion-v2-canonical@1",
-      name: "Slice 1.4 — key-expansion @2 at canonical AES-128 rounds",
+  describe("(c) aes.key-expansion@2 — round-key parity with @1 at canonical AES-128 rounds", () => {
+    // At canonical rounds (rounds === Nk + 6) @2's relaxations (the loosened
+    // `rounds >= Nk + 1` assertion + on-the-fly Rcon extension) are inert, so
+    // @2 must emit byte-identical round keys to @1. Both are now pure
+    // port-native (Slice 5.2 — no `legacy` fallback), so the former
+    // legacy-vs-ported frame-parity row is structurally impossible (neither
+    // can run flag-off). The surviving property is @1↔@2 round-key
+    // byte-equality under ported dispatch — it pins that @2's meta + executor
+    // (output-port count, ordering, byte values) don't drift from @1.
+    const oneLeafSpec = (type: string, id: string): CipherSpec => ({
+      id: `aes-key-expansion-canonical-${id}`,
+      name: `Slice 5.2 — ${type} at canonical AES-128 rounds`,
       stateShape: "bytes",
       inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 16 } },
       steps: [
         {
           kind: "step",
-          id: "ke-v2",
-          type: "aes.key-expansion@2",
+          id,
+          type,
           params: {
             keyAuxName: "key",
             outputPrefix: "roundKey",
@@ -256,27 +213,26 @@ describe("runtime — ported dispatch, Slice 1.4 AES core step types", () => {
           },
         },
       ],
-    };
+    });
 
-    it("emits frame-by-frame byte-equal traces vs legacy dispatch", () => {
-      const initial = () => makeBytesState(new Uint8Array(0));
-      const aux = (): Map<string, AuxValue> =>
-        new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]);
+    it("emits round keys byte-identical to @1 under ported dispatch", () => {
+      const run = (type: string, id: string) =>
+        runSpec(oneLeafSpec(type, id), buildDefaultRegistry(), {
+          initialState: makeBytesState(new Uint8Array(0)),
+          initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
+          portedDispatchEnabled: true,
+        });
 
-      const legacy = runSpec(v2Spec, buildDefaultRegistry(), {
-        initialState: initial(),
-        initialAux: aux(),
-      });
-      const ported = runSpec(v2Spec, buildDefaultRegistry(), {
-        initialState: initial(),
-        initialAux: aux(),
-        portedDispatchEnabled: true,
-      });
+      const v1 = run("aes.key-expansion@1", "ke-v1");
+      const v2 = run("aes.key-expansion@2", "ke-v2");
 
-      expectFrameStreamsEqual(ported.frames, legacy.frames, "key-expansion-v2");
-      // Sanity: 11 round keys present in finalAux (rounds=10 → 11 keys).
+      // 11 round keys (rounds=10 → roundKey.0 … roundKey.10), byte-equal.
       for (let r = 0; r <= 10; r++) {
-        expect(ported.finalAux.has(`roundKey.${r}`)).toBe(true);
+        const a = v1.finalAux.get(`roundKey.${r}`);
+        const b = v2.finalAux.get(`roundKey.${r}`);
+        expect(a, `@1 roundKey.${r}`).toBeInstanceOf(Uint8Array);
+        expect(b, `@2 roundKey.${r}`).toBeInstanceOf(Uint8Array);
+        expect(hexFromBytes(b as Uint8Array)).toBe(hexFromBytes(a as Uint8Array));
       }
     });
   });

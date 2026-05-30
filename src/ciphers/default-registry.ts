@@ -195,19 +195,24 @@ import { zeroUnpad, zeroUnpadDoc, zeroUnpadMeta, zeroUnpadPortContract } from ".
 
 export const buildDefaultRegistry = (): StepRegistry => {
   const r = new StepRegistry();
-  // ─── AES key expansion (lifted; Slice 1.4 — universal port-dataflow) ───
+  // ─── AES key expansion (port-native since Slice 5.2 — universal-port Phase 5) ───
   // The matrix AES round primitives (generic.byte-substitution@1 /
   // shift-rows@1 / mix-columns@1 / add-round-key@1) were retired in
   // Phase 5 Slice 5.1 (2026-05-30) along with the MatrixState shape — the
   // shipped AES specs run the port-native byte-flat primitives
   // (byte-substitute@1 / permute@1 / gf-matrix-multiply@1 / xor-with-aux@1)
-  // registered below. Key-expansion stays lifted here (Slice 5.2 converts
-  // it to a true PortedExecutor); it is the one-to-many round-key writer,
-  // with `outputs(params)` in function form sized by `params.rounds`.
+  // registered below. **Slice 5.2 (2026-05-30)** dropped the `legacy:` lift:
+  // `keyExpansion` / `keyExpansionV2` are now true `PortedExecutor`s (master
+  // key in on the `masterKey` port, round keys out on `key0`…`keyN`). `meta`
+  // is RETAINED — the runtime still projects `aux[keyAuxName] → masterKey`
+  // and `key${r} → aux[${outputPrefix}.${r}]`, so frames stay byte-identical
+  // (only `portInputs`/`portOutputs` newly populate; KeyScheduleExplorer
+  // still intercepts the frame by stepType, so the inspector is unchanged).
+  // It is the one-to-many round-key writer, with `outputs(params)` in
+  // function form sized by `params.rounds`.
   r.register("aes.key-expansion@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(keyExpansion, keyExpansionMeta),
-    legacy: keyExpansion,
+    executor: keyExpansion,
     shape: keyExpansionPortContract,
     meta: keyExpansionMeta,
     doc: keyExpansionDoc,
@@ -219,8 +224,7 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // Shares the @1 meta + contract verbatim (identical param shape).
   r.register("aes.key-expansion@2", {
     kind: "ported",
-    executor: liftLegacyExecutor(keyExpansionV2, keyExpansionV2Meta),
-    legacy: keyExpansionV2,
+    executor: keyExpansionV2,
     shape: keyExpansionV2PortContract,
     meta: keyExpansionV2Meta,
     doc: keyExpansionV2Doc,

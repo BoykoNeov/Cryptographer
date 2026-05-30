@@ -158,15 +158,26 @@ describe("TraceFrame port-fields — lifted-legacy ported (Feistel toy-add-k)", 
     expect(toy.portOutputs).toBeUndefined();
   });
 
-  it("AES key-expansion frame (lifted-legacy with auxWritePorts) also leaves port fields undefined", () => {
+  it("AES key-expansion frame (port-native since Slice 5.2) carries portInputs + portOutputs", () => {
     const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex("00112233445566778899aabbccddeeff")),
       initialAux: new Map([["key", bytesFromHex("000102030405060708090a0b0c0d0e0f")]]),
       portedDispatchEnabled: true,
     });
     const keyExpansion = findFrameByStepType(trace.frames, "aes.key-expansion@1");
-    expect(keyExpansion.portInputs).toBeUndefined();
-    expect(keyExpansion.portOutputs).toBeUndefined();
+    // Slice 5.2 dropped the `legacy` lift, so the runtime now captures the
+    // projected port I/O: the master key on `masterKey`, the 11 round keys
+    // (AES-128, rounds=10) on `key0` … `key10`. (KeyScheduleExplorer still
+    // intercepts this frame by stepType, so the inspector view is unchanged
+    // — but the captured port maps now exist, like every other port-native
+    // leaf.)
+    expect(keyExpansion.portInputs).toBeDefined();
+    expect(keyExpansion.portOutputs).toBeDefined();
+    expect([...(keyExpansion.portInputs?.keys() ?? [])]).toContain("masterKey");
+    expect(keyExpansion.portOutputs?.size).toBe(11);
+    for (let r = 0; r <= 10; r++) {
+      expect([...(keyExpansion.portOutputs?.keys() ?? [])]).toContain(`key${r}`);
+    }
   });
 });
 

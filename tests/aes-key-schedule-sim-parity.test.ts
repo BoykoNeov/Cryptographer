@@ -29,7 +29,12 @@ import { StepRegistry } from "@/core/registry";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue, CipherSpec } from "@/core/types";
-import { keyExpansion, keyExpansionV2 } from "@/steps/key-expansion";
+import {
+  keyExpansion,
+  keyExpansionMeta,
+  keyExpansionPortContract,
+  keyExpansionV2,
+} from "@/steps/key-expansion";
 import { simulateAesKeySchedule } from "@/ui/key-schedule-sim/aes";
 import { describe, expect, it } from "vitest";
 
@@ -56,10 +61,18 @@ const runKeyExpansionExecutor = (
 ): readonly Uint8Array[] => {
   const registry = new StepRegistry();
   const executor = variant === "v1" ? keyExpansion : keyExpansionV2;
-  // Doc block satisfied by a minimal stub — `runSpec` doesn't inspect
-  // it; only the executor + registered type matter.
+  // Slice 5.2 — the executors are now `PortedExecutor`s, so register the
+  // probe type as `kind: "ported"` with the shared meta + contract. @1 and
+  // @2 use the same `keyExpansionMeta` / `keyExpansionPortContract` (the @2
+  // exports are aliases). Doc block satisfied by a minimal stub — `runSpec`
+  // doesn't inspect it; only the executor + meta projection matter. With no
+  // `legacy` fallback this is pure port-native, so the run below sets
+  // `portedDispatchEnabled: true`.
   registry.register("test.key-expansion", {
+    kind: "ported",
     executor,
+    shape: keyExpansionPortContract,
+    meta: keyExpansionMeta,
     doc: {
       name: "test",
       summary: "test",
@@ -92,10 +105,13 @@ const runKeyExpansionExecutor = (
   };
 
   const trace = runSpec(spec, registry, {
-    // State is irrelevant — key-expansion is aux-only — but runSpec needs
-    // SOME initial state to seed the walk.
+    // State is irrelevant — key-expansion has no state port — but runSpec
+    // needs SOME initial state to seed the walk. The round keys still land
+    // in finalAux: the ported runtime maps each `key${r}` output port →
+    // `aux[roundKey.${r}]` via `keyExpansionMeta.auxWritePorts`.
     initialState: makeBytesState(new Uint8Array(16)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(masterKeyHex)]]),
+    portedDispatchEnabled: true,
   });
 
   // Pull every `roundKey.N` (N = 0..rounds) out of finalAux in order.

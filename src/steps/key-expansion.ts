@@ -1,20 +1,23 @@
 import type {
-  AuxValue,
   Json,
   PortContract,
   PortShape,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "../core/types";
 
 /**
  * AES key expansion. FIPS-197 §5.2.
  *
- * Reads a 16-, 24-, or 32-byte key from aux (AES-128 / 192 / 256), writes
- * Nr+1 round keys (each Uint8Array(16)) to aux as `${outputPrefix}.0` …
- * `${outputPrefix}.Nr`. State is unchanged; the work product lives entirely
- * in aux.
+ * Port-native `PortedExecutor` (Slice 5.2 — universal-port Phase 5). Reads
+ * the 16-, 24-, or 32-byte key from the `masterKey` input port (AES-128 /
+ * 192 / 256) and emits Nr+1 round keys (each Uint8Array(16)) on output ports
+ * `key0` … `keyN`. The registration keeps `meta` (NOT a lift adapter): the
+ * runtime projects `aux[keyAuxName] → masterKey` and `key${r} →
+ * aux[${outputPrefix}.${r}]`, so the emitted frame's `auxRead`/`auxWritten`
+ * are byte-identical to the former lifted path. State is unchanged (no
+ * `state` port); the work product lives entirely in the round-key ports.
  *
  * Nk (32-bit words in the key) is derived from the actual key length: 4 / 6 / 8
  * for AES-128 / 192 / 256. The standard relation Nr = Nk + 6 is asserted so a
@@ -34,14 +37,20 @@ import type {
  *   rounds: number,            // 10 / 12 / 14 for AES-128 / 192 / 256
  * }
  */
-export const keyExpansion: StepExecutor = (state, params, ctx) => {
+export const keyExpansion: PortedExecutor = (inputs, params, _ctx) => {
   const p = readParams(params);
-  const key = ctx.aux.get(p.keyAuxName);
+  // Port-native (Slice 5.2): the master key arrives on the `masterKey`
+  // input port. The runtime projects it from `aux[params.keyAuxName]` via
+  // `meta.auxReadPorts` — the same projection the lift adapter drove, so
+  // the emitted frame's `auxRead` still records the `key` aux dependency.
+  const key = inputs.get("masterKey");
   if (
     !(key instanceof Uint8Array) ||
     (key.length !== 16 && key.length !== 24 && key.length !== 32)
   ) {
-    throw new Error(`aux '${p.keyAuxName}' must be a 16-, 24-, or 32-byte Uint8Array`);
+    throw new Error(
+      "aes.key-expansion: 'masterKey' port must carry a 16-, 24-, or 32-byte key (projected from aux[keyAuxName] via meta.auxReadPorts)",
+    );
   }
 
   // Derive Nk from the key bytes themselves (the runtime gives us whatever the
@@ -89,8 +98,11 @@ export const keyExpansion: StepExecutor = (state, params, ctx) => {
     ]);
   }
 
-  // Pack words into 16-byte round keys.
-  const auxWrites = new Map<string, AuxValue>();
+  // Pack words into 16-byte round keys — one per output port (`key0` …
+  // `keyN`). The runtime maps `key${r}` → `aux[${outputPrefix}.${r}]` via
+  // `meta.auxWritePorts`, so `frame.auxWritten` still carries `roundKey.*`.
+  // No `state` output port — key expansion leaves the carried block alone.
+  const outputs = new Map<string, Uint8Array>();
   for (let r = 0; r <= p.rounds; r++) {
     const rk = new Uint8Array(16);
     for (let word = 0; word < 4; word++) {
@@ -100,10 +112,10 @@ export const keyExpansion: StepExecutor = (state, params, ctx) => {
       rk[word * 4 + 2] = src[2] ?? 0;
       rk[word * 4 + 3] = src[3] ?? 0;
     }
-    auxWrites.set(`${p.outputPrefix}.${r}`, rk);
+    outputs.set(`key${r}`, rk);
   }
 
-  return { state, auxReads: [p.keyAuxName], auxWrites };
+  return outputs;
 };
 
 // ─── Documentation ────────────────────────────────────────────────────────
@@ -222,14 +234,20 @@ const xtime = (n: number): number => {
  * via xtime on the fly. Used by the duplicate-round feature to express
  * non-standard variants ("AES with 11 rounds").
  */
-export const keyExpansionV2: StepExecutor = (state, params, ctx) => {
+export const keyExpansionV2: PortedExecutor = (inputs, params, _ctx) => {
   const p = readParams(params);
-  const key = ctx.aux.get(p.keyAuxName);
+  // Port-native (Slice 5.2): the master key arrives on the `masterKey`
+  // input port. The runtime projects it from `aux[params.keyAuxName]` via
+  // `meta.auxReadPorts` — the same projection the lift adapter drove, so
+  // the emitted frame's `auxRead` still records the `key` aux dependency.
+  const key = inputs.get("masterKey");
   if (
     !(key instanceof Uint8Array) ||
     (key.length !== 16 && key.length !== 24 && key.length !== 32)
   ) {
-    throw new Error(`aux '${p.keyAuxName}' must be a 16-, 24-, or 32-byte Uint8Array`);
+    throw new Error(
+      "aes.key-expansion: 'masterKey' port must carry a 16-, 24-, or 32-byte key (projected from aux[keyAuxName] via meta.auxReadPorts)",
+    );
   }
   const Nk = key.length / 4;
   const Nb = 4;
@@ -285,7 +303,7 @@ export const keyExpansionV2: StepExecutor = (state, params, ctx) => {
     ]);
   }
 
-  const auxWrites = new Map<string, AuxValue>();
+  const outputs = new Map<string, Uint8Array>();
   for (let r = 0; r <= p.rounds; r++) {
     const rk = new Uint8Array(16);
     for (let word = 0; word < 4; word++) {
@@ -295,10 +313,10 @@ export const keyExpansionV2: StepExecutor = (state, params, ctx) => {
       rk[word * 4 + 2] = src[2] ?? 0;
       rk[word * 4 + 3] = src[3] ?? 0;
     }
-    auxWrites.set(`${p.outputPrefix}.${r}`, rk);
+    outputs.set(`key${r}`, rk);
   }
 
-  return { state, auxReads: [p.keyAuxName], auxWrites };
+  return outputs;
 };
 
 export const keyExpansionV2Doc: StepDocumentation = {

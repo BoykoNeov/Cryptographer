@@ -26,17 +26,15 @@
  */
 
 import { AES_RCON, AES_SBOX } from "@/ciphers/aes-constants";
-import type { AuxValue, BytesState, Json, StepContext } from "@/core/types";
+import type { Json, StepContext } from "@/core/types";
 import { keyExpansion, keyExpansionV2 } from "@/steps/key-expansion";
 import { describe, expect, it } from "vitest";
 
-const PASSTHROUGH_STATE: BytesState = { shape: "bytes", bytes: new Uint8Array(0) };
-
-const ctxFor = (aux: Map<string, AuxValue>): StepContext => ({
-  stepId: "key-expansion",
-  path: [],
-  aux,
-});
+// Slice 5.2 — `keyExpansion` / `keyExpansionV2` are now `PortedExecutor`s:
+// the master key arrives on the `masterKey` input port (not via ctx.aux) and
+// the round keys come back on output ports `key0` … `keyN` (not via auxWrites).
+// `ctx` is ignored by the executor but the signature still requires it.
+const CTX: StepContext = { stepId: "key-expansion", path: [], aux: new Map() };
 
 const baseParams = (rounds: number): Json => ({
   keyAuxName: "key",
@@ -46,29 +44,26 @@ const baseParams = (rounds: number): Json => ({
   rounds,
 });
 
-/** Run both executors against the same key and compare every aux write byte-for-byte. */
+/** Call a key-expansion executor on the `masterKey` port; returns the round-key port map. */
+const callKeyExpansion = (
+  variant: "v1" | "v2",
+  keyBytes: Uint8Array,
+  rounds: number,
+): ReadonlyMap<string, Uint8Array> => {
+  const exec = variant === "v1" ? keyExpansion : keyExpansionV2;
+  return exec(new Map([["masterKey", keyBytes]]), baseParams(rounds), CTX);
+};
+
+/** Run both executors against the same key and compare every round-key port byte-for-byte. */
 const expectByteIdenticalToV1 = (keyBytes: Uint8Array, rounds: number): void => {
-  const v1Result = keyExpansion(
-    PASSTHROUGH_STATE,
-    baseParams(rounds),
-    ctxFor(new Map([["key", keyBytes]])),
-  );
-  const v2Result = keyExpansionV2(
-    PASSTHROUGH_STATE,
-    baseParams(rounds),
-    ctxFor(new Map([["key", keyBytes]])),
-  );
-  expect(v2Result.auxWrites).toBeDefined();
-  expect(v1Result.auxWrites).toBeDefined();
-  const v1Writes = v1Result.auxWrites as ReadonlyMap<string, AuxValue>;
-  const v2Writes = v2Result.auxWrites as ReadonlyMap<string, AuxValue>;
-  expect(v2Writes.size).toBe(v1Writes.size);
-  for (const [key, v1Value] of v1Writes) {
-    const v2Value = v2Writes.get(key);
+  const v1Out = callKeyExpansion("v1", keyBytes, rounds);
+  const v2Out = callKeyExpansion("v2", keyBytes, rounds);
+  expect(v2Out.size).toBe(v1Out.size);
+  for (const [port, v1Value] of v1Out) {
+    const v2Value = v2Out.get(port);
     expect(v2Value).toBeInstanceOf(Uint8Array);
-    expect(v1Value).toBeInstanceOf(Uint8Array);
     // Compare bytes — Uint8Array equality is reference, not value.
-    expect(Array.from(v2Value as Uint8Array)).toEqual(Array.from(v1Value as Uint8Array));
+    expect(Array.from(v2Value as Uint8Array)).toEqual(Array.from(v1Value));
   }
 };
 
@@ -115,33 +110,22 @@ describe("aes.key-expansion@2 — non-canonical round counts", () => {
       0x3c,
     ]);
 
-    const v1Result = keyExpansion(
-      PASSTHROUGH_STATE,
-      baseParams(10),
-      ctxFor(new Map([["key", key]])),
-    );
-    const v2Result = keyExpansionV2(
-      PASSTHROUGH_STATE,
-      baseParams(11),
-      ctxFor(new Map([["key", key]])),
-    );
-
-    const v1Writes = v1Result.auxWrites as ReadonlyMap<string, AuxValue>;
-    const v2Writes = v2Result.auxWrites as ReadonlyMap<string, AuxValue>;
+    const v1Out = callKeyExpansion("v1", key, 10);
+    const v2Out = callKeyExpansion("v2", key, 11);
 
     // 11 round keys from v1 (rounds=10) + an extra one from v2 (rounds=11) = 12.
-    expect(v1Writes.size).toBe(11);
-    expect(v2Writes.size).toBe(12);
+    expect(v1Out.size).toBe(11);
+    expect(v2Out.size).toBe(12);
 
     // First 11 round keys identical.
     for (let r = 0; r <= 10; r++) {
-      const v1rk = v1Writes.get(`roundKey.${r}`) as Uint8Array;
-      const v2rk = v2Writes.get(`roundKey.${r}`) as Uint8Array;
+      const v1rk = v1Out.get(`key${r}`) as Uint8Array;
+      const v2rk = v2Out.get(`key${r}`) as Uint8Array;
       expect(Array.from(v2rk)).toEqual(Array.from(v1rk));
     }
 
     // The extra round key exists and is well-shaped.
-    const extra = v2Writes.get("roundKey.11");
+    const extra = v2Out.get("key11");
     expect(extra).toBeInstanceOf(Uint8Array);
     expect((extra as Uint8Array).length).toBe(16);
   });
@@ -167,19 +151,14 @@ describe("aes.key-expansion@2 — non-canonical round counts", () => {
       0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f,
       0x3c,
     ]);
-    const result = keyExpansionV2(
-      PASSTHROUGH_STATE,
-      baseParams(20),
-      ctxFor(new Map([["key", key]])),
-    );
-    const writes = result.auxWrites as ReadonlyMap<string, AuxValue>;
-    expect(writes.size).toBe(21);
+    const out = callKeyExpansion("v2", key, 20);
+    expect(out.size).toBe(21);
     // Cross-check: all round keys are 16 bytes; no two consecutive round
     // keys are bit-identical (Rcon ensures forward-shift can't degenerate
     // even if SubWord didn't fire). Cheap sanity that the chain is alive.
     let prev: Uint8Array | null = null;
     for (let r = 0; r <= 20; r++) {
-      const rk = writes.get(`roundKey.${r}`) as Uint8Array;
+      const rk = out.get(`key${r}`) as Uint8Array;
       expect(rk.length).toBe(16);
       if (prev !== null) {
         const identical = Array.from(rk).every((b, i) => b === (prev as Uint8Array)[i]);
@@ -191,23 +170,17 @@ describe("aes.key-expansion@2 — non-canonical round counts", () => {
 
   it("rejects rounds < 1 with a clear error", () => {
     const key = new Uint8Array(16); // all-zero AES-128 key
-    expect(() =>
-      keyExpansionV2(PASSTHROUGH_STATE, baseParams(0), ctxFor(new Map([["key", key]]))),
-    ).toThrow(/rounds.*>= 1/);
+    expect(() => callKeyExpansion("v2", key, 0)).toThrow(/rounds.*>= 1/);
   });
 
   it("rejects non-integer rounds with a clear error", () => {
     const key = new Uint8Array(16);
-    expect(() =>
-      keyExpansionV2(PASSTHROUGH_STATE, baseParams(10.5), ctxFor(new Map([["key", key]]))),
-    ).toThrow(/rounds.*integer/);
+    expect(() => callKeyExpansion("v2", key, 10.5)).toThrow(/rounds.*integer/);
   });
 
   it("rejects an invalid key length", () => {
     const key = new Uint8Array(20); // not 16/24/32
-    expect(() =>
-      keyExpansionV2(PASSTHROUGH_STATE, baseParams(10), ctxFor(new Map([["key", key]]))),
-    ).toThrow(/16-, 24-, or 32-byte/);
+    expect(() => callKeyExpansion("v2", key, 10)).toThrow(/16-, 24-, or 32-byte/);
   });
 });
 
