@@ -79,9 +79,10 @@ describe("Phase 6 experiment — collapseGraph on a feistel-round", () => {
     const offending = collapsed.edges.filter(
       (e) => e.from === "round.3.add-k" || e.to === "round.3.add-k",
     );
-    expect(offending.length, "Edge endpoint should have remapped from round.3.add-k to round.3").toBe(
-      0,
-    );
+    expect(
+      offending.length,
+      "Edge endpoint should have remapped from round.3.add-k to round.3",
+    ).toBe(0);
 
     // The rejoin synthetic id sits inside round.3's containerPath so it
     // should also remap to round.3.

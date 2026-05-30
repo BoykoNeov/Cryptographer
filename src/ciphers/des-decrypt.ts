@@ -46,7 +46,10 @@ import {
 } from "./des-constants";
 
 /** Spell a port binding the way the runtime + the editor expect it. */
-const port = (node: string, portName: string): { readonly node: string; readonly port: string } => ({
+const port = (
+  node: string,
+  portName: string,
+): { readonly node: string; readonly port: string } => ({
   node,
   port: portName,
 });

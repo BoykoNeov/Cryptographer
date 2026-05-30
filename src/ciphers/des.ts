@@ -59,7 +59,10 @@ import {
 } from "./des-constants";
 
 /** Spell a port binding the way the runtime + the editor expect it. */
-const port = (node: string, portName: string): { readonly node: string; readonly port: string } => ({
+const port = (
+  node: string,
+  portName: string,
+): { readonly node: string; readonly port: string } => ({
   node,
   port: portName,
 });
@@ -173,12 +176,7 @@ export const buildDesEncryptRounds = (): StepNode => ({
   bodyOutput: port("round.16", "out"),
   children: [
     ...Array.from({ length: 15 }, (_, i) =>
-      buildDesRound(
-        i + 1,
-        i,
-        true,
-        i === 0 ? port("rounds", "in") : port(`round.${i}`, "out"),
-      ),
+      buildDesRound(i + 1, i, true, i === 0 ? port("rounds", "in") : port(`round.${i}`, "out")),
     ),
     // Round 16 — the no-swap exception, consuming K_16 (roundKey.15).
     buildDesRound(16, 15, false, port("round.15", "out")),

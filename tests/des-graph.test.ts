@@ -62,28 +62,32 @@ describe("DES (port-native) graph derivation — structural sanity", () => {
 
   it("each round carries the 7 port-native F-body leaves", () => {
     const graph = deriveAuxGraph(emptyTrace, desSpec);
-    const suffixes = [
-      "split",
-      "expand-R",
-      "xor-K",
-      "s-boxes",
-      "p-permute",
-      "fxor",
-      "recombine",
-    ];
+    const suffixes = ["split", "expand-R", "xor-K", "s-boxes", "p-permute", "fxor", "recombine"];
     for (let r = 1; r <= 16; r++) {
       for (const s of suffixes) {
         const id = `round.${r}.${s}`;
-        expect(graph.nodes.find((n) => n.stepId === id), id).toBeDefined();
+        expect(
+          graph.nodes.find((n) => n.stepId === id),
+          id,
+        ).toBeDefined();
       }
     }
   });
 
   it("carries the $input source + IP/FP cipher-boundary leaves", () => {
     const graph = deriveAuxGraph(emptyTrace, desSpec);
-    expect(graph.nodes.find((n) => n.stepId === "$input"), "$input source").toBeDefined();
-    expect(graph.nodes.find((n) => n.stepId === "initial-permutation"), "IP").toBeDefined();
-    expect(graph.nodes.find((n) => n.stepId === "final-permutation"), "FP").toBeDefined();
+    expect(
+      graph.nodes.find((n) => n.stepId === "$input"),
+      "$input source",
+    ).toBeDefined();
+    expect(
+      graph.nodes.find((n) => n.stepId === "initial-permutation"),
+      "IP",
+    ).toBeDefined();
+    expect(
+      graph.nodes.find((n) => n.stepId === "final-permutation"),
+      "FP",
+    ).toBeDefined();
   });
 
   it("fans the key-schedule out to all 16 xor-K leaves with the right round key", () => {

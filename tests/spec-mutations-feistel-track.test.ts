@@ -35,13 +35,7 @@ import {
   removeStep,
   reorderStep,
 } from "@/core/spec-mutations";
-import type {
-  CipherSpec,
-  FeistelRoundGroup,
-  StepGroup,
-  StepLeaf,
-  StepNode,
-} from "@/core/types";
+import type { CipherSpec, FeistelRoundGroup, StepGroup, StepLeaf, StepNode } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 /** Same throwaway leaf shape every structural mutation test uses. */
@@ -143,7 +137,11 @@ describe("transformParentArray — Feistel track descent (6d-i)", () => {
     });
 
     it("inserts after the last chip in R track", () => {
-      const updated = insertStepAfter(SYNTH_SPEC, "round.1.p-permute", fixtureLeaf("round.1.r-tail"));
+      const updated = insertStepAfter(
+        SYNTH_SPEC,
+        "round.1.p-permute",
+        fixtureLeaf("round.1.r-tail"),
+      );
       const r = trackChildren(getRound(updated, "round.1"), 1);
       expect(r.length).toBe(5);
       expect(r[4]?.id).toBe("round.1.r-tail");
@@ -167,7 +165,11 @@ describe("transformParentArray — Feistel track descent (6d-i)", () => {
 
   describe("insertStepBefore inside an R track", () => {
     it("inserts before the first chip in R track", () => {
-      const updated = insertStepBefore(SYNTH_SPEC, "round.1.expand-R", fixtureLeaf("round.1.r-head"));
+      const updated = insertStepBefore(
+        SYNTH_SPEC,
+        "round.1.expand-R",
+        fixtureLeaf("round.1.r-head"),
+      );
       const r = trackChildren(getRound(updated, "round.1"), 1);
       expect(r.length).toBe(5);
       expect(r[0]?.id).toBe("round.1.r-head");
