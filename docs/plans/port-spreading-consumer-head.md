@@ -17,6 +17,72 @@ port-spreading bug — captured as a high-priority follow-up: see
 Slice 7b → Feistel-plan → first Feistel cipher → universal cipher-shape
 plan, modulo the arrow-bundling discussion in the next session.
 
+## 2026-05-30 producer-tail spreading (outgoing edges)
+
+The symmetric counterpart to the consumer-head spreader, requested as
+"we have a spreader to spread incoming arrows along the edge of a leaf,
+develop the same for outgoing edges." Where `buildConsumerPortAssignment`
+/ `consumerPortOffset` distribute N **incoming** arrows across a
+consumer's attach edge, `buildProducerPortAssignment` / `producerPortOffset`
+distribute N **outgoing** arrows across a producer's exit edge — so a
+node that fans out to several consumers emits each tail from a distinct
+point on its bottom / right edge instead of stacking them all at one
+centre.
+
+**Where it fires.** With replication ON (the default for the port-native
+specs after the AES byte-native rebuild), every high-fanout source is
+split into fanout-1 replicas → producer buckets are size 1 → the spreader
+is a no-op, so the default view is byte-identical. Its showcase is the
+replication-OFF "one source fans to many" view that `view-replication.ts`
+explicitly calls out as legitimate pedagogy: e.g. AES `key-expansion`'s
+11 round-key tails now leave its right edge at 11 distinct, evenly-spaced,
+target-ordered y values (verified in a 2026-05-30 browser smoke: source-y
+64..84, 2 px apart, single source-x) rather than one converging point.
+
+**Design (mirror of the consumer side).**
+- `ProducerPortAssignment` mirrors `ConsumerPortAssignment` (edge-keyed
+  `slotOf` / `localCountOf`; `bucketSizeBySource` is the source-keyed
+  analogue of `bucketSizeByTarget`).
+- `buildProducerPortAssignment(graph, targetCoordOf?, sideOf?)` buckets by
+  `(edge.from, exit-side)` — raw `edge.from`, NOT a canonical source, so
+  replicas each land in their own size-1 bucket (no double-shift with
+  `replicaSourceXOffset`). The comparator sorts each bucket by the
+  CROSS-AXIS target coordinate (vertical exit → target centre-X; horizontal
+  exit → target centre-Y) so tails leave in their targets' direction and
+  don't cross at the source.
+- `producerPortOffset` reuses the shared `slotCenteredOffset` cap math that
+  `consumerPortOffset` was refactored onto (no duplicated cap logic).
+- Render wiring: `producerShift` is **added** to `sourceXOffset` (vertical
+  regime, bottom/top edge) and `sourceYOffset` (horizontal regime,
+  right/left edge). `EdgePath` consumes only the offset matching the regime
+  it picks, so feeding both is safe.
+
+**Co-fire handling (the three existing source-side mechanisms).**
+- **Replica stagger** — never co-fires (replica fanout = 1 → bucket size 1
+  → 0). Additive is a no-op.
+- **SHA-256 consumer-mirror (S2(k) `sourceYOffset`)** — in the horizontal
+  regime producer-spread WINS when nonzero, else falls back to the
+  consumer-mirror. The two key off mutually exclusive conditions (source
+  fanout ≥2 vs the fanout-1 adjacent-sibling case), so SHA-256's fanout-1
+  σ/Σ sources keep the consumer-mirror untouched —
+  `tests/graph-view-sha256-msg-schedule-source-y.test.tsx` stays green.
+- **Feistel rejoin swap** — the one guaranteed co-fire (rejoin has 2
+  outgoing edges). `sourceXOffset` GATES producer-spread off when
+  `rejoinSwapSourceXSign !== 0`, so the ±0.25×w L↔R X-crossing push owns
+  those tails alone. Browser smoke confirmed the DES round.1→round.2
+  rejoin X intact.
+
+**Regression locus checked.** AES-CBC replication-OFF (the documented
+scope-creep case from S2(k)): `cbc-xor` is single-out → producer-spread 0;
+its 3.5 px source-y is the unchanged pre-existing consumer-mirror (on the
+byte-native branch `cbc-xor → add-round-key` is now `state` / `port-flow`).
+No legacy state source is multi-out in any shipped spec's single side
+bucket.
+
+**Tests.** `tests/graph-view-producer-spreading.test.ts` (7 tests) mirrors
+the consumer file: single-outgoing no-op, multi-outgoing spread, target-
+ordered slots, per-side bucketing, replica no-op, cap scaling.
+
 ## 2026-05-18 horizontal-regime extension
 
 User reported on AES-128 ECB with collapsed ECB blocks: blue arrows
