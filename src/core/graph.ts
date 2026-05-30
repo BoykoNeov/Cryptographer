@@ -1575,6 +1575,18 @@ const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
   // round chain now that the `state-in`/`state-out` bridges are gone. Without
   // this the rounds would render as disconnected islands.
   const groupSeedByGroupId = new Map<string, PortBinding>();
+  // B1.5 Finding 2: a port-mode `iterate` with `chainInput` (byte-native CBC,
+  // B1.4b) injects a per-iteration chain value as `port(iterateId, "chain")` —
+  // the IV (`chainInput`) for block 0, then `chainFeedback` thereafter. A body
+  // leaf reading `port(iterateId, "chain")` (the CBC chaining XOR) is really
+  // consuming `chainInput.node`'s output (`fetch-iv`), so we resolve the chain
+  // edge THROUGH the iterate's `chainInput`, exactly as the `"in"` path resolves
+  // through `seedInput`. Without this the edge points at the container itself
+  // (the spurious "whole block body → cbc-xor" arrow) and `fetch-iv`'s output is
+  // read by nobody → floats unconnected. We deliberately resolve ONLY the
+  // bootstrap `chainInput`; the per-iteration `chainFeedback` recurrence is a
+  // separate recurrence-visibility pass (`types.ts` defers it).
+  const chainSeedByIterateId = new Map<string, PortBinding>();
   const collectGroupSeeds = (nodes: readonly StepNode[]): void => {
     for (const node of nodes) {
       if (node.kind === "step") continue;
@@ -1585,6 +1597,9 @@ const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
       // rather than drawing a self-referential `iterateId → leaf` island edge.
       if ((node.kind === "group" || node.kind === "iterate") && node.seedInput !== undefined) {
         groupSeedByGroupId.set(node.id, node.seedInput);
+      }
+      if (node.kind === "iterate" && node.chainInput !== undefined) {
+        chainSeedByIterateId.set(node.id, node.chainInput);
       }
       if (node.kind === "feistel-round") {
         for (const track of node.tracks) collectGroupSeeds(track.children);
@@ -1601,8 +1616,10 @@ const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
         if (node.portInputs !== undefined) {
           for (const binding of Object.values(node.portInputs)) {
             // Resolve a `port(groupId, "in")` seed reference through the
-            // enclosing group's seedInput to the real upstream producer; all
-            // other bindings keep their declared source.
+            // enclosing group's seedInput — and a `port(iterateId, "chain")`
+            // reference through the iterate's chainInput (B1.5 Finding 2) — to
+            // the real upstream producer; all other bindings keep their
+            // declared source.
             //
             // A3b follow-up ⓕ: this resolution is deliberately SINGLE-HOP — it
             // rewrites `port(groupId,"in")` to the group's `seedInput.node`,
@@ -1615,7 +1632,12 @@ const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
             // hand-malformed cross-scope read would draw an unreachable edge
             // here. Such a spec can't run (the runtime rejects the cross-scope
             // reference first), so the stray edge is purely visual.
-            const seed = binding.port === "in" ? groupSeedByGroupId.get(binding.node) : undefined;
+            const seed =
+              binding.port === "in"
+                ? groupSeedByGroupId.get(binding.node)
+                : binding.port === "chain"
+                  ? chainSeedByIterateId.get(binding.node)
+                  : undefined;
             const from = seed !== undefined ? seed.node : binding.node;
             edges.push({
               from,
@@ -3055,13 +3077,16 @@ export type EndpointOptions = {
  */
 const specReferencesInputSource = (spec: CipherSpec): boolean => {
   let found = false;
+  // True iff a binding wires its source to the reserved `$input` node.
+  const bindsInput = (binding: PortBinding | undefined): boolean =>
+    binding !== undefined && binding.node === INPUT_SOURCE_ID;
   const walk = (nodes: readonly StepNode[]): void => {
     for (const node of nodes) {
       if (found) return;
       if (node.kind === "step") {
         if (node.portInputs !== undefined) {
           for (const binding of Object.values(node.portInputs)) {
-            if (binding.node === INPUT_SOURCE_ID) {
+            if (bindsInput(binding)) {
               found = true;
               return;
             }
@@ -3072,6 +3097,29 @@ const specReferencesInputSource = (spec: CipherSpec): boolean => {
       if (node.kind === "feistel-round") {
         for (const track of node.tracks) walk(track.children);
         continue;
+      }
+      // B1.5 Finding 1 — container kinds (group / iterate / for-each-subgraph
+      // [-with-history]) can reference `$input` through their *boundary* port
+      // bindings, NOT through any child leaf's `portInputs`. The port-mode
+      // iterate's `seedInput = port($input, …)` (byte-native ECB/CBC) is exactly
+      // this case: walking only leaf `portInputs` missed it, so `deriveAuxGraph`
+      // never materialized the `$input` synthetic node — yet `inferPortEdges`
+      // still resolved `port(iterate,"in") → $input` and emitted a *dangling*
+      // edge to a node that was never drawn (the dangling-plaintext-pill bug).
+      // Checking `chainInput`/`chainFeedback` (iterate-only, byte-native CBC)
+      // too: only `seedInput` points at `$input` in shipped specs, but checking
+      // all three is correct + future-proof (e.g. a mode whose IV is the
+      // message head).
+      if (bindsInput(node.seedInput)) {
+        found = true;
+        return;
+      }
+      if (
+        node.kind === "iterate" &&
+        (bindsInput(node.chainInput) || bindsInput(node.chainFeedback))
+      ) {
+        found = true;
+        return;
       }
       walk(node.children);
     }
