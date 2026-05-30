@@ -19,11 +19,11 @@
  */
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
-import { desSpec } from "@/ciphers/des";
+import { FEISTEL_TOY_SPEC } from "@/ciphers/feistel-toy";
 import { buildSha256Spec } from "@/ciphers/sha-256";
+import { requiresPortedDispatch } from "@/core/dispatch";
 import { runSpec } from "@/core/runtime";
-import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
-import type { AuxValue } from "@/core/types";
+import { bytesFromHex } from "@/core/state/bytes";
 import { GraphView } from "@/ui/components/GraphView";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetByteFormatForTests } from "@/ui/stores/format";
@@ -33,32 +33,31 @@ import { __resetLayoutsForTests } from "@/ui/stores/layout";
 // via `buildCanonicalHash` and flips category. We need the spec-store
 // boundary so `useSpec()` returns the SHA-256 spec post-call.
 // (Same gotcha as [[feedback_setcipher_test_import]] for `setCipher`.)
-import { __resetSpecForTests, setCipher, setHash } from "@/ui/stores/spec";
+import { __resetSpecForTests, __setSpecForTests, setHash } from "@/ui/stores/spec";
 import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
 import { __resetViewDensityForTests } from "@/ui/stores/view-density";
 import { __resetReplicationForTests, setReplicationEnabled } from "@/ui/stores/view-replication";
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-// Non-ported control carrier. AES single-block (B1.1–B1.3), Speck rounds (B2),
-// and the Serpent round body (B3) are all byte-native now (ported → auto-on),
-// so the "non-ported, default-off" assertions retarget to DES — still lifted
-// (Feistel + legacy contract) until its universal-port Phase 4d rebuild.
-// 8-byte key + 8-byte block (FIPS 46-3 Appendix B.1 worked example). DES's
-// byte-native rebuild will re-break these two tests — retarget the control to
-// whatever lifted cipher survives then (grep `desSpec` / `setCipher("des")`).
-const DES_KEY = "133457799bbcdff1";
-const DES_PT = "0123456789abcdef";
+// Non-ported control carrier. AES (B1), Speck (B2), Serpent (B3), and DES
+// (B4) are ALL byte-native now (ported → auto-on), so the migration left no
+// shipped non-ported cipher. As the file's own prior note predicted, the
+// control becomes a FIXTURE: the toy Feistel spec, whose `feistel.toy-add-k`
+// leaves are lifted (legacy executor present) → `requiresPortedDispatch`
+// false. A standalone test below pins that property so this control can't
+// silently flip ported. The toy isn't a selector cipher, so it's injected via
+// `__setSpecForTests`. 4-byte block; no key (the toy F uses a param).
+const TOY_BLOCK = "01020304";
 
-const seedDesTrace = (): void => {
+const seedToyTrace = (): void => {
   // `effectiveReplicate` reads the STORE spec (`useSpec()`), not the trace, so
   // the store spec must be the non-ported control too. The post-reset default
-  // is byte-native AES-128 (ported → auto-on); flip the store to DES via the
-  // spec-store boundary (rebuilds the canonical spec — [[feedback_setcipher_test_import]]).
-  setCipher("des");
-  const trace = runSpec(desSpec, buildDefaultRegistry(), {
-    initialState: makeBytesState(bytesFromHex(DES_PT)),
-    initialAux: new Map<string, AuxValue>([["key", bytesFromHex(DES_KEY)]]),
+  // is byte-native AES-128 (ported → auto-on); inject the toy Feistel spec
+  // (non-ported) via the spec-store boundary so `useSpec()` returns it.
+  __setSpecForTests(FEISTEL_TOY_SPEC);
+  const trace = runSpec(FEISTEL_TOY_SPEC, buildDefaultRegistry(), {
+    initialState: { shape: "bytes", bytes: bytesFromHex(TOY_BLOCK) },
   });
   setTrace(trace);
 };
@@ -101,10 +100,18 @@ describe("GraphView replication — force-on for port-native specs", () => {
     resetAll();
   });
 
-  it("non-ported spec (DES) keeps the default-off raw signal", () => {
-    seedDesTrace();
+  it("the toy Feistel control is genuinely non-ported (requiresPortedDispatch === false)", () => {
+    // The discriminating power of this whole suite depends on the control
+    // NOT being ported. After B4 the toy Feistel spec is the only shipped/
+    // fixture construct that's still lifted; pin it so a future change that
+    // ports `feistel.toy-add-k` (or the toy) surfaces here loudly.
+    expect(requiresPortedDispatch(FEISTEL_TOY_SPEC, buildDefaultRegistry())).toBe(false);
+  });
+
+  it("non-ported spec (toy Feistel) keeps the default-off raw signal", () => {
+    seedToyTrace();
     const { container } = render(() => <GraphView />);
-    // Raw default false + no user toggle + DES is NOT ported →
+    // Raw default false + no user toggle + toy is NOT ported →
     // effective replication stays off.
     expect(isReplicationCheckboxChecked(container)).toBe(false);
   });
@@ -131,11 +138,11 @@ describe("GraphView replication — force-on for port-native specs", () => {
     expect(isReplicationCheckboxChecked(container)).toBe(false);
   });
 
-  it("user toggle on DES also wins when they later switch to SHA-256", () => {
-    // User toggles ON while looking at DES (raw → true, userToggled → true).
-    // DES (non-ported) makes the toggle genuinely the user's choice, not the
+  it("user toggle on a non-ported spec also wins when they later switch to SHA-256", () => {
+    // User toggles ON while looking at the toy (raw → true, userToggled → true).
+    // The toy (non-ported) makes the toggle genuinely the user's choice, not the
     // ported auto-on — preserving the test's discriminating power.
-    seedDesTrace();
+    seedToyTrace();
     setReplicationEnabled(true);
     // ... then switches to SHA-256. Effective should be raw = true (matches
     // their explicit choice, NOT forced-on by the ported branch — userToggled

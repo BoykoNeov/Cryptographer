@@ -365,21 +365,17 @@ describe("GraphView — container drag (Slice 6)", () => {
   //     the parent container's interior bounds when a parent is found.
   // The two tests below pin both fixes.
   it("dragging a nested feistel-round inside a group does NOT shift its unpinned siblings' rendered Y", async () => {
-    const { desSpec } = await import("@/ciphers/des");
-    const { setCipher } = await import("@/ui/stores/spec");
+    const { __setSpecForTests } = await import("@/ui/stores/spec");
+    const { buildSyntheticFeistelSpec } = await import("./fixtures/synthetic-feistel-rounds");
 
-    // Switch to DES so the spec carries a `Rounds` group containing 16
-    // feistel-round children — the precise nesting that exposed H(ii).
-    setCipher("des");
-    const trace = runSpec(desSpec, buildDefaultRegistry(), {
-      initialState: { shape: "bytes", bytes: bytesFromHex("0123456789abcdef") },
-      initialAux: new Map<string, AuxValue>([["key", bytesFromHex("133457799bbcdff1")]]),
-    });
-    setTrace(trace);
+    // B4 (universal-port Phase 4d): the port-native DES no longer uses
+    // `feistel-round`. The synthetic Feistel fixture reproduces the exact
+    // nesting that exposed H(ii) — a `Rounds` group of 16 feistel-round
+    // children stacked vertically. Layout/drag is structural; no trace needed.
+    __setSpecForTests(buildSyntheticFeistelSpec(16));
 
     const { container } = render(() => <GraphView />);
     const specId = useSpec()().id;
-    expect(specId).toBe(desSpec.id);
 
     // Snapshot pre-drag Y coordinates of round.6 and round.7. Both are
     // nested inside the `Rounds` group, stacked vertically.
@@ -415,15 +411,12 @@ describe("GraphView — container drag (Slice 6)", () => {
   });
 
   it("dragging a nested feistel-round can NOT escape the parent container's interior bounds", async () => {
-    const { desSpec } = await import("@/ciphers/des");
-    const { setCipher } = await import("@/ui/stores/spec");
+    const { __setSpecForTests } = await import("@/ui/stores/spec");
+    const { buildSyntheticFeistelSpec } = await import("./fixtures/synthetic-feistel-rounds");
 
-    setCipher("des");
-    const trace = runSpec(desSpec, buildDefaultRegistry(), {
-      initialState: { shape: "bytes", bytes: bytesFromHex("0123456789abcdef") },
-      initialAux: new Map<string, AuxValue>([["key", bytesFromHex("133457799bbcdff1")]]),
-    });
-    setTrace(trace);
+    // B4: synthetic Feistel fixture reproduces the `Rounds` group of 16
+    // feistel-rounds that exposed H(i) (escape past the parent's bounds).
+    __setSpecForTests(buildSyntheticFeistelSpec(16));
 
     const { container } = render(() => <GraphView />);
     const specId = useSpec()().id;
