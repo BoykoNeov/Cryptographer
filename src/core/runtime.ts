@@ -748,14 +748,24 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
         });
 
         // ─── Slice 2.9a — capture port I/O for the inspector ──────────
-        // Pure port-native steps only (no meta). `inputs` here carries
-        // POST-coercion bytes — Slice 1.12 mutates the map in place at
-        // line ~428 above, which is what we want (matches what the
-        // executor actually saw). Map values are aliased; the runtime
-        // does not mutate Uint8Array buffers after the frame is pushed.
-        // Lifted-legacy frames (meta defined) deliberately leave both
-        // fields undefined — see TraceFrame's port-fields doc comment.
-        if (meta === undefined) {
+        // Captured for any PORT-NATIVE leaf — i.e. one with NO `legacy`
+        // executor. This matches the documented `TraceFrame` port-fields
+        // contract ("Present iff kind:ported AND legacy === undefined"),
+        // which the earlier `meta === undefined` check silently diverged
+        // from: a HYBRID ported step (meta present for `auxReadPorts`, but
+        // no legacy executor — `aux-load-bytes@1`, the `state-to-bytes@1` /
+        // `bytes-to-state@1` bridges, and AddRoundKey's `xor-with-aux@1`)
+        // is pure port-flow and DOES carry honest port I/O worth showing.
+        // Those two checks were equivalent when 2.9a shipped (every
+        // meta-bearing step also had a legacy executor); the Slice 2.6
+        // hybrid steps are the divergence. Lifted-legacy frames (legacy
+        // defined — key-expansion, the matrix lifts) still leave both
+        // fields undefined so 2.9b routes them through the bytes/matrix
+        // renderer. `inputs` here carries POST-coercion bytes (Slice 1.12
+        // mutates the map in place above) — what the executor actually
+        // saw. Map values are aliased; the runtime does not mutate the
+        // Uint8Array buffers after the frame is pushed.
+        if (registration.legacy === undefined) {
           framePortInputs = inputs;
           framePortOutputs = outputs;
         }

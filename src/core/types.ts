@@ -809,13 +809,19 @@ export type TraceFrame = {
    * `docs/plans/slice-2-9-port-aware-provenance.md`).
    *
    * Present iff the registration was `kind: "ported"` AND `legacy ===
-   * undefined` (i.e. a pure port-native leaf — see runtime.ts line 607
-   * for the same discriminator). Lifted-legacy ported steps (legacy
-   * defined) deliberately leave BOTH fields undefined so 2.9b's
-   * port-aware inspector predicate
-   * `frame.portInputs !== undefined || frame.portOutputs !== undefined`
-   * keeps dispatching AES/Speck/Serpent/DES (today's lifted ciphers)
-   * through the existing matrix/bytes renderer.
+   * undefined` — i.e. any port-flow leaf, whether PURE port-native (no
+   * meta — `xor@1`, `add-mod-32@1`) or HYBRID (meta present only for
+   * `auxReadPorts` / `stateInputPort`, but no legacy executor —
+   * `aux-load-bytes@1`, the `state-to-bytes@1` / `bytes-to-state@1`
+   * bridges, AddRoundKey's `xor-with-aux@1`). Both carry honest port I/O.
+   * (The capture check originally read `meta === undefined`, which was
+   * equivalent until the Slice 2.6 hybrid steps shipped meta-without-legacy;
+   * it was aligned to `legacy === undefined` in F3 of the scaffolding-
+   * suppression plan, 2026-05-30, to match this contract.) Lifted-legacy
+   * ported steps (legacy defined — key-expansion, the matrix lifts)
+   * deliberately leave BOTH fields undefined so 2.9b's port-aware inspector
+   * predicate `frame.portInputs !== undefined || frame.portOutputs !==
+   * undefined` keeps dispatching them through the matrix/bytes renderer.
    *
    * Legacy-path frames (`kind: "legacy"`, or `kind: "ported"` running
    * with `portedDispatchEnabled: false`) leave both undefined.
