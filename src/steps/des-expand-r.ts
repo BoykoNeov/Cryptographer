@@ -19,26 +19,24 @@
  * `src/ciphers/des-constants.ts`.
  */
 
-import type {
-  BytesState,
-  Json,
-  PortContract,
-  ProjectionMetadata,
-  StepDocumentation,
-  StepExecutor,
-} from "../core/types";
+import type { Json, PortContract, PortedExecutor, StepDocumentation } from "../core/types";
 import { fipsPermute } from "./des-bit-ops";
 
-export const desExpandR: StepExecutor = (state, params) => {
-  if (state.shape !== "bytes") {
-    throw new Error("des.expand-R expects bytes state");
+/**
+ * Port-native since B4 (universal-port Phase 4d DES rebuild). Reads the
+ * 4-byte right half R from the `state` input port (wired from the round's
+ * split) and emits the 48-bit (6-byte) expansion on the `state` output port.
+ */
+export const desExpandR: PortedExecutor = (inputs, params) => {
+  const bytes = inputs.get("state");
+  if (bytes === undefined) {
+    throw new Error("des.expand-R: missing required input port 'state'");
   }
-  if (state.bytes.length !== 4) {
-    throw new Error(`des.expand-R expects 4-byte (32-bit) state; got ${state.bytes.length} bytes`);
+  if (bytes.length !== 4) {
+    throw new Error(`des.expand-R expects 4-byte (32-bit) state; got ${bytes.length} bytes`);
   }
   const table = readTable(params);
-  const next: BytesState = { shape: "bytes", bytes: fipsPermute(state.bytes, table, 48) };
-  return { state: next };
+  return new Map([["state", fipsPermute(bytes, table, 48)]]);
 };
 
 export const desExpandRDoc: StepDocumentation = {
@@ -73,22 +71,12 @@ This is one of two shape-changing steps inside F.`,
   shapeContract: { input: "bytes", output: "bytes" },
 };
 
-// ─── Universal port-dataflow metadata (Phase 1 Slice 1.8) ───────────────
-// **The first lifted step in any slice where `input.byteLength !==
-// output.byteLength` on the state port.** DES E maps 4 bytes (32 bits)
-// → 6 bytes (48 bits). Both ports share `stateLayout: "bytes"` — the
-// `bytes`-shape codec in `port-projection.ts` (`stateToBytes` line 286)
-// copies bytes without a length check, so the asymmetric declaration
-// works without runtime contract changes. The length asymmetry is
-// honest information for the editor + future palette wiring (telling
-// the user "this step expands its input"); the runtime relies on the
-// executor's own length assertions to catch wiring errors.
-
-export const desExpandRMeta: ProjectionMetadata = {
-  stateLayout: "bytes",
-  stateInputPort: "state",
-  stateOutputPort: "state",
-};
+// ─── Port contract (B4 — pure port-native, no projection meta) ──────────
+// DES E maps 4 bytes (32 bits) → 6 bytes (48 bits) — an asymmetric state
+// port. B4 dropped the projection meta; the bytes arrive on the `state`
+// port via portInputs and the 6-byte result publishes on the `state`
+// output port. The length asymmetry is honest information for the editor +
+// palette wiring; the executor's own length assertion catches wiring errors.
 
 export const desExpandRPortContract: PortContract = {
   // 4-byte input, 6-byte output — the first asymmetric state-port

@@ -15,26 +15,24 @@
  * "no swap on the last round, then apply FP."
  */
 
-import type {
-  BytesState,
-  Json,
-  PortContract,
-  ProjectionMetadata,
-  StepDocumentation,
-  StepExecutor,
-} from "../core/types";
+import type { Json, PortContract, PortedExecutor, StepDocumentation } from "../core/types";
 import { fipsPermute } from "./des-bit-ops";
 
-export const desFinalPermutation: StepExecutor = (state, params) => {
-  if (state.shape !== "bytes") {
-    throw new Error("des.final-permutation expects bytes state");
+/**
+ * Port-native since B4 (universal-port Phase 4d DES rebuild). Reads the
+ * 8-byte round-16 output from the `state` input port and emits the permuted
+ * ciphertext block on the `state` output port (the spec's `outputFrom`).
+ */
+export const desFinalPermutation: PortedExecutor = (inputs, params) => {
+  const bytes = inputs.get("state");
+  if (bytes === undefined) {
+    throw new Error("des.final-permutation: missing required input port 'state'");
   }
-  if (state.bytes.length !== 8) {
-    throw new Error(`des.final-permutation expects 8-byte state; got ${state.bytes.length} bytes`);
+  if (bytes.length !== 8) {
+    throw new Error(`des.final-permutation expects 8-byte state; got ${bytes.length} bytes`);
   }
   const table = readTable(params);
-  const next: BytesState = { shape: "bytes", bytes: fipsPermute(state.bytes, table, 64) };
-  return { state: next };
+  return new Map([["state", fipsPermute(bytes, table, 64)]]);
 };
 
 export const desFinalPermutationDoc: StepDocumentation = {
@@ -71,16 +69,11 @@ cipher; preserving them keeps the FIPS standard intact.`,
   shapeContract: { input: "bytes", output: "preserveInput" },
 };
 
-// ─── Universal port-dataflow metadata (Phase 1 Slice 1.8) ───────────────
+// ─── Port contract (B4 — pure port-native, no projection meta) ──────────
 // Pure bytes→bytes 8-byte fixed transform with no aux. Same shape as
-// `des.initial-permutation@1` — IP and FP are exact inverses applied
-// at the cipher boundary. byteLength: 8 honest declaration; no variant.
-
-export const desFinalPermutationMeta: ProjectionMetadata = {
-  stateLayout: "bytes",
-  stateInputPort: "state",
-  stateOutputPort: "state",
-};
+// `des.initial-permutation@1` — IP and FP are exact inverses applied at
+// the cipher boundary. B4 dropped the projection meta (bytes arrive on the
+// `state` port via portInputs). byteLength: 8 honest declaration; no variant.
 
 export const desFinalPermutationPortContract: PortContract = {
   inputs: new Map([["state", { byteLength: 8, layout: "raw" }]]),

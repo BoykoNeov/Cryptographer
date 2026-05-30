@@ -15,28 +15,25 @@
  * `src/ciphers/des-constants.ts`.
  */
 
-import type {
-  BytesState,
-  Json,
-  PortContract,
-  ProjectionMetadata,
-  StepDocumentation,
-  StepExecutor,
-} from "../core/types";
+import type { Json, PortContract, PortedExecutor, StepDocumentation } from "../core/types";
 import { fipsPermute } from "./des-bit-ops";
 
-export const desPPermutation: StepExecutor = (state, params) => {
-  if (state.shape !== "bytes") {
-    throw new Error("des.p-permutation expects bytes state");
+/**
+ * Port-native since B4 (universal-port Phase 4d DES rebuild). Reads the
+ * 4-byte S-box output from the `state` input port and emits the permuted
+ * F-function result on the `state` output port (consumed by the round's
+ * `L ⊕ F` xor leaf).
+ */
+export const desPPermutation: PortedExecutor = (inputs, params) => {
+  const bytes = inputs.get("state");
+  if (bytes === undefined) {
+    throw new Error("des.p-permutation: missing required input port 'state'");
   }
-  if (state.bytes.length !== 4) {
-    throw new Error(
-      `des.p-permutation expects 4-byte (32-bit) state; got ${state.bytes.length} bytes`,
-    );
+  if (bytes.length !== 4) {
+    throw new Error(`des.p-permutation expects 4-byte (32-bit) state; got ${bytes.length} bytes`);
   }
   const table = readTable(params);
-  const next: BytesState = { shape: "bytes", bytes: fipsPermute(state.bytes, table, 32) };
-  return { state: next };
+  return new Map([["state", fipsPermute(bytes, table, 32)]]);
 };
 
 export const desPPermutationDoc: StepDocumentation = {
@@ -66,16 +63,11 @@ final step before \`F(R, K)\` rejoins the L track via the round's combine.`,
   shapeContract: { input: "bytes", output: "preserveInput" },
 };
 
-// ─── Universal port-dataflow metadata (Phase 1 Slice 1.8) ───────────────
-// Pure bytes→bytes 4-byte fixed transform with no aux. Runs at the end
-// of F, mapping the 32-bit S-box output back to 32 permuted bits before
-// the rejoin XOR. byteLength: 4 honest declaration; no variant.
-
-export const desPPermutationMeta: ProjectionMetadata = {
-  stateLayout: "bytes",
-  stateInputPort: "state",
-  stateOutputPort: "state",
-};
+// ─── Port contract (B4 — pure port-native, no projection meta) ──────────
+// Pure bytes→bytes 4-byte fixed transform with no aux. Runs at the end of
+// F, mapping the 32-bit S-box output back to 32 permuted bits before the
+// `L ⊕ F` xor. B4 dropped the projection meta (bytes arrive on the `state`
+// port via portInputs). byteLength: 4 honest declaration; no variant.
 
 export const desPPermutationPortContract: PortContract = {
   inputs: new Map([["state", { byteLength: 4, layout: "raw" }]]),

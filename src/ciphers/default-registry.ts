@@ -59,22 +59,15 @@ import {
   concatBlocksPortContract,
 } from "../steps/concat-blocks";
 import { constantLoad, constantLoadDoc, constantLoadPortContract } from "../steps/constant-load";
-import {
-  desExpandR,
-  desExpandRDoc,
-  desExpandRMeta,
-  desExpandRPortContract,
-} from "../steps/des-expand-r";
+import { desExpandR, desExpandRDoc, desExpandRPortContract } from "../steps/des-expand-r";
 import {
   desFinalPermutation,
   desFinalPermutationDoc,
-  desFinalPermutationMeta,
   desFinalPermutationPortContract,
 } from "../steps/des-final-permutation";
 import {
   desInitialPermutation,
   desInitialPermutationDoc,
-  desInitialPermutationMeta,
   desInitialPermutationPortContract,
 } from "../steps/des-initial-permutation";
 import {
@@ -86,15 +79,9 @@ import {
 import {
   desPPermutation,
   desPPermutationDoc,
-  desPPermutationMeta,
   desPPermutationPortContract,
 } from "../steps/des-p-permutation";
-import {
-  desSBoxes,
-  desSBoxesDoc,
-  desSBoxesMeta,
-  desSBoxesPortContract,
-} from "../steps/des-s-boxes";
+import { desSBoxes, desSBoxesDoc, desSBoxesPortContract } from "../steps/des-s-boxes";
 import {
   desXorWithK,
   desXorWithKDoc,
@@ -731,52 +718,50 @@ export const buildDefaultRegistry = (): StepRegistry => {
     meta: desKeyScheduleMeta,
     doc: desKeyScheduleDoc,
   });
+  // ─── B4 (universal-port Phase 4d) — DES round body byte-native ─────────
+  // The F-function leaves below dropped `legacy:`/`liftLegacyExecutor` for
+  // true `PortedExecutor`s (Uint8Array Map in/out). IP/FP/E/S/P are pure
+  // port-native (NO `meta` — bytes flow on the `state` port via the spec's
+  // `portInputs`, the Feistel split/recombine expressed as native
+  // split-bytes/xor/concat in `des.ts`). `des.xor-with-K@1` stays a hybrid
+  // (keeps `meta.auxReadPorts` so the round key projects from
+  // `aux[roundKeyAux]` — the `xor-with-aux@1` shape). `des.key-schedule@1`
+  // stays LIFTED (aux-only, mirrors `aes.key-expansion@1`).
   r.register("des.initial-permutation@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(desInitialPermutation, desInitialPermutationMeta),
-    legacy: desInitialPermutation,
+    executor: desInitialPermutation,
     shape: desInitialPermutationPortContract,
-    meta: desInitialPermutationMeta,
     doc: desInitialPermutationDoc,
   });
   r.register("des.final-permutation@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(desFinalPermutation, desFinalPermutationMeta),
-    legacy: desFinalPermutation,
+    executor: desFinalPermutation,
     shape: desFinalPermutationPortContract,
-    meta: desFinalPermutationMeta,
     doc: desFinalPermutationDoc,
   });
   r.register("des.expand-R@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(desExpandR, desExpandRMeta),
-    legacy: desExpandR,
+    executor: desExpandR,
     shape: desExpandRPortContract,
-    meta: desExpandRMeta,
     doc: desExpandRDoc,
   });
   r.register("des.xor-with-K@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(desXorWithK, desXorWithKMeta),
-    legacy: desXorWithK,
+    executor: desXorWithK,
     shape: desXorWithKPortContract,
     meta: desXorWithKMeta,
     doc: desXorWithKDoc,
   });
   r.register("des.s-boxes@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(desSBoxes, desSBoxesMeta),
-    legacy: desSBoxes,
+    executor: desSBoxes,
     shape: desSBoxesPortContract,
-    meta: desSBoxesMeta,
     doc: desSBoxesDoc,
   });
   r.register("des.p-permutation@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(desPPermutation, desPPermutationMeta),
-    legacy: desPPermutation,
+    executor: desPPermutation,
     shape: desPPermutationPortContract,
-    meta: desPPermutationMeta,
     doc: desPPermutationDoc,
   });
   // ─── Port-native primitives (universal-port plan Phase 2, Slice 2.1a+) ──

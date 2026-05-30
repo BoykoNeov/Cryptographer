@@ -19,28 +19,25 @@
  * copy as `params.table` so saved JSON documents are self-contained.
  */
 
-import type {
-  BytesState,
-  Json,
-  PortContract,
-  ProjectionMetadata,
-  StepDocumentation,
-  StepExecutor,
-} from "../core/types";
+import type { Json, PortContract, PortedExecutor, StepDocumentation } from "../core/types";
 import { fipsPermute } from "./des-bit-ops";
 
-export const desInitialPermutation: StepExecutor = (state, params) => {
-  if (state.shape !== "bytes") {
-    throw new Error("des.initial-permutation expects bytes state");
+/**
+ * Port-native since B4 (universal-port Phase 4d DES rebuild). Reads the
+ * 8-byte block from the `state` input port (wired from `$input` in the
+ * encrypt spec, or the round-16 output on decrypt) and emits the permuted
+ * block on the `state` output port. No aux, no threaded state.
+ */
+export const desInitialPermutation: PortedExecutor = (inputs, params) => {
+  const bytes = inputs.get("state");
+  if (bytes === undefined) {
+    throw new Error("des.initial-permutation: missing required input port 'state'");
   }
-  if (state.bytes.length !== 8) {
-    throw new Error(
-      `des.initial-permutation expects 8-byte state; got ${state.bytes.length} bytes`,
-    );
+  if (bytes.length !== 8) {
+    throw new Error(`des.initial-permutation expects 8-byte state; got ${bytes.length} bytes`);
   }
   const table = readTable(params);
-  const next: BytesState = { shape: "bytes", bytes: fipsPermute(state.bytes, table, 64) };
-  return { state: next };
+  return new Map([["state", fipsPermute(bytes, table, 64)]]);
 };
 
 export const desInitialPermutationDoc: StepDocumentation = {
@@ -76,18 +73,13 @@ bytes so that every output byte mixes bits from 4 input bytes.`,
   shapeContract: { input: "bytes", output: "preserveInput" },
 };
 
-// ─── Universal port-dataflow metadata (Phase 1 Slice 1.8) ───────────────
-// Pure bytes→bytes 8-byte fixed transform with no aux. The cleanest lift
-// in Slice 1.8 — same shape as Slice 1.7's `serpent.bit-permutation@1`
-// pure transform, just at 8 bytes instead of 16. byteLength: 8 honest
-// declaration on both ports (DES block size is fixed by FIPS 46-3; no
-// variant). Matches the Slice 1.7 "honest fixed when no variant" posture.
-
-export const desInitialPermutationMeta: ProjectionMetadata = {
-  stateLayout: "bytes",
-  stateInputPort: "state",
-  stateOutputPort: "state",
-};
+// ─── Port contract (B4 — pure port-native, no projection meta) ──────────
+// Pure bytes→bytes 8-byte fixed transform with no aux. B4 dropped the
+// `ProjectionMetadata` (stateInputPort/stateOutputPort) — the bytes arrive
+// on the `state` PORT via the spec's `portInputs`, not the legacy state
+// thread, so the runtime dispatches this as a pure port-native leaf (no
+// `meta`, no `legacy`). byteLength: 8 honest declaration on both ports
+// (DES block size is fixed by FIPS 46-3; no variant).
 
 export const desInitialPermutationPortContract: PortContract = {
   inputs: new Map([["state", { byteLength: 8, layout: "raw" }]]),

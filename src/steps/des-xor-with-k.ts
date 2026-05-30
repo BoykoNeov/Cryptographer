@@ -15,32 +15,46 @@
  */
 
 import type {
-  BytesState,
   Json,
   PortContract,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "../core/types";
 
-export const desXorWithK: StepExecutor = (state, params, ctx) => {
-  if (state.shape !== "bytes") {
-    throw new Error("des.xor-with-K expects bytes state");
+/**
+ * Port-native hybrid since B4 (universal-port Phase 4d DES rebuild) — the
+ * `xor-with-aux@1` shape applied to DES. The 6-byte expanded R arrives on
+ * the `state` input port (wired from `des.expand-R@1`); the 6-byte round key
+ * is auto-projected onto the `roundKey` port by the runtime from
+ * `aux[params.roundKeyAux]` (declared in `meta.auxReadPorts`) — which also
+ * records the key-schedule → round fan-out as a `frame.auxRead`. Emits
+ * `state ⊕ roundKey` on the `state` output port. Like the B2/B3 native
+ * rounds, the executor returns ONLY state; the auxRead is recorded from meta.
+ */
+export const desXorWithK: PortedExecutor = (inputs, params) => {
+  readAuxName(params); // validate params.roundKeyAux is present + well-formed
+  const stateBytes = inputs.get("state");
+  if (stateBytes === undefined) {
+    throw new Error("des.xor-with-K: missing required input port 'state'");
   }
-  if (state.bytes.length !== 6) {
-    throw new Error(`des.xor-with-K expects 6-byte (48-bit) state; got ${state.bytes.length}`);
+  if (stateBytes.length !== 6) {
+    throw new Error(`des.xor-with-K expects 6-byte (48-bit) state; got ${stateBytes.length}`);
   }
-  const auxName = readAuxName(params);
-  const key = ctx.aux.get(auxName);
-  if (!(key instanceof Uint8Array) || key.length !== 6) {
+  const key = inputs.get("roundKey");
+  if (key === undefined) {
     throw new Error(
-      `des.xor-with-K: aux['${auxName}'] must be a 6-byte Uint8Array (48-bit round key)`,
+      "des.xor-with-K: operand port 'roundKey' not available — the runtime projects aux[params.roundKeyAux] onto the 'roundKey' port via meta.auxReadPorts; check that aux[roundKeyAux] is populated by des.key-schedule@1",
+    );
+  }
+  if (key.length !== 6) {
+    throw new Error(
+      `des.xor-with-K: roundKey (aux value) must be 6 bytes (48-bit round key); got ${key.length}`,
     );
   }
   const out = new Uint8Array(6);
-  for (let i = 0; i < 6; i++) out[i] = (state.bytes[i] ?? 0) ^ (key[i] ?? 0);
-  const next: BytesState = { shape: "bytes", bytes: out };
-  return { state: next, auxReads: [auxName] };
+  for (let i = 0; i < 6; i++) out[i] = (stateBytes[i] ?? 0) ^ (key[i] ?? 0);
+  return new Map([["state", out]]);
 };
 
 export const desXorWithKDoc: StepDocumentation = {
@@ -74,24 +88,20 @@ itself a mix of expanded data bits and round-key bits.`,
   shapeContract: { input: "bytes", output: "preserveInput" },
 };
 
-// ─── Universal port-dataflow metadata (Phase 1 Slice 1.8) ───────────────
-// State-bearing single-aux-read step. Direct analog of `aes.add-round-
-// key@1` (Slice 1.4) and `serpent.add-round-key@1` (Slice 1.7), but on
-// a 6-byte (48-bit, post-E expansion) `bytes`-shape state with a 6-byte
-// round key. Same lift adapter handles all three: stateLayout encodes/
-// decodes via the `bytes` codec; the aux-read binding is identical in
-// shape (one named port → one named aux key, function form because the
-// param names the round-specific aux key per-leaf).
-//
-// **byteLength: 6 honest declaration** on both state ports and the
-// aux-read port — DES has no variant; expanded R is always 48 bits and
-// round keys are always 48 bits. Matches the Serpent Slice 1.7 +
-// AES Slice 1.4 posture.
+// ─── Projection metadata (B4 — hybrid port-native, aux-read only) ───────
+// B4 dropped `stateInputPort`/`stateOutputPort`: the 6-byte expanded R now
+// arrives on the `state` PORT via the spec's `portInputs` (wired from
+// `des.expand-R@1`), not the legacy state thread. What REMAINS is
+// `auxReadPorts` — the runtime projects `aux[roundKeyAux]` onto the
+// `roundKey` port before the executor runs AND records it in
+// `frame.auxRead`, preserving the key-schedule → round fan-out edge. This
+// is exactly the `xor-with-aux@1` hybrid shape (meta present, no legacy, no
+// stateInputPort). `stateLayout: "bytes"` is the defensive default the
+// runtime's projection contract requires of any meta-bearing ported
+// registration. byteLength: 6 honest declaration; DES has no variant.
 
 export const desXorWithKMeta: ProjectionMetadata = {
   stateLayout: "bytes",
-  stateInputPort: "state",
-  stateOutputPort: "state",
   auxReadPorts: (params: Json) => {
     const auxName = readAuxName(params);
     return new Map([["roundKey", auxName]]);
