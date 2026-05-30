@@ -30,20 +30,23 @@ import { StepList } from "@/ui/components/StepList";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetCipherModeForTests } from "@/ui/stores/cipher-mode";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
-import { __resetSpecForTests, setCipher, useSpec } from "@/ui/stores/spec";
+import { __resetSpecForTests, __setSpecForTests, useSpec } from "@/ui/stores/spec";
 import { __resetTraceForTests, setFrame, setTrace, useFrameIndex } from "@/ui/stores/trace";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { buildSyntheticFeistelSpec } from "./fixtures/synthetic-feistel-rounds";
 
-// FIPS 46-3 Appendix B test vector — same as `tests/des-vectors.test.ts`.
-const DES_PT = new Uint8Array([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]);
-const DES_KEY = new Uint8Array([0x13, 0x34, 0x57, 0x79, 0x9b, 0xbc, 0xdf, 0xf1]);
+// B4 (universal-port Phase 4d): the port-native DES no longer uses
+// `feistel-round`, so StepList's FeistelRow sidebar branch is a surviving
+// (Phase-5-doomed) render path with no shipped cipher to exercise it. The
+// runnable synthetic Feistel fixture (16 rounds, "Round N" labels, 4-leaf R
+// tracks with DES-style ids, runnable via feistel.toy-add-k) drives it.
+const TOY_BLOCK = new Uint8Array([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]);
 
 const seedDesTrace = () => {
-  setCipher("des");
+  __setSpecForTests(buildSyntheticFeistelSpec(16));
   const trace = runSpec(useSpec()(), buildDefaultRegistry(), {
-    initialState: { shape: "bytes", bytes: DES_PT },
-    initialAux: new Map([["key", DES_KEY]]),
+    initialState: { shape: "bytes", bytes: TOY_BLOCK },
   });
   setTrace(trace);
   return trace;

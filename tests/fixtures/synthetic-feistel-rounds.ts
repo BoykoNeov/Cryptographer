@@ -11,15 +11,23 @@
  * track (`expand-R`/`xor-K`/`s-boxes`/`p-permute` ids, so old assertions
  * stand) and an empty L track, plus a non-feistel `key-schedule` node.
  *
- * The leaves are inert `test.fixture@1` — these tests mutate the spec tree
- * structurally and never RUN it (the port-native DES leaves can't run inside
- * a track anyway; that's why DES left the primitive). Round 16, if present,
- * uses `feistel-no-swap` to mirror DES's last-round exception.
+ * The R-track leaves use the registered, RUNNABLE `feistel.toy-add-k@1` step
+ * (the toy F, `(R + k) mod 256`) rather than an inert placeholder, so the
+ * spec can also be RUN where a test needs a real trace (e.g. the StepList
+ * sidebar smoke) — not just mutated/derived structurally. Leaf TYPE is
+ * irrelevant to the structural/rendering consumers (they key off ids), so
+ * this serves both. Round 16, if present, uses `feistel-no-swap` to mirror
+ * DES's last-round exception.
  */
 
 import type { CipherSpec, FeistelRoundGroup, StepLeaf } from "@/core/types";
 
-const leaf = (id: string): StepLeaf => ({ kind: "step", id, type: "test.fixture@1", params: {} });
+const leaf = (id: string): StepLeaf => ({
+  kind: "step",
+  id,
+  type: "feistel.toy-add-k@1",
+  params: { k: 0x11 },
+});
 
 const round = (i: number): FeistelRoundGroup => ({
   kind: "feistel-round",
