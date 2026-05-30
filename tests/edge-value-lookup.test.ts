@@ -28,7 +28,7 @@
  */
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
-import { desSpec } from "@/ciphers/des";
+import { FEISTEL_TOY_SPEC } from "@/ciphers/feistel-toy";
 import { lookupEdgeValue } from "@/core/edge-value-lookup";
 import { CIPHER_INPUT_ID, CIPHER_OUTPUT_ID, type GraphEdge } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
@@ -336,15 +336,20 @@ describe("lookupEdgeValue — regular state edges", () => {
 // reuses the empty-track passthrough naming so `lookupPassthroughBytes`
 // (which keys off `:passthrough-(\d+)` and maps trackIdx 1 → R_in from
 // the rejoin frame's params) resolves the chip's value for free —
-// returning the 4-byte R_in, not the 8-byte (L_in||R_in) the chip's
-// incoming arrow would otherwise resolve to.
+// returning the R_in half, not the full (L_in||R_in) the chip's incoming
+// arrow would otherwise resolve to.
+//
+// Retargeted to the toy Feistel fixture in B4 (universal-port Phase 4d) —
+// after the DES rebuild no shipped cipher uses `feistel-round`, so this
+// surviving `lookupEdgeValue` chip path is exercised against the runnable
+// toy (R = bytes [2,3], so R_in is 2 bytes; first R-leaf is `add-k`).
 
-describe("lookupEdgeValue — UX-D candidate (b) R-bypass chip (DES)", () => {
-  it("returns R_in (4 bytes) for the chip's outgoing edge to rejoin", () => {
-    // Any 8-byte plaintext + 8-byte key; FIPS Pub 81 vector picks itself.
-    const trace = runSpec(desSpec, buildDefaultRegistry(), {
-      initialState: makeBytesState(bytesFromHex("0123456789abcdef")),
-      initialAux: new Map<string, AuxValue>([["key", bytesFromHex("133457799bbcdff1")]]),
+describe("lookupEdgeValue — UX-D candidate (b) R-bypass chip (toy Feistel)", () => {
+  const TOY_PT = "01020304";
+
+  it("returns R_in (2 bytes) for the chip's outgoing edge to rejoin", () => {
+    const trace = runSpec(FEISTEL_TOY_SPEC, buildDefaultRegistry(), {
+      initialState: makeBytesState(bytesFromHex(TOY_PT)),
     });
     const chipOutgoingEdge: GraphEdge = {
       from: "round.1:passthrough-1",
@@ -352,39 +357,36 @@ describe("lookupEdgeValue — UX-D candidate (b) R-bypass chip (DES)", () => {
       auxKey: "state",
       kind: "state",
     };
-    const out = lookupEdgeValue(chipOutgoingEdge, desSpec, trace, undefined);
+    const out = lookupEdgeValue(chipOutgoingEdge, FEISTEL_TOY_SPEC, trace, undefined);
     expect(out.status).toBe("value");
     if (out.status !== "value") return;
     expect(out.displayKind).toBe("state");
-    // R_in is 4 bytes (DES half-block); the rejoin's combined L||R
-    // is 8 bytes. The chip's outgoing arrow MUST surface the 4-byte
-    // form — that's the WHOLE point of routing through a chip rather
-    // than starting the arrow at expand-R (which would have shown
-    // the 6-byte E(R) — the candidate (a) regression).
+    // R_in is the 2-byte R half; the rejoin's combined L||R is 4 bytes.
+    // The chip's outgoing arrow MUST surface the R_in form — that's the
+    // WHOLE point of routing through a chip rather than starting the arrow
+    // at the F-stack head (which would show the post-F-leaf value).
     expect(out.value).toMatchObject({ shape: "bytes" });
-    expect((out.value as { bytes: Uint8Array }).bytes.length).toBe(4);
+    expect((out.value as { bytes: Uint8Array }).bytes.length).toBe(2);
   });
 
-  it("returns R_in (4 bytes) for the chip's outgoing edge into the F-stack head (expand-R)", () => {
+  it("returns R_in (2 bytes) for the chip's outgoing edge into the F-stack head (add-k)", () => {
     // The chip sits at the head of the R-column, so the chain edge
-    // chip → expand-R runs in parallel with the bypass chip → rejoin.
-    // Both outgoing edges should resolve to the same R_in — they're
-    // two destinations of the same value.
-    const trace = runSpec(desSpec, buildDefaultRegistry(), {
-      initialState: makeBytesState(bytesFromHex("0123456789abcdef")),
-      initialAux: new Map<string, AuxValue>([["key", bytesFromHex("133457799bbcdff1")]]),
+    // chip → add-k runs in parallel with the bypass chip → rejoin. Both
+    // outgoing edges resolve to the same R_in — two destinations of one value.
+    const trace = runSpec(FEISTEL_TOY_SPEC, buildDefaultRegistry(), {
+      initialState: makeBytesState(bytesFromHex(TOY_PT)),
     });
     const chipChainEdge: GraphEdge = {
       from: "round.1:passthrough-1",
-      to: "round.1.expand-R",
+      to: "round.1.add-k",
       auxKey: "state",
       kind: "state",
     };
-    const out = lookupEdgeValue(chipChainEdge, desSpec, trace, undefined);
+    const out = lookupEdgeValue(chipChainEdge, FEISTEL_TOY_SPEC, trace, undefined);
     expect(out.status).toBe("value");
     if (out.status !== "value") return;
     expect(out.value).toMatchObject({ shape: "bytes" });
-    expect((out.value as { bytes: Uint8Array }).bytes.length).toBe(4);
+    expect((out.value as { bytes: Uint8Array }).bytes.length).toBe(2);
   });
 });
 
