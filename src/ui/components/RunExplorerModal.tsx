@@ -22,7 +22,7 @@
  * the app, so toggling format updates the explorer in place.
  */
 
-import { type ByteFormat, formatBytes } from "@/core/format";
+import { type ByteFormat, formatByte, formatBytes } from "@/core/format";
 import { For, Show, createEffect, createMemo } from "solid-js";
 import { useByteFormat } from "../stores/format";
 import {
@@ -32,7 +32,6 @@ import {
   useHistory,
 } from "../stores/history";
 import { getTrace, useFrameIndex, useTraceVersion } from "../stores/trace";
-import { TinyMatrix } from "./TinyMatrix";
 import { describeDelta } from "./run-delta-format";
 
 type Props = {
@@ -60,9 +59,11 @@ export const RunExplorerModal = (props: Props) => {
   // pass a "diff baseline" through the For loop.
   type TileData = {
     snapshot: RunSnapshot;
-    // 16-byte block state rendered as a 4×4 grid (AES, Serpent); null for
-    // other widths. Post-Slice-5.1 the length-16 gate replaces the old
-    // `shape === "matrix4x4-bytes"` discriminant.
+    // The step's after-state bytes, rendered as a flat byte row. Post-Slice-5.1
+    // (MatrixState retired) every cipher is byte-native, so the tile shows a
+    // flat row for any width rather than a 4×4 grid (which would impose an
+    // AES-column-major reading on non-AES states). null when the step isn't
+    // in this run.
     stateAtStep: Uint8Array | null;
     isCurrent: boolean;
   };
@@ -73,8 +74,7 @@ export const RunExplorerModal = (props: Props) => {
     const lastIdx = snaps.length - 1;
     return snaps.map((snapshot, i) => {
       const frame = stepId ? snapshot.trace.frames.find((f) => f.stepId === stepId) : undefined;
-      const stateAtStep =
-        frame && frame.stateAfter.bytes.length === 16 ? frame.stateAfter.bytes : null;
+      const stateAtStep = frame ? frame.stateAfter.bytes : null;
       return { snapshot, stateAtStep, isCurrent: i === lastIdx };
     });
   });
@@ -238,7 +238,26 @@ const RunTile = (props: {
           when={props.stateAtStep}
           fallback={<div class="run-tile-matrix-empty muted small">(stepId not in this run)</div>}
         >
-          {(bytes) => <TinyMatrix bytes={bytes()} previousBytes={props.previousVisibleState} />}
+          {(bytes) => (
+            <div class="run-tile-bytes">
+              <For each={Array.from(bytes())}>
+                {(byte, i) => (
+                  <div
+                    class="bytes-cell"
+                    classList={{
+                      // Highlight cells that differ from the previous visible
+                      // run's state at this step (the run-to-run diff overlay).
+                      "diff-vs-prev":
+                        props.previousVisibleState != null &&
+                        props.previousVisibleState[i()] !== byte,
+                    }}
+                  >
+                    {formatByte(byte, props.format)}
+                  </div>
+                )}
+              </For>
+            </div>
+          )}
         </Show>
       </Show>
 

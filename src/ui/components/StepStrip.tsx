@@ -1,7 +1,14 @@
 /**
  * Horizontal "neighborhood" strip: previous, current, next step thumbnails.
- * Each thumbnail shows the step's name, type, and the resulting state
- * after it ran (a small 4×4 byte grid).
+ * Each thumbnail shows the step's name, type, and the resulting state after
+ * it ran as a flat byte row.
+ *
+ * Post-Slice-5.1 (MatrixState retired) the thumbnail renders the state as a
+ * flat byte row rather than a 4×4 grid: every shipped cipher is byte-native,
+ * so a 4×4 grid would impose an AES-column-major reading on non-AES states
+ * (Serpent, DES, SHA) that don't have that structure — and it would clash
+ * with the flat byte rows the main inspector (`PortFlowView`/`BytesView`)
+ * shows. A flat row reads honestly for every cipher.
  *
  * The current step is centered and emphasized. The previous/next
  * thumbnails are clickable shortcuts to navigate one frame in either
@@ -9,11 +16,11 @@
  * neighbor is rendered as a placeholder.
  */
 
+import { formatByte } from "@/core/format";
 import type { TraceFrame } from "@/core/types";
-import { Show, createMemo } from "solid-js";
-import { findPreviousRunFrameByStepId, useHistory, useShowPreviousRun } from "../stores/history";
+import { For, Show, createMemo } from "solid-js";
+import { useByteFormat } from "../stores/format";
 import { getTrace, setFrame, useFrameIndex, useTraceVersion } from "../stores/trace";
-import { TinyMatrix } from "./TinyMatrix";
 
 export const StepStrip = () => {
   const frameIndex = useFrameIndex();
@@ -57,30 +64,6 @@ export const StepStrip = () => {
   );
 };
 
-/**
- * Resolve the previous-run after-bytes for a given frame, honoring the
- * "compare to previous run" toggle. Pulls from the history store; returns
- * null when the toggle is off, there's no prior run, or the prior state
- * isn't a 16-byte block. Shared by every thumbnail in the strip so the
- * per-step comparison is consistent.
- *
- * Post-Slice-5.1 (MatrixState retired) the 4×4 thumbnail renders any
- * 16-byte state (AES, Serpent) as a column-major grid; the length-16 gate
- * stands in for the old `shape === "matrix4x4-bytes"` discriminant.
- */
-const usePreviousBytesFor = (frame: () => TraceFrame | null) => {
-  const history = useHistory();
-  const showPrev = useShowPreviousRun();
-  return createMemo<Uint8Array | null>(() => {
-    if (!showPrev()) return null;
-    const f = frame();
-    if (!f) return null;
-    const prev = findPreviousRunFrameByStepId(history(), f.stepId);
-    if (!prev || prev.stateAfter.bytes.length !== 16) return null;
-    return prev.stateAfter.bytes;
-  });
-};
-
 // ─── Single thumbnail ────────────────────────────────────────────────────
 
 type ThumbnailProps = {
@@ -91,17 +74,14 @@ type ThumbnailProps = {
 };
 
 const Thumbnail = (props: ThumbnailProps) => {
-  // Render the 4×4 grid only for 16-byte block states (AES, Serpent);
-  // other widths (DES 8, SHA 32, Speck 4) fall through to a placeholder.
-  const gridBytes = (): Uint8Array | null => {
+  const fmt = useByteFormat();
+  // The flat byte sequence of the step's after-state. `createMemo` because
+  // it's read twice in the JSX below (the `<Show when>` guard + the `<For>`).
+  const stateBytes = createMemo<readonly number[]>(() => {
     const f = props.frame;
-    if (!f || f.stateAfter.bytes.length !== 16) return null;
-    return f.stateAfter.bytes;
-  };
-
-  // Phase 2b — per-thumbnail previous-run comparison. Reads the same toggle
-  // the inspector uses so the strip stays in sync.
-  const previousBytes = usePreviousBytesFor(() => props.frame);
+    if (!f) return [];
+    return Array.from(f.stateAfter.bytes);
+  });
 
   // The visible label for the step. We trim path noise — usually the
   // last segment of the path plus the step name conveys plenty.
@@ -152,8 +132,15 @@ const Thumbnail = (props: ThumbnailProps) => {
           <>
             <div class="step-thumb-label">{label()}</div>
             <div class="step-thumb-type">{frame().stepType}</div>
-            <Show when={gridBytes()} fallback={<div class="muted small">(no 4×4 view)</div>}>
-              {(bytes) => <TinyMatrix bytes={bytes()} previousBytes={previousBytes()} />}
+            <Show
+              when={stateBytes().length > 0}
+              fallback={<div class="muted small">(no state)</div>}
+            >
+              <div class="step-thumb-bytes">
+                <For each={stateBytes()}>
+                  {(byte) => <div class="bytes-cell">{formatByte(byte, fmt())}</div>}
+                </For>
+              </div>
             </Show>
           </>
         )}
