@@ -365,14 +365,14 @@ describe("Slice 11 — palette-built spec round-trips through Save/Load", () => 
     }
   });
 
-  // DES Phase 6d-vi — same round-trip property exercised against the
-  // first cipher whose graph drops can target a Feistel track. The
-  // L track of a DES round is empty in canonical form, so the
-  // `into-track-start` anchor is the only way to author a leaf
-  // there. Aux primitives are state-passthrough, so the DES
-  // ciphertext stays byte-equal to the canonical FIPS 46-3 vector
-  // even after the L track gets a user-added step.
-  it("DES round.5 L-track palette insert + params + layout pin survive Save → reset → Load, " +
+  // DES round-trip — retargeted to port-native DES in B4 (universal-port
+  // Phase 4d). DES no longer uses `feistel-round`; round.5 is now a port-mode
+  // GROUP. The same round-trip property is exercised by dropping a
+  // state-passthrough aux primitive into round.5's group via `into-start`.
+  // Aux primitives read/write aux and leave the port flow (and the group's
+  // bodyOutput) untouched, so the DES ciphertext stays byte-equal to the
+  // canonical FIPS 46-3 vector even after the round gets a user-added step.
+  it("DES round.5 group palette insert + params + layout pin survive Save → reset → Load, " +
     "and the DES ciphertext stays byte-equal across the boundary", async () => {
     // ── Phase A — open the app, switch to DES via the cipher
     // selector (so the App's plaintext/key auto-swap fires), then
@@ -421,28 +421,25 @@ describe("Slice 11 — palette-built spec round-trips through Save/Load", () => 
     expect(baselineCiphertext, "DES final state must be BytesState").not.toBeNull();
     if (!baselineCiphertext) return;
 
-    // ── Phase B — palette-author into round.5's empty L track ─────
-    // The drop pathway via DataTransfer is already pinned by
-    // `tests/graph-view-feistel-drop-gutters.test.tsx`; this test
-    // exercises the store boundary directly to keep the assertion
-    // surface tight.
+    // ── Phase B — palette-author into round.5's port-mode group ──
+    // The drop pathway via DataTransfer is pinned elsewhere; this test
+    // exercises the store boundary directly to keep the assertion surface
+    // tight. `into-start` prepends into the round GROUP (port-native DES
+    // round.5 is a group, not a feistel-round).
     insertStepIntoSpec("generic.aux-load@1", {
-      kind: "into-track-start",
-      roundId: "round.5",
-      trackIdx: 0,
+      kind: "into-start",
+      containerId: "round.5",
     });
     const specWithInsert = useSpec()();
     const insertLoc = findStepAndParent(specWithInsert, "aux-load-1");
-    expect(insertLoc, "L-track insert must exist").not.toBeNull();
-    expect(insertLoc?.parent?.kind).toBe("feistel-round");
+    expect(insertLoc, "round-group insert must exist").not.toBeNull();
+    expect(insertLoc?.parent?.kind).toBe("group");
     expect(insertLoc?.parent?.id).toBe("round.5");
-    expect(insertLoc?.trackIdx).toBe(0);
     expect(insertLoc?.indexInParent).toBe(0);
 
     // ── Phase C — edit the leaf's params ──────────────────────────
-    // aux-load writes the named aux without touching state; the
-    // value's literal bytes are pedagogical only. The L track's
-    // 4-byte BytesState passes through unchanged.
+    // aux-load writes the named aux without touching state and stays out of
+    // the round's port flow, so the round output is unchanged.
     editStepParams("aux-load-1", {
       auxName: "l-track-witness",
       value: [0xde, 0xad, 0xbe, 0xef],
@@ -485,9 +482,8 @@ describe("Slice 11 — palette-built spec round-trips through Save/Load", () => 
     });
     const loadedSpec = useSpec()();
     const loadedLoc = findStepAndParent(loadedSpec, "aux-load-1");
-    expect(loadedLoc?.parent?.kind).toBe("feistel-round");
+    expect(loadedLoc?.parent?.kind).toBe("group");
     expect(loadedLoc?.parent?.id).toBe("round.5");
-    expect(loadedLoc?.trackIdx).toBe(0);
     expect(loadedLoc?.indexInParent).toBe(0);
     if (loadedLoc?.node.kind === "step") {
       expect(loadedLoc.node.type).toBe("generic.aux-load@1");
