@@ -73,10 +73,6 @@ const expectStatesEqual = (a: State, b: State, label: string): void => {
       expect(Array.from(a.bytes), `${label}: bytes`).toEqual(Array.from(b.bytes));
       return;
     }
-    case "bitvec":
-      throw new Error(`${label}: bitvec not exercised by Slice 1.11 matrix`);
-    case "bigint":
-      throw new Error(`${label}: bigint not exercised by Slice 1.11 matrix`);
   }
 };
 
@@ -227,15 +223,9 @@ describe("runtime — Slice 1.11 frame-parity matrix (all shipped specs)", () =>
       expect(ported.finalState.shape, `${row.label}: ported finalState.shape`).toBe(
         legacy.finalState.shape,
       );
-      // Bytes-only state shapes in this matrix (bytes / matrix4x4-bytes);
-      // both expose `.bytes: Uint8Array`. Narrowing assertion is needed
-      // to keep TS happy under `noUncheckedIndexedAccess` + discriminated
-      // union.
-      if (ported.finalState.shape !== "bytes" && ported.finalState.shape !== "matrix4x4-bytes") {
-        throw new Error(
-          `${row.label}: unexpected ported finalState shape ${ported.finalState.shape}`,
-        );
-      }
+      // Both surviving state shapes (bytes / matrix4x4-bytes) expose
+      // `.bytes: Uint8Array`, so the union accessor below type-checks
+      // without a narrowing guard.
       expect(hexFromBytes(ported.finalState.bytes), `${row.label}: ported finalState bytes`).toBe(
         row.expectedOutputHex,
       );

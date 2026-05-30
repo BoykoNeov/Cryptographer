@@ -97,10 +97,6 @@ const expectStatesEqual = (a: State, b: State, label: string): void => {
       expect(Array.from(a.bytes), `${label}: bytes`).toEqual(Array.from(b.bytes));
       return;
     }
-    case "bitvec":
-      throw new Error(`${label}: bitvec not exercised by Slice 1.8 DES fixtures`);
-    case "bigint":
-      throw new Error(`${label}: bigint not exercised by Slice 1.8 DES fixtures`);
   }
 };
 

@@ -246,9 +246,8 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
      *   - for-each-subgraph-with-history: full concatenated history bytes.
      *   - feistel-round: rejoin combined output bytes.
      *
-     * All shipped exit shapes (bytes, matrix4x4-bytes, bitvec) are
-     * `stateToPortBytes`-encodable; bigint throws inside that helper if
-     * a future container produces one. Multi-output containers (e.g.,
+     * Both surviving exit shapes (bytes, matrix4x4-bytes) are
+     * `stateToPortBytes`-encodable. Multi-output containers (e.g.,
      * one with both "out" = concat AND "history" = per-iteration bytes
      * exposed separately) all receive the SAME bytes today — sufficient
      * for SHA-256's message-schedule-into-compression handoff in 2.6b.
@@ -970,9 +969,9 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
    * synthetic rejoin frame.
    *
    * Pre-conditions enforced at runtime:
-   *   - parent-scope `state.shape === "bytes"` (Feistel is bytes-shape today;
-   *     a future bitvec-shape Feistel would relax this and re-slice via
-   *     bit indices).
+   *   - parent-scope `state.shape === "bytes"` (Feistel is bytes-shape; a
+   *     bit-aligned Feistel would re-slice via bit indices inside the
+   *     executor and still exchange bytes at the port boundary).
    *   - tracks declare disjoint byte ranges within the input. Overlap or
    *     out-of-range indices throw with a descriptive message — easier to
    *     catch at the spec edit boundary than via a confusing combine result.

@@ -9,7 +9,7 @@ export type Json = null | boolean | number | string | Json[] | { [k: string]: Js
 // Discriminated union. Each variant carries the bytes plus enough shape
 // metadata for the UI to pick the right view without a runtime cast.
 
-export type StateShape = "bytes" | "matrix4x4-bytes" | "bitvec" | "bigint";
+export type StateShape = "bytes" | "matrix4x4-bytes";
 
 export type BytesState = {
   readonly shape: "bytes";
@@ -22,18 +22,7 @@ export type MatrixState = {
   readonly bytes: Uint8Array;
 };
 
-export type BitVecState = {
-  readonly shape: "bitvec";
-  readonly bits: Uint8Array; // packed; length in bits stored separately
-  readonly bitLength: number;
-};
-
-export type BigIntState = {
-  readonly shape: "bigint";
-  readonly value: bigint;
-};
-
-export type State = BytesState | MatrixState | BitVecState | BigIntState;
+export type State = BytesState | MatrixState;
 
 // ─── Auxiliary lanes ──────────────────────────────────────────────────────
 // Some steps need data alongside the main state — round keys, IVs, counters.
@@ -1191,22 +1180,14 @@ export type StepRegistration =
  * would make the round-trip trivial and would not validate the
  * "flatten-to-Uint8Array" claim that the entire migration rests on.
  *
- * Phase-0 scope (per user pick 2026-05-23): only `matrix-cm-4x4` and
- * `bytes` (raw) layouts are exercised — the three target step types
- * (`generic.byte-substitution@1`, `generic.add-round-key@1`, one ECB
- * iteration body) all use `MatrixState`. The fields for `bitvec` and
- * `bigint` reconstruction are sketched here but not exercised; first
- * cipher to use them (likely SHA-2 in Phase 2 or RSA later) forces them
- * through the round-trip.
- *
- * TODO(Phase 1, bitvec): exercise round-trip with a synthetic `BitVecState`
- * frame so `bitLength` correctly survives. Needed before any cipher that
- * carries bit-aligned state (Serpent's bitslice form, if it ever ships).
- *
- * TODO(Phase 1, bigint): exercise round-trip with a synthetic `BigIntState`
- * frame; design the endianness convention. RSA and elliptic-curve work
- * will force the question. `bigintByteLength` is needed because a bigint
- * value alone doesn't preserve leading zero bytes.
+ * Scope (Phase 5 / Slice 5.0, 2026-05-30): the only two State variants
+ * left are `matrix4x4-bytes` (AES round/key bytes) and `bytes` (raw); the
+ * never-shipped `bitvec` / `bigint` variants and their reconstruction
+ * fields were retired with the `State` union. A future cipher needing a
+ * bit-aligned or bignum state shape handles it INSIDE the executor and
+ * exchanges `Uint8Array` at the port boundary (see
+ * `feedback_all_specs_port_native` — specialized math never crosses a
+ * port as a non-bytes value), so `LayoutTags` stays bytes-and-matrix only.
  */
 export type LayoutTags = {
   /**
@@ -1215,12 +1196,6 @@ export type LayoutTags = {
    * by other shipped step types but not in the three targets.
    */
   readonly stateLayout: StateShape;
-  /** For `bitvec` reconstruction. Undefined for other shapes. */
-  readonly bitLength?: number;
-  /** For `bigint` reconstruction. Undefined for other shapes. */
-  readonly bigintEndian?: "be" | "le";
-  /** For `bigint` reconstruction (preserves leading zero bytes). */
-  readonly bigintByteLength?: number;
   /**
    * For each input port that was sourced from an aux entry in the legacy
    * frame, the original aux key name. The reconstruction reads

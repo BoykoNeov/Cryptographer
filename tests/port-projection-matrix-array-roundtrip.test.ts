@@ -33,7 +33,7 @@ import {
   portBytesToState,
   stateToPortBytes,
 } from "@/core/port-projection";
-import type { AuxValue, BitVecState, MatrixState, State } from "@/core/types";
+import type { AuxValue, MatrixState, State } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 // ─── Helper: build a MatrixState from 16 sequential bytes ───────────────
@@ -136,7 +136,7 @@ describe('aux layout "matrix-cm-4x4-array" round-trip (Slice 2.0b-ii)', () => {
 
 // ─── stateToBytes "bytes" relaxation (option C, 2026-05-24) ─────────────
 
-describe('stateToBytes relaxation: expected:"bytes" accepts any non-bigint variant', () => {
+describe('stateToBytes relaxation: expected:"bytes" accepts the matrix4x4-bytes variant', () => {
   it("encodes a matrix4x4-bytes state as raw bytes when expected is bytes", () => {
     // concat-blocks's load-bearing case: iterate leaves a 16-byte
     // matrix4x4-bytes in the runtime's `state` variable; concatBlocksMeta
@@ -145,30 +145,6 @@ describe('stateToBytes relaxation: expected:"bytes" accepts any non-bigint varia
     const bytes = stateToPortBytes(state, "bytes");
     expect(bytes.length).toBe(16);
     for (let i = 0; i < 16; i++) expect(bytes[i]).toBe(0x40 + i);
-  });
-
-  it("encodes a bitvec state as raw bytes when expected is bytes", () => {
-    // bitvec isn't exercised by any lifted ported step today, but the
-    // relaxation accepts it for symmetry — the universal sink is
-    // ".bytes-or-.bits". Pinning ensures future bitvec lifts can rely
-    // on the same path without another relaxation.
-    const bv: BitVecState = {
-      shape: "bitvec",
-      bitLength: 12,
-      bits: new Uint8Array([0xab, 0xcd]),
-    };
-    const bytes = stateToPortBytes(bv, "bytes");
-    expect(Array.from(bytes)).toEqual([0xab, 0xcd]);
-  });
-
-  it("bigint still throws even when expected is bytes", () => {
-    // The deferral is honest: bigint has no encoding committed yet, so
-    // the relaxation explicitly re-throws rather than silently picking
-    // an endianness. BigIntState carries `value: bigint`, no .bytes; the
-    // shape-discriminator check `state.shape === "bigint"` is what
-    // gates the throw.
-    const bi: State = { shape: "bigint", value: 0n };
-    expect(() => stateToPortBytes(bi, "bytes")).toThrow(/BigIntState/);
   });
 
   it("strict path still rejects matrix4x4-bytes when expected is matrix4x4-bytes... vs bytes", () => {

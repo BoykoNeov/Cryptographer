@@ -274,6 +274,18 @@ If a rebuild discovers a port-shape or naming constraint that would make the edi
 
 ### Phase 5 — Deprecate legacy step types
 
+> **Tracked as a dependency-ordered arc in
+> `docs/plans/phase-5-legacy-retirement.md` (2026-05-30).** An audit found
+> this phase's headline ("delete the state types") had an unmet precondition
+> — the key-schedules are still lifted and the old matrix primitives are
+> coupled to MatrixView/projection tests. Reordered: **Slice 5.0
+> (BitVecState/BigIntState + dead-alias/stats) SHIPPED 2026-05-30**; 5.1
+> MatrixState → 5.2 key-schedules + `liftLegacyExecutor` removal → 5.3 frame
+> fields. **Deviation:** the Feistel types (`FeistelRoundGroup`/`BranchTrack`/
+> `CombineKind`) + toy fixture stay through Phase 5 — reserved for the next
+> phase (port-native Feistel/swap viz rebuild). Verified: persistence is
+> additive (no `schemaVersion` bump); key-expansion already emits bytes.
+
 **Goal:** remove the legacy executor contract from the codebase when nothing depends on it.
 
 **Scope:**

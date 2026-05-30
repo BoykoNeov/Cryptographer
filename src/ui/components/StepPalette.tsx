@@ -63,8 +63,6 @@ export const useActiveDragStepType = (): (() => string | null) => activeDragStep
 export const SHAPE_LABELS: Record<StateShape | "any", string> = {
   bytes: "bytes",
   "matrix4x4-bytes": "4×4 matrix",
-  bitvec: "bitvec",
-  bigint: "bigint",
   any: "any",
 };
 

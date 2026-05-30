@@ -123,7 +123,7 @@ export const JsonSchema: z.ZodType<Json> = z.lazy(() =>
 
 // ─── StateShape ───────────────────────────────────────────────────────────
 
-export const StateShapeSchema = z.enum(["bytes", "matrix4x4-bytes", "bitvec", "bigint"]);
+export const StateShapeSchema = z.enum(["bytes", "matrix4x4-bytes"]);
 
 // ─── StepNode (recursive discriminated union) ─────────────────────────────
 // Each per-kind schema stays a concrete `z.object(...)` so it satisfies

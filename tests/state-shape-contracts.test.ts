@@ -50,15 +50,11 @@ const isPortNative = (stepType: string): boolean => {
 const VALID_INPUT_VALUES: ReadonlySet<StateShape | "any"> = new Set([
   "bytes",
   "matrix4x4-bytes",
-  "bitvec",
-  "bigint",
   "any",
 ]);
 const VALID_OUTPUT_VALUES: ReadonlySet<StateShape | "preserveInput"> = new Set([
   "bytes",
   "matrix4x4-bytes",
-  "bitvec",
-  "bigint",
   "preserveInput",
 ]);
 

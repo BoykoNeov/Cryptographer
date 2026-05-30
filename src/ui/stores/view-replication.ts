@@ -2,7 +2,7 @@
  * View-replication store. Toggles the high-fanout-source replica transform
  * in the graph view (commit 4 of the graph-readability sequence).
  *
- * When ON, sources with more than `REPLICATION_THRESHOLD` outgoing aux edges
+ * When ON, sources with more than `DEFAULT_REPLICATION_THRESHOLD` outgoing aux edges
  * are visually replicated next to each consumer — so AES-128's
  * `key-expansion` (11 outgoing roundKey edges) renders as 11 small chips
  * scattered through the round groups instead of one node on the far left
@@ -17,7 +17,7 @@
  * Why a global bool + constant for v1 (not a numeric input or per-node mode):
  *   - Commit 4 ships the global threshold (this file).
  *   - Commit 5 will add per-node modes (`auto` / `always` / `never`); the
- *     "auto" branch will reuse `REPLICATION_THRESHOLD` as its default.
+ *     "auto" branch will reuse `DEFAULT_REPLICATION_THRESHOLD` as its default.
  *   - Exposing the threshold as a number input now adds UI surface that
  *     commit 5's per-node controls will subsume. Hardcoded 6 catches AES
  *     (11 round keys), Speck (22), and Serpent (32) cleanly while leaving
@@ -51,13 +51,6 @@ import { createSignal } from "solid-js";
  * the default ships everywhere else.
  */
 export const DEFAULT_REPLICATION_THRESHOLD = 3;
-
-/**
- * Back-compat alias. Older call sites read `REPLICATION_THRESHOLD` as a
- * constant; new code threads `useReplicationThreshold()` instead so the
- * value reacts to the toolbar input.
- */
-export const REPLICATION_THRESHOLD = DEFAULT_REPLICATION_THRESHOLD;
 
 /** Bounds for the toolbar's numeric input. Lower bound 1 (replicate on any
  * fanout above 1); upper bound a safe sentinel that exceeds any realistic

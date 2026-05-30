@@ -8130,13 +8130,6 @@ const formatStateOneline = (state: State, fmt: ByteFormat): string => {
       return formatBytes(state.bytes, fmt);
     case "matrix4x4-bytes":
       return formatBytes(state.bytes, fmt);
-    case "bitvec":
-      // No bit-level renderer yet — show the underlying packed bytes as
-      // hex regardless of fmt. Once a cipher actually exercises bitvec
-      // state we can add a dedicated bit-string formatter.
-      return formatBytes(state.bits, "hex");
-    case "bigint":
-      return state.value.toString();
   }
 };
 

@@ -3,7 +3,11 @@
 > **Status: Phase A COMPLETE. Phase B COMPLETE — B1 (AES) + B2 (Speck) +
 > B3 (Serpent) + B4 (DES) all byte-native + merged to main 2026-05-30. Every
 > shipped cipher/hash is now port-native; no shipped spec uses `feistel-round`.
-> Next: Phase C (state-union retirement) per the universal-port plan's Phase 5.
+> Phase C (= universal-port Phase 5) is now tracked as a dependency-ordered
+> arc in **`docs/plans/phase-5-legacy-retirement.md`**; **Slice 5.0
+> (BitVecState/BigIntState retirement + dead-alias/stats cleanup) SHIPPED
+> 2026-05-30.** 5.1 (MatrixState) / 5.2 (key-schedules) / 5.3 (frame fields)
+> sequenced there. Feistel types stay (next phase).
 > See "## B4 — DES byte-native" (the Phase 4d Feistel rebuild) below.**
 >
 > **(historical) B1–B3:** B1 (AES) MERGED `f896f3c`; B2 (Speck) MERGED `d791c35`;
@@ -1917,6 +1921,14 @@ closes the red window → then B1.2 (decrypt + the deferred byte-native mirror
 registry entries) / B1.3 (192/256) / B1.4 (modes).
 
 ### Phase C — State retirement falls out (2 slices)
+
+> **Superseded for tracking by `docs/plans/phase-5-legacy-retirement.md`**
+> (2026-05-30), which reorders this into a dependency-ordered arc after an
+> audit found the precondition for the type deletion unmet (key-schedules
+> still lifted; the old matrix primitives coupled to MatrixView/projection
+> tests). C1 split: the `BitVecState`/`BigIntState` half **shipped as Slice
+> 5.0**; the `MatrixState` half is Slice 5.1. The two sub-slices below stay
+> as the conceptual description.
 
 **C1 — Retire legacy state types.** With no executor consuming them,
 delete `MatrixState` / `BitVecState` / `BigIntState` from `core/types.ts`

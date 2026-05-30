@@ -179,9 +179,8 @@ const expectStateBytesEqual = (
   recovered: TraceFrame["stateBefore"],
   original: TraceFrame["stateBefore"],
 ): void => {
-  // Phase 0 only exercises bytes / matrix4x4-bytes; switch is exhaustive
-  // by State union, but the bitvec/bigint arms throw a recognizable
-  // error if a fixture surprise routes data through them.
+  // The State union is just bytes / matrix4x4-bytes; the switch below is
+  // exhaustive over it.
   if (recovered.shape !== original.shape) {
     throw new Error(
       `state shape mismatch: recovered=${recovered.shape} original=${original.shape}`,
@@ -194,10 +193,6 @@ const expectStateBytesEqual = (
       expect(Array.from(recovered.bytes)).toEqual(Array.from(original.bytes));
       return;
     }
-    case "bitvec":
-      throw new Error("Phase 0 fixture should not produce bitvec frames");
-    case "bigint":
-      throw new Error("Phase 0 fixture should not produce bigint frames");
   }
 };
 

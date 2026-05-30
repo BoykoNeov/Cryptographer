@@ -18,8 +18,8 @@
  *
  * Anti-trivial discipline: `LayoutTags` MUST carry only what's needed to
  * reinterpret raw byte arrays back into the legacy variant — the State
- * enum tag, optional bit-length / bigint-encoding metadata, and the
- * port-name ↔ aux-key bindings. It MUST NOT carry the legacy `State`
+ * enum tag and the port-name ↔ aux-key bindings. It MUST NOT carry the
+ * legacy `State`
  * object verbatim. A trivial round-trip that just stashes the original
  * State in the sidecar would not test the flatten-to-Uint8Array claim
  * the entire migration rests on.
@@ -142,11 +142,6 @@ export const project = (frame: TraceFrame, meta: ProjectionMetadata): Projection
 
   const tags: LayoutTags = {
     stateLayout: meta.stateLayout,
-    // bitLength / bigintEndian / bigintByteLength only populated for
-    // their respective variants — Phase 0's matrix4x4-bytes targets
-    // never set them.
-    ...readBitLength(frame),
-    ...readBigintEncoding(frame),
     ...(auxInputBindings.size > 0 ? { auxInputBindings } : {}),
     ...(auxOutputBindings.size > 0 ? { auxOutputBindings } : {}),
   };
@@ -264,47 +259,33 @@ export const stateToPortBytes = (state: State, expected: StateShape): Uint8Array
 };
 
 /**
- * Inverse of `stateToPortBytes` (with the `LayoutTags`-rich variants
- * suppressed for Phase-0 simplicity — `bitvec` requires bitLength
- * separately and `bigint` is deferred). Throws if asked to reconstruct
- * a shape that needs more than `Uint8Array` bytes.
+ * Inverse of `stateToPortBytes`. Reconstructs a `State` from raw bytes
+ * plus the layout tag. Both surviving layouts (`bytes`, `matrix4x4-bytes`)
+ * reconstruct directly from the `Uint8Array`.
  */
 export const portBytesToState = (bytes: Uint8Array, layout: StateShape): State => {
-  // Build a minimal LayoutTags so we can reuse `bytesToState`. bitvec
-  // and bigint paths require additional metadata and are out of scope
-  // for Phase 0; `bytesToState` throws if either is requested without
-  // its companion field.
+  // Reuse `bytesToState` with a minimal LayoutTags carrying only the layout.
   return bytesToState(bytes, { stateLayout: layout });
 };
 
 const stateToBytes = (state: TraceFrame["stateBefore"], expected: StateShape): Uint8Array => {
   // Slice 2.0b-ii (universal-port Phase 2) relaxation, user pick option C
-  // (2026-05-24): when `expected === "bytes"`, accept any non-bigint State
-  // variant and read `.bytes` directly. The relaxation unblocks lifting
-  // shape-transforming steps whose input state's variant doesn't matter
-  // to the executor (concat-blocks: matrix-in/bytes-out, `_state` ignored)
-  // without forcing every such step to ship asymmetric stateInput/
-  // stateOutput layout meta. Trade-off: a meta author who mis-declares
-  // `stateLayout: "bytes"` against a state-reading executor no longer
-  // surfaces at the encode boundary — they surface inside the executor's
-  // own shape check. Narrowed-by-one-shape guardrail; documented surface.
-  // BigIntState still throws here (no encoding committed yet).
+  // (2026-05-24): when `expected === "bytes"`, accept the other State
+  // variant (`matrix4x4-bytes`) and read `.bytes` directly. The relaxation
+  // unblocks lifting shape-transforming steps whose input state's variant
+  // doesn't matter to the executor (concat-blocks: matrix-in/bytes-out,
+  // `_state` ignored) without forcing every such step to ship asymmetric
+  // stateInput/stateOutput layout meta. Trade-off: a meta author who
+  // mis-declares `stateLayout: "bytes"` against a state-reading executor no
+  // longer surfaces at the encode boundary — they surface inside the
+  // executor's own shape check.
   //
-  // Untouched: `expected === "matrix4x4-bytes"` / `"bitvec"` still enforce
-  // shape equality. "bytes" is the universal sink because every shipped
-  // State variant carries a `.bytes` Uint8Array internally.
+  // Untouched: `expected === "matrix4x4-bytes"` still enforces shape
+  // equality. "bytes" is the universal sink because every State variant
+  // carries a `.bytes` Uint8Array internally.
   if (expected === "bytes" && state.shape !== "bytes") {
-    if (state.shape === "bigint") {
-      // Same throw as the bigint case below — keep the deferral honest
-      // even on the relaxed path.
-      throw new Error(
-        "port-projection: BigIntState projection deferred to Phase 1 (no shipped cipher exercises it yet)",
-      );
-    }
-    // bitvec carries `.bits` (Uint8Array); matrix4x4-bytes carries
-    // `.bytes`. The union narrows to those two here.
-    const raw = state.shape === "bitvec" ? state.bits : state.bytes;
-    return new Uint8Array(raw);
+    // The union narrows to `matrix4x4-bytes` here; it carries `.bytes`.
+    return new Uint8Array(state.bytes);
   }
   if (state.shape !== expected) {
     throw new Error(
@@ -319,23 +300,6 @@ const stateToBytes = (state: TraceFrame["stateBefore"], expected: StateShape): U
       // alias the caller's bytes either — the PortedFrame is a
       // separate value owned by the ported pipeline.
       return new Uint8Array(state.bytes);
-    case "bitvec":
-      // Bits are already packed; copy for safety. The bitLength rides
-      // in LayoutTags.bitLength (see readBitLength below).
-      // TODO(Phase 1, bitvec): exercise round-trip with a real bitvec
-      // frame to confirm bitLength survives.
-      return new Uint8Array(state.bits);
-    case "bigint": {
-      // TODO(Phase 1, bigint): this is a placeholder. The first cipher
-      // to ship with BigIntState (RSA / elliptic curves) must pick a
-      // canonical encoding (BE vs LE, length convention) and the
-      // round-trip test must cover it. Throwing here keeps Phase 0
-      // honest — if someone wires a bigint step into the Phase-0
-      // fixture by mistake, the failure is loud.
-      throw new Error(
-        "port-projection: BigIntState projection deferred to Phase 1 (no shipped cipher exercises it yet)",
-      );
-    }
   }
 };
 
@@ -359,27 +323,6 @@ const bytesToState = (bytes: Uint8Array, tags: LayoutTags): TraceFrame["stateBef
         );
       }
       return cloneState({ shape: "matrix4x4-bytes", bytes });
-    case "bitvec": {
-      if (tags.bitLength === undefined) {
-        throw new Error("port-projection: bitvec reconstruction requires LayoutTags.bitLength");
-      }
-      const expectedByteLen = Math.ceil(tags.bitLength / 8);
-      // Same Slice 1.12 caveat 1 defensive throw — coerced bytes for a
-      // bitvec layout whose declared bitLength implies a fixed byte
-      // count must match exactly, else the resulting BitVecState
-      // carries bits in the wrong positions.
-      if (bytes.length !== expectedByteLen) {
-        throw new Error(
-          `port-projection: bytesToState layout "bitvec" expected ${expectedByteLen} bytes (bitLength=${tags.bitLength}), got ${bytes.length}. This usually means a ported-dispatch input port's coerced bytes don't fit the declared state-port layout. See Slice 1.12 caveat 1 in docs/plans/universal-port-phase-1-slices.md.`,
-        );
-      }
-      return cloneState({ shape: "bitvec", bits: bytes, bitLength: tags.bitLength });
-    }
-    case "bigint":
-      // TODO(Phase 1, bigint): pair with the encoding decision in
-      // stateToBytes. Throws today so a misconfigured fixture surfaces
-      // immediately.
-      throw new Error("port-projection: BigIntState reconstruction deferred to Phase 1");
   }
 };
 
@@ -455,34 +398,6 @@ const encodeStateArrayToBytes = (value: readonly unknown[], auxKey: string): Uin
     offset += b.length;
   }
   return out;
-};
-
-// ─── Layout-tag accessors ───────────────────────────────────────────────
-
-/**
- * Pull `bitLength` from a bitvec stateBefore if applicable. Returns an
- * empty object so the spread in `project` produces no key when the
- * variant isn't bitvec — keeps LayoutTags slim for the common case.
- */
-const readBitLength = (frame: TraceFrame): { bitLength?: number } => {
-  if (frame.stateBefore.shape === "bitvec") {
-    return { bitLength: frame.stateBefore.bitLength };
-  }
-  return {};
-};
-
-/**
- * Symmetric placeholder for bigint encoding metadata. Returns empty
- * today because Phase 0 doesn't exercise bigint frames — and the
- * encoding rule itself is deferred to Phase 1.
- */
-const readBigintEncoding = (
-  _frame: TraceFrame,
-): { bigintEndian?: "be" | "le"; bigintByteLength?: number } => {
-  // TODO(Phase 1, bigint): once an encoding is picked, populate this
-  // from the BigIntState — and stateToBytes / bytesToState above need
-  // matching changes.
-  return {};
 };
 
 // ─── Helpers ────────────────────────────────────────────────────────────

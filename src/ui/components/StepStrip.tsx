@@ -87,8 +87,7 @@ type ThumbnailProps = {
 
 const Thumbnail = (props: ThumbnailProps) => {
   // Only render the matrix view when we actually have a matrix state.
-  // Other state shapes (bytes, bitvec, bigint) will get their own tiny
-  // views in the future; for now they fall through to a placeholder.
+  // The other state shape (bytes) falls through to a placeholder.
   const matrixState = (): MatrixState | null => {
     const f = props.frame;
     if (!f || f.stateAfter.shape !== "matrix4x4-bytes") return null;

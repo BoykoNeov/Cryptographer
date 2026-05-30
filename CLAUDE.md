@@ -7,10 +7,10 @@ Interactive cryptography explorer. The user enters plaintext + key, sees every i
 | Command | What it does |
 |---|---|
 | `npm run dev` | Vite dev server at `http://localhost:5173`. Hot-reloads on file changes. |
-| `npm test` | Vitest, single run. Currently 1389 tests across 122 files, ~30s total (jsdom UI tests dominate). |
+| `npm test` | Vitest, single run. Currently 2546 tests across 219 files, ~44s total (jsdom UI tests dominate). |
 | `npm run typecheck` | `tsc --noEmit`, strict. |
 | `npm run check` | The gate: `biome ci . && tsc --noEmit && vitest run && vite build`. Runs in ~40s on this machine. |
-| `npm run build` | Production build into `dist/`. ~132 KB gzipped JS. |
+| `npm run build` | Production build into `dist/`. ~212 KB gzipped JS. |
 
 The pre-commit hook in `.githooks/pre-commit` runs `npm run check`. GitHub Actions in `.github/workflows/ci.yml` runs the same on push. Don't bypass with `--no-verify` unless you have a specific reason; both gates exist for a reason.
 
@@ -33,7 +33,7 @@ A `CipherSpec` (`src/core/types.ts`) is a tree of `StepNode`s. Leaves are `{ kin
 
 Each step type registers an executor *and* a `StepDocumentation` block (`name`, `summary`, `detail` markdown, `params`, `references`). The UI looks up the same key for both. Adding a new cipher = registering its step types in `src/ciphers/default-registry.ts` plus authoring a `CipherSpec` JSON file. **No UI changes needed for new step types** unless their params can't be edited by the existing `ParamEditor` blocks.
 
-State is a discriminated union: `BytesState`, `MatrixState` (4×4 byte matrix, column-major), `BitVecState`, `BigIntState`. AES uses `MatrixState`; Speck32/64 uses `BytesState` of length 4 (the two-word ARX interpretation lives inside the executor via a byte ↔ word codec); Serpent uses `BytesState` of length 16. `BitVecState` and `BigIntState` are declared but not yet exercised by a shipped cipher.
+State is a discriminated union: `BytesState`, `MatrixState` (4×4 byte matrix, column-major). AES uses `MatrixState`; Speck32/64 uses `BytesState` of length 4 (the two-word ARX interpretation lives inside the executor via a byte ↔ word codec); Serpent uses `BytesState` of length 16. `BitVecState`/`BigIntState` were retired in Phase 5 / Slice 5.0 (2026-05-30) — a node needing a bit-aligned or bignum state shape handles it inside its executor and exchanges `Uint8Array` at the port boundary (see memory `feedback_all_specs_port_native`).
 
 The future "binary export" feature is what *forced* the spec-as-data choice: a code generator can consume JSON, not closures.
 
