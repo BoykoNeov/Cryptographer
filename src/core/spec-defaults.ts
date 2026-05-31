@@ -58,15 +58,6 @@ export const getDefaultCollapsedContainers = (spec: CipherSpec): ReadonlySet<str
         for (const child of node.children) walk(child);
         return;
       }
-      case "feistel-round": {
-        if (node.defaultCollapsed === true) ids.add(node.id);
-        // Feistel branches store children under `tracks[].children`,
-        // not a top-level `children` field. Visit each track's body.
-        for (const track of node.tracks) {
-          for (const child of track.children) walk(child);
-        }
-        return;
-      }
     }
   };
   for (const node of spec.steps) walk(node);

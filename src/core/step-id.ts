@@ -5,17 +5,11 @@
  *
  * Suffix vocabulary today:
  *
- *   - `:t{name}` — track membership inside a `feistel-round`. `{name}`
- *     is the `BranchTrack.name` (default: stringified index).
  *   - `:b{i}` — block index inside an `iterate`.
  *   - `:r{i}` — round index inside a `for-each-subgraph` (Slice 2.0a of
  *     `docs/plans/universal-port-phase-2-slices.md`). The new kind threads
  *     state across iterations rather than seeding from an aux array;
  *     SHA-256's 64-round compression loop is the first shipped consumer.
- *   - `:rejoin` — synthetic rejoin frame for a `feistel-round`; spec-leaf
- *     resolves to the round's id (the FeistelRoundGroup node, not a leaf).
- *   - `:swap` — reserved for future "post-swap" frames. Not emitted today;
- *     the swap is baked into the `feistel-standard` combine.
  *
  * Note: `:coerce:{portName}` (synthetic frames from Slice 1.12's port-
  * length coercion path) is **deliberately NOT stripped** — the coerce
@@ -26,20 +20,13 @@
  * opposite of the "morph is visible" design.
  *
  * Composition rule (see `runtime.ts::composeStepId`): **fixed type order**
- * `:t` < `:b` < `:r`, with **outer-first walk order within a type**. So a
- * leaf inside Feistel-A wrapping Feistel-B inside an iterate inside a
- * for-each-subgraph emits `<leafId>:tA:tB:b3:r7`: track A (outer) appended
- * before track B (inner), then `:b3` (iterate is outer-of-:b), then `:r7`
- * (for-each-subgraph is outer-of-:r). The earlier doc-comment claim
- * "innermost-first append order" was a coincidence of the one shipped
- * nested case (Feistel-in-iterate, where Feistel happens to be `:t` and
- * iterate happens to be `:b`); type-order + walk-order is the real rule.
+ * `:b` < `:r`, with **outer-first walk order within a type**. So a leaf
+ * inside an iterate inside a for-each-subgraph emits `<leafId>:b3:r7`:
+ * `:b3` (iterate is outer-of-:b), then `:r7` (for-each-subgraph is
+ * outer-of-:r).
  *
  * Canonical form: every suffix stripped. So:
- *   - `round.1.expand-R:tR:b3` → `round.1.expand-R`
  *   - `compress.body:b0:r17` → `compress.body`
- *   - `round.1:rejoin` → `round.1`
- *   - `round.1:rejoin:b3` → `round.1`
  *   - `aes.sub-bytes:b0` → `aes.sub-bytes`
  *
  * Why one util: prior to Phase 2 the canonicalization lived in two
@@ -54,11 +41,11 @@
 // strip from the right because suffixes are appended at the rightmost
 // position by `composeStepId` under the type-order + walk-order rule
 // documented above.
-const SUFFIX_PATTERN = /(?::b\d+|:r\d+|:t[\w-]+|:rejoin|:swap)+$/;
+const SUFFIX_PATTERN = /(?::b\d+|:r\d+)+$/;
 
 /**
  * Strip all runtime-context suffixes off a stepId. Returns the spec-leaf
- * id (or the FeistelRoundGroup id for `:rejoin` frames). Pure.
+ * id. Pure.
  */
 export const canonicalStepId = (frameStepId: string): string =>
   frameStepId.replace(SUFFIX_PATTERN, "");

@@ -367,15 +367,24 @@ describe("port-edge wiring (Slice 2.6a) — container output ports", () => {
     inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
     steps: [
       {
+        // A port-native leaf wrapped in a group: the group seeds its body
+        // from `$input` (`port("subst-group","in")`) and publishes the
+        // leaf's output as its own `out` via `bodyOutput`. Downstream wires
+        // to `subst-group/out`. (Pre-5.3e this wrapped the lifted-legacy
+        // feistel toy and relied on the group's exit-STATE; the modern
+        // bodyOutput pattern is what every shipped port-native cipher uses.)
         kind: "group",
         id: "subst-group",
-        label: "Add-K wrapper",
+        label: "NOT wrapper",
+        seedInput: { node: "$input", port: "out" },
+        bodyOutput: { node: "sub", port: "output" },
         children: [
           {
             kind: "step",
             id: "sub",
-            type: "feistel.toy-add-k@1",
-            params: { k: 0x10 },
+            type: "not@1",
+            params: {},
+            portInputs: { input: { node: "subst-group", port: "in" } },
           },
         ],
         // outputPorts absent → defaults to ["out"].
@@ -452,79 +461,11 @@ describe("port-edge wiring (Slice 2.6a) — container output ports", () => {
   });
 });
 
-// ─── Mixed-mode: lifted-legacy + portInputs override (Q-edges-3 pick) ────
-
-describe("port-edge wiring (Slice 2.6a) — mixed-mode (Q-edges-3)", () => {
-  // Q-edges-3 user pick: "Unbound ports fall back to implicit state
-  // thread." This test pins the OVERRIDE direction: a lifted-legacy
-  // `feistel.toy-add-k@1` (the durable lifted-legacy carrier after the
-  // matrix `byte-substitution` retired in Phase 5 Slice 5.1) whose
-  // `meta.stateInputPort = "state"` is explicitly wired via portInputs to a
-  // `constant-load` upstream, bypassing the state-thread projection. The
-  // downstream add-k runs against the constant's bytes (not the spec's
-  // initial state) — verifying portInputs takes precedence per the pick.
-  it("portInputs override on a lifted-legacy state port BYPASSES the state-thread projection", () => {
-    const sourceBytes = Array.from({ length: 16 }, (_, i) => i); // [0..15]
-    const K = 0x10;
-    const spec: CipherSpec = {
-      id: "toy-mixed-mode",
-      name: "Mixed-mode override (Slice 2.6a)",
-      stateShape: "bytes",
-      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
-      steps: [
-        {
-          kind: "step",
-          id: "load.state-source",
-          type: "constant-load@1",
-          params: { bytes: sourceBytes },
-        },
-        {
-          kind: "step",
-          id: "sub",
-          type: "feistel.toy-add-k@1",
-          params: { k: K },
-          portInputs: {
-            // Override `meta.stateInputPort = "state"` with constant-
-            // load's output. The state-thread projection (initial state
-            // derived from spec.inputs.plaintext.shape) is suppressed for
-            // this port by the override.
-            state: { node: "load.state-source", port: "output" },
-          },
-        },
-      ],
-    };
-
-    // Initial state is all-0xff — DELIBERATELY different from the
-    // constant-load source — so we can prove the override worked by
-    // checking the add-k input was [0..15] ((i + K) mod 256), not the
-    // all-0xff projection ((0xff + K) mod 256 = K - 1).
-    const initialAllFF: BytesState = {
-      shape: "bytes",
-      bytes: new Uint8Array(16).fill(0xff),
-    };
-
-    const trace = runSpec(spec, buildDefaultRegistry(), {
-      initialState: initialAllFF,
-      portedDispatchEnabled: true,
-    });
-
-    // 2 frames: load + sub.
-    expect(trace.frames).toHaveLength(2);
-    const subFrame = trace.frames[1];
-    if (subFrame === undefined) throw new Error("subFrame undefined");
-    expect(subFrame.stepId).toBe("sub");
-    // The state AFTER sub should be ([0..15] + K) mod 256 — proving
-    // portInputs override carried the constant-load bytes, NOT
-    // (all-0xff + K).
-    const after = subFrame.stateAfter;
-    if (after.shape !== "bytes") {
-      throw new Error(`expected bytes stateAfter, got ${after.shape}`);
-    }
-    const expected = new Uint8Array(16);
-    for (let i = 0; i < 16; i++) expected[i] = (i + K) & 0xff;
-    expect(after.bytes).toEqual(expected);
-  });
-});
+// (The "mixed-mode — portInputs override on a LIFTED-LEGACY state port
+// bypasses the state-thread projection" describe was retired in Phase 5
+// Slice 5.3e: no `legacy`-bearing step remains. The override of a
+// meta-bearing state port via `portInputs.state` survives for HYBRID-ported
+// steps — pinned by Speck/Serpent's port-wired round leaves in Slice 5.3b.)
 
 // ─── Document round-trip (Slice 2.6a Q-edges schema persistence) ─────────
 

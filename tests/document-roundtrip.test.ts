@@ -38,7 +38,6 @@ import { aes256Spec } from "@/ciphers/aes-256";
 import { aes256DecryptSpec } from "@/ciphers/aes-256-decrypt";
 import { desSpec } from "@/ciphers/des";
 import { desDecryptSpec } from "@/ciphers/des-decrypt";
-import { FEISTEL_TOY_SPEC } from "@/ciphers/feistel-toy";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { serpent128DecryptSpec } from "@/ciphers/serpent-128-decrypt";
 import { serpent192Spec } from "@/ciphers/serpent-192";
@@ -95,10 +94,9 @@ const SHIPPED_SPECS: ReadonlyArray<{ readonly name: string; readonly spec: Ciphe
   { name: "serpent-192 decrypt", spec: serpent192DecryptSpec },
   { name: "serpent-256 encrypt", spec: serpent256Spec },
   { name: "serpent-256 decrypt", spec: serpent256DecryptSpec },
-  // Phase 2 of the DES + branching primitive plan — toy spec used to
-  // exercise the new feistel-round node kind through the document
-  // schema's discriminated union. Not a shipped user-facing cipher.
-  { name: "feistel-toy (Phase 2 test fixture)", spec: FEISTEL_TOY_SPEC },
+  // (The feistel-toy round-trip fixture was retired in Phase 5 Slice 5.3e
+  // with the `feistel-round` node kind. DES below exercises the
+  // discriminated-union round-trip with port-native group nodes instead.)
   // Phase 3 of the DES + branching primitive plan — DES encrypt + decrypt
   // specs are registered in `defaults` but not yet in the cipher selector
   // (Phase 4). Adding them to the round-trip table pins schema-v1

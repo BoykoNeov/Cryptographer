@@ -49,8 +49,6 @@ const collectConsumers = (nodes: readonly StepNode[], name: string): string[] =>
         if (n.type === "aux-load-bytes@1" && (n.params as { auxName?: string }).auxName === name) {
           out.push(n.id);
         }
-      } else if (n.kind === "feistel-round") {
-        for (const t of n.tracks) visit(t.children);
       } else {
         visit(n.children);
       }

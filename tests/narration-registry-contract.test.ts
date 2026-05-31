@@ -129,22 +129,18 @@ describe("narration-registry coverage contract", () => {
     expect(NARRATION_NO_OP_ALLOWLIST.has("serpent.bit-permutation@1")).toBe(false);
   });
 
-  it("allowlist size: 6 irreducible + 1 toy entry + 1 DES key-schedule entry", () => {
-    // Pins the current size after Phase 5 Slice 5.1 (2026-05-30):
+  it("allowlist size: 6 irreducible + 1 DES key-schedule entry", () => {
+    // Pins the current size after Phase 5 Slice 5.3e (2026-05-31):
     //   - 6 permanent entries (4 key-expansion step types covered by
     //     `<KeyScheduleExplorer />`, plus the 2 bit-level Serpent linear
     //     transforms whose byte-level prose would mislead).
-    //   - `feistel.toy-add-k@1` — Phase 2 toy F, removed when the toy
-    //     spec is decommissioned (reserved through Phase 5 for the
-    //     port-native Feistel/swap viz rebuild).
     //   - `des.key-schedule@1` — the 6 round-body DES step types moved
     //     OFF the allowlist in Phase 4 with dedicated narrators; only
     //     the key schedule remains because its per-frame narration is
     //     the wrong surface (multi-round PC-1 → 16 shifts → PC-2 walk).
-    //   - The 3 SHA-256 coarse-granularity helpers (sha2.*) retired in
-    //     Slice 5.1 with the Slice 2.6d port-native decomposition.
-    expect(NARRATION_NO_OP_ALLOWLIST.size).toBe(8);
-    expect(NARRATION_NO_OP_ALLOWLIST.has("feistel.toy-add-k@1")).toBe(true);
+    //   - The `feistel.toy-add-k@1` toy entry was removed in Slice 5.3e
+    //     with the Feistel scaffolding.
+    expect(NARRATION_NO_OP_ALLOWLIST.size).toBe(7);
     expect(NARRATION_NO_OP_ALLOWLIST.has("des.key-schedule@1")).toBe(true);
     // Negative assertion: the 6 round-body DES step types must NOT be on
     // the allowlist after Phase 4 (would mean we forgot to register a

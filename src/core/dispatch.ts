@@ -42,11 +42,10 @@ import type { CipherSpec, StepNode } from "./types";
 /**
  * Walk the spec tree depth-first; for every leaf, look up its
  * registration and short-circuit on the first pure port-native one. All
- * five container kinds — `group`, `iterate`, `feistel-round` (with
- * `tracks[].children`), `for-each-subgraph`, and
+ * four container kinds — `group`, `iterate`, `for-each-subgraph`, and
  * `for-each-subgraph-with-history` — must be descended into so a
  * port-native leaf injected anywhere in the tree is detected. Missing
- * a container kind is the easy bug; the synthetic Feistel test in
+ * a container kind is the easy bug; the deep-nested-group test in
  * `tests/requires-ported-dispatch.test.ts` catches it.
  *
  * Returns `false` for an empty spec (vacuously: no leaf requires
@@ -66,20 +65,10 @@ export const requiresPortedDispatch = (spec: CipherSpec, registry: StepRegistry)
         }
         continue;
       }
-      if (node.kind === "feistel-round") {
-        // Feistel rounds branch into N parallel tracks, each carrying
-        // its own children array. A port-native leaf can live inside
-        // any track (e.g., a future DES rebuild's expansion or
-        // S-box composition).
-        for (const track of node.tracks) {
-          if (visit(track.children)) return true;
-        }
-        continue;
-      }
       // Remaining container kinds (group, iterate, for-each-subgraph,
       // for-each-subgraph-with-history) all carry a single
       // `children: readonly StepNode[]` field — exhaustive over the
-      // current StepNode union (types.ts:522).
+      // current StepNode union.
       if (visit(node.children)) return true;
     }
     return false;

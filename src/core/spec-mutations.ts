@@ -10,7 +10,6 @@
 
 import type {
   CipherSpec,
-  FeistelRoundGroup,
   ForEachSubgraphNode,
   ForEachSubgraphWithHistoryNode,
   IterateGroup,
@@ -36,11 +35,6 @@ export const findStep = (spec: CipherSpec, stepId: string): StepLeaf | null => {
     for (const node of nodes) {
       if (node.kind === "step") {
         if (node.id === stepId) return node;
-      } else if (node.kind === "feistel-round") {
-        for (const track of node.tracks) {
-          const found = visit(track.children);
-          if (found) return found;
-        }
       } else {
         const found = visit(node.children);
         if (found) return found;
@@ -71,20 +65,6 @@ export const updateStepParams = (spec: CipherSpec, stepId: string, params: Json)
         if (node.id !== stepId) return node;
         changed = true;
         return { ...node, params };
-      }
-      if (node.kind === "feistel-round") {
-        // Descend into each track's children, rebuilding only tracks that
-        // contain the targeted leaf. Reference-equality preserved on
-        // untouched tracks AND on the round itself when no track changes.
-        let trackChanged = false;
-        const newTracks = node.tracks.map((track) => {
-          const updated = visit(track.children);
-          if (updated === track.children) return track;
-          trackChanged = true;
-          return { ...track, children: updated };
-        });
-        if (!trackChanged) return node;
-        return { ...node, tracks: newTracks };
       }
       const newChildren = visit(node.children);
       // If nothing changed inside this group, return the original group
@@ -126,17 +106,6 @@ export const updateAllStepsByType = (
         if (newParams === node.params) return node;
         changed = true;
         return { ...node, params: newParams };
-      }
-      if (node.kind === "feistel-round") {
-        let trackChanged = false;
-        const newTracks = node.tracks.map((track) => {
-          const updated = visit(track.children);
-          if (updated === track.children) return track;
-          trackChanged = true;
-          return { ...track, children: updated };
-        });
-        if (!trackChanged) return node;
-        return { ...node, tracks: newTracks };
       }
       const newChildren = visit(node.children);
       if (newChildren === node.children) return node;
@@ -436,11 +405,9 @@ export const compareSpecs = (a: CipherSpec, b: CipherSpec): readonly SpecParamDi
         visit(x.children, y.children);
       } else if (x.kind === "iterate" && y.kind === "iterate") {
         // Mirror the group branch — recurse into iterate bodies so any
-        // param edits inside an iterate body show up in the diff. (The
-        // pre-feistel union narrowed `x.kind === y.kind` to "group" only,
-        // implicitly skipping iterates; with feistel-round now in the
-        // union we explicitly enumerate to keep TS happy AND preserve the
-        // descent semantics across all container kinds.)
+        // param edits inside an iterate body show up in the diff. We
+        // explicitly enumerate each container kind to keep TS happy AND
+        // preserve the descent semantics across all of them.
         visit(x.children, y.children);
       } else if (x.kind === "for-each-subgraph" && y.kind === "for-each-subgraph") {
         // Same rationale as the iterate branch — descend into bodies so
@@ -455,22 +422,6 @@ export const compareSpecs = (a: CipherSpec, b: CipherSpec): readonly SpecParamDi
         // surface via the structural-change path (kind matches but the
         // offset arrays differ); body param edits surface via the recursion.
         visit(x.children, y.children);
-      } else if (x.kind === "feistel-round" && y.kind === "feistel-round") {
-        // Per-track recursion. Track count mismatch is already flagged
-        // above as a `(structure)` change via the `x.kind !== y.kind`
-        // guard (kind is the same here, but a future kind-tag bump would
-        // catch it). For now, recurse into the min of the two track
-        // counts; a Phase-3 cipher swap that adds tracks would surface
-        // as an `(unequal tracks)` change.
-        const trackLen = Math.min(x.tracks.length, y.tracks.length);
-        for (let ti = 0; ti < trackLen; ti++) {
-          const xt = x.tracks[ti];
-          const yt = y.tracks[ti];
-          if (xt && yt) visit(xt.children, yt.children);
-        }
-        if (x.tracks.length !== y.tracks.length) {
-          changes.push({ stepId: x.id, paramName: "(tracks added/removed)" });
-        }
       }
     }
     if (na.length !== nb.length) {
@@ -498,18 +449,10 @@ export const compareSpecs = (a: CipherSpec, b: CipherSpec): readonly SpecParamDi
 
 /**
  * Structural neighborhood of a node in the spec tree.
- *  - `node` is the matched node itself (leaf, group, iterate, or
- *    feistel-round).
+ *  - `node` is the matched node itself (leaf, group, or iterate).
  *  - `parent` is the container holding it, or `null` when the node
- *    lives at the top level of `spec.steps`. Can be a `StepGroup`,
- *    `IterateGroup`, or a `FeistelRoundGroup` (the latter when the
- *    node was matched inside a Feistel track — DES Phase 6d-ii).
+ *    lives at the top level of `spec.steps`.
  *  - `indexInParent` is the node's position in its sibling array.
- *    For Feistel parents, this is the index inside the matched
- *    track's `children`.
- *  - `trackIdx` is set IFF `parent` is a `FeistelRoundGroup`; tells
- *    the caller which `parent.tracks[trackIdx]` the matched node
- *    lives in. Always omitted for other parent kinds.
  *
  * Unlike `findStep` (leaves-only), this returns ANY node kind so the
  * visual editor can anchor inserts to groups too (e.g. "drop this new step
@@ -520,28 +463,17 @@ export type StepLocation = {
   readonly parent:
     | StepGroup
     | IterateGroup
-    | FeistelRoundGroup
     | ForEachSubgraphNode
     | ForEachSubgraphWithHistoryNode
     | null;
   readonly indexInParent: number;
-  /** Set iff `parent` is a `FeistelRoundGroup`. */
-  readonly trackIdx?: number;
 };
 
 /**
- * Find a node (leaf OR group OR iterate OR feistel-round) by id and
- * return its structural neighborhood. Depth-first; returns null on no
- * match. Ids are assumed unique within a spec — if duplicates exist the
- * first match in DFS order wins (mirrors `findStep`).
- *
- * Feistel-round descent (Phase 6d-ii): the walker recurses through
- * each track's `children` array. A leaf inside an L or R track gets a
- * `StepLocation` whose `parent` is the round itself + `trackIdx`
- * naming which track. Tracks are visited in declaration order, so for
- * DES the L track is searched before the R track (the L track is
- * always empty in canonical DES, so in practice every track-resident
- * match comes from R).
+ * Find a node (leaf OR group OR iterate) by id and return its structural
+ * neighborhood. Depth-first; returns null on no match. Ids are assumed
+ * unique within a spec — if duplicates exist the first match in DFS order
+ * wins (mirrors `findStep`).
  */
 export const findStepAndParent = (spec: CipherSpec, stepId: string): StepLocation | null => {
   const visit = (
@@ -553,38 +485,6 @@ export const findStepAndParent = (spec: CipherSpec, stepId: string): StepLocatio
       if (!node) continue;
       if (node.id === stepId) return { node, parent, indexInParent: i };
       if (node.kind === "step") continue;
-      if (node.kind === "feistel-round") {
-        // Search each track's children. The track itself isn't a
-        // structural parent in the data model (it's a record-shaped
-        // anonymous container with `inputBytes` + `children`), so
-        // we report the round as the parent and surface track
-        // membership via `trackIdx`.
-        for (let t = 0; t < node.tracks.length; t++) {
-          const track = node.tracks[t];
-          if (!track) continue;
-          for (let j = 0; j < track.children.length; j++) {
-            const child = track.children[j];
-            if (!child) continue;
-            if (child.id === stepId) {
-              return { node: child, parent: node, indexInParent: j, trackIdx: t };
-            }
-            // Recurse into a nested container inside the track body
-            // (a `group` or `iterate` inside a track is permitted by
-            // the data model). The recursion's parent slot stays
-            // group/iterate, NOT the round — only the direct match
-            // case above attributes a Feistel parent.
-            if (child.kind === "step") continue;
-            if (child.kind === "feistel-round") {
-              const nested = visit([child], null);
-              if (nested) return nested;
-              continue;
-            }
-            const nested = visit(child.children, child);
-            if (nested) return nested;
-          }
-        }
-        continue;
-      }
       const found = visit(node.children, node);
       if (found) return found;
     }
@@ -620,33 +520,11 @@ const transformParentArray = (
       found = true;
       return transform(nodes, idx);
     }
-    // Otherwise recurse into groups/iterates/feistel-rounds, threading
-    // found-state so we don't accidentally re-visit if the user's spec
-    // has an id collision.
+    // Otherwise recurse into groups/iterates, threading found-state so we
+    // don't accidentally re-visit if the user's spec has an id collision.
     let mutated = false;
     const newChildren = nodes.map((n) => {
       if (n.kind === "step" || found) return n;
-      // Feistel-round descent (DES Phase 6d, 2026-05-20). Each track's
-      // `children` array is its own splice site; the walker tries each
-      // track in turn and rebuilds only the affected track + the round
-      // node when a track changes. Untouched tracks must keep their
-      // original references — the spec store's debounced
-      // `createEffect(on(spec, ...))` triggers on any reference change
-      // in the tree, so a flat `tracks.map(t => ({ ...t, children: visit(...) }))`
-      // would spuriously re-run the trace on every track edit.
-      if (n.kind === "feistel-round") {
-        let trackMutated = false;
-        const newTracks = n.tracks.map((track) => {
-          if (found) return track;
-          const updatedTrackChildren = visit(track.children);
-          if (updatedTrackChildren === track.children) return track;
-          trackMutated = true;
-          return { ...track, children: updatedTrackChildren };
-        });
-        if (!trackMutated) return n;
-        mutated = true;
-        return { ...n, tracks: newTracks };
-      }
       const updatedChildren = visit(n.children);
       if (updatedChildren === n.children) return n;
       mutated = true;
@@ -741,22 +619,11 @@ export const prependChildToContainer = (
           leafCollision = true;
           return n;
         }
-        if (n.kind === "feistel-round") {
-          // A feistel-round IS a container, but it has no unambiguous
-          // "default body" — the caller must pick a track. Routing to
-          // the new `prependChildToTrack(spec, roundId, trackIdx, ...)`
-          // primitive is the correct entry point. Throw with a
-          // pointer rather than silently doing nothing.
-          throw new Error(
-            `prependChildToContainer: id "${containerId}" is a feistel-round; use prependChildToTrack(spec, roundId, trackIdx, newStep) to target a specific track`,
-          );
-        }
         found = true;
         mutated = true;
         return { ...n, children: [newStep, ...n.children] };
       }
       if (n.kind === "step") return n;
-      if (n.kind === "feistel-round") return n;
       const updated = visit(n.children);
       if (updated === n.children) return n;
       mutated = true;
@@ -773,97 +640,6 @@ export const prependChildToContainer = (
   }
   if (!found) {
     throw new Error(`prependChildToContainer: no node with id "${containerId}"`);
-  }
-  return { ...spec, steps: newSteps };
-};
-
-/**
- * Prepend `newStep` as the first child of the named track inside a
- * `feistel-round` (DES Phase 6d-iii). Sibling to
- * `prependChildToContainer` — the visual editor's
- * `into-track-start` drop semantic needs an at-position-0 mutator for
- * Feistel tracks the same way the group/iterate case needs one for
- * empty containers. The empty-L-track case in DES is the headline
- * example: dropping a palette step into the L column needs an entry
- * point that doesn't require an existing chip to anchor against.
- *
- * Throws on:
- *   - id not found in spec
- *   - id resolves to a non-feistel-round node
- *   - trackIdx is out of `tracks[]` range (negative or ≥ length)
- *
- * Reference-equality discipline: only the targeted track's `children`
- * array + the round itself are cloned. Sibling tracks AND every node
- * outside the touched round retain their original references — same
- * spec-store-debounce safety net as the rest of the structural
- * mutators (see `transformParentArray`'s 6d-i clone discipline).
- */
-export const prependChildToTrack = (
-  spec: CipherSpec,
-  roundId: string,
-  trackIdx: number,
-  newStep: StepNode,
-): CipherSpec => {
-  let found = false;
-  let nonFeistelMatch = false;
-  let trackOutOfRange = false;
-
-  const visit = (nodes: readonly StepNode[]): readonly StepNode[] => {
-    let mutated = false;
-    const next = nodes.map((n) => {
-      if (found || nonFeistelMatch || trackOutOfRange) return n;
-      if (n.id === roundId) {
-        if (n.kind !== "feistel-round") {
-          // The caller asked to prepend to a track inside a non-feistel
-          // node. Flag and let the outer code throw with a precise
-          // pointer to the right primitive — silently no-op'ing would
-          // mask a real wiring bug.
-          nonFeistelMatch = true;
-          return n;
-        }
-        if (trackIdx < 0 || trackIdx >= n.tracks.length) {
-          trackOutOfRange = true;
-          return n;
-        }
-        found = true;
-        mutated = true;
-        // Clone only the affected track; sibling tracks keep their
-        // object references unchanged.
-        const newTracks = n.tracks.map((t, i) =>
-          i === trackIdx ? { ...t, children: [newStep, ...t.children] } : t,
-        );
-        return { ...n, tracks: newTracks };
-      }
-      if (n.kind === "step") return n;
-      if (n.kind === "feistel-round") {
-        // The target round wasn't this one. Don't descend into this
-        // round's tracks looking for a NESTED feistel-round with the
-        // requested id — no shipped or planned cipher has Feistel-
-        // inside-Feistel, and the cost of searching is needless when
-        // every shipped roundId is unique at the spec's top scopes.
-        return n;
-      }
-      const updated = visit(n.children);
-      if (updated === n.children) return n;
-      mutated = true;
-      return { ...n, children: updated };
-    });
-    return mutated ? next : nodes;
-  };
-
-  const newSteps = visit(spec.steps);
-  if (nonFeistelMatch) {
-    throw new Error(
-      `prependChildToTrack: id "${roundId}" is not a feistel-round; use prependChildToContainer or insertStepAfter/Before instead`,
-    );
-  }
-  if (trackOutOfRange) {
-    throw new Error(
-      `prependChildToTrack: trackIdx ${trackIdx} out of range for round "${roundId}"`,
-    );
-  }
-  if (!found) {
-    throw new Error(`prependChildToTrack: no node with id "${roundId}"`);
   }
   return { ...spec, steps: newSteps };
 };
@@ -1251,22 +1027,9 @@ export const duplicateRoundGroup = (
       `duplicateRoundGroup: source "${sourceId}" must be a group, got ${loc.node.kind}`,
     );
   }
-  // Defensive: rejected as impossible by today's shipped specs (AES
-  // rounds live at top level or inside an iterate; DES rounds are
-  // feistel-round, not group). A `round.N` group somehow living inside
-  // a Feistel track would imply a future spec shape we haven't
-  // designed semantics for — bail loudly so the surprise is obvious
-  // instead of silently corrupting the spec via the AES-shaped
-  // renumber walk below.
-  if (loc.parent?.kind === "feistel-round") {
-    throw new Error(
-      `duplicateRoundGroup: source "${sourceId}" lives inside a Feistel track; duplicate-round on Feistel isn't supported (key schedule is global, not per-round-indexed)`,
-    );
-  }
-  // Defensive: same rationale as the Feistel guard above. The
-  // duplicate-round affordance is shaped around AES's per-round-indexed
-  // schedule + the renumber walk's assumption that every relevant child
-  // is a group/iterate/leaf. For-each-subgraph (Slice 2.0a) iterates a
+  // Defensive: the duplicate-round affordance is shaped around AES's
+  // per-round-indexed schedule + the renumber walk's assumption that every
+  // relevant child is a group/iterate/leaf. For-each-subgraph (Slice 2.0a) iterates a
   // body with `:r{i}` indexing — duplicate-round semantics on its
   // children would mean per-iteration content shifts, which isn't a
   // designed operation. Bail loudly until a motivating feature lands.
@@ -1457,15 +1220,6 @@ const replaceParentChildrenByRef = (
         return { ...n, children: newChildren };
       }
       if (n.kind === "step") return n;
-      // AES-only path: `duplicateRoundGroup` (the only caller of this
-      // helper) never targets a parent inside a feistel-round.
-      // Duplicate-round semantics on Feistel aren't designed (DES's
-      // key schedule is global, not per-round-indexed like AES); the
-      // affordance isn't surfaced for DES. So this branch stays
-      // opaque even after 6d-i widened the rest of the structural
-      // mutators with track descent — touching it without a
-      // motivating feature would be premature.
-      if (n.kind === "feistel-round") return n;
       const next = visit(n.children);
       if (next === n.children) return n;
       return { ...n, children: next };
@@ -1610,15 +1364,7 @@ const rewriteAllPortInputs = (
   // narrowing). Then rewrite the node's own portInputs.
   const rewriteNode = (n: StepNode): StepNode => {
     let withChildren: StepNode = n;
-    if (n.kind === "feistel-round") {
-      const newTracks = n.tracks.map((t) => {
-        const nc = visit(t.children);
-        return nc === t.children ? t : { ...t, children: nc };
-      });
-      if (newTracks.some((t, i) => t !== n.tracks[i])) {
-        withChildren = { ...n, tracks: newTracks };
-      }
-    } else if (n.kind !== "step") {
+    if (n.kind !== "step") {
       // group / iterate / for-each-subgraph / for-each-subgraph-with-history
       const nc = visit(n.children);
       if (nc !== n.children) withChildren = { ...n, children: nc };
@@ -1630,14 +1376,8 @@ const rewriteAllPortInputs = (
         : withChildren;
     // Container `seedInput` is the OTHER place a `$input` reference can live
     // (the byte-native ECB iterate reads `$input` there, not via portInputs —
-    // Slice B1.4). Only looping containers + `group` carry it; `step` /
-    // `feistel-round` don't. Round-group seedInputs point at sibling rounds,
-    // never `$input`, so the pad repoint/restore is identity for them.
-    if (
-      result.kind !== "step" &&
-      result.kind !== "feistel-round" &&
-      result.seedInput !== undefined
-    ) {
+    // Slice B1.4). Only looping containers + `group` carry it; `step` doesn't.
+    if (result.kind !== "step" && result.seedInput !== undefined) {
       const ns = rewriteBinding(result.seedInput);
       if (ns !== result.seedInput) result = { ...result, seedInput: ns };
     }

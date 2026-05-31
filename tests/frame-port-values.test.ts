@@ -29,25 +29,12 @@
 
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
-import { FEISTEL_TOY_KAT, FEISTEL_TOY_SPEC } from "@/ciphers/feistel-toy";
 import { buildSha256Spec } from "@/ciphers/sha-256";
 import { framePortBytes } from "@/core/port-projection";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { TraceFrame } from "@/core/types";
 import { describe, expect, it } from "vitest";
-
-// Durable lifted-legacy carrier. The negative + legacy-path tests below need
-// a `kind: "ported"` step that ALSO carries a `legacy` executor (so the
-// runtime can dispatch it under either path) — i.e. a lifted-legacy step.
-// `generic.byte-substitution@1` was the carrier through Phase B, but it
-// retired with the MatrixState shape in Phase 5 Slice 5.1 (2026-05-30).
-// `feistel.toy-add-k@1` is now the maximally durable carrier: it's reserved
-// to STAY lifted-legacy through Phase 5 (it's the toy fixture for the future
-// port-native Feistel/swap viz rebuild), so it outlives the Slice 5.2
-// conversions that turn the key-schedules + padding into true PortedExecutors.
-const TOY_INPUT = makeBytesState(new Uint8Array(FEISTEL_TOY_KAT.plaintext));
-const TOY_STEP_TYPE = "feistel.toy-add-k@1";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -140,24 +127,12 @@ describe("TraceFrame port-fields — pure port-native (SHA-256 add-mod-32@1)", (
   });
 });
 
-// ─── Negative: lifted-legacy ported frame leaves port fields undefined ────
+// ─── Port-field capture on a meta-bearing port-native frame ───────────────
+// (The lifted-legacy negative case — the Feistel toy's frames leaving port
+// fields undefined — was retired in Phase 5 Slice 5.3e with the toy, the
+// last `legacy`-bearing ported step. No lifted-legacy step remains.)
 
-describe("TraceFrame port-fields — lifted-legacy ported (Feistel toy-add-k)", () => {
-  it("lifted-legacy toy-add-k frame under portedDispatchEnabled:true has portInputs and portOutputs both undefined", () => {
-    // Run the lifted-legacy carrier under the ported path.
-    const trace = runSpec(FEISTEL_TOY_SPEC, buildDefaultRegistry(), {
-      initialState: TOY_INPUT,
-      portedDispatchEnabled: true,
-    });
-
-    // Lifted-legacy: `kind: "ported"` with `legacy` defined. The runtime
-    // executes through the ported path, but Slice 2.9a's gate
-    // (`legacy === undefined`) skips port-field capture.
-    const toy = findFrameByStepType(trace.frames, TOY_STEP_TYPE);
-    expect(toy.portInputs).toBeUndefined();
-    expect(toy.portOutputs).toBeUndefined();
-  });
-
+describe("TraceFrame port-fields — meta-bearing port-native (AES key-expansion)", () => {
   it("AES key-expansion frame (port-native since Slice 5.2) carries portInputs + portOutputs", () => {
     const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex("00112233445566778899aabbccddeeff")),
@@ -181,20 +156,11 @@ describe("TraceFrame port-fields — lifted-legacy ported (Feistel toy-add-k)", 
   });
 });
 
-// ─── Legacy path: flag-off leaves port fields undefined everywhere ────────
-
-describe("TraceFrame port-fields — legacy dispatch path", () => {
-  it("portedDispatchEnabled:false (default) leaves port fields undefined on every frame", () => {
-    const trace = runSpec(FEISTEL_TOY_SPEC, buildDefaultRegistry(), {
-      initialState: TOY_INPUT,
-      // portedDispatchEnabled omitted — default false.
-    });
-    for (const f of trace.frames) {
-      expect(f.portInputs, `frame ${f.index} (${f.stepType})`).toBeUndefined();
-      expect(f.portOutputs, `frame ${f.index} (${f.stepType})`).toBeUndefined();
-    }
-  });
-});
+// (The "legacy dispatch path leaves port fields undefined" describe was
+// retired in Phase 5 Slice 5.3e: it ran the Feistel toy under
+// `portedDispatchEnabled:false`, but no `legacy`-bearing step survives — and
+// every shipped port-native step THROWS under flag-off, so there is nothing
+// left to exercise the legacy path with.)
 
 // ─── framePortBytes helper ────────────────────────────────────────────────
 
@@ -235,14 +201,5 @@ describe("framePortBytes helper", () => {
     expect(framePortBytes(t1, "output", "input")).toBeNull();
     expect(framePortBytes(t1, "operand0", "output")).toBeNull();
     expect(framePortBytes(t1, "no-such-port", "input")).toBeNull();
-  });
-
-  it("returns null for a legacy-path frame (port fields undefined)", () => {
-    const trace = runSpec(FEISTEL_TOY_SPEC, buildDefaultRegistry(), {
-      initialState: TOY_INPUT,
-    });
-    const toy = findFrameByStepType(trace.frames, TOY_STEP_TYPE);
-    expect(framePortBytes(toy, "state", "input")).toBeNull();
-    expect(framePortBytes(toy, "state", "output")).toBeNull();
   });
 });

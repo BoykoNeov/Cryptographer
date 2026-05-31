@@ -26,6 +26,7 @@
 
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { desSpec } from "@/ciphers/des";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue } from "@/core/types";
@@ -352,10 +353,10 @@ describe("GraphView — container drag (Slice 6)", () => {
     expect(getX("round.7")).toBe(beforeR7X);
   });
 
-  // Phase 6e regression — nested feistel-round drag inside the DES
-  // `Rounds` group. Two related bugs surfaced in the manual smoke:
+  // Phase 6e regression — nested round-group drag inside the DES `rounds`
+  // group. Two related bugs surfaced in the manual smoke:
   //   H(ii) — dragging round.5 up shifted round.6..16 up along with it.
-  //   H(i)  — round.5 could be dragged out of the `Rounds` container
+  //   H(i)  — round.5 could be dragged out of the `rounds` container
   //           entirely (escape).
   // The fix lives in `GraphView.tsx`:
   //   - Group child layout now captures `naturalY` BEFORE the child
@@ -363,16 +364,14 @@ describe("GraphView — container drag (Slice 6)", () => {
   //     STACK_GAP` (mirroring the root-level pattern at layoutRoot).
   //   - `startNodeDrag`'s absolute-mode `onMove` clamps newX/newY to
   //     the parent container's interior bounds when a parent is found.
-  // The two tests below pin both fixes.
-  it("dragging a nested feistel-round inside a group does NOT shift its unpinned siblings' rendered Y", async () => {
+  // The two tests below pin both fixes. Vehicle: the shipped port-native
+  // DES spec (a `rounds` group of 16 `round.N` groups stacked vertically) —
+  // the same nesting that originally exposed both bugs. (Pre-5.3e these used
+  // a synthetic `feistel-round` fixture.)
+  it("dragging a nested round group does NOT shift its unpinned siblings' rendered Y", async () => {
     const { __setSpecForTests } = await import("@/ui/stores/spec");
-    const { buildSyntheticFeistelSpec } = await import("./fixtures/synthetic-feistel-rounds");
-
-    // B4 (universal-port Phase 4d): the port-native DES no longer uses
-    // `feistel-round`. The synthetic Feistel fixture reproduces the exact
-    // nesting that exposed H(ii) — a `Rounds` group of 16 feistel-round
-    // children stacked vertically. Layout/drag is structural; no trace needed.
-    __setSpecForTests(buildSyntheticFeistelSpec(16));
+    // Layout/drag is structural; no trace needed.
+    __setSpecForTests(desSpec);
 
     const { container } = render(() => <GraphView />);
     const specId = useSpec()().id;
@@ -410,13 +409,11 @@ describe("GraphView — container drag (Slice 6)", () => {
     expect(getRoundY("round.7")).toBe(beforeR7Y);
   });
 
-  it("dragging a nested feistel-round can NOT escape the parent container's interior bounds", async () => {
+  it("dragging a nested round group can NOT escape the parent container's interior bounds", async () => {
     const { __setSpecForTests } = await import("@/ui/stores/spec");
-    const { buildSyntheticFeistelSpec } = await import("./fixtures/synthetic-feistel-rounds");
-
-    // B4: synthetic Feistel fixture reproduces the `Rounds` group of 16
-    // feistel-rounds that exposed H(i) (escape past the parent's bounds).
-    __setSpecForTests(buildSyntheticFeistelSpec(16));
+    // DES's `rounds` group of 16 `round.N` groups reproduces the nesting
+    // that exposed H(i) (escape past the parent's bounds).
+    __setSpecForTests(desSpec);
 
     const { container } = render(() => <GraphView />);
     const specId = useSpec()().id;

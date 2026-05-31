@@ -36,7 +36,6 @@
  * intercepting. The badges are purely informational.
  */
 
-import { REJOIN_STEP_TYPE } from "@/core/combine-kinds";
 import { COERCE_STEP_TYPE } from "@/core/port-projection";
 import type { TraceFrame } from "@/core/types";
 import { For, Show, createMemo } from "solid-js";
@@ -51,7 +50,7 @@ type Badge = {
   readonly index: number;
   readonly positionPercent: number;
   readonly glyph: string;
-  readonly kind: "track" | "rejoin" | "coerce";
+  readonly kind: "coerce";
 };
 
 const computeBadges = (frames: readonly TraceFrame[]): Badge[] => {
@@ -61,25 +60,10 @@ const computeBadges = (frames: readonly TraceFrame[]): Badge[] => {
   for (let i = 0; i < frames.length; i++) {
     const f = frames[i];
     if (!f) continue;
-    // Rejoin synthetic frames get the ⇄ glyph regardless of
-    // branchPath state (today the runtime drops branchPath on the
-    // rejoin frame; defensive in case that changes).
-    if (f.stepType === REJOIN_STEP_TYPE) {
-      out.push({
-        index: i,
-        positionPercent: (i / maxIdx) * 100,
-        glyph: "⇄",
-        kind: "rejoin",
-      });
-      continue;
-    }
     // Coercion synthetic frames get the ⚠ glyph. Emitted by the
     // ported-dispatch runtime when an input port's source bytes don't
     // match its declared byteLength (Slice 1.12 of the universal-port
-    // plan). branchPath may or may not be set depending on whether the
-    // mismatched leaf is inside a Feistel/iterate body; the check on
-    // stepType comes first so we surface coercion uniformly across
-    // those scopes.
+    // plan).
     if (f.stepType === COERCE_STEP_TYPE) {
       out.push({
         index: i,
@@ -87,25 +71,6 @@ const computeBadges = (frames: readonly TraceFrame[]): Badge[] => {
         glyph: "⚠",
         kind: "coerce",
       });
-      continue;
-    }
-    const branchPath = f.branchPath;
-    if (branchPath && branchPath.length > 0) {
-      // Use the innermost track name (last entry). For DES this is
-      // always "R" (L track is empty passthrough). For future ciphers
-      // both tracks may show up in the strip.
-      const trackName = branchPath[branchPath.length - 1];
-      if (trackName !== undefined) {
-        // Short label: single character for one-letter track names,
-        // first character otherwise. Keeps the strip visually quiet
-        // when names get longer (e.g. "left" → "l").
-        out.push({
-          index: i,
-          positionPercent: (i / maxIdx) * 100,
-          glyph: trackName.length === 1 ? trackName : trackName.charAt(0).toLowerCase(),
-          kind: "track",
-        });
-      }
     }
   }
   return out;
@@ -153,18 +118,10 @@ export const TraceTimeline = () => {
                       <span
                         class="trace-timeline-badge"
                         classList={{
-                          "trace-timeline-badge-track": badge.kind === "track",
-                          "trace-timeline-badge-rejoin": badge.kind === "rejoin",
                           "trace-timeline-badge-coerce": badge.kind === "coerce",
                         }}
                         style={{ left: `${badge.positionPercent}%` }}
-                        title={`frame ${badge.index + 1}: ${
-                          badge.kind === "rejoin"
-                            ? "rejoin"
-                            : badge.kind === "coerce"
-                              ? "coerce (port byteLength mismatch)"
-                              : `track ${badge.glyph.toUpperCase()}`
-                        }`}
+                        title={`frame ${badge.index + 1}: coerce (port byteLength mismatch)`}
                       >
                         {badge.glyph}
                       </span>

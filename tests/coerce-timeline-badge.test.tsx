@@ -30,7 +30,6 @@
  * narration-registry contract. This file's scope is timeline surfacing.
  */
 
-import { liftLegacyExecutor } from "@/core/port-projection";
 import { StepRegistry } from "@/core/registry";
 import { runSpec } from "@/core/runtime";
 import { makeBytesState } from "@/core/state/bytes";
@@ -38,9 +37,9 @@ import type {
   AuxValue,
   CipherSpec,
   PortContract,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "@/core/types";
 import { TraceTimeline } from "@/ui/components/TraceTimeline";
 import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
@@ -48,8 +47,11 @@ import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 // ─── Fixture infrastructure (mirrors runtime-ported-dispatch-coercion.test) ──
+// Hybrid-ported (meta present, no `legacy`) aux-only no-op: coercion fires on
+// its declared input ports regardless of `legacy`. (Pre-5.3e this used the
+// lifted-legacy carrier via `liftLegacyExecutor`.)
 
-const passthroughExecutor: StepExecutor = (state) => ({ state });
+const passthroughExecutor: PortedExecutor = () => new Map();
 
 const passthroughDoc: StepDocumentation = {
   name: "Coercion timeline fixture",
@@ -70,14 +72,12 @@ const buildCoerceRegistry = (
     stateLayout: "bytes",
     auxReadPorts: () => auxReadBindings,
   };
-  const portedExecutor = liftLegacyExecutor(passthroughExecutor, meta);
   registry.register("test.coerce-timeline-fixture@1", {
     kind: "ported",
-    executor: portedExecutor,
+    executor: passthroughExecutor,
     shape,
     meta,
     doc: passthroughDoc,
-    legacy: passthroughExecutor,
   });
   return registry;
 };

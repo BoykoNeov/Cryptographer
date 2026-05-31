@@ -84,8 +84,6 @@ export const ParamEditor = (props: Props) => {
       for (const node of nodes) {
         if (node.kind === "step") {
           if (node.type === s.type) count++;
-        } else if (node.kind === "feistel-round") {
-          for (const track of node.tracks) visit(track.children);
         } else {
           visit(node.children);
         }

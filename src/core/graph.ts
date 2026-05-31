@@ -72,15 +72,7 @@
 
 import type { StepRegistry } from "./registry";
 import { canonicalStepId } from "./step-id";
-import type {
-  CipherSpec,
-  FeistelRoundGroup,
-  IterateGroup,
-  PortBinding,
-  StateShape,
-  StepNode,
-  Trace,
-} from "./types";
+import type { CipherSpec, IterateGroup, PortBinding, StateShape, StepNode, Trace } from "./types";
 import { INPUT_SOURCE_ID } from "./types";
 
 // ─── Public types ─────────────────────────────────────────────────────────
@@ -141,37 +133,6 @@ export type GraphNode = {
    */
   readonly blockChipOf?: string;
   /**
-   * Synthetic-node marker for `feistel-round` containers (Phase 2 +
-   * Phase 6b-ii of the DES + branching primitive plan).
-   *
-   *   - `"rejoin"` — combine-step chip at the round's bottom/right
-   *     edge. Frame: yes (runtime emits one with the 4-arg snapshots
-   *     in params). StepId: `{roundId}:rejoin`. Click scrubs to the
-   *     rejoin frame + opens the 4-arg inspector.
-   *   - `"passthrough"` — per-track stand-in for an EMPTY track
-   *     (Phase 6b-ii). Frame: no — the passthrough is the identity
-   *     (`L_in === L_out`); emitting a frame would carry zero new
-   *     information at ×16 cost per DES run. StepId:
-   *     `{roundId}:passthrough-{trackIdx}` (trackIdx, not name, so
-   *     N-way Feistel scales cleanly; `feistelTrackNames[trackIdx]`
-   *     supplies the human label). Click scrubs to the round's
-   *     rejoin frame (the nearest semantic anchor) + opens the
-   *     inspector. **Why id-bearing instead of pure-visual** (user
-   *     pick 2026-05-20): Phase 6d's per-track drop gutters get a
-   *     natural anchor, the chip is hoverable/clickable for
-   *     provenance like any other leaf, and the L track IS a real
-   *     algorithmic step (it carries `L_in` through the round).
-   *
-   * Why a separate discriminator (analogous to `endpointSide` and
-   * `blockChipOf`): synthetic chips render differently (no
-   * `data-drop-anchor`, no DeleteGlyph, no drag, no warnings overlay),
-   * is not click-deletable, click-routing dispatches off the marker.
-   * Widening from `"rejoin"` to `"rejoin" | "passthrough"` in Phase
-   * 6b-ii — audit `synthetic === "rejoin"` checks before adding
-   * passthrough-specific behavior.
-   */
-  readonly synthetic?: "rejoin" | "passthrough";
-  /**
    * Spine-replica marker (replica-scope-aware-layout fix, 2026-05-17).
    * Set ONLY on the (source, spineSuccessor) replica produced by
    * `replicateHighFanoutSources` — i.e. the single replica per
@@ -216,12 +177,6 @@ export type ContainerNode = {
    *   - `"iterate"` — multi-block replicator (ECB/CBC iterate). Spine
    *     terminates at the boundary; per-iteration body chain emitted
    *     separately. Aux-mediated handoff via `blocksFromAux` / `outBlocksAux`.
-   *   - `"feistel"` — Feistel branching primitive. The single `childIds`
-   *     list combines the round's direct children: each track's first
-   *     child appears (in track order), interleaved as the renderer will
-   *     stack them. Track membership is preserved by `feistelTracks` below.
-   *     Spine fans into N edges (one per track first leaf); rejoin
-   *     synthetic node is `{id}:rejoin` and exits the spine forward.
    *   - `"for-each-subgraph"` — port-native iteration primitive (Slice 2.0a
    *     of `docs/plans/universal-port-phase-2-slices.md`). State threads
    *     across iterations (unlike `"iterate"`, which clobbers state from
@@ -244,12 +199,7 @@ export type ContainerNode = {
    *     `validateGraph` orphan-read warning catches and renders as an
    *     orange dot the user can hover for explanation.
    */
-  readonly kind:
-    | "group"
-    | "iterate"
-    | "feistel"
-    | "for-each-subgraph"
-    | "for-each-subgraph-with-history";
+  readonly kind: "group" | "iterate" | "for-each-subgraph" | "for-each-subgraph-with-history";
   readonly id: string;
   readonly label: string;
   /** Ancestor container ids, root-first (excludes this container itself). */
@@ -258,19 +208,6 @@ export type ContainerNode = {
   readonly childIds: readonly string[];
   /** Iterate's iteration count from the trace (undefined for groups). */
   readonly blockSpan?: number;
-  /**
-   * Per-track child-id lists, set on `kind === "feistel"` containers only.
-   * `feistelTracks[t]` is the ordered list of stepIds/container-ids that
-   * live inside track `t` in spec order. The flat `childIds` (above)
-   * concatenates these for renderer code that doesn't care about tracks
-   * (e.g. drop-anchor numbering). Phase 2 ships 2-track Feistel; a future
-   * 4-way Twofish would set `feistelTracks.length === 4`.
-   */
-  readonly feistelTracks?: readonly (readonly string[])[];
-  /** Per-track `BranchTrack.name` (or stringified index) for renderer use. */
-  readonly feistelTrackNames?: readonly string[];
-  /** `CombineKind` string for `kind === "feistel"` containers; undefined elsewhere. */
-  readonly feistelCombineKind?: string;
 };
 
 /**
@@ -478,34 +415,12 @@ const ENDPOINT_STEP_TYPE = "__endpoint__";
 export const isEndpointId = (id: string): boolean =>
   id === CIPHER_INPUT_ID || id === CIPHER_OUTPUT_ID || id === INPUT_SOURCE_ID;
 
-// ─── Feistel passthrough synthetic (Phase 6b-ii) ───────────────────────
-
-/** Sentinel `stepType` set on synthetic passthrough nodes. Never registered
- *  in the step registry — the renderer dispatches off `synthetic === "passthrough"`
- *  instead. Mirrors `__rejoin__` and `__endpoint__`. */
-const PASSTHROUGH_STEP_TYPE = "__passthrough__";
-
-/**
- * Canonical synthetic id for an empty-track passthrough chip inside a
- * `feistel-round`. Shared by `walkSpec` (which materializes the node into
- * `ctx.nodes` + the per-track child list) and `processFeistelRound`
- * (which routes `predecessor → passthrough → rejoin` edges through it).
- * Centralizing here keeps both producers + edge-emitters agreeing on
- * the spelling — and a future Twofish-style N-way Feistel scales by
- * `trackIdx` (0/1/2/3) rather than re-encoding track names.
- */
-export const feistelPassthroughId = (roundId: string, trackIdx: number): string =>
-  `${roundId}:passthrough-${trackIdx}`;
-
 // ─── Internal helpers ──────────────────────────────────────────────────────
 
 /**
- * Strip the runtime's `:b<digits>` per-iteration suffix from a step id.
- * Phase 2 of the DES + branching primitive plan extended frame stepIds
- * with two more suffix families (`:t{name}` for track membership inside
- * a `feistel-round`, `:rejoin` for synthetic rejoin frames). The full
- * canonicalization lives in `@/core/step-id`; this thin wrapper preserves
- * the local name for the dedup call sites below.
+ * Strip the runtime's per-iteration suffixes (`:b{i}` / `:r{i}`) from a
+ * step id. The full canonicalization lives in `@/core/step-id`; this thin
+ * wrapper preserves the local name for the dedup call sites below.
  */
 const stripBlockSuffix = (stepId: string): string => canonicalStepId(stepId);
 
@@ -514,11 +429,6 @@ type BuildContext = {
   readonly containers: ContainerNode[];
   /** All iterate definitions indexed by id, for the edge-synthesis pass. */
   readonly iteratesById: Map<string, IterateGroup>;
-  /**
-   * All feistel-round definitions indexed by id, for state-spine inference
-   * + rejoin-synthetic placement. Phase 2 addition.
-   */
-  readonly feistelsById: Map<string, FeistelRoundGroup>;
   /** Canonical leaf stepIds indexed for blockSpan annotation. */
   readonly leafIndex: Map<string, number>;
   /** Iterate-container indices, also for blockSpan annotation. */
@@ -559,124 +469,6 @@ const walkSpec = (
         stepType: node.type,
         label: node.id,
         containerPath,
-      });
-      childIds.push(node.id);
-      continue;
-    }
-
-    // feistel-round: own branch — walks per-track children and adds a
-    // synthetic rejoin node inside the container's scope. Track membership
-    // is preserved on the ContainerNode via `feistelTracks`.
-    //
-    // Phase 6b-ii: empty tracks (DES's L track in every round, today) get
-    // a per-track synthetic passthrough node injected into the track's
-    // child list. The passthrough is id-bearing (`{roundId}:passthrough-{trackIdx}`)
-    // so subsequent passes (layout, render, edge-routing) treat it like
-    // any other leaf — `processFeistelRound`'s `predecessor → passthrough
-    // → rejoin` chain replaces the prior `predecessor → rejoin` shortcut,
-    // so the L column's "carries L_in through unchanged" role becomes a
-    // first-class graph entity instead of being implicit in the edge skip.
-    // Passthrough nodes have no trace frame (the identity adds zero info);
-    // the renderer's click handler scrubs to the rejoin frame as the
-    // nearest semantic anchor.
-    if (node.kind === "feistel-round") {
-      const nestedPath = [...containerPath, node.id];
-      const perTrackChildIds: string[][] = [];
-      const flatChildIds: string[] = [];
-      node.tracks.forEach((track, trackIdx) => {
-        const trackChildren = walkSpec(track.children, nestedPath, ctx);
-        if (trackChildren.length === 0) {
-          // Empty track — synthesize a passthrough chip so the L
-          // column reads as "carries L_in through unchanged" instead
-          // of empty space. Layout treats it as a regular leaf in
-          // the column.
-          const ptId = feistelPassthroughId(node.id, trackIdx);
-          ctx.nodes.push({
-            stepId: ptId,
-            stepType: PASSTHROUGH_STEP_TYPE,
-            label: ptId,
-            containerPath: nestedPath,
-            synthetic: "passthrough",
-          });
-          trackChildren.push(ptId);
-        } else if (trackIdx === 1 && node.combineKind === "feistel-standard") {
-          // UX-D candidate (b), 2026-05-22 — populated R-track in a
-          // `feistel-standard` round (DES rounds 1..15) gets a PARALLEL
-          // passthrough chip at the head of the R-column, representing
-          // R_in flowing unchanged to the rejoin alongside the F-stack.
-          // The chip is the visual anchor for the Feistel SWAP
-          // (`new_L = R_in`): a clickable element labelled with R_in's
-          // bytes, two outgoing arrows (one to expand-R / the F-stack,
-          // one directly to rejoin) that show R_in's two destinations.
-          //
-          // Candidate (a) — synthesize an arrow expand-R → rejoin — was
-          // tried first (commit `83502de`) and reverted because the
-          // arrow visually suggested expand-R PRODUCED R_in, whereas
-          // expand-R CONSUMES it (and produces E(R)). The chip moves
-          // the arrow's origin off expand-R, restoring "R_in flows to
-          // rejoin" as the pedagogy without putting it on top of the
-          // wrong node.
-          //
-          // We reuse the empty-track chip's id (`:passthrough-1`) and
-          // synthetic kind. Semantically the chip represents the same
-          // thing in both cases — R_in carried unchanged. The
-          // `lookupPassthroughBytes` regex in edge-value-lookup keys
-          // off `:passthrough-(\d+)` and maps trackIdx 1 → `R_in` from
-          // the rejoin frame's params, so the chip's value lookup
-          // works for free in either case. (No id collision is
-          // possible: only one branch fires per round — empty track
-          // produces the chip via the IF above, populated track
-          // produces it via this ELSE IF.)
-          //
-          // The chip is NOT added to `trackChildren` (and therefore
-          // NOT in the spec walker's view of the R-track), so the
-          // chain edges in `processFeistelRound` still run
-          // predecessor → expand-R → … → p-permute → rejoin
-          // unchanged. The chip's edges are emitted by
-          // `processFeistelRound` separately, gated on the same
-          // (combineKind, R-track populated) condition. We DO
-          // prepend the chip to `perTrackChildIds[1]` so the
-          // renderer lays it out at the top of the R-column;
-          // `feistelTracks[1]` becomes `[chip, expand-R, …]`.
-          const rBypassId = feistelPassthroughId(node.id, 1);
-          ctx.nodes.push({
-            stepId: rBypassId,
-            stepType: PASSTHROUGH_STEP_TYPE,
-            label: rBypassId,
-            containerPath: nestedPath,
-            synthetic: "passthrough",
-          });
-          trackChildren.unshift(rBypassId);
-        }
-        perTrackChildIds.push(trackChildren);
-        flatChildIds.push(...trackChildren);
-      });
-
-      // Rejoin synthetic node — clickable for the 4-arg inspector;
-      // NOT a spec leaf. Lives inside the round container's scope so
-      // collapse/expand pulls it along with the round.
-      const rejoinId = `${node.id}:rejoin`;
-      ctx.nodes.push({
-        stepId: rejoinId,
-        stepType: "__rejoin__",
-        label: rejoinId,
-        containerPath: nestedPath,
-        synthetic: "rejoin",
-      });
-      flatChildIds.push(rejoinId);
-
-      ctx.feistelsById.set(node.id, node);
-      const cIdx = ctx.containers.length;
-      ctx.containerIndex.set(node.id, cIdx);
-      ctx.containers.push({
-        kind: "feistel",
-        id: node.id,
-        label: node.label ?? node.id,
-        containerPath,
-        childIds: flatChildIds,
-        feistelTracks: perTrackChildIds,
-        feistelTrackNames: node.tracks.map((t, i) => t.name ?? String(i)),
-        feistelCombineKind: node.combineKind,
       });
       childIds.push(node.id);
       continue;
@@ -972,14 +764,6 @@ const deriveEdges = (trace: Trace, ctx: BuildContext): GraphEdge[] => {
         for (const child of children) {
           if (child.kind === "step") {
             bodyOrder.set(child.id, nextOrder++);
-          } else if (child.kind === "feistel-round") {
-            // Feistel-round inside an iterate body — assign the round's id
-            // a position, then descend through each track's children so
-            // any leaf within either track gets ordering relative to the
-            // rest of the body (matters when a future track reads /
-            // writes an aux key the body cares about).
-            bodyOrder.set(child.id, nextOrder++);
-            for (const track of child.tracks) walkBody(track.children);
           } else {
             // group or iterate — assign the container id a position too
             // (only iterates surface in the read/write maps via the
@@ -1155,10 +939,6 @@ const inferStateEdges = (spec: CipherSpec, registry?: StepRegistry): GraphEdge[]
           }
           continue;
         }
-        if (node.kind === "feistel-round") {
-          for (const track of node.tracks) collectSkips(track.children);
-          continue;
-        }
         collectSkips(node.children);
       }
     };
@@ -1188,22 +968,11 @@ const inferStateEdges = (spec: CipherSpec, registry?: StepRegistry): GraphEdge[]
   // style iterate with branching state would need an opt-out flag if
   // its spine carries meaningful information across the boundary.
   const iterateIds = new Set<string>();
-  /**
-   * Feistel-round container ids. Used by `emitChain` to suppress any direct
-   * `predecessor → roundId` edge — the spine fans into each track's first
-   * leaf instead, and resumes from `{roundId}:rejoin` onto the round's
-   * successor. (The rejoin synthetic id, not the round id itself, is what
-   * the parent chain sees as the round's "tail.")
-   */
-  const feistelRoundIds = new Set<string>();
   const collectIterates = (nodes: readonly StepNode[]): void => {
     for (const node of nodes) {
       if (node.kind === "iterate") {
         iterateIds.add(node.id);
         collectIterates(node.children);
-      } else if (node.kind === "feistel-round") {
-        feistelRoundIds.add(node.id);
-        for (const track of node.tracks) collectIterates(track.children);
       } else if (node.kind === "group") {
         collectIterates(node.children);
       }
@@ -1222,12 +991,6 @@ const inferStateEdges = (spec: CipherSpec, registry?: StepRegistry): GraphEdge[]
       // no bridging A→C edge, because no spine value actually crosses
       // the iterate boundary either way.
       if (iterateIds.has(from) || iterateIds.has(to)) continue;
-      // Suppress edges TO a feistel-round id — the fan-in to each track's
-      // first leaf is emitted explicitly by `processFeistelRound`. (Edges
-      // FROM a feistel-round id can't arise here because the round
-      // doesn't appear in any flat chain; the rejoin synthetic id takes
-      // its place — see `processScope` below.)
-      if (feistelRoundIds.has(to)) continue;
       // Per-edge S2(f) gate: skip edges to consumers that don't read
       // state via state-thread (pure port-native, or ported leaves with
       // an explicit portInputs override for their state-input port).
@@ -1238,17 +1001,15 @@ const inferStateEdges = (spec: CipherSpec, registry?: StepRegistry): GraphEdge[]
   };
 
   /**
-   * Find the first spine-bearing id in a track's children (or any subtree).
-   * Spine-bearing = a leaf, an iterate id (becomes a boundary marker), a
-   * feistel-round id (treated as round id for fan-in), or an empty group
+   * Find the first spine-bearing id in a subtree. Spine-bearing = a leaf,
+   * an iterate id (becomes a boundary marker), or an empty group
    * (participates as its own id when its subtree is empty). Returns null
-   * for a truly empty children list (e.g. an L track with `children: []`).
+   * for a truly empty children list.
    */
   const firstSpineId = (nodes: readonly StepNode[]): string | null => {
     for (const node of nodes) {
       if (node.kind === "step") return node.id;
       if (node.kind === "iterate") return node.id;
-      if (node.kind === "feistel-round") return node.id;
       if (node.kind === "group") {
         if (hasSpineContent(node.children)) {
           const inner = firstSpineId(node.children);
@@ -1269,7 +1030,7 @@ const inferStateEdges = (spec: CipherSpec, registry?: StepRegistry): GraphEdge[]
     for (const node of nodes) {
       if (node.kind === "step") {
         last = node.id;
-      } else if (node.kind === "iterate" || node.kind === "feistel-round") {
+      } else if (node.kind === "iterate") {
         last = node.id;
       } else if (node.kind === "group") {
         if (hasSpineContent(node.children)) {
@@ -1284,145 +1045,20 @@ const inferStateEdges = (spec: CipherSpec, registry?: StepRegistry): GraphEdge[]
   };
 
   /**
-   * True iff the subtree contains at least one leaf, iterate, or
-   * feistel-round — i.e. anything that would visibly contribute to the
-   * spine if walked. A group is treated as "empty" (eligible to
-   * participate as a spine node via its own id) when this returns false
-   * for its children. Nested empty groups recursively count as empty.
+   * True iff the subtree contains at least one leaf or iterate — i.e.
+   * anything that would visibly contribute to the spine if walked. A group
+   * is treated as "empty" (eligible to participate as a spine node via its
+   * own id) when this returns false for its children. Nested empty groups
+   * recursively count as empty.
    */
   function hasSpineContent(nodes: readonly StepNode[]): boolean {
     for (const node of nodes) {
       if (node.kind === "step") return true;
       if (node.kind === "iterate") return true;
-      if (node.kind === "feistel-round") return true;
       if (hasSpineContent(node.children)) return true;
     }
     return false;
   }
-
-  /**
-   * Process a Feistel round atomically. The parent chain segment ending
-   * at `predecessor` flushes BEFORE this is called; the new chain segment
-   * resumes from `{node.id}:rejoin` AFTER. Edges emitted directly:
-   *
-   *   - For each track with spine content:
-   *       - `predecessor → firstSpineId(track.children)` (fan-in, if predecessor present)
-   *       - The track's internal chain (via a nested `processScope` over
-   *         the track's children).
-   *       - `lastSpineId(track.children) → {node.id}:rejoin` (fan-out)
-   *   - For each empty track (Phase 6b-ii):
-   *       - `predecessor → {node.id}:passthrough-{trackIdx}` (fan-in, if predecessor present)
-   *       - `{node.id}:passthrough-{trackIdx} → {node.id}:rejoin` (fan-out)
-   *
-   * Empty-track passthroughs replace the Phase-6a `predecessor → rejoin`
-   * shortcut — the L column now reads as a real link in the spine instead
-   * of an arrow that visually skips the column entirely. The synthetic
-   * passthrough node itself is materialized by `walkSpec`; this function
-   * only routes the edges. Per-track-id consistency is enforced by both
-   * sites calling `feistelPassthroughId(node.id, trackIdx)`.
-   *
-   * No edge is ever drawn to or from the round's own id — the rejoin
-   * synthetic id replaces the round in the parent chain.
-   */
-  const processFeistelRound = (
-    node: {
-      readonly id: string;
-      readonly tracks: readonly { readonly children: readonly StepNode[] }[];
-      readonly combineKind: string;
-    },
-    predecessor: string | undefined,
-  ): void => {
-    const rejoinId = `${node.id}:rejoin`;
-    const canEdgeFromPredecessor =
-      predecessor !== undefined &&
-      !iterateIds.has(predecessor) &&
-      !feistelRoundIds.has(predecessor);
-    node.tracks.forEach((track, trackIdx) => {
-      const trackFirst = firstSpineId(track.children);
-      const trackLast = lastSpineId(track.children);
-      if (trackFirst === null) {
-        // Empty track — route through the synthetic passthrough chip
-        // `walkSpec` synthesized for this (round, trackIdx) pair. Two
-        // edges: predecessor → passthrough (if predecessor present),
-        // and passthrough → rejoin (always — the chip's outgoing link
-        // is invariant). The chip's identity-of-state semantic is
-        // implicit in the absence of a transform between the two edges.
-        const ptId = feistelPassthroughId(node.id, trackIdx);
-        if (canEdgeFromPredecessor && predecessor !== undefined) {
-          edges.push({ from: predecessor, to: ptId, auxKey: STATE_AUX_KEY, kind: "state" });
-        }
-        edges.push({ from: ptId, to: rejoinId, auxKey: STATE_AUX_KEY, kind: "state" });
-        return;
-      }
-      // UX-D candidate (b), 2026-05-22 — populated R-track in a
-      // `feistel-standard` round (DES rounds 1..15) carries an
-      // R-bypass passthrough chip at the head of the column. The chip
-      // is materialized in `walkSpec` and prepended to
-      // `perTrackChildIds[1]` for layout, but it's NOT in
-      // `track.children` (the spec). We splice it into the chain here
-      // so the user sees:
-      //
-      //   predecessor → chip → trackFirst (= expand-R for DES)
-      //                       → trackFirst → … → trackLast → rejoin
-      //                  chip → rejoin (the bypass)
-      //
-      // The chip "owns" R_in: it has one incoming arrow (from
-      // predecessor) and two outgoing arrows (into the F-stack head,
-      // and direct to rejoin). Both outgoing values resolve to the
-      // 4-byte R_in via `lookupPassthroughBytes` (which keys off
-      // `:passthrough-1` → `params.R_in` on the rejoin frame).
-      //
-      // Candidate (a) — synthesize an arrow expand-R → rejoin — was
-      // tried first (commit `83502de`) and reverted because the
-      // arrow visually suggested expand-R PRODUCED R_in, whereas
-      // expand-R CONSUMES it (and produces E(R)). Putting the chip
-      // upstream of expand-R restores the honest pedagogy.
-      const useRBypassChip =
-        trackIdx === 1 && node.combineKind === "feistel-standard" && track.children.length > 0;
-      const chainHead = useRBypassChip ? feistelPassthroughId(node.id, 1) : trackFirst;
-      // Fan-in edge: predecessor → chain head. With the chip, that's
-      // predecessor → chip; without, predecessor → trackFirst (the
-      // pre-candidate-(b) shape). Suppressed when the predecessor is
-      // a boundary node (iterate / feistel) — their boundary
-      // semantics already mark "no spine value crosses here."
-      if (canEdgeFromPredecessor && predecessor !== undefined) {
-        edges.push({
-          from: predecessor,
-          to: chainHead,
-          auxKey: STATE_AUX_KEY,
-          kind: "state",
-        });
-      }
-      if (useRBypassChip) {
-        // Chip → trackFirst (chain continues into the F-stack) AND
-        // chip → rejoin (the bypass — R_in flows directly to become
-        // new_L).
-        edges.push({
-          from: chainHead,
-          to: trackFirst,
-          auxKey: STATE_AUX_KEY,
-          kind: "state",
-        });
-        edges.push({
-          from: chainHead,
-          to: rejoinId,
-          auxKey: STATE_AUX_KEY,
-          kind: "state",
-        });
-      }
-      // Process the track's internal spine as its own sub-scope.
-      processScope(track.children);
-      // Fan-out edge: last spine id of this track → rejoin synthetic.
-      if (trackLast !== null && !iterateIds.has(trackLast) && !feistelRoundIds.has(trackLast)) {
-        edges.push({
-          from: trackLast,
-          to: rejoinId,
-          auxKey: STATE_AUX_KEY,
-          kind: "state",
-        });
-      }
-    });
-  };
 
   /**
    * Process one iterate-scope: collect its DFS leaves into a single chain
@@ -1430,11 +1066,6 @@ const inferStateEdges = (spec: CipherSpec, registry?: StepRegistry): GraphEdge[]
    * nodes, BRIDGING OVER iterates without breaking the chain), and recurse
    * into each iterate body as its own scope. Returns after emitting all
    * edges generated by this scope and its nested iterate scopes.
-   *
-   * Feistel-round breaks the linear-chain model: it has fan-in (parent →
-   * N tracks) and fan-out (N tracks → rejoin). We FLUSH the current
-   * linear segment when encountering one, call `processFeistelRound`
-   * inline, then start a new segment seeded with the rejoin id.
    */
   const processScope = (siblings: readonly StepNode[]): void => {
     let segment: string[] = [];
@@ -1491,16 +1122,6 @@ const inferStateEdges = (spec: CipherSpec, registry?: StepRegistry): GraphEdge[]
           // users.
           processScope(node.children);
           segment.push(node.id);
-        } else {
-          // Feistel-round — break the linear chain. The current segment's
-          // tail is the predecessor; flush the segment up to it, process
-          // the round (which emits fan-in/fan-out directly), then start
-          // a new segment from the rejoin synthetic id so the successor
-          // gets a clean `rejoin → successor` edge.
-          const predecessor = segment.length > 0 ? segment[segment.length - 1] : undefined;
-          flush();
-          processFeistelRound(node, predecessor);
-          segment.push(`${node.id}:rejoin`);
         }
       }
     };
@@ -1562,8 +1183,8 @@ const inferStateEdges = (spec: CipherSpec, registry?: StepRegistry): GraphEdge[]
  * upstream guard catches malformed ones before they reach here.
  *
  * **Container `portInputs` consciously skipped.** Types declare the
- * field on every container kind (group, iterate, feistel-round,
- * for-each-subgraph, for-each-subgraph-with-history) but the runtime
+ * field on every container kind (group, iterate, for-each-subgraph,
+ * for-each-subgraph-with-history) but the runtime
  * documents "no container kind reads explicit portInputs at its
  * boundary — the field is declared on every container type so the
  * schema + types are uniform, but the runtime doesn't yet consume
@@ -1612,10 +1233,6 @@ const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
       }
       if (node.kind === "iterate" && node.chainInput !== undefined) {
         chainSeedByIterateId.set(node.id, node.chainInput);
-      }
-      if (node.kind === "feistel-round") {
-        for (const track of node.tracks) collectGroupSeeds(track.children);
-        continue;
       }
       collectGroupSeeds(node.children);
     }
@@ -1666,10 +1283,6 @@ const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
             });
           }
         }
-        continue;
-      }
-      if (node.kind === "feistel-round") {
-        for (const track of node.tracks) walk(track.children);
         continue;
       }
       walk(node.children);
@@ -1777,12 +1390,6 @@ const inferHistorySeedEdges = (spec: CipherSpec): GraphEdge[] => {
         }
         continue;
       }
-      if (child.kind === "feistel-round") {
-        for (const track of child.tracks) {
-          visitLeavesInBody(track.children, offsetSet, predecessorId);
-        }
-        continue;
-      }
       // group | iterate | for-each-subgraph | for-each-subgraph-with-history
       // all carry `children: readonly StepNode[]`.
       visitLeavesInBody(child.children, offsetSet, predecessorId);
@@ -1816,10 +1423,6 @@ const inferHistorySeedEdges = (spec: CipherSpec): GraphEdge[] => {
         // Recurse into the body for any nested FES-with-history (rare
         // but the type system permits, runtime contract aside).
         walk(node.children);
-        continue;
-      }
-      if (node.kind === "feistel-round") {
-        for (const track of node.tracks) walk(track.children);
         continue;
       }
       if (node.kind !== "step") {
@@ -3106,10 +2709,6 @@ const specReferencesInputSource = (spec: CipherSpec): boolean => {
         }
         continue;
       }
-      if (node.kind === "feistel-round") {
-        for (const track of node.tracks) walk(track.children);
-        continue;
-      }
       // B1.5 Finding 1 — container kinds (group / iterate / for-each-subgraph
       // [-with-history]) can reference `$input` through their *boundary* port
       // bindings, NOT through any child leaf's `portInputs`. The port-mode
@@ -3152,7 +2751,6 @@ export const deriveAuxGraph = (
     nodes: [],
     containers: [],
     iteratesById: new Map(),
-    feistelsById: new Map(),
     leafIndex: new Map(),
     containerIndex: new Map(),
     outputAuxByContainerId: new Map(),

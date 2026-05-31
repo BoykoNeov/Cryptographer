@@ -24,7 +24,6 @@
  * routes through scheme-aware parsing + initial-state shape selection.
  */
 
-import { REJOIN_STEP_TYPE } from "@/core/combine-kinds";
 import { requiresPortedDispatch } from "@/core/dispatch";
 import {
   CURRENT_SCHEMA_VERSION,
@@ -53,17 +52,14 @@ import {
 import { BlockBadge } from "./components/BlockBadge";
 import { BytesView } from "./components/BytesView";
 import { ConstantsPanel } from "./components/ConstantsPanel";
-import { FeistelMiniDiagram } from "./components/FeistelMiniDiagram";
 import { FeistelRecombineView } from "./components/FeistelRecombineView";
 import { FeistelRoundBytes } from "./components/FeistelRoundBytes";
 import { FeistelSwapDiagram } from "./components/FeistelSwapDiagram";
-import { FeistelTrackContext } from "./components/FeistelTrackContext";
 import { GraphView } from "./components/GraphView";
 import { IvInput } from "./components/IvInput";
 import { KeyScheduleExplorer } from "./components/KeyScheduleExplorer";
 import { ParamEditor } from "./components/ParamEditor";
 import { PortFlowView, isPortNativeFrame } from "./components/PortFlowView";
-import { RejoinFrameView } from "./components/RejoinFrameView";
 import { RoundKeyPanel } from "./components/RoundKeyPanel";
 import { RunExplorerModal } from "./components/RunExplorerModal";
 import { StepDescription } from "./components/StepDescription";
@@ -1590,76 +1586,30 @@ export const App = () => {
                       frame belongs to an iterate node (blockIndex is set). */}
                   <BlockBadge blockIndex={frame().blockIndex} blockCount={blockCount()} />
 
-                  {/* State view, dispatched by (stateBefore.shape, stateAfter.shape):
-                      - both matrix       → MatrixView (today's path)
-                      - both bytes        → BytesView (pad/unpad frames)
-                      - mixed (boundary)  → side-by-side inline render so the
-                                            user can see the shape transition.
-
-                      EXCEPT for these specialized inspectors:
-                      - key-expansion frames: the executor only writes aux,
-                        so the default "before === after" matrix pair is
-                        uninformative. KeyScheduleExplorer renders the
-                        algorithm's per-stage internal decomposition (Phase
-                        2 of the pedagogy plan).
-                      - rejoin frames (synthetic, stepType "__rejoin__"
-                        from a `feistel-round` runtime expansion): the
-                        default view would render two 8-byte concat blobs.
-                        RejoinFrameView (Phase 5c of the DES + branching
-                        primitive plan) shows the 4 track snapshots in
-                        formula order plus the (new_L, new_R) split, with
-                        snapshots the combine doesn't read greyed out. */}
+                  {/* State view (PortFlowView for every shipped frame; see
+                      `FrameStateView`). EXCEPT key-expansion frames: the
+                      executor only writes aux, so the default before/after
+                      pair is uninformative — KeyScheduleExplorer renders the
+                      algorithm's per-stage internal decomposition (Phase 2 of
+                      the pedagogy plan). */}
                   <Show
-                    when={frame().stepType === REJOIN_STEP_TYPE}
+                    when={isKeyExpansionStepType(frame().stepType)}
                     fallback={
-                      <Show
-                        when={isKeyExpansionStepType(frame().stepType)}
-                        fallback={
-                          <FrameStateView frame={frame()} previousRunFrame={previousRunFrame()} />
-                        }
-                      >
-                        <KeyScheduleExplorer frame={frame()} />
-                      </Show>
+                      <FrameStateView frame={frame()} previousRunFrame={previousRunFrame()} />
                     }
                   >
-                    <RejoinFrameView frame={frame()} />
+                    <KeyScheduleExplorer frame={frame()} />
                   </Show>
-
-                  {/* Feistel round-context panel. Renders only when the
-                      active frame is inside a feistel-round body (i.e.
-                      `frame.branchPath` non-empty). Shows round entry
-                      (L | R), the currently-active track's evolving
-                      state, and round output (L' | R') reconstructed
-                      from the round's rejoin frame. Phase 5a of the
-                      DES + branching primitive plan; cipher-agnostic
-                      so TEA/XTEA/Twofish get it without modification. */}
-                  <div class="feistel-linear-pair">
-                    <FeistelTrackContext frame={frame()} />
-                    {/* Mini diagram (Phase 5b): abstract Feistel structure
-                        (split / F-stack / combine / output). Side-by-side
-                        with the track-context panel so the user sees
-                        both the concrete bytes (panel) and the algorithm
-                        topology (diagram) for the same round. Cipher-
-                        agnostic — geometry parameterizes off the active
-                        feistel-round spec node. */}
-                    <FeistelMiniDiagram frame={frame()} />
-                  </div>
 
                   {/* Port-native Feistel/swap visualization (Slice 5.3d — the
                       obligatory rebuild). These self-detect a port-native
                       Feistel round structurally from the round group's wiring
                       (no `branchPath`, no `feistel-round` kind) and render
                       nothing otherwise, so they're inert for every non-Feistel
-                      cipher AND mutually exclusive with the toy-gated pair
-                      above (the toy emits `branchPath`; port-native DES emits
-                      the split→…→concat shape). The diagram + bytes panel pair
-                      whenever the active frame is inside a Feistel round; the
-                      recombine inspector adds itself on the `concat` frame. The
-                      old pair + RejoinFrameView stay untouched (5.3e deletes
-                      them), keeping 5.3d independent of 5.3e. Own wrapper class
-                      (`feistel-port-pair`, not the old `feistel-linear-pair`)
-                      so 5.3e can strip the old layout rules without touching
-                      these. */}
+                      cipher. The diagram + bytes panel pair whenever the active
+                      frame is inside a Feistel round; the recombine inspector
+                      adds itself on the `concat` frame. (The old `branchPath`/
+                      `__rejoin__` toy components were retired in Slice 5.3e.) */}
                   <div class="feistel-port-pair">
                     <FeistelRoundBytes frame={frame()} />
                     <FeistelSwapDiagram frame={frame()} />

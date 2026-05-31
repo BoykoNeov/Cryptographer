@@ -80,63 +80,10 @@ import { join } from "node:path";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { desSpec } from "@/ciphers/des";
 import { desDecryptSpec } from "@/ciphers/des-decrypt";
-import { FEISTEL_TOY_KAT, FEISTEL_TOY_SPEC } from "@/ciphers/feistel-toy";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
-import type { AuxValue, State, TraceFrame } from "@/core/types";
+import type { AuxValue } from "@/core/types";
 import { describe, expect, it } from "vitest";
-
-// ─── Frame-equality helpers (mirror the Slice 1.7 dispatch tests) ──────
-
-const expectStatesEqual = (a: State, b: State, label: string): void => {
-  expect(a.shape, `${label}: shape`).toBe(b.shape);
-  switch (a.shape) {
-    case "bytes": {
-      if (b.shape !== a.shape) return;
-      expect(Array.from(a.bytes), `${label}: bytes`).toEqual(Array.from(b.bytes));
-      return;
-    }
-  }
-};
-
-const expectAuxMapsEqual = (
-  a: ReadonlyMap<string, AuxValue>,
-  b: ReadonlyMap<string, AuxValue>,
-  label: string,
-): void => {
-  expect([...a.keys()].sort(), `${label}: keys`).toEqual([...b.keys()].sort());
-  expect(a, `${label}: aux value`).toEqual(b);
-};
-
-const expectFramesEqual = (a: TraceFrame, b: TraceFrame, index: number): void => {
-  const label = `frame ${index} (${a.stepType} @ ${a.stepId})`;
-  expect(a.index, `${label}: index`).toBe(b.index);
-  expect(a.path, `${label}: path`).toEqual(b.path);
-  expect(a.stepId, `${label}: stepId`).toBe(b.stepId);
-  expect(a.stepType, `${label}: stepType`).toBe(b.stepType);
-  expect(a.params, `${label}: params`).toEqual(b.params);
-  expect(a.blockIndex, `${label}: blockIndex`).toBe(b.blockIndex);
-  expect(a.branchPath, `${label}: branchPath`).toEqual(b.branchPath);
-  expect(a.auxReadMissing, `${label}: auxReadMissing`).toEqual(b.auxReadMissing);
-  expectStatesEqual(a.stateBefore, b.stateBefore, `${label}: stateBefore`);
-  expectStatesEqual(a.stateAfter, b.stateAfter, `${label}: stateAfter`);
-  expectAuxMapsEqual(a.auxRead, b.auxRead, `${label}: auxRead`);
-  expectAuxMapsEqual(a.auxWritten, b.auxWritten, `${label}: auxWritten`);
-};
-
-const expectFrameStreamsEqual = (
-  a: readonly TraceFrame[],
-  b: readonly TraceFrame[],
-  label: string,
-): void => {
-  expect(a.length, `${label}: frame count`).toBe(b.length);
-  for (let i = 0; i < a.length; i++) {
-    const af = a[i];
-    const bf = b[i];
-    if (!af || !bf) throw new Error(`${label}: fixture missing frame at index ${i}`);
-    expectFramesEqual(af, bf, i);
-  }
-};
 
 // ─── DES KAT fixture (shared with tests/des-vectors.test.ts) ───────────
 
@@ -243,35 +190,11 @@ describe("runtime — ported dispatch, Slice 1.8 DES + feistel-toy step types", 
   // `frame.auxRead` — is pinned per-round against the FIPS oracle in
   // `des-vectors.test.ts`.
 
-  // ─── (e) feistel.toy-add-k@1 lift via FEISTEL_TOY_SPEC ───────────────
-
-  describe("(e) feistel.toy-add-k@1 inside a feistel-round container", () => {
-    // Re-use the existing toy spec from `feistel-primitive.test.ts`'s
-    // surface — a 2-round Feistel with one `feistel.toy-add-k@1` leaf in
-    // each round's R track and an empty L track. This is the most
-    // isolated possible exercise of "body leaves inside a `feistel-round`
-    // run ported, rejoin frame stays byte-identical between paths" —
-    // which is the parent plan's invariant 2 for Slice 1.8. A future
-    // runtime change that broke Feistel body dispatch would catch here
-    // before any DES-side noise enters.
-    it("frame-by-frame byte equality across both dispatch paths", () => {
-      const legacy = runSpec(FEISTEL_TOY_SPEC, buildDefaultRegistry(), {
-        initialState: { shape: "bytes", bytes: new Uint8Array(FEISTEL_TOY_KAT.plaintext) },
-      });
-      const ported = runSpec(FEISTEL_TOY_SPEC, buildDefaultRegistry(), {
-        initialState: { shape: "bytes", bytes: new Uint8Array(FEISTEL_TOY_KAT.plaintext) },
-        portedDispatchEnabled: true,
-      });
-
-      expectFrameStreamsEqual(ported.frames, legacy.frames, "feistel-toy");
-      // Cross-check: both paths produce the expected ciphertext from
-      // the hand-computed KAT — guards against the "frames match each
-      // other but both are wrong" failure mode.
-      expect(legacy.finalState.shape).toBe("bytes");
-      expect(ported.finalState.shape).toBe("bytes");
-      if (legacy.finalState.shape !== "bytes" || ported.finalState.shape !== "bytes") return;
-      expect(hexFromBytes(legacy.finalState.bytes)).toBe(hexFromBytes(FEISTEL_TOY_KAT.ciphertext));
-      expect(hexFromBytes(ported.finalState.bytes)).toBe(hexFromBytes(FEISTEL_TOY_KAT.ciphertext));
-    });
-  });
+  // ─── (e) feistel.toy-add-k@1 — REMOVED in Phase 5 Slice 5.3e ─────────
+  // The toy was the last `legacy`-bearing step + the last `feistel-round`
+  // user; both retired in 5.3e, so the dual-flag frame-parity exercise of
+  // "Feistel body leaves run ported, rejoin frame byte-identical" is gone
+  // (port-native steps throw under flag-off; there is no rejoin frame). DES's
+  // per-leaf native behavior is pinned against the FIPS oracle in
+  // `des-vectors.test.ts`.
 });

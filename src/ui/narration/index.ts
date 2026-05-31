@@ -24,7 +24,6 @@
 
 import { auxCopyNarration, auxLoadNarration, auxXorNarration } from "./aux-primitives";
 import { coerceNarration } from "./coerce";
-import { rejoinNarration } from "./combine-kinds";
 import {
   desExpandRNarration,
   desFinalPermutationNarration,
@@ -86,15 +85,15 @@ export const initNarrationRegistry = (): void => {
   registerNarration("generic.aux-copy@1", auxCopyNarration);
   // Phase 4 of `docs/plans/des-feistel.md` — DES step types use the bit-
   // level structural-overview + per-output-byte drill pattern (IP/FP/E/P);
-  // S-boxes get per-S-box units; xor-with-K is cell-wise XOR. The rejoin
-  // synthetic stepType `__rejoin__` carries combine-kind-specific prose.
+  // S-boxes get per-S-box units; xor-with-K is cell-wise XOR. (The Feistel
+  // rejoin narrator was retired with the branching primitive in Phase 5
+  // Slice 5.3e — port-native DES has no synthetic rejoin frame.)
   registerNarration("des.initial-permutation@1", desInitialPermutationNarration);
   registerNarration("des.final-permutation@1", desFinalPermutationNarration);
   registerNarration("des.expand-R@1", desExpandRNarration);
   registerNarration("des.xor-with-K@1", desXorWithKNarration);
   registerNarration("des.s-boxes@1", desSBoxesNarration);
   registerNarration("des.p-permutation@1", desPPermutationNarration);
-  registerNarration("__rejoin__", rejoinNarration);
   // Slice 1.12 of universal-port-dataflow plan — synthetic `__coerce__`
   // frames are runtime-synthesized when a ported-dispatch input port's
   // declared byteLength doesn't match the source byte count. Coercion

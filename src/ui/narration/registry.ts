@@ -180,11 +180,8 @@ export const NARRATION_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
   // (Bit-permutation is honest at byte granularity — narrated in Phase 2.)
   "serpent.linear-transform@1",
   "serpent.inv-linear-transform@1",
-  // Phase 2 of the DES + branching primitive plan — toy F used only by
-  // `tests/feistel-primitive.test.ts`. Never user-visible (the toy spec
-  // is not in the cipher selector), so no learner-facing narration is
-  // needed. Removed when the toy is decommissioned.
-  "feistel.toy-add-k@1",
+  // (The `feistel.toy-add-k@1` toy entry was removed in Phase 5 Slice 5.3e
+  // when the toy step type was decommissioned with the Feistel scaffolding.)
   // `des.key-schedule@1` — covered by the future `DesKeyScheduleSimulator`
   // (Phase 5e of the plan). The per-frame narration produced by this
   // registry is the wrong surface for a multi-round PC-1 → 16 shifts →

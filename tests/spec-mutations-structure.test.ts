@@ -27,13 +27,6 @@ import {
 } from "@/core/spec-mutations";
 import type { StepLeaf, StepNode } from "@/core/types";
 import { describe, expect, it } from "vitest";
-import { buildSyntheticFeistelSpec } from "./fixtures/synthetic-feistel-rounds";
-
-// B4 (universal-port Phase 4d): the port-native DES no longer uses
-// `feistel-round`, but `findStepAndParent`'s track descent survives until
-// Phase 5. The shared synthetic Feistel fixture (shaped like the old DES —
-// a `rounds` group of feistel-rounds with 4-leaf R tracks) exercises it.
-const synthFeistelSpec = buildSyntheticFeistelSpec();
 
 /**
  * Tiny fixture leaf used as the "newly inserted" node. The structural
@@ -53,11 +46,7 @@ const countAllNodes = (nodes: readonly StepNode[]): number => {
   for (const node of nodes) {
     n++;
     if (node.kind === "step") continue;
-    if (node.kind === "feistel-round") {
-      for (const track of node.tracks) n += countAllNodes(track.children);
-    } else {
-      n += countAllNodes(node.children);
-    }
+    n += countAllNodes(node.children);
   }
   return n;
 };
@@ -113,49 +102,8 @@ describe("findStepAndParent", () => {
     expect(findStepAndParent(aes128Spec, "no-such-step")).toBeNull();
   });
 
-  // ── Feistel-round track descent (Phase 6d-ii) ─────────────────────
-  // The walker recurses into each `feistel-round`'s tracks. A leaf
-  // inside a track gets a StepLocation whose `parent` is the round
-  // itself + `trackIdx` naming the matched track.
-
-  it("locates a leaf inside an R track of a DES Feistel round", () => {
-    const loc = findStepAndParent(synthFeistelSpec, "round.1.expand-R");
-    expect(loc).not.toBeNull();
-    expect(loc?.node.id).toBe("round.1.expand-R");
-    expect(loc?.parent?.kind).toBe("feistel-round");
-    expect(loc?.parent?.id).toBe("round.1");
-    expect(loc?.indexInParent).toBe(0); // first child of R track
-    expect(loc?.trackIdx).toBe(1); // R is the second track on DES rounds
-  });
-
-  it("locates a leaf at a non-zero index inside an R track", () => {
-    // round.1's R track: expand-R, xor-K, s-boxes, p-permute.
-    const loc = findStepAndParent(synthFeistelSpec, "round.1.s-boxes");
-    expect(loc).not.toBeNull();
-    expect(loc?.parent?.kind).toBe("feistel-round");
-    expect(loc?.indexInParent).toBe(2);
-    expect(loc?.trackIdx).toBe(1);
-  });
-
-  it("locates the feistel-round group itself with its outer parent (rounds group)", () => {
-    // round.1 lives inside the "rounds" StepGroup, not inside another
-    // feistel-round. Parent should be the rounds group, NOT round.1
-    // (the round isn't its own parent), and trackIdx should be omitted.
-    const loc = findStepAndParent(synthFeistelSpec, "round.1");
-    expect(loc).not.toBeNull();
-    expect(loc?.node.kind).toBe("feistel-round");
-    expect(loc?.parent?.kind).toBe("group");
-    expect(loc?.parent?.id).toBe("rounds");
-    expect(loc?.trackIdx).toBeUndefined();
-  });
-
-  it("returns null for the synthetic passthrough id (not a spec node)", () => {
-    expect(findStepAndParent(synthFeistelSpec, "round.1:passthrough-0")).toBeNull();
-  });
-
-  it("returns null for the synthetic rejoin id (not a spec node)", () => {
-    expect(findStepAndParent(synthFeistelSpec, "round.1:rejoin")).toBeNull();
-  });
+  // (The Feistel-round track-descent tests were retired in Phase 5 Slice
+  // 5.3e with the `feistel-round` node kind + `StepLocation.trackIdx`.)
 });
 
 describe("insertStepAfter", () => {

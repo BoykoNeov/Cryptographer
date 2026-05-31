@@ -109,46 +109,6 @@ describe("requiresPortedDispatch — shipped specs", () => {
 });
 
 describe("requiresPortedDispatch — container descent", () => {
-  it("descends into feistel-round tracks (synthetic port-native leaf in R)", () => {
-    // Synthetic 2-track Feistel round whose right track contains the
-    // port-native `not@1` primitive. If the walker fails to descend
-    // through `tracks[].children`, the assertion would catch the bug
-    // by returning `false` instead of `true`. DES's shipped spec uses
-    // only lifted-legacy leaves so it cannot detect this regression.
-    const spec: CipherSpec = {
-      id: "synthetic-feistel-port-native@1",
-      name: "synthetic-feistel-port-native",
-      stateShape: "bytes",
-      inputs: {
-        plaintext: { shape: "bytes" },
-        key: { byteLength: 0 },
-      },
-      steps: [
-        {
-          kind: "feistel-round",
-          id: "round.1",
-          combineKind: "feistel-standard",
-          tracks: [
-            { name: "L", inputBytes: [0, 1], children: [] },
-            {
-              name: "R",
-              inputBytes: [2, 3],
-              children: [
-                {
-                  kind: "step",
-                  id: "round.1:R:not",
-                  type: "not@1",
-                  params: {},
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    };
-    expect(requiresPortedDispatch(spec, registry)).toBe(true);
-  });
-
   it("descends into deeply nested groups (synthetic port-native leaf at depth 3)", () => {
     // Three-deep group nesting with a port-native leaf at the bottom.
     // None of the shipped specs nest groups this deeply, so this is
@@ -223,17 +183,12 @@ describe("requiresPortedDispatch — container descent", () => {
 // `__setSpecForTests`, never in the cipher selector). Reuses `shippedSpecs`
 // above so the enumeration can't drift between the two invariants.
 //
-// (Rejoin frames route to `RejoinFrameView`, key-expansion to
-// `KeyScheduleExplorer` — also not `BytesView`. No shipped spec uses
-// `feistel-round` post-B4, so no shipped frame is a rejoin frame either.)
+// (Key-expansion frames route to `KeyScheduleExplorer` — also not
+// `BytesView`.)
 const collectLeafTypes = (nodes: readonly StepNode[], out: string[]): string[] => {
   for (const node of nodes) {
     if (node.kind === "step") {
       out.push(node.type);
-      continue;
-    }
-    if (node.kind === "feistel-round") {
-      for (const track of node.tracks) collectLeafTypes(track.children, out);
       continue;
     }
     // group / iterate / for-each-subgraph* — structural, no frame of their
@@ -264,18 +219,8 @@ describe("PortFlowView universal default (5.3a) — no selectable cipher reaches
       }
     });
   }
-
-  it("positive control: the lifted-legacy feistel toy WOULD route to BytesView", () => {
-    // Proves the invariant above has teeth. The one lifted-legacy step (the
-    // test-only toy) is a ported registration that KEEPS a `legacy` fallback →
-    // the runtime skips port capture → its frames fall through to `BytesView`.
-    // If this regresses to `undefined`, the Feistel components break AND the
-    // invariant above goes vacuous.
-    const reg = registry.getRegistration("feistel.toy-add-k@1");
-    expect(reg).toBeDefined();
-    expect(reg?.kind).toBe("ported");
-    if (reg?.kind === "ported") {
-      expect(reg.legacy).toBeDefined();
-    }
-  });
+  // (The lifted-legacy "positive control" — the feistel toy as the one step
+  // that WOULD route to BytesView — was retired in Phase 5 Slice 5.3e along
+  // with the toy + BytesView. With no lifted-legacy step remaining, the
+  // invariant above is universal by construction.)
 });

@@ -50,16 +50,11 @@ describe("DES (port-native) graph derivation — structural sanity", () => {
     expect(graph.containers.find((c) => c.id === "rounds")).toBeDefined();
   });
 
-  it("emits NO feistel-kind containers (DES is port-native now)", () => {
-    const graph = deriveAuxGraph(emptyTrace, desSpec);
-    expect(graph.containers.filter((c) => c.kind === "feistel").length).toBe(0);
-  });
-
-  it("synthesizes NO rejoin or passthrough nodes (the combine is a concat leaf)", () => {
-    const graph = deriveAuxGraph(emptyTrace, desSpec);
-    const synthetics = graph.nodes.filter((n) => n.synthetic !== undefined);
-    expect(synthetics.map((n) => n.stepId)).toEqual([]);
-  });
+  // (The "emits NO feistel-kind containers / synthesizes NO rejoin or
+  // passthrough nodes" guards were retired in Phase 5 Slice 5.3e — the
+  // `kind: "feistel"` ContainerNode variant and the `synthetic` GraphNode
+  // field no longer exist, so "DES is port-native" is now enforced by the
+  // type system rather than a runtime assertion.)
 
   it("each round carries the 7 port-native F-body leaves", () => {
     const graph = deriveAuxGraph(emptyTrace, desSpec);

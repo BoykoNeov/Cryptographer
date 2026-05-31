@@ -54,7 +54,6 @@ import {
   insertStepAfter,
   insertStepBefore,
   prependChildToContainer,
-  prependChildToTrack,
   removeStep,
   updateAllStepsByType,
   updateCipherConstant,
@@ -764,7 +763,6 @@ export const insertStepIntoSpec = (
     | { kind: "after"; stepId: string }
     | { kind: "before"; stepId: string }
     | { kind: "into-start"; containerId: string }
-    | { kind: "into-track-start"; roundId: string; trackIdx: number }
     | { kind: "root-append" },
 ): string => {
   const currentSpec = activeSpec();
@@ -796,22 +794,6 @@ export const insertStepIntoSpec = (
       // fires if the spec mutated out from under us mid-drop. Recover
       // by appending to root rather than crashing the UI.
       console.warn(`insertStepIntoSpec(into-start, ${anchor.containerId}) failed:`, err);
-      updateActive((s) => ({ ...s, steps: [...s.steps, newLeaf] }));
-    }
-  } else if (anchor.kind === "into-track-start") {
-    // DES Phase 6d-iv: per-track at-start drop. The graph view's
-    // gutter logic emits this anchor for the "drop into an empty
-    // track" sentinel (DES L track) and any future at-start track
-    // strip. Same fallback discipline as into-start above — if the
-    // spec mutated out from under us mid-drop, recover by appending
-    // to root rather than dropping the user's drop on the floor.
-    try {
-      updateActive((s) => prependChildToTrack(s, anchor.roundId, anchor.trackIdx, newLeaf));
-    } catch (err) {
-      console.warn(
-        `insertStepIntoSpec(into-track-start, ${anchor.roundId}, ${anchor.trackIdx}) failed:`,
-        err,
-      );
       updateActive((s) => ({ ...s, steps: [...s.steps, newLeaf] }));
     }
   } else {
@@ -949,12 +931,6 @@ export const isRoundDuplicatable = (containerId: string): boolean => {
   // prefix === "round": confirm a higher-numbered sibling exists.
   const loc = findStepAndParent(activeSpec(), containerId);
   if (!loc || loc.node.kind !== "group") return false;
-  // Duplicate-round is AES-only — parent narrows to group / iterate /
-  // top-level. A `FeistelRoundGroup` parent would mean a `round.N`
-  // group somehow lives inside a Feistel track, which no shipped or
-  // planned cipher produces. Guard for the impossible case so a
-  // future surprise doesn't crash; just bail out as non-duplicatable.
-  if (loc.parent?.kind === "feistel-round") return false;
   const siblings = loc.parent ? loc.parent.children : activeSpec().steps;
   return siblings.some((s) => s.kind === "group" && s.id === `round.${n + 1}`);
 };
@@ -982,15 +958,7 @@ const generateUniqueStepId = (spec: CipherSpec, stepType: string): string => {
     for (const node of nodes) {
       usedIds.add(node.id);
       if (node.kind === "step") continue;
-      if (node.kind === "feistel-round") {
-        // Feistel-round (Phase 2 of the DES + branching primitive plan):
-        // descend into each track's children to collect ids from inside
-        // the round. Ensures auto-generated ids never collide with an
-        // id inside a Feistel track.
-        for (const track of node.tracks) visit(track.children);
-      } else {
-        visit(node.children);
-      }
+      visit(node.children);
     }
   };
   visit(spec.steps);

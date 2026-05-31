@@ -48,8 +48,6 @@ const collectLeavesByType = (nodes: readonly StepNode[], out: Map<string, StepLe
   for (const node of nodes) {
     if (node.kind === "step") {
       if (!out.has(node.type)) out.set(node.type, node);
-    } else if (node.kind === "feistel-round") {
-      for (const track of node.tracks) collectLeavesByType(track.children, out);
     } else {
       collectLeavesByType(node.children, out);
     }

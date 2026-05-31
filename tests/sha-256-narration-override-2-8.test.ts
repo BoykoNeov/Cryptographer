@@ -60,14 +60,6 @@ function* walkLeaves(node: StepNode): Generator<StepNode & { kind: "step" }> {
     }
     return;
   }
-  if (node.kind === "feistel-round") {
-    for (const track of node.tracks) {
-      for (const child of track.children) {
-        yield* walkLeaves(child);
-      }
-    }
-    return;
-  }
 }
 
 const spec = buildSha256Spec();

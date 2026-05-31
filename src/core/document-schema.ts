@@ -262,31 +262,13 @@ export const IterateGroupSchema = z.object({
   ...loopingContainerSeedFields,
 });
 
-// Feistel branching primitive (Phase 2 of `docs/plans/des-feistel.md`).
-// The CombineKind union is mirrored as a `z.enum` so adding a new kind
-// surfaces a literal compile error here once the TS union widens. Keep the
-// list in sync with `core/types.ts::CombineKind`.
-export const CombineKindSchema = z.enum([
-  "feistel-standard",
-  "feistel-no-swap",
-  "feistel-add-into-left",
-  "feistel-add-into-right",
-]);
-
-export const BranchTrackSchema = z.object({
-  name: z.string().optional(),
-  inputBytes: z.array(z.number().int().nonnegative()),
-  children: z.array(z.lazy(() => StepNodeSchema)),
-});
-
-export const FeistelRoundGroupSchema = z.object({
-  kind: z.literal("feistel-round"),
-  id: z.string(),
-  label: z.string().optional(),
-  tracks: z.array(BranchTrackSchema),
-  combineKind: CombineKindSchema,
-  ...containerPortEdgeFields,
-});
+// (The Feistel branching primitive's schema — `CombineKindSchema` /
+// `BranchTrackSchema` / `FeistelRoundGroupSchema` — was removed in Phase 5
+// Slice 5.3e with the `feistel-round` node kind. It was never released
+// outside `[Unreleased]` (DES went port-native in B4 before any tag), so a
+// document containing a `feistel-round` node now fails Zod validation
+// (reject-at-parse) rather than parsing into a node kind the runtime no
+// longer walks. No `schemaVersion` change.)
 
 // `for-each-subgraph` spec node kind (Slice 2.0a of
 // `docs/plans/universal-port-phase-2-slices.md`, widened in Slice 2.0b).
@@ -386,7 +368,6 @@ export const StepNodeSchema: z.ZodTypeAny = z.discriminatedUnion("kind", [
   StepLeafSchema,
   StepGroupSchema,
   IterateGroupSchema,
-  FeistelRoundGroupSchema,
   ForEachSubgraphSchema,
   ForEachSubgraphWithHistorySchema,
 ]);

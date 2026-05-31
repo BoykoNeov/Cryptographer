@@ -54,7 +54,6 @@
  * test self-contained.
  */
 
-import { liftLegacyExecutor } from "@/core/port-projection";
 import { StepRegistry } from "@/core/registry";
 import { runSpec } from "@/core/runtime";
 import { makeBytesState } from "@/core/state/bytes";
@@ -62,27 +61,27 @@ import type {
   AuxValue,
   CipherSpec,
   PortContract,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 // ─── Shared test-local step type infrastructure ─────────────────────────
 
 /**
- * Length-tolerant passthrough executor. The synthetic step type behaves
- * as an aux-only no-op: state is preserved verbatim, no aux reads/writes
- * are declared on the legacy side. The runtime's coercion check runs
- * AGAINST the declared input ports BEFORE this executor sees anything,
- * so this body never observes the coercion at all.
+ * Aux-only no-op port-native executor (hybrid-ported: `meta` present, NO
+ * `legacy` — the only kind that survives post-5.3e). It emits no output
+ * ports; the runtime's coercion check runs AGAINST the declared input ports
+ * BEFORE this executor sees anything, so its body never observes coercion.
  *
- * Why a passthrough: the test isn't about what the executor does with
- * the bytes — it's about what the runtime emits when the port-length
- * mismatch is detected. A trivial executor keeps the test focused on
- * the runtime behavior.
+ * Why a no-op: the test isn't about what the executor does with the bytes —
+ * it's about what the runtime emits when a port-length mismatch is detected.
+ * Coercion fires on any ported step's declared input ports regardless of
+ * `legacy`, so a meta-bearing port-native step exercises it just as the
+ * lifted-legacy carrier did pre-5.3e.
  */
-const passthroughExecutor: StepExecutor = (state) => ({ state });
+const passthroughExecutor: PortedExecutor = () => new Map();
 
 const passthroughDoc: StepDocumentation = {
   name: "Coercion fixture",
@@ -125,20 +124,16 @@ const buildCoerceRegistry = (
     auxReadPorts: () => auxReadBindings,
     // No auxWritePorts — the synthetic step writes no aux.
   };
-  // `liftLegacyExecutor(legacy, meta)` wraps the passthrough into the
-  // ported shape. Required because the runtime's ported-dispatch path
-  // calls `registration.executor(inputs, params, ctx)` — the bare
-  // legacy fn has the wrong signature. The lift logic itself is tested
-  // in Slice 1.2/1.4/1.5/1.6/1.7/1.8 dispatch tests; this test consumes
-  // it as a unit.
-  const portedExecutor = liftLegacyExecutor(passthroughExecutor, meta);
+  // Hybrid-ported registration: `meta` projects the aux reads into input
+  // ports, `executor` is the port-native no-op above, and there is NO
+  // `legacy` field (the lifted-legacy path retired in Slice 5.3e). The
+  // runtime's coercion check fires on the declared input ports regardless.
   registry.register("test.coerce-fixture@1", {
     kind: "ported",
-    executor: portedExecutor,
+    executor: passthroughExecutor,
     shape,
     meta,
     doc: passthroughDoc,
-    legacy: passthroughExecutor,
   });
   return registry;
 };

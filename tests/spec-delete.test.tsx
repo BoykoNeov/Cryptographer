@@ -168,53 +168,9 @@ describe("GraphView — × button removes nodes", () => {
     expect(findStep(spec(), targetId)).toBeNull();
   });
 
-  // UX-F regression (2026-05-23) — the per-leaf Delete handler exists
-  // uniformly on every LeafRect (line ~5687 in GraphView.tsx), so a
-  // leaf living inside a feistel-round's L-track must also accept
-  // Delete and round-trip back to the synthetic L-passthrough chip.
-  // Specifically pinning the DES case because UX-F was raised against
-  // DES — populating L-track via a palette drop, then re-emptying it.
-  it("Delete keypress on a feistel-track leaf removes it and re-emits the L-passthrough chip (UX-F)", async () => {
-    const { __setSpecForTests, useSpec, insertStepIntoSpec } = await import("@/ui/stores/spec");
-    const { buildSyntheticFeistelSpec } = await import("./fixtures/synthetic-feistel-rounds");
-    const spec = useSpec();
-    // B4 (universal-port Phase 4d): the port-native DES no longer uses
-    // `feistel-round`, so we inject the synthetic Feistel fixture (which does)
-    // to exercise the surviving GraphView L-track delete + passthrough re-emit.
-    __setSpecForTests(buildSyntheticFeistelSpec());
-
-    // Populate round.1's L-track via the same store API the graph
-    // view's drop handler uses, so the test mirrors the real user
-    // flow as closely as possible.
-    const newLeafId = insertStepIntoSpec("generic.byte-substitution@1", {
-      kind: "into-track-start",
-      roundId: "round.1",
-      trackIdx: 0,
-    });
-    expect(findStep(spec(), newLeafId)).not.toBeNull();
-
-    const { container } = render(() => <GraphView />);
-
-    // Dispatch Delete on the L-track-resident leaf.
-    const leafGroup = container.querySelector(`[data-drop-anchor="${newLeafId}"]`);
-    expect(leafGroup, "the inserted L-track leaf must render").not.toBeNull();
-    if (!leafGroup) throw new Error("unreachable");
-    leafGroup.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true }),
-    );
-
-    // Spec-level: the inserted leaf is gone.
-    expect(findStep(spec(), newLeafId)).toBeNull();
-
-    // Graph-level: the L-passthrough chip re-emerges. The synthetic
-    // chip is rendered by `PassthroughChip` (not `LeafRect`) and
-    // carries its own `graph-passthrough-${stepId}` testid hook (see
-    // GraphView.tsx:5904 — Phase 6b-ii, commit 6556ef6).
-    const passthrough = container.querySelector(
-      `[data-testid="graph-passthrough-round.1:passthrough-0"]`,
-    );
-    expect(passthrough, "L-passthrough chip re-renders after the round-trip").not.toBeNull();
-  });
+  // (The UX-F feistel-track Delete + L-passthrough re-emit test was retired
+  // in Phase 5 Slice 5.3e with the `feistel-round` node kind, the per-track
+  // drop affordance, and the synthetic passthrough chip.)
 });
 
 describe("ParamEditor — Delete button", () => {

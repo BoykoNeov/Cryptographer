@@ -86,9 +86,6 @@ const mutateFirstLeafParams = (
         };
         return leaf;
       }
-      if (n.kind === "feistel-round") {
-        return { ...n, tracks: n.tracks.map((t) => ({ ...t, children: mutate(t.children) })) };
-      }
       return { ...n, children: mutate(n.children) };
     });
   return { ...spec, steps: mutate(spec.steps) };

@@ -15,11 +15,6 @@ const findFirstLeaf = (spec: CipherSpec, type: string): StepLeaf | null => {
     for (const node of nodes) {
       if (node.kind === "step") {
         if (node.type === type) return node;
-      } else if (node.kind === "feistel-round") {
-        for (const track of node.tracks) {
-          const found = visit(track.children);
-          if (found) return found;
-        }
       } else {
         const found = visit(node.children);
         if (found) return found;
@@ -84,7 +79,6 @@ describe("applyPaddingScheme(spec, encrypt, 'pkcs7')", () => {
           pi !== undefined &&
           Object.values(pi).some((b) => b.node === "$input" && b.port === "out");
         if (here) return true;
-        if (n.kind === "feistel-round") return n.tracks.some((t) => readsRawInput(t.children));
         if (n.kind !== "step") return readsRawInput(n.children);
         return false;
       });

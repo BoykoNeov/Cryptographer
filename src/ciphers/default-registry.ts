@@ -8,7 +8,6 @@
  * params can't be edited by the existing ParamEditor blocks.
  */
 
-import { liftLegacyExecutor } from "../core/port-projection";
 import { StepRegistry } from "../core/registry";
 import { addMod32, addMod32Doc, addMod32PortContract } from "../steps/add-mod-32";
 import { and, andDoc, andPortContract } from "../steps/and";
@@ -69,12 +68,6 @@ import {
   desXorWithKMeta,
   desXorWithKPortContract,
 } from "../steps/des-xor-with-k";
-import {
-  feistelToyAddK,
-  feistelToyAddKDoc,
-  feistelToyAddKMeta,
-  feistelToyAddKPortContract,
-} from "../steps/feistel-toy-add-k";
 import {
   gfMatrixMultiply,
   gfMatrixMultiplyDoc,
@@ -490,21 +483,6 @@ export const buildDefaultRegistry = (): StepRegistry => {
     meta: serpentInvLinearTransformMeta,
     doc: serpentInvLinearTransformDoc,
   });
-  // ─── Toy Feistel F (Phase 2 of the DES + branching primitive plan) ─────
-  // Test-fixture step type exercising the branching primitive end-to-end
-  // without DES's complexity. Asymmetric F = (R + k) mod 256 per byte;
-  // see `src/steps/feistel-toy-add-k.ts` for why addition (not XOR) is
-  // chosen. NOT in the cipher selector — referenced only by Phase 2 tests.
-  // Lifted to `kind: "ported"` in Slice 1.8 alongside the seven DES steps;
-  // byteLength absent on both ports (length-polymorphic per fixture).
-  r.register("feistel.toy-add-k@1", {
-    kind: "ported",
-    executor: liftLegacyExecutor(feistelToyAddK, feistelToyAddKMeta),
-    legacy: feistelToyAddK,
-    shape: feistelToyAddKPortContract,
-    meta: feistelToyAddKMeta,
-    doc: feistelToyAddKDoc,
-  });
   // ─── DES (Phase 3 of the DES + branching primitive plan) ───────────────
   // The first cipher to use the `feistel-round` branching primitive. Seven
   // step types implement the FIPS 46-3 algorithm: a key schedule that
@@ -522,13 +500,11 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // since users can't currently reach a DES Save through the UI.
   //
   // ─── Slice 1.8 (universal port dataflow) ──────────────────────────────
-  // All seven DES step types lifted to `kind: "ported"`. DES is the
-  // FOURTH cipher family ported (after AES Slice 1.4, Speck Slice 1.6,
-  // Serpent Slice 1.7). Body leaves inside `feistel-round` containers
-  // run ported via the same `walk()` recursion that handles iterate-body
-  // leaves; the rejoin frame is synthesized by `runFeistelRound` from
-  // Uint8Array track outputs — byte-identical between dispatch paths
-  // for free, per the parent plan's invariant 2.
+  // All seven DES step types are `kind: "ported"`. DES is the FOURTH cipher
+  // family ported (after AES Slice 1.4, Speck Slice 1.6, Serpent Slice 1.7).
+  // (B4 / Phase 5 5.3e: DES is now built from port-mode `group` rounds wiring
+  // `split-bytes`/`des.*`/`xor`/`concat` — no `feistel-round`; the Feistel
+  // swap is the concat argument order.)
   //
   // **byteLength declarations** — fixed honest values everywhere (DES
   // has no variant): IP/FP 8/8, P-permute 4/4, expand-R 4/6 (FIRST

@@ -309,111 +309,6 @@ export type IterateGroup = {
 };
 
 /**
- * Branching primitive (Phase 2 of `docs/plans/des-feistel.md`). Introduces
- * the first non-linear control-flow shape into the spec tree: a round body
- * that forks into N parallel tracks, each operating on a slice of the input
- * state, and rejoins via a named combine op.
- *
- * Why a true branching primitive (not tuple state, not aux-mediated)? See
- * the plan's "Why true branching" section. Short form: only this shape
- * keeps the textbook Feistel diagram literal on the canvas — spine threads
- * continuously through F's internals on the R track, with L flowing
- * passively on a parallel track. Aux-mediated or tuple-state representations
- * would flatten F's internals into an aux thicket.
- *
- * The runtime contract:
- *   - At round entry, slice `state.bytes` by each track's `inputBytes`
- *     into a track-local `BytesState` (one per track).
- *   - Walk each track's children in turn, with `branchPath` stamped on
- *     every emitted frame so renderers (and `setTrace`'s stepId-matching)
- *     can keep tracks distinct.
- *   - Inside a track, frame stepIds gain a `:t{name}` suffix (innermost-
- *     first relative to any enclosing iterate, so a Feistel-inside-ECB
- *     frame ends up `node.id:t{name}:b{i}`).
- *   - After all tracks complete, emit ONE synthetic rejoin frame
- *     (`stepId = "{roundId}:rejoin"`, `stepType = "__rejoin__"`,
- *     `params = { combineKind }`). stateBefore = concat of all track outputs
- *     in declaration order; stateAfter = combined value per `combineKind`'s
- *     formula. The 4-arg inspector view (L_in, L_out, R_in, R_out) is
- *     reconstructed by `edge-value-lookup`, NOT carried as new fields on
- *     `TraceFrame`.
- *   - Resume parent-scope state from the combined value.
- *
- * Today's combine kinds and their (L_in, L_out, R_in, R_out) → (new_L, new_R)
- * formulas are documented inline on `CombineKind` below.
- */
-export type BranchTrack = {
-  /**
-   * Optional human-readable track name. Defaults to the track's index in
-   * the parent's `tracks[]` array. DES specs declare `name: "L"` and
-   * `name: "R"` explicitly — the name appears in the `:t{name}` stepId
-   * suffix and in `TraceFrame.branchPath` so future n-track ciphers
-   * (Twofish 4-way Feistel) can use readable names rather than indices.
-   */
-  readonly name?: string;
-  /** Byte indices from the input state that seed this track. */
-  readonly inputBytes: readonly number[];
-  /**
-   * Step nodes operating on the track's own state. May be empty
-   * (the passthrough case — typically the L track in textbook Feistel).
-   * An empty track emits ZERO frames; the runtime still passes its
-   * sliced input through to the combine as `L_out = L_in`.
-   */
-  readonly children: readonly StepNode[];
-};
-
-/**
- * Named combine ops. Each is a 4-arg function over the per-track input
- * AND output snapshots: `(tracks_in, tracks_out) → new_state_bytes`.
- * The 4-arg shape is critical — textbook Feistel's `new_L = R_in` reads
- * the ORIGINAL right-track input, not its post-F output, so a combine
- * that sees only `tracks_out` can't reconstruct it.
- *
- * Pre-defined kinds cover the shipped use cases. Each is documented
- * with its (L_in, L_out, R_in, R_out) → (new_L, new_R) formula:
- *
- *   - "feistel-standard":     new_L = R_in,      new_R = L_in XOR R_out
- *     Classic Feistel with swap. DES rounds 1..15.
- *   - "feistel-no-swap":      new_L = L_in XOR R_out, new_R = R_in
- *     Classic Feistel WITHOUT the post-round swap. DES round 16
- *     (and every cipher's "last round" by Feistel convention).
- *   - "feistel-add-into-left":  new_L = L_in + R_out (per byte mod 256),
- *                                new_R = R_in
- *     One half of TEA's cycle. Modular byte-add into L; R unchanged.
- *   - "feistel-add-into-right": new_L = L_in,
- *                                new_R = R_in + L_out (per byte mod 256)
- *     The other half of TEA's cycle. Modular byte-add into R; L unchanged.
- *
- * Adding new ops is a kind-tag bump (no schema break since `CombineKind`
- * is a string union over `string` at the JSON layer).
- */
-export type CombineKind =
-  | "feistel-standard"
-  | "feistel-no-swap"
-  | "feistel-add-into-left"
-  | "feistel-add-into-right";
-
-export type FeistelRoundGroup = {
-  readonly kind: "feistel-round";
-  readonly id: string;
-  readonly label?: string;
-  /**
-   * Tracks in order. 2-track for binary Feistel (the only shipped case
-   * today); future n-track ciphers (Twofish, 4-way) extend by adding
-   * entries here without a schema migration. The runtime + combine ops
-   * shipped today assume `tracks.length === 2`; n-track unlocks when a
-   * future cipher adds the corresponding combine kinds.
-   */
-  readonly tracks: readonly BranchTrack[];
-  readonly combineKind: CombineKind;
-  /** Author-declared default-collapse (see `StepGroup` for shared semantics). */
-  readonly defaultCollapsed?: boolean;
-  /** Slice 2.6a container port-edge wiring (see `StepGroup` for shared semantics). */
-  readonly portInputs?: Readonly<Record<string, PortBinding>>;
-  readonly outputPorts?: readonly string[];
-};
-
-/**
  * For-each-subgraph: a port-native iteration primitive introduced in
  * Slice 2.0a of `docs/plans/universal-port-phase-2-slices.md` and widened
  * in Slice 2.0b. Subsumes two iteration patterns under one spec node kind:
@@ -686,7 +581,6 @@ export type StepNode =
   | StepLeaf
   | StepGroup
   | IterateGroup
-  | FeistelRoundGroup
   | ForEachSubgraphNode
   | ForEachSubgraphWithHistoryNode;
 
@@ -778,23 +672,6 @@ export type TraceFrame = {
    * an `iterate` node; undefined for frames outside any iterate.
    */
   readonly blockIndex?: number;
-  /**
-   * Ordered list of track names this frame lives inside, outer-first.
-   * Set on every frame emitted inside a `feistel-round`'s tracks (including
-   * the synthetic `:rejoin` frame, where `branchPath` resolves to the
-   * enclosing round's `branchPath` — empty unless that round itself is
-   * nested in another). Stripped from `path` for stepId-matching; preserved
-   * as its own field so renderers (the FeistelTrackContext panel, the
-   * scrubber timeline badges) can flag track membership without reparsing
-   * step ids.
-   *
-   * Combine suffix order at frame-emit (innermost-first): `:t{name}` is
-   * inside `:b{i}`, so a leaf inside a Feistel track inside an iterate
-   * emits `node.id:t{name}:b{i}`. The runtime walker threads `branchPath`
-   * + `blockIndex` through recursion and assembles the suffix string at
-   * frame-construction time. Pin in `tests/frame-preservation-feistel`.
-   */
-  readonly branchPath?: readonly string[];
   /**
    * Port inputs / outputs captured at frame-emit time on the port-native
    * dispatch path (Slice 2.9a of the universal-port-dataflow plan —
@@ -1230,28 +1107,4 @@ export type LayoutTags = {
   readonly auxInputBindings?: ReadonlyMap<string, string>;
   /** For output ports that wrote to aux in the legacy frame. */
   readonly auxOutputBindings?: ReadonlyMap<string, string>;
-};
-
-/**
- * The port-projection of a legacy `TraceFrame`. Every legacy field
- * either survives unchanged (index, path, stepId, stepType, params,
- * blockIndex, branchPath, auxReadMissing) or projects through `inputs`/
- * `outputs` (stateBefore, stateAfter, auxRead, auxWritten).
- *
- * Reconstructing a legacy frame from a PortedFrame requires the
- * `LayoutTags` sidecar (see above). The Phase-0 spike validates that
- * `(PortedFrame, LayoutTags)` is lossless against `TraceFrame` for the
- * three lifted step types.
- */
-export type PortedFrame = {
-  readonly index: number;
-  readonly path: readonly string[];
-  readonly stepId: string;
-  readonly stepType: string;
-  readonly params: Json;
-  readonly inputs: StepInputs;
-  readonly outputs: StepOutputs;
-  readonly auxReadMissing?: readonly string[];
-  readonly blockIndex?: number;
-  readonly branchPath?: readonly string[];
 };

@@ -59,7 +59,7 @@ const findGroupIds = (spec: CipherSpec): string[] => {
   const visit = (nodes: readonly StepNode[]): void => {
     for (const n of nodes) {
       if (n.kind === "group") out.push(n.id);
-      if (n.kind === "step" || n.kind === "feistel-round") continue;
+      if (n.kind === "step") continue;
       visit(n.children);
     }
   };

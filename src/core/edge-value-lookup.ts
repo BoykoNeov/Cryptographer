@@ -101,7 +101,6 @@
  * consumer has no recorded stateBefore (rare; defensive).
  */
 
-import { REJOIN_STEP_TYPE } from "./combine-kinds";
 import { frameStateInBytes, frameStateOutBytes } from "./frame-state";
 import { CIPHER_INPUT_ID, CIPHER_OUTPUT_ID, type GraphEdge, isEndpointId } from "./graph";
 import { canonicalStepId } from "./step-id";
@@ -414,7 +413,7 @@ export const lookupEdgeValue = (
   if (edge.kind === "aux") {
     return lookupRegularAux(edge, trace, currentBlockIndex);
   }
-  return lookupRegularState(edge, spec, trace, currentBlockIndex);
+  return lookupRegularState(edge, trace, currentBlockIndex);
 };
 
 // ─── Branch helpers ────────────────────────────────────────────────────
@@ -693,139 +692,8 @@ const lookupRegularAux = (
       };
 };
 
-/**
- * Walk the spec to find which `feistel-round` track contains the given
- * leaf id. Returns the trackIdx (0 for L, 1 for R in the 2-track DES
- * convention) or null when the leaf isn't inside any feistel-round
- * track. Used by rejoin-source state-edge slicing — the rejoin frame's
- * stateAfter carries `(new_L || new_R)`, and each outgoing arrow
- * pedagogically carries only its half. This lets the inspector show
- * "L bytes" on the L-track arrow and "R bytes" on the R-track arrow
- * instead of the full concat on both (Phase 6e smoke finding
- * 2026-05-20).
- *
- * Recursion: walks every container kind (group, iterate, feistel-round)
- * so nested feistel-rounds resolve to the INNERMOST track index. The
- * innermost answer is the right one because the rejoin that emitted
- * the outgoing edge is itself at the boundary of the innermost
- * feistel-round.
- */
-const findTrackIdxForLeaf = (nodes: readonly StepNode[], leafId: string): number | null => {
-  for (const n of nodes) {
-    if (n.kind === "step") {
-      // Reach the leaf directly via a step. The CALLER picks track
-      // membership by recursing into a feistel-round below; here we
-      // just signal that the leaf exists in this children list with
-      // a sentinel "not in a feistel track" (since the caller passes
-      // a non-feistel container's children).
-      continue;
-    }
-    if (n.kind === "feistel-round") {
-      for (let t = 0; t < n.tracks.length; t++) {
-        const track = n.tracks[t];
-        if (!track) continue;
-        // Walk the track's children for the target leaf — direct
-        // children match, OR nested-container children match via
-        // recursion (returning whatever the inner walk decides, since
-        // the OUTER track is still the answer for the leaf's
-        // membership: rejoin-edge slicing always asks "which track
-        // OF THIS ROUND," and the leaf's nearest feistel ancestor
-        // is what matters).
-        if (containsLeaf(track.children, leafId)) {
-          return t;
-        }
-      }
-      // Leaf not in any of this round's tracks — fall through and
-      // keep searching siblings.
-      continue;
-    }
-    // Group / iterate: recurse into their children. The recursion
-    // can still land inside a NESTED feistel-round, which is what we
-    // want.
-    if (n.kind === "group" || n.kind === "iterate") {
-      const inner = findTrackIdxForLeaf(n.children, leafId);
-      if (inner !== null) return inner;
-    }
-  }
-  return null;
-};
-
-/** Returns true if any descendant of `nodes` is a step leaf with `id`. */
-const containsLeaf = (nodes: readonly StepNode[], leafId: string): boolean => {
-  for (const n of nodes) {
-    if (n.kind === "step" && n.id === leafId) return true;
-    if (n.kind === "feistel-round") {
-      for (const track of n.tracks) {
-        if (containsLeaf(track.children, leafId)) return true;
-      }
-    } else if (n.kind === "group" || n.kind === "iterate") {
-      if (containsLeaf(n.children, leafId)) return true;
-    }
-  }
-  return false;
-};
-
-/**
- * Determine which feistel track a state-edge consumer belongs to,
- * for slicing the producer-rejoin's combined stateAfter into per-track
- * halves. Two routes:
- *
- *   1. Passthrough chip pattern (`<roundId>:passthrough-<trackIdx>`) —
- *      trackIdx is embedded in the synthetic id; parse it directly.
- *   2. Real leaf — walk the spec to find the leaf's nearest
- *      feistel-round ancestor and identify the track within it.
- *
- * Returns null when the consumer isn't inside any feistel-round track
- * (e.g. the rejoin feeds OUTWARD to a final-permutation outside the
- * Rounds group — caller falls back to returning the full combined
- * stateAfter, which is the pedagogically right value at that boundary).
- */
-const findConsumerTrackIdx = (consumerId: string, spec: CipherSpec): number | null => {
-  const ptMatch = consumerId.match(/:passthrough-(\d+)$/);
-  if (ptMatch?.[1] !== undefined) {
-    return Number(ptMatch[1]);
-  }
-  const canonical = canonicalStepId(consumerId);
-  return findTrackIdxForLeaf(spec.steps, canonical);
-};
-
-/**
- * Resolve a passthrough chip id (`<roundId>:passthrough-<trackIdx>`) to
- * the bytes that flow through it. Empty-track passthroughs emit zero
- * frames, so the value has to come from the round's rejoin frame's
- * `params.L_in` (track 0) or `params.R_in` (track 1). Returns null when
- * the id isn't a passthrough or the rejoin frame can't be located.
- *
- * Used by both `lookupNodeValue` (chip click) AND `lookupRegularState`
- * (state edge whose producer or consumer is a passthrough chip — both
- * sides need to surface the same bytes the chip itself surfaces, not
- * the combined L||R from the rejoin frame which is what the default
- * "fall back to consumer.stateBefore" would yield).
- */
-const lookupPassthroughBytes = (
-  passthroughId: string,
-  trace: Trace,
-  currentBlockIndex: number | undefined,
-): BytesState | null => {
-  const match = passthroughId.match(/^(.+):passthrough-(\d+)$/);
-  if (match?.[1] === undefined || match[2] === undefined) return null;
-  const roundId = match[1];
-  const trackIdx = Number(match[2]);
-  const rejoinFrame = findConsumerFrame(trace, `${roundId}:rejoin`, currentBlockIndex);
-  if (rejoinFrame === null) return null;
-  const params = rejoinFrame.params;
-  if (typeof params !== "object" || params === null || Array.isArray(params)) return null;
-  const p = params as Record<string, unknown>;
-  const paramKey = trackIdx === 0 ? "L_in" : trackIdx === 1 ? "R_in" : null;
-  if (paramKey === null) return null;
-  const raw = p[paramKey];
-  if (!Array.isArray(raw) || !raw.every((n) => typeof n === "number")) return null;
-  return { shape: "bytes", bytes: new Uint8Array(raw as number[]) };
-};
-
 const lookupRegularState = (
   edge: GraphEdge,
-  spec: CipherSpec,
   trace: Trace,
   currentBlockIndex: number | undefined,
 ): EdgeValueLookup => {
@@ -836,76 +704,8 @@ const lookupRegularState = (
   // is a container id like an iterate, whose state edges are handled by
   // chip branches above but a non-chip iterate-targeted state edge can
   // still reach here pre-Slice-6 when the iterate isn't collapsed).
-  // Passthrough-source edges: the producer is a synthetic chip with
-  // NO frame in the trace, so `findProducerFrame` returns null and the
-  // default fallback would use `consumer.stateBefore` — which for the
-  // rejoin frame is the combined 8B L||R, not the 4B half the arrow
-  // pedagogically carries. Special-case here to slice the half from
-  // the rejoin's params (same mapping as the chip click resolves to,
-  // factored into `lookupPassthroughBytes`). User-flagged 2026-05-20
-  // Phase 6e smoke ("L passthrough chip shows 4 bytes but its outgoing
-  // arrow shows 8 bytes").
-  const passthroughBytes = lookupPassthroughBytes(edge.from, trace, currentBlockIndex);
-  if (passthroughBytes !== null) {
-    return {
-      status: "value",
-      value: passthroughBytes,
-      displayKind: "state",
-      auxKey: "state",
-    };
-  }
   const producer = findProducerFrame(trace, edge.from, currentBlockIndex);
   if (producer !== null) {
-    // Rejoin-source state edges: the producer's stateAfter is the
-    // combined `(new_L || new_R)`. Each outgoing arrow pedagogically
-    // carries ONLY its half — the L-track edge carries new_L, the
-    // R-track edge carries new_R. Without this slice the inspector
-    // showed the full concat on both arrows, hiding the swap (user
-    // flagged 2026-05-20 Phase 6e smoke).
-    //
-    // ISOLATED (Slice 5.3c): this branch reads `producer.stateAfter`
-    // DIRECTLY rather than via `frameStateOutBytes` because the rejoin
-    // frame is the lifted-legacy toy's synthetic `__rejoin__` (no port
-    // I/O) and the L||R slicing is toy-specific. The whole branch — like
-    // the toy, the feistel runtime walk, and the field — is deleted in
-    // Slice 5.3e. Keeping the direct field read here (rather than routing
-    // through the helper's fallback) makes that deletion a clean lift-out.
-    if (producer.stepType === REJOIN_STEP_TYPE && producer.stateAfter.shape === "bytes") {
-      const params = producer.params;
-      if (typeof params === "object" && params !== null && !Array.isArray(params)) {
-        const p = params as Record<string, unknown>;
-        const lInRaw = p.L_in;
-        if (Array.isArray(lInRaw) && lInRaw.every((n) => typeof n === "number")) {
-          const lSize = lInRaw.length;
-          const trackIdx = findConsumerTrackIdx(edge.to, spec);
-          if (trackIdx !== null) {
-            const combined = (producer.stateAfter as BytesState).bytes;
-            const slice = trackIdx === 0 ? combined.slice(0, lSize) : combined.slice(lSize);
-            const sliced: BytesState = { shape: "bytes", bytes: slice };
-            return producer.blockIndex !== undefined
-              ? {
-                  status: "value",
-                  value: sliced,
-                  displayKind: "state",
-                  auxKey: "state",
-                  blockIndex: producer.blockIndex,
-                }
-              : {
-                  status: "value",
-                  value: sliced,
-                  displayKind: "state",
-                  auxKey: "state",
-                };
-          }
-          // trackIdx === null: consumer is outside any feistel-round —
-          // probably the rejoin's last outgoing edge to a sibling
-          // outside the Rounds group (e.g. final-permutation). Fall
-          // through to the default "return full stateAfter" path; the
-          // whole combined state IS the right pedagogical value at
-          // that boundary.
-        }
-      }
-    }
     // Default state-edge value: the producer's `"state"` output port
     // (port-first, Slice 5.3c; falls back to the threaded state field
     // until 5.3e). `prev.stateAfter == next.stateBefore` by the runtime
@@ -1111,32 +911,6 @@ export const lookupNodeValue = (
     return {
       status: "missing",
       reason: "this chip represents multiple blocks — pick a numbered block-chip to inspect",
-    };
-  }
-
-  // ── Feistel-round passthrough chip ─────────────────────────────────
-  // Empty-track passthroughs emit ZERO frames (runtime.ts:275 — identity
-  // carries no new information). The chip pedagogically represents the
-  // track's incoming bytes (L_in for track 0, R_in for track 1), which
-  // the rejoin frame stashes in `params`. `lookupPassthroughBytes`
-  // (shared with the edge-side `lookupRegularState`) does the parse +
-  // lookup; here we just surface the result as a value lookup.
-  const passthroughBytes = lookupPassthroughBytes(nodeId, trace, currentBlockIndex);
-  if (passthroughBytes !== null) {
-    return {
-      status: "value",
-      value: passthroughBytes,
-      displayKind: "state",
-      auxKey: "state",
-    };
-  }
-  // If it LOOKED like a passthrough id but we couldn't resolve the
-  // bytes, surface a clear reason so the inspector doesn't fall through
-  // to the regular-leaf branch and emit a confusing message.
-  if (/:passthrough-\d+$/.test(nodeId)) {
-    return {
-      status: "missing",
-      reason: `couldn't resolve passthrough "${nodeId}" — rejoin frame missing or its params lack L_in/R_in`,
     };
   }
 

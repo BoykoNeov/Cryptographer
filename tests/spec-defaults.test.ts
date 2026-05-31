@@ -111,36 +111,6 @@ describe("getDefaultCollapsedContainers", () => {
     expect(ids.has("outer")).toBe(false);
   });
 
-  it("walks into feistel-round track children", () => {
-    // Feistel containers store children under `tracks[].children`, not a
-    // top-level `children` field — the walker must visit each track.
-    const spec = wrapSpec([
-      {
-        kind: "feistel-round",
-        id: "fr-1",
-        combineKind: "feistel-standard",
-        tracks: [
-          { name: "L", inputBytes: [0, 1, 2, 3], children: [] },
-          {
-            name: "R",
-            inputBytes: [4, 5, 6, 7],
-            children: [
-              {
-                kind: "group",
-                id: "f-inner",
-                label: "F internals",
-                defaultCollapsed: true,
-                children: [],
-              },
-            ],
-          },
-        ],
-      },
-    ]);
-    const ids = getDefaultCollapsedContainers(spec);
-    expect(ids.has("f-inner")).toBe(true);
-  });
-
   it("respects defaultCollapsed: false (does NOT include the id)", () => {
     // Explicit false === absent — only `true` adds to the set.
     const spec = wrapSpec([
