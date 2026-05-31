@@ -29,14 +29,19 @@
  *      value as the seed.
  */
 
+import { aes128Spec } from "@/ciphers/aes-128";
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { desSpec } from "@/ciphers/des";
+import { serpent128Spec } from "@/ciphers/serpent-128";
 import { buildSha256Spec } from "@/ciphers/sha-256";
+import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { lookupEdgeValue, lookupNodeValue } from "@/core/edge-value-lookup";
+import { frameStateInBytes, frameStateOutBytes } from "@/core/frame-state";
 import { CIPHER_INPUT_ID, type GraphEdge } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
-import { type AuxValue, INPUT_SOURCE_ID, type Trace } from "@/core/types";
+import { type AuxValue, type CipherSpec, INPUT_SOURCE_ID, type Trace } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 const SHA_INPUT = new Uint8Array([0x61, 0x62, 0x63]); // "abc"
@@ -126,5 +131,121 @@ describe("input pill resolves to trace.initialState", () => {
     expect(out.status).toBe("endpoint");
     if (out.status !== "endpoint") return;
     expect(out.value).toBe(trace.initialState);
+  });
+});
+
+// ─── frame-state helpers vs legacy fields (the 5.3e safety proof) ───────────
+//
+// The load-bearing check that 5.3e can safely delete `stateBefore`/`stateAfter`:
+// characterize, across all frames of representative ciphers spanning both
+// port-naming regimes, exactly where the new `frameStateInBytes` /
+// `frameStateOutBytes` helpers equal the fields and where they DON'T.
+//
+// Two regimes:
+//   - **Byte-identical** — SHA-256 + AES (pure-port-native primitives whose
+//     ports are named `output`/`input`/`a`/… so the helper falls back to the
+//     field) AND Speck + Serpent (hybrid-ported: the runtime reconstructs
+//     `stateAfter` FROM `portOutputs.get("state")`, so port == field). For
+//     these the helper is provably byte-identical, frame-for-frame.
+//   - **Partial, incidental divergence (DES)** — the DES-specific F-leaves
+//     (IP/FP/expand-R/xor-with-K/s-boxes/p-permutation) are pure-port-native
+//     (B4) AND name their output port `"state"`, but the runtime never
+//     reconstructs the threaded state from it, so `stateAfter` holds the STALE
+//     initial plaintext while the `"state"` port carries the honest per-leaf
+//     value. The helper reads the honest port for THOSE leaves (the B4
+//     de-staling already relied on by `narration/des.tsx`, now incidentally
+//     extended to the step strip + value inspector). The generic primitives in
+//     the same round — `split-bytes` (output0/1), the chaining `xor` (output),
+//     `concat` (output), `key-schedule` (keyN) — carry NO `"state"` port, so
+//     they STILL fall back to the stale field (and will read null/"(no state)"
+//     post-5.3e). So a DES round renders MIXED: honest on the F-leaves, stale
+//     on split/xor/concat. This is no worse than the prior uniformly-stale
+//     display and strictly better on the F-leaves; the uniform fix (resolve
+//     each leaf's real output port by name) is the deferred port-aware
+//     inspector, shared with the native-AES staleness. (Inputs are valid-sized,
+//     not KAT vectors — we assert the helper↔field relationship, not the
+//     ciphertext.)
+const REGISTRY = buildDefaultRegistry();
+
+const byteIdenticalCorpus: ReadonlyArray<readonly [string, CipherSpec, Trace]> = [
+  ["SHA-256 (fallback regime — no state port)", buildSha256Spec(), runSha256()],
+  [
+    "AES-128 single-block (fallback regime)",
+    aes128Spec,
+    runSpec(aes128Spec, REGISTRY, {
+      initialState: makeBytesState(bytesFromHex("00112233445566778899aabbccddeeff")),
+      initialAux: new Map<string, AuxValue>([
+        ["key", bytesFromHex("000102030405060708090a0b0c0d0e0f")],
+      ]),
+      portedDispatchEnabled: true,
+    }),
+  ],
+  [
+    "Speck-32/64 BE (hybrid: port 'state' == reconstructed stateAfter)",
+    speck32_64BeSpec,
+    runSpec(speck32_64BeSpec, REGISTRY, {
+      initialState: makeBytesState(bytesFromHex("6574694c")),
+      initialAux: new Map<string, AuxValue>([["key", bytesFromHex("1918111009080100")]]),
+      portedDispatchEnabled: true,
+    }),
+  ],
+  [
+    "Serpent-128 (hybrid: port 'state' == reconstructed stateAfter)",
+    serpent128Spec,
+    runSpec(serpent128Spec, REGISTRY, {
+      initialState: makeBytesState(bytesFromHex("00112233445566778899aabbccddeeff")),
+      initialAux: new Map<string, AuxValue>([
+        ["key", bytesFromHex("00000000000000000000000000000000")],
+      ]),
+      portedDispatchEnabled: true,
+    }),
+  ],
+];
+
+const desTrace: Trace = runSpec(desSpec, REGISTRY, {
+  initialState: makeBytesState(bytesFromHex("0123456789abcdef")),
+  initialAux: new Map<string, AuxValue>([["key", bytesFromHex("133457799bbcdff1")]]),
+  portedDispatchEnabled: true,
+});
+
+describe("frame-state helpers ≡ stateBefore/stateAfter (byte-identical regime)", () => {
+  for (const [name, , trace] of byteIdenticalCorpus) {
+    it(`${name}: every frame's helper bytes equal the legacy field bytes`, () => {
+      expect(trace.frames.length).toBeGreaterThan(0);
+      for (const f of trace.frames) {
+        expect(Array.from(frameStateInBytes(f) ?? [])).toEqual(Array.from(f.stateBefore.bytes));
+        expect(Array.from(frameStateOutBytes(f) ?? [])).toEqual(Array.from(f.stateAfter.bytes));
+      }
+    });
+  }
+});
+
+describe("frame-state helpers partially de-stale DES (port 'state' ≠ stale field)", () => {
+  // Where a `"state"` port exists (the DES F-leaves), the helper MUST read it
+  // (not the field); where it doesn't (split/xor/concat/key-schedule), it falls
+  // back to the field. And the de-staling must be ACTIVE — at least one frame's
+  // honest port value genuinely differs from the stale field, proving the
+  // helper improved those leaves rather than no-op'd.
+  it("reads the honest 'state' port and genuinely diverges from the stale field", () => {
+    expect(desTrace.frames.length).toBeGreaterThan(0);
+    let outDivergences = 0;
+    for (const f of desTrace.frames) {
+      const portIn = f.portInputs?.get("state");
+      if (portIn !== undefined) expect(frameStateInBytes(f)).toBe(portIn);
+      else expect(Array.from(frameStateInBytes(f) ?? [])).toEqual(Array.from(f.stateBefore.bytes));
+
+      const portOut = f.portOutputs?.get("state");
+      if (portOut !== undefined) {
+        expect(frameStateOutBytes(f)).toBe(portOut);
+        if (Array.from(portOut).join() !== Array.from(f.stateAfter.bytes).join()) {
+          outDivergences++;
+        }
+      } else {
+        expect(Array.from(frameStateOutBytes(f) ?? [])).toEqual(Array.from(f.stateAfter.bytes));
+      }
+    }
+    // The whole point of the B4 port-read: DES round bodies show honest
+    // per-leaf bytes, NOT the stale threaded plaintext.
+    expect(outDivergences).toBeGreaterThan(0);
   });
 });

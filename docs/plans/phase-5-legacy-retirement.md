@@ -57,7 +57,7 @@ user-required follow-up to B4). Advisor-confirmed.
 | **5.3** | **Expanded into a dependency-ordered sub-arc (5.3a–e).** The one-liner ("retire `stateBefore`/`stateAfter` + `inferStateEdges` + `dropAuxOnlyStateEdges`; collapse `BytesState`; PortFlowView universal default") was **mis-ordered**: the field/edge removals depend on the reserved Feistel scaffolding AND the un-port-wired Speck/Serpent being gone first. End goal (Path C) unchanged. See sub-rows. | see 5.3a–e |
 | **5.3a** | PortFlowView universal default + truth-up: formalize the `FrameStateView` default (BytesView = test-only-toy fallback), correct the stale S2(e) docstring, record this sub-arc + the BytesView-unreachable invariant test. No code-path change. | **DONE 2026-05-31** |
 | 5.3b | Port-wire Speck + Serpent specs (declare explicit `portInputs` on round-body leaves) so `inferPortEdges` owns their spine + the S2(f) gate skips legacy inference for them. **Load-bearing spike FIRST:** declaring `portInputs` may flip the runtime from implicit state-thread to explicit port-resolution (runtime.ts:343-347) — diff the trace on ONE Speck round leaf to confirm KAT byte-equality before committing the approach; if not byte-equal, 5.3b becomes native Speck/Serpent decomposition. Arc size hinges on this. | **DONE 2026-05-31** |
-| 5.3c | Migrate value/narration reads off `stateBefore`/`stateAfter` → frame ports: `edge-value-lookup` (endpoints + block-chips; isolate the toy-only rejoin), narration ×6, `StepStrip`, `RunExplorerModal`. | Sequenced |
+| 5.3c | Migrate value/narration reads off `stateBefore`/`stateAfter` → frame ports: `edge-value-lookup` (endpoints + block-chips; isolate the toy-only rejoin), narration ×6, `StepStrip`, `RunExplorerModal`. | **DONE 2026-05-31** |
 | 5.3d | **Port-native Feistel/swap visualization rebuild** (the obligatory user-required follow-up). New DES-port-native viz reading `portInputs`/`portOutputs`. **Independent of 5.3e** (the old components are toy-only). | Sequenced |
 | 5.3e | **Final removal.** Delete the old toy-only Feistel components (`RejoinFrameView`/`FeistelTrackContext`/`FeistelMiniDiagram`) + toy + feistel runtime walk + `FeistelRoundGroup`/`BranchTrack`/`CombineKind`; delete `stateBefore`/`stateAfter`, `inferStateEdges`, `dropAuxOnlyStateEdges`, `BytesView`, the legacy `port-projection` bridge; collapse `BytesState`/`State`/`StateShape`. Strictly after 5.3b + 5.3c. **Risk:** `inferStateEdges`'s empty-group-as-node case (graph.ts:1063-1071 — a cleared round in the editor) has no port-flow analogue → re-implement or accept as editor-only regression. | Sequenced |
 | — | Feistel types + toy fixture: **no longer a separate "next phase"** — folded into 5.3d (rebuild) + 5.3e (delete). Order of 5.3d vs 5.3e is a judgment call (rebuild-as-reference first, or clean-slate then rebuild from git history), not a dependency. | folded into 5.3d/e |
@@ -272,6 +272,107 @@ frame count, all 6 specs).
 key-schedule/key-expansion sit off-spine (aux-only). No KAT or `schemaVersion`
 change. **NEXT: 5.3c** (migrate value/narration reads off `stateBefore`/
 `stateAfter` → frame ports).
+
+## Slice 5.3c — what shipped (2026-05-31)
+
+Migrated every **non-toy** read of `stateBefore`/`stateAfter` onto the port
+I/O, so 5.3e can delete the fields with only the isolated toy-rejoin branch
+(deleted with the toy) still touching them. Shipped in three batches
+(`29c1efa`/`e19252e` narrators+components, `e6a2f9b` edge-value-lookup,
+`a1d2489` runtime+endpoints).
+
+- **New `src/core/frame-state.ts`** — `frameStateInBytes` / `frameStateOutBytes`
+  read the conventional `"state"` port first, falling back to the field until
+  5.3e. Generalizes the private B4 copy DES shipped in `narration/des.tsx`.
+  **NOT uniformly byte-identical — characterized by a corpus test
+  (`trace-initial-state.test.ts`), advisor-driven:**
+  - **Byte-identical** for (a) hybrid-ported leaves — the runtime reconstructs
+    `stateAfter` FROM `portOutputs.get("state")`, so port == field (Speck,
+    Serpent, padding, AES key-schedule); and (b) pure-port-native leaves with
+    NO `"state"` port — the helper falls back to the field (SHA-256, native-AES
+    `xor@1`/`byte-substitute@1` whose ports are `output`/`input`/`a`/…).
+  - **Partial, incidental de-staling for DES.** Its F-leaves (IP/FP/expand-R/
+    xor-with-K/s-boxes/p-permutation — 66 of 115 frames) are pure-port-native
+    BUT name their output port `"state"`, and the runtime never reconstructs
+    the threaded state from it → `stateAfter` is the STALE plaintext while the
+    port carries the honest per-leaf value. The helper reads the honest port
+    for those (the B4 de-staling `des.tsx` already relied on, now reaching the
+    step strip + inspector). DES's generic steps in the same round —
+    `split-bytes` (output0/1), chaining `xor` (output), `concat` (output),
+    `key-schedule` (keyN) — have no `"state"` port, so they STILL show the
+    stale field. So a DES round renders MIXED. Strictly better on the F-leaves,
+    no worse on the rest; visually confirmed clean (DES re-smoke below).
+- **Narration** (speck/serpent/padding migrated to the shared helper; des
+  consolidated off its private copy; **coerce** migrated to read the
+  `__coerce__` frame's new port I/O keyed by `params.portName`). Rejoin
+  (`combine-kinds.tsx`) left isolated — toy-only, deleted in 5.3e.
+- **`StepStrip` + `RunExplorerModal`** thumbnails/tiles read `frameStateOutBytes`.
+- **`edge-value-lookup`** — block-chips + `lookupRegularState` spine
+  (producer/consumer) + `lookupNodeValue` regular-leaf migrated; the
+  `REJOIN_STEP_TYPE` branch ISOLATED (kept its direct `stateAfter` reads,
+  toy-gated, deleted in 5.3e). `lookupPassthroughBytes` reads `params` only —
+  already field-free.
+- **`Trace.initialState: State`** (additive, runtime-only, NOT persisted → no
+  `schemaVersion` bump). The endpoint INPUT pill / input-end edge resolve to it
+  instead of `frames[0].stateBefore` — the only read the naive port-swap
+  couldn't cover (SHA-256's first frame has no `"state"` input port; it's a
+  constant-load). 17 `Trace`-literal constructors across 11 test files +
+  GraphView's empty-trace fallback gained the now-required field.
+- **The `__coerce__` frame** now carries `portInputs`/`portOutputs` (keyed by
+  the coerced `portName`); it survives 5.3e (universal coercion mechanism, not
+  toy scaffolding), so its narrator had to go field-free. Side effect: the
+  frame now routes to `PortFlowView` via `isPortNativeFrame` — harmless
+  (flag-on-only, never shipped).
+- **`provenance/serpent.ts`** (the plan-enumeration gap — advisor item 4):
+  2 bounds-guard `stateAfter` reads, registered but **unreachable** (Serpent
+  renders via `PortFlowView`, which has no provenance overlay; the
+  `BytesView`+provenance overlay is toy-only). Folded the 2-line port-first
+  migration into 5.3c rather than spin a slice — deferring would leave the
+  fields un-deletable. `App.tsx` (3 live reads) + `BytesView` +
+  `FeistelTrackContext` + `RejoinFrameView` reads are all toy-only-reachable
+  (BytesView is toy-only) → deleted with `BytesView` in 5.3e; no 5.3c action.
+- **Deferred (one unified concern):** the cipher-agnostic surfaces (step strip,
+  value inspector) only know the `"state"` port convention, so any leaf whose
+  honest bytes live on a differently-named port shows the stale threaded field
+  instead (→ null/"(no state)" once 5.3e removes the fallback): native-AES
+  `xor`/`byte-substitute` (`output`/`input`), DES `split-bytes`/`xor`/`concat`
+  (`output`/`output0/1`), SHA-256 primitives. This is byte-identical to the
+  prior `stateAfter` read (not a 5.3c regression) and the same condition
+  `narration/des.tsx` documents. The uniform fix — resolve each leaf's REAL
+  output port by name — is the deferred **port-aware inspector** (same class as
+  the block-chip port-value resolution, Slice 2.9c-e territory). 5.3c neither
+  fixes nor worsens it; it incidentally de-stales the subset whose port is
+  named `"state"` (the DES F-leaves).
+
+**Gate:** `npm run check` GREEN each batch (2372 tests / 206 files; bundle 657
+KB raw / 193 KB gz). New `tests/trace-initial-state.test.ts` pins
+(1) `initialState`==input==`frames[0].stateBefore` + input-pill resolution for
+SHA-256 (the load-bearing pure-port-native case) and AES-128 ECB, and (2) the
+helper↔field relationship across the corpus: byte-identical on SHA-256 / AES /
+Speck / Serpent, intentional-divergence on DES (helper reads the honest
+`"state"` port, ≥1 frame genuinely diverges from the stale field). **Browser
+smoke DONE** (throwaway specs, per `feedback_visual_smoke_vs_property_tests`):
+(a) AES — input pill renders the plaintext via `trace.initialState`, step strip
++ value inspector render clean; (b) DES (the only diverging cipher — AES
+structurally can't show it) — KAT correct, no page errors, and the step strip
+renders the MIX cleanly (`key-schedule` shows stale `0123456789abcdef` next to
+`initial-permutation` showing the honest de-staled `cc00ccfff0aaf0aa`),
+variable-length port values fine.
+
+**5.3e tracking — field-referencing code that 5.3e must delete/retarget:**
+(i) the isolated `REJOIN_STEP_TYPE` branch in `edge-value-lookup` + the toy +
+its Feistel UI; (ii) `trace-initial-state.test.ts`'s one
+`initialState`==`frames[0].stateBefore` assertion (drop it; the
+`initialState`==input assertion keeps correctness); (iii)
+`runtime-ported-dispatch-coercion.test.ts` asserts `coerceFrame.stateBefore`/
+`stateAfter` — retarget to the new `portInputs`/`portOutputs`; (iv) `App.tsx` +
+`BytesView` + `FeistelTrackContext`/`RejoinFrameView` (deleted with BytesView);
+(v) doc-comment references in `GraphView`/`provenance/*`/`step-id`/
+`default-registry`/`bytes-to-state`/`pkcs7-pad`.
+
+**NEXT: 5.3d** (port-native Feistel/swap viz rebuild — floats, independent of
+5.3e) and/or **5.3e** (final field/edge/BytesView/toy removal — now unblocked
+by 5.3a+5.3b+5.3c).
 
 ## Verification (for 5.1+)
 
