@@ -177,11 +177,16 @@ is that `portInputs`/`portOutputs` now populate (runtime gate:
 2340 tests / 205 files (−8 from 5.1's 2348: vacuous flag-off parity + dead
 executor-level assertions removed); AES-128/192/256 + ECB/CBC + Speck + Serpent
 + DES KATs all byte-equal. **Advisor pass DONE** this session (was deferred in
-the prior handoff). **Remaining manual gate:** browser-smoke a Speck
-key-schedule frame, a padding **pad AND unpad** frame (unpad is a length
-*decrease* — zero PortFlowView precedent), and an aux-primitive frame; if unpad
-reads confusingly, a PortFlowView length-delta affordance becomes near-term
-polish.
+the prior handoff). **Unpad browser smoke DONE** (the advisor's hard gate — the
+novel length-*decrease* with zero PortFlowView precedent): a throwaway
+Playwright run drove PKCS#7 encrypt→decrypt, scrubbed to the `pkcs7-unpad`
+frame, and screenshotted it — it renders as input `STATE (16 bytes)` over
+output `STATE (5 bytes)`, the per-row byte-count labels + the visible 0x0b
+padding run making the strip read as an obvious "11 bytes dropped." **C1
+confirmed empirically; the PortFlowView length-delta affordance stays future
+polish.** Optional remaining glances (not blocking — ordinary multi-port
+PortFlowView shapes with SHA-256 precedent): a Speck key-schedule frame (22
+round-key output rows) + an aux-primitive frame.
 
 ## Verification (for 5.1+)
 

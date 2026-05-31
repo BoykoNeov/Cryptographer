@@ -7,8 +7,11 @@ close-out done. The advisor pass that was pending below **was run this session**
 PortFlowView reroute for padding) + flagged the unpad length-decrease smoke. See
 `docs/plans/phase-5-legacy-retirement.md` "Slice 5.2 — what shipped" for the
 canonical record. This file is retained as the historical approach reference.
-The remaining open item is the **manual browser smoke** (Speck key-schedule
-frame, padding pad+unpad frames, aux-primitive frame).
+The advisor's hard gate — the **unpad** browser smoke (novel length-*decrease*)
+— was driven + viewed this session (renders as input `STATE (16 bytes)` over
+output `STATE (5 bytes)`; reads clearly; C1 confirmed). Only optional glances
+remain (Speck key-schedule frame, aux-primitive frame) — ordinary multi-port
+PortFlowView shapes.
 
 Parent plan: `docs/plans/phase-5-legacy-retirement.md` (Slice 5.2 row).
 Topic memory: `…/memory/project_phase5_legacy_retirement.md`.
