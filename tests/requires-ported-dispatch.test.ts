@@ -48,7 +48,7 @@ import { speck32_64BeDecryptSpec } from "@/ciphers/speck-32-64-be-decrypt";
 import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
 import { speck32_64LeDecryptSpec } from "@/ciphers/speck-32-64-le-decrypt";
 import { requiresPortedDispatch } from "@/core/dispatch";
-import type { CipherSpec } from "@/core/types";
+import type { CipherSpec, StepNode } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 const registry = buildDefaultRegistry();
@@ -207,5 +207,75 @@ describe("requiresPortedDispatch — container descent", () => {
       steps: [],
     };
     expect(requiresPortedDispatch(spec, registry)).toBe(false);
+  });
+});
+
+// ─── Slice 5.3a — PortFlowView is the universal inspector default ──────────
+//
+// The linear inspector dispatches a frame to `PortFlowView` iff the runtime
+// captured port I/O, which it does iff the step's registration has
+// `legacy === undefined` (the gate at `runtime.ts:767`; `isPortNativeFrame`
+// in `PortFlowView.tsx` then reads the populated fields). So the contract
+// 5.3a formalizes — "no user-selectable cipher reaches `BytesView`" — is
+// EXACTLY "every leaf of every shipped spec has a port-native (legacy-free)
+// registration." `BytesView` is reachable ONLY by the lifted-legacy
+// `feistel.toy-add-k@1` step, which is test-only (injected via
+// `__setSpecForTests`, never in the cipher selector). Reuses `shippedSpecs`
+// above so the enumeration can't drift between the two invariants.
+//
+// (Rejoin frames route to `RejoinFrameView`, key-expansion to
+// `KeyScheduleExplorer` — also not `BytesView`. No shipped spec uses
+// `feistel-round` post-B4, so no shipped frame is a rejoin frame either.)
+const collectLeafTypes = (nodes: readonly StepNode[], out: string[]): string[] => {
+  for (const node of nodes) {
+    if (node.kind === "step") {
+      out.push(node.type);
+      continue;
+    }
+    if (node.kind === "feistel-round") {
+      for (const track of node.tracks) collectLeafTypes(track.children, out);
+      continue;
+    }
+    // group / iterate / for-each-subgraph* — structural, no frame of their
+    // own; descend into children.
+    collectLeafTypes(node.children, out);
+  }
+  return out;
+};
+
+describe("PortFlowView universal default (5.3a) — no selectable cipher reaches BytesView", () => {
+  for (const [name, spec] of shippedSpecs) {
+    it(`${name}: every leaf is port-native (registration.legacy === undefined)`, () => {
+      const leafTypes = collectLeafTypes(spec.steps, []);
+      expect(leafTypes.length).toBeGreaterThan(0);
+      for (const type of leafTypes) {
+        const reg = registry.getRegistration(type);
+        expect(reg, `no registration for "${type}"`).toBeDefined();
+        if (reg === undefined) continue;
+        // Port-native ⟺ kind "ported" with NO `legacy` fallback — the exact
+        // condition under which the runtime captures port I/O (runtime.ts:767)
+        // → `isPortNativeFrame` → PortFlowView. `kind: "legacy"` or a lifted
+        // ported reg (legacy defined) would route to BytesView.
+        const isPortNative = reg.kind === "ported" && reg.legacy === undefined;
+        expect(
+          isPortNative,
+          `"${type}" is not port-native (kind=${reg.kind}) → would route to BytesView`,
+        ).toBe(true);
+      }
+    });
+  }
+
+  it("positive control: the lifted-legacy feistel toy WOULD route to BytesView", () => {
+    // Proves the invariant above has teeth. The one lifted-legacy step (the
+    // test-only toy) is a ported registration that KEEPS a `legacy` fallback →
+    // the runtime skips port capture → its frames fall through to `BytesView`.
+    // If this regresses to `undefined`, the Feistel components break AND the
+    // invariant above goes vacuous.
+    const reg = registry.getRegistration("feistel.toy-add-k@1");
+    expect(reg).toBeDefined();
+    expect(reg?.kind).toBe("ported");
+    if (reg?.kind === "ported") {
+      expect(reg.legacy).toBeDefined();
+    }
   });
 });

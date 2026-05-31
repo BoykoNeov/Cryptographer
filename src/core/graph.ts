@@ -1522,13 +1522,21 @@ const inferStateEdges = (spec: CipherSpec, registry?: StepRegistry): GraphEdge[]
  * kind: "state", auxKey: STATE_AUX_KEY }`. The kind reuses `"state"`
  * rather than introducing a new `"port"` kind so the renderer paints
  * port-flow as the spine (thicker, darker — exactly the "this is the
- * cipher's primary dataflow" reading the user expects). Post-S2(f)
- * the legacy consecutive-siblings inference is suppressed for port-
- * native specs, so on SHA-256 the spine is composed ENTIRELY of port-
- * derived edges; on legacy AES/Speck/Serpent/DES specs (no
- * `portInputs` anywhere) this pass returns an empty list and the
- * legacy inference still owns the spine. Byte-identical for any spec
- * that doesn't declare port-edge wiring.
+ * cipher's primary dataflow" reading the user expects). Post-S2(f) the
+ * legacy consecutive-siblings inference is suppressed (via the skip-set)
+ * for any leaf that declares `portInputs`, so where this pass emits, the
+ * legacy pass stays silent.
+ *
+ * **Per-cipher reality (updated 2026-05-31, post-B-phase + Slice 5.2 —
+ * supersedes the original S2(e) note).** SHA-256, DES, native-AES, and
+ * AES-CBC declare explicit spec `portInputs`, so their spine is composed
+ * ENTIRELY of port-derived edges. **Speck and Serpent do NOT** — they ship
+ * as monolithic hybrid-ported steps with no spec `portInputs`, so this pass
+ * returns an empty list for them and the legacy `inferStateEdges` remains
+ * the SOLE source of their rendered spine. Retiring `inferStateEdges`
+ * (Phase-5 Slice 5.3e) therefore requires port-wiring Speck/Serpent first
+ * (Slice 5.3b) — see `docs/plans/phase-5-legacy-retirement.md`. Byte-
+ * identical for any spec that doesn't declare port-edge wiring.
  *
  * **Why this needed to exist.** Pre-S2(e) `deriveAuxGraph` did not
  * consume `portInputs` — Slice 2.6a wired the runtime + spec-shapes

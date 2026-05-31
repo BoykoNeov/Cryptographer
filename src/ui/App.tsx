@@ -1789,6 +1789,19 @@ const FrameStateView = (props: {
   // Post-Slice-5.1 the only State shape is `bytes`, so the legacy 3-way
   // (matrix / bytes / mixed-boundary) dispatch collapsed to BytesView —
   // `MatrixView` + `MixedShapeView` were retired with the MatrixState shape.
+  //
+  // Slice 5.3a formalizes this as the intentional contract: `PortFlowView` is
+  // the UNIVERSAL inspector default. Every user-selectable cipher/hash is
+  // port-native — every leaf's registration has `legacy === undefined`, so the
+  // runtime captures port I/O (gate at `runtime.ts:767`) and every selectable
+  // frame lands in `PortFlowView`. `BytesView` is now reachable ONLY by the
+  // lifted-legacy `feistel.toy-add-k@1` step, which is test-only (injected via
+  // `__setSpecForTests`, never in the cipher selector). The invariant in
+  // `tests/requires-ported-dispatch.test.ts` pins that no selectable cipher
+  // reaches `BytesView`. Full retirement of `BytesView` +
+  // `stateBefore`/`stateAfter` is sequenced into Slice 5.3e of the Phase-5 arc
+  // (`docs/plans/phase-5-legacy-retirement.md`), once the Feistel scaffolding
+  // is rebuilt/retired.
   return (
     <Show
       when={isPortNativeFrame(props.frame)}

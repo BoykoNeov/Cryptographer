@@ -54,8 +54,13 @@ user-required follow-up to B4). Advisor-confirmed.
 | **5.0** | Underbrush: delete `BitVecState`/`BigIntState` + the dead `REPLICATION_THRESHOLD` alias + refresh stale `CLAUDE.md` stats. Zero crypto risk. | **DONE 2026-05-30** |
 | **5.1** | Retire `MatrixState` (Phase C1-matrix): drain the test-only `generic.*` matrix primitives + the `sha2.*` monolithic steps, retarget/delete their MatrixView/projection tests, drive the 4×4 render off raw bytes, then delete the type. No crypto risk; broad UI surface. | **DONE 2026-05-30** |
 | 5.2 | Convert the lifted key-schedules (`aes.key-expansion@1/@2`, `speck.key-schedule@1`, `serpent.key-expansion@1`, `des.key-schedule@1`) + the padding/aux primitives to true `PortedExecutor`s; drop their `legacy:` fields. **`liftLegacyExecutor` SURVIVES** as a bytes-only helper for `feistel.toy-add-k@1` (the reserved-through-Phase-5 toy — advisor verdict 2026-05-30: converting it would drop `legacy:` and flip the toy onto the PortFlowView capture path, doing the deferred Feistel-viz rebuild piecemeal). **Crypto KAT gates; own advisor pass** per `feedback_iterative_slice_review`. | **DONE 2026-05-31** |
-| 5.3 | Phase C2: retire `TraceFrame.stateBefore`/`stateAfter` + `inferStateEdges` + `dropAuxOnlyStateEdges`; collapse the residual `BytesState`; `PortFlowView` becomes the universal inspector default. | Sequenced |
-| — | Feistel types + toy fixture: reserved for the **next phase** (port-native Feistel/swap viz rebuild). | Deferred |
+| **5.3** | **Expanded into a dependency-ordered sub-arc (5.3a–e).** The one-liner ("retire `stateBefore`/`stateAfter` + `inferStateEdges` + `dropAuxOnlyStateEdges`; collapse `BytesState`; PortFlowView universal default") was **mis-ordered**: the field/edge removals depend on the reserved Feistel scaffolding AND the un-port-wired Speck/Serpent being gone first. End goal (Path C) unchanged. See sub-rows. | see 5.3a–e |
+| **5.3a** | PortFlowView universal default + truth-up: formalize the `FrameStateView` default (BytesView = test-only-toy fallback), correct the stale S2(e) docstring, record this sub-arc + the BytesView-unreachable invariant test. No code-path change. | **DONE 2026-05-31** |
+| 5.3b | Port-wire Speck + Serpent specs (declare explicit `portInputs` on round-body leaves) so `inferPortEdges` owns their spine + the S2(f) gate skips legacy inference for them. **Load-bearing spike FIRST:** declaring `portInputs` may flip the runtime from implicit state-thread to explicit port-resolution (runtime.ts:343-347) — diff the trace on ONE Speck round leaf to confirm KAT byte-equality before committing the approach; if not byte-equal, 5.3b becomes native Speck/Serpent decomposition. Arc size hinges on this. | Sequenced |
+| 5.3c | Migrate value/narration reads off `stateBefore`/`stateAfter` → frame ports: `edge-value-lookup` (endpoints + block-chips; isolate the toy-only rejoin), narration ×6, `StepStrip`, `RunExplorerModal`. | Sequenced |
+| 5.3d | **Port-native Feistel/swap visualization rebuild** (the obligatory user-required follow-up). New DES-port-native viz reading `portInputs`/`portOutputs`. **Independent of 5.3e** (the old components are toy-only). | Sequenced |
+| 5.3e | **Final removal.** Delete the old toy-only Feistel components (`RejoinFrameView`/`FeistelTrackContext`/`FeistelMiniDiagram`) + toy + feistel runtime walk + `FeistelRoundGroup`/`BranchTrack`/`CombineKind`; delete `stateBefore`/`stateAfter`, `inferStateEdges`, `dropAuxOnlyStateEdges`, `BytesView`, the legacy `port-projection` bridge; collapse `BytesState`/`State`/`StateShape`. Strictly after 5.3b + 5.3c. **Risk:** `inferStateEdges`'s empty-group-as-node case (graph.ts:1063-1071 — a cleared round in the editor) has no port-flow analogue → re-implement or accept as editor-only regression. | Sequenced |
+| — | Feistel types + toy fixture: **no longer a separate "next phase"** — folded into 5.3d (rebuild) + 5.3e (delete). Order of 5.3d vs 5.3e is a judgment call (rebuild-as-reference first, or clean-slate then rebuild from git history), not a dependency. | folded into 5.3d/e |
 
 ## Slice 5.0 — what shipped
 
@@ -187,6 +192,33 @@ confirmed empirically; the PortFlowView length-delta affordance stays future
 polish.** Optional remaining glances (not blocking — ordinary multi-port
 PortFlowView shapes with SHA-256 precedent): a Speck key-schedule frame (22
 round-key output rows) + an aux-primitive frame.
+
+## Slice 5.3a — what shipped (2026-05-31)
+
+First slice of the 5.3 sub-arc. **Formalized `PortFlowView` as the universal
+inspector default** — no runtime code-path change, since it was already
+de-facto true for every selectable cipher.
+
+- **`App.tsx::FrameStateView`** — reframed the dispatch comment: `PortFlowView`
+  is the intentional universal default. Every user-selectable cipher/hash is
+  port-native (every leaf's registration has `legacy === undefined`, the
+  `runtime.ts:767` port-capture gate), so every selectable frame lands there;
+  `BytesView` is reachable ONLY by the lifted-legacy `feistel.toy-add-k@1`
+  (test-only, injected via `__setSpecForTests`, never in the selector).
+- **`tests/requires-ported-dispatch.test.ts`** — new describe block reusing the
+  `shippedSpecs` enumeration: asserts every leaf of every shipped spec is
+  port-native (`kind:"ported"`, `legacy === undefined`) → no selectable cipher
+  reaches `BytesView`; plus a positive control that the toy IS lifted-legacy
+  (so the invariant has teeth).
+- **`graph.ts` (`inferPortEdges` docstring)** — truthed-up the stale S2(e)
+  note: AES/DES are now port-wired (spine from `inferPortEdges`), but
+  Speck/Serpent are NOT (monolithic hybrid-ported, no spec `portInputs`), so
+  `inferStateEdges` remains the sole source of their spine — retiring it (5.3e)
+  needs 5.3b first.
+
+**Gate:** `npm run check` GREEN; browser-smoked AES round + Speck key-schedule
+→ `PortFlowView`, and the graph spine for Speck/Serpent (`inferStateEdges`
+retained) + SHA-256 (port-flow). No KAT or `schemaVersion` change.
 
 ## Verification (for 5.1+)
 
