@@ -1,11 +1,11 @@
 /**
  * Slice 1.2 of the universal-port-dataflow plan
- * (`docs/plans/universal-port-phase-1-slices.md`).
+ * (`docs/plans/universal-port-phase-1-slices.md`), updated for Slice 5.2.
  *
- * Pins frame-byte equivalence between `portedDispatchEnabled: true` and
- * `portedDispatchEnabled: false` for the THREE byte-typed aux-only step
- * types lifted in Slice 1.2 (the fourth, the matrix `generic.iv-load@1`,
- * retired in Phase 5 Slice 5.1 with the MatrixState shape):
+ * The three byte-typed aux-only step types went **port-native in Slice 5.2**
+ * (2026-05-31): they dropped their `legacy:` lift for true `PortedExecutor`s
+ * (the fourth, the matrix `generic.iv-load@1`, retired in Slice 5.1 with the
+ * MatrixState shape):
  *
  *   - `generic.aux-load@1`  — pure source (no state, no aux read).
  *   - `generic.aux-copy@1`  — aux read + aux write, Uint8Array shape.
@@ -14,107 +14,43 @@
  *                              order invariant called out in
  *                              `ProjectionMetadata`'s contract comment.
  *
- * Two test surfaces (was three — (b) removed in Slice B1.4b):
+ * Because they no longer carry a legacy executor, a flag-OFF run throws
+ * "requires portedDispatchEnabled" — there is no legacy frame stream left to
+ * compare against. The original flag-off-vs-flag-on frame parity was therefore
+ * reduced to flag-ON assertions (the same reduction B2/B3/B4 applied to the
+ * cipher dispatch tests). The byte-level executor behavior is pinned
+ * independently by `tests/aux-primitives.test.ts`.
  *
- *   (a) **Synthetic 3-step spec** — exercises each lifted step type in
- *       turn under both flag values. Frame-by-frame deep-equality.
+ * Two surviving surfaces (all flag-ON):
  *
- *   (b) **REMOVED in Slice B1.4b.** Was the AES-128 CBC KAT + frame-parity
- *       smoke — the only shipped spec that exercised the matrix `iv-load`.
- *       CBC is now byte-native (no legacy frame stream; the IV rides a
- *       port-native `aux-load-bytes@1` "fetch-iv" leaf), so there's nothing
- *       to compare against. The CBC KAT lives in aes-128-cbc-kat; `iv-load`'s
- *       ported-vs-legacy parity is still pinned by the synthetic (a) spec.
+ *   (a) **Synthetic CBC-head spec** — load an IV literal, copy it into the
+ *       chain accumulator, XOR a per-block value in; assert the chain bytes
+ *       equal IV ⊕ plaintext end-to-end.
  *
- *   (c) **Targeted invariant pins** for the two hazards the advisor
- *       flagged before Slice 1.2 work began:
- *         - Map iteration order: `auxXor`'s metadata returns the binding
- *           in `[from, into]` order, so the runtime's auxReadMissing
- *           array matches the legacy executor's `auxReads: [from, into]`
- *           order. Drift here would break frame-parity in subtle ways
- *           (Vitest's `.toEqual` is order-insensitive on Maps, but the
- *           auxReadMissing field is an ARRAY — order matters).
- *         - Empty-auxName sentinel: a fresh palette drop with unset
- *           params yields a legacy frame with no auxWrites; the ported
- *           path's metadata must return an EMPTY write binding rather
- *           than `[port → ""]` (which would corrupt `aux.set("", ...)`).
- *
- * The existing `tests/runtime-ported-dispatch.test.ts` covers the
- * Phase-0 byte-substitution + add-round-key entries; this file is its
- * Slice-1.2 sibling.
+ *   (c) **Targeted invariant pins** for the two hazards the advisor flagged
+ *       before Slice 1.2 work began, now asserted on the ported path alone:
+ *         - Map iteration order: `auxXor`'s meta returns the binding in
+ *           `[from, into]` order, so a fresh-drop frame's `auxReadMissing`
+ *           array is `["", ""]` (order matters — it's an ARRAY).
+ *         - Empty-name/target sentinel: an unset `auxName` (aux-load) or `to`
+ *           (aux-copy) yields an EMPTY meta write binding, so the runtime
+ *           never does `aux.set("", ...)` — no auxWrites, no "" key pollution.
  */
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { runSpec } from "@/core/runtime";
 import { makeBytesState } from "@/core/state/bytes";
-import type { AuxValue, CipherSpec, State, TraceFrame } from "@/core/types";
+import type { AuxValue, CipherSpec } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
-// ─── State / aux equality helpers (mirror the Phase-0 dispatch tests) ───
-
-const expectStatesEqual = (a: State, b: State, label: string): void => {
-  expect(a.shape, `${label}: shape`).toBe(b.shape);
-  switch (a.shape) {
-    case "bytes": {
-      if (b.shape !== a.shape) return;
-      expect(Array.from(a.bytes), `${label}: bytes`).toEqual(Array.from(b.bytes));
-      return;
-    }
-  }
-};
-
-const expectAuxMapsEqual = (
-  a: ReadonlyMap<string, AuxValue>,
-  b: ReadonlyMap<string, AuxValue>,
-  label: string,
-): void => {
-  expect([...a.keys()].sort(), `${label}: keys`).toEqual([...b.keys()].sort());
-  expect(a, `${label}: aux value`).toEqual(b);
-};
-
-const expectFramesEqual = (a: TraceFrame, b: TraceFrame, index: number): void => {
-  const label = `frame ${index} (${a.stepType} @ ${a.stepId})`;
-  expect(a.index, `${label}: index`).toBe(b.index);
-  expect(a.path, `${label}: path`).toEqual(b.path);
-  expect(a.stepId, `${label}: stepId`).toBe(b.stepId);
-  expect(a.stepType, `${label}: stepType`).toBe(b.stepType);
-  expect(a.params, `${label}: params`).toEqual(b.params);
-  expect(a.blockIndex, `${label}: blockIndex`).toBe(b.blockIndex);
-  expect(a.branchPath, `${label}: branchPath`).toEqual(b.branchPath);
-  expect(a.auxReadMissing, `${label}: auxReadMissing`).toEqual(b.auxReadMissing);
-  expectStatesEqual(a.stateBefore, b.stateBefore, `${label}: stateBefore`);
-  expectStatesEqual(a.stateAfter, b.stateAfter, `${label}: stateAfter`);
-  expectAuxMapsEqual(a.auxRead, b.auxRead, `${label}: auxRead`);
-  expectAuxMapsEqual(a.auxWritten, b.auxWritten, `${label}: auxWritten`);
-};
-
-const expectFrameStreamsEqual = (
-  a: readonly TraceFrame[],
-  b: readonly TraceFrame[],
-  label: string,
-): void => {
-  expect(a.length, `${label}: frame count`).toBe(b.length);
-  for (let i = 0; i < a.length; i++) {
-    const af = a[i];
-    const bf = b[i];
-    if (!af || !bf) throw new Error(`${label}: fixture missing frame at index ${i}`);
-    expectFramesEqual(af, bf, i);
-  }
-};
-
-// ─── (a) Synthetic 4-step spec ──────────────────────────────────────────
+// ─── (a) Synthetic CBC-head spec ────────────────────────────────────────
 
 /**
- * Hand-built spec exercising all four Slice 1.2 step types. The data
- * flow is the head of a CBC composition: load an IV literal, copy it
- * into the chain accumulator, XOR a per-block value into it, then run
- * iv-load to obtain the matrix-shaped chain value the downstream cipher
- * would consume. State is passthrough throughout (each step's
- * shapeContract is `{ input: "any", output: "preserveInput" }`).
- *
- * The four leaves are NOT wrapped in any container — Slice 1.2 doesn't
- * touch iterate/feistel-round handling. The flat trace is what matters
- * for frame-parity.
+ * Hand-built spec exercising all three port-native aux step types. The data
+ * flow is the head of a CBC composition: load an IV literal, copy it into the
+ * chain accumulator, XOR a per-block value into it. State is passthrough
+ * throughout (no state ports — each step's `shapeContract` is
+ * `{ input: "any", output: "preserveInput" }`).
  */
 const auxOnlySpec: CipherSpec = {
   id: "test-aux-only@1",
@@ -128,7 +64,7 @@ const auxOnlySpec: CipherSpec = {
       type: "generic.aux-load@1",
       params: {
         auxName: "iv-literal",
-        // 16 bytes — matches AES block size so iv-load can run after.
+        // 16 bytes — matches AES block size.
         value: [
           0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
           0x0f,
@@ -147,10 +83,6 @@ const auxOnlySpec: CipherSpec = {
       type: "generic.aux-xor@1",
       params: { from: "plaintext-block", into: "chain-bytes" },
     },
-    // The matrix `generic.iv-load@1` step (chain-bytes → MatrixState
-    // chain-matrix) retired in Phase 5 Slice 5.1 (2026-05-30) with the
-    // MatrixState shape; the three surviving byte-typed aux primitives keep
-    // the frame-parity coverage.
   ],
 };
 
@@ -167,22 +99,8 @@ const auxOnlyInitialAux = (): Map<string, AuxValue> =>
     ],
   ]);
 
-describe("runtime — ported dispatch, Slice 1.2 aux-only primitives", () => {
-  describe("(a) synthetic 3-step spec — frame-by-frame parity", () => {
-    it("emits byte-equal frames across the three lifted aux step types", () => {
-      const legacy = runSpec(auxOnlySpec, buildDefaultRegistry(), {
-        initialState: auxOnlyInitialState(),
-        initialAux: auxOnlyInitialAux(),
-      });
-      const ported = runSpec(auxOnlySpec, buildDefaultRegistry(), {
-        initialState: auxOnlyInitialState(),
-        initialAux: auxOnlyInitialAux(),
-        portedDispatchEnabled: true,
-      });
-
-      expectFrameStreamsEqual(ported.frames, legacy.frames, "aux-only synthetic");
-    });
-
+describe("runtime — ported dispatch, aux-only primitives (port-native since Slice 5.2)", () => {
+  describe("(a) synthetic CBC-head spec under ported dispatch", () => {
     it("end-to-end aux state matches: chain-bytes is iv XOR plaintext", () => {
       const ported = runSpec(auxOnlySpec, buildDefaultRegistry(), {
         initialState: auxOnlyInitialState(),
@@ -215,21 +133,15 @@ describe("runtime — ported dispatch, Slice 1.2 aux-only primitives", () => {
     });
   });
 
-  // ─── (b) AES-128 CBC — REMOVED in Slice B1.4b ───────────────────────────
-  // Was the real-spec legacy-vs-ported frame-parity smoke (iv-load + the AES
-  // core + chaining on the matrix CBC spec). CBC is now byte-native (no legacy
-  // frame stream); its KAT lives in aes-128-cbc-kat. The iv-load primitive
-  // stays parity-pinned by the synthetic (a) spec above.
-
   // ─── (c) Targeted invariants for the two pre-Slice-1.2 hazards ──────────
 
-  describe("(c) hazard pins (advisor flags before Slice 1.2 work began)", () => {
-    it("auxReadMissing iteration order on aux-xor matches the legacy executor's auxReads: [from, into]", () => {
-      // Fresh-palette-drop variant: params has neither `from` nor `into`,
-      // so the legacy executor declares `auxReads: ["", ""]`. Both
-      // executions must produce `auxReadMissing: ["", ""]` in the same
-      // order — a Map-iteration drift in `auxXorMeta.auxReadPorts` would
-      // surface here even with vitest's order-insensitive Map .toEqual.
+  describe("(c) hazard pins (flag-on)", () => {
+    it("a fresh-drop aux-xor frame has auxReadMissing ['', ''] in [from, into] order", () => {
+      // params has neither `from` nor `into`, so meta.auxReadPorts returns
+      // [["from", ""], ["into", ""]] and both miss → auxReadMissing ["", ""].
+      // A Map-iteration drift in `auxXorMeta.auxReadPorts` would surface here
+      // even though Vitest's Map .toEqual is order-insensitive (the field is
+      // an ARRAY).
       const spec: CipherSpec = {
         id: "test-aux-xor-unset@1",
         name: "Aux-xor unset params",
@@ -245,32 +157,22 @@ describe("runtime — ported dispatch, Slice 1.2 aux-only primitives", () => {
         ],
       };
 
-      const legacy = runSpec(spec, buildDefaultRegistry(), {
-        initialState: makeBytesState(new Uint8Array(0)),
-      });
       const ported = runSpec(spec, buildDefaultRegistry(), {
         initialState: makeBytesState(new Uint8Array(0)),
         portedDispatchEnabled: true,
       });
 
-      expect(legacy.frames.length).toBe(1);
       expect(ported.frames.length).toBe(1);
-      const legacyFrame = legacy.frames[0];
-      const portedFrame = ported.frames[0];
-      if (!legacyFrame || !portedFrame) throw new Error("frame missing");
-
-      // The substantive assertion: auxReadMissing is an ARRAY, so order
-      // matters. Both paths must produce ["", ""].
-      expect(legacyFrame.auxReadMissing).toEqual(["", ""]);
-      expect(portedFrame.auxReadMissing).toEqual(["", ""]);
+      const frame = ported.frames[0];
+      if (!frame) throw new Error("frame missing");
+      expect(frame.auxReadMissing).toEqual(["", ""]);
     });
 
-    it("aux-load with empty auxName produces NO auxWrites on either path (empty-sentinel)", () => {
-      // Fresh palette drop: `auxName === ""`. Legacy returns `{ state }`
-      // with no auxWrites. Ported must match: meta.auxWritePorts({auxName:""})
-      // returns empty map; runtime auxWritten stays empty. If the meta
-      // bound an empty-string aux key, the runtime would aux.set("", ...)
-      // and the frame's auxWritten would diverge.
+    it("aux-load with empty auxName produces NO auxWrites and no '' aux key", () => {
+      // Fresh palette drop: `auxName === ""`. meta.auxWritePorts({auxName:""})
+      // returns an empty map; the runtime's auxWritten stays empty. If the
+      // meta bound an empty-string aux key, the runtime would aux.set("", ...)
+      // and the live aux map would gain a "" key.
       const spec: CipherSpec = {
         id: "test-aux-load-unset@1",
         name: "Aux-load unset params",
@@ -286,41 +188,27 @@ describe("runtime — ported dispatch, Slice 1.2 aux-only primitives", () => {
         ],
       };
 
-      const legacy = runSpec(spec, buildDefaultRegistry(), {
-        initialState: makeBytesState(new Uint8Array(0)),
-      });
       const ported = runSpec(spec, buildDefaultRegistry(), {
         initialState: makeBytesState(new Uint8Array(0)),
         portedDispatchEnabled: true,
       });
 
-      const legacyFrame = legacy.frames[0];
-      const portedFrame = ported.frames[0];
-      if (!legacyFrame || !portedFrame) throw new Error("frame missing");
-
-      // No auxWrites under either path.
-      expect(legacyFrame.auxWritten.size).toBe(0);
-      expect(portedFrame.auxWritten.size).toBe(0);
-
-      // Critical follow-on: the live aux map (carried through finalAux)
-      // must not contain a "" key from a stray empty-string binding.
-      expect(legacy.finalAux.has("")).toBe(false);
+      const frame = ported.frames[0];
+      if (!frame) throw new Error("frame missing");
+      expect(frame.auxWritten.size).toBe(0);
       expect(ported.finalAux.has("")).toBe(false);
     });
 
     it("aux-copy with empty target produces NO auxWrites and doesn't pollute aux", () => {
-      // Sentinel test for the writer: aux-xor's write never fires (missing
-      // reads → no write); aux-copy could plausibly mis-bind its `to`
-      // empty-string case if its auxWritePorts didn't gate. (The matrix
-      // `iv-load` empty-target case retired in Phase 5 Slice 5.1.)
+      // Seed a value the copy reads (so the read side succeeds), then copy it
+      // to an empty target. meta.auxWritePorts gates on `to === ""` → empty
+      // binding → no auxWrites, no "" key.
       const spec: CipherSpec = {
         id: "test-copy-unset@1",
         name: "Aux-copy unset writer",
         stateShape: "bytes",
         inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
         steps: [
-          // Seed a value the copy will read, so the read side succeeds
-          // and the only divergence vector is the unset-write target.
           {
             kind: "step",
             id: "seed",
@@ -336,21 +224,16 @@ describe("runtime — ported dispatch, Slice 1.2 aux-only primitives", () => {
         ],
       };
 
-      const legacy = runSpec(spec, buildDefaultRegistry(), {
-        initialState: makeBytesState(new Uint8Array(0)),
-      });
       const ported = runSpec(spec, buildDefaultRegistry(), {
         initialState: makeBytesState(new Uint8Array(0)),
         portedDispatchEnabled: true,
       });
 
-      // Full frame parity covers everything; this is a focused floor for
-      // the empty-target case specifically.
-      expectFrameStreamsEqual(ported.frames, legacy.frames, "unset-target-writers");
-
-      // Empty-string key pollution check — both paths must agree.
+      // The copy frame (index 1) writes nothing because its target is unset.
+      const copyFrame = ported.frames[1];
+      if (!copyFrame) throw new Error("copy frame missing");
+      expect(copyFrame.auxWritten.size).toBe(0);
       expect(ported.finalAux.has("")).toBe(false);
-      expect(legacy.finalAux.has("")).toBe(false);
     });
   });
 });

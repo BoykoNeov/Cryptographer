@@ -39,67 +39,46 @@
  */
 
 import type {
-  AuxValue,
   Json,
   PortContract,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "../core/types";
 
-export const auxXor: StepExecutor = (state, params, ctx) => {
-  const { from, into } = readParams(params);
+export const auxXor: PortedExecutor = (inputs, _params, _ctx) => {
+  // Port-native (Slice 5.2): the two operands arrive on the `from`/`into`
+  // input ports, projected from `aux[from]`/`aux[into]` via meta.auxReadPorts.
+  // When an aux read is missing, the runtime omits that input port AND records
+  // the miss in `frame.auxReadMissing` (from the same meta bindings) — so the
+  // graceful "either operand missing → no output" branch below preserves the
+  // Slice 9 orphan-read warning behavior without the executor touching the aux
+  // map. Empty-string params route the same way (aux.get("") is undefined).
+  const from = inputs.get("from");
+  const into = inputs.get("into");
 
-  // Both reads are declared up front, regardless of presence. The runtime
-  // splits the list into `auxRead` (present) and `auxReadMissing` (absent)
-  // based on `ctx.aux.get` results — see `runtime.ts:104-113`. Declaring
-  // here is what makes orphan warnings light up downstream.
-  //
-  // Unset/empty params (the freshly-palette-dropped state) get declared as
-  // empty-string reads. The aux map never holds the key "", so they route
-  // straight to auxReadMissing and surface as orphan-read warnings on the
-  // node — the user's signal that the step needs wiring. Same effect as a
-  // missing real key, just with an empty-string auxKey in the warning.
-  const auxReads: readonly string[] = [from, into];
-
-  // An empty-string key is by construction missing — `ctx.aux.get("")` is
-  // undefined unless someone explicitly wrote it, which no shipped step
-  // ever does. Treating it identically to a real-but-missing key keeps the
-  // rest of the executor flat.
-  const fromValue = from === "" ? undefined : ctx.aux.get(from);
-  const intoValue = into === "" ? undefined : ctx.aux.get(into);
-
-  // Missing-key path: passthrough, no write. Slice 9's validateGraph picks
-  // up the orphan from `frame.auxReadMissing` and renders a warning glyph.
-  if (fromValue === undefined || intoValue === undefined) {
-    return { state, auxReads };
+  // Missing-key path: no output → no aux write. validateGraph picks up the
+  // orphan from `frame.auxReadMissing` and renders a warning glyph.
+  if (from === undefined || into === undefined) {
+    return new Map();
   }
 
-  // Structural validation: both present, both must be Uint8Array of equal
-  // length. Anything else is a spec authoring bug — throw with a message
-  // that points at the offending key so the App's error banner can show it.
-  if (!(fromValue instanceof Uint8Array)) {
+  // Both present. Port projection always yields Uint8Array, so the only
+  // structural error left is a length mismatch (raw ports opt out of
+  // coercion) — a spec authoring bug; throw loudly.
+  if (from.length !== into.length) {
     throw new Error(
-      `aux-xor: aux["${from}"] must be a Uint8Array, got ${describeValue(fromValue)}`,
-    );
-  }
-  if (!(intoValue instanceof Uint8Array)) {
-    throw new Error(
-      `aux-xor: aux["${into}"] must be a Uint8Array, got ${describeValue(intoValue)}`,
-    );
-  }
-  if (fromValue.length !== intoValue.length) {
-    throw new Error(
-      `aux-xor: length mismatch — aux["${from}"]=${fromValue.length} bytes, aux["${into}"]=${intoValue.length} bytes`,
+      `aux-xor: length mismatch — from=${from.length} bytes, into=${into.length} bytes`,
     );
   }
 
-  const out = new Uint8Array(fromValue.length);
+  const out = new Uint8Array(from.length);
   for (let i = 0; i < out.length; i++) {
-    out[i] = (fromValue[i] ?? 0) ^ (intoValue[i] ?? 0);
+    out[i] = (from[i] ?? 0) ^ (into[i] ?? 0);
   }
-  const auxWrites = new Map<string, AuxValue>([[into, out]]);
-  return { state, auxReads, auxWrites };
+  // Single `result` output port; the runtime maps it to `aux[into]` (the
+  // in-place accumulator) via meta.auxWritePorts.
+  return new Map([["result", out]]);
 };
 
 export const auxXorDoc: StepDocumentation = {
@@ -229,20 +208,4 @@ const readParams = (params: Json): { from: string; into: string } => {
     throw new Error("aux-xor: into must be a string");
   }
   return { from: p.from ?? "", into: p.into ?? "" };
-};
-
-/**
- * Render an AuxValue's shape compactly for an error message. AuxValue is a
- * union of State / Uint8Array / number / bigint / readonly State[] — a
- * raw `typeof` of "object" doesn't tell the user what went wrong.
- */
-const describeValue = (v: unknown): string => {
-  if (v === null || v === undefined) return String(v);
-  if (typeof v === "number") return `number (${v})`;
-  if (typeof v === "bigint") return "bigint";
-  if (Array.isArray(v)) return `State[] (length ${v.length})`;
-  if (typeof v === "object" && v !== null && "shape" in v) {
-    return `State<${(v as { shape: string }).shape}>`;
-  }
-  return typeof v;
 };

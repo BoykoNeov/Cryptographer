@@ -7,9 +7,10 @@
  * tweak, or any other constant the user wants to thread into the cipher
  * via aux without writing a custom executor.
  *
- * State is passthrough. The "real" output is the byte sequence written into
- * `aux[auxName]`. Downstream consumers (e.g. `aux-xor`, `aux-copy`, or a
- * cipher-specific step) read it from there.
+ * No state port. Port-native `PortedExecutor` (Slice 5.2): the output is the
+ * byte sequence on the `value` output port, which the runtime maps to
+ * `aux[auxName]` (via meta.auxWritePorts). Downstream consumers (e.g.
+ * `aux-xor`, `aux-copy`, or a cipher-specific step) read it from there.
  *
  * Why a number[] in params rather than a hex string or base64:
  *  - The shape matches every other byte-table param shipped today (S-box,
@@ -27,23 +28,21 @@
  */
 
 import type {
-  AuxValue,
   Json,
   PortContract,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "../core/types";
 
-export const auxLoad: StepExecutor = (state, params) => {
+export const auxLoad: PortedExecutor = (_inputs, params, _ctx) => {
   const { auxName, value } = readParams(params);
-  // Unset auxName (freshly palette-dropped state) → passthrough, no write.
-  // No orphan warning fires (aux-load has no reads), but the user can
-  // still click the node and edit params normally. The Slice 9 validator
-  // will flag the empty `auxName` only once it lands in a real graph
-  // edge — for an unwired aux-load it's just inert.
+  // Unset auxName (freshly palette-dropped state) → no output port. The
+  // runtime's meta.auxWritePorts also returns an empty binding for an unset
+  // auxName, so nothing is published and the user can still click the node
+  // and edit params normally.
   if (auxName === "") {
-    return { state };
+    return new Map();
   }
   // Fresh Uint8Array per call — never alias the params array. The runtime
   // may persist this value across many frames; sharing the backing storage
@@ -57,8 +56,9 @@ export const auxLoad: StepExecutor = (state, params) => {
     }
     bytes[i] = v;
   }
-  const auxWrites = new Map<string, AuxValue>([[auxName, bytes]]);
-  return { state, auxWrites };
+  // Single `value` output port; the runtime maps it to `aux[auxName]` via
+  // meta.auxWritePorts, so `frame.auxWritten` still carries the loaded literal.
+  return new Map([["value", bytes]]);
 };
 
 export const auxLoadDoc: StepDocumentation = {

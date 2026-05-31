@@ -315,36 +315,32 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // warning glyph on the node. That keeps half-wired specs debuggable
   // during palette-driven authoring instead of throwing mid-spec.
   //
-  // **Slice 1.2 (universal port-dataflow Phase 1)** — these three step
-  // types plus `generic.iv-load@1` below are the FIRST registrations to
-  // use the `kind: "ported"` variant. Each declares colocated
-  // `ProjectionMetadata` + `PortContract` (per Decision C — metadata
-  // lives next to the executor that owns it, not in a central side-map).
-  // The runtime branches on `portedDispatchEnabled`: when on, runs the
-  // ported execution path through `liftLegacyExecutor`'s wrapping; when
-  // off, the `legacy` field provides the legacy-shape executor for the
-  // unchanged dispatch. Frame-parity is gated by
-  // `tests/runtime-ported-dispatch-aux-only.test.ts`.
+  // **Port-native since Slice 5.2** (2026-05-31) — these three aux primitives
+  // (plus `generic.iv-load@1` below) dropped their `legacy:` lift for true
+  // `PortedExecutor`s. `meta` is RETAINED: the runtime projects the aux reads
+  // onto named input ports (`from`/`into`/none) and the output ports
+  // (`value`/`result`) back to aux (per Decision C — metadata lives next to
+  // the executor that owns it). The graceful missing-aux semantics survive —
+  // the runtime omits an absent input port AND records the miss in
+  // `frame.auxReadMissing` from the same meta bindings, so the Slice 9
+  // orphan-read warnings still light up on half-wired specs.
   r.register("generic.aux-load@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(auxLoad, auxLoadMeta),
-    legacy: auxLoad,
+    executor: auxLoad,
     shape: auxLoadPortContract,
     meta: auxLoadMeta,
     doc: auxLoadDoc,
   });
   r.register("generic.aux-xor@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(auxXor, auxXorMeta),
-    legacy: auxXor,
+    executor: auxXor,
     shape: auxXorPortContract,
     meta: auxXorMeta,
     doc: auxXorDoc,
   });
   r.register("generic.aux-copy@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(auxCopy, auxCopyMeta),
-    legacy: auxCopy,
+    executor: auxCopy,
     shape: auxCopyPortContract,
     meta: auxCopyMeta,
     doc: auxCopyDoc,

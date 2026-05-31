@@ -1,25 +1,27 @@
 /**
- * Tests for the three Slice 10 aux primitives in `src/steps/`:
+ * Tests for the three Slice 10 aux primitives in `src/steps/` — port-native
+ * `PortedExecutor`s since Slice 5.2 (2026-05-31):
  *
- *   - `generic.aux-load@1` — publish a literal byte sequence under an aux key.
- *   - `generic.aux-xor@1`  — XOR aux[from] into aux[into] (writes back to into).
- *   - `generic.aux-copy@1` — copy aux[from] to aux[to].
+ *   - `generic.aux-load@1` — publish a literal byte sequence (no inputs; emits
+ *      the `value` output port, mapped to aux[auxName] by meta).
+ *   - `generic.aux-xor@1`  — XOR the `from` and `into` input ports; emits the
+ *      `result` output port (mapped to aux[into]).
+ *   - `generic.aux-copy@1` — copy the `from` input port to the `result` output
+ *      port (mapped to aux[to]).
  *
  * Three coverage axes:
  *
- *   1. **Per-primitive KAT** — direct executor calls assert the byte math.
- *   2. **Graceful missing-aux** — when a read key isn't in aux, the step
- *      returns passthrough with the read still declared (so the runtime
- *      records the miss in `frame.auxReadMissing`), but emits NO aux write.
- *      This is the contract that lets Slice 9's `validateGraph` produce
- *      "orphaned-read" warnings — the cross-slice integration receipt for
- *      Slice 10's advertised payoff.
- *   3. **End-to-end CBC-from-scratch composition** — a hand-built spec
- *      that uses only `aux-load` + `aux-xor` + `aux-copy` (no cipher core)
- *      to compute the CBC chaining math over a 2-block plaintext. Result
- *      is compared byte-for-byte against a reference XOR computation done
- *      outside the runtime. Then the same primitives are used to decrypt
- *      and recover the original plaintext.
+ *   1. **Per-primitive KAT** — direct executor calls with the port signature
+ *      (`(inputs, params, ctx) -> Map`) assert the byte math on the output
+ *      ports.
+ *   2. **Graceful missing-aux** — now a RUNTIME behavior: when a read key
+ *      isn't in aux, the runtime omits that input port (the executor returns
+ *      no output) AND records the miss in `frame.auxReadMissing` from
+ *      meta.auxReadPorts. The integration suite runs the specs flag-on and
+ *      asserts both auxReadMissing and the Slice 9 orphan-read warnings.
+ *   3. **End-to-end CBC-from-scratch composition** — a hand-built spec that
+ *      uses only `aux-load` + `aux-xor` + `aux-copy` (no cipher core) to
+ *      compute the CBC chaining math over a 2-block plaintext, run flag-on.
  */
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
@@ -36,68 +38,56 @@ import { describe, expect, it } from "vitest";
 // state shape, but the runtime needs something to seed with.
 const emptyBytes = () => makeBytesState(new Uint8Array(0));
 
-const makeCtx = (aux: ReadonlyMap<string, AuxValue>): StepContext => ({
-  stepId: "test",
-  path: [],
-  aux,
-});
+// The aux primitives are PortedExecutors since Slice 5.2: they read named
+// input ports and return a named-output-port Map, ignoring ctx. A fixed ctx
+// satisfies the signature; `ports({...})` builds the input map.
+const ctx: StepContext = { stepId: "test", path: [], aux: new Map() };
+const ports = (entries: Record<string, Uint8Array>) => new Map(Object.entries(entries));
 
 // ─── aux-load ─────────────────────────────────────────────────────────────
 
-describe("aux-load@1", () => {
-  it("writes the literal value as a fresh Uint8Array under the named aux key", () => {
-    const ctx = makeCtx(new Map());
-    const result = auxLoad(emptyBytes(), { auxName: "iv", value: [0xde, 0xad, 0xbe, 0xef] }, ctx);
-    expect(result.state.shape).toBe("bytes");
-    expect(result.auxWrites?.size).toBe(1);
-    const written = result.auxWrites?.get("iv");
+describe("aux-load@1 (port-native)", () => {
+  it("emits the literal value on the `value` output port as a fresh Uint8Array", () => {
+    const out = auxLoad(new Map(), { auxName: "iv", value: [0xde, 0xad, 0xbe, 0xef] }, ctx);
+    const written = out.get("value");
     expect(written).toBeInstanceOf(Uint8Array);
     expect(Array.from(written as Uint8Array)).toEqual([0xde, 0xad, 0xbe, 0xef]);
   });
 
   it("allocates a fresh buffer (does not alias the params array)", () => {
     const value = [1, 2, 3, 4];
-    const result = auxLoad(emptyBytes(), { auxName: "x", value }, makeCtx(new Map()));
-    const written = result.auxWrites?.get("x") as Uint8Array;
-    // Mutating the written bytes must not change the params array (they
-    // can't share storage anyway because Uint8Array vs number[], but this
-    // also catches a Uint8Array.from-with-shared-buffer regression).
+    const out = auxLoad(new Map(), { auxName: "x", value }, ctx);
+    const written = out.get("value") as Uint8Array;
     written[0] = 0xff;
     expect(value[0]).toBe(1);
   });
 
-  it("declares NO auxReads (pure source — no upstream dataflow)", () => {
-    const result = auxLoad(emptyBytes(), { auxName: "x", value: [] }, makeCtx(new Map()));
-    // auxReads is optional; the executor doesn't return it.
-    expect(result.auxReads).toBeUndefined();
-  });
-
   it("rejects out-of-range bytes in value", () => {
-    expect(() =>
-      auxLoad(emptyBytes(), { auxName: "x", value: [0, 256] }, makeCtx(new Map())),
-    ).toThrow(/value\[1\] must be an integer in \[0, 255\]/);
+    expect(() => auxLoad(new Map(), { auxName: "x", value: [0, 256] }, ctx)).toThrow(
+      /value\[1\] must be an integer in \[0, 255\]/,
+    );
   });
 
-  it("treats empty auxName as unset (passthrough, no auxWrites) — palette-drop authoring state", () => {
-    const result = auxLoad(emptyBytes(), { auxName: "", value: [1, 2, 3] }, makeCtx(new Map()));
-    expect(result.auxWrites).toBeUndefined();
+  it("treats empty auxName as unset (no output port) — palette-drop authoring state", () => {
+    const out = auxLoad(new Map(), { auxName: "", value: [1, 2, 3] }, ctx);
+    expect(out.size).toBe(0);
   });
 
-  it("treats missing auxName as unset (passthrough)", () => {
-    // Palette-dropped params start as `{}` — auxName is undefined. Must
-    // not throw, must not write.
-    const result = auxLoad(emptyBytes(), {}, makeCtx(new Map()));
-    expect(result.auxWrites).toBeUndefined();
+  it("treats missing auxName as unset (no output port)", () => {
+    // Palette-dropped params start as `{}` — auxName is undefined. Must not
+    // throw, must not emit an output port.
+    const out = auxLoad(new Map(), {}, ctx);
+    expect(out.size).toBe(0);
   });
 
   it("rejects non-string auxName (malformed JSON spec — not reachable from the UI)", () => {
-    expect(() => auxLoad(emptyBytes(), { auxName: 42, value: [] }, makeCtx(new Map()))).toThrow(
+    expect(() => auxLoad(new Map(), { auxName: 42, value: [] }, ctx)).toThrow(
       /auxName must be a string/,
     );
   });
 
   it("rejects non-array value", () => {
-    expect(() => auxLoad(emptyBytes(), { auxName: "x", value: "abc" }, makeCtx(new Map()))).toThrow(
+    expect(() => auxLoad(new Map(), { auxName: "x", value: "abc" }, ctx)).toThrow(
       /value must be an array of integers/,
     );
   });
@@ -105,117 +95,62 @@ describe("aux-load@1", () => {
 
 // ─── aux-xor ──────────────────────────────────────────────────────────────
 
-describe("aux-xor@1", () => {
-  it("XORs aux[from] into aux[into] and writes back to into", () => {
-    const aux = new Map<string, AuxValue>([
-      ["a", new Uint8Array([0xff, 0x0f, 0xaa])],
-      ["b", new Uint8Array([0x0f, 0xff, 0x55])],
-    ]);
-    const result = auxXor(emptyBytes(), { from: "a", into: "b" }, makeCtx(aux));
-    const out = result.auxWrites?.get("b") as Uint8Array;
-    expect(Array.from(out)).toEqual([0xf0, 0xf0, 0xff]);
-    // aux[from] is not modified.
-    expect(result.auxWrites?.has("a")).toBe(false);
-  });
-
-  it("declares BOTH auxReads regardless of presence (so the runtime can record missing)", () => {
-    const aux = new Map<string, AuxValue>();
-    const result = auxXor(emptyBytes(), { from: "a", into: "b" }, makeCtx(aux));
-    expect(result.auxReads).toEqual(["a", "b"]);
-  });
-
-  it("is passthrough (no auxWrites) when from is missing — graceful for Slice 9 orphan warnings", () => {
-    const aux = new Map<string, AuxValue>([["b", new Uint8Array([1, 2, 3])]]);
-    const result = auxXor(emptyBytes(), { from: "missing", into: "b" }, makeCtx(aux));
-    expect(result.auxWrites).toBeUndefined();
-    expect(result.auxReads).toEqual(["missing", "b"]);
-  });
-
-  it("is passthrough when into is missing", () => {
-    const aux = new Map<string, AuxValue>([["a", new Uint8Array([1, 2, 3])]]);
-    const result = auxXor(emptyBytes(), { from: "a", into: "missing" }, makeCtx(aux));
-    expect(result.auxWrites).toBeUndefined();
-  });
-
-  it("is passthrough when both are missing", () => {
-    const result = auxXor(emptyBytes(), { from: "x", into: "y" }, makeCtx(new Map()));
-    expect(result.auxWrites).toBeUndefined();
-    expect(result.auxReads).toEqual(["x", "y"]);
-  });
-
-  it("THROWS on length mismatch (both present, malformed-vs-missing distinction)", () => {
-    const aux = new Map<string, AuxValue>([
-      ["a", new Uint8Array(4)],
-      ["b", new Uint8Array(8)],
-    ]);
-    expect(() => auxXor(emptyBytes(), { from: "a", into: "b" }, makeCtx(aux))).toThrow(
-      /length mismatch.*4.*8/,
+describe("aux-xor@1 (port-native)", () => {
+  it("XORs the `from` and `into` ports, emitting the result on `result`", () => {
+    const out = auxXor(
+      ports({
+        from: new Uint8Array([0xff, 0x0f, 0xaa]),
+        into: new Uint8Array([0x0f, 0xff, 0x55]),
+      }),
+      {},
+      ctx,
     );
+    const result = out.get("result") as Uint8Array;
+    expect(Array.from(result)).toEqual([0xf0, 0xf0, 0xff]);
   });
 
-  it("THROWS when aux value isn't a Uint8Array", () => {
-    const aux = new Map<string, AuxValue>([
-      ["a", 42],
-      ["b", new Uint8Array(4)],
-    ]);
-    expect(() => auxXor(emptyBytes(), { from: "a", into: "b" }, makeCtx(aux))).toThrow(
-      /must be a Uint8Array/,
-    );
+  it("is graceful (no output) when the `from` port is missing", () => {
+    const out = auxXor(ports({ into: new Uint8Array([1, 2, 3]) }), {}, ctx);
+    expect(out.size).toBe(0);
   });
 
-  it("freshly-palette-dropped (empty params) emits a passthrough frame with empty-string reads declared", () => {
-    // The contract that lets the user drop the step onto the canvas, see
-    // an orphan-read warning glyph, then fill in the params one at a
-    // time. Without the lenient empty-string handling, the executor used
-    // to throw on `from must be a non-empty string`, which left the new
-    // node clickless (no frame → graph click can't focus the param
-    // panel) and warningless (no frame → no auxReadMissing).
-    const result = auxXor(emptyBytes(), {}, makeCtx(new Map()));
-    expect(result.auxWrites).toBeUndefined();
-    expect(result.auxReads).toEqual(["", ""]);
+  it("is graceful (no output) when the `into` port is missing", () => {
+    const out = auxXor(ports({ from: new Uint8Array([1, 2, 3]) }), {}, ctx);
+    expect(out.size).toBe(0);
+  });
+
+  it("is graceful (no output) when both ports are missing", () => {
+    const out = auxXor(new Map(), {}, ctx);
+    expect(out.size).toBe(0);
+  });
+
+  it("THROWS on a length mismatch between the two operands", () => {
+    expect(() =>
+      auxXor(ports({ from: new Uint8Array(4), into: new Uint8Array(8) }), {}, ctx),
+    ).toThrow(/length mismatch.*4.*8/);
   });
 });
 
 // ─── aux-copy ─────────────────────────────────────────────────────────────
 
-describe("aux-copy@1", () => {
-  it("copies aux[from] to aux[to]", () => {
-    const aux = new Map<string, AuxValue>([["src", new Uint8Array([0x11, 0x22, 0x33])]]);
-    const result = auxCopy(emptyBytes(), { from: "src", to: "dst" }, makeCtx(aux));
-    const out = result.auxWrites?.get("dst") as Uint8Array;
-    expect(Array.from(out)).toEqual([0x11, 0x22, 0x33]);
+describe("aux-copy@1 (port-native)", () => {
+  it("copies the `from` port to the `result` port", () => {
+    const out = auxCopy(ports({ from: new Uint8Array([0x11, 0x22, 0x33]) }), {}, ctx);
+    const result = out.get("result") as Uint8Array;
+    expect(Array.from(result)).toEqual([0x11, 0x22, 0x33]);
   });
 
-  it("makes a defensive copy of Uint8Array (dst doesn't alias src)", () => {
+  it("makes a defensive copy (result doesn't alias the source bytes)", () => {
     const src = new Uint8Array([1, 2, 3]);
-    const aux = new Map<string, AuxValue>([["src", src]]);
-    const result = auxCopy(emptyBytes(), { from: "src", to: "dst" }, makeCtx(aux));
-    const out = result.auxWrites?.get("dst") as Uint8Array;
-    out[0] = 0xff;
+    const out = auxCopy(ports({ from: src }), {}, ctx);
+    const result = out.get("result") as Uint8Array;
+    result[0] = 0xff;
     expect(src[0]).toBe(1);
   });
 
-  it("declares auxReads regardless of presence", () => {
-    const result = auxCopy(emptyBytes(), { from: "x", to: "y" }, makeCtx(new Map()));
-    expect(result.auxReads).toEqual(["x"]);
-  });
-
-  it("is passthrough (no auxWrites) when from is missing — graceful", () => {
-    const result = auxCopy(emptyBytes(), { from: "missing", to: "dst" }, makeCtx(new Map()));
-    expect(result.auxWrites).toBeUndefined();
-    expect(result.auxReads).toEqual(["missing"]);
-  });
-
-  it("passes non-byte aux shapes through by reference (numbers, bigints)", () => {
-    const aux = new Map<string, AuxValue>([["count", 7]]);
-    const result = auxCopy(emptyBytes(), { from: "count", to: "count-mirror" }, makeCtx(aux));
-    expect(result.auxWrites?.get("count-mirror")).toBe(7);
-  });
-
-  it("freshly-palette-dropped (empty params) emits a passthrough frame with empty-string read declared", () => {
-    const result = auxCopy(emptyBytes(), {}, makeCtx(new Map()));
-    expect(result.auxWrites).toBeUndefined();
-    expect(result.auxReads).toEqual([""]);
+  it("is graceful (no output) when the `from` port is missing", () => {
+    const out = auxCopy(new Map(), {}, ctx);
+    expect(out.size).toBe(0);
   });
 });
 
@@ -224,7 +159,8 @@ describe("aux-copy@1", () => {
 describe("runtime integration — missing aux populates auxReadMissing on the frame", () => {
   // Build a tiny spec that uses aux-xor without ever loading either of its
   // operands. The runtime should still emit a frame (the step is graceful),
-  // and that frame should carry auxReadMissing for BOTH keys.
+  // and that frame should carry auxReadMissing for BOTH keys. Run flag-on —
+  // the aux primitives are port-native (no legacy path).
   const spec: CipherSpec = {
     id: "test-graceful-xor@1",
     name: "test graceful aux-xor",
@@ -236,7 +172,10 @@ describe("runtime integration — missing aux populates auxReadMissing on the fr
   };
 
   it("aux-xor on missing keys emits a frame with auxReadMissing populated", () => {
-    const trace = runSpec(spec, buildDefaultRegistry(), { initialState: emptyBytes() });
+    const trace = runSpec(spec, buildDefaultRegistry(), {
+      initialState: emptyBytes(),
+      portedDispatchEnabled: true,
+    });
     expect(trace.frames.length).toBe(1);
     const frame = trace.frames[0];
     expect(frame).toBeDefined();
@@ -248,10 +187,11 @@ describe("runtime integration — missing aux populates auxReadMissing on the fr
 
   it("validateGraph surfaces both as orphaned-read warnings", () => {
     // The cross-slice integration receipt: Slice 9's validateGraph reads
-    // auxReadMissing off the trace and produces the warnings. Without the
-    // Slice 10 graceful primitives, no shipped step ever emits a frame
-    // with a populated auxReadMissing — this is the first one that does.
-    const trace = runSpec(spec, buildDefaultRegistry(), { initialState: emptyBytes() });
+    // auxReadMissing off the trace and produces the warnings.
+    const trace = runSpec(spec, buildDefaultRegistry(), {
+      initialState: emptyBytes(),
+      portedDispatchEnabled: true,
+    });
     const graph = deriveAuxGraph(trace, spec);
     const warnings = validateGraph(graph, trace);
 
@@ -268,9 +208,7 @@ describe("runtime integration — missing aux populates auxReadMissing on the fr
     // Regression for the bug a user hit in browser-verification of Slice
     // 10: drop aux-xor onto the canvas → no warning glyph → can't click
     // through to params editor. Root cause was the executor throwing on
-    // empty `from`/`into`, which prevented a frame from being emitted,
-    // which left validateGraph with nothing to warn about and made the
-    // graph click handler's `t.frames.findIndex` return -1.
+    // empty `from`/`into`, which prevented a frame from being emitted.
     const droppedSpec: CipherSpec = {
       id: "test-fresh-drop@1",
       name: "test fresh palette drop",
@@ -280,6 +218,7 @@ describe("runtime integration — missing aux populates auxReadMissing on the fr
     };
     const trace = runSpec(droppedSpec, buildDefaultRegistry(), {
       initialState: emptyBytes(),
+      portedDispatchEnabled: true,
     });
     // Frame emitted → graph click can land on it → param editor can
     // resolve the step.
@@ -294,8 +233,7 @@ describe("runtime integration — missing aux populates auxReadMissing on the fr
     const orphans = warnings.filter((w) => w.kind === "orphaned-read");
     // Both reads use the same auxKey (""), and validateGraph dedups by
     // (stepId, auxKey) — so the two empty-string reads collapse to ONE
-    // warning. That's correct UX: a single glyph per node says "this
-    // step is unwired," regardless of how many fields are blank.
+    // warning.
     expect(orphans.length).toBe(1);
     if (orphans[0]?.kind === "orphaned-read") {
       expect(orphans[0].stepId).toBe("xor");
@@ -313,7 +251,10 @@ describe("runtime integration — missing aux populates auxReadMissing on the fr
         { kind: "step", id: "cp", type: "generic.aux-copy@1", params: { from: "src", to: "dst" } },
       ],
     };
-    const trace = runSpec(copySpec, buildDefaultRegistry(), { initialState: emptyBytes() });
+    const trace = runSpec(copySpec, buildDefaultRegistry(), {
+      initialState: emptyBytes(),
+      portedDispatchEnabled: true,
+    });
     const frame = trace.frames[0];
     expect(frame).toBeDefined();
     if (!frame) return;
@@ -339,7 +280,7 @@ describe("runtime integration — missing aux populates auxReadMissing on the fr
  *   aux-load IV     (the IV literal)
  *   aux-load P0     (block 0 plaintext literal)
  *   aux-load P1     (block 1 plaintext literal)
- *   aux-copy IV → feedback
+ *   aux-copy iv → feedback     (initialize the chain)
  *   aux-xor  P0 → feedback     (feedback now = P0⊕IV = C0)
  *   aux-copy feedback → C0
  *   aux-xor  P1 → feedback     (feedback now = P1⊕C0 = C1)
@@ -476,6 +417,7 @@ describe("CBC-from-scratch composition (acceptance test)", () => {
     const blockSize = 16;
     const trace = runSpec(cbcEncryptSpec(blockSize), buildDefaultRegistry(), {
       initialState: emptyBytes(),
+      portedDispatchEnabled: true,
     });
 
     // Reference computation done outside the runtime.
@@ -499,6 +441,7 @@ describe("CBC-from-scratch composition (acceptance test)", () => {
     // First encrypt to obtain c0/c1.
     const encTrace = runSpec(cbcEncryptSpec(blockSize), buildDefaultRegistry(), {
       initialState: emptyBytes(),
+      portedDispatchEnabled: true,
     });
     const c0 = encTrace.finalAux.get("c0") as Uint8Array;
     const c1 = encTrace.finalAux.get("c1") as Uint8Array;
@@ -512,6 +455,7 @@ describe("CBC-from-scratch composition (acceptance test)", () => {
         ["c0", c0],
         ["c1", c1],
       ]),
+      portedDispatchEnabled: true,
     });
 
     const p0Out = decTrace.finalAux.get("p0-out") as Uint8Array;
@@ -524,22 +468,20 @@ describe("CBC-from-scratch composition (acceptance test)", () => {
     expect(Array.from(p1Out)).toEqual(Array.from(expectedP1));
   });
 
-  it("encrypt spec produces zero validateGraph warnings (fully wired)", () => {
-    // The acceptance test is "this is a valid spec", so the validator
-    // should be silent. If it isn't, the composition has a bug — an
-    // unused write or an orphaned read — that the user would see as a
-    // warning glyph in the visual editor.
+  it("encrypt spec produces zero orphaned-read / cycle validateGraph warnings (fully wired)", () => {
+    // The acceptance test is "this is a valid spec", so the validator should
+    // be silent on the dangerous directions. emit-c0/emit-c1 write c0/c1 which
+    // are FINAL outputs (no downstream reader in this spec), so those surface
+    // as "unused-write" — the validator working correctly. We filter those and
+    // assert no ORPHANED reads (uninitialized inputs) or cycles.
     const spec = cbcEncryptSpec(16);
-    const trace = runSpec(spec, buildDefaultRegistry(), { initialState: emptyBytes() });
+    const trace = runSpec(spec, buildDefaultRegistry(), {
+      initialState: emptyBytes(),
+      portedDispatchEnabled: true,
+    });
     const graph = deriveAuxGraph(trace, spec);
     const warnings = validateGraph(graph, trace);
 
-    // Note: emit-c0 and emit-c1 write c0/c1 which are FINAL outputs (no
-    // downstream reader in this spec), so those will surface as
-    // "unused-write" — that's the validator working correctly, telling
-    // the user "this aux value isn't consumed inside the spec." For the
-    // purpose of this acceptance test we filter those out and assert no
-    // ORPHANED reads (the dangerous direction — uninitialized inputs).
     const orphans = warnings.filter((w) => w.kind === "orphaned-read");
     expect(orphans).toEqual([]);
     const cycles = warnings.filter((w) => w.kind === "cycle");

@@ -46,40 +46,31 @@
  */
 
 import type {
-  AuxValue,
   Json,
   PortContract,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "../core/types";
 
-export const auxCopy: StepExecutor = (state, params, ctx) => {
-  const { from, to } = readParams(params);
-  // Declare the read regardless of presence so the runtime can record a
-  // missing key in `frame.auxReadMissing` (which surfaces as a Slice 9
-  // orphan-read warning glyph on the node). Empty `from` is by
-  // construction missing — `ctx.aux.get("")` is undefined.
-  const auxReads: readonly string[] = [from];
-
-  const value = from === "" ? undefined : ctx.aux.get(from);
+export const auxCopy: PortedExecutor = (inputs, _params, _ctx) => {
+  // Port-native (Slice 5.2): the source arrives on the `from` input port,
+  // projected from `aux[from]` via meta.auxReadPorts. A missing read → the
+  // runtime omits the port AND records the miss in `frame.auxReadMissing`, so
+  // the graceful "no input → no output" branch below preserves the Slice 9
+  // orphan-read warning. The half-wired `to === ""` case is gated by
+  // meta.auxWritePorts (it returns an empty binding for an unset `to`), so the
+  // executor can always emit `result` when the source is present.
+  const value = inputs.get("from");
   if (value === undefined) {
-    // Missing-key path: passthrough, no write.
-    return { state, auxReads };
+    return new Map();
   }
 
-  // No `to` to write to → still passthrough; the read was successful, so
-  // no orphan warning fires either. This is the "half-wired forward"
-  // authoring state and isn't surfaced specially.
-  if (to === "") {
-    return { state, auxReads };
-  }
-
-  // Defensive copy of Uint8Array; other AuxValue shapes pass through by
-  // reference (see file header for the reasoning).
-  const copied: AuxValue = value instanceof Uint8Array ? new Uint8Array(value) : value;
-  const auxWrites = new Map<string, AuxValue>([[to, copied]]);
-  return { state, auxReads, auxWrites };
+  // Defensive copy so aux[to] never shares storage with aux[from]. Port
+  // projection always yields a Uint8Array — the legacy by-reference
+  // passthrough for non-byte AuxValue shapes is gone (MatrixState retired in
+  // Slice 5.1, and node-to-node exchange is always bytes).
+  return new Map([["result", new Uint8Array(value)]]);
 };
 
 export const auxCopyDoc: StepDocumentation = {
@@ -176,23 +167,16 @@ export const auxCopyMeta: ProjectionMetadata = {
   },
 };
 
-// Output layout is `"preserve-input-variant"` (Slice 1.5b) rather than
-// `"raw"`. aux-copy is the ONLY shipped step whose output variant equals
-// its input variant at runtime — a Uint8Array in stays Uint8Array out,
-// a MatrixState in stays MatrixState out. A static `"raw"` layout
-// dropped the variant on decode for the State-variant case (CBC decrypt
-// advances its chain via aux-copy(next-chain → chain) where
-// aux[next-chain] is a MatrixState), corrupting the next iteration's
-// aux read. The sentinel tells the runtime to look up the source
-// variant from aux[from] and clone its shape with the output bytes.
-//
-// Input port stays `"raw"` because the bytes carry no variant
-// information by themselves — the runtime's lift adapter
-// (`auxValueToPortBytes`) already extracts bytes from any AuxValue
-// shape, and the executor only sees Uint8Array via ctx.aux.get.
+// Both ports are `"raw"` (Slice 5.2). The output was `"preserve-input-variant"`
+// (Slice 1.5b) only so a MatrixState could round-trip through aux-copy — CBC
+// decrypt advanced its chain via aux-copy(next-chain → chain) where
+// aux[next-chain] was a MatrixState, and a static `"raw"` layout would have
+// dropped that variant on decode. MatrixState retired in Slice 5.1 and
+// node-to-node exchange is always bytes, so the sentinel is no longer needed:
+// aux-copy copies raw bytes from the `from` port to the `result` port.
 export const auxCopyPortContract: PortContract = {
   inputs: new Map([["from", { layout: "raw" }]]),
-  outputs: new Map([["result", { layout: "preserve-input-variant" }]]),
+  outputs: new Map([["result", { layout: "raw" }]]),
 };
 
 /**

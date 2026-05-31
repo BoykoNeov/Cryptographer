@@ -67,17 +67,13 @@ import { describe, expect, it } from "vitest";
  * assertion (2) fails.
  */
 const NON_BYTES_ALLOWLIST: readonly string[] = [
-  // The matrix `matrix-cm-4x4` transforms + ECB/CBC boundary steps
-  // (add-round-key / byte-substitution / mix-columns / shift-rows /
-  // state-to-aux / xor-aux-into-state / concat-blocks / iv-load /
-  // split-blocks) retired in Phase 5 Slice 5.1 (2026-05-30) with the
-  // MatrixState shape. The sole remaining non-bytes port:
-  // ── Generic aux primitive (variant-preserving passthrough) ──
-  // `out:result = "preserve-input-variant"` — a passthrough sentinel, not
-  // a matrix interpretation. Drops to raw once the State variants are fully
-  // gone (the sentinel mirrors the legacy executor's variant preservation).
-  // Removed when the aux primitives go port-native in Slice 5.2.
-  "generic.aux-copy@1",
+  // EMPTY since Slice 5.2 (2026-05-31). The matrix `matrix-cm-4x4` transforms
+  // + ECB/CBC boundary steps retired in Slice 5.1 (2026-05-30) with the
+  // MatrixState shape. The last entry — `generic.aux-copy@1`'s
+  // `out:result = "preserve-input-variant"` sentinel — dropped to `"raw"` when
+  // the aux primitives went port-native in Slice 5.2 (its only purpose was
+  // round-tripping a MatrixState through aux-copy, and that variant is gone).
+  // No shipped ported leaf declares a non-bytes port any more.
 ];
 
 /**
