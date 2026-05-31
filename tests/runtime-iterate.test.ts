@@ -9,27 +9,63 @@
 
 import { StepRegistry } from "@/core/registry";
 import { runSpec } from "@/core/runtime";
-import type { AuxValue, BytesState, CipherSpec, StepDefinition } from "@/core/types";
+import type {
+  AuxValue,
+  BytesState,
+  CipherSpec,
+  PortedExecutor,
+  StepRegistration,
+} from "@/core/types";
 import { describe, expect, it } from "vitest";
 
-// Tiny "passthrough then write a marker to aux" step. Lets us tell each
-// iteration's frame apart in the test without standing up real AES.
-const markerStep: StepDefinition = {
-  executor: (state, _params, ctx) => {
-    const auxWrites = new Map<string, AuxValue>([[`mark@${ctx.stepId}`, 1]]);
-    return { state, auxWrites };
+// Tiny passthrough step — contributes a second body leaf per iteration so the
+// test can tell each iteration's frames apart without standing up real AES.
+// Port-native since Phase C (universal-port Phase 5): the runtime projects
+// the threaded state into/out of the `"state"` port via `meta`. (Pre-Phase-C
+// it also wrote a never-asserted `mark@${stepId}` aux marker; dropped as dead.)
+const markerStepExecutor: PortedExecutor = (inputs) => {
+  const state = inputs.get("state");
+  if (!state) throw new Error("markerStep expects a 'state' input port");
+  return new Map([["state", new Uint8Array(state)]]);
+};
+
+const markerStep: StepRegistration = {
+  kind: "ported",
+  executor: markerStepExecutor,
+  shape: {
+    inputs: new Map([["state", { layout: "raw" }]]),
+    outputs: new Map([["state", { layout: "raw" }]]),
+  },
+  meta: { stateLayout: "bytes", stateInputPort: "state", stateOutputPort: "state" },
+  doc: {
+    name: "Test: marker passthrough",
+    summary: "Toy second body leaf — passes the threaded state through unchanged.",
+    detail: "Iterate fixture (port-native since Phase C).",
   },
 };
 
 // Identity-ish step that increments byte 0 of a 16-byte block so each
-// iteration produces a distinct output.
-const incrementByte0: StepDefinition = {
-  executor: (state) => {
-    if (state.shape !== "bytes") throw new Error("expects bytes");
-    const out = new Uint8Array(state.bytes);
-    out[0] = ((out[0] ?? 0) + 1) & 0xff;
-    const result: BytesState = { shape: "bytes", bytes: out };
-    return { state: result };
+// iteration produces a distinct output. Port-native since Phase C.
+const incrementByte0Executor: PortedExecutor = (inputs) => {
+  const state = inputs.get("state");
+  if (!state) throw new Error("incrementByte0 expects a 'state' input port");
+  const out = new Uint8Array(state);
+  out[0] = ((out[0] ?? 0) + 1) & 0xff;
+  return new Map([["state", out]]);
+};
+
+const incrementByte0: StepRegistration = {
+  kind: "ported",
+  executor: incrementByte0Executor,
+  shape: {
+    inputs: new Map([["state", { layout: "raw" }]]),
+    outputs: new Map([["state", { layout: "raw" }]]),
+  },
+  meta: { stateLayout: "bytes", stateInputPort: "state", stateOutputPort: "state" },
+  doc: {
+    name: "Test: increment byte 0",
+    summary: "Toy body — bumps byte 0 of the threaded state by 1.",
+    detail: "Iterate fixture (port-native since Phase C).",
   },
 };
 
@@ -82,6 +118,7 @@ describe("runtime — iterate node", () => {
         ["count", 3],
         ["in-blocks", blocks],
       ]),
+      portedDispatchEnabled: true,
     });
 
     // 3 iterations × 2 children = 6 frames.
@@ -99,6 +136,7 @@ describe("runtime — iterate node", () => {
         ["count", 2],
         ["in-blocks", blocks],
       ]),
+      portedDispatchEnabled: true,
     });
 
     const indices = trace.frames.map((f) => f.blockIndex);
@@ -113,6 +151,7 @@ describe("runtime — iterate node", () => {
         ["count", 3],
         ["in-blocks", blocks],
       ]),
+      portedDispatchEnabled: true,
     });
 
     const out = trace.finalAux.get("out-blocks");
@@ -126,8 +165,7 @@ describe("runtime — iterate node", () => {
   });
 
   it("exposes aux['blockIndex'] to executors during iteration i", () => {
-    // The marker step writes `mark@inc` regardless of blockIndex, but the
-    // runtime sets aux['blockIndex'] before each iteration. A CTR-style
+    // The runtime sets aux['blockIndex'] before each iteration. A CTR-style
     // step (Phase 3) will rely on this. Verify it's exposed and final.
     const blocks = makeBlocks(4);
     const trace = runSpec(iterateSpec, buildRegistry(), {
@@ -136,6 +174,7 @@ describe("runtime — iterate node", () => {
         ["count", 4],
         ["in-blocks", blocks],
       ]),
+      portedDispatchEnabled: true,
     });
     // After all iterations, blockIndex remains at the last value (3).
     expect(trace.finalAux.get("blockIndex")).toBe(3);
@@ -148,6 +187,7 @@ describe("runtime — iterate node", () => {
         ["count", 0],
         ["in-blocks", []],
       ]),
+      portedDispatchEnabled: true,
     });
     expect(trace.frames.length).toBe(0);
     const out = trace.finalAux.get("out-blocks");

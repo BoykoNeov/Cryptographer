@@ -47,7 +47,6 @@ import type {
   BytesState,
   CipherSpec,
   PortedExecutor,
-  StepDefinition,
   StepRegistration,
 } from "@/core/types";
 import { describe, expect, it } from "vitest";
@@ -100,13 +99,33 @@ const xorWithConstant: StepRegistration = {
 // Increment-byte-0 body for the nested iterate-wrapping case. Each
 // iteration of the inner for-each-subgraph bumps byte 0 by 1; with state
 // threading, after 3 inner iterations byte 0 advances from i → i+3.
-const incrementByte0: StepDefinition = {
-  executor: (state) => {
-    if (state.shape !== "bytes") throw new Error("expects bytes");
-    const out = new Uint8Array(state.bytes);
-    out[0] = ((out[0] ?? 0) + 1) & 0xff;
-    const next: BytesState = { shape: "bytes", bytes: out };
-    return { state: next };
+//
+// **Port-native since Phase C (universal-port Phase 5).** Converted from a
+// legacy `(state) → { state }` executor to a hybrid-ported step when the
+// legacy executor contract was retired: the runtime projects the threaded
+// state into/out of the `"state"` port via `meta.stateInputPort`/
+// `stateOutputPort`, so the increment math is unchanged and the nested
+// state-thread invariant still holds byte-for-byte.
+const incrementByte0Executor: PortedExecutor = (inputs) => {
+  const state = inputs.get("state");
+  if (!state) throw new Error("incrementByte0 expects a 'state' input port");
+  const out = new Uint8Array(state);
+  out[0] = ((out[0] ?? 0) + 1) & 0xff;
+  return new Map([["state", out]]);
+};
+
+const incrementByte0: StepRegistration = {
+  kind: "ported",
+  executor: incrementByte0Executor,
+  shape: {
+    inputs: new Map([["state", { layout: "raw" }]]),
+    outputs: new Map([["state", { layout: "raw" }]]),
+  },
+  meta: { stateLayout: "bytes", stateInputPort: "state", stateOutputPort: "state" },
+  doc: {
+    name: "Test: increment byte 0",
+    summary: "Toy body — bumps byte 0 of the threaded state by 1.",
+    detail: "Nested iterate × for-each-subgraph fixture (port-native since Phase C).",
   },
 };
 
@@ -336,6 +355,7 @@ describe("runtime — for-each-subgraph node (Slice 2.0a)", () => {
         ["count", 2],
         ["in-blocks", blocks],
       ]),
+      portedDispatchEnabled: true,
     });
 
     // 2 blocks × 3 inner rounds × 1 child leaf = 6 frames.
@@ -364,8 +384,7 @@ describe("runtime — for-each-subgraph node (Slice 2.0a)", () => {
 
     // State-thread within a block + per-block reset are verified through the
     // surviving `finalState` (the per-frame `stateAfter` snapshots retired in
-    // Slice 5.3e Batch 4; `incrementByte0` stays a legacy executor, so its
-    // per-leaf bytes aren't captured on a port). The iterate seeds block 1
+    // Slice 5.3e Batch 4). The iterate seeds block 1
     // fresh from aux (resetting byte0 to 0x10) and the inner for-each-subgraph
     // threads 3 increments within it, leaving the exit state's byte0 at 0x13.
     // That value holds ONLY if BOTH happened correctly: a re-seed-each-inner-

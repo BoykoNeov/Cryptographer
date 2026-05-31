@@ -41,7 +41,7 @@
 import { StepRegistry } from "@/core/registry";
 import { runSpec } from "@/core/runtime";
 import { canonicalStepId } from "@/core/step-id";
-import type { BytesState, CipherSpec, StepDefinition } from "@/core/types";
+import type { BytesState, CipherSpec, PortedExecutor, StepRegistration } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 // Body executor: XOR each byte of the 4-byte block state with a constant
@@ -49,16 +49,34 @@ import { describe, expect, it } from "vitest";
 // per-block decode/encode round-trip. The constant length is independent
 // of block length (zero-pads / cycles via `i % constant.length`) so the
 // fixture can swap block sizes without retuning constants.
-const xorWithConstant: StepDefinition = {
-  executor: (state, params) => {
-    if (state.shape !== "bytes") throw new Error("xorWithConstant expects bytes state");
-    const constantRaw = (params as unknown as { readonly constant: readonly number[] }).constant;
-    const out = new Uint8Array(state.bytes);
-    for (let i = 0; i < out.length; i++) {
-      out[i] = (out[i] ?? 0) ^ (constantRaw[i % constantRaw.length] ?? 0);
-    }
-    const next: BytesState = { shape: "bytes", bytes: out };
-    return { state: next };
+//
+// **Port-native since Phase C (universal-port Phase 5).** Hybrid-ported:
+// the runtime projects each per-block seed state into the `"state"` port via
+// `meta.stateInputPort` and reconstructs the node-exit concat from the
+// `"state"` output port. XOR math unchanged; finalState byte-for-byte equal.
+const xorWithConstantExecutor: PortedExecutor = (inputs, params) => {
+  const state = inputs.get("state");
+  if (!state) throw new Error("xorWithConstant expects a 'state' input port");
+  const constantRaw = (params as unknown as { readonly constant: readonly number[] }).constant;
+  const out = new Uint8Array(state);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = (out[i] ?? 0) ^ (constantRaw[i % constantRaw.length] ?? 0);
+  }
+  return new Map([["state", out]]);
+};
+
+const xorWithConstant: StepRegistration = {
+  kind: "ported",
+  executor: xorWithConstantExecutor,
+  shape: {
+    inputs: new Map([["state", { layout: "raw" }]]),
+    outputs: new Map([["state", { layout: "raw" }]]),
+  },
+  meta: { stateLayout: "bytes", stateInputPort: "state", stateOutputPort: "state" },
+  doc: {
+    name: "Test: XOR with constant (item-array)",
+    summary: "Toy per-block body — XORs each block with a fixed constant.",
+    detail: "for-each-subgraph item-array fixture (port-native since Phase C).",
   },
 };
 
@@ -109,7 +127,10 @@ describe("runtime — for-each-subgraph item-array mode (Slice 2.0b)", () => {
         0x10, 0x11, 0x12, 0x13, 0x20, 0x21, 0x22, 0x23, 0x30, 0x31, 0x32, 0x33,
       ]),
     };
-    const trace = runSpec(outerToySpec, buildRegistry(), { initialState: initial });
+    const trace = runSpec(outerToySpec, buildRegistry(), {
+      initialState: initial,
+      portedDispatchEnabled: true,
+    });
 
     // 3 iterations × 1 body leaf = 3 frames. (Plus zero coercion frames —
     // toy spec has no port-length-coerced inputs.)
@@ -158,7 +179,10 @@ describe("runtime — for-each-subgraph item-array mode (Slice 2.0b)", () => {
 
   it("empty input (zero blocks) emits zero frames and leaves state as zero-length BytesState", () => {
     const initial: BytesState = { shape: "bytes", bytes: new Uint8Array(0) };
-    const trace = runSpec(outerToySpec, buildRegistry(), { initialState: initial });
+    const trace = runSpec(outerToySpec, buildRegistry(), {
+      initialState: initial,
+      portedDispatchEnabled: true,
+    });
     expect(trace.frames).toHaveLength(0);
     if (trace.finalState.shape !== "bytes") throw new Error("finalState shape");
     expect(trace.finalState.bytes.length).toBe(0);
@@ -166,7 +190,10 @@ describe("runtime — for-each-subgraph item-array mode (Slice 2.0b)", () => {
 
   it("single-block input (1 × blockByteLength) emits one :r0 frame", () => {
     const initial: BytesState = { shape: "bytes", bytes: new Uint8Array([0xa0, 0xa1, 0xa2, 0xa3]) };
-    const trace = runSpec(outerToySpec, buildRegistry(), { initialState: initial });
+    const trace = runSpec(outerToySpec, buildRegistry(), {
+      initialState: initial,
+      portedDispatchEnabled: true,
+    });
     expect(trace.frames).toHaveLength(1);
     expect(trace.frames[0]?.stepId).toBe("xor:r0");
     if (trace.finalState.shape !== "bytes") throw new Error("finalState shape");
@@ -184,9 +211,12 @@ describe("runtime — for-each-subgraph item-array mode (Slice 2.0b)", () => {
       shape: "bytes",
       bytes: new Uint8Array([0x01, 0x02, 0x03, 0x04, 0x05]),
     };
-    expect(() => runSpec(outerToySpec, buildRegistry(), { initialState: initial })).toThrow(
-      /is not a multiple of blockByteLength/,
-    );
+    expect(() =>
+      runSpec(outerToySpec, buildRegistry(), {
+        initialState: initial,
+        portedDispatchEnabled: true,
+      }),
+    ).toThrow(/is not a multiple of blockByteLength/);
   });
 
   it("mode-exclusivity throws when both iterationCount AND item-array fields are set", () => {

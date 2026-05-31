@@ -45,35 +45,76 @@ import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { StepRegistry } from "@/core/registry";
 import { runSpec } from "@/core/runtime";
 import { canonicalStepId } from "@/core/step-id";
-import type { AuxValue, BytesState, CipherSpec, StepDefinition } from "@/core/types";
+import type {
+  AuxValue,
+  BytesState,
+  CipherSpec,
+  PortedExecutor,
+  StepRegistration,
+} from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 // Test-local body leaf: reads aux["prior-1"] and aux["prior-2"], XORs them,
 // writes the result as the iteration's bytes-state output. Built test-
 // local because no shipped step type combines bytes-shape state with
-// 1-byte arithmetic (the existing `xor-aux-into-state@1` is matrix4x4-
-// bytes only). Keeps the toy hand-verifiable at 1-byte entries.
-const xorPriorsIntoState: StepDefinition = {
-  executor: (state, _params, ctx) => {
-    if (state.shape !== "bytes") {
-      throw new Error("xorPriorsIntoState expects bytes state");
-    }
-    const prior1 = ctx.aux.get("prior-1");
-    const prior2 = ctx.aux.get("prior-2");
-    if (!(prior1 instanceof Uint8Array) || !(prior2 instanceof Uint8Array)) {
-      throw new Error("xorPriorsIntoState requires aux['prior-1'] + aux['prior-2'] as Uint8Array");
-    }
-    if (prior1.length !== state.bytes.length || prior2.length !== state.bytes.length) {
-      throw new Error(
-        `xorPriorsIntoState length mismatch: state=${state.bytes.length} prior-1=${prior1.length} prior-2=${prior2.length}`,
-      );
-    }
-    const out = new Uint8Array(state.bytes.length);
-    for (let i = 0; i < out.length; i++) {
-      out[i] = (prior1[i] ?? 0) ^ (prior2[i] ?? 0);
-    }
-    const next: BytesState = { shape: "bytes", bytes: out };
-    return { state: next, auxReads: ["prior-1", "prior-2"] };
+// 1-byte arithmetic. Keeps the toy hand-verifiable at 1-byte entries.
+//
+// **Port-native since Phase C (universal-port Phase 5).** Hybrid-ported: the
+// runtime projects the threaded state onto the `"state"` port and the two
+// auto-published lookback entries onto the `"prior-1"`/`"prior-2"` ports via
+// `meta.stateInputPort` + `meta.auxReadPorts`. `frame.auxRead` is recorded
+// from those bindings (insertion order prior-1, prior-2 — identical to the
+// old executor's `auxReads: ["prior-1", "prior-2"]`). The pre-Phase-C version
+// read the live `ctx.aux` directly; the ported path feeds a synthetic aux
+// holding only declared keys, so the static binding makes the same two reads.
+const xorPriorsIntoStateExecutor: PortedExecutor = (inputs) => {
+  const state = inputs.get("state");
+  if (!state) throw new Error("xorPriorsIntoState expects a 'state' input port");
+  const prior1 = inputs.get("prior-1");
+  const prior2 = inputs.get("prior-2");
+  if (!(prior1 instanceof Uint8Array) || !(prior2 instanceof Uint8Array)) {
+    throw new Error("xorPriorsIntoState requires aux['prior-1'] + aux['prior-2'] as Uint8Array");
+  }
+  if (prior1.length !== state.length || prior2.length !== state.length) {
+    throw new Error(
+      `xorPriorsIntoState length mismatch: state=${state.length} prior-1=${prior1.length} prior-2=${prior2.length}`,
+    );
+  }
+  const out = new Uint8Array(state.length);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = (prior1[i] ?? 0) ^ (prior2[i] ?? 0);
+  }
+  return new Map([["state", out]]);
+};
+
+const xorPriorsIntoState: StepRegistration = {
+  kind: "ported",
+  executor: xorPriorsIntoStateExecutor,
+  shape: {
+    inputs: new Map([
+      ["state", { layout: "raw" }],
+      ["prior-1", { layout: "raw" }],
+      ["prior-2", { layout: "raw" }],
+    ]),
+    outputs: new Map([["state", { layout: "raw" }]]),
+  },
+  meta: {
+    stateLayout: "bytes",
+    stateInputPort: "state",
+    stateOutputPort: "state",
+    // Static bindings: this toy is purpose-built for lookbackOffsets [1, 2],
+    // so it always reads exactly aux["prior-1"] + aux["prior-2"] (the runtime
+    // auto-publishes them before each iteration).
+    auxReadPorts: () =>
+      new Map([
+        ["prior-1", "prior-1"],
+        ["prior-2", "prior-2"],
+      ]),
+  },
+  doc: {
+    name: "Test: XOR priors into state",
+    summary: "Toy FES-with-history body — XORs aux['prior-1'] ⊕ aux['prior-2'].",
+    detail: "Lookback fixture (port-native since Phase C).",
   },
 };
 
@@ -84,56 +125,39 @@ const xorPriorsIntoState: StepDefinition = {
 
 // Test-local body leaf for the "body exits with wrong byte length" throw
 // test. Returns a bytes state of length 2 regardless of input — under
-// historyEntryByteLength=1 this trips the length invariant.
-const returnTwoBytes: StepDefinition = {
-  executor: () => {
-    const next: BytesState = { shape: "bytes", bytes: new Uint8Array([0xff, 0xee]) };
-    return { state: next };
+// historyEntryByteLength=1 this trips the length invariant. Port-native
+// since Phase C: emits its 2-byte output on the `"state"` port.
+const returnTwoBytesExecutor: PortedExecutor = () =>
+  new Map([["state", new Uint8Array([0xff, 0xee])]]);
+
+const returnTwoBytes: StepRegistration = {
+  kind: "ported",
+  executor: returnTwoBytesExecutor,
+  shape: {
+    inputs: new Map([["state", { layout: "raw" }]]),
+    outputs: new Map([["state", { layout: "raw" }]]),
+  },
+  meta: { stateLayout: "bytes", stateInputPort: "state", stateOutputPort: "state" },
+  doc: {
+    name: "Test: return two bytes",
+    summary: "Toy body that always emits a 2-byte state (trips the entry-length invariant).",
+    detail: "FES-with-history wrong-length fixture (port-native since Phase C).",
   },
 };
 
-// Test-local body leaf that asserts a named aux key is absent. Used by
-// the aux-cleanup test to verify snapshot+restore deleted runtime-set
-// keys after the FES-with-history node exits.
-const assertAuxAbsent: StepDefinition = {
-  executor: (state, params, ctx) => {
-    const key = (params as unknown as { readonly key: string }).key;
-    if (ctx.aux.has(key)) {
-      throw new Error(
-        `assertAuxAbsent: aux["${key}"] is present but expected absent (FES-with-history cleanup failed)`,
-      );
-    }
-    return { state };
-  },
-};
-
-// Test-local body leaf that asserts a named aux key has a specific byte
-// value. Used by the aux-restore test to verify pre-existing aux state
-// was restored verbatim after the FES-with-history node exits.
-const assertAuxEquals: StepDefinition = {
-  executor: (state, params, ctx) => {
-    const key = (params as unknown as { readonly key: string }).key;
-    const expectedHex = (params as unknown as { readonly expectedHex: string }).expectedHex;
-    const got = ctx.aux.get(key);
-    if (!(got instanceof Uint8Array)) {
-      throw new Error(`assertAuxEquals: aux["${key}"] is not a Uint8Array (got ${typeof got})`);
-    }
-    const gotHex = Array.from(got)
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-    if (gotHex !== expectedHex) {
-      throw new Error(`assertAuxEquals: aux["${key}"]=${gotHex} expected ${expectedHex}`);
-    }
-    return { state, auxReads: [key] };
-  },
-};
+// (The `assertAuxAbsent` / `assertAuxEquals` probe-step helpers were removed
+// in Phase C — universal-port Phase 5. They read the LIVE `ctx.aux` map after
+// the FES-with-history node to verify its snapshot+restore protocol, but the
+// ported execution path feeds a synthetic aux holding only a step's declared
+// keys, so a probe step can no longer observe the live map. The two
+// snapshot+restore tests below now assert directly on `trace.finalAux` — the
+// live aux map the runtime exposes at walk-end — which is both simpler and a
+// more honest way to test a runtime property than threading a probe step.)
 
 const buildRegistry = (): StepRegistry => {
   const r = new StepRegistry();
   r.register("test.xor-priors-into-state@1", xorPriorsIntoState);
   r.register("test.return-two-bytes@1", returnTwoBytes);
-  r.register("test.assert-aux-absent@1", assertAuxAbsent);
-  r.register("test.assert-aux-equals@1", assertAuxEquals);
   return r;
 };
 
@@ -182,7 +206,10 @@ const xorShapeSpec: CipherSpec = {
 describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
   it("8-iter XOR-shape lookback: emits :r{i}-suffixed frames + correct final history", () => {
     const initial: BytesState = { shape: "bytes", bytes: new Uint8Array([0x05, 0x03]) };
-    const trace = runSpec(xorShapeSpec, buildRegistry(), { initialState: initial });
+    const trace = runSpec(xorShapeSpec, buildRegistry(), {
+      initialState: initial,
+      portedDispatchEnabled: true,
+    });
 
     // 8 iterations × 1 body leaf = 8 frames.
     expect(trace.frames).toHaveLength(8);
@@ -251,7 +278,10 @@ describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
       ],
     };
     const initial: BytesState = { shape: "bytes", bytes: new Uint8Array([0x05, 0x03]) };
-    const trace = runSpec(zeroSpec, buildRegistry(), { initialState: initial });
+    const trace = runSpec(zeroSpec, buildRegistry(), {
+      initialState: initial,
+      portedDispatchEnabled: true,
+    });
     expect(trace.frames).toHaveLength(0);
     if (trace.finalState.shape !== "bytes") throw new Error("finalState shape");
     expect(Array.from(trace.finalState.bytes)).toEqual([0x05, 0x03]);
@@ -337,13 +367,25 @@ describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
 
     // Test-local head-slice step for the nested case. Takes the first
     // 2 bytes of the 16-byte block and emits them as bytes state — small
-    // enough to feed FES-with-history as 2 seeds at entry=1.
-    const firstTwoBytes: StepDefinition = {
-      executor: (state) => {
-        if (state.shape !== "bytes") throw new Error("expects bytes");
-        const head = state.bytes.subarray(0, 2);
-        const next: BytesState = { shape: "bytes", bytes: new Uint8Array(head) };
-        return { state: next };
+    // enough to feed FES-with-history as 2 seeds at entry=1. Port-native
+    // since Phase C: reads/writes the `"state"` port via `meta`.
+    const firstTwoBytesExecutor: PortedExecutor = (inputs) => {
+      const state = inputs.get("state");
+      if (!state) throw new Error("firstTwoBytes expects a 'state' input port");
+      return new Map([["state", new Uint8Array(state.subarray(0, 2))]]);
+    };
+    const firstTwoBytes: StepRegistration = {
+      kind: "ported",
+      executor: firstTwoBytesExecutor,
+      shape: {
+        inputs: new Map([["state", { layout: "raw" }]]),
+        outputs: new Map([["state", { layout: "raw" }]]),
+      },
+      meta: { stateLayout: "bytes", stateInputPort: "state", stateOutputPort: "state" },
+      doc: {
+        name: "Test: first two bytes",
+        summary: "Toy adapter — emits the first 2 bytes of the threaded state.",
+        detail: "Nested iterate × FES-with-history fixture (port-native since Phase C).",
       },
     };
     const registry = buildRegistry();
@@ -366,6 +408,7 @@ describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
         ["count", 2],
         ["in-blocks", blocks],
       ]),
+      portedDispatchEnabled: true,
     });
 
     // Two blocks × (1 to-bytes + 3 inner rounds) = 8 frames total.
@@ -491,6 +534,7 @@ describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
     expect(() =>
       runSpec(makeSpec({ bodyType: "test.return-two-bytes@1" }), buildRegistry(), {
         initialState: seedsTwo,
+        portedDispatchEnabled: true,
       }),
     ).toThrow(/!= historyEntryByteLength/);
   });
@@ -511,9 +555,12 @@ describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
   // before the node ran stay absent after; keys present with a
   // pre-existing value get that value restored verbatim.
 
-  it("aux cleanup: prior-{N} keys absent after node exits when absent before", () => {
-    // Spec: FES-with-history, then a sibling leaf that throws if
-    // aux["prior-1"] or aux["prior-2"] is present. Verifies cleanup.
+  it("aux cleanup: prior-{N} keys absent in finalAux after node exits when absent before", () => {
+    // FES-with-history publishes aux["prior-{N}"] internally per iteration;
+    // its snapshot+restore protocol must DELETE them on exit (they were absent
+    // before the node). Observed directly on `trace.finalAux` — the live aux
+    // map the runtime exposes at walk-end — rather than via a probe step
+    // (retired with the legacy executor contract in Phase C).
     const cleanupSpec: CipherSpec = {
       id: "test-fes-history-cleanup@1",
       name: "cleanup",
@@ -535,28 +582,21 @@ describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
             },
           ],
         },
-        {
-          kind: "step",
-          id: "assert-1-absent",
-          type: "test.assert-aux-absent@1",
-          params: { key: "prior-1" },
-        },
-        {
-          kind: "step",
-          id: "assert-2-absent",
-          type: "test.assert-aux-absent@1",
-          params: { key: "prior-2" },
-        },
       ],
     };
-    expect(() => runSpec(cleanupSpec, buildRegistry(), { initialState: seedsTwo })).not.toThrow();
+    const trace = runSpec(cleanupSpec, buildRegistry(), {
+      initialState: seedsTwo,
+      portedDispatchEnabled: true,
+    });
+    expect(trace.finalAux.has("prior-1")).toBe(false);
+    expect(trace.finalAux.has("prior-2")).toBe(false);
   });
 
   it("aux restore: pre-existing prior-{N} value preserved across node lifetime", () => {
-    // Spec: FES-with-history (which sets aux["prior-1"] inside its loop),
-    // then a sibling leaf that verifies aux["prior-1"] still equals the
-    // PRE-EXISTING value seeded via initialAux. Snapshot+restore should
-    // overwrite the runtime's intermediate values with the original.
+    // FES-with-history overwrites aux["prior-{N}"] internally during its loop;
+    // its snapshot+restore protocol must restore the PRE-EXISTING values
+    // (seeded via initialAux) on exit. Observed on `trace.finalAux` (see the
+    // cleanup test above for why a probe step no longer works post-Phase-C).
     const restoreSpec: CipherSpec = {
       id: "test-fes-history-restore@1",
       name: "restore",
@@ -578,27 +618,24 @@ describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
             },
           ],
         },
-        {
-          kind: "step",
-          id: "assert-1-restored",
-          type: "test.assert-aux-equals@1",
-          params: { key: "prior-1", expectedHex: "aa" },
-        },
-        {
-          kind: "step",
-          id: "assert-2-restored",
-          type: "test.assert-aux-equals@1",
-          params: { key: "prior-2", expectedHex: "bb" },
-        },
       ],
     };
     const initialAux = new Map<string, AuxValue>([
       ["prior-1", new Uint8Array([0xaa])],
       ["prior-2", new Uint8Array([0xbb])],
     ]);
-    expect(() =>
-      runSpec(restoreSpec, buildRegistry(), { initialState: seedsTwo, initialAux }),
-    ).not.toThrow();
+    const trace = runSpec(restoreSpec, buildRegistry(), {
+      initialState: seedsTwo,
+      initialAux,
+      portedDispatchEnabled: true,
+    });
+    const p1 = trace.finalAux.get("prior-1");
+    const p2 = trace.finalAux.get("prior-2");
+    if (!(p1 instanceof Uint8Array) || !(p2 instanceof Uint8Array)) {
+      throw new Error("expected prior-1/prior-2 restored as Uint8Array in finalAux");
+    }
+    expect(Array.from(p1)).toEqual([0xaa]);
+    expect(Array.from(p2)).toEqual([0xbb]);
   });
 });
 
