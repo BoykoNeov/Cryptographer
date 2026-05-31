@@ -34,8 +34,11 @@
  *
  * **Explicit state-spine wiring (Phase 5 Slice 5.3b).** Every leaf declares
  * its `state` input port via `portInputs`, and every round group declares
- * `seedInput`/`bodyOutput` — exactly mirroring the byte-native AES body
- * (`aes-round-builder-native.ts`). This hands the round→round spine to
+ * `seedInput`/`bodyOutput` — following the byte-native AES body
+ * (`aes-round-builder-native.ts`), except that AES parameterizes its
+ * `inputSource` for multi-block reuse whereas this hardcodes `$input` (single-
+ * block only; see the TODO in `buildSerpentEncryptBody`). This hands the
+ * round→round spine to
  * `inferPortEdges` so the legacy `inferStateEdges` consecutive-siblings
  * inference can retire (5.3e). Because every Serpent leaf is
  * `stateLayout: "bytes"`, the runtime's Step-A port resolution is byte-equal
@@ -203,6 +206,10 @@ const encryptFinalRound = (): StepNode => {
 export const buildSerpentEncryptBody = (): readonly StepNode[] => {
   const nodes: StepNode[] = [];
   // IP reads the plaintext block from the reserved `$input` source.
+  // TODO(multi-block): unlike `aes-round-builder-native.ts`, which parameterizes
+  // `inputSource` so an ECB/CBC builder can pass `port(iterateId, "in")`, this
+  // hardcodes `$input` — correct for the only shipped (single-block) Serpent,
+  // but a future Serpent ECB/CBC would need the per-iteration injection instead.
   nodes.push(ipLeaf("initial-permutation", port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT)));
   for (let r = 1; r <= SERPENT_ROUNDS - 1; r++) {
     nodes.push(encryptNormalRound(r));
