@@ -121,21 +121,35 @@ describe("lookupNodeValue — trace null", () => {
 // ─── Block chips ────────────────────────────────────────────────────────
 
 describe("lookupNodeValue — block chips", () => {
-  // PHASE C / B1.4b: block-chip PAYLOAD-value resolution is an aux/state-mode
-  // feature — it reads the per-block ciphertext from the body's `stateAfter`
-  // at `blockIndex === i` (equivalently `aux[outBlocksAux][i]`). Byte-native
-  // ECB (B1.4) is a port-mode iterate: leaves never write `state`, and there
-  // is no `outBlocksAux` — each block's result lives in the body's port
-  // outputs. Resolving a chip's payload therefore needs a PORT-based path,
-  // the same class as the deferred `$input`-vs-endpoint-pill question
-  // (graph-narrative Slice 1) — scheduled with Slice 2.9c-e / Phase C, not
-  // built in B1.4a (locked decision: flat bytes until C2; accept the temporary
-  // block-chip-value regression). Both ECB (B1.4a) and CBC (B1.4b) are now
-  // port-mode iterates, so NO shipped spec has the aux/state block-payload
-  // path anymore. The two former payload-value tests (matrix4x4-bytes per-block
-  // value + per-chip discrimination) were dropped rather than retargeted. The
-  // MISSING-path chip tests below are index-driven and stay valid for the
-  // byte-native iterate.
+  // Block-chip PAYLOAD-value resolution: `lookupChipOutgoing` reads the per-block
+  // result from the LAST body frame's primary output port at `blockIndex === i`.
+  // Byte-native ECB (B1.4) is a port-mode iterate — leaves never write `state`,
+  // and there is no `outBlocksAux`; each block's result lives in the body's port
+  // outputs. The native-AES body's last leaf is `xor-with-aux` (port `"output"`,
+  // no `"state"` port), so under the old `"state"`-only helper this was "missing"
+  // (the B1.4a accepted block-chip-value regression). Slice 2.9c-e generalized
+  // the helper to the SOLE output port, so chip-out now resolves — pinned below
+  // against the NIST SP 800-38A ECB-AES128 ciphertext blocks. (Chip-IN stays
+  // intrinsically unresolvable: the body's FIRST leaf is `xor-with-aux` with two
+  // inputs — a fan-in, no single representative input port.)
+
+  it("resolves a numbered block chip to its per-block ciphertext (chip-out, NIST SP 800-38A)", () => {
+    const trace = runAes128Ecb();
+    const out0 = lookupNodeValue("ecb-blocks@block0", aes128EcbSpec, trace, undefined);
+    expect(out0.status).toBe("value");
+    if (out0.status !== "value") return;
+    expect(out0.displayKind).toBe("block-payload");
+    expect(out0.blockIndex).toBe(0);
+    expect(out0.value).toEqual(makeBytesState(bytesFromHex("3ad77bb40d7a3660a89ecaf32466ef97")));
+
+    // block3 is 0-indexed → NIST block #4 (PT f69f2445…), CT 7b0c785e…
+    const out3 = lookupNodeValue("ecb-blocks@block3", aes128EcbSpec, trace, undefined);
+    expect(out3.status).toBe("value");
+    if (out3.status !== "value") return;
+    expect(out3.value).toEqual(makeBytesState(bytesFromHex("7b0c785e27e8ad3f8223207104725dd4")));
+    // Distinct blocks → distinct per-block ciphertext.
+    expect(out0.value).not.toEqual(out3.value);
+  });
 
   it("returns missing for the ellipsis chip (`@blockMore`)", () => {
     const trace = runAes128Ecb();
