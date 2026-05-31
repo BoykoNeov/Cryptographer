@@ -19,20 +19,23 @@
  */
 
 import type {
-  BytesState,
   Json,
   PortContract,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "../core/types";
 
-export const iso78164Unpad: StepExecutor = (state, params) => {
-  if (state.shape !== "bytes") {
-    throw new Error("iso7816-4-unpad expects bytes state");
+// Port-native `PortedExecutor` (Slice 5.2): padded bytes in on `state`,
+// stripped bytes out on `state`. The intentional throw on a missing 0x80
+// sentinel (corrupt padding) propagates through the runtime unchanged.
+export const iso78164Unpad: PortedExecutor = (inputs, params, _ctx) => {
+  const bytes = inputs.get("state");
+  if (!(bytes instanceof Uint8Array)) {
+    throw new Error("iso7816-4-unpad: 'state' input port must carry the bytes to unpad");
   }
   const blockSize = readBlockSize(params);
-  const len = state.bytes.length;
+  const len = bytes.length;
   if (len === 0) {
     throw new Error("iso7816-4-unpad: input is empty (cannot find sentinel)");
   }
@@ -48,18 +51,17 @@ export const iso78164Unpad: StepExecutor = (state, params) => {
   // padding is malformed.
   let i = len - 1;
   const minScan = Math.max(0, len - blockSize);
-  while (i >= minScan && state.bytes[i] === 0x00) {
+  while (i >= minScan && bytes[i] === 0x00) {
     i--;
   }
-  if (i < minScan || state.bytes[i] !== 0x80) {
+  if (i < minScan || bytes[i] !== 0x80) {
     throw new Error(
       "iso7816-4-unpad: no 0x80 sentinel found in the trailing block — padding is malformed",
     );
   }
   const out = new Uint8Array(i);
-  out.set(state.bytes.subarray(0, i), 0);
-  const result: BytesState = { shape: "bytes", bytes: out };
-  return { state: result };
+  out.set(bytes.subarray(0, i), 0);
+  return new Map([["state", out]]);
 };
 
 export const iso78164UnpadDoc: StepDocumentation = {
@@ -112,8 +114,8 @@ of bare ISO 7816-4 + CBC.
 // ─── Universal port-dataflow metadata (Phase 1 Slice 1.3) ───────────────
 // ISO 7816-4 unpad: pure bytes→bytes, no aux. The runtime preserves the
 // executor's loud throws on malformed input (missing 0x80 sentinel,
-// non-multiple length) — both dispatch paths exhibit the same error
-// behavior, which is the educational point.
+// non-multiple length) — the ported runtime surfaces the same error, which
+// is the educational point.
 
 export const iso78164UnpadMeta: ProjectionMetadata = {
   stateLayout: "bytes",

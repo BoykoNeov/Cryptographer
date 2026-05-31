@@ -1,6 +1,6 @@
-import type { BytesState, StepContext } from "@/core/types";
-import { zeroPad } from "@/steps/zero-pad";
-import { zeroUnpad } from "@/steps/zero-unpad";
+import type { BytesState, Json, StepContext } from "@/core/types";
+import { zeroPad as zeroPadExec } from "@/steps/zero-pad";
+import { zeroUnpad as zeroUnpadExec } from "@/steps/zero-unpad";
 import { describe, expect, it } from "vitest";
 
 const ctx: StepContext = { stepId: "test", path: [], aux: new Map() };
@@ -9,6 +9,23 @@ const bytes = (...vals: number[]): BytesState => ({
   shape: "bytes",
   bytes: new Uint8Array(vals),
 });
+
+// Slice 5.2: zero-pad / zero-unpad are now PortedExecutors — bytes flow on the
+// `state` port. These thin adapters drive the port signature and re-wrap the
+// `state` output as { state: BytesState } so the assertions below stay
+// unchanged. The ignored third arg lets the existing 3-arg call sites compile.
+const zeroPad = (input: BytesState, params: Json, _ctx?: StepContext): { state: BytesState } => {
+  const out = zeroPadExec(new Map([["state", input.bytes]]), params, ctx);
+  const s = out.get("state");
+  if (s === undefined) throw new Error("zero-pad emitted no state output");
+  return { state: { shape: "bytes", bytes: s } };
+};
+const zeroUnpad = (input: BytesState, params: Json, _ctx?: StepContext): { state: BytesState } => {
+  const out = zeroUnpadExec(new Map([["state", input.bytes]]), params, ctx);
+  const s = out.get("state");
+  if (s === undefined) throw new Error("zero-unpad emitted no state output");
+  return { state: { shape: "bytes", bytes: s } };
+};
 
 describe("zero-pad", () => {
   it("pads a 5-byte input ('apple') with eleven 0x00 bytes", () => {

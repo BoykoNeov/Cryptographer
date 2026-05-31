@@ -19,28 +19,33 @@
  */
 
 import type {
-  BytesState,
   Json,
   PortContract,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "../core/types";
 
-export const pkcs7Pad: StepExecutor = (state, params) => {
-  if (state.shape !== "bytes") {
-    throw new Error("pkcs7-pad expects bytes state");
+// Port-native `PortedExecutor` (Slice 5.2 — universal-port Phase 5): the bytes
+// to pad arrive on the `state` input port and the padded bytes leave on the
+// `state` output port. The runtime wires both via meta.stateInputPort /
+// stateOutputPort, so the linear inspector still reads stateBefore/stateAfter
+// from these ports. The frame reroutes from BytesView to PortFlowView (it is a
+// port-native frame), matching SHA-256's already-shipped pad rendering.
+export const pkcs7Pad: PortedExecutor = (inputs, params, _ctx) => {
+  const bytes = inputs.get("state");
+  if (!(bytes instanceof Uint8Array)) {
+    throw new Error("pkcs7-pad: 'state' input port must carry the bytes to pad");
   }
   const blockSize = readBlockSize(params);
-  const inputLen = state.bytes.length;
+  const inputLen = bytes.length;
   // PKCS#7: pad length N is in [1, blockSize]. When input is already a
   // block multiple, N == blockSize (a full extra block of `blockSize`).
   const padLen = blockSize - (inputLen % blockSize);
   const out = new Uint8Array(inputLen + padLen);
-  out.set(state.bytes, 0);
+  out.set(bytes, 0);
   out.fill(padLen, inputLen);
-  const result: BytesState = { shape: "bytes", bytes: out };
-  return { state: result };
+  return new Map([["state", out]]);
 };
 
 export const pkcs7PadDoc: StepDocumentation = {

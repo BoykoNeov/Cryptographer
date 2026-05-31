@@ -1,6 +1,6 @@
-import type { BytesState, StepContext } from "@/core/types";
-import { iso78164Pad } from "@/steps/iso7816-4-pad";
-import { iso78164Unpad } from "@/steps/iso7816-4-unpad";
+import type { BytesState, Json, StepContext } from "@/core/types";
+import { iso78164Pad as iso78164PadExec } from "@/steps/iso7816-4-pad";
+import { iso78164Unpad as iso78164UnpadExec } from "@/steps/iso7816-4-unpad";
 import { describe, expect, it } from "vitest";
 
 const ctx: StepContext = { stepId: "test", path: [], aux: new Map() };
@@ -9,6 +9,31 @@ const bytes = (...vals: number[]): BytesState => ({
   shape: "bytes",
   bytes: new Uint8Array(vals),
 });
+
+// Slice 5.2: iso7816-4-pad / -unpad are now PortedExecutors — bytes flow on the
+// `state` port. These thin adapters drive the port signature and re-wrap the
+// `state` output as { state: BytesState } so the assertions below stay
+// unchanged. The ignored third arg lets the existing 3-arg call sites compile.
+const iso78164Pad = (
+  input: BytesState,
+  params: Json,
+  _ctx?: StepContext,
+): { state: BytesState } => {
+  const out = iso78164PadExec(new Map([["state", input.bytes]]), params, ctx);
+  const s = out.get("state");
+  if (s === undefined) throw new Error("iso7816-4-pad emitted no state output");
+  return { state: { shape: "bytes", bytes: s } };
+};
+const iso78164Unpad = (
+  input: BytesState,
+  params: Json,
+  _ctx?: StepContext,
+): { state: BytesState } => {
+  const out = iso78164UnpadExec(new Map([["state", input.bytes]]), params, ctx);
+  const s = out.get("state");
+  if (s === undefined) throw new Error("iso7816-4-unpad emitted no state output");
+  return { state: { shape: "bytes", bytes: s } };
+};
 
 describe("iso7816-4-pad", () => {
   it("pads a 5-byte input ('apple') with 0x80 followed by ten 0x00", () => {

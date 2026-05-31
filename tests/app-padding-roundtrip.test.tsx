@@ -59,6 +59,17 @@ const findFormatButton = (container: HTMLElement, label: string): HTMLButtonElem
   return target as HTMLButtonElement;
 };
 
+// Padding frames render in PortFlowView (port-native since Slice 5.2): a
+// `.port-row[data-port-name="state"]` under the inputs section (original
+// bytes) and one under the outputs section (padded/unpadded bytes). Pull the
+// `.bytes-cell`s of that state port on a given side.
+const portStateCells = (container: HTMLElement, side: "inputs" | "outputs"): Element[] => {
+  const row = container.querySelector(
+    `.port-flow-section[data-section="${side}"] .port-row[data-port-name="state"]`,
+  );
+  return Array.from(row?.querySelectorAll(".bytes-cell") ?? []);
+};
+
 const resetAll = (): void => {
   __resetByteFormatForTests();
   __resetTraceForTests();
@@ -119,14 +130,15 @@ describe("App — PKCS#7 padding round-trip", () => {
     const frameStep = container.querySelector(".frame-step")?.textContent ?? "";
     expect(frameStep).toContain("pkcs7-pad");
 
-    // The "after" bytes-row should have 16 cells; the last 11 are 0x0b.
-    const rows = container.querySelectorAll(".bytes-row-block");
-    expect(rows.length).toBeGreaterThanOrEqual(2);
-    const afterCells = rows[1]?.querySelectorAll(".bytes-cell") ?? [];
+    // The OUTPUT `state` port carries the padded 16 bytes; the last 11 are
+    // 0x0b. The INPUT `state` port still shows the 5 original "apple" bytes,
+    // so the 5 → 16 length growth is read across the two PortFlowView rows.
+    const afterCells = portStateCells(container, "outputs");
     expect(afterCells.length).toBe(16);
     for (let i = 5; i < 16; i++) {
       expect(afterCells[i]?.textContent?.trim()).toBe("\\x0b");
     }
+    expect(portStateCells(container, "inputs").length).toBe(5);
   });
 
   it("displays a friendly error when input exceeds 15 bytes under PKCS#7", () => {
@@ -224,15 +236,15 @@ describe("App — ISO 7816-4 padding round-trip", () => {
     const frameStep = container.querySelector(".frame-step")?.textContent ?? "";
     expect(frameStep).toContain("iso7816-4-pad");
 
-    // 'after' row: 16 cells, byte 5 is 0x80 sentinel, bytes 6..15 are 0x00.
-    const rows = container.querySelectorAll(".bytes-row-block");
-    expect(rows.length).toBeGreaterThanOrEqual(2);
-    const afterCells = rows[1]?.querySelectorAll(".bytes-cell") ?? [];
+    // OUTPUT `state` port: 16 cells, byte 5 is the 0x80 sentinel, bytes 6..15
+    // are 0x00. The INPUT port shows the 5 original "apple" bytes.
+    const afterCells = portStateCells(container, "outputs");
     expect(afterCells.length).toBe(16);
     expect(afterCells[5]?.textContent?.trim()).toBe("\\x80");
     for (let i = 6; i < 16; i++) {
       expect(afterCells[i]?.textContent?.trim()).toBe("\\x00");
     }
+    expect(portStateCells(container, "inputs").length).toBe(5);
   });
 
   it("round-trips 'apple' through encrypt → decrypt under ISO 7816-4", () => {
@@ -306,11 +318,10 @@ describe("App — Zero-pad scheme", () => {
     fireEvent.input(slider, { target: { value: "0" } });
     const frameStep = container.querySelector(".frame-step")?.textContent ?? "";
     expect(frameStep).toContain("zero-pad");
-    const rows = container.querySelectorAll(".bytes-row-block");
-    const beforeCells = rows[0]?.querySelectorAll(".bytes-cell") ?? [];
-    const afterCells = rows[1]?.querySelectorAll(".bytes-cell") ?? [];
-    expect(beforeCells.length).toBe(16);
-    expect(afterCells.length).toBe(16);
+    // Zero-pad on a clean 16-byte block is a no-op: both the INPUT and OUTPUT
+    // `state` port rows in PortFlowView carry 16 bytes (no length growth).
+    expect(portStateCells(container, "inputs").length).toBe(16);
+    expect(portStateCells(container, "outputs").length).toBe(16);
   });
 
   it("rejects length-0 input under zero-pad with a friendly error", () => {

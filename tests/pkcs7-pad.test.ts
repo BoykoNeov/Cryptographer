@@ -1,6 +1,6 @@
-import type { BytesState, StepContext } from "@/core/types";
-import { pkcs7Pad } from "@/steps/pkcs7-pad";
-import { pkcs7Unpad } from "@/steps/pkcs7-unpad";
+import type { BytesState, Json, StepContext } from "@/core/types";
+import { pkcs7Pad as pkcs7PadExec } from "@/steps/pkcs7-pad";
+import { pkcs7Unpad as pkcs7UnpadExec } from "@/steps/pkcs7-unpad";
 import { describe, expect, it } from "vitest";
 
 const ctx: StepContext = { stepId: "test", path: [], aux: new Map() };
@@ -9,6 +9,25 @@ const bytes = (...vals: number[]): BytesState => ({
   shape: "bytes",
   bytes: new Uint8Array(vals),
 });
+
+// Slice 5.2: pkcs7-pad / pkcs7-unpad are now PortedExecutors — bytes flow on
+// the `state` port. These thin adapters drive the port signature (state-port
+// Map in, output-port Map out) and re-wrap the `state` output as
+// { state: BytesState } so the byte-level assertions below stay unchanged. The
+// ignored third arg lets the existing 3-arg `(input, params, ctx)` call sites
+// compile untouched.
+const pkcs7Pad = (input: BytesState, params: Json, _ctx?: StepContext): { state: BytesState } => {
+  const out = pkcs7PadExec(new Map([["state", input.bytes]]), params, ctx);
+  const s = out.get("state");
+  if (s === undefined) throw new Error("pkcs7-pad emitted no state output");
+  return { state: { shape: "bytes", bytes: s } };
+};
+const pkcs7Unpad = (input: BytesState, params: Json, _ctx?: StepContext): { state: BytesState } => {
+  const out = pkcs7UnpadExec(new Map([["state", input.bytes]]), params, ctx);
+  const s = out.get("state");
+  if (s === undefined) throw new Error("pkcs7-unpad emitted no state output");
+  return { state: { shape: "bytes", bytes: s } };
+};
 
 describe("pkcs7-pad", () => {
   it("pads a 5-byte input ('apple') with eleven 0x0b bytes", () => {

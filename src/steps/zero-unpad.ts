@@ -15,20 +15,23 @@
  */
 
 import type {
-  BytesState,
   Json,
   PortContract,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "../core/types";
 
-export const zeroUnpad: StepExecutor = (state, params) => {
-  if (state.shape !== "bytes") {
-    throw new Error("zero-unpad expects bytes state");
+// Port-native `PortedExecutor` (Slice 5.2): bytes in on `state`, stripped
+// bytes out on `state`. Lossy by design (trailing original 0x00 bytes are
+// indistinguishable from padding) — see the file header.
+export const zeroUnpad: PortedExecutor = (inputs, params, _ctx) => {
+  const bytes = inputs.get("state");
+  if (!(bytes instanceof Uint8Array)) {
+    throw new Error("zero-unpad: 'state' input port must carry the bytes to unpad");
   }
   const blockSize = readBlockSize(params);
-  const len = state.bytes.length;
+  const len = bytes.length;
   if (len === 0) {
     throw new Error("zero-unpad: input is empty");
   }
@@ -37,16 +40,15 @@ export const zeroUnpad: StepExecutor = (state, params) => {
   }
   // Walk backwards from the end, dropping every 0x00 byte. If the entire
   // block is zeros, we end with `end == 0` (empty result) — that's
-  // acceptable; the runtime will render it as a zero-byte BytesState and
+  // acceptable; the runtime will render it as a zero-byte state and
   // the user can see the lossiness directly.
   let end = len;
-  while (end > 0 && state.bytes[end - 1] === 0x00) {
+  while (end > 0 && bytes[end - 1] === 0x00) {
     end--;
   }
   const out = new Uint8Array(end);
-  out.set(state.bytes.subarray(0, end), 0);
-  const result: BytesState = { shape: "bytes", bytes: out };
-  return { state: result };
+  out.set(bytes.subarray(0, end), 0);
+  return new Map([["state", out]]);
 };
 
 export const zeroUnpadDoc: StepDocumentation = {

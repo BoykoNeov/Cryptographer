@@ -29,14 +29,17 @@
  * cheap and the cells are otherwise unreadable without it.
  *
  * **Dispatch predicate** (`isPortNativeFrame`): a frame is port-native
- * iff `portInputs !== undefined || portOutputs !== undefined`. Slice
- * 2.9a's runtime gate (`meta === undefined` at `runtime.ts:502`) only
- * populates these fields on pure port-native steps; lifted-legacy
- * ported frames (AES SubBytes, AES key-expansion, `bytes-to-state@1`,
- * `state-to-bytes@1`) all carry `meta` and leave both fields undefined,
- * so the predicate naturally routes them through the existing
- * matrix/bytes dispatch. Future port-native steps that publish only
- * outputs (constants) or only inputs (sinks) still match via the `||`.
+ * iff `portInputs !== undefined || portOutputs !== undefined`. The runtime
+ * populates these fields whenever the registration has NO `legacy` executor
+ * (the port-capture gate at ~`runtime.ts:767`), so BOTH pure port-native
+ * steps AND the hybrid-ported steps (meta retained, legacy dropped) carry
+ * port I/O. Since Slice 5.2 that hybrid set is the key-schedules
+ * (AES/Speck/Serpent/DES) + the padding family; the key-schedules are
+ * intercepted upstream by `KeyScheduleExplorer` (by stepType) before this
+ * dispatch, so in practice padding is the hybrid family that lands here. A
+ * still-lifted-legacy frame (`feistel.toy-add-k@1`) keeps its `legacy`
+ * executor → no port capture → routes to `BytesView`. Steps that publish
+ * only outputs (constants) or only inputs (sinks) still match via the `||`.
  */
 
 import { formatByte } from "@/core/format";

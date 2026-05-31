@@ -31,31 +31,32 @@
  */
 
 import type {
-  BytesState,
   Json,
   PortContract,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "../core/types";
 
-export const iso78164Pad: StepExecutor = (state, params) => {
-  if (state.shape !== "bytes") {
-    throw new Error("iso7816-4-pad expects bytes state");
+// Port-native `PortedExecutor` (Slice 5.2): bytes in on `state`, padded bytes
+// (0x80 sentinel + zeros to the block boundary) out on `state`.
+export const iso78164Pad: PortedExecutor = (inputs, params, _ctx) => {
+  const bytes = inputs.get("state");
+  if (!(bytes instanceof Uint8Array)) {
+    throw new Error("iso7816-4-pad: 'state' input port must carry the bytes to pad");
   }
   const blockSize = readBlockSize(params);
-  const inputLen = state.bytes.length;
+  const inputLen = bytes.length;
   // ISO 7816-4 always adds at least one byte (the 0x80 sentinel). Same N
   // formula as PKCS#7: N ∈ [1, blockSize].
   const padLen = blockSize - (inputLen % blockSize);
   const out = new Uint8Array(inputLen + padLen);
-  out.set(state.bytes, 0);
+  out.set(bytes, 0);
   out[inputLen] = 0x80; // sentinel byte
   // The remaining (padLen - 1) bytes stay at their default 0x00. No fill
   // needed (Uint8Array zero-initializes), but if the buffer were ever
   // changed to a SharedArrayBuffer this would be the line to revisit.
-  const result: BytesState = { shape: "bytes", bytes: out };
-  return { state: result };
+  return new Map([["state", out]]);
 };
 
 export const iso78164PadDoc: StepDocumentation = {

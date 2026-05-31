@@ -16,27 +16,32 @@
  */
 
 import type {
-  BytesState,
   Json,
   PortContract,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "../core/types";
 
-export const pkcs7Unpad: StepExecutor = (state, params) => {
-  if (state.shape !== "bytes") {
-    throw new Error("pkcs7-unpad expects bytes state");
+// Port-native `PortedExecutor` (Slice 5.2): padded bytes in on `state`,
+// stripped bytes out on `state`. The executor's intentional throws on
+// malformed padding (empty, non-multiple length, bad pad byte) propagate
+// through the runtime unchanged — the educational "fail loudly" behavior is
+// preserved on the ported path.
+export const pkcs7Unpad: PortedExecutor = (inputs, params, _ctx) => {
+  const bytes = inputs.get("state");
+  if (!(bytes instanceof Uint8Array)) {
+    throw new Error("pkcs7-unpad: 'state' input port must carry the bytes to unpad");
   }
   const blockSize = readBlockSize(params);
-  const len = state.bytes.length;
+  const len = bytes.length;
   if (len === 0) {
     throw new Error("pkcs7-unpad: input is empty (cannot read pad length)");
   }
   if (len % blockSize !== 0) {
     throw new Error(`pkcs7-unpad: input length ${len} is not a multiple of blockSize ${blockSize}`);
   }
-  const padLen = state.bytes[len - 1] ?? 0;
+  const padLen = bytes[len - 1] ?? 0;
   if (padLen < 1 || padLen > blockSize) {
     throw new Error(
       `pkcs7-unpad: pad length ${padLen} out of range [1, ${blockSize}] — padding is malformed`,
@@ -46,16 +51,15 @@ export const pkcs7Unpad: StepExecutor = (state, params) => {
   // of pkcs7-pad. If any differs, the padding has been corrupted (or the
   // ciphertext is from a different scheme). Fail loudly so the user sees it.
   for (let i = len - padLen; i < len; i++) {
-    if (state.bytes[i] !== padLen) {
+    if (bytes[i] !== padLen) {
       throw new Error(
-        `pkcs7-unpad: padding byte at offset ${i} is ${state.bytes[i]}, expected ${padLen}`,
+        `pkcs7-unpad: padding byte at offset ${i} is ${bytes[i]}, expected ${padLen}`,
       );
     }
   }
   const out = new Uint8Array(len - padLen);
-  out.set(state.bytes.subarray(0, len - padLen), 0);
-  const result: BytesState = { shape: "bytes", bytes: out };
-  return { state: result };
+  out.set(bytes.subarray(0, len - padLen), 0);
+  return new Map([["state", out]]);
 };
 
 export const pkcs7UnpadDoc: StepDocumentation = {
@@ -107,11 +111,10 @@ docs for the full reusability story.`,
 // ─── Universal port-dataflow metadata (Phase 1 Slice 1.3) ───────────────
 // PKCS#7 unpad: pure bytes→bytes, no aux. Single `state` port each side,
 // layout "raw", `byteLength` absent (output is input.length − padLen
-// where padLen depends on the input's last byte — variable). The lift
-// adapter routes a throw from the executor (malformed padding, empty
-// input) up through the runtime unchanged, so the educational
-// "intentionally throws on bad input" behavior is preserved on both
-// dispatch paths.
+// where padLen depends on the input's last byte — variable). The executor's
+// throws (malformed padding, empty input) propagate through the ported
+// runtime unchanged, so the educational "intentionally throws on bad input"
+// behavior is preserved.
 
 export const pkcs7UnpadMeta: ProjectionMetadata = {
   stateLayout: "bytes",

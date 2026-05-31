@@ -251,50 +251,51 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // `compute-block-count` stays legacy — its `number` aux value still
   // has no port-projection encoding rule. `load-block`/`store-block`
   // still wait for asymmetric stateInput/stateOutput layout meta.
+  // Port-native since Slice 5.2 (2026-05-31): the six padding step types
+  // dropped their `legacy:` lift for true `PortedExecutor`s (bytes in/out on
+  // the `state` port). `meta` is RETAINED (stateInputPort/stateOutputPort
+  // "state"), so the linear inspector still reads stateBefore/stateAfter; the
+  // frames now reroute from BytesView to PortFlowView (the honest port view —
+  // same rendering SHA-256's `pad`/`length-append` already ship). The
+  // intentional throws on malformed padding propagate unchanged.
   r.register("generic.pkcs7-pad@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(pkcs7Pad, pkcs7PadMeta),
-    legacy: pkcs7Pad,
+    executor: pkcs7Pad,
     shape: pkcs7PadPortContract,
     meta: pkcs7PadMeta,
     doc: pkcs7PadDoc,
   });
   r.register("generic.pkcs7-unpad@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(pkcs7Unpad, pkcs7UnpadMeta),
-    legacy: pkcs7Unpad,
+    executor: pkcs7Unpad,
     shape: pkcs7UnpadPortContract,
     meta: pkcs7UnpadMeta,
     doc: pkcs7UnpadDoc,
   });
   r.register("generic.zero-pad@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(zeroPad, zeroPadMeta),
-    legacy: zeroPad,
+    executor: zeroPad,
     shape: zeroPadPortContract,
     meta: zeroPadMeta,
     doc: zeroPadDoc,
   });
   r.register("generic.zero-unpad@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(zeroUnpad, zeroUnpadMeta),
-    legacy: zeroUnpad,
+    executor: zeroUnpad,
     shape: zeroUnpadPortContract,
     meta: zeroUnpadMeta,
     doc: zeroUnpadDoc,
   });
   r.register("generic.iso7816-4-pad@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(iso78164Pad, iso78164PadMeta),
-    legacy: iso78164Pad,
+    executor: iso78164Pad,
     shape: iso78164PadPortContract,
     meta: iso78164PadMeta,
     doc: iso78164PadDoc,
   });
   r.register("generic.iso7816-4-unpad@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(iso78164Unpad, iso78164UnpadMeta),
-    legacy: iso78164Unpad,
+    executor: iso78164Unpad,
     shape: iso78164UnpadPortContract,
     meta: iso78164UnpadMeta,
     doc: iso78164UnpadDoc,

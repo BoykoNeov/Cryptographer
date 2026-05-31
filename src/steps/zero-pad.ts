@@ -35,32 +35,34 @@
  */
 
 import type {
-  BytesState,
   Json,
   PortContract,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "../core/types";
 
-export const zeroPad: StepExecutor = (state, params) => {
-  if (state.shape !== "bytes") {
-    throw new Error("zero-pad expects bytes state");
+// Port-native `PortedExecutor` (Slice 5.2): bytes in on `state`, padded bytes
+// out on `state`. The no-op case (input already block-aligned, padLen = 0)
+// passes the bytes through unchanged on the output port.
+export const zeroPad: PortedExecutor = (inputs, params, _ctx) => {
+  const bytes = inputs.get("state");
+  if (!(bytes instanceof Uint8Array)) {
+    throw new Error("zero-pad: 'state' input port must carry the bytes to pad");
   }
   const blockSize = readBlockSize(params);
-  const inputLen = state.bytes.length;
+  const inputLen = bytes.length;
   // Canonical zero-pad: N = (blockSize - len) mod blockSize. When input is
   // already aligned, N == 0 (no padding added). That's the property that
   // makes zero-pad ambiguous on inverse — different from PKCS#7's "always
   // adds at least one byte" guarantee.
   const padLen = (blockSize - (inputLen % blockSize)) % blockSize;
   const out = new Uint8Array(inputLen + padLen);
-  out.set(state.bytes, 0);
+  out.set(bytes, 0);
   // Uint8Array is zero-initialized — explicit fill not needed, but doing
   // it makes the intent unmistakable to readers.
   out.fill(0x00, inputLen);
-  const result: BytesState = { shape: "bytes", bytes: out };
-  return { state: result };
+  return new Map([["state", out]]);
 };
 
 export const zeroPadDoc: StepDocumentation = {

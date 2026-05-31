@@ -1775,13 +1775,16 @@ const FrameStateView = (props: {
   const after = () => props.frame.stateAfter;
   const prevAfter = () => props.previousRunFrame?.stateAfter ?? null;
 
-  // Port-aware dispatch (Slice 2.9b). When the runtime captured port I/O
-  // on this frame (pure port-native step — `meta === undefined` branch at
-  // `runtime.ts:502`), the before/after pair would be empty because
-  // port-native steps emit `stateBefore === stateAfter`. `PortFlowView`
-  // reads the captured port I/O instead. Lifted-legacy ported frames (AES
-  // key-expansion, padding) carry `meta` so their port fields stay
-  // undefined and the predicate falls through to `BytesView`.
+  // Port-aware dispatch (Slice 2.9b). `PortFlowView` reads the port I/O the
+  // runtime captured on the frame; `BytesView` renders the before/after state
+  // pair. The runtime captures port I/O whenever the registration has NO
+  // `legacy` executor (the gate at ~`runtime.ts:767`), so both PURE port-native
+  // steps AND the HYBRID-ported steps (meta retained, legacy dropped) populate
+  // the port fields. Since Slice 5.2 that hybrid set is the key-schedules
+  // (AES/Speck/Serpent/DES) + the padding family. The key-schedules are
+  // intercepted upstream by `KeyScheduleExplorer` (by stepType), so in practice
+  // padding is the hybrid family that reaches this dispatch — its input/output
+  // `state` port rows surface the pad/unpad length change.
   //
   // Post-Slice-5.1 the only State shape is `bytes`, so the legacy 3-way
   // (matrix / bytes / mixed-boundary) dispatch collapsed to BytesView —
