@@ -66,7 +66,6 @@ const runCbc = (spec: CipherSpec, inputHex: string, aux: Map<string, AuxValue>):
   const trace = runSpec(spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(inputHex)),
     initialAux: aux,
-    portedDispatchEnabled: true,
   });
   expect(trace.finalState.shape).toBe("bytes");
   if (trace.finalState.shape !== "bytes") throw new Error("expected bytes final state");
@@ -169,7 +168,6 @@ describe("AES-128 CBC (NIST SP 800-38A §F.2)", () => {
     const trace = runSpec(aes128CbcSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex(PLAINTEXT_4_BLOCKS)),
       initialAux: buildAux(),
-      portedDispatchEnabled: true,
     });
 
     // Spot-check: the chaining XOR (cbc-xor) shows up at every block index.
@@ -196,7 +194,6 @@ describe("AES-128 CBC (NIST SP 800-38A §F.2)", () => {
     const trace = runSpec(aes128CbcSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex(PLAINTEXT_4_BLOCKS)),
       initialAux: buildAux(),
-      portedDispatchEnabled: true,
     });
     const graph = deriveAuxGraph(trace, aes128CbcSpec);
     const warnings = validateGraph(graph, trace);
@@ -207,7 +204,6 @@ describe("AES-128 CBC (NIST SP 800-38A §F.2)", () => {
     const decTrace = runSpec(aes128CbcDecryptSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex(CBC_CIPHERTEXT_4_BLOCKS)),
       initialAux: buildAux(),
-      portedDispatchEnabled: true,
     });
     const decGraph = deriveAuxGraph(decTrace, aes128CbcDecryptSpec);
     const decWarnings = validateGraph(decGraph, decTrace);

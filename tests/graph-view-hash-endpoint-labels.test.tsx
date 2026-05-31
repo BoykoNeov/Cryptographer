@@ -41,7 +41,6 @@ const AES128_PT = "00112233445566778899aabbccddeeff";
 const seedAes128Trace = (): void => {
   const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(AES128_PT)),
-    portedDispatchEnabled: true,
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
   });
   setTrace(trace);
@@ -54,7 +53,6 @@ const seedSha256Trace = (): void => {
   // FIPS 180-4 §A.1 "abc" vector.
   const trace = runSpec(buildSha256Spec(), buildDefaultRegistry(), {
     initialState: { shape: "bytes", bytes: new Uint8Array([0x61, 0x62, 0x63]) },
-    portedDispatchEnabled: true,
   });
   setTrace(trace);
 };

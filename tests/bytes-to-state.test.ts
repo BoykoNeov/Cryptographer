@@ -123,7 +123,6 @@ describe("bytes-to-state@1 — runtime state-write via meta.stateOutputPort", ()
     const constantBytes = [0xde, 0xad, 0xbe, 0xef];
     const trace = runSpec(buildSpec(constantBytes), buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: new Uint8Array() },
-      portedDispatchEnabled: true,
     });
     expect(trace.finalState.shape).toBe("bytes");
     if (trace.finalState.shape !== "bytes") throw new Error("unreachable");
@@ -177,7 +176,6 @@ describe("bytes-to-state@1 — runtime state-write via meta.stateOutputPort", ()
     };
     const trace = runSpec(spec, buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: new Uint8Array() },
-      portedDispatchEnabled: true,
     });
     // Four frames: const-a, sink, const-b, xor.result.
     expect(trace.frames).toHaveLength(4);
@@ -195,16 +193,6 @@ describe("bytes-to-state@1 — runtime state-write via meta.stateOutputPort", ()
     // gate is enough.
   });
 
-  it("off-flag dispatch throws (port-native, no legacy executor)", () => {
-    const spec = buildSpec([0xaa, 0xbb]);
-    expect(() =>
-      runSpec(spec, buildDefaultRegistry(), {
-        initialState: { shape: "bytes", bytes: new Uint8Array() },
-        // portedDispatchEnabled omitted (defaults to false)
-      }),
-    ).toThrow(/port-native; requires portedDispatchEnabled: true/);
-  });
-
   it("preserves state shape: bytes-to-state always materializes a BytesState (not a matrix)", () => {
     // Even if the upstream emits 16 bytes — which happens to be a valid
     // matrix length — bytes-to-state's meta.stateLayout = "bytes" pins
@@ -216,7 +204,6 @@ describe("bytes-to-state@1 — runtime state-write via meta.stateOutputPort", ()
     ]);
     const trace = runSpec(spec, buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: new Uint8Array() },
-      portedDispatchEnabled: true,
     });
     expect(trace.finalState.shape).toBe("bytes");
     if (trace.finalState.shape !== "bytes") throw new Error("unreachable");

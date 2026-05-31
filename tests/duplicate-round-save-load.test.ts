@@ -39,7 +39,6 @@
 import { aes128Spec } from "@/ciphers/aes-128";
 import { aes128DecryptSpec } from "@/ciphers/aes-128-decrypt";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
-import { requiresPortedDispatch } from "@/core/dispatch";
 import {
   CURRENT_SCHEMA_VERSION,
   type CipherDocument,
@@ -123,7 +122,6 @@ describe("duplicate-round save/load — run-correctness survives round-trip", ()
     const encryptTrace = runSpec(encryptParse.doc.spec, registry, {
       initialState: makeBytesState(bytesFromHex(PLAINTEXT_HEX)),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(KEY_HEX)]]),
-      portedDispatchEnabled: requiresPortedDispatch(encryptParse.doc.spec, registry),
     });
     if (encryptTrace.finalState.shape !== "bytes") throw new Error("bytes expected");
     const ciphertext = encryptTrace.finalState.bytes;
@@ -133,7 +131,6 @@ describe("duplicate-round save/load — run-correctness survives round-trip", ()
     const decryptTrace = runSpec(decryptParse.doc.spec, registry, {
       initialState: makeBytesState(ciphertext),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(KEY_HEX)]]),
-      portedDispatchEnabled: requiresPortedDispatch(decryptParse.doc.spec, registry),
     });
     if (decryptTrace.finalState.shape !== "bytes") throw new Error("bytes expected");
     expect(hexFromBytes(decryptTrace.finalState.bytes)).toBe(PLAINTEXT_HEX);

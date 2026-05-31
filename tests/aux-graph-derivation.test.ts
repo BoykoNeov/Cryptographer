@@ -53,7 +53,6 @@ const runAes128 = (): Trace =>
   runSpec(aes128Spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(AES128_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
-    portedDispatchEnabled: true,
   });
 
 const runSpeck = (): Trace =>
@@ -66,7 +65,6 @@ const runSpeck = (): Trace =>
     // + port-flow spine edges now appear, and the S2(f) gate suppresses the legacy
     // state-thread spine for those leaves. The aux fan-out (key-schedule → round)
     // is unchanged.
-    portedDispatchEnabled: true,
   });
 
 const runSerpent128 = (): Trace =>
@@ -78,7 +76,6 @@ const runSerpent128 = (): Trace =>
     // `portInputs`/`seedInput`/`bodyOutput`, so a `$input` source node + a
     // port-flow-owned spine appear (the S2(f) gate suppresses the legacy
     // state-thread for the wired leaves).
-    portedDispatchEnabled: true,
   });
 
 const emptyTrace = (): Trace => ({

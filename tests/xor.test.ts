@@ -256,12 +256,6 @@ describe("xor@1 — runtime dispatch guards", () => {
     ],
   });
 
-  it("off-flag dispatch throws 'port-native; requires portedDispatchEnabled: true'", () => {
-    expect(() =>
-      runSpec(buildSpec(), buildDefaultRegistry(), { initialState: emptyBytes() }),
-    ).toThrow('step type "xor@1" is port-native; requires portedDispatchEnabled: true');
-  });
-
   it("on-flag dispatch with no portInputs throws 'input port operand0 is not wired' (Slice 2.6a)", () => {
     // Post-Slice-2.6a: edge-wiring landed; unwired ports surface
     // per-port via the dispatch-path guard. End-to-end wired specs
@@ -269,7 +263,6 @@ describe("xor@1 — runtime dispatch guards", () => {
     expect(() =>
       runSpec(buildSpec(), buildDefaultRegistry(), {
         initialState: emptyBytes(),
-        portedDispatchEnabled: true,
       }),
     ).toThrow(/input port 'operand0' is not wired/);
   });

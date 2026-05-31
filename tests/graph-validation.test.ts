@@ -48,7 +48,6 @@ import { serpent192Spec } from "@/ciphers/serpent-192";
 import { serpent256Spec } from "@/ciphers/serpent-256";
 import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
-import { requiresPortedDispatch } from "@/core/dispatch";
 import {
   type CipherGraph,
   type GraphEdge,
@@ -101,7 +100,6 @@ const runCbc = (spec: typeof aes128CbcSpec, pt: string): Trace =>
       ["key", bytesFromHex(CBC_KEY)],
       ["iv", bytesFromHex(CBC_IV)],
     ]),
-    portedDispatchEnabled: true,
   });
 
 const runBytes = (spec: typeof aes128EcbSpec, key: string, pt: string): Trace => {
@@ -112,7 +110,6 @@ const runBytes = (spec: typeof aes128EcbSpec, key: string, pt: string): Trace =>
   return runSpec(spec, registry, {
     initialState: makeBytesState(bytesFromHex(pt)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(key)]]),
-    portedDispatchEnabled: requiresPortedDispatch(spec, registry),
   });
 };
 
@@ -124,7 +121,6 @@ const runPorted = (spec: typeof aes128Spec, key: string, pt: string): Trace =>
   runSpec(spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(pt)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(key)]]),
-    portedDispatchEnabled: true,
   });
 
 const emptyTrace: Trace = {

@@ -47,7 +47,6 @@ const bytesToHex = (bytes: Uint8Array): string =>
 const runSha256 = (plaintext: Uint8Array): Uint8Array => {
   const trace = runSpec(buildSha256Spec(), buildDefaultRegistry(), {
     initialState: { shape: "bytes", bytes: plaintext },
-    portedDispatchEnabled: true,
   });
   if (trace.finalState.shape !== "bytes") {
     throw new Error(`expected bytes finalState, got ${trace.finalState.shape}`);
@@ -140,7 +139,6 @@ describe("SHA-256 — frame count and state shape pins", () => {
     // frames means every ROTR, every XOR, every modular add is visible.
     const trace = runSpec(buildSha256Spec(), buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: new Uint8Array([0x61, 0x62, 0x63]) },
-      portedDispatchEnabled: true,
     });
     expect(trace.frames).toHaveLength(2303);
   });
@@ -148,7 +146,6 @@ describe("SHA-256 — frame count and state shape pins", () => {
   it("finalState is always 32 bytes BytesState (the hash)", () => {
     const trace = runSpec(buildSha256Spec(), buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: new Uint8Array([0x61, 0x62, 0x63]) },
-      portedDispatchEnabled: true,
     });
     expect(trace.finalState.shape).toBe("bytes");
     if (trace.finalState.shape !== "bytes") throw new Error("unreachable");
@@ -158,7 +155,6 @@ describe("SHA-256 — frame count and state shape pins", () => {
   it("aux['H'] and aux['K'] survive end-to-end in finalAux (materialized from cipherConstants, never deleted)", () => {
     const trace = runSpec(buildSha256Spec(), buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: new Uint8Array([0x61, 0x62, 0x63]) },
-      portedDispatchEnabled: true,
     });
     expect(trace.finalAux.has("H")).toBe(true);
     expect(trace.finalAux.has("K")).toBe(true);
@@ -188,7 +184,6 @@ describe("SHA-256 — A3b carry visibility (Q1)", () => {
     const spec = buildSha256Spec();
     const trace = runSpec(spec, buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: new Uint8Array([0x61, 0x62, 0x63]) },
-      portedDispatchEnabled: true,
     });
     const byId = new Map(trace.frames.map((f) => [f.stepId, f]));
 

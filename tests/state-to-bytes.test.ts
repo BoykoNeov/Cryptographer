@@ -97,7 +97,6 @@ describe("state-to-bytes@1 — runtime state-read via meta.stateInputPort", () =
     };
     const trace = runSpec(spec, buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: plaintext },
-      portedDispatchEnabled: true,
     });
     if (trace.finalState.shape !== "bytes") throw new Error("expected bytes shape");
     expect(Array.from(trace.finalState.bytes)).toEqual(Array.from(plaintext));
@@ -149,7 +148,6 @@ describe("state-to-bytes@1 — runtime state-read via meta.stateInputPort", () =
     };
     const trace = runSpec(spec, buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: plaintext },
-      portedDispatchEnabled: true,
     });
     if (trace.finalState.shape !== "bytes") throw new Error("expected bytes shape");
     // plaintext ⊕ constant per byte
@@ -159,27 +157,5 @@ describe("state-to-bytes@1 — runtime state-read via meta.stateInputPort", () =
       0x30 ^ 0x03,
       0x40 ^ 0x04,
     ]);
-  });
-
-  it("off-flag dispatch throws (port-native, no legacy executor)", () => {
-    const spec: CipherSpec = {
-      id: "toy-state-to-bytes-offflag",
-      name: "off-flag throw",
-      stateShape: "bytes",
-      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
-      steps: [
-        {
-          kind: "step",
-          id: "src",
-          type: "state-to-bytes@1",
-          params: {},
-        },
-      ],
-    };
-    expect(() =>
-      runSpec(spec, buildDefaultRegistry(), {
-        initialState: { shape: "bytes", bytes: new Uint8Array([0x01]) },
-      }),
-    ).toThrow(/port-native; requires portedDispatchEnabled: true/);
   });
 });

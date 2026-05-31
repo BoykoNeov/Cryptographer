@@ -24,7 +24,6 @@ const aes128Graph = () => {
   const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(KEY)]]),
-    portedDispatchEnabled: true,
   });
   return deriveAuxGraph(trace, aes128Spec);
 };

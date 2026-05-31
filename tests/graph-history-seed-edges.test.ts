@@ -114,7 +114,6 @@ describe("deriveAuxGraph — history-seed edge derivation (S2(l))", () => {
     // constant like K does).
     const trace = runSpec(spec, registry, {
       initialState: { shape: "bytes", bytes: new Uint8Array([0x61, 0x62, 0x63]) },
-      portedDispatchEnabled: true,
     });
     const graph = deriveAuxGraph(trace, spec, { registry });
     const wEdges = graph.edges.filter((e) => e.kind === "aux" && e.auxKey === "W");

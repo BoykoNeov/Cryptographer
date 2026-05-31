@@ -37,7 +37,6 @@ const encrypt = (spec: CipherSpec, keyHex: string, plaintextHex: string): string
   const trace = runSpec(spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(plaintextHex)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
-    portedDispatchEnabled: true,
   });
   if (trace.finalState.shape !== "bytes") throw new Error("expected bytes state");
   return hexFromBytes(trace.finalState.bytes);
@@ -98,7 +97,6 @@ describe.each(variants)("$name trace structure", (v) => {
     const trace = runSpec(v.encryptSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex("00000000000000000000000000000000")),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(v.keyHex)]]),
-      portedDispatchEnabled: true,
     });
     expect(trace.frames.length).toBe(99);
   });
@@ -107,7 +105,6 @@ describe.each(variants)("$name trace structure", (v) => {
     const trace = runSpec(v.encryptSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex("00000000000000000000000000000000")),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(v.keyHex)]]),
-      portedDispatchEnabled: true,
     });
     for (let i = 0; i <= 32; i++) {
       const rk = trace.finalAux.get(`roundKey.${i}`);
@@ -120,7 +117,6 @@ describe.each(variants)("$name trace structure", (v) => {
     const trace = runSpec(v.encryptSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex("00000000000000000000000000000000")),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(v.keyHex)]]),
-      portedDispatchEnabled: true,
     });
     const uniqueRoundKeys = new Set<string>();
     for (let i = 0; i <= 32; i++) {
@@ -145,7 +141,6 @@ describe("Serpent rejects malformed inputs", () => {
         // Serpent runs port-native (key-expansion included since Slice 5.2),
         // so the executor's key-length validation fires under ported dispatch
         // — under flag-off the spec would throw "requires portedDispatchEnabled".
-        portedDispatchEnabled: true,
       }),
     ).toThrow(/keyByteLength=16 but aux key is 15 bytes|key must be 16, 24, or 32 bytes/);
   });
@@ -158,7 +153,6 @@ describe("Serpent rejects malformed inputs", () => {
           ["key", bytesFromHex("000102030405060708090a0b0c0d0e0f")],
         ]),
         // Port-native since Slice 5.2 — validation fires under ported dispatch.
-        portedDispatchEnabled: true,
       }),
     ).toThrow(/keyByteLength=32 but aux key is 16 bytes/);
   });

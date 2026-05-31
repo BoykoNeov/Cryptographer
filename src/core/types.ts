@@ -685,23 +685,14 @@ export type TraceFrame = {
    * dispatch path (Slice 2.9a of the universal-port-dataflow plan —
    * `docs/plans/slice-2-9-port-aware-provenance.md`).
    *
-   * Present iff the registration was `kind: "ported"` AND `legacy ===
-   * undefined` — i.e. any port-flow leaf, whether PURE port-native (no
-   * meta — `xor@1`, `add-mod-32@1`) or HYBRID (meta present only for
-   * `auxReadPorts` / `stateInputPort`, but no legacy executor —
-   * `aux-load-bytes@1`, the `state-to-bytes@1` / `bytes-to-state@1`
-   * bridges, AddRoundKey's `xor-with-aux@1`). Both carry honest port I/O.
-   * (The capture check originally read `meta === undefined`, which was
-   * equivalent until the Slice 2.6 hybrid steps shipped meta-without-legacy;
-   * it was aligned to `legacy === undefined` in F3 of the scaffolding-
-   * suppression plan, 2026-05-30, to match this contract.) Lifted-legacy
-   * ported steps (legacy defined — key-expansion, the matrix lifts)
-   * deliberately leave BOTH fields undefined so 2.9b's port-aware inspector
-   * predicate `frame.portInputs !== undefined || frame.portOutputs !==
-   * undefined` keeps dispatching them through the matrix/bytes renderer.
-   *
-   * Legacy-path frames (`kind: "legacy"`, or `kind: "ported"` running
-   * with `portedDispatchEnabled: false`) leave both undefined.
+   * Present for every leaf frame — whether PURE port-native (no meta —
+   * `xor@1`, `add-mod-32@1`) or HYBRID (meta present for `auxReadPorts` /
+   * `stateInputPort` — `aux-load-bytes@1`, the `state-to-bytes@1` /
+   * `bytes-to-state@1` bridges, AddRoundKey's `xor-with-aux@1`, the
+   * key-schedules). Both carry honest port I/O. (Historically the capture
+   * was gated on `legacy === undefined` to exclude lifted-legacy frames; the
+   * legacy executor contract was retired in Phase C / universal-port Phase 5,
+   * so every frame is now port-captured and the gate is gone.)
    *
    * `portInputs` carries POST-coercion bytes (after the Slice 1.12
    * `__coerce__` morph). This matches what the executor actually saw,
@@ -743,15 +734,10 @@ export type StepContext = {
   readonly aux: Aux;
 };
 
-export type StepResult = {
-  readonly state: State;
-  /** Aux changes; merged into the live aux map by the runtime. */
-  readonly auxWrites?: ReadonlyMap<string, AuxValue>;
-  /** Aux keys this executor consumed (for trace bookkeeping). */
-  readonly auxReads?: readonly string[];
-};
-
-export type StepExecutor = (state: State, params: Json, ctx: StepContext) => StepResult;
+// (`StepResult` + `StepExecutor` — the legacy single-thread executor contract
+//  `(state, params, ctx) → StepResult` — were retired in Phase C / universal-port
+//  Phase 5 along with the legacy dispatch path. Every step type is now a
+//  `PortedExecutor`; `StepContext` survives because the ported contract reuses it.)
 
 // ─── Documentation ────────────────────────────────────────────────────────
 // Human-readable explanation of a step type. Lives next to the executor in
@@ -807,20 +793,9 @@ export type StepDocumentation = {
   readonly shapeContract?: StepShapeContract;
 };
 
-/**
- * Combined unit registered for each step type: the runtime executor plus
- * (optionally) human-readable docs. Existing call sites can still register
- * by passing just an executor — the registry coerces it to this shape.
- *
- * Kept as a top-level export because external test fixtures
- * (`tests/runtime-iterate.test.ts`) annotate their step constants with
- * this type before passing them to `registry.register`. The discriminated
- * union (`StepRegistration`, below) wraps this shape on the legacy side.
- */
-export type StepDefinition = {
-  readonly executor: StepExecutor;
-  readonly doc?: StepDocumentation;
-};
+// (`StepDefinition` — the legacy `{ executor, doc? }` registration shape — was
+//  retired in Phase C / universal-port Phase 5. Step types now register as a
+//  `StepRegistration` (below), the single port-native contract.)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Universal port-based dataflow — Phase 0 spike (2026-05-23)
@@ -937,10 +912,12 @@ export type StepOutputs = ReadonlyMap<string, Uint8Array>;
 export type PortedExecutor = (inputs: StepInputs, params: Json, ctx: StepContext) => StepOutputs;
 
 /**
- * Per-step-type metadata sufficient to LIFT a legacy `StepExecutor` into a
- * `PortedExecutor` (via `liftLegacyExecutor` in `core/port-projection.ts`)
- * AND for the runtime's ported-dispatch path to project legacy `State` /
- * `Aux` values into per-port byte arrays + reconstruct them back.
+ * Per-step-type metadata the runtime uses to project the threaded `State` /
+ * `Aux` onto a hybrid-ported step's named ports (and reconstruct them back),
+ * so key-schedules / padding / aux primitives run port-native without the spec
+ * author having to wire every port explicitly. (Pre-Phase-C it also drove
+ * `liftLegacyExecutor`, which lifted a legacy `StepExecutor` into a
+ * `PortedExecutor`; that bridge retired with the legacy contract.)
  *
  * Defined here in `core/types.ts` (rather than alongside the lift logic
  * in `port-projection.ts`) so the `StepRegistration` discriminated union
@@ -996,80 +973,37 @@ export type ProjectionMetadata = {
 };
 
 /**
- * The unit `StepRegistry` stores per step type, as a discriminated union
- * over the two execution contracts that coexist during Phase 1 of the
- * universal-port-dataflow migration (see
- * `docs/plans/universal-port-phase-1-slices.md` — Slice 1.1).
+ * The unit a `StepRegistry` stores per step type: the universal port-based
+ * execution contract `(inputs, params, ctx) → outputs`, with `shape:
+ * PortContract` declaring the named port surface and (optionally) `meta:
+ * ProjectionMetadata` carrying the binding rules the runtime uses to project
+ * the threaded `State` / `Aux` onto named ports for hybrid-ported steps.
  *
- *   - `kind: "legacy"` — the existing `(state, params, ctx) → StepResult`
- *     executor contract. Every shipped step registers as this today.
- *   - `kind: "ported"` — the universal port-based contract:
- *     `(inputs, params, ctx) → outputs`, with `shape: PortContract`
- *     declaring the named port surface AND `meta: ProjectionMetadata`
- *     carrying the binding rules the runtime needs to project legacy
- *     `State` / `Aux` values into per-port byte arrays. Slice 1.2 lands
- *     the first real ported entries (the four aux-only primitives —
- *     `generic.aux-load@1`, `generic.aux-copy@1`, `generic.aux-xor@1`,
- *     `generic.iv-load@1`).
+ * Historically this was a discriminated union over a `kind: "legacy"`
+ * single-thread `StepExecutor` and this `kind: "ported"` contract — the two
+ * coexisted through the universal-port-dataflow migration (Phase 1's lift +
+ * dual-dispatch parity matrix). **Phase C / universal-port Phase 5 retired the
+ * legacy contract:** the `kind: "legacy"` arm and the per-entry `legacy`
+ * fallback executor are gone, so the type can no longer express a legacy
+ * registration and the runtime runs every step on the single port-native path.
+ * The `kind: "ported"` literal is kept as a single-member tag — every
+ * registration literal and `registration.kind === "ported"` read across the
+ * codebase compiles unchanged, and dropping the discriminator entirely is a
+ * purely cosmetic follow-up not worth folding into the contract retirement.
  *
- * Slice 1.1 was a NO-OP foundation slice: the union compiled, every
- * existing `register(...)` call site kept working unchanged via
- * normalization in `StepRegistry.register`, and dispatch behavior was
- * unchanged for every caller. Slice 1.2 introduces the `meta` field
- * AND the first real ported registrations.
- *
- * `doc` is REQUIRED on the ported variant (a ported step type is a
- * deliberately authored migration target — there's no excuse for it to
- * lack documentation). On the legacy variant `doc` stays optional to
- * match the pre-Slice-1.1 `StepDefinition` shape, so no existing call
- * site is forced to invent docs in this slice.
+ * `doc` is REQUIRED — a step type is a deliberately authored unit, so there's
+ * no excuse for it to lack documentation. `meta` is OPTIONAL: pure port-native
+ * steps (their inputs come entirely from the spec edge graph) omit it; hybrid-
+ * ported steps (key-schedules, padding, aux) declare it to project state/aux
+ * onto ports without explicit spec wiring.
  */
-export type StepRegistration =
-  | {
-      readonly kind: "legacy";
-      readonly executor: StepExecutor;
-      readonly doc?: StepDocumentation;
-    }
-  | {
-      readonly kind: "ported";
-      readonly executor: PortedExecutor;
-      readonly shape: PortContract;
-      readonly doc: StepDocumentation;
-      /**
-       * Sidecar projection metadata that lets the runtime build inputs to
-       * a lifted-legacy ported step from the parent's State + Aux. REQUIRED
-       * for every Phase 1 ported entry (those lifted from legacy via
-       * `liftLegacyExecutor(legacy, meta)`); OPTIONAL for Phase 2+
-       * port-native entries whose inputs come purely from the spec edge
-       * graph (Slice 2.6+) rather than from a projection of legacy state.
-       *
-       * Widened to optional in Slice 2.1a alongside `legacy` becoming
-       * optional. Until spec edge-wiring lands (Slice 2.6+), the
-       * on-flag dispatch path throws an explicit "port-native step
-       * requires spec edge-wiring" error when `meta` is absent — the
-       * step is reachable only via direct executor invocation in tests.
-       */
-      readonly meta?: ProjectionMetadata;
-      /**
-       * Legacy-shape executor preserved alongside the lifted ported
-       * executor during the Phase 1 migration window. Required for every
-       * Slice 1.2–1.8 ported entry because the runtime's frame-parity
-       * gate runs each ported step under BOTH `portedDispatchEnabled:
-       * true` (calls `executor`) and `portedDispatchEnabled: false`
-       * (calls this `legacy`) — without it the legacy path can't reach
-       * a step type that's been lifted.
-       *
-       * Phase 2 onward authors port-native executors directly; those
-       * entries genuinely have no legacy underlying. Widened to optional
-       * in Slice 2.1a (universal-port plan) — port-native registrations
-       * omit it, and the runtime's off-flag dispatch path throws an
-       * explicit "step type is port-native; requires
-       * portedDispatchEnabled: true" error when a spec wires such a
-       * step. When the migration ends (Phase 5 retires the legacy
-       * contract entirely), this field disappears.
-       */
-      readonly legacy?: StepExecutor;
-    };
+export type StepRegistration = {
+  readonly kind: "ported";
+  readonly executor: PortedExecutor;
+  readonly shape: PortContract;
+  readonly doc: StepDocumentation;
+  readonly meta?: ProjectionMetadata;
+};
 
 /**
  * Sidecar metadata sufficient to reconstruct a legacy `TraceFrame` from

@@ -289,19 +289,7 @@ describe("shift-bits-right@1 — runtime dispatch guards", () => {
     ],
   });
 
-  it("off-flag dispatch (portedDispatchEnabled: false) throws explicit error", () => {
-    const spec = buildSpec();
-    expect(() =>
-      runSpec(spec, buildDefaultRegistry(), {
-        initialState: emptyBytes(),
-        // Default: portedDispatchEnabled omitted = false.
-      }),
-    ).toThrow(
-      'step type "shift-bits-right@1" is port-native; requires portedDispatchEnabled: true',
-    );
-  });
-
-  it("on-flag dispatch with no portInputs throws 'input port input is not wired' (Slice 2.6a)", () => {
+  it("dispatch with no portInputs throws 'input port input is not wired' (Slice 2.6a)", () => {
     // Post-Slice-2.6a: edge-wiring landed; unwired ports surface
     // per-port via the dispatch-path guard. End-to-end wired specs
     // live in `runtime-port-edge-wiring-toy.test.ts`.
@@ -309,7 +297,6 @@ describe("shift-bits-right@1 — runtime dispatch guards", () => {
     expect(() =>
       runSpec(spec, buildDefaultRegistry(), {
         initialState: emptyBytes(),
-        portedDispatchEnabled: true,
       }),
     ).toThrow(/input port 'input' is not wired/);
   });

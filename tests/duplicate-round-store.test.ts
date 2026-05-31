@@ -25,7 +25,6 @@
  */
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
-import { requiresPortedDispatch } from "@/core/dispatch";
 import { runSpec } from "@/core/runtime";
 import { findStep } from "@/core/spec-mutations";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
@@ -276,7 +275,6 @@ describe("duplicateRoundInSpec — end-to-end round-trip via the store boundary"
     const encryptTrace = runSpec(encryptSpec, registry, {
       initialState: makeBytesState(bytesFromHex(plaintextHex)),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
-      portedDispatchEnabled: requiresPortedDispatch(encryptSpec, registry),
     });
     if (encryptTrace.finalState.shape !== "bytes") throw new Error("expected bytes");
     const ciphertextBytes = encryptTrace.finalState.bytes;
@@ -292,7 +290,6 @@ describe("duplicateRoundInSpec — end-to-end round-trip via the store boundary"
     const decryptTrace = runSpec(decryptSpec, registry, {
       initialState: makeBytesState(ciphertextBytes),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
-      portedDispatchEnabled: requiresPortedDispatch(decryptSpec, registry),
     });
     if (decryptTrace.finalState.shape !== "bytes") throw new Error("expected bytes");
     expect(hexFromBytes(decryptTrace.finalState.bytes)).toBe(plaintextHex);

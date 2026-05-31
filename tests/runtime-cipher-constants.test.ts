@@ -28,7 +28,6 @@ const specWithConstants = (cipherConstants: Record<string, Uint8Array>): CipherS
 const run = (spec: CipherSpec) =>
   runSpec(spec, buildDefaultRegistry(), {
     initialState: { shape: "bytes", bytes: new Uint8Array([1, 2, 3]) },
-    portedDispatchEnabled: true,
   });
 
 describe("runtime — cipherConstants materialization (A1)", () => {

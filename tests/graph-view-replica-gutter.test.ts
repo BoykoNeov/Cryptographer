@@ -73,7 +73,6 @@ const AES128_PT = "00112233445566778899aabbccddeeff";
 const aes128Graph = (): CipherGraph => {
   const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(AES128_PT)),
-    portedDispatchEnabled: true,
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
   });
   return deriveAuxGraph(trace, aes128Spec);
@@ -93,7 +92,6 @@ const aes128EcbReplicatedGraph = (): CipherGraph => {
     initialState: makeBytesState(bytesFromHex(ECB_PT_1_BLOCK)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(ECB_KEY)]]),
     // Byte-native ECB (B1.4) — port-mode iterate + port-native body.
-    portedDispatchEnabled: true,
   });
   return replicateHighFanoutSources(deriveAuxGraph(trace, aes128EcbSpec), 6);
 };
@@ -113,7 +111,6 @@ const serpent128ReplicatedGraph = (): CipherGraph => {
     initialState: makeBytesState(bytesFromHex(SERPENT128_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(SERPENT128_KEY)]]),
     // Serpent's round body is port-native since B3 → ported dispatch required.
-    portedDispatchEnabled: true,
   });
   return replicateHighFanoutSources(deriveAuxGraph(trace, serpent128Spec), 6);
 };
@@ -399,7 +396,6 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
       initialState: makeBytesState(bytesFromHex(SERPENT128_PT)),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(SERPENT128_KEY)]]),
       // Serpent's round body is port-native since B3 → ported dispatch required.
-      portedDispatchEnabled: true,
     });
     const noRep = deriveAuxGraph(trace, serpent128Spec);
     const withRep = replicateHighFanoutSources(noRep, 6);

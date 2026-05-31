@@ -95,7 +95,6 @@ describe("runtime — ported dispatch, Slice 1.4 AES core step types", () => {
       const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(AES128_PLAINTEXT)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
-        portedDispatchEnabled: true,
       });
       expect(trace.finalState.shape).toBe("bytes");
       if (trace.finalState.shape !== "bytes") return;
@@ -107,7 +106,6 @@ describe("runtime — ported dispatch, Slice 1.4 AES core step types", () => {
       const trace = runSpec(aes192Spec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(AES192_PLAINTEXT)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES192_KEY)]]),
-        portedDispatchEnabled: true,
       });
       expect(trace.finalState.shape).toBe("bytes");
       if (trace.finalState.shape !== "bytes") return;
@@ -123,7 +121,6 @@ describe("runtime — ported dispatch, Slice 1.4 AES core step types", () => {
       const trace = runSpec(aes256Spec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(AES256_PLAINTEXT)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES256_KEY)]]),
-        portedDispatchEnabled: true,
       });
       expect(trace.finalState.shape).toBe("bytes");
       if (trace.finalState.shape !== "bytes") return;
@@ -160,7 +157,6 @@ describe("runtime — ported dispatch, Slice 1.4 AES core step types", () => {
       const ported = runSpec(spec, buildDefaultRegistry(), {
         initialState: makeBytesState(new Uint8Array(16)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(key)]]),
-        portedDispatchEnabled: true,
       });
       const keyExpansionFrame = ported.frames.find((f) => f.stepType === "aes.key-expansion@1");
       if (!keyExpansionFrame) throw new Error(`${label}: no key-expansion frame found`);
@@ -220,7 +216,6 @@ describe("runtime — ported dispatch, Slice 1.4 AES core step types", () => {
         runSpec(oneLeafSpec(type, id), buildDefaultRegistry(), {
           initialState: makeBytesState(new Uint8Array(0)),
           initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
-          portedDispatchEnabled: true,
         });
 
       const v1 = run("aes.key-expansion@1", "ke-v1");

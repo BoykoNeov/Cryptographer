@@ -67,7 +67,6 @@ const runDes = () =>
   runSpec(desSpec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(DES_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(DES_KEY)]]),
-    portedDispatchEnabled: true,
   });
 
 const xorHex = (a: string, b: string): string => {

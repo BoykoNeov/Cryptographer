@@ -45,7 +45,6 @@ describe("AES-256 (FIPS-197 §A.3 + NIST AES Core 256)", () => {
     const trace = runSpec(aes256Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux,
-      portedDispatchEnabled: true,
     });
 
     expect(trace.finalState.shape).toBe("bytes");
@@ -67,7 +66,6 @@ describe("AES-256 (FIPS-197 §A.3 + NIST AES Core 256)", () => {
     const trace = runSpec(aes256Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux,
-      portedDispatchEnabled: true,
     });
 
     expect(trace.frames.length).toBe(57);
@@ -80,7 +78,6 @@ describe("AES-256 (FIPS-197 §A.3 + NIST AES Core 256)", () => {
     const trace = runSpec(aes256Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux,
-      portedDispatchEnabled: true,
     });
 
     // 15 round keys: index 0 through index 14.
@@ -115,7 +112,6 @@ describe("AES-256 (FIPS-197 §A.3 + NIST AES Core 256)", () => {
     const encTrace = runSpec(aes256Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux: new Map<string, AuxValue>([["key", key]]),
-      portedDispatchEnabled: true,
     });
     expect(encTrace.finalState.shape).toBe("bytes");
     if (encTrace.finalState.shape !== "bytes") return;
@@ -123,7 +119,6 @@ describe("AES-256 (FIPS-197 §A.3 + NIST AES Core 256)", () => {
     const decTrace = runSpec(aes256DecryptSpec, buildDefaultRegistry(), {
       initialState: encTrace.finalState,
       initialAux: new Map<string, AuxValue>([["key", key]]),
-      portedDispatchEnabled: true,
     });
     expect(decTrace.finalState.shape).toBe("bytes");
     if (decTrace.finalState.shape !== "bytes") return;
@@ -150,7 +145,6 @@ describe("AES-256 (FIPS-197 §A.3 + NIST AES Core 256)", () => {
       runSpec(corrupted, buildDefaultRegistry(), {
         initialState: plaintext,
         initialAux,
-        portedDispatchEnabled: true,
       }),
     ).toThrow(/rounds.*must equal Nk\+6/);
   });

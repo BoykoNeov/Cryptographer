@@ -46,7 +46,6 @@ describe("AES-192 (FIPS-197 §A.2 + NIST AES Core 192)", () => {
     const trace = runSpec(aes192Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux,
-      portedDispatchEnabled: true,
     });
 
     expect(trace.finalState.shape).toBe("bytes");
@@ -69,7 +68,6 @@ describe("AES-192 (FIPS-197 §A.2 + NIST AES Core 192)", () => {
     const trace = runSpec(aes192Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux,
-      portedDispatchEnabled: true,
     });
 
     expect(trace.frames.length).toBe(49);
@@ -82,7 +80,6 @@ describe("AES-192 (FIPS-197 §A.2 + NIST AES Core 192)", () => {
     const trace = runSpec(aes192Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux,
-      portedDispatchEnabled: true,
     });
 
     // 13 round keys: index 0 (initial AddRoundKey) through index 12 (final).
@@ -108,7 +105,6 @@ describe("AES-192 (FIPS-197 §A.2 + NIST AES Core 192)", () => {
     const encTrace = runSpec(aes192Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux: new Map<string, AuxValue>([["key", key]]),
-      portedDispatchEnabled: true,
     });
     expect(encTrace.finalState.shape).toBe("bytes");
     if (encTrace.finalState.shape !== "bytes") return;
@@ -116,7 +112,6 @@ describe("AES-192 (FIPS-197 §A.2 + NIST AES Core 192)", () => {
     const decTrace = runSpec(aes192DecryptSpec, buildDefaultRegistry(), {
       initialState: encTrace.finalState,
       initialAux: new Map<string, AuxValue>([["key", key]]),
-      portedDispatchEnabled: true,
     });
     expect(decTrace.finalState.shape).toBe("bytes");
     if (decTrace.finalState.shape !== "bytes") return;

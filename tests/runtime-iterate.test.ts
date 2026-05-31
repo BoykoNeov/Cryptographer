@@ -118,7 +118,6 @@ describe("runtime — iterate node", () => {
         ["count", 3],
         ["in-blocks", blocks],
       ]),
-      portedDispatchEnabled: true,
     });
 
     // 3 iterations × 2 children = 6 frames.
@@ -136,7 +135,6 @@ describe("runtime — iterate node", () => {
         ["count", 2],
         ["in-blocks", blocks],
       ]),
-      portedDispatchEnabled: true,
     });
 
     const indices = trace.frames.map((f) => f.blockIndex);
@@ -151,7 +149,6 @@ describe("runtime — iterate node", () => {
         ["count", 3],
         ["in-blocks", blocks],
       ]),
-      portedDispatchEnabled: true,
     });
 
     const out = trace.finalAux.get("out-blocks");
@@ -174,7 +171,6 @@ describe("runtime — iterate node", () => {
         ["count", 4],
         ["in-blocks", blocks],
       ]),
-      portedDispatchEnabled: true,
     });
     // After all iterations, blockIndex remains at the last value (3).
     expect(trace.finalAux.get("blockIndex")).toBe(3);
@@ -187,7 +183,6 @@ describe("runtime — iterate node", () => {
         ["count", 0],
         ["in-blocks", []],
       ]),
-      portedDispatchEnabled: true,
     });
     expect(trace.frames.length).toBe(0);
     const out = trace.finalAux.get("out-blocks");

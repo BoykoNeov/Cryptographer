@@ -33,7 +33,6 @@ describe("AES-128 decryption (FIPS-197 §5.3)", () => {
     const trace = runSpec(aes128DecryptSpec, buildDefaultRegistry(), {
       initialState: ct,
       initialAux,
-      portedDispatchEnabled: true,
     });
 
     expect(trace.finalState.shape).toBe("bytes");
@@ -53,7 +52,6 @@ describe("AES-128 decryption (FIPS-197 §5.3)", () => {
     const fwd = runSpec(aes128Spec, registry, {
       initialState: makeBytesState(bytesFromHex(pt)),
       initialAux,
-      portedDispatchEnabled: true,
     });
     if (fwd.finalState.shape !== "bytes") throw new Error("bad shape");
     const ct = hexFromBytes(fwd.finalState.bytes);
@@ -64,7 +62,6 @@ describe("AES-128 decryption (FIPS-197 §5.3)", () => {
     const inv = runSpec(aes128DecryptSpec, registry, {
       initialState: makeBytesState(bytesFromHex(ct)),
       initialAux,
-      portedDispatchEnabled: true,
     });
     if (inv.finalState.shape !== "bytes") throw new Error("bad shape");
     expect(hexFromBytes(inv.finalState.bytes)).toBe(pt);
@@ -82,7 +79,6 @@ describe("AES-128 decryption (FIPS-197 §5.3)", () => {
       runSpec(aes128DecryptSpec, registry, {
         initialState: ct,
         initialAux,
-        portedDispatchEnabled: true,
       }),
     ).not.toThrow();
   });
@@ -99,7 +95,6 @@ describe("AES-128 decryption (FIPS-197 §5.3)", () => {
     const trace = runSpec(aes128DecryptSpec, buildDefaultRegistry(), {
       initialState: ct,
       initialAux,
-      portedDispatchEnabled: true,
     });
     expect(trace.frames.length).toBe(41);
   });

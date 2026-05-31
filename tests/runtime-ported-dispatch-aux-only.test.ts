@@ -105,7 +105,6 @@ describe("runtime — ported dispatch, aux-only primitives (port-native since Sl
       const ported = runSpec(auxOnlySpec, buildDefaultRegistry(), {
         initialState: auxOnlyInitialState(),
         initialAux: auxOnlyInitialAux(),
-        portedDispatchEnabled: true,
       });
 
       // Expected XOR: IV (00..0f) ⊕ plaintext (6b..2a)
@@ -159,7 +158,6 @@ describe("runtime — ported dispatch, aux-only primitives (port-native since Sl
 
       const ported = runSpec(spec, buildDefaultRegistry(), {
         initialState: makeBytesState(new Uint8Array(0)),
-        portedDispatchEnabled: true,
       });
 
       expect(ported.frames.length).toBe(1);
@@ -190,7 +188,6 @@ describe("runtime — ported dispatch, aux-only primitives (port-native since Sl
 
       const ported = runSpec(spec, buildDefaultRegistry(), {
         initialState: makeBytesState(new Uint8Array(0)),
-        portedDispatchEnabled: true,
       });
 
       const frame = ported.frames[0];
@@ -226,7 +223,6 @@ describe("runtime — ported dispatch, aux-only primitives (port-native since Sl
 
       const ported = runSpec(spec, buildDefaultRegistry(), {
         initialState: makeBytesState(new Uint8Array(0)),
-        portedDispatchEnabled: true,
       });
 
       // The copy frame (index 1) writes nothing because its target is unset.

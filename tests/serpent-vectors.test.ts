@@ -42,7 +42,6 @@ const runCipher = (spec: CipherSpec, keyHex: string, inputHex: string): string =
   const trace = runSpec(spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(inputHex)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
-    portedDispatchEnabled: true,
   });
   if (trace.finalState.shape !== "bytes") throw new Error("expected bytes state");
   return hexFromBytes(trace.finalState.bytes);

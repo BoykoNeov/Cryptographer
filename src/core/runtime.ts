@@ -18,7 +18,6 @@ import type {
   ForEachSubgraphWithHistoryNode,
   PortBinding,
   State,
-  StepExecutor,
   StepNode,
   Trace,
   TraceFrame,
@@ -66,35 +65,10 @@ export type RuntimeInput = {
   readonly initialState: State;
   /** Aux values that should be present before any step runs (e.g. the key). */
   readonly initialAux?: ReadonlyMap<string, AuxValue>;
-  /**
-   * Dual-dispatch flag (universal-port-dataflow plan). When true AND a
-   * leaf's registration is `kind: "ported"` (colocated metadata + lifted
-   * executor — every shipped step type ported through Slice 1.8), the
-   * runtime routes that leaf through the ported execution path:
-   *
-   *   1. Project state + aux reads into per-port `Uint8Array` inputs via
-   *      the ported registration's `meta` bindings.
-   *   2. Call the ported `PortedExecutor` with a SYNTHETIC `ctx.aux`
-   *      populated only from declared `auxReadPorts` bindings (Slice 1.9
-   *      — Decision A; the live aux map no longer reaches lifted
-   *      executors).
-   *   3. Reconstruct `State` from the output port; build the emitted
-   *      `TraceFrame.auxRead` from the metadata's input-port-to-aux-key
-   *      bindings (NOT from the legacy executor's `result.auxReads`).
-   *
-   * Frames produced under either flag value are byte-equal across every
-   * shipped cipher family — pinned by the per-cipher
-   * `tests/runtime-ported-dispatch-{aes-core,chaining,speck,serpent,des}.test.ts`
-   * via frame-by-frame deep equality.
-   *
-   * Default: `false`. Existing callers (UI, cipher specs, every shipped
-   * test) keep the legacy path until a follow-on slice flips the default.
-   * The flag lives on `RuntimeInput` (per-call) rather than a module-
-   * level global so legacy and ported runs can stand side by side in
-   * the same test file.
-   */
-  readonly portedDispatchEnabled?: boolean;
 };
+// (The `portedDispatchEnabled` dual-dispatch flag was retired in Phase C /
+//  universal-port Phase 5. Every step type is port-native; the runtime runs
+//  the single port-native path unconditionally, so there is nothing to gate.)
 
 /**
  * Walks a CipherSpec, dispatches each leaf to its executor via the registry,
@@ -146,13 +120,6 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
   }
 
   let frameIndex = 0;
-
-  // Dual-dispatch flag (universal-port-dataflow plan). Captured once at
-  // the call boundary so the per-leaf check in `walk` is a simple
-  // `if (portedDispatch && registration.kind === "ported")`. Defaults
-  // to false → every leaf runs the legacy path; no behavior change for
-  // any caller that doesn't opt in.
-  const portedDispatch = input.portedDispatchEnabled === true;
 
   /** Compose the per-emit stepId suffix from runtime context. Fixed type
    *  order `:b` < `:r`; within a type, outer-first walk order. So a leaf
@@ -486,45 +453,40 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
 
       // Leaf step.
 
-      // ─── Ported dispatch (universal-port-dataflow plan) ────────────────
-      // When `portedDispatch` is on AND the registration is `kind: "ported"`
-      // (colocated metadata + lifted executor — the long-term home per
-      // Decision C), route through the ported execution path:
+      // ─── Port-native dispatch (universal-port-dataflow plan) ───────────
+      // Every step type is port-native (Phase C retired the legacy executor
+      // contract + the dual-dispatch flag), so every leaf routes through the
+      // single ported execution path below:
       //   1. Build `inputs` (state port + aux ports per `auxReadPorts`).
       //   2. Call the ported `executor` with a SYNTHETIC `ctx.aux`
       //      populated only from the step's declared `auxReadPorts`
       //      bindings (Decision A — Slice 1.9 cut the live-aux channel).
-      //      A legacy executor inside the lift that tries to read an
-      //      undeclared aux key gets `undefined` and surfaces the bug.
-      //   3. Reconstruct `State` from the output port (if declared) OR
-      //      leave state untouched (aux-only primitives — Slice 1.2).
+      //   3. Reconstruct `State` from the output port (if `meta` declares
+      //      one) OR leave state untouched (aux-only / pure port-native).
       //   4. Build the TraceFrame's `auxRead` from the metadata's input-
-      //      port-to-aux-key bindings — NOT from the legacy executor's
-      //      `result.auxReads`. This is the load-bearing claim: the
+      //      port-to-aux-key bindings. This is the load-bearing claim: the
       //      trace can be expressed purely in port projections + tags.
       //   5. Build `auxWritten` from output-port-to-aux-key bindings.
       //      The runtime also writes back into the live `aux` map so
-      //      downstream legacy / ported steps see the same Aux state.
-      //
-      // Otherwise (the default for every shipped caller, and every
-      // step type still registered as `kind: "legacy"`): the legacy
-      // path below runs unchanged.
+      //      downstream steps see the same Aux state.
       const registration = registry.getRegistration(node.type);
       if (!registration) throw new Error(`unknown step type: ${node.type}`);
       let auxRead: Map<string, AuxValue>;
       let auxReadMissing: string[] | undefined;
       let auxWritten: Map<string, AuxValue>;
-      // Slice 2.9a — port-aware inspector. Populated ONLY on the
-      // pure-port-native dispatch branch (meta === undefined &&
-      // legacy === undefined); lifted-legacy ported frames and legacy
-      // frames keep both undefined so the 2.9b inspector predicate
-      // (`portInputs !== undefined || portOutputs !== undefined`) routes
-      // AES/Speck/Serpent/DES to the existing matrix/bytes renderer.
-      // See TraceFrame's port-fields doc comment for the rationale.
+      // Slice 2.9a — port-aware inspector. Captured for every leaf (all
+      // port-native since Phase C). The 2.9b inspector predicate
+      // (`portInputs !== undefined || portOutputs !== undefined`) is now
+      // satisfied by every frame. See TraceFrame's port-fields doc comment.
       let framePortInputs: ReadonlyMap<string, Uint8Array> | undefined;
       let framePortOutputs: ReadonlyMap<string, Uint8Array> | undefined;
 
-      if (portedDispatch && registration.kind === "ported") {
+      // ── Port-native dispatch — the only execution path since Phase C ──
+      // The legacy executor contract + its OFF-flag dual-dispatch branch were
+      // retired in universal-port Phase 5; every step type is port-native and
+      // runs here. The bare block preserves the const scoping the old
+      // `if (portedDispatch && registration.kind === "ported")` body relied on.
+      {
         // ── Ported execution path ─────────────────────────────────────
         // Two registration shapes coexist post-Slice-2.6a:
         //   (1) Lifted-legacy ported — `meta` present. Inputs come from a
@@ -736,10 +698,11 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
         // mutates the map in place above) — what the executor actually
         // saw. Map values are aliased; the runtime does not mutate the
         // Uint8Array buffers after the frame is pushed.
-        if (registration.legacy === undefined) {
-          framePortInputs = inputs;
-          framePortOutputs = outputs;
-        }
+        // Every leaf is port-native now, so this is unconditional (the
+        // pre-Phase-C `legacy === undefined` gate that excluded lifted-legacy
+        // frames is gone with the legacy contract).
+        framePortInputs = inputs;
+        framePortOutputs = outputs;
 
         // ─── Save outputs to scope-local nodeOutputs (Slice 2.6a) ──────
         // Every ported leaf's outputs are recorded so downstream siblings
@@ -842,66 +805,6 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
             auxWritten.set(auxKey, value);
           }
         }
-      } else {
-        // ── Legacy execution path ─────────────────────────────────────
-        // Pull the legacy-shape executor out of the registration. For
-        // `kind:"legacy"` this is `registration.executor` directly; for
-        // `kind:"ported"` it's the preserved `legacy` field that the
-        // ported registration carries during the Phase 1 migration
-        // window. Frame-parity tests run a ported-registered step type
-        // under BOTH dispatch flag values; this is the path the off-flag
-        // half takes.
-        //
-        // Slice 2.1a (universal-port plan): port-native registrations
-        // omit `legacy` entirely — they have no single-thread shape
-        // executor to fall back to. Hitting one of these here means a
-        // spec wired a port-native step but the caller forgot to enable
-        // `portedDispatchEnabled: true`. Surface it with the exact
-        // message the slice's test pins.
-        // Resolve the legacy-shape executor up-front so the narrowing is
-        // obvious to TS: the compound `kind === "ported" && legacy ===
-        // undefined` guard above doesn't propagate through the ternary.
-        let executor: StepExecutor;
-        if (registration.kind === "ported") {
-          if (registration.legacy === undefined) {
-            throw new Error(
-              `step type "${node.type}" is port-native; requires portedDispatchEnabled: true`,
-            );
-          }
-          executor = registration.legacy;
-        } else {
-          executor = registration.executor;
-        }
-        const result = executor(state, node.params, {
-          stepId: node.id,
-          path,
-          aux,
-        });
-
-        auxRead = new Map<string, AuxValue>();
-        // Track requested-but-unfulfilled aux reads separately so Slice 9's
-        // `validateGraph` can surface them as orphaned-read warnings. The
-        // happy-path produces no missing reads, so we lazily allocate the
-        // array only on the first miss to keep frame allocation light.
-        for (const k of result.auxReads ?? []) {
-          const v = aux.get(k);
-          if (v !== undefined) {
-            auxRead.set(k, v);
-          } else {
-            if (auxReadMissing === undefined) auxReadMissing = [];
-            auxReadMissing.push(k);
-          }
-        }
-
-        auxWritten = new Map<string, AuxValue>();
-        if (result.auxWrites) {
-          for (const [k, v] of result.auxWrites) {
-            aux.set(k, v);
-            auxWritten.set(k, v);
-          }
-        }
-
-        state = result.state;
       }
 
       // Per-iteration / per-track / per-round stepId suffix: ensures every

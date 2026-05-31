@@ -51,7 +51,6 @@ const seedTrace = () => {
     initialState: makeBytesState(bytesFromHex(PT_4_BLOCKS)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
     // Byte-native ECB (B1.4) — port-native body needs ported dispatch.
-    portedDispatchEnabled: true,
   });
   setTrace(trace);
   return trace;

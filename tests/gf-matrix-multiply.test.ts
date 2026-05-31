@@ -122,19 +122,10 @@ describe("gf-matrix-multiply@1 — runtime dispatch guards", () => {
     ],
   });
 
-  it("off-flag dispatch throws 'requires portedDispatchEnabled: true'", () => {
-    expect(() =>
-      runSpec(buildSpec(), buildDefaultRegistry(), { initialState: emptyBytes() }),
-    ).toThrow(
-      'step type "gf-matrix-multiply@1" is port-native; requires portedDispatchEnabled: true',
-    );
-  });
-
   it("on-flag dispatch with no portInputs throws 'input port input is not wired'", () => {
     expect(() =>
       runSpec(buildSpec(), buildDefaultRegistry(), {
         initialState: emptyBytes(),
-        portedDispatchEnabled: true,
       }),
     ).toThrow(/input port 'input' is not wired/);
   });

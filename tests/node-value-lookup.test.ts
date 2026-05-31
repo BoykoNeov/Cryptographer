@@ -57,7 +57,6 @@ const runAes128Ecb = (): Trace =>
       ["key", bytesFromHex("2b7e151628aed2a6abf7158809cf4f3c")],
     ]),
     // Byte-native ECB (B1.4) — port-mode iterate + port-native body.
-    portedDispatchEnabled: true,
   });
 
 // ─── Endpoint pills ─────────────────────────────────────────────────────

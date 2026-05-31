@@ -577,15 +577,12 @@ export const buildDefaultRegistry = (): StepRegistry => {
     doc: desPPermutationDoc,
   });
   // ─── Port-native primitives (universal-port plan Phase 2, Slice 2.1a+) ──
-  // Authored against the port-native contract directly — no `legacy`
-  // executor, no `meta` projection sidecar. Reachable today only via
-  // direct executor invocation in tests (no shipped cipher spec wires
-  // them yet); the runtime's on-flag dispatch path throws an explicit
-  // "requires spec edge-wiring (Slice 2.6+)" error if a spec attempts
-  // to use them before SHA-256 lands, and the off-flag path throws
-  // "requires portedDispatchEnabled: true" if a spec wires one without
-  // the flag. This block is the long-term home for primitives lifted
-  // out of cipher-specific implementations as the migration progresses.
+  // Authored against the port-native contract directly — no `meta` projection
+  // sidecar. Their inputs come entirely from the spec edge graph: a spec must
+  // wire every input port via `portInputs`, or the runtime throws "input port
+  // X is not wired". SHA-256 was the first shipped consumer. This block is the
+  // long-term home for primitives lifted out of cipher-specific implementations
+  // as the migration progresses.
   //
   // **Naming convention (intentional).** Port-native primitives drop the
   // `generic.` prefix that every shipped step type uses today. The

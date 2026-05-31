@@ -111,7 +111,6 @@ const runKeyExpansionExecutor = (
     // `aux[roundKey.${r}]` via `keyExpansionMeta.auxWritePorts`.
     initialState: makeBytesState(new Uint8Array(16)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(masterKeyHex)]]),
-    portedDispatchEnabled: true,
   });
 
   // Pull every `roundKey.N` (N = 0..rounds) out of finalAux in order.

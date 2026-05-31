@@ -66,7 +66,6 @@ describe("DES decrypt — inverse of encrypt on FIPS test vectors", () => {
       const trace = runSpec(desDecryptSpec, buildDefaultRegistry(), {
         initialState: ciphertext,
         initialAux,
-        portedDispatchEnabled: true,
       });
       expect(trace.finalState.shape).toBe("bytes");
       if (trace.finalState.shape !== "bytes") return;
@@ -94,7 +93,6 @@ describe("DES roundtrip — encrypt then decrypt is the identity", () => {
       const encTrace = runSpec(desSpec, registry, {
         initialState: { shape: "bytes", bytes: bytesFromHex(pt) },
         initialAux,
-        portedDispatchEnabled: true,
       });
       if (encTrace.finalState.shape !== "bytes") throw new Error("encrypt shape");
       const ct = encTrace.finalState.bytes;
@@ -104,7 +102,6 @@ describe("DES roundtrip — encrypt then decrypt is the identity", () => {
       const decTrace = runSpec(desDecryptSpec, registry, {
         initialState: { shape: "bytes", bytes: ct },
         initialAux: decAux,
-        portedDispatchEnabled: true,
       });
       if (decTrace.finalState.shape !== "bytes") throw new Error("decrypt shape");
       expect(

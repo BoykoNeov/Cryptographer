@@ -56,7 +56,6 @@ const serpentFrames = (): TraceFrame[] => {
   const trace = runSpec(serpent128Spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(KEY)]]),
-    portedDispatchEnabled: true,
   });
   return [...trace.frames];
 };

@@ -174,7 +174,6 @@ describe("runtime integration — missing aux populates auxReadMissing on the fr
   it("aux-xor on missing keys emits a frame with auxReadMissing populated", () => {
     const trace = runSpec(spec, buildDefaultRegistry(), {
       initialState: emptyBytes(),
-      portedDispatchEnabled: true,
     });
     expect(trace.frames.length).toBe(1);
     const frame = trace.frames[0];
@@ -190,7 +189,6 @@ describe("runtime integration — missing aux populates auxReadMissing on the fr
     // auxReadMissing off the trace and produces the warnings.
     const trace = runSpec(spec, buildDefaultRegistry(), {
       initialState: emptyBytes(),
-      portedDispatchEnabled: true,
     });
     const graph = deriveAuxGraph(trace, spec);
     const warnings = validateGraph(graph, trace);
@@ -218,7 +216,6 @@ describe("runtime integration — missing aux populates auxReadMissing on the fr
     };
     const trace = runSpec(droppedSpec, buildDefaultRegistry(), {
       initialState: emptyBytes(),
-      portedDispatchEnabled: true,
     });
     // Frame emitted → graph click can land on it → param editor can
     // resolve the step.
@@ -253,7 +250,6 @@ describe("runtime integration — missing aux populates auxReadMissing on the fr
     };
     const trace = runSpec(copySpec, buildDefaultRegistry(), {
       initialState: emptyBytes(),
-      portedDispatchEnabled: true,
     });
     const frame = trace.frames[0];
     expect(frame).toBeDefined();
@@ -417,7 +413,6 @@ describe("CBC-from-scratch composition (acceptance test)", () => {
     const blockSize = 16;
     const trace = runSpec(cbcEncryptSpec(blockSize), buildDefaultRegistry(), {
       initialState: emptyBytes(),
-      portedDispatchEnabled: true,
     });
 
     // Reference computation done outside the runtime.
@@ -441,7 +436,6 @@ describe("CBC-from-scratch composition (acceptance test)", () => {
     // First encrypt to obtain c0/c1.
     const encTrace = runSpec(cbcEncryptSpec(blockSize), buildDefaultRegistry(), {
       initialState: emptyBytes(),
-      portedDispatchEnabled: true,
     });
     const c0 = encTrace.finalAux.get("c0") as Uint8Array;
     const c1 = encTrace.finalAux.get("c1") as Uint8Array;
@@ -455,7 +449,6 @@ describe("CBC-from-scratch composition (acceptance test)", () => {
         ["c0", c0],
         ["c1", c1],
       ]),
-      portedDispatchEnabled: true,
     });
 
     const p0Out = decTrace.finalAux.get("p0-out") as Uint8Array;
@@ -477,7 +470,6 @@ describe("CBC-from-scratch composition (acceptance test)", () => {
     const spec = cbcEncryptSpec(16);
     const trace = runSpec(spec, buildDefaultRegistry(), {
       initialState: emptyBytes(),
-      portedDispatchEnabled: true,
     });
     const graph = deriveAuxGraph(trace, spec);
     const warnings = validateGraph(graph, trace);

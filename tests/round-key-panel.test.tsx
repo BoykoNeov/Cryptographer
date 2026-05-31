@@ -45,7 +45,6 @@ const AES128_PT = "00112233445566778899aabbccddeeff";
 const seedAes128Trace = () => {
   const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(AES128_PT)),
-    portedDispatchEnabled: true,
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
   });
   setTrace(trace);
@@ -218,7 +217,6 @@ const seedSerpent128Trace = () => {
     initialState: makeBytesState(bytesFromHex(SERPENT128_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(SERPENT128_KEY)]]),
     // Serpent's round body is port-native since B3 → the spec requires ported dispatch.
-    portedDispatchEnabled: true,
   });
   setTrace(trace);
   return trace;
@@ -266,7 +264,6 @@ const seedSpeck32_64Trace = () => {
     initialState: makeBytesState(bytesFromHex(SPECK32_64_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(SPECK32_64_KEY)]]),
     // Speck rounds are port-native since B2 → the spec requires ported dispatch.
-    portedDispatchEnabled: true,
   });
   setTrace(trace);
   return trace;
@@ -329,7 +326,6 @@ const seedDesTrace = () => {
   const trace = runSpec(desSpec, buildDefaultRegistry(), {
     initialState: makeBytesState(DES_PT),
     initialAux: new Map<string, AuxValue>([["key", DES_KEY]]),
-    portedDispatchEnabled: true,
   });
   setTrace(trace);
   return trace;

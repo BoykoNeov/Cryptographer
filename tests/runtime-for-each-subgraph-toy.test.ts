@@ -169,7 +169,6 @@ describe("runtime — for-each-subgraph node (Slice 2.0a)", () => {
     };
     const trace = runSpec(innerToySpec, buildRegistry(), {
       initialState: initial,
-      portedDispatchEnabled: true,
     });
 
     // Five iterations × one body leaf = five frames.
@@ -238,7 +237,6 @@ describe("runtime — for-each-subgraph node (Slice 2.0a)", () => {
     };
     const trace = runSpec(evenSpec, buildRegistry(), {
       initialState: initial,
-      portedDispatchEnabled: true,
     });
     expect(trace.frames).toHaveLength(4);
     if (trace.finalState.shape !== "bytes") throw new Error("finalState shape");
@@ -271,7 +269,6 @@ describe("runtime — for-each-subgraph node (Slice 2.0a)", () => {
     };
     const trace = runSpec(emptySpec, buildRegistry(), {
       initialState: initial,
-      portedDispatchEnabled: true,
     });
     expect(trace.frames).toHaveLength(0);
     if (trace.finalState.shape !== "bytes") throw new Error("finalState shape");
@@ -301,9 +298,9 @@ describe("runtime — for-each-subgraph node (Slice 2.0a)", () => {
       shape: "bytes",
       bytes: new Uint8Array([0xaa, 0xbb, 0xcc, 0xdd]),
     };
-    expect(() =>
-      runSpec(paramSpec, buildRegistry(), { initialState: initial, portedDispatchEnabled: true }),
-    ).toThrow(/Slice 2\.0a/);
+    expect(() => runSpec(paramSpec, buildRegistry(), { initialState: initial })).toThrow(
+      /Slice 2\.0a/,
+    );
   });
 
   // ─── Nested toy: 2-block outer iterate × 3-iter inner for-each-subgraph ──
@@ -355,7 +352,6 @@ describe("runtime — for-each-subgraph node (Slice 2.0a)", () => {
         ["count", 2],
         ["in-blocks", blocks],
       ]),
-      portedDispatchEnabled: true,
     });
 
     // 2 blocks × 3 inner rounds × 1 child leaf = 6 frames.

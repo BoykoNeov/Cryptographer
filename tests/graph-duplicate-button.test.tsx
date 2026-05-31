@@ -26,7 +26,6 @@
 
 import { aes128Spec } from "@/ciphers/aes-128";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
-import { requiresPortedDispatch } from "@/core/dispatch";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue } from "@/core/types";
@@ -52,7 +51,6 @@ const seedAes128Trace = (): void => {
   const trace = runSpec(aes128Spec, registry, {
     initialState: makeBytesState(bytesFromHex(AES128_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
-    portedDispatchEnabled: requiresPortedDispatch(aes128Spec, registry),
   });
   setTrace(trace);
 };

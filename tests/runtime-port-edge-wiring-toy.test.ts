@@ -105,7 +105,6 @@ describe("port-edge wiring (Slice 2.6a) — happy path", () => {
   it("end-to-end run of 4-leaf chain produces expected XOR result", () => {
     const trace = runSpec(buildHappyPathSpec(), buildDefaultRegistry(), {
       initialState: emptyBytes(),
-      portedDispatchEnabled: true,
     });
 
     // Every leaf in the spec emits exactly one frame (no iteration,
@@ -123,7 +122,6 @@ describe("port-edge wiring (Slice 2.6a) — happy path", () => {
   it("rot.a frame reflects constant-load.a output rotated by 8 bits (KAT pinned)", () => {
     const trace = runSpec(buildHappyPathSpec(), buildDefaultRegistry(), {
       initialState: emptyBytes(),
-      portedDispatchEnabled: true,
     });
     // Pure port-native steps don't reconstruct state (no `meta`), so
     // `stateBefore` / `stateAfter` carry whatever was on the state
@@ -193,7 +191,6 @@ describe("port-edge wiring (Slice 2.6a) — unwired input port", () => {
     expect(() =>
       runSpec(buildUnwiredSpec(), buildDefaultRegistry(), {
         initialState: emptyBytes(),
-        portedDispatchEnabled: true,
       }),
     ).toThrow(/port-native step 'xor\.result' .+input port 'operand1' is not wired/);
   });
@@ -288,7 +285,6 @@ describe("port-edge wiring (Slice 2.6a) — unresolvable wire references", () =>
     expect(() =>
       runSpec(spec, buildDefaultRegistry(), {
         initialState: emptyBytes(),
-        portedDispatchEnabled: true,
       }),
     ).toThrow(/upstream node 'no-such-leaf' which has no recorded outputs/);
   });
@@ -324,27 +320,14 @@ describe("port-edge wiring (Slice 2.6a) — unresolvable wire references", () =>
     expect(() =>
       runSpec(spec, buildDefaultRegistry(), {
         initialState: emptyBytes(),
-        portedDispatchEnabled: true,
       }),
     ).toThrow(/upstream node 'load\.a' port 'result' but that port was not emitted/);
   });
 });
 
-// ─── Off-flag preserves prior behavior ────────────────────────────────────
-
-describe("port-edge wiring (Slice 2.6a) — off-flag passthrough unchanged", () => {
-  it("portedDispatchEnabled: false on a portInputs-bearing spec STILL hits 'requires portedDispatchEnabled: true' guard", () => {
-    // Authoring a spec with portInputs but running it with the flag
-    // OFF is a clear user error — the wiring is ignored because legacy
-    // dispatch doesn't know about portInputs. The existing legacy-
-    // path guard (registration.legacy === undefined → throw) fires.
-    expect(() =>
-      runSpec(buildHappyPathSpec(), buildDefaultRegistry(), {
-        initialState: emptyBytes(),
-      }),
-    ).toThrow(/port-native; requires portedDispatchEnabled: true/);
-  });
-});
+// (The "off-flag passthrough unchanged" describe was retired in Phase C —
+// there is no off-flag path any more. Every spec runs port-native, so a
+// portInputs-bearing spec is dispatched through its wiring unconditionally.)
 
 // ─── Container output port wiring (Slice 2.6a — Q-edges-2 user pick) ─────
 
@@ -417,7 +400,6 @@ describe("port-edge wiring (Slice 2.6a) — container output ports", () => {
   it("runtime publishes container exit-state to nodeOutputs; downstream consumer reads it", () => {
     const trace = runSpec(buildContainerOutputSpec(), buildDefaultRegistry(), {
       initialState,
-      portedDispatchEnabled: true,
     });
     // Frames: sub (inside group) + mask + xor.result = 3.
     expect(trace.frames).toHaveLength(3);

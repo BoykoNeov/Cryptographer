@@ -192,7 +192,6 @@ describe("split-bytes@1 — runtime integration via port wiring", () => {
     };
     const trace = runSpec(spec, buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: plaintext },
-      portedDispatchEnabled: true,
     });
     if (trace.finalState.shape !== "bytes") throw new Error("expected bytes shape");
     expect(Array.from(trace.finalState.bytes)).toEqual(Array.from(plaintext));
@@ -264,33 +263,8 @@ describe("split-bytes@1 — runtime integration via port wiring", () => {
     };
     const trace = runSpec(spec, buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: plaintext },
-      portedDispatchEnabled: true,
     });
     if (trace.finalState.shape !== "bytes") throw new Error("expected bytes shape");
     expect(Array.from(trace.finalState.bytes)).toEqual([0x03, 0x0c]);
-  });
-
-  it("off-flag dispatch throws (port-native, no legacy executor)", () => {
-    const spec: CipherSpec = {
-      id: "toy-split-bytes-offflag",
-      name: "off-flag throw",
-      stateShape: "bytes",
-      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
-      steps: [
-        { kind: "step", id: "src", type: "state-to-bytes@1", params: {} },
-        {
-          kind: "step",
-          id: "split",
-          type: "split-bytes@1",
-          params: { widths: [2, 2] },
-          portInputs: { input: { node: "src", port: "output" } },
-        },
-      ],
-    };
-    expect(() =>
-      runSpec(spec, buildDefaultRegistry(), {
-        initialState: { shape: "bytes", bytes: new Uint8Array([0x01, 0x02, 0x03, 0x04]) },
-      }),
-    ).toThrow(/port-native; requires portedDispatchEnabled: true/);
   });
 });

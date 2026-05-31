@@ -65,7 +65,6 @@ const singleStepSpec = (id: string, stepType: string, blockSize: number): Cipher
 const runPorted = (spec: CipherSpec, initial: Uint8Array): ReturnType<typeof runSpec> =>
   runSpec(spec, buildDefaultRegistry(), {
     initialState: makeBytesState(initial),
-    portedDispatchEnabled: true,
   });
 
 // 5-byte plaintext "apple" — short enough to fit in one 16-byte block.

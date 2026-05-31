@@ -208,7 +208,6 @@ describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
     const initial: BytesState = { shape: "bytes", bytes: new Uint8Array([0x05, 0x03]) };
     const trace = runSpec(xorShapeSpec, buildRegistry(), {
       initialState: initial,
-      portedDispatchEnabled: true,
     });
 
     // 8 iterations × 1 body leaf = 8 frames.
@@ -280,7 +279,6 @@ describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
     const initial: BytesState = { shape: "bytes", bytes: new Uint8Array([0x05, 0x03]) };
     const trace = runSpec(zeroSpec, buildRegistry(), {
       initialState: initial,
-      portedDispatchEnabled: true,
     });
     expect(trace.frames).toHaveLength(0);
     if (trace.finalState.shape !== "bytes") throw new Error("finalState shape");
@@ -408,7 +406,6 @@ describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
         ["count", 2],
         ["in-blocks", blocks],
       ]),
-      portedDispatchEnabled: true,
     });
 
     // Two blocks × (1 to-bytes + 3 inner rounds) = 8 frames total.
@@ -534,7 +531,6 @@ describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
     expect(() =>
       runSpec(makeSpec({ bodyType: "test.return-two-bytes@1" }), buildRegistry(), {
         initialState: seedsTwo,
-        portedDispatchEnabled: true,
       }),
     ).toThrow(/!= historyEntryByteLength/);
   });
@@ -586,7 +582,6 @@ describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
     };
     const trace = runSpec(cleanupSpec, buildRegistry(), {
       initialState: seedsTwo,
-      portedDispatchEnabled: true,
     });
     expect(trace.finalAux.has("prior-1")).toBe(false);
     expect(trace.finalAux.has("prior-2")).toBe(false);
@@ -627,7 +622,6 @@ describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
     const trace = runSpec(restoreSpec, buildRegistry(), {
       initialState: seedsTwo,
       initialAux,
-      portedDispatchEnabled: true,
     });
     const p1 = trace.finalAux.get("prior-1");
     const p2 = trace.finalAux.get("prior-2");
@@ -715,7 +709,6 @@ describe("runtime — FES-with-history container port contract (A2)", () => {
   it("port mode: seedInput seeds history + bodyOutput captures per-iteration result (KAT matches state mode)", () => {
     const trace = runSpec(buildPortModeSpec(), buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: new Uint8Array(0) },
-      portedDispatchEnabled: true,
     });
     // Exit state = full concatenated history (seeds + 8 outputs) — the
     // SAME value the legacy state-mode test pins, proving seedInput +
@@ -747,7 +740,6 @@ describe("runtime — FES-with-history container port contract (A2)", () => {
         buildDefaultRegistry(),
         {
           initialState: { shape: "bytes", bytes: new Uint8Array(0) },
-          portedDispatchEnabled: true,
         },
       ),
     ).toThrow(/seedInput references 'no-such-producer\.output'.*not a same-scope upstream output/);
@@ -759,7 +751,6 @@ describe("runtime — FES-with-history container port contract (A2)", () => {
     expect(() =>
       runSpec(buildPortModeSpec({ bodyOutput: port("seeds", "output") }), buildDefaultRegistry(), {
         initialState: { shape: "bytes", bytes: new Uint8Array(0) },
-        portedDispatchEnabled: true,
       }),
     ).toThrow(/bodyOutput references 'seeds\.output'.*not a same-scope body output/);
   });
@@ -899,7 +890,6 @@ describe("runtime — group container port contract (A3b)", () => {
   it("port mode: seedInput injects bytes as port(groupId,'in'); bodyOutput becomes the group's published exit", () => {
     const trace = runSpec(buildGroupPortModeSpec(), buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: new Uint8Array(0) },
-      portedDispatchEnabled: true,
     });
     // finalState = spec.outputFrom = port("g","out") = bodyOutput = NOT(seed).
     if (trace.finalState.shape !== "bytes") throw new Error("finalState shape");
@@ -918,7 +908,6 @@ describe("runtime — group container port contract (A3b)", () => {
         buildDefaultRegistry(),
         {
           initialState: { shape: "bytes", bytes: new Uint8Array(0) },
-          portedDispatchEnabled: true,
         },
       ),
     ).toThrow(
@@ -935,7 +924,6 @@ describe("runtime — group container port contract (A3b)", () => {
         buildDefaultRegistry(),
         {
           initialState: { shape: "bytes", bytes: new Uint8Array(0) },
-          portedDispatchEnabled: true,
         },
       ),
     ).toThrow(/group 'g': bodyOutput references 'seeds\.output'.*not a same-scope body output/);
@@ -985,7 +973,6 @@ describe("runtime — group container port contract (A3b)", () => {
     expect(() =>
       runSpec(spec, buildDefaultRegistry(), {
         initialState: { shape: "bytes", bytes: new Uint8Array(0) },
-        portedDispatchEnabled: true,
       }),
     ).toThrow(
       /group 'g': bodyOutput references 'g\.inner\.leaf\.output'.*not a same-scope body output/,

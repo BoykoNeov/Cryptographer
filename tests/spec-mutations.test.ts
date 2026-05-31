@@ -200,7 +200,6 @@ describe("spec mutation helpers", () => {
       const trace = runSpec(swapped, buildDefaultRegistry(), {
         initialState: pt,
         initialAux,
-        portedDispatchEnabled: true,
       });
 
       if (trace.finalState.shape !== "bytes") throw new Error("bad shape");
@@ -246,12 +245,10 @@ describe("spec mutation helpers", () => {
       const baseline = runSpec(serpent128Spec, buildDefaultRegistry(), {
         initialState: pt,
         initialAux,
-        portedDispatchEnabled: true,
       });
       const modified = runSpec(swapped, buildDefaultRegistry(), {
         initialState: pt,
         initialAux,
-        portedDispatchEnabled: true,
       });
       if (baseline.finalState.shape !== "bytes" || modified.finalState.shape !== "bytes") {
         throw new Error("bad shape");
@@ -290,14 +287,12 @@ describe("spec mutation helpers", () => {
       const pt = { shape: "bytes", bytes: new Uint8Array([0x61, 0x62, 0x63]) } as const;
       const baseline = runSpec(spec, buildDefaultRegistry(), {
         initialState: pt,
-        portedDispatchEnabled: true,
       });
       // Flip every byte of H — the initial working vars (and final add) change.
       const flippedH = Uint8Array.from(spec.cipherConstants?.H as Uint8Array, (b) => b ^ 0xff);
       const edited = updateCipherConstant(spec, "H", flippedH);
       const modified = runSpec(edited, buildDefaultRegistry(), {
         initialState: pt,
-        portedDispatchEnabled: true,
       });
       if (baseline.finalState.shape !== "bytes" || modified.finalState.shape !== "bytes") {
         throw new Error("bad shape");

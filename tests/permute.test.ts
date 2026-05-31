@@ -114,17 +114,10 @@ describe("permute@1 — runtime dispatch guards", () => {
     steps: [{ kind: "step", id: "s", type: "permute@1", params: { indices: [0] } }],
   });
 
-  it("off-flag dispatch throws 'requires portedDispatchEnabled: true'", () => {
-    expect(() =>
-      runSpec(buildSpec(), buildDefaultRegistry(), { initialState: emptyBytes() }),
-    ).toThrow('step type "permute@1" is port-native; requires portedDispatchEnabled: true');
-  });
-
   it("on-flag dispatch with no portInputs throws 'input port input is not wired'", () => {
     expect(() =>
       runSpec(buildSpec(), buildDefaultRegistry(), {
         initialState: emptyBytes(),
-        portedDispatchEnabled: true,
       }),
     ).toThrow(/input port 'input' is not wired/);
   });

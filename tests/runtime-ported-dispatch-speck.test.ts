@@ -73,7 +73,6 @@ const frameStream = (spec: CipherSpec, stateHex: string, keyHex: string): string
   const trace = runSpec(spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(stateHex)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
-    portedDispatchEnabled: true,
   });
   return trace.frames
     .map((f) => {
@@ -93,7 +92,6 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
       const trace = runSpec(speck32_64BeSpec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(BE_PLAINTEXT)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(BE_KEY)]]),
-        portedDispatchEnabled: true,
       });
       expect(trace.finalState.shape).toBe("bytes");
       if (trace.finalState.shape !== "bytes") return;
@@ -104,7 +102,6 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
       const trace = runSpec(speck32_64LeSpec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(LE_PLAINTEXT)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(LE_KEY)]]),
-        portedDispatchEnabled: true,
       });
       expect(trace.finalState.shape).toBe("bytes");
       if (trace.finalState.shape !== "bytes") return;
@@ -115,7 +112,6 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
       const trace = runSpec(speck32_64BeDecryptSpec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(BE_CIPHERTEXT)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(BE_KEY)]]),
-        portedDispatchEnabled: true,
       });
       expect(trace.finalState.shape).toBe("bytes");
       if (trace.finalState.shape !== "bytes") return;
@@ -126,7 +122,6 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
       const trace = runSpec(speck32_64LeDecryptSpec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(LE_CIPHERTEXT)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(LE_KEY)]]),
-        portedDispatchEnabled: true,
       });
       expect(trace.finalState.shape).toBe("bytes");
       if (trace.finalState.shape !== "bytes") return;
@@ -197,7 +192,6 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
       const trace = runSpec(speck32_64BeSpec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(BE_PLAINTEXT)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(BE_KEY)]]),
-        portedDispatchEnabled: true,
       });
 
       // The first frame is the key-schedule leaf — pre-rounds, the
@@ -272,7 +266,6 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
       const trace = runSpec(spec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(BE_PLAINTEXT)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(BE_KEY)]]),
-        portedDispatchEnabled: true,
       });
       // schedule frame + one round frame.
       expect(trace.frames.length).toBe(2);
@@ -302,7 +295,6 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
       const trace = runSpec(speck32_64BeSpec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(BE_PLAINTEXT)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(BE_KEY)]]),
-        portedDispatchEnabled: true,
       });
       // Every round.i (1..22) reads roundKey.{i-1} from aux, byte-for-byte
       // as before the port-wiring.
@@ -317,7 +309,6 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
       const trace = runSpec(speck32_64BeSpec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(BE_PLAINTEXT)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(BE_KEY)]]),
-        portedDispatchEnabled: true,
       });
       const r2 = trace.frames.find((f) => f.stepId === "round.2");
       if (!r2) throw new Error("missing frame round.2");

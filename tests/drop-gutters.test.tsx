@@ -54,7 +54,6 @@ const AES128_ECB_PT = "00112233445566778899aabbccddeeff112233445566778899aabbccd
 const seedAes128Trace = (): void => {
   const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(AES128_PT)),
-    portedDispatchEnabled: true,
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
   });
   setTrace(trace);
@@ -78,7 +77,6 @@ const seedAes128EcbTrace = (): void => {
     initialState: makeBytesState(bytesFromHex(AES128_ECB_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_ECB_KEY)]]),
     // Byte-native ECB (B1.4) — port-mode iterate + port-native body.
-    portedDispatchEnabled: true,
   });
   setTrace(trace);
 };

@@ -175,7 +175,6 @@ describe("runtime — ported dispatch, Slice 1.12 coercion (Q2)", () => {
       const trace = runSpec(spec, registry, {
         initialState: makeBytesState(new Uint8Array(0)),
         initialAux: new Map<string, AuxValue>([["src-a", new Uint8Array(SOURCE_8)]]),
-        portedDispatchEnabled: true,
       });
 
       // Frame stream: [__coerce__ for port-a, consumer leaf].
@@ -228,7 +227,6 @@ describe("runtime — ported dispatch, Slice 1.12 coercion (Q2)", () => {
       const trace = runSpec(spec, registry, {
         initialState: makeBytesState(new Uint8Array(0)),
         initialAux: new Map<string, AuxValue>([["src-b", new Uint8Array(SOURCE_8)]]),
-        portedDispatchEnabled: true,
       });
 
       expect(trace.frames.length).toBe(2);
@@ -279,7 +277,6 @@ describe("runtime — ported dispatch, Slice 1.12 coercion (Q2)", () => {
           ["src-a", new Uint8Array(SOURCE_8)],
           ["src-b", new Uint8Array(SOURCE_8)],
         ]),
-        portedDispatchEnabled: true,
       });
 
       // Expected: [coerce port-a, coerce port-b, consumer leaf]
@@ -323,7 +320,6 @@ describe("runtime — ported dispatch, Slice 1.12 coercion (Q2)", () => {
       const trace = runSpec(spec, registry, {
         initialState: makeBytesState(new Uint8Array(0)),
         initialAux: new Map<string, AuxValue>([["src-poly", new Uint8Array(SOURCE_8)]]),
-        portedDispatchEnabled: true,
       });
 
       // Frame stream is just the consumer leaf — no coercion fires.
@@ -348,7 +344,6 @@ describe("runtime — ported dispatch, Slice 1.12 coercion (Q2)", () => {
       const trace = runSpec(spec, registry, {
         initialState: makeBytesState(new Uint8Array(0)),
         initialAux: new Map<string, AuxValue>([["src-exact", new Uint8Array(SOURCE_8)]]),
-        portedDispatchEnabled: true,
       });
 
       // The runtime's exact-length short-circuit avoids both the

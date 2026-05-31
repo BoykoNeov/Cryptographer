@@ -230,12 +230,6 @@ describe("constant-load@1 — runtime dispatch guards", () => {
     ],
   });
 
-  it("off-flag dispatch throws 'port-native; requires portedDispatchEnabled: true'", () => {
-    expect(() =>
-      runSpec(buildSpec(), buildDefaultRegistry(), { initialState: emptyBytes() }),
-    ).toThrow('step type "constant-load@1" is port-native; requires portedDispatchEnabled: true');
-  });
-
   it("on-flag dispatch SUCCEEDS for a constant-load leaf (zero input ports — Slice 2.6a)", () => {
     // Constant-load is the ONLY port-native primitive with zero input
     // ports (it's a constant emitter), so post-Slice-2.6a it no longer
@@ -247,7 +241,6 @@ describe("constant-load@1 — runtime dispatch guards", () => {
     // stateAfter both carry the initial empty bytes.
     const trace = runSpec(buildSpec(), buildDefaultRegistry(), {
       initialState: emptyBytes(),
-      portedDispatchEnabled: true,
     });
     expect(trace.frames).toHaveLength(1);
     const frame = trace.frames[0];

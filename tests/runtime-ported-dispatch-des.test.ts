@@ -113,7 +113,6 @@ describe("runtime — ported dispatch, Slice 1.8 DES + feistel-toy step types", 
         const trace = runSpec(desSpec, buildDefaultRegistry(), {
           initialState: makeBytesState(bytesFromHex(vec.pt)),
           initialAux: new Map<string, AuxValue>([["key", bytesFromHex(vec.key)]]),
-          portedDispatchEnabled: true,
         });
         expect(trace.finalState.shape).toBe("bytes");
         if (trace.finalState.shape !== "bytes") return;
@@ -126,7 +125,6 @@ describe("runtime — ported dispatch, Slice 1.8 DES + feistel-toy step types", 
         const trace = runSpec(desDecryptSpec, buildDefaultRegistry(), {
           initialState: makeBytesState(bytesFromHex(vec.ct)),
           initialAux: new Map<string, AuxValue>([["key", bytesFromHex(vec.key)]]),
-          portedDispatchEnabled: true,
         });
         expect(trace.finalState.shape).toBe("bytes");
         if (trace.finalState.shape !== "bytes") return;
@@ -154,7 +152,6 @@ describe("runtime — ported dispatch, Slice 1.8 DES + feistel-toy step types", 
       const trace = runSpec(desSpec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(vec.pt)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(vec.key)]]),
-        portedDispatchEnabled: true,
       });
 
       // Find the key-schedule frame. Locating by stepType keeps the test

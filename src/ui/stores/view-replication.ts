@@ -88,8 +88,9 @@ export const useReplicationEnabled = () => replicationEnabled;
  * confused by the chip wall. Each page reload re-prompts the auto-on
  * behavior; explicit in-session intent wins.
  *
- * Read in `GraphView`'s `effectiveReplicationEnabled` memo, alongside
- * `requiresPortedDispatch(spec, registry)`.
+ * Read in `GraphView`'s `replicate` memo: when this is false (user hasn't
+ * toggled this session), replication defaults ON for every spec (all
+ * port-native since Phase C).
  */
 const [replicationUserToggledThisSession, setReplicationUserToggledThisSessionSignal] =
   createSignal<boolean>(false);

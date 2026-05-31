@@ -95,7 +95,6 @@ describe("runtime — ported dispatch (Phase 0 task 6)", () => {
       const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
         initialState: plaintext,
         initialAux: aux,
-        portedDispatchEnabled: true,
       });
       expect(trace.finalState.shape).toBe("bytes");
       if (trace.finalState.shape !== "bytes") return;
@@ -131,7 +130,6 @@ describe("runtime — ported dispatch (Phase 0 task 6)", () => {
       const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
         initialState: plaintext,
         initialAux: aux,
-        portedDispatchEnabled: true,
       });
       expect(trace.finalState.shape).toBe("bytes");
       if (trace.finalState.shape !== "bytes") return;
@@ -142,7 +140,6 @@ describe("runtime — ported dispatch (Phase 0 task 6)", () => {
       const ported = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
         initialState: plaintext,
         initialAux: aux,
-        portedDispatchEnabled: true,
       });
 
       // Pick a sample SubBytes frame from each block; confirm the suffix +

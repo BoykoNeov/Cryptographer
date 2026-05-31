@@ -86,7 +86,6 @@ const runVector = (vec: VectorFixture) => {
   return runSpec(desSpec, buildDefaultRegistry(), {
     initialState: plaintext,
     initialAux,
-    portedDispatchEnabled: true,
   });
 };
 

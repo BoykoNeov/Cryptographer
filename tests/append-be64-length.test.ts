@@ -271,14 +271,6 @@ describe("append-be64-length@1 — runtime dispatch guards", () => {
     ],
   });
 
-  it("off-flag dispatch throws 'port-native; requires portedDispatchEnabled: true'", () => {
-    expect(() =>
-      runSpec(buildSpec(), buildDefaultRegistry(), { initialState: emptyBytes() }),
-    ).toThrow(
-      'step type "append-be64-length@1" is port-native; requires portedDispatchEnabled: true',
-    );
-  });
-
   it("on-flag dispatch with no portInputs throws 'input port data is not wired' (Slice 2.6a)", () => {
     // Post-Slice-2.6a: edge-wiring landed; unwired ports surface
     // per-port via the dispatch-path guard. `data` is the first
@@ -287,7 +279,6 @@ describe("append-be64-length@1 — runtime dispatch guards", () => {
     expect(() =>
       runSpec(buildSpec(), buildDefaultRegistry(), {
         initialState: emptyBytes(),
-        portedDispatchEnabled: true,
       }),
     ).toThrow(/input port 'data' is not wired/);
   });

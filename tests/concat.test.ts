@@ -221,19 +221,9 @@ describe("concat@1 — runtime dispatch-path guards", () => {
   it("on-flag dispatch concatenates and materializes into state", () => {
     const trace = runSpec(buildSpec(), buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: new Uint8Array() },
-      portedDispatchEnabled: true,
     });
     if (trace.finalState.shape !== "bytes") throw new Error("expected bytes shape");
     expect(Array.from(trace.finalState.bytes)).toEqual([0xaa, 0xbb, 0xcc, 0xdd]);
-  });
-
-  it("off-flag dispatch throws (port-native, no legacy executor)", () => {
-    expect(() =>
-      runSpec(buildSpec(), buildDefaultRegistry(), {
-        initialState: { shape: "bytes", bytes: new Uint8Array() },
-        // portedDispatchEnabled omitted
-      }),
-    ).toThrow(/port-native; requires portedDispatchEnabled: true/);
   });
 
   it("validator finds no warnings on a well-wired concat spec", async () => {

@@ -52,7 +52,6 @@ const frameById = (stepId: string): TraceFrame => {
   const trace = runSpec(desSpec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(DES_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(DES_KEY)]]),
-    portedDispatchEnabled: true,
   });
   const f = trace.frames.find((fr) => fr.stepId === stepId);
   if (!f) throw new Error(`expected a ${stepId} frame`);

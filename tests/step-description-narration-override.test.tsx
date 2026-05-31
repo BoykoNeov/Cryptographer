@@ -70,7 +70,6 @@ describe("StepDescription — narrationOverride fallback + override", () => {
     const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
       initialState: initial,
       initialAux: new Map([["key", bytesFromHex(KEY_HEX)]]),
-      portedDispatchEnabled: true,
     });
     const frame = findFrameByStepId(trace.frames, "key-expansion");
 

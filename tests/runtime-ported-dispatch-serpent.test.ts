@@ -97,7 +97,6 @@ const frameDigest = (spec: CipherSpec, stateHex: string, keyHex: string): string
   const trace = runSpec(spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(stateHex)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
-    portedDispatchEnabled: true,
   });
   const h = createHash("sha256");
   for (const f of trace.frames) {
@@ -122,7 +121,6 @@ describe("runtime — ported dispatch, byte-native Serpent (Slice B3)", () => {
       const trace = runSpec(serpent128Spec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(PLAINTEXT_ZERO)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(KEY_128)]]),
-        portedDispatchEnabled: true,
       });
       expect(trace.finalState.shape).toBe("bytes");
       if (trace.finalState.shape !== "bytes") return;
@@ -133,7 +131,6 @@ describe("runtime — ported dispatch, byte-native Serpent (Slice B3)", () => {
       const trace = runSpec(serpent192Spec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(PLAINTEXT_ZERO)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(KEY_192)]]),
-        portedDispatchEnabled: true,
       });
       expect(trace.finalState.shape).toBe("bytes");
       if (trace.finalState.shape !== "bytes") return;
@@ -144,7 +141,6 @@ describe("runtime — ported dispatch, byte-native Serpent (Slice B3)", () => {
       const trace = runSpec(serpent256Spec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(PLAINTEXT_ZERO)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(KEY_256)]]),
-        portedDispatchEnabled: true,
       });
       expect(trace.finalState.shape).toBe("bytes");
       if (trace.finalState.shape !== "bytes") return;
@@ -155,7 +151,6 @@ describe("runtime — ported dispatch, byte-native Serpent (Slice B3)", () => {
       const trace = runSpec(serpent128DecryptSpec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(CIPHERTEXT_128)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(KEY_128)]]),
-        portedDispatchEnabled: true,
       });
       expect(trace.finalState.shape).toBe("bytes");
       if (trace.finalState.shape !== "bytes") return;
@@ -166,7 +161,6 @@ describe("runtime — ported dispatch, byte-native Serpent (Slice B3)", () => {
       const trace = runSpec(serpent192DecryptSpec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(CIPHERTEXT_192)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(KEY_192)]]),
-        portedDispatchEnabled: true,
       });
       expect(trace.finalState.shape).toBe("bytes");
       if (trace.finalState.shape !== "bytes") return;
@@ -177,7 +171,6 @@ describe("runtime — ported dispatch, byte-native Serpent (Slice B3)", () => {
       const trace = runSpec(serpent256DecryptSpec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(CIPHERTEXT_256)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(KEY_256)]]),
-        portedDispatchEnabled: true,
       });
       expect(trace.finalState.shape).toBe("bytes");
       if (trace.finalState.shape !== "bytes") return;
@@ -259,7 +252,6 @@ describe("runtime — ported dispatch, byte-native Serpent (Slice B3)", () => {
       const trace = runSpec(serpent128Spec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(PLAINTEXT_ZERO)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(KEY_128)]]),
-        portedDispatchEnabled: true,
       });
 
       // Find the key-expansion frame (typically frame 0 — the schedule runs
@@ -324,7 +316,6 @@ describe("runtime — ported dispatch, byte-native Serpent (Slice B3)", () => {
       const trace = runSpec(spec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(PLAINTEXT_ZERO)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(KEY_128)]]),
-        portedDispatchEnabled: true,
       });
 
       // schedule frame + one AddRoundKey frame.

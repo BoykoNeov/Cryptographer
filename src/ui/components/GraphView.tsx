@@ -35,7 +35,6 @@
  * starts no drag). Above threshold, the click handler is suppressed.
  */
 
-import { requiresPortedDispatch } from "@/core/dispatch";
 import { type EdgeValueLookup, lookupEdgeValue, lookupNodeValue } from "@/core/edge-value-lookup";
 import { type ByteFormat, formatBytes } from "@/core/format";
 import {
@@ -2209,18 +2208,17 @@ export const GraphView = () => {
   const replicationUserToggled = useReplicationUserToggledThisSession();
   /**
    * Effective replication switch. Returns `true` if EITHER the user
-   * explicitly toggled it on this session, OR they haven't touched it
-   * yet AND the current spec is port-native (`requiresPortedDispatch`).
+   * explicitly toggled it on this session, OR they haven't touched it yet
+   * (the default is ON for every spec).
    *
-   * Why force-on for ported specs: port-native ciphers like SHA-256
-   * decompose into thousands of fine-grained leaves with high-fanout
-   * sources (e.g. `K-to-aux` fans out to 64 rounds, `W-publish` to 64).
-   * With replication OFF the canvas is a dense thicket of crossing long
-   * arrows that obscures the data flow. Replication ON splits each
-   * source into per-consumer chips that read as a sequence. Default-off
-   * remained correct for the legacy AES/Speck/Serpent ciphers (one
-   * key-expansion source, large but manageable); ported specs upgrade
-   * the default to on.
+   * Why default-on: port-native ciphers decompose into many fine-grained
+   * leaves with high-fanout sources (e.g. SHA-256's `K-to-aux` fans out to
+   * 64 rounds, `W-publish` to 64). With replication OFF the canvas is a
+   * dense thicket of crossing long arrows that obscures the data flow;
+   * ON splits each source into per-consumer chips that read as a sequence.
+   * (Pre-Phase-C this auto-on was gated on `requiresPortedDispatch` — true
+   * only for SHA-256 while AES/Speck/Serpent/DES were still legacy-dispatched.
+   * Every spec is port-native now, so the auto-on applies universally.)
    *
    * Why "user hasn't touched it" gates the auto-on: if a user toggled
    * off mid-session (across any spec), they made an explicit choice;
@@ -2230,8 +2228,7 @@ export const GraphView = () => {
    */
   const replicate = createMemo<boolean>(() => {
     if (replicationUserToggled()) return rawReplicate();
-    if (requiresPortedDispatch(spec(), registry)) return true;
-    return rawReplicate();
+    return true;
   });
   const replicationThreshold = useReplicationThreshold();
   // `useReplicationPanelOpen` follows the same accessor-factory shape as

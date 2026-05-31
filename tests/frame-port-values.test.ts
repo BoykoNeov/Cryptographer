@@ -10,21 +10,15 @@
  *    a single `output` entry whose bytes equal the manual modular sum
  *    of the inputs.
  *
- *  - NEGATIVE (advisor flag, 2026-05-27): a lifted-legacy ported frame
- *    (AES `generic.byte-substitution@1` — `kind: "ported"` WITH `legacy`
- *    defined) leaves BOTH port fields undefined even when
- *    `portedDispatchEnabled: true`. This is the gate that protects 2.9b's
- *    predicate (`portInputs !== undefined || portOutputs !== undefined`)
- *    from dispatching AES SubBytes through PortFlowView; lifted-legacy
- *    frames must continue rendering through the existing matrix viewer.
+ *  - META-BEARING: an AES key-expansion frame (hybrid-ported — `meta` projects
+ *    the master key + the round keys onto ports) carries `portInputs` /
+ *    `portOutputs` too. Every leaf is port-captured since Phase C retired the
+ *    legacy executor contract; the pre-Phase-C lifted-legacy negative case and
+ *    the legacy-path case are gone with it.
  *
- *  - LEGACY-PATH: every step type, run with `portedDispatchEnabled: false`
- *    (default), leaves both port fields undefined.
- *
- *  - HELPER: `framePortBytes` returns `null` on a legacy frame, `null` on
- *    a port-native frame asked for an unknown port name, and the
- *    Uint8Array reference for a valid (port-native frame, known port)
- *    lookup on each side.
+ *  - HELPER: `framePortBytes` returns `null` for an unknown port name on a
+ *    port-native frame, and the Uint8Array reference for a valid (known port,
+ *    correct side) lookup on each side.
  */
 
 import { aes128Spec } from "@/ciphers/aes-128";
@@ -41,7 +35,6 @@ import { describe, expect, it } from "vitest";
 const runSha256AbcTrace = () =>
   runSpec(buildSha256Spec(), buildDefaultRegistry(), {
     initialState: { shape: "bytes", bytes: new Uint8Array([0x61, 0x62, 0x63]) },
-    portedDispatchEnabled: true,
   });
 
 const findFrameByStepType = (
@@ -137,7 +130,6 @@ describe("TraceFrame port-fields — meta-bearing port-native (AES key-expansion
     const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex("00112233445566778899aabbccddeeff")),
       initialAux: new Map([["key", bytesFromHex("000102030405060708090a0b0c0d0e0f")]]),
-      portedDispatchEnabled: true,
     });
     const keyExpansion = findFrameByStepType(trace.frames, "aes.key-expansion@1");
     // Slice 5.2 dropped the `legacy` lift, so the runtime now captures the

@@ -338,12 +338,6 @@ describe("add-mod-32@1 — runtime dispatch guards", () => {
     ],
   });
 
-  it("off-flag dispatch throws 'port-native; requires portedDispatchEnabled: true'", () => {
-    expect(() =>
-      runSpec(buildSpec(), buildDefaultRegistry(), { initialState: emptyBytes() }),
-    ).toThrow('step type "add-mod-32@1" is port-native; requires portedDispatchEnabled: true');
-  });
-
   it("on-flag dispatch with no portInputs throws 'input port operand0 is not wired' (Slice 2.6a)", () => {
     // Slice 2.6a (2026-05-25) landed spec edge-wiring. A port-native
     // leaf without `portInputs` declarations now triggers a per-port
@@ -353,7 +347,6 @@ describe("add-mod-32@1 — runtime dispatch guards", () => {
     expect(() =>
       runSpec(buildSpec(), buildDefaultRegistry(), {
         initialState: emptyBytes(),
-        portedDispatchEnabled: true,
       }),
     ).toThrow(/input port 'operand0' is not wired/);
   });

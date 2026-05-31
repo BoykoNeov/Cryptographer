@@ -161,7 +161,6 @@ describe("byte-slice@1 — runtime integration via port wiring", () => {
     };
     const trace = runSpec(spec, buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: plaintext },
-      portedDispatchEnabled: true,
     });
     if (trace.finalState.shape !== "bytes") throw new Error("expected bytes shape");
     expect(Array.from(trace.finalState.bytes)).toEqual([0x14, 0x15, 0x16, 0x17]);
@@ -218,35 +217,10 @@ describe("byte-slice@1 — runtime integration via port wiring", () => {
     };
     const trace = runSpec(spec, buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: plaintext },
-      portedDispatchEnabled: true,
     });
     if (trace.finalState.shape !== "bytes") throw new Error("expected bytes shape");
     expect(Array.from(trace.finalState.bytes)).toEqual([
       0x10, 0x11, 0x12, 0x13, 0x1c, 0x1d, 0x1e, 0x1f,
     ]);
-  });
-
-  it("off-flag dispatch throws (port-native, no legacy executor)", () => {
-    const spec: CipherSpec = {
-      id: "toy-byte-slice-offflag",
-      name: "off-flag throw",
-      stateShape: "bytes",
-      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
-      steps: [
-        { kind: "step", id: "src", type: "state-to-bytes@1", params: {} },
-        {
-          kind: "step",
-          id: "extract",
-          type: "byte-slice@1",
-          params: { sourceByteLength: 4, offset: 0, length: 2 },
-          portInputs: { input: { node: "src", port: "output" } },
-        },
-      ],
-    };
-    expect(() =>
-      runSpec(spec, buildDefaultRegistry(), {
-        initialState: { shape: "bytes", bytes: new Uint8Array([0x01, 0x02, 0x03, 0x04]) },
-      }),
-    ).toThrow(/port-native; requires portedDispatchEnabled: true/);
   });
 });

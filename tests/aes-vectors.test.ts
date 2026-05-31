@@ -32,7 +32,6 @@ describe("AES-128 (FIPS-197 Appendix C.1)", () => {
     const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux,
-      portedDispatchEnabled: true,
     });
 
     expect(trace.finalState.shape).toBe("bytes");
@@ -47,7 +46,6 @@ describe("AES-128 (FIPS-197 Appendix C.1)", () => {
     const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux,
-      portedDispatchEnabled: true,
     });
 
     // Byte-native AES-128 leaves (one frame each), after Finding F3 merged
@@ -67,7 +65,6 @@ describe("AES-128 (FIPS-197 Appendix C.1)", () => {
     const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux,
-      portedDispatchEnabled: true,
     });
 
     for (let r = 0; r <= 10; r++) {
@@ -96,7 +93,6 @@ describe("AES-128 (FIPS-197 Appendix C.1)", () => {
     const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
       initialState: plaintext,
       initialAux,
-      portedDispatchEnabled: true,
     });
 
     // Appendix B: state after the initial round key add (start of round 1):

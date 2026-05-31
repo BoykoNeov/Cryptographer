@@ -46,7 +46,6 @@ const speckRoundFrame = (): TraceFrame => {
   const trace = runSpec(speck32_64BeSpec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(BE_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(BE_KEY)]]),
-    portedDispatchEnabled: true,
   });
   // frame 0 = key-schedule; frame 1 = round.1 (the first port-native ARX round).
   const f = trace.frames.find((fr) => fr.stepId === "round.1");

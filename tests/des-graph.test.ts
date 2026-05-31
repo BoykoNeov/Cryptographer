@@ -35,7 +35,6 @@ const emptyTrace = {
 const desTrace = runSpec(desSpec, buildDefaultRegistry(), {
   initialState: { shape: "bytes" as const, bytes: bytesFromHex("0123456789abcdef") },
   initialAux: new Map<string, AuxValue>([["key", bytesFromHex("133457799bbcdff1")]]),
-  portedDispatchEnabled: true,
 });
 
 describe("DES (port-native) graph derivation — structural sanity", () => {

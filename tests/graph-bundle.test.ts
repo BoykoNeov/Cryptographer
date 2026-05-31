@@ -53,7 +53,6 @@ const ECB_PLAINTEXT_4_BLOCKS =
 const runAes128 = (): Trace =>
   runSpec(aes128Spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(AES128_PT)),
-    portedDispatchEnabled: true,
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
   });
 
@@ -73,7 +72,6 @@ const runSerpent128 = (): Trace =>
     initialState: makeBytesState(bytesFromHex(SERPENT128_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(SERPENT128_KEY)]]),
     // Serpent's round body is port-native since B3 → ported dispatch required.
-    portedDispatchEnabled: true,
   });
 
 const runAes128Ecb = (): Trace =>
@@ -83,7 +81,6 @@ const runAes128Ecb = (): Trace =>
     initialState: makeBytesState(bytesFromHex(ECB_PLAINTEXT_4_BLOCKS)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
     // Byte-native ECB (B1.4) — port-mode iterate + port-native body.
-    portedDispatchEnabled: true,
   });
 
 describe("bundleEdges — collapse same-(from, to, kind, isFeedback)", () => {

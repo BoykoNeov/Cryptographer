@@ -132,7 +132,6 @@ describe("xor-with-aux@1 — integration (records auxRead → graph fan-out pres
       initialAux: new Map<string, AuxValue>([
         ["key", bytesFromHex("2b7e151628aed2a6abf7158809cf4f3c")],
       ]),
-      portedDispatchEnabled: true,
     });
     const ark = trace.frames.find((f) => f.stepId === "initial.add-round-key");
     expect(ark).toBeDefined();

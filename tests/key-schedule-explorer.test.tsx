@@ -48,7 +48,6 @@ const findFrameByStepType = (
   const trace = runSpec(spec, buildDefaultRegistry(), {
     initialState,
     initialAux,
-    portedDispatchEnabled: true,
   });
   const f = trace.frames.find((fr) => predicate(fr.stepType));
   if (!f) throw new Error("no matching frame in trace");

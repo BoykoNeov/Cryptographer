@@ -41,7 +41,6 @@ const seedSha256Trace = (): void => {
   const spec = buildSha256Spec();
   const trace = runSpec(spec, buildDefaultRegistry(), {
     initialState: { shape: "bytes", bytes: new Uint8Array([0x61, 0x62, 0x63]) },
-    portedDispatchEnabled: true,
   });
   setTrace(trace);
 };

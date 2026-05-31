@@ -46,7 +46,6 @@ const seedAes128EcbTrace = (): void => {
     initialState: makeBytesState(bytesFromHex(ECB_PT_4_BLOCKS)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_ECB_KEY)]]),
     // Byte-native ECB (B1.4) — port-mode iterate + port-native body.
-    portedDispatchEnabled: true,
   });
   setTrace(trace);
 };

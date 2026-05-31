@@ -76,26 +76,11 @@ const NON_BYTES_ALLOWLIST: readonly string[] = [
   // No shipped ported leaf declares a non-bytes port any more.
 ];
 
-/**
- * `kind: "legacy"` registrations still present — the OLD `(state, params,
- * ctx) → StepResult` executor contract over a `State` variant. These carry
- * NO `PortContract`, so the port-shape walk above is BLIND to them: a
- * matrix-interpreting legacy executor is exactly the creep the plan targets
- * yet would slip past the layout checks. They therefore get their own
- * allowlist with the same exact-equality + directional discipline.
- *
- * (The memory note "every step type is ported since Slice 1.8" was wrong —
- * the three multi-block mode primitives never migrated. Two of them ARE
- * matrix-interpreting: `load-block` is `bytes → matrix4x4-bytes`,
- * `store-block` is `matrix4x4-bytes → bytes`.) Removed when AES ECB/CBC
- * modes are rebuilt byte-native (B1: `iterate` adopts seedInput/outputPorts).
- */
-const LEGACY_CONTRACT_ALLOWLIST: readonly string[] = [
-  // The three multi-block mode boundary primitives (compute-block-count /
-  // load-block / store-block) were the last `kind: "legacy"` registrations.
-  // They retired in Phase 5 Slice 5.1 (2026-05-30) with the MatrixState
-  // shape + the aux-mode matrix iterate, so NO legacy-contract step remains.
-];
+// (The `LEGACY_CONTRACT_ALLOWLIST` + its runtime "legacy-contract tripwire"
+//  describe were retired in Phase C / universal-port Phase 5. `StepRegistration`
+//  is now a single `kind: "ported"` shape, so a legacy registration is
+//  unrepresentable in the type system — a strictly stronger guarantee than the
+//  allowlist-plus-tripwire it replaced.)
 
 /**
  * Kitchen-sink params sufficient to resolve EVERY function-form
@@ -205,37 +190,10 @@ describe("byte-native ports — anti-creep contract (A4)", () => {
     expect(sorted(NON_BYTES_ALLOWLIST)).toEqual(sorted(new Set(NON_BYTES_ALLOWLIST)));
   });
 
-  // ── Legacy-contract tripwire (extension beyond the plan's literal A4) ──
-  // The port-shape checks above ONLY see `kind: "ported"` registrations — a
-  // bare `kind: "legacy"` step carries no PortContract, so a matrix-creeping
-  // legacy executor (the old `(state, params, ctx)` contract over a State
-  // variant) — or a ported→legacy regression — would be INVISIBLE to them.
-  // That is precisely the creep vector the plan exists to close, so the
-  // legacy set gets the same exact-equality + directional treatment.
-  const legacyTypes = registry
-    .types()
-    .filter((t) => registry.getRegistration(t)?.kind === "legacy");
-  const legacyAllowSet = new Set(LEGACY_CONTRACT_ALLOWLIST);
-
-  it("(legacy-1) no new legacy-contract step has crept in outside the legacy allowlist", () => {
-    const crept = setDiff(legacyTypes, legacyAllowSet);
-    expect(
-      crept,
-      `new legacy-contract step type(s) — port them (legacy/matrix executors are invisible to the port-shape checks): ${crept.join(", ")}`,
-    ).toEqual([]);
-  });
-
-  it("(legacy-2) every legacy-allowlist entry still exists (shrinks as Phase B ships)", () => {
-    const stale = setDiff(LEGACY_CONTRACT_ALLOWLIST, new Set(legacyTypes));
-    expect(
-      stale,
-      `legacy-allowlisted step(s) no longer registered (ported in a rebuild?) — delete the line(s) from LEGACY_CONTRACT_ALLOWLIST: ${stale.join(", ")}`,
-    ).toEqual([]);
-  });
-
-  it("the legacy allowlist has no duplicate entries", () => {
-    expect(sorted(LEGACY_CONTRACT_ALLOWLIST)).toEqual(sorted(legacyAllowSet));
-  });
+  // (The "legacy-contract tripwire" describe was retired in Phase C —
+  // `StepRegistration` is now a single `kind: "ported"` shape, so a legacy
+  // registration is unrepresentable; the type system enforces what the
+  // runtime filter used to.)
 
   // ── Gate: a deliberately-broken fixture leaf makes the checker red ──
   it("gate: a non-bytes port on a fresh fixture registry is detected", () => {

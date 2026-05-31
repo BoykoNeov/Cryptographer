@@ -42,7 +42,6 @@ const seed = (): Trace => {
   const trace = runSpec(desSpec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(DES_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(DES_KEY)]]),
-    portedDispatchEnabled: true,
   });
   setTrace(trace);
   return trace;

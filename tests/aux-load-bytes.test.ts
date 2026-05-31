@@ -158,7 +158,6 @@ describe("aux-load-bytes@1 — runtime aux-read via meta.auxReadPorts", () => {
     };
     const trace = runSpec(spec, buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: new Uint8Array(0) },
-      portedDispatchEnabled: true,
     });
     if (trace.finalState.shape !== "bytes") throw new Error("expected bytes shape");
     expect(Array.from(trace.finalState.bytes)).toEqual(auxBytes);
@@ -219,7 +218,6 @@ describe("aux-load-bytes@1 — runtime aux-read via meta.auxReadPorts", () => {
     };
     const trace = runSpec(spec, buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: new Uint8Array(0) },
-      portedDispatchEnabled: true,
     });
     if (trace.finalState.shape !== "bytes") throw new Error("expected bytes shape");
     expect(Array.from(trace.finalState.bytes)).toEqual([0, 0, 0, 0]);
@@ -230,34 +228,6 @@ describe("aux-load-bytes@1 — runtime aux-read via meta.auxReadPorts", () => {
    * true" guard — `aux-load-bytes@1` is port-native (no `legacy` executor
    * for the off-flag path to fall back to).
    */
-  it("off-flag dispatch throws (port-native, no legacy executor)", () => {
-    const spec: CipherSpec = {
-      id: "toy-aux-load-bytes-offflag",
-      name: "off-flag throw",
-      stateShape: "bytes",
-      inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
-      steps: [
-        {
-          kind: "step",
-          id: "publish",
-          type: "generic.aux-load@1",
-          params: { auxName: "K", value: [0x01] },
-        },
-        {
-          kind: "step",
-          id: "fetch",
-          type: "aux-load-bytes@1",
-          params: { auxName: "K", byteLength: 1 },
-        },
-      ],
-    };
-    expect(() =>
-      runSpec(spec, buildDefaultRegistry(), {
-        initialState: { shape: "bytes", bytes: new Uint8Array(0) },
-      }),
-    ).toThrow(/port-native; requires portedDispatchEnabled: true/);
-  });
-
   /**
    * Missing aux key — fresh palette drop with auxName="" or wrong name.
    * The runtime should record auxReadMissing on the frame; the executor
@@ -283,7 +253,6 @@ describe("aux-load-bytes@1 — runtime aux-read via meta.auxReadPorts", () => {
     expect(() =>
       runSpec(spec, buildDefaultRegistry(), {
         initialState: { shape: "bytes", bytes: new Uint8Array(0) },
-        portedDispatchEnabled: true,
       }),
     ).toThrow(/input port 'input' is not wired/);
   });
@@ -326,7 +295,6 @@ describe("aux-load-bytes@1 — runtime aux-read via meta.auxReadPorts", () => {
     };
     const trace = runSpec(spec, buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: new Uint8Array(0) },
-      portedDispatchEnabled: true,
     });
     if (trace.finalState.shape !== "bytes") throw new Error("expected bytes shape");
     // Truncate-from-right: keep first 4 bytes.

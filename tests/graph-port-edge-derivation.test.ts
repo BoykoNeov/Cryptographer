@@ -207,7 +207,6 @@ describe("deriveAuxGraph — A3b follow-ups: collapsed round-carry parity + vali
     const registry = buildDefaultRegistry();
     const trace = runSpec(spec, registry, {
       initialState: { shape: "bytes", bytes: new TextEncoder().encode("abc") },
-      portedDispatchEnabled: true,
     });
     return { spec, registry, trace, graph: deriveAuxGraph(trace, spec, { registry }) };
   };

@@ -24,7 +24,6 @@ import { aes128Spec } from "@/ciphers/aes-128";
 import { aes128DecryptSpec } from "@/ciphers/aes-128-decrypt";
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
-import { requiresPortedDispatch } from "@/core/dispatch";
 import { runSpec } from "@/core/runtime";
 import { duplicateRoundGroup, findStep } from "@/core/spec-mutations";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
@@ -340,7 +339,6 @@ describe("duplicateRoundGroup — end-to-end round-trip on a duplicated AES-128"
     const encryptTrace = runSpec(encryptSpec, registry, {
       initialState: makeBytesState(bytesFromHex(plaintextHex)),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
-      portedDispatchEnabled: requiresPortedDispatch(encryptSpec, registry),
     });
     expect(encryptTrace.finalState.shape).toBe("bytes");
     if (encryptTrace.finalState.shape !== "bytes") return;
@@ -354,7 +352,6 @@ describe("duplicateRoundGroup — end-to-end round-trip on a duplicated AES-128"
     const decryptTrace = runSpec(decryptSpec, registry, {
       initialState: makeBytesState(ciphertextBytes),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
-      portedDispatchEnabled: requiresPortedDispatch(decryptSpec, registry),
     });
     expect(decryptTrace.finalState.shape).toBe("bytes");
     if (decryptTrace.finalState.shape !== "bytes") return;
@@ -379,14 +376,12 @@ describe("duplicateRoundGroup — end-to-end round-trip on a duplicated AES-128"
     const ct = runSpec(encryptSpec, registry, {
       initialState: makeBytesState(bytesFromHex(plaintextHex)),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
-      portedDispatchEnabled: requiresPortedDispatch(encryptSpec, registry),
     });
     if (ct.finalState.shape !== "bytes") throw new Error("bad encrypt shape");
 
     const pt = runSpec(decryptSpec, registry, {
       initialState: makeBytesState(ct.finalState.bytes),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
-      portedDispatchEnabled: requiresPortedDispatch(decryptSpec, registry),
     });
     if (pt.finalState.shape !== "bytes") throw new Error("bad decrypt shape");
     expect(hexFromBytes(pt.finalState.bytes)).toBe(plaintextHex);
@@ -406,7 +401,6 @@ describe("duplicateRoundGroup — end-to-end round-trip on a duplicated AES-128"
     const trace = runSpec(encryptSpec, registry, {
       initialState: makeBytesState(bytesFromHex(plaintextHex)),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
-      portedDispatchEnabled: requiresPortedDispatch(encryptSpec, registry),
     });
     if (trace.finalState.shape !== "bytes") return;
     expect(hexFromBytes(trace.finalState.bytes)).not.toBe(canonicalCiphertext);

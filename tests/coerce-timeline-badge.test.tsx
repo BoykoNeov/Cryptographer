@@ -107,7 +107,6 @@ const seedCoerceTrace = (
   const trace = runSpec(spec, registry, {
     initialState: makeBytesState(new Uint8Array(0)),
     initialAux: new Map<string, AuxValue>(initialAux),
-    portedDispatchEnabled: true,
   });
   setTrace(trace);
   return trace;

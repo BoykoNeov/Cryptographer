@@ -230,19 +230,7 @@ describe("rotate-bits-right@1 — runtime dispatch guards", () => {
     ],
   });
 
-  it("off-flag dispatch (portedDispatchEnabled: false) throws explicit error", () => {
-    const spec = buildSpec();
-    expect(() =>
-      runSpec(spec, buildDefaultRegistry(), {
-        initialState: emptyBytes(),
-        // Default: portedDispatchEnabled omitted = false.
-      }),
-    ).toThrow(
-      'step type "rotate-bits-right@1" is port-native; requires portedDispatchEnabled: true',
-    );
-  });
-
-  it("on-flag dispatch with no portInputs throws 'input port not wired'", () => {
+  it("dispatch with no portInputs throws 'input port not wired'", () => {
     // Slice 2.6a (2026-05-25) landed spec edge-wiring via
     // `StepLeaf.portInputs`. A port-native leaf without `portInputs`
     // declarations triggers the dispatch-path guard for the first
@@ -255,7 +243,6 @@ describe("rotate-bits-right@1 — runtime dispatch guards", () => {
     expect(() =>
       runSpec(spec, buildDefaultRegistry(), {
         initialState: emptyBytes(),
-        portedDispatchEnabled: true,
       }),
     ).toThrow(/input port 'input' is not wired/);
   });

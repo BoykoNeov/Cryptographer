@@ -52,7 +52,6 @@ const SHA_INPUT = new Uint8Array([0x61, 0x62, 0x63]); // "abc"
 const runSha256 = (): Trace =>
   runSpec(buildSha256Spec(), buildDefaultRegistry(), {
     initialState: { shape: "bytes", bytes: SHA_INPUT },
-    portedDispatchEnabled: true,
   });
 
 const ECB_PLAINTEXT_4_BLOCKS =
@@ -67,7 +66,6 @@ const runAes128Ecb = (): Trace =>
     initialAux: new Map<string, AuxValue>([
       ["key", bytesFromHex("2b7e151628aed2a6abf7158809cf4f3c")],
     ]),
-    portedDispatchEnabled: true,
   });
 
 describe("Trace.initialState — runtime population", () => {
@@ -135,7 +133,6 @@ const REGISTRY = buildDefaultRegistry();
 const desTrace: Trace = runSpec(desSpec, REGISTRY, {
   initialState: makeBytesState(bytesFromHex("0123456789abcdef")),
   initialAux: new Map<string, AuxValue>([["key", bytesFromHex("133457799bbcdff1")]]),
-  portedDispatchEnabled: true,
 });
 
 describe("frame-state helper regime (Batch 4)", () => {

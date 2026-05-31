@@ -84,7 +84,6 @@ const runSerpentExecutor = (masterKeyHex: string): readonly Uint8Array[] => {
     // the runtime's shape check.
     initialState: makeBytesState(new Uint8Array(0)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(masterKeyHex)]]),
-    portedDispatchEnabled: true,
   });
 
   const roundKeys: Uint8Array[] = [];

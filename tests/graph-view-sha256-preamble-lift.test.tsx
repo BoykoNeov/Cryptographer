@@ -57,7 +57,6 @@ const seedSha256Trace = (): void => {
   // SHA-256 spec is fully port-native at root.
   const trace = runSpec(buildSha256Spec(), buildDefaultRegistry(), {
     initialState: { shape: "bytes", bytes: new Uint8Array([0x61, 0x62, 0x63]) },
-    portedDispatchEnabled: true,
   });
   setTrace(trace);
 };

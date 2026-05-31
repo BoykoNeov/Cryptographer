@@ -31,7 +31,6 @@ const getRoundKey = (spec: CipherSpec, keyHex: string, idx: number): string => {
   const trace = runSpec(spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex("00000000000000000000000000000000")),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
-    portedDispatchEnabled: true,
   });
   const rk = trace.finalAux.get(`roundKey.${idx}`);
   if (!(rk instanceof Uint8Array)) throw new Error(`missing roundKey.${idx}`);

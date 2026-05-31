@@ -14,9 +14,9 @@
  * unpadded ECB spec. PKCS#7 + multi-block boundary cases get their own
  * test file once `paddingLimits` is updated.
  *
- * Byte-native (scaffolding-suppression Slice B1.4): the ECB spec is now a
- * port-graph (port-mode `iterate`), so every run sets `portedDispatchEnabled:
- * true` — `requiresPortedDispatch` returns true for these specs.
+ * Byte-native (scaffolding-suppression Slice B1.4): the ECB spec is a
+ * port-graph (port-mode `iterate`) and runs on the universal port-native
+ * dispatch path like every shipped spec.
  */
 
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
@@ -51,7 +51,6 @@ describe("AES-128 ECB (NIST SP 800-38A §F.1)", () => {
     const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
       initialState: initial,
       initialAux: aux,
-      portedDispatchEnabled: true,
     });
 
     expect(trace.finalState.shape).toBe("bytes");
@@ -66,7 +65,6 @@ describe("AES-128 ECB (NIST SP 800-38A §F.1)", () => {
     const trace = runSpec(aes128EcbDecryptSpec, buildDefaultRegistry(), {
       initialState: initial,
       initialAux: aux,
-      portedDispatchEnabled: true,
     });
 
     expect(trace.finalState.shape).toBe("bytes");
@@ -80,7 +78,6 @@ describe("AES-128 ECB (NIST SP 800-38A §F.1)", () => {
     const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
       initialState: initial,
       initialAux: aux,
-      portedDispatchEnabled: true,
     });
 
     // Byte-native (B1.4): the matrix split-blocks/compute-block-count/
@@ -116,7 +113,6 @@ describe("AES-128 ECB (NIST SP 800-38A §F.1)", () => {
     const encTrace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(plaintext),
       initialAux: new Map<string, AuxValue>([["key", key]]),
-      portedDispatchEnabled: true,
     });
     expect(encTrace.finalState.shape).toBe("bytes");
     if (encTrace.finalState.shape !== "bytes") return;
@@ -124,7 +120,6 @@ describe("AES-128 ECB (NIST SP 800-38A §F.1)", () => {
     const decTrace = runSpec(aes128EcbDecryptSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(encTrace.finalState.bytes),
       initialAux: new Map<string, AuxValue>([["key", key]]),
-      portedDispatchEnabled: true,
     });
     expect(decTrace.finalState.shape).toBe("bytes");
     if (decTrace.finalState.shape !== "bytes") return;

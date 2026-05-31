@@ -170,7 +170,6 @@ describe("SHA-256 narrationOverride coverage (Slice 2.8)", () => {
     const registry = buildDefaultRegistry();
     const trace = runSpec(buildSha256Spec(), registry, {
       initialState: { shape: "bytes", bytes: new Uint8Array([0x61, 0x62, 0x63]) },
-      portedDispatchEnabled: true,
     });
     expect(trace.frames.length).toBeGreaterThan(100);
 

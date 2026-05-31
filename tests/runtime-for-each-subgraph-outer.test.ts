@@ -129,7 +129,6 @@ describe("runtime — for-each-subgraph item-array mode (Slice 2.0b)", () => {
     };
     const trace = runSpec(outerToySpec, buildRegistry(), {
       initialState: initial,
-      portedDispatchEnabled: true,
     });
 
     // 3 iterations × 1 body leaf = 3 frames. (Plus zero coercion frames —
@@ -181,7 +180,6 @@ describe("runtime — for-each-subgraph item-array mode (Slice 2.0b)", () => {
     const initial: BytesState = { shape: "bytes", bytes: new Uint8Array(0) };
     const trace = runSpec(outerToySpec, buildRegistry(), {
       initialState: initial,
-      portedDispatchEnabled: true,
     });
     expect(trace.frames).toHaveLength(0);
     if (trace.finalState.shape !== "bytes") throw new Error("finalState shape");
@@ -192,7 +190,6 @@ describe("runtime — for-each-subgraph item-array mode (Slice 2.0b)", () => {
     const initial: BytesState = { shape: "bytes", bytes: new Uint8Array([0xa0, 0xa1, 0xa2, 0xa3]) };
     const trace = runSpec(outerToySpec, buildRegistry(), {
       initialState: initial,
-      portedDispatchEnabled: true,
     });
     expect(trace.frames).toHaveLength(1);
     expect(trace.frames[0]?.stepId).toBe("xor:r0");
@@ -214,7 +211,6 @@ describe("runtime — for-each-subgraph item-array mode (Slice 2.0b)", () => {
     expect(() =>
       runSpec(outerToySpec, buildRegistry(), {
         initialState: initial,
-        portedDispatchEnabled: true,
       }),
     ).toThrow(/is not a multiple of blockByteLength/);
   });

@@ -24,7 +24,6 @@
  * routes through scheme-aware parsing + initial-state shape selection.
  */
 
-import { requiresPortedDispatch } from "@/core/dispatch";
 import {
   CURRENT_SCHEMA_VERSION,
   type CipherDocument,
@@ -417,18 +416,11 @@ export const App = () => {
         initialAux.set("iv", new Uint8Array(ivBytes()));
       }
       const currentSpec = spec();
-      // Slice 2.7 (universal-port plan): derive the ported-dispatch flag
-      // from the spec rather than carrying it as an explicit field.
-      // `requiresPortedDispatch` walks the spec; if any leaf is a pure
-      // port-native registration (kind: "ported" with no legacy
-      // fallback), the runtime needs the flag on. Today this is true
-      // only for SHA-256; AES / Speck / Serpent / DES derive `false`
-      // and continue to run under the legacy dispatch path.
-      const portedDispatchEnabled = requiresPortedDispatch(currentSpec, registry);
+      // Every spec is port-native (Phase C retired the legacy dispatch flag),
+      // so the runtime always runs the single port-native path.
       const trace = runSpec(currentSpec, registry, {
         initialState,
         initialAux,
-        portedDispatchEnabled,
       });
       setTrace(trace);
       // Push BEFORE setHasRunOnce so the snapshot captures the configuration
