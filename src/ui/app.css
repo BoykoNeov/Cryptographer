@@ -511,29 +511,7 @@ button:disabled {
   justify-content: center;
   font-size: 13px;
   letter-spacing: 0.05em;
-  /* Anchor for the absolute-positioned `.provenance-label` corner
-     annotation rendered when a MixColumns hover lights up this cell as a
-     source. No visual effect on cells without a label. */
   position: relative;
-}
-
-/* Coefficient label rendered in the top-right of a `before` cell when
-   the user is hovering an `after` cell that derives from it through a
-   non-identity GF(2^8) coefficient (MixColumns × 0x02 / × 0x03 / × 0x0e
-   / …). Small + green to match `.provenance-source`'s accent without
-   competing visually with the byte value in the cell center. The
-   `pointer-events: none` keeps the label from interfering with the
-   parent cell's `onMouseEnter` / `onMouseLeave` chain. */
-.cell .provenance-label {
-  position: absolute;
-  top: 1px;
-  right: 3px;
-  font-size: 9px;
-  line-height: 1;
-  color: var(--accent-success);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0;
-  pointer-events: none;
 }
 
 .cell.changed {
@@ -1610,11 +1588,10 @@ button:disabled {
    `RoundKeyPanel.tsx` for the data-shape detection logic.
 
    Highlight precedence (per the immutable-doodling-quokka plan):
-     1 .provenance-source     (phase 3, future — hover-driven)
-     2 .round-key-cell-current (this file — current-frame consumption)
-     3 .round-key-cell-diff   (this file — chain-XOR delta, future toggle)
-     4 .diff-vs-prev          (existing — run-to-run overlay)
-     5 .changed               (existing — within-step before→after)
+     1 .round-key-cell-current (this file — current-frame consumption)
+     2 .round-key-cell-diff   (this file — chain-XOR delta, future toggle)
+     3 .diff-vs-prev          (existing — run-to-run overlay)
+     4 .changed               (existing — within-step before→after)
    When two would apply, the higher-priority class is the only one set
    via `classList`. We do not compose outlines; we replace. */
 .round-key-panel {
@@ -1767,27 +1744,6 @@ button:disabled {
   min-width: 22px;
   height: 22px;
   padding: 0 4px;
-}
-
-/* ─── Phase 3: cell-level provenance overlay ──────────────────────────
-   Style for the highest-priority cell highlight class. Applied (per the
-   declared precedence in `RoundKeyPanel`'s docstring) when a user hovers
-   an `after` cell whose provenance fn points at this cell — either as a
-   `before-cell` source in MatrixView, or as an `aux-cell` source in
-   RoundKeyPanel / TinyMatrix.
-
-   Pedagogically distinct color from the existing `.changed` (warm
-   orange) and `.diff-vs-prev` (accent-blue outline). Provenance is
-   ephemeral (hover-driven), so a brighter ring + saturated fill make
-   it pop without competing with the persistent state-change colors. */
-.cell.provenance-source,
-.tiny-cell.provenance-source,
-.round-key-cell-byte.provenance-source,
-.bytes-cell.provenance-source,
-.key-schedule-byte-cell.provenance-source {
-  outline: 2px solid var(--accent-success);
-  outline-offset: -2px;
-  background: color-mix(in srgb, var(--accent-success) 22%, var(--bg-elev-2));
 }
 
 /* ─── Key-schedule explorer (Phase 2 — pedagogy plan) ─────────────────

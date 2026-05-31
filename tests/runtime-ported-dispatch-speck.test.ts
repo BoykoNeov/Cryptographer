@@ -43,7 +43,7 @@ import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { speck32_64BeDecryptSpec } from "@/ciphers/speck-32-64-be-decrypt";
 import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
 import { speck32_64LeDecryptSpec } from "@/ciphers/speck-32-64-le-decrypt";
-import { frameStateOutBytes } from "@/core/frame-state";
+import { framePrimaryOutBytes } from "@/core/frame-state";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
 import { INPUT_SOURCE_ID } from "@/core/types";
@@ -64,7 +64,7 @@ const LE_CIPHERTEXT = "f24268a8";
 
 /** Run a Speck spec under ported dispatch and render its per-frame `"state"`
  *  output port as a `stepId=hex|…` stream for golden comparison. The two ARX
- *  rounds name their output port `"state"`, so `frameStateOutBytes` returns
+ *  rounds name their output port `"state"`, so `framePrimaryOutBytes` returns
  *  the honest per-round block byte-identical to the pre-5.3e `stateAfter`
  *  field. The aux-only key-schedule frame has NO `"state"` port (its outputs
  *  are `roundKey.*`), so it renders `(no-state)` — the honest "no state thread
@@ -76,7 +76,7 @@ const frameStream = (spec: CipherSpec, stateHex: string, keyHex: string): string
   });
   return trace.frames
     .map((f) => {
-      const out = frameStateOutBytes(f);
+      const out = framePrimaryOutBytes(f);
       return `${f.stepId}=${out ? hexFromBytes(out) : "(no-state)"}`;
     })
     .join("|");
@@ -275,7 +275,7 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
       expect(roundFrame.stepType).toBe("speck.round@1");
       // round.0 here consumes roundKey.0 — identical math to round.1 of the
       // full BE-paper encrypt, whose golden `"state"` output is 0x5316f627.
-      const roundOut = frameStateOutBytes(roundFrame);
+      const roundOut = framePrimaryOutBytes(roundFrame);
       expect(roundOut).not.toBeNull();
       expect(hexFromBytes(roundOut ?? new Uint8Array())).toBe("5316f627");
       // The aux read of roundKey.0 is recorded on the native round's frame.

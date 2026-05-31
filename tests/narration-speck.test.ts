@@ -34,7 +34,7 @@ afterEach(cleanup);
 const portMap = (bytes: Uint8Array): ReadonlyMap<string, Uint8Array> => new Map([["state", bytes]]);
 
 // The Speck narrators decode (x, y) words from the `"state"` port via
-// frameStateInBytes / frameStateOutBytes (port-first, Slice 5.3c; the
+// framePrimaryInBytes / framePrimaryOutBytes (port-first, Slice 5.3c; the
 // stateBefore/stateAfter State fields retired in Slice 5.3e Batch 4). A test
 // frame surfaces its before/after block as the `"state"` port I/O.
 const makeFrame = (

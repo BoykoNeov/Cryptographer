@@ -61,7 +61,7 @@ import { serpent192Spec } from "@/ciphers/serpent-192";
 import { serpent192DecryptSpec } from "@/ciphers/serpent-192-decrypt";
 import { serpent256Spec } from "@/ciphers/serpent-256";
 import { serpent256DecryptSpec } from "@/ciphers/serpent-256-decrypt";
-import { frameStateOutBytes } from "@/core/frame-state";
+import { framePrimaryOutBytes } from "@/core/frame-state";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue, CipherSpec } from "@/core/types";
@@ -90,7 +90,7 @@ const auxValueToString = (v: AuxValue): string => {
 /** Run a Serpent spec under ported dispatch and reduce its frame stream to a
  *  `${count}:${sha256}` digest over each frame's
  *  `(stepId, hex("state" output port), sorted(auxRead))`. The round leaves are
- *  hybrid-ported and name their output port `"state"`, so `frameStateOutBytes`
+ *  hybrid-ported and name their output port `"state"`, so `framePrimaryOutBytes`
  *  is byte-identical to the pre-5.3e `stateAfter` field; the aux-only
  *  key-expansion frame has no `"state"` port and renders `(no-state)`. */
 const frameDigest = (spec: CipherSpec, stateHex: string, keyHex: string): string => {
@@ -100,7 +100,7 @@ const frameDigest = (spec: CipherSpec, stateHex: string, keyHex: string): string
   });
   const h = createHash("sha256");
   for (const f of trace.frames) {
-    const out = frameStateOutBytes(f);
+    const out = framePrimaryOutBytes(f);
     const after = out ? hexFromBytes(out) : "(no-state)";
     const aux = [...f.auxRead.entries()]
       .map(([k, v]) => `${k}=${auxValueToString(v)}`)
@@ -336,7 +336,7 @@ describe("runtime — ported dispatch, byte-native Serpent (Slice B3)", () => {
       // All-zero plaintext ⇒ AddRoundKey output == roundKey.0 byte-for-byte.
       const rk0 = ksFrame.auxWritten.get("roundKey.0");
       expect(rk0).toBeInstanceOf(Uint8Array);
-      const arkOut = frameStateOutBytes(arkFrame);
+      const arkOut = framePrimaryOutBytes(arkFrame);
       expect(arkOut).not.toBeNull();
       expect(Array.from(arkOut ?? new Uint8Array())).toEqual(Array.from(rk0 as Uint8Array));
     });

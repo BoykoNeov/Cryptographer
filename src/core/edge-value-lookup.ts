@@ -101,7 +101,7 @@
  * consumer has no recorded stateBefore (rare; defensive).
  */
 
-import { frameStateInBytes, frameStateOutBytes } from "./frame-state";
+import { framePrimaryInBytes, framePrimaryOutBytes } from "./frame-state";
 import { CIPHER_INPUT_ID, CIPHER_OUTPUT_ID, type GraphEdge, isEndpointId } from "./graph";
 import { canonicalStepId } from "./step-id";
 import type {
@@ -132,7 +132,7 @@ const REPLICA_DELIM = "@->";
  * Re-wrap port-resolved bytes as the `BytesState` the inspector `value`
  * field (an `AuxValue`) expects. Slice 5.3c migrated the state-edge / leaf
  * value reads off `frame.stateBefore` / `stateAfter` onto the shared
- * `frameStateInBytes` / `frameStateOutBytes` helpers (which return raw
+ * `framePrimaryInBytes` / `framePrimaryOutBytes` helpers (which return raw
  * `Uint8Array`); this restores the `{ shape: "bytes", bytes }` envelope the
  * renderer formats. State is bytes-only since Slice 5.1, so this is the only
  * envelope a state value ever takes.
@@ -437,7 +437,7 @@ const lookupChipIncoming = (
     // the first body frame's `"state"` input port (the State field fallback
     // retired in Slice 5.3e Batch 4 → null if the leaf has no `"state"` port).
     // biome-ignore lint/style/noNonNullAssertion: bodyFrames.length > 0 checked above
-    const inBytes = frameStateInBytes(bodyFrames[0]!);
+    const inBytes = framePrimaryInBytes(bodyFrames[0]!);
     if (inBytes === null) {
       return {
         status: "missing",
@@ -458,7 +458,7 @@ const lookupChipIncoming = (
   // visual as the state-edge branch above, different aux-key semantics.
   if (edge.auxKey === iterate.blocksFromAux) {
     // biome-ignore lint/style/noNonNullAssertion: bodyFrames.length > 0 checked above
-    const inBytes = frameStateInBytes(bodyFrames[0]!);
+    const inBytes = framePrimaryInBytes(bodyFrames[0]!);
     if (inBytes === null) {
       return {
         status: "missing",
@@ -539,7 +539,7 @@ const lookupChipOutgoing = (
   // What flowed OUT of the chip = the body's per-block result, read from
   // the last body frame's `"state"` output port (the State field fallback
   // retired in Slice 5.3e Batch 4 → null if the leaf has no `"state"` port).
-  const outBytes = frameStateOutBytes(lastFrame);
+  const outBytes = framePrimaryOutBytes(lastFrame);
   if (edge.kind === "state") {
     if (outBytes === null) {
       return {
@@ -710,7 +710,7 @@ const lookupRegularState = (
     // State field fallback retired in Slice 5.3e Batch 4 → null if no such
     // port). The producer's output port == the consumer's input port by the
     // runtime contract for every wired leaf.
-    const outBytes = frameStateOutBytes(producer);
+    const outBytes = framePrimaryOutBytes(producer);
     if (outBytes !== null) {
       return producer.blockIndex !== undefined
         ? {
@@ -734,7 +734,7 @@ const lookupRegularState = (
   if (consumer !== null) {
     // Consumer's `"state"` input port (the State field fallback retired in
     // Slice 5.3e Batch 4 → null if no such port).
-    const inBytes = frameStateInBytes(consumer);
+    const inBytes = framePrimaryInBytes(consumer);
     if (inBytes !== null) {
       return consumer.blockIndex !== undefined
         ? {
@@ -889,7 +889,7 @@ export const lookupNodeValue = (
     // The chip's value = the body's per-block result, read from the last
     // body frame's `"state"` output port (the State field fallback retired in
     // Slice 5.3e Batch 4 → null if the leaf has no `"state"` port).
-    const outBytes = frameStateOutBytes(lastFrame);
+    const outBytes = framePrimaryOutBytes(lastFrame);
     if (outBytes === null) {
       return {
         status: "missing",
@@ -930,7 +930,7 @@ export const lookupNodeValue = (
   // State at the leaf's own frame = its `"state"` output port (the State
   // field fallback retired in Slice 5.3e Batch 4 → null if no such port; a
   // native-port leaf whose payload rides another port name resolves missing).
-  const outBytes = frameStateOutBytes(frame);
+  const outBytes = framePrimaryOutBytes(frame);
   if (outBytes === null) {
     return {
       status: "missing",

@@ -3,7 +3,10 @@
 > **Status: Slice 2.9a SHIPPED 2026-05-27 PM (+9 tests, +0.12 KB raw).
 > Slice 2.9b SHIPPED 2026-05-27 evening (+9 tests, +1.98 KB raw /
 > +0.43 KB gzipped — well under <3 KB target; manual browser smoke
-> deferred to next session). Slices 2.9c–e NOT STARTED.** Drafted
+> deferred to next session). Slices 2.9c–e CLOSED 2026-05-31 as the
+> "honest close" (option C) — port-aware value inspector + dead-provenance
+> deletion + formal cell-hover deferral; see the dedicated section below.**
+> Drafted
 > after a session that surveyed today's frame shape for port-native
 > SHA-256 leaves, ran an empirical probe, and consulted the advisor
 > twice. Replaces the original three-bullet Slice 2.9 sketch in
@@ -25,6 +28,58 @@
 > (`tests/runtime-ported-dispatch-frame-parity.test.ts`)
 > field-iterates rather than shape-iterates, so the new optional fields
 > are invisible to it — parity stays untouched.
+
+## Slice 2.9c–e — CLOSED as the "honest close" (2026-05-31)
+
+**The original 2.9c–e plan below (cell-level provenance HOVER) was NOT built.
+It was re-evaluated against the post-5.3e codebase and replaced by a smaller,
+higher-value close.** The decision (user + two advisor passes):
+
+**What the plan assumed had rotted.** 2.9c–e was drafted to *extend* the
+provenance subsystem (`src/ui/provenance/*` + `provenance-hover` store +
+`ProvenanceSource` union). By 2026-05-31 that subsystem was a **corpse**: its
+`before-cell`/`aux-cell` sources indexed `stateAfter.bytes` (deleted in Slice
+5.3e Batch 4), its hover surface was MatrixView/BytesView (both deleted in 5.1
+/ 5.3e B2), `initProvenanceRegistry` was never called by any live surface, and
+the `RoundKeyPanel` reader subscribed to a signal no writer ever set. Extending
+it would have meant a from-scratch rebuild wearing the old plan's clothes.
+
+**The re-framing (what "port-aware inspector" should mean now).** The cell-hover
+was only ever "the remaining ~20%" (advisor 2026-05-27). The *graph already
+answers port-level provenance* — follow an edge to the producer node and inspect
+its value. The one thing blocking that was a **live regression**: the
+cipher-agnostic value surfaces (graph value inspector `lookupNodeValue` /
+`lookupEdgeValue`, step-strip thumbnails, RunExplorer tiles) hardcoded the
+`"state"` port via `frameStateOutBytes`, so they showed **"(no state)"** for
+every native-AES leaf and every SHA-256 primitive (the user-accepted Batch-4
+gap). "Reuse the value inspector, don't build a bespoke hover" — the user's call.
+
+**What shipped (option C).**
+- `src/core/frame-state.ts` helpers generalized + renamed
+  `frameState{In,Out}Bytes → framePrimary{In,Out}Bytes`: resolve the `"state"`
+  port first (hybrid-ported leaves stay byte-identical), else the SOLE port when
+  a leaf has exactly one (every broken leaf has a single `"output"` — only
+  `split-bytes` is multi-output), else null. Failure mode is "missing", never a
+  wrong value. This fixed all three surfaces in one seam **and** repaired
+  ECB/CBC block-chip-out values (last body leaf is `xor-with-aux`, port
+  `"output"`).
+- The dead provenance subsystem was **deleted** (`src/ui/provenance/` +
+  `provenance-hover` store + the `App.tsx` boot import + the dead-but-wired
+  `RoundKeyPanel`/`TinyMatrix`/`byte-row` highlight threading + `.provenance-*`
+  CSS + `tests/provenance-{registry-contract,serpent}.test.ts`).
+- The B4 regression tests (`trace-initial-state`, `node-value-lookup`) were
+  flipped to assert the now-honest bytes, anchored to published vectors
+  (AddRoundKey = plaintext ⊕ key; SHA-256 / DES finals = FIPS digests).
+
+**Cell-hover: formally DEFERRED (coherence note).** Deleting the subsystem
+forfeits nothing a future port-native hover could reuse — it was built entirely
+on the deleted `stateBefore`/`stateAfter`/MatrixView, so a revived hover would
+be a fresh build regardless. If pedagogy ever feels thin on the cells-only
+inspector, a *new* port-native hover (sources over `frame.portInputs/portOutputs`)
+gets its own plan, the same way the overlay surface was deferred below.
+
+The 2.9c/2.9d/2.9e sections below are retained as **historical** — the
+shape of the hover that was considered and not built.
 
 ## Context — why the original sketch couldn't ship
 

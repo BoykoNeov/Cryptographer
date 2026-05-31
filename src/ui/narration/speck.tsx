@@ -30,7 +30,7 @@
  * is paper-natural in hex regardless of toggle.
  */
 
-import { frameStateInBytes, frameStateOutBytes } from "@/core/frame-state";
+import { framePrimaryInBytes, framePrimaryOutBytes } from "@/core/frame-state";
 import type { Json, TraceFrame } from "@/core/types";
 import {
   type SpeckByteOrder,
@@ -45,7 +45,7 @@ import type { NarrationFn, NarrationUnit } from "./registry";
 /**
  * Forward Speck round. Three disclosable sub-ops show the cipher's ARX
  * structure step-by-step. We decode `(x, y)` from the `"state"` input port
- * (`frameStateInBytes`), `k` from the consumed round-key aux, and compute the same intermediate
+ * (`framePrimaryInBytes`), `k` from the consumed round-key aux, and compute the same intermediate
  * `x'` the executor would compute (modular add then XOR). The prose
  * names the rotation amounts (`α`, `β`) and the word width.
  */
@@ -242,8 +242,8 @@ const readSpeckFrame = (
   frame: TraceFrame,
   stepName: "speck.round" | "speck.round-inverse",
 ): SpeckFrame | null => {
-  const beforeBytes = frameStateInBytes(frame);
-  const afterBytes = frameStateOutBytes(frame);
+  const beforeBytes = framePrimaryInBytes(frame);
+  const afterBytes = framePrimaryOutBytes(frame);
   if (!beforeBytes || !afterBytes) return null;
 
   const params = frame.params;

@@ -66,12 +66,10 @@ import { StepNarration } from "./components/StepNarration";
 import { StepStrip } from "./components/StepStrip";
 import { TraceTimeline } from "./components/TraceTimeline";
 import { isKeyExpansionStepType } from "./key-schedule-sim/registry";
-// Side-effect imports: register the cell-level provenance fns and the
-// per-frame narration fns into their shared registries. Without these,
-// hover handlers in MatrixView would no-op for every step type, and
-// <StepNarration /> would render nothing. Idempotent.
+// Side-effect import: register the per-frame narration fns into the shared
+// narration registry. Without it, <StepNarration /> would render nothing.
+// Idempotent.
 import "./narration/index";
-import "./provenance/index";
 import { clearDirty, setAutoRerun, setDirty, useAutoRerun, useDirty } from "./stores/auto-rerun";
 import {
   type Algorithm,

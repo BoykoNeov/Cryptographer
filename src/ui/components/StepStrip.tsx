@@ -17,7 +17,7 @@
  */
 
 import { formatByte } from "@/core/format";
-import { frameStateOutBytes } from "@/core/frame-state";
+import { framePrimaryOutBytes } from "@/core/frame-state";
 import type { TraceFrame } from "@/core/types";
 import { For, Show, createMemo } from "solid-js";
 import { useByteFormat } from "../stores/format";
@@ -84,7 +84,7 @@ const Thumbnail = (props: ThumbnailProps) => {
   const stateBytes = createMemo<readonly number[]>(() => {
     const f = props.frame;
     if (!f) return [];
-    const bytes = frameStateOutBytes(f);
+    const bytes = framePrimaryOutBytes(f);
     return bytes ? Array.from(bytes) : [];
   });
 

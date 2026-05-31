@@ -28,7 +28,7 @@ afterEach(cleanup);
 const portMap = (bytes: Uint8Array): ReadonlyMap<string, Uint8Array> => new Map([["state", bytes]]);
 
 // The padding narrators read their input/output lengths off the `"state"`
-// port via `frameStateInBytes` / `frameStateOutBytes` (port-first, Slice 5.3c;
+// port via `framePrimaryInBytes` / `framePrimaryOutBytes` (port-first, Slice 5.3c;
 // the `stateBefore`/`stateAfter` State fields retired in Slice 5.3e Batch 4).
 // So a test frame surfaces its before/after bytes as the `"state"` port I/O —
 // `before` → `portInputs.get("state")`, `after` → `portOutputs.get("state")`.

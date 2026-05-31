@@ -38,7 +38,7 @@ const makeSubBytesFrame = (): TraceFrame => {
     stepType: "serpent.sub-bytes@1",
     params: {},
     // The Serpent SubBytes narrator reads before/after off the `"state"` port
-    // via frameStateInBytes / frameStateOutBytes (the stateBefore/stateAfter
+    // via framePrimaryInBytes / framePrimaryOutBytes (the stateBefore/stateAfter
     // State fields retired in Slice 5.3e Batch 4).
     portInputs: new Map([["state", before]]),
     portOutputs: new Map([["state", after]]),

@@ -35,7 +35,7 @@
  * highlighted-digit index inside the binary string is `7 - (b & 7)`.
  */
 
-import { frameStateInBytes, frameStateOutBytes } from "@/core/frame-state";
+import { framePrimaryInBytes, framePrimaryOutBytes } from "@/core/frame-state";
 import type { Json } from "@/core/types";
 import { For } from "solid-js";
 import { formatByteInline, formatBytes } from "../components/byte-row";
@@ -58,8 +58,8 @@ import { type NarrationFn, type NarrationUnit, singleAuxNameFromFrame } from "./
  * lookup the executor actually performed).
  */
 export const serpentSubBytesNarration: NarrationFn = (frame) => {
-  const before = frameStateInBytes(frame);
-  const after = frameStateOutBytes(frame);
+  const before = framePrimaryInBytes(frame);
+  const after = framePrimaryOutBytes(frame);
   if (!before || !after || before.length !== 16 || after.length !== 16) return null;
   const sboxIndex = readSboxIndex(frame.params);
   const units: NarrationUnit[] = [];
@@ -113,8 +113,8 @@ export const serpentSubBytesNarration: NarrationFn = (frame) => {
  * render nothing.
  */
 export const serpentAddRoundKeyNarration: NarrationFn = (frame) => {
-  const before = frameStateInBytes(frame);
-  const after = frameStateOutBytes(frame);
+  const before = framePrimaryInBytes(frame);
+  const after = framePrimaryOutBytes(frame);
   if (!before || !after || before.length !== 16 || after.length !== 16) return null;
   const auxName = singleAuxNameFromFrame(frame);
   if (auxName === null) return null;
@@ -164,8 +164,8 @@ export const serpentAddRoundKeyNarration: NarrationFn = (frame) => {
  * runs without leaving the narration.
  */
 export const serpentBitPermutationNarration: NarrationFn = (frame) => {
-  const before = frameStateInBytes(frame);
-  const after = frameStateOutBytes(frame);
+  const before = framePrimaryInBytes(frame);
+  const after = framePrimaryOutBytes(frame);
   const table = readPermutationTable(frame.params);
   if (!before || !after || before.length !== 16 || after.length !== 16 || !table) return null;
   const label = readPermutationLabel(frame.params);

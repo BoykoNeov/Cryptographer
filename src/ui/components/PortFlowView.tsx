@@ -13,18 +13,19 @@
  * `add-mod-32@1`, `rotate-bits-right@1`, etc.) leave the threaded state a
  * passthrough — the actual transformation happens in the port I/O, not in
  * state. A `"state"`-keyed view would render nothing for them (they carry no
- * `"state"` port — `frameStateOutBytes` returns null since the field retired
+ * `"state"` port — `framePrimaryOutBytes` returns null since the field retired
  * in Slice 5.3e Batch 4); `PortFlowView` surfaces what the step actually
  * computed by reading the port-I/O captured on the frame in Slice 2.9a.
  *
- * **What this does NOT do (yet).** Cells are display-only — no hover, no
- * click, no provenance highlighting. Slice 2.9c widens
- * `ProvenanceSource` to carry port-cell variants and wires the hover
- * plumbing; Slice 2.9d registers the per-primitive provenance fns. This
- * slice is cells-first by deliberate scope discipline (advisor verdict
- * 2026-05-27: cells deliver ~80% of pedagogical value; overlays + hover
- * earn their architecture after the user has scrubbed cells-only for a
- * few sessions). The byte-format toggle IS honored — that's already
+ * **What this does NOT do.** Cells are display-only — no hover, no click,
+ * no cell-level provenance highlighting. The cell-level provenance hover an
+ * earlier 2.9c-e draft proposed was formally DEFERRED (see
+ * `docs/plans/slice-2-9-port-aware-provenance.md`): the graph already answers
+ * port-level provenance (follow the edge to the producer, inspect its value),
+ * and the value inspector / step strip / RunExplorer now resolve each leaf's
+ * real port by name, so the marginal byte-level highlight wasn't worth a
+ * bespoke surface (advisor verdict 2026-05-27: cells deliver ~80% of the
+ * pedagogical value). The byte-format toggle IS honored — that's already
  * cheap and the cells are otherwise unreadable without it.
  *
  * **Port-native predicate** (`isPortNativeFrame`): a frame is port-native

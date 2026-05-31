@@ -38,7 +38,7 @@
  *    with a clear "deferred to first consumer" error.
  */
 
-import { frameStateInBytes, frameStateOutBytes } from "@/core/frame-state";
+import { framePrimaryInBytes, framePrimaryOutBytes } from "@/core/frame-state";
 import { StepRegistry } from "@/core/registry";
 import { runSpec } from "@/core/runtime";
 import { canonicalStepId } from "@/core/step-id";
@@ -194,14 +194,14 @@ describe("runtime — for-each-subgraph node (Slice 2.0a)", () => {
     // can't distinguish correct threading from per-iteration re-seeding.
     const f0 = trace.frames[0];
     if (!f0) throw new Error("frame 0 missing");
-    expect(Array.from(frameStateInBytes(f0) ?? [])).toEqual([0xaa, 0xbb, 0xcc, 0xdd]);
+    expect(Array.from(framePrimaryInBytes(f0) ?? [])).toEqual([0xaa, 0xbb, 0xcc, 0xdd]);
 
     for (let i = 1; i < trace.frames.length; i++) {
       const prev = trace.frames[i - 1];
       const cur = trace.frames[i];
       if (!prev || !cur) throw new Error(`frame ${i} or ${i - 1} missing`);
-      expect(Array.from(frameStateInBytes(cur) ?? [])).toEqual(
-        Array.from(frameStateOutBytes(prev) ?? []),
+      expect(Array.from(framePrimaryInBytes(cur) ?? [])).toEqual(
+        Array.from(framePrimaryOutBytes(prev) ?? []),
       );
     }
 

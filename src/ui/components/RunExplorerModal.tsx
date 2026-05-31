@@ -23,7 +23,7 @@
  */
 
 import { type ByteFormat, formatByte, formatBytes } from "@/core/format";
-import { frameStateOutBytes } from "@/core/frame-state";
+import { framePrimaryOutBytes } from "@/core/frame-state";
 import { For, Show, createEffect, createMemo } from "solid-js";
 import { useByteFormat } from "../stores/format";
 import {
@@ -77,7 +77,7 @@ export const RunExplorerModal = (props: Props) => {
       const frame = stepId ? snapshot.trace.frames.find((f) => f.stepId === stepId) : undefined;
       // The `"state"` output port (the `stateAfter` State field fallback
       // retired in Slice 5.3e Batch 4 → null if the leaf has no `"state"` port).
-      const stateAtStep = frame ? frameStateOutBytes(frame) : null;
+      const stateAtStep = frame ? framePrimaryOutBytes(frame) : null;
       return { snapshot, stateAtStep, isCurrent: i === lastIdx };
     });
   });

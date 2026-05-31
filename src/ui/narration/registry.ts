@@ -1,23 +1,26 @@
 /**
  * Step-narration registry. Cipher-agnostic surface for per-frame
  * *value-prose* — "what just happened to THESE specific bytes in THIS
- * frame" — rendered by `<StepNarration />` in linear mode below
- * `<MatrixView />`.
+ * frame" — rendered by `<StepNarration />` in linear mode below the
+ * port-flow inspector.
  *
- * Architectural decision (mirrors the parallel provenance registry at
- * `src/ui/provenance/registry.ts`): this is a *separate* registry from
- * the core step registry, NOT a new field on `StepDocumentation`. The
- * three registries answer three different questions:
+ * Architectural decision: this is a *separate* registry from the core
+ * step registry, NOT a new field on `StepDocumentation`. The two
+ * registries answer two different questions:
  *
  *   - Core step registry (`src/core/registry.ts`) — runtime:
  *     "how does this step execute? what does its doc panel say?"
- *   - Provenance registry — navigation:
- *     "for cell hover, which cells feed which output cell?"
  *   - Narration registry (THIS file) — pedagogy:
  *     "for this frame, what's a learner-friendly per-conceptual-unit
  *      breakdown of the transformation?"
  *
- * Keeping the three separate means a runtime refactor doesn't reach
+ * (A third, parallel *provenance* registry once answered "for cell
+ * hover, which cells feed which output cell?" — it was retired in the
+ * Slice 2.9c-e honest close once the value inspector / step strip /
+ * RunExplorer became port-aware; see
+ * `docs/plans/slice-2-9-port-aware-provenance.md`.)
+ *
+ * Keeping the registries separate means a runtime refactor doesn't reach
  * into pedagogy code (and vice versa). A new cipher with novel cell
  * shapes can register its own narration fn without touching the core
  * step-registration path.
@@ -153,8 +156,7 @@ export const hasNarrationFn = (stepType: string): boolean => REGISTRY.has(stepTy
  *
  *   - **Bit-level Serpent linear transforms**
  *     (`serpent.linear-transform@1`, `serpent.inv-linear-transform@1`)
- *     — same justification as the matching `PROVENANCE_NO_OP_ALLOWLIST`
- *     entries: each output bit derives from 6–7 input bits via XOR over
+ *     — each output bit derives from 6–7 input bits via XOR over
  *     GF(2). Byte-level prose would be misleading ("everything
  *     contributes to everything" isn't useful). A future per-bit
  *     narration surface could cover these honestly; the byte-level
@@ -196,10 +198,9 @@ export const NARRATION_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Pick the aux name a frame consumed under a single-aux step. Shared
- * with `src/ui/provenance/registry.ts:singleAuxNameFromFrame`; copied
- * rather than re-exported to keep the narration module standalone
- * (the two registries should be removable independently).
+ * Pick the aux name a frame consumed under a single-aux step. (Was
+ * shared in spirit with the retired provenance registry's helper of the
+ * same name; kept local so the narration module stands alone.)
  *
  * Returns null if `auxRead` has zero or more-than-one entries.
  * AddRoundKey (forward + inverse) consumes exactly one aux per frame,

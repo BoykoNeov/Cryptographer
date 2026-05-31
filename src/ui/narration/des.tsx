@@ -36,7 +36,7 @@
  * allowlist entry).
  */
 
-import { frameStateInBytes, frameStateOutBytes } from "@/core/frame-state";
+import { framePrimaryInBytes, framePrimaryOutBytes } from "@/core/frame-state";
 import type { Json } from "@/core/types";
 import { For } from "solid-js";
 import { formatByteInline, formatBytes } from "../components/byte-row";
@@ -178,16 +178,16 @@ const buildBitPermutationUnits = (
 // ─── Concrete narrators per DES step type ─────────────────────────────
 
 export const desInitialPermutationNarration: NarrationFn = (frame) => {
-  const before = frameStateInBytes(frame);
-  const after = frameStateOutBytes(frame);
+  const before = framePrimaryInBytes(frame);
+  const after = framePrimaryOutBytes(frame);
   const table = readPermutationTable(frame.params, 64);
   if (!before || !after || before.length !== 8 || after.length !== 8 || !table) return null;
   return buildBitPermutationUnits(before, after, table, 64, "Initial Permutation (IP)");
 };
 
 export const desFinalPermutationNarration: NarrationFn = (frame) => {
-  const before = frameStateInBytes(frame);
-  const after = frameStateOutBytes(frame);
+  const before = framePrimaryInBytes(frame);
+  const after = framePrimaryOutBytes(frame);
   const table = readPermutationTable(frame.params, 64);
   if (!before || !after || before.length !== 8 || after.length !== 8 || !table) return null;
   return buildBitPermutationUnits(before, after, table, 64, "Final Permutation (FP = IP⁻¹)");
@@ -201,16 +201,16 @@ export const desFinalPermutationNarration: NarrationFn = (frame) => {
  * indices.
  */
 export const desExpandRNarration: NarrationFn = (frame) => {
-  const before = frameStateInBytes(frame);
-  const after = frameStateOutBytes(frame);
+  const before = framePrimaryInBytes(frame);
+  const after = framePrimaryOutBytes(frame);
   const table = readPermutationTable(frame.params, 48);
   if (!before || !after || before.length !== 4 || after.length !== 6 || !table) return null;
   return buildBitPermutationUnits(before, after, table, 48, "Expansion (E)");
 };
 
 export const desPPermutationNarration: NarrationFn = (frame) => {
-  const before = frameStateInBytes(frame);
-  const after = frameStateOutBytes(frame);
+  const before = framePrimaryInBytes(frame);
+  const after = framePrimaryOutBytes(frame);
   const table = readPermutationTable(frame.params, 32);
   if (!before || !after || before.length !== 4 || after.length !== 4 || !table) return null;
   return buildBitPermutationUnits(before, after, table, 32, "P permutation");
@@ -225,8 +225,8 @@ export const desPPermutationNarration: NarrationFn = (frame) => {
  * result feeds the S-boxes, not the next state directly.
  */
 export const desXorWithKNarration: NarrationFn = (frame) => {
-  const before = frameStateInBytes(frame);
-  const after = frameStateOutBytes(frame);
+  const before = framePrimaryInBytes(frame);
+  const after = framePrimaryOutBytes(frame);
   if (!before || !after || before.length !== 6 || after.length !== 6) return null;
   const auxName = singleAuxNameFromFrame(frame);
   if (auxName === null) return null;
@@ -271,8 +271,8 @@ export const desXorWithKNarration: NarrationFn = (frame) => {
  * output.
  */
 export const desSBoxesNarration: NarrationFn = (frame) => {
-  const before = frameStateInBytes(frame);
-  const after = frameStateOutBytes(frame);
+  const before = framePrimaryInBytes(frame);
+  const after = framePrimaryOutBytes(frame);
   const sboxes = readSBoxes(frame.params);
   if (!before || !after || before.length !== 6 || after.length !== 4 || !sboxes) return null;
 
@@ -353,7 +353,7 @@ export const desSBoxesNarration: NarrationFn = (frame) => {
  * state holds the STALE initial plaintext. The honest per-leaf bytes live on
  * the port I/O instead (`frame.portInputs` / `frame.portOutputs`). DES B4
  * pioneered the port-first read; Slice 5.3c lifted it into the shared
- * `frameStateInBytes` / `frameStateOutBytes` helpers (read the `"state"`
+ * `framePrimaryInBytes` / `framePrimaryOutBytes` helpers (read the `"state"`
  * port; the legacy State-field fallback retired in Slice 5.3e Batch 4, so a
  * leaf with no `"state"` port reads null), so every narrator now sources state
  * through one definition.

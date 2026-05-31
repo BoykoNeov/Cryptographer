@@ -1,11 +1,11 @@
 /**
  * Narration registry wire-up. Importing this module side-effects every
  * narration fn into `REGISTRY` via `registerNarration` — once. The App
- * imports this file alongside the provenance and simulator registries;
- * the `<StepNarration />` component calls `lookupNarration` to dispatch.
+ * imports this file alongside the simulator registry; the
+ * `<StepNarration />` component calls `lookupNarration` to dispatch.
  *
- * Pattern mirrors `src/ui/provenance/index.ts`. Idempotent: re-importing
- * after `__resetNarrationForTests` re-runs initialization cleanly.
+ * Idempotent: re-importing after `__resetNarrationForTests` re-runs
+ * initialization cleanly.
  *
  * Coverage after Phase 3 (cross-checked by
  * `tests/narration-registry-contract.test.ts`):

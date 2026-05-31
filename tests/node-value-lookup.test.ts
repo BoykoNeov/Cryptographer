@@ -20,16 +20,15 @@
  *   - Ellipsis chip (`@blockMore`) → `"missing"` with pick-a-numbered-chip hint.
  *   - Block chip pointing at a non-existent iterate → `"missing"` with
  *     graph/spec out-of-sync reason.
- *   - Regular leaf → its `"state"` output port (port-first, Slice 5.3c; the
- *     `stateAfter` State field retired in Slice 5.3e Batch 4). A leaf with NO
- *     `"state"` port resolves to `"missing"` — every native-AES leaf is in
- *     this class (their payloads ride `output`/`a`/… ports), so the
- *     cipher-agnostic value inspector reports "(no state)" for them. This is
- *     the user-accepted deferred-port-aware-inspector gap; pre-Batch-4 the
- *     field read returned only the STALE leftover threaded state for these
- *     leaves, so "(no state)" is strictly more honest. The scrubber's
- *     `currentBlockIndex` still selects the right per-block FRAME via
- *     `findConsumerFrame` even when the value is missing.
+ *   - Regular leaf → its primary output port (Slice 2.9c-e: the `"state"`
+ *     port if present, else the SOLE output port when the leaf has exactly
+ *     one). Native-AES round leaves are single-output port-native steps
+ *     (`xor-with-aux`/`byte-substitute`/… → port `"output"`), so the value
+ *     inspector now surfaces their honest per-block bytes. Only genuinely
+ *     multi-output leaves (`split-bytes`) or aux-only leaves (`key-expansion`,
+ *     no output port) resolve to `"missing"`. The scrubber's
+ *     `currentBlockIndex` selects the right per-block FRAME via
+ *     `findConsumerFrame`, so block 0 and block 2 surface different values.
  *
  * Fixture: AES-128 ECB with a 4-block plaintext — the only shipping
  * multi-block fixture today (and entirely native-port → no `"state"` leaves).
@@ -58,6 +57,13 @@ const runAes128Ecb = (): Trace =>
     ]),
     // Byte-native ECB (B1.4) — port-mode iterate + port-native body.
   });
+
+/** Byte-wise XOR — used to compute the expected initial-AddRoundKey output
+ *  (plaintext ⊕ roundKey.0) independently of the runtime's own port capture. */
+const xorBytes = (a: Uint8Array, b: Uint8Array): Uint8Array =>
+  Uint8Array.from(a, (byte, i) => byte ^ (b[i] ?? 0));
+
+const ECB_KEY = "2b7e151628aed2a6abf7158809cf4f3c";
 
 // ─── Endpoint pills ─────────────────────────────────────────────────────
 
@@ -171,34 +177,48 @@ describe("lookupNodeValue — regular leaves", () => {
     expect(out.reason).toMatch(/no resolvable state/i);
   });
 
-  it("resolves a native-AES leaf inside the iterate (`initial.add-round-key`) to missing", () => {
+  it("resolves a native-AES leaf inside the iterate (`initial.add-round-key`) to its honest single-output value", () => {
     const trace = runAes128Ecb();
-    // Native-AES round leaves name their payload `output`/`a`/… — not
-    // `"state"` — so the value inspector resolves them to missing post-Batch-4.
-    // (Pre-Batch-4 the field read returned only the stale leftover threaded
-    // state here; "(no state)" is strictly more honest. The deferred
-    // port-aware inspector will resolve each leaf's real output port by name.)
-    const out = lookupNodeValue("initial.add-round-key", aes128EcbSpec, trace, undefined);
-    expect(out.status).toBe("missing");
-    if (out.status !== "missing") return;
-    expect(out.reason).toMatch(/no resolvable state/i);
+    // Native-AES AddRoundKey is `xor-with-aux@1` — a single-output port-native
+    // leaf (port `"output"`, no `"state"` port). The Slice 2.9c-e helper
+    // resolves the sole output port, so the value inspector now surfaces the
+    // honest per-block bytes (pre-2.9c-e this was the accepted "(no state)"
+    // regression). The INITIAL AddRoundKey XORs the plaintext block with
+    // roundKey.0, which IS the master key (FIPS-197 §5.1.4 / §5.2) — so block
+    // 0's output is plaintext_block0 ⊕ key, computed here from the fixture
+    // inputs (independent of the runtime's own port capture).
+    const out = lookupNodeValue("initial.add-round-key", aes128EcbSpec, trace, 0);
+    expect(out.status).toBe("value");
+    if (out.status !== "value") return;
+    expect(out.displayKind).toBe("state");
+    expect(out.blockIndex).toBe(0);
+    const expected = xorBytes(
+      bytesFromHex("6bc1bee22e409f96e93d7e117393172a"),
+      bytesFromHex(ECB_KEY),
+    );
+    expect(out.value).toEqual(makeBytesState(expected));
   });
 
-  it("selects a DIFFERENT per-block frame for the same leaf when the scrubber moves", () => {
+  it("surfaces a DIFFERENT per-block value for the same leaf when the scrubber moves", () => {
     const trace = runAes128Ecb();
     const a = lookupNodeValue("initial.add-round-key", aes128EcbSpec, trace, 0);
     const b = lookupNodeValue("initial.add-round-key", aes128EcbSpec, trace, 2);
-    // Both are "missing" (native-AES leaf, no `"state"` port), but the
-    // scrubber-blockIndex preference still drives `findConsumerFrame` to a
-    // DIFFERENT per-block frame — the "missing" reason names the resolved
-    // frame index, which differs by block. This pins that block resolution
-    // survives Batch 4 even though the per-block VALUE is no longer surfaced
-    // here (the honest per-block bytes live in the leaf's port output → the
-    // deferred port-aware inspector).
-    expect(a.status).toBe("missing");
-    expect(b.status).toBe("missing");
-    if (a.status !== "missing" || b.status !== "missing") return;
-    expect(a.reason).not.toBe(b.reason);
+    // The scrubber-blockIndex preference drives `findConsumerFrame` to the
+    // per-block frame, so block 0 and block 2 surface DIFFERENT initial-
+    // AddRoundKey outputs — plaintext_block0 ⊕ key vs plaintext_block2 ⊕ key
+    // (the two plaintext blocks differ). This pins both per-block resolution
+    // AND the honest per-block value now flowing through the inspector.
+    expect(a.status).toBe("value");
+    expect(b.status).toBe("value");
+    if (a.status !== "value" || b.status !== "value") return;
+    const key = bytesFromHex(ECB_KEY);
+    expect(a.value).toEqual(
+      makeBytesState(xorBytes(bytesFromHex("6bc1bee22e409f96e93d7e117393172a"), key)),
+    );
+    expect(b.value).toEqual(
+      makeBytesState(xorBytes(bytesFromHex("30c81c46a35ce411e5fbc1191a0a52ef"), key)),
+    );
+    expect(a.value).not.toEqual(b.value);
   });
 
   it("returns missing for a leaf id that has no frame in the trace", () => {

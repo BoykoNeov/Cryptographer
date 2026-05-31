@@ -25,16 +25,6 @@ type Props = {
    * to disable the overlay for this thumbnail.
    */
   previousBytes?: Uint8Array | null;
-  /**
-   * Linear cell indices (r + 4*c) to outline with the `.provenance-source`
-   * class — populated by the RoundKeyPanel when an active hover's
-   * `aux-cell` source points into this K_i. Per the declared precedence
-   * (Phase 3 plan), `.provenance-source` wins over `.diff-vs-prev`, so
-   * a hovered cell that ALSO differs from the previous run only shows
-   * the provenance outline while the hover is active. Pass `undefined`
-   * (or omit by union default) for the "no hover" case.
-   */
-  provenanceHighlights?: ReadonlySet<number> | undefined;
 };
 
 export const TinyMatrix = (props: Props) => {
@@ -57,27 +47,15 @@ export const TinyMatrix = (props: Props) => {
   return (
     <div class="tiny-matrix">
       <For each={cells()}>
-        {(cell) => {
-          // `linearIndex` is stable per cell — safe as a local const.
-          // The provenance check, however, reads a reactive prop and
-          // MUST stay inline in the classList. See CLAUDE.md gotcha:
-          // "For callbacks aren't reactive scopes."
-          const linearIndex = cell.row + 4 * cell.col;
-          return (
-            <div
-              class="tiny-cell"
-              classList={{
-                // Same precedence as MatrixView: provenance-source wins
-                // over diff-vs-prev when both would apply on the same cell.
-                "provenance-source": !!props.provenanceHighlights?.has(linearIndex),
-                "diff-vs-prev": !props.provenanceHighlights?.has(linearIndex) && cell.diffPrev,
-              }}
-              style={{ "grid-row": `${cell.row + 1}`, "grid-column": `${cell.col + 1}` }}
-            >
-              {formatByte(cell.byte, fmt())}
-            </div>
-          );
-        }}
+        {(cell) => (
+          <div
+            class="tiny-cell"
+            classList={{ "diff-vs-prev": cell.diffPrev }}
+            style={{ "grid-row": `${cell.row + 1}`, "grid-column": `${cell.col + 1}` }}
+          >
+            {formatByte(cell.byte, fmt())}
+          </div>
+        )}
       </For>
     </div>
   );
