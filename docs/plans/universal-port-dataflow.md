@@ -212,6 +212,34 @@ Each phase has an explicit pass/fail gate. **If a gate fails, planning re-opens 
 
 ### Phase 3 — AES rebuild from medium primitives
 
+> **STATUS (2026-05-31) — the AES *round-body* rebuild SHIPPED EARLY**, ahead
+> of this phase's banner, under `docs/plans/scaffolding-suppression.md`
+> Phase B (Slices B1.1 encrypt + B1.2 decrypt, 2026-05-29).
+> `src/ciphers/aes-round-builder-native.ts` composes the round body from
+> byte-native primitives — `byte-substitute@1` (SubBytes), `permute@1`
+> (ShiftRows), `gf-matrix-multiply@1` (MixColumns), `xor-with-aux@1`
+> (AddRoundKey) — threaded port-to-port via the A2 `seedInput`/`bodyOutput`
+> group contract, no `MatrixState`. The legacy matrix primitives the
+> `frameMap` parity swap (below) was meant to diff against were retired in
+> Phase 5 Slice 5.1, so the legacy↔ported cipher-selector flag is OBE — there
+> is no legacy AES left to compare. **What remains of "Phase 3 / AES rebuild"
+> is key-expansion (key-schedule) decomposition** — `aes.key-expansion@1` is
+> still the monolithic hybrid-ported step the Scope note below flagged for
+> "Phase 4a." That work is now **shared across all four still-monolithic key
+> schedules** (AES/Speck/Serpent/DES), each carrying `meta`'s
+> `auxReadPorts`/`auxWritePorts` round-key fan-out. It is scoped as its own
+> later phase — *decompose the producers + rewire their round-key consumers*
+> (bilateral; the round leaves' `auxReadPorts` reads must become explicit port
+> edges too) — with an **unresolved graph-topology decision** (explicit
+> per-round-key port wiring vs the current aux fan-out depiction) and a
+> KeyScheduleExplorer interaction (it intercepts by stepType, which
+> decomposition dissolves). **Sequenced AFTER closing Phase 2** (Slice 2.9c–e
+> port-aware inspector is an enabler for rendering the new decomposed leaves);
+> gets its own plan file + advisor pass, opened with an **AES-first spike**
+> (decompose AES's key schedule alone, graph-smoke it, and judge legibility
+> before committing all four). Padding's `meta` (state-half only) is
+> independent and out of scope.
+
 > **Inherits the container port contract from
 > `docs/plans/scaffolding-suppression.md` (Phase A, Slice A2 — SHIPPED
 > 2026-05-28).** Do NOT re-derive container seeding ad-hoc: the looping
