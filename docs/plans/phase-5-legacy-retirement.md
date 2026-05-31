@@ -56,7 +56,7 @@ user-required follow-up to B4). Advisor-confirmed.
 | 5.2 | Convert the lifted key-schedules (`aes.key-expansion@1/@2`, `speck.key-schedule@1`, `serpent.key-expansion@1`, `des.key-schedule@1`) + the padding/aux primitives to true `PortedExecutor`s; drop their `legacy:` fields. **`liftLegacyExecutor` SURVIVES** as a bytes-only helper for `feistel.toy-add-k@1` (the reserved-through-Phase-5 toy — advisor verdict 2026-05-30: converting it would drop `legacy:` and flip the toy onto the PortFlowView capture path, doing the deferred Feistel-viz rebuild piecemeal). **Crypto KAT gates; own advisor pass** per `feedback_iterative_slice_review`. | **DONE 2026-05-31** |
 | **5.3** | **Expanded into a dependency-ordered sub-arc (5.3a–e).** The one-liner ("retire `stateBefore`/`stateAfter` + `inferStateEdges` + `dropAuxOnlyStateEdges`; collapse `BytesState`; PortFlowView universal default") was **mis-ordered**: the field/edge removals depend on the reserved Feistel scaffolding AND the un-port-wired Speck/Serpent being gone first. End goal (Path C) unchanged. See sub-rows. | see 5.3a–e |
 | **5.3a** | PortFlowView universal default + truth-up: formalize the `FrameStateView` default (BytesView = test-only-toy fallback), correct the stale S2(e) docstring, record this sub-arc + the BytesView-unreachable invariant test. No code-path change. | **DONE 2026-05-31** |
-| 5.3b | Port-wire Speck + Serpent specs (declare explicit `portInputs` on round-body leaves) so `inferPortEdges` owns their spine + the S2(f) gate skips legacy inference for them. **Load-bearing spike FIRST:** declaring `portInputs` may flip the runtime from implicit state-thread to explicit port-resolution (runtime.ts:343-347) — diff the trace on ONE Speck round leaf to confirm KAT byte-equality before committing the approach; if not byte-equal, 5.3b becomes native Speck/Serpent decomposition. Arc size hinges on this. | Sequenced |
+| 5.3b | Port-wire Speck + Serpent specs (declare explicit `portInputs` on round-body leaves) so `inferPortEdges` owns their spine + the S2(f) gate skips legacy inference for them. **Load-bearing spike FIRST:** declaring `portInputs` may flip the runtime from implicit state-thread to explicit port-resolution (runtime.ts:343-347) — diff the trace on ONE Speck round leaf to confirm KAT byte-equality before committing the approach; if not byte-equal, 5.3b becomes native Speck/Serpent decomposition. Arc size hinges on this. | **DONE 2026-05-31** |
 | 5.3c | Migrate value/narration reads off `stateBefore`/`stateAfter` → frame ports: `edge-value-lookup` (endpoints + block-chips; isolate the toy-only rejoin), narration ×6, `StepStrip`, `RunExplorerModal`. | Sequenced |
 | 5.3d | **Port-native Feistel/swap visualization rebuild** (the obligatory user-required follow-up). New DES-port-native viz reading `portInputs`/`portOutputs`. **Independent of 5.3e** (the old components are toy-only). | Sequenced |
 | 5.3e | **Final removal.** Delete the old toy-only Feistel components (`RejoinFrameView`/`FeistelTrackContext`/`FeistelMiniDiagram`) + toy + feistel runtime walk + `FeistelRoundGroup`/`BranchTrack`/`CombineKind`; delete `stateBefore`/`stateAfter`, `inferStateEdges`, `dropAuxOnlyStateEdges`, `BytesView`, the legacy `port-projection` bridge; collapse `BytesState`/`State`/`StateShape`. Strictly after 5.3b + 5.3c. **Risk:** `inferStateEdges`'s empty-group-as-node case (graph.ts:1063-1071 — a cleared round in the editor) has no port-flow analogue → re-implement or accept as editor-only regression. | Sequenced |
@@ -219,6 +219,59 @@ de-facto true for every selectable cipher.
 **Gate:** `npm run check` GREEN; browser-smoked AES round + Speck key-schedule
 → `PortFlowView`, and the graph spine for Speck/Serpent (`inferStateEdges`
 retained) + SHA-256 (port-flow). No KAT or `schemaVersion` change.
+
+## Slice 5.3b — what shipped (2026-05-31)
+
+**Port-wired Speck + Serpent.** Every round-body leaf now declares an explicit
+`portInputs.state`, so `inferPortEdges` owns their graph spine and the S2(f)
+gate suppresses the legacy `inferStateEdges` consecutive-siblings inference for
+them. With this, **no shipped spec's spine comes from `inferStateEdges`** —
+its removal (5.3e) is unblocked. Shipped in two batches (Speck `70dd34d`, then
+Serpent).
+
+**The load-bearing spike resolved GREEN — byte-equality holds, no native
+decomposition needed.** The risk: Speck/Serpent round leaves are *hybrid-ported*
+(`meta` present, `legacy === undefined`), and declaring `portInputs.state` makes
+the runtime resolve the carried block from `nodeOutputs` (Step A, runtime.ts:589)
+and SKIP the `meta.stateInputPort` projection (Step B, runtime.ts:610). For
+`stateLayout: "bytes"` that override is byte-identical to the projection it
+replaces (the projection is the identity over the predecessor's recorded output
+bytes), and the data still rides the shared threaded `state` (runtime.ts:145/806)
+— so traces stay byte-equal. Confirmed empirically against the existing golden
+frame-stream suites (Speck's per-frame `stateAfter` + 23-frame guard; Serpent's
+per-spec SHA-256 checksum over `(stepId, hex(stateAfter), sorted(auxRead))` +
+frame count, all 6 specs).
+
+- **Speck** (`speck-32-64-builder.ts`): flat pipeline — `round.1 ← $input`,
+  `round.N ← round.{N-1}.state`. Spine = 22 `port-flow` edges, `$input → round.1`
+  the honest head (the `key-schedule → round.1` passthrough phantom is gone).
+- **Serpent** (`serpent-round-builder.ts`): nested round groups, so each leaf
+  gets `portInputs.state` AND each round group declares `seedInput`/`bodyOutput`
+  — exactly mirroring byte-native AES. The advisor flagged that "group
+  `seedInput`/`bodyOutput` over *meta-bearing* leaves" was proven by neither
+  native-AES (no meta) nor flat-Speck (no groups); it proved byte-equal because
+  the injected seed *is* the threaded state byte-for-byte (round.1's seed = IP's
+  `stateAfter`; round.N's seed = round.{N-1}'s `bodyOutput`). Spine = 98
+  `port-flow` edges, of which **32 are container-sourced** (`round.{n-1}`
+  container → next round's first leaf via single-hop `seedInput` resolution,
+  plus `round.32 → FP`) — structurally unlike Speck's flat leaf-to-leaf chain.
+  The descending decrypt `seedInput = port("inv-round.{r+1}","out")` was the
+  most error-prone line; wired encrypt-first (3 checksums green) then decrypt.
+- **`roundKey` ports stay UNWIRED** for both — they keep flowing from
+  `aux[roundKeyAux]` via the meta projection (Step C), preserving the
+  key-schedule→round aux fan-out edges in `frame.auxRead`.
+- **Tests:** `aux-graph-derivation` (Speck/Serpent node + spine assertions
+  rewritten for the `$input` node + port-flow-owned spine, registry passed);
+  `graph-bundle` (Serpent retargeted off "legacy clean state-spine" → port-flow
+  singletons); new `(e)` suite in `runtime-ported-dispatch-speck` pinning auxRead
+  preservation + the declared wiring on the shipped spec.
+
+**Gate:** `npm run check` GREEN (2368 tests / 205 files; bundle 657 KB raw /
+192.9 KB gzipped). Browser-smoked the Speck + Serpent graph view: the `$input`
+"plaintext" pill materializes and connects to round.1 / `initial-permutation`,
+key-schedule/key-expansion sit off-spine (aux-only). No KAT or `schemaVersion`
+change. **NEXT: 5.3c** (migrate value/narration reads off `stateBefore`/
+`stateAfter` → frame ports).
 
 ## Verification (for 5.1+)
 

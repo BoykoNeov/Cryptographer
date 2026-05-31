@@ -56,15 +56,15 @@ const runAes128 = (): Trace =>
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
   });
 
-// Serpent-128 fixture for the state-edge bundling tests. Byte-native AES-128
-// (Slice B1) is no longer a clean single-edge-per-connection graph: each
-// internal connection now yields BOTH a port-flow state edge (auxKey
-// "port-flow", from `inferPortEdges`) AND a spine state edge (auxKey "state"),
-// so (from,to,kind) groups duplicate and bundling collapses them. Serpent is
-// still legacy/matrix — its spine is a clean 1:1 `auxKey:"state"` thread with
-// no port-flow companion — so it preserves the "no duplicates" / "state edges
-// pass 1:1" properties these two tests pin. Retarget to byte-native or delete
-// when Serpent converts in B3.
+// Serpent-128 fixture for the state-edge bundling tests. These two tests pin
+// bundler PROPERTIES (each spine edge → one singleton bundle; no ×N merge of
+// the spine). Since Slice 5.3b Serpent is port-wired, so the two tests pass
+// the registry to `deriveAuxGraph` — the S2(f) gate then suppresses the legacy
+// consecutive-siblings state-thread, leaving a clean 1:1 port-flow spine (every
+// edge `kind:"state"` with `auxKey:"port-flow"`, no duplicate companion edge).
+// (Without the registry, a port-wired spec yields BOTH a port-flow edge and a
+// legacy state-thread edge per within-group hop, which bundling would collapse
+// — the registry is what keeps the spine duplicate-free.)
 const SERPENT128_PT = "00112233445566778899aabbccddeeff";
 const SERPENT128_KEY = "00112233445566778899aabbccddeeff";
 const runSerpent128 = (): Trace =>
@@ -87,12 +87,12 @@ const runAes128Ecb = (): Trace =>
 
 describe("bundleEdges — collapse same-(from, to, kind, isFeedback)", () => {
   it("returns a singleton bundle for each unique edge when no duplicates exist", () => {
-    // Serpent-128 single-block, NO replication (see `runSerpent128` note on why
-    // byte-native AES no longer has a duplicate-free edge set). Every aux edge
-    // from key-expansion goes to a UNIQUE consumer and the spine is a clean 1:1
-    // `auxKey:"state"` thread, so bundling produces one bundle per edge.
+    // Serpent-128 single-block, NO replication. With the registry passed, the
+    // S2(f) gate leaves a clean 1:1 port-flow spine (no legacy state-thread
+    // companion), and every aux edge from key-expansion goes to a UNIQUE
+    // consumer — so bundling produces exactly one bundle per edge.
     const trace = runSerpent128();
-    const raw = deriveAuxGraph(trace, serpent128Spec);
+    const raw = deriveAuxGraph(trace, serpent128Spec, { registry: buildDefaultRegistry() });
     const fb = buildIterateFeedbackPredicate(raw);
 
     const bundled = bundleEdges(raw, fb);
@@ -158,21 +158,22 @@ describe("bundleEdges — collapse same-(from, to, kind, isFeedback)", () => {
   });
 
   it("passes state edges through 1:1 as singleton bundles", () => {
-    // Serpent (legacy/matrix) — clean `auxKey:"state"` spine with no port-flow
-    // companion edges, so state bundles stay singleton. Byte-native AES pairs a
-    // port-flow + state edge per connection (see `runSerpent128`).
+    // Serpent (port-wired since 5.3b) with the registry passed → the S2(f)
+    // gate leaves a clean port-flow spine: every `kind:"state"` edge carries
+    // `auxKey:"port-flow"` with no legacy state-thread companion, so the
+    // state bundles stay singleton 1:1.
     const trace = runSerpent128();
-    const raw = deriveAuxGraph(trace, serpent128Spec);
+    const raw = deriveAuxGraph(trace, serpent128Spec, { registry: buildDefaultRegistry() });
     const fb = buildIterateFeedbackPredicate(raw);
 
     const bundled = bundleEdges(raw, fb);
 
     const stateBundles = bundled.bundles.filter((b) => b.kind === "state");
     expect(stateBundles.length).toBeGreaterThan(0);
-    // Every state bundle is a singleton because the spine is 1:1.
+    // Every state bundle is a singleton because the port-flow spine is 1:1.
     for (const b of stateBundles) {
       expect(b.auxKeys.length).toBe(1);
-      expect(b.auxKeys[0]).toBe("state");
+      expect(b.auxKeys[0]).toBe("port-flow");
     }
     // The number of state bundles equals the number of raw state edges.
     const rawStateCount = raw.edges.filter((e) => e.kind === "state").length;

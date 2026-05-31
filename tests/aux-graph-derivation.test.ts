@@ -75,6 +75,10 @@ const runSerpent128 = (): Trace =>
     initialState: makeBytesState(bytesFromHex(SERPENT128_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(SERPENT128_KEY)]]),
     // Serpent's round body is port-native since B3 → ported dispatch required.
+    // Since Slice 5.3b the IP/FP leaves + round groups declare explicit
+    // `portInputs`/`seedInput`/`bodyOutput`, so a `$input` source node + a
+    // port-flow-owned spine appear (the S2(f) gate suppresses the legacy
+    // state-thread for the wired leaves).
     portedDispatchEnabled: true,
   });
 
@@ -251,11 +255,16 @@ describe("deriveAuxGraph — Speck32/64 BE (flat, no groups)", () => {
 // ─── Serpent-128 (deeply nested round groups, 32 rounds) ──────────────────
 
 describe("deriveAuxGraph — Serpent-128 (SP-network, 32 round groups)", () => {
-  it("emits 99 leaves and 32 round-group containers", () => {
+  it("emits 99 cipher leaves + the `$input` source (Slice 5.3b) and 32 round-group containers", () => {
     const g = deriveAuxGraph(runSerpent128(), serpent128Spec);
-    // Leaves: 1 key-expansion + 1 IP + 31×3 (normal rounds) +
-    //         3 (final round) + 1 FP = 99.
-    expect(g.nodes.length).toBe(99);
+    // Cipher leaves: 1 key-expansion + 1 IP + 31×3 (normal rounds) +
+    //         3 (final round) + 1 FP = 99. Plus the synthetic `$input`
+    //         source pill, materialized now that the IP leaf wires its
+    //         `state` port to it (Slice 5.3b) → 100 nodes total.
+    const cipherLeaves = g.nodes.filter((n) => n.stepId !== INPUT_SOURCE_ID);
+    expect(cipherLeaves.length).toBe(99);
+    expect(g.nodes.some((n) => n.stepId === INPUT_SOURCE_ID)).toBe(true);
+    expect(g.nodes.length).toBe(100);
     // Containers: 32 round groups (round.1 .. round.32). IP and FP are leaves.
     expect(g.containers.length).toBe(32);
     expect(g.containers.every((c) => c.kind === "group")).toBe(true);
@@ -310,12 +319,13 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
   // ("port-flow") from inferPortEdges — so the clean "one edge per consecutive
   // pair" count is dup-broken, and the matrix leaf order they asserted
   // (key-expansion → initial.add-round-key; round.N.shift-rows →
-  // round.N.add-round-key) no longer holds for the byte-native body. The clean
-  // spec-derived spine property — a single chain
-  // threading every leaf with all endpoints present, transparent through round
-  // groups — is pinned on a still-matrix cipher by the Serpent-128 spine test
-  // below (98 edges across 32 round groups). Re-pin on AES if/when a port-flow
-  // spine assertion is wanted (Phase C, once inferStateEdges retires).
+  // round.N.add-round-key) no longer holds for the byte-native body. Since
+  // Slice 5.3b, Speck and Serpent are ALSO port-wired, so their spine tests
+  // below pass the registry and assert the port-flow-owned spine directly
+  // (the S2(f) gate suppresses the legacy state-thread): Speck as a flat 22-edge
+  // chain, Serpent as a 98-edge mix of within-group leaf hops + container-sourced
+  // round→round handoffs. Re-pin on AES if/when a port-flow spine assertion is
+  // wanted there too (the last leg before `inferStateEdges` retires in 5.3e).
 
   // The "AES-128-ECB: the iterate TERMINATES the parent spine on both sides"
   // test pinned the aux-mediated iterate boundary spine-suppression against
@@ -350,18 +360,50 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
     expect(stateEdges.find((e) => e.from === "round.21" && e.to === "round.22")).toBeDefined();
   });
 
-  it("Serpent-128 (32 round groups, IP/FP outside): spine threads through every leaf", () => {
-    const g = deriveAuxGraph(runSerpent128(), serpent128Spec);
+  it("Serpent-128 (32 round groups): the spine is port-flow-owned (Slice 5.3b), groups as container sources", () => {
+    // Post-5.3b the body is port-wired (each leaf declares `portInputs.state`,
+    // each round group declares `seedInput`/`bodyOutput`). With the registry
+    // passed (as the app does), the S2(f) gate suppresses the legacy
+    // consecutive-siblings inference and `inferPortEdges` owns the spine. The
+    // count stays 98, but the STRUCTURE differs from the old flattened chain:
+    // the within-group hops are leaf→leaf, while each round→round handoff
+    // resolves through the group's single-hop `seedInput` to a CONTAINER source
+    // (`round.{n-1}` container → round.n's first leaf), plus `round.32 → FP`.
+    const g = deriveAuxGraph(runSerpent128(), serpent128Spec, {
+      registry: buildDefaultRegistry(),
+    });
     const stateEdges = g.edges.filter((e) => e.kind === "state");
-    // Serpent-128 has 99 leaves → 98 spine edges (one continuous chain;
-    // round groups are transparent).
     expect(stateEdges.length).toBe(98);
-    // Each spine edge endpoint exists in the node set.
+    // Every spine edge is port-flow — none survive from the legacy state-thread.
+    expect(stateEdges.every((e) => e.auxKey === "port-flow")).toBe(true);
+    // Endpoints resolve to a real node OR container (no dangling edge). Round
+    // groups appear as edge SOURCES now, so the check spans nodes ∪ containers.
     const nodeIds = new Set(g.nodes.map((n) => n.stepId));
+    const containerIds = new Set(g.containers.map((c) => c.id));
+    const materialized = new Set([...nodeIds, ...containerIds]);
     for (const e of stateEdges) {
-      expect(nodeIds.has(e.from)).toBe(true);
-      expect(nodeIds.has(e.to)).toBe(true);
+      expect(materialized.has(e.from)).toBe(true);
+      expect(materialized.has(e.to)).toBe(true);
     }
+    // 32 container-sourced edges: 31 round→round handoffs (round.1→round.2 …
+    // round.31→round.32, each landing on the next round's first leaf) + the
+    // final `round.32 → final-permutation`.
+    const containerSourced = stateEdges.filter((e) => containerIds.has(e.from));
+    expect(containerSourced.length).toBe(32);
+    // Head of the spine is the plaintext source feeding the initial permutation.
+    expect(
+      stateEdges.find((e) => e.from === INPUT_SOURCE_ID && e.to === "initial-permutation"),
+    ).toBeDefined();
+    // A within-group hop (leaf→leaf) and a between-group hop (container→leaf).
+    expect(
+      stateEdges.find((e) => e.from === "round.1.add-round-key" && e.to === "round.1.sub-bytes"),
+    ).toBeDefined();
+    expect(
+      stateEdges.find((e) => e.from === "round.1" && e.to === "round.2.add-round-key"),
+    ).toBeDefined();
+    expect(
+      stateEdges.find((e) => e.from === "round.32" && e.to === "final-permutation"),
+    ).toBeDefined();
   });
 
   it("empty group participates in the spine via its own id (deleting all round body steps)", () => {

@@ -3044,11 +3044,10 @@ export const GraphView = () => {
       // can suppress the legacy consecutive-siblings state-spine inference
       // for any leaf that declares `portInputs` (pure port-native OR
       // hybrid-ported with an explicit state-port override). Port-flow edges
-      // from `inferPortEdges` (S2(e)) own the spine on those specs. Today:
-      // SHA-256, native-AES, AES-CBC, DES, and Speck (port-wired in Slice
-      // 5.3b). Serpent is the last monolithic hybrid-ported spec with no spec
-      // `portInputs`, so for it the gate stays a no-op and `inferStateEdges`
-      // owns its spine — until Serpent's 5.3b port-wiring lands.
+      // from `inferPortEdges` (S2(e)) own the spine on those specs. Since
+      // Slice 5.3b EVERY shipped cipher/hash is port-wired (SHA-256, native-AES,
+      // AES-CBC, DES, Speck, Serpent), so the gate fires for all of them and
+      // `inferStateEdges` no longer owns any shipped spine.
       registry,
     });
   });

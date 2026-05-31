@@ -1528,17 +1528,17 @@ const inferStateEdges = (spec: CipherSpec, registry?: StepRegistry): GraphEdge[]
  * legacy pass stays silent.
  *
  * **Per-cipher reality (updated 2026-05-31, post-B-phase + Slice 5.2/5.3b —
- * supersedes the original S2(e) note).** SHA-256, DES, native-AES, AES-CBC,
- * and now **Speck** (Slice 5.3b) declare explicit spec `portInputs`, so their
- * spine is composed ENTIRELY of port-derived edges (the S2(f) gate suppresses
- * the legacy consecutive-siblings inference for their wired leaves). Speck's
- * round leaves are hybrid-ported (meta present) but declare `portInputs.state`
- * so the gate's third branch (`portInputs[stateInputPort]` override) fires.
- * **Serpent does NOT yet** — it ships as monolithic hybrid-ported groups with
- * no spec `portInputs`, so this pass returns an empty list for it and the
- * legacy `inferStateEdges` remains the SOLE source of its rendered spine.
- * Port-wiring Serpent is the remaining half of Slice 5.3b; retiring
- * `inferStateEdges` (Slice 5.3e) requires it — see
+ * supersedes the original S2(e) note).** EVERY shipped cipher/hash now declares
+ * explicit spec `portInputs`, so their spine is composed ENTIRELY of
+ * port-derived edges (the S2(f) gate suppresses the legacy consecutive-siblings
+ * inference for their wired leaves): SHA-256, DES, native-AES, AES-CBC, and —
+ * since Slice 5.3b — Speck and Serpent. Speck/Serpent round leaves are
+ * hybrid-ported (meta present) but declare `portInputs.state`, so the gate's
+ * third branch (`portInputs[stateInputPort]` override) fires; Serpent's round
+ * GROUPS additionally declare `seedInput`/`bodyOutput`, so each round→round
+ * handoff resolves through the group's single-hop seed to a container source.
+ * With every shipped spec port-wired, `inferStateEdges` no longer owns any
+ * shipped spine — its removal (Slice 5.3e) is unblocked. See
  * `docs/plans/phase-5-legacy-retirement.md`. Byte-identical for any spec that
  * doesn't declare port-edge wiring.
  *
