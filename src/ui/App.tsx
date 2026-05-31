@@ -54,6 +54,9 @@ import { BlockBadge } from "./components/BlockBadge";
 import { BytesView } from "./components/BytesView";
 import { ConstantsPanel } from "./components/ConstantsPanel";
 import { FeistelMiniDiagram } from "./components/FeistelMiniDiagram";
+import { FeistelRecombineView } from "./components/FeistelRecombineView";
+import { FeistelRoundBytes } from "./components/FeistelRoundBytes";
+import { FeistelSwapDiagram } from "./components/FeistelSwapDiagram";
 import { FeistelTrackContext } from "./components/FeistelTrackContext";
 import { GraphView } from "./components/GraphView";
 import { IvInput } from "./components/IvInput";
@@ -1641,6 +1644,27 @@ export const App = () => {
                         feistel-round spec node. */}
                     <FeistelMiniDiagram frame={frame()} />
                   </div>
+
+                  {/* Port-native Feistel/swap visualization (Slice 5.3d — the
+                      obligatory rebuild). These self-detect a port-native
+                      Feistel round structurally from the round group's wiring
+                      (no `branchPath`, no `feistel-round` kind) and render
+                      nothing otherwise, so they're inert for every non-Feistel
+                      cipher AND mutually exclusive with the toy-gated pair
+                      above (the toy emits `branchPath`; port-native DES emits
+                      the split→…→concat shape). The diagram + bytes panel pair
+                      whenever the active frame is inside a Feistel round; the
+                      recombine inspector adds itself on the `concat` frame. The
+                      old pair + RejoinFrameView stay untouched (5.3e deletes
+                      them), keeping 5.3d independent of 5.3e. Own wrapper class
+                      (`feistel-port-pair`, not the old `feistel-linear-pair`)
+                      so 5.3e can strip the old layout rules without touching
+                      these. */}
+                  <div class="feistel-port-pair">
+                    <FeistelRoundBytes frame={frame()} />
+                    <FeistelSwapDiagram frame={frame()} />
+                  </div>
+                  <FeistelRecombineView frame={frame()} />
 
                   {/* Per-frame value-prose. Cipher-agnostic dispatch via
                       the narration registry (`src/ui/narration/`).

@@ -3115,6 +3115,292 @@ button:disabled {
   font-style: italic;
 }
 
+/* ─── Port-native Feistel/swap visualization (Slice 5.3d) ──────────────
+   OWN class names (copied from, not shared with, the old
+   `.feistel-mini-diagram-*` / `.feistel-context-*` rules above) so 5.3e
+   can delete those legacy components + their CSS without un-styling these.
+   Three surfaces: FeistelSwapDiagram (the SVG), FeistelRoundBytes (the
+   round-level byte rows), FeistelRecombineView (the recombine inspector).
+   The `.feistel-port-pair` wrapper lays the bytes panel + diagram
+   side-by-side, wrapping on narrow viewports. */
+
+.feistel-port-pair {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.feistel-port-pair > .feistel-round-bytes {
+  flex: 1 1 auto;
+  min-width: 280px;
+}
+
+.feistel-port-pair > .feistel-swap-diagram {
+  flex: 0 0 auto;
+}
+
+/* Swap diagram (SVG) */
+.feistel-swap-diagram {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev-1);
+}
+
+.feistel-swap-diagram-header {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.feistel-swap-diagram-title {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.feistel-swap-diagram-kind {
+  font-size: 10px;
+  font-family: var(--mono, monospace);
+}
+
+.feistel-swap-diagram-svg {
+  display: block;
+}
+
+.feistel-swap-diagram-half {
+  fill: var(--bg-elev-2);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.feistel-swap-diagram-half-accent {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+}
+
+.feistel-swap-diagram-half-label {
+  font-size: 11px;
+  font-family: var(--mono, monospace);
+  fill: var(--text);
+}
+
+.feistel-swap-diagram-wire {
+  stroke: var(--text);
+  stroke-width: 1;
+  opacity: 0.55;
+}
+
+/* The two swap-zone wires get distinct colours so the crossing reads at a
+   glance: the combined half (L⊕F) in accent, the passthrough (R) muted. */
+.feistel-swap-diagram-wire-mix {
+  stroke: var(--accent);
+  opacity: 0.85;
+  stroke-width: 1.5;
+}
+
+.feistel-swap-diagram-wire-pass {
+  stroke: var(--text);
+  opacity: 0.7;
+  stroke-width: 1.5;
+}
+
+.feistel-swap-diagram-leaf-rect {
+  fill: var(--bg-elev-2);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.feistel-swap-diagram-leaf-label {
+  font-size: 9px;
+  font-family: var(--mono, monospace);
+  fill: var(--text);
+}
+
+.feistel-swap-diagram-leaf-keyref {
+  font-size: 9px;
+  font-family: var(--mono, monospace);
+  fill: var(--accent);
+  font-weight: 600;
+}
+
+.feistel-swap-diagram-leaf-active .feistel-swap-diagram-leaf-rect {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.feistel-swap-diagram-leaf-clickable {
+  cursor: pointer;
+}
+
+.feistel-swap-diagram-leaf-clickable:hover .feistel-swap-diagram-leaf-rect {
+  fill: var(--bg-elev-3, var(--bg-elev-2));
+  stroke: var(--accent);
+}
+
+.feistel-swap-diagram-combine-node {
+  fill: var(--bg-elev-1);
+  stroke: var(--text);
+  stroke-width: 1;
+}
+
+.feistel-swap-diagram-combine-glyph {
+  font-size: 11px;
+  fill: var(--text);
+  font-weight: 600;
+}
+
+.feistel-swap-diagram-swap-label {
+  font-size: 8px;
+  fill: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.feistel-swap-diagram-empty {
+  font-size: 9px;
+  fill: var(--muted);
+  font-style: italic;
+}
+
+/* Round-bytes panel */
+.feistel-round-bytes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg-elev-1);
+}
+
+.feistel-round-bytes-header {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.feistel-round-bytes-round {
+  font-family: var(--mono, monospace);
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.feistel-round-bytes-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.feistel-round-bytes-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.feistel-round-bytes-section-title {
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.feistel-round-bytes-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+}
+
+.feistel-round-bytes-row-accent {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.feistel-round-bytes-label {
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 28px;
+  text-align: right;
+}
+
+/* Recombine inspector */
+.feistel-recombine {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev-1);
+}
+
+.feistel-recombine-header {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+.feistel-recombine-round {
+  font-family: var(--mono, monospace);
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.feistel-recombine-title {
+  font-size: 11px;
+  color: var(--text);
+}
+
+.feistel-recombine-kind {
+  margin-left: auto;
+  font-size: 10px;
+  font-family: var(--mono, monospace);
+  color: var(--accent);
+}
+
+.feistel-recombine-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.feistel-recombine-section-title {
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.feistel-recombine-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.feistel-recombine-label {
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 50px;
+  text-align: right;
+}
+
+.feistel-recombine-note {
+  margin: 0;
+  line-height: 1.5;
+}
+
 /* ─── Slice 2: view-mode tabs (linear / graph / JSON) ─────────────────────
    Tab bar sits above the trace-view content. Three buttons; the active one
    gets the accent border/background combo so it reads as "selected." The

@@ -58,7 +58,7 @@ user-required follow-up to B4). Advisor-confirmed.
 | **5.3a** | PortFlowView universal default + truth-up: formalize the `FrameStateView` default (BytesView = test-only-toy fallback), correct the stale S2(e) docstring, record this sub-arc + the BytesView-unreachable invariant test. No code-path change. | **DONE 2026-05-31** |
 | 5.3b | Port-wire Speck + Serpent specs (declare explicit `portInputs` on round-body leaves) so `inferPortEdges` owns their spine + the S2(f) gate skips legacy inference for them. **Load-bearing spike FIRST:** declaring `portInputs` may flip the runtime from implicit state-thread to explicit port-resolution (runtime.ts:343-347) — diff the trace on ONE Speck round leaf to confirm KAT byte-equality before committing the approach; if not byte-equal, 5.3b becomes native Speck/Serpent decomposition. Arc size hinges on this. | **DONE 2026-05-31** |
 | 5.3c | Migrate value/narration reads off `stateBefore`/`stateAfter` → frame ports: `edge-value-lookup` (endpoints + block-chips; isolate the toy-only rejoin), narration ×6, `StepStrip`, `RunExplorerModal`. | **DONE 2026-05-31** |
-| 5.3d | **Port-native Feistel/swap visualization rebuild** (the obligatory user-required follow-up). New DES-port-native viz reading `portInputs`/`portOutputs`. **Independent of 5.3e** (the old components are toy-only). | Sequenced |
+| 5.3d | **Port-native Feistel/swap visualization rebuild** (the obligatory user-required follow-up). New DES-port-native viz reading `portInputs`/`portOutputs`. **Independent of 5.3e** (the old components are toy-only). | **DONE 2026-05-31** |
 | 5.3e | **Final removal.** Delete the old toy-only Feistel components (`RejoinFrameView`/`FeistelTrackContext`/`FeistelMiniDiagram`) + toy + feistel runtime walk + `FeistelRoundGroup`/`BranchTrack`/`CombineKind`; delete `stateBefore`/`stateAfter`, `inferStateEdges`, `dropAuxOnlyStateEdges`, `BytesView`, the legacy `port-projection` bridge; collapse `BytesState`/`State`/`StateShape`. Strictly after 5.3b + 5.3c. **Risk:** `inferStateEdges`'s empty-group-as-node case (graph.ts:1063-1071 — a cleared round in the editor) has no port-flow analogue → re-implement or accept as editor-only regression. | Sequenced |
 | — | Feistel types + toy fixture: **no longer a separate "next phase"** — folded into 5.3d (rebuild) + 5.3e (delete). Order of 5.3d vs 5.3e is a judgment call (rebuild-as-reference first, or clean-slate then rebuild from git history), not a dependency. | folded into 5.3d/e |
 
@@ -370,9 +370,51 @@ its Feistel UI; (ii) `trace-initial-state.test.ts`'s one
 (v) doc-comment references in `GraphView`/`provenance/*`/`step-id`/
 `default-registry`/`bytes-to-state`/`pkcs7-pad`.
 
-**NEXT: 5.3d** (port-native Feistel/swap viz rebuild — floats, independent of
-5.3e) and/or **5.3e** (final field/edge/BytesView/toy removal — now unblocked
-by 5.3a+5.3b+5.3c).
+**NEXT: 5.3e** (final field/edge/BytesView/toy removal — unblocked by
+5.3a+5.3b+5.3c; 5.3d is now done so the Feistel viz no longer depends on the toy
+components 5.3e deletes).
+
+## Slice 5.3d — what shipped (2026-05-31)
+
+The obligatory port-native Feistel/swap visualization rebuild. When B4 made DES
+port-native (each round a plain `group` of `split-bytes → …F… → xor → concat`),
+the three `feistel-round`-keyed linear views went dark (they read `branchPath` /
+the synthetic `:rejoin` frame). 5.3d rebuilds them **reading port I/O**, with
+detection + structure **derived purely from the round group's wiring** (user
+pick: no spec tag, zero schema change). The swap is read from the `recombine`
+concat's argument order, so it stays correct across encrypt / decrypt / edits.
+
+- **`src/core/feistel-shape.ts`** (NEW, pure) — `analyzeFeistelRound(group)`
+  recognizes the split→F→xor→concat shape and returns the structural descriptor
+  (split/fxor/recombine ids, F-stack, derived port names, `swap`, `roundKeyAux`);
+  `findActiveFeistelRound(frame, spec)` walks `frame.path` for the round
+  ancestor; `resolveFeistelRoundBytes(shape, frames, blockIndex)` reads
+  L/R/F/L⊕F/new_L/new_R from the child frames' `portOutputs`/`portInputs`.
+- **Three NEW components** (`src/ui/components/`), self-detecting, own CSS class
+  names (`feistel-swap-diagram-*` / `feistel-round-bytes-*` / `feistel-recombine-*`,
+  copied — NOT shared — from the old selectors so 5.3e can strip the old CSS):
+  `FeistelSwapDiagram` (the abstract SVG; the swap CROSSING vs round-16 straight
+  wires, click-leaf-to-scrub, active-leaf accent, K_i subscript),
+  `FeistelRoundBytes` (round-level L/R/F/L⊕F/L'/R' byte rows), and
+  `FeistelRecombineView` (additive panel on the `concat` frame labelling the swap).
+- **Independent of 5.3e**: keyed off the new structural detection; the old
+  `branchPath`/`REJOIN_STEP_TYPE` toy components + their App.tsx dispatch are
+  untouched (5.3e deletes them). Mutually exclusive in practice (toy emits
+  `branchPath`; port-native DES emits the split→concat shape).
+- **Detection guard** — `findActiveFeistelRound` requires the active frame to be
+  a leaf OF the detected round (every cipher names rounds `round.N`, so a
+  transient spec/trace mismatch during a cipher switch could otherwise draw DES
+  structure on an AES `round.N` frame; the composite browser look surfaced this).
+- **Tests** (+26): `tests/feistel-shape.test.ts` (analyzer enc+dec swap pattern,
+  null for AES/SHA/outer-`rounds`/broken-round/the mismatch guard,
+  `resolveFeistelRoundBytes` KAT across all 16 DES rounds incl. the round-16
+  `preFp` byte-order pin) + three jsdom component tests. **Browser-smoked**
+  (throwaway Playwright): round-5 swap crossing + bytes, round-16 straight
+  (no-swap), recombine inspector both modes, DES decrypt diagram, composite
+  full-column look — byte values match FIPS 46-3. Gate GREEN (2402 tests / 210
+  files). No schema change, no KAT change.
+- **Out of scope**: graph view (B4's round-group render is user-confirmed good),
+  scrubber track badges (N/A for port-native rounds).
 
 ## Verification (for 5.1+)
 
