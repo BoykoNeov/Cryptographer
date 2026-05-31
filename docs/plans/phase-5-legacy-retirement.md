@@ -656,3 +656,100 @@ surfaces every unhandled `switch` arm). 5.2 additionally pins
 AES/Speck/Serpent/DES + ECB/CBC KATs byte-equal before and after. 5.1/5.3
 warrant a browser smoke (MatrixView removal + inspector default change are
 visual) per `feedback_visual_smoke_vs_property_tests`.
+
+## Phase C — legacy executor contract retirement (beyond 5.3e)
+
+Slices 5.0–5.3e retired the legacy **state** model (MatrixState, the
+`stateBefore`/`stateAfter` fields, the legacy graph state-edge inference,
+BytesView, the Feistel scaffolding). What survived into Phase C was the
+legacy **executor contract** itself: the `kind:"legacy"` `StepRegistration`
+variant, the per-leaf `legacy?` fallback executor, the runtime's OFF-flag
+dual-dispatch path, and the `portedDispatchEnabled` flag that selected it.
+After 5.3e no shipped step used any of it (every leaf is `kind:"ported"` with
+`legacy === undefined`), so it was dead code kept alive only by test
+scaffolding. Phase C removes it. Shipped in 2 batches (commits `fedec9b`,
+`954f5ba`, 2026-05-31).
+
+**Scope decision (user): Goal 1 only — retire the legacy executor contract /
+dual-dispatch.** `meta`/`ProjectionMetadata` is a *separate* mechanism and was
+**left untouched** (see "Deferred" below). The advisor split confirmed the two
+are independent: the meta-projection logic lives inside the ported dispatch
+branch, so deleting the OFF-flag branch leaves it riding along byte-for-byte.
+
+**The proof the path was dead (the enumeration, kept in the Batch-1 commit):**
+the only `kind:"legacy"`/bare-executor registrations + the only
+`portedDispatchEnabled: false` callers were test-only scaffolding that existed
+to exercise the legacy path — circular. No selectable cipher reached it.
+
+### Batch 1 — clear the last `kind:"legacy"` registrations (`fedec9b`)
+
+The runtime container tests (`runtime-iterate`,
+`runtime-for-each-subgraph-{toy,outer,with-history}`) registered
+`StepDefinition` (→ `kind:"legacy"`) helper steps to exercise iterate /
+for-each-subgraph machinery. Converted each to a hybrid-ported step
+(`meta.stateInputPort`/`stateOutputPort = "state"`, the 5.3e-B4 `xorWithConstant`
+pattern); the `xorPriorsIntoState` lookback body reads the auto-published
+priors via static `meta.auxReadPorts → prior-1/prior-2`. The marker step
+dropped its never-asserted dynamic `mark@${stepId}` aux write.
+
+**The one non-mechanical part — the FES-with-history aux snapshot/restore tests.**
+`assertAuxAbsent`/`assertAuxEquals` were probe steps reading the **live** `ctx.aux`
+map after the node, but the ported path feeds a *synthetic* `ctx.aux` (only a
+step's declared keys), so a probe step can't observe the live map. Reframed both
+onto `trace.finalAux` (the live aux the runtime already exposes at walk-end) and
+deleted the probe helpers — simpler and a more honest way to test a runtime
+property (advisor-confirmed; the seeding side already used `runSpec`'s
+`initialAux`). Gate GREEN 2237 / 191 (no count change — net-zero).
+
+### Batch 2 — atomic contract collapse + flag removal + sweep (`954f5ba`)
+
+One type-coupled unit (a discriminated union can't be half-collapsed):
+
+- **`runtime.ts`** — deleted the OFF-flag legacy branch + its "requires
+  portedDispatchEnabled: true" throw (ported branch now unconditional, a bare
+  block preserving const scoping); removed `portedDispatchEnabled` from
+  `RuntimeInput` + the `portedDispatch` local; the `legacy === undefined`
+  port-capture gate is now unconditional.
+- **`types.ts`** — collapsed `StepRegistration` to the single port-native shape
+  (dropped the `kind:"legacy"` arm + the `legacy?` field). **Kept `kind:"ported"`
+  as a single-member tag** (advisor: dropping the discriminator would turn every
+  registration literal — dozens in `default-registry` + the Batch-1 fixtures —
+  into excess-property errors for a cosmetic gain, folding a large error-prone
+  diff into the irreversible collapse). Deleted the orphaned `StepExecutor` /
+  `StepDefinition` / `StepResult`; **`StepContext` survives** (the ported
+  contract reuses it; ~40 tests build a `ctx` from it).
+- **`registry.ts`** — `register()` takes a `StepRegistration` directly; deleted
+  `normalizeRegistration` + the legacy `get()` accessor (zero callers).
+- **`dispatch.ts`** — deleted (`requiresPortedDispatch` was vestigial — `true`
+  for every shipped spec). `App.tsx` drops the flag derivation; the `GraphView`
+  replication-auto-on memo is now **unconditional** — every spec is port-native,
+  so replication defaults ON for all (previously SHA-256-only), the intended
+  end state.
+- **Test sweep (~110 files)** — scripted removal of `portedDispatchEnabled: true`
+  from every `runSpec` call (tsc-driven to completeness) + the `@/core/dispatch`
+  imports; deleted the per-primitive "off-flag dispatch throws" guard `it`s (the
+  on-flag "input port not wired" sibling stays); deleted the now-vacuous
+  `requires-ported-dispatch.test.ts`, the `byte-native-ports-contract`
+  legacy-contract tripwire (the collapsed type makes a legacy registration
+  *unrepresentable* — stronger than the runtime filter), and
+  `state-shape-contracts.test.ts` (its "legacy-shaped steps declare a
+  shapeContract" category is gone — vacuous since 5.2, and no structural
+  discriminator gives it honest teeth post-collapse; `spec-shapes.test.ts` keeps
+  the contract↔topology coherence).
+
+Gate GREEN — biome clean, tsc 0, **2165 tests / 189 files**, build **620.52 KB
+raw / 182.93 KB gz**. No KAT or `schemaVersion` change (registration kind + the
+dispatch flag are never persisted). **Browser-smoked** (throwaway Playwright):
+DES (`85e813540f0ab405` — verifies the `App.tsx` wiring + `meta` key-schedule
+projection) + AES-128 (FIPS-197 C.1, the new universal replication-auto-on
+default renders clean), zero console/page errors.
+
+### Deferred — `meta`/`ProjectionMetadata` retirement (a separate decision)
+
+`meta` has two halves. Its **state** half is already bypassable (5.3b proved a
+leaf's `portInputs.state` overrides the projection byte-equal). Its **aux** half
+is what draws the **key-schedule → round round-key fan-out** (5.3b deliberately
+left `roundKey` ports on aux). So "retire `meta`" really means *re-expressing
+each key-schedule's round-key broadcast as explicit port wiring* — a
+graph-topology + round-key-visualization change, **not** debt removal. That's a
+separate user call; Goal 1 leaves `meta` fully working.
