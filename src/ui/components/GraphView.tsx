@@ -2216,9 +2216,11 @@ export const GraphView = () => {
    * 64 rounds, `W-publish` to 64). With replication OFF the canvas is a
    * dense thicket of crossing long arrows that obscures the data flow;
    * ON splits each source into per-consumer chips that read as a sequence.
-   * (Pre-Phase-C this auto-on was gated on `requiresPortedDispatch` — true
-   * only for SHA-256 while AES/Speck/Serpent/DES were still legacy-dispatched.
-   * Every spec is port-native now, so the auto-on applies universally.)
+   * (Pre-Phase-C this read `if (requiresPortedDispatch(spec, registry)) return
+   * true`. Since Slice 5.2 every shipped spec has been port-native, so that
+   * predicate already returned true for all of them — replacing it with a
+   * literal `true` is a pure simplification, behavior-identical for every
+   * shipped spec, not a default change.)
    *
    * Why "user hasn't touched it" gates the auto-on: if a user toggled
    * off mid-session (across any spec), they made an explicit choice;

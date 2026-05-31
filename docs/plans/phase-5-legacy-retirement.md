@@ -722,9 +722,10 @@ One type-coupled unit (a discriminated union can't be half-collapsed):
   `normalizeRegistration` + the legacy `get()` accessor (zero callers).
 - **`dispatch.ts`** — deleted (`requiresPortedDispatch` was vestigial — `true`
   for every shipped spec). `App.tsx` drops the flag derivation; the `GraphView`
-  replication-auto-on memo is now **unconditional** — every spec is port-native,
-  so replication defaults ON for all (previously SHA-256-only), the intended
-  end state.
+  replication-auto-on memo's `requiresPortedDispatch` call became a literal
+  `true` — **behavior-identical** for every shipped spec (the predicate was true
+  for any port-native leaf, and every shipped spec has satisfied that since
+  Slice 5.2, so it already returned true for all of them), a pure simplification.
 - **Test sweep (~110 files)** — scripted removal of `portedDispatchEnabled: true`
   from every `runSpec` call (tsc-driven to completeness) + the `@/core/dispatch`
   imports; deleted the per-primitive "off-flag dispatch throws" guard `it`s (the
