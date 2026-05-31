@@ -1,10 +1,14 @@
 # Slice 5.2 handoff — true PortedExecutors for the lifted key-schedules + padding + aux primitives
 
-**Status as of 2026-05-31.** Batch A shipped; B/C/D + close-out not started.
-This file is a cold-start handoff so a fresh session can continue without
-re-deriving the architecture. Authored because the `advisor` tool was
-unavailable this session (the plan requires an "own advisor pass" for 5.2 —
-**still pending**, see "Required advisor pass" below).
+**STATUS: COMPLETE (2026-05-31).** All batches shipped + pushed —
+Batch A `8beae14`, Batch B `f5e1f80`, Batch C `d307656`, Batch D `9b4cd4c`;
+close-out done. The advisor pass that was pending below **was run this session**
+(advisor available again) and steered Batch C to decision C1 (accept the
+PortFlowView reroute for padding) + flagged the unpad length-decrease smoke. See
+`docs/plans/phase-5-legacy-retirement.md` "Slice 5.2 — what shipped" for the
+canonical record. This file is retained as the historical approach reference.
+The remaining open item is the **manual browser smoke** (Speck key-schedule
+frame, padding pad+unpad frames, aux-primitive frame).
 
 Parent plan: `docs/plans/phase-5-legacy-retirement.md` (Slice 5.2 row).
 Topic memory: `…/memory/project_phase5_legacy_retirement.md`.

@@ -53,7 +53,7 @@ user-required follow-up to B4). Advisor-confirmed.
 |---|---|---|
 | **5.0** | Underbrush: delete `BitVecState`/`BigIntState` + the dead `REPLICATION_THRESHOLD` alias + refresh stale `CLAUDE.md` stats. Zero crypto risk. | **DONE 2026-05-30** |
 | **5.1** | Retire `MatrixState` (Phase C1-matrix): drain the test-only `generic.*` matrix primitives + the `sha2.*` monolithic steps, retarget/delete their MatrixView/projection tests, drive the 4×4 render off raw bytes, then delete the type. No crypto risk; broad UI surface. | **DONE 2026-05-30** |
-| 5.2 | Convert the lifted key-schedules (`aes.key-expansion@1/@2`, `speck.key-schedule@1`, `serpent.key-expansion@1`, `des.key-schedule@1`) + the padding/aux primitives to true `PortedExecutor`s; drop their `legacy:` fields. **`liftLegacyExecutor` SURVIVES** as a bytes-only helper for `feistel.toy-add-k@1` (the reserved-through-Phase-5 toy — advisor verdict 2026-05-30: converting it would drop `legacy:` and flip the toy onto the PortFlowView capture path, doing the deferred Feistel-viz rebuild piecemeal). **Crypto KAT gates; own advisor pass** per `feedback_iterative_slice_review`. | Sequenced |
+| 5.2 | Convert the lifted key-schedules (`aes.key-expansion@1/@2`, `speck.key-schedule@1`, `serpent.key-expansion@1`, `des.key-schedule@1`) + the padding/aux primitives to true `PortedExecutor`s; drop their `legacy:` fields. **`liftLegacyExecutor` SURVIVES** as a bytes-only helper for `feistel.toy-add-k@1` (the reserved-through-Phase-5 toy — advisor verdict 2026-05-30: converting it would drop `legacy:` and flip the toy onto the PortFlowView capture path, doing the deferred Feistel-viz rebuild piecemeal). **Crypto KAT gates; own advisor pass** per `feedback_iterative_slice_review`. | **DONE 2026-05-31** |
 | 5.3 | Phase C2: retire `TraceFrame.stateBefore`/`stateAfter` + `inferStateEdges` + `dropAuxOnlyStateEdges`; collapse the residual `BytesState`; `PortFlowView` becomes the universal inspector default. | Sequenced |
 | — | Feistel types + toy fixture: reserved for the **next phase** (port-native Feistel/swap viz rebuild). | Deferred |
 
@@ -135,6 +135,53 @@ Retired `MatrixState` + the `matrix4x4-bytes` `StateShape`. `State` is now
   `feistel.toy-add-k@1` / synthetic byte specs).
 - **Gate:** `npm run check` GREEN — **2348 tests / 205 files**, build 656.71 KB
   raw / 192.95 KB gzipped (down ~20 KB).
+
+## Slice 5.2 — what shipped (2026-05-31)
+
+Converted the lifted key-schedules + padding + aux primitives to true
+`PortedExecutor`s (the **hybrid-ported** pattern: drop `legacy:`, **keep
+`meta`**). The runtime still projects `aux[…] → masterKey`/state ports and
+output ports → aux, so emitted frames stay byte-identical — the only new fact
+is that `portInputs`/`portOutputs` now populate (runtime gate:
+`registration.legacy === undefined`). Shipped in four batches:
+
+- **Batch A** (`8beae14`, prior session) — `aes.key-expansion@1`/`@2`.
+- **Batch B** (`f5e1f80`) — `speck.key-schedule@1`, `serpent.key-expansion@1`,
+  `des.key-schedule@1`. Render delta: AES/Serpent/DES key-schedule frames stay
+  intercepted by `KeyScheduleExplorer` (by stepType); **Speck reroutes to
+  PortFlowView** (not in `isKeyExpansionStepType`). The Serpent sim-parity test
+  was re-registered `kind:"ported"` flag-on; Speck/Serpent malformed-key
+  rejection tests gained `portedDispatchEnabled:true` (flag-off now throws
+  "requires portedDispatchEnabled" at the now-port-native schedule).
+- **Batch C** (`d307656`) — the six padding step types
+  (pkcs7/zero/iso7816-4 × pad/unpad). State-port pattern (`inputs.get("state")`
+  → `outputs.set("state", …)`). **Load-bearing UX (advisor decision C1):**
+  padding frames reroute BytesView → PortFlowView (input/output `state` port
+  rows surface the length change), matching SHA-256's already-shipped
+  `pad`/`length-append`. The App + PortFlowView dispatch comments were
+  corrected — the port-capture gate is `legacy === undefined`, NOT
+  `meta === undefined` (hybrid-ported frames capture ports). The padding
+  dispatch test's flag-off parity was reduced to flag-on (B2/B3/B4 precedent);
+  `app-padding-roundtrip.test.tsx` reads the PortFlowView port rows.
+- **Batch D** (`9b4cd4c`) — the three aux primitives (`generic.aux-load@1` /
+  `aux-xor@1` / `aux-copy@1`). Executors simplified (fixed port names, no
+  `ctx.aux`); the **graceful missing-aux** semantics survive as a runtime
+  behavior (absent port omitted + `frame.auxReadMissing` from `meta`).
+  `aux-copy`'s output layout `preserve-input-variant → raw` (its only purpose
+  was MatrixState round-tripping, gone since 5.1), and `generic.aux-copy@1`
+  was removed from `NON_BYTES_ALLOWLIST` (now **empty** — no shipped ported
+  leaf declares a non-bytes port).
+
+**`liftLegacyExecutor` SURVIVES** with its sole caller now `feistel.toy-add-k@1`
+(verified by grep). **Crypto gate:** `npm run check` GREEN at each batch —
+2340 tests / 205 files (−8 from 5.1's 2348: vacuous flag-off parity + dead
+executor-level assertions removed); AES-128/192/256 + ECB/CBC + Speck + Serpent
++ DES KATs all byte-equal. **Advisor pass DONE** this session (was deferred in
+the prior handoff). **Remaining manual gate:** browser-smoke a Speck
+key-schedule frame, a padding **pad AND unpad** frame (unpad is a length
+*decrease* — zero PortFlowView precedent), and an aux-primitive frame; if unpad
+reads confusingly, a PortFlowView length-delta affordance becomes near-term
+polish.
 
 ## Verification (for 5.1+)
 
