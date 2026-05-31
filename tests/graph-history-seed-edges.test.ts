@@ -185,10 +185,13 @@ describe("deriveAuxGraph — history-seed edge derivation (S2(l))", () => {
     // body alongside its fetch leaf).
     const replicated = replicateHighFanoutSources(graph, DEFAULT_REPLICATION_THRESHOLD);
     const seedReplicas = replicated.nodes.filter((n) => n.replicaOf === "length-append");
-    // Five total: 4 aux (history-seed) replicas inside msg-schedule + 1
-    // spine replica at root scope for length-append's spine-successor edge
-    // into msg-schedule (different consumer, no shared replica per Slice 7b).
-    expect(seedReplicas).toHaveLength(5);
+    // Four total: the 4 aux (history-seed) replicas inside msg-schedule.
+    // (Pre-5.3e there was a 5th — a spine replica at root scope for the legacy
+    // `length-append → msg-schedule` consecutive-siblings state edge. That edge
+    // came from `inferStateEdges`, retired in Slice 5.3e Batch 3; length-append's
+    // only out-edges are now the 4 history-seed aux edges, and the
+    // preamble→schedule handoff reads as those 4 aux arrows.)
+    expect(seedReplicas).toHaveLength(4);
     // The four IN-CONTAINER replicas (the user's add-on: "items inside
     // a container should also be available to be represented as
     // replications") land inside `msg-schedule`, alongside their
@@ -197,10 +200,10 @@ describe("deriveAuxGraph — history-seed edge derivation (S2(l))", () => {
       (n) => n.containerPath.length === 1 && n.containerPath[0] === "msg-schedule",
     );
     expect(insideMsgSchedule).toHaveLength(4);
-    // The spine replica lives at root scope (consumer = msg-schedule
-    // container, sibling of length-append).
+    // No root-scope replica anymore — length-append has no spine-successor
+    // state edge (only the aux history-seed fan-out into the container body).
     const atRoot = seedReplicas.filter((n) => n.containerPath.length === 0);
-    expect(atRoot).toHaveLength(1);
+    expect(atRoot).toHaveLength(0);
   });
 
   it("SHA-256: history-seed edges paint as kind:'aux' (not 'state'), distinguishing them from the port-flow spine", () => {

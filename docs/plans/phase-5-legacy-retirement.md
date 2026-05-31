@@ -59,7 +59,7 @@ user-required follow-up to B4). Advisor-confirmed.
 | 5.3b | Port-wire Speck + Serpent specs (declare explicit `portInputs` on round-body leaves) so `inferPortEdges` owns their spine + the S2(f) gate skips legacy inference for them. **Load-bearing spike FIRST:** declaring `portInputs` may flip the runtime from implicit state-thread to explicit port-resolution (runtime.ts:343-347) — diff the trace on ONE Speck round leaf to confirm KAT byte-equality before committing the approach; if not byte-equal, 5.3b becomes native Speck/Serpent decomposition. Arc size hinges on this. | **DONE 2026-05-31** |
 | 5.3c | Migrate value/narration reads off `stateBefore`/`stateAfter` → frame ports: `edge-value-lookup` (endpoints + block-chips; isolate the toy-only rejoin), narration ×6, `StepStrip`, `RunExplorerModal`. | **DONE 2026-05-31** |
 | 5.3d | **Port-native Feistel/swap visualization rebuild** (the obligatory user-required follow-up). New DES-port-native viz reading `portInputs`/`portOutputs`. **Independent of 5.3e** (the old components are toy-only). | **DONE 2026-05-31** |
-| 5.3e | **Final removal.** Delete the old toy-only Feistel components (`RejoinFrameView`/`FeistelTrackContext`/`FeistelMiniDiagram`) + toy + feistel runtime walk + `FeistelRoundGroup`/`BranchTrack`/`CombineKind`; delete `stateBefore`/`stateAfter`, `inferStateEdges`, `dropAuxOnlyStateEdges`, `BytesView`, the legacy `port-projection` bridge; collapse `BytesState`/`State`/`StateShape`. Strictly after 5.3b + 5.3c. **Risk:** `inferStateEdges`'s empty-group-as-node case (graph.ts:1063-1071 — a cleared round in the editor) has no port-flow analogue → re-implement or accept as editor-only regression. | **Batches 1–2 DONE 2026-05-31** (`dd279be` + B2); Batches 3–4 sequenced |
+| 5.3e | **Final removal.** Delete the old toy-only Feistel components (`RejoinFrameView`/`FeistelTrackContext`/`FeistelMiniDiagram`) + toy + feistel runtime walk + `FeistelRoundGroup`/`BranchTrack`/`CombineKind`; delete `stateBefore`/`stateAfter`, `inferStateEdges`, `dropAuxOnlyStateEdges`, `BytesView`, the legacy `port-projection` bridge; collapse `BytesState`/`State`/`StateShape`. Strictly after 5.3b + 5.3c. **Risk:** `inferStateEdges`'s empty-group-as-node case (graph.ts:1063-1071 — a cleared round in the editor) has no port-flow analogue → re-implement or accept as editor-only regression. | **Batches 1–3 DONE 2026-05-31** (`dd279be` + B2 + B3); Batch 4 sequenced |
 | — | Feistel types + toy fixture: **no longer a separate "next phase"** — folded into 5.3d (rebuild) + 5.3e (delete). Order of 5.3d vs 5.3e is a judgment call (rebuild-as-reference first, or clean-slate then rebuild from git history), not a dependency. | folded into 5.3d/e |
 
 ## Slice 5.0 — what shipped
@@ -416,7 +416,7 @@ concat's argument order, so it stays correct across encrypt / decrypt / edits.
 - **Out of scope**: graph view (B4's round-group render is user-confirmed good),
   scrubber track badges (N/A for port-native rounds).
 
-## Slice 5.3e — in progress (Batches 1–2 shipped 2026-05-31)
+## Slice 5.3e — in progress (Batches 1–3 shipped 2026-05-31)
 
 The final removal, split into **4 batches** (the one-liner spanned the runtime,
 types, graph, every UI surface, and the State-shape collapse — too broad for one
@@ -515,12 +515,62 @@ field/`State`-type collapse) lands last in its own commit.
   files** (−8 / −1 = the deleted BytesView test), build **623.46 KB raw / 183.90
   KB gz** (≈4.7 KB raw lighter). No KAT or `schemaVersion` change.
 
-**Batches 3–4 (sequenced, next session):**
-- **Batch 3 — graph state-edge inference.** Delete `inferStateEdges` /
-  `dropAuxOnlyStateEdges` + the `GraphView` call sites; retarget the deferred
-  toy-string fixtures in `aux-graph-derivation` /
-  `graph-port-edge-derivation` / `drop-aux-only-state-edges-asymmetric`. Accept
-  the empty-group-as-node editor-only regression (no port-flow analogue).
+**Batch 3 SHIPPED (2026-05-31)** — *retire graph state-edge inference*:
+
+- **`graph.ts`:** deleted `inferStateEdges` (the legacy consecutive-siblings
+  state-thread inference + its local helpers `emitChain` / `processScope` /
+  `firstSpineId` / `lastSpineId` / `hasSpineContent` / `collectIterates` /
+  `collectSkips` / the S2(f) `skipStateEdgeTo` gate) and `dropAuxOnlyStateEdges`
+  (the aux-only-root spine-edge suppressor) — 390 lines. `deriveAuxGraph` no
+  longer calls either; the spine is composed **entirely** by `inferPortEdges`
+  (`portFlowEdges`). `opts.registry` is now unread there but retained on the
+  signature for caller compat (~110 callsites). `STATE_AUX_KEY` (endpoint pills)
+  + `PORT_FLOW_AUX_KEY` survive; ~10 doc-comments naming the deleted functions
+  truthed-up.
+- **`GraphView.tsx`:** dropped the `dropAuxOnlyStateEdges` import + the
+  `auxOnlyFilteredGraph` memo (collapsed → `replicatedGraph` consumes
+  `expandedGraph()` directly) + the now-dead `auxOnlyRootSinkIds` memo.
+  **`auxOnlyRootIds` SURVIVES** — it still drives the layout-lift of aux-only
+  roots off the spine row in `layoutRoot`.
+- **The discriminator that made deleting the filter safe (advisor's #1):**
+  every shipped spec wires its first consumer to `$input` (`seedInput`/
+  `portInputs.state` = `port($input,…)`) → `specReferencesInputSource` is true
+  for all → the legacy `CIPHER_INPUT_ID` pill never injects → the only surviving
+  `kind:"state"+auxKey:"state"` edge is the OUTPUT pill (last step → output,
+  never an aux-only root). So `dropAuxOnlyStateEdges` was **already a pure no-op
+  for every shipped spec**; deletion is unconditionally safe. Probe-confirmed:
+  AES-128 spine = 40 edges, ALL port-flow, legacy=0; SHA-256 legacy=0
+  (pf=3245); DES legacy=0.
+- **Accepted regression:** the empty-group-as-node spine (a cleared round in the
+  editor staying connected via its own id) died with `inferStateEdges` —
+  `inferPortEdges` has no analogue. User-accepted per the 5.3e risk note.
+- **Tests:** deleted `drop-aux-only-state-edges-asymmetric.test.ts` (whole file —
+  its subject is the deleted function) + the `replicate-fanout` "dropAuxOnly
+  composes with replication" describe block (196 lines) + the 2 empty-group +
+  2 non-ported-backward-compat tests (`aux-graph-derivation` /
+  `graph-port-edge-derivation`) + the `legacyTwoLeafSpec`/`removeStep` they used.
+  **Six tests written against the pre-deletion DUPLICATE spine** (legacy +
+  port-flow coexisted) were fixed: 3 whose premise was "AES key-expansion has a
+  state-out" (the legacy identity passthrough — DELETED, invariant survives in
+  synthetic-graph cases + SHA-256 split-wv S2(i)); 3 RETARGETED to port-flow
+  reality — the SHA-256 history-seed replica count `5→4` (length-append's only
+  out-edges are now the 4 aux history-seed arrows, no spine replica), and the
+  two `collapseGraph` round.5 tests' cross-boundary endpoints from leaf-to-leaf
+  (`round.4.add-round-key → round.5`) to **container-sourced** (`round.4 →
+  round.5`), matching the port-flow round→round handoff. `graph-bundle`'s
+  singleton-bundle invariant retargeted from key-expansion to SHA-256 split-wv
+  (8 `[port-flow]` singletons).
+- **Gate:** `npm run check` GREEN — biome clean, tsc 0 errors, **2242 tests /
+  191 files** (−15 / −1 vs B2), build **621.89 KB raw / 183.46 KB gz** (≈1.6 KB
+  lighter). No KAT or `schemaVersion` change. **Browser-smoked the gating
+  visual** (advisor's hard gate — the one place deletion changed visible
+  structure beyond removing a duplicate): SHA-256 graph view shows
+  `$input → pad → length-append` (white port-flow spine) then a light-blue
+  history-seed arrow `length-append → Message schedule W_0..W_63` — msg-schedule
+  reads cleanly connected, NOT stranded (the legacy spine arrow was a redundant
+  duplicate of the always-rendered history-seed arrow). AES proven by the probe.
+
+**Batch 4 (sequenced, next session):**
 - **Batch 4 — field + `State`-type collapse (irreversible, own commit).** Delete
   `stateBefore` / `stateAfter` from `TraceFrame` + the runtime construction
   (incl. `coerceFrame`); `frame-state.ts` returns null on the field fallback

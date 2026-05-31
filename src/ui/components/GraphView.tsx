@@ -50,7 +50,6 @@ import {
   bundleEdges,
   collapseGraph,
   deriveAuxGraph,
-  dropAuxOnlyStateEdges,
   expandCollapsedIterates,
   isEndpointId,
   replicateHighFanoutSources,
@@ -2654,56 +2653,6 @@ export const GraphView = () => {
     return out;
   });
 
-  /**
-   * Slice S2(h), 2026-05-26 — `docs/plans/sha-256-density-polish.md`.
-   *
-   * The TO-side (sink) subset of `auxOnlyRootIds`: aux-only roots whose
-   * registration does NOT declare `meta.stateInputPort`. These leaves
-   * are pure aux producers — `aux-load@1`, `constant-load@1`,
-   * `aes.key-expansion@1`, port-native primitives with no state ports —
-   * and they don't read the state thread at runtime. An inferred
-   * consecutive-siblings spine edge INTO one of them is pedagogically
-   * misleading (the consumer never reads it) and gets dropped by
-   * `dropAuxOnlyStateEdges`.
-   *
-   * EXCLUDED from this narrower set (kept in the wider `auxOnlyRootIds`
-   * for layout-lift purposes): aux-only roots WITH `meta.stateInputPort`.
-   * Today's only shipped instance is SHA-256's `W-publish` =
-   * `generic.state-to-aux-bytes@1` — it has `shapeContract.input ===
-   * "any"` (so it lifts to the preamble row) AND `meta.stateInputPort:
-   * "state"` (it reads the state-thread to clone bytes into aux). An
-   * incoming spine edge into it (`msg-schedule → W-publish`) IS the
-   * real handoff. Pre-S2(h) the symmetric filter was dropping that
-   * edge and the user saw "message schedule has no outgoing arrows"
-   * — the dead-end the original plan misdiagnosed as a layout problem.
-   *
-   * Computed as a subset of `auxOnlyRootIds()` rather than re-walking
-   * the spec, so the two memos can't drift on Path 1/Path 2 membership
-   * rules. The `meta` lookup is registry-driven (`getRegistration` is
-   * the canonical source for both legacy and lifted-ported entries).
-   */
-  const auxOnlyRootSinkIds = createMemo<ReadonlySet<string>>(() => {
-    const wide = auxOnlyRootIds();
-    if (wide.size === 0) return wide;
-    const s = spec();
-    const out = new Set<string>();
-    for (const n of s.steps) {
-      if (n.kind !== "step" || !wide.has(n.id)) continue;
-      const reg = registry.getRegistration(n.type);
-      // A leaf without `meta.stateInputPort` doesn't consume the
-      // state-thread. Drop incoming spine edges. Includes (a) legacy
-      // entries with no meta field at all (kind: "legacy" narrowing
-      // below), (b) lifted-ported entries with meta but no stateInput
-      // port (e.g. key-expansion, aux-load), (c) port-native pure
-      // sources (no meta at all). The kind-narrow is load-bearing
-      // under verbatimModuleSyntax — `meta` doesn't exist on the
-      // legacy variant of the StepRegistration discriminated union.
-      const stateInputPort = reg?.kind === "ported" ? reg.meta?.stateInputPort : undefined;
-      if (stateInputPort === undefined) out.add(n.id);
-    }
-    return out;
-  });
-
   // Re-derive on every spec OR trace change. Both signals matter:
   //   - spec edit → new nodes/containers (structural change)
   //   - trace replace → new edges + blockSpan annotations
@@ -2767,66 +2716,30 @@ export const GraphView = () => {
     expandCollapsedIterates(collapsedGraph(), collapsedSet()),
   );
 
-  /**
-   * Drop the spine state edge through every aux-only root leaf (e.g.
-   * `aes.key-expansion@1`). This is the rendering companion to the
-   * `auxOnlyRootIds` lift in `layoutRoot` — having lifted the leaf OFF
-   * the spine row, we also take it off the spine LOGICALLY so the eye
-   * reads the canvas correctly: `initial.add-round-key` then has exactly
-   * ONE incoming state arrow, the endpoint pill's, and the round-key
-   * fan-out story (aux arrows from `key-expansion`) stays visually
-   * distinct.
-   *
-   * **Pipeline placement: BEFORE `replicateHighFanoutSources`.** Pre-7b
-   * this filter ran AFTER replication (on the final display graph) and
-   * worked correctly. Slice 7b (2026-05-17) made replication rewrite the
-   * `from` of state edges to the source's spine-entry replica id when
-   * the source is fully replicated; a post-replicate filter checks for
-   * the original spec id and misses the rewritten edge, so a phantom
-   * white arrow from the tiny `key-expansion@->initial.add-round-key`
-   * replica into `initial.add-round-key` slipped through whenever the
-   * user flipped replication to "always". Moving the filter ahead of
-   * replication keeps the suppression centered on the original spec
-   * ids — Slice 7b's `spineSuccessorOf` then falls through to its
-   * aux-target fallback (already documented in `graph.ts`) and the
-   * spine-entry replica id is unchanged.
-   *
-   * Validation (`rawWarnings`) consumes `rawGraph()`, not this view —
-   * unchanged.
-   */
-  const auxOnlyFilteredGraph = createMemo<CipherGraph>(() =>
-    // Two sets: `auxOnlyRootIds()` filters OUTGOING legacy spine edges
-    // from every aux-only root (the identity-passthrough case); the
-    // narrower `auxOnlyRootSinkIds()` filters INCOMING legacy spine
-    // edges only when the consumer doesn't read the state thread.
-    // The asymmetry preserves SHA-256's `msg-schedule → W-publish`
-    // legitimate handoff while still suppressing AES's `key-expansion
-    // → first-state-consumer` redundant arrow. See dropAuxOnlyStateEdges'
-    // docstring + Slice S2(h) of the SHA-256 density-polish plan.
-    dropAuxOnlyStateEdges(expandedGraph(), auxOnlyRootIds(), auxOnlyRootSinkIds()),
-  );
-
-  /** Apply optional fanout replication on top of the filtered graph.
+  /** Apply optional fanout replication on top of the expanded graph.
    * Master-switch semantic: when the global toggle is off, NO replicas
    * appear — even if the user has per-source `"always"` overrides set.
    * The override panel below is hidden in that case so the user doesn't
    * wonder why their override isn't taking effect.
+   *
+   * (Pre-5.3e an `auxOnlyFilteredGraph` stage sat here, running
+   * `dropAuxOnlyStateEdges` to suppress the legacy identity-passthrough
+   * spine edge out of aux-only roots like `key-expansion`. With the legacy
+   * `inferStateEdges` consecutive-siblings inference retired in Slice 5.3e
+   * the spine is pure port-flow — no such passthrough edge is ever emitted
+   * — so the filter and the `auxOnlyRootSinkIds` memo it consumed were
+   * removed. `auxOnlyRootIds` SURVIVES: it still drives the layout-lift of
+   * aux-only roots off the spine row in `layoutRoot`.)
    */
   const replicatedGraph = createMemo<CipherGraph>(() =>
     replicate()
-      ? replicateHighFanoutSources(
-          auxOnlyFilteredGraph(),
-          replicationThreshold(),
-          replicationModes(),
-        )
-      : auxOnlyFilteredGraph(),
+      ? replicateHighFanoutSources(expandedGraph(), replicationThreshold(), replicationModes())
+      : expandedGraph(),
   );
 
-  /** Final display graph. Identity over `replicatedGraph` — the
-   * aux-only filter now runs earlier in the pipeline (see
-   * `auxOnlyFilteredGraph` above). Kept as a separate memo so downstream
-   * code that subscribes to `graph()` doesn't have to be re-pointed
-   * every time the pipeline shifts. */
+  /** Final display graph. Identity over `replicatedGraph`. Kept as a
+   * separate memo so downstream code that subscribes to `graph()` doesn't
+   * have to be re-pointed every time the pipeline shifts. */
   const graph = createMemo<CipherGraph>(() => replicatedGraph());
 
   /**

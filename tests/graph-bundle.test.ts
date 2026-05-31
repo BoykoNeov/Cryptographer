@@ -27,6 +27,7 @@ import { aes128Spec } from "@/ciphers/aes-128";
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { serpent128Spec } from "@/ciphers/serpent-128";
+import { buildSha256Spec } from "@/ciphers/sha-256";
 import {
   type GraphEdge,
   buildIterateFeedbackPredicate,
@@ -180,30 +181,41 @@ describe("bundleEdges — collapse same-(from, to, kind, isFeedback)", () => {
     expect(stateBundles.length).toBe(rawStateCount);
   });
 
-  it("Slice 7b — replica-sourced state edges remain singleton bundles (no ×N decoration)", () => {
-    // Post-Slice-7b a fully-replicated source's state-out edge fans
-    // through the replica too. Each replica has a unique synthetic
-    // `from` (`${src}@->${consumer}`), so a `(replica, consumer)` state
-    // edge can't collide with anyone else's bundle key — it must come
-    // out as a singleton bundle that the renderer paints without the
-    // `×N` decoration. Pin this invariant so a future bundling tweak
-    // can't accidentally merge them.
-    const trace = runAes128();
-    const raw = deriveAuxGraph(trace, aes128Spec);
-    const replicated = replicateHighFanoutSources(raw, 0, { "key-expansion": "always" });
+  it("Slice 7b — replica-sourced port-flow state edges remain singleton bundles (no ×N decoration)", () => {
+    // A fully-replicated port-native source fans its port-flow state-out
+    // through one replica per consumer. Each replica has a unique synthetic
+    // `from` (`${src}@->${consumer}`), so a `(replica, consumer)` state edge
+    // can't collide with anyone else's bundle key — it must come out as a
+    // singleton bundle that the renderer paints without the `×N` decoration.
+    // Pin this invariant so a future bundling tweak can't accidentally merge
+    // them.
+    //
+    // Retargeted in Slice 5.3e Batch 3 from AES `key-expansion` (whose legacy
+    // identity-passthrough state-out retired with `inferStateEdges`) to
+    // SHA-256's `final.split-wv`, whose 8 port-flow edges to `final.s0..s7`
+    // auto-replicate at threshold 6.
+    const emptyTrace: Trace = {
+      frames: [],
+      initialState: { shape: "bytes", bytes: new Uint8Array(0) },
+      finalState: { shape: "bytes", bytes: new Uint8Array(0) },
+      finalAux: new Map(),
+    };
+    const raw = deriveAuxGraph(emptyTrace, buildSha256Spec(), { registry: buildDefaultRegistry() });
+    const replicated = replicateHighFanoutSources(raw, 6);
     const fb = buildIterateFeedbackPredicate(replicated);
 
     const bundled = bundleEdges(replicated, fb);
 
-    // Every state bundle whose `from` is a key-expansion replica is a
-    // singleton — replica ids guarantee per-(from, to) uniqueness.
+    // Every state bundle whose `from` is a split-wv replica is a singleton —
+    // replica ids guarantee per-(from, to) uniqueness. These carry the
+    // port-flow auxKey (the spine is entirely port-derived post-5.3e).
     const replicaStateBundles = bundled.bundles.filter(
-      (b) => b.kind === "state" && b.from.startsWith("key-expansion@->"),
+      (b) => b.kind === "state" && b.from.startsWith("final.split-wv@->"),
     );
     expect(replicaStateBundles.length).toBeGreaterThan(0);
     for (const b of replicaStateBundles) {
       expect(b.auxKeys.length).toBe(1);
-      expect(b.auxKeys[0]).toBe("state");
+      expect(b.auxKeys[0]).toBe("port-flow");
     }
   });
 

@@ -32,7 +32,7 @@ import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { buildSha256Spec } from "@/ciphers/sha-256";
 import { collapseGraph, deriveAuxGraph, validateGraph } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
-import type { CipherSpec, Trace } from "@/core/types";
+import type { Trace } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 const emptyTrace = (): Trace => ({
@@ -41,27 +41,6 @@ const emptyTrace = (): Trace => ({
   finalState: { shape: "bytes", bytes: new Uint8Array(0) },
   finalAux: new Map(),
 });
-
-/**
- * Minimal NON-ported (no `portInputs`) lifted-legacy spec, for the
- * registry-independence + backward-compat cases below. Two consecutive
- * `feistel.toy-add-k@1` leaves: `requiresPortedDispatch` is false (no pure
- * port-native step), `inferPortEdges` returns [] (no portInputs), and
- * `inferStateEdges` emits the `a → b` consecutive-siblings spine edge.
- * Replaced the matrix AES-128 ECB fixture (retired with the MatrixState
- * shape in Phase 5 Slice 5.1, 2026-05-30); every shipped spec is now
- * port-native, so a synthetic carrier is the only non-ported spec left.
- */
-const legacyTwoLeafSpec: CipherSpec = {
-  id: "legacy-two-leaf@1",
-  name: "Legacy two-leaf (non-ported)",
-  stateShape: "bytes",
-  inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
-  steps: [
-    { kind: "step", id: "a", type: "feistel.toy-add-k@1", params: { k: 1 } },
-    { kind: "step", id: "b", type: "feistel.toy-add-k@1", params: { k: 2 } },
-  ],
-};
 
 describe("deriveAuxGraph — port-flow edge derivation (S2(e))", () => {
   it("SHA-256: `final.s_0` has exactly two incoming port-flow edges (operand0, operand1)", () => {
@@ -205,30 +184,10 @@ describe("deriveAuxGraph — per-edge state-spine suppression on port-native con
     expect(splitHIncoming).toEqual([]);
   });
 
-  it("non-ported legacy spec: byte-identical edges with or without registry", () => {
-    // A non-ported spec has zero `portInputs`, so `inferPortEdges` returns
-    // [] and `inferStateEdges` fires regardless of whether registry is
-    // passed. Pin byte-equality of the structural edges between the two
-    // call signatures — using an empty trace avoids needing a valid
-    // initialAux; the spine edges are spec-derived, not trace-derived.
-    const registry = buildDefaultRegistry();
-    const withRegistry = deriveAuxGraph(emptyTrace(), legacyTwoLeafSpec, { registry });
-    const withoutRegistry = deriveAuxGraph(emptyTrace(), legacyTwoLeafSpec);
-    expect(withRegistry.edges.length).toBe(withoutRegistry.edges.length);
-    expect(withRegistry.edges).toEqual(withoutRegistry.edges);
-  });
-
-  it("Legacy specs called without registry: state-spine inference still fires (backward compat)", () => {
-    // The many existing `deriveAuxGraph(trace, spec)` callsites in the
-    // test suite don't pass a registry; they must continue to see the
-    // pre-S2 behavior. Concretely: a non-ported spec without registry
-    // still emits the consecutive-siblings spine.
-    const graph = deriveAuxGraph(emptyTrace(), legacyTwoLeafSpec);
-    const stateEdges = graph.edges.filter((e) => e.kind === "state");
-    // Even on an empty trace, the spine is derived from spec structure
-    // alone: the `a → b` consecutive-siblings edge.
-    expect(stateEdges.length).toBeGreaterThan(0);
-  });
+  // (The two "non-ported legacy spec" cases that pinned `inferStateEdges`'s
+  // consecutive-siblings fallback + its registry-independence were removed in
+  // Slice 5.3e Batch 3 with the inference itself — no shipped spec is
+  // non-ported, and the legacy fallback no longer exists.)
 });
 
 describe("deriveAuxGraph — A3b follow-ups: collapsed round-carry parity + validateGraph clean", () => {

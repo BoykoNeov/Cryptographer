@@ -31,7 +31,6 @@ import {
   isEndpointId,
 } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
-import { removeStep } from "@/core/spec-mutations";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import { INPUT_SOURCE_ID } from "@/core/types";
 import type { AuxValue, CipherSpec, Trace } from "@/core/types";
@@ -326,7 +325,8 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
   // (the S2(f) gate suppresses the legacy state-thread): Speck as a flat 22-edge
   // chain, Serpent as a 98-edge mix of within-group leaf hops + container-sourced
   // round→round handoffs. Re-pin on AES if/when a port-flow spine assertion is
-  // wanted there too (the last leg before `inferStateEdges` retires in 5.3e).
+  // wanted there too. (`inferStateEdges` retired in Slice 5.3e — port-flow is
+  // now the sole spine source for every shipped spec.)
 
   // The "AES-128-ECB: the iterate TERMINATES the parent spine on both sides"
   // test pinned the aux-mediated iterate boundary spine-suppression against
@@ -337,13 +337,12 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
   // boundary semantics (covered by the runtime + graph-port-edge tests).
 
   it("Speck32/64 (flat): the spine is port-flow-owned (Slice 5.3b), the legacy state-thread suppressed", () => {
-    // Passing the registry (as the app does) lets the S2(f) gate fire: the
-    // round leaves declare `portInputs.state`, so `inferStateEdges` skips them
-    // and `inferPortEdges` (S2(e)) owns the entire spine. The spine is one
-    // continuous chain `$input → round.1 → … → round.22` — 22 edges, ALL
-    // tagged `auxKey: "port-flow"`, with NO duplicate legacy state-thread
-    // edge. This is the 5.3b payoff that lets `inferStateEdges` retire for
-    // Speck in 5.3e.
+    // The round leaves declare `portInputs.state`, so `inferPortEdges` (S2(e))
+    // owns the entire spine. The spine is one continuous chain
+    // `$input → round.1 → … → round.22` — 22 edges, ALL tagged
+    // `auxKey: "port-flow"`, with NO legacy state-thread edge. This is the
+    // 5.3b payoff; `inferStateEdges` was retired in 5.3e, so port-flow is the
+    // sole spine source. (The registry is still passed, as the app does.)
     const g = deriveAuxGraph(runSpeck(), speck32_64BeSpec, {
       registry: buildDefaultRegistry(),
     });
@@ -363,9 +362,10 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
 
   it("Serpent-128 (32 round groups): the spine is port-flow-owned (Slice 5.3b), groups as container sources", () => {
     // Post-5.3b the body is port-wired (each leaf declares `portInputs.state`,
-    // each round group declares `seedInput`/`bodyOutput`). With the registry
-    // passed (as the app does), the S2(f) gate suppresses the legacy
-    // consecutive-siblings inference and `inferPortEdges` owns the spine. The
+    // each round group declares `seedInput`/`bodyOutput`), so `inferPortEdges`
+    // owns the spine. (Pre-5.3e the legacy `inferStateEdges` consecutive-
+    // siblings inference ran alongside, suppressed for wired leaves by its
+    // S2(f) gate; both retired in 5.3e — port-flow is the sole spine source.) The
     // count stays 98, but the STRUCTURE differs from the old flattened chain:
     // the within-group hops are leaf→leaf, while each round→round handoff
     // resolves through the group's single-hop `seedInput` to a CONTAINER source
@@ -407,75 +407,14 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
     ).toBeDefined();
   });
 
-  it("empty group participates in the spine via its own id (deleting all round body steps)", () => {
-    // Regression for the "delete all steps in a round → round disconnects
-    // from the chain" bug. With AES-128's round.5 emptied, the spine
-    // should route `round.4.add-round-key → round.5 → round.6.sub-bytes`
-    // rather than leapfrogging straight to round.6 (which would leave the
-    // empty round.5 box stranded on the canvas with no edges).
-    let emptiedSpec = aes128Spec;
-    // Remove all FOUR children of byte-native round.5 in turn (AddRoundKey is
-    // one `xor-with-aux@1` leaf since F3). Using the live mutation helpers
-    // keeps the test honest about the editor's actual flow.
-    for (const id of [
-      "round.5.sub-bytes",
-      "round.5.shift-rows",
-      "round.5.mix-columns",
-      "round.5.add-round-key",
-    ]) {
-      emptiedSpec = removeStep(emptiedSpec, id);
-    }
-    // Empty-spec derivation: no trace needed for state-edge inference.
-    const g = deriveAuxGraph(emptyTrace(), emptiedSpec);
-    const stateEdges = g.edges.filter((e) => e.kind === "state");
-
-    // The two headline edges the empty group is supposed to bridge.
-    expect(
-      stateEdges.find((e) => e.from === "round.4.add-round-key" && e.to === "round.5"),
-    ).toBeDefined();
-    expect(
-      stateEdges.find((e) => e.from === "round.5" && e.to === "round.6.sub-bytes"),
-    ).toBeDefined();
-    // And critically: the spine MUST NOT skip over round.5 entirely (the
-    // pre-fix behavior left round.5 disconnected).
-    expect(
-      stateEdges.find((e) => e.from === "round.4.add-round-key" && e.to === "round.6.sub-bytes"),
-    ).toBeUndefined();
-    // (No exact edge-count assertion: byte-native AES carries dup state edges
-    // — spec-derived spine + port-flow companions — so a precise count is
-    // dup-coupled. The existence bridges above fully pin the regression:
-    // "delete all steps in a round → round disconnects from the chain".)
-  });
-
-  it("nested empty group inside an otherwise filled outer group still participates", () => {
-    // Synthesize a spec with a populated outer group containing an empty
-    // inner group sandwiched between two leaves. The inner group should
-    // appear as a spine node between them.
-    const synthSpec: typeof aes128Spec = {
-      ...aes128Spec,
-      id: "synth-empty-nested",
-      steps: [
-        { kind: "step", id: "leafA", type: "test.fixture@1", params: {} },
-        {
-          kind: "group",
-          id: "outer",
-          label: "Outer",
-          children: [
-            { kind: "step", id: "innerLeafA", type: "test.fixture@1", params: {} },
-            { kind: "group", id: "inner-empty", label: "Empty", children: [] },
-            { kind: "step", id: "innerLeafB", type: "test.fixture@1", params: {} },
-          ],
-        },
-        { kind: "step", id: "leafB", type: "test.fixture@1", params: {} },
-      ],
-    };
-    const g = deriveAuxGraph(emptyTrace(), synthSpec);
-    const stateEdges = g.edges.filter((e) => e.kind === "state");
-    // Single chain: leafA → innerLeafA → inner-empty → innerLeafB → leafB.
-    expect(stateEdges.length).toBe(4);
-    expect(stateEdges.find((e) => e.from === "innerLeafA" && e.to === "inner-empty")).toBeDefined();
-    expect(stateEdges.find((e) => e.from === "inner-empty" && e.to === "innerLeafB")).toBeDefined();
-  });
+  // The two "empty group participates in the spine via its own id" tests
+  // (a cleared round + a nested empty group) were removed in Slice 5.3e
+  // Batch 3 with `inferStateEdges`. That consecutive-siblings inference was
+  // the only thing that pushed an empty group's own id onto the spine; the
+  // port-flow spine (`inferPortEdges`) has no analogue, so a round whose body
+  // the user clears in the editor disconnects from the chain. This is the
+  // user-accepted editor-only regression recorded in
+  // `docs/plans/phase-5-legacy-retirement.md` (Slice 5.3e risk note).
 
   it("never duplicates aux+state on the same (from, to, auxKey) triple", () => {
     // State edges' "state" sentinel auxKey can't collide with real aux
@@ -598,9 +537,10 @@ describe("collapseGraph — view-time transform", () => {
     }
     // Sanity: the collapse left the spine connected through the round.5 chip
     // (the cross-boundary edges survive — pinned in detail by the next test).
-    expect(afterState.some((e) => e.from === "round.4.add-round-key" && e.to === "round.5")).toBe(
-      true,
-    );
+    // The port-flow spine routes round→round through the round CONTAINER id
+    // (`round.4 → round.5.sub-bytes`), so after collapsing round.5 the entry
+    // edge is `round.4 → round.5` (container → collapsed chip).
+    expect(afterState.some((e) => e.from === "round.4" && e.to === "round.5")).toBe(true);
     expect(afterState.some((e) => e.from === "round.5" && e.to === "round.6.sub-bytes")).toBe(true);
   });
 
@@ -608,24 +548,23 @@ describe("collapseGraph — view-time transform", () => {
     const g = deriveAuxGraph(runAes128(), aes128Spec);
     const out = collapseGraph(g, new Set(["round.5"]));
     const stateEdges = out.edges.filter((e) => e.kind === "state");
-    // The pre-collapse pair (round.4.add-round-key → round.5.sub-bytes)
-    // remaps the consumer to the collapsed container chip.
-    const entering = stateEdges.find(
-      (e) => e.from === "round.4.add-round-key" && e.to === "round.5",
-    );
+    // The port-flow round→round handoff is container-sourced: the pre-collapse
+    // ENTRY edge is `round.4 → round.5.sub-bytes` (container round.4 → round.5's
+    // first leaf). Collapsing round.5 remaps the consumer leaf to the chip →
+    // `round.4 → round.5`.
+    const entering = stateEdges.find((e) => e.from === "round.4" && e.to === "round.5");
     expect(entering).toBeDefined();
-    // The exit edge (round.5.add-round-key → round.6.sub-bytes) remaps
-    // the producer to the collapsed chip.
+    // The EXIT edge is already container-sourced (`round.5 → round.6.sub-bytes`);
+    // round.5 IS the collapsed chip, so it survives unchanged.
     const leaving = stateEdges.find((e) => e.from === "round.5" && e.to === "round.6.sub-bytes");
     expect(leaving).toBeDefined();
-    // And the original-endpoint versions are gone (their internal
-    // round.5.* endpoints don't exist anymore in the visible graph).
-    expect(
-      stateEdges.some((e) => e.from === "round.4.add-round-key" && e.to === "round.5.sub-bytes"),
-    ).toBe(false);
-    expect(
-      stateEdges.some((e) => e.from === "round.5.add-round-key" && e.to === "round.6.sub-bytes"),
-    ).toBe(false);
+    // The pre-collapse entry edge's internal endpoint (round.5.sub-bytes) is
+    // gone — it remapped to the chip.
+    expect(stateEdges.some((e) => e.from === "round.4" && e.to === "round.5.sub-bytes")).toBe(
+      false,
+    );
+    // No surviving state edge is produced by a hidden round.5-internal leaf.
+    expect(stateEdges.some((e) => e.from.startsWith("round.5."))).toBe(false);
   });
 
   // The two "collapses an iterate container" tests (state-spine remap to

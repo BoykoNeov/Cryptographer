@@ -237,11 +237,13 @@ describe("GraphView — component-level (AES-128 fixture)", () => {
   // round-key` is no longer a spine-replica and the filtered spine edge no
   // longer exists. No other cipher exercises this exact branch at root (Serpent
   // uses the lift branch, DES is Feistel), so there is nothing to retarget to.
-  // The underlying machinery stays covered until Phase C by the synthetic
+  // The underlying machinery stays covered by the synthetic
   // `syntheticSpineReplicaGraph` layout test in
   // `tests/graph-view-replica-gutter.test.ts` (spine-replica placement) and the
-  // Serpent state-edge tests in `tests/aux-graph-derivation.test.ts` (spine
-  // derivation). Re-pin or delete when `inferStateEdges` retires in Phase C.
+  // Serpent/Speck port-flow spine tests in `tests/aux-graph-derivation.test.ts`
+  // (spine derivation). `inferStateEdges` was retired in Slice 5.3e (Batch 3),
+  // so the legacy `auxOnlyRootIds` spine-edge filter it fed is gone too —
+  // `auxOnlyRootIds` now only drives the layout-lift of aux-only roots.
 
   // ─── Slice 1 of graph-narrative plan — endpoint pills ────────────────────
 

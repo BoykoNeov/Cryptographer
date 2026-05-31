@@ -7,10 +7,14 @@
  *   - **Aux edges** (trace-derived) — round-key fan-out, IV chaining in
  *     CBC, keystream blocks in CTR, etc. Annotations on the cipher's
  *     primary dataflow.
- *   - **State edges** (spec-derived) — the implicit `(state, params) →
- *     state` thread through consecutive leaves. The headline pedagogical
- *     spine of the graph: students see the SubBytes → ShiftRows →
- *     MixColumns → AddRoundKey progression as a continuous chain.
+ *   - **State edges** (spec-derived) — the cipher's primary dataflow
+ *     spine, derived from each leaf's declared `portInputs` wiring
+ *     (`inferPortEdges`). The headline pedagogical spine of the graph:
+ *     students see the SubBytes → ShiftRows → MixColumns → AddRoundKey
+ *     progression as a continuous chain. (Until Slice 5.3e this spine was
+ *     inferred from the implicit `(state, params) → state` thread between
+ *     consecutive leaves; every shipped spec is now port-wired, so the
+ *     spine IS the declared port flow.)
  *
  * The graph is DERIVED, not stored. The spec already encodes the structural
  * tree; the trace's `TraceFrame.auxRead` / `auxWritten` (`types.ts`) already
@@ -39,23 +43,21 @@
  *      id as the participant: the iterate node itself becomes a node-like
  *      participant in the edge list.
  *
- *   3. **Iterates terminate the spine at their boundary.** State edges
- *      connect DFS-consecutive leaves at the same scope; groups are
- *      transparent (DFS through); iterates open a separate scope for
- *      their body (per-iteration chain emitted by recursion) AND have
- *      the parent spine STOP at their boundary on both sides. Concretely:
- *      `[A, B, iter, C, D]` at root scope emits only `A→B` and `C→D`;
- *      no `B→iter`, no `iter→C`, no bridging `B→C`. The aux arrows
- *      (`blocksFromAux` coming in, `outBlocksAux` going out) ARE the
- *      handoff at this boundary; the spine has nothing to add because
- *      the runtime overwrites state from aux at iteration entry and
- *      publishes the per-iteration output into aux at iteration exit.
- *      Surfaced 2026-05-17: the previously-rendered phantom `compute-
- *      block-count → ecb-blocks` state edge resolved to the plaintext
- *      bytes (compute-block-count's passthrough stateAfter), which the
- *      iterate doesn't actually consume — confusing pedagogically. See
- *      `inferStateEdges`'s function-level docstring for the full
- *      design decision and the iterate-suppression invariant.
+ *   3. **Iterate boundaries are port-mediated.** The spine is derived from
+ *      declared `portInputs` (`inferPortEdges`), so an iterate's body
+ *      connects to the surrounding pipeline through its explicit
+ *      `seedInput` / `chainInput` / `chainFeedback` port bindings (the
+ *      byte-native ECB/CBC modes wire `seedInput = port($input, …)`), and
+ *      its per-iteration body is its own port-flow scope. There is no
+ *      bridging `B→C` edge across an iterate because no leaf declares a
+ *      `portInputs` binding that reaches across the boundary; the aux
+ *      arrows (`blocksFromAux` in, `outBlocksAux` out) ARE the handoff.
+ *      (Until Slice 5.3e this was enforced negatively by `inferStateEdges`
+ *      SUPPRESSING a consecutive-leaf bridge — the 2026-05-17 phantom
+ *      `compute-block-count → ecb-blocks` edge that resolved to the
+ *      plaintext bytes the iterate never consumed. With the legacy
+ *      inference retired, the port-flow spine simply has nothing to draw
+ *      there unless a binding says so.)
  *
  *      **Feistel future**: when a Feistel-style cipher with branching
  *      state lands, the "DFS-consecutive leaves share state" assumption
@@ -493,8 +495,10 @@ const walkSpec = (
       // For-each-subgraph (Slice 2.0a). Treated as its own container kind
       // in the graph data model so future renderer polish (round-count
       // badge, collapse semantics) can switch on it. Slice 2.0a routes
-      // spine + chain through the iterate-shaped branch — see
-      // `inferStateEdges` for the spine-termination treatment.
+      // spine + chain through the iterate-shaped branch. (The spine itself
+      // comes from declared `portInputs` via `inferPortEdges`; the legacy
+      // consecutive-siblings inference + its iterate-boundary termination
+      // retired with `inferStateEdges` in Slice 5.3e.)
       const cIdx = ctx.containers.length;
       ctx.containerIndex.set(node.id, cIdx);
       ctx.containers.push({
@@ -809,329 +813,28 @@ const STATE_AUX_KEY = "state";
 
 /**
  * Sentinel aux key carried on every port-flow edge (Slice S2(e), 2026-05-26
- * — `docs/plans/sha-256-density-polish.md`). Distinguishes a port-flow
- * edge (declared by `portInputs`, carries real bytes from an upstream
- * output port to a downstream input port) from a legacy passthrough
- * state edge (consecutive-siblings inference, an implicit `(state,
- * params) → state` thread).
+ * — `docs/plans/sha-256-density-polish.md`). Tags a spine edge declared by
+ * `portInputs` (real bytes from an upstream output port to a downstream
+ * input port) as distinct from the only other `kind: "state"` edges: the
+ * endpoint-pill edges (input/output anchors), which carry
+ * `auxKey: STATE_AUX_KEY` ("state").
  *
- * Both edge classes share `kind: "state"` so the renderer paints them
+ * Both classes share `kind: "state"` so the renderer paints them
  * identically as the cipher's primary spine. The discriminator lives on
- * `auxKey` so `dropAuxOnlyStateEdges` can KEEP port-flow edges from
- * lifted aux-only roots (e.g. `H-constant → init-working-vars` on
- * SHA-256) while still DROPPING the misleading passthrough edges that
- * filter was originally designed to suppress.
+ * `auxKey` so consumers that care about provenance can tell them apart —
+ * most importantly `replicateHighFanoutSources`'s S2(i) fanout-eligibility
+ * predicate, which counts a port-native source's fan-out to N consumers
+ * but not the endpoint anchors.
  *
- * Surfaced 2026-05-26 manual smoke: after S2(d) lifted `H-constant`
- * into `auxOnlyRootIds`, `dropAuxOnlyStateEdges` was dropping its
- * outgoing port-flow edge alongside the legacy spine edge it was
- * meant to drop — SHA-256 graph view showed H-constant with no
- * outgoing arrow at all. Same fate awaited `final.fetch-H` (an
- * `aux-load-bytes@1` lifted via the legacy `shapeContract.input ===
- * "any"` path) and its port-flow edge to `final.split-H`. The
- * distinct auxKey lets the filter discriminate by provenance rather
- * than by appearance.
+ * (Historical: the discriminator was introduced so the now-retired
+ * `dropAuxOnlyStateEdges` filter could KEEP port-flow edges from lifted
+ * aux-only roots — `H-constant → init-working-vars`, `final.fetch-H →
+ * final.split-H` on SHA-256 — while dropping the legacy consecutive-siblings
+ * passthrough edges. Both that filter and the legacy `inferStateEdges`
+ * inference retired in Slice 5.3e; the auxKey tag survives for the renderer
+ * + replication.)
  */
 export const PORT_FLOW_AUX_KEY = "port-flow";
-
-/**
- * Spec-walk pass: emit a `kind: "state"` edge between every DFS-consecutive
- * pair of sibling leaves within the same iterate-scope.
- *
- * Scope rules:
- *   - **Filled groups are transparent.** DFS descends into them and their
- *     leaves join the parent scope's spine. The spine therefore crosses
- *     round-group boundaries (e.g. `round.1.add-round-key →
- *     round.2.sub-bytes`) — exactly the pedagogical "the cipher's primary
- *     dataflow runs through every round in order" story.
- *   - **Empty groups participate in the spine as nodes.** A group whose
- *     subtree contains no leaves and no iterates contributes its OWN id
- *     to the leaf chain. This keeps a round visible on the canvas connected
- *     to the dataflow when the user clears its body via the visual editor;
- *     without this, deleting all of a round's steps left the round box
- *     stranded with no incoming or outgoing edges — and dropping a new
- *     step on it appeared to "do nothing" because the empty round was
- *     visually disconnected from the chain. The full transparent-group
- *     semantics return as soon as the user adds any leaf back.
- *   - **Iterates terminate the spine at their boundary.** The iterate's
- *     body becomes its own scope (per-iteration spine emitted by recursing
- *     into the body), but the parent spine is BROKEN at the iterate — no
- *     state edge enters the iterate from its predecessor, and no state
- *     edge leaves the iterate toward its successor. Concretely: in
- *     `[A, B, iter, C, D]` at root scope, the parent emits only `A→B`
- *     and `C→D`; the predecessor-to-iterate (`B→iter`), iterate-to-
- *     successor (`iter→C`), and bridging (`B→C`) edges are all
- *     deliberately absent.
- *
- *     **Why suppress.** Today's iterate runtime contract is aux-mediated:
- *     at iteration ENTRY the runtime sets `state = aux[blocksFromAux][i]`
- *     (the predecessor's stateAfter is discarded); at iteration EXIT it
- *     appends `state` to `aux[outBlocksAux]` (the successor reads its
- *     data from that aux array, NOT from the iterate's final state). The
- *     "spine value at the boundary" is therefore dead — drawing a white
- *     arrow there showed the plaintext "flowing into" the iterate while
- *     the truth was "the per-block payload arrives via `aux[input-
- *     blocks]`." The aux arrows are the honest depiction of the handoff;
- *     the spine has nothing to add at this boundary.
- *
- *     Surfaced 2026-05-17: user clicking the previously-rendered phantom
- *     state edge saw the plaintext value and asked "where am I wrong? The
- *     plaintext isn't passed forward as plaintext in the cipher; it is
- *     passed already split into blocks." Right. The fix lives in
- *     `emitChain`'s iterate-suppression check.
- *
- *     **Feistel future**: a Feistel-style iterate (branching state, not
- *     aux-mediated) would carry meaningful spine information across the
- *     boundary and need an opt-out flag. Today every shipped iterate
- *     (ECB / CBC iterate) is aux-mediated, so the rule is unconditional.
- *
- * The function reads only `spec`, never the trace. State edges therefore
- * appear on the structural skeleton before any run, while aux edges remain
- * trace-derived. This matches the rendering goal: the spine is what the
- * user reads as "this is what the cipher does", and it should be visible
- * the moment they load a spec.
- */
-const inferStateEdges = (spec: CipherSpec, registry?: StepRegistry): GraphEdge[] => {
-  const edges: GraphEdge[] = [];
-
-  // ─── Per-edge S2(f) gate: skip state edges to non-state consumers ────────
-  // Build a set of leaf ids that should NOT receive an inferred
-  // consecutive-siblings state edge — consumers whose semantics don't
-  // include reading state via the state-thread. Three flavors of
-  // "doesn't read state":
-  //   1. Pure port-native registration (`kind: "ported"` AND `meta`
-  //      absent) — has no state-input at all; all inputs come from
-  //      `portInputs`.
-  //   2. Lifted-legacy ported registration whose `meta.stateInputPort`
-  //      is undefined — the meta-driven projection has no state input.
-  //   3. Lifted-legacy ported registration whose `meta.stateInputPort`
-  //      IS defined but the spec leaf declares `portInputs[stateInputPort]`
-  //      — the explicit port-flow binding overrides the state-thread
-  //      projection (per runtime.ts:343-347 "Step B — Skipped when
-  //      portInputs already wired this port").
-  // Otherwise — legacy registrations, lifted-legacy ported without
-  // override — the consumer DOES read state-thread, and the inferred
-  // edge is the depiction of the real handoff. KEEP those.
-  //
-  // Without a registry the gate is a no-op (skipSet stays empty),
-  // matching the ~110 existing test callsites that don't pass one.
-  const skipStateEdgeTo = new Set<string>();
-  if (registry !== undefined) {
-    const collectSkips = (nodes: readonly StepNode[]): void => {
-      for (const node of nodes) {
-        if (node.kind === "step") {
-          const reg = registry.getRegistration(node.type);
-          if (reg !== undefined && reg.kind === "ported") {
-            const meta = reg.meta;
-            if (meta === undefined) {
-              // Pure port-native — no state-thread.
-              skipStateEdgeTo.add(node.id);
-            } else if (meta.stateInputPort === undefined) {
-              // Lifted-legacy with no state input — pure source like
-              // `aux-load-bytes@1` / `aux-load@1` / `constant-load@1`.
-              skipStateEdgeTo.add(node.id);
-            } else if (node.portInputs?.[meta.stateInputPort] !== undefined) {
-              // Lifted-legacy with explicit portInputs override —
-              // port-flow edge represents the real input, inferred
-              // state edge would be redundant noise on the spine.
-              skipStateEdgeTo.add(node.id);
-            }
-          }
-          continue;
-        }
-        collectSkips(node.children);
-      }
-    };
-    collectSkips(spec.steps);
-  }
-
-  // Track every iterate's id so the spine-chain emitter can suppress
-  // phantom state edges that would otherwise appear to flow INTO or
-  // OUT OF an iterate. The runtime contract for an IterateGroup is:
-  //   - at iteration ENTRY it sets `state = aux[blocksFromAux][i]`,
-  //     overwriting whatever the predecessor's stateAfter was;
-  //   - at iteration EXIT it appends `state` to `aux[outBlocksAux]`,
-  //     and the successor step reads its data from that aux array, NOT
-  //     from the iterate's final state.
-  // So the spine value at the iterate's boundary is dead — it still
-  // exists as a passthrough, but no downstream step actually consumes
-  // it. Rendering it as a white arrow into the iterate misled users
-  // ("the plaintext flows here") while the truth is "the per-block
-  // payload arrives via aux[input-blocks]." Suppressing the edges is
-  // the pedagogically honest answer: the iterate's *aux* arrows ARE
-  // the handoff; the spine simply doesn't reach across this boundary.
-  //
-  // Surfaced 2026-05-17 manual smoke ("the plaintext isn't passed
-  // forward as plaintext in the cipher. It is passed already split
-  // into blocks"). Every IterateGroup we ship today (ECB / CBC iterate)
-  // is aux-mediated, so the rule is unconditional. A future Feistel-
-  // style iterate with branching state would need an opt-out flag if
-  // its spine carries meaningful information across the boundary.
-  const iterateIds = new Set<string>();
-  const collectIterates = (nodes: readonly StepNode[]): void => {
-    for (const node of nodes) {
-      if (node.kind === "iterate") {
-        iterateIds.add(node.id);
-        collectIterates(node.children);
-      } else if (node.kind === "group") {
-        collectIterates(node.children);
-      }
-    }
-  };
-  collectIterates(spec.steps);
-
-  const emitChain = (leaves: readonly string[]): void => {
-    for (let i = 0; i + 1 < leaves.length; i++) {
-      const from = leaves[i];
-      const to = leaves[i + 1];
-      if (from === undefined || to === undefined) continue;
-      // Suppress the phantom edges into / out of aux-mediated iterates
-      // (see the iterateIds doc-block above). Leaves the chain
-      // STRUCTURALLY split — A→B→iter→C→D produces only A→B and C→D,
-      // no bridging A→C edge, because no spine value actually crosses
-      // the iterate boundary either way.
-      if (iterateIds.has(from) || iterateIds.has(to)) continue;
-      // Per-edge S2(f) gate: skip edges to consumers that don't read
-      // state via state-thread (pure port-native, or ported leaves with
-      // an explicit portInputs override for their state-input port).
-      // See `skipStateEdgeTo`'s doc-block above for the full rule.
-      if (skipStateEdgeTo.has(to)) continue;
-      edges.push({ from, to, auxKey: STATE_AUX_KEY, kind: "state" });
-    }
-  };
-
-  /**
-   * Find the first spine-bearing id in a subtree. Spine-bearing = a leaf,
-   * an iterate id (becomes a boundary marker), or an empty group
-   * (participates as its own id when its subtree is empty). Returns null
-   * for a truly empty children list.
-   */
-  const firstSpineId = (nodes: readonly StepNode[]): string | null => {
-    for (const node of nodes) {
-      if (node.kind === "step") return node.id;
-      if (node.kind === "iterate") return node.id;
-      if (node.kind === "group") {
-        if (hasSpineContent(node.children)) {
-          const inner = firstSpineId(node.children);
-          if (inner !== null) return inner;
-        } else {
-          return node.id;
-        }
-      }
-    }
-    return null;
-  };
-
-  /** Symmetric helper to `firstSpineId` — returns the last spine-bearing
-   *  id in a track's children. Walks the subtree right-to-left semantics
-   *  by recursing through siblings and remembering the last hit. */
-  const lastSpineId = (nodes: readonly StepNode[]): string | null => {
-    let last: string | null = null;
-    for (const node of nodes) {
-      if (node.kind === "step") {
-        last = node.id;
-      } else if (node.kind === "iterate") {
-        last = node.id;
-      } else if (node.kind === "group") {
-        if (hasSpineContent(node.children)) {
-          const inner = lastSpineId(node.children);
-          if (inner !== null) last = inner;
-        } else {
-          last = node.id;
-        }
-      }
-    }
-    return last;
-  };
-
-  /**
-   * True iff the subtree contains at least one leaf or iterate — i.e.
-   * anything that would visibly contribute to the spine if walked. A group
-   * is treated as "empty" (eligible to participate as a spine node via its
-   * own id) when this returns false for its children. Nested empty groups
-   * recursively count as empty.
-   */
-  function hasSpineContent(nodes: readonly StepNode[]): boolean {
-    for (const node of nodes) {
-      if (node.kind === "step") return true;
-      if (node.kind === "iterate") return true;
-      if (hasSpineContent(node.children)) return true;
-    }
-    return false;
-  }
-
-  /**
-   * Process one iterate-scope: collect its DFS leaves into a single chain
-   * (recursing through filled groups, treating empty groups as spine
-   * nodes, BRIDGING OVER iterates without breaking the chain), and recurse
-   * into each iterate body as its own scope. Returns after emitting all
-   * edges generated by this scope and its nested iterate scopes.
-   */
-  const processScope = (siblings: readonly StepNode[]): void => {
-    let segment: string[] = [];
-    const flush = (): void => {
-      emitChain(segment);
-      segment = [];
-    };
-    const walk = (nodes: readonly StepNode[]): void => {
-      for (const node of nodes) {
-        if (node.kind === "step") {
-          segment.push(node.id);
-        } else if (node.kind === "group") {
-          if (hasSpineContent(node.children)) {
-            // Filled group — transparent, descend.
-            walk(node.children);
-          } else {
-            // Empty group — push its own id so the spine doesn't
-            // leapfrog over it. Preserves "a visible round stays
-            // connected to the chain even while the user is mid-edit
-            // with its body cleared out."
-            segment.push(node.id);
-          }
-        } else if (
-          node.kind === "iterate" ||
-          node.kind === "for-each-subgraph" ||
-          node.kind === "for-each-subgraph-with-history"
-        ) {
-          // Iterate / for-each-subgraph[-with-history] boundary — recurse
-          // into the body as its own scope (the per-iteration spine is a
-          // separate chain) AND push the container's id onto the parent
-          // chain so the chain has a recognizable boundary marker.
-          // `emitChain` then SUPPRESSES any state edge whose endpoint is
-          // one of these container ids (see the iterateIds doc-block
-          // above for iterate; for-each-subgraph and
-          // for-each-subgraph-with-history both piggyback on the same
-          // suppression). The result: the parent spine stops at the leaf
-          // BEFORE the container, and resumes at the leaf AFTER it.
-          //
-          // For-each-subgraph differs semantically (state THREADS across
-          // iterations rather than being clobbered from aux) but the
-          // PARENT-scope spine treatment is the same: one boundary marker
-          // per container.
-          //
-          // For-each-subgraph-with-history (Slice 2.0c) also has bytes-
-          // shape state at the parent boundary (initial-history seeds
-          // come from parent state.bytes; exit state is the concatenated
-          // full history). Spine termination at the boundary is honest:
-          // the data handoff is matter-of-fact "this many bytes in, this
-          // many bytes out" — but the per-iteration spine inside the
-          // body is its own scope, not connected to the parent spine.
-          // Future Slice 2.0c+ polish may surface lookback-arrow overlays
-          // distinct from the spine; until then the orphan-read warning
-          // on `aux["prior-{N}"]` reads is what surfaces the lookback to
-          // users.
-          processScope(node.children);
-          segment.push(node.id);
-        }
-      }
-    };
-    walk(siblings);
-    flush();
-  };
-
-  processScope(spec.steps);
-  return edges;
-};
 
 /**
  * Spec-walk pass: emit a `kind: "state"` edge for every `portInputs`
@@ -1140,28 +843,26 @@ const inferStateEdges = (spec: CipherSpec, registry?: StepRegistry): GraphEdge[]
  *
  * For each leaf with `portInputs`, every entry `(inputPortName →
  * { node, port })` produces a single edge `{ from: node, to: leaf.id,
- * kind: "state", auxKey: STATE_AUX_KEY }`. The kind reuses `"state"`
+ * kind: "state", auxKey: PORT_FLOW_AUX_KEY }`. The kind reuses `"state"`
  * rather than introducing a new `"port"` kind so the renderer paints
  * port-flow as the spine (thicker, darker — exactly the "this is the
- * cipher's primary dataflow" reading the user expects). Post-S2(f) the
- * legacy consecutive-siblings inference is suppressed (via the skip-set)
- * for any leaf that declares `portInputs`, so where this pass emits, the
- * legacy pass stays silent.
+ * cipher's primary dataflow" reading the user expects). Since Slice 5.3e
+ * this is the SOLE spine source — the legacy consecutive-siblings
+ * inference (`inferStateEdges`) was retired, so every spine edge a reader
+ * sees originates here.
  *
  * **Per-cipher reality (updated 2026-05-31, post-B-phase + Slice 5.2/5.3b —
  * supersedes the original S2(e) note).** EVERY shipped cipher/hash now declares
  * explicit spec `portInputs`, so their spine is composed ENTIRELY of
- * port-derived edges (the S2(f) gate suppresses the legacy consecutive-siblings
- * inference for their wired leaves): SHA-256, DES, native-AES, AES-CBC, and —
+ * port-derived edges: SHA-256, DES, native-AES, AES-CBC, and —
  * since Slice 5.3b — Speck and Serpent. Speck/Serpent round leaves are
- * hybrid-ported (meta present) but declare `portInputs.state`, so the gate's
- * third branch (`portInputs[stateInputPort]` override) fires; Serpent's round
+ * hybrid-ported (meta present) but declare `portInputs.state`; Serpent's round
  * GROUPS additionally declare `seedInput`/`bodyOutput`, so each round→round
  * handoff resolves through the group's single-hop seed to a container source.
- * With every shipped spec port-wired, `inferStateEdges` no longer owns any
- * shipped spine — its removal (Slice 5.3e) is unblocked. See
- * `docs/plans/phase-5-legacy-retirement.md`. Byte-identical for any spec that
- * doesn't declare port-edge wiring.
+ * With every shipped spec port-wired, this pass owns the ENTIRE spine: the
+ * legacy `inferStateEdges` consecutive-siblings inference (and its per-edge
+ * S2(f) skip-gate) was retired in Slice 5.3e. See
+ * `docs/plans/phase-5-legacy-retirement.md`.
  *
  * **Why this needed to exist.** Pre-S2(e) `deriveAuxGraph` did not
  * consume `portInputs` — Slice 2.6a wired the runtime + spec-shapes
@@ -1271,13 +972,11 @@ const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
             edges.push({
               from,
               to: node.id,
-              // Distinct auxKey distinguishes port-flow from legacy
-              // passthrough state edges so `dropAuxOnlyStateEdges`
-              // doesn't filter out port-flow edges from lifted aux-
-              // only roots (H-constant, aux-load-bytes leaves) — the
-              // misdiagnosis the same-day smoke surfaced 2026-05-26.
-              // See PORT_FLOW_AUX_KEY's doc-block for the full
-              // discriminator rationale.
+              // Distinct auxKey tags this as a port-flow spine edge (vs
+              // the endpoint-pill edges that carry "state"). See
+              // PORT_FLOW_AUX_KEY's doc-block — the tag once let the
+              // retired `dropAuxOnlyStateEdges` filter spare these edges;
+              // it now feeds the renderer + replication fanout-eligibility.
               auxKey: PORT_FLOW_AUX_KEY,
               kind: "state",
             });
@@ -1345,8 +1044,7 @@ export const HISTORY_SEED_AUX_KEY = "history-seed";
  * by `replicateHighFanoutSources`'s fanout-eligibility predicate and
  * surfaced in the replication-overrides panel's source list, so the
  * user can flip the predecessor (e.g. `seed-schedule`) to `"always"`
- * to fan replicas into the expanded body. Filtered untouched by
- * `dropAuxOnlyStateEdges` (which only acts on `kind: "state"`).
+ * to fan replicas into the expanded body.
  *
  * **Label honesty (deferred to renderer tooltip).** The edge is
  * literally accurate for iterations 0..seedCount-1. For later
@@ -1594,97 +1292,6 @@ export const collapseGraph = (
   };
 };
 
-// ─── Aux-only state-edge suppression ────────────────────────────────────
-
-/**
- * Drop every `kind: "state"` edge whose endpoint id is in `auxOnlyIds`.
- *
- * **Why this transform is its own stage.** `inferStateEdges` walks the spec
- * in DFS order and chains every leaf to its successor — including aux-only
- * leaves like `aes.key-expansion@1`. For those leaves the runtime contract
- * `(state, params) → state` produces an identity passthrough (key-expansion
- * reads `state` but doesn't modify it), so the emitted edge represents a
- * pedagogically misleading "data flows from here into the next step" arrow.
- * The renderer pairs every aux-only root with a `__cipher_input__` pill
- * arrow that lands on the FIRST state-consuming leaf, making the spine edge
- * out of the aux-only leaf redundant.
- *
- * **Pipeline placement: BEFORE `replicateHighFanoutSources`.** That matters
- * because Slice 7b (2026-05-17) made replication rewrite the `from` of
- * state edges to the source's spine-entry replica id when the source is
- * fully replicated. If this filter runs AFTER replication, the rewritten
- * edge slips through (its `from` is no longer the original aux-only id but
- * `${src}@->${consumer}`) and the user sees a phantom state arrow from the
- * tiny replica chip into the first state consumer — exactly the regression
- * the user reported. Running the filter BEFORE replication keeps the
- * suppression centered on the original spec ids, where the union check is
- * trivial and Slice 7b's redirect logic naturally falls through to its
- * aux-target fallback (documented at `replicateHighFanoutSources`'s
- * `spineSuccessorOf` block) without losing the spine-entry replica.
- *
- * **Asymmetric endpoint check** (Slice S2(h), 2026-05-26 —
- * `docs/plans/sha-256-density-polish.md`). The two endpoint sets answer
- * pedagogically distinct questions:
- *
- *   - `auxOnlyIds` (FROM-side): every aux-only root. An outgoing legacy
- *     state edge from one of these leaves represents an identity
- *     passthrough — the leaf doesn't transform state; the arrow shows
- *     the SAME bytes the input pill already shows landing at the first
- *     real consumer. Drop them all. Load-bearing for AES `key-expansion
- *     → initial.add-round-key` (the original target of this filter).
- *
- *   - `auxOnlySinkIds` (TO-side, OPTIONAL): the subset of `auxOnlyIds`
- *     whose registration has NO `meta.stateInputPort` declared — i.e.
- *     aux-only roots that DON'T read the state thread (AES
- *     `key-expansion`, SHA-256 `K-to-aux` / `H-to-aux` / `H-constant`).
- *     An incoming legacy state edge into one of these is misleading
- *     (the consumer never reads it). Drop those. CONTRAST: an aux-only
- *     root WITH `meta.stateInputPort` (SHA-256's `W-publish` =
- *     `generic.state-to-aux-bytes@1`) DOES read state via the thread
- *     even though it never transforms it; its incoming spine edge
- *     (`msg-schedule → W-publish`) is the legitimate handoff and must
- *     survive — drop it and the schedule looks like a dead-end (the
- *     S2(h) bug). When omitted, `auxOnlySinkIds` defaults to
- *     `auxOnlyIds` so the symmetric pre-S2(h) behavior is preserved
- *     for callers that don't differentiate (the tests in
- *     `tests/replicate-fanout.test.ts` exercise this path).
- *
- * **Identity short-circuit** when `auxOnlyIds` is empty OR no state edge
- * touches one — returns the input by reference so the createMemo chain in
- * `GraphView` short-circuits cheaply for ciphers without aux-only roots.
- *
- * Aux edges are never filtered — those represent real producer→consumer
- * data flow (the round-key fan-out from key-expansion); the user wants
- * to SEE those edges, that's the whole pedagogical point. Only the spine
- * passthrough is misleading.
- *
- * Validation (`validateGraph`) consumes the pre-filter graph, so dropping
- * these edges from the display doesn't change the warning surface.
- */
-export const dropAuxOnlyStateEdges = (
-  graph: CipherGraph,
-  auxOnlyIds: ReadonlySet<string>,
-  auxOnlySinkIds: ReadonlySet<string> = auxOnlyIds,
-): CipherGraph => {
-  if (auxOnlyIds.size === 0 && auxOnlySinkIds.size === 0) return graph;
-  const filteredEdges = graph.edges.filter((e) => {
-    // Only the LEGACY passthrough state edges (kind:"state" +
-    // auxKey:STATE_AUX_KEY) are pedagogically misleading from an
-    // aux-only root — those represent the implicit (state, params) →
-    // state thread, which the aux-only root never actually transforms.
-    // Port-flow state edges (kind:"state" + auxKey:PORT_FLOW_AUX_KEY)
-    // are declared by `portInputs` and carry real bytes; dropping them
-    // hides the H-constant → init-working-vars handoff (and the
-    // analogous final.fetch-H → final.split-H handoff). The auxKey
-    // discriminator was added 2026-05-26 — see PORT_FLOW_AUX_KEY's
-    // doc-block.
-    if (e.kind !== "state" || e.auxKey !== STATE_AUX_KEY) return true;
-    return !auxOnlyIds.has(e.from) && !auxOnlySinkIds.has(e.to);
-  });
-  if (filteredEdges.length === graph.edges.length) return graph;
-  return { ...graph, edges: filteredEdges };
-};
-
 // ─── Collapsed-iterate block-chip expansion (Slice 6) ────────────────────
 
 /**
@@ -1923,9 +1530,9 @@ export const expandCollapsedIterates = (
  *     whose `to` is a fully-replicated source are redirected to that
  *     source's "spine entry" replica — defined as the replica generated
  *     for the source's spine successor (first outgoing state edge's target,
- *     with fallback to first outgoing aux edge's target if the iterate-
- *     boundary suppression has eaten the only state-out — see
- *     `inferStateEdges` for the suppression rule). Linear-list sidebar
+ *     with fallback to first outgoing aux edge's target if there is no
+ *     outgoing state edge — e.g. an aux-only source whose only outputs
+ *     are aux fan-out). Linear-list sidebar
  *     click-to-scrub continues working because that view reads the trace,
  *     not the graph; click-to-scrub on any replica still works via the
  *     `replicaOf` field. See `feedback_state_spine_no_phantoms.md` for the
@@ -2048,11 +1655,9 @@ export const replicateHighFanoutSources = (
   // incoming edges whose `to` lands on a dead source id. Definition:
   //   1. First outgoing STATE edge's target (pre-replication graph).
   //   2. Fallback to first outgoing AUX edge's target if (1) doesn't
-  //      exist. The fallback handles sources whose only state output
-  //      was suppressed by the iterate-boundary rule in `inferStateEdges`
-  //      — e.g. `compute-block-count` set to `"always"` in AES-128 ECB,
-  //      where the spine edge → `ecb-blocks` (the iterate) is dropped,
-  //      leaving only the aux edge → `ecb-blocks` for `blockCount`.
+  //      exist. The fallback handles aux-only sources whose only outputs
+  //      are aux fan-out (no port-flow spine edge) — e.g. a key-schedule
+  //      flipped to `"always"`, whose round-key fan-out is its only edge set.
   // The spine-successor's replica (`${src}@->${spineSuccessor}`) is the
   // canonical "spine entry" for the removed source. Every qualifying
   // source has at least one outgoing aux edge (that's how it qualified),
@@ -2592,8 +2197,9 @@ export const validateGraph = (graph: CipherGraph, trace: Trace): GraphWarning[] 
   // of `reader` is the `:b{i}`-collapse case above. So we suppress any aux
   // edge that (a) has its endpoints inside the same iterate ancestor AND
   // (b) goes backwards in spec order within that iterate. State edges are
-  // never filtered — `inferStateEdges` only emits forward edges by
-  // construction, and a backwards state edge would indicate a real bug.
+  // never filtered — the port-flow spine (`inferPortEdges`) only emits
+  // forward edges by construction, and a backwards state edge would
+  // indicate a real bug.
   //
   // The edge stays in `graph.edges`, so the renderer still draws it (the
   // user wants to see the chain feedback). Only the cycle detector
@@ -2758,18 +2364,20 @@ export const deriveAuxGraph = (
 
   const rootIds = walkSpec(spec.steps, [], ctx);
   annotateBlockSpans(trace, ctx);
-  // Aux edges come from trace-walking (empty trace → empty list); state
-  // edges come from spec-walking (always present, even pre-run). Append
-  // state edges AFTER aux edges so existing tests that index the edge
-  // list by position continue to work, and so a reader scanning the
-  // dataflow sees the annotations first and the spine last. Port-flow
-  // edges (S2(e)) join the "state" bucket — they paint as the spine,
-  // distinguished by `auxKey: "port-flow"` so `dropAuxOnlyStateEdges`
-  // doesn't filter them. `inferStateEdges` takes the registry so it
-  // can apply the per-edge S2(f) gate (skip emitting state edges to
-  // consumers that don't actually read state-thread).
+  // Aux edges come from trace-walking (empty trace → empty list); the
+  // spine comes from spec-walking the declared `portInputs` (always
+  // present, even pre-run). Append spine edges AFTER aux edges so existing
+  // tests that index the edge list by position continue to work, and so a
+  // reader scanning the dataflow sees the annotations first and the spine
+  // last. Port-flow edges (S2(e)) carry `kind: "state"` so the renderer
+  // paints them as the spine, tagged `auxKey: "port-flow"`.
+  //
+  // The legacy consecutive-siblings state-thread inference (`inferStateEdges`)
+  // was retired in Phase 5 Slice 5.3e (Batch 3, 2026-05-31): every shipped
+  // spec is port-wired, so `inferPortEdges` owns the entire spine. `opts.registry`
+  // is therefore no longer read here — it's retained on the signature for
+  // caller compatibility (~110 callsites pass it).
   const portFlowEdges = inferPortEdges(spec);
-  const legacyStateEdges = inferStateEdges(spec, opts?.registry);
   // History-seed edges (S2(l), 2026-05-26): synthesize aux edges from
   // each `for-each-subgraph-with-history` container's spine predecessor
   // to every body lookback fetch. The runtime's auto-publish of
@@ -2778,12 +2386,7 @@ export const deriveAuxGraph = (
   // `replicateHighFanoutSources` (kind: "aux"); shared auxKey so the
   // edges dedupe to one visible arrow when the container is collapsed.
   const historySeedEdges = inferHistorySeedEdges(spec);
-  const edges = [
-    ...deriveEdges(trace, ctx),
-    ...portFlowEdges,
-    ...legacyStateEdges,
-    ...historySeedEdges,
-  ];
+  const edges = [...deriveEdges(trace, ctx), ...portFlowEdges, ...historySeedEdges];
 
   // ─── $input synthetic source pill (scaffolding-suppression A3a) ───────────
   //
