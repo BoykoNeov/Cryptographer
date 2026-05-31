@@ -377,8 +377,7 @@ button:disabled {
 /* Phase 2b — compare-to-previous-run toggle in the trace-view header. */
 /* Auto/manual rerun toggle. Lives in `.inputs` next to the Run button —
    inherits flex layout from the parent, so we just style the checkbox
-   row and let alignment fall out naturally. Mirrors `.compare-toggle`
-   for visual consistency: same font size, same gap, same muted color. */
+   row and let alignment fall out naturally. */
 .auto-rerun-toggle {
   display: flex;
   align-items: center;
@@ -455,34 +454,6 @@ button:disabled {
   background: #3a1010;
   border: 1px solid #ff6e6e;
   color: #ff8c8c;
-}
-
-.compare-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--muted);
-  cursor: pointer;
-  user-select: none;
-}
-
-.compare-toggle input[type="checkbox"] {
-  cursor: pointer;
-}
-
-.compare-toggle input[type="checkbox"]:disabled {
-  cursor: not-allowed;
-}
-
-.compare-toggle:has(input:disabled) {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.compare-count {
-  color: var(--accent);
-  font-size: 11px;
 }
 
 /* Multi-block ECB/CBC/CTR — small "Block i of N" chip rendered above the
@@ -581,37 +552,14 @@ button:disabled {
   outline-offset: -2px;
 }
 
-/* ─── BytesView (variable-length byte sequence) ───────────────────────── */
-/* Rendered for pkcs7-pad, pkcs7-unpad, and the bytes-side of load/store-
-   block frames. Lays out cells as a wrapping row rather than a fixed
-   grid — the sequence length varies (5 → 16 across a pad, 16 → 5 across
-   an unpad), so a flex row that wraps reads better than a column count. */
-.bytes-view {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.bytes-row-block {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.bytes-row-count {
-  color: var(--muted);
-  font-size: 11px;
-  text-transform: none;
-  letter-spacing: normal;
-  margin-left: 6px;
-}
-
-.bytes-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-}
-
+/* ─── Byte cell (shared primitive) ───────────────────────────────────── */
+/* One fixed-size cell rendering a single byte. Shared by `PortFlowView`
+   (port rows) and `StepStrip` (neighborhood thumbnails); both render plain
+   cells with no highlight modifiers. The `BytesView` before/after grid that
+   owned this class — its `.bytes-view`/`.bytes-row*` layout, the
+   `.changed`/`.diff-vs-prev`/`.bytes-cell-missing` highlight modifiers, and
+   the multi-block `.bytes-block-*` grouping — was retired with `BytesView`
+   in Phase 5 Slice 5.3e. Only the bare cell survives. */
 .bytes-cell {
   background: var(--bg-elev-2);
   display: flex;
@@ -623,75 +571,6 @@ button:disabled {
   height: 40px;
   padding: 0 6px;
   border-radius: 2px;
-}
-
-.bytes-cell.changed {
-  background: var(--changed-bg);
-  color: var(--changed);
-}
-
-.bytes-cell.diff-vs-prev {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
-/* "Missing" cells appear when one row is shorter than its comparison —
-   e.g. the `before` row of a pkcs7-pad frame is 5 bytes while `after` is
-   16, so before's positions 5..15 render as ghost cells. Lets the user see
-   the length expansion visually rather than reading the row count. */
-.bytes-cell-missing {
-  background: transparent;
-  border: 1px dashed var(--border);
-  color: var(--muted);
-  opacity: 0.6;
-}
-
-/* Multi-block grouping. When a BytesState exceeds one block (16 bytes),
-   `BytesView`/`SingleStateView` segment cells into per-block panels so the
-   reader sees discrete blocks instead of one long wrap-line. This is the
-   key visualization for ECB-mode pedagogy: identical plaintext blocks
-   encrypt to identical ciphertext blocks, and that's only obvious when
-   the blocks are visually separated. */
-.bytes-block-group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg-elev-1, rgba(255, 255, 255, 0.02));
-}
-
-.bytes-block-label {
-  font-size: 11px;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-/* Block panel renders each block as a 4×4 grid so it visually matches the
-   AES State matrix the reader has been watching inside the round body. The
-   `grid-auto-flow: column` setting is the AES-specific bit — items fill
-   column 1 top-to-bottom first (bytes 0..3), then column 2 (bytes 4..7),
-   matching FIPS-197 §3.4's column-major state layout exactly. Track sizes
-   mirror the MatrixView `.grid` rule above for visual parity. */
-.bytes-block-cells {
-  display: grid;
-  grid-template-rows: repeat(4, 40px);
-  grid-template-columns: repeat(4, 48px);
-  grid-auto-flow: column;
-  gap: 2px;
-  background: var(--border);
-  padding: 2px;
-  border-radius: 4px;
-}
-
-/* When `.bytes-row` actually contains block groups (multi-block frames),
-   widen the gap between groups so blocks read as distinct units. The default
-   2px gap inside the row is right for cells but visually merges two adjacent
-   block panels. */
-.bytes-row:has(.bytes-block-group) {
-  gap: 12px;
 }
 
 /* ─── Port-aware inspector view ────────────────────────────────────────── */

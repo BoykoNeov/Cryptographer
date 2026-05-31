@@ -50,7 +50,6 @@ import {
   onMount,
 } from "solid-js";
 import { BlockBadge } from "./components/BlockBadge";
-import { BytesView } from "./components/BytesView";
 import { ConstantsPanel } from "./components/ConstantsPanel";
 import { FeistelRecombineView } from "./components/FeistelRecombineView";
 import { FeistelRoundBytes } from "./components/FeistelRoundBytes";
@@ -59,7 +58,7 @@ import { GraphView } from "./components/GraphView";
 import { IvInput } from "./components/IvInput";
 import { KeyScheduleExplorer } from "./components/KeyScheduleExplorer";
 import { ParamEditor } from "./components/ParamEditor";
-import { PortFlowView, isPortNativeFrame } from "./components/PortFlowView";
+import { PortFlowView } from "./components/PortFlowView";
 import { RoundKeyPanel } from "./components/RoundKeyPanel";
 import { RunExplorerModal } from "./components/RunExplorerModal";
 import { StepDescription } from "./components/StepDescription";
@@ -104,13 +103,7 @@ import {
   useCipherMode,
 } from "./stores/cipher-mode";
 import { setByteFormat, useByteFormat } from "./stores/format";
-import {
-  findPreviousRunFrameByStepId,
-  pushSnapshot,
-  setShowPreviousRun,
-  useHistory,
-  useShowPreviousRun,
-} from "./stores/history";
+import { pushSnapshot, useHistory } from "./stores/history";
 import { useIvBytes } from "./stores/iv";
 import { installKeyboardShortcuts } from "./stores/keyboard";
 import { getLayoutForSpec, hasUserLayout, setLayoutForSpec } from "./stores/layout";
@@ -1007,22 +1000,13 @@ export const App = () => {
     return formatBytes(s.bytes, fmt());
   });
 
-  // Phase 2b — overlay: look up the same-stepId frame from the run just
-  // before the current one. We memoize on (history, currentFrame.stepId)
-  // so a scrub through the trace re-uses the same snapshot's frames
-  // without re-walking them on every render.
+  // Run history feeds the Run Explorer modal. `historyCount` drives the
+  // "compare runs (N)" button label and disables it when nothing has been
+  // recorded yet. (The Phase-2b inline "compare to previous run" overlay
+  // these once fed was retired with `BytesView` in Slice 5.3e — `PortFlowView`
+  // has no previous-run row; cross-run diffing now lives only in the modal.)
   const history = useHistory();
-  const showPrev = useShowPreviousRun();
-  const previousRunFrame = createMemo<TraceFrame | null>(() => {
-    if (!showPrev()) return null;
-    const f = currentFrame();
-    if (!f) return null;
-    return findPreviousRunFrameByStepId(history(), f.stepId);
-  });
-  // Snapshot count drives the "compare runs" button label and disables the
-  // overlay toggle when there's nothing to compare against (1 run only).
   const historyCount = createMemo(() => history().length);
-  const canCompare = createMemo(() => historyCount() >= 2);
 
   // Total block count across the current trace (for the BlockBadge "of N"
   // suffix). Counts unique blockIndex values rather than reading
@@ -1557,24 +1541,6 @@ export const App = () => {
                       {frame().stepId}
                     </span>
                     <div class="frame-header-right">
-                      {/* Phase 2b — overlay toggle. Disabled until we have a
-                          second snapshot to compare against, so the user can't
-                          ask for an overlay that doesn't exist yet. */}
-                      <label
-                        class="compare-toggle"
-                        title="Show previous run alongside the current matrix"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={showPrev()}
-                          disabled={!canCompare()}
-                          onChange={(e) => setShowPreviousRun(e.currentTarget.checked)}
-                        />
-                        compare to previous run
-                        <Show when={canCompare()}>
-                          <span class="compare-count">({historyCount()} runs)</span>
-                        </Show>
-                      </label>
                       <span class="frame-type">{frame().stepType}</span>
                     </div>
                   </div>
@@ -1594,9 +1560,7 @@ export const App = () => {
                       the pedagogy plan). */}
                   <Show
                     when={isKeyExpansionStepType(frame().stepType)}
-                    fallback={
-                      <FrameStateView frame={frame()} previousRunFrame={previousRunFrame()} />
-                    }
+                    fallback={<FrameStateView frame={frame()} />}
                   >
                     <KeyScheduleExplorer frame={frame()} />
                   </Show>
@@ -1738,60 +1702,24 @@ export const App = () => {
 };
 
 /**
- * Shape-aware render dispatch for one frame's before/after state. Pulled
- * out of App so the four-way branch is readable.
+ * Renders one frame's port I/O. `PortFlowView` is the UNIVERSAL inspector:
+ * every shipped cipher/hash is port-native (every leaf's registration has
+ * `legacy === undefined`, the port-capture gate at ~`runtime.ts:767`), so the
+ * runtime records each frame's input/output ports and this view reads them
+ * directly. The hybrid-ported family (key-schedules + padding, `meta`
+ * retained) populates the same port fields; key-expansion frames are
+ * intercepted upstream by `KeyScheduleExplorer` (by stepType) before reaching
+ * here, so in practice padding is the hybrid family that lands in this view.
+ *
+ * The legacy shape-aware before/after dispatch was retired across Phase 5:
+ * the matrix branch (`MatrixView`/`MixedShapeView`) with the `MatrixState`
+ * shape in Slice 5.1, and the `BytesView` before/after pair itself in Slice
+ * 5.3e once the last lifted-legacy step (the Feistel toy — the only frame
+ * that ever lacked port I/O) was gone. The invariant in
+ * `tests/requires-ported-dispatch.test.ts` pins that every shipped leaf is
+ * port-native, so this view is now unconditional.
  */
-const FrameStateView = (props: {
-  frame: TraceFrame;
-  previousRunFrame: TraceFrame | null;
-}) => {
-  const before = () => props.frame.stateBefore;
-  const after = () => props.frame.stateAfter;
-  const prevAfter = () => props.previousRunFrame?.stateAfter ?? null;
-
-  // Port-aware dispatch (Slice 2.9b). `PortFlowView` reads the port I/O the
-  // runtime captured on the frame; `BytesView` renders the before/after state
-  // pair. The runtime captures port I/O whenever the registration has NO
-  // `legacy` executor (the gate at ~`runtime.ts:767`), so both PURE port-native
-  // steps AND the HYBRID-ported steps (meta retained, legacy dropped) populate
-  // the port fields. Since Slice 5.2 that hybrid set is the key-schedules
-  // (AES/Speck/Serpent/DES) + the padding family. The key-schedules are
-  // intercepted upstream by `KeyScheduleExplorer` (by stepType), so in practice
-  // padding is the hybrid family that reaches this dispatch — its input/output
-  // `state` port rows surface the pad/unpad length change.
-  //
-  // Post-Slice-5.1 the only State shape is `bytes`, so the legacy 3-way
-  // (matrix / bytes / mixed-boundary) dispatch collapsed to BytesView —
-  // `MatrixView` + `MixedShapeView` were retired with the MatrixState shape.
-  //
-  // Slice 5.3a formalizes this as the intentional contract: `PortFlowView` is
-  // the UNIVERSAL inspector default. Every user-selectable cipher/hash is
-  // port-native — every leaf's registration has `legacy === undefined`, so the
-  // runtime captures port I/O (gate at `runtime.ts:767`) and every selectable
-  // frame lands in `PortFlowView`. `BytesView` is now reachable ONLY by the
-  // lifted-legacy `feistel.toy-add-k@1` step, which is test-only (injected via
-  // `__setSpecForTests`, never in the cipher selector). The invariant in
-  // `tests/requires-ported-dispatch.test.ts` pins that no selectable cipher
-  // reaches `BytesView`. Full retirement of `BytesView` +
-  // `stateBefore`/`stateAfter` is sequenced into Slice 5.3e of the Phase-5 arc
-  // (`docs/plans/phase-5-legacy-retirement.md`), once the Feistel scaffolding
-  // is rebuilt/retired.
-  return (
-    <Show
-      when={isPortNativeFrame(props.frame)}
-      fallback={
-        <BytesView
-          before={before()}
-          after={after()}
-          previousAfter={prevAfter()}
-          frame={props.frame}
-        />
-      }
-    >
-      <PortFlowView frame={props.frame} />
-    </Show>
-  );
-};
+const FrameStateView = (props: { frame: TraceFrame }) => <PortFlowView frame={props.frame} />;
 
 /**
  * Compact YYYYMMDD date string used in the default Save filename. UTC-day

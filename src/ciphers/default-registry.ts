@@ -248,7 +248,7 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // dropped their `legacy:` lift for true `PortedExecutor`s (bytes in/out on
   // the `state` port). `meta` is RETAINED (stateInputPort/stateOutputPort
   // "state"), so the linear inspector still reads stateBefore/stateAfter; the
-  // frames now reroute from BytesView to PortFlowView (the honest port view —
+  // frames render in PortFlowView (the honest port view —
   // same rendering SHA-256's `pad`/`length-append` already ship). The
   // intentional throws on malformed padding propagate unchanged.
   r.register("generic.pkcs7-pad@1", {

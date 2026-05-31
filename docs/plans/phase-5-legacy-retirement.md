@@ -59,7 +59,7 @@ user-required follow-up to B4). Advisor-confirmed.
 | 5.3b | Port-wire Speck + Serpent specs (declare explicit `portInputs` on round-body leaves) so `inferPortEdges` owns their spine + the S2(f) gate skips legacy inference for them. **Load-bearing spike FIRST:** declaring `portInputs` may flip the runtime from implicit state-thread to explicit port-resolution (runtime.ts:343-347) — diff the trace on ONE Speck round leaf to confirm KAT byte-equality before committing the approach; if not byte-equal, 5.3b becomes native Speck/Serpent decomposition. Arc size hinges on this. | **DONE 2026-05-31** |
 | 5.3c | Migrate value/narration reads off `stateBefore`/`stateAfter` → frame ports: `edge-value-lookup` (endpoints + block-chips; isolate the toy-only rejoin), narration ×6, `StepStrip`, `RunExplorerModal`. | **DONE 2026-05-31** |
 | 5.3d | **Port-native Feistel/swap visualization rebuild** (the obligatory user-required follow-up). New DES-port-native viz reading `portInputs`/`portOutputs`. **Independent of 5.3e** (the old components are toy-only). | **DONE 2026-05-31** |
-| 5.3e | **Final removal.** Delete the old toy-only Feistel components (`RejoinFrameView`/`FeistelTrackContext`/`FeistelMiniDiagram`) + toy + feistel runtime walk + `FeistelRoundGroup`/`BranchTrack`/`CombineKind`; delete `stateBefore`/`stateAfter`, `inferStateEdges`, `dropAuxOnlyStateEdges`, `BytesView`, the legacy `port-projection` bridge; collapse `BytesState`/`State`/`StateShape`. Strictly after 5.3b + 5.3c. **Risk:** `inferStateEdges`'s empty-group-as-node case (graph.ts:1063-1071 — a cleared round in the editor) has no port-flow analogue → re-implement or accept as editor-only regression. | **Batch 1 DONE 2026-05-31** (`dd279be`); Batches 2–4 sequenced |
+| 5.3e | **Final removal.** Delete the old toy-only Feistel components (`RejoinFrameView`/`FeistelTrackContext`/`FeistelMiniDiagram`) + toy + feistel runtime walk + `FeistelRoundGroup`/`BranchTrack`/`CombineKind`; delete `stateBefore`/`stateAfter`, `inferStateEdges`, `dropAuxOnlyStateEdges`, `BytesView`, the legacy `port-projection` bridge; collapse `BytesState`/`State`/`StateShape`. Strictly after 5.3b + 5.3c. **Risk:** `inferStateEdges`'s empty-group-as-node case (graph.ts:1063-1071 — a cleared round in the editor) has no port-flow analogue → re-implement or accept as editor-only regression. | **Batches 1–2 DONE 2026-05-31** (`dd279be` + B2); Batches 3–4 sequenced |
 | — | Feistel types + toy fixture: **no longer a separate "next phase"** — folded into 5.3d (rebuild) + 5.3e (delete). Order of 5.3d vs 5.3e is a judgment call (rebuild-as-reference first, or clean-slate then rebuild from git history), not a dependency. | folded into 5.3d/e |
 
 ## Slice 5.0 — what shipped
@@ -416,7 +416,7 @@ concat's argument order, so it stays correct across encrypt / decrypt / edits.
 - **Out of scope**: graph view (B4's round-group render is user-confirmed good),
   scrubber track badges (N/A for port-native rounds).
 
-## Slice 5.3e — in progress (Batch 1 shipped 2026-05-31)
+## Slice 5.3e — in progress (Batches 1–2 shipped 2026-05-31)
 
 The final removal, split into **4 batches** (the one-liner spanned the runtime,
 types, graph, every UI surface, and the State-shape collapse — too broad for one
@@ -465,21 +465,57 @@ field/`State`-type collapse) lands last in its own commit.
   193 files** (from 2402 / 210), build **628.20 KB raw / 185.68 KB gz** (≈28 KB
   raw lighter). No KAT or `schemaVersion` change.
 
-**Batches 2–4 (sequenced, next session):**
-- **Batch 2 — BytesView.** Delete `BytesView` + its `App.tsx` `FrameStateView`
-  dispatch arm + the toy-only provenance reads. Unblocked now (the only
-  `BytesView` consumer, the toy, is gone). **Graph-view browser smoke DONE +
-  PASSED (2026-05-31)** — the ~838-line `GraphView` deletion in Batch 1 is
-  jsdom-invisible (`feedback_visual_smoke_vs_property_tests`), so a throwaway
-  Chromium spec drove both AES-128 (generic graph, KAT correct, 0 errors) and
-  **DES** (now port-native group-per-round — `split → expand-R → xor-K →
-  s-boxes → p-permute → fxor → recombine` leaves, state spine + key-schedule aux
-  feeds + the L-half source-colored crossing edge, KAT `85e813540f0ab405`, 0
-  console/page errors). DES falls through the generic group renderer = the
-  intended B4 outcome; the deleted feistel-track rendering is gone and not
-  missed. (Gotcha: graph container structure is spec-driven/immediate but the
-  ciphertext is trace-driven/200ms-debounced — wait on the DES KAT result before
-  screenshotting or you capture a stale pre-rerun ciphertext.)
+**Batch 2 SHIPPED + pushed (2026-05-31)** — *retire `BytesView`*:
+
+- **Deleted** the `BytesView` component (`src/ui/components/BytesView.tsx`) + its
+  test (`tests/bytes-view.test.tsx`). With the toy gone (Batch 1) it had no
+  consumer — it had been the test-only-toy fallback ever since Slice 5.1 routed
+  every shipped frame to `PortFlowView`.
+- **`App.tsx::FrameStateView`** collapsed from the `isPortNativeFrame`
+  `Show`/`BytesView`-fallback to an unconditional `<PortFlowView>`; dropped the
+  `previousRunFrame` prop, the `before`/`after`/`prevAfter` accessors, and the
+  `BytesView` + `isPortNativeFrame` imports. `isPortNativeFrame` survives
+  (exported from `PortFlowView` — now an informational/contract predicate, no
+  longer a render-dispatch gate).
+- **CSS:** deleted the BytesView-exclusive rules (`.bytes-view`, `.bytes-row*`,
+  `.bytes-block-*`, and the `.bytes-cell.changed`/`.diff-vs-prev`/
+  `.bytes-cell-missing` highlight modifiers). **Kept the bare `.bytes-cell`** —
+  shared by `PortFlowView` (port rows) + `StepStrip` (thumbnails), both of which
+  render plain cells with no highlight modifiers.
+- **The inline "compare to previous run" checkbox** (linear frame header) was
+  removed too: its only renderer was `BytesView`'s `previousAfter` row, so it had
+  been a no-op for every shipped cipher since 5.1 — left visible it would toggle a
+  signal nothing renders. Removed the `previousRunFrame` memo + `showPrev` +
+  `canCompare` + the `.compare-toggle`/`.compare-count` CSS; `history` +
+  `historyCount` STAY (they feed the live Run Explorer "compare runs (N)" button).
+  Cross-run diffing still lives in the Run Explorer modal.
+- **Two subsystems left DORMANT, not deleted** (advisor verdict — they're
+  symmetric with each other and reusable; rolled into one follow-up flag):
+  (1) the cell-level **provenance overlay** — `lookupProvenance` /
+  `setProvenanceHover` lose their only caller (BytesView) and RoundKeyPanel's
+  aux-cell hover reader now always reads null, but the `des.ts`/`serpent.ts`
+  output-byte→input-byte maps are the exact consumer for the enqueued
+  **port-aware inspector (Slice 2.9c–e)**; (2) the **`history.ts` prev-run toggle
+  exports** (`useShowPreviousRun` / `setShowPreviousRun` /
+  `findPreviousRunFrameByStepId`) — uncalled but reusable for a future port-level
+  prev-run diff. Both are *invisible* dead code (no UI artifact), unlike the
+  visible checkbox; leaving them dormant is lowest-regret, and deleting one store
+  but not the other inside a "delete BytesView" commit is the inconsistency a
+  reviewer flags.
+- **Live-code comments** naming `BytesView` as part of the dispatch were
+  truthed-up (`PortFlowView` docstring + `isPortNativeFrame` doc, the `runtime.ts`
+  coerce-frame comment, `pkcs7-pad.ts`, `default-registry.ts`, `StepStrip.tsx`).
+  Comments inside the dormant `provenance/` subsystem were left (they retire with
+  that subsystem).
+- **No fresh browser smoke** — the graph-view smoke done in Batch 1 (`f6dfd7b`)
+  covered the structural deletion; B2 deletes only `BytesView` markup + its
+  exclusive CSS, whose selectors target no surviving surface (advisor-confirmed:
+  same category as a markup+CSS deletion, jsdom-invisible but provably safe).
+- **Gate:** `npm run check` GREEN — biome clean, tsc 0 errors, **2257 tests / 192
+  files** (−8 / −1 = the deleted BytesView test), build **623.46 KB raw / 183.90
+  KB gz** (≈4.7 KB raw lighter). No KAT or `schemaVersion` change.
+
+**Batches 3–4 (sequenced, next session):**
 - **Batch 3 — graph state-edge inference.** Delete `inferStateEdges` /
   `dropAuxOnlyStateEdges` + the `GraphView` call sites; retarget the deferred
   toy-string fixtures in `aux-graph-derivation` /

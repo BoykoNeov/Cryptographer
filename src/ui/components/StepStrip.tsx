@@ -7,8 +7,8 @@
  * flat byte row rather than a 4×4 grid: every shipped cipher is byte-native,
  * so a 4×4 grid would impose an AES-column-major reading on non-AES states
  * (Serpent, DES, SHA) that don't have that structure — and it would clash
- * with the flat byte rows the main inspector (`PortFlowView`/`BytesView`)
- * shows. A flat row reads honestly for every cipher.
+ * with the flat byte rows the main inspector (`PortFlowView`) shows. A
+ * flat row reads honestly for every cipher.
  *
  * The current step is centered and emphasized. The previous/next
  * thumbnails are clickable shortcuts to navigate one frame in either

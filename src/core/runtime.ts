@@ -688,10 +688,10 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
             // (post-coercion bytes). The coerce narrator reads these instead of
             // `stateBefore`/`stateAfter` (those fields retire in 5.3e; params
             // carries the lengths but not the bytes the narrator renders).
-            // This also routes the frame to `PortFlowView` via `isPortNativeFrame`
-            // — harmless (coercion is flag-on-only / never shipped) and the
-            // input/output port rows actually read the morph better than the
-            // before/after pair in BytesView would.
+            // This also marks the frame port-native (`isPortNativeFrame`), so
+            // `FrameStateView` renders it in `PortFlowView` — harmless (coercion
+            // is flag-on-only / never shipped) and the input/output port rows
+            // read the morph better than a before/after state pair would.
             portInputs: new Map([[portName, beforeBytes.bytes]]),
             portOutputs: new Map([[portName, afterBytes.bytes]]),
             auxRead: new Map(),

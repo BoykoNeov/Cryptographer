@@ -7,16 +7,15 @@
  * `frame.portInputs` becomes one input row, followed by every entry in
  * `frame.portOutputs` as an output row. Each row carries the port's name
  * (left-aligned label) and a cell strip — one `.bytes-cell` per byte —
- * laid out with the same visual vocabulary as `BytesView` so the user's
- * eye carries forward from legacy frames.
+ * the shared byte-cell primitive the step strip renders too.
  *
  * **Why this exists.** Pure port-native steps (SHA-256's `xor@1`,
  * `add-mod-32@1`, `rotate-bits-right@1`, etc.) emit `stateBefore ===
  * stateAfter` frames — the actual transformation happens in the port
- * I/O, not in state. The matrix/bytes dispatch in `FrameStateView` would
- * render before/after pairs that are byte-equal and pedagogically empty.
- * `PortFlowView` surfaces what the step actually computed by reading the
- * port-I/O captured on the frame in Slice 2.9a.
+ * I/O, not in state. A before/after state view renders byte-equal pairs
+ * that are pedagogically empty; `PortFlowView` surfaces what the step
+ * actually computed by reading the port-I/O captured on the frame in
+ * Slice 2.9a.
  *
  * **What this does NOT do (yet).** Cells are display-only — no hover, no
  * click, no provenance highlighting. Slice 2.9c widens
@@ -28,18 +27,20 @@
  * few sessions). The byte-format toggle IS honored — that's already
  * cheap and the cells are otherwise unreadable without it.
  *
- * **Dispatch predicate** (`isPortNativeFrame`): a frame is port-native
+ * **Port-native predicate** (`isPortNativeFrame`): a frame is port-native
  * iff `portInputs !== undefined || portOutputs !== undefined`. The runtime
  * populates these fields whenever the registration has NO `legacy` executor
  * (the port-capture gate at ~`runtime.ts:767`), so BOTH pure port-native
  * steps AND the hybrid-ported steps (meta retained, legacy dropped) carry
  * port I/O. Since Slice 5.2 that hybrid set is the key-schedules
  * (AES/Speck/Serpent/DES) + the padding family; the key-schedules are
- * intercepted upstream by `KeyScheduleExplorer` (by stepType) before this
- * dispatch, so in practice padding is the hybrid family that lands here. A
- * still-lifted-legacy frame (`feistel.toy-add-k@1`) keeps its `legacy`
- * executor → no port capture → routes to `BytesView`. Steps that publish
- * only outputs (constants) or only inputs (sinks) still match via the `||`.
+ * intercepted upstream by `KeyScheduleExplorer` (by stepType), so in practice
+ * padding is the hybrid family that lands here. Every shipped leaf is
+ * port-native (pinned by `tests/requires-ported-dispatch.test.ts`), so once
+ * Slice 5.3e retired the last lifted-legacy step (the Feistel toy) + its
+ * `BytesView` fallback, `FrameStateView` renders this view unconditionally
+ * and the predicate is now informational. Steps that publish only outputs
+ * (constants) or only inputs (sinks) still match via the `||`.
  */
 
 import { formatByte } from "@/core/format";
@@ -48,10 +49,11 @@ import { For, Show, createMemo } from "solid-js";
 import { useByteFormat } from "../stores/format";
 
 /**
- * Discriminator for the port-aware dispatch. True iff the runtime
- * captured port I/O on this frame (Slice 2.9a's `meta === undefined`
- * branch). Lives next to the consumer so a future port-native step
- * shape that lands only on one side still matches.
+ * True iff the runtime captured port I/O on this frame (the port-capture
+ * gate at ~`runtime.ts:767`). Since Slice 5.3e every shipped frame is
+ * port-native and `FrameStateView` renders `PortFlowView` unconditionally,
+ * so this is now an informational/contract predicate rather than a live
+ * render-dispatch gate — kept exported as the named port-native contract.
  */
 export const isPortNativeFrame = (frame: TraceFrame): boolean =>
   frame.portInputs !== undefined || frame.portOutputs !== undefined;
