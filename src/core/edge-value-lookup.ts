@@ -18,8 +18,10 @@
  * Five branches the result can take, captured by the `status` field:
  *
  *   1. `"endpoint"` — synthetic plaintext/ciphertext pill (Slice 1).
- *      The pills surface the actual cipher I/O: input pill → first
- *      frame's `stateBefore`, output pill → `trace.finalState`. The
+ *      The pills surface the actual cipher I/O: input pill →
+ *      `trace.initialState`, output pill → `trace.finalState` (the
+ *      symmetric pair; Slice 5.3c moved the input pill off the old
+ *      `frames[0].stateBefore` read). The
  *      panel formats `value` like any other state row and badges the
  *      kind as "input pill" / "output pill" via `endpointSide`. Any
  *      caption a future a11y / tooltip surface needs should be built
@@ -346,12 +348,15 @@ export const lookupEdgeValue = (
     if (trace === null) return { status: "no-trace" };
     const side: "input" | "output" = isInputEnd ? "input" : "output";
     if (side === "input") {
-      const first = trace.frames[0];
-      if (!first) return { status: "no-trace" };
+      // The cipher's plaintext input = `trace.initialState` (Slice 5.3c),
+      // symmetric with the output pill's `trace.finalState` below. Replaces
+      // the old `frames[0].stateBefore` read, which 5.3e's field deletion
+      // would break and which `frames[0]`'s `"state"` port can't answer
+      // (the first frame isn't always the plaintext consumer).
       return {
         status: "endpoint",
         endpointSide: "input",
-        value: first.stateBefore,
+        value: trace.initialState,
       };
     }
     return {
@@ -1030,22 +1035,21 @@ export const lookupNodeValue = (
 ): EdgeValueLookup => {
   // ── Endpoint pills ─────────────────────────────────────────────────
   // 2026-05-17: pills surface their actual I/O value in the inspector.
-  // Input pill → first frame's `stateBefore` (= the cipher's plaintext
-  // for encrypt, ciphertext for decrypt); output pill → `trace.finalState`
-  // (= the cipher's ciphertext for encrypt, plaintext for decrypt).
-  // Pre-run clicks fall through to `"no-trace"` so the empty-trace copy
-  // is consistent with every other inspector row.
+  // Input pill → `trace.initialState` (= the cipher's plaintext for encrypt,
+  // ciphertext for decrypt); output pill → `trace.finalState` (= the cipher's
+  // ciphertext for encrypt, plaintext for decrypt). Pre-run clicks fall
+  // through to `"no-trace"` so the empty-trace copy is consistent with every
+  // other inspector row. (Slice 5.3c moved the input pill off the old
+  // `frames[0].stateBefore` read onto the symmetric `initialState`.)
   // INPUT_SOURCE_ID (`$input`) is the scaffolding-suppression A3a synthetic
   // input source; it renders as the input pill for port-native specs, so it
-  // resolves to the same first-frame `stateBefore` value as CIPHER_INPUT_ID.
+  // resolves to the same `trace.initialState` value as CIPHER_INPUT_ID.
   if (nodeId === CIPHER_INPUT_ID || nodeId === INPUT_SOURCE_ID) {
     if (trace === null) return { status: "no-trace" };
-    const first = trace.frames[0];
-    if (!first) return { status: "no-trace" };
     return {
       status: "endpoint",
       endpointSide: "input",
-      value: first.stateBefore,
+      value: trace.initialState,
     };
   }
   if (nodeId === CIPHER_OUTPUT_ID) {

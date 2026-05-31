@@ -834,6 +834,18 @@ export type TraceFrame = {
 
 export type Trace = {
   readonly frames: readonly TraceFrame[];
+  /**
+   * The cipher's seed state — `runSpec`'s `cloneState(input.initialState)`.
+   * The symmetric counterpart of `finalState`: the input pill / input-end
+   * edge resolve to it (Slice 5.3c), replacing the old read of
+   * `frames[0].stateBefore`. That field-based read couldn't survive 5.3e's
+   * deletion of `stateBefore`/`stateAfter` — and `frames[0]`'s `"state"`
+   * input port is not always the plaintext (SHA-256's first frame is a
+   * constant-load), so the port-first helper can't answer the endpoint
+   * either. Runtime-only: NOT persisted in `CipherDocument` (the trace is
+   * re-derived by re-running), so no `schemaVersion` bump.
+   */
+  readonly initialState: State;
   readonly finalState: State;
   readonly finalAux: Aux;
 };

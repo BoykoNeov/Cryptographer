@@ -29,6 +29,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 const emptyState = (): State => ({ shape: "bytes", bytes: new Uint8Array(0) });
 const trivialTrace = (): Trace => ({
   frames: [],
+  initialState: emptyState(),
   finalState: emptyState(),
   finalAux: new Map(),
 });

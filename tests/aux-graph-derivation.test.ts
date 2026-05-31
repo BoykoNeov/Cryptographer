@@ -84,6 +84,7 @@ const runSerpent128 = (): Trace =>
 
 const emptyTrace = (): Trace => ({
   frames: [],
+  initialState: { shape: "bytes", bytes: new Uint8Array(0) },
   finalState: { shape: "bytes", bytes: new Uint8Array(0) },
   finalAux: new Map(),
 });

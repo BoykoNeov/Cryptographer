@@ -11,8 +11,8 @@
  * lookup helper):
  *
  *   - Endpoint pills (CIPHER_INPUT_ID / CIPHER_OUTPUT_ID) → `"endpoint"`
- *     carrying frames[0].stateBefore (input) or trace.finalState
- *     (output) as the I/O value. Pre-run clicks → `"no-trace"`.
+ *     carrying trace.initialState (input) or trace.finalState (output) as
+ *     the I/O value. Pre-run clicks → `"no-trace"`.
  *   - Trace null → `"no-trace"`.
  *   - Block chip with valid index → `"value"`, displayKind=block-payload,
  *     value = `outBlocks[i]` (= the iterate's last body frame stateAfter
@@ -65,11 +65,14 @@ describe("lookupNodeValue — endpoint pills", () => {
     expect(out.status).toBe("endpoint");
     if (out.status !== "endpoint") return;
     expect(out.endpointSide).toBe("input");
-    // Input pill resolves to the first frame's stateBefore — i.e. the
-    // cipher's plaintext (the initialState the runtime cloned in).
+    // Input pill resolves to `trace.initialState` (Slice 5.3c) — the cipher's
+    // plaintext (the seed state the runtime cloned in). This replaced the old
+    // `frames[0].stateBefore` read; the two are byte-equal, and we also pin
+    // that equivalence so the migration is provably value-preserving.
+    expect(out.value).toBe(trace.initialState);
     const first = trace.frames[0];
     expect(first).toBeDefined();
-    expect(out.value).toBe(first?.stateBefore);
+    expect((out.value as { bytes: Uint8Array }).bytes).toEqual(first?.stateBefore.bytes);
   });
 
   it("returns `endpoint` for the output pill carrying the ciphertext bytes", () => {

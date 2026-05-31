@@ -3025,6 +3025,7 @@ export const GraphView = () => {
     // still renders, just without edges.
     const fallback = t ?? {
       frames: [],
+      initialState: { shape: "bytes" as const, bytes: new Uint8Array(0) },
       finalState: { shape: "bytes" as const, bytes: new Uint8Array(0) },
       finalAux: new Map(),
     };

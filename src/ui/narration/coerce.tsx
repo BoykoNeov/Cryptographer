@@ -51,11 +51,6 @@ const readCoerceParams = (params: TraceFrame["params"]): CoerceParams | null => 
   return { portName, mode, sourceLen, targetLen };
 };
 
-const readBytesFromState = (state: TraceFrame["stateBefore"]): Uint8Array | null => {
-  if (state.shape !== "bytes") return null;
-  return state.bytes;
-};
-
 /**
  * Coercion narrator. One unit per frame — the morph is one logical
  * operation. The Prose body names the port, the mode, both lengths, and
@@ -69,9 +64,14 @@ export const coerceNarration: NarrationFn = (frame) => {
   // through doesn't crash the narrator.
   if (params.mode === "exact") return null;
 
-  const before = readBytesFromState(frame.stateBefore);
-  const after = readBytesFromState(frame.stateAfter);
-  if (!before || !after) return null;
+  // The pre- / post-coercion bytes ride the frame's `portName` port I/O
+  // (Slice 5.3c) — the runtime keys both `portInputs` and `portOutputs` by
+  // `params.portName`. This is field-free: `stateBefore`/`stateAfter` are
+  // gone after 5.3e, and the coerce frame's whole point is the morph on a
+  // named port, not a threaded state.
+  const before = frame.portInputs?.get(params.portName);
+  const after = frame.portOutputs?.get(params.portName);
+  if (before === undefined || after === undefined) return null;
   const beforeFrozen = new Uint8Array(before);
   const afterFrozen = new Uint8Array(after);
 

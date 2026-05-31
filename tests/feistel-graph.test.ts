@@ -23,6 +23,7 @@ import { describe, expect, it } from "vitest";
 
 const emptyTrace = {
   frames: [],
+  initialState: { shape: "bytes" as const, bytes: new Uint8Array(4) },
   finalState: { shape: "bytes" as const, bytes: new Uint8Array(4) },
   finalAux: new Map(),
 };

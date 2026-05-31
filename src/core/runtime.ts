@@ -719,6 +719,17 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
             },
             stateBefore: beforeBytes,
             stateAfter: afterBytes,
+            // Port I/O for the coercion morph (Slice 5.3c): the frame consumes
+            // `portName` (pre-coercion source bytes) and produces `portName`
+            // (post-coercion bytes). The coerce narrator reads these instead of
+            // `stateBefore`/`stateAfter` (those fields retire in 5.3e; params
+            // carries the lengths but not the bytes the narrator renders).
+            // This also routes the frame to `PortFlowView` via `isPortNativeFrame`
+            // — harmless (coercion is flag-on-only / never shipped) and the
+            // input/output port rows actually read the morph better than the
+            // before/after pair in BytesView would.
+            portInputs: new Map([[portName, beforeBytes.bytes]]),
+            portOutputs: new Map([[portName, afterBytes.bytes]]),
             auxRead: new Map(),
             auxWritten: new Map(),
             ...(blockIndex !== undefined ? { blockIndex } : {}),
@@ -1607,6 +1618,10 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
 
   return {
     frames,
+    // Symmetric with `finalState` (Slice 5.3c): the seed state, cloned so a
+    // later aux/state mutation can never write back into it. The input pill /
+    // input-end edge resolve to this instead of `frames[0].stateBefore`.
+    initialState: cloneState(input.initialState),
     finalState,
     finalAux: aux as Aux,
   };

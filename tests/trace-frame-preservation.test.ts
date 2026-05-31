@@ -41,6 +41,7 @@ const makeFrame = (index: number, stepId: string): TraceFrame => ({
 
 const makeTrace = (stepIds: readonly string[]): Trace => ({
   frames: stepIds.map((id, i) => makeFrame(i, id)),
+  initialState: emptyState(),
   finalState: emptyState(),
   finalAux: new Map(),
 });
@@ -106,7 +107,12 @@ describe("trace store — frame preservation across re-runs", () => {
 
   it("does not crash when the previous trace was empty", () => {
     // Edge case: a degenerate empty trace, then a real one.
-    setTrace({ frames: [], finalState: emptyState(), finalAux: new Map() });
+    setTrace({
+      frames: [],
+      initialState: emptyState(),
+      finalState: emptyState(),
+      finalAux: new Map(),
+    });
     expect(useFrameIndex()()).toBe(0);
 
     setTrace(makeTrace(["a", "b"]));

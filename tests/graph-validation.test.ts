@@ -129,6 +129,7 @@ const runPorted = (spec: typeof aes128Spec, key: string, pt: string): Trace =>
 
 const emptyTrace: Trace = {
   frames: [],
+  initialState: { shape: "bytes", bytes: new Uint8Array(0) },
   finalState: { shape: "bytes", bytes: new Uint8Array(0) },
   finalAux: new Map(),
 };
@@ -294,6 +295,7 @@ describe("validateGraph — orphaned-read warnings", () => {
   it("flags a single orphan with stepId + auxKey", () => {
     const trace: Trace = {
       frames: [makeOrphanFrame("xor.foo", ["nonexistent.key"])],
+      initialState: { shape: "bytes", bytes: new Uint8Array(0) },
       finalState: { shape: "bytes", bytes: new Uint8Array(0) },
       finalAux: new Map(),
     };
@@ -333,6 +335,7 @@ describe("validateGraph — orphaned-read warnings", () => {
           blockIndex: 1,
         },
       ],
+      initialState: { shape: "bytes", bytes: new Uint8Array(0) },
       finalState: { shape: "bytes", bytes: new Uint8Array(0) },
       finalAux: new Map(),
     };
@@ -363,6 +366,7 @@ describe("validateGraph — orphaned-read warnings", () => {
     // key — so the user sees what every gap is, not just the first.
     const trace: Trace = {
       frames: [makeOrphanFrame("multi.read", ["a", "b"])],
+      initialState: { shape: "bytes", bytes: new Uint8Array(0) },
       finalState: { shape: "bytes", bytes: new Uint8Array(0) },
       finalAux: new Map(),
     };
@@ -439,6 +443,7 @@ describe("validateGraph — unused-write warnings", () => {
           auxWritten: new Map(),
         },
       ],
+      initialState: { shape: "bytes", bytes: new Uint8Array(0) },
       finalState: { shape: "bytes", bytes: new Uint8Array(0) },
       finalAux: new Map(),
     };
@@ -471,6 +476,7 @@ describe("validateGraph — unused-write warnings", () => {
           auxWritten: new Map<string, AuxValue>([["k", new Uint8Array(4)]]),
         },
       ],
+      initialState: { shape: "bytes", bytes: new Uint8Array(0) },
       finalState: { shape: "bytes", bytes: new Uint8Array(0) },
       finalAux: new Map(),
     };
