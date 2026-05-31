@@ -62,9 +62,11 @@ const runSpeck = (): Trace =>
     initialState: makeBytesState(bytesFromHex(SPECK_PT)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(SPECK_KEY)]]),
     // Speck rounds are port-native since B2 → the spec requires ported dispatch.
-    // The graph shape is unchanged: Speck wires no `portInputs`, so no `$input`
-    // source node or port-flow edges appear — only the spec-derived spine + the
-    // key-schedule → round aux fan-out (both identical to the lifted trace).
+    // Since Phase 5 Slice 5.3b the round leaves declare explicit `portInputs.state`
+    // (round.1 ← `$input`, round.N ← round.{N-1}.state), so a `$input` source node
+    // + port-flow spine edges now appear, and the S2(f) gate suppresses the legacy
+    // state-thread spine for those leaves. The aux fan-out (key-schedule → round)
+    // is unchanged.
     portedDispatchEnabled: true,
   });
 
@@ -219,9 +221,15 @@ describe("deriveAuxGraph — AES-128 (single block, no iterate)", () => {
 // ─── Speck32/64 (flat, no containers, ARX) ────────────────────────────────
 
 describe("deriveAuxGraph — Speck32/64 BE (flat, no groups)", () => {
-  it("emits 23 leaves (key-schedule + 22 rounds) and zero containers", () => {
+  it("emits 23 cipher leaves + the `$input` source (Slice 5.3b) and zero containers", () => {
     const g = deriveAuxGraph(runSpeck(), speck32_64BeSpec);
-    expect(g.nodes.length).toBe(23);
+    // 23 cipher leaves (key-schedule + 22 rounds) plus the synthetic `$input`
+    // source pill, which materializes now that round.1 wires its `state` port
+    // to it (Slice 5.3b). Still no containers — Speck is a flat pipeline.
+    const cipherLeaves = g.nodes.filter((n) => n.stepId !== INPUT_SOURCE_ID);
+    expect(cipherLeaves.length).toBe(23);
+    expect(g.nodes.some((n) => n.stepId === INPUT_SOURCE_ID)).toBe(true);
+    expect(g.nodes.length).toBe(24);
     expect(g.containers.length).toBe(0);
   });
 
@@ -317,13 +325,29 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
   // boundary steps. The byte-native port-mode iterate carries its own
   // boundary semantics (covered by the runtime + graph-port-edge tests).
 
-  it("Speck32/64 (flat, no groups, no iterates): 22 state edges across 23 leaves", () => {
-    const g = deriveAuxGraph(runSpeck(), speck32_64BeSpec);
+  it("Speck32/64 (flat): the spine is port-flow-owned (Slice 5.3b), the legacy state-thread suppressed", () => {
+    // Passing the registry (as the app does) lets the S2(f) gate fire: the
+    // round leaves declare `portInputs.state`, so `inferStateEdges` skips them
+    // and `inferPortEdges` (S2(e)) owns the entire spine. The spine is one
+    // continuous chain `$input → round.1 → … → round.22` — 22 edges, ALL
+    // tagged `auxKey: "port-flow"`, with NO duplicate legacy state-thread
+    // edge. This is the 5.3b payoff that lets `inferStateEdges` retire for
+    // Speck in 5.3e.
+    const g = deriveAuxGraph(runSpeck(), speck32_64BeSpec, {
+      registry: buildDefaultRegistry(),
+    });
     const stateEdges = g.edges.filter((e) => e.kind === "state");
-    // 23 flat leaves → 22 spine edges. Sanity-check the obvious ones.
     expect(stateEdges.length).toBe(22);
-    expect(stateEdges.find((e) => e.from === "key-schedule" && e.to === "round.1")).toBeDefined();
+    // Every spine edge is a port-flow edge — none survive from the legacy
+    // consecutive-siblings state-thread inference.
+    expect(stateEdges.every((e) => e.auxKey === "port-flow")).toBe(true);
+    // Head of the spine is the true plaintext source, NOT the aux-only
+    // key-schedule (the old state-thread phantom `key-schedule → round.1` is
+    // gone — the no-phantoms principle).
+    expect(stateEdges.find((e) => e.from === INPUT_SOURCE_ID && e.to === "round.1")).toBeDefined();
+    expect(stateEdges.find((e) => e.from === "key-schedule" && e.to === "round.1")).toBeUndefined();
     expect(stateEdges.find((e) => e.from === "round.1" && e.to === "round.2")).toBeDefined();
+    expect(stateEdges.find((e) => e.from === "round.21" && e.to === "round.22")).toBeDefined();
   });
 
   it("Serpent-128 (32 round groups, IP/FP outside): spine threads through every leaf", () => {

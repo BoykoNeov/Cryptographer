@@ -45,6 +45,7 @@ import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
 import { speck32_64LeDecryptSpec } from "@/ciphers/speck-32-64-le-decrypt";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
+import { INPUT_SOURCE_ID } from "@/core/types";
 import type { AuxValue, CipherSpec } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
@@ -280,6 +281,50 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
       expect(hexFromBytes(roundFrame.stateAfter.bytes)).toBe("5316f627");
       // The aux read of roundKey.0 is recorded on the native round's frame.
       expect([...roundFrame.auxRead.keys()]).toContain("roundKey.0");
+    });
+  });
+
+  // ─── (e) Slice 5.3b — explicit state-spine wiring on the SHIPPED spec ───
+  describe("(e) port-wired `state` spine preserves the roundKey aux reads", () => {
+    // The (d) synthetic spec wires no `portInputs`; the shipped spec does
+    // (Slice 5.3b: round.1 ← `$input`, round.N ← round.{N-1}.state). This
+    // pins that declaring `portInputs.state` did NOT disturb the `roundKey`
+    // aux projection — `state` flows from the port, `roundKey` still flows
+    // from `aux[roundKeyAux]` via Step C — so the graph's key-schedule→round
+    // fan-out edges (built from `frame.auxRead`) survive.
+    it("round frames keep `roundKey.{i-1}` in auxRead while `state` is port-wired", () => {
+      const trace = runSpec(speck32_64BeSpec, buildDefaultRegistry(), {
+        initialState: makeBytesState(bytesFromHex(BE_PLAINTEXT)),
+        initialAux: new Map<string, AuxValue>([["key", bytesFromHex(BE_KEY)]]),
+        portedDispatchEnabled: true,
+      });
+      // Every round.i (1..22) reads roundKey.{i-1} from aux, byte-for-byte
+      // as before the port-wiring.
+      for (let i = 1; i <= 22; i++) {
+        const f = trace.frames.find((fr) => fr.stepId === `round.${i}`);
+        if (!f) throw new Error(`missing frame round.${i}`);
+        expect([...f.auxRead.keys()]).toContain(`roundKey.${i - 1}`);
+      }
+    });
+
+    it("the captured frame ports carry `state` + `roundKey`; round.1's `state` is `$input`", () => {
+      const trace = runSpec(speck32_64BeSpec, buildDefaultRegistry(), {
+        initialState: makeBytesState(bytesFromHex(BE_PLAINTEXT)),
+        initialAux: new Map<string, AuxValue>([["key", bytesFromHex(BE_KEY)]]),
+        portedDispatchEnabled: true,
+      });
+      const r2 = trace.frames.find((f) => f.stepId === "round.2");
+      if (!r2) throw new Error("missing frame round.2");
+      // Hybrid-ported leaf (legacy === undefined) → ports captured. `state`
+      // arrives via the declared portInputs; `roundKey` via the meta aux
+      // projection — both surface on the frame's portInputs.
+      expect(r2.portInputs).toBeDefined();
+      expect([...(r2.portInputs?.keys() ?? [])].sort()).toEqual(["roundKey", "state"]);
+
+      // The spec head: round.1 declares its `state` source as `$input`.
+      const round1 = speck32_64BeSpec.steps.find((s) => s.id === "round.1");
+      if (!round1 || round1.kind !== "step") throw new Error("missing round.1 leaf");
+      expect(round1.portInputs?.state).toEqual({ node: INPUT_SOURCE_ID, port: "out" });
     });
   });
 });

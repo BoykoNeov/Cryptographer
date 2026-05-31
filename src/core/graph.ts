@@ -1527,16 +1527,20 @@ const inferStateEdges = (spec: CipherSpec, registry?: StepRegistry): GraphEdge[]
  * for any leaf that declares `portInputs`, so where this pass emits, the
  * legacy pass stays silent.
  *
- * **Per-cipher reality (updated 2026-05-31, post-B-phase + Slice 5.2 —
- * supersedes the original S2(e) note).** SHA-256, DES, native-AES, and
- * AES-CBC declare explicit spec `portInputs`, so their spine is composed
- * ENTIRELY of port-derived edges. **Speck and Serpent do NOT** — they ship
- * as monolithic hybrid-ported steps with no spec `portInputs`, so this pass
- * returns an empty list for them and the legacy `inferStateEdges` remains
- * the SOLE source of their rendered spine. Retiring `inferStateEdges`
- * (Phase-5 Slice 5.3e) therefore requires port-wiring Speck/Serpent first
- * (Slice 5.3b) — see `docs/plans/phase-5-legacy-retirement.md`. Byte-
- * identical for any spec that doesn't declare port-edge wiring.
+ * **Per-cipher reality (updated 2026-05-31, post-B-phase + Slice 5.2/5.3b —
+ * supersedes the original S2(e) note).** SHA-256, DES, native-AES, AES-CBC,
+ * and now **Speck** (Slice 5.3b) declare explicit spec `portInputs`, so their
+ * spine is composed ENTIRELY of port-derived edges (the S2(f) gate suppresses
+ * the legacy consecutive-siblings inference for their wired leaves). Speck's
+ * round leaves are hybrid-ported (meta present) but declare `portInputs.state`
+ * so the gate's third branch (`portInputs[stateInputPort]` override) fires.
+ * **Serpent does NOT yet** — it ships as monolithic hybrid-ported groups with
+ * no spec `portInputs`, so this pass returns an empty list for it and the
+ * legacy `inferStateEdges` remains the SOLE source of its rendered spine.
+ * Port-wiring Serpent is the remaining half of Slice 5.3b; retiring
+ * `inferStateEdges` (Slice 5.3e) requires it — see
+ * `docs/plans/phase-5-legacy-retirement.md`. Byte-identical for any spec that
+ * doesn't declare port-edge wiring.
  *
  * **Why this needed to exist.** Pre-S2(e) `deriveAuxGraph` did not
  * consume `portInputs` — Slice 2.6a wired the runtime + spec-shapes

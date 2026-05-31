@@ -20,8 +20,14 @@
  * ordering encodes the reversal.
  */
 
-import type { CipherSpec, StepNode } from "../core/types";
+import type { CipherSpec, PortBinding, StepNode } from "../core/types";
+import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "../core/types";
 import type { SpeckByteOrder } from "../steps/speck-word-codec";
+
+// Tiny binding helper — mirrors the per-file `port()` in the AES/DES/ECB
+// builders (Phase 5 Slice 5.3b). `{ node, port }` is the sink-side edge a
+// leaf's `portInputs[portName]` resolves against `nodeOutputs` at runtime.
+const port = (node: string, portName: string): PortBinding => ({ node, port: portName });
 
 // Cipher constants — kept here so a future Speck64/128 builder can sit
 // alongside this one with its own constants and the rest of the file is a
@@ -74,6 +80,23 @@ export const buildSpeck32_64Spec = (
     const rkIndex = direction === "encrypt" ? i - 1 : ROUNDS - i;
     const stepType = direction === "encrypt" ? "speck.round@1" : "speck.round-inverse@1";
     const idPrefix = direction === "encrypt" ? "round" : "round-inverse";
+    // Explicit state-spine wiring (Phase 5 Slice 5.3b): declare the `state`
+    // input port so `inferPortEdges` owns the round→round spine and the
+    // `inferStateEdges` legacy fallback can be retired (5.3e). The first
+    // round reads the reserved `$input` source (the plaintext/ciphertext
+    // block); every later round reads its predecessor's `state` output port.
+    //
+    // Byte-equality (the 5.3b load-bearing spike): each round leaf is
+    // hybrid-ported (`speckRoundMeta` present, `legacy === undefined`), so
+    // declaring `portInputs.state` makes the runtime resolve the carried
+    // block from `nodeOutputs` (Step A) and SKIP the `meta.stateInputPort`
+    // projection (Step B). For `stateLayout: "bytes"` the projection is the
+    // identity over the predecessor's recorded output bytes, so the trace
+    // stays byte-identical to the implicit state-thread. `roundKey` is left
+    // unwired — it keeps flowing from `aux[roundKeyAux]` via Step C, so the
+    // key-schedule→round fan-out edges in `frame.auxRead` are preserved.
+    const stateBinding: PortBinding =
+      i === 1 ? port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT) : port(`${idPrefix}.${i - 1}`, "state");
     rounds.push({
       kind: "step",
       id: `${idPrefix}.${i}`,
@@ -85,6 +108,7 @@ export const buildSpeck32_64Spec = (
         wordBits: WORD_BITS,
         byteOrder,
       },
+      portInputs: { state: stateBinding },
     });
   }
 
