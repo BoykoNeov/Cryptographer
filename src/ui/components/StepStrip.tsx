@@ -17,6 +17,7 @@
  */
 
 import { formatByte } from "@/core/format";
+import { frameStateOutBytes } from "@/core/frame-state";
 import type { TraceFrame } from "@/core/types";
 import { For, Show, createMemo } from "solid-js";
 import { useByteFormat } from "../stores/format";
@@ -75,12 +76,15 @@ type ThumbnailProps = {
 
 const Thumbnail = (props: ThumbnailProps) => {
   const fmt = useByteFormat();
-  // The flat byte sequence of the step's after-state. `createMemo` because
-  // it's read twice in the JSX below (the `<Show when>` guard + the `<For>`).
+  // The flat byte sequence of the step's after-state — the `"state"` output
+  // port (port-first, Slice 5.3c) with the legacy `stateAfter` field as the
+  // fallback until 5.3e retires it. `createMemo` because it's read twice in
+  // the JSX below (the `<Show when>` guard + the `<For>`).
   const stateBytes = createMemo<readonly number[]>(() => {
     const f = props.frame;
     if (!f) return [];
-    return Array.from(f.stateAfter.bytes);
+    const bytes = frameStateOutBytes(f);
+    return bytes ? Array.from(bytes) : [];
   });
 
   // The visible label for the step. We trim path noise — usually the

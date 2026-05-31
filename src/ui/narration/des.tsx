@@ -36,7 +36,8 @@
  * allowlist entry).
  */
 
-import type { BytesState, Json, TraceFrame } from "@/core/types";
+import { frameStateInBytes, frameStateOutBytes } from "@/core/frame-state";
+import type { Json } from "@/core/types";
 import { For } from "solid-js";
 import { formatByteInline, formatBytes } from "../components/byte-row";
 import { type NarrationFn, type NarrationUnit, singleAuxNameFromFrame } from "./registry";
@@ -177,16 +178,16 @@ const buildBitPermutationUnits = (
 // ─── Concrete narrators per DES step type ─────────────────────────────
 
 export const desInitialPermutationNarration: NarrationFn = (frame) => {
-  const before = frameStateIn(frame);
-  const after = frameStateOut(frame);
+  const before = frameStateInBytes(frame);
+  const after = frameStateOutBytes(frame);
   const table = readPermutationTable(frame.params, 64);
   if (!before || !after || before.length !== 8 || after.length !== 8 || !table) return null;
   return buildBitPermutationUnits(before, after, table, 64, "Initial Permutation (IP)");
 };
 
 export const desFinalPermutationNarration: NarrationFn = (frame) => {
-  const before = frameStateIn(frame);
-  const after = frameStateOut(frame);
+  const before = frameStateInBytes(frame);
+  const after = frameStateOutBytes(frame);
   const table = readPermutationTable(frame.params, 64);
   if (!before || !after || before.length !== 8 || after.length !== 8 || !table) return null;
   return buildBitPermutationUnits(before, after, table, 64, "Final Permutation (FP = IP⁻¹)");
@@ -200,16 +201,16 @@ export const desFinalPermutationNarration: NarrationFn = (frame) => {
  * indices.
  */
 export const desExpandRNarration: NarrationFn = (frame) => {
-  const before = frameStateIn(frame);
-  const after = frameStateOut(frame);
+  const before = frameStateInBytes(frame);
+  const after = frameStateOutBytes(frame);
   const table = readPermutationTable(frame.params, 48);
   if (!before || !after || before.length !== 4 || after.length !== 6 || !table) return null;
   return buildBitPermutationUnits(before, after, table, 48, "Expansion (E)");
 };
 
 export const desPPermutationNarration: NarrationFn = (frame) => {
-  const before = frameStateIn(frame);
-  const after = frameStateOut(frame);
+  const before = frameStateInBytes(frame);
+  const after = frameStateOutBytes(frame);
   const table = readPermutationTable(frame.params, 32);
   if (!before || !after || before.length !== 4 || after.length !== 4 || !table) return null;
   return buildBitPermutationUnits(before, after, table, 32, "P permutation");
@@ -224,8 +225,8 @@ export const desPPermutationNarration: NarrationFn = (frame) => {
  * result feeds the S-boxes, not the next state directly.
  */
 export const desXorWithKNarration: NarrationFn = (frame) => {
-  const before = frameStateIn(frame);
-  const after = frameStateOut(frame);
+  const before = frameStateInBytes(frame);
+  const after = frameStateOutBytes(frame);
   if (!before || !after || before.length !== 6 || after.length !== 6) return null;
   const auxName = singleAuxNameFromFrame(frame);
   if (auxName === null) return null;
@@ -270,8 +271,8 @@ export const desXorWithKNarration: NarrationFn = (frame) => {
  * output.
  */
 export const desSBoxesNarration: NarrationFn = (frame) => {
-  const before = frameStateIn(frame);
-  const after = frameStateOut(frame);
+  const before = frameStateInBytes(frame);
+  const after = frameStateOutBytes(frame);
   const sboxes = readSBoxes(frame.params);
   if (!before || !after || before.length !== 6 || after.length !== 4 || !sboxes) return null;
 
@@ -343,33 +344,19 @@ export const desSBoxesNarration: NarrationFn = (frame) => {
 
 // ─── Helpers ───────────────────────────────────────────────────────────
 
-const readBytesState = (state: TraceFrame["stateBefore"] | null): Uint8Array | null => {
-  if (!state) return null;
-  if (state.shape !== "bytes") return null;
-  return (state as BytesState).bytes;
-};
-
 /**
  * Source a DES leaf's input / output bytes for narration.
  *
  * **B4 (universal-port Phase 4d):** the port-native DES F-leaves dropped
  * `stateInputPort`/`stateOutputPort`, so the runtime never reconstructs the
- * threaded `state` through the rounds — every DES round frame's
- * `stateBefore`/`stateAfter` holds the STALE initial plaintext. The honest
- * per-leaf bytes live on the port I/O instead (`frame.portInputs` /
- * `frame.portOutputs`, captured for port-native leaves). These helpers read
- * the `"state"` port (every DES F-leaf's in/out port name) and fall back to
- * the threaded state for any non-port frame, so the narrators show the
- * round-local value the user is actually scrubbed onto.
+ * threaded `state` through the rounds — every DES round frame's threaded
+ * state holds the STALE initial plaintext. The honest per-leaf bytes live on
+ * the port I/O instead (`frame.portInputs` / `frame.portOutputs`). DES B4
+ * pioneered the port-first read; Slice 5.3c lifted it into the shared
+ * `frameStateInBytes` / `frameStateOutBytes` helpers (read the `"state"`
+ * port, fall back to the legacy field until 5.3e retires it), so every
+ * narrator now sources state through one definition.
  */
-const frameStateIn = (frame: TraceFrame): Uint8Array | null => {
-  const p = frame.portInputs?.get("state");
-  return p !== undefined ? p : readBytesState(frame.stateBefore);
-};
-const frameStateOut = (frame: TraceFrame): Uint8Array | null => {
-  const p = frame.portOutputs?.get("state");
-  return p !== undefined ? p : readBytesState(frame.stateAfter);
-};
 
 /**
  * Read a FIPS permutation table off a frame's params. Returns null when

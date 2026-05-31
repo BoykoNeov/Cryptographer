@@ -23,6 +23,7 @@
  */
 
 import { type ByteFormat, formatByte, formatBytes } from "@/core/format";
+import { frameStateOutBytes } from "@/core/frame-state";
 import { For, Show, createEffect, createMemo } from "solid-js";
 import { useByteFormat } from "../stores/format";
 import {
@@ -74,7 +75,9 @@ export const RunExplorerModal = (props: Props) => {
     const lastIdx = snaps.length - 1;
     return snaps.map((snapshot, i) => {
       const frame = stepId ? snapshot.trace.frames.find((f) => f.stepId === stepId) : undefined;
-      const stateAtStep = frame ? frame.stateAfter.bytes : null;
+      // Port-first read (Slice 5.3c): the `"state"` output port, falling back
+      // to the legacy `stateAfter` field until 5.3e retires it.
+      const stateAtStep = frame ? frameStateOutBytes(frame) : null;
       return { snapshot, stateAtStep, isCurrent: i === lastIdx };
     });
   });

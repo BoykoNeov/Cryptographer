@@ -30,7 +30,8 @@
  * is paper-natural in hex regardless of toggle.
  */
 
-import type { BytesState, Json, TraceFrame } from "@/core/types";
+import { frameStateInBytes, frameStateOutBytes } from "@/core/frame-state";
+import type { Json, TraceFrame } from "@/core/types";
 import {
   type SpeckByteOrder,
   decodeBlock,
@@ -241,8 +242,8 @@ const readSpeckFrame = (
   frame: TraceFrame,
   stepName: "speck.round" | "speck.round-inverse",
 ): SpeckFrame | null => {
-  const beforeBytes = readBytesState(frame.stateBefore);
-  const afterBytes = readBytesState(frame.stateAfter);
+  const beforeBytes = frameStateInBytes(frame);
+  const afterBytes = frameStateOutBytes(frame);
   if (!beforeBytes || !afterBytes) return null;
 
   const params = frame.params;
@@ -278,13 +279,6 @@ const readSpeckFrame = (
     k,
     mask,
   };
-};
-
-/** Pull the bytes out of a BytesState; null on shape mismatch. */
-const readBytesState = (state: TraceFrame["stateBefore"] | null): Uint8Array | null => {
-  if (!state) return null;
-  if (state.shape !== "bytes") return null;
-  return (state as BytesState).bytes;
 };
 
 /**

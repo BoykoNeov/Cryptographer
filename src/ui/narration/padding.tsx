@@ -14,11 +14,12 @@
  *   - `generic.iso7816-4-unpad@1`  → "Found 0x80 sentinel at offset M; strip everything
  *                                     from offset M onward."
  *
- * State shape: every padding step operates on `BytesState` and produces a
- * `BytesState` of (typically) different length. The narrator reads
- * `stateBefore.bytes.length` AND `stateAfter.bytes.length` directly — these
- * are NOT equal across the transition, unlike the AES round body where
- * they always are.
+ * State shape: every padding step operates on bytes and produces bytes of
+ * (typically) different length. Each padding step is hybrid-ported with a
+ * `"state"` port, so the narrator reads the input / output bytes via the
+ * shared `frameStateInBytes` / `frameStateOutBytes` helpers (port-first,
+ * Slice 5.3c) — these lengths are NOT equal across the transition, unlike
+ * the AES round body where they always are.
  *
  * Each narrator emits ONE conceptual unit (the padding decision) rather
  * than one unit per padding byte. The pedagogical beat is the algorithm
@@ -27,7 +28,8 @@
  * cells of the after-state's view anyway.
  */
 
-import type { BytesState, Json, TraceFrame } from "@/core/types";
+import { frameStateInBytes, frameStateOutBytes } from "@/core/frame-state";
+import type { Json } from "@/core/types";
 import { formatByteInline } from "../components/byte-row";
 import type { NarrationFn } from "./registry";
 
@@ -44,8 +46,8 @@ import type { NarrationFn } from "./registry";
  * (no off-by-one risk).
  */
 export const pkcs7PadNarration: NarrationFn = (frame) => {
-  const before = readBytesState(frame.stateBefore);
-  const after = readBytesState(frame.stateAfter);
+  const before = frameStateInBytes(frame);
+  const after = frameStateOutBytes(frame);
   if (!before || !after) return null;
   const inputLen = before.length;
   const outputLen = after.length;
@@ -86,8 +88,8 @@ export const pkcs7PadNarration: NarrationFn = (frame) => {
  * after-length is L - N.
  */
 export const pkcs7UnpadNarration: NarrationFn = (frame) => {
-  const before = readBytesState(frame.stateBefore);
-  const after = readBytesState(frame.stateAfter);
+  const before = frameStateInBytes(frame);
+  const after = frameStateOutBytes(frame);
   if (!before || !after) return null;
   if (before.length === 0) return null;
   const padLen = before.length - after.length;
@@ -126,8 +128,8 @@ export const pkcs7UnpadNarration: NarrationFn = (frame) => {
  * the difference from PKCS#7's "always at least one byte" guarantee.
  */
 export const zeroPadNarration: NarrationFn = (frame) => {
-  const before = readBytesState(frame.stateBefore);
-  const after = readBytesState(frame.stateAfter);
+  const before = frameStateInBytes(frame);
+  const after = frameStateOutBytes(frame);
   if (!before || !after) return null;
   const inputLen = before.length;
   const outputLen = after.length;
@@ -171,8 +173,8 @@ export const zeroPadNarration: NarrationFn = (frame) => {
  * plaintext are indistinguishable from padding.
  */
 export const zeroUnpadNarration: NarrationFn = (frame) => {
-  const before = readBytesState(frame.stateBefore);
-  const after = readBytesState(frame.stateAfter);
+  const before = frameStateInBytes(frame);
+  const after = frameStateOutBytes(frame);
   if (!before || !after) return null;
   const stripped = before.length - after.length;
   return [
@@ -210,8 +212,8 @@ export const zeroUnpadNarration: NarrationFn = (frame) => {
  * the sentinel marks the boundary.
  */
 export const iso78164PadNarration: NarrationFn = (frame) => {
-  const before = readBytesState(frame.stateBefore);
-  const after = readBytesState(frame.stateAfter);
+  const before = frameStateInBytes(frame);
+  const after = frameStateOutBytes(frame);
   if (!before || !after) return null;
   const inputLen = before.length;
   const outputLen = after.length;
@@ -251,8 +253,8 @@ export const iso78164PadNarration: NarrationFn = (frame) => {
  * 0x80 sentinel. Drops the sentinel and everything after.
  */
 export const iso78164UnpadNarration: NarrationFn = (frame) => {
-  const before = readBytesState(frame.stateBefore);
-  const after = readBytesState(frame.stateAfter);
+  const before = frameStateInBytes(frame);
+  const after = frameStateOutBytes(frame);
   if (!before || !after) return null;
   const stripped = before.length - after.length;
   if (stripped < 1) return null;
@@ -282,12 +284,6 @@ export const iso78164UnpadNarration: NarrationFn = (frame) => {
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────
-
-const readBytesState = (state: TraceFrame["stateBefore"] | null): Uint8Array | null => {
-  if (!state) return null;
-  if (state.shape !== "bytes") return null;
-  return (state as BytesState).bytes;
-};
 
 /**
  * Read `params.blockSize` if present. Padding executors require it, but

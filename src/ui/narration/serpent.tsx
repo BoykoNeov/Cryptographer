@@ -35,7 +35,8 @@
  * highlighted-digit index inside the binary string is `7 - (b & 7)`.
  */
 
-import type { BytesState, Json, TraceFrame } from "@/core/types";
+import { frameStateInBytes, frameStateOutBytes } from "@/core/frame-state";
+import type { Json } from "@/core/types";
 import { For } from "solid-js";
 import { formatByteInline, formatBytes } from "../components/byte-row";
 import { type NarrationFn, type NarrationUnit, singleAuxNameFromFrame } from "./registry";
@@ -57,8 +58,8 @@ import { type NarrationFn, type NarrationUnit, singleAuxNameFromFrame } from "./
  * lookup the executor actually performed).
  */
 export const serpentSubBytesNarration: NarrationFn = (frame) => {
-  const before = readBytesState(frame.stateBefore);
-  const after = readBytesState(frame.stateAfter);
+  const before = frameStateInBytes(frame);
+  const after = frameStateOutBytes(frame);
   if (!before || !after || before.length !== 16 || after.length !== 16) return null;
   const sboxIndex = readSboxIndex(frame.params);
   const units: NarrationUnit[] = [];
@@ -112,8 +113,8 @@ export const serpentSubBytesNarration: NarrationFn = (frame) => {
  * render nothing.
  */
 export const serpentAddRoundKeyNarration: NarrationFn = (frame) => {
-  const before = readBytesState(frame.stateBefore);
-  const after = readBytesState(frame.stateAfter);
+  const before = frameStateInBytes(frame);
+  const after = frameStateOutBytes(frame);
   if (!before || !after || before.length !== 16 || after.length !== 16) return null;
   const auxName = singleAuxNameFromFrame(frame);
   if (auxName === null) return null;
@@ -163,8 +164,8 @@ export const serpentAddRoundKeyNarration: NarrationFn = (frame) => {
  * runs without leaving the narration.
  */
 export const serpentBitPermutationNarration: NarrationFn = (frame) => {
-  const before = readBytesState(frame.stateBefore);
-  const after = readBytesState(frame.stateAfter);
+  const before = frameStateInBytes(frame);
+  const after = frameStateOutBytes(frame);
   const table = readPermutationTable(frame.params);
   if (!before || !after || before.length !== 16 || after.length !== 16 || !table) return null;
   const label = readPermutationLabel(frame.params);
@@ -268,13 +269,6 @@ export const serpentBitPermutationNarration: NarrationFn = (frame) => {
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────
-
-/** Pull the bytes out of a `BytesState`; return null on shape mismatch. */
-const readBytesState = (state: TraceFrame["stateBefore"] | null): Uint8Array | null => {
-  if (!state) return null;
-  if (state.shape !== "bytes") return null;
-  return (state as BytesState).bytes;
-};
 
 /**
  * Read the optional `sboxIndex` annotation (0..7) off a SubBytes frame's

@@ -18,6 +18,7 @@
  *   - `serpent.bit-permutation@1` (IP/FP) — bit-level shuffle, same issue.
  */
 
+import { frameStateOutBytes } from "@/core/frame-state";
 import type { TraceFrame } from "@/core/types";
 import { type ProvenanceFn, type ProvenanceSource, singleAuxNameFromFrame } from "./registry";
 
@@ -30,7 +31,10 @@ export const serpentAddRoundKeyProvenance: ProvenanceFn = (frame, afterCellIndex
   if (afterCellIndex < 0) return [];
   // Defensive: Serpent state is always 16 bytes when AddRoundKey runs;
   // the upper guard catches accidental over-indexing without throwing.
-  if (frame.stateAfter.shape === "bytes" && afterCellIndex >= frame.stateAfter.bytes.length) {
+  // Port-first read (Slice 5.3c): the `"state"` output port, falling back to
+  // the legacy `stateAfter` field until 5.3e retires it.
+  const after = frameStateOutBytes(frame);
+  if (after !== null && afterCellIndex >= after.length) {
     return [];
   }
   const sources: ProvenanceSource[] = [{ kind: "before-cell", index: afterCellIndex }];
@@ -59,7 +63,9 @@ export const serpentAddRoundKeyProvenance: ProvenanceFn = (frame, afterCellIndex
  */
 export const serpentSubBytesProvenance: ProvenanceFn = (frame: TraceFrame, afterCellIndex) => {
   if (afterCellIndex < 0) return [];
-  if (frame.stateAfter.shape === "bytes" && afterCellIndex >= frame.stateAfter.bytes.length) {
+  // Port-first read (Slice 5.3c) — see `serpentAddRoundKeyProvenance` above.
+  const after = frameStateOutBytes(frame);
+  if (after !== null && afterCellIndex >= after.length) {
     return [];
   }
   return [{ kind: "before-cell", index: afterCellIndex }];
