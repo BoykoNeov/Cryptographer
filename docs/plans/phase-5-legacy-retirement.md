@@ -59,7 +59,7 @@ user-required follow-up to B4). Advisor-confirmed.
 | 5.3b | Port-wire Speck + Serpent specs (declare explicit `portInputs` on round-body leaves) so `inferPortEdges` owns their spine + the S2(f) gate skips legacy inference for them. **Load-bearing spike FIRST:** declaring `portInputs` may flip the runtime from implicit state-thread to explicit port-resolution (runtime.ts:343-347) — diff the trace on ONE Speck round leaf to confirm KAT byte-equality before committing the approach; if not byte-equal, 5.3b becomes native Speck/Serpent decomposition. Arc size hinges on this. | **DONE 2026-05-31** |
 | 5.3c | Migrate value/narration reads off `stateBefore`/`stateAfter` → frame ports: `edge-value-lookup` (endpoints + block-chips; isolate the toy-only rejoin), narration ×6, `StepStrip`, `RunExplorerModal`. | **DONE 2026-05-31** |
 | 5.3d | **Port-native Feistel/swap visualization rebuild** (the obligatory user-required follow-up). New DES-port-native viz reading `portInputs`/`portOutputs`. **Independent of 5.3e** (the old components are toy-only). | **DONE 2026-05-31** |
-| 5.3e | **Final removal.** Delete the old toy-only Feistel components (`RejoinFrameView`/`FeistelTrackContext`/`FeistelMiniDiagram`) + toy + feistel runtime walk + `FeistelRoundGroup`/`BranchTrack`/`CombineKind`; delete `stateBefore`/`stateAfter`, `inferStateEdges`, `dropAuxOnlyStateEdges`, `BytesView`, the legacy `port-projection` bridge; collapse `BytesState`/`State`/`StateShape`. Strictly after 5.3b + 5.3c. **Risk:** `inferStateEdges`'s empty-group-as-node case (graph.ts:1063-1071 — a cleared round in the editor) has no port-flow analogue → re-implement or accept as editor-only regression. | Sequenced |
+| 5.3e | **Final removal.** Delete the old toy-only Feistel components (`RejoinFrameView`/`FeistelTrackContext`/`FeistelMiniDiagram`) + toy + feistel runtime walk + `FeistelRoundGroup`/`BranchTrack`/`CombineKind`; delete `stateBefore`/`stateAfter`, `inferStateEdges`, `dropAuxOnlyStateEdges`, `BytesView`, the legacy `port-projection` bridge; collapse `BytesState`/`State`/`StateShape`. Strictly after 5.3b + 5.3c. **Risk:** `inferStateEdges`'s empty-group-as-node case (graph.ts:1063-1071 — a cleared round in the editor) has no port-flow analogue → re-implement or accept as editor-only regression. | **Batch 1 DONE 2026-05-31** (`dd279be`); Batches 2–4 sequenced |
 | — | Feistel types + toy fixture: **no longer a separate "next phase"** — folded into 5.3d (rebuild) + 5.3e (delete). Order of 5.3d vs 5.3e is a judgment call (rebuild-as-reference first, or clean-slate then rebuild from git history), not a dependency. | folded into 5.3d/e |
 
 ## Slice 5.0 — what shipped
@@ -415,6 +415,76 @@ concat's argument order, so it stays correct across encrypt / decrypt / edits.
   files). No schema change, no KAT change.
 - **Out of scope**: graph view (B4's round-group render is user-confirmed good),
   scrubber track badges (N/A for port-native rounds).
+
+## Slice 5.3e — in progress (Batch 1 shipped 2026-05-31)
+
+The final removal, split into **4 batches** (the one-liner spanned the runtime,
+types, graph, every UI surface, and the State-shape collapse — too broad for one
+reviewable diff). Dependency order: Batch 1 (Feistel scaffolding + legacy bridge)
+unblocks everything; Batch 2 (BytesView) needs the toy gone; Batch 3 (graph
+state-edge inference) is independent of 2; Batch 4 (the irreversible
+field/`State`-type collapse) lands last in its own commit.
+
+**Batch 1 SHIPPED + pushed (`dd279be`)** — *retire Feistel branching scaffolding
++ legacy lift bridge*:
+
+- **Runtime/types/core:** deleted `FeistelRoundGroup` / `BranchTrack` /
+  `CombineKind` (`types.ts`) + `core/combine-kinds.ts`; `runFeistelRound`, the
+  synthetic `:rejoin` frame, and the `branchPath` field + its threading
+  (`runtime.ts`); the `:t…` / `:rejoin` / `:swap` stepId suffixes (`step-id.ts`
+  regex narrowed to `/(?::b\d+|:r\d+)+$/`); the lifted-legacy projection bridge
+  `liftLegacyExecutor` / `project` / `reconstruct` / `Projection` / `PortedFrame`
+  (`port-projection.ts` / `types.ts`).
+- **The toy** (`feistel.toy-add-k@1` — the last `legacy`-bearing step): fixture
+  `feistel-toy.ts`, step file, registration, and narration entry all deleted;
+  `NARRATION_NO_OP_ALLOWLIST` 8 → 7.
+- **UI:** old toy-only linear components (`RejoinFrameView` /
+  `FeistelTrackContext` / `FeistelMiniDiagram`) + App dispatch + StepList
+  `FeistelRow` / `FeistelTrackRow`; all `feistel-round` graph handling
+  (`kind:"feistel"` containers, `synthetic` rejoin/passthrough nodes,
+  `processFeistelRound`, `feistelPassthroughId`, `rejoinSwapSourceXSign`, the
+  per-track drop gutters + `into-track-start` + `prependChildToTrack` +
+  `StepLocation.trackIdx`); the dead `.feistel-*` / `.rejoin-*` / track-badge CSS
+  (≈440 lines).
+- **Document schema:** the `feistel-round` Zod node was **unreleased** (DES went
+  port-native before any cipher carried it into a saved doc — last tag v0.5.0,
+  DES + `feistel-round` all under `[Unreleased]`), so it was **clean-deleted**:
+  a `feistel-round` document now *rejects at parse* rather than silently skipping
+  a node kind the runtime no longer walks.
+- **Kept:** the 5.3d port-native Feistel/swap viz (`feistel-shape.ts` + the three
+  self-detecting components, keyed off wiring — untouched); the `kind:"legacy"`
+  registration variant + runtime legacy-dispatch path (registry still normalizes
+  bare-executor registrations); `ProjectionMetadata` / `meta` (hybrid-ported
+  key-schedules / padding / aux still project through it).
+- **Coverage preserved:** coercion + coerce-badge tests retargeted onto a
+  hybrid-ported (`meta`, no `legacy`) no-op so the live coercion mechanism keeps
+  coverage; the container-output-port wiring test retargeted to a `not@1` leaf
+  via group `seedInput` / `bodyOutput`. ~16 pure-Feistel/toy test files + the
+  now-vacuous dual-flag frame-parity matrix removed.
+- **Gate:** `npm run check` GREEN — biome clean, tsc 0 errors, **2265 tests /
+  193 files** (from 2402 / 210), build **628.20 KB raw / 185.68 KB gz** (≈28 KB
+  raw lighter). No KAT or `schemaVersion` change.
+
+**Batches 2–4 (sequenced, next session):**
+- **Batch 2 — BytesView.** Delete `BytesView` + its `App.tsx` `FrameStateView`
+  dispatch arm + the toy-only provenance reads. Unblocked now (the only
+  `BytesView` consumer, the toy, is gone). **Do the DES + AES graph-view browser
+  smoke FIRST** — the ~700-line `GraphView` deletion in Batch 1 is
+  jsdom-invisible (`feedback_visual_smoke_vs_property_tests`).
+- **Batch 3 — graph state-edge inference.** Delete `inferStateEdges` /
+  `dropAuxOnlyStateEdges` + the `GraphView` call sites; retarget the deferred
+  toy-string fixtures in `aux-graph-derivation` /
+  `graph-port-edge-derivation` / `drop-aux-only-state-edges-asymmetric`. Accept
+  the empty-group-as-node editor-only regression (no port-flow analogue).
+- **Batch 4 — field + `State`-type collapse (irreversible, own commit).** Delete
+  `stateBefore` / `stateAfter` from `TraceFrame` + the runtime construction
+  (incl. `coerceFrame`); `frame-state.ts` returns null on the field fallback
+  (AES / SHA-256 step strip shows "(no state)" — **user-accepted** at Batch-1
+  planning); collapse `State` / `StateShape` / `BytesState` to the bytes floor
+  (`State` survives as the runtime-internal thread type). Retarget
+  `runtime-ported-dispatch-coercion` (stateBefore/After → ports) + drop
+  `trace-initial-state`'s one `frames[0].stateBefore` assertion. KAT gate +
+  browser smoke.
 
 ## Verification (for 5.1+)
 
