@@ -76,15 +76,15 @@ const shippedSpecs: ReadonlyArray<readonly [string, CipherSpec, boolean]> = [
   ["aes-256 single-block encrypt", aes256Spec, true],
   ["aes-256 single-block decrypt", aes256DecryptSpec, true],
   // Byte-native (Slice B2) — the two ARX rounds are port-native (no legacy
-  // path); the key-schedule stays lifted but a single port-native leaf flips
-  // the whole spec → true.
+  // path); the key-schedule is now port-native too (Slice 5.2, hybrid-ported)
+  // → the whole spec runs ported, true.
   ["speck-32-64-be encrypt", speck32_64BeSpec, true],
   ["speck-32-64-be decrypt", speck32_64BeDecryptSpec, true],
   ["speck-32-64-le encrypt", speck32_64LeSpec, true],
   ["speck-32-64-le decrypt", speck32_64LeDecryptSpec, true],
   // Byte-native (Slice B3) — the five round-body executors are port-native
-  // (no legacy path); the key-expansion stays lifted but a single port-native
-  // leaf flips the whole spec → true.
+  // (no legacy path); the key-expansion is now port-native too (Slice 5.2,
+  // hybrid-ported) → the whole spec runs ported, true.
   ["serpent-128 encrypt", serpent128Spec, true],
   ["serpent-128 decrypt", serpent128DecryptSpec, true],
   ["serpent-192 encrypt", serpent192Spec, true],
@@ -93,8 +93,8 @@ const shippedSpecs: ReadonlyArray<readonly [string, CipherSpec, boolean]> = [
   ["serpent-256 decrypt", serpent256DecryptSpec, true],
   // Byte-native (Slice B4 — universal-port Phase 4d) — the F-function leaves
   // are port-native (no legacy path); the round body is wired from native
-  // split/xor/concat. The key-schedule stays lifted but a single port-native
-  // leaf flips the whole spec → true.
+  // split/xor/concat. The key-schedule is now port-native too (Slice 5.2,
+  // hybrid-ported) → the whole spec runs ported, true.
   ["des encrypt", desSpec, true],
   ["des decrypt", desDecryptSpec, true],
   ["sha-256", buildSha256Spec(), true],

@@ -142,6 +142,10 @@ describe("Serpent rejects malformed inputs", () => {
         initialAux: new Map<string, AuxValue>([
           ["key", bytesFromHex("000102030405060708090a0b0c0d0e")],
         ]),
+        // Serpent runs port-native (key-expansion included since Slice 5.2),
+        // so the executor's key-length validation fires under ported dispatch
+        // — under flag-off the spec would throw "requires portedDispatchEnabled".
+        portedDispatchEnabled: true,
       }),
     ).toThrow(/keyByteLength=16 but aux key is 15 bytes|key must be 16, 24, or 32 bytes/);
   });
@@ -153,6 +157,8 @@ describe("Serpent rejects malformed inputs", () => {
         initialAux: new Map<string, AuxValue>([
           ["key", bytesFromHex("000102030405060708090a0b0c0d0e0f")],
         ]),
+        // Port-native since Slice 5.2 — validation fires under ported dispatch.
+        portedDispatchEnabled: true,
       }),
     ).toThrow(/keyByteLength=32 but aux key is 16 bytes/);
   });

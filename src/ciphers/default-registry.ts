@@ -376,17 +376,18 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // the `roundKey` port via `auxReadPorts`, the same projection it ran for
   // the lift adapter.
   //
-  // The **key-schedule stays lifted/monolithic** (still carries `legacy:`),
-  // mirroring B1's decision to leave `aes.key-expansion@1` lifted — its
-  // byte-native conversion belongs to the cross-cutting key-schedule slice
-  // (all ciphers at once), not per-cipher B-phase work. Under ported
-  // dispatch the lifted key-schedule runs its lift fallback and writes the
-  // 22 round keys to aux exactly as before (dispatch.ts: a lifted leaf
-  // degrades gracefully under the on-flag path).
+  // The **key-schedule is port-native since Slice 5.2** (2026-05-31): the
+  // cross-cutting key-schedule slice dropped the `legacy:` lift on all four
+  // ciphers at once (AES in Batch A, Speck/Serpent/DES here). `meta` is
+  // RETAINED — the runtime projects `aux[keyAuxName] → masterKey` and
+  // `key${i} → aux[${outputPrefix}.${i}]`, so the 22 round keys still land in
+  // aux exactly as before (frames byte-identical; only `portInputs`/
+  // `portOutputs` newly populate). Speck is NOT in `isKeyExpansionStepType`,
+  // so its frame now renders through PortFlowView rather than
+  // KeyScheduleExplorer.
   r.register("speck.key-schedule@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(speckKeySchedule, speckKeyScheduleMeta),
-    legacy: speckKeySchedule,
+    executor: speckKeySchedule,
     shape: speckKeySchedulePortContract,
     meta: speckKeyScheduleMeta,
     doc: speckKeyScheduleDoc,
@@ -434,10 +435,14 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // (honest fixed declaration when no variant exists), key-expansion's
   // round-key output ports follow Slice 1.6 Speck posture (polymorphic
   // for uniformity across the round-key port batch).
+  // Port-native since Slice 5.2 (2026-05-31): dropped the `legacy:` lift,
+  // KEEPS `meta` (runtime projects `aux[keyAuxName] → masterKey` and
+  // `key${i} → aux[${outputPrefix}.${i}]`, frames byte-identical). Serpent
+  // IS in `isKeyExpansionStepType`, so KeyScheduleExplorer still intercepts
+  // the frame — the inspector view is unchanged.
   r.register("serpent.key-expansion@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(serpentKeyExpansion, serpentKeyExpansionMeta),
-    legacy: serpentKeyExpansion,
+    executor: serpentKeyExpansion,
     shape: serpentKeyExpansionPortContract,
     meta: serpentKeyExpansionMeta,
     doc: serpentKeyExpansionDoc,
@@ -451,8 +456,8 @@ export const buildDefaultRegistry = (): StepRegistry => {
   //     add-round-key) `aux[roundKeyAux]` onto the `roundKey` port — exactly
   //     as the lift adapter did, so the flat Serpent specs need ZERO
   //     `portInputs` and the graph topology is unchanged. Mirrors B1 (AES) /
-  //     B2 (Speck); `serpent.key-expansion@1` above stays lifted (its native
-  //     conversion is the cross-cutting key-schedule slice). ───────────────
+  //     B2 (Speck); `serpent.key-expansion@1` above went port-native in the
+  //     cross-cutting key-schedule slice (Slice 5.2, 2026-05-31). ───────────
   r.register("serpent.bit-permutation@1", {
     kind: "ported",
     executor: serpentBitPermutation,
@@ -538,10 +543,15 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // fixed at 6 bytes). Master-key input port on des.key-schedule@1 IS
   // declared as 8 bytes (DES has no variant — different from AES/Serpent
   // which leave master-key absent for their 16/24/32 byte variants).
+  // Port-native since Slice 5.2 (2026-05-31): dropped the `legacy:` lift,
+  // KEEPS `meta` (same hybrid-ported pattern as `aes.key-expansion@1` — the
+  // runtime projects `aux[keyAuxName] → masterKey` and `key${r} →
+  // aux[${outputPrefix}.${r}]`, frames byte-identical). DES IS in
+  // `isKeyExpansionStepType`, so KeyScheduleExplorer still intercepts the
+  // frame — the inspector view is unchanged.
   r.register("des.key-schedule@1", {
     kind: "ported",
-    executor: liftLegacyExecutor(desKeySchedule, desKeyScheduleMeta),
-    legacy: desKeySchedule,
+    executor: desKeySchedule,
     shape: desKeySchedulePortContract,
     meta: desKeyScheduleMeta,
     doc: desKeyScheduleDoc,
@@ -554,7 +564,8 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // split-bytes/xor/concat in `des.ts`). `des.xor-with-K@1` stays a hybrid
   // (keeps `meta.auxReadPorts` so the round key projects from
   // `aux[roundKeyAux]` — the `xor-with-aux@1` shape). `des.key-schedule@1`
-  // stays LIFTED (aux-only, mirrors `aes.key-expansion@1`).
+  // went port-native in Slice 5.2 (hybrid-ported: `legacy:` dropped, `meta`
+  // retained — mirrors `aes.key-expansion@1`).
   r.register("des.initial-permutation@1", {
     kind: "ported",
     executor: desInitialPermutation,

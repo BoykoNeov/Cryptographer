@@ -99,6 +99,10 @@ describe("Speck32/64 (Beaulieu et al. 2013, Table 4.1)", () => {
       runSpec(speck32_64BeSpec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex("6574694c")),
         initialAux: new Map<string, AuxValue>([["key", tooShort]]),
+        // Key-schedule is port-native since Slice 5.2 → the executor's
+        // length validation fires under ported dispatch (flag-off would throw
+        // "requires portedDispatchEnabled" before reaching it).
+        portedDispatchEnabled: true,
       }),
     ).toThrow(/8 bytes/);
   });

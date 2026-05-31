@@ -8,10 +8,12 @@
  * `serpent.inv-linear-transform@1`, and `serpent.add-round-key@1` are now
  * true `PortedExecutor`s — Uint8Array in/out, no legacy fallback — so every
  * shipped Serpent spec requires `portedDispatchEnabled: true`. The
- * **key-schedule stays lifted** (`serpent.key-expansion@1` keeps its `legacy`
- * fallback), mirroring B1/B2's decision to leave `aes.key-expansion@1` /
- * `speck.key-schedule@1` lifted; under ported dispatch it runs its lift
- * adapter and writes the 33 round keys to aux unchanged.
+ * **key-schedule went port-native too in Slice 5.2** (2026-05-31,
+ * hybrid-ported: `serpent.key-expansion@1` dropped its `legacy` fallback but
+ * KEEPS `meta`), mirroring `aes.key-expansion@1` / `speck.key-schedule@1`;
+ * the runtime projects `aux[key] → masterKey` and `key${i} →
+ * aux[roundKey.${i}]`, so it still writes the 33 round keys to aux
+ * byte-identically.
  *
  * Because there is no longer a legacy single-thread path for the round body,
  * the old "ported == legacy frame parity" surface is gone (it was vacuous for
@@ -38,8 +40,9 @@
  *       when the final KAT still matches. The frame-count prefix surfaces a
  *       count change immediately.
  *
- *   (c) **Round-key port ordering** — the still-lifted key-schedule emits its
- *       33 round keys in `roundKey.0 … roundKey.32` insertion order.
+ *   (c) **Round-key port ordering** — the key-schedule (port-native since
+ *       Slice 5.2) emits its 33 round keys in `roundKey.0 … roundKey.32`
+ *       insertion order, projected from `key0 … key32` via meta.
  *
  *   (d) **Isolated native AddRoundKey** — a minimal schedule + one
  *       AddRoundKey spec, pinning the port-native AddRoundKey (and its
@@ -264,9 +267,9 @@ describe("runtime — ported dispatch, byte-native Serpent (Slice B3)", () => {
       expect(keys).toEqual(expected);
 
       // Cross-check: each round-key value is a 16-byte Uint8Array (Serpent
-      // round keys are always 128 bits). Pins that the still-lifted
-      // key-schedule didn't accidentally widen a round key into a MatrixState
-      // or other variant under ported dispatch.
+      // round keys are always 128 bits). Pins that the key-schedule
+      // (port-native since Slice 5.2) didn't accidentally widen a round key
+      // into another variant under ported dispatch.
       for (const k of keys) {
         const v = ksFrame.auxWritten.get(k);
         expect(v).toBeInstanceOf(Uint8Array);
@@ -278,11 +281,11 @@ describe("runtime — ported dispatch, byte-native Serpent (Slice B3)", () => {
   // ─── (d) Isolated native AddRoundKey ─────────────────────────────────
 
   describe("(d) per-primitive synthetic — key-expansion + one native AddRoundKey", () => {
-    // Two-step spec: the lifted schedule expands the master key, then a single
-    // port-native AddRoundKey consumes roundKey.0 against the all-zero
+    // Two-step spec: the (port-native) schedule expands the master key, then a
+    // single port-native AddRoundKey consumes roundKey.0 against the all-zero
     // plaintext. Pins the native AddRoundKey in isolation — the cipher-level
     // KAT (a) and full frame digest (b) layer 31 more rounds + IP/FP/LT/SubBytes
-    // on top; this fixture is the smallest one that exercises both the lifted
+    // on top; this fixture is the smallest one that exercises both the
     // schedule and the native AddRoundKey end-to-end.
     const spec: CipherSpec = {
       id: "test-serpent-add-round-key@1",

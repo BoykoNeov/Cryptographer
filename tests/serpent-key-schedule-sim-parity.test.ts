@@ -20,7 +20,11 @@ import { StepRegistry } from "@/core/registry";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue, CipherSpec } from "@/core/types";
-import { serpentKeyExpansion } from "@/steps/serpent-key-expansion";
+import {
+  serpentKeyExpansion,
+  serpentKeyExpansionMeta,
+  serpentKeyExpansionPortContract,
+} from "@/steps/serpent-key-expansion";
 import { simulateSerpentKeySchedule } from "@/ui/key-schedule-sim/serpent";
 import { describe, expect, it } from "vitest";
 
@@ -39,8 +43,16 @@ const SERPENT256_KEY = "00112233445566778899aabbccddeeff00112233445566778899aabb
  */
 const runSerpentExecutor = (masterKeyHex: string): readonly Uint8Array[] => {
   const registry = new StepRegistry();
+  // Slice 5.2 — `serpentKeyExpansion` is now a `PortedExecutor`, so register
+  // the probe type as `kind: "ported"` with its shared meta + contract and
+  // run flag-on. The runtime projects `aux[key] → masterKey` and
+  // `key${i} → aux[roundKey.${i}]` via the meta, so the 33 round keys still
+  // land in `trace.finalAux` exactly as under the former lifted path.
   registry.register("test.serpent-key-expansion", {
+    kind: "ported",
     executor: serpentKeyExpansion,
+    shape: serpentKeyExpansionPortContract,
+    meta: serpentKeyExpansionMeta,
     doc: { name: "t", summary: "t", detail: "t" },
   });
 
@@ -72,6 +84,7 @@ const runSerpentExecutor = (masterKeyHex: string): readonly Uint8Array[] => {
     // the runtime's shape check.
     initialState: makeBytesState(new Uint8Array(0)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(masterKeyHex)]]),
+    portedDispatchEnabled: true,
   });
 
   const roundKeys: Uint8Array[] = [];

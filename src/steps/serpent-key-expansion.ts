@@ -2,8 +2,13 @@
  * Serpent key expansion. Anderson/Biham/Knudsen 1998 §2.
  *
  * Generates 33 × 128-bit round keys (K_0 … K_32) from a 128-, 192-, or
- * 256-bit master key. The output is written to aux as `roundKey.0` …
- * `roundKey.32`, each a 16-byte Uint8Array.
+ * 256-bit master key. Port-native `PortedExecutor` (Slice 5.2 — universal-
+ * port Phase 5): the master key arrives on the `masterKey` input port and
+ * each round key leaves on an output port `key0` … `key32`, each a 16-byte
+ * Uint8Array. The registration KEEPS `meta` (NOT a lift adapter): the runtime
+ * projects `aux[keyAuxName] → masterKey` and `key${i} →
+ * aux[${outputPrefix}.${i}]`, so the emitted frame's `auxRead`/`auxWritten`
+ * stay byte-identical to the former lifted path.
  *
  * Algorithm:
  *
@@ -45,13 +50,12 @@
 
 import { SERPENT_IP, SERPENT_PHI, SERPENT_SBOXES } from "../ciphers/serpent-constants";
 import type {
-  AuxValue,
   Json,
   PortContract,
   PortShape,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "../core/types";
 import {
   applyBitPermutation,
@@ -61,11 +65,16 @@ import {
   wordsToBytes4,
 } from "./serpent-bit-ops";
 
-export const serpentKeyExpansion: StepExecutor = (state, params, ctx) => {
+export const serpentKeyExpansion: PortedExecutor = (inputs, params, _ctx) => {
   const p = readParams(params);
-  const key = ctx.aux.get(p.keyAuxName);
+  // Port-native (Slice 5.2): the master key arrives on the `masterKey` input
+  // port, projected from `aux[keyAuxName]` via `meta.auxReadPorts` (so
+  // `frame.auxRead` still records the master-key aux dependency).
+  const key = inputs.get("masterKey");
   if (!(key instanceof Uint8Array)) {
-    throw new Error(`serpent.key-expansion: aux '${p.keyAuxName}' must be a Uint8Array`);
+    throw new Error(
+      "serpent.key-expansion: 'masterKey' port must carry the master-key bytes (projected from aux[keyAuxName] via meta.auxReadPorts)",
+    );
   }
   if (key.length !== 16 && key.length !== 24 && key.length !== 32) {
     throw new Error(`serpent.key-expansion: key must be 16, 24, or 32 bytes; got ${key.length}`);
@@ -111,7 +120,10 @@ export const serpentKeyExpansion: StepExecutor = (state, params, ctx) => {
   }
 
   // ─── Steps 4 + 5: bitsliced S-box + IP per round key ───────────────────
-  const auxWrites = new Map<string, AuxValue>();
+  // One round key per output port (`key0` … `key32`); the runtime maps
+  // `key${i}` → `aux[${outputPrefix}.${i}]` via `meta.auxWritePorts`, so
+  // `frame.auxWritten` still carries the `roundKey.*` entries.
+  const outputs = new Map<string, Uint8Array>();
   for (let i = 0; i < 33; i++) {
     // S-box index walks down through the table with wraparound: classic
     // off-by-one trap. (35 - i) % 8 for i in 0..32. Equivalently:
@@ -128,10 +140,10 @@ export const serpentKeyExpansion: StepExecutor = (state, params, ctx) => {
 
     const rawRoundKey = wordsToBytes4(k0, k1, k2, k3);
     const permutedRoundKey = applyBitPermutation(rawRoundKey, SERPENT_IP);
-    auxWrites.set(`${p.outputPrefix}.${i}`, permutedRoundKey);
+    outputs.set(`key${i}`, permutedRoundKey);
   }
 
-  return { state, auxReads: [p.keyAuxName], auxWrites };
+  return outputs;
 };
 
 export const serpentKeyExpansionDoc: StepDocumentation = {

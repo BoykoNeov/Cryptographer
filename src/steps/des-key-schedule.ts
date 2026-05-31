@@ -1,10 +1,15 @@
 /**
  * DES Key Schedule. FIPS 46-3 §5 (Key Schedule Calculation).
  *
- * Expands the 64-bit master key into 16 round keys (each 48 bits) and
- * writes them to aux as `${outputPrefix}.0` … `${outputPrefix}.15` —
- * matching the convention `aes.key-expansion@1` and `serpent.key-expansion@1`
- * use, so the downstream UI (RoundKeyPanel) finds them by the same prefix.
+ * Expands the 64-bit master key into 16 round keys (each 48 bits). Port-native
+ * `PortedExecutor` (Slice 5.2 — universal-port Phase 5): the master key
+ * arrives on the `masterKey` input port and each round key leaves on an output
+ * port `key0` … `key15`. The registration KEEPS `meta` (NOT a lift adapter):
+ * the runtime projects `aux[keyAuxName] → masterKey` and `key${r} →
+ * aux[${outputPrefix}.${r}]`, matching the convention `aes.key-expansion@1`
+ * and `serpent.key-expansion@1` use — so the downstream UI (RoundKeyPanel)
+ * finds the round keys by the same prefix and the emitted frame's
+ * `auxRead`/`auxWritten` stay byte-identical to the former lifted path.
  *
  * Algorithm:
  *   1. PC-1 applied to the 64-bit master key drops the 8 parity bits
@@ -17,10 +22,11 @@
  *   3. Write K_r as `Uint8Array(6)` (the 48 bits packed MSB-first into 6
  *      bytes; trailing 0 in the last byte).
  *
- * State passthrough — the executor writes only to aux. Param `keyAuxName`
- * names the 8-byte master-key aux entry the runtime seeded before the
- * cipher ran; the App's input-seeding path puts the user's typed key under
- * the conventional name "key".
+ * No state port — the work product is the 16 round keys on the `key*` output
+ * ports. Param `keyAuxName` names the 8-byte master-key aux entry the runtime
+ * projects onto the `masterKey` input port (via `meta.auxReadPorts`); the
+ * App's input-seeding path puts the user's typed key under the conventional
+ * name "key".
  *
  * Note on parity bits. PC-1 never references positions 8, 16, …, 64, so
  * flipping any of those 8 bits in the user-typed key produces an identical
@@ -29,14 +35,12 @@
  */
 
 import type {
-  AuxValue,
   Json,
   PortContract,
   PortShape,
+  PortedExecutor,
   ProjectionMetadata,
-  StepContext,
   StepDocumentation,
-  StepExecutor,
 } from "../core/types";
 import { bitsToFipsBytes, fipsBytesToBits, fipsPermute, rotateBitsLeft } from "./des-bit-ops";
 
@@ -48,12 +52,14 @@ type Params = {
   readonly shifts: readonly number[];
 };
 
-export const desKeySchedule: StepExecutor = (state, params, ctx: StepContext) => {
+export const desKeySchedule: PortedExecutor = (inputs, params, _ctx) => {
   const p = readParams(params);
-  const key = ctx.aux.get(p.keyAuxName);
+  // Port-native (Slice 5.2): the master key arrives on the `masterKey` input
+  // port, projected from `aux[keyAuxName]` via `meta.auxReadPorts`.
+  const key = inputs.get("masterKey");
   if (!(key instanceof Uint8Array) || key.length !== 8) {
     throw new Error(
-      `des.key-schedule: aux['${p.keyAuxName}'] must be an 8-byte Uint8Array (64-bit key)`,
+      "des.key-schedule: 'masterKey' port must carry an 8-byte (64-bit) master key (projected from aux[keyAuxName] via meta.auxReadPorts)",
     );
   }
 
@@ -63,7 +69,10 @@ export const desKeySchedule: StepExecutor = (state, params, ctx: StepContext) =>
   let C = cdBits.slice(0, 28);
   let D = cdBits.slice(28, 56);
 
-  const auxWrites = new Map<string, AuxValue>();
+  // One round key per output port (`key0` … `key15`); the runtime maps
+  // `key${r}` → `aux[${outputPrefix}.${r}]` via `meta.auxWritePorts`, so
+  // `frame.auxWritten` still carries the `roundKey.*` entries.
+  const outputs = new Map<string, Uint8Array>();
   for (let r = 0; r < 16; r++) {
     const shift = p.shifts[r];
     if (shift === undefined) throw new Error(`des.key-schedule: shifts[${r}] missing`);
@@ -72,14 +81,10 @@ export const desKeySchedule: StepExecutor = (state, params, ctx: StepContext) =>
     // Concatenate C | D back into a 56-bit buffer (7 bytes), then PC-2 to 48.
     const cdConcat = bitsToFipsBytes([...C, ...D]);
     const K = fipsPermute(cdConcat, p.pc2, 48);
-    auxWrites.set(`${p.outputPrefix}.${r}`, K);
+    outputs.set(`key${r}`, K);
   }
 
-  return {
-    state,
-    auxWrites,
-    auxReads: [p.keyAuxName],
-  };
+  return outputs;
 };
 
 export const desKeyScheduleDoc: StepDocumentation = {

@@ -6,10 +6,11 @@
  * 2026-05-30). The two ARX rounds (`speck.round@1`, `speck.round-inverse@1`)
  * are now true `PortedExecutor`s — Uint8Array in/out, no legacy fallback —
  * so every shipped Speck spec requires `portedDispatchEnabled: true`. The
- * **key-schedule stays lifted** (`speck.key-schedule@1` keeps its `legacy`
- * fallback), mirroring B1's decision to leave `aes.key-expansion@1` lifted;
- * under ported dispatch it runs its lift adapter and writes the 22 round
- * keys to aux unchanged.
+ * **key-schedule went port-native too in Slice 5.2** (2026-05-31,
+ * hybrid-ported: `speck.key-schedule@1` dropped its `legacy` fallback but
+ * KEEPS `meta`), mirroring `aes.key-expansion@1`; the runtime projects
+ * `aux[key] → masterKey` and `key${i} → aux[roundKey.${i}]`, so it still
+ * writes the 22 round keys to aux byte-identically.
  *
  * Because there is no longer a legacy single-thread path for the rounds,
  * the old "ported == legacy frame parity" surface is gone (it was vacuous
@@ -29,8 +30,9 @@
  *       A frame-level regression (a wrong intermediate round, a dropped
  *       frame) shows here even when the final KAT still happens to match.
  *
- *   (c) **Round-key port ordering** — the still-lifted key-schedule emits
- *       its 22 round keys in `roundKey.0 … roundKey.21` insertion order.
+ *   (c) **Round-key port ordering** — the key-schedule (port-native since
+ *       Slice 5.2) emits its 22 round keys in `roundKey.0 … roundKey.21`
+ *       insertion order, projected from `key0 … key21` via meta.
  *
  *   (d) **Isolated native round** — a minimal schedule + one round spec,
  *       pinning the port-native round in isolation from the 22-round algebra.
@@ -205,8 +207,8 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
       expect(keys).toEqual(expected);
 
       // Cross-check: each round-key value is the expected 2-byte
-      // Uint8Array (Speck32/64 wordBits=16). The still-lifted key-schedule
-      // writes raw round-key words; pinning that the ported path didn't
+      // Uint8Array (Speck32/64 wordBits=16). The key-schedule (port-native
+      // since Slice 5.2) writes raw round-key words; pinning that the ported path didn't
       // accidentally widen a single Speck round key into another variant.
       for (const k of keys) {
         const v = f0.auxWritten.get(k);
@@ -219,7 +221,7 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
   // ─── (d) Isolated native round ───────────────────────────────────────
 
   describe("(d) per-primitive synthetic — key-schedule + one native round", () => {
-    // Two-step spec: the lifted schedule expands the master key, then a
+    // Two-step spec: the (port-native) schedule expands the master key, then a
     // single port-native round consumes roundKey.0. Pins the native round
     // in isolation — the cipher-level KAT (a) and full frame stream (b)
     // layer 21 more rounds on top.

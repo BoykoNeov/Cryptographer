@@ -12,31 +12,41 @@
  * ARX kernel as the round function — that's the cipher's defining
  * elegance, and a major contrast with AES's S-box-driven schedule.
  *
- * The runtime aux map carries each round-key word as a `Uint8Array` of
- * length `wordBits/8`, byte-encoded per the spec's `byteOrder` so the
- * round step decodes it consistently. State is unchanged by this step;
- * the work product lives entirely in aux, just like AES key expansion.
+ * Port-native `PortedExecutor` (Slice 5.2 — universal-port Phase 5). The
+ * master key arrives on the `masterKey` input port and each round-key word
+ * leaves on an output port `key0` … `key{rounds-1}` as a `Uint8Array` of
+ * length `wordBits/8`, byte-encoded per the spec's `byteOrder` so the round
+ * step decodes it consistently. State is unchanged (no `state` port). The
+ * registration KEEPS `meta` (NOT a lift adapter): the runtime projects
+ * `aux[keyAuxName] → masterKey` and `key${i} → aux[${outputPrefix}.${i}]`, so
+ * the emitted frame's `auxRead`/`auxWritten` stay byte-identical to the former
+ * lifted path — just like AES key expansion.
  *
  * For Speck32/64: wordBits=16, m=4, rounds=22, alpha=7, beta=2. Larger
  * Speck variants tune these constants; the executor itself is generic.
  */
 
 import type {
-  AuxValue,
   Json,
   PortContract,
   PortShape,
+  PortedExecutor,
   ProjectionMetadata,
   StepDocumentation,
-  StepExecutor,
 } from "../core/types";
 import { type SpeckByteOrder, decodeKey, encodeWord, readByteOrder } from "./speck-word-codec";
 
-export const speckKeySchedule: StepExecutor = (state, params, ctx) => {
+export const speckKeySchedule: PortedExecutor = (inputs, params, _ctx) => {
   const p = readParams(params);
-  const key = ctx.aux.get(p.keyAuxName);
+  // Port-native (Slice 5.2): the master key arrives on the `masterKey` input
+  // port. The runtime projects it from `aux[params.keyAuxName]` via
+  // `meta.auxReadPorts`, so the emitted frame's `auxRead` still records the
+  // master-key aux dependency.
+  const key = inputs.get("masterKey");
   if (!(key instanceof Uint8Array)) {
-    throw new Error(`speck.key-schedule: aux '${p.keyAuxName}' must be a Uint8Array`);
+    throw new Error(
+      "speck.key-schedule: 'masterKey' port must carry the master-key bytes (projected from aux[keyAuxName] via meta.auxReadPorts)",
+    );
   }
   const expectedBytes = p.m * (p.wordBits / 8);
   if (key.length !== expectedBytes) {
@@ -72,16 +82,19 @@ export const speckKeySchedule: StepExecutor = (state, params, ctx) => {
   }
 
   // Serialize the round keys back to bytes per the same byteOrder so the
-  // round step decodes them as single words via decodeWord(.., 0, ..).
-  const auxWrites = new Map<string, AuxValue>();
+  // round step decodes them as single words via decodeWord(.., 0, ..). One
+  // round key per output port (`key0` … `key{rounds-1}`); the runtime maps
+  // `key${i}` → `aux[${outputPrefix}.${i}]` via `meta.auxWritePorts`, so
+  // `frame.auxWritten` still carries the `roundKey.*` entries.
+  const outputs = new Map<string, Uint8Array>();
   const wb = p.wordBits / 8;
   for (let i = 0; i < p.rounds; i++) {
     const buf = new Uint8Array(wb);
     encodeWord(buf, 0, p.wordBits, p.byteOrder, k[i] ?? 0);
-    auxWrites.set(`${p.outputPrefix}.${i}`, buf);
+    outputs.set(`key${i}`, buf);
   }
 
-  return { state, auxReads: [p.keyAuxName], auxWrites };
+  return outputs;
 };
 
 // ─── Documentation ────────────────────────────────────────────────────────
