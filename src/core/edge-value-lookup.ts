@@ -100,6 +100,7 @@
  */
 
 import { REJOIN_STEP_TYPE } from "./combine-kinds";
+import { frameStateInBytes, frameStateOutBytes } from "./frame-state";
 import { CIPHER_INPUT_ID, CIPHER_OUTPUT_ID, type GraphEdge, isEndpointId } from "./graph";
 import { canonicalStepId } from "./step-id";
 import type {
@@ -125,6 +126,17 @@ const BLOCK_MORE_SUFFIX = "@blockMore";
  *  unmistakable (no real stepId contains `@->`), so we can detect and
  *  unwrap by string-search. */
 const REPLICA_DELIM = "@->";
+
+/**
+ * Re-wrap port-resolved bytes as the `BytesState` the inspector `value`
+ * field (an `AuxValue`) expects. Slice 5.3c migrated the state-edge / leaf
+ * value reads off `frame.stateBefore` / `stateAfter` onto the shared
+ * `frameStateInBytes` / `frameStateOutBytes` helpers (which return raw
+ * `Uint8Array`); this restores the `{ shape: "bytes", bytes }` envelope the
+ * renderer formats. State is bytes-only since Slice 5.1, so this is the only
+ * envelope a state value ever takes.
+ */
+const asBytesState = (bytes: Uint8Array): BytesState => ({ shape: "bytes", bytes });
 
 /** Parsed chip-id structure when the input is a recognized chip. */
 type ChipId = { readonly iterateId: string; readonly blockIndex: number };
@@ -417,13 +429,20 @@ const lookupChipIncoming = (
   }
 
   if (edge.kind === "state") {
-    // What flowed INTO the chip = the iterate's `blocks[i]`, captured
-    // as the first body frame's `stateBefore`. Both equivalent; using
-    // the frame keeps the lookup local and avoids re-walking aux maps.
+    // What flowed INTO the chip = the iterate's per-block input, read from
+    // the first body frame's `"state"` input port (port-first, Slice 5.3c;
+    // falls back to the threaded state field until 5.3e retires it).
+    // biome-ignore lint/style/noNonNullAssertion: bodyFrames.length > 0 checked above
+    const inBytes = frameStateInBytes(bodyFrames[0]!);
+    if (inBytes === null) {
+      return {
+        status: "missing",
+        reason: `block ${blockIndex} of iterate "${iterate.id}" has no resolvable incoming state`,
+      };
+    }
     return {
       status: "value",
-      // biome-ignore lint/style/noNonNullAssertion: bodyFrames.length > 0 checked above
-      value: bodyFrames[0]!.stateBefore,
+      value: asBytesState(inBytes),
       displayKind: "block-payload",
       auxKey: "state",
       blockIndex,
@@ -434,10 +453,17 @@ const lookupChipIncoming = (
   // `blocksFromAux`, slice to `blocks[i]` for the per-block view. Same
   // visual as the state-edge branch above, different aux-key semantics.
   if (edge.auxKey === iterate.blocksFromAux) {
+    // biome-ignore lint/style/noNonNullAssertion: bodyFrames.length > 0 checked above
+    const inBytes = frameStateInBytes(bodyFrames[0]!);
+    if (inBytes === null) {
+      return {
+        status: "missing",
+        reason: `block ${blockIndex} of iterate "${iterate.id}" has no resolvable incoming state`,
+      };
+    }
     return {
       status: "value",
-      // biome-ignore lint/style/noNonNullAssertion: bodyFrames.length > 0 checked above
-      value: bodyFrames[0]!.stateBefore,
+      value: asBytesState(inBytes),
       displayKind: "block-payload",
       auxKey: edge.auxKey,
       blockIndex,
@@ -506,10 +532,20 @@ const lookupChipOutgoing = (
     };
   }
 
+  // What flowed OUT of the chip = the body's per-block result, read from
+  // the last body frame's `"state"` output port (port-first, Slice 5.3c;
+  // falls back to the threaded state field until 5.3e retires it).
+  const outBytes = frameStateOutBytes(lastFrame);
   if (edge.kind === "state") {
+    if (outBytes === null) {
+      return {
+        status: "missing",
+        reason: `block ${blockIndex} of iterate "${iterate.id}" has no resolvable outgoing state`,
+      };
+    }
     return {
       status: "value",
-      value: lastFrame.stateAfter,
+      value: asBytesState(outBytes),
       displayKind: "block-payload",
       auxKey: "state",
       blockIndex,
@@ -519,9 +555,15 @@ const lookupChipOutgoing = (
   // Aux edge out of a chip — typically the iterate's `outBlocksAux`
   // flowing into concat-blocks. Slice to the chip's index.
   if (edge.auxKey === iterate.outBlocksAux) {
+    if (outBytes === null) {
+      return {
+        status: "missing",
+        reason: `block ${blockIndex} of iterate "${iterate.id}" has no resolvable outgoing state`,
+      };
+    }
     return {
       status: "value",
-      value: lastFrame.stateAfter,
+      value: asBytesState(outBytes),
       displayKind: "block-payload",
       auxKey: edge.auxKey,
       blockIndex,
@@ -815,6 +857,14 @@ const lookupRegularState = (
     // R-track edge carries new_R. Without this slice the inspector
     // showed the full concat on both arrows, hiding the swap (user
     // flagged 2026-05-20 Phase 6e smoke).
+    //
+    // ISOLATED (Slice 5.3c): this branch reads `producer.stateAfter`
+    // DIRECTLY rather than via `frameStateOutBytes` because the rejoin
+    // frame is the lifted-legacy toy's synthetic `__rejoin__` (no port
+    // I/O) and the L||R slicing is toy-specific. The whole branch — like
+    // the toy, the feistel runtime walk, and the field — is deleted in
+    // Slice 5.3e. Keeping the direct field read here (rather than routing
+    // through the helper's fallback) makes that deletion a clean lift-out.
     if (producer.stepType === REJOIN_STEP_TYPE && producer.stateAfter.shape === "bytes") {
       const params = producer.params;
       if (typeof params === "object" && params !== null && !Array.isArray(params)) {
@@ -851,37 +901,51 @@ const lookupRegularState = (
         }
       }
     }
-    return producer.blockIndex !== undefined
-      ? {
-          status: "value",
-          value: producer.stateAfter,
-          displayKind: "state",
-          auxKey: "state",
-          blockIndex: producer.blockIndex,
-        }
-      : {
-          status: "value",
-          value: producer.stateAfter,
-          displayKind: "state",
-          auxKey: "state",
-        };
+    // Default state-edge value: the producer's `"state"` output port
+    // (port-first, Slice 5.3c; falls back to the threaded state field
+    // until 5.3e). `prev.stateAfter == next.stateBefore` by the runtime
+    // contract for every wired leaf.
+    const outBytes = frameStateOutBytes(producer);
+    if (outBytes !== null) {
+      return producer.blockIndex !== undefined
+        ? {
+            status: "value",
+            value: asBytesState(outBytes),
+            displayKind: "state",
+            auxKey: "state",
+            blockIndex: producer.blockIndex,
+          }
+        : {
+            status: "value",
+            value: asBytesState(outBytes),
+            displayKind: "state",
+            auxKey: "state",
+          };
+    }
+    // Producer frame exists but exposes no state bytes — fall through to
+    // the consumer side rather than emitting a value-less "value".
   }
   const consumer = findConsumerFrame(trace, edge.to, currentBlockIndex);
   if (consumer !== null) {
-    return consumer.blockIndex !== undefined
-      ? {
-          status: "value",
-          value: consumer.stateBefore,
-          displayKind: "state",
-          auxKey: "state",
-          blockIndex: consumer.blockIndex,
-        }
-      : {
-          status: "value",
-          value: consumer.stateBefore,
-          displayKind: "state",
-          auxKey: "state",
-        };
+    // Consumer's `"state"` input port (port-first, Slice 5.3c; field
+    // fallback until 5.3e).
+    const inBytes = frameStateInBytes(consumer);
+    if (inBytes !== null) {
+      return consumer.blockIndex !== undefined
+        ? {
+            status: "value",
+            value: asBytesState(inBytes),
+            displayKind: "state",
+            auxKey: "state",
+            blockIndex: consumer.blockIndex,
+          }
+        : {
+            status: "value",
+            value: asBytesState(inBytes),
+            displayKind: "state",
+            auxKey: "state",
+          };
+    }
   }
   return {
     status: "missing",
@@ -1018,9 +1082,19 @@ export const lookupNodeValue = (
         reason: `no body frames found for block ${chip.blockIndex} of iterate "${iterate.id}"`,
       };
     }
+    // The chip's value = the body's per-block result, read from the last
+    // body frame's `"state"` output port (port-first, Slice 5.3c; field
+    // fallback until 5.3e).
+    const outBytes = frameStateOutBytes(lastFrame);
+    if (outBytes === null) {
+      return {
+        status: "missing",
+        reason: `block ${chip.blockIndex} of iterate "${iterate.id}" has no resolvable state`,
+      };
+    }
     return {
       status: "value",
-      value: lastFrame.stateAfter,
+      value: asBytesState(outBytes),
       displayKind: "block-payload",
       auxKey: "state",
       blockIndex: chip.blockIndex,
@@ -1075,17 +1149,26 @@ export const lookupNodeValue = (
       reason: `no frame found for step "${nodeId}"`,
     };
   }
+  // State at the leaf's own frame = its `"state"` output port (port-first,
+  // Slice 5.3c; field fallback until 5.3e).
+  const outBytes = frameStateOutBytes(frame);
+  if (outBytes === null) {
+    return {
+      status: "missing",
+      reason: `step "${nodeId}" has no resolvable state at frame ${frame.index}`,
+    };
+  }
   return frame.blockIndex !== undefined
     ? {
         status: "value",
-        value: frame.stateAfter,
+        value: asBytesState(outBytes),
         displayKind: "state",
         auxKey: "state",
         blockIndex: frame.blockIndex,
       }
     : {
         status: "value",
-        value: frame.stateAfter,
+        value: asBytesState(outBytes),
         displayKind: "state",
         auxKey: "state",
       };
