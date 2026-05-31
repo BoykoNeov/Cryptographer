@@ -59,8 +59,6 @@ const fakeFrame = (path: string[], stepId: string): TraceFrame => ({
   stepId,
   stepType: "x",
   params: {},
-  stateBefore: makeBytesState(new Uint8Array(0)),
-  stateAfter: makeBytesState(new Uint8Array(0)),
   auxRead: new Map(),
   auxWritten: new Map(),
 });

@@ -10,12 +10,12 @@
  * the shared byte-cell primitive the step strip renders too.
  *
  * **Why this exists.** Pure port-native steps (SHA-256's `xor@1`,
- * `add-mod-32@1`, `rotate-bits-right@1`, etc.) emit `stateBefore ===
- * stateAfter` frames — the actual transformation happens in the port
- * I/O, not in state. A before/after state view renders byte-equal pairs
- * that are pedagogically empty; `PortFlowView` surfaces what the step
- * actually computed by reading the port-I/O captured on the frame in
- * Slice 2.9a.
+ * `add-mod-32@1`, `rotate-bits-right@1`, etc.) leave the threaded state a
+ * passthrough — the actual transformation happens in the port I/O, not in
+ * state. A `"state"`-keyed view would render nothing for them (they carry no
+ * `"state"` port — `frameStateOutBytes` returns null since the field retired
+ * in Slice 5.3e Batch 4); `PortFlowView` surfaces what the step actually
+ * computed by reading the port-I/O captured on the frame in Slice 2.9a.
  *
  * **What this does NOT do (yet).** Cells are display-only — no hover, no
  * click, no provenance highlighting. Slice 2.9c widens

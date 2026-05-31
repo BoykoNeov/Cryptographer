@@ -20,15 +20,19 @@
  *   - Ellipsis chip (`@blockMore`) → `"missing"` with pick-a-numbered-chip hint.
  *   - Block chip pointing at a non-existent iterate → `"missing"` with
  *     graph/spec out-of-sync reason.
- *   - Regular leaf → `"value"`, displayKind=state, value = frame.stateAfter.
- *     Uses the scrubber's `currentBlockIndex` to disambiguate when the
- *     leaf has multiple frames (inside an iterate).
- *   - Cross-block sanity: different block indices on the same leaf
- *     resolve to DIFFERENT values (i.e. the per-block discrimination
- *     actually works against the multi-block trace).
+ *   - Regular leaf → its `"state"` output port (port-first, Slice 5.3c; the
+ *     `stateAfter` State field retired in Slice 5.3e Batch 4). A leaf with NO
+ *     `"state"` port resolves to `"missing"` — every native-AES leaf is in
+ *     this class (their payloads ride `output`/`a`/… ports), so the
+ *     cipher-agnostic value inspector reports "(no state)" for them. This is
+ *     the user-accepted deferred-port-aware-inspector gap; pre-Batch-4 the
+ *     field read returned only the STALE leftover threaded state for these
+ *     leaves, so "(no state)" is strictly more honest. The scrubber's
+ *     `currentBlockIndex` still selects the right per-block FRAME via
+ *     `findConsumerFrame` even when the value is missing.
  *
  * Fixture: AES-128 ECB with a 4-block plaintext — the only shipping
- * multi-block fixture today.
+ * multi-block fixture today (and entirely native-port → no `"state"` leaves).
  */
 
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
@@ -67,12 +71,9 @@ describe("lookupNodeValue — endpoint pills", () => {
     expect(out.endpointSide).toBe("input");
     // Input pill resolves to `trace.initialState` (Slice 5.3c) — the cipher's
     // plaintext (the seed state the runtime cloned in). This replaced the old
-    // `frames[0].stateBefore` read; the two are byte-equal, and we also pin
-    // that equivalence so the migration is provably value-preserving.
+    // `frames[0].stateBefore` read (the State fields retired in Slice 5.3e
+    // Batch 4); `initialState` is now the field-independent source of truth.
     expect(out.value).toBe(trace.initialState);
-    const first = trace.frames[0];
-    expect(first).toBeDefined();
-    expect((out.value as { bytes: Uint8Array }).bytes).toEqual(first?.stateBefore.bytes);
   });
 
   it("returns `endpoint` for the output pill carrying the ciphertext bytes", () => {
@@ -160,45 +161,45 @@ describe("lookupNodeValue — block chips", () => {
 // ─── Regular leaves ─────────────────────────────────────────────────────
 
 describe("lookupNodeValue — regular leaves", () => {
-  it("resolves a top-level leaf (`key-expansion`) to its frame.stateAfter", () => {
+  it('resolves a top-level leaf (`key-expansion`) to missing — aux-only, no `"state"` port', () => {
     const trace = runAes128Ecb();
     const out = lookupNodeValue("key-expansion", aes128EcbSpec, trace, undefined);
-    expect(out.status).toBe("value");
-    if (out.status !== "value") return;
-    expect(out.displayKind).toBe("state");
-    // key-expansion is outside any iterate; blockIndex is undefined.
-    expect(out.blockIndex).toBeUndefined();
+    // key-expansion writes its round keys to aux; it has no `"state"` output
+    // port, so post-Batch-4 the cipher-agnostic value inspector reports no
+    // resolvable state (the round keys surface via aux edges / PortFlowView).
+    expect(out.status).toBe("missing");
+    if (out.status !== "missing") return;
+    expect(out.reason).toMatch(/no resolvable state/i);
   });
 
-  it("resolves a leaf INSIDE the iterate to its per-block stateAfter (block 0 by default)", () => {
+  it("resolves a native-AES leaf inside the iterate (`initial.add-round-key`) to missing", () => {
     const trace = runAes128Ecb();
-    // initial.add-round-key lives inside the iterate body; without a
-    // scrubber preference, the lookup falls back to the first matching
-    // frame — which is block 0's first iteration.
+    // Native-AES round leaves name their payload `output`/`a`/… — not
+    // `"state"` — so the value inspector resolves them to missing post-Batch-4.
+    // (Pre-Batch-4 the field read returned only the stale leftover threaded
+    // state here; "(no state)" is strictly more honest. The deferred
+    // port-aware inspector will resolve each leaf's real output port by name.)
     const out = lookupNodeValue("initial.add-round-key", aes128EcbSpec, trace, undefined);
-    expect(out.status).toBe("value");
-    if (out.status !== "value") return;
-    expect(out.displayKind).toBe("state");
-    expect(out.blockIndex).toBe(0);
+    expect(out.status).toBe("missing");
+    if (out.status !== "missing") return;
+    expect(out.reason).toMatch(/no resolvable state/i);
   });
 
-  it("resolves the SAME leaf to different block-indices when the scrubber moves", () => {
+  it("selects a DIFFERENT per-block frame for the same leaf when the scrubber moves", () => {
     const trace = runAes128Ecb();
     const a = lookupNodeValue("initial.add-round-key", aes128EcbSpec, trace, 0);
     const b = lookupNodeValue("initial.add-round-key", aes128EcbSpec, trace, 2);
-    if (a.status !== "value" || b.status !== "value") {
-      expect.fail("expected both leaf lookups to be values");
-      return;
-    }
-    // The scrubber-blockIndex preference is what this pins: the SAME leaf id
-    // resolves to the frame at the requested block. (The per-block VALUE no
-    // longer differs by block under byte-native ECB — port-native leaves leave
-    // `state` untouched, so the resolved `stateAfter` is the same leftover for
-    // every block. The honest per-block value lives in the leaf's port output;
-    // surfacing it is the Phase-C port-based value path — see the block-chips
-    // describe above.)
-    expect(a.blockIndex).toBe(0);
-    expect(b.blockIndex).toBe(2);
+    // Both are "missing" (native-AES leaf, no `"state"` port), but the
+    // scrubber-blockIndex preference still drives `findConsumerFrame` to a
+    // DIFFERENT per-block frame — the "missing" reason names the resolved
+    // frame index, which differs by block. This pins that block resolution
+    // survives Batch 4 even though the per-block VALUE is no longer surfaced
+    // here (the honest per-block bytes live in the leaf's port output → the
+    // deferred port-aware inspector).
+    expect(a.status).toBe("missing");
+    expect(b.status).toBe("missing");
+    if (a.status !== "missing" || b.status !== "missing") return;
+    expect(a.reason).not.toBe(b.reason);
   });
 
   it("returns missing for a leaf id that has no frame in the trace", () => {

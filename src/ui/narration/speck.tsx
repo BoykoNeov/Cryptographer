@@ -44,8 +44,8 @@ import type { NarrationFn, NarrationUnit } from "./registry";
 
 /**
  * Forward Speck round. Three disclosable sub-ops show the cipher's ARX
- * structure step-by-step. We decode `(x, y)` from `stateBefore.bytes`,
- * `k` from the consumed round-key aux, and compute the same intermediate
+ * structure step-by-step. We decode `(x, y)` from the `"state"` input port
+ * (`frameStateInBytes`), `k` from the consumed round-key aux, and compute the same intermediate
  * `x'` the executor would compute (modular add then XOR). The prose
  * names the rotation amounts (`α`, `β`) and the word width.
  */

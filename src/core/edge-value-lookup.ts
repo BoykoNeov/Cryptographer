@@ -434,8 +434,8 @@ const lookupChipIncoming = (
 
   if (edge.kind === "state") {
     // What flowed INTO the chip = the iterate's per-block input, read from
-    // the first body frame's `"state"` input port (port-first, Slice 5.3c;
-    // falls back to the threaded state field until 5.3e retires it).
+    // the first body frame's `"state"` input port (the State field fallback
+    // retired in Slice 5.3e Batch 4 → null if the leaf has no `"state"` port).
     // biome-ignore lint/style/noNonNullAssertion: bodyFrames.length > 0 checked above
     const inBytes = frameStateInBytes(bodyFrames[0]!);
     if (inBytes === null) {
@@ -537,8 +537,8 @@ const lookupChipOutgoing = (
   }
 
   // What flowed OUT of the chip = the body's per-block result, read from
-  // the last body frame's `"state"` output port (port-first, Slice 5.3c;
-  // falls back to the threaded state field until 5.3e retires it).
+  // the last body frame's `"state"` output port (the State field fallback
+  // retired in Slice 5.3e Batch 4 → null if the leaf has no `"state"` port).
   const outBytes = frameStateOutBytes(lastFrame);
   if (edge.kind === "state") {
     if (outBytes === null) {
@@ -706,10 +706,10 @@ const lookupRegularState = (
   // still reach here pre-Slice-6 when the iterate isn't collapsed).
   const producer = findProducerFrame(trace, edge.from, currentBlockIndex);
   if (producer !== null) {
-    // Default state-edge value: the producer's `"state"` output port
-    // (port-first, Slice 5.3c; falls back to the threaded state field
-    // until 5.3e). `prev.stateAfter == next.stateBefore` by the runtime
-    // contract for every wired leaf.
+    // Default state-edge value: the producer's `"state"` output port (the
+    // State field fallback retired in Slice 5.3e Batch 4 → null if no such
+    // port). The producer's output port == the consumer's input port by the
+    // runtime contract for every wired leaf.
     const outBytes = frameStateOutBytes(producer);
     if (outBytes !== null) {
       return producer.blockIndex !== undefined
@@ -732,8 +732,8 @@ const lookupRegularState = (
   }
   const consumer = findConsumerFrame(trace, edge.to, currentBlockIndex);
   if (consumer !== null) {
-    // Consumer's `"state"` input port (port-first, Slice 5.3c; field
-    // fallback until 5.3e).
+    // Consumer's `"state"` input port (the State field fallback retired in
+    // Slice 5.3e Batch 4 → null if no such port).
     const inBytes = frameStateInBytes(consumer);
     if (inBytes !== null) {
       return consumer.blockIndex !== undefined
@@ -887,8 +887,8 @@ export const lookupNodeValue = (
       };
     }
     // The chip's value = the body's per-block result, read from the last
-    // body frame's `"state"` output port (port-first, Slice 5.3c; field
-    // fallback until 5.3e).
+    // body frame's `"state"` output port (the State field fallback retired in
+    // Slice 5.3e Batch 4 → null if the leaf has no `"state"` port).
     const outBytes = frameStateOutBytes(lastFrame);
     if (outBytes === null) {
       return {
@@ -927,8 +927,9 @@ export const lookupNodeValue = (
       reason: `no frame found for step "${nodeId}"`,
     };
   }
-  // State at the leaf's own frame = its `"state"` output port (port-first,
-  // Slice 5.3c; field fallback until 5.3e).
+  // State at the leaf's own frame = its `"state"` output port (the State
+  // field fallback retired in Slice 5.3e Batch 4 → null if no such port; a
+  // native-port leaf whose payload rides another port name resolves missing).
   const outBytes = frameStateOutBytes(frame);
   if (outBytes === null) {
     return {

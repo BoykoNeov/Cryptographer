@@ -28,7 +28,7 @@ import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { desSpec } from "@/ciphers/des";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
-import type { AuxValue, BytesState, TraceFrame } from "@/core/types";
+import type { AuxValue, TraceFrame } from "@/core/types";
 import { PortFlowView, isPortNativeFrame } from "@/ui/components/PortFlowView";
 import { StepNarration } from "@/ui/components/StepNarration";
 import {
@@ -70,12 +70,13 @@ describe("port-native DES round leaves — narration reads port I/O, not stale s
     expect(isPortNativeFrame(frameById("round.1.expand-R"))).toBe(true);
   });
 
-  it("the threaded state is stale (8-byte plaintext) while the port input is the round-local R", () => {
+  it("the round-local R lives on the input port (the honest per-leaf value)", () => {
     const f = frameById("round.1.expand-R");
-    // Threaded state never advances through port-native rounds → stale plaintext.
-    expect((f.stateBefore as BytesState).bytes.length).toBe(8);
-    expect(hexFromBytes((f.stateBefore as BytesState).bytes)).toBe(DES_PT);
-    // The honest round-local R_in (4 bytes) lives on the input port.
+    // Pre-5.3e the threaded `stateBefore` field was the STALE 8-byte plaintext
+    // here (rounds are port-native; the thread never advanced through them) —
+    // that staleness is exactly what Batch 4 removed by dropping the field. The
+    // honest round-local R_in (4 bytes) has always lived on the `"state"` input
+    // port, which is what the narrator + inspector read now.
     expect(f.portInputs?.get("state")?.length).toBe(4);
     expect(hexFromBytes(f.portInputs?.get("state") ?? new Uint8Array())).toBe("f0aaf0aa");
   });

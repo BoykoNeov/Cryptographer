@@ -75,8 +75,8 @@ export const RunExplorerModal = (props: Props) => {
     const lastIdx = snaps.length - 1;
     return snaps.map((snapshot, i) => {
       const frame = stepId ? snapshot.trace.frames.find((f) => f.stepId === stepId) : undefined;
-      // Port-first read (Slice 5.3c): the `"state"` output port, falling back
-      // to the legacy `stateAfter` field until 5.3e retires it.
+      // The `"state"` output port (the `stateAfter` State field fallback
+      // retired in Slice 5.3e Batch 4 → null if the leaf has no `"state"` port).
       const stateAtStep = frame ? frameStateOutBytes(frame) : null;
       return { snapshot, stateAtStep, isCurrent: i === lastIdx };
     });

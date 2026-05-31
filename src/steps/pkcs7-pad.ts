@@ -29,8 +29,8 @@ import type {
 // Port-native `PortedExecutor` (Slice 5.2 — universal-port Phase 5): the bytes
 // to pad arrive on the `state` input port and the padded bytes leave on the
 // `state` output port. The runtime wires both via meta.stateInputPort /
-// stateOutputPort, so the linear inspector still reads stateBefore/stateAfter
-// from these ports. The frame renders in PortFlowView (it is a port-native
+// stateOutputPort, so the linear inspector reads the input/output `state`
+// ports. The frame renders in PortFlowView (it is a port-native
 // frame), matching SHA-256's already-shipped pad rendering.
 export const pkcs7Pad: PortedExecutor = (inputs, params, _ctx) => {
   const bytes = inputs.get("state");

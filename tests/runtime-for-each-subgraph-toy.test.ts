@@ -38,28 +38,62 @@
  *    with a clear "deferred to first consumer" error.
  */
 
+import { frameStateInBytes, frameStateOutBytes } from "@/core/frame-state";
 import { StepRegistry } from "@/core/registry";
 import { runSpec } from "@/core/runtime";
 import { canonicalStepId } from "@/core/step-id";
-import type { AuxValue, BytesState, CipherSpec, StepDefinition } from "@/core/types";
+import type {
+  AuxValue,
+  BytesState,
+  CipherSpec,
+  PortedExecutor,
+  StepDefinition,
+  StepRegistration,
+} from "@/core/types";
 import { describe, expect, it } from "vitest";
 
-// XOR-with-constant body. The constant is hardcoded per-test; we surface
-// it via params so the executor stays cipher-agnostic. Each iteration's
-// body call reads the parent-scope state (which threads across iterations
-// under for-each-subgraph), XORs each byte with the param's `constant`
-// array (zero-padded / truncated to the state byte length so the toy
-// works on any state size), and returns the new state.
-const xorWithConstant: StepDefinition = {
-  executor: (state, params) => {
-    if (state.shape !== "bytes") throw new Error("xorWithConstant expects bytes state");
-    const constantRaw = (params as unknown as { readonly constant: readonly number[] }).constant;
-    const out = new Uint8Array(state.bytes);
-    for (let i = 0; i < out.length; i++) {
-      out[i] = (out[i] ?? 0) ^ (constantRaw[i % constantRaw.length] ?? 0);
-    }
-    const next: BytesState = { shape: "bytes", bytes: out };
-    return { state: next };
+// XOR-with-constant body. The constant is hardcoded per-test; we surface it
+// via params so the executor stays cipher-agnostic. Each iteration reads the
+// threaded state off the `"state"` input port (which threads across iterations
+// under for-each-subgraph), XORs each byte with the param's `constant` array
+// (cycled to the state byte length so the toy works on any state size), and
+// writes the new block to the `"state"` output port.
+//
+// **Port-native since Slice 5.3e Batch 4.** Originally a legacy
+// `(state) → { state }` executor; converted to a hybrid-ported step
+// (`meta.stateInputPort`/`stateOutputPort = "state"`, so the runtime projects
+// the threaded state into/out of the `"state"` port and captures it as frame
+// port I/O). The reason for the conversion: XOR is self-inverse, so a 5×
+// application's `finalState` (= s0 ^ c) is IDENTICAL whether the state threads
+// correctly or each iteration re-seeds from s0 — `finalState` cannot
+// discriminate. The per-iteration thread invariant below (`out[i-1] == in[i]`)
+// is the only check that catches mis-threading, and it now reads the captured
+// port I/O via `frameStateIn/OutBytes` (the `stateBefore`/`stateAfter` State
+// fields it used to read retired in Batch 4). The runtime threads the closure
+// state byte-identically either way; only the observation surface changed.
+const xorWithConstantExecutor: PortedExecutor = (inputs, params) => {
+  const state = inputs.get("state");
+  if (!state) throw new Error("xorWithConstant expects a 'state' input port");
+  const constantRaw = (params as unknown as { readonly constant: readonly number[] }).constant;
+  const out = new Uint8Array(state);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = (out[i] ?? 0) ^ (constantRaw[i % constantRaw.length] ?? 0);
+  }
+  return new Map([["state", out]]);
+};
+
+const xorWithConstant: StepRegistration = {
+  kind: "ported",
+  executor: xorWithConstantExecutor,
+  shape: {
+    inputs: new Map([["state", { layout: "raw" }]]),
+    outputs: new Map([["state", { layout: "raw" }]]),
+  },
+  meta: { stateLayout: "bytes", stateInputPort: "state", stateOutputPort: "state" },
+  doc: {
+    name: "Test: XOR with constant",
+    summary: "Toy for-each-subgraph body — XORs the threaded state with a fixed constant.",
+    detail: "Slice 2.0a fixture (port-native since 5.3e Batch 4).",
   },
 };
 
@@ -114,7 +148,10 @@ describe("runtime — for-each-subgraph node (Slice 2.0a)", () => {
       shape: "bytes",
       bytes: new Uint8Array([0xaa, 0xbb, 0xcc, 0xdd]),
     };
-    const trace = runSpec(innerToySpec, buildRegistry(), { initialState: initial });
+    const trace = runSpec(innerToySpec, buildRegistry(), {
+      initialState: initial,
+      portedDispatchEnabled: true,
+    });
 
     // Five iterations × one body leaf = five frames.
     expect(trace.frames).toHaveLength(5);
@@ -130,21 +167,24 @@ describe("runtime — for-each-subgraph node (Slice 2.0a)", () => {
       expect(canonicalStepId(f.stepId)).toBe("xor");
     }
 
-    // State-thread invariant: each iteration's stateBefore equals the
-    // PREVIOUS iteration's stateAfter. Frame 0's stateBefore equals the
-    // runtime's initial state.
+    // State-thread invariant: each iteration's `"state"` INPUT port equals the
+    // PREVIOUS iteration's `"state"` OUTPUT port, and iteration 0's input
+    // equals the runtime's initial state. Read off the captured port I/O via
+    // the `frameStateIn/OutBytes` helpers (the `stateBefore`/`stateAfter`
+    // fields retired in Slice 5.3e Batch 4). THIS is the load-bearing
+    // threading check for the self-inverse XOR body — `finalState` (= s0 ^ c)
+    // can't distinguish correct threading from per-iteration re-seeding.
     const f0 = trace.frames[0];
-    if (!f0 || f0.stateBefore.shape !== "bytes") throw new Error("frame 0 missing");
-    expect(Array.from(f0.stateBefore.bytes)).toEqual([0xaa, 0xbb, 0xcc, 0xdd]);
+    if (!f0) throw new Error("frame 0 missing");
+    expect(Array.from(frameStateInBytes(f0) ?? [])).toEqual([0xaa, 0xbb, 0xcc, 0xdd]);
 
     for (let i = 1; i < trace.frames.length; i++) {
       const prev = trace.frames[i - 1];
       const cur = trace.frames[i];
       if (!prev || !cur) throw new Error(`frame ${i} or ${i - 1} missing`);
-      if (prev.stateAfter.shape !== "bytes" || cur.stateBefore.shape !== "bytes") {
-        throw new Error("expected bytes state");
-      }
-      expect(Array.from(cur.stateBefore.bytes)).toEqual(Array.from(prev.stateAfter.bytes));
+      expect(Array.from(frameStateInBytes(cur) ?? [])).toEqual(
+        Array.from(frameStateOutBytes(prev) ?? []),
+      );
     }
 
     // Final state = start XOR constant (odd application count — XOR is
@@ -177,7 +217,10 @@ describe("runtime — for-each-subgraph node (Slice 2.0a)", () => {
       shape: "bytes",
       bytes: new Uint8Array([0xaa, 0xbb, 0xcc, 0xdd]),
     };
-    const trace = runSpec(evenSpec, buildRegistry(), { initialState: initial });
+    const trace = runSpec(evenSpec, buildRegistry(), {
+      initialState: initial,
+      portedDispatchEnabled: true,
+    });
     expect(trace.frames).toHaveLength(4);
     if (trace.finalState.shape !== "bytes") throw new Error("finalState shape");
     // 4 odd? No — 4 is even. Pairs cancel; final == initial.
@@ -207,7 +250,10 @@ describe("runtime — for-each-subgraph node (Slice 2.0a)", () => {
       shape: "bytes",
       bytes: new Uint8Array([0xaa, 0xbb, 0xcc, 0xdd]),
     };
-    const trace = runSpec(emptySpec, buildRegistry(), { initialState: initial });
+    const trace = runSpec(emptySpec, buildRegistry(), {
+      initialState: initial,
+      portedDispatchEnabled: true,
+    });
     expect(trace.frames).toHaveLength(0);
     if (trace.finalState.shape !== "bytes") throw new Error("finalState shape");
     expect(Array.from(trace.finalState.bytes)).toEqual([0xaa, 0xbb, 0xcc, 0xdd]);
@@ -236,9 +282,9 @@ describe("runtime — for-each-subgraph node (Slice 2.0a)", () => {
       shape: "bytes",
       bytes: new Uint8Array([0xaa, 0xbb, 0xcc, 0xdd]),
     };
-    expect(() => runSpec(paramSpec, buildRegistry(), { initialState: initial })).toThrow(
-      /Slice 2\.0a/,
-    );
+    expect(() =>
+      runSpec(paramSpec, buildRegistry(), { initialState: initial, portedDispatchEnabled: true }),
+    ).toThrow(/Slice 2\.0a/);
   });
 
   // ─── Nested toy: 2-block outer iterate × 3-iter inner for-each-subgraph ──
@@ -316,19 +362,18 @@ describe("runtime — for-each-subgraph node (Slice 2.0a)", () => {
     // Each frame carries blockIndex matching its `:b{i}` suffix.
     expect(trace.frames.map((f) => f.blockIndex)).toEqual([0, 0, 0, 1, 1, 1]);
 
-    // State-thread within block 0: byte0 goes 0 → 1 → 2 → 3 across the 3
-    // inner iterations. Then iterate seeds block 1 from aux (resetting
-    // state to blocks[1]), so byte0 restarts at 0x10 and threads to 0x13.
-    const byte0After = (i: number): number => {
-      const f = trace.frames[i];
-      if (!f || f.stateAfter.shape !== "bytes") throw new Error(`frame ${i}`);
-      return f.stateAfter.bytes[0] ?? -1;
-    };
-    expect(byte0After(0)).toBe(0x01); // block 0, round 0: 0 + 1
-    expect(byte0After(1)).toBe(0x02); // block 0, round 1: 1 + 1
-    expect(byte0After(2)).toBe(0x03); // block 0, round 2: 2 + 1
-    expect(byte0After(3)).toBe(0x11); // block 1, round 0: 0x10 + 1
-    expect(byte0After(4)).toBe(0x12);
-    expect(byte0After(5)).toBe(0x13);
+    // State-thread within a block + per-block reset are verified through the
+    // surviving `finalState` (the per-frame `stateAfter` snapshots retired in
+    // Slice 5.3e Batch 4; `incrementByte0` stays a legacy executor, so its
+    // per-leaf bytes aren't captured on a port). The iterate seeds block 1
+    // fresh from aux (resetting byte0 to 0x10) and the inner for-each-subgraph
+    // threads 3 increments within it, leaving the exit state's byte0 at 0x13.
+    // That value holds ONLY if BOTH happened correctly: a re-seed-each-inner-
+    // iteration bug would leave 0x11, and a missing per-block reset (block 1
+    // continuing block 0's 0x03) would leave 0x06. The exit `state` is the
+    // last block's threaded result (runtime.ts:444-447 — NOT a concat).
+    if (trace.finalState.shape !== "bytes") throw new Error("finalState shape");
+    expect(trace.finalState.bytes.length).toBe(16);
+    expect(trace.finalState.bytes[0]).toBe(0x13);
   });
 });

@@ -247,7 +247,7 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // Port-native since Slice 5.2 (2026-05-31): the six padding step types
   // dropped their `legacy:` lift for true `PortedExecutor`s (bytes in/out on
   // the `state` port). `meta` is RETAINED (stateInputPort/stateOutputPort
-  // "state"), so the linear inspector still reads stateBefore/stateAfter; the
+  // "state"), so the linear inspector reads the `state` port I/O; the
   // frames render in PortFlowView (the honest port view —
   // same rendering SHA-256's `pad`/`length-append` already ship). The
   // intentional throws on malformed padding propagate unchanged.

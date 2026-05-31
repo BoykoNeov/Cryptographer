@@ -210,8 +210,6 @@ describe("<KeyScheduleExplorer /> — AES branch", () => {
       stepId: "key-expansion",
       stepType: "aes.key-expansion@1",
       params: { rounds: 10 }, // no sbox/rcon/keyAuxName
-      stateBefore: makeBytesState(new Uint8Array(16)),
-      stateAfter: makeBytesState(new Uint8Array(16)),
       auxRead: new Map<string, AuxValue>([["key", bytesFromHex(AES128_KEY)]]),
       auxWritten: new Map(),
     };
@@ -277,8 +275,6 @@ describe("<KeyScheduleExplorer /> — Serpent branch", () => {
       stepId: "key-expansion",
       stepType: "serpent.key-expansion@1",
       params: { keyAuxName: "key", outputPrefix: "roundKey", keyByteLength: 16 },
-      stateBefore: makeBytesState(new Uint8Array(0)),
-      stateAfter: makeBytesState(new Uint8Array(0)),
       // Empty auxRead — the "key" entry the simulator needs isn't here.
       auxRead: new Map<string, AuxValue>(),
       auxWritten: new Map(),

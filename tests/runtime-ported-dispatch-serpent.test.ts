@@ -30,8 +30,12 @@
  *       (encrypt + decrypt) — the correctness floor.
  *
  *   (b) **Golden frame-stream checksum** — a per-spec SHA-256 over the ordered
- *       `(stepId, hex(stateAfter), sorted(auxRead))` of every frame, for all 6
- *       specs. Folding `auxRead` into the hash makes the parity net itself
+ *       `(stepId, hex("state" output port | "(no-state)"), sorted(auxRead))` of
+ *       every frame, for all 6 specs. (The round bodies name their output port
+ *       `"state"`, byte-identical to the pre-5.3e `stateAfter` field; the single
+ *       aux-only key-expansion frame has no `"state"` port → `(no-state)`. The
+ *       digests were regenerated in Slice 5.3e Batch 4 when the field retired.)
+ *       Folding `auxRead` into the hash makes the parity net itself
  *       guard the highest-risk change in the B3 conversion: that
  *       `serpent.add-round-key@1`'s `roundKey.N` aux read is still recorded on
  *       the frame from `meta.auxReadPorts` after the executor dropped its
@@ -57,6 +61,7 @@ import { serpent192Spec } from "@/ciphers/serpent-192";
 import { serpent192DecryptSpec } from "@/ciphers/serpent-192-decrypt";
 import { serpent256Spec } from "@/ciphers/serpent-256";
 import { serpent256DecryptSpec } from "@/ciphers/serpent-256-decrypt";
+import { frameStateOutBytes } from "@/core/frame-state";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue, CipherSpec } from "@/core/types";
@@ -84,7 +89,10 @@ const auxValueToString = (v: AuxValue): string => {
 
 /** Run a Serpent spec under ported dispatch and reduce its frame stream to a
  *  `${count}:${sha256}` digest over each frame's
- *  `(stepId, hex(stateAfter), sorted(auxRead))`. */
+ *  `(stepId, hex("state" output port), sorted(auxRead))`. The round leaves are
+ *  hybrid-ported and name their output port `"state"`, so `frameStateOutBytes`
+ *  is byte-identical to the pre-5.3e `stateAfter` field; the aux-only
+ *  key-expansion frame has no `"state"` port and renders `(no-state)`. */
 const frameDigest = (spec: CipherSpec, stateHex: string, keyHex: string): string => {
   const trace = runSpec(spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(stateHex)),
@@ -93,8 +101,8 @@ const frameDigest = (spec: CipherSpec, stateHex: string, keyHex: string): string
   });
   const h = createHash("sha256");
   for (const f of trace.frames) {
-    const after =
-      f.stateAfter.shape === "bytes" ? hexFromBytes(f.stateAfter.bytes) : `?${f.stateAfter.shape}`;
+    const out = frameStateOutBytes(f);
+    const after = out ? hexFromBytes(out) : "(no-state)";
     const aux = [...f.auxRead.entries()]
       .map(([k, v]) => `${k}=${auxValueToString(v)}`)
       .sort()
@@ -198,42 +206,42 @@ describe("runtime — ported dispatch, byte-native Serpent (Slice B3)", () => {
         spec: serpent128Spec,
         stateHex: PLAINTEXT_ZERO,
         keyHex: KEY_128,
-        digest: "99:824f3e1258fabbcb15784297dff9250d221a7421769396739f2bf9d167e03519",
+        digest: "99:c36dc162ec2a489831d776a7336d3a46268a54340033d73038d8243a079d61d2",
       },
       {
         label: "Serpent-128 decrypt",
         spec: serpent128DecryptSpec,
         stateHex: CIPHERTEXT_128,
         keyHex: KEY_128,
-        digest: "99:5a027a702bc03c18090a83cc638ebf9e95d4866a265bb29ce59dd39d7904cced",
+        digest: "99:2be87b7333f61843cd42c0972305fd0055d1d121cf3512c2b198f77943d831b5",
       },
       {
         label: "Serpent-192 encrypt",
         spec: serpent192Spec,
         stateHex: PLAINTEXT_ZERO,
         keyHex: KEY_192,
-        digest: "99:d8e7420f7c8296088f46fd622d50fe64de5678f00680456942bdee834dac8285",
+        digest: "99:90fff6fdff0173030ac143d682ecb501be5d81b5dd0492e82cdf1cb1b472b926",
       },
       {
         label: "Serpent-192 decrypt",
         spec: serpent192DecryptSpec,
         stateHex: CIPHERTEXT_192,
         keyHex: KEY_192,
-        digest: "99:77c9244fec54b1be946775aeb3a797f55c0b426732f0eba1c9c5e172388442d3",
+        digest: "99:be1fa8242be58d94e1d2a9c71815cdd578c1ad156f6840a5c4b4c9fb050766f6",
       },
       {
         label: "Serpent-256 encrypt",
         spec: serpent256Spec,
         stateHex: PLAINTEXT_ZERO,
         keyHex: KEY_256,
-        digest: "99:1c8d557ec6201e2343ccb0619dfc358d5b7515be20ef5a9307de856a823c451f",
+        digest: "99:fa73dc6d5391ffe86b9094752073cd1d2cf0274bbe532371ade07c1f0471ae62",
       },
       {
         label: "Serpent-256 decrypt",
         spec: serpent256DecryptSpec,
         stateHex: CIPHERTEXT_256,
         keyHex: KEY_256,
-        digest: "99:c48a1074226d679aeecbda73aa84dd4cd7526478c306736ef91cec273c391132",
+        digest: "99:fcfc4b82412dc2f930bcab542379a2f73269c25a9cfa3af04cbd3dbf35affbb4",
       },
     ];
 
@@ -337,9 +345,9 @@ describe("runtime — ported dispatch, byte-native Serpent (Slice B3)", () => {
       // All-zero plaintext ⇒ AddRoundKey output == roundKey.0 byte-for-byte.
       const rk0 = ksFrame.auxWritten.get("roundKey.0");
       expect(rk0).toBeInstanceOf(Uint8Array);
-      expect(arkFrame.stateAfter.shape).toBe("bytes");
-      if (arkFrame.stateAfter.shape !== "bytes") return;
-      expect(Array.from(arkFrame.stateAfter.bytes)).toEqual(Array.from(rk0 as Uint8Array));
+      const arkOut = frameStateOutBytes(arkFrame);
+      expect(arkOut).not.toBeNull();
+      expect(Array.from(arkOut ?? new Uint8Array())).toEqual(Array.from(rk0 as Uint8Array));
     });
   });
 });

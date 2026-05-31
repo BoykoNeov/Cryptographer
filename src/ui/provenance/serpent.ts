@@ -31,8 +31,9 @@ export const serpentAddRoundKeyProvenance: ProvenanceFn = (frame, afterCellIndex
   if (afterCellIndex < 0) return [];
   // Defensive: Serpent state is always 16 bytes when AddRoundKey runs;
   // the upper guard catches accidental over-indexing without throwing.
-  // Port-first read (Slice 5.3c): the `"state"` output port, falling back to
-  // the legacy `stateAfter` field until 5.3e retires it.
+  // The `"state"` output port (the `stateAfter` State field fallback retired
+  // in Slice 5.3e Batch 4 → null if the leaf has no `"state"` port; the upper
+  // bound guard below only fires when a port is present).
   const after = frameStateOutBytes(frame);
   if (after !== null && afterCellIndex >= after.length) {
     return [];

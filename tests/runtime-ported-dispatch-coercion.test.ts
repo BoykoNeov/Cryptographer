@@ -194,16 +194,18 @@ describe("runtime — ported dispatch, Slice 1.12 coercion (Q2)", () => {
         targetLen: 16,
       });
 
-      // stateBefore carries the original 8 bytes; stateAfter carries the
-      // 16-byte padded result (first 8 bytes = source, last 8 = zeros).
-      expect(coerceFrame.stateBefore.shape).toBe("bytes");
-      expect(coerceFrame.stateAfter.shape).toBe("bytes");
-      if (coerceFrame.stateBefore.shape !== "bytes") throw new Error("bad before shape");
-      if (coerceFrame.stateAfter.shape !== "bytes") throw new Error("bad after shape");
-      expect(Array.from(coerceFrame.stateBefore.bytes)).toEqual(Array.from(SOURCE_8));
+      // The coerce frame surfaces the morph via its port I/O keyed by
+      // `portName` (the `stateBefore`/`stateAfter` State fields retired in
+      // Slice 5.3e Batch 4): the input port carries the original 8 bytes, the
+      // output port the 16-byte padded result (first 8 = source, last 8 zeros).
+      const coercedIn = coerceFrame.portInputs?.get("port-a");
+      const coercedOut = coerceFrame.portOutputs?.get("port-a");
+      expect(coercedIn).toBeDefined();
+      expect(coercedOut).toBeDefined();
+      expect(Array.from(coercedIn ?? [])).toEqual(Array.from(SOURCE_8));
       const expectedPadded = new Uint8Array(16);
       expectedPadded.set(SOURCE_8, 0);
-      expect(Array.from(coerceFrame.stateAfter.bytes)).toEqual(Array.from(expectedPadded));
+      expect(Array.from(coercedOut ?? [])).toEqual(Array.from(expectedPadded));
 
       // Consumer leaf follows the coerce frame in the same path. Path
       // and blockIndex/branchPath stamping match what a real leaf would
@@ -244,9 +246,11 @@ describe("runtime — ported dispatch, Slice 1.12 coercion (Q2)", () => {
 
       // "Truncate from the right" keeps the LEFTMOST targetLen bytes —
       // Q2 names the discard side, not the keep side. Pin both halves
-      // unambiguously: keep = bytes [0..4), discard = bytes [4..8).
-      if (coerceFrame.stateAfter.shape !== "bytes") throw new Error("bad after shape");
-      expect(Array.from(coerceFrame.stateAfter.bytes)).toEqual([0x01, 0x02, 0x03, 0x04]);
+      // unambiguously: keep = bytes [0..4), discard = bytes [4..8). Read the
+      // morph off the output port (the State fields retired in 5.3e Batch 4).
+      const coercedOut = coerceFrame.portOutputs?.get("port-b");
+      expect(coercedOut).toBeDefined();
+      expect(Array.from(coercedOut ?? [])).toEqual([0x01, 0x02, 0x03, 0x04]);
     });
   });
 

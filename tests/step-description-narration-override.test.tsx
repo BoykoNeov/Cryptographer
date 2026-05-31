@@ -124,8 +124,6 @@ describe("StepDescription — narrationOverride fallback + override", () => {
       stepId: "custom-leaf",
       stepType: "aes.sub-bytes@1",
       params: { sbox: [] },
-      stateBefore: makeBytesState(bytesFromHex(PLAINTEXT_HEX)),
-      stateAfter: makeBytesState(bytesFromHex(PLAINTEXT_HEX)),
       auxRead: new Map(),
       auxWritten: new Map(),
     };

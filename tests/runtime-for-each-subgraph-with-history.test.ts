@@ -207,13 +207,6 @@ describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
       expect(canonicalStepId(f.stepId)).toBe("xor-priors");
     }
 
-    // Body starts each iteration with zero state of entryLen (1 byte).
-    // The aux reads + XOR are what produce the iteration's output.
-    for (const f of trace.frames) {
-      if (f.stateBefore.shape !== "bytes") throw new Error("expected bytes stateBefore");
-      expect(Array.from(f.stateBefore.bytes)).toEqual([0x00]);
-    }
-
     // Per-iteration auxRead binding contains "prior-1" + "prior-2" in
     // executor-declared order. (The runtime's frame-builder records the
     // executor's `auxReads` list verbatim.)
@@ -222,14 +215,17 @@ describe("runtime — for-each-subgraph-with-history node (Slice 2.0c)", () => {
       expect(f.auxRead.has("prior-2")).toBe(true);
     }
 
-    // Iteration outputs (XOR of declared priors per iteration) per the
-    // hand-computed cycle above.
-    const expectedOutputs = [0x06, 0x05, 0x03, 0x06, 0x05, 0x03, 0x06, 0x05];
-    for (let i = 0; i < trace.frames.length; i++) {
-      const f = trace.frames[i];
-      if (!f || f.stateAfter.shape !== "bytes") throw new Error(`frame ${i}`);
-      expect(Array.from(f.stateAfter.bytes)).toEqual([expectedOutputs[i]]);
-    }
+    // Per-iteration outputs AND the per-iteration entry seed are verified
+    // through the surviving `finalState` (the per-frame `stateBefore`/
+    // `stateAfter` State snapshots retired in Slice 5.3e Batch 4). finalState =
+    // the seeds concatenated with EVERY iteration's body output, so its tail
+    // pins all 8 outputs [0x06,0x05,0x03,…] in order — a wrong intermediate
+    // (mis-threaded history, wrong lookback, dropped iteration) could not
+    // produce this exact concat. And the body's own length check
+    // (`xorPriorsIntoState` throws when a prior's length ≠ the state's)
+    // independently proves each iteration was seeded with a zero state of the
+    // right entry length, which is the contract the old `stateBefore` pin
+    // covered.
 
     // Final state = seeds concatenated with all iteration outputs.
     if (trace.finalState.shape !== "bytes") throw new Error("finalState shape");
@@ -874,7 +870,7 @@ describe("runtime — group container port contract (A3b)", () => {
     // The body leaf saw the seed bytes on its input port (proving the
     // runtime injected seedInput as port(groupId,"in")).
     const notFrame = trace.frames.find((f) => canonicalStepId(f.stepId) === "g.not");
-    if (!notFrame || notFrame.stateBefore.shape !== "bytes") throw new Error("g.not frame");
+    if (!notFrame) throw new Error("g.not frame");
     expect(notFrame.portInputs?.get("input")).toEqual(new Uint8Array([0x05, 0x03]));
   });
 

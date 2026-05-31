@@ -13,7 +13,7 @@
 
 // @vitest-environment jsdom
 
-import type { AuxValue, BytesState, TraceFrame } from "@/core/types";
+import type { AuxValue, TraceFrame } from "@/core/types";
 import { applyBitPermutation } from "@/steps/serpent-bit-ops";
 import {
   serpentAddRoundKeyNarration,
@@ -25,20 +25,29 @@ import { afterEach, describe, expect, it } from "vitest";
 
 afterEach(cleanup);
 
-const bytesState = (bytes: Uint8Array): BytesState => ({ shape: "bytes", bytes });
+const portMap = (bytes: Uint8Array): ReadonlyMap<string, Uint8Array> => new Map([["state", bytes]]);
 
-const makeFrame = (overrides: Partial<TraceFrame>): TraceFrame => ({
-  index: 0,
-  path: [],
-  stepId: "test.step",
-  stepType: "test",
-  params: {},
-  stateBefore: bytesState(new Uint8Array(16)),
-  stateAfter: bytesState(new Uint8Array(16)),
-  auxRead: new Map<string, AuxValue>(),
-  auxWritten: new Map(),
-  ...overrides,
-});
+// The Serpent narrators read the before/after block off the `"state"` port via
+// frameStateInBytes / frameStateOutBytes (port-first, Slice 5.3c; the
+// stateBefore/stateAfter State fields retired in Slice 5.3e Batch 4). A test
+// frame surfaces its before/after block as the `"state"` port I/O.
+const makeFrame = (
+  overrides: Partial<TraceFrame> & { before?: Uint8Array; after?: Uint8Array },
+): TraceFrame => {
+  const { before, after, ...rest } = overrides;
+  return {
+    index: 0,
+    path: [],
+    stepId: "test.step",
+    stepType: "test",
+    params: {},
+    auxRead: new Map<string, AuxValue>(),
+    auxWritten: new Map(),
+    portInputs: portMap(before ?? new Uint8Array(16)),
+    portOutputs: portMap(after ?? new Uint8Array(16)),
+    ...rest,
+  };
+};
 
 const proseText = (Prose: (props: { fmt: "hex" }) => unknown): string => {
   const result = render(() => Prose({ fmt: "hex" }) as never);
@@ -61,8 +70,8 @@ describe("serpentSubBytesNarration", () => {
     const frame = makeFrame({
       stepType: "serpent.sub-bytes@1",
       params: { sbox, sboxIndex: 3 },
-      stateBefore: bytesState(before),
-      stateAfter: bytesState(after),
+      before,
+      after,
     });
     const units = serpentSubBytesNarration(frame);
     expect(units).not.toBeNull();
@@ -89,8 +98,8 @@ describe("serpentSubBytesNarration", () => {
     const frame = makeFrame({
       stepType: "serpent.sub-bytes@1",
       params: { sbox },
-      stateBefore: bytesState(before),
-      stateAfter: bytesState(after),
+      before,
+      after,
     });
     const units = serpentSubBytesNarration(frame);
     expect(units).not.toBeNull();
@@ -102,8 +111,8 @@ describe("serpentSubBytesNarration", () => {
   it("returns null on wrong-length bytes state", () => {
     const frame = makeFrame({
       stepType: "serpent.sub-bytes@1",
-      stateBefore: bytesState(new Uint8Array(4)),
-      stateAfter: bytesState(new Uint8Array(4)),
+      before: new Uint8Array(4),
+      after: new Uint8Array(4),
     });
     expect(serpentSubBytesNarration(frame)).toBeNull();
   });
@@ -123,8 +132,8 @@ describe("serpentAddRoundKeyNarration", () => {
     const frame = makeFrame({
       stepType: "serpent.add-round-key@1",
       params: { roundKeyAux: "roundKey.7" },
-      stateBefore: bytesState(before),
-      stateAfter: bytesState(after),
+      before,
+      after,
       auxRead,
     });
     const units = serpentAddRoundKeyNarration(frame);
@@ -143,8 +152,8 @@ describe("serpentAddRoundKeyNarration", () => {
     const frame = makeFrame({
       stepType: "serpent.add-round-key@1",
       params: { roundKeyAux: "roundKey.0" },
-      stateBefore: bytesState(new Uint8Array(16)),
-      stateAfter: bytesState(new Uint8Array(16)),
+      before: new Uint8Array(16),
+      after: new Uint8Array(16),
     });
     expect(serpentAddRoundKeyNarration(frame)).toBeNull();
   });
@@ -174,8 +183,8 @@ describe("serpentBitPermutationNarration", () => {
     const frame = makeFrame({
       stepType: "serpent.bit-permutation@1",
       params: { table, label: "IP" },
-      stateBefore: bytesState(before),
-      stateAfter: bytesState(after),
+      before,
+      after,
     });
     const units = serpentBitPermutationNarration(frame);
     expect(units).not.toBeNull();
@@ -194,8 +203,8 @@ describe("serpentBitPermutationNarration", () => {
     const frame = makeFrame({
       stepType: "serpent.bit-permutation@1",
       params: { table },
-      stateBefore: bytesState(before),
-      stateAfter: bytesState(after),
+      before,
+      after,
     });
     const units = serpentBitPermutationNarration(frame);
     if (!units) {
@@ -216,8 +225,8 @@ describe("serpentBitPermutationNarration", () => {
     const frame = makeFrame({
       stepType: "serpent.bit-permutation@1",
       params: { table },
-      stateBefore: bytesState(before),
-      stateAfter: bytesState(after),
+      before,
+      after,
     });
     const units = serpentBitPermutationNarration(frame);
     if (!units) {
@@ -237,8 +246,8 @@ describe("serpentBitPermutationNarration", () => {
     const frame = makeFrame({
       stepType: "serpent.bit-permutation@1",
       params: { table: [0, 1, 2] }, // wrong length
-      stateBefore: bytesState(new Uint8Array(16)),
-      stateAfter: bytesState(new Uint8Array(16)),
+      before: new Uint8Array(16),
+      after: new Uint8Array(16),
     });
     expect(serpentBitPermutationNarration(frame)).toBeNull();
   });

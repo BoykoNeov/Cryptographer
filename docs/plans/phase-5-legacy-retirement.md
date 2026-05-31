@@ -59,7 +59,7 @@ user-required follow-up to B4). Advisor-confirmed.
 | 5.3b | Port-wire Speck + Serpent specs (declare explicit `portInputs` on round-body leaves) so `inferPortEdges` owns their spine + the S2(f) gate skips legacy inference for them. **Load-bearing spike FIRST:** declaring `portInputs` may flip the runtime from implicit state-thread to explicit port-resolution (runtime.ts:343-347) — diff the trace on ONE Speck round leaf to confirm KAT byte-equality before committing the approach; if not byte-equal, 5.3b becomes native Speck/Serpent decomposition. Arc size hinges on this. | **DONE 2026-05-31** |
 | 5.3c | Migrate value/narration reads off `stateBefore`/`stateAfter` → frame ports: `edge-value-lookup` (endpoints + block-chips; isolate the toy-only rejoin), narration ×6, `StepStrip`, `RunExplorerModal`. | **DONE 2026-05-31** |
 | 5.3d | **Port-native Feistel/swap visualization rebuild** (the obligatory user-required follow-up). New DES-port-native viz reading `portInputs`/`portOutputs`. **Independent of 5.3e** (the old components are toy-only). | **DONE 2026-05-31** |
-| 5.3e | **Final removal.** Delete the old toy-only Feistel components (`RejoinFrameView`/`FeistelTrackContext`/`FeistelMiniDiagram`) + toy + feistel runtime walk + `FeistelRoundGroup`/`BranchTrack`/`CombineKind`; delete `stateBefore`/`stateAfter`, `inferStateEdges`, `dropAuxOnlyStateEdges`, `BytesView`, the legacy `port-projection` bridge; collapse `BytesState`/`State`/`StateShape`. Strictly after 5.3b + 5.3c. **Risk:** `inferStateEdges`'s empty-group-as-node case (graph.ts:1063-1071 — a cleared round in the editor) has no port-flow analogue → re-implement or accept as editor-only regression. | **Batches 1–3 DONE 2026-05-31** (`dd279be` + B2 + B3); Batch 4 sequenced |
+| 5.3e | **Final removal.** Delete the old toy-only Feistel components (`RejoinFrameView`/`FeistelTrackContext`/`FeistelMiniDiagram`) + toy + feistel runtime walk + `FeistelRoundGroup`/`BranchTrack`/`CombineKind`; delete `stateBefore`/`stateAfter`, `inferStateEdges`, `dropAuxOnlyStateEdges`, `BytesView`, the legacy `port-projection` bridge; collapse `BytesState`/`State`/`StateShape`. Strictly after 5.3b + 5.3c. **Risk:** `inferStateEdges`'s empty-group-as-node case (graph.ts:1063-1071 — a cleared round in the editor) has no port-flow analogue → re-implement or accept as editor-only regression. | **DONE 2026-05-31** (Batches 1–4) — Slice 5.3e complete |
 | — | Feistel types + toy fixture: **no longer a separate "next phase"** — folded into 5.3d (rebuild) + 5.3e (delete). Order of 5.3d vs 5.3e is a judgment call (rebuild-as-reference first, or clean-slate then rebuild from git history), not a dependency. | folded into 5.3d/e |
 
 ## Slice 5.0 — what shipped
@@ -416,7 +416,7 @@ concat's argument order, so it stays correct across encrypt / decrypt / edits.
 - **Out of scope**: graph view (B4's round-group render is user-confirmed good),
   scrubber track badges (N/A for port-native rounds).
 
-## Slice 5.3e — in progress (Batches 1–3 shipped 2026-05-31)
+## Slice 5.3e — COMPLETE (all 4 batches shipped 2026-05-31)
 
 The final removal, split into **4 batches** (the one-liner spanned the runtime,
 types, graph, every UI surface, and the State-shape collapse — too broad for one
@@ -570,16 +570,84 @@ field/`State`-type collapse) lands last in its own commit.
   reads cleanly connected, NOT stranded (the legacy spine arrow was a redundant
   duplicate of the always-rendered history-seed arrow). AES proven by the probe.
 
-**Batch 4 (sequenced, next session):**
-- **Batch 4 — field + `State`-type collapse (irreversible, own commit).** Delete
-  `stateBefore` / `stateAfter` from `TraceFrame` + the runtime construction
-  (incl. `coerceFrame`); `frame-state.ts` returns null on the field fallback
-  (AES / SHA-256 step strip shows "(no state)" — **user-accepted** at Batch-1
-  planning); collapse `State` / `StateShape` / `BytesState` to the bytes floor
-  (`State` survives as the runtime-internal thread type). Retarget
-  `runtime-ported-dispatch-coercion` (stateBefore/After → ports) + drop
-  `trace-initial-state`'s one `frames[0].stateBefore` assertion. KAT gate +
-  browser smoke.
+**Batch 4 SHIPPED (2026-05-31)** — *field deletion + `State`-type confirmation
+(irreversible)*:
+
+- **The deletion.** Removed `stateBefore` / `stateAfter` from `TraceFrame`
+  (`types.ts`) + their runtime construction: the per-leaf frame (the line-488
+  `stateBefore` capture + the 924/925 assignments), and the `__coerce__` frame's
+  two field lines (the `beforeBytes`/`afterBytes` locals SURVIVE — they feed the
+  coerce frame's `portInputs`/`portOutputs`). `frame-state.ts`'s
+  `frameStateInBytes`/`frameStateOutBytes` now return `portInputs/portOutputs.get
+  ("state") ?? null` (the field fallback is gone). `port-projection.ts`'s two
+  `TraceFrame["stateBefore"]` type aliases → `State`.
+- **`State`-type collapse = no-op (advisor-confirmed).** The types were ALREADY
+  at the bytes floor (5.0/5.1): `StateShape = "bytes"`, `BytesState = { shape:
+  "bytes"; bytes }`, `State = BytesState`. Removing the `shape` discriminant
+  would churn 566 `.shape`/`{shape:"bytes"}` sites across 132 files for zero
+  semantic gain and is exactly the mechanical-error risk to keep OUT of the
+  irreversible commit — so it was NOT done. `State` survives verbatim as the
+  runtime-internal thread type (`cloneState` at runtime.ts:130/444/446/1395).
+  **The field deletion IS the Batch-4 type work.**
+- **Accepted regression (user-confirmed at Batch-1 planning, browser-verified
+  here):** the cipher-agnostic `"state"`-keyed surfaces (step-strip thumbnails,
+  the graph value inspector via `lookupNodeValue`, `RunExplorerModal` tiles) now
+  read null → "(no state)" for any leaf with no `"state"` port — that's EVERY
+  native-AES leaf and all SHA-256 primitives (their payloads ride `output`/`a`/
+  `input`/… ports). **PortFlowView — the main linear inspector — is UNAFFECTED**
+  (it reads `portInputs`/`portOutputs` directly by real port name). DES F-leaves
+  (named `"state"`) keep showing honest round-local bytes. The uniform fix
+  (resolve each leaf's real output port by name) is the deferred port-aware
+  inspector (Slice 2.9c-e). Pre-Batch-4 these surfaces showed only the STALE
+  leftover threaded state for native-port leaves, so "(no state)" is strictly
+  more honest.
+- **Test break-set (the real bulk — 85 tsc errors across 21 files, triaged):**
+  - **Narration test frames** (`narration-padding`/`serpent`/`speck`,
+    `step-narration`) migrated from `stateBefore`/`stateAfter` overrides to
+    `portInputs`/`portOutputs` keyed `"state"` (the migrated narrators read the
+    `frameState*` helpers, which now need the port). `narration-aux` +
+    `step-description-narration-override` just dropped the fields (their
+    consumers read aux/doc, not state). The padding "returns null when not
+    BytesState" test (dead `matrix4x4-bytes` premise) was deleted.
+  - **Golden frame-streams retargeted to `frameStateOutBytes`** (byte-identical
+    for hybrid-ported round frames): Speck (`key-schedule=(no-state)` since it's
+    aux-only) + Serpent (the 6 SHA-256 digests **regenerated** — verified the
+    ONLY frame that flipped is the aux-only `key-expansion`; all 98 round/IP/FP
+    frames byte-identical, KAT suite independently guards correctness).
+  - **Coercion test** → `portInputs`/`portOutputs` keyed by `portName`.
+  - **for-each-subgraph fork** (the genuine judgment call, advisor-reviewed):
+    `-outer` (item-array) + `-with-history` reframed onto the surviving
+    `finalState` (which discriminates seeding/threading). The `-toy` inner XOR
+    fixture's threading invariant couldn't move to `finalState` (XOR self-inverse
+    → `finalState = s0^c` whether threaded or re-seeded), so its body leaf
+    `xorWithConstant` was **converted to a hybrid-ported step** (`meta.stateInput
+    /OutputPort = "state"`, `portedDispatchEnabled` on its 3 runSpec calls) — the
+    invariant now reads the captured `"state"` port via `frameStateIn/OutBytes`,
+    XOR semantics + all values preserved. The nested `increment` toy stays legacy
+    (preserving legacy-dispatch coverage), reframed onto `finalState.bytes[0]===0x13`.
+  - **`node-value-lookup` + `provenance-serpent`** (surfaced post-deletion, not
+    in the static break-set): the value inspector now returns `"missing"` for
+    native-AES leaves (reframed to assert that + that block resolution still
+    selects a different per-block frame); the serpent provenance bounds-guard
+    needs a 16-byte `"state"` port present (re-added to its `makeBytesFrame`).
+  - **`trace-initial-state`**: deleted the pre-deletion `helper==field`
+    characterization corpus (its job — proving migration safety — is moot once
+    the field is gone); kept the field-free `initialState`/input-pill tests +
+    added a slim regime pin (SHA-256 → null every frame; DES → reads the honest
+    `"state"` F-leaf port).
+  - ~30 doc-comments naming the field as live behavior truthed-up.
+- **Gate:** `npm run check` GREEN — biome clean, tsc 0 errors, **2237 tests /
+  191 files** (−5 vs B3: deleted characterization/equivalence assertions),
+  build **621.72 KB raw / 183.37 KB gz**. No `schemaVersion` bump (trace frames
+  are not persisted — `document-schema.ts` confirmed field-free). **Browser
+  smoke DONE** (throwaway Playwright, 3/3 green): AES-128 (FIPS-197 C.1 CT
+  `69c4e0d8…`) — PortFlowView renders full port-row bytes, step-strip
+  "(no state)" thumbnails don't crash; SHA-256 `abc` digest; DES (FIPS 46-3 CT
+  `85e813540f0ab405`); all three view tabs error-free for each.
+
+**Slice 5.3e COMPLETE** (Batches 1–4 shipped). With the fields, the toy
+scaffolding, BytesView, and the legacy state-edge inference all gone, the trace
+is port-flow-only end to end.
 
 ## Verification (for 5.1+)
 

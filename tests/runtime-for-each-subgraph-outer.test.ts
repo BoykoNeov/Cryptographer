@@ -101,7 +101,7 @@ const outerToySpec: CipherSpec = {
 };
 
 describe("runtime — for-each-subgraph item-array mode (Slice 2.0b)", () => {
-  it("3 blocks × 1 body leaf produces 3 :r{i} frames with per-block stateBefore", () => {
+  it("3 blocks × 1 body leaf produces 3 :r{i} frames; finalState concats per-block outputs", () => {
     const initial: BytesState = {
       shape: "bytes",
       // 3 blocks: [10..13][20..23][30..33]
@@ -126,28 +126,15 @@ describe("runtime — for-each-subgraph item-array mode (Slice 2.0b)", () => {
       expect(canonicalStepId(f.stepId)).toBe("xor");
     }
 
-    // Per-iteration stateBefore = the block's bytes (NOT the previous
-    // iteration's body output — that's state-thread mode, the OTHER mode).
-    // Each iteration is independent of the others' final state.
-    const expectStateBefore = (i: number, want: readonly number[]): void => {
-      const f = trace.frames[i];
-      if (!f || f.stateBefore.shape !== "bytes") throw new Error(`frame ${i} shape`);
-      expect(Array.from(f.stateBefore.bytes)).toEqual(want);
-    };
-    expectStateBefore(0, [0x10, 0x11, 0x12, 0x13]);
-    expectStateBefore(1, [0x20, 0x21, 0x22, 0x23]);
-    expectStateBefore(2, [0x30, 0x31, 0x32, 0x33]);
-
-    // Per-iteration stateAfter = block ^ constant.
-    const expectStateAfter = (i: number, want: readonly number[]): void => {
-      const f = trace.frames[i];
-      if (!f || f.stateAfter.shape !== "bytes") throw new Error(`frame ${i} shape`);
-      expect(Array.from(f.stateAfter.bytes)).toEqual(want);
-    };
-    expectStateAfter(0, [0x10 ^ 0x01, 0x11 ^ 0x02, 0x12 ^ 0x03, 0x13 ^ 0x04]);
-    expectStateAfter(1, [0x20 ^ 0x01, 0x21 ^ 0x02, 0x22 ^ 0x03, 0x23 ^ 0x04]);
-    expectStateAfter(2, [0x30 ^ 0x01, 0x31 ^ 0x02, 0x32 ^ 0x03, 0x33 ^ 0x04]);
-
+    // Per-iteration seeding + transform are verified through the surviving
+    // `finalState` (the per-frame `stateBefore`/`stateAfter` State snapshots
+    // retired in Slice 5.3e Batch 4). In item-array mode each iteration is
+    // independent — seeded from its OWN block (NOT the previous body output) —
+    // so `finalState` is the concat of each block ^ constant. That concat
+    // discriminates BOTH per-block seeding (a mis-seeded block would change
+    // its slice) AND the transform: it could not hold if any block were seeded
+    // from the wrong source or transformed wrong.
+    //
     // Final state: concat of per-iteration outputs as a flat BytesState.
     // This is what the node "writes back" to parent-scope state at exit
     // — the legacy concat-blocks step becomes redundant in port-native

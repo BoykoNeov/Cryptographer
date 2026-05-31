@@ -43,6 +43,7 @@ import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { speck32_64BeDecryptSpec } from "@/ciphers/speck-32-64-be-decrypt";
 import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
 import { speck32_64LeDecryptSpec } from "@/ciphers/speck-32-64-le-decrypt";
+import { frameStateOutBytes } from "@/core/frame-state";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
 import { INPUT_SOURCE_ID } from "@/core/types";
@@ -61,8 +62,13 @@ const LE_CIPHERTEXT = "f24268a8";
 
 // ─── Frame-stream helper ───────────────────────────────────────────────
 
-/** Run a Speck spec under ported dispatch and render its per-frame
- *  `stateAfter` as a `stepId=hex|…` stream for golden comparison. */
+/** Run a Speck spec under ported dispatch and render its per-frame `"state"`
+ *  output port as a `stepId=hex|…` stream for golden comparison. The two ARX
+ *  rounds name their output port `"state"`, so `frameStateOutBytes` returns
+ *  the honest per-round block byte-identical to the pre-5.3e `stateAfter`
+ *  field. The aux-only key-schedule frame has NO `"state"` port (its outputs
+ *  are `roundKey.*`), so it renders `(no-state)` — the honest "no state thread
+ *  here" reading, replacing the old threaded-plaintext passthrough value. */
 const frameStream = (spec: CipherSpec, stateHex: string, keyHex: string): string => {
   const trace = runSpec(spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(stateHex)),
@@ -70,10 +76,10 @@ const frameStream = (spec: CipherSpec, stateHex: string, keyHex: string): string
     portedDispatchEnabled: true,
   });
   return trace.frames
-    .map(
-      (f) =>
-        `${f.stepId}=${f.stateAfter.shape === "bytes" ? hexFromBytes(f.stateAfter.bytes) : `?${f.stateAfter.shape}`}`,
-    )
+    .map((f) => {
+      const out = frameStateOutBytes(f);
+      return `${f.stepId}=${out ? hexFromBytes(out) : "(no-state)"}`;
+    })
     .join("|");
 };
 
@@ -147,7 +153,7 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
         stateHex: BE_PLAINTEXT,
         keyHex: BE_KEY,
         stream:
-          "key-schedule=6574694c|round.1=5316f627|round.2=37dfef40|round.3=ccd271d1|round.4=0332c477|round.5=416450bb|round.6=6edf2c32|round.7=e786574e|round.8=a9c6f4ff|round.9=6db8be47|round.10=6111980f|round.11=cc25ac1b|round.12=aec51eab|round.13=44833e2f|round.14=9fbc6700|round.15=a6283a29|round.16=780b90af|round.17=202b6295|round.18=361fbc4a|round.19=172de607|round.20=7a67e278|round.21=3345baa6|round.22=a86842f2",
+          "key-schedule=(no-state)|round.1=5316f627|round.2=37dfef40|round.3=ccd271d1|round.4=0332c477|round.5=416450bb|round.6=6edf2c32|round.7=e786574e|round.8=a9c6f4ff|round.9=6db8be47|round.10=6111980f|round.11=cc25ac1b|round.12=aec51eab|round.13=44833e2f|round.14=9fbc6700|round.15=a6283a29|round.16=780b90af|round.17=202b6295|round.18=361fbc4a|round.19=172de607|round.20=7a67e278|round.21=3345baa6|round.22=a86842f2",
       },
       {
         label: "BE-paper decrypt",
@@ -155,7 +161,7 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
         stateHex: BE_CIPHERTEXT,
         keyHex: BE_KEY,
         stream:
-          "key-schedule=a86842f2|round-inverse.1=3345baa6|round-inverse.2=7a67e278|round-inverse.3=172de607|round-inverse.4=361fbc4a|round-inverse.5=202b6295|round-inverse.6=780b90af|round-inverse.7=a6283a29|round-inverse.8=9fbc6700|round-inverse.9=44833e2f|round-inverse.10=aec51eab|round-inverse.11=cc25ac1b|round-inverse.12=6111980f|round-inverse.13=6db8be47|round-inverse.14=a9c6f4ff|round-inverse.15=e786574e|round-inverse.16=6edf2c32|round-inverse.17=416450bb|round-inverse.18=0332c477|round-inverse.19=ccd271d1|round-inverse.20=37dfef40|round-inverse.21=5316f627|round-inverse.22=6574694c",
+          "key-schedule=(no-state)|round-inverse.1=3345baa6|round-inverse.2=7a67e278|round-inverse.3=172de607|round-inverse.4=361fbc4a|round-inverse.5=202b6295|round-inverse.6=780b90af|round-inverse.7=a6283a29|round-inverse.8=9fbc6700|round-inverse.9=44833e2f|round-inverse.10=aec51eab|round-inverse.11=cc25ac1b|round-inverse.12=6111980f|round-inverse.13=6db8be47|round-inverse.14=a9c6f4ff|round-inverse.15=e786574e|round-inverse.16=6edf2c32|round-inverse.17=416450bb|round-inverse.18=0332c477|round-inverse.19=ccd271d1|round-inverse.20=37dfef40|round-inverse.21=5316f627|round-inverse.22=6574694c",
       },
       {
         label: "LE-NSA encrypt",
@@ -163,7 +169,7 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
         stateHex: LE_PLAINTEXT,
         keyHex: LE_KEY,
         stream:
-          "key-schedule=4c697465|round.1=27f61653|round.2=40efdf37|round.3=d171d2cc|round.4=77c43203|round.5=bb506441|round.6=322cdf6e|round.7=4e5786e7|round.8=fff4c6a9|round.9=47beb86d|round.10=0f981161|round.11=1bac25cc|round.12=ab1ec5ae|round.13=2f3e8344|round.14=0067bc9f|round.15=293a28a6|round.16=af900b78|round.17=95622b20|round.18=4abc1f36|round.19=07e62d17|round.20=78e2677a|round.21=a6ba4533|round.22=f24268a8",
+          "key-schedule=(no-state)|round.1=27f61653|round.2=40efdf37|round.3=d171d2cc|round.4=77c43203|round.5=bb506441|round.6=322cdf6e|round.7=4e5786e7|round.8=fff4c6a9|round.9=47beb86d|round.10=0f981161|round.11=1bac25cc|round.12=ab1ec5ae|round.13=2f3e8344|round.14=0067bc9f|round.15=293a28a6|round.16=af900b78|round.17=95622b20|round.18=4abc1f36|round.19=07e62d17|round.20=78e2677a|round.21=a6ba4533|round.22=f24268a8",
       },
       {
         label: "LE-NSA decrypt",
@@ -171,7 +177,7 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
         stateHex: LE_CIPHERTEXT,
         keyHex: LE_KEY,
         stream:
-          "key-schedule=f24268a8|round-inverse.1=a6ba4533|round-inverse.2=78e2677a|round-inverse.3=07e62d17|round-inverse.4=4abc1f36|round-inverse.5=95622b20|round-inverse.6=af900b78|round-inverse.7=293a28a6|round-inverse.8=0067bc9f|round-inverse.9=2f3e8344|round-inverse.10=ab1ec5ae|round-inverse.11=1bac25cc|round-inverse.12=0f981161|round-inverse.13=47beb86d|round-inverse.14=fff4c6a9|round-inverse.15=4e5786e7|round-inverse.16=322cdf6e|round-inverse.17=bb506441|round-inverse.18=77c43203|round-inverse.19=d171d2cc|round-inverse.20=40efdf37|round-inverse.21=27f61653|round-inverse.22=4c697465",
+          "key-schedule=(no-state)|round-inverse.1=a6ba4533|round-inverse.2=78e2677a|round-inverse.3=07e62d17|round-inverse.4=4abc1f36|round-inverse.5=95622b20|round-inverse.6=af900b78|round-inverse.7=293a28a6|round-inverse.8=0067bc9f|round-inverse.9=2f3e8344|round-inverse.10=ab1ec5ae|round-inverse.11=1bac25cc|round-inverse.12=0f981161|round-inverse.13=47beb86d|round-inverse.14=fff4c6a9|round-inverse.15=4e5786e7|round-inverse.16=322cdf6e|round-inverse.17=bb506441|round-inverse.18=77c43203|round-inverse.19=d171d2cc|round-inverse.20=40efdf37|round-inverse.21=27f61653|round-inverse.22=4c697465",
       },
     ];
 
@@ -275,10 +281,10 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
       expect(roundFrame.stepId).toBe("round.0");
       expect(roundFrame.stepType).toBe("speck.round@1");
       // round.0 here consumes roundKey.0 — identical math to round.1 of the
-      // full BE-paper encrypt, whose golden stateAfter is 0x5316f627.
-      expect(roundFrame.stateAfter.shape).toBe("bytes");
-      if (roundFrame.stateAfter.shape !== "bytes") return;
-      expect(hexFromBytes(roundFrame.stateAfter.bytes)).toBe("5316f627");
+      // full BE-paper encrypt, whose golden `"state"` output is 0x5316f627.
+      const roundOut = frameStateOutBytes(roundFrame);
+      expect(roundOut).not.toBeNull();
+      expect(hexFromBytes(roundOut ?? new Uint8Array())).toBe("5316f627");
       // The aux read of roundKey.0 is recorded on the native round's frame.
       expect([...roundFrame.auxRead.keys()]).toContain("roundKey.0");
     });

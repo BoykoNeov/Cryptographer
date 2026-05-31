@@ -40,10 +40,10 @@ import type { NarrationFn } from "./registry";
  * N is always in [1, blockSize] — pad NEVER produces a no-op (a fully-aligned
  * input gets a full extra block).
  *
- * Reads input length from `stateBefore.bytes.length` and output length from
- * `stateAfter.bytes.length`. The pad-length N is `after.length - before.length`
- * — equivalent to reading the last byte of the output, but cleaner
- * (no off-by-one risk).
+ * Reads input length from the `"state"` input port and output length from the
+ * `"state"` output port (via `frameStateInBytes`/`frameStateOutBytes`). The
+ * pad-length N is `after.length - before.length` — equivalent to reading the
+ * last byte of the output, but cleaner (no off-by-one risk).
  */
 export const pkcs7PadNarration: NarrationFn = (frame) => {
   const before = frameStateInBytes(frame);

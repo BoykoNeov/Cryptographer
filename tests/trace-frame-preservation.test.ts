@@ -33,8 +33,6 @@ const makeFrame = (index: number, stepId: string): TraceFrame => ({
   stepId,
   stepType: "test.noop@1",
   params: null,
-  stateBefore: emptyState(),
-  stateAfter: emptyState(),
   auxRead: new Map(),
   auxWritten: new Map(),
 });

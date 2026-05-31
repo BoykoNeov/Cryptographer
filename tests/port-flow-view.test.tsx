@@ -74,8 +74,6 @@ describe("isPortNativeFrame", () => {
       stepId: "x",
       stepType: "generic.byte-substitution@1",
       params: {},
-      stateBefore: { shape: "bytes", bytes: new Uint8Array(0) },
-      stateAfter: { shape: "bytes", bytes: new Uint8Array(0) },
       auxRead: new Map(),
       auxWritten: new Map(),
     };
@@ -220,8 +218,6 @@ describe("PortFlowView — outputs-only frame", () => {
       stepId: "constant",
       stepType: "constant-load@1",
       params: { value: "0x6a09e667" },
-      stateBefore: { shape: "bytes", bytes: new Uint8Array(0) },
-      stateAfter: { shape: "bytes", bytes: new Uint8Array(0) },
       auxRead: new Map(),
       auxWritten: new Map(),
       portInputs: new Map(),

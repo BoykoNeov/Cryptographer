@@ -642,8 +642,16 @@ export type TraceFrame = {
   readonly stepId: string;
   readonly stepType: string;
   readonly params: Json;
-  readonly stateBefore: State;
-  readonly stateAfter: State;
+  // Phase 5 Slice 5.3e Batch 4 (2026-05-31) retired the per-frame
+  // `stateBefore`/`stateAfter` State snapshots. The honest per-step bytes now
+  // ride `portInputs`/`portOutputs` (every port-flow leaf names its primary
+  // payload `"state"`); the cipher's seed + result live on `Trace.initialState`
+  // / `Trace.finalState`. The runtime still threads a `State` internally (the
+  // `state` variable, `cloneState`) — it's just no longer published per frame.
+  // A leaf with no `"state"` port (SHA-256 primitives, native-AES `xor`/
+  // `byte-substitute`) therefore has no frame-level state reading at all; the
+  // cipher-agnostic surfaces (step strip, value inspector) show "(no state)"
+  // there — user-accepted, since PortFlowView reads the real ports directly.
   /** Aux entries that were read or written by this step. */
   readonly auxRead: ReadonlyMap<string, AuxValue>;
   readonly auxWritten: ReadonlyMap<string, AuxValue>;
@@ -969,9 +977,12 @@ export type ProjectionMetadata = {
    * `"bytes"`).
    */
   readonly stateLayout: StateShape;
-  /** Name of the input port that carries `stateBefore`. Convention: "state". */
+  /** Name of the input port the runtime projects the incoming threaded state
+   *  into. Convention: "state". (Pre-5.3e this carried the frame's
+   *  `stateBefore`; that field retired in Slice 5.3e Batch 4.) */
   readonly stateInputPort?: string;
-  /** Name of the output port that carries `stateAfter`. Convention: "state". */
+  /** Name of the output port the runtime reconstructs the outgoing threaded
+   *  state from. Convention: "state". (Pre-5.3e this carried `stateAfter`.) */
   readonly stateOutputPort?: string;
   /**
    * Function mapping the step's `params` to a `portName → auxKey` map for
@@ -1083,10 +1094,12 @@ export type StepRegistration =
  */
 export type LayoutTags = {
   /**
-   * The State shape the legacy frame's `stateBefore`/`stateAfter` carried.
-   * Post-Slice-5.1 this is always `"bytes"` — the field is retained for the
-   * surviving lifted-legacy steps (padding, aux, key-schedules) until the
-   * legacy contract is fully retired.
+   * The State shape the runtime reconstructs threaded state into across a
+   * ported step's projection. Post-Slice-5.1 this is always `"bytes"` — the
+   * field is retained for the surviving hybrid-ported steps (padding, aux,
+   * key-schedules) until the legacy contract is fully retired. (Pre-5.3e it
+   * described the shape the frame's `stateBefore`/`stateAfter` carried; those
+   * fields retired in Slice 5.3e Batch 4.)
    */
   readonly stateLayout: StateShape;
   /**

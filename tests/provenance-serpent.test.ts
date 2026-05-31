@@ -5,21 +5,24 @@
  * AddRoundKey and SubBytes.
  */
 
-import { makeBytesState } from "@/core/state/bytes";
 import type { AuxValue, TraceFrame } from "@/core/types";
 import { serpentAddRoundKeyProvenance, serpentSubBytesProvenance } from "@/ui/provenance/serpent";
 import { describe, expect, it } from "vitest";
 
+// The Serpent provenance fns bounds-check the cell index against the `"state"`
+// output port via `frameStateOutBytes` (port-first, Slice 5.3c; the
+// `stateAfter` State field retired in Slice 5.3e Batch 4). So a test frame
+// must expose a 16-byte `"state"` port for the upper-bound guard to fire.
 const makeBytesFrame = (overrides: Partial<TraceFrame> = {}): TraceFrame => ({
   index: 0,
   path: [],
   stepId: "test.step",
   stepType: "test",
   params: {},
-  stateBefore: makeBytesState(new Uint8Array(16)),
-  stateAfter: makeBytesState(new Uint8Array(16)),
   auxRead: new Map<string, AuxValue>(),
   auxWritten: new Map(),
+  portInputs: new Map([["state", new Uint8Array(16)]]),
+  portOutputs: new Map([["state", new Uint8Array(16)]]),
   ...overrides,
 });
 

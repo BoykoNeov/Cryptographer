@@ -77,9 +77,10 @@ type ThumbnailProps = {
 const Thumbnail = (props: ThumbnailProps) => {
   const fmt = useByteFormat();
   // The flat byte sequence of the step's after-state — the `"state"` output
-  // port (port-first, Slice 5.3c) with the legacy `stateAfter` field as the
-  // fallback until 5.3e retires it. `createMemo` because it's read twice in
-  // the JSX below (the `<Show when>` guard + the `<For>`).
+  // port (the `stateAfter` State field fallback retired in Slice 5.3e Batch 4,
+  // so a leaf with no `"state"` port renders an empty thumbnail / "(no state)";
+  // its bytes stay visible by real port name in PortFlowView). `createMemo`
+  // because it's read twice in the JSX below (the `<Show when>` + the `<For>`).
   const stateBytes = createMemo<readonly number[]>(() => {
     const f = props.frame;
     if (!f) return [];

@@ -90,7 +90,7 @@ export const portBytesToState = (bytes: Uint8Array, layout: StateShape): State =
   return bytesToState(bytes, { stateLayout: layout });
 };
 
-const stateToBytes = (state: TraceFrame["stateBefore"], _expected: StateShape): Uint8Array => {
+const stateToBytes = (state: State, _expected: StateShape): Uint8Array => {
   // Post-Slice-5.1 the only State shape is "bytes" (and `_expected` is
   // likewise always "bytes"), so there's nothing to assert — just take a
   // defensive copy. `cloneState` already produces a fresh Uint8Array per
@@ -99,7 +99,7 @@ const stateToBytes = (state: TraceFrame["stateBefore"], _expected: StateShape): 
   return new Uint8Array(state.bytes);
 };
 
-const bytesToState = (bytes: Uint8Array, _tags: LayoutTags): TraceFrame["stateBefore"] => {
+const bytesToState = (bytes: Uint8Array, _tags: LayoutTags): State => {
   // Post-Slice-5.1 the only State shape is "bytes" — wiring-determined
   // length, any length is legal. The consumer's own length assertions
   // (if any) gate beyond this.

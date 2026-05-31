@@ -354,8 +354,9 @@ export const desSBoxesNarration: NarrationFn = (frame) => {
  * the port I/O instead (`frame.portInputs` / `frame.portOutputs`). DES B4
  * pioneered the port-first read; Slice 5.3c lifted it into the shared
  * `frameStateInBytes` / `frameStateOutBytes` helpers (read the `"state"`
- * port, fall back to the legacy field until 5.3e retires it), so every
- * narrator now sources state through one definition.
+ * port; the legacy State-field fallback retired in Slice 5.3e Batch 4, so a
+ * leaf with no `"state"` port reads null), so every narrator now sources state
+ * through one definition.
  */
 
 /**

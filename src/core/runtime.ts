@@ -485,7 +485,6 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
       }
 
       // Leaf step.
-      const stateBefore = cloneState(state);
 
       // ─── Ported dispatch (universal-port-dataflow plan) ────────────────
       // When `portedDispatch` is on AND the registration is `kind: "ported"`
@@ -639,8 +638,8 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
         // (right-pad with zeros or truncate from the right per Q2) and
         // emit ONE synthetic `__coerce__` frame per affected port BEFORE
         // the consumer's leaf frame. The frame surfaces the morph via its
-        // stateBefore/stateAfter pair so the linear scrubber reads it
-        // for free (precedent: `__rejoin__`). Frames are flag-on-only;
+        // port I/O (`portInputs`/`portOutputs` keyed by `portName`) so the
+        // linear scrubber reads it for free. Frames are flag-on-only;
         // no shipped spec triggers coercion today (every shipped port's
         // declared byteLength matches its actual source — pinned by the
         // Slice 1.11 frame-parity matrix).
@@ -662,6 +661,9 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
           // contract as the consumer leaf and the rejoin frame.
           const coerceBaseId = `${node.id}:coerce:${portName}`;
           const coerceStepId = composeStepId(coerceBaseId, blockIndex, roundPath);
+          // Pre- and post-coercion byte payloads. These no longer feed a
+          // `stateBefore`/`stateAfter` pair (retired Slice 5.3e Batch 4) —
+          // they are the source for the frame's port I/O below.
           const beforeBytes: BytesState = {
             shape: "bytes",
             bytes: new Uint8Array(sourceBytes),
@@ -681,17 +683,13 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
               sourceLen: coerced.sourceLen,
               targetLen: coerced.targetLen,
             },
-            stateBefore: beforeBytes,
-            stateAfter: afterBytes,
             // Port I/O for the coercion morph (Slice 5.3c): the frame consumes
             // `portName` (pre-coercion source bytes) and produces `portName`
-            // (post-coercion bytes). The coerce narrator reads these instead of
-            // `stateBefore`/`stateAfter` (those fields retire in 5.3e; params
-            // carries the lengths but not the bytes the narrator renders).
-            // This also marks the frame port-native (`isPortNativeFrame`), so
-            // `FrameStateView` renders it in `PortFlowView` — harmless (coercion
-            // is flag-on-only / never shipped) and the input/output port rows
-            // read the morph better than a before/after state pair would.
+            // (post-coercion bytes). The coerce narrator reads these; it marks
+            // the frame port-native (`isPortNativeFrame`), so `FrameStateView`
+            // renders it in `PortFlowView` — harmless (coercion is flag-on-only
+            // / never shipped) and the input/output port rows read the morph
+            // better than a before/after state pair would.
             portInputs: new Map([[portName, beforeBytes.bytes]]),
             portOutputs: new Map([[portName, afterBytes.bytes]]),
             auxRead: new Map(),
@@ -921,8 +919,6 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
         stepId: emittedStepId,
         stepType: node.type,
         params: node.params,
-        stateBefore,
-        stateAfter: cloneState(state),
         auxRead,
         auxWritten,
         ...(auxReadMissing !== undefined ? { auxReadMissing } : {}),

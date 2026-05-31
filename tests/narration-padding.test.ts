@@ -11,7 +11,7 @@
 
 // @vitest-environment jsdom
 
-import type { AuxValue, BytesState, TraceFrame } from "@/core/types";
+import type { AuxValue, TraceFrame } from "@/core/types";
 import {
   iso78164PadNarration,
   iso78164UnpadNarration,
@@ -25,20 +25,30 @@ import { afterEach, describe, expect, it } from "vitest";
 
 afterEach(cleanup);
 
-const bytesState = (bytes: Uint8Array): BytesState => ({ shape: "bytes", bytes });
+const portMap = (bytes: Uint8Array): ReadonlyMap<string, Uint8Array> => new Map([["state", bytes]]);
 
-const makeFrame = (overrides: Partial<TraceFrame>): TraceFrame => ({
-  index: 0,
-  path: [],
-  stepId: "test.step",
-  stepType: "test",
-  params: { blockSize: 16 },
-  stateBefore: bytesState(new Uint8Array(0)),
-  stateAfter: bytesState(new Uint8Array(0)),
-  auxRead: new Map<string, AuxValue>(),
-  auxWritten: new Map(),
-  ...overrides,
-});
+// The padding narrators read their input/output lengths off the `"state"`
+// port via `frameStateInBytes` / `frameStateOutBytes` (port-first, Slice 5.3c;
+// the `stateBefore`/`stateAfter` State fields retired in Slice 5.3e Batch 4).
+// So a test frame surfaces its before/after bytes as the `"state"` port I/O —
+// `before` → `portInputs.get("state")`, `after` → `portOutputs.get("state")`.
+const makeFrame = (
+  overrides: Partial<TraceFrame> & { before?: Uint8Array; after?: Uint8Array },
+): TraceFrame => {
+  const { before, after, ...rest } = overrides;
+  return {
+    index: 0,
+    path: [],
+    stepId: "test.step",
+    stepType: "test",
+    params: { blockSize: 16 },
+    auxRead: new Map<string, AuxValue>(),
+    auxWritten: new Map(),
+    portInputs: portMap(before ?? new Uint8Array(0)),
+    portOutputs: portMap(after ?? new Uint8Array(0)),
+    ...rest,
+  };
+};
 
 const proseText = (Prose: (props: { fmt: "hex" }) => unknown): string => {
   const result = render(() => Prose({ fmt: "hex" }) as never);
@@ -58,8 +68,8 @@ describe("pkcs7PadNarration", () => {
     const units = pkcs7PadNarration(
       makeFrame({
         stepType: "generic.pkcs7-pad@1",
-        stateBefore: bytesState(before),
-        stateAfter: bytesState(after),
+        before,
+        after,
       }),
     );
     expect(units).not.toBeNull();
@@ -71,14 +81,6 @@ describe("pkcs7PadNarration", () => {
     expect(text).toContain("5 bytes");
     expect(text).toContain("16 byte"); // output length
     expect(text).toContain("11"); // pad length
-  });
-
-  it("returns null when stateBefore isn't BytesState", () => {
-    const frame = makeFrame({
-      stepType: "generic.pkcs7-pad@1",
-      stateBefore: { shape: "matrix4x4-bytes", bytes: new Uint8Array(16) },
-    } as never);
-    expect(pkcs7PadNarration(frame)).toBeNull();
   });
 });
 
@@ -93,8 +95,8 @@ describe("pkcs7UnpadNarration", () => {
     const units = pkcs7UnpadNarration(
       makeFrame({
         stepType: "generic.pkcs7-unpad@1",
-        stateBefore: bytesState(before),
-        stateAfter: bytesState(after),
+        before,
+        after,
       }),
     );
     expect(units).not.toBeNull();
@@ -118,8 +120,8 @@ describe("zeroPadNarration", () => {
     const units = zeroPadNarration(
       makeFrame({
         stepType: "generic.zero-pad@1",
-        stateBefore: bytesState(before),
-        stateAfter: bytesState(after),
+        before,
+        after,
       }),
     );
     expect(units).not.toBeNull();
@@ -138,8 +140,8 @@ describe("zeroPadNarration", () => {
     const units = zeroPadNarration(
       makeFrame({
         stepType: "generic.zero-pad@1",
-        stateBefore: bytesState(before),
-        stateAfter: bytesState(after),
+        before,
+        after,
       }),
     );
     expect(units).not.toBeNull();
@@ -159,8 +161,8 @@ describe("zeroUnpadNarration", () => {
     const units = zeroUnpadNarration(
       makeFrame({
         stepType: "generic.zero-unpad@1",
-        stateBefore: bytesState(before),
-        stateAfter: bytesState(after),
+        before,
+        after,
       }),
     );
     expect(units).not.toBeNull();
@@ -184,8 +186,8 @@ describe("iso78164PadNarration", () => {
     const units = iso78164PadNarration(
       makeFrame({
         stepType: "generic.iso7816-4-pad@1",
-        stateBefore: bytesState(before),
-        stateAfter: bytesState(after),
+        before,
+        after,
       }),
     );
     expect(units).not.toBeNull();
@@ -210,8 +212,8 @@ describe("iso78164UnpadNarration", () => {
     const units = iso78164UnpadNarration(
       makeFrame({
         stepType: "generic.iso7816-4-unpad@1",
-        stateBefore: bytesState(before),
-        stateAfter: bytesState(after),
+        before,
+        after,
       }),
     );
     expect(units).not.toBeNull();

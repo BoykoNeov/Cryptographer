@@ -12,23 +12,22 @@
 
 // @vitest-environment jsdom
 
-import type { AuxValue, BytesState, TraceFrame } from "@/core/types";
+import type { AuxValue, TraceFrame } from "@/core/types";
 import { auxCopyNarration, auxLoadNarration, auxXorNarration } from "@/ui/narration/aux-primitives";
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it } from "vitest";
 
 afterEach(cleanup);
 
-const bytesState = (bytes: Uint8Array): BytesState => ({ shape: "bytes", bytes });
-
+// The aux-primitive narrators read `auxRead` / `auxWritten`, never the state
+// thread — so a test frame needs no port I/O (and the stateBefore/stateAfter
+// State fields retired in Slice 5.3e Batch 4).
 const makeFrame = (overrides: Partial<TraceFrame>): TraceFrame => ({
   index: 0,
   path: [],
   stepId: "test.step",
   stepType: "test",
   params: {},
-  stateBefore: bytesState(new Uint8Array(0)),
-  stateAfter: bytesState(new Uint8Array(0)),
   auxRead: new Map<string, AuxValue>(),
   auxWritten: new Map(),
   ...overrides,
