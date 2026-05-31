@@ -468,9 +468,18 @@ field/`State`-type collapse) lands last in its own commit.
 **Batches 2–4 (sequenced, next session):**
 - **Batch 2 — BytesView.** Delete `BytesView` + its `App.tsx` `FrameStateView`
   dispatch arm + the toy-only provenance reads. Unblocked now (the only
-  `BytesView` consumer, the toy, is gone). **Do the DES + AES graph-view browser
-  smoke FIRST** — the ~700-line `GraphView` deletion in Batch 1 is
-  jsdom-invisible (`feedback_visual_smoke_vs_property_tests`).
+  `BytesView` consumer, the toy, is gone). **Graph-view browser smoke DONE +
+  PASSED (2026-05-31)** — the ~838-line `GraphView` deletion in Batch 1 is
+  jsdom-invisible (`feedback_visual_smoke_vs_property_tests`), so a throwaway
+  Chromium spec drove both AES-128 (generic graph, KAT correct, 0 errors) and
+  **DES** (now port-native group-per-round — `split → expand-R → xor-K →
+  s-boxes → p-permute → fxor → recombine` leaves, state spine + key-schedule aux
+  feeds + the L-half source-colored crossing edge, KAT `85e813540f0ab405`, 0
+  console/page errors). DES falls through the generic group renderer = the
+  intended B4 outcome; the deleted feistel-track rendering is gone and not
+  missed. (Gotcha: graph container structure is spec-driven/immediate but the
+  ciphertext is trace-driven/200ms-debounced — wait on the DES KAT result before
+  screenshotting or you capture a stale pre-rerun ciphertext.)
 - **Batch 3 — graph state-edge inference.** Delete `inferStateEdges` /
   `dropAuxOnlyStateEdges` + the `GraphView` call sites; retarget the deferred
   toy-string fixtures in `aux-graph-derivation` /
