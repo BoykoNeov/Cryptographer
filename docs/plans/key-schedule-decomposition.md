@@ -161,7 +161,21 @@ than a new pure-port aux-writer; a general `aux-store-bytes@1` is deferred).
 > `0c9f3a6` builder). Gate green (biome + tsc + 2227 vitest + vite build);
 > KAT byte-equal across BE-paper / LE-NSA × encrypt / decrypt; decomposition
 > parity test pins published `roundKey.0..21` byte-equal to the legacy
-> monolith under both byte orders. **K2b/K2c NOT STARTED.**
+> monolith under both byte orders.
+>
+> **K2b SHIPPED 2026-06-01** — blast-radius cleanup landed as a thin
+> hygiene slice (K2a's `feat` commit had already preemptively retargeted
+> the aux-graph derivation tests; the remaining work was confirming the
+> advisor-decided "keeps" with updated framing). Narration allowlist
+> gained `speck.publish-round-keys@1` (parity with the AES analog), the
+> stale `speck.key-schedule@1` allowlist comment was refreshed to
+> acknowledge K2a's "no shipped spec uses this leaf" status (parallel to
+> the AES @1/@2 comment), the `irreducible 6 entries` docstring rot was
+> corrected, the narration-contract size pin bumped 8 → 9, and
+> `SpeckKeyScheduleBlock`'s header was reframed as fallback-only (per
+> the K2 advisor pass: keep for pre-K2 saved docs + palette-droppable
+> legacy executor). Gate green (biome + tsc + 2227 vitest + vite build).
+> **K2c NOT STARTED.**
 
 **Recurrence (Beaulieu et al. 2013 §3), per iteration `i = 0 … rounds-2`:**
 `l_{i+m-1} = (k_i + ROR(l_i, alpha)) ⊕ i` ; `k_{i+1} = ROL(k_i, beta) ⊕ l_{i+m-1}`.

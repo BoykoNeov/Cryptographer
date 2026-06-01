@@ -139,18 +139,20 @@ export const lookupNarration = (stepType: string): NarrationFn | null =>
 export const hasNarrationFn = (stepType: string): boolean => REGISTRY.has(stepType);
 
 /**
- * Step types that *intentionally* have no narration fn. After Phase 3 the
- * list is at its irreducible 6 entries — 4 key-expansion step types
- * (covered by `<KeyScheduleExplorer />` with much richer per-stage
- * narration than the unit-list this registry produces) plus the
- * 2 bit-level Serpent linear transforms (where byte-level prose would
- * mislead — see below).
+ * Step types that *intentionally* have no narration fn. The list grew
+ * past its "Phase 3 irreducible 6" baseline as key-schedule decomposition
+ * (K1, K2) split each monolithic schedule into a tree of port-native
+ * leaves and introduced a meta-bearing aux-publish tail per cipher — the
+ * leaves narrate via their own `narrationOverride`, the tails are
+ * identity passthroughs with no per-frame prose worth a unit fn.
  *
- * Reasons for the irreducible set:
+ * Reasons for the current set:
  *
  *   - **Serpent key expansion** (`serpent.key-expansion@1`) — covered by
  *     `<KeyScheduleExplorer />` with much richer per-stage narration than the
  *     unit-list this registry produces. Narrating it again would double up.
+ *     (Slated for retirement under K3 — Serpent's key-schedule decomposition,
+ *     not yet started.)
  *   - **AES key expansion** (`aes.key-expansion@1/@2`) — NO LONGER covered by
  *     `<KeyScheduleExplorer />` (its AES branch was retired in
  *     key-schedule-decomposition K1c; the RotWord/SubWord/Rcon/word-XOR steps
@@ -160,9 +162,14 @@ export const hasNarrationFn = (stepType: string): boolean => REGISTRY.has(stepTy
  *     `aes-key-schedule-decomposition.test.ts` and for loading pre-K1 saved
  *     docs — so they are aux-only no-op steps with no narration to write.
  *     (Slated for deletion in a future release per `docs/versioning.md`.)
- *   - **Speck key schedule** (`speck.key-schedule@1`) — aux-only; not in
- *     `<KeyScheduleExplorer />` at all, so there is no richer surface, but the
- *     state-passthrough step has no per-frame value-prose worth a unit fn.
+ *   - **Speck key schedule** (`speck.key-schedule@1`) — analogous to the
+ *     AES @1/@2 entries above: NO LONGER used by any shipped spec post-K2a
+ *     (the Speck32/64 builder decomposes into a `key-schedule` GROUP of
+ *     port-native leaves, each carrying its own `narrationOverride`). The
+ *     monolithic executor survives registered as the KAT oracle for
+ *     `speck-32-64-key-schedule-decomposition.test.ts` and for loading
+ *     pre-K2 saved docs. Aux-only no-op; no per-frame value-prose to write.
+ *     (Slated for deletion in a future release per `docs/versioning.md`.)
  *
  *   - **Bit-level Serpent linear transforms**
  *     (`serpent.linear-transform@1`, `serpent.inv-linear-transform@1`)
@@ -197,6 +204,14 @@ export const NARRATION_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
   // interesting math is the recurrence leaves above it, each of which IS
   // narrated via its `narrationOverride`).
   "aes.publish-round-keys@1",
+  // The aux-publish tail of the DECOMPOSED Speck32/64 key schedule
+  // (key-schedule-decomposition K2a, 2026-06-01). Same posture as the AES
+  // analog above: an identity passthrough that mirrors the round-key words
+  // into aux. The interesting math (ROR / + mod 2¹⁶ / ⊕ / ROL / ⊕ per
+  // Beaulieu et al. 2013 §3) is in the recurrence leaves above it, each
+  // narrated via its own `narrationOverride`. Below the cell-shape gate
+  // anyway (`input: "any"`) — listed here for parity with the AES tail.
+  "speck.publish-round-keys@1",
   // Bit-level linear transforms — byte-level prose would be misleading.
   // (Bit-permutation is honest at byte granularity — narrated in Phase 2.)
   "serpent.linear-transform@1",

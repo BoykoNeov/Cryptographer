@@ -129,7 +129,7 @@ describe("narration-registry coverage contract", () => {
     expect(NARRATION_NO_OP_ALLOWLIST.has("serpent.bit-permutation@1")).toBe(false);
   });
 
-  it("allowlist size: 6 irreducible + DES key-schedule + AES publish-round-keys", () => {
+  it("allowlist size: 6 irreducible + DES key-schedule + AES/Speck publish-round-keys", () => {
     // Pins the current size:
     //   - 6 permanent entries (4 key-expansion step types covered by
     //     `<KeyScheduleExplorer />`, plus the 2 bit-level Serpent linear
@@ -142,11 +142,14 @@ describe("narration-registry coverage contract", () => {
     //     AES key schedule (key-schedule-decomposition K1a); an identity
     //     passthrough whose per-frame value-prose is the wrong surface (the
     //     narrated math is the recurrence leaves above it).
+    //   - `speck.publish-round-keys@1` — the same posture for the Speck32/64
+    //     decomposed schedule (key-schedule-decomposition K2a, 2026-06-01).
     //   - The `feistel.toy-add-k@1` toy entry was removed in Slice 5.3e
     //     with the Feistel scaffolding.
-    expect(NARRATION_NO_OP_ALLOWLIST.size).toBe(8);
+    expect(NARRATION_NO_OP_ALLOWLIST.size).toBe(9);
     expect(NARRATION_NO_OP_ALLOWLIST.has("des.key-schedule@1")).toBe(true);
     expect(NARRATION_NO_OP_ALLOWLIST.has("aes.publish-round-keys@1")).toBe(true);
+    expect(NARRATION_NO_OP_ALLOWLIST.has("speck.publish-round-keys@1")).toBe(true);
     // Negative assertion: the 6 round-body DES step types must NOT be on
     // the allowlist after Phase 4 (would mean we forgot to register a
     // narrator and the contract test's coverage check would lie).

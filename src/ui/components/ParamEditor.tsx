@@ -696,7 +696,17 @@ const AddRoundKeyBlock = (props: BlockProps) => {
 // editors — Speck has no S-box, and its "round constant" is just the
 // loop counter `i` XOR'd into the schedule (no table to edit).
 //
-// No ApplyAllRow: there's only one key-schedule step in any Speck spec.
+// **Post-K2a (2026-06-01) this block is FALLBACK-ONLY.** No shipped Speck
+// spec contains a `speck.key-schedule@1` leaf anymore — the four Speck32/64
+// specs (BE/LE × encrypt/decrypt) now route through the decomposed
+// `key-schedule` group built by `buildSpeck32_64KeyScheduleNative`. The
+// block survives so (a) pre-K2 saved docs that still carry the monolithic
+// leaf can be inspected, and (b) the palette-droppable legacy executor
+// (kept registered as the KAT oracle for the decomposition test) has a
+// usable editor when dropped manually. Per the K2 advisor pass.
+//
+// No ApplyAllRow: even on a pre-K2 spec there was only one key-schedule
+// step; the monolith was never duplicated.
 const SpeckKeyScheduleBlock = (props: BlockProps) => {
   const params = (): {
     keyAuxName?: string;
