@@ -2638,27 +2638,68 @@ verifies the new category-signal write actually flips the UI.
 
 **Next:** Slice 2.11 (KAT parity matrix; Phase 2 close).
 
-### Slice 2.11 — KAT parity matrix (Phase 2 close)
+### Slice 2.11 — multi-block SHA-256 + KAT parity matrix (Phase 2 close) — SHIPPED 2026-06-01
 
-**Goal:** comprehensive KAT coverage gating Phase 2 close.
+> **Status: GREEN 2026-06-01.** The KAT matrix's headline vectors (§A.2,
+> NIST-style long messages, the stress sweep) require **multi-block**
+> SHA-256, which the shipped spec did NOT have — it was single-block only
+> (≤55 bytes, UI-capped), and ≥56-byte input silently mis-hashed. The user
+> picked option **(A)**: build multi-block first, then the matrix. So Slice
+> 2.11 expanded into three commits:
+>
+> - **2.11a** (`5ed1e3e`) — `chainOutput` on the port-mode `iterate`: the
+>   honest dual of `chainInput`, harvesting the final carried chain value.
+>   The mechanism a fold-to-a-single-value needs. No SHA-256 change.
+> - **2.11b** (`1b1ab33`) — SHA-256 restructured as a **per-block fold**:
+>   the message schedule + 64 rounds + per-block final-add are wrapped in a
+>   port-mode `iterate` "blocks" whose carried CHAIN is the running hash H
+>   (`chainInput` = initial-H constant, `chainFeedback` = each block's new H,
+>   `chainOutput` = "digest"). FIPS 180-4 §6.2.2 fold. Single-block "abc"
+>   digest byte-identical (only stepIds gain `:b0`); padding unchanged (it
+>   already produced a multiple of 64). Graph fix: draw the iterate's
+>   `seedInput` loop-input edge (`length-append → blocks`) — its consumer is
+>   a nested container's `seedInput`, not a leaf, so it floated. Browser
+>   smoked. UI cap raised 55 → 512 bytes (legibility ceiling, not a SHA-256
+>   limit). Full stepId/structural test surface updated.
+> - **2.11c** (this slice) — the KAT parity matrix below + this status +
+>   memory.
 
-**Scope (sketched):**
+**`tests/sha-256-kat-matrix.test.ts` (shipped):**
 
-- `tests/sha-256-kat-matrix.test.ts`:
-  - FIPS 180-4 §A.1 single-block "abc" KAT.
-  - FIPS 180-4 §A.2 multi-block 448-bit message KAT.
-  - NIST CAVS short-message + long-message KATs (cross-checked with
-    `node:crypto.createHash('sha256')` per project's external-oracle
-    convention).
-  - Multi-block stress test: 10 MB random input, byte-equal to
-    `node:crypto` output (run guarded behind opt-in flag to keep
-    `npm run check` under 60s).
-- Final Phase 2 exit gate: all KATs green + `npm run check` green.
+- **Published exact-hex vectors:** empty string, "a", FIPS 180-4 §A.1
+  ("abc", 1 block), FIPS 180-4 §A.2 (56-byte 448-bit message, 2 blocks).
+- **Block-boundary cross-check vs `node:crypto`** across lengths straddling
+  every block transition (55↔56, 63↔64↔65, 119↔120, 127↔128, 191↔192,
+  255↔256) up to the 512-byte cap.
+- **Fold-engagement pins:** assert the per-block iterate runs the right
+  number of times (55→1, 56→2, 120→3 blocks via unique `blockIndex`); the
+  56/64-byte cases that mis-hashed pre-2.11b flip green here.
+- **Bounded multi-block stress** behind `SHA256_STRESS` (4 KB / 64 blocks +
+  a 0..256 length sweep). **Revised down from the sketch's "10 MB"** — that
+  literal predates the Slice 2.6d decomposition, which made the tracing
+  runtime emit ~2299 frames PER 64-byte block (10 MB ≈ 156k blocks ≈ 360M
+  frames, infeasible). The bounded stress proves the fold across many blocks
+  without the explosion and stays out of `npm run check`.
 
-**Pass/fail gate:** all KATs byte-equal; total test count documented
-(estimated 1748 prior + ~30 new across Slices 2.0–2.11 = ~1780).
+**Pass/fail gate — MET:** all KATs byte-equal vs FIPS 180-4 + `node:crypto`;
+`npm run check` GREEN. (Multi-block verified across lengths 0/1/55/56/63/64/
+119/120/200/1000 + §A.2 + the flag-gated 0..256 sweep + 4 KB.)
 
 ## Phase 2 exit criteria
+
+> **ALL MET OR SUPERSEDED — PHASE 2 CLOSED 2026-06-01.** SHA-256 ships
+> port-native end-to-end, multi-block, KAT-equal vs FIPS 180-4 §A.1 + §A.2 +
+> `node:crypto`. `npm run check` GREEN at HEAD. **One criterion superseded,
+> not met:** "Provenance overlay registered for SHA-256" — the cell-level
+> provenance overlay was RETIRED in the Slice 2.9c-e "honest close"
+> (2026-05-31; it was built on the deleted `stateBefore`/`stateAfter`/
+> MatrixView, so unusable for port-native hover). The inspector / step-strip
+> / RunExplorer became port-aware (`framePrimary{In,Out}Bytes`) instead, and
+> the cell-level hover was formally deferred — so SHA-256's pedagogy surfaces
+> are met by the port-aware inspector, not the (now-deleted) overlay. Next:
+> `meta` retirement / key-schedule decomposition (its own phase + AES-first
+> spike — see `docs/plans/phase-5-legacy-retirement.md` and the parent plan's
+> Phase 3 note).
 
 - All 15 sub-slices green individually.
 - `npm run check` green at HEAD.

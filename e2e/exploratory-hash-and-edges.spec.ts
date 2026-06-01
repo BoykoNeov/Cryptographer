@@ -223,17 +223,38 @@ test.describe("Weird inputs and edge cases", () => {
     await freshLoad(page);
   });
 
-  test("SHA-256 with 56 bytes (just over the cap) shows the friendly error", async ({ page }) => {
+  test("SHA-256 with the FIPS §A.2 56-byte message (2 blocks) hashes via the multi-block fold", async ({
+    page,
+  }) => {
+    // Slice 2.11b made SHA-256 multi-block. The 56-byte §A.2 message used to
+    // be just over the single-block cap (a friendly error); it now hashes
+    // correctly through the per-block fold. Enter it in ASCII so the smoke
+    // reads the published vector directly.
     await sel(page, "kind").selectOption("hash");
-    // 56 hex bytes = 112 hex chars. One over the single-block cap of 55.
-    const tooLong = "61".repeat(56);
+    await page.getByRole("button", { name: "ASCII", exact: true }).click();
+    await setInput(page, "message", "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq");
+    // Flip back to hex so the digest renders in hex (the toggle preserves the
+    // typed bytes); the result row follows the active byte format.
+    await page.getByRole("button", { name: "hex", exact: true }).click();
+    await clickRun(page);
+
+    const result = await readResult(page);
+    const err = await readError(page);
+    expect(err).toBeNull();
+    // FIPS 180-4 §A.2 digest.
+    expect(result).toBe("248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+  });
+
+  test("SHA-256 over the 512-byte explorer cap shows the friendly error", async ({ page }) => {
+    await sel(page, "kind").selectOption("hash");
+    // 513 hex bytes = 1026 hex chars — one over the 512-byte legibility cap.
+    const tooLong = "61".repeat(513);
     await setInput(page, "message", tooLong);
     await clickRun(page);
 
     const err = await readError(page);
     expect(err).not.toBeNull();
-    expect(err).toMatch(/55/);
-    expect(err).toMatch(/56/);
+    expect(err).toMatch(/512/);
     // Should NOT be a runtime stack trace / internals leak.
     expect(err).not.toMatch(/at \S+\.ts:/);
     expect(err).not.toMatch(/TypeError|RangeError/);

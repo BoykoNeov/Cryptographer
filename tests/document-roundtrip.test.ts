@@ -36,6 +36,7 @@ import { aes192Spec } from "@/ciphers/aes-192";
 import { aes192DecryptSpec } from "@/ciphers/aes-192-decrypt";
 import { aes256Spec } from "@/ciphers/aes-256";
 import { aes256DecryptSpec } from "@/ciphers/aes-256-decrypt";
+import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { desSpec } from "@/ciphers/des";
 import { desDecryptSpec } from "@/ciphers/des-decrypt";
 import { serpent128Spec } from "@/ciphers/serpent-128";
@@ -62,6 +63,7 @@ import {
   HASH_IDS,
   PADDING_SCHEMES,
 } from "@/core/document-schema";
+import { runSpec } from "@/core/runtime";
 import type { CipherSpec } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
@@ -843,5 +845,41 @@ describe("cipherConstants persistence (A1)", () => {
     const h = result.doc.spec.cipherConstants?.H;
     expect(h).toBeInstanceOf(Uint8Array);
     expect(Array.from(h as Uint8Array)).toEqual(Array.from(editedH));
+  });
+
+  // Slice 2.11b: the multi-block fold added structure that Zod could strip on
+  // Save/Load — the `blocks` iterate's `chainInput`/`chainFeedback`/`chainOutput`
+  // and `spec.outputFrom = port("blocks","digest")`. The constants tests above
+  // don't catch a stripped field (they only inspect cipherConstants). This RUNS
+  // the round-tripped spec and checks the digest survives — the load-bearing
+  // persistence gate for the multi-block restructure. Both a single-block (§A.1)
+  // and a multi-block (§A.2, 2 blocks) message, so a dropped chain field would
+  // surface as a wrong multi-block digest even if single-block coincidentally held.
+  it("round-tripped SHA-256 spec still hashes correctly (multi-block fold wiring survives)", () => {
+    const hexDigest = (spec: CipherSpec, msg: Uint8Array): string => {
+      const trace = runSpec(spec, buildDefaultRegistry(), {
+        initialState: { shape: "bytes", bytes: msg },
+      });
+      if (trace.finalState.shape !== "bytes") throw new Error("expected bytes finalState");
+      return Array.from(trace.finalState.bytes)
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+    };
+    const result = parseDocument(serializeDocument(sha256Doc()));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const reloaded = result.doc.spec;
+    // §A.1 "abc" (1 block).
+    expect(hexDigest(reloaded, new TextEncoder().encode("abc"))).toBe(
+      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    );
+    // §A.2 56-byte message (2 blocks) — exercises chainFeedback across the
+    // block boundary, which a stripped chain field would break.
+    expect(
+      hexDigest(
+        reloaded,
+        new TextEncoder().encode("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+      ),
+    ).toBe("248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
   });
 });

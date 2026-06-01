@@ -19,7 +19,15 @@ Shipped ciphers (all with both encrypt + decrypt paths and FIPS / NIST / paper-v
 
 Padding schemes (AES only): **PKCS#7**, **zero-pad**, **ISO 7816-4**, plus a no-pad option for exact-block input.
 
-DES is the project's first Feistel cipher — its round body uses the `feistel-round` branching primitive (an L track + R track that evolve independently, recombining via a named 4-arg combine kind). Rounds 1..15 use `feistel-standard` (textbook Feistel + swap); round 16 uses `feistel-no-swap` (the textbook last-round exception that makes the cipher self-inverse under key-reversal).
+Shipped hash (select **Hash** in the `kind` dropdown):
+
+| Hash | Output | Block | Notes |
+|---|---|---|---|
+| **SHA-256** | 32 B | 64 B | multi-block, KAT-equal vs FIPS 180-4 §A.1 + §A.2 + `node:crypto`; the first fully port-native primitive |
+
+SHA-256 is built entirely from the universal port-native vocabulary (`rotate-bits-right`, `shift-bits-right`, `xor`, `add-mod-32`, `and`, `not`, `concat`, `split-bytes`, `byte-slice`, …) — no SHA-specific executors. Its 64 compression rounds and the message schedule decompose into individually-scrubbable frames, and multi-block messages fold over a port-mode `iterate` that carries the running hash as its chain. The explorer caps input at 512 bytes to keep the per-byte trace scrubbable (not a SHA-256 limit).
+
+DES is the project's first Feistel cipher. Its round body is built port-native — a `group` of `split-bytes → E-expand → XOR with K_i → 8 S-boxes → P-permute → xor → concat` — with the Feistel swap expressed as the `concat` argument order (rounds 1..15 swap; round 16 doesn't, the textbook last-round exception that makes the cipher self-inverse under key-reversal). No special branching primitive — the universal-port thesis is that Feistel needs none.
 
 Interactive features:
 
