@@ -9,6 +9,7 @@
  */
 
 import { StepRegistry } from "../core/registry";
+import { addMod16, addMod16Doc, addMod16PortContract } from "../steps/add-mod-16";
 import { addMod32, addMod32Doc, addMod32PortContract } from "../steps/add-mod-32";
 import { and, andDoc, andPortContract } from "../steps/and";
 import {
@@ -679,6 +680,17 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: addMod32,
     shape: addMod32PortContract,
     doc: addMod32Doc,
+  });
+  // K2a (2026-06-01): the 16-bit dual of add-mod-32@1, shipped for the
+  // Speck32/64 key-schedule decomposition. Same N-way operand convention;
+  // multiple-of-2 byteLength invariant. Per-width fixed step types (not a
+  // wordBits-parameterized add-mod@1) preserve the "carry semantics differs
+  // per width" pedagogy — same posture as add-mod-32 / future add-mod-64.
+  r.register("add-mod-16@1", {
+    kind: "ported",
+    executor: addMod16,
+    shape: addMod16PortContract,
+    doc: addMod16Doc,
   });
   r.register("and@1", {
     kind: "ported",
