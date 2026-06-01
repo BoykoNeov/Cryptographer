@@ -175,7 +175,38 @@ than a new pure-port aux-writer; a general `aux-store-bytes@1` is deferred).
 > `SpeckKeyScheduleBlock`'s header was reframed as fallback-only (per
 > the K2 advisor pass: keep for pre-K2 saved docs + palette-droppable
 > legacy executor). Gate green (biome + tsc + 2227 vitest + vite build).
-> **K2c NOT STARTED.**
+>
+> **K2c-gate CLOSED 2026-06-01 (user-decided via AskUserQuestion, graph
+> smoke in hand — 0 console/page errors across all 4 specs, KAT byte-equal
+> ciphertexts a86842f2 / f24268a8, collapsed view shows a single `Key
+> Schedule` chip with the 22-round aux fan-out tamed by
+> `replicateHighFanoutSources`, expanded view stacks the iterations
+> top-down with the (m-1)=3 lag arcs rendered as in-place `master-split`
+> replicas not back-arrows). The user's verdict DIVERGES from K1's:
+>
+> 1. **Topology = A (explicit per-round-key ports).** Unlike K1 (where
+>    the gate picked B-minimal — "A's wires would only relabel the same
+>    fan-out for no legibility gain"), the K2 gate picked A: the schedule
+>    will emit each round key on a labelled output port; each Speck round's
+>    round-key consumer will rewire via `portInputs.roundKey`; aux fan-out
+>    + the remaining `meta` (`auxWritePorts` on publish, `auxReadPorts` on
+>    speck.round/speck.round-inverse) gone — FULL retirement. The K1 plan
+>    explicitly sequenced A as an "optional follow-on" separate from the
+>    spike; for Speck it now becomes **K2d** (below).
+> 2. **`SpeckKeyScheduleBlock` = retire now.** The fallback-only block
+>    K2b kept around is gone (no shipped spec uses the legacy leaf;
+>    palette-dropping a `speck.key-schedule@1` step now falls through to
+>    the raw-JSON editor — acceptable for a near-dead path). The legacy
+>    executor + StepDocumentation stay registered as the KAT oracle for
+>    `tests/speck-32-64-key-schedule-decomposition.test.ts`. K2c retire
+>    shipped in the K2c closure commit.
+>
+> **K2c closure commit** = block retire + this status update + CHANGELOG
+> entry + throwaway smoke deleted per [[feedback_playwright_dormant]].
+> No behavior change beyond the editor-block deletion; gate stays green.
+>
+> **K2d NOT STARTED.** A-topology rewrite for Speck — its own slice, its
+> own advisor pass, its own KAT gate per [[feedback_iterative_slice_review]].
 
 **Recurrence (Beaulieu et al. 2013 §3), per iteration `i = 0 … rounds-2`:**
 `l_{i+m-1} = (k_i + ROR(l_i, alpha)) ⊕ i` ; `k_{i+1} = ROL(k_i, beta) ⊕ l_{i+m-1}`.
@@ -292,6 +323,75 @@ mode, the schedule body's intermediate frame values render in BE byte-order
 (the param panel says LE-NSA, the frame view shows BE bytes). Less confusing
 than "byte order changes mid-body" but not zero-confusion. The `input-codec`
 and `output-codec` leaves' `narrationOverride` must explicitly say so.
+
+### K2d — Speck A-topology rewrite (queued by the K2c gate, 2026-06-01)
+
+> **Status: NOT STARTED.** The K2c gate picked A. Its own advisor pass +
+> KAT gate per [[feedback_iterative_slice_review]] before shipping.
+
+**What A means structurally:**
+
+- **`speck.publish-round-keys@1` loses `meta.auxWritePorts`.** The
+  publish tail's output ports `key0..key{rounds-1}` become the only
+  consumer surface; nothing more lands in `aux["roundKey.N"]` from the
+  decomposed schedule.
+- **`speck.round@1` / `speck.round-inverse@1` lose `meta.auxReadPorts`
+  and `params.roundKeyAux`.** Each round leaf reads its round-key word
+  via `portInputs.roundKey` pointing at the publish tail's `keyN`
+  output. The `roundKey` input port stays — only the projection path
+  changes.
+- **`buildSpeck32_64Spec` rewires.** Each round leaf gains
+  `portInputs.roundKey = port("key-schedule.publish", "key{r}")` (or
+  the reverse-order analog for the decrypt variant); the
+  `params.roundKeyAux` line drops.
+
+**Cross-container `portInputs` precedent.** The publish leaf has id
+`key-schedule.publish` and lives inside the `key-schedule` group; round
+leaves live OUTSIDE that group. `portInputs` wires by step id (a flat
+ID space — container membership is rendering / collapse metadata, not
+a scoping rule), so cross-container reads "just work" — same mechanism
+the SHA-256 spec already uses for cross-group references.
+
+**Back-compat trade-off.** Pre-K2d saved Speck docs carry the legacy
+`speck.key-schedule@1` LEAF — the legacy executor still writes
+`aux["roundKey.N"]` directly, so those docs continue to encrypt /
+decrypt because the round-leaf executor reads the aux entry via the
+still-living `roundKeyAux` param. A pre-K2d-but-post-K2a saved doc (one
+carrying the K2a decomposed schedule) loses its round-key fan-out —
+publish no longer writes aux, rounds no longer read aux — so it'll
+break under load. Such a doc would have existed for ~hours between K2a
+ship (2026-06-01) and the K2d ship; treat as "loads, won't encrypt;
+re-select the cipher to regenerate the spec under the A topology."
+
+**Open advisor questions for K2d:**
+
+- **Do `roundKeyAux` + `meta.auxReadPorts` survive as an optional
+  fallback** (preserving pre-K2d-decomposed-doc back-compat at the cost
+  of a deprecated-param surface), or fully retire (the cleaner contract
+  + cheap regenerate-from-cipher-selector escape hatch)?
+- **Re-target the K2a decomposition parity test.** The test currently
+  asserts `aux["roundKey.0..21"]` byte-equality vs the legacy monolith.
+  Under A those aux entries are gone; retarget to read the publish
+  leaf's per-port output values out of the trace frame (or roll the
+  parity into the round-by-round KAT byte-equal assertion, which
+  becomes the load-bearing oracle).
+- **Vectors tests' "produces all 22 round keys in aux" assertions** —
+  rewrite to assert "produces all 22 round keys on publish output ports"
+  (same trace-frame read), or delete (KAT covers it).
+- **Graph rendering smoke** — verify the 22 explicit port-flow wires
+  fold via `replicateHighFanoutSources` the way the K2c advisor verdict
+  predicted ("only relabel the same fan-out"), OR show a more legible
+  topology the K2c gate user expected to see. The smoke should capture
+  both possibilities and inform whether further graph-rendering tweaks
+  are needed.
+
+**Files affected (estimate):** 3 step files
+(`speck-publish-round-keys.ts`, `speck-round.ts`, `speck-round-inverse.ts`),
+1 builder (`speck-32-64-builder.ts`), 1 param-editor block
+(`SpeckRoundBlock` — drop `roundKeyAux` row), 4-6 tests (vectors,
+decrypt, decomposition parity, round-key panel, runtime-ported-dispatch,
+maybe narration). Bigger than K2a's blast radius; KAT gate is the
+safety net.
 
 ### K3 — Serpent / K4 — DES (sequenced after K2)
 

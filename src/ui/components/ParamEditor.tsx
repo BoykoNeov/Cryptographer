@@ -133,9 +133,23 @@ export const ParamEditor = (props: Props) => {
             <Match when={BLOCK_SIZE_PARAM_TYPES.has(getStep().type)}>
               <BlockSizeBlock step={getStep()} matchingCount={matchingSteps()} />
             </Match>
-            <Match when={getStep().type === "speck.key-schedule@1"}>
-              <SpeckKeyScheduleBlock step={getStep()} matchingCount={matchingSteps()} />
-            </Match>
+            {/*
+              K2c (2026-06-01) — retired `SpeckKeyScheduleBlock` after the
+              A-vs-B gate AskUserQuestion picked "retire now." No shipped
+              Speck spec contains a `speck.key-schedule@1` leaf since K2a
+              (the four BE/LE × encrypt/decrypt specs all route through the
+              decomposed `key-schedule` group built by
+              `buildSpeck32_64KeyScheduleNative`). The legacy executor + its
+              StepDocumentation stay registered in `default-registry.ts`
+              for two reasons: it's the KAT oracle for
+              `tests/speck-32-64-key-schedule-decomposition.test.ts`, and a
+              pre-K2 saved doc carrying the monolithic leaf can still load
+              + encrypt. Such a doc now shows the raw-JSON fallback panel
+              when selected (rare path; "loads and runs" but no bespoke
+              editor) — re-selecting the cipher regenerates the decomposed
+              schedule. The block's drop from this Switch is the visible
+              half of the retire.
+             */}
             <Match
               when={
                 getStep().type === "speck.round@1" || getStep().type === "speck.round-inverse@1"
@@ -683,75 +697,6 @@ const AddRoundKeyBlock = (props: BlockProps) => {
       <div class="param-scalar-row">
         <dt>Round key aux</dt>
         <dd>{params().auxName ?? "—"}</dd>
-      </div>
-    </dl>
-  );
-};
-
-// Speck key-schedule block.
-//
-// All seven params are structural (cipher-defining constants or naming
-// hooks); we render them read-only as a scalars dl. Mirrors the shape of
-// KeyExpansionBlock's scalars row but without the embedded S-box / rcon
-// editors — Speck has no S-box, and its "round constant" is just the
-// loop counter `i` XOR'd into the schedule (no table to edit).
-//
-// **Post-K2a (2026-06-01) this block is FALLBACK-ONLY.** No shipped Speck
-// spec contains a `speck.key-schedule@1` leaf anymore — the four Speck32/64
-// specs (BE/LE × encrypt/decrypt) now route through the decomposed
-// `key-schedule` group built by `buildSpeck32_64KeyScheduleNative`. The
-// block survives so (a) pre-K2 saved docs that still carry the monolithic
-// leaf can be inspected, and (b) the palette-droppable legacy executor
-// (kept registered as the KAT oracle for the decomposition test) has a
-// usable editor when dropped manually. Per the K2 advisor pass.
-//
-// No ApplyAllRow: even on a pre-K2 spec there was only one key-schedule
-// step; the monolith was never duplicated.
-const SpeckKeyScheduleBlock = (props: BlockProps) => {
-  const params = (): {
-    keyAuxName?: string;
-    outputPrefix?: string;
-    rounds?: number;
-    wordBits?: number;
-    m?: number;
-    alpha?: number;
-    beta?: number;
-    byteOrder?: string;
-  } => props.step.params as never;
-
-  return (
-    <dl class="param-scalars">
-      <div class="param-scalar-row">
-        <dt>Input aux</dt>
-        <dd>{params().keyAuxName ?? "—"}</dd>
-      </div>
-      <div class="param-scalar-row">
-        <dt>Output prefix</dt>
-        <dd>{params().outputPrefix ?? "—"}</dd>
-      </div>
-      <div class="param-scalar-row">
-        <dt>Rounds</dt>
-        <dd>{params().rounds ?? "—"}</dd>
-      </div>
-      <div class="param-scalar-row">
-        <dt>Word bits (n)</dt>
-        <dd>{params().wordBits ?? "—"}</dd>
-      </div>
-      <div class="param-scalar-row">
-        <dt>Key words (m)</dt>
-        <dd>{params().m ?? "—"}</dd>
-      </div>
-      <div class="param-scalar-row">
-        <dt>α (ROR)</dt>
-        <dd>{params().alpha ?? "—"}</dd>
-      </div>
-      <div class="param-scalar-row">
-        <dt>β (ROL)</dt>
-        <dd>{params().beta ?? "—"}</dd>
-      </div>
-      <div class="param-scalar-row">
-        <dt>Byte order</dt>
-        <dd>{params().byteOrder ?? "—"}</dd>
       </div>
     </dl>
   );
