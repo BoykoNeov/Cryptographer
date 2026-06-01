@@ -228,5 +228,12 @@ has none). Each its own KAT gate + advisor pass.
   `aes-key-schedule-decomposition.test.ts` + backward-compat for pre-K1 saved
   docs + the synthetic `runtime-ported-dispatch-aes-core` (c) parity). Palette
   still lists them. Their deletion is a future release per `docs/versioning.md`.
+  **Back-compat is "loads and runs", NOT "all features work":** an old doc
+  carrying the monolithic `key-expansion` LEAF loads + encrypts/decrypts fine
+  (executor present, writes `roundKey.N`, AddRoundKeys read it), but
+  **duplicate-round won't work on it** — `bumpKeyExpansion` looks for the
+  `key-schedule` GROUP and finds nothing on a pre-K1 doc. Acceptable (old docs
+  are rare and re-selecting the cipher regenerates the decomposed spec), but
+  narrower than "fully back-compatible."
 - **url-share payload grew** ~4.4 KB → ~8.5 KB (AES-128) from ~114 schedule
   sub-step leaves each carrying a `narrationOverride`; still trivially URL-safe.

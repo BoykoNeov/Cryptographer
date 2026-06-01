@@ -148,11 +148,21 @@ export const hasNarrationFn = (stepType: string): boolean => REGISTRY.has(stepTy
  *
  * Reasons for the irreducible set:
  *
- *   - **Key expansion** (`aes.key-expansion@1/@2`, `serpent.key-expansion@1`,
- *     `speck.key-schedule@1`) — already covered by
- *     `<KeyScheduleExplorer />` with much richer per-stage narration
- *     than the unit-list this registry produces. Narrating them again
- *     would double up.
+ *   - **Serpent key expansion** (`serpent.key-expansion@1`) — covered by
+ *     `<KeyScheduleExplorer />` with much richer per-stage narration than the
+ *     unit-list this registry produces. Narrating it again would double up.
+ *   - **AES key expansion** (`aes.key-expansion@1/@2`) — NO LONGER covered by
+ *     `<KeyScheduleExplorer />` (its AES branch was retired in
+ *     key-schedule-decomposition K1c; the RotWord/SubWord/Rcon/word-XOR steps
+ *     are now real, narrated trace frames inside the decomposed `key-schedule`
+ *     group). These monolithic executors are no longer used by any shipped
+ *     spec — they survive registered only as the FIPS oracle for
+ *     `aes-key-schedule-decomposition.test.ts` and for loading pre-K1 saved
+ *     docs — so they are aux-only no-op steps with no narration to write.
+ *     (Slated for deletion in a future release per `docs/versioning.md`.)
+ *   - **Speck key schedule** (`speck.key-schedule@1`) — aux-only; not in
+ *     `<KeyScheduleExplorer />` at all, so there is no richer surface, but the
+ *     state-passthrough step has no per-frame value-prose worth a unit fn.
  *
  *   - **Bit-level Serpent linear transforms**
  *     (`serpent.linear-transform@1`, `serpent.inv-linear-transform@1`)
@@ -173,10 +183,13 @@ export const hasNarrationFn = (stepType: string): boolean => REGISTRY.has(stepTy
  * enforces every step type is either registered or here.
  */
 export const NARRATION_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
-  // Covered by <KeyScheduleExplorer /> (richer surface)
+  // Serpent: still covered by <KeyScheduleExplorer /> (richer surface).
+  "serpent.key-expansion@1",
+  // AES @1/@2: explorer AES branch retired in K1c — now unused-by-any-spec
+  // aux-only no-op executors kept as FIPS oracle / pre-K1 doc back-compat.
   "aes.key-expansion@1",
   "aes.key-expansion@2",
-  "serpent.key-expansion@1",
+  // Speck: aux-only schedule, not in the explorer; no per-frame value-prose.
   "speck.key-schedule@1",
   // The aux-publish tail of the DECOMPOSED AES key schedule
   // (key-schedule-decomposition K1a). An identity passthrough that mirrors the
