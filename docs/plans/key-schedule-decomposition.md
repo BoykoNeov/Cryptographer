@@ -153,10 +153,132 @@ than a new pure-port aux-writer; a general `aux-store-bytes@1` is deferred).
   render the decomposed AES key schedule; wire 1–2 round-key edges explicitly to
   preview option A; screenshot; then `AskUserQuestion` **A vs B** + explorer fate.
 
-### K2–K4 — Speck / Serpent / DES (only after the K1-gate)
+### K2 — Speck32/64 key-schedule decomposition (advisor-revised 2026-06-01)
 
-Same unroll pattern (Speck/Serpent also have per-round constants → unroll; DES
-has none). Each its own KAT gate + advisor pass.
+> **Status:** advisor consulted 2026-06-01 — verdict "revise then ship." Three
+> structural revisions applied below. K2a NOT STARTED.
+
+**Recurrence (Beaulieu et al. 2013 §3), per iteration `i = 0 … rounds-2`:**
+`l_{i+m-1} = (k_i + ROR(l_i, alpha)) ⊕ i` ; `k_{i+1} = ROL(k_i, beta) ⊕ l_{i+m-1}`.
+Speck32/64: `wordBits=16, m=4, rounds=22, alpha=7, beta=2`. 21 iterations writing
+`roundKey.0..21`. The cipher's own ARX kernel runs in both round body and
+schedule — the punchline this decomposition makes visible.
+
+**New port-native primitives K2a ships:**
+- **`add-mod-16@1`** — exact dual of `add-mod-32@1` (fixed 16-bit BE, N≥2
+  operand ports, `inputCount` param). Posture: per-width fixed step types
+  (mirror `add-mod-32@1`'s precedent — carry semantics differ per width).
+- **`speck.publish-round-keys@1`** — parallel to `aes.publish-round-keys@1` but
+  STRUCTURALLY DIFFERENT in two ways the advisor flagged: (a) emits **exactly
+  `rounds`** round keys (not `rounds+1`), `for r in 0..rounds-1`; (b)
+  per-round-key `byteLength` is `wordBits/8` (2 for Speck32/64), not AES's
+  hardcoded 16. Cannot reuse the AES tail; the port contract's `byteLength`
+  field would fail validation.
+
+**Builder:** `buildSpeck32_64KeyScheduleNative(rounds, m, wordBits, alpha,
+beta, byteOrder)` in `src/ciphers/speck-32-64-key-schedule-builder-native.ts`.
+Structure (one outer `key-schedule` group, id-prefixed leaves):
+
+- `key-schedule.load-key` — `aux-load-bytes@1(auxName:"key", byteLength: m*2)`.
+- **`key-schedule.input-codec` — `permute@1` PRESENT IN BOTH MODES (different
+  indices)** because the master-key memory layout differs from logical word
+  order in BOTH conventions. Per `speck-word-codec.ts::decodeKey`:
+  - **BE-paper** memory = `(l_{m-2}, …, l_0, k_0)`, BE-encoded per word →
+    permute indices `[6,7,4,5,2,3,0,1]` for m=4 (reverse the four 2-byte
+    words; no byte-swap within words).
+  - **LE-NSA** memory = `(k_0, l_0, …, l_{m-2})`, LE-encoded per word →
+    permute indices `[1,0,3,2,5,4,7,6]` for m=4 (byte-swap within each word;
+    no word reorder).
+  After the codec leaf, both modes produce the logical layout
+  `[k_0(BE), l_0(BE), l_1(BE), l_2(BE)]`. `narrationOverride`: "Decode master
+  key from {BE-paper | LE-NSA} memory layout to logical word order
+  `[k_0, l_0, …, l_{m-2}]`, BE-encoded internally."
+- `key-schedule.master-split` — `split-bytes@1(widths:[2]×m)` of the codec'd
+  master key → `output0=k_0, output1=l_0, output2=l_1, output{m-1}=l_{m-2}`.
+  Identical across modes (the codec handles the difference upstream).
+- **Per iteration** `i = 0..rounds-2`, leaves `key-schedule.g{i}.{role}`:
+  - `g{i}.l-source` — `portInputs.input` binds to: (for `i < m-1`)
+    `master-split.output{i+1}`; (for `i ≥ m-1`) `g{i-(m-1)}.new-l.output`.
+    (Advisor: parameterize by `m`; lag is `(m-1)` iterations, not the
+    hardcoded 3.)
+  - `g{i}.k-source` — `portInputs.input` binds to: (for `i = 0`)
+    `master-split.output0`; (for `i > 0`) `g{i-1}.new-k.output`.
+  - `g{i}.rot-l` — `rotate-bits-right@1(wordBits:16, bits:alpha)`.
+  - `g{i}.sum` — `add-mod-16@1(inputCount:2)` of `k-source ⊞ rot-l`.
+  - `g{i}.round-const` — `constant-load@1(bytes:[hi(i), lo(i)])` — BE
+    encoding of the round counter `i`, since body bytes are always BE.
+  - `g{i}.new-l` — `xor@1(inputCount:2)` of `sum ⊕ round-const`.
+  - `g{i}.rol-k` — `rotate-bits-right@1(wordBits:16, bits: wordBits-beta)`.
+    (ROL(x, β) = ROR(x, B-β).)
+  - `g{i}.new-k` — `xor@1(inputCount:2)` of `rol-k ⊕ new-l`.
+
+**Output codec — asymmetric across byteOrder (advisor pick):**
+- **BE-paper:** body's `new-k` and `master-split.output0` are already BE per
+  word, which matches BE-paper's published encoding. Direct wiring. Publish
+  tail's `key0` ← `master-split.output0`; `key{i+1}` ← `g{i}.new-k.output`
+  for `i = 0..rounds-2`. No intermediate concat/slice.
+- **LE-NSA:** body's BE per-word bytes need a byte-swap to match LE-NSA's
+  published encoding. Insert one codec sub-pipeline:
+  `concat@1(master-split.output0, g{0}.new-k, …, g{rounds-2}.new-k)`
+  (rounds × 2 = 44 bytes for Speck32/64) → `key-schedule.output-codec =
+  permute@1 [bulk per-word byte-swap, indices [1,0,3,2,…,43,42]]` →
+  `rounds × byte-slice@1` (each `[offset 2·r, length 2]`) → `publish.key${r}`.
+  ONE codec leaf, clearly labelled. Mirrors K1's `word-stream → byte-slice →
+  publish` pattern.
+
+This is the advisor's load-bearing **substantive change**: byte-order
+convention is a CODEC, not scattered plumbing. ONE leaf at input boundary,
+ONE leaf at output boundary, LE-only. Body bytes are always BE-encoded. The
+trace reads "LE-NSA = BE-paper computation with explicit codec at the
+boundary," matching `speck-word-codec.ts`'s own design intent.
+
+**Slices:**
+
+- **K2a — decomposition + KAT gate.** Ship `add-mod-16@1` (+ doc + paramless
+  ParamEditor block + register + test). Ship `speck.publish-round-keys@1`
+  (parallel to the AES one but `byteLength` polymorphic + `rounds` not
+  `rounds+1`). Ship the builder above. Rewire `buildSpeck32_64Spec` to call
+  `...buildSpeck32_64KeyScheduleNative(...)` instead of emitting a monolithic
+  `speck.key-schedule@1` leaf. **Decomposition unit test:** published
+  `roundKey.0..21` byte-equal vs legacy `speck.key-schedule@1` for Beaulieu
+  Table 4.1 key (`1918111009080100`) **under BOTH byte orders**. **Crypto
+  gate:** `speck-32-64-vectors.test.ts` + `speck-32-64-decrypt.test.ts`
+  byte-equal before/after, all four direction × byteOrder specs.
+
+- **K2b — blast-radius cleanup.** ParamEditor's `SpeckKeyScheduleBlock`: keep
+  as fallback (legacy executor stays registered for back-compat per K1
+  pattern). `narration/registry.ts` allowlist entry: keep (legacy executor
+  still palette-droppable). Aux-graph derivation tests keyed on
+  `speck.key-schedule` leaf id → retarget to the `key-schedule` group
+  (parallel to K1c's `key-expansion → key-schedule` rename).
+
+- **K2c — graph smoke + A-vs-B gate.** Throwaway Playwright: render the
+  decomposed schedule for ALL FOUR specs (BE/LE × enc/dec), screenshot,
+  eyeball the topology. Advisor flagged the uncollapsed view as a risk —
+  ~150 leaves × (m-1)=3-lag arcs reaching back may show crowding. Collapsed
+  view should fan out clean from the `key-schedule` container.
+  `AskUserQuestion` A-vs-B + ParamEditor block fate.
+
+**Explicitly NOT in K2:**
+- No `bumpSpeckRounds` analog. Builder's `rounds` param makes a future
+  Speck-duplicate-round slice cheap; defer until user asks.
+- No `rol/ror/wordMask` helper consolidation across `speck-key-schedule.ts` /
+  `speck-round.ts`. Defer until Phase 4d's Speck rebuild settles whether the
+  round becomes a builder.
+- No `KeyScheduleExplorer` Speck branch retirement (never existed).
+- No cross-mode mirror work (Speck has no S-box in schedule).
+
+**Advisor-flagged uncertainty (worth surfacing at the K2-gate):** in LE-NSA
+mode, the schedule body's intermediate frame values render in BE byte-order
+(the param panel says LE-NSA, the frame view shows BE bytes). Less confusing
+than "byte order changes mid-body" but not zero-confusion. The `input-codec`
+and `output-codec` leaves' `narrationOverride` must explicitly say so.
+
+### K3 — Serpent / K4 — DES (sequenced after K2)
+
+Same unroll pattern for Serpent (per-round constants → unroll); DES has none
+and is a different shape. Each its own KAT gate + advisor pass per
+[[feedback-iterative-slice-review]].
 
 ## Critical files
 
