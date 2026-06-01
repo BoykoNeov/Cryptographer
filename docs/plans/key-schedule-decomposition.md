@@ -343,10 +343,81 @@ mode, the schedule body's intermediate frame values render in BE byte-order
 than "byte order changes mid-body" but not zero-confusion. The `input-codec`
 and `output-codec` leaves' `narrationOverride` must explicitly say so.
 
-### K2d — Speck A-topology rewrite (queued by the K2c gate, 2026-06-01)
+### K2d — Speck topology: RESOLVED as B-minimal (2026-06-01, user decision)
 
-> **Status: NOT STARTED.** The K2c gate picked A. Its own advisor pass +
-> KAT gate per [[feedback_iterative_slice_review]] before shipping.
+> **Status: RESOLVED as B-minimal — no code changes required.** The K2c
+> gate (recorded above, lines ~188–195) picked topology A; that direction
+> is **reversed** here. `main` already ships B-minimal for AES (K1c) and
+> Speck (K2a–K2c). See memory `project_group_scope_port_isolation`.
+
+**Resolution summary:**
+
+1. **A proved unbuildable** without new runtime machinery. A `group`'s
+   children walk in an isolated `nodeOutputs` scope; `portInputs` resolve
+   same-scope ONLY and throw across a group boundary (measured error:
+   *"no recorded outputs in this scope … same-scope wiring only"*). The
+   decomposed schedule lives inside the collapsed `key-schedule` group,
+   so only the global `aux` map crosses the boundary. There is no way to
+   wire a round leaf outside the group to a publish leaf inside the group
+   via `portInputs` without a new group-output-export runtime feature.
+
+2. **A's payoff narrowed to nothing on further inspection — three facts:**
+   - **Collapsed-identical:** Collapsed, A and B render identically. The
+     `key-schedule` container box draws the same fan of aux arrows to each
+     consumer round; `collapseGraph` remaps aux and port edges the same
+     way; the difference is only cosmetic edge-style/label in the expanded
+     view.
+   - **SHA-256 already ships B:** SHA-256 uses aux fan-out for its round
+     constants K, initial hash H, and message-schedule W — all fanned off
+     the global board across the iterate/message-schedule container
+     boundary — with no complaint. B is the established cross-boundary
+     fan-out pattern. (The earlier "SHA-256 cross-container precedent for
+     A" was a misread — SHA-256's rounds are same-scope siblings, not
+     grouped; that's why its `portInputs` cross-references work.)
+   - **Derived = view-only:** Round keys are recomputed from the master
+     key, so they are view-only by nature in either topology. A unlocks
+     no inspect/edit that B does not.
+
+3. **No code changes.** `main` already ships B-minimal end-to-end for
+   both AES and Speck. K2d is closed without a code commit.
+
+**Back-compat trade-off (still applies regardless of topology).** The K2c
+follow-up fully retired the monolithic `speck.key-schedule@1` step type,
+so a pre-K2 saved Speck doc carrying that LEAF no longer loads. The
+K2a..K2d span is **a single un-released sub-phase under one `[Unreleased]`
+CHANGELOG section — no tagged release of the K2a state will ever exist**.
+That guarantee depends on K2d closing before any release tag is cut; if
+K2d had slipped, a release manager would have needed to either (a) hold
+the tag, (b) restore the legacy executor under a deprecation flag, or (c)
+accept that pre-K2 Speck docs are non-loadable. K2d is now closed, so the
+guarantee holds.
+
+#### K2d-resolved: A vs B decision rule for K3/K4
+
+**Policy (replaces the earlier "≥22 → A / ≤11 → B" threshold rule):**
+
+> **B-minimal for all grouped schedules.** Topology A is only
+> reconsidered if a group-output-export runtime feature ships.
+
+**Rationale.** A is unbuildable for ANY grouped schedule under the current
+runtime — all four schedules (AES/Speck/Serpent/DES) live inside a
+`key-schedule` group, so the group-scope port isolation applies to all of
+them. There is no per-cipher A-vs-B gate: K3 (Serpent) and K4 (DES)
+proceed as B-minimal mechanically, without a smoke/re-gate. If a future
+slice ships a group-output-export runtime feature, revisit A for the
+cipher that benefits most from explicit per-round-key wiring visibility.
+
+---
+
+#### Deferred appendix — topology A (NOT being built)
+
+> The A-topology design below is preserved for a possible future revisit,
+> gated on a group-output-export runtime feature. Nothing below is being
+> implemented. **The "cross-container portInputs precedent" claims in
+> this section were found to be a misread** — SHA-256's cross-references
+> work because its rounds are same-scope siblings, not grouped; they do
+> NOT demonstrate cross-group resolution (which throws "same-scope wiring
+> only" at runtime). That claim is annotated inline below.
 
 **What A means structurally:**
 
@@ -364,26 +435,19 @@ and `output-codec` leaves' `narrationOverride` must explicitly say so.
   the reverse-order analog for the decrypt variant); the
   `params.roundKeyAux` line drops.
 
-**Cross-container `portInputs` precedent.** The publish leaf has id
-`key-schedule.publish` and lives inside the `key-schedule` group; round
-leaves live OUTSIDE that group. `portInputs` wires by step id (a flat
-ID space — container membership is rendering / collapse metadata, not
-a scoping rule), so cross-container reads "just work" — same mechanism
-the SHA-256 spec already uses for cross-group references.
+**Cross-container `portInputs` precedent — MISREAD (preserved for history).**
+The publish leaf has id `key-schedule.publish` and lives inside the
+`key-schedule` group; round leaves live OUTSIDE that group. The original
+claim was that `portInputs` wires by step id (a flat ID space) so
+cross-container reads "just work" — citing SHA-256 as the precedent. This
+was a misread: SHA-256's rounds are same-scope siblings (not grouped), so
+their cross-references are within-scope and do not test group-boundary
+crossing. Measured: a `portInputs` reference from a round leaf (outside
+the group) to `key-schedule.publish` (inside the group) throws at runtime
+with "no recorded outputs in this scope … same-scope wiring only." A
+requires a new runtime feature to become buildable.
 
-**Back-compat trade-off (post-K2c-follow-up framing).** The K2c
-follow-up fully retired the monolithic `speck.key-schedule@1`
-step type, so a pre-K2 saved Speck doc carrying that LEAF no longer
-loads. The K2a..K2d span is **a single un-released sub-phase under
-one `[Unreleased]` CHANGELOG section — no tagged release of the K2a
-state will ever exist**. That guarantee depends on K2d landing before
-any release tag is cut; if K2d slips, the guarantee weakens and a
-release manager will need to either (a) hold the tag, (b) restore the
-legacy executor under a deprecation flag, or (c) accept that pre-K2
-Speck docs are non-loadable in the next release. The K1c precedent
-(AES @1/@2 kept registered) is broken here, by user-and-advisor pick.
-
-**Advisor verdicts (consulted 2026-06-01, pre-implementation):**
+**Advisor verdicts (consulted 2026-06-01, pre-implementation; now moot):**
 
 1. **Q1 — fallback path: full retire.** Drop `params.roundKeyAux` +
    `meta.auxReadPorts` on `speck.round@1` / `speck.round-inverse@1`.
@@ -423,9 +487,9 @@ Speck docs are non-loadable in the next release. The K1c precedent
    picked A without seeing A's graph. K2d is where the graph appears.
    The gate `AskUserQuestion` shows encrypt + decrypt smoke and asks
    "confirm A, or fall back to B-minimal like K1?" Don't editorialize;
-   let the picture argue. **User-confirmed this session.**
+   let the picture argue. (Moot — K2d resolved as B without a smoke gate.)
 
-**Advisor-flagged risks:**
+**Advisor-flagged risks (moot — A not being built):**
 
 - **K2d_R1 (port-flow fan-out replication).** Encrypt likely tames
   like K2c. Decrypt unknown until smoke. Mitigation order if fishnet:
@@ -437,65 +501,28 @@ Speck docs are non-loadable in the next release. The K1c precedent
 
 - **K2d_R2 (decrypt cross-pattern).** Tied to R1; same escalation.
 
-- **K2d_R3 (K1=B vs K2=A codebase footgun for K3/K4).** Two valid
-  topologies for "publish round keys → consume in round bodies" now
-  exists. "Ask the user per cipher" doesn't scale across K3 (Serpent,
-  33 round keys) + K4 (DES, 16 round keys). **User-decided this
-  session: document the decision rule NOW.** See the next subsection.
+- **K2d_R3 (K1=B vs K2=A codebase footgun for K3/K4).** Moot —
+  resolved by the "B-minimal for all grouped schedules" rule above.
 
-- **Advisor mild push-back:** ship K2d on A, treat the K2d smoke as a
-  real re-gate. If decrypt looks bad and the offsets layout doesn't
-  fix it, retreat to B is cheaper at K2d than at K3.
+**Files that A would have affected (estimate, for future reference):**
+3 step files (`speck-publish-round-keys.ts`, `speck-round.ts`,
+`speck-round-inverse.ts`), 1 builder (`speck-32-64-builder.ts`), 1
+param-editor block (`SpeckRoundBlock` — drop `roundKeyAux` row), 5–7
+tests (vectors, decrypt, decomposition parity retarget, round-key panel
+retarget, runtime-ported-dispatch, maybe narration), 1 doc comment in
+`RoundKeyPanel.tsx`.
 
-#### K2d-resolved: A vs B decision rule for K3/K4
-
-K3 and K4 apply this rule at slice-open without re-litigating per
-cipher. The K2d gate `AskUserQuestion` includes a "refine wording"
-prompt so the final text is user-blessed before K3 starts.
-
-> **Pick B-minimal** (publish writes aux; consumers read aux) when
-> round-key fan-out is **short (~ ≤ 11 keys)** and reads cleanly under
-> `replicateHighFanoutSources` — the explicit port rewiring would only
-> relabel the same fan-out for no legibility gain.
->
-> **Pick A** (publish exposes per-round-key output ports; consumers
-> wire `portInputs.roundKey` to a publish port) when round count is
-> **long (~ ≥ 22)** and the per-round-indexed consumption IS the
-> pedagogical point — the explicit wiring honestly shows "each round
-> consumes a specific key," and aux indirection hides that.
-
-#### K2d-resolved: gate `AskUserQuestion` framing
-
-After smoke is captured, surface three questions in this order:
-
-1. **A confirm / B fall back.** Show encrypt + decrypt smoke shots.
-   If user picks B-fallback: revert steps 1 + 3a's removal of the
-   aux match-arms in `RoundKeyPanel`; keep steps 2 + 3b
-   (`portInputs.roundKey` wiring is independent of the publish-side
-   aux-write choice — full A loses both, B-minimal keeps both).
-2. **Decision-rule wording confirm.** Inline the wording above so the
-   user can edit before K3 starts.
-3. **`RoundKeyPanel` retarget verify.** Did the panel stay lit for
-   Speck round frames under A? Y/N from running-app inspection.
-
-**Files affected (estimate):** 3 step files
-(`speck-publish-round-keys.ts`, `speck-round.ts`, `speck-round-inverse.ts`),
-1 builder (`speck-32-64-builder.ts`), 1 param-editor block
-(`SpeckRoundBlock` — drop `roundKeyAux` row), 5-7 tests (vectors,
-decrypt, decomposition parity retarget, round-key panel retarget,
-runtime-ported-dispatch, maybe narration), 1 doc comment in
-`RoundKeyPanel.tsx`. Bigger than K2a's blast radius; KAT gate is the
-safety net.
-
-**Pre-verified facts (don't re-discover at slice open):**
+**Pre-verified facts (still accurate, useful if A is revisited):**
 
 - `TraceFrame.portOutputs?: ReadonlyMap<string, Uint8Array>` exists
   (`src/core/types.ts:728-729`) — parity-test retarget is feasible.
 - `replicateHighFanoutSources` covers port-flow edges (`GraphView.tsx`
   ~line 2885 via `PORT_FLOW_AUX_KEY`).
-- Cross-container `portInputs` resolution by step id works (SHA-256
-  precedent at `src/ciphers/sha-256.ts:1490` — `port("round.63",
-  "out")`).
+- Cross-container `portInputs` resolution by step id does NOT work across
+  group boundaries (measured: throws "same-scope wiring only"). The cited
+  SHA-256 precedent (`src/ciphers/sha-256.ts:1490` — `port("round.63",
+  "out")`) is within-scope (rounds are ungrouped siblings) and does not
+  apply here.
 - `speckRoundKeyPortName(r)` already exported from
   `speck-publish-round-keys.ts` — reuse, don't duplicate `key${r}`.
 
