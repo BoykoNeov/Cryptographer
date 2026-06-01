@@ -257,6 +257,11 @@ export const IterateGroupSchema = z.object({
   // (Zod strips undeclared keys — same gotcha as `seedInput`/`cipherConstants`).
   chainInput: PortBindingSchema.optional(),
   chainFeedback: PortBindingSchema.optional(),
+  // Fold harvest (Slice 2.11a) — publishes the final carried chain value on
+  // a named output port (the dual of `chainInput`). SHA-256 multi-block uses
+  // it to read out the running hash as the digest. Additive optional (no
+  // schemaVersion bump); declared so it survives Save/Load.
+  chainOutput: z.string().optional(),
   children: z.array(z.lazy(() => StepNodeSchema)),
   ...containerPortEdgeFields,
   ...loopingContainerSeedFields,

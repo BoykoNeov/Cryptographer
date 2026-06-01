@@ -285,6 +285,14 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
               `iterate '${node.id}': chainInput and chainFeedback must both be set (CBC-style feedback) or both absent (plain per-block loop)`,
             );
           }
+          // `chainOutput` (the fold-to-single-value harvest) only makes sense
+          // when a chain is actually carried — a non-chaining loop has no final
+          // chain to publish. Fail loud rather than emit an empty/garbage port.
+          if (node.chainOutput !== undefined && node.chainInput === undefined) {
+            throw new Error(
+              `iterate '${node.id}': chainOutput requires chainInput/chainFeedback (it publishes the final carried chain value — a non-chaining loop has none)`,
+            );
+          }
           const seedSource = resolveBinding(
             nodeOutputs,
             node.seedInput,
@@ -361,6 +369,14 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
           const ports = node.outputPorts ?? ["out"];
           const outMap = new Map<string, Uint8Array>();
           for (const p of ports) outMap.set(p, concatenated);
+          // Fold harvest: publish the FINAL chain value on `chainOutput`.
+          // `prevChain` holds iteration N-1's `chainFeedback` result (or the
+          // `chainInput` bootstrap if count===0, which padding makes
+          // unreachable for SHA-256 — there's always ≥1 block). Defensive
+          // copy so a downstream consumer can't mutate the loop's carry.
+          if (node.chainOutput !== undefined && prevChain !== undefined) {
+            outMap.set(node.chainOutput, new Uint8Array(prevChain));
+          }
           nodeOutputs.set(node.id, outMap);
           continue;
         }

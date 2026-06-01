@@ -306,6 +306,27 @@ export type IterateGroup = {
    */
   readonly chainInput?: PortBinding;
   readonly chainFeedback?: PortBinding;
+  /**
+   * Port-mode only — harvest the FINAL chain value (after the last
+   * iteration's `chainFeedback`) onto a named output port of the iterate
+   * container. The honest dual of `chainInput`: `chainInput` *seeds* the
+   * fold, `chainOutput` *reads it back out*. Required by no existing mode
+   * (CBC's result is the concatenated per-block `bodyOutput`, not the
+   * carried chain), but it is exactly what a *fold-to-a-single-value*
+   * needs — e.g. SHA-256 multi-block, where the running hash H is the
+   * chain and the digest is its final value after the last block.
+   *
+   * Only meaningful with chaining: setting `chainOutput` without
+   * `chainInput`/`chainFeedback` throws (a fold with no carry has no final
+   * chain to publish). The name is added to the node's output map *in
+   * addition to* `outputPorts` (which still carry the concatenated
+   * `bodyOutput`), so a single iterate can expose both the per-block
+   * stream and the folded result on distinct ports.
+   *
+   * Additive optional field (no `schemaVersion` bump — same posture as
+   * `seedInput`/`bodyOutput`/`chainInput`).
+   */
+  readonly chainOutput?: string;
 };
 
 /**
