@@ -940,11 +940,26 @@ const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
   };
   collectGroupSeeds(spec.steps);
 
+  // Set of container ids whose injected `"in"` port is consumed by some
+  // descendant LEAF (via that leaf's `portInputs`). Used below to decide
+  // whether a looping container's own `seedInput` still needs an explicit
+  // "loop input" edge drawn: if a body head leaf already reads
+  // `port(containerId, "in")`, the seed edge is drawn there (resolved through
+  // the container's seedInput — see the resolution block) and we must NOT
+  // double-draw. If NO leaf consumes it (the consumer is instead a nested
+  // CONTAINER's `seedInput`, e.g. SHA-256's `msg-schedule.seedInput =
+  // port("blocks","in")`), the loop input would otherwise float — so we draw
+  // `seedInput.node → containerId` after the walk. Multi-block SHA-256 (Slice
+  // 2.11b) is the first spec to hit this: ECB's body head is a leaf, so it's
+  // unaffected.
+  const inPortConsumedByLeaf = new Set<string>();
+
   const walk = (nodes: readonly StepNode[]): void => {
     for (const node of nodes) {
       if (node.kind === "step") {
         if (node.portInputs !== undefined) {
           for (const binding of Object.values(node.portInputs)) {
+            if (binding.port === "in") inPortConsumedByLeaf.add(binding.node);
             // Resolve a `port(groupId, "in")` seed reference through the
             // enclosing group's seedInput — and a `port(iterateId, "chain")`
             // reference through the iterate's chainInput (B1.5 Finding 2) — to
@@ -988,6 +1003,26 @@ const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
     }
   };
   walk(spec.steps);
+
+  // Loop-input edges (Slice 2.11b): a looping container whose injected `"in"`
+  // port is consumed only by a nested container's `seedInput` (not a leaf)
+  // would have its `seedInput.node` float, with no edge showing the input
+  // feeding the loop. SHA-256's per-block `blocks` iterate is the case:
+  // `length-append → blocks` is invisible because `msg-schedule.seedInput =
+  // port("blocks","in")` is a container binding, not a leaf `portInput`. Draw
+  // the loop-input edge here. Skipped when a body head leaf already consumes
+  // the in-port (ECB/CBC, the AES/DES round groups) — that edge is drawn by
+  // the resolution block above, and double-drawing would duplicate the spine.
+  for (const [groupId, seed] of groupSeedByGroupId) {
+    if (!inPortConsumedByLeaf.has(groupId)) {
+      edges.push({
+        from: seed.node,
+        to: groupId,
+        auxKey: PORT_FLOW_AUX_KEY,
+        kind: "state",
+      });
+    }
+  }
   return edges;
 };
 

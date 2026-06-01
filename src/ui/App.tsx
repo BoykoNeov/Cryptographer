@@ -373,18 +373,19 @@ export const App = () => {
           );
         }
       } else {
-        // Hash branch — today SHA-256 only. The shipped spec is single-block
-        // (one pad-with-byte + one append-be64-length feeding one
-        // compression block), so the message length is bounded by the
-        // single-block message space: 64 bytes block minus 1 byte (0x80
-        // sentinel) minus 8 bytes (length field) = 55 max message bytes.
-        // The runtime would also throw from `pad-with-byte` if the input
-        // pushed the padded length past 56; surfacing the cap here gives
-        // the user a friendlier error than the runtime's internals.
-        const MAX_HASH_INPUT = 55;
+        // Hash branch — today SHA-256 only. Slice 2.11b made the spec
+        // multi-block (the per-block body folds over the padded N×64-byte
+        // message, threading the running hash), so messages of any length
+        // hash correctly. We still cap input — NOT for correctness but for
+        // legibility: the decomposed trace is ~2299 frames PER 64-byte block,
+        // so a multi-KB paste would build a multi-hundred-thousand-frame
+        // trace and bog the linear scrubber. 512 bytes ≈ 9 blocks ≈ 21k
+        // frames is a sane pedagogy ceiling (raise it if a use case needs
+        // more). This is a tool-usability limit, not a SHA-256 limit.
+        const MAX_HASH_INPUT = 512;
         if (inputBytes.length > MAX_HASH_INPUT) {
           throw new Error(
-            `${inputLabel()}: ${HASH_LABELS[hash()]} (single-block) accepts 0..${MAX_HASH_INPUT} bytes; got ${inputBytes.length}. (Multi-block SHA-256 lands in a future slice — today's spec is the FIPS 180-4 §A.1 single-block construction.)`,
+            `${inputLabel()}: ${HASH_LABELS[hash()]} accepts 0..${MAX_HASH_INPUT} bytes in this explorer; got ${inputBytes.length}. (SHA-256 itself has no such limit — the cap keeps the per-byte trace small enough to scrub. ${MAX_HASH_INPUT} bytes is ~${Math.ceil((MAX_HASH_INPUT + 9) / 64)} blocks.)`,
           );
         }
       }

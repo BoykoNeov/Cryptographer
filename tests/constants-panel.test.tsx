@@ -63,9 +63,13 @@ describe("ConstantsPanel (A1)", () => {
     expect(kConsumers).toContain("round.0.fetch-K");
     expect(kConsumers).toContain("round.63.fetch-K");
     expect(kConsumers.length).toBe(64);
-    // H is read by the working-vars seed + the final add.
+    // H is read once — by `init.fetch-H`, which bootstraps the per-block
+    // fold's chainInput (block 0's running hash). Slice 2.11b retired the old
+    // `final.fetch-H` consumer: the per-block final-add now adds the RUNNING
+    // hash (the iterate chain), not the constant aux["H"].
     expect(hConsumers).toContain("init.fetch-H");
-    expect(hConsumers).toContain("final.fetch-H");
+    expect(hConsumers).not.toContain("final.fetch-H");
+    expect(hConsumers.length).toBe(1);
   });
 
   it("clicking a consumer link selects that leaf", () => {

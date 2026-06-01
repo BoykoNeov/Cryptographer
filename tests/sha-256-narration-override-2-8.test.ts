@@ -75,17 +75,21 @@ describe("SHA-256 narrationOverride coverage (Slice 2.8)", () => {
     //   - 13 schedule-body leaves (defined ONCE in the FES body — the
     //     runtime instantiates them 48 times, but they appear once in
     //     the spec tree). A3a dropped schedule-out (→ FES `bodyOutput`).
-    //   - 1 between-phases leaf: init.fetch-H. A3b dropped init-working-vars
-    //     (→ round 0 seedInput); A3a dropped W-publish (→ FES `outputAux`);
-    //     A1 dropped K-to-aux + H-to-aux + H-constant via cipherConstants.
+    //   - 1 parent-scope leaf: init.fetch-H (bootstraps the 2.11b "blocks"
+    //     iterate's chainInput). A3b dropped init-working-vars (→ round 0
+    //     seedInput); A3a dropped W-publish (→ FES `outputAux`); A1 dropped
+    //     K-to-aux + H-to-aux + H-constant via cipherConstants.
     //   - 64 compression rounds × 26 leaves = 1664 leaves. A3b dropped
     //     state-in + state-out per round (→ group seedInput/bodyOutput).
-    //   - 12 final-add leaves (split-wv, fetch-H, split-H, 8 × s_i,
-    //     assemble). A3b dropped final.state-in (→ port(round.63,"out"));
-    //     A3a dropped final.out (→ `spec.outputFrom`).
-    //   = 1692 leaves in the spec tree (was 1822 pre-A3b, 1827 pre-A3a,
-    //     1829 pre-A1).
-    expect(leaves.length).toBe(1692);
+    //   - 11 final-add leaves (split-wv, split-H, 8 × s_i, assemble). A3b
+    //     dropped final.state-in (→ port(round.63,"out")); A3a dropped
+    //     final.out (→ `spec.outputFrom`); Slice 2.11b dropped final.fetch-H
+    //     (the addend is the iterate `chain`, not the constant aux["H"]).
+    //   The schedule body + rounds + final-add now live inside the "blocks"
+    //   iterate, but the recursive leaf walker descends into it, so the count
+    //   is unchanged by the wrapping itself.
+    //   = 1691 leaves in the spec tree (was 1692 pre-2.11b, 1822 pre-A3b).
+    expect(leaves.length).toBe(1691);
   });
 
   it("every leaf carries a non-null narrationOverride", () => {

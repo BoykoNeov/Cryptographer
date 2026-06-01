@@ -13,16 +13,17 @@
  * finds no producer for `prior-{N}` and emits no edge. The body's
  * lookback fetches end up with zero incoming arrows — pedagogically
  * reading as "values from thin air" even though their seed window
- * has a real provenance. After scaffolding-suppression A3a the
- * SHA-256 FES declares `seedInput: { node: "length-append", … }`, so
- * the anchor is `length-append` directly (the `append-be64-length@1`
- * leaf producing the 64-byte padded block split into 16 four-byte
- * seeds) — the old `seed-schedule` bytes-to-state bridge is gone.
+ * has a real provenance. Slice 2.11b wrapped the per-block body in the
+ * "blocks" iterate, and the SHA-256 FES now declares
+ * `seedInput: { node: "blocks", port: "in" }` (this block's 64 bytes,
+ * injected per-iteration by the iterate), so the anchor is `blocks` —
+ * the honest "this block's bytes seed the schedule" source.
  *
  * **What this file pins:**
  *   1. SHA-256: four history-seed edges exist, one per
  *      `lookbackOffsets` entry, sourced from the FES `seedInput.node`
- *      (`length-append`) and targeting the four fetch-pN body leaves.
+ *      (`blocks`, the per-block iterate) and targeting the four fetch-pN
+ *      body leaves.
  *   2. AES-128 ECB (legacy, no FES-with-history): zero history-seed
  *      edges — the pass is a no-op for specs without the primitive.
  *   3. Shared `auxKey: "history-seed"` so that when `msg-schedule`
@@ -74,19 +75,21 @@ describe("deriveAuxGraph — history-seed edge derivation (S2(l))", () => {
     expect(seedEdges).toHaveLength(4);
   });
 
-  it("SHA-256: every history-seed edge originates from `length-append` (the FES-with-history `seedInput.node`)", () => {
+  it("SHA-256: every history-seed edge originates from `blocks` (the FES-with-history `seedInput.node`)", () => {
     const spec = buildSha256Spec();
     const registry = buildDefaultRegistry();
     const graph = deriveAuxGraph(emptyTrace(), spec, { registry });
     const seedEdges = graph.edges.filter(
       (e) => e.kind === "aux" && e.auxKey === HISTORY_SEED_AUX_KEY,
     );
-    // Anchor rule (A3a): `seedInput.node`. The SHA-256 FES declares
-    // `seedInput: { node: "length-append", port: "output" }`, so the
-    // synthetic seed edges anchor at `length-append` (the
-    // append-be64-length@1 producing the 64-byte padded block).
+    // Anchor rule: `seedInput.node`. Slice 2.11b's SHA-256 FES declares
+    // `seedInput: { node: "blocks", port: "in" }` — this block's 64 bytes,
+    // injected per iteration by the per-block iterate. So the synthetic seed
+    // edges anchor at `blocks` (the honest per-block seed source), not at
+    // `length-append` (which is the WHOLE padded message — anchoring there
+    // would misrepresent the per-block seed window for multi-block input).
     for (const edge of seedEdges) {
-      expect(edge.from).toBe("length-append");
+      expect(edge.from).toBe("blocks");
     }
   });
 
@@ -151,58 +154,46 @@ describe("deriveAuxGraph — history-seed edge derivation (S2(l))", () => {
       (e) => e.kind === "aux" && e.auxKey === HISTORY_SEED_AUX_KEY,
     );
     expect(seedEdges).toHaveLength(1);
-    expect(seedEdges[0]?.from).toBe("length-append");
+    expect(seedEdges[0]?.from).toBe("blocks");
     expect(seedEdges[0]?.to).toBe("msg-schedule");
   });
 
-  it("SHA-256: shared auxKey makes the edges fanout-eligible for replication (length-append fanout = 4)", () => {
+  it("SHA-256: `blocks` is the single seed source for the four history-seed edges (shared auxKey)", () => {
     const spec = buildSha256Spec();
     const registry = buildDefaultRegistry();
     const graph = deriveAuxGraph(emptyTrace(), spec, { registry });
-    // Mirror `replicateHighFanoutSources`'s fanout-eligibility predicate
-    // (kind:"aux" OR kind:"state" + auxKey:PORT_FLOW_AUX_KEY). `length-append`'s
-    // outgoing aux edges are exactly the four history-seed edges (its byte
-    // output feeds the FES via `seedInput`, not a port-flow edge).
-    const lengthAppendOutgoing = graph.edges.filter((e) => e.from === "length-append");
-    const auxOnly = lengthAppendOutgoing.filter((e) => e.kind === "aux");
-    expect(auxOnly).toHaveLength(4);
-    for (const edge of auxOnly) {
+    // Slice 2.11b: the seed source is the per-block iterate `blocks`. Its
+    // outgoing aux edges are exactly the four history-seed edges (one per
+    // lookback offset), all sharing HISTORY_SEED_AUX_KEY so a collapse dedups
+    // them to one arrow (see the collapse test above).
+    const blocksAuxOut = graph.edges.filter((e) => e.from === "blocks" && e.kind === "aux");
+    expect(blocksAuxOut).toHaveLength(4);
+    for (const edge of blocksAuxOut) {
       expect(edge.auxKey).toBe(HISTORY_SEED_AUX_KEY);
     }
   });
 
-  it("SHA-256: at the default threshold, length-append auto-replicates inside the expanded msg-schedule body (replicas land in consumer scope)", () => {
+  it("SHA-256: the seed source is a CONTAINER (`blocks`), so leaf fanout-replication does not apply", () => {
     const spec = buildSha256Spec();
     const registry = buildDefaultRegistry();
     const graph = deriveAuxGraph(emptyTrace(), spec, { registry });
-    // No msg-schedule collapse: the four fetch-pN consumers remain
-    // distinct, so each gets its own replica chip. Threshold 3 (strict
-    // `>`) means "fanout ≥ 4 auto-replicates" — exactly what
-    // length-append's four history-seed edges trip. Without the user
-    // touching the panel, the four arrows should fan out into the
-    // msg-schedule body (one replica per consumer, sitting inside the
-    // body alongside its fetch leaf).
+    // Behavior change from Slice 2.11b: the seed window moved from a leaf
+    // (`length-append`, pre-2.11b — which auto-replicated its 4-way fanout
+    // into the msg-schedule body) to the per-block iterate `blocks`. The
+    // honest depiction is "this block's bytes seed the schedule", and the
+    // bytes originate at the iterate boundary, not a standalone leaf.
+    // `replicateHighFanoutSources` only splits LEAF source nodes; a container
+    // source is left intact, so no seed replicas are produced. (The four
+    // edges still share an auxKey, so they dedup to one arrow when
+    // msg-schedule is collapsed — see the collapse test above.)
+    expect(graph.containers.some((c) => c.id === "blocks")).toBe(true);
+    expect(graph.nodes.some((n) => n.stepId === "blocks")).toBe(false);
     const replicated = replicateHighFanoutSources(graph, DEFAULT_REPLICATION_THRESHOLD);
-    const seedReplicas = replicated.nodes.filter((n) => n.replicaOf === "length-append");
-    // Four total: the 4 aux (history-seed) replicas inside msg-schedule.
-    // (Pre-5.3e there was a 5th — a spine replica at root scope for the legacy
-    // `length-append → msg-schedule` consecutive-siblings state edge. That edge
-    // came from `inferStateEdges`, retired in Slice 5.3e Batch 3; length-append's
-    // only out-edges are now the 4 history-seed aux edges, and the
-    // preamble→schedule handoff reads as those 4 aux arrows.)
-    expect(seedReplicas).toHaveLength(4);
-    // The four IN-CONTAINER replicas (the user's add-on: "items inside
-    // a container should also be available to be represented as
-    // replications") land inside `msg-schedule`, alongside their
-    // consumer fetch leaves.
-    const insideMsgSchedule = seedReplicas.filter(
-      (n) => n.containerPath.length === 1 && n.containerPath[0] === "msg-schedule",
-    );
-    expect(insideMsgSchedule).toHaveLength(4);
-    // No root-scope replica anymore — length-append has no spine-successor
-    // state edge (only the aux history-seed fan-out into the container body).
-    const atRoot = seedReplicas.filter((n) => n.containerPath.length === 0);
-    expect(atRoot).toHaveLength(0);
+    const blocksReplicas = replicated.nodes.filter((n) => n.replicaOf === "blocks");
+    expect(blocksReplicas).toHaveLength(0);
+    // And the old leaf source no longer fans the seeds out either.
+    const laReplicas = replicated.nodes.filter((n) => n.replicaOf === "length-append");
+    expect(laReplicas).toHaveLength(0);
   });
 
   it("SHA-256: history-seed edges paint as kind:'aux' (not 'state'), distinguishing them from the port-flow spine", () => {

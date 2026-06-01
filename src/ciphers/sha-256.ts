@@ -70,18 +70,24 @@
  *                                          the terminal bytes-to-state "final.out")
  * ```
  *
- * **Single-block scope.** This spec assumes the message fits in ONE
- * 64-byte block (after padding + length-suffix). The "abc" KAT (FIPS
- * 180-4 §A.1) is the canonical reference for single-block. Multi-block
- * support (per-block outer loop, running hash threaded across blocks)
- * is deferred to Slice 2.11's KAT matrix.
+ * **Multi-block (Slice 2.11b).** The message schedule + 64 rounds +
+ * per-block final-add (steps 3–6 above) are wrapped in a port-mode
+ * `iterate` `"blocks"` that folds over the padded N×64-byte message: the
+ * running hash H is the iterate's carried CHAIN (`chainInput` bootstraps
+ * it with the initial hash, `chainFeedback` advances it, `chainOutput`
+ * harvests the final H as the digest). Each iteration reads its 64-byte
+ * block off `port("blocks","in")` and the running H off
+ * `port("blocks","chain")`. Padding (`pad` + `length-append`) already
+ * produces a multiple of 64 for any length, so it needs no change. For a
+ * single-block message (N=1) the fold runs once and the digest is
+ * byte-identical to the pre-2.11b spec — only trace stepIds gain a `:b0`
+ * suffix. (FIPS 180-4 §6.2.2.)
  *
  * **Math byte-identical to FIPS 180-4.** The "abc" KAT continues to pass
  * after the rewrite — the decomposition is algebraically identical to
  * the helpers it replaces. `tests/sha-256.test.ts` is the load-bearing
- * safety net for this; the decomposition-parity test in
- * `tests/sha-256-decomposition-parity.test.ts` (Slice 2.6d step 5) adds
- * frame-level structural assertions on top.
+ * safety net; `tests/sha-256-kat-matrix.test.ts` (Slice 2.11c) adds the
+ * §A.2 multi-block KAT + a `node:crypto` cross-check across lengths.
  *
  * **Frame count grows substantially.** From 123 frames per run (2.6b's
  * coarse helpers) to ~2486 per run (decomposed). Every algorithmic
@@ -434,19 +440,21 @@ the padded message block via the FES seeding contract.`,
 // the constants-panel legend rather than in per-leaf narration.
 
 const NARR_INIT_FETCH_H: StepDocumentation = {
-  name: "Fetch H to seed working variables",
-  summary: 'Read the 8 initial-hash-value words from aux["H"] to seed a..h before round 0.',
+  name: "Fetch the initial hash H_0..H_7",
+  summary: 'Read the 8 initial-hash-value words from aux["H"] to bootstrap the per-block fold.',
   detail: `Reads the 32-byte \`aux["H"]\` buffer (H_0..H_7, each a
-big-endian 32-bit word) and emits it on a port. Round 0's \`seedInput\`
-wires straight to this output (A3b), so H_0..H_7 are the initial 8
-working variables a..h — no \`bytes-to-state\` bridge into state.
+big-endian 32-bit word) and emits it on a port. Slice 2.11b: this output
+feeds the per-block iterate's \`chainInput\` — the running-hash seed for
+the FIRST block. Inside the fold, each block reads the running hash off
+\`port("blocks","chain")\` (round 0's working variables a..h AND the
+final-add addend); for block 0 that chain equals these initial values.
 
 \`aux["H"]\` is materialized once by the runtime from
-\`spec.cipherConstants["H"]\` — the SAME source the final-add step
-reads via \`final.fetch-H\`. H plays two roles in SHA-256 (seed the
-working variables here; add into the digest after round 63), and both
-now read one editable constant, so changing H in the constants panel
-moves both uses in lockstep.
+\`spec.cipherConstants["H"]\`. H plays two roles in SHA-256 — it seeds
+the very first block's working variables and is added into the running
+hash after every block — and both reduce, for the first block, to this
+one editable constant, so changing H in the constants panel moves the
+fold's bootstrap.
 
 Provenance: per FIPS 180-4 §5.3.3, each \`H_i\` is the first 32 bits of
 the fractional part of the square root of the \`(i+1)\`-th prime
@@ -954,50 +962,55 @@ of the i-th working variable (for i = 0..7).`,
   references: ["FIPS 180-4 §6.2.2 — Step 4"],
 };
 
-const NARR_FINAL_FETCH_H: StepDocumentation = {
-  name: "Final-add: fetch H array from aux",
-  summary:
-    'Load the 32-byte aux["H"] buffer of initial hash values to add back into the working variables.',
-  detail: `H_0..H_7 (the SHA-256 initial hash values, FIPS 180-4
-§5.3.3) are added back into the post-compression working variables
-to produce the final digest. This loads the full 32-byte buffer; the
-next leaf splits it.`,
-  references: ["FIPS 180-4 §5.3.3 — Initial hash values"],
-};
-
 const NARR_FINAL_SPLIT_H: StepDocumentation = {
-  name: "Split H_0..H_7",
-  summary: 'Split the 32-byte aux["H"] buffer into 8 separate 4-byte H_i words.',
-  detail: "Output port `output_i` carries H_i (for i = 0..7).",
-  references: ["FIPS 180-4 §5.3.3 — Initial hash values"],
+  name: "Split the running hash H_0..H_7",
+  summary:
+    "Split the 32-byte running hash (entering this block on the iterate's chain port) into 8 separate 4-byte H_i words.",
+  detail: `Output port \`output_i\` carries H_i (for i = 0..7) — the
+running hash entering THIS block, read off the per-block iterate's
+\`chain\` port (Slice 2.11b). For the FIRST block that is the SHA-256
+initial hash (FIPS 180-4 §5.3.3); for later blocks it is the running
+hash carried from the previous block. The next 8 leaves add each H_i
+back into the post-round-63 working variable a_i to produce this
+block's new running hash.`,
+  references: [
+    "FIPS 180-4 §5.3.3 — Initial hash values",
+    "FIPS 180-4 §6.2.2 — Step 4 (intermediate hash update)",
+  ],
 };
 
 const NARR_FINAL_S_I: StepDocumentation = {
-  name: "Digest word: hash_i = wv_i + H_i (mod 2³²)",
-  summary: "Add the i-th initial hash value back into the i-th post-compression working variable.",
+  name: "Running-hash word: H_i ← H_i + a_i (mod 2³²)",
+  summary:
+    "Add the i-th post-compression working variable into the i-th running-hash word to update H for this block.",
   detail: `Per FIPS 180-4 §6.2.2 Step 4, for each i ∈ 0..7:
 
 \`\`\`
 H_i ← H_i + a_i   (mod 2³²)
 \`\`\`
 
-where \`a_i\` is the i-th working variable after round 63 (a, b,
-c, d, e, f, g, h corresponding to i = 0..7). For single-block scope
-the new H_i IS the i-th digest word. Each of these 8 add-mod-32
-leaves applies the rule for one specific i.`,
+where \`a_i\` is the i-th working variable after round 63 and \`H_i\`
+is the running hash entering this block (a, b, c, d, e, f, g, h
+corresponding to i = 0..7). The result is this block's new running
+hash, carried to the next block via the iterate's chain. After the
+LAST block, the 8 H_i ARE the 8 digest words. Each of these 8
+add-mod-32 leaves applies the rule for one specific i.`,
   references: ["FIPS 180-4 §6.2.2 — Step 4"],
 };
 
 const NARR_FINAL_ASSEMBLE: StepDocumentation = {
-  name: "Assemble 32-byte digest",
-  summary: "Concatenate hash_0..hash_7 into the final 32-byte SHA-256 output.",
-  detail: `8-way concat producing the final 32-byte SHA-256 digest:
+  name: "Assemble this block's 32-byte running hash",
+  summary: "Concatenate H_0..H_7 into this block's 32-byte running hash.",
+  detail: `8-way concat producing this block's 32-byte running hash:
 
 \`\`\`
-digest = hash_0 || hash_1 || ... || hash_7
+H = H_0 || H_1 || ... || H_7
 \`\`\`
 
-For the "abc" KAT (FIPS 180-4 §A.1) this yields
+This value is the per-block iterate's \`chainFeedback\` — it becomes the
+running hash entering the NEXT block. After the last block it is
+harvested as the digest via the iterate's \`chainOutput\`. For the
+single-block "abc" KAT (FIPS 180-4 §A.1) it equals
 \`ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\`.`,
   references: ["FIPS 180-4 §6.2.2 — Step 4 / §A.1 KAT"],
 };
@@ -1449,10 +1462,14 @@ const buildCompressionRound = (t: number): StepNode => {
     ],
     // A3b group port contract: the carried a..h enter the body on
     // `port("round.{t}", "in")` and the repacked result leaves on `repack`'s
-    // output — port-to-port, no state bridges. Round 0 seeds from
-    // `init.fetch-H` (H_0..H_7); round t (t>0) from round t-1's published exit
-    // ("out"). The next round's `seedInput` reads this round's `bodyOutput`.
-    seedInput: t === 0 ? port("init.fetch-H", "output") : port(`round.${t - 1}`, "out"),
+    // output — port-to-port, no state bridges. Round 0 seeds from the per-block
+    // running hash on the enclosing iterate's `chain` port (Slice 2.11b —
+    // `port("blocks", "chain")`); for the FIRST block that chain is the initial
+    // hash H_0..H_7 (bootstrapped by the iterate's `chainInput`), for later
+    // blocks it's the running hash after the previous block. Round t (t>0) seeds
+    // from round t-1's published exit ("out"). The next round's `seedInput`
+    // reads this round's `bodyOutput`.
+    seedInput: t === 0 ? port("blocks", "chain") : port(`round.${t - 1}`, "out"),
     bodyOutput: r("repack", "output"),
   };
 };
@@ -1475,17 +1492,18 @@ const buildFinalAddSteps = (): readonly StepNode[] => [
   },
   {
     kind: "step",
-    id: "final.fetch-H",
-    type: "aux-load-bytes@1",
-    params: { auxName: "H", byteLength: 32 },
-    narrationOverride: NARR_FINAL_FETCH_H,
-  },
-  {
-    kind: "step",
     id: "final.split-H",
     type: "split-bytes@1",
     params: { widths: [4, 4, 4, 4, 4, 4, 4, 4] },
-    portInputs: { input: port("final.fetch-H", "output") },
+    // Multi-block (Slice 2.11b): the addend is the per-block RUNNING hash, read
+    // off the enclosing iterate's `chain` port — NOT the constant aux["H"]. For
+    // the first block the chain equals the initial H (bootstrapped by the
+    // iterate's `chainInput`), so the §A.1 single-block digest is unchanged;
+    // for later blocks it is the running hash carried from the previous block,
+    // which is what makes `H_new = H_old + compress(H_old, block)` correct.
+    // (Retires the old `final.fetch-H` aux-load-bytes leaf, which read the
+    // constant — correct only when there's exactly one block.)
+    portInputs: { input: port("blocks", "chain") },
     narrationOverride: NARR_FINAL_SPLIT_H,
   },
   // 8 × 2-way add-mod-32: s_i = wv_i + H_i
@@ -1524,9 +1542,11 @@ const buildFinalAddSteps = (): readonly StepNode[] => [
 /**
  * Build the SHA-256 spec under the Slice 2.6d decomposed topology.
  *
- * Single-block only — supports messages whose total padded size is one
- * 64-byte block (i.e., message length ≤ 55 bytes per FIPS 180-4 §5.1.1
- * padding rules). Multi-block support lands in Slice 2.11.
+ * Multi-block (Slice 2.11b): the per-block body is wrapped in a port-mode
+ * `iterate` that folds over the padded N×64-byte message, threading the
+ * running hash H as the iterate's chain. Messages of any length hash
+ * correctly (the live UI caps input at a sane ceiling to keep the trace
+ * scrubbable — see `App.tsx`'s `MAX_HASH_INPUT`).
  */
 export const buildSha256Spec = (): CipherSpec => ({
   id: "sha-256@1",
@@ -1567,48 +1587,14 @@ export const buildSha256Spec = (): CipherSpec => ({
       },
       narrationOverride: NARR_LENGTH_APPEND,
     },
-    // ─── Message schedule (48 iterations, lookbackOffsets [2,7,15,16]) ────
-    // 14-leaf decomposed body per iteration. After this, state = W[0..63]
-    // (256 bytes — FES exit concatenates the full history).
-    //
-    // Default-collapse on first graph-view render (Slice 2.10c, 2026-05-25,
-    // pre-emptive per Slice 2.6d follow-up's sequencing pin). 48 iterations
-    // × 14 leaves = 672 chips uncollapsed — the chip-wall failure mode the
-    // Slice 2.6c plan flagged. Same `defaultCollapsed: true` flag the 64
-    // compression rounds already use (sha-256.ts:301). The two together
-    // mean the SHA-256 graph view's first visit shows ~10 top-level chips
-    // plus 64 collapsed round headers + 1 collapsed schedule header,
-    // browseable; explicit user expansion writes through to
-    // `LayoutSpec.expandedGroups` per the same `core/spec-defaults.ts`
-    // algebra.
-    {
-      kind: "for-each-subgraph-with-history",
-      id: "msg-schedule",
-      label: "Message schedule W_0..W_63",
-      iterationCount: 48,
-      lookbackOffsets: [2, 7, 15, 16],
-      historyEntryByteLength: 4,
-      defaultCollapsed: true,
-      // Container port contract (scaffolding-suppression A3a). The seed
-      // history is sliced from `length-append`'s 64-byte block (16 four-byte
-      // W seeds) — no `seed-schedule` bytes-to-state bridge. Each iteration's
-      // result is `w-t`'s output port (no `schedule-out` bridge). The full
-      // 256-byte W is published into aux["W"] at exit (no `W-publish`
-      // state-to-aux bridge); the 64 compression rounds read aux["W"] as before.
-      seedInput: port("length-append", "output"),
-      bodyOutput: port("w-t", "output"),
-      outputAux: "W",
-      children: buildScheduleBody(),
-    },
-    // ─── Initial working variables (H_0..H_7) for round 0 ────────────────
-    // Scaffolding-suppression A1: K and H are declared once on
-    // `cipherConstants` (below) and materialized into aux["K"]/aux["H"] by
-    // the runtime before any step runs. `init.fetch-H` reads aux["H"] (the
-    // SAME buffer the final-add reads via `final.fetch-H`, so editing the H
-    // constant moves both consumers in lockstep) and exposes the 8 initial
-    // working variables on its output port. Round 0's `seedInput` wires
-    // straight to it (A3b) — no `bytes-to-state "init-working-vars"` bridge
-    // seeding state; the compression rounds never touch `state`.
+    // ─── Initial hash H_0..H_7 (the running-hash seed for block 0) ───────
+    // Scaffolding-suppression A1: K and H live on `cipherConstants`; the
+    // runtime materializes aux["K"] / aux["H"] before the walk. `init.fetch-H`
+    // reads aux["H"] and exposes the 8 initial hash words on its output port.
+    // Slice 2.11b: it now feeds the per-block iterate's `chainInput` (the
+    // running-hash seed for the FIRST block) rather than round 0 directly —
+    // it must sit in the PARENT scope because `chainInput` resolves there for
+    // iteration 0.
     {
       kind: "step",
       id: "init.fetch-H",
@@ -1616,24 +1602,83 @@ export const buildSha256Spec = (): CipherSpec => ({
       params: { auxName: "H", byteLength: 32 },
       narrationOverride: NARR_INIT_FETCH_H,
     },
-    // ─── 64 compression rounds (decomposed) ──────────────────────────────
-    ...Array.from({ length: 64 }, (_, t) => buildCompressionRound(t)),
-    // ─── Final add (decomposed): state (32 bytes wv) + aux["H"] → 32-byte hash
-    ...buildFinalAddSteps(),
+    // ─── Per-block compression fold (Slice 2.11b — multi-block) ──────────
+    // SHA-256 over N blocks is a fold: H_0 = initial hash; for each 64-byte
+    // block, H ← H + compress(H, block); the digest is H after the last block
+    // (FIPS 180-4 §6.2.2). The port-mode `iterate` IS that fold — `seedInput`
+    // is the padded N×64-byte message split into 64-byte blocks, `chainInput`
+    // bootstraps the running hash H, `chainFeedback` carries each block's new
+    // H to the next, and `chainOutput` harvests the final H as the digest.
+    // The whole per-block body (message schedule + 64 rounds + per-block
+    // final-add) lives inside.
+    //
+    //   port("blocks","in")    = this block's 64 bytes (→ message schedule)
+    //   port("blocks","chain") = the running hash H entering this block
+    //                            (→ round 0's working-var seed AND final-add's
+    //                            addend; = the initial H for the first block)
+    //
+    // For a single-block message (N=1) the fold runs once and the digest is
+    // byte-identical to the pre-2.11b single-block spec — only the trace
+    // stepIds gain a `:b0` suffix.
+    {
+      kind: "iterate",
+      id: "blocks",
+      label: "Per-block compression (running-hash fold)",
+      blockByteLength: 64,
+      seedInput: port("length-append", "output"),
+      chainInput: port("init.fetch-H", "output"),
+      chainFeedback: port("final.assemble", "output"),
+      bodyOutput: port("final.assemble", "output"),
+      chainOutput: "digest",
+      children: [
+        // ─── Message schedule (48 iterations, lookbackOffsets [2,7,15,16]) ──
+        // Decomposed body per iteration; FES exit = W[0..63] (256 bytes).
+        // Seeds from THIS block's 64 bytes (`port("blocks","in")`, sliced into
+        // 16 four-byte W seeds) and publishes the 256-byte W into aux["W"] at
+        // exit (`outputAux`); the 64 rounds read aux["W"], recomputed per block.
+        // Default-collapsed to avoid the 672-chip wall on first graph render
+        // (Slice 2.10c) — explicit expansion writes through to
+        // `LayoutSpec.expandedGroups` per the `core/spec-defaults.ts` algebra.
+        {
+          kind: "for-each-subgraph-with-history",
+          id: "msg-schedule",
+          label: "Message schedule W_0..W_63",
+          iterationCount: 48,
+          lookbackOffsets: [2, 7, 15, 16],
+          historyEntryByteLength: 4,
+          defaultCollapsed: true,
+          seedInput: port("blocks", "in"),
+          bodyOutput: port("w-t", "output"),
+          outputAux: "W",
+          children: buildScheduleBody(),
+        },
+        // ─── 64 compression rounds (decomposed) ────────────────────────────
+        ...Array.from({ length: 64 }, (_, t) => buildCompressionRound(t)),
+        // ─── Final add: a..h + running H → new running H (this block) ───────
+        // The 32-byte result is both the iterate's `chainFeedback` (next
+        // block's H) and `bodyOutput` (the per-block running-hash stream); for
+        // the last block it is harvested as the digest via `chainOutput`.
+        ...buildFinalAddSteps(),
+      ],
+    },
   ],
   // ─── Published cryptographic constants (scaffolding-suppression A1) ─────
   // The 64 round constants K and the 8 initial-hash-value words H. The
   // runtime materializes these into aux["K"] (256 bytes) + aux["H"] (32
   // bytes) once, before walking the tree, so every consumer reads them via
   // `aux-load-bytes@1` and no per-spec loader leaf is needed. Editable in
-  // the constants panel; both H consumers (working-vars seed + final add)
-  // track one source. Provenance: K = cube roots of the first 64 primes
-  // (FIPS 180-4 §4.2.2); H = square roots of the first 8 primes (§5.3.3).
+  // the constants panel. Slice 2.11b: H now has ONE consumer — `init.fetch-H`,
+  // which bootstraps the per-block fold's `chainInput`; the per-block final-add
+  // adds the RUNNING hash (the iterate's `chain` port), not the constant, so
+  // editing H still moves both the block-0 seed and the block-0 addend in
+  // lockstep (they're the same value for the first block). Provenance: K =
+  // cube roots of the first 64 primes (FIPS 180-4 §4.2.2); H = square roots
+  // of the first 8 primes (§5.3.3).
   cipherConstants: { K: SHA256_K_BYTES, H: SHA256_H_BYTES },
-  // Cipher exit port (scaffolding-suppression A3a): the 32-byte digest
-  // assembled by `final.assemble` becomes the trace's finalState, decoded
-  // via stateShape "bytes". Retires the terminal `final.out` bridge leaf.
-  outputFrom: port("final.assemble", "output"),
+  // Cipher exit port (Slice 2.11b): the digest is the running hash AFTER the
+  // last block, harvested off the per-block iterate's `chainOutput` ("digest")
+  // — the fold's final carried value, not any single block's `final.assemble`.
+  outputFrom: port("blocks", "digest"),
 });
 
 // ─── Public re-exports (consumers and tests) ──────────────────────────────

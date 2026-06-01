@@ -89,7 +89,7 @@ describe("GraphView — replication panel port-flow source eligibility", () => {
     expect(row?.textContent ?? "").toContain("3");
   });
 
-  it("SHA-256 with expanded msg-schedule: `length-append` (4 history-seed aux edges) appears in the panel with fanout 4", () => {
+  it("SHA-256: the history-seed fanout moved to the `blocks` iterate; `length-append` keeps only the loop-input edge", () => {
     setHash("sha-256");
     seedSha256Trace();
     // 3rd arg `inDefaults: true` because msg-schedule has `defaultCollapsed: true`
@@ -98,13 +98,18 @@ describe("GraphView — replication panel port-flow source eligibility", () => {
     setReplicationEnabled(true);
     const { container } = render(() => <GraphView />);
     setReplicationPanelOpen(true);
-    // Sanity: the Slice S2(l) path (aux edges) still works under the
-    // widened predicate — the widening is additive, not replacement.
-    // Post scaffolding-suppression A3a the history-seed source is
-    // `length-append` (the FES `seedInput.node`), not the retired
-    // `seed-schedule` bridge.
-    const row = container.querySelector('[data-testid="replication-row-length-append"]');
-    expect(row).not.toBeNull();
-    expect(row?.textContent ?? "").toContain("4");
+    // Slice 2.11b: the FES `seedInput.node` is now the per-block iterate
+    // `blocks` (this block's bytes seed the schedule). Its outgoing
+    // fanout-eligible edges are the four history-seed aux edges PLUS the one
+    // port-flow chain seed into `round.0.split` = 5. Meanwhile `length-append`
+    // is no longer the seed source — its only outgoing edge is the loop-input
+    // edge `length-append → blocks` (the 2.11b graph fix that keeps it from
+    // floating), so its fanout drops to 1.
+    const blocksRow = container.querySelector('[data-testid="replication-row-blocks"]');
+    expect(blocksRow).not.toBeNull();
+    expect(blocksRow?.textContent ?? "").toContain("5 edges");
+    const laRow = container.querySelector('[data-testid="replication-row-length-append"]');
+    expect(laRow).not.toBeNull();
+    expect(laRow?.textContent ?? "").toContain("1 edge");
   });
 });

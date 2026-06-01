@@ -75,17 +75,17 @@ describe("deriveAuxGraph — port-flow edge derivation (S2(e))", () => {
     ]);
   });
 
-  it("SHA-256: round 0 is seeded port-to-port from `init.fetch-H` (A3b)", () => {
+  it("SHA-256: round 0 is seeded port-to-port from the per-block chain (`blocks`)", () => {
     const spec = buildSha256Spec();
     const registry = buildDefaultRegistry();
     const graph = deriveAuxGraph(emptyTrace(), spec, { registry });
-    // Scaffolding-suppression A3b retired the `init-working-vars`
-    // bytes-to-state bridge: round 0's `seedInput` is `port("init.fetch-H",
-    // "output")`, and `round.0.split` reads `port("round.0", "in")`. The
-    // port-edge derivation resolves that seed reference THROUGH the group's
-    // seedInput, so the edge runs `init.fetch-H → round.0.split`.
+    // Slice 2.11b: round 0's `seedInput` is `port("blocks", "chain")` — the
+    // per-block running hash (the initial H for block 0, bootstrapped by the
+    // iterate's chainInput). `round.0.split` reads `port("round.0", "in")`, and
+    // the port-edge derivation resolves that seed reference THROUGH the group's
+    // seedInput (single-hop), so the edge runs `blocks → round.0.split`.
     const match = graph.edges.some(
-      (e) => e.from === "init.fetch-H" && e.to === "round.0.split" && e.kind === "state",
+      (e) => e.from === "blocks" && e.to === "round.0.split" && e.kind === "state",
     );
     expect(match).toBe(true);
   });
@@ -100,8 +100,10 @@ describe("deriveAuxGraph — port-flow edge derivation (S2(e))", () => {
     // doesn't filter them out from lifted aux-only roots. Spot-check
     // that the discriminator is consistently applied to every port-
     // flow edge from a known port-native source leaf (`init.fetch-H`
-    // — an aux-load-bytes@1 leaf; since A3b it seeds round 0 via the
-    // group seedInput, so its edge targets `round.0.split`).
+    // — an aux-load-bytes@1 leaf; Slice 2.11b: it bootstraps the per-block
+    // fold's chainInput, and `final.split-H` reads `port("blocks","chain")`,
+    // resolved through chainInput to `init.fetch-H` — so its edge targets
+    // `final.split-H`).
     const portFlowFromInitFetchH = graph.edges.filter((e) => e.from === "init.fetch-H");
     expect(portFlowFromInitFetchH.length).toBeGreaterThan(0);
     for (const edge of portFlowFromInitFetchH) {
@@ -128,7 +130,9 @@ describe("deriveAuxGraph — per-edge state-spine suppression on port-native con
     // All these would be emitted by the unconditional inference pass.
     // The per-edge gate (consumer doesn't read state-thread) must
     // suppress every one.
-    expect(hasEdge("final.split-wv", "final.fetch-H")).toBe(false);
+    // final.split-wv and final.split-H are consecutive siblings but PARALLEL
+    // (split-wv reads round 63's exit; split-H reads the chain) — no chain.
+    expect(hasEdge("final.split-wv", "final.split-H")).toBe(false);
     for (let i = 0; i < 7; i++) {
       expect(hasEdge(`final.s${i}`, `final.s${i + 1}`)).toBe(false);
     }
@@ -138,23 +142,21 @@ describe("deriveAuxGraph — per-edge state-spine suppression on port-native con
   it("SHA-256: round-to-round carry is port-to-port, not a state-thread (A3b)", () => {
     // Scaffolding-suppression A3b retired the `state-in`/`state-out` bridge
     // leaves. The working variables now carry port-to-port: round t+1's
-    // `seedInput` reads round t's published `bodyOutput` (round 0 from
-    // `init.fetch-H`), and the port-edge derivation resolves each
-    // `port("round.{t}", "in")` seed reference THROUGH the group's seedInput.
-    // So the round chain is connected by PORT-FLOW edges (auxKey "port-flow"),
-    // and NO legacy consecutive-siblings state edge touches any round. (This
-    // replaces the pre-A3b state-thread spine that threaded through the
-    // now-deleted bridges; the connectivity is the same shape, in port edges.
-    // The one surviving legacy state edge, `length-append → msg-schedule`, is
-    // the preamble→schedule handoff and touches no round.)
+    // `seedInput` reads round t's published `bodyOutput` (Slice 2.11b: round 0
+    // from the per-block chain `port("blocks","chain")`), and the port-edge
+    // derivation resolves each `port("round.{t}", "in")` seed reference THROUGH
+    // the group's seedInput. So the round chain is connected by PORT-FLOW edges
+    // (auxKey "port-flow"), and NO legacy consecutive-siblings state edge
+    // touches any round.
     const spec = buildSha256Spec();
     const registry = buildDefaultRegistry();
     const graph = deriveAuxGraph(emptyTrace(), spec, { registry });
     const portFlow = graph.edges.filter((e) => e.kind === "state" && e.auxKey === "port-flow");
     const hasPort = (from: string, to: string): boolean =>
       portFlow.some((e) => e.from === from && e.to === to);
-    // Round 0 seeded from init.fetch-H (resolved through round.0.seedInput).
-    expect(hasPort("init.fetch-H", "round.0.split")).toBe(true);
+    // Round 0 seeded from the per-block chain `blocks` (resolved through
+    // round.0.seedInput = port("blocks","chain"), single-hop).
+    expect(hasPort("blocks", "round.0.split")).toBe(true);
     // Inter-round carry: round t's published exit ("out") → round t+1's split.
     expect(hasPort("round.0", "round.1.split")).toBe(true);
     expect(hasPort("round.62", "round.63.split")).toBe(true);
@@ -218,14 +220,15 @@ describe("deriveAuxGraph — A3b follow-ups: collapsed round-carry parity + vali
     // After collapse, each `round.{t}.split` leaf remaps to its `round.{t}`
     // container; the carry source `round.{t-1}` (a group id) is a collapsed
     // container that stays itself. So the uncollapsed `round.{t-1} →
-    // round.{t}.split` becomes `round.{t-1} → round.{t}`. `init.fetch-H` and
-    // `final.split-wv` aren't rounds → they stay as visible leaves.
+    // round.{t}.split` becomes `round.{t-1} → round.{t}`. The Slice 2.11b
+    // round-0 seed `blocks → round.0.split` collapses to `blocks → round.0`.
+    // `blocks` and `final.split-wv` aren't rounds → they stay visible.
     const { graph } = buildSha256Graph();
     const collapsed = collapseGraph(graph, allRoundIds());
     const hasEdge = (from: string, to: string): boolean =>
       collapsed.edges.some((e) => e.from === from && e.to === to && e.kind === "state");
-    // Preamble seed into round 0.
-    expect(hasEdge("init.fetch-H", "round.0")).toBe(true);
+    // Per-block chain seed into round 0.
+    expect(hasEdge("blocks", "round.0")).toBe(true);
     // Exit from the round chain into the final-add block.
     expect(hasEdge("round.63", "final.split-wv")).toBe(true);
     // Every inter-round boundary carries — no island anywhere in the chain.

@@ -35,6 +35,7 @@ import { createHash } from "node:crypto";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { buildSha256Spec } from "@/ciphers/sha-256";
 import { runSpec } from "@/core/runtime";
+import type { StepNode } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -52,6 +53,18 @@ const runSha256 = (plaintext: Uint8Array): Uint8Array => {
     throw new Error(`expected bytes finalState, got ${trace.finalState.shape}`);
   }
   return trace.finalState.bytes;
+};
+
+// Slice 2.11b: the per-block body (message schedule + 64 rounds + final-add)
+// lives inside the port-mode `iterate` "blocks". The structural pins reach the
+// round groups through it rather than off the top-level `spec.steps`.
+const blockBody = (): readonly StepNode[] => {
+  const spec = buildSha256Spec();
+  const blocks = spec.steps.find((s) => s.id === "blocks");
+  if (blocks === undefined || blocks.kind !== "iterate") {
+    throw new Error("expected a `blocks` iterate node at the top level");
+  }
+  return blocks.children;
 };
 
 // ─── FIPS 180-4 §A.1 KAT ──────────────────────────────────────────────────
@@ -104,43 +117,29 @@ describe("SHA-256 — single-block messages against node:crypto", () => {
 
 describe("SHA-256 — frame count and state shape pins", () => {
   it("emits the expected number of frames per run", () => {
-    // Frame budget for single-block run under the Slice 2.6d decomposed
-    // topology (every algorithmic sub-step is now a visible chip):
-    //   - 2 preprocessing leaves: pad + length-append. Scaffolding-
-    //     suppression A3a dropped 2 here: `plaintext-source` (state-to-bytes)
-    //     is gone — pad/length-append read the reserved `$input` source —
-    //     and `seed-schedule` (bytes-to-state) is gone — the message-schedule
-    //     FES seeds its history from `length-append.output` via `seedInput`.
-    //   - 13 schedule body leaves × 48 iterations = 624 frames
-    //     (aux-load ×4 + σ1 chain ×4 + σ0 chain ×4 + W_t 4-way add). A3a
-    //     dropped the per-iteration `schedule-out` (bytes-to-state) bridge:
-    //     the FES `bodyOutput` names `w-t.output` directly (−48 frames).
-    //   - 1 between-phases leaf: init.fetch-H. A3b dropped `init-working-vars`
-    //     (bytes-to-state) — round 0's `seedInput` reads `init.fetch-H.output`
-    //     directly (−1 frame). (A3a dropped `W-publish` here; A1 retired
-    //     K-to-aux/H-to-aux/H-constant via cipherConstants.)
-    //   - 26 leaves × 64 compression rounds = 1664 frames
-    //     (split-bytes + 2×(aux-load-bytes + byte-slice) + Σ1 ×4 + Σ0 ×4
-    //     + Ch ×4 + Maj ×4 + T1 + T2 + new_a + new_e + concat). A3b dropped
-    //     the per-round `state-in` (state-to-bytes) + `state-out`
-    //     (bytes-to-state) bridges: `split` reads the group's `seedInput`
-    //     port and `repack` is the group's `bodyOutput` (−128 frames).
-    //   - 11 final-add leaves: split-bytes + aux-load-bytes + split-bytes
-    //     + 8×add-mod-32 + concat. A3b dropped `final.state-in`
-    //     (state-to-bytes): `final.split-wv` reads `port(round.63,"out")`
-    //     (−1 frame). (A3a had already dropped the terminal `final.out`.)
-    //   - +1 from runtime control flow (FES outer accounting)
+    // Frame budget for a SINGLE-block run (message "abc", N=1). Slice 2.11b
+    // wraps the per-block body (message schedule + 64 rounds + final-add) in a
+    // port-mode `iterate` "blocks": the container emits no frame of its own,
+    // but every body frame's stepId now carries a `:b0` suffix. The fold also
+    // retired the `final.fetch-H` aux-load-bytes leaf (the final-add addend is
+    // the iterate `chain` port — the running hash — not the constant aux["H"]),
+    // so a single-block run is one frame shorter than the pre-2.11b 2303.
     //
-    // Total: 2 + 624 + 1 + 1664 + 11 + 1 = 2303 frames (was 2433 pre-A3b,
-    // 2485 pre-A3a, 2487 pre-A1). A3b frame delta: −130 (init-working-vars
-    // + state-in×64 + state-out×64 + final.state-in).
+    //   - 3 parent-scope leaves: pad + length-append + init.fetch-H
+    //     (init.fetch-H bootstraps the iterate's chainInput = block 0's H).
+    //   - inside the "blocks" iterate (one pass for a single block):
+    //       - 13 schedule body leaves × 48 iterations = 624 frames.
+    //       - 26 leaves × 64 compression rounds = 1664 frames.
+    //       - 11 final-add leaves: split-wv + split-H + 8×add-mod-32 + concat
+    //         (was 12 — `final.fetch-H` retired in 2.11b).
+    //     = 624 + 1664 + 11 = 2299 frames per block.
     //
-    // Pre-2.6d (coarse helpers): 123 frames. Pedagogy payoff: ~19× more
-    // frames means every ROTR, every XOR, every modular add is visible.
+    // Total: 3 + 2299 = 2302 frames (was 2303 pre-2.11b). A multi-block run is
+    // 3 parent frames + N × 2299 body frames (e.g. a 2-block message = 4601).
     const trace = runSpec(buildSha256Spec(), buildDefaultRegistry(), {
       initialState: { shape: "bytes", bytes: new Uint8Array([0x61, 0x62, 0x63]) },
     });
-    expect(trace.frames).toHaveLength(2303);
+    expect(trace.frames).toHaveLength(2302);
   });
 
   it("finalState is always 32 bytes BytesState (the hash)", () => {
@@ -187,32 +186,35 @@ describe("SHA-256 — A3b carry visibility (Q1)", () => {
     });
     const byId = new Map(trace.frames.map((f) => [f.stepId, f]));
 
-    // Round 0 is seeded (via round.0.seedInput → init.fetch-H) with the initial
-    // working variables a..h = aux["H"], materialized from cipherConstants.H.
-    // (init.fetch-H is a lifted-legacy aux-load-bytes leaf and doesn't expose
-    // captured portOutputs, so we compare against the constant it reads.)
-    const r0Split = byId.get("round.0.split");
+    // Slice 2.11b: the per-block body runs inside the "blocks" iterate, so for
+    // the single-block "abc" message every body frame's stepId gains a `:b0`
+    // suffix. Round 0 is now seeded (via round.0.seedInput → port("blocks",
+    // "chain")) with block 0's running hash, which IS the initial hash a..h =
+    // cipherConstants.H (the iterate's chainInput bootstrap). init.fetch-H
+    // stays in the PARENT scope (it feeds chainInput) so its frame has no
+    // `:b0` suffix.
+    const r0Split = byId.get("round.0.split:b0");
     expect(byId.get("init.fetch-H")).toBeDefined();
     expect(r0Split).toBeDefined();
     expect(r0Split?.portInputs?.get("input")).toEqual(spec.cipherConstants?.H);
 
     // Every inter-round boundary: round t's repack output === t+1's split input.
     for (let t = 0; t < 63; t++) {
-      const repack = byId.get(`round.${t}.repack`);
-      const nextSplit = byId.get(`round.${t + 1}.split`);
-      expect(repack, `round.${t}.repack must be a visible frame`).toBeDefined();
-      expect(nextSplit, `round.${t + 1}.split must be a visible frame`).toBeDefined();
+      const repack = byId.get(`round.${t}.repack:b0`);
+      const nextSplit = byId.get(`round.${t + 1}.split:b0`);
+      expect(repack, `round.${t}.repack:b0 must be a visible frame`).toBeDefined();
+      expect(nextSplit, `round.${t + 1}.split:b0 must be a visible frame`).toBeDefined();
       const carried = repack?.portOutputs?.get("output");
       expect(carried?.length).toBe(32); // 8 × 4-byte working variables a..h
       expect(nextSplit?.portInputs?.get("input")).toEqual(carried);
     }
 
     // Exit: round 63's repack feeds final.split-wv (the post-round-63 a..h).
-    const finalSplit = byId.get("final.split-wv");
-    expect(byId.get("round.63.repack")).toBeDefined();
+    const finalSplit = byId.get("final.split-wv:b0");
+    expect(byId.get("round.63.repack:b0")).toBeDefined();
     expect(finalSplit).toBeDefined();
     expect(finalSplit?.portInputs?.get("input")).toEqual(
-      byId.get("round.63.repack")?.portOutputs?.get("output"),
+      byId.get("round.63.repack:b0")?.portOutputs?.get("output"),
     );
   });
 });
@@ -229,9 +231,27 @@ describe("SHA-256 — spec structural pins", () => {
     expect(spec.inputs.plaintext.shape).toBe("bytes");
   });
 
-  it("spec has 64 compression round groups", () => {
+  // Slice 2.11b: the per-block fold. The "blocks" iterate threads the running
+  // hash as its chain — chainInput bootstraps it from init.fetch-H (block 0's
+  // H), chainFeedback advances it from final.assemble, and chainOutput
+  // ("digest") harvests the final value, which `outputFrom` reads as the
+  // 32-byte digest. seedInput is the padded message split at 64-byte blocks.
+  it("wraps the per-block body in a port-mode `iterate` fold (running-hash chain)", () => {
     const spec = buildSha256Spec();
-    const rounds = spec.steps.filter((s) => s.kind === "group" && /^round\.\d+$/.test(s.id));
+    const blocks = spec.steps.find((s) => s.id === "blocks");
+    if (blocks === undefined || blocks.kind !== "iterate") {
+      throw new Error("expected a `blocks` iterate node");
+    }
+    expect(blocks.blockByteLength).toBe(64);
+    expect(blocks.seedInput).toEqual({ node: "length-append", port: "output" });
+    expect(blocks.chainInput).toEqual({ node: "init.fetch-H", port: "output" });
+    expect(blocks.chainFeedback).toEqual({ node: "final.assemble", port: "output" });
+    expect(blocks.chainOutput).toBe("digest");
+    expect(spec.outputFrom).toEqual({ node: "blocks", port: "digest" });
+  });
+
+  it("spec has 64 compression round groups (inside the `blocks` iterate)", () => {
+    const rounds = blockBody().filter((s) => s.kind === "group" && /^round\.\d+$/.test(s.id));
     expect(rounds).toHaveLength(64);
   });
 
@@ -241,9 +261,8 @@ describe("SHA-256 — spec structural pins", () => {
   // Pin the marker so a future SHA-256 refactor that loses it surfaces
   // here, not as a "users complain about a chip wall" bug report.
   it("every compression round group carries defaultCollapsed: true (chip-wall avoidance)", () => {
-    const spec = buildSha256Spec();
-    const rounds = spec.steps.filter(
-      (s): s is Extract<typeof s, { kind: "group" }> =>
+    const rounds = blockBody().filter(
+      (s): s is Extract<StepNode, { kind: "group" }> =>
         s.kind === "group" && /^round\.\d+$/.test(s.id),
     );
     expect(rounds).toHaveLength(64);
@@ -267,9 +286,8 @@ describe("SHA-256 — spec structural pins", () => {
   // byte-slice offset is the load-bearing per-round disambiguator in the
   // decomposed form — different rounds extract from different positions in K/W.
   it("each compression-round group has 26 leaves with K_t offset = 4 * t", () => {
-    const spec = buildSha256Spec();
     const seenIndices = new Set<number>();
-    for (const step of spec.steps) {
+    for (const step of blockBody()) {
       if (step.kind !== "group") continue;
       const m = /^round\.(\d+)$/.exec(step.id);
       if (m === null) continue;
