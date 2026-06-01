@@ -97,6 +97,25 @@ The port-native primitives shipped under the universal-port-dataflow plan (Slice
 
 **Composer-time fail mode.** The executors' `readParams` validators check the params they ARE looking for; they DON'T reject extras. So `{ type: "xor@1", params: { byteLength: 4 } }` throws `xor: params.inputCount must be a positive integer (≥ 1)` because `inputCount` is missing — not because `byteLength` was rejected. Same for `{ type: "rotate-bits-right@1", params: { shift: 7 } }` — fails with "params.bits must be …" because `bits` wasn't provided. The error message names the param the executor wanted, NOT the wrong one you supplied. Read it carefully when copy-pasting a spec node from a legacy step — what you thought was a renamed param is actually a missing one.
 
+## Port-flow scope — edges cannot cross a group boundary
+
+**`portInputs` wiring resolves same-scope only; `aux` is the only cross-scope channel.** When the runtime walks a `group` node it allocates a fresh `nodeOutputs` map seeded only from `seedInput` / `groupSeed`. Per-leaf outputs accumulate inside that local map; only the group NODE's aggregate output is published back to the parent scope when the walk returns. A `portInputs` binding that names an upstream node living in a DIFFERENT scope — even a direct parent or a sibling group — throws at runtime:
+
+```
+port-input resolution: leaf 'X' input port 'Y' references upstream node 'Z'
+which has no recorded outputs in this scope (… same-scope wiring only)
+```
+
+This was measured 2026-06-01 while attempting topology "A" for the Speck key schedule (K2d).
+
+**The ONLY channel that crosses a group boundary is the global `aux` map.** A step inside a group can write to a named `aux` key (`aux["roundKey.0"]`); a step in any other scope can read that same key. This is exactly why the decomposed key schedules (AES K1, Speck K2) use the **B-minimal topology**: the schedule lives inside a default-collapsed `key-schedule` group, so its publish leaf's per-round-key outputs are trapped in the group's child scope and cannot be wired to round leaves outside via `portInputs`. B-minimal works precisely because it hands keys off through `aux`, not through port-flow.
+
+**Topology "A" (explicit per-round-key `portInputs` wiring) is currently unbuildable** for any grouped schedule. It requires a group-output-export runtime feature — a way for a group to surface named inner-leaf outputs into the parent scope as named ports on the group node itself — which does not exist yet. Don't redesign a key schedule spec to use topology A and then wonder why nodes outside the group can't see the publish leaf's outputs; they can't until that runtime feature ships.
+
+**SHA-256's cross-round `port()` references are NOT a counterexample.** SHA-256's round bodies (e.g. `port("round.63","out")`) are same-scope siblings — direct children of the iterate, ungrouped — so those references never cross a group boundary. They resolve fine in the same `nodeOutputs` map. Compare with a hypothetical SHA-256 where each round was wrapped in its own `{ kind: "group" }`: in that case cross-round references would fail with the same "no recorded outputs in this scope" error.
+
+**Cross-reference:** memory `project_group_scope_port_isolation`; the K2d resolution documented in `docs/plans/key-schedule-decomposition.md`.
+
 ## Tooling / shell
 
 - **Don't redirect native command stderr in PowerShell with `2>&1`.** PowerShell 5.1 wraps stderr lines in `NativeCommandError` records and sets `$?` to false even on success exit code 0. Capture stdout only, or merge in a different way.
