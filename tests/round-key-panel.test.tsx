@@ -133,9 +133,13 @@ describe("<RoundKeyPanel /> against a real AES-128 trace", () => {
 
   it("renders 11 round-key cells in one ribbon", () => {
     const trace = seedAes128Trace();
-    // First frame is key-expansion — a "relevant" frame, so the panel
-    // body auto-expands and the ribbon is visible without a click.
-    const { container } = render(() => <RoundKeyPanel frame={trace.frames[0] ?? null} />);
+    // Since the key-schedule decomposition (K1c) the frame that WRITES the
+    // whole schedule is the `key-schedule.publish` tail (its auxWritten holds
+    // every roundKey.N) — a "relevant" frame, so the panel body auto-expands
+    // and the ribbon is visible without a click. (frame[0] is now the
+    // `key-schedule.load-key` frame, which is not schedule-relevant.)
+    const publishFrame = trace.frames.find((f) => f.stepId === "key-schedule.publish") ?? null;
+    const { container } = render(() => <RoundKeyPanel frame={publishFrame} />);
     const ribbons = container.querySelectorAll(".round-key-ribbon");
     expect(ribbons.length).toBe(1);
     const cells = container.querySelectorAll(".round-key-cell");
@@ -180,7 +184,8 @@ describe("<RoundKeyPanel /> against a real AES-128 trace", () => {
 
   it("re-renders cell text on byte-format toggle", () => {
     const trace = seedAes128Trace();
-    const { container } = render(() => <RoundKeyPanel frame={trace.frames[0] ?? null} />);
+    const publishFrame = trace.frames.find((f) => f.stepId === "key-schedule.publish") ?? null;
+    const { container } = render(() => <RoundKeyPanel frame={publishFrame} />);
     // K_0 is the master key bytes (FIPS-197 Appendix B: 00 01 02 … 0f).
     // The first `.tiny-cell` in the document is K_0's [0,0] cell = 0x00.
     const firstTinyCell = container.querySelector(".tiny-cell");
@@ -402,11 +407,12 @@ describe("<RoundKeyPanel /> collapsible header", () => {
     __resetRoundKeyPanelOverrideForTests();
   });
 
-  it("auto-expands on a key-expansion frame (which writes the schedule)", () => {
+  it("auto-expands on the key-schedule publish frame (which writes the schedule)", () => {
     const trace = seedAes128Trace();
-    // First frame is AES key-expansion — its auxWritten contains every
-    // `roundKey.N`, so isRelevantFrame returns true → default expanded.
-    const { container } = render(() => <RoundKeyPanel frame={trace.frames[0] ?? null} />);
+    // The `key-schedule.publish` tail's auxWritten contains every `roundKey.N`
+    // (K1c), so isRelevantFrame returns true → default expanded.
+    const publishFrame = trace.frames.find((f) => f.stepId === "key-schedule.publish") ?? null;
+    const { container } = render(() => <RoundKeyPanel frame={publishFrame} />);
     expect(container.querySelector(".round-key-panel-body")).not.toBeNull();
     expect(container.querySelectorAll(".round-key-cell").length).toBe(11);
     // Header chevron points down (▼) when expanded.
@@ -457,10 +463,10 @@ describe("<RoundKeyPanel /> collapsible header", () => {
 
   it("clicking the header toggles expanded → collapsed", () => {
     const trace = seedAes128Trace();
-    const keyExpansionFrame = trace.frames[0];
-    expect(keyExpansionFrame).toBeDefined();
-    const { container } = render(() => <RoundKeyPanel frame={keyExpansionFrame ?? null} />);
-    // Default expanded (key-expansion frame).
+    const publishFrame = trace.frames.find((f) => f.stepId === "key-schedule.publish");
+    expect(publishFrame).toBeDefined();
+    const { container } = render(() => <RoundKeyPanel frame={publishFrame ?? null} />);
+    // Default expanded (the schedule-writing publish frame).
     expect(container.querySelector(".round-key-panel-body")).not.toBeNull();
     // Click the header to hide.
     fireEvent.click(container.querySelector(".round-key-panel-header") as Element);

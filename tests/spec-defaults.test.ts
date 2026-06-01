@@ -61,11 +61,32 @@ const wrapSpec = (steps: readonly StepNode[]): CipherSpec => ({
 
 describe("getDefaultCollapsedContainers", () => {
   it("returns an empty set for a spec with no defaultCollapsed markers", () => {
-    // AES-128 ECB ships with NO defaultCollapsed markers (its ECB iterate
-    // already renders compactly at the spine level; the user collapses
-    // manually when they want). Useful negative-case anchor.
-    const ids = getDefaultCollapsedContainers(aes128EcbSpec);
+    // A synthetic spec whose containers carry NO `defaultCollapsed` marker —
+    // the negative-case anchor. (We no longer use a shipped AES spec here:
+    // since the key-schedule decomposition (K1c) every AES spec carries the
+    // default-collapsed `key-schedule` group, so AES-128 ECB now has exactly
+    // ONE marker — see the dedicated assertion below.)
+    const spec = wrapSpec([
+      {
+        kind: "group",
+        id: "plain-outer",
+        label: "Plain outer",
+        children: [{ kind: "group", id: "plain-inner", label: "Plain inner", children: [] }],
+      },
+    ]);
+    const ids = getDefaultCollapsedContainers(spec);
     expect(ids.size).toBe(0);
+  });
+
+  it("includes the decomposed AES key-schedule group (default-collapsed since K1c)", () => {
+    // The key-schedule-decomposition (K1c) wraps the schedule in a
+    // `key-schedule` group marked `defaultCollapsed: true` so its ~140
+    // sub-step chips don't wall the canvas on first render. It is the ONLY
+    // default-collapsed surface in AES-128 ECB (the ECB iterate renders
+    // compactly at the spine level and is not marked).
+    const ids = getDefaultCollapsedContainers(aes128EcbSpec);
+    expect(ids.has("key-schedule")).toBe(true);
+    expect(ids.size).toBe(1);
   });
 
   it("returns the SHA-256 default-collapsed surfaces (64 round groups + msg-schedule)", () => {

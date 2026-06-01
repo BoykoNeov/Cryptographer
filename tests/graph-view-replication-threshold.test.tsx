@@ -16,7 +16,7 @@
  *      the existing "auto" mode replicate them too (smoke check against the
  *      derived graph).
  *
- * AES-128 stays the fixture: `key-expansion` has fanout 11 (always above
+ * AES-128 stays the fixture: `key-schedule` has fanout 11 (always above
  * any threshold ≥ 1), and other aux producers (e.g. round-derived writers
  * inside the body) have fanout 1.
  */
@@ -157,7 +157,7 @@ describe("GraphView — replication threshold input", () => {
     // producer surfaces — including single-consumer ones like
     // `compute-block-count` in ECB specs. AES-128 single-block doesn't
     // have any single-fanout aux source though; this test pins the
-    // *behavior* generally by asserting `key-expansion` is still listed
+    // *behavior* generally by asserting `key-schedule` is still listed
     // (fanout 11) and that no source is silently filtered for being too
     // small. The 2-block ECB case is exercised in the iterate test
     // suite where compute-block-count has fanout 1.
@@ -167,7 +167,7 @@ describe("GraphView — replication threshold input", () => {
     // Panel auto-closes on a no-override spec since the collapse toggle
     // shipped; open it after render so the row assertion sees the body.
     setReplicationPanelOpen(true);
-    const keyExpRow = container.querySelector('[data-testid="replication-row-key-expansion"]');
+    const keyExpRow = container.querySelector('[data-testid="replication-row-key-schedule"]');
     expect(keyExpRow).not.toBeNull();
   });
 });

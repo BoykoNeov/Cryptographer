@@ -562,18 +562,21 @@ describe("GraphView — root-level leaf drag", () => {
     resetAll();
   });
 
-  it("dragging a root-level leaf (key-expansion) pins its position AND moves the rendered rect", () => {
+  it("dragging a root-level leaf (initial.add-round-key) pins its position AND moves the rendered rect", () => {
     seedAes128Trace();
     const { container } = render(() => <GraphView />);
     const specId = useSpec()().id;
 
-    // Find the root-level key-expansion <g class="graph-leaf"> by walking
-    // titles. Its title prefix is the stepId.
+    // Find a root-level draggable leaf by walking titles. Since
+    // key-schedule-decomposition K1c the former root `key-expansion` leaf is
+    // a (collapsed) `key-schedule` GROUP, so we exercise the absolute-pin
+    // path on `initial.add-round-key` — still a root-level leaf. Its title
+    // prefix is the stepId.
     const leafGs = Array.from(container.querySelectorAll("g.graph-leaf"));
     const target = leafGs.find((g) =>
-      g.querySelector("title")?.textContent?.startsWith("key-expansion ("),
+      g.querySelector("title")?.textContent?.startsWith("initial.add-round-key ("),
     ) as Element | undefined;
-    if (!target) throw new Error("key-expansion leaf not found");
+    if (!target) throw new Error("initial.add-round-key leaf not found");
 
     // It should advertise itself as draggable via the class hook.
     expect(target.classList.contains("graph-leaf-draggable")).toBe(true);
@@ -588,7 +591,7 @@ describe("GraphView — root-level leaf drag", () => {
     window.dispatchEvent(pointerEvt("pointerup", 200, 180));
 
     // Store has the pin.
-    const pin = getLayoutForSpec(specId)?.positions["key-expansion"];
+    const pin = getLayoutForSpec(specId)?.positions["initial.add-round-key"];
     expect(pin).toBeDefined();
 
     // Rendered rect's x/y reflect the delta (150, 130).
@@ -631,16 +634,16 @@ describe("GraphView — root-level leaf drag", () => {
     seedAes128Trace();
     const { container } = render(() => <GraphView />);
     // Use the trace store's setFrame import indirectly: pre-park the
-    // scrubber on frame 0, then click key-expansion → its frame index.
+    // scrubber on frame 0, then click initial.add-round-key → its frame index.
     const { setFrame, useFrameIndex } = await import("@/ui/stores/trace");
     setFrame(0);
     expect(useFrameIndex()()).toBe(0);
 
     const leafGs = Array.from(container.querySelectorAll("g.graph-leaf"));
     const target = leafGs.find((g) =>
-      g.querySelector("title")?.textContent?.startsWith("key-expansion ("),
+      g.querySelector("title")?.textContent?.startsWith("initial.add-round-key ("),
     ) as Element | undefined;
-    if (!target) throw new Error("key-expansion leaf not found");
+    if (!target) throw new Error("initial.add-round-key leaf not found");
 
     // Sub-threshold drag (2px) acts as a click — the drag handler's
     // onClickFallback should fire handleLeafClick → setFrame.
@@ -650,7 +653,7 @@ describe("GraphView — root-level leaf drag", () => {
 
     const trace = getTrace();
     if (!trace) throw new Error("trace was lost");
-    const expected = trace.frames.findIndex((f) => f.stepId === "key-expansion");
+    const expected = trace.frames.findIndex((f) => f.stepId === "initial.add-round-key");
     expect(useFrameIndex()()).toBe(expected);
   });
 });
@@ -670,9 +673,11 @@ describe("GraphView — container collapse (Slice 6)", () => {
     // Byte-native round.5 has 4 leaves (sub-bytes, shift-rows, mix-columns,
     // add-round-key — AddRoundKey merged in F3). We can't easily count
     // "round.5's children" from the rendered SVG alone, but the whole
-    // byte-native AES-128 graph has 41 leaves: key-expansion +
-    // initial.add-round-key (2) + 9 full rounds × 4 (36) + final round.10 × 3 (3).
-    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(41);
+    // byte-native AES-128 graph shows 40 VISIBLE leaves: initial.add-round-key
+    // (1) + 9 full rounds × 4 (36) + final round.10 × 3 (3). The decomposed
+    // `key-schedule` group (K1c) is default-collapsed, so its sub-step leaves
+    // are hidden behind the container chip.
+    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(40);
   });
 
   it("clicking the chevron collapses the container; child leaves disappear from the SVG", () => {
@@ -686,8 +691,9 @@ describe("GraphView — container collapse (Slice 6)", () => {
     expect(chevron).not.toBeNull();
     fireEvent.click(chevron);
 
-    // Post-collapse: total leaves dropped by 4 (round.5's 4 children).
-    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(37);
+    // Post-collapse: total visible leaves dropped by 4 (round.5's 4 children),
+    // from 40 → 36.
+    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(36);
 
     // The container itself is still present as a chip.
     const collapsedRect = container.querySelector(".graph-container-rect-collapsed");
@@ -707,11 +713,20 @@ describe("GraphView — container collapse (Slice 6)", () => {
       return el;
     };
 
-    fireEvent.click(findChevron()); // collapse
-    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(37);
-    fireEvent.click(findChevron()); // expand
-    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(41);
-    expect(container.querySelector(".graph-container-rect-collapsed")).toBeNull();
+    // Baseline: the decomposed `key-schedule` group is default-collapsed
+    // (K1c), so exactly ONE collapsed container chip exists before we touch
+    // round.5.
+    const collapsedCount = (): number =>
+      container.querySelectorAll(".graph-container-rect-collapsed").length;
+    expect(collapsedCount()).toBe(1);
+
+    fireEvent.click(findChevron()); // collapse round.5
+    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(36);
+    expect(collapsedCount()).toBe(2); // key-schedule + round.5
+    fireEvent.click(findChevron()); // expand round.5
+    expect(container.querySelectorAll(".graph-leaf-rect").length).toBe(40);
+    // round.5 re-expanded → back to just the key-schedule chip collapsed.
+    expect(collapsedCount()).toBe(1);
   });
 });
 

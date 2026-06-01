@@ -59,22 +59,19 @@ describe("StepDescription — narrationOverride fallback + override", () => {
   });
 
   it("falls back to registry doc when the leaf has no narrationOverride", () => {
-    // The default AES-128 spec carries no `narrationOverride` on any leaf,
-    // so every frame's docs come from `registry.getDoc(stepType)`. Picking
-    // the key-expansion frame because its registry doc has a stable, easy-
-    // to-assert heading ("Key Expansion").
-    // Byte-native AES-128 (Slice B1): bytes state + ported dispatch. The
-    // `key-expansion` leaf stays monolithic with NO narrationOverride, so it
-    // still exercises the registry-doc fallback ("Key Expansion").
+    // Most AES-128 leaves now carry a `narrationOverride` (the decomposed key
+    // schedule's recurrence leaves + the round body), but the aux-publish tail
+    // `key-schedule.publish` does NOT — so it still exercises the registry-doc
+    // fallback. Its registry doc has a stable heading ("Publish round keys").
     const initial = makeBytesState(bytesFromHex(PLAINTEXT_HEX));
     const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
       initialState: initial,
       initialAux: new Map([["key", bytesFromHex(KEY_HEX)]]),
     });
-    const frame = findFrameByStepId(trace.frames, "key-expansion");
+    const frame = findFrameByStepId(trace.frames, "key-schedule.publish");
 
     const registryDoc = buildDefaultRegistry().getDoc(frame.stepType);
-    if (!registryDoc) throw new Error("registry doc missing for aes.key-expansion");
+    if (!registryDoc) throw new Error("registry doc missing for aes.publish-round-keys@1");
 
     const { container } = render(() => <StepDescription frame={frame} />);
     const heading = container.querySelector(".step-description-name");

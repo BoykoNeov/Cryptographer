@@ -48,15 +48,21 @@ describe("AES-128 (FIPS-197 Appendix C.1)", () => {
       initialAux,
     });
 
-    // Byte-native AES-128 leaves (one frame each), after Finding F3 merged
-    // AddRoundKey's fetch-rk + xor pair into the single `xor-with-aux@1` leaf:
-    //   key-expansion (1)
-    //   initial.add-round-key (1)
-    //   rounds 1..9 × 4 sub-steps (sub-bytes, shift-rows, mix-columns,
-    //     add-round-key) = 36
-    //   final round.10 × 3 sub-steps (no mix-columns) = 3
-    //   = 41 frames
-    expect(trace.frames.length).toBe(41);
+    // Byte-native AES-128 leaves (one frame each). The key schedule is now
+    // DECOMPOSED (key-schedule-decomposition plan K1a) into visible primitive
+    // frames instead of one monolithic `aes.key-expansion@1` leaf:
+    //   key-schedule (114):
+    //     load-key (1)
+    //     10 groups × 10 leaves (split, rotword, subword, rcon, temp,
+    //       w0, w1, w2, w3, out) = 100
+    //     word-stream (1) + rk0..rk10 (11) + publish (1) = 13
+    //   round body (40):
+    //     initial.add-round-key (1)
+    //     rounds 1..9 × 4 sub-steps (sub-bytes, shift-rows, mix-columns,
+    //       add-round-key) = 36
+    //     final round.10 × 3 sub-steps (no mix-columns) = 3
+    //   = 154 frames
+    expect(trace.frames.length).toBe(154);
   });
 
   it("produces all 11 round keys in aux", () => {

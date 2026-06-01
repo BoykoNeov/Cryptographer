@@ -8,6 +8,13 @@
  * S-box") without knowing how to walk the tree itself.
  */
 
+// Layering exception (key-schedule-decomposition K1b): `duplicateRoundGroup`
+// is AES-specific by construction (it hardcodes `round.N` / `roundKey.N` and
+// the `key-schedule` group id), so it legitimately reaches into the AES
+// key-schedule builder to REBUILD the decomposed schedule at the new round
+// count. This is the one core→ciphers import; it's justified by this function
+// not being generic core. See `bumpKeyExpansion` below.
+import { buildAesKeyScheduleNative } from "../ciphers/aes-key-schedule-builder-native";
 import type {
   CipherSpec,
   ForEachSubgraphNode,
@@ -90,11 +97,23 @@ export const updateStepParams = (spec: CipherSpec, stepId: string, params: Json)
  * (the architecture treats params as per-step JSON). For AES, every round
  * shares the same S-box conceptually — so the UI offers a one-click way to
  * propagate an edit to all matching steps.
+ *
+ * **`idFilter` — role-scoping for a type used in two roles.** Some step
+ * types appear in distinct semantic roles distinguished only by leaf id.
+ * Since the key-schedule-decomposition (2026-06-01), `byte-substitute@1`
+ * is BOTH round-body SubBytes (class-2 inverse cross-mode mirror) AND
+ * key-schedule SubWord (class-1 identity mirror — the schedule uses the
+ * FORWARD S-box even when decrypting, FIPS-197 §5.2). A type-wide
+ * broadcast across all `byte-substitute@1` leaves would corrupt one role
+ * with the other's value. When `idFilter` is supplied, only matching-type
+ * leaves whose id ALSO passes the filter are updated; the rest are returned
+ * by reference (preserving structural sharing + the no-op short-circuit).
  */
 export const updateAllStepsByType = (
   spec: CipherSpec,
   stepType: string,
   update: (params: Json) => Json,
+  idFilter?: (id: string) => boolean,
 ): CipherSpec => {
   let changed = false;
 
@@ -102,6 +121,7 @@ export const updateAllStepsByType = (
     return nodes.map((node) => {
       if (node.kind === "step") {
         if (node.type !== stepType) return node;
+        if (idFilter && !idFilter(node.id)) return node;
         const newParams = update(node.params);
         if (newParams === node.params) return node;
         changed = true;
@@ -743,8 +763,10 @@ const AUX_LOAD_BYTES_TYPE = "aux-load-bytes@1";
  *  leaf that reads `roundKey.N` from aux via `params.auxName` (replaced the
  *  fetch-rk + xor pair). Its `auxName` is what the round renumber bumps. */
 const XOR_WITH_AUX_TYPE = "xor-with-aux@1";
-const KEY_EXPANSION_V1 = "aes.key-expansion@1";
-const KEY_EXPANSION_V2 = "aes.key-expansion@2";
+// The DECOMPOSED key schedule (key-schedule-decomposition K1a) is a single
+// top-level group with this id; its publish tail carries the round count.
+const KEY_SCHEDULE_GROUP_ID = "key-schedule";
+const PUBLISH_ROUND_KEYS_TYPE = "aes.publish-round-keys@1";
 
 /**
  * Renumber one round group: rewrite the group's id, the canonical prefix
@@ -921,39 +943,50 @@ const bumpInvInitialAuxName = (leaf: StepLeaf): StepLeaf => {
   };
 };
 
+/** Nk (master-key words) from the spec's declared key length (16/24/32 → 4/6/8). */
+const aesNkFromSpec = (spec: CipherSpec): number => {
+  const byteLength = spec.inputs.key.byteLength;
+  if (byteLength !== 16 && byteLength !== 24 && byteLength !== 32) {
+    throw new Error(
+      `duplicateRoundGroup: spec.inputs.key.byteLength must be 16/24/32 (got ${byteLength})`,
+    );
+  }
+  return byteLength / 4;
+};
+
 /**
- * Locate the AES key-expansion leaf at the top level of `spec.steps`,
- * bump its `rounds` param by 1, and morph the type from `@1 → @2` (the
- * schedule needs the relaxed-rounds executor to accept the new count).
- * Throws if no key-expansion leaf exists at the top level — every
- * shipped AES spec puts it there, including ECB (key-expansion sits
+ * Bump the AES key schedule for a duplicated round by REBUILDING it at the new
+ * round count. The key schedule is the decomposed `key-schedule` group
+ * (key-schedule-decomposition K1a); its internal structure (recurrence groups,
+ * word count, the Nk-vs-round-key repack) is a function of the round count, so
+ * it cannot be bumped by editing a param the way the old monolithic leaf was.
+ * `buildAesKeyScheduleNative(rounds+1, Nk)` regenerates it — including a longer
+ * Rcon sequence (computed at build time) — which is exactly why duplicate-round
+ * is agnostic to the unroll-vs-iterate structure (advisor 2026-06-01).
+ *
+ * Current round count is read off the publish tail's `rounds` param; Nk from
+ * the spec's declared key length. Throws if no top-level `key-schedule` group
+ * exists — every shipped AES spec puts it there (single-block AND ECB/CBC,
  * outside the iterate so it runs once).
  */
 const bumpKeyExpansion = (spec: CipherSpec): CipherSpec => {
   let found = false;
   const newSteps = spec.steps.map((node) => {
     if (found) return node;
-    if (
-      node.kind === "step" &&
-      (node.type === KEY_EXPANSION_V1 || node.type === KEY_EXPANSION_V2)
-    ) {
+    if (node.kind === "group" && node.id === KEY_SCHEDULE_GROUP_ID) {
       found = true;
-      const p = node.params as { readonly rounds?: unknown };
+      const publish = node.children.find(
+        (c): c is StepLeaf => c.kind === "step" && c.type === PUBLISH_ROUND_KEYS_TYPE,
+      );
+      const p = publish?.params as { readonly rounds?: unknown } | undefined;
       const currentRounds = typeof p?.rounds === "number" ? p.rounds : 0;
-      return {
-        ...node,
-        type: KEY_EXPANSION_V2,
-        params: {
-          ...(p as Record<string, Json>),
-          rounds: currentRounds + 1,
-        },
-      };
+      return buildAesKeyScheduleNative(currentRounds + 1, aesNkFromSpec(spec));
     }
     return node;
   });
   if (!found) {
     throw new Error(
-      "duplicateRoundGroup: no aes.key-expansion@* leaf at the top level of the spec",
+      "duplicateRoundGroup: no top-level `key-schedule` group in the spec (expected the decomposed AES key schedule from buildAesKeyScheduleNative)",
     );
   }
   return { ...spec, steps: newSteps };

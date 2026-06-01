@@ -13,7 +13,7 @@
  *      reactive memo through `useLayoutMap` makes that round-trip visible.
  *
  * AES-128 is the fixture: it has exactly one aux-edge source with
- * fanout ≥ 2 (`key-expansion` with 11 outgoing roundKey edges).
+ * fanout ≥ 2 (`key-schedule` with 11 outgoing roundKey edges).
  */
 
 import { aes128Spec } from "@/ciphers/aes-128";
@@ -68,7 +68,7 @@ describe("GraphView — replication override panel (commit 5)", () => {
     seedAes128Trace();
     const { container } = render(() => <GraphView />);
     // No matching row testid → panel not rendered.
-    expect(container.querySelector('[data-testid="replication-row-key-expansion"]')).toBeNull();
+    expect(container.querySelector('[data-testid="replication-row-key-schedule"]')).toBeNull();
   });
 
   it("panel surfaces aux-source rows when the global toggle is on", () => {
@@ -79,7 +79,7 @@ describe("GraphView — replication override panel (commit 5)", () => {
     // effect set it false on mount). Open it AFTER render so the manual
     // setter wins; setting before render would be undone by the effect.
     setReplicationPanelOpen(true);
-    const row = container.querySelector('[data-testid="replication-row-key-expansion"]');
+    const row = container.querySelector('[data-testid="replication-row-key-schedule"]');
     expect(row).not.toBeNull();
     // Row's fanout label reflects the 11 outgoing roundKey edges.
     expect(row?.textContent ?? "").toContain("11");
@@ -91,25 +91,25 @@ describe("GraphView — replication override panel (commit 5)", () => {
     const { container } = render(() => <GraphView />);
     setReplicationPanelOpen(true);
     const row = container.querySelector(
-      '[data-testid="replication-row-key-expansion"]',
+      '[data-testid="replication-row-key-schedule"]',
     ) as HTMLElement;
     const buttons = Array.from(row.querySelectorAll("button"));
     const alwaysBtn = buttons.find((b) => b.textContent === "always") as HTMLButtonElement;
     alwaysBtn.click();
     expect(getLayoutForSpec(aes128Spec.id)?.replicationModes).toEqual({
-      "key-expansion": "always",
+      "key-schedule": "always",
     });
   });
 
   it('clicking "auto" clears an existing override (back to implicit default)', () => {
     seedAes128Trace();
     setReplicationEnabled(true);
-    setReplicationMode(aes128Spec.id, "key-expansion", "never");
+    setReplicationMode(aes128Spec.id, "key-schedule", "never");
     // Pre-seeded override → effect should auto-open the panel on mount;
     // no manual setReplicationPanelOpen(true) needed here.
     const { container } = render(() => <GraphView />);
     const row = container.querySelector(
-      '[data-testid="replication-row-key-expansion"]',
+      '[data-testid="replication-row-key-schedule"]',
     ) as HTMLElement;
     const buttons = Array.from(row.querySelectorAll("button"));
     const autoBtn = buttons.find((b) => b.textContent === "auto") as HTMLButtonElement;
@@ -124,19 +124,25 @@ describe("GraphView — replication override panel (commit 5)", () => {
     setReplicationEnabled(true);
     const { container } = render(() => <GraphView />);
     setReplicationPanelOpen(true);
-    const row = container.querySelector(
-      '[data-testid="replication-row-key-expansion"]',
-    ) as HTMLElement;
-    const getActiveLabel = () =>
-      Array.from(row.querySelectorAll("button"))
+    // Re-query the row each read: a mode change can re-key the
+    // `<For each={replicationSources()}>` row (the source is the collapsed
+    // `key-schedule` container since K1c), swapping the DOM node and leaving a
+    // captured ref stale. Same resilient pattern as the chevron re-find in
+    // `graph-view-drag.test.tsx`.
+    const getActiveLabel = () => {
+      const row = container.querySelector(
+        '[data-testid="replication-row-key-schedule"]',
+      ) as HTMLElement | null;
+      return Array.from(row?.querySelectorAll("button") ?? [])
         .find((b) => b.classList.contains("active"))
         ?.textContent?.trim();
+    };
     // Initially auto (the implicit default).
     expect(getActiveLabel()).toBe("auto");
     // External setter fires; the panel's memoized currentMode re-runs.
-    setReplicationMode(aes128Spec.id, "key-expansion", "always");
+    setReplicationMode(aes128Spec.id, "key-schedule", "always");
     expect(getActiveLabel()).toBe("always");
-    setReplicationMode(aes128Spec.id, "key-expansion", "never");
+    setReplicationMode(aes128Spec.id, "key-schedule", "never");
     expect(getActiveLabel()).toBe("never");
   });
 });
@@ -173,7 +179,7 @@ describe("GraphView — replication panel collapse toggle", () => {
     expect(toggle?.dataset.open).toBe("false");
     // Body rows are NOT rendered — the <Show> wrapper hides them when
     // the panel is closed.
-    expect(container.querySelector('[data-testid="replication-row-key-expansion"]')).toBeNull();
+    expect(container.querySelector('[data-testid="replication-row-key-schedule"]')).toBeNull();
   });
 
   it("defaults OPEN when the active spec carries a user override at render time", () => {
@@ -182,13 +188,13 @@ describe("GraphView — replication panel collapse toggle", () => {
     // Seed override BEFORE mount so the auto-open effect fires on the
     // spec().id sample at initial render. This is the canonical "load a
     // customized spec from disk / a share URL" flow.
-    setReplicationMode(aes128Spec.id, "key-expansion", "always");
+    setReplicationMode(aes128Spec.id, "key-schedule", "always");
     const { container } = render(() => <GraphView />);
     const toggle = container.querySelector(
       '[data-testid="replication-panel-toggle"]',
     ) as HTMLButtonElement | null;
     expect(toggle?.dataset.open).toBe("true");
-    expect(container.querySelector('[data-testid="replication-row-key-expansion"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="replication-row-key-schedule"]')).not.toBeNull();
   });
 
   it("clicking the header chevron toggles the panel open and closed", () => {
@@ -202,11 +208,11 @@ describe("GraphView — replication panel collapse toggle", () => {
     expect(toggle.dataset.open).toBe("false");
     toggle.click();
     expect(toggle.dataset.open).toBe("true");
-    expect(container.querySelector('[data-testid="replication-row-key-expansion"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="replication-row-key-schedule"]')).not.toBeNull();
     // Click again → closed → body disappears.
     toggle.click();
     expect(toggle.dataset.open).toBe("false");
-    expect(container.querySelector('[data-testid="replication-row-key-expansion"]')).toBeNull();
+    expect(container.querySelector('[data-testid="replication-row-key-schedule"]')).toBeNull();
   });
 
   it("aria-expanded mirrors the open/closed state for screen-reader users", () => {

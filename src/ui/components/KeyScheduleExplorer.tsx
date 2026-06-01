@@ -1,22 +1,29 @@
 /**
  * Key-Schedule Explorer — Phase 2 of the linear-mode pedagogy plan.
  *
- * Surfaces the hidden internal machinery of key-expansion executors. The
- * standard `<FrameStateView />` for a key-expansion frame renders the
- * unchanged input state matrix on both "before" and "after" sides (the
- * executor only writes aux; state passes through) — useless. This
- * component takes the slot instead and renders the algorithm's
- * intermediate decomposition: per-word `RotWord → SubWord → Rcon → XOR`
- * chain for AES, prekey recurrence + bitsliced S-box + IP for Serpent.
+ * Surfaces the hidden internal machinery of the still-monolithic
+ * key-expansion executors (Serpent, DES). The standard `<FrameStateView />`
+ * for a key-expansion frame renders the unchanged input state matrix on
+ * both "before" and "after" sides (the executor only writes aux; state
+ * passes through) — useless. This component takes the slot instead and
+ * renders the algorithm's intermediate decomposition: prekey recurrence +
+ * bitsliced S-box + IP for Serpent; the per-round PC-1/shift/PC-2 table for
+ * DES.
+ *
+ * **AES branch RETIRED (key-schedule-decomposition K1c, 2026-06-01).** AES's
+ * key schedule is now decomposed into port-native primitives, so the
+ * RotWord / SubWord / Rcon / word-XOR stages this used to simulate are real
+ * scrubbable trace frames — the AES swimlane was unreachable (no
+ * `aes.key-expansion@1` frame ships) and redundant. Serpent + DES keep their
+ * simulators until K3/K4 decompose them.
  *
  * Dispatch:
  *   - Looks up the frame's stepType in the simulator registry
  *     (`src/ui/key-schedule-sim/registry.ts`).
- *   - For `kind: "aes"` simulators: extracts sbox/rcon/rounds from
- *     `frame.params`, master key from `frame.auxRead`, runs
- *     `simulateAesKeySchedule`, renders per-word swimlane.
  *   - For `kind: "serpent"`: just needs the master key; runs
  *     `simulateSerpentKeySchedule`, renders multi-stage pipeline.
+ *   - For `kind: "des"`: needs the master key + PC-1/PC-2/shifts params;
+ *     runs `simulateDesKeySchedule`, renders the per-round table.
  *
  * The parity tests pin both simulators byte-for-byte against their
  * executors, so the values rendered here ARE the values the runtime
@@ -31,17 +38,12 @@
 import type { ByteFormat } from "@/core/format";
 import type { Json, TraceFrame } from "@/core/types";
 import { For, Match, Show, Switch, createMemo } from "solid-js";
-import type { AesScheduleTrace, AesScheduleWord, AesStage } from "../key-schedule-sim/aes";
 import type { DesScheduleRound, DesScheduleTrace } from "../key-schedule-sim/des";
-import {
-  type AesSimParams,
-  type ScheduleSimulator,
-  lookupScheduleSimulator,
-} from "../key-schedule-sim/registry";
+import { type ScheduleSimulator, lookupScheduleSimulator } from "../key-schedule-sim/registry";
 import type { SerpentScheduleTrace, SerpentStage } from "../key-schedule-sim/serpent";
 import { useByteFormat } from "../stores/format";
 import { getTrace, setFrame, useTraceVersion } from "../stores/trace";
-import { ByteRow, formatByteInline, formatBytes } from "./byte-row";
+import { ByteRow } from "./byte-row";
 
 type Props = {
   frame: TraceFrame;
@@ -76,9 +78,6 @@ export const KeyScheduleExplorer = (props: Props) => {
           // were a nested Show pair when only two kinds existed; the
           // pair couldn't extend cleanly when DES joined.
           <Switch fallback={<div class="muted small">unknown simulator kind: {sim().kind}</div>}>
-            <Match when={sim().kind === "aes"}>
-              <AesExplorer frame={props.frame} fmt={fmt()} />
-            </Match>
             <Match when={sim().kind === "serpent"}>
               <SerpentExplorer frame={props.frame} fmt={fmt()} />
             </Match>
@@ -105,319 +104,6 @@ const readKeyAuxName = (params: Json): string => {
   if (typeof params !== "object" || params === null || Array.isArray(params)) return "key";
   const candidate = (params as Record<string, Json>).keyAuxName;
   return typeof candidate === "string" && candidate.length > 0 ? candidate : "key";
-};
-
-// ─── AES branch ──────────────────────────────────────────────────────
-
-const AesExplorer = (props: { frame: TraceFrame; fmt: ByteFormat }) => {
-  // Run the AES simulator from the frame's params + aux. Wrapped in a
-  // memo so the heavy work re-runs only on frame swap (the simulator
-  // walks 44/52/60 words and emits ~50/70/90 stages — cheap, but a
-  // factor-of-N savings on scrub-and-format-toggle storms is free).
-  const trace = createMemo<AesScheduleTrace | null>(() => {
-    const params = extractAesParams(props.frame.params);
-    if (!params) return null;
-    const masterKey = props.frame.auxRead.get(readKeyAuxName(props.frame.params));
-    if (!(masterKey instanceof Uint8Array)) return null;
-    try {
-      // Re-fetch the simulator (vs hoisting to the parent) so the memo
-      // is independent and the parent can pass `frame` reactively.
-      const sim = lookupScheduleSimulator(props.frame.stepType);
-      if (sim?.kind !== "aes") return null;
-      return sim.simulate(masterKey, params);
-    } catch {
-      // Simulator throws on shape mismatch (wrong sbox length, rounds<1,
-      // etc.). Treat as "render the empty state" — the inline error
-      // surface below tells the user the explorer couldn't decompose.
-      return null;
-    }
-  });
-
-  return (
-    <Show
-      when={trace()}
-      fallback={
-        <div class="key-schedule-explorer-error muted">
-          Couldn't decompose this key-expansion frame (missing or wrong-shape params / master key).
-        </div>
-      }
-    >
-      {(t) => <AesScheduleView trace={t()} fmt={props.fmt} />}
-    </Show>
-  );
-};
-
-const AesScheduleView = (props: { trace: AesScheduleTrace; fmt: ByteFormat }) => (
-  <div class="key-schedule-aes">
-    <div class="key-schedule-aes-header">
-      <span class="key-schedule-aes-title">AES key expansion</span>
-      <span class="muted small">
-        Nk = {props.trace.Nk} · Nr = {props.trace.Nr} · {props.trace.words.length} words →{" "}
-        {props.trace.roundKeys.length} round keys
-      </span>
-    </div>
-    <AesScheduleLegend />
-    <ol class="key-schedule-aes-words">
-      <For each={props.trace.words}>{(word) => <AesWordRow word={word} fmt={props.fmt} />}</For>
-    </ol>
-  </div>
-);
-
-/**
- * Section-top collapsible legend. Type-prose — one entry per stage kind,
- * shared by every row of that kind across all 44 / 52 / 60 words. The
- * per-row `<details>` carry the *value*-prose ("here, byte 0x09 rotated
- * to position 3"); this legend carries the *type*-prose ("what RotWord
- * IS and why it exists in the schedule").
- *
- * Collapsed by default. Reference material — a learner who already knows
- * AES doesn't need it open; one click reveals it for the curious.
- */
-const AesScheduleLegend = () => (
-  <details class="key-schedule-aes-legend">
-    <summary>What these stages mean</summary>
-    <dl class="key-schedule-aes-legend-entries">
-      <dt>init</dt>
-      <dd>
-        The first Nk words come straight from the master key — no transformation. AES-128: W[0..3];
-        AES-192: W[0..5]; AES-256: W[0..7]. These seed the entire expansion.
-      </dd>
-
-      <dt>RotWord</dt>
-      <dd>
-        Cyclic byte rotation: [a, b, c, d] → [b, c, d, a]. Fires only on chain words (every Nk-th
-        word). Forces the chain word's bytes to mix into different column positions — without it,
-        position 0 of every round key would derive only from position 0 of the master key.
-      </dd>
-
-      <dt>SubWord</dt>
-      <dd>
-        Byte-wise S-box substitution applied to all four bytes. The same S-box SubBytes uses during
-        the round body. Provides the non-linearity that prevents the schedule from being a linear
-        function of the master key. <em>Note:</em> uses the FORWARD S-box even when decrypting
-        (FIPS-197 §5.2).
-      </dd>
-
-      <dt>⊕ Rcon</dt>
-      <dd>
-        XOR a round constant into byte 0 only; bytes 1-3 pass through. Rcon = powers of x in
-        GF(2^8): 01, 02, 04, 08, 10, 20, 40, 80, 1b, 36, … Breaks the across-round symmetry —
-        without it, a periodic master key would produce periodic round keys.
-      </dd>
-
-      <dt>SubWord (extra)</dt>
-      <dd>
-        AES-256-only wrinkle: when Nk &gt; 6 and i mod Nk == 4, run SubWord with no RotWord and no
-        Rcon. Adds non-linearity to compensate for the longer 8-word stride. AES-128 and AES-192
-        don't have this stage.
-      </dd>
-
-      <dt>⊕ W[i-Nk]</dt>
-      <dd>
-        Closes every word's derivation by XOR-ing the current chain output (or W[i-1] for plain
-        words) with the word from one full key-cycle back. This is the recurrence that threads round
-        N's key forward into round N+1.
-      </dd>
-    </dl>
-  </details>
-);
-
-const AesWordRow = (props: { word: AesScheduleWord; fmt: ByteFormat }) => (
-  <li
-    class="key-schedule-aes-word"
-    classList={{
-      "key-schedule-aes-word-chain": props.word.isChainStart,
-      "key-schedule-aes-word-nk8mid": props.word.isNk8Mid,
-    }}
-  >
-    <div class="key-schedule-aes-word-header">
-      <span class="key-schedule-aes-word-index">
-        W<sub>{props.word.wordIndex}</sub>
-      </span>
-      <Show when={props.word.isChainStart}>
-        <span
-          class="key-schedule-aes-word-badge"
-          title="i % Nk === 0 — RotWord + SubWord + Rcon XOR"
-        >
-          chain
-        </span>
-      </Show>
-      <Show when={props.word.isNk8Mid}>
-        <span
-          class="key-schedule-aes-word-badge key-schedule-aes-word-badge-nk8mid"
-          title="AES-256-only: extra SubWord at i % Nk === 4, no RotWord, no Rcon"
-        >
-          Nk&gt;6 mid
-        </span>
-      </Show>
-    </div>
-    <div class="key-schedule-aes-word-stages">
-      <For each={props.word.stages}>
-        {(stage) => <AesStageRow stage={stage} word={props.word} fmt={props.fmt} />}
-      </For>
-    </div>
-  </li>
-);
-
-/**
- * One stage row. `<details>` so the user can click to expand value-prose
- * explaining what just happened to these specific bytes. `<summary>` IS
- * the existing flex row (label → bytes) so the visual rhythm survives
- * across collapsed-state rows.
- *
- * `word` provides the parent context (wordIndex, Nk) the prose templates
- * need — e.g. RconIndex = wordIndex/Nk, master-key byte range for `init`,
- * W[i-Nk] label for `xor-prev`. The stage variants themselves don't carry
- * the parent index.
- */
-const AesStageRow = (props: { stage: AesStage; word: AesScheduleWord; fmt: ByteFormat }) => (
-  <details class="key-schedule-aes-stage" data-stage-kind={props.stage.kind}>
-    <summary class="key-schedule-aes-stage-summary">
-      <span class="key-schedule-aes-stage-label">{stageLabel(props.stage)}</span>
-      <span class="key-schedule-aes-stage-arrow">→</span>
-      <span class="key-schedule-aes-stage-value">
-        <ByteRow bytes={stageOutput(props.stage)} fmt={props.fmt} />
-      </span>
-    </summary>
-    <div class="key-schedule-aes-stage-prose">
-      <AesStageProse stage={props.stage} word={props.word} fmt={props.fmt} />
-    </div>
-  </details>
-);
-
-// ─── Value-prose: per-stage explanation of *these specific bytes* ─────
-//
-// `formatBytes` / `formatByteInline` / `<ByteRow>` are imported from
-// `./byte-row` — the same helpers are reused by `<StepNarration />` so
-// every per-frame prose surface in linear mode renders byte sequences
-// with one visual rhythm.
-
-/**
- * Dispatch to a per-kind prose component. Each prose body is a single
- * short paragraph (1-2 lines) describing the transformation in terms of
- * the actual bytes — complements the type-prose legend at the top of the
- * section, which explains what the operation IS in general.
- *
- * Reactivity note: stage objects don't mutate (the simulator emits them
- * frozen per frame), so we switch on `props.stage.kind` once at render
- * time and capture `stage` as a local for terseness. But `props.fmt` IS
- * reactive — it flows from the byte-format toggle. We read `props.fmt`
- * directly in each JSX expression (no destructure into a local) so Solid
- * wraps each formatted byte in its own tracked computation. Result:
- * format toggle surgically updates text content WITHOUT re-creating the
- * parent `<details>` element, which would lose its `open` state.
- */
-const AesStageProse = (props: { stage: AesStage; word: AesScheduleWord; fmt: ByteFormat }) => {
-  switch (props.stage.kind) {
-    case "init": {
-      const stage = props.stage;
-      const wordIndex = props.word.wordIndex;
-      const start = 4 * wordIndex;
-      return (
-        <p>
-          W<sub>{wordIndex}</sub> comes straight from master-key bytes [{start}..{start + 4}] ={" "}
-          {formatBytes(stage.word, props.fmt)}. No transformation applied.
-        </p>
-      );
-    }
-    case "rotword": {
-      const stage = props.stage;
-      const leading = stage.input[0] ?? 0;
-      return (
-        <p>
-          Rotate left one byte: {formatBytes(stage.input, props.fmt)} →{" "}
-          {formatBytes(stage.output, props.fmt)}. The leading byte (
-          {formatByteInline(leading, props.fmt)}) moves to position 3; the other three shift left.
-        </p>
-      );
-    }
-    case "subword":
-    case "extra-subword": {
-      const stage = props.stage;
-      const [a, b, c, d] = stage.sboxLookups;
-      const out = stage.output;
-      return (
-        <p>
-          <Show when={stage.kind === "extra-subword"}>
-            <em>AES-256 extra path (no RotWord, no Rcon).</em>{" "}
-          </Show>
-          S-box lookup per byte: S[{formatByteInline(a, props.fmt)}] ={" "}
-          {formatByteInline(out[0] ?? 0, props.fmt)}, S[{formatByteInline(b, props.fmt)}] ={" "}
-          {formatByteInline(out[1] ?? 0, props.fmt)}, S[{formatByteInline(c, props.fmt)}] ={" "}
-          {formatByteInline(out[2] ?? 0, props.fmt)}, S[{formatByteInline(d, props.fmt)}] ={" "}
-          {formatByteInline(out[3] ?? 0, props.fmt)}. All four bytes substituted in place.
-        </p>
-      );
-    }
-    case "rcon-xor": {
-      const stage = props.stage;
-      // Rcon index = i / Nk (chain-start invariant).
-      const rconIdx = props.word.wordIndex / props.word.Nk;
-      const rconHex = `0x${stage.rconValue.toString(16).padStart(2, "0")}`;
-      const b0In = stage.input[0] ?? 0;
-      const b0Out = stage.output[0] ?? 0;
-      return (
-        <p>
-          Rcon[{rconIdx}] = {rconHex}. XOR into byte 0 only: {formatByteInline(b0In, props.fmt)} ⊕{" "}
-          {rconHex} = {formatByteInline(b0Out, props.fmt)}. Bytes 1-3 pass through unchanged.
-        </p>
-      );
-    }
-    case "xor-prev": {
-      const stage = props.stage;
-      return (
-        <p>
-          W<sub>{stage.prevWordIndex}</sub> = {formatBytes(stage.prevWord, props.fmt)}. Per-byte XOR
-          with the chain output: {formatBytes(stage.input, props.fmt)} ⊕{" "}
-          {formatBytes(stage.prevWord, props.fmt)} = {formatBytes(stage.output, props.fmt)}.
-        </p>
-      );
-    }
-  }
-};
-
-const stageLabel = (stage: AesStage): string => {
-  switch (stage.kind) {
-    case "init":
-      return "init";
-    case "rotword":
-      return "RotWord";
-    case "subword":
-      return "SubWord";
-    case "rcon-xor":
-      return `⊕ Rcon = 0x${stage.rconValue.toString(16).padStart(2, "0")}`;
-    case "extra-subword":
-      return "SubWord (extra, AES-256)";
-    case "xor-prev":
-      return `⊕ W[${stage.prevWordIndex}]`;
-  }
-};
-
-const stageOutput = (stage: AesStage): Uint8Array => {
-  switch (stage.kind) {
-    case "init":
-      return stage.word;
-    default:
-      return stage.output;
-  }
-};
-
-const extractAesParams = (params: Json): AesSimParams | null => {
-  if (typeof params !== "object" || params === null || Array.isArray(params)) return null;
-  const p = params as Record<string, Json>;
-  const sbox = p.sbox;
-  const rcon = p.rcon;
-  const rounds = p.rounds;
-  if (!Array.isArray(sbox) || sbox.length !== 256) return null;
-  if (!Array.isArray(rcon)) return null;
-  if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 1) return null;
-  // Cast through Json → number[] is safe here because we just validated
-  // the shape. The simulator does its own range checks.
-  return {
-    sbox: sbox as readonly number[],
-    rcon: rcon as readonly number[],
-    rounds,
-  };
 };
 
 // ─── Serpent branch ──────────────────────────────────────────────────

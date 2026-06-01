@@ -84,18 +84,20 @@ describe("AES-128 decryption (FIPS-197 §5.3)", () => {
   });
 
   it("emits the same number of frames as the forward cipher", () => {
-    // Byte-native (Slice B1.2; AddRoundKey merged to one leaf in Finding F3):
-    // 1 key-expansion + 1 inv-initial AddRoundKey + 9 inverse rounds × 4
-    // substeps (InvShiftRows, InvSubBytes, AddRoundKey, InvMixColumns) + 1
-    // final inverse round × 3 substeps (no InvMixColumns) = 41 frames. Same
-    // shape as the byte-native forward cipher, which makes the side-by-side
-    // comparison meaningful in the UI.
+    // DECOMPOSED key schedule (key-schedule-decomposition K1a) — 114 schedule
+    // frames (load-key + 10 groups × 10 + word-stream + rk0..10 + publish),
+    // identical to the forward cipher since both derive the same round keys.
+    // The inverse round body is 40 frames: 1 inv-initial AddRoundKey + 9
+    // inverse rounds × 4 substeps (InvShiftRows, InvSubBytes, AddRoundKey,
+    // InvMixColumns) + 1 final inverse round × 3 substeps (no InvMixColumns).
+    // 114 + 40 = 154 — same total as the byte-native forward cipher, which
+    // keeps the side-by-side comparison meaningful in the UI.
     const ct = makeBytesState(bytesFromHex(ciphertextHex));
     const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]);
     const trace = runSpec(aes128DecryptSpec, buildDefaultRegistry(), {
       initialState: ct,
       initialAux,
     });
-    expect(trace.frames.length).toBe(41);
+    expect(trace.frames.length).toBe(154);
   });
 });

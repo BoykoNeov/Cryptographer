@@ -44,7 +44,7 @@
 
 import type { CipherSpec, PortBinding, StepNode } from "../core/types";
 import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "../core/types";
-import { AES_RCON, AES_SBOX } from "./aes-constants";
+import { buildAesKeyScheduleNative } from "./aes-key-schedule-builder-native";
 import {
   aesNativeDecryptOutputFrom,
   aesNativeOutputFrom,
@@ -81,19 +81,6 @@ const BLOCK_SIZE = 16;
 const ECB_ITERATE_ID = "ecb-blocks";
 
 const port = (node: string, portName: string): PortBinding => ({ node, port: portName });
-
-const keyExpansionLeaf = (rounds: number): StepNode => ({
-  kind: "step",
-  id: "key-expansion",
-  type: "aes.key-expansion@1",
-  params: {
-    keyAuxName: "key",
-    outputPrefix: "roundKey",
-    sbox: [...AES_SBOX],
-    rcon: [...AES_RCON],
-    rounds,
-  },
-});
 
 export function buildAesEcbSpec(variant: AesVariant, direction: CipherDirection): CipherSpec {
   const rounds = ROUNDS_BY_VARIANT[variant];
@@ -134,9 +121,10 @@ export function buildAesEcbSpec(variant: AesVariant, direction: CipherDirection)
       key: { byteLength: keyBytes },
     },
     steps: [
-      // Key expansion runs once total — outside the per-block loop. Writes
-      // roundKey.0..N to aux; every block's AddRoundKey reads them.
-      keyExpansionLeaf(rounds),
+      // Key expansion runs once total — outside the per-block loop. The
+      // decomposed schedule publishes roundKey.0..N to aux; every block's
+      // AddRoundKey reads them (B-minimal — consumers untouched).
+      buildAesKeyScheduleNative(rounds, keyBytes / 4),
       iterateNode,
     ],
     // The cipher's output is the iterate's concatenated per-block exit.

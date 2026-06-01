@@ -53,13 +53,14 @@ const countAllNodes = (nodes: readonly StepNode[]): number => {
 
 describe("findStepAndParent", () => {
   it("locates a top-level leaf with parent=null", () => {
-    // key-expansion is a top-level leaf in aes-128 (lives directly in
-    // spec.steps, not inside a round group).
-    const loc = findStepAndParent(aes128Spec, "key-expansion");
+    // initial.add-round-key is a top-level leaf in aes-128 (lives directly in
+    // spec.steps, not inside a round group). It sits at index 1, right after
+    // the decomposed `key-schedule` group (key-schedule-decomposition K1a).
+    const loc = findStepAndParent(aes128Spec, "initial.add-round-key");
     expect(loc).not.toBeNull();
-    expect(loc?.node.id).toBe("key-expansion");
+    expect(loc?.node.id).toBe("initial.add-round-key");
     expect(loc?.parent).toBeNull();
-    expect(loc?.indexInParent).toBe(0); // key-expansion is first
+    expect(loc?.indexInParent).toBe(1); // after the key-schedule group
   });
 
   it("locates a leaf nested inside a round group with parent set", () => {
@@ -108,11 +109,12 @@ describe("findStepAndParent", () => {
 
 describe("insertStepAfter", () => {
   it("inserts at the top level", () => {
-    const newStep = fixtureLeaf("after-key-expansion");
-    const updated = insertStepAfter(aes128Spec, "key-expansion", newStep);
+    const newStep = fixtureLeaf("after-key-schedule");
+    // Anchor on the top-level `key-schedule` group (index 0); the new step
+    // lands at index 1 in the top-level array.
+    const updated = insertStepAfter(aes128Spec, "key-schedule", newStep);
 
-    // The new step lands at index 1 in the top-level array.
-    const inserted = findStepAndParent(updated, "after-key-expansion");
+    const inserted = findStepAndParent(updated, "after-key-schedule");
     expect(inserted?.parent).toBeNull();
     expect(inserted?.indexInParent).toBe(1);
     // Original node count grows by exactly one.
@@ -175,10 +177,10 @@ describe("insertStepAfter", () => {
 
 describe("insertStepBefore", () => {
   it("inserts at the top level", () => {
-    const newStep = fixtureLeaf("before-key-expansion");
-    const updated = insertStepBefore(aes128Spec, "key-expansion", newStep);
+    const newStep = fixtureLeaf("before-key-schedule");
+    const updated = insertStepBefore(aes128Spec, "key-schedule", newStep);
 
-    const inserted = findStepAndParent(updated, "before-key-expansion");
+    const inserted = findStepAndParent(updated, "before-key-schedule");
     expect(inserted?.parent).toBeNull();
     expect(inserted?.indexInParent).toBe(0); // becomes the new first step
   });
@@ -262,9 +264,11 @@ describe("prependChildToContainer", () => {
   });
 
   it("throws when the id resolves to a leaf, not a container", () => {
-    expect(() => prependChildToContainer(aes128Spec, "key-expansion", fixtureLeaf("x"))).toThrow(
-      /resolves to a leaf, not a container/,
-    );
+    // `initial.add-round-key` is a top-level LEAF (the `key-schedule` node is a
+    // group, so it would NOT throw here).
+    expect(() =>
+      prependChildToContainer(aes128Spec, "initial.add-round-key", fixtureLeaf("x")),
+    ).toThrow(/resolves to a leaf, not a container/);
   });
 
   it("throws when no node has that id", () => {
@@ -311,7 +315,7 @@ describe("removeStep", () => {
   it("removing the only child leaves an empty group standing", () => {
     // Construct a spec with a single-child group, then remove that child.
     const onlyChild = fixtureLeaf("onlychild");
-    const withSingleton = insertStepAfter(aes128Spec, "key-expansion", {
+    const withSingleton = insertStepAfter(aes128Spec, "key-schedule", {
       kind: "group",
       id: "singleton-group",
       label: "Singleton",
@@ -405,7 +409,7 @@ describe("reorderStep", () => {
 describe("structural mutations preserve runtime correctness", () => {
   it("findStep still works after insertStepAfter (round-trip via the existing finder)", () => {
     const newStep = fixtureLeaf("post-keyexp");
-    const updated = insertStepAfter(aes128Spec, "key-expansion", newStep);
+    const updated = insertStepAfter(aes128Spec, "key-schedule", newStep);
     // findStep is leaf-only and should locate our new leaf.
     expect(findStep(updated, "post-keyexp")?.id).toBe("post-keyexp");
     // Pre-existing leaves are still findable.

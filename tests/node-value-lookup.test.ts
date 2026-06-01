@@ -108,7 +108,7 @@ describe("lookupNodeValue — endpoint pills", () => {
 
 describe("lookupNodeValue — trace null", () => {
   it("returns `no-trace` for a regular leaf when the user hasn't run yet", () => {
-    const out = lookupNodeValue("key-expansion", aes128EcbSpec, null, undefined);
+    const out = lookupNodeValue("initial.add-round-key", aes128EcbSpec, null, undefined);
     expect(out.status).toBe("no-trace");
   });
 
@@ -180,15 +180,18 @@ describe("lookupNodeValue — block chips", () => {
 // ─── Regular leaves ─────────────────────────────────────────────────────
 
 describe("lookupNodeValue — regular leaves", () => {
-  it('resolves a top-level leaf (`key-expansion`) to missing — aux-only, no `"state"` port', () => {
+  it("resolves the schedule publish tail (`key-schedule.publish`) to missing — multi-output, no single resolvable state", () => {
     const trace = runAes128Ecb();
-    const out = lookupNodeValue("key-expansion", aes128EcbSpec, trace, undefined);
-    // key-expansion writes its round keys to aux; it has no `"state"` output
-    // port, so post-Batch-4 the cipher-agnostic value inspector reports no
-    // resolvable state (the round keys surface via aux edges / PortFlowView).
+    // Since the key-schedule decomposition (K1c) the schedule's meta-bearing
+    // tail `key-schedule.publish` is the aux writer for the round keys. It has
+    // 11 output ports (key0..key10, identity-forwarded) and no `"state"` port,
+    // so the cipher-agnostic value inspector (framePrimaryOutBytes: state →
+    // sole-port → null) can't pick a single representative value → missing.
+    // The round keys surface via the aux edges / PortFlowView instead.
+    const out = lookupNodeValue("key-schedule.publish", aes128EcbSpec, trace, undefined);
     expect(out.status).toBe("missing");
     if (out.status !== "missing") return;
-    expect(out.reason).toMatch(/no resolvable state/i);
+    expect(out.reason).toMatch(/no resolvable state|single|output port/i);
   });
 
   it("resolves a native-AES leaf inside the iterate (`initial.add-round-key`) to its honest single-output value", () => {

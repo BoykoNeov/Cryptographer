@@ -158,6 +158,32 @@ const syntheticSpineReplicaGraph = (): CipherGraph => ({
   rootIds: [SPINE_REPLICA_ID, SPINE_CONSUMER_ID],
 });
 
+// Synthetic aux-only-root-leaf graph (key-schedule-decomposition K1c).
+//
+// The aux-only-root LIFT feature targets a root-level LEAF whose only output
+// is aux (the former monolithic `key-expansion` was the canonical subject).
+// Since the decomposition, the schedule is the `key-schedule` GROUP — there is
+// NO root-level aux-only leaf in any shipped AES spec, so the lift is dormant
+// for real ciphers. Per the Bucket-C policy ("keep the layout machinery
+// covered until Phase C"), drive `layoutRoot`'s aux-only-lift path with a
+// hand-built graph: a root aux-only leaf `aux-root` plus a spine consumer.
+const AUX_ROOT_ID = "aux-root";
+const syntheticAuxOnlyRootGraph = (): CipherGraph => ({
+  nodes: [
+    { stepId: AUX_ROOT_ID, stepType: "test.aux", label: AUX_ROOT_ID, containerPath: [] },
+    {
+      stepId: "initial.add-round-key",
+      stepType: "test.consumer",
+      label: "initial.add-round-key",
+      containerPath: [],
+    },
+  ],
+  containers: [],
+  // The aux-only leaf fans a round key into the spine consumer (aux-kind).
+  edges: [{ from: AUX_ROOT_ID, to: "initial.add-round-key", auxKey: "roundKey.0", kind: "aux" }],
+  rootIds: [AUX_ROOT_ID, "initial.add-round-key"],
+});
+
 // ─── Tests ─────────────────────────────────────────────────────────────────
 
 describe("GraphView — replica side-gutter inside vertical-stack groups", () => {
@@ -171,7 +197,7 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
     // from the high-fanout key-expansion source.
     for (const n of [1, 5, 10]) {
       const consumerId = `round.${n}.add-round-key`;
-      const replicaId = `key-expansion@->${consumerId}`;
+      const replicaId = `key-schedule.publish@->${consumerId}`;
       const consumerBox = boxes.get(consumerId);
       const replicaBox = boxes.get(replicaId);
       if (!consumerBox || !replicaBox) {
@@ -193,7 +219,7 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
       layoutConstantsFor("normal"),
     );
     const consumerId = "round.5.add-round-key";
-    const replicaId = `key-expansion@->${consumerId}`;
+    const replicaId = `key-schedule.publish@->${consumerId}`;
     const c = boxes.get(consumerId);
     const r = boxes.get(replicaId);
     if (!c || !r) throw new Error("missing box");
@@ -246,7 +272,7 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
     // All x-coordinates are the same number (they share the column).
     expect(new Set(xs).size).toBe(1);
     // And the replica's x is strictly less than that shared column x.
-    const replicaX = boxes.get("key-expansion@->round.5.add-round-key")?.x;
+    const replicaX = boxes.get("key-schedule.publish@->round.5.add-round-key")?.x;
     expect(replicaX).toBeDefined();
     expect(replicaX).toBeLessThan(xs[0] ?? Number.POSITIVE_INFINITY);
   });
@@ -293,7 +319,12 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
   });
 
   it("when no replicas are present, root row stays at CANVAS_MARGIN (no spurious lift)", () => {
-    const g = aes128Graph();
+    // Synthetic fixture (K1c): a no-replica graph with no aux-only-lift passed.
+    // The gutter/lift machinery must not fire spuriously — both root nodes sit
+    // flush at the top margin. (Decomposed AES's high-fanout sources live
+    // inside the collapsed `key-schedule` group, so a no-replica real-AES
+    // fixture no longer has a representative root leaf to pin here.)
+    const g = syntheticAuxOnlyRootGraph();
     const { boxes } = layoutRoot(
       g,
       new Map<string, { x: number; y: number }>(),
@@ -302,20 +333,22 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
     // CANVAS_MARGIN = 60 (module-internal constant, bumped 24 → 44 → 60
     // across two 2026-05-17 polish rounds); pin via the observed top y
     // of the leftmost root child instead of importing it.
-    const keyExp = boxes.get("key-expansion");
-    if (!keyExp) throw new Error("missing key-expansion");
-    // Without replicas, the row should sit flush against the top margin
-    // — no extra LEAF_H + REPLICA_LIFT_GAP shift.
-    expect(keyExp.y).toBe(60);
+    const auxRoot = boxes.get(AUX_ROOT_ID);
+    if (!auxRoot) throw new Error("missing aux-root");
+    // Without replicas + no lift, the row should sit flush against the top
+    // margin — no extra LEAF_H + REPLICA_LIFT_GAP shift.
+    expect(auxRoot.y).toBe(60);
   });
 
   it("inside an iterate body (AES-128-ECB), replicas also lift above their consumer", () => {
     // Symmetric to the root-level test: the iterate body is also a
     // horizontal flow, so its spliced-before-consumer replicas need the
     // same orthogonal lift. Byte-native ECB (B1.4): key-expansion's per-round
-    // consumers are the `*.add-round-key` (`aux-load-bytes@1`) leaves inside the
-    // iterate; the first is `initial.add-round-key`, so the replica is
-    // `key-expansion@->initial.add-round-key` and it lifts above that consumer.
+    // consumers are the `*.add-round-key` leaves inside the iterate; the first
+    // is `initial.add-round-key`, and since the key-schedule decomposition
+    // (K1c) the aux source is `key-schedule.publish`, so the replica is
+    // `key-schedule.publish@->initial.add-round-key` and it lifts above that
+    // consumer.
     const g = aes128EcbReplicatedGraph();
     const { boxes } = layoutRoot(
       g,
@@ -323,7 +356,7 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
       layoutConstantsFor("normal"),
     );
     const consumerBox = boxes.get("initial.add-round-key");
-    const replicaBox = boxes.get("key-expansion@->initial.add-round-key");
+    const replicaBox = boxes.get("key-schedule.publish@->initial.add-round-key");
     if (!consumerBox || !replicaBox) {
       throw new Error("missing iterate-body box (consumer or replica)");
     }
@@ -679,15 +712,17 @@ describe("GraphView — multiple sources targeting same consumer don't overlap",
  * computation; on the spine = state flow."
  */
 describe("GraphView — aux-only root leaves are lifted above the spine row", () => {
-  it("places `key-expansion` at CANVAS_MARGIN and the spine row below it", () => {
-    // No replicas — pure aux-only-lift behavior, isolated.
-    const g = aes128Graph();
+  it("places an aux-only root leaf at CANVAS_MARGIN and the spine row below it", () => {
+    // No replicas — pure aux-only-lift behavior, isolated. Synthetic fixture
+    // (K1c): decomposed AES has no root-level aux-only leaf, so we drive the
+    // lift math with a hand-built graph (the `aux-root` leaf).
+    const g = syntheticAuxOnlyRootGraph();
     const consts = layoutConstantsFor("normal");
     const empty = new Map<string, { x: number; y: number }>();
-    const auxOnlyRootIds = new Set<string>(["key-expansion"]);
+    const auxOnlyRootIds = new Set<string>([AUX_ROOT_ID]);
     const { boxes } = layoutRoot(g, empty, consts, auxOnlyRootIds);
 
-    const ke = boxes.get("key-expansion");
+    const ke = boxes.get(AUX_ROOT_ID);
     const initial = boxes.get("initial.add-round-key");
     if (!ke || !initial) throw new Error("missing key boxes");
 
@@ -706,12 +741,12 @@ describe("GraphView — aux-only root leaves are lifted above the spine row", ()
   it("when no aux-only root leaves are present, spine stays at CANVAS_MARGIN", () => {
     // Empty auxOnlyRootIds → no lift → spine row is the top row.
     // Backward-compat: callers that pass nothing get the old behavior.
-    const g = aes128Graph();
+    const g = syntheticAuxOnlyRootGraph();
     const consts = layoutConstantsFor("normal");
     const empty = new Map<string, { x: number; y: number }>();
     const { boxes } = layoutRoot(g, empty, consts);
 
-    const ke = boxes.get("key-expansion");
+    const ke = boxes.get(AUX_ROOT_ID);
     const initial = boxes.get("initial.add-round-key");
     if (!ke || !initial) throw new Error("missing key boxes");
 

@@ -54,14 +54,19 @@ describe("AES-192 (FIPS-197 §A.2 + NIST AES Core 192)", () => {
   });
 
   it("emits a frame for every leaf step", () => {
-    // Byte-native AES-192 leaves (one frame each), after Finding F3 merged
-    // AddRoundKey's fetch-rk + xor pair into one `xor-with-aux@1` leaf:
-    //   key-expansion (1)
-    //   initial.add-round-key (1)
-    //   rounds 1..11 × 4 sub-steps (sub-bytes, shift-rows, mix-columns,
-    //     add-round-key) = 44
-    //   final round.12 × 3 sub-steps (no mix-columns) = 3
-    //   = 49 frames
+    // Byte-native AES-192 leaves (one frame each). DECOMPOSED key schedule
+    // (key-schedule-decomposition K1a), Nk=6 → 52 words = 7 full 6-word groups
+    // + 1 partial 4-word group (groups don't align with round keys):
+    //   key-schedule (110):
+    //     load-key (1)
+    //     7 full groups × 12 leaves = 84
+    //     1 partial group (4 words) × 10 leaves = 10
+    //     word-stream (1) + rk0..rk12 (13) + publish (1) = 15
+    //   round body (48):
+    //     initial.add-round-key (1)
+    //     rounds 1..11 × 4 sub-steps = 44
+    //     final round.12 × 3 sub-steps (no mix-columns) = 3
+    //   = 158 frames
     const plaintext = makeBytesState(bytesFromHex(PLAINTEXT_HEX));
     const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(KEY_HEX)]]);
 
@@ -70,7 +75,7 @@ describe("AES-192 (FIPS-197 §A.2 + NIST AES Core 192)", () => {
       initialAux,
     });
 
-    expect(trace.frames.length).toBe(49);
+    expect(trace.frames.length).toBe(158);
   });
 
   it("produces all 13 round keys in aux and roundKey.12 matches FIPS-197 §A.2", () => {

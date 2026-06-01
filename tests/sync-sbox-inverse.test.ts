@@ -19,6 +19,7 @@
 
 import { AES_INV_SBOX, AES_SBOX } from "@/ciphers/aes-constants";
 import type { CipherSpec, StepNode } from "@/core/types";
+import { isKeyScheduleLeafId, isRoundBodyLeafId } from "@/ui/components/cross-mode-mirror-registry";
 import { invertSbox } from "@/ui/components/sbox-validation";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetCipherModeForTests } from "@/ui/stores/cipher-mode";
@@ -49,16 +50,21 @@ const resetAll = (): void => {
   // `generic.byte-substitution@1` mirror entry retires with Phase C.
 };
 
-// Visit every leaf with the given type and collect its `sbox` param.
-// Used to assert "every matching step has table X" without depending on
-// the AES round count (which varies across AES-128/192/256).
-const collectSboxParams = (spec: CipherSpec, stepType: string): readonly number[][] => {
-  const out: number[][] = [];
+// Visit every leaf with the given type and collect its (id, sbox). The id
+// lets the role-scoped tests partition `byte-substitute@1` into round-body
+// SubBytes vs key-schedule SubWord — both share the type since the
+// key-schedule decomposition (2026-06-01), but only round-body takes the
+// inverse mirror (the SubWord stays forward, FIPS-197 §5.2).
+const collectSboxEntries = (
+  spec: CipherSpec,
+  stepType: string,
+): readonly { id: string; sbox: readonly number[] }[] => {
+  const out: { id: string; sbox: readonly number[] }[] = [];
   const visit = (nodes: readonly StepNode[]): void => {
     for (const n of nodes) {
       if (n.kind === "step" && n.type === stepType) {
         const params = n.params as { sbox?: readonly number[] };
-        if (params.sbox) out.push([...params.sbox]);
+        if (params.sbox) out.push({ id: n.id, sbox: [...params.sbox] });
       } else if (n.kind === "group" || n.kind === "iterate") {
         visit(n.children as readonly StepNode[]);
       }
@@ -68,23 +74,29 @@ const collectSboxParams = (spec: CipherSpec, stepType: string): readonly number[
   return out;
 };
 
+// Round-body SubBytes tables (the inverse-mirror role).
+const roundBodyTables = (spec: CipherSpec): readonly (readonly number[])[] =>
+  collectSboxEntries(spec, "byte-substitute@1")
+    .filter((e) => isRoundBodyLeafId(e.id))
+    .map((e) => e.sbox);
+
+// Key-schedule SubWord tables (the identity/Copy role — must stay forward).
+const keyScheduleTables = (spec: CipherSpec): readonly (readonly number[])[] =>
+  collectSboxEntries(spec, "byte-substitute@1")
+    .filter((e) => isKeyScheduleLeafId(e.id))
+    .map((e) => e.sbox);
+
 describe("syncSboxInverseToCounterpart — cross-slot value mirror", () => {
   beforeEach(resetAll);
   afterEach(resetAll);
 
-  it("writes the inverse to every matching step in the decrypt slot when active=encrypt", () => {
-    // Active mode defaults to encrypt. The canonical AES-128 spec
-    // ships with AES_SBOX in every byte-substitution step on the
-    // encrypt side and AES_INV_SBOX on the decrypt side. We pick a
-    // *non-canonical* forward table so the test would fail if the
-    // mutator silently no-op'd or used the canonical defaults.
-    const customForward = AES_SBOX.slice();
-    customForward[0] = (customForward[0] ?? 0) ^ 0x01; // bit-flip
-    customForward[1] = (customForward[1] ?? 0) ^ 0x01; // keep it a permutation? — no, this can produce dupes.
-
-    // Use a proper permutation: a rotation.
+  it("writes the inverse to every ROUND-BODY step in the decrypt slot when active=encrypt", () => {
+    // Active mode defaults to encrypt. We pick a *non-canonical* forward
+    // table (a swap of two AES_SBOX entries → still a permutation) so the
+    // test would fail if the mutator silently no-op'd or used canonical
+    // defaults. The UI path scopes the broadcast to round-body leaves via
+    // `isRoundBodyLeafId` — that is the call shape under test.
     const rotated = AES_SBOX.slice();
-    // Swap two values to get a fresh permutation that isn't AES_SBOX.
     const a = rotated[10];
     const b = rotated[20];
     if (a !== undefined && b !== undefined) {
@@ -93,24 +105,46 @@ describe("syncSboxInverseToCounterpart — cross-slot value mirror", () => {
     }
     const expectedInverse = invertSbox(rotated);
 
-    syncSboxInverseToCounterpart("byte-substitute@1", expectedInverse);
+    syncSboxInverseToCounterpart("byte-substitute@1", expectedInverse, isRoundBodyLeafId);
 
     const decryptSpec = useCipherSpecsByMode()().decrypt;
-    const decryptTables = collectSboxParams(decryptSpec, "byte-substitute@1");
-
-    expect(decryptTables.length).toBeGreaterThan(0); // AES has 10+ SubBytes steps
-    for (const table of decryptTables) {
+    const roundBody = roundBodyTables(decryptSpec);
+    expect(roundBody.length).toBeGreaterThan(0); // AES has 10+ SubBytes steps
+    for (const table of roundBody) {
       expect(table).toEqual(expectedInverse);
     }
   });
 
-  it("writes the inverse to every matching step in the encrypt slot when active=decrypt", () => {
+  // ── Corruption guard (key-schedule-decomposition K1c) ─────────────────
+  // The SubWord leaves share the `byte-substitute@1` type but must hold the
+  // FORWARD S-box even on the decrypt side (FIPS-197 §5.2). A type-wide
+  // inverse broadcast would overwrite them with the inverse table and break
+  // the decrypt key schedule — invisible to the ciphertext KATs (which run
+  // the specs as-authored, not after a button click). This pins that the
+  // role-scoped inverse leaves the SubWord leaves untouched.
+  it("does NOT touch the decrypt key-schedule SubWord leaves (they stay forward)", () => {
+    const rotated = AES_SBOX.slice();
+    const a = rotated[10];
+    const b = rotated[20];
+    if (a !== undefined && b !== undefined) {
+      rotated[10] = b;
+      rotated[20] = a;
+    }
+    syncSboxInverseToCounterpart("byte-substitute@1", invertSbox(rotated), isRoundBodyLeafId);
+
+    const subwordTables = keyScheduleTables(useCipherSpecsByMode()().decrypt);
+    expect(subwordTables.length).toBeGreaterThan(0); // AES-128 has 10 SubWord leaves
+    for (const table of subwordTables) {
+      // Untouched → still the canonical forward S-box, NOT the inverse.
+      expect(table).toEqual([...AES_SBOX]);
+    }
+  });
+
+  it("writes the inverse to every ROUND-BODY step in the encrypt slot when active=decrypt", () => {
     // Flip active mode first; the mutator should follow the active
     // signal and write to encrypt instead.
     setMode("decrypt");
 
-    // Compute the inverse-of-something — doesn't matter what, as long
-    // as it differs from the canonical default in the encrypt slot.
     const rotated = AES_INV_SBOX.slice();
     const a = rotated[5];
     const b = rotated[200];
@@ -120,36 +154,35 @@ describe("syncSboxInverseToCounterpart — cross-slot value mirror", () => {
     }
     const expectedWrite = invertSbox(rotated);
 
-    syncSboxInverseToCounterpart("byte-substitute@1", expectedWrite);
+    syncSboxInverseToCounterpart("byte-substitute@1", expectedWrite, isRoundBodyLeafId);
 
     const encryptSpec = useCipherSpecsByMode()().encrypt;
-    const encryptTables = collectSboxParams(encryptSpec, "byte-substitute@1");
-
-    expect(encryptTables.length).toBeGreaterThan(0);
-    for (const table of encryptTables) {
+    const roundBody = roundBodyTables(encryptSpec);
+    expect(roundBody.length).toBeGreaterThan(0);
+    for (const table of roundBody) {
       expect(table).toEqual(expectedWrite);
     }
   });
 
   it("leaves the active slot untouched", () => {
     // Capture the active slot's tables before, mutate, compare after.
-    const beforeEncrypt = collectSboxParams(useCipherSpecsByMode()().encrypt, "byte-substitute@1");
+    const beforeEncrypt = roundBodyTables(useCipherSpecsByMode()().encrypt);
     const inverse = invertSbox(AES_SBOX);
-    syncSboxInverseToCounterpart("byte-substitute@1", inverse);
-    const afterEncrypt = collectSboxParams(useCipherSpecsByMode()().encrypt, "byte-substitute@1");
+    syncSboxInverseToCounterpart("byte-substitute@1", inverse, isRoundBodyLeafId);
+    const afterEncrypt = roundBodyTables(useCipherSpecsByMode()().encrypt);
     expect(afterEncrypt).toEqual(beforeEncrypt);
   });
 
   it("preserves canonical round-trip when called with invertSbox(AES_SBOX)", () => {
     // Property check: writing invertSbox(AES_SBOX) === AES_INV_SBOX into
-    // the decrypt slot is a no-op against canonical. The test pins the
-    // canonical/canonical relationship — if invertSbox or the spec
-    // factory ever drifts, this catches it.
+    // the decrypt slot is a no-op against canonical round-body leaves. The
+    // test pins the canonical/canonical relationship — if invertSbox or the
+    // spec factory ever drifts, this catches it.
     const inverse = invertSbox(AES_SBOX);
-    syncSboxInverseToCounterpart("byte-substitute@1", inverse);
+    syncSboxInverseToCounterpart("byte-substitute@1", inverse, isRoundBodyLeafId);
 
-    const decryptTables = collectSboxParams(useCipherSpecsByMode()().decrypt, "byte-substitute@1");
-    for (const table of decryptTables) {
+    const roundBody = roundBodyTables(useCipherSpecsByMode()().decrypt);
+    for (const table of roundBody) {
       expect(table).toEqual([...AES_INV_SBOX]);
     }
   });

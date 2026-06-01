@@ -178,6 +178,12 @@ export const NARRATION_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
   "aes.key-expansion@2",
   "serpent.key-expansion@1",
   "speck.key-schedule@1",
+  // The aux-publish tail of the DECOMPOSED AES key schedule
+  // (key-schedule-decomposition K1a). An identity passthrough that mirrors the
+  // round keys into aux — per-frame value-prose is the wrong surface (the
+  // interesting math is the recurrence leaves above it, each of which IS
+  // narrated via its `narrationOverride`).
+  "aes.publish-round-keys@1",
   // Bit-level linear transforms — byte-level prose would be misleading.
   // (Bit-permutation is honest at byte granularity — narrated in Phase 2.)
   "serpent.linear-transform@1",

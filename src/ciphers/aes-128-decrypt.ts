@@ -34,10 +34,11 @@
  */
 
 import type { CipherSpec } from "../core/types";
-import { AES_RCON, AES_SBOX } from "./aes-constants";
+import { buildAesKeyScheduleNative } from "./aes-key-schedule-builder-native";
 import { aesNativeDecryptOutputFrom, buildAesDecryptBodyNative } from "./aes-round-builder-native";
 
 const ROUNDS = 10;
+const NK = 4; // 16-byte key / 4 bytes per word
 
 export const aes128DecryptSpec: CipherSpec = {
   id: "aes-128-decrypt@1",
@@ -48,21 +49,11 @@ export const aes128DecryptSpec: CipherSpec = {
     key: { byteLength: 16 },
   },
   steps: [
-    // Step 1: derive round keys. Identical to forward — uses the FORWARD
-    // S-box (key expansion's SubWord applies forward S-box even when
-    // decrypting, FIPS-197 §5.2). Writes roundKey.0..10 into aux.
-    {
-      kind: "step",
-      id: "key-expansion",
-      type: "aes.key-expansion@1",
-      params: {
-        keyAuxName: "key",
-        outputPrefix: "roundKey",
-        sbox: [...AES_SBOX],
-        rcon: [...AES_RCON],
-        rounds: ROUNDS,
-      },
-    },
+    // Step 1: derive round keys. Identical to forward — the decomposed schedule
+    // uses the FORWARD S-box (key expansion's SubWord applies the forward S-box
+    // even when decrypting, FIPS-197 §5.2). Publishes roundKey.0..10 into aux;
+    // the inverse rounds read them back in reverse order.
+    buildAesKeyScheduleNative(ROUNDS, NK),
     ...buildAesDecryptBodyNative(ROUNDS),
   ],
   outputFrom: aesNativeDecryptOutputFrom(),

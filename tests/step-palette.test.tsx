@@ -186,15 +186,15 @@ describe("insertStepIntoSpec — store mutator", () => {
   it("inserts a new leaf with empty params after the named anchor leaf", () => {
     const spec = useSpec();
     const before = spec();
-    // The shipped AES-128 spec has `key-expansion` as the first top-level leaf.
-    expect(findStep(before, "key-expansion")).not.toBeNull();
+    // The shipped AES-128 spec has `initial.add-round-key` as the first top-level leaf.
+    expect(findStep(before, "initial.add-round-key")).not.toBeNull();
     insertStepIntoSpec("generic.byte-substitution@1", {
       kind: "after",
-      stepId: "key-expansion",
+      stepId: "initial.add-round-key",
     });
     const after = spec();
     // A new leaf with that stepType should now exist; its position is
-    // directly after `key-expansion` in the top-level array.
+    // directly after `initial.add-round-key` in the top-level array.
     const located = findStepAndParent(after, "byte-substitution-1");
     expect(located, "new leaf should be findable by generated id").not.toBeNull();
     expect(located?.node.kind).toBe("step");
@@ -202,8 +202,8 @@ describe("insertStepIntoSpec — store mutator", () => {
       expect(located.node.type).toBe("generic.byte-substitution@1");
       expect(located.node.params).toEqual({});
     }
-    // Sibling-order assertion: index of new leaf is index of key-expansion + 1.
-    const keyExpLoc = findStepAndParent(after, "key-expansion");
+    // Sibling-order assertion: index of new leaf is index of initial.add-round-key + 1.
+    const keyExpLoc = findStepAndParent(after, "initial.add-round-key");
     expect(located?.indexInParent).toBe((keyExpLoc?.indexInParent ?? -1) + 1);
   });
 
@@ -241,9 +241,9 @@ describe("insertStepIntoSpec — store mutator", () => {
   it("preserves the active padding overlay when inserting at root", () => {
     // Inserting at the top level shouldn't disturb the padding chain; the
     // spec returned from `insertStepIntoSpec` should still carry whatever
-    // leaves the canonical spec had. Specifically: AES-128 default has
-    // `key-expansion` at index 0; that should still be at index 0 after a
-    // root-append.
+    // top-level nodes the canonical spec had. Specifically: AES-128 default has
+    // the `key-schedule` group at index 0 (since K1c); that node should still
+    // be at index 0 (by reference) after a root-append.
     const spec = useSpec();
     const beforeFirst = spec().steps[0];
     insertStepIntoSpec("generic.shift-rows@1", { kind: "root-append" });
@@ -279,11 +279,11 @@ describe("GraphView — palette drop integration", () => {
   it("creates a new leaf in the spec when a drop fires over a leaf node", () => {
     seedAes128Trace();
     const { container } = render(() => <GraphView />);
-    // Drop on the `key-expansion` leaf's `<g>` (has data-drop-anchor).
+    // Drop on the `initial.add-round-key` leaf's `<g>` (has data-drop-anchor).
     const leaf = container.querySelector<SVGGElement>(
-      'g.graph-leaf[data-drop-anchor="key-expansion"]',
+      'g.graph-leaf[data-drop-anchor="initial.add-round-key"]',
     );
-    expect(leaf, "graph should render the key-expansion leaf").not.toBeNull();
+    expect(leaf, "graph should render the initial.add-round-key leaf").not.toBeNull();
     if (!leaf) return;
     fireDropAt(leaf, "byte-substitute@1");
     const spec = useSpec();
@@ -328,9 +328,9 @@ describe("GraphView — palette drop integration", () => {
     const spec = useSpec();
     const beforeLen = spec().steps.length;
     const leaf = container.querySelector<SVGGElement>(
-      'g.graph-leaf[data-drop-anchor="key-expansion"]',
+      'g.graph-leaf[data-drop-anchor="initial.add-round-key"]',
     );
-    if (!leaf) throw new Error("test setup: key-expansion leaf missing");
+    if (!leaf) throw new Error("test setup: initial.add-round-key leaf missing");
     fireDropAt(leaf, "generic.nonexistent-type@99");
     // Spec should be unchanged — no leaf was added, no error thrown.
     expect(useSpec()().steps.length).toBe(beforeLen);
@@ -341,9 +341,9 @@ describe("GraphView — palette drop integration", () => {
     const { container } = render(() => <GraphView />);
     const before = useSpec()().steps.length;
     const leaf = container.querySelector<SVGGElement>(
-      'g.graph-leaf[data-drop-anchor="key-expansion"]',
+      'g.graph-leaf[data-drop-anchor="initial.add-round-key"]',
     );
-    if (!leaf) throw new Error("test setup: key-expansion leaf missing");
+    if (!leaf) throw new Error("test setup: initial.add-round-key leaf missing");
     // Fire a drop event whose dataTransfer is empty for the step-type MIME.
     const event = new Event("drop", { bubbles: true, cancelable: true });
     Object.defineProperty(event, "dataTransfer", {

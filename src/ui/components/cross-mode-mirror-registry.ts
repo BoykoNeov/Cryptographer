@@ -40,6 +40,24 @@ export type MirrorClass =
   /** Class-2: encrypt and decrypt hold algebraic inverses. Button verb: "Sync inverse". */
   | "inverse";
 
+/**
+ * Role-scope for a step type used in TWO mirror roles. Since the
+ * key-schedule decomposition (2026-06-01), `byte-substitute@1` is BOTH
+ * round-body SubBytes (class-2 inverse) AND key-schedule SubWord (class-1
+ * identity — the schedule uses the FORWARD S-box even when decrypting,
+ * FIPS-197 §5.2). The two roles are distinguished purely by leaf id
+ * (`key-schedule.*` vs everything else of that type). `matches` is BOTH
+ * the predicate ParamEditor uses to decide which button to render AND the
+ * `idFilter` it passes to the mutator so the broadcast lands only on this
+ * role's leaves (a type-wide broadcast would corrupt the other role).
+ * `sampleLeafId` is a stable leaf id the enumeration coverage test selects.
+ */
+export type MirrorLeafScope = {
+  readonly description: string;
+  readonly matches: (leafId: string) => boolean;
+  readonly sampleLeafId: string;
+};
+
 export type CrossModeMirrorEntry = {
   /** The step type whose params are mirrored. */
   readonly stepType: string;
@@ -61,7 +79,34 @@ export type CrossModeMirrorEntry = {
    * `useMode()` and the registered counterpart spec.
    */
   readonly counterpartStepType?: string;
+  /**
+   * When set, this entry applies to only the SUBSET of `stepType` leaves
+   * matching `leafScope.matches` — used when one step type carries two
+   * mirror roles (today: `byte-substitute@1`). Absent ⇒ the entry applies
+   * to every leaf of the type (the common case).
+   */
+  readonly leafScope?: MirrorLeafScope;
 };
+
+// ─── Leaf-id role predicates (single source of truth) ──────────────────────
+// The decomposed AES key schedule is a `key-schedule` group; every leaf
+// inside it has an id prefixed `key-schedule.`. That prefix is the
+// discriminator between the two `byte-substitute@1` roles.
+
+/** Id prefix carried by every leaf inside the decomposed `key-schedule` group. */
+export const KEY_SCHEDULE_LEAF_PREFIX = "key-schedule.";
+
+/** True for a key-schedule SubWord leaf (class-1 identity Copy role). */
+export const isKeyScheduleLeafId = (leafId: string): boolean =>
+  leafId.startsWith(KEY_SCHEDULE_LEAF_PREFIX);
+
+/**
+ * True for a round-body leaf (class-2 inverse role). Defined as "not a
+ * key-schedule leaf" — correct because it is only ever applied to
+ * `byte-substitute@1` leaves, whose only two homes are round-body SubBytes
+ * and key-schedule SubWord.
+ */
+export const isRoundBodyLeafId = (leafId: string): boolean => !isKeyScheduleLeafId(leafId);
 
 export const CROSS_MODE_MIRROR_ENTRIES: readonly CrossModeMirrorEntry[] = [
   // NOTE: the matrix `generic.byte-substitution@1` + `generic.mix-columns@1`
@@ -75,25 +120,26 @@ export const CROSS_MODE_MIRROR_ENTRIES: readonly CrossModeMirrorEntry[] = [
   // Phase C; ParamEditor still renders the matrix editors' Sync rows
   // unconditionally — that UI is just unreachable from any shipped spec.)
 
-  // AES key-expansion v1 — class-1 (identity). FIPS-197 §5.2: the key
-  // schedule uses the FORWARD S-box even when decrypting, so both
-  // encrypt and decrypt hold AES_SBOX. Mutator:
-  // `syncSboxCopyToCounterpart`.
+  // AES key-schedule SubWord — class-1 (identity). Since the key-schedule
+  // decomposition (2026-06-01) the SubWord is a `byte-substitute@1` leaf
+  // inside the `key-schedule` group (id prefix `key-schedule.`), NOT a
+  // monolithic `aes.key-expansion@1/@2` step. Per FIPS-197 §5.2 the schedule
+  // uses the FORWARD S-box even when decrypting, so both encrypt and decrypt
+  // hold AES_SBOX here — the identity Copy mirror. `leafScope` confines this
+  // role (and the Copy broadcast) to the key-schedule SubWord leaves, leaving
+  // the round-body SubBytes entry below to own the inverse mirror. Mutator:
+  // `syncSboxCopyToCounterpart` with the `isKeyScheduleLeafId` filter.
+  // (Replaces the retired `aes.key-expansion@1` + `@2` identity entries.)
   {
-    stepType: "aes.key-expansion@1",
+    stepType: "byte-substitute@1",
     paramKey: "sbox",
     mirrorClass: "identity",
-  },
-
-  // AES key-expansion v2 — same identity mirror as v1. v2 is the
-  // renumber variant from the duplicate-round path (relaxed
-  // `rounds === Nk + 6` assertion); shares the same `Match` arm in
-  // `ParamEditor.tsx`'s `KeyExpansionBlock`, so the Copy button
-  // surfaces identically.
-  {
-    stepType: "aes.key-expansion@2",
-    paramKey: "sbox",
-    mirrorClass: "identity",
+    leafScope: {
+      description: "key-schedule SubWord leaves (forward S-box even when decrypting)",
+      matches: isKeyScheduleLeafId,
+      // g1.subword exists for every AES size (≥ 1 generated group). Stable id.
+      sampleLeafId: "key-schedule.g1.subword",
+    },
   },
 
   // Serpent SubBytes — class-2 (inverse) with per-S-box-index grouping.
@@ -118,12 +164,22 @@ export const CROSS_MODE_MIRROR_ENTRIES: readonly CrossModeMirrorEntry[] = [
   // mutator as the former matrix entry — now that BOTH modes share the
   // byte-native type, the same-type broadcast lands on the decrypt counterpart
   // (in B1 the encrypt-only conversion would have made this a no-op sync
-  // button, so the entry was deferred to B1.2). This is now the ONLY AES
+  // button, so the entry was deferred to B1.2). This is the round-body AES
   // SubBytes mirror entry — every shipped AES is byte-native (B1.4b).
+  // `leafScope` confines the inverse to the round-body leaves so the
+  // key-schedule SubWord leaves (identity entry above) are NOT overwritten
+  // with the inverse table — that would corrupt the decrypt key schedule
+  // (key-schedule-decomposition K1c, 2026-06-01).
   {
     stepType: "byte-substitute@1",
     paramKey: "sbox",
     mirrorClass: "inverse",
+    leafScope: {
+      description: "round-body SubBytes leaves (encrypt forward / decrypt inverse)",
+      matches: isRoundBodyLeafId,
+      // round.1.sub-bytes is the canonical round-body SubBytes leaf on AES-128.
+      sampleLeafId: "round.1.sub-bytes",
+    },
   },
 
   // Byte-native AES MixColumns (Slice B1.2) — class-2 (inverse). Encrypt holds

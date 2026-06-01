@@ -4,7 +4,7 @@
  *
  * The motivating regression: AES-128 with the user-toggled "always
  * replicate" + collapsed iterate produces 11 parallel aux arrows from
- * the `key-expansion@->...` replica chip into the iterate's top edge.
+ * the `key-schedule.publish@->...` replica chip into the iterate's top edge.
  * The visual is correct (11 distinct round keys) but unreadable. The
  * bundler collapses them into one EdgeBundle that the renderer paints
  * as a thicker arrow with a `×11` label.
@@ -87,7 +87,7 @@ describe("bundleEdges — collapse same-(from, to, kind, isFeedback)", () => {
   it("returns a singleton bundle for each unique edge when no duplicates exist", () => {
     // Serpent-128 single-block, NO replication. With the registry passed, the
     // S2(f) gate leaves a clean 1:1 port-flow spine (no legacy state-thread
-    // companion), and every aux edge from key-expansion goes to a UNIQUE
+    // companion), and every aux edge from key-schedule.publish goes to a UNIQUE
     // consumer — so bundling produces exactly one bundle per edge.
     const trace = runSerpent128();
     const raw = deriveAuxGraph(trace, serpent128Spec, { registry: buildDefaultRegistry() });
@@ -103,28 +103,28 @@ describe("bundleEdges — collapse same-(from, to, kind, isFeedback)", () => {
 
   it("collapses N parallel aux edges (post-replication) into one bundle of length N", () => {
     // The motivating case from the manual smoke on 2026-05-17: AES-128 ECB
-    // with the iterate COLLAPSED + key-expansion source set to "always"
+    // with the iterate COLLAPSED + key-schedule.publish source set to "always"
     // replicate. Collapsing folds the 11 per-round AddRoundKey consumers
     // into the iterate-as-a-whole, so all 11 round-key aux edges land at
     // the iterate id. After replication, the chip
-    // `key-expansion@->ecb-blocks` carries all 11 outgoing aux edges. The
+    // `key-schedule.publish@->ecb-blocks` carries all 11 outgoing aux edges. The
     // bundler must collapse them into one EdgeBundle.
     const trace = runAes128Ecb();
     const raw = deriveAuxGraph(trace, aes128EcbSpec);
     // Collapse the iterate — this is the user-flagged state.
     const collapsed = collapseGraph(raw, new Set(["ecb-blocks"]));
     // Replicate at threshold 1 so even small fanouts replicate. With the
-    // iterate collapsed, key-expansion's outgoing fanout into ecb-blocks
+    // iterate collapsed, key-schedule.publish's outgoing fanout into ecb-blocks
     // is 11 (one per round-key consumer, all folded to the iterate id).
     const replicated = replicateHighFanoutSources(collapsed, 1);
     const fb = buildIterateFeedbackPredicate(replicated);
 
     const bundled = bundleEdges(replicated, fb);
 
-    // Find the bundle from the key-expansion replica into the iterate.
+    // Find the bundle from the key-schedule.publish replica into the iterate.
     // Replica id format: `${sourceId}@->${consumerId}`.
     const keyExpReplicaBundle = bundled.bundles.find(
-      (b) => b.from === "key-expansion@->ecb-blocks" && b.to === "ecb-blocks",
+      (b) => b.from === "key-schedule.publish@->ecb-blocks" && b.to === "ecb-blocks",
     );
     expect(keyExpReplicaBundle).toBeDefined();
     if (!keyExpReplicaBundle) throw new Error("unreachable");
@@ -144,7 +144,7 @@ describe("bundleEdges — collapse same-(from, to, kind, isFeedback)", () => {
     const bundled = bundleEdges(replicated, fb);
 
     const keyExpReplicaBundle = bundled.bundles.find(
-      (b) => b.from === "key-expansion@->ecb-blocks" && b.to === "ecb-blocks",
+      (b) => b.from === "key-schedule.publish@->ecb-blocks" && b.to === "ecb-blocks",
     );
     if (!keyExpReplicaBundle) throw new Error("expected the replica bundle");
     // Compare against the same-key sequence taken directly from the
@@ -187,7 +187,7 @@ describe("bundleEdges — collapse same-(from, to, kind, isFeedback)", () => {
     // Pin this invariant so a future bundling tweak can't accidentally merge
     // them.
     //
-    // Retargeted in Slice 5.3e Batch 3 from AES `key-expansion` (whose legacy
+    // Retargeted in Slice 5.3e Batch 3 from AES `key-schedule.publish` (whose legacy
     // identity-passthrough state-out retired with `inferStateEdges`) to
     // SHA-256's `final.split-wv`, whose 8 port-flow edges to `final.s0..s7`
     // auto-replicate at threshold 6.
@@ -242,9 +242,9 @@ describe("bundleEdges — collapse same-(from, to, kind, isFeedback)", () => {
     const raw = deriveAuxGraph(trace, aes128EcbSpec);
     const collapsed = collapseGraph(raw, new Set(["ecb-blocks"]));
     const replicated = replicateHighFanoutSources(collapsed, 1);
-    // Find the key-expansion replica bundle's (from, to) so we have
+    // Find the key-schedule.publish replica bundle's (from, to) so we have
     // a pair with >2 same-pair aux edges to split.
-    const replicaSrc = replicated.edges.find((e) => e.from.startsWith("key-expansion@->"));
+    const replicaSrc = replicated.edges.find((e) => e.from.startsWith("key-schedule.publish@->"));
     if (!replicaSrc) throw new Error("expected a replica edge");
     const pair = { from: replicaSrc.from, to: replicaSrc.to };
 

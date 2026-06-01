@@ -106,6 +106,12 @@ import {
   pkcs7UnpadPortContract,
 } from "../steps/pkcs7-unpad";
 import {
+  publishRoundKeys,
+  publishRoundKeysDoc,
+  publishRoundKeysMeta,
+  publishRoundKeysPortContract,
+} from "../steps/publish-round-keys";
+import {
   rotateBitsRight,
   rotateBitsRightDoc,
   rotateBitsRightPortContract,
@@ -221,6 +227,20 @@ export const buildDefaultRegistry = (): StepRegistry => {
     shape: keyExpansionV2PortContract,
     meta: keyExpansionV2Meta,
     doc: keyExpansionV2Doc,
+  });
+  // Aux-publish tail of the DECOMPOSED key schedule (key-schedule-decomposition
+  // plan, Slice K1a). Identity passthrough of the round keys (wired from the
+  // repack byte-slices) with `meta.auxWritePorts` mirroring `key${r} →
+  // aux[roundKey.${r}]` — byte-identical to what the monolith wrote, so the
+  // round-body `xor-with-aux@1` consumers are untouched (B-minimal). This is
+  // the one surviving `meta` in the decomposed schedule; the recurrence math
+  // above it (`buildAesKeyScheduleNative`) is all pure port-native.
+  r.register("aes.publish-round-keys@1", {
+    kind: "ported",
+    executor: publishRoundKeys,
+    shape: publishRoundKeysPortContract,
+    meta: publishRoundKeysMeta,
+    doc: publishRoundKeysDoc,
   });
   // ─── Padding chain (Phase: plaintext input + visible padding) ──────────
   // BytesState ↔ MatrixState boundary steps plus three pad/unpad pairs.

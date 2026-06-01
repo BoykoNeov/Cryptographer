@@ -198,9 +198,9 @@ describe("Slice 11 — palette-built spec round-trips through Save/Load", () => 
     });
 
     const anchorLeaf = container.querySelector<SVGGElement>(
-      'g.graph-leaf[data-drop-anchor="key-expansion"]',
+      'g.graph-leaf[data-drop-anchor="initial.add-round-key"]',
     );
-    expect(anchorLeaf, "key-expansion leaf must be drop-targetable").not.toBeNull();
+    expect(anchorLeaf, "initial.add-round-key leaf must be drop-targetable").not.toBeNull();
     if (!anchorLeaf) return;
     fireDropAt(anchorLeaf, "generic.aux-load@1");
 

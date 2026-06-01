@@ -2,12 +2,19 @@
 
 /**
  * UI test for the Copy-S-box-to-counterpart button (`CopySboxRow`)
- * rendered inside the AES key-expansion S-box <details> in
- * `ParamEditor`.
+ * rendered inside the AES key-schedule SubWord `byte-substitute@1` editor
+ * (`ByteSubstituteBlock`) in `ParamEditor`.
+ *
+ * Since the key-schedule decomposition (2026-06-01) the Copy affordance is
+ * re-homed from the retired monolithic `aes.key-expansion@1/@2` leaf onto
+ * the decomposed SubWord leaf (`key-schedule.g1.subword`, a
+ * `byte-substitute@1` step inside the `key-schedule` group). The round-body
+ * SubBytes leaves of the SAME type render the *inverse* row instead — so
+ * selecting a SubWord leaf is what surfaces the Copy button.
  *
  * Properties pinned here (sibling to `sync-inverse-row.test.tsx` for
  * the inverse case):
- *   - The button RENDERS when a key-expansion step is selected.
+ *   - The button RENDERS when a key-schedule SubWord step is selected.
  *   - Its label names the COPY operation (distinct from the inverse
  *     row's "Sync inverse" verb).
  *   - It carries `data-mirror-class="identity"` so the enumeration
@@ -52,28 +59,30 @@ const resetAll = (): void => {
   __resetViewModeForTests();
 };
 
-// The canonical AES-128 spec puts key-expansion at a top-level leaf with
-// id "key-expansion". Selecting it makes the KeyExpansionBlock render
-// (with the CopySboxRow nested inside its <details>).
-const selectKeyExpansion = (): void => {
-  setSelectedStepId("key-expansion");
+// The decomposed AES-128 key schedule puts SubWord on a `byte-substitute@1`
+// leaf at `key-schedule.g1.subword` (inside the default-collapsed
+// `key-schedule` group). Selecting it makes `ByteSubstituteBlock` render its
+// key-schedule branch — the CopySboxRow. (ParamEditor resolves the selected
+// leaf regardless of graph collapse state.)
+const SUBWORD_LEAF_ID = "key-schedule.g1.subword";
+const selectSubWord = (): void => {
+  setSelectedStepId(SUBWORD_LEAF_ID);
 };
 
 const findCopyButton = (root: HTMLElement): HTMLButtonElement | null =>
   root.querySelector(".copy-sbox-row button") as HTMLButtonElement | null;
 
-// Walk the live spec to find the key-expansion leaf so the sabotage path
-// can read its current S-box without depending on the canonical table
-// shape (which differs across AES-128 / 192 / 256 if those ship later).
+// Walk the live spec to find the SubWord leaf so the sabotage path can read
+// its current S-box without depending on the canonical table shape.
 type Node = { kind: string; id?: string; params?: unknown; children?: readonly Node[] };
-const findKeyExpansion = (): Node | null => {
+const findSubWord = (): Node | null => {
   const spec = useSpec()();
   let found: Node | null = null;
   const visit = (nodes: readonly Node[]): void => {
     for (const n of nodes) {
-      if (n.kind === "step" && n.id === "key-expansion") {
+      if (n.kind === "step" && n.id === SUBWORD_LEAF_ID) {
         found = n;
-      } else if (n.kind === "group" && n.children) {
+      } else if ((n.kind === "group" || n.kind === "iterate") && n.children) {
         visit(n.children);
       }
     }
@@ -89,9 +98,9 @@ describe("CopySboxRow — gating on bijection + label + mirror class", () => {
     resetAll();
   });
 
-  it("renders the Copy button with the COPY verb on a fresh canonical key-expansion step", async () => {
+  it("renders the Copy button with the COPY verb on a fresh canonical key-schedule SubWord step", async () => {
     const { container } = render(() => <App />);
-    selectKeyExpansion();
+    selectSubWord();
 
     await waitFor(() => {
       const btn = findCopyButton(container);
@@ -110,7 +119,7 @@ describe("CopySboxRow — gating on bijection + label + mirror class", () => {
 
   it('carries data-mirror-class="identity" for the enumeration test', async () => {
     const { container } = render(() => <App />);
-    selectKeyExpansion();
+    selectSubWord();
 
     await waitFor(() => {
       const btn = findCopyButton(container);
@@ -123,7 +132,7 @@ describe("CopySboxRow — gating on bijection + label + mirror class", () => {
 
   it("tooltip cites FIPS-197 §5.2 (the spec citation is the pedagogical hook)", async () => {
     const { container } = render(() => <App />);
-    selectKeyExpansion();
+    selectSubWord();
 
     await waitFor(() => {
       const btn = findCopyButton(container);
@@ -137,19 +146,19 @@ describe("CopySboxRow — gating on bijection + label + mirror class", () => {
 
   it("is DISABLED after sabotaging the S-box into a non-permutation; re-ENABLES after restore", async () => {
     const { container } = render(() => <App />);
-    selectKeyExpansion();
+    selectSubWord();
 
     await waitFor(() => {
       expect(findCopyButton(container)).not.toBeNull();
     });
 
-    const step = findKeyExpansion();
+    const step = findSubWord();
     const canonical = [...((step?.params as { sbox?: readonly number[] }).sbox ?? [])];
 
     // Phase 1: force a duplicate, expect disabled.
     const sabotaged = [...canonical];
     sabotaged[0x10] = sabotaged[0x00] ?? 0;
-    editStepParams("key-expansion", {
+    editStepParams(SUBWORD_LEAF_ID, {
       ...(step?.params as Record<string, unknown>),
       sbox: sabotaged,
     });
@@ -163,7 +172,7 @@ describe("CopySboxRow — gating on bijection + label + mirror class", () => {
     // Phase 2: restore canonical, button should re-enable (regression
     // guard: a stuck-disabled state would indicate the bijection memo
     // captured the sabotaged sbox by value rather than reactively).
-    editStepParams("key-expansion", {
+    editStepParams(SUBWORD_LEAF_ID, {
       ...(step?.params as Record<string, unknown>),
       sbox: canonical,
     });

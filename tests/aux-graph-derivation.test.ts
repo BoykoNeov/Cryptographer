@@ -92,25 +92,27 @@ describe("deriveAuxGraph — AES-128 (single block, no iterate)", () => {
     const trace = runAes128();
     const g = deriveAuxGraph(trace, aes128Spec);
 
-    // Byte-native AES-128 leaves (AddRoundKey merged to one `xor-with-aux@1`
-    // leaf in Finding F3): 1 key-expansion + 1 initial.add-round-key
-    //   + 9 normal rounds × 4 leaves (sub-bytes, shift-rows, mix-columns,
-    //     add-round-key) = 36
-    //   + 1 final round × 3 leaves (no mix-columns) = 3
-    //   = 41 leaves.
-    // The graph ALSO carries the reserved `$input` source node (A3a) — filter
-    // it so "one node per leaf" stays honest. (SHA-256's graph has it too.)
+    // Byte-native AES-128, decomposed key schedule (K1c). Round body
+    // (AddRoundKey merged in F3): 1 initial.add-round-key + 9 normal rounds ×
+    // 4 (36) + final round × 3 (3) = 40. The former single `key-expansion`
+    // leaf is now the decomposed `key-schedule` GROUP — ~114 primitive leaves
+    // (load-key, per-group split/rotword/subword/rcon/temp/wN, word-stream,
+    // rk0..10, publish) — so deriveAuxGraph (which does NOT collapse) emits
+    // 154 leaf nodes total. The graph ALSO carries the reserved `$input`
+    // source node (A3a) — filter it so "one node per leaf" stays honest.
     const leafNodes = g.nodes.filter((n) => n.stepId !== INPUT_SOURCE_ID);
-    expect(leafNodes.length).toBe(41);
+    expect(leafNodes.length).toBe(154);
   });
 
-  it("emits one container per group (round.1 .. round.10)", () => {
+  it("emits one container per group (key-schedule + round.1 .. round.10)", () => {
     const g = deriveAuxGraph(runAes128(), aes128Spec);
-    expect(g.containers.length).toBe(10);
+    // 10 round groups + the decomposed `key-schedule` group (K1c) = 11.
+    expect(g.containers.length).toBe(11);
     expect(g.containers.every((c) => c.kind === "group")).toBe(true);
     const ids = g.containers.map((c) => c.id).sort();
     expect(ids).toEqual(
       [
+        "key-schedule",
         "round.1",
         "round.2",
         "round.3",
@@ -125,12 +127,13 @@ describe("deriveAuxGraph — AES-128 (single block, no iterate)", () => {
     );
   });
 
-  it("rootIds interleaves the top-level leaf with each round group, in spec order", () => {
+  it("rootIds interleaves the top-level groups with each round group, in spec order", () => {
     const g = deriveAuxGraph(runAes128(), aes128Spec);
-    // Byte-native top-scope shape (AddRoundKey merged in F3): [$input source,
-    // key-expansion, initial.add-round-key, round.1, ..., round.10].
+    // Byte-native top-scope shape (K1c): [$input source, key-schedule (the
+    // decomposed schedule group), initial.add-round-key, round.1, ...,
+    // round.10].
     expect(g.rootIds[0]).toBe(INPUT_SOURCE_ID);
-    expect(g.rootIds[1]).toBe("key-expansion");
+    expect(g.rootIds[1]).toBe("key-schedule");
     expect(g.rootIds[2]).toBe("initial.add-round-key");
     expect(g.rootIds.slice(3)).toEqual([
       "round.1",
@@ -146,20 +149,23 @@ describe("deriveAuxGraph — AES-128 (single block, no iterate)", () => {
     ]);
   });
 
-  it("fans out an edge from key-expansion to every AddRoundKey consumer", () => {
+  it("fans out an edge from key-schedule.publish to every AddRoundKey consumer", () => {
     const g = deriveAuxGraph(runAes128(), aes128Spec);
     // Byte-native (merged in F3): round keys are read internally by the
     // `xor-with-aux@1` AddRoundKey leaves (the recorded auxRead is what keeps
-    // this fan-out edge). 11 consumers: initial.add-round-key +
+    // this fan-out edge). Since the key-schedule decomposition (K1c) the aux
+    // writer is the `key-schedule.publish` tail leaf (the one surviving
+    // meta-bearing step). 11 consumers: initial.add-round-key +
     // round.{1..10}.add-round-key.
     const expectedConsumers = new Set<string>([
       "initial.add-round-key",
       ...Array.from({ length: 10 }, (_, i) => `round.${i + 1}.add-round-key`),
     ]);
-    // Filter to aux edges — key-expansion is also the first leaf in DFS
-    // order, so it carries an outgoing `kind: "state"` spine edge. That edge
-    // is correct but not what THIS test pins (the round-key fan-out).
-    const keyExpEdges = g.edges.filter((e) => e.kind === "aux" && e.from === "key-expansion");
+    // The publish leaf is aux-only (writes roundKey.N via meta), so all its
+    // outgoing edges are the round-key fan-out.
+    const keyExpEdges = g.edges.filter(
+      (e) => e.kind === "aux" && e.from === "key-schedule.publish",
+    );
     expect(keyExpEdges.length).toBe(11);
     const actualConsumers = new Set(keyExpEdges.map((e) => e.to));
     expect(actualConsumers).toEqual(expectedConsumers);
@@ -439,9 +445,11 @@ describe("collapseGraph — view-time transform", () => {
     const g = deriveAuxGraph(runAes128(), aes128Spec);
     const out = collapseGraph(g, new Set(["round.5"]));
     // Byte-native round.5 has 4 leaves (sub-bytes, shift-rows, mix-columns,
-    // add-round-key — merged in F3); they vanish from the node list. Pre: 42
-    // (41 leaves + $input source), post: 42 - 4 = 38.
-    expect(out.nodes.length).toBe(38);
+    // add-round-key — merged in F3); they vanish from the node list. Pre: 155
+    // (154 leaves incl. the decomposed key-schedule's sub-steps + $input
+    // source), post: 155 - 4 = 151. (This case collapses only round.5; the
+    // key-schedule group is left expanded here.)
+    expect(out.nodes.length).toBe(151);
     // The container itself stays — renderer draws it as a collapsed chip.
     expect(out.containers.find((c) => c.id === "round.5")).toBeDefined();
     // But its childIds is now empty so the layout walk treats it as leaf-sized.
@@ -450,23 +458,27 @@ describe("collapseGraph — view-time transform", () => {
 
   it("re-routes round-key edges that entered a collapsed container to terminate at it", () => {
     const g = deriveAuxGraph(runAes128(), aes128Spec);
-    // Before collapse: 11 fan-out aux edges from key-expansion (initial +
-    // round.1..10's add-round-key consumers). Filter to kind=aux because
-    // key-expansion also has an outgoing spine edge — see commit 2.
-    const before = g.edges.filter((e) => e.kind === "aux" && e.from === "key-expansion").length;
+    // Before collapse: 11 fan-out aux edges from key-schedule.publish (the
+    // decomposed schedule's meta-bearing tail, K1c) — initial +
+    // round.1..10's add-round-key consumers. The publish leaf is aux-only.
+    const before = g.edges.filter(
+      (e) => e.kind === "aux" && e.from === "key-schedule.publish",
+    ).length;
     expect(before).toBe(11);
 
     const out = collapseGraph(g, new Set(["round.3"]));
     // After collapse: round.3.add-round-key (the byte-native roundKey.3
-    // consumer since F3) is hidden, but the edge key-expansion →
-    // round.3.add-round-key remaps to key-expansion → round.3. No edge count
-    // change for this fan-out (the remap doesn't collide with anything else).
-    const after = out.edges.filter((e) => e.kind === "aux" && e.from === "key-expansion").length;
+    // consumer since F3) is hidden, but the edge key-schedule.publish →
+    // round.3.add-round-key remaps to key-schedule.publish → round.3. No edge
+    // count change for this fan-out (the remap doesn't collide with anything).
+    const after = out.edges.filter(
+      (e) => e.kind === "aux" && e.from === "key-schedule.publish",
+    ).length;
     expect(after).toBe(11);
     // The specific re-routed edge exists.
     expect(
       out.edges.some(
-        (e) => e.from === "key-expansion" && e.to === "round.3" && e.auxKey === "roundKey.3",
+        (e) => e.from === "key-schedule.publish" && e.to === "round.3" && e.auxKey === "roundKey.3",
       ),
     ).toBe(true);
     // And the pre-collapse target (the hidden add-round-key leaf) is gone.

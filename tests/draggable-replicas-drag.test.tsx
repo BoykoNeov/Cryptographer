@@ -15,11 +15,11 @@
  *   - A sub-threshold movement still does NOT pin anything (same
  *     click-vs-drag discipline as the legacy absolute-pin path).
  *
- * AES-128 single-block doesn't auto-replicate `key-expansion` (the
- * default threshold isn't tripped). The test forces it by setting the
- * per-source `replicationMode` override to "always" before rendering,
- * so the graph then contains synthetic ids of shape
- * `key-expansion@->round.N.add-round-key`.
+ * Since the key-schedule decomposition (K1c) the high-fanout aux source is
+ * `key-schedule.publish` (inside the default-collapsed `key-schedule` group).
+ * The test EXPANDS that group and sets the per-source `replicationMode`
+ * override to "always" before rendering, so the graph then contains synthetic
+ * ids of shape `key-schedule.publish@->round.N.add-round-key`.
  */
 
 import { aes128Spec } from "@/ciphers/aes-128";
@@ -32,7 +32,12 @@ import { __resetAutoRerunForTests } from "@/ui/stores/auto-rerun";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
-import { __resetLayoutsForTests, getLayoutForSpec, setReplicationMode } from "@/ui/stores/layout";
+import {
+  __resetLayoutsForTests,
+  getLayoutForSpec,
+  setReplicationMode,
+  toggleCollapse,
+} from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
 import { __resetSpecForTests, useSpec } from "@/ui/stores/spec";
 import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
@@ -152,8 +157,16 @@ describe("GraphView — replica chip drag (Slice 3, draggable-replicas plan)", (
   });
 
   /**
-   * Common setup: seed AES-128 trace + force key-expansion replication so
-   * replica chips appear in the rendered graph. Returns the specId.
+   * Common setup: seed AES-128 trace + force the key-schedule's publish-tail
+   * replication so replica chips appear in the rendered graph. Returns the
+   * specId.
+   *
+   * Since the key-schedule decomposition (K1c) the high-fanout aux source is
+   * `key-schedule.publish`, which lives INSIDE the default-collapsed
+   * `key-schedule` group. We must EXPAND that group first (otherwise the only
+   * fan-out source is the `key-schedule` CONTAINER, which replication skips),
+   * then force `key-schedule.publish` to "always" so its cross-scope
+   * consumer-scope replica chips (`key-schedule.publish@->...`) render.
    */
   const renderWithReplicas = (): string => {
     seedAes128Trace();
@@ -163,7 +176,10 @@ describe("GraphView — replica chip drag (Slice 3, draggable-replicas plan)", (
     // also driven from localStorage, but the test runs in jsdom with a
     // fresh module so it defaults to off; flip it on explicitly.
     setReplicationEnabled(true);
-    setReplicationMode(specId, "key-expansion", "always");
+    // Expand the default-collapsed `key-schedule` group so its `publish` leaf
+    // becomes a visible, replicable source (in-defaults ⇒ inDefaults=true).
+    toggleCollapse(specId, "key-schedule", true);
+    setReplicationMode(specId, "key-schedule.publish", "always");
     return specId;
   };
 
@@ -205,7 +221,7 @@ describe("GraphView — replica chip drag (Slice 3, draggable-replicas plan)", (
   it("a sub-threshold drag on a replica chip does NOT write a relative pin (click, not drag)", () => {
     const specId = renderWithReplicas();
     const { container } = render(() => <GraphView />);
-    const chip = container.querySelector('[data-testid^="graph-leaf-key-expansion@->"]');
+    const chip = container.querySelector('[data-testid^="graph-leaf-key-schedule.publish@->"]');
     expect(chip).not.toBeNull();
     if (!chip) return;
 
@@ -345,7 +361,7 @@ describe("GraphView — replica chip drag (Slice 3, draggable-replicas plan)", (
   it("a second drag accumulates onto the existing pin instead of overwriting it", () => {
     const specId = renderWithReplicas();
     const { container } = render(() => <GraphView />);
-    const chip = container.querySelector('[data-testid^="graph-leaf-key-expansion@->"]');
+    const chip = container.querySelector('[data-testid^="graph-leaf-key-schedule.publish@->"]');
     expect(chip).not.toBeNull();
     if (!chip) return;
     const REPLICA_ID = (chip.getAttribute("data-testid") ?? "").replace(/^graph-leaf-/, "");

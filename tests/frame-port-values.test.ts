@@ -125,25 +125,26 @@ describe("TraceFrame port-fields — pure port-native (SHA-256 add-mod-32@1)", (
 // fields undefined — was retired in Phase 5 Slice 5.3e with the toy, the
 // last `legacy`-bearing ported step. No lifted-legacy step remains.)
 
-describe("TraceFrame port-fields — meta-bearing port-native (AES key-expansion)", () => {
-  it("AES key-expansion frame (port-native since Slice 5.2) carries portInputs + portOutputs", () => {
+describe("TraceFrame port-fields — meta-bearing port-native (AES key-schedule publish tail)", () => {
+  it("the key-schedule publish frame carries portInputs + portOutputs (key0…key10)", () => {
     const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex("00112233445566778899aabbccddeeff")),
       initialAux: new Map([["key", bytesFromHex("000102030405060708090a0b0c0d0e0f")]]),
     });
-    const keyExpansion = findFrameByStepType(trace.frames, "aes.key-expansion@1");
-    // Slice 5.2 dropped the `legacy` lift, so the runtime now captures the
-    // projected port I/O: the master key on `masterKey`, the 11 round keys
-    // (AES-128, rounds=10) on `key0` … `key10`. (KeyScheduleExplorer still
-    // intercepts this frame by stepType, so the inspector view is unchanged
-    // — but the captured port maps now exist, like every other port-native
-    // leaf.)
-    expect(keyExpansion.portInputs).toBeDefined();
-    expect(keyExpansion.portOutputs).toBeDefined();
-    expect([...(keyExpansion.portInputs?.keys() ?? [])]).toContain("masterKey");
-    expect(keyExpansion.portOutputs?.size).toBe(11);
+    // Since the key-schedule decomposition (K1c) the meta-bearing port-native
+    // step is the `aes.publish-round-keys@1` TAIL leaf: it takes the 11 round
+    // keys (AES-128, rounds=10) on `key0`…`key10` as port inputs (from the
+    // `rk0..rk10` byte-slices), forwards them identically on the same output
+    // ports, and its `meta.auxWritePorts` projects each `key${r}` →
+    // `aux["roundKey.${r}"]`. Both port maps exist like every port-native leaf.
+    const publish = findFrameByStepType(trace.frames, "aes.publish-round-keys@1");
+    expect(publish.portInputs).toBeDefined();
+    expect(publish.portOutputs).toBeDefined();
+    expect(publish.portInputs?.size).toBe(11);
+    expect(publish.portOutputs?.size).toBe(11);
     for (let r = 0; r <= 10; r++) {
-      expect([...(keyExpansion.portOutputs?.keys() ?? [])]).toContain(`key${r}`);
+      expect([...(publish.portInputs?.keys() ?? [])]).toContain(`key${r}`);
+      expect([...(publish.portOutputs?.keys() ?? [])]).toContain(`key${r}`);
     }
   });
 });

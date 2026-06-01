@@ -82,9 +82,13 @@ describe("duplicate-round save/load — schema acceptance", () => {
     const result = parseDocument(text);
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error(result.error);
-    // Sanity: key-expansion morphed to @2 and the round count grew.
-    const keyExp = findStep(result.doc.spec, "key-expansion");
-    expect(keyExp?.type).toBe("aes.key-expansion@2");
+    // Sanity: the decomposed key schedule (key-schedule-decomposition K1a) was
+    // rebuilt at rounds+1 — its publish tail now declares 11 round keys — and
+    // the round-group count grew. (The schedule is a `key-schedule` group, not
+    // a leaf, so the duplicated spec survives Save/Load as plain StepNode JSON.)
+    const publish = findStep(result.doc.spec, "key-schedule.publish");
+    expect(publish?.type).toBe("aes.publish-round-keys@1");
+    expect((publish?.params as { rounds?: number } | undefined)?.rounds).toBe(11);
     expect(countRoundGroups(result.doc.spec, "round")).toBe(11);
   });
 

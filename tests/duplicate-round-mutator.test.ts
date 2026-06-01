@@ -62,19 +62,25 @@ const auxNameOf = (spec: CipherSpec, leafId: string): string | undefined => {
   return typeof p.auxName === "string" ? p.auxName : undefined;
 };
 
-/** Extract key-expansion's `rounds` param value. */
+// The DECOMPOSED key schedule (key-schedule-decomposition K1a) is a top-level
+// `key-schedule` group whose `key-schedule.publish` tail carries the round
+// count in its `rounds` param — the post-decomposition analogue of the old
+// `aes.key-expansion@*` leaf's `rounds` param. After a duplicate, the mutator
+// REBUILDS the whole group via `buildAesKeyScheduleNative(rounds+1, Nk)`, so
+// the round count is what reflects the bump (there is no longer a leaf type to
+// "morph to @2" — the @1/@2 distinction dissolved with the rebuild).
 const keyExpansionRounds = (spec: CipherSpec): number => {
-  const leaf = findStep(spec, "key-expansion");
-  if (!leaf) throw new Error("test setup: no key-expansion leaf");
-  const p = leaf.params as { rounds?: unknown };
+  const group = findGroup(spec, "key-schedule");
+  if (!group) throw new Error("test setup: no key-schedule group");
+  const publish = group.children.find(
+    (c) => c.kind === "step" && c.type === "aes.publish-round-keys@1",
+  );
+  if (!publish || publish.kind !== "step") {
+    throw new Error("test setup: no publish leaf in key-schedule group");
+  }
+  const p = publish.params as { rounds?: unknown };
   if (typeof p.rounds !== "number") throw new Error("test setup: rounds is not a number");
   return p.rounds;
-};
-
-const keyExpansionType = (spec: CipherSpec): string => {
-  const leaf = findStep(spec, "key-expansion");
-  if (!leaf) throw new Error("test setup: no key-expansion leaf");
-  return leaf.type;
 };
 
 // ─── 1. Forward, canonical AES-128 single-block ──────────────────────────
@@ -139,10 +145,12 @@ describe("duplicateRoundGroup — forward (AES-128 single-block)", () => {
     });
   });
 
-  it("bumps key-expansion's rounds param and morphs the type to @2", () => {
+  it("rebuilds the decomposed key schedule at rounds+1", () => {
     const { spec } = duplicateRoundGroup(aes128Spec, "round.2", "forward");
+    // The schedule is rebuilt as a fresh `key-schedule` group publishing 11
+    // round keys (was 10). No leaf-param "bump" + no `@2` morph any more.
+    expect(findGroup(spec, "key-schedule")).not.toBeNull();
     expect(keyExpansionRounds(spec)).toBe(11);
-    expect(keyExpansionType(spec)).toBe("aes.key-expansion@2");
   });
 
   it("preserves the final round's no-MixColumns shape on the shifted final", () => {
@@ -196,10 +204,10 @@ describe("duplicateRoundGroup — forward (AES-128 ECB, nested inside iterate)",
     expect(auxNameOf(spec, "round.3.add-round-key")).toBe("roundKey.3");
   });
 
-  it("still bumps the top-level key-expansion (outside the iterate)", () => {
+  it("still rebuilds the top-level key schedule (outside the iterate)", () => {
     const { spec } = duplicateRoundGroup(aes128EcbSpec, "round.2", "forward");
+    expect(findGroup(spec, "key-schedule")).not.toBeNull();
     expect(keyExpansionRounds(spec)).toBe(11);
-    expect(keyExpansionType(spec)).toBe("aes.key-expansion@2");
   });
 
   it("does not rename top-level multi-block plumbing (iterate / key-expansion)", () => {
@@ -254,10 +262,10 @@ describe("duplicateRoundGroup — reverse (AES-128 decrypt single-block)", () =>
     expect(auxNameOf(spec, "inv-initial.add-round-key")).toBe("roundKey.11");
   });
 
-  it("bumps key-expansion's rounds + morphs type to @2 in reverse mode too", () => {
+  it("rebuilds the key schedule at rounds+1 in reverse mode too", () => {
     const { spec } = duplicateRoundGroup(aes128DecryptSpec, "inv-round.2", "reverse");
+    expect(findGroup(spec, "key-schedule")).not.toBeNull();
     expect(keyExpansionRounds(spec)).toBe(11);
-    expect(keyExpansionType(spec)).toBe("aes.key-expansion@2");
   });
 });
 

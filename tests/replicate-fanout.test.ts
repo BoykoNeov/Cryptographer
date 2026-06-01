@@ -18,7 +18,7 @@ const PT = "00112233445566778899aabbccddeeff";
 // Byte-native AES-128 (Slice B1; AddRoundKey merged in Finding F3): bytes
 // state + ported dispatch. Round keys are read internally by the
 // `xor-with-aux@1` AddRoundKey leaves (initial.add-round-key +
-// round.N.add-round-key), so key-expansion's 11 aux fan-out consumers are
+// round.N.add-round-key), so key-schedule.publish's 11 aux fan-out consumers are
 // those AddRoundKey leaves.
 const aes128Graph = () => {
   const trace = runSpec(aes128Spec, buildDefaultRegistry(), {
@@ -37,59 +37,62 @@ describe("replicateHighFanoutSources", () => {
 
   it("no source above threshold returns the input by reference", () => {
     const g = aes128Graph();
-    // AES-128 key-expansion has 11 outgoing aux edges. A threshold of 50
+    // AES-128 key-schedule.publish has 11 outgoing aux edges. A threshold of 50
     // is above every source's fanout, so the transform is identity.
     expect(replicateHighFanoutSources(g, 50)).toBe(g);
   });
 
-  it("replicates key-expansion (11 unique consumers) when threshold = 6", () => {
+  it("replicates key-schedule.publish (11 unique consumers) when threshold = 6", () => {
     const g = aes128Graph();
     const r = replicateHighFanoutSources(g, 6);
 
-    // 11 unique (source, consumer) pairs — the state edge from
-    // key-expansion to initial.add-round-key shares its replica with
-    // the corresponding aux edge (roundKey.0 to the same consumer).
-    const replicas = r.nodes.filter((n) => n.replicaOf === "key-expansion");
+    // 11 unique (source, consumer) pairs — the publish leaf is aux-only
+    // (writes roundKey.0..10 via meta), so all 11 outgoing edges are the
+    // round-key fan-out (one per AddRoundKey consumer).
+    const replicas = r.nodes.filter((n) => n.replicaOf === "key-schedule.publish");
     expect(replicas.length).toBe(11);
     // Each replica inherits the source's stepType + label.
     for (const rep of replicas) {
-      expect(rep.stepType).toBe("aes.key-expansion@1");
-      expect(rep.label).toBe("key-expansion");
+      expect(rep.stepType).toBe("aes.publish-round-keys@1");
+      expect(rep.label).toBe("key-schedule.publish");
     }
     // Slice 7b — every outgoing edge (aux AND state) is rerouted; the
-    // original `key-expansion` is fully replicated and removed from the
+    // original `key-schedule.publish` is fully replicated and removed from the
     // graph. Linear-list sidebar click-to-scrub continues working via
     // the trace (not via this graph), and replica chips carry
     // `replicaOf` so click-to-scrub on a replica still reaches the
     // source frame.
-    const remainingFromSource = r.edges.filter((e) => e.from === "key-expansion");
+    const remainingFromSource = r.edges.filter((e) => e.from === "key-schedule.publish");
     expect(remainingFromSource.length).toBe(0);
-    expect(r.nodes.find((n) => n.stepId === "key-expansion")).toBeUndefined();
-    expect(r.rootIds).not.toContain("key-expansion");
+    expect(r.nodes.find((n) => n.stepId === "key-schedule.publish")).toBeUndefined();
+    expect(r.rootIds).not.toContain("key-schedule.publish");
   });
 
   it('mode "always" replicates a low-fanout source that auto would skip', () => {
     const g = aes128Graph();
-    // round.0.add-round-key is an aux CONSUMER of key-expansion, not a
+    // round.0.add-round-key is an aux CONSUMER of key-schedule.publish, not a
     // source. Pick an actual low-fanout source — the iterate doesn't
     // exist in single-block AES, and most leaves don't emit aux. Use
-    // `key-expansion` with a HIGH threshold so auto would skip, then
+    // `key-schedule.publish` with a HIGH threshold so auto would skip, then
     // force replication via "always".
-    const r = replicateHighFanoutSources(g, 50, { "key-expansion": "always" });
+    const r = replicateHighFanoutSources(g, 50, { "key-schedule.publish": "always" });
     // High threshold alone would have left the graph alone; "always"
     // forces replication anyway.
     expect(r).not.toBe(g);
-    const replicas = r.nodes.filter((n) => n.replicaOf === "key-expansion");
+    const replicas = r.nodes.filter((n) => n.replicaOf === "key-schedule.publish");
     expect(replicas.length).toBe(11);
   });
 
   it('mode "never" suppresses replication of a high-fanout source that auto would replicate', () => {
     const g = aes128Graph();
-    // Threshold 6 would auto-replicate key-expansion (fanout 11), but the
-    // "never" override pins it back.
-    const r = replicateHighFanoutSources(g, 6, { "key-expansion": "never" });
-    expect(r).toBe(g);
-    const replicas = r.nodes.filter((n) => n.replicaOf === "key-expansion");
+    // Threshold 6 would auto-replicate key-schedule.publish (fanout 11), but the
+    // "never" override pins IT back. Note the decomposed schedule (K1c) also
+    // has `key-schedule.word-stream` as a fanout-11 source (it feeds the 11
+    // round-key byte-slices), so the graph is NOT globally identity at
+    // threshold 6 — the override is per-source, so we assert publish
+    // specifically produced no replicas.
+    const r = replicateHighFanoutSources(g, 6, { "key-schedule.publish": "never" });
+    const replicas = r.nodes.filter((n) => n.replicaOf === "key-schedule.publish");
     expect(replicas.length).toBe(0);
   });
 
@@ -101,18 +104,23 @@ describe("replicateHighFanoutSources", () => {
 
   it("threshold <= 0 with an 'always' override still replicates that source", () => {
     const g = aes128Graph();
-    const r = replicateHighFanoutSources(g, 0, { "key-expansion": "always" });
+    const r = replicateHighFanoutSources(g, 0, { "key-schedule.publish": "always" });
     expect(r).not.toBe(g);
-    expect(r.nodes.filter((n) => n.replicaOf === "key-expansion").length).toBe(11);
+    expect(r.nodes.filter((n) => n.replicaOf === "key-schedule.publish").length).toBe(11);
   });
 
   it("each replica sits in its consumer's parent container, before the consumer", () => {
     const g = aes128Graph();
     const r = replicateHighFanoutSources(g, 6);
-    // Pick one replica's consumer (the `:b{i}` suffix is stripped during
-    // graph derivation, so consumer ids look like `round.5.add-round-key`).
-    const sample = r.nodes.find((n) => n.replicaOf === "key-expansion");
-    if (!sample) throw new Error("no replica produced");
+    // Pick an AUX-FAN-OUT replica (NOT the spine-replica). Since the source
+    // `key-schedule.publish` lives inside the `key-schedule` group (K1c), the
+    // spine-replica is placed in the SOURCE's scope (`["key-schedule"]`), not
+    // its consumer's — so only the aux-fan-out replicas satisfy the
+    // "sibling of its consumer" property this test pins. (`:b{i}` suffixes are
+    // stripped during graph derivation, so consumer ids look like
+    // `round.5.add-round-key`.)
+    const sample = r.nodes.find((n) => n.replicaOf === "key-schedule.publish" && !n.isSpineReplica);
+    if (!sample) throw new Error("no aux-fan-out replica produced");
     // The replica id encodes the consumer: `${source}@->${consumer}`.
     const consumerId = sample.stepId.split("@->")[1];
     expect(consumerId).toBeDefined();
@@ -191,7 +199,7 @@ describe("replicateHighFanoutSources", () => {
 
   describe("Slice 7b — state edges fan through replicas", () => {
     // ("replicates the source's state-out alongside its aux edges" was removed
-    // in Slice 5.3e Batch 3: AES `key-expansion` is aux-only and has no
+    // in Slice 5.3e Batch 3: AES `key-schedule.publish` is aux-only and has no
     // state-out — the legacy identity-passthrough spine edge it once carried
     // retired with `inferStateEdges`. The general "a source's state-out fans
     // through replicas" invariant is still pinned by the synthetic-graph cases
@@ -295,18 +303,27 @@ describe("replicateHighFanoutSources", () => {
       expect(incoming?.to).toBe("B@->C1");
     });
 
-    it("removes the source from rootIds AND parent container childIds", () => {
-      // The byte-native AES-128 fixture has key-expansion at root + AddRoundKey
-      // consumers (initial.add-round-key at root, round.N.add-round-key inside
-      // `round.X` groups). After replication the original key-expansion is gone
-      // from rootIds, and the round groups carry replicas spliced before their
-      // AddRoundKey children.
+    it("removes the source from its parent container childIds AND splices replicas", () => {
+      // Since the key-schedule decomposition (K1c), the high-fanout aux source
+      // `key-schedule.publish` lives INSIDE the `key-schedule` group (not at
+      // root). Its AddRoundKey consumers are at root (initial.add-round-key) and
+      // inside round groups — a CROSS-SCOPE source. Per the DES-era `samePath`
+      // rule, a cross-scope (source.parent ≠ consumer.parent) replica is NOT a
+      // spine-replica: every publish replica is a regular consumer-scope chip.
+      // So publish@->initial.add-round-key lands at root (initial's scope) and
+      // publish@->round.5.add-round-key inside round.5.
       const g = aes128Graph();
       const r = replicateHighFanoutSources(g, 6);
 
-      expect(r.rootIds).not.toContain("key-expansion");
-      // initial.add-round-key sits at root: its replica should precede it.
-      const initialRepId = "key-expansion@->initial.add-round-key";
+      // publish was never at root; it's removed from the key-schedule group.
+      expect(r.rootIds).not.toContain("key-schedule.publish");
+      const keySchedule = r.containers.find((c) => c.id === "key-schedule");
+      expect(keySchedule).toBeDefined();
+      expect(keySchedule?.childIds.includes("key-schedule.publish")).toBe(false);
+
+      // The root consumer's replica lands in ROOT (consumer scope), spliced
+      // before initial.add-round-key.
+      const initialRepId = "key-schedule.publish@->initial.add-round-key";
       const initialRepIdx = r.rootIds.indexOf(initialRepId);
       const initialConsIdx = r.rootIds.indexOf("initial.add-round-key");
       expect(initialRepIdx).toBeGreaterThanOrEqual(0);
@@ -314,19 +331,19 @@ describe("replicateHighFanoutSources", () => {
       expect(initialRepIdx).toBeLessThan(initialConsIdx);
 
       // Spot-check a round group: round.5 hosts `round.5.add-round-key`
-      // plus its key-expansion replica, both inside the group's childIds.
+      // plus its aux-fan-out replica, both inside the group's childIds.
       const round5 = r.containers.find((c) => c.id === "round.5");
       expect(round5).toBeDefined();
-      const round5Replica = "key-expansion@->round.5.add-round-key";
+      const round5Replica = "key-schedule.publish@->round.5.add-round-key";
       expect(round5?.childIds).toContain(round5Replica);
       expect(round5?.childIds).toContain("round.5.add-round-key");
-      // No fully-replicated source id (key-expansion) slipped through.
-      expect(round5?.childIds.includes("key-expansion")).toBe(false);
+      // No fully-replicated source id (key-schedule.publish) slipped through.
+      expect(round5?.childIds.includes("key-schedule.publish")).toBe(false);
     });
 
     // ("spine reaches the last root step through the replica chain" was removed
-    // in Slice 5.3e Batch 3. Its premise — replicating key-expansion must not
-    // break the spine — is moot: key-expansion is no longer ON the spine (it's
+    // in Slice 5.3e Batch 3. Its premise — replicating key-schedule.publish must not
+    // break the spine — is moot: key-schedule.publish is no longer ON the spine (it's
     // aux-only), so replicating it can't break it. And the test's flat-BFS over
     // state edges can't traverse the port-flow spine's container-sourced
     // round→round handoffs (`round.1 → round.2.sub-bytes`, where the `round.1`
@@ -338,7 +355,7 @@ describe("replicateHighFanoutSources", () => {
       // Slice 7b dropped the kind filter; verify the no-replicate baseline
       // (no source qualifies) still produces identity output.
       const g = aes128Graph();
-      // Threshold 50 above key-expansion's fanout of 11, no overrides.
+      // Threshold 50 above key-schedule.publish's fanout of 11, no overrides.
       const r = replicateHighFanoutSources(g, 50);
       expect(r).toBe(g);
     });
@@ -356,32 +373,39 @@ describe("replicateHighFanoutSources", () => {
 
   describe("replica-scope-aware layout (narrow) — spine-replica flag + scope", () => {
     it("flags exactly one replica per fully-replicated source as isSpineReplica", () => {
-      // Byte-native AES-128: key-expansion is fully replicated (11 consumers
-      // above threshold). Exactly ONE of its replicas is the spine-replica
-      // (= the one targeting the spineSuccessor — `initial.add-round-key`, the DFS-
-      // next leaf and key-expansion's only state-target). The other 10 are
-      // aux-fan-out replicas without the flag.
+      // Byte-native AES-128 with the decomposed key schedule (K1c). The
+      // SAME-SCOPE high-fanout source is `key-schedule.word-stream`: it feeds
+      // the 11 round-key byte-slices (`key-schedule.rk0..rk10`) via port-flow,
+      // and ALL of them live in the SAME `key-schedule` group. So exactly ONE
+      // of word-stream's replicas is the spine-replica (targeting the first
+      // state successor `key-schedule.rk0`); the other 10 are aux/port-fan-out
+      // replicas. (publish, by contrast, is CROSS-SCOPE — its consumers live
+      // outside key-schedule — so it gets NO spine-replica; see the "removes
+      // source" test above.)
       const g = aes128Graph();
       const r = replicateHighFanoutSources(g, 6);
-      const keReplicas = r.nodes.filter((n) => n.replicaOf === "key-expansion");
-      expect(keReplicas).toHaveLength(11);
-      const spineReplicas = keReplicas.filter((n) => n.isSpineReplica === true);
+      const wsReplicas = r.nodes.filter((n) => n.replicaOf === "key-schedule.word-stream");
+      expect(wsReplicas).toHaveLength(11);
+      const spineReplicas = wsReplicas.filter((n) => n.isSpineReplica === true);
       expect(spineReplicas).toHaveLength(1);
-      expect(spineReplicas[0]?.stepId).toBe("key-expansion@->initial.add-round-key");
+      expect(spineReplicas[0]?.stepId).toBe("key-schedule.word-stream@->key-schedule.rk0");
+      // publish is cross-scope → no spine-replica.
+      const publishReplicas = r.nodes.filter((n) => n.replicaOf === "key-schedule.publish");
+      expect(publishReplicas.filter((n) => n.isSpineReplica === true)).toHaveLength(0);
     });
 
-    it("spine-replica's containerPath matches the SOURCE's parent scope (not consumer's)", () => {
-      // For byte-native AES-128, both source (key-expansion) and
-      // spineSuccessor (initial.add-round-key) live at root, so their containerPaths
-      // coincide → the spine-replica's containerPath is also `[]`. The
-      // interesting structural case is the scope-aware synthetic below where
-      // source and consumer differ.
+    it("spine-replica's containerPath matches the SOURCE's parent scope", () => {
+      // word-stream and its rk0 successor both live in the `key-schedule`
+      // group, so the spine-replica's containerPath is `["key-schedule"]` —
+      // the source's parent scope. (The source-≠-consumer-scope distinction is
+      // pinned by the scope-aware synthetic case below.)
       const g = aes128Graph();
       const r = replicateHighFanoutSources(g, 6);
-      const spine = r.nodes.find((n) => n.stepId === "key-expansion@->initial.add-round-key");
-      const source = g.nodes.find((n) => n.stepId === "key-expansion");
+      const spine = r.nodes.find((n) => n.stepId === "key-schedule.word-stream@->key-schedule.rk0");
+      const source = g.nodes.find((n) => n.stepId === "key-schedule.word-stream");
       if (!spine || !source) throw new Error("missing node");
       expect(spine.containerPath).toEqual(source.containerPath);
+      expect(spine.containerPath).toEqual(["key-schedule"]);
       expect(spine.isSpineReplica).toBe(true);
     });
 

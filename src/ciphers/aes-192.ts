@@ -13,20 +13,23 @@
  * plaintext arrives on the reserved `$input` source and the cipher exit is
  * named by `outputFrom`.
  *
- * Key expansion stays the monolithic `aes.key-expansion@1` (already A4-clean).
- * The shared executor derives Nk from the actual key length at runtime; this
- * file just tells the runtime to expect a 24-byte key and to assemble 12
- * rounds. It runs once total, writing `roundKey.0..12` into the aux map.
+ * Key expansion is the DECOMPOSED port-native schedule
+ * (`buildAesKeyScheduleNative`, key-schedule-decomposition plan Slice K1a) at
+ * Nk=6 — the 52-word FIPS-197 §5.2 recurrence becomes visible primitive frames
+ * (7 full 6-word groups + a final partial 4-word group; groups don't align
+ * with 16-byte round keys, so the repack re-slices). It runs once total,
+ * publishing `roundKey.0..12` into the aux map.
  *
  * Kept as a separate file (rather than parameterizing aes-128) so each variant
  * has a discoverable, named CipherSpec the UI/registry can pick by id.
  */
 
 import type { CipherSpec } from "../core/types";
-import { AES_RCON, AES_SBOX } from "./aes-constants";
+import { buildAesKeyScheduleNative } from "./aes-key-schedule-builder-native";
 import { aesNativeOutputFrom, buildAesEncryptBodyNative } from "./aes-round-builder-native";
 
 const ROUNDS = 12;
+const NK = 6; // 24-byte key / 4 bytes per word
 
 export const aes192Spec: CipherSpec = {
   id: "aes-192@1",
@@ -36,20 +39,6 @@ export const aes192Spec: CipherSpec = {
     plaintext: { shape: "bytes" },
     key: { byteLength: 24 },
   },
-  steps: [
-    {
-      kind: "step",
-      id: "key-expansion",
-      type: "aes.key-expansion@1",
-      params: {
-        keyAuxName: "key",
-        outputPrefix: "roundKey",
-        sbox: [...AES_SBOX],
-        rcon: [...AES_RCON],
-        rounds: ROUNDS,
-      },
-    },
-    ...buildAesEncryptBodyNative(ROUNDS),
-  ],
+  steps: [buildAesKeyScheduleNative(ROUNDS, NK), ...buildAesEncryptBodyNative(ROUNDS)],
   outputFrom: aesNativeOutputFrom(ROUNDS),
 };

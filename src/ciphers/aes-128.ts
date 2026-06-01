@@ -14,12 +14,13 @@
  * Body construction lives in `aes-round-builder-native.ts` so the ECB / CBC
  * factories can reuse it verbatim in Slice B1.4.
  *
- * Key expansion stays the monolithic `aes.key-expansion@1` (already A4-clean,
- * and it ALSO consumes the forward S-box for SubWord — moving only the round
- * S-box to `cipherConstants` would diverge the two consumers, so the S-box
- * stays a leaf param in B1; unify in the later key-expansion-decomposition
- * slice). It runs once total — never inside the per-block loop regardless of
- * mode — writing `roundKey.0..10` into the aux map.
+ * Key expansion is the DECOMPOSED port-native schedule
+ * (`buildAesKeyScheduleNative`, key-schedule-decomposition plan Slice K1a) —
+ * the FIPS-197 §5.2 RotWord / SubWord / Rcon / word-XOR recurrence is now a
+ * tree of visible primitive frames instead of one monolithic executor. It
+ * still runs once total — never inside the per-block loop regardless of mode —
+ * publishing `roundKey.0..10` into the aux map via its `aes.publish-round-keys@1`
+ * tail, so the round-body AddRoundKey consumers are unchanged (B-minimal).
  *
  * The decrypt side (`aes128DecryptSpec`) and the ECB/CBC modes remain
  * matrix-shaped until Slices B1.2 / B1.4 — `main` never holds a half-converted
@@ -28,10 +29,11 @@
  */
 
 import type { CipherSpec } from "../core/types";
-import { AES_RCON, AES_SBOX } from "./aes-constants";
+import { buildAesKeyScheduleNative } from "./aes-key-schedule-builder-native";
 import { aesNativeOutputFrom, buildAesEncryptBodyNative } from "./aes-round-builder-native";
 
 const ROUNDS = 10;
+const NK = 4; // 16-byte key / 4 bytes per word
 
 export const aes128Spec: CipherSpec = {
   id: "aes-128@1",
@@ -41,20 +43,6 @@ export const aes128Spec: CipherSpec = {
     plaintext: { shape: "bytes" },
     key: { byteLength: 16 },
   },
-  steps: [
-    {
-      kind: "step",
-      id: "key-expansion",
-      type: "aes.key-expansion@1",
-      params: {
-        keyAuxName: "key",
-        outputPrefix: "roundKey",
-        sbox: [...AES_SBOX],
-        rcon: [...AES_RCON],
-        rounds: ROUNDS,
-      },
-    },
-    ...buildAesEncryptBodyNative(ROUNDS),
-  ],
+  steps: [buildAesKeyScheduleNative(ROUNDS, NK), ...buildAesEncryptBodyNative(ROUNDS)],
   outputFrom: aesNativeOutputFrom(ROUNDS),
 };

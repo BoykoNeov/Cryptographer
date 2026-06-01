@@ -64,8 +64,8 @@
 
 import type { CipherSpec, PortBinding, StepDocumentation, StepNode } from "../core/types";
 import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "../core/types";
-import { AES_RCON, AES_SBOX } from "./aes-constants";
 import type { AesVariant, CipherDirection } from "./aes-ecb-builder";
+import { buildAesKeyScheduleNative } from "./aes-key-schedule-builder-native";
 import {
   aesNativeDecryptOutputFrom,
   aesNativeOutputFrom,
@@ -107,19 +107,6 @@ const CBC_ITERATE_ID = "cbc-blocks";
 const CBC_XOR_ID = "cbc-xor";
 
 const port = (node: string, portName: string): PortBinding => ({ node, port: portName });
-
-const keyExpansionLeaf = (rounds: number): StepNode => ({
-  kind: "step",
-  id: "key-expansion",
-  type: "aes.key-expansion@1",
-  params: {
-    keyAuxName: "key",
-    outputPrefix: "roundKey",
-    sbox: [...AES_SBOX],
-    rcon: [...AES_RCON],
-    rounds,
-  },
-});
 
 const NARR_FETCH_IV: StepDocumentation = {
   name: "Load IV",
@@ -258,8 +245,9 @@ export function buildAesCbcSpec(variant: AesVariant, direction: CipherDirection)
       key: { byteLength: keyBytes },
     },
     steps: [
-      // Key expansion runs once, outside the loop. Writes roundKey.0..N to aux.
-      keyExpansionLeaf(rounds),
+      // Key expansion runs once, outside the loop. The decomposed schedule
+      // publishes roundKey.0..N to aux (B-minimal — consumers untouched).
+      buildAesKeyScheduleNative(rounds, keyBytes / 4),
       // Pre-loop chain bootstrap: aux["iv"] (Uint8Array, 16) → a port the
       // iterate's `chainInput` reads. The first iteration's chain XOR uses it.
       fetchIvLeaf(),

@@ -124,8 +124,9 @@ describe("insertStepIntoSpec — `before` anchor", () => {
 
   it("inserts a new leaf immediately before the named anchor leaf", () => {
     const spec = useSpec();
-    // AES-128 spec has `initial.add-round-key` as the second top-level leaf
-    // (immediately after `key-expansion`). Insert before it.
+    // AES-128 spec has `initial.add-round-key` as the first top-level LEAF
+    // (it follows the `key-schedule` group at index 0 since K1c). Insert
+    // before it.
     insertStepIntoSpec("byte-substitute@1", {
       kind: "before",
       stepId: "initial.add-round-key",
@@ -157,7 +158,7 @@ describe("insertStepIntoSpec — `before` anchor", () => {
   it("returns the generated id so the caller can route trace focus", () => {
     const newId = insertStepIntoSpec("byte-substitute@1", {
       kind: "before",
-      stepId: "key-expansion",
+      stepId: "initial.add-round-key",
     });
     expect(newId).toBe("byte-substitute-1");
     expect(findStep(useSpec()(), "byte-substitute-1")).not.toBeNull();

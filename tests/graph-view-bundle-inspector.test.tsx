@@ -61,7 +61,7 @@ const seedAes128EcbCollapsedReplicated = (): void => {
   setTrace(trace);
   toggleCollapse(aes128EcbSpec.id, "ecb-blocks", false);
   setReplicationEnabled(true);
-  setReplicationMode(aes128EcbSpec.id, "key-expansion", "always");
+  setReplicationMode(aes128EcbSpec.id, "key-schedule", "always");
 };
 
 const resetAll = (): void => {
@@ -79,7 +79,7 @@ const findBundleHit = (container: HTMLElement): SVGPathElement | null => {
   const hits = container.querySelectorAll<SVGPathElement>("path[data-edge-key]");
   for (const p of Array.from(hits)) {
     const key = p.getAttribute("data-edge-key") ?? "";
-    if (key.startsWith("bundle:key-expansion@->ecb-blocks|ecb-blocks|aux|")) return p;
+    if (key.startsWith("bundle:key-schedule|ecb-blocks|aux|")) return p;
   }
   return null;
 };
@@ -106,7 +106,7 @@ describe("GraphView — bundle inspector (Slice C)", () => {
     expect(target).not.toBeNull();
     expect(target?.kind).toBe("bundle");
     if (target?.kind === "bundle") {
-      expect(target.key).toBe("bundle:key-expansion@->ecb-blocks|ecb-blocks|aux|0");
+      expect(target.key).toBe("bundle:key-schedule|ecb-blocks|aux|0");
     }
   });
 

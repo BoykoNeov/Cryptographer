@@ -6,9 +6,9 @@
  *
  *   1. **Default ON**: a multi-fanout source's edges render with the
  *      canonical-source's assigned color as their inline `stroke`. AES-
- *      128 ECB's `key-expansion` fans out to 11 round-key consumers →
- *      every key-expansion → round.N.add-round-key edge picks up
- *      `SOURCE_COLOR_PALETTE[0]` (`key-expansion` happens to be the
+ *      128 ECB's `key-schedule` fans out to 11 round-key consumers →
+ *      every key-schedule → round.N.add-round-key edge picks up
+ *      `SOURCE_COLOR_PALETTE[0]` (`key-schedule` happens to be the
  *      alphabetically-first multi-fanout source on this spec).
  *
  *   2. **Master toggle OFF**: the rendered edges drop their inline
@@ -48,7 +48,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const AES128_KEY = "000102030405060708090a0b0c0d0e0f";
 // SP 800-38A §F.1.1 first block — single-block plaintext is enough to
-// exercise key-expansion fan-out (we don't need multi-block iteration).
+// exercise key-schedule fan-out (we don't need multi-block iteration).
 const ECB_PLAINTEXT = "6bc1bee22e409f96e93d7e117393172a";
 
 const seedAes128Ecb = (): void => {
@@ -77,7 +77,7 @@ const resetAll = (): void => {
 /**
  * Read every rendered <path> that carries an inline `style.stroke`
  * value — these are the source-colored edges. Returns the unique set
- * of stroke values (so e.g. all 11 key-expansion edges share one
+ * of stroke values (so e.g. all 11 key-schedule edges share one
  * entry).
  *
  * We read from `el.style.stroke`, NOT from `getAttribute("stroke")`:
@@ -137,10 +137,10 @@ describe("GraphView — source-color coding", () => {
     resetAll();
   });
 
-  it("default ON: every key-expansion edge picks up palette[0] as its inline stroke", () => {
+  it("default ON: every key-schedule edge picks up palette[0] as its inline stroke", () => {
     // AES-128 ECB has multiple multi-fanout sources at root level:
-    // `key-expansion`, `compute-block-count`, `split-blocks`. Alphabetical
-    // sort puts `compute-block-count` at palette[0]; `key-expansion` at
+    // `key-schedule`, `compute-block-count`, `split-blocks`. Alphabetical
+    // sort puts `compute-block-count` at palette[0]; `key-schedule` at
     // palette[2]. Pin both to verify the alphabetical-determinism claim
     // from the unit tests carries through to the rendered DOM.
     seedAes128Ecb();
@@ -170,10 +170,10 @@ describe("GraphView — source-color coding", () => {
 
   it("manual override changes every matching edge's inline stroke", () => {
     seedAes128Ecb();
-    // Override key-expansion to a sentinel color the auto palette would
+    // Override key-schedule to a sentinel color the auto palette would
     // never assign (`#ff00aa` is outside the curated set).
     const SENTINEL = "#ff00aa";
-    setSourceColorOverride(aes128EcbSpec.id, "key-expansion", SENTINEL);
+    setSourceColorOverride(aes128EcbSpec.id, "key-schedule", SENTINEL);
 
     const { container } = render(() => <GraphView />);
 
@@ -199,12 +199,12 @@ describe("GraphView — source-color coding", () => {
   });
 
   it("replica start-dots and bundle ×N pills pick up the source color", () => {
-    // Seed AES-128 ECB with `key-expansion` set to "always" replicate +
-    // iterate collapsed → the 11 key-expansion → round.N.add-round-key
+    // Seed AES-128 ECB with `key-schedule` set to "always" replicate +
+    // iterate collapsed → the 11 key-schedule → round.N.add-round-key
     // edges fan into one bundle through a replica chip whose start-dot
     // is rendered. This exercises BOTH the start-dot fill path AND the
     // bundle ×N label fill path against the same canonical source
-    // (key-expansion → palette[2] alphabetically on this spec — after
+    // (key-schedule → palette[2] alphabetically on this spec — after
     // `compute-block-count` (palette[0]) and `ecb-blocks` (NOT
     // multi-fanout in standard ECB) sort earlier).
     setCipher("aes-128");
@@ -216,7 +216,7 @@ describe("GraphView — source-color coding", () => {
     });
     setTrace(trace);
     setReplicationEnabled(true);
-    setReplicationMode(aes128EcbSpec.id, "key-expansion", "always");
+    setReplicationMode(aes128EcbSpec.id, "key-schedule", "always");
     toggleCollapse(aes128EcbSpec.id, "ecb-blocks", false);
 
     const { container } = render(() => <GraphView />);
@@ -238,7 +238,7 @@ describe("GraphView — source-color coding", () => {
       expect(paletteKeys.has(rgbKey(fill))).toBe(true);
     }
 
-    // At least one bundle ×N label is rendered (key-expansion's 11
+    // At least one bundle ×N label is rendered (key-schedule's 11
     // round-key arrows collapse into one bundle when the iterate is
     // collapsed). The text element's inline `style.fill` should match
     // one of the palette colors too.

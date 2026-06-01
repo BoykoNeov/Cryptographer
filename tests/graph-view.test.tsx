@@ -105,23 +105,26 @@ describe("GraphView — component-level (AES-128 fixture)", () => {
     __setOffsetsEnabledForTest(null);
   });
 
-  it("renders one leaf rectangle per leaf in the spec (41 for byte-native AES-128)", () => {
+  it("renders one leaf rectangle per visible leaf (40 for byte-native AES-128, key-schedule collapsed)", () => {
     seedAes128Trace();
     const { container } = render(() => <GraphView />);
     // Each leaf is an SVG <g class="graph-leaf">; the rect inside it is
-    // `.graph-leaf-rect`. Byte-native AES-128 (Slice B1; AddRoundKey merged to
-    // one `xor-with-aux@1` leaf in Finding F3) has 41 leaves:
-    // key-expansion + initial.add-round-key (2) + 9 full rounds × 4 (36)
-    // + final round.10 × 3 (3).
+    // `.graph-leaf-rect`. Byte-native AES-128's round body has 40 leaves:
+    // initial.add-round-key (1) + 9 full rounds × 4 (36) + final round.10 × 3
+    // (3). Since key-schedule-decomposition K1c, the schedule is a
+    // default-collapsed `key-schedule` GROUP (not the former single
+    // `key-expansion` leaf), so its ~140 sub-step leaves are hidden behind the
+    // container chip on first render — hence 40 visible leaves, not 41.
     const leafRects = container.querySelectorAll(".graph-leaf-rect");
-    expect(leafRects.length).toBe(41);
+    expect(leafRects.length).toBe(40);
   });
 
-  it("renders one container rectangle per group (10 round groups)", () => {
+  it("renders one container rectangle per group (10 round groups + the key-schedule group)", () => {
     seedAes128Trace();
     const { container } = render(() => <GraphView />);
+    // 10 round groups + the decomposed `key-schedule` group (K1c) = 11.
     const containerRects = container.querySelectorAll(".graph-container-rect");
-    expect(containerRects.length).toBe(10);
+    expect(containerRects.length).toBe(11);
   });
 
   it("renders aux-flow edges from the trace (11 key-expansion fan-out edges)", () => {
@@ -213,7 +216,9 @@ describe("GraphView — component-level (AES-128 fixture)", () => {
     // `.graph-edge-state` and are counted here.
     const { container } = render(() => <GraphView />);
     const leaves = container.querySelectorAll(".graph-leaf-rect");
-    expect(leaves.length).toBe(41);
+    // 40 visible round-body leaves; the decomposed `key-schedule` group is
+    // default-collapsed (K1c), hiding its sub-step leaves behind the chip.
+    expect(leaves.length).toBe(40);
     // No aux edges pre-run (those require a trace).
     expect(container.querySelectorAll(".graph-edge-aux").length).toBe(0);
     // Byte-native AES-128 (Slice B1; AddRoundKey merged in Finding F3): the

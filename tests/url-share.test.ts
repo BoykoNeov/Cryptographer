@@ -88,26 +88,27 @@ describe("url-share — encode/decode round-trip", () => {
     expect(a).toBe(b);
   });
 
-  it("produces compact payloads — spec-only AES-128 under 8 KB encoded", async () => {
+  it("produces compact payloads — spec-only AES-128 under 12 KB encoded", async () => {
     const encoded = await encodeDocumentToHash(specOnly);
-    // Byte-native AES-128 (Slice B1) is a much larger spec than the matrix
-    // form — ~52 leaves, each carrying its own sbox/matrix/indices params plus
-    // a `narrationOverride` block — so the measured baseline rose from ~1.6 KB
-    // to ~4.4 KB. Still trivially URL-safe. Asserting at the generous side
-    // (~2× the baseline) keeps a real regression catchable without flapping.
-    expect(encoded.length).toBeLessThan(8192);
+    // Byte-native AES-128 (Slice B1) plus the decomposed key schedule (K1c)
+    // is a much larger spec than the matrix form — ~150 leaves now, each
+    // carrying its own params plus a `narrationOverride` block (the ~114
+    // key-schedule sub-step leaves added their RotWord/SubWord/Rcon/word-XOR
+    // narration). The measured baseline rose ~4.4 KB → ~8.5 KB. Still trivially
+    // URL-safe (orders of magnitude under any browser URL limit). Asserting at
+    // the generous side keeps a real regression catchable without flapping.
+    expect(encoded.length).toBeLessThan(12288);
   });
 
-  it("produces compact payloads — AES-256 + layout + session under 8 KB", async () => {
-    // Largest realistic case shipped today. Byte-native AES-256 (Slice B1.3) is
-    // a much larger spec than the matrix form — 14 rounds of port-native leaves,
-    // each carrying its own sbox/matrix/indices params plus a `narrationOverride`
-    // block — so the measured baseline rose from ~1.6 KB to ~5 KB (matching the
-    // AES-128 byte-native growth above, scaled by the extra rounds). Still
+  it("produces compact payloads — AES-256 + layout + session under 14 KB", async () => {
+    // Largest realistic case shipped today. Byte-native AES-256 (Slice B1.3)
+    // plus the decomposed key schedule (K1c) — 14 rounds of port-native leaves
+    // + the Nk=8 schedule's ~130 sub-step leaves, each with params + a
+    // `narrationOverride` — pushed the measured baseline to ~9.7 KB. Still
     // trivially URL-safe. If this fails after a future schema change, time to
     // revisit the compression strategy.
     const encoded = await encodeDocumentToHash(aes256WithLayout);
-    expect(encoded.length).toBeLessThan(8192);
+    expect(encoded.length).toBeLessThan(14336);
   });
 });
 

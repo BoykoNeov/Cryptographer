@@ -134,47 +134,49 @@ describe("runtime — ported dispatch, Slice 1.4 AES core step types", () => {
     // The legacy-vs-ported frame-parity rows were REMOVED across Slices B1.1
     // (AES-128 encrypt), B1.2 (AES-128 decrypt), and B1.3 (AES-192/256): every
     // single-block AES spec is byte-native with no legacy executor, so there is
-    // no legacy dispatch run to compare against. The parity property only ever
-    // applied to lifted-legacy steps. What these rows uniquely validated — the
-    // `aes.key-expansion@1` PortContract.outputs FUNCTION form sizing its
-    // round-key output ports to `params.rounds` at N ≠ 11 — survives as a
-    // ported-only check: the number + insertion order of the round keys the
-    // function emits, at N=13 (AES-192) and N=15 (AES-256). The end-to-end KATs
-    // in block (a) already prove those keys are wired correctly to AddRoundKey;
-    // these pin the function actually consults `params.rounds` rather than
-    // hard-coding AES-128's 11. (Byte-native frame streams are pinned in
-    // `aes-vectors` / `aes-192-vectors` / `aes-256-vectors`.)
+    // no legacy dispatch run to compare against. What these rows uniquely
+    // validated — the round-key output surface sizing its ports to
+    // `params.rounds` at N ≠ 11 — survives as a ported-only check.
+    //
+    // Since the key-schedule decomposition (K1c, 2026-06-01) the round keys are
+    // published by the `aes.publish-round-keys@1` TAIL leaf (the one surviving
+    // meta-bearing step), not the former monolithic `aes.key-expansion@1`. Its
+    // `meta.auxWritePorts` is built `key0..keyN → roundKey.0..N` from
+    // `params.rounds`, so we assert the number + insertion order of the round
+    // keys it writes, at N=11/13/15. The end-to-end KATs in block (a) already
+    // prove those keys are wired correctly to AddRoundKey; these pin the
+    // publish tail actually consults `params.rounds` rather than hard-coding 11.
 
     // Map iteration is insertion-ordered in JS; downstream consumers (round-key
     // panel layout, narration ordering) depend on `roundKey.0..N` order. The
-    // function-form `outputs(params)` insertion order MUST be ascending.
+    // publish tail's `auxWritePorts` insertion order MUST be ascending.
     const expectRoundKeyOrder = (spec: CipherSpec, key: string, rounds: number, label: string) => {
       // A full 16-byte block is required: byte-native AES reads its plaintext
       // from `$input`, and the initial AddRoundKey xor's the round key into it
       // (a 0-length state would length-mismatch the 16-byte key). The actual
-      // plaintext value is irrelevant — we only inspect the key-expansion
-      // frame's auxWritten, which doesn't depend on the plaintext.
+      // plaintext value is irrelevant — we only inspect the publish frame's
+      // auxWritten, which doesn't depend on the plaintext.
       const ported = runSpec(spec, buildDefaultRegistry(), {
         initialState: makeBytesState(new Uint8Array(16)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(key)]]),
       });
-      const keyExpansionFrame = ported.frames.find((f) => f.stepType === "aes.key-expansion@1");
-      if (!keyExpansionFrame) throw new Error(`${label}: no key-expansion frame found`);
-      const writtenKeys = [...keyExpansionFrame.auxWritten.keys()];
+      const publishFrame = ported.frames.find((f) => f.stepType === "aes.publish-round-keys@1");
+      if (!publishFrame) throw new Error(`${label}: no publish-round-keys frame found`);
+      const writtenKeys = [...publishFrame.auxWritten.keys()];
       const expected: string[] = [];
       for (let r = 0; r <= rounds; r++) expected.push(`roundKey.${r}`);
       expect(writtenKeys, label).toEqual(expected);
     };
 
-    it("AES-192 emits 13 round keys (rounds=12) in ascending order under ported", () => {
+    it("AES-192 publishes 13 round keys (rounds=12) in ascending order under ported", () => {
       expectRoundKeyOrder(aes192Spec, AES192_KEY, 12, "aes-192");
     });
 
-    it("AES-256 emits 15 round keys (rounds=14) in ascending order under ported", () => {
+    it("AES-256 publishes 15 round keys (rounds=14) in ascending order under ported", () => {
       expectRoundKeyOrder(aes256Spec, AES256_KEY, 14, "aes-256");
     });
 
-    it("AES-128 emits 11 round keys (rounds=10) in ascending order under ported", () => {
+    it("AES-128 publishes 11 round keys (rounds=10) in ascending order under ported", () => {
       expectRoundKeyOrder(aes128Spec, AES128_KEY, 10, "aes-128");
     });
   });

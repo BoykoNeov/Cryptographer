@@ -92,12 +92,12 @@ describe("ParamEditor decoupled from TraceFrame — bug-2 fix", () => {
     const { container } = render(() => <App />);
     setViewMode("graph");
 
-    // Drop aux-xor onto the key-expansion leaf (a root-level anchor so
+    // Drop aux-xor onto the initial.add-round-key leaf (a root-level anchor so
     // the insertion lands in the top-level spec.steps array).
     const anchor = container.querySelector<SVGGElement>(
-      'g.graph-leaf[data-drop-anchor="key-expansion"]',
+      'g.graph-leaf[data-drop-anchor="initial.add-round-key"]',
     );
-    expect(anchor, "key-expansion leaf must be drop-targetable").not.toBeNull();
+    expect(anchor, "initial.add-round-key leaf must be drop-targetable").not.toBeNull();
     if (!anchor) return;
     fireDropAt(anchor, "generic.aux-xor@1");
 
@@ -179,12 +179,12 @@ describe("ParamEditor decoupled from TraceFrame — bug-2 fix", () => {
     const { container } = render(() => <App />);
     setViewMode("graph");
 
-    // Drop aux-load onto the key-expansion leaf (same root-level anchor
+    // Drop aux-load onto the initial.add-round-key leaf (same root-level anchor
     // as the bug-2 test — keeps the insertion at the top of spec.steps).
     const anchor = container.querySelector<SVGGElement>(
-      'g.graph-leaf[data-drop-anchor="key-expansion"]',
+      'g.graph-leaf[data-drop-anchor="initial.add-round-key"]',
     );
-    expect(anchor, "key-expansion leaf must be drop-targetable").not.toBeNull();
+    expect(anchor, "initial.add-round-key leaf must be drop-targetable").not.toBeNull();
     if (!anchor) return;
     fireDropAt(anchor, "generic.aux-load@1");
 

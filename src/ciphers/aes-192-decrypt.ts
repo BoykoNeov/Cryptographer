@@ -25,10 +25,11 @@
  */
 
 import type { CipherSpec } from "../core/types";
-import { AES_RCON, AES_SBOX } from "./aes-constants";
+import { buildAesKeyScheduleNative } from "./aes-key-schedule-builder-native";
 import { aesNativeDecryptOutputFrom, buildAesDecryptBodyNative } from "./aes-round-builder-native";
 
 const ROUNDS = 12;
+const NK = 6; // 24-byte key / 4 bytes per word
 
 export const aes192DecryptSpec: CipherSpec = {
   id: "aes-192-decrypt@1",
@@ -38,20 +39,6 @@ export const aes192DecryptSpec: CipherSpec = {
     plaintext: { shape: "bytes" },
     key: { byteLength: 24 },
   },
-  steps: [
-    {
-      kind: "step",
-      id: "key-expansion",
-      type: "aes.key-expansion@1",
-      params: {
-        keyAuxName: "key",
-        outputPrefix: "roundKey",
-        sbox: [...AES_SBOX],
-        rcon: [...AES_RCON],
-        rounds: ROUNDS,
-      },
-    },
-    ...buildAesDecryptBodyNative(ROUNDS),
-  ],
+  steps: [buildAesKeyScheduleNative(ROUNDS, NK), ...buildAesDecryptBodyNative(ROUNDS)],
   outputFrom: aesNativeDecryptOutputFrom(),
 };

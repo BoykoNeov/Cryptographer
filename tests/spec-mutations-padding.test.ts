@@ -33,22 +33,24 @@ describe("applyPaddingScheme(spec, encrypt, 'none')", () => {
     const types = topLevelLeafTypes(result);
     expect(types).not.toContain("generic.pkcs7-pad@1");
     expect(types).not.toContain("generic.load-block@1");
-    // Canonical structure preserved: key-expansion is the first top-level
-    // leaf in the encrypt spec.
-    expect(types[0]).toBe("aes.key-expansion@1");
+    // Canonical structure preserved: the decomposed `key-schedule` group is
+    // the first top-level node (key-schedule-decomposition K1a — it's a group,
+    // not a leaf, so it no longer shows up in topLevelLeafTypes).
+    expect(result.steps[0]?.id).toBe("key-schedule");
     // Byte-native AES carries a flat 16-byte state on raw ports.
     expect(result.inputs.plaintext.shape).toBe("bytes");
   });
 });
 
 describe("applyPaddingScheme(spec, encrypt, 'pkcs7')", () => {
-  it("prepends ONLY pkcs7-pad before key-expansion (no load-block, byte-native B1)", () => {
+  it("prepends ONLY pkcs7-pad before the key schedule (no load-block, byte-native B1)", () => {
     const result = applyPaddingScheme(aes128Spec, "encrypt", "pkcs7");
     const types = topLevelLeafTypes(result);
     expect(types[0]).toBe("generic.pkcs7-pad@1");
     // No bytes↔matrix bridge: byte-native AES has no load-block.
     expect(types).not.toContain("generic.load-block@1");
-    expect(types[1]).toBe("aes.key-expansion@1");
+    // The pad is prepended at steps[0]; the decomposed key-schedule group follows.
+    expect(result.steps[1]?.id).toBe("key-schedule");
   });
 
   it("declares input shape as 'bytes' so the runtime accepts BytesState", () => {
@@ -130,7 +132,7 @@ describe("applyPaddingScheme idempotency", () => {
     const types = topLevelLeafTypes(unpadded);
     expect(types).not.toContain("generic.pkcs7-pad@1");
     expect(types).not.toContain("generic.load-block@1");
-    expect(types[0]).toBe("aes.key-expansion@1");
+    expect(unpadded.steps[0]?.id).toBe("key-schedule");
     expect(unpadded.inputs.plaintext.shape).toBe("bytes");
   });
 
@@ -152,12 +154,12 @@ describe("applyPaddingScheme idempotency", () => {
 });
 
 describe("applyPaddingScheme(spec, encrypt, 'zero-pad')", () => {
-  it("prepends ONLY zero-pad before key-expansion (no load-block, byte-native B1)", () => {
+  it("prepends ONLY zero-pad before the key schedule (no load-block, byte-native B1)", () => {
     const result = applyPaddingScheme(aes128Spec, "encrypt", "zero-pad");
     const types = topLevelLeafTypes(result);
     expect(types[0]).toBe("generic.zero-pad@1");
     expect(types).not.toContain("generic.load-block@1");
-    expect(types[1]).toBe("aes.key-expansion@1");
+    expect(result.steps[1]?.id).toBe("key-schedule");
   });
 
   it("declares input shape as 'bytes' so the runtime accepts BytesState", () => {
@@ -183,12 +185,12 @@ describe("applyPaddingScheme(spec, decrypt, 'zero-pad')", () => {
 });
 
 describe("applyPaddingScheme(spec, encrypt, 'iso7816-4')", () => {
-  it("prepends ONLY iso7816-4-pad before key-expansion (no load-block, byte-native B1)", () => {
+  it("prepends ONLY iso7816-4-pad before the key schedule (no load-block, byte-native B1)", () => {
     const result = applyPaddingScheme(aes128Spec, "encrypt", "iso7816-4");
     const types = topLevelLeafTypes(result);
     expect(types[0]).toBe("generic.iso7816-4-pad@1");
     expect(types).not.toContain("generic.load-block@1");
-    expect(types[1]).toBe("aes.key-expansion@1");
+    expect(result.steps[1]?.id).toBe("key-schedule");
   });
 
   it("declares input shape as 'bytes'", () => {
@@ -224,7 +226,7 @@ describe("applyPaddingScheme cross-scheme swaps", () => {
     // New zero-pad chain present (byte-native: pad only, no load-block).
     expect(types[0]).toBe("generic.zero-pad@1");
     expect(types).not.toContain("generic.load-block@1");
-    expect(types[1]).toBe("aes.key-expansion@1");
+    expect(zero.steps[1]?.id).toBe("key-schedule");
     // The initial AddRoundKey (a `xor-with-aux@1` leaf since F3) was repointed
     // onto the NEW pad, not the old one — its state arrives on the `input` port.
     const initialArk = findFirstLeaf(zero, "xor-with-aux@1");
@@ -237,7 +239,7 @@ describe("applyPaddingScheme cross-scheme swaps", () => {
     const types = topLevelLeafTypes(canonical);
     expect(types).not.toContain("generic.iso7816-4-pad@1");
     expect(types).not.toContain("generic.load-block@1");
-    expect(types[0]).toBe("aes.key-expansion@1");
+    expect(canonical.steps[0]?.id).toBe("key-schedule");
     expect(canonical.inputs.plaintext.shape).toBe("bytes");
     // The initial AddRoundKey's $input wiring was restored on strip (the
     // `xor-with-aux@1` leaf's `input` port points back at the raw source).

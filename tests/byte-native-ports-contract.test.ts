@@ -97,6 +97,7 @@ const NON_BYTES_ALLOWLIST: readonly string[] = [
 const KITCHEN_SINK: Json = {
   inputCount: 2,
   rounds: 1,
+  outputPrefix: "roundKey", // aes.publish-round-keys@1 (key-schedule decomposition)
   widths: [4],
   byteLength: 4,
   auxName: "probe",

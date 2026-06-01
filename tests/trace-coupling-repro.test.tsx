@@ -105,13 +105,13 @@ describe("trace-coupling fix — palette drop surfaces warning glyph without man
       expect(getTrace(), "boot-time onMount should have produced a trace").not.toBeNull();
     });
 
-    // Drop aux-xor onto the key-expansion leaf. Same anchor pattern as
+    // Drop aux-xor onto the initial.add-round-key leaf. Same anchor pattern as
     // `built-from-palette-roundtrip.test.tsx`. We use a root-level leaf so
     // the insertion lands in the spec without requiring an iterate body.
     const anchorLeaf = container.querySelector<SVGGElement>(
-      'g.graph-leaf[data-drop-anchor="key-expansion"]',
+      'g.graph-leaf[data-drop-anchor="initial.add-round-key"]',
     );
-    expect(anchorLeaf, "key-expansion leaf must be drop-targetable").not.toBeNull();
+    expect(anchorLeaf, "initial.add-round-key leaf must be drop-targetable").not.toBeNull();
     if (!anchorLeaf) return;
     fireDropAt(anchorLeaf, "generic.aux-xor@1");
 

@@ -16,15 +16,20 @@
  * The 16-byte working state carries port-to-port between round groups via the
  * A3b `StepGroup` `seedInput`/`bodyOutput` contract; the plaintext arrives on
  * the reserved `$input` source and the cipher exit is named by `outputFrom`.
- * Key expansion stays the monolithic `aes.key-expansion@1` (A4-clean),
- * writing `roundKey.0..14` into the aux map once total.
+ * Key expansion is the DECOMPOSED port-native schedule
+ * (`buildAesKeyScheduleNative`, key-schedule-decomposition plan Slice K1a) at
+ * Nk=8 — the 60-word recurrence becomes visible primitive frames (6 full
+ * 8-word groups + a final partial 4-word group, each full group carrying the
+ * mid-word SubWord at i % Nk == 4), publishing `roundKey.0..14` into the aux
+ * map once total.
  */
 
 import type { CipherSpec } from "../core/types";
-import { AES_RCON, AES_SBOX } from "./aes-constants";
+import { buildAesKeyScheduleNative } from "./aes-key-schedule-builder-native";
 import { aesNativeOutputFrom, buildAesEncryptBodyNative } from "./aes-round-builder-native";
 
 const ROUNDS = 14;
+const NK = 8; // 32-byte key / 4 bytes per word
 
 export const aes256Spec: CipherSpec = {
   id: "aes-256@1",
@@ -34,20 +39,6 @@ export const aes256Spec: CipherSpec = {
     plaintext: { shape: "bytes" },
     key: { byteLength: 32 },
   },
-  steps: [
-    {
-      kind: "step",
-      id: "key-expansion",
-      type: "aes.key-expansion@1",
-      params: {
-        keyAuxName: "key",
-        outputPrefix: "roundKey",
-        sbox: [...AES_SBOX],
-        rcon: [...AES_RCON],
-        rounds: ROUNDS,
-      },
-    },
-    ...buildAesEncryptBodyNative(ROUNDS),
-  ],
+  steps: [buildAesKeyScheduleNative(ROUNDS, NK), ...buildAesEncryptBodyNative(ROUNDS)],
   outputFrom: aesNativeOutputFrom(ROUNDS),
 };

@@ -33,6 +33,7 @@ import { ByteCellInput } from "./ByteCellInput";
 import { MatrixEditor } from "./MatrixEditor";
 import { SboxEditor } from "./SboxEditor";
 import { ShiftsEditor } from "./ShiftsEditor";
+import { isKeyScheduleLeafId, isRoundBodyLeafId } from "./cross-mode-mirror-registry";
 import {
   collisionGroupsByIndex,
   countRedundantDuplicates,
@@ -251,6 +252,9 @@ export const ParamEditor = (props: Props) => {
             <Match when={getStep().type === "constant-load@1"}>
               <ConstantLoadBlock step={getStep()} />
             </Match>
+            <Match when={getStep().type === "aes.publish-round-keys@1"}>
+              <PublishRoundKeysBlock step={getStep()} />
+            </Match>
             <Match when={getStep().type === "pad-with-byte@1"}>
               <PadWithByteBlock step={getStep()} matchingCount={matchingSteps()} />
             </Match>
@@ -399,6 +403,14 @@ const ShiftsBlock = (props: BlockProps) => {
 const ByteSubstituteBlock = (props: BlockProps) => {
   const sbox = (): readonly number[] =>
     ((props.step.params as { sbox?: number[] }).sbox ?? []) as readonly number[];
+  // Role-scope by leaf id (key-schedule-decomposition K1c): `byte-substitute@1`
+  // is BOTH round-body SubBytes AND key-schedule SubWord. Round-body SubBytes
+  // is the class-2 inverse mirror (encrypt forward / decrypt inverse); the
+  // key-schedule SubWord is the class-1 identity Copy (forward S-box on both
+  // sides, FIPS-197 §5.2). Rendering the wrong row — and, worse, letting its
+  // mutator broadcast type-wide — would corrupt the decrypt key schedule, so
+  // we pick the row AND pass the matching `idFilter` to confine the write.
+  const isKeySchedule = (): boolean => isKeyScheduleLeafId(props.step.id);
 
   return (
     <>
@@ -417,11 +429,30 @@ const ByteSubstituteBlock = (props: BlockProps) => {
         matchingCount={props.matchingCount}
         label="S-box"
       />
-      {/* Class-2 (inverse) cross-mode mirror — encrypt holds AES_SBOX,
-          decrypt holds AES_INV_SBOX. Both AES-128 modes are byte-native as
-          of Slice B1.2, so the same-type sync writes to the real decrypt
-          `byte-substitute@1` leaves. */}
-      <SyncInverseRow currentSbox={sbox()} stepType={props.step.type} />
+      <Show
+        when={isKeySchedule()}
+        fallback={
+          /* Round-body SubBytes — class-2 (inverse) cross-mode mirror.
+             Scoped to NON-key-schedule leaves so the inverse never lands on
+             the SubWord leaves. */
+          <SyncInverseRow
+            currentSbox={sbox()}
+            stepType={props.step.type}
+            idFilter={isRoundBodyLeafId}
+          />
+        }
+      >
+        {/* Key-schedule SubWord — class-1 (identity) Copy mirror. The
+            schedule uses the FORWARD S-box even when decrypting (FIPS-197
+            §5.2), so encrypt and decrypt hold the SAME table. Scoped to the
+            key-schedule leaves. (Re-homed here from the retired
+            `aes.key-expansion@1/@2` KeyExpansionBlock Copy row.) */}
+        <CopySboxRow
+          currentSbox={sbox()}
+          stepType={props.step.type}
+          idFilter={isKeyScheduleLeafId}
+        />
+      </Show>
     </>
   );
 };
@@ -1004,6 +1035,39 @@ const SerpentSyncInverseRow = (props: {
 // (the Serpent LT and inverse LT). Avoids the raw-JSON fallback rendering
 // `{}` for an empty params object.
 const NoParamsBlock = (props: { label: string }) => <div class="muted small">{props.label}</div>;
+
+// Aux-publish tail of the DECOMPOSED AES key schedule
+// (key-schedule-decomposition K1a). Read-only: both params are structural —
+// `outputPrefix` must match what the AddRoundKey consumers read, and `rounds`
+// must match the schedule the builder emitted. Editing either would desync the
+// producer from the consumers, so we surface them as a labelled scalar header
+// (same posture as the read-only DES permutation blocks) rather than inputs.
+const PublishRoundKeysBlock = (props: { step: StepLeaf }) => {
+  const params = (): { outputPrefix?: string; rounds?: number } => props.step.params as never;
+  const rounds = (): number => params().rounds ?? 0;
+  const prefix = (): string => params().outputPrefix ?? "roundKey";
+  return (
+    <>
+      <dl class="param-scalars">
+        <div class="param-scalar-row">
+          <dt>Aux prefix (write)</dt>
+          <dd>{prefix()}</dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Round keys</dt>
+          <dd>
+            {rounds() + 1} keys ({prefix()}.0 … {prefix()}.{rounds()})
+          </dd>
+        </div>
+      </dl>
+      <p class="muted small">
+        Writes the derived round keys into the aux map for the AddRoundKey steps. The interesting
+        math is the recurrence leaves above this tail; these params are structural and not meant to
+        be edited.
+      </p>
+    </>
+  );
+};
 
 // ─── DES step blocks (Phase 4 of docs/plans/des-feistel.md) ───────────────
 //
@@ -2124,7 +2188,15 @@ const portNativeNoParamsLabel = (stepType: string): string => {
 //     editing the inverse table in decrypt mode and clicking sync writes
 //     the forward back to encrypt with the same algorithm — only the
 //     label changes.
-const SyncInverseRow = (props: { currentSbox: readonly number[]; stepType: string }) => {
+const SyncInverseRow = (props: {
+  currentSbox: readonly number[];
+  stepType: string;
+  // Role-scope filter (key-schedule-decomposition K1c): when set, the
+  // inverse is broadcast only to counterpart leaves whose id passes this
+  // predicate. `byte-substitute@1` passes `isRoundBodyLeafId` so the
+  // key-schedule SubWord leaves are NOT overwritten with the inverse table.
+  idFilter?: (id: string) => boolean;
+}) => {
   const mode = useMode();
   const isBijective = (): boolean => countRedundantDuplicates(props.currentSbox) === 0;
   const counterpartLabel = (): string => (mode() === "encrypt" ? "decrypt" : "encrypt");
@@ -2156,7 +2228,7 @@ const SyncInverseRow = (props: { currentSbox: readonly number[]; stepType: strin
         onAction={() => {
           if (!isBijective()) return; // belt-and-braces; button is disabled too
           const inverted = invertSbox(props.currentSbox);
-          syncSboxInverseToCounterpart(props.stepType, inverted);
+          syncSboxInverseToCounterpart(props.stepType, inverted, props.idFilter);
         }}
       >
         {buttonLabel()}
@@ -2180,7 +2252,15 @@ const SyncInverseRow = (props: { currentSbox: readonly number[]; stepType: strin
 // the S-box rows lock when broken and the other half don't, users will
 // learn a noisier mental model. Repair-first is the single rule for
 // every S-box mirror row.
-const CopySboxRow = (props: { currentSbox: readonly number[]; stepType: string }) => {
+const CopySboxRow = (props: {
+  currentSbox: readonly number[];
+  stepType: string;
+  // Role-scope filter (key-schedule-decomposition K1c): when set, the Copy
+  // is broadcast only to counterpart leaves whose id passes this predicate.
+  // `byte-substitute@1` passes `isKeyScheduleLeafId` so the Copy lands on
+  // the key-schedule SubWord leaves and NOT the round-body SubBytes leaves.
+  idFilter?: (id: string) => boolean;
+}) => {
   const mode = useMode();
   const isBijective = (): boolean => countRedundantDuplicates(props.currentSbox) === 0;
   const counterpartLabel = (): string => (mode() === "encrypt" ? "decrypt" : "encrypt");
@@ -2206,7 +2286,7 @@ const CopySboxRow = (props: { currentSbox: readonly number[]; stepType: string }
           // Pass the current table verbatim — NO `invertSbox` composition
           // here. The whole point of the Copy verb is to mirror the
           // forward S-box exactly, per FIPS-197 §5.2.
-          syncSboxCopyToCounterpart(props.stepType, props.currentSbox);
+          syncSboxCopyToCounterpart(props.stepType, props.currentSbox, props.idFilter);
         }}
       >
         {buttonLabel()}

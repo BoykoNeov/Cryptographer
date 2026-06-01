@@ -495,15 +495,20 @@ export const editAllStepsByType = (stepType: string, update: (params: Json) => J
  * counterpart slot, regardless of any per-step customizations
  * already there — destructive by design, same as Apply-to-all.
  *
- * Not coupled to `aes.key-expansion@1`: that step holds the FORWARD
- * table on both sides (FIPS-197 §5.2 — key expansion always uses the
- * forward S-box), so it needs a different propagation operation
- * ("copy, don't invert"). Deferred; surface as a separate mutator
- * when the UI calls for it.
+ * **Role-scoping (`idFilter`).** Since the key-schedule decomposition
+ * (2026-06-01) `byte-substitute@1` is used in TWO roles: round-body
+ * SubBytes (this inverse mirror) AND key-schedule SubWord (which holds the
+ * FORWARD table on both sides — FIPS-197 §5.2, handled by
+ * `syncSboxCopyToCounterpart`). A type-wide broadcast would overwrite the
+ * decrypt key schedule's forward S-box with the inverse table and corrupt
+ * decryption. The caller passes `idFilter` (`isRoundBodyLeafId`) so the
+ * inverse only lands on round-body leaves; the key-schedule SubWord leaves
+ * are left untouched.
  */
 export const syncSboxInverseToCounterpart = (
   stepType: string,
   invertedSbox: readonly number[],
+  idFilter?: (id: string) => boolean,
 ): void => {
   const current = specs();
   // Cross-mode mirror is only meaningful for ciphers with separate
@@ -515,10 +520,15 @@ export const syncSboxInverseToCounterpart = (
     throw new Error("syncSboxInverseToCounterpart not supported for hash spec");
   }
   const counterpartMode: Mode = mode() === "encrypt" ? "decrypt" : "encrypt";
-  const updated = updateAllStepsByType(current[counterpartMode], stepType, (params) => ({
-    ...(params as Record<string, Json>),
-    sbox: [...invertedSbox],
-  }));
+  const updated = updateAllStepsByType(
+    current[counterpartMode],
+    stepType,
+    (params) => ({
+      ...(params as Record<string, Json>),
+      sbox: [...invertedSbox],
+    }),
+    idFilter,
+  );
   if (updated === current[counterpartMode]) return; // reference-equal → no-op
   setSpecs(
     counterpartMode === "encrypt"
@@ -620,17 +630,34 @@ export const syncSboxInverseToCounterpartByIndex = (
  * Caller passes the table verbatim — DO NOT compose `invertSbox` here or
  * on the caller side; that would re-introduce the AES-SubBytes semantic
  * by accident.
+ *
+ * **Today's user (since the key-schedule decomposition, 2026-06-01):** the
+ * AES key-schedule SubWord leaves, which are `byte-substitute@1` (the same
+ * type as round-body SubBytes). The caller passes `idFilter`
+ * (`isKeyScheduleLeafId`) so the Copy lands ONLY on the key-schedule
+ * SubWord leaves and not on the round-body SubBytes leaves (which take the
+ * inverse mirror instead). Before decomposition this was keyed on the
+ * monolithic `aes.key-expansion@1/@2` step type with no filter.
  */
-export const syncSboxCopyToCounterpart = (stepType: string, sboxValue: readonly number[]): void => {
+export const syncSboxCopyToCounterpart = (
+  stepType: string,
+  sboxValue: readonly number[],
+  idFilter?: (id: string) => boolean,
+): void => {
   const current = specs();
   if (current.kind !== "cipher") {
     throw new Error("syncSboxCopyToCounterpart not supported for hash spec");
   }
   const counterpartMode: Mode = mode() === "encrypt" ? "decrypt" : "encrypt";
-  const updated = updateAllStepsByType(current[counterpartMode], stepType, (params) => ({
-    ...(params as Record<string, Json>),
-    sbox: [...sboxValue],
-  }));
+  const updated = updateAllStepsByType(
+    current[counterpartMode],
+    stepType,
+    (params) => ({
+      ...(params as Record<string, Json>),
+      sbox: [...sboxValue],
+    }),
+    idFilter,
+  );
   if (updated === current[counterpartMode]) return; // reference-equal → no-op
   setSpecs(
     counterpartMode === "encrypt"

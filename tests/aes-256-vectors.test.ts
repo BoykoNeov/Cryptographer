@@ -53,13 +53,19 @@ describe("AES-256 (FIPS-197 §A.3 + NIST AES Core 256)", () => {
   });
 
   it("emits a frame for every leaf step", () => {
-    // Byte-native AES-256 leaves (one frame each), after Finding F3 merged
-    // AddRoundKey's fetch-rk + xor pair into one `xor-with-aux@1` leaf:
-    //   key-expansion (1)
-    //   initial.add-round-key (1)
-    //   rounds 1..13 × 4 sub-steps = 52
-    //   final round.14 × 3 sub-steps (no mix-columns) = 3
-    //   = 57 frames
+    // Byte-native AES-256 leaves (one frame each). DECOMPOSED key schedule
+    // (key-schedule-decomposition K1a), Nk=8 → 60 words = 6 full 8-word groups
+    // (each with the mid-word SubWord at i % Nk == 4) + 1 partial 4-word group:
+    //   key-schedule (118):
+    //     load-key (1)
+    //     6 full groups × 15 leaves (incl. subword4 + w4) = 90
+    //     1 partial group (4 words) × 10 leaves = 10
+    //     word-stream (1) + rk0..rk14 (15) + publish (1) = 17
+    //   round body (56):
+    //     initial.add-round-key (1)
+    //     rounds 1..13 × 4 sub-steps = 52
+    //     final round.14 × 3 sub-steps (no mix-columns) = 3
+    //   = 174 frames
     const plaintext = makeBytesState(bytesFromHex(PLAINTEXT_HEX));
     const initialAux = new Map<string, AuxValue>([["key", bytesFromHex(KEY_HEX)]]);
 
@@ -68,7 +74,7 @@ describe("AES-256 (FIPS-197 §A.3 + NIST AES Core 256)", () => {
       initialAux,
     });
 
-    expect(trace.frames.length).toBe(57);
+    expect(trace.frames.length).toBe(174);
   });
 
   it("produces all 15 round keys; roundKey.3 pins the Nk>6 SubWord-only branch", () => {
@@ -125,27 +131,13 @@ describe("AES-256 (FIPS-197 §A.3 + NIST AES Core 256)", () => {
     expect(hexFromBytes(decTrace.finalState.bytes)).toBe(PLAINTEXT_HEX);
   });
 
-  it("throws when rounds disagrees with the key length", () => {
-    // Pair a 32-byte key with rounds=10 to trip the Nk+6===rounds assertion
-    // in the shared key-expansion executor.
-    const plaintext = makeBytesState(bytesFromHex(PLAINTEXT_HEX));
-    const key = bytesFromHex(KEY_HEX);
-    const initialAux = new Map<string, AuxValue>([["key", key]]);
-
-    // Clone the AES-256 spec and corrupt its rounds param to 10.
-    const corrupted = structuredClone(aes256Spec);
-    const ke = corrupted.steps[0];
-    if (!ke || ke.kind !== "step") throw new Error("expected key-expansion leaf at index 0");
-    (ke as { params: Record<string, unknown> }).params = {
-      ...(ke.params as Record<string, unknown>),
-      rounds: 10,
-    };
-
-    expect(() =>
-      runSpec(corrupted, buildDefaultRegistry(), {
-        initialState: plaintext,
-        initialAux,
-      }),
-    ).toThrow(/rounds.*must equal Nk\+6/);
-  });
+  // (Removed: "throws when rounds disagrees with the key length".) That test
+  // tripped the monolithic `aes.key-expansion@1` executor's runtime
+  // `Nk+6===rounds` guard by corrupting the spec's key-expansion leaf params.
+  // Under the DECOMPOSED key schedule (key-schedule-decomposition K1a) there is
+  // no such leaf or runtime guard — `buildAesKeyScheduleNative(rounds, Nk)`
+  // constructs a structurally consistent schedule at spec-build time, so the
+  // mismatch is unrepresentable. The Nk>6 mid-word SubWord correctness is
+  // proven end-to-end by the AES-256 ciphertext KATs above and pinned directly
+  // by `tests/aes-key-schedule-decomposition.test.ts`.
 });

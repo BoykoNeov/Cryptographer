@@ -20,16 +20,15 @@
  * no longer applies, e.g. a step type was deprecated).
  *
  * Per-step setup notes:
- *   - `aes.key-expansion@1` lives at the top level of canonical AES-128
- *     under id "key-expansion".
- *   - `aes.key-expansion@2` is the renumber variant — only appears
- *     after `duplicateRoundInSpec` bumps a round group. We trigger the
- *     duplicate against canonical round.1, then re-select "key-expansion"
- *     whose `type` field is now `@2`.
+ *   - Entries carrying a `leafScope` (today: both `byte-substitute@1`
+ *     roles) are selected via `leafScope.sampleLeafId` — round-body
+ *     SubBytes at `round.1.sub-bytes` (inverse) and the decomposed
+ *     key-schedule SubWord at `key-schedule.g1.subword` (identity). Both
+ *     live on the default byte-native AES-128 spec.
  *   - `serpent.sub-bytes@1` requires switching to Serpent-128 first;
  *     `round.1.sub-bytes` is a stable leaf id (S_0).
- *   - `generic.byte-substitution@1` is the AES SubBytes step type; any
- *     `round.N.sub-bytes` leaf works on canonical AES-128.
+ *   - `gf-matrix-multiply@1` is byte-native AES MixColumns; `round.1.mix-columns`
+ *     works on canonical AES-128.
  *
  * The per-S-box-index Serpent semantic (`groupBy: "sboxIndex"`) is NOT
  * asserted by this enumeration test — a single Sync button on the
@@ -50,7 +49,7 @@ import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
 import { __resetLayoutsForTests } from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
-import { __resetSpecForTests, duplicateRoundInSpec, setCipher, useSpec } from "@/ui/stores/spec";
+import { __resetSpecForTests, setCipher } from "@/ui/stores/spec";
 import { __resetTraceForTests, setSelectedStepId } from "@/ui/stores/trace";
 import { __resetViewDensityForTests } from "@/ui/stores/view-density";
 import { __resetViewModeForTests } from "@/ui/stores/view-mode";
@@ -73,76 +72,28 @@ const resetAll = (): void => {
   __resetViewModeForTests();
 };
 
-// Find the first leaf in the live spec of the given type. Returns the
-// leaf's id, or null if none exists. Used to look up a v2 key-expansion
-// leaf after `duplicateRoundInSpec` morphs the canonical v1 leaf in
-// place — we don't hard-code "key-expansion" for that case because the
-// mutator's id-stability is an implementation detail.
-type Node = {
-  kind: string;
-  id?: string;
-  type?: string;
-  children?: readonly Node[];
-};
-const findFirstLeafIdOfType = (stepType: string): string | null => {
-  const spec = useSpec()();
-  let found: string | null = null;
-  const visit = (nodes: readonly Node[]): void => {
-    for (const n of nodes) {
-      if (found !== null) return;
-      if (n.kind === "step" && n.type === stepType && typeof n.id === "string") {
-        found = n.id;
-        return;
-      }
-      if ((n.kind === "group" || n.kind === "iterate") && n.children) {
-        visit(n.children);
-      }
-    }
-  };
-  visit(spec.steps as readonly Node[]);
-  return found;
-};
-
 // Per-entry setup. Returns the leaf id to select, or throws with a
-// descriptive message if the entry's prerequisite isn't satisfiable
-// (e.g. v2 needs a successful duplicateRoundInSpec).
+// descriptive message if the entry's prerequisite isn't satisfiable.
 const setupForEntry = (entry: CrossModeMirrorEntry): string => {
+  // Role-scoped entries carry their own canonical sample leaf id. Since the
+  // key-schedule decomposition (2026-06-01), `byte-substitute@1` has TWO
+  // entries — round-body SubBytes (inverse, `round.1.sub-bytes`) and
+  // key-schedule SubWord (identity, `key-schedule.g1.subword`) — that the
+  // stepType switch alone can't tell apart, so `leafScope.sampleLeafId` is
+  // the disambiguator. Both live on the default byte-native AES-128 spec,
+  // no `setCipher` needed.
+  if (entry.leafScope) {
+    return entry.leafScope.sampleLeafId;
+  }
   switch (entry.stepType) {
     // NOTE: the matrix `generic.byte-substitution@1` + `generic.mix-columns@1`
-    // cases were removed in Slice B1.4b along with their registry entries —
-    // every shipped AES is byte-native, so there is no selectable matrix leaf
-    // to exercise. Their live replacements are the `byte-substitute@1` /
-    // `gf-matrix-multiply@1` cases below (default byte-native AES-128).
-    case "aes.key-expansion@1": {
-      // Top-level leaf on canonical AES-128.
-      return "key-expansion";
-    }
-    case "aes.key-expansion@2": {
-      // v2 only appears after a round duplicate. Trigger on round.1,
-      // then look up whatever leaf id ends up carrying the @2 type.
-      // (Today it's still "key-expansion" — the mutator preserves the
-      // id and only bumps `rounds` + the `type` suffix — but we don't
-      // hard-code that.)
-      duplicateRoundInSpec("round.1");
-      const id = findFirstLeafIdOfType("aes.key-expansion@2");
-      if (!id) {
-        throw new Error(
-          "Test setup failure: duplicateRoundInSpec did not produce an aes.key-expansion@2 leaf",
-        );
-      }
-      return id;
-    }
+    // cases were removed in Slice B1.4b; the monolithic `aes.key-expansion@1/@2`
+    // identity cases were removed in key-schedule-decomposition K1c (the Copy
+    // affordance re-homed onto the SubWord `byte-substitute@1` leaf above).
     case "serpent.sub-bytes@1": {
       // Serpent-128 canonical. `round.1.sub-bytes` has sboxIndex=0
       // (S_{(r-1) mod 8} for r=1 → S_0).
       setCipher("serpent-128");
-      return "round.1.sub-bytes";
-    }
-    case "byte-substitute@1": {
-      // Byte-native AES SubBytes (Slice B1.2). AES-128 single-block is the
-      // app default and byte-native on BOTH modes now, so `round.1.sub-bytes`
-      // is `byte-substitute@1` with no `setCipher` needed. The sync writes to
-      // the byte-native decrypt counterpart.
       return "round.1.sub-bytes";
     }
     case "gf-matrix-multiply@1": {

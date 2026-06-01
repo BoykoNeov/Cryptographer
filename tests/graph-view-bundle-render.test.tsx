@@ -4,12 +4,16 @@
  * Component-level test for the bundled-edge visual (Slice B of the
  * arrow-bundling work, 2026-05-17).
  *
- * Scenario: AES-128 ECB with the iterate `ecb-blocks` COLLAPSED and
- * key-expansion's source-mode set to "always" replicate. This is the
- * exact user-flagged case from the manual smoke that surfaced the
- * "11 parallel arrows are unreadable" complaint. Post-bundle, the
- * 11 round-key aux edges from `key-expansion@->ecb-blocks → ecb-
- * blocks` collapse into ONE rendered path carrying a `×11` label.
+ * Scenario: AES-128 ECB with BOTH the iterate `ecb-blocks` and the
+ * decomposed `key-schedule` group COLLAPSED (the latter is default-collapsed
+ * since key-schedule-decomposition K1c). The 11 round-key aux edges now run
+ * from the `key-schedule` container (the publish tail inside it remaps to the
+ * container on collapse) to the `ecb-blocks` container (the AddRoundKey
+ * consumers inside the iterate remap to it). Same (from, to, kind) for all
+ * 11 → they collapse into ONE rendered path carrying a `×11` label. This is
+ * the same "11 parallel arrows are unreadable" case the bundle work targeted;
+ * no replication is needed because the container→container fan-out bundles
+ * directly (and `replicateHighFanoutSources` skips container sources anyway).
  *
  * What we pin:
  *   - Bundle is reachable via the new `bundle:` prefix on the hit
@@ -29,7 +33,7 @@ import type { AuxValue } from "@/core/types";
 import { GraphView } from "@/ui/components/GraphView";
 import { __resetCipherForTests, setCipher } from "@/ui/stores/cipher";
 import { __resetByteFormatForTests } from "@/ui/stores/format";
-import { __resetLayoutsForTests, setReplicationMode, toggleCollapse } from "@/ui/stores/layout";
+import { __resetLayoutsForTests, toggleCollapse } from "@/ui/stores/layout";
 import { __resetSpecForTests, setCipherMode } from "@/ui/stores/spec";
 import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
 import { __resetViewDensityForTests } from "@/ui/stores/view-density";
@@ -60,16 +64,13 @@ const seedAes128EcbCollapsedReplicated = (): void => {
   setTrace(trace);
   // Collapse the iterate — this is the user-flagged state. The toggle
   // store is keyed by spec.id; the canonical aes-128 ECB spec carries
-  // a stable id that matches the collapseSet lookup.
+  // a stable id that matches the collapseSet lookup. (The `key-schedule`
+  // group is ALREADY default-collapsed, so we don't toggle it.)
   toggleCollapse(aes128EcbSpec.id, "ecb-blocks", false);
-  // Master replication switch ON — GraphView short-circuits the
-  // replication transform when this is false, regardless of per-source
-  // "always" overrides. See the doc-block on `replicateHighFanoutSources`.
+  // Master replication switch ON (harmless here — the only fan-out source
+  // is the collapsed `key-schedule` CONTAINER, which replication skips; the
+  // bundle forms from the container→container fan-out regardless).
   setReplicationEnabled(true);
-  // Set key-expansion source to "always" replicate so the chip exists
-  // even at the default threshold-6 cutoff. The mode lives on the
-  // per-spec LayoutSpec, indexed by source id.
-  setReplicationMode(aes128EcbSpec.id, "key-expansion", "always");
 };
 
 const resetAll = (): void => {
@@ -97,9 +98,7 @@ describe("GraphView — bundled-edge render (Slice B)", () => {
     // Locate the bundled hit-path by its `bundle:` data-edge-key prefix.
     const hitPaths = container.querySelectorAll<SVGPathElement>("path[data-edge-key]");
     const bundleHits = Array.from(hitPaths).filter((p) =>
-      (p.getAttribute("data-edge-key") ?? "").startsWith(
-        "bundle:key-expansion@->ecb-blocks|ecb-blocks|aux|",
-      ),
+      (p.getAttribute("data-edge-key") ?? "").startsWith("bundle:key-schedule|ecb-blocks|aux|"),
     );
     // Exactly one bundle path for this (source, target, kind) pair.
     expect(bundleHits.length).toBe(1);
@@ -153,9 +152,7 @@ describe("GraphView — bundled-edge render (Slice B)", () => {
     const bundleHit = Array.from(
       container.querySelectorAll<SVGPathElement>("path[data-edge-key]"),
     ).find((p) =>
-      (p.getAttribute("data-edge-key") ?? "").startsWith(
-        "bundle:key-expansion@->ecb-blocks|ecb-blocks|aux|",
-      ),
+      (p.getAttribute("data-edge-key") ?? "").startsWith("bundle:key-schedule|ecb-blocks|aux|"),
     );
     expect(bundleHit).not.toBeUndefined();
     const titleText = bundleHit?.querySelector("title")?.textContent ?? "";

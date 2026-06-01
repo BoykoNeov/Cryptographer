@@ -93,7 +93,12 @@ describe("spec mutation helpers", () => {
         }
       };
       visit(updated.steps as never);
-      expect(count).toBe(10); // one per round
+      // 10 round SubBytes + 10 key-schedule SubWords: the decomposed key
+      // schedule (key-schedule-decomposition K1a) reuses `byte-substitute@1`
+      // for SubWord (one per recurrence group, AES-128 = 10 groups), so
+      // "apply to all SubBytes" now also unifies the key schedule's S-box —
+      // they ARE the same AES S-box per FIPS-197 §5.1.1 / §5.2.
+      expect(count).toBe(20);
     });
 
     // ─── compareSpecs richer diff shape (May 2026) ─────────────────────────
@@ -164,13 +169,15 @@ describe("spec mutation helpers", () => {
     });
 
     it("emits a scalar diff when only a primitive param value differs (e.g. rounds count)", () => {
-      // Synthetic spec where only a number-valued param differs. Use
-      // updateStepParams on key-expansion which has a `rounds` field.
-      const tweaked = updateStepParams(aes128Spec, "key-expansion", {
-        keyAuxName: "key",
-        outputPrefix: "roundKey",
-        sbox: [...(findStep(aes128Spec, "key-expansion")?.params as { sbox: number[] }).sbox],
-        rcon: [...(findStep(aes128Spec, "key-expansion")?.params as { rcon: number[] }).rcon],
+      // Synthetic spec where only a number-valued param differs. The decomposed
+      // key schedule's publish tail (key-schedule-decomposition K1a) has a
+      // numeric `rounds` param — a clean single-scalar example for the diff.
+      const publishParams = findStep(aes128Spec, "key-schedule.publish")?.params as {
+        outputPrefix: string;
+        rounds: number;
+      };
+      const tweaked = updateStepParams(aes128Spec, "key-schedule.publish", {
+        outputPrefix: publishParams.outputPrefix,
         rounds: 999, // was 10
       });
 

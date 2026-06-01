@@ -28,7 +28,7 @@
  *
  * Byte-native AES-128 (Slice B1; AddRoundKey merged to one `xor-with-aux@1`
  * leaf in Finding F3) is the fixture — well-known stable id set: the
- * `key-expansion → initial.add-round-key` aux edge carries `roundKey.0`, which
+ * `key-schedule → initial.add-round-key` aux edge carries `roundKey.0`, which
  * the merged AddRoundKey leaf reads internally (so it IS the round-key fan-out
  * consumer now).
  */
@@ -67,7 +67,7 @@ const seedAes128Trace = (): void => {
   setTrace(trace);
   // Byte-native AES-128 (Slice B1) auto-ON's replication via GraphView's
   // `effectiveReplicate` (ported spec). Force it OFF — simulating an explicit
-  // user toggle — so `key-expansion`'s 11 round-key edges stay un-replicated
+  // user toggle — so `key-schedule`'s 11 round-key edges stay un-replicated
   // and the edge-key selectors below remain stable.
   setReplicationEnabled(false);
 };
@@ -183,7 +183,7 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     const { container } = render(() => <GraphView />);
     const path = findEdgePathByEndpoints(
       container as HTMLElement,
-      "key-expansion",
+      "key-schedule",
       "initial.add-round-key",
       "roundKey.0",
     );
@@ -194,14 +194,14 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     // Halo on the VISIBLE `.graph-edge` sibling.
     const visibleEdge = path?.parentElement?.querySelector(".graph-edge");
     expect(visibleEdge?.classList.contains("graph-edge-selected")).toBe(true);
-    expect(body?.textContent).toContain("key-expansion");
+    expect(body?.textContent).toContain("key-schedule");
     expect(body?.textContent).toContain("initial.add-round-key");
     // First 4 bytes of the input key as a fingerprint for round key 0.
     expect(body?.textContent).toContain("00010203");
     const target = useSelectedTarget()();
     expect(target).toEqual({
       kind: "edge",
-      key: "key-expansion|initial.add-round-key|roundKey.0|aux",
+      key: "key-schedule|initial.add-round-key|roundKey.0|aux",
     });
   });
 
@@ -261,7 +261,7 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     const { container } = render(() => <GraphView />);
     const path = findEdgePathByEndpoints(
       container as HTMLElement,
-      "key-expansion",
+      "key-schedule",
       "initial.add-round-key",
       "roundKey.0",
     );
@@ -293,14 +293,14 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     // Switch to an edge.
     const path = findEdgePathByEndpoints(
       container as HTMLElement,
-      "key-expansion",
+      "key-schedule",
       "initial.add-round-key",
       "roundKey.0",
     );
     fireEvent.click(path as SVGPathElement);
     expect(useSelectedTarget()()).toEqual({
       kind: "edge",
-      key: "key-expansion|initial.add-round-key|roundKey.0|aux",
+      key: "key-schedule|initial.add-round-key|roundKey.0|aux",
     });
     // Switch to the input pill.
     const pill = findEndpointPill(container as HTMLElement, "input");
@@ -313,7 +313,7 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     const { container } = render(() => <GraphView />);
     const path = findEdgePathByEndpoints(
       container as HTMLElement,
-      "key-expansion",
+      "key-schedule",
       "initial.add-round-key",
       "roundKey.0",
     );
@@ -332,7 +332,7 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     const { container } = render(() => <GraphView />);
     const path = findEdgePathByEndpoints(
       container as HTMLElement,
-      "key-expansion",
+      "key-schedule",
       "initial.add-round-key",
       "roundKey.0",
     );
