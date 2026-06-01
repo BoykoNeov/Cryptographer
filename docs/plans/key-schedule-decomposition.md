@@ -156,7 +156,12 @@ than a new pure-port aux-writer; a general `aux-store-bytes@1` is deferred).
 ### K2 — Speck32/64 key-schedule decomposition (advisor-revised 2026-06-01)
 
 > **Status:** advisor consulted 2026-06-01 — verdict "revise then ship." Three
-> structural revisions applied below. K2a NOT STARTED.
+> structural revisions applied below. **K2a SHIPPED 2026-06-01** (commits
+> `c5b91ef` plan, `2f3d511` add-mod-16, `8f7434c` speck.publish-round-keys,
+> `0c9f3a6` builder). Gate green (biome + tsc + 2227 vitest + vite build);
+> KAT byte-equal across BE-paper / LE-NSA × encrypt / decrypt; decomposition
+> parity test pins published `roundKey.0..21` byte-equal to the legacy
+> monolith under both byte orders. **K2b/K2c NOT STARTED.**
 
 **Recurrence (Beaulieu et al. 2013 §3), per iteration `i = 0 … rounds-2`:**
 `l_{i+m-1} = (k_i + ROR(l_i, alpha)) ⊕ i` ; `k_{i+1} = ROL(k_i, beta) ⊕ l_{i+m-1}`.
