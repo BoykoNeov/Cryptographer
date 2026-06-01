@@ -379,7 +379,10 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
     );
     // Pick any Serpent round (they're all identically structured).
     const consumerId = "round.5.add-round-key";
-    const replicaId = `key-expansion@->${consumerId}`;
+    // K3a (2026-06-02): the round-key source is the decomposed schedule's
+    // publish tail (`key-schedule.publish`), not the retired monolithic
+    // `key-expansion` leaf, so the replica id is prefixed accordingly.
+    const replicaId = `key-schedule.publish@->${consumerId}`;
     const consumerBox = boxes.get(consumerId);
     const replicaBox = boxes.get(replicaId);
     if (!consumerBox || !replicaBox) {
@@ -404,7 +407,7 @@ describe("GraphView — replica side-gutter inside vertical-stack groups", () =>
       new Map<string, { x: number; y: number }>(),
       layoutConstantsFor("normal"),
     );
-    const replicaBox = boxes.get("key-expansion@->round.5.add-round-key");
+    const replicaBox = boxes.get("key-schedule.publish@->round.5.add-round-key");
     if (!replicaBox) throw new Error("missing replica");
     const replicaBottom = replicaBox.y + replicaBox.h;
     for (const child of [

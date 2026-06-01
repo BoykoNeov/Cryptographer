@@ -528,10 +528,34 @@ retarget, runtime-ported-dispatch, maybe narration), 1 doc comment in
 
 ### K3 — Serpent key-schedule decomposition (B-minimal)
 
-> **Status: OPEN (B-minimal, per the K2d decision rule — no A gate).** Its own
-> advisor pass + KAT gate per [[feedback_iterative_slice_review]] before code.
-> Verify byte-equal against the in-repo `serpent.key-expansion@1` executor
-> (the oracle), NOT recalled crypto.
+> **Status: K3a SHIPPED 2026-06-02 — gate GREEN (biome + tsc + 2231 vitest /
+> 193 files + build).** B-minimal, no A gate (per the K2d decision rule). The
+> slice-open advisor pass picked **option (B): a dedicated `serpent.key-sbox@1`
+> leaf** (lifts the oracle's bitsliced-S-box+IP internals verbatim → no mirror
+> in the registry → no role-scoping, no corruption hazard, verified-by-
+> construction) over option (A) reuse-via-identity. A throwaway probe CONFIRMED
+> the identity `IP(bitslice_Sbox(w)) == nibble_Sbox(IP(w))` holds (400/400
+> cases across S₀..S₇) — so **(A) is a viable future upgrade** if someone wants
+> the extra per-nibble granularity AND ships the K1-style mirror role-scoping +
+> guard test; (B) was chosen because the run was unreviewed and (A)'s mirror
+> scoping is a silent, KAT-invisible corruption surface. Shipped:
+> `serpent-key-sbox.ts` + `serpent-publish-round-keys.ts` (thin sibling — 33
+> fixed keys, not AES's `rounds+1`) + `serpent-key-schedule-builder-native.ts`
+> (unroll: load → pad → input-codec LE→BE → master-split → 132 ARX recurrence
+> iterations (4-tap lags 8/5/3/1, φ + per-iteration index constants, ROL11 =
+> `rotate-bits-right@1` bits 21) → 33 key-sbox groups → publish tail). Byte
+> order: recurrence runs in BE (one `permute@1` input-codec swaps the LE master
+> key); key-sbox decodes BE then runs `wordsToBytes4`(LE)+IP verbatim. **Gate:**
+> `tests/serpent-32-key-schedule-decomposition.test.ts` pins published
+> `roundKey.0..32` byte-equal to the monolith oracle for all 3 sizes; the
+> shipped `serpent-vectors`/`roundtrip`/`key-schedule` KATs (now routing through
+> the decomposition) stay byte-equal to published vectors. `serpent.key-
+> expansion@1` KEPT registered (oracle + back-compat). **K3b (remainder, NOT
+> STARTED):** KeyScheduleExplorer Serpent branch is now dormant (no shipped spec
+> emits a `serpent.key-expansion@1` frame — same state the AES branch entered at
+> K1c) → its formal retirement + any further blast-radius tidy is the K3b slice.
+> Behavioral note: malformed-key handling shifted from hard-reject to warn-and-
+> run coercion (via `aux-load-bytes@1`), consistent with K1/K2.
 
 **Oracle (the ground truth to byte-match):** `src/steps/serpent-key-expansion.ts`
 generates 33 round keys K_0..K_32 (16 bytes each) from a 128/192/256-bit master

@@ -84,20 +84,44 @@ const runAes128Ecb = (): Trace =>
   });
 
 describe("bundleEdges — collapse same-(from, to, kind, isFeedback)", () => {
-  it("returns a singleton bundle for each unique edge when no duplicates exist", () => {
+  it("collapses only the schedule's legitimate multi-tap fan-in; body+aux edges stay 1:1", () => {
     // Serpent-128 single-block, NO replication. With the registry passed, the
-    // S2(f) gate leaves a clean 1:1 port-flow spine (no legacy state-thread
-    // companion), and every aux edge from key-schedule.publish goes to a UNIQUE
-    // consumer — so bundling produces exactly one bundle per edge.
+    // S2(f) gate leaves a clean 1:1 port-flow body spine and every aux edge
+    // from key-schedule.publish goes to a UNIQUE consumer.
+    //
+    // K3a (2026-06-02): the decomposed key schedule introduces a HANDFUL of
+    // legitimate parallel (from→to) edges — the early prekey recurrence's XOR
+    // reads MULTIPLE taps from `master-split` (e.g. j0.xor pulls taps idx-8,
+    // idx-5, idx-3, idx-1 = 4 parallel edges from master-split until the lag
+    // window fills). The bundler correctly collapses each such group into one
+    // multi-edge bundle. So `bundles.length < edges.length` now, by exactly the
+    // fan-in surplus. Compute that surplus from the raw edges and assert the
+    // bundler removed precisely it (this still pins "no SPURIOUS collapse" — a
+    // bug that merged unrelated edges would over-shrink the count).
     const trace = runSerpent128();
     const raw = deriveAuxGraph(trace, serpent128Spec, { registry: buildDefaultRegistry() });
     const fb = buildIterateFeedbackPredicate(raw);
 
     const bundled = bundleEdges(raw, fb);
 
-    expect(bundled.bundles.length).toBe(raw.edges.length);
+    // Surplus = (edges in a (from,to,kind,isFeedback) group) − (one bundle each).
+    // `isFeedback` is computed per-edge by the same predicate the bundler uses
+    // (it's NOT a field on GraphEdge), so the grouping key matches bundleKey.
+    const groupSizes = new Map<string, number>();
+    for (const e of raw.edges) {
+      const k = `${e.from}|${e.to}|${e.kind}|${fb(e) ? 1 : 0}`;
+      groupSizes.set(k, (groupSizes.get(k) ?? 0) + 1);
+    }
+    const surplus = [...groupSizes.values()].reduce((acc, n) => acc + (n - 1), 0);
+    expect(bundled.bundles.length).toBe(raw.edges.length - surplus);
+    expect(bundled.bundles.length).toBe(groupSizes.size);
+    // Every collapsed bundle (>1 edge) is a `master-split → early-XOR` schedule
+    // fan-in; everything else stays singleton.
     for (const b of bundled.bundles) {
-      expect(b.auxKeys.length).toBe(1);
+      if (b.auxKeys.length > 1) {
+        expect(b.from).toBe("key-schedule.master-split");
+        expect(b.to.startsWith("key-schedule.j")).toBe(true);
+      }
     }
   });
 
@@ -155,27 +179,39 @@ describe("bundleEdges — collapse same-(from, to, kind, isFeedback)", () => {
     expect(keyExpReplicaBundle.auxKeys).toEqual(expected);
   });
 
-  it("passes state edges through 1:1 as singleton bundles", () => {
+  it("passes the body-spine state edges through 1:1 as singleton bundles", () => {
     // Serpent (port-wired since 5.3b) with the registry passed → the S2(f)
     // gate leaves a clean port-flow spine: every `kind:"state"` edge carries
-    // `auxKey:"port-flow"` with no legacy state-thread companion, so the
-    // state bundles stay singleton 1:1.
+    // `auxKey:"port-flow"` with no legacy state-thread companion.
+    //
+    // K3a (2026-06-02): the decomposed key schedule's early prekey-recurrence
+    // XORs pull multiple taps from `master-split` (legitimate parallel
+    // port-flow edges, collapsed by the bundler into a few multi-edge bundles).
+    // Those live entirely inside the `key-schedule` group. The BODY spine (IP,
+    // 32 rounds, FP) is still strictly 1:1 — assert the singleton property on
+    // the non-schedule state bundles.
     const trace = runSerpent128();
     const raw = deriveAuxGraph(trace, serpent128Spec, { registry: buildDefaultRegistry() });
     const fb = buildIterateFeedbackPredicate(raw);
 
     const bundled = bundleEdges(raw, fb);
 
-    const stateBundles = bundled.bundles.filter((b) => b.kind === "state");
-    expect(stateBundles.length).toBeGreaterThan(0);
-    // Every state bundle is a singleton because the port-flow spine is 1:1.
-    for (const b of stateBundles) {
+    const isScheduleId = (id: string): boolean => id.startsWith("key-schedule.");
+    const bodyStateBundles = bundled.bundles.filter(
+      (b) => b.kind === "state" && !isScheduleId(b.from) && !isScheduleId(b.to),
+    );
+    expect(bodyStateBundles.length).toBeGreaterThan(0);
+    // Every BODY state bundle is a singleton because the body port-flow spine
+    // is 1:1.
+    for (const b of bodyStateBundles) {
       expect(b.auxKeys.length).toBe(1);
       expect(b.auxKeys[0]).toBe("port-flow");
     }
-    // The number of state bundles equals the number of raw state edges.
-    const rawStateCount = raw.edges.filter((e) => e.kind === "state").length;
-    expect(stateBundles.length).toBe(rawStateCount);
+    // The number of body state bundles equals the number of raw body state edges.
+    const rawBodyStateCount = raw.edges.filter(
+      (e) => e.kind === "state" && !isScheduleId(e.from) && !isScheduleId(e.to),
+    ).length;
+    expect(bodyStateBundles.length).toBe(rawBodyStateCount);
   });
 
   it("Slice 7b — replica-sourced port-flow state edges remain singleton bundles (no ×N decoration)", () => {

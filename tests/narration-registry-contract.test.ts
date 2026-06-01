@@ -166,6 +166,8 @@ describe("narration-registry coverage contract", () => {
       "des.key-schedule@1",
       "aes.publish-round-keys@1",
       "speck.publish-round-keys@1",
+      // K3a (2026-06-02): the decomposed Serpent key schedule's publish tail.
+      "serpent.publish-round-keys@1",
     ]);
     expect(NARRATION_NO_OP_ALLOWLIST).toEqual(expected);
     // Negative assertion: the 6 round-body DES step types must NOT be on

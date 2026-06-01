@@ -267,29 +267,33 @@ describe("deriveAuxGraph — Speck32/64 BE (key-schedule container + flat rounds
 // ─── Serpent-128 (deeply nested round groups, 32 rounds) ──────────────────
 
 describe("deriveAuxGraph — Serpent-128 (SP-network, 32 round groups)", () => {
-  it("emits 99 cipher leaves + the `$input` source (Slice 5.3b) and 32 round-group containers", () => {
+  it("emits 567 cipher leaves + the `$input` source and 33 containers (32 rounds + key-schedule)", () => {
     const g = deriveAuxGraph(runSerpent128(), serpent128Spec);
-    // Cipher leaves: 1 key-expansion + 1 IP + 31×3 (normal rounds) +
-    //         3 (final round) + 1 FP = 99. Plus the synthetic `$input`
-    //         source pill, materialized now that the IP leaf wires its
-    //         `state` port to it (Slice 5.3b) → 100 nodes total.
+    // K3a (2026-06-02): the single `key-expansion` leaf became the decomposed
+    // `key-schedule` group — for Serpent-128 (16-byte key, padded) that is
+    // 469 inner leaves (load-key + pad-const + pad + input-codec + master-split
+    // + phi + 132×{round-const, xor, rotate} + 33×{concat, key-sbox} + publish).
+    // Body unchanged: 1 IP + 31×3 + 3 + 1 FP = 98. So 469 + 98 = 567 cipher
+    // leaves, plus the synthetic `$input` source pill → 568 nodes total.
     const cipherLeaves = g.nodes.filter((n) => n.stepId !== INPUT_SOURCE_ID);
-    expect(cipherLeaves.length).toBe(99);
+    expect(cipherLeaves.length).toBe(567);
     expect(g.nodes.some((n) => n.stepId === INPUT_SOURCE_ID)).toBe(true);
-    expect(g.nodes.length).toBe(100);
-    // Containers: 32 round groups (round.1 .. round.32). IP and FP are leaves.
-    expect(g.containers.length).toBe(32);
+    expect(g.nodes.length).toBe(568);
+    // Containers: 32 round groups (round.1 .. round.32) + 1 `key-schedule`
+    // group. IP and FP are leaves.
+    expect(g.containers.length).toBe(33);
+    expect(g.containers.some((c) => c.id === "key-schedule")).toBe(true);
     expect(g.containers.every((c) => c.kind === "group")).toBe(true);
   });
 
-  it("fans out 33 round-key edges from key-expansion (rounds 1..31 + round 32's two AKs)", () => {
+  it("fans out 33 round-key edges from the decomposed schedule's publish tail", () => {
     const g = deriveAuxGraph(runSerpent128(), serpent128Spec);
-    // Each normal round has 1 AddRoundKey (rounds 1..31 → 31 edges).
-    // Final round (32) has 2 AddRoundKey leaves (.add-round-key + .add-final-round-key).
-    // Total fan-out: 31 + 2 = 33.
-    // Filter to aux edges — key-expansion is also the first leaf in DFS
-    // order, so it has an outgoing `kind: "state"` spine edge to `ip`.
-    const kEdges = g.edges.filter((e) => e.kind === "aux" && e.from === "key-expansion");
+    // K3a: the round-key fan-out moved from the monolithic `key-expansion`
+    // leaf to the decomposed schedule's B-minimal publish tail
+    // (`key-schedule.publish`). Each normal round has 1 AddRoundKey
+    // (rounds 1..31 → 31 edges); the final round (32) has 2 AddRoundKey leaves
+    // (.add-round-key + .add-final-round-key). Total fan-out: 31 + 2 = 33.
+    const kEdges = g.edges.filter((e) => e.kind === "aux" && e.from === "key-schedule.publish");
     expect(kEdges.length).toBe(33);
     // Each edge carries a distinct roundKey.N.
     const auxKeys = new Set(kEdges.map((e) => e.auxKey));
@@ -387,15 +391,21 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
     // owns the spine. (Pre-5.3e the legacy `inferStateEdges` consecutive-
     // siblings inference ran alongside, suppressed for wired leaves by its
     // S2(f) gate; both retired in 5.3e — port-flow is the sole spine source.) The
-    // count stays 98, but the STRUCTURE differs from the old flattened chain:
-    // the within-group hops are leaf→leaf, while each round→round handoff
-    // resolves through the group's single-hop `seedInput` to a CONTAINER source
-    // (`round.{n-1}` container → round.n's first leaf), plus `round.32 → FP`.
+    // body spine STRUCTURE: the within-group hops are leaf→leaf, while each
+    // round→round handoff resolves through the group's single-hop `seedInput`
+    // to a CONTAINER source (`round.{n-1}` container → round.n's first leaf),
+    // plus `round.32 → FP`.
+    //
+    // K3a (2026-06-02): the decomposed `key-schedule` group adds many internal
+    // port-flow edges (load → codec → split → 132 recurrence chains → 33 S-box
+    // groups → publish), so the total `state`-edge count is no longer the body's
+    // 98 — we assert the body-spine structure directly (32 container-sourced
+    // round handoffs + the named hops) rather than an exact total, mirroring the
+    // Speck K2a retarget above.
     const g = deriveAuxGraph(runSerpent128(), serpent128Spec, {
       registry: buildDefaultRegistry(),
     });
     const stateEdges = g.edges.filter((e) => e.kind === "state");
-    expect(stateEdges.length).toBe(98);
     // Every spine edge is port-flow — none survive from the legacy state-thread.
     expect(stateEdges.every((e) => e.auxKey === "port-flow")).toBe(true);
     // Endpoints resolve to a real node OR container (no dangling edge). Round

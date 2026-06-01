@@ -142,11 +142,22 @@ import {
   serpentKeyExpansionPortContract,
 } from "../steps/serpent-key-expansion";
 import {
+  serpentKeySbox,
+  serpentKeySboxDoc,
+  serpentKeySboxPortContract,
+} from "../steps/serpent-key-sbox";
+import {
   serpentLinearTransform,
   serpentLinearTransformDoc,
   serpentLinearTransformMeta,
   serpentLinearTransformPortContract,
 } from "../steps/serpent-linear-transform";
+import {
+  serpentPublishRoundKeys,
+  serpentPublishRoundKeysDoc,
+  serpentPublishRoundKeysMeta,
+  serpentPublishRoundKeysPortContract,
+} from "../steps/serpent-publish-round-keys";
 import {
   serpentSubBytes,
   serpentSubBytesDoc,
@@ -468,6 +479,28 @@ export const buildDefaultRegistry = (): StepRegistry => {
     shape: serpentKeyExpansionPortContract,
     meta: serpentKeyExpansionMeta,
     doc: serpentKeyExpansionDoc,
+  });
+  // K3a (2026-06-02): the decomposed Serpent key schedule's two new leaves.
+  // `serpent.key-sbox@1` lifts the monolith's bitsliced-S-box + IP stage (one
+  // leaf per round key); `serpent.publish-round-keys@1` is the B-minimal
+  // meta-bearing tail that writes `aux["roundKey.0..32"]` byte-identically to
+  // the monolith. Cannot reuse `aes.publish-round-keys@1` — Serpent's count is
+  // a FIXED 33 (no `rounds` param) and round-key byteLength is polymorphic.
+  // `serpent.key-expansion@1` above stays registered as the KAT oracle +
+  // back-compat for saved specs; new specs route through
+  // `buildSerpentKeyScheduleNative`.
+  r.register("serpent.key-sbox@1", {
+    kind: "ported",
+    executor: serpentKeySbox,
+    shape: serpentKeySboxPortContract,
+    doc: serpentKeySboxDoc,
+  });
+  r.register("serpent.publish-round-keys@1", {
+    kind: "ported",
+    executor: serpentPublishRoundKeys,
+    shape: serpentPublishRoundKeysPortContract,
+    meta: serpentPublishRoundKeysMeta,
+    doc: serpentPublishRoundKeysDoc,
   });
   // ─── Serpent round body — port-native since scaffolding-suppression B3
   //     (2026-05-30). The five round-body executors are true PortedExecutors

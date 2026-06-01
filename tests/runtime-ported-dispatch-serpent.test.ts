@@ -181,12 +181,15 @@ describe("runtime — ported dispatch, byte-native Serpent (Slice B3)", () => {
   // ─── (b) Golden frame-stream checksum (byte-equal to the pre-B3 lifted impl) ─
 
   describe("(b) per-spec frame-stream checksum matches the lifted golden", () => {
-    // Captured from the lifted (pre-B3) Serpent and confirmed byte-identical
-    // to the native rewrite. 99 frames each: 1 key-expansion + IP + 32 rounds
-    // (rounds 0..30 = AddRoundKey + SubBytes + LT = 96 frames; round 31 =
-    // AddRoundKey + SubBytes + AddRoundKey) + FP. The capture cross-checked
-    // that lifted flag-off == flag-on, so the digest is proven
-    // dispatch-independent on lifted code — the native impl must reproduce it.
+    // Regenerated in K3a (2026-06-02) when the monolithic
+    // `serpent.key-expansion@1` leaf was replaced by the decomposed
+    // `buildSerpentKeyScheduleNative` group. The single key-expansion frame
+    // became ~469 visible recurrence/S-box/publish frames, so the body's 98
+    // frames now ride on a much larger schedule: 567 frames for Serpent-128/192
+    // (which pad the key to 256 bits → 2 extra pad leaves) and 565 for
+    // Serpent-256 (no pad). The cipher KATs in suite (a) prove the ciphertext
+    // is unchanged; these digests are purely the new frame inventory. The
+    // pre-K3a goldens (99-frame) are in git history.
     const GOLDEN: ReadonlyArray<{
       label: string;
       spec: CipherSpec;
@@ -199,47 +202,47 @@ describe("runtime — ported dispatch, byte-native Serpent (Slice B3)", () => {
         spec: serpent128Spec,
         stateHex: PLAINTEXT_ZERO,
         keyHex: KEY_128,
-        digest: "99:c36dc162ec2a489831d776a7336d3a46268a54340033d73038d8243a079d61d2",
+        digest: "567:94b3b2743c1b76e5ea1abc06ab126dd835d57ec463053b0cfbb702213d9b850f",
       },
       {
         label: "Serpent-128 decrypt",
         spec: serpent128DecryptSpec,
         stateHex: CIPHERTEXT_128,
         keyHex: KEY_128,
-        digest: "99:2be87b7333f61843cd42c0972305fd0055d1d121cf3512c2b198f77943d831b5",
+        digest: "567:43ec97285f926ab04b91221ca6b729a49d9968a8061b7e9624e66bbbca5d03b1",
       },
       {
         label: "Serpent-192 encrypt",
         spec: serpent192Spec,
         stateHex: PLAINTEXT_ZERO,
         keyHex: KEY_192,
-        digest: "99:90fff6fdff0173030ac143d682ecb501be5d81b5dd0492e82cdf1cb1b472b926",
+        digest: "567:5fec0e1aa5306b82da349396239e63f3be89ff2bc3d71bf50f6ea9ae981783df",
       },
       {
         label: "Serpent-192 decrypt",
         spec: serpent192DecryptSpec,
         stateHex: CIPHERTEXT_192,
         keyHex: KEY_192,
-        digest: "99:be1fa8242be58d94e1d2a9c71815cdd578c1ad156f6840a5c4b4c9fb050766f6",
+        digest: "567:8a709aef3690402bfaa76bd8d9a443c0e95677bf5790d44cf9962838495448b7",
       },
       {
         label: "Serpent-256 encrypt",
         spec: serpent256Spec,
         stateHex: PLAINTEXT_ZERO,
         keyHex: KEY_256,
-        digest: "99:fa73dc6d5391ffe86b9094752073cd1d2cf0274bbe532371ade07c1f0471ae62",
+        digest: "565:c3109a945452b7ec24e5a32cc916665e69bd4a906a138f5d712c43b6ffa50649",
       },
       {
         label: "Serpent-256 decrypt",
         spec: serpent256DecryptSpec,
         stateHex: CIPHERTEXT_256,
         keyHex: KEY_256,
-        digest: "99:fcfc4b82412dc2f930bcab542379a2f73269c25a9cfa3af04cbd3dbf35affbb4",
+        digest: "565:be7438998e0cde41b8415e32959bb7078797de6c855936ca6e2107f9a42716a1",
       },
     ];
 
     for (const g of GOLDEN) {
-      it(`${g.label} — 99-frame stream digest byte-equal to golden`, () => {
+      it(`${g.label} — frame-stream digest byte-equal to golden`, () => {
         expect(frameDigest(g.spec, g.stateHex, g.keyHex)).toBe(g.digest);
       });
     }
@@ -247,18 +250,20 @@ describe("runtime — ported dispatch, byte-native Serpent (Slice B3)", () => {
 
   // ─── (c) Round-key port insertion order ──────────────────────────────
 
-  describe("(c) serpent.key-expansion@1 emits 33 round keys in insertion order", () => {
+  describe("(c) the decomposed schedule's publish tail emits 33 round keys in insertion order", () => {
     it("aux Map iteration preserves roundKey.0 → roundKey.32 ordering under ported", () => {
       const trace = runSpec(serpent128Spec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(PLAINTEXT_ZERO)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(KEY_128)]]),
       });
 
-      // Find the key-expansion frame (typically frame 0 — the schedule runs
-      // once at the start of every Serpent spec). Locating by stepType keeps
-      // the test robust to any future leading aux-load additions.
-      const ksFrame = trace.frames.find((f) => f.stepType === "serpent.key-expansion@1");
-      if (!ksFrame) throw new Error("expected one serpent.key-expansion@1 frame");
+      // K3a: the round-key fan-out moved from the monolithic
+      // `serpent.key-expansion@1` frame to the decomposed schedule's
+      // B-minimal publish tail (`serpent.publish-round-keys@1`, leaf id
+      // `key-schedule.publish`). Locating by stepType keeps the assertion on
+      // the single frame that carries the 33-key auxWritten fan-out.
+      const ksFrame = trace.frames.find((f) => f.stepType === "serpent.publish-round-keys@1");
+      if (!ksFrame) throw new Error("expected one serpent.publish-round-keys@1 frame");
 
       const keys = [...ksFrame.auxWritten.keys()];
       expect(keys.length).toBe(33);

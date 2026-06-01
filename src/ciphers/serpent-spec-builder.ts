@@ -13,7 +13,8 @@
  * or round structure.
  */
 
-import type { CipherSpec, StepNode } from "../core/types";
+import type { CipherSpec } from "../core/types";
+import { buildSerpentKeyScheduleNative } from "./serpent-key-schedule-builder-native";
 import { buildSerpentDecryptBody, buildSerpentEncryptBody } from "./serpent-round-builder";
 
 export type SerpentDirection = "encrypt" | "decrypt";
@@ -28,16 +29,12 @@ export const buildSerpentSpec = (
   const id = `serpent-${keyBits}${dirTag}@1`;
   const name = `Serpent-${keyBits}${direction === "decrypt" ? " (decrypt)" : ""}`;
 
-  const keyExpansion: StepNode = {
-    kind: "step",
-    id: "key-expansion",
-    type: "serpent.key-expansion@1",
-    params: {
-      keyAuxName: "key",
-      outputPrefix: "roundKey",
-      keyByteLength,
-    },
-  };
+  // Decomposed (port-native) key schedule — K3a (2026-06-02). Replaces the
+  // monolithic `serpent.key-expansion@1` leaf with a visible tree of
+  // primitives that publishes byte-identical `aux["roundKey.0..32"]`. The
+  // `serpent.key-expansion@1` executor is KEPT registered as the KAT oracle +
+  // back-compat for saved specs; new specs route through the builder.
+  const keySchedule = buildSerpentKeyScheduleNative(keyByteLength);
 
   const body = direction === "encrypt" ? buildSerpentEncryptBody() : buildSerpentDecryptBody();
 
@@ -49,6 +46,6 @@ export const buildSerpentSpec = (
       plaintext: { shape: "bytes" },
       key: { byteLength: keyByteLength },
     },
-    steps: [keyExpansion, ...body],
+    steps: [keySchedule, ...body],
   };
 };

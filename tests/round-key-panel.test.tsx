@@ -240,9 +240,18 @@ describe("<RoundKeyPanel /> against a real Serpent-128 trace (high-count)", () =
     __resetRoundKeyPanelOverrideForTests();
   });
 
+  // K3a (2026-06-02): Serpent's key schedule was decomposed, so the round-key
+  // writes happen at the `key-schedule.publish` tail (its auxWritten holds
+  // every roundKey.N) rather than the old monolithic `serpent.key-expansion@1`
+  // frame[0]. The panel's `isRelevantFrame` gate fires only on a frame "about"
+  // the schedule — select the publish frame so it opens. Same retarget the
+  // Speck (K2a) and AES (K1a) blocks above already use.
+  const publishFrame = (trace: ReturnType<typeof seedSerpent128Trace>) =>
+    trace.frames.find((f) => f.stepId === "key-schedule.publish") ?? null;
+
   it("renders 33 round-key cells in one ribbon at 16B each", () => {
     const trace = seedSerpent128Trace();
-    const { container } = render(() => <RoundKeyPanel frame={trace.frames[0] ?? null} />);
+    const { container } = render(() => <RoundKeyPanel frame={publishFrame(trace)} />);
     const ribbons = container.querySelectorAll(".round-key-ribbon");
     expect(ribbons.length).toBe(1);
     // Serpent: 33 round keys (K_0 through K_32, one more than the 32-round
@@ -253,7 +262,7 @@ describe("<RoundKeyPanel /> against a real Serpent-128 trace (high-count)", () =
 
   it("uses the TinyMatrix render path (not the fallback strip) for 16-byte keys", () => {
     const trace = seedSerpent128Trace();
-    const { container } = render(() => <RoundKeyPanel frame={trace.frames[0] ?? null} />);
+    const { container } = render(() => <RoundKeyPanel frame={publishFrame(trace)} />);
     // All 33 cells take the TinyMatrix branch — 16 × 33 = 528 tiny cells.
     // The fallback strip class must be entirely absent.
     expect(container.querySelectorAll(".tiny-matrix").length).toBe(33);

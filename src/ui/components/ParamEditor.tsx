@@ -279,6 +279,18 @@ export const ParamEditor = (props: Props) => {
               */}
               <PublishRoundKeysBlock step={getStep()} />
             </Match>
+            <Match when={getStep().type === "serpent.publish-round-keys@1"}>
+              {/*
+                K3a (2026-06-02): the Serpent publish tail uses a `count`
+                param (fixed 33), not AES/Speck's `rounds`, so it gets a thin
+                dedicated read-only block rather than reusing
+                PublishRoundKeysBlock (which renders `rounds + 1`).
+              */}
+              <SerpentPublishRoundKeysBlock step={getStep()} />
+            </Match>
+            <Match when={getStep().type === "serpent.key-sbox@1"}>
+              <SerpentKeySboxBlock step={getStep()} />
+            </Match>
             <Match when={getStep().type === "pad-with-byte@1"}>
               <PadWithByteBlock step={getStep()} matchingCount={matchingSteps()} />
             </Match>
@@ -1029,6 +1041,64 @@ const PublishRoundKeysBlock = (props: { step: StepLeaf }) => {
         Writes the derived round keys into the aux map for the AddRoundKey steps. The interesting
         math is the recurrence leaves above this tail; these params are structural and not meant to
         be edited.
+      </p>
+    </>
+  );
+};
+
+// ─── Serpent key-schedule decomposition blocks (K3a) ──────────────────────
+//
+// The decomposed Serpent key schedule introduces two leaf step types beyond
+// the shared port-native primitives:
+//   - `serpent.publish-round-keys@1` — the B-minimal aux-publish tail. Uses a
+//     `count` param (fixed 33), distinct from AES/Speck's `rounds`, so it gets
+//     its own read-only block rather than reusing PublishRoundKeysBlock.
+//   - `serpent.key-sbox@1` — the per-round-key bitsliced S-box + IP. Single
+//     `sboxIndex` param; read-only (the builder derives it as (35-i) mod 8).
+
+const SerpentPublishRoundKeysBlock = (props: { step: StepLeaf }) => {
+  const params = (): { outputPrefix?: string; count?: number } => props.step.params as never;
+  const count = (): number => params().count ?? 33;
+  const prefix = (): string => params().outputPrefix ?? "roundKey";
+  return (
+    <>
+      <dl class="param-scalars">
+        <div class="param-scalar-row">
+          <dt>Aux prefix (write)</dt>
+          <dd>{prefix()}</dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Round keys</dt>
+          <dd>
+            {count()} keys ({prefix()}.0 … {prefix()}.{count() - 1})
+          </dd>
+        </div>
+      </dl>
+      <p class="muted small">
+        Writes the 33 derived Serpent round keys into the aux map for the AddRoundKey steps. The
+        interesting math is the recurrence + per-group S-box/IP leaves above this tail; these params
+        are structural and not meant to be edited.
+      </p>
+    </>
+  );
+};
+
+const SerpentKeySboxBlock = (props: { step: StepLeaf }) => {
+  const params = (): { sboxIndex?: number } => props.step.params as never;
+  const sboxIndex = (): number => params().sboxIndex ?? 0;
+  return (
+    <>
+      <dl class="param-scalars">
+        <div class="param-scalar-row">
+          <dt>S-box</dt>
+          <dd>S{sboxIndex()}</dd>
+        </div>
+      </dl>
+      <p class="muted small">
+        Applies the bitsliced forward Serpent S-box S{sboxIndex()} to one group of four prekey
+        words, then the Initial Permutation, producing one 16-byte round key. The S-box index walks
+        down the table with wraparound (group i uses S₍₃₅₋ᵢ₎ ₘₒ𝒹 ₈); it is derived structurally by
+        the key-schedule builder, not edited here.
       </p>
     </>
   );

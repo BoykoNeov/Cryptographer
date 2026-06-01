@@ -90,15 +90,28 @@ describe.each(variants)("$name encrypt/decrypt round-trip", (v) => {
 });
 
 describe.each(variants)("$name trace structure", (v) => {
-  it("emits the expected frame count (1 key-expansion + 98 body = 99)", () => {
+  it("emits the expected frame count (decomposed key schedule + 98 body)", () => {
     // Body = IP + 31 normal rounds (3 leaves each) + 1 final round (3 leaves)
-    //        + FP = 1 + 93 + 3 + 1 = 98. Plus key-expansion → 99 leaf frames.
-    // Group nodes don't emit their own frames — only the leaves inside them do.
+    //        + FP = 1 + 93 + 3 + 1 = 98. Group nodes don't emit their own
+    //        frames — only the leaves inside them do.
+    //
+    // K3a (2026-06-02): the single `serpent.key-expansion@1` frame became the
+    // decomposed `buildSerpentKeyScheduleNative` group's many leaves:
+    //   load-key (1)
+    //   + pad-const + pad (2, only for 16/24-byte keys; 0 for 32-byte)
+    //   + input-codec (1) + master-split (1) + phi (1)
+    //   + 132 iterations × (round-const + xor + rotate = 3) = 396
+    //   + 33 groups × (concat + key-sbox = 2) = 66
+    //   + publish (1)
+    // = 467 (32-byte key) or 469 (16/24-byte key, +2 pad leaves).
+    // So 565 total for Serpent-256, 567 for Serpent-128/192.
+    const keyByteLen = v.keyHex.length / 2;
+    const scheduleFrames = keyByteLen < 32 ? 469 : 467;
     const trace = runSpec(v.encryptSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex("00000000000000000000000000000000")),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex(v.keyHex)]]),
     });
-    expect(trace.frames.length).toBe(99);
+    expect(trace.frames.length).toBe(scheduleFrames + 98);
   });
 
   it("produces 33 round keys in aux, each 16 bytes", () => {
@@ -130,30 +143,38 @@ describe.each(variants)("$name trace structure", (v) => {
   });
 });
 
-describe("Serpent rejects malformed inputs", () => {
-  it("Serpent-128 rejects a 15-byte key", () => {
-    expect(() =>
-      runSpec(serpent128Spec, buildDefaultRegistry(), {
-        initialState: makeBytesState(bytesFromHex("00000000000000000000000000000000")),
-        initialAux: new Map<string, AuxValue>([
-          ["key", bytesFromHex("000102030405060708090a0b0c0d0e")],
-        ]),
-        // Serpent runs port-native (key-expansion included since Slice 5.2),
-        // so the executor's key-length validation fires under ported dispatch
-        // — under flag-off the spec would throw "requires portedDispatchEnabled".
-      }),
-    ).toThrow(/keyByteLength=16 but aux key is 15 bytes|key must be 16, 24, or 32 bytes/);
+describe("Serpent coerces malformed-length keys (warn-and-run, not reject)", () => {
+  // K3a (2026-06-02): the monolithic `serpent.key-expansion@1` executor did a
+  // HARD key-length cross-check and threw on a mismatch. The decomposed
+  // schedule loads the master key via `aux-load-bytes@1({ byteLength })`, and
+  // the runtime's Slice 1.12 port-length coercion silently pads/truncates a
+  // mismatched aux key to the declared length and RUNS. This is the
+  // universal-port plan's deliberate "warn-and-run coercion" posture
+  // ("permissiveness IS the pedagogy") — consistent with the AES and Speck
+  // decompositions, which likewise dropped their monoliths' length checks.
+  // So a wrong-length key no longer throws; it produces a (16-byte) result
+  // from the coerced key. We pin THAT behavior rather than deleting coverage.
+  it("Serpent-128 coerces a 15-byte key and still produces a 16-byte block", () => {
+    const trace = runSpec(serpent128Spec, buildDefaultRegistry(), {
+      initialState: makeBytesState(bytesFromHex("00000000000000000000000000000000")),
+      initialAux: new Map<string, AuxValue>([
+        ["key", bytesFromHex("000102030405060708090a0b0c0d0e")],
+      ]),
+    });
+    expect(trace.finalState.shape).toBe("bytes");
+    if (trace.finalState.shape !== "bytes") return;
+    expect(trace.finalState.bytes.length).toBe(16);
   });
 
-  it("Serpent-256 rejects a 16-byte key (spec declares 32)", () => {
-    expect(() =>
-      runSpec(serpent256Spec, buildDefaultRegistry(), {
-        initialState: makeBytesState(bytesFromHex("00000000000000000000000000000000")),
-        initialAux: new Map<string, AuxValue>([
-          ["key", bytesFromHex("000102030405060708090a0b0c0d0e0f")],
-        ]),
-        // Port-native since Slice 5.2 — validation fires under ported dispatch.
-      }),
-    ).toThrow(/keyByteLength=32 but aux key is 16 bytes/);
+  it("Serpent-256 coerces a 16-byte key (spec declares 32) and still produces a 16-byte block", () => {
+    const trace = runSpec(serpent256Spec, buildDefaultRegistry(), {
+      initialState: makeBytesState(bytesFromHex("00000000000000000000000000000000")),
+      initialAux: new Map<string, AuxValue>([
+        ["key", bytesFromHex("000102030405060708090a0b0c0d0e0f")],
+      ]),
+    });
+    expect(trace.finalState.shape).toBe("bytes");
+    if (trace.finalState.shape !== "bytes") return;
+    expect(trace.finalState.bytes.length).toBe(16);
   });
 });

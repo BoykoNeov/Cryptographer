@@ -19,10 +19,7 @@
  * `tests/des-key-schedule-explorer.test.tsx`.)
  */
 
-import { buildDefaultRegistry } from "@/ciphers/default-registry";
-import { serpent128Spec } from "@/ciphers/serpent-128";
-import { runSpec } from "@/core/runtime";
-import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
+import { bytesFromHex } from "@/core/state/bytes";
 import type { AuxValue, TraceFrame } from "@/core/types";
 import { KeyScheduleExplorer } from "@/ui/components/KeyScheduleExplorer";
 import { __resetByteFormatForTests } from "@/ui/stores/format";
@@ -30,25 +27,24 @@ import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const SERPENT128_KEY = "00112233445566778899aabbccddeeff";
-const SERPENT128_PT = "00112233445566778899aabbccddeeff";
 
-const findFrameByStepType = (
-  spec: typeof serpent128Spec,
-  initialAux: Map<string, AuxValue>,
-  initialState: ReturnType<typeof makeBytesState>,
-  predicate: (stepType: string) => boolean,
-): TraceFrame => {
-  // Serpent's round body is port-native (B3) → the spec requires ported
-  // dispatch; `runSpec` defaults to it. Lifted-legacy steps run via the
-  // adapter to identical frames.
-  const trace = runSpec(spec, buildDefaultRegistry(), {
-    initialState,
-    initialAux,
-  });
-  const f = trace.frames.find((fr) => predicate(fr.stepType));
-  if (!f) throw new Error("no matching frame in trace");
-  return f;
-};
+// K3a (2026-06-02): Serpent's key schedule was decomposed, so a shipped
+// Serpent spec no longer emits a `serpent.key-expansion@1` frame — the
+// monolithic executor survives ONLY as the KAT oracle + back-compat. The
+// KeyScheduleExplorer's Serpent branch is DEFERRED for retirement (a later
+// slice), so this UI-dispatch test keeps exercising it by SYNTHESIZING the
+// monolithic frame directly (same shape as the error-stub test below, but with
+// the master key present in `auxRead`). This pins the explorer's render path
+// independently of which leaf a shipped spec uses.
+const serpentKeyExpansionFrame = (keyHex: string): TraceFrame => ({
+  index: 0,
+  path: [],
+  stepId: "key-expansion",
+  stepType: "serpent.key-expansion@1",
+  params: { keyAuxName: "key", outputPrefix: "roundKey", keyByteLength: 16 },
+  auxRead: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
+  auxWritten: new Map(),
+});
 
 describe("<KeyScheduleExplorer /> — Serpent branch", () => {
   beforeEach(() => __resetByteFormatForTests());
@@ -58,12 +54,7 @@ describe("<KeyScheduleExplorer /> — Serpent branch", () => {
   });
 
   it("renders the multi-stage pipeline with 4 <details> sections for Serpent-128", () => {
-    const frame = findFrameByStepType(
-      serpent128Spec,
-      new Map<string, AuxValue>([["key", bytesFromHex(SERPENT128_KEY)]]),
-      makeBytesState(bytesFromHex(SERPENT128_PT)),
-      (t) => t.startsWith("serpent.key-expansion"),
-    );
+    const frame = serpentKeyExpansionFrame(SERPENT128_KEY);
     const { container } = render(() => <KeyScheduleExplorer frame={frame} />);
     expect(container.querySelector(".key-schedule-serpent")).not.toBeNull();
     // Four sections: pad, prekey-init, recurrence, sbox-groups+IP.
@@ -72,24 +63,14 @@ describe("<KeyScheduleExplorer /> — Serpent branch", () => {
   });
 
   it("renders 132 recurrence rows", () => {
-    const frame = findFrameByStepType(
-      serpent128Spec,
-      new Map<string, AuxValue>([["key", bytesFromHex(SERPENT128_KEY)]]),
-      makeBytesState(bytesFromHex(SERPENT128_PT)),
-      (t) => t.startsWith("serpent.key-expansion"),
-    );
+    const frame = serpentKeyExpansionFrame(SERPENT128_KEY);
     const { container } = render(() => <KeyScheduleExplorer frame={frame} />);
     const recurrenceItems = container.querySelectorAll(".key-schedule-serpent-recurrence > li");
     expect(recurrenceItems.length).toBe(132);
   });
 
   it("renders 33 sbox-group rows (one per round key K_0..K_32)", () => {
-    const frame = findFrameByStepType(
-      serpent128Spec,
-      new Map<string, AuxValue>([["key", bytesFromHex(SERPENT128_KEY)]]),
-      makeBytesState(bytesFromHex(SERPENT128_PT)),
-      (t) => t.startsWith("serpent.key-expansion"),
-    );
+    const frame = serpentKeyExpansionFrame(SERPENT128_KEY);
     const { container } = render(() => <KeyScheduleExplorer frame={frame} />);
     const groups = container.querySelectorAll(".key-schedule-serpent-sbox-groups > li");
     expect(groups.length).toBe(33);
