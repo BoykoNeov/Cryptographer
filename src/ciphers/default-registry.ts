@@ -165,6 +165,12 @@ import {
   speckKeySchedulePortContract,
 } from "../steps/speck-key-schedule";
 import {
+  speckPublishRoundKeys,
+  speckPublishRoundKeysDoc,
+  speckPublishRoundKeysMeta,
+  speckPublishRoundKeysPortContract,
+} from "../steps/speck-publish-round-keys";
+import {
   speckRound,
   speckRoundDoc,
   speckRoundMeta,
@@ -402,6 +408,18 @@ export const buildDefaultRegistry = (): StepRegistry => {
     shape: speckKeySchedulePortContract,
     meta: speckKeyScheduleMeta,
     doc: speckKeyScheduleDoc,
+  });
+  // K2a (2026-06-01): the parallel-name Speck publish tail of the decomposed
+  // schedule. Cannot reuse `aes.publish-round-keys@1` — Speck emits `rounds`
+  // keys (not `rounds + 1`), and round-key byteLength is polymorphic across
+  // Speck variants (not hardcoded 16). One surviving `meta` in the K2
+  // decomposition; the recurrence math above it is pure port-native.
+  r.register("speck.publish-round-keys@1", {
+    kind: "ported",
+    executor: speckPublishRoundKeys,
+    shape: speckPublishRoundKeysPortContract,
+    meta: speckPublishRoundKeysMeta,
+    doc: speckPublishRoundKeysDoc,
   });
   r.register("speck.round@1", {
     kind: "ported",
