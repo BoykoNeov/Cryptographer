@@ -526,11 +526,104 @@ retarget, runtime-ported-dispatch, maybe narration), 1 doc comment in
 - `speckRoundKeyPortName(r)` already exported from
   `speck-publish-round-keys.ts` — reuse, don't duplicate `key${r}`.
 
-### K3 — Serpent / K4 — DES (sequenced after K2)
+### K3 — Serpent key-schedule decomposition (B-minimal)
 
-Same unroll pattern for Serpent (per-round constants → unroll); DES has none
-and is a different shape. Each its own KAT gate + advisor pass per
-[[feedback-iterative-slice-review]].
+> **Status: OPEN (B-minimal, per the K2d decision rule — no A gate).** Its own
+> advisor pass + KAT gate per [[feedback_iterative_slice_review]] before code.
+> Verify byte-equal against the in-repo `serpent.key-expansion@1` executor
+> (the oracle), NOT recalled crypto.
+
+**Oracle (the ground truth to byte-match):** `src/steps/serpent-key-expansion.ts`
+generates 33 round keys K_0..K_32 (16 bytes each) from a 128/192/256-bit master
+key (Anderson/Biham/Knudsen 1998 §2):
+1. Pad to 256 bits (`padded[keyByteLength]=0x01`; no-op for 32-byte keys).
+2. Decode 8 LE 32-bit prekey words `w_{-8}..w_{-1}`.
+3. Recurrence for `j=0..131`: `w_j = ROL(w_{j-8} ⊕ w_{j-5} ⊕ w_{j-3} ⊕ w_{j-1}
+   ⊕ φ ⊕ j, 11)`, `φ=0x9e3779b9` (same golden-ratio constant Speck/TEA use).
+4. Bitsliced S-box on each group of 4 prekeys; group `i` uses `S_{(35-i) mod 8}`
+   (index walks DOWN with wraparound — the classic off-by-one trap).
+5. Apply IP to each raw round key.
+
+**Decomposition shape (unroll, like K1/K2):**
+
+- **Seed + recurrence (clean, parallels K1/K2 ARX).** Pad via the
+  `aux-load-bytes@1(byteLength: keyByteLength)` + a constant-load `0x01` tail
+  when <32 bytes (or build the padded master at the codec boundary). Read 8 LE
+  32-bit prekey words via `split-bytes@1`. Each generated prekey `w_j` is one
+  unrolled iteration: `xor@1(inputCount: 6)` over `[w_{j-8}, w_{j-5}, w_{j-3},
+  w_{j-1}, φ-const, j-const]` → `rotate-bits-right@1(wordBits: 32, bits: 21)`
+  (ROL 11 = ROR 21). `φ` = one shared `constant-load@1`; the per-iteration index
+  `j` = a build-time `constant-load@1` (exactly K1's per-group Rcon idiom). The
+  four taps (lags 8/5/3/1) wire from prior iterations' outputs / the seed split —
+  a four-tap generalization of Speck's single `(m-1)` lag.
+- **S-box + IP per round key — THE load-bearing design call (verify, don't
+  assume).** The oracle applies the *bitsliced* S-box across 4 words then IP.
+  Decomposing the bitslice S-box as boolean gates (and/or/xor/not) would be
+  ~15-20 gates × 33 groups ≈ 600 leaves. **Hypothesis to verify byte-equal
+  against the oracle:** `IP(bitslice_Sbox(w)) == nibble_Sbox(IP(w))` — i.e. the
+  same step pair the round body already ships (`serpent.bit-permutation@1` for
+  IP, then `serpent.sub-bytes@1` with `S_{(35-i) mod 8}` per nibble). If it
+  holds, K3 reuses the round-body steps for a tiny, legible decomposition and a
+  real pedagogical payoff ("the schedule runs the SAME S-box the round body
+  does"). If it does NOT hold, fall back to either a dedicated key-schedule
+  S-box step or the gate decomposition (bigger; defer). **The byte-equal-to-
+  oracle decomposition test settles this empirically — author it FIRST.**
+- **Publish tail (B-minimal):** new `serpent.publish-round-keys@1` (parallel to
+  `aes.`/`speck.publish-round-keys@1`) — 33 keys × 16 bytes, `meta.auxWritePorts`
+  `key${i} → roundKey.${i}`. **Consumers (`serpent.add-round-key@1`) untouched.**
+  Note the divergence from the AES/Speck tails: 33 fixed keys (no `rounds`
+  param), `byteLength: 16` like AES (Speck's was 2) — reuse the AES publish block
+  if the param shape matches, else a thin sibling.
+- **Byte-order codec at the boundaries** (parallels K2): Serpent prekeys are LE
+  32-bit words; the recurrence math is on those words. A boundary codec leaf
+  (LE↔internal) may be needed so the `rotate-bits-right@1`/`xor@1` body operates
+  uniformly — settle the exact reading against the oracle, like K2's input/output
+  codecs.
+
+**S-box mirror-corruption hazard — THE K3-specific trap (K1 lesson re-applies).**
+If the key schedule reuses `serpent.sub-bytes@1`, the existing **class-2 "Sync
+inverse S_i to decrypt" mirror** (registered on `serpent.sub-bytes@1`, per
+`sboxIndex`) would broadcast the inverse table onto the key-schedule leaves on a
+UI click → **corrupt the decrypt key schedule** (the schedule uses the FORWARD
+S-box in BOTH directions, per the oracle: "same key schedule for encrypt and
+decrypt"). Invisible to the KAT gate (KATs run specs as authored). **Fix
+(mandatory, same as K1):** role-scope the mirror by leaf id (`isRoundBodyLeafId`
+vs `isKeyScheduleLeafId`) so round-body SubBytes keeps class-2 inverse and the
+key-schedule S-box leaves are NOT inverse-mirrored (forward-only); ship a
+corruption-guard test (`sync-serpent-sbox-inverse` leaves the key schedule
+untouched). **Alternative considered:** a dedicated `serpent.key-sbox@1` step
+type sidesteps the mirror entirely (no role-scoping) but loses the
+"same-S-box-as-the-round-body" pedagogy — the advisor pass decides reuse+scope
+(K1 precedent, pedagogy) vs dedicated step (simpler).
+
+**Blast radius:** rewire the 6 Serpent specs (`serpent-128/192/256{,-decrypt}.ts`
+via `serpent-spec-builder.ts`) to call a new
+`buildSerpentKeyScheduleNative(keyByteLength)` instead of the monolithic
+`serpent.key-expansion@1` leaf. Retarget aux-graph derivation tests
+(`serpent.key-expansion` leaf → `key-schedule` group). **KeyScheduleExplorer
+Serpent branch** (`src/ui/key-schedule-sim/serpent.ts` + parity test) — fate
+decided at the K3 gate (retire like K1's AES branch, since the frames are now in
+the trace, OR keep as a high-level summary). **Keep the `serpent.key-expansion@1`
+executor registered** as the KAT oracle + back-compat (K1 precedent; do NOT
+global-rename `key-expansion`). The decomposition test byte-matches its 33
+outputs.
+
+**Gate (crypto):** `serpent-vectors`, `serpent-roundtrip`,
+`serpent-key-schedule` byte-equal before/after, all three sizes × enc/dec; the
+new decomposition test pins published `roundKey.0..32` byte-equal to the oracle
+for all three key sizes. Graph smoke (throwaway Playwright) for legibility — but
+**no A-vs-B gate** (B-minimal is the rule).
+
+### K4 — DES key-schedule decomposition (B-minimal; sequenced after K3)
+
+DES's schedule is a **different shape** (no per-round arithmetic constant — PC-1
+→ 16 rounds of left-rotations on the two 28-bit halves → PC-2 selects 48 bits per
+round key). Decompose: PC-1 = `serpent.bit-permutation@1`-style `permute`/bit
+step; per-round the C/D halves rotate (a bit-rotate on 28-bit halves) and PC-2
+permutes → one `des.publish-round-keys@1` tail (16 keys × 6 bytes/48 bits),
+B-minimal, `des.xor-with-K` consumers untouched. No S-box in the DES schedule, so
+**no mirror hazard** (DES dodges K3's trap, like Speck did). Its own KAT gate
+(FIPS 46-3) + advisor pass. Full design deferred to K4 slice-open.
 
 ## Critical files
 
