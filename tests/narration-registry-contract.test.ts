@@ -116,7 +116,11 @@ describe("narration-registry coverage contract", () => {
     expect(NARRATION_NO_OP_ALLOWLIST.has("aes.key-expansion@1")).toBe(true);
     expect(NARRATION_NO_OP_ALLOWLIST.has("aes.key-expansion@2")).toBe(true);
     expect(NARRATION_NO_OP_ALLOWLIST.has("serpent.key-expansion@1")).toBe(true);
-    expect(NARRATION_NO_OP_ALLOWLIST.has("speck.key-schedule@1")).toBe(true);
+    // `speck.key-schedule@1` was on this allowlist until the K2c follow-up
+    // (2026-06-01) — the executor + its StepDocumentation were retired then,
+    // so the allowlist entry was dropped (an allowlist entry for an
+    // un-registered step type would be dead). The decomposed schedule's
+    // publish tail (`speck.publish-round-keys@1`) carries the parity entry.
   });
 
   it("allowlists Serpent's bit-level LINEAR transforms (byte-approximation too muddled)", () => {
@@ -129,27 +133,41 @@ describe("narration-registry coverage contract", () => {
     expect(NARRATION_NO_OP_ALLOWLIST.has("serpent.bit-permutation@1")).toBe(false);
   });
 
-  it("allowlist size: 6 irreducible + DES key-schedule + AES/Speck publish-round-keys", () => {
-    // Pins the current size:
-    //   - 6 permanent entries (4 key-expansion step types covered by
-    //     `<KeyScheduleExplorer />`, plus the 2 bit-level Serpent linear
-    //     transforms whose byte-level prose would mislead).
-    //   - `des.key-schedule@1` — the 6 round-body DES step types moved
-    //     OFF the allowlist in Phase 4 with dedicated narrators; only
-    //     the key schedule remains because its per-frame narration is
-    //     the wrong surface (multi-round PC-1 → 16 shifts → PC-2 walk).
-    //   - `aes.publish-round-keys@1` — the aux-publish tail of the decomposed
-    //     AES key schedule (key-schedule-decomposition K1a); an identity
-    //     passthrough whose per-frame value-prose is the wrong surface (the
-    //     narrated math is the recurrence leaves above it).
-    //   - `speck.publish-round-keys@1` — the same posture for the Speck32/64
-    //     decomposed schedule (key-schedule-decomposition K2a, 2026-06-01).
-    //   - The `feistel.toy-add-k@1` toy entry was removed in Slice 5.3e
-    //     with the Feistel scaffolding.
-    expect(NARRATION_NO_OP_ALLOWLIST.size).toBe(9);
-    expect(NARRATION_NO_OP_ALLOWLIST.has("des.key-schedule@1")).toBe(true);
-    expect(NARRATION_NO_OP_ALLOWLIST.has("aes.publish-round-keys@1")).toBe(true);
-    expect(NARRATION_NO_OP_ALLOWLIST.has("speck.publish-round-keys@1")).toBe(true);
+  it("allowlist contents are exactly the expected set (set-equality pin)", () => {
+    // Switched from a numeric `.size` pin to a `toEqual(new Set([...]))` set-
+    // equality assertion at the K2c follow-up (2026-06-01) per advisor pass:
+    // the size pin churned on every cipher decomposition (8 → 9 for K2a's
+    // publish tail, then 9 → 8 for K2c's monolith retire), each delta a
+    // one-line bump that added nothing the positive `has(...)` assertions
+    // didn't already cover. The set-equality assertion is one-time
+    // refactoring effort that pins the entire shape; K3 (Serpent
+    // decomposition) and K4 (DES decomposition) will touch the data array,
+    // not the assertion arithmetic.
+    //
+    // Current contents (5 permanent + 3 cipher-specific):
+    //   - 3 surviving key-expansion / key-schedule step types covered by
+    //     `<KeyScheduleExplorer />` (`aes.key-expansion@{1,2}` — the AES
+    //     branch is unreachable but the executors stay as FIPS oracle;
+    //     `serpent.key-expansion@1` — actively used). The Speck entry was
+    //     dropped at the K2c follow-up with its executor.
+    //   - 2 bit-level Serpent linear transforms whose byte-level prose
+    //     would mislead.
+    //   - `des.key-schedule@1` — multi-round PC-1 → shifts → PC-2 walk;
+    //     wrong surface for per-frame narration.
+    //   - `aes.publish-round-keys@1` and `speck.publish-round-keys@1` —
+    //     identity-passthrough aux-publish tails (decomposed-schedule K1a
+    //     and K2a); the math is the recurrence leaves above them.
+    const expected = new Set<string>([
+      "aes.key-expansion@1",
+      "aes.key-expansion@2",
+      "serpent.key-expansion@1",
+      "serpent.linear-transform@1",
+      "serpent.inv-linear-transform@1",
+      "des.key-schedule@1",
+      "aes.publish-round-keys@1",
+      "speck.publish-round-keys@1",
+    ]);
+    expect(NARRATION_NO_OP_ALLOWLIST).toEqual(expected);
     // Negative assertion: the 6 round-body DES step types must NOT be on
     // the allowlist after Phase 4 (would mean we forgot to register a
     // narrator and the contract test's coverage check would lie).

@@ -3,8 +3,7 @@ import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
-import type { AuxValue, CipherSpec, StepContext } from "@/core/types";
-import { speckKeySchedule } from "@/steps/speck-key-schedule";
+import type { AuxValue, CipherSpec } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -18,57 +17,124 @@ import { describe, expect, it } from "vitest";
  * (input-codec → master-split → (m-1) lag-chained ARX iterations → asymmetric
  * output codec → publish). The contract that makes this safe is that the
  * decomposed schedule publishes BYTE-IDENTICAL `aux["roundKey.0..21"]` to what
- * the monolith wrote, so the untouched round-body `speck.round@1` consumers see
- * the same round keys.
+ * the original Beaulieu et al. 2013 §3 recurrence prescribes, so the
+ * round-body `speck.round@1` consumers see canonical round keys.
  *
  * This test pins that contract directly: run each shipped Speck32/64 spec
  * (which now carries the decomposed schedule) and compare every published
- * round key, byte-for-byte, against the Beaulieu et al. 2013 §3-validated
- * monolithic `speckKeySchedule` executor used as the oracle. Critically: it
- * covers BOTH byte-order conventions (BE-paper and LE-NSA), since the codec
- * boundary handling is the K2-specific load-bearing design — the body math is
- * byte-order-invariant, but the published bytes ARE byte-order-dependent.
+ * round key, byte-for-byte, against an **inline reference implementation**
+ * of the Beaulieu §3 recurrence (formerly compared against the monolithic
+ * `speckKeySchedule` executor; that step type was fully retired at the K2c
+ * follow-up). The two recurrence implementations are independent: the
+ * decomposed schedule expresses the recurrence as a tree of port-native
+ * primitive frames; this oracle expresses it as straight-line TS. A
+ * mismatch would mean either the builder's primitive wiring is wrong or
+ * this oracle is wrong — both run in this file's tests, so a divergence
+ * surfaces before any cipher KAT fails. Critically: covers BOTH byte-order
+ * conventions (BE-paper and LE-NSA), since the codec boundary is the K2
+ * load-bearing design — the body math is byte-order-invariant, but the
+ * published bytes ARE byte-order-dependent.
  *
  * Speck32/64 constants (`m=4, wordBits=16, rounds=22, alpha=7, beta=2`) are
- * baked into the shipped specs. The legacy `speck.key-schedule@1` executor
- * stays registered for back-compat (per the K1 pattern), so this test can
- * use it directly as the parity oracle without reaching into a builder.
+ * baked into the shipped specs and into this oracle.
  */
 
-// The monolith executor ignores ctx; a minimal one satisfies the type.
-const CTX: StepContext = { stepId: "ref", path: [], aux: new Map() };
+// ─── Inline Beaulieu §3 reference (replaces the retired monolith oracle) ──
+//
+// The recurrence (Beaulieu et al. 2013 §3, with `i` the iteration index):
+//   l_{i+m-1} = (k_i + ROR(l_i, alpha)) ⊕ i
+//   k_{i+1}   = ROL(k_i, beta) ⊕ l_{i+m-1}
+// for i = 0..rounds-2. The cipher's round keys are k_0, k_1, …, k_{rounds-1}.
+//
+// Speck32/64 specifics: wordBits=16, m=4, alpha=7, beta=2, rounds=22 → 22
+// round keys, k_0 plus 21 iterations.
+//
+// Byte-order codec (matches `speck-word-codec.ts`):
+//   BE-paper memory layout = (l_{m-2}, …, l_0, k_0) BE-encoded per word
+//     → byte indices [6,7, 4,5, 2,3, 0,1] for m=4 (word reverse, no in-word swap)
+//   LE-NSA  memory layout = (k_0, l_0, …, l_{m-2}) LE-encoded per word
+//     → byte indices [1,0, 3,2, 5,4, 7,6] for m=4 (in-word byte-swap, no reverse)
+// Round-key output encoding matches the spec's byteOrder: BE-encoded for
+// BE-paper, LE-encoded for LE-NSA.
 
-/** Beaulieu Table 4.1 validated reference round keys via the monolithic
- *  executor. The schedule is identical for both byte orders at the
- *  word-value level; only the byte encoding of the master key + each round
- *  key changes per `byteOrder`. */
-const monolithRoundKeys = (
+const WORD_BITS = 16;
+const WORD_MASK = (1 << WORD_BITS) - 1;
+const M = 4;
+const ALPHA = 7;
+const BETA = 2;
+const ROUNDS = 22;
+
+const ror = (x: number, n: number): number => ((x >>> n) | (x << (WORD_BITS - n))) & WORD_MASK;
+const rol = (x: number, n: number): number => ((x << n) | (x >>> (WORD_BITS - n))) & WORD_MASK;
+
+/** Decode the 8-byte master key into [k_0, l_0, l_1, l_2] (logical word
+ *  order, plain 16-bit number values), accounting for the byteOrder
+ *  memory layout. */
+const decodeMasterKey = (
+  keyBytes: Uint8Array,
+  byteOrder: "be-paper" | "le-nsa",
+): readonly number[] => {
+  if (keyBytes.length !== M * 2) {
+    throw new Error(`expected ${M * 2} master-key bytes, got ${keyBytes.length}`);
+  }
+  // BE-paper: memory = (l_2, l_1, l_0, k_0) BE per word — so the LAST 2 bytes
+  // are k_0, the previous 2 are l_0, etc. Word indices reverse vs memory.
+  // LE-NSA: memory = (k_0, l_0, l_1, l_2) LE per word — so the FIRST 2 bytes
+  // are k_0 (low byte first), the next 2 are l_0, etc.
+  const words: number[] = [];
+  for (let i = 0; i < M; i++) {
+    if (byteOrder === "be-paper") {
+      const offset = (M - 1 - i) * 2;
+      const hi = keyBytes[offset];
+      const lo = keyBytes[offset + 1];
+      if (hi === undefined || lo === undefined) throw new Error("oob");
+      words.push(((hi << 8) | lo) & WORD_MASK);
+    } else {
+      const offset = i * 2;
+      const lo = keyBytes[offset];
+      const hi = keyBytes[offset + 1];
+      if (hi === undefined || lo === undefined) throw new Error("oob");
+      words.push(((hi << 8) | lo) & WORD_MASK);
+    }
+  }
+  return words; // [k_0, l_0, l_1, l_2]
+};
+
+/** Encode a 16-bit word value to 2 bytes per the spec's byteOrder. */
+const encodeRoundKeyWord = (w: number, byteOrder: "be-paper" | "le-nsa"): Uint8Array => {
+  const hi = (w >>> 8) & 0xff;
+  const lo = w & 0xff;
+  return byteOrder === "be-paper" ? new Uint8Array([hi, lo]) : new Uint8Array([lo, hi]);
+};
+
+/** Inline reference: run the Beaulieu §3 recurrence on the decoded master
+ *  key and emit `roundKey.0..roundKey.21` as byte-encoded round-key words. */
+const referenceRoundKeys = (
   keyBytes: Uint8Array,
   byteOrder: "be-paper" | "le-nsa",
 ): Map<string, Uint8Array> => {
-  const outputs = speckKeySchedule(
-    new Map([["masterKey", keyBytes]]),
-    {
-      keyAuxName: "key",
-      outputPrefix: "roundKey",
-      rounds: 22,
-      wordBits: 16,
-      m: 4,
-      alpha: 7,
-      beta: 2,
-      byteOrder,
-    },
-    CTX,
-  );
-  // The monolith emits `key0`..`key21` ports; turn that into roundKey.N for
-  // a direct compare against the decomposed schedule's aux publication.
-  const renamed = new Map<string, Uint8Array>();
-  for (const [k, v] of outputs) {
-    const m = /^key(\d+)$/.exec(k);
-    if (!m) throw new Error(`monolith oracle: unexpected port name ${k}`);
-    renamed.set(`roundKey.${m[1]}`, v);
+  const decoded = decodeMasterKey(keyBytes, byteOrder);
+  // l[0..m-2] are the (m-1) cross-iteration carries; k is the round-key
+  // accumulator. Pre-allocate `l` long enough for the (i + m - 1) writes
+  // that happen for i = 0 .. rounds-2.
+  const k: number[] = [decoded[0] as number];
+  const l: number[] = [];
+  for (let j = 0; j < M - 1; j++) l.push(decoded[j + 1] as number);
+
+  for (let i = 0; i < ROUNDS - 1; i++) {
+    const ki = k[i] as number;
+    const li = l[i] as number;
+    const lNext = ((ki + ror(li, ALPHA)) & WORD_MASK) ^ (i & WORD_MASK);
+    const kNext = rol(ki, BETA) ^ lNext;
+    l.push(lNext);
+    k.push(kNext);
   }
-  return renamed;
+
+  const out = new Map<string, Uint8Array>();
+  for (let r = 0; r < ROUNDS; r++) {
+    out.set(`roundKey.${r}`, encodeRoundKeyWord(k[r] as number, byteOrder));
+  }
+  return out;
 };
 
 type Case = {
@@ -101,13 +167,13 @@ const cases: ReadonlyArray<Case> = [
 
 describe("Speck32/64 — decomposed key schedule (K2a) publishes byte-identical round keys", () => {
   for (const c of cases) {
-    it(`${c.label}: roundKey.0..21 byte-equal to the monolithic oracle`, () => {
+    it(`${c.label}: roundKey.0..21 byte-equal to the inline Beaulieu §3 reference`, () => {
       const keyBytes = bytesFromHex(c.keyHex);
       const trace = runSpec(c.spec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(c.plaintextHex)),
         initialAux: new Map<string, AuxValue>([["key", keyBytes]]),
       });
-      const oracle = monolithRoundKeys(keyBytes, c.byteOrder);
+      const oracle = referenceRoundKeys(keyBytes, c.byteOrder);
 
       // Sanity: the oracle produces exactly 22 round-key entries.
       expect(oracle.size).toBe(22);

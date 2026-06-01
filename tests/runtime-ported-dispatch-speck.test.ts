@@ -1,16 +1,19 @@
 /**
- * Per-cipher dispatch + correctness pins for the three Speck step types.
+ * Per-cipher dispatch + correctness pins for the Speck round step types.
  *
  * History: lifted in Slice 1.6 of the universal-port-dataflow plan, then
  * taken **byte-native in Slice B2** (scaffolding-suppression Phase B,
  * 2026-05-30). The two ARX rounds (`speck.round@1`, `speck.round-inverse@1`)
  * are now true `PortedExecutor`s — Uint8Array in/out, no legacy fallback —
- * so every shipped Speck spec requires `portedDispatchEnabled: true`. The
- * **key-schedule went port-native too in Slice 5.2** (2026-05-31,
- * hybrid-ported: `speck.key-schedule@1` dropped its `legacy` fallback but
- * KEEPS `meta`), mirroring `aes.key-expansion@1`; the runtime projects
- * `aux[key] → masterKey` and `key${i} → aux[roundKey.${i}]`, so it still
- * writes the 22 round keys to aux byte-identically.
+ * so every shipped Speck spec requires ported dispatch.
+ *
+ * **Key-schedule history:** went port-native in Slice 5.2 (2026-05-31), then
+ * was **decomposed into port-native primitives at K2a** (2026-06-01), and
+ * finally the monolithic `speck.key-schedule@1` step type was **fully
+ * retired at the K2c follow-up** (2026-06-01). The decomposed schedule
+ * built by `buildSpeck32_64KeyScheduleNative` still writes the 22 round
+ * keys to `aux["roundKey.N"]` byte-identically via the meta-bearing
+ * `speck.publish-round-keys@1` tail — surface (c) below pins that.
  *
  * Because there is no longer a legacy single-thread path for the rounds,
  * the old "ported == legacy frame parity" surface is gone (it was vacuous
@@ -232,32 +235,25 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
 
   // ─── (d) Isolated native round ───────────────────────────────────────
 
-  describe("(d) per-primitive synthetic — key-schedule + one native round", () => {
-    // Two-step spec: the (port-native) schedule expands the master key, then a
-    // single port-native round consumes roundKey.0. Pins the native round
-    // in isolation — the cipher-level KAT (a) and full frame stream (b)
-    // layer 21 more rounds on top.
+  describe("(d) per-primitive synthetic — one native round consuming pre-seeded roundKey.0", () => {
+    // Single-step spec: a port-native round consumes `roundKey.0` from the
+    // initialAux map (pre-seeded with the Beaulieu Table 4.1 k_0 = 0x0100 in
+    // BE bytes). Pins the native round in isolation — the cipher-level KAT
+    // (a) and full frame stream (b) layer 21 more rounds on top, and the
+    // K2c decomposition parity test (`speck-32-64-key-schedule-decomposition.test.ts`)
+    // pins that the schedule produces this same byte value.
+    //
+    // K2c follow-up (2026-06-01): formerly this fixture instantiated a
+    // `speck.key-schedule@1` leaf as the first step; that step type was
+    // retired in the follow-up commit. Pre-seeding the round key in aux is
+    // strictly cleaner — it isolates the round's behavior from the schedule
+    // entirely (which is the test's stated goal anyway).
     const spec: CipherSpec = {
       id: "test-speck-one-round@1",
-      name: "Slice B2 — speck schedule + one native round synthetic",
+      name: "K2c follow-up — speck.round@1 with pre-seeded roundKey.0",
       stateShape: "bytes",
       inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 8 } },
       steps: [
-        {
-          kind: "step",
-          id: "schedule",
-          type: "speck.key-schedule@1",
-          params: {
-            keyAuxName: "key",
-            outputPrefix: "roundKey",
-            rounds: 22,
-            wordBits: 16,
-            m: 4,
-            alpha: 7,
-            beta: 2,
-            byteOrder: "be-paper",
-          },
-        },
         {
           kind: "step",
           id: "round.0",
@@ -274,14 +270,17 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
     };
 
     it("runs under ported dispatch and applies one ARX round to the plaintext", () => {
+      // roundKey.0 = k_0 = 0x0100 (paper) → BE-encoded bytes [0x01, 0x00].
+      // Identical to what the decomposed schedule publishes for the canonical
+      // BE-paper master key 1918111009080100; the K2c decomposition parity
+      // test pins THAT, this fixture pins the consumer half independently.
       const trace = runSpec(spec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(BE_PLAINTEXT)),
-        initialAux: new Map<string, AuxValue>([["key", bytesFromHex(BE_KEY)]]),
+        initialAux: new Map<string, AuxValue>([["roundKey.0", new Uint8Array([0x01, 0x00])]]),
       });
-      // schedule frame + one round frame.
-      expect(trace.frames.length).toBe(2);
-      const roundFrame = trace.frames[1];
-      if (!roundFrame) throw new Error("expected round frame at index 1");
+      expect(trace.frames.length).toBe(1);
+      const roundFrame = trace.frames[0];
+      if (!roundFrame) throw new Error("expected round frame at index 0");
       expect(roundFrame.stepId).toBe("round.0");
       expect(roundFrame.stepType).toBe("speck.round@1");
       // round.0 here consumes roundKey.0 — identical math to round.1 of the

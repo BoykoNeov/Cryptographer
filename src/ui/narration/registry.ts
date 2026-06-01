@@ -162,14 +162,13 @@ export const hasNarrationFn = (stepType: string): boolean => REGISTRY.has(stepTy
  *     `aes-key-schedule-decomposition.test.ts` and for loading pre-K1 saved
  *     docs — so they are aux-only no-op steps with no narration to write.
  *     (Slated for deletion in a future release per `docs/versioning.md`.)
- *   - **Speck key schedule** (`speck.key-schedule@1`) — analogous to the
- *     AES @1/@2 entries above: NO LONGER used by any shipped spec post-K2a
- *     (the Speck32/64 builder decomposes into a `key-schedule` GROUP of
- *     port-native leaves, each carrying its own `narrationOverride`). The
- *     monolithic executor survives registered as the KAT oracle for
- *     `speck-32-64-key-schedule-decomposition.test.ts` and for loading
- *     pre-K2 saved docs. Aux-only no-op; no per-frame value-prose to write.
- *     (Slated for deletion in a future release per `docs/versioning.md`.)
+ *   - **Speck key schedule** — the monolithic `speck.key-schedule@1` step
+ *     type was FULLY RETIRED at the K2c follow-up (2026-06-01): the executor,
+ *     its StepDocumentation, the file `src/steps/speck-key-schedule.ts`,
+ *     the registration in `default-registry.ts`, AND this allowlist entry
+ *     are all gone. The decomposed schedule's publish tail
+ *     (`speck.publish-round-keys@1`) holds the residual allowlist parity
+ *     with `aes.publish-round-keys@1`.
  *
  *   - **Bit-level Serpent linear transforms**
  *     (`serpent.linear-transform@1`, `serpent.inv-linear-transform@1`)
@@ -196,8 +195,6 @@ export const NARRATION_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
   // aux-only no-op executors kept as FIPS oracle / pre-K1 doc back-compat.
   "aes.key-expansion@1",
   "aes.key-expansion@2",
-  // Speck: aux-only schedule, not in the explorer; no per-frame value-prose.
-  "speck.key-schedule@1",
   // The aux-publish tail of the DECOMPOSED AES key schedule
   // (key-schedule-decomposition K1a). An identity passthrough that mirrors the
   // round keys into aux — per-frame value-prose is the wrong surface (the

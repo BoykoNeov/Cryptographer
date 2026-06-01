@@ -193,17 +193,36 @@ than a new pure-port aux-writer; a general `aux-store-bytes@1` is deferred).
 >    speck.round/speck.round-inverse) gone — FULL retirement. The K1 plan
 >    explicitly sequenced A as an "optional follow-on" separate from the
 >    spike; for Speck it now becomes **K2d** (below).
-> 2. **`SpeckKeyScheduleBlock` = retire now.** The fallback-only block
->    K2b kept around is gone (no shipped spec uses the legacy leaf;
->    palette-dropping a `speck.key-schedule@1` step now falls through to
->    the raw-JSON editor — acceptable for a near-dead path). The legacy
->    executor + StepDocumentation stay registered as the KAT oracle for
->    `tests/speck-32-64-key-schedule-decomposition.test.ts`. K2c retire
->    shipped in the K2c closure commit.
+ > 2. **`SpeckKeyScheduleBlock` = retire now.** Initial K2c closure
+>    (commit `347fbae`) retired the editor block only and kept the
+>    legacy executor registered as a KAT oracle. An **advisor pass on
+>    K2b+K2c flagged the partial-retire as diverging from the user's
+>    literal Q2 option-text** (which said "Delete the block + retire
+>    the speck.key-schedule@1 executor registration"). User re-confirmed
+>    full retire; the **K2c follow-up commit** then:
+>    - Deleted `src/steps/speck-key-schedule.ts` and the registration
+>      block in `default-registry.ts`.
+>    - Migrated `tests/speck-32-64-key-schedule-decomposition.test.ts`
+>      from the monolith-executor oracle to an **inline Beaulieu §3
+>      reference implementation** (decode master key per byteOrder →
+>      run the ROR/ADD/⊕/ROL recurrence → encode round keys per
+>      byteOrder). The decomposed schedule's published `roundKey.0..21`
+>      still byte-equal across BE/LE; the oracle is now an independent
+>      straight-line TS implementation of the same recurrence the
+>      decomposed primitives express graphically.
+>    - Rewired the runtime-dispatch (d) synthetic (`tests/runtime-ported-dispatch-speck.test.ts`)
+>      to pre-seed `roundKey.0` in initialAux rather than instantiating
+>      the retired step type.
+>    - Dropped `speck.key-schedule@1` from the narration allowlist and
+>      replaced the brittle size-pin (8→9 every K-slice churn) with a
+>      `toEqual(new Set([...]))` set-equality assertion that pins the
+>      whole allowlist shape — K3/K4 touch the data, not the arithmetic.
+>    - Refreshed stale doc comments in `default-registry.ts`,
+>      `narration/registry.ts`, `RoundKeyPanel.tsx`, and this plan.
 >
-> **K2c closure commit** = block retire + this status update + CHANGELOG
-> entry + throwaway smoke deleted per [[feedback_playwright_dormant]].
-> No behavior change beyond the editor-block deletion; gate stays green.
+> **K2c is now two commits.** The initial closure (`347fbae`) +
+> the K2c follow-up. Both share the same `[Unreleased]` block in the
+> CHANGELOG. Gate stays green across both.
 >
 > **K2d NOT STARTED.** A-topology rewrite for Speck — its own slice, its
 > own advisor pass, its own KAT gate per [[feedback_iterative_slice_review]].
@@ -352,45 +371,84 @@ ID space — container membership is rendering / collapse metadata, not
 a scoping rule), so cross-container reads "just work" — same mechanism
 the SHA-256 spec already uses for cross-group references.
 
-**Back-compat trade-off.** Pre-K2d saved Speck docs carry the legacy
-`speck.key-schedule@1` LEAF — the legacy executor still writes
-`aux["roundKey.N"]` directly, so those docs continue to encrypt /
-decrypt because the round-leaf executor reads the aux entry via the
-still-living `roundKeyAux` param. A pre-K2d-but-post-K2a saved doc (one
-carrying the K2a decomposed schedule) loses its round-key fan-out —
-publish no longer writes aux, rounds no longer read aux — so it'll
-break under load. Such a doc would have existed for ~hours between K2a
-ship (2026-06-01) and the K2d ship; treat as "loads, won't encrypt;
-re-select the cipher to regenerate the spec under the A topology."
+**Back-compat trade-off (post-K2c-follow-up framing).** The K2c
+follow-up fully retired the monolithic `speck.key-schedule@1`
+step type, so a pre-K2 saved Speck doc carrying that LEAF no longer
+loads. The K2a..K2d span is **a single un-released sub-phase under
+one `[Unreleased]` CHANGELOG section — no tagged release of the K2a
+state will ever exist**. That guarantee depends on K2d landing before
+any release tag is cut; if K2d slips, the guarantee weakens and a
+release manager will need to either (a) hold the tag, (b) restore the
+legacy executor under a deprecation flag, or (c) accept that pre-K2
+Speck docs are non-loadable in the next release. The K1c precedent
+(AES @1/@2 kept registered) is broken here, by user-and-advisor pick.
 
 **Open advisor questions for K2d:**
 
-- **Do `roundKeyAux` + `meta.auxReadPorts` survive as an optional
-  fallback** (preserving pre-K2d-decomposed-doc back-compat at the cost
-  of a deprecated-param surface), or fully retire (the cleaner contract
-  + cheap regenerate-from-cipher-selector escape hatch)?
-- **Re-target the K2a decomposition parity test.** The test currently
-  asserts `aux["roundKey.0..21"]` byte-equality vs the legacy monolith.
-  Under A those aux entries are gone; retarget to read the publish
-  leaf's per-port output values out of the trace frame (or roll the
-  parity into the round-by-round KAT byte-equal assertion, which
-  becomes the load-bearing oracle).
-- **Vectors tests' "produces all 22 round keys in aux" assertions** —
-  rewrite to assert "produces all 22 round keys on publish output ports"
-  (same trace-frame read), or delete (KAT covers it).
-- **Graph rendering smoke** — verify the 22 explicit port-flow wires
-  fold via `replicateHighFanoutSources` the way the K2c advisor verdict
-  predicted ("only relabel the same fan-out"), OR show a more legible
-  topology the K2c gate user expected to see. The smoke should capture
-  both possibilities and inform whether further graph-rendering tweaks
-  are needed.
+1. **Do `roundKeyAux` + `meta.auxReadPorts` survive as an optional
+   fallback** (preserving any in-the-wild non-loadable scenarios as
+   "loads but reads from aux") or fully retire? Cleaner posture argues
+   for full retire — under A the round's `roundKey` input always comes
+   from `portInputs`, so a fallback path would be dead code from day
+   one.
+
+2. **Decrypt-variant reverse-order port wiring.** Speck decrypt consumes
+   `roundKey.21, .20, …, .0` in that order. Under aux this was free
+   (the spec leaf names whichever aux entry it wants). Under A with
+   explicit `portInputs`, the decrypt builder has to wire `round.0.roundKey
+   ← publish.key21`, `round.1.roundKey ← publish.key20`, …, `round.21.roundKey
+   ← publish.key0` — 22 cross-wires in reverse. This is **exactly** the
+   topology risk the K1 plan flagged for A. The K2d graph smoke should
+   confirm the decrypt graph reads cleanly under `replicateHighFanoutSources`,
+   and not as a tangled cross-pattern.
+
+3. **`RoundKeyPanel.tsx` retarget.** The panel's `isRelevantFrame`
+   classifier reads `frame.auxRead` / `frame.auxWritten` on aux keys
+   matching `prefix.N`. Under A the round bodies no longer write or
+   read aux for the round keys (the `roundKey` port flows directly).
+   The K2c follow-up updated the panel's doc comment but the actual
+   classifier may quietly miss-classify Speck round frames if the
+   round step's frame `auxRead` is empty under A. Grep before the K2d
+   advisor pass: does the panel still light up correctly, or does it
+   need a `portInputs`-aware fallback (e.g., also check whether any
+   frame's port-input bytes match a known `prefix.N` value)? If the
+   panel goes dark for Speck under A, the user picks: retarget the
+   panel (worth doing), or accept (Speck never had a dedicated
+   `KeyScheduleExplorer` arm anyway, so the round-key ribbon is the
+   only schedule-aware UI surface — going dark for Speck is a regression).
+
+4. **K2a parity test retarget.** The test currently asserts
+   `aux["roundKey.0..21"]` byte-equality against the inline Beaulieu
+   §3 reference (just landed in the K2c follow-up). Under A those aux
+   entries don't exist; retarget to read the publish leaf's per-port
+   output values out of the trace frame's `portOutputs` map. **Pre-draft
+   decision** (advisor flagged it has a concrete answer): use the
+   trace-frame `portOutputs` read; don't roll into the KAT byte-equal.
+   The whole point of the parity test is to surface decomposition bugs
+   the KAT can't catch (a one-bit-off in iteration `i` that the next
+   iteration happens to cancel before round-1 consumes it).
+
+5. **Vectors tests' "produces all 22 round keys in aux" assertions** —
+   rewrite to assert "produces all 22 round keys on publish output
+   ports" (same trace-frame read), or delete (KAT covers it).
+
+6. **Graph rendering smoke.** Verify the 22 explicit port-flow wires
+   from `key-schedule.publish` to the 22 round consumers fold via
+   `replicateHighFanoutSources` the way the K2c B-defense argued (with
+   the advisor verdict "would only relabel the same fan-out"), OR show
+   a more legible topology the K2c gate user expected. Capture both
+   encrypt + decrypt variants (the decrypt reverse-wiring of Q2 is
+   where the risk concentrates). **Do not** re-cite the K2c B-defense
+   in K2d's `AskUserQuestion` framing as if A had been observed and
+   rejected — it hadn't been.
 
 **Files affected (estimate):** 3 step files
 (`speck-publish-round-keys.ts`, `speck-round.ts`, `speck-round-inverse.ts`),
 1 builder (`speck-32-64-builder.ts`), 1 param-editor block
-(`SpeckRoundBlock` — drop `roundKeyAux` row), 4-6 tests (vectors,
-decrypt, decomposition parity, round-key panel, runtime-ported-dispatch,
-maybe narration). Bigger than K2a's blast radius; KAT gate is the
+(`SpeckRoundBlock` — drop `roundKeyAux` row), 5-7 tests (vectors,
+decrypt, decomposition parity retarget, round-key panel retarget,
+runtime-ported-dispatch, maybe narration), 1 doc comment in
+`RoundKeyPanel.tsx`. Bigger than K2a's blast radius; KAT gate is the
 safety net.
 
 ### K3 — Serpent / K4 — DES (sequenced after K2)

@@ -95,10 +95,14 @@ export const __resetRoundKeyPanelOverrideForTests = (): void => {
  *
  * The read-or-write check is cipher-agnostic by construction — no
  * hardcoded list of step types, no dependency on the key-schedule-sim
- * registry (which only knows AES + Serpent today; Speck's
- * `speck.key-schedule@1` would otherwise be misclassified). A future
- * cipher whose schedule uses `prefix.N` aux naming automatically counts
- * on both sides.
+ * registry (which only knows AES + Serpent today). The Speck schedule
+ * was decomposed in K2a and its monolithic step type retired in the
+ * K2c follow-up (2026-06-01), so today no Speck frame produces a
+ * monolithic schedule write — the per-iteration ARX leaves' aux fan-out
+ * comes through the `key-schedule.publish` tail frame, which writes
+ * `roundKey.0..21` in one shot. The producer-side check picks that
+ * frame up unchanged. A future cipher whose schedule uses `prefix.N`
+ * aux naming automatically counts on both sides.
  *
  * Returns `false` when no frame is selected.
  */

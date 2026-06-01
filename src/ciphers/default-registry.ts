@@ -159,12 +159,6 @@ import {
   shiftBitsRightPortContract,
 } from "../steps/shift-bits-right";
 import {
-  speckKeySchedule,
-  speckKeyScheduleDoc,
-  speckKeyScheduleMeta,
-  speckKeySchedulePortContract,
-} from "../steps/speck-key-schedule";
-import {
   speckPublishRoundKeys,
   speckPublishRoundKeysDoc,
   speckPublishRoundKeysMeta,
@@ -393,22 +387,21 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // the `roundKey` port via `auxReadPorts`, the same projection it ran for
   // the lift adapter.
   //
-  // The **key-schedule is port-native since Slice 5.2** (2026-05-31): the
-  // cross-cutting key-schedule slice dropped the `legacy:` lift on all four
-  // ciphers at once (AES in Batch A, Speck/Serpent/DES here). `meta` is
-  // RETAINED — the runtime projects `aux[keyAuxName] → masterKey` and
-  // `key${i} → aux[${outputPrefix}.${i}]`, so the 22 round keys still land in
-  // aux exactly as before (frames byte-identical; only `portInputs`/
-  // `portOutputs` newly populate). Speck is NOT in `isKeyExpansionStepType`,
-  // so its frame now renders through PortFlowView rather than
-  // KeyScheduleExplorer.
-  r.register("speck.key-schedule@1", {
-    kind: "ported",
-    executor: speckKeySchedule,
-    shape: speckKeySchedulePortContract,
-    meta: speckKeyScheduleMeta,
-    doc: speckKeyScheduleDoc,
-  });
+  // The **monolithic `speck.key-schedule@1` step type is FULLY RETIRED at K2c
+  // follow-up (2026-06-01)** — the K2c gate's `AskUserQuestion` picked "retire
+  // now" with the option text spelling out executor-registration retirement;
+  // the initial K2c closure kept the executor as a KAT oracle for the
+  // decomposition test, but an advisor pass flagged the partial-retire as
+  // diverging from the user's literal pick. The follow-up commit deletes the
+  // step file, drops this registration, and migrates the parity test to an
+  // inline Beaulieu 2013 §3 reference implementation. No shipped Speck spec
+  // has used this leaf since K2a; the four BE/LE × encrypt/decrypt specs route
+  // through the decomposed `key-schedule` group built by
+  // `buildSpeck32_64KeyScheduleNative`. Palette-dropping the monolithic leaf
+  // is no longer possible; pre-K2 saved Speck docs carrying the leaf will fail
+  // to load (acceptable per the "K2a..K2d is a single un-released sub-phase,
+  // no tagged release of the K2a state will ever exist" invariant — see
+  // `docs/plans/key-schedule-decomposition.md` § K2d back-compat).
   // K2a (2026-06-01): the parallel-name Speck publish tail of the decomposed
   // schedule. Cannot reuse `aes.publish-round-keys@1` — Speck emits `rounds`
   // keys (not `rounds + 1`), and round-key byteLength is polymorphic across
