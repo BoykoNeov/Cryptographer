@@ -555,7 +555,11 @@ retarget, runtime-ported-dispatch, maybe narration), 1 doc comment in
 > emits a `serpent.key-expansion@1` frame — same state the AES branch entered at
 > K1c) → its formal retirement + any further blast-radius tidy is the K3b slice.
 > Behavioral note: malformed-key handling shifted from hard-reject to warn-and-
-> run coercion (via `aux-load-bytes@1`), consistent with K1/K2.
+> run coercion (via `aux-load-bytes@1`), consistent with K1/K2. **Graph smoke
+> (throwaway Playwright, deleted post-gate per [[feedback_playwright_dormant]]):
+> all 6 Serpent specs (128/192/256 × enc/dec) render in graph view with 0
+> console/page errors; the `key-schedule` group default-collapses (no
+> ~469-chip wall — collapsed leaf count < 200) and expands without throwing.**
 
 **Oracle (the ground truth to byte-match):** `src/steps/serpent-key-expansion.ts`
 generates 33 round keys K_0..K_32 (16 bytes each) from a 128/192/256-bit master
