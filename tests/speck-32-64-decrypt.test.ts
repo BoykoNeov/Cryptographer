@@ -57,12 +57,16 @@ describe("Speck32/64 decryption", () => {
     }
   });
 
-  it("inverse cipher emits 23 frames (1 schedule + 22 inverse rounds)", () => {
+  it("inverse cipher emits the decomposed schedule + 22 inverse rounds (152 frames in BE-paper)", () => {
+    // K2a (2026-06-01): identical frame-count math as the encrypt side (the
+    // forward key-schedule decomposition is shared across encrypt/decrypt).
+    // Decrypt consumes the round keys in reverse leaf order but the schedule
+    // itself runs forward, so the BE-paper frame count is the same 152.
     const trace = runSpec(speck32_64BeDecryptSpec, buildDefaultRegistry(), {
       initialState: makeBytesState(bytesFromHex("a86842f2")),
       initialAux: new Map<string, AuxValue>([["key", bytesFromHex("1918111009080100")]]),
     });
-    expect(trace.frames.length).toBe(23);
+    expect(trace.frames.length).toBe(152);
   });
 
   it("decrypt leaf 1 references roundKey.21; decrypt leaf 22 references roundKey.0", () => {

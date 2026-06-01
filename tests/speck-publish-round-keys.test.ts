@@ -50,26 +50,53 @@ describe("speck.publish-round-keys@1 — executor", () => {
   it("emits exactly `rounds` output ports (key0..key{rounds-1}), NOT rounds+1", () => {
     // The single most important structural pin vs the AES analog.
     const rounds = 22; // Speck32/64 production case
-    const outputs = speckPublishRoundKeys(makeInputs(rounds), {
-      outputPrefix: "roundKey",
-      rounds,
-    } as unknown as Json, ctx());
+    const outputs = speckPublishRoundKeys(
+      makeInputs(rounds),
+      {
+        outputPrefix: "roundKey",
+        rounds,
+      } as unknown as Json,
+      ctx(),
+    );
 
     expect(outputs.size).toBe(rounds);
     expect([...outputs.keys()]).toEqual([
-      "key0", "key1", "key2", "key3", "key4", "key5", "key6", "key7",
-      "key8", "key9", "key10", "key11", "key12", "key13", "key14",
-      "key15", "key16", "key17", "key18", "key19", "key20", "key21",
+      "key0",
+      "key1",
+      "key2",
+      "key3",
+      "key4",
+      "key5",
+      "key6",
+      "key7",
+      "key8",
+      "key9",
+      "key10",
+      "key11",
+      "key12",
+      "key13",
+      "key14",
+      "key15",
+      "key16",
+      "key17",
+      "key18",
+      "key19",
+      "key20",
+      "key21",
     ]);
   });
 
   it("identity passthrough: each output byte-equals its input", () => {
     const rounds = 5;
     const inputs = makeInputs(rounds);
-    const outputs = speckPublishRoundKeys(inputs, {
-      outputPrefix: "roundKey",
-      rounds,
-    } as unknown as Json, ctx());
+    const outputs = speckPublishRoundKeys(
+      inputs,
+      {
+        outputPrefix: "roundKey",
+        rounds,
+      } as unknown as Json,
+      ctx(),
+    );
 
     for (let r = 0; r < rounds; r++) {
       const name = speckRoundKeyPortName(r);
@@ -82,10 +109,14 @@ describe("speck.publish-round-keys@1 — executor", () => {
     // suite pins this across the codebase. Our executor inserts in
     // ascending r order; the resulting outputs map must reflect that.
     const rounds = 3;
-    const outputs = speckPublishRoundKeys(makeInputs(rounds), {
-      outputPrefix: "roundKey",
-      rounds,
-    } as unknown as Json, ctx());
+    const outputs = speckPublishRoundKeys(
+      makeInputs(rounds),
+      {
+        outputPrefix: "roundKey",
+        rounds,
+      } as unknown as Json,
+      ctx(),
+    );
     expect([...outputs.keys()]).toEqual(["key0", "key1", "key2"]);
   });
 
@@ -94,17 +125,25 @@ describe("speck.publish-round-keys@1 — executor", () => {
     // port shape declares no fixed byteLength, so both work without a
     // step-type change.
     const inputs2 = makeInputs(3, 2);
-    const out2 = speckPublishRoundKeys(inputs2, {
-      outputPrefix: "rk",
-      rounds: 3,
-    } as unknown as Json, ctx());
+    const out2 = speckPublishRoundKeys(
+      inputs2,
+      {
+        outputPrefix: "rk",
+        rounds: 3,
+      } as unknown as Json,
+      ctx(),
+    );
     expect((out2.get("key0") as Uint8Array).length).toBe(2);
 
     const inputs4 = makeInputs(3, 4);
-    const out4 = speckPublishRoundKeys(inputs4, {
-      outputPrefix: "rk",
-      rounds: 3,
-    } as unknown as Json, ctx());
+    const out4 = speckPublishRoundKeys(
+      inputs4,
+      {
+        outputPrefix: "rk",
+        rounds: 3,
+      } as unknown as Json,
+      ctx(),
+    );
     expect((out4.get("key0") as Uint8Array).length).toBe(4);
   });
 
@@ -112,10 +151,14 @@ describe("speck.publish-round-keys@1 — executor", () => {
     const inputs = makeInputs(3);
     inputs.delete("key1");
     expect(() =>
-      speckPublishRoundKeys(inputs, {
-        outputPrefix: "roundKey",
-        rounds: 3,
-      } as unknown as Json, ctx()),
+      speckPublishRoundKeys(
+        inputs,
+        {
+          outputPrefix: "roundKey",
+          rounds: 3,
+        } as unknown as Json,
+        ctx(),
+      ),
     ).toThrow(/input port "key1" must carry a round-key word/);
   });
 });
@@ -124,9 +167,9 @@ describe("speck.publish-round-keys@1 — executor", () => {
 
 describe("speck.publish-round-keys@1 — param validation", () => {
   it("throws when params is not an object", () => {
-    expect(() =>
-      speckPublishRoundKeys(new Map(), null as unknown as Json, ctx()),
-    ).toThrow(/params must be an object/);
+    expect(() => speckPublishRoundKeys(new Map(), null as unknown as Json, ctx())).toThrow(
+      /params must be an object/,
+    );
   });
 
   it("throws when outputPrefix is missing", () => {
@@ -143,19 +186,27 @@ describe("speck.publish-round-keys@1 — param validation", () => {
 
   it("throws when rounds is 0", () => {
     expect(() =>
-      speckPublishRoundKeys(new Map(), {
-        outputPrefix: "rk",
-        rounds: 0,
-      } as unknown as Json, ctx()),
+      speckPublishRoundKeys(
+        new Map(),
+        {
+          outputPrefix: "rk",
+          rounds: 0,
+        } as unknown as Json,
+        ctx(),
+      ),
     ).toThrow(/positive integer/);
   });
 
   it("throws when rounds is non-integer", () => {
     expect(() =>
-      speckPublishRoundKeys(new Map(), {
-        outputPrefix: "rk",
-        rounds: 22.5,
-      } as unknown as Json, ctx()),
+      speckPublishRoundKeys(
+        new Map(),
+        {
+          outputPrefix: "rk",
+          rounds: 22.5,
+        } as unknown as Json,
+        ctx(),
+      ),
     ).toThrow(/positive integer/);
   });
 });

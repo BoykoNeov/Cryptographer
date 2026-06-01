@@ -62,19 +62,23 @@ const LE_CIPHERTEXT = "f24268a8";
 
 // ─── Frame-stream helper ───────────────────────────────────────────────
 
-/** Run a Speck spec under ported dispatch and render its per-frame `"state"`
- *  output port as a `stepId=hex|…` stream for golden comparison. The two ARX
- *  rounds name their output port `"state"`, so `framePrimaryOutBytes` returns
- *  the honest per-round block byte-identical to the pre-5.3e `stateAfter`
- *  field. The aux-only key-schedule frame has NO `"state"` port (its outputs
- *  are `roundKey.*`), so it renders `(no-state)` — the honest "no state thread
- *  here" reading, replacing the old threaded-plaintext passthrough value. */
-const frameStream = (spec: CipherSpec, stateHex: string, keyHex: string): string => {
+/** Run a Speck spec under ported dispatch and render the per-ROUND `"state"`
+ *  output port as a `stepId=hex|…` stream for golden comparison.
+ *
+ *  K2a (2026-06-01): the key schedule decomposed from one monolithic frame
+ *  into ~130 port-native primitive frames, so the original "1 schedule frame +
+ *  22 round frames" stream is no longer well-defined for the schedule
+ *  portion. The schedule's byte-equality is pinned separately by the K2a
+ *  decomposition parity test — here we restrict the golden to the round
+ *  frames, which carry the cipher's round-by-round algebra that's the
+ *  load-bearing pedagogy regression check. */
+const roundFrameStream = (spec: CipherSpec, stateHex: string, keyHex: string): string => {
   const trace = runSpec(spec, buildDefaultRegistry(), {
     initialState: makeBytesState(bytesFromHex(stateHex)),
     initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
   });
   return trace.frames
+    .filter((f) => f.stepType === "speck.round@1" || f.stepType === "speck.round-inverse@1")
     .map((f) => {
       const out = framePrimaryOutBytes(f);
       return `${f.stepId}=${out ? hexFromBytes(out) : "(no-state)"}`;
@@ -129,12 +133,17 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
     });
   });
 
-  // ─── (b) Golden frame-stream pin (byte-equal to the pre-B2 lifted impl) ─
+  // ─── (b) Golden round-frame stream (byte-equal to the pre-B2 lifted impl) ─
 
-  describe("(b) full per-frame stateAfter stream matches the lifted golden", () => {
+  describe("(b) per-round stateAfter stream matches the lifted golden", () => {
     // Captured from the lifted (pre-B2) Speck and confirmed byte-identical
-    // to the native rewrite. 23 frames each (1 key-schedule + 22 rounds).
-    // Note the encrypt/decrypt symmetry: round-inverse.k recovers round.(22-k).
+    // through B2's port-native round rewrite. K2a (2026-06-01) decomposed the
+    // schedule into ~130 port-native frames, so the original "1 schedule
+    // frame at index 0" entry in the stream went away — but the 22 ROUND
+    // frames stay byte-equal because the published round-key aux entries
+    // are byte-equal (separately pinned by the K2a decomposition parity
+    // test). The encrypt/decrypt symmetry holds: round-inverse.k recovers
+    // round.(22-k).
     const GOLDEN: ReadonlyArray<{
       label: string;
       spec: CipherSpec;
@@ -148,7 +157,7 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
         stateHex: BE_PLAINTEXT,
         keyHex: BE_KEY,
         stream:
-          "key-schedule=(no-state)|round.1=5316f627|round.2=37dfef40|round.3=ccd271d1|round.4=0332c477|round.5=416450bb|round.6=6edf2c32|round.7=e786574e|round.8=a9c6f4ff|round.9=6db8be47|round.10=6111980f|round.11=cc25ac1b|round.12=aec51eab|round.13=44833e2f|round.14=9fbc6700|round.15=a6283a29|round.16=780b90af|round.17=202b6295|round.18=361fbc4a|round.19=172de607|round.20=7a67e278|round.21=3345baa6|round.22=a86842f2",
+          "round.1=5316f627|round.2=37dfef40|round.3=ccd271d1|round.4=0332c477|round.5=416450bb|round.6=6edf2c32|round.7=e786574e|round.8=a9c6f4ff|round.9=6db8be47|round.10=6111980f|round.11=cc25ac1b|round.12=aec51eab|round.13=44833e2f|round.14=9fbc6700|round.15=a6283a29|round.16=780b90af|round.17=202b6295|round.18=361fbc4a|round.19=172de607|round.20=7a67e278|round.21=3345baa6|round.22=a86842f2",
       },
       {
         label: "BE-paper decrypt",
@@ -156,7 +165,7 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
         stateHex: BE_CIPHERTEXT,
         keyHex: BE_KEY,
         stream:
-          "key-schedule=(no-state)|round-inverse.1=3345baa6|round-inverse.2=7a67e278|round-inverse.3=172de607|round-inverse.4=361fbc4a|round-inverse.5=202b6295|round-inverse.6=780b90af|round-inverse.7=a6283a29|round-inverse.8=9fbc6700|round-inverse.9=44833e2f|round-inverse.10=aec51eab|round-inverse.11=cc25ac1b|round-inverse.12=6111980f|round-inverse.13=6db8be47|round-inverse.14=a9c6f4ff|round-inverse.15=e786574e|round-inverse.16=6edf2c32|round-inverse.17=416450bb|round-inverse.18=0332c477|round-inverse.19=ccd271d1|round-inverse.20=37dfef40|round-inverse.21=5316f627|round-inverse.22=6574694c",
+          "round-inverse.1=3345baa6|round-inverse.2=7a67e278|round-inverse.3=172de607|round-inverse.4=361fbc4a|round-inverse.5=202b6295|round-inverse.6=780b90af|round-inverse.7=a6283a29|round-inverse.8=9fbc6700|round-inverse.9=44833e2f|round-inverse.10=aec51eab|round-inverse.11=cc25ac1b|round-inverse.12=6111980f|round-inverse.13=6db8be47|round-inverse.14=a9c6f4ff|round-inverse.15=e786574e|round-inverse.16=6edf2c32|round-inverse.17=416450bb|round-inverse.18=0332c477|round-inverse.19=ccd271d1|round-inverse.20=37dfef40|round-inverse.21=5316f627|round-inverse.22=6574694c",
       },
       {
         label: "LE-NSA encrypt",
@@ -164,7 +173,7 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
         stateHex: LE_PLAINTEXT,
         keyHex: LE_KEY,
         stream:
-          "key-schedule=(no-state)|round.1=27f61653|round.2=40efdf37|round.3=d171d2cc|round.4=77c43203|round.5=bb506441|round.6=322cdf6e|round.7=4e5786e7|round.8=fff4c6a9|round.9=47beb86d|round.10=0f981161|round.11=1bac25cc|round.12=ab1ec5ae|round.13=2f3e8344|round.14=0067bc9f|round.15=293a28a6|round.16=af900b78|round.17=95622b20|round.18=4abc1f36|round.19=07e62d17|round.20=78e2677a|round.21=a6ba4533|round.22=f24268a8",
+          "round.1=27f61653|round.2=40efdf37|round.3=d171d2cc|round.4=77c43203|round.5=bb506441|round.6=322cdf6e|round.7=4e5786e7|round.8=fff4c6a9|round.9=47beb86d|round.10=0f981161|round.11=1bac25cc|round.12=ab1ec5ae|round.13=2f3e8344|round.14=0067bc9f|round.15=293a28a6|round.16=af900b78|round.17=95622b20|round.18=4abc1f36|round.19=07e62d17|round.20=78e2677a|round.21=a6ba4533|round.22=f24268a8",
       },
       {
         label: "LE-NSA decrypt",
@@ -172,47 +181,49 @@ describe("runtime — ported dispatch, byte-native Speck (Slice B2)", () => {
         stateHex: LE_CIPHERTEXT,
         keyHex: LE_KEY,
         stream:
-          "key-schedule=(no-state)|round-inverse.1=a6ba4533|round-inverse.2=78e2677a|round-inverse.3=07e62d17|round-inverse.4=4abc1f36|round-inverse.5=95622b20|round-inverse.6=af900b78|round-inverse.7=293a28a6|round-inverse.8=0067bc9f|round-inverse.9=2f3e8344|round-inverse.10=ab1ec5ae|round-inverse.11=1bac25cc|round-inverse.12=0f981161|round-inverse.13=47beb86d|round-inverse.14=fff4c6a9|round-inverse.15=4e5786e7|round-inverse.16=322cdf6e|round-inverse.17=bb506441|round-inverse.18=77c43203|round-inverse.19=d171d2cc|round-inverse.20=40efdf37|round-inverse.21=27f61653|round-inverse.22=4c697465",
+          "round-inverse.1=a6ba4533|round-inverse.2=78e2677a|round-inverse.3=07e62d17|round-inverse.4=4abc1f36|round-inverse.5=95622b20|round-inverse.6=af900b78|round-inverse.7=293a28a6|round-inverse.8=0067bc9f|round-inverse.9=2f3e8344|round-inverse.10=ab1ec5ae|round-inverse.11=1bac25cc|round-inverse.12=0f981161|round-inverse.13=47beb86d|round-inverse.14=fff4c6a9|round-inverse.15=4e5786e7|round-inverse.16=322cdf6e|round-inverse.17=bb506441|round-inverse.18=77c43203|round-inverse.19=d171d2cc|round-inverse.20=40efdf37|round-inverse.21=27f61653|round-inverse.22=4c697465",
       },
     ];
 
     for (const g of GOLDEN) {
-      it(`${g.label} — 23 frames byte-equal to golden`, () => {
-        const stream = frameStream(g.spec, g.stateHex, g.keyHex);
-        expect(stream.split("|").length).toBe(23);
+      it(`${g.label} — 22 round frames byte-equal to golden`, () => {
+        const stream = roundFrameStream(g.spec, g.stateHex, g.keyHex);
+        expect(stream.split("|").length).toBe(22);
         expect(stream).toBe(g.stream);
       });
     }
   });
 
-  // ─── (c) Round-key port insertion order ──────────────────────────────
+  // ─── (c) Round-key publish insertion order ───────────────────────────
 
-  describe("(c) speck.key-schedule@1 emits 22 round keys in insertion order", () => {
-    it("aux Map iteration preserves roundKey.0 → roundKey.21 ordering under ported", () => {
+  describe("(c) speck.publish-round-keys@1 emits 22 round keys in insertion order", () => {
+    it("the publish tail's auxWritten preserves roundKey.0 → roundKey.21 ordering under ported", () => {
+      // K2a (2026-06-01): the round-key fan-out moved from the monolithic
+      // `speck.key-schedule@1` frame (which used to be frame 0) to the
+      // decomposed schedule's `key-schedule.publish` tail leaf. Same aux
+      // bindings, same insertion order, just emitted by a different leaf —
+      // and surrounded by ~130 sibling schedule frames that didn't exist
+      // pre-K2a.
       const trace = runSpec(speck32_64BeSpec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(BE_PLAINTEXT)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(BE_KEY)]]),
       });
 
-      // The first frame is the key-schedule leaf — pre-rounds, the
-      // entire 22-key emission happens in one frame. Pull it and inspect
-      // auxWritten's key order.
-      const f0 = trace.frames[0];
-      if (!f0) throw new Error("expected key-schedule frame at index 0");
-      expect(f0.stepType).toBe("speck.key-schedule@1");
+      const publishFrame = trace.frames.find((f) => f.stepId === "key-schedule.publish");
+      if (!publishFrame) throw new Error("expected key-schedule.publish frame");
+      expect(publishFrame.stepType).toBe("speck.publish-round-keys@1");
 
-      const keys = [...f0.auxWritten.keys()];
+      const keys = [...publishFrame.auxWritten.keys()];
       expect(keys.length).toBe(22);
       const expected: string[] = [];
       for (let i = 0; i < 22; i++) expected.push(`roundKey.${i}`);
       expect(keys).toEqual(expected);
 
       // Cross-check: each round-key value is the expected 2-byte
-      // Uint8Array (Speck32/64 wordBits=16). The key-schedule (port-native
-      // since Slice 5.2) writes raw round-key words; pinning that the ported path didn't
-      // accidentally widen a single Speck round key into another variant.
+      // Uint8Array (Speck32/64 wordBits=16). Pins that the decomposed
+      // schedule didn't accidentally widen a single Speck round key.
       for (const k of keys) {
-        const v = f0.auxWritten.get(k);
+        const v = publishFrame.auxWritten.get(k);
         expect(v).toBeInstanceOf(Uint8Array);
         expect((v as Uint8Array).length).toBe(2);
       }

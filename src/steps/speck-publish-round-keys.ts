@@ -72,9 +72,7 @@ const readParams = (params: Json): Params => {
     throw new Error("speck.publish-round-keys: params.outputPrefix must be a string");
   }
   if (typeof p.rounds !== "number" || !Number.isInteger(p.rounds) || p.rounds < 1) {
-    throw new Error(
-      "speck.publish-round-keys: params.rounds must be a positive integer (≥ 1)",
-    );
+    throw new Error("speck.publish-round-keys: params.rounds must be a positive integer (≥ 1)");
   }
   return { outputPrefix: p.outputPrefix, rounds: p.rounds };
 };
@@ -161,7 +159,8 @@ export const speckPublishRoundKeysMeta: ProjectionMetadata = {
 
 export const speckPublishRoundKeysDoc: StepDocumentation = {
   name: "Publish round keys (Speck)",
-  summary: "Write the derived Speck round-key words into the aux map (roundKey.0 … roundKey.{rounds-1}).",
+  summary:
+    "Write the derived Speck round-key words into the aux map (roundKey.0 … roundKey.{rounds-1}).",
   detail: `## Publish round keys (Speck)
 
 The tail of the decomposed Speck key schedule. The recurrence above this

@@ -255,6 +255,16 @@ export const ParamEditor = (props: Props) => {
             <Match when={getStep().type === "aes.publish-round-keys@1"}>
               <PublishRoundKeysBlock step={getStep()} />
             </Match>
+            <Match when={getStep().type === "speck.publish-round-keys@1"}>
+              {/*
+                K2a (2026-06-01): the Speck publish tail's params shape
+                (outputPrefix, rounds) is identical to AES's, so it reuses
+                PublishRoundKeysBlock unchanged. The structural deltas
+                (round-key count, byteLength) are in the executor + port
+                contract, not surfaced through the editor.
+              */}
+              <PublishRoundKeysBlock step={getStep()} />
+            </Match>
             <Match when={getStep().type === "pad-with-byte@1"}>
               <PadWithByteBlock step={getStep()} matchingCount={matchingSteps()} />
             </Match>
@@ -1863,7 +1873,13 @@ const BitOpBlock = (props: BlockProps) => {
 // That's a hard-error path with no pedagogical signal (the user sees the
 // cipher refuse to run, not a divergent digest). Locking matches the
 // existing pattern (BlockSizeBlock, AddRoundKeyBlock).
-const INPUT_COUNT_PARAM_TYPES = new Set(["xor@1", "and@1", "add-mod-32@1", "concat@1"]);
+const INPUT_COUNT_PARAM_TYPES = new Set([
+  "xor@1",
+  "and@1",
+  "add-mod-32@1",
+  "add-mod-16@1", // K2a (2026-06-01) — Speck schedule 16-bit modular addition.
+  "concat@1",
+]);
 
 const InputCountBlock = (props: { step: StepLeaf }) => {
   const params = (): { inputCount?: number } => props.step.params as never;
@@ -1875,6 +1891,8 @@ const InputCountBlock = (props: { step: StepLeaf }) => {
         return "Bitwise AND (∧)";
       case "add-mod-32@1":
         return "Modular add (+ mod 2³²)";
+      case "add-mod-16@1":
+        return "Modular add (+ mod 2¹⁶)";
       case "concat@1":
         return "Byte concatenation (‖)";
       default:

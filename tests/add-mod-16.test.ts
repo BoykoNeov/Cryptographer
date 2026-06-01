@@ -39,17 +39,33 @@ const emptyBytes = (): BytesState => ({ shape: "bytes", bytes: new Uint8Array() 
 describe("add-mod-16@1 — executor (direct invocation)", () => {
   describe("identity (zero is additive identity)", () => {
     it("x + 0 = x", () => {
-      expect(callAdd([[0x12, 0x34], [0x00, 0x00]])).toEqual([0x12, 0x34]);
+      expect(
+        callAdd([
+          [0x12, 0x34],
+          [0x00, 0x00],
+        ]),
+      ).toEqual([0x12, 0x34]);
     });
 
     it("0 + 0 + 0 = 0 (3-way zero)", () => {
-      expect(callAdd([[0, 0], [0, 0], [0, 0]])).toEqual([0, 0]);
+      expect(
+        callAdd([
+          [0, 0],
+          [0, 0],
+          [0, 0],
+        ]),
+      ).toEqual([0, 0]);
     });
   });
 
   describe("2-way basic addition (no carry)", () => {
     it("[0x00 01] + [0x00 02] = [0x00 03]", () => {
-      expect(callAdd([[0x00, 0x01], [0x00, 0x02]])).toEqual([0x00, 0x03]);
+      expect(
+        callAdd([
+          [0x00, 0x01],
+          [0x00, 0x02],
+        ]),
+      ).toEqual([0x00, 0x03]);
     });
 
     it("commutative: a + b = b + a", () => {
@@ -61,30 +77,55 @@ describe("add-mod-16@1 — executor (direct invocation)", () => {
     it("byte-level carry within word: [0x00 FF] + [0x00 01] = [0x01 00]", () => {
       // Single-word addition; carry from byte 1 into byte 0 lives inside
       // the 16-bit word and re-encodes naturally as BE.
-      expect(callAdd([[0x00, 0xff], [0x00, 0x01]])).toEqual([0x01, 0x00]);
+      expect(
+        callAdd([
+          [0x00, 0xff],
+          [0x00, 0x01],
+        ]),
+      ).toEqual([0x01, 0x00]);
     });
 
     it("high-byte add (no carry): [0x12 00] + [0x34 00] = [0x46 00]", () => {
-      expect(callAdd([[0x12, 0x00], [0x34, 0x00]])).toEqual([0x46, 0x00]);
+      expect(
+        callAdd([
+          [0x12, 0x00],
+          [0x34, 0x00],
+        ]),
+      ).toEqual([0x46, 0x00]);
     });
   });
 
   describe("carry-wrap (the core mod-2¹⁶ semantic)", () => {
     it("[0xFFFF] + [0x0001] = [0x0000]", () => {
       // The defining test for mod-2¹⁶ addition: max + 1 wraps to 0.
-      expect(callAdd([[0xff, 0xff], [0x00, 0x01]])).toEqual([0x00, 0x00]);
+      expect(
+        callAdd([
+          [0xff, 0xff],
+          [0x00, 0x01],
+        ]),
+      ).toEqual([0x00, 0x00]);
     });
 
     it("[0x8000] + [0x8000] = [0x0000] (high bit sum wraps)", () => {
       // 2^15 + 2^15 = 2^16 ≡ 0 (mod 2^16). Sign-extension trap check —
       // would fail if `decodeBE16` produced a negative number via the JS
       // signed-OR semantics. The `>>> 0` in `decodeBE16` prevents that.
-      expect(callAdd([[0x80, 0x00], [0x80, 0x00]])).toEqual([0x00, 0x00]);
+      expect(
+        callAdd([
+          [0x80, 0x00],
+          [0x80, 0x00],
+        ]),
+      ).toEqual([0x00, 0x00]);
     });
 
     it("[0xFFFF] + [0xFFFF] = [0xFFFE] (2-way max)", () => {
       // (2^16 - 1) + (2^16 - 1) = 2^17 - 2 ≡ 2^16 - 2 = 0xFFFE.
-      expect(callAdd([[0xff, 0xff], [0xff, 0xff]])).toEqual([0xff, 0xfe]);
+      expect(
+        callAdd([
+          [0xff, 0xff],
+          [0xff, 0xff],
+        ]),
+      ).toEqual([0xff, 0xfe]);
     });
   });
 
@@ -123,9 +164,12 @@ describe("add-mod-16@1 — executor (direct invocation)", () => {
       // This is the single most important sanity check on the per-word
       // loop boundary, doubly so because Speck32/64's block IS two 16-bit
       // words.
-      expect(callAdd([[0xff, 0xff, 0x00, 0x00], [0x00, 0x01, 0x00, 0x05]])).toEqual([
-        0x00, 0x00, 0x00, 0x05,
-      ]);
+      expect(
+        callAdd([
+          [0xff, 0xff, 0x00, 0x00],
+          [0x00, 0x01, 0x00, 0x05],
+        ]),
+      ).toEqual([0x00, 0x00, 0x00, 0x05]);
     });
 
     it("four 16-bit words: per-word add holds independently", () => {
@@ -143,7 +187,12 @@ describe("add-mod-16@1 — executor (direct invocation)", () => {
       // so logical k_0 = 0x0100, l_0 = 0x0908. ROR(0x0908, 7) over 16
       // bits = (0x0908 >> 7) | (0x0908 << 9) & 0xFFFF = 0x12 | 0x1000 =
       // 0x1012. Sum = 0x0100 + 0x1012 = 0x1112. BE-encoded: [0x11, 0x12].
-      expect(callAdd([[0x01, 0x00], [0x10, 0x12]])).toEqual([0x11, 0x12]);
+      expect(
+        callAdd([
+          [0x01, 0x00],
+          [0x10, 0x12],
+        ]),
+      ).toEqual([0x11, 0x12]);
     });
   });
 

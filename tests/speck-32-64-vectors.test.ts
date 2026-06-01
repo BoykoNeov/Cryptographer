@@ -33,13 +33,19 @@ describe("Speck32/64 (Beaulieu et al. 2013, Table 4.1)", () => {
       expect(hexFromBytes(trace.finalState.bytes)).toBe(expectedHex);
     });
 
-    it("emits one frame per leaf step (1 schedule + 22 rounds = 23)", () => {
+    it("emits one frame per leaf step (decomposed schedule + 22 rounds = 152)", () => {
+      // K2a (2026-06-01): the key schedule decomposed from a monolithic
+      // `speck.key-schedule@1` leaf into ~130 port-native primitive leaves
+      // (load-key + input-codec + master-split + 21 iterations × 6 leaves
+      // each + publish = 130 frames), plus 22 round leaves = 152 total in
+      // BE-paper mode. LE-NSA adds an output-concat + output-codec +
+      // 22 byte-slice leaves on top of the 130 → its frame count differs.
       const trace = runSpec(speck32_64BeSpec, buildDefaultRegistry(), {
         initialState: makeBytesState(bytesFromHex(plaintextHex)),
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
         // Speck rounds are port-native since B2 → the spec requires ported dispatch.
       });
-      expect(trace.frames.length).toBe(23);
+      expect(trace.frames.length).toBe(152);
     });
 
     it("produces all 22 round keys in aux", () => {
@@ -87,17 +93,29 @@ describe("Speck32/64 (Beaulieu et al. 2013, Table 4.1)", () => {
     });
   });
 
-  it("rejects keys with the wrong byte length", () => {
-    // 7-byte key instead of 8 — should throw a clear error from the schedule step.
-    const tooShort = bytesFromHex("19181110090801");
-    expect(() =>
-      runSpec(speck32_64BeSpec, buildDefaultRegistry(), {
-        initialState: makeBytesState(bytesFromHex("6574694c")),
-        initialAux: new Map<string, AuxValue>([["key", tooShort]]),
-        // Key-schedule is port-native since Slice 5.2 → the executor's
-        // length validation fires under ported dispatch (flag-off would throw
-        // "requires portedDispatchEnabled" before reaching it).
-      }),
-    ).toThrow(/8 bytes/);
+  it("emits a __coerce__ frame when keyed with the wrong byte length", () => {
+    // K2a behavior change (2026-06-01): the legacy monolith threw a
+    // descriptive `8 bytes` error from its own pre-condition check. The
+    // decomposed schedule reads the master key via `aux-load-bytes@1` which
+    // declares `byteLength: 8` on its output port; a wrong-sized aux value
+    // triggers the runtime's port-length coercion (pad/truncate) and emits
+    // a synthetic `__coerce__` frame the UI surfaces as a ⚠ badge. This is
+    // the universal-port architecture's stated "coerce is visible, not
+    // thrown" posture (see `coerce-timeline-badge.test.tsx`); the cipher
+    // runs to completion with garbled output rather than crashing.
+    // Picking a 7-byte value that's clearly NOT a prefix of the canonical key
+    // 1918111009080100, so however the runtime coerces (zero-pad vs truncate)
+    // it lands on a non-canonical 8-byte key and yields a non-canonical
+    // ciphertext.
+    const wrongLength = bytesFromHex("aabbccddeeff11"); // 7 bytes
+    const trace = runSpec(speck32_64BeSpec, buildDefaultRegistry(), {
+      initialState: makeBytesState(bytesFromHex("6574694c")),
+      initialAux: new Map<string, AuxValue>([["key", wrongLength]]),
+    });
+    const coerceFrames = trace.frames.filter((f) => f.stepType === "__coerce__");
+    expect(coerceFrames.length).toBeGreaterThan(0);
+    // The cipher completes but does NOT produce the canonical ciphertext.
+    if (trace.finalState.shape !== "bytes") return;
+    expect(hexFromBytes(trace.finalState.bytes)).not.toBe("a86842f2");
   });
 });

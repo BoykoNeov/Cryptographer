@@ -275,8 +275,11 @@ describe("applyPaddingScheme is a no-op for non-AES (non-matrix4x4-bytes) specs"
     // No padding-overlay leaves got inserted.
     expect(types).not.toContain("generic.pkcs7-pad@1");
     expect(types).not.toContain("generic.load-block@1");
-    // First leaf is still Speck's key-schedule, as in the canonical spec.
-    expect(types[0]).toBe("speck.key-schedule@1");
+    // K2a (2026-06-01): the schedule decomposed from a monolithic
+    // `speck.key-schedule@1` LEAF into a `key-schedule` GROUP, so it no
+    // longer shows up in topLevelLeafTypes. Check the canonical structure
+    // via the first top-level node's id instead (same pattern AES K1a uses).
+    expect(result.steps[0]?.id).toBe("key-schedule");
     // Input shape preserved (Speck consumes BytesState directly).
     expect(result.inputs.plaintext.shape).toBe("bytes");
   });
@@ -295,7 +298,9 @@ describe("applyPaddingScheme is a no-op for non-AES (non-matrix4x4-bytes) specs"
     };
     const result = applyPaddingScheme(tampered, "encrypt", "none");
     expect(topLevelLeafTypes(result)).not.toContain("generic.pkcs7-pad@1");
-    expect(topLevelLeafTypes(result)[0]).toBe("speck.key-schedule@1");
+    // K2a: the decomposed schedule is a group, not a leaf — check the
+    // first top-level node's id instead.
+    expect(result.steps[0]?.id).toBe("key-schedule");
   });
 });
 

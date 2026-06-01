@@ -23,6 +23,7 @@
 import type { CipherSpec, PortBinding, StepNode } from "../core/types";
 import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "../core/types";
 import type { SpeckByteOrder } from "../steps/speck-word-codec";
+import { buildSpeck32_64KeyScheduleNative } from "./speck-32-64-key-schedule-builder-native";
 
 // Tiny binding helper — mirrors the per-file `port()` in the AES/DES/ECB
 // builders (Phase 5 Slice 5.3b). `{ node, port }` is the sink-side edge a
@@ -51,23 +52,23 @@ export const buildSpeck32_64Spec = (
     direction === "decrypt" ? ", decrypt" : ""
   })`;
 
-  // The schedule step is identical for both directions. It writes
-  // roundKey.0 … roundKey.{ROUNDS-1} to aux.
-  const keySchedule: StepNode = {
-    kind: "step",
-    id: "key-schedule",
-    type: "speck.key-schedule@1",
-    params: {
-      keyAuxName: "key",
-      outputPrefix: "roundKey",
-      rounds: ROUNDS,
-      wordBits: WORD_BITS,
-      m: M,
-      alpha: ALPHA,
-      beta: BETA,
-      byteOrder,
-    },
-  };
+  // The schedule is identical for both directions — it writes
+  // roundKey.0 … roundKey.{ROUNDS-1} to aux regardless. K2a (2026-06-01)
+  // decomposes the previously monolithic `speck.key-schedule@1` leaf into
+  // a tree of port-native primitives (ROR/ADD/XOR/ROL/XOR per
+  // Beaulieu et al. 2013 §3) plus byte-order codec leaves at the I/O
+  // boundary, all wrapped in a default-collapsed `key-schedule` group.
+  // Published aux entries are byte-identical to the monolith's output, so
+  // the round-body consumers below are untouched. See
+  // `speck-32-64-key-schedule-builder-native.ts` for the structure.
+  const keySchedule: StepNode = buildSpeck32_64KeyScheduleNative(
+    ROUNDS,
+    M,
+    WORD_BITS,
+    ALPHA,
+    BETA,
+    byteOrder,
+  );
 
   // For encrypt, round.i consumes roundKey.{i-1} (forward order).
   // For decrypt, round-inverse.i consumes roundKey.{ROUNDS-i} (reverse order):

@@ -227,25 +227,34 @@ describe("deriveAuxGraph — AES-128 (single block, no iterate)", () => {
 
 // ─── Speck32/64 (flat, no containers, ARX) ────────────────────────────────
 
-describe("deriveAuxGraph — Speck32/64 BE (flat, no groups)", () => {
-  it("emits 23 cipher leaves + the `$input` source (Slice 5.3b) and zero containers", () => {
+describe("deriveAuxGraph — Speck32/64 BE (key-schedule container + flat rounds)", () => {
+  it("emits 130 decomposed-schedule leaves + 22 rounds + `$input` source + 1 schedule container", () => {
+    // K2a (2026-06-01): the schedule decomposed from a monolithic leaf into
+    // a `key-schedule` GROUP holding ~130 port-native primitive leaves
+    // (load-key + input-codec + master-split + 21 iterations × 6 leaves +
+    // publish = 130) for the BE-paper variant (LE-NSA adds output-codec
+    // sub-pipeline, but this test stays on BE for round-key math sanity).
+    // Plus 22 round leaves + the synthetic `$input` source.
     const g = deriveAuxGraph(runSpeck(), speck32_64BeSpec);
-    // 23 cipher leaves (key-schedule + 22 rounds) plus the synthetic `$input`
-    // source pill, which materializes now that round.1 wires its `state` port
-    // to it (Slice 5.3b). Still no containers — Speck is a flat pipeline.
     const cipherLeaves = g.nodes.filter((n) => n.stepId !== INPUT_SOURCE_ID);
-    expect(cipherLeaves.length).toBe(23);
+    // 130 schedule leaves + 22 round leaves = 152.
+    expect(cipherLeaves.length).toBe(152);
     expect(g.nodes.some((n) => n.stepId === INPUT_SOURCE_ID)).toBe(true);
-    expect(g.nodes.length).toBe(24);
-    expect(g.containers.length).toBe(0);
+    expect(g.nodes.length).toBe(153);
+    // Now ONE container: the `key-schedule` group. Round leaves remain flat
+    // (Speck has no per-round group; the round-body is a single port-native
+    // step that doesn't decompose further in K2 scope).
+    expect(g.containers.length).toBe(1);
+    expect(g.containers[0]?.id).toBe("key-schedule");
   });
 
-  it("fans out 22 round-key edges from key-schedule to round.1..round.22", () => {
+  it("fans out 22 round-key edges from key-schedule.publish to round.1..round.22", () => {
+    // K2a: the round-key aux fan-out now originates from the schedule's
+    // `publish` tail leaf, not the legacy monolithic `key-schedule` leaf.
+    // (The collapsed view remaps these onto the container, per K1c's note;
+    // the uncollapsed/raw view tested here keeps them on `key-schedule.publish`.)
     const g = deriveAuxGraph(runSpeck(), speck32_64BeSpec);
-    // Filter to aux edges — key-schedule is also the first leaf in DFS
-    // order, so it has an outgoing `kind: "state"` spine edge to round.1
-    // (which this fan-out test deliberately ignores).
-    const ksEdges = g.edges.filter((e) => e.kind === "aux" && e.from === "key-schedule");
+    const ksEdges = g.edges.filter((e) => e.kind === "aux" && e.from === "key-schedule.publish");
     expect(ksEdges.length).toBe(22);
     // Each round.i reads roundKey.{i-1}.
     for (let i = 1; i <= 22; i++) {
@@ -341,22 +350,31 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
 
   it("Speck32/64 (flat): the spine is port-flow-owned (Slice 5.3b), the legacy state-thread suppressed", () => {
     // The round leaves declare `portInputs.state`, so `inferPortEdges` (S2(e))
-    // owns the entire spine. The spine is one continuous chain
-    // `$input → round.1 → … → round.22` — 22 edges, ALL tagged
-    // `auxKey: "port-flow"`, with NO legacy state-thread edge. This is the
-    // 5.3b payoff; `inferStateEdges` was retired in 5.3e, so port-flow is the
-    // sole spine source. (The registry is still passed, as the app does.)
+    // owns the entire spine: `$input → round.1 → … → round.22`. Every state
+    // edge is tagged `auxKey: "port-flow"`, with NO legacy state-thread edge.
+    // (Pre-5.3e the legacy `inferStateEdges` would have layered phantom
+    // edges on top; retired in 5.3e, so port-flow is the sole spine source.)
+    //
+    // K2a (2026-06-01): the decomposed schedule introduces ~70 additional
+    // port-flow edges INSIDE the `key-schedule` group (load-key → input-codec
+    // → master-split → 21 × {rot-l, sum, new-l, rol-k, new-k} chained, plus
+    // each iteration's fan-in into publish). The round-spine claim is
+    // unchanged; the count is no longer exactly 22.
     const g = deriveAuxGraph(runSpeck(), speck32_64BeSpec, {
       registry: buildDefaultRegistry(),
     });
     const stateEdges = g.edges.filter((e) => e.kind === "state");
-    expect(stateEdges.length).toBe(22);
-    // Every spine edge is a port-flow edge — none survive from the legacy
-    // consecutive-siblings state-thread inference.
+    // Every state edge is a port-flow edge — none survive from the legacy
+    // consecutive-siblings state-thread inference (which was retired in 5.3e).
     expect(stateEdges.every((e) => e.auxKey === "port-flow")).toBe(true);
-    // Head of the spine is the true plaintext source, NOT the aux-only
-    // key-schedule (the old state-thread phantom `key-schedule → round.1` is
-    // gone — the no-phantoms principle).
+    // The round-spine portion: 22 round-to-round (state via $input) edges
+    // still resolve cleanly. Head of the spine is the true plaintext source,
+    // NOT the aux-only schedule container.
+    const roundSpineEdges = stateEdges.filter(
+      (e) =>
+        (e.from === INPUT_SOURCE_ID || /^round\.\d+$/.test(e.from)) && /^round\.\d+$/.test(e.to),
+    );
+    expect(roundSpineEdges.length).toBe(22);
     expect(stateEdges.find((e) => e.from === INPUT_SOURCE_ID && e.to === "round.1")).toBeDefined();
     expect(stateEdges.find((e) => e.from === "key-schedule" && e.to === "round.1")).toBeUndefined();
     expect(stateEdges.find((e) => e.from === "round.1" && e.to === "round.2")).toBeDefined();

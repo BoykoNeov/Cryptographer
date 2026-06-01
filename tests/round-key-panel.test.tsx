@@ -287,9 +287,18 @@ describe("<RoundKeyPanel /> against a real Speck32/64 trace (fallback-strip path
     __resetRoundKeyPanelOverrideForTests();
   });
 
+  // K2a (2026-06-01): the round-key panel's `expanded()` gate fires only on a
+  // frame "about" the schedule (auxRead or auxWritten of a roundKey.*). Pre-K2a
+  // that was frame[0] (the monolithic `speck.key-schedule@1` writing all 22
+  // keys). Post-decomposition the writes happen at the publish tail leaf, and
+  // the rounds consume specific roundKey.{i} entries — use the publish frame
+  // here so the panel opens.
+  const publishOrFirstRound = (trace: ReturnType<typeof seedSpeck32_64Trace>) =>
+    trace.frames.find((f) => f.stepId === "key-schedule.publish") ?? null;
+
   it("renders 22 subkey cells in one ribbon at 2B each", () => {
     const trace = seedSpeck32_64Trace();
-    const { container } = render(() => <RoundKeyPanel frame={trace.frames[0] ?? null} />);
+    const { container } = render(() => <RoundKeyPanel frame={publishOrFirstRound(trace)} />);
     const ribbons = container.querySelectorAll(".round-key-ribbon");
     expect(ribbons.length).toBe(1);
     // Speck32/64: 22 round subkeys, each `wordBits/8 = 16/8 = 2` bytes.
@@ -303,7 +312,7 @@ describe("<RoundKeyPanel /> against a real Speck32/64 trace (fallback-strip path
     // sequence-detection logic; this catches a Solid-reactivity or shape-
     // dispatch bug specific to the fallback path that pure tests can't see.
     const trace = seedSpeck32_64Trace();
-    const { container } = render(() => <RoundKeyPanel frame={trace.frames[0] ?? null} />);
+    const { container } = render(() => <RoundKeyPanel frame={publishOrFirstRound(trace)} />);
     // 22 cells use the strip branch.
     expect(container.querySelectorAll(".round-key-cell-strip").length).toBe(22);
     // And TinyMatrix never gets used for 2-byte subkeys.
