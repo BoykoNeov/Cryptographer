@@ -383,64 +383,100 @@ legacy executor under a deprecation flag, or (c) accept that pre-K2
 Speck docs are non-loadable in the next release. The K1c precedent
 (AES @1/@2 kept registered) is broken here, by user-and-advisor pick.
 
-**Open advisor questions for K2d:**
+**Advisor verdicts (consulted 2026-06-01, pre-implementation):**
 
-1. **Do `roundKeyAux` + `meta.auxReadPorts` survive as an optional
-   fallback** (preserving any in-the-wild non-loadable scenarios as
-   "loads but reads from aux") or fully retire? Cleaner posture argues
-   for full retire — under A the round's `roundKey` input always comes
-   from `portInputs`, so a fallback path would be dead code from day
-   one.
+1. **Q1 — fallback path: full retire.** Drop `params.roundKeyAux` +
+   `meta.auxReadPorts` on `speck.round@1` / `speck.round-inverse@1`.
+   Dead-from-day-one fallback = maintenance liability + reader
+   confusion ("which path is real?"). Single source of truth.
 
-2. **Decrypt-variant reverse-order port wiring.** Speck decrypt consumes
-   `roundKey.21, .20, …, .0` in that order. Under aux this was free
-   (the spec leaf names whichever aux entry it wants). Under A with
-   explicit `portInputs`, the decrypt builder has to wire `round.0.roundKey
-   ← publish.key21`, `round.1.roundKey ← publish.key20`, …, `round.21.roundKey
-   ← publish.key0` — 22 cross-wires in reverse. This is **exactly** the
-   topology risk the K1 plan flagged for A. The K2d graph smoke should
-   confirm the decrypt graph reads cleanly under `replicateHighFanoutSources`,
-   and not as a tangled cross-pattern.
+2. **Q2 — decrypt fan-out predictability: unknown until smoke.**
+   `replicateHighFanoutSources` IS in scope for port-flow edges
+   (verified at `GraphView.tsx` ~line 2885, eligibility key is
+   `PORT_FLOW_AUX_KEY`-marked state edges). Encrypt should tame like
+   K2c. Decrypt reverse-wiring (22 cross-wires `round.i ←
+   publish.key{ROUNDS-i}`) is the open question — replication tames
+   the source-side chip explosion but doesn't undo geometric reversal.
+   **Don't pre-commit a mitigation; capture smoke first.**
 
-3. **`RoundKeyPanel.tsx` retarget.** The panel's `isRelevantFrame`
-   classifier reads `frame.auxRead` / `frame.auxWritten` on aux keys
-   matching `prefix.N`. Under A the round bodies no longer write or
-   read aux for the round keys (the `roundKey` port flows directly).
-   The K2c follow-up updated the panel's doc comment but the actual
-   classifier may quietly miss-classify Speck round frames if the
-   round step's frame `auxRead` is empty under A. Grep before the K2d
-   advisor pass: does the panel still light up correctly, or does it
-   need a `portInputs`-aware fallback (e.g., also check whether any
-   frame's port-input bytes match a known `prefix.N` value)? If the
-   panel goes dark for Speck under A, the user picks: retarget the
-   panel (worth doing), or accept (Speck never had a dedicated
-   `KeyScheduleExplorer` arm anyway, so the round-key ribbon is the
-   only schedule-aware UI surface — going dark for Speck is a regression).
+3. **Q3 — `RoundKeyPanel` retarget: do it in the same commit.** The
+   classifier currently pattern-matches `frame.auxRead`/`auxWritten`
+   on `${prefix}.${N}` keys and is cipher-agnostic by design. Under A
+   the Speck-side aux matches go cold; extend `isRelevantFrame` to
+   ALSO match `frame.portInputs.has("roundKey")` (consumer side) or
+   any `frame.portOutputs` `keyN` write (producer side). Avoids a real
+   pedagogical regression (ribbon is Speck's only schedule-aware UI
+   surface) and preserves the panel's cipher-agnostic invariant.
 
-4. **K2a parity test retarget.** The test currently asserts
-   `aux["roundKey.0..21"]` byte-equality against the inline Beaulieu
-   §3 reference (just landed in the K2c follow-up). Under A those aux
-   entries don't exist; retarget to read the publish leaf's per-port
-   output values out of the trace frame's `portOutputs` map. **Pre-draft
-   decision** (advisor flagged it has a concrete answer): use the
-   trace-frame `portOutputs` read; don't roll into the KAT byte-equal.
-   The whole point of the parity test is to surface decomposition bugs
-   the KAT can't catch (a one-bit-off in iteration `i` that the next
-   iteration happens to cancel before round-1 consumes it).
+4. **Q4 — parity test retarget: agree, `portOutputs` read on the
+   publish frame; do not fold into the cipher KAT.** KAT catches
+   end-state divergence; parity test catches single-iteration
+   cancellation bugs in ARX schedules. Different bug classes; merging
+   loses the latter.
 
-5. **Vectors tests' "produces all 22 round keys in aux" assertions** —
-   rewrite to assert "produces all 22 round keys on publish output
-   ports" (same trace-frame read), or delete (KAT covers it).
+5. **Q5 — redundant aux-22 assertions: delete from vectors/decrypt
+   tests.** Keep the single parity assertion at the decomposition-test
+   layer. KAT covers cipher output; decomposition test covers schedule
+   intermediates. Don't duplicate.
 
-6. **Graph rendering smoke.** Verify the 22 explicit port-flow wires
-   from `key-schedule.publish` to the 22 round consumers fold via
-   `replicateHighFanoutSources` the way the K2c B-defense argued (with
-   the advisor verdict "would only relabel the same fan-out"), OR show
-   a more legible topology the K2c gate user expected. Capture both
-   encrypt + decrypt variants (the decrypt reverse-wiring of Q2 is
-   where the risk concentrates). **Do not** re-cite the K2c B-defense
-   in K2d's `AskUserQuestion` framing as if A had been observed and
-   rejected — it hadn't been.
+6. **Q6 — gate framing: clean B-fallback exit, not hedging.** K2c
+   picked A without seeing A's graph. K2d is where the graph appears.
+   The gate `AskUserQuestion` shows encrypt + decrypt smoke and asks
+   "confirm A, or fall back to B-minimal like K1?" Don't editorialize;
+   let the picture argue. **User-confirmed this session.**
+
+**Advisor-flagged risks:**
+
+- **K2d_R1 (port-flow fan-out replication).** Encrypt likely tames
+  like K2c. Decrypt unknown until smoke. Mitigation order if fishnet:
+  (1) default-on offsets layout (shipped 2026-05-28, `?offsets=1`);
+  (2) stub-placement heuristic that places replicas adjacent to
+  consumers; (3) per-cipher special-case as last resort. **Do not**
+  reverse port order on the decrypt-variant publish leaf — spec data
+  should not differ between enc/dec on the same leaf type.
+
+- **K2d_R2 (decrypt cross-pattern).** Tied to R1; same escalation.
+
+- **K2d_R3 (K1=B vs K2=A codebase footgun for K3/K4).** Two valid
+  topologies for "publish round keys → consume in round bodies" now
+  exists. "Ask the user per cipher" doesn't scale across K3 (Serpent,
+  33 round keys) + K4 (DES, 16 round keys). **User-decided this
+  session: document the decision rule NOW.** See the next subsection.
+
+- **Advisor mild push-back:** ship K2d on A, treat the K2d smoke as a
+  real re-gate. If decrypt looks bad and the offsets layout doesn't
+  fix it, retreat to B is cheaper at K2d than at K3.
+
+#### K2d-resolved: A vs B decision rule for K3/K4
+
+K3 and K4 apply this rule at slice-open without re-litigating per
+cipher. The K2d gate `AskUserQuestion` includes a "refine wording"
+prompt so the final text is user-blessed before K3 starts.
+
+> **Pick B-minimal** (publish writes aux; consumers read aux) when
+> round-key fan-out is **short (~ ≤ 11 keys)** and reads cleanly under
+> `replicateHighFanoutSources` — the explicit port rewiring would only
+> relabel the same fan-out for no legibility gain.
+>
+> **Pick A** (publish exposes per-round-key output ports; consumers
+> wire `portInputs.roundKey` to a publish port) when round count is
+> **long (~ ≥ 22)** and the per-round-indexed consumption IS the
+> pedagogical point — the explicit wiring honestly shows "each round
+> consumes a specific key," and aux indirection hides that.
+
+#### K2d-resolved: gate `AskUserQuestion` framing
+
+After smoke is captured, surface three questions in this order:
+
+1. **A confirm / B fall back.** Show encrypt + decrypt smoke shots.
+   If user picks B-fallback: revert steps 1 + 3a's removal of the
+   aux match-arms in `RoundKeyPanel`; keep steps 2 + 3b
+   (`portInputs.roundKey` wiring is independent of the publish-side
+   aux-write choice — full A loses both, B-minimal keeps both).
+2. **Decision-rule wording confirm.** Inline the wording above so the
+   user can edit before K3 starts.
+3. **`RoundKeyPanel` retarget verify.** Did the panel stay lit for
+   Speck round frames under A? Y/N from running-app inspection.
 
 **Files affected (estimate):** 3 step files
 (`speck-publish-round-keys.ts`, `speck-round.ts`, `speck-round-inverse.ts`),
@@ -450,6 +486,18 @@ decrypt, decomposition parity retarget, round-key panel retarget,
 runtime-ported-dispatch, maybe narration), 1 doc comment in
 `RoundKeyPanel.tsx`. Bigger than K2a's blast radius; KAT gate is the
 safety net.
+
+**Pre-verified facts (don't re-discover at slice open):**
+
+- `TraceFrame.portOutputs?: ReadonlyMap<string, Uint8Array>` exists
+  (`src/core/types.ts:728-729`) — parity-test retarget is feasible.
+- `replicateHighFanoutSources` covers port-flow edges (`GraphView.tsx`
+  ~line 2885 via `PORT_FLOW_AUX_KEY`).
+- Cross-container `portInputs` resolution by step id works (SHA-256
+  precedent at `src/ciphers/sha-256.ts:1490` — `port("round.63",
+  "out")`).
+- `speckRoundKeyPortName(r)` already exported from
+  `speck-publish-round-keys.ts` — reuse, don't duplicate `key${r}`.
 
 ### K3 — Serpent / K4 — DES (sequenced after K2)
 
