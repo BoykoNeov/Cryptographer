@@ -7,6 +7,10 @@ dist
 # Per-user Claude Code overrides — should not be committed
 .claude/settings.local.json
 
+# Transient harness lock file (scheduled-task coordination); not state
+# that belongs in the repo.
+.claude/scheduled_tasks.lock
+
 # Background-agent isolated worktrees (harness-managed; transient).
 # When the user spawns a parallel agent in worktree-isolation mode the
 # harness creates `.claude/worktrees/<agent-id>/`; the entries are full
