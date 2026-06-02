@@ -77,6 +77,7 @@ import {
   CIPHER_OPTIONS,
   type Category,
   type Cipher,
+  DEFAULT_CT_BYTES_BY_CIPHER,
   DEFAULT_KEY_BYTES_BY_CIPHER,
   DEFAULT_KEY_BYTES_BY_HASH,
   DEFAULT_PT_BYTES_BY_CIPHER,
@@ -875,15 +876,25 @@ export const App = () => {
     if (currentKey && bytesEqual(currentKey, DEFAULT_KEY_BYTES_BY_CIPHER[prev])) {
       setKeyText(formatBytes(DEFAULT_KEY_BYTES_BY_CIPHER[next], fmt()));
     }
-    // Plaintext field: same policy. AES↔Speck flips change the block size
-    // (16↔4 bytes), so a literal value-equal default carry-over is the
-    // right trigger for an auto-swap. A user-typed arbitrary value stays.
-    // Also covers AES↔AES (no-op for "00112233...ff" which is the shared
-    // FIPS-197 default across all three AES variants) and Speck-BE↔Speck-LE
-    // (4 bytes either way, but the byte sequence differs by convention).
-    const currentPt = tryParseBytes(inputText(), fmt());
-    if (currentPt && bytesEqual(currentPt, DEFAULT_PT_BYTES_BY_CIPHER[prev])) {
-      setInputText(formatBytes(DEFAULT_PT_BYTES_BY_CIPHER[next], fmt()));
+    // Input field: same policy, but the canonical default depends on the
+    // active mode. In encrypt mode the field holds a PLAINTEXT; in decrypt
+    // mode it holds a CIPHERTEXT (e.g. carried over by the mode-flip
+    // auto-swap, which copies the previous mode's output in). Comparing
+    // against the plaintext default in decrypt mode would never match a
+    // ciphertext, so a stale block (e.g. AES's 16-byte CT) would survive a
+    // switch to DES and trip the "must be exactly 8 bytes" banner — the bug
+    // this branch fixes. Using the per-mode default table keeps the swap
+    // working in both directions so the new cipher's first Run lands on its
+    // canonical vector (decrypt round-trips straight back to the KAT
+    // plaintext). A user-typed value (PT or CT) still never matches a
+    // canonical default and is left untouched — the same sacred-input policy
+    // as the key swap above; the user will see a friendly length error on
+    // Run if it doesn't fit the new block size.
+    const defaultForMode =
+      mode() === "decrypt" ? DEFAULT_CT_BYTES_BY_CIPHER : DEFAULT_PT_BYTES_BY_CIPHER;
+    const currentInput = tryParseBytes(inputText(), fmt());
+    if (currentInput && bytesEqual(currentInput, defaultForMode[prev])) {
+      setInputText(formatBytes(defaultForMode[next], fmt()));
     }
     setCipher(next);
   };

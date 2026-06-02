@@ -362,6 +362,58 @@ describe("App — cipher selector", () => {
     expect(result).toBe("85e813540f0ab405");
   });
 
+  it("switching cipher in DECRYPT mode swaps the ciphertext + key to the new cipher's canonical defaults and round-trips", () => {
+    // Regression guard for the decrypt-mode input swap (the "DES decrypt
+    // default ciphertext is 16 bytes → must be exactly 8 bytes" bug). The
+    // encrypt-mode plaintext swap policy didn't fire in decrypt mode because
+    // the field holds a CIPHERTEXT, which never equals the plaintext default —
+    // so a stale 16-byte AES block survived a switch to DES and tripped the
+    // 8-byte block-size banner. `changeCipher` now compares against the
+    // per-mode default table (DEFAULT_CT in decrypt) so the swap works.
+    const { container } = render(() => <App />);
+
+    // Boot is AES-128 encrypt; auto-run leaves the §C.1 ciphertext in the
+    // result line. Flip to decrypt — the mode-flip auto-swap copies that
+    // ciphertext into the (now "ciphertext"-labeled) input field, which is
+    // exactly DEFAULT_CT["aes-128"].
+    fireEvent.change(findSelectByLabel(container, "mode"), { target: { value: "decrypt" } });
+    expect(findInputByLabel(container, "ciphertext").value).toBe(
+      "69c4e0d86a7b0430d8cdb78070b4c55a",
+    );
+
+    // Now switch cipher to DES while still in decrypt mode. The 16-byte AES
+    // ciphertext must be replaced by DES's canonical 8-byte ciphertext, and
+    // the key by DES's canonical key (the key swap is mode-independent and
+    // already worked — assert it here so the round-trip below is meaningful).
+    fireEvent.change(findSelectByLabel(container, "cipher"), { target: { value: "des" } });
+    expect(findInputByLabel(container, "ciphertext").value).toBe("85e813540f0ab405");
+    expect(findInputByLabel(container, "key").value).toBe("133457799bbcdff1");
+
+    // Decrypting that canonical ciphertext recovers the FIPS 46-3 Appendix B
+    // plaintext with no length banner — the whole point of the swap.
+    fireEvent.click(findButton(container, "run"));
+    expect(container.querySelector(".error")).toBeNull();
+    expect(container.querySelector(".result code")?.textContent ?? "").toBe("0123456789abcdef");
+  });
+
+  it("does NOT clobber a user-typed ciphertext when the cipher changes in decrypt mode", () => {
+    // Sacred-input policy in decrypt mode, mirroring the user-typed-key guard
+    // below. A custom ciphertext (not any cipher's canonical default) must
+    // survive a cipher switch — the user will see a friendly length banner on
+    // Run if it doesn't fit the new block, but we never silently overwrite it.
+    const { container } = render(() => <App />);
+
+    fireEvent.change(findSelectByLabel(container, "mode"), { target: { value: "decrypt" } });
+
+    // Type a custom 16-byte ciphertext distinct from every canonical default.
+    const custom = "112233445566778899aabbccddeeff00";
+    fireEvent.input(findInputByLabel(container, "ciphertext"), { target: { value: custom } });
+
+    // Switch to DES. The custom value is preserved (no swap to DES's default).
+    fireEvent.change(findSelectByLabel(container, "cipher"), { target: { value: "des" } });
+    expect(findInputByLabel(container, "ciphertext").value).toBe(custom);
+  });
+
   it("does NOT clobber a user-typed key when the cipher changes", () => {
     const { container } = render(() => <App />);
     const keyInput = findInputByLabel(container, "key");

@@ -290,6 +290,66 @@ export const DEFAULT_PT_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
   des: new Uint8Array([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]),
 };
 
+/**
+ * Canonical default *ciphertext* per cipher — the exact output each cipher
+ * produces from its `DEFAULT_PT_BYTES_BY_CIPHER` plaintext under its
+ * `DEFAULT_KEY_BYTES_BY_CIPHER` key. This is the decrypt-mode analogue of the
+ * plaintext table above: it is what the input field should hold when the user
+ * lands in decrypt mode, so the first Run round-trips straight back to the
+ * canonical plaintext (mirroring how encrypt's first Run lands on the
+ * published vector).
+ *
+ * **Why a table rather than computing on the fly.** Deriving these would mean
+ * running each encrypt spec through the runtime (needs the registry, the spec
+ * map, and a full trace) every time the cipher selector changes — heavy for a
+ * UI event handler. Baking constants in matches the existing PT/KEY-table
+ * pattern. The bytes are NOT hand-derived (which would risk the Speck BE/LE
+ * and Serpent byte-convention traps): they were computed by running each
+ * canonical encrypt spec, and `tests/default-ciphertext-table.test.ts` pins
+ * every entry to `encrypt(DEFAULT_PT, DEFAULT_KEY)` so the table can never
+ * drift from the implementation. The AES-128 / Speck-BE / Speck-LE / DES
+ * entries additionally match their published KAT vectors (FIPS-197 §C.1,
+ * Beaulieu et al., FIPS 46-3 App B), which keeps the round-trip test
+ * non-circular — a regression in the shared byte-flat engine would break the
+ * literal-anchor assertions, not silently redefine "canonical."
+ *
+ * App.tsx's `changeCipher` consults this in decrypt mode: if the ciphertext
+ * field currently holds the previous cipher's canonical ciphertext, it swaps
+ * to the new cipher's. A user-typed ciphertext is left alone (same sacred-
+ * input policy as the plaintext/key swaps).
+ *
+ * AES-192/256 use the FIPS-197 sequential plaintext under §A.2/§A.3's
+ * sequential keys (NOT the NIST AES Core `6bc1…` vectors), so their
+ * ciphertexts differ from the headline KAT constants — they ride on the
+ * existing AES-192/256 KAT coverage transitively via the table test.
+ */
+export const DEFAULT_CT_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
+  // FIPS-197 §C.1: PT 00112233…ff under key 000102…0f → 69c4e0d8…c55a.
+  "aes-128": new Uint8Array([
+    0x69, 0xc4, 0xe0, 0xd8, 0x6a, 0x7b, 0x04, 0x30, 0xd8, 0xcd, 0xb7, 0x80, 0x70, 0xb4, 0xc5, 0x5a,
+  ]),
+  "aes-192": new Uint8Array([
+    0xeb, 0x1b, 0x03, 0xf2, 0xac, 0xb6, 0x4b, 0xcf, 0x28, 0xc9, 0x99, 0x1c, 0xc8, 0xa4, 0xfa, 0x50,
+  ]),
+  "aes-256": new Uint8Array([
+    0xd8, 0x34, 0x14, 0x22, 0x3d, 0x20, 0xa0, 0xc9, 0x28, 0xb1, 0x36, 0xc8, 0x84, 0xd0, 0x7e, 0xa2,
+  ]),
+  // Beaulieu et al. Speck32/64 KAT under each byte convention.
+  "speck-32-64-be": new Uint8Array([0xa8, 0x68, 0x42, 0xf2]), // "a86842f2"
+  "speck-32-64-le": new Uint8Array([0xf2, 0x42, 0x68, 0xa8]), // "f24268a8"
+  "serpent-128": new Uint8Array([
+    0x56, 0x3e, 0x2c, 0xf8, 0x74, 0x0a, 0x27, 0xc1, 0x64, 0x80, 0x45, 0x60, 0x39, 0x1e, 0x9b, 0x27,
+  ]),
+  "serpent-192": new Uint8Array([
+    0x6a, 0xb8, 0x16, 0xc8, 0x2d, 0xe5, 0x3b, 0x93, 0x00, 0x50, 0x08, 0xaf, 0xa2, 0x24, 0x6a, 0x02,
+  ]),
+  "serpent-256": new Uint8Array([
+    0x28, 0x68, 0xb7, 0xa2, 0xd2, 0x8e, 0xcd, 0x5e, 0x4f, 0xde, 0xfa, 0xc3, 0xc4, 0x33, 0x00, 0x74,
+  ]),
+  // FIPS 46-3 Appendix B: PT 0123456789abcdef under key 133457799bbcdff1.
+  des: new Uint8Array([0x85, 0xe8, 0x13, 0x54, 0x0f, 0x0a, 0xb4, 0x05]),
+};
+
 // ─── Hash defaults ───────────────────────────────────────────────────────
 //
 // Slice 2.10b (2026-05-25) — canonical input bytes per Hash variant. The
