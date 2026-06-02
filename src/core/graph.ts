@@ -1623,41 +1623,77 @@ export const replicateHighFanoutSources = (
   const hasAnyAlwaysOverride = Object.values(modesObj).some((m) => m === "always");
   if (threshold <= 0 && !hasAnyAlwaysOverride) return graph;
 
-  // Container ids — index up front so the per-source loop can no-op
-  // container sources without re-walking `graph.containers`. Containers
-  // (groups + iterates) are themselves visible decongestion devices;
-  // replicating one produces a chip near the consumer that duplicates
-  // the existing state-spine arrow AND overflows the chip (container
-  // labels are typically long, e.g. "ECB blocks (per-block AES)"). The
-  // user can still set a container to "always" in the panel — the toggle
-  // is preserved; this loop just silently skips it. Specific motivation:
-  // post-Option-C, a collapsed iterate stays in the graph as a source
-  // with one outgoing aux edge to its successor (e.g. `concat-blocks`),
-  // and toggling it "always" in the panel produced exactly the duplicate
-  // arrow + overflowing-chip the user reported.
-  const containerIds = new Set<string>();
-  for (const c of graph.containers) containerIds.add(c.id);
+  // Container sources: a COLLAPSED `group` (childIds === [] after
+  // collapseGraph, so it renders as a single leaf-like chip) IS eligible
+  // for replication — exactly like a leaf source. A small chip lands next
+  // to each consumer and the long fan-out lines disappear. The motivating
+  // case is AES's "Key Expansion" group (default-collapsed; 11 roundKey aux
+  // edges to every AddRoundKey): un-collapsed, the inner `key-schedule.publish`
+  // leaf is the fan-out source and replicates fine, but once the user
+  // collapses the group the CONTAINER becomes the source — and before this
+  // change it was silently skipped, so the 11 long lines stayed on the canvas.
+  //
+  // Every OTHER container is collected here so the per-source loop can no-op
+  // it (the user's "always" panel toggle still no-ops for these ids):
+  //
+  //   - Expanded containers (childIds.length > 0): they own a body box on
+  //     the canvas, so collapsing the whole body into one chip per consumer
+  //     is ill-defined — and the body's real fan-out source (the inner leaf)
+  //     already replicates on its own.
+  //   - Iterate-family containers (iterate / for-each-subgraph /
+  //     for-each-subgraph-with-history): spine loop structures. Replicating a
+  //     source REMOVES it from the graph; for a spine iterate that erases the
+  //     loop from the main flow. This is the documented 2026-05-16 complaint —
+  //     a collapsed ECB iterate left as a source with one aux edge to
+  //     `concat-blocks`, where toggling "always" produced a duplicate arrow +
+  //     a label-overflowing chip. (A post-Run collapsed iterate ALSO fails the
+  //     childIds===[] test because expandCollapsedIterates repopulates its
+  //     childIds with block chips before this transform runs; the kind check
+  //     additionally covers the pre-Run / no-blockSpan iterate.)
+  const ineligibleContainerIds = new Set<string>();
+  for (const c of graph.containers) {
+    const isCollapsedGroup = c.kind === "group" && c.childIds.length === 0;
+    if (!isCollapsedGroup) ineligibleContainerIds.add(c.id);
+  }
 
-  // Count outgoing fanout-eligible edges per source: every aux edge, plus
-  // every port-flow state edge (kind:"state" + auxKey === PORT_FLOW_AUX_KEY).
-  // Legacy passthrough state edges (kind:"state" + auxKey === STATE_AUX_KEY)
-  // stay excluded — they're 1-to-1 between consecutive same-parent leaves by
-  // construction and would otherwise inflate the count for every spine
-  // participant. The port-flow inclusion was added 2026-05-26 (Slice S2(i)):
-  // SHA-256's `final.split-wv` and `final.split-H` each emit 8 port-flow
-  // edges and need to qualify for replication, but the original aux-only
-  // rule scored them as fanout 0 and the long lines overlapped horizontally
-  // through the s_0..s_7 row.
-  const fanoutBySrc = new Map<string, number>();
+  // Count fanout-eligible DISTINCT CONSUMERS per source — every aux edge,
+  // plus every port-flow state edge (kind:"state" + auxKey ===
+  // PORT_FLOW_AUX_KEY). Legacy passthrough state edges (auxKey ===
+  // STATE_AUX_KEY) stay excluded — they're 1-to-1 between consecutive
+  // same-parent leaves by construction and would otherwise inflate the count
+  // for every spine participant. (Port-flow inclusion added 2026-05-26, Slice
+  // S2(i): SHA-256's `final.split-wv` / `final.split-H` each fan to 8 distinct
+  // port consumers and need to qualify; the original aux-only rule scored
+  // them 0 and the long lines overlapped through the s_0..s_7 row.)
+  //
+  // DISTINCT CONSUMERS, not raw edges (2026-06-02): the transform creates
+  // exactly ONE replica per (source, consumer) pair — multiple aux keys
+  // flowing source→consumer share a single chip. So distinct-consumer count
+  // is the honest measure both of a source's contribution to canvas clutter
+  // (clutter = lines to DIFFERENT places) and of how many replicas would
+  // result. For every shipped (source, consumer) pair this equals the raw
+  // edge count (one aux key per pair); it differs ONLY where collapse remaps
+  // many edges onto a single container id — e.g. a collapsed key-schedule
+  // group feeding a collapsed ECB iterate, where all 11 round-key edges fold
+  // onto the lone `ecb-blocks` consumer. There the fan-target count is 1, so
+  // auto-replication (which would merely relocate the chip) correctly defers
+  // to the ×11 bundle that the container→container relationship already
+  // renders cleanly.
+  const consumersBySrc = new Map<string, Set<string>>();
   for (const e of graph.edges) {
     const eligible = e.kind === "aux" || (e.kind === "state" && e.auxKey === PORT_FLOW_AUX_KEY);
     if (!eligible) continue;
-    fanoutBySrc.set(e.from, (fanoutBySrc.get(e.from) ?? 0) + 1);
+    let consumers = consumersBySrc.get(e.from);
+    if (!consumers) {
+      consumers = new Set<string>();
+      consumersBySrc.set(e.from, consumers);
+    }
+    consumers.add(e.to);
   }
 
   const highFanoutSrcs = new Set<string>();
-  for (const [srcId, count] of fanoutBySrc) {
-    if (containerIds.has(srcId)) continue;
+  for (const [srcId, consumers] of consumersBySrc) {
+    if (ineligibleContainerIds.has(srcId)) continue;
     const m = modesObj[srcId];
     if (m === "never") continue;
     if (m === "always") {
@@ -1668,7 +1704,7 @@ export const replicateHighFanoutSources = (
     // early-exit above unless an "always" override exists somewhere else
     // in the modes map; in that case auto sources still respect the
     // threshold (a 0 threshold means "no auto replication").
-    if (threshold > 0 && count > threshold) highFanoutSrcs.add(srcId);
+    if (threshold > 0 && consumers.size > threshold) highFanoutSrcs.add(srcId);
   }
 
   if (highFanoutSrcs.size === 0) return graph;
@@ -1872,13 +1908,22 @@ export const replicateHighFanoutSources = (
   const stripDead = (ids: readonly string[]): string[] =>
     ids.filter((id) => !fullyReplicated.has(id));
 
-  const newContainers = graph.containers.map((c) => {
-    const ins = insertionsByParent.get(c.id);
-    const spliced = ins ? splice(c.childIds, ins) : c.childIds;
-    const stripped = stripDead(spliced);
-    if (stripped === c.childIds) return c;
-    return { ...c, childIds: stripped };
-  });
+  const newContainers = graph.containers
+    // A fully-replicated collapsed group is no longer a graph entity — it's
+    // been replaced by per-consumer chips, the same way a fully-replicated
+    // leaf source is dropped from `nodes` below. Filter it out of
+    // `containers` so the renderer (which paints EVERY `graph.containers`
+    // entry, not just rootIds-reachable ones) can't draw an orphaned
+    // original box. `stripDead` already removes its id from rootIds + every
+    // childIds list, but that alone wouldn't drop the container record itself.
+    .filter((c) => !fullyReplicated.has(c.id))
+    .map((c) => {
+      const ins = insertionsByParent.get(c.id);
+      const spliced = ins ? splice(c.childIds, ins) : c.childIds;
+      const stripped = stripDead(spliced);
+      if (stripped === c.childIds) return c;
+      return { ...c, childIds: stripped };
+    });
 
   const rootInsertions = insertionsByParent.get("");
   const rootSpliced = rootInsertions ? splice(graph.rootIds, rootInsertions) : graph.rootIds;

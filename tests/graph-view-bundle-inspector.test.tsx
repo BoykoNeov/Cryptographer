@@ -50,7 +50,7 @@ const ECB_PLAINTEXT =
   "30c81c46a35ce411e5fbc1191a0a52ef" +
   "f69f2445df4f9b17ad2b417be66c3710";
 
-const seedAes128EcbCollapsedReplicated = (): void => {
+const seedAes128EcbCollapsedBundle = (): void => {
   setCipher("aes-128");
   setCipherMode("ecb");
   const trace = runSpec(aes128EcbSpec, buildDefaultRegistry(), {
@@ -61,7 +61,16 @@ const seedAes128EcbCollapsedReplicated = (): void => {
   setTrace(trace);
   toggleCollapse(aes128EcbSpec.id, "ecb-blocks", false);
   setReplicationEnabled(true);
-  setReplicationMode(aes128EcbSpec.id, "key-schedule", "always");
+  // Pin the (default-collapsed) `key-schedule` group to "never" replicate so it
+  // stays a container SOURCE and its 11 round-key edges bundle container→
+  // container (`key-schedule → ecb-blocks ×11`) — the bundle this inspector
+  // test clicks. Since 2026-06-02 a collapsed group IS replication-eligible,
+  // and replication is measured in DISTINCT consumers: after collapsing
+  // ecb-blocks all 11 consumers fold onto that one iterate, so the auto path
+  // already defers (1 < threshold). The explicit "never" makes the intent
+  // robust to threshold changes — and guards against an "always" toggle that
+  // WOULD now replicate the group and dissolve the bundle.
+  setReplicationMode(aes128EcbSpec.id, "key-schedule", "never");
 };
 
 const resetAll = (): void => {
@@ -95,7 +104,7 @@ describe("GraphView — bundle inspector (Slice C)", () => {
   });
 
   it("clicking a bundled edge selects a `bundle` target (not a per-edge target)", () => {
-    seedAes128EcbCollapsedReplicated();
+    seedAes128EcbCollapsedBundle();
     const { container } = render(() => <GraphView />);
 
     const bundleHit = findBundleHit(container as HTMLElement);
@@ -111,7 +120,7 @@ describe("GraphView — bundle inspector (Slice C)", () => {
   });
 
   it("renders the bundle's full auxKey list with the first row active by default", () => {
-    seedAes128EcbCollapsedReplicated();
+    seedAes128EcbCollapsedBundle();
     const { container } = render(() => <GraphView />);
 
     const bundleHit = findBundleHit(container as HTMLElement);
@@ -132,7 +141,7 @@ describe("GraphView — bundle inspector (Slice C)", () => {
   });
 
   it("clicking a row makes that aux active (canvas halo stays on the bundle)", () => {
-    seedAes128EcbCollapsedReplicated();
+    seedAes128EcbCollapsedBundle();
     const { container } = render(() => <GraphView />);
 
     const bundleHit = findBundleHit(container as HTMLElement);
@@ -162,7 +171,7 @@ describe("GraphView — bundle inspector (Slice C)", () => {
   });
 
   it("re-clicking the same bundle clears the selection (toggle)", () => {
-    seedAes128EcbCollapsedReplicated();
+    seedAes128EcbCollapsedBundle();
     const { container } = render(() => <GraphView />);
 
     const bundleHit = findBundleHit(container as HTMLElement);
@@ -173,7 +182,7 @@ describe("GraphView — bundle inspector (Slice C)", () => {
   });
 
   it("clearing the bundle selection clears the active row too (no stale state)", () => {
-    seedAes128EcbCollapsedReplicated();
+    seedAes128EcbCollapsedBundle();
     const { container } = render(() => <GraphView />);
 
     const bundleHit = findBundleHit(container as HTMLElement);
@@ -195,7 +204,7 @@ describe("GraphView — bundle inspector (Slice C)", () => {
   });
 
   it("swapping the spec clears the bundle selection (no stale identity)", () => {
-    seedAes128EcbCollapsedReplicated();
+    seedAes128EcbCollapsedBundle();
     const { container } = render(() => <GraphView />);
 
     const bundleHit = findBundleHit(container as HTMLElement);

@@ -2946,15 +2946,27 @@ export const GraphView = () => {
    */
   const replicationSources = createMemo<{ readonly id: string; readonly fanout: number }[]>(() => {
     const g = collapsedGraph();
-    const counts = new Map<string, number>();
+    // DISTINCT CONSUMERS per source — mirrors `replicateHighFanoutSources`'s
+    // metric exactly (graph.ts, 2026-06-02). The transform makes one replica
+    // per (source, consumer) pair, so the panel's "N edges" count must be
+    // distinct consumers, not raw edges, or the displayed number would
+    // disagree with what "always"/threshold actually does (most visibly in
+    // the collapsed-group→collapsed-iterate corner, where many edges fold
+    // onto one consumer and the honest fan-target count is 1).
+    const consumers = new Map<string, Set<string>>();
     for (const e of g.edges) {
       const eligible = e.kind === "aux" || (e.kind === "state" && e.auxKey === PORT_FLOW_AUX_KEY);
       if (!eligible) continue;
-      counts.set(e.from, (counts.get(e.from) ?? 0) + 1);
+      let set = consumers.get(e.from);
+      if (!set) {
+        set = new Set<string>();
+        consumers.set(e.from, set);
+      }
+      set.add(e.to);
     }
     const rows: { id: string; fanout: number }[] = [];
-    for (const [id, fanout] of counts) {
-      if (fanout >= 1) rows.push({ id, fanout });
+    for (const [id, set] of consumers) {
+      if (set.size >= 1) rows.push({ id, fanout: set.size });
     }
     rows.sort((a, b) => b.fanout - a.fanout || a.id.localeCompare(b.id));
     return rows;
@@ -6134,6 +6146,18 @@ const LeafRect = (props: {
   /** Bind the armed port to THIS leaf's legal output (then disarm). */
   onBindHere?: () => void;
 }) => {
+  // Replica chips inherit their SOURCE's label, which for a collapsed-GROUP
+  // source (e.g. AES "Key Expansion") can be longer than a leaf chip's fixed
+  // width (LEAF_W). SVG <text> doesn't clip, so a long label would spill past
+  // the rect. Truncate the RENDERED text with an ellipsis to fit the box;
+  // the full label stays in the <title> tooltip. Only replicas truncate —
+  // real leaves are sized by the spec and fit by construction.
+  const displayLabel = createMemo(() => {
+    if (!props.isReplica) return props.label;
+    const maxChars = Math.floor((props.box.w - 8) / LABEL_PX_PER_CHAR);
+    if (maxChars >= props.label.length || maxChars < 2) return props.label;
+    return `${props.label.slice(0, maxChars - 1)}…`;
+  });
   // SVG <g> can't be replaced by a semantic <button> (it'd leave the SVG
   // coordinate system). We attach pointer + keyboard handlers; biome's
   // useSemanticElements rule then leaves us alone because we deliberately
@@ -6213,7 +6237,7 @@ const LeafRect = (props: {
         text-anchor="middle"
         dominant-baseline="central"
       >
-        {props.label}
+        {displayLabel()}
       </text>
       <Show when={props.warnings.length > 0}>
         <WarningGlyph

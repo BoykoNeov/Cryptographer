@@ -137,10 +137,16 @@ describe("bundleEdges — collapse same-(from, to, kind, isFeedback)", () => {
     const raw = deriveAuxGraph(trace, aes128EcbSpec);
     // Collapse the iterate — this is the user-flagged state.
     const collapsed = collapseGraph(raw, new Set(["ecb-blocks"]));
-    // Replicate at threshold 1 so even small fanouts replicate. With the
-    // iterate collapsed, key-schedule.publish's outgoing fanout into ecb-blocks
-    // is 11 (one per round-key consumer, all folded to the iterate id).
-    const replicated = replicateHighFanoutSources(collapsed, 1);
+    // Force `key-schedule.publish` to replicate via "always". With the iterate
+    // collapsed, all 11 round-key consumers fold onto the single `ecb-blocks`
+    // id, so the source's DISTINCT-consumer fanout is 1 — below any threshold
+    // (the 2026-06-02 metric counts distinct consumers, not raw edges, so a
+    // single-consumer fan-out defers to the ×11 bundle on the auto path). The
+    // explicit "always" override is the sanctioned way to still force the
+    // single replica chip here — exactly the case this test pins.
+    const replicated = replicateHighFanoutSources(collapsed, 1, {
+      "key-schedule.publish": "always",
+    });
     const fb = buildIterateFeedbackPredicate(replicated);
 
     const bundled = bundleEdges(replicated, fb);
@@ -162,7 +168,11 @@ describe("bundleEdges — collapse same-(from, to, kind, isFeedback)", () => {
     const trace = runAes128Ecb();
     const raw = deriveAuxGraph(trace, aes128EcbSpec);
     const collapsed = collapseGraph(raw, new Set(["ecb-blocks"]));
-    const replicated = replicateHighFanoutSources(collapsed, 1);
+    // "always" override — single distinct consumer (ecb-blocks) after collapse;
+    // see the sibling test above for why the auto path defers to the bundle.
+    const replicated = replicateHighFanoutSources(collapsed, 1, {
+      "key-schedule.publish": "always",
+    });
     const fb = buildIterateFeedbackPredicate(replicated);
 
     const bundled = bundleEdges(replicated, fb);
@@ -277,7 +287,11 @@ describe("bundleEdges — collapse same-(from, to, kind, isFeedback)", () => {
     const trace = runAes128Ecb();
     const raw = deriveAuxGraph(trace, aes128EcbSpec);
     const collapsed = collapseGraph(raw, new Set(["ecb-blocks"]));
-    const replicated = replicateHighFanoutSources(collapsed, 1);
+    // "always" override — single distinct consumer (ecb-blocks) after collapse;
+    // forces the multi-aux replica pair this test splits on the feedback flag.
+    const replicated = replicateHighFanoutSources(collapsed, 1, {
+      "key-schedule.publish": "always",
+    });
     // Find the key-schedule.publish replica bundle's (from, to) so we have
     // a pair with >2 same-pair aux edges to split.
     const replicaSrc = replicated.edges.find((e) => e.from.startsWith("key-schedule.publish@->"));

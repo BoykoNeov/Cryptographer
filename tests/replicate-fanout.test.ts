@@ -152,16 +152,15 @@ describe("replicateHighFanoutSources", () => {
     }
   });
 
-  // Container sources (iterate, group) are themselves visible decongestion
-  // devices — replicating them produces a chip near the consumer that
-  // duplicates the existing state-spine arrow AND overflows the chip
-  // (container labels are typically long). The transform silently skips
-  // them: the user's "always" panel toggle is preserved but no-ops for
-  // container ids. Specific user-reported case (2026-05-16): post-Option-C
-  // a collapsed iterate stayed as a source with one outgoing aux edge to
-  // `concat-blocks`, and toggling it "always" produced a duplicate
-  // arrow + label-overflowing chip.
-  it("skips container sources even when set to 'always' in modes", () => {
+  // ITERATE-family containers stay ineligible for replication even when set
+  // to "always" — they're spine loop structures, and replicating fully
+  // removes the source from the graph, erasing the loop from the main flow.
+  // Specific user-reported case (2026-05-16): post-Option-C a collapsed
+  // iterate stayed as a source with one outgoing aux edge to `concat-blocks`,
+  // and toggling it "always" produced a duplicate arrow + label-overflowing
+  // chip. (Collapsed GROUP containers ARE eligible — see the group cases
+  // below; the discriminator is `kind === "group" && childIds.length === 0`.)
+  it("skips iterate container sources even when set to 'always' in modes", () => {
     const g = {
       nodes: [
         {
@@ -193,6 +192,84 @@ describe("replicateHighFanoutSources", () => {
     expect(edges).toHaveLength(1);
     expect(edges[0]?.from).toBe("ecb-blocks");
     expect(edges[0]?.to).toBe("concat-blocks");
+  });
+
+  // ─── Collapsed-GROUP container sources ARE eligible (2026-06-02) ──────────
+  //
+  // A collapsed group renders as a single leaf-like chip (collapseGraph
+  // clears its childIds to []), so it can be replicated exactly like a leaf
+  // source: one small chip per consumer, the long fan-out lines gone. The
+  // motivating case is AES's default-collapsed "Key Expansion" group fanning
+  // 11 round keys to every AddRoundKey. Before this change the container was
+  // silently skipped and the 11 long lines stayed on the canvas.
+  describe("collapsed group container sources", () => {
+    // Build a fixture that mirrors the post-collapse shape: a `group`
+    // container with childIds === [] is the source of N aux edges to N
+    // distinct leaf consumers.
+    const collapsedGroupFixture = (childIds: readonly string[]): CipherGraph => {
+      const consumers = Array.from({ length: 5 }, (_, i) => `consumer-${i}`);
+      return {
+        nodes: consumers.map((id) => ({
+          stepId: id,
+          stepType: "add-round-key@1",
+          label: id,
+          containerPath: [],
+        })),
+        containers: [
+          {
+            kind: "group" as const,
+            id: "key-schedule",
+            label: "Key Expansion",
+            containerPath: [],
+            childIds,
+          },
+        ],
+        edges: consumers.map((id, i) => ({
+          from: "key-schedule",
+          to: id,
+          auxKey: `roundKey.${i}`,
+          kind: "aux" as const,
+        })),
+        rootIds: ["key-schedule", ...consumers],
+      };
+    };
+
+    it("auto-replicates a collapsed group above the threshold (one chip per consumer)", () => {
+      const g = collapsedGroupFixture([]); // collapsed → childIds empty
+      // Fanout 5 > threshold 3 → auto-replicate, no override needed.
+      const r = replicateHighFanoutSources(g, 3);
+      const replicas = r.nodes.filter((n) => n.replicaOf === "key-schedule");
+      expect(replicas).toHaveLength(5);
+      for (const rep of replicas) {
+        // Replicas inherit the container's kind (as stepType) + label.
+        expect(rep.stepType).toBe("group");
+        expect(rep.label).toBe("Key Expansion");
+      }
+      // The original container is fully replaced: gone from nodes (never was),
+      // gone from containers, gone from rootIds, and no edge emits from it.
+      expect(r.containers.find((c) => c.id === "key-schedule")).toBeUndefined();
+      expect(r.rootIds).not.toContain("key-schedule");
+      expect(r.edges.filter((e) => e.from === "key-schedule")).toHaveLength(0);
+    });
+
+    it('honors "always" for a collapsed group even below the threshold', () => {
+      const g = collapsedGroupFixture([]);
+      const r = replicateHighFanoutSources(g, 50, { "key-schedule": "always" });
+      expect(r).not.toBe(g);
+      expect(r.nodes.filter((n) => n.replicaOf === "key-schedule")).toHaveLength(5);
+      expect(r.containers.find((c) => c.id === "key-schedule")).toBeUndefined();
+    });
+
+    it("does NOT replicate an EXPANDED group (childIds non-empty)", () => {
+      // An expanded group owns a body box; its real fan-out source is the
+      // inner leaf, not the container. childIds non-empty → ineligible.
+      const g = collapsedGroupFixture(["some-inner-leaf"]);
+      const r = replicateHighFanoutSources(g, 3);
+      // No replicas, container survives, edges still emit from it.
+      expect(r.nodes.filter((n) => n.replicaOf === "key-schedule")).toHaveLength(0);
+      expect(r.containers.find((c) => c.id === "key-schedule")).toBeDefined();
+      expect(r.edges.filter((e) => e.from === "key-schedule")).toHaveLength(5);
+    });
   });
 
   // ─── Slice 7b: state-edge replication + source removal ─────────────────
