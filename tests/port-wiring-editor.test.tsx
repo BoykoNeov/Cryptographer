@@ -140,6 +140,29 @@ describe("PortWiringEditor", () => {
     expect(sel.options[sel.selectedIndex]?.textContent).toContain("unresolvable");
   });
 
+  it("flags a byteLength-mismatched source with the coerce label", () => {
+    // des.p-permutation emits 4 bytes on `state`; des.s-boxes' `state` input
+    // wants 6 — a genuine concrete mismatch, so the source is offered but
+    // tagged "coerce" (the runtime would right-pad it as a visible step).
+    __setSpecForTests(
+      makeSpec([
+        { kind: "step", id: "src", type: "des.p-permutation@1", params: {} },
+        {
+          kind: "step",
+          id: "sink",
+          type: "des.s-boxes@1",
+          params: {},
+          portInputs: { state: { node: "src", port: "state" } },
+        },
+      ]),
+    );
+    const { container } = render(() => <PortWiringEditor stepId="sink" />);
+    const sel = selectFor(container, "state");
+    const srcOption = optionLabels(sel).find((l) => l.startsWith("src.state"));
+    expect(srcOption).toBeDefined();
+    expect(srcOption).toContain("size mismatch (coerces)");
+  });
+
   it("renders nothing for a leaf that has no input ports", () => {
     // A leaf type with zero declared inputs (constant-load) → no wiring rows.
     __setSpecForTests(

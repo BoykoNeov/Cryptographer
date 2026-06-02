@@ -2303,6 +2303,19 @@ export const GraphView = () => {
     ),
   );
 
+  // Disarm any pending wire when the spec changes (4d-bis). Same reason as the
+  // inspector reset above: an armed `{stepId, portName}` from a prior spec can
+  // collide with a same-named leaf in the new one (AES-128 → AES-192 both have
+  // `round.1.mix-columns`), silently re-activating the arm against a different
+  // cipher. Clear on any spec-id change.
+  createEffect(
+    on(
+      () => spec().id,
+      () => disarmPort(),
+      { defer: true },
+    ),
+  );
+
   /**
    * Per-spec zoom factor for the SVG canvas (Slice 3 of the
    * graph-narrative-and-zoom plan). Applied by scaling the SVG's rendered

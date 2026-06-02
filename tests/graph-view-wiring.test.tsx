@@ -28,7 +28,7 @@ import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetHistoryForTests } from "@/ui/stores/history";
 import { __resetLayoutsForTests } from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
-import { __resetSpecForTests, useSpec } from "@/ui/stores/spec";
+import { __resetSpecForTests, setCipher, useSpec } from "@/ui/stores/spec";
 import { __resetTraceForTests } from "@/ui/stores/trace";
 import { __resetViewDensityForTests } from "@/ui/stores/view-density";
 import { __resetViewModeForTests, setViewMode } from "@/ui/stores/view-mode";
@@ -116,6 +116,18 @@ describe("GraphView port-wiring gesture", () => {
     await waitFor(() => expect(q(container, "graph-port-bind-round.1.sub-bytes")).toBeTruthy());
     // Toggle off.
     arm();
+    await waitFor(() => expect(q(container, "graph-port-bind-round.1.sub-bytes")).toBeNull());
+  });
+
+  it("disarms when the cipher (spec) changes — no stale arm on a same-named leaf", async () => {
+    const { container } = render(() => <App />);
+    await waitFor(() => expect(q(container, "graph-leaf-round.1.mix-columns")).toBeTruthy());
+    fireEvent.click(q(container, "graph-port-in-round.1.mix-columns-input") as Element);
+    await waitFor(() => expect(q(container, "graph-port-bind-round.1.sub-bytes")).toBeTruthy());
+
+    // AES-192 also has `round.1.mix-columns` — without the reset the arm would
+    // silently re-activate against the new spec's same-named leaf.
+    setCipher("aes-192");
     await waitFor(() => expect(q(container, "graph-port-bind-round.1.sub-bytes")).toBeNull());
   });
 });

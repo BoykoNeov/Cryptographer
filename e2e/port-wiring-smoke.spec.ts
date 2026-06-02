@@ -85,4 +85,16 @@ test.describe("Slice E — port-wiring click-to-arm on the AES-128 graph", () =>
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("graph-port-bind-round.1.sub-bytes")).toHaveCount(0);
   });
+
+  test("the dropdown wiring panel mounts below the graph for the selected leaf", async ({
+    page,
+  }) => {
+    await openGraphTab(page);
+    // Selecting a leaf (click its rect, not a port handle) shows its param +
+    // wiring panel. Confirms PortWiringEditor is actually mounted in the App,
+    // not just unit-rendered — and gives the keyboard/a11y path a smoke.
+    await page.getByTestId("graph-leaf-round.1.mix-columns").locator("rect").first().click();
+    await expect(page.getByText("Input wiring")).toBeVisible();
+    await expect(page.locator(".port-wiring-select").first()).toBeVisible();
+  });
 });

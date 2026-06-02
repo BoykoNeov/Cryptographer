@@ -20,8 +20,12 @@ import { desSpec } from "@/ciphers/des";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { buildSha256Spec } from "@/ciphers/sha-256";
 import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
+import { COERCE_STEP_TYPE } from "@/core/port-projection";
 import { classifyBinding, legalSourcesForInput } from "@/core/port-sources";
-import type { CipherSpec, StepNode } from "@/core/types";
+import { runSpec } from "@/core/runtime";
+import { setPortBinding } from "@/core/spec-mutations";
+import { bytesFromHex } from "@/core/state/bytes";
+import type { AuxValue, CipherSpec, StepNode } from "@/core/types";
 import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
@@ -185,6 +189,36 @@ describe("legalSourcesForInput — preceding container's published output", () =
   it("does NOT offer a leaf inside that container (cross-scope)", () => {
     const sources = legalSourcesForInput(spec, registry, "after", "input");
     expect(has(sources, "g.x", "output")).toBe(false);
+  });
+});
+
+describe("coerce wiring — reachable in a shipped spec + coerces-and-runs", () => {
+  // The DES key schedule's rotate step wants a 7-byte half; load-key publishes
+  // 8 bytes. Wiring rotate's input straight to load-key is a genuine concrete
+  // mismatch (8 → 7) — the canary that the coerce affordance isn't dead UI.
+  const SINK = "key-schedule.g0.rotate";
+  const SOURCE = { node: "key-schedule.load-key", port: "output" } as const;
+
+  it("legalSourcesForInput tags the mismatched source 'coerce'", () => {
+    const sources = legalSourcesForInput(desSpec, registry, SINK, "input");
+    const match = sources.find((s) => s.node === SOURCE.node && s.port === SOURCE.port);
+    expect(match, "the load-key source must be a legal target for rotate").toBeDefined();
+    expect(match?.compat).toBe("coerce");
+  });
+
+  it("a coerce wire coerces-and-runs (no throw) and emits a __coerce__ frame", () => {
+    const rewired = setPortBinding(desSpec, SINK, "input", {
+      node: SOURCE.node,
+      port: SOURCE.port,
+    });
+    const trace = runSpec(rewired, registry, {
+      initialState: { shape: "bytes", bytes: bytesFromHex("0123456789abcdef") },
+      initialAux: new Map<string, AuxValue>([["key", bytesFromHex("133457799bbcdff1")]]),
+    });
+    // The run completed (a coerce is warn-and-run, never a throw)…
+    expect(trace.frames.length).toBeGreaterThan(0);
+    // …and the length mismatch surfaced as a visible synthetic coercion frame.
+    expect(trace.frames.some((f) => f.stepType === COERCE_STEP_TYPE)).toBe(true);
   });
 });
 
