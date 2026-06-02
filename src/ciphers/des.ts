@@ -39,24 +39,18 @@
  * `outputFrom`. Neither has cryptographic value (relics of bit-serial
  * hardware) — kept visible so the standard's structure is intact.
  *
- * **Key schedule stays lifted** (`des.key-schedule@1`), aux-only — it runs
- * first, expands the 64-bit master key into 16 × 48-bit round keys under
- * `roundKey.0..15`, mirroring `aes.key-expansion@1`. Each round's `xor-K`
- * reads its slot from aux.
+ * **Key schedule is decomposed** (`buildDesKeyScheduleNative()`,
+ * key-schedule-decomposition K4a) — it runs first as a visible tree of
+ * port-native primitives (PC-1 → 16× rotate-halves → PC-2 → publish tail),
+ * expanding the 64-bit master key into 16 × 48-bit round keys under
+ * `roundKey.0..15`, mirroring the AES/Speck/Serpent decomposed schedules.
+ * Each round's `xor-K` reads its slot from aux unchanged.
  */
 
 import type { CipherSpec, StepNode } from "../core/types";
 import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "../core/types";
-import {
-  DES_E,
-  DES_FP,
-  DES_IP,
-  DES_P,
-  DES_PC1,
-  DES_PC2,
-  DES_SBOXES,
-  DES_SHIFTS,
-} from "./des-constants";
+import { DES_E, DES_FP, DES_IP, DES_P, DES_SBOXES } from "./des-constants";
+import { buildDesKeyScheduleNative } from "./des-key-schedule-builder-native";
 
 /** Spell a port binding the way the runtime + the editor expect it. */
 const port = (
@@ -192,18 +186,12 @@ export const desSpec: CipherSpec = {
     key: { byteLength: 8 },
   },
   steps: [
-    {
-      kind: "step",
-      id: "key-schedule",
-      type: "des.key-schedule@1",
-      params: {
-        keyAuxName: "key",
-        outputPrefix: "roundKey",
-        pc1: [...DES_PC1],
-        pc2: [...DES_PC2],
-        shifts: [...DES_SHIFTS],
-      },
-    },
+    // The key schedule is now DECOMPOSED into visible port-native frames
+    // (key-schedule-decomposition K4a) — PC-1 → 16× rotate-halves → PC-2 →
+    // publish — instead of the monolithic `des.key-schedule@1` leaf. It still
+    // runs first and publishes `roundKey.0..15` into aux, which each round's
+    // `xor-K` reads unchanged.
+    buildDesKeyScheduleNative(),
     {
       kind: "step",
       id: "initial-permutation",

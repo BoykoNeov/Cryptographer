@@ -34,16 +34,8 @@
 
 import type { CipherSpec, StepNode } from "../core/types";
 import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "../core/types";
-import {
-  DES_E,
-  DES_FP,
-  DES_IP,
-  DES_P,
-  DES_PC1,
-  DES_PC2,
-  DES_SBOXES,
-  DES_SHIFTS,
-} from "./des-constants";
+import { DES_E, DES_FP, DES_IP, DES_P, DES_SBOXES } from "./des-constants";
+import { buildDesKeyScheduleNative } from "./des-key-schedule-builder-native";
 
 /** Spell a port binding the way the runtime + the editor expect it. */
 const port = (
@@ -175,18 +167,11 @@ export const desDecryptSpec: CipherSpec = {
     key: { byteLength: 8 },
   },
   steps: [
-    {
-      kind: "step",
-      id: "key-schedule",
-      type: "des.key-schedule@1",
-      params: {
-        keyAuxName: "key",
-        outputPrefix: "roundKey",
-        pc1: [...DES_PC1],
-        pc2: [...DES_PC2],
-        shifts: [...DES_SHIFTS],
-      },
-    },
+    // Decomposed key schedule (key-schedule-decomposition K4a) — identical to
+    // encrypt's. The schedule produces the SAME 16 round keys in BOTH
+    // directions; only the per-round CONSUMPTION order flips (decrypt round r
+    // reads roundKey.{16 - r}), which is handled below in the round wiring.
+    buildDesKeyScheduleNative(),
     {
       kind: "step",
       id: "initial-permutation",

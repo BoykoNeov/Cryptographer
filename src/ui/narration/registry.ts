@@ -217,6 +217,14 @@ export const NARRATION_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
   // via its own `narrationOverride`. Below the cell-shape gate anyway
   // (`input: "any"`) — listed here for parity with the AES / Speck tails.
   "serpent.publish-round-keys@1",
+  // The aux-publish tail of the DECOMPOSED DES key schedule
+  // (key-schedule-decomposition K4a, 2026-06-02). Same posture as the AES /
+  // Speck / Serpent analogs above: an identity passthrough that mirrors the 16
+  // round keys into aux. The interesting math (PC-1 → 16× rotate-halves →
+  // PC-2) is in the leaves above it, each narrated via its own
+  // `narrationOverride`. Below the cell-shape gate anyway (`input: "any"`) —
+  // listed here for parity with the AES / Speck / Serpent tails.
+  "des.publish-round-keys@1",
   // Bit-level linear transforms — byte-level prose would be misleading.
   // (Bit-permutation is honest at byte granularity — narrated in Phase 2.)
   "serpent.linear-transform@1",

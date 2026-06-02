@@ -185,10 +185,20 @@ export const ParamEditor = (props: Props) => {
                 getStep().type === "des.initial-permutation@1" ||
                 getStep().type === "des.final-permutation@1" ||
                 getStep().type === "des.expand-R@1" ||
-                getStep().type === "des.p-permutation@1"
+                getStep().type === "des.p-permutation@1" ||
+                getStep().type === "des.bit-permute@1"
               }
             >
+              {/* `des.bit-permute@1` (key-schedule PC-1/PC-2, K4a) reuses the
+                  read-only table view — same `table` param; the "Output bits"
+                  row (table().length) distinguishes PC-1's 56 from PC-2's 48. */}
               <DesPermutationBlock step={getStep()} />
+            </Match>
+            <Match when={getStep().type === "des.rotate-halves@1"}>
+              <DesRotateHalvesBlock step={getStep()} />
+            </Match>
+            <Match when={getStep().type === "des.publish-round-keys@1"}>
+              <DesPublishRoundKeysBlock step={getStep()} />
             </Match>
             <Match when={getStep().type === "des.xor-with-K@1"}>
               <DesXorWithKBlock step={getStep()} />
@@ -1138,6 +1148,10 @@ const DesPermutationBlock = (props: { step: StepLeaf }) => {
         return "Expansion (E)";
       case "des.p-permutation@1":
         return "P permutation";
+      case "des.bit-permute@1":
+        // Serves both PC-1 (56) and PC-2 (48); the "Output bits" row below
+        // (table().length) tells them apart.
+        return "Permuted Choice (PC-1 / PC-2)";
       default:
         return props.step.type;
     }
@@ -1177,10 +1191,72 @@ const DesPermutationBlock = (props: { step: StepLeaf }) => {
   );
 };
 
+// DES key-schedule decomposition (K4a) — the C/D half-rotation. Thin
+// read-only view of the shift amount; the half-width is structural (28).
+// No ApplyAllRow: the 16 rotate leaves use DIFFERENT shifts (the FIPS
+// schedule), so copying one to all would break the cipher.
+const DesRotateHalvesBlock = (props: { step: StepLeaf }) => {
+  const params = (): { shift?: number; halfBits?: number } => props.step.params as never;
+  const shift = (): number => params().shift ?? 0;
+  const halfBits = (): number => params().halfBits ?? 28;
+  return (
+    <>
+      <dl class="param-scalars">
+        <div class="param-scalar-row">
+          <dt>Left-rotate by</dt>
+          <dd>
+            {shift()} bit{shift() === 1 ? "" : "s"}
+          </dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Half width</dt>
+          <dd>{halfBits()} bits (C and D)</dd>
+        </div>
+      </dl>
+      <p class="muted small">
+        Left-rotates both {halfBits()}-bit halves (C and D) of the key register by {shift()} bit
+        {shift() === 1 ? "" : "s"}. The per-round shift amount comes from the FIPS 46-3 schedule (1
+        or 2); it is structural and not meant to be edited.
+      </p>
+    </>
+  );
+};
+
+// DES key-schedule decomposition (K4a) — the aux-publish tail. Thin read-only
+// view (parallel to SerpentPublishRoundKeysBlock). DES emits a fixed 16 round
+// keys (no key-size variant).
+const DesPublishRoundKeysBlock = (props: { step: StepLeaf }) => {
+  const params = (): { outputPrefix?: string; count?: number } => props.step.params as never;
+  const count = (): number => params().count ?? 16;
+  const prefix = (): string => params().outputPrefix ?? "roundKey";
+  return (
+    <>
+      <dl class="param-scalars">
+        <div class="param-scalar-row">
+          <dt>Aux prefix (write)</dt>
+          <dd>{prefix()}</dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Round keys</dt>
+          <dd>
+            {count()} keys ({prefix()}.0 … {prefix()}.{count() - 1})
+          </dd>
+        </div>
+      </dl>
+      <p class="muted small">
+        Writes the 16 derived DES round keys into the aux map for the per-round key-mixing steps.
+        The interesting math is the PC-1 / rotate / PC-2 leaves above this tail; these params are
+        structural and not meant to be edited.
+      </p>
+    </>
+  );
+};
+
 // DES key-schedule: three structural tables (PC-1, PC-2, SHIFTS) plus two
 // aux-name scalars. Rendered the same way as the AES key-expansion block
 // (scalars + collapsible table) but with three independent tables instead
-// of one S-box.
+// of one S-box. Retained for the monolithic `des.key-schedule@1` (KAT oracle
+// + pre-K4 saved docs); shipped DES specs now use the decomposed builder.
 const DesKeyScheduleBlock = (props: { step: StepLeaf }) => {
   const params = (): {
     keyAuxName?: string;

@@ -367,9 +367,18 @@ describe("<RoundKeyPanel /> against a real DES trace (fallback-strip path, 6B ke
     __resetRoundKeyPanelOverrideForTests();
   });
 
+  // K4a (2026-06-02): DES's key schedule was decomposed, so the round-key
+  // writes now happen at the `key-schedule.publish` tail (its auxWritten holds
+  // every roundKey.N) rather than the old monolithic `des.key-schedule@1`
+  // frame[0]. The panel auto-expands only on a frame "about" the schedule —
+  // select the publish frame so it opens. Same retarget the AES / Serpent /
+  // Speck sections above already apply.
+  const desPublishFrame = (trace: ReturnType<typeof seedDesTrace>) =>
+    trace.frames.find((f) => f.stepId === "key-schedule.publish") ?? null;
+
   it("renders 16 round-key cells in one ribbon at 6B each", () => {
     const trace = seedDesTrace();
-    const { container } = render(() => <RoundKeyPanel frame={trace.frames[0] ?? null} />);
+    const { container } = render(() => <RoundKeyPanel frame={desPublishFrame(trace)} />);
     const ribbons = container.querySelectorAll(".round-key-ribbon");
     expect(ribbons.length).toBe(1);
     // DES: 16 round keys (K_0..K_15), each 48 bits packed into 6 bytes.
@@ -379,7 +388,7 @@ describe("<RoundKeyPanel /> against a real DES trace (fallback-strip path, 6B ke
 
   it("each K_i ribbon cell renders 6 byte cells via the strip branch (no TinyMatrix)", () => {
     const trace = seedDesTrace();
-    const { container } = render(() => <RoundKeyPanel frame={trace.frames[0] ?? null} />);
+    const { container } = render(() => <RoundKeyPanel frame={desPublishFrame(trace)} />);
     // All 16 ribbons use the strip fallback (byteLength !== 16 path).
     expect(container.querySelectorAll(".round-key-cell-strip").length).toBe(16);
     // No TinyMatrix anywhere — DES K_i is 6 bytes, never 16.

@@ -40,6 +40,11 @@ import {
 } from "../steps/bytes-to-state";
 import { concat, concatDoc, concatPortContract } from "../steps/concat";
 import { constantLoad, constantLoadDoc, constantLoadPortContract } from "../steps/constant-load";
+import {
+  desBitPermute,
+  desBitPermuteDoc,
+  desBitPermutePortContract,
+} from "../steps/des-bit-permute";
 import { desExpandR, desExpandRDoc, desExpandRPortContract } from "../steps/des-expand-r";
 import {
   desFinalPermutation,
@@ -62,6 +67,17 @@ import {
   desPPermutationDoc,
   desPPermutationPortContract,
 } from "../steps/des-p-permutation";
+import {
+  desPublishRoundKeys,
+  desPublishRoundKeysDoc,
+  desPublishRoundKeysMeta,
+  desPublishRoundKeysPortContract,
+} from "../steps/des-publish-round-keys";
+import {
+  desRotateHalves,
+  desRotateHalvesDoc,
+  desRotateHalvesPortContract,
+} from "../steps/des-rotate-halves";
 import { desSBoxes, desSBoxesDoc, desSBoxesPortContract } from "../steps/des-s-boxes";
 import {
   desXorWithK,
@@ -640,6 +656,36 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: desPPermutation,
     shape: desPPermutationPortContract,
     doc: desPPermutationDoc,
+  });
+  // ─── DES key-schedule decomposition (key-schedule-decomposition K4a) ────
+  // The decomposed replacement for the monolithic `des.key-schedule@1`. The
+  // schedule is pure bit-wiring (no arithmetic): PC-1 → 16× rotate-halves →
+  // PC-2. `des.bit-permute@1` (PC-1/PC-2) and `des.rotate-halves@1` are pure
+  // port-native (no meta — bytes flow on input/output ports via portInputs).
+  // `des.publish-round-keys@1` is the one surviving meta-bearing tail
+  // (B-minimal): identity passthrough whose `meta.auxWritePorts` mirrors each
+  // round key into `aux["roundKey.0..15"]` byte-identically to the monolith,
+  // so the untouched `des.xor-with-K@1` consumers read the same round keys.
+  // The monolithic `des.key-schedule@1` stays registered as KAT oracle +
+  // back-compat (AES/Serpent precedent — no global rename).
+  r.register("des.bit-permute@1", {
+    kind: "ported",
+    executor: desBitPermute,
+    shape: desBitPermutePortContract,
+    doc: desBitPermuteDoc,
+  });
+  r.register("des.rotate-halves@1", {
+    kind: "ported",
+    executor: desRotateHalves,
+    shape: desRotateHalvesPortContract,
+    doc: desRotateHalvesDoc,
+  });
+  r.register("des.publish-round-keys@1", {
+    kind: "ported",
+    executor: desPublishRoundKeys,
+    shape: desPublishRoundKeysPortContract,
+    meta: desPublishRoundKeysMeta,
+    doc: desPublishRoundKeysDoc,
   });
   // ─── Port-native primitives (universal-port plan Phase 2, Slice 2.1a+) ──
   // Authored against the port-native contract directly — no `meta` projection

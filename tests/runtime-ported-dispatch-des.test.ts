@@ -143,8 +143,15 @@ describe("runtime — ported dispatch, Slice 1.8 DES + feistel-toy step types", 
   // asserted across all 16 rounds) — the real replacement for frame parity.
 
   // ─── (c) Round-key port insertion order ──────────────────────────────
+  // K4a (2026-06-02): the DES key schedule is DECOMPOSED — no shipped spec
+  // emits a monolithic `des.key-schedule@1` frame. The round-key aux writes
+  // now happen at the meta-bearing `des.publish-round-keys@1` tail, so this
+  // insertion-order pin retargets there. The property is identical (the
+  // visualizations that iterate `frame.auxWritten.entries()` read this tail
+  // now). The monolith's own port-emission order stays covered by the
+  // decomposition oracle in `des-key-schedule-decomposition.test.ts`.
 
-  describe("(c) des.key-schedule@1 emits 16 round keys in insertion order", () => {
+  describe("(c) des.publish-round-keys@1 emits 16 round keys in insertion order", () => {
     it("aux Map iteration preserves roundKey.0 → roundKey.15 ordering under ported", () => {
       const vec = DES_KATS[0];
       if (!vec) throw new Error("expected at least one DES KAT vector");
@@ -154,10 +161,11 @@ describe("runtime — ported dispatch, Slice 1.8 DES + feistel-toy step types", 
         initialAux: new Map<string, AuxValue>([["key", bytesFromHex(vec.key)]]),
       });
 
-      // Find the key-schedule frame. Locating by stepType keeps the test
-      // robust to any future spec-builder additions ahead of the schedule.
-      const ksFrame = trace.frames.find((f) => f.stepType === "des.key-schedule@1");
-      if (!ksFrame) throw new Error("expected one des.key-schedule@1 frame");
+      // Find the publish tail by stepType (the decomposed schedule's
+      // meta-bearing aux-writer). Locating by stepType keeps the test robust
+      // to spec-builder additions ahead of the schedule.
+      const ksFrame = trace.frames.find((f) => f.stepType === "des.publish-round-keys@1");
+      if (!ksFrame) throw new Error("expected one des.publish-round-keys@1 frame");
 
       const keys = [...ksFrame.auxWritten.keys()];
       expect(keys.length).toBe(16);

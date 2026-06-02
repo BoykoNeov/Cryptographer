@@ -87,15 +87,21 @@ describe("DES (port-native) graph derivation — structural sanity", () => {
 
   it("fans the key-schedule out to all 16 xor-K leaves with the right round key", () => {
     const graph = deriveAuxGraph(desTrace, desSpec);
+    // K4a (key-schedule decomposition): the round-key aux source is now the
+    // meta-bearing publish tail `key-schedule.publish` (inside the decomposed
+    // `key-schedule` group), not the retired monolithic `key-schedule` leaf —
+    // the same retarget K1c/K3 applied (uncollapsed graph: `*.publish` is the
+    // aux source). On COLLAPSE the edge re-homes to the `key-schedule`
+    // container; this raw-graph test pins the leaf.
     for (let r = 1; r <= 16; r++) {
       const edge = graph.edges.find(
         (e) =>
-          e.from === "key-schedule" &&
+          e.from === "key-schedule.publish" &&
           e.to === `round.${r}.xor-K` &&
           e.kind === "aux" &&
           e.auxKey === `roundKey.${r - 1}`,
       );
-      expect(edge, `key-schedule → round.${r}.xor-K (roundKey.${r - 1})`).toBeDefined();
+      expect(edge, `key-schedule.publish → round.${r}.xor-K (roundKey.${r - 1})`).toBeDefined();
     }
   });
 

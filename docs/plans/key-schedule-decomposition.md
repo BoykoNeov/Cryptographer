@@ -662,6 +662,60 @@ for all three key sizes. Graph smoke (throwaway Playwright) for legibility — b
 
 ### K4 — DES key-schedule decomposition (B-minimal; sequenced after K3)
 
+> **Status: K4a SHIPPED 2026-06-02 — gate GREEN (biome + tsc + 2220 vitest /
+> 192 files + build).** B-minimal, no A gate (per the K2d decision rule).
+> **K4b (KeyScheduleExplorer DES-branch retirement) NOT STARTED** — and since
+> DES is the *last* cipher, K4b empties the whole KeyScheduleExplorer subsystem.
+>
+> **The K4 load-bearing design call (advisor slice-open pass, 2026-06-02): the
+> rotation representation.** DES's schedule is *pure bit-wiring* — no arithmetic,
+> no S-box. The advisor picked a **dedicated `des.rotate-halves@1`** (verbatim
+> lift of the monolith's `fipsBytesToBits`/`rotateBitsLeft`/`bitsToFipsBytes`
+> loop body) over expressing the rotation as a build-generated `des.bit-permute@1`
+> table. Rationale: a rotation IS pure bit-routing (so the "zero arithmetic"
+> punchline survives either way), but the cycling C/D halves are *the* signature
+> feature (the cumulative-28 cycle, C₁₆ = C₀), and `des.rotate-halves@1(shift: 2)`
+> is self-describing where a 56-entry permute table buries "rotate" in narration;
+> the verbatim lift is also byte-identical to the oracle by construction (the K3
+> `serpent.key-sbox@1` principle). **Three new step types shipped:**
+> `des.bit-permute@1` (PC-1/PC-2, generic `fipsPermute` lift, `{table, outBits}`),
+> `des.rotate-halves@1` (`{shift, halfBits}`), `des.publish-round-keys@1` (thin
+> sibling — 16 FIXED keys via `count`, 6 bytes each; NOT reuse Serpent's to avoid
+> welding a `serpent.*` type into saved DES JSON). **No mirror hazard** (no
+> schedule S-box — DES dodges K3's trap like Speck did). New
+> `src/ciphers/des-key-schedule-builder-native.ts` (`buildDesKeyScheduleNative()`,
+> no params): one default-collapsed `key-schedule` group: `load-key` → `pc1`
+> (64→56) → 16× (`rotate-halves` → `pc2` 56→48) → publish. The 7-byte C‖D
+> register threads round-to-round; no byte-order codec (DES is FIPS MSB-first
+> throughout, unlike K2/K3). **Gate:**
+> `tests/des-key-schedule-decomposition.test.ts` pins published `roundKey.0..15`
+> byte-equal to the monolith oracle (FIPS App-B key + one more — no key-size
+> variant, so no 3-size matrix); shipped `des-vectors`/`des-decrypt` KATs (now
+> routing through the decomposition) stay byte-equal to published vectors.
+> `des.key-schedule@1` KEPT registered (oracle + back-compat — never
+> global-rename). Blast radius: both DES specs rewired; ParamEditor blocks
+> (`des.bit-permute@1` reuses `DesPermutationBlock`; new `DesRotateHalvesBlock` +
+> `DesPublishRoundKeysBlock`); publish tail on the narration allowlist; round-key
+> fan-out graph/UI tests retargeted `key-schedule` → `key-schedule.publish`. The
+> KeyScheduleExplorer DES branch is now dormant — its `des-key-schedule-explorer`
+> test keeps it green by synthesizing the monolith frame (K3a pattern), pending
+> K4b retirement. Malformed-key handling shifted from hard-reject to
+> warn-and-run coercion (via `aux-load-bytes@1`), consistent with K1/K2/K3.
+> **Graph smoke (throwaway Playwright, deleted post-gate per
+> [[feedback_playwright_dormant]]): both DES specs (encrypt + decrypt) render
+> with 0 console/page errors; the `key-schedule` group default-collapses to a
+> single chip (no ~50-chip wall) and expands into the clean
+> `load-key → pc1 → (rotate → pc2)×16 → publish` staircase; clicking a
+> `rotate-halves` chip shows its read-only ParamEditor block (not raw JSON).
+> The decrypt collapsed view (reversed round-key consumption) renders
+> structurally identical to encrypt — the fan-out originates from the single
+> collapsed container, so consumption order produces no fishnet (the K2d
+> finding holds). Out-of-scope note: DES decrypt's default ciphertext is 16
+> bytes, so single-block mode shows a "must be exactly 8 bytes" input-validation
+> banner — pre-existing, unrelated to the key schedule (which runs first and
+> rendered fine).** K4a is now fully closed; **K4b** (KeyScheduleExplorer
+> DES-branch retirement — empties the whole subsystem) is the remaining slice.
+
 DES's schedule is a **different shape** (no per-round arithmetic constant — PC-1
 → 16 rounds of left-rotations on the two 28-bit halves → PC-2 selects 48 bits per
 round key). Decompose: PC-1 = `serpent.bit-permutation@1`-style `permute`/bit

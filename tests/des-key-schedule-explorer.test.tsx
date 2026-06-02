@@ -18,8 +18,9 @@
  */
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { DES_PC1, DES_PC2, DES_SHIFTS } from "@/ciphers/des-constants";
 import { runSpec } from "@/core/runtime";
-import type { TraceFrame } from "@/core/types";
+import type { AuxValue, TraceFrame } from "@/core/types";
 import { KeyScheduleExplorer } from "@/ui/components/KeyScheduleExplorer";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetCipherModeForTests } from "@/ui/stores/cipher-mode";
@@ -42,6 +43,32 @@ const resetAll = (): void => {
   __resetPaddingForTests();
 };
 
+// K4a (2026-06-02): DES's key schedule was decomposed, so a shipped DES spec
+// no longer emits a `des.key-schedule@1` frame — the monolithic executor
+// survives ONLY as the KAT oracle + back-compat. The KeyScheduleExplorer's DES
+// branch is DEFERRED for retirement (K4b — DES is the last cipher, so that
+// empties the whole subsystem), so this UI-dispatch test keeps exercising the
+// branch by SYNTHESIZING the monolithic frame directly (same shape the shipped
+// spec used to emit, with the master key in `auxRead` + the FIPS tables in
+// `params` so `simulateDesKeySchedule` re-runs). The shipped trace is still
+// put in the store so the click-scrub test can resolve `round.5.expand-R`
+// (the round body is unchanged by decomposition).
+const desKeyScheduleFrame = (): TraceFrame => ({
+  index: 0,
+  path: [],
+  stepId: "key-schedule",
+  stepType: "des.key-schedule@1",
+  params: {
+    keyAuxName: "key",
+    outputPrefix: "roundKey",
+    pc1: [...DES_PC1],
+    pc2: [...DES_PC2],
+    shifts: [...DES_SHIFTS],
+  },
+  auxRead: new Map<string, AuxValue>([["key", DES_KEY]]),
+  auxWritten: new Map(),
+});
+
 const seedDes = (): TraceFrame => {
   setCipher("des");
   const trace = runSpec(useSpec()(), buildDefaultRegistry(), {
@@ -49,9 +76,7 @@ const seedDes = (): TraceFrame => {
     initialAux: new Map([["key", DES_KEY]]),
   });
   setTrace(trace);
-  const f = trace.frames.find((fr) => fr.stepType === "des.key-schedule@1");
-  if (!f) throw new Error("des.key-schedule frame missing");
-  return f;
+  return desKeyScheduleFrame();
 };
 
 describe("KeyScheduleExplorer — DES dispatch", () => {
