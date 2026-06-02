@@ -42,7 +42,10 @@ internalized.
 
 - **Drag from the palette.** The left sidebar lists every registered
   step type, grouped by namespace, with a small chip showing the input
-  state shape each step expects (`bytes`, `4×4 matrix`, or `any`). Drag
+  state shape each step expects (`bytes`, `4×4 matrix`, or `any`). Below
+  the built-in groups, a **"my elements"** section lists any composites
+  you've saved (see "Saving a group as a reusable element" below) — drag
+  one to drop a fresh, fully editable copy of that whole group. Drag
   an entry onto the canvas:
   - **Drop on a leaf** → insert *after* that leaf in its parent.
   - **Drop on a container's header band** (the labelled top strip of
@@ -88,6 +91,20 @@ internalized.
   and use the "Delete this step" button. Deleting a container removes
   all its descendants too. No undo — drag the step back from the
   palette if you regret it.
+- **Save a group as a reusable element.** Hover any **group** (e.g. an
+  AES round) and click the amber `★` chip in its header band (next to
+  the `×`), then name it. The group is captured into the palette's
+  **"my elements"** section as a *composite* — a saved copy of its whole
+  contents (including the internal wiring). Drag it back from the palette
+  anywhere to drop a **fresh, fully editable copy**; its input is
+  auto-wired to whatever you drop it after. Composites are stored in your
+  browser (`localStorage`) and persist across reloads; rename or delete
+  them with the small `✎` / `×` controls on the palette entry. Two
+  caveats: only *groups* can be saved (not single leaves or loop
+  containers), and a saved round that reads a round key from `aux` only
+  computes correctly where that key exists — drop it somewhere without
+  the matching `roundKey.N` and you'll see the coercion/missing-aux
+  warning, which is the point (watch it break).
 - **Drag a replica chip or block chip** to nudge its position. Replicas
   (the small dashed chips that appear above their consumer when a
   high-fanout source is replicated) and block chips (the per-block
