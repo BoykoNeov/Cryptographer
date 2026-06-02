@@ -27,6 +27,7 @@
 import { PADDING_STEP_TYPES } from "@/core/spec-mutations";
 import type { StateShape } from "@/core/types";
 import { For, createMemo, createSignal } from "solid-js";
+import { deleteComposite, renameComposite, useComposites } from "../stores/composites";
 import { registry } from "../stores/registry";
 
 /**
@@ -35,6 +36,17 @@ import { registry } from "../stores/registry";
  * keys when reading/writing across getData/setData, so use lowercase.
  */
 export const STEP_TYPE_DRAG_MIME = "application/x-cryptographer-step-type";
+
+/**
+ * MIME key carrying a saved composite's LIBRARY id (not a step type) from a
+ * "my elements" palette entry to the GraphView drop handler (Phase 4f). The
+ * drop handler checks this MIME first; a payload here routes to
+ * `insertCompositeIntoSpec` (inline a fresh clone) instead of the step-type
+ * `insertStepIntoSpec` path. Composites carry no `text/plain` fallback so the
+ * step path's `text/plain` branch can never mistake a composite id for a
+ * step type.
+ */
+export const COMPOSITE_DRAG_MIME = "application/x-cryptographer-composite";
 
 /**
  * Module-level signal of the step type currently being dragged from the
@@ -165,6 +177,14 @@ const groupEntries = (entries: readonly PaletteEntry[]): readonly [string, Palet
 export const StepPalette = () => {
   const grouped = createMemo(() => groupEntries(collectEntries()));
 
+  // Saved composites ("my elements") — reactive so a save/delete/rename from
+  // anywhere (the graph-view [save as element] button, the delete ×) updates
+  // the section live. Oldest-first, the order the user built them in.
+  const composites = useComposites();
+  const compositeList = createMemo(() =>
+    Object.values(composites()).sort((a, b) => a.createdAt - b.createdAt),
+  );
+
   /**
    * HTML5 dragstart handler. Writes the step type onto `dataTransfer` so
    * the drop handler (GraphView's onDrop) can read it back. We also set
@@ -198,6 +218,29 @@ export const StepPalette = () => {
    */
   const onDragEnd = (): void => {
     setActiveDragStepType(null);
+  };
+
+  /**
+   * Dragstart for a saved composite. Carries the composite's LIBRARY id under
+   * the composite MIME only — no `text/plain` fallback, so the step-type drop
+   * path can never mistake a composite id for a step type. The drop handler
+   * reads this id and routes to `insertCompositeIntoSpec`. Composites are
+   * byte-shaped groups, so (unlike step types) they need no drag signal for
+   * drop-anchor greying — the drop reads the id directly from `dataTransfer`.
+   */
+  const onCompositeDragStart = (e: DragEvent, compositeId: string): void => {
+    if (!e.dataTransfer) return;
+    e.dataTransfer.setData(COMPOSITE_DRAG_MIME, compositeId);
+    e.dataTransfer.effectAllowed = "copy";
+  };
+
+  /**
+   * Rename a saved composite via a native prompt (v1 — a styled dialog is a
+   * trivial follow-up). Empty / cancelled input is a no-op.
+   */
+  const onCompositeRename = (id: string, current: string): void => {
+    const next = window.prompt("Rename element", current);
+    if (next !== null && next.trim().length > 0) renameComposite(id, next.trim());
   };
 
   return (
@@ -253,6 +296,47 @@ export const StepPalette = () => {
           </section>
         )}
       </For>
+      {compositeList().length > 0 ? (
+        <section class="step-palette-group" data-testid="step-palette-group-composites">
+          <h4 class="step-palette-group-label">my elements</h4>
+          <ul class="step-palette-list">
+            <For each={compositeList()}>
+              {(composite) => (
+                <li
+                  class="step-palette-entry step-palette-entry-composite"
+                  draggable={true}
+                  data-composite-id={composite.id}
+                  data-testid={`composite-palette-entry-${composite.id}`}
+                  title={`${composite.name} — a saved element (drag into the graph)`}
+                  onDragStart={(e) => onCompositeDragStart(e, composite.id)}
+                >
+                  <span class="step-palette-entry-name">{composite.name}</span>
+                  <span class="step-palette-entry-actions">
+                    <button
+                      type="button"
+                      class="step-palette-entry-action"
+                      aria-label={`Rename ${composite.name}`}
+                      data-testid={`composite-rename-${composite.id}`}
+                      onClick={() => onCompositeRename(composite.id, composite.name)}
+                    >
+                      ✎
+                    </button>
+                    <button
+                      type="button"
+                      class="step-palette-entry-action"
+                      aria-label={`Delete ${composite.name}`}
+                      data-testid={`composite-delete-${composite.id}`}
+                      onClick={() => deleteComposite(composite.id)}
+                    >
+                      ×
+                    </button>
+                  </span>
+                </li>
+              )}
+            </For>
+          </ul>
+        </section>
+      ) : null}
     </aside>
   );
 };

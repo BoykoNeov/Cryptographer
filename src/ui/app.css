@@ -4258,6 +4258,38 @@ button:disabled {
   color: var(--muted);
 }
 
+/* ─── "my elements" composites (Phase 4f compose-and-save) ────────────────
+   A saved composite is still a draggable palette card, but it carries inline
+   rename/delete actions, so its row lays out name-left / actions-right rather
+   than the stacked name+type of a registry entry. */
+.step-palette-entry-composite {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.step-palette-entry-actions {
+  display: inline-flex;
+  gap: 2px;
+  flex: none;
+}
+.step-palette-entry-action {
+  /* Tiny ghost buttons; the entry itself is the draggable handle, so these
+     read as secondary. Pointer cursor (not grab) signals "click, don't drag". */
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.step-palette-entry-action:hover {
+  background: rgba(127, 127, 127, 0.2);
+  color: var(--text);
+}
+
 /*
  * Drop-anchor greying. Activated while the user is dragging a
  * shape-constrained step from the palette. The `.graph-view` div gets a

@@ -179,3 +179,9 @@ export const renameComposite = (id: string, name: string): void => {
   setCompositeMapSignal(next);
   persist(next);
 };
+
+/** Test-only: clear the library (signal + persisted blob) for a clean slate. */
+export const __resetCompositesForTests = (): void => {
+  setCompositeMapSignal({});
+  persist({});
+};
