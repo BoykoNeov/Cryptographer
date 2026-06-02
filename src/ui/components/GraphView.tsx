@@ -54,8 +54,11 @@ import {
   replicateHighFanoutSources,
   validateGraph,
 } from "@/core/graph";
+import { resolvePortMap } from "@/core/port-projection";
+import { type LegalSource, legalSourcesForInput } from "@/core/port-sources";
 import { allColorableSources, assignSourceColors } from "@/core/source-colors";
 import { getDefaultCollapsedContainers, getEffectiveCollapsedSet } from "@/core/spec-defaults";
+import { findStep } from "@/core/spec-mutations";
 import { inferShapesAtAnchors, validateShapes } from "@/core/spec-shapes";
 import type { AuxValue, State, StepNode } from "@/core/types";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
@@ -75,6 +78,7 @@ import {
 import { isOffsetsEnabledForLayout } from "../stores/offsets-hatch";
 import { registry } from "../stores/registry";
 import {
+  bindPortInSpec,
   duplicateRoundInSpec,
   insertStepIntoSpec,
   isRoundDuplicatable,
@@ -147,6 +151,7 @@ import {
   stepViewZoom,
   useViewZoom,
 } from "../stores/view-zoom";
+import { disarmPort, toggleArmPort, useArmedPort } from "../stores/wiring";
 import { GraphHelpModal } from "./GraphHelpModal";
 import { STEP_TYPE_DRAG_MIME, StepPalette, useActiveDragStepType } from "./StepPalette";
 
@@ -2248,6 +2253,43 @@ export const GraphView = () => {
   const inspectorPanelOpen = useInspectorPanelOpen();
   const frameIndex = useFrameIndex();
   const byteFormat = useByteFormat();
+
+  // ─── Port-wiring (4d-bis, Slice E — click-to-arm) ──────────────────────
+  // Two-click gesture: click a leaf's input-port handle to ARM, then click a
+  // legal upstream source's bind handle to WIRE. The armed port lives in the
+  // transient `wiring` store; here we derive the scope-legal sources for it.
+  const armed = useArmedPort();
+  /** Scope-legal sources for the armed input port (null when nothing armed). */
+  const armedLegalSources = createMemo<LegalSource[] | null>(() => {
+    const a = armed();
+    if (a === null) return null;
+    return legalSourcesForInput(spec(), registry, a.stepId, a.portName);
+  });
+  /**
+   * Lookup keyed by source NODE id → its `LegalSource` for the armed port, so
+   * a rendered leaf can ask "am I a legal bind target, and would it coerce?"
+   * in O(1). First port wins if a node exposes several (the canvas binds to
+   * that port; the dropdown is the surface for picking a specific one).
+   * `$input` and container-seed sources have no leaf node, so they never key
+   * here — they're reachable only via the dropdown, by design.
+   */
+  const armedLegalByNode = createMemo<Map<string, LegalSource> | null>(() => {
+    const list = armedLegalSources();
+    if (list === null) return null;
+    const m = new Map<string, LegalSource>();
+    for (const s of list) if (!m.has(s.node)) m.set(s.node, s);
+    return m;
+  });
+  // Esc disarms a pending wire. Registered once (the body reads no signals, so
+  // the effect doesn't re-run); the handler reads `armed()` at event time.
+  createEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape" && armed() !== null) disarmPort();
+    };
+    window.addEventListener("keydown", onKey);
+    onCleanup(() => window.removeEventListener("keydown", onKey));
+  });
+
   // Clear the selection whenever the user swaps to a different cipher spec.
   // A selected target from a prior spec points at ids that no longer
   // exist in the new graph; without this reset the panel would render
@@ -4286,6 +4328,11 @@ export const GraphView = () => {
     const onEmptyCanvas = target === wrapperEl || target instanceof SVGSVGElement;
     if (!onEmptyCanvas) return;
 
+    // Clicking empty canvas cancels a pending wire (4d-bis) — same "click
+    // away to dismiss" reflex as Esc. Runs before the pan bail so it works
+    // even on a fully-visible (non-scrolling) spec.
+    if (armed() !== null) disarmPort();
+
     // Bail early if there's nothing to pan in either axis — clicking
     // empty canvas on a fully-visible spec shouldn't capture the pointer
     // for nothing.
@@ -5454,6 +5501,33 @@ export const GraphView = () => {
                     }
                   : {};
                 const leafWarnings = createMemo(() => warningsByVisibleId().get(node.stepId) ?? []);
+                // ─── Port-wiring per-leaf state (4d-bis, Slice E) ──────────
+                // Only REAL spec leaves (not replicas / block chips) join the
+                // wiring gesture. Input ports come from the leaf's registration
+                // so dynamic-arity primitives (xor `operandN`) enumerate right.
+                const wiringInputPorts = createMemo<string[]>(() => {
+                  if (isReplicaLike || isBlockChip) return [];
+                  const leaf = findStep(spec(), node.stepId);
+                  if (leaf === null) return [];
+                  const reg = registry.getRegistration(leaf.type);
+                  if (reg === undefined) return [];
+                  return [...resolvePortMap(reg.shape.inputs, leaf.params).keys()];
+                });
+                // Which input port of THIS leaf is currently armed (else null).
+                const armedPortHere = createMemo<string | null>(() => {
+                  const a = armed();
+                  return a !== null && a.stepId === node.stepId ? a.portName : null;
+                });
+                // When a wire is armed on ANOTHER leaf and THIS leaf is a legal
+                // source, the coerce verdict for binding it (null = not a target).
+                const wireTargetRole = createMemo<"ok" | "coerce" | null>(() => {
+                  const a = armed();
+                  if (a === null || a.stepId === node.stepId || isReplicaLike || isBlockChip) {
+                    return null;
+                  }
+                  const src = armedLegalByNode()?.get(node.stepId);
+                  return src ? src.compat : null;
+                });
                 return (
                   <Show when={box()}>
                     {(b) => (
@@ -5527,6 +5601,22 @@ export const GraphView = () => {
                         isSelected={selectedTarget() !== null && isNodeSelected(inspectorTargetId)}
                         warnings={leafWarnings()}
                         stateShape={shapesByAnchor().get(clickTargetId) ?? ""}
+                        // ─── Port-wiring (4d-bis, Slice E) ──────────────────
+                        inputPorts={wiringInputPorts()}
+                        armedPortName={armedPortHere()}
+                        wireTarget={wireTargetRole()}
+                        onArmPort={(portName) => toggleArmPort(node.stepId, portName)}
+                        onBindHere={() => {
+                          const a = armed();
+                          const src = armedLegalByNode()?.get(node.stepId);
+                          if (a !== null && src !== undefined) {
+                            bindPortInSpec(a.stepId, a.portName, {
+                              node: src.node,
+                              port: src.port,
+                            });
+                            disarmPort();
+                          }
+                        }}
                       />
                     )}
                   </Show>
@@ -5934,6 +6024,24 @@ const LeafRect = (props: {
    * `.graph-edge-selected` halo on edges for visual consistency.
    */
   isSelected: boolean;
+  /**
+   * ─── Port-wiring (4d-bis, Slice E) ──────────────────────────────────────
+   * Declared INPUT port names of this leaf (empty for replicas/chips and any
+   * leaf with no inputs). Each becomes a small left-edge "arm" handle.
+   */
+  inputPorts?: readonly string[];
+  /** The input port currently armed on THIS leaf, or null. Highlights its handle. */
+  armedPortName?: string | null;
+  /**
+   * When a wire is armed elsewhere and this leaf is a legal source: the
+   * coerce verdict for binding it (`"ok"` | `"coerce"`), else null. Drives the
+   * bind-target ring + the right-edge bind handle (red on `"coerce"`).
+   */
+  wireTarget?: "ok" | "coerce" | null;
+  /** Arm an input port on this leaf (toggles off if re-armed). */
+  onArmPort?: (portName: string) => void;
+  /** Bind the armed port to THIS leaf's legal output (then disarm). */
+  onBindHere?: () => void;
 }) => {
   // SVG <g> can't be replaced by a semantic <button> (it'd leave the SVG
   // coordinate system). We attach pointer + keyboard handlers; biome's
@@ -5957,6 +6065,11 @@ const LeafRect = (props: {
       classList={{
         "graph-drop-target-active": props.isDropTargetActive,
         "graph-leaf-selected": props.isSelected,
+        // Port-wiring (4d-bis): ring a leaf that's a legal bind target while a
+        // wire is armed; the coerce variant tints it to warn of a size mismatch.
+        "graph-leaf-wire-target": props.wireTarget === "ok",
+        "graph-leaf-wire-target-coerce": props.wireTarget === "coerce",
+        "graph-leaf-wire-armed": props.armedPortName != null,
       }}
       data-drop-anchor={props.dropAnchorId}
       data-state-shape={props.stateShape}
@@ -6042,6 +6155,81 @@ const LeafRect = (props: {
           stepId={props.stepId}
           onReset={props.onResetRelativePin as () => void}
         />
+      </Show>
+      {/* ─── Port-wiring handles (4d-bis, Slice E) ──────────────────────────
+          Left-edge "arm" handle per input port (click to start a rewire); a
+          right-edge "bind" handle appears when this leaf is a legal source for
+          an armed wire (click to complete it). Both stopPropagation so they
+          never trigger the leaf's drag/scrub. A larger transparent hit-circle
+          sits under each small visible dot so the target is easy to click. */}
+      <For each={props.inputPorts ?? []}>
+        {(portName, i) => {
+          const n = (props.inputPorts ?? []).length;
+          const cx = props.box.x;
+          const cy = props.box.y + (props.box.h * (i() + 1)) / (n + 1);
+          return (
+            <g
+              class="graph-port-handle graph-port-in"
+              classList={{ "graph-port-armed": props.armedPortName === portName }}
+              data-testid={`graph-port-in-${props.stepId}-${portName}`}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                props.onArmPort?.(portName);
+              }}
+              // Keyboard parity for biome's useKeyWithClickEvents. The dropdown
+              // (`PortWiringEditor`) is the a11y-complete rewire path; this just
+              // mirrors the click for anyone who focuses the handle.
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  props.onArmPort?.(portName);
+                }
+              }}
+            >
+              <title>{`input port "${portName}" — click to rewire`}</title>
+              <circle class="graph-port-hit" cx={cx} cy={cy} r={9} />
+              <circle class="graph-port-dot" cx={cx} cy={cy} r={4} />
+            </g>
+          );
+        }}
+      </For>
+      <Show when={props.wireTarget != null}>
+        <g
+          class="graph-port-handle graph-port-bind"
+          classList={{ "graph-port-bind-coerce": props.wireTarget === "coerce" }}
+          data-testid={`graph-port-bind-${props.stepId}`}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            props.onBindHere?.();
+          }}
+          // Keyboard parity for biome's useKeyWithClickEvents (see input handle).
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              props.onBindHere?.();
+            }
+          }}
+        >
+          <title>
+            {props.wireTarget === "coerce"
+              ? "wire from here (size mismatch — will coerce)"
+              : "wire from here"}
+          </title>
+          <circle
+            class="graph-port-hit"
+            cx={props.box.x + props.box.w}
+            cy={props.box.y + props.box.h / 2}
+            r={9}
+          />
+          <circle
+            class="graph-port-dot"
+            cx={props.box.x + props.box.w}
+            cy={props.box.y + props.box.h / 2}
+            r={4}
+          />
+        </g>
       </Show>
     </g>
   );

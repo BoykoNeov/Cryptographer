@@ -3506,6 +3506,70 @@ button:disabled {
   outline: none;
 }
 
+/* ─── Port-wiring handles (universal-port Phase 4d-bis, Slice E) ──────────
+   Small dots on a leaf's edges driving the click-to-arm rewire gesture: an
+   input handle per port on the left edge starts a rewire; a bind handle on
+   the right edge appears on legal source leaves while a wire is armed. Dots
+   are subtle by default and brighten on hover / when armed so they don't
+   clutter the default read; a transparent hit-circle keeps them easy to click
+   without enlarging the visible dot. */
+.graph-port-handle {
+  cursor: pointer;
+}
+
+.graph-port-hit {
+  fill: transparent;
+}
+
+.graph-port-dot {
+  fill: var(--muted);
+  opacity: 0.3;
+  transition: opacity 0.1s ease, fill 0.1s ease;
+}
+
+.graph-leaf:hover .graph-port-in .graph-port-dot,
+.graph-port-handle:hover .graph-port-dot {
+  opacity: 1;
+  fill: var(--accent);
+}
+
+/* The armed input handle stays lit regardless of hover. */
+.graph-port-in.graph-port-armed .graph-port-dot {
+  opacity: 1;
+  fill: var(--accent);
+}
+
+/* The leaf whose port is armed — dashed accent outline so the user sees
+   "this is the input I'm rewiring" while choosing a source. */
+.graph-leaf-wire-armed .graph-leaf-rect {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-dasharray: 3 2;
+}
+
+/* A leaf that's a legal bind target while a wire is armed. */
+.graph-leaf-wire-target .graph-leaf-rect {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.graph-leaf-wire-target-coerce .graph-leaf-rect {
+  stroke: var(--warning, #d97706);
+  stroke-width: 2;
+  stroke-dasharray: 4 2;
+}
+
+/* The bind handle (right edge) only renders on a legal target, so it's always
+   lit; the coerce variant warns in the size-mismatch hue. */
+.graph-port-bind .graph-port-dot {
+  opacity: 1;
+  fill: var(--accent);
+}
+
+.graph-port-bind.graph-port-bind-coerce .graph-port-dot {
+  fill: var(--warning, #d97706);
+}
+
 .graph-leaf-label {
   fill: var(--text);
   font-size: 11px;
