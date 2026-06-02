@@ -155,13 +155,21 @@ describe("deriveAuxGraph — per-edge state-spine suppression on port-native con
     const hasPort = (from: string, to: string): boolean =>
       portFlow.some((e) => e.from === from && e.to === to);
     // Round 0 seeded from the per-block chain `blocks` (resolved through
-    // round.0.seedInput = port("blocks","chain"), single-hop).
+    // round.0.seedInput = port("blocks","chain"), single-hop — a `chain` seed
+    // is NOT chased further, so the source stays the iterate, the meaningful
+    // "the per-block loop carries the running hash" reading).
     expect(hasPort("blocks", "round.0.split")).toBe(true);
-    // Inter-round carry: round t's published exit ("out") → round t+1's split.
-    expect(hasPort("round.0", "round.1.split")).toBe(true);
-    expect(hasPort("round.62", "round.63.split")).toBe(true);
-    // Exit from the round chain into the final-add block.
-    expect(hasPort("round.63", "final.split-wv")).toBe(true);
+    // Inter-round carry: round t's published exit → round t+1's split. The
+    // seed reference `port("round.{t}", "out")` resolves THROUGH round t's
+    // `bodyOutput` (= `port("round.{t}.repack", "output")`) to the producing
+    // leaf, so the carry originates at `round.{t}.repack`, NOT the round.{t}
+    // container boundary (the "out"-port → bodyOutput resolution that fixes
+    // expanded containers drawing their carry from the box edge).
+    expect(hasPort("round.0.repack", "round.1.split")).toBe(true);
+    expect(hasPort("round.62.repack", "round.63.split")).toBe(true);
+    // Exit from the round chain into the final-add block — `final.split-wv`
+    // reads `port("round.63", "out")`, resolved to round 63's `repack` leaf.
+    expect(hasPort("round.63.repack", "final.split-wv")).toBe(true);
     // No legacy consecutive-siblings state edge touches any round — the
     // round-to-round carry is purely port-flow.
     const legacyStateEdges = graph.edges.filter((e) => e.kind === "state" && e.auxKey === "state");

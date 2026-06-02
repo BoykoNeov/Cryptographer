@@ -921,6 +921,17 @@ const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
   // bootstrap `chainInput`; the per-iteration `chainFeedback` recurrence is a
   // separate recurrence-visibility pass (`types.ts` defers it).
   const chainSeedByIterateId = new Map<string, PortBinding>();
+  // A `port(containerId, "out")` reference (a downstream leaf reading a
+  // container's published exit, or a container's own `bodyOutput`) is really
+  // consuming the body node that the container republishes. We resolve such
+  // references THROUGH `bodyOutput` to the real producing leaf — the
+  // "out"-port dual of the "in"-port `seedInput` resolution. Without this the
+  // edge lands on the container box itself, so an EXPANDED round draws its
+  // outgoing carry from the container boundary instead of from the leaf that
+  // actually produced the bytes (DES round.N's `recombine`, AES round.N's
+  // `add-round-key`, SHA-256 round.t's `repack`). Collected for every
+  // container kind — all four declare `bodyOutput` (`types.ts`).
+  const bodyOutputByGroupId = new Map<string, PortBinding>();
   const collectGroupSeeds = (nodes: readonly StepNode[]): void => {
     for (const node of nodes) {
       if (node.kind === "step") continue;
@@ -935,10 +946,34 @@ const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
       if (node.kind === "iterate" && node.chainInput !== undefined) {
         chainSeedByIterateId.set(node.id, node.chainInput);
       }
+      if (node.bodyOutput !== undefined) {
+        bodyOutputByGroupId.set(node.id, node.bodyOutput);
+      }
       collectGroupSeeds(node.children);
     }
   };
   collectGroupSeeds(spec.steps);
+
+  // Resolve a `port(container, "out")` reference through `bodyOutput`,
+  // recursively — a container's `bodyOutput` may itself be ANOTHER container's
+  // "out" port (DES's outer `rounds.bodyOutput = port("round.16", "out")`,
+  // which resolves on through `round.16.bodyOutput = port("round.16.recombine",
+  // "output")` to the leaf). Multi-hop here is REQUIRED (unlike the deliberately
+  // single-hop `seedInput`/`chainInput` resolutions): the `rounds → final-
+  // permutation` carry only reaches `round.16.recombine` after chasing both
+  // hops. Non-"out" ports and leaf references return unchanged; the hop cap is
+  // a cycle guard (no shipped spec nests containers anywhere near this deep).
+  const MAX_OUT_HOPS = 64;
+  const resolveOutChain = (binding: PortBinding): PortBinding => {
+    let current = binding;
+    for (let hop = 0; hop < MAX_OUT_HOPS; hop++) {
+      if (current.port !== "out") return current;
+      const out = bodyOutputByGroupId.get(current.node);
+      if (out === undefined) return current;
+      current = out;
+    }
+    return current;
+  };
 
   // Set of container ids whose injected `"in"` port is consumed by some
   // descendant LEAF (via that leaf's `portInputs`). Used below to decide
@@ -977,13 +1012,33 @@ const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
             // hand-malformed cross-scope read would draw an unreachable edge
             // here. Such a spec can't run (the runtime rejects the cross-scope
             // reference first), so the stray edge is purely visual.
-            const seed =
-              binding.port === "in"
-                ? groupSeedByGroupId.get(binding.node)
-                : binding.port === "chain"
-                  ? chainSeedByIterateId.get(binding.node)
-                  : undefined;
-            const from = seed !== undefined ? seed.node : binding.node;
+            // Resolve the declared source to the real producing node:
+            //   - "in"  → the group's `seedInput` (single-hop, A3b ⓕ). But if
+            //     that seed itself points at a container's "out" port (the
+            //     round→round carry: round.{n}.seedInput = port("round.{n-1}",
+            //     "out")), chase the "out" the rest of the way to the producing
+            //     leaf so the carry originates at e.g. `round.{n-1}.recombine`,
+            //     NOT the round.{n-1} container boundary.
+            //   - "chain" → the iterate's `chainInput` (single-hop, B1.5 F2 —
+            //     deliberately NOT chased further, so SHA-256's round-0 seed
+            //     stays `blocks → round.0.split`, the meaningful "the per-block
+            //     loop carries the chain" reading, rather than dereferencing to
+            //     the IV-bootstrap leaf).
+            //   - "out" → resolved straight through `bodyOutput` (multi-hop),
+            //     fixing `rounds → final-permutation` to land on the last
+            //     round's producing leaf.
+            let resolved: PortBinding;
+            if (binding.port === "in") {
+              const seed = groupSeedByGroupId.get(binding.node);
+              resolved = seed !== undefined ? resolveOutChain(seed) : binding;
+            } else if (binding.port === "chain") {
+              resolved = chainSeedByIterateId.get(binding.node) ?? binding;
+            } else if (binding.port === "out") {
+              resolved = resolveOutChain(binding);
+            } else {
+              resolved = binding;
+            }
+            const from = resolved.node;
             edges.push({
               from,
               to: node.id,

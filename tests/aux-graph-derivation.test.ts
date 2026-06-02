@@ -385,23 +385,24 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
     expect(stateEdges.find((e) => e.from === "round.21" && e.to === "round.22")).toBeDefined();
   });
 
-  it("Serpent-128 (32 round groups): the spine is port-flow-owned (Slice 5.3b), groups as container sources", () => {
+  it("Serpent-128 (32 round groups): the spine is port-flow-owned (Slice 5.3b), round handoffs resolve to producing leaves", () => {
     // Post-5.3b the body is port-wired (each leaf declares `portInputs.state`,
     // each round group declares `seedInput`/`bodyOutput`), so `inferPortEdges`
     // owns the spine. (Pre-5.3e the legacy `inferStateEdges` consecutive-
     // siblings inference ran alongside, suppressed for wired leaves by its
     // S2(f) gate; both retired in 5.3e — port-flow is the sole spine source.) The
     // body spine STRUCTURE: the within-group hops are leaf→leaf, while each
-    // round→round handoff resolves through the group's single-hop `seedInput`
-    // to a CONTAINER source (`round.{n-1}` container → round.n's first leaf),
-    // plus `round.32 → FP`.
+    // round→round handoff resolves through the group's `seedInput` AND through
+    // the source round's `bodyOutput` (the "out"-port resolution) to the
+    // producing LEAF (`round.{n-1}.linear-transform` → round.n's first leaf),
+    // plus `round.32.add-final-round-key → FP`.
     //
     // K3a (2026-06-02): the decomposed `key-schedule` group adds many internal
     // port-flow edges (load → codec → split → 132 recurrence chains → 33 S-box
     // groups → publish), so the total `state`-edge count is no longer the body's
-    // 98 — we assert the body-spine structure directly (32 container-sourced
-    // round handoffs + the named hops) rather than an exact total, mirroring the
-    // Speck K2a retarget above.
+    // 98 — we assert the body-spine structure directly (zero container-sourced
+    // edges + the named leaf→leaf hops) rather than an exact total, mirroring
+    // the Speck K2a retarget above.
     const g = deriveAuxGraph(runSerpent128(), serpent128Spec, {
       registry: buildDefaultRegistry(),
     });
@@ -417,24 +418,32 @@ describe("deriveAuxGraph — state-edge inference (spec-derived spine)", () => {
       expect(materialized.has(e.from)).toBe(true);
       expect(materialized.has(e.to)).toBe(true);
     }
-    // 32 container-sourced edges: 31 round→round handoffs (round.1→round.2 …
-    // round.31→round.32, each landing on the next round's first leaf) + the
-    // final `round.32 → final-permutation`.
+    // ZERO container-sourced edges: every round→round handoff originates at the
+    // producing LEAF now. A `port("round.{n-1}", "out")` seed reference resolves
+    // THROUGH round.{n-1}'s `bodyOutput` (= its linear-transform leaf) to that
+    // leaf, so the carry no longer leaves the round.{n-1} container boundary
+    // (the fix for "expanded round containers draw an outgoing edge from the
+    // box"). `final-permutation` likewise resolves to round.32's last leaf.
     const containerSourced = stateEdges.filter((e) => containerIds.has(e.from));
-    expect(containerSourced.length).toBe(32);
+    expect(containerSourced.length).toBe(0);
     // Head of the spine is the plaintext source feeding the initial permutation.
     expect(
       stateEdges.find((e) => e.from === INPUT_SOURCE_ID && e.to === "initial-permutation"),
     ).toBeDefined();
-    // A within-group hop (leaf→leaf) and a between-group hop (container→leaf).
+    // A within-group hop (leaf→leaf) and a between-group hop (producing leaf →
+    // next round's first leaf, resolved through round 1's `bodyOutput`).
     expect(
       stateEdges.find((e) => e.from === "round.1.add-round-key" && e.to === "round.1.sub-bytes"),
     ).toBeDefined();
     expect(
-      stateEdges.find((e) => e.from === "round.1" && e.to === "round.2.add-round-key"),
+      stateEdges.find(
+        (e) => e.from === "round.1.linear-transform" && e.to === "round.2.add-round-key",
+      ),
     ).toBeDefined();
     expect(
-      stateEdges.find((e) => e.from === "round.32" && e.to === "final-permutation"),
+      stateEdges.find(
+        (e) => e.from === "round.32.add-final-round-key" && e.to === "final-permutation",
+      ),
     ).toBeDefined();
   });
 
@@ -574,10 +583,14 @@ describe("collapseGraph — view-time transform", () => {
     }
     // Sanity: the collapse left the spine connected through the round.5 chip
     // (the cross-boundary edges survive — pinned in detail by the next test).
-    // The port-flow spine routes round→round through the round CONTAINER id
-    // (`round.4 → round.5.sub-bytes`), so after collapsing round.5 the entry
-    // edge is `round.4 → round.5` (container → collapsed chip).
-    expect(afterState.some((e) => e.from === "round.4" && e.to === "round.5")).toBe(true);
+    // The port-flow spine routes round→round from the producing LEAF (round
+    // n's `bodyOutput`, resolved through the "out" port): the pre-collapse
+    // entry edge is `round.4.add-round-key → round.5.sub-bytes`, so after
+    // collapsing round.5 the entry edge is `round.4.add-round-key → round.5`
+    // (producing leaf → collapsed chip).
+    expect(afterState.some((e) => e.from === "round.4.add-round-key" && e.to === "round.5")).toBe(
+      true,
+    );
     expect(afterState.some((e) => e.from === "round.5" && e.to === "round.6.sub-bytes")).toBe(true);
   });
 
@@ -585,14 +598,17 @@ describe("collapseGraph — view-time transform", () => {
     const g = deriveAuxGraph(runAes128(), aes128Spec);
     const out = collapseGraph(g, new Set(["round.5"]));
     const stateEdges = out.edges.filter((e) => e.kind === "state");
-    // The port-flow round→round handoff is container-sourced: the pre-collapse
-    // ENTRY edge is `round.4 → round.5.sub-bytes` (container round.4 → round.5's
-    // first leaf). Collapsing round.5 remaps the consumer leaf to the chip →
-    // `round.4 → round.5`.
-    const entering = stateEdges.find((e) => e.from === "round.4" && e.to === "round.5");
+    // The port-flow round→round handoff originates at the producing leaf: the
+    // pre-collapse ENTRY edge is `round.4.add-round-key → round.5.sub-bytes`
+    // (round.4's `bodyOutput` leaf → round.5's first leaf). Collapsing round.5
+    // remaps the consumer leaf to the chip → `round.4.add-round-key → round.5`.
+    const entering = stateEdges.find(
+      (e) => e.from === "round.4.add-round-key" && e.to === "round.5",
+    );
     expect(entering).toBeDefined();
-    // The EXIT edge is already container-sourced (`round.5 → round.6.sub-bytes`);
-    // round.5 IS the collapsed chip, so it survives unchanged.
+    // The EXIT edge `round.5.add-round-key → round.6.sub-bytes` has its
+    // producing leaf hidden by the collapse → remaps to `round.5 →
+    // round.6.sub-bytes` (collapsed chip → next round's first leaf).
     const leaving = stateEdges.find((e) => e.from === "round.5" && e.to === "round.6.sub-bytes");
     expect(leaving).toBeDefined();
     // The pre-collapse entry edge's internal endpoint (round.5.sub-bytes) is
