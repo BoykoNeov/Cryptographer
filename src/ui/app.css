@@ -4015,6 +4015,33 @@ button:disabled {
   user-select: none;
 }
 
+/* Save-as-element chip (Phase 4f compose-and-save) — same hover-reveal as the
+   duplicate chip. A muted amber fill distinguishes "save to my elements" from
+   the accent-blue duplicate without competing with it in the header row. */
+.graph-save-element-button {
+  opacity: 0;
+  pointer-events: none;
+  cursor: pointer;
+  transition: opacity 0.12s ease-out;
+}
+.graph-container:hover .graph-save-element-button,
+.graph-save-element-button:focus-within {
+  opacity: 1;
+  pointer-events: all;
+}
+.graph-save-element-button-circle {
+  fill: var(--warn, #d97706);
+  stroke: var(--bg, #0f1115);
+  stroke-width: 1;
+}
+.graph-save-element-button-glyph {
+  fill: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  pointer-events: none;
+  user-select: none;
+}
+
 /* ─── Slice 8: step palette + drop affordance ────────────────────────────
    The graph view becomes a two-column layout in graph mode: palette on the
    left (sticky / fixed width), scrollable SVG canvas on the right. Linear

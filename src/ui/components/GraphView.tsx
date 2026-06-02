@@ -58,11 +58,16 @@ import { resolvePortMap } from "@/core/port-projection";
 import { type LegalSource, legalSourcesForInput } from "@/core/port-sources";
 import { allColorableSources, assignSourceColors } from "@/core/source-colors";
 import { getDefaultCollapsedContainers, getEffectiveCollapsedSet } from "@/core/spec-defaults";
-import { findStep } from "@/core/spec-mutations";
+import {
+  type CompositeInsertAnchor,
+  captureCompositeFromGroup,
+  findStep,
+} from "@/core/spec-mutations";
 import { inferShapesAtAnchors, validateShapes } from "@/core/spec-shapes";
 import type { AuxValue, State, StepNode } from "@/core/types";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { isHash, useAlgorithm } from "../stores/cipher";
+import { getComposite, saveComposite } from "../stores/composites";
 import { useByteFormat } from "../stores/format";
 import {
   clearNodePosition,
@@ -80,6 +85,7 @@ import { registry } from "../stores/registry";
 import {
   bindPortInSpec,
   duplicateRoundInSpec,
+  insertCompositeIntoSpec,
   insertStepIntoSpec,
   isRoundDuplicatable,
   removeStepFromSpec,
@@ -153,7 +159,12 @@ import {
 } from "../stores/view-zoom";
 import { disarmPort, toggleArmPort, useArmedPort } from "../stores/wiring";
 import { GraphHelpModal } from "./GraphHelpModal";
-import { STEP_TYPE_DRAG_MIME, StepPalette, useActiveDragStepType } from "./StepPalette";
+import {
+  COMPOSITE_DRAG_MIME,
+  STEP_TYPE_DRAG_MIME,
+  StepPalette,
+  useActiveDragStepType,
+} from "./StepPalette";
 
 /**
  * Shared empty map for the source-color memo's OFF / no-data branch.
@@ -3871,24 +3882,26 @@ export const GraphView = () => {
   const [helpOpen, setHelpOpen] = createSignal(false);
 
   /**
-   * Check whether a drag event carries a step-type payload from our palette.
-   * `dataTransfer.types` is the only field readable during `dragover` —
-   * `getData` is blocked outside `drop` for security reasons. So we sniff
-   * the MIME list to decide whether to call `preventDefault` (which signals
-   * "this is a valid drop target" to the browser).
+   * Check whether a drag event carries a palette payload — a step type OR a
+   * saved composite ("my elements"). `dataTransfer.types` is the only field
+   * readable during `dragover` (`getData` is blocked outside `drop` for
+   * security), so we sniff the MIME list to decide whether to call
+   * `preventDefault` (which signals "this is a valid drop target" to the
+   * browser). Both palette flavors must accept here, else the browser refuses
+   * the composite drop.
    */
-  const isStepTypeDrag = (e: DragEvent): boolean => {
+  const isPaletteDrag = (e: DragEvent): boolean => {
     const types = e.dataTransfer?.types;
     if (!types) return false;
     // `types` is a DOMStringList in some browsers; spread covers both.
     for (const t of types) {
-      if (t === STEP_TYPE_DRAG_MIME || t === "text/plain") return true;
+      if (t === STEP_TYPE_DRAG_MIME || t === COMPOSITE_DRAG_MIME || t === "text/plain") return true;
     }
     return false;
   };
 
   const handleDragOver = (e: DragEvent): void => {
-    if (!isStepTypeDrag(e)) return;
+    if (!isPaletteDrag(e)) return;
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
     if (!dragOverActive()) setDragOverActive(true);
@@ -3930,85 +3943,80 @@ export const GraphView = () => {
     setDragOverGutterId(null);
   };
 
+  /**
+   * Resolve the structural anchor a drop lands on — shared by the step-type
+   * and composite (Phase 4f) drop paths, so both insert at the same place.
+   *
+   * Slice 5: gutter hit-test wins over the legacy data-drop-anchor walk. A
+   * gutter under the cursor maps directly to a precise between-positions slot —
+   * `before:X` (at-start / between siblings) or `after:Y` (at-end). Without
+   * this priority a drop on the thin strip just above a leaf would resolve to
+   * the leaf's anchor (insert AFTER the leaf) — the opposite of intent.
+   *
+   * Anchor-resolution dispatch (post-rescope, 2026-05-15): a CONTAINER anchor
+   * (header band hit → lookup hit in `graph().containers`) routes to
+   * `into-start` ("drop on header = enter this container's body"); a LEAF
+   * anchor keeps the `after` semantic; no anchor → `root-append`.
+   */
+  const resolveDropAnchor = (e: DragEvent): CompositeInsertAnchor => {
+    const target = e.target as Element | null;
+    const gutterEl = target?.closest?.("[data-drop-gutter]") ?? null;
+    const gutterEncoding = gutterEl?.getAttribute("data-drop-gutter") ?? null;
+    if (gutterEncoding !== null) {
+      // Encoding shape: `${"before" | "after" | "into-start"}:${siblingStepId}`.
+      // Split on the FIRST colon only — step ids are forbidden from containing
+      // colons by the runtime's `:b{i}` block-index suffix convention.
+      const colonIdx = gutterEncoding.indexOf(":");
+      if (colonIdx > 0) {
+        const kind = gutterEncoding.slice(0, colonIdx);
+        const targetId = gutterEncoding.slice(colonIdx + 1);
+        if (kind === "before" && targetId.length > 0) return { kind: "before", stepId: targetId };
+        if (kind === "after" && targetId.length > 0) return { kind: "after", stepId: targetId };
+        // Empty-container sentinel gutter (see dropGutters memo): the entire box
+        // of an empty container resolves here so the user can drop anywhere
+        // inside the visible chip, not just the labelled header band.
+        if (kind === "into-start" && targetId.length > 0) {
+          return { kind: "into-start", containerId: targetId };
+        }
+      }
+      // Malformed encoding — fall through to anchor / root-append.
+    }
+    // Walk up from the drop target to the nearest `data-drop-anchor`. `closest`
+    // returns the element itself if it matches; replicas carry their source's
+    // stepId, so the anchor is always a real spec id.
+    const anchored = target?.closest?.("[data-drop-anchor]") ?? null;
+    const anchorId = anchored?.getAttribute("data-drop-anchor") ?? null;
+    if (anchorId !== null && anchorId.length > 0) {
+      return containersById().get(anchorId) !== undefined
+        ? { kind: "into-start", containerId: anchorId }
+        : { kind: "after", stepId: anchorId };
+    }
+    return { kind: "root-append" };
+  };
+
   const handleDrop = (e: DragEvent): void => {
     e.preventDefault();
     setDragOverActive(false);
     setDragOverAnchorId(null);
     setDragOverGutterId(null);
     if (!e.dataTransfer) return;
-    // Prefer the custom MIME (palette-authored); fall back to text/plain
-    // for browsers that strip non-standard MIMEs on DnD payloads.
+
+    // Composite drop (Phase 4f): a "my elements" entry carries its LIBRARY id
+    // under the composite MIME (checked FIRST — composites carry no text/plain,
+    // so this can't collide with the step-type path). Inline a fresh clone.
+    const compositeId = e.dataTransfer.getData(COMPOSITE_DRAG_MIME);
+    if (compositeId) {
+      const def = getComposite(compositeId);
+      if (def) insertCompositeIntoSpec(def.group, resolveDropAnchor(e));
+      return;
+    }
+
+    // Step-type drop: prefer the custom MIME (palette-authored), fall back to
+    // text/plain for browsers that strip non-standard MIMEs on DnD payloads.
     const stepType =
       e.dataTransfer.getData(STEP_TYPE_DRAG_MIME) || e.dataTransfer.getData("text/plain");
     if (!stepType || !registry.has(stepType)) return;
-    // Slice 5: gutter hit-test wins over the legacy data-drop-anchor walk.
-    // A gutter under the cursor maps directly to a precise between-positions
-    // slot — `before:X` (at-start / between siblings) or `after:Y`
-    // (at-end). Without this priority a drop on the thin strip just above
-    // a leaf would resolve to the leaf's anchor (insert AFTER the leaf) —
-    // the opposite of the user's intent.
-    const target = e.target as Element | null;
-    const gutterEl = target?.closest?.("[data-drop-gutter]") ?? null;
-    const gutterEncoding = gutterEl?.getAttribute("data-drop-gutter") ?? null;
-    if (gutterEncoding !== null) {
-      // Encoding shape: `${"before" | "after"}:${siblingStepId}`. Split
-      // on the FIRST colon only — step ids are forbidden from containing
-      // colons by the runtime's `:b{i}` block-index suffix convention,
-      // but a hand-rolled spec could in principle still contain one.
-      const colonIdx = gutterEncoding.indexOf(":");
-      if (colonIdx > 0) {
-        const kind = gutterEncoding.slice(0, colonIdx);
-        const targetId = gutterEncoding.slice(colonIdx + 1);
-        if (kind === "before" && targetId.length > 0) {
-          insertStepIntoSpec(stepType, { kind: "before", stepId: targetId });
-          return;
-        }
-        if (kind === "after" && targetId.length > 0) {
-          insertStepIntoSpec(stepType, { kind: "after", stepId: targetId });
-          return;
-        }
-        if (kind === "into-start" && targetId.length > 0) {
-          // Empty-container sentinel gutter (see dropGutters memo):
-          // the entire box of an empty container resolves here so the
-          // user can drop anywhere inside the visible chip, not just
-          // on the labelled header band.
-          insertStepIntoSpec(stepType, { kind: "into-start", containerId: targetId });
-          return;
-        }
-      }
-      // Malformed encoding — fall through to anchor / root-append.
-    }
-    // Walk up from the drop target looking for the nearest `data-drop-anchor`
-    // attribute. `closest` returns the element itself if it matches, so a
-    // drop directly on a `<g class="graph-leaf">` finds itself. Replicas
-    // carry their `clickTargetId` (source's stepId), so the anchor is
-    // always a real spec id.
-    //
-    // Anchor-resolution dispatch (post-rescope, 2026-05-15):
-    //   - Anchor is a CONTAINER id (lookup hit in `graph().containers`):
-    //     the header band was hit (the only place container anchors
-    //     remain, after the rescope moved `data-drop-anchor` from the
-    //     outer `<g>` to the header `<rect>`). Route to
-    //     `{ kind: "into-start", containerId }` — "drop on header =
-    //     enter this container's body" matches user intuition. The
-    //     original Slice 8 "insert after container in parent" semantic
-    //     is dropped because the chip obscures the header and users
-    //     couldn't tell their cursor was on it.
-    //   - Anchor is a LEAF id: keep the leaf-after semantic. A drop on
-    //     a leaf still means "insert immediately after this leaf in its
-    //     parent."
-    const anchored = target?.closest?.("[data-drop-anchor]") ?? null;
-    const anchorId = anchored?.getAttribute("data-drop-anchor") ?? null;
-    if (anchorId !== null && anchorId.length > 0) {
-      const anchorContainer = containersById().get(anchorId);
-      if (anchorContainer !== undefined) {
-        insertStepIntoSpec(stepType, { kind: "into-start", containerId: anchorId });
-      } else {
-        insertStepIntoSpec(stepType, { kind: "after", stepId: anchorId });
-      }
-    } else {
-      insertStepIntoSpec(stepType, { kind: "root-append" });
-    }
+    insertStepIntoSpec(stepType, resolveDropAnchor(e));
   };
 
   /**
@@ -5857,6 +5865,76 @@ const DuplicateGlyph = (props: {
 );
 
 /**
+ * "Save as element" affordance for a GROUP container (universal-port Phase 4f,
+ * compose-and-save). Captures the group as a reusable composite into the
+ * "my elements" library (`captureCompositeFromGroup` → `saveComposite`). Same
+ * hover-reveal header-row chip pattern as DuplicateGlyph; `★` glyph (distinct
+ * from duplicate's `+`) reads as "add to my elements." The name is collected
+ * via a native prompt (v1 — a styled dialog is a trivial follow-up), defaulting
+ * to the group's label. A capture error (e.g. a group with a looping container
+ * inside) is surfaced via `alert`, not swallowed.
+ */
+const SaveAsElementGlyph = (props: {
+  x: number;
+  y: number;
+  containerId: string;
+  defaultName: string;
+}) => (
+  <g
+    class="graph-save-element-button"
+    data-testid={`graph-save-element-${props.containerId}`}
+    transform={`translate(${props.x}, ${props.y})`}
+    onClick={(e) => {
+      e.stopPropagation();
+      const name = window.prompt("Name this element", props.defaultName);
+      if (name === null || name.trim().length === 0) return;
+      try {
+        saveComposite(captureCompositeFromGroup(useSpec()(), props.containerId, name.trim()));
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`save as element failed for ${props.containerId}:`, err);
+        window.alert(`Could not save element: ${msg}`);
+      }
+    }}
+    onPointerDown={(e) => {
+      // Prevent the container's drag-start from claiming the gesture.
+      e.stopPropagation();
+    }}
+    onKeyDown={(e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        e.stopPropagation();
+        const name = window.prompt("Name this element", props.defaultName);
+        if (name === null || name.trim().length === 0) return;
+        try {
+          saveComposite(captureCompositeFromGroup(useSpec()(), props.containerId, name.trim()));
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          window.alert(`Could not save element: ${msg}`);
+        }
+      }
+    }}
+  >
+    <title>Save "{props.defaultName}" as a reusable element</title>
+    <circle
+      class="graph-save-element-button-circle"
+      cx={WARNING_DOT_SIZE / 2}
+      cy={WARNING_DOT_SIZE / 2}
+      r={WARNING_DOT_SIZE / 2}
+    />
+    <text
+      class="graph-save-element-button-glyph"
+      x={WARNING_DOT_SIZE / 2}
+      y={WARNING_DOT_SIZE / 2 + 0.5}
+      text-anchor="middle"
+      dominant-baseline="central"
+    >
+      ★
+    </text>
+  </g>
+);
+
+/**
  * Per-node reset for a relative pin (draggable-replicas plan Slice 4,
  * 2026-05-19). Visible only when the chip has a `relativePositions`
  * entry — the caller passes `onResetRelativePin` only in that case,
@@ -6529,31 +6607,50 @@ const ContainerRect = (props: {
         stepId={props.container.id}
         onDelete={() => removeStepFromSpec(props.container.id)}
       />
-      {/* Duplicate affordance for AES round groups. Sits immediately
-          to the right of the delete chip, in the same row, hidden via
-          the same hover-reveal CSS pattern. Gated by
-          `isRoundDuplicatable` so the final round (no clean counterpart)
-          doesn't render the button. */}
+      {/* Save-as-element affordance — slot 1, for `group` containers only
+          (Phase 4f compose-and-save). Captures the group as a reusable
+          composite into the palette's "my elements" section. Iterates aren't
+          offered (their multi-scope chain bindings don't compose cleanly yet —
+          see `captureCompositeFromGroup`'s subtree guard). The header row reads:
+          [delete] · [save?] · [duplicate?] · [reset?] · label · … */}
+      <Show when={props.container.kind === "group"}>
+        <SaveAsElementGlyph
+          x={props.box.x + WARNING_DOT_INSET + (WARNING_DOT_SIZE + 4)}
+          y={props.box.y + (HEADER_H - WARNING_DOT_SIZE) / 2}
+          containerId={props.container.id}
+          defaultName={props.container.label}
+        />
+      </Show>
+      {/* Duplicate affordance for AES round groups. Sits to the right of the
+          save chip (a round is a group, so save always precedes it), hidden via
+          the same hover-reveal CSS pattern. Gated by `isRoundDuplicatable` so
+          the final round (no clean counterpart) doesn't render the button. */}
       <Show when={isRoundDuplicatable(props.container.id)}>
         <DuplicateGlyph
-          x={props.box.x + WARNING_DOT_INSET + WARNING_DOT_SIZE + 4}
+          x={
+            props.box.x +
+            WARNING_DOT_INSET +
+            (WARNING_DOT_SIZE + 4) * (props.container.kind === "group" ? 2 : 1)
+          }
           y={props.box.y + (HEADER_H - WARNING_DOT_SIZE) / 2}
           containerId={props.container.id}
           onDuplicate={() => duplicateRoundInSpec(props.container.id)}
         />
       </Show>
-      {/* Reset-pin affordance — placed after the delete chip (and after
-          the duplicate chip when present) so the row reads:
-          [delete] · [duplicate?] · [reset?] · label · …
-          Visible only when the parent passed `onResetAbsolutePin`, which
-          it does iff this container carries an absolute pin in the
-          layout sidecar. Counterpart to LeafRect's per-replica reset. */}
+      {/* Reset-pin affordance — after delete/save/duplicate so the row reads:
+          [delete] · [save?] · [duplicate?] · [reset?] · label · …
+          Visible only when the parent passed `onResetAbsolutePin`, which it
+          does iff this container carries an absolute pin in the layout sidecar.
+          Counterpart to LeafRect's per-replica reset. */}
       <Show when={props.onResetAbsolutePin !== undefined}>
         <ResetPinGlyph
           x={
             props.box.x +
             WARNING_DOT_INSET +
-            (WARNING_DOT_SIZE + 4) * (isRoundDuplicatable(props.container.id) ? 2 : 1)
+            (WARNING_DOT_SIZE + 4) *
+              (1 +
+                (props.container.kind === "group" ? 1 : 0) +
+                (isRoundDuplicatable(props.container.id) ? 1 : 0))
           }
           y={props.box.y + (HEADER_H - WARNING_DOT_SIZE) / 2}
           stepId={props.container.id}
