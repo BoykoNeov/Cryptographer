@@ -98,6 +98,41 @@ internalized.
   Containers and root-level leaves still pin absolutely; they're
   unchanged by this addition.
 
+## Rewiring ports
+
+Every leaf reads its inputs from named upstream **output ports**. You can
+change which source feeds which input *in place* — the two-click "click-to-arm"
+gesture on the canvas, or the dropdown panel below the graph.
+
+- **On the canvas.** Each leaf has small **input-port handles** on its left
+  edge (one per input port). Click one to **arm** it — the leaf gets a dashed
+  accent outline. Every **scope-legal source** then lights up with a ring and
+  grows a **bind handle** on its right edge; click one to complete the wire.
+  Press <kbd>Esc</kbd> or click empty canvas to cancel. Click the same input
+  handle again to disarm.
+- **Size-mismatch (coerce) wiring.** If a source emits a different number of
+  bytes than the input expects, its ring + bind handle turn **amber and
+  dashed**. The wire is still allowed — the runtime coerces the bytes and shows
+  it as a visible step in the trace — but the colour warns you it isn't a
+  clean fit.
+- **You can only wire within a scope.** A leaf offers only sources in its *own*
+  scope: same-parent siblings that run *before* it, plus (inside a round/loop
+  body) that body's incoming value, plus (at the top level) the cipher input.
+  A leaf buried in one round can't read from another round, and nothing offers
+  a forward or self reference — those would fail at run time, so they're never
+  offered. This is why a round's *first* leaf shows no canvas bind targets: its
+  only legal source is the round's incoming value, which has no on-canvas
+  handle. Reach it via the dropdown.
+- **The dropdown panel** below the graph (under the parameter editor) is the
+  keyboard/accessibility-complete equivalent: when a leaf is selected it shows
+  one dropdown per input port listing every legal source, a `— unwired —`
+  choice, and — if the current binding has gone stale — an explicit
+  `⚠ current (unresolvable)` entry so the control never lies about what's
+  actually wired. It's also the **only** way to wire a leaf to its container's
+  incoming value (the canvas draws no handle there).
+
+Rewires save and share exactly like any other spec edit (no extra opt-in).
+
 ## Toolbar
 
 - **Density** rescales the box sizes and gaps. Compact fits long
