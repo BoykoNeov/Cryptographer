@@ -86,6 +86,85 @@ export const updateStepParams = (spec: CipherSpec, stepId: string, params: Json)
   return { ...spec, steps: newSteps };
 };
 
+// ─── Rewiring one input port ──────────────────────────────────────────────
+
+/**
+ * Rebind (or clear) ONE input port on a leaf step. Returns a NEW spec; the
+ * original is untouched. This is the headless core of the port-wiring editor
+ * (universal-port plan Phase 4d-bis): the in-app affordance for the user to
+ * change which upstream output port an input port reads from. Until this
+ * landed, `portInputs` was source-file-only (every shipped cipher declared
+ * its wiring in TypeScript).
+ *
+ * `binding` of `null` CLEARS the port (deletes the key from `portInputs`),
+ * which is how the dropdown's "— unwired —" choice flows through. A non-null
+ * binding overwrites (or adds) the entry for `portName`.
+ *
+ * **This function imposes NO legality check.** Scope-legality (only same-scope
+ * sources are reachable at runtime) is enforced UPSTREAM, by the editor only
+ * ever offering scope-legal targets (`legalSourcesForInput` in
+ * `port-sources.ts`) — so a cross-scope binding can never be constructed here.
+ * Shape (byteLength) mismatches are deliberately allowed: they coerce at run
+ * time as a visible trace step ("permissiveness IS the pedagogy"). Keeping
+ * this mutation a dumb setter mirrors `updateStepParams` and keeps the
+ * round-trip (Save/Share/Load) trivially correct — no schema bump, since
+ * `portInputs` is already part of `StepLeaf`.
+ *
+ * Ref-equality is preserved on every untouched branch (Solid stores diff by
+ * reference). If `stepId` matches no leaf — or the requested change is a
+ * no-op (clearing an already-absent port, or rebinding to the identical
+ * target) — the ORIGINAL spec is returned by reference so the caller can
+ * detect the no-op via `result === spec` and skip a redundant re-run.
+ */
+export const setPortBinding = (
+  spec: CipherSpec,
+  stepId: string,
+  portName: string,
+  binding: PortBinding | null,
+): CipherSpec => {
+  let changed = false;
+
+  const visit = (nodes: readonly StepNode[]): readonly StepNode[] => {
+    return nodes.map((node) => {
+      if (node.kind === "step") {
+        if (node.id !== stepId) return node;
+
+        const current = node.portInputs?.[portName];
+        if (binding === null) {
+          // Clearing a port that isn't bound is a no-op — return by reference.
+          if (current === undefined) return node;
+          // Rebuild portInputs without this key. `{ [portName]: _, ...rest }`
+          // destructure-omit keeps the other bindings intact by value.
+          const { [portName]: _dropped, ...rest } = node.portInputs ?? {};
+          changed = true;
+          return { ...node, portInputs: rest };
+        }
+
+        // Rebinding to the identical target is a no-op — return by reference.
+        if (
+          current !== undefined &&
+          current.node === binding.node &&
+          current.port === binding.port
+        ) {
+          return node;
+        }
+        changed = true;
+        return {
+          ...node,
+          portInputs: { ...node.portInputs, [portName]: binding },
+        };
+      }
+      const newChildren = visit(node.children);
+      if (newChildren === node.children) return node;
+      return { ...node, children: newChildren };
+    });
+  };
+
+  const newSteps = visit(spec.steps);
+  if (!changed) return spec;
+  return { ...spec, steps: newSteps };
+};
+
 // ─── Bulk edit by step type ───────────────────────────────────────────────
 
 /**

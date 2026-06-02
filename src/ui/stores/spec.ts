@@ -55,11 +55,12 @@ import {
   insertStepBefore,
   prependChildToContainer,
   removeStep,
+  setPortBinding,
   updateAllStepsByType,
   updateCipherConstant,
   updateStepParams,
 } from "@/core/spec-mutations";
-import type { CipherSpec, Json, StepLeaf, StepNode } from "@/core/types";
+import type { CipherSpec, Json, PortBinding, StepLeaf, StepNode } from "@/core/types";
 import { createSignal } from "solid-js";
 import {
   type Algorithm,
@@ -454,6 +455,28 @@ export const setPadding = (scheme: PaddingScheme): void => {
  */
 export const editStepParams = (stepId: string, params: Json): void => {
   updateActive((s) => updateStepParams(s, stepId, params));
+};
+
+/**
+ * Rewire one input port on a leaf to a new upstream source (or clear it with
+ * `null`) — the store boundary for the port-wiring editor (Phase 4d-bis).
+ * Writes to the ACTIVE mode's slot only, same two-spec semantics as
+ * `editStepParams`: a rewire in encrypt does NOT leak into decrypt (the user
+ * edits each side independently and learns what breaks). The caller is
+ * responsible for only passing SCOPE-LEGAL bindings (the UI sources them from
+ * `legalSourcesForInput`), so a cross-scope binding that would throw at runtime
+ * can never reach `setPortBinding`. Flows through `updateActive`, so the
+ * App-level debounced `createEffect(on(spec, …))` re-runs the cipher and the
+ * trace updates — no new rerun path. A no-op rewire (rebinding to the same
+ * target, or clearing an already-unbound port) returns the spec by reference,
+ * so `updateActive` skips the redundant re-run.
+ */
+export const bindPortInSpec = (
+  stepId: string,
+  portName: string,
+  binding: PortBinding | null,
+): void => {
+  updateActive((s) => setPortBinding(s, stepId, portName, binding));
 };
 
 /**

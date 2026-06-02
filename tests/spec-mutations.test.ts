@@ -7,13 +7,37 @@ import {
   type ParamCellDiff,
   compareSpecs,
   findStep,
+  setPortBinding,
   updateAllStepsByType,
   updateCipherConstant,
   updateStepParams,
 } from "@/core/spec-mutations";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
-import type { AuxValue, Json } from "@/core/types";
+import type { AuxValue, CipherSpec, Json } from "@/core/types";
 import { describe, expect, it } from "vitest";
+
+/**
+ * Tiny two-leaf spec used by the `setPortBinding` cases. `b` reads `a`'s
+ * `output` on its `input` port; rewiring/clearing that one binding is what
+ * the port-wiring editor (Phase 4d-bis) does. Built fresh per test via the
+ * factory so ref-equality assertions start from a known-distinct tree.
+ */
+const makeWiredSpec = (): CipherSpec => ({
+  id: "wire-test@1",
+  name: "wire-test",
+  stateShape: "bytes",
+  inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+  steps: [
+    { kind: "step", id: "a", type: "not@1", params: {} },
+    {
+      kind: "step",
+      id: "b",
+      type: "not@1",
+      params: {},
+      portInputs: { input: { node: "a", port: "output" } },
+    },
+  ],
+});
 
 describe("spec mutation helpers", () => {
   describe("findStep", () => {
@@ -57,6 +81,95 @@ describe("spec mutation helpers", () => {
       const before = JSON.stringify(aes128Spec);
       updateStepParams(aes128Spec, "round.1.sub-bytes", { sbox: new Array(256).fill(0) });
       expect(JSON.stringify(aes128Spec)).toBe(before);
+    });
+  });
+
+  describe("setPortBinding", () => {
+    it("rebinds an existing input port to a new source", () => {
+      const spec = makeWiredSpec();
+      const updated = setPortBinding(spec, "b", "input", { node: "c", port: "out2" });
+
+      const b = findStep(updated, "b");
+      expect(b?.portInputs).toEqual({ input: { node: "c", port: "out2" } });
+    });
+
+    it("adds a brand-new input port without disturbing existing ones", () => {
+      const spec = makeWiredSpec();
+      const updated = setPortBinding(spec, "b", "operand", { node: "a", port: "output" });
+
+      const b = findStep(updated, "b");
+      // Both the pre-existing `input` and the new `operand` are present.
+      expect(b?.portInputs).toEqual({
+        input: { node: "a", port: "output" },
+        operand: { node: "a", port: "output" },
+      });
+    });
+
+    it("clears a bound port when given null (the dropdown '— unwired —' path)", () => {
+      const spec = makeWiredSpec();
+      const updated = setPortBinding(spec, "b", "input", null);
+
+      const b = findStep(updated, "b");
+      // The key is gone, not set to undefined.
+      expect(b?.portInputs).toEqual({});
+      expect(b?.portInputs && "input" in b.portInputs).toBe(false);
+    });
+
+    it("preserves reference equality on untouched sibling branches", () => {
+      const spec = makeWiredSpec();
+      const updated = setPortBinding(spec, "b", "input", { node: "c", port: "out2" });
+
+      // `a` was not touched — same object reference survives.
+      const originalA = spec.steps[0];
+      const updatedA = updated.steps[0];
+      expect(updatedA).toBe(originalA);
+      // But the spec itself and the edited leaf are fresh.
+      expect(updated).not.toBe(spec);
+      expect(updated.steps[1]).not.toBe(spec.steps[1]);
+    });
+
+    it("returns the original spec by reference when stepId doesn't match", () => {
+      const spec = makeWiredSpec();
+      const result = setPortBinding(spec, "nope", "input", { node: "a", port: "output" });
+      expect(result).toBe(spec); // ===, a detectable no-op
+    });
+
+    it("is a no-op (by reference) when rebinding to the identical target", () => {
+      const spec = makeWiredSpec();
+      const result = setPortBinding(spec, "b", "input", { node: "a", port: "output" });
+      expect(result).toBe(spec);
+    });
+
+    it("is a no-op (by reference) when clearing an already-unbound port", () => {
+      const spec = makeWiredSpec();
+      const result = setPortBinding(spec, "b", "never-bound", null);
+      expect(result).toBe(spec);
+    });
+
+    it("does not mutate the original spec", () => {
+      const spec = makeWiredSpec();
+      const before = JSON.stringify(spec);
+      setPortBinding(spec, "b", "input", { node: "c", port: "out2" });
+      expect(JSON.stringify(spec)).toBe(before);
+    });
+
+    it("rewires a real shipped leaf (AES round.1.shift-rows reads sub-bytes)", () => {
+      // Sanity that the mutation works on production spec shapes, not just the
+      // synthetic two-leaf fixture. round.1.shift-rows normally reads
+      // round.1.sub-bytes; point it at the initial AddRoundKey instead.
+      const updated = setPortBinding(aes128Spec, "round.1.shift-rows", "input", {
+        node: "initial.add-round-key",
+        port: "output",
+      });
+      const leaf = findStep(updated, "round.1.shift-rows");
+      expect(leaf?.portInputs).toEqual({
+        input: { node: "initial.add-round-key", port: "output" },
+      });
+      // Original untouched.
+      const original = findStep(aes128Spec, "round.1.shift-rows");
+      expect(original?.portInputs).toEqual({
+        input: { node: "round.1.sub-bytes", port: "output" },
+      });
     });
   });
 
