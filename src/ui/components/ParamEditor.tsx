@@ -726,15 +726,30 @@ const AddRoundKeyBlock = (props: BlockProps) => {
 
 // Speck round / round-inverse block.
 //
-// Five structural params shared by both forward and inverse steps. The
-// `roundKeyAux` is the per-leaf knob that wires the round to its specific
-// round-key word; pinning it visible makes the encrypt-vs-decrypt key
-// ordering (`roundKey.0` first vs. `roundKey.21` first) inspectable when
-// scrubbing through the trace.
+// Five params shared by both forward and inverse steps, split by editability
+// (the same rule as the port-native blocks below — editable when an edit
+// produces wrong-but-DEFINED output, read-only when it would throw or break
+// wiring):
 //
-// No ApplyAllRow: like AddRoundKey, each Speck round leaf intentionally
-// references a DIFFERENT roundKey aux name. Copying one step's params
-// onto every match would point every round at the same key.
+//   - `alpha` / `beta` (the ROR/ROL rotation constants) and `byteOrder` (the
+//     serialization convention) are EDITABLE. The `speck.round@1` /
+//     `speck.round-inverse@1` executors read all three at run time
+//     (`src/steps/speck-round.ts`), so editing them just diverges the cipher —
+//     "what if Speck rotated by 3 instead of 7?" is exactly the pedagogy. These
+//     bare round-body leaves are the ONLY place these params live (the rounds
+//     aren't grouped, so no composite/graph affordance reaches them); in-place
+//     editing here is the only path to them.
+//   - `roundKeyAux` stays READ-ONLY: it's per-round DISTINCT wiring
+//     (`roundKey.0` first in encrypt vs `roundKey.21` first in decrypt), so
+//     editing/broadcasting it would point rounds at the wrong key. Pinning it
+//     visible keeps the key ordering inspectable while scrubbing.
+//   - `wordBits` stays READ-ONLY: structural (only 16 ships; the schedule
+//     builder throws on ≠16).
+//
+// The apply-to-all row is SCOPED (`SpeckArxApplyAllRow`) — it broadcasts only
+// α/β/byteOrder and PRESERVES each leaf's own `roundKeyAux`, which is why it
+// can't reuse the generic `ApplyAllRow` (that copies the whole params object
+// and would clobber every round's distinct key wiring).
 const SpeckRoundBlock = (props: BlockProps) => {
   const params = (): {
     roundKeyAux?: string;
@@ -743,32 +758,122 @@ const SpeckRoundBlock = (props: BlockProps) => {
     wordBits?: number;
     byteOrder?: string;
   } => props.step.params as never;
+  const alpha = (): number => params().alpha ?? 0;
+  const beta = (): number => params().beta ?? 0;
+  const wordBits = (): number => params().wordBits ?? 16;
+  const byteOrder = (): string => params().byteOrder ?? "be-paper";
+
+  const writeParams = (patch: Record<string, Json>) => {
+    editStepParams(props.step.id, {
+      ...(props.step.params as Record<string, Json>),
+      ...patch,
+    });
+  };
 
   return (
-    <dl class="param-scalars">
-      <div class="param-scalar-row">
-        <dt>Round key aux</dt>
-        <dd>{params().roundKeyAux ?? "—"}</dd>
-      </div>
-      <div class="param-scalar-row">
-        <dt>α (ROR)</dt>
-        <dd>{params().alpha ?? "—"}</dd>
-      </div>
-      <div class="param-scalar-row">
-        <dt>β (ROL)</dt>
-        <dd>{params().beta ?? "—"}</dd>
-      </div>
-      <div class="param-scalar-row">
-        <dt>Word bits (n)</dt>
-        <dd>{params().wordBits ?? "—"}</dd>
-      </div>
-      <div class="param-scalar-row">
-        <dt>Byte order</dt>
-        <dd>{params().byteOrder ?? "—"}</dd>
-      </div>
-    </dl>
+    <>
+      <dl class="param-scalars">
+        <div class="param-scalar-row">
+          <dt>Round key aux</dt>
+          <dd>{params().roundKeyAux ?? "—"}</dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>α (ROR)</dt>
+          <dd>
+            {/* [1, wordBits-1] matches the key schedule's valid range and
+                avoids the degenerate identity rotations (0 / wordBits). */}
+            <IntInput
+              value={alpha()}
+              min={1}
+              max={wordBits() - 1}
+              placeholder="7"
+              onCommit={(next) => writeParams({ alpha: next })}
+            />
+          </dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>β (ROL)</dt>
+          <dd>
+            <IntInput
+              value={beta()}
+              min={1}
+              max={wordBits() - 1}
+              placeholder="2"
+              onCommit={(next) => writeParams({ beta: next })}
+            />
+          </dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Word bits (n)</dt>
+          <dd>{params().wordBits ?? "—"}</dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Byte order</dt>
+          <dd>
+            {/* Native select constrained to the two valid conventions, so the
+                executor never sees an unknown byteOrder. Both are whole-cipher
+                conventions; editing one round diverges (see the note below). */}
+            <select
+              class="speck-byteorder-select"
+              value={byteOrder()}
+              onChange={(e) => writeParams({ byteOrder: e.currentTarget.value })}
+            >
+              <option value="be-paper">be-paper</option>
+              <option value="le-nsa">le-nsa</option>
+            </select>
+          </dd>
+        </div>
+      </dl>
+      <SpeckArxApplyAllRow
+        stepType={props.step.type}
+        matchingCount={props.matchingCount}
+        alpha={alpha()}
+        beta={beta()}
+        byteOrder={byteOrder()}
+      />
+      <p class="muted small">
+        α and β also drive the key schedule's rotations (in the Key Expansion group). Editing them
+        here changes only the round function — the schedule keeps its original rotations, so the
+        cipher will diverge from canonical Speck. That's intentional: tinker and watch it break.
+      </p>
+    </>
   );
 };
+
+// Scoped apply-to-all for the Speck ARX constants. Unlike the generic
+// `ApplyAllRow` (which replaces the WHOLE params object and would clobber each
+// round's distinct `roundKeyAux`), this broadcasts ONLY α/β/byteOrder by
+// spreading each leaf's existing params and overriding those three keys —
+// `roundKeyAux` (and `wordBits`) survive. Scopes to `stepType` so it stays
+// within the active mode's rounds (`speck.round@1` in encrypt,
+// `speck.round-inverse@1` in decrypt); the counterpart mode's spec is untouched
+// (cross-mode is never auto-synced). Gated `matchingCount > 1` like ApplyAllRow.
+const SpeckArxApplyAllRow = (props: {
+  stepType: string;
+  matchingCount: number;
+  alpha: number;
+  beta: number;
+  byteOrder: string;
+}) => (
+  <Show when={props.matchingCount > 1}>
+    <div class="apply-all-row">
+      <ActionButton
+        title={`Copy this round's α, β and byte order to all ${props.matchingCount} ${props.stepType} rounds (each round keeps its own round key)`}
+        feedbackLabel={`Applied α/β/byte order to all ${props.matchingCount} rounds`}
+        onAction={() => {
+          editAllStepsByType(props.stepType, (p) => ({
+            ...(p as Record<string, Json>),
+            alpha: props.alpha,
+            beta: props.beta,
+            byteOrder: props.byteOrder,
+          }));
+        }}
+      >
+        Apply α/β/byte order to all {props.matchingCount} rounds
+      </ActionButton>
+    </div>
+  </Show>
+);
 
 // ─── Serpent step blocks ─────────────────────────────────────────────────
 
