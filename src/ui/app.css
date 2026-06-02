@@ -1004,6 +1004,26 @@ button:disabled {
   outline-offset: 0;
 }
 
+/* byteOrder dropdown in the Speck round-body editor (`SpeckRoundBlock`). Same
+   colorway as .int-input / .aux-name-input so the native <select> sits
+   consistently among the other Speck param controls rather than rendering as
+   an unstyled OS default. Width is intrinsic (no fixed width / right-align —
+   the two option labels are short). */
+.speck-byteorder-select {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 2px 6px;
+}
+
+.speck-byteorder-select:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: 0;
+}
+
 /* Read-only chip row for short arrays (split-bytes widths, future similar
    shapes). Each chip is `.param-readonly-cell`; the row wraps if the array
    is long. */
