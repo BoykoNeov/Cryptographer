@@ -139,30 +139,31 @@ describe("feistelSwapWires — inter-round X geometry", () => {
   const DX = 30;
   // Centers: rcx = 100, recombine bottom = 28; scx = 100, split top = 200.
 
-  it("crosses the halves when swap=true (left source → right target, and vice versa)", () => {
-    const { first, second } = feistelSwapWires(true, recombineBox, splitBox, DX);
-    // Sources straddle the recombine center (100 ± 30) on its bottom edge.
-    expect(first.x1).toBe(70);
-    expect(second.x1).toBe(130);
-    expect(first.y1).toBe(28);
-    // Targets are CROSSED: left source lands right of center, right lands left.
-    expect(first.x2).toBe(130);
-    expect(second.x2).toBe(70);
-    expect(first.y2).toBe(200);
-    // A genuine crossing: the two segments swap their relative left/right order
-    // between source and target.
-    expect(first.x1 < second.x1).toBe(true);
-    expect(first.x2 > second.x2).toBe(true);
+  it("crosses byte-correctly when swap=true: R lands new_L (left), L⊕F lands new_R (right)", () => {
+    const { lxorf, r } = feistelSwapWires(true, recombineBox, splitBox, DX);
+    // Sources straddle the recombine center (100 ± 30): L⊕F left, R right.
+    expect(lxorf.x1).toBe(70);
+    expect(r.x1).toBe(130);
+    expect(lxorf.y1).toBe(28);
+    // THE BYTE MAPPING (recombine = concat(R, L⊕F) → new_L = R, new_R = L⊕F):
+    // the R wire must land on split's LEFT (new_L), L⊕F on the RIGHT (new_R).
+    expect(r.x2).toBe(70); // R → split-left (new_L)
+    expect(lxorf.x2).toBe(130); // L⊕F → split-right (new_R)
+    expect(r.y2).toBe(200);
+    // Genuine crossing: each wire swaps its left/right side from source→target.
+    expect(lxorf.x1 < r.x1).toBe(true);
+    expect(lxorf.x2 > r.x2).toBe(true);
   });
 
-  it("keeps each half on its own side when swap=false (straight down)", () => {
-    const { first, second } = feistelSwapWires(false, recombineBox, splitBox, DX);
-    expect(first.x1).toBe(70);
-    expect(first.x2).toBe(70); // straight: left stays left
-    expect(second.x1).toBe(130);
-    expect(second.x2).toBe(130); // right stays right
+  it("keeps each half on its own side when swap=false (straight; concat(L⊕F, R))", () => {
+    const { lxorf, r } = feistelSwapWires(false, recombineBox, splitBox, DX);
+    // No-swap last round: new_L = L⊕F (left), new_R = R (right).
+    expect(lxorf.x1).toBe(70);
+    expect(lxorf.x2).toBe(70); // L⊕F → split-left (new_L)
+    expect(r.x1).toBe(130);
+    expect(r.x2).toBe(130); // R → split-right (new_R)
     // No crossing: order preserved.
-    expect(first.x1 < second.x1).toBe(true);
-    expect(first.x2 < second.x2).toBe(true);
+    expect(lxorf.x1 < r.x1).toBe(true);
+    expect(lxorf.x2 < r.x2).toBe(true);
   });
 });

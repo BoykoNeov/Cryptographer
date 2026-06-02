@@ -166,31 +166,44 @@ export type FeistelSwapWire = { x1: number; y1: number; x2: number; y2: number }
 export type LayoutBox = { x: number; y: number; w: number; h: number };
 
 /**
- * Endpoints of the two inter-round carry half-wires between a round's
+ * Endpoints of the two inter-round carry half-wires, between a round's
  * `recombine` (source, bottom edge) and the next round's `split` (target, top
- * edge). Each half leaves `dx` either side of the recombine center and lands
- * `dx` either side of the split center:
- *   - `swap === true`  → the halves CROSS (left source → right target and vice
- *     versa): the textbook Feistel X (R becomes the next round's left half,
- *     L⊕F its right).
- *   - `swap === false` → straight down, each half keeping its side (DES round
- *     16's no-swap exception — if it had a successor round).
+ * edge). The two halves are named by the VALUE each carries, NOT by byte
+ * position — because the swap lives in `recombine`'s concat order, so the raw
+ * `recombine → split` byte flow is actually straight; the X is the rail-level
+ * picture and the renderer LABELS each wire so a student can trace it:
  *
- * Pure geometry so the crossing decision is unit-tested independently of the
- * SVG renderer.
+ *   - `lxorf` carries **L⊕F** (computed at `fxor` on the left rail), leaving
+ *     recombine's left.
+ *   - `r` carries **R** (`split.output1`, the right rail), leaving recombine's
+ *     right.
+ *
+ * On a SWAP (`swap === true`) they CROSS to the OPPOSITE side of the next
+ * split: **R → the next round's LEFT half (new_L)** and **L⊕F → its RIGHT half
+ * (new_R)** — the textbook Feistel X, matching `recombine = concat(R, L⊕F)` →
+ * `new_L = R`, `new_R = L⊕F`. On no-swap (`false`, DES round 16) they go
+ * straight (L⊕F → new_L, R → new_R), matching `concat(L⊕F, R)`.
+ *
+ * Pure geometry so the crossing direction is unit-tested independently of the
+ * SVG renderer (and verified against the byte mapping, not just "looks like an
+ * X").
  */
 export const feistelSwapWires = (
   swap: boolean,
   recombineBox: LayoutBox,
   splitBox: LayoutBox,
   dx: number,
-): { first: FeistelSwapWire; second: FeistelSwapWire } => {
+): { lxorf: FeistelSwapWire; r: FeistelSwapWire } => {
   const rcx = recombineBox.x + recombineBox.w / 2;
   const rby = recombineBox.y + recombineBox.h; // recombine bottom edge
   const scx = splitBox.x + splitBox.w / 2;
   const sty = splitBox.y; // next split top edge
+  const left = scx - dx;
+  const right = scx + dx;
   return {
-    first: { x1: rcx - dx, y1: rby, x2: swap ? scx + dx : scx - dx, y2: sty },
-    second: { x1: rcx + dx, y1: rby, x2: swap ? scx - dx : scx + dx, y2: sty },
+    // L⊕F: from recombine-left → new_R (right) on swap, else new_L (left).
+    lxorf: { x1: rcx - dx, y1: rby, x2: swap ? right : left, y2: sty },
+    // R: from recombine-right → new_L (left) on swap, else new_R (right).
+    r: { x1: rcx + dx, y1: rby, x2: swap ? left : right, y2: sty },
   };
 };

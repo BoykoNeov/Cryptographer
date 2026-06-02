@@ -3637,11 +3637,10 @@ export const GraphView = () => {
     const out: {
       id: string;
       swap: boolean;
-      // Two wire endpoints (source on the recombine's bottom, target on the
-      // next split's top). The "first-half" wire carries R, the "second-half"
-      // wire carries L⊕F; for a swap they cross to the opposite side.
-      first: { x1: number; y1: number; x2: number; y2: number };
-      second: { x1: number; y1: number; x2: number; y2: number };
+      // Two named wires: `lxorf` carries L⊕F (from recombine-left), `r` carries
+      // R (from recombine-right). On a swap they cross — R → new_L, L⊕F → new_R.
+      lxorf: { x1: number; y1: number; x2: number; y2: number };
+      r: { x1: number; y1: number; x2: number; y2: number };
     }[] = [];
     const DX = 34; // horizontal offset of each half off the box center.
     for (const e of graph().edges) {
@@ -5936,11 +5935,20 @@ export const GraphView = () => {
               port-native cipher realizes the swap via the concat order. */}
             <For each={feistelSwaps()}>
               {(s) => {
+                type Wire = { x1: number; y1: number; x2: number; y2: number };
                 // Cubic with vertical control points → a smooth crossing.
-                const path = (w: { x1: number; y1: number; x2: number; y2: number }) => {
-                  const my = (w.y1 + w.y2) / 2;
-                  return `M ${w.x1} ${w.y1} C ${w.x1} ${my} ${w.x2} ${my} ${w.x2} ${w.y2}`;
-                };
+                const path = (w: Wire) =>
+                  `M ${w.x1} ${w.y1} C ${w.x1} ${(w.y1 + w.y2) / 2} ${w.x2} ${(w.y1 + w.y2) / 2} ${w.x2} ${w.y2}`;
+                // Label each wire by the VALUE it carries, so a student can
+                // trace R → new_L despite the concat byte order. Placed ~70%
+                // toward the target (not the midpoint) so the two labels sit on
+                // the separated ends rather than overlapping at the crossing.
+                const labelAt = (w: Wire) => ({
+                  x: w.x1 + 0.7 * (w.x2 - w.x1),
+                  y: w.y1 + 0.7 * (w.y2 - w.y1),
+                });
+                const rMid = labelAt(s.r);
+                const lMid = labelAt(s.lxorf);
                 return (
                   <g
                     class="graph-feistel-swap"
@@ -5948,19 +5956,25 @@ export const GraphView = () => {
                   >
                     <title>
                       {s.swap
-                        ? "Feistel swap: the right half (R) becomes the next round's left, (L⊕F) its right. Realized by the recombine's concat order + the next split."
-                        : "No swap (the self-inverse last-round exception): halves pass straight down."}
+                        ? "Feistel swap: the right half (R) becomes the next round's left half (new_L), and (L⊕F) becomes its right (new_R). The port-native cipher realizes this via the recombine's concat order — concat(R, L⊕F) — then the next split."
+                        : "No swap (the self-inverse last-round exception): the halves pass straight down — concat(L⊕F, R)."}
                     </title>
                     <path
                       class="graph-feistel-swap-wire"
-                      d={path(s.first)}
+                      d={path(s.r)}
                       marker-end="url(#graph-arrow-state)"
                     />
                     <path
                       class="graph-feistel-swap-wire"
-                      d={path(s.second)}
+                      d={path(s.lxorf)}
                       marker-end="url(#graph-arrow-state)"
                     />
+                    <text class="graph-feistel-swap-label" x={rMid.x} y={rMid.y}>
+                      R
+                    </text>
+                    <text class="graph-feistel-swap-label" x={lMid.x} y={lMid.y}>
+                      L⊕F
+                    </text>
                   </g>
                 );
               }}
