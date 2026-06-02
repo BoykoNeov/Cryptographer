@@ -36,6 +36,8 @@
  */
 
 import { type EdgeValueLookup, lookupEdgeValue, lookupNodeValue } from "@/core/edge-value-lookup";
+import { feistelRoundPlacement } from "@/core/feistel-layout";
+import { type FeistelRoundShape, analyzeFeistelRound } from "@/core/feistel-shape";
 import { type ByteFormat, formatBytes } from "@/core/format";
 import {
   type CipherGraph,
@@ -467,6 +469,14 @@ const labelTextLength = (
 // ─── Layout ────────────────────────────────────────────────────────────────
 
 type Box = { x: number; y: number; w: number; h: number };
+
+/**
+ * Empty Feistel-round map — the default for `layoutNode`/`layoutRoot`'s
+ * `feistelRounds` param so callers (and the test suite) that don't pass it
+ * keep the generic group layout byte-identically. A round id present in the
+ * map triggers the canonical two-column Feistel layout (see `feistel-layout.ts`).
+ */
+const EMPTY_FEISTEL_ROUNDS: ReadonlyMap<string, FeistelRoundShape> = new Map();
 
 /**
  * Replica placement info, derived once at the top of `layoutRoot` from the
@@ -1193,6 +1203,14 @@ const layoutNode = (
    * layout.
    */
   offsetsEnabled = false,
+  /**
+   * Feistel-shaped round groups (id → derived `FeistelRoundShape`). A group
+   * whose id is in this map lays its children out in the canonical two-column
+   * Feistel form (see `feistel-layout.ts`) instead of the generic vertical
+   * stack. Defaults empty so non-Feistel specs + the test suite keep the
+   * generic layout.
+   */
+  feistelRounds: ReadonlyMap<string, FeistelRoundShape> = EMPTY_FEISTEL_ROUNDS,
 ): Box => {
   const container = containersById.get(id);
   const pin = pinned.get(id);
@@ -1232,6 +1250,41 @@ const layoutNode = (
       out.set(id, autoBox);
     }
     return autoBox;
+  }
+
+  // Canonical Feistel-round layout: a round group whose wiring matches the
+  // split→F→xor→concat shape lays its children out as the textbook two-column
+  // Feistel cell (L rail left, F-function right, swap-bearing recombine at the
+  // bottom) instead of the generic vertical stack. The children are all leaves
+  // (split / F-stack / fxor / recombine, plus any round-key replica), so we set
+  // their boxes directly — no recursion needed. `relativePins` still apply so a
+  // user can drag an individual leaf. See `feistel-layout.ts`.
+  const feistel = feistelRounds.get(id);
+  if (container.kind === "group" && feistel !== undefined) {
+    const innerX = startX + consts.CONTAINER_PAD;
+    const innerY = startY + HEADER_H + consts.CONTAINER_PAD;
+    const placement = feistelRoundPlacement(feistel, container.childIds, {
+      leafW: consts.LEAF_W,
+      leafH: consts.LEAF_H,
+      isReplica: (cid) => replicas.isReplica.has(cid),
+      consumerOf: (cid) => replicas.consumerOf.get(cid),
+    });
+    for (const childId of container.childIds) {
+      const off = placement.offsets.get(childId);
+      if (off === undefined) continue;
+      const delta = relativePins.get(childId);
+      out.set(childId, {
+        x: innerX + off.dx + (delta?.dx ?? 0),
+        y: innerY + off.dy + (delta?.dy ?? 0),
+        w: consts.LEAF_W,
+        h: consts.LEAF_H,
+      });
+    }
+    const w = placement.bodyW + 2 * consts.CONTAINER_PAD;
+    const h = HEADER_H + placement.bodyH + 2 * consts.CONTAINER_PAD;
+    const box: Box = { x: startX, y: startY, w, h };
+    out.set(id, box);
+    return box;
   }
 
   if (container.kind === "group") {
@@ -1353,6 +1406,7 @@ const layoutNode = (
         replicas,
         relativePins,
         offsetsEnabled,
+        feistelRounds,
       );
       innerY = naturalY + childBox.h + consts.STACK_GAP;
       const renderedBottom = childBox.y + childBox.h;
@@ -1501,6 +1555,7 @@ const layoutNode = (
       replicas,
       relativePins,
       offsetsEnabled,
+      feistelRounds,
     );
     innerX = childBox.x + childBox.w + consts.FLOW_GAP;
     lastChildRight = childBox.x + childBox.w;
@@ -1612,6 +1667,13 @@ export const layoutRoot = (
    * Added 2026-05-19 (draggable-replicas plan, Slice 2).
    */
   relativePins: ReadonlyMap<string, { dx: number; dy: number }> = new Map(),
+  /**
+   * Feistel-shaped round groups (id → derived shape). Threaded down to
+   * `layoutNode` so a round whose wiring matches the split→F→xor→concat shape
+   * lays out as the canonical two-column Feistel cell. Optional; defaults
+   * empty so the test suite + non-Feistel specs keep the generic layout.
+   */
+  feistelRounds: ReadonlyMap<string, FeistelRoundShape> = EMPTY_FEISTEL_ROUNDS,
 ): { boxes: Map<string, Box>; canvasW: number; canvasH: number } => {
   const containersById = new Map<string, ContainerNode>();
   for (const c of graph.containers) containersById.set(c.id, c);
@@ -1728,6 +1790,7 @@ export const layoutRoot = (
       replicas,
       relativePins,
       offsetsEnabled,
+      feistelRounds,
     );
     cursorX = naturalX + box.w + consts.FLOW_GAP;
     if (offsetsEnabled && !isAuxOnly) altCounter += 1;
@@ -3284,7 +3347,42 @@ export const GraphView = () => {
   // would create a feedback loop (port assignment depends on base layout,
   // base layout would then depend on port assignment) without changing
   // the lookup's correctness in any cipher we've shipped or planned.
-  const baseLayout = createMemo(() => layoutRoot(graph(), pinnedMap(), consts(), auxOnlyRootIds()));
+  // Feistel-shaped round groups in the active spec (id → derived shape),
+  // driving the canonical two-column Feistel layout in `layoutNode`. Derived
+  // purely from each group's wiring via `analyzeFeistelRound` — DES rounds
+  // today; any split→F→xor→concat group qualifies, no cipher tag. The outer
+  // `rounds` group (bodyOutput → a child GROUP) and AES/Serpent/SHA rounds
+  // (bodyOutput → a non-concat leaf) return null and keep the generic layout.
+  const feistelRoundsById = createMemo(() => {
+    const m = new Map<string, FeistelRoundShape>();
+    const walk = (nodes: readonly StepNode[]): void => {
+      for (const node of nodes) {
+        if (node.kind === "step") continue;
+        if (node.kind === "group") {
+          const shape = analyzeFeistelRound(node);
+          if (shape !== null) m.set(node.id, shape);
+        }
+        walk(node.children);
+      }
+    };
+    walk(spec().steps);
+    return m;
+  });
+
+  // `baseLayout` passes feistelRounds (so the source-x lookup matches the final
+  // layout for Feistel round leaves) but still OMITS portAssignment +
+  // relativePins — passing `undefined` lets layoutRoot's defaults apply.
+  const baseLayout = createMemo(() =>
+    layoutRoot(
+      graph(),
+      pinnedMap(),
+      consts(),
+      auxOnlyRootIds(),
+      undefined,
+      undefined,
+      feistelRoundsById(),
+    ),
+  );
 
   const portAssignment = createMemo(() => {
     // Port-assignment is now keyed off BUNDLES (one slot per bundle) so an
@@ -3435,8 +3533,61 @@ export const GraphView = () => {
       auxOnlyRootIds(),
       portAssignment(),
       relativePinsMap(),
+      feistelRoundsById(),
     ),
   );
+
+  /**
+   * Canonical-Feistel decorations (DES canonical-representation feature):
+   * per expanded Feistel round, the **L / R rail labels** under `split` and an
+   * **F-function bounding box** around the F-stack column. Pure geometry read
+   * off `layout().boxes` + the round's `FeistelRoundShape`. Collapsed rounds
+   * (no child leaf boxes) are skipped. Rendered as a `pointer-events:none`
+   * overlay so it never intercepts clicks/drags on the real leaves.
+   */
+  const feistelDecorations = createMemo(() => {
+    const rounds = feistelRoundsById();
+    if (rounds.size === 0) return [];
+    const boxes = layout().boxes;
+    const FBOX_PAD = 10;
+    const out: {
+      roundId: string;
+      fBox: Box;
+      lLabel: { x: number; y: number };
+      rLabel: { x: number; y: number };
+    }[] = [];
+    for (const [roundId, shape] of rounds) {
+      const splitB = boxes.get(shape.splitId);
+      if (splitB === undefined) continue; // collapsed round → no leaf boxes.
+      let minX = Number.POSITIVE_INFINITY;
+      let minY = Number.POSITIVE_INFINITY;
+      let maxX = Number.NEGATIVE_INFINITY;
+      let maxY = Number.NEGATIVE_INFINITY;
+      for (const fid of shape.fStackIds) {
+        const b = boxes.get(fid);
+        if (b === undefined) continue;
+        minX = Math.min(minX, b.x);
+        minY = Math.min(minY, b.y);
+        maxX = Math.max(maxX, b.x + b.w);
+        maxY = Math.max(maxY, b.y + b.h);
+      }
+      if (!Number.isFinite(minX)) continue;
+      out.push({
+        roundId,
+        fBox: {
+          x: minX - FBOX_PAD,
+          y: minY - FBOX_PAD,
+          w: maxX - minX + 2 * FBOX_PAD,
+          h: maxY - minY + 2 * FBOX_PAD,
+        },
+        // L below split's left edge (the L rail drops left to fxor); R below
+        // split's right edge (R forks right into the F function).
+        lLabel: { x: splitB.x + 10, y: splitB.y + splitB.h + 18 },
+        rLabel: { x: splitB.x + splitB.w - 10, y: splitB.y + splitB.h + 18 },
+      });
+    }
+    return out;
+  });
 
   /**
    * Slice 5 — drop-gutter records for every visible container.
@@ -5330,6 +5481,40 @@ export const GraphView = () => {
                   </Show>
                 );
               }}
+            </For>
+
+            {/* Canonical-Feistel decorations: F-function box + L/R rail labels
+              per expanded Feistel round (DES today). Drawn after containers and
+              before edges/leaves so the F-box reads as a subtle background
+              grouping the F-stack column; `pointer-events:none` so it never
+              eats clicks. The labels name `split`'s two output halves. */}
+            <For each={feistelDecorations()}>
+              {(d) => (
+                <g class="graph-feistel-decor" pointer-events="none">
+                  <rect
+                    class="graph-feistel-fbox"
+                    x={d.fBox.x}
+                    y={d.fBox.y}
+                    width={d.fBox.w}
+                    height={d.fBox.h}
+                    rx="8"
+                  />
+                  <text class="graph-feistel-fbox-label" x={d.fBox.x + 8} y={d.fBox.y + 16}>
+                    F
+                  </text>
+                  <text class="graph-feistel-rail-label" x={d.lLabel.x} y={d.lLabel.y}>
+                    L
+                  </text>
+                  <text
+                    class="graph-feistel-rail-label"
+                    x={d.rLabel.x}
+                    y={d.rLabel.y}
+                    text-anchor="end"
+                  >
+                    R
+                  </text>
+                </g>
+              )}
             </For>
 
             {/* Edges between leaf/container centers. Drawn before leaves so the

@@ -3558,6 +3558,30 @@ button:disabled {
   font-style: italic;
 }
 
+/* Canonical-Feistel decorations (DES canonical round view). The F-function
+   box is a subtle dashed grouping behind the F-stack column; the "F" label
+   and the L/R rail labels name the textbook Feistel structure. All
+   pointer-events:none (set on the <g>) so they never intercept node clicks. */
+.graph-feistel-fbox {
+  fill: color-mix(in srgb, var(--accent) 6%, transparent);
+  stroke: color-mix(in srgb, var(--accent) 45%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 5 3;
+}
+
+.graph-feistel-fbox-label {
+  fill: color-mix(in srgb, var(--accent) 75%, var(--muted));
+  font-size: 13px;
+  font-style: italic;
+  font-weight: 600;
+}
+
+.graph-feistel-rail-label {
+  fill: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .graph-leaf:hover .graph-leaf-rect,
 .graph-leaf:focus .graph-leaf-rect {
   fill: var(--accent-soft);
