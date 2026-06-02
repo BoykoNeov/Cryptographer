@@ -54,6 +54,20 @@ graph and overlays the layout sidecar (`src/ui/stores/layout.ts`,
 per-spec.id, persisted to localStorage) for pinned positions + collapsed
 sets.
 
+**Canonical Feistel rounds (DES, 2026-06-02).** A round group whose wiring
+matches `split → F → xor → concat` (detected by `analyzeFeistelRound` in
+`src/core/feistel-shape.ts`, cipher-agnostic, no tag) lays out as the textbook
+two-column Feistel cell instead of the generic vertical stack — L rail left,
+F-function boxed on the right, recombine at the bottom — via the pure helpers
+in `src/core/feistel-layout.ts` threaded into `layoutNode`. The inter-round
+**swap (the "X")** is drawn as two crossing wires between consecutive rounds
+(R → next round's new_L, L⊕F → new_R), suppressing the straight `recombine →
+split` carry; the X is the rail-level picture (byte-level flow is straight — the
+swap lives in the concat order) so each wire is LABELED. Leaves stay real
+(draggable / click-scrub / wireable); only LAYOUT + decoration change. Deferred:
+the long `round.16.recombine → final-permutation` edge (FP lays out at the top,
+far from round 16 — a pre-existing root-layout artifact, not a Feistel issue).
+
 **Authoring** is a two-channel surface. The palette
 (`src/ui/components/StepPalette.tsx`) lists every non-padding registered
 step type and emits HTML5 drags carrying the `STEP_TYPE_DRAG_MIME`
