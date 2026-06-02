@@ -838,6 +838,54 @@ button:disabled {
   border-top: 1px solid var(--border);
 }
 
+/* ─── Port-wiring editor (universal-port Phase 4d-bis) ────────────────────
+   Per-input-port dropdowns below the param editor, letting the user rewire
+   the selected leaf's inputs to any scope-legal upstream source. Shares the
+   muted-uppercase title language of the param editor so the two read as
+   siblings within the graph editor pane. */
+.port-wiring-editor {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.port-wiring-title {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.port-wiring-hint {
+  margin: 0 0 2px 0;
+}
+
+/* One row: the input-port name + its source dropdown, baseline-aligned. */
+.port-wiring-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.port-wiring-port-name {
+  min-width: 84px;
+  font-family: var(--mono, monospace);
+  color: var(--fg);
+}
+
+.port-wiring-select {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 2px 4px;
+}
+
 /* ─── Cipher-constants panel (scaffolding-suppression A1) ─────────────────
    Editable published constants (SHA-256's K/H). Sits above the per-step
    ParamEditor in linear + graph views. The outer <details> uses the same

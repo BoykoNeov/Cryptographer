@@ -57,6 +57,7 @@ import { GraphView } from "./components/GraphView";
 import { IvInput } from "./components/IvInput";
 import { ParamEditor } from "./components/ParamEditor";
 import { PortFlowView } from "./components/PortFlowView";
+import { PortWiringEditor } from "./components/PortWiringEditor";
 import { RoundKeyPanel } from "./components/RoundKeyPanel";
 import { RunExplorerModal } from "./components/RunExplorerModal";
 import { StepDescription } from "./components/StepDescription";
@@ -1649,6 +1650,11 @@ export const App = () => {
               {(graphStepId) => (
                 <div class="graph-param-editor-pane">
                   <ParamEditor stepId={graphStepId()} />
+                  {/* Port-wiring editor (4d-bis): rewire the selected leaf's
+                      input ports to any scope-legal upstream source. Graph-mode
+                      authoring only — sits below the param editor in the same
+                      selection-gated pane. */}
+                  <PortWiringEditor stepId={graphStepId()} />
                 </div>
               )}
             </Show>

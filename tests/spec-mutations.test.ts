@@ -105,14 +105,24 @@ describe("spec mutation helpers", () => {
       });
     });
 
-    it("clears a bound port when given null (the dropdown '— unwired —' path)", () => {
+    it("clears a bound port when given null, normalizing an emptied map to ABSENT", () => {
       const spec = makeWiredSpec();
       const updated = setPortBinding(spec, "b", "input", null);
 
       const b = findStep(updated, "b");
-      // The key is gone, not set to undefined.
-      expect(b?.portInputs).toEqual({});
-      expect(b?.portInputs && "input" in b.portInputs).toBe(false);
+      // Emptying the last binding strips portInputs entirely (byte-stable
+      // saves: a semantically-unwired leaf must not serialize as `{}`).
+      expect(b?.portInputs).toBeUndefined();
+    });
+
+    it("clears one port but keeps the others when several are bound", () => {
+      let spec = makeWiredSpec();
+      spec = setPortBinding(spec, "b", "operand", { node: "a", port: "output" });
+      const updated = setPortBinding(spec, "b", "input", null);
+
+      const b = findStep(updated, "b");
+      // `input` gone, `operand` survives — map is non-empty so it stays a map.
+      expect(b?.portInputs).toEqual({ operand: { node: "a", port: "output" } });
     });
 
     it("preserves reference equality on untouched sibling branches", () => {

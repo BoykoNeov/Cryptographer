@@ -137,6 +137,14 @@ export const setPortBinding = (
           // destructure-omit keeps the other bindings intact by value.
           const { [portName]: _dropped, ...rest } = node.portInputs ?? {};
           changed = true;
+          // Normalize an emptied map back to ABSENT (not `{}`) so two
+          // semantically-equal specs serialize identically — preserving the
+          // "spec-only saves are byte-stable" property the URL-share hash
+          // relies on. Strip the key entirely rather than leaving `portInputs: {}`.
+          if (Object.keys(rest).length === 0) {
+            const { portInputs: _omit, ...nodeWithout } = node;
+            return nodeWithout;
+          }
           return { ...node, portInputs: rest };
         }
 

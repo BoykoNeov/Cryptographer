@@ -158,6 +158,36 @@ describe("legalSourcesForInput — nested (seeded group) body", () => {
   });
 });
 
+describe("legalSourcesForInput — preceding container's published output", () => {
+  // A top-scope leaf AFTER a group may read that group's published `out`,
+  // but NOT a leaf buried inside the group's body (different scope).
+  const spec = makeSpec([
+    {
+      kind: "group",
+      id: "g",
+      label: "G",
+      children: [{ kind: "step", id: "g.x", type: "not@1", params: {} }],
+    },
+    {
+      kind: "step",
+      id: "after",
+      type: "not@1",
+      params: {},
+      portInputs: { input: { node: "g", port: "out" } },
+    },
+  ]);
+
+  it("offers the finished container's out port", () => {
+    const sources = legalSourcesForInput(spec, registry, "after", "input");
+    expect(has(sources, "g", "out")).toBe(true);
+  });
+
+  it("does NOT offer a leaf inside that container (cross-scope)", () => {
+    const sources = legalSourcesForInput(spec, registry, "after", "input");
+    expect(has(sources, "g.x", "output")).toBe(false);
+  });
+});
+
 describe("legalSourcesForInput — anti-drift superset over shipped specs", () => {
   // Collect every (leafId, portName, binding) across a spec tree.
   const collectBindings = (
