@@ -1,33 +1,32 @@
 /**
  * Key-Schedule Explorer — Phase 2 of the linear-mode pedagogy plan.
  *
- * Surfaces the hidden internal machinery of the still-monolithic
- * key-expansion executors (Serpent, DES). The standard `<FrameStateView />`
- * for a key-expansion frame renders the unchanged input state matrix on
- * both "before" and "after" sides (the executor only writes aux; state
- * passes through) — useless. This component takes the slot instead and
- * renders the algorithm's intermediate decomposition: prekey recurrence +
- * bitsliced S-box + IP for Serpent; the per-round PC-1/shift/PC-2 table for
- * DES.
+ * Surfaces the hidden internal machinery of the still-monolithic DES
+ * key-schedule executor. The standard `<FrameStateView />` for a
+ * key-expansion frame renders the unchanged input state matrix on both
+ * "before" and "after" sides (the executor only writes aux; state passes
+ * through) — useless. This component takes the slot instead and renders the
+ * algorithm's intermediate decomposition: the per-round PC-1/shift/PC-2
+ * table for DES.
  *
- * **AES branch RETIRED (key-schedule-decomposition K1c, 2026-06-01).** AES's
- * key schedule is now decomposed into port-native primitives, so the
- * RotWord / SubWord / Rcon / word-XOR stages this used to simulate are real
- * scrubbable trace frames — the AES swimlane was unreachable (no
- * `aes.key-expansion@1` frame ships) and redundant. Serpent + DES keep their
- * simulators until K3/K4 decompose them.
+ * **AES branch RETIRED (key-schedule-decomposition K1c, 2026-06-01) and
+ * Serpent branch RETIRED (K3b, 2026-06-02).** Both schedules are now
+ * decomposed into port-native primitives, so the stages they used to
+ * simulate (RotWord/SubWord/Rcon/word-XOR for AES; prekey recurrence +
+ * bitsliced S-box + IP for Serpent) are real scrubbable trace frames — each
+ * swimlane was unreachable (no `aes.key-expansion@1` / `serpent.key-expansion@1`
+ * frame ships from a builder-routed spec) and redundant. DES keeps its
+ * simulator until K4 decomposes it.
  *
  * Dispatch:
  *   - Looks up the frame's stepType in the simulator registry
  *     (`src/ui/key-schedule-sim/registry.ts`).
- *   - For `kind: "serpent"`: just needs the master key; runs
- *     `simulateSerpentKeySchedule`, renders multi-stage pipeline.
  *   - For `kind: "des"`: needs the master key + PC-1/PC-2/shifts params;
  *     runs `simulateDesKeySchedule`, renders the per-round table.
  *
- * The parity tests pin both simulators byte-for-byte against their
- * executors, so the values rendered here ARE the values the runtime
- * computed — not an independent calculation that could drift.
+ * The parity test pins the simulator byte-for-byte against its executor, so
+ * the values rendered here ARE the values the runtime computed — not an
+ * independent calculation that could drift.
  *
  * Failure modes are graceful: missing/wrong-shape master key returns
  * `null` (the App falls back to the standard FrameStateView). Bad params
@@ -37,10 +36,9 @@
 
 import type { ByteFormat } from "@/core/format";
 import type { Json, TraceFrame } from "@/core/types";
-import { For, Match, Show, Switch, createMemo } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import type { DesScheduleRound, DesScheduleTrace } from "../key-schedule-sim/des";
 import { type ScheduleSimulator, lookupScheduleSimulator } from "../key-schedule-sim/registry";
-import type { SerpentScheduleTrace, SerpentStage } from "../key-schedule-sim/serpent";
 import { useByteFormat } from "../stores/format";
 import { getTrace, setFrame, useTraceVersion } from "../stores/trace";
 import { ByteRow } from "./byte-row";
@@ -71,20 +69,13 @@ export const KeyScheduleExplorer = (props: Props) => {
           </div>
         }
       >
-        {(sim) => (
-          // Per-kind dispatch. `Switch`/`Match` over `sim().kind` keeps
-          // the three branches symmetric and makes adding a fourth
-          // cipher's explorer mechanical (one Match arm). AES + Serpent
-          // were a nested Show pair when only two kinds existed; the
-          // pair couldn't extend cleanly when DES joined.
-          <Switch fallback={<div class="muted small">unknown simulator kind: {sim().kind}</div>}>
-            <Match when={sim().kind === "serpent"}>
-              <SerpentExplorer frame={props.frame} fmt={fmt()} />
-            </Match>
-            <Match when={sim().kind === "des"}>
-              <DesExplorer frame={props.frame} fmt={fmt()} />
-            </Match>
-          </Switch>
+        {(_sim) => (
+          // DES is the only remaining simulator kind (AES retired in K1c,
+          // Serpent in K3b — both now decompose into real trace frames).
+          // The `ScheduleSimulator` union is single-member, so no per-kind
+          // Switch is needed; a future cipher's monolithic schedule would
+          // re-widen the union and reintroduce the dispatch here.
+          <DesExplorer frame={props.frame} fmt={fmt()} />
         )}
       </Show>
     </section>
@@ -94,11 +85,10 @@ export const KeyScheduleExplorer = (props: Props) => {
 /**
  * Pull the `keyAuxName` value out of a key-expansion step's params,
  * falling back to the canonical default `"key"` when the field is
- * missing or wrong shape. Both the AES and Serpent executors use the
- * same `keyAuxName` field with the same `"key"` default — extracted
- * here as a single source of truth so a future cipher addition
- * (or a fix to one cipher's failure handling) doesn't have to be
- * applied to two parallel copies.
+ * missing or wrong shape. The DES executor uses the `keyAuxName` field
+ * with a `"key"` default; the helper is kept standalone so a future
+ * cipher addition reusing the same convention doesn't have to duplicate
+ * the shape-guard.
  */
 const readKeyAuxName = (params: Json): string => {
   if (typeof params !== "object" || params === null || Array.isArray(params)) return "key";
@@ -106,214 +96,9 @@ const readKeyAuxName = (params: Json): string => {
   return typeof candidate === "string" && candidate.length > 0 ? candidate : "key";
 };
 
-// ─── Serpent branch ──────────────────────────────────────────────────
-
-const SerpentExplorer = (props: { frame: TraceFrame; fmt: ByteFormat }) => {
-  const trace = createMemo<SerpentScheduleTrace | null>(() => {
-    const masterKey = props.frame.auxRead.get(readKeyAuxName(props.frame.params));
-    if (!(masterKey instanceof Uint8Array)) return null;
-    try {
-      const sim = lookupScheduleSimulator(props.frame.stepType);
-      if (sim?.kind !== "serpent") return null;
-      return sim.simulate(masterKey);
-    } catch {
-      return null;
-    }
-  });
-
-  return (
-    <Show
-      when={trace()}
-      fallback={
-        <div class="key-schedule-explorer-error muted">
-          Couldn't decompose this key-expansion frame (missing or wrong-shape master key).
-        </div>
-      }
-    >
-      {(t) => <SerpentScheduleView trace={t()} fmt={props.fmt} />}
-    </Show>
-  );
-};
-
-const SerpentScheduleView = (props: { trace: SerpentScheduleTrace; fmt: ByteFormat }) => {
-  // Partition stages for distinct sections — readable rather than 200
-  // homogeneous rows. The recurrence section is collapsed by default
-  // (132 entries dominate the trace; the structurally interesting bits
-  // are the pad + prekey-init + S-box-group + IP phases).
-  const sections = createMemo(() => {
-    const padStage = props.trace.stages.find((s) => s.kind === "pad");
-    const initStage = props.trace.stages.find((s) => s.kind === "prekey-init");
-    const recurrenceStages = props.trace.stages.filter((s) => s.kind === "prekey-recurrence");
-    const sboxStages = props.trace.stages.filter((s) => s.kind === "sbox-group");
-    const ipStages = props.trace.stages.filter((s) => s.kind === "ip");
-    return { padStage, initStage, recurrenceStages, sboxStages, ipStages };
-  });
-
-  return (
-    <div class="key-schedule-serpent">
-      <div class="key-schedule-serpent-header">
-        <span class="key-schedule-serpent-title">Serpent key expansion</span>
-        <span class="muted small">
-          {props.trace.keyByteLength}-byte key · {props.trace.roundKeys.length} round keys ·{" "}
-          {props.trace.stages.length} stages
-        </span>
-      </div>
-
-      {/* Section 1: padding */}
-      <Show when={sections().padStage}>
-        {(s) => (
-          <details class="key-schedule-serpent-section" open>
-            <summary>1. Pad to 256 bits</summary>
-            <Show
-              when={s().kind === "pad" && (s() as Extract<SerpentStage, { kind: "pad" }>)}
-              fallback={null}
-            >
-              {(pad) => (
-                <PadStageView
-                  masterKey={pad().masterKey}
-                  padded={pad().padded}
-                  padByteIndex={pad().padByteIndex}
-                  fmt={props.fmt}
-                />
-              )}
-            </Show>
-          </details>
-        )}
-      </Show>
-
-      {/* Section 2: prekey-init (8 words from padded key) */}
-      <Show when={sections().initStage}>
-        {(s) => (
-          <details class="key-schedule-serpent-section" open>
-            <summary>2. Decode 8 prekey words (LE 32-bit)</summary>
-            <Show
-              when={
-                s().kind === "prekey-init" &&
-                (s() as Extract<SerpentStage, { kind: "prekey-init" }>)
-              }
-              fallback={null}
-            >
-              {(init) => (
-                <ol class="key-schedule-serpent-prekey-init">
-                  <For each={init().prekeys}>
-                    {(w, idx) => (
-                      <li>
-                        <span class="muted">
-                          w<sub>-{8 - idx()}</sub>
-                        </span>{" "}
-                        = 0x{(w >>> 0).toString(16).padStart(8, "0")}
-                      </li>
-                    )}
-                  </For>
-                </ol>
-              )}
-            </Show>
-          </details>
-        )}
-      </Show>
-
-      {/* Section 3: 132 prekey-recurrence (collapsed by default — dense) */}
-      <details class="key-schedule-serpent-section">
-        <summary>3. Generate w[0]…w[131] (132 × 5-input XOR + ROL11)</summary>
-        <ol class="key-schedule-serpent-recurrence">
-          <For each={sections().recurrenceStages}>
-            {(stage) => (
-              <Show
-                when={
-                  stage.kind === "prekey-recurrence" &&
-                  (stage as Extract<SerpentStage, { kind: "prekey-recurrence" }>)
-                }
-                fallback={null}
-              >
-                {(r) => (
-                  <li>
-                    <span class="muted">
-                      w<sub>{r().j}</sub>
-                    </span>{" "}
-                    = ROL<sub>11</sub>(0x{(r().xorResult >>> 0).toString(16).padStart(8, "0")}) = 0x
-                    {(r().output >>> 0).toString(16).padStart(8, "0")}
-                  </li>
-                )}
-              </Show>
-            )}
-          </For>
-        </ol>
-      </details>
-
-      {/* Section 4: 33 sbox-group + IP pairs (interleaved per round key) */}
-      <details class="key-schedule-serpent-section" open>
-        <summary>4. Bitsliced S-box per group → IP → K_i (33 round keys)</summary>
-        <ol class="key-schedule-serpent-sbox-groups">
-          <For each={sections().sboxStages}>
-            {(stage, i) => (
-              <Show
-                when={
-                  stage.kind === "sbox-group" &&
-                  (stage as Extract<SerpentStage, { kind: "sbox-group" }>)
-                }
-                fallback={null}
-              >
-                {(g) => (
-                  <li>
-                    <div class="key-schedule-serpent-sbox-group-header">
-                      <span>
-                        K<sub>{g().groupIndex}</sub>
-                      </span>
-                      <span class="muted small">
-                        S<sub>{g().sboxIndex}</sub> (i={g().groupIndex} → (35-i) mod 8 ={" "}
-                        {g().sboxIndex})
-                      </span>
-                    </div>
-                    <Show
-                      when={
-                        sections().ipStages[i()] &&
-                        sections().ipStages[i()]?.kind === "ip" &&
-                        (sections().ipStages[i()] as Extract<SerpentStage, { kind: "ip" }>)
-                      }
-                      fallback={null}
-                    >
-                      {(ip) => (
-                        <div class="key-schedule-serpent-roundkey">
-                          <div class="muted small">raw (pre-IP):</div>
-                          <ByteRow bytes={ip().rawRoundKey} fmt={props.fmt} />
-                          <div class="muted small">permuted (final K_{g().groupIndex}):</div>
-                          <ByteRow bytes={ip().permutedRoundKey} fmt={props.fmt} />
-                        </div>
-                      )}
-                    </Show>
-                  </li>
-                )}
-              </Show>
-            )}
-          </For>
-        </ol>
-      </details>
-    </div>
-  );
-};
-
-const PadStageView = (props: {
-  masterKey: Uint8Array;
-  padded: Uint8Array;
-  padByteIndex: number;
-  fmt: ByteFormat;
-}) => (
-  <div class="key-schedule-serpent-pad">
-    <div class="muted small">master key ({props.masterKey.length} bytes):</div>
-    <ByteRow bytes={props.masterKey} fmt={props.fmt} />
-    <div class="muted small">
-      padded (32 bytes
-      <Show when={props.padByteIndex >= 0}>; 0x01 marker at byte {props.padByteIndex}</Show>
-      <Show when={props.padByteIndex < 0}>; 256-bit key, no marker needed</Show>
-      ):
-    </div>
-    <ByteRow bytes={props.padded} fmt={props.fmt} highlightIndex={props.padByteIndex} />
-  </div>
-);
-
 // `<ByteRow>` lives in `./byte-row` so the StepNarration component
 // renders byte sequences with the same visual rhythm as the
-// key-schedule explorer's pad-stage / round-key views.
+// key-schedule explorer's DES per-round table.
 
 // ─── DES branch (Phase 5e of `docs/plans/des-feistel.md`) ────────────
 

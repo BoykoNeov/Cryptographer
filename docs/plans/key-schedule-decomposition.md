@@ -528,8 +528,9 @@ retarget, runtime-ported-dispatch, maybe narration), 1 doc comment in
 
 ### K3 — Serpent key-schedule decomposition (B-minimal)
 
-> **Status: K3a SHIPPED 2026-06-02 — gate GREEN (biome + tsc + 2231 vitest /
-> 193 files + build).** B-minimal, no A gate (per the K2d decision rule). The
+> **Status: K3a + K3b SHIPPED 2026-06-02 — gate GREEN (biome + tsc + 2231
+> vitest / 193 files + build for K3a; K3b re-gated below).** B-minimal, no A
+> gate (per the K2d decision rule). The
 > slice-open advisor pass picked **option (B): a dedicated `serpent.key-sbox@1`
 > leaf** (lifts the oracle's bitsliced-S-box+IP internals verbatim → no mirror
 > in the registry → no role-scoping, no corruption hazard, verified-by-
@@ -550,10 +551,27 @@ retarget, runtime-ported-dispatch, maybe narration), 1 doc comment in
 > `roundKey.0..32` byte-equal to the monolith oracle for all 3 sizes; the
 > shipped `serpent-vectors`/`roundtrip`/`key-schedule` KATs (now routing through
 > the decomposition) stay byte-equal to published vectors. `serpent.key-
-> expansion@1` KEPT registered (oracle + back-compat). **K3b (remainder, NOT
-> STARTED):** KeyScheduleExplorer Serpent branch is now dormant (no shipped spec
-> emits a `serpent.key-expansion@1` frame — same state the AES branch entered at
-> K1c) → its formal retirement + any further blast-radius tidy is the K3b slice.
+> expansion@1` KEPT registered (oracle + back-compat). **K3b SHIPPED
+> 2026-06-02 — gate GREEN:** the dormant KeyScheduleExplorer Serpent branch
+> was formally retired (the K1c-for-Serpent analog). Deleted
+> `src/ui/key-schedule-sim/serpent.ts`, the Serpent variant + registry entry
+> in `key-schedule-sim/registry.ts` (the `ScheduleSimulator` union is now a
+> single DES member), the `SerpentExplorer`/`SerpentScheduleView`/`PadStageView`
+> render branch in `KeyScheduleExplorer.tsx` (dispatch collapses to the lone
+> `DesExplorer`), and the two Serpent-only tests
+> (`serpent-key-schedule-sim-parity.test.ts` + `key-schedule-explorer.test.tsx`
+> — the latter tested only the Serpent branch; DES dispatch through
+> `<KeyScheduleExplorer>` stays covered by `des-key-schedule-explorer.test.tsx`).
+> Premise verified directly (not just from the K3a commit message):
+> `serpent-spec-builder.ts` routes the key schedule through
+> `buildSerpentKeyScheduleNative`, so no shipped spec emits a
+> `serpent.key-expansion@1` frame — the explorer branch was genuinely
+> unreachable. The dead `.key-schedule-serpent*` CSS is LEFT in place to match
+> the K1c choice (K1c left the parallel `.key-schedule-aes*` rules). Per the
+> advisor, no heavy graph smoke — K3b changes no spec/trace/graph topology
+> (viz-only linear-mode dead-code removal); the dormancy confirmation IS the
+> relevant check. **K4 (DES schedule, different shape, no S-box mirror) is the
+> remaining slice.**
 > Behavioral note: malformed-key handling shifted from hard-reject to warn-and-
 > run coercion (via `aux-load-bytes@1`), consistent with K1/K2. **Graph smoke
 > (throwaway Playwright, deleted post-gate per [[feedback_playwright_dormant]]):
