@@ -1461,13 +1461,38 @@ export const App = () => {
             the next successful run. Hidden in auto-rerun mode (dirty is
             never set). Lives inside `.inputs` (flex wrap row) with
             full-width basis so it lands on its own line below the Run
-            button — visually adjacent to the action that clears it. */}
-        <Show when={dirty()}>
-          {/* Native <output> carries an implicit `role="status"` so screen
-              readers announce the change without us repeating the role. */}
-          <output class="pending-banner">
-            edits pending — click <strong>run</strong> to update the trace
-          </output>
+            button — visually adjacent to the action that clears it.
+
+            Why the always-present SLOT (gated on manual mode, not on
+            `dirty`): the banner appears/disappears on every edit→Run cycle
+            — exactly the batch workflow manual mode exists for. Toggling a
+            full-width row in/out of `.inputs` grew the section ~41px and
+            shoved the whole page down (scroll anchoring masks it only when
+            there's scroll headroom above the viewport; a tall viewport /
+            near-top edit shows a visible jump — measured +176px). Reserving
+            the row whenever auto-rerun is off, and only swapping its CONTENT
+            on `dirty`, keeps `.inputs` height constant across the cycle so
+            nothing jumps. The two states share box metrics (see app.css) so
+            the row height is identical whether dirty or idle. */}
+        <Show when={!autoRerun()}>
+          <div class="pending-banner-slot">
+            <Show
+              when={dirty()}
+              fallback={
+                // Idle filler: keeps the slot at the banner's height (a bare
+                // empty gap reads as a rendering bug) and quietly reminds the
+                // user that edits won't apply until they Run. Plain <span> so
+                // it carries no status role — only the live banner announces.
+                <span class="pending-banner-idle">auto-rerun off — edits apply on run</span>
+              }
+            >
+              {/* Native <output> carries an implicit `role="status"` so screen
+                  readers announce the change without us repeating the role. */}
+              <output class="pending-banner">
+                edits pending — click <strong>run</strong> to update the trace
+              </output>
+            </Show>
+          </div>
         </Show>
         {/* Slice 7 — Share feedback. Surfaces "Copied!" or a clipboard
             failure inline below the toolbar; auto-clears after 3s. */}

@@ -146,6 +146,34 @@ describe("App — auto/manual rerun toggle", () => {
     expect(useHistory()().length).toBe(2);
   });
 
+  it("manual mode reserves the pending-banner slot whether or not edits are pending", () => {
+    // Regression pin for the scroll-jank fix (2026-06-02): the banner used to
+    // be gated directly on `dirty`, so it mounted/unmounted a full-width row
+    // in `.inputs` on every edit→Run cycle — growing the section ~41px and
+    // shoving the page down (visible when there's no scroll headroom). The fix
+    // reserves an always-present `.pending-banner-slot` whenever auto-rerun is
+    // OFF and only swaps its CONTENT (idle filler ⇄ live banner) on `dirty`, so
+    // `.inputs` height is constant across the cycle. This test pins the slot's
+    // presence invariant; if someone re-gates the slot on `dirty`, it fails.
+    const { container } = render(() => <App />);
+    fireEvent.click(findButton(container, "run"));
+
+    // Auto mode (default): the whole slot is absent — no reserved row.
+    expect(container.querySelector(".pending-banner-slot")).toBeNull();
+
+    // Manual mode, not yet dirty: slot present, idle filler shown, no live banner.
+    setAutoRerun(false);
+    expect(container.querySelector(".pending-banner-slot")).not.toBeNull();
+    expect(container.querySelector(".pending-banner-idle")).not.toBeNull();
+    expect(container.querySelector(".pending-banner")).toBeNull();
+
+    // Edit → dirty: slot STILL present (same reserved row); banner replaces filler.
+    tweakRound1Sbox();
+    expect(container.querySelector(".pending-banner-slot")).not.toBeNull();
+    expect(container.querySelector(".pending-banner")).not.toBeNull();
+    expect(container.querySelector(".pending-banner-idle")).toBeNull();
+  });
+
   it("flipping the toggle back ON clears the pending banner immediately", () => {
     const { container } = render(() => <App />);
     fireEvent.click(findButton(container, "run"));

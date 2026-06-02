@@ -415,23 +415,48 @@ button:disabled {
   cursor: pointer;
 }
 
-/* The "edits pending" banner. Full-width row inside `.inputs` (the flex
-   wrap container) so it lands on its own line below the controls. Uses
-   the same warm "changed" palette as the modified-cell highlight in the
-   matrix view — same semantic meaning ("something is different and you
-   should notice"), just at the section scale. */
-.pending-banner {
+/* Manual-mode pending-edit slot. Always occupies one full-width row in
+   `.inputs` whenever auto-rerun is off (gated in App.tsx on `!autoRerun()`,
+   NOT on `dirty`). Toggling `dirty` swaps the slot's CONTENT (live banner ⇄
+   idle filler) without changing the row's height — which previously grew
+   `.inputs` ~41px on every edit→Run cycle and shoved the page down. The two
+   children below share identical box metrics (padding / font-size / 1px
+   border) so the slot height is the same in either state. */
+.pending-banner-slot {
   flex-basis: 100%;
-  background: var(--changed-bg);
-  border: 1px solid var(--changed);
+  display: flex;
+}
+
+/* Shared box for both slot states so the row height never changes. The idle
+   filler carries a transparent border to match the banner's 1px border, so
+   neither state is a pixel taller than the other. */
+.pending-banner,
+.pending-banner-idle {
+  flex: 1 1 auto;
+  border: 1px solid transparent;
   border-radius: 4px;
   padding: 6px 10px;
   font-size: 13px;
+}
+
+/* The "edits pending" banner. Uses the same warm "changed" palette as the
+   modified-cell highlight in the matrix view — same semantic meaning
+   ("something is different and you should notice"), just at the section
+   scale. */
+.pending-banner {
+  background: var(--changed-bg);
+  border-color: var(--changed);
   color: var(--changed);
 }
 
 .pending-banner strong {
   color: var(--text);
+}
+
+/* Idle state — slot is reserved but no edits are pending. Low-emphasis muted
+   text so it reads as a quiet status hint, not an alert. */
+.pending-banner-idle {
+  color: var(--muted);
 }
 
 /* Slice 7 — Share status pill. Sits on its own row below the toolbar via
