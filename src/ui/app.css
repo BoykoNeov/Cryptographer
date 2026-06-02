@@ -3582,6 +3582,16 @@ button:disabled {
   font-weight: 700;
 }
 
+/* Inter-round Feistel swap (the X). Accent-coloured, slightly thicker than a
+   normal spine edge so the crossover reads as the headline structural event
+   between rounds. */
+.graph-feistel-swap-wire {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  opacity: 0.85;
+}
+
 .graph-leaf:hover .graph-leaf-rect,
 .graph-leaf:focus .graph-leaf-rect {
   fill: var(--accent-soft);

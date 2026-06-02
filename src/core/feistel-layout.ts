@@ -158,3 +158,39 @@ export const feistelRoundPlacement = (
 
   return { offsets, bodyW, bodyH };
 };
+
+/** A straight wire segment (consumed by the renderer, which curves it). */
+export type FeistelSwapWire = { x1: number; y1: number; x2: number; y2: number };
+
+/** A minimal box shape (the renderer's layout `Box` is structurally compatible). */
+export type LayoutBox = { x: number; y: number; w: number; h: number };
+
+/**
+ * Endpoints of the two inter-round carry half-wires between a round's
+ * `recombine` (source, bottom edge) and the next round's `split` (target, top
+ * edge). Each half leaves `dx` either side of the recombine center and lands
+ * `dx` either side of the split center:
+ *   - `swap === true`  → the halves CROSS (left source → right target and vice
+ *     versa): the textbook Feistel X (R becomes the next round's left half,
+ *     L⊕F its right).
+ *   - `swap === false` → straight down, each half keeping its side (DES round
+ *     16's no-swap exception — if it had a successor round).
+ *
+ * Pure geometry so the crossing decision is unit-tested independently of the
+ * SVG renderer.
+ */
+export const feistelSwapWires = (
+  swap: boolean,
+  recombineBox: LayoutBox,
+  splitBox: LayoutBox,
+  dx: number,
+): { first: FeistelSwapWire; second: FeistelSwapWire } => {
+  const rcx = recombineBox.x + recombineBox.w / 2;
+  const rby = recombineBox.y + recombineBox.h; // recombine bottom edge
+  const scx = splitBox.x + splitBox.w / 2;
+  const sty = splitBox.y; // next split top edge
+  return {
+    first: { x1: rcx - dx, y1: rby, x2: swap ? scx + dx : scx - dx, y2: sty },
+    second: { x1: rcx + dx, y1: rby, x2: swap ? scx - dx : scx + dx, y2: sty },
+  };
+};

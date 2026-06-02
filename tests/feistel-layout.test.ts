@@ -8,7 +8,7 @@
  * replica parked right of the F column at its consumer's row.
  */
 
-import { feistelRoundPlacement } from "@/core/feistel-layout";
+import { feistelRoundPlacement, feistelSwapWires } from "@/core/feistel-layout";
 import type { FeistelRoundShape } from "@/core/feistel-shape";
 import { describe, expect, it } from "vitest";
 
@@ -129,5 +129,40 @@ describe("feistelRoundPlacement — round-key replica", () => {
   it("grows bodyW to contain the key replica", () => {
     const rep = place.offsets.get(replicaId);
     expect(place.bodyW).toBeGreaterThanOrEqual((rep?.dx ?? 0) + CONSTS.leafW);
+  });
+});
+
+describe("feistelSwapWires — inter-round X geometry", () => {
+  // recombine above (centered at x=100), next split below (centered at x=100).
+  const recombineBox = { x: 50, y: 0, w: 100, h: 28 };
+  const splitBox = { x: 50, y: 200, w: 100, h: 28 };
+  const DX = 30;
+  // Centers: rcx = 100, recombine bottom = 28; scx = 100, split top = 200.
+
+  it("crosses the halves when swap=true (left source → right target, and vice versa)", () => {
+    const { first, second } = feistelSwapWires(true, recombineBox, splitBox, DX);
+    // Sources straddle the recombine center (100 ± 30) on its bottom edge.
+    expect(first.x1).toBe(70);
+    expect(second.x1).toBe(130);
+    expect(first.y1).toBe(28);
+    // Targets are CROSSED: left source lands right of center, right lands left.
+    expect(first.x2).toBe(130);
+    expect(second.x2).toBe(70);
+    expect(first.y2).toBe(200);
+    // A genuine crossing: the two segments swap their relative left/right order
+    // between source and target.
+    expect(first.x1 < second.x1).toBe(true);
+    expect(first.x2 > second.x2).toBe(true);
+  });
+
+  it("keeps each half on its own side when swap=false (straight down)", () => {
+    const { first, second } = feistelSwapWires(false, recombineBox, splitBox, DX);
+    expect(first.x1).toBe(70);
+    expect(first.x2).toBe(70); // straight: left stays left
+    expect(second.x1).toBe(130);
+    expect(second.x2).toBe(130); // right stays right
+    // No crossing: order preserved.
+    expect(first.x1 < second.x1).toBe(true);
+    expect(first.x2 < second.x2).toBe(true);
   });
 });

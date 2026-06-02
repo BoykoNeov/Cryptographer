@@ -36,7 +36,7 @@
  */
 
 import { type EdgeValueLookup, lookupEdgeValue, lookupNodeValue } from "@/core/edge-value-lookup";
-import { feistelRoundPlacement } from "@/core/feistel-layout";
+import { feistelRoundPlacement, feistelSwapWires } from "@/core/feistel-layout";
 import { type FeistelRoundShape, analyzeFeistelRound } from "@/core/feistel-shape";
 import { type ByteFormat, formatBytes } from "@/core/format";
 import {
@@ -3590,6 +3590,73 @@ export const GraphView = () => {
   });
 
   /**
+   * Inter-round Feistel SWAP (the "X"). The straight round→round carry edge
+   * (`round.N.recombine → round.{N+1}.split`) between two Feistel rounds is
+   * suppressed from the normal edge render (`visibleNonFeedbackBundles`) and
+   * redrawn as two crossing wires by the overlay below — the canonical
+   * depiction that the right half (R) becomes the next round's LEFT and (L⊕F)
+   * becomes its RIGHT. `feistelCarryKeys` is the suppression set; `feistelSwaps`
+   * is the geometry. The crossing is driven by the SOURCE round's `swap` flag
+   * (read from its recombine argument order), so editing a round to (no-)swap
+   * flips the picture live — and DES's round 16 (no successor round) simply has
+   * no inter-round swap drawn.
+   */
+  const feistelCarryKeys = createMemo(() => {
+    const rounds = feistelRoundsById();
+    if (rounds.size === 0) return new Set<string>();
+    const recombineIds = new Set<string>();
+    const splitIds = new Set<string>();
+    for (const shape of rounds.values()) {
+      recombineIds.add(shape.recombineId);
+      splitIds.add(shape.splitId);
+    }
+    const keys = new Set<string>();
+    for (const e of graph().edges) {
+      if (recombineIds.has(e.from) && splitIds.has(e.to)) keys.add(`${e.from} ${e.to}`);
+    }
+    return keys;
+  });
+
+  const visibleNonFeedbackBundles = createMemo(() => {
+    const carry = feistelCarryKeys();
+    const bundles = nonFeedbackBundles();
+    if (carry.size === 0) return bundles;
+    return bundles.filter((b) => !carry.has(`${b.from} ${b.to}`));
+  });
+
+  const feistelSwaps = createMemo(() => {
+    const rounds = feistelRoundsById();
+    if (rounds.size === 0) return [];
+    const boxes = layout().boxes;
+    const recombineToRound = new Map<string, FeistelRoundShape>();
+    const splitToRound = new Map<string, FeistelRoundShape>();
+    for (const shape of rounds.values()) {
+      recombineToRound.set(shape.recombineId, shape);
+      splitToRound.set(shape.splitId, shape);
+    }
+    const out: {
+      id: string;
+      swap: boolean;
+      // Two wire endpoints (source on the recombine's bottom, target on the
+      // next split's top). The "first-half" wire carries R, the "second-half"
+      // wire carries L⊕F; for a swap they cross to the opposite side.
+      first: { x1: number; y1: number; x2: number; y2: number };
+      second: { x1: number; y1: number; x2: number; y2: number };
+    }[] = [];
+    const DX = 34; // horizontal offset of each half off the box center.
+    for (const e of graph().edges) {
+      const fromRound = recombineToRound.get(e.from);
+      if (fromRound === undefined || !splitToRound.has(e.to)) continue;
+      const rb = boxes.get(e.from);
+      const sb = boxes.get(e.to);
+      if (rb === undefined || sb === undefined) continue;
+      const wires = feistelSwapWires(fromRound.swap, rb, sb, DX);
+      out.push({ id: `${e.from}->${e.to}`, swap: fromRound.swap, ...wires });
+    }
+    return out;
+  });
+
+  /**
    * Slice 5 — drop-gutter records for every visible container.
    *
    * Three gutter flavors per container, in a single pass:
@@ -5534,7 +5601,7 @@ export const GraphView = () => {
               (CBC's `cbc-snapshot → cbc-xor`) sit on top of any nodes
               they happen to cross. See `nonFeedbackBundles` /
               `feedbackBundles` memos for the rationale. */}
-            <For each={nonFeedbackBundles()}>{renderBundle}</For>
+            <For each={visibleNonFeedbackBundles()}>{renderBundle}</For>
 
             {/* Leaves last so they sit on top. Root-level leaves (those with
               empty containerPath — e.g. AES's `key-expansion`,
@@ -5858,6 +5925,46 @@ export const GraphView = () => {
               box rather than "stuck to" the front face — see
               `.graph-edge-feedback` in `app.css`. */}
             <For each={feedbackBundles()}>{renderBundle}</For>
+
+            {/* Inter-round Feistel SWAP (the "X"). Drawn AFTER the leaves so
+              the crossing reads on top of the empty inter-round band. Two
+              cubic half-wires per round boundary, crossing when the source
+              round swaps (DES rounds 1..15) — the textbook depiction that R
+              becomes the next round's left half and (L⊕F) its right. The
+              straight `recombine → split` carry was suppressed from the edge
+              render (`visibleNonFeedbackBundles`). A `<title>` notes that the
+              port-native cipher realizes the swap via the concat order. */}
+            <For each={feistelSwaps()}>
+              {(s) => {
+                // Cubic with vertical control points → a smooth crossing.
+                const path = (w: { x1: number; y1: number; x2: number; y2: number }) => {
+                  const my = (w.y1 + w.y2) / 2;
+                  return `M ${w.x1} ${w.y1} C ${w.x1} ${my} ${w.x2} ${my} ${w.x2} ${w.y2}`;
+                };
+                return (
+                  <g
+                    class="graph-feistel-swap"
+                    classList={{ "graph-feistel-swap-crossed": s.swap }}
+                  >
+                    <title>
+                      {s.swap
+                        ? "Feistel swap: the right half (R) becomes the next round's left, (L⊕F) its right. Realized by the recombine's concat order + the next split."
+                        : "No swap (the self-inverse last-round exception): halves pass straight down."}
+                    </title>
+                    <path
+                      class="graph-feistel-swap-wire"
+                      d={path(s.first)}
+                      marker-end="url(#graph-arrow-state)"
+                    />
+                    <path
+                      class="graph-feistel-swap-wire"
+                      d={path(s.second)}
+                      marker-end="url(#graph-arrow-state)"
+                    />
+                  </g>
+                );
+              }}
+            </For>
 
             {/* Slice 5 — drop gutters. Rendered LAST so they sit on top
               of leaves and containers for native SVG hit-testing: a
