@@ -1139,7 +1139,23 @@ export const App = () => {
         {/* Slice 2.10c — cipher dropdown shown only when category=cipher.
             Hash category swaps in the parallel hash dropdown below. */}
         <Show when={category() === "cipher"}>
-          <label>
+          {/* `position: relative` so the divergence-only reset button can be
+              absolutely positioned in the label's top-right dead space (next
+              to the ~40px "cipher" caption). Keeping it OUT of the flex flow is
+              deliberate: the button used to live inside `.cipher-select-row`,
+              and its appearance on first divergence widened the cipher item
+              ~52px, tipping a settings sibling onto a new line and growing
+              `.inputs` ~54px (once per session, anchoring-masked at wide
+              viewports, visible at narrow ones). Absolute positioning inside
+              the caption's reliable dead space means the button's appearance
+              reflows nothing. (Residual, out of scope: for Speck/Serpent-256
+              the `<select>` itself grows on divergence because
+              "Custom (was Speck 32/64 (BE, paper))" exceeds the widest normal
+              option that otherwise pins the select width — the reported case is
+              the AES-128 landing, where "Custom (was AES-128)" is narrower than
+              that pin, so the select stays put and the button was the sole
+              contributor.) */}
+          <label class="cipher-label">
             cipher
             <div class="cipher-select-row">
               <select
@@ -1163,21 +1179,23 @@ export const App = () => {
                   )}
                 </For>
               </select>
-              {/* Visible only when the spec has diverged. Single reset surface
-                — placed here next to the dropdown (the action surface) rather
-                than mirrored next to the header indicator, so it doesn't
-                compete with the muted cipher-name label. */}
-              <Show when={isCustom()}>
-                <button
-                  type="button"
-                  class="reset-spec-button"
-                  onClick={() => resetSpec()}
-                  title={`Discard edits and restore the canonical ${CIPHER_LABELS[cipher()]} spec`}
-                >
-                  reset
-                </button>
-              </Show>
             </div>
+            {/* Visible only when the spec has diverged. Single reset surface
+              — placed on the cipher control (the action surface) rather than
+              mirrored next to the header indicator, so it doesn't compete with
+              the muted cipher-name label. Absolutely positioned (see the
+              `.cipher-label` `position: relative` note above) so its appearance
+              never reflows the `.inputs` settings row. */}
+            <Show when={isCustom()}>
+              <button
+                type="button"
+                class="reset-spec-button"
+                onClick={() => resetSpec()}
+                title={`Discard edits and restore the canonical ${CIPHER_LABELS[cipher()]} spec`}
+              >
+                reset
+              </button>
+            </Show>
           </label>
         </Show>
         {/* Slice 2.10c (2026-05-25) — hash dropdown shown only when

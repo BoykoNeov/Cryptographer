@@ -104,22 +104,39 @@ h1 {
   color: var(--changed);
 }
 
-/* Wrapper that holds the cipher <select> plus the inline "reset" button
-   side-by-side under the "cipher" label column. The outer label is a
-   flex column (label text on top, content below); this row is a flex
-   row so the button sits to the right of the select. */
+/* The cipher <label> is a flex column (caption "cipher" on top, the
+   select-row below). `position: relative` makes it the containing block
+   for the absolutely-positioned reset button (below), which lives in the
+   dead space to the right of the ~40px caption. Anchoring the button here
+   — rather than in the flex flow — keeps its appearance-on-divergence from
+   widening the cipher item and wrapping a settings sibling onto a new line
+   (the ~54px once-per-session reflow this layout fixes). */
+.cipher-label {
+  position: relative;
+}
+
+/* Wrapper that holds the cipher <select>. The outer label is a flex
+   column (caption on top, content below); this row keeps the select on
+   its own line. (The reset button used to sit inline here; it's now
+   absolutely positioned on the label so its appearance can't reflow the
+   `.inputs` settings row.) */
 .cipher-select-row {
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
-/* "Reset to canonical" affordance next to the cipher dropdown. Only
-   rendered when the spec has diverged. Sized small and low-weight so it
-   reads as a corrective action, not a primary control — and uses the
-   --changed accent that elsewhere flags edited state, so it's
-   immediately recognisable as paired with the "Custom (was X)" label. */
+/* "Reset to canonical" affordance on the cipher control. Only rendered
+   when the spec has diverged. Absolutely positioned in the label's
+   top-right dead space (beside the "cipher" caption) so it overlays free
+   space and its appearance reflows nothing. Sized small and low-weight so
+   it reads as a corrective action, not a primary control — and uses the
+   --changed accent that elsewhere flags edited state, so it's immediately
+   recognisable as paired with the "Custom (was X)" label. */
 .reset-spec-button {
+  position: absolute;
+  top: 0;
+  right: 0;
   background: transparent;
   border: 1px solid var(--changed);
   color: var(--changed);
