@@ -48,8 +48,8 @@
  *
  * ## Authoring conventions
  *
- * - **Per-conceptual-unit `<details>`** — match the visual rhythm of
- *   `KeyScheduleExplorer`'s `.key-schedule-aes-stage` rows. ShiftRows
+ * - **Per-conceptual-unit `<details>`** — one disclosure per natural
+ *   sub-unit of the step. ShiftRows
  *   → 4 row units. MixColumns → 4 column units. SubBytes → 16 byte
  *   units. AddRoundKey → 16 cell units. Speck round → 3 ARX sub-ops.
  *   AVOID per-byte disclosure on large states (a future SHAKE / Keccak
@@ -59,8 +59,7 @@
  * - **`Prose` is a Component, not bare JSX.** This is what keeps
  *   `<details>` `open` state alive across the byte-format toggle. The
  *   builder closure captures frame bytes once; only `fmt` propagates
- *   reactively into each Prose body. See the rationale at
- *   `src/ui/components/KeyScheduleExplorer.tsx:295-304`.
+ *   reactively into each Prose body.
  *
  * - **Return `null` for "decline to narrate this frame"** — wrong-shape
  *   params, missing aux. The component then renders nothing for that
@@ -148,20 +147,20 @@ export const hasNarrationFn = (stepType: string): boolean => REGISTRY.has(stepTy
  *
  * Reasons for the current set:
  *
- *   - **Serpent key expansion** (`serpent.key-expansion@1`) — covered by
- *     `<KeyScheduleExplorer />` with much richer per-stage narration than the
- *     unit-list this registry produces. Narrating it again would double up.
- *     (Slated for retirement under K3 — Serpent's key-schedule decomposition,
- *     not yet started.)
- *   - **AES key expansion** (`aes.key-expansion@1/@2`) — NO LONGER covered by
- *     `<KeyScheduleExplorer />` (its AES branch was retired in
- *     key-schedule-decomposition K1c; the RotWord/SubWord/Rcon/word-XOR steps
- *     are now real, narrated trace frames inside the decomposed `key-schedule`
- *     group). These monolithic executors are no longer used by any shipped
- *     spec — they survive registered only as the FIPS oracle for
- *     `aes-key-schedule-decomposition.test.ts` and for loading pre-K1 saved
- *     docs — so they are aux-only no-op steps with no narration to write.
- *     (Slated for deletion in a future release per `docs/versioning.md`.)
+ *   - **Monolithic key-expansion oracle executors** (`aes.key-expansion@1/@2`,
+ *     `serpent.key-expansion@1`, `des.key-schedule@1`) — every key schedule is
+ *     now decomposed into port-native primitives (AES in K1, Speck K2, Serpent
+ *     K3, DES K4), so the per-stage math those executors hid (RotWord/SubWord/
+ *     Rcon/word-XOR for AES; the prekey recurrence + bitsliced S-box + IP for
+ *     Serpent; PC-1 → 16× rotate → PC-2 for DES) is now real, narrated trace
+ *     frames inside the decomposed `key-schedule` group. The monolithic
+ *     executors are no longer emitted by any shipped spec — they survive
+ *     registered only as the KAT oracle for the decomposition tests and for
+ *     loading pre-decomposition saved docs — so they are aux-only no-op steps
+ *     with no narration to write. (The `<KeyScheduleExplorer />` UI that used
+ *     to fake their decomposition was retired in K4b, 2026-06-02, once DES, the
+ *     last monolithic schedule, decomposed. These executors are slated for
+ *     deletion in a future release per `docs/versioning.md`.)
  *   - **Speck key schedule** — the monolithic `speck.key-schedule@1` step
  *     type was FULLY RETIRED at the K2c follow-up (2026-06-01): the executor,
  *     its StepDocumentation, the file `src/steps/speck-key-schedule.ts`,
@@ -189,10 +188,11 @@ export const hasNarrationFn = (stepType: string): boolean => REGISTRY.has(stepTy
  * enforces every step type is either registered or here.
  */
 export const NARRATION_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
-  // Serpent: still covered by <KeyScheduleExplorer /> (richer surface).
+  // Monolithic key-expansion oracle executors — decomposed into port-native
+  // primitives (AES K1, Serpent K3, DES K4), so unused by any shipped spec;
+  // kept registered only as KAT oracle + pre-decomposition doc back-compat.
+  // Aux-only no-ops with no per-frame prose to write.
   "serpent.key-expansion@1",
-  // AES @1/@2: explorer AES branch retired in K1c — now unused-by-any-spec
-  // aux-only no-op executors kept as FIPS oracle / pre-K1 doc back-compat.
   "aes.key-expansion@1",
   "aes.key-expansion@2",
   // The aux-publish tail of the DECOMPOSED AES key schedule
@@ -231,11 +231,11 @@ export const NARRATION_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
   "serpent.inv-linear-transform@1",
   // (The `feistel.toy-add-k@1` toy entry was removed in Phase 5 Slice 5.3e
   // when the toy step type was decommissioned with the Feistel scaffolding.)
-  // `des.key-schedule@1` — covered by the future `DesKeyScheduleSimulator`
-  // (Phase 5e of the plan). The per-frame narration produced by this
-  // registry is the wrong surface for a multi-round PC-1 → 16 shifts →
-  // PC-2 walk; the explorer view that replaces FrameStateView is the
-  // right one, matching how AES and Serpent key expansions are handled.
+  // `des.key-schedule@1` — the monolithic DES schedule oracle. Decomposed
+  // in K4a into port-native `des.bit-permute@1` (PC-1/PC-2) + `des.rotate-
+  // halves@1` + the `des.publish-round-keys@1` tail, each narrated via its own
+  // `narrationOverride`; this executor is no longer emitted by any shipped
+  // spec (same posture as the AES/Serpent oracles above).
   "des.key-schedule@1",
   // The SHA-256 coarse-granularity helpers (sha2.message-schedule-step@1 /
   // compression-round@1 / final-add@1) were retired in Phase 5 Slice 5.1

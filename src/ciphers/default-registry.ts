@@ -233,8 +233,10 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // key in on the `masterKey` port, round keys out on `key0`…`keyN`). `meta`
   // is RETAINED — the runtime still projects `aux[keyAuxName] → masterKey`
   // and `key${r} → aux[${outputPrefix}.${r}]`, so frames stay byte-identical
-  // (only `portInputs`/`portOutputs` newly populate; KeyScheduleExplorer
-  // still intercepts the frame by stepType, so the inspector is unchanged).
+  // (only `portInputs`/`portOutputs` newly populate). This monolithic oracle
+  // is no longer emitted by any shipped spec — the schedule decomposed into
+  // port-native primitives (K1–K4) — so it survives only as KAT oracle /
+  // pre-decomposition doc back-compat.
   // It is the one-to-many round-key writer, with `outputs(params)` in
   // function form sized by `params.rounds`.
   r.register("aes.key-expansion@1", {
@@ -486,9 +488,9 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // for uniformity across the round-key port batch).
   // Port-native since Slice 5.2 (2026-05-31): dropped the `legacy:` lift,
   // KEEPS `meta` (runtime projects `aux[keyAuxName] → masterKey` and
-  // `key${i} → aux[${outputPrefix}.${i}]`, frames byte-identical). Serpent
-  // IS in `isKeyExpansionStepType`, so KeyScheduleExplorer still intercepts
-  // the frame — the inspector view is unchanged.
+  // `key${i} → aux[${outputPrefix}.${i}]`, frames byte-identical). Kept only
+  // as the KAT oracle + pre-K3 doc back-compat: no shipped spec emits this
+  // frame (the schedule decomposed into port-native primitives in K3).
   r.register("serpent.key-expansion@1", {
     kind: "ported",
     executor: serpentKeyExpansion,
@@ -600,9 +602,9 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // Port-native since Slice 5.2 (2026-05-31): dropped the `legacy:` lift,
   // KEEPS `meta` (same hybrid-ported pattern as `aes.key-expansion@1` — the
   // runtime projects `aux[keyAuxName] → masterKey` and `key${r} →
-  // aux[${outputPrefix}.${r}]`, frames byte-identical). DES IS in
-  // `isKeyExpansionStepType`, so KeyScheduleExplorer still intercepts the
-  // frame — the inspector view is unchanged.
+  // aux[${outputPrefix}.${r}]`, frames byte-identical). Kept only as the KAT
+  // oracle + pre-K4 doc back-compat: no shipped spec emits this frame (the
+  // schedule decomposed into port-native primitives in K4a).
   r.register("des.key-schedule@1", {
     kind: "ported",
     executor: desKeySchedule,

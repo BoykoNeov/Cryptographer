@@ -94,8 +94,7 @@ export const __resetRoundKeyPanelOverrideForTests = (): void => {
  *     `auxRead`. The schedule is being mixed in right now.
  *
  * The read-or-write check is cipher-agnostic by construction — no
- * hardcoded list of step types, no dependency on the key-schedule-sim
- * registry (which only knows AES + Serpent today). The Speck schedule
+ * hardcoded list of step types. The Speck schedule
  * was decomposed in K2a and its monolithic step type retired in the
  * K2c follow-up (2026-06-01), so today no Speck frame produces a
  * monolithic schedule write — the per-iteration ARX leaves' aux fan-out

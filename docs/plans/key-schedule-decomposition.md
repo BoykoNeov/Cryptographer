@@ -662,10 +662,24 @@ for all three key sizes. Graph smoke (throwaway Playwright) for legibility — b
 
 ### K4 — DES key-schedule decomposition (B-minimal; sequenced after K3)
 
-> **Status: K4a SHIPPED 2026-06-02 — gate GREEN (biome + tsc + 2220 vitest /
-> 192 files + build).** B-minimal, no A gate (per the K2d decision rule).
-> **K4b (KeyScheduleExplorer DES-branch retirement) NOT STARTED** — and since
-> DES is the *last* cipher, K4b empties the whole KeyScheduleExplorer subsystem.
+> **Status: K4a + K4b SHIPPED 2026-06-02 — gate GREEN.** B-minimal, no A gate
+> (per the K2d decision rule).
+> **K4b CLOSED (KeyScheduleExplorer DES-branch retirement) — gate GREEN (biome +
+> tsc + 2228 vitest / 191 files + build).** Since DES was the *last* cipher with
+> a registered simulator, K4b emptied the WHOLE subsystem: deleted
+> `src/ui/components/KeyScheduleExplorer.tsx`, `src/ui/key-schedule-sim/des.ts`
+> + `registry.ts` (the dir is gone), and the two explorer tests
+> (`des-key-schedule-explorer.test.tsx` + `des-key-schedule-sim-parity.test.ts`).
+> App.tsx's `isKeyExpansionStepType` intercept collapsed to a bare
+> `<FrameStateView frame={frame()} />` (the fallback was already FrameStateView;
+> no shipped spec emits the monolithic oracle frames, so no UX regression — the
+> decomposed K1–K4 stages are real scrubbable frames the standard view renders).
+> The shared `<ByteRow>` (`components/byte-row.tsx`) survives (its `key-schedule-`
+> CSS class prefix is now just a naming holdover — kept, only the explorer-only
+> CSS rules were removed). The four monolithic oracle executors
+> (`aes.key-expansion@1/@2`, `serpent.key-expansion@1`, `des.key-schedule@1`)
+> stay registered + on the narration allowlist (KAT oracle / back-compat); only
+> the stale prose comments referencing the deleted explorer were rewritten.
 >
 > **The K4 load-bearing design call (advisor slice-open pass, 2026-06-02): the
 > rotation representation.** DES's schedule is *pure bit-wiring* — no arithmetic,

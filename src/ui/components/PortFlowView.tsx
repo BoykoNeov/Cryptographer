@@ -33,10 +33,11 @@
  * populates these fields whenever the registration has NO `legacy` executor
  * (the port-capture gate at ~`runtime.ts:767`), so BOTH pure port-native
  * steps AND the hybrid-ported steps (meta retained, legacy dropped) carry
- * port I/O. Since Slice 5.2 that hybrid set is the key-schedules
- * (AES/Speck/Serpent/DES) + the padding family; the key-schedules are
- * intercepted upstream by `KeyScheduleExplorer` (by stepType), so in practice
- * padding is the hybrid family that lands here. Every shipped leaf is
+ * port I/O. Since Slice 5.2 that hybrid set is the monolithic key-schedule
+ * oracle executors (AES/Speck/Serpent/DES) + the padding family; the oracle
+ * frames are no longer emitted by any shipped spec (every schedule decomposed
+ * into port-native primitives in K1–K4), so in practice padding is the only
+ * hybrid family that lands here. Every shipped leaf is
  * port-native (pinned by `tests/requires-ported-dispatch.test.ts`), so once
  * Slice 5.3e retired the last lifted-legacy step (the Feistel toy) + its
  * `BytesView` fallback, `FrameStateView` renders this view unconditionally

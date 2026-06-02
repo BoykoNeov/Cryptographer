@@ -55,7 +55,6 @@ import { FeistelRoundBytes } from "./components/FeistelRoundBytes";
 import { FeistelSwapDiagram } from "./components/FeistelSwapDiagram";
 import { GraphView } from "./components/GraphView";
 import { IvInput } from "./components/IvInput";
-import { KeyScheduleExplorer } from "./components/KeyScheduleExplorer";
 import { ParamEditor } from "./components/ParamEditor";
 import { PortFlowView } from "./components/PortFlowView";
 import { RoundKeyPanel } from "./components/RoundKeyPanel";
@@ -65,7 +64,6 @@ import { StepList } from "./components/StepList";
 import { StepNarration } from "./components/StepNarration";
 import { StepStrip } from "./components/StepStrip";
 import { TraceTimeline } from "./components/TraceTimeline";
-import { isKeyExpansionStepType } from "./key-schedule-sim/registry";
 // Side-effect import: register the per-frame narration fns into the shared
 // narration registry. Without it, <StepNarration /> would render nothing.
 // Idempotent.
@@ -1555,17 +1553,14 @@ export const App = () => {
                   <BlockBadge blockIndex={frame().blockIndex} blockCount={blockCount()} />
 
                   {/* State view (PortFlowView for every shipped frame; see
-                      `FrameStateView`). EXCEPT key-expansion frames: the
-                      executor only writes aux, so the default before/after
-                      pair is uninformative — KeyScheduleExplorer renders the
-                      algorithm's per-stage internal decomposition (Phase 2 of
-                      the pedagogy plan). */}
-                  <Show
-                    when={isKeyExpansionStepType(frame().stepType)}
-                    fallback={<FrameStateView frame={frame()} />}
-                  >
-                    <KeyScheduleExplorer frame={frame()} />
-                  </Show>
+                      `FrameStateView`). Every key schedule is now decomposed
+                      into port-native primitive frames (K1–K4), so each stage
+                      is a real, scrubbable frame the standard view renders
+                      directly — the old `<KeyScheduleExplorer />` intercept
+                      (which faked that decomposition for the monolithic
+                      executors) was retired in K4b once DES, the last
+                      monolithic schedule, decomposed. */}
+                  <FrameStateView frame={frame()} />
 
                   {/* Port-native Feistel/swap visualization (Slice 5.3d — the
                       obligatory rebuild). These self-detect a port-native
@@ -1585,8 +1580,9 @@ export const App = () => {
                   {/* Per-frame value-prose. Cipher-agnostic dispatch via
                       the narration registry (`src/ui/narration/`).
                       Renders nothing for frames whose step type is on
-                      the allowlist (every key-expansion frame is, since
-                      KeyScheduleExplorer above is the richer surface).
+                      the allowlist (the monolithic key-expansion oracle
+                      executors are — they're aux-only no-ops not emitted by
+                      any shipped spec, kept only for KAT/back-compat).
                       For AES round-body frames the registry returns one
                       <details> per conceptual sub-unit — 16 byte units
                       for SubBytes / AddRoundKey, 4 row units for
@@ -1708,10 +1704,11 @@ export const App = () => {
  * every shipped cipher/hash is port-native (every leaf's registration has
  * `legacy === undefined`, the port-capture gate at ~`runtime.ts:767`), so the
  * runtime records each frame's input/output ports and this view reads them
- * directly. The hybrid-ported family (key-schedules + padding, `meta`
- * retained) populates the same port fields; key-expansion frames are
- * intercepted upstream by `KeyScheduleExplorer` (by stepType) before reaching
- * here, so in practice padding is the hybrid family that lands in this view.
+ * directly. The hybrid-ported family (the monolithic key-expansion oracle
+ * executors + padding, `meta` retained) populates the same port fields. The
+ * oracle key-expansion frames are no longer emitted by any shipped spec (every
+ * schedule decomposed into port-native primitives in K1–K4), so in practice
+ * padding is the hybrid family that lands in this view.
  *
  * The legacy shape-aware before/after dispatch was retired across Phase 5:
  * the matrix branch (`MatrixView`/`MixedShapeView`) with the `MatrixState`

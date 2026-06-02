@@ -1,13 +1,14 @@
 /**
- * Shared byte-row + byte-formatting helpers extracted from
- * `KeyScheduleExplorer.tsx` so both the key-schedule explorer and the
- * new `<StepNarration />` component (and any future per-frame prose
- * surface) render byte sequences with the same visual rhythm.
+ * Shared byte-row + byte-formatting helpers. Originally extracted from
+ * the (now-retired, K4b 2026-06-02) `KeyScheduleExplorer.tsx`; the
+ * surviving consumers are the port-native Feistel views
+ * (FeistelRoundBytes / FeistelRecombineView) and the per-frame narration
+ * components (`narration/*`), which render byte sequences with the same
+ * visual rhythm.
  *
  * `<ByteRow>` renders a horizontal strip of bordered cells (one per
  * byte), each showing the byte in the currently-selected format.
- * Optional `highlightIndex` outlines one cell — used by the Serpent
- * key-schedule pad-stage view to mark the 0x01 padding marker.
+ * Optional `highlightIndex` outlines one cell.
  *
  * `formatBytes` returns a compact `[0x01, 0x02, ...]` string useful
  * inline inside prose paragraphs where a `<ByteRow>` would be too
@@ -15,10 +16,9 @@
  * the format-aware string form.
  *
  * Style classes (`key-schedule-byte-row`, `key-schedule-byte-cell`,
- * `key-schedule-byte-highlight`) are kept on the existing namespace
- * so the visual identity is shared — narration's `<details>` body
- * renders byte rows that look identical to those in the key-schedule
- * explorer, which is the desired pedagogical consistency.
+ * `key-schedule-byte-highlight`) keep the `key-schedule-` prefix as a
+ * naming holdover from the retired explorer that first defined them —
+ * it is no longer a scope marker (see the CSS note in `app.css`).
  */
 
 import { type ByteFormat, formatByte } from "@/core/format";

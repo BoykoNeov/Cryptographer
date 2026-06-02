@@ -112,7 +112,7 @@ describe("narration-registry coverage contract", () => {
     expect(hasNarrationFn("generic.aux-copy@1")).toBe(true);
   });
 
-  it("allowlists key-expansion step types (covered by KeyScheduleExplorer)", () => {
+  it("allowlists the monolithic key-expansion oracle step types (aux-only no-ops)", () => {
     expect(NARRATION_NO_OP_ALLOWLIST.has("aes.key-expansion@1")).toBe(true);
     expect(NARRATION_NO_OP_ALLOWLIST.has("aes.key-expansion@2")).toBe(true);
     expect(NARRATION_NO_OP_ALLOWLIST.has("serpent.key-expansion@1")).toBe(true);
@@ -144,19 +144,20 @@ describe("narration-registry coverage contract", () => {
     // decomposition) and K4 (DES decomposition) will touch the data array,
     // not the assertion arithmetic.
     //
-    // Current contents (5 permanent + 3 cipher-specific):
-    //   - 3 surviving key-expansion / key-schedule step types covered by
-    //     `<KeyScheduleExplorer />` (`aes.key-expansion@{1,2}` — the AES
-    //     branch is unreachable but the executors stay as FIPS oracle;
-    //     `serpent.key-expansion@1` — actively used). The Speck entry was
-    //     dropped at the K2c follow-up with its executor.
+    // Current contents (10 entries):
+    //   - 4 monolithic key-expansion / key-schedule ORACLE step types
+    //     (`aes.key-expansion@{1,2}`, `serpent.key-expansion@1`,
+    //     `des.key-schedule@1`). Every schedule decomposed into port-native
+    //     primitives (K1–K4), so none of these is emitted by any shipped spec;
+    //     they survive registered only as KAT oracle + pre-decomposition doc
+    //     back-compat — aux-only no-ops with no per-frame prose. (The
+    //     `<KeyScheduleExplorer />` UI that faked their decomposition was
+    //     retired in K4b once DES decomposed.)
     //   - 2 bit-level Serpent linear transforms whose byte-level prose
     //     would mislead.
-    //   - `des.key-schedule@1` — multi-round PC-1 → shifts → PC-2 walk;
-    //     wrong surface for per-frame narration.
-    //   - `aes.publish-round-keys@1` and `speck.publish-round-keys@1` —
-    //     identity-passthrough aux-publish tails (decomposed-schedule K1a
-    //     and K2a); the math is the recurrence leaves above them.
+    //   - 4 identity-passthrough aux-publish tails of the decomposed
+    //     schedules (`aes`/`speck`/`serpent`/`des`.publish-round-keys@1); the
+    //     math is the recurrence leaves above them, each self-narrated.
     const expected = new Set<string>([
       "aes.key-expansion@1",
       "aes.key-expansion@2",

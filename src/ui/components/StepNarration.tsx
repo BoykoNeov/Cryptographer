@@ -7,8 +7,7 @@
  * column, byte, cell — chosen per step). Each `<details>` body is a
  * `Component<{fmt}>` so the byte-format toggle surgically updates
  * prose text without recreating the `<details>` (which would snap it
- * shut). See the reactivity rationale at
- * `src/ui/components/KeyScheduleExplorer.tsx:295-304`.
+ * shut).
  *
  * Dispatch:
  *   - `lookupNarration(stepType)` → narrator fn, or null.
@@ -23,8 +22,7 @@
  * Non-goal: preserving `<details>` `open` state across frame swaps.
  * The unit list rebuilds per frame, which Solid renders as a new
  * `<For>` iteration; native `<details>` state lives in the DOM and
- * resets accordingly. `KeyScheduleExplorer` doesn't preserve it
- * either; pattern is consistent across the linear-mode panes.
+ * resets accordingly — consistent across the linear-mode panes.
  */
 
 import type { TraceFrame } from "@/core/types";
