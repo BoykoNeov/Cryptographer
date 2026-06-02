@@ -1350,6 +1350,288 @@ const replaceParentChildrenByRef = (
   return { ...spec, steps: newSteps };
 };
 
+// ─── Composite capture + clone (compose-and-save, universal-port Phase 4f) ──
+// A "composite" is a reusable, named building block the user saves out of an
+// existing GROUP (e.g. an AES round) and later drops back onto any spec from
+// the palette's "my elements" section. It is PURE JSON — a `StepGroup`
+// template — NOT a registered step type with a synthesized executor, so the
+// dropped copy's internals stay fully visible + scrubbable (the project's
+// "cipher = JSON, not code" invariant). See docs/plans/compose-and-save.md.
+//
+// Group-scope isolation (the runtime walks a group body in an isolated
+// nodeOutputs map; only the group's published `out` escapes) gives a captured
+// group a clean boundary FOR FREE: exactly one port input (its `seedInput`,
+// injected as `port(groupId,"in")`), one published output (`bodyOutput` →
+// `outputPorts`, default `["out"]`), plus any number of aux reads (aux is the
+// only cross-scope channel — e.g. a round's `xor-with-aux@1` reading
+// `aux["roundKey.N"]`). A dropped composite that reads aux only computes
+// correctly if that aux cell exists in the new context; otherwise the existing
+// coerce / aux-missing machinery surfaces it in the trace — on-brand, not a
+// special case here.
+
+/** Collect every node id (leaves AND containers) in a spec — one namespace. */
+export const collectSpecIds = (spec: CipherSpec): Set<string> => {
+  const ids = new Set<string>();
+  const visit = (nodes: readonly StepNode[]): void => {
+    for (const n of nodes) {
+      ids.add(n.id);
+      if (n.kind !== "step") visit(n.children);
+    }
+  };
+  visit(spec.steps);
+  return ids;
+};
+
+export type CloneGroupResult = {
+  readonly group: StepGroup;
+  readonly renames: ReadonlyMap<string, string>;
+};
+
+/**
+ * Guard: a Phase 4f v1 composite subtree supports `step` + nested `group`
+ * nodes only. Looping/branching containers (`iterate` / `for-each-subgraph` /
+ * `for-each-subgraph-with-history` / `feistel-round`) carry multi-scope chain
+ * bindings that don't compose cleanly when re-instantiated at a new insertion
+ * point — out of scope until a motivating feature lands. Throws loudly so the
+ * store never holds an unsupported template (and `cloneGroupWithFreshIds`'s
+ * rebuild can assume step|group throughout).
+ */
+const assertCompositeSubtreeSupported = (group: StepGroup): void => {
+  const visit = (nodes: readonly StepNode[]): void => {
+    for (const n of nodes) {
+      if (n.kind === "step") continue;
+      if (n.kind !== "group") {
+        throw new Error(
+          `composite subtree contains an unsupported "${n.kind}" container ("${n.id}") — Phase 4f v1 supports leaves + nested groups only`,
+        );
+      }
+      visit(n.children);
+    }
+  };
+  visit(group.children);
+};
+
+/**
+ * Clone a group subtree under a fresh, collision-free id, regenerating every
+ * descendant id and rebasing every INTERNAL port reference (each node's
+ * `portInputs`, plus the group's own `seedInput`/`bodyOutput`) through the
+ * old→new id map. External references (a `seedInput` aimed at a node OUTSIDE
+ * the subtree, or `$input`) pass through untouched — the caller decides whether
+ * to keep or clear them. (The captured template clears `seedInput`, so the only
+ * binding that matters in practice is each child's internal `port(groupId,"in")`
+ * seed reference, which DOES rebase because the group id is in the rename map.)
+ *
+ * `newGroupBaseId` is the desired root id; it (and every derived child id) is
+ * deduped against `existingIds` so the clone never collides with the live spec.
+ * Descendants that follow the readable `<oldGroupId>.<suffix>` convention keep
+ * their suffix under the new root; any that don't are namespaced under it.
+ *
+ * v1 scope: `step` + `group` only (see `assertCompositeSubtreeSupported`); the
+ * rebuild throws on any other kind defensively.
+ */
+export const cloneGroupWithFreshIds = (
+  group: StepGroup,
+  newGroupBaseId: string,
+  existingIds: ReadonlySet<string>,
+): CloneGroupResult => {
+  const oldGroupId = group.id;
+  const taken = new Set<string>(existingIds);
+  const renames = new Map<string, string>();
+
+  // Reserve a unique id, recording it so two clones / siblings can't collide.
+  const freshId = (candidate: string): string => {
+    let id = candidate;
+    let n = 2;
+    while (taken.has(id)) id = `${candidate}-${n++}`;
+    taken.add(id);
+    return id;
+  };
+
+  // Dedupe the ROOT first; every descendant id derives from the deduped root so
+  // the clone reads consistently (root `aes-round-2` ⇒ child
+  // `aes-round-2.sub-bytes`, never a mix of the original + deduped prefixes).
+  const rootId = freshId(newGroupBaseId);
+  renames.set(oldGroupId, rootId);
+
+  const assignDescendant = (oldId: string): string =>
+    freshId(
+      oldId.startsWith(`${oldGroupId}.`)
+        ? `${rootId}${oldId.slice(oldGroupId.length)}` // preserve `.suffix`
+        : `${rootId}.${oldId}`, // fallback: namespace an unconventional id
+    );
+
+  const assign = (node: StepNode): void => {
+    if (node.id !== oldGroupId) renames.set(node.id, assignDescendant(node.id));
+    if (node.kind === "step") return;
+    if (node.kind !== "group") {
+      throw new Error(
+        `cloneGroupWithFreshIds: unsupported node kind "${node.kind}" in composite subtree (id "${node.id}")`,
+      );
+    }
+    for (const child of node.children) assign(child);
+  };
+  assign(group);
+
+  const remapBinding = (b: PortBinding): PortBinding => {
+    const to = renames.get(b.node);
+    return to === undefined ? b : { node: to, port: b.port };
+  };
+  const remapPortInputs = (
+    pi: Readonly<Record<string, PortBinding>> | undefined,
+  ): Readonly<Record<string, PortBinding>> | undefined => {
+    if (pi === undefined) return undefined;
+    const next: Record<string, PortBinding> = {};
+    for (const [k, b] of Object.entries(pi)) next[k] = remapBinding(b);
+    return next;
+  };
+
+  const rebuildLeaf = (leaf: StepLeaf): StepLeaf => {
+    const pi = remapPortInputs(leaf.portInputs);
+    return {
+      ...leaf,
+      id: renames.get(leaf.id) ?? leaf.id,
+      ...(pi !== undefined ? { portInputs: pi } : {}),
+    };
+  };
+
+  const rebuildGroup = (g: StepGroup): StepGroup => {
+    const children = g.children.map((c) => {
+      if (c.kind === "step") return rebuildLeaf(c);
+      if (c.kind === "group") return rebuildGroup(c);
+      // Unreachable — `assign` already rejected non-step/non-group nodes.
+      throw new Error(`cloneGroupWithFreshIds: unexpected node kind "${c.kind}"`);
+    });
+    const pi = remapPortInputs(g.portInputs);
+    return {
+      ...g,
+      id: renames.get(g.id) ?? g.id,
+      children,
+      ...(pi !== undefined ? { portInputs: pi } : {}),
+      ...(g.seedInput !== undefined ? { seedInput: remapBinding(g.seedInput) } : {}),
+      ...(g.bodyOutput !== undefined ? { bodyOutput: remapBinding(g.bodyOutput) } : {}),
+    };
+  };
+
+  return { group: rebuildGroup(group), renames };
+};
+
+/**
+ * Produce a context-free composite template from an existing group in `spec`.
+ * The template is the group with its `seedInput` CLEARED (so it carries no
+ * dependency on its original neighbours — the drop path rebinds the seed to the
+ * new insertion point), `defaultCollapsed: true` (it reads as one chip on the
+ * canvas), and `label` set to the user-chosen `name`. Internal `portInputs` +
+ * the children's `port(groupId,"in")` seed references are kept verbatim; the
+ * drop-time `cloneGroupWithFreshIds` rebases them to the freshly-generated ids.
+ *
+ * Throws if `groupId` is not a `group`, if the group is empty, or if its
+ * subtree contains a looping/branching container (see
+ * `assertCompositeSubtreeSupported`). Pure — returns a fresh `StepGroup`; the
+ * caller (composites store) wraps it with a composite id + createdAt.
+ */
+export const captureCompositeFromGroup = (
+  spec: CipherSpec,
+  groupId: string,
+  name: string,
+): StepGroup => {
+  const loc = findStepAndParent(spec, groupId);
+  if (!loc) throw new Error(`captureCompositeFromGroup: no node with id "${groupId}"`);
+  if (loc.node.kind !== "group") {
+    throw new Error(
+      `captureCompositeFromGroup: "${groupId}" must be a group, got ${loc.node.kind}`,
+    );
+  }
+  const group = loc.node;
+  if (group.children.length === 0) {
+    throw new Error(`captureCompositeFromGroup: group "${groupId}" is empty`);
+  }
+  assertCompositeSubtreeSupported(group);
+
+  // Build the context-free template explicitly (rather than spread-then-delete)
+  // so `seedInput` is provably omitted under exactOptionalPropertyTypes. The
+  // children + their internal wiring carry through by reference; the spec tree
+  // is readonly so sharing is safe.
+  return {
+    kind: "group",
+    id: group.id,
+    label: name,
+    children: group.children,
+    defaultCollapsed: true,
+    ...(group.portInputs !== undefined ? { portInputs: group.portInputs } : {}),
+    ...(group.outputPorts !== undefined ? { outputPorts: group.outputPorts } : {}),
+    ...(group.bodyOutput !== undefined ? { bodyOutput: group.bodyOutput } : {}),
+    // seedInput intentionally omitted — context-free template.
+  };
+};
+
+/** Anchor flavors for inserting a composite (mirrors `insertStepIntoSpec`). */
+export type CompositeInsertAnchor =
+  | { readonly kind: "after"; readonly stepId: string }
+  | { readonly kind: "before"; readonly stepId: string }
+  | { readonly kind: "into-start"; readonly containerId: string }
+  | { readonly kind: "root-append" };
+
+/**
+ * The synthetic body-entry port a seeded group / port-mode iterate injects
+ * (`port(id,"in")`). `undefined` for any container that doesn't seed its body.
+ * Used as the seed source when a composite lands at the head of such a body.
+ */
+const seededContainerInPort = (node: StepNode): PortBinding | undefined =>
+  (node.kind === "group" || node.kind === "iterate") && node.seedInput !== undefined
+    ? port(node.id, "in")
+    : undefined;
+
+/**
+ * Choose the `seedInput` binding for a composite GROUP being inserted at
+ * `anchor`, so the dropped copy is wired into the data flow by default — the
+ * "insert into the pipeline" semantics. This matters because the 4d-bis port
+ * editor only rewires LEAF input ports (a container `seedInput` is not a
+ * rebindable target), so a dropped composite MUST arrive with its seed bound or
+ * its first child's `port(groupId,"in")` read dangles with no in-app fix.
+ *
+ * Rules (resolved against the spec BEFORE insertion):
+ *   - after  X     → seed = X's primary output (the composite follows X).
+ *   - before X     → seed = X's preceding sibling's primary output; if X is
+ *                    first in its scope, the scope's seed (`$input` at top, else
+ *                    the parent container's `in`), else undefined.
+ *   - into-start C → seed = `port(C,"in")` when C seeds its body, else undefined.
+ *   - root-append  → seed = the last top-level node's primary output, or
+ *                    `port($input,"out")` when the spec is empty.
+ *
+ * `primaryOut(node)` resolves a node's published output port (registry-driven
+ * for leaves; `outputPorts[0] ?? "out"` for containers) — passed in so this
+ * helper stays registry-free + unit-testable. Returns `undefined` when no
+ * sensible default exists (the composite then arrives unbound).
+ */
+export const pickSeedBinding = (
+  spec: CipherSpec,
+  anchor: CompositeInsertAnchor,
+  primaryOut: (node: StepNode) => string,
+): PortBinding | undefined => {
+  if (anchor.kind === "after") {
+    const loc = findStepAndParent(spec, anchor.stepId);
+    return loc ? port(loc.node.id, primaryOut(loc.node)) : undefined;
+  }
+  if (anchor.kind === "before") {
+    const loc = findStepAndParent(spec, anchor.stepId);
+    if (!loc) return undefined;
+    const siblings = loc.parent ? loc.parent.children : spec.steps;
+    const pred = loc.indexInParent > 0 ? siblings[loc.indexInParent - 1] : undefined;
+    if (pred) return port(pred.id, primaryOut(pred));
+    // Composite becomes first in this scope: seed from the scope's own source.
+    return loc.parent === null
+      ? port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT)
+      : seededContainerInPort(loc.parent);
+  }
+  if (anchor.kind === "into-start") {
+    const loc = findStepAndParent(spec, anchor.containerId);
+    return loc ? seededContainerInPort(loc.node) : undefined;
+  }
+  // root-append
+  const last = spec.steps.length > 0 ? spec.steps[spec.steps.length - 1] : undefined;
+  return last ? port(last.id, primaryOut(last)) : port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT);
+};
+
 // ─── Padding-scheme overlay ───────────────────────────────────────────────
 // Layer a padding chain onto a canonical cipher spec without modifying the
 // canonical spec itself. The step types listed in `PADDING_STEP_TYPES` are

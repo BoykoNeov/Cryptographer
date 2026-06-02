@@ -46,13 +46,18 @@ import { speck32_64BeDecryptSpec } from "@/ciphers/speck-32-64-be-decrypt";
 import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
 import { speck32_64LeDecryptSpec } from "@/ciphers/speck-32-64-le-decrypt";
 import type { CipherDocument } from "@/core/document";
+import { resolvePortMap } from "@/core/port-projection";
 import {
+  type CompositeInsertAnchor,
   type PaddingScheme,
   applyPaddingScheme,
+  cloneGroupWithFreshIds,
+  collectSpecIds,
   duplicateRoundGroup,
   findStepAndParent,
   insertStepAfter,
   insertStepBefore,
+  pickSeedBinding,
   prependChildToContainer,
   removeStep,
   setPortBinding,
@@ -60,7 +65,7 @@ import {
   updateCipherConstant,
   updateStepParams,
 } from "@/core/spec-mutations";
-import type { CipherSpec, Json, PortBinding, StepLeaf, StepNode } from "@/core/types";
+import type { CipherSpec, Json, PortBinding, StepGroup, StepLeaf, StepNode } from "@/core/types";
 import { createSignal } from "solid-js";
 import {
   type Algorithm,
@@ -83,6 +88,7 @@ import { setByteFormat } from "./format";
 import { setIvBytes } from "./iv";
 import { renameSpecLayoutIds } from "./layout";
 import { setPaddingScheme, usePaddingScheme } from "./padding";
+import { registry } from "./registry";
 
 // ─── Mode ────────────────────────────────────────────────────────────────
 
@@ -853,6 +859,87 @@ export const insertStepIntoSpec = (
     updateActive((s) => ({ ...s, steps: [...s.steps, newLeaf] }));
   }
   return newId;
+};
+
+/**
+ * Registry-driven primary published output port of a node — the port a
+ * downstream consumer reads by default. Leaves: the first declared output port
+ * from the registered `PortContract` (falls back to `"output"`, the port-native
+ * leaf convention, for an unregistered/contract-less type). Containers: their
+ * first `outputPorts` entry, defaulting to `"out"`. Used to auto-wire a dropped
+ * composite's seed into the flow (see `insertCompositeIntoSpec`).
+ */
+const primaryOutputPort = (node: StepNode): string => {
+  if (node.kind !== "step") return node.outputPorts?.[0] ?? "out";
+  const reg = registry.getRegistration(node.type);
+  if (reg?.kind === "ported") {
+    for (const portName of resolvePortMap(reg.shape.outputs, node.params).keys()) {
+      return portName; // first declared output
+    }
+  }
+  return "output";
+};
+
+/**
+ * Slugify a composite's name into a spec-id-safe base (lowercase, non-alnum
+ * runs → `-`, trimmed). `"AES Round"` → `"aes-round"`. Empty result (e.g. a
+ * name with no alnum chars) lets the caller fall back to the template's id.
+ */
+const slugifyId = (s: string): string =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+/**
+ * Drop a saved composite (a `StepGroup` template from the composites store)
+ * into the live spec — the store boundary the GraphView composite-drop handler
+ * calls (universal-port Phase 4f, compose-and-save). The COPY/INLINE semantics:
+ * the template's children are cloned with fresh, collision-free ids
+ * (`cloneGroupWithFreshIds`), inlined as a real group, and stay fully editable
+ * + scrubbable — the saved/shared document is self-contained (it never
+ * references the composite library).
+ *
+ * The clone's `seedInput` is auto-bound to the insertion-point predecessor
+ * (`pickSeedBinding` + `primaryOutputPort`) so the dropped composite is wired
+ * into the data flow by default — the 4d-bis port editor only rewires LEAF
+ * ports, so a container seed left unbound would have no in-app fix. The user
+ * can then rewire the composite's internal leaf ports via that editor as usual.
+ *
+ * Flows through `updateActive`, reusing the App-level debounced rerun (no new
+ * rerun path). Returns the new group's id so the caller can route the scrubber.
+ */
+export const insertCompositeIntoSpec = (
+  template: StepGroup,
+  anchor: CompositeInsertAnchor,
+): string => {
+  const currentSpec = activeSpec();
+  const existingIds = collectSpecIds(currentSpec);
+  // Readable fresh root id from the composite's name (its label), else its id.
+  const base = slugifyId(template.label) || template.id;
+  const { group } = cloneGroupWithFreshIds(template, base, existingIds);
+  // Wire the seed into the flow at the insertion point (registry-driven).
+  const seed = pickSeedBinding(currentSpec, anchor, primaryOutputPort);
+  const seeded: StepGroup = seed !== undefined ? { ...group, seedInput: seed } : group;
+
+  if (anchor.kind === "after") {
+    updateActive((s) => insertStepAfter(s, anchor.stepId, seeded));
+  } else if (anchor.kind === "before") {
+    updateActive((s) => insertStepBefore(s, anchor.stepId, seeded));
+  } else if (anchor.kind === "into-start") {
+    // Same recover-by-root-append fallback discipline as `insertStepIntoSpec`:
+    // the drop handler only routes into-start to a confirmed container, so this
+    // throw only fires if the spec mutated out from under us mid-drop.
+    try {
+      updateActive((s) => prependChildToContainer(s, anchor.containerId, seeded));
+    } catch (err) {
+      console.warn(`insertCompositeIntoSpec(into-start, ${anchor.containerId}) failed:`, err);
+      updateActive((s) => ({ ...s, steps: [...s.steps, seeded] }));
+    }
+  } else {
+    updateActive((s) => ({ ...s, steps: [...s.steps, seeded] }));
+  }
+  return seeded.id;
 };
 
 /**
