@@ -4569,14 +4569,31 @@ export const GraphView = () => {
     const wrapperEl = scrollWrapperEl;
     if (!wrapperEl) return;
 
-    // Empty-canvas guard: pan only when the gesture started on a
-    // background, never on a node/edge/toolbar control. Two backgrounds
-    // qualify — (a) the wrapper's own background (the dead zone below a
-    // short SVG) and (b) the SVG root element itself. Any descendant
-    // (`<rect>`, `<path>`, `<g>`, a toolbar button) owns its own gesture.
+    // Pan-surface guard: pan only when the gesture started on a passive
+    // canvas surface, never on a control that owns its own gesture. Three
+    // surfaces qualify — (a) the wrapper's own background (the dead zone
+    // below a short SVG), (b) the SVG root element itself, and (c) a
+    // container BODY rect (`graph-container-rect`).
+    //
+    // (c) is the fix for "I can't drag inside an expanded DES round to move
+    // the view" (2026-06-03): an expanded container's interior is fully
+    // covered by its own `graph-container-rect`, which sits above the SVG
+    // root in paint order — so a pointerdown there used to hit the rect (not
+    // the SVG root) and the pan bailed, leaving no pannable surface inside a
+    // populated round. The body rect owns NO click/drag gesture (the header
+    // band is a SEPARATE rect on top with its own pointerdown→startNodeDrag;
+    // leaves / port handles / chevrons stopPropagation), so treating it as a
+    // pan surface can't steal another gesture. Edges are deliberately NOT
+    // included: a `graph-edge-hit` path owns a click-to-inspect gesture, and
+    // immediate pointer capture below would swallow it. Collapsed-container
+    // bodies also carry the class and become pannable — harmless, their
+    // bodies have no handler and the header still drags via its own rect.
     const target = ev.target;
-    const onEmptyCanvas = target === wrapperEl || target instanceof SVGSVGElement;
-    if (!onEmptyCanvas) return;
+    const onPanSurface =
+      target === wrapperEl ||
+      target instanceof SVGSVGElement ||
+      (target instanceof Element && target.classList.contains("graph-container-rect"));
+    if (!onPanSurface) return;
 
     // Clicking empty canvas cancels a pending wire (4d-bis) — same "click
     // away to dismiss" reflex as Esc. Runs before the pan bail so it works

@@ -139,6 +139,29 @@ const REPLICA_DELIM = "@->";
  */
 const asBytesState = (bytes: Uint8Array): BytesState => ({ shape: "bytes", bytes });
 
+/**
+ * Build the `"value"` result for a state/spine byte stream, stamping
+ * `blockIndex` only when the resolving frame had one (inside an iterate).
+ * Centralizes the `blockIndex !== undefined ? {…, blockIndex} : {…}` split
+ * that the state-edge and regular-leaf branches both repeated inline — needed
+ * because `exactOptionalPropertyTypes` forbids passing `blockIndex: undefined`.
+ */
+const stateValueResult = (bytes: Uint8Array, blockIndex: number | undefined): EdgeValueLookup =>
+  blockIndex !== undefined
+    ? {
+        status: "value",
+        value: asBytesState(bytes),
+        displayKind: "state",
+        auxKey: "state",
+        blockIndex,
+      }
+    : {
+        status: "value",
+        value: asBytesState(bytes),
+        displayKind: "state",
+        auxKey: "state",
+      };
+
 /** Parsed chip-id structure when the input is a recognized chip. */
 type ChipId = { readonly iterateId: string; readonly blockIndex: number };
 
@@ -705,53 +728,42 @@ const lookupRegularState = (
   // chip branches above but a non-chip iterate-targeted state edge can
   // still reach here pre-Slice-6 when the iterate isn't collapsed).
   const producer = findProducerFrame(trace, edge.from, currentBlockIndex);
-  if (producer !== null) {
-    // Default state-edge value: the producer's `"state"` output port (the
-    // State field fallback retired in Slice 5.3e Batch 4 → null if no such
-    // port). The producer's output port == the consumer's input port by the
-    // runtime contract for every wired leaf.
-    const outBytes = framePrimaryOutBytes(producer);
-    if (outBytes !== null) {
-      return producer.blockIndex !== undefined
-        ? {
-            status: "value",
-            value: asBytesState(outBytes),
-            displayKind: "state",
-            auxKey: "state",
-            blockIndex: producer.blockIndex,
-          }
-        : {
-            status: "value",
-            value: asBytesState(outBytes),
-            displayKind: "state",
-            auxKey: "state",
-          };
-    }
-    // Producer frame exists but exposes no state bytes — fall through to
-    // the consumer side rather than emitting a value-less "value".
-  }
   const consumer = findConsumerFrame(trace, edge.to, currentBlockIndex);
-  if (consumer !== null) {
-    // Consumer's `"state"` input port (the State field fallback retired in
-    // Slice 5.3e Batch 4 → null if no such port).
-    const inBytes = framePrimaryInBytes(consumer);
-    if (inBytes !== null) {
-      return consumer.blockIndex !== undefined
-        ? {
-            status: "value",
-            value: asBytesState(inBytes),
-            displayKind: "state",
-            auxKey: "state",
-            blockIndex: consumer.blockIndex,
-          }
-        : {
-            status: "value",
-            value: asBytesState(inBytes),
-            displayKind: "state",
-            auxKey: "state",
-          };
-    }
+
+  // (1) Producer's PRIMARY output port — the `"state"` port or the sole
+  // output (the State field fallback retired in Slice 5.3e Batch 4 → null
+  // for a multi-output leaf like `split-bytes`). The producer's output ==
+  // the consumer's input by the runtime contract for every wired leaf, so
+  // this is the common, byte-stable path for single-port spines.
+  if (producer !== null) {
+    const outBytes = framePrimaryOutBytes(producer);
+    if (outBytes !== null) return stateValueResult(outBytes, producer.blockIndex);
+    // Producer frame exists but exposes no single state byte stream — fall
+    // through rather than emitting a value-less "value".
   }
+  // (2) Consumer's PRIMARY input port — symmetric fallback. Null for a
+  // fan-in consumer (`xor`/`concat`/`xor-with-aux` read multiple operands).
+  if (consumer !== null) {
+    const inBytes = framePrimaryInBytes(consumer);
+    if (inBytes !== null) return stateValueResult(inBytes, consumer.blockIndex);
+  }
+
+  // (3) PORT-SPECIFIC fallback for genuinely multi-port endpoints. When BOTH
+  // primaries returned null the edge connects e.g. DES's multi-output `split`
+  // to a fan-in `xor`/`concat`; the only honest value is the byte stream on
+  // the SPECIFIC port this edge represents. `toPort` (the consumer's declared
+  // input-port name) is the reliable read — it's always a real input port;
+  // `fromPort` (the producer's output port) is the secondary read, used when
+  // the consumer frame is absent. See `GraphEdge.fromPort`/`toPort` docs.
+  if (consumer !== null && edge.toPort !== undefined) {
+    const inBytes = consumer.portInputs?.get(edge.toPort);
+    if (inBytes !== undefined) return stateValueResult(inBytes, consumer.blockIndex);
+  }
+  if (producer !== null && edge.fromPort !== undefined) {
+    const outBytes = producer.portOutputs?.get(edge.fromPort);
+    if (outBytes !== undefined) return stateValueResult(outBytes, producer.blockIndex);
+  }
+
   return {
     status: "missing",
     reason: `no frame found for either endpoint of state edge "${edge.from}" → "${edge.to}"`,
@@ -927,28 +939,21 @@ export const lookupNodeValue = (
       reason: `no frame found for step "${nodeId}"`,
     };
   }
-  // State at the leaf's own frame = its `"state"` output port (the State
-  // field fallback retired in Slice 5.3e Batch 4 → null if no such port; a
-  // native-port leaf whose payload rides another port name resolves missing).
-  const outBytes = framePrimaryOutBytes(frame);
-  if (outBytes === null) {
+  // State at the leaf's own frame = its `"state"` output port, else the sole
+  // output (the State field fallback retired in Slice 5.3e Batch 4). For a
+  // MULTI-output leaf (`split-bytes`: `output0`/`output1`, no `"state"` port)
+  // `framePrimaryOutBytes` is null — there's no single output to show, so we
+  // fall back to the leaf's PRIMARY INPUT: for a split that's the one 8-byte
+  // block being divided, a far better "value at this node" than a missing row.
+  // A genuinely multi-INPUT leaf (a fan-in `xor`/`concat`, or the 11-input
+  // `publish-round-keys` tail) still has a null primary input, so it stays
+  // "missing" — inspect those per-port in PortFlowView.
+  const bytes = framePrimaryOutBytes(frame) ?? framePrimaryInBytes(frame);
+  if (bytes === null) {
     return {
       status: "missing",
       reason: `step "${nodeId}" has no resolvable state at frame ${frame.index}`,
     };
   }
-  return frame.blockIndex !== undefined
-    ? {
-        status: "value",
-        value: asBytesState(outBytes),
-        displayKind: "state",
-        auxKey: "state",
-        blockIndex: frame.blockIndex,
-      }
-    : {
-        status: "value",
-        value: asBytesState(outBytes),
-        displayKind: "state",
-        auxKey: "state",
-      };
+  return stateValueResult(bytes, frame.blockIndex);
 };

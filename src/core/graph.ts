@@ -239,6 +239,27 @@ export type GraphEdge = {
   readonly auxKey: string;
   /** Edge classification — see EdgeKind. */
   readonly kind: EdgeKind;
+  /**
+   * For port-flow edges (`auxKey === PORT_FLOW_AUX_KEY`): the SPECIFIC ports
+   * this edge connects — `fromPort` is the producer's output port name,
+   * `toPort` is the consumer's input port name (the key under which the
+   * consumer's `portInputs` declared this binding). Set by `inferPortEdges`.
+   *
+   * **Why they exist.** A `(from, to)` pair is NOT enough to read the value
+   * flowing on the edge when either endpoint is MULTI-PORT: DES's
+   * `split → fxor` and `split → recombine` both originate at the same
+   * `split-bytes` leaf (`output0` = L, `output1` = R) and land on fan-in
+   * consumers (`xor`/`concat`, each reading two operands). The
+   * cipher-agnostic `framePrimaryOut/InBytes` helpers return `null` for such
+   * leaves, so the value inspector can only resolve the exact byte stream by
+   * the port name. `toPort` is the reliable one (always a real input-port
+   * name on the consumer); `fromPort` may be a container pseudo-port
+   * (`"in"`/`"out"`/`"chain"`) when the source was resolved through a
+   * `seedInput`/`bodyOutput`, so it's a secondary fallback. Undefined on
+   * aux edges and on the container-targeted loop-input edges.
+   */
+  readonly fromPort?: string;
+  readonly toPort?: string;
 };
 
 export type CipherGraph = {
@@ -993,7 +1014,7 @@ const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
     for (const node of nodes) {
       if (node.kind === "step") {
         if (node.portInputs !== undefined) {
-          for (const binding of Object.values(node.portInputs)) {
+          for (const [inputPortName, binding] of Object.entries(node.portInputs)) {
             if (binding.port === "in") inPortConsumedByLeaf.add(binding.node);
             // Resolve a `port(groupId, "in")` seed reference through the
             // enclosing group's seedInput — and a `port(iterateId, "chain")`
@@ -1049,6 +1070,13 @@ const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
               // it now feeds the renderer + replication fanout-eligibility.
               auxKey: PORT_FLOW_AUX_KEY,
               kind: "state",
+              // The exact port pairing this edge carries (GraphEdge docs):
+              // `toPort` = the consumer's input-port name (always real),
+              // `fromPort` = the resolved producer's output port (may be a
+              // container pseudo-port). Lets the value inspector read the
+              // right byte stream when split/fan-in leaves are multi-port.
+              fromPort: resolved.port,
+              toPort: inputPortName,
             });
           }
         }

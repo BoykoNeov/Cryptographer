@@ -161,6 +161,36 @@ describe("GraphView — drag-to-pan on the scroll wrapper", () => {
     expect(wrapper.classList.contains("panning")).toBe(false);
   });
 
+  it("starts a pan from a container BODY rect — drag inside an expanded round moves the view", () => {
+    // Regression for "I can't drag inside an expanded DES round to move the
+    // view" (2026-06-03). A populated container's interior is fully covered by
+    // its own `graph-container-rect`, which paints above the SVG root — so a
+    // pointerdown there hits the rect, not the SVG background. Before the fix
+    // the pan guard only accepted the wrapper / SVG root, so the gesture
+    // bailed and nothing scrolled. The body rect owns no click/drag gesture of
+    // its own (the header band is a separate rect with its own pointerdown),
+    // so treating it as a pan surface is safe.
+    seedAes128Trace();
+    const { container } = render(() => <GraphView />);
+
+    const wrapper = container.querySelector(".graph-view") as HTMLElement;
+    const { scroll } = mockScrollableWrapper(wrapper, { overflow: true, left: 100, top: 100 });
+    const containerRect = container.querySelector(".graph-container-rect") as SVGRectElement;
+    expect(containerRect).not.toBeNull();
+
+    // target === a container body rect — the surface inside an expanded round.
+    containerRect.dispatchEvent(pointerEvt("pointerdown", 300, 300));
+    expect(wrapper.classList.contains("panning")).toBe(true);
+
+    // Drag down-right: the canvas scrolls opposite the pointer.
+    wrapper.dispatchEvent(pointerEvt("pointermove", 340, 360));
+    expect(scroll.left).toBe(60); // 100 − (340 − 300)
+    expect(scroll.top).toBe(40); // 100 − (360 − 300)
+
+    wrapper.dispatchEvent(pointerEvt("pointerup", 340, 360));
+    expect(wrapper.classList.contains("panning")).toBe(false);
+  });
+
   it("does NOT pan when the pointerdown lands on a node (a leaf rect)", () => {
     seedAes128Trace();
     const { container } = render(() => <GraphView />);
