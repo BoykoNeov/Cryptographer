@@ -39,6 +39,7 @@ import { aes256DecryptSpec } from "@/ciphers/aes-256-decrypt";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { desSpec } from "@/ciphers/des";
 import { desDecryptSpec } from "@/ciphers/des-decrypt";
+import { rsaDecryptSpec, rsaEncryptSpec } from "@/ciphers/rsa";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { serpent128DecryptSpec } from "@/ciphers/serpent-128-decrypt";
 import { serpent192Spec } from "@/ciphers/serpent-192";
@@ -107,6 +108,11 @@ const SHIPPED_SPECS: ReadonlyArray<{ readonly name: string; readonly spec: Ciphe
   // the selector wiring.
   { name: "des encrypt", spec: desSpec },
   { name: "des decrypt", spec: desDecryptSpec },
+  // RSA (first public-key cipher) — exercises the `cipherConstants` (p/q/e
+  // Uint8Array → hex) + `outputFrom` round-trip through the document format,
+  // proving a saved/shared RSA document survives serialize → parse byte-equal.
+  { name: "rsa encrypt", spec: rsaEncryptSpec },
+  { name: "rsa decrypt", spec: rsaDecryptSpec },
 ];
 
 // ─── Round-trip every shipped spec ────────────────────────────────────────

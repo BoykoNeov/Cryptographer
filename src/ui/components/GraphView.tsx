@@ -68,7 +68,7 @@ import {
 import { inferShapesAtAnchors, validateShapes } from "@/core/spec-shapes";
 import type { AuxValue, State, StepNode } from "@/core/types";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
-import { isHash, useAlgorithm } from "../stores/cipher";
+import { isAsymmetric, isHash, useAlgorithm } from "../stores/cipher";
 import { getComposite, saveComposite } from "../stores/composites";
 import { useByteFormat } from "../stores/format";
 import {
@@ -2690,8 +2690,17 @@ export const GraphView = () => {
    * when the first spec lands. Memory pointer: [[project_hash_future]].
    */
   const endpointLabels = createMemo<{ inputLabel: string; outputLabel: string }>(() => {
-    if (isHash(useAlgorithm()())) {
+    const algo = useAlgorithm()();
+    if (isHash(algo)) {
       return { inputLabel: "message", outputLabel: "digest" };
+    }
+    // RSA (asymmetric): encrypt consumes the message m → ciphertext c; decrypt
+    // consumes c → m. Matches App.tsx's inputLabel()/outputLabel() so the graph
+    // endpoint pills agree with the linear sidebar.
+    if (isAsymmetric(algo)) {
+      return useMode()() === "encrypt"
+        ? { inputLabel: "message", outputLabel: "ciphertext" }
+        : { inputLabel: "ciphertext", outputLabel: "message" };
     }
     return useMode()() === "encrypt"
       ? { inputLabel: "plaintext", outputLabel: "ciphertext" }

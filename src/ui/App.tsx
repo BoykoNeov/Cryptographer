@@ -225,6 +225,13 @@ export const App = () => {
   // starts in hash category, which is not the default — but covers a
   // hypothetical future where the initial category persists or a test
   // boots with category="hash".
+  //
+  // RSA note: category boots "cipher" (session-only, never persisted — see
+  // `stores/cipher.ts`), so the non-cipher branch here only ever runs for a
+  // hash today. If the boot category ever becomes persistent, the asymmetric
+  // case needs its own `DEFAULT_*_BY_ASYMMETRIC` arm; until then it would
+  // harmlessly fall to the hash default (wrong bytes, no crash). The live
+  // category swap is handled mode-aware by `changeCategory`.
   const initialPtBytes = isCipher(algorithm())
     ? (() => {
         const initialLimits = paddingLimits(mode(), padding(), cipher(), cipherMode());
