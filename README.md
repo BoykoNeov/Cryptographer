@@ -29,6 +29,14 @@ SHA-256 is built entirely from the universal port-native vocabulary (`rotate-bit
 
 DES is the project's first Feistel cipher. Its round body is built port-native — a `group` of `split-bytes → E-expand → XOR with K_i → 8 S-boxes → P-permute → xor → concat` — with the Feistel swap expressed as the `concat` argument order (rounds 1..15 swap; round 16 doesn't, the textbook last-round exception that makes the cipher self-inverse under key-reversal). No special branching primitive — the universal-port thesis is that Feistel needs none.
 
+Shipped public-key algorithm (select **Public-key** in the `kind` dropdown):
+
+| Algorithm | Key material | Notes |
+|---|---|---|
+| **RSA (textbook)** | editable `p, q, e` constants | traced key generation + square-and-multiply encrypt/decrypt; KAT-verified against a Python `pow()` oracle |
+
+RSA is the project's first **public-key** cipher — no symmetric key, big-integer modular arithmetic instead of byte permutation. Both halves of the "magic" are visible frames: **key generation** derives `n = p·q`, `φ(n) = (p-1)(q-1)`, and the private exponent `d = e⁻¹ mod φ` (extended Euclid), and **exponentiation** is an unrolled square-and-multiply ladder (`c = mᵉ mod n` / `m = cᵈ mod n`) built from `mul` / `sub` / `mod-mul` / `cond-mod-mul` / `mod-inverse` primitives whose `bigint` math lives inside the executor and exchanges `Uint8Array` at every port. The exponent is live-editable — each ladder rung reads its bit at run time, so editing `e` (or `p, q` → `d`) re-runs the trace. Textbook sizes (default `p=61, q=53, e=17`, `n=3233`); the message `m` must satisfy `0 ≤ m < n`.
+
 Interactive features:
 
 - **Per-frame value-prose narration** — every step in every cipher emits a collapsible `<details>` block per conceptual sub-unit (SubBytes → 16 byte units, MixColumns → 4 GF(2^8) dot-product breakdowns, AddRoundKey → 16 XOR cells naming the consumed aux, padding → input/output lengths + pad value, aux primitives → operands + result with the algebraic identity). Disclosures stay open across the byte-format toggle and across the debounced re-run after a param edit.

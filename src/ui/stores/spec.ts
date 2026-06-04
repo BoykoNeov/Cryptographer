@@ -34,6 +34,7 @@ import { aes256Spec } from "@/ciphers/aes-256";
 import { aes256DecryptSpec } from "@/ciphers/aes-256-decrypt";
 import { desSpec } from "@/ciphers/des";
 import { desDecryptSpec } from "@/ciphers/des-decrypt";
+import { rsaDecryptSpec, rsaEncryptSpec } from "@/ciphers/rsa";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { serpent128DecryptSpec } from "@/ciphers/serpent-128-decrypt";
 import { serpent192Spec } from "@/ciphers/serpent-192";
@@ -69,10 +70,13 @@ import type { CipherSpec, Json, PortBinding, StepGroup, StepLeaf, StepNode } fro
 import { createSignal } from "solid-js";
 import {
   type Algorithm,
+  type Asymmetric,
   type Cipher,
   type Hash,
+  isAsymmetric,
   isCipher,
   isHash,
+  setAsymmetric as setAsymmetricSignal,
   setCategory as setCategorySignal,
   setCipher as setCipherSignal,
   setHash as setHashSignal,
@@ -171,6 +175,24 @@ const hashDefaults: Record<Hash, CipherSpec> = {
  */
 const resolveHashDefault = (hash: Hash): CipherSpec => hashDefaults[hash];
 
+/**
+ * Canonical-spec table for asymmetric (public-key) algorithms — sibling of
+ * `defaults` / `hashDefaults`. RSA is the only entry today
+ * (`docs/plans/shimmying-booping-moth.md`). Asymmetric algorithms have
+ * encrypt/decrypt directions (so the inner shape mirrors a cipher's mode pair)
+ * but NO cipher-mode or padding axes — those are symmetric-block concepts — so
+ * the table is keyed by `Asymmetric` × `Mode` directly, flat compared to the
+ * cipher `defaults` table's three-axis structure.
+ */
+const asymmetricDefaults: Record<Asymmetric, Record<Mode, CipherSpec>> = {
+  rsa: { encrypt: rsaEncryptSpec, decrypt: rsaDecryptSpec },
+};
+
+/** Pick the canonical asymmetric spec for an `(asymmetric, mode)` pair.
+ *  Mirrors `resolveDefault` / `resolveHashDefault`; no cipherMode/padding. */
+const resolveAsymmetricDefault = (a: Asymmetric, mode: Mode): CipherSpec =>
+  asymmetricDefaults[a][mode];
+
 // ─── Signals ─────────────────────────────────────────────────────────────
 //
 // Two-spec store: encrypt and decrypt are held simultaneously, in
@@ -226,7 +248,29 @@ type HashSpecsByMode = {
   readonly single: CipherSpec;
 };
 
-type SpecsByMode = CipherSpecsByMode | HashSpecsByMode;
+/**
+ * Asymmetric-shape SpecsByMode (RSA). Like the cipher shape it carries
+ * encrypt + decrypt slots (asymmetric algorithms have a direction), and like
+ * the hash shape it carries an `asymmetric: Asymmetric` discriminant so
+ * `resetSpec` / `isCustomSpec` / `setSpecFromDocument` can recover WHICH
+ * variant the active spec is for the canonical-default lookup. No cipherMode /
+ * padding axes apply.
+ *
+ * Kept a DISTINCT kind from `cipher` (rather than reusing it) because every
+ * `cipher`-branch consumer calls `resolveDefault(useCipher()(), …)`, a
+ * `Cipher`-keyed lookup that an asymmetric variant would crash. The separate
+ * kind makes the type system force each `.kind` site to handle RSA
+ * consciously; the cross-mode-mirror guards (`kind !== "cipher"`) already
+ * throw for it, exactly like the hash guards.
+ */
+type AsymmetricSpecsByMode = {
+  readonly kind: "asymmetric";
+  readonly asymmetric: Asymmetric;
+  readonly encrypt: CipherSpec;
+  readonly decrypt: CipherSpec;
+};
+
+type SpecsByMode = CipherSpecsByMode | HashSpecsByMode | AsymmetricSpecsByMode;
 
 const buildCanonicalPair = (
   cipher: Cipher,
@@ -260,6 +304,19 @@ export const buildCanonicalHash = (hash: Hash): SpecsByMode => ({
   single: resolveHashDefault(hash),
 });
 
+/**
+ * Sibling of `buildCanonicalPair` / `buildCanonicalHash` for asymmetric
+ * variants. Builds both encrypt + decrypt slots from the canonical table; no
+ * (cipherMode, padding) parameters apply. Carries the `asymmetric` discriminant
+ * so downstream `.kind` consumers can identify the variant.
+ */
+export const buildCanonicalAsymmetric = (a: Asymmetric): SpecsByMode => ({
+  kind: "asymmetric",
+  asymmetric: a,
+  encrypt: resolveAsymmetricDefault(a, "encrypt"),
+  decrypt: resolveAsymmetricDefault(a, "decrypt"),
+});
+
 const [mode, setModeSignal] = createSignal<Mode>("encrypt");
 const [specs, setSpecs] = createSignal<SpecsByMode>(
   buildCanonicalPair(useCipher()(), useCipherMode()(), usePaddingScheme()()),
@@ -271,7 +328,9 @@ const [specs, setSpecs] = createSignal<SpecsByMode>(
 // direction) so we return the single slot regardless of `mode()`.
 const activeSpec = (): CipherSpec => {
   const s = specs();
-  return s.kind === "cipher" ? s[mode()] : s.single;
+  if (s.kind === "hash") return s.single;
+  // cipher + asymmetric both carry encrypt/decrypt slots indexed by mode.
+  return s[mode()];
 };
 
 export const useMode = () => mode;
@@ -330,6 +389,14 @@ const updateActive = (updater: (s: CipherSpec) => CipherSpec): void => {
   const prev = current[m];
   const updated = updater(prev);
   if (updated === prev) return; // reference-equal → no-op write
+  if (current.kind === "asymmetric") {
+    setSpecs(
+      m === "encrypt"
+        ? { ...current, encrypt: updated, decrypt: current.decrypt }
+        : { ...current, encrypt: current.encrypt, decrypt: updated },
+    );
+    return;
+  }
   setSpecs(
     m === "encrypt"
       ? { kind: "cipher", encrypt: updated, decrypt: current.decrypt }
@@ -350,6 +417,18 @@ const updateBoth = (updater: (s: CipherSpec, m: Mode) => CipherSpec): void => {
     const updated = updater(current.single, "encrypt");
     if (updated === current.single) return;
     setSpecs({ kind: "hash", hash: current.hash, single: updated });
+    return;
+  }
+  if (current.kind === "asymmetric") {
+    // The only caller that reaches here for asymmetric is `setPadding`
+    // (`applyPaddingScheme` is inert for non-AES specs — RSA has no overlay);
+    // `duplicateRoundInSpec` throws upstream for non-cipher kinds. Apply to
+    // both slots preserving the discriminant.
+    setSpecs({
+      ...current,
+      encrypt: updater(current.encrypt, "encrypt"),
+      decrypt: updater(current.decrypt, "decrypt"),
+    });
     return;
   }
   setSpecs({
@@ -413,6 +492,19 @@ export const setHash = (h: Hash): void => {
 };
 
 /**
+ * Switch the active asymmetric variant (RSA). Mirrors `setHash`'s shape but
+ * lands a `kind: "asymmetric"` SpecsByMode (encrypt + decrypt slots). Flips
+ * the category signal to "asymmetric" so `useAlgorithm()` resolves to the new
+ * value. No cipherMode / padding axes apply; the UI hides those selectors and
+ * the symmetric key field when the asymmetric category is active.
+ */
+export const setAsymmetric = (a: Asymmetric): void => {
+  setCategorySignal("asymmetric");
+  setAsymmetricSignal(a);
+  setSpecs(buildCanonicalAsymmetric(a));
+};
+
+/**
  * Algorithm-level setter that routes to `setCipher` or `setHash`
  * depending on the category of the passed value. The single boundary
  * the App's algorithm-selector UI calls into so cross-category flips
@@ -427,6 +519,8 @@ export const setHash = (h: Hash): void => {
 export const setAlgorithm = (a: Algorithm): void => {
   if (isHash(a)) {
     setHash(a);
+  } else if (isAsymmetric(a)) {
+    setAsymmetric(a);
   } else {
     setCipher(a);
   }
@@ -1175,6 +1269,38 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
     setSpecs({ kind: "hash", hash: doc.algorithm, single: doc.spec });
     return;
   }
+  // Asymmetric (RSA) document branch — sibling of the hash short-circuit.
+  // Like the cipher branch it lands the doc's single spec in the matching
+  // mode slot and rebuilds the counterpart from canonical, but there is no
+  // cipherMode/padding to restore. byteFormat + mode come from the session
+  // when present; otherwise the current values are kept.
+  if (doc.algorithm !== undefined && isAsymmetric(doc.algorithm)) {
+    setCategorySignal("asymmetric");
+    setAsymmetricSignal(doc.algorithm);
+    if (doc.session) {
+      setByteFormat(doc.session.byteFormat);
+      setModeSignal(doc.session.mode);
+    }
+    const docMode: Mode = doc.session?.mode ?? mode();
+    const otherMode: Mode = docMode === "encrypt" ? "decrypt" : "encrypt";
+    const otherCanonical = resolveAsymmetricDefault(doc.algorithm, otherMode);
+    setSpecs(
+      docMode === "encrypt"
+        ? {
+            kind: "asymmetric",
+            asymmetric: doc.algorithm,
+            encrypt: doc.spec,
+            decrypt: otherCanonical,
+          }
+        : {
+            kind: "asymmetric",
+            asymmetric: doc.algorithm,
+            encrypt: otherCanonical,
+            decrypt: doc.spec,
+          },
+    );
+    return;
+  }
   // Slice 2.10c (2026-05-25): from here down is the cipher-document
   // branch. Land in category "cipher" defensively — a recipient previously
   // in "hash" category needs its selector flipped back so the cipher
@@ -1255,6 +1381,12 @@ export const resetSpec = (): void => {
     updateActive(() => canonical);
     return;
   }
+  if (current.kind === "asymmetric") {
+    // No (cipherMode, padding) overlay — direct table read by (variant, mode).
+    const canonical = resolveAsymmetricDefault(current.asymmetric, mode());
+    updateActive(() => canonical);
+    return;
+  }
   const canonical = applyPaddingScheme(
     resolveDefault(useCipher()(), useCipherMode()(), mode()),
     mode(),
@@ -1325,6 +1457,10 @@ export const isCustomSpec = (): boolean => {
     // hash table has no padding overlay to compose first.
     const canonical = resolveHashDefault(current.hash);
     return !deepEqualJson(current.single, canonical);
+  }
+  if (current.kind === "asymmetric") {
+    const canonical = resolveAsymmetricDefault(current.asymmetric, mode());
+    return !deepEqualJson(activeSpec(), canonical);
   }
   const canonical = applyPaddingScheme(
     resolveDefault(useCipher()(), useCipherMode()(), mode()),

@@ -46,6 +46,18 @@ export type Cipher = AesCipher | SpeckCipher | SerpentCipher | DesCipher;
 export type Hash = "sha-256";
 
 /**
+ * Asymmetric (public-key) family — algorithms with a public/private key pair
+ * rather than a single symmetric key. RSA is the first (and only) member
+ * (`docs/plans/shimmying-booping-moth.md`). Like a cipher it has encrypt /
+ * decrypt directions, but UNLIKE a cipher it has no symmetric key field, no
+ * block-cipher mode of operation, and no padding overlay — the public/private
+ * key material is the editable `p, q, e` constants on the spec. The separate
+ * family + category is what lets the UI hide those three symmetric-only
+ * surfaces (presenting a "key" field for RSA would miseducate).
+ */
+export type Asymmetric = "rsa";
+
+/**
  * Category discriminant for the algorithm selector (Slice 2.10c, 2026-05-25).
  * The UI surfaces a top-level toggle between "cipher" and "hash"; the
  * specific dropdown alongside renders cipher or hash options depending on
@@ -59,7 +71,7 @@ export type Hash = "sha-256";
  * shape extends cleanly when SHA-3 / SHA-512 land — each family's dropdown
  * remembers independently.
  */
-export type Category = "cipher" | "hash";
+export type Category = "cipher" | "hash" | "asymmetric";
 
 /**
  * Public umbrella type — every cryptographic primitive the app supports.
@@ -70,7 +82,7 @@ export type Category = "cipher" | "hash";
  * Implementing functions in terms of `Algorithm` and branching on category
  * is cheaper than maintaining parallel cipher-only and hash-only overloads.
  */
-export type Algorithm = Cipher | Hash;
+export type Algorithm = Cipher | Hash | Asymmetric;
 
 const ALL_CIPHERS: readonly Cipher[] = [
   "aes-128",
@@ -102,12 +114,26 @@ export const isAesCipher = (c: Cipher): c is AesCipher => c.startsWith("aes-");
 export const isHash = (a: Algorithm): a is Hash => a === "sha-256";
 
 /**
- * True when an algorithm is a cipher (the encrypt/decrypt-shaped primitives).
- * Expressed as `!isHash(a)` so adding a new hash family member (SHA-3 etc.)
- * needs only one edit, not two — the closed Algorithm union forces this
- * predicate correct by construction.
+ * True when an algorithm is in the asymmetric (public-key) family. RSA today.
+ * Defined alongside `isHash` so `isCipher` can exclude BOTH non-cipher
+ * families explicitly.
  */
-export const isCipher = (a: Algorithm): a is Cipher => !isHash(a);
+export const isAsymmetric = (a: Algorithm): a is Asymmetric => a === "rsa";
+
+/**
+ * True when an algorithm is a symmetric cipher (the keyed encrypt/decrypt
+ * block primitives with cipher-mode + padding surfaces).
+ *
+ * **MUST be an explicit exclusion of every non-cipher family, NOT
+ * `!isHash(a)`.** The naive negation worked while `Algorithm = Cipher | Hash`,
+ * but once the asymmetric family widened the union, `!isHash("rsa")` is `true`,
+ * and because this is a hand-written type predicate (`a is Cipher`) the
+ * compiler would BELIEVE the lie and silently route RSA down the cipher path
+ * (`setAlgorithm`, `setSpecFromDocument`, the `DEFAULT_*_BY_CIPHER` lookups).
+ * The exhaustive-switch safety net does not catch a manual predicate. Every
+ * new non-cipher family MUST be subtracted here.
+ */
+export const isCipher = (a: Algorithm): a is Cipher => !isHash(a) && !isAsymmetric(a);
 
 // Default to AES-128 so first-time / fresh-load users hit the canonical
 // FIPS-197 Appendix C.1 vector. Session-only — see file header.
@@ -135,9 +161,11 @@ export const setCipher = (c: Cipher): void => {
 // selector.
 
 const [hash, setHashSignal] = createSignal<Hash>("sha-256");
+const [asymmetric, setAsymmetricSignal] = createSignal<Asymmetric>("rsa");
 const [category, setCategorySignal] = createSignal<Category>("cipher");
 
 export const useHash = () => hash;
+export const useAsymmetric = () => asymmetric;
 export const useCategory = () => category;
 
 /**
@@ -151,7 +179,15 @@ export const setHash = (h: Hash): void => {
   setHashSignal(h);
 };
 
-/** Flip the active category without changing the cipher / hash signals. */
+/** Set the active asymmetric variant. Does NOT flip category — mirrors
+ *  `setHash`. Single-member union today; forward-compat for future
+ *  public-key algorithms. */
+export const setAsymmetric = (a: Asymmetric): void => {
+  setAsymmetricSignal(a);
+};
+
+/** Flip the active category without changing the cipher / hash / asymmetric
+ *  signals. */
 export const setCategory = (c: Category): void => {
   setCategorySignal(c);
 };
@@ -167,7 +203,12 @@ export const setCategory = (c: Category): void => {
  * all three as dependencies.
  */
 export const useAlgorithm = (): (() => Algorithm) => {
-  return () => (category() === "cipher" ? cipher() : hash());
+  return () => {
+    const c = category();
+    if (c === "cipher") return cipher();
+    if (c === "hash") return hash();
+    return asymmetric();
+  };
 };
 
 /** Hash dropdown options + labels. Sized to one entry today; mirrors
@@ -177,6 +218,14 @@ const ALL_HASHES: readonly Hash[] = ["sha-256"];
 export const HASH_OPTIONS = ALL_HASHES;
 export const HASH_LABELS: Record<Hash, string> = {
   "sha-256": "SHA-256",
+};
+
+/** Asymmetric dropdown options + labels. One entry today (RSA); mirrors the
+ *  cipher / hash option shapes so the selector renders any family uniformly. */
+const ALL_ASYMMETRICS: readonly Asymmetric[] = ["rsa"];
+export const ASYMMETRIC_OPTIONS = ALL_ASYMMETRICS;
+export const ASYMMETRIC_LABELS: Record<Asymmetric, string> = {
+  rsa: "RSA (textbook)",
 };
 
 /** Display labels for the selector. Keep in sync with `ALL_CIPHERS`. */
@@ -390,9 +439,36 @@ export const DEFAULT_PT_BYTES_BY_HASH: Record<Hash, Uint8Array> = {
   "sha-256": new Uint8Array([0x61, 0x62, 0x63]),
 };
 
+// ─── Asymmetric defaults ───────────────────────────────────────────────────
+//
+// RSA is keyless in the symmetric sense — the public/private material is the
+// editable `p, q, e` constants on the spec — so the key default is empty
+// (`inputs.key.byteLength` is 0; the key field is hidden for the asymmetric
+// category). The message / ciphertext are W=2-byte big-endian integers; the
+// defaults are the classic textbook vector m=65 ⇒ c=2790 (n=3233) so the first
+// Run reproduces it and decrypt round-trips straight back. Kept in sync with
+// `RSA_DEFAULT_MESSAGE` / the KAT in `src/ciphers/rsa.ts` +
+// `tests/rsa-vectors.test.ts`.
+
+/** Empty key per asymmetric variant — RSA has no symmetric key field. */
+export const DEFAULT_KEY_BYTES_BY_ASYMMETRIC: Record<Asymmetric, Uint8Array> = {
+  rsa: new Uint8Array(0),
+};
+
+/** Default message m (encrypt input) — 65 as a 2-byte BE integer. */
+export const DEFAULT_PT_BYTES_BY_ASYMMETRIC: Record<Asymmetric, Uint8Array> = {
+  rsa: new Uint8Array([0x00, 0x41]),
+};
+
+/** Default ciphertext c (decrypt input) — 2790 (= 65¹⁷ mod 3233) as 2-byte BE. */
+export const DEFAULT_CT_BYTES_BY_ASYMMETRIC: Record<Asymmetric, Uint8Array> = {
+  rsa: new Uint8Array([0x0a, 0xe6]),
+};
+
 /** Test-only reset; production code never calls this. */
 export const __resetCipherForTests = (): void => {
   setCipherSignal("aes-128");
   setHashSignal("sha-256");
+  setAsymmetricSignal("rsa");
   setCategorySignal("cipher");
 };

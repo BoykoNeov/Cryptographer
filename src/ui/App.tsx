@@ -24,6 +24,7 @@
  * routes through scheme-aware parsing + initial-state shape selection.
  */
 
+import { bytesToBigInt } from "@/core/big-int-codec";
 import {
   CURRENT_SCHEMA_VERSION,
   type CipherDocument,
@@ -71,23 +72,30 @@ import { TraceTimeline } from "./components/TraceTimeline";
 import "./narration/index";
 import { clearDirty, setAutoRerun, setDirty, useAutoRerun, useDirty } from "./stores/auto-rerun";
 import {
+  ASYMMETRIC_LABELS,
+  ASYMMETRIC_OPTIONS,
   type Algorithm,
+  type Asymmetric,
   CIPHER_LABELS,
   CIPHER_OPTIONS,
   type Category,
   type Cipher,
   DEFAULT_CT_BYTES_BY_CIPHER,
+  DEFAULT_KEY_BYTES_BY_ASYMMETRIC,
   DEFAULT_KEY_BYTES_BY_CIPHER,
   DEFAULT_KEY_BYTES_BY_HASH,
+  DEFAULT_PT_BYTES_BY_ASYMMETRIC,
   DEFAULT_PT_BYTES_BY_CIPHER,
   DEFAULT_PT_BYTES_BY_HASH,
   HASH_LABELS,
   HASH_OPTIONS,
   type Hash,
   isAesCipher,
+  isAsymmetric,
   isCipher,
   isHash,
   useAlgorithm,
+  useAsymmetric,
   useCategory,
   useCipher,
   useHash,
@@ -116,6 +124,7 @@ import {
   isCustomSpec,
   resetSpec,
   setAlgorithm,
+  setAsymmetric,
   setCipher,
   setCipherMode,
   setHash,
@@ -189,6 +198,7 @@ export const App = () => {
   const algorithm = useAlgorithm();
   const category = useCategory();
   const hash = useHash();
+  const asymmetric = useAsymmetric();
 
   // True when the live spec has diverged from the canonical default for
   // the current selectors (param edits, palette inserts, deletions). Drives
@@ -372,7 +382,7 @@ export const App = () => {
             `${inputLabel()}: must be a multiple of 16 bytes (whole AES blocks); got ${inputBytes.length}.`,
           );
         }
-      } else {
+      } else if (isHash(algorithm())) {
         // Hash branch — today SHA-256 only. Slice 2.11b made the spec
         // multi-block (the per-block body folds over the padded N×64-byte
         // message, threading the running hash), so messages of any length
@@ -387,6 +397,24 @@ export const App = () => {
           throw new Error(
             `${inputLabel()}: ${HASH_LABELS[hash()]} accepts 0..${MAX_HASH_INPUT} bytes in this explorer; got ${inputBytes.length}. (SHA-256 itself has no such limit — the cap keeps the per-byte trace small enough to scrub. ${MAX_HASH_INPUT} bytes is ~${Math.ceil((MAX_HASH_INPUT + 9) / 64)} blocks.)`,
           );
+        }
+      } else {
+        // Asymmetric (RSA) branch. The message m must satisfy 0 ≤ m < n,
+        // else the square-and-multiply ladder silently computes (m mod n)ᵉ
+        // and the round-trip won't recover m (green math, wrong behaviour).
+        // Validate by VALUE against the live modulus n = p·q derived from the
+        // spec's editable constants — NOT just the byte width.
+        const consts = spec().cipherConstants;
+        const p = consts?.p;
+        const q = consts?.q;
+        if (p !== undefined && q !== undefined) {
+          const n = bytesToBigInt(p) * bytesToBigInt(q);
+          const m = bytesToBigInt(inputBytes);
+          if (m >= n) {
+            throw new Error(
+              `${inputLabel()}: value ${m} must be less than the modulus n = ${n} (= p·q). Textbook RSA only operates on integers in [0, n).`,
+            );
+          }
         }
       }
 
@@ -937,7 +965,8 @@ export const App = () => {
   const changeCategory = (next: Category): void => {
     const prev = category();
     if (prev === next) return;
-    const nextAlgorithm: Algorithm = next === "cipher" ? cipher() : hash();
+    const nextAlgorithm: Algorithm =
+      next === "cipher" ? cipher() : next === "hash" ? hash() : asymmetric();
     const prevKeyDefault = algorithmDefaultKey(algorithm());
     const currentKey = tryParseBytes(keyText(), fmt());
     if (currentKey && bytesEqual(currentKey, prevKeyDefault)) {
@@ -1033,10 +1062,13 @@ export const App = () => {
   // a category lie.
   const inputLabel = () => {
     if (isHash(algorithm())) return "message";
+    // RSA: encrypt consumes the message m, decrypt consumes the ciphertext c.
+    if (isAsymmetric(algorithm())) return mode() === "encrypt" ? "message" : "ciphertext";
     return mode() === "encrypt" ? "plaintext" : "ciphertext";
   };
   const outputLabel = () => {
     if (isHash(algorithm())) return "digest";
+    if (isAsymmetric(algorithm())) return mode() === "encrypt" ? "ciphertext" : "message";
     return mode() === "encrypt" ? "ciphertext" : "plaintext";
   };
 
@@ -1063,7 +1095,11 @@ export const App = () => {
         <span class="cipher-name" classList={{ "is-custom": isCustom() }}>
           {isCustom()
             ? `Custom (was ${
-                category() === "hash" ? HASH_LABELS[hash()] : CIPHER_LABELS[cipher()]
+                category() === "hash"
+                  ? HASH_LABELS[hash()]
+                  : category() === "asymmetric"
+                    ? ASYMMETRIC_LABELS[asymmetric()]
+                    : CIPHER_LABELS[cipher()]
               })`
             : spec().name}
         </span>
@@ -1087,10 +1123,11 @@ export const App = () => {
           <select
             value={category()}
             onChange={(e) => changeCategory(e.currentTarget.value as Category)}
-            title="Cipher = encrypt/decrypt with a key. Hash = one-way digest of a message (no key, no direction)."
+            title="Cipher = symmetric encrypt/decrypt with a key. Hash = one-way digest (no key, no direction). Public-key = asymmetric (RSA) — encrypt/decrypt with a key pair, no symmetric key field."
           >
             <option value="cipher">Cipher</option>
             <option value="hash">Hash</option>
+            <option value="asymmetric">Public-key</option>
           </select>
         </label>
         {/* Slice 2.10c — mode selector hidden for hash category. Hashes
@@ -1099,7 +1136,7 @@ export const App = () => {
             signal in hash mode (the discriminated `HashSpecsByMode`
             ignores `mode()`); hiding the selector here is the UI half
             of that contract. */}
-        <Show when={isCipher(algorithm())}>
+        <Show when={!isHash(algorithm())}>
           <label>
             mode
             <select
@@ -1219,6 +1256,43 @@ export const App = () => {
             >
               <For each={HASH_OPTIONS}>{(h) => <option value={h}>{HASH_LABELS[h]}</option>}</For>
             </select>
+          </label>
+        </Show>
+        {/* Public-key (asymmetric) dropdown — shown only when
+            category=asymmetric. RSA today. Mirrors the cipher dropdown's
+            reset-to-canonical affordance: the editable p/q/e constants mean
+            the spec CAN diverge, so the "Custom (was RSA …)" indicator + reset
+            button apply here too. One option today; the `<For>` shape scales. */}
+        <Show when={category() === "asymmetric"}>
+          <label class="cipher-label">
+            algorithm
+            <div class="cipher-select-row">
+              <select
+                value={asymmetric()}
+                onChange={(e) => setAsymmetric(e.currentTarget.value as Asymmetric)}
+                title="Public-key algorithm. Today: textbook RSA — key generation (p, q, e → n, φ, d) plus square-and-multiply encrypt/decrypt."
+              >
+                <For each={ASYMMETRIC_OPTIONS}>
+                  {(a) => (
+                    <option value={a}>
+                      {a === asymmetric() && isCustom()
+                        ? `Custom (was ${ASYMMETRIC_LABELS[a]})`
+                        : ASYMMETRIC_LABELS[a]}
+                    </option>
+                  )}
+                </For>
+              </select>
+            </div>
+            <Show when={isCustom()}>
+              <button
+                type="button"
+                class="reset-spec-button"
+                onClick={() => resetSpec()}
+                title={`Discard edits and restore the canonical ${ASYMMETRIC_LABELS[asymmetric()]} spec`}
+              >
+                reset
+              </button>
+            </Show>
           </label>
         </Show>
         {/* Slice 2.10c (2026-05-25) — cipher-specific selectors. Mode of
@@ -1816,8 +1890,11 @@ const tryParseBytes = (text: string, fmt: ByteFormat): Uint8Array | null => {
  * (Slice 2.10c, 2026-05-25). Each table is a `Record` keyed exhaustively
  * over its family — no fallback needed.
  */
-const algorithmDefaultKey = (a: Algorithm): Uint8Array =>
-  isHash(a) ? DEFAULT_KEY_BYTES_BY_HASH[a] : DEFAULT_KEY_BYTES_BY_CIPHER[a];
+const algorithmDefaultKey = (a: Algorithm): Uint8Array => {
+  if (isHash(a)) return DEFAULT_KEY_BYTES_BY_HASH[a];
+  if (isAsymmetric(a)) return DEFAULT_KEY_BYTES_BY_ASYMMETRIC[a]; // empty — no key
+  return DEFAULT_KEY_BYTES_BY_CIPHER[a];
+};
 
 /**
  * Resolve the canonical-default plaintext / message for any Algorithm.
@@ -1825,8 +1902,14 @@ const algorithmDefaultKey = (a: Algorithm): Uint8Array =>
  * (FIPS 180-4 §A.1 single-block KAT), so first-time hash users land on
  * the textbook digest.
  */
-const algorithmDefaultPt = (a: Algorithm): Uint8Array =>
-  isHash(a) ? DEFAULT_PT_BYTES_BY_HASH[a] : DEFAULT_PT_BYTES_BY_CIPHER[a];
+const algorithmDefaultPt = (a: Algorithm): Uint8Array => {
+  if (isHash(a)) return DEFAULT_PT_BYTES_BY_HASH[a];
+  // RSA's "plaintext" default is its encrypt-mode message; the decrypt-mode
+  // ciphertext default is swapped in mode-aware by `changeMode` (mirrors how
+  // `DEFAULT_CT_BYTES_BY_CIPHER` is consulted for ciphers in decrypt mode).
+  if (isAsymmetric(a)) return DEFAULT_PT_BYTES_BY_ASYMMETRIC[a];
+  return DEFAULT_PT_BYTES_BY_CIPHER[a];
+};
 
 const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean => {
   if (a.length !== b.length) return false;

@@ -27,7 +27,7 @@
  * `z.discriminatedUnion`'s per-option constraint without explicit casts.
  */
 
-import type { Cipher, Hash } from "@/ui/stores/cipher";
+import type { Asymmetric, Cipher, Hash } from "@/ui/stores/cipher";
 import type { CipherMode } from "@/ui/stores/cipher-mode";
 import { z } from "zod";
 import { ALL_BYTE_FORMATS } from "./format";
@@ -66,12 +66,20 @@ export const CIPHER_IDS = [
 export const HASH_IDS = ["sha-256"] as const satisfies readonly Hash[];
 
 /**
- * Concatenation of cipher + hash ids. Used by the top-level document's
- * `algorithm` field (v3 schema), which accepts any cryptographic-primitive
- * family. Composed at the tuple level so the `z.enum(ALGORITHM_IDS)`
- * below stays a static-enum schema rather than a runtime union.
+ * Asymmetric (public-key) variants — `docs/plans/shimmying-booping-moth.md`.
+ * RSA is the first member. `assertAsymmetricCoverage` below pins it against
+ * the `Asymmetric` union in `ui/stores/cipher.ts`.
  */
-export const ALGORITHM_IDS = [...CIPHER_IDS, ...HASH_IDS] as const;
+export const ASYMMETRIC_IDS = ["rsa"] as const satisfies readonly Asymmetric[];
+
+/**
+ * Concatenation of cipher + hash + asymmetric ids. Used by the top-level
+ * document's `algorithm` field, which accepts any cryptographic-primitive
+ * family. Composed at the tuple level so the `z.enum(ALGORITHM_IDS)` below
+ * stays a static-enum schema rather than a runtime union — so a saved RSA
+ * document's `algorithm: "rsa"` hint round-trips through validation.
+ */
+export const ALGORITHM_IDS = [...CIPHER_IDS, ...HASH_IDS, ...ASYMMETRIC_IDS] as const;
 
 export const CIPHER_MODES = [
   "single-block",
@@ -100,10 +108,12 @@ type MissingCipher = Exclude<Cipher, (typeof CIPHER_IDS)[number]>;
 type MissingCipherMode = Exclude<CipherMode, (typeof CIPHER_MODES)[number]>;
 type MissingPaddingScheme = Exclude<PaddingScheme, (typeof PADDING_SCHEMES)[number]>;
 type MissingHash = Exclude<Hash, (typeof HASH_IDS)[number]>;
+type MissingAsymmetric = Exclude<Asymmetric, (typeof ASYMMETRIC_IDS)[number]>;
 export const assertCipherCoverage: [MissingCipher] extends [never] ? true : never = true;
 export const assertCipherModeCoverage: [MissingCipherMode] extends [never] ? true : never = true;
 export const assertPaddingCoverage: [MissingPaddingScheme] extends [never] ? true : never = true;
 export const assertHashCoverage: [MissingHash] extends [never] ? true : never = true;
+export const assertAsymmetricCoverage: [MissingAsymmetric] extends [never] ? true : never = true;
 
 // ─── Json (recursive) ─────────────────────────────────────────────────────
 // Mirrors the `Json` type in core/types.ts. `z.lazy` is the standard
