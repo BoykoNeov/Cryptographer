@@ -296,7 +296,10 @@ export const lookupProvenance = (stepType: string): ProvenanceFn | undefined =>
  *
  *  - **approximate** (an exact-looking byte highlight would mislead):
  *    `add-mod-32@1` / `add-mod-16@1` (carry crosses byte boundaries),
- *    `rotate-bits-right@1` / `shift-bits-right@1` (bit-level → byte-approximate).
+ *    `rotate-bits-right@1` / `shift-bits-right@1` (bit-level → byte-approximate),
+ *    and the RSA big-integer primitives `mul@1` / `sub@1` / `mod-mul@1` /
+ *    `cond-mod-mul@1` / `mod-inverse@1` (full-width carries/borrows mix every
+ *    output byte across all input bytes — there is no clean per-cell mapping).
  *    Deferred to the distinct `≈`-treatment fast-follow.
  *  - **no inputs**: `constant-load@1` (emits a literal — nothing to point back to).
  *  - **partial — synthesizes bytes with no input source**: `pad-with-byte@1`,
@@ -316,6 +319,12 @@ export const PROVENANCE_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set<string>([
   "add-mod-16@1",
   "rotate-bits-right@1",
   "shift-bits-right@1",
+  // approximate — RSA big-integer arithmetic (carries/borrows mix all bytes)
+  "mul@1",
+  "sub@1",
+  "mod-mul@1",
+  "cond-mod-mul@1",
+  "mod-inverse@1",
   // no inputs
   "constant-load@1",
   // partial — synthesizes bytes

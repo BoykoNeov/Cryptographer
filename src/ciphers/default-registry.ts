@@ -39,6 +39,7 @@ import {
   bytesToStatePortContract,
 } from "../steps/bytes-to-state";
 import { concat, concatDoc, concatPortContract } from "../steps/concat";
+import { condModMul, condModMulDoc, condModMulPortContract } from "../steps/cond-mod-mul";
 import { constantLoad, constantLoadDoc, constantLoadPortContract } from "../steps/constant-load";
 import {
   desBitPermute,
@@ -112,6 +113,9 @@ import {
   keyExpansionV2Meta,
   keyExpansionV2PortContract,
 } from "../steps/key-expansion";
+import { modInverse, modInverseDoc, modInversePortContract } from "../steps/mod-inverse";
+import { modMul, modMulDoc, modMulPortContract } from "../steps/mod-mul";
+import { mul, mulDoc, mulPortContract } from "../steps/mul";
 import { not, notDoc, notPortContract } from "../steps/not";
 import { padWithByte, padWithByteDoc, padWithBytePortContract } from "../steps/pad-with-byte";
 import { permute, permuteDoc, permutePortContract } from "../steps/permute";
@@ -210,6 +214,7 @@ import {
   stateToBytesMeta,
   stateToBytesPortContract,
 } from "../steps/state-to-bytes";
+import { sub, subDoc, subPortContract } from "../steps/sub";
 import { xor, xorDoc, xorPortContract } from "../steps/xor";
 import {
   xorWithAux,
@@ -819,6 +824,44 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: shiftBitsRight,
     shape: shiftBitsRightPortContract,
     doc: shiftBitsRightDoc,
+  });
+  // ─── RSA big-integer primitives (docs/plans/shimmying-booping-moth.md) ────
+  // Port-native, `bigint`-internal, big-endian. `mul`/`sub` build the
+  // key-generation derivation (n = p·q, φ = (p-1)(q-1)); `mod-inverse` derives
+  // d = e⁻¹ mod φ; `mod-mul` is the square-and-multiply workhorse (squaring =
+  // wire both factors to one source); `cond-mod-mul` is the live-editable
+  // conditional multiply driven by one exponent bit per rung. All pure (no
+  // meta) — the flat Phase-1 RSA spec fans n/φ/d port-to-port among same-scope
+  // siblings; no aux broadcast.
+  r.register("mul@1", {
+    kind: "ported",
+    executor: mul,
+    shape: mulPortContract,
+    doc: mulDoc,
+  });
+  r.register("sub@1", {
+    kind: "ported",
+    executor: sub,
+    shape: subPortContract,
+    doc: subDoc,
+  });
+  r.register("mod-mul@1", {
+    kind: "ported",
+    executor: modMul,
+    shape: modMulPortContract,
+    doc: modMulDoc,
+  });
+  r.register("cond-mod-mul@1", {
+    kind: "ported",
+    executor: condModMul,
+    shape: condModMulPortContract,
+    doc: condModMulDoc,
+  });
+  r.register("mod-inverse@1", {
+    kind: "ported",
+    executor: modInverse,
+    shape: modInversePortContract,
+    doc: modInverseDoc,
   });
   // ─── AES round primitives (Slice B1.1 — scaffolding-suppression Phase B) ─
   // Byte-native replacements for the matrix round body. `byte-substitute@1`

@@ -79,7 +79,7 @@ describe("port-provenance coverage contract", () => {
     }
   });
 
-  it("allowlist contents are exactly the expected 10 (rationale set-pin)", () => {
+  it("allowlist contents are exactly the expected 15 (rationale set-pin)", () => {
     // Grouped by the FOUR distinct rationales — see PROVENANCE_NO_OP_ALLOWLIST's
     // doc. Keeping the groups visible here stops a future edit from quietly
     // relabelling an exact-but-plumbing bridge as "approximate".
@@ -89,6 +89,12 @@ describe("port-provenance coverage contract", () => {
       "add-mod-16@1",
       "rotate-bits-right@1",
       "shift-bits-right@1",
+      // approximate — RSA big-integer arithmetic (carries/borrows mix all bytes)
+      "mul@1",
+      "sub@1",
+      "mod-mul@1",
+      "cond-mod-mul@1",
+      "mod-inverse@1",
       // no inputs
       "constant-load@1",
       // partial — synthesizes bytes with no input source
