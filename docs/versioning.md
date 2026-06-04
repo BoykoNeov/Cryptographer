@@ -6,7 +6,7 @@ Cryptographer has three independent versioned surfaces. Each answers a different
 |---|---|---|
 | **App version** (semver) | [`package.json`](../package.json) → [`src/version.ts`](../src/version.ts) → UI footer + exported `metadata.appVersion` | End users, anyone reading [`CHANGELOG.md`](../CHANGELOG.md) |
 | **Step-type contract** (`@N` suffix on every step's type key) | `src/ciphers/default-registry.ts`, every `CipherSpec` JSON | Saved-document longevity |
-| **Document schema** (`schemaVersion: 2`) | [`src/core/document.ts`](../src/core/document.ts) + [`src/core/document-schema.ts`](../src/core/document-schema.ts) | Anyone loading a `.cipher.json` file produced by an older build |
+| **Document schema** (`schemaVersion: 3`) | [`src/core/document.ts`](../src/core/document.ts) + [`src/core/document-schema.ts`](../src/core/document-schema.ts) | Anyone loading a `.cipher.json` file produced by an older build |
 
 This page describes how each one is bumped and what's invariant across a bump.
 
@@ -67,14 +67,14 @@ No step type has been bumped past `@1` yet. The protocol exists so the first bum
 
 ## 3. Document schema (`schemaVersion`)
 
-`schemaVersion: 2` is the current literal. v1 documents (every save produced before Phase 4 of `docs/plans/des-feistel.md` shipped DES into the cipher selector) still load via the v1 → v2 migration in [`parseDocument`](../src/core/document.ts) — see "Migration mechanics" below for the concrete shape of that hop. The strict/loose layer split in [`src/core/document-schema.ts`](../src/core/document-schema.ts) decides what triggers a bump:
+`schemaVersion: 3` is the current literal. Older documents still load via forward migration in [`parseDocument`](../src/core/document.ts): v1 saves (produced before Phase 4 of `docs/plans/des-feistel.md` shipped DES into the cipher selector) and v2 saves (produced before the `cipher` → `algorithm` field rename) both walk forward to v3 — see "Migration mechanics" below for the concrete shape of each hop. The strict/loose layer split in [`src/core/document-schema.ts`](../src/core/document-schema.ts) decides what triggers a bump:
 
 - **Wrapper layers** (`CipherDocument`, `LayoutSpec`, `SessionSnapshot`, `DocumentMetadata`) use Zod's `.strict()` — unknown fields are rejected. **Adding a new field at any wrapper layer requires bumping `schemaVersion`.**
 - **`CipherSpec` and `StepNode` interiors** are loose by default — they mirror `core/types.ts`, which is "load-bearing forever." Spec-level extensions (a new step kind, a new aux key, optional fields on a step's params) can land without forcing a migration; they're caught by the per-step Zod schemas when relevant.
 
 ### When to bump
 
-(Phase 4 of `docs/plans/des-feistel.md` made the v1 → v2 hop. The triggers below apply to the next bump, v2 → v3.)
+(Phase 4 of `docs/plans/des-feistel.md` made the v1 → v2 hop; Slice 2.10b of `docs/plans/universal-port-dataflow.md` made the v2 → v3 hop — the `cipher` → `algorithm` field rename. The triggers below apply to the next bump, v3 → v4.)
 
 - A new required field at a wrapper layer.
 - A removed wrapper-layer field that loaders rely on.
@@ -85,9 +85,9 @@ No step type has been bumped past `@1` yet. The protocol exists so the first bum
 
 [`parseDocument`](../src/core/document.ts) holds the seam:
 
-1. **Phase 2 pre-check** — `parseDocument` inspects `raw.schemaVersion` before running the full Zod schema. Today it accepts any version in `ACCEPTED_SCHEMA_VERSIONS` (currently `[1, 2]`) and rejects everything else with a friendly forward/backward-compat error message listing the accepted set.
-2. **`migrateDocument`** — when the version doesn't equal `CURRENT_SCHEMA_VERSION`, the pre-check hands off to `migrateDocument(raw, fromVersion)`, which is a pure function that walks v1 → v2 → … → CURRENT applying any per-version transforms. The v1 → v2 step (shipped in Phase 4 of `docs/plans/des-feistel.md`) is a pure version-field bump — v1 documents predate DES being in the cipher selector, so they cannot contain `feistel-round` nodes and no node-level changes are required.
-3. **When v3 lands** — add a `if (fromVersion <= 2)` step inside `migrateDocument` that returns a v3 document. Add `3` to `ACCEPTED_SCHEMA_VERSIONS`, bump `CURRENT_SCHEMA_VERSION` to 3, and flip `CipherDocumentSchema`'s `z.literal(2)` to `z.literal(3)`. Existing v1/v2 documents are now migrated forward to v3 transparently.
+1. **Phase 2 pre-check** — `parseDocument` inspects `raw.schemaVersion` before running the full Zod schema. Today it accepts any version in `ACCEPTED_SCHEMA_VERSIONS` (currently `[1, 2, 3]`) and rejects everything else with a friendly forward/backward-compat error message listing the accepted set.
+2. **`migrateDocument`** — when the version doesn't equal `CURRENT_SCHEMA_VERSION`, the pre-check hands off to `migrateDocument(raw, fromVersion)`, which is a pure function that walks v1 → v2 → v3 → … → CURRENT applying any per-version transforms. The v1 → v2 step (shipped in Phase 4 of `docs/plans/des-feistel.md`) is a pure version-field bump — v1 documents predate DES being in the cipher selector, so they cannot contain `feistel-round` nodes and no node-level changes are required. The v2 → v3 step (Slice 2.10b of `docs/plans/universal-port-dataflow.md`) renames the top-level cipher-hint field `cipher` → `algorithm`; the value passes through unchanged because every v2 cipher value is still a valid `Algorithm`.
+3. **When v4 lands** — add a `if (fromVersion <= 3)` step inside `migrateDocument` that returns a v4 document. Add `4` to `ACCEPTED_SCHEMA_VERSIONS`, bump `CURRENT_SCHEMA_VERSION` to 4, and flip `CipherDocumentSchema`'s `z.literal(3)` to `z.literal(4)`. Existing v1/v2/v3 documents are now migrated forward to v4 transparently.
 4. **Loaders ≥ vN** — happily accept any version in `ACCEPTED_SCHEMA_VERSIONS` (migrated on the fly) and reject newer versions with the friendly error. Old loaders (v(N-1)-only builds) reject v(N) files with the friendly error; this is intended and the user-facing message tells them which app version their file came from.
 
 The strictness split is doing real work here: a `.strict()` wrapper layer means that the moment someone tries to land an unannounced field at that layer, Zod fails the parse and the change is forced through the migration discipline rather than silently passed through.
