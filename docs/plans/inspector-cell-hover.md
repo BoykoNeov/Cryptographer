@@ -1,11 +1,25 @@
 # Inspector cell-level hover — port-native provenance restore
 
-> **Status: DRAFT (not yet built) — 2026-06-03.** Drafted after a session
-> that re-surfaced the deleted cell-level provenance overlay, surveyed the
-> port-native frame shape, ran two empirical de-risk checks, and consulted
-> the advisor. Supersedes the never-created `docs/plans/inspector-overlays.md`
+> **Status: SHIPPED — 2026-06-04** (all 3 slices). Drafted 2026-06-03 after a
+> session that re-surfaced the deleted cell-level provenance overlay; built the
+> next day. Supersedes the never-created `docs/plans/inspector-overlays.md`
 > placeholder for the **hover** half; the **identity-overlay** half stays
 > deferred (see "## Non-goals").
+>
+> **What shipped:** `src/core/port-provenance.ts` (10 exact-mapping fns +
+> `lookupProvenance` + `PROVENANCE_NO_OP_ALLOWLIST`); the hover wiring in
+> `PortFlowView` (read-time `stepId` gate, `(portName,cellIndex)` keying, GF
+> `×N` badge, output-cell hover triggers, `.provenance-source` scoped under
+> `.port-flow-view`). Tests: `tests/port-provenance.test.ts` (hand-computed
+> mappings + value-independence + the **executor perturbation cross-check**
+> that pins `provenance == real data-dependency set` for all 10 fns),
+> `tests/port-provenance-coverage.test.ts` (bare-name fn-or-allowlist gate +
+> set-equality), `tests/port-flow-view.test.tsx` (jsdom hover incl. the
+> AddRoundKey `operand`-projection empirical check), and
+> `e2e/inspector-cell-hover-smoke.spec.ts` (real-Chromium MixColumns hover).
+> Full `npm run check` green; no schema bump. The two fast-follows (approximate
+> `≈` treatment; the prefixed exact mappings `des.xor-with-K@1` /
+> `serpent.add-round-key@1` / `serpent.sub-bytes@1`) remain deferred.
 
 ## Context
 
@@ -88,7 +102,7 @@ class) is a **fast-follow**, not v1.
 | `not` | `input[i]` | exact | ✅ fn |
 | `xor-with-aux` (AddRoundKey) | `input[i]`, `operand[i]` (round key row) | exact | ✅ fn |
 | `byte-substitute` (SubBytes / S-boxes) | `input[i]` (S-box swap, same pos) | exact | ✅ fn |
-| `permute` (ShiftRows / P / IP-FP) | `input[indices[i]]` (forward gather) | exact | ✅ fn |
+| `permute` (AES ShiftRows) | `input[indices[i]]` (forward gather) | exact | ✅ fn |
 | `concat` | the input port + offset covering global index `i` | exact (uses lengths) | ✅ fn |
 | `split-bytes` | `input[ (Σ widths before outPort) + j ]` | exact (uses `widths`) | ✅ fn |
 | `byte-slice` | `input[offset + i]` | exact (uses `offset`) | ✅ fn |
@@ -99,7 +113,40 @@ class) is a **fast-follow**, not v1.
 
 `gf-matrix-multiply` is the headline: it's the one case where the `label` field
 earns its place (the GF coefficients `×1 / ×2 / ×3` per contributor). Build the
-`label` channel even though only MixColumns uses it in v1.
+`label` channel even though only MixColumns uses it in v1. **Zero-coefficient
+contributors are OMITTED** (a `matrix[r][k] === 0` cell does not actually feed
+the output) — honest for the "swap in the identity matrix and watch it collapse"
+pedagogy, and pinned by an identity-matrix node test (one source, not four).
+
+### DES reframe correction (2026-06-04, advisor-confirmed)
+
+The table's original "`permute` (ShiftRows / P / IP-FP)" line conflated two
+different things. **Only AES uses the generic byte-level `permute@1`** (ShiftRows).
+DES's permutations are **bit-level** and have their own step types
+(`des.initial-permutation@1`, `des.final-permutation@1`, `des.p-permutation@1`,
+`des.bit-permute@1`), as are `des.expand-R@1` (bit-duplicating) and
+`des.s-boxes@1` (6→4-bit nonlinear). None is a byte gather, so none gets an exact
+fn in v1. What the byte-cell hover **does** illuminate on DES is the **structural
+Feistel plumbing** — `split-bytes` (L‖R halves), the `xor` of L with F(R), and the
+`concat` whose argument order *is* the swap. That's genuinely the piece of DES the
+byte hover can show, and it's the headline Feistel teaching point this codebase
+already leans on. The bit-level F-function internals stay dark (allowlisted via the
+prefixed-name exclusion below) — confirming dark-stays-dark is a *stronger* test of
+the "missing never wrong" property than highlighting them would be.
+
+### Module placement + desync guard (decided 2026-06-04, was "decide at impl time")
+
+The pure fns live **centralized in `src/core/port-provenance.ts`**, NOT co-located
+in each `src/steps/<prim>.ts`. Co-location would invert the layer direction
+(`core/` importing executor-adjacent exports from `steps/`); the desync hard
+requirement is met instead by an **executor perturbation cross-check** in the node
+tests: for each gather/linear primitive, perturb each input cell of the *real
+executor* and assert the provenance set equals the set of cells whose perturbation
+changes the output cell. That ties provenance to executor *behaviour* (it catches a
+gather→scatter semantic drift, which co-location only catches by eyeball), and
+keeps `core/` importing nothing from `steps/`. (`and@1` is value-dependent — AND
+with a 0 mask hides a dependency — so its cross-check uses an all-`0xFF`
+dependency-transparent operand setup; documented in the test.)
 
 ### The pure module
 
@@ -142,13 +189,40 @@ the registry. (Decide at implementation time; not load-bearing.)
 
 ### Contract test — revive the CI coverage gate
 
-Walk the port-native step types reached by shipped specs; assert each EITHER has
-a provenance fn registered OR sits on an explicit `PROVENANCE_NO_OP_ALLOWLIST`
-with a one-line rationale. This is what made the old coverage a real gate — a
-future port-native primitive fails the test until a fn is wired or an explicit
-"we considered this" lands on the allowlist. Standing allowlist entries:
-`add-mod-32@1`, `rotate-bits-right@1`, `shift-bits-right@1` (approximate —
-deferred to the distinct-treatment fast-follow), `constant-load@1` (no inputs).
+**Scope = the universal bare-name port-native vocabulary** (registry types with
+no `.` prefix — `xor@1`, `permute@1`, …). This is the cleanest mechanical reading
+of "port-native step types reached by shipped specs": all four AES-round-body
+primitives (`byte-substitute@1` / `permute@1` / `gf-matrix-multiply@1` /
+`xor-with-aux@1`) are bare-name, so the scope covers 100% of the primary target as
+a fixed 20-entry set, while the ~35 prefixed cipher-specific types (`des.*`,
+`serpent.*`, `speck.*`, `generic.*`, the key-schedule oracles) stay out. The gate
+walks `registry.types()`, filters to bare-name, and asserts each EITHER has a
+provenance fn OR sits on `PROVENANCE_NO_OP_ALLOWLIST` with a one-line rationale —
+a future bare-name primitive fails until a fn is wired or an explicit "we
+considered this" lands on the allowlist. The 10-fn / 10-allowlist split is pinned
+by set-equality (like the narration test's allowlist set-pin).
+
+**Known-uncovered, by design (fast-follow):** the prefixed exact mappings the
+bare-name scope deliberately excludes — `des.xor-with-K@1` + `serpent.add-round-key@1`
+(both the `xor-with-aux` shape) and `serpent.sub-bytes@1` (byte substitution).
+They *could* get exact fns; v1 draws the line at the universal vocabulary. The gate
+does NOT catch a future *prefixed* port-native primitive — a documented choice, not
+an oversight.
+
+**The allowlist's 10 entries carry FOUR distinct rationales — keep them honest:**
+
+- *approximate — an exact-looking byte highlight would mislead*: `add-mod-32@1`,
+  `add-mod-16@1` (carry crosses byte boundaries), `rotate-bits-right@1`,
+  `shift-bits-right@1` (bit-level → byte-approximate). Deferred to the distinct
+  `≈`-treatment fast-follow.
+- *no inputs*: `constant-load@1` (emits a literal; nothing to point back to).
+- *partial — synthesizes bytes with no input source*: `pad-with-byte@1`,
+  `append-be64-length@1` (output bytes are partly fabricated, not gathered).
+- *exact-but-plumbing — identity bridge, deferred as low-value (NOT approximate)*:
+  `state-to-bytes@1`, `bytes-to-state@1`, `aux-load-bytes@1`. `output[i] = input[i]`
+  is trivially exact; these could safely get an identity fn, but a 1:1 passthrough
+  highlight teaches nothing, so v1 defers them. Labelling them "approximate" would
+  lie about why they're skipped.
 
 ### The hover wiring (`PortFlowView`)
 
@@ -190,8 +264,12 @@ deferred to the distinct-treatment fast-follow), `constant-load@1` (no inputs).
    stepId-gated, keyed by `(portName, cellIndex)`). MixColumns label renders.
 3. **Browser smoke + close.** Scrub AES-128: SubBytes (same-pos), ShiftRows
    (gather), MixColumns (4 same-column + GF labels), AddRoundKey (input + K_i
-   rows). DES P-permutation. SHA-256 `xor`. Confirm approximate primitives
-   highlight **nothing** (no false exact-looking highlight). Update `README`
+   rows). DES: confirm the **structural Feistel plumbing** highlights — `split-bytes`
+   (L‖R halves), the round `xor` (L with F(R)), the `concat` whose argument order is
+   the swap — AND that the bit-level F-function steps (`des.expand-R`, `des.s-boxes`,
+   `des.p-permutation`, IP/FP) highlight **nothing** (the dark-stays-dark assertion
+   is the stronger "missing never wrong" check). SHA-256 `xor`. Confirm approximate
+   primitives (`add-mod-32`, the rotates) highlight **nothing**. Update `README`
    "What's in the box" if the linear-view surface is described there; update
    `docs/help/graph-view.md` only if it mentions the inspector. Memory + commit.
 

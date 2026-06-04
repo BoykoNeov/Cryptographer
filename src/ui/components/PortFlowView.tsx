@@ -17,37 +17,39 @@
  * in Slice 5.3e Batch 4); `PortFlowView` surfaces what the step actually
  * computed by reading the port-I/O captured on the frame in Slice 2.9a.
  *
- * **What this does NOT do.** Cells are display-only — no hover, no click,
- * no cell-level provenance highlighting. The cell-level provenance hover an
- * earlier 2.9c-e draft proposed was formally DEFERRED (see
- * `docs/plans/slice-2-9-port-aware-provenance.md`): the graph already answers
- * port-level provenance (follow the edge to the producer, inspect its value),
- * and the value inspector / step strip / RunExplorer now resolve each leaf's
- * real port by name, so the marginal byte-level highlight wasn't worth a
- * bespoke surface (advisor verdict 2026-05-27: cells deliver ~80% of the
- * pedagogical value). The byte-format toggle IS honored — that's already
- * cheap and the cells are otherwise unreadable without it.
+ * **Cell-level provenance hover (inspector-cell-hover plan, Slice 2,
+ * 2026-06-04).** Hovering an OUTPUT cell lights up the INPUT cell(s) that feed
+ * it, on this same surface — the port-native rebuild of the highlight deleted
+ * in the 2.9c-e "honest close". The mapping is pure index math from
+ * `src/core/port-provenance.ts` (`lookupProvenance(frame.stepType)`), keyed by
+ * `(portName, cellIndex)` so `split-bytes`' multiple output rows stay
+ * unambiguous. Only the 10 EXACT port-native primitives highlight; approximate
+ * / plumbing primitives (no registered fn) highlight NOTHING — the "missing
+ * never wrong" stance. The hover is frame-local, so iterate / `:b{i}` /
+ * multi-block "just work" with no per-block logic. MixColumns
+ * (`gf-matrix-multiply@1`) renders its GF(2⁸) coefficient as a `×N` badge on
+ * each contributor. The byte-format toggle is honored (cells are unreadable
+ * without it).
+ *
+ * **Stale-frame guard = a READ-TIME stepId gate.** `activeSources` recomputes
+ * the highlighted set only when `hover().stepId === frame.stepId`; a hover
+ * captured on a prior frame paints nothing after a scrub even though the signal
+ * still holds its old value. This is deliberately a read-time gate, NOT an
+ * effect that clears the signal on frame change — the effect can race the new
+ * frame's first paint, the read-time check cannot.
  *
  * **Port-native predicate** (`isPortNativeFrame`): a frame is port-native
- * iff `portInputs !== undefined || portOutputs !== undefined`. The runtime
- * populates these fields whenever the registration has NO `legacy` executor
- * (the port-capture gate at ~`runtime.ts:767`), so BOTH pure port-native
- * steps AND the hybrid-ported steps (meta retained, legacy dropped) carry
- * port I/O. Since Slice 5.2 that hybrid set is the monolithic key-schedule
- * oracle executors (AES/Speck/Serpent/DES) + the padding family; the oracle
- * frames are no longer emitted by any shipped spec (every schedule decomposed
- * into port-native primitives in K1–K4), so in practice padding is the only
- * hybrid family that lands here. Every shipped leaf is
- * port-native (pinned by `tests/requires-ported-dispatch.test.ts`), so once
- * Slice 5.3e retired the last lifted-legacy step (the Feistel toy) + its
- * `BytesView` fallback, `FrameStateView` renders this view unconditionally
- * and the predicate is now informational. Steps that publish only outputs
- * (constants) or only inputs (sinks) still match via the `||`.
+ * iff `portInputs !== undefined || portOutputs !== undefined`. Every shipped
+ * leaf is port-native (pinned by `tests/requires-ported-dispatch.test.ts`), so
+ * `FrameStateView` renders this view unconditionally and the predicate is now
+ * informational. Steps that publish only outputs (constants) or only inputs
+ * (sinks) still match via the `||`.
  */
 
 import { formatByte } from "@/core/format";
+import { type ProvenanceCell, lookupProvenance } from "@/core/port-provenance";
 import type { TraceFrame } from "@/core/types";
-import { For, Show, createMemo } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { useByteFormat } from "../stores/format";
 
 /**
@@ -64,13 +66,26 @@ type Props = {
   frame: TraceFrame;
 };
 
+/** A captured hover: which output cell, on which frame, and the precomputed
+ *  input sources that feed it. `stepId` is the gate key (see header). */
+type HoverState = {
+  readonly stepId: string;
+  readonly outPort: string;
+  readonly outCellIndex: number;
+  readonly sources: readonly ProvenanceCell[];
+};
+
+/** Shared empties so the no-port / no-hover branches never allocate — keeps
+ *  Solid's reactive equality cheap when scrubbing between empty frames. */
+const EMPTY_PORT_ROWS: readonly [string, Uint8Array][] = [];
+const EMPTY_PORTS: ReadonlyMap<string, Uint8Array> = new Map();
+const EMPTY_SOURCE_MAP: ReadonlyMap<string, string | undefined> = new Map();
+
 export const PortFlowView = (props: Props) => {
   // Materialize port lists once per frame change. Map iteration is
   // insertion order in ES, and the runtime inserts in port-declaration
   // order (see `runtime.ts:502-505`), so the row order matches the
-  // executor's contract authoring order — no sort needed. `createMemo`
-  // because both lists are read TWICE in JSX below (`<Show when>` +
-  // `<For each>`) and we don't want to allocate a fresh array per read.
+  // executor's contract authoring order — no sort needed.
   const inputRows = createMemo<readonly [string, Uint8Array][]>(() => {
     const m = props.frame.portInputs;
     if (m === undefined) return EMPTY_PORT_ROWS;
@@ -82,6 +97,48 @@ export const PortFlowView = (props: Props) => {
     return Array.from(m);
   });
 
+  // ─── Cell-level provenance hover ──────────────────────────────────────────
+  const [hover, setHover] = createSignal<HoverState | null>(null);
+
+  // Does this frame's step type have an exact provenance mapping? Drives the
+  // "hoverable" affordance on output cells — we only imply interactivity where
+  // hovering actually highlights something.
+  const hasProvenance = createMemo(() => lookupProvenance(props.frame.stepType) !== undefined);
+
+  // Active highlighted input cells, keyed "portName:cellIndex" → optional GF
+  // label. GATED on stepId at READ time (the load-bearing stale-frame guard):
+  // a hover captured on a prior frame returns the empty map after a scrub.
+  const activeSources = createMemo<ReadonlyMap<string, string | undefined>>(() => {
+    const h = hover();
+    if (h === null || h.stepId !== props.frame.stepId) return EMPTY_SOURCE_MAP;
+    const m = new Map<string, string | undefined>();
+    for (const c of h.sources) m.set(`${c.portName}:${c.cellIndex}`, c.label);
+    return m;
+  });
+
+  // Compute + capture the sources when an output cell is hovered. No fn (an
+  // approximate / plumbing primitive) ⇒ clear, so nothing lights up.
+  const onOutputEnter = (outPort: string, outCellIndex: number): void => {
+    const fn = lookupProvenance(props.frame.stepType);
+    if (fn === undefined) {
+      setHover(null);
+      return;
+    }
+    const sources = fn({
+      params: props.frame.params,
+      portInputs: props.frame.portInputs ?? EMPTY_PORTS,
+      portOutputs: props.frame.portOutputs ?? EMPTY_PORTS,
+      outPort,
+      outCellIndex,
+    });
+    setHover({ stepId: props.frame.stepId, outPort, outCellIndex, sources });
+  };
+  // Block body required: Solid setters RETURN the value they set, so an
+  // expression body would make this `() => HoverState | null`, not `() => void`.
+  const onLeave = (): void => {
+    setHover(null);
+  };
+
   return (
     <div class="port-flow-view">
       {/* Inputs section. Skipped entirely when there are no input
@@ -89,24 +146,37 @@ export const PortFlowView = (props: Props) => {
       <Show when={inputRows().length > 0}>
         <div class="port-flow-section" data-section="inputs">
           <For each={inputRows()}>
-            {([portName, bytes]) => <PortRow side="input" portName={portName} bytes={bytes} />}
+            {([portName, bytes]) => (
+              <PortRow
+                side="input"
+                portName={portName}
+                bytes={bytes}
+                activeSources={activeSources}
+              />
+            )}
           </For>
         </div>
       </Show>
 
-      {/* Separator: rendered only when BOTH sides have ports. A
-          single-sided port frame would otherwise show a lone divider
-          floating above or below the only section. */}
+      {/* Separator: rendered only when BOTH sides have ports. */}
       <Show when={inputRows().length > 0 && outputRows().length > 0}>
         <div class="port-flow-divider" aria-hidden="true" />
       </Show>
 
-      {/* Outputs section. Symmetric to inputs — skipped on a
-          (hypothetical) sink leaf with no outputs. */}
+      {/* Outputs section. Output cells are the hover triggers. */}
       <Show when={outputRows().length > 0}>
         <div class="port-flow-section" data-section="outputs">
           <For each={outputRows()}>
-            {([portName, bytes]) => <PortRow side="output" portName={portName} bytes={bytes} />}
+            {([portName, bytes]) => (
+              <PortRow
+                side="output"
+                portName={portName}
+                bytes={bytes}
+                hoverable={hasProvenance()}
+                onCellEnter={onOutputEnter}
+                onCellLeave={onLeave}
+              />
+            )}
           </For>
         </div>
       </Show>
@@ -114,28 +184,33 @@ export const PortFlowView = (props: Props) => {
   );
 };
 
-/** Shared sentinel so the "no port fields" branch of the memos never
- *  produces a new array — keeps Solid's reactive equality cheap when
- *  the user scrubs between two port-empty frames in a row. */
-const EMPTY_PORT_ROWS: readonly [string, Uint8Array][] = [];
+type PortRowProps = {
+  side: "input" | "output";
+  portName: string;
+  bytes: Uint8Array;
+  /** Input side: the active highlighted-source lookup (read inline in the JSX
+   *  so the highlight stays reactive to the hover signal). */
+  activeSources?: () => ReadonlyMap<string, string | undefined>;
+  /** Output side: this frame's step type has a provenance fn (cursor hint). */
+  hoverable?: boolean;
+  /** Output side: hover handlers carrying (outPort, cellIndex). */
+  onCellEnter?: (outPort: string, cellIndex: number) => void;
+  onCellLeave?: () => void;
+};
 
 /**
  * One labelled row of byte cells for a single port.
  *
- * Cells reuse `.bytes-cell` so visual rhythm matches BytesView's flat
- * rows. The label sits to the left at fixed width so multi-row stacks
- * align column-wise (operand0 / operand1 / … cells start at the same x).
- *
- * Byte-format toggle (`useByteFormat`) is read inline on each cell so a
- * format flip re-renders text without unmounting the row.
+ * Cells reuse `.bytes-cell` so visual rhythm matches the step strip. The label
+ * sits to the left at fixed width so multi-row stacks align column-wise
+ * (operand0 / operand1 / … cells start at the same x). Output cells carry the
+ * hover handlers; input cells read `activeSources` to paint `.provenance-source`
+ * + a GF `×N` badge. Both the highlight class and `fmt()` are read INLINE in the
+ * JSX (not captured in a const) so they stay reactive (Solid `For` rows + the
+ * `feedback_solid_conditional_prop_reactivity` rule).
  */
-const PortRow = (props: { side: "input" | "output"; portName: string; bytes: Uint8Array }) => {
+const PortRow = (props: PortRowProps) => {
   const fmt = useByteFormat();
-  // Materialize byte indices once for the For loop. Keyed by index
-  // (which is monotonic and stable across re-renders for a given
-  // byte length) so Solid re-uses cell nodes when scrubbing between
-  // same-length frames. `createMemo` because the array is read twice
-  // (`<Show when={...length > 0}>` + `<For each>`).
   const cells = createMemo<readonly { index: number; byte: number }[]>(() => {
     const out: { index: number; byte: number }[] = [];
     for (let i = 0; i < props.bytes.length; i++) {
@@ -154,8 +229,35 @@ const PortRow = (props: { side: "input" | "output"; portName: string; bytes: Uin
         <Show when={props.bytes.length > 0} fallback={<span class="muted small">(empty)</span>}>
           <For each={cells()}>
             {(cell) => (
-              <div class="bytes-cell" title={`index ${cell.index}`}>
+              <div
+                class="bytes-cell"
+                classList={{
+                  "provenance-source":
+                    props.side === "input" &&
+                    (props.activeSources?.().has(`${props.portName}:${cell.index}`) ?? false),
+                  "provenance-hoverable": props.side === "output" && (props.hoverable ?? false),
+                }}
+                title={`index ${cell.index}`}
+                onMouseEnter={
+                  props.side === "output"
+                    ? () => props.onCellEnter?.(props.portName, cell.index)
+                    : undefined
+                }
+                onMouseLeave={props.side === "output" ? () => props.onCellLeave?.() : undefined}
+              >
                 {formatByte(cell.byte, fmt())}
+                {/* GF coefficient badge (MixColumns). `get` returns the label
+                    string for a highlighted source cell, undefined otherwise —
+                    so the badge shows only on labelled contributors. */}
+                <Show
+                  when={
+                    props.side === "input"
+                      ? props.activeSources?.().get(`${props.portName}:${cell.index}`)
+                      : undefined
+                  }
+                >
+                  {(label) => <span class="provenance-label">{label()}</span>}
+                </Show>
               </div>
             )}
           </For>

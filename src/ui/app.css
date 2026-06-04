@@ -659,6 +659,53 @@ button:disabled {
   gap: 2px;
 }
 
+/* ─── Cell-level provenance hover ──────────────────────────────────────── */
+/* inspector-cell-hover plan, Slice 2 (2026-06-04). Hovering an OUTPUT cell
+   lights up the INPUT cell(s) that feed it. ALL rules are scoped under
+   `.port-flow-view` so they can't leak onto the `.bytes-cell` shared with the
+   StepStrip thumbnails. The source cells need `position: relative` to anchor
+   the absolute GF badge (scoped, so StepStrip cells are untouched). */
+.port-flow-view .bytes-cell {
+  position: relative;
+}
+
+/* Output cells whose step type has an exact provenance mapping read as
+   interactive (cursor + a faint outline on :hover). Approximate / plumbing
+   primitives get no `.provenance-hoverable` class, so they look inert —
+   honest, since hovering them highlights nothing. */
+.port-flow-view .bytes-cell.provenance-hoverable {
+  cursor: help;
+}
+.port-flow-view .bytes-cell.provenance-hoverable:hover {
+  outline: 1.5px solid var(--muted);
+  outline-offset: -1.5px;
+}
+
+/* The highlighted input contributor(s) of the hovered output cell. */
+.port-flow-view .bytes-cell.provenance-source {
+  background: var(--accent);
+  color: var(--bg);
+  outline: 1.5px solid var(--accent);
+  outline-offset: -1.5px;
+}
+
+/* GF(2⁸) coefficient badge (MixColumns `×2` / `×3`). Absolutely positioned so
+   it overlays the corner WITHOUT changing the cell's box — `.port-row` keeps
+   cells column-aligned, and a width-changing badge would break that. */
+.port-flow-view .provenance-label {
+  position: absolute;
+  top: -6px;
+  right: -4px;
+  font-size: 9px;
+  line-height: 1;
+  padding: 1px 3px;
+  border-radius: 6px;
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  pointer-events: none;
+}
+
 /* ─── Mixed-shape boundary frames ─────────────────────────────────────── */
 /* When a step transitions between bytes and matrix shapes (load-block /
    store-block), we render the two sides side-by-side in a single block.
