@@ -38,7 +38,7 @@ import { CIPHER_IDS, HASH_IDS } from "@/core/document-schema";
 import type { StepLeaf, StepNode } from "@/core/types";
 import { ParamEditor } from "@/ui/components/ParamEditor";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
-import { __resetSpecForTests, setCipher, setHash, useSpec } from "@/ui/stores/spec";
+import { __resetSpecForTests, setAsymmetric, setCipher, setHash, useSpec } from "@/ui/stores/spec";
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -99,4 +99,22 @@ describe("ParamEditor coverage — no raw-JSON fallback on shipped specs", () =>
       }
     });
   }
+
+  // RSA is the lone asymmetric family — not in CIPHER_IDS/HASH_IDS, so the loops
+  // above don't reach it. The five big-integer primitives (`mul@1` … `mod-
+  // inverse@1`) deliberately keep the raw-JSON fallback in v1 (plan-deferred —
+  // their params are read-only scalars), so a full RSA walk would (correctly)
+  // trip the assertion. The Phase-2 publish tail, however, ships its OWN block
+  // (RsaPublishKeyParamsBlock) — assert it specifically renders, not the
+  // fallback, so the new component can't silently regress to a JSON dump.
+  it("rsa.publish-key-params@1 renders its real block (public/private key split)", () => {
+    setAsymmetric("rsa"); // store → kind:"asymmetric", active spec = rsaEncryptSpec
+    const { queryByText, unmount } = render(() => <ParamEditor stepId="publish-key" />);
+    expect(queryByText(FALLBACK_RE)).toBeNull();
+    // The block's distinctive content — the public-key (n, e) / private-key
+    // (n, d) split — proves RsaPublishKeyParamsBlock rendered, not a sibling.
+    expect(queryByText(/Public key/)).not.toBeNull();
+    expect(queryByText(/Private key/)).not.toBeNull();
+    unmount();
+  });
 });
