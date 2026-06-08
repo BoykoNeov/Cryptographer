@@ -1368,11 +1368,21 @@ const DesPublishRoundKeysBlock = (props: { step: StepLeaf }) => {
 
 // rsa.publish-key-params@1 — the aux-publish tail of the RSA "Key Generation"
 // group (RSA Phase 2). Read-only structural view (parallel to the
-// publish-round-keys blocks). RSA's exports are NAMED (n / e / d), not indexed,
-// and frame the public-key (n, e) / private-key (n, d) split.
+// publish-round-keys blocks). RSA's exports are NAMED (n / e / d), not indexed.
+// Each direction publishes exactly the key its ladder uses — the public key
+// {n, e} on encrypt, the private key {n, d} on decrypt — so the rows are
+// derived from `params.keys`, not hardcoded.
 const RsaPublishKeyParamsBlock = (props: { step: StepLeaf }) => {
-  const prefix = (): string =>
-    (props.step.params as { outputPrefix?: string }).outputPrefix ?? "rsa";
+  const params = (): { outputPrefix?: string; keys?: readonly string[] } =>
+    props.step.params as never;
+  const prefix = (): string => params().outputPrefix ?? "rsa";
+  const keys = (): readonly string[] => params().keys ?? [];
+  // The private exponent d marks the private key; otherwise it's the public key.
+  const keyKind = (): string => (keys().includes("d") ? "Private key" : "Public key");
+  const published = (): string =>
+    keys()
+      .map((k) => `${prefix()}.${k}`)
+      .join(", ");
   return (
     <>
       <dl class="param-scalars">
@@ -1381,22 +1391,16 @@ const RsaPublishKeyParamsBlock = (props: { step: StepLeaf }) => {
           <dd>{prefix()}</dd>
         </div>
         <div class="param-scalar-row">
-          <dt>Public key</dt>
-          <dd>
-            ({prefix()}.n, {prefix()}.e)
-          </dd>
-        </div>
-        <div class="param-scalar-row">
-          <dt>Private key</dt>
-          <dd>
-            ({prefix()}.n, {prefix()}.d)
-          </dd>
+          <dt>{keyKind()} (published)</dt>
+          <dd>{published()}</dd>
         </div>
       </dl>
       <p class="muted small">
-        Writes the derived modulus n and exponents e / d into the aux map so the exponentiation
-        ladder can read them across the Key-Generation group boundary. The interesting math is the n
-        = p·q / φ = (p−1)(q−1) / d = e⁻¹ mod φ leaves above this tail; this param is structural.
+        Writes this direction's key material into the aux map so the exponentiation ladder can read
+        it across the Key-Generation group boundary. Encryption exports the public key (n, e);
+        decryption the private key (n, d) — each tail publishes exactly the key it uses, so nothing
+        is written-but-unread. The interesting math is the n = p·q / φ = (p−1)(q−1) / d = e⁻¹ mod φ
+        leaves above this tail; these params are structural.
       </p>
     </>
   );

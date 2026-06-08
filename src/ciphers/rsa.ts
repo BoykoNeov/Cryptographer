@@ -265,6 +265,23 @@ export const buildRsaSpec = (
   // public `e`, decrypt the derived private `d`. Both wire to `load-exp`.
   const exponentAuxKey = direction === "encrypt" ? `${RSA_AUX_PREFIX}.e` : `${RSA_AUX_PREFIX}.d`;
 
+  // The publish tail exports exactly the key this direction's ladder consumes:
+  // the public key {n, e} on encrypt, the private key {n, d} on decrypt. (Both
+  // also export `n`, the shared modulus.) Building `portInputs` from the same
+  // list keeps the ports and the published-aux-keys in lockstep.
+  const publishedKeys: readonly string[] = direction === "encrypt" ? ["n", "e"] : ["n", "d"];
+  const publishSource: Record<string, PortBinding> = {
+    n: port("n", "output"),
+    e: port("load-e", "output"),
+    d: port("d", "output"),
+  };
+  const publishInputs: Record<string, PortBinding> = {};
+  for (const k of publishedKeys) {
+    const src = publishSource[k];
+    if (src === undefined) throw new Error(`buildRsaSpec: no source for published key "${k}"`);
+    publishInputs[k] = src;
+  }
+
   // ── Key generation (collapsible group) ───────────────────────────────────
   // p, q, e → n = p·q, φ = (p−1)(q−1), d = e⁻¹ mod φ — each a VISIBLE
   // port-native frame, in dependency order. The `rsa.publish-key-params@1`
@@ -346,20 +363,20 @@ export const buildRsaSpec = (
       portInputs: { value: port("load-e", "output"), modulus: port("phi", "output") },
       narrationOverride: NARR_D,
     },
-    // Publish tail: mirror n / e / d into aux["rsa.n" | "rsa.e" | "rsa.d"] so
-    // the ladder can read them across the group boundary (`aux` is the only
-    // cross-scope channel). This is also where RSA's two keys become concrete:
-    // public (n, e) and private (n, d).
+    // Publish tail: mirror this direction's key material into aux["rsa.*"] so
+    // the ladder can read it across the group boundary (`aux` is the only
+    // cross-scope channel). Each direction publishes EXACTLY the key its ladder
+    // consumes — the public key {n, e} on encrypt, the private key {n, d} on
+    // decrypt — so RSA's two-key split is concrete AND nothing is written-but-
+    // unread (publishing the unused exponent would draw an `unused-write`
+    // warning on the default spec). `d` is still derived + narrated above for
+    // both directions; in encrypt its output simply goes unconsumed.
     {
       kind: "step",
       id: "publish-key",
       type: "rsa.publish-key-params@1",
-      params: { outputPrefix: RSA_AUX_PREFIX },
-      portInputs: {
-        n: port("n", "output"),
-        e: port("load-e", "output"),
-        d: port("d", "output"),
-      },
+      params: { outputPrefix: RSA_AUX_PREFIX, keys: [...publishedKeys] },
+      portInputs: publishInputs,
     },
   ];
 

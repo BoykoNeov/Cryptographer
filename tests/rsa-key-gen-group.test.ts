@@ -19,6 +19,7 @@
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { RSA_AUX_PREFIX, buildRsaSpec } from "@/ciphers/rsa";
 import { bigIntToBytes, bytesToBigInt } from "@/core/big-int-codec";
+import { deriveAuxGraph, validateGraph } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import type { StepNode, Trace } from "@/core/types";
 import { publishKeyParams, publishKeyParamsMeta } from "@/steps/publish-key-params";
@@ -85,10 +86,15 @@ describe("RSA Phase 2 — Key-Generation group structure", () => {
 });
 
 describe("RSA Phase 2 — cross-scope aux export is byte-identical", () => {
-  it("the publish tail emits n=3233, e=17, d=2753 on its output ports", () => {
+  it("encrypt's publish tail emits the PUBLIC key {n=3233, e=17} on its output ports", () => {
     const trace = runRsa("encrypt", 65);
     expect(frameOut(trace, "publish-key", "n")).toBe(3233n);
     expect(frameOut(trace, "publish-key", "e")).toBe(17n);
+  });
+
+  it("decrypt's publish tail emits the PRIVATE key {n=3233, d=2753} on its output ports", () => {
+    const trace = runRsa("decrypt", 2790);
+    expect(frameOut(trace, "publish-key", "n")).toBe(3233n);
     expect(frameOut(trace, "publish-key", "d")).toBe(2753n);
   });
 
@@ -107,47 +113,81 @@ describe("RSA Phase 2 — cross-scope aux export is byte-identical", () => {
     expect(frameOut(trace, "load-exp")).toBe(2753n);
   });
 
-  it("the publish frame writes the three named aux keys (rsa.n / rsa.e / rsa.d)", () => {
-    const trace = runRsa("encrypt", 65);
-    const frame = trace.frames.find((f) => f.stepId === "publish-key");
-    if (!frame) throw new Error("no publish-key frame");
-    for (const name of ["n", "e", "d"]) {
-      expect(frame.auxWritten.has(`${RSA_AUX_PREFIX}.${name}`)).toBe(true);
-    }
+  it("each direction publishes EXACTLY its consumed key (no unused aux write)", () => {
+    // Encrypt writes the public key {rsa.n, rsa.e} and NOT rsa.d — publishing
+    // the unused private exponent would leave an unread aux value (unused-write
+    // warning). Decrypt is the mirror.
+    const enc = runRsa("encrypt", 65).frames.find((f) => f.stepId === "publish-key");
+    if (!enc) throw new Error("no encrypt publish-key frame");
+    expect(enc.auxWritten.has(`${RSA_AUX_PREFIX}.n`)).toBe(true);
+    expect(enc.auxWritten.has(`${RSA_AUX_PREFIX}.e`)).toBe(true);
+    expect(enc.auxWritten.has(`${RSA_AUX_PREFIX}.d`)).toBe(false);
+
+    const dec = runRsa("decrypt", 2790).frames.find((f) => f.stepId === "publish-key");
+    if (!dec) throw new Error("no decrypt publish-key frame");
+    expect(dec.auxWritten.has(`${RSA_AUX_PREFIX}.n`)).toBe(true);
+    expect(dec.auxWritten.has(`${RSA_AUX_PREFIX}.d`)).toBe(true);
+    expect(dec.auxWritten.has(`${RSA_AUX_PREFIX}.e`)).toBe(false);
   });
 });
 
+describe("RSA Phase 2 — graph validates with no unused-write warnings", () => {
+  // The durable encoding of what the manual browser pass caught: publishing all
+  // three key parameters left rsa.d (encrypt) / rsa.e (decrypt) written-but-
+  // unread, which `validateGraph` flags as `unused-write` — an orange warning
+  // glyph on the DEFAULT spec. Publishing only the consumed key removes it.
+  for (const direction of ["encrypt", "decrypt"] as const) {
+    it(`${direction} produces zero unused-write warnings`, () => {
+      const spec = buildRsaSpec(direction, W);
+      const trace = runRsa(direction, direction === "encrypt" ? 65 : 2790);
+      const warnings = validateGraph(deriveAuxGraph(trace, spec), trace);
+      const unused = warnings.filter((w) => w.kind === "unused-write");
+      expect(unused, `unexpected unused-write warnings: ${JSON.stringify(unused)}`).toEqual([]);
+    });
+  }
+});
+
 describe("rsa.publish-key-params@1 executor + meta contract", () => {
-  const params = { outputPrefix: RSA_AUX_PREFIX };
   // The executor ignores ctx (aux-only via meta); a minimal valid StepContext.
   const ctx = { stepId: "publish-key", path: [], aux: new Map() };
 
-  it("is an identity passthrough on its three named ports", () => {
+  it("is an identity passthrough on exactly the keys it is told to publish", () => {
+    // Encrypt-shaped instance: publishes the public key {n, e}.
+    const params = { outputPrefix: RSA_AUX_PREFIX, keys: ["n", "e"] };
     const inputs = new Map<string, Uint8Array>([
       ["n", bigIntToBytes(3233n, W)],
       ["e", bigIntToBytes(17n, W)],
-      ["d", bigIntToBytes(2753n, W)],
     ]);
     const out = publishKeyParams(inputs, params, ctx);
     expect(bytesToBigInt(out.get("n") as Uint8Array)).toBe(3233n);
     expect(bytesToBigInt(out.get("e") as Uint8Array)).toBe(17n);
-    expect(bytesToBigInt(out.get("d") as Uint8Array)).toBe(2753n);
+    expect(out.has("d")).toBe(false); // not in `keys` → not emitted
   });
 
-  it("throws a friendly error when a key-parameter port is unwired", () => {
+  it("throws when params.keys is missing or empty (no default — it is direction-specific)", () => {
+    const inputs = new Map<string, Uint8Array>([["n", bigIntToBytes(3233n, W)]]);
+    expect(() => publishKeyParams(inputs, { outputPrefix: RSA_AUX_PREFIX }, ctx)).toThrow(
+      /params\.keys/,
+    );
+  });
+
+  it("throws a friendly error when a listed key-parameter port is unwired", () => {
+    const params = { outputPrefix: RSA_AUX_PREFIX, keys: ["n", "d"] };
     const inputs = new Map<string, Uint8Array>([
       ["n", bigIntToBytes(3233n, W)],
-      ["e", bigIntToBytes(17n, W)],
       // d missing
     ]);
     expect(() => publishKeyParams(inputs, params, ctx)).toThrow(/input port "d"/);
   });
 
-  it("maps each output port to its prefixed aux key via meta.auxWritePorts", () => {
-    const bindings = publishKeyParamsMeta.auxWritePorts?.(params);
+  it("maps each published key to its prefixed aux key via meta.auxWritePorts", () => {
+    const bindings = publishKeyParamsMeta.auxWritePorts?.({
+      outputPrefix: RSA_AUX_PREFIX,
+      keys: ["n", "d"],
+    });
     expect(bindings?.get("n")).toBe("rsa.n");
-    expect(bindings?.get("e")).toBe("rsa.e");
     expect(bindings?.get("d")).toBe("rsa.d");
+    expect(bindings?.has("e")).toBe(false); // not published in this instance
   });
 });
 

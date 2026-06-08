@@ -107,14 +107,15 @@ describe("ParamEditor coverage — no raw-JSON fallback on shipped specs", () =>
   // trip the assertion. The Phase-2 publish tail, however, ships its OWN block
   // (RsaPublishKeyParamsBlock) — assert it specifically renders, not the
   // fallback, so the new component can't silently regress to a JSON dump.
-  it("rsa.publish-key-params@1 renders its real block (public/private key split)", () => {
+  it("rsa.publish-key-params@1 renders its real block (the published key)", () => {
     setAsymmetric("rsa"); // store → kind:"asymmetric", active spec = rsaEncryptSpec
     const { queryByText, unmount } = render(() => <ParamEditor stepId="publish-key" />);
     expect(queryByText(FALLBACK_RE)).toBeNull();
-    // The block's distinctive content — the public-key (n, e) / private-key
-    // (n, d) split — proves RsaPublishKeyParamsBlock rendered, not a sibling.
+    // The encrypt spec's tail publishes the PUBLIC key (n, e) — its distinctive
+    // "Public key (published)" row proves RsaPublishKeyParamsBlock rendered (not
+    // a sibling block or the JSON fallback).
     expect(queryByText(/Public key/)).not.toBeNull();
-    expect(queryByText(/Private key/)).not.toBeNull();
+    expect(queryByText(/rsa\.n, rsa\.e/)).not.toBeNull();
     unmount();
   });
 });

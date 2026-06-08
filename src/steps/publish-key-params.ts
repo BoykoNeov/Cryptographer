@@ -22,22 +22,30 @@
  * **Why a dedicated RSA step, not reuse a publish-round-keys sibling.** The
  * sibling tails publish INDEXED round keys (`key0`…`keyN` → `roundKey.0…N`).
  * RSA's exports are NAMED, not indexed — the public modulus `n`, the public
- * exponent `e`, and the private exponent `d` — and the "public key (n,e) /
- * private key (n,d)" split is itself the RSA lesson. Welding an indexed
- * `*.publish-round-keys@1` step into every saved RSA document's JSON would
- * also be cross-domain coupling in the persisted spec.
+ * exponent `e`, the private exponent `d` — and welding an indexed
+ * `*.publish-round-keys@1` step into every saved RSA document's JSON would be
+ * cross-domain coupling in the persisted spec.
  *
- * **What it publishes.** Strictly only `n` and `d` MUST cross the wall (`e` is
- * a `cipherConstant`, already materialized into `aux["e"]` before the walk, so
- * the encrypt ladder could read it directly). It re-publishes `e` anyway so
- * the tail names the complete key material in one place — the encrypt ladder
- * reads `aux["${prefix}.e"]`, the decrypt ladder reads `aux["${prefix}.d"]`,
- * and `aux["${prefix}.n"]` is the modulus for every rung either way.
+ * **Each direction exports exactly the key its ladder consumes** (`keys`
+ * param). Encryption exports the **public key** `{n, e}`; decryption exports
+ * the **private key** `{n, d}` — so the "public key (n, e) / private key
+ * (n, d)" split that IS the RSA lesson becomes concrete, AND no aux value is
+ * written-but-unread (publishing all three would mirror `rsa.d` in encrypt,
+ * which nothing reads → an `unused-write` warning glyph on the default spec).
+ * `d` is still computed + narrated in the group for both directions; in
+ * encrypt its output simply goes unconsumed downstream (as in flat Phase 1 —
+ * port outputs, unlike aux writes, draw no validator warning).
  *
- * Contract: 3 input ports `n`, `e`, `d` (wired from the key-gen leaves) →
- * identity passthrough to the same-named output ports; `meta.auxWritePorts`
- * mirrors `name → aux[${outputPrefix}.${name}]`. No state ports (aux-only —
- * the carried block, the message bytes, passes through untouched).
+ * Contract: one input port per name in `params.keys` (wired from the key-gen
+ * leaves) → identity passthrough to the same-named output ports;
+ * `meta.auxWritePorts` mirrors `name → aux[${outputPrefix}.${name}]`. No state
+ * ports (aux-only — the carried block, the message bytes, passes through
+ * untouched).
+ *
+ * **Version note.** `keys` was added (replacing the original fixed `n`/`e`/`d`
+ * triple) within the same unreleased cycle this step type first shipped — no
+ * saved document can reference the old shape, so `@1` is amended rather than
+ * bumped to `@2`.
  */
 
 import type {
@@ -49,11 +57,10 @@ import type {
   StepDocumentation,
 } from "../core/types";
 
-/** The three named key parameters RSA exports across the group wall. */
-const KEY_PARAM_PORTS = ["n", "e", "d"] as const;
-
 type Params = {
   readonly outputPrefix: string;
+  /** The named key parameters this instance publishes (e.g. ["n", "e"]). */
+  readonly keys: readonly string[];
 };
 
 const readParams = (params: Json): Params => {
@@ -64,22 +71,35 @@ const readParams = (params: Json): Params => {
   if (typeof p.outputPrefix !== "string" || p.outputPrefix.length === 0) {
     throw new Error("rsa.publish-key-params: params.outputPrefix must be a non-empty string");
   }
-  return { outputPrefix: p.outputPrefix };
+  // `keys` is REQUIRED with no default: the set of published keys is
+  // direction-specific (public {n,e} vs private {n,d}), so a default would
+  // either re-introduce the unused-write warning or export the wrong key.
+  if (
+    !Array.isArray(p.keys) ||
+    p.keys.length === 0 ||
+    !p.keys.every((k) => typeof k === "string" && k.length > 0)
+  ) {
+    throw new Error(
+      'rsa.publish-key-params: params.keys must be a non-empty array of non-empty strings (the named key parameters to publish, e.g. ["n", "e"])',
+    );
+  }
+  return { outputPrefix: p.outputPrefix, keys: p.keys as string[] };
 };
 
 /**
- * Identity passthrough: read each key parameter off its input port and re-emit
- * it on the same-named output port. The runtime's `meta.auxWritePorts` step
- * then mirrors every output port into `aux[${outputPrefix}.${name}]`.
+ * Identity passthrough: read each published key parameter off its input port
+ * and re-emit it on the same-named output port. The runtime's
+ * `meta.auxWritePorts` step then mirrors every output port into
+ * `aux[${outputPrefix}.${name}]`.
  */
 export const publishKeyParams: PortedExecutor = (inputs, params, _ctx) => {
-  readParams(params);
+  const { keys } = readParams(params);
   const outputs = new Map<string, Uint8Array>();
-  for (const name of KEY_PARAM_PORTS) {
+  for (const name of keys) {
     const v = inputs.get(name);
     if (!(v instanceof Uint8Array)) {
       throw new Error(
-        `rsa.publish-key-params: input port "${name}" must carry a key parameter (wire from the key-gen leaves: n, load-e, d)`,
+        `rsa.publish-key-params: input port "${name}" must carry a key parameter (wire it from the key-gen leaves: n, load-e, or d)`,
       );
     }
     outputs.set(name, v);
@@ -88,16 +108,18 @@ export const publishKeyParams: PortedExecutor = (inputs, params, _ctx) => {
 };
 
 // ─── Port contract ──────────────────────────────────────────────────────────
-// Both sides expose the same three named ports. `byteLength` ABSENT —
-// polymorphic, matching the publish-round-keys siblings: the RSA working width
-// `W` lives in the spec builder, not this step, and the runtime's port-length
-// coercion aligns the actual values either way.
+// One port per published key. `byteLength` ABSENT — polymorphic, matching the
+// publish-round-keys siblings: the RSA working width `W` lives in the spec
+// builder, not this step, and the runtime's port-length coercion aligns the
+// actual values either way. Function form because the port SET varies with
+// `params.keys`.
 
 const KEY_PARAM_PORT_SHAPE: PortShape = { layout: "raw" };
 
-const keyParamPortMap = (): ReadonlyMap<string, PortShape> => {
+const keyParamPortMap = (params: Json): ReadonlyMap<string, PortShape> => {
+  const { keys } = readParams(params);
   const m = new Map<string, PortShape>();
-  for (const name of KEY_PARAM_PORTS) m.set(name, KEY_PARAM_PORT_SHAPE);
+  for (const name of keys) m.set(name, KEY_PARAM_PORT_SHAPE);
   return m;
 };
 
@@ -109,17 +131,17 @@ export const publishKeyParamsPortContract: PortContract = {
 // ─── Projection metadata (the one meta in the decomposed key generation) ────
 // Aux-only: no `stateInputPort` / `stateOutputPort` — the carried block (the
 // message bytes) is preserved across the call. `auxWritePorts` maps each
-// output port to its `aux[${outputPrefix}.${name}]` key, so the top-level
+// published key to its `aux[${outputPrefix}.${name}]` key, so the top-level
 // `aux-load-bytes@1` loaders that feed the exponentiation ladder read the
-// computed n / e / d back out across the group boundary.
+// computed parameters back out across the group boundary.
 
 export const publishKeyParamsMeta: ProjectionMetadata = {
   // Ceremonial — required by the type but never consulted for an aux-only step.
   stateLayout: "bytes",
   auxWritePorts: (params: Json) => {
-    const p = readParams(params);
+    const { outputPrefix, keys } = readParams(params);
     const bindings = new Map<string, string>();
-    for (const name of KEY_PARAM_PORTS) bindings.set(name, `${p.outputPrefix}.${name}`);
+    for (const name of keys) bindings.set(name, `${outputPrefix}.${name}`);
     return bindings;
   },
 };
@@ -129,43 +151,46 @@ export const publishKeyParamsMeta: ProjectionMetadata = {
 export const publishKeyParamsDoc: StepDocumentation = {
   name: "Publish key parameters (RSA)",
   summary:
-    "Write the derived RSA key parameters (modulus n, public exponent e, private exponent d) into the aux map.",
+    "Write this direction's RSA key material (the modulus n + the active exponent) into the aux map.",
   detail: `## Publish key parameters (RSA)
 
 The tail of the "Key Generation" group. The leaves above this step have
 already computed the modulus \`n = p·q\`, Euler's totient \`φ(n) =
 (p−1)(q−1)\`, and the private exponent \`d = e⁻¹ mod φ(n)\` as visible
-port-native frames; this leaf takes the finished parameters on its input
-ports \`n\`, \`e\`, \`d\` and publishes them into the aux map as
-\`\${outputPrefix}.n\`, \`\${outputPrefix}.e\`, \`\${outputPrefix}.d\`
-(typically \`rsa.n\`, \`rsa.e\`, \`rsa.d\`).
+port-native frames; this leaf takes the parameters this direction needs on its
+input ports and publishes them into the aux map as
+\`\${outputPrefix}.<name>\` (typically \`rsa.n\`, \`rsa.e\`, \`rsa.d\`).
 
 ## Why a publish step is needed
 
 Key generation lives inside a collapsible group. A group walks its children
 in an isolated scope, so the exponentiation ladder OUTSIDE the group cannot
-wire a port directly to \`n\` or \`d\` INSIDE it. The aux map is global — it
-is the one channel that crosses the group boundary — so this tail mirrors the
-key parameters into aux, and the ladder reads them back via top-level
+wire a port directly to \`n\` or the exponent INSIDE it. The aux map is global
+— it is the one channel that crosses the group boundary — so this tail mirrors
+the key parameters into aux, and the ladder reads them back via top-level
 \`aux-load-bytes@1\` loaders. The carried state (the message bytes) passes
 through this step untouched; the work product lives entirely in the aux map.
 
 ## The public / private key split
 
-This step is where RSA's two keys become concrete:
+Each direction publishes exactly the key its ladder uses:
 
-- **Public key** = (n, e) — used to encrypt: \`c = mᵉ mod n\`.
-- **Private key** = (n, d) — used to decrypt: \`m = cᵈ mod n\`.
+- **Encrypt** publishes the **public key** \`{n, e}\` → \`c = mᵉ mod n\`.
+- **Decrypt** publishes the **private key** \`{n, d}\` → \`m = cᵈ mod n\`.
 
-The modulus \`n\` is shared by both. The encrypt ladder reads
-\`\${outputPrefix}.e\`; the decrypt ladder reads \`\${outputPrefix}.d\`. (Only
-\`n\` and \`d\` strictly need to cross the group wall — \`e\` is an editable
-constant already in aux — but publishing all three names the complete key
-material in one place.)`,
+The modulus \`n\` is shared by both. Publishing only the consumed key is the
+cross-mode asymmetry made concrete — and it avoids writing an aux value that
+nothing reads (which would draw an \`unused-write\` warning). The private
+exponent \`d\` is still derived and narrated in the key-gen group even when
+encrypting; its output simply goes unconsumed there.`,
   params: new Map([
     [
       "outputPrefix",
-      'Prefix for the key-parameter aux entries. With "rsa", outputs are rsa.n, rsa.e, rsa.d.',
+      'Prefix for the key-parameter aux entries. With "rsa", outputs are rsa.<name>.',
+    ],
+    [
+      "keys",
+      'The named key parameters this instance publishes. Encrypt → ["n", "e"] (public key); decrypt → ["n", "d"] (private key).',
     ],
   ]),
   references: [

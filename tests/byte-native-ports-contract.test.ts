@@ -98,6 +98,7 @@ const KITCHEN_SINK: Json = {
   inputCount: 2,
   rounds: 1,
   outputPrefix: "roundKey", // aes.publish-round-keys@1 (key-schedule decomposition)
+  keys: ["n", "e"], // rsa.publish-key-params@1 (RSA Phase 2 — per-direction key set)
   widths: [4],
   byteLength: 4,
   auxName: "probe",
