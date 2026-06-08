@@ -40,7 +40,7 @@
  * `pow(65,17,3233)=2790` round-trips back to 65.
  */
 
-import type { CipherSpec, PortBinding, StepNode } from "../core/types";
+import type { CipherSpec, PortBinding, StepDocumentation, StepNode } from "../core/types";
 import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "../core/types";
 
 // ─── Tunables ─────────────────────────────────────────────────────────────
@@ -78,6 +78,167 @@ const beBytes = (value: number, width: number): Uint8Array => {
 const beConst = (value: number, width: number): number[] => Array.from(beBytes(value, width));
 
 const port = (node: string, p: string): PortBinding => ({ node, port: p });
+
+// ─── narrationOverride docs (RSA Phase 2) ───────────────────────────────────
+// Per-leaf friendly names + prose for the inspector, attached via the spec
+// leaf's `narrationOverride` field (the registry doc is the generic primitive's
+// — `mul@1` is "Multiply", but THIS `mul` leaf is "Modulus n = p·q"). Same
+// idiom as the four key-schedule builders: shared static docs for the leaves
+// that say the same thing every time, small functions for the ladder rungs that
+// bake in the rung number / exponent-bit index (both known at spec-build time —
+// only whether the bit is 0 or 1 is runtime-dependent, which is the dynamic
+// `src/ui/narration/` registry's job, out of scope for a static override).
+
+const NARR_LOAD_P: StepDocumentation = {
+  name: "Load prime p",
+  summary: "Read the first secret prime p from the editable key constants.",
+  detail: `## Load prime p
+
+\`p\` is one of the two secret primes whose product is the public modulus
+\`n = p·q\`. It is read from the editable \`cipherConstants\` (default 61 in the
+textbook example) — edit it and the whole derivation (n, φ, d) re-runs live.
+
+RSA's security rests on the difficulty of recovering \`p\` and \`q\` from the
+public \`n\`: multiplying two primes is easy, factoring their product is not.`,
+  references: ["Rivest, Shamir, Adleman 1978"],
+};
+
+const NARR_LOAD_Q: StepDocumentation = {
+  name: "Load prime q",
+  summary: "Read the second secret prime q from the editable key constants.",
+  detail: `## Load prime q
+
+\`q\` is the second secret prime (default 53). Together with \`p\` it forms the
+modulus \`n = p·q\` and Euler's totient \`φ(n) = (p−1)(q−1)\`. Both primes are
+secret; only their product \`n\` is published.`,
+  references: ["Rivest, Shamir, Adleman 1978"],
+};
+
+const NARR_LOAD_E: StepDocumentation = {
+  name: "Load public exponent e",
+  summary: "Read the public exponent e — half of the public key (n, e).",
+  detail: `## Load public exponent e
+
+\`e\` is the public encryption exponent (default 17; real keys commonly use
+65537). It must be **coprime to φ(n)** — \`gcd(e, φ) = 1\` — so that the private
+exponent \`d = e⁻¹ mod φ\` exists. Pick an \`e\` sharing a factor with φ and the
+modular-inverse step throws, which is the honest "that e is not a valid public
+exponent."`,
+  references: ["Rivest, Shamir, Adleman 1978"],
+};
+
+const NARR_ONE: StepDocumentation = {
+  name: "Constant 1",
+  summary: "The literal 1 used to form p − 1 and q − 1 for the totient.",
+  detail: `## Constant 1
+
+A literal \`1\`, subtracted from each prime to build Euler's totient
+\`φ(n) = (p−1)(q−1)\`. Carried as a \`W\`-byte value so it lines up with the
+prime widths at the subtraction's ports.`,
+};
+
+const NARR_N: StepDocumentation = {
+  name: "Modulus n = p·q",
+  summary: "Multiply the two primes to form the public modulus n.",
+  detail: `## Modulus n = p·q
+
+The **public modulus** — shared by both encryption (\`c = mᵉ mod n\`) and
+decryption (\`m = cᵈ mod n\`), and threaded to every ladder rung as the
+\`modulus\`. Its bit-length is the RSA "key size." For the textbook example
+\`n = 61·53 = 3233\`.
+
+Recovering the secret primes from \`n\` is the integer-factorization problem —
+believed hard for large \`n\`, which is what keeps the private key private.`,
+  references: ["Rivest, Shamir, Adleman 1978"],
+};
+
+const NARR_P_MINUS_1: StepDocumentation = {
+  name: "p − 1",
+  summary: "Subtract 1 from p — a factor of Euler's totient φ(n).",
+  detail: `## p − 1
+
+One factor of \`φ(n) = (p−1)(q−1)\`. Because \`n\`'s only prime factors are
+\`p\` and \`q\`, Euler's totient factors this cleanly — that closed form is
+exactly what makes \`d\` computable by someone who knows \`p\` and \`q\` (and
+intractable for someone who knows only \`n\`).`,
+};
+
+const NARR_Q_MINUS_1: StepDocumentation = {
+  name: "q − 1",
+  summary: "Subtract 1 from q — the other factor of Euler's totient φ(n).",
+  detail: `## q − 1
+
+The second factor of \`φ(n) = (p−1)(q−1)\`. See "p − 1" — together these give
+the totient that the private exponent is defined modulo.`,
+};
+
+const NARR_PHI: StepDocumentation = {
+  name: "Totient φ(n) = (p−1)(q−1)",
+  summary: "Euler's totient of n — the modulus for the private-exponent inverse.",
+  detail: `## Euler's totient φ(n)
+
+\`φ(n)\` counts the integers in \`[1, n]\` that are coprime to \`n\`. For a
+product of two distinct primes it is \`(p−1)(q−1)\` (here \`60·52 = 3120\`).
+
+The private exponent is defined **modulo φ(n)**: \`d = e⁻¹ mod φ(n)\`. Euler's
+theorem (\`mᵠ⁽ⁿ⁾ ≡ 1 mod n\` for \`gcd(m, n) = 1\`) is what makes
+\`(mᵉ)ᵈ ≡ m mod n\` — i.e. why decryption undoes encryption.
+
+(The Carmichael function \`λ(n)\` also yields a valid, smaller \`d\`; this
+textbook build uses \`φ\`, the classic presentation.)`,
+  references: ["Rivest, Shamir, Adleman 1978"],
+};
+
+const NARR_D: StepDocumentation = {
+  name: "Private exponent d = e⁻¹ mod φ(n)",
+  summary: "Modular inverse of e modulo φ(n) — the private key exponent.",
+  detail: `## Private exponent d
+
+\`d\` is the unique value in \`[0, φ(n))\` with \`e·d ≡ 1 (mod φ(n))\` — the
+**modular multiplicative inverse** of \`e\`. It exists if and only if
+\`gcd(e, φ) = 1\` (the coprimality precondition), by Bézout's identity: the
+extended Euclidean algorithm finds \`x, y\` with \`e·x + φ·y = gcd(e, φ)\`, and
+when that gcd is 1, \`x mod φ\` is \`d\`. For the textbook key
+\`d = 17⁻¹ mod 3120 = 2753\`.
+
+The pair \`(n, d)\` is the **private key**. v1 computes \`d\` in a single oracle
+frame; a later phase decomposes the extended-Euclid loop into traced steps.`,
+  references: [
+    "Rivest, Shamir, Adleman 1978",
+    "Knuth, TAOCP Vol. 2 §4.5.2 — the extended Euclidean algorithm",
+  ],
+};
+
+/** Square rung `rungNum` of `total` (1-indexed for humans). */
+const NARR_SQUARE = (rungNum: number, total: number): StepDocumentation => ({
+  name: `Square (rung ${rungNum}/${total})`,
+  summary: "result ← result² mod n — the unconditional squaring step of the rung.",
+  detail: `## Square (rung ${rungNum} of ${total})
+
+Left-to-right binary exponentiation processes the exponent one bit per rung,
+**squaring the accumulator every rung**: \`result ← result² mod n\`. (Squaring
+is a \`mod-mul\` with both factors wired to the same upstream port.) Reducing
+mod \`n\` each step keeps the accumulator bounded — this is what makes
+exponentiating a huge exponent tractable.`,
+  references: ["Knuth, TAOCP Vol. 2 §4.6.3 — evaluation of powers"],
+});
+
+/** Conditional multiply testing exponent bit `bitIndex` (the rung's fixed bit). */
+const NARR_COND_MULT = (bitIndex: number): StepDocumentation => ({
+  name: `Multiply if exponent bit ${bitIndex} is set`,
+  summary: `result ← result · base mod n when exponent bit ${bitIndex} is 1, else carry forward.`,
+  detail: `## Conditional multiply (exponent bit ${bitIndex})
+
+The other half of the rung. It reads **bit ${bitIndex}** of the exponent AT
+RUNTIME: if that bit is **1**, multiply the accumulator by the base (the message
+\`m\` on encrypt, the ciphertext \`c\` on decrypt) mod \`n\`; if **0**, carry the
+squared accumulator forward unchanged.
+
+Because the bit is read live, editing the exponent (\`e\`, or \`p,q\` → \`d\`)
+flips exactly which rungs multiply — and the trace re-runs. The 0-bit rungs are
+honest identity frames: they show the squaring still happened, just no multiply.`,
+  references: ["Knuth, TAOCP Vol. 2 §4.6.3 — evaluation of powers"],
+});
 
 // ─── Spec builder ─────────────────────────────────────────────────────────
 
@@ -118,21 +279,30 @@ export const buildRsaSpec = (
       id: "load-p",
       type: "aux-load-bytes@1",
       params: { auxName: "p", byteLength: W },
+      narrationOverride: NARR_LOAD_P,
     },
     {
       kind: "step",
       id: "load-q",
       type: "aux-load-bytes@1",
       params: { auxName: "q", byteLength: W },
+      narrationOverride: NARR_LOAD_Q,
     },
     {
       kind: "step",
       id: "load-e",
       type: "aux-load-bytes@1",
       params: { auxName: "e", byteLength: W },
+      narrationOverride: NARR_LOAD_E,
     },
     // The literal 1, for p−1 / q−1.
-    { kind: "step", id: "one", type: "constant-load@1", params: { bytes: beConst(1, W) } },
+    {
+      kind: "step",
+      id: "one",
+      type: "constant-load@1",
+      params: { bytes: beConst(1, W) },
+      narrationOverride: NARR_ONE,
+    },
     // n = p · q  (the public modulus, published as `rsa.n` for every rung).
     {
       kind: "step",
@@ -140,6 +310,7 @@ export const buildRsaSpec = (
       type: "mul@1",
       params: {},
       portInputs: { a: port("load-p", "output"), b: port("load-q", "output") },
+      narrationOverride: NARR_N,
     },
     // φ(n) = (p − 1)(q − 1).
     {
@@ -148,6 +319,7 @@ export const buildRsaSpec = (
       type: "sub@1",
       params: {},
       portInputs: { a: port("load-p", "output"), b: port("one", "output") },
+      narrationOverride: NARR_P_MINUS_1,
     },
     {
       kind: "step",
@@ -155,6 +327,7 @@ export const buildRsaSpec = (
       type: "sub@1",
       params: {},
       portInputs: { a: port("load-q", "output"), b: port("one", "output") },
+      narrationOverride: NARR_Q_MINUS_1,
     },
     {
       kind: "step",
@@ -162,6 +335,7 @@ export const buildRsaSpec = (
       type: "mul@1",
       params: {},
       portInputs: { a: port("p-minus-1", "output"), b: port("q-minus-1", "output") },
+      narrationOverride: NARR_PHI,
     },
     // d = e⁻¹ mod φ(n)  (the private exponent; the decrypt ladder's exponent).
     {
@@ -170,6 +344,7 @@ export const buildRsaSpec = (
       type: "mod-inverse@1",
       params: {},
       portInputs: { value: port("load-e", "output"), modulus: port("phi", "output") },
+      narrationOverride: NARR_D,
     },
     // Publish tail: mirror n / e / d into aux["rsa.n" | "rsa.e" | "rsa.d"] so
     // the ladder can read them across the group boundary (`aux` is the only
@@ -246,6 +421,7 @@ export const buildRsaSpec = (
         b: prevResult,
         modulus: port("load-n", "output"),
       },
+      narrationOverride: NARR_SQUARE(j + 1, rungs),
     });
     // Conditional multiply by the base (message/ciphertext) when bit set; the
     // exponent comes from the published `rsa.e`/`rsa.d` loader.
@@ -260,6 +436,7 @@ export const buildRsaSpec = (
         exponent: port("load-exp", "output"),
         modulus: port("load-n", "output"),
       },
+      narrationOverride: NARR_COND_MULT(bitIndex),
     });
   }
 

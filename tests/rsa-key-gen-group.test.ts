@@ -20,12 +20,28 @@ import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { RSA_AUX_PREFIX, buildRsaSpec } from "@/ciphers/rsa";
 import { bigIntToBytes, bytesToBigInt } from "@/core/big-int-codec";
 import { runSpec } from "@/core/runtime";
-import type { Trace } from "@/core/types";
+import type { StepNode, Trace } from "@/core/types";
 import { publishKeyParams, publishKeyParamsMeta } from "@/steps/publish-key-params";
 import { describe, expect, it } from "vitest";
 
 const W = 2;
 const registry = buildDefaultRegistry();
+
+type StepLeaf = Extract<StepNode, { kind: "step" }>;
+
+/** Flatten a spec's step tree to its leaves (RSA nests one group; recurse). */
+const collectLeaves = (nodes: readonly StepNode[]): StepLeaf[] => {
+  const out: StepLeaf[] = [];
+  for (const n of nodes) {
+    if (n.kind === "step") out.push(n);
+    else if (n.kind === "group" || n.kind === "iterate") out.push(...collectLeaves(n.children));
+  }
+  return out;
+};
+
+/** Map of leaf id → its narrationOverride name (undefined if no override). */
+const overrideNames = (spec: { steps: readonly StepNode[] }): Map<string, string | undefined> =>
+  new Map(collectLeaves(spec.steps).map((leaf) => [leaf.id, leaf.narrationOverride?.name]));
 
 /** Run an RSA spec on a numeric message; return the trace. */
 const runRsa = (direction: "encrypt" | "decrypt", message: number): Trace =>
@@ -132,5 +148,41 @@ describe("rsa.publish-key-params@1 executor + meta contract", () => {
     expect(bindings?.get("n")).toBe("rsa.n");
     expect(bindings?.get("e")).toBe("rsa.e");
     expect(bindings?.get("d")).toBe("rsa.d");
+  });
+});
+
+describe("RSA Phase 2 — per-leaf narrationOverride", () => {
+  it("names every key-generation leaf with cipher-specific prose", () => {
+    // The registry doc for `mul@1` is the generic "Multiply"; the narration
+    // override is what makes THIS mul leaf read as "Modulus n = p·q" etc.
+    const names = overrideNames(buildRsaSpec("encrypt", W));
+    expect(names.get("load-p")).toBe("Load prime p");
+    expect(names.get("load-q")).toBe("Load prime q");
+    expect(names.get("load-e")).toBe("Load public exponent e");
+    expect(names.get("one")).toBe("Constant 1");
+    expect(names.get("n")).toBe("Modulus n = p·q");
+    expect(names.get("p-minus-1")).toBe("p − 1");
+    expect(names.get("q-minus-1")).toBe("q − 1");
+    expect(names.get("phi")).toBe("Totient φ(n) = (p−1)(q−1)");
+    expect(names.get("d")).toBe("Private exponent d = e⁻¹ mod φ(n)");
+  });
+
+  it("names ladder rungs with their rung number + tested exponent bit", () => {
+    const names = overrideNames(buildRsaSpec("encrypt", W));
+    const totalRungs = W * 8; // 16
+    // square-0 is rung 1 of 16; mult-0 tests the MSB (bitIndex = 15).
+    expect(names.get("square-0")).toBe(`Square (rung 1/${totalRungs})`);
+    expect(names.get("mult-0")).toBe("Multiply if exponent bit 15 is set");
+    // square-15 is the last rung; mult-15 tests the LSB (bitIndex = 0).
+    expect(names.get("square-15")).toBe(`Square (rung 16/${totalRungs})`);
+    expect(names.get("mult-15")).toBe("Multiply if exponent bit 0 is set");
+  });
+
+  it("leaves the publish tail to its registry doc (no override)", () => {
+    // The aux-publish tail's own StepDocumentation is already cipher-specific
+    // ("Publish key parameters (RSA)") — same posture as the key-schedule
+    // publish tails, which carry no narrationOverride either.
+    const names = overrideNames(buildRsaSpec("encrypt", W));
+    expect(names.get("publish-key")).toBeUndefined();
   });
 });
