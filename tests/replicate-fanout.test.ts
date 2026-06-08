@@ -152,15 +152,18 @@ describe("replicateHighFanoutSources", () => {
     }
   });
 
-  // ITERATE-family containers stay ineligible for replication even when set
-  // to "always" — they're spine loop structures, and replicating fully
-  // removes the source from the graph, erasing the loop from the main flow.
-  // Specific user-reported case (2026-05-16): post-Option-C a collapsed
-  // iterate stayed as a source with one outgoing aux edge to `concat-blocks`,
-  // and toggling it "always" produced a duplicate arrow + label-overflowing
-  // chip. (Collapsed GROUP containers ARE eligible — see the group cases
-  // below; the discriminator is `kind === "group" && childIds.length === 0`.)
-  it("skips iterate container sources even when set to 'always' in modes", () => {
+  // A FANOUT-1 iterate container stays un-replicated even when set to
+  // "always". This pins the user-reported 2026-05-16 case: a collapsed iterate
+  // left as a source with ONE outgoing aux edge to `concat-blocks`, toggled
+  // "always", produced a duplicate arrow + label-overflowing chip. Reference
+  // replication (2026-06-08) added a path for collapsed pure-aux iterates, but
+  // it requires ≥2 consumers — a single rerouted edge has nothing to declutter
+  // and just adds an indirection chip on the data path. So this fanout-1 case
+  // is still protected. (HIGH-fanout pure-aux iterates DO reference-replicate
+  // now — SHA-256's `msg-schedule`, fanout 64; see
+  // `replicate-pure-aux-iterate.test.ts`. Collapsed GROUP containers are FULLY
+  // replicated at any fanout — see the group cases below.)
+  it("skips a fanout-1 iterate container source even when set to 'always' in modes", () => {
     const g = {
       nodes: [
         {

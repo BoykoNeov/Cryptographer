@@ -24,6 +24,7 @@ dist
 test-results/
 playwright-report/
 .playwright/
+e2e/.artifacts/
 
 # Ad-hoc screenshot dumps from coordinator-driven multi-branch UX
 # captures (e.g. visual comparison of layout-constant bumps across

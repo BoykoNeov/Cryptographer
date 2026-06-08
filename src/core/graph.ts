@@ -1724,19 +1724,46 @@ export const replicateHighFanoutSources = (
   //     is ill-defined — and the body's real fan-out source (the inner leaf)
   //     already replicates on its own.
   //   - Iterate-family containers (iterate / for-each-subgraph /
-  //     for-each-subgraph-with-history): spine loop structures. Replicating a
-  //     source REMOVES it from the graph; for a spine iterate that erases the
-  //     loop from the main flow. This is the documented 2026-05-16 complaint —
-  //     a collapsed ECB iterate left as a source with one aux edge to
-  //     `concat-blocks`, where toggling "always" produced a duplicate arrow +
-  //     a label-overflowing chip. (A post-Run collapsed iterate ALSO fails the
-  //     childIds===[] test because expandCollapsedIterates repopulates its
-  //     childIds with block chips before this transform runs; the kind check
-  //     additionally covers the pre-Run / no-blockSpan iterate.)
+  //     for-each-subgraph-with-history) that sit on the SPINE (have an
+  //     outgoing state/port-flow edge): replicating a source REMOVES it from
+  //     the graph, and for a spine iterate that erases the loop from the main
+  //     flow. This is the documented 2026-05-16 complaint — a collapsed ECB
+  //     iterate left as a source with one aux edge to `concat-blocks`, where
+  //     toggling "always" produced a duplicate arrow + a label-overflowing
+  //     chip. (A post-Run collapsed iterate ALSO fails the childIds===[] test
+  //     because expandCollapsedIterates repopulates its childIds with block
+  //     chips before this transform runs; the kind check additionally covers
+  //     the pre-Run / no-blockSpan iterate.)
+  //
+  // EXCEPTION — collapsed PURE-AUX iterates (2026-06-08): an iterate-family
+  // container that is collapsed AND has aux fanout but NO outgoing state edge
+  // is a pure aux producer. SHA-256's `msg-schedule` publishes aux["W"] to all
+  // 64 rounds and is consumed by no port-flow, so deleting it would erase the
+  // loop box for no spine gain. Instead it gets REFERENCE replication: the box
+  // is KEPT and only its outgoing aux edges reroute to per-consumer chips (see
+  // `referenceReplicated` below). Its id goes in `referenceEligibleContainerIds`,
+  // NOT `ineligibleContainerIds`. (Verified `msg-schedule` is the ONLY newly
+  // qualifying container: ECB/CBC `*-blocks` iterates have ZERO outgoing edges
+  // so never enter the fanout map, and SHA-256's outer `blocks` iterate has an
+  // outgoing port-flow edge → stays spine-ineligible.)
+  const containersWithOutgoingStateEdge = new Set<string>();
+  for (const e of graph.edges) {
+    if (e.kind === "state") containersWithOutgoingStateEdge.add(e.from);
+  }
+  const ITERATE_FAMILY_KINDS = new Set<string>([
+    "iterate",
+    "for-each-subgraph",
+    "for-each-subgraph-with-history",
+  ]);
   const ineligibleContainerIds = new Set<string>();
+  const referenceEligibleContainerIds = new Set<string>();
   for (const c of graph.containers) {
-    const isCollapsedGroup = c.kind === "group" && c.childIds.length === 0;
-    if (!isCollapsedGroup) ineligibleContainerIds.add(c.id);
+    const collapsed = c.childIds.length === 0;
+    const isCollapsedGroup = c.kind === "group" && collapsed;
+    const isPureAuxIterate =
+      collapsed && ITERATE_FAMILY_KINDS.has(c.kind) && !containersWithOutgoingStateEdge.has(c.id);
+    if (isPureAuxIterate) referenceEligibleContainerIds.add(c.id);
+    else if (!isCollapsedGroup) ineligibleContainerIds.add(c.id);
   }
 
   // Count fanout-eligible DISTINCT CONSUMERS per source — every aux edge,
@@ -1774,23 +1801,37 @@ export const replicateHighFanoutSources = (
     consumers.add(e.to);
   }
 
-  const highFanoutSrcs = new Set<string>();
+  const fullyReplicated = new Set<string>();
+  const referenceReplicated = new Set<string>();
   for (const [srcId, consumers] of consumersBySrc) {
     if (ineligibleContainerIds.has(srcId)) continue;
     const m = modesObj[srcId];
     if (m === "never") continue;
-    if (m === "always") {
-      highFanoutSrcs.add(srcId);
-      continue;
-    }
     // Auto: threshold check. `threshold <= 0` was already handled by the
     // early-exit above unless an "always" override exists somewhere else
     // in the modes map; in that case auto sources still respect the
     // threshold (a 0 threshold means "no auto replication").
-    if (threshold > 0 && consumers.size > threshold) highFanoutSrcs.add(srcId);
+    const qualifies = m === "always" || (threshold > 0 && consumers.size > threshold);
+    if (!qualifies) continue;
+    // Route by replication MODE. A collapsed pure-aux iterate (msg-schedule)
+    // is REFERENCE-replicated — its box stays and only outgoing aux edges
+    // reroute. Everything else (leaves, collapsed groups) is FULLY replicated:
+    // the source is deleted and its incoming edges redirect to a spine replica.
+    if (referenceEligibleContainerIds.has(srcId)) {
+      // Reference replication only pays off for a GENUINE fan-out: it swaps N
+      // long lines for N short chips beside their consumers. At N=1 there is
+      // nothing to declutter — rerouting the lone edge through a chip just adds
+      // an indirection on the data path (this is the 2026-05-16 regression: a
+      // fanout-1 `ecb-blocks → concat-blocks` iterate set to "always" produced
+      // a stray chip on the spine). So require ≥2 consumers even under an
+      // "always" override; a lower fan-out keeps its box + direct line.
+      if (consumers.size > 1) referenceReplicated.add(srcId);
+    } else {
+      fullyReplicated.add(srcId);
+    }
   }
 
-  if (highFanoutSrcs.size === 0) return graph;
+  if (fullyReplicated.size === 0 && referenceReplicated.size === 0) return graph;
 
   // Index source nodes by id so replicas can inherit stepType + label.
   // Containers can also be sources (iterate aux), so check both maps.
@@ -1799,11 +1840,13 @@ export const replicateHighFanoutSources = (
   const containerById = new Map<string, ContainerNode>();
   for (const c of graph.containers) containerById.set(c.id, c);
 
-  // Slice 7b: every qualifying source IS fully replicated by construction
-  // (we walk EVERY outgoing edge below, regardless of kind). So the
-  // "fully replicated" set equals `highFanoutSrcs` exactly. Naming it
-  // separately keeps the redirect / removal sites readable.
-  const fullyReplicated = highFanoutSrcs;
+  // Union of both replication modes — sources whose OUTGOING edges get
+  // rerouted through per-consumer chips (the shared replica-creation path
+  // below walks EVERY outgoing edge regardless of kind). Only `fullyReplicated`
+  // members are additionally DELETED from the graph and have their INCOMING
+  // edges redirected to a spine replica; `referenceReplicated` sources keep
+  // their box + incoming edges, shedding only the high-fanout aux lines.
+  const replicatedSrcs = new Set<string>([...fullyReplicated, ...referenceReplicated]);
 
   // Spine successor for each fully-replicated source — used to redirect
   // incoming edges whose `to` lands on a dead source id. Definition:
@@ -1864,7 +1907,11 @@ export const replicateHighFanoutSources = (
   };
 
   for (const edge of graph.edges) {
-    const fromIsReplicated = fullyReplicated.has(edge.from);
+    // `from` in EITHER set → its outgoing edges reroute through chips.
+    // `to` only in `fullyReplicated` → a deleted consumer's incoming edges
+    // redirect to its spine replica (reference consumers keep their box, so
+    // they are never redirected-to).
+    const fromIsReplicated = replicatedSrcs.has(edge.from);
     const toIsReplicated = fullyReplicated.has(edge.to);
 
     // Determine the effective `to`: if the consumer is fully replicated,
@@ -1903,7 +1950,15 @@ export const replicateHighFanoutSources = (
       const sourceContainer = containerById.get(edge.from);
       const sourcePath = sourceNode?.containerPath ?? sourceContainer?.containerPath ?? [];
       const stepType = sourceNode?.stepType ?? sourceContainer?.kind ?? "replica";
-      const label = sourceNode?.label ?? sourceContainer?.label ?? edge.from;
+      // Reference chips (kept-box mode) carry a SHORT label = the aux key they
+      // forward (e.g. "W"), not the source container's verbose label. All N
+      // chips reference the SAME aux buffer — each consumer slices a different
+      // part of it — so one shared key reads honestly; a per-chip verbose label
+      // ("Message schedule W_0..W_63" ×64) would falsely imply N distinct
+      // values. Full-replica chips keep inheriting the source's own label.
+      const label = referenceReplicated.has(edge.from)
+        ? (edge.auxKey ?? sourceContainer?.label ?? edge.from)
+        : (sourceNode?.label ?? sourceContainer?.label ?? edge.from);
       // Replica-scope-aware layout (2026-05-17, narrow interpretation):
       // the (source, spineSuccessor) replica is the SPINE replica — it
       // takes over the source's role on the canvas main row. It lives
@@ -1945,7 +2000,18 @@ export const replicateHighFanoutSources = (
       const samePath =
         sourcePath.length === consumerPath.length &&
         sourcePath.every((seg, i) => seg === consumerPath[i]);
-      const isSpine = spineSuccessorOf.get(edge.from) === edge.to && samePath;
+      // A reference source keeps its own box, so it never spawns a spine
+      // replica — gate explicitly. This is load-bearing, not belt-and-
+      // suspenders: post-collapse `msg-schedule` and `round.N` share the
+      // `blocks` scope, so `samePath` is genuinely true here (unlike AES);
+      // without this gate the first round's ref chip would be mis-promoted to
+      // a spine replica. (`spineSuccessorOf` is also only built for
+      // `fullyReplicated`, so `.get(refSrc)` is already undefined — the gate
+      // makes the invariant explicit and survives a future loop widening.)
+      const isSpine =
+        !referenceReplicated.has(edge.from) &&
+        spineSuccessorOf.get(edge.from) === edge.to &&
+        samePath;
       const replicaContainerPath = isSpine ? sourcePath : consumerPath;
       replicas.set(rId, {
         stepId: rId,

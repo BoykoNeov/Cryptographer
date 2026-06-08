@@ -159,7 +159,12 @@ Rewires save and share exactly like any other spec edit (no extra opt-in).
   per-consumer chips. Trades horizontal width for vertical height; the
   long fan-out lines collapse into local stubs. The `>` number next to
   it is the **replication threshold** — a source replicates only when it
-  fans out to *more than* this many consumers (default 3).
+  fans out to *more than* this many consumers (default 3). A leaf or a
+  collapsed group is *replaced* by its chips; a looping source that only
+  feeds aux — SHA-256's **message schedule**, which publishes `W` to all
+  64 rounds — instead **keeps its box** and grows a short `W` reference
+  chip beside each round, so the loop stays visible while its fan-out
+  declutters.
 - **Color by source**, when on, paints each source's outgoing edges in
   a distinct color so you can track "all these arrows came from here" at
   a glance. The `≥` number next to it is the **coloring threshold** — a

@@ -63,23 +63,24 @@ describe("GraphView — RSA render", () => {
     resetAll();
   });
 
-  it("renders the RSA spec without throwing and draws the key-gen + ladder leaves", () => {
+  it("renders the RSA spec without throwing and draws the ladder leaves (key-gen folded)", () => {
     seedRsa();
     const { container } = render(() => <GraphView />);
-    // Phase-2 grouped spec, Key-Generation group default-EXPANDED so the
-    // derivation is visible on first render. Phase 4 decomposed the single
-    // `mod-inverse@1` `d` leaf into a traced extended-Euclid loop. Leaves:
-    //   - group children (38): 3 aux-load (p/q/e) + 1 constant-load (one)
-    //     + 4 key-gen (n, p-1, q-1, phi)
-    //     + the EEA decomposition: 2 constant-load seeds (eea-t0, eea-newt0)
-    //       + eeaMaxIterations(2) = 26 `eea-step` rungs + 1 `eea-extract` (d)
-    //     + 1 publish (rsa.publish-key-params)
+    // Phase-2 grouped spec; the Key-Generation group is default-COLLAPSED
+    // (user request 2026-06-08), so on first render its children are folded
+    // behind the container chip and only the top-level ladder leaves render.
+    // Phase 4 decomposed the single `mod-inverse@1` `d` leaf into a traced
+    // extended-Euclid loop — which is WHY key-gen is the bulk of the leaves
+    // (38 of 73) and collapsing it is the decluttering win. Visible leaves:
     //   - top level (35): 2 aux-load (load-n, load-exp) + 1 constant-load
     //     (result-seed) + 16 rungs × 2 (square + conditional multiply)
-    // = 73 leaves. Assert the exact count (catches a silent topology
-    // regression) — replication is off above.
+    // The 38 folded group children (3 aux-load p/q/e + 1 constant-load `one`
+    // + 4 key-gen n/p-1/q-1/phi + 2 EEA seeds + 26 `eea-step` rungs + 1
+    // `eea-extract` + 1 publish) do NOT render as leaf rects while collapsed.
+    // Assert the exact visible count (catches a silent topology regression) —
+    // replication is off above.
     const leafRects = container.querySelectorAll(".graph-leaf-rect");
-    expect(leafRects.length).toBe(73);
+    expect(leafRects.length).toBe(35);
   });
 
   it("renders the Key-Generation group as a container (Phase 2 grouping)", () => {

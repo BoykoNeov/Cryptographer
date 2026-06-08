@@ -60,16 +60,18 @@ const frameOut = (trace: Trace, stepId: string, port = "output"): bigint => {
 };
 
 describe("RSA Phase 2 — Key-Generation group structure", () => {
-  it("wraps the key-gen leaves in a default-EXPANDED group whose tail is the publish step", () => {
+  it("wraps the key-gen leaves in a default-COLLAPSED group whose tail is the publish step", () => {
     const spec = buildRsaSpec("encrypt", W);
     const first = spec.steps[0];
     if (first?.kind !== "group")
       throw new Error("expected steps[0] to be the key-generation group");
     expect(first.id).toBe("key-generation");
     expect(first.label).toBe("Key Generation");
-    // Default-EXPANDED: key generation is RSA's headline feature, so the group
-    // must NOT default-collapse (that would hide what Phase 1 showed).
-    expect(first.defaultCollapsed).toBeUndefined();
+    // Default-COLLAPSED (user request 2026-06-08): key generation is a
+    // self-contained preamble the ladder consumes only via the published
+    // n/e/d, so it folds on first render — the headline is the ladder. The
+    // collapsed header still names the group, so it's folded, not hidden.
+    expect(first.defaultCollapsed).toBe(true);
     // The publish tail is the group's last child.
     const last = first.children[first.children.length - 1];
     if (last?.kind !== "step") throw new Error("expected the publish tail to be a step leaf");

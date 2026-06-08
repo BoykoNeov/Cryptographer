@@ -501,11 +501,15 @@ export const buildRsaSpec = (
     kind: "group",
     id: "key-generation",
     label: "Key Generation",
-    // Default-EXPANDED (no `defaultCollapsed`): key generation is RSA's
-    // headline feature — the user explicitly chose to trace it — so collapsing
-    // it by default would hide what the flat Phase-1 spec showed. The group
-    // adds a collapse affordance for learners who want to focus on the ladder;
-    // it does not hide the derivation on first render.
+    // Default-COLLAPSED: key generation is a self-contained preamble — pick
+    // p/q, derive n/φ/d, publish the key into aux — that the exponentiation
+    // ladder consumes only through the published n/e/d. On first render the
+    // headline is the ladder (the actual encrypt/decrypt), so the key-gen
+    // derivation opens behind a collapse affordance rather than crowding the
+    // canvas with its ~9 leaves. Learners expand it with one click; the
+    // collapsed header still names "Key Generation" so the step isn't hidden,
+    // only folded. (User request 2026-06-08.)
+    defaultCollapsed: true,
     children: keyGenChildren,
   };
 
