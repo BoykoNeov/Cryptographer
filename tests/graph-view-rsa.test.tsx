@@ -5,13 +5,15 @@
  * `docs/plans/shimmying-booping-moth.md`).
  *
  * The graph tab is one click away from the linear view, and RSA's topology is
- * novel for the graph machinery: no `round.N` groups at all, `$input` fans out
- * to every ladder rung's `factor` port, the computed modulus `n` fans out to
- * ~32 `modulus` ports (above the replication threshold), and `cond-mod-mul@1`
- * is a 4-input leaf. None of that is fundamentally new (SHA-256 has high aux
- * fanout; multi-input leaves exist), but "probably renders" on a visible tab
- * with no test is exactly the gap this closes: render the RSA trace through
- * `GraphView` and assert it produces the ladder without throwing.
+ * novel for the graph machinery: a single "Key Generation" group (Phase 2)
+ * whose `rsa.publish-key-params@1` tail fans n/e/d into aux, `$input` fanning
+ * out to every ladder rung's `factor` port, the loaded modulus `n` fanning out
+ * to ~32 `modulus` ports (above the replication threshold), and `cond-mod-mul@1`
+ * a 4-input leaf. None of that is fundamentally new (SHA-256 has high aux
+ * fanout; multi-input leaves and key-schedule groups exist), but "probably
+ * renders" on a visible tab with no test is exactly the gap this closes:
+ * render the RSA trace through `GraphView` and assert it produces the
+ * key-generation group + ladder without throwing.
  */
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
@@ -64,18 +66,27 @@ describe("GraphView — RSA render", () => {
   it("renders the RSA spec without throwing and draws the key-gen + ladder leaves", () => {
     seedRsa();
     const { container } = render(() => <GraphView />);
-    // Flat spec: 3 aux-load (p/q/e) + 2 constant-load (one/result-seed)
-    // + 4 key-gen (n, p-1, q-1, phi) + mod-inverse (d) + 16 rungs × 2
-    // (square + conditional multiply) = 42 leaves. Assert the exact count
-    // (catches a silent topology regression) — replication is off above.
+    // Phase-2 grouped spec, Key-Generation group default-EXPANDED so the
+    // derivation is visible on first render. Leaves:
+    //   - group children (10): 3 aux-load (p/q/e) + 1 constant-load (one)
+    //     + 4 key-gen (n, p-1, q-1, phi) + 1 mod-inverse (d)
+    //     + 1 publish (rsa.publish-key-params)
+    //   - top level (35): 2 aux-load (load-n, load-exp) + 1 constant-load
+    //     (result-seed) + 16 rungs × 2 (square + conditional multiply)
+    // = 45 leaves. Assert the exact count (catches a silent topology
+    // regression) — replication is off above.
     const leafRects = container.querySelectorAll(".graph-leaf-rect");
-    expect(leafRects.length).toBe(42);
+    expect(leafRects.length).toBe(45);
   });
 
-  it("renders no container rects (RSA is flat — no round groups)", () => {
+  it("renders the Key-Generation group as a container (Phase 2 grouping)", () => {
     seedRsa();
     const { container } = render(() => <GraphView />);
-    expect(container.querySelectorAll(".graph-container-rect").length).toBe(0);
+    // RSA's only group: "Key Generation" (the ladder stays flat). Exactly one
+    // container rect — proves the Phase-2 group renders and the ladder did not
+    // get accidentally wrapped.
+    expect(container.querySelectorAll(".graph-container-rect").length).toBe(1);
+    expect(container.textContent ?? "").toContain("Key Generation");
   });
 
   it("labels the endpoint pills message → ciphertext for RSA encrypt", () => {

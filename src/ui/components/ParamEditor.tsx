@@ -301,6 +301,15 @@ export const ParamEditor = (props: Props) => {
             <Match when={getStep().type === "serpent.key-sbox@1"}>
               <SerpentKeySboxBlock step={getStep()} />
             </Match>
+            <Match when={getStep().type === "rsa.publish-key-params@1"}>
+              {/*
+                RSA Phase 2 (2026-06-08): the Key-Generation group's publish
+                tail. Named (n/e/d), not indexed like the round-key tails, so
+                it gets its own thin read-only block rather than reusing
+                PublishRoundKeysBlock.
+              */}
+              <RsaPublishKeyParamsBlock step={getStep()} />
+            </Match>
             <Match when={getStep().type === "pad-with-byte@1"}>
               <PadWithByteBlock step={getStep()} matchingCount={matchingSteps()} />
             </Match>
@@ -1352,6 +1361,42 @@ const DesPublishRoundKeysBlock = (props: { step: StepLeaf }) => {
         Writes the 16 derived DES round keys into the aux map for the per-round key-mixing steps.
         The interesting math is the PC-1 / rotate / PC-2 leaves above this tail; these params are
         structural and not meant to be edited.
+      </p>
+    </>
+  );
+};
+
+// rsa.publish-key-params@1 — the aux-publish tail of the RSA "Key Generation"
+// group (RSA Phase 2). Read-only structural view (parallel to the
+// publish-round-keys blocks). RSA's exports are NAMED (n / e / d), not indexed,
+// and frame the public-key (n, e) / private-key (n, d) split.
+const RsaPublishKeyParamsBlock = (props: { step: StepLeaf }) => {
+  const prefix = (): string =>
+    (props.step.params as { outputPrefix?: string }).outputPrefix ?? "rsa";
+  return (
+    <>
+      <dl class="param-scalars">
+        <div class="param-scalar-row">
+          <dt>Aux prefix (write)</dt>
+          <dd>{prefix()}</dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Public key</dt>
+          <dd>
+            ({prefix()}.n, {prefix()}.e)
+          </dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Private key</dt>
+          <dd>
+            ({prefix()}.n, {prefix()}.d)
+          </dd>
+        </div>
+      </dl>
+      <p class="muted small">
+        Writes the derived modulus n and exponents e / d into the aux map so the exponentiation
+        ladder can read them across the Key-Generation group boundary. The interesting math is the n
+        = p·q / φ = (p−1)(q−1) / d = e⁻¹ mod φ leaves above this tail; this param is structural.
       </p>
     </>
   );

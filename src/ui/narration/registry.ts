@@ -225,6 +225,14 @@ export const NARRATION_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
   // `narrationOverride`. Below the cell-shape gate anyway (`input: "any"`) —
   // listed here for parity with the AES / Speck / Serpent tails.
   "des.publish-round-keys@1",
+  // The aux-publish tail of the RSA "Key Generation" group (RSA Phase 2,
+  // 2026-06-08). Identity passthrough that mirrors the computed n / e / d into
+  // aux["rsa.n" | "rsa.e" | "rsa.d"] so the exponentiation ladder reads them
+  // back across the group wall. Same posture as the four publish-round-keys
+  // tails: the interesting math (n = p·q, φ = (p−1)(q−1), d = e⁻¹ mod φ) is in
+  // the leaves above it, each narrated via its own `narrationOverride`. Below
+  // the cell-shape gate anyway (`input: "any"`) — listed here for parity.
+  "rsa.publish-key-params@1",
   // Bit-level linear transforms — byte-level prose would be misleading.
   // (Bit-permutation is honest at byte granularity — narrated in Phase 2.)
   "serpent.linear-transform@1",

@@ -144,7 +144,7 @@ describe("narration-registry coverage contract", () => {
     // decomposition) and K4 (DES decomposition) will touch the data array,
     // not the assertion arithmetic.
     //
-    // Current contents (10 entries):
+    // Current contents (11 entries):
     //   - 4 monolithic key-expansion / key-schedule ORACLE step types
     //     (`aes.key-expansion@{1,2}`, `serpent.key-expansion@1`,
     //     `des.key-schedule@1`). Every schedule decomposed into port-native
@@ -158,6 +158,10 @@ describe("narration-registry coverage contract", () => {
     //   - 4 identity-passthrough aux-publish tails of the decomposed
     //     schedules (`aes`/`speck`/`serpent`/`des`.publish-round-keys@1); the
     //     math is the recurrence leaves above them, each self-narrated.
+    //   - 1 identity-passthrough aux-publish tail of the RSA Key-Generation
+    //     group (`rsa.publish-key-params@1`); same posture — the n = p·q /
+    //     φ = (p−1)(q−1) / d = e⁻¹ mod φ math is the self-narrated leaves
+    //     above it.
     const expected = new Set<string>([
       "aes.key-expansion@1",
       "aes.key-expansion@2",
@@ -171,6 +175,8 @@ describe("narration-registry coverage contract", () => {
       "serpent.publish-round-keys@1",
       // K4a (2026-06-02): the decomposed DES key schedule's publish tail.
       "des.publish-round-keys@1",
+      // RSA Phase 2 (2026-06-08): the RSA Key-Generation group's publish tail.
+      "rsa.publish-key-params@1",
     ]);
     expect(NARRATION_NO_OP_ALLOWLIST).toEqual(expected);
     // Negative assertion: the 6 round-body DES step types must NOT be on

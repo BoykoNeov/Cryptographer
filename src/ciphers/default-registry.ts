@@ -127,6 +127,12 @@ import {
   pkcs7UnpadPortContract,
 } from "../steps/pkcs7-unpad";
 import {
+  publishKeyParams,
+  publishKeyParamsDoc,
+  publishKeyParamsMeta,
+  publishKeyParamsPortContract,
+} from "../steps/publish-key-params";
+import {
   publishRoundKeys,
   publishRoundKeysDoc,
   publishRoundKeysMeta,
@@ -862,6 +868,20 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: modInverse,
     shape: modInversePortContract,
     doc: modInverseDoc,
+  });
+  // `rsa.publish-key-params@1` (RSA Phase 2): the one meta-bearing tail of the
+  // "Key Generation" group. Identity passthrough whose `meta.auxWritePorts`
+  // mirrors the derived n / e / d into `aux["rsa.n" | "rsa.e" | "rsa.d"]`, so
+  // the exponentiation ladder (outside the group) reads them back across the
+  // group-scope wall via top-level `aux-load-bytes@1` loaders. Same B-minimal
+  // posture as the four publish-round-keys tails; the n = p·q / φ = (p-1)(q-1)
+  // / d = e⁻¹ mod φ math stays visible as port-native frames above it.
+  r.register("rsa.publish-key-params@1", {
+    kind: "ported",
+    executor: publishKeyParams,
+    shape: publishKeyParamsPortContract,
+    meta: publishKeyParamsMeta,
+    doc: publishKeyParamsDoc,
   });
   // ─── AES round primitives (Slice B1.1 — scaffolding-suppression Phase B) ─
   // Byte-native replacements for the matrix round body. `byte-substitute@1`
