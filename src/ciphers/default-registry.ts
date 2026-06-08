@@ -86,6 +86,8 @@ import {
   desXorWithKMeta,
   desXorWithKPortContract,
 } from "../steps/des-xor-with-k";
+import { eeaExtract, eeaExtractDoc, eeaExtractPortContract } from "../steps/eea-extract";
+import { eeaStep, eeaStepDoc, eeaStepPortContract } from "../steps/eea-step";
 import {
   gfMatrixMultiply,
   gfMatrixMultiplyDoc,
@@ -868,6 +870,27 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: modInverse,
     shape: modInversePortContract,
     doc: modInverseDoc,
+  });
+  // `eea-step@1` / `eea-extract@1` (RSA Phase 4): the DECOMPOSITION of the
+  // `mod-inverse@1` oracle into a traced extended-Euclid loop. The shipped RSA
+  // spec chains `eeaMaxIterations(W)` `eea-step` rungs (one division step per
+  // frame, the (r, newR, t, newT) tuple carried port-to-port, the Bézout
+  // coefficient kept reduced mod φ so every port stays non-negative) and
+  // terminates with `eea-extract` (gcd gate → d). `mod-inverse@1` stays
+  // registered above as the FIPS-style oracle the Phase-4 test cross-checks
+  // against (same posture as the four key-expansion oracles kept after their
+  // schedules decomposed) — no shipped spec emits it anymore.
+  r.register("eea-step@1", {
+    kind: "ported",
+    executor: eeaStep,
+    shape: eeaStepPortContract,
+    doc: eeaStepDoc,
+  });
+  r.register("eea-extract@1", {
+    kind: "ported",
+    executor: eeaExtract,
+    shape: eeaExtractPortContract,
+    doc: eeaExtractDoc,
   });
   // `rsa.publish-key-params@1` (RSA Phase 2): the one meta-bearing tail of the
   // "Key Generation" group. Identity passthrough whose `meta.auxWritePorts`

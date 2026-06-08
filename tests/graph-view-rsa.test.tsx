@@ -67,16 +67,19 @@ describe("GraphView — RSA render", () => {
     seedRsa();
     const { container } = render(() => <GraphView />);
     // Phase-2 grouped spec, Key-Generation group default-EXPANDED so the
-    // derivation is visible on first render. Leaves:
-    //   - group children (10): 3 aux-load (p/q/e) + 1 constant-load (one)
-    //     + 4 key-gen (n, p-1, q-1, phi) + 1 mod-inverse (d)
+    // derivation is visible on first render. Phase 4 decomposed the single
+    // `mod-inverse@1` `d` leaf into a traced extended-Euclid loop. Leaves:
+    //   - group children (38): 3 aux-load (p/q/e) + 1 constant-load (one)
+    //     + 4 key-gen (n, p-1, q-1, phi)
+    //     + the EEA decomposition: 2 constant-load seeds (eea-t0, eea-newt0)
+    //       + eeaMaxIterations(2) = 26 `eea-step` rungs + 1 `eea-extract` (d)
     //     + 1 publish (rsa.publish-key-params)
     //   - top level (35): 2 aux-load (load-n, load-exp) + 1 constant-load
     //     (result-seed) + 16 rungs × 2 (square + conditional multiply)
-    // = 45 leaves. Assert the exact count (catches a silent topology
+    // = 73 leaves. Assert the exact count (catches a silent topology
     // regression) — replication is off above.
     const leafRects = container.querySelectorAll(".graph-leaf-rect");
-    expect(leafRects.length).toBe(45);
+    expect(leafRects.length).toBe(73);
   });
 
   it("renders the Key-Generation group as a container (Phase 2 grouping)", () => {

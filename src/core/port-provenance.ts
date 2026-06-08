@@ -297,8 +297,9 @@ export const lookupProvenance = (stepType: string): ProvenanceFn | undefined =>
  *  - **approximate** (an exact-looking byte highlight would mislead):
  *    `add-mod-32@1` / `add-mod-16@1` (carry crosses byte boundaries),
  *    `rotate-bits-right@1` / `shift-bits-right@1` (bit-level → byte-approximate),
- *    and the RSA big-integer primitives `mul@1` / `sub@1` / `mod-mul@1` /
- *    `cond-mod-mul@1` / `mod-inverse@1` (full-width carries/borrows mix every
+ *    the RSA big-integer primitives `mul@1` / `sub@1` / `mod-mul@1` /
+ *    `cond-mod-mul@1` / `mod-inverse@1`, and the traced extended-Euclid loop
+ *    `eea-step@1` / `eea-extract@1` (full-width carries/borrows mix every
  *    output byte across all input bytes — there is no clean per-cell mapping).
  *    Deferred to the distinct `≈`-treatment fast-follow.
  *  - **no inputs**: `constant-load@1` (emits a literal — nothing to point back to).
@@ -325,6 +326,12 @@ export const PROVENANCE_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set<string>([
   "mod-mul@1",
   "cond-mod-mul@1",
   "mod-inverse@1",
+  // approximate — the traced extended-Euclid loop (RSA Phase 4): each rung's
+  // quotient/remainder + the mod-φ-reduced coefficient mix every output byte
+  // across the input tuple, exactly like the `mod-inverse@1` oracle they
+  // decompose.
+  "eea-step@1",
+  "eea-extract@1",
   // no inputs
   "constant-load@1",
   // partial — synthesizes bytes

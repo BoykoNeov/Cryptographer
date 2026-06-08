@@ -79,7 +79,7 @@ describe("port-provenance coverage contract", () => {
     }
   });
 
-  it("allowlist contents are exactly the expected 15 (rationale set-pin)", () => {
+  it("allowlist contents are exactly the expected 17 (rationale set-pin)", () => {
     // Grouped by the FOUR distinct rationales — see PROVENANCE_NO_OP_ALLOWLIST's
     // doc. Keeping the groups visible here stops a future edit from quietly
     // relabelling an exact-but-plumbing bridge as "approximate".
@@ -95,6 +95,9 @@ describe("port-provenance coverage contract", () => {
       "mod-mul@1",
       "cond-mod-mul@1",
       "mod-inverse@1",
+      // approximate — the traced extended-Euclid loop (RSA Phase 4)
+      "eea-step@1",
+      "eea-extract@1",
       // no inputs
       "constant-load@1",
       // partial — synthesizes bytes with no input source

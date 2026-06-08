@@ -42,6 +42,7 @@
 
 import type { CipherSpec, PortBinding, StepDocumentation, StepNode } from "../core/types";
 import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "../core/types";
+import { eeaMaxIterations } from "../steps/eea-step";
 
 // ─── Tunables ─────────────────────────────────────────────────────────────
 
@@ -201,8 +202,11 @@ extended Euclidean algorithm finds \`x, y\` with \`e·x + φ·y = gcd(e, φ)\`, 
 when that gcd is 1, \`x mod φ\` is \`d\`. For the textbook key
 \`d = 17⁻¹ mod 3120 = 2753\`.
 
-The pair \`(n, d)\` is the **private key**. v1 computes \`d\` in a single oracle
-frame; a later phase decomposes the extended-Euclid loop into traced steps.`,
+The pair \`(n, d)\` is the **private key**. The traced extended-Euclid loop just
+above derives it: a shrinking-remainder chain whose last non-zero remainder is
+\`gcd(e, φ)\` and whose companion coefficient settles to \`d\`. This final step
+reads that settled \`(gcd, coefficient)\` slot — emitting the coefficient as \`d\`
+when the gcd is 1, and throwing otherwise (a non-coprime \`e\` has no inverse).`,
   references: [
     "Rivest, Shamir, Adleman 1978",
     "Knuth, TAOCP Vol. 2 §4.5.2 — the extended Euclidean algorithm",
@@ -238,6 +242,63 @@ Because the bit is read live, editing the exponent (\`e\`, or \`p,q\` → \`d\`)
 flips exactly which rungs multiply — and the trace re-runs. The 0-bit rungs are
 honest identity frames: they show the squaring still happened, just no multiply.`,
   references: ["Knuth, TAOCP Vol. 2 §4.6.3 — evaluation of powers"],
+});
+
+// ── Extended-Euclid decomposition narration (RSA Phase 4) ───────────────────
+// The `mod-inverse@1` oracle is decomposed into a traced loop: two coefficient
+// seeds + `eeaMaxIterations(W)` `eea-step` rungs + the `eea-extract` tail (which
+// carries NARR_D — it IS the private exponent). These name the seeds + per-rung
+// frames. As with the ladder, only the iteration NUMBER is static (baked at
+// build); whether a given rung is still doing real work or has hit the
+// identity fixed-point is runtime, so it is left to the dynamic narration layer.
+
+const NARR_EEA_T0: StepDocumentation = {
+  name: "Coefficient seed t = 0",
+  summary: "Initial Bézout coefficient t = 0 — seeds the extended-Euclid loop.",
+  detail: `## Coefficient seed t = 0
+
+The extended Euclidean algorithm tracks a Bézout coefficient alongside the
+shrinking remainder. It starts as the pair \`(t, newT) = (0, 1)\`; this is the
+\`t = 0\` seed. After the loop settles, \`t\` holds \`e⁻¹ mod φ\` = the private
+exponent \`d\`.`,
+  references: ["Knuth, TAOCP Vol. 2 §4.5.2 — the extended Euclidean algorithm"],
+};
+
+const NARR_EEA_NEWT0: StepDocumentation = {
+  name: "Coefficient seed newT = 1",
+  summary: "Initial companion coefficient newT = 1 — the other half of the seed pair.",
+  detail: `## Coefficient seed newT = 1
+
+The companion of the \`t = 0\` seed: the Bézout coefficient pair starts as
+\`(t, newT) = (0, 1)\`. Each \`eea-step\` shifts the pair by the step's quotient,
+keeping it reduced modulo φ so every value stays a non-negative integer.`,
+  references: ["Knuth, TAOCP Vol. 2 §4.5.2 — the extended Euclidean algorithm"],
+};
+
+/** Extended-Euclid iteration `iterNum` of `total` (1-indexed for humans). */
+const NARR_EEA_STEP = (iterNum: number, total: number): StepDocumentation => ({
+  name: `Extended-Euclid step ${iterNum}/${total}`,
+  summary:
+    "One division step: shift (r, newR, t, newT) by q = ⌊r/newR⌋. Identity once the remainder reaches 0.",
+  detail: `## Extended-Euclid step ${iterNum} of ${total}
+
+One iteration of the loop that derives \`d = e⁻¹ mod φ\`. The running state is the
+four-tuple \`(r, newR, t, newT)\`, carried rung-to-rung. With \`q = ⌊r / newR⌋\`:
+
+\`\`\`
+r ← newR,    newR ← r − q·newR        (Euclid's remainder step)
+t ← newT,    newT ← (t − q·newT) mod φ (the Bézout coefficient, reduced)
+\`\`\`
+
+The remainder sequence shrinks to \`gcd(e, φ)\`; the coefficient settles to \`d\`.
+The chain is unrolled to a fixed worst-case length (Lamé's theorem bounds
+Euclid's step count), so once the remainder hits 0 this and every later rung is
+an honest identity frame — like the square-and-multiply ladder's 0-bit rungs.
+
+**Coefficient shown reduced mod φ.** The raw Bézout coefficient is signed; to
+keep every value a non-negative integer it is reduced into \`[0, φ)\`, so a
+textbook's \`−183\` appears here as \`φ − 183\`. This is exact for the inverse.`,
+  references: ["Knuth, TAOCP Vol. 2 §4.5.2 — the extended Euclidean algorithm"],
 });
 
 // ─── Spec builder ─────────────────────────────────────────────────────────
@@ -281,6 +342,65 @@ export const buildRsaSpec = (
     if (src === undefined) throw new Error(`buildRsaSpec: no source for published key "${k}"`);
     publishInputs[k] = src;
   }
+
+  // ── d = e⁻¹ mod φ as a TRACED extended-Euclid loop (RSA Phase 4) ──────────
+  // The decomposition of the `mod-inverse@1` oracle: two coefficient seeds + a
+  // chain of `eea-step@1` rungs (one division step per frame, the running
+  // (r, newR, t, newT) tuple carried port-to-port) + the `eea-extract@1` tail
+  // (id "d") that reads the settled (r=gcd, t=inverse) slot. Seeds: r₀ = φ (the
+  // `phi` leaf), newR₀ = e (the `load-e` leaf), t₀ = 0, newT₀ = 1. The chain is
+  // unrolled to `eeaMaxIterations(W)` rungs — Euclid's worst case (consecutive
+  // Fibonacci numbers, Lamé's theorem) is bounded — and a rung whose remainder
+  // has reached 0 is an honest identity frame. The coefficient is kept reduced
+  // mod φ so every port value stays a non-negative big-endian integer (the
+  // central design decision — see `src/steps/eea-step.ts`).
+  const K = eeaMaxIterations(W);
+  const eeaDecomposition: StepNode[] = [
+    {
+      kind: "step",
+      id: "eea-t0",
+      type: "constant-load@1",
+      params: { bytes: beConst(0, W) },
+      narrationOverride: NARR_EEA_T0,
+    },
+    {
+      kind: "step",
+      id: "eea-newt0",
+      type: "constant-load@1",
+      params: { bytes: beConst(1, W) },
+      narrationOverride: NARR_EEA_NEWT0,
+    },
+  ];
+  for (let i = 0; i < K; i++) {
+    // Rung 0 reads the seeds; every later rung reads the previous rung's tuple.
+    const prev = (slot: string): PortBinding => port(`eea-${i - 1}`, slot);
+    eeaDecomposition.push({
+      kind: "step",
+      id: `eea-${i}`,
+      type: "eea-step@1",
+      params: {},
+      portInputs: {
+        r: i === 0 ? port("phi", "output") : prev("r"),
+        newR: i === 0 ? port("load-e", "output") : prev("newR"),
+        t: i === 0 ? port("eea-t0", "output") : prev("t"),
+        newT: i === 0 ? port("eea-newt0", "output") : prev("newT"),
+        modulus: port("phi", "output"),
+      },
+      narrationOverride: NARR_EEA_STEP(i + 1, K),
+    });
+  }
+  // Terminal: read the LAST rung's settled (r, t) slot — r is gcd(e, φ), t is
+  // the inverse. Throws when gcd ≠ 1 (e not coprime to φ — no valid inverse).
+  // Keeps id "d" so the publish tail's `port("d", "output")` and the KAT's
+  // `frameOutValue(trace, "d")` resolve unchanged.
+  eeaDecomposition.push({
+    kind: "step",
+    id: "d",
+    type: "eea-extract@1",
+    params: {},
+    portInputs: { gcd: port(`eea-${K - 1}`, "r"), value: port(`eea-${K - 1}`, "t") },
+    narrationOverride: NARR_D,
+  });
 
   // ── Key generation (collapsible group) ───────────────────────────────────
   // p, q, e → n = p·q, φ = (p−1)(q−1), d = e⁻¹ mod φ — each a VISIBLE
@@ -354,15 +474,12 @@ export const buildRsaSpec = (
       portInputs: { a: port("p-minus-1", "output"), b: port("q-minus-1", "output") },
       narrationOverride: NARR_PHI,
     },
-    // d = e⁻¹ mod φ(n)  (the private exponent; the decrypt ladder's exponent).
-    {
-      kind: "step",
-      id: "d",
-      type: "mod-inverse@1",
-      params: {},
-      portInputs: { value: port("load-e", "output"), modulus: port("phi", "output") },
-      narrationOverride: NARR_D,
-    },
+    // d = e⁻¹ mod φ(n) — the private exponent (and the decrypt ladder's
+    // exponent), derived by the TRACED extended-Euclid loop built above: two
+    // coefficient seeds + K division-step rungs + the gcd-gated `eea-extract`
+    // tail (id "d"). Replaces the single-frame `mod-inverse@1` oracle (kept
+    // registered as the cross-check oracle, no longer emitted by any spec).
+    ...eeaDecomposition,
     // Publish tail: mirror this direction's key material into aux["rsa.*"] so
     // the ladder can read it across the group boundary (`aux` is the only
     // cross-scope channel). Each direction publishes EXACTLY the key its ladder
