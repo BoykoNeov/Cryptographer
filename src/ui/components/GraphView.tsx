@@ -3621,7 +3621,10 @@ export const GraphView = () => {
     }
     const keys = new Set<string>();
     for (const e of graph().edges) {
-      if (recombineIds.has(e.from) && splitIds.has(e.to)) keys.add(`${e.from} ${e.to}`);
+      // NUL separator: can't collide with any character in a step id. Written
+      // as the \u0000 escape (NOT a raw NUL byte) so the file stays text to
+      // grep/diff tools — a literal NUL makes ripgrep classify it as binary.
+      if (recombineIds.has(e.from) && splitIds.has(e.to)) keys.add(`${e.from}\u0000${e.to}`);
     }
     return keys;
   });
@@ -3630,7 +3633,7 @@ export const GraphView = () => {
     const carry = feistelCarryKeys();
     const bundles = nonFeedbackBundles();
     if (carry.size === 0) return bundles;
-    return bundles.filter((b) => !carry.has(`${b.from} ${b.to}`));
+    return bundles.filter((b) => !carry.has(`${b.from}\u0000${b.to}`));
   });
 
   const feistelSwaps = createMemo(() => {

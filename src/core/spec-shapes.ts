@@ -22,16 +22,16 @@
  * Both share a single walker (`walk`) to keep the iterate-scope semantics
  * + the "preserveInput" output shorthand in one place.
  *
- * Iterate handling. The runtime sets `state = blocks[i]` (a MatrixState)
- * for each iteration, then leaves state as the last iteration's matrix on
- * exit (`core/runtime.ts:81–86`). The walker therefore:
- *   - enters the iterate body with shape = `matrix4x4-bytes`;
- *   - exits the iterate with shape = `matrix4x4-bytes`, regardless of the
- *     shape that surrounded the iterate node in the parent scope.
- * This matches what every shipped multi-block spec actually does. A future
- * iterate that carries `BytesState` blocks would need an explicit
- * `bodyInputShape` field on `IterateGroup` — flagged in the plan as out
- * of scope for today.
+ * Iterate handling (two modes, B1.4 — mirrors the runtime):
+ *   - Port mode (`seedInput` defined — every SHIPPED multi-block spec:
+ *     byte-native ECB/CBC, multi-block SHA-256): the body reads per-block
+ *     bytes on `port(iterateId, "in")`, so the walker enters and exits the
+ *     iterate with shape = `"bytes"`.
+ *   - Aux mode (the legacy matrix iterate, no `seedInput`): the walker keeps
+ *     the historical `matrix4x4-bytes` in/out shape. No shipped spec uses
+ *     this mode since Phase 5 / Slice 5.1 (2026-05-30) retired the matrix
+ *     iterate; the branch survives for old saved documents (the document
+ *     schema still accepts the shape string).
  *
  * "any" input contract. Steps declared with `input: "any"` (the aux
  * primitives + the various key-expansions) consume no state-shape

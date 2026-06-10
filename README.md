@@ -4,7 +4,7 @@ An interactive cryptography explorer. Type a plaintext + key, watch every interm
 
 Built as a learning tool, not a production crypto library.
 
-> **Status:** v0.5.0 — multiple ciphers and modes shipped, 2D visual editor complete (all 11 slices), **full linear-mode pedagogy**: every step narrates what it does inline with byte values (per-frame value-prose), every round key renders side-by-side as a labelled ribbon with the consumed `K_i` outlined, the key schedule that used to collapse into one passthrough frame now surfaces its per-word internals (AES `RotWord → SubWord → Rcon → XOR` chain; Serpent prekey recurrence + bitsliced S-boxes + IP), and hovering an output byte cell in the linear inspector lights up the input cell(s) that feed it (same-position for SubBytes/AddRoundKey, a gather for ShiftRows, the four same-column cells with GF `×N` labels for MixColumns). Cross-mode mirror buttons across every step type with a known encrypt↔decrypt param relationship. Compose-your-own block-cipher modes from the palette. See [CHANGELOG.md](./CHANGELOG.md) for the release log and [docs/versioning.md](./docs/versioning.md) for the versioning policy.
+> **Status:** v0.6.0 (+ textbook RSA with traced key generation on `main`, unreleased) — multiple ciphers and modes shipped, 2D visual editor complete (all 11 slices), **full linear-mode pedagogy**: every step narrates what it does inline with byte values (per-frame value-prose), every round key renders side-by-side as a labelled ribbon with the consumed `K_i` outlined, the key schedule that used to collapse into one passthrough frame now surfaces its per-word internals (AES `RotWord → SubWord → Rcon → XOR` chain; Serpent prekey recurrence + bitsliced S-boxes + IP), and hovering an output byte cell in the linear inspector lights up the input cell(s) that feed it (same-position for SubBytes/AddRoundKey, a gather for ShiftRows, the four same-column cells with GF `×N` labels for MixColumns). Cross-mode mirror buttons across every step type with a known encrypt↔decrypt param relationship. Compose-your-own block-cipher modes from the palette. See [CHANGELOG.md](./CHANGELOG.md) for the release log and [docs/versioning.md](./docs/versioning.md) for the versioning policy.
 
 ## What's in the box
 
@@ -71,11 +71,11 @@ Open `http://localhost:5173`. Hot reload kicks in on every save.
 | Command | What it does |
 |---|---|
 | `npm run dev` | Vite dev server with HMR. |
-| `npm test` | Vitest, single run. ~1389 tests across 122 files, ~30s. |
+| `npm test` | Vitest, single run. ~2430 tests across 214 files, ~50s. |
 | `npm run typecheck` | `tsc --noEmit`, strict mode. |
-| `npm run check` | The full gate: `biome ci . && tsc --noEmit && vitest run && vite build`. ~25s. |
-| `npm run smoke` | Playwright real-browser smoke tests (currently the Slice 6 graph drag/collapse spec). |
-| `npm run build` | Production build into `dist/`. ~132 KB gzipped JS. |
+| `npm run check` | The full gate: `biome ci . && tsc --noEmit && vitest run && vite build`. ~60s. |
+| `npm run smoke` | Playwright real-browser smoke specs (graph drag/collapse, port wiring, composite save/drop, inspector cell-hover, …). |
+| `npm run build` | Production build into `dist/`. ~212 KB gzipped JS. |
 
 The pre-commit hook in `.githooks/pre-commit` runs `npm run check`. GitHub Actions runs the same on push.
 
@@ -93,7 +93,7 @@ src/
   ciphers/         per-cipher specs + constants (AES, Speck, Serpent, DES)
   steps/           step-type executors + their StepDocumentation blocks
   ui/              Solid components, stores, app shell
-tests/             ~122 files, ~1389 tests — vitest (node + jsdom mix)
+tests/             ~214 files, ~2430 tests — vitest (node + jsdom mix)
 e2e/               Playwright real-browser smoke tests
 docs/              key-files.md, gotchas.md, versioning.md, plans/
 .githooks/         pre-commit gate
