@@ -270,7 +270,7 @@ type AsymmetricSpecsByMode = {
   readonly decrypt: CipherSpec;
 };
 
-type SpecsByMode = CipherSpecsByMode | HashSpecsByMode | AsymmetricSpecsByMode;
+export type SpecsByMode = CipherSpecsByMode | HashSpecsByMode | AsymmetricSpecsByMode;
 
 const buildCanonicalPair = (
   cipher: Cipher,
@@ -1362,6 +1362,27 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
       ? { kind: "cipher", encrypt: doc.spec, decrypt: otherCanonical }
       : { kind: "cipher", encrypt: otherCanonical, decrypt: doc.spec },
   );
+};
+
+/**
+ * History apply-path setter (Part C of the graph-legibility plan, undo/redo).
+ * Replace the WHOLE dual-mode spec union wholesale from a snapshot the
+ * edit-history store captured. Deliberately lean — a bare `setSpecs`, NOT
+ * `setSpecFromDocument`: the selector signals (cipher, cipherMode, padding,
+ * category/hash/asymmetric) are invariant within a single undo/redo stack
+ * because any selector switch clears the history stacks (see the stack-
+ * boundary rule), so restoring a snapshot never needs to re-sync them. The
+ * snapshot was captured by reference off `useSpecsByMode()`, which the spec
+ * store only ever replaces wholesale (structural sharing on untouched
+ * branches), so the reference stays valid indefinitely.
+ *
+ * The caller (edit-history) wraps this + `replaceLayoutMap` in one Solid
+ * `batch()` so subscribers see a single atomic (spec, layout) transition,
+ * and sets its re-entrancy guard to this exact reference BEFORE calling so
+ * the capture observer skips the restore's own write.
+ */
+export const restoreSpecsForHistory = (snapshot: SpecsByMode): void => {
+  setSpecs(snapshot);
 };
 
 /**

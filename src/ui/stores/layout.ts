@@ -600,6 +600,26 @@ export const setLayoutForSpec = (specId: string, layout: LayoutSpec | null): voi
 };
 
 /**
+ * History apply-path setter (Part C of the graph-legibility plan, undo/redo).
+ * Replace the ENTIRE layout map wholesale from a snapshot the edit-history
+ * store captured. Authoritative whole-map write — NOT a per-entry
+ * `setLayoutForSpec` loop, which would hit the drop-empty-on-clear branches
+ * and leave stale entries for spec ids present in the live map but absent
+ * from the snapshot (e.g. a snapshot taken before a duplicate-round migrated
+ * a spec's layout id would otherwise strand the post-rename entry). The
+ * snapshot is captured by reference off `useLayoutMap()`, which every setter
+ * replaces wholesale (never mutates in place), so the reference stays valid.
+ *
+ * The caller (edit-history) wraps this + `restoreSpecsForHistory` in one
+ * Solid `batch()` and sets its re-entrancy guard to this exact map reference
+ * BEFORE calling so the capture observer skips the restore's own write.
+ */
+export const replaceLayoutMap = (map: LayoutMap): void => {
+  setLayoutMapSignal(map);
+  persist(map);
+};
+
+/**
  * Multiply every pinned position in every spec's layout by `factor`. Used by
  * `view-density.ts::setViewDensity` to keep dragged containers in their
  * "logical slot" when the user flips density — without rescaling, a pin at
