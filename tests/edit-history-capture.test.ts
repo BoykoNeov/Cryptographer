@@ -27,6 +27,7 @@
  * observer with the right prev/cur, matching production.
  */
 
+import { getDefaultCollapsedContainers } from "@/core/spec-defaults";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
 import {
   __editHistoryDepthsForTests,
@@ -41,6 +42,7 @@ import {
   __resetLayoutsForTests,
   getLayoutForSpec,
   setNodePosition,
+  toggleCollapse,
   useLayoutMap,
 } from "@/ui/stores/layout";
 import {
@@ -142,6 +144,28 @@ describe("edit-history capture observer (C2) — atomic + coalesced mutations", 
 
     undo();
     expect(useSpecsByMode()()).toBe(pristine);
+    expect(depths()).toEqual({ undo: 0, redo: 1 });
+  });
+
+  it("captures a collapse toggle (guard-3 false branch: layout change, no gesture) as ONE entry", () => {
+    // A `toggleCollapse` changes the layout map with specs unchanged AND no
+    // drag gesture active — the ONE normal-edit class that lands in guard 3's
+    // FALSE branch (`layoutGestureActive` is false, so it does NOT coalesce).
+    // Per the stack-boundary rule, collapse/replication toggles are undoable
+    // per-spec layout edits: one entry each. Guards against a future
+    // "simplify" of the gesture-flag logic silently swallowing them.
+    const spec = useSpec()();
+    const specId = spec.id;
+    const containerId = "round.1";
+    const inDefaults = getDefaultCollapsedContainers(spec).has(containerId);
+    const before = useLayoutMap()();
+
+    toggleCollapse(specId, containerId, inDefaults);
+    expect(useLayoutMap()()).not.toBe(before);
+    expect(depths().undo).toBe(1);
+
+    undo();
+    expect(useLayoutMap()()).toBe(before);
     expect(depths()).toEqual({ undo: 0, redo: 1 });
   });
 
