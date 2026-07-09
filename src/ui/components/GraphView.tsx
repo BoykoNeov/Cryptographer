@@ -59,6 +59,7 @@ import {
 import { resolvePortMap } from "@/core/port-projection";
 import { type LegalSource, legalSourcesForInput } from "@/core/port-sources";
 import { allColorableSources, assignSourceColors } from "@/core/source-colors";
+import { type StrokeStyle, assignSourceStrokes, strokeStyleByName } from "@/core/source-strokes";
 import { getDefaultCollapsedContainers, getEffectiveCollapsedSet } from "@/core/spec-defaults";
 import {
   type CompositeInsertAnchor,
@@ -133,6 +134,7 @@ import {
   useManualSourceColors,
   useSourceColoringEnabled,
 } from "../stores/view-source-colors";
+import { useSourceStrokeStylingEnabled } from "../stores/view-source-strokes";
 import {
   type ValueInspectorTarget,
   clearSelectedTarget,
@@ -177,6 +179,14 @@ import {
  * tests + the fall-through path).
  */
 const EMPTY_COLOR_MAP: ReadonlyMap<string, string> = new Map();
+
+/**
+ * Shared empty map for the source-*stroke* memo's OFF / no-data branch.
+ * Same GC-churn rationale as `EMPTY_COLOR_MAP`, but this branch is the
+ * COMMON case: the stroke master toggle ships OFF (see
+ * `view-source-strokes.ts`), so most sessions read this identity.
+ */
+const EMPTY_STROKE_MAP: ReadonlyMap<string, string> = new Map();
 
 // ─── Layout constants ──────────────────────────────────────────────────────
 // All in CSS pixels. The size-and-gap subset scales with the active view
@@ -3088,6 +3098,50 @@ export const GraphView = () => {
     return merged;
   });
 
+  // ─── Source-STROKE coding (Part A / chunk A3a, 2026-07-09) ───────────────
+  //
+  // The second disambiguation channel alongside colour: a per-source dash
+  // *style* (see `core/source-strokes.ts`). Mirrors the colour memos above,
+  // with two deliberate differences (both documented on the store,
+  // `view-source-strokes.ts`):
+  //
+  //   1. **Threshold is REUSED**, not owned. `assignSourceStrokes` walks the
+  //      identical `multiFanoutSources(graph, colorThreshold())` list as
+  //      `assignSourceColors`, so a source lands at the same index in both →
+  //      a stable matched (colour, dash) pair. A separate stroke threshold
+  //      would desync that pair.
+  //   2. **Manual overrides come from `LayoutSpec.strokeStyles`**, not a
+  //      viewer store — arrow styles TRAVEL with the document (the divergence
+  //      from colours). We read them off `activeLayout()` so the memo
+  //      recomputes when the persisted layout changes (a `setSourceStroke`
+  //      write replaces the layout entry).
+  //
+  // Master toggle ships OFF, so `effectiveSourceStrokes` is the empty
+  // identity in the common case and every edge falls through to today's
+  // un-styled path — byte-identical to before this chunk.
+  const strokeStylingEnabled = useSourceStrokeStylingEnabled();
+  const autoSourceStrokes = createMemo(() => assignSourceStrokes(graph(), colorThreshold()));
+  // Manual per-source style-name overrides, read off the active layout's
+  // `strokeStyles` map (absent → empty). Tracks `activeLayout()`, so a
+  // `setSourceStroke` write (which mints a new layout entry) recomputes this.
+  const manualSourceStrokes = createMemo<ReadonlyMap<string, string>>(() => {
+    const styles = activeLayout()?.strokeStyles;
+    if (styles === undefined) return EMPTY_STROKE_MAP;
+    return new Map(Object.entries(styles));
+  });
+  // Combined map (auto + manual) of canonical source id → style NAME — what
+  // the per-edge resolver reads. Empty when the master toggle is OFF, so the
+  // EdgePath fall-through to un-styled edges takes over automatically.
+  const effectiveSourceStrokes = createMemo<ReadonlyMap<string, string>>(() => {
+    if (!strokeStylingEnabled()) return EMPTY_STROKE_MAP;
+    const auto = autoSourceStrokes();
+    const manual = manualSourceStrokes();
+    if (manual.size === 0) return auto;
+    const merged = new Map(auto);
+    for (const [k, v] of manual) merged.set(k, v);
+    return merged;
+  });
+
   // List of rows for the SourceColorsPanel. Each row carries:
   //   - `id`: canonical source id.
   //   - `color`: the effective colour (`undefined` for single-fanout
@@ -4910,6 +4964,34 @@ export const GraphView = () => {
             const node = nodesById().get(edge.from);
             const canonical = node?.replicaOf ?? edge.from;
             return colors.get(canonical);
+          })()}
+          // Source-STROKE coding (A3a). Same canonical-source resolution as
+          // `sourceColor` (reuse the `nodesById` memo, no per-edge O(N)
+          // scan), then expand the assigned style NAME into its four-channel
+          // bundle. Returns `undefined` for edges that should stay un-styled:
+          // toggle OFF (empty map), endpoint-pill sources, sources absent
+          // from the map, AND — critically — the `solid` baseline (all four
+          // channels at their defaults). Falling through on `solid` keeps
+          // solid-assigned sources byte-identical to today's un-styled edge,
+          // the invariant that makes this chunk non-disruptive.
+          sourceStroke={(() => {
+            const strokes = effectiveSourceStrokes();
+            if (strokes.size === 0) return undefined;
+            if (isEndpointId(edge.from)) return undefined;
+            const node = nodesById().get(edge.from);
+            const canonical = node?.replicaOf ?? edge.from;
+            const name = strokes.get(canonical);
+            if (name === undefined) return undefined;
+            const style = strokeStyleByName(name);
+            // Solid baseline → no visual change; fall through un-styled.
+            if (
+              style.dasharray === null &&
+              style.widthMul === 1 &&
+              style.dashoffset === undefined
+            ) {
+              return undefined;
+            }
+            return style;
           })()}
         />
       </Show>
@@ -7288,6 +7370,24 @@ const EdgePath = (props: {
    * reject an explicit `undefined` argument.
    */
   sourceColor: string | undefined;
+  /**
+   * Source-stroke *style* override (A3a, 2026-07-09). When defined, the
+   * visible path applies this style's four orthogonal channels
+   * (`stroke-dasharray`, `stroke-linecap`, `stroke-dashoffset`, and a
+   * `widthMul` that MULTIPLIES — never overwrites — the base density/bundle
+   * width). Undefined means "no stroke styling" — the caller already folds
+   * the `solid` baseline into `undefined`, so a defined value always changes
+   * at least one channel.
+   *
+   * Orthogonal to `sourceColor`: an edge can be both coloured (its stroke
+   * paint) and styled (its dash texture). The width multiplier composes with
+   * the existing bundle `stroke-width` math; the dash/linecap/offset are
+   * new channels no other prop touches. Like `sourceColor`, an explicit
+   * `| undefined` (not `?:`) because the call site returns
+   * `StrokeStyle | undefined` from an IIFE under
+   * `exactOptionalPropertyTypes`.
+   */
+  sourceStroke: StrokeStyle | undefined;
 }) => {
   // The `d` attribute is computed via createMemo so it tracks changes to
   // props.from / props.to. Without the memo, the path string would be
@@ -7691,13 +7791,58 @@ const EdgePath = (props: {
         // source-coloured halo CSS rule resolves to the same value —
         // see the `.graph-edge-source-colored.graph-edge-selected`
         // rule.)
-        style={props.sourceColor !== undefined ? { stroke: props.sourceColor } : undefined}
+        // Inline style carries three of the four channels: `sourceColor`
+        // (the stroke paint, as before), the source-STROKE dash texture
+        // (`stroke-dasharray` / `stroke-linecap` / `stroke-dashoffset`), AND
+        // — only for the heavy weight tier — the multiplied `stroke-width`.
+        // Inline style wins over both the kind class AND
+        // `.graph-edge-feedback`'s `4 3` dash (a source dash overrides the
+        // feedback dash on the rare cross-iteration edge — acceptable for an
+        // opt-in channel).
+        //
+        // Width is INLINE here (rather than the presentation attribute
+        // below) BECAUSE it must beat the `.graph-edge-{aux,state}` base-
+        // width class — a presentation attribute has the lowest CSS
+        // specificity and would be shadowed by that class, leaving the heavy
+        // tier invisible. We only emit it when `widthMul !== 1`: the common
+        // (solid / plain-dash) path leaves width to the attribute below, so
+        // its today's-behavior emphasis (`:hover` → 2.5, `.selected` → 4,
+        // which DO beat the attribute) is untouched. The documented trade-
+        // off: a hovered/selected HEAVY edge keeps its heavy width instead of
+        // the CSS bump — fine for an opt-in channel.
+        style={(() => {
+          const color = props.sourceColor;
+          const s = props.sourceStroke;
+          if (color === undefined && s === undefined) return undefined;
+          const out: Record<string, string> = {};
+          if (color !== undefined) out.stroke = color;
+          if (s !== undefined) {
+            // `dasharray === null` is the continuous-line case (only reachable
+            // via a heavy/phase tier whose base pattern is solid); skip it so
+            // the line stays unbroken.
+            if (s.dasharray !== null) out["stroke-dasharray"] = s.dasharray;
+            out["stroke-linecap"] = s.linecap;
+            if (s.dashoffset !== undefined) out["stroke-dashoffset"] = String(s.dashoffset);
+            if (s.widthMul !== 1) {
+              const n = props.bundleCount ?? 1;
+              // Base = the same density/bundle width the attribute below
+              // computes (bundle formula for n≥2, else the per-kind CSS
+              // default). The heavy tier MULTIPLIES it — never overwrites —
+              // so the density math still wins its part.
+              const base =
+                n >= 2 ? 1.5 + Math.min(1.5, Math.log2(n) * 0.7) : props.kind === "state" ? 2 : 1.5;
+              out["stroke-width"] = String(base * s.widthMul);
+            }
+          }
+          return out;
+        })()}
         // Conservative log-based scaling per advisor: N=2 ~2.2 px, N=11
         // ~2.7 px, N=100 ~3.0 px. The `×N` label does most of the
         // communicating; the arrow shouldn't dominate. Falls back to
         // CSS (1.5 px aux / 2 px state) for singleton bundles by
         // returning `undefined`, which SVG treats as "use the
-        // stylesheet rule."
+        // stylesheet rule." (The heavy weight tier overrides this via inline
+        // style above; the plain/solid path stays on this attribute.)
         stroke-width={(() => {
           const n = props.bundleCount ?? 1;
           if (n < 2) return undefined;
