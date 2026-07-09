@@ -67,7 +67,7 @@ import {
   updateStepParams,
 } from "@/core/spec-mutations";
 import type { CipherSpec, Json, PortBinding, StepGroup, StepLeaf, StepNode } from "@/core/types";
-import { createSignal } from "solid-js";
+import { batch, createSignal } from "solid-js";
 import {
   type Algorithm,
   type Asymmetric,
@@ -1119,18 +1119,25 @@ export const duplicateRoundInSpec = (sourceId: string): void => {
     );
   }
 
-  // Single signal update: both slots land atomically. Subscribers see
-  // one consistent (encrypt, decrypt) pair.
-  setSpecs(
-    currentMode === "encrypt"
-      ? { kind: "cipher", encrypt: newActive, decrypt: newCounterpart }
-      : { kind: "cipher", encrypt: newCounterpart, decrypt: newActive },
-  );
+  // One `batch()` so the three signal writes below (the spec union + both
+  // layout-map renames) land as a SINGLE reactive transition. Subscribers see
+  // one consistent (encrypt, decrypt, layout) update — and, load-bearing for
+  // C2, the edit-history capture observer records exactly ONE undo entry for
+  // the whole duplicate-round instead of one per intermediate write.
+  batch(() => {
+    // Both slots land atomically: subscribers see one consistent
+    // (encrypt, decrypt) pair.
+    setSpecs(
+      currentMode === "encrypt"
+        ? { kind: "cipher", encrypt: newActive, decrypt: newCounterpart }
+        : { kind: "cipher", encrypt: newCounterpart, decrypt: newActive },
+    );
 
-  // Layout migration. Both specs have their own layout entry keyed by
-  // spec.id; each gets the matching rename map applied.
-  renameSpecLayoutIds(newActive.id, activeRenames);
-  renameSpecLayoutIds(newCounterpart.id, counterpartRenames);
+    // Layout migration. Both specs have their own layout entry keyed by
+    // spec.id; each gets the matching rename map applied.
+    renameSpecLayoutIds(newActive.id, activeRenames);
+    renameSpecLayoutIds(newCounterpart.id, counterpartRenames);
+  });
 };
 
 /**

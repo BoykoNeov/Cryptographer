@@ -107,6 +107,7 @@ import {
   isCipherModeSupported,
   useCipherMode,
 } from "./stores/cipher-mode";
+import { installEditHistoryCapture } from "./stores/edit-history";
 import { setByteFormat, useByteFormat } from "./stores/format";
 import { pushSnapshot, useHistory } from "./stores/history";
 import { useIvBytes } from "./stores/iv";
@@ -296,6 +297,12 @@ export const App = () => {
   // Wire window-level keyboard shortcuts (←/→ scrub, Home/End, PageUp/Down).
   // Tied to App's lifecycle via onCleanup inside the helper.
   installKeyboardShortcuts();
+
+  // Wire the unified undo/redo capture observer (C2): one deferred-style
+  // `createEffect(on([specs, layout]))` that records a pre-change snapshot for
+  // every spec edit or layout move. Behavior-neutral until C4 exposes the
+  // toolbar buttons + Ctrl+Z shortcuts — the stack just accumulates for now.
+  installEditHistoryCapture();
 
   /**
    * Wrap a state-mutating `onInput` body so the page's vertical scroll

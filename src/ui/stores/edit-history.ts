@@ -49,7 +49,7 @@
  * stepId.
  */
 
-import { batch, createSignal } from "solid-js";
+import { batch, createEffect, createSignal, on } from "solid-js";
 import { type LayoutMap, replaceLayoutMap, useLayoutMap } from "./layout";
 import {
   type Mode,
@@ -157,6 +157,46 @@ export const captureTransition = (
   }
   if (layoutGestureActive && prev.specs === cur.specs) return;
   pushUndo({ specs: prev.specs, layoutMap: prev.layout, mode: useMode()() });
+};
+
+// ─── Observer wiring (C2) ───────────────────────────────────────────────────
+
+/**
+ * Install the App-scope capture observer: ONE `createEffect(on(...))` watching
+ * the whole dual-mode spec union AND the whole layout map, so every mutation to
+ * either store flows through a single place and forwards its (pre-change,
+ * post-change) snapshot pair to `captureTransition`. Mirrors
+ * `installKeyboardShortcuts()` — called once from App scope, so it lives as long
+ * as the app does. C1 tests drove `captureTransition` directly; C2 tests drive
+ * this real observer.
+ *
+ * **Deliberately NOT `{ defer: true }`** — despite the plan's wording. Solid's
+ * `on` returns from a deferred initial run BEFORE it records `prevInput`
+ * (verified in `solid.cjs`: the `if (defer) { defer = false; return prevValue }`
+ * branch short-circuits ahead of `prevInput = input`). So with `defer`, the
+ * FIRST real change fires `fn` with `prevInput === undefined` and the `!prev`
+ * guard would silently drop it — the first non-drag edit after a fresh load
+ * would not be undoable, throwing every later undo depth off by one. Running
+ * non-deferred instead means the immediate init run fires `fn(input, undefined)`
+ * — the `!prev` guard skips that one no-op — and `on` then sets `prevInput =
+ * input`, so the first GENUINE change already carries the correct pre-change
+ * snapshot. (The drag path masks this bug because `endLayoutGesture` pushes its
+ * snapshot directly, not through this observer; only a non-drag first edit
+ * exposes it.)
+ *
+ * Reads BOTH deps every run (unconditional array read) — a conditional dep read
+ * would desync `on`'s `prevInput` and corrupt the next entry.
+ */
+export const installEditHistoryCapture = (): void => {
+  createEffect(
+    on([useSpecsByMode(), useLayoutMap()], ([curSpecs, curLayout], prev) => {
+      if (!prev) return; // init run: only establishes prevInput, captures nothing
+      captureTransition(
+        { specs: prev[0], layout: prev[1] },
+        { specs: curSpecs, layout: curLayout },
+      );
+    }),
+  );
 };
 
 // ─── Apply (undo / redo) ────────────────────────────────────────────────────

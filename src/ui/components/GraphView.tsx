@@ -82,6 +82,7 @@ import {
   suppressCuratedLayout,
   unsuppressCuratedLayout,
 } from "../stores/curated-layout-suppress";
+import { beginLayoutGesture, endLayoutGesture } from "../stores/edit-history";
 import { useByteFormat } from "../stores/format";
 import {
   clearNodePosition,
@@ -4558,9 +4559,19 @@ export const GraphView = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
+      // Close the undo gesture (C2): commits exactly ONE pre-drag entry iff the
+      // layout map reference actually changed during the drag. A sub-threshold
+      // click never moved a pin, so the map is untouched and no entry records —
+      // the same `moved` outcome that drives `onClickFallback` below.
+      endLayoutGesture();
       if (!moved && onClickFallback) onClickFallback();
     };
 
+    // Open the undo gesture (C2) AFTER the `if (!startBox) return` guard above,
+    // so a bailed drag never leaks the active flag. While the gesture is open,
+    // the App-scope capture observer coalesces every per-pointermove layout
+    // write into the single pre-drag snapshot committed by `endLayoutGesture`.
+    beginLayoutGesture();
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onUp);
