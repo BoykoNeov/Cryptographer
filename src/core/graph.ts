@@ -590,7 +590,7 @@ const deriveEdges = (trace: Trace, ctx: BuildContext): GraphEdge[] => {
   // (the implicit per-leaf state thread) are synthesized in a separate
   // pass - see commit 2 of this sequence.
   const addEdge = (from: string, to: string, auxKey: string): void => {
-    const dedupKey = `aux ${from} ${to} ${auxKey}`;
+    const dedupKey = `aux\u0000${from}\u0000${to}\u0000${auxKey}`;
     if (seenEdgeKeys.has(dedupKey)) return;
     seenEdgeKeys.add(dedupKey);
     edges.push({ from, to, auxKey, kind: "aux" });
