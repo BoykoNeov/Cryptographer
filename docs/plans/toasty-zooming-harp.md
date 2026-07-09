@@ -204,6 +204,35 @@ dropdown per source row — one small `<select>` of catalogue names beside
 the existing colour swatch. Auto-assigned style shown as the default
 option; picking one writes via `setSourceStroke`.
 
+**SHIPPED (A3b, 2026-07-09).** The colours panel became a unified
+**"source styling"** panel hosting BOTH channels per row: colour swatch +
+dash `<select>`. Key decisions taken during the build (recorded so a later
+reader doesn't re-litigate them):
+- **Panel visibility** = `(colouring || styling) && rows > 0` — gating on
+  colour alone would hide the dash dropdown from a strokes-only spec.
+- **Row-id union** — `sourceColorRows` now unions manual *stroke* keys
+  (`manualSourceStrokes().keys()`) into the id set, else a source with only
+  a manual stroke + sub-threshold fanout vanishes (unreachable to reset).
+  The auto stroke keys coincide with the auto colour keys (shared
+  `multiFanoutSources`), so only the manual-stroke union was needed.
+- **Per-channel disable** — the swatch disables when colouring is off, the
+  `<select>` disables when styling is off; the greyed control still
+  *advertises* the channel exists rather than vanishing.
+- **"auto (name)" option** — the `<select>`'s first option (value `""`)
+  maps to `setSourceStroke(id, null)` (clear override) and labels the
+  currently auto-assigned style so the user sees the default without
+  committing.
+- **Shipped default = OFF everywhere EXCEPT SHA-256 (ON)** — user-decided.
+  Strokes are the escalation channel for when a spec's source count blows
+  past the 8-colour palette; SHA-256 is the only shipped spec that does, so
+  it opens pre-styled and the rest stay clean. Implemented as a **per-spec**
+  master toggle (`view-source-strokes.ts` reshaped from a single global bool
+  to a `{ [specId]: boolean }` override map + `defaultStrokeStylingFor`
+  prefix-matching `sha-256`), with drop-on-match persistence so "reset"
+  returns to the shipped default. Verified in-browser
+  (`e2e/exploratory-hash-and-edges.spec.ts` "A3b" block): SHA-256 opens
+  dashed, and a manual override survives reload via the persisted LayoutSpec.
+
 ### Tests (same commit)
 - `source-strokes.test.ts` — determinism of `assignSourceStrokes`,
   catalogue cycling, canonical-source collapsing (mirror

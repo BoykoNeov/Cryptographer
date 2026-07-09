@@ -59,7 +59,12 @@ import {
 import { resolvePortMap } from "@/core/port-projection";
 import { type LegalSource, legalSourcesForInput } from "@/core/port-sources";
 import { allColorableSources, assignSourceColors } from "@/core/source-colors";
-import { type StrokeStyle, assignSourceStrokes, strokeStyleByName } from "@/core/source-strokes";
+import {
+  STROKE_STYLE_CATALOGUE,
+  type StrokeStyle,
+  assignSourceStrokes,
+  strokeStyleByName,
+} from "@/core/source-strokes";
 import { getDefaultCollapsedContainers, getEffectiveCollapsedSet } from "@/core/spec-defaults";
 import {
   type CompositeInsertAnchor,
@@ -80,6 +85,7 @@ import {
   setNodePosition,
   setRelativePosition,
   setReplicationMode,
+  setSourceStroke,
   toggleCollapse,
   useLayoutMap,
 } from "../stores/layout";
@@ -134,7 +140,10 @@ import {
   useManualSourceColors,
   useSourceColoringEnabled,
 } from "../stores/view-source-colors";
-import { useSourceStrokeStylingEnabled } from "../stores/view-source-strokes";
+import {
+  toggleSourceStrokeStylingEnabled,
+  useSourceStrokeStylingEnabled,
+} from "../stores/view-source-strokes";
 import {
   type ValueInspectorTarget,
   clearSelectedTarget,
@@ -3119,7 +3128,10 @@ export const GraphView = () => {
   // Master toggle ships OFF, so `effectiveSourceStrokes` is the empty
   // identity in the common case and every edge falls through to today's
   // un-styled path — byte-identical to before this chunk.
-  const strokeStylingEnabled = useSourceStrokeStylingEnabled();
+  // Per-spec master toggle (SHA-256 ships ON, every other built-in OFF —
+  // see `view-source-strokes.ts`). Tracks BOTH the persisted override map
+  // and the active spec id, so switching cipher re-reads the correct default.
+  const strokeStylingEnabled = useSourceStrokeStylingEnabled(() => spec().id);
   const autoSourceStrokes = createMemo(() => assignSourceStrokes(graph(), colorThreshold()));
   // Manual per-source style-name overrides, read off the active layout's
   // `strokeStyles` map (absent → empty). Tracks `activeLayout()`, so a
@@ -3165,6 +3177,15 @@ export const GraphView = () => {
   // previously coloured even when the sub-toggle is off (otherwise
   // their override would be invisible in the panel but still active
   // on the canvas).
+  //
+  // A3b (2026-07-09): this panel now hosts BOTH per-source channels —
+  // colour swatch AND stroke-style dropdown — so each row also carries the
+  // stroke fields (`strokeName` = effective name, `autoStrokeName` = the
+  // auto-assigned name for the dropdown's "auto (…)" option, `isStrokeManual`
+  // = a manual override is in effect). The id set unions manual STROKE keys
+  // too: a source with a manual stroke, no colour override, and sub-threshold
+  // fanout must still surface a row, else its override is invisible and
+  // unresettable (the same invariant the colour manual keys satisfy).
   const sourceColorRows = createMemo<
     readonly {
       id: string;
@@ -3172,10 +3193,15 @@ export const GraphView = () => {
       fanout: number;
       isManual: boolean;
       isAutoColored: boolean;
+      strokeName: string | undefined;
+      autoStrokeName: string | undefined;
+      isStrokeManual: boolean;
     }[]
   >(() => {
     const auto = autoSourceColors();
     const manual = manualSourceColors();
+    const autoStrokes = autoSourceStrokes();
+    const manualStrokes = manualSourceStrokes();
     const includeSingle = includeSingleSources();
     // Reuse `replicationSources` style fanout counting — single pass over
     // the graph's edges, replicas counted toward their canonical source.
@@ -3188,11 +3214,12 @@ export const GraphView = () => {
       fanout.set(canonical, (fanout.get(canonical) ?? 0) + 1);
     }
     // Decide which ids to surface:
-    //   - Multi-fanout always (via `auto.keys()`).
-    //   - Anything with a manual override (so the user's previous
-    //     picks remain visible / resettable).
+    //   - Multi-fanout always (via `auto.keys()`; auto strokes share the
+    //     same key set, so `auto.keys()` already covers auto-styled sources).
+    //   - Anything with a manual colour OR manual stroke override (so the
+    //     user's previous picks remain visible / resettable).
     //   - Every other source when the sub-toggle is ON.
-    const ids = new Set<string>([...auto.keys(), ...manual.keys()]);
+    const ids = new Set<string>([...auto.keys(), ...manual.keys(), ...manualStrokes.keys()]);
     if (includeSingle) {
       for (const id of allColorableSources(g)) ids.add(id);
     }
@@ -3202,16 +3229,24 @@ export const GraphView = () => {
       fanout: number;
       isManual: boolean;
       isAutoColored: boolean;
+      strokeName: string | undefined;
+      autoStrokeName: string | undefined;
+      isStrokeManual: boolean;
     }[] = [];
     for (const id of ids) {
       const manualColor = manual.get(id);
       const autoColor = auto.get(id);
+      const manualStroke = manualStrokes.get(id);
+      const autoStroke = autoStrokes.get(id);
       rows.push({
         id,
         color: manualColor ?? autoColor,
         fanout: fanout.get(id) ?? 0,
         isManual: manualColor !== undefined,
         isAutoColored: autoColor !== undefined,
+        strokeName: manualStroke ?? autoStroke,
+        autoStrokeName: autoStroke,
+        isStrokeManual: manualStroke !== undefined,
       });
     }
     rows.sort((a, b) => a.id.localeCompare(b.id));
@@ -5129,6 +5164,28 @@ export const GraphView = () => {
               />
               color by source
             </label>
+            {/* Source-STROKE styling master toggle (A3b, 2026-07-09). The
+                second, orthogonal disambiguation channel: each source's edges
+                get a distinct DASH pattern (× line-cap × weight × phase) so
+                sources stay tellable-apart even when their colours collide —
+                which they do on dense specs (more sources than the 8-colour
+                palette). PER-SPEC + SHA-256 ships ON, every other built-in
+                OFF (see `view-source-strokes.ts`); the same per-source panel
+                below hosts the dash dropdown next to the colour swatch. Shares
+                the colouring fanout threshold, so a source's colour index and
+                dash index stay aligned. */}
+            <label
+              class="graph-replicate-toggle"
+              title="Give each source's outgoing edges a distinct dash pattern (a second channel alongside colour)"
+            >
+              <input
+                type="checkbox"
+                checked={strokeStylingEnabled()}
+                onChange={() => toggleSourceStrokeStylingEnabled(spec().id)}
+                data-testid="source-stroke-styling-toggle"
+              />
+              style by source
+            </label>
             {/* Coloring fanout threshold (2026-05-30) — the REAL "color by
                 source" knob, next to its own checkbox. A source auto-colours
                 when its fanout is ≥ this value. Min 0 (colour every edge),
@@ -5370,20 +5427,23 @@ export const GraphView = () => {
               </Show>
             </div>
           </Show>
-          {/* Source-colors panel (2026-05-19). Shown when the master
-              toggle is ON and at least one colorable source exists.
-              Mirrors the replication-overrides panel's header /
-              chevron / open-state shape so the two graph-level panels
-              read as siblings. One row per source: a clickable colour
-              swatch (opens a native <input type="color"> below it), the
-              source's canonical id, the fanout count, and a per-row
-              [reset] button when a manual override is active. Footer
-              has [clear all manual] and [autocolor now] (functionally
-              identical — clearing reverts every override to auto;
-              `autocolor now` is the user's mental-model phrasing for
-              the same operation, kept as a separate button for
-              discoverability). */}
-          <Show when={sourceColoringEnabled() && sourceColorRows().length > 0}>
+          {/* Source-styling panel (2026-05-19; A3b added the stroke channel
+              2026-07-09). Shown when EITHER master toggle (colour OR stroke)
+              is ON and at least one source exists — gating on colour alone
+              would hide the dash dropdown from a strokes-only spec (e.g.
+              SHA-256 with colours toggled off). Mirrors the replication-
+              overrides panel's header / chevron / open-state shape so the two
+              graph-level panels read as siblings. One row per source: a
+              clickable colour swatch (native <input type="color">, disabled
+              when colouring is off), a dash-style dropdown (disabled when
+              styling is off), the source's canonical id, the fanout count,
+              and a per-row colour-[reset] button when a manual colour is
+              active. Footer has [clear all manual] and [autocolor now]. */}
+          <Show
+            when={
+              (sourceColoringEnabled() || strokeStylingEnabled()) && sourceColorRows().length > 0
+            }
+          >
             <div class="graph-source-colors-panel">
               <button
                 type="button"
@@ -5392,14 +5452,14 @@ export const GraphView = () => {
                 data-open={colorsPanelOpen() ? "true" : "false"}
                 aria-expanded={colorsPanelOpen() ? "true" : "false"}
                 onClick={() => toggleColorsPanelOpen(spec().id)}
-                title={colorsPanelOpen() ? "Collapse source colors" : "Expand source colors"}
+                title={colorsPanelOpen() ? "Collapse source styling" : "Expand source styling"}
               >
                 <span class="graph-replication-panel-chevron" aria-hidden="true">
                   ▸
                 </span>
-                source colors
+                source styling
                 <span class="graph-replication-panel-hint">
-                  {sourceColorRows().length} colored source
+                  {sourceColorRows().length} source
                   {sourceColorRows().length === 1 ? "" : "s"}
                 </span>
               </button>
@@ -5453,12 +5513,38 @@ export const GraphView = () => {
                             "graph-source-colors-swatch-unset": row.color === undefined,
                           }}
                           value={row.color ?? "#888888"}
+                          disabled={!sourceColoringEnabled()}
                           aria-label={`Color for source ${row.id}`}
                           onInput={(e) =>
                             setSourceColorOverride(spec().id, row.id, e.currentTarget.value)
                           }
                           data-testid={`source-colors-swatch-${row.id}`}
                         />
+                        {/* Dash-style dropdown (A3b). The persisted value is a
+                            style NAME string; the empty option maps to "auto"
+                            (clears the manual override → `setSourceStroke(…,
+                            null)`), and its label shows what auto currently
+                            assigns so the user can see the default without
+                            committing to it. A manual pick writes the chosen
+                            name. Disabled when the stroke channel is off for
+                            this spec, so the control still ADVERTISES the
+                            channel exists (greyed, not hidden). */}
+                        <select
+                          class="graph-source-strokes-select"
+                          disabled={!strokeStylingEnabled()}
+                          value={row.isStrokeManual ? (row.strokeName ?? "") : ""}
+                          aria-label={`Dash style for source ${row.id}`}
+                          onChange={(e) => {
+                            const name = e.currentTarget.value;
+                            setSourceStroke(spec().id, row.id, name === "" ? null : name);
+                          }}
+                          data-testid={`source-strokes-select-${row.id}`}
+                        >
+                          <option value="">auto ({row.autoStrokeName ?? "solid"})</option>
+                          <For each={STROKE_STYLE_CATALOGUE}>
+                            {(style) => <option value={style.name}>{style.name}</option>}
+                          </For>
+                        </select>
                         <span class="graph-replication-row-id" title={row.id}>
                           {row.id}
                         </span>

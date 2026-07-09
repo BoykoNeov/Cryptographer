@@ -657,3 +657,135 @@ test.describe("Aggressive edges", () => {
     expect(bannerText?.toLowerCase()).toContain("run");
   });
 });
+
+// ─── A3b: per-source arrow-style (dash) channel ───────────────────────────
+//
+// Graph-legibility plan (`docs/plans/toasty-zooming-harp.md`) Part A, chunk
+// A3b (2026-07-09). Visual features need a browser smoke, not just property
+// tests (project rule). The jsdom suite pins the wiring; this pins that in a
+// REAL browser (real CSS applied) SHA-256 opens with the dash channel ON,
+// the picker exists, and a MANUAL dash override survives a reload (the
+// "styles travel with the document" guarantee — the override lives on
+// LayoutSpec, persisted to localStorage).
+test.describe("A3b — per-source arrow styles", () => {
+  test.beforeEach(async ({ page }) => {
+    await freshLoad(page);
+  });
+
+  test("SHA-256 graph opens with dash styles ON by default; toggle is checked", async ({
+    page,
+  }) => {
+    await sel(page, "kind").selectOption("hash");
+    await clickRun(page);
+    await page.getByRole("tab", { name: "graph", exact: true }).click();
+    await expect(page.locator(".graph-container-rect").first()).toBeVisible();
+
+    // Per-spec default: SHA-256 ships the dash channel ON, so at least one
+    // rendered edge carries an inline stroke-dasharray with NO user action.
+    const dashedCount = await page
+      .locator("path.graph-edge")
+      .evaluateAll(
+        (paths) => paths.filter((p) => (p as SVGPathElement).style.strokeDasharray !== "").length,
+      );
+    expect(dashedCount).toBeGreaterThan(0);
+
+    // The "style by source" master toggle reflects the ON default.
+    await expect(page.getByTestId("source-stroke-styling-toggle")).toBeChecked();
+  });
+
+  test("a manual dash-style override survives a reload (travels on LayoutSpec)", async ({
+    page,
+  }) => {
+    await sel(page, "kind").selectOption("hash");
+    await clickRun(page);
+    await page.getByRole("tab", { name: "graph", exact: true }).click();
+    await expect(page.locator(".graph-container-rect").first()).toBeVisible();
+
+    // Open the source-styling panel and pick a distinctive dash on the first
+    // listed source.
+    await page.getByTestId("source-colors-panel-toggle").click();
+    const firstSelect = page.locator('[data-testid^="source-strokes-select-"]').first();
+    await expect(firstSelect).toBeVisible();
+    const testId = await firstSelect.getAttribute("data-testid");
+    if (!testId) throw new Error("stroke select is missing its data-testid");
+    await firstSelect.selectOption("long-dash");
+    await expect(firstSelect).toHaveValue("long-dash");
+
+    // Reload WITHOUT clearing storage. The algorithm SELECTION is session-only
+    // (resets to AES on reload — a deliberate design choice), but the manual
+    // dash override lives on the SHA-256 LayoutSpec, persisted to localStorage
+    // under `cryptographer.layouts`. Re-navigate to SHA-256 and the override
+    // must rehydrate — that's the "styles travel with the document" guarantee.
+    await page.reload();
+    await sel(page, "kind").selectOption("hash");
+    await clickRun(page);
+    await page.getByRole("tab", { name: "graph", exact: true }).click();
+    await expect(page.locator(".graph-container-rect").first()).toBeVisible();
+    await page.getByTestId("source-colors-panel-toggle").click();
+    await expect(page.getByTestId(testId)).toHaveValue("long-dash");
+  });
+
+  test("a manual dash-style override travels through Save → Load (the document round-trip)", async ({
+    page,
+  }) => {
+    // The stroke override's whole raison d'être (vs viewer-local colours) is
+    // that it travels WITH the document. Reload proves the localStorage path;
+    // this proves the file path — Save embeds the LayoutSpec.strokeStyles
+    // sidecar (a manual override makes hasUserLayout true), Load reapplies it.
+    await sel(page, "kind").selectOption("hash");
+    await clickRun(page);
+    await page.getByRole("tab", { name: "graph", exact: true }).click();
+    await expect(page.locator(".graph-container-rect").first()).toBeVisible();
+
+    await page.getByTestId("source-colors-panel-toggle").click();
+    const firstSelect = page.locator('[data-testid^="source-strokes-select-"]').first();
+    await expect(firstSelect).toBeVisible();
+    const testId = await firstSelect.getAttribute("data-testid");
+    if (!testId) throw new Error("stroke select is missing its data-testid");
+    await firstSelect.selectOption("long-dash");
+    await expect(firstSelect).toHaveValue("long-dash");
+
+    // Save → capture the downloaded document bytes.
+    const downloadPromise = page.waitForEvent("download");
+    await page
+      .getByRole("button", { name: /^save…?$/i })
+      .first()
+      .click();
+    const download = await downloadPromise;
+    const path = await download.path();
+    if (!path) throw new Error("download.path() returned null");
+    const fs = await import("node:fs/promises");
+    const text = await fs.readFile(path, "utf-8");
+    // The saved document must carry the stroke override in its layout sidecar.
+    expect(text).toContain("strokeStyles");
+    expect(text).toContain("long-dash");
+
+    // Flip to a different algorithm so the Load actually swings state back.
+    await sel(page, "kind").selectOption("cipher");
+    await expect(sel(page, "kind")).toHaveValue("cipher");
+
+    // Load the saved file and confirm the override reapplied on SHA-256.
+    await page
+      .locator('input[type="file"]')
+      .first()
+      .setInputFiles({
+        name: download.suggestedFilename(),
+        mimeType: "application/json",
+        buffer: Buffer.from(text, "utf-8"),
+      });
+    await expect(sel(page, "kind")).toHaveValue("hash");
+    await page.getByRole("tab", { name: "graph", exact: true }).click();
+    await expect(page.locator(".graph-container-rect").first()).toBeVisible();
+    // Let the post-Load debounced rerun settle so the graph (and its source
+    // rows) are fully derived before we open the panel.
+    await page.waitForTimeout(500);
+    // The panel-open state is a session signal that SURVIVES Save→Load (no
+    // page reload here), so it's still open from earlier — clicking would
+    // close it. Open only if currently collapsed.
+    const panelToggle = page.getByTestId("source-colors-panel-toggle");
+    if ((await panelToggle.getAttribute("aria-expanded")) !== "true") {
+      await panelToggle.click();
+    }
+    await expect(page.getByTestId(testId)).toHaveValue("long-dash");
+  });
+});

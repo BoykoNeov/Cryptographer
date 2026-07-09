@@ -3150,6 +3150,37 @@ button:disabled {
   outline-offset: 2px;
 }
 
+/* Dash-style dropdown (A3b, 2026-07-09) — the per-source stroke picker,
+   sitting between the colour swatch and the source id in each row. Kept
+   compact and neutral so it doesn't compete with the colour swatch; the
+   disabled state (stroke channel off for this spec) dims + shows a
+   not-allowed cursor so the greyed control still advertises the channel. */
+.graph-source-strokes-select {
+  flex: 0 0 auto;
+  max-width: 132px;
+  padding: 1px 4px;
+  font-size: 11px;
+  color: var(--text);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.graph-source-strokes-select:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.graph-source-strokes-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.graph-source-strokes-select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* Hatched-stripe overlay for uncoloured swatches — single-output
    sources visible via the "include single-output" sub-toggle that
    haven't been manually coloured yet. The diagonal stripes read as
