@@ -107,6 +107,19 @@ const isLayoutSpec = (v: unknown): v is LayoutSpec => {
   if (o.expandedGroups !== undefined && !Array.isArray(o.expandedGroups)) {
     return false;
   }
+  // strokeStyles (Part A, 2026-07-09): plain object map (source id → style
+  // name). Checked loosely like `replicationModes` — the file-I/O path's Zod
+  // schema validates entries, and the renderer falls back to `solid` for any
+  // unknown value anyway.
+  if (o.strokeStyles !== undefined) {
+    if (
+      o.strokeStyles === null ||
+      typeof o.strokeStyles !== "object" ||
+      Array.isArray(o.strokeStyles)
+    ) {
+      return false;
+    }
+  }
   return true;
 };
 
@@ -177,18 +190,38 @@ const cloneExpandedGroups = (layout: LayoutSpec): string[] => {
 };
 
 /**
+ * Helper: snapshot a layout's `strokeStyles` (per-source stroke-style name
+ * overrides, Part A of the graph-legibility plan) as a plain mutable object.
+ * Absent field treated as empty. Mirrors the clone helpers above. Empty map
+ * is never persisted (see `buildLayoutSpec`'s omission discipline).
+ */
+const cloneStrokeStyles = (layout: LayoutSpec): { [sourceId: string]: string } => {
+  const out: { [sourceId: string]: string } = {};
+  if (layout.strokeStyles) {
+    for (const [k, v] of Object.entries(layout.strokeStyles)) {
+      out[k] = v;
+    }
+  }
+  return out;
+};
+
+/**
  * Compose a LayoutSpec, omitting `replicationModes` / `relativePositions` /
- * `expandedGroups` entirely when empty. Empty objects / arrays would still
- * serialize to `{}` / `[]` — present-but-empty produces different bytes
- * than absent, defeating the byte-stability gate that spec-only saves
- * depend on. Centralized here so every setter that rebuilds a LayoutSpec
- * follows the same discipline.
+ * `expandedGroups` / `strokeStyles` entirely when empty. Empty objects /
+ * arrays would still serialize to `{}` / `[]` — present-but-empty produces
+ * different bytes than absent, defeating the byte-stability gate that
+ * spec-only saves depend on. Centralized here so every setter that rebuilds
+ * a LayoutSpec follows the same discipline.
  *
- * The 2-by-2-by-2 omission matrix is unrolled to keep the produced
- * object literal monomorphic — V8 / SpiderMonkey can stably hidden-class
- * the result regardless of which optional fields are present. The cost
- * is verbose: 8 branches for the 3 independent optional fields, but
- * each branch is one return.
+ * **Field order is load-bearing.** `JSON.stringify` serializes in insertion
+ * order and the byte-stability gate pins that order, so the optionals must
+ * be spread in the fixed sequence `replicationModes → relativePositions →
+ * expandedGroups → strokeStyles`. Each is conditionally spread only when
+ * non-empty. (This replaced an unrolled 2^N branch matrix once a fourth
+ * optional field would have pushed it to 16 branches — conditional-spread
+ * is called on drag/edit, not a hot loop, so the earlier monomorphism
+ * concern doesn't apply.) `strokeStyles` is a REQUIRED positional param
+ * (no default) so `tsc` flags any call site that forgets it.
  */
 const buildLayoutSpec = (
   positions: { readonly [stepId: string]: { readonly x: number; readonly y: number } },
@@ -197,23 +230,17 @@ const buildLayoutSpec = (
   replicationModes: { [sourceId: string]: ReplicationMode },
   relativePositions: { [syntheticId: string]: RelativePosition },
   expandedGroups: readonly string[],
+  strokeStyles: { [sourceId: string]: string },
 ): LayoutSpec => {
-  const base = { positions, collapsedGroups, flowDirection };
-  const hasModes = Object.keys(replicationModes).length > 0;
-  const hasRelatives = Object.keys(relativePositions).length > 0;
-  const hasExpanded = expandedGroups.length > 0;
-  // 2×2×2 = 8 branches. Each combination produces a stable object shape.
-  if (!hasModes && !hasRelatives && !hasExpanded) return base;
-  if (hasModes && !hasRelatives && !hasExpanded) return { ...base, replicationModes };
-  if (!hasModes && hasRelatives && !hasExpanded) return { ...base, relativePositions };
-  if (!hasModes && !hasRelatives && hasExpanded) return { ...base, expandedGroups };
-  if (hasModes && hasRelatives && !hasExpanded)
-    return { ...base, replicationModes, relativePositions };
-  if (hasModes && !hasRelatives && hasExpanded)
-    return { ...base, replicationModes, expandedGroups };
-  if (!hasModes && hasRelatives && hasExpanded)
-    return { ...base, relativePositions, expandedGroups };
-  return { ...base, replicationModes, relativePositions, expandedGroups };
+  return {
+    positions,
+    collapsedGroups,
+    flowDirection,
+    ...(Object.keys(replicationModes).length > 0 ? { replicationModes } : {}),
+    ...(Object.keys(relativePositions).length > 0 ? { relativePositions } : {}),
+    ...(expandedGroups.length > 0 ? { expandedGroups } : {}),
+    ...(Object.keys(strokeStyles).length > 0 ? { strokeStyles } : {}),
+  };
 };
 
 /**
@@ -249,6 +276,7 @@ export const setNodePosition = (specId: string, nodeId: string, x: number, y: nu
     cloneReplicationModes(current),
     cloneRelativePositions(current),
     cloneExpandedGroups(current),
+    cloneStrokeStyles(current),
   );
   const map = { ...layoutMap(), [specId]: next };
   setLayoutMapSignal(map);
@@ -275,6 +303,7 @@ export const clearNodePosition = (specId: string, nodeId: string): void => {
     cloneReplicationModes(current),
     cloneRelativePositions(current),
     cloneExpandedGroups(current),
+    cloneStrokeStyles(current),
   );
   if (!hasUserLayout(next)) {
     const map = { ...layoutMap() };
@@ -319,6 +348,7 @@ export const setRelativePosition = (
     cloneReplicationModes(current),
     relatives,
     cloneExpandedGroups(current),
+    cloneStrokeStyles(current),
   );
   const map = { ...layoutMap(), [specId]: next };
   setLayoutMapSignal(map);
@@ -345,6 +375,7 @@ export const clearRelativePosition = (specId: string, nodeId: string): void => {
     cloneReplicationModes(current),
     relatives,
     cloneExpandedGroups(current),
+    cloneStrokeStyles(current),
   );
   if (!hasUserLayout(next)) {
     const map = { ...layoutMap() };
@@ -439,6 +470,7 @@ export const toggleCollapse = (specId: string, containerId: string, inDefaults: 
     cloneReplicationModes(current),
     cloneRelativePositions(current),
     [...expandedSet],
+    cloneStrokeStyles(current),
   );
   // A toggle on a default-collapsed-but-not-yet-touched container CAN
   // produce a layout with only `expandedGroups` populated, which still
@@ -486,11 +518,58 @@ export const setReplicationMode = (
     modes,
     cloneRelativePositions(current),
     cloneExpandedGroups(current),
+    cloneStrokeStyles(current),
   );
   // If the resulting layout is entirely empty (no pins, no collapsed, no
   // modes, no relative pins), drop the entry from the map — same byte-
   // stability discipline as `setLayoutForSpec(null)`. Otherwise just
   // write through.
+  if (!hasUserLayout(next)) {
+    const map = { ...layoutMap() };
+    delete (map as { [specId: string]: LayoutSpec })[specId];
+    setLayoutMapSignal(map);
+    persist(map);
+    return;
+  }
+  const map = { ...layoutMap(), [specId]: next };
+  setLayoutMapSignal(map);
+  persist(map);
+};
+
+/**
+ * Set or clear a per-source stroke-style override (Part A of the
+ * graph-legibility plan, 2026-07-09). `styleName` is a name from
+ * `source-strokes.ts`'s catalogue; passing `null` removes the entry —
+ * falls back to the auto-assigned stroke for that source. Empty
+ * `strokeStyles` maps are NOT preserved (an empty map serializes to
+ * `"strokeStyles":{}`, different bytes than the absent-field default);
+ * `buildLayoutSpec` omits the field when empty, keeping spec-only saves
+ * byte-stable. Mirrors `setReplicationMode` exactly, including the
+ * drop-the-whole-spec-when-empty tail.
+ */
+export const setSourceStroke = (
+  specId: string,
+  sourceId: string,
+  styleName: string | null,
+): void => {
+  const current = layoutMap()[specId] ?? emptyLayout();
+  const strokes = cloneStrokeStyles(current);
+  if (styleName === null) {
+    delete strokes[sourceId];
+  } else {
+    strokes[sourceId] = styleName;
+  }
+  const next = buildLayoutSpec(
+    current.positions,
+    current.collapsedGroups,
+    current.flowDirection,
+    cloneReplicationModes(current),
+    cloneRelativePositions(current),
+    cloneExpandedGroups(current),
+    strokes,
+  );
+  // If the resulting layout is entirely empty, drop the spec from the map —
+  // same byte-stability discipline as `setReplicationMode`.
   if (!hasUserLayout(next)) {
     const map = { ...layoutMap() };
     delete (map as { [specId: string]: LayoutSpec })[specId];
@@ -580,6 +659,7 @@ export const rescaleAllPositions = (factor: number): void => {
       cloneReplicationModes(layout),
       newRelatives,
       cloneExpandedGroups(layout),
+      cloneStrokeStyles(layout),
     );
     changed = true;
   }
@@ -621,6 +701,12 @@ export const hasUserLayout = (layout: LayoutSpec | null): boolean => {
   // meaningful customization and must persist + ride through Save /
   // Share.
   if (layout.expandedGroups && layout.expandedGroups.length > 0) return true;
+  // Per-source stroke-style override (Part A, 2026-07-09): a manual stroke
+  // assignment is meaningful customization on its own — a session where the
+  // user did nothing but restyle one source's arrows produces a layout whose
+  // only populated field is `strokeStyles`, and that must persist + ride
+  // through Save / Share. Same reasoning as `expandedGroups` above.
+  if (layout.strokeStyles && Object.keys(layout.strokeStyles).length > 0) return true;
   return false;
 };
 
@@ -693,6 +779,22 @@ export const renameLayoutIds = (
     newExpandedGroups = layout.expandedGroups.map((id) => renames.get(id) ?? id);
   }
 
+  // `strokeStyles` keys on the CANONICAL source id — the same id namespace
+  // as `replicationModes` (replica nodes collapse to their origin) — so a
+  // rename remaps it in parallel. Empty result is omitted per byte-stability
+  // discipline. MUST be spread LAST in the return object (after
+  // expandedGroups) to match `buildLayoutSpec`'s insertion order; a
+  // divergence would silently change a doc's bytes on duplicate-round rename.
+  let newStrokeStyles: { [sourceId: string]: string } | undefined;
+  if (layout.strokeStyles && Object.keys(layout.strokeStyles).length > 0) {
+    const remapped: { [sourceId: string]: string } = {};
+    for (const [id, style] of Object.entries(layout.strokeStyles)) {
+      const newId = renames.get(id) ?? id;
+      remapped[newId] = style;
+    }
+    if (Object.keys(remapped).length > 0) newStrokeStyles = remapped;
+  }
+
   return {
     positions: newPositions,
     collapsedGroups: newCollapsedGroups,
@@ -700,6 +802,7 @@ export const renameLayoutIds = (
     ...(newReplicationModes ? { replicationModes: newReplicationModes } : {}),
     ...(newRelativePositions ? { relativePositions: newRelativePositions } : {}),
     ...(newExpandedGroups ? { expandedGroups: newExpandedGroups } : {}),
+    ...(newStrokeStyles ? { strokeStyles: newStrokeStyles } : {}),
   };
 };
 

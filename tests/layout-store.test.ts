@@ -32,6 +32,7 @@ import {
   setNodePosition,
   setRelativePosition,
   setReplicationMode,
+  setSourceStroke,
   toggleCollapse,
   useLayoutMap,
 } from "@/ui/stores/layout";
@@ -398,6 +399,31 @@ describe("layout store — hasUserLayout", () => {
       }),
     ).toBe(false);
   });
+
+  it("returns true when strokeStyles is the ONLY populated field (Part A)", () => {
+    // Mirror the expandedGroups reasoning: a session where the user did
+    // nothing but restyle one source's arrows is meaningful customization
+    // that must persist + ride through Save / Share.
+    expect(
+      hasUserLayout({
+        positions: {},
+        collapsedGroups: [],
+        flowDirection: "ltr",
+        strokeStyles: { "key-expansion": "short-dash" },
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when strokeStyles is present but empty", () => {
+    expect(
+      hasUserLayout({
+        positions: {},
+        collapsedGroups: [],
+        flowDirection: "ltr",
+        strokeStyles: {},
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("layout store — setReplicationMode (commit 5)", () => {
@@ -475,6 +501,110 @@ describe("layout store — setReplicationMode (commit 5)", () => {
     // An empty `replicationModes: {}` would defeat byte-stability: spec-only
     // saves with no user customization need to omit the field entirely.
     expect(parsed["aes-128@1"].replicationModes).toBeUndefined();
+  });
+});
+
+describe("layout store — setSourceStroke (Part A: per-source arrow styles)", () => {
+  it("stores an override under the named spec id", () => {
+    setSourceStroke("aes-128@1", "key-expansion", "short-dash");
+    expect(getLayoutForSpec("aes-128@1")?.strokeStyles).toEqual({
+      "key-expansion": "short-dash",
+    });
+    expect(getLayoutForSpec("aes-256@1")).toBeNull();
+  });
+
+  it("can change a stored override to a different style name", () => {
+    setSourceStroke("aes-128@1", "key-expansion", "short-dash");
+    setSourceStroke("aes-128@1", "key-expansion", "long-dash-heavy");
+    expect(getLayoutForSpec("aes-128@1")?.strokeStyles).toEqual({
+      "key-expansion": "long-dash-heavy",
+    });
+  });
+
+  it("passing null clears the entry (back to the auto-assigned stroke)", () => {
+    setSourceStroke("aes-128@1", "key-expansion", "short-dash");
+    setSourceStroke("aes-128@1", "key-expansion", null);
+    // Only override → cleared → no other user-layout → entry removed
+    // entirely (byte-stability discipline). Mirrors setReplicationMode.
+    expect(getLayoutForSpec("aes-128@1")).toBeNull();
+  });
+
+  it("clearing an override while a position pin exists keeps the entry", () => {
+    setNodePosition("aes-128@1", "round.1", 100, 100);
+    setSourceStroke("aes-128@1", "key-expansion", "short-dash");
+    setSourceStroke("aes-128@1", "key-expansion", null);
+    const layout = getLayoutForSpec("aes-128@1");
+    expect(layout).not.toBeNull();
+    expect(layout?.positions["round.1"]).toEqual({ x: 100, y: 100 });
+    expect(layout?.strokeStyles).toBeUndefined();
+  });
+
+  it("multiple overrides on the same spec accumulate", () => {
+    setSourceStroke("aes-128@1", "key-expansion", "short-dash");
+    setSourceStroke("aes-128@1", "split-blocks", "round-dot");
+    expect(getLayoutForSpec("aes-128@1")?.strokeStyles).toEqual({
+      "key-expansion": "short-dash",
+      "split-blocks": "round-dot",
+    });
+  });
+
+  it("persists to localStorage synchronously", () => {
+    setSourceStroke("aes-128@1", "key-expansion", "short-dash");
+    const parsed = JSON.parse(storage.getItem(STORAGE_KEY) as string);
+    expect(parsed["aes-128@1"].strokeStyles).toEqual({ "key-expansion": "short-dash" });
+  });
+
+  it("does NOT write an empty strokeStyles object to disk (byte-stability)", () => {
+    setNodePosition("aes-128@1", "round.1", 0, 0);
+    setSourceStroke("aes-128@1", "key-expansion", "short-dash");
+    setSourceStroke("aes-128@1", "key-expansion", null);
+    const parsed = JSON.parse(storage.getItem(STORAGE_KEY) as string);
+    // Present-but-empty `strokeStyles: {}` would defeat the byte-stability
+    // gate; the field must be absent, exactly as never-set.
+    expect(parsed["aes-128@1"].strokeStyles).toBeUndefined();
+  });
+
+  it("set-then-clear produces bytes IDENTICAL to never-set", () => {
+    // The sharpest byte-stability property: a stroke assignment that's later
+    // cleared must leave the serialized form indistinguishable from one that
+    // was never touched — otherwise a shared doc's hash would drift.
+    setNodePosition("aes-128@1", "round.1", 7, 7);
+    const neverSet = storage.getItem(STORAGE_KEY);
+    setSourceStroke("aes-128@1", "key-expansion", "dash-dot");
+    setSourceStroke("aes-128@1", "key-expansion", null);
+    expect(storage.getItem(STORAGE_KEY)).toBe(neverSet);
+  });
+
+  it("coexists with the other optional fields on the same layout", () => {
+    setReplicationMode("aes-128@1", "key-expansion", "always");
+    setSourceStroke("aes-128@1", "key-expansion", "short-dash");
+    const layout = getLayoutForSpec("aes-128@1");
+    expect(layout?.replicationModes).toEqual({ "key-expansion": "always" });
+    expect(layout?.strokeStyles).toEqual({ "key-expansion": "short-dash" });
+  });
+
+  it("serializes the optional fields in a FIXED key order (byte-stability)", () => {
+    // JSON.stringify emits keys in insertion order and the byte-stability
+    // gate pins that order. With all four optionals populated the serialized
+    // layout MUST read positions → collapsedGroups → flowDirection →
+    // replicationModes → relativePositions → expandedGroups → strokeStyles.
+    // A divergence between buildLayoutSpec and any other LayoutSpec
+    // constructor would silently change a doc's bytes.
+    setNodePosition("aes-128@1", "round.1", 1, 1);
+    toggleCollapse("aes-128@1", "round.5", true);
+    setReplicationMode("aes-128@1", "key-expansion", "always");
+    setRelativePosition("aes-128@1", "key-expansion@->round.1.add-round-key", 3, 4);
+    setSourceStroke("aes-128@1", "key-expansion", "short-dash");
+    const parsed = JSON.parse(storage.getItem(STORAGE_KEY) as string);
+    expect(Object.keys(parsed["aes-128@1"])).toEqual([
+      "positions",
+      "collapsedGroups",
+      "flowDirection",
+      "replicationModes",
+      "relativePositions",
+      "expandedGroups",
+      "strokeStyles",
+    ]);
   });
 });
 

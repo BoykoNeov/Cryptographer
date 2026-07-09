@@ -235,6 +235,27 @@ describe("serializeDocument + parseDocument: documents with sidecars", () => {
     if (result.ok) expect(result.doc).toEqual(doc);
   });
 
+  it("round-trips a document with strokeStyles (Part A: per-source arrow styles)", () => {
+    // Part A of the graph-legibility plan (2026-07-09). Unlike per-source
+    // colours (viewer-local), stroke styles TRAVEL with the document — a
+    // shared `.cipher.json` carries the author's chosen arrow-disambiguation
+    // as a `sourceId → style-name` map, so it must round-trip losslessly.
+    const doc: CipherDocument = {
+      schemaVersion: 3,
+      spec: aes128Spec,
+      layout: {
+        positions: {},
+        collapsedGroups: [],
+        flowDirection: "ltr",
+        strokeStyles: { "key-expansion": "short-dash", "split-blocks": "round-dot" },
+      },
+    };
+    const text = serializeDocument(doc);
+    const result = parseDocument(text);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.doc).toEqual(doc);
+  });
+
   it("round-trips a spec whose container declares defaultCollapsed: true", () => {
     // Slice 2.6d follow-up (2026-05-25). SHA-256's 64 round groups
     // carry `defaultCollapsed: true`; the field must survive the

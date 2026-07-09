@@ -464,6 +464,17 @@ export const LayoutSpecSchema = z
     // `relativePositions` (2026-05-19). Empty array is never
     // serialized — see `layout.ts::buildLayoutSpec`.
     expandedGroups: z.array(z.string()).optional(),
+    // Per-source stroke-style overrides (Part A of the graph-legibility
+    // plan, 2026-07-09). Canonical source id → stroke-style name (from
+    // `source-strokes.ts`). Kept a permissive `z.record(z.string())` — NOT
+    // an enum of the 24 catalogue names — so a document written by a future,
+    // larger catalogue opens on an older build without hard-failing (the
+    // renderer falls back to `solid` for unrecognised names). Additive
+    // optional field; MUST stay last for byte-stability (insertion order).
+    // No schemaVersion bump — same precedent as `expandedGroups` /
+    // `relativePositions`. Empty map is never serialized (see
+    // `layout.ts::buildLayoutSpec`).
+    strokeStyles: z.record(z.string()).optional(),
   })
   .strict();
 

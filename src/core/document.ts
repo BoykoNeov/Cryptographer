@@ -184,6 +184,26 @@ export type LayoutSpec = {
    * discipline as the other optional fields.
    */
   readonly expandedGroups?: readonly string[];
+  /**
+   * Per-source stroke-style overrides (Part A of the graph-legibility plan,
+   * `docs/plans/toasty-zooming-harp.md`, 2026-07-09). Maps a canonical
+   * source id → a stroke-style *name* from `src/core/source-strokes.ts`'s
+   * catalogue. Unlike per-source *colours* (which are deliberately
+   * viewer-local and never persisted), styles TRAVEL with the document so a
+   * shared `.cipher.json` carries the author's chosen arrow-disambiguation.
+   *
+   * The value is a single opaque name string — `source-strokes.ts` is the
+   * one place that expands it into its four-channel (dasharray × linecap ×
+   * widthMul × dashoffset) bundle, so this schema surface stays a plain
+   * map and the picker is one `<select>`. Unknown/legacy names render as
+   * `solid` (forward-compat).
+   *
+   * MUST stay the LAST optional field: `JSON.stringify` serializes in
+   * insertion order and the byte-stability gate pins that order. Absent /
+   * empty when the user has assigned no manual stroke override — same
+   * byte-stability discipline as the other optional fields.
+   */
+  readonly strokeStyles?: { readonly [sourceId: string]: string };
 };
 
 /**

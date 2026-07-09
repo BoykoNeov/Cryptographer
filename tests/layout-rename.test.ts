@@ -142,6 +142,68 @@ describe("renameLayoutIds — replicationModes", () => {
   });
 });
 
+// ─── 2b. strokeStyles handling (Part A) ──────────────────────────────────
+// strokeStyles keys on the CANONICAL source id — the same namespace as
+// replicationModes — so a rename must remap it in parallel, and it must
+// stay the LAST optional field to preserve byte-stable insertion order.
+
+describe("renameLayoutIds — strokeStyles", () => {
+  it("renames keys; preserves the style-name values verbatim", () => {
+    const layout: LayoutSpec = {
+      positions: {},
+      collapsedGroups: [],
+      flowDirection: "ltr",
+      strokeStyles: {
+        "round.3.sub-bytes": "short-dash",
+        "key-expansion": "long-dash-heavy",
+      },
+    };
+    const renames = new Map([["round.3.sub-bytes", "round.4.sub-bytes"]]);
+    const result = renameLayoutIds(layout, renames);
+
+    expect(result.strokeStyles).toEqual({
+      "round.4.sub-bytes": "short-dash",
+      "key-expansion": "long-dash-heavy",
+    });
+  });
+
+  it("drops the field entirely when the input strokeStyles is empty (byte stability)", () => {
+    const layout: LayoutSpec = {
+      positions: {},
+      collapsedGroups: [],
+      flowDirection: "ltr",
+      strokeStyles: {},
+    };
+    const result = renameLayoutIds(layout, new Map([["foo", "bar"]]));
+    expect(Object.hasOwn(result, "strokeStyles")).toBe(false);
+  });
+
+  it("emits strokeStyles LAST in the returned object (byte-stable key order)", () => {
+    // With every optional field populated, renameLayoutIds must reproduce
+    // buildLayoutSpec's insertion order or a duplicate-round rename would
+    // silently change a shared doc's bytes.
+    const layout: LayoutSpec = {
+      positions: { "round.3": { x: 1, y: 1 } },
+      collapsedGroups: ["round.5"],
+      flowDirection: "ltr",
+      replicationModes: { "key-expansion": "always" },
+      relativePositions: { "key-expansion@->round.3": { dx: 2, dy: 3 } },
+      expandedGroups: ["round.7"],
+      strokeStyles: { "key-expansion": "short-dash" },
+    };
+    const result = renameLayoutIds(layout, new Map([["round.3", "round.4"]]));
+    expect(Object.keys(result)).toEqual([
+      "positions",
+      "collapsedGroups",
+      "flowDirection",
+      "replicationModes",
+      "relativePositions",
+      "expandedGroups",
+      "strokeStyles",
+    ]);
+  });
+});
+
 // ─── 3. renameSpecLayoutIds (in-place store action) ──────────────────────
 
 describe("renameSpecLayoutIds — persistence", () => {
