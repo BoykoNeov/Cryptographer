@@ -261,6 +261,43 @@ reader doesn't re-litigate them):
 
 ## Part B — Curated default layouts for the built-ins + reset-to-default
 
+> **SHIPPED — B1 mechanism (2026-07-09).** The code deliverable landed
+> behavior-neutral: `src/core/default-layouts.ts` (pure `curatedDefaultFor` +
+> `mergeLayoutSpecs` + a `__setCuratedDefaultsForTests` seam) with an **empty**
+> real catalogue, so `effectiveLayout() === userLayout()` for every shipped spec
+> and nothing renders differently until later chunks author layouts. `GraphView`
+> split `activeLayout()` → `userLayout()` (customization gates + the stroke
+> reader) vs `effectiveLayout()` (all rendering readers: collapse, positions,
+> relative pins, replication modes). The reset button splits into "reset to
+> default" / "reset to automatic" **only when a curated default exists**
+> (`hasCuratedDefault`), backed by a session-only `Set<specId>` suppress signal
+> (`src/ui/stores/curated-layout-suppress.ts`). Tests:
+> `tests/default-layouts.test.ts` (pure merge/catalogue) +
+> `tests/graph-view-curated-layouts.test.tsx` (curated collapse + position reach
+> render; per-node merge survives a user edit; persist-only-edited-key
+> byte-stability; reset split + disabled logic + suppress round-trip). Full
+> `npm run check` GREEN (219 files / 2514 pass / 2 skip).
+>
+> **KEY DIVERGENCE from the design below (user-decided 2026-07-09):**
+> `effectiveLayout()` is a **per-node MERGE** (`mergeLayoutSpecs(curated, user)`,
+> user wins per id), NOT the whole-object `userLayout() ?? curatedDefault` the
+> "Apply seam" section specifies. Rationale: with the `??`, the *first* drag on a
+> curated spec drops the whole curated arrangement back to auto-layout (only the
+> dragged node stays pinned); the user chose curation-preserving merge instead —
+> dragging one node persists only that node while the rest keep their curated
+> spots. Byte-stability is unaffected: persistence baselines read the raw
+> `layoutMap` entry (`setNodePosition` etc.), never the merge, so a drag persists
+> exactly one key. `strokeStyles` is deliberately **excluded** from the merge —
+> arrow styles are a viewer channel read off the USER layout (SHA-256's
+> auto-assignment covers the only spec that needs them), so curated layouts carry
+> none.
+>
+> **Forward note for the authoring chunks (B2+):** curated positions never enter
+> `layoutMap`, so `rescaleAllPositions` (the density-flip rescale) will NOT
+> rescale them — a curated position-bearing layout authored at one density sits
+> at the wrong scale after a density flip. The authoring chunk needs either a
+> canonical authoring density or a rescale-at-read strategy for curated pins.
+
 ### Goal
 Ship the built-in ciphers/hashes with a hand-arranged layout (positions,
 sensible collapses, and — for Part A — curated arrow styles) so they open

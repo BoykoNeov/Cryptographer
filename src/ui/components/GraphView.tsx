@@ -35,6 +35,7 @@
  * starts no drag). Above threshold, the click handler is suppressed.
  */
 
+import { curatedDefaultFor, mergeLayoutSpecs } from "@/core/default-layouts";
 import { type EdgeValueLookup, lookupEdgeValue, lookupNodeValue } from "@/core/edge-value-lookup";
 import { feistelRoundPlacement, feistelSwapWires } from "@/core/feistel-layout";
 import { type FeistelRoundShape, analyzeFeistelRound } from "@/core/feistel-shape";
@@ -76,6 +77,11 @@ import type { AuxValue, State, StepNode } from "@/core/types";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { isAsymmetric, isHash, useAlgorithm } from "../stores/cipher";
 import { getComposite, saveComposite } from "../stores/composites";
+import {
+  isCuratedLayoutSuppressed,
+  suppressCuratedLayout,
+  unsuppressCuratedLayout,
+} from "../stores/curated-layout-suppress";
 import { useByteFormat } from "../stores/format";
 import {
   clearNodePosition,
@@ -2444,10 +2450,47 @@ export const GraphView = () => {
    */
   const consts = createMemo(() => layoutConstantsFor(density()));
 
-  /** Active spec's persisted layout, or null if none yet. */
-  const activeLayout = createMemo(() => {
+  /**
+   * The active spec's persisted USER layout, or null if none yet — ONLY the
+   * localStorage/user entry (dragged pins, collapses, replication/stroke
+   * overrides). Gates user-customization affordances (the reset button's
+   * `disabled` state) and the manual `strokeStyles` reader; NOT what rendering
+   * reads (that's `effectiveLayout()`). Formerly named `activeLayout`; split
+   * from the curated-default fallback in Part B (graph-legibility plan).
+   */
+  const userLayout = createMemo(() => {
     const m = layoutMap();
     return m[spec().id] ?? null;
+  });
+
+  /**
+   * Whether this spec has a curated default layout (a shipped built-in
+   * arrangement). Drives the reset-button split: with a curated default the
+   * toolbar offers "reset to default" + "reset to automatic"; without one it
+   * keeps today's single "reset layout". EMPTY catalogue in B1, so this is
+   * `false` for every shipped spec until later Part B chunks author layouts.
+   */
+  const hasCuratedDefault = createMemo(() => curatedDefaultFor(spec().id) !== null);
+
+  /**
+   * The layout that actually drives RENDERING: the user layout overlaid on the
+   * curated default (user wins per id, via `mergeLayoutSpecs`). Falls back to
+   * pure user (or pure curated, or null) at the edges. "Reset to automatic"
+   * suppresses the curated fallback for this spec (session-only signal), so a
+   * suppressed spec renders from the user layout alone.
+   *
+   * The curated default is a pure read-time fallback — never persisted — so
+   * spec-only-save byte-stability is untouched. Persistence baselines read the
+   * raw `layoutMap` entry (the store setters), never this merged value, so the
+   * first drag on a curated spec persists only the dragged node.
+   */
+  const effectiveLayout = createMemo(() => {
+    const user = userLayout();
+    if (isCuratedLayoutSuppressed(spec().id)) return user;
+    const curated = curatedDefaultFor(spec().id);
+    if (!curated) return user;
+    if (!user) return curated;
+    return mergeLayoutSpecs(curated, user);
   });
 
   /**
@@ -2477,7 +2520,7 @@ export const GraphView = () => {
    * "id never in both sets" end-invariant.
    */
   const collapsedSet = createMemo<ReadonlySet<string>>(() =>
-    getEffectiveCollapsedSet(spec(), activeLayout()),
+    getEffectiveCollapsedSet(spec(), effectiveLayout()),
   );
 
   /**
@@ -2519,7 +2562,7 @@ export const GraphView = () => {
    * recording new pins, persistence inspectors) should reach for this.
    */
   const rawPinnedMap = createMemo<ReadonlyMap<string, { x: number; y: number }>>(() => {
-    const l = activeLayout();
+    const l = effectiveLayout();
     if (!l) return new Map();
     const m = new Map<string, { x: number; y: number }>();
     for (const [id, p] of Object.entries(l.positions)) m.set(id, p);
@@ -2542,7 +2585,7 @@ export const GraphView = () => {
    * map (cf. `layout.ts` header).
    */
   const relativePinsMap = createMemo<ReadonlyMap<string, { dx: number; dy: number }>>(() => {
-    const l = activeLayout();
+    const l = effectiveLayout();
     if (!l || !l.relativePositions) return new Map();
     const m = new Map<string, { dx: number; dy: number }>();
     for (const [id, r] of Object.entries(l.relativePositions)) m.set(id, r);
@@ -2555,7 +2598,7 @@ export const GraphView = () => {
    * Map ↔ object conversion at the boundary.
    */
   const replicationModes = createMemo<{ readonly [sourceId: string]: "always" | "never" }>(() => {
-    const l = activeLayout();
+    const l = effectiveLayout();
     return l?.replicationModes ?? {};
   });
 
@@ -3121,7 +3164,7 @@ export const GraphView = () => {
   //      would desync that pair.
   //   2. **Manual overrides come from `LayoutSpec.strokeStyles`**, not a
   //      viewer store — arrow styles TRAVEL with the document (the divergence
-  //      from colours). We read them off `activeLayout()` so the memo
+  //      from colours). We read them off `userLayout()` so the memo
   //      recomputes when the persisted layout changes (a `setSourceStroke`
   //      write replaces the layout entry).
   //
@@ -3134,10 +3177,15 @@ export const GraphView = () => {
   const strokeStylingEnabled = useSourceStrokeStylingEnabled(() => spec().id);
   const autoSourceStrokes = createMemo(() => assignSourceStrokes(graph(), colorThreshold()));
   // Manual per-source style-name overrides, read off the active layout's
-  // `strokeStyles` map (absent → empty). Tracks `activeLayout()`, so a
+  // `strokeStyles` map (absent → empty). Tracks `userLayout()`, so a
   // `setSourceStroke` write (which mints a new layout entry) recomputes this.
   const manualSourceStrokes = createMemo<ReadonlyMap<string, string>>(() => {
-    const styles = activeLayout()?.strokeStyles;
+    // Reads the USER layout (not the merged/effective one): curated defaults
+    // carry NO strokeStyles — SHA-256's per-source dashes come from A3b's
+    // auto-assignment (`view-source-strokes` ships it ON), so there is nothing
+    // for a curated layout to contribute here, and keeping this on the user
+    // entry avoids a curated stroke reappearing after a manual clear.
+    const styles = userLayout()?.strokeStyles;
     if (styles === undefined) return EMPTY_STROKE_MAP;
     return new Map(Object.entries(styles));
   });
@@ -5289,25 +5337,79 @@ export const GraphView = () => {
                 document. Confirm prompt is the cheap safety net; the
                 button is disabled when there's nothing to reset so the
                 user can't accidentally trigger the prompt on an
-                already-clean spec. */}
-            <button
-              type="button"
-              class="graph-view-toolbar-button graph-view-layout-reset"
-              data-testid="graph-view-layout-reset"
-              onClick={() => {
-                if (
-                  window.confirm(
-                    "Reset graph layout?\n\nThis clears every pin, collapse, and replication override for this spec. Cannot be undone.",
-                  )
-                ) {
-                  setLayoutForSpec(spec().id, null);
-                }
-              }}
-              disabled={!hasUserLayout(activeLayout())}
-              title="Clear every pin, collapse, and replication override for this spec"
+                already-clean spec.
+
+                Part B split (graph-legibility plan): a built-in WITH a
+                curated default layout offers TWO resets — "to default"
+                (discard user pins, fall back to the curated arrangement)
+                and "to automatic" (discard user pins AND suppress the
+                curated default for this session, showing raw auto-layout).
+                A built-in WITHOUT a curated default keeps the single
+                "reset layout" (identical to today). The catalogue is empty
+                in B1, so every shipped spec renders the single button until
+                later chunks author layouts. */}
+            <Show
+              when={hasCuratedDefault()}
+              fallback={
+                <button
+                  type="button"
+                  class="graph-view-toolbar-button graph-view-layout-reset"
+                  data-testid="graph-view-layout-reset"
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        "Reset graph layout?\n\nThis clears every pin, collapse, and replication override for this spec. Cannot be undone.",
+                      )
+                    ) {
+                      setLayoutForSpec(spec().id, null);
+                    }
+                  }}
+                  disabled={!hasUserLayout(userLayout())}
+                  title="Clear every pin, collapse, and replication override for this spec"
+                >
+                  reset layout
+                </button>
+              }
             >
-              reset layout
-            </button>
+              <button
+                type="button"
+                class="graph-view-toolbar-button graph-view-layout-reset"
+                data-testid="graph-view-layout-reset-default"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Reset to the curated default layout?\n\nThis discards your pins, collapses, and overrides for this spec and restores the built-in arrangement. Cannot be undone.",
+                    )
+                  ) {
+                    setLayoutForSpec(spec().id, null);
+                    unsuppressCuratedLayout(spec().id);
+                  }
+                }}
+                disabled={!hasUserLayout(userLayout()) && !isCuratedLayoutSuppressed(spec().id)}
+                title="Discard your changes and restore the built-in curated layout"
+              >
+                reset to default
+              </button>
+              <button
+                type="button"
+                class="graph-view-toolbar-button graph-view-layout-reset"
+                data-testid="graph-view-layout-reset-automatic"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Reset to automatic layout?\n\nThis discards your pins and ignores the curated default, showing the raw auto-layout for this session. Cannot be undone.",
+                    )
+                  ) {
+                    setLayoutForSpec(spec().id, null);
+                    suppressCuratedLayout(spec().id);
+                  }
+                }}
+                disabled={!hasUserLayout(userLayout()) && isCuratedLayoutSuppressed(spec().id)}
+                title="Discard your changes and the curated default, showing raw auto-layout (resets on reload)"
+              >
+                reset to automatic
+              </button>
+            </Show>
             {/* Slice 11 — in-app help button. Pushed to the right edge of
             the toolbar via `margin-left: auto` in `.graph-view-help-button`
             so it doesn't visually compete with the density + replicate
