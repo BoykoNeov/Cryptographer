@@ -16,6 +16,7 @@ import {
   __setCuratedDefaultsForTests,
   curatedDefaultFor,
   mergeLayoutSpecs,
+  scaleCuratedLayout,
 } from "../src/core/default-layouts";
 import type { LayoutSpec } from "../src/core/document";
 import { LayoutSpecSchema } from "../src/core/document-schema";
@@ -187,5 +188,67 @@ describe("mergeLayoutSpecs — per-key overlay, user wins per id", () => {
     const curated: LayoutSpec = { positions: {}, collapsedGroups: [], flowDirection: "ltr" };
     const user: LayoutSpec = { positions: {}, collapsedGroups: [], flowDirection: "ltr" };
     expect(mergeLayoutSpecs(curated, user).flowDirection).toBe("ltr");
+  });
+});
+
+describe("scaleCuratedLayout — density rescale-at-read for curated pins", () => {
+  it("factor === 1 returns the SAME reference (normal-density no-op, byte-neutral)", () => {
+    // Curated layouts are authored at `normal` (scale 1.0); the common read is
+    // at normal, so the identity passthrough copies nothing and keeps the
+    // pre-Part-B render byte-identical.
+    const layout: LayoutSpec = {
+      positions: { a: { x: 400, y: 200 } },
+      collapsedGroups: [],
+      flowDirection: "ltr",
+    };
+    expect(scaleCuratedLayout(layout, 1)).toBe(layout);
+  });
+
+  it("scales positions by the factor with Math.round (compact 0.75×)", () => {
+    const layout: LayoutSpec = {
+      positions: { a: { x: 400, y: 200 }, b: { x: 401, y: 3 } },
+      collapsedGroups: [],
+      flowDirection: "ltr",
+    };
+    const scaled = scaleCuratedLayout(layout, 0.75);
+    expect(scaled.positions).toEqual({
+      a: { x: 300, y: 150 }, // 400×.75=300, 200×.75=150
+      b: { x: 301, y: 2 }, // 401×.75=300.75→301, 3×.75=2.25→2
+    });
+  });
+
+  it("scales relativePositions too (they are current-density viewBox deltas)", () => {
+    const layout: LayoutSpec = {
+      positions: {},
+      collapsedGroups: [],
+      flowDirection: "ltr",
+      relativePositions: { chipA: { dx: 40, dy: -8 } },
+    };
+    const scaled = scaleCuratedLayout(layout, 1.25);
+    expect(scaled.relativePositions).toEqual({ chipA: { dx: 50, dy: -10 } });
+  });
+
+  it("leaves density-independent fields untouched (collapse / replication / flow / strokes)", () => {
+    const layout: LayoutSpec = {
+      positions: { a: { x: 100, y: 100 } },
+      collapsedGroups: ["g1"],
+      flowDirection: "ltr",
+      replicationModes: { s0: "always" },
+      strokeStyles: { s0: "short-dash" },
+    };
+    const scaled = scaleCuratedLayout(layout, 0.75);
+    expect(scaled.collapsedGroups).toEqual(["g1"]);
+    expect(scaled.replicationModes).toEqual({ s0: "always" });
+    expect(scaled.flowDirection).toBe("ltr");
+    expect(scaled.strokeStyles).toEqual({ s0: "short-dash" });
+  });
+
+  it("does not add relativePositions when the source layout has none", () => {
+    const layout: LayoutSpec = {
+      positions: { a: { x: 100, y: 100 } },
+      collapsedGroups: [],
+      flowDirection: "ltr",
+    };
+    expect("relativePositions" in scaleCuratedLayout(layout, 0.75)).toBe(false);
   });
 });

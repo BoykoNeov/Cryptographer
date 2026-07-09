@@ -75,6 +75,53 @@ export const curatedDefaultFor = (specId: string): LayoutSpec | null => {
   return map[specId] ?? null;
 };
 
+/**
+ * Rescale a curated layout's coordinates by `factor`, returning a new
+ * `LayoutSpec` with `positions` and `relativePositions` multiplied (and
+ * `Math.round`ed to stay integer, exactly like `rescaleAllPositions`). Every
+ * other field — `collapsedGroups`, `replicationModes`, `flowDirection`,
+ * `strokeStyles` — is density-independent and passes through by reference.
+ *
+ * ## Why curated layouts need this (the density forward-note)
+ * Curated defaults are authored ONCE at the canonical `normal` density
+ * (`DENSITY_SCALE.normal === 1.0`) and never enter `layoutMap`, so
+ * `rescaleAllPositions` (which the density flip runs over the user layout map)
+ * never touches them. Without a read-time rescale, a curated pin authored at
+ * (400, 200) would stay at (400, 200) when the user flips to compact (0.75×)
+ * while every auto-laid sibling shrinks — the exact overlap `rescaleAllPositions`
+ * exists to prevent, just on the curated side. So `GraphView.effectiveLayout()`
+ * scales the curated layout by `DENSITY_SCALE[current] / DENSITY_SCALE.normal`
+ * at read time (a pure fallback, still never persisted).
+ *
+ * `factor === 1` returns the input by reference (the `normal`-density common
+ * case) so nothing is copied and byte-neutrality at `normal` is trivially kept.
+ *
+ * PURE — no Solid, no store. Applied to the CURATED layout ONLY, BEFORE the
+ * user layout merges on top: user pins already live in `layoutMap` at the
+ * current density (rescaled by `rescaleAllPositions` on every flip), so scaling
+ * the merged result instead would double-scale them.
+ */
+export const scaleCuratedLayout = (layout: LayoutSpec, factor: number): LayoutSpec => {
+  if (factor === 1) return layout;
+
+  const positions: { [stepId: string]: StepPosition } = {};
+  for (const [id, p] of Object.entries(layout.positions)) {
+    positions[id] = { x: Math.round(p.x * factor), y: Math.round(p.y * factor) };
+  }
+
+  const relativeEntries = Object.entries(layout.relativePositions ?? {});
+  const relativePositions: { [id: string]: RelativePosition } = {};
+  for (const [id, r] of relativeEntries) {
+    relativePositions[id] = { dx: Math.round(r.dx * factor), dy: Math.round(r.dy * factor) };
+  }
+
+  return {
+    ...layout,
+    positions,
+    ...(relativeEntries.length > 0 ? { relativePositions } : {}),
+  };
+};
+
 /** Dedup-preserving union of two id lists (order: base first, then new). */
 const unionIds = (a: readonly string[], b: readonly string[]): string[] => {
   const seen = new Set(a);

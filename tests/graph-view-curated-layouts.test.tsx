@@ -44,7 +44,7 @@ import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetLayoutsForTests, getLayoutForSpec, setNodePosition } from "@/ui/stores/layout";
 import { __resetSpecForTests, setCipherMode } from "@/ui/stores/spec";
 import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
-import { __resetViewDensityForTests } from "@/ui/stores/view-density";
+import { __resetViewDensityForTests, setViewDensity } from "@/ui/stores/view-density";
 import { __resetReplicationForTests } from "@/ui/stores/view-replication";
 import { __resetSourceColorsForTests } from "@/ui/stores/view-source-colors";
 import { __resetSourceStrokesForTests } from "@/ui/stores/view-source-strokes";
@@ -283,6 +283,53 @@ describe("GraphView — curated default layout wire-up", () => {
       container.querySelector<HTMLButtonElement>('[data-testid="graph-view-layout-reset-default"]')
         ?.disabled,
     ).toBe(false);
+  });
+
+  it("a curated POSITION rescales with density: compact renders it toward 0.75×", () => {
+    // Curated layouts are authored at `normal` and never enter `layoutMap`, so
+    // `rescaleAllPositions` (the density-flip rescale) never touches them —
+    // `effectiveLayout()` rescales the curated layer at read time instead. A big
+    // curated pin dominates the layout offset, so the compact rect x lands near
+    // 0.75× the normal one. Without the read-time rescale it would stay ~equal
+    // (the exact bug this chunk fixes).
+    const curatedFarRight = (): LayoutSpec => ({
+      positions: { [COLLAPSE_TARGET]: { x: 2000, y: 40 } },
+      collapsedGroups: [],
+      flowDirection: "ltr",
+    });
+    __setCuratedDefaultsForTests({ [aes128EcbSpec.id]: curatedFarRight() });
+    seedAes128Ecb();
+    const normal = render(() => <GraphView />);
+    const xNormal = containerRectX(normal.container, COLLAPSE_TARGET);
+    expect(xNormal).not.toBeNull();
+    cleanup();
+
+    setViewDensity("compact");
+    const compact = render(() => <GraphView />);
+    const xCompact = containerRectX(compact.container, COLLAPSE_TARGET);
+    expect(xCompact).not.toBeNull();
+
+    const ratio = (xCompact as number) / (xNormal as number);
+    // Brackets 0.75 (DENSITY_SCALE.compact) with slack for the scaled layout
+    // offset; would sit ~1.0 if the rescale were missing.
+    expect(ratio).toBeGreaterThan(0.65);
+    expect(ratio).toBeLessThan(0.82);
+  });
+
+  it("a user pin is NOT rescaled at compact (only the curated layer is — no double-scale)", () => {
+    // User pins already live in `layoutMap` at the current density (rescaled on
+    // every flip by `rescaleAllPositions`). `scaleCuratedLayout` runs on the
+    // curated layer ALONE, before the merge, so a 2000 user pin at compact
+    // renders near 2000 (+ a small offset), NOT the ~1500 it would show if the
+    // merged result were scaled.
+    seedAes128Ecb();
+    setViewDensity("compact");
+    setNodePosition(aes128EcbSpec.id, COLLAPSE_TARGET, 2000, 40);
+    const { container } = render(() => <GraphView />);
+    const x = containerRectX(container, COLLAPSE_TARGET);
+    expect(x).not.toBeNull();
+    // Well above the 0.75× double-scaled value (~1500).
+    expect(x as number).toBeGreaterThan(1800);
   });
 
   it("'reset to default' restores the curated collapse after switching to automatic", () => {

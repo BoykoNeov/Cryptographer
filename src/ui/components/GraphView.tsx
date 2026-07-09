@@ -35,7 +35,7 @@
  * starts no drag). Above threshold, the click handler is suppressed.
  */
 
-import { curatedDefaultFor, mergeLayoutSpecs } from "@/core/default-layouts";
+import { curatedDefaultFor, mergeLayoutSpecs, scaleCuratedLayout } from "@/core/default-layouts";
 import { type EdgeValueLookup, lookupEdgeValue, lookupNodeValue } from "@/core/edge-value-lookup";
 import { feistelRoundPlacement, feistelSwapWires } from "@/core/feistel-layout";
 import { type FeistelRoundShape, analyzeFeistelRound } from "@/core/feistel-shape";
@@ -2483,12 +2483,21 @@ export const GraphView = () => {
    * spec-only-save byte-stability is untouched. Persistence baselines read the
    * raw `layoutMap` entry (the store setters), never this merged value, so the
    * first drag on a curated spec persists only the dragged node.
+   *
+   * Curated layouts are authored at the canonical `normal` density and rescaled
+   * to the current density HERE (`scaleCuratedLayout`), because they never enter
+   * `layoutMap` and so escape `rescaleAllPositions`. The scale runs on the
+   * curated layout ALONE, before the user layout merges on top — user pins are
+   * already at the current density (rescaled on every flip), so scaling the
+   * merged result would double-scale them. Reading `density()` here keeps the
+   * memo reactive to a density flip. `factor === 1` (normal) is a no-op.
    */
   const effectiveLayout = createMemo(() => {
     const user = userLayout();
     if (isCuratedLayoutSuppressed(spec().id)) return user;
-    const curated = curatedDefaultFor(spec().id);
-    if (!curated) return user;
+    const rawCurated = curatedDefaultFor(spec().id);
+    if (!rawCurated) return user;
+    const curated = scaleCuratedLayout(rawCurated, DENSITY_SCALE[density()] / DENSITY_SCALE.normal);
     if (!user) return curated;
     return mergeLayoutSpecs(curated, user);
   });
