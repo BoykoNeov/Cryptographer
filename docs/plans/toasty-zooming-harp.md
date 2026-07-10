@@ -215,6 +215,15 @@ reader doesn't re-litigate them):
   a manual stroke + sub-threshold fanout vanishes (unreachable to reset).
   The auto stroke keys coincide with the auto colour keys (shared
   `multiFanoutSources`), so only the manual-stroke union was needed.
+  **Update (2026-07-10): the colour and stroke channels no longer share a
+  fanout threshold.** Each owns a separate per-spec counter (`useColorThreshold`
+  in `view-source-colors`, `useStrokeThreshold` in `view-source-strokes`), both
+  defaulting to 1 for SHA-256 (all sources) and 3 elsewhere. This reverses the
+  original "shared threshold keeps the (colour, dash) pair index-locked — do not
+  pre-build a separate one" decision (user-requested, so the two counters tune
+  independently). The auto stroke keys and auto colour keys therefore can now
+  DIVERGE when the two thresholds differ; the manual-stroke row-id union above
+  is still required and still correct.
 - **Per-channel disable** — the swatch disables when colouring is off, the
   `<select>` disables when styling is off; the greyed control still
   *advertises* the channel exists rather than vanishing.
