@@ -316,6 +316,39 @@ describe("App — cipher selector", () => {
     expect(container.querySelector(".param-raw")).toBeNull();
   });
 
+  it("encrypts under Blowfish end-to-end through the selector (Eric-Young vector)", () => {
+    // `docs/plans/blowfish.md`. The Blowfish default key + plaintext are the
+    // Eric-Young Blowfish-ECB vector
+    //   PT=1111111111111111, K=0123456789abcdef → CT=61f9c3802281b096
+    // so a fresh selector swap + Run lands on the published ciphertext with no
+    // per-field edits. This is the only end-to-end UI path Blowfish lacked (the
+    // pinned option-list assertion above proves it's IN the dropdown; this
+    // proves the whole select → defaults → spec → Run → CT pipeline works,
+    // exercising the 521-loop monolith + 16 port-native Feistel rounds through
+    // the real App).
+    const { container } = render(() => <App />);
+
+    fireEvent.change(findSelectByLabel(container, "cipher"), {
+      target: { value: "blowfish" },
+    });
+
+    // Auto-swap replaces the AES-128 defaults with Blowfish's canonical 8-byte
+    // key + plaintext.
+    expect(findInputByLabel(container, "key").value).toBe("0123456789abcdef");
+    expect(findInputByLabel(container, "plaintext").value).toBe("1111111111111111");
+
+    // Padding + cipher-mode are AES-only (Blowfish is single-block, BytesState).
+    expect(findSelectByLabel(container, "padding").disabled).toBe(true);
+    expect(findSelectByLabel(container, "mode of operation").disabled).toBe(true);
+
+    fireEvent.click(findButton(container, "run"));
+    expect(container.querySelector(".error")).toBeNull();
+    expect(container.querySelector(".result code")?.textContent ?? "").toBe("61f9c3802281b096");
+
+    // No raw-JSON fallback for any Blowfish step type.
+    expect(container.querySelector(".param-raw")).toBeNull();
+  });
+
   it("swapping from AES-128 + PKCS7 to DES does not throw on the padding overlay", () => {
     // Regression guard surfaced during Phase 4 advisor review:
     // `setCipher("des")` rebuilds both spec slots via

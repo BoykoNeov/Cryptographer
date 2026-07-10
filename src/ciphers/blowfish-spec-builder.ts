@@ -45,11 +45,132 @@
  * P/S); only the consumption indices differ.
  */
 
-import type { CipherSpec, PortBinding, StepNode } from "../core/types";
+import type { CipherSpec, PortBinding, StepDocumentation, StepNode } from "../core/types";
 import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "../core/types";
 import { BLOWFISH_P_INIT, BLOWFISH_ROUNDS, u32ToBytesBE } from "./blowfish-constants";
 
 export type BlowfishDirection = "encrypt" | "decrypt";
+
+// ─── narrationOverride docs (Blowfish-friendly names for the generic leaves) ──
+// The round body reuses GENERIC primitives (`split-bytes` / `xor-with-aux` /
+// `add-mod-32` / `xor` / `concat`) that otherwise render as "Split Bytes / XOR
+// with Aux / Add mod 2^32" in the inspector — opaque for a learner. These
+// overrides name the Blowfish role each leaf plays, mirroring RSA's per-rung
+// ladder narration (RSA's `mul`/`mod-mul` reuse is the same situation). Shared
+// static docs per role (the DES key-schedule `NARR_*` idiom); the few that need
+// a subkey index take function form. The `blowfish.sbox-lookup@1` /
+// `blowfish.key-schedule@1` leaves already carry rich cipher-specific registry
+// docs, so they need no override.
+
+const NARR_SPLIT: StepDocumentation = {
+  name: "Split into L | R",
+  summary: "Split the 8-byte block into the two 32-bit Feistel halves L and R.",
+  detail: `## Split into L ‖ R
+
+The 64-bit block divides into the left half **L** (bytes 0–3) and the right
+half **R** (bytes 4–7). Only L is transformed this round; the halves swap at the
+end (which is just the recombine's argument order).`,
+};
+
+const narrXorP = (pIdx: number): StepDocumentation => ({
+  name: `L ⊕ P[${pIdx}]`,
+  summary: `XOR this round's subkey word P[${pIdx}] into the left half.`,
+  detail: `## L ⊕ P[${pIdx}]
+
+Each round begins by XORing its P-array subkey word **P[${pIdx}]** into the left
+half. This is where key material enters the round directly; the four S-box
+lookups in F carry the rest of the key's influence (the S-boxes were themselves
+derived from the key). Decryption uses the same P-array in reverse order.`,
+});
+
+const NARR_SPLIT_F: StepDocumentation = {
+  name: "Split into a,b,c,d",
+  summary: "Split the 32-bit F-function input into its four bytes.",
+  detail: `## F-function input split
+
+F looks each byte of its 32-bit input up in a different S-box, so the word
+splits into four bytes **a b c d** (most-significant first) indexing S0, S1, S2,
+S3 respectively.`,
+};
+
+const NARR_ADD01: StepDocumentation = {
+  name: "S0[a] + S1[b]",
+  summary: "Add the first two S-box outputs, mod 2³².",
+  detail: `## F: S0[a] + S1[b]
+
+The first combine in Blowfish's F function adds the S0 and S1 lookups modulo
+2³². F deliberately mixes group operations — two adds over ℤ/2³² and one XOR over
+GF(2)³² — and that mismatch is the source of its non-linearity.`,
+};
+
+const NARR_XOR2: StepDocumentation = {
+  name: "⊕ S2[c]",
+  summary: "XOR the S2 lookup into the running F value.",
+  detail: `## F: ⊕ S2[c]
+
+XOR the third S-box output S2[c] into \`S0[a] + S1[b]\` — the single XOR in F,
+sandwiched between the two modular adds.`,
+};
+
+const NARR_ADD3: StepDocumentation = {
+  name: "+ S3[d] = F",
+  summary: "Add the S3 lookup (mod 2³²) to complete F(L').",
+  detail: `## F: + S3[d]
+
+Add the fourth S-box output to finish
+\`F = ((S0[a] + S1[b]) ⊕ S2[c]) + S3[d]\`.`,
+};
+
+const NARR_XOR_R: StepDocumentation = {
+  name: "R ⊕ F",
+  summary: "XOR the F-function output into the right half — the Feistel mix.",
+  detail: `## R ⊕ F
+
+The Feistel mix: the right half is XORed with F of the subkey-mixed left half.
+Together with the swap below, this is the entire round.`,
+};
+
+const NARR_RECOMBINE: StepDocumentation = {
+  name: "Swap → (R⊕F) ‖ (L⊕P)",
+  summary: "Recombine with the halves swapped — the Feistel exchange.",
+  detail: `## Swap and recombine
+
+The round output is \`(R ⊕ F) ‖ (L ⊕ P)\`: the new left half is the old (mixed)
+right half, and vice-versa. **The swap is nothing more than this concatenation
+order** — Blowfish, like every Feistel cipher here, needs no dedicated swap
+step.`,
+};
+
+const narrMix = (i: number): StepDocumentation => ({
+  name: `P[${i}] ⊕ key word ${i % 2}`,
+  summary: `Mix key word ${i % 2} into π P-array seed word ${i}.`,
+  detail: `## Key mixing: P[${i}]
+
+The key enters Blowfish by XORing its words (cycling with wraparound) into the
+π-derived P-array seed. With an 8-byte key there are two key words that
+alternate across the 18 slots, so P[${i}] takes key word ${i % 2}. **These 18
+XORs are the *visible* part of the key schedule**; the 521-encryption loop that
+consumes their result is the one opaque step.`,
+});
+
+const narrWhitenXor = (pIdx: number): StepDocumentation => ({
+  name: `⊕ P[${pIdx}]`,
+  summary: `Final whitening: XOR the remaining subkey word P[${pIdx}].`,
+  detail: `## Output whitening: ⊕ P[${pIdx}]
+
+After the 16 rounds, Blowfish undoes the final swap and XORs the two P-array
+words the round loop never used (P[16], P[17] on encrypt; P[0], P[1] on decrypt)
+into the two halves. This half applies **P[${pIdx}]**.`,
+});
+
+const NARR_WHITEN_CONCAT: StepDocumentation = {
+  name: "Output block",
+  summary: "Concatenate the two whitened halves into the 8-byte output.",
+  detail: `## Output block
+
+The two whitened halves join into the final 8-byte block — the ciphertext (or,
+in decrypt mode, the recovered plaintext).`,
+};
 
 /** Aux namespace the key schedule publishes under (must match the monolith's
  *  default `outputPrefix`). */
@@ -141,6 +262,7 @@ const buildKeySetup = (): StepNode => {
         operand0: port(ks("split-piP"), `output${i}`),
         operand1: port(kwId, "output"),
       },
+      narrationOverride: narrMix(i),
     });
     concatInputs[`input${i}`] = port(ks(`mix${i}`), "output");
   }
@@ -197,6 +319,7 @@ const buildRound = (roundIdx: number, pIdx: number, seedInput: PortBinding): Ste
         type: "split-bytes@1",
         params: { widths: [4, 4] },
         portInputs: { input: port(p, "in") },
+        narrationOverride: NARR_SPLIT,
       },
       // L1 = L ⊕ P[pIdx]  (reuses the parameterizable generic xor-with-aux).
       {
@@ -205,6 +328,7 @@ const buildRound = (roundIdx: number, pIdx: number, seedInput: PortBinding): Ste
         type: "xor-with-aux@1",
         params: { auxName: auxP(pIdx) },
         portInputs: { input: r("split", "output0") },
+        narrationOverride: narrXorP(pIdx),
       },
       // F(L1): split into 4 bytes, look each up in S0..S3, then combine.
       {
@@ -213,6 +337,7 @@ const buildRound = (roundIdx: number, pIdx: number, seedInput: PortBinding): Ste
         type: "split-bytes@1",
         params: { widths: [1, 1, 1, 1] },
         portInputs: { input: r("xorP", "output") },
+        narrationOverride: NARR_SPLIT_F,
       },
       {
         kind: "step",
@@ -249,6 +374,7 @@ const buildRound = (roundIdx: number, pIdx: number, seedInput: PortBinding): Ste
         type: "add-mod-32@1",
         params: { inputCount: 2 },
         portInputs: { operand0: r("s0", "output"), operand1: r("s1", "output") },
+        narrationOverride: NARR_ADD01,
       },
       // t2 = t1 ⊕ S2[c]
       {
@@ -257,6 +383,7 @@ const buildRound = (roundIdx: number, pIdx: number, seedInput: PortBinding): Ste
         type: "xor@1",
         params: { inputCount: 2 },
         portInputs: { operand0: r("add01", "output"), operand1: r("s2", "output") },
+        narrationOverride: NARR_XOR2,
       },
       // Fout = t2 + S3[d]   (mod 2^32)
       {
@@ -265,6 +392,7 @@ const buildRound = (roundIdx: number, pIdx: number, seedInput: PortBinding): Ste
         type: "add-mod-32@1",
         params: { inputCount: 2 },
         portInputs: { operand0: r("xor2", "output"), operand1: r("s3", "output") },
+        narrationOverride: NARR_ADD3,
       },
       // R1 = F(L1) ⊕ R
       {
@@ -273,6 +401,7 @@ const buildRound = (roundIdx: number, pIdx: number, seedInput: PortBinding): Ste
         type: "xor@1",
         params: { inputCount: 2 },
         portInputs: { operand0: r("add3", "output"), operand1: r("split", "output1") },
+        narrationOverride: NARR_XOR_R,
       },
       // Recombine as R1 || L1 — the Feistel swap IS the concat argument order.
       {
@@ -281,6 +410,7 @@ const buildRound = (roundIdx: number, pIdx: number, seedInput: PortBinding): Ste
         type: "concat@1",
         params: { inputCount: 2 },
         portInputs: { input0: r("xorR", "output"), input1: r("xorP", "output") },
+        narrationOverride: NARR_RECOMBINE,
       },
     ],
   };
@@ -316,6 +446,7 @@ const buildWhitening = (
       type: "xor-with-aux@1",
       params: { auxName: auxP(leftP) },
       portInputs: { input: port(w("split"), "output1") },
+      narrationOverride: narrWhitenXor(leftP),
     },
     // right = A ⊕ P[rightP]
     {
@@ -324,6 +455,7 @@ const buildWhitening = (
       type: "xor-with-aux@1",
       params: { auxName: auxP(rightP) },
       portInputs: { input: port(w("split"), "output0") },
+      narrationOverride: narrWhitenXor(rightP),
     },
     // Output block = left || right.
     {
@@ -332,6 +464,7 @@ const buildWhitening = (
       type: "concat@1",
       params: { inputCount: 2 },
       portInputs: { input0: port(w("left"), "output"), input1: port(w("right"), "output") },
+      narrationOverride: NARR_WHITEN_CONCAT,
     },
   ];
   return { nodes, output: port(w("concat"), "output") };
