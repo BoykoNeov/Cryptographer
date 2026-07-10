@@ -6920,8 +6920,15 @@ const LeafRect = (props: {
       <For each={props.inputPorts ?? []}>
         {(portName, i) => {
           const n = (props.inputPorts ?? []).length;
-          const cx = props.box.x;
-          const cy = props.box.y + (props.box.h * (i() + 1)) / (n + 1);
+          // Read `props.box` through thunks, NOT captured consts. `props.box`
+          // updates live while the node is dragged; a plain `const cx =
+          // props.box.x` here freezes the dots in place because the `<For>`
+          // child callback is NOT a reactive scope (the documented "For
+          // callbacks aren't reactive scopes" gotcha). The rect/label above
+          // read `props.box.*` directly in JSX, so they tracked the drag while
+          // these handles were left behind — that was the ghost-dot bug.
+          const cx = () => props.box.x;
+          const cy = () => props.box.y + (props.box.h * (i() + 1)) / (n + 1);
           return (
             <g
               class="graph-port-handle graph-port-in"
@@ -6943,8 +6950,8 @@ const LeafRect = (props: {
               }}
             >
               <title>{`input port "${portName}" — click to rewire`}</title>
-              <circle class="graph-port-hit" cx={cx} cy={cy} r={9} />
-              <circle class="graph-port-dot" cx={cx} cy={cy} r={4} />
+              <circle class="graph-port-hit" cx={cx()} cy={cy()} r={9} />
+              <circle class="graph-port-dot" cx={cx()} cy={cy()} r={4} />
             </g>
           );
         }}
