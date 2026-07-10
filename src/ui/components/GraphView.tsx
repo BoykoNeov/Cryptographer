@@ -273,6 +273,17 @@ const BASE_FLOW_GAP = 72;
 /** Base (1.0×) padding inside a container (group or iterate) box. */
 const BASE_CONTAINER_PAD = 10;
 /**
+ * Direct-child count at/above which an EXPANDED iterate reserves a second
+ * inner-region of empty space below its body (see the iterate branch of
+ * `layoutNode`). A structural heuristic — NOT a spec id — for "this is a
+ * large-bodied fold the user hand-arranges," so it needs no per-spec plumbing
+ * in the pure layout function. Today the only iterate that clears it is
+ * SHA-256's per-block compression fold (~76 children); AES ECB/CBC iterates
+ * wrap a single round-body group (1-few children) and stay snug. NOT density-
+ * scaled — it's a count, not a length.
+ */
+const ITERATE_HEADROOM_MIN_CHILDREN = 8;
+/**
  * Base (1.0×) horizontal step between adjacent replica rows above a shared
  * consumer.
  *
@@ -1563,18 +1574,25 @@ const layoutNode = (
 
   let innerX = startX + consts.CONTAINER_PAD;
   const innerY = startY + HEADER_H + consts.CONTAINER_PAD + replicaLiftH;
-  let maxChildH = 0;
+  // Track the LOWEST child extent (max of `childBox.y + childBox.h`), NOT just
+  // the tallest child height. The group branch already sizes off child-bottom;
+  // the iterate branch used to size off `maxChildH` alone, so a child pinned or
+  // dragged BELOW the natural row spilled out the bottom of the box (its box
+  // clipped it) — exactly the hazard when hand-authoring a curated default
+  // inside an expanded iterate like SHA-256's per-block compression fold.
+  // Child-bottom tracking makes the box grow to contain dragged-down children,
+  // and (as a bonus) absorbs the offsets-hatch's lowered odd rows without a
+  // separate `altRowExtra` budget. Floor at `innerY` so an empty body keeps
+  // the header + pad height it had before.
+  let bodyBottom = innerY;
   let lastChildRight = innerX;
   // OFFSETS-HATCH: an iterate body is a HORIZONTAL-flow context, so its
-  // children alternate up/down — even index at `innerY`, odd index one
-  // LEAF_H lower. `altRowExtra` budgets the extra LEAF_H of body height
-  // the odd rows need so the container box grows to contain them.
+  // children alternate up/down — even index at `innerY`, odd index one LEAF_H
+  // lower. The lowered rows' extra extent is captured by `bodyBottom` below.
   let iterateChildIndex = 0;
-  let altRowExtra = 0;
   for (const childId of container.childIds) {
     if (replicas.isReplica.has(childId)) continue;
     const childAltY = offsetsEnabled && iterateChildIndex % 2 === 1 ? consts.LEAF_H : 0;
-    if (childAltY > altRowExtra) altRowExtra = childAltY;
     const childBox = layoutNode(
       childId,
       innerX,
@@ -1590,7 +1608,7 @@ const layoutNode = (
     );
     innerX = childBox.x + childBox.w + consts.FLOW_GAP;
     lastChildRight = childBox.x + childBox.w;
-    if (childBox.h > maxChildH) maxChildH = childBox.h;
+    if (childBox.y + childBox.h > bodyBottom) bodyBottom = childBox.y + childBox.h;
     iterateChildIndex += 1;
   }
 
@@ -1624,6 +1642,9 @@ const layoutNode = (
     });
     const replicaRight = finalX + consts.LEAF_W;
     if (replicaRight > maxIterateReplicaRight) maxIterateReplicaRight = replicaRight;
+    // Replicas normally sit ABOVE the body (lifted), but a user can drag one
+    // down via `relativePins`; contain it like any other child-bottom.
+    if (finalY + consts.LEAF_H > bodyBottom) bodyBottom = finalY + consts.LEAF_H;
   }
 
   // Grow the iterate container to fit upper-row replicas that shifted
@@ -1632,9 +1653,23 @@ const layoutNode = (
   // the iterate's box must contain it.
   const effectiveLastRight = Math.max(lastChildRight, maxIterateReplicaRight);
   const w = effectiveLastRight - startX + consts.CONTAINER_PAD;
-  // `altRowExtra` (0 unless the offsets hatch dropped odd-index children
-  // by LEAF_H) extends the body so the lowered rows don't crop.
-  const h = HEADER_H + 2 * consts.CONTAINER_PAD + replicaLiftH + maxChildH + altRowExtra;
+  // Height from the lowest child extent (child-bottom tracking) plus a bottom
+  // pad — mirrors the group branch, and contains any dragged-down child.
+  let h = bodyBottom - startY + consts.CONTAINER_PAD;
+  // Extra authoring headroom for LARGE-bodied expanded iterates (today only
+  // SHA-256's per-block compression fold; see `ITERATE_HEADROOM_MIN_CHILDREN`).
+  // Reserve a SECOND copy of the inner-region height as empty space below the
+  // body, so the window opens ~2× taller and there is room to drag the many
+  // leaves into a hand-arranged default. Children are NOT moved — the space is
+  // purely additive at the bottom; child-bottom tracking above then keeps any
+  // leaf dragged into that space contained (so the arrangement round-trips
+  // through Save/reload un-clipped). `innerRegionTop` is where lifted replicas
+  // begin (the top of the inner content), so `bodyBottom - innerRegionTop` is
+  // the full inner content height (replica lift + body row).
+  if (container.childIds.length >= ITERATE_HEADROOM_MIN_CHILDREN) {
+    const innerRegionTop = startY + HEADER_H + consts.CONTAINER_PAD;
+    h += Math.max(0, bodyBottom - innerRegionTop);
+  }
   const box: Box = { x: startX, y: startY, w, h };
   out.set(id, box);
   return box;
