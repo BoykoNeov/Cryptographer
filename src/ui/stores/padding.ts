@@ -126,6 +126,11 @@ export const paddingLimits = (
       // size-aware load/store would unlock multi-block DES (and ECB/CBC).
       case "des":
         return { min: 8, max: 8 };
+      // Blowfish — single 64-bit block. Same padding-overlay blocker as
+      // Speck/Serpent/DES (load-block is 16-byte-only), so the input is fixed
+      // at exactly one 8-byte block and the padding selector is disabled.
+      case "blowfish":
+        return { min: 8, max: 8 };
       default: {
         const _exhaustive: never = cipher;
         throw new Error(`paddingLimits: unsupported non-AES cipher: ${_exhaustive as string}`);

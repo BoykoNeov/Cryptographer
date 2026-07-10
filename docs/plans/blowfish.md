@@ -1,6 +1,14 @@
 # Blowfish — fourth Feistel-family cipher (second Feistel after DES)
 
-**Status:** APPROVED-pending — plan written 2026-07-10. Awaiting go-ahead to build Phase 1.
+**Status:** SHIPPED 2026-07-10 (Phases 1–4). Cipher core + decrypt + UI wiring +
+docs all landed; full `npm run check` green with Blowfish in the selector.
+
+**Narration decision (deviation from the plan's Phase-4 line):** per-leaf
+`narrationOverride` was NOT added, matching the DES round-body precedent (DES's
+port-native round leaves carry no override; only its decomposed *key schedule*
+does). The two new step types ship rich registry docs, and the visible key-mix
+XOR frames + F-function primitives read acceptably with the generic docs. Adding
+per-leaf overrides (e.g. "L ⊕ P[1]", "S0[a]") is deferred polish, not a v1 gap.
 
 ## Context
 

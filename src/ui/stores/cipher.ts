@@ -30,7 +30,15 @@ export type SerpentCipher = "serpent-128" | "serpent-192" | "serpent-256";
  * first to use the `feistel-round` branching primitive.
  */
 export type DesCipher = "des";
-export type Cipher = AesCipher | SpeckCipher | SerpentCipher | DesCipher;
+/**
+ * Blowfish is its own family — Schneier's 1993 64-bit-block Feistel cipher, the
+ * second Feistel after DES. Variable key length (4–56 bytes) in the standard,
+ * but v1 here fixes it at 8 bytes (`inputs.key.byteLength` can't express a
+ * range yet). Single fixed variant, so no `-128`/`-192`/`-256` suffixes.
+ * `docs/plans/blowfish.md`.
+ */
+export type BlowfishCipher = "blowfish";
+export type Cipher = AesCipher | SpeckCipher | SerpentCipher | DesCipher | BlowfishCipher;
 
 /**
  * Hash family — non-cipher cryptographic primitives that consume a message
@@ -94,6 +102,7 @@ const ALL_CIPHERS: readonly Cipher[] = [
   "serpent-192",
   "serpent-256",
   "des",
+  "blowfish",
 ];
 
 /**
@@ -239,6 +248,7 @@ export const CIPHER_LABELS: Record<Cipher, string> = {
   "serpent-192": "Serpent-192",
   "serpent-256": "Serpent-256",
   des: "DES",
+  blowfish: "Blowfish",
 };
 
 export const CIPHER_OPTIONS = ALL_CIPHERS;
@@ -297,6 +307,11 @@ export const DEFAULT_KEY_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
   // each byte is a parity bit — flipping any of those 8 bits produces an
   // identical key schedule (PC-1 in `des.key-schedule@1` drops them).
   des: new Uint8Array([0x13, 0x34, 0x57, 0x79, 0x9b, 0xbc, 0xdf, 0xf1]),
+  // Blowfish canonical key from the Eric-Young Blowfish-ECB vector set. 8 bytes
+  // (v1 fixes the key length). Under key 0123456789abcdef + plaintext
+  // 1111111111111111 the cipher produces 61f9c3802281b096 — a published vector,
+  // so the first Run reproduces a textbook result (like AES's FIPS-197 default).
+  blowfish: new Uint8Array([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]),
 };
 
 /**
@@ -337,6 +352,8 @@ export const DEFAULT_PT_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
   // DES canonical KAT plaintext from FIPS 46-3 Appendix B
   // (`PT=0123456789abcdef → CT=85e813540f0ab405` under the key above).
   des: new Uint8Array([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]),
+  // Blowfish canonical plaintext (Eric-Young vector) — 8 bytes, one block.
+  blowfish: new Uint8Array([0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11]),
 };
 
 /**
@@ -397,6 +414,9 @@ export const DEFAULT_CT_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
   ]),
   // FIPS 46-3 Appendix B: PT 0123456789abcdef under key 133457799bbcdff1.
   des: new Uint8Array([0x85, 0xe8, 0x13, 0x54, 0x0f, 0x0a, 0xb4, 0x05]),
+  // Eric-Young Blowfish-ECB vector: PT 1111111111111111 under key
+  // 0123456789abcdef → 61f9c3802281b096.
+  blowfish: new Uint8Array([0x61, 0xf9, 0xc3, 0x80, 0x22, 0x81, 0xb0, 0x96]),
 };
 
 // ─── Hash defaults ───────────────────────────────────────────────────────

@@ -68,6 +68,10 @@ export const SUPPORTED_CIPHER_MODES_BY_CIPHER: Readonly<Record<Cipher, readonly 
   // ECB/CBC for DES would need block-size-aware load-block/store-block
   // (currently 16-byte-only). See plan's "Out of scope" section.
   des: ["single-block"],
+  // Blowfish: single-block today (64-bit block). Multi-block ECB/CBC deferred
+  // (same block-size-aware overlay blocker as Speck/Serpent/DES). See
+  // `docs/plans/blowfish.md` "Deferred".
+  blowfish: ["single-block"],
 };
 
 export const isCipherModeSupported = (cipher: Cipher, mode: CipherMode): boolean =>

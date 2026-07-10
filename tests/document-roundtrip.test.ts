@@ -36,6 +36,8 @@ import { aes192Spec } from "@/ciphers/aes-192";
 import { aes192DecryptSpec } from "@/ciphers/aes-192-decrypt";
 import { aes256Spec } from "@/ciphers/aes-256";
 import { aes256DecryptSpec } from "@/ciphers/aes-256-decrypt";
+import { blowfishSpec } from "@/ciphers/blowfish";
+import { blowfishDecryptSpec } from "@/ciphers/blowfish-decrypt";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { desSpec } from "@/ciphers/des";
 import { desDecryptSpec } from "@/ciphers/des-decrypt";
@@ -113,6 +115,11 @@ const SHIPPED_SPECS: ReadonlyArray<{ readonly name: string; readonly spec: Ciphe
   // proving a saved/shared RSA document survives serialize → parse byte-equal.
   { name: "rsa encrypt", spec: rsaEncryptSpec },
   { name: "rsa decrypt", spec: rsaDecryptSpec },
+  // Blowfish (second Feistel cipher) — exercises the port-mode Feistel round
+  // groups + the aux-published key material round-tripping through the document
+  // format. `docs/plans/blowfish.md`.
+  { name: "blowfish encrypt", spec: blowfishSpec },
+  { name: "blowfish decrypt", spec: blowfishDecryptSpec },
 ];
 
 // ─── Round-trip every shipped spec ────────────────────────────────────────

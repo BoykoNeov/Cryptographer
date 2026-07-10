@@ -16,6 +16,7 @@ Shipped ciphers (all with both encrypt + decrypt paths and FIPS / NIST / paper-v
 | **Speck32/64** | BE (paper) + LE (NSA reference) | 4 B | 8 B | single-block |
 | **Serpent** | 128 / 192 / 256 | 16 B | 16 / 24 / 32 B | single-block |
 | **DES** | — | 8 B | 8 B (56 effective) | single-block |
+| **Blowfish** | — | 8 B | 8 B (v1) | single-block |
 
 Padding schemes (AES only): **PKCS#7**, **zero-pad**, **ISO 7816-4**, plus a no-pad option for exact-block input.
 
@@ -28,6 +29,8 @@ Shipped hash (select **Hash** in the `kind` dropdown):
 SHA-256 is built entirely from the universal port-native vocabulary (`rotate-bits-right`, `shift-bits-right`, `xor`, `add-mod-32`, `and`, `not`, `concat`, `split-bytes`, `byte-slice`, …) — no SHA-specific executors. Its 64 compression rounds and the message schedule decompose into individually-scrubbable frames, and multi-block messages fold over a port-mode `iterate` that carries the running hash as its chain. The explorer caps input at 512 bytes to keep the per-byte trace scrubbable (not a SHA-256 limit).
 
 DES is the project's first Feistel cipher. Its round body is built port-native — a `group` of `split-bytes → E-expand → XOR with K_i → 8 S-boxes → P-permute → xor → concat` — with the Feistel swap expressed as the `concat` argument order (rounds 1..15 swap; round 16 doesn't, the textbook last-round exception that makes the cipher self-inverse under key-reversal). No special branching primitive — the universal-port thesis is that Feistel needs none.
+
+Blowfish is the second Feistel cipher, and the one place the app keeps a step deliberately opaque. Its round body is fully port-native (`split-bytes → xor-with-aux(P[i]) → F → xor → concat`, the swap again being the `concat` order; F is `((S0[a]+S1[b]) ⊕ S2[c]) + S3[d]` shown as four aux-fed S-box lookups + two `add-mod-32` + one `xor`). But its key schedule runs the cipher **on itself 521 times** to derive the key-dependent P-array + four S-boxes — a hard data-dependency chain with no legible frame-by-frame decomposition. So the `key ⊕ P` mixing IS shown (18 real XOR frames — how a variable-length key enters), while the 521-encryption loop is one honest black-box step that publishes the derived P/S into aux. Decryption is the same network with the P-array consumed in reverse. Key fixed at 8 bytes in v1; verified against the Eric-Young / pycryptodome vector set.
 
 Shipped public-key algorithm (select **Public-key** in the `kind` dropdown):
 

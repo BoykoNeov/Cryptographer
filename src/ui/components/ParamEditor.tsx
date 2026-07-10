@@ -301,6 +301,12 @@ export const ParamEditor = (props: Props) => {
             <Match when={getStep().type === "serpent.key-sbox@1"}>
               <SerpentKeySboxBlock step={getStep()} />
             </Match>
+            <Match when={getStep().type === "blowfish.key-schedule@1"}>
+              <BlowfishKeyScheduleBlock step={getStep()} />
+            </Match>
+            <Match when={getStep().type === "blowfish.sbox-lookup@1"}>
+              <BlowfishSboxLookupBlock step={getStep()} />
+            </Match>
             <Match when={getStep().type === "rsa.publish-key-params@1"}>
               {/*
                 RSA Phase 2 (2026-06-08): the Key-Generation group's publish
@@ -962,6 +968,44 @@ const SerpentAddRoundKeyBlock = (props: BlockProps) => {
       <div class="param-scalar-row">
         <dt>Round key aux</dt>
         <dd>{params().roundKeyAux ?? "—"}</dd>
+      </div>
+    </dl>
+  );
+};
+
+// Blowfish key schedule: the opaque 521-self-encryption monolith. One
+// read-only scalar (outputPrefix) — the aux namespace it publishes the derived
+// P-array + S-boxes under. Read-only because editing the prefix would break the
+// round bodies' aux wiring; the 521-loop itself has no editable parameter.
+const BlowfishKeyScheduleBlock = (props: { step: StepLeaf }) => {
+  const params = (): { outputPrefix?: string } => props.step.params as never;
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>Aux prefix</dt>
+        <dd>{params().outputPrefix ?? "blowfish"}</dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Operation</dt>
+        <dd>521 self-encryptions → P[0..17] + S0..S3 (key-derived)</dd>
+      </div>
+    </dl>
+  );
+};
+
+// Blowfish S-box lookup: the F function's aux-fed 32-bit word lookup. One
+// read-only scalar (sboxName) — which of the four key-derived S-boxes this
+// lookup reads. Read-only because the F function's four leaves each reference a
+// distinct S-box (S0..S3); editing would corrupt the round.
+const BlowfishSboxLookupBlock = (props: { step: StepLeaf }) => {
+  const params = (): { sboxName?: string } => props.step.params as never;
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>S-box aux</dt>
+        <dd>{params().sboxName ?? "—"}</dd>
       </div>
     </dl>
   );

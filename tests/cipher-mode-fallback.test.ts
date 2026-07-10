@@ -61,4 +61,15 @@ describe("cipher-mode × cipher support matrix", () => {
     expect(isCipherModeSupported("des", "cbc")).toBe(false);
     expect(isCipherModeSupported("des", "ctr")).toBe(false);
   });
+
+  it("Blowfish ships single-block only (docs/plans/blowfish.md); ecb/cbc/ctr unsupported", () => {
+    // Canary: multi-block Blowfish would need block-size-aware
+    // load-block/store-block (currently 16-byte-only) — same blocker as
+    // Speck/Serpent/DES. When that lands, this test fires and the matrix
+    // gets updated alongside the new spec factory.
+    expect(isCipherModeSupported("blowfish", "single-block")).toBe(true);
+    expect(isCipherModeSupported("blowfish", "ecb")).toBe(false);
+    expect(isCipherModeSupported("blowfish", "cbc")).toBe(false);
+    expect(isCipherModeSupported("blowfish", "ctr")).toBe(false);
+  });
 });

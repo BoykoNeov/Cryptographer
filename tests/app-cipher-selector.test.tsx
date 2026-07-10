@@ -99,6 +99,8 @@ describe("App — cipher selector", () => {
       // DES added in Phase 4 of `docs/plans/des-feistel.md`. First Feistel
       // cipher; single-block only.
       "des",
+      // Blowfish (`docs/plans/blowfish.md`) — second Feistel cipher, single-block.
+      "blowfish",
     ]);
   });
 

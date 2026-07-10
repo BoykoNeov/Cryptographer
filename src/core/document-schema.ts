@@ -54,6 +54,10 @@ export const CIPHER_IDS = [
   // tuple change here is what passes the compile-time exhaustiveness check
   // `assertCipherCoverage` against the `Cipher` union in `ui/stores/cipher.ts`.
   "des",
+  // Blowfish — `docs/plans/blowfish.md`. Single fixed variant; the tuple entry
+  // is what satisfies the `assertCipherCoverage` exhaustiveness check against
+  // the `Cipher` union in `ui/stores/cipher.ts`.
+  "blowfish",
 ] as const satisfies readonly Cipher[];
 
 /**

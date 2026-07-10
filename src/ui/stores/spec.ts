@@ -32,6 +32,8 @@ import { aes192Spec } from "@/ciphers/aes-192";
 import { aes192DecryptSpec } from "@/ciphers/aes-192-decrypt";
 import { aes256Spec } from "@/ciphers/aes-256";
 import { aes256DecryptSpec } from "@/ciphers/aes-256-decrypt";
+import { blowfishSpec } from "@/ciphers/blowfish";
+import { blowfishDecryptSpec } from "@/ciphers/blowfish-decrypt";
 import { desSpec } from "@/ciphers/des";
 import { desDecryptSpec } from "@/ciphers/des-decrypt";
 import { rsaDecryptSpec, rsaEncryptSpec } from "@/ciphers/rsa";
@@ -133,6 +135,11 @@ const defaults: Record<Cipher, Partial<Record<CipherMode, Record<Mode, CipherSpe
   // Single-block only; multi-block modes need block-size-aware load/store.
   des: {
     "single-block": { encrypt: desSpec, decrypt: desDecryptSpec },
+  },
+  // Blowfish — second Feistel cipher (`docs/plans/blowfish.md`). Single-block
+  // only; decrypt is the same network with the P-array reversed.
+  blowfish: {
+    "single-block": { encrypt: blowfishSpec, decrypt: blowfishDecryptSpec },
   },
 };
 
