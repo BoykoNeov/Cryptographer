@@ -23,6 +23,7 @@
  */
 
 import { auxCopyNarration, auxLoadNarration, auxXorNarration } from "./aux-primitives";
+import { blowfishKeyScheduleNarration, blowfishSboxLookupNarration } from "./blowfish";
 import { coerceNarration } from "./coerce";
 import {
   desExpandRNarration,
@@ -101,6 +102,16 @@ export const initNarrationRegistry = (): void => {
   // ships so a future palette-dropped novice spec with mismatched ports
   // gets learner-friendly prose rather than a naked default frame view.
   registerNarration("__coerce__", coerceNarration);
+  // Blowfish (2026-07-11) — value-prose for the two Blowfish-ONLY step types.
+  // The F-function S-box lookup (1-byte index → 4-byte key-derived word) and the
+  // opaque 521-loop monolith, whose narrator turns it into disclosable pedagogy
+  // rows (mix / P-fill / S-fill / result) annotated with the real published
+  // P/S values. The round body's shared arithmetic (`xor@1` / `add-mod-32@1` /
+  // `xor-with-aux@1` / `concat@1` / `split-bytes@1`) is deliberately left to
+  // PortFlowView + each leaf's `narrationOverride` detail — same posture as
+  // AES's port-native round body, which carries no value-prose narrator either.
+  registerNarration("blowfish.sbox-lookup@1", blowfishSboxLookupNarration);
+  registerNarration("blowfish.key-schedule@1", blowfishKeyScheduleNarration);
   initialized = true;
 };
 
