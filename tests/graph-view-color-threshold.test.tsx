@@ -29,7 +29,7 @@ import { GraphView } from "@/ui/components/GraphView";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetByteFormatForTests } from "@/ui/stores/format";
 import { __resetLayoutsForTests } from "@/ui/stores/layout";
-import { __resetSpecForTests } from "@/ui/stores/spec";
+import { __resetSpecForTests, useSpec } from "@/ui/stores/spec";
 import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
 import { __resetViewDensityForTests } from "@/ui/stores/view-density";
 import { __resetReplicationForTests } from "@/ui/stores/view-replication";
@@ -109,7 +109,7 @@ describe("GraphView — source-coloring fanout threshold input", () => {
     const input = findColorThresholdInput(container);
     input.value = "5";
     fireEvent.input(input);
-    expect(useColorThreshold()()).toBe(5);
+    expect(useColorThreshold(() => useSpec()().id)()).toBe(5);
   });
 
   it("allows the minimum of 0 (NOT clamped up) so all edges can be colored", () => {
@@ -118,7 +118,7 @@ describe("GraphView — source-coloring fanout threshold input", () => {
     const input = findColorThresholdInput(container);
     input.value = "0";
     fireEvent.input(input);
-    expect(useColorThreshold()()).toBe(0);
+    expect(useColorThreshold(() => useSpec()().id)()).toBe(0);
   });
 
   it("clamps an out-of-range high input to the MAX bound", () => {
@@ -127,7 +127,7 @@ describe("GraphView — source-coloring fanout threshold input", () => {
     const input = findColorThresholdInput(container);
     input.value = "999";
     fireEvent.input(input);
-    expect(useColorThreshold()()).toBe(COLOR_THRESHOLD_MAX);
+    expect(useColorThreshold(() => useSpec()().id)()).toBe(COLOR_THRESHOLD_MAX);
   });
 
   it("falls back to default on a non-numeric input", () => {
@@ -136,7 +136,7 @@ describe("GraphView — source-coloring fanout threshold input", () => {
     const input = findColorThresholdInput(container);
     input.value = "abc";
     fireEvent.input(input);
-    expect(useColorThreshold()()).toBe(DEFAULT_COLOR_THRESHOLD);
+    expect(useColorThreshold(() => useSpec()().id)()).toBe(DEFAULT_COLOR_THRESHOLD);
   });
 
   it("lowering the threshold to 0 colors MORE edges than the default", () => {

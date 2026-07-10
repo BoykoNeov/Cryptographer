@@ -143,28 +143,34 @@ export const toggleIncludeSingleSources = (): void => {
   });
 };
 
-// ─── Auto-coloring fanout threshold (2026-05-30) ─────────────────────────
+// ─── Auto-coloring fanout threshold (2026-05-30; per-spec 2026-07-10) ─────
 //
 // A source is auto-coloured when its fanout (outgoing-edge count, replicas
 // rolled up to the canonical source) is `>=` this threshold. The "color by
 // source" toolbar control owns this number — DISTINCT from the replication
-// threshold in `view-replication.ts`, which governs replica splitting, not
-// colour. (Before 2026-05-30 the cutoff was hardcoded `>= 2` with no
-// user-facing knob, and the only number in the toolbar — visually next to
-// "color by source" — was actually the replication threshold.)
+// threshold in `view-replication.ts` (which governs replica splitting, not
+// colour) AND, as of 2026-07-10, DISTINCT from the source-STROKE threshold in
+// `view-source-strokes.ts`. The colour and dash channels used to share this
+// one knob (so a source's colour index and dash index stayed aligned); the
+// user split them into two independent counters so the two channels' cutoffs
+// move separately.
 //
-// Range: min 0, default 3, max 99.
-//   - 0 (or 1) → colour EVERY non-endpoint source: every edge gets a
-//     colour, including single-fanout sources. This is what "all edges can
-//     be colored" means.
-//   - 3 (default) → only sources fanning out to ≥ 3 consumers. NOTE this
-//     narrows the pre-2026-05-30 `>= 2` behaviour: fanout-2 sources (e.g.
-//     SHA-256 `length-append`) no longer auto-colour at the default — drag
-//     to 2 for the old behaviour, 0 for everything.
+// PER-SPEC with a per-spec shipped DEFAULT (2026-07-10). Most built-ins
+// default to 3 (only the biggest fan-outs auto-colour); SHA-256 defaults to 1
+// (colour EVERY source) because it saturates the 8-colour palette and the
+// user wants it fully coded on first open. The persisted map holds ONLY the
+// specs whose value DIVERGES from that per-spec default (drop-on-match),
+// mirroring `view-source-strokes.ts`'s enable map — so "reset" is "forget the
+// override" and a later default change is never shadowed by a stale entry.
 //
-// Persisted (like the master toggle + include-single sub-toggle) so the
-// user's pick sticks across reloads. NOT in `LayoutSpec` — it's a global
-// viewer preference, not a document fact, so it never travels via
+// Range: min 0, per-spec default (see below), max 99.
+//   - 0 (or 1) → colour EVERY non-endpoint source: every edge gets a colour,
+//     including single-fanout sources. This is what "all edges are coloured"
+//     means (and is SHA-256's shipped default).
+//   - 3 (non-SHA default) → only sources fanning out to ≥ 3 consumers.
+//
+// Persisted so the user's pick sticks across reloads. NOT in `LayoutSpec` —
+// a global viewer preference, not a document fact, so it never travels via
 // Save/Share.
 
 const COLOR_THRESHOLD_STORAGE_KEY = "cryptographer.viewSourceColorThreshold";
@@ -173,46 +179,102 @@ export const DEFAULT_COLOR_THRESHOLD = 3;
 export const COLOR_THRESHOLD_MIN = 0;
 export const COLOR_THRESHOLD_MAX = 99;
 
-const loadInitialColorThreshold = (): number => {
+/**
+ * The one spec family that ships colouring EVERY source (threshold 1). Matched
+ * by prefix so a future step-type `@N` bump (`sha-256@2`) keeps the default.
+ * Mirrors `view-source-strokes.ts`'s `STROKE_ON_BY_DEFAULT_PREFIX`.
+ */
+const COLOR_ALL_BY_DEFAULT_PREFIX = "sha-256";
+
+/**
+ * Shipped per-spec default threshold: 1 for SHA-256 (colour every source),
+ * else `DEFAULT_COLOR_THRESHOLD` (3). The single source of truth for "what
+ * does this spec do before the user touches the knob," shared by the reactive
+ * read and the drop-on-match persistence discipline.
+ */
+export const defaultColorThresholdFor = (specId: string): number =>
+  specId.startsWith(COLOR_ALL_BY_DEFAULT_PREFIX) ? 1 : DEFAULT_COLOR_THRESHOLD;
+
+/** Clamp to [MIN, MAX] and round; non-finite falls back to `fallback`. */
+const clampColorThreshold = (value: number, fallback: number): number => {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(COLOR_THRESHOLD_MIN, Math.min(COLOR_THRESHOLD_MAX, Math.round(value)));
+};
+
+/**
+ * Persisted shape: `{ [specId]: number }`, holding ONLY specs whose threshold
+ * diverges from `defaultColorThresholdFor`. Legacy note: before 2026-07-10
+ * this key held a single bare number string (one GLOBAL threshold).
+ * `JSON.parse("3")` yields a number, not an object, so the shape guard below
+ * discards it and we start from the per-spec defaults — an acceptable one-time
+ * reset of a viewer preference (no document data is lost).
+ */
+type ColorThresholdMap = { readonly [specId: string]: number };
+
+const loadInitialColorThresholds = (): ColorThresholdMap => {
   try {
-    if (typeof localStorage === "undefined") return DEFAULT_COLOR_THRESHOLD;
+    if (typeof localStorage === "undefined") return {};
     const raw = localStorage.getItem(COLOR_THRESHOLD_STORAGE_KEY);
-    if (raw === null) return DEFAULT_COLOR_THRESHOLD;
-    const parsed = Number.parseInt(raw, 10);
-    if (!Number.isFinite(parsed)) return DEFAULT_COLOR_THRESHOLD;
-    return Math.max(COLOR_THRESHOLD_MIN, Math.min(COLOR_THRESHOLD_MAX, parsed));
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: { [specId: string]: number } = {};
+    for (const [specId, val] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof val === "number" && Number.isFinite(val)) {
+        out[specId] = clampColorThreshold(val, defaultColorThresholdFor(specId));
+      }
+    }
+    return out;
   } catch {
-    return DEFAULT_COLOR_THRESHOLD;
+    return {};
   }
 };
 
-const [colorThreshold, setColorThresholdSignal] = createSignal<number>(loadInitialColorThreshold());
+const [colorThresholdMap, setColorThresholdMapSignal] = createSignal<ColorThresholdMap>(
+  loadInitialColorThresholds(),
+);
 
-export const useColorThreshold = () => colorThreshold;
-
-/**
- * Set the auto-coloring fanout threshold. Out-of-range inputs clamp to
- * [MIN, MAX]; non-finite (`NaN`, `Infinity`) falls back to the default —
- * mirrors `setReplicationThreshold`'s defensive shape so a pasted "999" or
- * cleared field doesn't wedge the control.
- */
-export const setColorThreshold = (value: number): void => {
-  let next: number;
-  if (!Number.isFinite(value)) {
-    next = DEFAULT_COLOR_THRESHOLD;
-  } else {
-    next = Math.round(value);
-    if (next < COLOR_THRESHOLD_MIN) next = COLOR_THRESHOLD_MIN;
-    if (next > COLOR_THRESHOLD_MAX) next = COLOR_THRESHOLD_MAX;
-  }
-  setColorThresholdSignal(next);
+const persistColorThresholds = (map: ColorThresholdMap): void => {
   try {
     if (typeof localStorage !== "undefined") {
-      localStorage.setItem(COLOR_THRESHOLD_STORAGE_KEY, String(next));
+      localStorage.setItem(COLOR_THRESHOLD_STORAGE_KEY, JSON.stringify(map));
     }
   } catch {
     // Persist failed; in-memory signal still updated.
   }
+};
+
+/**
+ * Reactive read of one spec's effective colour threshold: the user's override
+ * if present, else the per-spec shipped default. Use from JSX with
+ * `useColorThreshold(() => spec().id)` so it recomputes on both the map change
+ * AND the active-spec change.
+ */
+export const useColorThreshold = (specId: () => string): (() => number) => {
+  return () => {
+    const id = specId();
+    return colorThresholdMap()[id] ?? defaultColorThresholdFor(id);
+  };
+};
+
+/**
+ * Set one spec's auto-coloring fanout threshold. Out-of-range inputs clamp to
+ * [MIN, MAX]; non-finite (`NaN`, `Infinity`) falls back to the spec's default.
+ * When the resolved value equals the spec's shipped default the entry is
+ * DROPPED (drop-on-match) so the persisted map stays minimal and a later
+ * default change isn't shadowed by a stale entry.
+ */
+export const setColorThreshold = (specId: string, value: number): void => {
+  const next = clampColorThreshold(value, defaultColorThresholdFor(specId));
+  const current = colorThresholdMap();
+  const nextMap = { ...current };
+  if (next === defaultColorThresholdFor(specId)) {
+    delete (nextMap as { [specId: string]: number })[specId];
+  } else {
+    nextMap[specId] = next;
+  }
+  setColorThresholdMapSignal(nextMap);
+  persistColorThresholds(nextMap);
 };
 
 // ─── Per-spec manual overrides ────────────────────────────────────────────
@@ -374,7 +436,7 @@ export const __resetSourceColorsForTests = (): void => {
   setOverridesMapSignal({});
   setColorsPanelOpenMap({});
   setIncludeSingleSourcesSignal(false);
-  setColorThresholdSignal(DEFAULT_COLOR_THRESHOLD);
+  setColorThresholdMapSignal({});
   try {
     if (typeof localStorage !== "undefined") {
       localStorage.removeItem(ENABLED_STORAGE_KEY);

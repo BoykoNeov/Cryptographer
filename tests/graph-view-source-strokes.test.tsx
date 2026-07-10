@@ -40,14 +40,11 @@ import { __resetSpecForTests, setCipherMode, setHash } from "@/ui/stores/spec";
 import { __resetTraceForTests, setTrace } from "@/ui/stores/trace";
 import { __resetViewDensityForTests } from "@/ui/stores/view-density";
 import { __resetReplicationForTests } from "@/ui/stores/view-replication";
-import {
-  __resetSourceColorsForTests,
-  setColorThreshold,
-  setColorsPanelOpen,
-} from "@/ui/stores/view-source-colors";
+import { __resetSourceColorsForTests, setColorsPanelOpen } from "@/ui/stores/view-source-colors";
 import {
   __resetSourceStrokesForTests,
   setSourceStrokeStylingEnabled,
+  setStrokeThreshold,
 } from "@/ui/stores/view-source-strokes";
 import { __resetValueInspectorForTests } from "@/ui/stores/view-value-inspector";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
@@ -127,7 +124,7 @@ describe("GraphView — source-stroke coding wire-up", () => {
     // assignSourceStrokes → effective memo → per-edge resolver → DOM.
     seedAes128Ecb();
     setSourceStrokeStylingEnabled(aes128EcbSpec.id, true);
-    setColorThreshold(0);
+    setStrokeThreshold(aes128EcbSpec.id, 0);
     const { container } = render(() => <GraphView />);
 
     const dashes = collectInlineProp(container, "stroke-dasharray");
@@ -218,7 +215,7 @@ describe("GraphView — source-stroke coding wire-up", () => {
     // un-styled edges, so a single-source (index-0) graph stays clean.
     seedAes128Ecb();
     setSourceStrokeStylingEnabled(aes128EcbSpec.id, true);
-    setColorThreshold(99);
+    setStrokeThreshold(aes128EcbSpec.id, 99);
     setSourceStroke(aes128EcbSpec.id, "key-schedule", "solid");
     const { container } = render(() => <GraphView />);
 
@@ -321,7 +318,7 @@ describe("GraphView — A3b source-stroke picker + per-spec default", () => {
   it("choosing the 'auto' option clears a manual override (reverts to the auto-assigned style)", () => {
     seedAes128Ecb();
     setSourceStrokeStylingEnabled(aes128EcbSpec.id, true);
-    setColorThreshold(99); // suppress auto so "auto" resolves to no style
+    setStrokeThreshold(aes128EcbSpec.id, 99); // suppress auto so "auto" resolves to no style
     setSourceStroke(aes128EcbSpec.id, "key-schedule", "long-dash");
     setColorsPanelOpen(aes128EcbSpec.id, true);
     const { container } = render(() => <GraphView />);

@@ -28,16 +28,18 @@
  *     `GraphView` off `activeLayout().strokeStyles`. This store owns none of
  *     that — only the on/off switch.
  *
- *   - **Fanout threshold — reused, NOT owned here.** Auto-assignment uses
- *     the SAME `useColorThreshold()` knob the colour channel uses. Both
- *     `assignSourceColors` and `assignSourceStrokes` walk the identical
- *     `multiFanoutSources(graph, threshold)` list, so a shared threshold
- *     keeps the colour index and the stroke index aligned: source S is
- *     `color[i]` AND `stroke[i]`, a stable matched (colour, dash) pair. A
- *     separate stroke threshold would return an interleaved superset and
- *     desync the pair. If strokes ever need to extend to more sources than
- *     colours (the catalogue reaches 24, the palette runs out at 8), split
- *     the threshold then — do not pre-build it.
+ *   - **Fanout threshold — OWNED here, INDEPENDENT of colours (2026-07-10).**
+ *     Auto-assignment walks `multiFanoutSources(graph, threshold)` with the
+ *     stroke channel's OWN threshold (`useStrokeThreshold`), a separate
+ *     per-spec counter from the colour channel's. Until 2026-07-10 the two
+ *     channels shared `view-source-colors`'s single knob so a source's colour
+ *     index and dash index stayed aligned (source S = `color[i]` AND
+ *     `stroke[i]`); the user split them into two counters so the cutoffs move
+ *     independently. The trade-off is deliberate: with different thresholds a
+ *     source may be coloured but un-dashed (or vice versa), and the (colour,
+ *     dash) pairing is no longer index-locked. Same per-spec-default +
+ *     drop-on-match discipline as the enable map: SHA-256 defaults to 1 (style
+ *     every source), every other built-in to 3.
  */
 
 import { createSignal } from "solid-js";
@@ -145,22 +147,125 @@ export const toggleSourceStrokeStylingEnabled = (specId: string): void => {
   setSourceStrokeStylingEnabled(specId, !currentlyEnabled);
 };
 
+// ─── Auto-styling fanout threshold (per-spec, 2026-07-10) ────────────────
+//
+// The stroke channel's OWN fanout cutoff, INDEPENDENT of the colour channel's
+// (`view-source-colors.ts`). See the file header ("Fanout threshold — OWNED
+// here") for why the two were split. A source is auto-STYLED when its fanout
+// is `>=` this threshold. Same per-spec-default + drop-on-match discipline as
+// the enable map above: SHA-256 defaults to 1 (style EVERY source — it
+// saturates the 8-colour palette so the orthogonal dash channel earns its keep
+// on first open), every other built-in to 3 (only the biggest fan-outs).
+// Viewer-local, never on `LayoutSpec`.
+
+const STROKE_THRESHOLD_STORAGE_KEY = "cryptographer.viewSourceStrokeThreshold";
+
+export const DEFAULT_STROKE_THRESHOLD = 3;
+export const STROKE_THRESHOLD_MIN = 0;
+export const STROKE_THRESHOLD_MAX = 99;
+
+/**
+ * Shipped per-spec default stroke threshold: 1 for SHA-256 (style every
+ * source), else `DEFAULT_STROKE_THRESHOLD` (3). Reuses the same SHA-256 prefix
+ * as the enable default so the two ship in lock-step.
+ */
+export const defaultStrokeThresholdFor = (specId: string): number =>
+  specId.startsWith(STROKE_ON_BY_DEFAULT_PREFIX) ? 1 : DEFAULT_STROKE_THRESHOLD;
+
+/** Clamp to [MIN, MAX] and round; non-finite falls back to `fallback`. */
+const clampStrokeThreshold = (value: number, fallback: number): number => {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(STROKE_THRESHOLD_MIN, Math.min(STROKE_THRESHOLD_MAX, Math.round(value)));
+};
+
+/**
+ * Persisted shape: `{ [specId]: number }`, holding ONLY specs whose threshold
+ * diverges from `defaultStrokeThresholdFor` (drop-on-match). Defensive against
+ * missing localStorage and against any corrupted / non-object blob.
+ */
+type StrokeThresholdMap = { readonly [specId: string]: number };
+
+const loadInitialStrokeThresholds = (): StrokeThresholdMap => {
+  try {
+    if (typeof localStorage === "undefined") return {};
+    const raw = localStorage.getItem(STROKE_THRESHOLD_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: { [specId: string]: number } = {};
+    for (const [specId, val] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof val === "number" && Number.isFinite(val)) {
+        out[specId] = clampStrokeThreshold(val, defaultStrokeThresholdFor(specId));
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+};
+
+const [strokeThresholdMap, setStrokeThresholdMapSignal] = createSignal<StrokeThresholdMap>(
+  loadInitialStrokeThresholds(),
+);
+
+const persistStrokeThresholds = (map: StrokeThresholdMap): void => {
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(STROKE_THRESHOLD_STORAGE_KEY, JSON.stringify(map));
+    }
+  } catch {
+    // Persist failed; in-memory signal still updated.
+  }
+};
+
+/**
+ * Reactive read of one spec's effective stroke threshold: the user's override
+ * if present, else the per-spec shipped default. Use from JSX with
+ * `useStrokeThreshold(() => spec().id)`.
+ */
+export const useStrokeThreshold = (specId: () => string): (() => number) => {
+  return () => {
+    const id = specId();
+    return strokeThresholdMap()[id] ?? defaultStrokeThresholdFor(id);
+  };
+};
+
+/**
+ * Set one spec's auto-styling fanout threshold. Out-of-range clamps to
+ * [MIN, MAX]; non-finite falls back to the spec's default. Drop-on-match when
+ * the resolved value equals the spec's shipped default.
+ */
+export const setStrokeThreshold = (specId: string, value: number): void => {
+  const next = clampStrokeThreshold(value, defaultStrokeThresholdFor(specId));
+  const current = strokeThresholdMap();
+  const nextMap = { ...current };
+  if (next === defaultStrokeThresholdFor(specId)) {
+    delete (nextMap as { [specId: string]: number })[specId];
+  } else {
+    nextMap[specId] = next;
+  }
+  setStrokeThresholdMapSignal(nextMap);
+  persistStrokeThresholds(nextMap);
+};
+
 // ─── Test hooks ───────────────────────────────────────────────────────────
 
 /**
  * Hard reset for tests. Production code never calls this. Clears the
- * in-memory map + the persisted blob so each test starts from the shipped
- * per-spec defaults. NOTE: SHA-256 defaults ON, every other spec OFF — a
- * render test on a NON-SHA-256 spec that expects styled edges MUST call
- * `setSourceStrokeStylingEnabled(specId, true)` after this reset, otherwise
- * it asserts on the un-styled fall-through and passes for the wrong reason
- * (the `jsdom_replication_off_default` gotcha class).
+ * in-memory maps + the persisted blobs so each test starts from the shipped
+ * per-spec defaults. NOTE: SHA-256 defaults ON (threshold 1), every other spec
+ * OFF (threshold 3) — a render test on a NON-SHA-256 spec that expects styled
+ * edges MUST call `setSourceStrokeStylingEnabled(specId, true)` after this
+ * reset, otherwise it asserts on the un-styled fall-through and passes for the
+ * wrong reason (the `jsdom_replication_off_default` gotcha class).
  */
 export const __resetSourceStrokesForTests = (): void => {
   setEnabledMapSignal({});
+  setStrokeThresholdMapSignal({});
   try {
     if (typeof localStorage !== "undefined") {
       localStorage.removeItem(ENABLED_STORAGE_KEY);
+      localStorage.removeItem(STROKE_THRESHOLD_STORAGE_KEY);
     }
   } catch {
     // Ignore.

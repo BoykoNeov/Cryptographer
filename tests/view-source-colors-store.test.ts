@@ -14,9 +14,13 @@
  */
 
 import {
+  COLOR_THRESHOLD_MAX,
+  DEFAULT_COLOR_THRESHOLD,
   __resetSourceColorsForTests,
   clearAllSourceColorOverrides,
   clearSourceColorOverride,
+  defaultColorThresholdFor,
+  setColorThreshold,
   setColorsPanelOpen,
   setIncludeSingleSources,
   setSourceColorOverride,
@@ -24,12 +28,25 @@ import {
   toggleColorsPanelOpen,
   toggleIncludeSingleSources,
   toggleSourceColoringEnabled,
+  useColorThreshold,
   useColorsPanelOpen,
   useIncludeSingleSources,
   useManualSourceColors,
   useSourceColoringEnabled,
 } from "@/ui/stores/view-source-colors";
 import { beforeEach, describe, expect, it } from "vitest";
+
+const THRESHOLD_STORAGE_KEY = "cryptographer.viewSourceColorThreshold";
+const readThresholdMap = (): Record<string, unknown> => {
+  const raw = localStorage.getItem(THRESHOLD_STORAGE_KEY);
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+};
 
 // ─── Setup ────────────────────────────────────────────────────────────────
 
@@ -171,6 +188,44 @@ describe("include-single-output-sources sub-toggle", () => {
     setIncludeSingleSources(true);
     expect(useSourceColoringEnabled()()).toBe(false);
     expect(useIncludeSingleSources()()).toBe(true);
+  });
+});
+
+// ─── 4b. Per-spec fanout threshold (per-spec 2026-07-10) ──────────────────
+
+describe("per-spec color fanout threshold", () => {
+  it("defaultColorThresholdFor: 1 for SHA-256 (any @N), else the non-SHA default", () => {
+    expect(defaultColorThresholdFor("sha-256@1")).toBe(1);
+    expect(defaultColorThresholdFor("sha-256@2")).toBe(1);
+    expect(defaultColorThresholdFor("aes-128@1")).toBe(DEFAULT_COLOR_THRESHOLD);
+    expect(defaultColorThresholdFor("rsa@1")).toBe(DEFAULT_COLOR_THRESHOLD);
+  });
+
+  it("reactive read falls back to the per-spec default when no override exists", () => {
+    expect(useColorThreshold(() => "sha-256@1")()).toBe(1);
+    expect(useColorThreshold(() => "aes-128@1")()).toBe(DEFAULT_COLOR_THRESHOLD);
+  });
+
+  it("an explicit override persists per-spec and wins over the default", () => {
+    setColorThreshold("aes-128@1", 0);
+    expect(useColorThreshold(() => "aes-128@1")()).toBe(0);
+    expect(useColorThreshold(() => "sha-256@1")()).toBe(1);
+    expect(readThresholdMap()).toEqual({ "aes-128@1": 0 });
+  });
+
+  it("clamps out-of-range high to MAX; drop-on-match returns to default", () => {
+    setColorThreshold("aes-128@1", 999);
+    expect(useColorThreshold(() => "aes-128@1")()).toBe(COLOR_THRESHOLD_MAX);
+    setColorThreshold("aes-128@1", DEFAULT_COLOR_THRESHOLD);
+    expect(readThresholdMap()).toEqual({});
+  });
+
+  it("SHA-256 set to a non-1 value writes an entry; back to 1 drops it", () => {
+    setColorThreshold("sha-256@1", 3);
+    expect(useColorThreshold(() => "sha-256@1")()).toBe(3);
+    expect(readThresholdMap()).toEqual({ "sha-256@1": 3 });
+    setColorThreshold("sha-256@1", 1);
+    expect(readThresholdMap()).toEqual({});
   });
 });
 

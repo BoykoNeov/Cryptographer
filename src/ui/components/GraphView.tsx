@@ -148,8 +148,13 @@ import {
   useSourceColoringEnabled,
 } from "../stores/view-source-colors";
 import {
+  DEFAULT_STROKE_THRESHOLD,
+  STROKE_THRESHOLD_MAX,
+  STROKE_THRESHOLD_MIN,
+  setStrokeThreshold,
   toggleSourceStrokeStylingEnabled,
   useSourceStrokeStylingEnabled,
+  useStrokeThreshold,
 } from "../stores/view-source-strokes";
 import {
   type ValueInspectorTarget,
@@ -3140,7 +3145,10 @@ export const GraphView = () => {
   // manual override flipped.
   const sourceColoringEnabled = useSourceColoringEnabled();
   const includeSingleSources = useIncludeSingleSources();
-  const colorThreshold = useColorThreshold();
+  // Per-spec fanout threshold (2026-07-10): SHA-256 defaults to 1 (colour
+  // every source), every other built-in to 3. Tracks the active spec id so a
+  // cipher switch re-reads the correct default.
+  const colorThreshold = useColorThreshold(() => spec().id);
   const manualSourceColors = useManualSourceColors(() => spec().id);
   const colorsPanelOpen = useColorsPanelOpen(() => spec().id);
   // Auto-color map honours the user-set fanout threshold (2026-05-30). At
@@ -3167,25 +3175,25 @@ export const GraphView = () => {
   // with two deliberate differences (both documented on the store,
   // `view-source-strokes.ts`):
   //
-  //   1. **Threshold is REUSED**, not owned. `assignSourceStrokes` walks the
-  //      identical `multiFanoutSources(graph, colorThreshold())` list as
-  //      `assignSourceColors`, so a source lands at the same index in both →
-  //      a stable matched (colour, dash) pair. A separate stroke threshold
-  //      would desync that pair.
+  //   1. **Threshold is OWNED, not reused (2026-07-10).** `assignSourceStrokes`
+  //      walks `multiFanoutSources(graph, strokeThreshold())` with the stroke
+  //      channel's OWN per-spec threshold — the user split it from the colour
+  //      threshold so the two counters move independently. The (colour, dash)
+  //      index pairing is therefore no longer locked; that's the accepted
+  //      trade-off for independent cutoffs.
   //   2. **Manual overrides come from `LayoutSpec.strokeStyles`**, not a
   //      viewer store — arrow styles TRAVEL with the document (the divergence
   //      from colours). We read them off `userLayout()` so the memo
   //      recomputes when the persisted layout changes (a `setSourceStroke`
   //      write replaces the layout entry).
   //
-  // Master toggle ships OFF, so `effectiveSourceStrokes` is the empty
-  // identity in the common case and every edge falls through to today's
-  // un-styled path — byte-identical to before this chunk.
-  // Per-spec master toggle (SHA-256 ships ON, every other built-in OFF —
-  // see `view-source-strokes.ts`). Tracks BOTH the persisted override map
-  // and the active spec id, so switching cipher re-reads the correct default.
+  // Per-spec master toggle AND per-spec threshold (SHA-256 ships ON with
+  // threshold 1 → every source styled; every other built-in OFF, threshold 3 —
+  // see `view-source-strokes.ts`). Both track the active spec id, so switching
+  // cipher re-reads the correct defaults.
   const strokeStylingEnabled = useSourceStrokeStylingEnabled(() => spec().id);
-  const autoSourceStrokes = createMemo(() => assignSourceStrokes(graph(), colorThreshold()));
+  const strokeThreshold = useStrokeThreshold(() => spec().id);
+  const autoSourceStrokes = createMemo(() => assignSourceStrokes(graph(), strokeThreshold()));
   // Manual per-source style-name overrides, read off the active layout's
   // `strokeStyles` map (absent → empty). Tracks `userLayout()`, so a
   // `setSourceStroke` write (which mints a new layout entry) recomputes this.
@@ -5232,38 +5240,17 @@ export const GraphView = () => {
               />
               color by source
             </label>
-            {/* Source-STROKE styling master toggle (A3b, 2026-07-09). The
-                second, orthogonal disambiguation channel: each source's edges
-                get a distinct DASH pattern (× line-cap × weight × phase) so
-                sources stay tellable-apart even when their colours collide —
-                which they do on dense specs (more sources than the 8-colour
-                palette). PER-SPEC + SHA-256 ships ON, every other built-in
-                OFF (see `view-source-strokes.ts`); the same per-source panel
-                below hosts the dash dropdown next to the colour swatch. Shares
-                the colouring fanout threshold, so a source's colour index and
-                dash index stay aligned. */}
-            <label
-              class="graph-replicate-toggle"
-              title="Give each source's outgoing edges a distinct dash pattern (a second channel alongside colour)"
-            >
-              <input
-                type="checkbox"
-                checked={strokeStylingEnabled()}
-                onChange={() => toggleSourceStrokeStylingEnabled(spec().id)}
-                data-testid="source-stroke-styling-toggle"
-              />
-              style by source
-            </label>
-            {/* Coloring fanout threshold (2026-05-30) — the REAL "color by
-                source" knob, next to its own checkbox. A source auto-colours
-                when its fanout is ≥ this value. Min 0 (colour every edge),
-                default 3, max 99. `≥` glyph matches the inclusive semantics
-                (vs the replication threshold's strict `>`). Disabled when the
-                master coloring toggle is OFF so the knob's no-op state is
-                visible at a glance. */}
+            {/* Coloring fanout threshold (2026-05-30; per-spec 2026-07-10) —
+                the "color by source" knob, right after its own checkbox. A
+                source auto-colours when its fanout is ≥ this value. Min 0
+                (colour every source), max 99; the per-spec DEFAULT is 1 for
+                SHA-256 (all sources) and ${DEFAULT_COLOR_THRESHOLD} elsewhere.
+                `≥` glyph matches the inclusive semantics (vs the replication
+                threshold's strict `>`). Disabled when the master coloring
+                toggle is OFF so the knob's no-op state is visible at a glance. */}
             <label
               class="graph-replicate-threshold"
-              title={`Sources fanning out to at least this many consumers get an auto colour (default ${DEFAULT_COLOR_THRESHOLD}). 0 colours every edge; raise it to colour only the biggest fan-outs.`}
+              title={`Sources fanning out to at least this many consumers get an auto colour (SHA-256 default 1, others ${DEFAULT_COLOR_THRESHOLD}). 0 colours every edge; raise it to colour only the biggest fan-outs.`}
             >
               <span class="graph-replicate-threshold-label">&ge;</span>
               <input
@@ -5276,10 +5263,58 @@ export const GraphView = () => {
                 disabled={!sourceColoringEnabled()}
                 onInput={(e) => {
                   const parsed = Number.parseInt(e.currentTarget.value, 10);
-                  setColorThreshold(parsed);
+                  setColorThreshold(spec().id, parsed);
                 }}
                 aria-label="Fanout threshold for source coloring"
                 data-testid="color-threshold-input"
+              />
+            </label>
+            {/* Source-STROKE styling master toggle (A3b, 2026-07-09). The
+                second, orthogonal disambiguation channel: each source's edges
+                get a distinct DASH pattern (× line-cap × weight × phase) so
+                sources stay tellable-apart even when their colours collide —
+                which they do on dense specs (more sources than the 8-colour
+                palette). PER-SPEC + SHA-256 ships ON, every other built-in OFF
+                (see `view-source-strokes.ts`); the same per-source panel below
+                hosts the dash dropdown next to the colour swatch. Owns its OWN
+                fanout threshold (the next control), independent of the colour
+                threshold since 2026-07-10. */}
+            <label
+              class="graph-replicate-toggle"
+              title="Give each source's outgoing edges a distinct dash pattern (a second channel alongside colour)"
+            >
+              <input
+                type="checkbox"
+                checked={strokeStylingEnabled()}
+                onChange={() => toggleSourceStrokeStylingEnabled(spec().id)}
+                data-testid="source-stroke-styling-toggle"
+              />
+              style by source
+            </label>
+            {/* Styling fanout threshold (2026-07-10) — the "style by source"
+                knob, INDEPENDENT of the colour threshold above. A source
+                auto-styles when its fanout is ≥ this value. Same range/glyph as
+                the colour knob; per-spec DEFAULT 1 for SHA-256, ${DEFAULT_STROKE_THRESHOLD}
+                elsewhere. Disabled when the master styling toggle is OFF. */}
+            <label
+              class="graph-replicate-threshold"
+              title={`Sources fanning out to at least this many consumers get an auto dash style (SHA-256 default 1, others ${DEFAULT_STROKE_THRESHOLD}). Independent of the colour threshold.`}
+            >
+              <span class="graph-replicate-threshold-label">&ge;</span>
+              <input
+                type="number"
+                class="graph-stroke-threshold-input"
+                min={STROKE_THRESHOLD_MIN}
+                max={STROKE_THRESHOLD_MAX}
+                step={1}
+                value={strokeThreshold()}
+                disabled={!strokeStylingEnabled()}
+                onInput={(e) => {
+                  const parsed = Number.parseInt(e.currentTarget.value, 10);
+                  setStrokeThreshold(spec().id, parsed);
+                }}
+                aria-label="Fanout threshold for source styling"
+                data-testid="stroke-threshold-input"
               />
             </label>
             {/* Slice 3 (graph-narrative-and-zoom plan) — zoom controls.
