@@ -3303,6 +3303,19 @@ button:disabled {
   border-bottom: 1px solid var(--border);
   background: var(--bg-elev);
   font-size: 11px;
+  /* Containing block for the floating body (below). The body is
+     absolutely positioned so opening the inspector — which the FIRST
+     node/edge click does automatically via `toggleSelectedTarget` —
+     doesn't grow the sticky header and shove the whole SVG canvas down.
+     (Reported 2026-07-10: "first click in graphview displaces the view
+     downward due to expansion of the value inspector".) The body slot is
+     already fixed-height (min/max below), so the shift was purely the
+     closed→open mount; floating the body removes it from flow entirely.
+     Per `feedback_layout_shift_fix_reserve_vs_absolute`: the footprint is
+     NOT already-present slack (closed = no body), so the rule says
+     absolute-position into dead space — here the top sliver of canvas
+     under the toolbar, which is pannable and the least-valuable region. */
+  position: relative;
 }
 
 .graph-value-inspector-panel-header {
@@ -3349,10 +3362,28 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  /* Float below the panel header instead of pushing the SVG down. Anchored
+     to `.graph-value-inspector-panel`'s bottom edge; `z-index: 2` keeps it
+     above the SVG (the sticky header is `z-index: 1`). The card chrome
+     (background/border/shadow) is what a floating panel needs that an
+     in-flow band got for free from its parent. */
+  position: absolute;
+  top: 100%;
+  left: 8px;
+  z-index: 2;
+  padding: 6px 8px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  box-shadow: 0 8px 18px rgb(0 0 0 / 30%);
   /* Cap body width on wide canvases so long hex dumps don't push the
      panel out into horizontal scroll territory. Browser wraps the
      value row on the explicit `word-break` rule below. */
   max-width: 720px;
+  /* Don't let a narrow selection (e.g. an 8-byte state) render a
+     hair-thin card; keep a readable minimum so the float reads as a panel. */
+  min-width: 280px;
   /* Reserve enough vertical space for the populated state (identity
      row + kind badge row + value row) even when the body is empty,
      so populating doesn't grow the panel's height and push the SVG
