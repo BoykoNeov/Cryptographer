@@ -35,6 +35,7 @@
  */
 
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
+import { blowfishSpec } from "@/ciphers/blowfish";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { lookupNodeValue } from "@/core/edge-value-lookup";
 import { CIPHER_INPUT_ID, CIPHER_OUTPUT_ID } from "@/core/graph";
@@ -244,5 +245,44 @@ describe("lookupNodeValue — regular leaves", () => {
     expect(out.status).toBe("missing");
     if (out.status !== "missing") return;
     expect(out.reason).toMatch(/no frame found/i);
+  });
+});
+
+// ─── Collapsed-container node id (Blowfish key-schedule bug, 2026-07-10) ─────
+//
+// Regression for the user-reported "no frame found for step \"key-schedule\"".
+// Repro (confirmed in-browser): replication ON + the default-collapsed
+// `key-schedule` Key Setup group. `replicateHighFanoutSources` runs AFTER
+// collapse, so a replica of the group's aux output carries `replicaOf:
+// "key-schedule"` (the container id, not the monolith leaf). Clicking it routes
+// `toggleSelectedNode("key-schedule")` → `lookupNodeValue("key-schedule")`,
+// which — pre-fix — fell through to the regular-leaf branch and errored because
+// no trace frame is keyed by a GROUP id. The fix resolves a container id to its
+// terminal leaf's frame (the monolith), matching how a root-level leaf aux
+// source like AES's `key-expansion` already resolves.
+describe("lookupNodeValue — collapsed container id (Blowfish key-schedule)", () => {
+  const runBlowfish = (): Trace =>
+    runSpec(blowfishSpec, buildDefaultRegistry(), {
+      initialState: makeBytesState(bytesFromHex("1111111111111111")),
+      initialAux: new Map<string, AuxValue>([["key", bytesFromHex("0123456789abcdef")]]),
+    });
+
+  it("resolves the `key-schedule` GROUP id to a value instead of `missing`", () => {
+    const trace = runBlowfish();
+    const out = lookupNodeValue("key-schedule", blowfishSpec, trace, undefined);
+    // Pre-fix this returned `missing` with "no frame found for step key-schedule".
+    // Post-fix it resolves to the group's terminal leaf (the 521-loop monolith),
+    // whose primary input is the 72-byte key-mixed P-array (the monolith has no
+    // single primary OUTPUT — it publishes 22 aux ports — so the lookup falls
+    // back to the input, the honest "value entering the Key Setup's exit step").
+    expect(out.status).toBe("value");
+    if (out.status !== "value") return;
+    expect(out.value).not.toBeNull();
+  });
+
+  it("still returns missing for a genuinely unknown id (no false-positive container match)", () => {
+    const trace = runBlowfish();
+    const out = lookupNodeValue("no-such-container", blowfishSpec, trace, undefined);
+    expect(out.status).toBe("missing");
   });
 });

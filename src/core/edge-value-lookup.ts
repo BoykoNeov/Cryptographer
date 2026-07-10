@@ -222,6 +222,38 @@ const findIterateById = (steps: readonly StepNode[], id: string): IterateGroup |
   return null;
 };
 
+/** Recursively search a spec tree for ANY container (group or iterate) by id. */
+const findContainerById = (steps: readonly StepNode[], id: string): StepNode | null => {
+  for (const node of steps) {
+    if (node.kind === "step") continue;
+    if (node.id === id) return node;
+    const inside = findContainerById(node.children, id);
+    if (inside !== null) return inside;
+  }
+  return null;
+};
+
+/**
+ * The deepest last-descendant LEAF id of a container — the node whose frame
+ * carries the container's "output" state (the value at the container's exit).
+ * Returns null for an empty container. Used to resolve a node-click that
+ * landed on a COLLAPSED container id (see `lookupNodeValue`'s regular-leaf
+ * branch): a replica of a collapsed group's aux output routes its click to the
+ * group id, which no trace frame is keyed by, so we descend to the terminal
+ * leaf that DID emit a frame — the same way a root-level leaf aux source (AES's
+ * `key-expansion`) resolves directly.
+ */
+const terminalLeafId = (container: StepNode): string | null => {
+  let node: StepNode = container;
+  while (node.kind !== "step") {
+    const children = node.children;
+    const last = children[children.length - 1];
+    if (last === undefined) return null;
+    node = last;
+  }
+  return node.id;
+};
+
 // Canonicalization (strip `:b{i}` / `:t{name}` / `:rejoin` / `:swap` runtime
 // suffixes off a frame stepId) lives in `@/core/step-id`. Centralized in
 // Phase 2 of the DES + branching primitive plan so all sites that resolve
@@ -932,12 +964,28 @@ export const lookupNodeValue = (
   // and return its stateAfter. `findConsumerFrame` already implements
   // this preference: scrubber-blockIndex first, fallback to any
   // matching frame.
-  const frame = findConsumerFrame(trace, nodeId, currentBlockIndex);
+  let frame = findConsumerFrame(trace, nodeId, currentBlockIndex);
   if (frame === null) {
-    return {
-      status: "missing",
-      reason: `no frame found for step "${nodeId}"`,
-    };
+    // `nodeId` may be a COLLAPSED CONTAINER id rather than a leaf. The canonical
+    // case (2026-07-10): with replication ON, a replica of a collapsed group's
+    // aux output (e.g. Blowfish's `key-schedule` Key Setup, whose 521-loop
+    // monolith publishes P/S into aux) routes its node-click to the group id via
+    // `replicaOf`. No trace frame is keyed by a group id, so the pre-fix path
+    // returned "no frame found for step key-schedule". Resolve to the
+    // container's terminal leaf — the frame that carries the container's exit
+    // value — matching how a root-level leaf aux source (AES's `key-expansion`)
+    // already resolves via the fallbacks below.
+    const container = findContainerById(spec.steps, nodeId);
+    if (container !== null) {
+      const leafId = terminalLeafId(container);
+      if (leafId !== null) frame = findConsumerFrame(trace, leafId, currentBlockIndex);
+    }
+    if (frame === null) {
+      return {
+        status: "missing",
+        reason: `no frame found for step "${nodeId}"`,
+      };
+    }
   }
   // State at the leaf's own frame = its `"state"` output port, else the sole
   // output (the State field fallback retired in Slice 5.3e Batch 4). For a
