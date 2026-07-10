@@ -81,6 +81,16 @@ const dragContainerHeader = async (
   deltaY: number,
 ): Promise<void> => {
   const header = page.locator(`[data-testid="graph-container-header-${containerId}"]`);
+  // The port-native AES canvas is far wider than the viewport (mid rounds
+  // lay out thousands of px to the right), so a target container's header
+  // is usually off-screen. `page.mouse.move` addresses VIEWPORT coordinates,
+  // and moving to an off-screen point hits nothing — the drag silently no-ops
+  // and no pin is written. Scroll the header into view first so its
+  // boundingBox() resolves to an in-viewport point the mouse can actually
+  // land on. (The chevron-collapse tests don't need this: Playwright's
+  // `.click()` auto-scrolls for actionability; only the manual mouse drag
+  // below bypasses that.)
+  await header.scrollIntoViewIfNeeded();
   const box = await header.boundingBox();
   if (!box) throw new Error(`could not get bounding box for ${containerId} header`);
   const startX = box.x + box.width / 2;
@@ -137,14 +147,21 @@ test.describe("Slice 6 — Real browser drag + collapse + persistence", () => {
   test("Clicking the chevron collapses a round; child leaves disappear", async ({ page }) => {
     await openGraphTab(page);
 
-    // Pre-collapse: count all leaf rects (AES-128 has 41).
+    // Pre-collapse: count all leaf rects. The port-native AES-128 spec
+    // renders 51 leaf rects (initial AddRoundKey + the ten round bodies at
+    // 4 port-native leaves each + key-schedule leaves). This exact number
+    // tracks the current AES decomposition — if AES is ever re-decomposed,
+    // this and the post-collapse count below need re-pinning together. The
+    // invariant the test actually cares about is the DELTA: collapsing one
+    // full middle round hides exactly its 4 child leaves.
     const leafRects = page.locator(".graph-leaf-rect");
-    await expect(leafRects).toHaveCount(41);
+    await expect(leafRects).toHaveCount(51);
 
     await page.locator(`[data-testid="graph-container-chevron-round.7"]`).click();
 
-    // Post-collapse: 4 leaves (round.7's children) are hidden.
-    await expect(leafRects).toHaveCount(37);
+    // Post-collapse: 4 leaves (round.7's SubBytes/ShiftRows/MixColumns/
+    // AddRoundKey children) are hidden → 51 − 4 = 47.
+    await expect(leafRects).toHaveCount(47);
 
     // The collapsed chip is visually distinct (CSS class applied).
     const collapsedChip = page.locator(".graph-container-rect-collapsed");
