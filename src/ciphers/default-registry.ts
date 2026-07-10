@@ -26,6 +26,18 @@ import {
   auxLoadBytesPortContract,
 } from "../steps/aux-load-bytes";
 import { auxXor, auxXorDoc, auxXorMeta, auxXorPortContract } from "../steps/aux-xor";
+import {
+  blowfishKeySchedule,
+  blowfishKeyScheduleDoc,
+  blowfishKeyScheduleMeta,
+  blowfishKeySchedulePortContract,
+} from "../steps/blowfish-key-schedule";
+import {
+  blowfishSboxLookup,
+  blowfishSboxLookupDoc,
+  blowfishSboxLookupMeta,
+  blowfishSboxLookupPortContract,
+} from "../steps/blowfish-sbox-lookup";
 import { byteSlice, byteSliceDoc, byteSlicePortContract } from "../steps/byte-slice";
 import {
   byteSubstitute,
@@ -701,6 +713,33 @@ export const buildDefaultRegistry = (): StepRegistry => {
     shape: desPublishRoundKeysPortContract,
     meta: desPublishRoundKeysMeta,
     doc: desPublishRoundKeysDoc,
+  });
+  // ─── Blowfish (Schneier 1993, fifth cipher family, second Feistel) ─────
+  // Two new step types. `blowfish.key-schedule@1` is the ONE deliberately-
+  // monolithic step: the 521-self-encryption loop that regenerates the
+  // key-dependent P-array + four S-boxes cannot decompose into a legible
+  // frame count (unlike AES/Speck/Serpent/DES's bit-plumbing schedules), so
+  // it stays opaque and publishes P + S into aux (B-minimal `meta.auxWritePorts`
+  // posture, same as `rsa.publish-key-params@1`). The VISIBLE `key ⊕ P` mixing
+  // that feeds it is composed from ordinary `xor@1` frames in the spec.
+  // `blowfish.sbox-lookup@1` is the F-function's aux-fed 32-bit word lookup —
+  // the S-boxes are key-DERIVED (not fixed constants), so the table comes from
+  // aux (hybrid `meta.auxReadPorts`, like `xor-with-aux@1`). Everything else in
+  // the round body (split/xor/add-mod-32/concat) reuses existing primitives;
+  // `L ⊕ P[i]` reuses `xor-with-aux@1`'s parameterizable `auxName`.
+  r.register("blowfish.key-schedule@1", {
+    kind: "ported",
+    executor: blowfishKeySchedule,
+    shape: blowfishKeySchedulePortContract,
+    meta: blowfishKeyScheduleMeta,
+    doc: blowfishKeyScheduleDoc,
+  });
+  r.register("blowfish.sbox-lookup@1", {
+    kind: "ported",
+    executor: blowfishSboxLookup,
+    shape: blowfishSboxLookupPortContract,
+    meta: blowfishSboxLookupMeta,
+    doc: blowfishSboxLookupDoc,
   });
   // ─── Port-native primitives (universal-port plan Phase 2, Slice 2.1a+) ──
   // Authored against the port-native contract directly — no `meta` projection
