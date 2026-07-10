@@ -107,7 +107,7 @@ import {
   isCipherModeSupported,
   useCipherMode,
 } from "./stores/cipher-mode";
-import { installEditHistoryCapture } from "./stores/edit-history";
+import { installEditHistoryCapture, withBoundaryReset } from "./stores/edit-history";
 import { setByteFormat, useByteFormat } from "./stores/format";
 import { pushSnapshot, useHistory } from "./stores/history";
 import { useIvBytes } from "./stores/iv";
@@ -712,6 +712,18 @@ export const App = () => {
    *      duplicate run is harmless because pushSnapshot dedups.
    */
   const applyDocument = (doc: CipherDocument): void => {
+    // C3 stack boundary — a document Load is a canonical rebuild:
+    // `applyDocumentInner` mints a fresh spec + layout map, and the restored
+    // selectors no longer match any pre-load undo snapshot, so the accumulated
+    // history is invalid. Suppress the transition writes and drop both stacks.
+    // Wrapping HERE (rather than at each call site) is what covers the
+    // `onMount` `#doc=` URL-share boot path too — advisor C3 note: the boot
+    // load funnels through `applyDocument`, so it inherits the same boundary as
+    // the manual [Load…] button without a separate onMount wrap.
+    withBoundaryReset(() => applyDocumentInner(doc));
+  };
+
+  const applyDocumentInner = (doc: CipherDocument): void => {
     // Capture the recipient's algorithm BEFORE `setSpecFromDocument` flips
     // it, so the smart-swap below can compare the inputText/keyText
     // against the OLD algorithm's canonical defaults. Without this
@@ -937,7 +949,11 @@ export const App = () => {
     if (currentInput && bytesEqual(currentInput, defaultForMode[prev])) {
       setInputText(formatBytes(defaultForMode[next], fmt()));
     }
-    setCipher(next);
+    // C3 stack boundary: a cipher switch rebuilds the spec off a selector that
+    // isn't in the undo snapshot — suppress the rebuild, drop the history. (The
+    // input/key smart-swaps above write only the text signals, which the
+    // capture observer doesn't watch, so they stay outside the boundary.)
+    withBoundaryReset(() => setCipher(next));
   };
 
   /**
@@ -959,7 +975,9 @@ export const App = () => {
     if (currentPt && bytesEqual(currentPt, DEFAULT_PT_BYTES_BY_HASH[prev])) {
       setInputText(formatBytes(DEFAULT_PT_BYTES_BY_HASH[next], fmt()));
     }
-    setHash(next);
+    // C3 stack boundary (see `changeCipher`): hash-variant switch rebuilds the
+    // spec; suppress the rebuild and clear the now-stale undo history.
+    withBoundaryReset(() => setHash(next));
   };
 
   /**
@@ -991,7 +1009,9 @@ export const App = () => {
     if (currentPt && bytesEqual(currentPt, prevPtDefault)) {
       setInputText(formatBytes(algorithmDefaultPt(nextAlgorithm), fmt()));
     }
-    setAlgorithm(nextAlgorithm);
+    // C3 stack boundary (see `changeCipher`): crossing algorithm families
+    // rebuilds the spec off the category signal; suppress + clear.
+    withBoundaryReset(() => setAlgorithm(nextAlgorithm));
   };
 
   const changePadding = (next: PaddingScheme): void => {
@@ -1011,7 +1031,10 @@ export const App = () => {
         }
       }
     }
-    setPadding(next);
+    // C3 stack boundary (see `changeCipher`): a padding-scheme switch rebuilds
+    // the spec's padding overlay off a selector absent from the snapshot;
+    // suppress + clear.
+    withBoundaryReset(() => setPadding(next));
   };
 
   // Reactive derived values for the trace view.
@@ -1283,7 +1306,11 @@ export const App = () => {
             <div class="cipher-select-row">
               <select
                 value={asymmetric()}
-                onChange={(e) => setAsymmetric(e.currentTarget.value as Asymmetric)}
+                onChange={(e) =>
+                  // C3 stack boundary (see `changeCipher`): an asymmetric-
+                  // variant switch rebuilds the spec; suppress + clear.
+                  withBoundaryReset(() => setAsymmetric(e.currentTarget.value as Asymmetric))
+                }
                 title="Public-key algorithm. Today: textbook RSA — key generation (p, q, e → n, φ, d) plus square-and-multiply encrypt/decrypt."
               >
                 <For each={ASYMMETRIC_OPTIONS}>
@@ -1323,7 +1350,12 @@ export const App = () => {
             mode of operation
             <select
               value={cipherMode()}
-              onChange={(e) => setCipherMode(e.currentTarget.value as CipherMode)}
+              onChange={(e) =>
+                // C3 stack boundary (see `changeCipher`): a mode-of-operation
+                // switch rebuilds the spec (single-block ↔ ECB/CBC); suppress
+                // + clear.
+                withBoundaryReset(() => setCipherMode(e.currentTarget.value as CipherMode))
+              }
               disabled={!isAesCipher(cipher())}
               title={
                 isAesCipher(cipher())

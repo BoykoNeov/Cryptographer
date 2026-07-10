@@ -303,6 +303,41 @@ export const clearEditHistory = (): void => {
   lastApplied = null;
 };
 
+/**
+ * Run a selector-boundary rebuild (C3): SUPPRESS the switch's transition write,
+ * then DROP both stacks. Wraps `withCaptureSuppressed(fn)` + `clearEditHistory()`.
+ *
+ * Why both, and in this order:
+ *   • **The boundary rule.** The selector signals (cipher, cipherMode, padding,
+ *     category/algorithm) are NOT part of a snapshot. Undoing across a switch
+ *     would restore a spec that no longer matches the live selectors, desyncing
+ *     spec vs. UI. So a switch is a stack boundary: history from BEFORE it is
+ *     invalid and must be cleared. Encrypt↔decrypt mode flips are NOT boundaries
+ *     — the observer watches `specs`/`layoutMap`, never `mode`, so a flip
+ *     captures nothing and the stack survives on its own (no call here).
+ *   • **Suppress covers the switch transition itself.** `fn` mints a fresh
+ *     `specs` (and, in `applyDocument`, a fresh `layoutMap`); the non-deferred
+ *     capture observer flushes SYNCHRONOUSLY inside `fn` (a top-level signal
+ *     write flushes effects before returning — see the C2 flush model), so the
+ *     suppress flag is up throughout and no boundary entry is recorded.
+ *
+ * Note on the order: because the observer flushes synchronously, `fn(); clear()`
+ * would reach the same end state as suppress-then-clear in today's runtime — the
+ * plan's older "clear-after repopulates from a stale `prev`" hazard was specific
+ * to the `{defer:true}` observer C2 retired. Suppress stays as cheap, intent-
+ * revealing insurance; the property that actually matters and is tested is the
+ * END STATE: after a switch the undo/redo depths are 0 and no spurious
+ * post-switch entry appears. (The only thing suppress-then-clear genuinely
+ * cannot catch is an effect that rewrites `specs`/`layoutMap` ASYNCHRONOUSLY in
+ * response to the switch; the C3 wiring verified none exists — the spec-id-keyed
+ * effects only touch inspector/wire/panel signals, and the 200ms rerun debounce
+ * regenerates the trace only.)
+ */
+export const withBoundaryReset = (fn: () => void): void => {
+  withCaptureSuppressed(fn);
+  clearEditHistory();
+};
+
 /** Test-only stack depths (production reads booleans via useCanUndo/useCanRedo). */
 export const __editHistoryDepthsForTests = (): {
   readonly undo: number;

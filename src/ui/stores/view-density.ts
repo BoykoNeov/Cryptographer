@@ -36,6 +36,7 @@
  */
 
 import { createSignal } from "solid-js";
+import { withCaptureSuppressed } from "./edit-history";
 import { rescaleAllPositions } from "./layout";
 
 export const ALL_VIEW_DENSITIES = ["compact", "normal", "spacious"] as const;
@@ -95,7 +96,13 @@ export const setViewDensity = (density: ViewDensity): void => {
     const oldScale = DENSITY_SCALE[oldDensity];
     const newScale = DENSITY_SCALE[density];
     if (oldScale !== newScale) {
-      rescaleAllPositions(newScale / oldScale);
+      // C3 stack boundary: density is a viewer preference tied to a signal
+      // that lives OUTSIDE the edit-history snapshot, so the rescale it forces
+      // on the pinned-position map must not become an undoable entry — but,
+      // unlike a selector switch, a density flip is NOT a boundary: the undo
+      // stack stays intact (SUPPRESS, do NOT clear). Wrapping just the rescale
+      // keeps the suppression window minimal.
+      withCaptureSuppressed(() => rescaleAllPositions(newScale / oldScale));
     }
   }
   setViewDensitySignal(density);
