@@ -82,7 +82,7 @@ import {
   suppressCuratedLayout,
   unsuppressCuratedLayout,
 } from "../stores/curated-layout-suppress";
-import { beginLayoutGesture, endLayoutGesture } from "../stores/edit-history";
+import { beginLayoutGesture, cancelLayoutGesture, endLayoutGesture } from "../stores/edit-history";
 import { useByteFormat } from "../stores/format";
 import {
   clearNodePosition,
@@ -5378,9 +5378,10 @@ export const GraphView = () => {
                   onClick={() => {
                     if (
                       window.confirm(
-                        "Reset graph layout?\n\nThis clears every pin, collapse, and replication override for this spec. Cannot be undone.",
+                        "Reset graph layout?\n\nThis clears every pin, collapse, and replication override for this spec. You can undo it with Ctrl+Z.",
                       )
                     ) {
+                      cancelLayoutGesture();
                       setLayoutForSpec(spec().id, null);
                     }
                   }}
@@ -5398,9 +5399,10 @@ export const GraphView = () => {
                 onClick={() => {
                   if (
                     window.confirm(
-                      "Reset to the curated default layout?\n\nThis discards your pins, collapses, and overrides for this spec and restores the built-in arrangement. Cannot be undone.",
+                      "Reset to the curated default layout?\n\nThis discards your pins, collapses, and overrides for this spec and restores the built-in arrangement. You can undo it with Ctrl+Z.",
                     )
                   ) {
+                    cancelLayoutGesture();
                     setLayoutForSpec(spec().id, null);
                     unsuppressCuratedLayout(spec().id);
                   }
@@ -5417,9 +5419,10 @@ export const GraphView = () => {
                 onClick={() => {
                   if (
                     window.confirm(
-                      "Reset to automatic layout?\n\nThis discards your pins and ignores the curated default, showing the raw auto-layout for this session. Cannot be undone.",
+                      "Reset to automatic layout?\n\nThis discards your pins and ignores the curated default, showing the raw auto-layout for this session. You can undo it with Ctrl+Z.",
                     )
                   ) {
+                    cancelLayoutGesture();
                     setLayoutForSpec(spec().id, null);
                     suppressCuratedLayout(spec().id);
                   }
@@ -5519,7 +5522,10 @@ export const GraphView = () => {
                             <button
                               type="button"
                               classList={{ active: currentMode() === "auto" }}
-                              onClick={() => setReplicationMode(spec().id, src.id, null)}
+                              onClick={() => {
+                                cancelLayoutGesture();
+                                setReplicationMode(spec().id, src.id, null);
+                              }}
                               title="Defer to the global threshold"
                             >
                               auto
@@ -5527,7 +5533,10 @@ export const GraphView = () => {
                             <button
                               type="button"
                               classList={{ active: currentMode() === "always" }}
-                              onClick={() => setReplicationMode(spec().id, src.id, "always")}
+                              onClick={() => {
+                                cancelLayoutGesture();
+                                setReplicationMode(spec().id, src.id, "always");
+                              }}
                               title="Always replicate this source"
                             >
                               always
@@ -5535,7 +5544,10 @@ export const GraphView = () => {
                             <button
                               type="button"
                               classList={{ active: currentMode() === "never" }}
-                              onClick={() => setReplicationMode(spec().id, src.id, "never")}
+                              onClick={() => {
+                                cancelLayoutGesture();
+                                setReplicationMode(spec().id, src.id, "never");
+                              }}
                               title="Never replicate this source"
                             >
                               never
@@ -5835,13 +5847,16 @@ export const GraphView = () => {
                         // `inDefaults` routes the flip to expandedGroups vs
                         // collapsedGroups so the "never in both sets" invariant
                         // holds — see `toggleCollapse` in `stores/layout.ts`.
-                        onToggleCollapse={() =>
+                        onToggleCollapse={() => {
+                          // Clear any stuck drag gesture first so this discrete
+                          // edit can't be coalesced away (C4, cancelLayoutGesture).
+                          cancelLayoutGesture();
                           toggleCollapse(
                             spec().id,
                             container.id,
                             defaultCollapsedSet().has(container.id),
-                          )
-                        }
+                          );
+                        }}
                         warnings={containerWarnings()}
                         stateShape={shapesByAnchor().get(container.id) ?? ""}
                         // Live preview during a palette drag: highlights this

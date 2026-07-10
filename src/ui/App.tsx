@@ -107,7 +107,15 @@ import {
   isCipherModeSupported,
   useCipherMode,
 } from "./stores/cipher-mode";
-import { installEditHistoryCapture, withBoundaryReset } from "./stores/edit-history";
+import {
+  installEditHistoryCapture,
+  installEditHistoryShortcuts,
+  redo,
+  undo,
+  useCanRedo,
+  useCanUndo,
+  withBoundaryReset,
+} from "./stores/edit-history";
 import { setByteFormat, useByteFormat } from "./stores/format";
 import { pushSnapshot, useHistory } from "./stores/history";
 import { useIvBytes } from "./stores/iv";
@@ -298,11 +306,21 @@ export const App = () => {
   // Tied to App's lifecycle via onCleanup inside the helper.
   installKeyboardShortcuts();
 
-  // Wire the unified undo/redo capture observer (C2): one deferred-style
+  // Wire the unified undo/redo capture observer (C2): one
   // `createEffect(on([specs, layout]))` that records a pre-change snapshot for
-  // every spec edit or layout move. Behavior-neutral until C4 exposes the
-  // toolbar buttons + Ctrl+Z shortcuts — the stack just accumulates for now.
+  // every spec edit or layout move. Made user-reachable in C4 via the toolbar
+  // buttons below + the Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y shortcuts.
   installEditHistoryCapture();
+
+  // C4 — the undo/redo keyboard shortcuts. Separate handler from
+  // `installKeyboardShortcuts` (which early-returns on `!trace`); this one
+  // bails on editable targets so Ctrl+Z in an input does native text undo.
+  installEditHistoryShortcuts();
+
+  // C4 toolbar depth accessors (curried: call twice — `canUndo()` — to read the
+  // reactive boolean; a single call is the accessor and always truthy).
+  const canUndo = useCanUndo();
+  const canRedo = useCanRedo();
 
   /**
    * Wrap a state-mutating `onInput` body so the page's vertical scroll
@@ -1516,6 +1534,26 @@ export const App = () => {
         </Show>
         <button type="button" onClick={run}>
           run
+        </button>
+        {/* C4 (graph-legibility plan) — unified undo/redo across BOTH spec edits
+            and layout moves. Document-level placement (beside run/save), since a
+            single undo can span spec + layout + document state. Disabled via the
+            reactive depth accessors; the same actions bind to Ctrl+Z / Ctrl+Shift+Z. */}
+        <button
+          type="button"
+          onClick={undo}
+          disabled={!canUndo()}
+          title="Undo the last edit (Ctrl+Z)"
+        >
+          undo
+        </button>
+        <button
+          type="button"
+          onClick={redo}
+          disabled={!canRedo()}
+          title="Redo the last undone edit (Ctrl+Shift+Z)"
+        >
+          redo
         </button>
         <button type="button" onClick={resetSpec} title="Restore the canonical spec for this mode">
           reset spec

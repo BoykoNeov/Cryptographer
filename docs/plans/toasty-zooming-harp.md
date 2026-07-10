@@ -383,6 +383,31 @@ cipher.
 
 ## Part C — Unified undo/redo (spec edits + layout moves)
 
+> **SHIPPED — C1–C4 all landed (C4 2026-07-10), Part C COMPLETE.** C1 store
+> core → C2 capture observer → C3 stack boundaries → **C4 makes it
+> user-reachable**: `undo`/`redo` toolbar buttons in the App top row (disabled
+> via the reactive `useCanUndo()()` / `useCanRedo()()` depth accessors) and
+> `installEditHistoryShortcuts()` (window `keydown`, Ctrl/Cmd+Z undo,
+> Ctrl/Cmd+Shift+Z / Ctrl/Cmd+Y redo). Two real-browser corrections the advisor
+> flagged and C4 baked in: (1) `e.key` for a Shift+letter arrives UPPERCASE
+> ("Z"), so the handler normalizes with `.toLowerCase()` — else redo is dead;
+> (2) `isEditableTarget` bails FIRST so Ctrl+Z inside a text field does native
+> text undo. Wrinkle-2 hardening = `cancelLayoutGesture()` (clears a stuck
+> `layoutGestureActive` WITHOUT committing), called at the discrete non-drag
+> layout ops (collapse / replication / reset) so a lost-`pointerup` stuck flag
+> can't coalesce away the next layout edit (residual: two consecutive
+> lost-pointerup drags lose one entry — documented, not fixed). Wrinkle-1
+> (density-flip undo restores old-scale coords) — **user chose document + defer**
+> (minor, recoverable). The three reset-layout confirm dialogs dropped their now-
+> false "Cannot be undone." copy (C4 makes reset undoable). Tests:
+> `tests/edit-history-c4.test.ts` (resetSpec = 1 entry; cancelLayoutGesture
+> unsticks), `tests/edit-history-shortcuts.test.tsx` (jsdom: Ctrl+Z/Shift+Z/Y,
+> Cmd+Z, editable bail, depth accessors), + browser smoke in
+> `e2e/exploratory-hash-and-edges.spec.ts` "C4" block (real Ctrl+Shift+Z
+> uppercase-Z, editable bail, cipher-switch boundary — collapse used as the
+> undoable edit since the slice-6 drag helper rotted: container drag now pans).
+> Full `npm run check` GREEN (224 files / 2550 pass / 2 skip).
+
 ### Goal
 `Ctrl+Z` / `Ctrl+Shift+Z` (+ `Ctrl+Y`) and toolbar buttons that undo/redo
 **both** spec edits (param, rewire, palette/composite drop, delete,

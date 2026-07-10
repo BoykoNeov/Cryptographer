@@ -16,8 +16,13 @@ import type { TraceFrame } from "@/core/types";
 import { onCleanup } from "solid-js";
 import { getTrace, setFrame, useFrameIndex } from "./trace";
 
-/** True if the key event originated inside an editable element. */
-const isEditableTarget = (target: EventTarget | null): boolean => {
+/**
+ * True if the key event originated inside an editable element. Exported so the
+ * edit-history shortcut handler (`installEditHistoryShortcuts`) can reuse the
+ * exact same bail rule — inside a text field, Ctrl+Z must do NATIVE text undo,
+ * not our editor undo.
+ */
+export const isEditableTarget = (target: EventTarget | null): boolean => {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;

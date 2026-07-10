@@ -49,7 +49,8 @@
  * stepId.
  */
 
-import { batch, createEffect, createSignal, on } from "solid-js";
+import { batch, createEffect, createSignal, on, onCleanup } from "solid-js";
+import { isEditableTarget } from "./keyboard";
 import { type LayoutMap, replaceLayoutMap, useLayoutMap } from "./layout";
 import {
   type Mode,
@@ -275,6 +276,74 @@ export const endLayoutGesture = (): void => {
   // sub-threshold click left it untouched.
   if (useLayoutMap()() === before.layoutMap) return;
   pushUndo(before);
+};
+
+/**
+ * Discard an open drag gesture WITHOUT committing an undo entry. The discrete
+ * (non-drag) layout ops — collapse toggle, replication-mode change, layout
+ * reset — call this before their own write, so a STUCK gesture flag can't
+ * silently coalesce them away.
+ *
+ * Why it's needed (C4 hardening): `beginLayoutGesture` sets
+ * `layoutGestureActive`, normally cleared by `endLayoutGesture` in the drag's
+ * `pointerup`. If that pointerup never fires (pointer released off-window, and
+ * `pointercancel` also missed), the flag stays true. The very next pure-layout
+ * edit then hits guard 3 in `captureTransition` (`layoutGestureActive &&
+ * prev.specs === cur.specs`) and is dropped — un-undoable. Because that harm
+ * lands BEFORE any next drag, a self-heal inside `beginLayoutGesture` cannot
+ * reach it; the discrete op itself must clear the stale flag first.
+ *
+ * NOT `endLayoutGesture` at these sites: that would commit the stale pre-drag
+ * snapshot as a spurious entry. We want the flag gone with nothing pushed.
+ *
+ * Residual (documented, not fixed): if a genuine drag's pointerup is lost and
+ * the user's NEXT action is also a drag (not a discrete op), that first drag's
+ * entry is lost. Rare lost-pointerup edge, one missed entry, self-corrects on
+ * the next completed gesture.
+ */
+export const cancelLayoutGesture = (): void => {
+  layoutGestureActive = false;
+  gestureSnapshot = null;
+};
+
+// ─── Keyboard shortcuts (C4) ────────────────────────────────────────────────
+
+/**
+ * Install the window-level undo/redo keyboard shortcuts. A dedicated handler
+ * (NOT folded into `installKeyboardShortcuts`, which early-returns on `!trace`
+ * and would swallow Ctrl+Z before the graph has run). Mirrors that store's
+ * install shape: attach on call, `onCleanup` to detach with the App lifecycle.
+ *
+ *   Ctrl/Cmd+Z            undo
+ *   Ctrl/Cmd+Shift+Z      redo
+ *   Ctrl/Cmd+Y           redo (Windows convention)
+ *
+ * Two things that only bite in a real browser (jsdom lets a test pick the key
+ * string, so these are the reason the browser smoke is the real gate):
+ *   • `isEditableTarget` bail FIRST — inside plaintext/key/S-box/param inputs,
+ *     Ctrl+Z must do the browser's native text undo, not our editor undo.
+ *   • `e.key` for a Shift+letter arrives UPPERCASE ("Z"), so normalize with
+ *     `.toLowerCase()` — otherwise Ctrl+Shift+Z (redo) never matches.
+ * Cross-platform via `ctrlKey || metaKey` (Cmd on macOS).
+ */
+export const installEditHistoryShortcuts = (): void => {
+  const handler = (e: KeyboardEvent): void => {
+    if (isEditableTarget(e.target)) return;
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const key = e.key.toLowerCase();
+    if (key === "z") {
+      if (e.shiftKey) redo();
+      else undo();
+      e.preventDefault();
+      return;
+    }
+    if (key === "y") {
+      redo();
+      e.preventDefault();
+    }
+  };
+  window.addEventListener("keydown", handler);
+  onCleanup(() => window.removeEventListener("keydown", handler));
 };
 
 // ─── Boundary suppression + clear (orchestration finalized in C3) ───────────

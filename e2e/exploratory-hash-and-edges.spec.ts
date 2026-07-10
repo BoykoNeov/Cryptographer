@@ -789,3 +789,87 @@ test.describe("A3b — per-source arrow styles", () => {
     await expect(page.getByTestId(testId)).toHaveValue("long-dash");
   });
 });
+
+// ─── C4: unified undo/redo (graph-legibility plan, Part C) ────────────────────
+//
+// The jsdom suites (`tests/edit-history-*.test.ts[x]`) pin the capture logic,
+// boundary rule, and shortcut wiring. What ONLY a real browser proves — and
+// where jsdom lies, since a test picks `e.key` freely — is the actual key
+// casing: with Shift held, `e.key` arrives UPPERCASE ("Z"), so Ctrl+Shift+Z
+// (redo) only works because the handler normalizes with `.toLowerCase()`.
+// These drive real Ctrl+Z / Ctrl+Shift+Z through the browser and assert the
+// user-facing undo/redo state, using a chevron collapse as the undoable edit
+// (a real layout edit; drag was retired as a node-move gesture — inside a
+// container it now pans, per the 2026-06-03 pan fix — so collapse is the
+// stable observable layout mutation).
+const readCollapsed = (page: Page, specId: string): Promise<string[] | undefined> =>
+  page.evaluate((id) => {
+    const raw = window.localStorage.getItem("cryptographer.layouts");
+    if (!raw) return undefined;
+    return (JSON.parse(raw)[id]?.collapsedGroups as string[] | undefined) ?? undefined;
+  }, specId);
+
+const undoButton = (page: Page) => page.getByRole("button", { name: "undo", exact: true });
+const redoButton = (page: Page) => page.getByRole("button", { name: "redo", exact: true });
+
+test.describe("C4 — unified undo/redo (real keyboard)", () => {
+  test.beforeEach(async ({ page }) => {
+    await freshLoad(page);
+  });
+
+  const openGraph = async (page: Page): Promise<void> => {
+    await page.getByRole("tab", { name: "graph", exact: true }).click();
+    await expect(page.locator(".graph-container-rect").first()).toBeVisible();
+  };
+
+  test("Ctrl+Z reverts a collapse (one entry) and Ctrl+Shift+Z redoes it", async ({ page }) => {
+    await openGraph(page);
+    await expect(undoButton(page)).toBeDisabled();
+
+    // A chevron collapse is a real, persisted layout edit → one undo entry.
+    await page.locator('[data-testid="graph-container-chevron-round.7"]').click();
+    await expect(page.locator(".graph-container-rect-collapsed")).toHaveCount(1);
+    expect(await readCollapsed(page, "aes-128@1")).toContain("round.7");
+    await expect(undoButton(page)).toBeEnabled();
+
+    // ONE Ctrl+Z fully reverts it (not several) — button disables, chip gone.
+    await page.keyboard.press("Control+z");
+    await expect(undoButton(page)).toBeDisabled();
+    await expect(page.locator(".graph-container-rect-collapsed")).toHaveCount(0);
+
+    // Ctrl+Shift+Z redoes. Shift makes `e.key === "Z"` (uppercase) in a real
+    // browser — this is the end-to-end proof the normalization actually works.
+    await expect(redoButton(page)).toBeEnabled();
+    await page.keyboard.press("Control+Shift+z");
+    await expect(page.locator(".graph-container-rect-collapsed")).toHaveCount(1);
+    expect(await readCollapsed(page, "aes-128@1")).toContain("round.7");
+  });
+
+  test("Ctrl+Z inside a text input does native text undo, not editor undo", async ({ page }) => {
+    await openGraph(page);
+    await page.locator('[data-testid="graph-container-chevron-round.7"]').click();
+    await expect(undoButton(page)).toBeEnabled();
+
+    // Focus the plaintext input and press Ctrl+Z there. `isEditableTarget`
+    // bails FIRST, so the editor stack is untouched — the button stays enabled
+    // and the collapse is still in place.
+    await page.locator("label.data-field input").first().click();
+    await page.keyboard.press("Control+z");
+    await expect(undoButton(page)).toBeEnabled();
+    await expect(page.locator(".graph-container-rect-collapsed")).toHaveCount(1);
+  });
+
+  test("a cipher switch clears the undo stack (selector boundary)", async ({ page }) => {
+    await openGraph(page);
+    await page.locator('[data-testid="graph-container-chevron-round.7"]').click();
+    await expect(undoButton(page)).toBeEnabled();
+
+    // Switching the cipher variant is a canonical rebuild — pre-switch history
+    // no longer matches the live selectors, so the boundary rule drops both
+    // stacks. (A document Load funnels through the same `withBoundaryReset`
+    // wrapper, so it clears identically — covered by construction + unit test.)
+    await sel(page, "cipher").selectOption("aes-256");
+    await expect(undoButton(page)).toBeDisabled();
+    await expect(redoButton(page)).toBeDisabled();
+  });
+});
