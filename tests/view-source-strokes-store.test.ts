@@ -73,12 +73,13 @@ beforeEach(() => {
 });
 
 describe("source-stroke per-spec master toggle", () => {
-  it("defaultStrokeStylingFor: ON for SHA-256 (any @N), OFF for every other spec", () => {
+  it("defaultStrokeStylingFor: ON for SHA-256 + RSA (any @N / both directions), OFF for every other spec", () => {
     expect(defaultStrokeStylingFor("sha-256@1")).toBe(true);
     expect(defaultStrokeStylingFor("sha-256@2")).toBe(true);
+    expect(defaultStrokeStylingFor("rsa@1")).toBe(true);
+    expect(defaultStrokeStylingFor("rsa-decrypt@1")).toBe(true);
     expect(defaultStrokeStylingFor("aes-128@1")).toBe(false);
     expect(defaultStrokeStylingFor("des@1")).toBe(false);
-    expect(defaultStrokeStylingFor("rsa@1")).toBe(false);
   });
 
   it("reactive read falls back to the per-spec default when no override exists", () => {
@@ -134,9 +135,11 @@ describe("source-stroke per-spec master toggle", () => {
 });
 
 describe("source-stroke per-spec fanout threshold", () => {
-  it("defaultStrokeThresholdFor: 1 for SHA-256 (any @N), else the non-SHA default", () => {
+  it("defaultStrokeThresholdFor: 1 for SHA-256 + RSA (any @N / both directions), else the non-styled default", () => {
     expect(defaultStrokeThresholdFor("sha-256@1")).toBe(1);
     expect(defaultStrokeThresholdFor("sha-256@2")).toBe(1);
+    expect(defaultStrokeThresholdFor("rsa@1")).toBe(1);
+    expect(defaultStrokeThresholdFor("rsa-decrypt@1")).toBe(1);
     expect(defaultStrokeThresholdFor("aes-128@1")).toBe(DEFAULT_STROKE_THRESHOLD);
     expect(defaultStrokeThresholdFor("des@1")).toBe(DEFAULT_STROKE_THRESHOLD);
   });

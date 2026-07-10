@@ -270,6 +270,25 @@ reader doesn't re-litigate them):
 
 ## Part B — Curated default layouts for the built-ins + reset-to-default
 
+> **SHIPPED — B2.2 first authored layout (2026-07-10).** The catalogue is no
+> longer empty: `CURATED_DEFAULT_LAYOUTS["sha-256@1"]` carries a browser-driven
+> arrangement (dragged in-app, saved as `.cipher.json`, its `layout` sidecar
+> transcribed into `src/core/default-layouts.ts` at normal density, coords
+> rounded to ints). Sparse — three moved nodes (`init.fetch-H` parked far right
+> beside `final.assemble`, since it is both the fold seed AND the final feed-
+> forward addend; `msg-schedule`, `round.0`) plus three synthetic-chip nudges;
+> every other node keeps its auto-laid spot and merges under the user's drags.
+> `tests/default-layouts.test.ts` updated (catalogue no longer empty); the
+> `graph-view-sha256-assemble-fan-in` auto-layout test now forces the catalogue
+> empty so the curated `final.assemble` pin doesn't perturb the geometry it
+> asserts. **RSA joins the fully-coded set:** `defaultColorThresholdFor` /
+> `defaultStrokeStylingFor` / `defaultStrokeThresholdFor` now key off a
+> `["sha-256", "rsa"]` prefix set, so RSA opens with colour-by-source AND
+> style-by-source ON at threshold 1 (both `rsa@1` + `rsa-decrypt@1`). Full
+> `npm run check` GREEN (224 files / 2562 pass). **Remaining Part B non-goal:**
+> authoring curated layouts for the other built-ins (AES/DES/Speck/Serpent) —
+> pick up per user ask.
+
 > **SHIPPED — B1 mechanism (2026-07-09).** The code deliverable landed
 > behavior-neutral: `src/core/default-layouts.ts` (pure `curatedDefaultFor` +
 > `mergeLayoutSpecs` + a `__setCuratedDefaultsForTests` seam) with an **empty**

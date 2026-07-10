@@ -42,31 +42,46 @@ describe("CURATED_DEFAULT_LAYOUTS catalogue", () => {
     }
   });
 
-  it("ships empty in B1 (mechanism is a no-op until layouts are authored)", () => {
-    expect(Object.keys(CURATED_DEFAULT_LAYOUTS)).toHaveLength(0);
+  it("carries the authored SHA-256 curated layout (B2.2)", () => {
+    // B1 shipped empty; B2.2 authored the first entry. The specific pins are
+    // covered by the browser-driven capture, not asserted numerically here —
+    // this guards that the catalogue is no longer a no-op and the SHA-256 key
+    // is present with the expected sparse shape.
+    const sha = CURATED_DEFAULT_LAYOUTS["sha-256@1"];
+    expect(sha, "sha-256@1 curated layout present").toBeDefined();
+    expect(sha?.positions["init.fetch-H"]).toBeDefined();
+    expect(sha?.flowDirection).toBe("ltr");
   });
 });
 
 describe("curatedDefaultFor", () => {
   it("returns null for an id with no curated default", () => {
-    expect(curatedDefaultFor("sha-256@1")).toBeNull();
+    expect(curatedDefaultFor("aes-128@1")).toBeNull();
     expect(curatedDefaultFor("not-a-real-id@9")).toBeNull();
   });
 
+  it("returns the authored layout for a curated id", () => {
+    expect(curatedDefaultFor("sha-256@1")).toBe(CURATED_DEFAULT_LAYOUTS["sha-256@1"]);
+  });
+
   it("test seam injects and resets a curated map", () => {
+    // Inject under a SYNTHETIC never-real id (mirrors `not-a-real-id@9` above)
+    // so the post-reset assertion stays unambiguous no matter which real
+    // built-ins later get authored curated layouts — after reset it falls back
+    // to the real catalogue, which will never carry `test-only@1`.
     const injected: LayoutSpec = {
       positions: { "round.0": { x: 10, y: 20 } },
       collapsedGroups: [],
       flowDirection: "ltr",
     };
-    __setCuratedDefaultsForTests({ "sha-256@1": injected });
+    __setCuratedDefaultsForTests({ "test-only@1": injected });
     try {
-      expect(curatedDefaultFor("sha-256@1")).toBe(injected);
-      expect(curatedDefaultFor("aes-128@1")).toBeNull();
+      expect(curatedDefaultFor("test-only@1")).toBe(injected);
+      expect(curatedDefaultFor("also-not-real@2")).toBeNull();
     } finally {
       __resetCuratedDefaultsForTests();
     }
-    expect(curatedDefaultFor("sha-256@1")).toBeNull();
+    expect(curatedDefaultFor("test-only@1")).toBeNull();
   });
 });
 

@@ -8,12 +8,15 @@
  *   - **Master toggle — PER-SPEC, session-persisted, here.** Unlike colours,
  *     whose master toggle is one GLOBAL bool, the stroke channel's enable
  *     state is keyed by `spec.id`, because its *shipped default differs per
- *     built-in*: OFF everywhere EXCEPT SHA-256, which ships ON (user-decided
- *     2026-07-09). SHA-256 is the one shipped spec with more distinct sources
- *     than the 8-colour Okabe-Ito palette, so colours *repeat* there and the
- *     orthogonal dash channel earns its keep from first open; every other
- *     cipher (AES/DES/Speck/RSA) has few enough sources that colour alone
- *     suffices, so a global dash-on would only add noise. The persisted map
+ *     built-in*: OFF everywhere EXCEPT SHA-256 (user-decided 2026-07-09) and
+ *     RSA (user-decided 2026-07-10), which both ship ON. SHA-256 has more
+ *     distinct sources than the 8-colour Okabe-Ito palette, so colours
+ *     *repeat* there and the orthogonal dash channel earns its keep from first
+ *     open; RSA joins it so its bigint dataflow reads fully styled by default.
+ *     The remaining ciphers (AES/DES/Speck) have few enough sources that
+ *     colour alone suffices, so a dash-on there would only add noise. The
+ *     enable default and the threshold default (below) are driven by the SAME
+ *     prefix set so the two stay in lock-step. The persisted map
  *     stores only the entries that DIVERGE from the per-spec default (an
  *     explicit user flip); an entry equal to the default is dropped, so
  *     "reset" is simply "forget the override" and the shipped default returns.
@@ -47,20 +50,23 @@ import { createSignal } from "solid-js";
 const ENABLED_STORAGE_KEY = "cryptographer.viewSourceStrokesEnabled";
 
 /**
- * The one spec that ships with arrow styling ON. Matched by prefix so a
- * future step-type `@N` bump (`sha-256@2`) keeps the default without a code
- * change here. Every other built-in ships OFF.
+ * The spec families that ship with arrow styling ON: SHA-256 and RSA (see
+ * file header). Matched by prefix so a future step-type `@N` bump
+ * (`sha-256@2`) keeps the default without a code change here, and `"rsa"`
+ * covers BOTH `rsa@1` (encrypt) and `rsa-decrypt@1`. Every other built-in
+ * ships OFF. This same set also drives `defaultStrokeThresholdFor` below so
+ * the enable and threshold defaults stay in lock-step.
  */
-const STROKE_ON_BY_DEFAULT_PREFIX = "sha-256";
+const STROKE_ON_BY_DEFAULT_PREFIXES = ["sha-256", "rsa"] as const;
 
 /**
- * Per-spec shipped default: ON iff the spec is SHA-256 (see file header).
- * Pure — the single source of truth for "what does this spec do before the
- * user touches the toggle," shared by the reactive read and the drop-to-
- * default persistence discipline.
+ * Per-spec shipped default: ON iff the spec is one of the styled families
+ * above (see file header). Pure — the single source of truth for "what does
+ * this spec do before the user touches the toggle," shared by the reactive
+ * read and the drop-to-default persistence discipline.
  */
 export const defaultStrokeStylingFor = (specId: string): boolean =>
-  specId.startsWith(STROKE_ON_BY_DEFAULT_PREFIX);
+  STROKE_ON_BY_DEFAULT_PREFIXES.some((p) => specId.startsWith(p));
 
 /**
  * Persisted shape: `{ [specId]: boolean }`, holding ONLY the specs whose
@@ -153,10 +159,11 @@ export const toggleSourceStrokeStylingEnabled = (specId: string): void => {
 // (`view-source-colors.ts`). See the file header ("Fanout threshold — OWNED
 // here") for why the two were split. A source is auto-STYLED when its fanout
 // is `>=` this threshold. Same per-spec-default + drop-on-match discipline as
-// the enable map above: SHA-256 defaults to 1 (style EVERY source — it
-// saturates the 8-colour palette so the orthogonal dash channel earns its keep
-// on first open), every other built-in to 3 (only the biggest fan-outs).
-// Viewer-local, never on `LayoutSpec`.
+// the enable map above: SHA-256 and RSA default to 1 (style EVERY source —
+// SHA-256 saturates the 8-colour palette so the orthogonal dash channel earns
+// its keep on first open, RSA ships fully styled by user request), every other
+// built-in to 3 (only the biggest fan-outs). Viewer-local, never on
+// `LayoutSpec`.
 
 const STROKE_THRESHOLD_STORAGE_KEY = "cryptographer.viewSourceStrokeThreshold";
 
@@ -165,12 +172,13 @@ export const STROKE_THRESHOLD_MIN = 0;
 export const STROKE_THRESHOLD_MAX = 99;
 
 /**
- * Shipped per-spec default stroke threshold: 1 for SHA-256 (style every
- * source), else `DEFAULT_STROKE_THRESHOLD` (3). Reuses the same SHA-256 prefix
- * as the enable default so the two ship in lock-step.
+ * Shipped per-spec default stroke threshold: 1 for the styled families
+ * (SHA-256, RSA — style every source), else `DEFAULT_STROKE_THRESHOLD` (3).
+ * Reuses the same prefix set as the enable default so the two ship in
+ * lock-step.
  */
 export const defaultStrokeThresholdFor = (specId: string): number =>
-  specId.startsWith(STROKE_ON_BY_DEFAULT_PREFIX) ? 1 : DEFAULT_STROKE_THRESHOLD;
+  STROKE_ON_BY_DEFAULT_PREFIXES.some((p) => specId.startsWith(p)) ? 1 : DEFAULT_STROKE_THRESHOLD;
 
 /** Clamp to [MIN, MAX] and round; non-finite falls back to `fallback`. */
 const clampStrokeThreshold = (value: number, fallback: number): number => {

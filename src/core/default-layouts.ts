@@ -25,24 +25,56 @@
  * original whole-object `??` (which would have reverted the whole arrangement
  * on the first drag); the user chose curation-preserving merge.
  *
- * ## B1 scope
- * The real `CURATED_DEFAULT_LAYOUTS` map ships EMPTY. With no entries,
- * `curatedDefaultFor` returns `null` for every shipped spec and
- * `effectiveLayout() === userLayout()` — i.e. this module is a provable no-op
- * in the shipped app until Part B's later chunks author one layout per cipher
- * (browser-driven, SHA-256 first). The `__setCuratedDefaultsForTests` seam
+ * ## Catalogue scope (B2.2, 2026-07-10)
+ * B1 shipped the mechanism with an EMPTY map (a provable no-op —
+ * `effectiveLayout() === userLayout()` for every spec). B2.2 authors the
+ * FIRST entry, `sha-256@1`, browser-driven: the arrangement below was dragged
+ * into place in the app, saved as a `.cipher.json`, and its `layout` sidecar
+ * transcribed here (coords rounded to integers — a curated layout is never
+ * persisted, so sub-pixel precision is noise). Specs without an entry still
+ * fall through to raw auto-layout. The `__setCuratedDefaultsForTests` seam
  * lets the mechanism tests exercise the fallback/merge/reset paths without
- * depending on that hand-authored content.
+ * depending on this hand-authored content.
+ *
+ * ## Authoring invariant: normal density
+ * Curated layouts are authored at the canonical `normal` density (scale 1.0);
+ * `GraphView.effectiveLayout()` rescales them at read time for compact /
+ * comfortable (see `scaleCuratedLayout`). The SHA-256 layout below was
+ * captured at normal density.
  */
 
 import type { LayoutSpec, RelativePosition, ReplicationMode, StepPosition } from "./document";
 
 /**
- * The curated built-in layouts, keyed by stable `spec.id`. EMPTY in B1 —
- * populated one cipher at a time in Part B's later chunks. Keys must be real
- * built-in spec ids (cross-checked in `tests/default-layouts.test.ts`).
+ * The curated built-in layouts, keyed by stable `spec.id`. Populated one
+ * cipher at a time (B2.2 authored `sha-256@1`). Keys must be real built-in
+ * spec ids (cross-checked in `tests/default-layouts.test.ts`).
+ *
+ * **`sha-256@1`** — the SHA-256 graph is ~14,000px wide (64 rounds unrolled
+ * left-to-right inside the per-block `blocks` fold), so the only three moved
+ * nodes plus three synthetic-chip nudges are all this layout needs; every
+ * other node keeps its auto-laid position (the curated layer is sparse and
+ * merges UNDER the user's own drags). `init.fetch-H` is parked at the far
+ * right (x≈13843) beside `final.assemble` on purpose: it is the fold's seed
+ * AND the feed-forward addend that lands in the final add, so it reads best
+ * next to where its value re-enters, not back at round 0 (x≈1089).
  */
-export const CURATED_DEFAULT_LAYOUTS: { readonly [specId: string]: LayoutSpec } = {};
+export const CURATED_DEFAULT_LAYOUTS: { readonly [specId: string]: LayoutSpec } = {
+  "sha-256@1": {
+    positions: {
+      "init.fetch-H": { x: 13843, y: 81 },
+      "msg-schedule": { x: 909, y: 209 },
+      "round.0": { x: 1089, y: 271 },
+    },
+    collapsedGroups: [],
+    flowDirection: "ltr",
+    relativePositions: {
+      "final.assemble": { dx: -433, dy: 147 },
+      "final.s0": { dx: -10, dy: 42 },
+      "final.split-H@->final.s0": { dx: -95, dy: -118 },
+    },
+  },
+};
 
 /**
  * Test-only override of the curated map. Mirrors the `__reset*ForTests` seams

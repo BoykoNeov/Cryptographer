@@ -34,6 +34,10 @@
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { buildSha256Spec } from "@/ciphers/sha-256";
+import {
+  __resetCuratedDefaultsForTests,
+  __setCuratedDefaultsForTests,
+} from "@/core/default-layouts";
 import { runSpec } from "@/core/runtime";
 import { GraphView } from "@/ui/components/GraphView";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
@@ -61,6 +65,11 @@ const resetAll = (): void => {
   __resetViewDensityForTests();
   __resetReplicationForTests();
   __resetLayoutsForTests();
+  // Force the curated-defaults catalogue EMPTY: this test verifies the raw
+  // fan-in AUTO-LAYOUT geometry, so the shipped SHA-256 curated layout (which
+  // relative-pins `final.assemble`) must not perturb the attach-y clamp window
+  // under test. Restored to the real catalogue in afterEach.
+  __setCuratedDefaultsForTests({});
 };
 
 /**
@@ -90,6 +99,7 @@ describe("GraphView — SHA-256 final.assemble 8-fan-IN distinct attach y", () =
   afterEach(() => {
     cleanup();
     resetAll();
+    __resetCuratedDefaultsForTests();
   });
 
   it("the 8 incoming edges at final.assemble produce 8 DISTINCT ty values", () => {

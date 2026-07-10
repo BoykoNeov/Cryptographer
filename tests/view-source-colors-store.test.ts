@@ -194,11 +194,12 @@ describe("include-single-output-sources sub-toggle", () => {
 // ─── 4b. Per-spec fanout threshold (per-spec 2026-07-10) ──────────────────
 
 describe("per-spec color fanout threshold", () => {
-  it("defaultColorThresholdFor: 1 for SHA-256 (any @N), else the non-SHA default", () => {
+  it("defaultColorThresholdFor: 1 for SHA-256 + RSA (any @N / both directions), else the non-coded default", () => {
     expect(defaultColorThresholdFor("sha-256@1")).toBe(1);
     expect(defaultColorThresholdFor("sha-256@2")).toBe(1);
+    expect(defaultColorThresholdFor("rsa@1")).toBe(1);
+    expect(defaultColorThresholdFor("rsa-decrypt@1")).toBe(1);
     expect(defaultColorThresholdFor("aes-128@1")).toBe(DEFAULT_COLOR_THRESHOLD);
-    expect(defaultColorThresholdFor("rsa@1")).toBe(DEFAULT_COLOR_THRESHOLD);
   });
 
   it("reactive read falls back to the per-spec default when no override exists", () => {
