@@ -67,9 +67,8 @@ export const serpentLinearTransformDoc: StepDocumentation = {
   detail: `## Linear Transform (Serpent, standard form)
 
 Each of the 128 output bits is the XOR of a small set (2–7) of input bits.
-The mapping from output bit position to input bit positions is a fixed
-table embedded in the cipher specification (\`SERPENT_LT_TABLE\` in the
-constants module).
+The mapping from each output bit to the input bits it XORs is a fixed table
+that is part of the Serpent specification.
 
 \`\`\`
 output_bit[i]  =  XOR over j in LT_TABLE[i] of  input_bit[j]

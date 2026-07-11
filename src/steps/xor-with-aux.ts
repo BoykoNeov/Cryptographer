@@ -158,49 +158,41 @@ export const xorWithAuxMeta: ProjectionMetadata = {
 
 export const xorWithAuxDoc: StepDocumentation = {
   name: "XOR with Aux",
-  summary:
-    "XOR a named aux value into the port input. The single-step form of fetch-then-XOR (AES AddRoundKey, DES XOR-with-K).",
+  summary: "XORs a round key (or other key-schedule value) into the block in one step.",
   detail: `# XOR with Aux
 
-Reads the bytes on the \`input\` port and XORs them, byte-for-byte, with the
-value held in \`aux[params.auxName]\`:
+XORs the bytes on the \`input\` byte-for-byte with a key-schedule value —
+typically a round key. The value is not wired in directly; it is read from a
+**named slot** (the \`auxName\`) that an earlier step, usually the key
+schedule, filled in:
 
 \`\`\`
-output  =  input  ⊕  aux[auxName]
+output  =  input  ⊕  the value stored under auxName
 \`\`\`
 
-The aux value is auto-projected onto the \`operand\` input port by the runtime
-(via \`meta.auxReadPorts\`) before this step runs — the same mechanism
-\`aux-load-bytes@1\` uses — so it also shows up as an aux-read edge in the
-graph, preserving the key-schedule → AddRoundKey fan-out.
+This is the everyday way a cipher folds its key material into the data one
+round at a time. Keeping the key value in a named slot is what lets a single
+key schedule feed the same round key to whichever rounds need it.
 
 ## Where it fits
 
-- **AES AddRoundKey (FIPS-197 §5.1.4).** Each round reads its 16-byte
-  \`roundKey.N\` and XORs it into the state. The single-step replacement for
-  the old \`aux-load-bytes@1\` + \`xor@1\` pair.
-- **DES XOR with K_i, Serpent AddRoundKey.** The same operation on a
-  different-width state and key — this primitive is variant-agnostic (no fixed
-  \`byteLength\`), so those rebuilds can adopt it too.
+- **Blowfish** starts each round by XORing the round subkey \`P[i]\` into the
+  left half of the block (\`L ⊕ P[i]\`); the \`auxName\` names that subkey.
+- **AES AddRoundKey** XORs the 16-byte round key into the state each round
+  (FIPS-197 §5.1.4).
+- **DES and Serpent** do the same at their own block and key sizes — this is
+  one general step, not tied to a particular cipher.
 
-## Self-inverse
+## Why the same step decrypts
 
-XOR cancels under repetition (\`A ⊕ B ⊕ B = A\`), which is why decryption
-re-applies the same round keys in reverse order with this same step — no
-separate "unmix" operation.
-
-## Errors
-
-- Throws if \`params.auxName\` is not a string.
-- Throws if the \`input\` port is unwired, or if \`aux[auxName]\` is missing at
-  execute time (the editor's orphan-read glyph is the first line of defense;
-  this throw is the second).
-- Throws if the input and the aux operand disagree on length — a wiring bug
-  surfaced loudly, never silently padded or truncated.`,
+XOR undoes itself: \`A ⊕ B ⊕ B = A\`. So decryption removes each round key by
+XORing the very same value back in (with the round keys applied in reverse
+order) — there is no separate "un-XOR" operation. The two inputs must be the
+same length.`,
   params: new Map([
     [
       "auxName",
-      "Aux key holding the XOR operand (e.g. `roundKey.N`). Must decode to bytes the same length as the input port. Empty string is allowed at authoring time — the editor surfaces an orphan-read glyph until it is wired.",
+      "The name of the key-schedule slot to XOR in (e.g. `roundKey.N` for AES, a P-array entry for Blowfish). Its value must be the same length as the input. Left blank on a freshly added step, and the editor flags it until you connect it.",
     ],
   ]),
   references: ["FIPS-197 §5.1.4 (AddRoundKey)", "FIPS 46-3 §3 (DES f-function XOR with K)"],

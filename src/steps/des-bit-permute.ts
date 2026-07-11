@@ -96,10 +96,8 @@ A bit-level permutation under FIPS 46-3 numbering (1-indexed, MSB-first):
 output_bit[i] = input_bit[table[i - 1]]      for i in 1..outBits
 \`\`\`
 
-The output is \`outBits\` bits packed MSB-first into \`ceil(outBits / 8)\`
-bytes. Unlike the byte-gather \`permute@1\`, this works at single-bit
-granularity and can change the bit-length (PC-1 drops 8 bits; PC-2 drops
-8 more).
+Unlike a byte-level permutation, this works one bit at a time and can change
+the total number of bits (PC-1 drops 8 bits; PC-2 drops 8 more).
 
 **Where it fits in the DES key schedule.**
 
@@ -114,9 +112,9 @@ arithmetic, only this permute and the per-round rotation.`,
   params: new Map([
     [
       "table",
-      "FIPS 1-indexed, MSB-first source-bit positions; one entry per output bit. PC-1 = DES_PC1 (56), PC-2 = DES_PC2 (48).",
+      "For each output bit, which input bit it comes from — the PC-1 table (56 entries) or the PC-2 table (48 entries).",
     ],
-    ["outBits", "Number of output bits (= table.length). 56 for PC-1, 48 for PC-2."],
+    ["outBits", "How many output bits: 56 for PC-1, 48 for PC-2."],
   ]),
   references: ["FIPS 46-3 §5 (Key Schedule — Tables PC-1, PC-2)"],
   // No shapeContract — port-native steps describe their surface via the

@@ -44,13 +44,12 @@ export const sub: PortedExecutor = (inputs, _params, _ctx) => {
 
 export const subDoc: StepDocumentation = {
   name: "Subtract (integer)",
-  summary:
-    "Unsigned big-integer difference a − b over big-endian operands. Output width = max(a, b) bytes; throws if negative.",
+  summary: "Subtracts one whole number from another. The result must not go below zero.",
   detail: `# Subtract (integer)
 
-Reads two big-endian non-negative integers from ports \`a\` (minuend) and
-\`b\` (subtrahend) and emits \`a − b\` on \`output\`, big-endian, at
-\`max(a.length, b.length)\` bytes.
+Subtracts \`b\` from \`a\` and produces the difference. The result is treated
+as a plain non-negative whole number, so \`a\` must be at least as large as
+\`b\`.
 
 ## Math
 
@@ -58,20 +57,11 @@ Reads two big-endian non-negative integers from ports \`a\` (minuend) and
 output = a − b      (must be ≥ 0)
 \`\`\`
 
-Unsigned: a result below zero throws rather than wrapping into two's
-complement, because the only RSA use is \`p − 1\` / \`q − 1\` where the
-result is always positive.
-
 ## Where it fits
 
-- **RSA key generation**: the two factors of Euler's totient
-  \`φ(n) = (p − 1)(q − 1)\`. The constant \`1\` arrives from a
-  \`constant-load@1\` leaf.
-
-## Errors
-
-- Throws if port \`a\` or \`b\` is unwired.
-- Throws if \`a − b\` is negative.`,
+- **RSA key generation**: computing \`p − 1\` and \`q − 1\`, whose product is
+  Euler's totient φ(n) = (p − 1)(q − 1) — a value the key generation needs to
+  find the private exponent.`,
   references: [
     "Rivest, Shamir, Adleman 1978 — A Method for Obtaining Digital Signatures and Public-Key Cryptosystems",
   ],

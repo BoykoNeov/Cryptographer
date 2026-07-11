@@ -160,37 +160,25 @@ export const speckPublishRoundKeysMeta: ProjectionMetadata = {
 export const speckPublishRoundKeysDoc: StepDocumentation = {
   name: "Publish round keys (Speck)",
   summary:
-    "Write the derived Speck round-key words into the aux map (roundKey.0 … roundKey.{rounds-1}).",
+    "Stores the finished Speck round-key words under names so each round can look up its key.",
   detail: `## Publish round keys (Speck)
 
-The tail of the decomposed Speck key schedule. The recurrence above this
-step has already computed every round-key word as visible port-native
-frames (ROR/ADD/XOR/ROL/XOR per Beaulieu et al. 2013 §3); this leaf takes
-the finished round keys on its input ports \`key0\` … \`key{rounds-1}\`
-and publishes them into the aux map as
-\`${"`"}\${outputPrefix}.0${"`"}\` … \`${"`"}\${outputPrefix}.{rounds-1}${"`"}\`
-(typically \`roundKey.0\` … \`roundKey.{rounds-1}\`).
+The last step of the Speck key schedule. The ARX recurrence above it has
+already computed every round-key word; this step collects them and stores
+each under a name — \`roundKey.0\` … \`roundKey.{rounds-1}\` — so each round
+can look up the key word it needs. The 2-word block being encrypted is
+untouched; this step only files the round keys away.
 
-The per-round Speck round step (\`speck.round@1\`) reads those aux entries
-unchanged — so decomposing the key schedule into visible math did not touch
-the round body at all. The state (the carried 2-word block) passes through
-this step untouched; the work product lives entirely in the aux map.
-
-**Speck32/64 vs AES round-key contract.** Speck has no initial pre-round
-key; each round consumes exactly one round-key word, so the schedule emits
-\`rounds\` keys total (not \`rounds + 1\` as AES does). \`roundKey.0\` is
-the master-key first word \`k_0\`; \`roundKey.{i+1}\` is the result of the
-i-th ARX iteration. The 22 round keys for Speck32/64 fully consume the
-schedule.`,
+**How many keys.** Speck has no initial pre-round key: each round uses exactly
+one round-key word, so the schedule produces one key per round (22 for
+Speck32/64). \`roundKey.0\` is the first word of the master key; each later key
+is the result of one more step of the schedule.`,
   params: new Map([
     [
       "outputPrefix",
-      'Prefix for the round-key aux entries. With "roundKey", outputs are roundKey.0 … roundKey.{rounds-1}.',
+      'The name prefix for the round keys. With "roundKey", they are stored as roundKey.0, roundKey.1, and so on.',
     ],
-    [
-      "rounds",
-      "Total round-key count (Speck32/64 = 22). Emits `rounds` round keys (key0 … key{rounds-1}). One less than the AES analog because Speck has no initial pre-round key.",
-    ],
+    ["rounds", "How many round keys to store (22 for Speck32/64) — one per round."],
   ]),
   references: [
     "Beaulieu et al. 2013, 'The SIMON and SPECK Families of Lightweight Block Ciphers' (key-schedule output convention)",

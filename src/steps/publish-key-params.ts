@@ -154,22 +154,12 @@ export const publishKeyParamsDoc: StepDocumentation = {
     "Write this direction's RSA key material (the modulus n + the active exponent) into the aux map.",
   detail: `## Publish key parameters (RSA)
 
-The tail of the "Key Generation" group. The leaves above this step have
-already computed the modulus \`n = p·q\`, Euler's totient \`φ(n) =
-(p−1)(q−1)\`, and the private exponent \`d = e⁻¹ mod φ(n)\` as visible
-port-native frames; this leaf takes the parameters this direction needs on its
-input ports and publishes them into the aux map as
-\`\${outputPrefix}.<name>\` (typically \`rsa.n\`, \`rsa.e\`, \`rsa.d\`).
-
-## Why a publish step is needed
-
-Key generation lives inside a collapsible group. A group walks its children
-in an isolated scope, so the exponentiation ladder OUTSIDE the group cannot
-wire a port directly to \`n\` or the exponent INSIDE it. The aux map is global
-— it is the one channel that crosses the group boundary — so this tail mirrors
-the key parameters into aux, and the ladder reads them back via top-level
-\`aux-load-bytes@1\` loaders. The carried state (the message bytes) passes
-through this step untouched; the work product lives entirely in the aux map.
+The last step of the "Key Generation" group. The steps above it have already
+computed the modulus \`n = p·q\`, Euler's totient \`φ(n) = (p−1)(q−1)\`, and the
+private exponent \`d = e⁻¹ mod φ(n)\`. This step collects the key values this
+direction needs and stores them under names — \`rsa.n\`, \`rsa.e\`, \`rsa.d\` —
+so the encryption or decryption that follows can look them up. It does not
+change the message; it only files the key material away.
 
 ## The public / private key split
 
@@ -178,11 +168,10 @@ Each direction publishes exactly the key its ladder uses:
 - **Encrypt** publishes the **public key** \`{n, e}\` → \`c = mᵉ mod n\`.
 - **Decrypt** publishes the **private key** \`{n, d}\` → \`m = cᵈ mod n\`.
 
-The modulus \`n\` is shared by both. Publishing only the consumed key is the
-cross-mode asymmetry made concrete — and it avoids writing an aux value that
-nothing reads (which would draw an \`unused-write\` warning). The private
-exponent \`d\` is still derived and narrated in the key-gen group even when
-encrypting; its output simply goes unconsumed there.`,
+The modulus \`n\` is shared by both. Publishing only the key each direction
+actually uses is the public/private split made concrete. The private exponent
+\`d\` is still derived and shown in the key-generation group even when
+encrypting — it just isn't used on that side.`,
   params: new Map([
     [
       "outputPrefix",

@@ -194,18 +194,10 @@ ready for the compression function.
 
 ## Where it does NOT fit
 
-This primitive is **not** PKCS#7 (which encodes the pad length in the
-pad byte's value, not via a sentinel) or zero-padding (which has no
-sentinel and is ambiguous on inverse). Use the existing
-\`generic.pkcs7-pad@1\` or \`generic.zero-pad@1\` step types for those
-schemes; they remain legacy-typed because their semantics differ
-structurally.
-
-## Phase status
-
-Shipped in Slice 2.4 of the universal-port-dataflow plan as the first
-of two SHA-256-preprocessing primitives. The companion
-\`append-be64-length@1\` provides the message-length suffix.`,
+This is **not** PKCS#7 padding (which records the padding length in the pad
+byte's value rather than using a sentinel) or zero-padding (which has no
+sentinel and can't be unambiguously removed). Use the **PKCS#7** or
+**Zero-pad** steps for those.`,
   params: new Map([
     [
       "padByte",

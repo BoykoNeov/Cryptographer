@@ -145,89 +145,48 @@ export const splitBytes: PortedExecutor = (inputs, params, _ctx) => {
 
 export const splitBytesDoc: StepDocumentation = {
   name: "Split Bytes",
-  summary:
-    "N-way byte-range partitioning of one input port into output0..output{N-1}. Symmetric inverse of concat.",
+  summary: "Cuts one byte string into several contiguous pieces of the widths you choose.",
   detail: `# Split Bytes
 
-Reads bytes from the \`input\` port and emits N contiguous sub-ranges on
-output ports \`output0\`, \`output1\`, …, \`output{N-1}\` where the i-th
-output carries \`params.widths[i]\` bytes. Symmetric inverse of
-\`concat@1\` — concat takes N inputs and joins; split-bytes takes one
-input and partitions.
+Cuts a single input into several contiguous pieces, laid out left to right.
+It reads the \`input\` and emits N outputs — \`output0\`, \`output1\`, …,
+\`output{N-1}\` — where the i-th piece is \`widths[i]\` bytes long. It is the
+exact reverse of **Concat**: concat joins pieces into one value, split-bytes
+cuts one value back into pieces.
 
 ## Math
 
-For input \`a\` of length \`L = sum(widths)\`:
+For input \`a\` cut with widths \`[w0, w1, w2, …]\` (so \`a\` is \`w0 + w1 +
+w2 + …\` bytes long):
 
 \`\`\`
-output0 = a[0 .. widths[0]]
-output1 = a[widths[0] .. widths[0]+widths[1]]
-output2 = a[widths[0]+widths[1] .. widths[0]+widths[1]+widths[2]]
+output0 = a[0 .. w0]
+output1 = a[w0 .. w0+w1]
+output2 = a[w0+w1 .. w0+w1+w2]
 ...
 \`\`\`
 
-Each \`widths[i]\` must be ≥ 1; the array must contain at least one
-entry. Output port count = \`widths.length\`. Input byteLength = sum of
-widths (declared at spec-edit time, validated by the runtime's
-port-length coercion at run-time).
+Each width must be at least 1, and the widths add up to the input's length.
 
 ## Where it fits
 
-- **SHA-256 working-variable extraction.** Per-round compression splits
-  the 32-byte working_vars buffer into 8 × 4-byte words a..h via
-  \`params: { widths: [4, 4, 4, 4, 4, 4, 4, 4] }\`.
-- **SHA-256 initial hash extraction.** Final-add splits the 32-byte
-  H-table read from aux into H_0..H_7 the same way.
-- **HMAC, BLAKE2, future hashes.** Wherever a packed multi-word buffer
-  needs to be unpacked into per-word ports for parallel arithmetic.
+- **Splitting a block into halves for a Feistel round** — Blowfish and DES
+  begin each round by cutting the block into a left half and a right half
+  (for Blowfish's 8-byte block, \`widths: [4, 4]\`); the round then transforms
+  the halves and concatenates them back.
+- **Unpacking words for hashing** — SHA-256 cuts its 32-byte working state
+  into eight 4-byte words (\`widths: [4,4,4,4,4,4,4,4]\`) so each word can be
+  fed through the round arithmetic on its own.
 
-## Pair with \`byte-slice@1\`
-
-For arbitrary-offset single-range extraction (e.g., the per-round K_t
-at offset 4*roundIndex from a 256-byte K-table), prefer
-\`byte-slice@1\`. \`split-bytes@1\` is for symmetric N-way extraction
-starting at offset 0.
-
-## Authoring shape
-
-\`\`\`json
-{
-  "kind": "step",
-  "id": "extract-working-vars",
-  "type": "split-bytes@1",
-  "params": { "widths": [4, 4, 4, 4, 4, 4, 4, 4] },
-  "portInputs": {
-    "input": { "node": "state-to-bytes-of-working-vars", "port": "output" }
-  }
-}
-\`\`\`
-
-This leaf emits 8 outputs (output0..output7) each carrying 4 bytes,
-ready to be wired to the per-word arithmetic chains for SHA-256's
-Σ0/Σ1/Ch/Maj.
-
-## Errors
-
-- Throws if \`params.widths\` is missing or not an array.
-- Throws if \`params.widths\` is empty (N ≥ 1 floor).
-- Throws if any \`widths[i]\` is missing, not an integer, or < 1.
-- Throws at run-time if the \`input\` port is missing.
-
-## Phase status
-
-Shipped in Slice 2.6d of the universal-port-dataflow plan as the
-**third of three** new primitives. First consumers: the decomposed
-SHA-256 spec's compression-round working-variable extraction and the
-final-add step's H-table extraction.`,
+To pull out a single range that does **not** start at the beginning (for
+example, one round's key from the middle of a key table), use **Byte Slice**
+instead; split-bytes always cuts from the start.`,
   params: new Map([
     [
       "widths",
-      "Array of output port byteLengths. Each entry must be a positive integer (≥ 1); the array must have at least one entry. Output port N is named output{N-1}; input port byteLength = sum(widths).",
+      "The lengths of the pieces to cut, in order (e.g. [4, 4] for two 4-byte halves). Each is a whole number, 1 or more, and together they add up to the input's length.",
     ],
   ]),
-  references: [
-    "docs/plans/universal-port-phase-2-slices.md (Slice 2.6c design D.3 + Slice 2.6d ship)",
-  ],
   // No `shapeContract` — port-native steps describe their surface via
   // PortContract.
 };

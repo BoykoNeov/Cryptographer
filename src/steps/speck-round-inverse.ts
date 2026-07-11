@@ -99,21 +99,17 @@ y   =  ROR(y'  XOR  x', beta)
 x   =  ROL((x'  XOR  k_i)  −  y, alpha)
 \`\`\`
 
-The subtraction is **modular** in \`2^n\` — same as the forward addition
-just reversed. In code we keep values masked to \`wordBits\` and add
-\`2^n\` before subtracting so the JavaScript arithmetic doesn't dip
-negative; the trailing mask normalises the result.
+The subtraction is **modular** in \`2^n\` — the exact reverse of the forward
+round's modular addition, wrapping around at \`2^n\` in the same way.
 
-**Round-key order.** The inverse cipher consumes round keys in
-**reverse**: \`k_{rounds-1}, k_{rounds-2}, …, k_0\`. The forward key
-schedule still runs unchanged; only the spec's leaf ordering encodes the
-reversal. That keeps the schedule itself reusable across encrypt and
-decrypt — the same pattern AES uses, where the forward S-box drives key
-expansion even on the decrypt path.`,
+**Round-key order.** Decryption consumes the round keys in **reverse**:
+\`k_{rounds-1}, k_{rounds-2}, …, k_0\`. The key schedule itself is unchanged —
+only the order in which the rounds use its keys is reversed. This is the same
+idea AES uses, letting one key schedule serve both encryption and decryption.`,
   params: new Map([
     [
       "roundKeyAux",
-      "Name of the aux entry holding this inverse round's key word. The decrypt spec wires roundKey.21 to leaf 1, roundKey.0 to the final leaf.",
+      "The name of the slot holding this round's key word. Decryption uses the round keys in reverse order.",
     ],
     [
       "alpha",

@@ -95,21 +95,19 @@ operation in the un-permuted "bitslice" domain is to apply the same
 S-box **column-wise** across the four 32-bit words. Both forms compute
 the same final ciphertext.
 
-**Inverse.** The same executor is used for both directions; only the
-\`sbox\` param changes (forward S-box for encrypt, inverse table for
-decrypt).
+**Inverse.** The same step handles both directions; only the \`sbox\` changes
+— the forward S-box for encryption, the inverse table for decryption.
 
-**Editable per-leaf.** Each round's leaf carries its own copy of the
-S-box table. The spec builder deep-copies the table per leaf so editing
-one round's S-box doesn't bleed into any other.`,
+**Editable per round.** Each round carries its own copy of the S-box, so you
+can change one round's table without affecting the others.`,
   params: new Map([
     [
       "sbox",
-      "16-entry 4-bit S-box: an array of 16 integers in 0..15 forming a permutation of {0,…,15}.",
+      "The 4-bit S-box: 16 values, each 0–15, forming a permutation of 0…15 (so it can be inverted for decryption).",
     ],
     [
       "sboxIndex",
-      "Display-only annotation: which of the 8 S-boxes this is (0..7). The executor ignores this; the param editor and trace renderer use it for context.",
+      "Which of the 8 S-boxes this is (0–7). A label for context only; it doesn't affect the result.",
     ],
   ]),
   references: [

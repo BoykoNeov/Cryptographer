@@ -75,44 +75,32 @@ export const auxCopy: PortedExecutor = (inputs, _params, _ctx) => {
 
 export const auxCopyDoc: StepDocumentation = {
   name: "Aux Copy",
-  summary: "Copy aux[from] verbatim into aux[to] (no state change).",
+  summary: "Copies a stored value to a new name, leaving the original untouched.",
   detail: `## Aux Copy
 
-A straight assignment between aux slots:
+Copies a stored value from one name to another. The original is left
+unchanged:
 
 \`\`\`
-state          → state (passthrough)
-aux[from]      → aux[to] := aux[from]   (Uint8Array deep-copied)
+to  :=  from
 \`\`\`
-
-\`aux[from]\` is left unchanged. If the value is a \`Uint8Array\`, the
-written copy is a fresh allocation — \`aux[to]\` does not share storage
-with \`aux[from]\`. Non-byte aux shapes (State, State[], integers, bigints)
-pass through by reference, since the architecture treats those as
-immutable once published.
 
 **Use cases.** Three patterns dominate:
 
-- **Snapshot before destructive update.** Chaining modes XOR over their
-  feedback buffer, overwriting the previous ciphertext. \`aux-copy
-  feedback → C_i\` preserves the per-block output before the next
-  iteration's XOR clobbers it.
-- **Rename to bridge two steps.** Re-route an upstream step's output to
-  a downstream step that reads under a different key — without editing
-  either step's params.
-- **Initialize a chain.** \`aux-copy IV → feedback\` at the head of a CBC
-  composition so the original IV stays available later in the trace.
+- **Save a value before it gets overwritten.** Chaining modes overwrite
+  their feedback value each block. Copying \`feedback → C_i\` first keeps
+  that block's ciphertext before the next block overwrites it.
+- **Bridge two steps.** Route one step's output to a step that reads under a
+  different name, without editing either step.
+- **Start a chain.** Copy \`IV → feedback\` at the head of a CBC build so the
+  original IV stays available later.
 
-**Graceful when not yet wired.** If \`aux[from]\` is undefined at read
-time, the step is a passthrough — no error, no write. The visual editor
-flags the missing read with a warning glyph on the node so a half-built
-spec is debuggable in place.`,
+While you are still wiring things up, if the source value hasn't been
+produced yet the step simply passes through and the editor flags the missing
+connection.`,
   params: new Map([
-    ["from", "Aux key to read. Read-only — this step does not modify aux[from]."],
-    [
-      "to",
-      "Aux key to write to. The value is a fresh copy when source is a Uint8Array; other shapes pass through by reference.",
-    ],
+    ["from", "The name of the value to copy. It is only read, not changed."],
+    ["to", "The name to copy the value to."],
   ]),
   references: ["NIST SP 800-38A §6 (Modes of Operation)"],
   shapeContract: { input: "any", output: "preserveInput" },

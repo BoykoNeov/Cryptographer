@@ -49,21 +49,15 @@ value byte-for-byte.
 output_bit[i]  =  input_bit[table[i - 1]]      for i in 1..64
 \`\`\`
 
-**Note on the round-16 input to FP.** Textbook DES descriptions say "skip
-the swap on the last round, then apply FP." Equivalently — and the
-formulation this app uses — the 16th Feistel round uses
-\`combineKind: "feistel-no-swap"\` so its rejoin output is
-\`(L_in ⊕ R_out) || R_in\` directly. FP then permutes those 64 bits into
-the ciphertext.
+**The last round has no swap.** In DES, the final (16th) round skips the
+usual left/right swap before FP is applied. FP then permutes those 64 bits
+into the ciphertext.
 
-**No cryptographic purpose.** FP exists for symmetry with IP, which exists
-as a relic of bit-serial hardware. Removing both would not weaken the
-cipher; preserving them keeps the FIPS standard intact.`,
+**No cryptographic purpose.** FP exists only for symmetry with IP, which is
+itself a relic of 1970s bit-serial hardware. Removing both would not weaken
+the cipher; they are kept to match the DES standard.`,
   params: new Map([
-    [
-      "table",
-      "64-entry permutation table (FIPS 1-indexed, MSB-first). DES_FP in des-constants.ts.",
-    ],
+    ["table", "The 64-entry permutation: for each output bit, which input bit it comes from."],
   ]),
   references: ["FIPS 46-3 §3 (Inverse Initial Permutation, Table 2)"],
   shapeContract: { input: "bytes", output: "preserveInput" },

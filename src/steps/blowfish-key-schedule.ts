@@ -177,18 +177,19 @@ four S-boxes by running Blowfish encryption on itself:
    encryptions**, for **521 total**. Each encryption uses the P/S produced so
    far.
 
-The result is published into the aux map: \`blowfish.P.0 … blowfish.P.17\`
-(consumed by each round's \`L ⊕ P[i]\`) and \`blowfish.S0 … blowfish.S3\`
-(consumed by the round F function's four S-box lookups).
+The result becomes the cipher's working key material: \`P[0] … P[17]\`
+(each round's \`L ⊕ P[i]\` subkey) and the four S-boxes \`S0 … S3\` (read by
+the round F function's four lookups).
 
-## Why this step is opaque
+## Why this step is shown as one block
 
-Every OTHER key schedule in this app decomposes into visible port-native frames
-(AES / Speck / Serpent / DES). Blowfish's does not: 521 self-encryptions with a
-hard data-dependency chain would be tens of thousands of frames — the whole
-point of the trace is legibility, and there is no legible decomposition. So the
-loop is one step. What the app CAN show — how the key enters — is the visible
-\`key ⊕ P\` mixing that feeds this step's \`keyMixedP\` port.
+Blowfish builds its subkeys by running the cipher on itself 521 times in a
+row, where each encryption depends on the P/S the previous one just produced.
+Written out step by step, that would be tens of thousands of near-identical
+operations — no clearer than a single block. So this explorer shows the loop
+as one step and instead makes the *interesting* part visible: how the key
+enters, which is the \`key ⊕ P\` mixing (the XOR steps just above) that feeds
+this step's key-mixed P-array.
 
 ## Cost of a key change
 
@@ -200,7 +201,7 @@ trivial for a CPU, though it was significant for 1993 hardware.`,
   params: new Map([
     [
       "outputPrefix",
-      'Aux-namespace prefix for the published key material (default "blowfish"). Rounds read ${prefix}.P.{i}; the F function reads ${prefix}.S{b}.',
+      'The name prefix under which the derived key material is stored (default "blowfish"), so the rounds can find it — the P-array as "{prefix}.P.0…17" and the S-boxes as "{prefix}.S0…S3".',
     ],
   ]),
   references: [

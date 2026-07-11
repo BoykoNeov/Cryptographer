@@ -83,47 +83,33 @@ export const auxXor: PortedExecutor = (inputs, _params, _ctx) => {
 
 export const auxXorDoc: StepDocumentation = {
   name: "Aux XOR",
-  summary: "XOR aux[from] into aux[into], writing the result back to aux[into].",
+  summary:
+    "XORs one stored value into another, replacing it — the accumulator step for chaining modes.",
   detail: `## Aux XOR
 
-Byte-wise XOR of two aux values, with the result replacing one of them:
+XORs one stored value into another and writes the result back:
 
 \`\`\`
-state                       → state (passthrough)
-aux[from], aux[into]        → aux[into] := aux[from] ⊕ aux[into]
+into  :=  from  ⊕  into
 \`\`\`
 
-The operation is symmetric in its inputs (XOR is commutative), but the
-asymmetric \`from\`/\`into\` naming captures the intent: \`into\` is the
-running accumulator (e.g. CBC's feedback buffer), \`from\` is the new
-contribution being mixed in (e.g. the current plaintext block).
+XOR itself is symmetric, but the \`from\`/\`into\` names capture the intent:
+\`into\` is a running accumulator (for example CBC's feedback value), and
+\`from\` is the new piece being mixed into it (for example the current
+plaintext block).
 
-**Self-inverse property.** \`A ⊕ B ⊕ B = A\`. Applying the same step twice
-with the same \`from\` (and an unchanged \`aux[from]\`) cancels out — which
-is why decryption in feedback modes reuses the same XOR with the previous
-ciphertext, no separate "unmix" step needed.
+**Self-inverse.** \`A ⊕ B ⊕ B = A\`. Mixing the same value in a second time
+cancels it out — which is why feedback modes decrypt by XORing the previous
+ciphertext back in with this same step, and need no separate "unmix"
+operation.
 
-**Graceful when wires aren't connected yet.** If either operand's aux key
-hasn't been written by an upstream step at the time this step runs, the
-step is a passthrough — no error, no write. The visual editor's
-validation overlay flags such missing reads with an orange \`!\` glyph on
-the node. This lets users build half-wired specs incrementally and see
-exactly which connection is still missing.
-
-**Structural errors still throw.** If both operands are present but they
-aren't Uint8Arrays, or their lengths don't match, the step halts with a
-descriptive error. That's a different class of mistake — a wiring problem
-becomes a soft warning; a shape problem stops the run so it can't quietly
-produce wrong output.`,
+While you are still wiring a cipher up, if one of the two values hasn't been
+produced yet the step simply passes through and the editor flags the missing
+connection — so you can build a mode step by step and see what's still
+unconnected.`,
   params: new Map([
-    [
-      "from",
-      "Aux key whose value is the XOR operand to mix IN. Read-only — this step does not modify aux[from].",
-    ],
-    [
-      "into",
-      "Aux key whose value is BOTH read (as the second operand) and overwritten with the result.",
-    ],
+    ["from", "The name of the value to mix in. This value is only read, not changed."],
+    ["into", "The name of the accumulator: it is both read and overwritten with the result."],
   ]),
   references: [
     "NIST SP 800-38A §6.2 (CBC mode)",

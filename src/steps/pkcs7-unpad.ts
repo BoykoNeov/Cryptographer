@@ -64,7 +64,7 @@ export const pkcs7Unpad: PortedExecutor = (inputs, params, _ctx) => {
 
 export const pkcs7UnpadDoc: StepDocumentation = {
   name: "PKCS#7 Unpad",
-  summary: "Strip PKCS#7 padding from the end. Throws if the padding is malformed.",
+  summary: "Strips PKCS#7 padding from the end, checking that the padding is well-formed first.",
   detail: `## PKCS#7 Unpad
 
 The reverse of \`pkcs7-pad\`. Reads the last byte \`N\`, validates that the
@@ -82,11 +82,11 @@ verify:    trailing 11 bytes all == 0x0b ✓
 stripped:  61 70 70 6c 65   (← original "apple")
 \`\`\`
 
-**Why it must throw on malformed padding.** Silently truncating to a
-plausible prefix would hide bugs: a swapped block, an off-by-one in the
-cipher, an attacker tampering with the ciphertext — all of these break the
-padding before any other symptom shows up. Failing loudly turns the padding
-into a (very weak) integrity check.
+**Why it must reject malformed padding.** Silently trimming to a plausible
+prefix would hide problems: a swapped block, an off-by-one in the cipher, an
+attacker tampering with the ciphertext — all of these break the padding before
+any other symptom shows up. Rejecting it turns the padding into a (very weak)
+integrity check.
 
 **Aside on padding oracles.** Real-world AES-CBC + PKCS#7 implementations
 that distinguish "wrong padding" from "right padding but wrong plaintext"

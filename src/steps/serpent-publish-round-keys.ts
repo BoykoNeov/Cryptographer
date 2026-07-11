@@ -151,34 +151,24 @@ export const serpentPublishRoundKeysMeta: ProjectionMetadata = {
 
 export const serpentPublishRoundKeysDoc: StepDocumentation = {
   name: "Publish round keys (Serpent)",
-  summary: "Write the derived Serpent round keys into the aux map (roundKey.0 … roundKey.32).",
+  summary: "Stores the finished Serpent round keys under names so each round can look up its key.",
   detail: `## Publish round keys (Serpent)
 
-The tail of the decomposed Serpent key schedule. The recurrence + per-group
-S-box/IP above this step have already computed every round key as visible
-port-native frames; this leaf takes the finished round keys on its input ports
-\`key0\` … \`key32\` and publishes them into the aux map as
-\`${"`"}\${outputPrefix}.0${"`"}\` … \`${"`"}\${outputPrefix}.32${"`"}\`
-(typically \`roundKey.0\` … \`roundKey.32\`).
+The last step of the Serpent key schedule. The recurrence and per-group
+S-box/IP above it have already computed every round key; this step collects
+them and stores each under a name — \`roundKey.0\` … \`roundKey.32\` — so each
+round's AddRoundKey can look up its key. The 16-byte block being encrypted is
+untouched; this step only files the round keys away.
 
-The per-round Serpent AddRoundKey step (\`serpent.add-round-key@1\`) reads those
-aux entries unchanged — so decomposing the key schedule into visible math did
-not touch the round body at all. The state (the carried 16-byte block) passes
-through this step untouched; the work product lives entirely in the aux map.
-
-**Serpent's fixed 33 round keys.** Unlike AES (\`rounds + 1\` keys) and Speck
-(\`rounds\` keys), Serpent always emits exactly 33 round keys (K₀ … K₃₂) for all
-three key sizes — 32 for the per-round AddRoundKey plus one extra (K₃₂) for the
-final round's second AddRoundKey.`,
+**Serpent's fixed 33 round keys.** Serpent always uses exactly 33 round keys
+(K₀ … K₃₂) for all three key sizes — 32 for the per-round AddRoundKey, plus one
+extra (K₃₂) for the final round's second AddRoundKey.`,
   params: new Map([
     [
       "outputPrefix",
-      'Prefix for the round-key aux entries. With "roundKey", outputs are roundKey.0 … roundKey.32.',
+      'The name prefix for the round keys. With "roundKey", they are stored as roundKey.0 … roundKey.32.',
     ],
-    [
-      "count",
-      "Round-key count. Defaults to 33 (Serpent's fixed K₀ … K₃₂). The builder always passes 33.",
-    ],
+    ["count", "How many round keys to store — 33 for Serpent (K₀ … K₃₂)."],
   ]),
   references: ["Anderson, Biham, Knudsen 1998, §2 (Key Schedule — 33 round keys K₀ … K₃₂)"],
   shapeContract: { input: "any", output: "preserveInput" },

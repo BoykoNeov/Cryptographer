@@ -166,10 +166,9 @@ export const xorDoc: StepDocumentation = {
     "N-way byte-wise XOR of operand0..operand{N-1}. All operands must share the same length; output carries the XOR.",
   detail: `# XOR
 
-Universal port-native bitwise-XOR primitive. Takes N input ports named
-\`operand0\`, \`operand1\`, …, \`operand{N-1}\` (where N is set by
-\`params.inputCount\`), produces one output port \`output\` carrying the
-byte-wise XOR of all operands.
+Combines two or more equal-length byte strings by exclusive-OR. It takes N
+inputs — \`operand0\`, \`operand1\`, …, \`operand{N-1}\` (N is set by
+\`inputCount\`) — and produces one output that is their bitwise XOR.
 
 ## Math
 
@@ -179,53 +178,32 @@ For each byte position \`j\`:
 output[j] = operand0[j] ⊕ operand1[j] ⊕ … ⊕ operand{N-1}[j]
 \`\`\`
 
-XOR is commutative and associative, so operand order does not affect
-the result. XOR with itself is zero, and zero is the identity — so
-\`xor(a, a) = 0\` and \`xor(a, 0...0) = a\`.
+All inputs must be the **same length** — XOR combines them position by
+position. It is commutative and associative, so the order of the inputs does
+not change the result. A value XOR'd with itself is zero, and XOR with zero
+leaves a value unchanged: \`xor(a, a) = 0\` and \`xor(a, 0…0) = a\`. That
+self-inverse property is why the same XOR undoes itself, which is what makes
+it the workhorse of key mixing and chaining.
 
 ## Where it fits
 
-- **SHA-256 σ0 / σ1**: 3-way XOR of rotated and shifted copies of a
-  message word (FIPS 180-4 §4.1.2).
-- **SHA-256 message schedule**: 4-way XOR in the W_t recurrence
-  \`W_t = σ1(W_{t-2}) ⊕ W_{t-7} ⊕ σ0(W_{t-15}) ⊕ W_{t-16}\`.
-- **AES MixColumns rebuild from primitives**: each output cell is a
-  4-way XOR of GF(2^8)-multiplied state bytes — a future Phase 3+
-  rebuild composes \`gf-matrix-multiply\` + \`xor\` instead of the
-  monolithic legacy \`generic.mix-columns@1\`.
-- **Block-cipher chaining modes**: CBC's plaintext ⊕ previous-
-  ciphertext is a 2-way XOR; OFB / CFB feedback structure same. The
-  port-native variant lets the user wire chaining math entirely from
-  primitives, no implicit aux reads.
-- **Identity passthrough**: N=1 is the identity, useful as a wiring
-  placeholder during incremental spec authoring.
+- **Adding a key to data** — XOR is how nearly every cipher folds key
+  material into the block: AES's AddRoundKey, Blowfish's \`L ⊕ P[i]\` at the
+  start of each round, and the key-mixing that seeds Blowfish's key schedule.
+- **Feistel round combination** — the output of the round's F-function is
+  XOR'd into the other half of the block.
+- **SHA-256 helper functions** — σ0/σ1 XOR three rotated/shifted copies of a
+  word; the message schedule XORs four words together
+  (\`W_t = σ1(W_{t-2}) ⊕ W_{t-7} ⊕ σ0(W_{t-15}) ⊕ W_{t-16}\`).
+- **Chaining modes** — CBC XORs each plaintext block with the previous
+  ciphertext; OFB and CFB feed the keystream in the same way.
 
-## Why not widen \`generic.aux-xor@1\`
-
-Today's \`generic.aux-xor@1\` reads one operand from the aux map by
-name — that aux read is implicit and not wireable. \`xor@1\` ships
-under the port-native contract where every operand is an explicit
-input port; the two coexist because they serve different mental
-models (legacy aux-typed flow vs universal port-typed flow).
-
-## Errors
-
-- Throws if \`params.inputCount\` is missing, not an integer, or < 1.
-- Throws if any expected operand port is missing on the input map.
-- Throws if operands disagree on length — coercion is an editor /
-  edge-projection concern per the universal-port plan's Q2, NOT a
-  step-level concern.
-
-## Phase status
-
-Shipped in Slice 2.1b of the universal-port-dataflow plan, alongside
-\`add-mod-32@1\`. Not yet wired into any cipher spec — Slice 2.6's
-SHA-256 build is the first consumer; AES + DES rebuilds in Phases 3/4
-follow.`,
+With a single input (\`inputCount = 1\`) XOR just passes it through — handy as
+a placeholder while wiring a cipher up; the useful cases XOR two or more.`,
   params: new Map([
     [
       "inputCount",
-      "Number of input operand ports. Positive integer (≥ 1). N=1 is identity; N≥2 is the usual cryptographic case.",
+      "How many inputs to combine. A whole number, 1 or more; 2 or more is the usual case. All inputs must be the same length.",
     ],
   ]),
   references: [

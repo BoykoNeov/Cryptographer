@@ -66,7 +66,8 @@ export const iso78164Unpad: PortedExecutor = (inputs, params, _ctx) => {
 
 export const iso78164UnpadDoc: StepDocumentation = {
   name: "ISO 7816-4 Unpad",
-  summary: "Find the trailing 0x80 sentinel, strip it and everything after. Throws if no sentinel.",
+  summary:
+    "Finds the trailing 0x80 sentinel and strips it and everything after; fails if there is no sentinel.",
   detail: `## ISO/IEC 7816-4 Unpad
 
 The reverse of \`iso7816-4-pad\`. Walks from the end of the input,
@@ -79,11 +80,11 @@ padded:    61 70 70 6c 65 80 00 00 00 00 00 00 00 00 00 00
 stripped:  61 70 70 6c 65   (← original "apple")
 \`\`\`
 
-**Failure modes** (both throw, by design):
+**Failure modes** (both are rejected, by design):
 
 1. No \`0x80\` found in the trailing block. Either the padding is corrupt,
    the ciphertext was never ISO 7816-4 padded, or someone tampered with
-   the trailing bytes. Failing loudly is the educational choice: silently
+   the trailing bytes. Failing outright is the educational choice: silently
    returning a plausible prefix would hide a real cryptographic event.
 
 2. The last block is all zeros. Same shape, different cause — sometimes
@@ -98,10 +99,10 @@ worst-case behavior on aligned inputs).
 **Aside on padding oracles.** The same caveat as pkcs7-unpad applies: a
 real-world implementation that distinguishes "bad padding" from "good
 padding but wrong plaintext" leaks information to an attacker who can
-recover plaintext byte by byte. The Cryptographer is educational — we
-throw a single error string regardless of failure mode — but production
-code should use authenticated encryption (GCM, ChaCha20-Poly1305) instead
-of bare ISO 7816-4 + CBC.
+recover plaintext byte by byte. The Cryptographer is educational — it reports
+the same failure regardless of the cause — but production code should use
+authenticated encryption (GCM, ChaCha20-Poly1305) instead of bare
+ISO 7816-4 + CBC.
 
 **Reference:** ISO/IEC 7816-4 §5.4.1.`,
   params: new Map([

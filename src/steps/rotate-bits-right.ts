@@ -151,71 +151,54 @@ export const rotateBitsRight: PortedExecutor = (inputs, params, _ctx) => {
 export const rotateBitsRightDoc: StepDocumentation = {
   name: "Rotate bits right",
   summary:
-    "Cyclic right-rotation of each big-endian word in the input by `bits` positions. Pure port-native primitive — no state, no aux.",
+    "Rotates the bits of each word to the right, wrapping the bits that fall off the end back to the top.",
   detail: `# Rotate bits right
 
-A foundational ARX-family primitive: split the input bytes into N
-big-endian words of width \`wordBits\`, rotate each word's bits right by
-\`bits\` positions (treating each word as a circular bit register), and
-concatenate back to bytes. The output port carries the same number of
-bytes as the input.
+Reads the input as one or more fixed-width words and rotates the bits of each
+word to the right by \`bits\` positions. A rotation is a circular shift: the
+bits that fall off the right-hand end wrap around to the top, so no bits are
+lost — only rearranged.
 
 ## Math
 
-For each word \`w\` of width \`B\` bits, with a rotation amount \`n\`
-(canonicalized to \`bits mod B\`):
+For each word \`w\` of width \`B\` bits, rotating right by \`n\`:
 
 \`\`\`
-ROR(w, n, B) = ((w >> n) | (w << (B - n))) & (2^B - 1)
+ROR(w, n, B) = ((w >> n) | (w << (B - n)))   within B bits
 \`\`\`
 
-The bottom \`n\` bits wrap to the top; the remaining \`B - n\` bits
-shift right by \`n\`. \`n = 0\` (or any multiple of \`B\`) is the
-identity.
+The bottom \`n\` bits wrap to the top; the rest move right by \`n\`. Rotating
+by 0 (or a full word) leaves the value unchanged.
 
 ## Where it fits
 
-- **SHA-256**: building block of the Σ0, Σ1, σ0, σ1 helpers
-  (FIPS 180-4 §4.1.2) and the message schedule's W_t recurrence.
-- **ARX block ciphers**: Speck's round function and key schedule. The
-  shipped \`speck.round@1\` step type inlines the rotation against
-  Speck's wider 2-word state; this primitive isolates the rotation
-  itself so future ARX rebuilds from medium primitives can compose it.
-- **General-purpose bit transforms**: any time a cipher or hash treats
-  a flat byte buffer as N parallel fixed-width words and rotates each.
+Rotation is the **"R" in the ARX family** (Addition, Rotation, XOR). On its
+own it just shuffles bits, but combined with addition and XOR it spreads each
+bit's influence across the whole word, which is a large part of how these
+ciphers and hashes mix their data:
+
+- **SHA-256** builds its Σ0/Σ1/σ0/σ1 mixing functions from rotations.
+- **Speck** rotates as part of every round and its key schedule.
 
 ## Word-size guidance
 
-| \`wordBits\` | When |
+The word size sets how wide the "circle" of bits is — a rotation wraps within
+one word, so it depends on the width the cipher uses:
+
+| \`wordBits\` | Used by |
 |---|---|
-| 8  | Per-byte rotation; rare in modern ciphers, occasionally in S-box construction. |
+| 8  | Per-byte rotation; rare, occasionally in S-box construction. |
 | 16 | Speck32/64. |
 | 32 | SHA-256, Speck64/128, ChaCha20, BLAKE2s. |
-| 64 | SHA-512, Speck128/256, BLAKE2b. |
-
-## Implementation notes
-
-The 8/16/32-bit paths use native JavaScript bit operators (\`>>> / << / |\`),
-masked to the declared word width via per-width helpers in
-\`src/core/word-codec.ts\`. The 64-bit path uses \`BigInt\` because JS
-number bit ops truncate to 32-bit unsigned. All paths produce big-endian
-encoded output, matching the typical hash-function convention.
-
-## Phase status
-
-Shipped in Slice 2.1a of the universal-port-dataflow plan as the first
-port-native step type. Codec helpers consolidated into
-\`src/core/word-codec.ts\` in Slice 2.2 alongside \`add-mod-32@1\` (Slice
-2.1b). Not yet wired into any cipher spec — Slice 2.6's SHA-256 build is
-the first consumer.`,
+| 64 | SHA-512, Speck128/256, BLAKE2b. |`,
   params: new Map([
     [
       "bits",
-      "Number of bit positions to rotate right. Non-negative integer; reduced modulo `wordBits`.",
+      "How many bit positions to rotate right. A whole number (0 or more); a rotation by the full word width brings you back to the start.",
     ],
     [
       "wordBits",
-      "Word width in bits. One of 8, 16, 32, 64. Input length must be a multiple of `wordBits / 8`.",
+      "The width of each word, in bits: 8, 16, 32, or 64. The rotation wraps around within one word of this size.",
     ],
   ]),
   references: [

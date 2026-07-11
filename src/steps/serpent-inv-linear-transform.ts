@@ -59,9 +59,8 @@ the XOR of a small set of input bits, per the *inverse* LT table:
 output_bit[i]  =  XOR over j in INV_LT_TABLE[i] of  input_bit[j]
 \`\`\`
 
-The inverse table is constructed so that the round-trip
-\`applyLT(applyInverseLT(x)) === x\` holds for every 128-bit state.
-A property test in \`tests/serpent-lt-roundtrip.test.ts\` pins this fact.
+The inverse table is built so that applying the linear transform and then
+this inverse returns the original state exactly, for any 128-bit value.
 
 **Used in 31 of 32 inverse rounds.** Decryption's first inverse round
 undoes encryption's irregular final round, which had no LT — so there's

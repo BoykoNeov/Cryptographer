@@ -65,7 +65,10 @@ selectors" of each S-box come from neighboring input bits).
 **Output shape.** Input is 32 bits (4 bytes); output is 48 bits (6 bytes).
 This is one of two shape-changing steps inside F.`,
   params: new Map([
-    ["table", "48-entry expansion table (FIPS 1-indexed, MSB-first). DES_E in des-constants.ts."],
+    [
+      "table",
+      "The 48-entry expansion table: for each of the 48 output bits, which of the 32 input bits it comes from.",
+    ],
   ]),
   references: ["FIPS 46-3 §3 (E Bit-Selection Table)"],
   shapeContract: { input: "bytes", output: "bytes" },

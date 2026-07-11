@@ -96,18 +96,19 @@ export const permute: PortedExecutor = (inputs, params, _ctx) => {
 export const permuteDoc: StepDocumentation = {
   name: "Permute",
   summary:
-    "Reorder bytes by a fixed index map: output[i] = input[indices[i]]. Port-native byte gather.",
+    "Reorders bytes to a fixed pattern: the output's i-th byte is taken from a chosen input position.",
   detail: `# Permute
 
-Pure byte permutation (a gather). The output byte at position \`i\` is the
-input byte at position \`indices[i]\`:
+Rearranges bytes into a new order. The output byte at position \`i\` is copied
+from the input byte at position \`indices[i]\` — so the \`indices\` list simply
+says, for each output slot, which input byte goes there:
 
 \`\`\`
 output[i] = input[indices[i]]
 \`\`\`
 
-The output length equals \`indices.length\`. Each index addresses one source
-byte; an index out of range for the wired input throws.
+The output has one byte per entry in \`indices\`. Bytes are only moved around,
+never changed.
 
 ## Where it fits
 
@@ -129,18 +130,11 @@ index array (the inverse shifts right by the same amounts).
 Permutations contribute **diffusion** — alone they don't add confusion (no
 non-linearity), but combined with a substitution and a mixing step they
 ensure a single input-byte change propagates across the whole block within
-a couple of rounds.
-
-## Errors
-
-- Throws if \`params.indices\` is missing/empty or contains a non-integer or
-  negative entry.
-- Throws if the \`input\` port is not wired.
-- Throws at run time if any index addresses past the end of the input.`,
+a couple of rounds.`,
   params: new Map([
     [
       "indices",
-      "Array of source byte positions. output[i] = input[indices[i]]; output length = indices.length. AES ShiftRows derives this from the per-row shift schedule under the column-major convention.",
+      "For each output byte, which input position to take it from. The output has one byte per entry, and every position must point at a real input byte.",
     ],
   ]),
   references: ["FIPS-197 §5.1.2 (ShiftRows)", "FIPS-197 §5.3.1 (InvShiftRows)"],

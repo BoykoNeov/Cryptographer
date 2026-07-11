@@ -54,10 +54,13 @@ the next round's S-box inputs via the round's expansion E. After about
 effect that makes DES resistant to differential cryptanalysis when the
 key is unknown.
 
-The full F function is therefore: \`F(R, K) = P(S(E(R) ⊕ K))\`. P is the
-final step before \`F(R, K)\` rejoins the L track via the round's combine.`,
+The full F function is therefore: \`F(R, K) = P(S(E(R) ⊕ K))\`. P is its last
+step, just before the result is XORed into the other half of the block.`,
   params: new Map([
-    ["table", "32-entry permutation table (FIPS 1-indexed, MSB-first). DES_P in des-constants.ts."],
+    [
+      "table",
+      "The 32-entry permutation: for each output bit, which S-box output bit it comes from.",
+    ],
   ]),
   references: ["FIPS 46-3 §3 (Permutation Function P, Table P)"],
   shapeContract: { input: "bytes", output: "preserveInput" },

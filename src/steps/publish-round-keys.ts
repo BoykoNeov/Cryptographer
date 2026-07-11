@@ -127,25 +127,25 @@ export const publishRoundKeysMeta: ProjectionMetadata = {
 
 export const publishRoundKeysDoc: StepDocumentation = {
   name: "Publish round keys",
-  summary: "Write the derived round keys into the aux map (roundKey.0 … roundKey.Nr).",
+  summary: "Stores the finished round keys under names so each round can look up the key it needs.",
   detail: `## Publish round keys
 
-The tail of the decomposed AES key schedule. The recurrence above this step
-has already computed every round key as visible port-native frames; this leaf
-takes the finished round keys on its input ports \`key0\` … \`keyN\` and
-publishes them into the aux map as \`${"`"}\${outputPrefix}.0${"`"}\` …
-\`${"`"}\${outputPrefix}.Nr${"`"}\` (typically \`roundKey.0\` … \`roundKey.Nr\`).
+The last step of the AES key schedule. The steps above it have already worked
+out every round key; this one collects them and stores each under a name —
+\`roundKey.0\`, \`roundKey.1\`, and so on — so that each round's AddRoundKey can
+look up the key it needs.
 
-The per-round AddRoundKey steps read those aux entries unchanged — so
-decomposing the key schedule into visible math did not touch the round body
-at all. The state (the carried block) passes through this step untouched; the
-work product lives entirely in the aux map.`,
+It does not change the data being encrypted; it only files the round keys away
+for the rounds to find.`,
   params: new Map([
     [
       "outputPrefix",
-      'Prefix for the round-key aux entries. With "roundKey", outputs are roundKey.0 … roundKey.Nr.',
+      'The name prefix for the stored round keys. With "roundKey", they are stored as roundKey.0, roundKey.1, and so on.',
     ],
-    ["rounds", "Number of cipher rounds Nr. Emits rounds+1 round keys (key0 … key{rounds})."],
+    [
+      "rounds",
+      "The number of rounds. One more round key than this is produced (an initial key plus one per round).",
+    ],
   ]),
   references: ["FIPS-197 §5.2 (Key Expansion — round-key derivation)"],
   shapeContract: { input: "any", output: "preserveInput" },

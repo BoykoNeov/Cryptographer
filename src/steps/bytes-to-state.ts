@@ -144,61 +144,17 @@ export const bytesToStateMeta: ProjectionMetadata = {
 export const bytesToStateDoc: StepDocumentation = {
   name: "Bytes To State",
   summary:
-    "Materialize the input port's bytes into the runtime state variable. Identity passthrough on the output port; the load-bearing effect is the state write.",
+    "The exit point: takes the finished result and hands it back out as the cipher's output.",
   detail: `# Bytes To State
 
-Reads bytes from the \`input\` port, emits them unchanged on the \`output\`
-port, AND copies them into the runtime \`state\` variable. The state-write
-is what makes this primitive load-bearing — pure port-native leaves can
-compute bytes but can't update state, so the trace's \`finalState\` (and
-the UI's bottom pane) would stay stale without a terminator like this.
+The end point of a cipher's dataflow. It takes the finished result — the
+ciphertext, or a hash's digest — and hands it back out as the cipher's
+output, so it shows up as the final value. It doesn't change the bytes; it
+just marks them as the result.
 
-## Where it fits
-
-- **Final hash output.** SHA-256's final-add leaf writes the 32-byte hash
-  into state. (In Slice 2.6b's lifted-legacy compression-round path, the
-  state-write happens through the legacy executor's \`result.state\`. But
-  a pure-port-native rebuild — Slice 2.6d — would terminate the chain
-  with a \`bytes-to-state@1\` leaf.)
-- **Seeding the message schedule.** The padded block (output of
-  \`pad-with-byte@1\` + \`append-be64-length@1\`) becomes the parent-
-  scope state for the message-schedule \`for-each-subgraph-with-history\`
-  via \`bytes-to-state@1\`.
-- **Mode bridges.** Any port-native chain that needs to terminate into
-  visible state (CBC IV initialization, CTR counter seeding) can end
-  with this primitive.
-
-## Pairs with \`state-to-bytes@1\`
-
-The inverse direction. \`state-to-bytes@1\` reads parent state into an
-output port; \`bytes-to-state@1\` writes an input port into state. Together
-they let port-native chains both source from initial state and terminate
-into final state.
-
-## Authoring shape
-
-\`\`\`json
-{
-  "kind": "step",
-  "id": "seed-schedule",
-  "type": "bytes-to-state@1",
-  "params": {},
-  "portInputs": {
-    "input": { "node": "length-append", "port": "output" }
-  }
-}
-\`\`\`
-
-The \`portInputs\` map wires the input port. \`params\` is empty (no
-options today).
-
-## Phase status
-
-Shipped in Slice 2.6b of the universal-port-dataflow plan as one of three
-port-native bridges (alongside \`state-to-bytes@1\` and \`concat@1\`).
-First port-native primitive registered with \`meta\` but no \`legacy\` —
-the load-bearing piece is \`meta.stateOutputPort\` which drives the
-post-executor state update.`,
-  params: new Map([["(no params)", "This primitive takes no parameters; pass `{}`."]]),
-  references: ["docs/plans/universal-port-phase-2-slices.md (Slice 2.6b)"],
+Its partner is **State To Bytes**, which does the reverse at the start: it
+brings the input data in. A dataflow typically begins with one and ends with
+the other. The same step is also used to hand a computed value on to the next
+stage (for example, feeding a prepared block into the rounds that follow).`,
+  params: new Map([["(no params)", "This step takes no settings."]]),
 };

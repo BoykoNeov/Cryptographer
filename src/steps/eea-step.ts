@@ -159,30 +159,24 @@ coefficient of \`e\` alongside it.
 
 ## Why the coefficient is shown reduced mod φ
 
-The raw Bézout coefficient is signed — it dips negative mid-loop. Rather than
-introduce a signed value on a port (every other value in this explorer is an
-unsigned big-endian integer), this step keeps the coefficient **reduced into
-\`[0, φ)\`**. That is mathematically exact for the inverse (the coefficient is only
-ever needed modulo φ), so the final \`t\` is \`d\` directly. The visible consequence:
-a coefficient a textbook prints as \`−183\` appears here as \`φ − 183\`.
+The Bézout coefficient is normally signed — it dips negative partway through
+the loop. Since the coefficient only ever matters modulo φ, this step keeps it
+**reduced into the range 0 up to φ**, which is exact for finding the inverse
+and means the final \`t\` is \`d\` directly. The visible consequence: a
+coefficient a textbook would print as \`−183\` appears here as \`φ − 183\`.
 
-## Done = identity
+## When the loop is done
 
-Once \`newR\` reaches 0 the gcd has been found, and the step passes its tuple
-through unchanged. The chain is unrolled to a fixed worst-case number of rungs
-(Lamé's theorem bounds Euclid's step count), so the trailing rungs are honest
-identity frames — like the 0-bit rungs of the square-and-multiply ladder.
+Once \`newR\` reaches 0 the gcd has been found, and the step just passes its
+tuple through unchanged. The loop is unrolled to a fixed worst-case number of
+steps, so any steps past the answer are simply identity steps that change
+nothing — much like the 0-bit steps of the square-and-multiply ladder.
 
 ## Where it fits
 
-- **RSA key generation**: chained \`eeaMaxIterations(W)\` times to derive
-  \`d = e⁻¹ mod φ(n)\`, terminated by an \`eea-extract@1\` that reads the final
-  \`(r, t)\` slot (gcd and inverse).
-
-## Errors
-
-- Throws if any of \`r\`, \`newR\`, \`t\`, \`newT\`, \`modulus\` is unwired.
-- Throws if the modulus is not positive.`,
+- **RSA key generation**: repeated to derive the private exponent
+  \`d = e⁻¹ mod φ(n)\`, then finished off by an **Extended-Euclid extract** that
+  reads the final result (the gcd and the inverse).`,
   references: [
     "Knuth, TAOCP Vol. 2 §4.5.2 — The extended Euclidean algorithm",
     "Rivest, Shamir, Adleman 1978 — A Method for Obtaining Digital Signatures and Public-Key Cryptosystems",

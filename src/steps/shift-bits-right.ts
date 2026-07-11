@@ -150,13 +150,13 @@ export const shiftBitsRight: PortedExecutor = (inputs, params, _ctx) => {
 export const shiftBitsRightDoc: StepDocumentation = {
   name: "Shift bits right",
   summary:
-    "Logical right-shift of each big-endian word in the input by `bits` positions: the top zero-fills; the bottom drops. Pure port-native primitive — no state, no aux.",
+    "Shifts the bits of each word to the right, filling the top with zeros and dropping the bits that fall off.",
   detail: `# Shift bits right
 
-A foundational ARX-family primitive paired with \`rotate-bits-right@1\`.
-Split the input bytes into N big-endian words of width \`wordBits\`,
-**logically** right-shift each word's bits by \`bits\` positions (the top
-zero-fills; the bottom bits drop), and concatenate back to bytes.
+Reads the input as one or more fixed-width words and shifts the bits of each
+word to the right by \`bits\` positions. Unlike a rotation, a shift is not
+circular: the top fills with zeros and the bits pushed off the bottom are
+lost. This is the close partner of **Rotate bits right**.
 
 ## ROR vs SHR
 
@@ -205,40 +205,18 @@ SHR(w, n, B) = 0                        for n ≥ B
 
 ## Word-size guidance
 
-| \`wordBits\` | When |
+| \`wordBits\` | Used by |
 |---|---|
 | 8  | Per-byte zero-fill shift; rare in modern ciphers. |
 | 16 | Speck32/64 hybrids; some bit-permutation gadgets. |
 | 32 | SHA-256, ChaCha20, BLAKE2s. |
-| 64 | SHA-512, BLAKE2b, Argon2. |
-
-## Implementation notes
-
-The 8/16/32-bit paths use \`shr8\` / \`shr16\` / \`shr32\` from
-\`src/core/word-codec.ts\` — thin wrappers around JS's \`>>>\` operator
-with explicit unsigned-32 coercion. The 64-bit path uses \`shr64\`
-(BigInt), because JS number bit ops truncate to 32-bit.
-
-The executor short-circuits to all-zero output when \`bits ≥ wordBits\`
-— JS's \`>>>\` operator truncates the shift amount modulo 32, so
-\`x >>> 32\` returns \`x\` instead of \`0\`. The short-circuit makes
-the math correct AND simplifies the per-width loop.
-
-## Phase status
-
-Shipped in Slice 2.5 of the universal-port-dataflow plan as the third
-port-native step type (after \`rotate-bits-right@1\` and
-\`add-mod-32@1\`). Codec helpers live in \`src/core/word-codec.ts\`
-alongside their ROR siblings.`,
+| 64 | SHA-512, BLAKE2b, Argon2. |`,
   params: new Map([
     [
       "bits",
-      "Number of bit positions to shift right. Non-negative integer. `bits ≥ wordBits` produces all-zero output.",
+      "How many bit positions to shift right. A whole number (0 or more); shifting by a full word or more zeros the value out entirely.",
     ],
-    [
-      "wordBits",
-      "Word width in bits. One of 8, 16, 32, 64. Input length must be a multiple of `wordBits / 8`.",
-    ],
+    ["wordBits", "The width of each word, in bits: 8, 16, 32, or 64."],
   ]),
   references: [
     "FIPS 180-4 §4.1.2 (SHA-256 helper functions σ0, σ1)",

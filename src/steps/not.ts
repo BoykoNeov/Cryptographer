@@ -68,58 +68,32 @@ export const not: PortedExecutor = (inputs, _params, _ctx) => {
 
 export const notDoc: StepDocumentation = {
   name: "NOT",
-  summary:
-    "Byte-wise bitwise complement. Inverts every bit of the input; output length equals input length.",
+  summary: "Flips every bit of the input — each 0 becomes 1 and each 1 becomes 0.",
   detail: `# NOT
 
-Universal port-native bitwise-NOT primitive. Takes one input port
-\`input\` carrying a flat \`Uint8Array\` of any length, produces one
-output port \`output\` of the same length with every bit inverted.
+Inverts every bit of the input: each 0 becomes a 1 and each 1 becomes a 0.
+The output is the same length as the input. Also called the bitwise
+**complement**.
 
 ## Math
 
 For each byte position \`j\`:
 
 \`\`\`
-output[j] = ¬input[j]   (equivalently: 0xFF ⊕ input[j])
+output[j] = ¬input[j]   (the same as 0xFF ⊕ input[j])
 \`\`\`
 
-NOT is its own inverse: \`¬(¬x) = x\`. It distributes over XOR
-(\`¬(a ⊕ b) = (¬a) ⊕ b = a ⊕ (¬b)\`) and is dual to AND/OR under De
-Morgan's laws.
+NOT is its own inverse — applying it twice returns the original value.
 
 ## Where it fits
 
-- **SHA-256 Ch(x, y, z) = (x ∧ y) ⊕ (¬x ∧ z)** (FIPS 180-4 §4.1.2):
-  the only Phase 2 consumer. Wired into the second branch of Ch — one
-  \`not@1\` on \`x\`, then a 2-way \`and@1\` against \`z\`.
-- **Bit-complement masks generally**: when a spec needs the
-  complement of a wired value rather than a fresh literal mask.
-
-## Why a dedicated step type, not XOR-with-all-ones
-
-\`¬x\` and \`x ⊕ 0xFF…FF\` are bit-identical, but the dedicated step
-type:
-
-- Names the operation in the trace ("complement" reads better than
-  "xor with constant 0xFF").
-- Keeps the graph one-leaf-per-conceptual-step — Ch reads as four
-  leaves (and, not, and, xor) instead of five (and, xor-against-mask,
-  and, xor — with a wired constant-load alongside).
-- Avoids the spec-authoring footgun of needing a constant-load source
-  whose length matches the operand under coercion.
-
-## Errors
-
-- Throws if the \`input\` port is missing on the input map.
-
-## Phase status
-
-Shipped in Slice 2.3 of the universal-port-dataflow plan, alongside
-\`and@1\`. Not yet wired into any cipher spec — Slice 2.6's SHA-256
-build is the first consumer (inside the Ch helper).`,
+- **Bitwise Boolean formulas** — ciphers and hashes that express a step as
+  AND/OR/NOT logic use NOT to negate an input. SHA-256's
+  \`Ch(x, y, z) = (x ∧ y) ⊕ (¬x ∧ z)\` selects between \`y\` and \`z\` based
+  on \`x\`, and the \`¬x\` is this step.
+- Any time a cipher needs the complement of a value rather than a fixed mask.`,
   params: new Map(),
-  references: ["FIPS 180-4 §4.1.2 (SHA-256 helper function Ch — the only Phase 2 consumer of NOT)"],
+  references: ["FIPS 180-4 §4.1.2 (SHA-256 helper function Ch)"],
   // No `shapeContract` — port-native steps describe their surface via
   // PortContract instead.
 };

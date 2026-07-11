@@ -64,10 +64,7 @@ comes from input bit 58 (the second bit of byte 7's MSB region), output
 bit 2 from input bit 50, and so on. The full table interleaves the input
 bytes so that every output byte mixes bits from 4 input bytes.`,
   params: new Map([
-    [
-      "table",
-      "64-entry permutation table (FIPS 1-indexed, MSB-first). DES_IP in des-constants.ts.",
-    ],
+    ["table", "The 64-entry permutation: for each output bit, which input bit it comes from."],
   ]),
   references: ["FIPS 46-3 §3 (Initial Permutation, Table 1)"],
   shapeContract: { input: "bytes", output: "preserveInput" },

@@ -88,42 +88,29 @@ export const condModMulDoc: StepDocumentation = {
     "If bit `bitIndex` of the exponent is set, output (base · factor) mod n; otherwise pass base through. One rung of square-and-multiply.",
   detail: `# Conditional modular multiply
 
-The multiply half of an RSA square-and-multiply ladder rung. Reads the
-running accumulator \`base\`, the value to fold in \`factor\` (the message on
-encrypt, ciphertext on decrypt), the full \`exponent\` bytes, and the
-\`modulus\` n. The scalar param \`bitIndex\` selects which exponent bit this
-rung tests.
+The "multiply" half of RSA's **square-and-multiply** method for raising a
+number to a power. Raising to a large power directly is impractical, so RSA
+scans the exponent one bit at a time: at every bit it squares the running
+result, and only when the bit is 1 does it also multiply in the base value.
+This step is that conditional multiply for one bit.
 
 ## Behaviour
 
 \`\`\`
-bit = (exponent >> bitIndex) & 1
-output = bit == 1 ? (base · factor) mod n
-                  : base            // carry forward, no multiply
+bit = the exponent bit at position bitIndex
+output = if bit is 1:  (base · factor) mod n
+         if bit is 0:  base            (carry forward, no multiply)
 \`\`\`
 
-## Why the exponent is a runtime input, not baked in
-
-The ladder is unrolled to a fixed number of rungs (one per modulus-width
-bit). Each rung reads its exponent bit at RUN time from the wired
-\`exponent\` port — so editing the exponent (e directly, or p/q which derive
-d) flips exactly the affected rungs and the trace re-runs live. That is what
-makes "edit a param, watch it re-run" hold for RSA's exponent.
-
-A 0-bit rung is an honest identity step: the accumulator carries forward
-unchanged. Paired with the always-present square (\`mod-mul@1\`), the trace
-reads as the classic square-and-multiply ladder.
+When the bit is 0 the value simply passes through. Paired with the square
+that always runs, this is the classic square-and-multiply ladder — and
+because each step reads its exponent bit live, changing the exponent (or the
+primes that derive it) instantly changes which steps multiply.
 
 ## Where it fits
 
 - **RSA encryption** \`c = mᵉ mod n\` and **decryption** \`m = cᵈ mod n\`:
-  one of these per ladder rung, after the rung's square.
-
-## Errors
-
-- Throws if any of \`base\`, \`factor\`, \`exponent\`, \`modulus\` is unwired.
-- Throws if \`params.bitIndex\` is missing or not a non-negative integer.
-- Throws if the modulus is not positive.`,
+  one of these per bit of the exponent, following that bit's square.`,
   references: [
     "Rivest, Shamir, Adleman 1978 — A Method for Obtaining Digital Signatures and Public-Key Cryptosystems",
     "Knuth, TAOCP Vol. 2 §4.6.3 — Evaluation of powers (binary exponentiation)",
@@ -131,7 +118,7 @@ reads as the classic square-and-multiply ladder.
   params: new Map([
     [
       "bitIndex",
-      "Which exponent bit this rung tests (LSB = 0). For an N-rung ladder, rung j tests bit N-1-j (MSB first).",
+      "Which bit of the exponent this step looks at (counting from 0 at the least-significant bit).",
     ],
   ]),
 };

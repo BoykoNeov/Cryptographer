@@ -55,37 +55,29 @@ export const eeaExtract: PortedExecutor = (inputs, _params, _ctx) => {
 export const eeaExtractDoc: StepDocumentation = {
   name: "Extract inverse (gcd gate)",
   summary:
-    "Terminal of the extended-Euclid chain: emit the final coefficient as value⁻¹ mod modulus, or throw if gcd ≠ 1 (no inverse).",
+    "Reads the finished extended-Euclid result: hands out the modular inverse, unless no inverse exists.",
   detail: `# Extract inverse (gcd gate)
 
-The last step of the traced extended-Euclidean chain. Reads the chain's settled
-\`(r, t)\` slot — \`gcd\` (the final \`r\`) and \`value\` (the final coefficient \`t\`) —
-and emits the modular inverse on \`output\`.
+The final step of the extended-Euclidean calculation. It reads the settled
+result — the greatest common divisor and the accompanying coefficient — and
+hands out the modular inverse.
 
 ## Behaviour
 
 \`\`\`
-gcd == 1 → output = value         (= value⁻¹ mod modulus, already in [0, modulus))
-gcd != 1 → throw "not invertible" (no inverse exists)
+if gcd is 1:      output = the inverse
+if gcd is not 1:  no inverse exists — the calculation stops here
 \`\`\`
 
-## Why read the (r, t) slot, not (newR, newT)
-
-When the algorithm terminates, the remainder \`newR\` has reached 0 and the
-companion \`newT\` is junk. The answer lives in the slot that has NOT yet been
-overwritten: \`r\` = gcd, \`t\` = inverse. Wiring to \`newR\`/\`newT\` instead would
-spuriously report gcd ≠ 1 — the classic extended-Euclid off-by-one.
+The gcd being 1 is exactly the condition for an inverse to exist. When it is
+1, the coefficient the calculation produced **is** the inverse.
 
 ## Where it fits
 
-- **RSA key generation**: the tail of the \`eea-step@1\` chain that derives
-  \`d = e⁻¹ mod φ(n)\`. A non-1 gcd means the chosen \`e\` shares a factor with φ —
-  not a valid public exponent — which surfaces here as a thrown error.
-
-## Errors
-
-- Throws if port \`gcd\` or \`value\` is unwired.
-- Throws if \`gcd ≠ 1\` (no modular inverse — e and φ are not coprime).`,
+- **RSA key generation**: the end of the extended-Euclid calculation that
+  derives the private exponent \`d = e⁻¹ mod φ(n)\`. A gcd other than 1 means
+  the chosen \`e\` shares a factor with φ(n) and is not a valid public exponent
+  — so there is no private key for it, and that shows up right here.`,
   references: [
     "Knuth, TAOCP Vol. 2 §4.5.2 — The extended Euclidean algorithm",
     "Rivest, Shamir, Adleman 1978 — A Method for Obtaining Digital Signatures and Public-Key Cryptosystems",

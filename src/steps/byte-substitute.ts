@@ -91,13 +91,13 @@ export const byteSubstitute: PortedExecutor = (inputs, params, _ctx) => {
 export const byteSubstituteDoc: StepDocumentation = {
   name: "Byte Substitute",
   summary:
-    "Replace every input byte b with sbox[b] using a 256-entry lookup table. Port-native, byte-flat.",
+    "Replaces every input byte by looking it up in a 256-entry substitution table (an S-box).",
   detail: `# Byte Substitute
 
-Port-native S-box substitution. Each byte \`b\` on the \`input\` port is
-replaced with \`sbox[b]\`, where \`sbox\` is a 256-entry permutation supplied
-in \`params.sbox\`. The substitution is applied **independently** to every
-byte, so the step is purely position-preserving and purely byte-local.
+Replaces each byte using a lookup table (an "S-box"). Every input byte \`b\`
+is swapped for the table entry \`sbox[b]\`. The table has 256 entries — one
+for every possible byte value — and each byte is looked up independently, so
+bytes stay in place; only their values change.
 
 ## Math
 
@@ -123,18 +123,14 @@ breaks the cipher's security entirely while leaving the structure intact.
 
 ## Where it fits
 
-- **AES SubBytes / InvSubBytes** — forward table vs \`AES_INV_SBOX\`.
+- **AES SubBytes / InvSubBytes** — forward table for encryption, the inverse
+  table for decryption.
 - Any cipher doing table-driven byte substitution can reuse this with its
-  own table (Serpent's 4-bit S-boxes use a different, bit-sliced step).
-
-## Errors
-
-- Throws if \`params.sbox\` is missing or not a 256-element array.
-- Throws if the \`input\` port is not wired.`,
+  own table (Serpent's 4-bit S-boxes use a different, bit-sliced step).`,
   params: new Map([
     [
       "sbox",
-      "256-entry array of bytes (0..255). Must be a permutation for the cipher to be invertible.",
+      "The substitution table: 256 byte values, one output for each possible input byte. For the step to be reversible for decryption, the table must be a permutation (every value 0–255 appears exactly once).",
     ],
   ]),
   references: ["FIPS-197 §5.1.1 (SubBytes)", "FIPS-197 §5.3.2 (InvSubBytes)"],

@@ -112,78 +112,31 @@ export const constantLoad: PortedExecutor = (_inputs, params, _ctx) => {
 export const constantLoadDoc: StepDocumentation = {
   name: "Load constant",
   summary:
-    "Emit a declared byte sequence on the output port. Zero inputs. Used for cryptographic round constants and IVs.",
+    "Produces a fixed byte sequence that you type in — a round constant, an IV, or any literal value.",
   detail: `# Load constant
 
-Emits the byte sequence declared in \`params.bytes\` on the single
-output port \`output\`. No input ports. The output byteLength is known
-at spec-edit time (from \`params.bytes.length\`), unlike most port-
-native primitives whose output length depends on run-time input length.
+Produces a fixed sequence of bytes that you supply directly. It has no
+inputs — it simply hands the value you typed into \`bytes\` to whatever reads
+it. This is how a cipher injects the fixed, published numbers it needs.
 
 ## Where it fits
 
-- **SHA-256 round constants (K_0..K_63)**: 64 leaves, each a 4-byte BE
-  constant per FIPS 180-4 §4.2.2. E.g.:
-  - K_0 = \`6 b: 42 8a 2f 98\`
-  - K_1 = \`6 b: 71 37 44 91\`
-  - …
-- **SHA-256 initial hash values (H_0..H_7)**: 8 leaves, each a 4-byte
-  BE constant per FIPS 180-4 §5.3.3. E.g.:
-  - H_0 = \`6 b: 6a 09 e6 67\`
-- **AES Rcon table**: 10 / 12 / 14 constants per key size (future
-  Phase 3 AES rebuild from medium primitives).
-- **DES initial / final permutation tables**: when DES rebuilds from
-  medium primitives (Phase 4 future), the per-round S-box tables would
-  ride along as \`constant-load@1\` leaves.
-- **Any IV / nonce / fixed counter**: CBC IV, CTR initial counter, GCM
-  J_0 — each a literal byte sequence the spec needs to inject.
+- **Round constants** — many hashes and ciphers mix in a fixed constant each
+  round to break up symmetry. SHA-256 uses 64 such constants (K₀…K₆₃) and
+  eight starting values (H₀…H₇); AES's key schedule uses its Rcon constants.
+- **Initialization vectors, nonces, counters** — a CBC IV or a CTR starting
+  counter is a fixed value fed in at the start of a mode of operation.
+- **Fixed tables** — any published table a cipher references (a permutation
+  table, a starting S-box) can be loaded this way.
 
-## Why one constant per leaf
-
-User pick at Slice 2.4 start (universal-port plan Phase 2, 2026-05-24)
-per Open #N2: option **(b) constant-load@1 at 72 leaves** for SHA-256.
-The Slice 2.3 "(b) Compositions" precedent — every cryptographic
-sub-operation visible as a chip in the graph — extends to constants.
-The cost is verbosity in the spec (8 + 64 = 72 leaves just for SHA-256
-preprocessing), but each constant becomes individually addressable,
-inspectable, and editable. Spec authors who prefer compact bundles
-(e.g., one 256-byte K-table leaf, one 32-byte H-table leaf) can still
-do so by setting \`params.bytes\` to a longer array — the primitive
-doesn't enforce the granularity, just provides it.
-
-## Example
-
-\`\`\`json
-{
-  "kind": "step",
-  "id": "h0",
-  "type": "constant-load@1",
-  "params": { "bytes": [0x6a, 0x09, 0xe6, 0x67] }
-}
-\`\`\`
-
-At execute time, the output port carries the 4 bytes
-\`6a 09 e6 67\` — SHA-256's initial hash value H_0.
-
-## Output byteLength is exact
-
-Unlike \`rotate-bits-right@1\` / \`xor@1\` / \`add-mod-32@1\` (whose
-output byteLength is polymorphic — it equals the input byteLength),
-\`constant-load@1\` declares an EXACT output byteLength on its
-PortContract. The editor can use this to surface coercion-warning
-glyphs at the wiring boundary when a consumer expects a different
-length.
-
-## Phase status
-
-Shipped in Slice 2.4 of the universal-port-dataflow plan as the third
-of three SHA-256-preprocessing primitives (alongside
-\`pad-with-byte@1\` and \`append-be64-length@1\`). Slice 2.6's SHA-256
-spec wires 72 instances (8 for H, 64 for K).`,
+These values are part of the cipher's published definition. Changing one is a
+good way to *see* how much a cipher depends on its constants — but it no
+longer matches the standard, so it won't interoperate with other
+implementations.`,
   params: new Map([
     [
       "bytes",
-      "Array of integers in [0, 255] — the byte sequence to emit. Output port's byteLength = bytes.length.",
+      "The exact byte values to produce, in order — each a number 0–255. The output is as long as this list.",
     ],
   ]),
   references: [

@@ -109,9 +109,10 @@ key-dependent way), and the rotation prevents alignment attacks. With
 those three primitives Speck achieves the same security goals as AES,
 in roughly a quarter of the gate count.
 
-**Byte order.** Plain state bytes and round-key bytes are interpreted
-per the step's \`byteOrder\` param. Both BE-paper and LE-NSA conventions
-share this same executor; only the codec at the boundary differs.
+**Byte order.** The block and round-key bytes are read according to the
+\`byteOrder\` setting — Speck has two published conventions (the original
+paper's and the NSA's), which differ only in how the words are laid out as
+bytes.
 
 **Reference test vector (Speck32/64, BE-paper):** Key
 \`1918111009080100\`, plaintext \`6574694c\`, ciphertext \`a86842f2\`
@@ -119,7 +120,7 @@ after 22 rounds.`,
   params: new Map([
     [
       "roundKeyAux",
-      "Name of the aux entry holding this round's key word (e.g. roundKey.0). One word per round.",
+      "The name of the slot holding this round's key word (e.g. roundKey.0) — one word per round.",
     ],
     ["alpha", "Right-rotation amount on x. Speck32/64 = 7; Speck64/128 and above = 8."],
     ["beta", "Left-rotation amount on y. Speck32/64 = 2; Speck64/128 and above = 3."],

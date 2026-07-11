@@ -75,37 +75,27 @@ export const modInverse: PortedExecutor = (inputs, _params, _ctx) => {
 export const modInverseDoc: StepDocumentation = {
   name: "Modular inverse",
   summary:
-    "Compute value⁻¹ mod modulus via the extended Euclidean algorithm. RSA's d = e⁻¹ mod φ(n). Throws when not coprime.",
+    "Finds the modular inverse of a value — the number that multiplies with it to give 1, modulo n.",
   detail: `# Modular inverse
 
-Reads \`value\` and \`modulus\` as big-endian integers and emits
-\`value⁻¹ mod modulus\` on \`output\` (big-endian, modulus-width) — the
-unique \`x\` in \`[0, modulus)\` with \`value · x ≡ 1 (mod modulus)\`.
+Finds the **modular inverse** of \`value\` modulo \`modulus\`: the unique
+number \`x\` (between 0 and modulus) such that \`value · x ≡ 1 (mod
+modulus)\`. It is the modular equivalent of "one over" a number — the value
+you multiply by to get back to 1.
 
 ## Math
 
-Computed with the **extended Euclidean algorithm**, which finds integers
-\`x, y\` with \`value·x + modulus·y = gcd(value, modulus)\`. When the gcd is
-1, \`x mod modulus\` is the inverse.
+It is found with the **extended Euclidean algorithm**, which finds whole
+numbers \`x, y\` with \`value·x + modulus·y = gcd(value, modulus)\`. When that
+greatest common divisor is 1, \`x\` is the inverse.
 
 ## Where it fits
 
-- **RSA key generation**: the private exponent \`d = e⁻¹ mod φ(n)\`. The
-  coprimality requirement \`gcd(e, φ) = 1\` is exactly the condition under
-  which the inverse exists — pick an \`e\` sharing a factor with φ and this
-  step throws, which is the honest "that e is not a valid public exponent."
-
-## v1 is an oracle
-
-The extended-Euclid loop runs inside this step; the trace shows one frame
-(e, φ → d). A later phase decomposes the loop into traced quotient /
-remainder / coefficient steps so the whole derivation is visible.
-
-## Errors
-
-- Throws if port \`value\` or \`modulus\` is unwired.
-- Throws if the modulus is not positive.
-- Throws if \`gcd(value, modulus) ≠ 1\` (no inverse — e and φ share a factor).`,
+- **RSA key generation**: the private exponent \`d\` is the inverse of the
+  public exponent \`e\` modulo φ(n) — that is exactly what makes decryption
+  undo encryption. The inverse exists only when \`e\` and φ(n) share no common
+  factor; pick an \`e\` that shares a factor and there is simply no valid
+  private key for it.`,
   references: [
     "Rivest, Shamir, Adleman 1978 — A Method for Obtaining Digital Signatures and Public-Key Cryptosystems",
     "Knuth, TAOCP Vol. 2 §4.5.2 — The extended Euclidean algorithm",

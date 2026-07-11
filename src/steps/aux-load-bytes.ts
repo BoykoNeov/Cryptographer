@@ -170,93 +170,33 @@ export const auxLoadBytesMeta: ProjectionMetadata = {
 export const auxLoadBytesDoc: StepDocumentation = {
   name: "Aux Load Bytes",
   summary:
-    "Read bytes from an aux key and emit them on an output port. Bridge from the aux map into a port-native chain.",
+    "Fetches a value that an earlier step stored under a name, and makes it available to read.",
   detail: `# Aux Load Bytes
 
-Reads bytes from \`aux[params.auxName]\` (auto-projected by the runtime
-via \`meta.auxReadPorts\`) and emits them unchanged on the \`output\`
-port. The aux-read is what makes this primitive load-bearing — pure
-port-native leaves can compute bytes but can't read from aux, so a
-port-native chain has no way to source cryptographic constants or
-run-time-computed aux values without a primitive like this.
+Fetches a value that an earlier step stored away under a name (a "slot") and
+makes it available for later steps to read. Ciphers use named slots for
+values that are computed once and then read many times — most often the round
+keys or tables produced by the key schedule.
 
 ## Where it fits
 
-- **SHA-256 round constants (K).** A single \`aux-load-bytes@1\` leaf per
-  compression round with \`params: { auxName: "K", byteLength: 256 }\`
-  exposes the full K table on a port; a downstream \`byte-slice@1\`
-  extracts the round's 4-byte slice at offset \`4 * roundIndex\`.
-- **SHA-256 initial hash values (H).** The final-add step reads
-  \`aux["H"]\` via \`aux-load-bytes@1\` with \`byteLength: 32\`, then
-  splits into 8 × 4-byte words via \`split-bytes@1\`.
-- **SHA-256 message schedule (W).** Under the user-picked Phase 2
-  Slice 2.6d topology (Q1 = (b)), the schedule's exit publishes W into
-  \`aux["W"]\`; each compression round reads the full 256-byte W via
-  this primitive and slices its W_t out at offset \`4 * roundIndex\`.
-- **HMAC, future hashes, AEAD constants.** Any cipher that mediates
-  values through aux (because the values are loaded once and re-read
-  many times) gets a port-side handle via this primitive.
+- **Reading key-schedule output** — a key schedule computes the round keys
+  and stores them in named slots; steps that need a round key fetch it back
+  with this.
+- **Reading shared tables** — where a hash keeps a table of round constants
+  in one slot, this fetches the whole table so a later step can pick out the
+  part it needs.
 
-## Pairs with the source side
-
-For literal byte sequences known at spec-edit time, prefer
-\`constant-load@1\` — its bytes ride along in the spec itself and don't
-require an earlier aux-write step. \`aux-load-bytes@1\` is for values
-that flow into aux at run-time (e.g., the message schedule's exit
-publishing W).
-
-## Output byteLength is exact
-
-Like \`constant-load@1\`, \`aux-load-bytes@1\` declares an EXACT output
-byteLength on its PortContract (from \`params.byteLength\`). The editor
-can use this to surface coercion-warning glyphs at the wiring boundary
-when a consumer declares a different length. At run-time, the runtime's
-port-length coercion (Slice 1.12) handles the actual aux value's length
-matching the declared byteLength — coercing (right-pad or truncate-from-
-right) and emitting a synthetic \`__coerce__\` frame if they differ.
-
-## Authoring shape
-
-\`\`\`json
-{
-  "kind": "step",
-  "id": "fetch-K",
-  "type": "aux-load-bytes@1",
-  "params": { "auxName": "K", "byteLength": 256 }
-}
-\`\`\`
-
-No \`portInputs\` map needed — the runtime auto-projects
-\`aux[params.auxName]\` into the \`input\` port. Downstream consumers
-wire \`{ node: "fetch-K", port: "output" }\`.
-
-## Errors
-
-- Throws if \`params.auxName\` is missing or not a string.
-- Throws if \`params.byteLength\` is missing, not a positive integer, or < 1.
-- Throws at run-time if \`aux[auxName]\` is missing AND the editor's
-  orphan-read warning glyph didn't catch it ahead of time (the warning
-  glyph is the first line of defense; the executor throw is the second).
-
-## Phase status
-
-Shipped in Slice 2.6d of the universal-port-dataflow plan as the
-**first of three** new primitives (the others being \`byte-slice@1\` and
-\`split-bytes@1\`). First consumer: the decomposed SHA-256 spec's K-table,
-H-table, and W-table reads.`,
+If instead you want a fixed value that you type in directly (rather than one
+produced by an earlier step), use **Load constant** — its value is written
+right into the cipher and needs no earlier step to fill it in.`,
   params: new Map([
     [
       "auxName",
-      "Aux key to read. Must reference a value that decodes to bytes (Uint8Array or a State variant). Empty string is allowed at authoring time — the runtime records auxReadMissing and the editor surfaces an orphan-read glyph.",
+      "The name of the slot to read. Left blank on a freshly added step, and the editor flags it until you point it at a slot some earlier step fills in.",
     ],
-    [
-      "byteLength",
-      "Declared output byteLength. Positive integer (≥ 1). The runtime's port-length coercion handles mismatches against the actual aux value's length.",
-    ],
+    ["byteLength", "How many bytes the fetched value is expected to be."],
   ]),
-  references: [
-    "docs/plans/universal-port-phase-2-slices.md (Slice 2.6c design D.1 + Slice 2.6d ship)",
-  ],
   // No `shapeContract` — port-native steps describe their surface via
   // PortContract.
 };

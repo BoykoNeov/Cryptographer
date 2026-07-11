@@ -135,14 +135,13 @@ export const concat: PortedExecutor = (inputs, params, _ctx) => {
 
 export const concatDoc: StepDocumentation = {
   name: "Concat",
-  summary:
-    "N-way byte concatenation of input0..input{N-1}. Output byteLength = sum of input byteLengths.",
+  summary: "Joins two or more byte strings end to end, in order, into one longer value.",
   detail: `# Concat
 
-Universal port-native byte-concatenation primitive. Takes N input ports
-named \`input0\`, \`input1\`, …, \`input{N-1}\` (N set by
-\`params.inputCount\`), produces one output port \`output\` carrying the
-byte-wise concatenation of all inputs in declaration order.
+Joins several byte strings end to end into one. It takes N inputs —
+\`input0\`, \`input1\`, …, \`input{N-1}\` (N is set by \`inputCount\`) — and
+produces a single output that is all of them laid out one after another, in
+order.
 
 ## Math
 
@@ -152,38 +151,33 @@ For inputs \`a, b, c\` of lengths \`L_a, L_b, L_c\`:
 output = a || b || c    (length L_a + L_b + L_c)
 \`\`\`
 
-Unlike \`xor@1\`, operands do NOT have to share length — each contributes
-its bytes verbatim, and the output is the concatenation.
+The inputs do **not** have to be the same length — each one contributes its
+bytes verbatim, and the output length is their sum. (This is the difference
+from XOR, which combines equal-length inputs position by position.)
 
 ## Where it fits
 
-- **Boundary state assembly**: combine the SHA-256 initial hash values
-  \`H_0..H_7\` (32 bytes) with the message schedule's \`W_0..W_63\`
-  (256 bytes) into a 288-byte composite state that compression rounds
-  can read for both their working variables AND their per-round W lookup.
-- **HMAC**: concatenate the inner-hash output with the outer-key for the
-  second compression-function pass.
-- **SHA-3 sponge**: assemble state bytes across absorb/squeeze.
-- **BLAKE2/3 finalization**: per-block output assembly.
-- **Identity passthrough** (N=1): useful as a wiring placeholder during
-  incremental spec authoring.
+Concatenation is how a cipher or hash reassembles a larger value out of
+smaller pieces:
 
-## Errors
+- **Rejoining the halves of a Feistel round** — Blowfish, DES and other
+  Feistel ciphers split the block into a left and right half, transform them,
+  then concatenate them back into one block. The *order* of the two inputs is
+  what encodes the round's left/right **swap**.
+- **SHA-256 state assembly** — the eight initial hash words \`H_0..H_7\` are
+  concatenated with the message schedule \`W_0..W_63\` into the single value
+  the compression rounds read.
+- **HMAC** — the inner-hash output is concatenated with the outer key before
+  the second hashing pass.
+- **Sponge and tree hashes (SHA-3, BLAKE2/3)** — state and per-block outputs
+  are assembled by concatenation.
 
-- Throws if \`params.inputCount\` is missing, not an integer, or < 1.
-- Throws if any expected input port is missing on the input map.
-
-## Phase status
-
-Shipped in Slice 2.6b of the universal-port-dataflow plan as one of three
-port-native bridges (alongside \`state-to-bytes@1\` and \`bytes-to-state@1\`).
-First consumer: the SHA-256 spec's H||W state assembly between message
-schedule and compression rounds.`,
+With a single input (\`inputCount = 1\`) concat simply passes it through
+unchanged — occasionally useful as a placeholder while wiring a cipher up.`,
   params: new Map([
     [
       "inputCount",
-      "Number of input ports to concatenate. Positive integer (≥ 1). N=1 is identity passthrough.",
+      "How many inputs to join. A whole number, 1 or more. With 1 input, concat passes it through unchanged.",
     ],
   ]),
-  references: ["docs/plans/universal-port-phase-2-slices.md (Slice 2.6b)"],
 };

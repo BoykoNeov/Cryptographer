@@ -62,17 +62,15 @@ export const desXorWithKDoc: StepDocumentation = {
   summary: "XOR the 48-bit expanded R against the round key.",
   detail: `## XOR with K_i
 
-The middle step of the F function: takes the 48-bit expansion of R (from
-\`des.expand-R@1\`) and XORs it against the round key K_i, which is read
-from \`aux[params.roundKeyAux]\`.
+The middle step of the F function: takes the 48-bit expansion of R and XORs
+it against this round's key K_i.
 
 \`\`\`
 output[i]  =  input[i]  XOR  K_i[i]      for i in 0..5
 \`\`\`
 
-The round key was produced once by \`des.key-schedule@1\` and stored in
-aux under names like \`roundKey.0\` … \`roundKey.15\`. Each round's spec
-node sets \`params.roundKeyAux\` to one of those names.
+The round keys were produced once by the DES key schedule and stored under
+names \`roundKey.0\` … \`roundKey.15\`; each round picks the one it needs.
 
 **Pedagogical note.** XOR is the cipher's "mix the secret into the data"
 operation. The expansion before this step ensures the key bits influence
@@ -81,7 +79,7 @@ itself a mix of expanded data bits and round-key bits.`,
   params: new Map([
     [
       "roundKeyAux",
-      "Aux key holding the 6-byte (48-bit) round key. Conventionally 'roundKey.{N}' for round N.",
+      "The name of the slot holding this round's 48-bit key — conventionally 'roundKey.N' for round N.",
     ],
   ]),
   references: ["FIPS 46-3 §3 (Cipher Function f)"],

@@ -46,13 +46,11 @@ export const mul: PortedExecutor = (inputs, _params, _ctx) => {
 
 export const mulDoc: StepDocumentation = {
   name: "Multiply (integer)",
-  summary:
-    "Big-integer product a · b over big-endian operands. Output width = max(a, b) bytes; throws on overflow.",
+  summary: "Multiplies two whole numbers exactly — plain integer multiplication, no wrap-around.",
   detail: `# Multiply (integer)
 
-Reads two big-endian non-negative integers from ports \`a\` and \`b\`
-(any byte length) and emits their **exact integer product** on
-\`output\`, big-endian, at \`max(a.length, b.length)\` bytes.
+Multiplies two non-negative whole numbers, \`a\` and \`b\`, and produces their
+exact product.
 
 ## Math
 
@@ -60,22 +58,15 @@ Reads two big-endian non-negative integers from ports \`a\` and \`b\`
 output = a · b
 \`\`\`
 
-No modulus — this is plain integer multiplication. If the product is too
-large for the output width, the step throws (rather than silently wrapping)
-so an oversized prime fails loudly.
+This is ordinary integer multiplication — there is no modulus and no
+wrap-around, so the result is the true product.
 
 ## Where it fits
 
-- **RSA key generation** (\`docs/plans/shimmying-booping-moth.md\`):
-  - the public modulus \`n = p · q\`,
-  - Euler's totient \`φ(n) = (p − 1) · (q − 1)\`, the value e is inverted
-    modulo to obtain the private exponent d.
-
-## Errors
-
-- Throws if port \`a\` or \`b\` is unwired.
-- Throws if the product overflows the output width (widen the working
-  width / use smaller primes).`,
+- **RSA key generation**: the two secret primes \`p\` and \`q\` are multiplied
+  to form the public modulus \`n = p · q\`, and \`(p − 1) · (q − 1)\` gives
+  Euler's totient φ(n), which the key generation uses to derive the private
+  exponent.`,
   references: [
     "Rivest, Shamir, Adleman 1978 — A Method for Obtaining Digital Signatures and Public-Key Cryptosystems",
   ],

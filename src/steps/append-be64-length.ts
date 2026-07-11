@@ -93,49 +93,32 @@ export const appendBe64Length: PortedExecutor = (inputs, _params, _ctx) => {
 export const appendBe64LengthDoc: StepDocumentation = {
   name: "Append BE64 length suffix",
   summary:
-    "Append an 8-byte big-endian encoding of `(length-source.length * 8)` to `data`. Implements SHA-256-family message-length suffix.",
+    "Appends the original message's bit-length as an 8-byte suffix — the final step of SHA-256-style padding.",
   detail: `# Append BE64 length suffix
 
-Appends an 8-byte big-endian encoding of \`(length-source.length × 8)\`
-— the **bit-length of the original message** — to the bytes on the
-\`data\` port. Output length = \`data.length + 8\`.
+Appends an 8-byte number recording the **bit-length of the original message**
+to the data. The output is 8 bytes longer than the input.
 
 ## Math
 
 \`\`\`
-bitLength = length-source.length × 8       (as 64-bit unsigned)
-output    = data || BE64(bitLength)
+bitLength = (original message length in bytes) × 8     (as a 64-bit number)
+output    = data || bitLength
 \`\`\`
 
-## Why two input ports
+## Why two inputs
 
-SHA-256 (and every Merkle–Damgård hash) appends the length of the
-**original** message, not the padded length. The natural port-native
-expression decouples this: the \`data\` port carries the already-padded
-bytes; the \`length-source\` port carries the unpadded original
-message. The spec wires both — \`length-source\` reads from the
-pre-padding message directly, while \`data\` reads from the
-\`pad-with-byte@1\` output.
-
-\`\`\`
-message ──┬──→ pad-with-byte@1 ──→ append-be64-length@1 .data ──→ ...
-          └────────────────────→ append-be64-length@1 .length-source
-\`\`\`
+SHA-256 — like every hash in its family — ends its padding by recording the
+length of the **original** message, not the padded one. So this step takes
+two inputs: \`data\` is the already-padded message, and \`length-source\` is
+the original message, used only to measure its length. Recording the original
+length is a defense against certain forgery attacks, so the hash commits to
+exactly how many bytes it saw.
 
 ## Where it fits
 
-- **SHA-256 / SHA-224**: bit-length suffix per FIPS 180-4 §5.1.1.
-- **MD5**: bit-length suffix per RFC 1321 §3.2.
-- **SHA-1**: bit-length suffix per FIPS 180-4 §5.1.1 (same shape, different
-  word size).
-
-## Width split
-
-SHA-512 / SHA-384 use a **128-bit** length suffix. When SHA-512 lands
-(Phase 2c+), a sibling \`append-be128-length@1\` primitive ships then.
-The per-width split mirrors \`add-mod-32@1\` (vs. future
-\`add-mod-64@1\`) and the per-width helpers in
-\`src/core/word-codec.ts\`.
+- **SHA-256 / SHA-224 / SHA-1**: the message-length suffix (FIPS 180-4 §5.1.1).
+- **MD5**: the same suffix (RFC 1321 §3.2).
 
 ## Example (SHA-256 padding of "abc")
 
@@ -153,14 +136,8 @@ output:        61 62 63 80 00 00 00 00 00 00 00 00 00 00 00 00
                                                             BE64(24)
 \`\`\`
 
-\`24 = 3 × 8\` (3-byte message, 8 bits per byte). The 64-bit BE encoding
-fills the last 8 bytes with \`00 00 00 00 00 00 00 18\`.
-
-## Phase status
-
-Shipped in Slice 2.4 of the universal-port-dataflow plan as the SHA-256
-preprocessing companion to \`pad-with-byte@1\`. Slice 2.6 wires both
-into the SHA-256 spec.`,
+\`24 = 3 × 8\` (3-byte message, 8 bits per byte). The last 8 bytes hold that
+number, \`00 00 00 00 00 00 00 18\`.`,
   params: new Map(),
   references: [
     "FIPS 180-4 §5.1.1 (SHA-256 / SHA-224 padding — bit-length suffix)",

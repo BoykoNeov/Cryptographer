@@ -140,98 +140,43 @@ export const byteSlice: PortedExecutor = (inputs, params, _ctx) => {
 export const byteSliceDoc: StepDocumentation = {
   name: "Byte Slice",
   summary:
-    "Extract a contiguous byte range from the input port. One in, one out; output length = params.length.",
+    "Pulls out one contiguous run of bytes from the input, starting at the offset you choose.",
   detail: `# Byte Slice
 
-Reads bytes from the \`input\` port and emits a contiguous sub-range
-\`input[offset .. offset + length]\` on the \`output\` port. The
-input's declared byteLength is \`params.sourceByteLength\`; the output's
-declared byteLength is \`params.length\`.
+Pulls out a single contiguous run of bytes from its input — the \`length\`
+bytes starting at position \`offset\`, counting from zero.
 
 ## Math
 
-For input \`a\` of length \`L\`:
+For input \`a\`:
 
 \`\`\`
-output = a[offset .. offset + length]    (length: params.length)
+output = a[offset .. offset + length]
 \`\`\`
 
-Validation:
-- \`0 ≤ offset\`
-- \`length ≥ 1\`
-- \`offset + length ≤ sourceByteLength\`
-
-Throws on any violation at param-validation time (before the executor
-runs).
+The slice must lie inside the input, i.e. \`offset + length\` cannot run past
+the input's end.
 
 ## Where it fits
 
-- **SHA-256 K_t extraction.** Each compression round reads the 256-byte
-  K-table via \`aux-load-bytes@1\`, then a \`byte-slice@1\` with
-  \`params: { sourceByteLength: 256, offset: 4*roundIndex, length: 4 }\`
-  extracts \`K_t\`.
-- **SHA-256 W_t extraction.** Under user pick Q1 = (b) (W in aux), same
-  pattern as K_t but reading from \`aux["W"]\`.
-- **HMAC inner/outer key padding.** Extracting the leading 64-byte block
-  from a hashed key for HMAC's ipad/opad XOR.
-- **AEAD nonce vs. ciphertext split.** Extracting the nonce from a
-  composite AEAD input (when AEAD ships).
+- **Selecting one round's constant or key from a table** — where a cipher or
+  hash keeps a long table of per-round values, this pulls out the few bytes
+  for the current round. SHA-256, for instance, reads its round constant for
+  round *t* from a 256-byte table by slicing 4 bytes at offset \`4 × t\`.
+- **Separating a combined value into a wanted piece** — e.g. taking a nonce
+  or a header off the front of a larger input.
 
-## Pair with \`split-bytes@1\`
-
-For symmetric N-way extraction starting at offset 0 (e.g., extracting 8
-× 4-byte working variables from a 32-byte working_vars buffer), prefer
-\`split-bytes@1\` — it emits N outputs in one leaf instead of N separate
-byte-slice instances.
-
-## Authoring shape
-
-\`\`\`json
-{
-  "kind": "step",
-  "id": "round.5.K_t",
-  "type": "byte-slice@1",
-  "params": { "sourceByteLength": 256, "offset": 20, "length": 4 },
-  "portInputs": {
-    "input": { "node": "fetch-K", "port": "output" }
-  }
-}
-\`\`\`
-
-This leaf extracts the 4 bytes at offset 20–23 from the K-table
-(equivalent to \`K_5\` in big-endian word form).
-
-## Errors
-
-- Throws if \`params.sourceByteLength\` is missing, not an integer, or < 1.
-- Throws if \`params.offset\` is missing, not a non-negative integer.
-- Throws if \`params.length\` is missing, not an integer, or < 1.
-- Throws if \`offset + length > sourceByteLength\`.
-- Throws at run-time if the \`input\` port is missing.
-
-## Phase status
-
-Shipped in Slice 2.6d of the universal-port-dataflow plan as the
-**second of three** new primitives. First consumer: the decomposed
-SHA-256 spec's per-round \`K_t\` and (under user pick Q1 = (b)) \`W_t\`
-reads.`,
+To cut an input into *several* pieces at once (rather than pull out one), use
+**Split Bytes**. Byte Slice is the tool when you want a single range that may
+start anywhere.`,
   params: new Map([
-    [
-      "sourceByteLength",
-      "Declared length of the input port. Positive integer (≥ 1). Drives the input PortContract's byteLength.",
-    ],
+    ["sourceByteLength", "The length of the incoming value, in bytes."],
     [
       "offset",
-      "Starting byte offset into the input. Non-negative integer; must satisfy offset + length ≤ sourceByteLength.",
+      "Where the slice starts, counting bytes from zero. The slice must stay within the input.",
     ],
-    [
-      "length",
-      "Number of bytes to emit on the output port. Positive integer (≥ 1). Drives the output PortContract's byteLength.",
-    ],
+    ["length", "How many bytes to pull out."],
   ]),
-  references: [
-    "docs/plans/universal-port-phase-2-slices.md (Slice 2.6c design D.2 + Slice 2.6d ship)",
-  ],
   // No `shapeContract` — port-native steps describe their surface via
   // PortContract.
 };

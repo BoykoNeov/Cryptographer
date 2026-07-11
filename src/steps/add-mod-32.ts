@@ -158,80 +158,43 @@ export const addMod32: PortedExecutor = (inputs, params, _ctx) => {
 export const addMod32Doc: StepDocumentation = {
   name: "Add (mod 2³²)",
   summary:
-    "N-way modular addition over 32-bit big-endian word arrays. Output word at each position = sum of all operands' words at that position, mod 2³².",
+    "Adds two or more values as 32-bit words, wrapping around at 2³² (ordinary computer addition).",
   detail: `# Add (mod 2³²)
 
-Universal port-native modular-addition primitive. Takes N input ports
-named \`operand0\`, \`operand1\`, …, \`operand{N-1}\` (where N is set
-by \`params.inputCount\`), produces one output port \`output\` carrying
-the byte-wise representation of the sum.
+Adds two or more inputs together as 32-bit words. Each input is read as a
+sequence of 32-bit words (4 bytes each, big-endian), and the words at each
+position are summed. Any carry past the top bit is dropped — the sum "wraps
+around" at 2³², exactly the way addition works in a 32-bit CPU register.
 
 ## Math
 
-Each operand is a sequence of K big-endian 32-bit words (K =
-byteLength / 4). At each word position \`w\`:
+At each word position \`w\`:
 
 \`\`\`
 output_w = (operand0_w + operand1_w + … + operand{N-1}_w) mod 2³²
 \`\`\`
 
-Addition is commutative and associative — order does not affect the
-result, and chunking two operands at a time vs all N at once gives the
-same answer. Carries beyond bit 31 are dropped; this is the standard
-behavior of unsigned 32-bit arithmetic in C / FIPS pseudocode notation.
-
-## Word width
-
-Fixed at 32 bits. SHA-512 / Argon2 / BLAKE2b will get their own
-\`add-mod-64@1\` primitive when those land — the carry-wrap point is
-fundamentally different between 32-bit and 64-bit additions, so
-folding both into one step type with a \`wordBits\` param would hide
-the semantic difference. (Compare: \`rotate-bits-right@1\` DOES carry
-\`wordBits\` as a param because rotation is a pure bit shuffle that
-abstracts cleanly across widths.)
+All inputs must be the same length (a whole number of 4-byte words).
+Addition is commutative and associative, so the order of the inputs does not
+matter. Because the carry is discarded rather than growing the number, this
+addition is **not** reversible on its own — that non-linearity is exactly
+why ciphers mix it with XOR and rotation.
 
 ## Where it fits
 
-- **SHA-256 compression function**: the working-variable update
-  \`T1 = h + Σ1(e) + Ch(e,f,g) + K[i] + W[i]\` is one 5-operand
-  add-mod-32, and \`T2 = Σ0(a) + Maj(a,b,c)\` is one 2-operand add
-  (FIPS 180-4 §6.2.2).
-- **SHA-256 message schedule**: each new \`W_t\` for t ≥ 16 is a
-  4-operand add of σ1, σ0, and two earlier W words.
-- **ARX primitives generally**: SipHash, BLAKE2s, ChaCha20 (in 32-bit
-  word form) all do 32-bit modular addition as their A in A-R-X. The
-  shipped \`speck.round@1\` step inlines its 16/32/64-bit addition
-  against the wider 2-word state; this primitive isolates the
-  addition itself so future ARX rebuilds from medium primitives can
-  compose it.
-
-## Why N-way from the start
-
-The plan's literal Slice 2.1b text reads 2-way, but the implementation
-ships N-way because (a) addition mod 2³² is associative so the math is
-identical, and (b) SHA-256 reads cleanly with multi-operand adds —
-flatening the 5-operand T1 update into one node beats the same
-expression as four chained 2-way adds. Mirrors \`xor@1\`'s N-way
-shape. Decided 2026-05-24 (Fork 2).
-
-## Errors
-
-- Throws if \`params.inputCount\` is missing, not an integer, or < 2.
-- Throws if any expected operand port is missing on the input map.
-- Throws if any operand's length is not a multiple of 4 (cannot be
-  decoded as a sequence of 32-bit words).
-- Throws if operands disagree on length — coercion is an editor /
-  edge-projection concern per Q2, NOT a step-level concern.
-
-## Phase status
-
-Shipped in Slice 2.1b of the universal-port-dataflow plan, alongside
-\`xor@1\`. Not yet wired into any cipher spec — Slice 2.6's SHA-256
-build is the first consumer.`,
+- **The "A" in ARX ciphers** — Addition, Rotation, XOR is a whole cipher
+  family (Speck, ChaCha20, BLAKE2). This step is the Addition: mixing values
+  in a way that XOR alone cannot, because its carries let one bit affect the
+  bits above it.
+- **Blowfish's F-function** — combines the four S-box lookups with two
+  additions mod 2³² (interleaved with an XOR): \`((S0 + S1) ⊕ S2) + S3\`.
+- **SHA-256** — the compression step \`T1 = h + Σ1(e) + Ch(e,f,g) + K + W\`
+  is a single 5-input add mod 2³²; the message schedule adds four words to
+  form each new word.`,
   params: new Map([
     [
       "inputCount",
-      "Number of input operand ports. Integer ≥ 2 (single-operand addition would be the identity, indistinguishable from passthrough).",
+      "How many inputs to add. A whole number, 2 or more (adding a single value would change nothing). All inputs must be the same length.",
     ],
   ]),
   references: [

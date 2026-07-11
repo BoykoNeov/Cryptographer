@@ -79,24 +79,23 @@ Decryption uses these same two tables but in reverse order: IP is applied
 first (to undo encryption's final FP), and FP is applied last (to undo
 encryption's initial IP).
 
-**Why pull this out of bitslice form?** Production Serpent implementations
-absorb IP/FP into the key schedule and never touch the state with them at
-run time. We keep them visible here so a user scrubbing the trace can
-watch the bit interleaving happen explicitly — the price is two extra
-trace frames per Run.
+**Why shown as its own step.** Optimized Serpent implementations fold IP/FP
+into the key schedule and never apply them to the state directly. This
+explorer keeps them as visible steps so you can watch the bit-interleaving
+happen for yourself.
 
 **Bit numbering.** The 128-bit state is stored as 16 bytes; state bit \`b\`
-is bit \`b % 8\` of byte \`b >> 3\`, LSB-first within each byte. So state
-bit 0 = LSB of byte 0; state bit 8 = LSB of byte 1; state bit 127 = MSB
-of byte 15.`,
+is bit \`b % 8\` of byte \`b >> 3\`, counting from the least-significant bit
+within each byte. So state bit 0 = lowest bit of byte 0; state bit 8 = lowest
+bit of byte 1; state bit 127 = highest bit of byte 15.`,
   params: new Map([
     [
       "table",
-      "128-entry permutation table. table[i] is the source bit position in the input for output bit i.",
+      "The permutation: 128 entries, where entry i names the input bit position that becomes output bit i.",
     ],
     [
       "label",
-      'Optional human-readable name for the permutation, e.g. "IP" or "FP". Display-only; the executor ignores it.',
+      'An optional name for the permutation, e.g. "IP" or "FP". A label only; it doesn\'t affect the result.',
     ],
   ]),
   references: [

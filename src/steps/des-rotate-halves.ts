@@ -115,7 +115,7 @@ that round's key Kᵣ.`,
   params: new Map([
     [
       "shift",
-      "Left-rotation amount in bits for this round (DES uses 1 or 2 per FIPS_46-3 SHIFTS).",
+      "How many bits to rotate left this round — DES uses 1 or 2, following its fixed shift schedule.",
     ],
     ["halfBits", "Width of each half in bits. DES uses 28 (the register is 2 × 28 = 56 bits)."],
   ]),

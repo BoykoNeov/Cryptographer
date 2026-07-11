@@ -127,52 +127,16 @@ export const stateToBytesMeta: ProjectionMetadata = {
 export const stateToBytesDoc: StepDocumentation = {
   name: "State To Bytes",
   summary:
-    "Project the runtime state variable's bytes onto an output port. Identity passthrough; the load-bearing effect is exposing state to a port-native chain.",
+    "The entry point: takes the incoming data (plaintext or message) and hands it to the first step.",
   detail: `# State To Bytes
 
-Reads bytes from the runtime \`state\` variable (auto-projected by the
-runtime via \`meta.stateInputPort\`) and emits them unchanged on the
-\`output\` port. The state-read is what makes this primitive load-bearing
-— pure port-native leaves can compute bytes but can't read from state, so
-a port-native chain has no way to source the cipher's initial plaintext
-without a primitive like this.
+The starting point of a cipher's dataflow. It takes the data being processed
+— the plaintext or message you entered — and makes it available for the first
+real step to read. It doesn't change anything; it just hands the input over so
+the chain of steps has somewhere to begin.
 
-## Where it fits
-
-- **Initial plaintext source.** SHA-256's first spec leaf is
-  \`state-to-bytes@1\`, exposing the plaintext bytes (delivered via
-  \`RuntimeInput.initialState\`) on its output port. Downstream
-  \`pad-with-byte@1\` wires its \`input\` port to this leaf's output.
-- **Mid-chain state-to-port handoffs.** When a lifted-legacy step has
-  updated state and a downstream port-native primitive needs to read
-  it (e.g., after a state-write boundary in a hybrid spec).
-
-## Pairs with \`bytes-to-state@1\`
-
-The inverse direction. \`bytes-to-state@1\` writes an input port into
-state; \`state-to-bytes@1\` reads state into an output port. Together
-they close the port-native chain's loop with parent-scope state.
-
-## Authoring shape
-
-\`\`\`json
-{
-  "kind": "step",
-  "id": "src",
-  "type": "state-to-bytes@1",
-  "params": {}
-}
-\`\`\`
-
-No \`portInputs\` map needed — the runtime auto-projects parent state into
-the \`state\` input port. Downstream consumers wire
-\`{ node: "src", port: "output" }\`.
-
-## Phase status
-
-Shipped in Slice 2.6b of the universal-port-dataflow plan as the entry
-counterpart to \`bytes-to-state@1\`. Required because pure port-native
-leaves don't have built-in access to parent state.`,
-  params: new Map([["(no params)", "This primitive takes no parameters; pass `{}`."]]),
-  references: ["docs/plans/universal-port-phase-2-slices.md (Slice 2.6b)"],
+Its partner is **Bytes To State**, which does the reverse at the end: it
+takes the final result and hands it back out as the cipher's output. One
+brings the data in, the other sends it out.`,
+  params: new Map([["(no params)", "This step takes no settings."]]),
 };

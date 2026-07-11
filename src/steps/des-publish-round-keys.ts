@@ -149,20 +149,15 @@ export const desPublishRoundKeysMeta: ProjectionMetadata = {
 
 export const desPublishRoundKeysDoc: StepDocumentation = {
   name: "Publish round keys (DES)",
-  summary: "Write the derived DES round keys into the aux map (roundKey.0 … roundKey.15).",
+  summary:
+    "Stores the finished DES round keys under names so each round can look up the key it needs.",
   detail: `## Publish round keys (DES)
 
-The tail of the decomposed DES key schedule. The PC-1 → 16 rotations → PC-2
-stages above this step have already computed every round key as visible
-port-native frames; this leaf takes the finished round keys on its input
-ports \`key0\` … \`key15\` and publishes them into the aux map as
-\`\${outputPrefix}.0\` … \`\${outputPrefix}.15\` (typically \`roundKey.0\` …
-\`roundKey.15\`).
-
-The per-round DES key-mixing step (\`des.xor-with-K@1\`) reads those aux
-entries unchanged — so decomposing the key schedule into visible math did
-not touch the round body at all. The state (the carried 8-byte block) passes
-through this step untouched; the work product lives entirely in the aux map.
+The last step of the DES key schedule. The PC-1 → 16 rotations → PC-2 stages
+above it have already computed every round key; this step collects them and
+stores each under a name — \`roundKey.0\` … \`roundKey.15\` — so each round's
+key-mixing step can look up the key it needs. The 8-byte block being encrypted
+is untouched; this step only files the round keys away.
 
 **DES's fixed 16 round keys.** DES has no key-size variant — the 64-bit
 master key always reduces to 56 effective bits via PC-1 and yields exactly
@@ -171,12 +166,9 @@ SAME 16 keys in reverse order.`,
   params: new Map([
     [
       "outputPrefix",
-      'Prefix for the round-key aux entries. With "roundKey", outputs are roundKey.0 … roundKey.15.',
+      'The name prefix for the round keys. With "roundKey", they are stored as roundKey.0 … roundKey.15.',
     ],
-    [
-      "count",
-      "Round-key count. Defaults to 16 (DES's fixed K₁ … K₁₆). The builder always passes 16.",
-    ],
+    ["count", "How many round keys to store — 16 for DES (K₁ … K₁₆)."],
   ]),
   references: ["FIPS 46-3 §5 (Key Schedule — 16 round keys K₁ … K₁₆)"],
   shapeContract: { input: "any", output: "preserveInput" },

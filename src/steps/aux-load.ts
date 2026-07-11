@@ -83,31 +83,29 @@ the plaintext, key, or another step's output. Canonical examples:
 - A **tweak** for tweakable modes (XEX, XTS).
 - A **per-mode constant** baked into a hand-built compound cipher.
 
-**Composition.** This is one of three Slice 10 primitives (\`aux-load\`,
-\`aux-xor\`, \`aux-copy\`) that together let a user *build* block-cipher
-modes inside the visual editor instead of choosing from a fixed list. CBC,
-for instance, factors as:
+**Building a mode of operation.** Together with **Aux XOR** and **Aux Copy**,
+this lets you build chaining modes (CBC, OFB, CFB) by hand instead of picking
+one from a list. CBC, for instance, is:
 
 \`\`\`
-aux-load   IV         → aux[feedback]
+Aux Load  IV         → feedback
 [per block]
-  aux-xor  P_i, feedback     → aux[feedback]   (P_i ⊕ prev-cipher)
-  <cipher core on feedback>                    (e.g. AES round body)
-  aux-copy feedback → C_i                       (publish ciphertext)
+  Aux XOR  P_i, feedback     → feedback   (P_i ⊕ previous ciphertext)
+  <cipher core on feedback>               (e.g. AES round body)
+  Aux Copy feedback → C_i                 (record the ciphertext block)
 \`\`\`
 
-Today only the aux side is wired; once a state↔aux bridge step lands the
-composition will extend to drive the cipher state through real AES.
-
-**Educational hook:** the trace shows the loaded value as the step's
-\`auxWritten\` entry — exactly the same shape every key-expansion frame
-produces — so students see "an IV is just another piece of named data"
-rather than a privileged input.`,
+**The point:** the trace shows the loaded value as just another named piece
+of data — the same shape every round key has — so an IV reads as ordinary
+data fed in, not a special kind of input.`,
   params: new Map([
-    ["auxName", "Aux key to write the value under. Any non-empty string."],
+    [
+      "auxName",
+      "The name to store the value under, so later steps can find it. Any non-empty label.",
+    ],
     [
       "value",
-      "The byte sequence to publish, as an array of integers 0..255. Length is unconstrained by this step; consumers (e.g. aux-xor) impose any shape requirements.",
+      "The fixed byte sequence to store, as numbers 0–255. Its length is up to you; the steps that read it decide what length they need.",
     ],
   ]),
   references: [

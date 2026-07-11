@@ -116,15 +116,12 @@ keys by grouping them into 33 sets of four consecutive words and applying a
 
 ### What this leaf does
 
-1. **Decode** the 16-byte input as four 32-bit words. The decomposed schedule
-   runs its prekey recurrence on big-endian words (so the
-   \`rotate-bits-right\` primitive's BE word view is consistent), so these are
-   decoded big-endian.
+1. **Read** the 16-byte input as four 32-bit words.
 
 2. **Bitsliced S-box.** For each of the 32 bit-columns across the four words,
-   the 4 bits (one per word) form a nibble, looked up in
-   \`SERPENT_SBOXES[sboxIndex]\` and written back to the same column. The S-box
-   index walks **down** the table with wraparound: group \`i\` uses
+   the 4 bits (one per word) form a nibble, which is looked up in the chosen
+   Serpent S-box and written back to the same column. The S-box index walks
+   **down** the eight-box list with wraparound: group \`i\` uses
    \`S_{(35 - i) mod 8}\` (group 0 → S₃, group 1 → S₂, …).
 
 3. **IP.** The raw round key is passed through the Initial Permutation so it
@@ -136,10 +133,7 @@ for encrypt and decrypt; only the consumption order of the 33 round keys
 differs. So unlike the round body's SubBytes, this leaf carries no cross-mode
 mirror.`,
   params: new Map([
-    [
-      "sboxIndex",
-      "Which of the 8 Serpent S-boxes to apply (0..7). The builder computes group i's index as ((35 - i) mod 8 + 8) mod 8.",
-    ],
+    ["sboxIndex", "Which of the 8 Serpent S-boxes to apply (0–7) for this group of prekey words."],
   ]),
   references: [
     "Anderson, Biham, Knudsen 1998, §2 (Key Schedule, steps 4 + 5)",

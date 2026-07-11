@@ -48,13 +48,13 @@ export const auxLoadNarration: NarrationFn = (frame) => {
       Prose: (props) => (
         <div>
           <p>
-            Publish the literal byte sequence {formatBytes(value, props.fmt)} ({valueLen} byte
-            {valueLen === 1 ? "" : "s"}) into <code>aux[{auxName}]</code>. State is passthrough —
-            this step has no data inputs; the value is a constant baked into the spec.
+            Store the fixed byte sequence {formatBytes(value, props.fmt)} ({valueLen} byte
+            {valueLen === 1 ? "" : "s"}) in the slot <code>aux[{auxName}]</code>. The value is one
+            you supply directly; the data being encrypted passes by untouched.
           </p>
           <p>
             Common uses: an initialization vector (CBC, OFB, CFB), a counter starting value (CTR),
-            or any per-mode constant a hand-built compound cipher needs to thread through aux.
+            or any fixed value a hand-built mode of operation needs to bring in.
           </p>
         </div>
       ),

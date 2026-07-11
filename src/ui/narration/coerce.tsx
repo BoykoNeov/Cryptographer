@@ -82,8 +82,8 @@ export const coerceNarration: NarrationFn = (frame) => {
   // running UI sees the same vocabulary.
   const modePhrase =
     mode === "right-pad"
-      ? `right-zero-padding (source was shorter than the port's declared ${targetLen} bytes)`
-      : `truncating from the right (source was longer than the port's declared ${targetLen} bytes; the trailing ${sourceLen - targetLen} bytes were discarded)`;
+      ? `adding zero bytes on the right (the source was shorter than the ${targetLen} bytes the next step expects)`
+      : `trimming from the right (the source was longer than the ${targetLen} bytes the next step expects; the trailing ${sourceLen - targetLen} bytes were dropped)`;
 
   const morphHeadline = `coerced ${sourceLen} → ${targetLen} bytes by ${mode === "right-pad" ? "right-zero-padding" : "right-truncation"}`;
 
@@ -93,10 +93,9 @@ export const coerceNarration: NarrationFn = (frame) => {
     Prose: (props) => (
       <div>
         <p>
-          The downstream step declares input port <code>{portName}</code> at{" "}
-          <strong>{targetLen} bytes</strong>; the upstream source produced{" "}
-          <strong>{sourceLen} bytes</strong>. To keep the pipeline running, the runtime applied
-          deterministic coercion: <em>{modePhrase}</em>.
+          The next step expects <code>{portName}</code> to be <strong>{targetLen} bytes</strong>,
+          but the step feeding it produced <strong>{sourceLen} bytes</strong>. Rather than stop, the
+          value was adjusted to fit by <em>{modePhrase}</em>.
         </p>
         <p>
           Before ({sourceLen} bytes): {formatBytes(beforeFrozen, props.fmt)}
@@ -105,11 +104,10 @@ export const coerceNarration: NarrationFn = (frame) => {
           After ({targetLen} bytes): {formatBytes(afterFrozen, props.fmt)}
         </p>
         <p>
-          This is the universal-port-dataflow plan's <strong>warn-and-run</strong> mismatch policy
-          (Q2): mismatched wirings don't halt execution — they produce a deterministic, visible
-          coercion frame so the learner sees exactly which bytes landed where. Editor warnings would
-          additionally flag the mismatch as red at the wiring; the trace tells the runtime side of
-          the story.
+          A length mismatch like this usually means two steps aren't wired the way you intended. The
+          cipher keeps running so you can see exactly which bytes were kept, added, or dropped — but
+          if this wasn't deliberate, it's a sign to adjust the wiring or the lengths so the two
+          sides match.
         </p>
       </div>
     ),

@@ -135,9 +135,9 @@ on the key size:
 | AES-192  | 24        | 6          | 12          | 13         |
 | AES-256  | 32        | 8          | 14          | 15         |
 
-Round keys are written to aux as \`roundKey.0\` through \`roundKey.Nr\`. The
-state itself is unchanged by this step; the work product lives entirely in
-the aux map.
+The round keys are stored under names \`roundKey.0\` through \`roundKey.Nr\` so
+each round can read the key it needs; the data being encrypted is untouched by
+this step.
 
 The expansion is iterative. For most word indices \`i\`, the new word is
 \`w[i] = w[i-Nk] XOR w[i-1]\`. Every Nk-th word receives extra processing:
@@ -323,27 +323,23 @@ export const keyExpansionV2Doc: StepDocumentation = {
   name: "Key Expansion (v2)",
   summary:
     "Derive `rounds + 1` round keys from the cipher key. Accepts non-canonical round counts.",
-  detail: `## Key Expansion v2 (AES)
+  detail: `## Key Expansion (extended)
 
-Same FIPS-197 §5.2 procedure as the v1 step, with two relaxations that let
-this executor power non-standard AES variants (e.g. "AES-128 with 11
-rounds"):
+The same AES key expansion (FIPS-197 §5.2), with two relaxations so you can
+experiment with **non-standard AES variants** — for example, "AES-128 but
+with 11 rounds":
 
-1. **No \`rounds === Nk + 6\` assertion.** v1 enforced the FIPS-197 standard
-   relation; v2 accepts any \`rounds >= Nk + 1\`. The other branches
-   (RotWord/SubWord on \`i % Nk == 0\`, the Nk>6 extra SubWord) still fire
-   exactly as the standard prescribes — only the count of derived words
-   changes.
+1. **Any number of rounds.** Standard AES fixes the round count from the key
+   size; this version derives however many round keys you ask for. All the
+   real key-expansion work (the RotWord/SubWord/Rcon steps) happens exactly as
+   the standard prescribes — only *how many* round keys are produced changes.
 
-2. **Rcon table is extended on the fly.** If the user-supplied
-   \`rcon\` array is shorter than \`floor(totalWords / Nk) + 1\`, the
-   executor appends entries using \`Rcon[i] = xtime(Rcon[i-1])\` in
-   GF(2^8). Standard Rcon values seeded by the canonical spec stay
-   visible and editable in the ParamEditor; the auto-extension only
-   fills slots the user didn't provide.
+2. **Round constants extend automatically.** If you ask for more rounds than
+   the supplied round-constant table covers, the extra constants are generated
+   the same way the standard ones are, so the extension is seamless.
 
-At canonical round counts (10 / 12 / 14) v2 produces byte-identical round
-keys to v1 — pinned by a parity test against \`aes.key-expansion@1\`.`,
+At the standard round counts (10 / 12 / 14) this produces exactly the same
+round keys as ordinary AES key expansion.`,
   params: new Map([
     [
       "keyAuxName",

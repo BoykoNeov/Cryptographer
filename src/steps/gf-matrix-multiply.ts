@@ -102,7 +102,7 @@ export const gfMatrixMultiply: PortedExecutor = (inputs, params, _ctx) => {
 export const gfMatrixMultiplyDoc: StepDocumentation = {
   name: "GF Matrix Multiply",
   summary:
-    "Multiply each 4-byte column of the input by a 4×4 matrix in GF(2⁸). Port-native MixColumns.",
+    "Mixes each group of 4 bytes by multiplying it against a fixed 4×4 matrix in GF(2⁸) — AES's MixColumns.",
   detail: `# GF Matrix Multiply
 
 Treats the input as N consecutive **columns** of 4 bytes each (column-major:
@@ -143,17 +143,11 @@ This is the column-level **diffusion** step. ShiftRows spreads bytes
 between columns; MixColumns then spreads each column's content across all
 four of its bytes. Together they give full diffusion within two AES rounds.
 **Try it:** replace the matrix with the identity and AES collapses to
-SubBytes + ShiftRows + key XOR — breakable by hand.
-
-## Errors
-
-- Throws if \`params.matrix\` is not a 4×4 array.
-- Throws if the \`input\` port is not wired.
-- Throws if the input length is not a multiple of 4.`,
+SubBytes + ShiftRows + key XOR — breakable by hand.`,
   params: new Map([
     [
       "matrix",
-      "Row-major 4×4 array of GF(2⁸) coefficients (0..255). Forward AES uses {1,2,3} entries; inverse uses {9,11,13,14}.",
+      "The 4×4 mixing matrix, given row by row (each coefficient 0–255). Forward AES uses {1,2,3} entries; the inverse used for decryption uses {9,11,13,14}.",
     ],
   ]),
   references: [

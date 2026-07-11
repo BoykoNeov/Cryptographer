@@ -130,16 +130,16 @@ export const blowfishSboxLookupMeta: ProjectionMetadata = {
 export const blowfishSboxLookupDoc: StepDocumentation = {
   name: "S-box lookup (Blowfish)",
   summary:
-    "Look up a 32-bit word in a key-derived Blowfish S-box, indexed by one byte. Reads the table from aux.",
+    "Looks up a 32-bit word in one of Blowfish's key-derived S-boxes, using a single byte as the index.",
   detail: `# S-box lookup (Blowfish)
 
-Reads a single byte on the \`index\` port (0..255) and emits the 4-byte
-big-endian word \`S[index]\`, where \`S\` is the 256-word Blowfish S-box held in
-\`aux[params.sboxName]\` (auto-projected onto the \`table\` port by the runtime
-via \`meta.auxReadPorts\`):
+Takes a single byte on the \`index\` (a number 0–255) and returns the 4-byte
+word stored at that position of one of Blowfish's S-boxes. The S-box itself is
+a 256-word table that the key schedule produced and left in a named slot; this
+step reads the table named by \`sboxName\`:
 
 \`\`\`
-output  =  aux[sboxName][index]      (a 32-bit word, big-endian)
+output  =  S[index]      (a 32-bit word)
 \`\`\`
 
 ## Where it fits — the F function
@@ -157,23 +157,15 @@ then combined by \`add-mod-32@1\` and \`xor@1\` leaves.
 
 ## Why the table comes from aux, not params
 
-Unlike AES's or DES's S-boxes (fixed cipher constants baked into leaf params),
-Blowfish's four S-boxes are **derived from the key** by the key schedule (via
-521 self-encryptions) and published into the aux map. So the lookup must read
-its table at run time from aux — this step is the point where the key's effect
-re-enters every round.
-
-## Errors
-
-- Throws if \`params.sboxName\` is not a string.
-- Throws if the \`index\` port is unwired or not exactly 1 byte.
-- Throws if the \`table\` port (aux value) is missing or not 1024 bytes — the
-  editor's orphan-read glyph is the first line of defense; this throw is the
-  second.`,
+Unlike AES's or DES's S-boxes, which are fixed constants, Blowfish's four
+S-boxes are **derived from the key** by the key schedule (through its 521
+self-encryptions). So the lookup reads its table fresh each run rather than
+from fixed values — this step is the point where the key's effect re-enters
+every round. Change the key and every one of these 1024 entries changes.`,
   params: new Map([
     [
       "sboxName",
-      "Aux key holding the 256-word (1024-byte) S-box, e.g. `blowfish.S0`. Empty string is allowed at authoring time — the editor surfaces an orphan-read glyph until it is wired.",
+      "Which of Blowfish's four S-boxes to read (e.g. `blowfish.S0`), by the name the key schedule stored it under. Left blank on a freshly added step, and the editor flags it until you connect it.",
     ],
   ]),
   references: ["Schneier 1993 — Description of a New Variable-Length Key, 64-Bit Block Cipher"],

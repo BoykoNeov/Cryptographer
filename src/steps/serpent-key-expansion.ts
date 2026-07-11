@@ -205,15 +205,15 @@ consumes \`K_0\` first, decrypt consumes \`K_32\` first.`,
   params: new Map([
     [
       "keyAuxName",
-      "Aux entry holding the master key bytes. Length must equal the keyByteLength param.",
+      "The name of the slot holding the master key. Its length must match keyByteLength.",
     ],
     [
       "outputPrefix",
-      'Prefix for the round-key aux entries. With "roundKey", outputs are roundKey.0 … roundKey.32.',
+      'The name prefix for the round keys produced. With "roundKey", they are roundKey.0 through roundKey.32.',
     ],
     [
       "keyByteLength",
-      "Expected key length in bytes: 16 (Serpent-128), 24 (Serpent-192), or 32 (Serpent-256). The executor cross-checks this against the actual aux key length.",
+      "The key length in bytes: 16 (Serpent-128), 24 (Serpent-192), or 32 (Serpent-256).",
     ],
   ]),
   references: [

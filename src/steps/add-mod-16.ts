@@ -147,72 +147,38 @@ export const addMod16: PortedExecutor = (inputs, params, _ctx) => {
 export const addMod16Doc: StepDocumentation = {
   name: "Add (mod 2¹⁶)",
   summary:
-    "N-way modular addition over 16-bit big-endian word arrays. Output word at each position = sum of all operands' words at that position, mod 2¹⁶.",
+    "Adds two or more values as 16-bit words, wrapping around at 2¹⁶. The 16-bit sibling of Add (mod 2³²).",
   detail: `# Add (mod 2¹⁶)
 
-Universal port-native modular-addition primitive at 16-bit word width.
-Takes N input ports named \`operand0\`, \`operand1\`, …, \`operand{N-1}\`
-(where N is set by \`params.inputCount\`), produces one output port
-\`output\` carrying the byte-wise representation of the sum.
+Adds two or more inputs together as 16-bit words. Each input is read as a
+sequence of 16-bit words (2 bytes each, big-endian), and the words at each
+position are summed. Any carry past the top bit is dropped — the sum wraps
+around at 2¹⁶. This is the same operation as **Add (mod 2³²)**, just on
+smaller 16-bit words, for ciphers that work in 16-bit chunks.
 
 ## Math
 
-Each operand is a sequence of K big-endian 16-bit words (K =
-byteLength / 2). At each word position \`w\`:
+At each word position \`w\`:
 
 \`\`\`
 output_w = (operand0_w + operand1_w + … + operand{N-1}_w) mod 2¹⁶
 \`\`\`
 
-Addition is commutative and associative — order does not affect the
-result, and chunking two operands at a time vs all N at once gives the
-same answer. Carries beyond bit 15 are dropped; this is the standard
-behavior of unsigned 16-bit arithmetic in ARX cipher pseudocode.
-
-## Word width
-
-Fixed at 16 bits, matching how \`add-mod-32@1\` is fixed at 32 bits.
-The carry-wrap point is fundamentally different between widths, so
-folding multiple widths into one step type with a \`wordBits\` param
-would hide the semantic difference. (Compare: \`rotate-bits-right@1\`
-DOES carry \`wordBits\` as a param because rotation is a pure bit
-shuffle that abstracts cleanly across widths.) Future \`add-mod-64@1\`
-will ship when SHA-512 / Blake2b / Argon2 land.
+All inputs must be the same length (a whole number of 2-byte words).
+Addition is commutative and associative, so the input order does not matter.
+Discarding the carry makes the addition non-linear — the reason ARX ciphers
+combine it with XOR and rotation.
 
 ## Where it fits
 
-- **Speck32/64 key schedule (the K2a consumer)**: the
-  \`l_{i+m-1} = (k_i + ROR(l_i, alpha)) ⊕ i\` recurrence's modular
-  addition step is one \`add-mod-16@1\` leaf per iteration.
-- **Speck32/64 round function**: the \`x ← (ROR(x, alpha) + y) mod 2^n\`
-  step is the same primitive at 16-bit width. Today's
-  \`speck.round@1\` step inlines its 16-bit addition; a future
-  port-native Speck round rebuild from medium primitives composes this
-  primitive directly.
-- **Byte-level encodings**: any cipher or hash that performs
-  word-level modular addition on a flat byte buffer where the words
-  are 16 bits each.
-
-## Errors
-
-- Throws if \`params.inputCount\` is missing, not an integer, or < 2.
-- Throws if any expected operand port is missing on the input map.
-- Throws if any operand's length is not a multiple of 2 (cannot be
-  decoded as a sequence of 16-bit words).
-- Throws if operands disagree on length — coercion is an editor /
-  edge-projection concern per Q2 of the universal-port plan, NOT a
-  step-level concern.
-
-## Phase status
-
-Shipped in K2a of the key-schedule-decomposition plan as the sibling
-of \`add-mod-32@1\` (Phase 2 Slice 2.1b). Used by the Speck32/64
-decomposed key-schedule builder. The fixed-width family extends to
-\`add-mod-64@1\` when SHA-512 lands.`,
+- **Speck32/64** — Speck is an ARX cipher on 16-bit words: both its round
+  function (\`x ← (ROR(x) + y) mod 2¹⁶\`) and its key schedule use this
+  16-bit modular addition as their Addition step.
+- **Any 16-bit-word cipher or hash** that mixes values by modular addition.`,
   params: new Map([
     [
       "inputCount",
-      "Number of input operand ports. Integer ≥ 2 (single-operand addition would be the identity, indistinguishable from passthrough).",
+      "How many inputs to add. A whole number, 2 or more. All inputs must be the same length.",
     ],
   ]),
   references: [

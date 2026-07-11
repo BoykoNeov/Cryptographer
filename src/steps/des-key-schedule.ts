@@ -92,8 +92,8 @@ export const desKeyScheduleDoc: StepDocumentation = {
   summary: "Expand the 64-bit key into 16 × 48-bit round keys via PC-1, 16 shifts, PC-2.",
   detail: `## DES Key Schedule
 
-Produces the 16 round keys K_1..K_16 from the 64-bit master key. State
-passes through unchanged; every effect is in aux.
+Produces the 16 round keys K_1..K_16 from the 64-bit master key. The data
+being encrypted is untouched; this step only derives the round keys.
 
 **Pipeline.**
 
@@ -115,19 +115,21 @@ The 48 bits are MSB-first; the trailing 0 in the last byte is unused.
 the user-typed master key produces an identical key schedule. DES is
 "really" a 56-bit cipher; the 64-bit presentation is historical.
 
-**Decrypt.** The same schedule produces the same K_1..K_16; decryption
-consumes them in *reverse* order (K_16, K_15, …, K_1). The decrypt spec
-references the same aux names but routes them backwards through the
-rounds — see \`src/ciphers/des-decrypt.ts\`.`,
+**Decrypt.** The same schedule produces the same K_1..K_16; decryption uses
+them in *reverse* order (K_16, K_15, …, K_1). Nothing about the keys changes
+for decryption — only the order in which the rounds consume them.`,
   params: new Map([
-    ["keyAuxName", "Aux key holding the 8-byte master key. Conventionally 'key'."],
+    ["keyAuxName", "The name of the slot holding the 8-byte master key (conventionally 'key')."],
     [
       "outputPrefix",
-      "Prefix for the 16 emitted round-key aux entries. Convention: 'roundKey' → roundKey.0..15.",
+      "The name prefix for the 16 round keys produced. With 'roundKey', they are roundKey.0 through roundKey.15.",
     ],
-    ["pc1", "PC-1 table, 56 entries (FIPS 1-indexed). DES_PC1 in des-constants.ts."],
-    ["pc2", "PC-2 table, 48 entries (FIPS 1-indexed). DES_PC2 in des-constants.ts."],
-    ["shifts", "16-entry array of per-round left-shift amounts (1 or 2). DES_SHIFTS."],
+    [
+      "pc1",
+      "The PC-1 table (56 entries): which key bits to keep and in what order, dropping the 8 parity bits.",
+    ],
+    ["pc2", "The PC-2 table (48 entries): which of the 56 bits form each round key."],
+    ["shifts", "The per-round left-shift amounts (16 entries, each 1 or 2)."],
   ]),
   references: ["FIPS 46-3 §5 (Key Schedule Calculation, Tables PC-1, PC-2)"],
   shapeContract: { input: "any", output: "preserveInput" },

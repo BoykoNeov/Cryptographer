@@ -54,13 +54,13 @@ export const modMul: PortedExecutor = (inputs, _params, _ctx) => {
 
 export const modMulDoc: StepDocumentation = {
   name: "Modular multiply",
-  summary:
-    "Compute (a · b) mod n over big-endian operands. Squaring = wire a and b to the same source. Output is modulus-width.",
+  summary: "Multiplies two numbers and reduces the result modulo n, so it stays within [0, n).",
   detail: `# Modular multiply
 
-Reads factors \`a\`, \`b\` and the modulus \`n\` (port \`modulus\`) as
-big-endian integers and emits \`(a · b) mod n\` on \`output\`, big-endian,
-at the modulus' byte width.
+Multiplies \`a\` by \`b\` and then reduces the result modulo \`n\`, keeping it
+within the range 0 up to (but not including) \`n\`. Modular arithmetic — doing
+everything "clock-face" style within a modulus — is the setting all of RSA's
+math takes place in.
 
 ## Math
 
@@ -68,25 +68,16 @@ at the modulus' byte width.
 output = (a · b) mod n
 \`\`\`
 
-Operand lengths need not match — a short message multiplied against a wider
-accumulator is read by value. The residue is always in \`[0, n)\`, so it
-fits the modulus width; the exponentiation ladder threads a uniform width.
-
 ## Squaring
 
-There is no separate square primitive — to compute \`x² mod n\`, wire BOTH
-\`a\` and \`b\` to the same upstream port. \`x · x mod n\` is the square.
+There is no separate squaring step — to compute \`x² mod n\`, connect both
+\`a\` and \`b\` to the same source, since \`x · x mod n\` is the square.
 
 ## Where it fits
 
-- **RSA square-and-multiply**: each ladder rung's unconditional square
-  (\`result² mod n\`), and the conditional multiply by the message
-  (\`result · m mod n\`) inside \`cond-mod-mul@1\`.
-
-## Errors
-
-- Throws if port \`a\`, \`b\`, or \`modulus\` is unwired.
-- Throws if the modulus is not positive.`,
+- **RSA encryption and decryption** raise a number to a power by repeated
+  squaring and multiplying, all modulo \`n\`. This step is each of those
+  squares and multiplies — the workhorse of the whole operation.`,
   references: [
     "Rivest, Shamir, Adleman 1978 — A Method for Obtaining Digital Signatures and Public-Key Cryptosystems",
     "Knuth, TAOCP Vol. 2 §4.6.3 — Evaluation of powers (binary exponentiation)",

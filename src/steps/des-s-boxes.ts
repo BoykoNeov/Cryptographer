@@ -91,12 +91,7 @@ an affine transform; replacing them with carefully chosen "weak" tables
 Each of the 8 S-boxes is *distinct*. Unlike AES, which uses a single S-box
 applied 16 times in parallel, DES uses 8 different tables so the
 diffusion / confusion budget is spread across the input groups.`,
-  params: new Map([
-    [
-      "sboxes",
-      "8 substitution tables, each a 4×16 array of 4-bit values. DES_SBOXES in des-constants.ts.",
-    ],
-  ]),
+  params: new Map([["sboxes", "The 8 substitution tables, each a 4×16 grid of 4-bit values."]]),
   references: ["FIPS 46-3 Appendix A (Primitive functions for the data encryption algorithm)"],
   shapeContract: { input: "bytes", output: "bytes" },
 };

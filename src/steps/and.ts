@@ -157,13 +157,11 @@ export const and: PortedExecutor = (inputs, params, _ctx) => {
 export const andDoc: StepDocumentation = {
   name: "AND",
   summary:
-    "N-way byte-wise bitwise AND of operand0..operand{N-1}. All operands must share the same length; output carries the conjunction.",
+    "Bitwise AND of two or more equal-length inputs — a bit is 1 only where every input has a 1.",
   detail: `# AND
 
-Universal port-native bitwise-AND primitive. Takes N input ports named
-\`operand0\`, \`operand1\`, …, \`operand{N-1}\` (where N is set by
-\`params.inputCount\`), produces one output port \`output\` carrying
-the byte-wise AND of all operands.
+Combines two or more equal-length inputs bit by bit: an output bit is 1 only
+where **every** input has a 1 in that position, and 0 otherwise.
 
 ## Math
 
@@ -173,53 +171,23 @@ For each byte position \`j\`:
 output[j] = operand0[j] ∧ operand1[j] ∧ … ∧ operand{N-1}[j]
 \`\`\`
 
-AND is commutative and associative, so operand order does not affect
-the result. AND with all-ones is the identity, AND with zero is zero,
-and AND of any value with itself is itself (\`a ∧ a = a\`).
+All inputs must be the same length. AND is commutative and associative, so
+the input order does not matter. A common use is **masking**: ANDing a value
+with a pattern of 1s and 0s keeps the bits under the 1s and zeros out the
+rest.
 
 ## Where it fits
 
-- **SHA-256 Ch(x, y, z) = (x ∧ y) ⊕ (¬x ∧ z)** (FIPS 180-4 §4.1.2):
-  one 2-way \`and@1\` on \`(x, y)\`, one \`not@1\` on \`x\`, one 2-way
-  \`and@1\` on \`(¬x, z)\`, then \`xor@1\` to combine. The "choice"
-  function selects bit-by-bit from \`y\` when \`x\` is 1 and from \`z\`
-  when \`x\` is 0.
-- **SHA-256 Maj(x, y, z) = (x ∧ y) ⊕ (x ∧ z) ⊕ (y ∧ z)** (FIPS
-  180-4 §4.1.2): three 2-way \`and@1\` leaves and one 3-way \`xor@1\`.
-  The XOR-form of majority avoids needing \`or@1\` — picked
-  intentionally so SHA-256 ships with two new primitives, not three.
-- **Bit masking generally**: any spec that needs to zero out bit
-  ranges (e.g., DES key parity-bit strip, future SHA-3 χ step) does so
-  with an \`and@1\` against a literal mask wired in from \`aux-load\`
-  or a constant primitive.
-- **Identity passthrough**: N=1 is the identity, useful as a wiring
-  placeholder during incremental spec authoring.
-
-## Why not widen \`generic.aux-xor@1\` or similar
-
-The closest cousin \`generic.aux-xor@1\` reads one operand from the
-aux map by name — that aux read is implicit and not wireable. \`and@1\`
-ships under the port-native contract where every operand is an
-explicit input port. There is no existing step type that does AND
-under either contract, so no widening question arises.
-
-## Errors
-
-- Throws if \`params.inputCount\` is missing, not an integer, or < 1.
-- Throws if any expected operand port is missing on the input map.
-- Throws if operands disagree on length — coercion is an editor /
-  edge-projection concern per the universal-port plan's Q2, NOT a
-  step-level concern.
-
-## Phase status
-
-Shipped in Slice 2.3 of the universal-port-dataflow plan, alongside
-\`not@1\`. Not yet wired into any cipher spec — Slice 2.6's SHA-256
-build is the first consumer (Ch and Maj).`,
+- **Bitwise Boolean formulas** — SHA-256's \`Ch\` and \`Maj\` helpers are
+  built from AND, NOT and XOR. \`Ch(x, y, z) = (x ∧ y) ⊕ (¬x ∧ z)\` uses \`x\`
+  to choose, bit by bit, between \`y\` and \`z\`; \`Maj(x, y, z)\` takes the
+  majority vote of the three inputs at each bit.
+- **Masking off bits** — ANDing against a mask keeps some bits and clears
+  others (for example, stripping parity bits out of a key).`,
   params: new Map([
     [
       "inputCount",
-      "Number of input operand ports. Positive integer (≥ 1). N=1 is identity; N=2 is the SHA-256 Ch/Maj case; higher N is unusual but algebraically valid.",
+      "How many inputs to combine. A whole number, 1 or more (2 is the usual case). All inputs must be the same length.",
     ],
   ]),
   references: ["FIPS 180-4 §4.1.2 (SHA-256 helper functions Ch and Maj)"],
