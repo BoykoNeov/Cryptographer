@@ -143,7 +143,8 @@ export const toggleIncludeSingleSources = (): void => {
   });
 };
 
-// ─── Auto-coloring fanout threshold (2026-05-30; per-spec 2026-07-10) ─────
+// ─── Auto-coloring fanout threshold (2026-05-30; per-spec 2026-07-10;
+//     universalised 2026-07-11) ──────────────────────────────────────────────
 //
 // A source is auto-coloured when its fanout (outgoing-edge count, replicas
 // rolled up to the canonical source) is `>=` this threshold. The "color by
@@ -155,20 +156,21 @@ export const toggleIncludeSingleSources = (): void => {
 // user split them into two independent counters so the two channels' cutoffs
 // move separately.
 //
-// PER-SPEC with a per-spec shipped DEFAULT (2026-07-10). Most built-ins
-// default to 3 (only the biggest fan-outs auto-colour); SHA-256 and RSA
-// default to 1 (colour EVERY source) — SHA-256 because it saturates the
-// 8-colour palette, RSA because the user wants its bigint dataflow fully
-// coded on first open. The persisted map holds ONLY the
-// specs whose value DIVERGES from that per-spec default (drop-on-match),
-// mirroring `view-source-strokes.ts`'s enable map — so "reset" is "forget the
-// override" and a later default change is never shadowed by a stale entry.
+// PER-SPEC, but the shipped default is now UNIVERSAL: **1 for every spec**
+// (user-decided 2026-07-11 — "colour by source on by default and ≥ 1 for
+// Blowfish and all future ciphers and hashes"). Colour every source on first
+// open, present and future. Before 2026-07-11 most built-ins defaulted to 3
+// and only SHA-256 + RSA to 1; that prefix distinction is gone. The persisted
+// map still holds ONLY specs whose value DIVERGES from the default
+// (drop-on-match), mirroring `view-source-strokes.ts`'s enable map — so
+// "reset" is "forget the override" and a later default change is never
+// shadowed by a stale entry.
 //
-// Range: min 0, per-spec default (see below), max 99.
-//   - 0 (or 1) → colour EVERY non-endpoint source: every edge gets a colour,
-//     including single-fanout sources. This is what "all edges are coloured"
-//     means (and is SHA-256's shipped default).
-//   - 3 (non-SHA default) → only sources fanning out to ≥ 3 consumers.
+// Range: min 0, default 1, max 99.
+//   - 0 or 1 → colour EVERY non-endpoint source: every edge gets a colour,
+//     including single-fanout sources (the shipped default).
+//   - 3+ → only sources fanning out to ≥ that many consumers (raise it to
+//     restrict colouring to the biggest fan-outs).
 //
 // Persisted so the user's pick sticks across reloads. NOT in `LayoutSpec` —
 // a global viewer preference, not a document fact, so it never travels via
@@ -176,29 +178,19 @@ export const toggleIncludeSingleSources = (): void => {
 
 const COLOR_THRESHOLD_STORAGE_KEY = "cryptographer.viewSourceColorThreshold";
 
-export const DEFAULT_COLOR_THRESHOLD = 3;
+export const DEFAULT_COLOR_THRESHOLD = 1;
 export const COLOR_THRESHOLD_MIN = 0;
 export const COLOR_THRESHOLD_MAX = 99;
 
 /**
- * The spec families that ship colouring EVERY source (threshold 1): SHA-256
- * (saturates the 8-colour palette so every source wants a colour) and RSA
- * (user-decided 2026-07-10 — the bigint dataflow reads best fully colour-
- * coded on first open). Matched by prefix so a future step-type `@N` bump
- * (`sha-256@2`) keeps the default, and `"rsa"` covers BOTH the `rsa@1`
- * (encrypt) and `rsa-decrypt@1` specs. Mirrors `view-source-strokes.ts`'s
- * `STROKE_ON_BY_DEFAULT_PREFIXES`.
+ * Shipped per-spec default threshold — now UNIVERSAL: `DEFAULT_COLOR_THRESHOLD`
+ * (1) for every spec, so every source is auto-coloured on first open. Kept as a
+ * per-spec function (rather than a bare constant) so callers stay stable and a
+ * future per-family divergence, if one is ever wanted again, has a single seam
+ * to reintroduce it. Shared by the reactive read and the drop-on-match
+ * persistence discipline.
  */
-const COLOR_ALL_BY_DEFAULT_PREFIXES = ["sha-256", "rsa"] as const;
-
-/**
- * Shipped per-spec default threshold: 1 for the fully-coded families above
- * (colour every source), else `DEFAULT_COLOR_THRESHOLD` (3). The single source
- * of truth for "what does this spec do before the user touches the knob,"
- * shared by the reactive read and the drop-on-match persistence discipline.
- */
-export const defaultColorThresholdFor = (specId: string): number =>
-  COLOR_ALL_BY_DEFAULT_PREFIXES.some((p) => specId.startsWith(p)) ? 1 : DEFAULT_COLOR_THRESHOLD;
+export const defaultColorThresholdFor = (_specId: string): number => DEFAULT_COLOR_THRESHOLD;
 
 /** Clamp to [MIN, MAX] and round; non-finite falls back to `fallback`. */
 const clampColorThreshold = (value: number, fallback: number): number => {

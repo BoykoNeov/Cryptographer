@@ -5275,17 +5275,18 @@ export const GraphView = () => {
               />
               color by source
             </label>
-            {/* Coloring fanout threshold (2026-05-30; per-spec 2026-07-10) —
-                the "color by source" knob, right after its own checkbox. A
-                source auto-colours when its fanout is ≥ this value. Min 0
-                (colour every source), max 99; the per-spec DEFAULT is 1 for
-                SHA-256 (all sources) and ${DEFAULT_COLOR_THRESHOLD} elsewhere.
-                `≥` glyph matches the inclusive semantics (vs the replication
-                threshold's strict `>`). Disabled when the master coloring
-                toggle is OFF so the knob's no-op state is visible at a glance. */}
+            {/* Coloring fanout threshold (2026-05-30; per-spec 2026-07-10;
+                universalised 2026-07-11) — the "color by source" knob, right
+                after its own checkbox. A source auto-colours when its fanout is
+                ≥ this value. Min 0 (colour every source), max 99; the DEFAULT is
+                now ${DEFAULT_COLOR_THRESHOLD} for EVERY spec (colour every
+                source on first open). `≥` glyph matches the inclusive semantics
+                (vs the replication threshold's strict `>`). Disabled when the
+                master coloring toggle is OFF so the knob's no-op state is
+                visible at a glance. */}
             <label
               class="graph-replicate-threshold"
-              title={`Sources fanning out to at least this many consumers get an auto colour (SHA-256 default 1, others ${DEFAULT_COLOR_THRESHOLD}). 0 colours every edge; raise it to colour only the biggest fan-outs.`}
+              title={`Sources fanning out to at least this many consumers get an auto colour (default ${DEFAULT_COLOR_THRESHOLD} for every spec — colours every edge). Raise it to colour only the biggest fan-outs.`}
             >
               <span class="graph-replicate-threshold-label">&ge;</span>
               <input
@@ -5309,11 +5310,11 @@ export const GraphView = () => {
                 get a distinct DASH pattern (× line-cap × weight × phase) so
                 sources stay tellable-apart even when their colours collide —
                 which they do on dense specs (more sources than the 8-colour
-                palette). PER-SPEC + SHA-256 ships ON, every other built-in OFF
-                (see `view-source-strokes.ts`); the same per-source panel below
-                hosts the dash dropdown next to the colour swatch. Owns its OWN
-                fanout threshold (the next control), independent of the colour
-                threshold since 2026-07-10. */}
+                palette). PER-SPEC, and as of 2026-07-11 ships ON for EVERY spec
+                (previously OFF-except-SHA-256/RSA; see `view-source-strokes.ts`);
+                the same per-source panel below hosts the dash dropdown next to
+                the colour swatch. Owns its OWN fanout threshold (the next
+                control), independent of the colour threshold since 2026-07-10. */}
             <label
               class="graph-replicate-toggle"
               title="Give each source's outgoing edges a distinct dash pattern (a second channel alongside colour)"
@@ -5326,14 +5327,15 @@ export const GraphView = () => {
               />
               style by source
             </label>
-            {/* Styling fanout threshold (2026-07-10) — the "style by source"
-                knob, INDEPENDENT of the colour threshold above. A source
-                auto-styles when its fanout is ≥ this value. Same range/glyph as
-                the colour knob; per-spec DEFAULT 1 for SHA-256, ${DEFAULT_STROKE_THRESHOLD}
-                elsewhere. Disabled when the master styling toggle is OFF. */}
+            {/* Styling fanout threshold (2026-07-10; universalised 2026-07-11)
+                — the "style by source" knob, INDEPENDENT of the colour
+                threshold above. A source auto-styles when its fanout is ≥ this
+                value. Same range/glyph as the colour knob; DEFAULT now
+                ${DEFAULT_STROKE_THRESHOLD} for EVERY spec. Disabled when the
+                master styling toggle is OFF. */}
             <label
               class="graph-replicate-threshold"
-              title={`Sources fanning out to at least this many consumers get an auto dash style (SHA-256 default 1, others ${DEFAULT_STROKE_THRESHOLD}). Independent of the colour threshold.`}
+              title={`Sources fanning out to at least this many consumers get an auto dash style (default ${DEFAULT_STROKE_THRESHOLD} for every spec). Independent of the colour threshold.`}
             >
               <span class="graph-replicate-threshold-label">&ge;</span>
               <input

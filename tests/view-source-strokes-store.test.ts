@@ -9,20 +9,22 @@
  * `docs/plans/toasty-zooming-harp.md`, chunks A3a + A3b).
  *
  * Unlike the colours store (one GLOBAL bool, ships ON), the stroke toggle is
- * keyed by `spec.id` because its shipped default differs per built-in: OFF
- * everywhere EXCEPT SHA-256, which ships ON (user-decided 2026-07-09). The
- * store owns no manual-override map (those live on `LayoutSpec.strokeStyles`,
- * chunk A2) but DOES own its own fanout threshold as of 2026-07-10 (split from
- * the colour threshold — a per-spec number map with the same discipline). So
- * the properties to pin are:
+ * keyed by `spec.id`. Its shipped default is now UNIVERSAL — ON for every spec
+ * (user-decided 2026-07-11; before that, OFF everywhere except SHA-256 /
+ * 2026-07-09 and RSA / 2026-07-10). The per-spec keying is retained so an
+ * explicit per-spec OFF still persists independently. The store owns no
+ * manual-override map (those live on `LayoutSpec.strokeStyles`, chunk A2) but
+ * DOES own its own fanout threshold as of 2026-07-10 (split from the colour
+ * threshold — a per-spec number map with the same discipline). So the
+ * properties to pin are:
  *
- *   1. Per-spec default: SHA-256 ON, every other spec OFF.
+ *   1. Per-spec default: ON for every spec (universal).
  *   2. Explicit overrides persist and win over the default.
  *   3. Drop-on-match: setting a spec back to its default removes the entry,
  *      so the persisted map stays minimal (and a future default change is
  *      never shadowed by a stale entry).
- *   4. Threshold: per-spec default (SHA-256 → 1, else 3), clamped, with the
- *      same drop-on-match discipline as the enable map.
+ *   4. Threshold: per-spec default (1, universal), clamped, with the same
+ *      drop-on-match discipline as the enable map.
  */
 
 import {
@@ -73,39 +75,42 @@ beforeEach(() => {
 });
 
 describe("source-stroke per-spec master toggle", () => {
-  it("defaultStrokeStylingFor: ON for SHA-256 + RSA (any @N / both directions), OFF for every other spec", () => {
+  it("defaultStrokeStylingFor: ON for EVERY spec (universal default, 2026-07-11)", () => {
+    // Pre-2026-07-11 only SHA-256 + RSA shipped ON; the user then extended
+    // styling-on to every cipher and hash. No spec ships OFF anymore.
     expect(defaultStrokeStylingFor("sha-256@1")).toBe(true);
     expect(defaultStrokeStylingFor("sha-256@2")).toBe(true);
     expect(defaultStrokeStylingFor("rsa@1")).toBe(true);
     expect(defaultStrokeStylingFor("rsa-decrypt@1")).toBe(true);
-    expect(defaultStrokeStylingFor("aes-128@1")).toBe(false);
-    expect(defaultStrokeStylingFor("des@1")).toBe(false);
+    expect(defaultStrokeStylingFor("aes-128@1")).toBe(true);
+    expect(defaultStrokeStylingFor("des@1")).toBe(true);
+    expect(defaultStrokeStylingFor("blowfish@1")).toBe(true);
   });
 
-  it("reactive read falls back to the per-spec default when no override exists", () => {
-    // The reason A3b ships OFF-except-SHA-256: SHA-256 saturates the 8-colour
-    // palette so the dash channel earns its keep on first open; the others
-    // have few enough sources that colour alone suffices.
+  it("reactive read falls back to the per-spec default (ON) when no override exists", () => {
+    // Every spec now ships styled — Blowfish and all future ciphers/hashes
+    // included (user-decided 2026-07-11).
     expect(useSourceStrokeStylingEnabled(() => SHA)()).toBe(true);
-    expect(useSourceStrokeStylingEnabled(() => AES)()).toBe(false);
+    expect(useSourceStrokeStylingEnabled(() => AES)()).toBe(true);
   });
 
   it("an explicit override wins over the default and persists per-spec", () => {
-    setSourceStrokeStylingEnabled(AES, true);
-    expect(useSourceStrokeStylingEnabled(() => AES)()).toBe(true);
-    // SHA-256 (untouched) still reads its own default.
+    // Default is now ON for every spec, so the divergent value is `false`.
+    setSourceStrokeStylingEnabled(AES, false);
+    expect(useSourceStrokeStylingEnabled(() => AES)()).toBe(false);
+    // SHA-256 (untouched) still reads its own default (ON).
     expect(useSourceStrokeStylingEnabled(() => SHA)()).toBe(true);
-    expect(readMap()).toEqual({ [AES]: true });
+    expect(readMap()).toEqual({ [AES]: false });
   });
 
   it("setting a spec back to its shipped default DROPS the entry (drop-on-match)", () => {
-    // AES default is OFF: turning it ON writes an entry, turning it back OFF
-    // (== default) removes it, so the persisted map returns to empty.
-    setSourceStrokeStylingEnabled(AES, true);
-    expect(readMap()).toEqual({ [AES]: true });
+    // Every spec now defaults ON: turning one OFF writes an entry, turning it
+    // back ON (== default) removes it, so the persisted map returns to empty.
     setSourceStrokeStylingEnabled(AES, false);
+    expect(readMap()).toEqual({ [AES]: false });
+    setSourceStrokeStylingEnabled(AES, true);
     expect(readMap()).toEqual({});
-    expect(useSourceStrokeStylingEnabled(() => AES)()).toBe(false);
+    expect(useSourceStrokeStylingEnabled(() => AES)()).toBe(true);
   });
 
   it("SHA-256 turned OFF writes an explicit false (diverges from its ON default)", () => {
@@ -118,16 +123,16 @@ describe("source-stroke per-spec master toggle", () => {
   });
 
   it("toggle flips relative to the CURRENT effective value (default-aware)", () => {
-    // AES starts OFF → toggle → ON (entry written).
-    toggleSourceStrokeStylingEnabled(AES);
-    expect(useSourceStrokeStylingEnabled(() => AES)()).toBe(true);
-    expect(readMap()).toEqual({ [AES]: true });
-    // Toggle again → back to default OFF → entry dropped.
+    // AES starts ON (universal default) → toggle → OFF (explicit false written).
     toggleSourceStrokeStylingEnabled(AES);
     expect(useSourceStrokeStylingEnabled(() => AES)()).toBe(false);
+    expect(readMap()).toEqual({ [AES]: false });
+    // Toggle again → back to default ON → entry dropped.
+    toggleSourceStrokeStylingEnabled(AES);
+    expect(useSourceStrokeStylingEnabled(() => AES)()).toBe(true);
     expect(readMap()).toEqual({});
 
-    // SHA-256 starts ON → toggle → OFF (explicit false written).
+    // SHA-256 also starts ON → toggle → OFF (explicit false written).
     toggleSourceStrokeStylingEnabled(SHA);
     expect(useSourceStrokeStylingEnabled(() => SHA)()).toBe(false);
     expect(readMap()).toEqual({ [SHA]: false });
@@ -135,13 +140,14 @@ describe("source-stroke per-spec master toggle", () => {
 });
 
 describe("source-stroke per-spec fanout threshold", () => {
-  it("defaultStrokeThresholdFor: 1 for SHA-256 + RSA (any @N / both directions), else the non-styled default", () => {
+  it("defaultStrokeThresholdFor: 1 (universal default) for every spec", () => {
     expect(defaultStrokeThresholdFor("sha-256@1")).toBe(1);
     expect(defaultStrokeThresholdFor("sha-256@2")).toBe(1);
     expect(defaultStrokeThresholdFor("rsa@1")).toBe(1);
     expect(defaultStrokeThresholdFor("rsa-decrypt@1")).toBe(1);
     expect(defaultStrokeThresholdFor("aes-128@1")).toBe(DEFAULT_STROKE_THRESHOLD);
     expect(defaultStrokeThresholdFor("des@1")).toBe(DEFAULT_STROKE_THRESHOLD);
+    expect(DEFAULT_STROKE_THRESHOLD).toBe(1);
   });
 
   it("reactive read falls back to the per-spec default when no override exists", () => {
@@ -161,7 +167,7 @@ describe("source-stroke per-spec fanout threshold", () => {
     setStrokeThreshold(AES, 999);
     expect(useStrokeThreshold(() => AES)()).toBe(STROKE_THRESHOLD_MAX);
     setStrokeThreshold(AES, Number.NaN);
-    // NaN → spec default (3 for AES) → drop-on-match → back to default.
+    // NaN → spec default (1, universal) → drop-on-match → back to default.
     expect(useStrokeThreshold(() => AES)()).toBe(DEFAULT_STROKE_THRESHOLD);
     expect(readThresholdMap()).toEqual({});
   });

@@ -72,10 +72,12 @@ import { TraceTimeline } from "./components/TraceTimeline";
 import "./narration/index";
 import { clearDirty, setAutoRerun, setDirty, useAutoRerun, useDirty } from "./stores/auto-rerun";
 import {
+  ASYMMETRIC_DESCRIPTIONS,
   ASYMMETRIC_LABELS,
   ASYMMETRIC_OPTIONS,
   type Algorithm,
   type Asymmetric,
+  CIPHER_DESCRIPTIONS,
   CIPHER_LABELS,
   CIPHER_OPTIONS,
   type Category,
@@ -87,9 +89,11 @@ import {
   DEFAULT_PT_BYTES_BY_ASYMMETRIC,
   DEFAULT_PT_BYTES_BY_CIPHER,
   DEFAULT_PT_BYTES_BY_HASH,
+  HASH_DESCRIPTIONS,
   HASH_LABELS,
   HASH_OPTIONS,
   type Hash,
+  describeAlgorithm,
   isAesCipher,
   isAsymmetric,
   isCipher,
@@ -1158,6 +1162,15 @@ export const App = () => {
               })`
             : spec().name}
         </span>
+        {/* One-liner describing the active primitive, right after the cipher
+            name next to "Cryptographer" (2026-07-11). Shown regardless of
+            `isCustom()` — the description is about the ALGORITHM FAMILY, which
+            doesn't change when the user diverges the spec, so blanking it on
+            edit would drop useful context. Same text the selector caption
+            shows, via the shared `describeAlgorithm` source of truth. */}
+        <span class="cipher-desc muted small" title={describeAlgorithm(algorithm())}>
+          {describeAlgorithm(algorithm())}
+        </span>
         <span class="muted small kbd-hint">←/→ step · Home/End jump · PgUp/PgDn round</span>
       </header>
 
@@ -1253,7 +1266,12 @@ export const App = () => {
               <select
                 value={cipher()}
                 onChange={(e) => changeCipher(e.currentTarget.value as Cipher)}
-                title="AES variant — 128/192/256 differ in key length and round count"
+                // Tooltip reflects the CURRENT selection's one-liner (2026-07-11)
+                // so hovering the closed dropdown surfaces "what is this cipher";
+                // each <option> carries its own via `title` below so the user can
+                // compare while the list is open. The always-visible copy lives
+                // in the header caption.
+                title={CIPHER_DESCRIPTIONS[cipher()]}
               >
                 {/* The selected option's label flips to "Custom (was AES-128)"
                   when the live spec has diverged from canonical. Picking the
@@ -1263,7 +1281,7 @@ export const App = () => {
                   the cipher-switch semantics. */}
                 <For each={CIPHER_OPTIONS}>
                   {(c) => (
-                    <option value={c}>
+                    <option value={c} title={CIPHER_DESCRIPTIONS[c]}>
                       {c === cipher() && isCustom()
                         ? `Custom (was ${CIPHER_LABELS[c]})`
                         : CIPHER_LABELS[c]}
@@ -1307,9 +1325,15 @@ export const App = () => {
             <select
               value={hash()}
               onChange={(e) => changeHash(e.currentTarget.value as Hash)}
-              title="Cryptographic hash function — produces a fixed-length digest from a message. Today: SHA-256 (FIPS 180-4)."
+              title={HASH_DESCRIPTIONS[hash()]}
             >
-              <For each={HASH_OPTIONS}>{(h) => <option value={h}>{HASH_LABELS[h]}</option>}</For>
+              <For each={HASH_OPTIONS}>
+                {(h) => (
+                  <option value={h} title={HASH_DESCRIPTIONS[h]}>
+                    {HASH_LABELS[h]}
+                  </option>
+                )}
+              </For>
             </select>
           </label>
         </Show>
@@ -1329,11 +1353,11 @@ export const App = () => {
                   // variant switch rebuilds the spec; suppress + clear.
                   withBoundaryReset(() => setAsymmetric(e.currentTarget.value as Asymmetric))
                 }
-                title="Public-key algorithm. Today: textbook RSA — key generation (p, q, e → n, φ, d) plus square-and-multiply encrypt/decrypt."
+                title={ASYMMETRIC_DESCRIPTIONS[asymmetric()]}
               >
                 <For each={ASYMMETRIC_OPTIONS}>
                   {(a) => (
-                    <option value={a}>
+                    <option value={a} title={ASYMMETRIC_DESCRIPTIONS[a]}>
                       {a === asymmetric() && isCustom()
                         ? `Custom (was ${ASYMMETRIC_LABELS[a]})`
                         : ASYMMETRIC_LABELS[a]}

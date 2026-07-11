@@ -252,7 +252,10 @@ describe("App — Save/Load (Slice 5)", () => {
     const { container, unmount } = render(() => <App />);
 
     // Pick AES-192 + ASCII format so we have something distinct from defaults.
-    const cipherSel = container.querySelector('select[title*="AES variant"]') as HTMLSelectElement;
+    // Query by the stable wrapper class, not the select's `title` — the title
+    // now reflects the current cipher's one-liner (2026-07-11) rather than a
+    // fixed "AES variant …" string.
+    const cipherSel = container.querySelector(".cipher-select-row select") as HTMLSelectElement;
     fireEvent.change(cipherSel, { target: { value: "aes-192" } });
     // Format toggle: ASCII.
     const asciiBtn = Array.from(container.querySelectorAll(".format-toggle button")).find(

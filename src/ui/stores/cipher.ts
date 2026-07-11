@@ -253,6 +253,60 @@ export const CIPHER_LABELS: Record<Cipher, string> = {
 
 export const CIPHER_OPTIONS = ALL_CIPHERS;
 
+// ─── One-liner descriptions (2026-07-11) ─────────────────────────────────────
+//
+// A short, plain-language "what is this primitive" line per algorithm, surfaced
+// in TWO places by the UI: the selector caption (below the dropdown + as each
+// `<option>`'s `title` tooltip) and the header, right after the cipher name
+// next to "Cryptographer". Family variants (AES-128/192/256, the two Speck byte
+// orders, Serpent-128/192/256) get their own line so the key-length / byte-order
+// distinction is visible at a glance. Kept terse (~one clause of history + one
+// of structure) so they fit on a single line without wrapping the header.
+
+/** Per-cipher one-liner. Keep in sync with `ALL_CIPHERS` / `CIPHER_LABELS`. */
+export const CIPHER_DESCRIPTIONS: Record<Cipher, string> = {
+  "aes-128": "AES (Rijndael, FIPS-197) — 128-bit key, 10 rounds; SPN over a 16-byte block.",
+  "aes-192": "AES (Rijndael, FIPS-197) — 192-bit key, 12 rounds; SPN over a 16-byte block.",
+  "aes-256": "AES (Rijndael, FIPS-197) — 256-bit key, 14 rounds; SPN over a 16-byte block.",
+  "speck-32-64-be":
+    "Speck 32/64 (NSA, 2013) — lightweight ARX cipher, 22 rounds; big-endian (paper) byte order.",
+  "speck-32-64-le":
+    "Speck 32/64 (NSA, 2013) — lightweight ARX cipher, 22 rounds; little-endian (NSA ref) byte order.",
+  "serpent-128":
+    "Serpent (Anderson–Biham–Knudsen) — AES finalist; 32-round bitsliced SPN, 128-bit key.",
+  "serpent-192":
+    "Serpent (Anderson–Biham–Knudsen) — AES finalist; 32-round bitsliced SPN, 192-bit key.",
+  "serpent-256":
+    "Serpent (Anderson–Biham–Knudsen) — AES finalist; 32-round bitsliced SPN, 256-bit key.",
+  des: "DES (FIPS 46-3, 1977) — 16-round Feistel; 64-bit block, 56-bit key. Foundational, now insecure.",
+  blowfish:
+    "Blowfish (Schneier, 1993) — 16-round Feistel; 64-bit block, key-derived S-boxes (8-byte key here).",
+};
+
+/** Per-hash one-liner. Mirrors `HASH_LABELS`. */
+export const HASH_DESCRIPTIONS: Record<Hash, string> = {
+  "sha-256":
+    "SHA-256 (FIPS 180-4) — Merkle–Damgård hash; 256-bit digest from 512-bit blocks over 64 rounds.",
+};
+
+/** Per-asymmetric one-liner. Mirrors `ASYMMETRIC_LABELS`. */
+export const ASYMMETRIC_DESCRIPTIONS: Record<Asymmetric, string> = {
+  rsa: "Textbook RSA — public-key: key-gen (p, q, e → n, φ, d) + modular exponentiation. No padding.",
+};
+
+/**
+ * Resolve the one-liner for any algorithm, routing by family. Used by the
+ * header caption and the selector caption so the two surfaces stay in sync
+ * (same single source of truth, like `CIPHER_LABELS` drives both the dropdown
+ * and the "Custom (was …)" indicator).
+ */
+export const describeAlgorithm = (a: Algorithm): string =>
+  isHash(a)
+    ? HASH_DESCRIPTIONS[a]
+    : isAsymmetric(a)
+      ? ASYMMETRIC_DESCRIPTIONS[a]
+      : CIPHER_DESCRIPTIONS[a];
+
 /**
  * Canonical default key per cipher — FIPS-197 §A.1 / §A.2 / §A.3 expansion
  * examples. These match the keys used by the NIST AES Core PDFs that drive

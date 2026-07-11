@@ -17,12 +17,11 @@
  * entry via `setSourceStroke`, then assert the rendered channels. Manual
  * overrides win over auto (mirrors the colours manual-override test).
  *
- * The master toggle is PER-SPEC and ships OFF for AES (only SHA-256 ships
- * ON — A3b, 2026-07-09). These tests all use AES-128, so every test that
- * expects styling MUST enable it first
- * (`setSourceStrokeStylingEnabled(aes128EcbSpec.id, true)`) — otherwise it
- * asserts on the un-styled fall-through and passes for the wrong reason
- * (the `jsdom_replication_off_default` gotcha class).
+ * The master toggle is PER-SPEC. As of 2026-07-11 it ships ON for EVERY spec
+ * (previously OFF-except-SHA-256/RSA). Most tests below still call
+ * `setSourceStrokeStylingEnabled(aes128EcbSpec.id, true)` for explicitness;
+ * a test that wants the UN-styled fall-through must now explicitly turn the
+ * channel OFF (the inverse of the pre-2026-07-11 gotcha).
  */
 
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
@@ -197,7 +196,9 @@ describe("GraphView — source-stroke coding wire-up", () => {
     // channel without discarding the saved override.
     seedAes128Ecb();
     setSourceStroke(aes128EcbSpec.id, "key-schedule", "short-dash-heavy");
-    // Toggle left at its default (OFF).
+    // Every spec now defaults ON, so explicitly turn the channel OFF to
+    // exercise the "un-styled fall-through with a saved override" invariant.
+    setSourceStrokeStylingEnabled(aes128EcbSpec.id, false);
     const { container } = render(() => <GraphView />);
 
     expect(collectInlineProp(container, "stroke-dasharray")).toHaveLength(0);
@@ -226,11 +227,12 @@ describe("GraphView — source-stroke coding wire-up", () => {
 });
 
 /**
- * A3b (2026-07-09): the per-source panel dropdown + the per-spec default
- * (SHA-256 ships ON, every other built-in OFF). These pin the NEW surface —
- * the picker's presence/options/disabled-state and that picking an option
- * drives the rendered dash — plus the headline behaviour that SHA-256 opens
- * pre-styled with no explicit enable.
+ * A3b (2026-07-09): the per-source panel dropdown + the per-spec default.
+ * As of 2026-07-11 every spec ships stroke styling ON (previously
+ * OFF-except-SHA-256/RSA). These pin the NEW surface — the picker's
+ * presence/options/disabled-state and that picking an option drives the
+ * rendered dash — plus that a fresh spec opens pre-styled with no explicit
+ * enable, and that an explicit OFF disables the picker.
  */
 describe("GraphView — A3b source-stroke picker + per-spec default", () => {
   beforeEach(resetAll);
@@ -240,9 +242,9 @@ describe("GraphView — A3b source-stroke picker + per-spec default", () => {
   });
 
   it("SHA-256 ships stroke styling ON by default: ≥1 edge is dashed with NO explicit enable", () => {
-    // The whole point of OFF-except-SHA-256: SHA-256 saturates the 8-colour
-    // palette, so it opens with the orthogonal dash channel already on. We do
-    // NOT call setSourceStrokeStylingEnabled — the per-spec default drives it.
+    // Every spec now opens with the orthogonal dash channel on (SHA-256
+    // especially benefits — it saturates the 8-colour palette). We do NOT
+    // call setSourceStrokeStylingEnabled — the per-spec default drives it.
     seedSha256();
     const { container } = render(() => <GraphView />);
 
@@ -250,12 +252,14 @@ describe("GraphView — A3b source-stroke picker + per-spec default", () => {
     expect(dashes.length).toBeGreaterThan(0);
   });
 
-  it("AES ships stroke styling OFF by default: NO edge is dashed with NO explicit enable", () => {
-    // The other side of the per-spec default — AES stays un-dashed on open.
+  it("AES ships stroke styling ON by default (universal, 2026-07-11): ≥1 edge is dashed with NO explicit enable", () => {
+    // Post-2026-07-11 every spec — AES included — opens pre-styled. With the
+    // default threshold 1, indices 1+ walk the catalogue, so at least one edge
+    // carries an inline dash without any explicit enable.
     seedAes128Ecb();
     const { container } = render(() => <GraphView />);
 
-    expect(collectInlineProp(container, "stroke-dasharray")).toHaveLength(0);
+    expect(collectInlineProp(container, "stroke-dasharray").length).toBeGreaterThan(0);
   });
 
   it("the panel renders a dash-style dropdown per source, with an 'auto' option plus every catalogue entry", () => {
@@ -279,10 +283,12 @@ describe("GraphView — A3b source-stroke picker + per-spec default", () => {
   });
 
   it("the dropdown is DISABLED when the stroke channel is off (panel opened via colours)", () => {
-    // Colours ON (default), strokes OFF (AES default). The panel is visible
+    // Colours ON (default), strokes explicitly OFF. The panel is visible
     // because colouring is on; the dash dropdown is present-but-disabled so
-    // it advertises the channel without acting.
+    // it advertises the channel without acting. (Strokes now default ON for
+    // every spec, so we turn them off explicitly to reach this state.)
     seedAes128Ecb();
+    setSourceStrokeStylingEnabled(aes128EcbSpec.id, false);
     setColorsPanelOpen(aes128EcbSpec.id, true);
     const { container } = render(() => <GraphView />);
 

@@ -95,6 +95,18 @@ h1 {
   font-size: 13px;
 }
 
+/* One-liner describing the active primitive, right after the cipher name
+   (2026-07-11). The header is a single-line baseline flex row, so let this
+   shrink and truncate with an ellipsis rather than overflow / wrap on narrow
+   viewports; the full text stays reachable via the element's `title`. */
+.cipher-desc {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* When the live spec has diverged from canonical, .cipher-name renders
    "Custom (was AES-128)" instead of the canonical name, and the App
    applies .is-custom via Solid's classList binding. Lift the colour out

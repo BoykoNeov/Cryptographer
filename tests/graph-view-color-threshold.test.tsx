@@ -8,7 +8,8 @@
  * "color by source" checkbox.
  *
  * Verifies:
- *   1. The input renders with the default (DEFAULT_COLOR_THRESHOLD = 3).
+ *   1. The input renders with the default (DEFAULT_COLOR_THRESHOLD = 1,
+ *      universal as of 2026-07-11 — colour every source on first open).
  *   2. The input is `disabled` when the master "color by source" toggle is
  *      OFF (the knob has no effect, shown at a glance).
  *   3. Enabled when the master toggle is ON.
@@ -139,10 +140,11 @@ describe("GraphView — source-coloring fanout threshold input", () => {
     expect(useColorThreshold(() => useSpec()().id)()).toBe(DEFAULT_COLOR_THRESHOLD);
   });
 
-  it("lowering the threshold to 0 colors MORE edges than the default", () => {
-    // Empirical end-to-end check: at the default (3) only key-expansion
-    // (fanout 11) auto-colors; at 0 every non-endpoint source colors, so
-    // the count of inline-stroked edges strictly increases.
+  it("raising the threshold colors FEWER edges than the default", () => {
+    // Empirical end-to-end check: at the universal default (1) every
+    // non-endpoint source auto-colors; raising it to 5 restricts colouring to
+    // the biggest fan-outs (key-expansion, fanout 11), so the count of
+    // inline-stroked edges strictly decreases.
     seedAes128Trace();
     const { container } = render(() => <GraphView />);
     const countColored = (): number => {
@@ -156,9 +158,9 @@ describe("GraphView — source-coloring fanout threshold input", () => {
     input.value = String(DEFAULT_COLOR_THRESHOLD);
     fireEvent.input(input);
     const atDefault = countColored();
-    input.value = "0";
+    input.value = "5";
     fireEvent.input(input);
-    const atZero = countColored();
-    expect(atZero).toBeGreaterThan(atDefault);
+    const atHigh = countColored();
+    expect(atHigh).toBeLessThan(atDefault);
   });
 });

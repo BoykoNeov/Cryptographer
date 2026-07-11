@@ -42,6 +42,10 @@ import {
   setSourceColorOverride,
   setSourceColoringEnabled,
 } from "@/ui/stores/view-source-colors";
+import {
+  __resetSourceStrokesForTests,
+  setSourceStrokeStylingEnabled,
+} from "@/ui/stores/view-source-strokes";
 import { __resetValueInspectorForTests } from "@/ui/stores/view-value-inspector";
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -72,6 +76,7 @@ const resetAll = (): void => {
   __resetLayoutsForTests();
   __resetValueInspectorForTests();
   __resetSourceColorsForTests();
+  __resetSourceStrokesForTests();
 };
 
 /**
@@ -190,9 +195,13 @@ describe("GraphView — source-color coding", () => {
     expect(header).not.toBeNull();
   });
 
-  it("the source-colors panel header is HIDDEN when the master toggle is OFF", () => {
+  it("the source-styling panel header is HIDDEN when BOTH the colour and stroke channels are OFF", () => {
+    // The panel surfaces whenever EITHER channel is on. Since strokes now
+    // default ON for every spec (2026-07-11), hiding the panel requires
+    // turning both channels off.
     seedAes128Ecb();
     setSourceColoringEnabled(false);
+    setSourceStrokeStylingEnabled(aes128EcbSpec.id, false);
     const { container } = render(() => <GraphView />);
     const header = container.querySelector('[data-testid="source-colors-panel-toggle"]');
     expect(header).toBeNull();
