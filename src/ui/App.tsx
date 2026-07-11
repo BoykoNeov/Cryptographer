@@ -94,6 +94,7 @@ import {
   HASH_OPTIONS,
   type Hash,
   describeAlgorithm,
+  historyOfAlgorithm,
   isAesCipher,
   isAsymmetric,
   isCipher,
@@ -1456,15 +1457,16 @@ export const App = () => {
             </select>
           </label>
         </Show>
-        {/* Always-visible one-liner for the active primitive, on its own
-            full-width row directly below the selector controls (2026-07-11) —
-            the "in the dropdown selection panel" copy the user asked for,
-            mirroring the header caption via the shared `describeAlgorithm`.
-            Full-width (`flex: 0 0 100%`, like `.inputs-result` / the pending
-            banner) so it wraps to its own line rather than squeezing into the
-            settings row and reflowing it. */}
-        <p class="selector-caption muted small" title={describeAlgorithm(algorithm())}>
-          {describeAlgorithm(algorithm())}
+        {/* Always-visible HISTORICAL one-liner for the active primitive, on its
+            own full-width row directly below the selector controls. Deliberately
+            a DIFFERENT flavour from the header caption (2026-07-12): the header
+            keeps the structural `describeAlgorithm` line, this tells the story
+            (designer, year, lineage) via `historyOfAlgorithm` so the two
+            surfaces complement rather than duplicate. Full-width (`flex: 0 0
+            100%`, like `.inputs-result` / the pending banner) so it wraps to its
+            own line rather than squeezing into the settings row and reflowing it. */}
+        <p class="selector-caption muted small" title={historyOfAlgorithm(algorithm())}>
+          {historyOfAlgorithm(algorithm())}
         </p>
         {/* Group of buttons (not a single form control) → semantic
             <fieldset>/<legend> per biome's a11y lint. The group browses

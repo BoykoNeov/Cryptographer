@@ -307,6 +307,61 @@ export const describeAlgorithm = (a: Algorithm): string =>
       ? ASYMMETRIC_DESCRIPTIONS[a]
       : CIPHER_DESCRIPTIONS[a];
 
+// ─── Historical one-liners (2026-07-12) ──────────────────────────────────────
+//
+// A second, DIFFERENT flavour of one-liner: instead of the structural "what is
+// this primitive" line above (which stays in the header next to "Cryptographer"),
+// these carry the *history* — who designed it, when, and its place in the
+// lineage. Surfaced ONLY in the selector caption below the dropdown, so the two
+// surfaces complement rather than duplicate each other (per user request
+// 2026-07-12: header keeps the technical line, caption tells the story).
+//
+// History is a family property, not a key-length one, so the AES / Speck /
+// Serpent variants deliberately share their family's sentence — the 128/192/256
+// distinction is a structural detail already carried by the header line.
+
+/** Per-cipher historical one-liner. Keep in sync with `ALL_CIPHERS`. */
+export const CIPHER_HISTORY: Record<Cipher, string> = {
+  "aes-128":
+    "Belgian design 'Rijndael' (Daemen & Rijmen); won NIST's open 1997–2000 contest, standardised as FIPS-197 in 2001.",
+  "aes-192":
+    "Belgian design 'Rijndael' (Daemen & Rijmen); won NIST's open 1997–2000 contest, standardised as FIPS-197 in 2001.",
+  "aes-256":
+    "Belgian design 'Rijndael' (Daemen & Rijmen); won NIST's open 1997–2000 contest, standardised as FIPS-197 in 2001.",
+  "speck-32-64-be":
+    "Published by the U.S. NSA in 2013 for constrained IoT devices; its ISO standardisation push drew public controversy.",
+  "speck-32-64-le":
+    "Published by the U.S. NSA in 2013 for constrained IoT devices; its ISO standardisation push drew public controversy.",
+  "serpent-128":
+    "Anderson, Biham & Knudsen's AES finalist (1998); placed second to Rijndael, prized for a conservative security margin.",
+  "serpent-192":
+    "Anderson, Biham & Knudsen's AES finalist (1998); placed second to Rijndael, prized for a conservative security margin.",
+  "serpent-256":
+    "Anderson, Biham & Knudsen's AES finalist (1998); placed second to Rijndael, prized for a conservative security margin.",
+  des: "IBM's Lucifer, tuned by the NSA and adopted as U.S. standard in 1977; brute-forced by the EFF's 'Deep Crack' in 1998.",
+  blowfish:
+    "Bruce Schneier's 1993 unpatented, royalty-free cipher; a popular DES replacement, later succeeded by his Twofish.",
+};
+
+/** Per-hash historical one-liner. Mirrors `HASH_DESCRIPTIONS`. */
+export const HASH_HISTORY: Record<Hash, string> = {
+  "sha-256":
+    "NSA-designed, published by NIST in 2001 (FIPS 180-2); the SHA-2 workhorse behind TLS, Bitcoin, and Git.",
+};
+
+/** Per-asymmetric historical one-liner. Mirrors `ASYMMETRIC_DESCRIPTIONS`. */
+export const ASYMMETRIC_HISTORY: Record<Asymmetric, string> = {
+  rsa: "Rivest, Shamir & Adleman, 1977 — the first practical public-key cryptosystem; secretly pre-discovered by GCHQ's Cocks in 1973.",
+};
+
+/**
+ * Resolve the historical one-liner for any algorithm, routing by family.
+ * Sibling of `describeAlgorithm` (which the header uses); this one feeds only
+ * the selector caption.
+ */
+export const historyOfAlgorithm = (a: Algorithm): string =>
+  isHash(a) ? HASH_HISTORY[a] : isAsymmetric(a) ? ASYMMETRIC_HISTORY[a] : CIPHER_HISTORY[a];
+
 /**
  * Canonical default key per cipher — FIPS-197 §A.1 / §A.2 / §A.3 expansion
  * examples. These match the keys used by the NIST AES Core PDFs that drive
