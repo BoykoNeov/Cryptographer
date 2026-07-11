@@ -179,6 +179,16 @@ h1 {
   color: var(--muted);
 }
 
+/* Always-visible algorithm one-liner below the selector controls
+   (2026-07-11). Full-width so it wraps to its own line under the
+   settings dropdowns (matches the `.inputs-result` / pending-banner
+   full-width-row pattern) rather than squeezing into the flex row. */
+.inputs .selector-caption {
+  flex: 0 0 100%;
+  margin: 0;
+  align-self: flex-start;
+}
+
 /* fieldset reset — strip the default chrome so the byte-format group
    visually matches the other label/control pairs in the row. */
 .inputs fieldset.input-group {

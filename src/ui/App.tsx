@@ -1456,6 +1456,16 @@ export const App = () => {
             </select>
           </label>
         </Show>
+        {/* Always-visible one-liner for the active primitive, on its own
+            full-width row directly below the selector controls (2026-07-11) —
+            the "in the dropdown selection panel" copy the user asked for,
+            mirroring the header caption via the shared `describeAlgorithm`.
+            Full-width (`flex: 0 0 100%`, like `.inputs-result` / the pending
+            banner) so it wraps to its own line rather than squeezing into the
+            settings row and reflowing it. */}
+        <p class="selector-caption muted small" title={describeAlgorithm(algorithm())}>
+          {describeAlgorithm(algorithm())}
+        </p>
         {/* Group of buttons (not a single form control) → semantic
             <fieldset>/<legend> per biome's a11y lint. The group browses
             as one labeled chunk for screen readers. */}

@@ -169,10 +169,20 @@ Rewires save and share exactly like any other spec edit (no extra opt-in).
   a distinct color so you can track "all these arrows came from here" at
   a glance. The `≥` number next to it is the **coloring threshold** — a
   source gets a color when it fans out to *at least* this many consumers.
-  **Set it to 0 to color every edge** (including single-output sources);
-  the default of 3 colors only the larger fan-outs. (Endpoint pills —
-  plaintext / ciphertext / message / digest — are never colored: they
-  *are* the source.)
+  **It defaults to 1 for every cipher and hash, so every source is
+  colored on first open**; raise it to color only the larger fan-outs (or
+  set it to 0, which is equivalent to 1 here — no source fans out to zero
+  edges). (Endpoint pills — plaintext / ciphertext / message / digest —
+  are never colored: they *are* the source.)
+- **Style by source**, when on, gives each source's outgoing edges a
+  distinct **dash pattern** — a second channel alongside color, so
+  sources stay tellable-apart even when their colors repeat (which they
+  do on dense specs like SHA-256, which has more sources than the color
+  palette). It has its own `≥` **styling threshold**, independent of the
+  coloring one; it *also* defaults to 1 for every spec, so every source
+  is dashed on first open. Both channels are viewer preferences — turning
+  one off, or changing a threshold, sticks per-spec in your browser but
+  never travels with `Save` / `Share…`.
 - **Zoom** scales the rendered canvas from 50% to 200%. Use the
   toolbar's `−` / `+` buttons (or `reset` to return to 100%), or
   **just roll the mouse wheel while the cursor is over the canvas**
