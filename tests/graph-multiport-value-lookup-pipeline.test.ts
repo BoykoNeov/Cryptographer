@@ -44,13 +44,16 @@ import { blowfishDecryptSpec } from "@/ciphers/blowfish-decrypt";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { desSpec } from "@/ciphers/des";
 import { desDecryptSpec } from "@/ciphers/des-decrypt";
+import { rsaDecryptSpec, rsaEncryptSpec } from "@/ciphers/rsa";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { serpent192Spec } from "@/ciphers/serpent-192";
 import { serpent256Spec } from "@/ciphers/serpent-256";
+import { buildSha256Spec } from "@/ciphers/sha-256";
 import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
 import { twofishSpec } from "@/ciphers/twofish";
 import { twofishDecryptSpec } from "@/ciphers/twofish-decrypt";
+import { bigIntToBytes } from "@/core/big-int-codec";
 import { lookupEdgeValue } from "@/core/edge-value-lookup";
 import {
   type CipherGraph,
@@ -78,63 +81,90 @@ const unwrapReplica = (id: string): string => {
   return i >= 0 ? id.slice(0, i) : id;
 };
 
-type Case = { readonly name: string; readonly spec: CipherSpec; readonly key: string };
+type Case = { readonly name: string; readonly spec: CipherSpec; readonly run: () => Trace };
 
-// Every shipped symmetric cipher, encrypt + the decrypt specs that carry their
-// own distinct split/whitening wiring. Inputs are arbitrary — the lookup
-// resolution is independent of the plaintext; we only need a real trace.
+/** A keyed symmetric-cipher case. `keyHex` sets aux["key"]; `inputHex` sizes the
+ *  block. Inputs are arbitrary — lookup resolution is independent of the actual
+ *  plaintext; we only need a real trace. */
+const sym = (name: string, spec: CipherSpec, keyHex: string, inputHex: string): Case => ({
+  name,
+  spec,
+  run: () =>
+    runSpec(spec, buildDefaultRegistry(), {
+      initialState: makeBytesState(bytesFromHex(inputHex)),
+      initialAux: new Map<string, AuxValue>([["key", bytesFromHex(keyHex)]]),
+    }),
+});
+
+const BLK16 = "00112233445566778899aabbccddeeff"; // 16-byte block (AES/Serpent/Twofish)
+const BLK8 = "0011223344556677"; // 8-byte block (DES/Blowfish)
+const BLK4 = "00112233"; // 4-byte block (Speck32/64)
+
+// Every shipped port-native cipher/hash/asymmetric family. This deliberately
+// spans BEYOND the reported Blowfish/Twofish: SHA-256 (`final.split-wv`/`-H` are
+// 8-output splits feeding fan-in adds + the 8-input `final.assemble` — the exact
+// multi-port shape) and RSA (bigint ladder is 2-input `mod-mul`/`cond-mod-mul`
+// fan-ins) have the vulnerable topology too, and both have default-collapsed
+// containers, so the regression bit them identically. The universal invariant
+// below (every spine edge between two real leaves resolves) covers all of them.
 const CASES: readonly Case[] = [
-  { name: "aes-128", spec: aes128Spec, key: "000102030405060708090a0b0c0d0e0f" },
-  { name: "aes-128 decrypt", spec: aes128DecryptSpec, key: "000102030405060708090a0b0c0d0e0f" },
-  { name: "aes-192", spec: aes192Spec, key: "000102030405060708090a0b0c0d0e0f1011121314151617" },
+  sym("aes-128", aes128Spec, "000102030405060708090a0b0c0d0e0f", BLK16),
+  sym("aes-128 decrypt", aes128DecryptSpec, "000102030405060708090a0b0c0d0e0f", BLK16),
+  sym("aes-192", aes192Spec, "000102030405060708090a0b0c0d0e0f1011121314151617", BLK16),
+  sym(
+    "aes-256",
+    aes256Spec,
+    "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    BLK16,
+  ),
+  sym("speck-32-64-be", speck32_64BeSpec, "1918111009080100", BLK4),
+  sym("speck-32-64-le", speck32_64LeSpec, "1918111009080100", BLK4),
+  sym("serpent-128", serpent128Spec, "000102030405060708090a0b0c0d0e0f", BLK16),
+  sym("serpent-192", serpent192Spec, "000102030405060708090a0b0c0d0e0f1011121314151617", BLK16),
+  sym(
+    "serpent-256",
+    serpent256Spec,
+    "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    BLK16,
+  ),
+  sym("des", desSpec, "133457799bbcdff1", BLK8),
+  sym("des decrypt", desDecryptSpec, "133457799bbcdff1", BLK8),
+  sym("blowfish", blowfishSpec, "0000000000000000", BLK8),
+  sym("blowfish decrypt", blowfishDecryptSpec, "0000000000000000", BLK8),
+  sym("twofish", twofishSpec, "000102030405060708090a0b0c0d0e0f", BLK16),
+  sym("twofish decrypt", twofishDecryptSpec, "000102030405060708090a0b0c0d0e0f", BLK16),
+  // SHA-256 — hash: message bytes on initialState, no key aux. A short
+  // single-block message keeps the trace legible; the `final.*` region is what
+  // matters and is identical regardless of message.
   {
-    name: "aes-256",
-    spec: aes256Spec,
-    key: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    name: "sha-256",
+    spec: buildSha256Spec(),
+    run: () =>
+      runSpec(buildSha256Spec(), buildDefaultRegistry(), {
+        initialState: makeBytesState(bytesFromHex("616263")), // "abc"
+      }),
   },
-  { name: "speck-32-64-be", spec: speck32_64BeSpec, key: "1918111009080100" },
-  { name: "speck-32-64-le", spec: speck32_64LeSpec, key: "1918111009080100" },
-  { name: "serpent-128", spec: serpent128Spec, key: "000102030405060708090a0b0c0d0e0f" },
+  // RSA — asymmetric: a small numeric message, no key aux (p/q/e are spec params
+  // with defaults). W=2 default width. Both directions exercise the bigint ladder.
   {
-    name: "serpent-192",
-    spec: serpent192Spec,
-    key: "000102030405060708090a0b0c0d0e0f1011121314151617",
+    name: "rsa encrypt",
+    spec: rsaEncryptSpec,
+    run: () =>
+      runSpec(rsaEncryptSpec, buildDefaultRegistry(), {
+        initialState: makeBytesState(bigIntToBytes(42n, 2)),
+      }),
   },
   {
-    name: "serpent-256",
-    spec: serpent256Spec,
-    key: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    name: "rsa decrypt",
+    spec: rsaDecryptSpec,
+    run: () =>
+      runSpec(rsaDecryptSpec, buildDefaultRegistry(), {
+        initialState: makeBytesState(bigIntToBytes(42n, 2)),
+      }),
   },
-  { name: "des", spec: desSpec, key: "133457799bbcdff1" },
-  { name: "des decrypt", spec: desDecryptSpec, key: "133457799bbcdff1" },
-  { name: "blowfish", spec: blowfishSpec, key: "0000000000000000" },
-  { name: "blowfish decrypt", spec: blowfishDecryptSpec, key: "0000000000000000" },
-  { name: "twofish", spec: twofishSpec, key: "000102030405060708090a0b0c0d0e0f" },
-  { name: "twofish decrypt", spec: twofishDecryptSpec, key: "000102030405060708090a0b0c0d0e0f" },
 ];
 
-/** A 16-byte input truncated/repeated to whatever block size the cipher wants. */
-const inputFor = (spec: CipherSpec): string => {
-  // Speck32/64 is a 4-byte block; DES/Blowfish 8-byte; the rest 16-byte.
-  // Over-long hex is harmless — runSpec reads only the block it needs from the
-  // initial state, and we never assert on the ciphertext here.
-  void spec;
-  return "00112233445566778899aabbccddeeff";
-};
-
-const runTrace = (c: Case): Trace =>
-  runSpec(c.spec, buildDefaultRegistry(), {
-    initialState: makeBytesState(bytesFromHex(inputFor(c.spec).slice(0, blockHexLen(c.spec)))),
-    initialAux: new Map<string, AuxValue>([["key", bytesFromHex(c.key)]]),
-  });
-
-/** Hex-char length of the cipher's block (2 chars/byte). */
-const blockHexLen = (spec: CipherSpec): number => {
-  const id = spec.id;
-  if (id.startsWith("speck")) return 8; // 4-byte block
-  if (id === "des" || id === "blowfish") return 16; // 8-byte block
-  return 32; // 16-byte block (AES / Serpent / Twofish)
-};
+const runTrace = (c: Case): Trace => c.run();
 
 /** Canonical stepIds of every real trace frame — the "frame-backed" leaf set. */
 const frameBackedIds = (trace: Trace): ReadonlySet<string> => {
@@ -211,6 +241,16 @@ describe("reported regression edges resolve after the fix", () => {
     ["twofish", "whiten-in.split@->whiten-in.r3", "whiten-in.r3"],
     ["blowfish", "round.1.split", "round.1.xorR"],
     ["blowfish", "whiten.split", "whiten.left"],
+    // SHA-256 has the SAME multi-port shape (advisor 2026-07-12): `final.s0 →
+    // final.assemble` lands on the 8-input concat (collapse-path vulnerable), and
+    // the 8-output `final.split-wv` replicates → the replica-path form. Both
+    // present at the default collapse (the `blocks` iterate is NOT collapsed, so
+    // the `final.*` leaves render) — so these anchors are non-vacuous.
+    ["sha-256", "final.s0", "final.assemble"],
+    ["sha-256", "final.split-wv@->final.s0", "final.s0"],
+    // RSA's bigint ladder: `square-0 → mult-0` lands on the 4-input
+    // `cond-mod-mul` (base port). Top-level ladder, so present at default collapse.
+    ["rsa encrypt", "square-0", "mult-0"],
   ];
   for (const [caseName, from, to] of anchors) {
     it(`${caseName}: ${from} → ${to}`, () => {
