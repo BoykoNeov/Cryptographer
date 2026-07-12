@@ -3789,6 +3789,18 @@ button:disabled {
   transition: opacity 0.1s ease, fill 0.1s ease;
 }
 
+/* An input-port dot that sits under an incoming arrow (2026-07-12): tint it the
+   SAME colour as that arrow (`currentColor` = the inline `color` the handle `<g>`
+   carries, set by `portArrivalPoints` via `arrivalColorFor`) so the dot reads as
+   "this arrow terminates here". Full opacity so it's a clear terminus marker, vs
+   the muted 0.3 baseline for unbound / arrowless ports. The `:hover` and armed
+   rules below have higher specificity, so hovering / arming still lifts the dot
+   to the accent hue for the wiring affordance. */
+.graph-port-arrived .graph-port-dot {
+  fill: currentColor;
+  opacity: 0.9;
+}
+
 .graph-leaf:hover .graph-port-in .graph-port-dot,
 .graph-port-handle:hover .graph-port-dot {
   opacity: 1;

@@ -2360,6 +2360,39 @@ export const portArrivalPoint = (
 };
 
 /**
+ * The CSS colour an incoming arrow is drawn in — used to paint each input-port
+ * arrival dot the SAME hue as its arrow so the eye can trace "this arrow ends
+ * here" at a glance (2026-07-12, user request "make the dots the same colour as
+ * the arrow"). MUST mirror `renderBundle`'s `sourceColor` resolution + the
+ * `.graph-edge-*` kind defaults in `app.css`, so a dot and its arrowhead never
+ * disagree:
+ *   1. source-colour coding ON and this edge's canonical source has an assigned
+ *      hue → that hex (endpoint-pill sources are excluded, exactly as the arrow
+ *      is — they fall through to the kind default);
+ *   2. otherwise the kind baseline — aux edges are `var(--accent)`
+ *      (`.graph-edge` / `.graph-edge-aux`), state/spine edges `var(--text)`
+ *      (`.graph-edge-state`).
+ *
+ * Returned as a CSS `color` value (hex or `var(--…)`); the caller sets it as the
+ * handle `<g>`'s inline `color` and the dot's CSS resolves `fill: currentColor`
+ * — the same carrier `EdgePath` uses, so the `:hover` / armed `fill: var(--accent)`
+ * stylesheet rules still win by specificity (an inline `fill` would clobber them).
+ */
+export const arrivalColorFor = (
+  edge: Pick<GraphEdge, "from" | "kind">,
+  sourceColors: ReadonlyMap<string, string>,
+  nodesById: ReadonlyMap<string, GraphNode>,
+): string => {
+  if (sourceColors.size > 0 && !isEndpointId(edge.from)) {
+    const node = nodesById.get(edge.from);
+    const canonical = node?.replicaOf ?? edge.from;
+    const c = sourceColors.get(canonical);
+    if (c !== undefined) return c;
+  }
+  return edge.kind === "aux" ? "var(--accent)" : "var(--text)";
+};
+
+/**
  * Horizontal shift applied to the SOURCE x of a replica edge's path in
  * the vertical regime. Returns a signed pixel offset; `EdgePath` adds
  * it to the source attach x (`sx`), so the arrow emerges from a
@@ -3962,56 +3995,133 @@ export const GraphView = () => {
   );
 
   /**
-   * Where each leaf's input-port wiring dot should sit: the box-edge point where
-   * that port's incoming port-flow edge actually arrives (2026-07-12). Keyed
-   * `consumerStepId → (portName → point)`; a port with no resolvable incoming
-   * port-flow edge (unbound, or fed from the plaintext pill / a container seed —
-   * those edges aren't `PORT_FLOW_AUX_KEY`) is simply absent, and `LeafRect`
-   * falls back to the legacy left-edge placement for it.
+   * Where each leaf's input-port wiring dot should sit, AND the colour it should
+   * take: the box-edge point where that port's incoming arrow actually arrives,
+   * tinted to match that arrow (2026-07-12). Keyed `consumerStepId → (portName →
+   * { x, y, color })`; a port with no resolvable incoming edge (unbound, or fed
+   * from the plaintext pill / a container seed — the pill sits to the LEFT so the
+   * left-edge fallback already aligns) is simply absent, and `LeafRect` falls
+   * back to the legacy muted left-edge placement for it.
    *
-   * Built from the SAME inputs `EdgePath` uses for the target attach — the
-   * `layout()` boxes, the bundle representative edges, and `consumerPortOffset`
-   * against `portAssignment()` — so a dot lands exactly on its arrow's head by
-   * construction. The two `consumerPortOffset` calls mirror the `targetXOffset`
-   * (vertical regime: LEAF_W-scaled gap) and `targetYOffset` (horizontal regime:
-   * LEAF_H-scaled gap) memos in `renderBundle`; `portArrivalPoint` then selects
-   * whichever axis the regime uses.
+   * **Two edge classes resolve to a port** (the user's "arrows must land on the
+   * dots in ALL cases"):
+   *   - **Port-flow spine** (`kind:"state"`, `auxKey === PORT_FLOW_AUX_KEY`) —
+   *     the edge's `toPort` names the consumer input port directly.
+   *   - **Aux fan-in** (`kind:"aux"`, e.g. a round key / P-array subkey / S-box
+   *     table) — the edge carries an `auxKey` but NO `toPort`, so we resolve it
+   *     through the consumer leaf's `meta.auxReadPorts(params)` reverse map
+   *     (`auxKey → input-port name`). This is what pulls the gold P[i] / round-key
+   *     operand dot off the left edge and onto its arrowhead.
+   *
+   * **We iterate the raw MEMBER edges (`bg.edges`), not `bg.bundles`.** Several
+   * ports can share one rendered arrow: when the SAME source feeds two ports of
+   * the SAME consumer (Twofish `split → recombine.input2` + `.input3`, or
+   * `g1 → dbl2T1.operand0` + `.operand1` for `2·T1`), those edges collapse into
+   * one `(from,to,kind)` bundle drawn as a single `×N` arrow. Reading only the
+   * representative's `toPort` would leave every non-representative port dot
+   * stranded on the left edge. So we walk each member edge, resolve its own port,
+   * and land it at the BUNDLE's arrival point (computed once from the
+   * representative — the geometry `EdgePath` actually draws) so the co-fed ports
+   * stack their dots on the shared arrowhead.
+   *
+   * Geometry comes from the SAME inputs `EdgePath` uses for the target attach —
+   * the `layout()` boxes, the bundle representative edge, and `consumerPortOffset`
+   * against `portAssignment()` — so a dot lands exactly on its arrow's head. The
+   * two `consumerPortOffset` calls mirror the `targetXOffset` (vertical regime:
+   * LEAF_W-scaled gap) and `targetYOffset` (horizontal regime: LEAF_H-scaled gap)
+   * memos in `renderBundle`; `portArrivalPoint` then selects whichever axis the
+   * regime uses. The colour comes from `arrivalColorFor` against the SAME
+   * `effectiveSourceColors` map `renderBundle` feeds its `sourceColor` prop.
    */
   const portArrivalPoints = createMemo<
-    ReadonlyMap<string, ReadonlyMap<string, { x: number; y: number }>>
+    ReadonlyMap<string, ReadonlyMap<string, { x: number; y: number; color: string }>>
   >(() => {
-    const result = new Map<string, Map<string, { x: number; y: number }>>();
+    const result = new Map<string, Map<string, { x: number; y: number; color: string }>>();
     const boxes = layout().boxes;
     const assign = portAssignment();
     const c = consts();
     const bg = bundledGraph();
     const nById = nodesById();
     const cById = containersById();
+    const sourceColors = effectiveSourceColors();
+    const isFb = feedbackPredicate();
     // Gap/cap pairs copied from `renderBundle`'s targetXOffset / targetYOffset.
     const vGap = Math.max(6, Math.round(c.LEAF_W / 10));
     const vCap = c.LEAF_W / 2 - 4;
     const hGap = Math.max(4, Math.round(c.LEAF_H / 4));
     const hCap = c.LEAF_H / 2 - 4;
+
+    // Reverse map per aux-reading leaf: `auxKey → input-port name`. Only leaves
+    // whose registration declares `meta.auxReadPorts` project an aux read onto a
+    // named input port (the port-native idiom, e.g. `xor-with-aux`'s `operand`,
+    // `blowfish.sbox-lookup`'s table ports); a legacy executor-only `auxReads`
+    // has no port to land on and is intentionally out of scope.
+    const auxPortByLeaf = new Map<string, Map<string, string>>();
+    for (const [id, node] of nById) {
+      const readPorts = registry.getRegistration(node.stepType)?.meta?.auxReadPorts;
+      if (readPorts === undefined) continue;
+      const leaf = findStep(spec(), id);
+      if (leaf === null) continue;
+      const rev = new Map<string, string>();
+      for (const [port, auxKey] of readPorts(leaf.params)) rev.set(auxKey, port);
+      auxPortByLeaf.set(id, rev);
+    }
+
+    // Bundle lookup so a member edge can borrow its bundle's representative edge
+    // (the one `EdgePath` actually draws) for geometry + isFeedback. Keyed the
+    // same `(from,to,kind,fb)` way `bundleEdges` keys internally.
+    const bundleKey = (from: string, to: string, kind: string, fb: boolean): string =>
+      `${from} ${to} ${kind} ${fb ? "1" : "0"}`;
+    const bundleByKey = new Map<string, EdgeBundle>();
     for (const b of bg.bundles) {
-      const edge = b.representativeEdge;
-      // Only port-flow spine edges carry a real consumer input-port name.
-      if (edge.kind !== "state" || edge.auxKey !== PORT_FLOW_AUX_KEY) continue;
-      if (edge.toPort === undefined) continue;
-      const targetId = visualEdgeTargetId(edge, nById, cById);
+      bundleByKey.set(bundleKey(b.from, b.to, b.kind, b.isFeedback), b);
+    }
+    // Arrival point per bundle (representative geometry), computed once + cached.
+    const pointByBundle = new Map<EdgeBundle, { x: number; y: number } | null>();
+    const bundleArrival = (b: EdgeBundle, targetId: string): { x: number; y: number } | null => {
+      const cached = pointByBundle.get(b);
+      if (cached !== undefined) return cached;
       const to = boxes.get(targetId);
-      const from = boxes.get(edge.from);
-      if (to === undefined || from === undefined) continue;
-      const point = portArrivalPoint(from, to, {
-        isFeedback: b.isFeedback,
-        targetXOffset: consumerPortOffset(edge, assign, vGap, vCap),
-        targetYOffset: consumerPortOffset(edge, assign, hGap, hCap),
-      });
+      const from = boxes.get(b.representativeEdge.from);
+      const point =
+        to === undefined || from === undefined
+          ? null
+          : portArrivalPoint(from, to, {
+              isFeedback: b.isFeedback,
+              targetXOffset: consumerPortOffset(b.representativeEdge, assign, vGap, vCap),
+              targetYOffset: consumerPortOffset(b.representativeEdge, assign, hGap, hCap),
+            });
+      pointByBundle.set(b, point);
+      return point;
+    };
+
+    // Place one port's dot at its bundle's arrowhead, tinted to the arrow. First
+    // writer wins — a declared input port has exactly one incoming arrow.
+    const place = (targetId: string, portName: string, edge: GraphEdge) => {
+      const fb = isFb(edge);
+      const b = bundleByKey.get(bundleKey(edge.from, edge.to, edge.kind, fb));
+      if (b === undefined) return;
+      const point = bundleArrival(b, targetId);
+      if (point === null) return;
       let inner = result.get(targetId);
       if (inner === undefined) {
         inner = new Map();
         result.set(targetId, inner);
       }
-      inner.set(edge.toPort, point);
+      if (inner.has(portName)) return;
+      inner.set(portName, { ...point, color: arrivalColorFor(edge, sourceColors, nById) });
+    };
+
+    for (const edge of bg.edges) {
+      const targetId = visualEdgeTargetId(edge, nById, cById);
+      // Port-flow spine edge → `toPort` names the consumer input port directly.
+      if (edge.kind === "state" && edge.auxKey === PORT_FLOW_AUX_KEY && edge.toPort !== undefined) {
+        place(targetId, edge.toPort, edge);
+        continue;
+      }
+      // Aux fan-in → resolve which declared input port this key fills.
+      const portName = auxPortByLeaf.get(targetId)?.get(edge.auxKey);
+      if (portName !== undefined) place(targetId, portName, edge);
     }
     return result;
   });
@@ -7244,14 +7354,16 @@ const LeafRect = (props: {
   inputPorts?: readonly string[];
   /**
    * Per-input-port arrival points — where each port's incoming arrow actually
-   * lands on this box (2026-07-12). When a port is present, its wiring dot is
-   * drawn there instead of on the fixed left edge, so the dot tracks the arrow
-   * across the canonical top-to-bottom Feistel/Twofish cells. Ports absent from
-   * the map (unbound, or fed by the plaintext pill / a container seed) fall back
-   * to the legacy left-edge placement. `| undefined` for
-   * `exactOptionalPropertyTypes` (the parent passes `map.get(id)`).
+   * lands on this box, plus the CSS colour of that arrow (2026-07-12). When a
+   * port is present, its wiring dot is drawn there (instead of on the fixed left
+   * edge) and tinted `color` (via inline `color` + `fill: currentColor`), so the
+   * dot both tracks and matches its arrow across the canonical top-to-bottom
+   * Feistel/Twofish cells. Ports absent from the map (unbound, or fed by the
+   * plaintext pill / a container seed) fall back to the legacy muted left-edge
+   * placement. `| undefined` for `exactOptionalPropertyTypes` (the parent passes
+   * `map.get(id)`).
    */
-  inputPortPoints?: ReadonlyMap<string, { x: number; y: number }> | undefined;
+  inputPortPoints?: ReadonlyMap<string, { x: number; y: number; color: string }> | undefined;
   /** The input port currently armed on THIS leaf, or null. Highlights its handle. */
   armedPortName?: string | null;
   /**
@@ -7415,10 +7527,24 @@ const LeafRect = (props: {
           const arrival = () => props.inputPortPoints?.get(portName);
           const cx = () => arrival()?.x ?? props.box.x;
           const cy = () => arrival()?.y ?? props.box.y + (props.box.h * (i() + 1)) / (n + 1);
+          // Tint the resting dot to its incoming arrow's colour (via inline
+          // `color` + the `.graph-port-arrived` CSS `fill: currentColor`). Set
+          // ONLY `color`, never inline `fill` — an inline `fill` outranks the
+          // `:hover` / armed `fill: var(--accent)` stylesheet rules and would
+          // kill the wiring-handle highlight. Ports with no incoming arrow keep
+          // the muted `var(--muted)` baseline.
+          const arrivalColor = () => arrival()?.color;
           return (
             <g
               class="graph-port-handle graph-port-in"
-              classList={{ "graph-port-armed": props.armedPortName === portName }}
+              classList={{
+                "graph-port-armed": props.armedPortName === portName,
+                "graph-port-arrived": arrivalColor() !== undefined,
+              }}
+              style={(() => {
+                const col = arrivalColor();
+                return col !== undefined ? { color: col } : undefined;
+              })()}
               data-testid={`graph-port-in-${props.stepId}-${portName}`}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {

@@ -363,14 +363,34 @@ export type BundledGraph = {
  * `key-expansion@->initial.add-round-key` the result is
  * `["roundKey.0", "roundKey.1", ..., "roundKey.10"]`, which the inspector
  * panel renders as a stable, human-readable list.
+ *
+ * **Port-flow spine edges bundle by `(from, to, kind, fb, toPort)`** — i.e. the
+ * consumer INPUT PORT joins the key. Bundling exists to collapse the many
+ * parallel AUX annotations (round-key / S-box fan-out) into one `×N` pill; the
+ * primary port-flow spine is not that — when one source feeds two DIFFERENT
+ * ports of the same consumer (Twofish `split → recombine.input2` + `.input3`
+ * carrying the R0/R1 rails; `g1 → dbl2T1.operand0` + `.operand1` for `2·T1`)
+ * those are two distinct byte streams that must stay two separately
+ * click-resolvable arrows. Merging them into a `×2` state bundle routes clicks
+ * to the bundle-summary path, whose two `"port-flow"` auxKeys carry no frame →
+ * "no frame found for either endpoint of state edge". Keeping them unbundled
+ * also lets each land its own arrival dot at its own port offset. Aux edges
+ * (whose whole purpose IS the `×N` pill) are unaffected — they carry no
+ * `toPort`, so the suffix is empty and they bundle exactly as before.
  */
 export const bundleEdges = (
   graph: CipherGraph,
   isFeedback: (edge: GraphEdge) => boolean,
 ): BundledGraph => {
-  const bundleKey = (e: GraphEdge, fb: boolean): string =>
+  const bundleKey = (e: GraphEdge, fb: boolean): string => {
     // `\0` separator is safe — no spec id contains a null byte.
-    `${e.from}\0${e.to}\0${e.kind}\0${fb ? "1" : "0"}`;
+    const base = `${e.from}\0${e.to}\0${e.kind}\0${fb ? "1" : "0"}`;
+    // Port-flow spine edges also key on the consumer input port so distinct
+    // rails between the same two nodes render (and resolve) as separate arrows.
+    return e.kind === "state" && e.auxKey === PORT_FLOW_AUX_KEY && e.toPort !== undefined
+      ? `${base}\0${e.toPort}`
+      : base;
+  };
 
   const bundles: EdgeBundle[] = [];
   const byKey = new Map<string, { bundle: EdgeBundle; auxKeys: string[] }>();
@@ -1389,25 +1409,41 @@ export const collapseGraph = (
     const from = remap(edge.from);
     const to = remap(edge.to);
     if (from === to) continue;
-    const key = `${edge.kind} ${from} ${to} ${edge.auxKey}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
     // Preserve the port pairing (`fromPort`/`toPort`) that `inferPortEdges`
     // stamped — the value inspector's multi-port state-edge resolution
-    // (`lookupRegularState`, DES/Blowfish/Twofish split→fan-in wires) reads it.
-    // But ONLY for endpoints that survived collapse UNremapped: a remapped
-    // endpoint now points at a collapsed CONTAINER, whose port name refers to
-    // a leaf that no longer renders, so carrying it would be a dangling
-    // reference. (Regression 2026-07-12: this rebuild silently dropped both
-    // fields, so every port-flow edge lost its pairing the moment ANY container
-    // was collapsed — which is the default for every cipher's key schedule.)
+    // (`lookupRegularState`, DES/Blowfish/Twofish split→fan-in wires) reads it,
+    // and the arrival-dot placer maps it to a consumer input port. But ONLY for
+    // endpoints that survived collapse UNremapped: a remapped endpoint now
+    // points at a collapsed CONTAINER, whose port name refers to a leaf that no
+    // longer renders, so carrying it would be a dangling reference. (Regression
+    // 2026-07-12: this rebuild silently dropped both fields, so every port-flow
+    // edge lost its pairing the moment ANY container was collapsed — the default
+    // for every cipher's key schedule.)
+    const keptFromPort = from === edge.from ? edge.fromPort : undefined;
+    const keptToPort = to === edge.to ? edge.toPort : undefined;
+    // Dedup key includes `kind` so a future state edge between the same
+    // (from, to) as an existing aux edge is preserved as a distinct edge —
+    // AND the KEPT `toPort`, so two DISTINCT port-flow edges from the same
+    // source into two different input ports of the same consumer both survive.
+    // Twofish's round wires `split → recombine.input2` AND `split →
+    // recombine.input3` (the carried R0/R1 rails), and `g1 → dbl2T1.operand0`
+    // + `.operand1` (the `2·T1` doubling); those carry different byte streams,
+    // so merging them by (kind,from,to,auxKey) alone would erase one rail —
+    // dropping its edge, stranding its arrival dot on the box's left edge, and
+    // leaving that wire unresolvable in the value inspector. When BOTH endpoints
+    // remap into a collapsed container the port names vanish (`keptToPort`
+    // undefined for both) and the edges correctly re-merge into one container
+    // edge. Aux edges (`toPort` always undefined) key exactly as before.
+    const key = `${edge.kind} ${from} ${to} ${edge.auxKey} ${keptToPort ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     newEdges.push({
       from,
       to,
       auxKey: edge.auxKey,
       kind: edge.kind,
-      ...(from === edge.from && edge.fromPort !== undefined ? { fromPort: edge.fromPort } : {}),
-      ...(to === edge.to && edge.toPort !== undefined ? { toPort: edge.toPort } : {}),
+      ...(keptFromPort !== undefined ? { fromPort: keptFromPort } : {}),
+      ...(keptToPort !== undefined ? { toPort: keptToPort } : {}),
     });
   }
 

@@ -120,8 +120,11 @@ const findEdgePathByEndpoints = (
   for (const p of paths) {
     const key = p.getAttribute("data-edge-key");
     if (key === null) continue;
-    if (key === `${fromId}|${toId}|${auxKey}|aux`) return p;
-    if (key === `${fromId}|${toId}|${auxKey}|state`) return p;
+    // `encodeEdgeKey` is `from|to|auxKey|kind|toPort` (2026-07-12: `toPort`
+    // joined the identity so co-fed rails resolve distinctly). Match on the
+    // first four fields so this helper stays agnostic to the trailing port.
+    const parts = key.split("|");
+    if (parts[0] === fromId && parts[1] === toId && parts[2] === auxKey) return p;
   }
   return null;
 };
@@ -201,7 +204,7 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     const target = useSelectedTarget()();
     expect(target).toEqual({
       kind: "edge",
-      key: "key-schedule|initial.add-round-key|roundKey.0|aux",
+      key: "key-schedule|initial.add-round-key|roundKey.0|aux|",
     });
   });
 
@@ -300,7 +303,7 @@ describe("GraphView — value-inspector panel (click-only, edges + nodes)", () =
     fireEvent.click(path as SVGPathElement);
     expect(useSelectedTarget()()).toEqual({
       kind: "edge",
-      key: "key-schedule|initial.add-round-key|roundKey.0|aux",
+      key: "key-schedule|initial.add-round-key|roundKey.0|aux|",
     });
     // Switch to the input pill.
     const pill = findEndpointPill(container as HTMLElement, "input");

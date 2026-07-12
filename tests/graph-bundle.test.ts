@@ -30,6 +30,7 @@ import { serpent128Spec } from "@/ciphers/serpent-128";
 import { buildSha256Spec } from "@/ciphers/sha-256";
 import {
   type GraphEdge,
+  PORT_FLOW_AUX_KEY,
   buildIterateFeedbackPredicate,
   bundleEdges,
   collapseGraph,
@@ -93,34 +94,44 @@ describe("bundleEdges — collapse same-(from, to, kind, isFeedback)", () => {
     // legitimate parallel (from→to) edges — the early prekey recurrence's XOR
     // reads MULTIPLE taps from `master-split` (e.g. j0.xor pulls taps idx-8,
     // idx-5, idx-3, idx-1 = 4 parallel edges from master-split until the lag
-    // window fills). The bundler correctly collapses each such group into one
-    // multi-edge bundle. So `bundles.length < edges.length` now, by exactly the
-    // fan-in surplus. Compute that surplus from the raw edges and assert the
-    // bundler removed precisely it (this still pins "no SPURIOUS collapse" — a
-    // bug that merged unrelated edges would over-shrink the count).
+    // window fills).
+    //
+    // 2026-07-12: those taps are PORT-FLOW edges into DISTINCT operands of the
+    // XOR (different `toPort`s), so the bundler now keys them apart — each tap is
+    // its own singleton arrow, independently click-resolvable to its own byte
+    // stream (a `×4` state bundle would have four identical `"port-flow"` auxKeys
+    // and resolve to "no frame found"). So `bundles.length == edges.length` for
+    // the port-flow spine; the only surplus left is genuine AUX fan-in (same
+    // (from,to) same auxKey), of which Serpent-128 single-block has none. Compute
+    // the surplus with the SAME key `bundleEdges` uses (toPort joins the key for
+    // port-flow edges) and assert the bundler removed precisely it — still pinning
+    // "no SPURIOUS collapse."
     const trace = runSerpent128();
     const raw = deriveAuxGraph(trace, serpent128Spec, { registry: buildDefaultRegistry() });
     const fb = buildIterateFeedbackPredicate(raw);
 
     const bundled = bundleEdges(raw, fb);
 
-    // Surplus = (edges in a (from,to,kind,isFeedback) group) − (one bundle each).
-    // `isFeedback` is computed per-edge by the same predicate the bundler uses
-    // (it's NOT a field on GraphEdge), so the grouping key matches bundleKey.
+    // Grouping key mirrors `bundleEdges`' `bundleKey`: `(from,to,kind,isFeedback)`
+    // plus `toPort` for port-flow spine edges. `isFeedback` is computed per-edge
+    // by the same predicate the bundler uses (it's NOT a field on GraphEdge).
     const groupSizes = new Map<string, number>();
     for (const e of raw.edges) {
-      const k = `${e.from}|${e.to}|${e.kind}|${fb(e) ? 1 : 0}`;
+      const portSuffix =
+        e.kind === "state" && e.auxKey === PORT_FLOW_AUX_KEY && e.toPort !== undefined
+          ? `|${e.toPort}`
+          : "";
+      const k = `${e.from}|${e.to}|${e.kind}|${fb(e) ? 1 : 0}${portSuffix}`;
       groupSizes.set(k, (groupSizes.get(k) ?? 0) + 1);
     }
     const surplus = [...groupSizes.values()].reduce((acc, n) => acc + (n - 1), 0);
     expect(bundled.bundles.length).toBe(raw.edges.length - surplus);
     expect(bundled.bundles.length).toBe(groupSizes.size);
-    // Every collapsed bundle (>1 edge) is a `master-split → early-XOR` schedule
-    // fan-in; everything else stays singleton.
+    // Any remaining collapsed bundle (>1 edge) can only be a same-auxKey AUX
+    // fan-in — never a port-flow group (those are keyed apart by toPort now).
     for (const b of bundled.bundles) {
       if (b.auxKeys.length > 1) {
-        expect(b.from).toBe("key-schedule.master-split");
-        expect(b.to.startsWith("key-schedule.j")).toBe(true);
+        expect(b.kind).toBe("aux");
       }
     }
   });

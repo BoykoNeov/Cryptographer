@@ -11,7 +11,8 @@
  * dots drift off their arrows and these assertions catch it.
  */
 
-import { portArrivalPoint } from "@/ui/components/GraphView";
+import type { GraphNode } from "@/core/graph";
+import { arrivalColorFor, portArrivalPoint } from "@/ui/components/GraphView";
 import { describe, expect, it } from "vitest";
 
 type Box = { x: number; y: number; w: number; h: number };
@@ -75,5 +76,65 @@ describe("portArrivalPoint — box-edge attach per regime", () => {
     expect(
       portArrivalPoint(from, to, { isFeedback: false, targetXOffset: 0, targetYOffset: 999 }).y,
     ).toBe(136);
+  });
+});
+
+/**
+ * Unit guard for `arrivalColorFor` — the colour each input-port dot takes so it
+ * matches its incoming arrow (2026-07-12, "make the dots the same colour as the
+ * arrow"). MUST mirror `renderBundle`'s `sourceColor` resolution + the
+ * `.graph-edge-*` kind baselines, else a dot and its arrowhead disagree.
+ */
+describe("arrivalColorFor — dot colour matches its arrow", () => {
+  const mkNode = (over: Partial<GraphNode> & { stepId: string }): GraphNode => ({
+    stepType: "x@1",
+    label: over.stepId,
+    containerPath: [],
+    ...over,
+  });
+  const EMPTY = new Map<string, string>();
+
+  it("uncoloured aux edge → the aux baseline var(--accent)", () => {
+    expect(arrivalColorFor({ from: "key-schedule", kind: "aux" }, EMPTY, new Map())).toBe(
+      "var(--accent)",
+    );
+  });
+
+  it("uncoloured state/spine edge → the spine baseline var(--text)", () => {
+    expect(arrivalColorFor({ from: "split", kind: "state" }, EMPTY, new Map())).toBe("var(--text)");
+  });
+
+  it("source-coloured edge → the assigned hex (matches the arrow's inline stroke)", () => {
+    const colors = new Map([["key-schedule", "#E69F00"]]);
+    const nodes = new Map([["key-schedule", mkNode({ stepId: "key-schedule" })]]);
+    expect(arrivalColorFor({ from: "key-schedule", kind: "aux" }, colors, nodes)).toBe("#E69F00");
+  });
+
+  it("a replica edge resolves the colour of its CANONICAL source (via replicaOf)", () => {
+    const colors = new Map([["key-schedule", "#56B4E9"]]);
+    const nodes = new Map([
+      [
+        "key-schedule@->round.1.xorP",
+        mkNode({ stepId: "key-schedule", replicaOf: "key-schedule" }),
+      ],
+    ]);
+    expect(
+      arrivalColorFor({ from: "key-schedule@->round.1.xorP", kind: "aux" }, colors, nodes),
+    ).toBe("#56B4E9");
+  });
+
+  it("endpoint-pill sources are excluded (fall through to the kind baseline, like the arrow)", () => {
+    const colors = new Map([["$input", "#009E73"]]);
+    // `$input` is a synthetic endpoint id → isEndpointId true → skip the map.
+    expect(arrivalColorFor({ from: "$input", kind: "state" }, colors, new Map())).toBe(
+      "var(--text)",
+    );
+  });
+
+  it("a source absent from the colour map → the kind baseline (uncoloured arrow)", () => {
+    const colors = new Map([["other-source", "#E69F00"]]);
+    expect(arrivalColorFor({ from: "split", kind: "state" }, colors, new Map())).toBe(
+      "var(--text)",
+    );
   });
 });

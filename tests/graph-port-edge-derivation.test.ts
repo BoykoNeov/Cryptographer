@@ -30,7 +30,8 @@
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { buildSha256Spec } from "@/ciphers/sha-256";
-import { collapseGraph, deriveAuxGraph, validateGraph } from "@/core/graph";
+import type { CipherGraph, ContainerNode, GraphNode } from "@/core/graph";
+import { PORT_FLOW_AUX_KEY, collapseGraph, deriveAuxGraph, validateGraph } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import type { Trace } from "@/core/types";
 import { describe, expect, it } from "vitest";
@@ -258,5 +259,79 @@ describe("deriveAuxGraph — A3b follow-ups: collapsed round-carry parity + vali
     expect(validateGraph(graph, trace)).toEqual([]);
     const collapsed = collapseGraph(graph, allRoundIds());
     expect(validateGraph(collapsed, trace)).toEqual([]);
+  });
+});
+
+/**
+ * `collapseGraph` — the dedup key must keep DISTINCT port-flow rails apart
+ * (2026-07-12). Regression guard for the exact class that already bit twice: the
+ * dedup key was `(kind, from, to, auxKey)`, so two port-flow edges from the same
+ * source into two DIFFERENT input ports of the same consumer (Twofish's
+ * `split → recombine.input2`/`.input3` carrying R0/R1; `g1 → dbl2T1.operand0`/
+ * `.operand1` for `2·T1`) collided — one rail's edge was dropped, stranding its
+ * arrival dot and leaving that wire unresolvable in the value inspector.
+ *
+ * This is browser-smoke territory otherwise (nothing in `npm run check`
+ * exercised it — the value-lookup pipeline guard walks EXISTING edges, so a
+ * dropped edge passes vacuously), which is exactly why it needs a direct unit
+ * pin: a future "simplify" of the dedup key fails HERE instead of silently in a
+ * browser.
+ */
+describe("collapseGraph — distinct-port port-flow rails survive dedup", () => {
+  const leaf = (stepId: string, containerPath: readonly string[] = []): GraphNode => ({
+    stepId,
+    stepType: "concat@1",
+    label: stepId,
+    containerPath,
+  });
+  const group = (id: string, childIds: readonly string[]): ContainerNode => ({
+    kind: "group",
+    id,
+    label: id,
+    containerPath: [],
+    childIds,
+  });
+  // Two rails from one source into two different ports of one consumer.
+  const rails = (from: string, to: string) =>
+    [
+      { from, to, auxKey: PORT_FLOW_AUX_KEY, kind: "state", fromPort: "output0", toPort: "input2" },
+      { from, to, auxKey: PORT_FLOW_AUX_KEY, kind: "state", fromPort: "output1", toPort: "input3" },
+    ] as const;
+
+  it("keeps both rails (distinct toPort) when neither endpoint is collapsed", () => {
+    const graph: CipherGraph = {
+      nodes: [leaf("split"), leaf("recombine"), leaf("filler", ["box"])],
+      containers: [group("box", ["filler"])],
+      edges: [...rails("split", "recombine")],
+      rootIds: ["split", "recombine", "box"],
+    };
+    // Collapse an UNRELATED container so `collapsedIds.size > 0` — else the
+    // size-0 short-circuit returns the graph untouched and never runs the dedup
+    // path this test is guarding (the trap that produced a false pass before).
+    const out = collapseGraph(graph, new Set(["box"]));
+    const kept = out.edges.filter((e) => e.from === "split" && e.to === "recombine");
+    expect(kept.length).toBe(2);
+    expect(kept.map((e) => e.toPort).sort()).toEqual(["input2", "input3"]);
+    // Both endpoints survived unremapped, so the port pairing is carried.
+    expect(kept.map((e) => e.fromPort).sort()).toEqual(["output0", "output1"]);
+  });
+
+  it("re-merges the two rails into one edge when the consumer remaps into a collapsed container", () => {
+    // `recombine` lives inside `cbox`; collapsing `cbox` remaps BOTH edges'
+    // `to` onto `cbox`, so the port names refer to a now-hidden leaf and are
+    // dropped (`keptToPort === undefined`). With no toPort in the key the two
+    // edges correctly re-merge into ONE container-level edge — pinning the
+    // `to === edge.to` guard on the port carry so a future refactor can't
+    // resurrect two dangling container edges.
+    const graph: CipherGraph = {
+      nodes: [leaf("split"), leaf("recombine", ["cbox"])],
+      containers: [group("cbox", ["recombine"])],
+      edges: [...rails("split", "recombine")],
+      rootIds: ["split", "cbox"],
+    };
+    const out = collapseGraph(graph, new Set(["cbox"]));
+    const merged = out.edges.filter((e) => e.from === "split" && e.to === "cbox");
+    expect(merged.length).toBe(1);
+    expect(merged[0]?.toPort).toBeUndefined();
   });
 });

@@ -50,10 +50,20 @@ import { createSignal } from "solid-js";
 /**
  * Encode a `GraphEdge` to its identity key. The format is stable across
  * sessions but not persisted anywhere — used only for in-memory signal
- * comparisons. Order: from → to → auxKey → kind, separated by `|`.
+ * comparisons. Order: from → to → auxKey → kind → toPort, separated by `|`.
+ *
+ * `toPort` (the consumer's input-port name) is part of the identity so two
+ * distinct port-flow rails between the SAME two nodes — Twofish's
+ * `split → recombine.input2` (R0) and `split → recombine.input3` (R1) — get
+ * DISTINCT keys. Without it both rails collide, and clicking either resolves to
+ * the first (R0), so the R1 arrow would silently show R0's bytes. The trailing
+ * `|${toPort}` is empty for every edge that carries no `toPort` (all aux edges +
+ * endpoint-pill state edges), so their keys are byte-identical to the old 4-part
+ * form modulo the trailing separator — the round-trip through `decodeEdgeKey`
+ * preserves them.
  */
 export const encodeEdgeKey = (edge: GraphEdge): string =>
-  `${edge.from}|${edge.to}|${edge.auxKey}|${edge.kind}`;
+  `${edge.from}|${edge.to}|${edge.auxKey}|${edge.kind}|${edge.toPort ?? ""}`;
 
 /**
  * Decode an edge key produced by `encodeEdgeKey`. Returns `null` for
@@ -65,16 +75,21 @@ export const encodeEdgeKey = (edge: GraphEdge): string =>
  * lowercase + dot + dash, no pipes, so `split("|")` is safe today. If a
  * future cipher allowed pipes in ids, this would need a smarter
  * splitter. Pinned at parse time so the gotcha doesn't drift.
+ *
+ * Accepts both the current 5-part form (with the trailing `toPort`) and the
+ * legacy 4-part form — a `toPort`-less key round-trips to a `toPort`-less edge.
  */
 export const decodeEdgeKey = (key: string): GraphEdge | null => {
   const parts = key.split("|");
-  if (parts.length !== 4) return null;
-  const [from, to, auxKey, kind] = parts;
+  if (parts.length !== 4 && parts.length !== 5) return null;
+  const [from, to, auxKey, kind, toPort] = parts;
   if (from === undefined || to === undefined || auxKey === undefined || kind === undefined) {
     return null;
   }
   if (kind !== "aux" && kind !== "state") return null;
-  return { from, to, auxKey, kind };
+  return toPort !== undefined && toPort !== ""
+    ? { from, to, auxKey, kind, toPort }
+    : { from, to, auxKey, kind };
 };
 
 /**
