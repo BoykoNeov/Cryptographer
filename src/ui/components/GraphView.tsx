@@ -115,6 +115,7 @@ import {
   useSpec,
 } from "../stores/spec";
 import { getTrace, setSelectedStepId, useFrameIndex, useTraceVersion } from "../stores/trace";
+import { isTwofishCanonicalEnabledForLayout } from "../stores/twofish-canonical-hatch";
 import {
   ALL_VIEW_DENSITIES,
   DENSITY_SCALE,
@@ -3056,6 +3057,11 @@ export const GraphView = () => {
    */
   const twofishRoundNeverModes = createMemo<{ readonly [id: string]: "never" }>(() => {
     const modes: Record<string, "never"> = {};
+    // Gated on the canonical-layout hatch: with the 4-rail cell OFF (default),
+    // the round renders as a generic stack, so its split SHOULD replicate like
+    // any other high-fanout source — no cell to protect. Matches the original
+    // pre-4-rail behavior for the A/B comparison.
+    if (!isTwofishCanonicalEnabledForLayout()) return modes;
     const walk = (nodes: readonly StepNode[]): void => {
       for (const node of nodes) {
         if (node.kind === "step") continue;
@@ -3682,6 +3688,10 @@ export const GraphView = () => {
   // so it has its own recognizer/layout).
   const twofishRoundsById = createMemo(() => {
     const m = new Map<string, TwofishRoundShape>();
+    // Canonical 4-rail layout is OFF by default (`?twofish4rail=1` to enable);
+    // an empty map means no round is recognized, so every Twofish round falls
+    // through to the generic vertical-stack layout — the "original" view.
+    if (!isTwofishCanonicalEnabledForLayout()) return m;
     const walk = (nodes: readonly StepNode[]): void => {
       for (const node of nodes) {
         if (node.kind === "step") continue;
