@@ -681,6 +681,29 @@ button:disabled {
   gap: 2px;
 }
 
+/* Inline expand/collapse chip for a port row that carries a big table (a
+   key-derived S-box, published key material). The row collapses to a preview
+   by default (PORT_ROW_CELL_CAP) so scrubbing onto such a frame doesn't balloon
+   the state view and yank the page scroll; this chip reveals the full strip. */
+.port-row-more {
+  align-self: center;
+  margin-left: 4px;
+  padding: 1px 8px;
+  font-size: 10px;
+  font-family: inherit;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border, #333);
+  border-radius: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.port-row-more:hover {
+  color: var(--fg, #eee);
+  border-color: var(--muted);
+}
+
 /* ─── Cell-level provenance hover ──────────────────────────────────────── */
 /* inspector-cell-hover plan, Slice 2 (2026-06-04). Hovering an OUTPUT cell
    lights up the INPUT cell(s) that feed it. ALL rules are scoped under

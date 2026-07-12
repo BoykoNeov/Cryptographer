@@ -28,7 +28,7 @@ import { buildSha256Spec } from "@/ciphers/sha-256";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue, TraceFrame } from "@/core/types";
-import { PortFlowView, isPortNativeFrame } from "@/ui/components/PortFlowView";
+import { PORT_ROW_CELL_CAP, PortFlowView, isPortNativeFrame } from "@/ui/components/PortFlowView";
 import { __resetByteFormatForTests, setByteFormat } from "@/ui/stores/format";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
@@ -233,6 +233,63 @@ describe("PortFlowView — outputs-only frame", () => {
     );
     expect(outputRows.length).toBe(1);
     expect(outputRows[0]?.querySelectorAll(".bytes-cell").length).toBe(4);
+  });
+});
+
+// ─── Big-table cell cap (2026-07-12) — the linear-view no-jump fix ───────
+//
+// A port carrying a key-derived table (Blowfish's 1024-byte S-box aux, the
+// key-schedule monolith's published P+S) used to render one cell per byte,
+// ballooning the state view to thousands of px and yanking the page scroll when
+// scrubbing onto such a frame. The row now collapses to a PORT_ROW_CELL_CAP
+// preview with an inline expand chip. Real operands (≤ 16 bytes) never truncate.
+
+describe("PortFlowView — big-table cell cap", () => {
+  afterEach(() => cleanup());
+
+  /** A frame whose single input port carries `len` bytes (a stand-in for the
+   *  Blowfish S-box aux read). */
+  const bigInputFrame = (len: number): TraceFrame => ({
+    index: 0,
+    path: [],
+    stepId: "big",
+    stepType: "blowfish.sbox-lookup@1",
+    params: {},
+    auxRead: new Map(),
+    auxWritten: new Map(),
+    portInputs: new Map([["table", new Uint8Array(len)]]),
+    portOutputs: new Map([["output", new Uint8Array([1, 2, 3, 4])]]),
+  });
+
+  it("collapses a 1024-byte port to the cap and shows a '+N more' chip", () => {
+    const { container } = render(() => <PortFlowView frame={bigInputFrame(1024)} />);
+    const tableRow = container.querySelector(".port-row[data-port-name='table']");
+    if (tableRow === null) throw new Error("no table row");
+    expect(tableRow.querySelectorAll(".bytes-cell").length).toBe(PORT_ROW_CELL_CAP);
+    const chip = tableRow.querySelector(".port-row-more");
+    expect(chip).not.toBeNull();
+    expect(chip?.textContent ?? "").toBe(`+${1024 - PORT_ROW_CELL_CAP} more`);
+    // The label still reports the TRUE byte count (the cap is display-only).
+    expect(tableRow.querySelector(".port-row-count")?.textContent ?? "").toContain("1024 bytes");
+  });
+
+  it("clicking the chip reveals every byte and flips the label to 'show less'", () => {
+    const { container } = render(() => <PortFlowView frame={bigInputFrame(1024)} />);
+    const tableRow = container.querySelector(".port-row[data-port-name='table']");
+    if (tableRow === null) throw new Error("no table row");
+    const chip = tableRow.querySelector(".port-row-more");
+    if (chip === null) throw new Error("no chip");
+    fireEvent.click(chip);
+    expect(tableRow.querySelectorAll(".bytes-cell").length).toBe(1024);
+    expect(tableRow.querySelector(".port-row-more")?.textContent ?? "").toBe("show less");
+  });
+
+  it("a small port (≤ cap) renders all cells with no chip", () => {
+    const { container } = render(() => <PortFlowView frame={bigInputFrame(PORT_ROW_CELL_CAP)} />);
+    const tableRow = container.querySelector(".port-row[data-port-name='table']");
+    if (tableRow === null) throw new Error("no table row");
+    expect(tableRow.querySelectorAll(".bytes-cell").length).toBe(PORT_ROW_CELL_CAP);
+    expect(tableRow.querySelector(".port-row-more")).toBeNull();
   });
 });
 

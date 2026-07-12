@@ -81,6 +81,29 @@ const EMPTY_PORT_ROWS: readonly [string, Uint8Array][] = [];
 const EMPTY_PORTS: ReadonlyMap<string, Uint8Array> = new Map();
 const EMPTY_SOURCE_MAP: ReadonlyMap<string, string | undefined> = new Map();
 
+/**
+ * Cell-strip preview cap (2026-07-12). A port row wider than this collapses to
+ * its first `PORT_ROW_CELL_CAP` cells plus an inline expand chip; the full strip
+ * shows only when the user opts in.
+ *
+ * **Why.** A leaf that reads a whole key-derived table on an aux port renders
+ * one `.bytes-cell` per byte — Blowfish's `sbox-lookup` reads its 1024-byte
+ * S-box, the key-schedule monolith publishes ~4 KB of P+S — so those frames'
+ * state view balloons to thousands of px while a neighbouring round frame is
+ * ~160 px. Scrubbing onto one shoves everything below it down and yanks the
+ * page scroll (the jump the user hit clicking s0..s3). Real operands are ≤ 16
+ * bytes and never truncate; only the big lookup tables collapse — which is also
+ * the more legible default (the per-frame narration already names the single
+ * entry that was read, so a full wall of table hex teaches nothing).
+ *
+ * The cap is on RENDERED cells only; `bytes.length` (the label count) still
+ * reports the true size, and the expand chip reveals every byte on demand. The
+ * `expanded` signal is per-`PortRow`; because `<For>` remounts the rows on every
+ * frame change (new tuple arrays from the `inputRows`/`outputRows` memos), it
+ * resets to collapsed on each scrub — exactly the no-jump default we want.
+ */
+export const PORT_ROW_CELL_CAP = 32;
+
 export const PortFlowView = (props: Props) => {
   // Materialize port lists once per frame change. Map iteration is
   // insertion order in ES, and the runtime inserts in port-declaration
@@ -211,13 +234,25 @@ type PortRowProps = {
  */
 const PortRow = (props: PortRowProps) => {
   const fmt = useByteFormat();
-  const cells = createMemo<readonly { index: number; byte: number }[]>(() => {
+  // Collapsed by default; the row remounts per frame (see PORT_ROW_CELL_CAP),
+  // so this resets to collapsed on every scrub — the no-jump default.
+  const [expanded, setExpanded] = createSignal(false);
+  const allCells = createMemo<readonly { index: number; byte: number }[]>(() => {
     const out: { index: number; byte: number }[] = [];
     for (let i = 0; i < props.bytes.length; i++) {
       out.push({ index: i, byte: props.bytes[i] ?? 0 });
     }
     return out;
   });
+  // Whether this row is long enough to collapse, and the cells actually shown.
+  const overflows = createMemo(() => props.bytes.length > PORT_ROW_CELL_CAP);
+  const cells = createMemo<readonly { index: number; byte: number }[]>(() =>
+    overflows() && !expanded() ? allCells().slice(0, PORT_ROW_CELL_CAP) : allCells(),
+  );
+  const hiddenCount = createMemo(() => props.bytes.length - PORT_ROW_CELL_CAP);
+  const toggle = (): void => {
+    setExpanded((prev) => !prev);
+  };
 
   return (
     <div class="port-row" data-side={props.side} data-port-name={props.portName}>
@@ -261,6 +296,19 @@ const PortRow = (props: PortRowProps) => {
               </div>
             )}
           </For>
+          {/* Expand chip for a collapsed big table (aux lookup tables, published
+              key material). Sits inline after the last shown cell; toggles the
+              row between the capped preview and the full byte strip. */}
+          <Show when={overflows()}>
+            <button
+              type="button"
+              class="port-row-more"
+              onClick={toggle}
+              title={expanded() ? "show fewer bytes" : "show all bytes"}
+            >
+              {expanded() ? "show less" : `+${hiddenCount()} more`}
+            </button>
+          </Show>
         </Show>
       </div>
     </div>
