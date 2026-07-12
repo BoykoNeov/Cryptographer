@@ -77,6 +77,8 @@ import {
   findStep,
 } from "@/core/spec-mutations";
 import { inferShapesAtAnchors, validateShapes } from "@/core/spec-shapes";
+import { twofishRoundPlacement } from "@/core/twofish-layout";
+import { type TwofishRoundShape, analyzeTwofishRound } from "@/core/twofish-shape";
 import type { AuxValue, State, StepNode } from "@/core/types";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { isAsymmetric, isHash, useAlgorithm } from "../stores/cipher";
@@ -523,6 +525,13 @@ type Box = { x: number; y: number; w: number; h: number };
  * map triggers the canonical two-column Feistel layout (see `feistel-layout.ts`).
  */
 const EMPTY_FEISTEL_ROUNDS: ReadonlyMap<string, FeistelRoundShape> = new Map();
+
+/**
+ * Empty Twofish-round map — the parallel default for the `twofishRounds` param
+ * (see `EMPTY_FEISTEL_ROUNDS`). A round id present here triggers the canonical
+ * 4-rail Twofish layout (see `twofish-layout.ts`) instead of the generic stack.
+ */
+const EMPTY_TWOFISH_ROUNDS: ReadonlyMap<string, TwofishRoundShape> = new Map();
 
 /**
  * Replica placement info, derived once at the top of `layoutRoot` from the
@@ -1257,6 +1266,13 @@ const layoutNode = (
    * generic layout.
    */
   feistelRounds: ReadonlyMap<string, FeistelRoundShape> = EMPTY_FEISTEL_ROUNDS,
+  /**
+   * Twofish-shaped round groups (id → derived `TwofishRoundShape`). Parallel to
+   * `feistelRounds`: a group whose id is here lays out as the canonical 4-rail
+   * Twofish cell (see `twofish-layout.ts`). Kept a separate param so the 2-way
+   * Feistel path is byte-identically untouched (zero regression).
+   */
+  twofishRounds: ReadonlyMap<string, TwofishRoundShape> = EMPTY_TWOFISH_ROUNDS,
 ): Box => {
   const container = containersById.get(id);
   const pin = pinned.get(id);
@@ -1310,6 +1326,38 @@ const layoutNode = (
     const innerX = startX + consts.CONTAINER_PAD;
     const innerY = startY + HEADER_H + consts.CONTAINER_PAD;
     const placement = feistelRoundPlacement(feistel, container.childIds, {
+      leafW: consts.LEAF_W,
+      leafH: consts.LEAF_H,
+      isReplica: (cid) => replicas.isReplica.has(cid),
+      consumerOf: (cid) => replicas.consumerOf.get(cid),
+    });
+    for (const childId of container.childIds) {
+      const off = placement.offsets.get(childId);
+      if (off === undefined) continue;
+      const delta = relativePins.get(childId);
+      out.set(childId, {
+        x: innerX + off.dx + (delta?.dx ?? 0),
+        y: innerY + off.dy + (delta?.dy ?? 0),
+        w: consts.LEAF_W,
+        h: consts.LEAF_H,
+      });
+    }
+    const w = placement.bodyW + 2 * consts.CONTAINER_PAD;
+    const h = HEADER_H + placement.bodyH + 2 * consts.CONTAINER_PAD;
+    const box: Box = { x: startX, y: startY, w, h };
+    out.set(id, box);
+    return box;
+  }
+
+  // Canonical Twofish 4-rail layout — the same idea as the Feistel branch above
+  // but for Twofish's wider round (two g boxes, PHT, two mix rails). See
+  // `twofish-layout.ts`. Children are all leaves, so we set their boxes
+  // directly; `relativePins` still apply.
+  const twofish = twofishRounds.get(id);
+  if (container.kind === "group" && twofish !== undefined) {
+    const innerX = startX + consts.CONTAINER_PAD;
+    const innerY = startY + HEADER_H + consts.CONTAINER_PAD;
+    const placement = twofishRoundPlacement(twofish, container.childIds, {
       leafW: consts.LEAF_W,
       leafH: consts.LEAF_H,
       isReplica: (cid) => replicas.isReplica.has(cid),
@@ -1453,6 +1501,7 @@ const layoutNode = (
         relativePins,
         offsetsEnabled,
         feistelRounds,
+        twofishRounds,
       );
       innerY = naturalY + childBox.h + consts.STACK_GAP;
       const renderedBottom = childBox.y + childBox.h;
@@ -1609,6 +1658,7 @@ const layoutNode = (
       relativePins,
       offsetsEnabled,
       feistelRounds,
+      twofishRounds,
     );
     innerX = childBox.x + childBox.w + consts.FLOW_GAP;
     lastChildRight = childBox.x + childBox.w;
@@ -1744,6 +1794,12 @@ export const layoutRoot = (
    * empty so the test suite + non-Feistel specs keep the generic layout.
    */
   feistelRounds: ReadonlyMap<string, FeistelRoundShape> = EMPTY_FEISTEL_ROUNDS,
+  /**
+   * Twofish-shaped round groups (id → derived shape). Threaded down to
+   * `layoutNode` alongside `feistelRounds` so a Twofish round lays out as the
+   * canonical 4-rail cell. Optional; defaults empty (generic layout).
+   */
+  twofishRounds: ReadonlyMap<string, TwofishRoundShape> = EMPTY_TWOFISH_ROUNDS,
 ): { boxes: Map<string, Box>; canvasW: number; canvasH: number } => {
   const containersById = new Map<string, ContainerNode>();
   for (const c of graph.containers) containersById.set(c.id, c);
@@ -1861,6 +1917,7 @@ export const layoutRoot = (
       relativePins,
       offsetsEnabled,
       feistelRounds,
+      twofishRounds,
     );
     cursorX = naturalX + box.w + consts.FLOW_GAP;
     if (offsetsEnabled && !isAuxOnly) altCounter += 1;
@@ -2984,9 +3041,56 @@ export const GraphView = () => {
    * removed. `auxOnlyRootIds` SURVIVES: it still drives the layout-lift of
    * aux-only roots off the spine row in `layoutRoot`.)
    */
+  /**
+   * Twofish canonical rounds are self-contained 4-rail cells; their internal
+   * leaves must NOT be replicated. The round split feeds 6 port-flow edges
+   * (each of its first two outputs drives both a g function AND a carried
+   * recombine input, plus the R2/R3 rails) — over the fanout threshold — so
+   * without this it would scatter into per-consumer chips and break the cell +
+   * the swap-X edge detection. (DES/Blowfish splits stay under the threshold,
+   * so they never hit this.) We mark every recognized-round member `"never"`.
+   * Computed straight from `spec()` — not the later `twofishRoundsById` memo —
+   * to avoid a temporal-dead-zone reference from this earlier pipeline stage.
+   * The high-fanout KEY-SCHEDULE publish source is NOT a round member, so it
+   * still replicates its 40 subkey loads as intended.
+   */
+  const twofishRoundNeverModes = createMemo<{ readonly [id: string]: "never" }>(() => {
+    const modes: Record<string, "never"> = {};
+    const walk = (nodes: readonly StepNode[]): void => {
+      for (const node of nodes) {
+        if (node.kind === "step") continue;
+        if (node.kind === "group") {
+          const shape = analyzeTwofishRound(node);
+          if (shape !== null) {
+            for (const id of [
+              shape.splitId,
+              shape.recombineId,
+              shape.rolNodeId,
+              ...shape.g0Ids,
+              ...shape.g1Ids,
+              ...shape.phtIds,
+              ...shape.r2MixIds,
+              ...shape.r3MixIds,
+            ]) {
+              modes[id] = "never";
+            }
+          }
+        }
+        walk(node.children);
+      }
+    };
+    walk(spec().steps);
+    return modes;
+  });
+
   const replicatedGraph = createMemo<CipherGraph>(() =>
     replicate()
-      ? replicateHighFanoutSources(expandedGraph(), replicationThreshold(), replicationModes())
+      ? replicateHighFanoutSources(expandedGraph(), replicationThreshold(), {
+          // Round members first so a user's explicit per-source override
+          // (rare on a round-internal split) still wins on top.
+          ...twofishRoundNeverModes(),
+          ...replicationModes(),
+        })
       : expandedGraph(),
   );
 
@@ -3572,6 +3676,26 @@ export const GraphView = () => {
     return m;
   });
 
+  // Twofish 4-rail round shapes, keyed by group id — the parallel of
+  // `feistelRoundsById`. A group recognized by `analyzeTwofishRound` triggers
+  // the canonical 4-rail layout (Twofish's round is NOT the 2-way Feistel form,
+  // so it has its own recognizer/layout).
+  const twofishRoundsById = createMemo(() => {
+    const m = new Map<string, TwofishRoundShape>();
+    const walk = (nodes: readonly StepNode[]): void => {
+      for (const node of nodes) {
+        if (node.kind === "step") continue;
+        if (node.kind === "group") {
+          const shape = analyzeTwofishRound(node);
+          if (shape !== null) m.set(node.id, shape);
+        }
+        walk(node.children);
+      }
+    };
+    walk(spec().steps);
+    return m;
+  });
+
   // `baseLayout` passes feistelRounds (so the source-x lookup matches the final
   // layout for Feistel round leaves) but still OMITS portAssignment +
   // relativePins — passing `undefined` lets layoutRoot's defaults apply.
@@ -3584,6 +3708,7 @@ export const GraphView = () => {
       undefined,
       undefined,
       feistelRoundsById(),
+      twofishRoundsById(),
     ),
   );
 
@@ -3737,6 +3862,7 @@ export const GraphView = () => {
       portAssignment(),
       relativePinsMap(),
       feistelRoundsById(),
+      twofishRoundsById(),
     ),
   );
 
@@ -3877,6 +4003,49 @@ export const GraphView = () => {
         carryLabel: labels.carry,
         ...wires,
       });
+    }
+    return out;
+  });
+
+  /**
+   * Canonical-Twofish decorations: per expanded Twofish round, a dashed "g"
+   * bounding box around EACH of the two g-function stacks (the `rolR1` rail is
+   * excluded — it sits atop the g1 box but is not part of g). Pure geometry off
+   * `layout().boxes`; collapsed rounds are skipped. Overlay is
+   * `pointer-events:none` so it never intercepts clicks on the real leaves.
+   */
+  const twofishDecorations = createMemo(() => {
+    const rounds = twofishRoundsById();
+    if (rounds.size === 0) return [];
+    const boxes = layout().boxes;
+    const GBOX_PAD = 10;
+    const bboxOf = (ids: readonly string[]): Box | null => {
+      let minX = Number.POSITIVE_INFINITY;
+      let minY = Number.POSITIVE_INFINITY;
+      let maxX = Number.NEGATIVE_INFINITY;
+      let maxY = Number.NEGATIVE_INFINITY;
+      for (const id of ids) {
+        const b = boxes.get(id);
+        if (b === undefined) continue;
+        minX = Math.min(minX, b.x);
+        minY = Math.min(minY, b.y);
+        maxX = Math.max(maxX, b.x + b.w);
+        maxY = Math.max(maxY, b.y + b.h);
+      }
+      if (!Number.isFinite(minX)) return null;
+      return {
+        x: minX - GBOX_PAD,
+        y: minY - GBOX_PAD,
+        w: maxX - minX + 2 * GBOX_PAD,
+        h: maxY - minY + 2 * GBOX_PAD,
+      };
+    };
+    const out: { roundId: string; g0Box: Box; g1Box: Box }[] = [];
+    for (const [roundId, shape] of rounds) {
+      const g0Box = bboxOf(shape.g0Ids);
+      const g1Box = bboxOf(shape.g1Ids);
+      if (g0Box === null || g1Box === null) continue; // collapsed round.
+      out.push({ roundId, g0Box, g1Box });
     }
     return out;
   });
@@ -6013,6 +6182,32 @@ export const GraphView = () => {
               )}
             </For>
 
+            {/* Canonical-Twofish decorations: a dashed "g" box around EACH of
+              the two g-function stacks. Reuses the Feistel F-box styling. */}
+            <For each={twofishDecorations()}>
+              {(d) => (
+                <g class="graph-feistel-decor" pointer-events="none">
+                  <For each={[d.g0Box, d.g1Box]}>
+                    {(gb) => (
+                      <>
+                        <rect
+                          class="graph-feistel-fbox"
+                          x={gb.x}
+                          y={gb.y}
+                          width={gb.w}
+                          height={gb.h}
+                          rx="8"
+                        />
+                        <text class="graph-feistel-fbox-label" x={gb.x + 8} y={gb.y + 16}>
+                          g
+                        </text>
+                      </>
+                    )}
+                  </For>
+                </g>
+              )}
+            </For>
+
             {/* Edges between leaf/container centers. Drawn before leaves so the
               lines tuck under the rectangle fills.
 
@@ -6409,6 +6604,15 @@ export const GraphView = () => {
                 );
               }}
             </For>
+
+            {/* No Twofish inter-round swap-X overlay: Twofish rounds lay out
+              HORIZONTALLY (top-level steps, no outer `rounds` group), so a
+              `recombine → next split` swap spans ~2000px up-and-over — a long
+              diagonal tangle, not a readable X (unlike DES/Blowfish, whose
+              rounds stack vertically for a short clean X). We keep the plain
+              `recombine → split` carry edge instead; the 4-rail cell + the
+              `recombine` narration ("Swap → (R2′,R3′,R0,R1) … the swap is just
+              the concat order") carry the swap story. DES-round-16 precedent. */}
 
             {/* Slice 5 — drop gutters. Rendered LAST so they sit on top
               of leaves and containers for native SVG hit-testing: a
