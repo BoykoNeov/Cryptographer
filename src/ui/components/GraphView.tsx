@@ -4103,7 +4103,14 @@ export const GraphView = () => {
     for (const [id, node] of nById) {
       const readPorts = registry.getRegistration(node.stepType)?.meta?.auxReadPorts;
       if (readPorts === undefined) continue;
-      const leaf = findStep(spec(), id);
+      // A REPLICA reproduces its source leaf, so its params (hence its
+      // `auxReadPorts` mapping) live on the source — the replica id itself is
+      // NOT in the spec. Resolve `replicaOf` first so an aux-fed replicated
+      // loader (RSA's high-fanout `load-n@->square-0` / `load-exp@->…`, one
+      // per square-and-multiply rung) still maps `aux[rsa.n] → input` and lands
+      // a dot. Port-flow replicas already resolved (their dot rides `toPort`,
+      // which needs no spec lookup); this generalizes that to aux-fed ones.
+      const leaf = findStep(spec(), node.replicaOf ?? id);
       if (leaf === null) continue;
       const rev = new Map<string, string>();
       for (const [port, auxKey] of readPorts(leaf.params)) rev.set(auxKey, port);

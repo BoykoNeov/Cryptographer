@@ -9,7 +9,11 @@
  *   inherits its incoming edges. Replicas carry no interactive wiring handles, so
  *   they render a plain, non-interactive `.graph-arrival-dot` where each arrow
  *   lands. The pure-OUTPUT replicas (the other `phi@->eea-N`) receive nothing and
- *   stay dotless.
+ *   stay dotless. This includes AUX-FED loaders (`load-n`/`load-exp`, fed by the
+ *   Key-Generation aux publish): their single incoming aux edge redirects to the
+ *   spine-entry replica, which must resolve its `input` port via the replica's
+ *   `replicaOf` params (the 2026-07-12 fix — a replica id isn't in the spec, so
+ *   the old `findStep(spec, id)` reverse-map lookup returned null and no dot drew).
  *
  * - **Case D — collapsed containers.** A folded group / iterate receives arrows
  *   (SHA-256's per-round `W` aux, the `blocks → round.0` seed) on its box; each
@@ -98,6 +102,27 @@ describe("GraphView — arrival dots on replicas (case C)", () => {
     const pureOutput = container.querySelector('[data-testid="graph-leaf-phi@->eea-5"]');
     expect(pureOutput).not.toBeNull();
     expect(pureOutput?.querySelectorAll(".graph-arrival-dot").length).toBe(0);
+  });
+
+  it("draws an arrival dot on the aux-fed loader replica that inherits the Key-Generation aux edge", () => {
+    // The 2026-07-12 replica-param fix. `load-n` is a top-level `aux-load-bytes`
+    // (reads aux[rsa.n] onto its `input` port) that fans out to every ladder rung,
+    // so it FULLY replicates. Its single incoming aux edge (from the collapsed
+    // Key-Generation group's publish) redirects to the spine-entry replica
+    // `load-n@->square-0`, which must resolve `rsa.n → input` via the replica's
+    // source params and land a dot. The loaders sit at TOP LEVEL, so no expand.
+    seedRsaReplicated();
+    const { container } = render(() => <GraphView />);
+
+    const spineEntry = container.querySelector('[data-testid="graph-leaf-load-n@->square-0"]');
+    expect(spineEntry).not.toBeNull();
+    expect(spineEntry?.querySelectorAll(".graph-arrival-dot").length).toBe(1);
+
+    // A pure-output loader replica (spawned copy, no incoming aux edge of its own)
+    // stays dotless — the arrow lands once, on the spine-entry replica only.
+    const pureCopy = container.querySelector('[data-testid="graph-leaf-load-n@->mult-0"]');
+    expect(pureCopy).not.toBeNull();
+    expect(pureCopy?.querySelectorAll(".graph-arrival-dot").length).toBe(0);
   });
 });
 
