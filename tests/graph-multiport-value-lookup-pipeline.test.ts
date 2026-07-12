@@ -66,6 +66,7 @@ import {
 } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import { getDefaultCollapsedContainers } from "@/core/spec-defaults";
+import { findStep } from "@/core/spec-mutations";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
 import { canonicalStepId } from "@/core/step-id";
 import type { AuxValue, CipherSpec, Trace } from "@/core/types";
@@ -229,6 +230,62 @@ describe("value-inspector resolves every port-flow spine edge through the full U
         ).toEqual([]);
       });
     }
+  }
+});
+
+// The INVERSE invariant — the user's literal ask, "every ARROW lands on a dot."
+//
+// The browser smoke counts `.graph-port-dot`s and asks "is each dot arrived?",
+// which proves the converse ("every PORT has an arrow") and CANNOT see the real
+// failure mode: an aux arrow terminating on a leaf that reads its value via
+// executor `auxReads` rather than `meta.auxReadPorts` projects NO input port, so
+// there's no dot to land on — and a dot-counting loop never enumerates it.
+//
+// This asserts it directly and decidably: over the full-pipeline graph (both
+// replication modes), every `kind:"aux"` edge whose target is a real LEAF must
+// have its `auxKey` resolvable through that leaf's `meta.auxReadPorts` reverse
+// map (`auxKey → input-port name`) — i.e. `portArrivalPoints` can place its dot.
+// Port-flow spine edges always resolve to a declared `toPort` by construction, so
+// aux edges are the only ones that could strand an arrow; container/endpoint-pill
+// arrivals are the documented out-of-scope boundary (no leaf input port exists).
+// Empty violation set ⇒ every arrow a user can see terminates on a coloured dot.
+describe("every aux arrow terminates on a resolvable input-port dot (full pipeline)", () => {
+  const reg = buildDefaultRegistry();
+  for (const c of CASES) {
+    it(`${c.name}: no aux arrow lands on a portless leaf`, () => {
+      const trace = runTrace(c);
+      const frames = frameBackedIds(trace);
+      // The aux keys a leaf reads through `meta.auxReadPorts` (the map is
+      // `port → auxKey`, so `.values()` are the auxKeys). If `edge.auxKey` is in
+      // this set the consumer projects it onto a real input port → a dot exists.
+      // Cached per leaf across both replication modes.
+      const auxKeysByLeaf = new Map<string, Set<string>>();
+      const readsAux = (leafId: string): Set<string> => {
+        const cached = auxKeysByLeaf.get(leafId);
+        if (cached !== undefined) return cached;
+        const leaf = findStep(c.spec, leafId);
+        const readPorts = leaf !== null ? reg.getRegistration(leaf.type)?.meta?.auxReadPorts : null;
+        const set = new Set(
+          leaf !== null && readPorts != null ? [...readPorts(leaf.params).values()] : [],
+        );
+        auxKeysByLeaf.set(leafId, set);
+        return set;
+      };
+
+      const violations: string[] = [];
+      for (const threshold of [0, REPLICATION_THRESHOLD]) {
+        const graph = buildGraph(c.spec, trace, threshold);
+        for (const e of graph.edges) {
+          if (e.kind !== "aux") continue;
+          if (!isFrameBacked(e.to, frames)) continue; // container/endpoint = out of scope
+          const targetId = canonicalStepId(unwrapReplica(e.to));
+          if (!readsAux(targetId).has(e.auxKey)) {
+            violations.push(`[t=${threshold}] ${e.from} → ${targetId} aux=${e.auxKey}`);
+          }
+        }
+      }
+      expect(violations).toEqual([]);
+    });
   }
 });
 
