@@ -261,7 +261,7 @@ const gfMatrixMultiplyProvenance: ProvenanceFn = (ctx) => {
 // ─── Registry + allowlist ───────────────────────────────────────────────────
 
 /**
- * The 10 EXACT-mapping provenance fns, keyed by bare port-native step type. The
+ * The 11 EXACT-mapping provenance fns, keyed by bare port-native step type. The
  * UI's `PortFlowView` resolves a hovered output cell's sources via
  * `lookupProvenance(frame.stepType)`.
  */
@@ -276,6 +276,10 @@ const PROVENANCE_REGISTRY: ReadonlyMap<string, ProvenanceFn> = new Map<string, P
   ["split-bytes@1", splitBytesProvenance],
   ["byte-slice@1", byteSliceProvenance],
   ["gf-matrix-multiply@1", gfMatrixMultiplyProvenance],
+  // @2 (Twofish MDS) shares @1's provenance exactly — the column contributor
+  // math is index-only (`out[r+4c]` ← same-column input cells `{4c+k}`); the
+  // field polynomial differs but does not change WHICH cells contribute.
+  ["gf-matrix-multiply@2", gfMatrixMultiplyProvenance],
 ]);
 
 /** Bare step types that have an exact provenance fn — exported for the

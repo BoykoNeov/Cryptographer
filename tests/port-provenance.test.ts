@@ -502,7 +502,7 @@ describe("port-provenance — executor perturbation cross-check", () => {
 // ─── Sanity: the fn registry is the 10 exact mappings ────────────────────────
 
 describe("port-provenance — registry shape", () => {
-  it("registers exactly the 10 exact-mapping step types", () => {
+  it("registers exactly the 11 exact-mapping step types", () => {
     expect(PROVENANCE_FN_STEP_TYPES).toEqual(
       new Set([
         "xor@1",
@@ -515,6 +515,8 @@ describe("port-provenance — registry shape", () => {
         "split-bytes@1",
         "byte-slice@1",
         "gf-matrix-multiply@1",
+        // @2 (Twofish MDS) reuses @1's index-only provenance fn.
+        "gf-matrix-multiply@2",
       ]),
     );
   });

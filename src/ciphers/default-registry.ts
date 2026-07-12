@@ -104,6 +104,9 @@ import {
   gfMatrixMultiply,
   gfMatrixMultiplyDoc,
   gfMatrixMultiplyPortContract,
+  gfMatrixMultiplyV2,
+  gfMatrixMultiplyV2Doc,
+  gfMatrixMultiplyV2PortContract,
 } from "../steps/gf-matrix-multiply";
 import {
   iso78164Pad,
@@ -235,6 +238,24 @@ import {
   stateToBytesPortContract,
 } from "../steps/state-to-bytes";
 import { sub, subDoc, subPortContract } from "../steps/sub";
+import {
+  twofishHExpand,
+  twofishHExpandDoc,
+  twofishHExpandMeta,
+  twofishHExpandPortContract,
+} from "../steps/twofish-h-expand";
+import {
+  twofishPublishSubkeys,
+  twofishPublishSubkeysDoc,
+  twofishPublishSubkeysMeta,
+  twofishPublishSubkeysPortContract,
+} from "../steps/twofish-publish-subkeys";
+import {
+  twofishSboxLookup,
+  twofishSboxLookupDoc,
+  twofishSboxLookupMeta,
+  twofishSboxLookupPortContract,
+} from "../steps/twofish-sbox-lookup";
 import { xor, xorDoc, xorPortContract } from "../steps/xor";
 import {
   xorWithAux,
@@ -741,6 +762,39 @@ export const buildDefaultRegistry = (): StepRegistry => {
     meta: blowfishSboxLookupMeta,
     doc: blowfishSboxLookupDoc,
   });
+  // ─── Twofish (1998 AES finalist, sixth cipher family, third Feistel) ────
+  // Three step types. `twofish.h-expand@1` is the OPAQUE half of the key
+  // schedule (RS S-vector + key-dependent S-box construction + 40 h evals),
+  // publishing A/B intermediates + the four byte→byte S-boxes to aux — but,
+  // unlike Blowfish's silent tail, it carries a rich value-prose narrator. The
+  // VISIBLE half (the pseudo-Hadamard subkey mixing) is composed from ordinary
+  // `add-mod-32@1` / `rotate-bits-right@1` frames, gathered by
+  // `twofish.publish-subkeys@1` (the aux-publish tail, allowlisted like the
+  // other `*.publish-round-keys@1` tails). `twofish.sbox-lookup@1` is the
+  // g-function's aux-fed BYTE→BYTE lookup (Twofish S-boxes are byte→byte, unlike
+  // Blowfish's byte→word). The round body's MDS reuses `gf-matrix-multiply@2`
+  // (field 0x169); everything else reuses existing port-native primitives.
+  r.register("twofish.h-expand@1", {
+    kind: "ported",
+    executor: twofishHExpand,
+    shape: twofishHExpandPortContract,
+    meta: twofishHExpandMeta,
+    doc: twofishHExpandDoc,
+  });
+  r.register("twofish.sbox-lookup@1", {
+    kind: "ported",
+    executor: twofishSboxLookup,
+    shape: twofishSboxLookupPortContract,
+    meta: twofishSboxLookupMeta,
+    doc: twofishSboxLookupDoc,
+  });
+  r.register("twofish.publish-subkeys@1", {
+    kind: "ported",
+    executor: twofishPublishSubkeys,
+    shape: twofishPublishSubkeysPortContract,
+    meta: twofishPublishSubkeysMeta,
+    doc: twofishPublishSubkeysDoc,
+  });
   // ─── Port-native primitives (universal-port plan Phase 2, Slice 2.1a+) ──
   // Authored against the port-native contract directly — no `meta` projection
   // sidecar. Their inputs come entirely from the spec edge graph: a spec must
@@ -973,6 +1027,16 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: gfMatrixMultiply,
     shape: gfMatrixMultiplyPortContract,
     doc: gfMatrixMultiplyDoc,
+  });
+  // @2 (Twofish, 2026-07-12): generalizes @1 with a `fieldModulus` param so the
+  // same column-mixing primitive works over Twofish's MDS field GF(2⁸)/0x169
+  // (default 0x11B reproduces AES for parity). @1 is left untouched — AES
+  // depends on its hardcoded field. Backed by `gfMulPoly` in core/state/matrix.
+  r.register("gf-matrix-multiply@2", {
+    kind: "ported",
+    executor: gfMatrixMultiplyV2,
+    shape: gfMatrixMultiplyV2PortContract,
+    doc: gfMatrixMultiplyV2Doc,
   });
   // AddRoundKey: XOR the round key (read from `aux["roundKey.N"]` internally
   // via `meta.auxReadPorts`) into the carried `input` port. Hybrid ported
