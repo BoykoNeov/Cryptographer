@@ -172,8 +172,14 @@ const unresolvedLandings = (spec: CipherSpec, trace: Trace): string[] => {
   for (const b of bundled.bundles) {
     const edge = b.representativeEdge;
     const targetId = visualEdgeTargetId(edge, nById, cById);
-    // Container-targeted bundles land their dot via `containerArrivalDots`
-    // (collapsed) or descend to a leaf when expanded — out of scope here.
+    // Container-targeted bundles are out of scope: a COLLAPSED container gets
+    // its dot from `containerArrivalDots`; an EXPANDED one is a group-SEED edge
+    // (e.g. DES `initial-permutation → rounds`, `toPort` undefined — the group's
+    // `in` pseudo-port) whose real landing is the first leaf INSIDE, dotted via
+    // the seed→leaf edge that this same test DOES assert (`rounds →
+    // round.1.split`, `toPort=input`). Dotting the expanded wrapper too is the
+    // deliberate "don't pepper an expanded container" decision (case D). So the
+    // guarantee here is precisely "every LEAF/replica-targeted arrow resolves."
     if (cById.has(targetId)) continue;
     if (!resolves(edge, targetId)) {
       const t = nById.get(targetId);
