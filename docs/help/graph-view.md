@@ -32,6 +32,14 @@ internalized.
   `key-expansion` to a collapsed iterate), they collapse into one
   thicker arrow tagged `×N`. Click the arrow to see the full list of
   aux keys it carries.
+- **Colored dots where an arrow ends** mark exactly where each incoming
+  value lands and are tinted to match that arrow — so when a box has
+  several inputs (an `xor`'s two operands, a `mod-mul`'s `a`/`b`, a round
+  key feeding `add-round-key`) you can tell at a glance which dot belongs
+  to which arrow. They appear on leaves, on the two crossing rails of a
+  Feistel round's swap (labeled `R` / `L⊕F`), on a fanned-out reference
+  chip that has its own input, and on a collapsed container where a folded
+  step's input arrives.
 - **Orange `!` glyph** on a node means the validator found a wiring
   problem. Hover for the message: an orphaned read (the step asked for
   an aux key nothing produced), an unused write (this step's output is
