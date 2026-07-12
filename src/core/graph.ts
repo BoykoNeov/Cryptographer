@@ -1392,7 +1392,23 @@ export const collapseGraph = (
     const key = `${edge.kind} ${from} ${to} ${edge.auxKey}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    newEdges.push({ from, to, auxKey: edge.auxKey, kind: edge.kind });
+    // Preserve the port pairing (`fromPort`/`toPort`) that `inferPortEdges`
+    // stamped — the value inspector's multi-port state-edge resolution
+    // (`lookupRegularState`, DES/Blowfish/Twofish split→fan-in wires) reads it.
+    // But ONLY for endpoints that survived collapse UNremapped: a remapped
+    // endpoint now points at a collapsed CONTAINER, whose port name refers to
+    // a leaf that no longer renders, so carrying it would be a dangling
+    // reference. (Regression 2026-07-12: this rebuild silently dropped both
+    // fields, so every port-flow edge lost its pairing the moment ANY container
+    // was collapsed — which is the default for every cipher's key schedule.)
+    newEdges.push({
+      from,
+      to,
+      auxKey: edge.auxKey,
+      kind: edge.kind,
+      ...(from === edge.from && edge.fromPort !== undefined ? { fromPort: edge.fromPort } : {}),
+      ...(to === edge.to && edge.toPort !== undefined ? { toPort: edge.toPort } : {}),
+    });
   }
 
   // rootIds: keep the entries that still resolve to a visible leaf or container.
@@ -2032,7 +2048,21 @@ export const replicateHighFanoutSources = (
       list.push(rId);
       map.set(anchorKey, list);
     }
-    newEdges.push({ from: rId, to: effectiveTo, auxKey: edge.auxKey, kind: edge.kind });
+    // Carry the port pairing onto the replica's outgoing edge. The replica
+    // reproduces the SOURCE, so it emits on the same producer port
+    // (`edge.fromPort`). `toPort` is preserved only when the consumer wasn't
+    // itself redirected to a spine replica (`effectiveTo === edge.to`) — a
+    // redirected target no longer names a real consumer input port. Without
+    // this, the value inspector can't resolve a replica→fan-in state edge
+    // (regression 2026-07-12: Twofish's replicated g-split → S-box wires).
+    newEdges.push({
+      from: rId,
+      to: effectiveTo,
+      auxKey: edge.auxKey,
+      kind: edge.kind,
+      ...(edge.fromPort !== undefined ? { fromPort: edge.fromPort } : {}),
+      ...(effectiveTo === edge.to && edge.toPort !== undefined ? { toPort: edge.toPort } : {}),
+    });
   }
 
   // Build replacement childIds for each affected container + rootIds.

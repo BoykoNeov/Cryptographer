@@ -759,7 +759,12 @@ const lookupRegularState = (
   // is a container id like an iterate, whose state edges are handled by
   // chip branches above but a non-chip iterate-targeted state edge can
   // still reach here pre-Slice-6 when the iterate isn't collapsed).
-  const producer = findProducerFrame(trace, edge.from, currentBlockIndex);
+  // Unwrap a fan-out replica id (`${src}@->${consumer}`) to its real producer
+  // leaf — the replica is a synthetic node with no trace frame, but it emits
+  // the source's bytes, so the producer-side reads (primary output / port 4)
+  // resolve through the underlying source. Matches the unwrap every aux path
+  // already does; the state path had omitted it.
+  const producer = findProducerFrame(trace, unwrapReplicaSource(edge.from), currentBlockIndex);
   const consumer = findConsumerFrame(trace, edge.to, currentBlockIndex);
 
   // (1) Producer's PRIMARY output port — the `"state"` port or the sole
