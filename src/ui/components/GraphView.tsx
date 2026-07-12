@@ -364,6 +364,24 @@ const HEADER_H = 22;
  * topmost row of nodes.
  */
 const CANVAS_MARGIN = 60;
+/**
+ * Extra scroll headroom appended to the RIGHT and BOTTOM of the canvas beyond
+ * the leading `CANVAS_MARGIN` origin (2026-07-12, user: "give more vertical
+ * and horizontal space… the bottom is hard to access and read even when
+ * scrolled maximally down"). Purely trailing padding: the last row/column of
+ * nodes is no longer flush against the scroll boundary, so the user can scroll
+ * the bottommost content up into the middle of the viewport to read it — and,
+ * because the value inspector floats sticky at the TOP-LEFT, the extra room
+ * lets any node be panned out from under it. Bottom gets more than right
+ * because the sticky toolbar/inspector band eats top viewport height, so the
+ * bottom needs the larger reserve to clear it. Kept SEPARATE from
+ * `CANVAS_MARGIN` so the layout ORIGIN (which the replica-gutter / drag /
+ * label-truncation tests pin to 60) is untouched — only the trailing extent
+ * grows, and every relative canvasW/H assertion (density ordering, feistel /
+ * twofish `withMap === without`) still holds since both sides gain the pad.
+ */
+const CANVAS_TRAILING_PAD_RIGHT = 120;
+const CANVAS_TRAILING_PAD_BOTTOM = 180;
 /** Pixel threshold above which a pointer event is a drag, not a click. Fixed. */
 const DRAG_THRESHOLD_PX = 4;
 /** Width of the collapse-chevron hit area inside the container header. Fixed. */
@@ -2100,8 +2118,8 @@ export const layoutRoot = (
 
   return {
     boxes,
-    canvasW: maxRight + CANVAS_MARGIN,
-    canvasH: maxBottom + CANVAS_MARGIN,
+    canvasW: maxRight + CANVAS_MARGIN + CANVAS_TRAILING_PAD_RIGHT,
+    canvasH: maxBottom + CANVAS_MARGIN + CANVAS_TRAILING_PAD_BOTTOM,
   };
 };
 

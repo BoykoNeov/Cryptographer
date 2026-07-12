@@ -17,6 +17,7 @@
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { desSpec } from "@/ciphers/des";
+import { lookupEdgeValue } from "@/core/edge-value-lookup";
 import { deriveAuxGraph } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex } from "@/core/state/bytes";
@@ -108,5 +109,53 @@ describe("DES (port-native) graph derivation — structural sanity", () => {
   it("does not throw on the full 16-round port-native DES spec", () => {
     expect(() => deriveAuxGraph(emptyTrace, desSpec)).not.toThrow();
     expect(() => deriveAuxGraph(desTrace, desSpec)).not.toThrow();
+  });
+
+  // ─── Round-1 carry resolves through the outer `rounds` group (2026-07-12) ───
+  //
+  // Regression for the user-reported "no frame found for either endpoint of
+  // state edge 'rounds' → 'round.1'" plus the paired redundant `initial-
+  // permutation → rounds` arrow ("the same value, long arrows"). DES nests
+  // seeds — `round.1.seedInput = port("rounds","in")` and
+  // `rounds.seedInput = port("initial-permutation","state")`, a seed-of-a-seed
+  // — which the pre-fix SINGLE-HOP "in" resolver couldn't chase: it stopped at
+  // the frameless `port("rounds","in")` container pseudo-port, drawing a
+  // phantom `rounds → round.1.split` edge that the value inspector reported as
+  // "no frame found", while the loop-input pass drew a second `IP → rounds`
+  // edge for the same bytes. `resolveSeedChain` now chases the group "in" seed
+  // the rest of the way to the Initial Permutation, and the loop-input pass
+  // drops its now-redundant edge.
+  describe("round-1 carry (no phantom `rounds` edges)", () => {
+    it("draws the honest `initial-permutation → round.1.split` carry", () => {
+      const graph = deriveAuxGraph(desTrace, desSpec);
+      const carry = graph.edges.find(
+        (e) => e.from === "initial-permutation" && e.to === "round.1.split",
+      );
+      expect(carry, "initial-permutation → round.1.split").toBeDefined();
+      // The port pairing must be real (IP's `state` output → split's `input`),
+      // NOT the frameless `rounds`/`in` container pseudo-port.
+      expect(carry?.fromPort).toBe("state");
+      expect(carry?.toPort).toBe("input");
+    });
+
+    it("emits NO edge anchored on the `rounds` container boundary", () => {
+      const graph = deriveAuxGraph(desTrace, desSpec);
+      // Neither the phantom `rounds → round.1.split` nor the redundant
+      // `IP → rounds` loop-input edge may survive.
+      expect(graph.edges.filter((e) => e.from === "rounds")).toEqual([]);
+      expect(graph.edges.filter((e) => e.to === "rounds")).toEqual([]);
+    });
+
+    it("the round-1 carry resolves to a value in the inspector (was `missing`)", () => {
+      const graph = deriveAuxGraph(desTrace, desSpec);
+      const carry = graph.edges.find(
+        (e) => e.from === "initial-permutation" && e.to === "round.1.split",
+      );
+      if (carry === undefined) throw new Error("round-1 carry edge missing");
+      const out = lookupEdgeValue(carry, desSpec, desTrace, undefined);
+      // Pre-fix: `{ status: "missing", reason: "no frame found for either
+      // endpoint of state edge \"rounds\" → \"round.1\"" }`.
+      expect(out.status).toBe("value");
+    });
   });
 });
