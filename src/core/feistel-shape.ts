@@ -82,6 +82,21 @@ export type FeistelRoundShape = {
    */
   readonly fStackIds: readonly string[];
   /**
+   * The F-stack leaves grouped into DEPENDENCY LAYERS: leaf ids at the same
+   * topological depth within the F cone (a leaf's depth = 1 + the max depth of
+   * any F-stack leaf it reads; leaves reading only split/rail/aux are depth 0).
+   * Spec order is preserved within each layer. Consumed by the layout so that
+   * PARALLEL F leaves (Blowfish's four independent S-box lookups) render
+   * side-by-side in one row instead of a tall vertical stack, while a purely
+   * SEQUENTIAL F chain (DES's expand→xor-K→s-boxes→p-permute) stays one-per-row
+   * exactly as before. Always a partition of `fStackIds`.
+   *
+   * Optional only so hand-built test shapes can omit it; `analyzeFeistelRound`
+   * always populates it, and the layout falls back to one-leaf-per-layer (the
+   * pre-layering single-column behavior) when it is absent.
+   */
+  readonly fStackLayers?: readonly (readonly string[])[];
+  /**
    * The pass-through rail: single-port-input nodes between a split half and the
    * recombine's carried input, in split→recombine order. **Empty for DES** (its
    * carried half is the raw split output); **`[xorP]` for Blowfish** (the
@@ -290,12 +305,48 @@ export const analyzeFeistelRound = (group: StepGroup): FeistelRoundShape | null 
       return typeof v === "string" ? v : null;
     }, null);
 
+    // 4b. Layer the F stack by dependency depth so the layout can render
+    //     parallel leaves (Blowfish's 4 S-boxes) in one row. A leaf's depth is
+    //     1 + the deepest F-stack leaf it reads; leaves that read only the
+    //     split / rail / aux are depth 0. Spec order is preserved within a layer.
+    const fSet = new Set(fStack.map((l) => l.id));
+    const depthMemo = new Map<string, number>();
+    const fDepth = (id: string): number => {
+      const cached = depthMemo.get(id);
+      if (cached !== undefined) return cached;
+      depthMemo.set(id, 0); // cycle guard (round wiring is a DAG; be safe anyway)
+      const leaf = byId.get(id);
+      let d = 0;
+      if (leaf) {
+        for (const b of Object.values(portInputsOf(leaf))) {
+          if (fSet.has(b.node)) d = Math.max(d, fDepth(b.node) + 1);
+        }
+      }
+      depthMemo.set(id, d);
+      return d;
+    };
+    const byDepth = new Map<number, string[]>();
+    let maxDepth = 0;
+    for (const l of fStack) {
+      const d = fDepth(l.id);
+      maxDepth = Math.max(maxDepth, d);
+      const bucket = byDepth.get(d) ?? [];
+      bucket.push(l.id);
+      byDepth.set(d, bucket);
+    }
+    const fStackLayers: string[][] = [];
+    for (let d = 0; d <= maxDepth; d++) {
+      const bucket = byDepth.get(d);
+      if (bucket && bucket.length > 0) fStackLayers.push(bucket);
+    }
+
     return {
       roundId: group.id,
       splitId,
       fxorId: fxor.id,
       recombineId: recombine.id,
       fStackIds: fStack.map((l) => l.id),
+      fStackLayers,
       railNodeIds: rail.railNodeIds,
       mixedHalf,
       mixedRecombineInput,

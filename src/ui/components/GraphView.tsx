@@ -37,7 +37,11 @@
 
 import { curatedDefaultFor, mergeLayoutSpecs, scaleCuratedLayout } from "@/core/default-layouts";
 import { type EdgeValueLookup, lookupEdgeValue, lookupNodeValue } from "@/core/edge-value-lookup";
-import { feistelRoundPlacement, feistelSwapWires } from "@/core/feistel-layout";
+import {
+  feistelRoundPlacement,
+  feistelRoundsStackVertically,
+  feistelSwapWires,
+} from "@/core/feistel-layout";
 import {
   type FeistelRoundShape,
   analyzeFeistelRound,
@@ -2314,6 +2318,48 @@ export const producerPortOffset = (
 };
 
 /**
+ * The point on the CONSUMER box's edge where an incoming edge visually lands —
+ * the box-edge anchor for the arrowhead, used to place the input-port wiring
+ * dots so they sit where the arrow actually arrives (2026-07-12) rather than
+ * always on the left edge. Before the canonical Feistel/Twofish cells, flow was
+ * left-to-right so left-edge dots matched; those cells route flow top-to-bottom,
+ * so a fixed left-edge dot no longer aligns with the incoming arrow.
+ *
+ * **This MUST match `EdgePath`'s `geom()` target-attach math** (search "Three
+ * regimes" / the vertical/horizontal branches). It returns the point ON the box
+ * edge (EdgePath then pulls the arrowhead `inset` px inside; the visible tip
+ * still kisses this edge). The three regimes:
+ *   - feedback → target's TOP-edge centre;
+ *   - vertical (boxes share x-range, no y-overlap) → TOP edge if the source is
+ *     above (`downward`), else BOTTOM, shifted by the port-spread `targetXOffset`;
+ *   - horizontal (default) → LEFT edge if the source is to the left
+ *     (`rightward`), else RIGHT, shifted by `targetYOffset`.
+ * The offsets are clamped to the same half-extent EdgePath uses so the dot stays
+ * inside the box on degenerate inputs.
+ */
+export const portArrivalPoint = (
+  from: Box,
+  to: Box,
+  opts: { isFeedback: boolean; targetXOffset: number; targetYOffset: number },
+): { x: number; y: number } => {
+  const toCx = to.x + to.w / 2;
+  const toCy = to.y + to.h / 2;
+  if (opts.isFeedback) return { x: toCx, y: to.y };
+  const horizOverlap = Math.min(from.x + from.w, to.x + to.w) > Math.max(from.x, to.x);
+  const vertOverlap = Math.min(from.y + from.h, to.y + to.h) > Math.max(from.y, to.y);
+  if (horizOverlap && !vertOverlap) {
+    const downward = to.y + to.h / 2 >= from.y + from.h / 2;
+    const cap = to.w / 2 - 4;
+    const off = Math.max(-cap, Math.min(cap, opts.targetXOffset));
+    return { x: toCx + off, y: downward ? to.y : to.y + to.h };
+  }
+  const rightward = to.x + to.w / 2 >= from.x + from.w / 2;
+  const cap = to.h / 2 - 4;
+  const off = Math.max(-cap, Math.min(cap, opts.targetYOffset));
+  return { x: rightward ? to.x : to.x + to.w, y: toCy + off };
+};
+
+/**
  * Horizontal shift applied to the SOURCE x of a replica edge's path in
  * the vertical regime. Returns a signed pixel offset; `EdgePath` adds
  * it to the source attach x (`sx`), so the arrow emerges from a
@@ -3089,12 +3135,51 @@ export const GraphView = () => {
     return modes;
   });
 
+  /**
+   * Canonical Feistel rounds (DES + Blowfish) are self-contained two-column
+   * cells; their internal leaves must NOT scatter into per-consumer replica
+   * chips. Blowfish's `splitF` fans out to four S-box lookups (fanout 4 > the
+   * threshold 3), so without this it replicates into four chips that pile onto
+   * one cell — the "enormous amount of split-F replicas on top of one another"
+   * the user reported. Marking every recognized-round member `"never"` keeps
+   * `splitF` a single node drawing four short edges to its S-boxes. DES has no
+   * high-fanout round member, so this is a provable no-op there (verified via
+   * the layout box-dump: DES's only replica is the key-schedule aux source,
+   * which is NOT a round member and still replicates one chip per round).
+   */
+  const feistelRoundNeverModes = createMemo<{ readonly [id: string]: "never" }>(() => {
+    const modes: Record<string, "never"> = {};
+    const walk = (nodes: readonly StepNode[]): void => {
+      for (const node of nodes) {
+        if (node.kind === "step") continue;
+        if (node.kind === "group") {
+          const shape = analyzeFeistelRound(node);
+          if (shape !== null) {
+            for (const id of [
+              shape.splitId,
+              shape.fxorId,
+              shape.recombineId,
+              ...shape.fStackIds,
+              ...shape.railNodeIds,
+            ]) {
+              modes[id] = "never";
+            }
+          }
+        }
+        walk(node.children);
+      }
+    };
+    walk(spec().steps);
+    return modes;
+  });
+
   const replicatedGraph = createMemo<CipherGraph>(() =>
     replicate()
       ? replicateHighFanoutSources(expandedGraph(), replicationThreshold(), {
           // Round members first so a user's explicit per-source override
           // (rare on a round-internal split) still wins on top.
           ...twofishRoundNeverModes(),
+          ...feistelRoundNeverModes(),
           ...replicationModes(),
         })
       : expandedGraph(),
@@ -3877,6 +3962,61 @@ export const GraphView = () => {
   );
 
   /**
+   * Where each leaf's input-port wiring dot should sit: the box-edge point where
+   * that port's incoming port-flow edge actually arrives (2026-07-12). Keyed
+   * `consumerStepId → (portName → point)`; a port with no resolvable incoming
+   * port-flow edge (unbound, or fed from the plaintext pill / a container seed —
+   * those edges aren't `PORT_FLOW_AUX_KEY`) is simply absent, and `LeafRect`
+   * falls back to the legacy left-edge placement for it.
+   *
+   * Built from the SAME inputs `EdgePath` uses for the target attach — the
+   * `layout()` boxes, the bundle representative edges, and `consumerPortOffset`
+   * against `portAssignment()` — so a dot lands exactly on its arrow's head by
+   * construction. The two `consumerPortOffset` calls mirror the `targetXOffset`
+   * (vertical regime: LEAF_W-scaled gap) and `targetYOffset` (horizontal regime:
+   * LEAF_H-scaled gap) memos in `renderBundle`; `portArrivalPoint` then selects
+   * whichever axis the regime uses.
+   */
+  const portArrivalPoints = createMemo<
+    ReadonlyMap<string, ReadonlyMap<string, { x: number; y: number }>>
+  >(() => {
+    const result = new Map<string, Map<string, { x: number; y: number }>>();
+    const boxes = layout().boxes;
+    const assign = portAssignment();
+    const c = consts();
+    const bg = bundledGraph();
+    const nById = nodesById();
+    const cById = containersById();
+    // Gap/cap pairs copied from `renderBundle`'s targetXOffset / targetYOffset.
+    const vGap = Math.max(6, Math.round(c.LEAF_W / 10));
+    const vCap = c.LEAF_W / 2 - 4;
+    const hGap = Math.max(4, Math.round(c.LEAF_H / 4));
+    const hCap = c.LEAF_H / 2 - 4;
+    for (const b of bg.bundles) {
+      const edge = b.representativeEdge;
+      // Only port-flow spine edges carry a real consumer input-port name.
+      if (edge.kind !== "state" || edge.auxKey !== PORT_FLOW_AUX_KEY) continue;
+      if (edge.toPort === undefined) continue;
+      const targetId = visualEdgeTargetId(edge, nById, cById);
+      const to = boxes.get(targetId);
+      const from = boxes.get(edge.from);
+      if (to === undefined || from === undefined) continue;
+      const point = portArrivalPoint(from, to, {
+        isFeedback: b.isFeedback,
+        targetXOffset: consumerPortOffset(edge, assign, vGap, vCap),
+        targetYOffset: consumerPortOffset(edge, assign, hGap, hCap),
+      });
+      let inner = result.get(targetId);
+      if (inner === undefined) {
+        inner = new Map();
+        result.set(targetId, inner);
+      }
+      inner.set(edge.toPort, point);
+    }
+    return result;
+  });
+
+  /**
    * Canonical-Feistel decorations (DES canonical-representation feature):
    * per expanded Feistel round, the **L / R rail labels** under `split` and an
    * **F-function bounding box** around the F-stack column. Pure geometry read
@@ -3949,12 +4089,23 @@ export const GraphView = () => {
       recombineIds.add(shape.recombineId);
       splitIds.add(shape.splitId);
     }
+    // Suppress the plain carry edge ONLY where the swap X actually replaces it —
+    // i.e. vertically-stacked rounds (DES). Gated on the SAME geometric test as
+    // `feistelSwaps` below so the two never disagree (a mismatch would either
+    // double-draw the carry edge or drop it). Horizontally-tiled Blowfish rounds
+    // fail the test → their carry edge is kept and routes like any other edge.
+    const boxes = layout().boxes;
     const keys = new Set<string>();
     for (const e of graph().edges) {
+      if (!recombineIds.has(e.from) || !splitIds.has(e.to)) continue;
+      const rb = boxes.get(e.from);
+      const sb = boxes.get(e.to);
+      if (rb === undefined || sb === undefined) continue;
+      if (!feistelRoundsStackVertically(rb, sb)) continue;
       // NUL separator: can't collide with any character in a step id. Written
       // as the \u0000 escape (NOT a raw NUL byte) so the file stays text to
       // grep/diff tools — a literal NUL makes ripgrep classify it as binary.
-      if (recombineIds.has(e.from) && splitIds.has(e.to)) keys.add(`${e.from}\u0000${e.to}`);
+      keys.add(`${e.from}\u0000${e.to}`);
     }
     return keys;
   });
@@ -3995,6 +4146,10 @@ export const GraphView = () => {
       const rb = boxes.get(e.from);
       const sb = boxes.get(e.to);
       if (rb === undefined || sb === undefined) continue;
+      // Same gate as `feistelCarryKeys`: only vertically-stacked rounds (DES) get
+      // the swap X. Horizontally-tiled Blowfish rounds keep the plain carry edge
+      // (which `feistelCarryKeys` correspondingly does NOT suppress for them).
+      if (!feistelRoundsStackVertically(rb, sb)) continue;
       const labels = feistelValueLabels(fromRound);
       const wires = feistelSwapWires({
         // The fxor (combined half) sits LEFT when F is on the right (DES,
@@ -6522,6 +6677,10 @@ export const GraphView = () => {
                         stateShape={shapesByAnchor().get(clickTargetId) ?? ""}
                         // ─── Port-wiring (4d-bis, Slice E) ──────────────────
                         inputPorts={wiringInputPorts()}
+                        // Per-port arrival points so each input dot sits where
+                        // its incoming arrow actually lands (2026-07-12); absent
+                        // ports fall back to the left-edge placement in LeafRect.
+                        inputPortPoints={portArrivalPoints().get(node.stepId)}
                         armedPortName={armedPortHere()}
                         wireTarget={wireTargetRole()}
                         onArmPort={(portName) => toggleArmPort(node.stepId, portName)}
@@ -7083,6 +7242,16 @@ const LeafRect = (props: {
    * leaf with no inputs). Each becomes a small left-edge "arm" handle.
    */
   inputPorts?: readonly string[];
+  /**
+   * Per-input-port arrival points — where each port's incoming arrow actually
+   * lands on this box (2026-07-12). When a port is present, its wiring dot is
+   * drawn there instead of on the fixed left edge, so the dot tracks the arrow
+   * across the canonical top-to-bottom Feistel/Twofish cells. Ports absent from
+   * the map (unbound, or fed by the plaintext pill / a container seed) fall back
+   * to the legacy left-edge placement. `| undefined` for
+   * `exactOptionalPropertyTypes` (the parent passes `map.get(id)`).
+   */
+  inputPortPoints?: ReadonlyMap<string, { x: number; y: number }> | undefined;
   /** The input port currently armed on THIS leaf, or null. Highlights its handle. */
   armedPortName?: string | null;
   /**
@@ -7230,15 +7399,22 @@ const LeafRect = (props: {
       <For each={props.inputPorts ?? []}>
         {(portName, i) => {
           const n = (props.inputPorts ?? []).length;
-          // Read `props.box` through thunks, NOT captured consts. `props.box`
-          // updates live while the node is dragged; a plain `const cx =
-          // props.box.x` here freezes the dots in place because the `<For>`
-          // child callback is NOT a reactive scope (the documented "For
-          // callbacks aren't reactive scopes" gotcha). The rect/label above
-          // read `props.box.*` directly in JSX, so they tracked the drag while
-          // these handles were left behind — that was the ghost-dot bug.
-          const cx = () => props.box.x;
-          const cy = () => props.box.y + (props.box.h * (i() + 1)) / (n + 1);
+          // Read `props.box` / the arrival map through thunks, NOT captured
+          // consts. `props.box` updates live while the node is dragged; a plain
+          // `const cx = props.box.x` here freezes the dots in place because the
+          // `<For>` child callback is NOT a reactive scope (the documented "For
+          // callbacks aren't reactive scopes" gotcha). The rect/label above read
+          // `props.box.*` directly in JSX, so they tracked the drag while these
+          // handles were left behind — that was the ghost-dot bug.
+          //
+          // Preferred position: where this port's incoming arrow actually lands
+          // (`inputPortPoints`, tracks the box-edge attach across the vertical-
+          // flow Feistel/Twofish cells). Fallback: the legacy evenly-spread
+          // left edge, used for ports with no resolvable incoming port-flow edge
+          // (unbound, or fed from the plaintext pill / a container seed).
+          const arrival = () => props.inputPortPoints?.get(portName);
+          const cx = () => arrival()?.x ?? props.box.x;
+          const cy = () => arrival()?.y ?? props.box.y + (props.box.h * (i() + 1)) / (n + 1);
           return (
             <g
               class="graph-port-handle graph-port-in"

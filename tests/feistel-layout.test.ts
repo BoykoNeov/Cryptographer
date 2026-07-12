@@ -8,7 +8,11 @@
  * replica parked right of the F column at its consumer's row.
  */
 
-import { feistelRoundPlacement, feistelSwapWires } from "@/core/feistel-layout";
+import {
+  feistelRoundPlacement,
+  feistelRoundsStackVertically,
+  feistelSwapWires,
+} from "@/core/feistel-layout";
 import type { FeistelRoundShape } from "@/core/feistel-shape";
 import { describe, expect, it } from "vitest";
 
@@ -213,6 +217,121 @@ describe("feistelRoundPlacement — mirrored Blowfish orientation", () => {
     expect(at("round.1.split").dx).toBe(at("round.1.recombine").dx);
     expect(at("round.1.split").dx).toBeGreaterThan(at("round.1.splitF").dx);
     expect(at("round.1.split").dx).toBeLessThan(at("round.1.xorR").dx);
+  });
+});
+
+// A Blowfish round with the F stack grouped into DEPENDENCY LAYERS (as
+// `analyzeFeistelRound` populates it): splitF, then the four PARALLEL S-boxes,
+// then the add/xor cascade. This is the "wide" form that triggers the extra
+// spread, the S-box zig-zag, and the aux-replica lane.
+const blowfishWideShape = (roundId: string): FeistelRoundShape => ({
+  ...blowfishRoundShape(roundId),
+  fStackLayers: [
+    [`${roundId}.splitF`],
+    [`${roundId}.s0`, `${roundId}.s1`, `${roundId}.s2`, `${roundId}.s3`],
+    [`${roundId}.add01`],
+    [`${roundId}.xor2`],
+    [`${roundId}.add3`],
+  ],
+});
+
+describe("feistelRoundPlacement — wide Blowfish F band + collision check", () => {
+  const shape = blowfishWideShape("round.1");
+  // The four S-box table replicas (the aux-source chips that used to pile onto
+  // one another) plus the round's real leaves.
+  const auxReplicas = [
+    "key-schedule@->round.1.s0",
+    "key-schedule@->round.1.s1",
+    "key-schedule@->round.1.s2",
+    "key-schedule@->round.1.s3",
+  ];
+  const consumerOfReplica: Record<string, string> = {
+    "key-schedule@->round.1.s0": "round.1.s0",
+    "key-schedule@->round.1.s1": "round.1.s1",
+    "key-schedule@->round.1.s2": "round.1.s2",
+    "key-schedule@->round.1.s3": "round.1.s3",
+  };
+  const childIds = [
+    "round.1.split",
+    "round.1.xorP",
+    "round.1.splitF",
+    "round.1.s0",
+    "round.1.s1",
+    "round.1.s2",
+    "round.1.s3",
+    "round.1.add01",
+    "round.1.xor2",
+    "round.1.add3",
+    "round.1.xorR",
+    "round.1.recombine",
+    ...auxReplicas,
+  ];
+  const place = feistelRoundPlacement(shape, childIds, {
+    ...CONSTS,
+    isReplica: (id) => auxReplicas.includes(id),
+    consumerOf: (id) => consumerOfReplica[id],
+  });
+  const at = (id: string) => {
+    const o = place.offsets.get(id);
+    if (!o) throw new Error(`no offset for ${id}`);
+    return o;
+  };
+
+  // The user's literal requirement: "it should not be possible for leaves or
+  // replicates to sit on top of one another." Assert no two child boxes overlap.
+  it("places every child at a distinct, non-overlapping cell", () => {
+    const boxes = childIds.map((id) => ({ id, ...at(id) }));
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i];
+        const b = boxes[j];
+        if (!a || !b) continue;
+        const ox = Math.min(a.dx + CONSTS.leafW, b.dx + CONSTS.leafW) - Math.max(a.dx, b.dx);
+        const oy = Math.min(a.dy + CONSTS.leafH, b.dy + CONSTS.leafH) - Math.max(a.dy, b.dy);
+        expect(ox > 2 && oy > 2, `${a.id} overlaps ${b.id}`).toBe(false);
+      }
+    }
+  });
+
+  it("lays the four S-boxes side-by-side in one row (parallel layer), left→right", () => {
+    const s = [at("round.1.s0"), at("round.1.s1"), at("round.1.s2"), at("round.1.s3")];
+    // Strictly increasing x (a horizontal row, not a vertical stack).
+    for (let i = 1; i < s.length; i++) expect(s[i]?.dx).toBeGreaterThan(s[i - 1]?.dx ?? 0);
+    // Row band: their y's differ only by the small zig-zag, never a full row.
+    const ys = s.map((o) => o.dy);
+    expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(CONSTS.leafH);
+  });
+
+  it("keeps splitF a single node above the S-box row (no replica pile)", () => {
+    for (const s of ["round.1.s0", "round.1.s1", "round.1.s2", "round.1.s3"]) {
+      expect(at("round.1.splitF").dy).toBeLessThan(at(s).dy);
+    }
+  });
+
+  it("drops each S-box aux replica just above its consumer, on a shared lane row", () => {
+    for (const rep of auxReplicas) {
+      const consumer = consumerOfReplica[rep] as string;
+      expect(at(rep).dy).toBeLessThan(at(consumer).dy); // above the S-box
+    }
+    // All four aux replicas share one lane row (distinct x, same y).
+    const ys = auxReplicas.map((r) => at(r).dy);
+    expect(new Set(ys).size).toBe(1);
+    const xs = auxReplicas.map((r) => at(r).dx);
+    expect(new Set(xs).size).toBe(4);
+  });
+});
+
+describe("feistelRoundsStackVertically", () => {
+  it("is TRUE for DES-style stacked rounds (split below recombine, same column)", () => {
+    const recombine = { x: 800, y: 1169, w: 141, h: 28 };
+    const nextSplit = { x: 866, y: 1299, w: 141, h: 28 };
+    expect(feistelRoundsStackVertically(recombine, nextSplit)).toBe(true);
+  });
+
+  it("is FALSE for Blowfish-style horizontally-tiled rounds (next split far to the side)", () => {
+    const recombine = { x: 800, y: 1297, w: 141, h: 28 };
+    const nextSplit = { x: 2035, y: 889, w: 141, h: 28 };
+    expect(feistelRoundsStackVertically(recombine, nextSplit)).toBe(false);
   });
 });
 
