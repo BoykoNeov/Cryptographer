@@ -17,6 +17,7 @@ Shipped ciphers (all with both encrypt + decrypt paths and FIPS / NIST / paper-v
 | **Serpent** | 128 / 192 / 256 | 16 B | 16 / 24 / 32 B | single-block |
 | **DES** | — | 8 B | 8 B (56 effective) | single-block |
 | **Blowfish** | — | 8 B | 8 B (v1) | single-block |
+| **Twofish** | — | 16 B | 16 B (v1) | single-block |
 
 Padding schemes (AES only): **PKCS#7**, **zero-pad**, **ISO 7816-4**, plus a no-pad option for exact-block input.
 
@@ -31,6 +32,8 @@ SHA-256 is built entirely from the universal port-native vocabulary (`rotate-bit
 DES is the project's first Feistel cipher. Its round body is built port-native — a `group` of `split-bytes → E-expand → XOR with K_i → 8 S-boxes → P-permute → xor → concat` — with the Feistel swap expressed as the `concat` argument order (rounds 1..15 swap; round 16 doesn't, the textbook last-round exception that makes the cipher self-inverse under key-reversal). No special branching primitive — the universal-port thesis is that Feistel needs none.
 
 Blowfish is the second Feistel cipher, and the one place the app keeps a step deliberately opaque. Its round body is fully port-native (`split-bytes → xor-with-aux(P[i]) → F → xor → concat`, the swap again being the `concat` order; F is `((S0[a]+S1[b]) ⊕ S2[c]) + S3[d]` shown as four aux-fed S-box lookups + two `add-mod-32` + one `xor`). But its key schedule runs the cipher **on itself 521 times** to derive the key-dependent P-array + four S-boxes — a hard data-dependency chain with no legible frame-by-frame decomposition. So the `key ⊕ P` mixing IS shown (18 real XOR frames — how a variable-length key enters), while the 521-encryption loop is one honest black-box step that publishes the derived P/S into aux. Decryption is the same network with the P-array consumed in reverse. Key fixed at 8 bytes in v1; verified against the Eric-Young / pycryptodome vector set.
+
+Twofish is the third Feistel cipher — Blowfish's 1998 AES-finalist successor, and the richest cipher in the box. Its round body is port-native (`split → g(R0) / g(ROL(R1,8)) → pseudo-Hadamard combine with two subkeys → 1-bit rotations → concat`, the swap again the `concat` order), where **g** is four aux-fed byte→byte S-box lookups feeding an MDS matrix over a *second* GF(2⁸) field (`0x169`, not AES's) via a generalized `gf-matrix-multiply@2`. The key schedule follows Twofish's **partial-visibility split**: the pseudo-Hadamard subkey mixing is 20 visible blocks of `add` / `rotate` frames, while the h-function machinery (the Reed–Solomon S-vector over a *third* field `0x14D`, the key-dependent S-box construction, and the 40 h-evaluations) is one honest opaque `twofish.h-expand@1` step — but, unlike Blowfish's silent monolith, it carries a **rich value-prose narrator** that discloses its four hidden stages annotated with the real per-key numbers this run produced (per user request). Words travel the ports big-endian to reuse the generic ARX primitives; the little-endian crossing is localized to visible `permute` reversals. Key fixed at 128 bits in v1; **verified at three levels — S-boxes, all 40 subkeys, and endpoint ciphertext — against Niels Ferguson's reference implementation *and* the published spec's constants**, agreeing on the canonical all-zero vector `9f589f5c…c35a`.
 
 Shipped public-key algorithm (select **Public-key** in the `kind` dropdown):
 

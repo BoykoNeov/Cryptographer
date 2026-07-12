@@ -131,6 +131,11 @@ export const paddingLimits = (
       // at exactly one 8-byte block and the padding selector is disabled.
       case "blowfish":
         return { min: 8, max: 8 };
+      // Twofish — single 128-bit block. Same padding-overlay blocker as the
+      // other non-AES ciphers, so the input is fixed at exactly one 16-byte
+      // block and the padding selector is disabled.
+      case "twofish":
+        return { min: 16, max: 16 };
       default: {
         const _exhaustive: never = cipher;
         throw new Error(`paddingLimits: unsupported non-AES cipher: ${_exhaustive as string}`);

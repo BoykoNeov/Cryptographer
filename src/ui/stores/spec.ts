@@ -48,6 +48,8 @@ import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { speck32_64BeDecryptSpec } from "@/ciphers/speck-32-64-be-decrypt";
 import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
 import { speck32_64LeDecryptSpec } from "@/ciphers/speck-32-64-le-decrypt";
+import { twofishSpec } from "@/ciphers/twofish";
+import { twofishDecryptSpec } from "@/ciphers/twofish-decrypt";
 import type { CipherDocument } from "@/core/document";
 import { resolvePortMap } from "@/core/port-projection";
 import {
@@ -140,6 +142,12 @@ const defaults: Record<Cipher, Partial<Record<CipherMode, Record<Mode, CipherSpe
   // only; decrypt is the same network with the P-array reversed.
   blowfish: {
     "single-block": { encrypt: blowfishSpec, decrypt: blowfishDecryptSpec },
+  },
+  // Twofish — third Feistel cipher (`docs/plans/twofish.md`). Single-block
+  // only; decrypt runs the same network with inverted rotations, reversed
+  // subkey order, and swapped whitening.
+  twofish: {
+    "single-block": { encrypt: twofishSpec, decrypt: twofishDecryptSpec },
   },
 };
 

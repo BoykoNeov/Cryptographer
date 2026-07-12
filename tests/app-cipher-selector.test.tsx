@@ -101,6 +101,8 @@ describe("App — cipher selector", () => {
       "des",
       // Blowfish (`docs/plans/blowfish.md`) — second Feistel cipher, single-block.
       "blowfish",
+      // Twofish (`docs/plans/twofish.md`) — third Feistel cipher, single-block.
+      "twofish",
     ]);
   });
 

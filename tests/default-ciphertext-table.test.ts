@@ -37,6 +37,7 @@ import { serpent192Spec } from "@/ciphers/serpent-192";
 import { serpent256Spec } from "@/ciphers/serpent-256";
 import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
+import { twofishSpec } from "@/ciphers/twofish";
 import { runSpec } from "@/core/runtime";
 import { hexFromBytes } from "@/core/state/bytes";
 import type { AuxValue, BytesState, CipherSpec } from "@/core/types";
@@ -61,6 +62,7 @@ const encryptSpecs: Record<Cipher, CipherSpec> = {
   "serpent-256": serpent256Spec,
   des: desSpec,
   blowfish: blowfishSpec,
+  twofish: twofishSpec,
 };
 
 /** Run a cipher's encrypt spec on its canonical default PT + key. */
@@ -102,6 +104,7 @@ describe("DEFAULT_CT_BYTES_BY_CIPHER — published-vector anchors (non-circulari
     ["speck-32-64-le", "f24268a8"], // Beaulieu et al. (NSA-reference byte order)
     ["des", "85e813540f0ab405"], // FIPS 46-3 Appendix B
     ["blowfish", "61f9c3802281b096"], // Eric-Young Blowfish-ECB vector
+    ["twofish", "df8451d26e0504bc19b0a93b049e3203"], // Ferguson reference (seq key)
   ];
   for (const [cipher, expected] of anchors) {
     it(`${cipher} default CT matches its published vector`, () => {

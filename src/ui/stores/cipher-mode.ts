@@ -72,6 +72,9 @@ export const SUPPORTED_CIPHER_MODES_BY_CIPHER: Readonly<Record<Cipher, readonly 
   // (same block-size-aware overlay blocker as Speck/Serpent/DES). See
   // `docs/plans/blowfish.md` "Deferred".
   blowfish: ["single-block"],
+  // Twofish: single-block today (128-bit block). Multi-block deferred (same
+  // overlay blocker). See `docs/plans/twofish.md` "Deferred".
+  twofish: ["single-block"],
 };
 
 export const isCipherModeSupported = (cipher: Cipher, mode: CipherMode): boolean =>

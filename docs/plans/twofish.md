@@ -1,6 +1,9 @@
 # Twofish — sixth cipher family, third Feistel
 
-**Status:** PLANNED (2026-07-12). Awaiting implementation go-ahead.
+**Status:** SHIPPED (2026-07-12) — all 4 phases complete. Verified at three
+levels (S-boxes, 40 subkeys, endpoint CT) against Niels Ferguson's reference C
+library AND the published spec constants; canonical all-zero vector
+`9f589f5cf6122c32b6bfec2f2ae8c35a`. Deferred items in "## Deferred" unchanged.
 
 Twofish (Schneier/Kelsey/Whiting/Wagner/Hall/Ferguson, 1998 — AES finalist)
 is the user's chosen sixth cipher and third Feistel after DES and Blowfish. It

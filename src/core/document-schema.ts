@@ -58,6 +58,9 @@ export const CIPHER_IDS = [
   // is what satisfies the `assertCipherCoverage` exhaustiveness check against
   // the `Cipher` union in `ui/stores/cipher.ts`.
   "blowfish",
+  // Twofish — `docs/plans/twofish.md`. Single fixed 128-bit variant; same
+  // exhaustiveness-check role as the entries above.
+  "twofish",
 ] as const satisfies readonly Cipher[];
 
 /**

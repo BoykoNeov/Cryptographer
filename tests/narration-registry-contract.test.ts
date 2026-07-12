@@ -177,6 +177,8 @@ describe("narration-registry coverage contract", () => {
       "des.publish-round-keys@1",
       // RSA Phase 2 (2026-06-08): the RSA Key-Generation group's publish tail.
       "rsa.publish-key-params@1",
+      // Twofish (2026-07-12): the VISIBLE-PHT-half aux-publish tail.
+      "twofish.publish-subkeys@1",
     ]);
     expect(NARRATION_NO_OP_ALLOWLIST).toEqual(expected);
     // Negative assertion: the 6 round-body DES step types must NOT be on

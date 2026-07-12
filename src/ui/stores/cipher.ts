@@ -38,7 +38,21 @@ export type DesCipher = "des";
  * `docs/plans/blowfish.md`.
  */
 export type BlowfishCipher = "blowfish";
-export type Cipher = AesCipher | SpeckCipher | SerpentCipher | DesCipher | BlowfishCipher;
+/**
+ * Twofish is its own family — Schneier et al.'s 1998 AES finalist, the third
+ * Feistel after DES and Blowfish. v1 fixes the key at 128 bits (the h-function
+ * q-permutation stage count is key-size-dependent, so 192/256 are real added
+ * work deferred to follow-ups). Single fixed variant, so no `-128`/`-192`/`-256`
+ * suffixes. `docs/plans/twofish.md`.
+ */
+export type TwofishCipher = "twofish";
+export type Cipher =
+  | AesCipher
+  | SpeckCipher
+  | SerpentCipher
+  | DesCipher
+  | BlowfishCipher
+  | TwofishCipher;
 
 /**
  * Hash family — non-cipher cryptographic primitives that consume a message
@@ -103,6 +117,7 @@ const ALL_CIPHERS: readonly Cipher[] = [
   "serpent-256",
   "des",
   "blowfish",
+  "twofish",
 ];
 
 /**
@@ -249,6 +264,7 @@ export const CIPHER_LABELS: Record<Cipher, string> = {
   "serpent-256": "Serpent-256",
   des: "DES",
   blowfish: "Blowfish",
+  twofish: "Twofish",
 };
 
 export const CIPHER_OPTIONS = ALL_CIPHERS;
@@ -281,6 +297,8 @@ export const CIPHER_DESCRIPTIONS: Record<Cipher, string> = {
   des: "DES (FIPS 46-3, 1977) — 16-round Feistel; 64-bit block, 56-bit key. Foundational, now insecure.",
   blowfish:
     "Blowfish (Schneier, 1993) — 16-round Feistel; 64-bit block, key-derived S-boxes (8-byte key here).",
+  twofish:
+    "Twofish (Schneier et al., 1998) — 16-round Feistel; 128-bit block, key-dependent S-boxes, MDS + PHT.",
 };
 
 /** Per-hash one-liner. Mirrors `HASH_LABELS`. */
@@ -341,6 +359,8 @@ export const CIPHER_HISTORY: Record<Cipher, string> = {
   des: "IBM's Lucifer, tuned by the NSA and adopted as U.S. standard in 1977; brute-forced by the EFF's 'Deep Crack' in 1998.",
   blowfish:
     "Bruce Schneier's 1993 unpatented, royalty-free cipher; a popular DES replacement, later succeeded by his Twofish.",
+  twofish:
+    "Schneier, Kelsey, Whiting, Wagner, Hall & Ferguson's AES finalist (1998); Blowfish's successor, unpatented and a strong runner-up to Rijndael.",
 };
 
 /** Per-hash historical one-liner. Mirrors `HASH_DESCRIPTIONS`. */
@@ -421,6 +441,13 @@ export const DEFAULT_KEY_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
   // 1111111111111111 the cipher produces 61f9c3802281b096 — a published vector,
   // so the first Run reproduces a textbook result (like AES's FIPS-197 default).
   blowfish: new Uint8Array([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]),
+  // Twofish canonical key — the sequential 16-byte pattern (AES/Serpent house
+  // style). Under plaintext 00112233…ff it produces df8451d2…3203, verified
+  // against Niels Ferguson's reference; the all-zero key/pt gives the published
+  // 128-bit vector 9f589f5c…c35a. See `docs/plans/twofish.md`.
+  twofish: new Uint8Array([
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+  ]),
 };
 
 /**
@@ -463,6 +490,10 @@ export const DEFAULT_PT_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
   des: new Uint8Array([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]),
   // Blowfish canonical plaintext (Eric-Young vector) — 8 bytes, one block.
   blowfish: new Uint8Array([0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11]),
+  // Twofish uses the same 16-byte AES-style plaintext (128-bit block).
+  twofish: new Uint8Array([
+    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+  ]),
 };
 
 /**
@@ -526,6 +557,10 @@ export const DEFAULT_CT_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
   // Eric-Young Blowfish-ECB vector: PT 1111111111111111 under key
   // 0123456789abcdef → 61f9c3802281b096.
   blowfish: new Uint8Array([0x61, 0xf9, 0xc3, 0x80, 0x22, 0x81, 0xb0, 0x96]),
+  // Twofish: PT 00112233…ff under key 000102…0f → df8451d2…3203 (Ferguson ref).
+  twofish: new Uint8Array([
+    0xdf, 0x84, 0x51, 0xd2, 0x6e, 0x05, 0x04, 0xbc, 0x19, 0xb0, 0xa9, 0x3b, 0x04, 0x9e, 0x32, 0x03,
+  ]),
 };
 
 // ─── Hash defaults ───────────────────────────────────────────────────────

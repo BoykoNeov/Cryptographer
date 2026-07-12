@@ -233,6 +233,14 @@ export const NARRATION_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
   // the leaves above it, each narrated via its own `narrationOverride`. Below
   // the cell-shape gate anyway (`input: "any"`) — listed here for parity.
   "rsa.publish-key-params@1",
+  // The aux-publish tail of the VISIBLE half of the Twofish key schedule
+  // (2026-07-12). Identity passthrough that mirrors the 40 subkeys into
+  // aux["twofish.K.0..39"] for the rounds + whitening. Same posture as the four
+  // publish-round-keys tails: the interesting math (the pseudo-Hadamard
+  // transform combining A_i/B_i into each K) is the visible PHT frames feeding
+  // it, each narrated via its own `narrationOverride`. Below the cell-shape gate
+  // anyway (`input: "any"`) — listed here for parity.
+  "twofish.publish-subkeys@1",
   // Bit-level linear transforms — byte-level prose would be misleading.
   // (Bit-permutation is honest at byte granularity — narrated in Phase 2.)
   "serpent.linear-transform@1",

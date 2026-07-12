@@ -48,6 +48,7 @@ import {
   serpentSubBytesNarration,
 } from "./serpent";
 import { speckRoundInverseNarration, speckRoundNarration } from "./speck";
+import { twofishHExpandNarration, twofishSboxLookupNarration } from "./twofish";
 
 let initialized = false;
 
@@ -112,6 +113,18 @@ export const initNarrationRegistry = (): void => {
   // AES's port-native round body, which carries no value-prose narrator either.
   registerNarration("blowfish.sbox-lookup@1", blowfishSboxLookupNarration);
   registerNarration("blowfish.key-schedule@1", blowfishKeyScheduleNarration);
+  // Twofish (2026-07-12) — value-prose for the two Twofish-ONLY step types.
+  // The g-function byte→byte S-box lookup and the opaque h-expand monolith,
+  // whose narrator turns it into disclosable pedagogy rows (key decode →
+  // RS S-vector → S-box construction → h/A-B material) annotated with the real
+  // published values. The round body's shared arithmetic (`xor@1` /
+  // `add-mod-32@1` / `rotate-bits-right@1` / `concat@1` / `split-bytes@1` /
+  // `gf-matrix-multiply@2`) is left to PortFlowView + each leaf's
+  // `narrationOverride` — same posture as AES's / Blowfish's port-native round
+  // bodies. `twofish.publish-subkeys@1` is an identity passthrough on the
+  // allowlist (parity with the four `*.publish-round-keys@1` tails).
+  registerNarration("twofish.sbox-lookup@1", twofishSboxLookupNarration);
+  registerNarration("twofish.h-expand@1", twofishHExpandNarration);
   initialized = true;
 };
 

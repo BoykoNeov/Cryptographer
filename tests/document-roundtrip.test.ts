@@ -53,6 +53,8 @@ import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { speck32_64BeDecryptSpec } from "@/ciphers/speck-32-64-be-decrypt";
 import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
 import { speck32_64LeDecryptSpec } from "@/ciphers/speck-32-64-le-decrypt";
+import { twofishSpec } from "@/ciphers/twofish";
+import { twofishDecryptSpec } from "@/ciphers/twofish-decrypt";
 import {
   CURRENT_SCHEMA_VERSION,
   type CipherDocument,
@@ -120,6 +122,11 @@ const SHIPPED_SPECS: ReadonlyArray<{ readonly name: string; readonly spec: Ciphe
   // format. `docs/plans/blowfish.md`.
   { name: "blowfish encrypt", spec: blowfishSpec },
   { name: "blowfish decrypt", spec: blowfishDecryptSpec },
+  // Twofish (third Feistel cipher) — exercises the opaque h-expand monolith +
+  // visible PHT blocks + port-native rounds round-tripping through the document
+  // format. `docs/plans/twofish.md`.
+  { name: "twofish encrypt", spec: twofishSpec },
+  { name: "twofish decrypt", spec: twofishDecryptSpec },
 ];
 
 // ─── Round-trip every shipped spec ────────────────────────────────────────

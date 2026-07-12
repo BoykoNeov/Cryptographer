@@ -243,6 +243,9 @@ export const ParamEditor = (props: Props) => {
             <Match when={getStep().type === "gf-matrix-multiply@1"}>
               <GfMatrixMultiplyBlock step={getStep()} matchingCount={matchingSteps()} />
             </Match>
+            <Match when={getStep().type === "gf-matrix-multiply@2"}>
+              <GfMatrixMultiplyV2Block step={getStep()} matchingCount={matchingSteps()} />
+            </Match>
             <Match when={getStep().type === "permute@1"}>
               <PermuteBlock step={getStep()} />
             </Match>
@@ -303,6 +306,15 @@ export const ParamEditor = (props: Props) => {
             </Match>
             <Match when={getStep().type === "blowfish.key-schedule@1"}>
               <BlowfishKeyScheduleBlock step={getStep()} />
+            </Match>
+            <Match when={getStep().type === "twofish.h-expand@1"}>
+              <TwofishHExpandBlock step={getStep()} />
+            </Match>
+            <Match when={getStep().type === "twofish.sbox-lookup@1"}>
+              <TwofishSboxLookupBlock step={getStep()} />
+            </Match>
+            <Match when={getStep().type === "twofish.publish-subkeys@1"}>
+              <TwofishPublishSubkeysBlock step={getStep()} />
             </Match>
             <Match when={getStep().type === "blowfish.sbox-lookup@1"}>
               <BlowfishSboxLookupBlock step={getStep()} />
@@ -545,6 +557,45 @@ const GfMatrixMultiplyBlock = (props: BlockProps) => {
           decrypt holds its GF(2⁸) inverse. Both AES-128 modes byte-native as
           of Slice B1.2 (see ByteSubstituteBlock above). */}
       <SyncMixColumnsRow currentMatrix={matrix()} stepType={props.step.type} />
+    </>
+  );
+};
+
+// @2 (Twofish MDS): the matrix multiply over an ARBITRARY GF(2⁸) field. Same
+// editable 4×4 MatrixEditor as @1 plus a read-only `fieldModulus` scalar (the
+// reduction polynomial — Twofish's MDS is 0x169). No cross-mode inverse mirror:
+// Twofish's g function (and thus its MDS) is identical in encrypt and decrypt,
+// so there is no inverse to sync. ApplyAllRow still broadcasts the matrix across
+// the 32 MDS leaves (all share the one MDS matrix).
+const GfMatrixMultiplyV2Block = (props: BlockProps) => {
+  const matrix = (): readonly (readonly number[])[] =>
+    (props.step.params as { matrix?: number[][] }).matrix ?? [];
+  const fieldModulus = (): number =>
+    (props.step.params as { fieldModulus?: number }).fieldModulus ?? 0x11b;
+
+  return (
+    <>
+      <MatrixEditor
+        matrix={matrix()}
+        onChange={(next) => {
+          editStepParams(props.step.id, {
+            ...(props.step.params as Record<string, Json>),
+            matrix: next,
+          });
+        }}
+      />
+      <dl class="param-scalars">
+        <div class="param-scalar-row">
+          <dt>Field polynomial</dt>
+          <dd>0x{fieldModulus().toString(16)}</dd>
+        </div>
+      </dl>
+      <ApplyAllRow
+        currentParams={props.step.params}
+        stepType={props.step.type}
+        matchingCount={props.matchingCount}
+        label="MDS matrix"
+      />
     </>
   );
 };
@@ -1006,6 +1057,66 @@ const BlowfishSboxLookupBlock = (props: { step: StepLeaf }) => {
       <div class="param-scalar-row">
         <dt>S-box aux</dt>
         <dd>{params().sboxName ?? "—"}</dd>
+      </div>
+    </dl>
+  );
+};
+
+// Twofish h-expand: the opaque half of the key schedule (RS S-vector +
+// key-dependent S-box construction + 40 h evaluations). One read-only scalar
+// (outputPrefix) — the aux namespace it publishes A/B + the four S-boxes under.
+// Read-only because editing it would break the PHT blocks' + rounds' aux wiring;
+// the h-function machinery itself has no editable parameter.
+const TwofishHExpandBlock = (props: { step: StepLeaf }) => {
+  const params = (): { outputPrefix?: string } => props.step.params as never;
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>Aux prefix</dt>
+        <dd>{params().outputPrefix ?? "twofish"}</dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Operation</dt>
+        <dd>RS S-vector → key-dependent S0..S3 + 40 h evals → A/B intermediates</dd>
+      </div>
+    </dl>
+  );
+};
+
+// Twofish S-box lookup: the g function's aux-fed byte→byte substitution. One
+// read-only scalar (sboxName) — which of the four key-derived S-boxes this
+// lookup reads. Read-only because g's four leaves each reference a distinct
+// S-box (S0..S3); editing would corrupt the round.
+const TwofishSboxLookupBlock = (props: { step: StepLeaf }) => {
+  const params = (): { sboxName?: string } => props.step.params as never;
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>S-box aux</dt>
+        <dd>{params().sboxName ?? "—"}</dd>
+      </div>
+    </dl>
+  );
+};
+
+// Twofish publish-subkeys: the aux-publish tail of the visible PHT half. One
+// read-only scalar (outputPrefix) — the aux namespace the 40 subkeys are stored
+// under for the rounds + whitening. Read-only because editing it would orphan
+// the round consumers' aux reads.
+const TwofishPublishSubkeysBlock = (props: { step: StepLeaf }) => {
+  const params = (): { outputPrefix?: string } => props.step.params as never;
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>Aux prefix</dt>
+        <dd>{params().outputPrefix ?? "twofish"}</dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Operation</dt>
+        <dd>Publish K[0..39] → aux for input/output whitening + the 16 rounds</dd>
       </div>
     </dl>
   );
