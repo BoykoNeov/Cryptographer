@@ -3741,13 +3741,40 @@ button:disabled {
    between rounds. */
 .graph-feistel-swap-wire {
   fill: none;
-  /* `currentColor` = the inline `color` each wire carries (its rail's source
-     hue), so the wire + its arrowhead + the landing dot below all agree. Falls
-     back to the accent when the rail's producer has no assigned source colour. */
+  /* Stroke is set INLINE to a concrete rail colour (2026-07-13) so the
+     `context-stroke` arrowhead marker resolves to the same hue — a
+     `currentColor` stroke left the arrowhead the default paint. The
+     `currentColor` fallback here only applies if the inline style is ever
+     dropped; `color` is still set inline so the selected halo below can tint. */
   stroke: currentColor;
   color: var(--accent);
   stroke-width: 2;
   opacity: 0.85;
+}
+
+/* Wide transparent companion so the thin 2px swap wire is comfortably
+   clickable (same idiom as `.graph-edge-hit`). Painted after the visible
+   wire; `pointer-events: stroke` captures clicks on the fat invisible stroke
+   and routes them to the value inspector via the wire's `data-edge-key`. */
+.graph-feistel-swap-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 12;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.graph-feistel-swap-hit:focus {
+  outline: none;
+}
+
+/* Selected halo when this rail is the inspector's active target — mirrors
+   `.graph-edge-selected` but resolves `currentColor` to the rail's own hue
+   (the wire carries an inline `color`), so the halo matches the rail. */
+.graph-feistel-swap-wire-selected {
+  opacity: 1;
+  stroke-width: 3;
+  filter: drop-shadow(0 0 4px currentColor);
 }
 
 /* The dot where a swap wire lands on the next round's split (2026-07-12). Same
@@ -3783,6 +3810,9 @@ button:disabled {
   paint-order: stroke;
   stroke: var(--bg);
   stroke-width: 3px;
+  /* Non-interactive so a click near the label falls through to the wire's
+     hit path beneath (the label sits ~70% along the rail, over the wire). */
+  pointer-events: none;
 }
 
 .graph-leaf:hover .graph-leaf-rect,

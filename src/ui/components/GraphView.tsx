@@ -4349,6 +4349,19 @@ export const GraphView = () => {
       // a flat `var(--accent)` that clashed with the source-coloured split dot.
       mixedColor: string;
       carryColor: string;
+      // Inspector edge keys (2026-07-13). Each swap wire REPLACES the suppressed
+      // `recombine → split` carry edge, so the wires must be clickable → the value
+      // inspector. Rather than point both at the 8-byte concat output (which would
+      // contradict the per-half `R` / `L⊕F` labels), each wire keys the REAL
+      // internal round edge that produced its half: the mixed wire → `fxor →
+      // recombine` (its input port = `mixedRecombineInput`), the carry wire →
+      // `carryProducer → recombine` (the COMPLEMENT input port). `encodeEdgeKey`
+      // drops `fromPort`, so the carry wire — whose DES producer is the
+      // multi-output `split` — resolves solely through `lookupRegularState`'s
+      // port-specific branch on `toPort`; the complement port is therefore
+      // load-bearing (a wrong port = a silent wrong-half value, no error).
+      mixedEdgeKey: string;
+      carryEdgeKey: string;
     }[] = [];
     const sourceColors = effectiveSourceColors();
     const railColor = (nodeId: string): string => sourceColors.get(nodeId) ?? "var(--accent)";
@@ -4380,6 +4393,10 @@ export const GraphView = () => {
         fromRound.railNodeIds.length > 0
           ? (fromRound.railNodeIds[fromRound.railNodeIds.length - 1] as string)
           : fromRound.splitId;
+      // The carried half lands on the recombine input the mixed half does NOT
+      // occupy (a Feistel `concat` has exactly two inputs). This complement is
+      // the whole game for the DES carry wire's lookup — see the type comment.
+      const carryRecombineInput = fromRound.mixedRecombineInput === "input0" ? "input1" : "input0";
       out.push({
         id: `${e.from}->${e.to}`,
         swap: fromRound.swap,
@@ -4387,6 +4404,23 @@ export const GraphView = () => {
         carryLabel: labels.carry,
         mixedColor: railColor(fromRound.fxorId),
         carryColor: railColor(carryProducer),
+        // Real internal round edges (auxKey `port-flow`, kind `state`), so the
+        // keys match the round's own `fxor → recombine` / `producer → recombine`
+        // edges byte-for-byte and `lookupEdgeValue` resolves the correct half.
+        mixedEdgeKey: encodeEdgeKey({
+          from: fromRound.fxorId,
+          to: fromRound.recombineId,
+          auxKey: PORT_FLOW_AUX_KEY,
+          kind: "state",
+          toPort: fromRound.mixedRecombineInput,
+        }),
+        carryEdgeKey: encodeEdgeKey({
+          from: carryProducer,
+          to: fromRound.recombineId,
+          auxKey: PORT_FLOW_AUX_KEY,
+          kind: "state",
+          toPort: carryRecombineInput,
+        }),
         ...wires,
       });
     }
@@ -6964,6 +6998,60 @@ export const GraphView = () => {
                 });
                 const carryMid = labelAt(s.carry);
                 const mixedMid = labelAt(s.mixed);
+                // Render one swap rail: the visible tinted wire (+ arrowhead),
+                // then a wide transparent hit path so the thin 2px wire is
+                // comfortably clickable → the value inspector. Mirrors EdgePath's
+                // two-layer idiom (visible path `pointer-events:none`; hit path
+                // `pointer-events:stroke` on a 12px transparent stroke). Each rail
+                // keys the internal round edge that carries its half, so clicking
+                // `R` inspects R's bytes and `L⊕F` inspects the fxor output.
+                const rail = (w: Wire, color: string, edgeKey: string, label: string) => {
+                  const d = path(w);
+                  const toggle = () => toggleSelectedEdge(edgeKey);
+                  return (
+                    <>
+                      {/* Concrete inline `stroke` (not `currentColor`) so the
+                          `context-stroke` arrowhead marker resolves to this rail's
+                          hue — a `currentColor` stroke leaves the arrowhead the
+                          default paint (user-flagged 2026-07-13). `color` stays set
+                          so the selected-halo `drop-shadow(... currentColor)` tints. */}
+                      <path
+                        class="graph-feistel-swap-wire"
+                        classList={{
+                          "graph-feistel-swap-wire-selected": isEdgeSelected(edgeKey),
+                        }}
+                        d={d}
+                        marker-end="url(#graph-arrow-state)"
+                        style={{ color, stroke: color }}
+                        pointer-events="none"
+                      />
+                      {/* Wide transparent hit companion — same idiom as
+                          `.graph-edge-hit` (onClick + onKeyDown + data-edge-key,
+                          no ARIA role: an SVG path is a non-interactive element,
+                          so biome rejects `role="button"`; the EdgePath hit path
+                          it mirrors carries none either). */}
+                      <path
+                        class="graph-feistel-swap-hit"
+                        d={d}
+                        data-edge-key={edgeKey}
+                        onClick={(e) => {
+                          // stopPropagation so the click doesn't bubble to the
+                          // canvas (empty-area drag-cancel handlers).
+                          e.stopPropagation();
+                          toggle();
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            toggle();
+                          }
+                        }}
+                      >
+                        <title>{`${label} — click to inspect this half's bytes`}</title>
+                      </path>
+                    </>
+                  );
+                };
                 return (
                   <g
                     class="graph-feistel-swap"
@@ -6974,32 +7062,20 @@ export const GraphView = () => {
                         ? `Feistel swap: the two halves cross — the carried half (${s.carryLabel}) and the combined half (${s.mixedLabel}) each move to the opposite side of the next round's split. The port-native cipher realizes this via the recombine's concat argument order, then the next split.`
                         : `No swap (the self-inverse last-round exception): the halves pass straight down — the combined half (${s.mixedLabel}) stays left, the carried half (${s.carryLabel}) stays right.`}
                     </title>
-                    {/* Each rail carries its producer's source colour via inline
-                        `color` + the CSS `stroke: currentColor` / `fill:
-                        currentColor`, so the wire, its arrowhead, and the landing
-                        dot on the next split all read as one hue (2026-07-12). */}
-                    <path
-                      class="graph-feistel-swap-wire"
-                      d={path(s.carry)}
-                      marker-end="url(#graph-arrow-state)"
-                      style={{ color: s.carryColor }}
-                    />
-                    <path
-                      class="graph-feistel-swap-wire"
-                      d={path(s.mixed)}
-                      marker-end="url(#graph-arrow-state)"
-                      style={{ color: s.mixedColor }}
-                    />
+                    {rail(s.carry, s.carryColor, s.carryEdgeKey, s.carryLabel)}
+                    {rail(s.mixed, s.mixedColor, s.mixedEdgeKey, s.mixedLabel)}
                     {/* Landing dots — one per rail, at each wire's endpoint on the
                         next round's split, tinted to that rail. Replaces the single
                         (mislocated, source-of-`recombine`-coloured) input-port dot,
-                        which is suppressed for a swap-fed split in `portArrivalPoints`. */}
+                        which is suppressed for a swap-fed split in `portArrivalPoints`.
+                        `pointer-events:none` so they never steal the wire's click. */}
                     <circle
                       class="graph-feistel-swap-dot"
                       cx={s.carry.x2}
                       cy={s.carry.y2}
                       r={4}
                       style={{ color: s.carryColor }}
+                      pointer-events="none"
                     />
                     <circle
                       class="graph-feistel-swap-dot"
@@ -7007,6 +7083,7 @@ export const GraphView = () => {
                       cy={s.mixed.y2}
                       r={4}
                       style={{ color: s.mixedColor }}
+                      pointer-events="none"
                     />
                     <text
                       class="graph-feistel-swap-label"
