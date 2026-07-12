@@ -3759,6 +3759,16 @@ button:disabled {
   opacity: 0.9;
 }
 
+/* Non-interactive arrival dot where an arrow lands on a REPLICA chip or a
+   COLLAPSED CONTAINER (cases C + D, 2026-07-12) — a terminus marker only,
+   tinted to its arrow via the inline `color` carrier. Real leaves use the
+   interactive `.graph-port-dot` handles instead. */
+.graph-arrival-dot {
+  fill: currentColor;
+  color: var(--accent);
+  opacity: 0.9;
+}
+
 /* Label naming the VALUE each swap wire carries (R / L⊕F), so the crossing is
    traceable despite the concat byte order. A subtle backing via paint-order so
    the glyph stays legible where it crosses the other wire. */

@@ -4179,6 +4179,64 @@ export const GraphView = () => {
   });
 
   /**
+   * Case D (2026-07-12): arrival dots on COLLAPSED containers. A collapsed group
+   * / iterate hides its internals, so an incoming arrow (SHA-256's per-round `W`
+   * aux into a folded `round.N`, the `blocks → round.0` seed, the `blocks →
+   * msg-schedule` history) lands on the container box with no terminus marker —
+   * the case D of "every arrow should end on a colored dot". We place ONE
+   * non-interactive dot per incoming rendered arrow (deduped by bundle) at the
+   * point EdgePath actually attaches it, tinted to the arrow.
+   *
+   * Scoped to `collapsedSet()`: an EXPANDED container shows its children (and
+   * their own port dots), and a dot on the big wrapper edge would be noise. Keyed
+   * `containerId → { x, y, color }[]`. Geometry + colour mirror `portArrivalPoints`
+   * exactly (same `consumerPortOffset` / `arrivalColorFor`), so a container dot and
+   * its arrowhead never disagree.
+   */
+  const containerArrivalDots = createMemo<
+    ReadonlyMap<string, { x: number; y: number; color: string }[]>
+  >(() => {
+    const collapsed = collapsedSet();
+    const result = new Map<string, { x: number; y: number; color: string }[]>();
+    if (collapsed.size === 0) return result;
+    const boxes = layout().boxes;
+    const cById = containersById();
+    const nById = nodesById();
+    const sourceColors = effectiveSourceColors();
+    const bg = bundledGraph();
+    const assign = portAssignment();
+    const c = consts();
+    const isFb = feedbackPredicate();
+    const vGap = Math.max(6, Math.round(c.LEAF_W / 10));
+    const vCap = c.LEAF_W / 2 - 4;
+    const hGap = Math.max(4, Math.round(c.LEAF_H / 4));
+    const hCap = c.LEAF_H / 2 - 4;
+    // One dot per RENDERED arrow: dedup member edges down to their bundle.
+    const seen = new Set<string>();
+    for (const edge of bg.edges) {
+      const targetId = visualEdgeTargetId(edge, nById, cById);
+      if (!collapsed.has(targetId)) continue;
+      const toBox = boxes.get(targetId);
+      const fromBox = boxes.get(edge.from);
+      if (toBox === undefined || fromBox === undefined) continue;
+      const fb = isFb(edge);
+      const bkey = bundleKeyFor(edge, fb);
+      if (seen.has(bkey)) continue;
+      seen.add(bkey);
+      const point = portArrivalPoint(fromBox, toBox, {
+        isFeedback: fb,
+        targetXOffset: consumerPortOffset(edge, assign, vGap, vCap),
+        targetYOffset: consumerPortOffset(edge, assign, hGap, hCap),
+      });
+      const dot = { ...point, color: arrivalColorFor(edge, sourceColors, nById) };
+      const arr = result.get(targetId);
+      if (arr === undefined) result.set(targetId, [dot]);
+      else arr.push(dot);
+    }
+    return result;
+  });
+
+  /**
    * Canonical-Feistel decorations (DES canonical-representation feature):
    * per expanded Feistel round, the **L / R rail labels** under `split` and an
    * **F-function bounding box** around the F-stack column. Pure geometry read
@@ -6936,6 +6994,29 @@ export const GraphView = () => {
               }}
             </For>
 
+            {/* Case D (2026-07-12): arrival dots on collapsed containers. A folded
+              group / iterate receives arrows (SHA-256's per-round `W`, the
+              `blocks → round.0` seed) on its box with no terminus marker; render
+              a non-interactive dot per incoming arrow where EdgePath attaches it,
+              tinted to the arrow. `pointer-events:none` so it never intercepts a
+              chevron / drag on the container beneath. */}
+            <For each={[...containerArrivalDots().entries()]}>
+              {([, dots]) => (
+                <For each={dots}>
+                  {(dot) => (
+                    <circle
+                      class="graph-arrival-dot"
+                      cx={dot.x}
+                      cy={dot.y}
+                      r={4}
+                      style={{ color: dot.color }}
+                      pointer-events="none"
+                    />
+                  )}
+                </For>
+              )}
+            </For>
+
             {/* No Twofish inter-round swap-X overlay: Twofish rounds lay out
               HORIZONTALLY (top-level steps, no outer `rounds` group), so a
               `recombine → next split` swap spans ~2000px up-and-over — a long
@@ -7620,6 +7701,29 @@ const LeafRect = (props: {
           );
         }}
       </For>
+      {/* Case C (2026-07-12): a REPLICA chip that RECEIVES arrows — i.e. a
+          replicated node that has its OWN inputs (SHA-256 `split-H` fed by
+          `fetch-H`; RSA `phi` fed by `p-1`/`q-1`) — shows a plain, NON-interactive
+          arrival dot where each incoming arrow lands, tinted to that arrow. Real
+          leaves get the interactive wiring handles above; replicas are references
+          and carry no `inputPorts`, so their arrows would otherwise land on a bare
+          chip edge with no terminus marker. `portArrivalPoints` already keys these
+          by the replica id (its `visualEdgeTargetId` returns the replica for a
+          source→replica edge), so we just render the points it resolved. */}
+      <Show when={props.isReplica}>
+        <For each={[...(props.inputPortPoints?.entries() ?? [])]}>
+          {([, pt]) => (
+            <circle
+              class="graph-arrival-dot"
+              cx={pt.x}
+              cy={pt.y}
+              r={4}
+              style={{ color: pt.color }}
+              pointer-events="none"
+            />
+          )}
+        </For>
+      </Show>
       <Show when={props.wireTarget != null}>
         <g
           class="graph-port-handle graph-port-bind"
