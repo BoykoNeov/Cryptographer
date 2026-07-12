@@ -54,19 +54,32 @@ graph and overlays the layout sidecar (`src/ui/stores/layout.ts`,
 per-spec.id, persisted to localStorage) for pinned positions + collapsed
 sets.
 
-**Canonical Feistel rounds (DES, 2026-06-02).** A round group whose wiring
-matches `split → F → xor → concat` (detected by `analyzeFeistelRound` in
-`src/core/feistel-shape.ts`, cipher-agnostic, no tag) lays out as the textbook
-two-column Feistel cell instead of the generic vertical stack — L rail left,
-F-function boxed on the right, recombine at the bottom — via the pure helpers
-in `src/core/feistel-layout.ts` threaded into `layoutNode`. The inter-round
-**swap (the "X")** is drawn as two crossing wires between consecutive rounds
-(R → next round's new_L, L⊕F → new_R), suppressing the straight `recombine →
-split` carry; the X is the rail-level picture (byte-level flow is straight — the
-swap lives in the concat order) so each wire is LABELED. Leaves stay real
-(draggable / click-scrub / wireable); only LAYOUT + decoration change. Deferred:
-the long `round.16.recombine → final-permutation` edge (FP lays out at the top,
-far from round 16 — a pre-existing root-layout artifact, not a Feistel issue).
+**Canonical Feistel rounds (DES + Blowfish, 2026-06-02 / 2026-07-12).** A round
+group whose wiring matches `split → F → xor → concat` (detected by
+`analyzeFeistelRound` in `src/core/feistel-shape.ts`, cipher-agnostic, no tag)
+lays out as the textbook two-column Feistel cell instead of the generic vertical
+stack — via the pure helpers in `src/core/feistel-layout.ts` threaded into
+`layoutNode`. The analyzer is **orientation-aware**: DES mixes F into the LEFT
+half (`mixedHalf==="L"` → F boxed on the RIGHT, fxor left, carried value "R"),
+Blowfish mirrors it (`mixedHalf==="R"` → F on the LEFT, fxor right, combined
+value "R⊕F"). The carried half may be a **pass-through rail** rather than a raw
+split output — DES's is raw (`railNodeIds: []`); Blowfish's `L ⊕ P[i]` key mix
+(`railNodeIds: [xorP]`) sits on it before feeding F and passing down, and is
+excluded from the F-box. Every value label (`feistelValueLabels`) is derived
+from `mixedHalf` so no surface hardcodes "L⊕F". The inter-round **swap (the
+"X")** is two crossing wires between consecutive rounds, suppressing the straight
+`recombine → split` carry; `swap` and the wire origin/dest sides are derived
+byte-honestly from the wiring (which split half `recombine.input0` descends
+from + which column the fxor sits in), so the X stays correct across DES *and*
+the mirrored BF form. The X is the rail-level picture (byte-level flow is
+straight — the swap lives in the concat order) so each wire is LABELED. The same
+shape feeds the linear-view abstract diagram (`FeistelSwapDiagram` /
+`FeistelRoundBytes` / `FeistelRecombineView`), also orientation-aware. Leaves
+stay real (draggable / click-scrub / wireable); only LAYOUT + decoration change.
+**Deferred: Twofish** (a genuinely different 4-rail / PHT / 4-way-swap shape —
+needs its own recognizer + shape-type decision, not this 2-way generalization).
+Also deferred: the long `round.16.recombine → final-permutation` edge (a
+pre-existing root-layout artifact, not a Feistel issue).
 
 **Authoring** is a two-channel surface. The palette
 (`src/ui/components/StepPalette.tsx`) lists every non-padding registered

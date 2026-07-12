@@ -27,7 +27,11 @@
  * cross-references the round-key panel ribbon below.
  */
 
-import { type FeistelRoundShape, findActiveFeistelRound } from "@/core/feistel-shape";
+import {
+  type FeistelRoundShape,
+  feistelValueLabels,
+  findActiveFeistelRound,
+} from "@/core/feistel-shape";
 import { canonicalStepId } from "@/core/step-id";
 import type { StepLeaf, TraceFrame } from "@/core/types";
 import { For, Show, createMemo } from "solid-js";
@@ -140,10 +144,22 @@ const DiagramSvg = (props: {
   const outputY = (): number => swapTopY() + 40;
   const svgHeight = (): number => outputY() + HALF_H + 12;
 
-  // Output labels: the swap decides which half holds R vs L⊕F. The L⊕F half is
-  // the "combined" one and gets the accent.
-  const leftLabel = (): string => (props.shape.swap ? "R" : "L⊕F");
-  const rightLabel = (): string => (props.shape.swap ? "L⊕F" : "R");
+  // Orientation (shared with the graph two-column layout). DES mixes F into the
+  // LEFT half (combine on the left, F fed by the right half); Blowfish mirrors
+  // it (combine on the RIGHT, F fed by the left half). `mixCx` is the combine's
+  // column, `passCx` the carried half's column.
+  const labels = feistelValueLabels(props.shape);
+  const mixCx = (): number => (props.shape.mixedHalf === "L" ? L_CX : R_CX);
+  const passCx = (): number => (props.shape.mixedHalf === "L" ? R_CX : L_CX);
+  // Where the combined value LANDS: input0 → new_L (left), input1 → new_R (right).
+  const combinedDestLeft = (): boolean => props.shape.mixedRecombineInput === "input0";
+  // The F-output horizontal joins the combine from the F column toward mixCx.
+  const combineJoinX = (): number => (mixCx() < FX_CX ? mixCx() + 8 : mixCx() - 8);
+
+  // Output labels: the combined ("X⊕F") half gets the accent; the carried half
+  // takes the other column. Which column each lands in follows the swap.
+  const leftLabel = (): string => (combinedDestLeft() ? labels.mixed : labels.carry);
+  const rightLabel = (): string => (combinedDestLeft() ? labels.carry : labels.mixed);
 
   return (
     <svg
@@ -154,31 +170,31 @@ const DiagramSvg = (props: {
       role="img"
       aria-label={`feistel round, ${props.shape.swap ? "with swap" : "no swap"}`}
     >
-      {/* Input halves */}
+      {/* Input halves (geometric: L left, R right) */}
       <HalfRect cx={L_CX} y={INPUT_Y} label="L" />
       <HalfRect cx={R_CX} y={INPUT_Y} label="R" />
 
-      {/* L straight down into the combine */}
+      {/* Mixed half straight down into the combine */}
       <line
-        x1={L_CX}
+        x1={mixCx()}
         y1={INPUT_Y + HALF_H}
-        x2={L_CX}
+        x2={mixCx()}
         y2={combineY()}
         class="feistel-swap-diagram-wire"
       />
-      {/* R into the F-stack (fan-out branch 1) */}
+      {/* Carried half into the F-stack (fan-out branch 1) */}
       <line
-        x1={R_CX}
+        x1={passCx()}
         y1={INPUT_Y + HALF_H}
         x2={FX_CX}
         y2={F_STACK_Y}
         class="feistel-swap-diagram-wire"
       />
-      {/* R passthrough down the right column (fan-out branch 2) */}
+      {/* Carried-half passthrough down its own column (fan-out branch 2) */}
       <line
-        x1={R_CX}
+        x1={passCx()}
         y1={INPUT_Y + HALF_H}
-        x2={R_CX}
+        x2={passCx()}
         y2={swapTopY()}
         class="feistel-swap-diagram-wire"
       />
@@ -207,7 +223,7 @@ const DiagramSvg = (props: {
         </text>
       </Show>
 
-      {/* F output down then left into the combine */}
+      {/* F output down then across into the combine (toward mixCx) */}
       <line
         x1={FX_CX}
         y1={fStackBottom()}
@@ -218,15 +234,15 @@ const DiagramSvg = (props: {
       <line
         x1={FX_CX}
         y1={combineY()}
-        x2={L_CX + 8}
+        x2={combineJoinX()}
         y2={combineY()}
         class="feistel-swap-diagram-wire"
       />
 
-      {/* Combine node (L ⊕ F) */}
-      <circle cx={L_CX} cy={combineY()} r="8" class="feistel-swap-diagram-combine-node" />
+      {/* Combine node (the mixed half ⊕ F) */}
+      <circle cx={mixCx()} cy={combineY()} r="8" class="feistel-swap-diagram-combine-node" />
       <text
-        x={L_CX}
+        x={mixCx()}
         y={combineY()}
         class="feistel-swap-diagram-combine-glyph"
         text-anchor="middle"
@@ -234,17 +250,23 @@ const DiagramSvg = (props: {
       >
         ⊕
       </text>
-      {/* L⊕F down into the swap zone */}
+      {/* Combined half down into the swap zone */}
       <line
-        x1={L_CX}
+        x1={mixCx()}
         y1={combineY() + 8}
-        x2={L_CX}
+        x2={mixCx()}
         y2={swapTopY()}
         class="feistel-swap-diagram-wire"
       />
 
       {/* ─── Swap zone — the crown jewel. Cross (swap) or straight (no-swap). ─── */}
-      <SwapWires swap={props.shape.swap} topY={swapTopY()} bottomY={outputY()} />
+      <SwapWires
+        mixedOriginCx={mixCx()}
+        passOriginCx={passCx()}
+        combinedDestLeft={combinedDestLeft()}
+        topY={swapTopY()}
+        bottomY={outputY()}
+      />
       <text
         x={SVG_WIDTH / 2}
         y={(swapTopY() + outputY()) / 2}
@@ -255,29 +277,40 @@ const DiagramSvg = (props: {
         {props.shape.swap ? "swap" : "no swap"}
       </text>
 
-      {/* Output halves */}
-      <HalfRect cx={L_CX} y={outputY()} label={leftLabel()} accent={!props.shape.swap} />
-      <HalfRect cx={R_CX} y={outputY()} label={rightLabel()} accent={props.shape.swap} />
+      {/* Output halves (the combined half is accented, on whichever side it lands) */}
+      <HalfRect cx={L_CX} y={outputY()} label={leftLabel()} accent={combinedDestLeft()} />
+      <HalfRect cx={R_CX} y={outputY()} label={rightLabel()} accent={!combinedDestLeft()} />
     </svg>
   );
 };
 
-/** The two swap-zone wires: L⊕F (from left) and R-passthrough (from right). */
-const SwapWires = (props: { swap: boolean; topY: number; bottomY: number }) => (
+/**
+ * The two swap-zone wires: the combined ("X⊕F") half (from its combine column)
+ * and the carried passthrough (from its own column). Each lands in the column
+ * its value flows to — the combined half at `combinedDestLeft ? L : R`, the
+ * carried half in the opposite column. They visibly cross iff origin ≠ dest.
+ */
+const SwapWires = (props: {
+  mixedOriginCx: number;
+  passOriginCx: number;
+  combinedDestLeft: boolean;
+  topY: number;
+  bottomY: number;
+}) => (
   <>
-    {/* L⊕F: left → (right if swap, else left) */}
+    {/* Combined half → its destination column */}
     <line
-      x1={L_CX}
+      x1={props.mixedOriginCx}
       y1={props.topY}
-      x2={props.swap ? R_CX : L_CX}
+      x2={props.combinedDestLeft ? L_CX : R_CX}
       y2={props.bottomY}
       class="feistel-swap-diagram-wire feistel-swap-diagram-wire-mix"
     />
-    {/* R passthrough: right → (left if swap, else right) */}
+    {/* Carried passthrough → the opposite column */}
     <line
-      x1={R_CX}
+      x1={props.passOriginCx}
       y1={props.topY}
-      x2={props.swap ? L_CX : R_CX}
+      x2={props.combinedDestLeft ? R_CX : L_CX}
       y2={props.bottomY}
       class="feistel-swap-diagram-wire feistel-swap-diagram-wire-pass"
     />

@@ -20,6 +20,7 @@
 
 import {
   type FeistelRoundBytes as FeistelRoundBytesData,
+  feistelValueLabels,
   findActiveFeistelRound,
   resolveFeistelRoundBytes,
 } from "@/core/feistel-shape";
@@ -40,14 +41,16 @@ type Section = {
   readonly rows: ReadonlyArray<{ label: string; bytes: Uint8Array; accent?: boolean }>;
 };
 
-/** Build the (title, rows) sections from the resolved bytes, dropping any
- *  row whose value is null. A section with no resolvable rows is omitted. */
-const buildSections = (b: FeistelRoundBytesData): readonly Section[] => {
+/** Build the (title, rows) sections from the resolved bytes, dropping any row
+ *  whose value is null. `mixedLabel` names the combined half ("L⊕F" for DES,
+ *  "R⊕F" for the mirrored Blowfish form). A section with no resolvable rows is
+ *  omitted. */
+const buildSections = (b: FeistelRoundBytesData, mixedLabel: string): readonly Section[] => {
   const row = (label: string, bytes: Uint8Array | null, accent?: boolean) =>
     bytes ? [{ label, bytes, ...(accent ? { accent: true } : {}) }] : [];
   const sections: Section[] = [
     { title: "round entry", rows: [...row("L", b.L_in), ...row("R", b.R_in)] },
-    { title: "F mix", rows: [...row("F", b.F), ...row("L⊕F", b.LxorF, true)] },
+    { title: "F mix", rows: [...row("F", b.F), ...row(mixedLabel, b.LxorF, true)] },
     { title: "round output", rows: [...row("L'", b.new_L), ...row("R'", b.new_R)] },
   ];
   return sections.filter((s) => s.rows.length > 0);
@@ -67,7 +70,7 @@ export const FeistelRoundBytes = (props: Props) => {
     const t = getTrace();
     if (!t) return [];
     const bytes = resolveFeistelRoundBytes(a.shape, t.frames, props.frame.blockIndex);
-    return buildSections(bytes);
+    return buildSections(bytes, feistelValueLabels(a.shape).mixed);
   });
 
   return (

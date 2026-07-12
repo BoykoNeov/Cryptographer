@@ -18,7 +18,7 @@
  * IS the recombine frame), so no trace scan is needed.
  */
 
-import { findActiveFeistelRound } from "@/core/feistel-shape";
+import { feistelValueLabels, findActiveFeistelRound } from "@/core/feistel-shape";
 import type { ByteFormat } from "@/core/format";
 import { canonicalStepId } from "@/core/step-id";
 import type { TraceFrame } from "@/core/types";
@@ -39,11 +39,14 @@ const INPUT1 = "input1";
 type RecombineData = {
   readonly roundId: string;
   readonly swap: boolean;
-  /** input0 / input1 bytes + their semantic label (R or L⊕F). */
+  /** input0 / input1 bytes + their semantic label (the combined "X⊕F" half or
+   *  the carried half). */
   readonly input0: { label: string; bytes: Uint8Array };
   readonly input1: { label: string; bytes: Uint8Array };
   readonly new_L: Uint8Array;
   readonly new_R: Uint8Array;
+  /** `output = <input0 label> ‖ <input1 label>` — the concat, in wiring order. */
+  readonly outExpr: string;
 };
 
 export const FeistelRecombineView = (props: Props) => {
@@ -61,11 +64,14 @@ export const FeistelRecombineView = (props: Props) => {
     const out = props.frame.portOutputs?.get(a.shape.recombineOutPort);
     if (!in0 || !in1 || !out) return null;
 
-    // The swap decides which concat argument is which half:
-    //   swap   → input0 = R (passthrough), input1 = L⊕F (combined)
-    //   no-swap→ input0 = L⊕F (combined),  input1 = R (passthrough)
-    const label0 = a.shape.swap ? "R" : "L⊕F";
-    const label1 = a.shape.swap ? "L⊕F" : "R";
+    // Which concat argument holds the combined ("X⊕F") half vs the carried half
+    // is a STRUCTURAL fact (`mixedRecombineInput`), not a swap consequence —
+    // that keeps the labels honest for both DES (combined = L⊕F) and the
+    // mirrored Blowfish form (combined = R⊕F, carried = L).
+    const { mixed, carry } = feistelValueLabels(a.shape);
+    const mixedIsInput0 = a.shape.mixedRecombineInput === "input0";
+    const label0 = mixedIsInput0 ? mixed : carry;
+    const label1 = mixedIsInput0 ? carry : mixed;
     // The output's first half spans input0's length (balanced Feistel).
     const pivot = in0.length;
     if (out.length < pivot) return null;
@@ -76,6 +82,7 @@ export const FeistelRecombineView = (props: Props) => {
       input1: { label: label1, bytes: in1 },
       new_L: out.slice(0, pivot),
       new_R: out.slice(pivot),
+      outExpr: `${label0} ‖ ${label1}`,
     };
   });
 
@@ -117,15 +124,15 @@ export const FeistelRecombineView = (props: Props) => {
               fallback={
                 <>
                   This is the <strong>no-swap</strong> round: the halves stay put (
-                  <code>output = L⊕F ‖ R</code>). DES's last round skips the swap — that is
-                  precisely what makes the same body decrypt when the round keys are reversed.
+                  <code>output = {getData().outExpr}</code>). DES's last round skips the swap — that
+                  is precisely what makes the same body decrypt when the round keys are reversed.
                 </>
               }
             >
               <>
-                The halves <strong>swap</strong>: <code>output = R ‖ L⊕F</code>, so next round's
-                left is this round's right. The order of the two arguments to <code>concat</code> IS
-                the swap — flip them and the cipher stops round-tripping.
+                The halves <strong>swap</strong>: <code>output = {getData().outExpr}</code>, so next
+                round's left is this round's right. The order of the two arguments to{" "}
+                <code>concat</code> IS the swap — flip them and the cipher stops round-tripping.
               </>
             </Show>
           </p>

@@ -38,7 +38,11 @@
 import { curatedDefaultFor, mergeLayoutSpecs, scaleCuratedLayout } from "@/core/default-layouts";
 import { type EdgeValueLookup, lookupEdgeValue, lookupNodeValue } from "@/core/edge-value-lookup";
 import { feistelRoundPlacement, feistelSwapWires } from "@/core/feistel-layout";
-import { type FeistelRoundShape, analyzeFeistelRound } from "@/core/feistel-shape";
+import {
+  type FeistelRoundShape,
+  analyzeFeistelRound,
+  feistelValueLabels,
+} from "@/core/feistel-shape";
 import { type ByteFormat, formatBytes } from "@/core/format";
 import {
   type CipherGraph,
@@ -3839,10 +3843,14 @@ export const GraphView = () => {
     const out: {
       id: string;
       swap: boolean;
-      // Two named wires: `lxorf` carries L⊕F (from recombine-left), `r` carries
-      // R (from recombine-right). On a swap they cross — R → new_L, L⊕F → new_R.
-      lxorf: { x1: number; y1: number; x2: number; y2: number };
-      r: { x1: number; y1: number; x2: number; y2: number };
+      // Two ROLE-named wires with derived labels: `mixed` carries the combined
+      // half (DES "L⊕F", Blowfish "R⊕F"), `carry` the pass-through half (DES
+      // "R", Blowfish "L"). Origin/dest sides come from the round's orientation
+      // so the crossing is byte-honest for both DES and the mirrored BF form.
+      mixed: { x1: number; y1: number; x2: number; y2: number };
+      carry: { x1: number; y1: number; x2: number; y2: number };
+      mixedLabel: string;
+      carryLabel: string;
     }[] = [];
     const DX = 34; // horizontal offset of each half off the box center.
     for (const e of graph().edges) {
@@ -3851,8 +3859,24 @@ export const GraphView = () => {
       const rb = boxes.get(e.from);
       const sb = boxes.get(e.to);
       if (rb === undefined || sb === undefined) continue;
-      const wires = feistelSwapWires(fromRound.swap, rb, sb, DX);
-      out.push({ id: `${e.from}->${e.to}`, swap: fromRound.swap, ...wires });
+      const labels = feistelValueLabels(fromRound);
+      const wires = feistelSwapWires({
+        // The fxor (combined half) sits LEFT when F is on the right (DES,
+        // mixedHalf="L"), RIGHT when F is on the left (Blowfish, mixedHalf="R").
+        mixedOriginSide: fromRound.mixedHalf === "L" ? "left" : "right",
+        // Combined value lands in new_L (left) if it is the recombine's input0.
+        mixedDestSide: fromRound.mixedRecombineInput === "input0" ? "left" : "right",
+        recombineBox: rb,
+        splitBox: sb,
+        dx: DX,
+      });
+      out.push({
+        id: `${e.from}->${e.to}`,
+        swap: fromRound.swap,
+        mixedLabel: labels.mixed,
+        carryLabel: labels.carry,
+        ...wires,
+      });
     }
     return out;
   });
@@ -6353,8 +6377,8 @@ export const GraphView = () => {
                   x: w.x1 + 0.7 * (w.x2 - w.x1),
                   y: w.y1 + 0.7 * (w.y2 - w.y1),
                 });
-                const rMid = labelAt(s.r);
-                const lMid = labelAt(s.lxorf);
+                const carryMid = labelAt(s.carry);
+                const mixedMid = labelAt(s.mixed);
                 return (
                   <g
                     class="graph-feistel-swap"
@@ -6362,24 +6386,24 @@ export const GraphView = () => {
                   >
                     <title>
                       {s.swap
-                        ? "Feistel swap: the right half (R) becomes the next round's left half (new_L), and (L⊕F) becomes its right (new_R). The port-native cipher realizes this via the recombine's concat order — concat(R, L⊕F) — then the next split."
-                        : "No swap (the self-inverse last-round exception): the halves pass straight down — concat(L⊕F, R)."}
+                        ? `Feistel swap: the two halves cross — the carried half (${s.carryLabel}) and the combined half (${s.mixedLabel}) each move to the opposite side of the next round's split. The port-native cipher realizes this via the recombine's concat argument order, then the next split.`
+                        : `No swap (the self-inverse last-round exception): the halves pass straight down — the combined half (${s.mixedLabel}) stays left, the carried half (${s.carryLabel}) stays right.`}
                     </title>
                     <path
                       class="graph-feistel-swap-wire"
-                      d={path(s.r)}
+                      d={path(s.carry)}
                       marker-end="url(#graph-arrow-state)"
                     />
                     <path
                       class="graph-feistel-swap-wire"
-                      d={path(s.lxorf)}
+                      d={path(s.mixed)}
                       marker-end="url(#graph-arrow-state)"
                     />
-                    <text class="graph-feistel-swap-label" x={rMid.x} y={rMid.y}>
-                      R
+                    <text class="graph-feistel-swap-label" x={carryMid.x} y={carryMid.y}>
+                      {s.carryLabel}
                     </text>
-                    <text class="graph-feistel-swap-label" x={lMid.x} y={lMid.y}>
-                      L⊕F
+                    <text class="graph-feistel-swap-label" x={mixedMid.x} y={mixedMid.y}>
+                      {s.mixedLabel}
                     </text>
                   </g>
                 );
