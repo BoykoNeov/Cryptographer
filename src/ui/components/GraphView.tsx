@@ -6983,10 +6983,20 @@ export const GraphView = () => {
                       r={4}
                       style={{ color: s.mixedColor }}
                     />
-                    <text class="graph-feistel-swap-label" x={carryMid.x} y={carryMid.y}>
+                    <text
+                      class="graph-feistel-swap-label"
+                      x={carryMid.x}
+                      y={carryMid.y}
+                      style={{ color: s.carryColor }}
+                    >
                       {s.carryLabel}
                     </text>
-                    <text class="graph-feistel-swap-label" x={mixedMid.x} y={mixedMid.y}>
+                    <text
+                      class="graph-feistel-swap-label"
+                      x={mixedMid.x}
+                      y={mixedMid.y}
+                      style={{ color: s.mixedColor }}
+                    >
                       {s.mixedLabel}
                     </text>
                   </g>

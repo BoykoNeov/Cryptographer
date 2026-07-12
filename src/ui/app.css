@@ -3773,7 +3773,11 @@ button:disabled {
    traceable despite the concat byte order. A subtle backing via paint-order so
    the glyph stays legible where it crosses the other wire. */
 .graph-feistel-swap-label {
-  fill: var(--accent);
+  /* `currentColor` = the inline `color` each label carries (its rail's source
+     hue), so the `R` / `L⊕F` text matches its own wire + landing dot instead of
+     a flat accent that clashed with the coloured rails. */
+  fill: currentColor;
+  color: var(--accent);
   font-size: 11px;
   font-weight: 700;
   paint-order: stroke;
