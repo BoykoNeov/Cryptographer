@@ -3996,6 +3996,48 @@ export const GraphView = () => {
   );
 
   /**
+   * Inter-round Feistel SWAP (the "X"). The straight round→round carry edge
+   * (`round.N.recombine → round.{N+1}.split`) between two Feistel rounds is
+   * suppressed from the normal edge render (`visibleNonFeedbackBundles`) and
+   * redrawn as two crossing wires by the overlay below — the canonical
+   * depiction that the right half (R) becomes the next round's LEFT and (L⊕F)
+   * becomes its RIGHT. `feistelCarryKeys` is the suppression set; `feistelSwaps`
+   * is the geometry. The crossing is driven by the SOURCE round's `swap` flag
+   * (read from its recombine argument order), so editing a round to (no-)swap
+   * flips the picture live — and DES's round 16 (no successor round) simply has
+   * no inter-round swap drawn.
+   */
+  const feistelCarryKeys = createMemo(() => {
+    const rounds = feistelRoundsById();
+    if (rounds.size === 0) return new Set<string>();
+    const recombineIds = new Set<string>();
+    const splitIds = new Set<string>();
+    for (const shape of rounds.values()) {
+      recombineIds.add(shape.recombineId);
+      splitIds.add(shape.splitId);
+    }
+    // Suppress the plain carry edge ONLY where the swap X actually replaces it —
+    // i.e. vertically-stacked rounds (DES). Gated on the SAME geometric test as
+    // `feistelSwaps` below so the two never disagree (a mismatch would either
+    // double-draw the carry edge or drop it). Horizontally-tiled Blowfish rounds
+    // fail the test → their carry edge is kept and routes like any other edge.
+    const boxes = layout().boxes;
+    const keys = new Set<string>();
+    for (const e of graph().edges) {
+      if (!recombineIds.has(e.from) || !splitIds.has(e.to)) continue;
+      const rb = boxes.get(e.from);
+      const sb = boxes.get(e.to);
+      if (rb === undefined || sb === undefined) continue;
+      if (!feistelRoundsStackVertically(rb, sb)) continue;
+      // NUL separator: can't collide with any character in a step id. Written
+      // as the \u0000 escape (NOT a raw NUL byte) so the file stays text to
+      // grep/diff tools — a literal NUL makes ripgrep classify it as binary.
+      keys.add(`${e.from}\u0000${e.to}`);
+    }
+    return keys;
+  });
+
+  /**
    * Where each leaf's input-port wiring dot should sit, AND the colour it should
    * take: the box-edge point where that port's incoming arrow actually arrives,
    * tinted to match that arrow (2026-07-12). Keyed `consumerStepId → (portName →
@@ -4115,7 +4157,14 @@ export const GraphView = () => {
       inner.set(portName, { ...point, color: arrivalColorFor(edge, sourceColors, nById) });
     };
 
+    // A round→round carry that the Feistel swap-X replaces (DES) draws its own
+    // per-rail landing dots (`graph-feistel-swap-dot`), so skip the plain
+    // input-port dot for it — otherwise the split shows a single dot at the
+    // suppressed edge's geometry, coloured by `recombine` (often the grey
+    // palette slot) and NOT under either visible swap wire.
+    const carryKeys = feistelCarryKeys();
     for (const edge of bg.edges) {
+      if (carryKeys.size > 0 && carryKeys.has(`${edge.from}\u0000${edge.to}`)) continue;
       const targetId = visualEdgeTargetId(edge, nById, cById);
       // Port-flow spine edge → `toPort` names the consumer input port directly.
       if (edge.kind === "state" && edge.auxKey === PORT_FLOW_AUX_KEY && edge.toPort !== undefined) {
@@ -4181,48 +4230,6 @@ export const GraphView = () => {
     return out;
   });
 
-  /**
-   * Inter-round Feistel SWAP (the "X"). The straight round→round carry edge
-   * (`round.N.recombine → round.{N+1}.split`) between two Feistel rounds is
-   * suppressed from the normal edge render (`visibleNonFeedbackBundles`) and
-   * redrawn as two crossing wires by the overlay below — the canonical
-   * depiction that the right half (R) becomes the next round's LEFT and (L⊕F)
-   * becomes its RIGHT. `feistelCarryKeys` is the suppression set; `feistelSwaps`
-   * is the geometry. The crossing is driven by the SOURCE round's `swap` flag
-   * (read from its recombine argument order), so editing a round to (no-)swap
-   * flips the picture live — and DES's round 16 (no successor round) simply has
-   * no inter-round swap drawn.
-   */
-  const feistelCarryKeys = createMemo(() => {
-    const rounds = feistelRoundsById();
-    if (rounds.size === 0) return new Set<string>();
-    const recombineIds = new Set<string>();
-    const splitIds = new Set<string>();
-    for (const shape of rounds.values()) {
-      recombineIds.add(shape.recombineId);
-      splitIds.add(shape.splitId);
-    }
-    // Suppress the plain carry edge ONLY where the swap X actually replaces it —
-    // i.e. vertically-stacked rounds (DES). Gated on the SAME geometric test as
-    // `feistelSwaps` below so the two never disagree (a mismatch would either
-    // double-draw the carry edge or drop it). Horizontally-tiled Blowfish rounds
-    // fail the test → their carry edge is kept and routes like any other edge.
-    const boxes = layout().boxes;
-    const keys = new Set<string>();
-    for (const e of graph().edges) {
-      if (!recombineIds.has(e.from) || !splitIds.has(e.to)) continue;
-      const rb = boxes.get(e.from);
-      const sb = boxes.get(e.to);
-      if (rb === undefined || sb === undefined) continue;
-      if (!feistelRoundsStackVertically(rb, sb)) continue;
-      // NUL separator: can't collide with any character in a step id. Written
-      // as the \u0000 escape (NOT a raw NUL byte) so the file stays text to
-      // grep/diff tools — a literal NUL makes ripgrep classify it as binary.
-      keys.add(`${e.from}\u0000${e.to}`);
-    }
-    return keys;
-  });
-
   const visibleNonFeedbackBundles = createMemo(() => {
     const carry = feistelCarryKeys();
     const bundles = nonFeedbackBundles();
@@ -4251,7 +4258,17 @@ export const GraphView = () => {
       carry: { x1: number; y1: number; x2: number; y2: number };
       mixedLabel: string;
       carryLabel: string;
+      // Each rail is tinted by the SOURCE colour of the leaf that produced that
+      // half (the mixed half comes from the round's `fxor`; the carried half from
+      // its `split`, or the last pass-through rail node for Blowfish's `L⊕P[i]`).
+      // This matches how `arrivalColorFor` colours every other arrival dot, so the
+      // wire and the dot at its landing point agree — the pre-2026-07-12 wires were
+      // a flat `var(--accent)` that clashed with the source-coloured split dot.
+      mixedColor: string;
+      carryColor: string;
     }[] = [];
+    const sourceColors = effectiveSourceColors();
+    const railColor = (nodeId: string): string => sourceColors.get(nodeId) ?? "var(--accent)";
     const DX = 34; // horizontal offset of each half off the box center.
     for (const e of graph().edges) {
       const fromRound = recombineToRound.get(e.from);
@@ -4274,11 +4291,19 @@ export const GraphView = () => {
         splitBox: sb,
         dx: DX,
       });
+      // Carried-half producer: the last pass-through rail node if any (Blowfish's
+      // `L⊕P[i]`), else the raw split output (DES).
+      const carryProducer =
+        fromRound.railNodeIds.length > 0
+          ? (fromRound.railNodeIds[fromRound.railNodeIds.length - 1] as string)
+          : fromRound.splitId;
       out.push({
         id: `${e.from}->${e.to}`,
         swap: fromRound.swap,
         mixedLabel: labels.mixed,
         carryLabel: labels.carry,
+        mixedColor: railColor(fromRound.fxorId),
+        carryColor: railColor(carryProducer),
         ...wires,
       });
     }
@@ -6866,15 +6891,39 @@ export const GraphView = () => {
                         ? `Feistel swap: the two halves cross — the carried half (${s.carryLabel}) and the combined half (${s.mixedLabel}) each move to the opposite side of the next round's split. The port-native cipher realizes this via the recombine's concat argument order, then the next split.`
                         : `No swap (the self-inverse last-round exception): the halves pass straight down — the combined half (${s.mixedLabel}) stays left, the carried half (${s.carryLabel}) stays right.`}
                     </title>
+                    {/* Each rail carries its producer's source colour via inline
+                        `color` + the CSS `stroke: currentColor` / `fill:
+                        currentColor`, so the wire, its arrowhead, and the landing
+                        dot on the next split all read as one hue (2026-07-12). */}
                     <path
                       class="graph-feistel-swap-wire"
                       d={path(s.carry)}
                       marker-end="url(#graph-arrow-state)"
+                      style={{ color: s.carryColor }}
                     />
                     <path
                       class="graph-feistel-swap-wire"
                       d={path(s.mixed)}
                       marker-end="url(#graph-arrow-state)"
+                      style={{ color: s.mixedColor }}
+                    />
+                    {/* Landing dots — one per rail, at each wire's endpoint on the
+                        next round's split, tinted to that rail. Replaces the single
+                        (mislocated, source-of-`recombine`-coloured) input-port dot,
+                        which is suppressed for a swap-fed split in `portArrivalPoints`. */}
+                    <circle
+                      class="graph-feistel-swap-dot"
+                      cx={s.carry.x2}
+                      cy={s.carry.y2}
+                      r={4}
+                      style={{ color: s.carryColor }}
+                    />
+                    <circle
+                      class="graph-feistel-swap-dot"
+                      cx={s.mixed.x2}
+                      cy={s.mixed.y2}
+                      r={4}
+                      style={{ color: s.mixedColor }}
                     />
                     <text class="graph-feistel-swap-label" x={carryMid.x} y={carryMid.y}>
                       {s.carryLabel}

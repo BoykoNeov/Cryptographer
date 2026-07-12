@@ -3741,9 +3741,22 @@ button:disabled {
    between rounds. */
 .graph-feistel-swap-wire {
   fill: none;
-  stroke: var(--accent);
+  /* `currentColor` = the inline `color` each wire carries (its rail's source
+     hue), so the wire + its arrowhead + the landing dot below all agree. Falls
+     back to the accent when the rail's producer has no assigned source colour. */
+  stroke: currentColor;
+  color: var(--accent);
   stroke-width: 2;
   opacity: 0.85;
+}
+
+/* The dot where a swap wire lands on the next round's split (2026-07-12). Same
+   `currentColor` carrier as the wire, so dot and wire never disagree; full
+   opacity so it reads as a clear terminus, matching `.graph-port-arrived`. */
+.graph-feistel-swap-dot {
+  fill: currentColor;
+  color: var(--accent);
+  opacity: 0.9;
 }
 
 /* Label naming the VALUE each swap wire carries (R / L⊕F), so the crossing is
