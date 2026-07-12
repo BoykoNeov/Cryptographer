@@ -100,4 +100,31 @@ describe("GraphView — RSA render", () => {
     expect(text).toContain("message");
     expect(text).toContain("ciphertext");
   });
+
+  it("lands a SEPARATE arrival dot on each of square-0's a/b ports (2026-07-12)", () => {
+    // Regression for the bundleByKey `toPort` collision: `result-seed` feeds BOTH
+    // `square-0.a` and `square-0.b` (the squaring `result²`). Before the shared
+    // `bundleKeyFor`, the memo's `(from,to,kind,fb)`-only key collided the two
+    // per-port bundles, so both port dots stacked on ONE arrowhead — one arrow
+    // visibly landed on a dot, its sibling did not. Assert both ports now render
+    // an "arrived" (colored) dot at DISTINCT coordinates.
+    seedRsa();
+    const { container } = render(() => <GraphView />);
+    const handleFor = (port: string) =>
+      container.querySelector<SVGGElement>(`[data-testid="graph-port-in-square-0-${port}"]`);
+    const a = handleFor("a");
+    const b = handleFor("b");
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    // Both resolved to a real incoming arrow → the "arrived" class (grey fallback
+    // would omit it).
+    expect(a?.classList.contains("graph-port-arrived")).toBe(true);
+    expect(b?.classList.contains("graph-port-arrived")).toBe(true);
+    const dotXY = (g: SVGGElement | null) => {
+      const dot = g?.querySelector(".graph-port-dot");
+      return `${dot?.getAttribute("cx")},${dot?.getAttribute("cy")}`;
+    };
+    // The whole point: the two dots sit at DIFFERENT arrowheads, not stacked.
+    expect(dotXY(a)).not.toBe(dotXY(b));
+  });
 });

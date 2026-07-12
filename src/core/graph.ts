@@ -378,26 +378,42 @@ export type BundledGraph = {
  * (whose whole purpose IS the `×N` pill) are unaffected — they carry no
  * `toPort`, so the suffix is empty and they bundle exactly as before.
  */
+
+/**
+ * The bundling identity of an edge — the key `bundleEdges` groups on.
+ *
+ * Exported and shared so every consumer that needs to map an edge back to
+ * "which rendered arrow is this?" keys it IDENTICALLY. There are two: this
+ * function's home in `bundleEdges`, and `GraphView`'s `portArrivalPoints`
+ * memo, which reverses (rendered bundle → the input-port arrival dot). When
+ * these two diverged, port-flow bundles that split by `toPort` here (Twofish
+ * `split → recombine.input2`/`.input3`; RSA `result-seed → square-0.a`/`.b`;
+ * `eea-i → eea-i+1` on r/newR/t/newT) COLLIDED in the memo's own map — every
+ * per-port dot stacked onto one arrowhead and the sibling arrows got none.
+ * A single source of truth makes that class of drift impossible.
+ *
+ * The `\0` separator is safe: no spec id contains a null byte. Port-flow
+ * spine edges append the consumer input port so distinct rails between the
+ * SAME two nodes stay separate arrows (and separate arrival dots); aux edges
+ * carry no `toPort`, so the suffix is empty and they bundle as before.
+ */
+export const bundleKeyFor = (e: GraphEdge, fb: boolean): string => {
+  const base = `${e.from}\0${e.to}\0${e.kind}\0${fb ? "1" : "0"}`;
+  return e.kind === "state" && e.auxKey === PORT_FLOW_AUX_KEY && e.toPort !== undefined
+    ? `${base}\0${e.toPort}`
+    : base;
+};
+
 export const bundleEdges = (
   graph: CipherGraph,
   isFeedback: (edge: GraphEdge) => boolean,
 ): BundledGraph => {
-  const bundleKey = (e: GraphEdge, fb: boolean): string => {
-    // `\0` separator is safe — no spec id contains a null byte.
-    const base = `${e.from}\0${e.to}\0${e.kind}\0${fb ? "1" : "0"}`;
-    // Port-flow spine edges also key on the consumer input port so distinct
-    // rails between the same two nodes render (and resolve) as separate arrows.
-    return e.kind === "state" && e.auxKey === PORT_FLOW_AUX_KEY && e.toPort !== undefined
-      ? `${base}\0${e.toPort}`
-      : base;
-  };
-
   const bundles: EdgeBundle[] = [];
   const byKey = new Map<string, { bundle: EdgeBundle; auxKeys: string[] }>();
 
   for (const edge of graph.edges) {
     const fb = isFeedback(edge);
-    const key = bundleKey(edge, fb);
+    const key = bundleKeyFor(edge, fb);
     const existing = byKey.get(key);
     if (existing) {
       existing.auxKeys.push(edge.auxKey);

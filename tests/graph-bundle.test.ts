@@ -26,13 +26,16 @@
 import { aes128Spec } from "@/ciphers/aes-128";
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { buildRsaSpec } from "@/ciphers/rsa";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { buildSha256Spec } from "@/ciphers/sha-256";
+import { bigIntToBytes } from "@/core/big-int-codec";
 import {
   type GraphEdge,
   PORT_FLOW_AUX_KEY,
   buildIterateFeedbackPredicate,
   bundleEdges,
+  bundleKeyFor,
   collapseGraph,
   deriveAuxGraph,
   replicateHighFanoutSources,
@@ -342,5 +345,82 @@ describe("bundleEdges — collapse same-(from, to, kind, isFeedback)", () => {
     } as const;
     const bundled = bundleEdges(empty, () => false);
     expect(bundled.bundles).toEqual([]);
+  });
+});
+
+describe("bundleKeyFor — the shared bundling identity (2026-07-12)", () => {
+  // `bundleKeyFor` is exported so `bundleEdges` AND `GraphView`'s
+  // `portArrivalPoints` memo key edges IDENTICALLY. When the memo kept its own
+  // `(from,to,kind,fb)`-only key, the per-port bundles a source fans to ONE
+  // consumer (RSA `result-seed → square-0.a`/`.b`; `eea-i → eea-i+1` on
+  // r/newR/t/newT) all collided in the memo's map — every sibling port's arrival
+  // dot stacked onto the survivor's arrowhead. These pin the two properties that
+  // keep that from recurring.
+  const portFlowEdge = (from: string, to: string, toPort: string): GraphEdge => ({
+    from,
+    to,
+    auxKey: PORT_FLOW_AUX_KEY,
+    kind: "state",
+    fromPort: "output",
+    toPort,
+  });
+  const auxEdge = (from: string, to: string, auxKey: string): GraphEdge => ({
+    from,
+    to,
+    auxKey,
+    kind: "aux",
+  });
+
+  it("keys one source's DISTINCT toPorts of one consumer as DISTINCT bundles", () => {
+    // The A-bug root: two port-flow rails from the same source into two ports of
+    // the same consumer must NOT share a key (else one arrowhead swallows both
+    // dots). RSA `result-seed → square-0` feeds ports `a` and `b`.
+    const a = portFlowEdge("result-seed", "square-0", "a");
+    const b = portFlowEdge("result-seed", "square-0", "b");
+    expect(bundleKeyFor(a, false)).not.toBe(bundleKeyFor(b, false));
+    // Same port ⇒ same key (idempotent), so a member edge finds its own bundle.
+    expect(bundleKeyFor(a, false)).toBe(
+      bundleKeyFor(portFlowEdge("result-seed", "square-0", "a"), false),
+    );
+  });
+
+  it("keys aux fan-in from one source to one consumer as ONE shared bundle", () => {
+    // Aux edges carry no `toPort`, so the whole point of bundling (the `×N` pill)
+    // is preserved: distinct auxKeys between the same pair collapse together.
+    const k0 = auxEdge("key-schedule", "add-round-key", "roundKey.0");
+    const k1 = auxEdge("key-schedule", "add-round-key", "roundKey.1");
+    expect(bundleKeyFor(k0, false)).toBe(bundleKeyFor(k1, false));
+  });
+
+  it("splits the same edge across the isFeedback flag", () => {
+    const e = portFlowEdge("recombine", "split", "input");
+    expect(bundleKeyFor(e, true)).not.toBe(bundleKeyFor(e, false));
+  });
+
+  it("matches the identity `bundleEdges` actually groups on (real RSA spec)", () => {
+    // End-to-end: derive the RSA graph, then assert that grouping the raw edges
+    // by `bundleKeyFor` reproduces exactly `bundleEdges`' bundle set — the two
+    // can't drift because they're the same function.
+    const trace = runSpec(buildRsaSpec("encrypt", 2), buildDefaultRegistry(), {
+      initialState: { shape: "bytes", bytes: bigIntToBytes(65n, 2) },
+    });
+    const raw = deriveAuxGraph(trace, buildRsaSpec("encrypt", 2), {
+      registry: buildDefaultRegistry(),
+    });
+    const fb = buildIterateFeedbackPredicate(raw);
+    const bundled = bundleEdges(raw, fb);
+
+    const keyed = new Set(raw.edges.map((e) => bundleKeyFor(e, fb(e))));
+    expect(bundled.bundles.length).toBe(keyed.size);
+
+    // The RSA-specific fan we care about: `result-seed → square-0` must be TWO
+    // bundles (ports a + b), not one — the exact case the memo used to collapse.
+    const seedBundles = bundled.bundles.filter(
+      (b) => b.from === "result-seed" && b.to === "square-0",
+    );
+    expect(seedBundles.length).toBe(2);
+    expect(new Set(seedBundles.map((b) => b.representativeEdge.toPort))).toEqual(
+      new Set(["a", "b"]),
+    );
   });
 });

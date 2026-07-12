@@ -58,6 +58,7 @@ import {
   PORT_FLOW_AUX_KEY,
   buildIterateFeedbackPredicate,
   bundleEdges,
+  bundleKeyFor,
   collapseGraph,
   deriveAuxGraph,
   expandCollapsedIterates,
@@ -4068,13 +4069,15 @@ export const GraphView = () => {
     }
 
     // Bundle lookup so a member edge can borrow its bundle's representative edge
-    // (the one `EdgePath` actually draws) for geometry + isFeedback. Keyed the
-    // same `(from,to,kind,fb)` way `bundleEdges` keys internally.
-    const bundleKey = (from: string, to: string, kind: string, fb: boolean): string =>
-      `${from} ${to} ${kind} ${fb ? "1" : "0"}`;
+    // (the one `EdgePath` actually draws) for geometry + isFeedback. Keyed via
+    // the SHARED `bundleKeyFor` so a member edge finds its OWN bundle — port-flow
+    // rails split by `toPort` in `bundleEdges`, so a `(from,to,kind,fb)`-only key
+    // would collide the per-port bundles (RSA `result-seed → square-0.a`/`.b`,
+    // `eea-i → eea-i+1` on r/newR/t/newT) and strand every sibling port's dot on
+    // the survivor's arrowhead.
     const bundleByKey = new Map<string, EdgeBundle>();
     for (const b of bg.bundles) {
-      bundleByKey.set(bundleKey(b.from, b.to, b.kind, b.isFeedback), b);
+      bundleByKey.set(bundleKeyFor(b.representativeEdge, b.isFeedback), b);
     }
     // Arrival point per bundle (representative geometry), computed once + cached.
     const pointByBundle = new Map<EdgeBundle, { x: number; y: number } | null>();
@@ -4099,7 +4102,7 @@ export const GraphView = () => {
     // writer wins — a declared input port has exactly one incoming arrow.
     const place = (targetId: string, portName: string, edge: GraphEdge) => {
       const fb = isFb(edge);
-      const b = bundleByKey.get(bundleKey(edge.from, edge.to, edge.kind, fb));
+      const b = bundleByKey.get(bundleKeyFor(edge, fb));
       if (b === undefined) return;
       const point = bundleArrival(b, targetId);
       if (point === null) return;
