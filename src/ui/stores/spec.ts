@@ -45,6 +45,7 @@ import { serpent256Spec } from "@/ciphers/serpent-256";
 import { serpent256DecryptSpec } from "@/ciphers/serpent-256-decrypt";
 import { buildSha256Spec } from "@/ciphers/sha-256";
 import { buildSha3256Spec } from "@/ciphers/sha3-256";
+import { buildShakeSpec, readShakeOutputLength } from "@/ciphers/shake";
 import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { speck32_64BeDecryptSpec } from "@/ciphers/speck-32-64-be-decrypt";
 import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
@@ -86,6 +87,7 @@ import {
   setCipher as setCipherSignal,
   setHash as setHashSignal,
   useCipher,
+  useHash,
 } from "./cipher";
 import {
   type CipherMode,
@@ -180,7 +182,28 @@ const resolveDefault = (cipher: Cipher, cipherMode: CipherMode, mode: Mode): Cip
  * matching the cipher tables. SHA-256's builder constructs ~1800+ leaves;
  * the cost is one-shot, paid before first paint.
  */
-const hashDefaults: Record<Hash, CipherSpec> = {
+// ─── SHAKE output length (editable XOF digest length) ─────────────────────
+//
+// SHAKE is a variable-length XOF: its output length is spec DATA (it changes
+// how many squeeze blocks run and the digest bytes, and travels via Save /
+// Share), so it is captured structurally in the built spec. This signal is the
+// "currently desired length" input the store rebuilds SHAKE specs from —
+// exactly analogous to how the `cipherMode` signal parameterizes
+// `buildCanonicalPair`. Fixed-digest hashes (SHA-256 / SHA3-256) ignore it.
+
+/** Legibility ceiling on the SHAKE output length: 512 bytes ⇒ up to 4 squeeze
+ *  blocks (3 extra Keccak-f permutations) — headroom above the default to show
+ *  the loop growing, well under SHA-256's leaf count. */
+export const MAX_SHAKE_OUTPUT = 512;
+/** Default SHAKE output length: 200 bytes ⇒ 2 squeeze blocks for BOTH variants
+ *  (rate 168 and 136), so the squeeze loop is visible on first paint. */
+export const DEFAULT_SHAKE_OUTPUT = 200;
+
+const [shakeOutputLength, setShakeOutputLengthSignal] = createSignal(DEFAULT_SHAKE_OUTPUT);
+/** Accessor for the current SHAKE output length (the UI stepper reads this). */
+export const useShakeOutputLength = (): (() => number) => shakeOutputLength;
+
+const hashDefaults: Record<Exclude<Hash, "shake128" | "shake256">, CipherSpec> = {
   "sha-256": buildSha256Spec(),
   "sha3-256": buildSha3256Spec(),
 };
@@ -189,8 +212,20 @@ const hashDefaults: Record<Hash, CipherSpec> = {
  * Pick the canonical hash spec for a `Hash` variant. Mirrors
  * `resolveDefault` for ciphers — kept separate because the (mode,
  * cipherMode, padding) axes don't apply to hashes.
+ *
+ * SHAKE variants are built ON DEMAND at the current `shakeOutputLength()`
+ * rather than cached in `hashDefaults`, because their canonical shape depends
+ * on the editable output length. Reading the signal here makes every consumer
+ * that calls `resolveHashDefault` (`isCustomSpec`, `resetSpec`) reactive to
+ * length changes, and keeps the signal + the active spec in lockstep so a pure
+ * length change reads "not custom".
  */
-const resolveHashDefault = (hash: Hash): CipherSpec => hashDefaults[hash];
+const resolveHashDefault = (hash: Hash): CipherSpec => {
+  if (hash === "shake128" || hash === "shake256") {
+    return buildShakeSpec(hash, shakeOutputLength());
+  }
+  return hashDefaults[hash];
+};
 
 /**
  * Canonical-spec table for asymmetric (public-key) algorithms — sibling of
@@ -506,6 +541,29 @@ export const setHash = (h: Hash): void => {
   setCategorySignal("hash");
   setHashSignal(h);
   setSpecs(buildCanonicalHash(h));
+};
+
+/**
+ * Set the SHAKE output length and, when a SHAKE is the active hash, rebuild the
+ * spec at the new length. Clamps to `[1, MAX_SHAKE_OUTPUT]`.
+ *
+ * This is a STRUCTURAL rebuild (via `setSpecs(buildCanonicalHash(...))`), not a
+ * param edit: the output length changes how many `squeeze.perm.{j}` groups the
+ * spec contains, which `editStepParams` cannot express. The signal and the
+ * active spec move in lockstep, so `isCustomSpec` (which compares against
+ * `resolveHashDefault`, itself built at `shakeOutputLength()`) reads "not
+ * custom" after a pure length change and "custom" only after a real edit.
+ *
+ * No-op for non-SHAKE hashes / ciphers: the signal still updates (cheap) but no
+ * rebuild happens, so switching TO a SHAKE later picks up the chosen length.
+ */
+export const setShakeOutputLength = (n: number): void => {
+  const clamped = Math.max(1, Math.min(MAX_SHAKE_OUTPUT, Math.floor(n)));
+  setShakeOutputLengthSignal(clamped);
+  const active = useHash()();
+  if (active === "shake128" || active === "shake256") {
+    setSpecs(buildCanonicalHash(active));
+  }
 };
 
 /**
@@ -1290,6 +1348,16 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
     // dropdown looking active even though the live spec is a hash.
     setCategorySignal("hash");
     setHashSignal(doc.algorithm);
+    // For SHAKE, recover the output length from the loaded spec's truncate step
+    // so the control shows it and a later resetSpec rebuilds at that length.
+    // Set the RAW signal (not setShakeOutputLength) — we land doc.spec verbatim
+    // below rather than a canonical rebuild, so no structural rebuild is wanted.
+    if (doc.algorithm === "shake128" || doc.algorithm === "shake256") {
+      const loadedLen = readShakeOutputLength(doc.spec);
+      if (loadedLen !== undefined) {
+        setShakeOutputLengthSignal(Math.max(1, Math.min(MAX_SHAKE_OUTPUT, loadedLen)));
+      }
+    }
     setSpecs({ kind: "hash", hash: doc.algorithm, single: doc.spec });
     return;
   }

@@ -70,7 +70,12 @@ export const CIPHER_IDS = [
  * `assertHashCoverage` below pins it against the `Hash` union in
  * `ui/stores/cipher.ts` so a future addition surfaces here at `tsc` time.
  */
-export const HASH_IDS = ["sha-256", "sha3-256"] as const satisfies readonly Hash[];
+export const HASH_IDS = [
+  "sha-256",
+  "sha3-256",
+  "shake128",
+  "shake256",
+] as const satisfies readonly Hash[];
 
 /**
  * Asymmetric (public-key) variants — `docs/plans/shimmying-booping-moth.md`.
