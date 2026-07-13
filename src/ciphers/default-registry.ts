@@ -44,6 +44,7 @@ import {
   byteSubstituteDoc,
   byteSubstitutePortContract,
 } from "../steps/byte-substitute";
+import { bytepad, bytepadDoc, bytepadPortContract } from "../steps/bytepad";
 import {
   bytesToState,
   bytesToStateDoc,
@@ -100,6 +101,7 @@ import {
 } from "../steps/des-xor-with-k";
 import { eeaExtract, eeaExtractDoc, eeaExtractPortContract } from "../steps/eea-extract";
 import { eeaStep, eeaStepDoc, eeaStepPortContract } from "../steps/eea-step";
+import { encodeString, encodeStringDoc, encodeStringPortContract } from "../steps/encode-string";
 import {
   gfMatrixMultiply,
   gfMatrixMultiplyDoc,
@@ -163,6 +165,7 @@ import {
   publishRoundKeysMeta,
   publishRoundKeysPortContract,
 } from "../steps/publish-round-keys";
+import { rightEncodeDoc, rightEncodePortContract, rightEncodeStep } from "../steps/right-encode";
 import {
   rotateBitsRight,
   rotateBitsRightDoc,
@@ -957,6 +960,28 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: appendBe64Length,
     shape: appendBe64LengthPortContract,
     doc: appendBe64LengthDoc,
+  });
+  // NIST SP 800-185 §2.3 byte-string encodings — the cSHAKE / KMAC prefix
+  // machinery. `encode-string` length-prefixes a field (bit length!),
+  // `bytepad` aligns it to a rate block, `right-encode` commits the output
+  // length into KMAC's input. See `src/ciphers/cshake.ts` / `kmac.ts`.
+  r.register("encode-string@1", {
+    kind: "ported",
+    executor: encodeString,
+    shape: encodeStringPortContract,
+    doc: encodeStringDoc,
+  });
+  r.register("bytepad@1", {
+    kind: "ported",
+    executor: bytepad,
+    shape: bytepadPortContract,
+    doc: bytepadDoc,
+  });
+  r.register("right-encode@1", {
+    kind: "ported",
+    executor: rightEncodeStep,
+    shape: rightEncodePortContract,
+    doc: rightEncodeDoc,
   });
   r.register("constant-load@1", {
     kind: "ported",

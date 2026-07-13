@@ -79,7 +79,7 @@ describe("port-provenance coverage contract", () => {
     }
   });
 
-  it("allowlist contents are exactly the expected 18 (rationale set-pin)", () => {
+  it("allowlist contents are exactly the expected 21 (rationale set-pin)", () => {
     // Grouped by the FOUR distinct rationales — see PROVENANCE_NO_OP_ALLOWLIST's
     // doc. Keeping the groups visible here stops a future edit from quietly
     // relabelling an exact-but-plumbing bridge as "approximate".
@@ -102,9 +102,12 @@ describe("port-provenance coverage contract", () => {
       "eea-extract@1",
       // no inputs
       "constant-load@1",
+      "right-encode@1",
       // partial — synthesizes bytes with no input source
       "pad-with-byte@1",
       "append-be64-length@1",
+      "encode-string@1",
+      "bytepad@1",
       // exact-but-plumbing — identity bridge, deferred as low-value
       "state-to-bytes@1",
       "bytes-to-state@1",

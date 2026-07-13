@@ -75,6 +75,8 @@ export const HASH_IDS = [
   "sha3-256",
   "shake128",
   "shake256",
+  "cshake128",
+  "cshake256",
 ] as const satisfies readonly Hash[];
 
 /**

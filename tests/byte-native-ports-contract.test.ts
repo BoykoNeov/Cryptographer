@@ -106,6 +106,7 @@ const KITCHEN_SINK: Json = {
   length: 4,
   offset: 0,
   bytes: [0, 0, 0, 0],
+  value: 0, // right-encode@1 (SP 800-185 — encodes the output-length commitment)
 } as unknown as Json;
 
 type Scan = {

@@ -34,6 +34,7 @@ import { aes256Spec } from "@/ciphers/aes-256";
 import { aes256DecryptSpec } from "@/ciphers/aes-256-decrypt";
 import { blowfishSpec } from "@/ciphers/blowfish";
 import { blowfishDecryptSpec } from "@/ciphers/blowfish-decrypt";
+import { buildCshakeSpec, readCshakeCustomization } from "@/ciphers/cshake";
 import { desSpec } from "@/ciphers/des";
 import { desDecryptSpec } from "@/ciphers/des-decrypt";
 import { rsaDecryptSpec, rsaEncryptSpec } from "@/ciphers/rsa";
@@ -200,10 +201,34 @@ export const MAX_SHAKE_OUTPUT = 512;
 export const DEFAULT_SHAKE_OUTPUT = 200;
 
 const [shakeOutputLength, setShakeOutputLengthSignal] = createSignal(DEFAULT_SHAKE_OUTPUT);
-/** Accessor for the current SHAKE output length (the UI stepper reads this). */
+/** Accessor for the current SHAKE output length (the UI stepper reads this).
+ *  Shared by every XOF variant — SHAKE and cSHAKE. */
 export const useShakeOutputLength = (): (() => number) => shakeOutputLength;
 
-const hashDefaults: Record<Exclude<Hash, "shake128" | "shake256">, CipherSpec> = {
+// ─── cSHAKE customization strings (editable spec DATA) ────────────────────
+//
+// cSHAKE binds two byte strings — a function-name N (reserved for NIST-defined
+// functions; empty for direct use) and a user customization string S — into the
+// sponge prefix. Like the SHAKE output length, these are spec DATA (they change
+// the encode_string/bytepad prefix bytes and the digest, and travel via Save /
+// Share as constant-load params), so the store rebuilds the cSHAKE spec from
+// these "currently desired" signals. Held as text; UTF-8-encoded at build.
+
+/** Default cSHAKE customization: N empty (direct use), S the NIST sample string
+ *  — so the first Run at output 32 reproduces SP 800-185 cSHAKE Sample #1. */
+export const DEFAULT_CSHAKE_N = "";
+export const DEFAULT_CSHAKE_S = "Email Signature";
+
+const [cshakeN, setCshakeNSignal] = createSignal(DEFAULT_CSHAKE_N);
+const [cshakeS, setCshakeSSignal] = createSignal(DEFAULT_CSHAKE_S);
+/** Accessors for the current cSHAKE customization strings (the UI reads these). */
+export const useCshakeN = (): (() => string) => cshakeN;
+export const useCshakeS = (): (() => string) => cshakeS;
+
+const hashDefaults: Record<
+  Exclude<Hash, "shake128" | "shake256" | "cshake128" | "cshake256">,
+  CipherSpec
+> = {
   "sha-256": buildSha256Spec(),
   "sha3-256": buildSha3256Spec(),
 };
@@ -224,8 +249,25 @@ const resolveHashDefault = (hash: Hash): CipherSpec => {
   if (hash === "shake128" || hash === "shake256") {
     return buildShakeSpec(hash, shakeOutputLength());
   }
+  if (hash === "cshake128" || hash === "cshake256") {
+    const utf8 = new TextEncoder();
+    return buildCshakeSpec(
+      hash,
+      utf8.encode(cshakeN()),
+      utf8.encode(cshakeS()),
+      shakeOutputLength(),
+    );
+  }
   return hashDefaults[hash];
 };
+
+/** True when a `Hash` is an extendable-output function (SHAKE or cSHAKE) — the
+ *  variants that read the shared `shakeOutputLength` signal. */
+export const isXofHash = (h: Hash): boolean =>
+  h === "shake128" || h === "shake256" || h === "cshake128" || h === "cshake256";
+
+/** True when a `Hash` is a cSHAKE variant (has editable customization strings). */
+export const isCshakeHash = (h: Hash): boolean => h === "cshake128" || h === "cshake256";
 
 /**
  * Canonical-spec table for asymmetric (public-key) algorithms — sibling of
@@ -561,7 +603,24 @@ export const setShakeOutputLength = (n: number): void => {
   const clamped = Math.max(1, Math.min(MAX_SHAKE_OUTPUT, Math.floor(n)));
   setShakeOutputLengthSignal(clamped);
   const active = useHash()();
-  if (active === "shake128" || active === "shake256") {
+  // Every XOF variant (SHAKE and cSHAKE) is rebuilt at the new length.
+  if (isXofHash(active)) {
+    setSpecs(buildCanonicalHash(active));
+  }
+};
+
+/**
+ * Set a cSHAKE customization string (`N` or `S`) and, when a cSHAKE is the
+ * active hash, rebuild the spec. Like the SHAKE output length this is a
+ * STRUCTURAL rebuild: the string's length changes the `encode_string` / `bytepad`
+ * prefix bytes (and emptying BOTH N and S flips the domain byte back to SHAKE's
+ * 0x1F), which `editStepParams` cannot express. No-op for non-cSHAKE hashes.
+ */
+export const setCshakeCustomization = (which: "N" | "S", value: string): void => {
+  if (which === "N") setCshakeNSignal(value);
+  else setCshakeSSignal(value);
+  const active = useHash()();
+  if (isCshakeHash(active)) {
     setSpecs(buildCanonicalHash(active));
   }
 };
@@ -1352,11 +1411,19 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
     // so the control shows it and a later resetSpec rebuilds at that length.
     // Set the RAW signal (not setShakeOutputLength) — we land doc.spec verbatim
     // below rather than a canonical rebuild, so no structural rebuild is wanted.
-    if (doc.algorithm === "shake128" || doc.algorithm === "shake256") {
+    if (isXofHash(doc.algorithm)) {
       const loadedLen = readShakeOutputLength(doc.spec);
       if (loadedLen !== undefined) {
         setShakeOutputLengthSignal(Math.max(1, Math.min(MAX_SHAKE_OUTPUT, loadedLen)));
       }
+    }
+    // cSHAKE: recover the customization strings so the controls show them and a
+    // later resetSpec rebuilds the same customized spec.
+    if (isCshakeHash(doc.algorithm)) {
+      const { N, S } = readCshakeCustomization(doc.spec);
+      const dec = new TextDecoder();
+      setCshakeNSignal(dec.decode(N));
+      setCshakeSSignal(dec.decode(S));
     }
     setSpecs({ kind: "hash", hash: doc.algorithm, single: doc.spec });
     return;

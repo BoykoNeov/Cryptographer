@@ -334,6 +334,9 @@ export const ParamEditor = (props: Props) => {
             <Match when={KECCAK_SCALAR_PARAM_TYPES.has(getStep().type)}>
               <KeccakParamsBlock step={getStep()} />
             </Match>
+            <Match when={SP800185_SCALAR_PARAM_TYPES.has(getStep().type)}>
+              <Sp800185ParamsBlock step={getStep()} />
+            </Match>
             <Match when={NO_PARAMS_PORT_NATIVE_TYPES.has(getStep().type)}>
               <NoParamsBlock label={portNativeNoParamsLabel(getStep().type)} />
             </Match>
@@ -826,6 +829,41 @@ const KeccakParamsBlock = (props: { step: StepLeaf }) => {
         <div class="param-scalar-row">
           <dt>Offsets</dt>
           <dd>{params().offsets?.length ?? 0} lanes (ρ rotation table, FIPS 202 Table 2)</dd>
+        </div>
+      </Show>
+    </dl>
+  );
+};
+
+// NIST SP 800-185 encoding scalar-param block. `encode-string@1` (no params —
+// it reads its input length at run time), `bytepad@1` (block size `w`), and
+// `right-encode@1` (the `value` it encodes) carry small STRUCTURAL params that
+// define the cSHAKE / KMAC prefix — editing them by hand would break the
+// SP 800-185 math — so they render read-only, like the Keccak scalar block.
+const SP800185_SCALAR_PARAM_TYPES = new Set(["encode-string@1", "bytepad@1", "right-encode@1"]);
+
+const Sp800185ParamsBlock = (props: { step: StepLeaf }) => {
+  const type = (): string => props.step.type;
+  const params = (): { w?: number; value?: number } => props.step.params as never;
+
+  return (
+    <dl class="param-scalars">
+      <Show when={type() === "encode-string@1"}>
+        <div class="param-scalar-row">
+          <dt>encode_string</dt>
+          <dd>left_encode(8·len) ‖ input — no parameters (length read at run time)</dd>
+        </div>
+      </Show>
+      <Show when={type() === "bytepad@1"}>
+        <div class="param-scalar-row">
+          <dt>Block size w</dt>
+          <dd>{params().w ?? "—"} bytes (the sponge rate — pad to a multiple)</dd>
+        </div>
+      </Show>
+      <Show when={type() === "right-encode@1"}>
+        <div class="param-scalar-row">
+          <dt>Value</dt>
+          <dd>{params().value ?? "—"} (bits; 0 = KMACXOF, else output length × 8)</dd>
         </div>
       </Show>
     </dl>

@@ -65,7 +65,7 @@ export type Cipher =
  * Open #N7 user pick. Slice 2.10c (2026-05-25) reaches it through the live
  * UI via the `hash` + `category` signals below.
  */
-export type Hash = "sha-256" | "sha3-256" | "shake128" | "shake256";
+export type Hash = "sha-256" | "sha3-256" | "shake128" | "shake256" | "cshake128" | "cshake256";
 
 /**
  * Asymmetric (public-key) family — algorithms with a public/private key pair
@@ -136,7 +136,12 @@ export const isAesCipher = (c: Cipher): c is AesCipher => c.startsWith("aes-");
  * untouched by virtue of the structural definition.
  */
 export const isHash = (a: Algorithm): a is Hash =>
-  a === "sha-256" || a === "sha3-256" || a === "shake128" || a === "shake256";
+  a === "sha-256" ||
+  a === "sha3-256" ||
+  a === "shake128" ||
+  a === "shake256" ||
+  a === "cshake128" ||
+  a === "cshake256";
 
 /**
  * True when an algorithm is in the asymmetric (public-key) family. RSA today.
@@ -239,13 +244,22 @@ export const useAlgorithm = (): (() => Algorithm) => {
 /** Hash dropdown options + labels. Sized to one entry today; mirrors
  *  CIPHER_OPTIONS / CIPHER_LABELS so the UI can render either family with
  *  the same `<For each={options}>` shape. */
-const ALL_HASHES: readonly Hash[] = ["sha-256", "sha3-256", "shake128", "shake256"];
+const ALL_HASHES: readonly Hash[] = [
+  "sha-256",
+  "sha3-256",
+  "shake128",
+  "shake256",
+  "cshake128",
+  "cshake256",
+];
 export const HASH_OPTIONS = ALL_HASHES;
 export const HASH_LABELS: Record<Hash, string> = {
   "sha-256": "SHA-256",
   "sha3-256": "SHA3-256",
   shake128: "SHAKE128",
   shake256: "SHAKE256",
+  cshake128: "cSHAKE128",
+  cshake256: "cSHAKE256",
 };
 
 /** Asymmetric dropdown options + labels. One entry today (RSA); mirrors the
@@ -315,6 +329,10 @@ export const HASH_DESCRIPTIONS: Record<Hash, string> = {
     "SHAKE128 (FIPS 202) — Keccak XOF; arbitrary-length output, 168-byte rate (128-bit strength). Squeezes as many blocks as you ask for.",
   shake256:
     "SHAKE256 (FIPS 202) — Keccak XOF; arbitrary-length output, 136-byte rate (256-bit strength). Squeezes as many blocks as you ask for.",
+  cshake128:
+    "cSHAKE128 (SP 800-185) — customizable SHAKE128; a customization string S domain-separates the XOF. Empty S ⇒ plain SHAKE128.",
+  cshake256:
+    "cSHAKE256 (SP 800-185) — customizable SHAKE256; a customization string S domain-separates the XOF. Empty S ⇒ plain SHAKE256.",
 };
 
 /** Per-asymmetric one-liner. Mirrors `ASYMMETRIC_LABELS`. */
@@ -383,6 +401,10 @@ export const HASH_HISTORY: Record<Hash, string> = {
     "The XOF face of Keccak, standardized alongside SHA-3 in FIPS 202 (2015); its extendable output is the workhorse inside ML-KEM, ML-DSA, and SLH-DSA.",
   shake256:
     "The higher-strength Keccak XOF from FIPS 202 (2015); a variable-length output built from the same sponge, used pervasively across the NIST post-quantum standards.",
+  cshake128:
+    "The customizable SHAKE from NIST SP 800-185 (2016); adds a domain-separation string so an application can carve out its own independent instance of the XOF. The base construction under KMAC.",
+  cshake256:
+    "The 256-bit-strength customizable SHAKE from NIST SP 800-185 (2016); the same domain-separation idea on the higher-security sponge, and the base of KMAC256.",
 };
 
 /** Per-asymmetric historical one-liner. Mirrors `ASYMMETRIC_DESCRIPTIONS`. */
@@ -611,6 +633,8 @@ export const DEFAULT_KEY_BYTES_BY_HASH: Record<Hash, Uint8Array> = {
   "sha3-256": new Uint8Array(0),
   shake128: new Uint8Array(0),
   shake256: new Uint8Array(0),
+  cshake128: new Uint8Array(0), // cSHAKE is unkeyed (customization is spec data)
+  cshake256: new Uint8Array(0),
 };
 
 /**
@@ -626,6 +650,10 @@ export const DEFAULT_PT_BYTES_BY_HASH: Record<Hash, Uint8Array> = {
   shake128: new Uint8Array([0x61, 0x62, 0x63]),
   // "abc" — SHAKE256("abc") @ 32 = 48336660…
   shake256: new Uint8Array([0x61, 0x62, 0x63]),
+  // 00 01 02 03 — the NIST SP 800-185 cSHAKE sample data (with the default
+  // S = "Email Signature" and output 32, the first Run reproduces Sample #1).
+  cshake128: new Uint8Array([0x00, 0x01, 0x02, 0x03]),
+  cshake256: new Uint8Array([0x00, 0x01, 0x02, 0x03]),
 };
 
 // ─── Asymmetric defaults ───────────────────────────────────────────────────

@@ -51,19 +51,11 @@
  *   - FIPS 202 §B.2 (domain separation), Algorithm 8 (the squeeze loop)
  */
 
-import type { CipherSpec, PortBinding, StepDocumentation, StepNode } from "../core/types";
+import type { CipherSpec, StepDocumentation } from "../core/types";
 import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "../core/types";
 import type { AbsorbNarration } from "./keccak-f";
-import {
-  RC_BYTES,
-  ROUNDS,
-  S0_BYTES,
-  STATE_BYTES,
-  buildAbsorbSteps,
-  buildKeccakPermGroup,
-  buildKeccakRounds,
-  port,
-} from "./keccak-f";
+import { RC_BYTES, S0_BYTES, STATE_BYTES, port } from "./keccak-f";
+import { type SpongeNarration, buildSpongeSqueeze } from "./sponge";
 
 // ─── SHAKE variants + parameters ────────────────────────────────────────────
 
@@ -180,91 +172,34 @@ the control above to see blocks appear or disappear.`,
   references: ["FIPS 202 §4 (squeezing)", "FIPS 202 §6.2 (SHAKE)"],
 });
 
-// ─── Squeeze (unrolled) ─────────────────────────────────────────────────────
+// ─── Sponge narration bundle ────────────────────────────────────────────────
 
 /**
- * Build the unrolled squeeze: `numBlocks = ceil(outputLength / rate)` output
- * blocks, each extracted from a state that has been permuted once more than the
- * last (except block 0, straight off the absorbed state). No permutation after
- * the final extract. Returns the squeeze step nodes and the port carrying the
- * truncated output.
+ * Bundle SHAKE's per-leaf narration for the shared sponge tail
+ * (`buildSpongeSqueeze`). The extract / concat / truncate wording is variant-
+ * and rate-specific; the shared tail supplies only structure. (The `_numBlocks`
+ * arg the tail passes to `extract` is unused here — SHAKE's per-block prose
+ * keys off `j` alone.)
  */
-const buildSqueeze = (
+const shakeSpongeNarration = (
   variant: ShakeVariant,
   rate: number,
   outputLength: number,
-): { readonly steps: StepNode[]; readonly output: PortBinding } => {
-  const numBlocks = Math.ceil(outputLength / rate);
-  const steps: StepNode[] = [];
-
-  // Block 0: extract straight off the absorbed sponge state.
-  steps.push({
-    kind: "step",
-    id: "squeeze.extract.0",
-    type: "byte-slice@1",
-    params: { sourceByteLength: STATE_BYTES, offset: 0, length: rate },
-    portInputs: { input: port("sponge", "state") },
-    narrationOverride: narrExtract(variant, 0, rate),
-  });
-
-  // Blocks 1..numBlocks-1: permute once more, then extract.
-  for (let j = 1; j < numBlocks; j++) {
-    const permId = `squeeze.perm.${j}`;
-    // perm.1 seeds from the absorbed state; perm.j (j>1) from perm.{j-1}'s exit.
-    const seed = j === 1 ? port("sponge", "state") : port(`squeeze.perm.${j - 1}`, "out");
-    // The perm group carries its pedagogy via its label; the family-neutral
-    // Keccak-f rounds inside inherit the shared θρπχι narration.
-    steps.push(buildKeccakPermGroup(permId, `Squeeze permutation ${j}`, seed));
-    steps.push({
-      kind: "step",
-      id: `squeeze.extract.${j}`,
-      type: "byte-slice@1",
-      params: { sourceByteLength: STATE_BYTES, offset: 0, length: rate },
-      portInputs: { input: port(permId, "out") },
-      narrationOverride: narrExtract(variant, j, rate),
-    });
-  }
-
-  // Join the blocks (only when there is more than one) and truncate to length.
-  let sliceSource: PortBinding;
-  let sliceSourceLen: number;
-  if (numBlocks > 1) {
-    const concatInputs: Record<string, PortBinding> = {};
-    for (let j = 0; j < numBlocks; j++) {
-      concatInputs[`input${j}`] = port(`squeeze.extract.${j}`, "output");
-    }
-    steps.push({
-      kind: "step",
-      id: "squeeze.concat",
-      type: "concat@1",
-      params: { inputCount: numBlocks },
-      portInputs: concatInputs,
-      narrationOverride: narrConcat(numBlocks, rate),
-    });
-    sliceSource = port("squeeze.concat", "output");
-    sliceSourceLen = numBlocks * rate;
-  } else {
-    sliceSource = port("squeeze.extract.0", "output");
-    sliceSourceLen = rate;
-  }
-
-  steps.push({
-    kind: "step",
-    id: "squeeze.truncate",
-    type: "byte-slice@1",
-    params: { sourceByteLength: sliceSourceLen, offset: 0, length: outputLength },
-    portInputs: { input: sliceSource },
-    narrationOverride: narrTruncate(variant, outputLength),
-  });
-
-  return { steps, output: port("squeeze.truncate", "output") };
-};
+): SpongeNarration => ({
+  initState: narrInitState,
+  absorb: narrAbsorb(rate),
+  extract: (j, _numBlocks) => narrExtract(variant, j, rate),
+  concat: (numBlocks) => narrConcat(numBlocks, rate),
+  truncate: narrTruncate(variant, outputLength),
+});
 
 // ─── Spec builder ────────────────────────────────────────────────────────────
 
 /**
  * Build a SHAKE spec: pad → sponge-absorb fold (Keccak-f[1600] per block) →
- * unrolled squeeze producing `outputLength` bytes.
+ * unrolled squeeze producing `outputLength` bytes. The sponge tail (init-state,
+ * absorb fold, squeeze) is the shared `buildSpongeSqueeze` — SHAKE only owns the
+ * `pad10*1` + domain-`0x1F` head.
  *
  * `outputLength` is validated as a positive integer by the caller (the store
  * clamps it to `[1, MAX_SHAKE_OUTPUT]`); here it is trusted and drives the
@@ -272,7 +207,12 @@ const buildSqueeze = (
  */
 export const buildShakeSpec = (variant: ShakeVariant, outputLength: number): CipherSpec => {
   const rate = RATE_BY_VARIANT[variant];
-  const squeeze = buildSqueeze(variant, rate, outputLength);
+  const tail = buildSpongeSqueeze(
+    rate,
+    outputLength,
+    port("pad", "output"),
+    shakeSpongeNarration(variant, rate, outputLength),
+  );
   return {
     id: `${variant}@1`,
     name: DISPLAY_NAME[variant],
@@ -291,37 +231,13 @@ export const buildShakeSpec = (variant: ShakeVariant, outputLength: number): Cip
         portInputs: { input: port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT) },
         narrationOverride: narrPad(variant, rate),
       },
-      // ─── Initial all-zero sponge state (the fold's chainInput) ───────────
-      {
-        kind: "step",
-        id: "init-state",
-        type: "aux-load-bytes@1",
-        params: { auxName: "S0", byteLength: STATE_BYTES },
-        narrationOverride: narrInitState,
-      },
-      // ─── Sponge absorb fold (one Keccak-f[1600] per rate block) ──────────
-      {
-        kind: "iterate",
-        id: "sponge",
-        label: "Sponge absorb (Keccak-f[1600] per block)",
-        blockByteLength: rate,
-        seedInput: port("pad", "output"),
-        chainInput: port("init-state", "output"),
-        chainFeedback: port(`round.${ROUNDS - 1}`, "out"),
-        bodyOutput: port(`round.${ROUNDS - 1}`, "out"),
-        chainOutput: "state",
-        children: [
-          ...buildAbsorbSteps(rate, narrAbsorb(rate)),
-          ...buildKeccakRounds("", port("absorb", "output")),
-        ],
-      },
-      // ─── Squeeze (unrolled): extract → permute → extract → concat → trunc ─
-      ...squeeze.steps,
+      // ─── Shared sponge tail: init-state → absorb fold → squeeze ───────────
+      ...tail.steps,
     ],
     // Published constants materialized into aux before the walk: RC (24-lane
     // round-constant table) + S0 (the all-zero initial state).
     cipherConstants: { RC: RC_BYTES, S0: S0_BYTES },
-    outputFrom: squeeze.output,
+    outputFrom: tail.outputFrom,
   };
 };
 

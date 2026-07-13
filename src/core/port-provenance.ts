@@ -306,9 +306,11 @@ export const lookupProvenance = (stepType: string): ProvenanceFn | undefined =>
  *    `eea-step@1` / `eea-extract@1` (full-width carries/borrows mix every
  *    output byte across all input bytes — there is no clean per-cell mapping).
  *    Deferred to the distinct `≈`-treatment fast-follow.
- *  - **no inputs**: `constant-load@1` (emits a literal — nothing to point back to).
+ *  - **no inputs**: `constant-load@1`, `right-encode@1` (emit a literal / a
+ *    param-derived encoding — nothing to point back to).
  *  - **partial — synthesizes bytes with no input source**: `pad-with-byte@1`,
- *    `append-be64-length@1` (output bytes are partly fabricated, not gathered).
+ *    `append-be64-length@1`, `encode-string@1`, `bytepad@1` (output bytes are
+ *    partly fabricated — a length prefix / zero padding — not all gathered).
  *  - **exact-but-plumbing — identity bridge, deferred as low-value (NOT
  *    approximate)**: `state-to-bytes@1`, `bytes-to-state@1`, `aux-load-bytes@1`.
  *    `output[i] = input[i]` is trivially exact; a 1:1 passthrough highlight just
@@ -341,9 +343,15 @@ export const PROVENANCE_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set<string>([
   "eea-extract@1",
   // no inputs
   "constant-load@1",
+  "right-encode@1", // emits right_encode(value) from a param — nothing to point back to
   // partial — synthesizes bytes
   "pad-with-byte@1",
   "append-be64-length@1",
+  // partial — SP 800-185 encodings prepend a synthesized length prefix (and
+  // bytepad appends zero padding); the input bytes are copied but the prefix has
+  // no input source, so no clean per-cell mapping.
+  "encode-string@1",
+  "bytepad@1",
   // exact-but-plumbing — identity bridge, deferred
   "state-to-bytes@1",
   "bytes-to-state@1",

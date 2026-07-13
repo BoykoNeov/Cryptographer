@@ -142,11 +142,14 @@ import {
   setAsymmetric,
   setCipher,
   setCipherMode,
+  setCshakeCustomization,
   setHash,
   setMode,
   setPadding,
   setShakeOutputLength,
   setSpecFromDocument,
+  useCshakeN,
+  useCshakeS,
   useMode,
   useShakeOutputLength,
   useSpec,
@@ -217,12 +220,22 @@ export const App = () => {
   const hash = useHash();
   const asymmetric = useAsymmetric();
   const shakeOutputLength = useShakeOutputLength();
+  const cshakeN = useCshakeN();
+  const cshakeS = useCshakeS();
 
-  /** True when the active hash is a SHAKE XOF (has an editable output length). */
-  const isShake = () => hash() === "shake128" || hash() === "shake256";
-  /** Sponge rate of the active SHAKE (bytes/squeeze-block) — for the block-count
-   *  caption; 0 when not a SHAKE. */
-  const shakeRate = () => (hash() === "shake128" ? 168 : hash() === "shake256" ? 136 : 0);
+  /** True when the active hash is a cSHAKE (editable customization strings). */
+  const isCshake = () => hash() === "cshake128" || hash() === "cshake256";
+  /** True when the active hash is any XOF (SHAKE or cSHAKE) — has an editable
+   *  output length. */
+  const isXof = () => hash() === "shake128" || hash() === "shake256" || isCshake();
+  /** Sponge rate of the active XOF (bytes/squeeze-block) — for the block-count
+   *  caption; 0 when not an XOF. 128-strength = 168, 256-strength = 136. */
+  const shakeRate = () =>
+    hash() === "shake128" || hash() === "cshake128"
+      ? 168
+      : hash() === "shake256" || hash() === "cshake256"
+        ? 136
+        : 0;
 
   // True when the live spec has diverged from the canonical default for
   // the current selectors (param edits, palette inserts, deletions). Drives
@@ -1027,6 +1040,15 @@ export const App = () => {
   };
 
   /**
+   * Change a cSHAKE customization string (N or S). Like the output-length
+   * control it is a STRUCTURAL rebuild off a selector outside the undo snapshot,
+   * so it goes through the same C3 boundary reset.
+   */
+  const changeCshakeCustomization = (which: "N" | "S", value: string): void => {
+    withBoundaryReset(() => setCshakeCustomization(which, value));
+  };
+
+  /**
    * Flip the algorithm category (Slice 2.10c, 2026-05-25). Distinct from
    * `changeCipher` / `changeHash` because it crosses families — the smart-
    * swap compares the current key/plaintext against the OLD family's
@@ -1366,7 +1388,7 @@ export const App = () => {
               — a rebuild is ~hundreds of leaves). Bounded by MAX_SHAKE_OUTPUT
               for trace legibility; the block-count caption makes the squeeze
               loop's growth explicit. */}
-          <Show when={isShake()}>
+          <Show when={isXof()}>
             <label class="shake-output-length" title="XOF output length in bytes">
               output bytes
               <input
@@ -1385,6 +1407,43 @@ export const App = () => {
                 return `${blocks} squeeze block${blocks === 1 ? "" : "s"} · rate ${rate} · max ${MAX_SHAKE_OUTPUT}`;
               })()}
             </span>
+          </Show>
+          {/* cSHAKE customization strings (SP 800-185): N (function name,
+              reserved — empty for direct use) and S (user customization).
+              Editing either is a STRUCTURAL rebuild (their length changes the
+              encode_string / bytepad prefix), so commit on change, not per
+              keystroke. Emptying BOTH flips the domain byte back to SHAKE's
+              0x1F — the spec then renders as a plain SHAKE pipeline. */}
+          <Show when={isCshake()}>
+            <label
+              class="cshake-custom"
+              title="cSHAKE function name N (reserved; empty for direct use)"
+            >
+              N (name)
+              <input
+                type="text"
+                value={cshakeN()}
+                placeholder="(empty)"
+                onChange={(e) => changeCshakeCustomization("N", e.currentTarget.value)}
+              />
+            </label>
+            <label
+              class="cshake-custom"
+              title="cSHAKE customization string S — domain-separates the XOF"
+            >
+              S (custom)
+              <input
+                type="text"
+                value={cshakeS()}
+                placeholder="(empty)"
+                onChange={(e) => changeCshakeCustomization("S", e.currentTarget.value)}
+              />
+            </label>
+            <Show when={cshakeN() === "" && cshakeS() === ""}>
+              <span class="shake-block-caption">
+                empty N &amp; S ⇒ reduces to SHAKE (domain 0x1F)
+              </span>
+            </Show>
           </Show>
         </Show>
         {/* Public-key (asymmetric) dropdown — shown only when

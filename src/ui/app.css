@@ -215,6 +215,13 @@ h1 {
   color: var(--muted);
 }
 
+/* cSHAKE customization string inputs (N / S) — shown only for cSHAKE128/256.
+   Modest fixed width so a customization string doesn't stretch the settings
+   row; the value scrolls within the field. */
+.inputs label.cshake-custom input {
+  width: 16ch;
+}
+
 .input-group-label {
   font-size: 12px;
   color: var(--muted);

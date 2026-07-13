@@ -36,6 +36,7 @@
  *     SpecsByMode survives any of those signal flips intact."
  */
 
+import { buildCshakeSpec } from "@/ciphers/cshake";
 import { buildSha256Spec } from "@/ciphers/sha-256";
 import { buildShakeSpec } from "@/ciphers/shake";
 import {
@@ -55,9 +56,12 @@ import {
   editStepParams,
   isCustomSpec,
   resetSpec,
+  setCshakeCustomization,
   setHash,
   setShakeOutputLength,
   setSpecFromDocument,
+  useCshakeN,
+  useCshakeS,
   useShakeOutputLength,
   useSpec,
   useSpecsByMode,
@@ -254,6 +258,39 @@ describe("spec store — hash branch (Slice 2.10b)", () => {
         algorithm: "shake256",
       });
       expect(useShakeOutputLength()()).toBe(96);
+      expect(isCustomSpec()).toBe(false);
+    });
+
+    it("loading a cSHAKE doc syncs the customization strings + output length (reads as not custom)", () => {
+      // A cshake128 doc authored with a non-default S and output length 48.
+      // applyDocument's cSHAKE branch must recover N/S from the constant-load
+      // params AND the length from the truncate step, so the controls show them
+      // and a later resetSpec rebuilds the SAME customized spec (not the default).
+      const utf8 = new TextEncoder();
+      setCshakeCustomization("S", "default"); // start off-value so the sync is observable
+      setSpecFromDocument({
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        spec: buildCshakeSpec("cshake128", utf8.encode(""), utf8.encode("My Customization"), 48),
+        algorithm: "cshake128",
+      });
+      expect(useCshakeS()()).toBe("My Customization");
+      expect(useCshakeN()()).toBe("");
+      expect(useShakeOutputLength()()).toBe(48);
+      expect(isCustomSpec()).toBe(false);
+    });
+
+    it("loading a cSHAKE doc in the SHAKE-reduction form (empty N/S) round-trips as empty", () => {
+      // Empty N and S ⇒ the builder emits no customization steps (domain 0x1F);
+      // readCshakeCustomization must recover two empty strings.
+      const utf8 = new TextEncoder();
+      setCshakeCustomization("S", "leftover"); // must be cleared by the load
+      setSpecFromDocument({
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        spec: buildCshakeSpec("cshake256", utf8.encode(""), utf8.encode(""), 64),
+        algorithm: "cshake256",
+      });
+      expect(useCshakeS()()).toBe("");
+      expect(useCshakeN()()).toBe("");
       expect(isCustomSpec()).toBe(false);
     });
   });
