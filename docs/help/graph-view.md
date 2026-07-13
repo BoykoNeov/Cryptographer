@@ -218,9 +218,19 @@ and click any element on the canvas to populate it:
   scrubber position — the round key (`roundKey.3`), the per-block
   plaintext payload (`block 2`'s 16-byte matrix), the cross-iteration
   feedback IV, etc.
-- **A leaf step** shows that step's state-after value at the current
+- **A leaf step** shows that step's primary value at the current
   scrubber position. Clicking a leaf also scrubs the trace to that
-  step (the two behaviors are additive).
+  step (the two behaviors are additive). Two extra expanders open below
+  the value row:
+  - **all port values** — every input and output port of the leaf, one
+    labelled byte-row each (the operands going in, the result coming
+    out, plus any aux inputs like a round key or S-box table). This is
+    the honest "all incoming values" view — a fan-in step like `xor` or
+    `concat` reads several operands, and they're all listed here.
+  - **what this step does** — the per-step, value-aware narration (the
+    same prose the linear view shows): what the operation is and what it
+    did to *these* bytes. Only appears for steps that have a narrator;
+    for a plain primitive the "all port values" strip is the full story.
 - **An endpoint pill** ("plaintext" / "ciphertext") shows a descriptive
   label — pills aren't bound to a trace frame, so there's nothing
   numeric to display.

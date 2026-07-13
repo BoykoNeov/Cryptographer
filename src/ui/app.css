@@ -3563,6 +3563,44 @@ button:disabled {
   border-radius: 2px;
 }
 
+/* Leaf-inspector expanders — the "all port values" (PortFlowView) and
+   "what this step does" (StepNarration) disclosures shown below the value row
+   when a leaf node is selected. Thin chrome so the reused linear-view surfaces
+   read as part of the graph inspector rather than a transplant. */
+.graph-value-inspector-expanders {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.graph-value-inspector-expander {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-elev);
+}
+
+.graph-value-inspector-expander-summary {
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 0.85em;
+  color: var(--muted);
+  user-select: none;
+}
+
+.graph-value-inspector-expander-summary:hover {
+  color: var(--text);
+}
+
+.graph-value-inspector-expander-body {
+  padding: 4px 8px 8px;
+  /* A leaf reading a big aux table (S-box, published key material) can still
+     produce a tall body even with PortFlowView's per-row cap; scroll it inside
+     the panel rather than stretching the fixed-width inspector. */
+  max-height: 320px;
+  overflow-y: auto;
+}
+
 .graph-view-svg {
   display: block;
   font-family: inherit;

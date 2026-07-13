@@ -37,10 +37,11 @@
 import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { blowfishSpec } from "@/ciphers/blowfish";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
-import { lookupNodeValue } from "@/core/edge-value-lookup";
+import { lookupNodeValue, resolveNodeFrame } from "@/core/edge-value-lookup";
 import { CIPHER_INPUT_ID, CIPHER_OUTPUT_ID } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import { bytesFromHex, makeBytesState } from "@/core/state/bytes";
+import { canonicalStepId } from "@/core/step-id";
 import type { AuxValue, Trace } from "@/core/types";
 import { describe, expect, it } from "vitest";
 
@@ -284,5 +285,84 @@ describe("lookupNodeValue — collapsed container id (Blowfish key-schedule)", (
     const trace = runBlowfish();
     const out = lookupNodeValue("no-such-container", blowfishSpec, trace, undefined);
     expect(out.status).toBe("missing");
+  });
+});
+
+// ─── resolveNodeFrame (leaf-inspector expanders) ────────────────────────────
+//
+// The frame-returning sibling of `lookupNodeValue`, used by the graph value
+// inspector to feed `PortFlowView` (all port values) + `StepNarration` (what
+// the step does). Same resolution order; returns the `TraceFrame` instead of an
+// extracted value. Null whenever there is no single leaf frame to show —
+// endpoints, ellipsis chip, unknown id, or a null trace.
+describe("resolveNodeFrame — leaf-inspector frame resolution", () => {
+  const runBlowfish = (): Trace =>
+    runSpec(blowfishSpec, buildDefaultRegistry(), {
+      initialState: makeBytesState(bytesFromHex("1111111111111111")),
+      initialAux: new Map<string, AuxValue>([["key", bytesFromHex("0123456789abcdef")]]),
+    });
+
+  it("returns null for endpoint pills (they carry initial/finalState, not a leaf frame)", () => {
+    const trace = runAes128Ecb();
+    expect(resolveNodeFrame(CIPHER_INPUT_ID, aes128EcbSpec, trace, undefined)).toBeNull();
+    expect(resolveNodeFrame(CIPHER_OUTPUT_ID, aes128EcbSpec, trace, undefined)).toBeNull();
+  });
+
+  it("returns null when the trace is null (pre-run)", () => {
+    expect(resolveNodeFrame("initial.add-round-key", aes128EcbSpec, null, undefined)).toBeNull();
+  });
+
+  it("resolves a regular leaf to the frame whose stepId canonicalizes to it", () => {
+    const trace = runAes128Ecb();
+    const frame = resolveNodeFrame("initial.add-round-key", aes128EcbSpec, trace, 0);
+    expect(frame).not.toBeNull();
+    if (frame === null) return;
+    expect(canonicalStepId(frame.stepId)).toBe("initial.add-round-key");
+    // Feeds PortFlowView: the frame carries port I/O to render.
+    expect(frame.portInputs !== undefined || frame.portOutputs !== undefined).toBe(true);
+  });
+
+  it("tracks the scrubber blockIndex — same leaf, different per-block frame", () => {
+    const trace = runAes128Ecb();
+    const f0 = resolveNodeFrame("initial.add-round-key", aes128EcbSpec, trace, 0);
+    const f2 = resolveNodeFrame("initial.add-round-key", aes128EcbSpec, trace, 2);
+    expect(f0?.blockIndex).toBe(0);
+    expect(f2?.blockIndex).toBe(2);
+  });
+
+  it("resolves a numbered block chip to the iterate body's LAST frame at that block", () => {
+    const trace = runAes128Ecb();
+    const frame = resolveNodeFrame("ecb-blocks@block0", aes128EcbSpec, trace, undefined);
+    expect(frame).not.toBeNull();
+    if (frame === null) return;
+    expect(frame.blockIndex).toBe(0);
+    expect(frame.path).toContain("ecb-blocks");
+    // The chip's frame IS the last body frame at block 0 — no later block-0
+    // body frame exists in the trace.
+    const block0Frames = trace.frames.filter(
+      (f) => f.blockIndex === 0 && f.path.includes("ecb-blocks"),
+    );
+    expect(frame).toBe(block0Frames[block0Frames.length - 1]);
+  });
+
+  it("returns null for the ellipsis chip and for a chip on a non-existent iterate", () => {
+    const trace = runAes128Ecb();
+    expect(resolveNodeFrame("ecb-blocks@blockMore", aes128EcbSpec, trace, undefined)).toBeNull();
+    expect(resolveNodeFrame("does-not-exist@block0", aes128EcbSpec, trace, undefined)).toBeNull();
+  });
+
+  it("returns null for an id with no frame and no matching container", () => {
+    const trace = runAes128Ecb();
+    expect(resolveNodeFrame("not-a-real-step", aes128EcbSpec, trace, undefined)).toBeNull();
+  });
+
+  it("resolves a collapsed container id to its terminal leaf's frame (Blowfish key-schedule)", () => {
+    const trace = runBlowfish();
+    // Mirrors `lookupNodeValue`'s container fallback: a group id has no frame of
+    // its own, so we descend to the terminal leaf (the 521-loop monolith).
+    const frame = resolveNodeFrame("key-schedule", blowfishSpec, trace, undefined);
+    expect(frame).not.toBeNull();
+    if (frame === null) return;
+    expect(frame.portInputs !== undefined || frame.portOutputs !== undefined).toBe(true);
   });
 });

@@ -1010,3 +1010,57 @@ export const lookupNodeValue = (
   }
   return stateValueResult(bytes, frame.blockIndex);
 };
+
+/**
+ * Resolve the representative trace frame for a graph NODE — the frame whose
+ * port I/O + narration the leaf-inspector expanders render. Returns `null`
+ * when the node has no single leaf frame to show (endpoint pills, the ellipsis
+ * chip, or a node whose frame isn't in the trace).
+ *
+ * This is the frame-returning sibling of {@link lookupNodeValue}: it reuses the
+ * exact same resolution order (endpoint → null, numbered chip → last body
+ * frame, ellipsis → null, leaf → consumer frame, collapsed container →
+ * terminal-leaf frame) but hands back the `TraceFrame` instead of extracting a
+ * single primary value. The graph value inspector feeds the returned frame to
+ * `PortFlowView` (all port values) and `StepNarration` (what the step does),
+ * bringing the linear view's per-step surfaces into the graph inspector.
+ *
+ * Endpoints return null on purpose: the pills carry `trace.initialState` /
+ * `trace.finalState`, not a leaf frame — there are no ports or narration to
+ * expand for them.
+ */
+export const resolveNodeFrame = (
+  nodeId: string,
+  spec: CipherSpec,
+  trace: Trace | null,
+  currentBlockIndex: number | undefined,
+): TraceFrame | null => {
+  if (trace === null) return null;
+  // Endpoint pills carry initialState/finalState, not a leaf frame.
+  if (nodeId === CIPHER_INPUT_ID || nodeId === INPUT_SOURCE_ID || nodeId === CIPHER_OUTPUT_ID) {
+    return null;
+  }
+  // Numbered block-chip → the iterate body's LAST frame at that block index
+  // (the chip's value in `lookupNodeValue` is that same frame's output).
+  const chip = parseChipId(nodeId);
+  if (chip !== null) {
+    const iterate = findIterateById(spec.steps, chip.iterateId);
+    if (iterate === null) return null;
+    const bodyFrames = findBodyFramesAt(trace, iterate, chip.blockIndex);
+    return bodyFrames[bodyFrames.length - 1] ?? null;
+  }
+  // Ellipsis chip represents multiple blocks — no single frame to show.
+  if (nodeId.endsWith(BLOCK_MORE_SUFFIX)) return null;
+  // Regular leaf, else a collapsed-container id → its terminal leaf frame
+  // (mirrors `lookupNodeValue`'s container fallback so a replica of a collapsed
+  // group's output still resolves to the frame carrying the container's exit).
+  let frame = findConsumerFrame(trace, nodeId, currentBlockIndex);
+  if (frame === null) {
+    const container = findContainerById(spec.steps, nodeId);
+    if (container !== null) {
+      const leafId = terminalLeafId(container);
+      if (leafId !== null) frame = findConsumerFrame(trace, leafId, currentBlockIndex);
+    }
+  }
+  return frame;
+};

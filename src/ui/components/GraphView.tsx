@@ -36,7 +36,12 @@
  */
 
 import { curatedDefaultFor, mergeLayoutSpecs, scaleCuratedLayout } from "@/core/default-layouts";
-import { type EdgeValueLookup, lookupEdgeValue, lookupNodeValue } from "@/core/edge-value-lookup";
+import {
+  type EdgeValueLookup,
+  lookupEdgeValue,
+  lookupNodeValue,
+  resolveNodeFrame,
+} from "@/core/edge-value-lookup";
 import {
   feistelRoundPlacement,
   feistelRoundsStackVertically,
@@ -86,6 +91,7 @@ import { twofishRoundPlacement } from "@/core/twofish-layout";
 import { type TwofishRoundShape, analyzeTwofishRound } from "@/core/twofish-shape";
 import type { AuxValue, State, StepNode } from "@/core/types";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
+import { hasNarrationFn } from "../narration/registry";
 import { isAsymmetric, isHash, useAlgorithm } from "../stores/cipher";
 import { getComposite, saveComposite } from "../stores/composites";
 import {
@@ -196,6 +202,8 @@ import {
 } from "../stores/view-zoom";
 import { disarmPort, toggleArmPort, useArmedPort } from "../stores/wiring";
 import { GraphHelpModal } from "./GraphHelpModal";
+import { PortFlowView } from "./PortFlowView";
+import { StepNarration } from "./StepNarration";
 import {
   COMPOSITE_DRAG_MIME,
   STEP_TYPE_DRAG_MIME,
@@ -9251,6 +9259,28 @@ const ValueInspectorBody = (props: {
     return lookupNodeValue(t.id, props.spec(), trace, currentBlockIndex);
   });
 
+  // The representative trace frame for a selected LEAF node — feeds the two
+  // leaf-inspector expanders (all port values + what-this-step-does). Null for
+  // edges, bundles, endpoint pills, and the ellipsis chip (no single frame).
+  // Same tracked deps as `lookup` so it re-resolves on scrub / re-run.
+  const nodeFrame = createMemo<import("@/core/types").TraceFrame | null>(() => {
+    void props.version();
+    const t = props.selectedTarget();
+    if (t === null || t.kind !== "node") return null;
+    const trace = getTrace();
+    const idx = props.frameIndex();
+    const currentBlockIndex = trace !== null ? trace.frames[idx]?.blockIndex : undefined;
+    return resolveNodeFrame(t.id, props.spec(), trace, currentBlockIndex);
+  });
+
+  // Whether the selected leaf's step type has a value-prose narrator — gates the
+  // "what this step does" expander so we never show an empty disclosure for a
+  // leaf with no registered narration.
+  const nodeHasNarration = createMemo<boolean>(() => {
+    const f = nodeFrame();
+    return f !== null && hasNarrationFn(f.stepType);
+  });
+
   // Identity-row branching: edges show `from → to`; nodes show just
   // their id. The aux key for the kind-badge is taken from the lookup
   // result's `auxKey` field (it's `"state"` for state-derived rows and
@@ -9371,6 +9401,38 @@ const ValueInspectorBody = (props: {
                       {valueRowText(r(), props.byteFormat())}
                     </div>
                   </>
+                )}
+              </Show>
+              {/* Leaf expanders — bring the linear view's per-step surfaces into
+                  the graph inspector when a LEAF node is selected. `nodeFrame`
+                  is null for edges/bundles/endpoints/ellipsis-chip, so these
+                  render only for a resolvable leaf frame. Native <details> so
+                  the browser owns open-state (resets per scrub, consistent with
+                  the linear panes). */}
+              <Show when={nodeFrame()}>
+                {(f) => (
+                  <div class="graph-value-inspector-expanders">
+                    <details class="graph-value-inspector-expander">
+                      <summary class="graph-value-inspector-expander-summary">
+                        all port values
+                      </summary>
+                      <div class="graph-value-inspector-expander-body">
+                        <PortFlowView frame={f()} />
+                      </div>
+                    </details>
+                    {/* Guarded on a registered narrator so we never show an
+                        empty "what this step does" disclosure. */}
+                    <Show when={nodeHasNarration()}>
+                      <details class="graph-value-inspector-expander">
+                        <summary class="graph-value-inspector-expander-summary">
+                          what this step does
+                        </summary>
+                        <div class="graph-value-inspector-expander-body">
+                          <StepNarration frame={f()} />
+                        </div>
+                      </details>
+                    </Show>
+                  </div>
                 )}
               </Show>
             </>
