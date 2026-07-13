@@ -5387,39 +5387,6 @@ export const GraphView = () => {
     scrollWrapperEl = el;
     el.addEventListener("wheel", handleWheelZoom, { passive: false, capture: true });
     onCleanup(() => el.removeEventListener("wheel", handleWheelZoom, { capture: true }));
-
-    // Publish the wrapper's true resting distance from the document top as
-    // the `--graph-top` CSS var, so `.graph-view`'s `max-height` subtracts
-    // the ACTUAL chrome height above the canvas instead of a static estimate.
-    // The old `calc(100vh - 220px)` was calibrated for cipher mode; the
-    // SP 800-185 hashes add ~300px of input rows (customization string, KMAC
-    // key, output length), pushing the canvas past the viewport so the
-    // expanded container's bottom fell below the reachable area. We add
-    // `scrollY` so the value is the SCROLL-INDEPENDENT at-rest offset — the
-    // element's document position — not its live viewport top, so scrolling
-    // the page doesn't reflow the canvas height. Recomputes when the chrome
-    // above changes height (ResizeObserver on the body) or the window resizes.
-    const publishGraphTop = (): void => {
-      const top = Math.round(el.getBoundingClientRect().top + window.scrollY);
-      const next = `${top}px`;
-      // Only write on change — setting an identical value is a no-op, but
-      // this also stops a ResizeObserver feedback loop cold (our own
-      // max-height change can resize the body; the recomputed top is
-      // unchanged because it's driven by chrome ABOVE us, not our height).
-      if (el.style.getPropertyValue("--graph-top") !== next) {
-        el.style.setProperty("--graph-top", next);
-      }
-    };
-    publishGraphTop();
-    // ResizeObserver is absent in the jsdom test environment; guard so the
-    // node/jsdom suites don't throw. In the browser it's universally present.
-    if (typeof ResizeObserver !== "undefined") {
-      const ro = new ResizeObserver(publishGraphTop);
-      ro.observe(document.body);
-      onCleanup(() => ro.disconnect());
-    }
-    window.addEventListener("resize", publishGraphTop);
-    onCleanup(() => window.removeEventListener("resize", publishGraphTop));
   };
 
   /**

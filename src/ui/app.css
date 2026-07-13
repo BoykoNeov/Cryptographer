@@ -2782,20 +2782,27 @@ button:disabled {
   border: 1px solid var(--border);
   border-radius: 4px;
   /* Viewport-relative cap (2026-05-16, replacing the hardcoded 600 px
-     that never adapted to taller displays). The subtrahend is the
-     chrome height ABOVE the canvas — header band, frame-header, inputs
-     panel, byte-format toggle. This was a static `220px` estimate until
-     2026-07-13, when the SP 800-185 hashes (cSHAKE customization string,
-     KMAC key, SHAKE output-length) added ~300px of extra input rows in
-     hash mode, so no single constant fit both cipher and hash modes —
-     the canvas overshot the viewport and the expanded container's bottom
-     fell below the reachable area. `--graph-top` is the wrapper's true
-     resting distance from the document top, measured live in GraphView
-     (`attachScrollWrapperRef`) via ResizeObserver + resize; the `220px`
-     fallback preserves the old behaviour before JS runs and under jsdom.
-     `100dvh` (not `vh`) so mobile browser chrome doesn't inflate the cap.
-     `min-height` floors the cap so short displays keep their canvas. */
-  max-height: calc(100dvh - var(--graph-top, 220px));
+     that never adapted to taller displays). The subtrahend is a small
+     top/bottom breathing margin — NOT the chrome height above the canvas.
+
+     History worth keeping straight: a 2026-07-13 attempt subtracted the
+     REAL chrome height (`--graph-top`, ~711px in hash mode once the
+     SP 800-185 input rows landed) so the whole wrapper would fit inside
+     the viewport with the toolbar always in view. That backfired — it
+     shrank the canvas to ~369px (floored to 560) on a 1080p display,
+     the exact opposite of what the user wanted ("make the space inside
+     the canvas bigger"). The insight that fixed it: the user explicitly
+     accepts PAGE scroll ("nothing is hidden"), and does NOT want the
+     inputs panel shrunk. So the canvas is allowed to be nearly a full
+     viewport tall and let the page scroll to reach the inputs above it.
+     Internal canvas navigation is drag-pan / scrollbar (wheel-alone
+     zooms, see `handleWheelZoom`), during which the sticky header stays
+     pinned — so a tall window doesn't cost toolbar visibility for the
+     dominant interaction. `100dvh` (not `vh`) so mobile browser chrome
+     doesn't inflate the cap; the 48px is just enough margin to keep the
+     wrapper off the top/bottom edges. `min-height` floors it for short
+     displays; `overflow: auto` (below) keeps horizontal containment. */
+  max-height: calc(100dvh - 48px);
   min-height: 560px;
   overflow: auto;
   /* Drag-to-pan affordance. The pan gesture is owned by this scroll
