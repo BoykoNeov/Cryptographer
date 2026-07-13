@@ -202,6 +202,13 @@ Rewires save and share exactly like any other spec edit (no extra opt-in).
   preference — it's saved per-spec in your browser, but doesn't
   travel with `Save` or `Share…`, so a link you share will render
   at the recipient's zoom, not yours.
+- **Collapse all** / **Expand all** fold or unfold every container
+  (rounds, groups) on the canvas in one click, instead of clicking each
+  header chevron. They compose with a spec's default-collapsed groups
+  (SHA-256's 64 rounds): *collapse all* returns those to their folded
+  default, *expand all* opens them. Each button is disabled when it
+  would do nothing (everything already collapsed / already expanded),
+  and both are undoable with <kbd>Ctrl</kbd>+<kbd>Z</kbd>.
 - **Reset layout** clears every customization for the active spec
   in one click — drag-pinned positions (containers and root leaves),
   relative pins (replica chips and block chips), collapsed

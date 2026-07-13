@@ -84,7 +84,11 @@ import {
   assignSourceStrokes,
   strokeStyleByName,
 } from "@/core/source-strokes";
-import { getDefaultCollapsedContainers, getEffectiveCollapsedSet } from "@/core/spec-defaults";
+import {
+  getAllContainerIds,
+  getDefaultCollapsedContainers,
+  getEffectiveCollapsedSet,
+} from "@/core/spec-defaults";
 import {
   type CompositeInsertAnchor,
   captureCompositeFromGroup,
@@ -108,6 +112,8 @@ import { useByteFormat } from "../stores/format";
 import {
   clearNodePosition,
   clearRelativePosition,
+  collapseAllContainers,
+  expandAllContainers,
   hasUserLayout,
   setLayoutForSpec,
   setNodePosition,
@@ -2745,6 +2751,31 @@ export const GraphView = () => {
    */
   const collapsedSet = createMemo<ReadonlySet<string>>(() =>
     getEffectiveCollapsedSet(spec(), effectiveLayout()),
+  );
+
+  /**
+   * Every container id in the spec, document order (nested included). Drives
+   * the toolbar's "collapse all" / "expand all" buttons — both their bulk
+   * store calls and their disabled state. Re-derives only on spec change.
+   */
+  const allContainerIds = createMemo<readonly string[]>(() => getAllContainerIds(spec()));
+
+  /**
+   * True when the spec has ≥1 container that is NOT currently collapsed — i.e.
+   * "collapse all" has work to do. False when there are no containers or all
+   * are already collapsed (button disabled).
+   */
+  const hasExpandedContainer = createMemo<boolean>(() =>
+    allContainerIds().some((id) => !collapsedSet().has(id)),
+  );
+
+  /**
+   * True when the spec has ≥1 container that IS currently collapsed — i.e.
+   * "expand all" has work to do. False when there are no containers or none
+   * are collapsed (button disabled).
+   */
+  const hasCollapsedContainer = createMemo<boolean>(() =>
+    allContainerIds().some((id) => collapsedSet().has(id)),
   );
 
   /**
@@ -6048,6 +6079,42 @@ export const GraphView = () => {
                 reset
               </button>
             </div>
+            {/* Bulk collapse / expand of every container in the spec. A
+                shortcut over clicking each round-group chevron one at a time —
+                the forcing case is a many-round cipher (AES-256, DES, SHA-256)
+                where the user wants the whole canvas folded to rounds, or
+                fully unfolded to inspect every leaf. Both route through the
+                same effective-collapsed algebra as the per-container chevron
+                (`collapseAllContainers` / `expandAllContainers` in
+                `stores/layout.ts`), so they compose cleanly with the spec's
+                `defaultCollapsed` declarations and are undoable with Ctrl+Z.
+                Each is disabled when it would be a no-op. */}
+            <button
+              type="button"
+              class="graph-view-toolbar-button graph-view-layout-reset"
+              data-testid="graph-view-collapse-all"
+              onClick={() => {
+                cancelLayoutGesture();
+                collapseAllContainers(spec().id, allContainerIds(), defaultCollapsedSet());
+              }}
+              disabled={!hasExpandedContainer()}
+              title="Collapse every container (rounds, groups) on the canvas"
+            >
+              collapse all
+            </button>
+            <button
+              type="button"
+              class="graph-view-toolbar-button graph-view-layout-reset"
+              data-testid="graph-view-expand-all"
+              onClick={() => {
+                cancelLayoutGesture();
+                expandAllContainers(spec().id, allContainerIds(), defaultCollapsedSet());
+              }}
+              disabled={!hasCollapsedContainer()}
+              title="Expand every container (rounds, groups) on the canvas"
+            >
+              expand all
+            </button>
             {/* Hard-reset of the per-spec layout sidecar (draggable-
                 replicas plan Slice 5, 2026-05-19). Clears positions,
                 relativePositions, collapsedGroups, and replicationModes

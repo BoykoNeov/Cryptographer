@@ -491,6 +491,97 @@ export const toggleCollapse = (specId: string, containerId: string, inDefaults: 
 };
 
 /**
+ * Bulk-collapse every container in the spec (graph-view "collapse all"
+ * toolbar button). Operates over the EFFECTIVE collapsed view, exactly like
+ * `toggleCollapse` but for the whole `allContainerIds` list at once:
+ *
+ *   - A default-collapsed container is already effectively collapsed, so we
+ *     only clear any explicit `expandedGroups` override on it (re-collapse to
+ *     the default) — never add a redundant `collapsedGroups` entry.
+ *   - Any other container is added to `collapsedGroups`.
+ *
+ * In both cases the id is purged from `expandedGroups`, preserving the
+ * "never in both sets" invariant `toggleCollapse` documents. Spec-agnostic:
+ * the caller (GraphView) threads in `allContainerIds` (via
+ * `getAllContainerIds`) and `defaultCollapsedIds` (via
+ * `getDefaultCollapsedContainers`), so the store never walks a spec.
+ */
+export const collapseAllContainers = (
+  specId: string,
+  allContainerIds: readonly string[],
+  defaultCollapsedIds: ReadonlySet<string>,
+): void => {
+  const current = layoutMap()[specId] ?? emptyLayout();
+  const collapsedSet = new Set(current.collapsedGroups);
+  const expandedSet = new Set(current.expandedGroups ?? []);
+  for (const id of allContainerIds) {
+    if (!defaultCollapsedIds.has(id)) collapsedSet.add(id);
+    expandedSet.delete(id);
+  }
+  writeCollapseExpand(specId, current, collapsedSet, expandedSet);
+};
+
+/**
+ * Bulk-expand every container in the spec (graph-view "expand all" toolbar
+ * button). Mirror of `collapseAllContainers`:
+ *
+ *   - A default-collapsed container needs an explicit `expandedGroups`
+ *     override to open (the spec default would otherwise re-collapse it).
+ *   - Any other container is un-collapsed by removing it from
+ *     `collapsedGroups`.
+ *
+ * The complementary set is purged for each id, preserving the "never in both
+ * sets" invariant.
+ */
+export const expandAllContainers = (
+  specId: string,
+  allContainerIds: readonly string[],
+  defaultCollapsedIds: ReadonlySet<string>,
+): void => {
+  const current = layoutMap()[specId] ?? emptyLayout();
+  const collapsedSet = new Set(current.collapsedGroups);
+  const expandedSet = new Set(current.expandedGroups ?? []);
+  for (const id of allContainerIds) {
+    if (defaultCollapsedIds.has(id)) expandedSet.add(id);
+    collapsedSet.delete(id);
+  }
+  writeCollapseExpand(specId, current, collapsedSet, expandedSet);
+};
+
+/**
+ * Shared tail for `collapseAllContainers` / `expandAllContainers`: rebuild the
+ * LayoutSpec from the mutated collapsed/expanded sets (preserving every other
+ * layer), then persist — dropping the spec's entry entirely when the result
+ * carries no user customization, per the byte-stability discipline.
+ */
+const writeCollapseExpand = (
+  specId: string,
+  current: LayoutSpec,
+  collapsedSet: ReadonlySet<string>,
+  expandedSet: ReadonlySet<string>,
+): void => {
+  const next = buildLayoutSpec(
+    current.positions,
+    [...collapsedSet],
+    current.flowDirection,
+    cloneReplicationModes(current),
+    cloneRelativePositions(current),
+    [...expandedSet],
+    cloneStrokeStyles(current),
+  );
+  if (!hasUserLayout(next)) {
+    const map = { ...layoutMap() };
+    delete (map as { [specId: string]: LayoutSpec })[specId];
+    setLayoutMapSignal(map);
+    persist(map);
+    return;
+  }
+  const map = { ...layoutMap(), [specId]: next };
+  setLayoutMapSignal(map);
+  persist(map);
+};
+
+/**
  * Set or clear a per-source replication-mode override (commit 5 of the
  * graph-readability sequence). Passing `null` removes the entry — falls
  * back to the implicit `"auto"` default (follow the global threshold).

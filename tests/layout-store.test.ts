@@ -25,6 +25,8 @@ import {
   __resetLayoutsForTests,
   clearLayoutForSpec,
   clearRelativePosition,
+  collapseAllContainers,
+  expandAllContainers,
   getLayoutForSpec,
   hasUserLayout,
   rescaleAllPositions,
@@ -216,6 +218,70 @@ describe("layout store — toggleCollapse with inDefaults=true", () => {
     expect(raw).not.toBeNull();
     const parsed = JSON.parse(raw as string);
     expect(parsed["sha-256@1"].expandedGroups).toEqual(["round.5"]);
+  });
+});
+
+// ─── collapseAllContainers / expandAllContainers (toolbar bulk ops) ──────
+// The graph-view "collapse all" / "expand all" toolbar buttons fold or
+// unfold every container in one click. They route through the same
+// effective-collapsed algebra as the per-container chevron, so they must
+// compose with spec `defaultCollapsed` declarations and preserve the
+// "never in both sets" invariant.
+
+describe("layout store — collapseAllContainers / expandAllContainers", () => {
+  it("collapseAll adds every non-default container to collapsedGroups", () => {
+    collapseAllContainers("aes-128@1", ["round.1", "round.2", "round.3"], new Set());
+    const got = [...(getLayoutForSpec("aes-128@1")?.collapsedGroups ?? [])].sort();
+    expect(got).toEqual(["round.1", "round.2", "round.3"]);
+  });
+
+  it("collapseAll leaves default-collapsed containers alone (no redundant collapsedGroups entry)", () => {
+    // A SHA-256-shaped spec: all rounds are default-collapsed. Collapsing
+    // all is a no-op on the persisted form — they're already effectively
+    // collapsed, so nothing needs writing.
+    collapseAllContainers("sha-256@1", ["round.0", "round.1"], new Set(["round.0", "round.1"]));
+    expect(getLayoutForSpec("sha-256@1")).toBeNull();
+  });
+
+  it("collapseAll clears any explicit expansion override on a default-collapsed container", () => {
+    // User expanded round.0 (override); collapse-all re-collapses it to the
+    // default by dropping the expandedGroups entry.
+    toggleCollapse("sha-256@1", "round.0", true);
+    expect(getLayoutForSpec("sha-256@1")?.expandedGroups).toEqual(["round.0"]);
+    collapseAllContainers("sha-256@1", ["round.0", "round.1"], new Set(["round.0", "round.1"]));
+    expect(getLayoutForSpec("sha-256@1")).toBeNull();
+  });
+
+  it("expandAll removes every non-default container from collapsedGroups", () => {
+    collapseAllContainers("aes-128@1", ["round.1", "round.2"], new Set());
+    expandAllContainers("aes-128@1", ["round.1", "round.2"], new Set());
+    // All un-collapsed and no defaults → empty layout → entry dropped.
+    expect(getLayoutForSpec("aes-128@1")).toBeNull();
+  });
+
+  it("expandAll adds default-collapsed containers to expandedGroups (override the default)", () => {
+    expandAllContainers("sha-256@1", ["round.0", "round.1"], new Set(["round.0", "round.1"]));
+    const got = [...(getLayoutForSpec("sha-256@1")?.expandedGroups ?? [])].sort();
+    expect(got).toEqual(["round.0", "round.1"]);
+    expect(getLayoutForSpec("sha-256@1")?.collapsedGroups).toEqual([]);
+  });
+
+  it("collapseAll then expandAll on a mixed spec preserves the disjoint-sets invariant", () => {
+    const ids = ["round.0", "round.1", "msg-schedule"];
+    const defaults = new Set(["round.0", "round.1"]);
+    collapseAllContainers("sha-256@1", ids, defaults);
+    expandAllContainers("sha-256@1", ids, defaults);
+    const l = getLayoutForSpec("sha-256@1");
+    const collapsed = new Set(l?.collapsedGroups ?? []);
+    const expanded = new Set(l?.expandedGroups ?? []);
+    for (const id of collapsed) expect(expanded.has(id)).toBe(false);
+  });
+
+  it("bulk ops write through to localStorage synchronously", () => {
+    collapseAllContainers("aes-128@1", ["round.1"], new Set());
+    const raw = storage.getItem(STORAGE_KEY);
+    const parsed = JSON.parse(raw as string);
+    expect(parsed["aes-128@1"].collapsedGroups).toEqual(["round.1"]);
   });
 });
 

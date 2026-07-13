@@ -65,6 +65,38 @@ export const getDefaultCollapsedContainers = (spec: CipherSpec): ReadonlySet<str
 };
 
 /**
+ * Walk a `CipherSpec`'s tree and return every container id, in document
+ * order. Leaves are skipped; every `group`/`iterate`/`for-each-subgraph`/
+ * `for-each-subgraph-with-history` node contributes its id (including nested
+ * ones). Pure — never throws, returns an empty array for a container-less
+ * spec.
+ *
+ * Used by the graph-view "collapse all" / "expand all" toolbar buttons to
+ * drive `collapseAllContainers` / `expandAllContainers` (`stores/layout.ts`),
+ * which are spec-agnostic and so need the id list threaded in — mirroring how
+ * `toggleCollapse` receives `inDefaults` from the caller.
+ */
+export const getAllContainerIds = (spec: CipherSpec): readonly string[] => {
+  const ids: string[] = [];
+  const walk = (node: StepNode): void => {
+    switch (node.kind) {
+      case "step":
+        return;
+      case "group":
+      case "iterate":
+      case "for-each-subgraph":
+      case "for-each-subgraph-with-history": {
+        ids.push(node.id);
+        for (const child of node.children) walk(child);
+        return;
+      }
+    }
+  };
+  for (const node of spec.steps) walk(node);
+  return ids;
+};
+
+/**
  * Compute the effective collapsed set for a (spec, layout) pair.
  * Effective = (spec defaults ∪ layout.collapsedGroups) − layout.expandedGroups.
  *

@@ -2805,7 +2805,16 @@ button:disabled {
 .graph-view-toolbar {
   display: flex;
   align-items: center;
+  /* Wrap to a second row instead of overflowing off the right edge of the
+     `.graph-view` scroll viewport. The toolbar's natural width (density +
+     replicate + colour/style + zoom + collapse/expand + reset + help) exceeds
+     the canvas column at common window sizes, so without wrapping the trailing
+     controls (reset, help, collapse-all, expand-all) get clipped and become
+     unreachable. `row-gap` spaces the wrapped rows; `gap` already sets the
+     column gap between buttons. */
+  flex-wrap: wrap;
   gap: 8px;
+  row-gap: 6px;
   padding: 6px 8px;
   border: none;
   border-bottom: 1px solid var(--border);

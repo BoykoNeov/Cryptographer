@@ -29,6 +29,7 @@ import { aes128EcbSpec } from "@/ciphers/aes-128-ecb";
 import { buildSha256Spec } from "@/ciphers/sha-256";
 import type { LayoutSpec } from "@/core/document";
 import {
+  getAllContainerIds,
   getDefaultCollapsedContainers,
   getEffectiveCollapsedSet,
   isDefaultCollapsed,
@@ -55,6 +56,56 @@ const wrapSpec = (steps: readonly StepNode[]): CipherSpec => ({
     key: { byteLength: 0 },
   },
   steps,
+});
+
+// ─── getAllContainerIds ───────────────────────────────────────────────────
+// Drives the graph-view "collapse all" / "expand all" toolbar buttons: they
+// need EVERY container id (regardless of nesting or defaultCollapsed marker),
+// unlike getDefaultCollapsedContainers which filters to the marked ones.
+
+describe("getAllContainerIds", () => {
+  it("returns an empty array for a container-less spec", () => {
+    const spec = wrapSpec([{ kind: "step", id: "s1", type: "generic.xor@1", params: {} }]);
+    expect(getAllContainerIds(spec)).toEqual([]);
+  });
+
+  it("collects every container id including nested ones, in document order", () => {
+    const spec = wrapSpec([
+      {
+        kind: "group",
+        id: "outer",
+        label: "Outer",
+        children: [
+          { kind: "step", id: "s1", type: "generic.xor@1", params: {} },
+          { kind: "group", id: "inner", label: "Inner", children: [] },
+        ],
+      },
+      { kind: "group", id: "sibling", label: "Sibling", children: [] },
+    ]);
+    // Leaves excluded; every group (nested + top-level) present, doc order.
+    expect(getAllContainerIds(spec)).toEqual(["outer", "inner", "sibling"]);
+  });
+
+  it("includes containers regardless of their defaultCollapsed marker", () => {
+    const spec = wrapSpec([
+      { kind: "group", id: "open", label: "Open", children: [] },
+      { kind: "group", id: "folded", label: "Folded", defaultCollapsed: true, children: [] },
+    ]);
+    expect([...getAllContainerIds(spec)].sort()).toEqual(["folded", "open"]);
+  });
+
+  it("returns a strict superset of the SHA-256 default-collapsed containers", () => {
+    const spec = buildSha256Spec();
+    const all = new Set(getAllContainerIds(spec));
+    const defaults = getDefaultCollapsedContainers(spec);
+    // Every default-collapsed container (64 rounds + msg-schedule) is present.
+    for (const id of defaults) expect(all.has(id)).toBe(true);
+    expect(all.has("msg-schedule")).toBe(true);
+    for (let t = 0; t < 64; t += 1) expect(all.has(`round.${t}`)).toBe(true);
+    // Strict superset: there is at least one uncollapsed wrapper container
+    // (the per-block iterate) the defaults filter drops.
+    expect(all.size).toBeGreaterThan(defaults.size);
+  });
 });
 
 // ─── getDefaultCollapsedContainers ────────────────────────────────────────
