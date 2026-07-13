@@ -260,6 +260,33 @@ test.describe("Weird inputs and edge cases", () => {
     expect(err).not.toMatch(/TypeError|RangeError/);
   });
 
+  test("KMAC128 key over the 512-byte MAX shows a friendly error, not a silently-coerced tag", async ({
+    page,
+  }) => {
+    // KMAC's key length is variable (Option A — the key field is the source of
+    // truth). The MAX is a legibility clamp; because it's a cap on a
+    // derived-from-the-key quantity, it must REJECT an over-long key at the Run
+    // boundary — clamping the declared length silently while the full key still
+    // flows into aux would let the runtime coerce it into a WRONG MAC (of the
+    // first 512 bytes) that reads as fine. This is the exact footgun the whole
+    // variable-key design exists to prevent, so it earns a real-browser pin.
+    await sel(page, "kind").selectOption("hash");
+    await sel(page, "hash").selectOption("kmac128");
+    // 513 bytes = 1026 hex chars — one over the cap.
+    await setInput(page, "key", "41".repeat(513));
+    await clickRun(page);
+
+    const err = await readError(page);
+    const result = await readResult(page);
+    expect(err).not.toBeNull();
+    expect(err?.toLowerCase()).toMatch(/max 512|too long/);
+    // The result must NOT be a 64-hex-char digest (KMAC of the first 512 bytes).
+    // On the error path the result line is absent (null); if present, it must
+    // not be a tag.
+    if (result !== null) expect(result).not.toMatch(/^[0-9a-f]{64}$/);
+    expect(err).not.toMatch(/TypeError|RangeError|undefined/);
+  });
+
   test("SHA-256 with empty message produces the empty-string digest", async ({ page }) => {
     await sel(page, "kind").selectOption("hash");
     await setInput(page, "message", "");

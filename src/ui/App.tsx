@@ -518,6 +518,16 @@ export const App = () => {
           if (parsed.length !== spec().inputs.key.byteLength) {
             setKmacKeyLength(parsed.length); // rebuilds spec() to the typed length
           }
+          // If the declared length STILL disagrees after the resync, the key is
+          // out of the [1, MAX] range that setKmacKeyLength clamps to — running
+          // now would feed the full key into aux against a clamped (shorter)
+          // declared length, and the runtime would silently coerce it into a
+          // WRONG MAC. Reject at the boundary instead (MAX is the only remaining
+          // divergence — the < 1 case already threw). The clamp is a legibility
+          // cap on a derived-from-the-key quantity, so it must reject, not clip.
+          if (parsed.length !== spec().inputs.key.byteLength) {
+            throw new Error(`KMAC key too long: max ${MAX_KMAC_KEY_LENGTH} bytes`);
+          }
           keyBytes = parsed;
         } else {
           keyBytes = parseBytesWithLength(keyText(), fmt(), spec().inputs.key.byteLength);
