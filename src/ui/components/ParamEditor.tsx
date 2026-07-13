@@ -331,6 +331,9 @@ export const ParamEditor = (props: Props) => {
             <Match when={getStep().type === "pad-with-byte@1"}>
               <PadWithByteBlock step={getStep()} matchingCount={matchingSteps()} />
             </Match>
+            <Match when={KECCAK_SCALAR_PARAM_TYPES.has(getStep().type)}>
+              <KeccakParamsBlock step={getStep()} />
+            </Match>
             <Match when={NO_PARAMS_PORT_NATIVE_TYPES.has(getStep().type)}>
               <NoParamsBlock label={portNativeNoParamsLabel(getStep().type)} />
             </Match>
@@ -763,6 +766,68 @@ const BlockSizeBlock = (props: BlockProps) => {
         <dt>Block size</dt>
         <dd>{params().blockSize ?? "—"} bytes</dd>
       </div>
+    </dl>
+  );
+};
+
+// SHA-3 / Keccak scalar-param block. `keccak.pad@1` (rate + domain byte),
+// `keccak.iota@1` (round index + RC aux slot), and `rotate-lanes@1` (lane
+// width + endianness + per-lane offset count) all carry small STRUCTURAL
+// params that define the algorithm — editing them would break the FIPS 202
+// math — so they render read-only, like the padding block-size row. The 25
+// ρ offsets are a fixed table (Table 2), summarized rather than dumped.
+const KECCAK_SCALAR_PARAM_TYPES = new Set(["keccak.pad@1", "keccak.iota@1", "rotate-lanes@1"]);
+
+const KeccakParamsBlock = (props: { step: StepLeaf }) => {
+  const type = (): string => props.step.type;
+  const params = (): {
+    rate?: number;
+    domainByte?: number;
+    round?: number;
+    auxName?: string;
+    wordBits?: number;
+    littleEndian?: boolean;
+    offsets?: readonly number[];
+  } => props.step.params as never;
+  const hex2 = (n: number | undefined): string =>
+    n === undefined ? "—" : `0x${n.toString(16).padStart(2, "0")}`;
+
+  return (
+    <dl class="param-scalars">
+      <Show when={type() === "keccak.pad@1"}>
+        <div class="param-scalar-row">
+          <dt>Rate</dt>
+          <dd>{params().rate ?? "—"} bytes</dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Domain byte</dt>
+          <dd>{hex2(params().domainByte)} (0x06 = SHA-3, 0x1F = SHAKE)</dd>
+        </div>
+      </Show>
+      <Show when={type() === "keccak.iota@1"}>
+        <div class="param-scalar-row">
+          <dt>Round</dt>
+          <dd>{params().round ?? "—"} (selects RC[round])</dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>RC slot</dt>
+          <dd>aux["{params().auxName ?? "RC"}"]</dd>
+        </div>
+      </Show>
+      <Show when={type() === "rotate-lanes@1"}>
+        <div class="param-scalar-row">
+          <dt>Lane width</dt>
+          <dd>{params().wordBits ?? "—"} bits</dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Byte order</dt>
+          <dd>{params().littleEndian ? "little-endian (Keccak)" : "big-endian"}</dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Offsets</dt>
+          <dd>{params().offsets?.length ?? 0} lanes (ρ rotation table, FIPS 202 Table 2)</dd>
+        </div>
+      </Show>
     </dl>
   );
 };
@@ -2576,6 +2641,7 @@ const NO_PARAMS_PORT_NATIVE_TYPES = new Set([
   "state-to-bytes@1",
   "bytes-to-state@1",
   "append-be64-length@1",
+  "keccak.theta@1",
 ]);
 
 const portNativeNoParamsLabel = (stepType: string): string => {
@@ -2588,6 +2654,8 @@ const portNativeNoParamsLabel = (stepType: string): string => {
       return "Bridges port-native bytes → runtime state (identity-on-port). No editable parameters; the conversion is driven by the runtime's state codec.";
     case "append-be64-length@1":
       return "Appends the big-endian 64-bit bit-length of the message (FIPS 180-4 §5.1.1). No editable parameters; the length is derived from the input port's byteLength.";
+    case "keccak.theta@1":
+      return "θ (theta) — mixes whole columns of the Keccak state (FIPS 202 §3.2.1). No editable parameters; the 5×5×64 geometry is fixed.";
     default:
       return "No editable parameters.";
   }

@@ -65,7 +65,7 @@ export type Cipher =
  * Open #N7 user pick. Slice 2.10c (2026-05-25) reaches it through the live
  * UI via the `hash` + `category` signals below.
  */
-export type Hash = "sha-256";
+export type Hash = "sha-256" | "sha3-256";
 
 /**
  * Asymmetric (public-key) family — algorithms with a public/private key pair
@@ -135,7 +135,7 @@ export const isAesCipher = (c: Cipher): c is AesCipher => c.startsWith("aes-");
  * other hash variants land, only this predicate widens; `isCipher` stays
  * untouched by virtue of the structural definition.
  */
-export const isHash = (a: Algorithm): a is Hash => a === "sha-256";
+export const isHash = (a: Algorithm): a is Hash => a === "sha-256" || a === "sha3-256";
 
 /**
  * True when an algorithm is in the asymmetric (public-key) family. RSA today.
@@ -238,10 +238,11 @@ export const useAlgorithm = (): (() => Algorithm) => {
 /** Hash dropdown options + labels. Sized to one entry today; mirrors
  *  CIPHER_OPTIONS / CIPHER_LABELS so the UI can render either family with
  *  the same `<For each={options}>` shape. */
-const ALL_HASHES: readonly Hash[] = ["sha-256"];
+const ALL_HASHES: readonly Hash[] = ["sha-256", "sha3-256"];
 export const HASH_OPTIONS = ALL_HASHES;
 export const HASH_LABELS: Record<Hash, string> = {
   "sha-256": "SHA-256",
+  "sha3-256": "SHA3-256",
 };
 
 /** Asymmetric dropdown options + labels. One entry today (RSA); mirrors the
@@ -305,6 +306,8 @@ export const CIPHER_DESCRIPTIONS: Record<Cipher, string> = {
 export const HASH_DESCRIPTIONS: Record<Hash, string> = {
   "sha-256":
     "SHA-256 (FIPS 180-4) — Merkle–Damgård hash; 256-bit digest from 512-bit blocks over 64 rounds.",
+  "sha3-256":
+    "SHA3-256 (FIPS 202) — Keccak sponge; 256-bit digest, absorbs 1088-bit blocks through Keccak-f[1600] (24 rounds θρπχι).",
 };
 
 /** Per-asymmetric one-liner. Mirrors `ASYMMETRIC_LABELS`. */
@@ -367,6 +370,8 @@ export const CIPHER_HISTORY: Record<Cipher, string> = {
 export const HASH_HISTORY: Record<Hash, string> = {
   "sha-256":
     "NSA-designed, published by NIST in 2001 (FIPS 180-2); the SHA-2 workhorse behind TLS, Bitcoin, and Git.",
+  "sha3-256":
+    "Keccak (Bertoni, Daemen, Peeters, Van Assche) won NIST's SHA-3 competition in 2012; standardized as FIPS 202 in 2015. A sponge, structurally unlike SHA-2 — and the hash every NIST post-quantum standard builds on.",
 };
 
 /** Per-asymmetric historical one-liner. Mirrors `ASYMMETRIC_DESCRIPTIONS`. */
@@ -592,6 +597,7 @@ export const DEFAULT_CT_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
  */
 export const DEFAULT_KEY_BYTES_BY_HASH: Record<Hash, Uint8Array> = {
   "sha-256": new Uint8Array(0),
+  "sha3-256": new Uint8Array(0),
 };
 
 /**
@@ -601,6 +607,8 @@ export const DEFAULT_KEY_BYTES_BY_HASH: Record<Hash, Uint8Array> = {
  */
 export const DEFAULT_PT_BYTES_BY_HASH: Record<Hash, Uint8Array> = {
   "sha-256": new Uint8Array([0x61, 0x62, 0x63]),
+  // "abc" — the FIPS 202 §A.1 example, digest 3a985da7...31532.
+  "sha3-256": new Uint8Array([0x61, 0x62, 0x63]),
 };
 
 // ─── Asymmetric defaults ───────────────────────────────────────────────────

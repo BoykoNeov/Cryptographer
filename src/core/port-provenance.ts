@@ -324,6 +324,9 @@ export const PROVENANCE_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set<string>([
   "add-mod-16@1",
   "rotate-bits-right@1",
   "shift-bits-right@1",
+  // approximate — per-lane bit rotation (Keccak ρ); a rotated byte draws from
+  // up to two input bytes, so byte-level provenance is only approximate.
+  "rotate-lanes@1",
   // approximate — RSA big-integer arithmetic (carries/borrows mix all bytes)
   "mul@1",
   "sub@1",

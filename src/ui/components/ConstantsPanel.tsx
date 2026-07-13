@@ -46,7 +46,13 @@ const collectConsumers = (nodes: readonly StepNode[], name: string): string[] =>
   const visit = (ns: readonly StepNode[]): void => {
     for (const n of ns) {
       if (n.kind === "step") {
-        if (n.type === "aux-load-bytes@1" && (n.params as { auxName?: string }).auxName === name) {
+        // Leaves that read a named constant out of aux. `aux-load-bytes@1`
+        // names it directly; `keccak.iota@1` reads its round-constant table
+        // (aux["RC"], default) the same way via meta.auxReadPorts.
+        const p = n.params as { auxName?: string };
+        if (n.type === "aux-load-bytes@1" && p.auxName === name) {
+          out.push(n.id);
+        } else if (n.type === "keccak.iota@1" && (p.auxName ?? "RC") === name) {
           out.push(n.id);
         }
       } else {

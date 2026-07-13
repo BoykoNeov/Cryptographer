@@ -121,6 +121,14 @@ import {
   iso78164UnpadPortContract,
 } from "../steps/iso7816-4-unpad";
 import {
+  keccakIota,
+  keccakIotaDoc,
+  keccakIotaMeta,
+  keccakIotaPortContract,
+} from "../steps/keccak-iota";
+import { keccakPad, keccakPadDoc, keccakPadPortContract } from "../steps/keccak-pad";
+import { keccakTheta, keccakThetaDoc, keccakThetaPortContract } from "../steps/keccak-theta";
+import {
   keyExpansion,
   keyExpansionDoc,
   keyExpansionMeta,
@@ -160,6 +168,7 @@ import {
   rotateBitsRightDoc,
   rotateBitsRightPortContract,
 } from "../steps/rotate-bits-right";
+import { rotateLanes, rotateLanesDoc, rotateLanesPortContract } from "../steps/rotate-lanes";
 import {
   serpentAddRoundKey,
   serpentAddRoundKeyDoc,
@@ -794,6 +803,41 @@ export const buildDefaultRegistry = (): StepRegistry => {
     shape: twofishPublishSubkeysPortContract,
     meta: twofishPublishSubkeysMeta,
     doc: twofishPublishSubkeysDoc,
+  });
+  // ─── SHA-3 / Keccak (FIPS 202, sponge hash — first non-Merkle–Damgård hash) ─
+  // Keccak-f[1600]'s five round steps map to the port-native vocabulary as:
+  //   θ → keccak.theta@1 (custom; column parities over non-contiguous lanes)
+  //   ρ → rotate-lanes@1 (generic; per-lane LE left-rotate)
+  //   π → permute@1       (reused; lane transposition as a 200-byte gather)
+  //   χ → permute/not/and/xor (reused; the sole nonlinear step, kept visible)
+  //   ι → keccak.iota@1   (custom; XOR RC[round] from aux into lane 0)
+  // Padding is keccak.pad@1 (pad10*1 + domain byte), NOT SHA-256's
+  // pad-with-byte + length suffix. `rotate-lanes@1` is generic (bare name);
+  // the keccak.* steps are Keccak-specific. See src/ciphers/sha3-256.ts.
+  r.register("rotate-lanes@1", {
+    kind: "ported",
+    executor: rotateLanes,
+    shape: rotateLanesPortContract,
+    doc: rotateLanesDoc,
+  });
+  r.register("keccak.theta@1", {
+    kind: "ported",
+    executor: keccakTheta,
+    shape: keccakThetaPortContract,
+    doc: keccakThetaDoc,
+  });
+  r.register("keccak.iota@1", {
+    kind: "ported",
+    executor: keccakIota,
+    shape: keccakIotaPortContract,
+    meta: keccakIotaMeta,
+    doc: keccakIotaDoc,
+  });
+  r.register("keccak.pad@1", {
+    kind: "ported",
+    executor: keccakPad,
+    shape: keccakPadPortContract,
+    doc: keccakPadDoc,
   });
   // ─── Port-native primitives (universal-port plan Phase 2, Slice 2.1a+) ──
   // Authored against the port-native contract directly — no `meta` projection

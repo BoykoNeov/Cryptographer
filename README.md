@@ -21,13 +21,16 @@ Shipped ciphers (all with both encrypt + decrypt paths and FIPS / NIST / paper-v
 
 Padding schemes (AES only): **PKCS#7**, **zero-pad**, **ISO 7816-4**, plus a no-pad option for exact-block input.
 
-Shipped hash (select **Hash** in the `kind` dropdown):
+Shipped hashes (select **Hash** in the `kind` dropdown):
 
 | Hash | Output | Block | Notes |
 |---|---|---|---|
-| **SHA-256** | 32 B | 64 B | multi-block, KAT-equal vs FIPS 180-4 §A.1 + §A.2 + `node:crypto`; the first fully port-native primitive |
+| **SHA-256** | 32 B | 64 B | Merkle–Damgård; multi-block, KAT-equal vs FIPS 180-4 §A.1 + §A.2 + `node:crypto`; the first fully port-native primitive |
+| **SHA3-256** | 32 B | 136 B rate | sponge (Keccak-f[1600], 24 rounds θρπχι), multi-block, KAT-equal vs FIPS 202 + `node:crypto`; the first non-Merkle–Damgård hash and the foundation for post-quantum work |
 
 SHA-256 is built entirely from the universal port-native vocabulary (`rotate-bits-right`, `shift-bits-right`, `xor`, `add-mod-32`, `and`, `not`, `concat`, `split-bytes`, `byte-slice`, …) — no SHA-specific executors. Its 64 compression rounds and the message schedule decompose into individually-scrubbable frames, and multi-block messages fold over a port-mode `iterate` that carries the running hash as its chain. The explorer caps input at 512 bytes to keep the per-byte trace scrubbable (not a SHA-256 limit).
+
+SHA3-256 is a **sponge**, structurally unlike SHA-2: it absorbs the padded message 136 bytes at a time into a 200-byte state, running the **Keccak-f[1600]** permutation (24 rounds of θ→ρ→π→χ→ι) after each block, then squeezes the 32-byte digest out of the state. The absorb loop reuses the *same* port-mode `iterate` fold as SHA-256's multi-block hashing (the carried chain is the full state). Each round decomposes into named port-native leaves — θ (`keccak.theta`), ρ (`rotate-lanes`, the per-lane rotation), π (`permute`), χ (`not`/`and`/`xor`, the one nonlinear step), ι (`keccak.iota`, the round constant). SHA3-256 is the honest prerequisite for the NIST post-quantum standards (ML-KEM, ML-DSA, SLH-DSA), which all build on Keccak/SHAKE.
 
 DES is the project's first Feistel cipher. Its round body is built port-native — a `group` of `split-bytes → E-expand → XOR with K_i → 8 S-boxes → P-permute → xor → concat` — with the Feistel swap expressed as the `concat` argument order (rounds 1..15 swap; round 16 doesn't, the textbook last-round exception that makes the cipher self-inverse under key-reversal). No special branching primitive — the universal-port thesis is that Feistel needs none.
 

@@ -44,6 +44,7 @@ import { serpent192DecryptSpec } from "@/ciphers/serpent-192-decrypt";
 import { serpent256Spec } from "@/ciphers/serpent-256";
 import { serpent256DecryptSpec } from "@/ciphers/serpent-256-decrypt";
 import { buildSha256Spec } from "@/ciphers/sha-256";
+import { buildSha3256Spec } from "@/ciphers/sha3-256";
 import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { speck32_64BeDecryptSpec } from "@/ciphers/speck-32-64-be-decrypt";
 import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
@@ -181,6 +182,7 @@ const resolveDefault = (cipher: Cipher, cipherMode: CipherMode, mode: Mode): Cip
  */
 const hashDefaults: Record<Hash, CipherSpec> = {
   "sha-256": buildSha256Spec(),
+  "sha3-256": buildSha3256Spec(),
 };
 
 /**
