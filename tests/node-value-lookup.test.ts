@@ -182,18 +182,44 @@ describe("lookupNodeValue — block chips", () => {
 // ─── Regular leaves ─────────────────────────────────────────────────────
 
 describe("lookupNodeValue — regular leaves", () => {
-  it("resolves the schedule publish tail (`key-schedule.publish`) to missing — multi-output, no single resolvable state", () => {
+  it("resolves the schedule publish tail (`key-schedule.publish`) to aux-fanout — summarises the published round keys, no single scalar value", () => {
     const trace = runAes128Ecb();
     // Since the key-schedule decomposition (K1c) the schedule's meta-bearing
     // tail `key-schedule.publish` is the aux writer for the round keys. It has
-    // 11 output ports (key0..key10, identity-forwarded) and no `"state"` port,
-    // so the cipher-agnostic value inspector (framePrimaryOutBytes: state →
-    // sole-port → null) can't pick a single representative value → missing.
-    // The round keys surface via the aux edges / PortFlowView instead.
+    // 11 ports (key0..key10) and no `"state"` port, so the cipher-agnostic
+    // value inspector (framePrimaryOutBytes: state → sole-port → null) can't
+    // pick a single representative value. Rather than the old raw
+    // "no resolvable state" jargon, it now reports `"aux-fanout"` and
+    // summarises what the tail published — the 11 round keys, each of which is
+    // fully inspectable via the aux edges / PortFlowView.
     const out = lookupNodeValue("key-schedule.publish", aes128EcbSpec, trace, undefined);
-    expect(out.status).toBe("missing");
-    if (out.status !== "missing") return;
-    expect(out.reason).toMatch(/no resolvable state|single|output port/i);
+    expect(out.status).toBe("aux-fanout");
+    if (out.status !== "aux-fanout") return;
+    // AES-128: 11 round keys published to aux (roundKey.0 … roundKey.10).
+    expect(out.auxKeys).toHaveLength(11);
+    expect(out.auxKeys[0]).toBe("roundKey.0");
+    expect(out.auxKeys.at(-1)).toBe("roundKey.10");
+    // The summary must NOT read as an error — it names the fan-out and its
+    // endpoints (the elided form kicks in for n > 4).
+    expect(out.summary).toMatch(/publishes 11 aux values/i);
+    expect(out.summary).toContain("roundKey.0");
+    expect(out.summary).toContain("roundKey.10");
+    expect(out.summary).not.toMatch(/no resolvable state/i);
+  });
+
+  it("resolves the COLLAPSED key-schedule GROUP id to aux-fanout via the container fallback (the DES-report shape)", () => {
+    const trace = runAes128Ecb();
+    // The user clicked DES's collapsed "Key Schedule" group (the group node id
+    // is literally `key-schedule` in every decomposed schedule — AES too). No
+    // trace frame is keyed by a group id, so `lookupNodeValue` falls back
+    // through the container to its terminal leaf (the publish tail) — which is
+    // exactly the aux-fanout case. This pins the reported path, not just a
+    // direct leaf click. (AES fixture: same group id + same publish shape.)
+    const out = lookupNodeValue("key-schedule", aes128EcbSpec, trace, undefined);
+    expect(out.status).toBe("aux-fanout");
+    if (out.status !== "aux-fanout") return;
+    expect(out.auxKeys).toHaveLength(11);
+    expect(out.summary).not.toMatch(/no resolvable state/i);
   });
 
   it("resolves a native-AES leaf inside the iterate (`initial.add-round-key`) to its honest single-output value", () => {

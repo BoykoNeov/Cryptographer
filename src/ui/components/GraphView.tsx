@@ -9452,6 +9452,7 @@ const kindBadgeText = (r: EdgeValueLookup): string => {
   }
   if (r.status === "no-trace") return "no trace";
   if (r.status === "missing") return "no value";
+  if (r.status === "aux-fanout") return "aux fan-out";
   // r.status === "value"
   const blockSuffix = r.blockIndex !== undefined ? ` (block ${r.blockIndex})` : "";
   if (r.displayKind === "state") return `state${blockSuffix}`;
@@ -9472,6 +9473,8 @@ const valueRowText = (r: EdgeValueLookup, fmt: ByteFormat): string => {
       return "Run the cipher to see values.";
     case "missing":
       return r.reason;
+    case "aux-fanout":
+      return r.summary;
     case "value":
       return formatAuxValueOneline(r.value, fmt);
   }

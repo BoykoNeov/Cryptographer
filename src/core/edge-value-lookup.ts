@@ -43,6 +43,12 @@
  *      frame because an earlier step threw. `reason` carries a short
  *      human description for the panel.
  *
+ *   3b. `"aux-fanout"` — a frame WAS found but it has no single scalar value:
+ *      a key-schedule PUBLISH tail (0 output ports, N input ports, each fanned
+ *      into aux). Distinct from `"missing"` because it is information, not a
+ *      failure — the row summarises what was published (e.g. "16 round keys")
+ *      and the leaf inspector's "all port values" expander shows each in full.
+ *
  *   4. `"value"` — got it. `value` is the `AuxValue` (a State, a
  *      Uint8Array, a number, a bigint, or a `readonly State[]`). The
  *      panel renders this via `src/core/format.ts` for byte-y values and
@@ -161,6 +167,20 @@ const stateValueResult = (bytes: Uint8Array, blockIndex: number | undefined): Ed
         displayKind: "state",
         auxKey: "state",
       };
+
+/**
+ * One-line summary of a publish tail's aux fan-out, for the `"aux-fanout"`
+ * value row. Lists the keys when there are few; otherwise elides to
+ * `first … last` (the round-key case: `roundKey.0 … roundKey.15`). Named
+ * generically because the tails vary — DES/AES/Speck/Serpent publish indexed
+ * `roundKey.*`, RSA publishes named key params (`n`, `e`, `d`, …).
+ */
+const summarizeAuxFanout = (keys: readonly string[]): string => {
+  const n = keys.length;
+  const noun = `value${n === 1 ? "" : "s"}`;
+  if (n <= 4) return `publishes ${n} aux ${noun}: ${keys.join(", ")}`;
+  return `publishes ${n} aux ${noun}: ${keys[0]} … ${keys[n - 1]}`;
+};
 
 /** Parsed chip-id structure when the input is a recognized chip. */
 type ChipId = { readonly iterateId: string; readonly blockIndex: number };
@@ -354,6 +374,26 @@ export type EdgeValueLookup =
     }
   | { readonly status: "no-trace" }
   | { readonly status: "missing"; readonly reason: string }
+  | {
+      /**
+       * The node is a key-schedule PUBLISH tail (`*.publish-round-keys` /
+       * `publish-subkeys` / `publish-key-params`): 0 output ports + N input
+       * ports, each fanned out into `aux`. There is no single scalar "state"
+       * to show — by construction both `framePrimaryOutBytes` and
+       * `framePrimaryInBytes` are null — but the frame's `auxWritten` records
+       * exactly what it published. This is INFORMATION, not a failure: the row
+       * summarises the fan-out (e.g. "16 round keys") and the leaf inspector's
+       * "all port values" expander shows each published value in full. Split
+       * out from `"missing"` (Bug fix 2026-07-13) so the value row stops
+       * reading as the raw "no resolvable state at frame N" error the user hit
+       * clicking DES's collapsed Key Schedule group.
+       */
+      readonly status: "aux-fanout";
+      /** The aux keys this frame published, in write order. */
+      readonly auxKeys: readonly string[];
+      /** One-line human summary rendered in the value row. */
+      readonly summary: string;
+    }
   | {
       readonly status: "value";
       readonly value: AuxValue;
@@ -1003,6 +1043,28 @@ export const lookupNodeValue = (
   // "missing" — inspect those per-port in PortFlowView.
   const bytes = framePrimaryOutBytes(frame) ?? framePrimaryInBytes(frame);
   if (bytes === null) {
+    // No single scalar value at this frame. The ONLY leaves that reach here
+    // are the key-schedule PUBLISH tails (`*.publish-round-keys` /
+    // `publish-subkeys` / `publish-key-params`): 0 output ports + N input
+    // ports, each written to `aux` — so `framePrimaryOut/InBytes` are both
+    // null by construction. (Fan-in `xor`/`concat` have a SINGLE output port,
+    // so `framePrimaryOutBytes`'s sole-port fallback resolves them; `split`
+    // has a single INPUT port. Neither reaches this branch.) The frame's
+    // `auxWritten` records exactly what the tail fanned out, so summarise
+    // that (e.g. "16 round keys") rather than emitting the raw
+    // "no resolvable state" jargon the user hit on DES's collapsed Key
+    // Schedule group. The leaf inspector's "all port values" expander shows
+    // each published value in full.
+    const published = [...frame.auxWritten.keys()];
+    if (published.length > 0) {
+      return {
+        status: "aux-fanout",
+        auxKeys: published,
+        summary: summarizeAuxFanout(published),
+      };
+    }
+    // Defensive: a genuinely value-less frame (no ports, no aux) — should not
+    // occur for any shipped step, but keep the honest fallback.
     return {
       status: "missing",
       reason: `step "${nodeId}" has no resolvable state at frame ${frame.index}`,

@@ -231,6 +231,12 @@ and click any element on the canvas to populate it:
     same prose the linear view shows): what the operation is and what it
     did to *these* bytes. Only appears for steps that have a narrator;
     for a plain primitive the "all port values" strip is the full story.
+- **A key-schedule group** (the collapsed "Key Schedule" / "Key
+  Expansion" box, or one of its round-key chips) has no single output
+  value — it fans out *all* the round keys at once. The row says so
+  ("publishes 16 aux values: `roundKey.0` … `roundKey.15`") instead of a
+  blank, and the **all port values** expander lists every published key
+  in full.
 - **An endpoint pill** ("plaintext" / "ciphertext") shows a descriptive
   label — pills aren't bound to a trace frame, so there's nothing
   numeric to display.
