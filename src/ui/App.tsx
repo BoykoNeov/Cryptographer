@@ -135,8 +135,10 @@ import {
 } from "./stores/padding";
 import { registry } from "./stores/registry";
 import {
+  MAX_KMAC_KEY_LENGTH,
   MAX_SHAKE_OUTPUT,
   isCustomSpec,
+  isKmacHash,
   resetSpec,
   setAlgorithm,
   setAsymmetric,
@@ -145,6 +147,7 @@ import {
   setCshakeCustomization,
   setHash,
   setKmacCustomization,
+  setKmacKeyLength,
   setMode,
   setPadding,
   setShakeOutputLength,
@@ -500,9 +503,25 @@ export const App = () => {
       // Key length depends on the active cipher: 16 (AES-128) / 24 (192) /
       // 32 (256). The spec carries this in inputs.key.byteLength — read it
       // off the live spec rather than threading the cipher signal in.
+      //
+      // KMAC is the exception: its key is VARIABLE-length (Option A — the key
+      // field is the source of truth). Parse without a fixed-length check, then
+      // make the spec's declared key length agree BEFORE running. Committing the
+      // field on blur normally already did this, but a typed-then-Run edit that
+      // never blurred would otherwise run a stale-length spec — and the runtime's
+      // aux coercion would silently pad/truncate the key into a WRONG MAC.
       let keyBytes: Uint8Array;
       try {
-        keyBytes = parseBytesWithLength(keyText(), fmt(), spec().inputs.key.byteLength);
+        if (isKmac()) {
+          const parsed = parseBytes(keyText(), fmt());
+          if (parsed.length < 1) throw new Error("KMAC needs at least 1 key byte");
+          if (parsed.length !== spec().inputs.key.byteLength) {
+            setKmacKeyLength(parsed.length); // rebuilds spec() to the typed length
+          }
+          keyBytes = parsed;
+        } else {
+          keyBytes = parseBytesWithLength(keyText(), fmt(), spec().inputs.key.byteLength);
+        }
       } catch (e) {
         throw new Error(`key: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -844,7 +863,16 @@ export const App = () => {
       const currentKey = tryParseBytes(keyText(), fmt());
       const prevKeyDefault = algorithmDefaultKey(prevAlgorithm);
       if (currentKey && bytesEqual(currentKey, prevKeyDefault)) {
-        setKeyText(formatBytes(algorithmDefaultKey(doc.algorithm), fmt()));
+        const nextKey = algorithmDefaultKey(doc.algorithm);
+        setKeyText(formatBytes(nextKey, fmt()));
+        // A spec-only KMAC share carries no key bytes, so we drop in the 32-byte
+        // canonical default; resync the store's variable-key-length mirror to it
+        // (the loaded spec may have declared a different length). The store's
+        // applyDocument set the mirror from the loaded spec; this overrides it to
+        // match the default key we just placed in the field.
+        if (isHash(doc.algorithm) && isKmacHash(doc.algorithm)) {
+          setKmacKeyLength(nextKey.length);
+        }
       }
       const currentPt = tryParseBytes(inputText(), fmt());
       const prevPtDefault = algorithmDefaultPt(prevAlgorithm);
@@ -1034,7 +1062,14 @@ export const App = () => {
     if (prev === next) return;
     const currentKey = tryParseBytes(keyText(), fmt());
     if (currentKey && bytesEqual(currentKey, DEFAULT_KEY_BYTES_BY_HASH[prev])) {
-      setKeyText(formatBytes(DEFAULT_KEY_BYTES_BY_HASH[next], fmt()));
+      const nextKey = DEFAULT_KEY_BYTES_BY_HASH[next];
+      setKeyText(formatBytes(nextKey, fmt()));
+      // KMAC's key length is variable and derived from the key field, so when we
+      // swap in the canonical (32-byte) default we must resync the store's length
+      // mirror — otherwise a persisted non-32 length would leave the rebuilt spec
+      // declaring a length the key field no longer matches. (When the user kept a
+      // custom key, its length is already committed, so no resync is needed.)
+      if (isKmacHash(next)) setKmacKeyLength(nextKey.length);
     }
     const currentPt = tryParseBytes(inputText(), fmt());
     if (currentPt && bytesEqual(currentPt, DEFAULT_PT_BYTES_BY_HASH[prev])) {
@@ -1071,6 +1106,29 @@ export const App = () => {
    *  boundary reset as the cSHAKE / output-length controls). */
   const changeKmacCustomization = (value: string): void => {
     withBoundaryReset(() => setKmacCustomization(value));
+  };
+
+  /** Commit a new KMAC key length (structural rebuild; same C3 boundary reset as
+   *  the other KMAC / XOF structural controls). */
+  const changeKmacKeyLength = (len: number): void => {
+    withBoundaryReset(() => setKmacKeyLength(len));
+  };
+
+  /**
+   * On a KMAC key-field commit (blur / Enter), derive the key length from the
+   * bytes the user typed and rebuild the spec at that length — KMAC's key length
+   * is VARIABLE and the key field is its source of truth (Option A). A no-op for
+   * every non-KMAC key field (those are fixed-length: the cipher declares the
+   * size). Unparseable / empty text is left as-is for the Run handler to surface
+   * as a parse error; we never rebuild at a guessed length. Skips the rebuild
+   * when the length is unchanged (a pure value edit doesn't touch the structure).
+   */
+  const commitKmacKeyLength = (text: string): void => {
+    if (!isKmac()) return;
+    const bytes = tryParseBytes(text, fmt());
+    if (!bytes || bytes.length < 1) return;
+    if (bytes.length === spec().inputs.key.byteLength) return;
+    changeKmacKeyLength(bytes.length);
   };
 
   /**
@@ -1681,9 +1739,23 @@ export const App = () => {
             <input
               value={keyText()}
               onInput={(e) => preserveScroll(() => setKeyText(e.currentTarget.value))}
+              // KMAC key length is VARIABLE and DERIVED from this field (Option
+              // A): committing the field (blur / Enter) rebuilds the spec at the
+              // typed length. No-op for every fixed-length cipher key.
+              onChange={(e) => commitKmacKeyLength(e.currentTarget.value)}
               spellcheck={false}
             />
           </label>
+          {/* KMAC's key is variable-length (SP 800-185 places no bound; we cap at
+              MAX for trace legibility). Surface the live length so the "type any
+              length" affordance is discoverable — the field itself is the only
+              control. */}
+          <Show when={isKmac()}>
+            <span class="shake-block-caption">
+              key = {spec().inputs.key.byteLength} bytes · variable (type any length, 1–
+              {MAX_KMAC_KEY_LENGTH})
+            </span>
+          </Show>
         </Show>
         {/* IV input: shown only when CBC is active. The all-zero default
             from the iv store is replaced by NIST §F's standard test

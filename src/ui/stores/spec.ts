@@ -37,7 +37,12 @@ import { blowfishDecryptSpec } from "@/ciphers/blowfish-decrypt";
 import { buildCshakeSpec, readCshakeCustomization } from "@/ciphers/cshake";
 import { desSpec } from "@/ciphers/des";
 import { desDecryptSpec } from "@/ciphers/des-decrypt";
-import { type KmacVariant, buildKmacSpec, readKmacCustomization } from "@/ciphers/kmac";
+import {
+  type KmacVariant,
+  buildKmacSpec,
+  readKmacCustomization,
+  readKmacKeyLength,
+} from "@/ciphers/kmac";
 import { rsaDecryptSpec, rsaEncryptSpec } from "@/ciphers/rsa";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { serpent128DecryptSpec } from "@/ciphers/serpent-128-decrypt";
@@ -233,6 +238,33 @@ const [kmacS, setKmacSSignal] = createSignal(DEFAULT_KMAC_S);
 /** Accessor for the current KMAC customization string (the UI reads this). */
 export const useKmacS = (): (() => string) => kmacS;
 
+// ─── KMAC key length (variable; DERIVED from the key field) ────────────────
+//
+// Unlike SHAKE's output length, KMAC's key length is not an independent knob —
+// it is DERIVED from the key the user types (Option A: the key is the source of
+// truth). But the store still needs a mirror signal, because `resolveHashDefault`
+// / `buildCanonicalHash` build the KMAC spec (declaring `inputs.key.byteLength`,
+// the `key.load` aux-read width, and `encode_string(K)`'s bit-length prefix)
+// WITHOUT visibility into the App-local key field. The App keeps this signal in
+// lockstep with the key field: it commits a new length on the field's blur, and
+// the Run path resyncs defensively so an uncommitted edit can't run a
+// stale-length spec (which the runtime would silently coerce into a WRONG MAC).
+
+/** Default KMAC key length in bytes — the NIST SP 800-185 sample key size. */
+export const DEFAULT_KMAC_KEY_LENGTH = 32;
+/** Upper bound on the KMAC key length, for trace legibility (SP 800-185 itself
+ *  places no bound). Mirrors `MAX_SHAKE_OUTPUT`'s role. */
+export const MAX_KMAC_KEY_LENGTH = 512;
+const [kmacKeyLength, setKmacKeyLengthSignal] = createSignal(DEFAULT_KMAC_KEY_LENGTH);
+/** Accessor for the current KMAC key length (the store's mirror of the key
+ *  field's byte length; consumed by `resolveHashDefault`). */
+export const useKmacKeyLength = (): (() => number) => kmacKeyLength;
+/** Clamp a proposed key length into `[1, MAX_KMAC_KEY_LENGTH]`. Min 1 because
+ *  `aux-load-bytes@1` rejects `byteLength < 1` and the key field only shows when
+ *  `inputs.key.byteLength > 0`. */
+const clampKmacKeyLength = (n: number): number =>
+  Math.max(1, Math.min(MAX_KMAC_KEY_LENGTH, Math.floor(n)));
+
 const hashDefaults: Record<
   Exclude<
     Hash,
@@ -277,7 +309,12 @@ const resolveHashDefault = (hash: Hash): CipherSpec => {
     );
   }
   if (isKmacHash(hash)) {
-    return buildKmacSpec(hash, new TextEncoder().encode(kmacS()), shakeOutputLength());
+    return buildKmacSpec(
+      hash,
+      new TextEncoder().encode(kmacS()),
+      shakeOutputLength(),
+      kmacKeyLength(),
+    );
   }
   return hashDefaults[hash];
 };
@@ -660,6 +697,28 @@ export const setCshakeCustomization = (which: "N" | "S", value: string): void =>
  */
 export const setKmacCustomization = (value: string): void => {
   setKmacSSignal(value);
+  const active = useHash()();
+  if (isKmacHash(active)) {
+    setSpecs(buildCanonicalHash(active));
+  }
+};
+
+/**
+ * Set the KMAC key length (in bytes) and, when a KMAC is the active hash,
+ * rebuild the spec at that length. STRUCTURAL rebuild (same rationale as the S
+ * string / output length): the length changes `encode_string(K)`'s bit-length
+ * prefix, the key bytepad block size, the `key.load` aux-read width, and the
+ * declared `inputs.key.byteLength` — none of which `editStepParams` can express.
+ * Clamped to `[1, MAX_KMAC_KEY_LENGTH]`. No-op rebuild for non-KMAC hashes.
+ *
+ * KMAC's key length is DERIVED from the key field (Option A), so the App calls
+ * this from the field's commit and defensively from the Run path; the store just
+ * keeps the mirror signal + spec in lockstep so `isCustomSpec` reads "not custom"
+ * after a pure length change (it compares against `resolveHashDefault`, itself
+ * built at `kmacKeyLength()`).
+ */
+export const setKmacKeyLength = (n: number): void => {
+  setKmacKeyLengthSignal(clampKmacKeyLength(n));
   const active = useHash()();
   if (isKmacHash(active)) {
     setSpecs(buildCanonicalHash(active));
@@ -1467,9 +1526,13 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
       setCshakeSSignal(dec.decode(S));
     }
     // KMAC: recover the customization string S (the key travels via session/aux,
-    // not the spec; N is the fixed "KMAC").
+    // not the spec; N is the fixed "KMAC") AND the declared key length, so a
+    // later S edit rebuilds at the loaded key length rather than snapping back to
+    // the 32-byte default. Signal-only (no rebuild): the doc's spec is applied
+    // as-is by the setSpecs below and may be a customized/edited variant.
     if (isKmacHash(doc.algorithm)) {
       setKmacSSignal(new TextDecoder().decode(readKmacCustomization(doc.spec)));
+      setKmacKeyLengthSignal(clampKmacKeyLength(readKmacKeyLength(doc.spec)));
     }
     setSpecs({ kind: "hash", hash: doc.algorithm, single: doc.spec });
     return;

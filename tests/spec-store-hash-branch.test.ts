@@ -60,10 +60,12 @@ import {
   setCshakeCustomization,
   setHash,
   setKmacCustomization,
+  setKmacKeyLength,
   setShakeOutputLength,
   setSpecFromDocument,
   useCshakeN,
   useCshakeS,
+  useKmacKeyLength,
   useKmacS,
   useShakeOutputLength,
   useSpec,
@@ -294,6 +296,51 @@ describe("spec store — hash branch (Slice 2.10b)", () => {
       });
       expect(useKmacS()()).toBe("My Tagged Application");
       expect(useShakeOutputLength()()).toBe(32);
+      expect(isCustomSpec()).toBe(false);
+    });
+
+    it("setKmacKeyLength rebuilds the KMAC spec at the new key length (lockstep, not custom)", () => {
+      // KMAC's key length is variable (Option A). Like the SHAKE output length it
+      // rebuilds spec + canonical in lockstep off one signal, so a pure length
+      // change must read as NOT custom, and the declared key length must appear
+      // in inputs.key.byteLength AND the key.load aux-read width.
+      setHash("kmac256");
+      expect(isCustomSpec()).toBe(false); // fresh canonical (32-byte default)
+      setKmacKeyLength(20);
+      expect(useKmacKeyLength()()).toBe(20);
+      const s = useSpecsByMode()();
+      expect(s.kind).toBe("hash");
+      if (s.kind === "hash") {
+        expect(s.single.inputs.key.byteLength).toBe(20);
+        const keyLoad = s.single.steps.find((n) => n.id === "key.load");
+        expect(keyLoad?.kind).toBe("step");
+        if (keyLoad?.kind === "step") {
+          expect((keyLoad.params as Record<string, unknown>).byteLength).toBe(20);
+        }
+      }
+      expect(isCustomSpec()).toBe(false); // canonical rebuilt at 20 → lockstep
+    });
+
+    it("setKmacKeyLength clamps to [1, MAX] (aux-load-bytes rejects < 1)", () => {
+      setHash("kmac128");
+      setKmacKeyLength(0);
+      expect(useKmacKeyLength()()).toBe(1);
+      setKmacKeyLength(99999);
+      expect(useKmacKeyLength()()).toBe(512); // MAX_KMAC_KEY_LENGTH
+    });
+
+    it("loading a KMAC doc syncs the key-length signal from the declared key input", () => {
+      // A kmac128 doc authored with a 48-byte key. applyDocument's KMAC branch
+      // must recover the length from inputs.key.byteLength so a later S edit
+      // rebuilds at 48 (not the 32-byte default). Start off-value to observe it.
+      const utf8 = new TextEncoder();
+      setKmacKeyLength(32);
+      setSpecFromDocument({
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        spec: buildKmacSpec("kmac128", utf8.encode(""), 32, 48),
+        algorithm: "kmac128",
+      });
+      expect(useKmacKeyLength()()).toBe(48);
       expect(isCustomSpec()).toBe(false);
     });
 

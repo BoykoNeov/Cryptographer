@@ -31,10 +31,12 @@
  * **The key travels through aux.** KMAC is the first hash to consume a key. The
  * app seeds the key into `aux["key"]` (the same channel ciphers use), and the
  * spec reads it back with `aux-load-bytes@1` — so the key is a runtime input,
- * not baked into the spec. Its length is declared in `inputs.key.byteLength`
- * (fixed at 32 bytes for v1; the NIST sample key size). `encode_string` computes
- * the key's bit-length at run time, so a different declared length would be a
- * validation choice, not a correctness one.
+ * not baked into the spec. Its length is **variable** (SP 800-185 places no
+ * upper bound on the key): the key field is the source of truth, and the number
+ * of bytes the user types drives `keyByteLength`, which the builder threads into
+ * `inputs.key.byteLength`, the `key.load` aux-read width, and (via
+ * `encode_string`) the key's `left_encode(8·len)` bit-length prefix. The NIST
+ * sample key size (32 bytes) is the default, not a limit.
  *
  * **KAT.** Byte-equal to the NIST SP 800-185 published KMAC / KMACXOF samples
  * and to pycryptodome (`tests/kmac-kat.test.ts`), driven through the runtime
@@ -340,6 +342,17 @@ export const buildKmacSpec = (
 
 /** The variant's rate — exported so the UI stepper can step by whole blocks. */
 export const kmacRate = (variant: KmacVariant): number => RATE_BY_VARIANT[variant];
+
+/**
+ * Recover the declared MAC key length (in bytes) from a built KMAC spec. KMAC's
+ * key length is variable (SP 800-185 places no upper bound); the whole key block
+ * — `inputs.key.byteLength`, the `key.load` aux-read width, and
+ * `encode_string(K)`'s bit-length prefix — is built from one `keyByteLength`, so
+ * `inputs.key.byteLength` is the authoritative source. Used by `applyDocument`
+ * to sync the key-length signal after loading a saved / shared KMAC document, so
+ * a later customization edit rebuilds at the same key length.
+ */
+export const readKmacKeyLength = (spec: CipherSpec): number => spec.inputs.key.byteLength;
 
 /**
  * Recover the customization string `S` from a built KMAC spec (the `cust.S`
