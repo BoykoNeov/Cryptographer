@@ -37,6 +37,7 @@
  */
 
 import { buildSha256Spec } from "@/ciphers/sha-256";
+import { buildShakeSpec } from "@/ciphers/shake";
 import {
   CURRENT_SCHEMA_VERSION,
   type CipherDocument,
@@ -51,9 +52,13 @@ import { __resetPaddingForTests } from "@/ui/stores/padding";
 import {
   __resetSpecForTests,
   buildCanonicalHash,
+  editStepParams,
   isCustomSpec,
   resetSpec,
+  setHash,
+  setShakeOutputLength,
   setSpecFromDocument,
+  useShakeOutputLength,
   useSpec,
   useSpecsByMode,
 } from "@/ui/stores/spec";
@@ -196,6 +201,60 @@ describe("spec store — hash branch (Slice 2.10b)", () => {
         algorithm: "sha-256",
       });
       expect(isCustomSpec()).toBe(true);
+    });
+  });
+
+  // ─── SHAKE editable output length — the on-demand-build contract ────────
+  //
+  // SHAKE is the ONLY hash whose canonical spec is built from a signal
+  // (`resolveHashDefault` → `buildShakeSpec(hash, shakeOutputLength())`), rather
+  // than a static `hashDefaults` entry. That makes `isCustomSpec` reactive to
+  // the length: a PURE length change rebuilds both the active spec AND the
+  // canonical it compares against, at the SAME length, so it must read "not
+  // custom" (the user picked editable-length precisely so it feels first-class,
+  // not like customizing). Only a real leaf edit should read "custom". These
+  // guard that lockstep contract against future drift (someone dropping the
+  // signal read, or making `buildShakeSpec` non-deterministic).
+
+  describe("SHAKE output-length lockstep with isCustomSpec", () => {
+    it("a pure output-length change reads as NOT custom (rebuilds spec + canonical in lockstep)", () => {
+      setHash("shake128");
+      expect(isCustomSpec()).toBe(false); // fresh canonical
+      setShakeOutputLength(300);
+      // The active spec actually rebuilt at the new length…
+      expect(useShakeOutputLength()()).toBe(300);
+      const s = useSpecsByMode()();
+      expect(s.kind).toBe("hash");
+      if (s.kind === "hash") {
+        const truncate = s.single.steps.find((n) => n.id === "squeeze.truncate");
+        expect(truncate?.kind).toBe("step");
+        if (truncate?.kind === "step") {
+          expect((truncate.params as Record<string, unknown>).length).toBe(300);
+        }
+      }
+      // …and isCustomSpec compares against a canonical built at the SAME length.
+      expect(isCustomSpec()).toBe(false);
+    });
+
+    it("a real leaf param edit reads as custom (not a length change)", () => {
+      setHash("shake256");
+      expect(isCustomSpec()).toBe(false);
+      editStepParams("pad", { rate: 136, domainByte: 0x1f, __markerForTest: true });
+      expect(isCustomSpec()).toBe(true);
+    });
+
+    it("loading a SHAKE doc syncs the output-length signal and reads as not custom", () => {
+      // A shake256 doc authored at output length 96. applyDocument's hash branch
+      // must sync the signal from the loaded truncate step so the control shows
+      // 96 AND a later resetSpec rebuilds at 96 (not the 200 default).
+      setShakeOutputLength(200); // start off-value so the sync is observable
+      setSpecFromDocument({
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        spec: buildShakeSpec("shake256", 96),
+        algorithm: "shake256",
+      });
+      expect(useShakeOutputLength()()).toBe(96);
+      expect(isCustomSpec()).toBe(false);
     });
   });
 
