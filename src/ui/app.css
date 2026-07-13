@@ -2782,16 +2782,20 @@ button:disabled {
   border: 1px solid var(--border);
   border-radius: 4px;
   /* Viewport-relative cap (2026-05-16, replacing the hardcoded 600 px
-     that never adapted to taller displays). On a 1080-px display this
-     allots ~860 px of canvas — ~43 % more than before. The 220-px
-     subtrahend accounts for the app's fixed chrome above and below the
-     canvas (header band, frame-header, inputs panel, byte-format
-     toggle, ParamEditor strip, footer); it's a deliberate
-     over-estimate so the canvas never pushes those out of view.
-     `min-height` floors the cap at roughly the previous fixed value
-     so short displays (800-px laptops) keep their existing canvas
-     real estate even though the calc would give them less. */
-  max-height: calc(100vh - 220px);
+     that never adapted to taller displays). The subtrahend is the
+     chrome height ABOVE the canvas — header band, frame-header, inputs
+     panel, byte-format toggle. This was a static `220px` estimate until
+     2026-07-13, when the SP 800-185 hashes (cSHAKE customization string,
+     KMAC key, SHAKE output-length) added ~300px of extra input rows in
+     hash mode, so no single constant fit both cipher and hash modes —
+     the canvas overshot the viewport and the expanded container's bottom
+     fell below the reachable area. `--graph-top` is the wrapper's true
+     resting distance from the document top, measured live in GraphView
+     (`attachScrollWrapperRef`) via ResizeObserver + resize; the `220px`
+     fallback preserves the old behaviour before JS runs and under jsdom.
+     `100dvh` (not `vh`) so mobile browser chrome doesn't inflate the cap.
+     `min-height` floors the cap so short displays keep their canvas. */
+  max-height: calc(100dvh - var(--graph-top, 220px));
   min-height: 560px;
   overflow: auto;
   /* Drag-to-pan affordance. The pan gesture is owned by this scroll
@@ -3390,19 +3394,13 @@ button:disabled {
   border-bottom: 1px solid var(--border);
   background: var(--bg-elev);
   font-size: 11px;
-  /* Containing block for the floating body (below). The body is
-     absolutely positioned so opening the inspector — which the FIRST
-     node/edge click does automatically via `toggleSelectedTarget` —
-     doesn't grow the sticky header and shove the whole SVG canvas down.
-     (Reported 2026-07-10: "first click in graphview displaces the view
-     downward due to expansion of the value inspector".) The body slot is
-     already fixed-height (min/max below), so the shift was purely the
-     closed→open mount; floating the body removes it from flow entirely.
-     Per `feedback_layout_shift_fix_reserve_vs_absolute`: the footprint is
-     NOT already-present slack (closed = no body), so the rule says
-     absolute-position into dead space — here the top sliver of canvas
-     under the toolbar, which is pannable and the least-valuable region. */
-  position: relative;
+  /* The body (below) renders in normal flow, so opening the inspector grows
+     this band inside the sticky header and pushes the SVG down by one screen
+     — an accepted one-time shift. This REVERSED the 2026-07-10 float fix
+     ("first click displaces the view downward"): that fix floated the body
+     over the top sliver of canvas on the premise it was dead space, but the
+     SP 800-185 hashes put a clickable node there (see the body rule), so
+     occlusion now outweighs the shift. No containing block is needed anymore. */
 }
 
 .graph-value-inspector-panel-header {
@@ -3449,21 +3447,19 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  /* Float below the panel header instead of pushing the SVG down. Anchored
-     to `.graph-value-inspector-panel`'s bottom edge; `z-index: 2` keeps it
-     above the SVG (the sticky header is `z-index: 1`). The card chrome
-     (background/border/shadow) is what a floating panel needs that an
-     in-flow band got for free from its parent. */
-  position: absolute;
-  top: 100%;
-  left: 8px;
-  z-index: 2;
-  padding: 6px 8px;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-top: none;
-  border-radius: 0 0 6px 6px;
-  box-shadow: 0 8px 18px rgb(0 0 0 / 30%);
+  /* In-flow band inside the sticky header (2026-07-13). It used to FLOAT
+     (`position: absolute; top: 100%`) over the top sliver of canvas, on the
+     premise that that sliver was dead space so floating there avoided a
+     one-time downward shift on first open (`feedback_layout_shift_fix_
+     reserve_vs_absolute`). The SP 800-185 hashes broke that premise: their
+     graphs place a real, clickable node (the `pad` origin) in the top-left,
+     and the float obstructed clicks on it. So the body now takes a slot in
+     normal flow — opening grows the sticky header and pushes the SVG down
+     (the accepted one-time shift), and nothing is ever occluded. The card
+     chrome collapses to a simple top divider since the parent band already
+     supplies the background. */
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--border);
   /* Cap body width on wide canvases so long hex dumps don't push the
      panel out into horizontal scroll territory. Browser wraps the
      value row on the explicit `word-break` rule below. */
