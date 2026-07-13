@@ -1197,7 +1197,22 @@ const inferPortEdges = (spec: CipherSpec): GraphEdge[] => {
     const descendants = new Set<string>();
     const kids = childrenByContainerId.get(groupId);
     if (kids !== undefined) descendantIdsOf(kids, descendants);
-    const seedReachesDescendant = edges.some((e) => e.from === seed.node && descendants.has(e.to));
+    // Compare against the RESOLVED seed producer, not just the raw seedInput
+    // node. When the seed is another GROUP's "out" (SHAKE's squeeze carry:
+    // `perm.{j}.seedInput = port("perm.{j-1}","out")`), `resolveSeedChain`
+    // chases it to the deep producing leaf (`perm.{j-1}.round.23.iota`) — which
+    // is exactly the `from` of the resolved leaf edge into this container's body
+    // head (`…iota → …round.0.theta`). So the flow is ALREADY depicted
+    // leaf-to-leaf; drawing this container→container edge too would just double
+    // it with a value-less ("no frame found") arrow — the same redundancy the
+    // DES `initial-permutation → rounds` drop removed, reached through a group
+    // "out" rather than a leaf. SHA-256's `blocks` loop-input edge is unaffected:
+    // its seed port is a leaf "output" (unchanged by the chase), and the chase
+    // stops at the iterate boundary regardless.
+    const resolvedSeedNode = resolveSeedChain(seed).node;
+    const seedReachesDescendant = edges.some(
+      (e) => (e.from === seed.node || e.from === resolvedSeedNode) && descendants.has(e.to),
+    );
     if (seedReachesDescendant) continue;
     edges.push({
       from: seed.node,

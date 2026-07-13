@@ -135,6 +135,7 @@ import {
 } from "./stores/padding";
 import { registry } from "./stores/registry";
 import {
+  MAX_SHAKE_OUTPUT,
   isCustomSpec,
   resetSpec,
   setAlgorithm,
@@ -144,8 +145,10 @@ import {
   setHash,
   setMode,
   setPadding,
+  setShakeOutputLength,
   setSpecFromDocument,
   useMode,
+  useShakeOutputLength,
   useSpec,
 } from "./stores/spec";
 import {
@@ -213,6 +216,13 @@ export const App = () => {
   const category = useCategory();
   const hash = useHash();
   const asymmetric = useAsymmetric();
+  const shakeOutputLength = useShakeOutputLength();
+
+  /** True when the active hash is a SHAKE XOF (has an editable output length). */
+  const isShake = () => hash() === "shake128" || hash() === "shake256";
+  /** Sponge rate of the active SHAKE (bytes/squeeze-block) — for the block-count
+   *  caption; 0 when not a SHAKE. */
+  const shakeRate = () => (hash() === "shake128" ? 168 : hash() === "shake256" ? 136 : 0);
 
   // True when the live spec has diverged from the canonical default for
   // the current selectors (param edits, palette inserts, deletions). Drives
@@ -1004,6 +1014,19 @@ export const App = () => {
   };
 
   /**
+   * Change the SHAKE output length (the editable XOF digest length). Like a
+   * hash-variant switch it rebuilds the spec structurally off a selector that
+   * isn't in the undo snapshot — so it goes through the same C3 boundary reset:
+   * suppress the rebuild's capture and clear the now-stale undo history. The
+   * store clamps to [1, MAX_SHAKE_OUTPUT]; a no-op change (same length) still
+   * costs only the clamp + a reference-equal setSpecs, so we don't guard it.
+   */
+  const changeShakeOutputLength = (next: number): void => {
+    if (!Number.isFinite(next)) return; // ignore an empty / non-numeric field
+    withBoundaryReset(() => setShakeOutputLength(next));
+  };
+
+  /**
    * Flip the algorithm category (Slice 2.10c, 2026-05-25). Distinct from
    * `changeCipher` / `changeHash` because it crosses families — the smart-
    * swap compares the current key/plaintext against the OLD family's
@@ -1337,6 +1360,32 @@ export const App = () => {
               </For>
             </select>
           </label>
+          {/* SHAKE is a variable-length XOF: expose an editable output length so
+              the user can watch squeeze blocks appear / disappear. Structural
+              rebuild on commit (onChange = blur/Enter/spinner, NOT per-keystroke
+              — a rebuild is ~hundreds of leaves). Bounded by MAX_SHAKE_OUTPUT
+              for trace legibility; the block-count caption makes the squeeze
+              loop's growth explicit. */}
+          <Show when={isShake()}>
+            <label class="shake-output-length" title="XOF output length in bytes">
+              output bytes
+              <input
+                type="number"
+                min={1}
+                max={MAX_SHAKE_OUTPUT}
+                step={1}
+                value={shakeOutputLength()}
+                onChange={(e) => changeShakeOutputLength(e.currentTarget.valueAsNumber)}
+              />
+            </label>
+            <span class="shake-block-caption">
+              {(() => {
+                const rate = shakeRate();
+                const blocks = rate > 0 ? Math.ceil(shakeOutputLength() / rate) : 0;
+                return `${blocks} squeeze block${blocks === 1 ? "" : "s"} · rate ${rate} · max ${MAX_SHAKE_OUTPUT}`;
+              })()}
+            </span>
+          </Show>
         </Show>
         {/* Public-key (asymmetric) dropdown — shown only when
             category=asymmetric. RSA today. Mirrors the cipher dropdown's

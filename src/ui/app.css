@@ -197,6 +197,24 @@ h1 {
   margin: 0;
 }
 
+/* SHAKE variable-length XOF output control (shown only for SHAKE128/256).
+   The number input is kept narrow — a 1..512 value never needs more — so it
+   doesn't stretch the settings row. */
+.inputs label.shake-output-length input {
+  width: 6ch;
+}
+
+/* Block-count caption under the SHAKE output-length control — full-width so it
+   drops to its own line (like `.selector-caption`) rather than squeezing the
+   flex row, and low-weight so it reads as a live status hint, not a control. */
+.inputs .shake-block-caption {
+  flex: 0 0 100%;
+  margin: 0;
+  align-self: flex-start;
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .input-group-label {
   font-size: 12px;
   color: var(--muted);
