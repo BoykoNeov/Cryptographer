@@ -222,6 +222,14 @@ h1 {
   width: 16ch;
 }
 
+/* Read-only "N = KMAC" chip in the KMAC customization row — a fixed value the
+   user can't edit, styled as a muted static label rather than an input. */
+.inputs .cshake-custom.cshake-fixed {
+  align-self: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .input-group-label {
   font-size: 12px;
   color: var(--muted);

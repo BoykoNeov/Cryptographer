@@ -65,7 +65,17 @@ export type Cipher =
  * Open #N7 user pick. Slice 2.10c (2026-05-25) reaches it through the live
  * UI via the `hash` + `category` signals below.
  */
-export type Hash = "sha-256" | "sha3-256" | "shake128" | "shake256" | "cshake128" | "cshake256";
+export type Hash =
+  | "sha-256"
+  | "sha3-256"
+  | "shake128"
+  | "shake256"
+  | "cshake128"
+  | "cshake256"
+  | "kmac128"
+  | "kmac256"
+  | "kmacxof128"
+  | "kmacxof256";
 
 /**
  * Asymmetric (public-key) family — algorithms with a public/private key pair
@@ -141,7 +151,11 @@ export const isHash = (a: Algorithm): a is Hash =>
   a === "shake128" ||
   a === "shake256" ||
   a === "cshake128" ||
-  a === "cshake256";
+  a === "cshake256" ||
+  a === "kmac128" ||
+  a === "kmac256" ||
+  a === "kmacxof128" ||
+  a === "kmacxof256";
 
 /**
  * True when an algorithm is in the asymmetric (public-key) family. RSA today.
@@ -251,6 +265,10 @@ const ALL_HASHES: readonly Hash[] = [
   "shake256",
   "cshake128",
   "cshake256",
+  "kmac128",
+  "kmac256",
+  "kmacxof128",
+  "kmacxof256",
 ];
 export const HASH_OPTIONS = ALL_HASHES;
 export const HASH_LABELS: Record<Hash, string> = {
@@ -260,6 +278,10 @@ export const HASH_LABELS: Record<Hash, string> = {
   shake256: "SHAKE256",
   cshake128: "cSHAKE128",
   cshake256: "cSHAKE256",
+  kmac128: "KMAC128",
+  kmac256: "KMAC256",
+  kmacxof128: "KMACXOF128",
+  kmacxof256: "KMACXOF256",
 };
 
 /** Asymmetric dropdown options + labels. One entry today (RSA); mirrors the
@@ -333,6 +355,13 @@ export const HASH_DESCRIPTIONS: Record<Hash, string> = {
     "cSHAKE128 (SP 800-185) — customizable SHAKE128; a customization string S domain-separates the XOF. Empty S ⇒ plain SHAKE128.",
   cshake256:
     "cSHAKE256 (SP 800-185) — customizable SHAKE256; a customization string S domain-separates the XOF. Empty S ⇒ plain SHAKE256.",
+  kmac128:
+    "KMAC128 (SP 800-185) — Keccak keyed MAC on cSHAKE128; the first keyed hash. 128-bit strength, fixed-length tag.",
+  kmac256:
+    "KMAC256 (SP 800-185) — Keccak keyed MAC on cSHAKE256; 256-bit strength, fixed-length tag.",
+  kmacxof128:
+    "KMACXOF128 (SP 800-185) — the XOF variant of KMAC128; arbitrary-length tag (appends right_encode(0)).",
+  kmacxof256: "KMACXOF256 (SP 800-185) — the XOF variant of KMAC256; arbitrary-length tag.",
 };
 
 /** Per-asymmetric one-liner. Mirrors `ASYMMETRIC_LABELS`. */
@@ -405,6 +434,14 @@ export const HASH_HISTORY: Record<Hash, string> = {
     "The customizable SHAKE from NIST SP 800-185 (2016); adds a domain-separation string so an application can carve out its own independent instance of the XOF. The base construction under KMAC.",
   cshake256:
     "The 256-bit-strength customizable SHAKE from NIST SP 800-185 (2016); the same domain-separation idea on the higher-security sponge, and the base of KMAC256.",
+  kmac128:
+    "The Keccak keyed MAC from NIST SP 800-185 (2016); built on cSHAKE, it is the SHA-3 family's native alternative to HMAC — a keyed, length-committing tag.",
+  kmac256:
+    "The 256-bit-strength Keccak MAC from NIST SP 800-185 (2016); cSHAKE256 with a key block and an output-length commitment.",
+  kmacxof128:
+    "The extendable-output variant of KMAC128 (SP 800-185, 2016); drops the length commitment so the tag can be squeezed to any length.",
+  kmacxof256:
+    "The extendable-output variant of KMAC256 (SP 800-185, 2016); an arbitrary-length keyed output.",
 };
 
 /** Per-asymmetric historical one-liner. Mirrors `ASYMMETRIC_DESCRIPTIONS`. */
@@ -635,6 +672,12 @@ export const DEFAULT_KEY_BYTES_BY_HASH: Record<Hash, Uint8Array> = {
   shake256: new Uint8Array(0),
   cshake128: new Uint8Array(0), // cSHAKE is unkeyed (customization is spec data)
   cshake256: new Uint8Array(0),
+  // KMAC is the FIRST keyed hash. Default = the NIST SP 800-185 sample key
+  // (bytes 0x40..0x5F, 32 bytes) so the first Run reproduces a published tag.
+  kmac128: new Uint8Array(Array.from({ length: 32 }, (_, i) => 0x40 + i)),
+  kmac256: new Uint8Array(Array.from({ length: 32 }, (_, i) => 0x40 + i)),
+  kmacxof128: new Uint8Array(Array.from({ length: 32 }, (_, i) => 0x40 + i)),
+  kmacxof256: new Uint8Array(Array.from({ length: 32 }, (_, i) => 0x40 + i)),
 };
 
 /**
@@ -654,6 +697,11 @@ export const DEFAULT_PT_BYTES_BY_HASH: Record<Hash, Uint8Array> = {
   // S = "Email Signature" and output 32, the first Run reproduces Sample #1).
   cshake128: new Uint8Array([0x00, 0x01, 0x02, 0x03]),
   cshake256: new Uint8Array([0x00, 0x01, 0x02, 0x03]),
+  // 00 01 02 03 — the NIST SP 800-185 KMAC sample message.
+  kmac128: new Uint8Array([0x00, 0x01, 0x02, 0x03]),
+  kmac256: new Uint8Array([0x00, 0x01, 0x02, 0x03]),
+  kmacxof128: new Uint8Array([0x00, 0x01, 0x02, 0x03]),
+  kmacxof256: new Uint8Array([0x00, 0x01, 0x02, 0x03]),
 };
 
 // ─── Asymmetric defaults ───────────────────────────────────────────────────

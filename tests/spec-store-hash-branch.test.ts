@@ -37,6 +37,7 @@
  */
 
 import { buildCshakeSpec } from "@/ciphers/cshake";
+import { buildKmacSpec } from "@/ciphers/kmac";
 import { buildSha256Spec } from "@/ciphers/sha-256";
 import { buildShakeSpec } from "@/ciphers/shake";
 import {
@@ -58,10 +59,12 @@ import {
   resetSpec,
   setCshakeCustomization,
   setHash,
+  setKmacCustomization,
   setShakeOutputLength,
   setSpecFromDocument,
   useCshakeN,
   useCshakeS,
+  useKmacS,
   useShakeOutputLength,
   useSpec,
   useSpecsByMode,
@@ -276,6 +279,21 @@ describe("spec store — hash branch (Slice 2.10b)", () => {
       expect(useCshakeS()()).toBe("My Customization");
       expect(useCshakeN()()).toBe("");
       expect(useShakeOutputLength()()).toBe(48);
+      expect(isCustomSpec()).toBe(false);
+    });
+
+    it("loading a KMAC doc syncs the customization string S (reads as not custom)", () => {
+      // KMAC's key travels via session/aux, not the spec — but S is spec data
+      // (a cust.S constant-load), so applyDocument must recover it.
+      const utf8 = new TextEncoder();
+      setKmacCustomization("stale");
+      setSpecFromDocument({
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        spec: buildKmacSpec("kmac128", utf8.encode("My Tagged Application"), 32),
+        algorithm: "kmac128",
+      });
+      expect(useKmacS()()).toBe("My Tagged Application");
+      expect(useShakeOutputLength()()).toBe(32);
       expect(isCustomSpec()).toBe(false);
     });
 

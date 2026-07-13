@@ -37,6 +37,7 @@ import { blowfishDecryptSpec } from "@/ciphers/blowfish-decrypt";
 import { buildCshakeSpec, readCshakeCustomization } from "@/ciphers/cshake";
 import { desSpec } from "@/ciphers/des";
 import { desDecryptSpec } from "@/ciphers/des-decrypt";
+import { type KmacVariant, buildKmacSpec, readKmacCustomization } from "@/ciphers/kmac";
 import { rsaDecryptSpec, rsaEncryptSpec } from "@/ciphers/rsa";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { serpent128DecryptSpec } from "@/ciphers/serpent-128-decrypt";
@@ -225,8 +226,25 @@ const [cshakeS, setCshakeSSignal] = createSignal(DEFAULT_CSHAKE_S);
 export const useCshakeN = (): (() => string) => cshakeN;
 export const useCshakeS = (): (() => string) => cshakeS;
 
+/** Default KMAC customization: empty S (the NIST sample #1 case). Only S is the
+ *  user's — KMAC's function name N is the fixed "KMAC". */
+export const DEFAULT_KMAC_S = "";
+const [kmacS, setKmacSSignal] = createSignal(DEFAULT_KMAC_S);
+/** Accessor for the current KMAC customization string (the UI reads this). */
+export const useKmacS = (): (() => string) => kmacS;
+
 const hashDefaults: Record<
-  Exclude<Hash, "shake128" | "shake256" | "cshake128" | "cshake256">,
+  Exclude<
+    Hash,
+    | "shake128"
+    | "shake256"
+    | "cshake128"
+    | "cshake256"
+    | "kmac128"
+    | "kmac256"
+    | "kmacxof128"
+    | "kmacxof256"
+  >,
   CipherSpec
 > = {
   "sha-256": buildSha256Spec(),
@@ -258,13 +276,23 @@ const resolveHashDefault = (hash: Hash): CipherSpec => {
       shakeOutputLength(),
     );
   }
+  if (isKmacHash(hash)) {
+    return buildKmacSpec(hash, new TextEncoder().encode(kmacS()), shakeOutputLength());
+  }
   return hashDefaults[hash];
 };
 
-/** True when a `Hash` is an extendable-output function (SHAKE or cSHAKE) — the
- *  variants that read the shared `shakeOutputLength` signal. */
+/** True when a `Hash` is a KMAC variant (keyed; editable S; output length is the
+ *  committed tag length — or arbitrary for the XOF variants). Type predicate so
+ *  `resolveHashDefault` can narrow the hash to `KmacVariant`. */
+export const isKmacHash = (h: Hash): h is KmacVariant =>
+  h === "kmac128" || h === "kmac256" || h === "kmacxof128" || h === "kmacxof256";
+
+/** True when a `Hash`'s output length is editable via the shared
+ *  `shakeOutputLength` signal — every XOF-length variant (SHAKE, cSHAKE, and
+ *  KMAC, whose output length is the committed tag length). */
 export const isXofHash = (h: Hash): boolean =>
-  h === "shake128" || h === "shake256" || h === "cshake128" || h === "cshake256";
+  h === "shake128" || h === "shake256" || h === "cshake128" || h === "cshake256" || isKmacHash(h);
 
 /** True when a `Hash` is a cSHAKE variant (has editable customization strings). */
 export const isCshakeHash = (h: Hash): boolean => h === "cshake128" || h === "cshake256";
@@ -621,6 +649,19 @@ export const setCshakeCustomization = (which: "N" | "S", value: string): void =>
   else setCshakeSSignal(value);
   const active = useHash()();
   if (isCshakeHash(active)) {
+    setSpecs(buildCanonicalHash(active));
+  }
+};
+
+/**
+ * Set the KMAC customization string `S` and, when a KMAC is the active hash,
+ * rebuild the spec. Structural rebuild (same rationale as cSHAKE). No-op for
+ * non-KMAC hashes. KMAC's function name `N` is the fixed "KMAC" — not editable.
+ */
+export const setKmacCustomization = (value: string): void => {
+  setKmacSSignal(value);
+  const active = useHash()();
+  if (isKmacHash(active)) {
     setSpecs(buildCanonicalHash(active));
   }
 };
@@ -1424,6 +1465,11 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
       const dec = new TextDecoder();
       setCshakeNSignal(dec.decode(N));
       setCshakeSSignal(dec.decode(S));
+    }
+    // KMAC: recover the customization string S (the key travels via session/aux,
+    // not the spec; N is the fixed "KMAC").
+    if (isKmacHash(doc.algorithm)) {
+      setKmacSSignal(new TextDecoder().decode(readKmacCustomization(doc.spec)));
     }
     setSpecs({ kind: "hash", hash: doc.algorithm, single: doc.spec });
     return;

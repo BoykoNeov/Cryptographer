@@ -144,12 +144,14 @@ import {
   setCipherMode,
   setCshakeCustomization,
   setHash,
+  setKmacCustomization,
   setMode,
   setPadding,
   setShakeOutputLength,
   setSpecFromDocument,
   useCshakeN,
   useCshakeS,
+  useKmacS,
   useMode,
   useShakeOutputLength,
   useSpec,
@@ -222,20 +224,37 @@ export const App = () => {
   const shakeOutputLength = useShakeOutputLength();
   const cshakeN = useCshakeN();
   const cshakeS = useCshakeS();
+  const kmacS = useKmacS();
 
-  /** True when the active hash is a cSHAKE (editable customization strings). */
+  /** True when the active hash is a cSHAKE (editable N + S customization). */
   const isCshake = () => hash() === "cshake128" || hash() === "cshake256";
-  /** True when the active hash is any XOF (SHAKE or cSHAKE) — has an editable
-   *  output length. */
-  const isXof = () => hash() === "shake128" || hash() === "shake256" || isCshake();
+  /** True when the active hash is a KMAC variant (keyed; editable S; N fixed). */
+  const isKmac = () =>
+    hash() === "kmac128" ||
+    hash() === "kmac256" ||
+    hash() === "kmacxof128" ||
+    hash() === "kmacxof256";
+  /** True when the active hash is any XOF-length variant (SHAKE / cSHAKE / KMAC)
+   *  — has an editable output length. */
+  const isXof = () => hash() === "shake128" || hash() === "shake256" || isCshake() || isKmac();
   /** Sponge rate of the active XOF (bytes/squeeze-block) — for the block-count
    *  caption; 0 when not an XOF. 128-strength = 168, 256-strength = 136. */
   const shakeRate = () =>
-    hash() === "shake128" || hash() === "cshake128"
+    hash() === "shake128" ||
+    hash() === "cshake128" ||
+    hash() === "kmac128" ||
+    hash() === "kmacxof128"
       ? 168
-      : hash() === "shake256" || hash() === "cshake256"
+      : hash() === "shake256" ||
+          hash() === "cshake256" ||
+          hash() === "kmac256" ||
+          hash() === "kmacxof256"
         ? 136
         : 0;
+  /** True when the live spec consumes a key (byteLength > 0) — the honest test
+   *  for showing the key field. Every cipher is keyed; hashes are keyless except
+   *  KMAC (the first keyed hash); RSA/asymmetric declare byteLength 0. */
+  const activeSpecConsumesKey = () => spec().inputs.key.byteLength > 0;
 
   // True when the live spec has diverged from the canonical default for
   // the current selectors (param edits, palette inserts, deletions). Drives
@@ -1048,6 +1067,12 @@ export const App = () => {
     withBoundaryReset(() => setCshakeCustomization(which, value));
   };
 
+  /** Change the KMAC customization string S (structural rebuild; same C3
+   *  boundary reset as the cSHAKE / output-length controls). */
+  const changeKmacCustomization = (value: string): void => {
+    withBoundaryReset(() => setKmacCustomization(value));
+  };
+
   /**
    * Flip the algorithm category (Slice 2.10c, 2026-05-25). Distinct from
    * `changeCipher` / `changeHash` because it crosses families — the smart-
@@ -1445,6 +1470,27 @@ export const App = () => {
               </span>
             </Show>
           </Show>
+          {/* KMAC customization: only S is the user's — the function name N is
+              the fixed ASCII "KMAC" (shown read-only). The key is entered in the
+              key field above (KMAC is the first keyed hash). Editing S is a
+              structural rebuild, like cSHAKE. */}
+          <Show when={isKmac()}>
+            <span class="cshake-custom cshake-fixed" title="KMAC's function name N is fixed">
+              N = "KMAC"
+            </span>
+            <label
+              class="cshake-custom"
+              title="KMAC customization string S — optional domain separation"
+            >
+              S (custom)
+              <input
+                type="text"
+                value={kmacS()}
+                placeholder="(empty)"
+                onChange={(e) => changeKmacCustomization(e.currentTarget.value)}
+              />
+            </label>
+          </Show>
         </Show>
         {/* Public-key (asymmetric) dropdown — shown only when
             category=asymmetric. RSA today. Mirrors the cipher dropdown's
@@ -1623,13 +1669,13 @@ export const App = () => {
             spellcheck={false}
           />
         </label>
-        {/* Slice 2.10c (2026-05-25) — key field hidden for hash category.
-            SHA-256 (and hashes in general) consume no key; the SHA-256
-            spec declares `inputs.key.byteLength: 0`, so the value would
-            be parsed as an empty Uint8Array regardless of what's in the
-            field — but showing a "key" label invites the user to type
-            into it. Hiding the field keeps the UI honest. */}
-        <Show when={isCipher(algorithm())}>
+        {/* Key field shown whenever the live spec CONSUMES a key
+            (`inputs.key.byteLength > 0`) — the honest test. Every cipher is
+            keyed; most hashes are keyless (SHA-256 declares byteLength 0, so a
+            key label would just invite dead typing) — but KMAC (SP 800-185) is
+            the first KEYED hash, so the field lights up for it. RSA/asymmetric
+            declare byteLength 0 and stay hidden. */}
+        <Show when={activeSpecConsumesKey()}>
           <label class="data-field">
             key ({fmt()})
             <input
