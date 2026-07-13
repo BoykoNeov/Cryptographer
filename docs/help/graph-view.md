@@ -220,17 +220,31 @@ and click any element on the canvas to populate it:
   feedback IV, etc.
 - **A leaf step** shows that step's primary value at the current
   scrubber position. Clicking a leaf also scrubs the trace to that
-  step (the two behaviors are additive). Two extra expanders open below
-  the value row:
+  step (the two behaviors are additive). Up to three expanders open
+  below the value row:
   - **all port values** — every input and output port of the leaf, one
     labelled byte-row each (the operands going in, the result coming
     out, plus any aux inputs like a round key or S-box table). This is
     the honest "all incoming values" view — a fan-in step like `xor` or
     `concat` reads several operands, and they're all listed here.
-  - **what this step does** — the per-step, value-aware narration (the
-    same prose the linear view shows): what the operation is and what it
-    did to *these* bytes. Only appears for steps that have a narrator;
-    for a plain primitive the "all port values" strip is the full story.
+    Hovering an output cell here still lights up the input cell(s) that
+    feed it.
+  - **where each byte comes from** — the always-on version of that hover:
+    the whole input→output map at once, so you don't have to point at
+    every byte. A uniform map collapses to one line (`xor`: "each output
+    byte comes from the same-position input byte on operand0, operand1";
+    a slice: "output[i] ← input[i + 8]"); a map where the wiring *is* the
+    lesson enumerates one row per output byte — `permute` (ShiftRows'
+    gather), `concat`/`split-bytes` (the offset boundaries), and
+    MixColumns (each output byte's four same-column contributors with
+    their GF(2⁸) `×2`/`×3` coefficients). Only appears for the steps with
+    an exact byte-to-byte mapping; an approximate step (a bit-rotate, a
+    big-integer add) shows nothing here rather than a misleading one.
+  - **what this step does** — the operation's description. A step with a
+    per-byte narrator shows the value-aware prose (what it did to *these*
+    bytes, the same as the linear view); every other leaf falls back to
+    the registry's "what this operation is" summary + detail, so every
+    step carries *some* description.
 - **A key-schedule group** (the collapsed "Key Schedule" / "Key
   Expansion" box, or one of its round-key chips) has no single output
   value — it fans out *all* the round keys at once. The row says so

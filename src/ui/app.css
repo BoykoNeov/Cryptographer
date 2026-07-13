@@ -3601,6 +3601,68 @@ button:disabled {
   overflow-y: auto;
 }
 
+/* ─── Always-on cell provenance (Tier B, leaf inspector) ──────────────────
+   The static "where each byte comes from" map. Collapsed uniform maps render
+   one summary sentence; a per-cell map renders one row per output byte. */
+.cell-provenance-view {
+  font-size: 0.82em;
+}
+
+.cell-provenance-summary-line {
+  margin: 2px 0;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.cell-provenance-view code {
+  font-size: 0.95em;
+  padding: 0 2px;
+  border-radius: 2px;
+  background: var(--bg-elev-2);
+}
+
+.cell-provenance-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cell-provenance-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px;
+  line-height: 1.5;
+}
+
+.cell-provenance-out {
+  color: var(--accent);
+}
+
+.cell-provenance-src {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+}
+
+/* GF(2⁸) coefficient badge (MixColumns `×2` / `×3`) on a per-cell contributor. */
+.cell-provenance-coeff {
+  font-size: 0.85em;
+  padding: 0 3px;
+  border-radius: 6px;
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border: 1px solid var(--accent);
+}
+
+/* The muted source byte VALUE suffix — context next to the index payload. */
+.cell-provenance-val {
+  font-variant-numeric: tabular-nums;
+}
+
 .graph-view-svg {
   display: block;
   font-family: inherit;

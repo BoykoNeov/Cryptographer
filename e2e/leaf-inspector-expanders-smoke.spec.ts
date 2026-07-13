@@ -16,7 +16,19 @@
  * `npm run check`.
  */
 
-import { expect, test } from "@playwright/test";
+import { type Locator, expect, test } from "@playwright/test";
+
+/**
+ * Open the `<details>` wrapping a summary, but only if it's closed. The graph
+ * inspector's expanders are native `<details>` under a stable `<Show>`, so their
+ * open state PERSISTS across leaf selections — a blind second `.click()` on an
+ * already-open one would toggle it shut.
+ */
+const ensureOpen = async (summary: Locator): Promise<void> => {
+  const details = summary.locator("xpath=ancestor::details[1]");
+  const open = await details.evaluate((d) => (d as HTMLDetailsElement).open);
+  if (!open) await summary.click();
+};
 
 test.describe("graph value-inspector leaf expanders", () => {
   test("selecting a DES round leaf shows 'all port values' + 'what this step does'", async ({
@@ -74,6 +86,83 @@ test.describe("graph value-inspector leaf expanders", () => {
 
     await page.screenshot({
       path: "M:/claud_projects/temp/leaf-inspector-expanders-smoke.png",
+    });
+
+    expect(errors).toEqual([]);
+  });
+
+  test("un-narrated leaf shows Tier B provenance + a TYPE-prose fallback; a same-index leaf collapses", async ({
+    page,
+  }) => {
+    // Tier A + Tier B (2026-07-13). `split-bytes@1` has NO value narrator but
+    // DOES have an exact provenance fn: the "where each byte comes from" expander
+    // enumerates its per-cell offsets, and "what this step does" falls back to
+    // the registry TYPE-prose (StepDescription) rather than being hidden. Then a
+    // same-index leaf (`fxor` = `xor@1`) collapses Tier B to one summary line.
+    const errors: string[] = [];
+    page.on("console", (m) => {
+      if (m.type() === "error") errors.push(m.text());
+    });
+
+    await page.goto("/");
+    await page.evaluate(() => window.localStorage.clear());
+    await page.reload();
+
+    const cipherSelect = page.locator("select", {
+      has: page.locator('option[value="des"]'),
+    });
+    await cipherSelect.selectOption("des");
+    await page.getByRole("tab", { name: "graph", exact: true }).click();
+    await page.locator('[data-testid="value-inspector-panel-toggle"]').click();
+
+    const body = page.locator('[data-testid="value-inspector-body"]');
+
+    // ── The split leaf: per-cell provenance + type-prose fallback ──────────
+    const splitLeaf = page.locator("g.graph-leaf", {
+      has: page.locator("title", { hasText: "round.1.split" }),
+    });
+    await expect(splitLeaf).toBeVisible();
+    await splitLeaf.click();
+
+    const provenance = body.locator(".graph-value-inspector-expander-summary", {
+      hasText: "where each byte comes from",
+    });
+    await expect(provenance).toBeVisible();
+    await ensureOpen(provenance);
+    // split-bytes is multi-output → per-cell enumeration (rows, not a one-liner).
+    await expect(body.locator(".cell-provenance-view .cell-provenance-row").first()).toBeVisible();
+
+    const whatItDoes = body.locator(".graph-value-inspector-expander-summary", {
+      hasText: "what this step does",
+    });
+    await expect(whatItDoes).toBeVisible();
+    await ensureOpen(whatItDoes);
+    // No narrator → the registry type-prose (StepDescription), not StepNarration.
+    await expect(body.locator(".step-description")).toBeVisible();
+    await expect(body.locator(".step-narration")).toHaveCount(0);
+
+    await page.screenshot({
+      path: "M:/claud_projects/temp/leaf-inspector-tier-ab-per-cell.png",
+    });
+
+    // ── The fxor leaf: same-index → collapsed one-liner ───────────────────
+    const fxorLeaf = page.locator("g.graph-leaf", {
+      has: page.locator("title", { hasText: "round.1.fxor" }),
+    });
+    await expect(fxorLeaf).toBeVisible();
+    await fxorLeaf.click();
+
+    const fxorProvenance = body.locator(".graph-value-inspector-expander-summary", {
+      hasText: "where each byte comes from",
+    });
+    await expect(fxorProvenance).toBeVisible();
+    await ensureOpen(fxorProvenance);
+    // `xor@1` maps same-index → one summary sentence, NO per-cell rows.
+    await expect(body.locator(".cell-provenance-summary-line")).toBeVisible();
+    await expect(body.locator(".cell-provenance-row")).toHaveCount(0);
+
+    await page.screenshot({
+      path: "M:/claud_projects/temp/leaf-inspector-tier-ab-collapsed.png",
     });
 
     expect(errors).toEqual([]);

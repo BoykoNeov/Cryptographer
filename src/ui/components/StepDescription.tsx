@@ -13,41 +13,52 @@
 
 import { findStep } from "@/core/spec-mutations";
 import { canonicalStepId } from "@/core/step-id";
-import type { StepDocumentation, TraceFrame } from "@/core/types";
+import type { CipherSpec, StepDocumentation, TraceFrame } from "@/core/types";
 import { For, Show } from "solid-js";
 import { registry } from "../stores/registry";
 import { useSpec } from "../stores/spec";
 import { Markdown } from "./Markdown";
 
+/**
+ * Resolve the documentation for a frame's step (pure; shared with the graph
+ * leaf inspector's type-prose fallback so both surfaces agree):
+ *   1. If the spec's leaf for this frame carries a `narrationOverride`, use it —
+ *      the override is per-instance (multiple specs may reuse a step type but
+ *      want different prose for it).
+ *   2. Otherwise fall back to the registry's generic doc keyed by `stepType`
+ *      (the long-shipped behavior).
+ *
+ * `canonicalStepId` strips `:b{i}` / `:t{name}` / `:rejoin` / `:swap` runtime
+ * suffixes so frames emitted inside `iterate` / `feistel-round` still resolve to
+ * their spec-leaf id. `findStep` returns `null` for group ids (e.g. a `:rejoin`
+ * frame whose canonical id resolves to a `feistel-round`, not a leaf); the
+ * registry fallback then keeps the panel populated for those.
+ */
+export const resolveStepDoc = (
+  spec: CipherSpec,
+  frame: TraceFrame | null,
+): StepDocumentation | undefined => {
+  if (!frame) return undefined;
+  const leaf = findStep(spec, canonicalStepId(frame.stepId));
+  if (leaf?.narrationOverride) return leaf.narrationOverride;
+  return registry.getDoc(frame.stepType);
+};
+
 type Props = {
   /** The frame whose step docs we should display. */
   frame: TraceFrame | null;
+  /**
+   * Compact mode (graph leaf inspector): render only the name + summary +
+   * detail; drop the Parameters and References sections. The graph inspector
+   * has the `ParamEditor` reachable separately and is a narrow panel, so the
+   * full doc's extra sections would crowd it.
+   */
+  compact?: boolean;
 };
 
 export const StepDescription = (props: Props) => {
   const spec = useSpec();
-  /**
-   * Slice 1.10 lookup order:
-   *   1. If the spec's leaf for this frame carries a `narrationOverride`,
-   *      use it. The override is per-instance; multiple specs may reuse
-   *      the same step type but want different prose for it.
-   *   2. Otherwise fall back to the registry's generic doc keyed by
-   *      `stepType` (the long-shipped behavior).
-   *
-   * `canonicalStepId` strips `:b{i}` / `:t{name}` / `:rejoin` / `:swap`
-   * runtime suffixes so frames emitted inside `iterate` or `feistel-round`
-   * still resolve to their spec-leaf id. `findStep` returns `null` for
-   * group ids (e.g. a `:rejoin` frame whose canonical id resolves to a
-   * `feistel-round`, not a leaf); the registry fallback then keeps the
-   * panel populated for those.
-   */
-  const doc = (): StepDocumentation | undefined => {
-    const f = props.frame;
-    if (!f) return undefined;
-    const leaf = findStep(spec(), canonicalStepId(f.stepId));
-    if (leaf?.narrationOverride) return leaf.narrationOverride;
-    return registry.getDoc(f.stepType);
-  };
+  const doc = (): StepDocumentation | undefined => resolveStepDoc(spec(), props.frame);
 
   return (
     <div class="step-description">
@@ -78,8 +89,9 @@ export const StepDescription = (props: Props) => {
 
             {/* Param explanations — only shown when the step type
                 actually documented its params. Useful for the user as
-                they look at the ParamEditor below. */}
-            <Show when={hasParams(getDoc())}>
+                they look at the ParamEditor below. Suppressed in compact
+                mode (the graph leaf inspector). */}
+            <Show when={!props.compact && hasParams(getDoc())}>
               <section class="step-description-params">
                 <h3>Parameters</h3>
                 <dl>
@@ -97,7 +109,7 @@ export const StepDescription = (props: Props) => {
               </section>
             </Show>
 
-            <Show when={(getDoc().references?.length ?? 0) > 0}>
+            <Show when={!props.compact && (getDoc().references?.length ?? 0) > 0}>
               <section class="step-description-refs">
                 <h3>References</h3>
                 <ul>

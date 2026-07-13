@@ -35,6 +35,10 @@
  * starts no drag). Above threshold, the click handler is suppressed.
  */
 
+import {
+  type CellProvenanceSummary,
+  summarizeCellProvenance,
+} from "@/core/cell-provenance-summary";
 import { curatedDefaultFor, mergeLayoutSpecs, scaleCuratedLayout } from "@/core/default-layouts";
 import {
   type EdgeValueLookup,
@@ -201,8 +205,10 @@ import {
   useViewZoom,
 } from "../stores/view-zoom";
 import { disarmPort, toggleArmPort, useArmedPort } from "../stores/wiring";
+import { CellProvenanceView } from "./CellProvenanceView";
 import { GraphHelpModal } from "./GraphHelpModal";
 import { PortFlowView } from "./PortFlowView";
+import { StepDescription, resolveStepDoc } from "./StepDescription";
 import { StepNarration } from "./StepNarration";
 import {
   COMPOSITE_DRAG_MIME,
@@ -9273,12 +9279,37 @@ const ValueInspectorBody = (props: {
     return resolveNodeFrame(t.id, props.spec(), trace, currentBlockIndex);
   });
 
-  // Whether the selected leaf's step type has a value-prose narrator — gates the
-  // "what this step does" expander so we never show an empty disclosure for a
-  // leaf with no registered narration.
+  // Whether the selected leaf's step type has a value-prose narrator. Drives the
+  // BRANCH inside the "what this step does" expander: a narrated leaf shows the
+  // per-byte `StepNarration`; an un-narrated leaf falls back to the registry's
+  // type-prose (what the operation IS) via `StepDescription`.
   const nodeHasNarration = createMemo<boolean>(() => {
     const f = nodeFrame();
     return f !== null && hasNarrationFn(f.stepType);
+  });
+
+  // The registry doc (or per-instance `narrationOverride`) for the selected
+  // leaf — the type-prose fallback source. Every shipped step registers a doc,
+  // so this is defined for real leaves; the guard below stays belt-and-suspenders.
+  const nodeOpDoc = createMemo(() => {
+    void props.version();
+    const f = nodeFrame();
+    return f !== null ? resolveStepDoc(props.spec(), f) : undefined;
+  });
+
+  // Whether to render the "what this step does" expander at all: true when there
+  // is EITHER a value-prose narrator OR a resolvable operation description. This
+  // closes the old gap where an un-narrated leaf (AES port-native round steps,
+  // plumbing primitives) showed no description whatsoever.
+  const nodeHasOpProse = createMemo<boolean>(() => nodeHasNarration() || nodeOpDoc() !== undefined);
+
+  // The always-on cell-provenance map for the selected leaf (Tier B). `"none"`
+  // for leaves whose step type has no exact provenance fn (approximate /
+  // plumbing / no-input primitives) — the expander then stays hidden.
+  const nodeProvenance = createMemo<CellProvenanceSummary>(() => {
+    void props.version();
+    const f = nodeFrame();
+    return f !== null ? summarizeCellProvenance(f) : { kind: "none" };
   });
 
   // Identity-row branching: edges show `from → to`; nodes show just
@@ -9420,15 +9451,38 @@ const ValueInspectorBody = (props: {
                         <PortFlowView frame={f()} />
                       </div>
                     </details>
-                    {/* Guarded on a registered narrator so we never show an
-                        empty "what this step does" disclosure. */}
-                    <Show when={nodeHasNarration()}>
+                    {/* Tier B — the always-on cell input→output map. Shown only
+                        when the step type has an exact provenance fn (the
+                        approximate / plumbing / no-input primitives resolve to
+                        `"none"` and stay hidden — the "missing never wrong"
+                        stance the hover already holds). */}
+                    <Show when={nodeProvenance().kind !== "none"}>
+                      <details class="graph-value-inspector-expander">
+                        <summary class="graph-value-inspector-expander-summary">
+                          where each byte comes from
+                        </summary>
+                        <div class="graph-value-inspector-expander-body">
+                          <CellProvenanceView frame={f()} summary={nodeProvenance()} />
+                        </div>
+                      </details>
+                    </Show>
+                    {/* Tier A — "what this step does". A narrated leaf shows the
+                        per-byte value-prose; an un-narrated leaf falls back to
+                        the registry's type-prose (what the operation IS) so every
+                        leaf carries a description. Guarded on `nodeHasOpProse`
+                        (belt-and-suspenders: every shipped step registers a doc). */}
+                    <Show when={nodeHasOpProse()}>
                       <details class="graph-value-inspector-expander">
                         <summary class="graph-value-inspector-expander-summary">
                           what this step does
                         </summary>
                         <div class="graph-value-inspector-expander-body">
-                          <StepNarration frame={f()} />
+                          <Show
+                            when={nodeHasNarration()}
+                            fallback={<StepDescription frame={f()} compact />}
+                          >
+                            <StepNarration frame={f()} />
+                          </Show>
                         </div>
                       </details>
                     </Show>

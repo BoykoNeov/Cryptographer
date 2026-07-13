@@ -3,22 +3,29 @@
 /**
  * Component test for the LEAF-inspector expanders in the graph value inspector.
  *
- * When a LEAF node is selected, the inspector renders two collapsible
+ * When a LEAF node is selected, the inspector renders up to three collapsible
  * disclosures below the single value row (the linear view's per-step surfaces,
  * brought into the graph inspector):
  *
  *   1. "all port values" → `<PortFlowView>` (every input/output port of the
  *      selected leaf's frame — verified via `.port-flow-view` + `.port-row`).
- *   2. "what this step does" → `<StepNarration>`, GUARDED on a registered
- *      narrator so leaves without one show no empty disclosure.
+ *   2. "where each byte comes from" (Tier B) → `<CellProvenanceView>`, GUARDED
+ *      on a registered provenance fn (`.cell-provenance-view`).
+ *   3. "what this step does" (Tier A) → `<StepNarration>` for a narrated leaf,
+ *      else a type-prose fallback (`<StepDescription compact>`). Every leaf with
+ *      a registered doc gets SOME description now.
  *
- * DES is the fixture because it exercises BOTH guard branches with two leaves
- * inside the same visible round:
- *   - `round.1.s-boxes` (`des.s-boxes@1`) HAS a narrator → both expanders.
- *   - `round.1.split` (`split-bytes@1`) has NO narrator → port values only.
+ * DES is the fixture because it exercises the branches with leaves inside one
+ * visible round:
+ *   - `round.1.s-boxes` (`des.s-boxes@1`) HAS a narrator, NO provenance fn →
+ *     port values + narration (no Tier B).
+ *   - `round.1.split` (`split-bytes@1`) has NO narrator but HAS a provenance fn →
+ *     port values + per-cell provenance + type-prose fallback.
+ *   - `round.1.xor` (`xor@1`) has a same-index provenance fn → Tier B collapses
+ *     to a single summary line.
  *
  * And it pins the negative case: endpoint pills resolve to no leaf frame
- * (`resolveNodeFrame` returns null), so neither expander renders for them.
+ * (`resolveNodeFrame` returns null), so NO expander renders for them.
  *
  * The pure frame-resolution (`resolveNodeFrame`) is unit-tested in
  * `node-value-lookup.test.ts`; this file pins only the UI wiring + the
@@ -115,7 +122,7 @@ describe("GraphView — leaf-inspector expanders", () => {
     resetAll();
   });
 
-  it("renders BOTH expanders for a leaf with a registered narrator (des.s-boxes)", () => {
+  it("narrated leaf (des.s-boxes): port values + VALUE-prose narration, no Tier B", () => {
     seedDes();
     const { container } = render(() => <GraphView />);
     const leaf = findLeafByStepId(container as HTMLElement, "round.1.s-boxes");
@@ -127,26 +134,55 @@ describe("GraphView — leaf-inspector expanders", () => {
     const summaries = expanderSummaries(container as HTMLElement);
     expect(summaries).toContain("all port values");
     expect(summaries).toContain("what this step does");
+    // `des.s-boxes@1` has no exact provenance fn (bit-level) → no Tier B expander.
+    expect(summaries).not.toContain("where each byte comes from");
     // The port-values expander actually mounts PortFlowView with port rows.
     expect(body?.querySelector(".port-flow-view")).not.toBeNull();
     expect(body?.querySelector(".port-row")).not.toBeNull();
+    // "what this step does" shows the VALUE-prose narrator (not the type-prose
+    // fallback): StepNarration renders `.step-narration`, StepDescription would
+    // render `.step-description`.
+    expect(body?.querySelector(".step-narration")).not.toBeNull();
+    expect(body?.querySelector(".step-description")).toBeNull();
   });
 
-  it("renders ONLY the port-values expander for a leaf with no narrator (split-bytes)", () => {
+  it("un-narrated leaf (split-bytes): port values + per-cell Tier B + TYPE-prose fallback", () => {
     seedDes();
     const { container } = render(() => <GraphView />);
     const leaf = findLeafByStepId(container as HTMLElement, "round.1.split");
     expect(leaf).not.toBeNull();
     clickLeaf(leaf as SVGGElement);
 
+    const body = container.querySelector('[data-testid="value-inspector-body"]');
     const summaries = expanderSummaries(container as HTMLElement);
     expect(summaries).toContain("all port values");
-    // `split-bytes@1` has no registered narrator → the guard hides the second
-    // disclosure rather than showing an empty "what this step does" box.
-    expect(summaries).not.toContain("what this step does");
-    // PortFlowView still renders — a split leaf has an input + two output ports.
-    const body = container.querySelector('[data-testid="value-inspector-body"]');
+    // Tier B: split-bytes@1 HAS a provenance fn → the always-on map appears,
+    // and (multi-output) enumerates per-cell rows.
+    expect(summaries).toContain("where each byte comes from");
+    expect(body?.querySelector(".cell-provenance-view")).not.toBeNull();
+    expect(body?.querySelector(".cell-provenance-row")).not.toBeNull();
+    // Tier A: `split-bytes@1` has NO narrator, so "what this step does" now
+    // falls back to the registry TYPE-prose (StepDescription) rather than being
+    // hidden — every leaf gets a description.
+    expect(summaries).toContain("what this step does");
+    expect(body?.querySelector(".step-description")).not.toBeNull();
+    expect(body?.querySelector(".step-narration")).toBeNull();
     expect(body?.querySelector(".port-flow-view")).not.toBeNull();
+  });
+
+  it("same-index leaf (round fxor): Tier B collapses to a single summary line", () => {
+    seedDes();
+    const { container } = render(() => <GraphView />);
+    // The DES round's `xor@1` (L ⊕ f(R,K)) is the `fxor` leaf.
+    const leaf = findLeafByStepId(container as HTMLElement, "round.1.fxor");
+    expect(leaf).not.toBeNull();
+    clickLeaf(leaf as SVGGElement);
+
+    const body = container.querySelector('[data-testid="value-inspector-body"]');
+    expect(expanderSummaries(container as HTMLElement)).toContain("where each byte comes from");
+    // `xor@1` is same-index → collapsed one-liner, NOT a per-cell enumeration.
+    expect(body?.querySelector(".cell-provenance-summary-line")).not.toBeNull();
+    expect(body?.querySelector(".cell-provenance-row")).toBeNull();
   });
 
   it("renders NO expanders for an endpoint pill (no leaf frame to expand)", () => {
