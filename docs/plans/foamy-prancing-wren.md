@@ -298,6 +298,17 @@ dominated by seed-threading (Serpent has an explicit `TODO(multi-block)` at
 2. **Regression:** `tests/multi-block-padding-boundary.test.ts`, `spec-mutations-padding.test.ts`, `runtime-iterate*.test.ts`, `app-cbc-iv-flow.test.tsx`, `app-multi-block-roundtrip.test.tsx`, `port-sources.test.ts`.
 3. **Phase C correctness:** composed-oracle Blowfish CBC KAT (multi-block, non-16 block, chain across ≥3 blocks).
 4. **Browser smoke — required, not optional.** Per `feedback_visual_smoke_vs_property_tests`: `npm run dev`, pick Blowfish + CBC, enter >8 bytes, confirm the IV field accepts **8** bytes, padding selector enables, the graph draws per-block iterate chips, and the linear view scrubs `:b{i}` frames. Property tests cannot catch "the mode selector never appeared".
+
+   **Phase B smoke — DONE 2026-07-17** (throwaway spec, deleted after per
+   `feedback_playwright_dormant`). Real Chromium: AES-192 + CBC — the mode
+   dropdown *enables* (the `isAesCipher` → `hasBlockCipherCore` gate), the IV
+   field appears, and a Run driven entirely through the real selectors produced
+   the published §F.2.3 ciphertext; AES-256 + ECB reachable and error-free;
+   Blowfish keeps mode + padding *disabled* (the other half of the gate). 3/3.
+   **Gotcha that cost a cycle:** another project's dev server held port 5173, and
+   `reuseExistingServer: true` made Playwright drive **that app instead** —
+   3 failures reading as "element(s) not found". See
+   `feedback_playwright_port_collision`.
 5. **Gate:** `npm run check` (~130s warm; cold >3min — background it).
 
 ## Out of scope
