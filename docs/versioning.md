@@ -34,7 +34,7 @@ Pre-1.0: the API is "stable as a learning tool" but not yet "stable as a library
 4. **Commit** with title `Release vX.Y.Z` (or fold into a feature commit if the bump rides one).
 5. **Push the tag**: `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`.
 
-The tag triggers GitHub's "Releases" surface — the release page auto-populates from the changelog entry plus the tagged commit's diff.
+**The annotated tag is the whole release.** This project deliberately ships tags only — there are no GitHub Release objects, and a tag does *not* create one (GitHub lists tags and Releases separately; a Release has to be authored explicitly, via `gh release create` or the web UI). `CHANGELOG.md` is the release log; the tag is the pointer into it. Don't create a Release, and don't go looking for a release page after pushing a tag.
 
 ### What's stamped in artifacts
 
