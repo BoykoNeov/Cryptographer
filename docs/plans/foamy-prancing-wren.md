@@ -1,13 +1,16 @@
 # Cipher-agnostic block modes — `BlockCipherCore` + generic mode builders
 
-> **Status (2026-07-17): Phases A + B SHIPPED; Phase C (Blowfish) pending.**
+> **Status (2026-07-17): Phases A + B + C ALL SHIPPED. The plan is closed.**
 > Scope decided with the user: build the machine, prove it on **one 8-byte
-> cipher (Blowfish)**, and **design for CTR without building it**.
+> cipher (Blowfish)**, and **design for CTR without building it**. All three
+> delivered.
 >
-> After B the machine is block-size-generic end to end and AES-192/256 gained
-> ECB/CBC. **No shipped cipher has a non-16 block in a mode yet** — the generic
-> paths are pinned by a fake-core unit test, not by the app. Phase C is what
-> turns that into a real proof.
+> Phase C made the block-size-generic claim real: Blowfish ECB/CBC ships, and an
+> 8-byte block now drives the mode builders, the iterate, the IV, and the padding
+> overlay in the actual app rather than in a fake-core unit test. The remaining
+> four ciphers (Speck/Serpent/DES/Twofish) are cheap follow-ups templated on
+> `src/ciphers/blowfish-core.ts`; each costs its own seed-threading plus the
+> three table rows.
 
 ## Context
 
@@ -259,24 +262,76 @@ changes. But the day Blowfish gets a core it *also* gains PKCS#7 in single-block
 whether single-block padding follows core-presence or gets its own gate; a KAT
 won't catch a first-impression demo quietly changing.
 
-### Phase C — Blowfish ECB/CBC (the repeatable unit)
+> **DECIDED in Phase C (user, 2026-07-17): option 1 — it follows core-presence.**
+> See the Phase C section above for why the alternative was unwritable without
+> re-encoding "AES is special". Note the framing above overstated the change: the
+> padding default is `"none"`, so a fresh Blowfish load is unchanged; what moves
+> is that the selector becomes clickable and the persisted scheme (one global
+> preference shared across ciphers) starts applying.
 
-1. `src/ciphers/blowfish-core.ts` — thread the seed: `buildBlowfishSpec`'s
-   round-1 `$input` (`:481`) becomes a parameter; wrap `buildKeySetup` (`:494`);
-   output is `port("whiten.concat","output")` (`:470`).
-2. Register in **both** tables (`SUPPORTED_CIPHER_MODES_BY_CIPHER` +
-   `defaults` in `stores/spec.ts`) — the known two-table gotcha.
-3. **Flip the canary:** `tests/cipher-mode-fallback.test.ts:33-73` actively
-   asserts `ecb`/`cbc` === `false` for every non-AES cipher, with comments
-   saying "when that lands, this test fires". Must flip in the same commit.
-4. Composed KAT: `tests/blowfish-cbc-kat.test.ts`, following
-   `tests/aes-128-cbc-kat.test.ts:1-70` (aux `Map` with `key`+`iv` → `runSpec`
-   → assert hex + `deriveAuxGraph`/`validateGraph` + per-iteration `:b{i}`
-   stepId suffixes).
+### Phase C — Blowfish ECB/CBC (the repeatable unit) — ✅ SHIPPED 2026-07-17
+
+1. ✅ `src/ciphers/blowfish-core.ts`. The seed-threading was smaller than
+   budgeted: `buildRound` already took a `seedInput`, so only round 1's `$input`
+   was hardcoded. Extracted `buildBlowfishBody(direction, seed) → {nodes, output}`
+   (rounds + whitening, minus the key setup) and exported `buildKeySetup`;
+   `buildBlowfishSpec` now delegates with `$input`.
+2. ✅ Registered in all **three** tables (`BLOCK_CIPHER_CORES`, `defaults` via
+   `modesFromCore`, `SUPPORTED_CIPHER_MODES_BY_CIPHER`).
+3. ✅ Canary flipped. `blowfish` left `CORELESS_CIPHERS`; the
+   "AES is exactly the set of ciphers with a core" pin was **inverted, not
+   deleted** — it now asserts Blowfish has a core AND is not AES, which is what
+   makes any surviving `isAesCipher` mode gate a bug.
+4. ✅ `tests/blowfish-modes-kat.test.ts` — ECB **and** CBC (the plan named only
+   CBC; ECB is a distinct builder path and the test was free).
+
+**Refactor gate (as in Phase A, and it earned its keep):** snapshotted both
+canonical Blowfish specs before the extraction, `isDeepStrictEqual` after —
+2/2 byte-identical, so the single-block demo provably did not move a frame.
+
+**The padding decision (the "Phase C must decide" item below): option 1 —
+padding follows core-presence.** Blowfish gains PKCS#7 in single-block, as AES
+has had since May 2026. The alternative needed a gate that could only encode
+"AES is special": either resurrecting `isAesCipher` (the anti-pattern A+B
+deleted) or a `supportsSingleBlockPadding` flag true for AES and false for
+Blowfish for no discoverable reason. The one non-arbitrary variant — gate padding
+on `cipherMode !== "single-block"` — regresses AES. Pinned by
+`tests/blowfish-padding-overlay.test.ts`, which asserts OUTPUT BYTES rather than
+`params.blockSize`: a param check passes even on a pad that is spliced in but
+consumed by nothing.
+
+**A real bug the browser smoke caught — see "IV width" below.**
 
 **This phase is the template.** Remaining four ciphers = repeat C, cost
 dominated by seed-threading (Serpent has an explicit `TODO(multi-block)` at
 `serpent-round-builder.ts:209-212`; DES needs the const→builder extraction).
+
+### Phase C addendum — the IV width bug (found by LOOKING, not by testing)
+
+The Phase C smoke screenshotted Blowfish + CBC and showed a **16-byte IV**
+(`000102…0f`, the AES default) in the field of a cipher whose block is 8.
+`IvInput` passes Blowfish's 8 to `setIvBytes`, which throws on a mismatch — so
+**the field displayed a value it would itself have rejected.** Phase B made the
+IV width a *parameter* but never re-defaulted the *stored* value, which is
+persisted and module-scope while `cipher`/`cipherMode` are session-only.
+
+Fix: `reconcileIvWidth(blockByteLength)` in `stores/iv.ts`, called from BOTH
+`changeCipher` and the cipher-mode `onChange`. The mode trigger is the one a
+cipher-only fix misses — land on Blowfish in single-block (IV inert), flip to
+CBC, and no cipher change fires. `DEFAULT_IV` is now generated by
+`defaultIvOfWidth(n)` (the ascending run `00 01 02 …`), which reproduces the
+published SP 800-38A §F vector byte-identically at n=16 and extends free to any
+width. Deliberately in the two handlers rather than a global effect, which could
+clobber the IV `applyDocument` just restored.
+
+**Why no KAT for this, and the lesson:** the 16-byte default truncated to 8 by
+the runtime's port-length coercion is `0001020304050607` — byte-identical to the
+correct 8-byte default. Broken and fixed produce the **same ciphertext**
+(confirmed: `af2dfa9b…` both ways). The defect is the stored/displayed VALUE, so
+`tests/iv-width-reconcile.test.ts` pins that, and its sharpest assertion is that
+the reconciled IV is one `setIvBytes` *accepts* at the same width. The drift also
+runs BOTH ways: an 8-byte IV left from a Blowfish session survives a reload onto
+AES + CBC.
 
 ## Critical files
 
