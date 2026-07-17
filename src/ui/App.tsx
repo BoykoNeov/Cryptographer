@@ -124,7 +124,7 @@ import {
 } from "./stores/edit-history";
 import { setByteFormat, useByteFormat } from "./stores/format";
 import { pushSnapshot, useHistory } from "./stores/history";
-import { DEFAULT_IV_LENGTH, useIvBytes } from "./stores/iv";
+import { DEFAULT_IV_LENGTH, reconcileIvWidth, useIvBytes } from "./stores/iv";
 import { installKeyboardShortcuts } from "./stores/keyboard";
 import { getLayoutForSpec, hasUserLayout, setLayoutForSpec } from "./stores/layout";
 import {
@@ -552,10 +552,12 @@ export const App = () => {
       const initialState: State = makeBytesState(inputBytes);
 
       const initialAux = new Map<string, AuxValue>([["key", keyBytes]]);
-      // CBC seeds the IV from the dedicated `iv` store (the IvInput
-      // field below). The store always holds exactly 16 bytes — its
-      // setter enforces the length and the randomize button generates
-      // the right size — so we can drop straight into aux.
+      // CBC seeds the IV from the dedicated `iv` store (the IvInput field
+      // below). The store holds exactly one block of the ACTIVE cipher — not a
+      // fixed 16: `setIvBytes` enforces the width its caller names, the
+      // randomize button generates that width, and `reconcileIvWidth` re-defaults
+      // the IV whenever a cipher/mode change moves the block size. So we can drop
+      // straight into aux.
       if (cipherMode() === "cbc") {
         initialAux.set("iv", new Uint8Array(ivBytes()));
       }
@@ -1065,7 +1067,13 @@ export const App = () => {
     // isn't in the undo snapshot — suppress the rebuild, drop the history. (The
     // input/key smart-swaps above write only the text signals, which the
     // capture observer doesn't watch, so they stay outside the boundary.)
-    withBoundaryReset(() => setCipher(next));
+    withBoundaryReset(() => {
+      setCipher(next);
+      // The IV must be exactly one block wide, and the new cipher's block may
+      // be a different size (AES 16 ↔ Blowfish 8). Inside the boundary because
+      // `ivBytes` IS in the undo capture list.
+      reconcileIvWidth(blockByteLengthFor(next));
+    });
   };
 
   /**
@@ -1628,7 +1636,14 @@ export const App = () => {
                 // C3 stack boundary (see `changeCipher`): a mode-of-operation
                 // switch rebuilds the spec (single-block ↔ ECB/CBC); suppress
                 // + clear.
-                withBoundaryReset(() => setCipherMode(e.currentTarget.value as CipherMode))
+                withBoundaryReset(() => {
+                  setCipherMode(e.currentTarget.value as CipherMode);
+                  // The OTHER moment a stale IV goes live, and the one a
+                  // cipher-change-only fix misses: land on Blowfish in
+                  // single-block (where the IV is inert), then flip to CBC —
+                  // no cipher change fires, but the IV is suddenly load-bearing.
+                  reconcileIvWidth(blockByteLengthFor(cipher()));
+                })
               }
               disabled={!hasBlockCipherCore(cipher())}
               title={

@@ -38,19 +38,25 @@ const STORAGE_KEY = "cryptographer.iv";
 
 /**
  * The IV width the store boots at, and the fallback when a caller doesn't name
- * one. 16 because AES is the default cipher and the only family with a core
- * today — not because the store is AES-only.
+ * one. 16 because AES is the default cipher — not because the store is AES-only.
  */
 export const DEFAULT_IV_LENGTH = 16;
 
-// Default IV: NIST SP 800-38A §F's standard test vector
-// `000102030405060708090a0b0c0d0e0f`. Chosen so the first-impression
-// run against the §F sample plaintext matches the published §F.2.1
-// ciphertext byte-for-byte — same first-impression discipline as the
-// FIPS-197 default key for AES-128.
-const DEFAULT_IV = new Uint8Array([
-  0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
-]);
+/**
+ * The canonical default IV at a given block width: the ascending byte run
+ * `00 01 02 …`.
+ *
+ * At 16 bytes this IS NIST SP 800-38A §F's standard test vector
+ * `000102030405060708090a0b0c0d0e0f` — chosen so the first-impression AES run
+ * against the §F sample plaintext reproduces the published §F.2.1 ciphertext
+ * byte-for-byte (the same first-impression discipline as the FIPS-197 default
+ * key). Generating it rather than spelling it out extends that default to any
+ * block width for free: Blowfish/DES get `0001020304050607`, Speck `00010203`.
+ */
+export const defaultIvOfWidth = (blockByteLength: number): Uint8Array =>
+  Uint8Array.from({ length: blockByteLength }, (_, i) => i & 0xff);
+
+const DEFAULT_IV = defaultIvOfWidth(DEFAULT_IV_LENGTH);
 
 const loadInitial = (): Uint8Array => {
   try {
@@ -115,6 +121,44 @@ export const setIvBytes = (bytes: Uint8Array, blockByteLength?: number): void =>
   const copy = new Uint8Array(bytes);
   setIvBytesSignal(copy);
   persist(copy);
+};
+
+/**
+ * Reset the IV to the canonical default for `blockByteLength` when the stored
+ * one is the wrong width. No-op when the width already agrees, so a user's
+ * hand-typed IV survives everything except an actual change of block size.
+ *
+ * ## Why this has to exist
+ *
+ * The stored IV is persisted and module-scope; the active cipher is neither. So
+ * the two drift the moment the cipher's block width changes, and the store has
+ * no way to notice on its own. Before this, landing on Blowfish CBC showed the
+ * 16-byte AES default in the IV field — a value `setIvBytes` itself would
+ * REJECT if the user typed it back, since `IvInput` passes Blowfish's 8. The
+ * field displayed something it would not accept. (The run still "worked": the
+ * runtime's port-length coercion truncated 16→8 and emitted a coercion frame.
+ * That is warn-and-run doing its job on a genuinely wrong input, not a reason to
+ * hand it one.)
+ *
+ * It drifts BOTH ways — the IV persists across reloads while `cipher` and
+ * `cipherMode` are session-only, so finishing a Blowfish session and reloading
+ * onto AES + CBC would otherwise feed AES-128 an 8-byte IV.
+ *
+ * **Why reset rather than preserve, unlike the plaintext smart-swap in
+ * `changeCipher`** (which keeps a custom value and swaps only a recognized
+ * default): a plaintext of the "wrong" length is a legal thing to experiment
+ * with, but an IV must be exactly one block wide — CBC XORs it with a block.
+ * There is no correct way to carry a custom 16-byte IV over to an 8-byte
+ * cipher, so the canonical default is the honest landing place.
+ *
+ * @param blockByteLength the active cipher's block width, or `undefined` when
+ *   there is no block cipher (a hash, RSA, a coreless cipher) — then the IV is
+ *   inert and left alone.
+ */
+export const reconcileIvWidth = (blockByteLength: number | undefined): void => {
+  if (blockByteLength === undefined) return;
+  if (ivBytes().length === blockByteLength) return;
+  setIvBytes(defaultIvOfWidth(blockByteLength), blockByteLength);
 };
 
 /**
