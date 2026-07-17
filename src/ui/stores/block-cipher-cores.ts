@@ -34,20 +34,26 @@
 
 import { aesCore } from "@/ciphers/aes-core";
 import type { BlockCipherCore } from "@/ciphers/block-cipher-core";
+import { blowfishCore } from "@/ciphers/blowfish-core";
 import type { Cipher } from "./cipher";
 
 /**
  * Every cipher whose body a mode of operation can drive.
  *
- * AES only, today: it was the one cipher already seed-parameterized, which is
- * why Phase A made it the first core. Each `aesCore(…)` call is cheap — the
- * returned object holds closures, so no spec is built until a mode builder
- * asks for a body.
+ * AES was first because it was the one cipher already seed-parameterized (Phase
+ * A). Blowfish followed in Phase C and is the one that matters for confidence:
+ * it is the first core whose block is **not 16 bytes**, so it is the first to
+ * actually exercise the block-size-generic arithmetic Phase B introduced.
+ * Everything before it could have hidden a stray hardcoded 16.
+ *
+ * Each `…Core()` call is cheap — the returned object holds closures, so no spec
+ * is built until a mode builder asks for a body.
  */
 const BLOCK_CIPHER_CORES: Partial<Record<Cipher, BlockCipherCore>> = {
   "aes-128": aesCore("aes-128"),
   "aes-192": aesCore("aes-192"),
   "aes-256": aesCore("aes-256"),
+  blowfish: blowfishCore(),
 };
 
 /**

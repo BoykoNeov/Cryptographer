@@ -60,19 +60,24 @@ export const SUPPORTED_CIPHER_MODES_BY_CIPHER: Readonly<Record<Cipher, readonly 
   "aes-128": ["single-block", "ecb", "cbc"],
   "aes-192": ["single-block", "ecb", "cbc"],
   "aes-256": ["single-block", "ecb", "cbc"],
+  // Blowfish — the first non-AES cipher with a core (Phase C), and the first
+  // whose block is 8 bytes rather than 16.
+  blowfish: ["single-block", "ecb", "cbc"],
   // Everything below is single-block for ONE reason: no `BlockCipherCore` yet.
   // A core needs the cipher's body to accept its block from an arbitrary port
-  // rather than hardcoding `$input` — the per-cipher seed-threading work that
-  // `docs/plans/foamy-prancing-wren.md` Phase C templates on Blowfish. It is
+  // rather than hardcoding `$input` — per-cipher seed-threading work. It is
   // NOT a block-size limitation: the mode builders, the iterate, and the
-  // padding overlay are all block-size-generic as of Phase B.
+  // padding overlay are all block-size-generic as of Phase B, and Blowfish's
+  // 8-byte block proves it end to end. `src/ciphers/blowfish-core.ts` is the
+  // template each of these follows; Serpent carries an explicit
+  // `TODO(multi-block)`, and DES needs its top-level const extracted into a
+  // seed-taking builder first.
   "speck-32-64-be": ["single-block"],
   "speck-32-64-le": ["single-block"],
   "serpent-128": ["single-block"],
   "serpent-192": ["single-block"],
   "serpent-256": ["single-block"],
   des: ["single-block"],
-  blowfish: ["single-block"],
   twofish: ["single-block"],
 };
 

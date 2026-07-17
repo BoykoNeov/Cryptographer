@@ -1905,12 +1905,19 @@ export const applyPaddingScheme = (
   //
   // Instead we splice the pad directly into the port graph: prepend a pad
   // reading `$input`, then repoint every `$input` consumer to the pad's
-  // output. For single-block that consumer is the initial AddRoundKey's
-  // `input` port (a `portInputs` binding — the merged `xor-with-aux@1` leaf
-  // since Finding F3); for ECB/CBC it's the port-mode iterate's `seedInput`.
-  // `repointInputSourceConsumers` rewrites both generically (it walks every
-  // portInputs key). The pad is a Phase-1 lifted step, so its output port is
-  // named `"state"` (LIFTED_STATE_PORT), not `"output"`.
+  // output. That consumer lives in one of TWO places depending on the spec:
+  //   • a leaf's `portInputs` — AES single-block's initial AddRoundKey `input`
+  //     (the merged `xor-with-aux@1` leaf since Finding F3);
+  //   • a container's `seedInput` — the ECB/CBC iterate, and also Blowfish
+  //     single-block, whose round 1 is a port-mode `group` seeded from `$input`
+  //     with no leaf referencing it at all.
+  // `repointInputSourceConsumers` handles both: despite the name,
+  // `rewriteAllPortInputs` walks container `seedInput` as well as every
+  // portInputs key (see its `rewriteNode`). A portInputs-only rewrite would
+  // splice a pad that nothing consumes — the body would keep reading raw
+  // `$input` and the run would SUCCEED on unpadded bytes.
+  // The pad is a Phase-1 lifted step, so its output port is named `"state"`
+  // (LIFTED_STATE_PORT), not `"output"`.
   // Idempotency: a prior call may have repointed `$input` consumers to a
   // pad (encrypt) or moved `outputFrom` onto an unpad (decrypt). `stripped`
   // removed those LEAVES; we must also repair the EDGES before re-applying,

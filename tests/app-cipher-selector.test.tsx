@@ -339,9 +339,15 @@ describe("App — cipher selector", () => {
     expect(findInputByLabel(container, "key").value).toBe("0123456789abcdef");
     expect(findInputByLabel(container, "plaintext").value).toBe("1111111111111111");
 
-    // Padding + cipher-mode are AES-only (Blowfish is single-block, BytesState).
-    expect(findSelectByLabel(container, "padding").disabled).toBe(true);
-    expect(findSelectByLabel(container, "mode of operation").disabled).toBe(true);
+    // Both selectors are ENABLED as of Phase C: Blowfish has a
+    // `BlockCipherCore`, which is the single gate for "can run ECB/CBC" and
+    // "the padding overlay knows your block size"
+    // (`docs/plans/foamy-prancing-wren.md`). The Run below still lands on the
+    // published single-block vector because the padding DEFAULT is "none" and
+    // the mode default is single-block — enabling a selector changes what the
+    // user can reach, not what they land on.
+    expect(findSelectByLabel(container, "padding").disabled).toBe(false);
+    expect(findSelectByLabel(container, "mode of operation").disabled).toBe(false);
 
     fireEvent.click(findButton(container, "run"));
     expect(container.querySelector(".error")).toBeNull();

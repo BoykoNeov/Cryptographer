@@ -40,18 +40,23 @@ const CORELESS_CIPHERS = [
   "serpent-192",
   "serpent-256",
   "des",
-  "blowfish",
   "twofish",
 ] as const satisfies readonly Cipher[];
 
-const AES_CIPHERS = ["aes-128", "aes-192", "aes-256"] as const satisfies readonly Cipher[];
+/** Every cipher that HAS a core ⇒ single-block + ecb + cbc. */
+const CORED_CIPHERS = [
+  "aes-128",
+  "aes-192",
+  "aes-256",
+  "blowfish",
+] as const satisfies readonly Cipher[];
 
 describe("cipher-mode × cipher support matrix", () => {
-  it("every AES variant supports single-block + ecb + cbc", () => {
-    // Phase B of `docs/plans/foamy-prancing-wren.md` extended ECB/CBC from
-    // AES-128 to all three variants: they were always variant-parameterized,
-    // and once the mode builders took a core the other two cost a table row.
-    for (const cipher of AES_CIPHERS) {
+  it("every cipher with a core supports single-block + ecb + cbc", () => {
+    // Phase B extended ECB/CBC from AES-128 to all three AES variants; Phase C
+    // added Blowfish, the first non-AES member and the first whose block is not
+    // 16 bytes. All four arrive the same way: a core plus two table rows.
+    for (const cipher of CORED_CIPHERS) {
       expect(isCipherModeSupported(cipher, "single-block")).toBe(true);
       expect(isCipherModeSupported(cipher, "ecb")).toBe(true);
       expect(isCipherModeSupported(cipher, "cbc")).toBe(true);
@@ -62,9 +67,9 @@ describe("cipher-mode × cipher support matrix", () => {
   });
 
   it("a cipher with no BlockCipherCore is single-block only", () => {
-    // Canary: adding a core for any of these (Phase C templates it on
-    // Blowfish) fires this test and forces the mode matrix + the `defaults`
-    // table to be updated in the same commit as the core.
+    // Canary: adding a core for any of these fires this test and forces the
+    // mode matrix + the `defaults` table to be updated in the same commit as
+    // the core. `src/ciphers/blowfish-core.ts` is the template to follow.
     for (const cipher of CORELESS_CIPHERS) {
       expect(isCipherModeSupported(cipher, "single-block")).toBe(true);
       expect(isCipherModeSupported(cipher, "ecb")).toBe(false);
@@ -78,19 +83,19 @@ describe("cipher-mode × cipher support matrix", () => {
     // A cipher with a core but no `defaults` entry would show an enabled
     // dropdown option that silently falls back to single-block; a cipher with
     // a `defaults` entry but no core cannot have been built at all.
-    for (const cipher of [...AES_CIPHERS, ...CORELESS_CIPHERS]) {
+    for (const cipher of [...CORED_CIPHERS, ...CORELESS_CIPHERS]) {
       expect(isCipherModeSupported(cipher, "ecb")).toBe(hasBlockCipherCore(cipher));
       expect(isCipherModeSupported(cipher, "cbc")).toBe(hasBlockCipherCore(cipher));
     }
   });
 
-  it("AES is exactly the set of ciphers with a core today", () => {
-    // Pins the CURRENT rollout state. Deliberately not written as "AES has a
-    // core" — this fires when Blowfish's core lands (Phase C), which is the
-    // moment `isAesCipher` stops being a usable stand-in for "can do modes"
-    // anywhere it still survives.
-    for (const cipher of [...AES_CIPHERS, ...CORELESS_CIPHERS]) {
-      expect(hasBlockCipherCore(cipher)).toBe(isAesCipher(cipher));
-    }
+  it("a core is no longer the same thing as being AES", () => {
+    // Retires the old "AES is exactly the set of ciphers with a core" pin,
+    // which existed to fire the moment `isAesCipher` stopped standing in for
+    // "can do modes". Phase C is that moment, so the pin is inverted rather
+    // than deleted: Blowfish must have a core while NOT being AES, which is
+    // what makes any surviving `isAesCipher` mode gate a bug.
+    expect(hasBlockCipherCore("blowfish")).toBe(true);
+    expect(isAesCipher("blowfish")).toBe(false);
   });
 });

@@ -109,17 +109,19 @@ const singleBlockLimits = (cipher: Cipher): { min: number; max: number } => {
       return { min: 16, max: 16 };
     case "des":
       return { min: 8, max: 8 };
-    case "blowfish":
-      return { min: 8, max: 8 };
     case "twofish":
       return { min: 16, max: 16 };
-    // AES always has a core, so it never reaches here. The arm exists to keep
-    // the switch exhaustive over `Cipher` — which is what makes a NEW cipher
-    // that lacks a core a compile error rather than a runtime throw.
+    // AES and Blowfish always have a core, so they never reach here. The arms
+    // exist to keep the switch exhaustive over `Cipher` — which is what makes a
+    // NEW cipher that lacks a core a compile error rather than a runtime throw.
+    // This is the rollout shrinking one entry at a time, visible in the type
+    // system: Blowfish moved up here when its core landed in Phase C.
     case "aes-128":
     case "aes-192":
     case "aes-256":
       return { min: 16, max: 16 };
+    case "blowfish":
+      return { min: 8, max: 8 };
     default: {
       const _exhaustive: never = cipher;
       throw new Error(`paddingLimits: unhandled cipher: ${_exhaustive as string}`);
@@ -136,9 +138,9 @@ const singleBlockLimits = (cipher: Cipher): { min: number; max: number } => {
  * `BlockCipherCore` — the same fact that decides whether it can run a mode at
  * all:
  *
- *   • **No core** (Speck/Serpent/DES/Blowfish/Twofish today): one fixed-size
- *     block, regardless of mode or padding choice. The padding selector is
- *     disabled in the UI.
+ *   • **No core** (Speck/Serpent/DES/Twofish today): one fixed-size block,
+ *     regardless of mode or padding choice. The padding selector is disabled
+ *     in the UI.
  *
  *   • **Core, single-block**: exactly one block on decrypt; on encrypt,
  *     0..B-1 / 1..B / B..B depending on the padding scheme.
@@ -152,9 +154,8 @@ const singleBlockLimits = (cipher: Cipher): { min: number; max: number } => {
  *     the cap — the keystream truncates to the original length.
  *
  * Every bound is derived from the core's block width `B` rather than a
- * hardcoded 16. Note that no shipped cipher has a non-16 core yet (AES only),
- * so the generic arithmetic here is exercised by unit tests against a fake
- * core, not by the app — until Blowfish lands in Phase C.
+ * hardcoded 16 — and since Blowfish's core landed (Phase C), the app itself
+ * exercises that: a Blowfish PKCS#7 encrypt bounds at 0..7, not 0..15.
  */
 export const paddingLimits = (
   mode: "encrypt" | "decrypt",

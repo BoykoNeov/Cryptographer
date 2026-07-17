@@ -35,6 +35,7 @@ import { aes256DecryptSpec } from "@/ciphers/aes-256-decrypt";
 import { aesCore } from "@/ciphers/aes-core";
 import type { BlockCipherCore } from "@/ciphers/block-cipher-core";
 import { blowfishSpec } from "@/ciphers/blowfish";
+import { blowfishCore } from "@/ciphers/blowfish-core";
 import { blowfishDecryptSpec } from "@/ciphers/blowfish-decrypt";
 import { buildCshakeSpec, readCshakeCustomization } from "@/ciphers/cshake";
 import { desSpec } from "@/ciphers/des";
@@ -175,10 +176,13 @@ const defaults: Record<Cipher, Partial<Record<CipherMode, Record<Mode, CipherSpe
   des: {
     "single-block": { encrypt: desSpec, decrypt: desDecryptSpec },
   },
-  // Blowfish — second Feistel cipher (`docs/plans/blowfish.md`). Single-block
-  // only; decrypt is the same network with the P-array reversed.
+  // Blowfish — second Feistel cipher (`docs/plans/blowfish.md`); decrypt is the
+  // same network with the P-array reversed. The first NON-AES cipher to gain
+  // ECB/CBC, and the first whose 8-byte block exercises the block-size-generic
+  // mode machine for real (Phase C of `docs/plans/foamy-prancing-wren.md`).
   blowfish: {
     "single-block": { encrypt: blowfishSpec, decrypt: blowfishDecryptSpec },
+    ...modesFromCore(blowfishCore()),
   },
   // Twofish — third Feistel cipher (`docs/plans/twofish.md`). Single-block
   // only; decrypt runs the same network with inverted rotations, reversed

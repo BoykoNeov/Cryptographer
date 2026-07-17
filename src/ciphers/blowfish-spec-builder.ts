@@ -208,7 +208,7 @@ const piPInitBytes = (): number[] => {
  * words (`kw0` = key[0..3], `kw1` = key[4..7]) that alternate across the 18
  * P slots (the general cycling-with-wraparound rule collapses to alternation).
  */
-const buildKeySetup = (): StepNode => {
+export const buildKeySetup = (): StepNode => {
   const ks = (s: string) => `key-schedule.${s}`;
   const children: StepNode[] = [];
 
@@ -472,26 +472,48 @@ const buildWhitening = (
 
 // ─── Spec assembly ────────────────────────────────────────────────────────────
 
-/** Build the Blowfish encrypt or decrypt spec. */
-export const buildBlowfishSpec = (direction: BlowfishDirection): CipherSpec => {
+/**
+ * The cipher body — 16 Feistel rounds + the final whitening — reading its block
+ * from `seed`. Excludes the key setup, which a mode of operation runs ONCE
+ * outside the per-block loop (the schedule publishes to aux, and aux is global,
+ * so it crosses the iterate's scope boundary freely).
+ *
+ * The seed is a parameter rather than a hardcoded `$input` because a body inside
+ * a port-mode `iterate` receives its block on the iterate's injected port, and
+ * the runtime seeds `$input` at top scope only — a body that hardcodes it throws
+ * inside the loop. The single-block spec below passes `$input`; `blowfish-core.ts`
+ * passes whatever the mode hands it. This is the whole of the seed-threading
+ * work a cipher needs to gain every mode (`docs/plans/foamy-prancing-wren.md`).
+ */
+export const buildBlowfishBody = (
+  direction: BlowfishDirection,
+  seed: PortBinding,
+): { nodes: StepNode[]; output: PortBinding } => {
   const encrypt = direction === "encrypt";
   const rounds: StepNode[] = [];
   for (let j = 1; j <= BLOWFISH_ROUNDS; j++) {
     const pIdx = encrypt ? j - 1 : 18 - j;
-    const seed = j === 1 ? port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT) : port(`round.${j - 1}`, "out");
-    rounds.push(buildRound(j, pIdx, seed));
+    // Round 1 takes the caller's seed; later rounds chain off their predecessor.
+    const roundSeed = j === 1 ? seed : port(`round.${j - 1}`, "out");
+    rounds.push(buildRound(j, pIdx, roundSeed));
   }
   const { nodes: whitening, output } = encrypt ? buildWhitening(17, 16) : buildWhitening(0, 1);
+  return { nodes: [...rounds, ...whitening], output };
+};
+
+/** Build the single-block Blowfish encrypt or decrypt spec. */
+export const buildBlowfishSpec = (direction: BlowfishDirection): CipherSpec => {
+  const { nodes, output } = buildBlowfishBody(direction, port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT));
 
   return {
-    id: encrypt ? "blowfish@1" : "blowfish-decrypt@1",
+    id: direction === "encrypt" ? "blowfish@1" : "blowfish-decrypt@1",
     name: "Blowfish",
     stateShape: "bytes",
     inputs: {
       plaintext: { shape: "bytes" },
       key: { byteLength: 8 },
     },
-    steps: [buildKeySetup(), ...rounds, ...whitening],
+    steps: [buildKeySetup(), ...nodes],
     outputFrom: output,
   };
 };
