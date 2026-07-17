@@ -1,23 +1,53 @@
 @echo off
 setlocal enabledelayedexpansion
 REM ============================================================
-REM  Cryptographer launcher — double-click to run the app.
-REM  Starts the Vite dev server and opens it in your browser.
+REM  Cryptographer launcher - double-click to run the app.
 REM
-REM  Port handling: other locally-running dev tools (often other
-REM  Vite/Claude-derived apps) grab the default 5173, and the old
-REM  launcher blindly opened the browser at 5173 — landing on the
-REM  wrong app. So we now probe a list of candidate ports, bind
-REM  the first FREE one (pinned with --strictPort so Vite can't
-REM  silently drift to yet another port), and open the browser at
-REM  exactly that port. If every candidate is busy, we free the
-REM  first one by killing whatever is listening on it.
+REM  Reuses a dev server that is already serving THIS project if
+REM  one is running, and starts a new one only otherwise.
+REM
+REM  Why: Vite does not fail when its port is busy - it climbs to
+REM  the next free port - so the old "find a free port and bind
+REM  it" launcher quietly left another server running on every
+REM  double-click, sixteen deep across 5173-5190.
+REM
+REM  And a port does not tell you WHOSE server it is: several Vite
+REM  projects on this machine climb past each other, so 5173 is
+REM  very often a different app. scripts\find-dev-server.mjs
+REM  therefore identifies our server by what it SERVES (index.html's
+REM  <title>) and we reuse only a real match. Nothing here probes
+REM  for a free port, and nothing here kills anything: taking a
+REM  port from whatever is holding it is how you murder someone's
+REM  live work in another project.
 REM ============================================================
 
 cd /d "%~dp0"
 
-echo Starting Cryptographer...
-echo.
+REM Ask before installing: the reuse path needs no dependencies, so
+REM even a half-set-up checkout can hop onto a running server.
+REM
+REM `set "URL="` first so a stale value from the environment cannot
+REM leak in and fake a match. `2^>nul` escapes the redirect so it
+REM applies to node rather than to the for. The detector prints the
+REM URL on stdout and nothing else, so a captured line IS the answer.
+set "URL="
+for /f "usebackq delims=" %%u in (`node "scripts\find-dev-server.mjs" 2^>nul`) do set "URL=%%u"
+
+if defined URL (
+    echo Cryptographer is already running at !URL!
+    echo Opening it in your browser.
+    echo.
+    echo   The running server reads your code from disk on every request,
+    echo   so it is already serving your latest edits. The one exception is
+    echo   vite.config.ts - if you changed that, close the old server's
+    echo   window and run this launcher again to start fresh.
+    REM `start` reads a lone quoted argument as the window title, so the
+    REM empty "" title is required or the URL is swallowed as one.
+    start "" "!URL!"
+    exit /b
+)
+
+REM Nothing of ours is running, so we start one.
 
 REM Install dependencies on first run (node_modules missing).
 if not exist "node_modules" (
@@ -31,60 +61,16 @@ if not exist "node_modules" (
     )
 )
 
-REM Candidate ports, tried left to right. 5173 is Vite's default;
-REM the rest are fallbacks that are unlikely to collide.
-set "PORTS=5173 5174 5175 5180 5190"
-set "CHOSEN="
-
-for %%P in (%PORTS%) do (
-    if not defined CHOSEN (
-        call :isfree %%P && set "CHOSEN=%%P"
-    )
-)
-
-if not defined CHOSEN (
-    REM Every candidate is occupied — reclaim the first one in the
-    REM list by terminating its listener, then use it.
-    for /f "tokens=1" %%A in ("%PORTS%") do set "FIRST=%%A"
-    echo All candidate ports are busy. Freeing port !FIRST!...
-    call :killport !FIRST!
-    set "CHOSEN=!FIRST!"
-)
-
-echo Using port !CHOSEN!.
+echo Starting Cryptographer...
 echo.
 
-REM Give Vite a moment to boot, then open the browser to the port
-REM we actually bound (not a hardcoded guess).
-start "" cmd /c "timeout /t 3 >nul & start http://localhost:!CHOSEN!"
-
-REM Run the dev server in this window. --strictPort makes Vite fail
-REM loudly instead of drifting to another port if this one races.
-REM Close the window (or Ctrl+C) to stop.
-call npm run dev -- --port !CHOSEN! --strictPort
+REM No port probe here, on purpose. Vite picks the first free port
+REM itself and --open opens the browser at exactly that port, so we
+REM never have to guess which port it took - and never have to take
+REM one from another project to get it.
+REM
+REM This runs the server in this window. Close it (or Ctrl+C) to stop.
+call npm run dev -- --open
 
 pause
-exit /b
-
-REM ------------------------------------------------------------
-REM :isfree PORT  — exit 0 if the port has no LISTENING socket,
-REM                 exit 1 if something is already listening.
-REM /C:":PORT " uses a literal search (with the trailing space so
-REM ":5173 " never matches ":51730 "); without /C findstr would
-REM split on the space into an OR that also matches an empty
-REM pattern (i.e. every line).
-REM ------------------------------------------------------------
-:isfree
-netstat -ano | findstr /C:":%1 " | findstr LISTENING >nul 2>&1
-if errorlevel 1 (exit /b 0) else (exit /b 1)
-
-REM ------------------------------------------------------------
-REM :killport PORT — kill the PID(s) LISTENING on PORT. In netstat
-REM -ano output the PID is the 5th whitespace token.
-REM ------------------------------------------------------------
-:killport
-for /f "tokens=5" %%K in ('netstat -ano ^| findstr /C:":%1 " ^| findstr LISTENING') do (
-    echo Killing PID %%K holding port %1
-    taskkill /F /PID %%K >nul 2>&1
-)
 exit /b

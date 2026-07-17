@@ -3,6 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      This title is load-bearing beyond the browser tab: "Start Cryptographer.bat"
+      identifies an already-running dev server by fetching each port and matching
+      this exact string, so it can reuse that server instead of stacking a new one.
+      If you rename it, rename APP_TITLE in scripts/find-dev-server.mjs to match —
+      a mismatch fails silently, by going back to starting a server every run.
+    -->
     <title>Cryptographer</title>
   </head>
   <body>
