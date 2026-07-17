@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- **AES-192 and AES-256 gained ECB and CBC** (`docs/plans/foamy-prancing-wren.md` Phase B). Multi-block modes were AES-128-only since they shipped; both other variants now offer them in the mode-of-operation dropdown, encrypt and decrypt. The specs are **generated from each variant's `BlockCipherCore`** rather than hand-written per (variant × mode × direction) — the payoff of the Phase-A seam, and the reason this cost two lines instead of eight files. Verified against the published NIST SP 800-38A §F vectors (§F.1.3/§F.1.5 ECB, §F.2.3/§F.2.5 CBC) *and*, independently, `node:crypto` on a message NIST never published (`tests/aes-192-256-modes-kat.test.ts`). The plan called this "a table-only change, correct by construction" — but `aesCore` at Nk=6/Nk=8 driving the mode builders was a path no test had ever run, and its failure mode is silent (plausible-but-wrong ciphertext), so it got a KAT anyway.
+
+### Changed
+- **Block-cipher modes, padding, and the IV stopped assuming a 16-byte block** (`docs/plans/foamy-prancing-wren.md` Phase B). Five places hardcoded AES's block width, which is why every non-AES cipher was single-block-only with the padding selector greyed out. They now read the width from the active cipher's `BlockCipherCore` via a new registry (`src/ui/stores/block-cipher-cores.ts`): the padding overlay takes the block size as a parameter (and its AES-by-spec-id-prefix gate is **deleted** — the caller passing no width is what scopes it now, so a hash or RSA can't be padded), `paddingLimits` derives every bound from the core and honours the cipher mode, the Run handler's alignment check and its error prose name the actual cipher, and the IV store accepts one block of bytes rather than throwing on anything but 16 — an 8-byte-block cipher in CBC needs an 8-byte IV, which was previously unrepresentable. **This is plumbing, not a new capability:** a cipher still needs a `BlockCipherCore` to run a mode at all, and AES is the only family with one today. The remaining eight ciphers are single-block for that reason — *not* the block-size limitation the old code comments claimed (they described a blocker retired with `MatrixState` back in Phase 5, and are purged here). Because no shipped cipher has a non-16 block in a mode yet, the newly generic paths are pinned by a fake 8-byte-block core in `tests/block-size-generic-modes.test.ts` rather than by the app. No `schemaVersion` change.
+
 ## [0.8.0] - 2026-07-17
 
 ### Added

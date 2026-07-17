@@ -43,9 +43,7 @@ export const SUPPORTED_CIPHER_MODES: readonly CipherMode[] = ["single-block", "e
 
 /**
  * Which (cipher, cipherMode) combinations have a concrete spec in
- * `stores/spec.ts`'s defaults table. Phase 1 only AES-128 has the ECB
- * factory wired up; AES-192/256 ECB ship in Phase 4; CBC + CTR ship in
- * Phases 2 + 3 (also AES-128 only at first). Speck is single-block only.
+ * `stores/spec.ts`'s defaults table.
  *
  * Used both by the App's dropdown (to disable unsupported (cipher, mode)
  * options so the user can't pick a combo that silently falls back to
@@ -54,26 +52,27 @@ export const SUPPORTED_CIPHER_MODES: readonly CipherMode[] = ["single-block", "e
  *
  * If this drifts from the actual defaults table, the dropdown will lie —
  * keep them in sync when registering a new mode factory.
+ * `tests/cipher-mode-fallback.test.ts` is the canary.
  */
 export const SUPPORTED_CIPHER_MODES_BY_CIPHER: Readonly<Record<Cipher, readonly CipherMode[]>> = {
+  // The AES variants: every one has a `BlockCipherCore`, and the generic mode
+  // builders generate their ECB/CBC specs from it (`stores/spec.ts`).
   "aes-128": ["single-block", "ecb", "cbc"],
-  "aes-192": ["single-block"],
-  "aes-256": ["single-block"],
+  "aes-192": ["single-block", "ecb", "cbc"],
+  "aes-256": ["single-block", "ecb", "cbc"],
+  // Everything below is single-block for ONE reason: no `BlockCipherCore` yet.
+  // A core needs the cipher's body to accept its block from an arbitrary port
+  // rather than hardcoding `$input` — the per-cipher seed-threading work that
+  // `docs/plans/foamy-prancing-wren.md` Phase C templates on Blowfish. It is
+  // NOT a block-size limitation: the mode builders, the iterate, and the
+  // padding overlay are all block-size-generic as of Phase B.
   "speck-32-64-be": ["single-block"],
   "speck-32-64-le": ["single-block"],
   "serpent-128": ["single-block"],
   "serpent-192": ["single-block"],
   "serpent-256": ["single-block"],
-  // DES: single-block today (Phase 4 of `docs/plans/des-feistel.md`).
-  // ECB/CBC for DES would need block-size-aware load-block/store-block
-  // (currently 16-byte-only). See plan's "Out of scope" section.
   des: ["single-block"],
-  // Blowfish: single-block today (64-bit block). Multi-block ECB/CBC deferred
-  // (same block-size-aware overlay blocker as Speck/Serpent/DES). See
-  // `docs/plans/blowfish.md` "Deferred".
   blowfish: ["single-block"],
-  // Twofish: single-block today (128-bit block). Multi-block deferred (same
-  // overlay blocker). See `docs/plans/twofish.md` "Deferred".
   twofish: ["single-block"],
 };
 

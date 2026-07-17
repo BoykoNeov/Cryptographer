@@ -22,8 +22,8 @@ import { describe, expect, it } from "vitest";
 const KEY_HEX = "00112233445566778899aabbccddeeff";
 
 const runRoundTrip = (rawInput: Uint8Array): Uint8Array => {
-  const encSpec = applyPaddingScheme(aes128EcbSpec, "encrypt", "pkcs7");
-  const decSpec = applyPaddingScheme(aes128EcbDecryptSpec, "decrypt", "pkcs7");
+  const encSpec = applyPaddingScheme(aes128EcbSpec, "encrypt", "pkcs7", 16);
+  const decSpec = applyPaddingScheme(aes128EcbDecryptSpec, "decrypt", "pkcs7", 16);
   const keyBytes = new Uint8Array(16);
   for (let i = 0; i < 16; i++) keyBytes[i] = Number.parseInt(KEY_HEX.substr(i * 2, 2), 16);
 
@@ -65,7 +65,7 @@ describe("multi-block ECB + PKCS#7 boundary cases", () => {
 
   it("PKCS#7 of 16-byte input adds a full extra padding block (canonical behaviour)", () => {
     const input = new Uint8Array(16).fill(0xaa);
-    const encSpec = applyPaddingScheme(aes128EcbSpec, "encrypt", "pkcs7");
+    const encSpec = applyPaddingScheme(aes128EcbSpec, "encrypt", "pkcs7", 16);
     const keyBytes = new Uint8Array(16);
     for (let i = 0; i < 16; i++) keyBytes[i] = Number.parseInt(KEY_HEX.substr(i * 2, 2), 16);
     const trace = runSpec(encSpec, buildDefaultRegistry(), {

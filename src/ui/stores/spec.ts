@@ -32,6 +32,8 @@ import { aes192Spec } from "@/ciphers/aes-192";
 import { aes192DecryptSpec } from "@/ciphers/aes-192-decrypt";
 import { aes256Spec } from "@/ciphers/aes-256";
 import { aes256DecryptSpec } from "@/ciphers/aes-256-decrypt";
+import { aesCore } from "@/ciphers/aes-core";
+import type { BlockCipherCore } from "@/ciphers/block-cipher-core";
 import { blowfishSpec } from "@/ciphers/blowfish";
 import { blowfishDecryptSpec } from "@/ciphers/blowfish-decrypt";
 import { buildCshakeSpec, readCshakeCustomization } from "@/ciphers/cshake";
@@ -43,6 +45,8 @@ import {
   readKmacCustomization,
   readKmacKeyLength,
 } from "@/ciphers/kmac";
+import { buildCbcSpec } from "@/ciphers/modes/cbc";
+import { buildEcbSpec } from "@/ciphers/modes/ecb";
 import { rsaDecryptSpec, rsaEncryptSpec } from "@/ciphers/rsa";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { serpent128DecryptSpec } from "@/ciphers/serpent-128-decrypt";
@@ -81,6 +85,7 @@ import {
 } from "@/core/spec-mutations";
 import type { CipherSpec, Json, PortBinding, StepGroup, StepLeaf, StepNode } from "@/core/types";
 import { batch, createSignal } from "solid-js";
+import { blockByteLengthFor } from "./block-cipher-cores";
 import {
   type Algorithm,
   type Asymmetric,
@@ -112,10 +117,30 @@ import { registry } from "./registry";
 
 export type Mode = "encrypt" | "decrypt";
 
-// 3D table of canonical specs: defaults[cipher][cipherMode][mode]. The
-// inner per-cipherMode record is partial — Speck only supports
-// single-block today; AES-128 ships single-block + ecb in Phase 1, with
-// cbc/ctr arriving in later phases.
+/**
+ * Generate the ECB + CBC entries for a cipher from its `BlockCipherCore`.
+ *
+ * Every (cipher × mode × direction) combination is one call to a generic mode
+ * builder, so a variant that already has a core costs a single line here. The
+ * alternative — a `<cipher>-<mode>[-decrypt].ts` file per combination, the
+ * pattern AES-128 predates this machine with — is 4 files per cipher per mode:
+ * the N×M explosion `docs/plans/foamy-prancing-wren.md` exists to remove.
+ *
+ * AES-128 deliberately keeps its file constants below: ~35 modules import them
+ * by name, and those tests compare against the table's spec by REFERENCE, so
+ * regenerating it here would hand them a byte-identical but non-identical
+ * object.
+ */
+const modesFromCore = (
+  core: BlockCipherCore,
+): Partial<Record<CipherMode, Record<Mode, CipherSpec>>> => ({
+  ecb: { encrypt: buildEcbSpec(core, "encrypt"), decrypt: buildEcbSpec(core, "decrypt") },
+  cbc: { encrypt: buildCbcSpec(core, "encrypt"), decrypt: buildCbcSpec(core, "decrypt") },
+});
+
+// 3D table of canonical specs: defaults[cipher][cipherMode][mode]. The inner
+// per-cipherMode record is partial — only ciphers with a `BlockCipherCore`
+// carry ECB/CBC entries; the rest are single-block only.
 const defaults: Record<Cipher, Partial<Record<CipherMode, Record<Mode, CipherSpec>>>> = {
   "aes-128": {
     "single-block": { encrypt: aes128Spec, decrypt: aes128DecryptSpec },
@@ -124,9 +149,11 @@ const defaults: Record<Cipher, Partial<Record<CipherMode, Record<Mode, CipherSpe
   },
   "aes-192": {
     "single-block": { encrypt: aes192Spec, decrypt: aes192DecryptSpec },
+    ...modesFromCore(aesCore("aes-192")),
   },
   "aes-256": {
     "single-block": { encrypt: aes256Spec, decrypt: aes256DecryptSpec },
+    ...modesFromCore(aesCore("aes-256")),
   },
   "speck-32-64-be": {
     "single-block": { encrypt: speck32_64BeSpec, decrypt: speck32_64BeDecryptSpec },
@@ -435,11 +462,27 @@ const buildCanonicalPair = (
   cipher: Cipher,
   cipherMode: CipherMode,
   scheme: PaddingScheme,
-): SpecsByMode => ({
-  kind: "cipher",
-  encrypt: applyPaddingScheme(resolveDefault(cipher, cipherMode, "encrypt"), "encrypt", scheme),
-  decrypt: applyPaddingScheme(resolveDefault(cipher, cipherMode, "decrypt"), "decrypt", scheme),
-});
+): SpecsByMode => {
+  // `undefined` for a cipher with no `BlockCipherCore` (Speck/Serpent/DES/
+  // Blowfish/Twofish today) — which is what keeps the padding overlay off for
+  // them, exactly as the old AES-id-prefix gate did inside the overlay itself.
+  const blockBytes = blockByteLengthFor(cipher);
+  return {
+    kind: "cipher",
+    encrypt: applyPaddingScheme(
+      resolveDefault(cipher, cipherMode, "encrypt"),
+      "encrypt",
+      scheme,
+      blockBytes,
+    ),
+    decrypt: applyPaddingScheme(
+      resolveDefault(cipher, cipherMode, "decrypt"),
+      "decrypt",
+      scheme,
+      blockBytes,
+    ),
+  };
+};
 
 /**
  * Sibling of `buildCanonicalPair` for hash variants. Slice 2.10b
@@ -779,7 +822,17 @@ export const setCipherMode = (m: CipherMode): void => {
  */
 export const setPadding = (scheme: PaddingScheme): void => {
   setPaddingScheme(scheme);
-  updateBoth((s, m) => applyPaddingScheme(s, m, scheme));
+  // The block size has to be resolved HERE, not inside the callback:
+  // `updateBoth` hands the updater only `(spec, mode)`, and the spec alone
+  // can't say how wide its cipher's block is.
+  //
+  // Gate on the union's `kind` rather than on `useCipher()()` alone — the
+  // cipher signal keeps its value while a hash or RSA is active ("remember
+  // last cipher"), so reading it unconditionally would hand a 16 to an RSA
+  // spec and splice a pad into it. Only a `cipher`-kind spec has a block.
+  const current = specs();
+  const blockBytes = current.kind === "cipher" ? blockByteLengthFor(useCipher()()) : undefined;
+  updateBoth((s, m) => applyPaddingScheme(s, m, scheme, blockBytes));
 };
 
 /**
@@ -1624,6 +1677,7 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
     resolveDefault(useCipher()(), useCipherMode()(), otherMode),
     otherMode,
     usePaddingScheme()(),
+    blockByteLengthFor(useCipher()()),
   );
   setSpecs(
     docMode === "encrypt"
@@ -1680,6 +1734,7 @@ export const resetSpec = (): void => {
     resolveDefault(useCipher()(), useCipherMode()(), mode()),
     mode(),
     usePaddingScheme()(),
+    blockByteLengthFor(useCipher()()),
   );
   updateActive(() => canonical);
 };
@@ -1755,6 +1810,7 @@ export const isCustomSpec = (): boolean => {
     resolveDefault(useCipher()(), useCipherMode()(), mode()),
     mode(),
     usePaddingScheme()(),
+    blockByteLengthFor(useCipher()()),
   );
   return !deepEqualJson(activeSpec(), canonical);
 };
@@ -1765,8 +1821,13 @@ export const __resetSpecForTests = (): void => {
   const scheme = usePaddingScheme()();
   setSpecs({
     kind: "cipher",
-    encrypt: applyPaddingScheme(aes128Spec, "encrypt", scheme),
-    decrypt: applyPaddingScheme(aes128DecryptSpec, "decrypt", scheme),
+    encrypt: applyPaddingScheme(aes128Spec, "encrypt", scheme, blockByteLengthFor("aes-128")),
+    decrypt: applyPaddingScheme(
+      aes128DecryptSpec,
+      "decrypt",
+      scheme,
+      blockByteLengthFor("aes-128"),
+    ),
   });
 };
 

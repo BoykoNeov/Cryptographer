@@ -1,8 +1,13 @@
 # Cipher-agnostic block modes — `BlockCipherCore` + generic mode builders
 
-> **Status (2026-07-17): PROPOSED.** Scope decided with the user: build the
-> machine, prove it on **one 8-byte cipher (Blowfish)**, and **design for CTR
-> without building it**.
+> **Status (2026-07-17): Phases A + B SHIPPED; Phase C (Blowfish) pending.**
+> Scope decided with the user: build the machine, prove it on **one 8-byte
+> cipher (Blowfish)**, and **design for CTR without building it**.
+>
+> After B the machine is block-size-generic end to end and AES-192/256 gained
+> ECB/CBC. **No shipped cipher has a non-16 block in a mode yet** — the generic
+> paths are pinned by a fake-core unit test, not by the app. Phase C is what
+> turns that into a real proof.
 
 ## Context
 
@@ -142,18 +147,19 @@ tiebreaker is surgery: Blowfish's `buildRound(roundIdx, pIdx, seedInput)`
 named (`:470`). DES is a top-level **const, not a builder** (`des.ts:180`), with
 IP/FP inline and double nesting — a worse first customer.
 
-## The real blocker set (5 sites, all `16`)
+## The real blocker set (5 sites, all `16`) — ✅ all closed in Phase B
 
-| # | Site | What |
-|---|---|---|
-| 1 | `spec-mutations.ts:1705` `AES_BLOCK_SIZE` (used `:1914/:1923/:1975/:1992`) + gate `isByteNativeAesSpec` `:1734` | Padding overlay hardcodes 16 and is gated to AES **by spec-id prefix** |
-| 2 | `stores/padding.ts:102-146` | `paddingLimits` is `isAesCipher`-gated; returns fixed one-block `min===max` per cipher, **ignoring `cipherMode`**. `MAX_BYTES = MAX_BLOCKS_UI * 16` |
-| 3 | `App.tsx:~465` | `inputBytes.length % 16 !== 0`, message *"multiple of 16 bytes (whole AES blocks)"* |
-| 4 | `stores/iv.ts:26` | `IV_LENGTH = 16`; `setIvBytes` **throws** on any other length → DES/Blowfish need 8 |
-| 5 | `aes-cbc-builder.ts:169` | `fetch-iv` leaf `params: { byteLength: BLOCK_SIZE }` |
+| # | Site | What | Resolution |
+|---|---|---|---|
+| 1 | `spec-mutations.ts` `AES_BLOCK_SIZE` + gate `isByteNativeAesSpec` | Padding overlay hardcodes 16 and is gated to AES **by spec-id prefix** | `blockByteLength` param + `overlayApplies`; both const and gate deleted |
+| 2 | `stores/padding.ts` | `paddingLimits` is `isAesCipher`-gated; fixed one-block `min===max` per cipher, **ignoring `cipherMode`**. `MAX_BYTES = MAX_BLOCKS_UI * 16` | Derives from the core; `singleBlockLimits` fallback for coreless ciphers |
+| 3 | `App.tsx` | `inputBytes.length % 16 !== 0`, message *"multiple of 16 bytes (whole AES blocks)"* | `% blockBytes`, cipher-named prose |
+| 4 | `stores/iv.ts` | `IV_LENGTH = 16`; `setIvBytes` **throws** on any other length → DES/Blowfish need 8 | width is a param; `IvInput` takes a prop |
+| 5 | `aes-cbc-builder.ts` `fetch-iv` `byteLength: BLOCK_SIZE` | — | **Already fixed in Phase A** (`modes/cbc.ts` reads `core.blockByteLength`) |
 
 Site 2's switch **is already a per-cipher block-size table**, just badly
-factored — `BlockCipherCore.blockByteLength` replaces it outright.
+factored. It is NOT fully replaced yet: `core.blockByteLength` takes over per
+cipher as cores land, and the switch is the fallback until every cipher has one.
 
 ## Phases
 
@@ -181,18 +187,77 @@ would give false positives). Result: **12/12 deep-equal AND byte-identical
 serialization**. Since frames are derived from the spec, a byte-identical spec
 *guarantees* zero frame changes — a proof, not a sample. `tsc --noEmit` clean.
 
-### Phase B — block-size-generic plumbing
+### Phase B — block-size-generic plumbing — ✅ SHIPPED 2026-07-17
 
-Fix the 5 sites above to read `blockByteLength` from the core registry.
-Delete `isByteNativeAesSpec`'s id-prefix gate. `iv.ts` accepts the core's
-block size; `paddingLimits` derives from the core **and** honours `cipherMode`.
-Purge the stale MatrixState/load-block comments while here.
+The registry landed as planned (`src/ui/stores/block-cipher-cores.ts`,
+`Partial<Record<Cipher, BlockCipherCore>>`, AES ×3). Site 5 (`fetch-iv`) turned
+out to be **already fixed in Phase A** — `modes/cbc.ts` reads
+`core.blockByteLength`. The other four:
 
-**Early partial win:** register AES-192/256 ECB/CBC (already
-variant-parameterized — table-only change in `cipher-mode.ts:60-61` +
-`spec.ts` defaults). Validates the store/table plumbing. **Flag:** still
-16-byte, so it does *not* exercise the block-size-generic path — no false
-confidence.
+1. ✅ `applyPaddingScheme(spec, mode, scheme, blockByteLength)` — the width is a
+   **required, nullable** param, not optional. Optional would buy nothing (a
+   3-arg call means "no overlay", so every existing test breaks either way) and
+   would let a forgotten call site *silently* disable padding. `undefined` now
+   means "the caller has no block cipher here" (hash/RSA/coreless cipher) and is
+   what scopes the overlay — the `isByteNativeAesSpec` id-prefix gate is gone.
+2. ✅ `paddingLimits` derives every bound from `core.blockByteLength`, honours
+   `cipherMode`, and falls back to a fixed one-block `switch` for coreless
+   ciphers (see "the switch stays" below).
+3. ✅ `App.tsx` — `% blockBytes` + cipher-named prose; `formatLengthError` and
+   the mode/padding selector gates key off `hasBlockCipherCore` instead of
+   `isAesCipher`.
+4. ✅ `iv.ts` — `setIvBytes(bytes, blockByteLength?)` / `randomizeIv(width)`.
+   The width is passed IN (the App knows the active cipher; this module-scope
+   signal doesn't, and reaching for the cipher store would invert the
+   dependency). `IvInput` takes it as a prop.
+
+Also purged the ghost comments, and **deleted the dead matrix multi-block
+branch** in `applyPaddingScheme` (+ its two `hasIterateNode` /
+`hasByteNativeIterate` helpers, whose only caller it was): every shipped
+`iterate` is port-mode, and the aux-mode matrix iterate it served was retired
+with `MatrixState` in Phase 5 Slice 5.1 along with the `split-blocks` steps that
+made such a spec runnable at all.
+
+**The switch stays — "core.blockByteLength replaces it outright" is only true
+once EVERY cipher has a core.** Mid-rollout, `paddingLimits` still needs a width
+for coreless ciphers, so `singleBlockLimits` keeps the per-cipher table. It
+shrinks one entry per core landed; don't read "outright" as "delete it now."
+Enumerating `Cipher` *here* is correct per decision 1b — the anti-pattern is
+only in `src/ciphers/` mode builders.
+
+**Early partial win — AES-192/256 ECB/CBC: shipped AND verified.** Generated
+from the core in `spec.ts`'s `defaults` (`modesFromCore`) rather than as 8 new
+`aes-192-ecb.ts`-style files — a file per (cipher × mode × direction) is the N×M
+explosion this plan exists to kill. AES-128 keeps its file constants (~35
+modules import them, some by reference).
+
+The plan called this "a table-only change", i.e. correct by construction — so it
+got a KAT anyway (`tests/aes-192-256-modes-kat.test.ts`), and it earned it:
+`aesCore` at Nk=6/Nk=8 driving the mode builders was a path **no test had ever
+run**, and its failure mode is silent (plausible-but-wrong ciphertext). Pinned
+against the published SP 800-38A §F.1.3/§F.1.5/§F.2.3/§F.2.5 vectors *and*
+`node:crypto`. 10/10 green.
+
+**Verification — and its honest limit.** Gate green: 255 files / 3086 tests,
+`tsc` clean, build clean. But **AES-192/256 gave ZERO non-16 coverage** — every
+generalized path stays at 16 for AES, so `*blockBytes` / `%blockBytes` /
+non-16 IV were correct-by-construction but unexercised. That gap is closed only
+as far as unit tests can close it: `tests/block-size-generic-modes.test.ts`
+feeds a **fake `BlockCipherCore` with an 8-byte block** to the real mode
+builders and the real overlay, asserting the iterate splits at 8, `fetch-iv`
+reads 8, and the pad's `blockSize` is 8. Pre-Phase-B that test fails twice over
+(id-prefix gate rejects `fake-8-ecb@1`; `AES_BLOCK_SIZE` pads to 16).
+
+**Phase B does NOT prove non-16 works in the app** — the fake core's body is a
+passthrough leaf, not a cipher. That is Phase C's job (composed Blowfish CBC KAT
++ browser smoke). Don't let a green Phase B read as "8-byte blocks work."
+
+**Phase C must decide:** the gate change couples "has a core" with "padding
+overlay enabled **in single-block mode**". Today only AES has cores, so nothing
+changes. But the day Blowfish gets a core it *also* gains PKCS#7 in single-block
+— which it lacks today and which this plan lists as out of scope. Decide then
+whether single-block padding follows core-presence or gets its own gate; a KAT
+won't catch a first-impression demo quietly changing.
 
 ### Phase C — Blowfish ECB/CBC (the repeatable unit)
 

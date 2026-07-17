@@ -72,6 +72,7 @@ import { TwofishRoundDiagram } from "./components/TwofishRoundDiagram";
 // Idempotent.
 import "./narration/index";
 import { clearDirty, setAutoRerun, setDirty, useAutoRerun, useDirty } from "./stores/auto-rerun";
+import { blockByteLengthFor, hasBlockCipherCore } from "./stores/block-cipher-cores";
 import {
   ASYMMETRIC_DESCRIPTIONS,
   ASYMMETRIC_LABELS,
@@ -96,7 +97,6 @@ import {
   type Hash,
   describeAlgorithm,
   historyOfAlgorithm,
-  isAesCipher,
   isAsymmetric,
   isCipher,
   isHash,
@@ -124,7 +124,7 @@ import {
 } from "./stores/edit-history";
 import { setByteFormat, useByteFormat } from "./stores/format";
 import { pushSnapshot, useHistory } from "./stores/history";
-import { useIvBytes } from "./stores/iv";
+import { DEFAULT_IV_LENGTH, useIvBytes } from "./stores/iv";
 import { installKeyboardShortcuts } from "./stores/keyboard";
 import { getLayoutForSpec, hasUserLayout, setLayoutForSpec } from "./stores/layout";
 import {
@@ -189,10 +189,11 @@ import "./app.css";
 // "currently holds a recognisable default?" check in changePadding.
 const DEFAULT_AES_PT_BYTES = DEFAULT_PT_BYTES_BY_CIPHER["aes-128"];
 // When the user reloads with a non-`none` padding scheme that caps input
-// below 16 bytes (pkcs7 + iso7816-4), the FIPS vector would immediately
-// fail the length check. Default to a short, visible word so the trace
-// produces a clean pad/unpad frame on first Run. The bytes are the ASCII
-// codepoints for "apple". AES-only — Speck has no padding scheme today.
+// below one block (pkcs7 + iso7816-4 always append at least one byte), the
+// FIPS vector would immediately fail the length check. Default to a short,
+// visible word so the trace produces a clean pad/unpad frame on first Run.
+// The bytes are the ASCII codepoints for "apple". Only reachable for a cipher
+// with a core — a coreless one takes no padding, so its limits never cap short.
 const DEFAULT_SHORT_PT_BYTES = new Uint8Array([0x61, 0x70, 0x70, 0x6c, 0x65]);
 
 // How long after the last spec edit before we re-run the cipher. 200ms is
@@ -295,7 +296,10 @@ export const App = () => {
   const initialPtBytes = isCipher(algorithm())
     ? (() => {
         const initialLimits = paddingLimits(mode(), padding(), cipher(), cipherMode());
-        return isAesCipher(cipher()) && mode() === "encrypt" && initialLimits.max < 16
+        // An always-adds-a-byte scheme caps encrypt below a full block, so the
+        // full-block default plaintext wouldn't fit — boot the short one instead.
+        const blockBytes = blockByteLengthFor(cipher());
+        return blockBytes !== undefined && mode() === "encrypt" && initialLimits.max < blockBytes
           ? DEFAULT_SHORT_PT_BYTES
           : DEFAULT_PT_BYTES_BY_CIPHER[cipher()];
       })()
@@ -455,14 +459,18 @@ export const App = () => {
         }
         // Multi-block ECB/CBC require block-aligned input on decrypt OR when
         // the padding scheme is "none" on encrypt. Catch it here with a
-        // friendly error rather than letting split-blocks throw a
-        // runtime-internals error from inside the iterate loop.
+        // friendly error rather than letting the iterate's block split throw a
+        // runtime-internals error from inside the loop.
         const needsAlignment =
           (cipherMode() === "ecb" || cipherMode() === "cbc") &&
           (mode() === "decrypt" || padding() === "none");
-        if (needsAlignment && inputBytes.length % 16 !== 0) {
+        // A cipher in ECB/CBC always has a core, so the `?? 0` is unreachable;
+        // it exists so a missing core can't turn into a `% NaN` that silently
+        // passes every alignment check.
+        const blockBytes = blockByteLengthFor(cipher()) ?? 0;
+        if (needsAlignment && blockBytes > 0 && inputBytes.length % blockBytes !== 0) {
           throw new Error(
-            `${inputLabel()}: must be a multiple of 16 bytes (whole AES blocks); got ${inputBytes.length}.`,
+            `${inputLabel()}: must be a multiple of ${blockBytes} bytes (whole ${CIPHER_LABELS[cipher()]} blocks); got ${inputBytes.length}.`,
           );
         }
       } else if (isHash(algorithm())) {
@@ -1622,11 +1630,11 @@ export const App = () => {
                 // + clear.
                 withBoundaryReset(() => setCipherMode(e.currentTarget.value as CipherMode))
               }
-              disabled={!isAesCipher(cipher())}
+              disabled={!hasBlockCipherCore(cipher())}
               title={
-                isAesCipher(cipher())
-                  ? "Block-cipher mode of operation. 'single block' keeps the canonical FIPS-197 single-block trace. ECB encrypts each block independently (educational baseline — the Tux-image leak). CBC chains blocks via the IV + previous-ciphertext XOR so identical plaintext blocks produce different ciphertext. CTR ships in Phase 3. AES-128 is the only variant with the multi-block factories wired up today — AES-192/256 lands in Phase 4."
-                  : "Modes of operation are AES-only in this build; Speck / Serpent / DES run as single-block ciphers."
+                hasBlockCipherCore(cipher())
+                  ? "Block-cipher mode of operation. 'single block' keeps the canonical FIPS-197 single-block trace. ECB encrypts each block independently (educational baseline — the Tux-image leak). CBC chains blocks via the IV + previous-ciphertext XOR so identical plaintext blocks produce different ciphertext. CTR is designed for but not built."
+                  : `Modes of operation need a cipher whose body can read its block from the loop — ${CIPHER_LABELS[cipher()]} runs as a single-block cipher in this build.`
               }
             >
               <option value="single-block">{CIPHER_MODE_LABELS["single-block"]}</option>
@@ -1638,8 +1646,8 @@ export const App = () => {
                 }
               >
                 {CIPHER_MODE_LABELS.ecb}
-                {isAesCipher(cipher()) && !isCipherModeSupported(cipher(), "ecb")
-                  ? " (AES-128 only in Phase 1)"
+                {hasBlockCipherCore(cipher()) && !isCipherModeSupported(cipher(), "ecb")
+                  ? " (not wired up for this cipher yet)"
                   : ""}
               </option>
               <option
@@ -1650,8 +1658,8 @@ export const App = () => {
                 }
               >
                 {CIPHER_MODE_LABELS.cbc}
-                {isAesCipher(cipher()) && !isCipherModeSupported(cipher(), "cbc")
-                  ? " (AES-128 only in Phase 2)"
+                {hasBlockCipherCore(cipher()) && !isCipherModeSupported(cipher(), "cbc")
+                  ? " (not wired up for this cipher yet)"
                   : ""}
               </option>
               <option
@@ -1667,11 +1675,11 @@ export const App = () => {
             <select
               value={padding()}
               onChange={(e) => changePadding(e.currentTarget.value as PaddingScheme)}
-              disabled={!isAesCipher(cipher())}
+              disabled={!hasBlockCipherCore(cipher())}
               title={
-                isAesCipher(cipher())
+                hasBlockCipherCore(cipher())
                   ? "Padding scheme applied at the start of encrypt / end of decrypt"
-                  : "Padding is AES-only in this build — the overlay's load-block step assumes a 16-byte matrix. The non-AES cipher uses its natural block size as the input length."
+                  : `Padding needs a cipher the overlay can wire itself into — ${CIPHER_LABELS[cipher()]} takes exactly one block of input in this build.`
               }
             >
               <For each={PADDING_SCHEME_OPTIONS}>
@@ -1777,7 +1785,10 @@ export const App = () => {
             need a class hook — the wrapper carries the full-row layout. */}
         <Show when={cipherMode() === "cbc"}>
           <div class="data-field">
-            <IvInput format={fmt()} />
+            <IvInput
+              format={fmt()}
+              blockByteLength={blockByteLengthFor(cipher()) ?? DEFAULT_IV_LENGTH}
+            />
           </div>
         </Show>
         {/* Result line sits adjacent to plaintext/key in the inputs row
@@ -2304,10 +2315,12 @@ const formatLengthError = (
 ): string => {
   const label = mode === "encrypt" ? "plaintext" : "ciphertext";
   const range = min === max ? `${min} bytes` : `${min}–${max} bytes`;
+  const name = CIPHER_LABELS[cipher];
 
-  // Non-AES ciphers (today: Speck32/64) take a fixed single-block input.
-  if (!isAesCipher(cipher)) {
-    return `${label}: must be exactly ${min} bytes (one ${CIPHER_LABELS[cipher]} block); got ${got}.`;
+  // A cipher with no core is single-block only and takes no padding, so its
+  // whole story is "exactly one block".
+  if (!hasBlockCipherCore(cipher)) {
+    return `${label}: must be exactly ${min} bytes (one ${name} block); got ${got}.`;
   }
 
   // Multi-block modes (ECB/CBC/CTR) — cite the cap rather than "second
@@ -2321,12 +2334,12 @@ const formatLengthError = (
     return `${label}: ${cipherMode.toUpperCase()} + ${schemeLabel} accepts ${range}; got ${got}. (Cap is the UI's MAX_BLOCKS_UI for trace browsability — raise to extend.)`;
   }
   if (cipherMode === "ctr") {
-    return `${label}: AES-CTR accepts ${range}; got ${got}. (No padding needed; cap is the UI's MAX_BLOCKS_UI for trace browsability.)`;
+    return `${label}: ${name}-CTR accepts ${range}; got ${got}. (No padding needed; cap is the UI's MAX_BLOCKS_UI for trace browsability.)`;
   }
 
-  // Single-block AES: today's behavior with scheme-specific hints.
+  // Single-block, with scheme-specific hints.
   if (mode === "decrypt") {
-    return `${label}: must be exactly ${min} bytes (one AES block); got ${got}.`;
+    return `${label}: must be exactly ${min} bytes (one ${name} block); got ${got}.`;
   }
   switch (scheme) {
     case "pkcs7":
@@ -2335,7 +2348,7 @@ const formatLengthError = (
       return `${label}: ISO 7816-4 input must be ${range}; got ${got}. (Like PKCS#7, this scheme always appends at least one byte — the 0x80 sentinel — so a ${max + 1}-byte input would need a second block. Switch to ECB/CBC mode for multi-block input.)`;
     case "zero-pad":
       if (got < min) {
-        return `${label}: Zero-pad input must be ${range}; got ${got}. (Length 0 would produce an empty padded block, which can't be loaded into the AES state.)`;
+        return `${label}: Zero-pad input must be ${range}; got ${got}. (Length 0 would produce an empty padded block, which has no bytes for ${name} to act on.)`;
       }
       return `${label}: Zero-pad input must be ${range}; got ${got}. (A ${max + 1}-byte input would need a second padding block — switch to ECB/CBC mode for multi-block input.)`;
     case "none":

@@ -1639,15 +1639,25 @@ export const pickSeedBinding = (
 // instance before inserting the new chain, so calling it repeatedly with
 // the same scheme is a no-op (idempotent).
 //
-// Encrypt + <scheme>: prepend [<scheme>-pad → load-block] to spec.steps. Input
-//   shape becomes `bytes` (variable-length); the runtime seeds with BytesState
-//   and the load-block frame transitions to MatrixState before AES runs.
-// Decrypt + <scheme>: append   [store-block → <scheme>-unpad] to spec.steps.
-//   Input shape stays `matrix4x4-bytes` (the ciphertext is one block). The
-//   final state after the chain is BytesState (0..blockSize bytes of
-//   recovered plaintext, depending on scheme).
+// Encrypt + <scheme>: prepend a <scheme>-pad reading `$input`, and repoint the
+//   body's former `$input` consumers at the pad's output.
+// Decrypt + <scheme>: append a <scheme>-unpad reading the cipher's exit, and
+//   move `spec.outputFrom` onto it, so the spec's result is the stripped
+//   plaintext (0..blockSize bytes, depending on scheme) rather than the
+//   still-padded block.
 // scheme=none: strips any existing chain and returns the canonical spec
 //   unchanged (or as close to it as `applyPaddingScheme` was last fed).
+//
+// The overlay splices into the PORT graph. It once wove a
+// [pad → load-block] / [store-block → unpad] chain around a `matrix4x4-bytes`
+// state thread, bridging bytes↔matrix on the way in and out; Phase 5 Slice 5.1
+// (2026-05-30) retired `MatrixState` and both bridge steps with it. Every spec
+// is port-native byte-flat now, so there is no shape to bridge — only a pad to
+// wire in.
+//
+// The block width comes from the CALLER (`blockByteLength`), not from a
+// constant here: the overlay is cipher-agnostic, and a hardcoded 16 is what
+// used to scope it to AES by spec-id prefix. See `docs/plans/foamy-prancing-wren.md`.
 //
 // Adding a new scheme: register the pad/unpad step types in the registry,
 // extend the `PaddingScheme` union below, add its (pad, unpad) type pair
@@ -1701,9 +1711,6 @@ export const PADDING_STEP_TYPES: ReadonlySet<string> = new Set<string>([
   "generic.store-block@1",
 ]);
 
-/** AES block size — the only value supported by this overlay today. */
-const AES_BLOCK_SIZE = 16;
-
 /**
  * The port name a Phase-1 *lifted* legacy step (`generic.pkcs7-pad@1` et al.)
  * publishes its transformed bytes under. The lift's `ProjectionMetadata`
@@ -1719,20 +1726,29 @@ const LIFTED_STATE_PORT = "state";
 const port = (node: string, portName: string): PortBinding => ({ node, port: portName });
 
 /**
- * Byte-native AES detection for the padding overlay. Byte-native AES
- * (scaffolding-suppression Phase B) carries a flat 16-byte state on raw
- * ports (`stateShape: "bytes"`), unlike the legacy matrix AES
- * (`"matrix4x4-bytes"`). It shares the `"bytes"` shape with Speck (4-byte
- * block) / Serpent (16) / DES (8), so shape alone can't gate the overlay:
- * the pad's `blockSize` is hardcoded to `AES_BLOCK_SIZE` (16), which is a
- * lie for Speck/DES. We therefore scope the byte-native padding branch to
- * the AES family by id prefix — the honest scope for the hardcoded 16.
- * When Serpent (B3, block 16) / DES (B4, block 8) go byte-native they add
- * their own branch (Serpent could reuse this once block size is read off
- * the spec; DES needs an 8-byte block). This is the clear B3/B4 seam.
+ * Can the padding overlay target this spec?
+ *
+ * The gate used to be `spec.stateShape === "bytes" && spec.id.startsWith("aes")`
+ * — an id-prefix scope that existed for one reason: the pad's `blockSize` was
+ * hardcoded to 16, which is a lie for Speck (4) / DES (8) / Blowfish (8), and
+ * every port-native cipher shares the `"bytes"` shape, so shape alone couldn't
+ * tell them apart. Now that the caller supplies the block size, the id prefix
+ * has nothing left to do and the overlay works for any block cipher.
+ *
+ * `blockByteLength === undefined` is what scopes it instead, and it means
+ * exactly "the caller has no block cipher here": a hash, RSA, or a cipher with
+ * no `BlockCipherCore` yet. Absence disables the overlay, so a spec the caller
+ * can't vouch for is returned canonical rather than padded on a guessed size.
+ *
+ * The `stateShape` check is belt-and-braces — every shipped spec is `"bytes"`
+ * since Phase 5 Slice 5.1 retired `MatrixState`. It stays because a pad
+ * spliced into a non-byte state thread would be silently wrong, and the check
+ * costs nothing.
  */
-const isByteNativeAesSpec = (spec: CipherSpec): boolean =>
-  spec.stateShape === "bytes" && spec.id.startsWith("aes");
+const overlayApplies = (
+  spec: CipherSpec,
+  blockByteLength: number | undefined,
+): blockByteLength is number => blockByteLength !== undefined && spec.stateShape === "bytes";
 
 /**
  * Recursively rewrite every `portInputs` binding in the tree through
@@ -1842,29 +1858,6 @@ const stripPaddingLeaves = (steps: readonly StepNode[]): readonly StepNode[] =>
   steps.filter((n) => !(n.kind === "step" && PADDING_STEP_TYPES.has(n.type)));
 
 /**
- * Detect a multi-block cipher spec by looking for an `iterate` node at the
- * top level. Multi-block AES (ECB/CBC/CTR factories) put their iterate
- * loop at the top level; non-iterating specs (single-block AES, Speck)
- * don't have one. Used to branch `applyPaddingScheme`: multi-block specs
- * already do their own BytesState↔MatrixState shape handling inside the
- * loop, so the overlay only needs to add pad/unpad — no load/store-block.
- */
-const hasIterateNode = (steps: readonly StepNode[]): boolean =>
-  steps.some((n) => n.kind === "iterate");
-
-/**
- * Detect a byte-native (port-mode) iterate — `seedInput` set rather than the
- * legacy `blocksFromAux` aux split (Slice B1.4). Used to route byte-native
- * ECB *away* from the matrix multi-block padding branch (Branch 1): a
- * port-mode iterate reads its blocks from a port (`$input`/pad), not from a
- * `state` thread, so the matrix branch's no-portInputs pad prepend would be
- * ignored. Byte-native ECB instead splices the pad into the port graph in
- * the byte-native branch (Branch 2), repointing the iterate's `seedInput`.
- */
-const hasByteNativeIterate = (steps: readonly StepNode[]): boolean =>
-  steps.some((n) => n.kind === "iterate" && n.seedInput !== undefined);
-
-/**
  * Layer a padding chain onto a cipher spec.
  *
  * Idempotent: any pre-existing padding leaves are stripped before the new
@@ -1873,15 +1866,13 @@ const hasByteNativeIterate = (steps: readonly StepNode[]): boolean =>
  * by passing scheme=`"none"` — useful when the user toggles the padding
  * selector back to off.
  *
- * Three shape branches:
- *  1. Multi-block AES (has an `iterate` node) — pad on encrypt / unpad on
- *     decrypt, no load/store-block (the iterate body handles state shape).
- *  2. Single-block AES (`stateShape === "matrix4x4-bytes"`) — today's path:
- *     prepend [pad, load-block] on encrypt or append [store-block, unpad]
- *     on decrypt.
- *  3. Anything else (Speck32/64) — overlay is a no-op for now; the user's
- *     preference is preserved in the store and re-applies when the user
- *     flips back to an AES variant.
+ * @param blockByteLength the block width the pad should fill to, or
+ *   `undefined` when the caller has no block cipher here (a hash, RSA, or a
+ *   cipher with no `BlockCipherCore`) — which disables the overlay entirely.
+ *   Required rather than optional *on purpose*: a defaulted-to-16 param would
+ *   silently pad an 8-byte-block cipher to 16, and an optional one would let a
+ *   call site forget the argument and silently get no overlay at all. Making
+ *   every caller name its block size — or name its absence — is the point.
  *
  * Pure: returns a new spec; the input spec is not mutated. New StepLeaf
  * objects are emitted on each call (no shared param references between
@@ -1891,125 +1882,89 @@ export const applyPaddingScheme = (
   spec: CipherSpec,
   mode: "encrypt" | "decrypt",
   scheme: PaddingScheme,
+  blockByteLength: number | undefined,
 ): CipherSpec => {
   const stripped = stripPaddingLeaves(spec.steps);
 
-  // ── Branch 1: matrix multi-block (matrix CBC/CTR) ──────────────────────
-  // The iterate node already handles BytesState ↔ MatrixState transitions
-  // via the split-blocks / concat-blocks boundary steps inside the spec.
-  // All we add here is the pad/unpad at the outer BytesState boundary.
-  // Byte-native ECB (port-mode iterate) is EXCLUDED — it has no `state`
-  // thread to splice a no-portInputs pad into; it falls through to the
-  // byte-native branch below, which repoints the iterate's `seedInput`.
-  if (hasIterateNode(stripped) && !hasByteNativeIterate(stripped)) {
-    if (scheme === "none") {
-      return { ...spec, steps: stripped };
-    }
-    const { padType, unpadType, padId, unpadId } = SCHEME_STEP_TYPES[scheme];
-    if (mode === "encrypt") {
-      const padLeaf: StepLeaf = {
-        kind: "step",
-        id: padId,
-        type: padType,
-        params: { blockSize: AES_BLOCK_SIZE },
-      };
-      return { ...spec, steps: [padLeaf, ...stripped] };
-    }
-    // decrypt
-    const unpadLeaf: StepLeaf = {
-      kind: "step",
-      id: unpadId,
-      type: unpadType,
-      params: { blockSize: AES_BLOCK_SIZE },
-    };
-    return { ...spec, steps: [...stripped, unpadLeaf] };
+  // ── Not an overlay target ──────────────────────────────────────────────
+  // A hash, RSA, or a cipher with no core: return the spec canonical
+  // (stripped of any overlay a previous cipher selection left behind). The
+  // padding store still holds the user's preference, so flipping back to a
+  // cipher that HAS a core re-applies their choice without losing it.
+  if (!overlayApplies(spec, blockByteLength)) {
+    return { ...spec, steps: stripped };
   }
 
-  // ── Branch 2: byte-native AES (single-block + ECB) (Slice B1) ──────────
-  // The port-native AES rebuild carries a flat 16-byte state on raw ports
-  // (no `MatrixState` thread): the plaintext arrives on the reserved
-  // `$input` source and the cipher exit is named by `spec.outputFrom`. The
-  // legacy matrix branch's [pad → load-block] / [store-block → unpad] chain
-  // doesn't apply — there is no state thread to splice into and no
-  // bytes↔matrix bridge to insert. Instead we splice the pad directly into
-  // the port graph: prepend a pad reading `$input`, then repoint every
-  // `$input` consumer to the pad's output. For single-block that consumer is
-  // the initial AddRoundKey's `input` port (a `portInputs` binding — the
-  // merged `xor-with-aux@1` leaf since Finding F3); for ECB (B1.4) it's the
-  // port-mode iterate's `seedInput` — `repointInputSourceConsumers` rewrites
-  // both generically (it walks every portInputs key). The pad is a Phase-1
-  // lifted step, so its output port is named `"state"` (LIFTED_STATE_PORT),
-  // not `"output"`.
-  if (isByteNativeAesSpec(spec)) {
-    // Idempotency: a prior call may have repointed `$input` consumers to a
-    // pad (encrypt) or moved `outputFrom` onto an unpad (decrypt). `stripped`
-    // removed those LEAVES; we must also repair the EDGES before re-applying,
-    // or a leftover binding dangles at the removed pad/unpad. Restore both
-    // first, then re-derive from that canonical wiring.
-    const inputRestored = restoreInputSourceConsumers(stripped);
-    // Restore `outputFrom`: if it points at a known unpad, recover the
-    // unpad's captured cipher-exit binding from the PRE-strip spec.
-    let canonicalOutputFrom = spec.outputFrom;
-    if (canonicalOutputFrom !== undefined && PADDING_UNPAD_IDS.has(canonicalOutputFrom.node)) {
-      const priorUnpad = findStep(spec, canonicalOutputFrom.node);
-      const captured = priorUnpad?.portInputs?.[LIFTED_STATE_PORT];
-      canonicalOutputFrom = captured ?? canonicalOutputFrom;
-    }
-    const restoredSpec: CipherSpec = {
-      ...spec,
-      steps: inputRestored,
-      ...(canonicalOutputFrom !== undefined ? { outputFrom: canonicalOutputFrom } : {}),
-    };
-
-    if (scheme === "none") {
-      // No `load-block`/`store-block` ever existed in the byte-native spec,
-      // so the restored wiring IS the canonical spec. Shape stays `"bytes"`.
-      return restoredSpec;
-    }
-    const { padType, unpadType, padId, unpadId } = SCHEME_STEP_TYPES[scheme];
-    if (mode === "encrypt") {
-      const padLeaf: StepLeaf = {
-        kind: "step",
-        id: padId,
-        type: padType,
-        params: { blockSize: AES_BLOCK_SIZE },
-        // Pad reads the raw plaintext from `$input` on its `state` input port.
-        portInputs: { [LIFTED_STATE_PORT]: port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT) },
-      };
-      // The body's `$input` consumers now read the padded bytes instead.
-      const repointed = repointInputSourceConsumers(inputRestored, padId);
-      return { ...restoredSpec, steps: [padLeaf, ...repointed] };
-    }
-    // mode === "decrypt": NOT exercised in B1 (the shipped decrypt spec is
-    // still matrix → handled by the matrix branch below). Implemented
-    // symmetrically for forward-compat with Slice B1.2's byte-native
-    // decrypt: append an unpad reading the current cipher exit, then move
-    // `outputFrom` to the unpad's output. B1.2 will exercise + verify this.
-    const unpadLeaf: StepLeaf = {
-      kind: "step",
-      id: unpadId,
-      type: unpadType,
-      params: { blockSize: AES_BLOCK_SIZE },
-      ...(canonicalOutputFrom !== undefined
-        ? { portInputs: { [LIFTED_STATE_PORT]: canonicalOutputFrom } }
-        : {}),
-    };
-    return {
-      ...restoredSpec,
-      steps: [...inputRestored, unpadLeaf],
-      outputFrom: port(unpadId, LIFTED_STATE_PORT),
-    };
+  // ── The port-native overlay ────────────────────────────────────────────
+  // Every shipped spec carries a flat state on raw ports (no `MatrixState`
+  // thread — Phase 5 Slice 5.1): the plaintext arrives on the reserved
+  // `$input` source and the cipher exit is named by `spec.outputFrom`. So
+  // there is no state thread to splice into and no bytes↔matrix bridge to
+  // insert; the retired matrix overlay's [pad → load-block] /
+  // [store-block → unpad] chain has no counterpart here.
+  //
+  // Instead we splice the pad directly into the port graph: prepend a pad
+  // reading `$input`, then repoint every `$input` consumer to the pad's
+  // output. For single-block that consumer is the initial AddRoundKey's
+  // `input` port (a `portInputs` binding — the merged `xor-with-aux@1` leaf
+  // since Finding F3); for ECB/CBC it's the port-mode iterate's `seedInput`.
+  // `repointInputSourceConsumers` rewrites both generically (it walks every
+  // portInputs key). The pad is a Phase-1 lifted step, so its output port is
+  // named `"state"` (LIFTED_STATE_PORT), not `"output"`.
+  // Idempotency: a prior call may have repointed `$input` consumers to a
+  // pad (encrypt) or moved `outputFrom` onto an unpad (decrypt). `stripped`
+  // removed those LEAVES; we must also repair the EDGES before re-applying,
+  // or a leftover binding dangles at the removed pad/unpad. Restore both
+  // first, then re-derive from that canonical wiring.
+  const inputRestored = restoreInputSourceConsumers(stripped);
+  // Restore `outputFrom`: if it points at a known unpad, recover the
+  // unpad's captured cipher-exit binding from the PRE-strip spec.
+  let canonicalOutputFrom = spec.outputFrom;
+  if (canonicalOutputFrom !== undefined && PADDING_UNPAD_IDS.has(canonicalOutputFrom.node)) {
+    const priorUnpad = findStep(spec, canonicalOutputFrom.node);
+    const captured = priorUnpad?.portInputs?.[LIFTED_STATE_PORT];
+    canonicalOutputFrom = captured ?? canonicalOutputFrom;
   }
+  const restoredSpec: CipherSpec = {
+    ...spec,
+    steps: inputRestored,
+    ...(canonicalOutputFrom !== undefined ? { outputFrom: canonicalOutputFrom } : {}),
+  };
 
-  // ── Branch 3: any other spec the overlay can't target ─────────────────
-  // The legacy matrix padding overlay ([pad → load-block] / [store-block →
-  // unpad] around a `matrix4x4-bytes` state thread) was retired in Phase 5
-  // Slice 5.1 (2026-05-30) with the MatrixState shape + the load-block /
-  // store-block step types. Every shipped AES variant is byte-native now
-  // (handled by Branch 2 above); anything reaching here (Speck/Serpent/DES/
-  // hash) has a state shape the overlay can't meaningfully target — skip it
-  // and return the canonical (stripped) spec. The padding store still
-  // carries the user's preference, so flipping back to a byte-native AES
-  // variant re-applies the choice without losing it.
-  return { ...spec, steps: stripped };
+  if (scheme === "none") {
+    // No `load-block`/`store-block` ever existed in a port-native spec, so
+    // the restored wiring IS the canonical spec. Shape stays `"bytes"`.
+    return restoredSpec;
+  }
+  const { padType, unpadType, padId, unpadId } = SCHEME_STEP_TYPES[scheme];
+  if (mode === "encrypt") {
+    const padLeaf: StepLeaf = {
+      kind: "step",
+      id: padId,
+      type: padType,
+      params: { blockSize: blockByteLength },
+      // Pad reads the raw plaintext from `$input` on its `state` input port.
+      portInputs: { [LIFTED_STATE_PORT]: port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT) },
+    };
+    // The body's `$input` consumers now read the padded bytes instead.
+    const repointed = repointInputSourceConsumers(inputRestored, padId);
+    return { ...restoredSpec, steps: [padLeaf, ...repointed] };
+  }
+  // decrypt: append an unpad reading the current cipher exit, then move
+  // `outputFrom` to the unpad's output so the spec's result is the stripped
+  // plaintext rather than the still-padded block.
+  const unpadLeaf: StepLeaf = {
+    kind: "step",
+    id: unpadId,
+    type: unpadType,
+    params: { blockSize: blockByteLength },
+    ...(canonicalOutputFrom !== undefined
+      ? { portInputs: { [LIFTED_STATE_PORT]: canonicalOutputFrom } }
+      : {}),
+  };
+  return {
+    ...restoredSpec,
+    steps: [...inputRestored, unpadLeaf],
+    outputFrom: port(unpadId, LIFTED_STATE_PORT),
+  };
 };

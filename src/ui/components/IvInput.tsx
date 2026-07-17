@@ -1,5 +1,5 @@
 /**
- * IV input row. Renders a 16-byte text field in the current byte format
+ * IV input row. Renders a one-block-wide text field in the current byte format
  * alongside a 🎲 randomize button. Visible when CBC is the active
  * cipher-mode; the App owns the conditional render.
  *
@@ -7,9 +7,14 @@
  * input next door. The text reflects the live IV from the store but
  * stays in the field as the user types so the byte parser doesn't
  * fight them mid-edit. On blur (or pressing Enter) the value is
- * parsed: if it's a clean 16 bytes in the current format, commit to
- * the store; otherwise revert to the store's current bytes so the
- * field never holds garbage between runs.
+ * parsed: if it's a clean block's worth of bytes in the current format,
+ * commit to the store; otherwise revert to the store's current bytes so
+ * the field never holds garbage between runs.
+ *
+ * The required width arrives as a prop rather than being read from a store:
+ * the IV must match the active cipher's block, and the App is what knows which
+ * cipher is active. Passing it down keeps this component cipher-agnostic — it
+ * renders an 8-byte field for an 8-byte-block cipher without knowing one exists.
  *
  * Format awareness: the field re-renders on byte-format changes
  * because the upstream `props.format` flips, and the local effect
@@ -24,6 +29,8 @@ import { createEffect, createSignal } from "solid-js";
 
 type IvInputProps = {
   readonly format: ByteFormat;
+  /** The active cipher's block width — the IV must be exactly this long. */
+  readonly blockByteLength: number;
 };
 
 export const IvInput = (props: IvInputProps) => {
@@ -61,16 +68,14 @@ export const IvInput = (props: IvInputProps) => {
       setDraft(formatBytes(ivBytes(), props.format));
       return;
     }
-    if (parsed.length !== 16) {
+    if (parsed.length !== props.blockByteLength) {
       // Wrong length. Same recovery — revert to store. We don't show a
       // separate error label because the field reverting is already the
-      // signal that the input was wrong; the cipher's Run handler will
-      // surface a clearer "IV must be 16 bytes" if the user manages to
-      // commit a wrong-length value some other way.
+      // signal that the input was wrong.
       setDraft(formatBytes(ivBytes(), props.format));
       return;
     }
-    setIvBytes(parsed);
+    setIvBytes(parsed, props.blockByteLength);
   };
 
   return (
@@ -96,8 +101,8 @@ export const IvInput = (props: IvInputProps) => {
         <button
           type="button"
           class="iv-randomize-button"
-          onClick={() => randomizeIv()}
-          title="Generate a cryptographically-random 16-byte IV"
+          onClick={() => randomizeIv(props.blockByteLength)}
+          title={`Generate a cryptographically-random ${props.blockByteLength}-byte IV`}
           aria-label="Randomize IV"
         >
           🎲

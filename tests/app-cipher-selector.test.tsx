@@ -355,13 +355,15 @@ describe("App — cipher selector", () => {
     // Regression guard surfaced during Phase 4 advisor review:
     // `setCipher("des")` rebuilds both spec slots via
     // `buildCanonicalPair("des", "single-block", padding())`. If the user
-    // was on AES-128 + PKCS7 just before the swap, that call invokes
-    // `applyPaddingScheme(desSpec, "encrypt", "pkcs7")`. The overlay
-    // expects matrix4x4-bytes state; DES is BytesState. The early-return
-    // guard at `spec.stateShape !== "matrix4x4-bytes"` in
-    // `applyPaddingScheme` is what makes this safe — without it, the
-    // pad/load-block leaves would be prepended onto a non-matrix spec
-    // and `load-block` would throw at runtime.
+    // was on AES-128 + PKCS7 just before the swap, that rebuild still has
+    // the user's pkcs7 preference in hand and must NOT pad DES with it.
+    //
+    // What makes it safe (Phase B of `docs/plans/foamy-prancing-wren.md`):
+    // DES has no `BlockCipherCore`, so `buildCanonicalPair` resolves its
+    // `blockByteLength` to `undefined` and `applyPaddingScheme` returns the
+    // spec canonical instead of splicing a pad in. Before Phase B the same
+    // outcome came from an AES-id-prefix gate inside the overlay; the guard
+    // moved to the call site, so this test guards the NEW seam.
     //
     // The plaintext field text doesn't necessarily auto-swap to DES's
     // canonical 8-byte value here — App.tsx's swap heuristic checks the
