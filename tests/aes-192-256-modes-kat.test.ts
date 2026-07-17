@@ -21,12 +21,13 @@
  * line up side-by-side with the shipped AES-128 KATs.
  */
 
-import { createCipheriv } from "node:crypto";
+import { createCipheriv, createDecipheriv } from "node:crypto";
 import { aesCore } from "@/ciphers/aes-core";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { buildCbcSpec } from "@/ciphers/modes/cbc";
 import { buildEcbSpec } from "@/ciphers/modes/ecb";
 import { runSpec } from "@/core/runtime";
+import { applyPaddingScheme } from "@/core/spec-mutations";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue, CipherSpec } from "@/core/types";
 import { describe, expect, it } from "vitest";
@@ -144,6 +145,54 @@ describe.each([
       expect(run(buildCbcSpec(core, "encrypt"), ptHex, cbcSpecAux)).toBe(
         nodeRef(`${variant}-cbc`, ivHex),
       );
+    });
+
+    it("CBC + PKCS#7 round-trips a NON-block-multiple message", () => {
+      // The one path where the padding overlay and a non-AES-128 body actually
+      // MEET. Every other test here runs scheme=none on exact block multiples,
+      // and the overlay's own tests all run AES-128 — so "AES-192 + CBC +
+      // PKCS#7, type 20 bytes, hit Run" (a newly-reachable user path) had never
+      // executed end-to-end. Both halves being separately covered is exactly
+      // the composition that "works by construction" right up until the
+      // decrypt's `outputFrom` rewrite meets a real multi-block non-128 body.
+      const shortPtHex = "00112233445566778899aabbccddeeff01020304"; // 20 bytes → pads to 32
+      const ivHex = "f0e1d2c3b4a5968778695a4b3c2d1e0f";
+      const aux = (): Map<string, AuxValue> =>
+        new Map<string, AuxValue>([
+          ["key", bytesFromHex(keyHex)],
+          ["iv", bytesFromHex(ivHex)],
+        ]);
+
+      // node:crypto with AUTO-padding on = the PKCS#7 oracle.
+      const c = createCipheriv(
+        `${variant}-cbc`,
+        Buffer.from(keyHex, "hex"),
+        Buffer.from(ivHex, "hex"),
+      );
+      c.setAutoPadding(true);
+      const expectedCt = Buffer.concat([
+        c.update(Buffer.from(shortPtHex, "hex")),
+        c.final(),
+      ]).toString("hex");
+
+      const encSpec = applyPaddingScheme(buildCbcSpec(core, "encrypt"), "encrypt", "pkcs7", 16);
+      expect(run(encSpec, shortPtHex, aux())).toBe(expectedCt);
+
+      // ...and back, through the unpad + the moved `outputFrom`.
+      const decSpec = applyPaddingScheme(buildCbcSpec(core, "decrypt"), "decrypt", "pkcs7", 16);
+      expect(run(decSpec, expectedCt, aux())).toBe(shortPtHex);
+
+      // Sanity that the oracle really padded: 20 bytes in, 32 out.
+      const d = createDecipheriv(
+        `${variant}-cbc`,
+        Buffer.from(keyHex, "hex"),
+        Buffer.from(ivHex, "hex"),
+      );
+      d.setAutoPadding(true);
+      expect(
+        Buffer.concat([d.update(Buffer.from(expectedCt, "hex")), d.final()]).toString("hex"),
+      ).toBe(shortPtHex);
+      expect(expectedCt.length / 2).toBe(32);
     });
   },
 );
