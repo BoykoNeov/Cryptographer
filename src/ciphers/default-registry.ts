@@ -452,7 +452,7 @@ export const buildDefaultRegistry = (): StepRegistry => {
   // They produced/consumed MatrixState aux values for the aux-mediated
   // matrix CBC body; the shipped CBC spec now chains in bytes through the
   // `iterate` port mode's `chainInput`/`chainFeedback` (see
-  // `aes-cbc-builder.ts`). The user-facing "compose your own mode" palette
+  // `modes/cbc.ts`). The user-facing "compose your own mode" palette
   // primitives `generic.aux-load@1` / `aux-xor@1` / `aux-copy@1` above stay
   // (byte-typed; Slice 5.2 converts them to true PortedExecutors).
   // ─── Speck (ARX block cipher, second cipher family) ────────────────────

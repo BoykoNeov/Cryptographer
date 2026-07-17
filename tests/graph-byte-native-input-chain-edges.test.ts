@@ -31,13 +31,23 @@
  * verification gates; jsdom can't see layout.
  */
 
-import { buildAesCbcSpec } from "@/ciphers/aes-cbc-builder";
-import { buildAesEcbSpec } from "@/ciphers/aes-ecb-builder";
-import type { AesVariant, CipherDirection } from "@/ciphers/aes-ecb-builder";
+import { aesCore } from "@/ciphers/aes-core";
+import type { AesVariant } from "@/ciphers/aes-core";
+import type { CipherDirection } from "@/ciphers/block-cipher-core";
+import { buildCbcSpec } from "@/ciphers/modes/cbc";
+import { buildEcbSpec } from "@/ciphers/modes/ecb";
 import { deriveAuxGraph } from "@/core/graph";
 import type { CipherSpec, Trace } from "@/core/types";
 import { INPUT_SOURCE_ID } from "@/core/types";
 import { describe, expect, it } from "vitest";
+
+// The AES-specific mode builders these assertions were written against are
+// gone — ECB/CBC are now cipher-agnostic builders driven by a BlockCipherCore.
+// These shims keep the test body verbatim, so it still pins the same edges.
+const buildAesEcbSpec = (v: AesVariant, d: CipherDirection): CipherSpec =>
+  buildEcbSpec(aesCore(v), d);
+const buildAesCbcSpec = (v: AesVariant, d: CipherDirection): CipherSpec =>
+  buildCbcSpec(aesCore(v), d);
 
 const emptyTrace = (): Trace => ({
   frames: [],

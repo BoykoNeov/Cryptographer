@@ -6,12 +6,13 @@
  * then XORs in the chain (`port("cbc-blocks","chain")` — the previous block's
  * ciphertext, or the IV for block 0) to recover the plaintext. The chain
  * rides the iterate's `chainInput`/`chainFeedback` ports, not an aux slot;
- * decrypt's `chainFeedback` is the raw input block. See `buildAesCbcSpec`.
+ * decrypt's `chainFeedback` is the raw input block. See `modes/cbc.ts`.
  *
  * NIST SP 800-38A §F.2.2 supplies the known-answer test for this spec
  * — covered in `tests/aes-128-cbc-kat.test.ts`.
  */
 
-import { buildAesCbcSpec } from "./aes-cbc-builder";
+import { aesCore } from "./aes-core";
+import { buildCbcSpec } from "./modes/cbc";
 
-export const aes128CbcDecryptSpec = buildAesCbcSpec("aes-128", "decrypt");
+export const aes128CbcDecryptSpec = buildCbcSpec(aesCore("aes-128"), "decrypt");

@@ -9,6 +9,7 @@
  * inside the inverse body.
  */
 
-import { buildAesEcbSpec } from "./aes-ecb-builder";
+import { aesCore } from "./aes-core";
+import { buildEcbSpec } from "./modes/ecb";
 
-export const aes128EcbDecryptSpec = buildAesEcbSpec("aes-128", "decrypt");
+export const aes128EcbDecryptSpec = buildEcbSpec(aesCore("aes-128"), "decrypt");
