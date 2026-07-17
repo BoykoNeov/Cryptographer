@@ -66,6 +66,7 @@ import { StepList } from "./components/StepList";
 import { StepNarration } from "./components/StepNarration";
 import { StepStrip } from "./components/StepStrip";
 import { TraceTimeline } from "./components/TraceTimeline";
+import { TwofishRoundDiagram } from "./components/TwofishRoundDiagram";
 // Side-effect import: register the per-frame narration fns into the shared
 // narration registry. Without it, <StepNarration /> would render nothing.
 // Idempotent.
@@ -2050,6 +2051,14 @@ export const App = () => {
                     <FeistelSwapDiagram frame={frame()} />
                   </div>
                   <FeistelRecombineView frame={frame()} />
+
+                  {/* Twofish's round is 4-rail, not the 2-way Feistel form, so
+                      every component above returns null for it (their shared
+                      `analyzeFeistelRound` rejects the 4-input recombine). This
+                      is the Twofish learner's equivalent: the abstract round +
+                      the 4-way swap the per-step chain hides. Self-detecting
+                      from the round's wiring, so it's inert everywhere else. */}
+                  <TwofishRoundDiagram frame={frame()} />
 
                   {/* Per-frame value-prose. Cipher-agnostic dispatch via
                       the narration registry (`src/ui/narration/`).

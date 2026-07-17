@@ -5022,3 +5022,157 @@ button:disabled {
   padding: 0 1px;
   font-weight: bold;
 }
+
+/* ─── Twofish round diagram (linear view) ─────────────────────────────────
+   The 4-rail sibling of the Feistel swap diagram. Twofish isn't the 2-way
+   Feistel form, so `analyzeFeistelRound` returns null for its 4-input
+   recombine and the 2-way trio above stays dark; this panel is what the
+   Twofish learner gets instead. Class names mirror the Feistel diagram's
+   vocabulary (wire / wire-mix / wire-pass / active / clickable) so the two
+   read as one family. */
+
+.twofish-round-diagram {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev-1);
+  align-self: flex-start;
+}
+
+.twofish-round-diagram-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.twofish-round-diagram-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.twofish-round-diagram-kind {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.twofish-round-diagram-svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.twofish-round-diagram-note {
+  max-width: 440px;
+  line-height: 1.5;
+}
+
+/* Wires. The default is the muted rail; the swap zone's two classes carry the
+   same meaning they do in the Feistel diagram — mixed values in accent, carried
+   passthroughs in plain text colour — so the four crossing wires stay tellable
+   apart where they overlap mid-zone. */
+.twofish-round-diagram-wire {
+  stroke: var(--text);
+  stroke-width: 1;
+  opacity: 0.55;
+}
+
+.twofish-round-diagram-wire-carry {
+  stroke-dasharray: 3 2;
+  opacity: 0.45;
+}
+
+/* F0 / F1 leaving the PHT for the rail each one mixes. */
+.twofish-round-diagram-wire-f {
+  stroke: var(--accent);
+  opacity: 0.6;
+}
+
+.twofish-round-diagram-wire-mix {
+  stroke: var(--accent);
+  opacity: 0.85;
+  stroke-width: 1.5;
+}
+
+.twofish-round-diagram-wire-pass {
+  stroke: var(--text);
+  opacity: 0.7;
+  stroke-width: 1.5;
+}
+
+/* Input / output words. */
+.twofish-round-diagram-word {
+  fill: var(--bg-elev-2);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.twofish-round-diagram-word-label {
+  font-size: 10px;
+  font-family: var(--mono, monospace);
+  fill: var(--text);
+  font-weight: 600;
+}
+
+/* Composite elements (the two g boxes, the PHT) — dashed, because each one
+   stands for several real leaves rather than a single frame. */
+.twofish-round-diagram-box {
+  fill: var(--bg-elev-2);
+  stroke: var(--border);
+  stroke-width: 1;
+  stroke-dasharray: 4 2;
+}
+
+.twofish-round-diagram-box-label {
+  font-size: 11px;
+  font-family: var(--mono, monospace);
+  fill: var(--text);
+  font-style: italic;
+}
+
+.twofish-round-diagram-chip {
+  fill: var(--bg-elev-2);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.twofish-round-diagram-chip-label {
+  font-size: 8px;
+  font-family: var(--mono, monospace);
+  fill: var(--text);
+}
+
+/* Intermediate value names (T0, T1, F0, F1) riding next to their producer. */
+.twofish-round-diagram-value-label {
+  font-size: 8px;
+  font-family: var(--mono, monospace);
+  fill: var(--muted);
+}
+
+.twofish-round-diagram-swap-label {
+  font-size: 8px;
+  fill: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* "You are here" — the element holding the active frame's leaf. */
+.twofish-round-diagram-active .twofish-round-diagram-box,
+.twofish-round-diagram-active .twofish-round-diagram-chip,
+.twofish-round-diagram-active .twofish-round-diagram-word {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.twofish-round-diagram-clickable {
+  cursor: pointer;
+}
+
+.twofish-round-diagram-clickable:hover .twofish-round-diagram-box,
+.twofish-round-diagram-clickable:hover .twofish-round-diagram-chip {
+  fill: var(--bg-elev-3, var(--bg-elev-2));
+  stroke: var(--accent);
+}

@@ -352,6 +352,21 @@ decomposed schedule), `src/ciphers/des.ts` (port-mode round-group + concat-swap)
 
 192/256-bit keys (k=3/4 h-function branches); multi-block ECB/CBC; the RS
 S-vector as a visible frame (needs a 4×8 GF(0x14D) step); full h-function /
-S-box-construction decomposition; canonical two-column Feistel graph layout
-(round shape doesn't match `analyzeFeistelRound`); share-URL cipher-selector
-flip (pre-existing bug).
+S-box-construction decomposition.
+
+**Closed since:**
+
+- *Canonical graph layout* — SHIPPED 2026-07-12 as a 4-rail cell, not the
+  two-column Feistel one this list imagined: the round shape genuinely doesn't
+  match `analyzeFeistelRound`, so it got its own `twofish-shape.ts` /
+  `twofish-layout.ts` pair rather than a strained union. See
+  `docs/plans/polished-imagining-bird.md`.
+- *Linear-view abstract diagram* — SHIPPED 2026-07-17. `TwofishRoundDiagram`
+  over a pure `core/twofish-diagram.ts` model. It carries the swap-X the graph
+  view had to drop for being a 2000px tangle; at single-round scale the wires
+  are ~50px and the 4-way rotation reads.
+- *Share-URL cipher-selector flip* — was NOT still a bug when checked on
+  2026-07-17. Phase 6e of `docs/plans/des-feistel.md` fixed it before Twofish
+  shipped, via the document's `algorithm` hint (emitted on both the save and
+  share paths, read by `setSpecFromDocument`, which flips the selector and
+  smart-swaps the byte defaults). This entry was stale.
