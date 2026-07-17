@@ -27,8 +27,14 @@
  * cipher dropdown is the same control today's tests already exercise).
  */
 
+import { desSpec } from "@/ciphers/des";
 import { buildSha256Spec } from "@/ciphers/sha-256";
-import { CURRENT_SCHEMA_VERSION, type CipherDocument } from "@/core/document";
+import {
+  CURRENT_SCHEMA_VERSION,
+  type CipherDocument,
+  parseDocument,
+  serializeDocument,
+} from "@/core/document";
 import {
   __resetCipherForTests,
   setCategory,
@@ -229,6 +235,51 @@ describe("algorithm-selector (Slice 2.10c)", () => {
       // Category flipped back to "cipher" defensively.
       expect(useCategory()()).toBe("cipher");
       expect(useCipher()()).toBe("aes-128");
+    });
+  });
+
+  // ─── The spec-only share scenario (regression guard) ───────────────────
+  // Phase 6e of `docs/plans/des-feistel.md` fixed a real bug: a spec-only
+  // share (the [share…] default, and every `.cipher.json` saved without
+  // "include session") carried the SPEC but not the selector, so a recipient
+  // on a fresh tab loaded a DES spec against an AES-128 selector and its
+  // 16-byte key default — an instant "key: expected 8 bytes, got 16" and no
+  // trace. The fix is the document's `algorithm` hint, which `buildSaveText`
+  // emits on BOTH the save and share paths.
+  //
+  // Nothing else pins the scenario end-to-end: `app-url-share.test.tsx`
+  // doesn't touch the hint, `document-roundtrip.test.ts` only round-trips the
+  // FIELD through serialize/parse (never applying it), and the DES self-smoke
+  // that originally caught it was deleted when Phase 6e closed. So this walks
+  // the recipient's actual path — serialize the way Save/Share builds it,
+  // parse the way the loader does, apply — and asserts the selector lands on
+  // the cipher the spec is FOR. (Added 2026-07-17, when the bug was re-checked
+  // and found already fixed; the guard is what makes "fixed" durable.)
+  describe("a spec-only share flips the recipient's selector (Phase 6e)", () => {
+    it("lands a DES spec-only document on the DES selector, not the AES-128 default", () => {
+      // The recipient's fresh-tab state.
+      expect(useCipher()()).toBe("aes-128");
+
+      // Exactly what `buildSaveText` produces with "include session" OFF:
+      // spec + hint, no session bytes.
+      const text = serializeDocument({
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        spec: desSpec,
+        algorithm: "des",
+      });
+
+      const parsed = parseDocument(text);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) return;
+      // The hint has to survive the wire; without it the loader has no way to
+      // know what the spec is for.
+      expect(parsed.doc.algorithm).toBe("des");
+
+      setSpecFromDocument(parsed.doc);
+
+      expect(useCipher()()).toBe("des");
+      expect(useCategory()()).toBe("cipher");
+      expect(useAlgorithm()()).toBe("des");
     });
   });
 
