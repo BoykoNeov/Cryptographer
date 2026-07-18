@@ -103,25 +103,26 @@ const singleBlockLimits = (cipher: Cipher): { min: number; max: number } => {
     case "speck-32-64-be":
     case "speck-32-64-le":
       return { min: 4, max: 4 };
-    case "serpent-128":
-    case "serpent-192":
-    case "serpent-256":
-      return { min: 16, max: 16 };
     case "des":
       return { min: 8, max: 8 };
     case "twofish":
       return { min: 16, max: 16 };
-    // AES and Blowfish always have a core, so they never reach here. The arms
-    // exist to keep the switch exhaustive over `Cipher` — which is what makes a
-    // NEW cipher that lacks a core a compile error rather than a runtime throw.
-    // This is the rollout shrinking one entry at a time, visible in the type
-    // system: Blowfish moved up here when its core landed in Phase C.
+    // AES, Blowfish, and Serpent always have a core, so they never reach here.
+    // The arms exist to keep the switch exhaustive over `Cipher` — which is what
+    // makes a NEW cipher that lacks a core a compile error rather than a runtime
+    // throw. This is the rollout shrinking one entry at a time, visible in the
+    // type system: Blowfish moved up here when its core landed in Phase C, and
+    // the three Serpent variants followed when theirs did.
     case "aes-128":
     case "aes-192":
     case "aes-256":
       return { min: 16, max: 16 };
     case "blowfish":
       return { min: 8, max: 8 };
+    case "serpent-128":
+    case "serpent-192":
+    case "serpent-256":
+      return { min: 16, max: 16 };
     default: {
       const _exhaustive: never = cipher;
       throw new Error(`paddingLimits: unhandled cipher: ${_exhaustive as string}`);
@@ -138,7 +139,7 @@ const singleBlockLimits = (cipher: Cipher): { min: number; max: number } => {
  * `BlockCipherCore` — the same fact that decides whether it can run a mode at
  * all:
  *
- *   • **No core** (Speck/Serpent/DES/Twofish today): one fixed-size block,
+ *   • **No core** (Speck/DES/Twofish today): one fixed-size block,
  *     regardless of mode or padding choice. The padding selector is disabled
  *     in the UI.
  *

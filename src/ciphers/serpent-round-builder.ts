@@ -35,10 +35,10 @@
  * **Explicit state-spine wiring (Phase 5 Slice 5.3b).** Every leaf declares
  * its `state` input port via `portInputs`, and every round group declares
  * `seedInput`/`bodyOutput` — following the byte-native AES body
- * (`aes-round-builder-native.ts`), except that AES parameterizes its
- * `inputSource` for multi-block reuse whereas this hardcodes `$input` (single-
- * block only; see the TODO in `buildSerpentEncryptBody`). This hands the
- * round→round spine to
+ * (`aes-round-builder-native.ts`), including the `inputSource` parameter that
+ * lets a mode of operation inject each block's port in place of `$input`
+ * (`serpent-core.ts` is the consumer; the single-block spec keeps the default).
+ * This hands the round→round spine to
  * `inferPortEdges` so the legacy `inferStateEdges` consecutive-siblings
  * inference can retire (5.3e). Because every Serpent leaf is
  * `stateLayout: "bytes"`, the runtime's Step-A port resolution is byte-equal
@@ -200,17 +200,33 @@ const encryptFinalRound = (): StepNode => {
 };
 
 /**
+ * The cipher exit port: FP's `state`. Both directions share it — encrypt and
+ * decrypt bodies each end with `fpLeaf("final-permutation", …)`, and
+ * `serpent.bit-permutation@1` emits on `state`. So, unlike AES (whose forward
+ * and inverse exits are different group ids, `round.N` vs `inv-round.0`),
+ * Serpent needs ONE output helper for both.
+ */
+export const serpentBodyOutputFrom = (): PortBinding => port("final-permutation", "state");
+
+/**
  * Build the forward Serpent body: IP, 31 normal rounds, 1 final round, FP.
  * Total leaves: 1 (IP) + 31*3 + 1*3 + 1 (FP) = 98.
+ *
+ * `inputSource` is the port the IP leaf reads its block from. It defaults to the
+ * reserved `$input` source for the single-block spec; a mode of operation
+ * (`serpent-core.ts` → `modes/ecb.ts`/`modes/cbc.ts`) passes the iterate's
+ * injected `port(iterateId, "in")` instead, so the same body runs per block.
+ * This mirrors `buildAesEncryptBodyNative` — every non-IP leaf already threads
+ * its block through sibling `state` bindings, so the seed enters at exactly one
+ * point.
  */
-export const buildSerpentEncryptBody = (): readonly StepNode[] => {
+export const buildSerpentEncryptBody = (
+  inputSource: PortBinding = port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT),
+): readonly StepNode[] => {
   const nodes: StepNode[] = [];
-  // IP reads the plaintext block from the reserved `$input` source.
-  // TODO(multi-block): unlike `aes-round-builder-native.ts`, which parameterizes
-  // `inputSource` so an ECB/CBC builder can pass `port(iterateId, "in")`, this
-  // hardcodes `$input` — correct for the only shipped (single-block) Serpent,
-  // but a future Serpent ECB/CBC would need the per-iteration injection instead.
-  nodes.push(ipLeaf("initial-permutation", port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT)));
+  // IP reads the plaintext block from `inputSource` ($input single-block; the
+  // iterate's injected port under a mode of operation).
+  nodes.push(ipLeaf("initial-permutation", inputSource));
   for (let r = 1; r <= SERPENT_ROUNDS - 1; r++) {
     nodes.push(encryptNormalRound(r));
   }
@@ -280,11 +296,16 @@ const decryptNormalRound = (roundNumber: number): StepNode => {
  * (no inv-LT, irregular), inverse rounds 31..1, FP (which is IP^-1).
  *
  * Total leaves: 1 + 1*3 + 31*3 + 1 = 98 — same shape as the encrypt body.
+ *
+ * `inputSource` parameterizes the IP leaf's block source exactly as the encrypt
+ * body does — `$input` for single-block, the iterate port under a mode.
  */
-export const buildSerpentDecryptBody = (): readonly StepNode[] => {
+export const buildSerpentDecryptBody = (
+  inputSource: PortBinding = port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT),
+): readonly StepNode[] => {
   const nodes: StepNode[] = [];
   // Encryption ended with FP; decryption starts by applying IP to undo it.
-  nodes.push(ipLeaf("initial-permutation", port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT)));
+  nodes.push(ipLeaf("initial-permutation", inputSource));
   nodes.push(decryptFirstRound());
   for (let r = SERPENT_ROUNDS - 1; r >= 1; r--) {
     nodes.push(decryptNormalRound(r));

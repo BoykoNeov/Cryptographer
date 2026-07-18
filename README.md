@@ -14,12 +14,12 @@ Shipped ciphers (all with both encrypt + decrypt paths and FIPS / NIST / paper-v
 |---|---|---|---|---|
 | **AES** | 128 / 192 / 256 | 16 B | 16 / 24 / 32 B | single-block, ECB + CBC (all three variants) |
 | **Speck32/64** | BE (paper) + LE (NSA reference) | 4 B | 8 B | single-block |
-| **Serpent** | 128 / 192 / 256 | 16 B | 16 / 24 / 32 B | single-block |
+| **Serpent** | 128 / 192 / 256 | 16 B | 16 / 24 / 32 B | single-block, ECB + CBC (all three variants) |
 | **DES** | — | 8 B | 8 B (56 effective) | single-block |
 | **Blowfish** | — | 8 B | 8 B (v1) | single-block, ECB + CBC |
 | **Twofish** | — | 16 B | 16 B (v1) | single-block |
 
-Padding schemes (AES + Blowfish): **PKCS#7**, **zero-pad**, **ISO 7816-4**, plus a no-pad option for exact-block input. Blowfish pads to its own **8-byte** block, not 16 — the padding overlay reads the width from the active cipher.
+Padding schemes (AES, Serpent + Blowfish): **PKCS#7**, **zero-pad**, **ISO 7816-4**, plus a no-pad option for exact-block input. Blowfish pads to its own **8-byte** block, not 16 — the padding overlay reads the width from the active cipher.
 
 **Modes of operation cost `N ciphers + M modes`, not `N × M`.** ECB and CBC are written once against a `BlockCipherCore` contract (block/key width, a key schedule, and seed-parameterized forward + inverse bodies) and know nothing about the cipher underneath — so adding a mode gives it to every cipher, and adding a cipher gives it every mode. The ciphers above marked single-block are so for exactly one reason: no core yet. That is *not* a block-size limitation — Blowfish's 8-byte block drives the same generic machinery AES's 16-byte block does — but per-cipher work to let the body take its block from the loop instead of the input. CTR is designed for and not built: the contract already exposes the forward body on its own and treats padding as a per-mode flag, since CTR decryption still *encrypts* the counter and needs no padding.
 

@@ -171,6 +171,56 @@ describe("App — CBC IV flow (Phase 2)", () => {
     expect(ciphertextA).not.toBe(ciphertextB);
   });
 
+  it("drives Serpent-128 CBC through the whole App UI and round-trips a 2-block message", () => {
+    // The advisor's flagged gap: the Serpent modes KAT runs the CBC spec
+    // straight through the runtime, but not through the App's mode-dropdown ↔
+    // spec-store ↔ IV-field ↔ Run wiring. Serpent's 16-byte block means its IV
+    // path is byte-identical to AES's (the field even defaults to the same
+    // vector), so this proves the wiring, not new arithmetic. A round-trip is
+    // self-checking — no external Serpent oracle exists (`node:crypto` has none).
+    const { container } = render(() => <App />);
+
+    // Select Serpent-128, then CBC. Serpent now supports CBC, so the cipher
+    // switch does NOT reset the mode back to single-block.
+    fireEvent.change(findSelectByLabel(container, "cipher"), {
+      target: { value: "serpent-128" },
+    });
+    fireEvent.change(findSelectByLabel(container, "mode of operation"), {
+      target: { value: "cbc" },
+    });
+
+    // The IV row must appear with the 16-byte default — the same width AES
+    // uses, since Serpent's block is also 16 bytes.
+    const ivInput = findInputByLabel(container, "IV");
+    expect(ivInput).not.toBeNull();
+    expect(ivInput?.value).toBe("000102030405060708090a0b0c0d0e0f");
+
+    // A 2-block plaintext (32 bytes) under a 16-byte key. Padding stays "none"
+    // (the input is an exact block multiple), so no pad step is spliced in.
+    const PT_2_BLOCKS = "11111111111111111111111111111111" + "000102030405060708090a0b0c0d0e0f";
+    setInputValue(findInputByLabel(container, "plaintext") as HTMLInputElement, PT_2_BLOCKS);
+    setInputValue(
+      findInputByLabel(container, "key") as HTMLInputElement,
+      "80000000000000000000000000000000",
+    );
+
+    fireEvent.click(findButton(container, "run"));
+    expect(container.querySelector(".error")).toBeNull();
+    const ct = (readResultHex(container) ?? "").replace(/\s+/g, "");
+    // 2 blocks × 16 bytes = 32 bytes = 64 hex chars, and CBC must not leave the
+    // plaintext untouched.
+    expect(ct.length).toBe(64);
+    expect(ct).not.toBe(PT_2_BLOCKS);
+
+    // Flip to decrypt — the auto-swap copies the ciphertext into the input —
+    // and Run must recover the original plaintext.
+    fireEvent.change(findSelectByLabel(container, "mode"), { target: { value: "decrypt" } });
+    fireEvent.click(findButton(container, "run"));
+    expect(container.querySelector(".error")).toBeNull();
+    const recovered = (readResultHex(container) ?? "").replace(/\s+/g, "");
+    expect(recovered).toBe(PT_2_BLOCKS);
+  });
+
   it("invalid IV (wrong length) snaps back to the store's last known good value", () => {
     const { container } = render(() => <App />);
     fireEvent.change(findSelectByLabel(container, "mode of operation"), {

@@ -253,10 +253,14 @@ describe("App — cipher selector", () => {
     expect(findInputByLabel(container, "key").value).toBe("000102030405060708090a0b0c0d0e0f");
     expect(findInputByLabel(container, "plaintext").value).toBe("00112233445566778899aabbccddeeff");
 
-    // Padding is AES-only today; Serpent uses BytesState so the overlay's
-    // applyPaddingScheme early-returns and the dropdown disables.
-    const paddingSelect = findSelectByLabel(container, "padding");
-    expect(paddingSelect.disabled).toBe(true);
+    // Both selectors are ENABLED now that Serpent has a `BlockCipherCore` — the
+    // single gate for "can run ECB/CBC" and "the padding overlay knows your
+    // block size" (`docs/plans/foamy-prancing-wren.md`). The Run below still
+    // lands on the published single-block vector because the padding DEFAULT is
+    // "none" and the mode default is single-block — enabling a selector changes
+    // what the user can reach, not what they land on.
+    expect(findSelectByLabel(container, "padding").disabled).toBe(false);
+    expect(findSelectByLabel(container, "mode of operation").disabled).toBe(false);
 
     // Use a verified KAT vector from the Python reference. Replace the
     // plaintext field with all-zeros and the key with the single-bit key
@@ -298,9 +302,9 @@ describe("App — cipher selector", () => {
     expect(findInputByLabel(container, "key").value).toBe("133457799bbcdff1");
     expect(findInputByLabel(container, "plaintext").value).toBe("0123456789abcdef");
 
-    // Padding is AES-only today (load-block hardcoded to 16 bytes). DES uses
-    // BytesState, so the overlay's applyPaddingScheme early-returns and the
-    // dropdown disables — matching Speck and Serpent.
+    // DES has no `BlockCipherCore` yet, so both the padding overlay and the
+    // mode-of-operation selector stay disabled — matching Speck (Serpent now
+    // has cores, so it no longer belongs in this list).
     const paddingSelect = findSelectByLabel(container, "padding");
     expect(paddingSelect.disabled).toBe(true);
 

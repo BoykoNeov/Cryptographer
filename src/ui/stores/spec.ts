@@ -55,6 +55,7 @@ import { serpent192Spec } from "@/ciphers/serpent-192";
 import { serpent192DecryptSpec } from "@/ciphers/serpent-192-decrypt";
 import { serpent256Spec } from "@/ciphers/serpent-256";
 import { serpent256DecryptSpec } from "@/ciphers/serpent-256-decrypt";
+import { serpentCore } from "@/ciphers/serpent-core";
 import { buildSha256Spec } from "@/ciphers/sha-256";
 import { buildSha3256Spec } from "@/ciphers/sha3-256";
 import { buildShakeSpec, readShakeOutputLength } from "@/ciphers/shake";
@@ -162,14 +163,20 @@ const defaults: Record<Cipher, Partial<Record<CipherMode, Record<Mode, CipherSpe
   "speck-32-64-le": {
     "single-block": { encrypt: speck32_64LeSpec, decrypt: speck32_64LeDecryptSpec },
   },
+  // Serpent — an AES-shaped core (16-byte block, flat round groups between IP
+  // and FP). The three variants gain ECB/CBC from `serpent-core.ts` the same
+  // way AES-192/256 do: one `modesFromCore` line each.
   "serpent-128": {
     "single-block": { encrypt: serpent128Spec, decrypt: serpent128DecryptSpec },
+    ...modesFromCore(serpentCore(16)),
   },
   "serpent-192": {
     "single-block": { encrypt: serpent192Spec, decrypt: serpent192DecryptSpec },
+    ...modesFromCore(serpentCore(24)),
   },
   "serpent-256": {
     "single-block": { encrypt: serpent256Spec, decrypt: serpent256DecryptSpec },
+    ...modesFromCore(serpentCore(32)),
   },
   // DES — first Feistel cipher (Phase 4 of `docs/plans/des-feistel.md`).
   // Single-block only; multi-block modes need block-size-aware load/store.

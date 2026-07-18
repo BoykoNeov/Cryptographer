@@ -36,9 +36,6 @@ import { describe, expect, it } from "vitest";
 const CORELESS_CIPHERS = [
   "speck-32-64-be",
   "speck-32-64-le",
-  "serpent-128",
-  "serpent-192",
-  "serpent-256",
   "des",
   "twofish",
 ] as const satisfies readonly Cipher[];
@@ -49,13 +46,17 @@ const CORED_CIPHERS = [
   "aes-192",
   "aes-256",
   "blowfish",
+  "serpent-128",
+  "serpent-192",
+  "serpent-256",
 ] as const satisfies readonly Cipher[];
 
 describe("cipher-mode × cipher support matrix", () => {
   it("every cipher with a core supports single-block + ecb + cbc", () => {
     // Phase B extended ECB/CBC from AES-128 to all three AES variants; Phase C
     // added Blowfish, the first non-AES member and the first whose block is not
-    // 16 bytes. All four arrive the same way: a core plus two table rows.
+    // 16 bytes; Serpent followed as an AES-shaped family (three more cores).
+    // All arrive the same way: a core plus two table rows.
     for (const cipher of CORED_CIPHERS) {
       expect(isCipherModeSupported(cipher, "single-block")).toBe(true);
       expect(isCipherModeSupported(cipher, "ecb")).toBe(true);

@@ -35,6 +35,7 @@
 import { aesCore } from "@/ciphers/aes-core";
 import type { BlockCipherCore } from "@/ciphers/block-cipher-core";
 import { blowfishCore } from "@/ciphers/blowfish-core";
+import { serpentCore } from "@/ciphers/serpent-core";
 import type { Cipher } from "./cipher";
 
 /**
@@ -44,7 +45,10 @@ import type { Cipher } from "./cipher";
  * A). Blowfish followed in Phase C and is the one that matters for confidence:
  * it is the first core whose block is **not 16 bytes**, so it is the first to
  * actually exercise the block-size-generic arithmetic Phase B introduced.
- * Everything before it could have hidden a stray hardcoded 16.
+ * Everything before it could have hidden a stray hardcoded 16. Serpent came
+ * next: an AES-shaped body (flat round groups between IP and FP, 16-byte block)
+ * whose only non-seed-parameterized leaf was IP — three cores for one cipher's
+ * seed-threading work, the AES-family pattern.
  *
  * Each `…Core()` call is cheap — the returned object holds closures, so no spec
  * is built until a mode builder asks for a body.
@@ -54,6 +58,9 @@ const BLOCK_CIPHER_CORES: Partial<Record<Cipher, BlockCipherCore>> = {
   "aes-192": aesCore("aes-192"),
   "aes-256": aesCore("aes-256"),
   blowfish: blowfishCore(),
+  "serpent-128": serpentCore(16),
+  "serpent-192": serpentCore(24),
+  "serpent-256": serpentCore(32),
 };
 
 /**
