@@ -14,12 +14,12 @@
  * the readonly tree is rebuilt correctly and reference equality holds on
  * untouched branches (cheaper Solid re-renders).
  *
- * Non-AES ciphers (Speck32/64) only support "single-block" today. The
+ * The coreless ciphers (DES, Twofish today) only support "single-block". The
  * defaults table records this with a partial inner record, and
  * `resolveDefault` falls back to single-block if a requested mode is
  * missing for the active cipher. That fallback lets the user pick "ECB"
- * for AES-128, then flip cipher to Speck without crashing — they just
- * land back in single-block on the Speck side.
+ * for AES-128, then flip cipher to a coreless one without crashing — they
+ * just land back in single-block on that side.
  */
 
 import { aes128Spec } from "@/ciphers/aes-128";
@@ -61,6 +61,7 @@ import { buildSha3256Spec } from "@/ciphers/sha3-256";
 import { buildShakeSpec, readShakeOutputLength } from "@/ciphers/shake";
 import { speck32_64BeSpec } from "@/ciphers/speck-32-64-be";
 import { speck32_64BeDecryptSpec } from "@/ciphers/speck-32-64-be-decrypt";
+import { speck32_64Core } from "@/ciphers/speck-32-64-core";
 import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
 import { speck32_64LeDecryptSpec } from "@/ciphers/speck-32-64-le-decrypt";
 import { twofishSpec } from "@/ciphers/twofish";
@@ -157,11 +158,16 @@ const defaults: Record<Cipher, Partial<Record<CipherMode, Record<Mode, CipherSpe
     "single-block": { encrypt: aes256Spec, decrypt: aes256DecryptSpec },
     ...modesFromCore(aesCore("aes-256")),
   },
+  // Speck32/64 — the first core whose block is smaller than 8 bytes. Both byte
+  // conventions gain ECB/CBC from `speck-32-64-core.ts` the same way AES-192/256
+  // do: one `modesFromCore` line each, carrying the byte order.
   "speck-32-64-be": {
     "single-block": { encrypt: speck32_64BeSpec, decrypt: speck32_64BeDecryptSpec },
+    ...modesFromCore(speck32_64Core("be-paper")),
   },
   "speck-32-64-le": {
     "single-block": { encrypt: speck32_64LeSpec, decrypt: speck32_64LeDecryptSpec },
+    ...modesFromCore(speck32_64Core("le-nsa")),
   },
   // Serpent — an AES-shaped core (16-byte block, flat round groups between IP
   // and FP). The three variants gain ECB/CBC from `serpent-core.ts` the same

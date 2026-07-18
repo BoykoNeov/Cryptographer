@@ -36,6 +36,7 @@ import { aesCore } from "@/ciphers/aes-core";
 import type { BlockCipherCore } from "@/ciphers/block-cipher-core";
 import { blowfishCore } from "@/ciphers/blowfish-core";
 import { serpentCore } from "@/ciphers/serpent-core";
+import { speck32_64Core } from "@/ciphers/speck-32-64-core";
 import type { Cipher } from "./cipher";
 
 /**
@@ -48,7 +49,11 @@ import type { Cipher } from "./cipher";
  * Everything before it could have hidden a stray hardcoded 16. Serpent came
  * next: an AES-shaped body (flat round groups between IP and FP, 16-byte block)
  * whose only non-seed-parameterized leaf was IP — three cores for one cipher's
- * seed-threading work, the AES-family pattern.
+ * seed-threading work, the AES-family pattern. Speck32/64 followed as the first
+ * core whose block is **smaller than 8 bytes** — its 4-byte block pushes the
+ * block-size-generic arithmetic below every "round" width, and its two byte
+ * conventions (BE-paper / LE-NSA) are a `speck32_64Core(byteOrder)` family of
+ * two, the same word-level cipher under two serializations.
  *
  * Each `…Core()` call is cheap — the returned object holds closures, so no spec
  * is built until a mode builder asks for a body.
@@ -57,6 +62,8 @@ const BLOCK_CIPHER_CORES: Partial<Record<Cipher, BlockCipherCore>> = {
   "aes-128": aesCore("aes-128"),
   "aes-192": aesCore("aes-192"),
   "aes-256": aesCore("aes-256"),
+  "speck-32-64-be": speck32_64Core("be-paper"),
+  "speck-32-64-le": speck32_64Core("le-nsa"),
   blowfish: blowfishCore(),
   "serpent-128": serpentCore(16),
   "serpent-192": serpentCore(24),

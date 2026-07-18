@@ -33,18 +33,15 @@ import { isCipherModeSupported } from "@/ui/stores/cipher-mode";
 import { describe, expect, it } from "vitest";
 
 /** Every cipher that has no `BlockCipherCore` yet ⇒ single-block only. */
-const CORELESS_CIPHERS = [
-  "speck-32-64-be",
-  "speck-32-64-le",
-  "des",
-  "twofish",
-] as const satisfies readonly Cipher[];
+const CORELESS_CIPHERS = ["des", "twofish"] as const satisfies readonly Cipher[];
 
 /** Every cipher that HAS a core ⇒ single-block + ecb + cbc. */
 const CORED_CIPHERS = [
   "aes-128",
   "aes-192",
   "aes-256",
+  "speck-32-64-be",
+  "speck-32-64-le",
   "blowfish",
   "serpent-128",
   "serpent-192",
@@ -55,8 +52,9 @@ describe("cipher-mode × cipher support matrix", () => {
   it("every cipher with a core supports single-block + ecb + cbc", () => {
     // Phase B extended ECB/CBC from AES-128 to all three AES variants; Phase C
     // added Blowfish, the first non-AES member and the first whose block is not
-    // 16 bytes; Serpent followed as an AES-shaped family (three more cores).
-    // All arrive the same way: a core plus two table rows.
+    // 16 bytes; Serpent followed as an AES-shaped family (three more cores); and
+    // Speck32/64 joined as the first core whose block is smaller than 8 bytes
+    // (a byte-order pair). All arrive the same way: a core plus two table rows.
     for (const cipher of CORED_CIPHERS) {
       expect(isCipherModeSupported(cipher, "single-block")).toBe(true);
       expect(isCipherModeSupported(cipher, "ecb")).toBe(true);

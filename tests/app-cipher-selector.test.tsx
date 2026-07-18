@@ -184,9 +184,14 @@ describe("App — cipher selector", () => {
     expect(findInputByLabel(container, "key").value).toBe("1918111009080100");
     expect(findInputByLabel(container, "plaintext").value).toBe("6574694c");
 
-    // Padding selector must be disabled — overlay assumes a 16-byte matrix.
+    // Padding selector is now ENABLED — registering the Speck `BlockCipherCore`
+    // (2026-07-18) makes "has a core" the single gate for both "can run a mode"
+    // and "the padding overlay knows your block size" (the core-presence policy
+    // Blowfish established). Speck is the first cipher whose pad fills to 4
+    // bytes; the default scheme is still "none", so this only makes the selector
+    // clickable — the canonical Run below is unaffected.
     const paddingSelect = findSelectByLabel(container, "padding");
-    expect(paddingSelect.disabled).toBe(true);
+    expect(paddingSelect.disabled).toBe(false);
 
     fireEvent.click(findButton(container, "run"));
     expect(container.querySelector(".error")).toBeNull();
@@ -303,12 +308,12 @@ describe("App — cipher selector", () => {
     expect(findInputByLabel(container, "plaintext").value).toBe("0123456789abcdef");
 
     // DES has no `BlockCipherCore` yet, so both the padding overlay and the
-    // mode-of-operation selector stay disabled — matching Speck (Serpent now
-    // has cores, so it no longer belongs in this list).
+    // mode-of-operation selector stay disabled — matching Twofish (Speck and
+    // Serpent now have cores, so they no longer belong in this list).
     const paddingSelect = findSelectByLabel(container, "padding");
     expect(paddingSelect.disabled).toBe(true);
 
-    // Cipher-mode is AES-only for the same reason.
+    // Cipher-mode requires a core, which DES lacks, for the same reason.
     const cipherModeSelect = findSelectByLabel(container, "mode of operation");
     expect(cipherModeSelect.disabled).toBe(true);
 

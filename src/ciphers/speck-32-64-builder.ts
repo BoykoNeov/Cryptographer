@@ -39,7 +39,72 @@ const M = 4;
 const ALPHA = 7;
 const BETA = 2;
 
+/** Speck32/64's block is 32 bits — two 16-bit words. The `BlockCipherCore`. */
+export const SPECK_32_64_BLOCK_BYTES = 4;
+/** Speck32/64's key is 64 bits — m=4 words × 16 bits. */
+export const SPECK_32_64_KEY_BYTES = M * (WORD_BITS / 8);
+
 export type Speck32_64Direction = "encrypt" | "decrypt";
+
+/**
+ * The Speck32/64 round pipeline, seed-parameterized — the block-cipher *body*
+ * a mode of operation drives.
+ *
+ * Split out from `buildSpeck32_64Spec` (2026-07-18) so the same 22-round leaf
+ * chain feeds both surfaces: the single-block spec passes `$input`, while a
+ * `BlockCipherCore` (`speck-32-64-core.ts`) passes the iterate's injected block
+ * port. Only round 1's `state` binding varies with `seed`; every later round
+ * and every param is identical, so the mode specs are byte-for-byte what the
+ * single-block spec produces per block.
+ *
+ * `output` names the exit port explicitly (the last round's `state`) because a
+ * mode iterate's `bodyOutput` cannot fall back to the runtime's implicit
+ * last-leaf rule — see `BlockCipherCore` (`block-cipher-core.ts`).
+ *
+ * The round-key wiring stays as it was: encrypt's round.i consumes
+ * roundKey.{i-1} (forward), decrypt's round-inverse.i consumes
+ * roundKey.{ROUNDS-i} (reverse) — the leaf ORDER is what encodes the reversal,
+ * and `roundKey` flows from `aux[roundKeyAux]` (unwired), which crosses an
+ * iterate's scope boundary because aux is global.
+ */
+export const buildSpeck32_64Body = (
+  byteOrder: SpeckByteOrder,
+  direction: Speck32_64Direction,
+  seed: PortBinding,
+): { nodes: StepNode[]; output: PortBinding } => {
+  const stepType = direction === "encrypt" ? "speck.round@1" : "speck.round-inverse@1";
+  const idPrefix = direction === "encrypt" ? "round" : "round-inverse";
+
+  const rounds: StepNode[] = [];
+  for (let i = 1; i <= ROUNDS; i++) {
+    const rkIndex = direction === "encrypt" ? i - 1 : ROUNDS - i;
+    // Round 1 reads the injected block (`seed`: `$input` single-block, or the
+    // iterate's "in" port under a mode); every later round reads its
+    // predecessor's `state` output. Same shape as AES/Serpent.
+    const stateBinding: PortBinding = i === 1 ? seed : port(`${idPrefix}.${i - 1}`, "state");
+    rounds.push({
+      kind: "step",
+      id: `${idPrefix}.${i}`,
+      type: stepType,
+      params: {
+        roundKeyAux: `roundKey.${rkIndex}`,
+        alpha: ALPHA,
+        beta: BETA,
+        wordBits: WORD_BITS,
+        byteOrder,
+      },
+      portInputs: { state: stateBinding },
+    });
+  }
+
+  // The ciphertext (or plaintext, decrypting) block leaves on the last round's
+  // `state` output — all rounds share `speck.round@1`, so all publish `state`.
+  return { nodes: rounds, output: port(`${idPrefix}.${ROUNDS}`, "state") };
+};
+
+/** The Speck32/64 key schedule as one node — run once, outside a mode's loop. */
+export const buildSpeck32_64KeySchedule = (byteOrder: SpeckByteOrder): StepNode =>
+  buildSpeck32_64KeyScheduleNative(ROUNDS, M, WORD_BITS, ALPHA, BETA, byteOrder);
 
 export const buildSpeck32_64Spec = (
   byteOrder: SpeckByteOrder,
@@ -61,57 +126,17 @@ export const buildSpeck32_64Spec = (
   // Published aux entries are byte-identical to the monolith's output, so
   // the round-body consumers below are untouched. See
   // `speck-32-64-key-schedule-builder-native.ts` for the structure.
-  const keySchedule: StepNode = buildSpeck32_64KeyScheduleNative(
-    ROUNDS,
-    M,
-    WORD_BITS,
-    ALPHA,
-    BETA,
-    byteOrder,
-  );
+  const keySchedule: StepNode = buildSpeck32_64KeySchedule(byteOrder);
 
-  // For encrypt, round.i consumes roundKey.{i-1} (forward order).
-  // For decrypt, round-inverse.i consumes roundKey.{ROUNDS-i} (reverse order):
-  //   decrypt leaf 1 → roundKey.21
-  //   decrypt leaf 2 → roundKey.20
-  //   …
-  //   decrypt leaf 22 → roundKey.0
-  const rounds: StepNode[] = [];
-  for (let i = 1; i <= ROUNDS; i++) {
-    const rkIndex = direction === "encrypt" ? i - 1 : ROUNDS - i;
-    const stepType = direction === "encrypt" ? "speck.round@1" : "speck.round-inverse@1";
-    const idPrefix = direction === "encrypt" ? "round" : "round-inverse";
-    // Explicit state-spine wiring (Phase 5 Slice 5.3b): declare the `state`
-    // input port so `inferPortEdges` owns the round→round spine and the
-    // `inferStateEdges` legacy fallback can be retired (5.3e). The first
-    // round reads the reserved `$input` source (the plaintext/ciphertext
-    // block); every later round reads its predecessor's `state` output port.
-    //
-    // Byte-equality (the 5.3b load-bearing spike): each round leaf is
-    // hybrid-ported (`speckRoundMeta` present, `legacy === undefined`), so
-    // declaring `portInputs.state` makes the runtime resolve the carried
-    // block from `nodeOutputs` (Step A) and SKIP the `meta.stateInputPort`
-    // projection (Step B). For `stateLayout: "bytes"` the projection is the
-    // identity over the predecessor's recorded output bytes, so the trace
-    // stays byte-identical to the implicit state-thread. `roundKey` is left
-    // unwired — it keeps flowing from `aux[roundKeyAux]` via Step C, so the
-    // key-schedule→round fan-out edges in `frame.auxRead` are preserved.
-    const stateBinding: PortBinding =
-      i === 1 ? port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT) : port(`${idPrefix}.${i - 1}`, "state");
-    rounds.push({
-      kind: "step",
-      id: `${idPrefix}.${i}`,
-      type: stepType,
-      params: {
-        roundKeyAux: `roundKey.${rkIndex}`,
-        alpha: ALPHA,
-        beta: BETA,
-        wordBits: WORD_BITS,
-        byteOrder,
-      },
-      portInputs: { state: stateBinding },
-    });
-  }
+  // The 22-round body, seeded from the reserved `$input` source (the
+  // single-block plaintext/ciphertext). `buildSpeck32_64Body` owns the
+  // round-key ordering (forward for encrypt, reversed for decrypt) and the
+  // `state`-spine wiring; a mode reuses the same builder with a different seed.
+  const { nodes: rounds } = buildSpeck32_64Body(
+    byteOrder,
+    direction,
+    port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT),
+  );
 
   return {
     id,
@@ -119,7 +144,7 @@ export const buildSpeck32_64Spec = (
     stateShape: "bytes",
     inputs: {
       plaintext: { shape: "bytes" },
-      key: { byteLength: M * (WORD_BITS / 8) }, // 8 bytes for Speck32/64
+      key: { byteLength: SPECK_32_64_KEY_BYTES }, // 8 bytes for Speck32/64
     },
     steps: [keySchedule, ...rounds],
   };

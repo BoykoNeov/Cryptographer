@@ -100,23 +100,24 @@ export const PADDING_SCHEME_OPTIONS = ALL_PADDING_SCHEMES;
  */
 const singleBlockLimits = (cipher: Cipher): { min: number; max: number } => {
   switch (cipher) {
-    case "speck-32-64-be":
-    case "speck-32-64-le":
-      return { min: 4, max: 4 };
     case "des":
       return { min: 8, max: 8 };
     case "twofish":
       return { min: 16, max: 16 };
-    // AES, Blowfish, and Serpent always have a core, so they never reach here.
-    // The arms exist to keep the switch exhaustive over `Cipher` — which is what
-    // makes a NEW cipher that lacks a core a compile error rather than a runtime
-    // throw. This is the rollout shrinking one entry at a time, visible in the
-    // type system: Blowfish moved up here when its core landed in Phase C, and
-    // the three Serpent variants followed when theirs did.
+    // AES, Speck, Blowfish, and Serpent always have a core, so they never reach
+    // here. The arms exist to keep the switch exhaustive over `Cipher` — which
+    // is what makes a NEW cipher that lacks a core a compile error rather than a
+    // runtime throw. This is the rollout shrinking one entry at a time, visible
+    // in the type system: Blowfish moved up here when its core landed in Phase
+    // C, the three Serpent variants followed when theirs did, and the two Speck
+    // conventions joined when the 4-byte core landed.
     case "aes-128":
     case "aes-192":
     case "aes-256":
       return { min: 16, max: 16 };
+    case "speck-32-64-be":
+    case "speck-32-64-le":
+      return { min: 4, max: 4 };
     case "blowfish":
       return { min: 8, max: 8 };
     case "serpent-128":

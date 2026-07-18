@@ -21,8 +21,9 @@
  * The mode + cipher + direction triple selects one canonical spec from
  * the table in stores/spec.ts; padding overlay layers on top of that.
  *
- * Non-AES ciphers (Speck32/64) only support "single-block" today — the
- * cipher-mode <select> is greyed out when a Speck variant is active.
+ * Coreless ciphers (DES, Twofish today) only support "single-block" — the
+ * cipher-mode <select> is greyed out when one of them is active. AES, Speck,
+ * Serpent, and Blowfish all have a `BlockCipherCore` and gain ECB/CBC.
  *
  * Session-only (2026-05-19): not persisted in localStorage. Refresh resets
  * to "single-block". See the matching note in cipher.ts — both selectors
@@ -69,16 +70,21 @@ export const SUPPORTED_CIPHER_MODES_BY_CIPHER: Readonly<Record<Cipher, readonly 
   "serpent-128": ["single-block", "ecb", "cbc"],
   "serpent-192": ["single-block", "ecb", "cbc"],
   "serpent-256": ["single-block", "ecb", "cbc"],
+  // Speck32/64 — the first core whose block is smaller than 8 bytes (4-byte
+  // block, two byte conventions). `src/ciphers/speck-32-64-core.ts` — the
+  // seed-threading was one binding (round 1's `state`), the rest of the round
+  // chain and every param already flowed through the shared body builder.
+  "speck-32-64-be": ["single-block", "ecb", "cbc"],
+  "speck-32-64-le": ["single-block", "ecb", "cbc"],
   // Everything below is single-block for ONE reason: no `BlockCipherCore` yet.
   // A core needs the cipher's body to accept its block from an arbitrary port
   // rather than hardcoding `$input` — per-cipher seed-threading work. It is
   // NOT a block-size limitation: the mode builders, the iterate, and the
-  // padding overlay are all block-size-generic as of Phase B, and Blowfish's
-  // 8-byte block proves it end to end. `src/ciphers/blowfish-core.ts` /
-  // `serpent-core.ts` are the templates each of these follows; DES needs its
-  // top-level const extracted into a seed-taking builder first.
-  "speck-32-64-be": ["single-block"],
-  "speck-32-64-le": ["single-block"],
+  // padding overlay are all block-size-generic as of Phase B, and Speck's
+  // 4-byte block proves it below every "round" width. `blowfish-core.ts` /
+  // `serpent-core.ts` / `speck-32-64-core.ts` are the templates each of these
+  // follows; DES needs its top-level const extracted into a seed-taking builder
+  // first, and Twofish's round body isn't seed-parameterized yet.
   des: ["single-block"],
   twofish: ["single-block"],
 };
