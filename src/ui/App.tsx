@@ -464,7 +464,7 @@ export const App = () => {
         // friendly error rather than letting the iterate's block split throw a
         // runtime-internals error from inside the loop.
         //
-        // CTR and CFB are deliberately absent: they are stream modes, so a
+        // CTR, CFB and OFB are deliberately absent: they are stream modes, so a
         // message may end mid-block in either direction (the iterate sets
         // `allowPartialFinalBlock` and the mode's trim leaf matches the
         // keystream to the short block). Requiring alignment here would reject
@@ -567,11 +567,12 @@ export const App = () => {
       // randomize button generates that width, and `reconcileIvWidth` re-defaults
       // the IV whenever a cipher/mode change moves the block size. So we can drop
       // straight into aux.
-      // CTR and CFB read the same aux slot, but the value plays a different
-      // role: in CTR it is the INITIAL COUNTER BLOCK and in CFB the INITIAL
-      // FEEDBACK REGISTER — both get encrypted, rather than XORed into the
-      // first block as CBC's is. One field, three meanings — the IV input's
-      // label and the mode's narration carry the distinction.
+      // CTR, CFB and OFB read the same aux slot, but the value plays a
+      // different role: in CTR it is the INITIAL COUNTER BLOCK, in CFB the
+      // initial feedback register, in OFB the initial output-feedback register
+      // that seeds the whole keystream — all three get encrypted, rather than
+      // XORed into the first block as CBC's is. One field, four meanings — the
+      // IV input's label and the mode's narration carry the distinction.
       if (cipherModeUsesIv(cipherMode())) {
         initialAux.set("iv", new Uint8Array(ivBytes()));
       }
@@ -1712,6 +1713,18 @@ export const App = () => {
               >
                 {CIPHER_MODE_LABELS.cfb}
                 {hasBlockCipherCore(cipher()) && !isCipherModeSupported(cipher(), "cfb")
+                  ? " (not wired up for this cipher yet)"
+                  : ""}
+              </option>
+              <option
+                value="ofb"
+                disabled={
+                  !(SUPPORTED_CIPHER_MODES as readonly string[]).includes("ofb") ||
+                  !isCipherModeSupported(cipher(), "ofb")
+                }
+              >
+                {CIPHER_MODE_LABELS.ofb}
+                {hasBlockCipherCore(cipher()) && !isCipherModeSupported(cipher(), "ofb")
                   ? " (not wired up for this cipher yet)"
                   : ""}
               </option>

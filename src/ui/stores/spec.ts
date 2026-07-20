@@ -51,6 +51,7 @@ import { buildCbcSpec } from "@/ciphers/modes/cbc";
 import { buildCfbSpec } from "@/ciphers/modes/cfb";
 import { buildCtrSpec } from "@/ciphers/modes/ctr";
 import { buildEcbSpec } from "@/ciphers/modes/ecb";
+import { buildOfbSpec } from "@/ciphers/modes/ofb";
 import { rsaDecryptSpec, rsaEncryptSpec } from "@/ciphers/rsa";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { serpent128DecryptSpec } from "@/ciphers/serpent-128-decrypt";
@@ -146,6 +147,7 @@ const modesFromCore = (
   cbc: { encrypt: buildCbcSpec(core, "encrypt"), decrypt: buildCbcSpec(core, "decrypt") },
   ...ctrFromCore(core),
   ...cfbFromCore(core),
+  ...ofbFromCore(core),
 });
 
 /**
@@ -181,6 +183,22 @@ const cfbFromCore = (
   cfb: { encrypt: buildCfbSpec(core, "encrypt"), decrypt: buildCfbSpec(core, "decrypt") },
 });
 
+/**
+ * OFB alone, split out for the same reason as `ctrFromCore` / `cfbFromCore` —
+ * AES-128 must be able to take it without regenerating its grandfathered
+ * ECB/CBC constants.
+ *
+ * Like CTR (and unlike CFB), the two directions are structurally IDENTICAL
+ * specs: OFB's register is refilled from the cipher's own output, which is
+ * message-independent, so nothing about the wiring flips with direction. Both
+ * are still built, because they carry different ids, names, and prose.
+ */
+const ofbFromCore = (
+  core: BlockCipherCore,
+): Partial<Record<CipherMode, Record<Mode, CipherSpec>>> => ({
+  ofb: { encrypt: buildOfbSpec(core, "encrypt"), decrypt: buildOfbSpec(core, "decrypt") },
+});
+
 // 3D table of canonical specs: defaults[cipher][cipherMode][mode]. The inner
 // per-cipherMode record is partial — only ciphers with a `BlockCipherCore`
 // carry ECB/CBC entries; the rest are single-block only.
@@ -195,6 +213,8 @@ const defaults: Record<Cipher, Partial<Record<CipherMode, Record<Mode, CipherSpe
     ...ctrFromCore(aesCore("aes-128")),
     // CFB likewise postdates the mode machine — same reasoning.
     ...cfbFromCore(aesCore("aes-128")),
+    // OFB likewise postdates the mode machine — same reasoning.
+    ...ofbFromCore(aesCore("aes-128")),
   },
   "aes-192": {
     "single-block": { encrypt: aes192Spec, decrypt: aes192DecryptSpec },
