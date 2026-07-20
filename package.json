@@ -1,7 +1,7 @@
 {
   "name": "cryptographer",
   "private": true,
-  "version": "0.8.0",
+  "version": "0.9.0",
   "license": "LicenseRef-BNCL-1.0",
   "type": "module",
   "scripts": {

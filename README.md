@@ -4,7 +4,7 @@ An interactive cryptography explorer. Type a plaintext + key, watch every interm
 
 Built as a learning tool, not a production crypto library.
 
-> **Status:** v0.8.0 — multiple ciphers and modes shipped, 2D visual editor complete (all 11 slices), **full linear-mode pedagogy**: every step narrates what it does inline with byte values (per-frame value-prose), every round key renders side-by-side as a labelled ribbon with the consumed `K_i` outlined, the key schedule that used to collapse into one passthrough frame now surfaces its per-word internals (AES `RotWord → SubWord → Rcon → XOR` chain; Serpent prekey recurrence + bitsliced S-boxes + IP), and hovering an output byte cell in the linear inspector lights up the input cell(s) that feed it (same-position for SubBytes/AddRoundKey, a gather for ShiftRows, the four same-column cells with GF `×N` labels for MixColumns). Cross-mode mirror buttons across every step type with a known encrypt↔decrypt param relationship. Compose-your-own block-cipher modes from the palette. See [CHANGELOG.md](./CHANGELOG.md) for the release log and [docs/versioning.md](./docs/versioning.md) for the versioning policy.
+> **Status:** v0.9.0 — **`N ciphers + M modes` is closed**: every block cipher in the box (AES ×3, Speck ×2, Serpent ×3, DES, Blowfish, Twofish — eleven cores) runs every mode of operation (ECB, CBC, CTR, CFB), because the modes are written once against a cipher-agnostic contract rather than per cipher. 2D visual editor complete (all 11 slices), **full linear-mode pedagogy**: every step narrates what it does inline with byte values (per-frame value-prose), every round key renders side-by-side as a labelled ribbon with the consumed `K_i` outlined, the key schedule that used to collapse into one passthrough frame now surfaces its per-word internals (AES `RotWord → SubWord → Rcon → XOR` chain; Serpent prekey recurrence + bitsliced S-boxes + IP), and hovering an output byte cell in the linear inspector lights up the input cell(s) that feed it (same-position for SubBytes/AddRoundKey, a gather for ShiftRows, the four same-column cells with GF `×N` labels for MixColumns). Cross-mode mirror buttons across every step type with a known encrypt↔decrypt param relationship. Compose-your-own block-cipher modes from the palette. See [CHANGELOG.md](./CHANGELOG.md) for the release log and [docs/versioning.md](./docs/versioning.md) for the versioning policy.
 
 ## What's in the box
 
@@ -19,7 +19,7 @@ Shipped ciphers (all with both encrypt + decrypt paths and FIPS / NIST / paper-v
 | **Blowfish** | — | 8 B | 8 B (v1) | single-block, ECB + CBC + CTR + CFB |
 | **Twofish** | — | 16 B | 16 B (v1) | single-block, ECB + CBC + CTR + CFB |
 
-Padding schemes (every cipher): **PKCS#7**, **zero-pad**, **ISO 7816-4**, plus a no-pad option for exact-block input. Blowfish and DES pad to their own **8-byte** block and Speck to its **4-byte** block, not 16 — the padding overlay reads the width from the active cipher.
+Padding schemes (every cipher): **PKCS#7**, **zero-pad**, **ISO 7816-4**, plus a no-pad option for exact-block input. Blowfish and DES pad to their own **8-byte** block and Speck to its **4-byte** block, not 16 — the padding overlay reads the width from the active cipher. The **stream** modes (CTR, CFB) are exempt: they engage no padding at all and accept a message of any length ≥ 1 byte.
 
 **Modes of operation cost `N ciphers + M modes`, not `N × M`.** ECB, CBC, CTR, and CFB are written once against a `BlockCipherCore` contract (block/key width, a key schedule, and seed-parameterized forward + inverse bodies) and know nothing about the cipher underneath — so adding a mode gives it to every cipher, and adding a cipher gives it every mode. As of Twofish's core (the last one), **every block cipher above runs every mode** — the claim fully paid out. Widths are no obstacle either: Speck's 4-byte block and Blowfish's 8-byte block drive exactly the same generic machinery AES's 16-byte block does.
 
@@ -69,7 +69,7 @@ Interactive features:
 - **Per-frame value-prose narration** — every step in every cipher emits a collapsible `<details>` block per conceptual sub-unit (SubBytes → 16 byte units, MixColumns → 4 GF(2^8) dot-product breakdowns, AddRoundKey → 16 XOR cells naming the consumed aux, padding → input/output lengths + pad value, aux primitives → operands + result with the algebraic identity). Disclosures stay open across the byte-format toggle and across the debounced re-run after a param edit.
 - **Round-key side-by-side panel** — every round key of the active schedule renders as a labelled ribbon (AES → 11/13/15 4×4 grids; Serpent → 33 grids; Speck → 22 two-byte strips). The `K_i` whose canonical name appears in the current frame's `auxRead` map lights up, so chain XOR and Rcon column injection become visible at a glance.
 - **Cell-level provenance hover** — in the linear inspector, hover an output byte cell and the input cell(s) that feed it light up: same-position for SubBytes and AddRoundKey (whose round-key `operand` row lights up alongside the state), a gather for ShiftRows, the four same-column contributors for MixColumns (each annotated with its GF(2⁸) coefficient `×N`). It's pure index math over the port-native primitives — derived from each step's params + port lengths, never the byte values, so it can't go stale — and operations whose byte mapping is only approximate (SHA-256's modular adds and bit-rotates) intentionally highlight nothing rather than mislead.
-- **Compose-your-own block-cipher mode** — drag `generic.aux-load`, `generic.aux-xor`, and `generic.aux-copy` primitives from the palette and wire up CBC, OFB, or CFB around any single-block cipher without writing a single line of executor code. Half-wired specs stay debuggable: missing aux references show up as orange `!` glyphs on the canvas instead of throwing a runtime exception. (See `src/steps/CLAUDE.md` for the canonical CBC recipe.)
+- **Compose-your-own block-cipher mode** — ECB, CBC, CTR, and CFB ship built in for every cipher, but the primitives that build them are in the palette too: drag `generic.aux-load`, `generic.aux-xor`, and `generic.aux-copy` and wire up a mode by hand — OFB, or your own feedback rule — around any single-block cipher, without writing a single line of executor code. Half-wired specs stay debuggable: missing aux references show up as orange `!` glyphs on the canvas instead of throwing a runtime exception. (See `src/steps/CLAUDE.md` for the canonical CBC recipe.)
 - **2D graph view with drag-from-palette authoring** — pan / drag containers, collapse groups, see the aux-flow + state-flow edges that connect every step. Drag step types from the left palette to insert them into the spec; warning glyphs surface orphaned reads, unused writes, cycles, and state-shape mismatches **before** you click Run. High-fanout sources (Serpent's 33-key schedule, AES's 11 round keys) collapse to local replica chips with the parallel arrows bundled into one `×N` pill. Per-source edge colouring (Okabe-Ito 8-colour palette) makes overlapping dataflow readable at a glance. Replica chips and per-block iterate chips are draggable, with a per-node ↺ reset glyph and a toolbar `[reset layout]` button for the hard reset.
 - **Rewire ports in place** — change which upstream output feeds a step's input without touching code: click a leaf's input-port handle to arm it, then click any scope-legal source's bind handle to wire it (or use the per-port dropdown below the graph). Only same-scope sources are offered, so a wire can never crash at run time; a size-mismatch wire is allowed but flagged amber (the bytes coerce as a visible trace step). Rewires save and share like any other edit.
 - **Save a group as a reusable element ("compose-and-save")** — hover any group (e.g. an AES round) and click the `★` chip in its header to capture it into a **"my elements"** palette section; drag it back anywhere to drop a fresh, fully editable copy. A composite is pure JSON (a saved group template, not opaque code), so its internals stay visible and scrubbable — the "cipher = JSON" idea at the reusable-block grain. The library persists per browser; the dropped copy inlines into the spec, so saved/shared `.cipher.json` files stay self-contained.
@@ -98,11 +98,11 @@ Open `http://localhost:5173`. Hot reload kicks in on every save.
 | Command | What it does |
 |---|---|
 | `npm run dev` | Vite dev server with HMR. |
-| `npm test` | Vitest, single run. ~2430 tests across 214 files, ~50s. |
+| `npm test` | Vitest, single run. ~3515 tests across 270 files, ~90s (the jsdom UI tests dominate). |
 | `npm run typecheck` | `tsc --noEmit`, strict mode. |
-| `npm run check` | The full gate: `biome ci . && tsc --noEmit && vitest run && vite build`. ~60s. |
+| `npm run check` | The full gate: `biome ci . && tsc --noEmit && vitest run && vite build`. ~100s warm; a cold first run can exceed 3 minutes. |
 | `npm run smoke` | Playwright real-browser smoke specs (graph drag/collapse, port wiring, composite save/drop, inspector cell-hover, …). |
-| `npm run build` | Production build into `dist/`. ~212 KB gzipped JS. |
+| `npm run build` | Production build into `dist/`. ~272 KB gzipped JS. |
 
 The pre-commit hook in `.githooks/pre-commit` runs `npm run check`. GitHub Actions runs the same on push.
 
@@ -117,10 +117,12 @@ For the file-by-file map, read **[`docs/key-files.md`](./docs/key-files.md)**. F
 ```
 src/
   core/            cipher-agnostic engine: types, runtime, registry, spec mutations, document format, graph
-  ciphers/         per-cipher specs + constants (AES, Speck, Serpent, DES)
+  ciphers/         per-cipher specs + constants (AES, Speck, Serpent, DES, Blowfish,
+                   Twofish, RSA, SHA-256, Keccak/SHA-3/SHAKE/cSHAKE/KMAC)
+  ciphers/modes/   cipher-agnostic ECB / CBC / CTR / CFB over the BlockCipherCore contract
   steps/           step-type executors + their StepDocumentation blocks
   ui/              Solid components, stores, app shell
-tests/             ~214 files, ~2430 tests — vitest (node + jsdom mix)
+tests/             ~270 files, ~3515 tests — vitest (node + jsdom mix)
 e2e/               Playwright real-browser smoke tests
 docs/              key-files.md, gotchas.md, versioning.md, plans/
 .githooks/         pre-commit gate
