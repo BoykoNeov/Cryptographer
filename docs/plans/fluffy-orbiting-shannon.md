@@ -295,6 +295,19 @@ SVG groups rather than a chip wall.
 Canonical quarter-round graph cell (`core/chacha-shape.ts` +
 `core/chacha-layout.ts`, recognized by wiring on the `twofish-shape.ts` model)
 and a linear `<ChaChaQuarterRoundDiagram />` over a pure
-`core/chacha-diagram.ts`. Not started. Twofish shipped its graph layout and its
-linear diagram days after the cipher, so this is a normal follow-up rather than
-an outstanding defect.
+`core/chacha-diagram.ts`. **Not started — and this is APPROVED SCOPE that
+remains outstanding, not an optional follow-up.** The user selected
+"QR graph layout + linear diagram" explicitly when this plan was agreed.
+Twofish deferred its diagrams, but that was Twofish's own call and the
+precedent does not transfer to work asked for up front.
+
+Two consequences of P5 being absent, both confined to it:
+
+- Expanding a double-round container in the graph shows a raw 96-leaf stack
+  rather than eight readable quarter-round cells. The groups ship
+  default-collapsed so first render is fine, but the canonical cell is what
+  makes an expanded round legible.
+- The round split's port fanout should be checked against the replication
+  threshold when the cell lands — Twofish needed `never`-replication on its
+  round members or the cell scattered into per-consumer chips, and that was
+  caught by browser smoke rather than by unit tests.
