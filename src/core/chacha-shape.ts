@@ -24,6 +24,15 @@
  *   concat[16]                            → the 64-byte state back out
  * ```
  *
+ * **What lives here, and what moved.** The double-round ENVELOPE — find the
+ * concat via `bodyOutput`, find the sole 16-way split, collect the eight
+ * rotation anchors, run the walk, apply the partition gate — is shared with
+ * Salsa20 and lives in `arx-round-shape.ts`. What stays here is the one thing
+ * that is irreducibly ChaCha's: the twelve-op walk itself, because ChaCha
+ * accumulates in place (`a += b; d ^= a; d <<<= 16`) while Salsa assigns into a
+ * fresh rail (`z1 = y1 ^ ((y0+y3) <<< 7)`) — different dependency graphs, not a
+ * reordering. So this module is an adapter: `anchorBits: 7` plus the walk.
+ *
  * **Why the match is an explicit 12-leaf walk and not a backward cone.**
  * `twofish-shape.ts` cones outward from an anchor because its round is bounded
  * by a split it can stop at. That does not work here: the diagonal quarter
@@ -49,27 +58,35 @@
  *     owns it.
  */
 
-import { findStepAndParent } from "./spec-mutations";
-import { canonicalStepId } from "./step-id";
+import {
+  type ArxDoubleRoundShape,
+  type ArxRail,
+  type ArxRailedQuarterRound,
+  analyzeArxDoubleRound,
+  findActiveArxQuarterRound,
+  isBinary,
+  partitionOperands,
+  rotateBits,
+  sameBinding,
+  soleInput,
+} from "./arx-round-shape";
 import type { CipherSpec, PortBinding, StepGroup, StepLeaf, TraceFrame } from "./types";
 
 // Primitive type strings the shape is built from. Matched by value so
 // recognition is decoupled from ChaCha20's leaf ids.
-const SPLIT_TYPE = "split-bytes@1";
-const CONCAT_TYPE = "concat@1";
 const ADD_TYPE = "add-mod-32@1";
 const XOR_TYPE = "xor@1";
-const ROTL_TYPE = "rotate-bits-left@1";
 
-/** ChaCha20's state is sixteen 32-bit words. */
-const STATE_WORDS = 16;
-/** RFC 8439 §2.3.1: four column quarter rounds then four diagonal ones. */
-const QUARTER_ROUNDS_PER_DOUBLE_ROUND = 8;
 /** Twelve ARX operations per quarter round (RFC 8439 §2.1). */
 const OPS_PER_QUARTER_ROUND = 12;
+/** RFC 8439 §2.1: every quarter round ends on `b <<<= 7`. That is the anchor. */
+const ANCHOR_BITS = 7;
 
-/** The four words a quarter round mixes, named as RFC 8439 §2.1 names them. */
-export type ChaChaRail = "a" | "b" | "c" | "d";
+/**
+ * The four words a quarter round mixes, named as RFC 8439 §2.1 names them.
+ * Structurally identical to the family's positional rails.
+ */
+export type ChaChaRail = ArxRail;
 
 /**
  * One of the twelve operations of a quarter round, with its role derived from
@@ -104,17 +121,13 @@ export type ChaChaOp =
  * is derived from real child wiring, so it survives a rewire and is identical
  * for encrypt and decrypt.
  */
-export type ChaChaQuarterRoundShape = {
+export type ChaChaQuarterRoundShape = ArxRailedQuarterRound<ChaChaOp> & {
   /**
    * Stable identity: the id of the final `<<< 7` rotation, which is the walk's
    * anchor and is unique per quarter round. Used as the map key and as the
    * diagram's identity across re-runs.
    */
   readonly id: string;
-  /** All twelve member leaves, in spec order. */
-  readonly memberIds: readonly string[];
-  /** The twelve operations in RFC 8439 §2.1 order — four lines of three. */
-  readonly ops: readonly ChaChaOp[];
   /** Where each rail's value came from on entry (bindings outside this round). */
   readonly inputs: Readonly<Record<ChaChaRail, PortBinding>>;
   /** The leaf producing each rail's final value: a, b, c, d. */
@@ -125,74 +138,7 @@ export type ChaChaQuarterRoundShape = {
  * Structural descriptor of a ChaCha20 DOUBLE round — the group the graph view
  * lays out, holding the eight quarter rounds it contains.
  */
-export type ChaChaDoubleRoundShape = {
-  /** The double-round group's id, e.g. "double-round.3". */
-  readonly roundId: string;
-  /** The 16-way `split-bytes@1` leaf producing the state's words. */
-  readonly splitId: string;
-  /** The 16-input `concat@1` leaf reassembling the state (= `bodyOutput`). */
-  readonly concatId: string;
-  /** Concat output port (= `group.bodyOutput.port`). */
-  readonly concatOutPort: string;
-  /** The eight quarter rounds, in spec order: four column, then four diagonal. */
-  readonly quarterRounds: readonly ChaChaQuarterRoundShape[];
-};
-
-// ─── Local helpers (deliberately re-declared rather than shared, so the two
-// existing shape modules stay untouched — they are trivial pure narrowers). ──
-
-/** Narrow a `Json` params value to a string-keyed record, or null. */
-const asRecord = (v: unknown): Record<string, unknown> | null =>
-  typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
-
-/** Read a numeric leaf param, or undefined. */
-const paramNumber = (leaf: StepLeaf, key: string): number | undefined => {
-  const v = asRecord(leaf.params)?.[key];
-  return typeof v === "number" ? v : undefined;
-};
-
-/** The port-input bindings of a leaf, or an empty record. */
-const portInputsOf = (leaf: StepLeaf): Record<string, PortBinding> => leaf.portInputs ?? {};
-
-/** Step (leaf) children of a group, in spec order. */
-const leafChildren = (group: StepGroup): readonly StepLeaf[] =>
-  group.children.filter((c): c is StepLeaf => c.kind === "step");
-
-/** Two bindings name the same value iff both node and port agree. */
-const sameBinding = (x: PortBinding, y: PortBinding): boolean =>
-  x.node === y.node && x.port === y.port;
-
-/** The rotation amount of a left-rotate leaf, or undefined if it isn't one. */
-const rotateBits = (leaf: StepLeaf | undefined): number | undefined =>
-  leaf !== undefined && leaf.type === ROTL_TYPE ? paramNumber(leaf, "bits") : undefined;
-
-/** True iff `leaf` is a 2-input leaf of `type`. */
-const isBinary = (leaf: StepLeaf | undefined, type: string): boolean =>
-  leaf !== undefined && leaf.type === type && paramNumber(leaf, "inputCount") === 2;
-
-/** The two operand bindings of a binary leaf, or null if it doesn't have two. */
-const operandPair = (leaf: StepLeaf): readonly [PortBinding, PortBinding] | null => {
-  const ops = Object.values(portInputsOf(leaf));
-  return ops.length === 2 ? [ops[0] as PortBinding, ops[1] as PortBinding] : null;
-};
-
-/**
- * Split a binary leaf's operands into (the one matching `pick`, the other).
- * Returns null when neither or both match — either way the wiring isn't the
- * shape we're matching, so the caller bails to the generic layout.
- */
-const partitionOperands = (
-  leaf: StepLeaf,
-  pick: (b: PortBinding) => boolean,
-): { readonly matched: PortBinding; readonly other: PortBinding } | null => {
-  const pair = operandPair(leaf);
-  if (!pair) return null;
-  const [first, second] = pair;
-  const firstMatches = pick(first);
-  const secondMatches = pick(second);
-  if (firstMatches === secondMatches) return null; // neither, or ambiguous
-  return firstMatches ? { matched: first, other: second } : { matched: second, other: first };
-};
+export type ChaChaDoubleRoundShape = ArxDoubleRoundShape<ChaChaQuarterRoundShape>;
 
 /**
  * Match one quarter round by walking RFC 8439 §2.1's dependency chain backwards
@@ -215,10 +161,6 @@ const matchQuarterRound = (
   byId: ReadonlyMap<string, StepLeaf>,
 ): ChaChaQuarterRoundShape | null => {
   const leafOf = (b: PortBinding): StepLeaf | undefined => byId.get(b.node);
-  const soleInput = (leaf: StepLeaf): PortBinding | undefined => {
-    const ins = Object.values(portInputsOf(leaf));
-    return ins.length === 1 ? ins[0] : undefined;
-  };
 
   // ── line 4: c += d; b ^= c; b <<<= 7 ──────────────────────────────────
   const r_b7 = anchor; // by construction: rotate-left, bits 7
@@ -339,71 +281,11 @@ const matchQuarterRound = (
  *
  * Returns null gracefully for every other cipher's rounds and for a
  * half-edited ChaCha round, so the caller falls back to the generic vertical
- * stack rather than rendering a broken cell.
- *
- * The final PARTITION check is the real validity gate: the eight quarter-round
- * walks must together cover every leaf of the group except the split and the
- * concat, exactly once. A user who rewires one operation therefore drops the
- * whole double round to the generic layout instead of leaving a cell with a
- * silently orphaned leaf.
+ * stack rather than rendering a broken cell. The envelope's partition gate does
+ * that work; see `analyzeArxDoubleRound`.
  */
-export const analyzeChaChaDoubleRound = (group: StepGroup): ChaChaDoubleRoundShape | null => {
-  if (group.kind !== "group") return null;
-  const bodyOutput = group.bodyOutput;
-  if (!bodyOutput) return null;
-
-  const leaves = leafChildren(group);
-  const byId = new Map(leaves.map((l) => [l.id, l] as const));
-
-  // 1. The concat is the bodyOutput target, and must reassemble all 16 words.
-  const concat = byId.get(bodyOutput.node);
-  if (!concat || concat.type !== CONCAT_TYPE) return null;
-  if (paramNumber(concat, "inputCount") !== STATE_WORDS) return null;
-
-  // 2. Exactly one 16-way split — the state's decomposition into words.
-  const splits = leaves.filter((l) => {
-    if (l.type !== SPLIT_TYPE) return false;
-    const widths = asRecord(l.params)?.widths;
-    return Array.isArray(widths) && widths.length === STATE_WORDS;
-  });
-  if (splits.length !== 1) return null;
-  const split = splits[0] as StepLeaf;
-
-  // 3. Eight anchors: the `<<< 7` rotations that end each quarter round.
-  const anchors = leaves.filter((l) => rotateBits(l) === 7);
-  if (anchors.length !== QUARTER_ROUNDS_PER_DOUBLE_ROUND) return null;
-
-  const quarterRounds: ChaChaQuarterRoundShape[] = [];
-  for (const anchor of anchors) {
-    const qr = matchQuarterRound(anchor, byId);
-    if (!qr) return null;
-    quarterRounds.push(qr);
-  }
-
-  // 4. Partition gate: the eight walks must tile the group's leaves exactly,
-  //    with the split and concat the only non-members. Overlap or leftovers
-  //    mean this is not (or is no longer) a canonical double round.
-  const claimed = new Set<string>();
-  for (const qr of quarterRounds) {
-    for (const id of qr.memberIds) {
-      if (claimed.has(id)) return null; // two quarter rounds claim one leaf
-      claimed.add(id);
-    }
-  }
-  if (claimed.size !== QUARTER_ROUNDS_PER_DOUBLE_ROUND * OPS_PER_QUARTER_ROUND) return null;
-  for (const leaf of leaves) {
-    if (leaf.id === split.id || leaf.id === concat.id) continue;
-    if (!claimed.has(leaf.id)) return null; // an unclaimed leaf — not our shape
-  }
-
-  return {
-    roundId: group.id,
-    splitId: split.id,
-    concatId: concat.id,
-    concatOutPort: bodyOutput.port,
-    quarterRounds,
-  };
-};
+export const analyzeChaChaDoubleRound = (group: StepGroup): ChaChaDoubleRoundShape | null =>
+  analyzeArxDoubleRound(group, { anchorBits: ANCHOR_BITS, matchQuarterRound });
 
 /**
  * Resolve the ChaCha20 quarter round containing the active frame. Walks the
@@ -423,25 +305,4 @@ export const findActiveChaChaQuarterRound = (
   quarterRound: ChaChaQuarterRoundShape;
   /** 0-based position within the double round: 0–3 column, 4–7 diagonal. */
   quarterRoundIndex: number;
-} | null => {
-  const activeLeaf = canonicalStepId(frame.stepId);
-  for (let i = frame.path.length - 1; i >= 0; i--) {
-    const id = frame.path[i];
-    if (id === undefined) continue;
-    const located = findStepAndParent(spec, id);
-    if (!located) continue;
-    const node = located.node;
-    if (node.kind !== "group") continue;
-    const round = analyzeChaChaDoubleRound(node);
-    if (!round) continue;
-    const index = round.quarterRounds.findIndex((qr) => qr.memberIds.includes(activeLeaf));
-    if (index < 0) continue;
-    return {
-      group: node,
-      round,
-      quarterRound: round.quarterRounds[index] as ChaChaQuarterRoundShape,
-      quarterRoundIndex: index,
-    };
-  }
-  return null;
-};
+} | null => findActiveArxQuarterRound(frame, spec, analyzeChaChaDoubleRound);

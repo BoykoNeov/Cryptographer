@@ -33,6 +33,7 @@
  * structurally identical, so one model serves both.
  */
 
+import { ARX_RAILS, deriveArxWordIndices } from "./arx-round-shape";
 import type {
   ChaChaDoubleRoundShape,
   ChaChaOp,
@@ -41,7 +42,7 @@ import type {
 } from "./chacha-shape";
 
 /** The four rails, top to bottom, as RFC 8439 §2.1 orders them. */
-export const CHACHA_RAILS: readonly ChaChaRail[] = ["a", "b", "c", "d"];
+export const CHACHA_RAILS: readonly ChaChaRail[] = ARX_RAILS;
 
 /** One operation, with the label the diagram prints on it. */
 export type ChaChaDiagramOp = ChaChaOp & {
@@ -84,47 +85,6 @@ export type ChaChaDiagramModel = {
   readonly rfcLabel: string | null;
 };
 
-/** Key a port binding for the word-index map. */
-const bindingKey = (node: string, port: string): string => `${node}:${port}`;
-
-/**
- * Thread state-word indices through a double round.
- *
- * The split's `outputN` IS word N. Each quarter round then reads four words and
- * writes its four results back to the same four positions — that is what makes
- * ChaCha's state a fixed 16-word array rather than a growing dataflow. So we
- * walk the quarter rounds in spec order, resolve each one's inputs against the
- * map, and register its outputs at the same indices for whoever reads them next.
- *
- * Returns a map from quarter-round id → its four rails' word indices.
- */
-const deriveWordIndices = (
-  round: ChaChaDoubleRoundShape,
-): ReadonlyMap<string, Readonly<Record<ChaChaRail, number | null>>> => {
-  // Seed: the split's sixteen outputs are words 0..15.
-  const wordAt = new Map<string, number>();
-  for (let i = 0; i < 16; i++) {
-    wordAt.set(bindingKey(round.splitId, `output${i}`), i);
-  }
-
-  const result = new Map<string, Readonly<Record<ChaChaRail, number | null>>>();
-  for (const qr of round.quarterRounds) {
-    const indices: Record<ChaChaRail, number | null> = { a: null, b: null, c: null, d: null };
-    for (const rail of CHACHA_RAILS) {
-      const input = qr.inputs[rail];
-      indices[rail] = wordAt.get(bindingKey(input.node, input.port)) ?? null;
-    }
-    result.set(qr.id, indices);
-    // This quarter round's outputs occupy the same four word positions.
-    for (const rail of CHACHA_RAILS) {
-      const index = indices[rail];
-      if (index === null) continue;
-      wordAt.set(bindingKey(qr.outputs[rail], "output"), index);
-    }
-  }
-  return result;
-};
-
 /** The written form of an operation, as RFC 8439 §2.1 writes it. */
 const opLabel = (op: ChaChaOp): string => {
   switch (op.kind) {
@@ -151,7 +111,10 @@ export const chachaDiagramModel = (
   const qr: ChaChaQuarterRoundShape | undefined = round.quarterRounds[quarterRoundIndex];
   if (!qr) return null;
 
-  const indices = deriveWordIndices(round).get(qr.id) ?? { a: null, b: null, c: null, d: null };
+  // Threading the words from the split is family machinery, not ChaCha's — the
+  // rule "each quarter round writes its results back to the four positions it
+  // read" is equally Salsa's. See `deriveArxWordIndices`.
+  const indices = deriveArxWordIndices(round).get(qr.id) ?? { a: null, b: null, c: null, d: null };
 
   const rails: ChaChaDiagramRail[] = CHACHA_RAILS.map((rail) => ({
     rail,
