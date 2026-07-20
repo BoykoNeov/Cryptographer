@@ -33,7 +33,7 @@ import { isCipherModeSupported } from "@/ui/stores/cipher-mode";
 import { describe, expect, it } from "vitest";
 
 /** Every cipher that has no `BlockCipherCore` yet ⇒ single-block only. */
-const CORELESS_CIPHERS = ["des", "twofish"] as const satisfies readonly Cipher[];
+const CORELESS_CIPHERS = ["twofish"] as const satisfies readonly Cipher[];
 
 /** Every cipher that HAS a core ⇒ single-block + ecb + cbc. */
 const CORED_CIPHERS = [
@@ -46,6 +46,7 @@ const CORED_CIPHERS = [
   "serpent-128",
   "serpent-192",
   "serpent-256",
+  "des",
 ] as const satisfies readonly Cipher[];
 
 describe("cipher-mode × cipher support matrix", () => {

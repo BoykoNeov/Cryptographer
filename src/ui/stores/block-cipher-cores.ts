@@ -35,6 +35,7 @@
 import { aesCore } from "@/ciphers/aes-core";
 import type { BlockCipherCore } from "@/ciphers/block-cipher-core";
 import { blowfishCore } from "@/ciphers/blowfish-core";
+import { desCore } from "@/ciphers/des-core";
 import { serpentCore } from "@/ciphers/serpent-core";
 import { speck32_64Core } from "@/ciphers/speck-32-64-core";
 import type { Cipher } from "./cipher";
@@ -53,7 +54,10 @@ import type { Cipher } from "./cipher";
  * core whose block is **smaller than 8 bytes** — its 4-byte block pushes the
  * block-size-generic arithmetic below every "round" width, and its two byte
  * conventions (BE-paper / LE-NSA) are a `speck32_64Core(byteOrder)` family of
- * two, the same word-level cipher under two serializations.
+ * two, the same word-level cipher under two serializations. DES came last of
+ * the five and adds breadth rather than block-size confidence — its 8-byte
+ * block is Blowfish's — but it is the first core whose body nests a port-mode
+ * group (the outer `rounds` group) inside the mode's iterate.
  *
  * Each `…Core()` call is cheap — the returned object holds closures, so no spec
  * is built until a mode builder asks for a body.
@@ -65,6 +69,7 @@ const BLOCK_CIPHER_CORES: Partial<Record<Cipher, BlockCipherCore>> = {
   "speck-32-64-be": speck32_64Core("be-paper"),
   "speck-32-64-le": speck32_64Core("le-nsa"),
   blowfish: blowfishCore(),
+  des: desCore(),
   "serpent-128": serpentCore(16),
   "serpent-192": serpentCore(24),
   "serpent-256": serpentCore(32),

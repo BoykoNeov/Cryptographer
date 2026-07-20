@@ -307,15 +307,15 @@ describe("App — cipher selector", () => {
     expect(findInputByLabel(container, "key").value).toBe("133457799bbcdff1");
     expect(findInputByLabel(container, "plaintext").value).toBe("0123456789abcdef");
 
-    // DES has no `BlockCipherCore` yet, so both the padding overlay and the
-    // mode-of-operation selector stay disabled — matching Twofish (Speck and
-    // Serpent now have cores, so they no longer belong in this list).
-    const paddingSelect = findSelectByLabel(container, "padding");
-    expect(paddingSelect.disabled).toBe(true);
-
-    // Cipher-mode requires a core, which DES lacks, for the same reason.
-    const cipherModeSelect = findSelectByLabel(container, "mode of operation");
-    expect(cipherModeSelect.disabled).toBe(true);
+    // Both selectors are ENABLED now that DES has a `BlockCipherCore` — the
+    // single gate for "can run ECB/CBC" and "the padding overlay knows your
+    // block size" (`docs/plans/foamy-prancing-wren.md`). Twofish is the only
+    // cipher left with both disabled. The Run below still lands on the
+    // published single-block vector because the padding DEFAULT is "none" and
+    // the mode default is single-block — enabling a selector changes what the
+    // user can reach, not what they land on.
+    expect(findSelectByLabel(container, "padding").disabled).toBe(false);
+    expect(findSelectByLabel(container, "mode of operation").disabled).toBe(false);
 
     fireEvent.click(findButton(container, "run"));
     expect(container.querySelector(".error")).toBeNull();
@@ -366,28 +366,21 @@ describe("App — cipher selector", () => {
     expect(container.querySelector(".param-raw")).toBeNull();
   });
 
-  it("swapping from AES-128 + PKCS7 to DES does not throw on the padding overlay", () => {
+  it("carrying PKCS7 from AES-128 across to DES pads to DES's 8-byte block", () => {
     // Regression guard surfaced during Phase 4 advisor review:
     // `setCipher("des")` rebuilds both spec slots via
-    // `buildCanonicalPair("des", "single-block", padding())`. If the user
-    // was on AES-128 + PKCS7 just before the swap, that rebuild still has
-    // the user's pkcs7 preference in hand and must NOT pad DES with it.
+    // `buildCanonicalPair("des", "single-block", padding())`, so if the user
+    // was on AES-128 + PKCS7 just before the swap, that rebuild still has the
+    // user's pkcs7 preference in hand. The original hazard was padding DES
+    // with AES's 16-byte block width.
     //
-    // What makes it safe (Phase B of `docs/plans/foamy-prancing-wren.md`):
-    // DES has no `BlockCipherCore`, so `buildCanonicalPair` resolves its
-    // `blockByteLength` to `undefined` and `applyPaddingScheme` returns the
-    // spec canonical instead of splicing a pad in. Before Phase B the same
-    // outcome came from an AES-id-prefix gate inside the overlay; the guard
-    // moved to the call site, so this test guards the NEW seam.
-    //
-    // The plaintext field text doesn't necessarily auto-swap to DES's
-    // canonical 8-byte value here — App.tsx's swap heuristic checks the
-    // current field against DEFAULT_PT_BYTES_BY_CIPHER for the OLD
-    // cipher, and PKCS7-on-AES seeds a different (5-byte "apple")
-    // default. So the user might need to retype the plaintext after
-    // the swap; we type DES's canonical value explicitly and verify
-    // Run produces the published KAT, which proves the overlay routed
-    // around DES correctly.
+    // **This test inverted when DES gained a core.** Before, the guard was
+    // "the overlay routes AROUND DES" — DES had no `BlockCipherCore`, so
+    // `blockByteLength` resolved to `undefined` and `applyPaddingScheme`
+    // returned the spec canonical. Now DES has a core, so under the
+    // core-presence policy (Phase C of `docs/plans/foamy-prancing-wren.md`)
+    // padding is REACHABLE for it — and the guard becomes the sharper claim:
+    // the pad that gets spliced in must be DES's 8, never AES's 16.
     const { container } = render(() => <App />);
 
     // Pick PKCS7 while still on AES-128.
@@ -400,11 +393,13 @@ describe("App — cipher selector", () => {
       target: { value: "des" },
     });
     expect(container.querySelector(".error")).toBeNull();
+    expect(findSelectByLabel(container, "padding").value).toBe("pkcs7");
 
-    // Explicitly retype the FIPS canonical plaintext to bypass the
-    // PKCS7-default-short residue, then Run.
+    // A 5-byte plaintext: under PKCS#7 at an 8-byte block it pads to exactly
+    // one block (three 0x03s). At AES's 16 it would pad to two — so the output
+    // LENGTH alone distinguishes "padded with DES's width" from the bug.
     fireEvent.input(findInputByLabel(container, "plaintext"), {
-      target: { value: "0123456789abcdef" },
+      target: { value: "deadbeef01" },
     });
     fireEvent.input(findInputByLabel(container, "key"), {
       target: { value: "133457799bbcdff1" },
@@ -413,7 +408,10 @@ describe("App — cipher selector", () => {
     fireEvent.click(findButton(container, "run"));
     expect(container.querySelector(".error")).toBeNull();
     const result = container.querySelector(".result code")?.textContent ?? "";
-    expect(result).toBe("85e813540f0ab405");
+    // 8 bytes = 16 hex chars. The byte VALUES are pinned against real DES in
+    // `tests/des-modes-kat.test.ts`; this asserts the UI wiring picked the
+    // right block width.
+    expect(result.length).toBe(16);
   });
 
   it("switching cipher in DECRYPT mode swaps the ciphertext + key to the new cipher's canonical defaults and round-trips", () => {

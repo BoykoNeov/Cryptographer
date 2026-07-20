@@ -21,9 +21,9 @@
  * The mode + cipher + direction triple selects one canonical spec from
  * the table in stores/spec.ts; padding overlay layers on top of that.
  *
- * Coreless ciphers (DES, Twofish today) only support "single-block" — the
- * cipher-mode <select> is greyed out when one of them is active. AES, Speck,
- * Serpent, and Blowfish all have a `BlockCipherCore` and gain ECB/CBC.
+ * Coreless ciphers (Twofish alone today) only support "single-block" — the
+ * cipher-mode <select> is greyed out when one is active. AES, Speck, Serpent,
+ * Blowfish, and DES all have a `BlockCipherCore` and gain ECB/CBC.
  *
  * Session-only (2026-05-19): not persisted in localStorage. Refresh resets
  * to "single-block". See the matching note in cipher.ts — both selectors
@@ -76,16 +76,21 @@ export const SUPPORTED_CIPHER_MODES_BY_CIPHER: Readonly<Record<Cipher, readonly 
   // chain and every param already flowed through the shared body builder.
   "speck-32-64-be": ["single-block", "ecb", "cbc"],
   "speck-32-64-le": ["single-block", "ecb", "cbc"],
-  // Everything below is single-block for ONE reason: no `BlockCipherCore` yet.
-  // A core needs the cipher's body to accept its block from an arbitrary port
-  // rather than hardcoding `$input` — per-cipher seed-threading work. It is
-  // NOT a block-size limitation: the mode builders, the iterate, and the
-  // padding overlay are all block-size-generic as of Phase B, and Speck's
-  // 4-byte block proves it below every "round" width. `blowfish-core.ts` /
-  // `serpent-core.ts` / `speck-32-64-core.ts` are the templates each of these
-  // follows; DES needs its top-level const extracted into a seed-taking builder
-  // first, and Twofish's round body isn't seed-parameterized yet.
-  des: ["single-block"],
+  // DES — the first Feistel cipher, and the first core whose body nests a
+  // port-mode group (the outer `rounds` group) inside the mode's iterate. Its
+  // 8-byte block is Blowfish's, so this is breadth, not new block-size
+  // coverage. `src/ciphers/des-core.ts` — the seed-threading was one binding
+  // (the Initial Permutation leaf), the Serpent story rather than the Blowfish
+  // one: B4 had already given every round a port-chained seed.
+  des: ["single-block", "ecb", "cbc"],
+  // Twofish is single-block for ONE reason: no `BlockCipherCore` yet. A core
+  // needs the cipher's body to accept its block from an arbitrary port rather
+  // than hardcoding `$input` — per-cipher seed-threading work, and Twofish's
+  // round body isn't seed-parameterized. It is NOT a block-size limitation:
+  // the mode builders, the iterate, and the padding overlay are all
+  // block-size-generic as of Phase B, and Speck's 4-byte block proves it below
+  // every "round" width. `blowfish-core.ts` / `serpent-core.ts` /
+  // `speck-32-64-core.ts` / `des-core.ts` are the templates to follow.
   twofish: ["single-block"],
 };
 

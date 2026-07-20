@@ -32,7 +32,7 @@
  * front-to-back without chasing.
  */
 
-import type { CipherSpec, StepNode } from "../core/types";
+import type { CipherSpec, PortBinding, StepNode } from "../core/types";
 import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "../core/types";
 import { DES_E, DES_FP, DES_IP, DES_P, DES_SBOXES } from "./des-constants";
 import { buildDesKeyScheduleNative } from "./des-key-schedule-builder-native";
@@ -138,7 +138,7 @@ const buildDesRound = (
  * independently. The outer "rounds" group is port-mode so round 1 can seed
  * from the Initial Permutation across the group boundary (see `des.ts`).
  */
-export const buildDesDecryptRounds = (): StepNode => ({
+const buildDesDecryptRounds = (): StepNode => ({
   kind: "group",
   id: "rounds",
   label: "Rounds",
@@ -158,26 +158,28 @@ export const buildDesDecryptRounds = (): StepNode => ({
   ],
 });
 
-export const desDecryptSpec: CipherSpec = {
-  id: "des-decrypt@1",
-  name: "DES (decrypt)",
-  stateShape: "bytes",
-  inputs: {
-    plaintext: { shape: "bytes" },
-    key: { byteLength: 8 },
-  },
-  steps: [
-    // Decomposed key schedule (key-schedule-decomposition K4a) — identical to
-    // encrypt's. The schedule produces the SAME 16 round keys in BOTH
-    // directions; only the per-round CONSUMPTION order flips (decrypt round r
-    // reads roundKey.{16 - r}), which is handled below in the round wiring.
-    buildDesKeyScheduleNative(),
+/**
+ * The DES decrypt **body** — IP → 16 rounds (reversed key order) → FP —
+ * reading its block from `seed`. Mirrors `buildDesEncryptBody` in `des.ts`,
+ * duplicated here for the same self-containment reason as the round builder
+ * above: a reader can follow decrypt front-to-back without chasing.
+ *
+ * Excludes the key schedule, which a mode of operation runs ONCE outside the
+ * per-block loop. The seed is a parameter because a body inside a port-mode
+ * `iterate` receives its block on the iterate's injected port — the runtime
+ * seeds `$input` at top scope only. The single-block spec below passes
+ * `$input`; `des-core.ts` passes the mode's block port.
+ */
+export const buildDesDecryptBody = (
+  seed: PortBinding,
+): { nodes: StepNode[]; output: PortBinding } => ({
+  nodes: [
     {
       kind: "step",
       id: "initial-permutation",
       type: "des.initial-permutation@1",
       params: { table: [...DES_IP] },
-      portInputs: { state: port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT) },
+      portInputs: { state: seed },
     },
     buildDesDecryptRounds(),
     {
@@ -188,5 +190,27 @@ export const desDecryptSpec: CipherSpec = {
       portInputs: { state: port("rounds", "out") },
     },
   ],
-  outputFrom: port("final-permutation", "state"),
-};
+  output: port("final-permutation", "state"),
+});
+
+export const desDecryptSpec: CipherSpec = (() => {
+  const { nodes, output } = buildDesDecryptBody(port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT));
+  return {
+    id: "des-decrypt@1",
+    name: "DES (decrypt)",
+    stateShape: "bytes",
+    inputs: {
+      plaintext: { shape: "bytes" },
+      key: { byteLength: 8 },
+    },
+    steps: [
+      // Decomposed key schedule (key-schedule-decomposition K4a) — identical to
+      // encrypt's. The schedule produces the SAME 16 round keys in BOTH
+      // directions; only the per-round CONSUMPTION order flips (decrypt round r
+      // reads roundKey.{16 - r}), which is handled above in the round wiring.
+      buildDesKeyScheduleNative(),
+      ...nodes,
+    ],
+    outputFrom: output,
+  };
+})();

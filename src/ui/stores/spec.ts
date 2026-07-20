@@ -39,6 +39,7 @@ import { blowfishCore } from "@/ciphers/blowfish-core";
 import { blowfishDecryptSpec } from "@/ciphers/blowfish-decrypt";
 import { buildCshakeSpec, readCshakeCustomization } from "@/ciphers/cshake";
 import { desSpec } from "@/ciphers/des";
+import { desCore } from "@/ciphers/des-core";
 import { desDecryptSpec } from "@/ciphers/des-decrypt";
 import {
   type KmacVariant,
@@ -184,10 +185,13 @@ const defaults: Record<Cipher, Partial<Record<CipherMode, Record<Mode, CipherSpe
     "single-block": { encrypt: serpent256Spec, decrypt: serpent256DecryptSpec },
     ...modesFromCore(serpentCore(32)),
   },
-  // DES — first Feistel cipher (Phase 4 of `docs/plans/des-feistel.md`).
-  // Single-block only; multi-block modes need block-size-aware load/store.
+  // DES — first Feistel cipher (Phase 4 of `docs/plans/des-feistel.md`), and
+  // the first core whose body nests a port-mode group (the outer `rounds`
+  // group) inside the mode's iterate. Its 8-byte block is Blowfish's, so the
+  // modes gain breadth here rather than new block-size coverage.
   des: {
     "single-block": { encrypt: desSpec, decrypt: desDecryptSpec },
+    ...modesFromCore(desCore()),
   },
   // Blowfish — second Feistel cipher (`docs/plans/blowfish.md`); decrypt is the
   // same network with the P-array reversed. The first NON-AES cipher to gain

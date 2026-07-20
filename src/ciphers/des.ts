@@ -47,7 +47,7 @@
  * Each round's `xor-K` reads its slot from aux unchanged.
  */
 
-import type { CipherSpec, StepNode } from "../core/types";
+import type { CipherSpec, PortBinding, StepNode } from "../core/types";
 import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "../core/types";
 import { DES_E, DES_FP, DES_IP, DES_P, DES_SBOXES } from "./des-constants";
 import { buildDesKeyScheduleNative } from "./des-key-schedule-builder-native";
@@ -162,7 +162,7 @@ const buildDesRound = (
  * Rounds 1..15 use the swap; round 16 is the no-swap exception. For encrypt,
  * round r consumes `roundKey.{r-1}`.
  */
-export const buildDesEncryptRounds = (): StepNode => ({
+const buildDesEncryptRounds = (): StepNode => ({
   kind: "group",
   id: "rounds",
   label: "Rounds",
@@ -177,28 +177,37 @@ export const buildDesEncryptRounds = (): StepNode => ({
   ],
 });
 
-export const desSpec: CipherSpec = {
-  id: "des@1",
-  name: "DES",
-  stateShape: "bytes",
-  inputs: {
-    plaintext: { shape: "bytes" },
-    key: { byteLength: 8 },
-  },
-  steps: [
-    // The key schedule is now DECOMPOSED into visible port-native frames
-    // (key-schedule-decomposition K4a) — PC-1 → 16× rotate-halves → PC-2 →
-    // publish — instead of the monolithic `des.key-schedule@1` leaf. It still
-    // runs first and publishes `roundKey.0..15` into aux, which each round's
-    // `xor-K` reads unchanged.
-    buildDesKeyScheduleNative(),
+/**
+ * The DES encrypt **body** — IP → 16 rounds → FP — reading its block from
+ * `seed`. Excludes the key schedule, which a mode of operation runs ONCE
+ * outside the per-block loop (the schedule publishes `roundKey.0..15` to aux,
+ * and aux is global, so it crosses the iterate's scope boundary freely).
+ *
+ * The seed is a parameter rather than a hardcoded `$input` because a body
+ * inside a port-mode `iterate` receives its block on the iterate's injected
+ * port, and the runtime seeds `$input` at top scope only — a body that
+ * hardcodes it throws inside the loop. The single-block spec below passes
+ * `$input`; `des-core.ts` passes whatever the mode hands it.
+ *
+ * **One binding is the whole of the seed-threading work.** Every round already
+ * chains off its predecessor's published `"out"` port (B4, universal-port
+ * Phase 4d), and the `rounds` group already seeds from IP across its own
+ * boundary — the Initial Permutation leaf was the single node still naming
+ * `$input`. That makes DES a Serpent-shaped port, not a Blowfish-shaped one
+ * (`docs/plans/foamy-prancing-wren.md` Phase C).
+ */
+export const buildDesEncryptBody = (
+  seed: PortBinding,
+): { nodes: StepNode[]; output: PortBinding } => ({
+  nodes: [
     {
       kind: "step",
       id: "initial-permutation",
       type: "des.initial-permutation@1",
       params: { table: [...DES_IP] },
-      // The plaintext arrives on the reserved `$input` source (no state thread).
-      portInputs: { state: port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT) },
+      // The block arrives from `seed` — `$input` single-block, the iterate's
+      // injected port under a mode of operation.
+      portInputs: { state: seed },
     },
     buildDesEncryptRounds(),
     {
@@ -209,6 +218,29 @@ export const desSpec: CipherSpec = {
       portInputs: { state: port("rounds", "out") },
     },
   ],
-  // The 8-byte ciphertext leaves the cipher straight off FP's `state` port.
-  outputFrom: port("final-permutation", "state"),
-};
+  // The 8-byte ciphertext leaves the body straight off FP's `state` port.
+  output: port("final-permutation", "state"),
+});
+
+export const desSpec: CipherSpec = (() => {
+  const { nodes, output } = buildDesEncryptBody(port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT));
+  return {
+    id: "des@1",
+    name: "DES",
+    stateShape: "bytes",
+    inputs: {
+      plaintext: { shape: "bytes" },
+      key: { byteLength: 8 },
+    },
+    steps: [
+      // The key schedule is now DECOMPOSED into visible port-native frames
+      // (key-schedule-decomposition K4a) — PC-1 → 16× rotate-halves → PC-2 →
+      // publish — instead of the monolithic `des.key-schedule@1` leaf. It still
+      // runs first and publishes `roundKey.0..15` into aux, which each round's
+      // `xor-K` reads unchanged.
+      buildDesKeyScheduleNative(),
+      ...nodes,
+    ],
+    outputFrom: output,
+  };
+})();
