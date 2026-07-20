@@ -48,11 +48,13 @@ import { buildEcbSpec } from "@/ciphers/modes/ecb";
 import { serpentCore } from "@/ciphers/serpent-core";
 import { speck32_64Core } from "@/ciphers/speck-32-64-core";
 import { runSpec } from "@/core/runtime";
+import { applyPaddingScheme } from "@/core/spec-mutations";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue, CipherSpec } from "@/core/types";
 import { hasBlockCipherCore } from "@/ui/stores/block-cipher-cores";
 import type { Cipher } from "@/ui/stores/cipher";
 import { isCipherModeSupported } from "@/ui/stores/cipher-mode";
+import { paddingLimits } from "@/ui/stores/padding";
 import { describe, expect, it } from "vitest";
 
 // ─── The cores under test ─────────────────────────────────────────────────────
@@ -279,6 +281,39 @@ describe("CTR across every BlockCipherCore", () => {
         const b = core.blockByteLength * 2;
         expect(ct.slice(2 * b, 3 * b)).toBe(expected.slice(2 * b, 3 * b));
         expect(ct.slice(3 * b, 4 * b)).toBe(expected.slice(3 * b, 4 * b));
+      });
+
+      it("takes the padding overlay, so a short message reaches a block boundary", () => {
+        // v1 CTR is block-aligned, so the padding overlay must actually apply
+        // to it — `needsAlignment` in App.tsx SKIPS the alignment check when a
+        // padding scheme is set, on the assumption that a pad gets spliced in.
+        // If that assumption were wrong (e.g. the overlay gated on
+        // `cipherMode ∈ {ecb,cbc}`), a short input would reach the iterate raw
+        // and throw "not a multiple of blockByteLength". It is gated on core
+        // PRESENCE instead, which is why CTR gets it for free — asserted here
+        // rather than inferred from the call site.
+        const b = core.blockByteLength;
+        // One byte short of a whole block ⇒ PKCS#7 must append exactly one 0x01.
+        const short = "7e".repeat(b - 1);
+        const enc = applyPaddingScheme(buildCtrSpec(core, "encrypt"), "encrypt", "pkcs7", b);
+        const ct = runMode(enc, short, key, iv);
+        expect(ct.length / 2).toBe(b);
+
+        // And it round-trips: decrypt(unpad) recovers the original short input.
+        const dec = applyPaddingScheme(buildCtrSpec(core, "decrypt"), "decrypt", "pkcs7", b);
+        expect(runMode(dec, ct, key, iv)).toBe(short);
+      });
+
+      it("paddingLimits bounds CTR like the other multi-block modes (v1: whole blocks)", () => {
+        // Pinned because CTR's bounds are a deliberate v1 compromise, not the
+        // mode's real behaviour: real CTR needs no padding at all. If the
+        // partial-block follow-up lands, THIS is the assertion that should
+        // change, which is exactly why it names the block width explicitly.
+        const b = core.blockByteLength;
+        expect(paddingLimits("decrypt", "none", cipher, "ctr")).toEqual(
+          paddingLimits("decrypt", "none", cipher, "cbc"),
+        );
+        expect(paddingLimits("decrypt", "none", cipher, "ctr").min).toBe(b);
       });
 
       it("the cipher body is seeded from the COUNTER, never from the message block", () => {

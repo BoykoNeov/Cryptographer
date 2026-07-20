@@ -221,6 +221,56 @@ describe("App — CBC IV flow (Phase 2)", () => {
     expect(recovered).toBe(PT_2_BLOCKS);
   });
 
+  it("drives AES-128 CTR through the whole App UI, byte-equal to node:crypto", () => {
+    // The CTR KAT builds specs by calling `buildCtrSpec` directly, so it never
+    // touches the App's mode-dropdown ↔ spec-store ↔ IV-field ↔ Run wiring —
+    // the same gap the Serpent CBC test above exists to close. CTR adds a
+    // wrinkle worth pinning here: the IV field must appear for CTR too (it
+    // holds the INITIAL COUNTER BLOCK rather than a chaining value), and the
+    // Run handler's aux-seed branch had to learn `ctr` alongside `cbc`. If
+    // that branch were missed, `aux["iv"]` would be absent and `fetch-iv`
+    // would fail — a break invisible to a spec-level test.
+    const { container } = render(() => <App />);
+
+    // Set the cipher EXPLICITLY rather than relying on the default. The
+    // Serpent test above leaves the cipher selector on serpent-128, and
+    // Serpent shares AES's 16-byte block and key width — so without this the
+    // test would silently run Serpent-128 CTR and fail against an AES vector
+    // with no hint that the cipher was wrong.
+    fireEvent.change(findSelectByLabel(container, "cipher"), { target: { value: "aes-128" } });
+    fireEvent.change(findSelectByLabel(container, "mode of operation"), {
+      target: { value: "ctr" },
+    });
+
+    // The IV row appears for CTR, defaulting to the same 16-byte value AES
+    // CBC uses (the width is the block width, which CTR shares).
+    const ivInput = findInputByLabel(container, "IV");
+    expect(ivInput).not.toBeNull();
+    expect(ivInput?.value).toBe("000102030405060708090a0b0c0d0e0f");
+
+    const PT_2_BLOCKS = "00112233445566778899aabbccddeeff" + "ffeeddccbbaa99887766554433221100";
+    setInputValue(findInputByLabel(container, "plaintext") as HTMLInputElement, PT_2_BLOCKS);
+    setInputValue(
+      findInputByLabel(container, "key") as HTMLInputElement,
+      "000102030405060708090a0b0c0d0e0f",
+    );
+
+    fireEvent.click(findButton(container, "run"));
+    expect(container.querySelector(".error")).toBeNull();
+    const ct = (readResultHex(container) ?? "").replace(/\s+/g, "");
+    // Byte-equal to `node:crypto`'s aes-128-ctr for this (key, counter,
+    // plaintext) — computed independently and pinned as a literal so this
+    // test needs no crypto import and cannot drift with the implementation.
+    expect(ct).toBe("0a852986053b9632795a3ee30a8e04a5fd8d3158ddb2eb1eedbca84b78861edc");
+
+    // Flip to decrypt — which runs the SAME forward cipher — and recover the
+    // plaintext. This is the UI-level statement of CTR's defining property.
+    fireEvent.change(findSelectByLabel(container, "mode"), { target: { value: "decrypt" } });
+    fireEvent.click(findButton(container, "run"));
+    expect(container.querySelector(".error")).toBeNull();
+    expect((readResultHex(container) ?? "").replace(/\s+/g, "")).toBe(PT_2_BLOCKS);
+  });
+
   it("invalid IV (wrong length) snaps back to the store's last known good value", () => {
     const { container } = render(() => <App />);
     fireEvent.change(findSelectByLabel(container, "mode of operation"), {
