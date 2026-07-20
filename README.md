@@ -12,18 +12,20 @@ Shipped ciphers (all with both encrypt + decrypt paths and FIPS / NIST / paper-v
 
 | Cipher | Variants | Block | Key | Mode of operation |
 |---|---|---|---|---|
-| **AES** | 128 / 192 / 256 | 16 B | 16 / 24 / 32 B | single-block, ECB + CBC + CTR (all three variants) |
-| **Speck32/64** | BE (paper) + LE (NSA reference) | 4 B | 8 B | single-block, ECB + CBC + CTR (both conventions) |
-| **Serpent** | 128 / 192 / 256 | 16 B | 16 / 24 / 32 B | single-block, ECB + CBC + CTR (all three variants) |
-| **DES** | — | 8 B | 8 B (56 effective) | single-block, ECB + CBC + CTR |
-| **Blowfish** | — | 8 B | 8 B (v1) | single-block, ECB + CBC + CTR |
-| **Twofish** | — | 16 B | 16 B (v1) | single-block, ECB + CBC + CTR |
+| **AES** | 128 / 192 / 256 | 16 B | 16 / 24 / 32 B | single-block, ECB + CBC + CTR + CFB (all three variants) |
+| **Speck32/64** | BE (paper) + LE (NSA reference) | 4 B | 8 B | single-block, ECB + CBC + CTR + CFB (both conventions) |
+| **Serpent** | 128 / 192 / 256 | 16 B | 16 / 24 / 32 B | single-block, ECB + CBC + CTR + CFB (all three variants) |
+| **DES** | — | 8 B | 8 B (56 effective) | single-block, ECB + CBC + CTR + CFB |
+| **Blowfish** | — | 8 B | 8 B (v1) | single-block, ECB + CBC + CTR + CFB |
+| **Twofish** | — | 16 B | 16 B (v1) | single-block, ECB + CBC + CTR + CFB |
 
 Padding schemes (every cipher): **PKCS#7**, **zero-pad**, **ISO 7816-4**, plus a no-pad option for exact-block input. Blowfish and DES pad to their own **8-byte** block and Speck to its **4-byte** block, not 16 — the padding overlay reads the width from the active cipher.
 
-**Modes of operation cost `N ciphers + M modes`, not `N × M`.** ECB, CBC, and CTR are written once against a `BlockCipherCore` contract (block/key width, a key schedule, and seed-parameterized forward + inverse bodies) and know nothing about the cipher underneath — so adding a mode gives it to every cipher, and adding a cipher gives it every mode. As of Twofish's core (the last one), **every block cipher above runs every mode** — the claim fully paid out. Widths are no obstacle either: Speck's 4-byte block and Blowfish's 8-byte block drive exactly the same generic machinery AES's 16-byte block does.
+**Modes of operation cost `N ciphers + M modes`, not `N × M`.** ECB, CBC, CTR, and CFB are written once against a `BlockCipherCore` contract (block/key width, a key schedule, and seed-parameterized forward + inverse bodies) and know nothing about the cipher underneath — so adding a mode gives it to every cipher, and adding a cipher gives it every mode. As of Twofish's core (the last one), **every block cipher above runs every mode** — the claim fully paid out. Widths are no obstacle either: Speck's 4-byte block and Blowfish's 8-byte block drive exactly the same generic machinery AES's 16-byte block does.
 
 CTR is the claim's clearest payout: it landed as one mode file plus one arithmetic step, with **zero changes to the contract** — which had been designed against it from the start (hence the forward body exposed on its own, since CTR *decryption* also encrypts). It is also the strictest test of every core, because it is the only mode that feeds the cipher body the **counter** rather than the message block, so a core that merely happened to work when seeded from the usual direction fails immediately. And it is honest about being a *stream* mode: CTR accepts a message of any length ≥ 1, emits ciphertext exactly as long as the plaintext, and engages **no padding at all** — the final keystream block is visibly trimmed to the short message block, so a whole message shorter than one cipher block is representable.
+
+CFB is the cheapest payout of all — **no new step type whatsoever**, reusing CTR's keystream leaves and CBC's feedback wiring. It is the mode that sits between the two: like CTR it encrypts something other than the message (a *feedback register*) and XORs the result, so the forward cipher runs in both directions and no padding is needed; like CBC that register holds the previous **ciphertext** block, so blocks are serially dependent. That makes it a **self-synchronizing** stream cipher — corrupt one ciphertext byte and the plaintext recovers after exactly two blocks, a property you can watch happen in the trace. Its encrypt and decrypt specs differ in exactly one wire: which port refills the register (what we emit vs. what arrived).
 
 Shipped hashes (select **Hash** in the `kind` dropdown):
 

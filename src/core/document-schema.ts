@@ -104,6 +104,7 @@ export const CIPHER_MODES = [
   "ecb",
   "cbc",
   "ctr",
+  "cfb",
 ] as const satisfies readonly CipherMode[];
 
 export const PADDING_SCHEMES = [

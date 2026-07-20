@@ -110,7 +110,9 @@ import {
   CIPHER_MODE_LABELS,
   type CipherMode,
   SUPPORTED_CIPHER_MODES,
+  cipherModeUsesIv,
   isCipherModeSupported,
+  isStreamCipherMode,
   useCipherMode,
 } from "./stores/cipher-mode";
 import {
@@ -462,12 +464,12 @@ export const App = () => {
         // friendly error rather than letting the iterate's block split throw a
         // runtime-internals error from inside the loop.
         //
-        // CTR is deliberately absent: it is a stream mode, so a message may end
-        // mid-block in either direction (the iterate sets
-        // `allowPartialFinalBlock` and `ctr-trim` matches the keystream to the
-        // short block). Requiring alignment here would reject the ragged tail
-        // before it ever reached the runtime — and on decrypt too, since CTR
-        // ciphertext is exactly as long as its plaintext.
+        // CTR and CFB are deliberately absent: they are stream modes, so a
+        // message may end mid-block in either direction (the iterate sets
+        // `allowPartialFinalBlock` and the mode's trim leaf matches the
+        // keystream to the short block). Requiring alignment here would reject
+        // the ragged tail before it ever reached the runtime — and on decrypt
+        // too, since stream-mode ciphertext is exactly as long as its plaintext.
         const needsAlignment =
           (cipherMode() === "ecb" || cipherMode() === "cbc") &&
           (mode() === "decrypt" || padding() === "none");
@@ -565,11 +567,12 @@ export const App = () => {
       // randomize button generates that width, and `reconcileIvWidth` re-defaults
       // the IV whenever a cipher/mode change moves the block size. So we can drop
       // straight into aux.
-      // CTR reads the same aux slot, but the value plays a different role:
-      // there it is the INITIAL COUNTER BLOCK that gets encrypted, not a value
-      // XORed into the first block. One field, two meanings — the IV input's
+      // CTR and CFB read the same aux slot, but the value plays a different
+      // role: in CTR it is the INITIAL COUNTER BLOCK and in CFB the INITIAL
+      // FEEDBACK REGISTER — both get encrypted, rather than XORed into the
+      // first block as CBC's is. One field, three meanings — the IV input's
       // label and the mode's narration carry the distinction.
-      if (cipherMode() === "cbc" || cipherMode() === "ctr") {
+      if (cipherModeUsesIv(cipherMode())) {
         initialAux.set("iv", new Uint8Array(ivBytes()));
       }
       const currentSpec = spec();
@@ -670,7 +673,7 @@ export const App = () => {
     // single-block / ECB would be confusing — the spec doesn't read
     // aux[iv] there, so the value would silently round-trip but mean
     // nothing.
-    const includeIv = cipherMode() === "cbc" || cipherMode() === "ctr";
+    const includeIv = cipherModeUsesIv(cipherMode());
     return {
       mode: mode(),
       cipher: cipher(),
@@ -1700,6 +1703,18 @@ export const App = () => {
                   ? " (not wired up for this cipher yet)"
                   : ""}
               </option>
+              <option
+                value="cfb"
+                disabled={
+                  !(SUPPORTED_CIPHER_MODES as readonly string[]).includes("cfb") ||
+                  !isCipherModeSupported(cipher(), "cfb")
+                }
+              >
+                {CIPHER_MODE_LABELS.cfb}
+                {hasBlockCipherCore(cipher()) && !isCipherModeSupported(cipher(), "cfb")
+                  ? " (not wired up for this cipher yet)"
+                  : ""}
+              </option>
             </select>
           </label>
           <label>
@@ -1707,10 +1722,10 @@ export const App = () => {
             <select
               value={padding()}
               onChange={(e) => changePadding(e.currentTarget.value as PaddingScheme)}
-              disabled={!hasBlockCipherCore(cipher()) || cipherMode() === "ctr"}
+              disabled={!hasBlockCipherCore(cipher()) || isStreamCipherMode(cipherMode())}
               title={
-                cipherMode() === "ctr"
-                  ? "CTR is a stream mode — it needs no padding. The message is XORed with keystream rather than fed through the cipher, so it can end mid-block and the ciphertext comes out exactly as long as the plaintext."
+                isStreamCipherMode(cipherMode())
+                  ? `${CIPHER_MODE_LABELS[cipherMode()]} is a stream mode — it needs no padding. The message is XORed with keystream rather than fed through the cipher, so it can end mid-block and the ciphertext comes out exactly as long as the plaintext.`
                   : hasBlockCipherCore(cipher())
                     ? "Padding scheme applied at the start of encrypt / end of decrypt"
                     : `Padding needs a cipher the overlay can wire itself into — ${CIPHER_LABELS[cipher()]} takes exactly one block of input in this build.`
@@ -1817,7 +1832,7 @@ export const App = () => {
             randomize button uses crypto.getRandomValues. Wrapped in a
             `data-field` div so the IvInput's own `<label>` root doesn't
             need a class hook — the wrapper carries the full-row layout. */}
-        <Show when={cipherMode() === "cbc" || cipherMode() === "ctr"}>
+        <Show when={cipherModeUsesIv(cipherMode())}>
           <div class="data-field">
             <IvInput
               format={fmt()}
@@ -2367,11 +2382,12 @@ const formatLengthError = (
     const schemeLabel = scheme === "none" ? "no padding" : scheme.toUpperCase();
     return `${label}: ${cipherMode.toUpperCase()} + ${schemeLabel} accepts ${range}; got ${got}. (Cap is the UI's MAX_BLOCKS_UI for trace browsability — raise to extend.)`;
   }
-  // CTR — the stream mode. Any length in range is legal, whole blocks or not,
-  // so the message never has to reach a block boundary and the wording must
-  // not imply otherwise.
-  if (cipherMode === "ctr") {
-    return `${label}: ${name}-CTR accepts ${range} — any length, whole blocks or not; got ${got}. (CTR is a stream mode and needs no padding; the cap is the UI's MAX_BLOCKS_UI for trace browsability.)`;
+  // CTR / CFB — the stream modes. Any length in range is legal, whole blocks or
+  // not, so the message never has to reach a block boundary and the wording
+  // must not imply otherwise.
+  if (isStreamCipherMode(cipherMode)) {
+    const m = cipherMode.toUpperCase();
+    return `${label}: ${name}-${m} accepts ${range} — any length, whole blocks or not; got ${got}. (${m} is a stream mode and needs no padding; the cap is the UI's MAX_BLOCKS_UI for trace browsability.)`;
   }
 
   // Single-block, with scheme-specific hints.

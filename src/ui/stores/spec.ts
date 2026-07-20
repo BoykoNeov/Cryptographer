@@ -48,6 +48,7 @@ import {
   readKmacKeyLength,
 } from "@/ciphers/kmac";
 import { buildCbcSpec } from "@/ciphers/modes/cbc";
+import { buildCfbSpec } from "@/ciphers/modes/cfb";
 import { buildCtrSpec } from "@/ciphers/modes/ctr";
 import { buildEcbSpec } from "@/ciphers/modes/ecb";
 import { rsaDecryptSpec, rsaEncryptSpec } from "@/ciphers/rsa";
@@ -110,6 +111,7 @@ import {
 import {
   type CipherMode,
   isCipherModeSupported,
+  isStreamCipherMode,
   setCipherMode as setCipherModeSignal,
   useCipherMode,
 } from "./cipher-mode";
@@ -143,6 +145,7 @@ const modesFromCore = (
   ecb: { encrypt: buildEcbSpec(core, "encrypt"), decrypt: buildEcbSpec(core, "decrypt") },
   cbc: { encrypt: buildCbcSpec(core, "encrypt"), decrypt: buildCbcSpec(core, "decrypt") },
   ...ctrFromCore(core),
+  ...cfbFromCore(core),
 });
 
 /**
@@ -164,6 +167,20 @@ const ctrFromCore = (
   ctr: { encrypt: buildCtrSpec(core, "encrypt"), decrypt: buildCtrSpec(core, "decrypt") },
 });
 
+/**
+ * CFB alone, split out for the same reason as `ctrFromCore` — AES-128 must be
+ * able to take it without regenerating its grandfathered ECB/CBC constants.
+ *
+ * Unlike CTR, the two directions are NOT structurally identical specs: both run
+ * the forward cipher, but they differ in which port refills the feedback
+ * register (see `src/ciphers/modes/cfb.ts`).
+ */
+const cfbFromCore = (
+  core: BlockCipherCore,
+): Partial<Record<CipherMode, Record<Mode, CipherSpec>>> => ({
+  cfb: { encrypt: buildCfbSpec(core, "encrypt"), decrypt: buildCfbSpec(core, "decrypt") },
+});
+
 // 3D table of canonical specs: defaults[cipher][cipherMode][mode]. The inner
 // per-cipherMode record is partial — only ciphers with a `BlockCipherCore`
 // carry ECB/CBC entries; the rest are single-block only.
@@ -176,6 +193,8 @@ const defaults: Record<Cipher, Partial<Record<CipherMode, Record<Mode, CipherSpe
     // file to grandfather — it comes from the generic builder like every other
     // core's. See `ctrFromCore` on why this isn't a full `modesFromCore`.
     ...ctrFromCore(aesCore("aes-128")),
+    // CFB likewise postdates the mode machine — same reasoning.
+    ...cfbFromCore(aesCore("aes-128")),
   },
   "aes-192": {
     "single-block": { encrypt: aes192Spec, decrypt: aes192DecryptSpec },
@@ -516,10 +535,10 @@ export type SpecsByMode = CipherSpecsByMode | HashSpecsByMode | AsymmetricSpecsB
  *
  *  1. **No `BlockCipherCore`** (Twofish today) — the overlay has no width to
  *     wire itself in at. This is the original reason the parameter is optional.
- *  2. **CTR, whatever the cipher** — CTR is a stream mode and needs no padding
- *     at all. A pad step spliced into a CTR spec would re-fill the final block,
- *     so the partial-block path would silently never run and CTR would behave
- *     exactly like the block modes it differs from.
+ *  2. **CTR or CFB, whatever the cipher** — both are stream modes and need no
+ *     padding at all. A pad step spliced into such a spec would re-fill the
+ *     final block, so the partial-block path would silently never run and the
+ *     mode would behave exactly like the block modes it differs from.
  *
  * Both are expressed as "no block width", which reuses `overlayApplies`'s
  * existing "no width ⇒ no overlay" semantics rather than adding a second gate
@@ -534,7 +553,7 @@ export type SpecsByMode = CipherSpecsByMode | HashSpecsByMode | AsymmetricSpecsB
  * from having to be remembered five times.
  */
 const overlayBlockBytes = (cipher: Cipher, cipherMode: CipherMode): number | undefined =>
-  cipherMode === "ctr" ? undefined : blockByteLengthFor(cipher);
+  isStreamCipherMode(cipherMode) ? undefined : blockByteLengthFor(cipher);
 
 const buildCanonicalPair = (
   cipher: Cipher,

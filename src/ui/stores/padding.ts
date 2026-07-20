@@ -18,7 +18,7 @@ import type { PaddingScheme } from "@/core/spec-mutations";
 import { createSignal } from "solid-js";
 import { blockCipherCoreFor } from "./block-cipher-cores";
 import type { Cipher } from "./cipher";
-import type { CipherMode } from "./cipher-mode";
+import { type CipherMode, isStreamCipherMode } from "./cipher-mode";
 
 /**
  * UI cap on multi-block input length, in *blocks*. Real ciphers have no
@@ -174,19 +174,20 @@ export const paddingLimits = (
   const B = core.blockByteLength;
   const MAX_BYTES = MAX_BLOCKS_UI * B;
 
-  // ── CTR — the stream mode, no padding, no alignment ─────────────────────
-  // CTR encrypts the COUNTER to make keystream and XORs that with the message,
-  // so the message never enters the cipher and never needs topping up to a
-  // whole block. Any length ≥ 1 is legal in BOTH directions — including a
-  // message shorter than one block — and the ciphertext comes out exactly as
-  // long as the plaintext, so a decrypt input is bounded identically to an
-  // encrypt input. `scheme` is deliberately ignored: no padding overlay is
-  // spliced into a CTR spec at all (see `buildCanonicalPair` in stores/spec.ts,
-  // which passes no block width for CTR).
+  // ── CTR / CFB — the stream modes: no padding, no alignment ──────────────
+  // Both encrypt something OTHER than the message to make keystream (CTR a
+  // counter, CFB a feedback register holding the previous ciphertext block) and
+  // XOR that with the message, so the message never enters the cipher and never
+  // needs topping up to a whole block. Any length ≥ 1 is legal in BOTH
+  // directions — including a message shorter than one block — and the
+  // ciphertext comes out exactly as long as the plaintext, so a decrypt input
+  // is bounded identically to an encrypt input. `scheme` is deliberately
+  // ignored: no padding overlay is spliced into such a spec at all (see
+  // `overlayBlockBytes` in stores/spec.ts, which passes no block width here).
   //
   // min is 1 rather than 0 because a zero-length message yields zero
   // iterations and so no trace to look at.
-  if (cipherMode === "ctr") {
+  if (isStreamCipherMode(cipherMode)) {
     return { min: 1, max: MAX_BYTES };
   }
 
