@@ -37,6 +37,40 @@ A `CipherSpec` (`src/core/types.ts`) is a tree of `StepNode`s. Leaves are `{ kin
 
 **ChaCha20 linear-view diagram (2026-07-20).** `<ChaChaQuarterRoundDiagram />` over the pure `src/core/chacha-diagram.ts` — four horizontal rails (a/b/c/d) crossed by twelve operation stations, self-detecting via `findActiveChaChaQuarterRound`, inert for every other cipher. It threads **state-word indices** forward from the split so it can name the round the way RFC 8439 §2.3.1 does (`QUARTERROUND(0, 5, 10, 15)`) — the one fact distinguishing eight otherwise-identical quarter rounds, and the reason the diagram beats quoting the RFC. Routing satisfies the Twofish rule (a wire may cross a wire, never a labelled box) **by construction**: each station owns its own x and only its TARGET rail carries a box there, so an operand connector crosses bare rails only. **Neither the shape nor the diagram is direction-aware** — ChaCha's encrypt and decrypt specs are structurally identical, so one code path serves both (contrast Twofish, whose two rotations swap).
 
+**Salsa20 shape / layout / diagram (2026-07-20) — the ARX family's second
+consumer, and the proof S1's seam was cut in the right place.** The layout came
+free: `arx-round-layout.ts` is consumed UNCHANGED and the graph cell was correct
+on first render (eight 3×4 blocks in two tiers, rows reading `add-7|rot-7|xor-7`
+down to `add-18|rot-18|xor-18`). Only the walk is new. **Two ways Salsa's walk
+differs from ChaCha's, both structural, both easy to get wrong:** (1) ChaCha's
+`<<< 7` anchor is its quarter round's TERMINAL op so a backward walk reaches all
+twelve leaves — Salsa's terminal op is the **XOR**, and the `<<< 18` anchor feeds
+it, so `xor18` is reached by a FORWARD consumer scan; miss it and each round
+claims eleven leaves and the partition gate refuses the whole double round.
+(2) `add18`'s two operands are BOTH XORs (`z3`, `z2`), indistinguishable without
+reaching *through* each to the rotate it consumed (`xorLineBits`) — the only
+place the walk cannot pin an unknown by an already-identified leaf. **A forward
+positional verification pass was considered and deliberately NOT built:**
+`add-mod-32@1`/`xor@1` are commutative and the ChaCha walk is intentionally
+robust to a swapped operand pair, so a positional check would reject a legal
+no-op edit; `partitionOperands` + the partition gate are the whole validation
+(swap tolerance is pinned by test). **The replication guard was GENERALIZED, not
+duplicated** — `GraphView` asks `analyzeArxGroup` (both analyzers) and its
+`chacha*` names are now `arx*`, so guard + layout + shape map generalize with the
+SHAPE FAMILY rather than the cipher list; a third ARX cipher costs one line.
+**Measured:** Salsa's split feeds **24 consumers over 28 edges**, MORE extreme
+than ChaCha's 16/20, because only its XORs write back so a word stays "original"
+across three of four lines instead of two. **The diagram is NOT ChaCha's with
+different labels:** Salsa's add and rotate touch no state word, so they sit on a
+per-line **scratch lane** below the four rails (operands drop in, the sum travels
+right through the rotate, only the XOR climbs back) — that descent-and-return is
+the whole difference from in-place accumulation. Tier names are **column / row**;
+the quad label is `quarterround(x15, x3, x7, x11)`, **rail order, never sorted**,
+so the diagonal start survives. The strongest test is the quad-label one: the
+eight derived tuples match Bernstein's published columnround/rowround tuples
+exactly, which checks the word-index threading that every structural assertion is
+blind to.
+
 Registering a core has THREE consequences: the cipher gains ECB/CBC/CTR/CFB/OFB, `paddingLimits` starts deriving its bounds from the core, and **the padding overlay becomes reachable — including in single-block mode** (user decision, Phase C: padding follows core-presence; a separate gate could only have encoded "AES is special"). **The STREAM modes (CTR + CFB + OFB) are exempt from the third**: `buildCanonicalPair` passes no block width for them and no pad is ever spliced in. That exemption is asked at three sites (`overlayBlockBytes`, `paddingLimits`, the App's padding selector) and is funnelled through one predicate, `isStreamCipherMode` in `stores/cipher-mode.ts` — as is the parallel "does this mode use an IV?" question (`cipherModeUsesIv`: CBC's chain bootstrap, CTR's initial counter, CFB's and OFB's initial registers all share `aux["iv"]`), asked at aux seeding, session export, and the IV field. A mode wired into two of three sites fails silently, which is why these are predicates and not inline comparisons.
 
 **OFB (2026-07-20) is the fifth mode, and the first to cost no new PREDICATE either** — CFB had already extracted `isStreamCipherMode` / `cipherModeUsesIv`, so OFB is one mode file plus a fifth arm on each. It is **CFB with one wire moved and the direction branch deleted**: `chainFeedback` is the core body's own output (`O_j = E(O_{j-1})`), so the keystream depends only on key+IV and is identical in both directions — encrypt and decrypt are structurally the same spec, CTR's symmetry rather than CFB's asymmetry. **Deliberately the UNTRIMMED `keystream.output`**, not `ofb-trim.output`: byte-indistinguishable (nothing reads the final iteration's feedback — perturbation-verified, 132/132 still pass either way), but the recurrence is defined on whole blocks and the trace should say so. **The trap is the mirror of CFB's: here round-trip is FREE and proves nothing** — one spec used both ways round-trips by construction even if the keystream rule is entirely wrong — so `tests/ofb-all-cores-kat.test.ts` ranks it last and leans on `node:crypto`'s `aes-*-ofb` (no `-ofb8` name trap; §6.4 fixes s=b), the keystream read out and checked against `E(IV)`/`E(E(IV))`/`E(E(E(IV)))`, an ECB-rebuilt chain per core, **the three-way contrast** (CTR/CFB/OFB agree on block 0 = `E(IV)`, must diverge from block 1 — the assertion that catches a mode quietly being its neighbour), and OFB's **zero** error propagation (one corrupt byte ⇒ one damaged byte, vs CFB's two blocks). Perturbation run: rewiring feedback to CFB's source fails 83/132.

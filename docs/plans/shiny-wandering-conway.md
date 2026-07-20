@@ -1,8 +1,9 @@
 # Salsa20 — the second stream cipher, and the ARX shape generalization
 
-Status: **APPROVED, in progress.** Created 2026-07-20.
-**S1 SHIPPED 2026-07-20** — the ARX family is extracted.
-**S2 SHIPPED 2026-07-20** — the cipher runs; S3 (shape / layout / diagram) is next.
+Status: **CLOSED — all phases shipped 2026-07-20.**
+**S1 SHIPPED** — the ARX family is extracted.
+**S2 SHIPPED** — the cipher runs.
+**S3 SHIPPED** — the shape, the layout and the diagram.
 
 ## Context
 
@@ -195,7 +196,69 @@ project's own, so the ciphertext is not itself a published value.
   `BLOCK_CIPHER_CORES` is correctly left **untouched** — absence is what makes
   `hasBlockCipherCore("salsa20")` false.
 
-### Phase S3 — Salsa20's shape, layout, diagram
+### Phase S3 — Salsa20's shape, layout, diagram — **SHIPPED 2026-07-20**
+
+**The layout came free exactly as predicted** — `arx-round-layout.ts` was
+consumed unchanged, and the graph cell was correct on first render: eight 3×4
+blocks in two tiers whose rows read `add-7 | rot-7 | xor-7` down to
+`add-18 | rot-18 | xor-18`. That is the S1 seam paying for itself; the only new
+graph code is the recognizer.
+
+**Corrections and refinements to what this plan predicted:**
+
+- **The walk needed one thing ChaCha's does not: a FORWARD step.** ChaCha's
+  anchor `<<< 7` is its quarter round's terminal operation, so a purely backward
+  walk reaches all twelve leaves. Salsa's terminal operation is the **XOR**, and
+  the `<<< 18` anchor feeds it — so `xor18` is reached by a consumer scan over
+  the group, and everything else backwards. Miss it and each round claims eleven
+  leaves and the partition gate refuses the whole double round. Pinned by its own
+  test (`the anchor's XOR is severed`), which is the only assertion in the file
+  that a walk missing `xor18` would fail besides the tiling one.
+- **A second bootstrap difference.** ChaCha's first discrimination splits an add
+  whose operand is a rotate directly. Salsa's `add18` has **two XOR operands**
+  (`z3` and `z2`), indistinguishable without reaching *through* each to the
+  rotate it consumes. That is `xorLineBits`, and it is the only place the walk
+  cannot pin an unknown by an already-identified leaf.
+- **A forward positional verification pass was considered and deliberately NOT
+  built** (advisor). `add-mod-32@1` and `xor@1` are commutative and the ChaCha
+  walk is intentionally robust to a swapped operand pair; a positional forward
+  check would reject a legal, semantically-identical edit and be stricter than
+  the precedent. `partitionOperands` cross-checks plus the envelope's partition
+  gate are the whole validation. A test now pins the swap tolerance.
+- **The replication guard was generalized, not duplicated.** `GraphView` now
+  asks `analyzeArxGroup` — both analyzers — and its ChaCha-specific names
+  (`chachaRounds` / `chachaRoundsById` / `chachaRoundNeverModes`) were renamed to
+  `arx*`. So the guard, the layout threading and the shape map all generalize
+  with the *shape family* rather than with the cipher list; a third ARX cipher
+  adds one line. **Measured:** Salsa's split feeds **24 distinct consumers over
+  28 edges** — MORE than ChaCha's 16/20, because only Salsa's XORs write back, so
+  a word stays "original" across three of the four lines instead of two. Without
+  the guard the split is genuinely deleted and scattered into 24 chips; both
+  halves are pinned in `tests/salsa-graph-replication.test.ts`.
+- **The diagram is NOT ChaCha's with different labels**, which the plan's "four
+  rails, twelve stations" line implied it would be. Salsa's add and rotate touch
+  no state word at all, so drawing them on a rail would misrepresent the
+  dataflow. They sit instead on a per-line **scratch lane** below the four rails:
+  operands drop down into the add, the sum travels right through the rotate, and
+  only the XOR climbs back to its rail. That descent-and-return IS the structural
+  difference from in-place accumulation, and it is the reason the diagram earns
+  its place next to ChaCha's rather than duplicating it.
+- **Tier names are column / row**, as planned. The quad label is Bernstein's
+  `quarterround(x15, x3, x7, x11)` — printed in rail order and never sorted, so
+  the diagonal start survives.
+
+**Browser smoke run, not skipped.** Graph: the cell renders as the two-tier grid
+(ten splits survive, not 240 scattered chips). Linear: scrubbing into
+`double-round.1 > add-18` draws the diagram with rails `z0 (x15) … z3 (x11)`, the
+`(sum)` lane carrying `y0+y3 ≪7 · z1+y0 ≪9 · z2+z1 ≪13 · z3+z2 ≪18`, and the
+active leaf accented.
+
+**The strongest test in the suite is the quad-label one.** The eight derived
+tuples match Bernstein's published columnround/rowround tuples exactly, in order
+— which is a check on the word-index threading that every structural assertion
+in `salsa-shape.test.ts` is blind to.
+
+#### As planned
 
 - `src/core/salsa-shape.ts` — `matchSalsaQuarterRound`, anchored on the `<<< 18`
   that ends each quarter round, walking backwards through the four lines. Same

@@ -5290,3 +5290,134 @@ button:disabled {
   fill: var(--bg-elev-3, var(--bg-elev-2));
   stroke: var(--accent);
 }
+
+/* ─── Salsa20 quarter-round diagram ──────────────────────────────────────
+   Four rails PLUS a scratch lane. The extra lane is the structural
+   difference from ChaCha's diagram, not a decoration: Salsa's add and
+   rotate compute a value that is not yet a state word, so they hang below
+   the rails and only the XOR climbs back up. */
+
+.salsa-qr-diagram {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev-1);
+  align-self: flex-start;
+}
+
+.salsa-qr-diagram-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.salsa-qr-diagram-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.salsa-qr-diagram-kind {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.salsa-qr-diagram-svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.salsa-qr-diagram-note {
+  max-width: 620px;
+  line-height: 1.5;
+}
+
+/* The written-line bands. Deliberately very low contrast: they group each
+   add/rotate/XOR triple into one expression without competing with the
+   boxes for attention. */
+.salsa-qr-diagram-band {
+  fill: var(--text);
+  opacity: 0.03;
+}
+
+.salsa-qr-diagram-band-alt {
+  opacity: 0.06;
+}
+
+.salsa-qr-diagram-rail {
+  stroke: var(--text);
+  stroke-width: 1;
+  opacity: 0.45;
+}
+
+/* The scratch lane is dashed and fainter than a rail — it is not part of
+   the state, and it must not read as a fifth state word. */
+.salsa-qr-diagram-scratch {
+  stroke: var(--text);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  opacity: 0.28;
+}
+
+.salsa-qr-diagram-rail-label {
+  font-size: 11px;
+  font-family: var(--mono);
+  fill: var(--muted);
+}
+
+.salsa-qr-diagram-scratch-label {
+  font-size: 10px;
+  font-family: var(--mono);
+  fill: var(--muted);
+  opacity: 0.7;
+}
+
+/* Operand connectors cross bare rails only (never a box — see the
+   component's routing note), so they can be solid without reading as a
+   false junction. */
+.salsa-qr-diagram-operand {
+  stroke: var(--accent);
+  stroke-width: 1;
+  opacity: 0.5;
+}
+
+.salsa-qr-diagram-tap {
+  fill: var(--accent);
+  opacity: 0.7;
+}
+
+.salsa-qr-diagram-box {
+  fill: var(--bg-elev-2);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.salsa-qr-diagram-box-rotate {
+  stroke-dasharray: 3 2;
+}
+
+.salsa-qr-diagram-box-label {
+  font-size: 10px;
+  font-family: var(--mono);
+  fill: var(--text);
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.salsa-qr-diagram-active .salsa-qr-diagram-box {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.salsa-qr-diagram-clickable {
+  cursor: pointer;
+}
+
+.salsa-qr-diagram-clickable:hover .salsa-qr-diagram-box {
+  fill: var(--bg-elev-3, var(--bg-elev-2));
+  stroke: var(--accent);
+}

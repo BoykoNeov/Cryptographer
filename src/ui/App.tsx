@@ -62,6 +62,7 @@ import { PortFlowView } from "./components/PortFlowView";
 import { PortWiringEditor } from "./components/PortWiringEditor";
 import { RoundKeyPanel } from "./components/RoundKeyPanel";
 import { RunExplorerModal } from "./components/RunExplorerModal";
+import { SalsaQuarterRoundDiagram } from "./components/SalsaQuarterRoundDiagram";
 import { StepDescription } from "./components/StepDescription";
 import { StepList } from "./components/StepList";
 import { StepNarration } from "./components/StepNarration";
@@ -2159,6 +2160,14 @@ export const App = () => {
                       double round cannot show at any other altitude. Also
                       self-detecting, also inert for every other cipher. */}
                   <ChaChaQuarterRoundDiagram frame={frame()} />
+
+                  {/* Salsa20 is ChaCha's ancestor and the same ARX family, but
+                      its quarter round computes into a FRESH rail rather than
+                      accumulating in place, so `analyzeChaChaDoubleRound`
+                      declines it and the two diagrams are mutually exclusive by
+                      construction. This one adds the scratch lane that in-place
+                      accumulation has no need of. */}
+                  <SalsaQuarterRoundDiagram frame={frame()} />
 
                   {/* Per-frame value-prose. Cipher-agnostic dispatch via
                       the narration registry (`src/ui/narration/`).
