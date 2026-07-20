@@ -163,7 +163,19 @@ This was measured 2026-06-01 while attempting topology "A" for the Speck key sch
 
 **SHA-256's cross-round `port()` references are NOT a counterexample.** SHA-256's round bodies (e.g. `port("round.63","out")`) are same-scope siblings — direct children of the iterate, ungrouped — so those references never cross a group boundary. They resolve fine in the same `nodeOutputs` map. Compare with a hypothetical SHA-256 where each round was wrapped in its own `{ kind: "group" }`: in that case cross-round references would fail with the same "no recorded outputs in this scope" error.
 
+**A group can be seeded with exactly ONE value, which is what decides how a round may be grouped.** The body reads its seed as `port(groupId, "in")` — a single binding. So a round that consumes N > 1 independent values cannot be a group without inventing concat/split plumbing at its boundary. This is why Twofish's 4-rail rounds are flat top-level steps, and why ChaCha20 groups **double rounds** rather than quarter rounds: a quarter round takes four words (not representable), while a double round consumes and produces the whole 64-byte state (one value, and its split/concat boundary is honest — the state really is 64 bytes there). Decide this BEFORE authoring a round body; discovering it afterwards means rewiring every leaf.
+
 **Cross-reference:** memory `project_group_scope_port_isolation`; the K2d resolution documented in `docs/plans/key-schedule-decomposition.md`.
+
+## Stream ciphers / ChaCha20
+
+**A cipher's IV width is NOT necessarily its block width.** They coincide for every block cipher — CBC XORs the IV with a block, so an IV must be exactly one block wide — which is why the IV sites all reached for `blockByteLengthFor`. ChaCha20 breaks it: 64-byte block, 16-byte IV (a 32-bit LE counter plus a 96-bit nonce), and no core for `blockByteLengthFor` to read at all. Use **`ivByteLengthFor`** at any site that sizes, defaults or reconciles the IV.
+
+**`reconcileIvWidth` only acts when the width CHANGES.** Switching between two ciphers that both want 16 bytes keeps the old IV. That is harmless while an IV is an opaque block and wrong the moment one has structure: AES → ChaCha20 inherited `00 01 02 03 …`, setting ChaCha's block counter to `0x03020100` instead of 1. The result encrypts and decrypts perfectly self-consistently and matches no published vector — **and every unit test passed, because they all supply the IV explicitly.** It was found by opening the app in a browser. Any cipher whose IV has internal structure must register a `DEFAULT_IV_BYTES_BY_CIPHER` entry and rely on the sacred-input swap in `changeCipher`, not on width reconciliation.
+
+**A stream cipher has no `"single-block"` mode**, so anything resolving a default mode must read `SUPPORTED_CIPHER_MODES_BY_CIPHER[cipher][0]` (`defaultCipherModeFor`) rather than assume the constant. Three sites had the constant hardcoded — `resolveDefault`, `setCipher`, and document load — and each resolved to a spec that does not exist.
+
+**`isStreamCipherMode` (mode) vs `isStreamCipher` (cipher) are different questions.** Almost everything wants the first: it answers "does this pad? does it use an IV?" and already has every call site. The second is needed only *before* a mode is settled — which mode a newly-selected cipher lands in, and whether the mode selector is interactive. Adding call sites to the cipher-keyed one is how the seven-site hazard comes back.
 
 ## Tooling / shell
 

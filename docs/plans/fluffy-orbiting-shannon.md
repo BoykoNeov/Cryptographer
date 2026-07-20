@@ -1,6 +1,10 @@
 # ChaCha20 — the first stream cipher (RFC 8439)
 
-Status: PLANNED · 2026-07-20
+Status: **P1–P4 SHIPPED 2026-07-20** · P5 (diagrams) OPEN
+
+> **Shipped:** `rotate-bits-left@1` (`09fe61b`), the cipher + KAT (`1d2d0b9`),
+> the UI wiring + `"stream"` mode (`cf2510f`). What follows is the plan as
+> approved; deviations found during the build are recorded at the end.
 
 ## Context
 
@@ -255,3 +259,42 @@ frame in the browser and read what it says.
 
 Finally: `npm run check`, and a `docs/gotchas.md` + `README.md` + `CHANGELOG.md`
 pass, since the user-visible surface gains a cipher and a mode.
+
+
+## What the build changed vs this plan
+
+Three things the plan got wrong or did not anticipate. All were found by
+checking rather than by assuming, and all are now in `docs/gotchas.md`.
+
+1. **Quarter-round groups are not representable.** The plan sketched
+   `rounds > double-round > qr` as nested groups. A group body is seeded with
+   exactly ONE value (`port(groupId, "in")`), and a quarter round consumes
+   four words. Only the double round — which consumes and produces the whole
+   64-byte state — can be a group. This is the same constraint that keeps
+   Twofish's 4-rail rounds flat, and it should have been checked before the
+   spec shape was drawn.
+
+2. **`permute@1` takes `indices`, not `permutation`.** The exploration pass
+   reported the wrong param name; the executor was read before use. Exactly the
+   port-native param-name divergence `docs/gotchas.md` already warns about.
+
+3. **The IV bug, which no test could have caught.** Plan decision #4 assumed a
+   ChaCha-specific default IV would be enough. It was not: `reconcileIvWidth`
+   short-circuits when the width is unchanged, and AES and ChaCha20 both want
+   16 bytes — so the canonical default never landed and the block counter
+   silently started at `0x03020100`. The whole suite stayed green because every
+   test supplies the IV explicitly. Found by opening the app in a browser, and
+   the reason `tests/app-chacha20-stream.test.tsx` exists.
+
+Also worth recording: the plan's frame-count estimate (~1000 leaves/block) was
+right — 995 — and the double-round grouping keeps the graph at ~123 rendered
+SVG groups rather than a chip wall.
+
+## P5 — remaining
+
+Canonical quarter-round graph cell (`core/chacha-shape.ts` +
+`core/chacha-layout.ts`, recognized by wiring on the `twofish-shape.ts` model)
+and a linear `<ChaChaQuarterRoundDiagram />` over a pure
+`core/chacha-diagram.ts`. Not started. Twofish shipped its graph layout and its
+linear diagram days after the cipher, so this is a normal follow-up rather than
+an outstanding defect.
