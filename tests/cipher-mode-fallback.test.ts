@@ -28,12 +28,20 @@
  */
 
 import { hasBlockCipherCore } from "@/ui/stores/block-cipher-cores";
-import { type Cipher, isAesCipher } from "@/ui/stores/cipher";
+import { CIPHER_OPTIONS, type Cipher, isAesCipher } from "@/ui/stores/cipher";
 import { isCipherModeSupported } from "@/ui/stores/cipher-mode";
 import { describe, expect, it } from "vitest";
 
-/** Every cipher that has no `BlockCipherCore` yet ⇒ single-block only. */
-const CORELESS_CIPHERS = ["twofish"] as const satisfies readonly Cipher[];
+/**
+ * Every cipher that has no `BlockCipherCore` yet ⇒ single-block only.
+ *
+ * **Empty since Twofish's core landed** — every block cipher in the app now runs
+ * every mode, which is the `N ciphers + M modes` claim fully paid out. The list
+ * stays (rather than being deleted with its test) because it is the slot a
+ * newly-added cipher occupies before its seed-threading work is done, and the
+ * assertions below are what force that cipher's tables to be honest meanwhile.
+ */
+const CORELESS_CIPHERS = [] as const satisfies readonly Cipher[];
 
 /** Every cipher that HAS a core ⇒ single-block + ecb + cbc. */
 const CORED_CIPHERS = [
@@ -47,6 +55,7 @@ const CORED_CIPHERS = [
   "serpent-192",
   "serpent-256",
   "des",
+  "twofish",
 ] as const satisfies readonly Cipher[];
 
 describe("cipher-mode × cipher support matrix", () => {
@@ -68,10 +77,22 @@ describe("cipher-mode × cipher support matrix", () => {
     }
   });
 
+  it("the two hand-maintained lists together cover every block cipher", () => {
+    // With CORELESS_CIPHERS empty, its loop below asserts nothing on its own —
+    // so this guards the gap that opens: a NEW cipher added to the union but to
+    // neither list would sail past every other assertion in this file. Derived
+    // from the union rather than hand-listed, so it cannot drift.
+    // `CIPHER_OPTIONS` is the `Cipher` union itself — hashes and RSA live in
+    // separate unions, so every entry is a block cipher and needs a list.
+    const listed = new Set<string>([...CORED_CIPHERS, ...CORELESS_CIPHERS]);
+    expect(CIPHER_OPTIONS.filter((c) => !listed.has(c))).toEqual([]);
+  });
+
   it("a cipher with no BlockCipherCore is single-block only", () => {
     // Canary: adding a core for any of these fires this test and forces the
     // mode matrix + the `defaults` table to be updated in the same commit as
-    // the core. `src/ciphers/blowfish-core.ts` is the template to follow.
+    // the core. `src/ciphers/twofish-core.ts` is the most recent template.
+    // Currently empty — every block cipher has a core.
     for (const cipher of CORELESS_CIPHERS) {
       expect(isCipherModeSupported(cipher, "single-block")).toBe(true);
       expect(isCipherModeSupported(cipher, "ecb")).toBe(false);

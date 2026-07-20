@@ -38,6 +38,7 @@ import { blowfishCore } from "@/ciphers/blowfish-core";
 import { desCore } from "@/ciphers/des-core";
 import { serpentCore } from "@/ciphers/serpent-core";
 import { speck32_64Core } from "@/ciphers/speck-32-64-core";
+import { twofishCore } from "@/ciphers/twofish-core";
 import type { Cipher } from "./cipher";
 
 /**
@@ -57,7 +58,11 @@ import type { Cipher } from "./cipher";
  * two, the same word-level cipher under two serializations. DES came last of
  * the five and adds breadth rather than block-size confidence — its 8-byte
  * block is Blowfish's — but it is the first core whose body nests a port-mode
- * group (the outer `rounds` group) inside the mode's iterate.
+ * group (the outer `rounds` group) inside the mode's iterate. Twofish closed the
+ * table: its 16-byte block adds no block-size confidence, but it was the last
+ * cipher left in single-block mode, so with it the "absence is meaningful"
+ * caveat below no longer excludes any block cipher — every one of them runs
+ * every mode.
  *
  * Each `…Core()` call is cheap — the returned object holds closures, so no spec
  * is built until a mode builder asks for a body.
@@ -73,6 +78,7 @@ const BLOCK_CIPHER_CORES: Partial<Record<Cipher, BlockCipherCore>> = {
   "serpent-128": serpentCore(16),
   "serpent-192": serpentCore(24),
   "serpent-256": serpentCore(32),
+  twofish: twofishCore,
 };
 
 /**

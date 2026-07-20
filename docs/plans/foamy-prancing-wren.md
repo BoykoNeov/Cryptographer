@@ -11,6 +11,17 @@
 > four ciphers (Speck/Serpent/DES/Twofish) are cheap follow-ups templated on
 > `src/ciphers/blowfish-core.ts`; each costs its own seed-threading plus the
 > three table rows.
+>
+> **Follow-ups ALL SHIPPED (2026-07-18 → 2026-07-20).** Serpent ×3, Speck ×2,
+> DES, and finally **Twofish (2026-07-20)** each landed exactly as templated,
+> and CTR shipped as the third mode with zero changes to the contract.
+> **Every block cipher in the app now runs every mode** — the `N + M` claim is
+> fully paid out, not merely demonstrated. The one recurring lesson across all
+> four follow-ups: the seed-threading is "one binding" ONLY when every round key
+> already reaches its round through **aux** rather than a port edge into the
+> key-schedule group (port flow cannot cross a group scope, so a port-borne
+> subkey throws the moment the body is nested in the mode's iterate). Check that
+> first on any future cipher.
 
 ## Context
 

@@ -741,9 +741,16 @@ const buildRound = (
  * Reverse each plaintext word (LE→BE), split into R0..R3, XOR with the four
  * whitening subkeys (`wIdx0..3`), recombine into the round-0 input. Returns the
  * nodes + the binding round 0 seeds from.
+ *
+ * `seed` is where the 16-byte block comes from. The single-block spec passes
+ * `$input`; a mode of operation passes the port its `iterate` injects the block
+ * on. This head is the ONLY place the cipher touched its input source, which is
+ * why seed-parameterizing Twofish for `BlockCipherCore` was a one-binding change
+ * (the Serpent / Speck story — see `twofish-core.ts`).
  */
 const buildInputWhitening = (
   wIdx: readonly number[],
+  seed: PortBinding,
 ): { nodes: StepNode[]; output: PortBinding } => {
   const w = (s: string) => `whiten-in.${s}`;
   const nodes: StepNode[] = [
@@ -752,7 +759,7 @@ const buildInputWhitening = (
       id: w("permute"),
       type: "permute@1",
       params: { indices: [...WORD_REVERSE_16] },
-      portInputs: { input: port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT) },
+      portInputs: { input: seed },
       narrationOverride: NARR_IN_PERMUTE,
     },
     {
@@ -845,8 +852,21 @@ const buildOutputWhitening = (
 
 // ─── Spec assembly ────────────────────────────────────────────────────────────
 
-/** Build the Twofish encrypt or decrypt spec (128-bit key, v1). */
-export const buildTwofishSpec = (direction: TwofishDirection): CipherSpec => {
+/**
+ * The Twofish cipher body — whitening, 16 rounds, whitening — reading its block
+ * from `seed`, WITHOUT the key setup.
+ *
+ * Split out from `buildTwofishSpec` so a mode of operation can nest exactly this
+ * inside its per-block `iterate` while the key schedule runs ONCE outside the
+ * loop (`BlockCipherCore.buildKeySchedule`). The two halves compose only because
+ * every subkey reaches a round through **aux** (`aux-load-bytes@1` on
+ * `twofish.K.*`) rather than a port edge to the key-setup group: aux is global
+ * and crosses the iterate's scope boundary, a port edge would not.
+ */
+export const buildTwofishBody = (
+  direction: TwofishDirection,
+  seed: PortBinding,
+): { nodes: StepNode[]; output: PortBinding } => {
   const encrypt = direction === "encrypt";
 
   // Whitening subkey indices. Encrypt: input K0..3, output K4..7. Decrypt swaps
@@ -854,10 +874,10 @@ export const buildTwofishSpec = (direction: TwofishDirection): CipherSpec => {
   const inWhitening = encrypt ? [0, 1, 2, 3] : [4, 5, 6, 7];
   const outWhitening = encrypt ? [4, 5, 6, 7] : [0, 1, 2, 3];
 
-  const { nodes: inWhiten, output: seed0 } = buildInputWhitening(inWhitening);
+  const { nodes: inWhiten, output: seed0 } = buildInputWhitening(inWhitening, seed);
 
   const rounds: StepNode[] = [];
-  let seed = seed0;
+  let roundSeed = seed0;
   for (let r = 0; r < TWOFISH_ROUNDS; r++) {
     // Encrypt consumes rounds/subkeys forward; decrypt reverses both. Round r's
     // two subkeys are K[8 + 2·rr] / K[9 + 2·rr] where rr is the ENCRYPT round
@@ -865,8 +885,8 @@ export const buildTwofishSpec = (direction: TwofishDirection): CipherSpec => {
     const rr = encrypt ? r : TWOFISH_ROUNDS - 1 - r;
     const k0Idx = 8 + 2 * rr;
     const k1Idx = 9 + 2 * rr;
-    rounds.push(buildRound(r, k0Idx, k1Idx, seed, !encrypt));
-    seed = port(`round.${r}`, "out");
+    rounds.push(buildRound(r, k0Idx, k1Idx, roundSeed, !encrypt));
+    roundSeed = port(`round.${r}`, "out");
   }
 
   const { nodes: outWhiten, output } = buildOutputWhitening(
@@ -874,15 +894,27 @@ export const buildTwofishSpec = (direction: TwofishDirection): CipherSpec => {
     outWhitening,
   );
 
+  return { nodes: [...inWhiten, ...rounds, ...outWhiten], output };
+};
+
+/** The Twofish key setup as a single node — the mode machine's `buildKeySchedule`. */
+export const buildTwofishKeySchedule = (): StepNode => buildKeySetup();
+
+/** Build the Twofish encrypt or decrypt spec (128-bit key, v1). */
+export const buildTwofishSpec = (direction: TwofishDirection): CipherSpec => {
+  // The single-block spec seeds the body from the spec's own plaintext input;
+  // a mode passes its iterate's per-block port instead.
+  const { nodes, output } = buildTwofishBody(direction, port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT));
+
   return {
-    id: encrypt ? "twofish@1" : "twofish-decrypt@1",
+    id: direction === "encrypt" ? "twofish@1" : "twofish-decrypt@1",
     name: "Twofish",
     stateShape: "bytes",
     inputs: {
       plaintext: { shape: "bytes" },
       key: { byteLength: 16 },
     },
-    steps: [buildKeySetup(), ...inWhiten, ...rounds, ...outWhiten],
+    steps: [buildKeySetup(), ...nodes],
     outputFrom: output,
   };
 };

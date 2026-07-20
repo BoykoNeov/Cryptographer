@@ -88,15 +88,14 @@ export const SUPPORTED_CIPHER_MODES_BY_CIPHER: Readonly<Record<Cipher, readonly 
   // (the Initial Permutation leaf), the Serpent story rather than the Blowfish
   // one: B4 had already given every round a port-chained seed.
   des: ["single-block", "ecb", "cbc", "ctr"],
-  // Twofish is single-block for ONE reason: no `BlockCipherCore` yet. A core
-  // needs the cipher's body to accept its block from an arbitrary port rather
-  // than hardcoding `$input` — per-cipher seed-threading work, and Twofish's
-  // round body isn't seed-parameterized. It is NOT a block-size limitation:
-  // the mode builders, the iterate, and the padding overlay are all
-  // block-size-generic as of Phase B, and Speck's 4-byte block proves it below
-  // every "round" width. `blowfish-core.ts` / `serpent-core.ts` /
-  // `speck-32-64-core.ts` / `des-core.ts` are the templates to follow.
-  twofish: ["single-block"],
+  // Twofish — the last cipher to gain modes, closing the `N + M` story: every
+  // block cipher in the app now runs every mode. Its 16-byte block is AES's, so
+  // this is breadth rather than block-size coverage; what it does add is the
+  // mode machine over the app's most structurally unusual body (the 4-rail
+  // round), nested a scope deeper inside the iterate. The seed-threading was one
+  // binding — the input-whitening head — because every subkey already reached
+  // its round through aux rather than a port edge into key setup.
+  twofish: ["single-block", "ecb", "cbc", "ctr"],
 };
 
 export const isCipherModeSupported = (cipher: Cipher, mode: CipherMode): boolean =>

@@ -67,6 +67,7 @@ import { speck32_64Core } from "@/ciphers/speck-32-64-core";
 import { speck32_64LeSpec } from "@/ciphers/speck-32-64-le";
 import { speck32_64LeDecryptSpec } from "@/ciphers/speck-32-64-le-decrypt";
 import { twofishSpec } from "@/ciphers/twofish";
+import { twofishCore } from "@/ciphers/twofish-core";
 import { twofishDecryptSpec } from "@/ciphers/twofish-decrypt";
 import type { CipherDocument } from "@/core/document";
 import { resolvePortMap } from "@/core/port-projection";
@@ -226,11 +227,13 @@ const defaults: Record<Cipher, Partial<Record<CipherMode, Record<Mode, CipherSpe
     "single-block": { encrypt: blowfishSpec, decrypt: blowfishDecryptSpec },
     ...modesFromCore(blowfishCore()),
   },
-  // Twofish — third Feistel cipher (`docs/plans/twofish.md`). Single-block
-  // only; decrypt runs the same network with inverted rotations, reversed
-  // subkey order, and swapped whitening.
+  // Twofish — third Feistel cipher (`docs/plans/twofish.md`), and the LAST
+  // cipher to gain modes: with this row every block cipher in the app runs every
+  // mode. Decrypt runs the same network with inverted rotations, reversed subkey
+  // order, and swapped whitening.
   twofish: {
     "single-block": { encrypt: twofishSpec, decrypt: twofishDecryptSpec },
+    ...modesFromCore(twofishCore),
   },
 };
 

@@ -47,6 +47,7 @@ import { buildCtrSpec } from "@/ciphers/modes/ctr";
 import { buildEcbSpec } from "@/ciphers/modes/ecb";
 import { serpentCore } from "@/ciphers/serpent-core";
 import { speck32_64Core } from "@/ciphers/speck-32-64-core";
+import { twofishCore } from "@/ciphers/twofish-core";
 import { runSpec } from "@/core/runtime";
 import { applyPaddingScheme } from "@/core/spec-mutations";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
@@ -75,6 +76,7 @@ const CORES: ReadonlyArray<{ cipher: Cipher; core: BlockCipherCore }> = [
   { cipher: "serpent-128", core: serpentCore(16) },
   { cipher: "serpent-192", core: serpentCore(24) },
   { cipher: "serpent-256", core: serpentCore(32) },
+  { cipher: "twofish", core: twofishCore },
 ];
 
 const ALL_CIPHERS: readonly Cipher[] = [
@@ -189,8 +191,11 @@ describe("CTR across every BlockCipherCore", () => {
     for (const { cipher } of CORES) {
       expect(isCipherModeSupported(cipher, "ctr")).toBe(true);
     }
-    // Twofish has no core, so it must NOT advertise CTR.
-    expect(isCipherModeSupported("twofish", "ctr")).toBe(false);
+    // Every cipher in the union has a core since Twofish's landed, so there is
+    // no longer a coreless counter-example to assert against here. The
+    // must-NOT-advertise direction is kept alive by the derived check in
+    // `cipher-mode-fallback.test.ts` ("core presence is what decides…").
+    expect(ALL_CIPHERS.every((c) => hasBlockCipherCore(c))).toBe(true);
   });
 
   // ── The external oracle: AES vs node:crypto ────────────────────────────────
