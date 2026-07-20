@@ -111,6 +111,11 @@ import {
   gfMatrixMultiplyV2PortContract,
 } from "../steps/gf-matrix-multiply";
 import {
+  incrementCounter,
+  incrementCounterDoc,
+  incrementCounterPortContract,
+} from "../steps/increment-counter";
+import {
   iso78164Pad,
   iso78164PadDoc,
   iso78164PadMeta,
@@ -948,6 +953,17 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: not,
     shape: notPortContract,
     doc: notDoc,
+  });
+  // The `+1` inside CTR's per-block loop (NIST SP 800-38A §6.5). Deliberately
+  // width-free: the counter block is one CIPHER block wide, which differs per
+  // core (16 AES/Serpent, 8 DES/Blowfish, 4 Speck32/64), so the width is
+  // derived from the wired input rather than parameterized. That is what lets
+  // `modes/ctr.ts` stay cipher-agnostic.
+  r.register("increment-counter@1", {
+    kind: "ported",
+    executor: incrementCounter,
+    shape: incrementCounterPortContract,
+    doc: incrementCounterDoc,
   });
   r.register("pad-with-byte@1", {
     kind: "ported",

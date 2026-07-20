@@ -48,6 +48,7 @@ import {
   readKmacKeyLength,
 } from "@/ciphers/kmac";
 import { buildCbcSpec } from "@/ciphers/modes/cbc";
+import { buildCtrSpec } from "@/ciphers/modes/ctr";
 import { buildEcbSpec } from "@/ciphers/modes/ecb";
 import { rsaDecryptSpec, rsaEncryptSpec } from "@/ciphers/rsa";
 import { serpent128Spec } from "@/ciphers/serpent-128";
@@ -140,6 +141,26 @@ const modesFromCore = (
 ): Partial<Record<CipherMode, Record<Mode, CipherSpec>>> => ({
   ecb: { encrypt: buildEcbSpec(core, "encrypt"), decrypt: buildEcbSpec(core, "decrypt") },
   cbc: { encrypt: buildCbcSpec(core, "encrypt"), decrypt: buildCbcSpec(core, "decrypt") },
+  ...ctrFromCore(core),
+});
+
+/**
+ * CTR alone, split out of `modesFromCore` for AES-128's sake.
+ *
+ * AES-128 keeps hand-authored ECB/CBC spec constants (see `modesFromCore`'s
+ * note on reference equality), so it cannot spread `modesFromCore` — that
+ * would regenerate and replace them. But AES-128 has no hand-authored CTR and
+ * never will: CTR shipped after the mode machine, so there is no legacy file
+ * to preserve. This helper lets AES-128 take the generic CTR while keeping its
+ * grandfathered ECB/CBC constants intact.
+ *
+ * Both directions are structurally identical specs (CTR runs the forward
+ * cipher either way) — they differ only in id, name, and narration prose.
+ */
+const ctrFromCore = (
+  core: BlockCipherCore,
+): Partial<Record<CipherMode, Record<Mode, CipherSpec>>> => ({
+  ctr: { encrypt: buildCtrSpec(core, "encrypt"), decrypt: buildCtrSpec(core, "decrypt") },
 });
 
 // 3D table of canonical specs: defaults[cipher][cipherMode][mode]. The inner
@@ -150,6 +171,10 @@ const defaults: Record<Cipher, Partial<Record<CipherMode, Record<Mode, CipherSpe
     "single-block": { encrypt: aes128Spec, decrypt: aes128DecryptSpec },
     ecb: { encrypt: aes128EcbSpec, decrypt: aes128EcbDecryptSpec },
     cbc: { encrypt: aes128CbcSpec, decrypt: aes128CbcDecryptSpec },
+    // CTR postdates the mode machine, so there is no hand-authored AES-128 CTR
+    // file to grandfather — it comes from the generic builder like every other
+    // core's. See `ctrFromCore` on why this isn't a full `modesFromCore`.
+    ...ctrFromCore(aesCore("aes-128")),
   },
   "aes-192": {
     "single-block": { encrypt: aes192Spec, decrypt: aes192DecryptSpec },

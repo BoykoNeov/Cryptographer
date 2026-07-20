@@ -50,7 +50,7 @@ const CORED_CIPHERS = [
 ] as const satisfies readonly Cipher[];
 
 describe("cipher-mode × cipher support matrix", () => {
-  it("every cipher with a core supports single-block + ecb + cbc", () => {
+  it("every cipher with a core supports single-block + ecb + cbc + ctr", () => {
     // Phase B extended ECB/CBC from AES-128 to all three AES variants; Phase C
     // added Blowfish, the first non-AES member and the first whose block is not
     // 16 bytes; Serpent followed as an AES-shaped family (three more cores); and
@@ -60,9 +60,11 @@ describe("cipher-mode × cipher support matrix", () => {
       expect(isCipherModeSupported(cipher, "single-block")).toBe(true);
       expect(isCipherModeSupported(cipher, "ecb")).toBe(true);
       expect(isCipherModeSupported(cipher, "cbc")).toBe(true);
-      // CTR is designed for but not built — the contract exposes the forward
-      // body + a no-padding flag so it lands as a `modes/ctr.ts` alone.
-      expect(isCipherModeSupported(cipher, "ctr")).toBe(false);
+      // CTR landed exactly as `block-cipher-core.ts` predicted it would: a
+      // single `modes/ctr.ts` plus one new arithmetic step, with ZERO changes
+      // to the core contract. Every core gained it at once — which is the
+      // N+M-not-N×M claim paying out for the third time.
+      expect(isCipherModeSupported(cipher, "ctr")).toBe(true);
     }
   });
 
@@ -86,6 +88,7 @@ describe("cipher-mode × cipher support matrix", () => {
     for (const cipher of [...CORED_CIPHERS, ...CORELESS_CIPHERS]) {
       expect(isCipherModeSupported(cipher, "ecb")).toBe(hasBlockCipherCore(cipher));
       expect(isCipherModeSupported(cipher, "cbc")).toBe(hasBlockCipherCore(cipher));
+      expect(isCipherModeSupported(cipher, "ctr")).toBe(hasBlockCipherCore(cipher));
     }
   });
 

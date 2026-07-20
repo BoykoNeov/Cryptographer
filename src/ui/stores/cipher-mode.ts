@@ -9,8 +9,12 @@
  *   "ecb"          — multi-block, no chaining. Each block encrypts
  *                    independently. The "what NOT to do" baseline.
  *   "cbc"          — multi-block with IV-driven block chaining. Phase 2.
- *   "ctr"          — keystream from encrypting a counter; XORed with
- *                    plaintext, no padding. Phase 3.
+ *   "ctr"          — keystream from encrypting a counter block, XORed with
+ *                    the message. Runs the FORWARD cipher in both
+ *                    directions (XOR is its own inverse), so decrypt never
+ *                    invokes the inverse body. v1 still requires whole
+ *                    blocks, so the padding overlay stays engaged; real CTR
+ *                    truncates the last keystream block instead.
  *
  * Orthogonal to:
  *   - direction ("encrypt"/"decrypt"), held by stores/spec.ts
@@ -37,10 +41,11 @@ import type { Cipher } from "./cipher";
 
 export type CipherMode = "single-block" | "ecb" | "cbc" | "ctr";
 
-// Phase 1 shipped ECB; Phase 2 ships CBC; CTR arrives in Phase 3. The
-// dropdown shows all four entries but disables the unsupported ones so
-// the eventual rollout doesn't move things around in the UI.
-export const SUPPORTED_CIPHER_MODES: readonly CipherMode[] = ["single-block", "ecb", "cbc"];
+// All four modes ship. ECB and CBC arrived with the cipher-agnostic mode
+// machine; CTR followed, built from the same `BlockCipherCore` contract with
+// no changes to it — the contract was designed against CTR precisely so that
+// third mode would cost one file.
+export const SUPPORTED_CIPHER_MODES: readonly CipherMode[] = ["single-block", "ecb", "cbc", "ctr"];
 
 /**
  * Which (cipher, cipherMode) combinations have a concrete spec in
@@ -58,31 +63,31 @@ export const SUPPORTED_CIPHER_MODES: readonly CipherMode[] = ["single-block", "e
 export const SUPPORTED_CIPHER_MODES_BY_CIPHER: Readonly<Record<Cipher, readonly CipherMode[]>> = {
   // The AES variants: every one has a `BlockCipherCore`, and the generic mode
   // builders generate their ECB/CBC specs from it (`stores/spec.ts`).
-  "aes-128": ["single-block", "ecb", "cbc"],
-  "aes-192": ["single-block", "ecb", "cbc"],
-  "aes-256": ["single-block", "ecb", "cbc"],
+  "aes-128": ["single-block", "ecb", "cbc", "ctr"],
+  "aes-192": ["single-block", "ecb", "cbc", "ctr"],
+  "aes-256": ["single-block", "ecb", "cbc", "ctr"],
   // Blowfish — the first non-AES cipher with a core (Phase C), and the first
   // whose block is 8 bytes rather than 16.
-  blowfish: ["single-block", "ecb", "cbc"],
+  blowfish: ["single-block", "ecb", "cbc", "ctr"],
   // Serpent — an AES-shaped core (16-byte block, flat round groups between IP
   // and FP), three cores for one cipher's seed-threading work
   // (`src/ciphers/serpent-core.ts`).
-  "serpent-128": ["single-block", "ecb", "cbc"],
-  "serpent-192": ["single-block", "ecb", "cbc"],
-  "serpent-256": ["single-block", "ecb", "cbc"],
+  "serpent-128": ["single-block", "ecb", "cbc", "ctr"],
+  "serpent-192": ["single-block", "ecb", "cbc", "ctr"],
+  "serpent-256": ["single-block", "ecb", "cbc", "ctr"],
   // Speck32/64 — the first core whose block is smaller than 8 bytes (4-byte
   // block, two byte conventions). `src/ciphers/speck-32-64-core.ts` — the
   // seed-threading was one binding (round 1's `state`), the rest of the round
   // chain and every param already flowed through the shared body builder.
-  "speck-32-64-be": ["single-block", "ecb", "cbc"],
-  "speck-32-64-le": ["single-block", "ecb", "cbc"],
+  "speck-32-64-be": ["single-block", "ecb", "cbc", "ctr"],
+  "speck-32-64-le": ["single-block", "ecb", "cbc", "ctr"],
   // DES — the first Feistel cipher, and the first core whose body nests a
   // port-mode group (the outer `rounds` group) inside the mode's iterate. Its
   // 8-byte block is Blowfish's, so this is breadth, not new block-size
   // coverage. `src/ciphers/des-core.ts` — the seed-threading was one binding
   // (the Initial Permutation leaf), the Serpent story rather than the Blowfish
   // one: B4 had already given every round a port-chained seed.
-  des: ["single-block", "ecb", "cbc"],
+  des: ["single-block", "ecb", "cbc", "ctr"],
   // Twofish is single-block for ONE reason: no `BlockCipherCore` yet. A core
   // needs the cipher's body to accept its block from an arbitrary port rather
   // than hardcoding `$input` — per-cipher seed-threading work, and Twofish's

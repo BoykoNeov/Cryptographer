@@ -462,7 +462,7 @@ export const App = () => {
         // friendly error rather than letting the iterate's block split throw a
         // runtime-internals error from inside the loop.
         const needsAlignment =
-          (cipherMode() === "ecb" || cipherMode() === "cbc") &&
+          (cipherMode() === "ecb" || cipherMode() === "cbc" || cipherMode() === "ctr") &&
           (mode() === "decrypt" || padding() === "none");
         // A cipher in ECB/CBC always has a core, so the `?? 0` is unreachable;
         // it exists so a missing core can't turn into a `% NaN` that silently
@@ -558,7 +558,11 @@ export const App = () => {
       // randomize button generates that width, and `reconcileIvWidth` re-defaults
       // the IV whenever a cipher/mode change moves the block size. So we can drop
       // straight into aux.
-      if (cipherMode() === "cbc") {
+      // CTR reads the same aux slot, but the value plays a different role:
+      // there it is the INITIAL COUNTER BLOCK that gets encrypted, not a value
+      // XORed into the first block. One field, two meanings — the IV input's
+      // label and the mode's narration carry the distinction.
+      if (cipherMode() === "cbc" || cipherMode() === "ctr") {
         initialAux.set("iv", new Uint8Array(ivBytes()));
       }
       const currentSpec = spec();
@@ -659,7 +663,7 @@ export const App = () => {
     // single-block / ECB would be confusing — the spec doesn't read
     // aux[iv] there, so the value would silently round-trip but mean
     // nothing.
-    const includeIv = cipherMode() === "cbc";
+    const includeIv = cipherMode() === "cbc" || cipherMode() === "ctr";
     return {
       mode: mode(),
       cipher: cipher(),
@@ -1679,9 +1683,15 @@ export const App = () => {
               </option>
               <option
                 value="ctr"
-                disabled={!(SUPPORTED_CIPHER_MODES as readonly string[]).includes("ctr")}
+                disabled={
+                  !(SUPPORTED_CIPHER_MODES as readonly string[]).includes("ctr") ||
+                  !isCipherModeSupported(cipher(), "ctr")
+                }
               >
-                {CIPHER_MODE_LABELS.ctr} (coming Phase 3)
+                {CIPHER_MODE_LABELS.ctr}
+                {hasBlockCipherCore(cipher()) && !isCipherModeSupported(cipher(), "ctr")
+                  ? " (not wired up for this cipher yet)"
+                  : ""}
               </option>
             </select>
           </label>
@@ -1798,7 +1808,7 @@ export const App = () => {
             randomize button uses crypto.getRandomValues. Wrapped in a
             `data-field` div so the IvInput's own `<label>` root doesn't
             need a class hook — the wrapper carries the full-row layout. */}
-        <Show when={cipherMode() === "cbc"}>
+        <Show when={cipherMode() === "cbc" || cipherMode() === "ctr"}>
           <div class="data-field">
             <IvInput
               format={fmt()}

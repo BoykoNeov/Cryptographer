@@ -301,6 +301,8 @@ export const lookupProvenance = (stepType: string): ProvenanceFn | undefined =>
  *  - **approximate** (an exact-looking byte highlight would mislead):
  *    `add-mod-32@1` / `add-mod-16@1` (carry crosses byte boundaries),
  *    `rotate-bits-right@1` / `shift-bits-right@1` (bit-level → byte-approximate),
+ *    `increment-counter@1` (CTR's +1 — an exact cone that would still mislead,
+ *    see its inline note),
  *    the RSA big-integer primitives `mul@1` / `sub@1` / `mod-mul@1` /
  *    `cond-mod-mul@1` / `mod-inverse@1`, and the traced extended-Euclid loop
  *    `eea-step@1` / `eea-extract@1` (full-width carries/borrows mix every
@@ -324,6 +326,13 @@ export const PROVENANCE_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set<string>([
   // approximate
   "add-mod-32@1",
   "add-mod-16@1",
+  // approximate — CTR's counter +1. The dependency cone is technically exact
+  // (`output[j]` can only be affected by `input[j..len-1]`, since the carry
+  // travels right-to-left), but highlighting that whole tail would mislead:
+  // the carry reaches past the last byte on only 1 increment in 256, so an
+  // exact-looking highlight would show a dozen "contributing" bytes that
+  // almost never contribute. Same rationale as `add-mod-32@1` above.
+  "increment-counter@1",
   "rotate-bits-right@1",
   "shift-bits-right@1",
   // approximate — per-lane bit rotation (Keccak ρ); a rotated byte draws from

@@ -148,13 +148,12 @@ const singleBlockLimits = (cipher: Cipher): { min: number; max: number } => {
  *   • **Core, single-block**: exactly one block on decrypt; on encrypt,
  *     0..B-1 / 1..B / B..B depending on the padding scheme.
  *
- *   • **Core, multi-block (ECB/CBC)**: N × B bytes, up to MAX_BLOCKS_UI
+ *   • **Core, multi-block (ECB/CBC/CTR)**: N × B bytes, up to MAX_BLOCKS_UI
  *     blocks. PKCS#7 / zero-pad / iso7816-4 each accept short input on
  *     encrypt (their pad step expands to the next block boundary); decrypt
- *     needs a clean block multiple.
- *
- *   • **Core, CTR** (designed for, not built): no padding, any length up to
- *     the cap — the keystream truncates to the original length.
+ *     needs a clean block multiple. CTR is here rather than in a padding-free
+ *     family of its own only because v1 can't truncate its last keystream
+ *     block — see the branch comment below.
  *
  * Every bound is derived from the core's block width `B` rather than a
  * hardcoded 16 — and since Blowfish's core landed (Phase C), the app itself
@@ -172,8 +171,13 @@ export const paddingLimits = (
   const B = core.blockByteLength;
   const MAX_BYTES = MAX_BLOCKS_UI * B;
 
-  // ── Multi-block (ECB / CBC) ─────────────────────────────────────────────
-  if (cipherMode === "ecb" || cipherMode === "cbc") {
+  // ── Multi-block (ECB / CBC / CTR) ───────────────────────────────────────
+  // CTR shares these bounds in v1 despite not needing padding in principle:
+  // the port-mode iterate rejects a non-block-multiple `seedInput` and `xor@1`
+  // requires equal-length operands, so the last keystream block cannot yet be
+  // truncated to a ragged tail. Until that lands, CTR is block-aligned like
+  // its siblings and keeps the padding overlay engaged.
+  if (cipherMode === "ecb" || cipherMode === "cbc" || cipherMode === "ctr") {
     if (mode === "decrypt") {
       // Decrypt input must be a clean ciphertext block multiple. The Run
       // handler also checks the alignment; this just bounds the overall
@@ -200,14 +204,6 @@ export const paddingLimits = (
         // full range — except length 0, which would yield no blocks to iterate.
         return { min: 1, max: MAX_BYTES };
     }
-  }
-
-  // ── CTR (designed for, not built — see `docs/plans/foamy-prancing-wren.md`) ──
-  // CTR doesn't use the padding overlay (no padding needed; the keystream
-  // is truncated to plaintext length). The byte-length range is purely the
-  // UI cap. Same on encrypt and decrypt (CTR is symmetric).
-  if (cipherMode === "ctr") {
-    return { min: 0, max: MAX_BYTES };
   }
 
   // ── Single-block ───────────────────────────────────────────────────────

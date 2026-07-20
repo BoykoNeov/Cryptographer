@@ -2680,6 +2680,7 @@ const NO_PARAMS_PORT_NATIVE_TYPES = new Set([
   "bytes-to-state@1",
   "append-be64-length@1",
   "keccak.theta@1",
+  "increment-counter@1",
 ]);
 
 const portNativeNoParamsLabel = (stepType: string): string => {
@@ -2692,6 +2693,8 @@ const portNativeNoParamsLabel = (stepType: string): string => {
       return "Bridges port-native bytes → runtime state (identity-on-port). No editable parameters; the conversion is driven by the runtime's state codec.";
     case "append-be64-length@1":
       return "Appends the big-endian 64-bit bit-length of the message (FIPS 180-4 §5.1.1). No editable parameters; the length is derived from the input port's byteLength.";
+    case "increment-counter@1":
+      return "Adds one to the counter block, read as a big-endian number (NIST SP 800-38A §6.5). No editable parameters; the counter's width is the cipher's block size, taken from the wired input.";
     case "keccak.theta@1":
       return "θ (theta) — mixes whole columns of the Keccak state (FIPS 202 §3.2.1). No editable parameters; the 5×5×64 geometry is fixed.";
     default:

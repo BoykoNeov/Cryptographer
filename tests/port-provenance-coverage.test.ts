@@ -89,6 +89,10 @@ describe("port-provenance coverage contract", () => {
       "add-mod-16@1",
       "rotate-bits-right@1",
       "shift-bits-right@1",
+      // approximate — CTR's counter +1: the carry cone is exact but reaches
+      // past one byte only 1 increment in 256, so highlighting it would lie
+      // about how much of the tail actually contributes
+      "increment-counter@1",
       // approximate — per-lane bit rotation (Keccak ρ, SHA-3)
       "rotate-lanes@1",
       // approximate — RSA big-integer arithmetic (carries/borrows mix all bytes)
