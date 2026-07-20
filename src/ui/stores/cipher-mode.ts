@@ -133,6 +133,13 @@ export const SUPPORTED_CIPHER_MODES_BY_CIPHER: Readonly<Record<Cipher, readonly 
   // message must fit into. Anything that resolves a cipher's default mode must
   // therefore read this list rather than assume "single-block" exists.
   chacha20: ["stream"],
+  // Salsa20 — the second stream cipher, and the test of whether "stream" was
+  // the right abstraction. This row is the ENTIRE cost of that decision: every
+  // predicate below (`isStreamCipher`, `isStreamCipherMode`, `cipherModeUsesIv`,
+  // `defaultCipherModeFor`) derives from this table rather than naming ciphers,
+  // so none of them gains an arm. Had "stream" been modelled as a per-cipher
+  // predicate instead, this cipher would have cost seven edits.
+  salsa20: ["stream"],
 };
 
 /**

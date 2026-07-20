@@ -33,6 +33,7 @@ import { blowfishSpec } from "@/ciphers/blowfish";
 import { chacha20EncryptSpec } from "@/ciphers/chacha20";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { desSpec } from "@/ciphers/des";
+import { salsa20EncryptSpec } from "@/ciphers/salsa20";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { serpent192Spec } from "@/ciphers/serpent-192";
 import { serpent256Spec } from "@/ciphers/serpent-256";
@@ -68,6 +69,7 @@ const encryptSpecs: Record<Cipher, CipherSpec> = {
   // ChaCha20 has no single-block spec — "stream" is its only mode, and that
   // one spec IS the cipher. It is also the only entry here that needs an IV.
   chacha20: chacha20EncryptSpec,
+  salsa20: salsa20EncryptSpec,
 };
 
 /** Run a cipher's encrypt spec on its canonical default PT + key. */
@@ -125,6 +127,13 @@ describe("DEFAULT_CT_BYTES_BY_CIPHER — published-vector anchors (non-circulari
         "07ca0dbf500d6a6156a38e088a22b65e52bc514d16ccf806818ce91ab7793736" +
         "5af90bbf74a35be6b40b8eedf2785e42874d",
     ],
+    // NOTE: Salsa20 is deliberately ABSENT from this list. Its default key and
+    // nonce are a published pair (eSTREAM Set 6, vector 0), but its default
+    // plaintext is this project's own, so the resulting ciphertext is not
+    // itself a published value and would not belong under "literal published
+    // KAT values". Salsa20's non-circularity is established in
+    // `tests/salsa20-kat.test.ts`, at the keystream level where a published
+    // comparison is actually available.
   ];
   for (const [cipher, expected] of anchors) {
     it(`${cipher} default CT matches its published vector`, () => {

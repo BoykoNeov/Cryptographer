@@ -54,6 +54,7 @@ import { buildCtrSpec } from "@/ciphers/modes/ctr";
 import { buildEcbSpec } from "@/ciphers/modes/ecb";
 import { buildOfbSpec } from "@/ciphers/modes/ofb";
 import { rsaDecryptSpec, rsaEncryptSpec } from "@/ciphers/rsa";
+import { salsa20DecryptSpec, salsa20EncryptSpec } from "@/ciphers/salsa20";
 import { serpent128Spec } from "@/ciphers/serpent-128";
 import { serpent128DecryptSpec } from "@/ciphers/serpent-128-decrypt";
 import { serpent192Spec } from "@/ciphers/serpent-192";
@@ -282,6 +283,12 @@ const defaults: Record<Cipher, Partial<Record<CipherMode, Record<Mode, CipherSpe
   // from a mode builder is already inside ChaCha20's own spec.
   chacha20: {
     stream: { encrypt: chacha20EncryptSpec, decrypt: chacha20DecryptSpec },
+  },
+  // Salsa20 — the second coreless row, and structurally identical to the one
+  // above. Both directions get the same spec object shape because a stream
+  // cipher's message meets only an XOR; see `src/ciphers/salsa20.ts`.
+  salsa20: {
+    stream: { encrypt: salsa20EncryptSpec, decrypt: salsa20DecryptSpec },
   },
 };
 

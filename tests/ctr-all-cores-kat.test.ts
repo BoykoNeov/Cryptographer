@@ -53,7 +53,9 @@ import { applyPaddingScheme } from "@/core/spec-mutations";
 import { bytesFromHex, hexFromBytes, makeBytesState } from "@/core/state/bytes";
 import type { AuxValue, CipherSpec } from "@/core/types";
 import { hasBlockCipherCore } from "@/ui/stores/block-cipher-cores";
-import type { Cipher } from "@/ui/stores/cipher";
+// `CIPHER_OPTIONS` is the exported alias for the store's own (unexported)
+// ALL_CIPHERS — the canonical list the local mirror below must match.
+import { CIPHER_OPTIONS as CANONICAL_ALL_CIPHERS, type Cipher } from "@/ui/stores/cipher";
 import { isCipherModeSupported } from "@/ui/stores/cipher-mode";
 import { paddingLimits } from "@/ui/stores/padding";
 import { describe, expect, it } from "vitest";
@@ -95,7 +97,18 @@ const ALL_CIPHERS: readonly Cipher[] = [
   // copy stays a faithful mirror of the `Cipher` union, which is the whole
   // point of it being hand-maintained. The coreless assertion below names it.
   "chacha20",
+  // Salsa20, likewise coreless: the second stream cipher (2026-07-20).
+  "salsa20",
 ];
+
+// The list above is `readonly Cipher[]`, NOT an exhaustive map, so adding a
+// member to the `Cipher` union does NOT make TypeScript flag it here — the
+// mirror simply stops mirroring, and every test below keeps passing while
+// quietly covering one cipher fewer. Salsa20 landed that way and was caught by
+// hand. This assertion is what makes the mirror self-policing.
+it("the hand-maintained cipher list still mirrors the Cipher union", () => {
+  expect([...ALL_CIPHERS].sort()).toEqual([...CANONICAL_ALL_CIPHERS].sort());
+});
 
 // ─── Deterministic per-core test material ─────────────────────────────────────
 
@@ -205,7 +218,7 @@ describe("CTR across every BlockCipherCore", () => {
     // pin is that every cipher WITH a core is covered here, plus an explicit
     // note of who is deliberately excluded.
     const coreless = ALL_CIPHERS.filter((c) => !hasBlockCipherCore(c));
-    expect(coreless).toEqual(["chacha20"]);
+    expect(coreless).toEqual(["chacha20", "salsa20"]);
     expect(CORES.length).toBe(ALL_CIPHERS.length - coreless.length);
   });
 

@@ -64,6 +64,24 @@ export type TwofishCipher = "twofish";
  * `docs/plans/fluffy-orbiting-shannon.md`.
  */
 export type ChaChaCipher = "chacha20";
+
+/**
+ * Salsa20 — the SECOND stream cipher, and ChaCha20's direct ancestor.
+ *
+ * Everything the ChaCha20 note above says about stream ciphers applies here
+ * unchanged, which is the point: Salsa20 is the evidence that `"stream"` was
+ * correctly modelled as a sixth `CipherMode` rather than a per-cipher
+ * predicate. It costs exactly one row in `SUPPORTED_CIPHER_MODES_BY_CIPHER`
+ * and ZERO new arms on `isStreamCipher` / `isStreamCipherMode` /
+ * `cipherModeUsesIv` / `defaultCipherModeFor` — all of which already derive
+ * from that row.
+ *
+ * Where it differs from ChaCha20: its state is assembled on the DIAGONAL from
+ * eight runs rather than four contiguous regions, its nonce is 8 bytes rather
+ * than 12, and its counter is 64 bits rather than 32 (so the IV is still 16
+ * bytes, but split 8/8 instead of 4/12). `docs/plans/shiny-wandering-conway.md`.
+ */
+export type SalsaCipher = "salsa20";
 export type Cipher =
   | AesCipher
   | SpeckCipher
@@ -71,7 +89,8 @@ export type Cipher =
   | DesCipher
   | BlowfishCipher
   | TwofishCipher
-  | ChaChaCipher;
+  | ChaChaCipher
+  | SalsaCipher;
 
 /**
  * Hash family — non-cipher cryptographic primitives that consume a message
@@ -148,6 +167,7 @@ const ALL_CIPHERS: readonly Cipher[] = [
   "blowfish",
   "twofish",
   "chacha20",
+  "salsa20",
 ];
 
 /**
@@ -326,6 +346,7 @@ export const CIPHER_LABELS: Record<Cipher, string> = {
   blowfish: "Blowfish",
   twofish: "Twofish",
   chacha20: "ChaCha20",
+  salsa20: "Salsa20",
 };
 
 export const CIPHER_OPTIONS = ALL_CIPHERS;
@@ -362,6 +383,8 @@ export const CIPHER_DESCRIPTIONS: Record<Cipher, string> = {
     "Twofish (Schneier et al., 1998) — 16-round Feistel; 128-bit block, key-dependent S-boxes, MDS + PHT.",
   chacha20:
     "ChaCha20 (Bernstein, 2008; RFC 8439) — stream cipher; 20 ARX rounds over a 4×4 word state, no S-box, no padding.",
+  salsa20:
+    "Salsa20/20 (Bernstein, 2005) — stream cipher; ChaCha20's ancestor, 20 ARX rounds over a diagonally-assembled 4×4 word state.",
 };
 
 /** Per-hash one-liner. Mirrors `HASH_LABELS`. */
@@ -443,6 +466,8 @@ export const CIPHER_HISTORY: Record<Cipher, string> = {
     "Schneier, Kelsey, Whiting, Wagner, Hall & Ferguson's AES finalist (1998); Blowfish's successor, unpatented and a strong runner-up to Rijndael.",
   chacha20:
     "Daniel J. Bernstein's 2008 refinement of his Salsa20; standardized as RFC 8439 and paired with Poly1305 in TLS 1.3, WireGuard and OpenSSH — the fast, constant-time answer to AES on hardware without AES instructions.",
+  salsa20:
+    "Bernstein's 2005 submission to the eSTREAM project, which selected it for its final software portfolio in 2008; the design ChaCha20 refines, and still the reference for the ARX stream-cipher family.",
 };
 
 /** Per-hash historical one-liner. Mirrors `HASH_DESCRIPTIONS`. */
@@ -556,6 +581,15 @@ export const DEFAULT_KEY_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
     0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
   ]),
+  // Salsa20's 256-bit key, from the eSTREAM/ECRYPT verified test vectors
+  // (Set 6, vector 0). Paired with that vector's nonce in
+  // DEFAULT_IV_BYTES_BY_CIPHER, so the keystream the app generates on its first
+  // Run is a published one — the same "first impression IS a test vector"
+  // choice AES-128 makes with FIPS-197 §C.1 and ChaCha20 with RFC 8439 §2.4.2.
+  salsa20: new Uint8Array([
+    0x00, 0x53, 0xa6, 0xf9, 0x4c, 0x9f, 0xf2, 0x45, 0x98, 0xeb, 0x3e, 0x91, 0xe4, 0x37, 0x8a, 0xdd,
+    0x30, 0x83, 0xd6, 0x29, 0x7c, 0xcf, 0x22, 0x75, 0xc8, 0x1b, 0x6e, 0xc1, 0x14, 0x67, 0xba, 0x0d,
+  ]),
 };
 
 /**
@@ -609,6 +643,13 @@ export const DEFAULT_PT_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
   // long as the plaintext with no padding anywhere.
   chacha20: new TextEncoder().encode(
     "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.",
+  ),
+  // 108 bytes — deliberately NOT a multiple of the 64-byte block, for the same
+  // reason ChaCha20's default is 114: the default view should demonstrate the
+  // property that distinguishes a stream cipher, with a short final block whose
+  // keystream is trimmed to match and no padding anywhere.
+  salsa20: new TextEncoder().encode(
+    "Salsa20 builds a keystream from the key, the nonce and a counter; the message meets it just once, at an XOR.",
   ),
 };
 
@@ -691,6 +732,20 @@ export const DEFAULT_CT_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
     0x5a, 0xf9, 0x0b, 0xbf, 0x74, 0xa3, 0x5b, 0xe6, 0xb4, 0x0b, 0x8e, 0xed, 0xf2, 0x78, 0x5e, 0x42,
     0x87, 0x4d,
   ]),
+  // Salsa20: the default plaintext under the eSTREAM Set 6 vector-0 key and
+  // nonce, counter starting at 0. Generated offline from pycryptodome's
+  // `Crypto.Cipher.Salsa20` — `node:crypto` has no `salsa20`, so unlike every
+  // other row in this table there is no live reference to check it against at
+  // run time. See `tests/salsa20-kat.test.ts` for the pinned vectors.
+  salsa20: new Uint8Array([
+    0xa6, 0x9b, 0xb9, 0x4c, 0x18, 0xcb, 0xef, 0x78, 0xa6, 0xdb, 0xc9, 0xbc, 0x89, 0xe9, 0xb6, 0x60,
+    0xd2, 0x13, 0x74, 0x55, 0xd4, 0x6c, 0x7f, 0x33, 0x3a, 0x2f, 0x2a, 0x2e, 0x73, 0xf9, 0x1d, 0xca,
+    0x86, 0x24, 0x81, 0xb3, 0xc3, 0x07, 0x1a, 0xda, 0x57, 0xc0, 0x02, 0xab, 0x39, 0x4a, 0x18, 0x53,
+    0x48, 0xd7, 0x75, 0x10, 0x8f, 0xce, 0xa5, 0xf2, 0x55, 0xec, 0xac, 0xf7, 0xdf, 0x5c, 0x6e, 0x03,
+    0xbd, 0x98, 0x8a, 0x4f, 0x23, 0x63, 0xc7, 0x7b, 0x6d, 0x27, 0xd3, 0x9a, 0x52, 0x42, 0x66, 0x47,
+    0xe1, 0x9f, 0xcd, 0x9c, 0x3a, 0x96, 0xf6, 0x78, 0x32, 0xce, 0xb2, 0xb8, 0xce, 0xe1, 0xfa, 0x43,
+    0x17, 0xfe, 0xb0, 0x2b, 0x99, 0x9d, 0x7c, 0x38, 0x69, 0x0b, 0x34, 0x69,
+  ]),
 };
 
 /**
@@ -719,6 +774,42 @@ export const DEFAULT_IV_BYTES_BY_CIPHER: Partial<Record<Cipher, Uint8Array>> = {
     // 96-bit nonce
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4a, 0x00, 0x00, 0x00, 0x00,
   ]),
+  // Salsa20's 16 IV bytes are also a counter followed by a nonce, but split
+  // 8/8 rather than ChaCha20's 4/12 — so the generic `defaultIvOfWidth` would
+  // start the counter at 0x0706050403020100 and reproduce no published vector.
+  //
+  // The counter starts at 0 here, NOT at 1. That is the opposite of ChaCha20's
+  // row directly above, and it is deliberate: RFC 8439's worked examples start
+  // at 1, but standard Salsa20 implementations — including the pycryptodome
+  // that generated every vector in `tests/salsa20-kat.test.ts` — start at 0 and
+  // offer no API to start elsewhere. Carrying ChaCha20's convention across
+  // would silently decouple this cipher from its only oracle.
+  salsa20: new Uint8Array([
+    // counter = 0, little-endian, 64 bits wide
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    // 64-bit nonce — eSTREAM Set 6, vector 0
+    0x0d, 0x74, 0xdb, 0x42, 0xa9, 0x10, 0x77, 0xde,
+  ]),
+};
+
+/**
+ * Caption naming the internal split of a structured IV, for the ciphers that
+ * have one.
+ *
+ * Both stream ciphers pack a counter and a nonce into the same 16-byte IV
+ * field, and **they disagree about where the boundary is** — ChaCha20 splits
+ * 4/12 with the counter starting at 1, Salsa20 splits 8/8 starting at 0. The
+ * counter is precisely the part whose value silently changes the answer while
+ * looking perfectly plausible, so a caption that named the wrong bytes would be
+ * worse than none at all.
+ *
+ * This table exists because the caption was originally hardcoded to ChaCha20's
+ * split behind a generic `isStreamCipher` gate — correct while there was one
+ * stream cipher, and wrong in every particular the moment Salsa20 landed.
+ */
+export const IV_LAYOUT_CAPTION_BY_CIPHER: Partial<Record<Cipher, string>> = {
+  chacha20: "bytes 0–3 = block counter (little-endian, starts at 1) · bytes 4–15 = 96-bit nonce",
+  salsa20: "bytes 0–7 = block counter (little-endian, starts at 0) · bytes 8–15 = 64-bit nonce",
 };
 
 // ─── Hash defaults ───────────────────────────────────────────────────────

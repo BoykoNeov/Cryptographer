@@ -91,8 +91,10 @@ export const CHACHA20_IV_BYTES = 16;
  * RFC 8439 §2.3 gives them as `0x61707865, 0x3320646e, 0x79622d32, 0x6b206574`
  * — which is the little-endian reading of the ASCII string "expand 32-byte k".
  * Because words travel big-endian here, the bytes below are each word's
- * big-endian encoding, so reading them as ASCII gives the string back directly:
- * "expa" "nd 3" "2-by" "te k".
+ * big-endian encoding — which is the ASCII group REVERSED. Read as text the
+ * array spells "apxe" "3 dn" "yb-2" "k et"; reversing each group again recovers
+ * "expa" "nd 3" "2-by" "te k". (This comment previously claimed the array read
+ * back as the string directly, which is wrong: 0x61 is 'a', not 'e'.)
  *
  * These are a nothing-up-my-sleeve number: a fixed, public, obviously
  * arbitrary value that could not have been chosen to hide a weakness. They

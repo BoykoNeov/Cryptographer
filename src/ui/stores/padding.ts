@@ -133,6 +133,7 @@ const singleBlockLimits = (cipher: Cipher): { min: number; max: number } => {
     // path still gets a truthful bound: any length ≥ 1, no padding, no
     // block-multiple requirement.
     case "chacha20":
+    case "salsa20":
       return { min: 1, max: Number.POSITIVE_INFINITY };
     default: {
       const _exhaustive: never = cipher;

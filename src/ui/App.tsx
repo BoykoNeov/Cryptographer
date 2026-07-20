@@ -101,6 +101,7 @@ import {
   HASH_LABELS,
   HASH_OPTIONS,
   type Hash,
+  IV_LAYOUT_CAPTION_BY_CIPHER,
   describeAlgorithm,
   historyOfAlgorithm,
   isAsymmetric,
@@ -1856,15 +1857,19 @@ export const App = () => {
               format={fmt()}
               blockByteLength={ivByteLengthFor(cipher()) ?? DEFAULT_IV_LENGTH}
             />
-            {/* ChaCha20's IV is the only one with internal structure — every
-                other mode's is an opaque block. Naming the split is the whole
-                reason the single field is acceptable here: without it the user
-                cannot tell which bytes are the counter, and the counter is
-                exactly the part whose value silently changes the answer. */}
-            <Show when={isStreamCipher(cipher())}>
-              <span class="shake-block-caption">
-                bytes 0–3 = block counter (little-endian, starts at 1) · bytes 4–15 = 96-bit nonce
-              </span>
+            {/* The stream ciphers' IVs are the only ones with internal
+                structure — every other mode's is an opaque block. Naming the
+                split is the whole reason the single field is acceptable here:
+                without it the user cannot tell which bytes are the counter, and
+                the counter is exactly the part whose value silently changes the
+                answer.
+
+                The caption is per-cipher because the two stream ciphers do NOT
+                agree on the split: ChaCha20 is 4/12 starting at 1, Salsa20 is
+                8/8 starting at 0. This was a ChaCha20-specific string behind a
+                generic `isStreamCipher` gate until Salsa20 landed. */}
+            <Show when={IV_LAYOUT_CAPTION_BY_CIPHER[cipher()]}>
+              {(caption) => <span class="shake-block-caption">{caption()}</span>}
             </Show>
           </div>
         </Show>

@@ -68,7 +68,7 @@ const CORED_CIPHERS = [
  * "single-block" mode, which is what distinguishes it from the coreless slot
  * above — a stream cipher has no block the message must fit into.
  */
-const STREAM_CIPHERS = ["chacha20"] as const satisfies readonly Cipher[];
+const STREAM_CIPHERS = ["chacha20", "salsa20"] as const satisfies readonly Cipher[];
 
 describe("cipher-mode × cipher support matrix", () => {
   it("every cipher with a core supports single-block + ecb + cbc + ctr", () => {

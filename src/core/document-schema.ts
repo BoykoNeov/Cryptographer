@@ -62,6 +62,7 @@ export const CIPHER_IDS = [
   // cipher, and the first entry here whose only supported mode is "stream";
   // same exhaustiveness-check role as the entries above.
   "chacha20",
+  "salsa20",
   // Twofish — `docs/plans/twofish.md`. Single fixed 128-bit variant; same
   // exhaustiveness-check role as the entries above.
   "twofish",

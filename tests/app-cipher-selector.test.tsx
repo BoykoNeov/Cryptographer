@@ -83,7 +83,7 @@ describe("App — cipher selector", () => {
     resetAll();
   });
 
-  it("renders every cipher variant in the dropdown (11 block ciphers + 1 stream cipher)", () => {
+  it("renders every cipher variant in the dropdown (11 block ciphers + 2 stream ciphers)", () => {
     const { container } = render(() => <App />);
     const select = findSelectByLabel(container, "cipher");
     const values = Array.from(select.querySelectorAll("option")).map((o) => o.value);
@@ -109,6 +109,10 @@ describe("App — cipher selector", () => {
       // what changes is that selecting it lands the mode selector in "stream"
       // and disables it, and suppresses the padding selector entirely.
       "chacha20",
+      // Salsa20 (`docs/plans/shiny-wandering-conway.md`) — the second stream
+      // cipher, and ChaCha20's ancestor. Behaves identically in this dropdown:
+      // mode selector pinned to "stream" and disabled, padding suppressed.
+      "salsa20",
     ]);
   });
 
