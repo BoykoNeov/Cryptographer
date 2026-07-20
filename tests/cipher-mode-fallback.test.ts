@@ -29,7 +29,7 @@
 
 import { hasBlockCipherCore } from "@/ui/stores/block-cipher-cores";
 import { CIPHER_OPTIONS, type Cipher, isAesCipher } from "@/ui/stores/cipher";
-import { isCipherModeSupported } from "@/ui/stores/cipher-mode";
+import { defaultCipherModeFor, isCipherModeSupported } from "@/ui/stores/cipher-mode";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -58,6 +58,18 @@ const CORED_CIPHERS = [
   "twofish",
 ] as const satisfies readonly Cipher[];
 
+/**
+ * Stream ciphers — the third class, and the one that broke this file's original
+ * assumption that every entry in the `Cipher` union is a block cipher.
+ *
+ * A stream cipher has no `BlockCipherCore` (like CORELESS_CIPHERS) but is NOT
+ * pending one: it generates its own keystream and contains its own counter, so
+ * the modes of operation simply do not apply to it. It also has no
+ * "single-block" mode, which is what distinguishes it from the coreless slot
+ * above — a stream cipher has no block the message must fit into.
+ */
+const STREAM_CIPHERS = ["chacha20"] as const satisfies readonly Cipher[];
+
 describe("cipher-mode × cipher support matrix", () => {
   it("every cipher with a core supports single-block + ecb + cbc + ctr", () => {
     // Phase B extended ECB/CBC from AES-128 to all three AES variants; Phase C
@@ -84,7 +96,7 @@ describe("cipher-mode × cipher support matrix", () => {
     // from the union rather than hand-listed, so it cannot drift.
     // `CIPHER_OPTIONS` is the `Cipher` union itself — hashes and RSA live in
     // separate unions, so every entry is a block cipher and needs a list.
-    const listed = new Set<string>([...CORED_CIPHERS, ...CORELESS_CIPHERS]);
+    const listed = new Set<string>([...CORED_CIPHERS, ...CORELESS_CIPHERS, ...STREAM_CIPHERS]);
     expect(CIPHER_OPTIONS.filter((c) => !listed.has(c))).toEqual([]);
   });
 
@@ -106,10 +118,30 @@ describe("cipher-mode × cipher support matrix", () => {
     // A cipher with a core but no `defaults` entry would show an enabled
     // dropdown option that silently falls back to single-block; a cipher with
     // a `defaults` entry but no core cannot have been built at all.
-    for (const cipher of [...CORED_CIPHERS, ...CORELESS_CIPHERS]) {
+    for (const cipher of [...CORED_CIPHERS, ...CORELESS_CIPHERS, ...STREAM_CIPHERS]) {
       expect(isCipherModeSupported(cipher, "ecb")).toBe(hasBlockCipherCore(cipher));
       expect(isCipherModeSupported(cipher, "cbc")).toBe(hasBlockCipherCore(cipher));
       expect(isCipherModeSupported(cipher, "ctr")).toBe(hasBlockCipherCore(cipher));
+    }
+  });
+
+  it("a stream cipher runs ONLY its own stream mode — no core, no single-block", () => {
+    // The distinction that earns STREAM_CIPHERS its own list rather than a seat
+    // in CORELESS_CIPHERS: those await a core and meanwhile run single-block,
+    // while a stream cipher will never have one and has no single-block mode to
+    // fall back to. Anything resolving a default mode must therefore read the
+    // per-cipher list rather than assume "single-block" is always present.
+    for (const cipher of STREAM_CIPHERS) {
+      expect(hasBlockCipherCore(cipher)).toBe(false);
+      expect(isCipherModeSupported(cipher, "stream")).toBe(true);
+      expect(isCipherModeSupported(cipher, "single-block")).toBe(false);
+      expect(isCipherModeSupported(cipher, "ecb")).toBe(false);
+      expect(isCipherModeSupported(cipher, "cbc")).toBe(false);
+      expect(isCipherModeSupported(cipher, "ctr")).toBe(false);
+      expect(isCipherModeSupported(cipher, "cfb")).toBe(false);
+      expect(isCipherModeSupported(cipher, "ofb")).toBe(false);
+      // And the fallback resolves INTO stream rather than to the old constant.
+      expect(defaultCipherModeFor(cipher)).toBe("stream");
     }
   });
 

@@ -155,10 +155,35 @@ export const setIvBytes = (bytes: Uint8Array, blockByteLength?: number): void =>
  *   there is no block cipher (a hash, RSA, a coreless cipher) — then the IV is
  *   inert and left alone.
  */
-export const reconcileIvWidth = (blockByteLength: number | undefined): void => {
+/**
+ * The IV a cipher should start life with: its registered canonical default if
+ * it has one, else the generic ascending pattern at the given width.
+ *
+ * Exists so the App can compare "is the field still holding the PREVIOUS
+ * cipher's default?" using the same rule that produced it — the sacred-input
+ * policy the key and plaintext fields already follow. `reconcileIvWidth` alone
+ * is not enough for that job: it short-circuits when the width is unchanged,
+ * so switching between two 16-byte-IV ciphers would silently keep the old
+ * bytes. Harmless when the IV is an opaque block; wrong for ChaCha20, whose
+ * first four bytes are a counter, and where inheriting AES's `00 01 02 03`
+ * starts it at 0x03020100 and quietly reproduces no published vector.
+ */
+export const canonicalIvFor = (byteLength: number, registeredDefault?: Uint8Array): Uint8Array =>
+  registeredDefault ?? defaultIvOfWidth(byteLength);
+
+export const reconcileIvWidth = (
+  blockByteLength: number | undefined,
+  canonicalDefault?: Uint8Array,
+): void => {
   if (blockByteLength === undefined) return;
   if (ivBytes().length === blockByteLength) return;
-  setIvBytes(defaultIvOfWidth(blockByteLength), blockByteLength);
+  // `canonicalDefault` lets a caller override the generic ascending pattern for
+  // a cipher whose IV has internal structure. ChaCha20 is the only one today:
+  // its first four bytes are a little-endian block counter, and the generic
+  // `00 01 02 03 …` would silently start it at 0x03020100 — legal, consistent,
+  // and matching no published test vector. The store still knows nothing about
+  // which cipher is active; the caller supplies the bytes.
+  setIvBytes(canonicalDefault ?? defaultIvOfWidth(blockByteLength), blockByteLength);
 };
 
 /**

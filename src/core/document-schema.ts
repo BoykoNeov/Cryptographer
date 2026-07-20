@@ -58,6 +58,10 @@ export const CIPHER_IDS = [
   // is what satisfies the `assertCipherCoverage` exhaustiveness check against
   // the `Cipher` union in `ui/stores/cipher.ts`.
   "blowfish",
+  // ChaCha20 — `docs/plans/fluffy-orbiting-shannon.md`. The first stream
+  // cipher, and the first entry here whose only supported mode is "stream";
+  // same exhaustiveness-check role as the entries above.
+  "chacha20",
   // Twofish — `docs/plans/twofish.md`. Single fixed 128-bit variant; same
   // exhaustiveness-check role as the entries above.
   "twofish",
@@ -106,6 +110,10 @@ export const CIPHER_MODES = [
   "ctr",
   "cfb",
   "ofb",
+  // ChaCha20's mode. Not a mode of operation like the six above — a stream
+  // cipher IS its own keystream rule — but it rides the same axis so that
+  // padding-disengagement and IV presence fall out of the existing predicates.
+  "stream",
 ] as const satisfies readonly CipherMode[];
 
 export const PADDING_SCHEMES = [

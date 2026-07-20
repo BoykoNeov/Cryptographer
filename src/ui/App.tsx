@@ -72,7 +72,11 @@ import { TwofishRoundDiagram } from "./components/TwofishRoundDiagram";
 // Idempotent.
 import "./narration/index";
 import { clearDirty, setAutoRerun, setDirty, useAutoRerun, useDirty } from "./stores/auto-rerun";
-import { blockByteLengthFor, hasBlockCipherCore } from "./stores/block-cipher-cores";
+import {
+  blockByteLengthFor,
+  hasBlockCipherCore,
+  ivByteLengthFor,
+} from "./stores/block-cipher-cores";
 import {
   ASYMMETRIC_DESCRIPTIONS,
   ASYMMETRIC_LABELS,
@@ -85,6 +89,7 @@ import {
   type Category,
   type Cipher,
   DEFAULT_CT_BYTES_BY_CIPHER,
+  DEFAULT_IV_BYTES_BY_CIPHER,
   DEFAULT_KEY_BYTES_BY_ASYMMETRIC,
   DEFAULT_KEY_BYTES_BY_CIPHER,
   DEFAULT_KEY_BYTES_BY_HASH,
@@ -111,7 +116,9 @@ import {
   type CipherMode,
   SUPPORTED_CIPHER_MODES,
   cipherModeUsesIv,
+  hasCipherModeChoice,
   isCipherModeSupported,
+  isStreamCipher,
   isStreamCipherMode,
   useCipherMode,
 } from "./stores/cipher-mode";
@@ -126,7 +133,13 @@ import {
 } from "./stores/edit-history";
 import { setByteFormat, useByteFormat } from "./stores/format";
 import { pushSnapshot, useHistory } from "./stores/history";
-import { DEFAULT_IV_LENGTH, reconcileIvWidth, useIvBytes } from "./stores/iv";
+import {
+  DEFAULT_IV_LENGTH,
+  canonicalIvFor,
+  reconcileIvWidth,
+  setIvBytes,
+  useIvBytes,
+} from "./stores/iv";
 import { installKeyboardShortcuts } from "./stores/keyboard";
 import { getLayoutForSpec, hasUserLayout, setLayoutForSpec } from "./stores/layout";
 import {
@@ -1078,16 +1091,37 @@ export const App = () => {
     if (currentInput && bytesEqual(currentInput, defaultForMode[prev])) {
       setInputText(formatBytes(defaultForMode[next], fmt()));
     }
+    // IV field: the SAME sacred-input policy as the key and plaintext swaps
+    // above, and it needs stating separately because width reconciliation
+    // alone does not cover it. `reconcileIvWidth` only acts when the width
+    // changes, so switching between two ciphers that both want a 16-byte IV
+    // (AES → ChaCha20) would keep the old bytes. That is harmless while an IV
+    // is an opaque block, and wrong for ChaCha20: inheriting AES's
+    // `00 01 02 03 …` sets its block counter to 0x03020100 rather than 1, and
+    // the app's headline default silently stops being RFC 8439 §2.4.2.
+    const prevIv = canonicalIvFor(
+      ivByteLengthFor(prev) ?? DEFAULT_IV_LENGTH,
+      DEFAULT_IV_BYTES_BY_CIPHER[prev],
+    );
+    const nextIv = canonicalIvFor(
+      ivByteLengthFor(next) ?? DEFAULT_IV_LENGTH,
+      DEFAULT_IV_BYTES_BY_CIPHER[next],
+    );
+    const ivIsPreviousDefault = bytesEqual(ivBytes(), prevIv);
     // C3 stack boundary: a cipher switch rebuilds the spec off a selector that
     // isn't in the undo snapshot — suppress the rebuild, drop the history. (The
     // input/key smart-swaps above write only the text signals, which the
     // capture observer doesn't watch, so they stay outside the boundary.)
     withBoundaryReset(() => {
       setCipher(next);
-      // The IV must be exactly one block wide, and the new cipher's block may
-      // be a different size (AES 16 ↔ Blowfish 8). Inside the boundary because
-      // `ivBytes` IS in the undo capture list.
-      reconcileIvWidth(blockByteLengthFor(next));
+      if (ivIsPreviousDefault) {
+        // Untouched by the user — hand it the new cipher's canonical IV.
+        setIvBytes(nextIv, nextIv.length);
+      } else {
+        // User-typed: preserve it, and only correct the width if the new
+        // cipher needs a different one (AES 16 ↔ Blowfish 8).
+        reconcileIvWidth(ivByteLengthFor(next), DEFAULT_IV_BYTES_BY_CIPHER[next]);
+      }
     });
   };
 
@@ -1657,77 +1691,47 @@ export const App = () => {
                   // cipher-change-only fix misses: land on Blowfish in
                   // single-block (where the IV is inert), then flip to CBC —
                   // no cipher change fires, but the IV is suddenly load-bearing.
-                  reconcileIvWidth(blockByteLengthFor(cipher()));
+                  reconcileIvWidth(ivByteLengthFor(cipher()), DEFAULT_IV_BYTES_BY_CIPHER[cipher()]);
                 })
               }
-              disabled={!hasBlockCipherCore(cipher())}
+              // A cipher offers a mode choice if it has a core (the eleven
+              // block ciphers) OR if it is a stream cipher, whose single
+              // "stream" entry must be selectable rather than greyed out.
+              // This is the one site that genuinely has to ask about the
+              // CIPHER — it runs before any mode is settled. Everything
+              // downstream asks `isStreamCipherMode` about the mode instead.
+              disabled={!hasCipherModeChoice(cipher())}
               title={
-                hasBlockCipherCore(cipher())
-                  ? "Block-cipher mode of operation. 'single block' keeps the canonical FIPS-197 single-block trace. ECB encrypts each block independently (educational baseline — the Tux-image leak). CBC chains blocks via the IV + previous-ciphertext XOR so identical plaintext blocks produce different ciphertext. CTR is designed for but not built."
-                  : `Modes of operation need a cipher whose body can read its block from the loop — ${CIPHER_LABELS[cipher()]} runs as a single-block cipher in this build.`
+                isStreamCipher(cipher())
+                  ? `${CIPHER_LABELS[cipher()]} is a stream cipher — it generates its own keystream and contains its own counter, so the modes of operation that repeat a block cipher over a long message do not apply to it.`
+                  : hasBlockCipherCore(cipher())
+                    ? "Block-cipher mode of operation. 'single block' keeps the canonical FIPS-197 single-block trace. ECB encrypts each block independently (educational baseline — the Tux-image leak). CBC chains blocks via the IV + previous-ciphertext XOR so identical plaintext blocks produce different ciphertext. CTR/CFB/OFB build a keystream and XOR it with the message."
+                    : `Modes of operation need a cipher whose body can read its block from the loop — ${CIPHER_LABELS[cipher()]} runs as a single-block cipher in this build.`
               }
             >
-              <option value="single-block">{CIPHER_MODE_LABELS["single-block"]}</option>
-              <option
-                value="ecb"
-                disabled={
-                  !(SUPPORTED_CIPHER_MODES as readonly string[]).includes("ecb") ||
-                  !isCipherModeSupported(cipher(), "ecb")
-                }
+              {/* Rendered from the mode list rather than one hardcoded
+                  <option> apiece — six near-identical blocks was already a
+                  copy-paste hazard, and "stream" made it seven. The filter
+                  keeps the two classes apart: a stream cipher offers only
+                  "stream", and a block cipher never shows it, because
+                  "stream" is not a mode of operation a block cipher could be
+                  put into. Within a class, an unsupported mode is still
+                  SHOWN but disabled, which is the affordance that tells the
+                  user a combination exists and simply isn't wired yet. */}
+              <For
+                each={SUPPORTED_CIPHER_MODES.filter((m) =>
+                  isStreamCipher(cipher()) ? m === "stream" : m !== "stream",
+                )}
               >
-                {CIPHER_MODE_LABELS.ecb}
-                {hasBlockCipherCore(cipher()) && !isCipherModeSupported(cipher(), "ecb")
-                  ? " (not wired up for this cipher yet)"
-                  : ""}
-              </option>
-              <option
-                value="cbc"
-                disabled={
-                  !(SUPPORTED_CIPHER_MODES as readonly string[]).includes("cbc") ||
-                  !isCipherModeSupported(cipher(), "cbc")
-                }
-              >
-                {CIPHER_MODE_LABELS.cbc}
-                {hasBlockCipherCore(cipher()) && !isCipherModeSupported(cipher(), "cbc")
-                  ? " (not wired up for this cipher yet)"
-                  : ""}
-              </option>
-              <option
-                value="ctr"
-                disabled={
-                  !(SUPPORTED_CIPHER_MODES as readonly string[]).includes("ctr") ||
-                  !isCipherModeSupported(cipher(), "ctr")
-                }
-              >
-                {CIPHER_MODE_LABELS.ctr}
-                {hasBlockCipherCore(cipher()) && !isCipherModeSupported(cipher(), "ctr")
-                  ? " (not wired up for this cipher yet)"
-                  : ""}
-              </option>
-              <option
-                value="cfb"
-                disabled={
-                  !(SUPPORTED_CIPHER_MODES as readonly string[]).includes("cfb") ||
-                  !isCipherModeSupported(cipher(), "cfb")
-                }
-              >
-                {CIPHER_MODE_LABELS.cfb}
-                {hasBlockCipherCore(cipher()) && !isCipherModeSupported(cipher(), "cfb")
-                  ? " (not wired up for this cipher yet)"
-                  : ""}
-              </option>
-              <option
-                value="ofb"
-                disabled={
-                  !(SUPPORTED_CIPHER_MODES as readonly string[]).includes("ofb") ||
-                  !isCipherModeSupported(cipher(), "ofb")
-                }
-              >
-                {CIPHER_MODE_LABELS.ofb}
-                {hasBlockCipherCore(cipher()) && !isCipherModeSupported(cipher(), "ofb")
-                  ? " (not wired up for this cipher yet)"
-                  : ""}
-              </option>
+                {(m) => (
+                  <option value={m} disabled={!isCipherModeSupported(cipher(), m)}>
+                    {CIPHER_MODE_LABELS[m]}
+                    {hasBlockCipherCore(cipher()) && !isCipherModeSupported(cipher(), m)
+                      ? " (not wired up for this cipher yet)"
+                      : ""}
+                  </option>
+                )}
+              </For>
             </select>
           </label>
           <label>
@@ -1849,8 +1853,18 @@ export const App = () => {
           <div class="data-field">
             <IvInput
               format={fmt()}
-              blockByteLength={blockByteLengthFor(cipher()) ?? DEFAULT_IV_LENGTH}
+              blockByteLength={ivByteLengthFor(cipher()) ?? DEFAULT_IV_LENGTH}
             />
+            {/* ChaCha20's IV is the only one with internal structure — every
+                other mode's is an opaque block. Naming the split is the whole
+                reason the single field is acceptable here: without it the user
+                cannot tell which bytes are the counter, and the counter is
+                exactly the part whose value silently changes the answer. */}
+            <Show when={isStreamCipher(cipher())}>
+              <span class="shake-block-caption">
+                bytes 0–3 = block counter (little-endian, starts at 1) · bytes 4–15 = 96-bit nonce
+              </span>
+            </Show>
           </div>
         </Show>
         {/* Result line sits adjacent to plaintext/key in the inputs row

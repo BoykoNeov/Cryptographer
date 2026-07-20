@@ -48,7 +48,7 @@
 import { createSignal } from "solid-js";
 import type { Cipher } from "./cipher";
 
-export type CipherMode = "single-block" | "ecb" | "cbc" | "ctr" | "cfb" | "ofb";
+export type CipherMode = "single-block" | "ecb" | "cbc" | "ctr" | "cfb" | "ofb" | "stream";
 
 // All four SP 800-38A confidentiality modes ship, alongside single-block. ECB
 // and CBC arrived with the cipher-agnostic mode machine; CTR followed, built
@@ -58,6 +58,15 @@ export type CipherMode = "single-block" | "ecb" | "cbc" | "ctr" | "cfb" | "ofb";
 // keystream leaves and CBC's feedback asymmetry. OFB is cheaper again — CFB's
 // wiring with one wire moved and the direction branch DELETED, and it needed no
 // new predicate either, only a fifth arm on the two CFB extracted.
+// "stream" is the odd one out and deliberately so. The other six are modes of
+// OPERATION — rules for repeating a block cipher over a long message, any of
+// which can be applied to any core. "stream" is not a rule applied to a cipher;
+// it is what a cipher that generates its own keystream (ChaCha20) already is.
+// It exists as a `CipherMode` rather than as a per-cipher predicate because
+// every downstream question — does this pad? does it use an IV? — is already
+// asked of the MODE at seven call sites. Adding an arm to two predicates is
+// zero new sites; a parallel `isStreamCipher(cipher)` OR'd in at all seven is
+// seven chances to wire six of them and have the seventh fail silently.
 export const SUPPORTED_CIPHER_MODES: readonly CipherMode[] = [
   "single-block",
   "ecb",
@@ -65,6 +74,7 @@ export const SUPPORTED_CIPHER_MODES: readonly CipherMode[] = [
   "ctr",
   "cfb",
   "ofb",
+  "stream",
 ];
 
 /**
@@ -116,6 +126,13 @@ export const SUPPORTED_CIPHER_MODES_BY_CIPHER: Readonly<Record<Cipher, readonly 
   // binding — the input-whitening head — because every subkey already reached
   // its round through aux rather than a port edge into key setup.
   twofish: ["single-block", "ecb", "cbc", "ctr", "cfb", "ofb"],
+  // ChaCha20 — the first cipher whose list does NOT include "single-block",
+  // and the first with exactly one entry. It has no `BlockCipherCore`, so none
+  // of the six modes of operation apply to it; and "single-block" would be a
+  // lie in the persisted document, since a stream cipher has no block the
+  // message must fit into. Anything that resolves a cipher's default mode must
+  // therefore read this list rather than assume "single-block" exists.
+  chacha20: ["stream"],
 };
 
 /**
@@ -137,7 +154,7 @@ export const SUPPORTED_CIPHER_MODES_BY_CIPHER: Readonly<Record<Cipher, readonly 
  * (stores/padding.ts), and the App's padding selector.
  */
 export const isStreamCipherMode = (mode: CipherMode): boolean =>
-  mode === "ctr" || mode === "cfb" || mode === "ofb";
+  mode === "ctr" || mode === "cfb" || mode === "ofb" || mode === "stream";
 
 /**
  * Does this mode read `aux["iv"]`?
@@ -154,10 +171,59 @@ export const isStreamCipherMode = (mode: CipherMode): boolean =>
  * three fails in ways no type check catches.
  */
 export const cipherModeUsesIv = (mode: CipherMode): boolean =>
-  mode === "cbc" || mode === "ctr" || mode === "cfb" || mode === "ofb";
+  mode === "cbc" ||
+  mode === "ctr" ||
+  mode === "cfb" ||
+  mode === "ofb" ||
+  // ChaCha20's IV is the only one with internal structure: a 32-bit
+  // little-endian block counter followed by a 96-bit nonce. One aux slot and
+  // one field still serve, as with the other four — the label carries the
+  // distinction. See `DEFAULT_IV_BYTES_BY_CIPHER` in stores/cipher.ts.
+  mode === "stream";
 
 export const isCipherModeSupported = (cipher: Cipher, mode: CipherMode): boolean =>
   (SUPPORTED_CIPHER_MODES_BY_CIPHER[cipher] as readonly string[]).includes(mode);
+
+/**
+ * Is this cipher a stream cipher — one that generates a keystream itself and
+ * therefore has no `BlockCipherCore` and no modes of operation?
+ *
+ * The ONE question that genuinely has to be asked of the cipher rather than the
+ * mode, because it is asked *before* a mode is known: which mode should a
+ * newly-selected cipher land in, and should the mode selector be enabled at
+ * all. Everything downstream of "we are in mode X" is answered by
+ * `isStreamCipherMode` instead — do not add call sites here that could ask that
+ * one.
+ */
+export const isStreamCipher = (cipher: Cipher): boolean =>
+  SUPPORTED_CIPHER_MODES_BY_CIPHER[cipher].includes("stream");
+
+/**
+ * The mode a cipher lands in when the active one isn't available to it — its
+ * first supported mode.
+ *
+ * Every block cipher's list starts with "single-block", so this returns exactly
+ * what the previously-hardcoded constant did for all eleven of them. ChaCha20
+ * is the first cipher for which that constant would have been wrong: it has no
+ * "single-block" entry, so a hardcoded fallback resolves to a spec that does
+ * not exist and throws.
+ */
+export const defaultCipherModeFor = (cipher: Cipher): CipherMode =>
+  SUPPORTED_CIPHER_MODES_BY_CIPHER[cipher][0] ?? "single-block";
+
+/**
+ * Is there actually a mode CHOICE to make for this cipher — i.e. should the
+ * mode selector be interactive?
+ *
+ * Phrased as "more than one option" rather than "has a core", which is what
+ * the App asked before ChaCha20 existed. The two agreed while every cipher was
+ * a block cipher, and they disagree now in the right direction: ChaCha20's
+ * selector still DISPLAYS "stream" (a disabled `<select>` shows its value), so
+ * the user can see what the cipher is doing, but there is genuinely nothing to
+ * pick and the control says so. The tooltip carries the reason.
+ */
+export const hasCipherModeChoice = (cipher: Cipher): boolean =>
+  SUPPORTED_CIPHER_MODES_BY_CIPHER[cipher].length > 1;
 
 // Default to single-block so the first impression remains the FIPS-197
 // Appendix C.1 round-by-round demo. Session-only — see file header.
@@ -177,6 +243,7 @@ export const CIPHER_MODE_LABELS: Record<CipherMode, string> = {
   ctr: "CTR",
   cfb: "CFB",
   ofb: "OFB",
+  stream: "stream",
 };
 
 /** Test-only reset; production code uses setCipherMode. */

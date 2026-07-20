@@ -30,6 +30,7 @@ import { aes128Spec } from "@/ciphers/aes-128";
 import { aes192Spec } from "@/ciphers/aes-192";
 import { aes256Spec } from "@/ciphers/aes-256";
 import { blowfishSpec } from "@/ciphers/blowfish";
+import { chacha20EncryptSpec } from "@/ciphers/chacha20";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { desSpec } from "@/ciphers/des";
 import { serpent128Spec } from "@/ciphers/serpent-128";
@@ -45,6 +46,7 @@ import {
   CIPHER_OPTIONS,
   type Cipher,
   DEFAULT_CT_BYTES_BY_CIPHER,
+  DEFAULT_IV_BYTES_BY_CIPHER,
   DEFAULT_KEY_BYTES_BY_CIPHER,
   DEFAULT_PT_BYTES_BY_CIPHER,
 } from "@/ui/stores/cipher";
@@ -63,6 +65,9 @@ const encryptSpecs: Record<Cipher, CipherSpec> = {
   des: desSpec,
   blowfish: blowfishSpec,
   twofish: twofishSpec,
+  // ChaCha20 has no single-block spec — "stream" is its only mode, and that
+  // one spec IS the cipher. It is also the only entry here that needs an IV.
+  chacha20: chacha20EncryptSpec,
 };
 
 /** Run a cipher's encrypt spec on its canonical default PT + key. */
@@ -72,6 +77,11 @@ const encryptDefault = (cipher: Cipher): string => {
     bytes: DEFAULT_PT_BYTES_BY_CIPHER[cipher],
   };
   const initialAux = new Map<string, AuxValue>([["key", DEFAULT_KEY_BYTES_BY_CIPHER[cipher]]]);
+  // Ciphers with a structured IV register a canonical one; the block ciphers
+  // above register none and run single-block, where no IV is read. Mirrors
+  // what App.tsx seeds before a run.
+  const iv = DEFAULT_IV_BYTES_BY_CIPHER[cipher];
+  if (iv !== undefined) initialAux.set("iv", iv);
   const trace = runSpec(encryptSpecs[cipher], buildDefaultRegistry(), {
     initialState,
     initialAux,
@@ -105,6 +115,16 @@ describe("DEFAULT_CT_BYTES_BY_CIPHER — published-vector anchors (non-circulari
     ["des", "85e813540f0ab405"], // FIPS 46-3 Appendix B
     ["blowfish", "61f9c3802281b096"], // Eric-Young Blowfish-ECB vector
     ["twofish", "df8451d26e0504bc19b0a93b049e3203"], // Ferguson reference (seq key)
+    // RFC 8439 §2.4.2 — the whole 114-byte ciphertext, under that section's
+    // key, nonce and initial counter of 1. The app's ChaCha20 defaults ARE
+    // that vector, so the first thing a user sees is a published result.
+    [
+      "chacha20",
+      "6e2e359a2568f98041ba0728dd0d6981e97e7aec1d4360c20a27afccfd9fae0b" +
+        "f91b65c5524733ab8f593dabcd62b3571639d624e65152ab8f530c359f0861d8" +
+        "07ca0dbf500d6a6156a38e088a22b65e52bc514d16ccf806818ce91ab7793736" +
+        "5af90bbf74a35be6b40b8eedf2785e42874d",
+    ],
   ];
   for (const [cipher, expected] of anchors) {
     it(`${cipher} default CT matches its published vector`, () => {

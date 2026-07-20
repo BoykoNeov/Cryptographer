@@ -46,13 +46,32 @@ export type BlowfishCipher = "blowfish";
  * suffixes. `docs/plans/twofish.md`.
  */
 export type TwofishCipher = "twofish";
+/**
+ * ChaCha20 (RFC 8439) — the app's first STREAM cipher, and the first cipher
+ * with no `BlockCipherCore` at all.
+ *
+ * Every other member of this union is a block cipher: a keyed permutation on a
+ * fixed-width block, which a mode of operation then repeats over a long
+ * message. ChaCha20 is a different kind of object. It generates a keystream
+ * from (key, nonce, counter) and the message meets that keystream exactly once,
+ * at an XOR — so it needs no mode wrapped around it, contains its own counter,
+ * accepts any message length ≥ 1, and never pads.
+ *
+ * Consequences worth knowing before touching anything cipher-keyed: it is the
+ * first cipher for which `hasBlockCipherCore` is false, the first whose
+ * supported-mode list does NOT include `"single-block"`, and the first whose IV
+ * width is not its block width (16-byte counter‖nonce vs a 64-byte block).
+ * `docs/plans/fluffy-orbiting-shannon.md`.
+ */
+export type ChaChaCipher = "chacha20";
 export type Cipher =
   | AesCipher
   | SpeckCipher
   | SerpentCipher
   | DesCipher
   | BlowfishCipher
-  | TwofishCipher;
+  | TwofishCipher
+  | ChaChaCipher;
 
 /**
  * Hash family — non-cipher cryptographic primitives that consume a message
@@ -128,6 +147,7 @@ const ALL_CIPHERS: readonly Cipher[] = [
   "des",
   "blowfish",
   "twofish",
+  "chacha20",
 ];
 
 /**
@@ -305,6 +325,7 @@ export const CIPHER_LABELS: Record<Cipher, string> = {
   des: "DES",
   blowfish: "Blowfish",
   twofish: "Twofish",
+  chacha20: "ChaCha20",
 };
 
 export const CIPHER_OPTIONS = ALL_CIPHERS;
@@ -339,6 +360,8 @@ export const CIPHER_DESCRIPTIONS: Record<Cipher, string> = {
     "Blowfish (Schneier, 1993) — 16-round Feistel; 64-bit block, key-derived S-boxes (8-byte key here).",
   twofish:
     "Twofish (Schneier et al., 1998) — 16-round Feistel; 128-bit block, key-dependent S-boxes, MDS + PHT.",
+  chacha20:
+    "ChaCha20 (Bernstein, 2008; RFC 8439) — stream cipher; 20 ARX rounds over a 4×4 word state, no S-box, no padding.",
 };
 
 /** Per-hash one-liner. Mirrors `HASH_LABELS`. */
@@ -418,6 +441,8 @@ export const CIPHER_HISTORY: Record<Cipher, string> = {
     "Bruce Schneier's 1993 unpatented, royalty-free cipher; a popular DES replacement, later succeeded by his Twofish.",
   twofish:
     "Schneier, Kelsey, Whiting, Wagner, Hall & Ferguson's AES finalist (1998); Blowfish's successor, unpatented and a strong runner-up to Rijndael.",
+  chacha20:
+    "Daniel J. Bernstein's 2008 refinement of his Salsa20; standardized as RFC 8439 and paired with Poly1305 in TLS 1.3, WireGuard and OpenSSH — the fast, constant-time answer to AES on hardware without AES instructions.",
 };
 
 /** Per-hash historical one-liner. Mirrors `HASH_DESCRIPTIONS`. */
@@ -523,6 +548,14 @@ export const DEFAULT_KEY_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
   twofish: new Uint8Array([
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
   ]),
+  // ChaCha20's 256-bit key, from RFC 8439 §2.4.2's worked example. The default
+  // key, nonce, counter and plaintext together reproduce that section's
+  // published ciphertext exactly — the same choice AES-128 makes with
+  // FIPS-197 §C.1, so the app's first impression IS a published test vector.
+  chacha20: new Uint8Array([
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+  ]),
 };
 
 /**
@@ -569,6 +602,14 @@ export const DEFAULT_PT_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
   twofish: new Uint8Array([
     0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
   ]),
+  // RFC 8439 §2.4.2's plaintext, verbatim. 114 bytes — deliberately NOT a
+  // multiple of the 64-byte block, so the default view demonstrates the
+  // property that distinguishes a stream cipher: the last block is short, the
+  // keystream is trimmed to match it, and the ciphertext comes out exactly as
+  // long as the plaintext with no padding anywhere.
+  chacha20: new TextEncoder().encode(
+    "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.",
+  ),
 };
 
 /**
@@ -635,6 +676,48 @@ export const DEFAULT_CT_BYTES_BY_CIPHER: Record<Cipher, Uint8Array> = {
   // Twofish: PT 00112233…ff under key 000102…0f → df8451d2…3203 (Ferguson ref).
   twofish: new Uint8Array([
     0xdf, 0x84, 0x51, 0xd2, 0x6e, 0x05, 0x04, 0xbc, 0x19, 0xb0, 0xa9, 0x3b, 0x04, 0x9e, 0x32, 0x03,
+  ]),
+  // ChaCha20: RFC 8439 §2.4.2's published ciphertext, under that section's key,
+  // its nonce 00:00:00:00:00:00:00:4a:00:00:00:00 and its initial counter of 1
+  // (see DEFAULT_IV_BYTES_BY_CIPHER — the counter is 1, NOT 0). Cross-checked
+  // against node:crypto's `chacha20` before being written down.
+  chacha20: new Uint8Array([
+    0x6e, 0x2e, 0x35, 0x9a, 0x25, 0x68, 0xf9, 0x80, 0x41, 0xba, 0x07, 0x28, 0xdd, 0x0d, 0x69, 0x81,
+    0xe9, 0x7e, 0x7a, 0xec, 0x1d, 0x43, 0x60, 0xc2, 0x0a, 0x27, 0xaf, 0xcc, 0xfd, 0x9f, 0xae, 0x0b,
+    0xf9, 0x1b, 0x65, 0xc5, 0x52, 0x47, 0x33, 0xab, 0x8f, 0x59, 0x3d, 0xab, 0xcd, 0x62, 0xb3, 0x57,
+    0x16, 0x39, 0xd6, 0x24, 0xe6, 0x51, 0x52, 0xab, 0x8f, 0x53, 0x0c, 0x35, 0x9f, 0x08, 0x61, 0xd8,
+    0x07, 0xca, 0x0d, 0xbf, 0x50, 0x0d, 0x6a, 0x61, 0x56, 0xa3, 0x8e, 0x08, 0x8a, 0x22, 0xb6, 0x5e,
+    0x52, 0xbc, 0x51, 0x4d, 0x16, 0xcc, 0xf8, 0x06, 0x81, 0x8c, 0xe9, 0x1a, 0xb7, 0x79, 0x37, 0x36,
+    0x5a, 0xf9, 0x0b, 0xbf, 0x74, 0xa3, 0x5b, 0xe6, 0xb4, 0x0b, 0x8e, 0xed, 0xf2, 0x78, 0x5e, 0x42,
+    0x87, 0x4d,
+  ]),
+};
+
+/**
+ * Per-cipher canonical default IV, for the ciphers whose IV has internal
+ * structure that the generic `defaultIvOfWidth` ascending pattern would get
+ * wrong.
+ *
+ * `Partial` on purpose: **absence is the normal case.** For CBC, CFB and OFB
+ * the IV is an opaque block with no meaningful interior, so
+ * `defaultIvOfWidth(n)`'s `00 01 02 …` is as good as any value and the store
+ * needs no per-cipher knowledge.
+ *
+ * ChaCha20 is the exception, and the reason this table exists. Its 16 IV bytes
+ * are a 32-bit LITTLE-ENDIAN block counter followed by a 12-byte nonce, so the
+ * generic default would set the counter to `0x03020100` — a legal value that
+ * encrypts and decrypts perfectly consistently, and reproduces no published
+ * test vector at all. RFC 8439's worked examples all start the counter at 1,
+ * and an initial-counter off-by-one is the classic ChaCha bug precisely
+ * because nothing about the output looks wrong.
+ */
+export const DEFAULT_IV_BYTES_BY_CIPHER: Partial<Record<Cipher, Uint8Array>> = {
+  // RFC 8439 §2.4.2: counter = 1 (little-endian), nonce = 00…00 4a 00 00 00 00.
+  chacha20: new Uint8Array([
+    // counter = 1, little-endian
+    0x01, 0x00, 0x00, 0x00,
+    // 96-bit nonce
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4a, 0x00, 0x00, 0x00, 0x00,
   ]),
 };
 

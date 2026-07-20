@@ -37,6 +37,7 @@ import type { BlockCipherCore } from "@/ciphers/block-cipher-core";
 import { blowfishSpec } from "@/ciphers/blowfish";
 import { blowfishCore } from "@/ciphers/blowfish-core";
 import { blowfishDecryptSpec } from "@/ciphers/blowfish-decrypt";
+import { chacha20DecryptSpec, chacha20EncryptSpec } from "@/ciphers/chacha20";
 import { buildCshakeSpec, readCshakeCustomization } from "@/ciphers/cshake";
 import { desSpec } from "@/ciphers/des";
 import { desCore } from "@/ciphers/des-core";
@@ -111,6 +112,7 @@ import {
 } from "./cipher";
 import {
   type CipherMode,
+  defaultCipherModeFor,
   isCipherModeSupported,
   isStreamCipherMode,
   setCipherMode as setCipherModeSignal,
@@ -274,6 +276,13 @@ const defaults: Record<Cipher, Partial<Record<CipherMode, Record<Mode, CipherSpe
     "single-block": { encrypt: twofishSpec, decrypt: twofishDecryptSpec },
     ...modesFromCore(twofishCore),
   },
+  // ChaCha20 — the only row with no "single-block" entry and no
+  // `modesFromCore` spread, because there is no core. Its single "stream"
+  // entry is the whole cipher: the block-repetition rule the other rows get
+  // from a mode builder is already inside ChaCha20's own spec.
+  chacha20: {
+    stream: { encrypt: chacha20EncryptSpec, decrypt: chacha20DecryptSpec },
+  },
 };
 
 /**
@@ -285,7 +294,12 @@ const defaults: Record<Cipher, Partial<Record<CipherMode, Record<Mode, CipherSpe
  */
 const resolveDefault = (cipher: Cipher, cipherMode: CipherMode, mode: Mode): CipherSpec => {
   const byMode = defaults[cipher];
-  const forCipherMode = byMode[cipherMode] ?? byMode["single-block"];
+  // The fallback is the cipher's FIRST supported mode, not a hardcoded
+  // "single-block". For all eleven block ciphers those are the same thing.
+  // ChaCha20 is the first cipher for which they differ — it has no
+  // single-block entry at all, and the old constant resolved to `undefined`
+  // and threw the moment the user selected it while another mode was active.
+  const forCipherMode = byMode[cipherMode] ?? byMode[defaultCipherModeFor(cipher)];
   if (!forCipherMode) {
     throw new Error(`No spec registered for cipher=${cipher}`);
   }
@@ -786,7 +800,11 @@ export const setCipher = (c: Cipher): void => {
   setCategorySignal("cipher");
   setCipherSignal(c);
   if (!isCipherModeSupported(c, useCipherMode()())) {
-    setCipherModeSignal("single-block");
+    // The new cipher's own default, not a constant: selecting ChaCha20 must
+    // land in "stream" (its only mode), and selecting a block cipher while
+    // ChaCha20's "stream" is active must land back in "single-block". A
+    // hardcoded fallback got the first of those wrong.
+    setCipherModeSignal(defaultCipherModeFor(c));
   }
   setSpecs(buildCanonicalPair(c, useCipherMode()(), usePaddingScheme()()));
 };
@@ -1778,7 +1796,10 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
     // single-block fallback.
     setCipherSignal(doc.algorithm);
     if (!isCipherModeSupported(doc.algorithm, useCipherMode()())) {
-      setCipherModeSignal("single-block");
+      // As in `setCipher`: the loaded cipher's own default mode. Loading a
+      // ChaCha20 document while a block-cipher mode is active must not try to
+      // resolve a "single-block" ChaCha20 spec, which does not exist.
+      setCipherModeSignal(defaultCipherModeFor(doc.algorithm));
     }
   }
   // Document carries one spec (for the document's mode). Land it in the

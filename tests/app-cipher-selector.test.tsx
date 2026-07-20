@@ -83,7 +83,7 @@ describe("App — cipher selector", () => {
     resetAll();
   });
 
-  it("renders every cipher variant in the dropdown (3 AES + 2 Speck + 3 Serpent + 1 DES)", () => {
+  it("renders every cipher variant in the dropdown (11 block ciphers + 1 stream cipher)", () => {
     const { container } = render(() => <App />);
     const select = findSelectByLabel(container, "cipher");
     const values = Array.from(select.querySelectorAll("option")).map((o) => o.value);
@@ -103,6 +103,12 @@ describe("App — cipher selector", () => {
       "blowfish",
       // Twofish (`docs/plans/twofish.md`) — third Feistel cipher, single-block.
       "twofish",
+      // ChaCha20 (`docs/plans/fluffy-orbiting-shannon.md`) — the first STREAM
+      // cipher, and the first entry with no `BlockCipherCore`. It appears in
+      // the same dropdown as the block ciphers because it is still a cipher;
+      // what changes is that selecting it lands the mode selector in "stream"
+      // and disables it, and suppresses the padding selector entirely.
+      "chacha20",
     ]);
   });
 

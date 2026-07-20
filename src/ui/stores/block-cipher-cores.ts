@@ -39,7 +39,7 @@ import { desCore } from "@/ciphers/des-core";
 import { serpentCore } from "@/ciphers/serpent-core";
 import { speck32_64Core } from "@/ciphers/speck-32-64-core";
 import { twofishCore } from "@/ciphers/twofish-core";
-import type { Cipher } from "./cipher";
+import { type Cipher, DEFAULT_IV_BYTES_BY_CIPHER } from "./cipher";
 
 /**
  * Every cipher whose body a mode of operation can drive.
@@ -103,3 +103,28 @@ export const blockByteLengthFor = (cipher: Cipher): number | undefined =>
 /** True when a cipher has a core — i.e. can run ECB/CBC and take padding. */
 export const hasBlockCipherCore = (cipher: Cipher): boolean =>
   BLOCK_CIPHER_CORES[cipher] !== undefined;
+
+/**
+ * How many bytes of IV this cipher wants, or `undefined` when it has no notion
+ * of one (a coreless cipher that isn't a stream cipher — none today).
+ *
+ * Distinct from `blockByteLengthFor`, and the distinction is the point. For
+ * every block cipher the two coincide: CBC XORs the IV with a block, so an IV
+ * must be exactly one block wide, and asking either question gives the same
+ * answer. ChaCha20 is the first cipher where they diverge — its block is 64
+ * bytes but its IV is 16 (a 32-bit little-endian counter plus a 96-bit nonce),
+ * and it has no core for `blockByteLengthFor` to read at all.
+ *
+ * Callers that size, default or reconcile the IV field must use THIS, not the
+ * block width. Before ChaCha20 the difference was unobservable, so the IV sites
+ * all reached for `blockByteLengthFor` — which for a coreless cipher returns
+ * `undefined`, and `reconcileIvWidth(undefined)` leaves the IV alone. The
+ * failure that produces is quiet and confusing: select Blowfish (8-byte IV),
+ * then ChaCha20, and the cipher throws deep in `aux-load-bytes@1` because
+ * `aux["iv"]` is 8 bytes where the spec declared 16.
+ */
+export const ivByteLengthFor = (cipher: Cipher): number | undefined =>
+  // The canonical default IV, where one is registered, IS the width — one
+  // table rather than two that could disagree. Block ciphers register none and
+  // fall through to their block width, which is the correct answer for them.
+  DEFAULT_IV_BYTES_BY_CIPHER[cipher]?.length ?? blockByteLengthFor(cipher);

@@ -91,6 +91,10 @@ const ALL_CIPHERS: readonly Cipher[] = [
   "serpent-192",
   "serpent-256",
   "twofish",
+  // ChaCha20 has no core and never will — it is here so this hand-maintained
+  // copy stays a faithful mirror of the `Cipher` union, which is the whole
+  // point of it being hand-maintained. The coreless assertion below names it.
+  "chacha20",
 ];
 
 // ─── Deterministic per-core test material ─────────────────────────────────────
@@ -195,7 +199,14 @@ describe("CTR across every BlockCipherCore", () => {
     // no longer a coreless counter-example to assert against here. The
     // must-NOT-advertise direction is kept alive by the derived check in
     // `cipher-mode-fallback.test.ts` ("core presence is what decides…").
-    expect(ALL_CIPHERS.every((c) => hasBlockCipherCore(c))).toBe(true);
+    // Was `every(hasBlockCipherCore)` while every cipher in the app was a
+    // block cipher. ChaCha20 (2026-07-20) is the first counterexample: a
+    // stream cipher has no core and runs no mode of operation, so the honest
+    // pin is that every cipher WITH a core is covered here, plus an explicit
+    // note of who is deliberately excluded.
+    const coreless = ALL_CIPHERS.filter((c) => !hasBlockCipherCore(c));
+    expect(coreless).toEqual(["chacha20"]);
+    expect(CORES.length).toBe(ALL_CIPHERS.length - coreless.length);
   });
 
   // ── The external oracle: AES vs node:crypto ────────────────────────────────

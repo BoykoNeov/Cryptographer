@@ -125,6 +125,15 @@ const singleBlockLimits = (cipher: Cipher): { min: number; max: number } => {
     case "serpent-192":
     case "serpent-256":
       return { min: 16, max: 16 };
+    // ChaCha20 never reaches here in practice — its only mode is "stream",
+    // which `isStreamCipherMode` answers earlier with {min: 1} in both
+    // directions. The arm exists because this switch is exhaustiveness-checked
+    // against the `Cipher` union, and it returns the stream-cipher answer
+    // rather than a block width so that a future caller reaching it by another
+    // path still gets a truthful bound: any length ≥ 1, no padding, no
+    // block-multiple requirement.
+    case "chacha20":
+      return { min: 1, max: Number.POSITIVE_INFINITY };
     default: {
       const _exhaustive: never = cipher;
       throw new Error(`paddingLimits: unhandled cipher: ${_exhaustive as string}`);
