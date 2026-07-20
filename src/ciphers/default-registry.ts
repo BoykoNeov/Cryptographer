@@ -172,6 +172,11 @@ import {
 } from "../steps/publish-round-keys";
 import { rightEncodeDoc, rightEncodePortContract, rightEncodeStep } from "../steps/right-encode";
 import {
+  rotateBitsLeft,
+  rotateBitsLeftDoc,
+  rotateBitsLeftPortContract,
+} from "../steps/rotate-bits-left";
+import {
   rotateBitsRight,
   rotateBitsRightDoc,
   rotateBitsRightPortContract,
@@ -923,6 +928,20 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: rotateBitsRight,
     shape: rotateBitsRightPortContract,
     doc: rotateBitsRightDoc,
+  });
+  // `rotate-bits-left@1` (2026-07-20, for ChaCha20) is the mirror image, and
+  // buys no new behaviour — ROL(w, n) is ROR(w, B - n), and the executor says
+  // so by delegating to the same `ror*` helpers. What it buys is a trace that
+  // matches the specification a learner is reading alongside it. RFC 8439 §2.1
+  // writes ChaCha20's quarter-round rotations as `<<< 16/12/8/7`; routing them
+  // through the right-handed step would have rendered 16/20/24/25, correct
+  // arithmetic showing numbers that appear nowhere in the RFC. Designs that
+  // write their rotations rightward (SHA-256, Speck) keep using the sibling.
+  r.register("rotate-bits-left@1", {
+    kind: "ported",
+    executor: rotateBitsLeft,
+    shape: rotateBitsLeftPortContract,
+    doc: rotateBitsLeftDoc,
   });
   r.register("xor@1", {
     kind: "ported",

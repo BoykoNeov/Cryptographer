@@ -307,7 +307,8 @@ export const lookupProvenance = (stepType: string): ProvenanceFn | undefined =>
  *
  *  - **approximate** (an exact-looking byte highlight would mislead):
  *    `add-mod-32@1` / `add-mod-16@1` (carry crosses byte boundaries),
- *    `rotate-bits-right@1` / `shift-bits-right@1` (bit-level → byte-approximate),
+ *    `rotate-bits-right@1` / `rotate-bits-left@1` / `shift-bits-right@1`
+ *    (bit-level → byte-approximate),
  *    `increment-counter@1` (CTR's +1 — an exact cone that would still mislead,
  *    see its inline note),
  *    the RSA big-integer primitives `mul@1` / `sub@1` / `mod-mul@1` /
@@ -341,6 +342,13 @@ export const PROVENANCE_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set<string>([
   // almost never contribute. Same rationale as `add-mod-32@1` above.
   "increment-counter@1",
   "rotate-bits-right@1",
+  // approximate — same rationale as its right-handed sibling above, and for
+  // the same reason: `rotate-bits-left@1` IS that sibling under the hood
+  // (ROL(w, n) === ROR(w, B - n)), so a rotation by a non-multiple of 8 draws
+  // each output byte from two input bytes and byte-level provenance can only
+  // ever be approximate. ChaCha20's 12- and 7-bit rotations are exactly that
+  // case.
+  "rotate-bits-left@1",
   "shift-bits-right@1",
   // approximate — per-lane bit rotation (Keccak ρ); a rotated byte draws from
   // up to two input bytes, so byte-level provenance is only approximate.

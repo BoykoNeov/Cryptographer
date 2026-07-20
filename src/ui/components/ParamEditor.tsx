@@ -259,7 +259,9 @@ export const ParamEditor = (props: Props) => {
             {/* ─── Port-native primitives (Slice S1 of sha-256-density-polish) ── */}
             <Match
               when={
-                getStep().type === "rotate-bits-right@1" || getStep().type === "shift-bits-right@1"
+                getStep().type === "rotate-bits-right@1" ||
+                getStep().type === "rotate-bits-left@1" ||
+                getStep().type === "shift-bits-right@1"
               }
             >
               <BitOpBlock step={getStep()} matchingCount={matchingSteps()} />
@@ -2324,7 +2326,7 @@ const IntInput = (props: {
   );
 };
 
-// rotate-bits-right@1 / shift-bits-right@1.
+// rotate-bits-right@1 / rotate-bits-left@1 / shift-bits-right@1.
 //
 // Editable `bits` (non-negative integer; rotate semantics modulo wordBits,
 // shift semantics saturate to zero past wordBits). Read-only `wordBits`
@@ -2336,10 +2338,14 @@ const BitOpBlock = (props: BlockProps) => {
   const params = (): { bits?: number; wordBits?: number } => props.step.params as never;
   const bits = (): number => params().bits ?? 0;
   const wordBits = (): number => params().wordBits ?? 32;
-  const operation = (): string =>
-    props.step.type === "rotate-bits-right@1"
-      ? "Cyclic rotate right (ROTR)"
-      : "Logical shift right (SHR)";
+  const operation = (): string => {
+    if (props.step.type === "rotate-bits-right@1") return "Cyclic rotate right (ROTR)";
+    // ChaCha20 (and Salsa20/BLAKE2 after it) write their rotations leftward.
+    // Naming the direction here is the same fidelity argument that justifies
+    // `rotate-bits-left@1` existing at all — the editor and the RFC agree.
+    if (props.step.type === "rotate-bits-left@1") return "Cyclic rotate left (ROTL)";
+    return "Logical shift right (SHR)";
+  };
 
   const writeBits = (next: number) => {
     editStepParams(props.step.id, {

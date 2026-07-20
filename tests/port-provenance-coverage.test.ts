@@ -79,7 +79,7 @@ describe("port-provenance coverage contract", () => {
     }
   });
 
-  it("allowlist contents are exactly the expected 21 (rationale set-pin)", () => {
+  it("allowlist contents are exactly the expected 22 (rationale set-pin)", () => {
     // Grouped by the FOUR distinct rationales — see PROVENANCE_NO_OP_ALLOWLIST's
     // doc. Keeping the groups visible here stops a future edit from quietly
     // relabelling an exact-but-plumbing bridge as "approximate".
@@ -88,6 +88,10 @@ describe("port-provenance coverage contract", () => {
       "add-mod-32@1",
       "add-mod-16@1",
       "rotate-bits-right@1",
+      // approximate — the left-handed mirror (ChaCha20). Same reasoning: it
+      // delegates to the same `ror*` helpers, so a rotation by a non-multiple
+      // of 8 splits every output byte across two input bytes.
+      "rotate-bits-left@1",
       "shift-bits-right@1",
       // approximate — CTR's counter +1: the carry cone is exact but reaches
       // past one byte only 1 increment in 256, so highlighting it would lie
