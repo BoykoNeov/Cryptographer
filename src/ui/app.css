@@ -5176,3 +5176,117 @@ button:disabled {
   fill: var(--bg-elev-3, var(--bg-elev-2));
   stroke: var(--accent);
 }
+
+/* ─── ChaCha20 quarter-round diagram ─────────────────────────────────────
+   Four horizontal rails crossed by twelve operation boxes. Structurally
+   simpler than the Twofish diagram (no composites, no swap zone), so it
+   needs far fewer classes — every element is one leaf. */
+
+.chacha-qr-diagram {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev-1);
+  align-self: flex-start;
+}
+
+.chacha-qr-diagram-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.chacha-qr-diagram-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.chacha-qr-diagram-kind {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.chacha-qr-diagram-svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.chacha-qr-diagram-note {
+  max-width: 560px;
+  line-height: 1.5;
+}
+
+/* The RFC-line bands. Deliberately very low contrast: they group the
+   +/⊕/<<< triples without competing with the boxes for attention. */
+.chacha-qr-diagram-band {
+  fill: var(--text);
+  opacity: 0.03;
+}
+
+.chacha-qr-diagram-band-alt {
+  opacity: 0.06;
+}
+
+.chacha-qr-diagram-rail {
+  stroke: var(--text);
+  stroke-width: 1;
+  opacity: 0.45;
+}
+
+.chacha-qr-diagram-rail-label {
+  font-size: 11px;
+  font-family: var(--mono);
+  fill: var(--muted);
+}
+
+/* Operand connectors cross bare rails only (never a box — see the component's
+   routing note), so they can be solid without reading as a false junction. */
+.chacha-qr-diagram-operand {
+  stroke: var(--accent);
+  stroke-width: 1;
+  opacity: 0.5;
+}
+
+.chacha-qr-diagram-tap {
+  fill: var(--accent);
+  opacity: 0.7;
+}
+
+.chacha-qr-diagram-box {
+  fill: var(--bg-elev-2);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+/* The three ARX operations are tinted apart, because "which of the three kinds
+   is this?" is the diagram's central question. */
+.chacha-qr-diagram-box-rotate {
+  stroke-dasharray: 3 2;
+}
+
+.chacha-qr-diagram-box-label {
+  font-size: 10px;
+  font-family: var(--mono);
+  fill: var(--text);
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.chacha-qr-diagram-active .chacha-qr-diagram-box {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.chacha-qr-diagram-clickable {
+  cursor: pointer;
+}
+
+.chacha-qr-diagram-clickable:hover .chacha-qr-diagram-box {
+  fill: var(--bg-elev-3, var(--bg-elev-2));
+  stroke: var(--accent);
+}

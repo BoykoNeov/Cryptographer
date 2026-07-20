@@ -39,6 +39,8 @@ import {
   type CellProvenanceSummary,
   summarizeCellProvenance,
 } from "@/core/cell-provenance-summary";
+import { chachaDoubleRoundPlacement } from "@/core/chacha-layout";
+import { type ChaChaDoubleRoundShape, analyzeChaChaDoubleRound } from "@/core/chacha-shape";
 import { curatedDefaultFor, mergeLayoutSpecs, scaleCuratedLayout } from "@/core/default-layouts";
 import {
   type EdgeValueLookup,
@@ -576,6 +578,14 @@ const EMPTY_FEISTEL_ROUNDS: ReadonlyMap<string, FeistelRoundShape> = new Map();
  * 4-rail Twofish layout (see `twofish-layout.ts`) instead of the generic stack.
  */
 const EMPTY_TWOFISH_ROUNDS: ReadonlyMap<string, TwofishRoundShape> = new Map();
+
+/**
+ * Empty ChaCha20 double-round map — the third parallel default (see
+ * `EMPTY_FEISTEL_ROUNDS`). A group id present here lays out as the canonical
+ * two-tier quarter-round grid (see `chacha-layout.ts`) instead of a 98-chip
+ * vertical ribbon.
+ */
+const EMPTY_CHACHA_ROUNDS: ReadonlyMap<string, ChaChaDoubleRoundShape> = new Map();
 
 /**
  * Replica placement info, derived once at the top of `layoutRoot` from the
@@ -1317,6 +1327,14 @@ const layoutNode = (
    * Feistel path is byte-identically untouched (zero regression).
    */
   twofishRounds: ReadonlyMap<string, TwofishRoundShape> = EMPTY_TWOFISH_ROUNDS,
+  /**
+   * ChaCha20-shaped double-round groups (id → derived `ChaChaDoubleRoundShape`).
+   * The third member of the canonical-layout family: a group whose id is here
+   * lays out as the two-tier quarter-round grid (see `chacha-layout.ts`). Kept a
+   * separate param for the same reason as `twofishRounds` — the Feistel and
+   * Twofish paths stay byte-identically untouched.
+   */
+  chachaRounds: ReadonlyMap<string, ChaChaDoubleRoundShape> = EMPTY_CHACHA_ROUNDS,
 ): Box => {
   const container = containersById.get(id);
   const pin = pinned.get(id);
@@ -1406,6 +1424,35 @@ const layoutNode = (
       leafH: consts.LEAF_H,
       isReplica: (cid) => replicas.isReplica.has(cid),
       consumerOf: (cid) => replicas.consumerOf.get(cid),
+    });
+    for (const childId of container.childIds) {
+      const off = placement.offsets.get(childId);
+      if (off === undefined) continue;
+      const delta = relativePins.get(childId);
+      out.set(childId, {
+        x: innerX + off.dx + (delta?.dx ?? 0),
+        y: innerY + off.dy + (delta?.dy ?? 0),
+        w: consts.LEAF_W,
+        h: consts.LEAF_H,
+      });
+    }
+    const w = placement.bodyW + 2 * consts.CONTAINER_PAD;
+    const h = HEADER_H + placement.bodyH + 2 * consts.CONTAINER_PAD;
+    const box: Box = { x: startX, y: startY, w, h };
+    out.set(id, box);
+    return box;
+  }
+
+  // Canonical ChaCha20 double-round layout — eight quarter-round blocks in two
+  // tiers (column round above diagonal round), each block the RFC's four lines
+  // of three operations. See `chacha-layout.ts`. Children are all leaves.
+  const chacha = chachaRounds.get(id);
+  if (container.kind === "group" && chacha !== undefined) {
+    const innerX = startX + consts.CONTAINER_PAD;
+    const innerY = startY + HEADER_H + consts.CONTAINER_PAD;
+    const placement = chachaDoubleRoundPlacement(chacha, container.childIds, {
+      leafW: consts.LEAF_W,
+      leafH: consts.LEAF_H,
     });
     for (const childId of container.childIds) {
       const off = placement.offsets.get(childId);
@@ -1546,6 +1593,7 @@ const layoutNode = (
         offsetsEnabled,
         feistelRounds,
         twofishRounds,
+        chachaRounds,
       );
       innerY = naturalY + childBox.h + consts.STACK_GAP;
       const renderedBottom = childBox.y + childBox.h;
@@ -1703,6 +1751,7 @@ const layoutNode = (
       offsetsEnabled,
       feistelRounds,
       twofishRounds,
+      chachaRounds,
     );
     innerX = childBox.x + childBox.w + consts.FLOW_GAP;
     lastChildRight = childBox.x + childBox.w;
@@ -1844,6 +1893,12 @@ export const layoutRoot = (
    * canonical 4-rail cell. Optional; defaults empty (generic layout).
    */
   twofishRounds: ReadonlyMap<string, TwofishRoundShape> = EMPTY_TWOFISH_ROUNDS,
+  /**
+   * ChaCha20-shaped double-round groups (id → derived shape). Threaded down to
+   * `layoutNode` alongside the other two so a ChaCha double round lays out as
+   * the canonical two-tier quarter-round grid. Optional; defaults empty.
+   */
+  chachaRounds: ReadonlyMap<string, ChaChaDoubleRoundShape> = EMPTY_CHACHA_ROUNDS,
 ): { boxes: Map<string, Box>; canvasW: number; canvasH: number } => {
   const containersById = new Map<string, ContainerNode>();
   for (const c of graph.containers) containersById.set(c.id, c);
@@ -1962,6 +2017,7 @@ export const layoutRoot = (
       offsetsEnabled,
       feistelRounds,
       twofishRounds,
+      chachaRounds,
     );
     cursorX = naturalX + box.w + consts.FLOW_GAP;
     if (offsetsEnabled && !isAuxOnly) altCounter += 1;
@@ -3270,12 +3326,53 @@ export const GraphView = () => {
     return modes;
   });
 
+  /**
+   * ChaCha20 double rounds are self-contained two-tier cells, and their split
+   * is the most extreme fan-out source in the app. `replicateHighFanoutSources`
+   * counts DISTINCT CONSUMERS per source NODE (not per output port), and the
+   * 16-way split feeds SIXTEEN of them over twenty edges — each of the four
+   * COLUMN quarter rounds reads it through four heads: `a += b` (two words),
+   * `d ^= a`, `c += d`, and `b ^= c`, which reads `b` a second time because `b`
+   * is not reassigned until the `<<< 12` after it. That is five times the
+   * threshold, so without this the split would be deleted from the graph and
+   * scattered into sixteen chips, destroying the cell. (Each split output port
+   * feeds exactly one consumer, so a per-port rule would not have fired at all
+   * — which is precisely why this had to be checked against the pipeline rather
+   * than assumed.) No other round member comes close: every ARX operation feeds
+   * at most two others. We mark every member `"never"` anyway, matching the
+   * Twofish and Feistel precedent.
+   */
+  const chachaRoundNeverModes = createMemo<{ readonly [id: string]: "never" }>(() => {
+    const modes: Record<string, "never"> = {};
+    const walk = (nodes: readonly StepNode[]): void => {
+      for (const node of nodes) {
+        if (node.kind === "step") continue;
+        if (node.kind === "group") {
+          const shape = analyzeChaChaDoubleRound(node);
+          if (shape !== null) {
+            for (const id of [
+              shape.splitId,
+              shape.concatId,
+              ...shape.quarterRounds.flatMap((qr) => qr.memberIds),
+            ]) {
+              modes[id] = "never";
+            }
+          }
+        }
+        walk(node.children);
+      }
+    };
+    walk(spec().steps);
+    return modes;
+  });
+
   const replicatedGraph = createMemo<CipherGraph>(() =>
     replicate()
       ? replicateHighFanoutSources(expandedGraph(), replicationThreshold(), {
           // Round members first so a user's explicit per-source override
           // (rare on a round-internal split) still wins on top.
           ...twofishRoundNeverModes(),
+          ...chachaRoundNeverModes(),
           ...feistelRoundNeverModes(),
           ...replicationModes(),
         })
@@ -3888,6 +3985,27 @@ export const GraphView = () => {
     return m;
   });
 
+  // ChaCha20 double-round shapes, keyed by group id — the third member of the
+  // canonical-layout family. Unlike Twofish there is no opt-in hatch: the
+  // two-tier quarter-round grid is always on, because the alternative for a
+  // 98-leaf ARX group is a vertical ribbon with no structure at all, and there
+  // is no "original" view worth preserving for an A/B comparison.
+  const chachaRoundsById = createMemo(() => {
+    const m = new Map<string, ChaChaDoubleRoundShape>();
+    const walk = (nodes: readonly StepNode[]): void => {
+      for (const node of nodes) {
+        if (node.kind === "step") continue;
+        if (node.kind === "group") {
+          const shape = analyzeChaChaDoubleRound(node);
+          if (shape !== null) m.set(node.id, shape);
+        }
+        walk(node.children);
+      }
+    };
+    walk(spec().steps);
+    return m;
+  });
+
   // `baseLayout` passes feistelRounds (so the source-x lookup matches the final
   // layout for Feistel round leaves) but still OMITS portAssignment +
   // relativePins — passing `undefined` lets layoutRoot's defaults apply.
@@ -3901,6 +4019,7 @@ export const GraphView = () => {
       undefined,
       feistelRoundsById(),
       twofishRoundsById(),
+      chachaRoundsById(),
     ),
   );
 
@@ -4055,6 +4174,7 @@ export const GraphView = () => {
       relativePinsMap(),
       feistelRoundsById(),
       twofishRoundsById(),
+      chachaRoundsById(),
     ),
   );
 

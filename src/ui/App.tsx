@@ -50,6 +50,7 @@ import {
   onMount,
 } from "solid-js";
 import { BlockBadge } from "./components/BlockBadge";
+import { ChaChaQuarterRoundDiagram } from "./components/ChaChaQuarterRoundDiagram";
 import { ConstantsPanel } from "./components/ConstantsPanel";
 import { FeistelRecombineView } from "./components/FeistelRecombineView";
 import { FeistelRoundBytes } from "./components/FeistelRoundBytes";
@@ -2146,6 +2147,13 @@ export const App = () => {
                       the 4-way swap the per-step chain hides. Self-detecting
                       from the round's wiring, so it's inert everywhere else. */}
                   <TwofishRoundDiagram frame={frame()} />
+
+                  {/* ChaCha20 is neither form, so both analyzers above reject
+                      it too. Its quarter round is four rails alternately added,
+                      XORed and rotated into each other — a picture the 98-leaf
+                      double round cannot show at any other altitude. Also
+                      self-detecting, also inert for every other cipher. */}
+                  <ChaChaQuarterRoundDiagram frame={frame()} />
 
                   {/* Per-frame value-prose. Cipher-agnostic dispatch via
                       the narration registry (`src/ui/narration/`).

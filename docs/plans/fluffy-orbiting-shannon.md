@@ -1,6 +1,6 @@
 # ChaCha20 — the first stream cipher (RFC 8439)
 
-Status: **P1–P4 SHIPPED 2026-07-20** · P5 (diagrams) OPEN
+Status: **ALL PHASES SHIPPED 2026-07-20 — plan CLOSED**
 
 > **Shipped:** `rotate-bits-left@1` (`09fe61b`), the cipher + KAT (`1d2d0b9`),
 > the UI wiring + `"stream"` mode (`cf2510f`). What follows is the plan as
@@ -290,24 +290,48 @@ Also worth recording: the plan's frame-count estimate (~1000 leaves/block) was
 right — 995 — and the double-round grouping keeps the graph at ~123 rendered
 SVG groups rather than a chip wall.
 
-## P5 — remaining
+## P5 — SHIPPED 2026-07-20
 
-Canonical quarter-round graph cell (`core/chacha-shape.ts` +
-`core/chacha-layout.ts`, recognized by wiring on the `twofish-shape.ts` model)
-and a linear `<ChaChaQuarterRoundDiagram />` over a pure
-`core/chacha-diagram.ts`. **Not started — and this is APPROVED SCOPE that
-remains outstanding, not an optional follow-up.** The user selected
-"QR graph layout + linear diagram" explicitly when this plan was agreed.
-Twofish deferred its diagrams, but that was Twofish's own call and the
-precedent does not transfer to work asked for up front.
+Both halves of the approved diagram scope landed: the canonical quarter-round
+graph cell and the linear abstract diagram.
 
-Two consequences of P5 being absent, both confined to it:
+**New modules.** `core/chacha-shape.ts` (recognizer), `core/chacha-layout.ts`
+(pure placement), `core/chacha-diagram.ts` (pure presentation model),
+`ui/components/ChaChaQuarterRoundDiagram.tsx`. `GraphView` threads a
+`chachaRounds` param through `layoutRoot`/`layoutNode` parallel to
+`feistelRounds`/`twofishRounds`, so both existing paths stay byte-identical.
+Five test files, 43 tests.
 
-- Expanding a double-round container in the graph shows a raw 96-leaf stack
-  rather than eight readable quarter-round cells. The groups ship
-  default-collapsed so first render is fine, but the canonical cell is what
-  makes an expanded round legible.
-- The round split's port fanout should be checked against the replication
-  threshold when the cell lands — Twofish needed `never`-replication on its
-  round members or the cell scattered into per-consumer chips, and that was
-  caught by browser smoke rather than by unit tests.
+**Recognition could not follow the Twofish model, and that is the finding.**
+`analyzeTwofishRound` cones backward from an anchor because its round is
+bounded by a split it can stop at. ChaCha's diagonal quarter rounds consume the
+column quarter rounds' outputs, so a cone from a diagonal anchor runs back
+through half the double round. The recognizer instead walks RFC 8439 §2.1's
+twelve-operation chain explicitly, backwards from the `<<< 7` that ends every
+quarter round, cross-checking each leaf against a second path to it. A
+**partition gate** then requires the eight walks to tile the group exactly —
+overlap or leftovers drop the round to the generic layout rather than drawing a
+cell with an orphaned member.
+
+**Layout.** Each quarter round is a 3×4 block whose rows ARE the RFC's four
+written lines; the eight blocks sit in two tiers (column above diagonal, derived
+from which rounds read the split). The permuted 16-word crossing between tiers
+is deliberately NOT drawn — the Twofish swap-X precedent.
+
+**The replication hazard was measured, and the estimate was wrong.**
+`replicateHighFanoutSources` counts distinct consumers per source NODE. The
+prediction here was twelve; it is **sixteen** over twenty edges, because
+`b ^= c` reads `b` from the split a second time (`b` is not reassigned until the
+`<<< 12` after it). Five times the threshold, so without a `"never"` guard the
+split is deleted and scattered into sixteen chips.
+`tests/chacha-graph-replication.test.ts` pins both halves — with AND without the
+guard — so the guard cannot silently become dead code. Note that a per-PORT
+fanout rule would never have fired at all (each of the sixteen split ports has
+exactly one consumer), which is why this had to be checked against the pipeline.
+
+**Browser-verified** (the gap that broke Twofish's cell with ~60 unit tests
+green): expanded round places all 98 leaves, two tiers at distinct y, four
+blocks per tier, four rows per block, split top / concat bottom, **zero
+replicas**, zero graph warnings, clean console; the linear diagram labels the
+active round `QUARTERROUND(0, 5, 10, 15)` with rails `a (w0) b (w5) c (w10)
+d (w15)` and ops reading `+b ⊕a ≪16 +d ⊕c ≪12 +b ⊕a ≪8 +d ⊕c ≪7`.
