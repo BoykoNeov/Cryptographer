@@ -461,8 +461,15 @@ export const App = () => {
         // the padding scheme is "none" on encrypt. Catch it here with a
         // friendly error rather than letting the iterate's block split throw a
         // runtime-internals error from inside the loop.
+        //
+        // CTR is deliberately absent: it is a stream mode, so a message may end
+        // mid-block in either direction (the iterate sets
+        // `allowPartialFinalBlock` and `ctr-trim` matches the keystream to the
+        // short block). Requiring alignment here would reject the ragged tail
+        // before it ever reached the runtime — and on decrypt too, since CTR
+        // ciphertext is exactly as long as its plaintext.
         const needsAlignment =
-          (cipherMode() === "ecb" || cipherMode() === "cbc" || cipherMode() === "ctr") &&
+          (cipherMode() === "ecb" || cipherMode() === "cbc") &&
           (mode() === "decrypt" || padding() === "none");
         // A cipher in ECB/CBC always has a core, so the `?? 0` is unreachable;
         // it exists so a missing core can't turn into a `% NaN` that silently
@@ -1700,11 +1707,13 @@ export const App = () => {
             <select
               value={padding()}
               onChange={(e) => changePadding(e.currentTarget.value as PaddingScheme)}
-              disabled={!hasBlockCipherCore(cipher())}
+              disabled={!hasBlockCipherCore(cipher()) || cipherMode() === "ctr"}
               title={
-                hasBlockCipherCore(cipher())
-                  ? "Padding scheme applied at the start of encrypt / end of decrypt"
-                  : `Padding needs a cipher the overlay can wire itself into — ${CIPHER_LABELS[cipher()]} takes exactly one block of input in this build.`
+                cipherMode() === "ctr"
+                  ? "CTR is a stream mode — it needs no padding. The message is XORed with keystream rather than fed through the cipher, so it can end mid-block and the ciphertext comes out exactly as long as the plaintext."
+                  : hasBlockCipherCore(cipher())
+                    ? "Padding scheme applied at the start of encrypt / end of decrypt"
+                    : `Padding needs a cipher the overlay can wire itself into — ${CIPHER_LABELS[cipher()]} takes exactly one block of input in this build.`
               }
             >
               <For each={PADDING_SCHEME_OPTIONS}>
@@ -2348,9 +2357,9 @@ const formatLengthError = (
     return `${label}: must be exactly ${min} bytes (one ${name} block); got ${got}.`;
   }
 
-  // Multi-block modes (ECB/CBC/CTR) — cite the cap rather than "second
-  // padding block" since multi-block has no such limit. The cap is the
-  // UI's MAX_BLOCKS_UI; the user can raise it if they want more.
+  // Block modes (ECB/CBC) — cite the cap rather than "second padding block"
+  // since multi-block has no such limit. The cap is the UI's MAX_BLOCKS_UI;
+  // the user can raise it if they want more.
   if (cipherMode === "ecb" || cipherMode === "cbc") {
     if (mode === "decrypt") {
       return `${label}: ${cipherMode.toUpperCase()} ciphertext must be a whole-block multiple in ${range}; got ${got}. (Cap is the UI's MAX_BLOCKS_UI for trace browsability — raise to extend.)`;
@@ -2358,8 +2367,11 @@ const formatLengthError = (
     const schemeLabel = scheme === "none" ? "no padding" : scheme.toUpperCase();
     return `${label}: ${cipherMode.toUpperCase()} + ${schemeLabel} accepts ${range}; got ${got}. (Cap is the UI's MAX_BLOCKS_UI for trace browsability — raise to extend.)`;
   }
+  // CTR — the stream mode. Any length in range is legal, whole blocks or not,
+  // so the message never has to reach a block boundary and the wording must
+  // not imply otherwise.
   if (cipherMode === "ctr") {
-    return `${label}: ${name}-CTR accepts ${range}; got ${got}. (No padding needed; cap is the UI's MAX_BLOCKS_UI for trace browsability.)`;
+    return `${label}: ${name}-CTR accepts ${range} — any length, whole blocks or not; got ${got}. (CTR is a stream mode and needs no padding; the cap is the UI's MAX_BLOCKS_UI for trace browsability.)`;
   }
 
   // Single-block, with scheme-specific hints.

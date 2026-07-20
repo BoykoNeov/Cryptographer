@@ -33,6 +33,7 @@ import { gfMatrixMultiply } from "@/steps/gf-matrix-multiply";
 import { not } from "@/steps/not";
 import { permute } from "@/steps/permute";
 import { splitBytes } from "@/steps/split-bytes";
+import { truncateToReference } from "@/steps/truncate-to-reference";
 import { xor } from "@/steps/xor";
 import { xorWithAux } from "@/steps/xor-with-aux";
 import { describe, expect, it } from "vitest";
@@ -471,6 +472,23 @@ describe("port-provenance — executor perturbation cross-check", () => {
       outPorts: ["output"],
     },
     {
+      // The desync guard that matters most for this primitive: a trim that
+      // kept the SUFFIX instead of the prefix would return the right number of
+      // cells and pass every hand-computed shape check, but its true
+      // data-dependency set would be offset — which this catches. `reference`
+      // is deliberately included in the fixture so the cross-check confirms
+      // perturbing its bytes changes nothing (only its length is read).
+      name: "truncate-to-reference@1",
+      stepType: "truncate-to-reference@1",
+      exec: truncateToReference,
+      params: {},
+      inputs: new Map([
+        ["input", fill(8, 21)],
+        ["reference", fill(3, 22)],
+      ]),
+      outPorts: ["output"],
+    },
+    {
       name: "gf-matrix-multiply@1",
       stepType: "gf-matrix-multiply@1",
       exec: gfMatrixMultiply,
@@ -502,7 +520,7 @@ describe("port-provenance — executor perturbation cross-check", () => {
 // ─── Sanity: the fn registry is the 10 exact mappings ────────────────────────
 
 describe("port-provenance — registry shape", () => {
-  it("registers exactly the 11 exact-mapping step types", () => {
+  it("registers exactly the 12 exact-mapping step types", () => {
     expect(PROVENANCE_FN_STEP_TYPES).toEqual(
       new Set([
         "xor@1",
@@ -510,6 +528,9 @@ describe("port-provenance — registry shape", () => {
         "not@1",
         "xor-with-aux@1",
         "byte-substitute@1",
+        // CTR's ragged-tail trim — the identity prefix `output[i] ← input[i]`.
+        // `reference` contributes no cell: only its LENGTH is read.
+        "truncate-to-reference@1",
         "permute@1",
         "concat@1",
         "split-bytes@1",

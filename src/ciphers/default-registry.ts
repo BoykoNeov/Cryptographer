@@ -256,6 +256,11 @@ import {
 } from "../steps/state-to-bytes";
 import { sub, subDoc, subPortContract } from "../steps/sub";
 import {
+  truncateToReference,
+  truncateToReferenceDoc,
+  truncateToReferencePortContract,
+} from "../steps/truncate-to-reference";
+import {
   twofishHExpand,
   twofishHExpandDoc,
   twofishHExpandMeta,
@@ -964,6 +969,17 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: incrementCounter,
     shape: incrementCounterPortContract,
     doc: incrementCounterDoc,
+  });
+  // CTR's ragged tail: trims the full-width keystream down to the final
+  // message block's width, so the ciphertext comes out exactly as long as the
+  // plaintext and CTR needs no padding. Width-free for the same reason
+  // `increment-counter@1` is — but one step further, since the target width
+  // depends on the MESSAGE the user typed, not just the cipher's block size.
+  r.register("truncate-to-reference@1", {
+    kind: "ported",
+    executor: truncateToReference,
+    shape: truncateToReferencePortContract,
+    doc: truncateToReferenceDoc,
   });
   r.register("pad-with-byte@1", {
     kind: "ported",

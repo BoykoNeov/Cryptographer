@@ -290,6 +290,16 @@ export const IterateGroupSchema = z.object({
   // it to read out the running hash as the digest. Additive optional (no
   // schemaVersion bump); declared so it survives Save/Load.
   chainOutput: z.string().optional(),
+  // Ragged tail (2026-07-20) — CTR's stream-mode relaxation: the message may
+  // end mid-block, so the count becomes `ceil` and the final iteration gets a
+  // short `in` block. Additive optional (no schemaVersion bump); declared here
+  // for the same reason as `chainInput`/`chainOutput` above — **Zod strips
+  // undeclared keys**, so leaving it out would silently drop the flag on every
+  // Save/Load and URL-share round-trip. That failure has no error and no
+  // visual tell: a shared CTR link would simply start rejecting the partial
+  // input it was built to accept. Pinned by
+  // `tests/ctr-partial-block-document-roundtrip.test.ts`.
+  allowPartialFinalBlock: z.boolean().optional(),
   children: z.array(z.lazy(() => StepNodeSchema)),
   ...containerPortEdgeFields,
   ...loopingContainerSeedFields,

@@ -82,7 +82,8 @@ export interface CipherBody {
 
 export interface BlockMode {
   readonly id: string;
-  readonly requiresPadding: boolean;  // ecb/cbc: true. ctr: false.
+  readonly requiresPadding: boolean;  // ecb/cbc: true. ctr: false (honoured since 2026-07-20 —
+                                      // see docs/plans/encapsulated-skipping-bubble.md).
   readonly requiresIv: boolean;       // cbc/ctr: true. ecb: false.
   build(core: BlockCipherCore, direction: CipherDirection): CipherSpec;
 }

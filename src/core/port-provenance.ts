@@ -261,7 +261,7 @@ const gfMatrixMultiplyProvenance: ProvenanceFn = (ctx) => {
 // ─── Registry + allowlist ───────────────────────────────────────────────────
 
 /**
- * The 11 EXACT-mapping provenance fns, keyed by bare port-native step type. The
+ * The 12 EXACT-mapping provenance fns, keyed by bare port-native step type. The
  * UI's `PortFlowView` resolves a hovered output cell's sources via
  * `lookupProvenance(frame.stepType)`.
  */
@@ -271,6 +271,13 @@ const PROVENANCE_REGISTRY: ReadonlyMap<string, ProvenanceFn> = new Map<string, P
   ["not@1", samePositionProvenance("input")],
   ["xor-with-aux@1", xorWithAuxProvenance],
   ["byte-substitute@1", samePositionProvenance("input")],
+  // `truncate-to-reference@1`: the surviving bytes keep their positions, so
+  // `output[i] ← input[i]` — the identity prefix. `reference` contributes NO
+  // cell: only its length is read, never its bytes, and highlighting it would
+  // claim a data dependency that does not exist. The guard inside
+  // `samePositionProvenance` is naturally satisfied here (output is never
+  // wider than input), which is exactly what makes this mapping exact.
+  ["truncate-to-reference@1", samePositionProvenance("input")],
   ["permute@1", permuteProvenance],
   ["concat@1", concatProvenance],
   ["split-bytes@1", splitBytesProvenance],

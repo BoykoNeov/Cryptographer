@@ -327,6 +327,35 @@ export type IterateGroup = {
    * `seedInput`/`bodyOutput`/`chainInput`).
    */
   readonly chainOutput?: string;
+  /**
+   * Port mode only — allow the message to end mid-block (CTR's ragged tail).
+   *
+   * By default `seedInput.length` must be a whole multiple of
+   * `blockByteLength`; a remainder throws, because ECB and CBC feed each block
+   * *through* the cipher and a block cipher has no meaning for a partial
+   * block. That is why those modes need padding at all.
+   *
+   * CTR does not. It encrypts the **counter** to manufacture a keystream and
+   * XORs that keystream with the message, so the message never enters the
+   * cipher and a 5-byte message wants exactly 5 keystream bytes. Setting this
+   * flag makes the iteration count `ceil(len / blockByteLength)` and hands the
+   * final iteration a **short** `in` block (the runtime's per-block
+   * `subarray` already clamps at the end of the seed, so the short block falls
+   * out for free). The body is then responsible for trimming its full-width
+   * result down to that block's width — in CTR, a `truncate-to-reference@1`
+   * leaf between the keystream and the XOR.
+   *
+   * Note the chain carry is unaffected and stays full width: CTR's counter
+   * rides `chain` (bootstrapped one block wide from the IV, advanced by
+   * `increment-counter@1`), not `in`. So the cipher core always encrypts a
+   * full counter block and always emits full-width keystream — only `in` goes
+   * short, and no `BlockCipherCore` needs to know this flag exists.
+   *
+   * Additive optional field (no `schemaVersion` bump — same posture as
+   * `seedInput`/`bodyOutput`/`chainInput`). Absent ⇒ today's behaviour
+   * byte-identically, which is what keeps ECB and CBC provably unaffected.
+   */
+  readonly allowPartialFinalBlock?: boolean;
 };
 
 /**

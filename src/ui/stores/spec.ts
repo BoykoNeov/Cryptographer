@@ -504,15 +504,41 @@ type AsymmetricSpecsByMode = {
 
 export type SpecsByMode = CipherSpecsByMode | HashSpecsByMode | AsymmetricSpecsByMode;
 
+/**
+ * The block width to hand `applyPaddingScheme` — i.e. "should the padding
+ * overlay engage here, and at what width?". **Every** call site that builds or
+ * rebuilds a cipher spec must route through this rather than calling
+ * `blockByteLengthFor` directly, because there are two independent reasons the
+ * answer is "don't engage":
+ *
+ *  1. **No `BlockCipherCore`** (Twofish today) — the overlay has no width to
+ *     wire itself in at. This is the original reason the parameter is optional.
+ *  2. **CTR, whatever the cipher** — CTR is a stream mode and needs no padding
+ *     at all. A pad step spliced into a CTR spec would re-fill the final block,
+ *     so the partial-block path would silently never run and CTR would behave
+ *     exactly like the block modes it differs from.
+ *
+ * Both are expressed as "no block width", which reuses `overlayApplies`'s
+ * existing "no width ⇒ no overlay" semantics rather than adding a second gate
+ * inside `applyPaddingScheme`.
+ *
+ * **This helper exists because the five call sites are easy to miss.** The CTR
+ * rule originally landed in `buildCanonicalPair` alone, and browser smoke
+ * immediately found the gap: `setPadding` recomputed the width independently,
+ * so selecting a scheme while CTR was active still padded the message. The
+ * other three (`setSpecFromDocument`, `resetSpec`, `isCustomSpec`) had the same
+ * shape. Funnelling them through one function is what stops the next such rule
+ * from having to be remembered five times.
+ */
+const overlayBlockBytes = (cipher: Cipher, cipherMode: CipherMode): number | undefined =>
+  cipherMode === "ctr" ? undefined : blockByteLengthFor(cipher);
+
 const buildCanonicalPair = (
   cipher: Cipher,
   cipherMode: CipherMode,
   scheme: PaddingScheme,
 ): SpecsByMode => {
-  // `undefined` for a cipher with no `BlockCipherCore` (Speck/Serpent/DES/
-  // Blowfish/Twofish today) — which is what keeps the padding overlay off for
-  // them, exactly as the old AES-id-prefix gate did inside the overlay itself.
-  const blockBytes = blockByteLengthFor(cipher);
+  const blockBytes = overlayBlockBytes(cipher, cipherMode);
   return {
     kind: "cipher",
     encrypt: applyPaddingScheme(
@@ -877,7 +903,8 @@ export const setPadding = (scheme: PaddingScheme): void => {
   // last cipher"), so reading it unconditionally would hand a 16 to an RSA
   // spec and splice a pad into it. Only a `cipher`-kind spec has a block.
   const current = specs();
-  const blockBytes = current.kind === "cipher" ? blockByteLengthFor(useCipher()()) : undefined;
+  const blockBytes =
+    current.kind === "cipher" ? overlayBlockBytes(useCipher()(), useCipherMode()()) : undefined;
   updateBoth((s, m) => applyPaddingScheme(s, m, scheme, blockBytes));
 };
 
@@ -1723,7 +1750,7 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
     resolveDefault(useCipher()(), useCipherMode()(), otherMode),
     otherMode,
     usePaddingScheme()(),
-    blockByteLengthFor(useCipher()()),
+    overlayBlockBytes(useCipher()(), useCipherMode()()),
   );
   setSpecs(
     docMode === "encrypt"
@@ -1780,7 +1807,7 @@ export const resetSpec = (): void => {
     resolveDefault(useCipher()(), useCipherMode()(), mode()),
     mode(),
     usePaddingScheme()(),
-    blockByteLengthFor(useCipher()()),
+    overlayBlockBytes(useCipher()(), useCipherMode()()),
   );
   updateActive(() => canonical);
 };
@@ -1856,7 +1883,7 @@ export const isCustomSpec = (): boolean => {
     resolveDefault(useCipher()(), useCipherMode()(), mode()),
     mode(),
     usePaddingScheme()(),
-    blockByteLengthFor(useCipher()()),
+    overlayBlockBytes(useCipher()(), useCipherMode()()),
   );
   return !deepEqualJson(activeSpec(), canonical);
 };

@@ -48,6 +48,7 @@ import {
   serpentSubBytesNarration,
 } from "./serpent";
 import { speckRoundInverseNarration, speckRoundNarration } from "./speck";
+import { truncateToReferenceNarration } from "./truncate";
 import { twofishHExpandNarration, twofishSboxLookupNarration } from "./twofish";
 
 let initialized = false;
@@ -125,6 +126,15 @@ export const initNarrationRegistry = (): void => {
   // allowlist (parity with the four `*.publish-round-keys@1` tails).
   registerNarration("twofish.sbox-lookup@1", twofishSboxLookupNarration);
   registerNarration("twofish.h-expand@1", twofishHExpandNarration);
+  // CTR's ragged tail (2026-07-20) — `truncate-to-reference@1` is a bare-name
+  // port-native primitive, so it escapes the contract test's shapeContract
+  // scope and could have shipped silently un-narrated. It gets a real narrator
+  // anyway because its payload sentence is per-frame value-aware: on the final
+  // short block it names the discarded keystream bytes and explains that this
+  // is why CTR's ciphertext matches the plaintext length. A static
+  // `narrationOverride` cannot branch on the widths, so that sentence — the
+  // point of the whole partial-block feature — is only sayable here.
+  registerNarration("truncate-to-reference@1", truncateToReferenceNarration);
   initialized = true;
 };
 

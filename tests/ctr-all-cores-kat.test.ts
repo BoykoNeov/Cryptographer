@@ -283,37 +283,46 @@ describe("CTR across every BlockCipherCore", () => {
         expect(ct.slice(3 * b, 4 * b)).toBe(expected.slice(3 * b, 4 * b));
       });
 
-      it("takes the padding overlay, so a short message reaches a block boundary", () => {
-        // v1 CTR is block-aligned, so the padding overlay must actually apply
-        // to it — `needsAlignment` in App.tsx SKIPS the alignment check when a
-        // padding scheme is set, on the assumption that a pad gets spliced in.
-        // If that assumption were wrong (e.g. the overlay gated on
-        // `cipherMode ∈ {ecb,cbc}`), a short input would reach the iterate raw
-        // and throw "not a multiple of blockByteLength". It is gated on core
-        // PRESENCE instead, which is why CTR gets it for free — asserted here
-        // rather than inferred from the call site.
+      it("needs NO padding — a short message encrypts to a short ciphertext", () => {
+        // The partial-block follow-up (2026-07-20) replaced this file's former
+        // "takes the padding overlay" assertion. CTR is a stream mode: a
+        // message one byte short of a block stays one byte short of a block,
+        // and no pad leaf is spliced in at all (`buildCanonicalPair` passes no
+        // block width for CTR, so `overlayApplies` declines).
         const b = core.blockByteLength;
-        // One byte short of a whole block ⇒ PKCS#7 must append exactly one 0x01.
+        const short = "7e".repeat(b - 1);
+        const ct = runMode(buildCtrSpec(core, "encrypt"), short, key, iv);
+        expect(ct.length / 2).toBe(b - 1);
+        expect(runMode(buildCtrSpec(core, "decrypt"), ct, key, iv)).toBe(short);
+      });
+
+      it("still runs correctly if a pad IS spliced in by hand (the overlay is inert, not incompatible)", () => {
+        // The app never does this for CTR any more, but the mode has no
+        // objection to whole-block input — this pins that disengaging padding
+        // was a UI/limits decision, not something the spec now depends on.
+        const b = core.blockByteLength;
         const short = "7e".repeat(b - 1);
         const enc = applyPaddingScheme(buildCtrSpec(core, "encrypt"), "encrypt", "pkcs7", b);
         const ct = runMode(enc, short, key, iv);
         expect(ct.length / 2).toBe(b);
-
-        // And it round-trips: decrypt(unpad) recovers the original short input.
         const dec = applyPaddingScheme(buildCtrSpec(core, "decrypt"), "decrypt", "pkcs7", b);
         expect(runMode(dec, ct, key, iv)).toBe(short);
       });
 
-      it("paddingLimits bounds CTR like the other multi-block modes (v1: whole blocks)", () => {
-        // Pinned because CTR's bounds are a deliberate v1 compromise, not the
-        // mode's real behaviour: real CTR needs no padding at all. If the
-        // partial-block follow-up lands, THIS is the assertion that should
-        // change, which is exactly why it names the block width explicitly.
+      it("paddingLimits gives CTR its own padding-free bounds, unlike ECB/CBC", () => {
+        // The assertion the former "v1: whole blocks" pin said should change
+        // when partial blocks landed. CTR now accepts ANY length ≥ 1 in both
+        // directions — it must NOT agree with CBC, and its floor must be 1
+        // rather than the block width, which is what makes a message shorter
+        // than one block representable.
         const b = core.blockByteLength;
-        expect(paddingLimits("decrypt", "none", cipher, "ctr")).toEqual(
+        expect(paddingLimits("decrypt", "none", cipher, "ctr")).not.toEqual(
           paddingLimits("decrypt", "none", cipher, "cbc"),
         );
-        expect(paddingLimits("decrypt", "none", cipher, "ctr").min).toBe(b);
+        expect(paddingLimits("decrypt", "none", cipher, "ctr").min).toBe(1);
+        expect(paddingLimits("encrypt", "none", cipher, "ctr").min).toBe(1);
+        // CBC keeps the block floor — the relaxation must not have leaked.
+        expect(paddingLimits("decrypt", "none", cipher, "cbc").min).toBe(b);
       });
 
       it("the cipher body is seeded from the COUNTER, never from the message block", () => {

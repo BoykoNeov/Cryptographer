@@ -18,7 +18,7 @@
  *  2. **The blocks are independent.** Unlike CBC, block `i`'s keystream
  *     depends only on the counter, so nothing serializes.
  *  3. **No padding is needed**, because the message is XORed, not blocked —
- *     a 5-byte message wants only 5 keystream bytes. *(v1 caveat below.)*
+ *     a 5-byte message wants only 5 keystream bytes. See "The ragged tail".
  *
  * **Cipher-agnostic.** Like `modes/ecb.ts` and `modes/cbc.ts`, this builder
  * takes a `BlockCipherCore` and knows nothing else. It is also the mode that
@@ -36,13 +36,15 @@
  *     iterate "ctr-blocks" {
  *       seedInput:     $input                       // the message bytes
  *       blockByteLength: core.blockByteLength
+ *       allowPartialFinalBlock: true                // the ragged tail (below)
  *       chainInput:    port(fetch-iv,"output")      // T_0 bootstraps the counter
  *       chainFeedback: port(ctr-increment,"output") // T_{i+1} = T_i + 1
  *       bodyOutput:    port(ctr-xor,"output")       // P_i ⊕ keystream
  *       outputPorts:   ["out"]
  *       children: [
  *         <core FORWARD body, seeded from port(it,"chain")>  → keystream E(T_i)
- *         ctr-xor       (xor@1: port(it,"in") ⊕ keystream)
+ *         ctr-trim      (truncate-to-reference@1: keystream ↓ to port(it,"in") width)
+ *         ctr-xor       (xor@1: port(it,"in") ⊕ trimmed keystream)
  *         ctr-increment (increment-counter@1 on port(it,"chain"))
  *       ]
  *     }
@@ -70,17 +72,37 @@
  * of the mode, and running CTR-decrypt over CTR-encrypt's output in the
  * explorer is meant to make that land.
  *
- * ## v1 caveat: whole blocks only
+ * ## The ragged tail
  *
- * Real CTR truncates the final keystream block to the message's trailing
- * partial block and emits ciphertext exactly as long as the plaintext. This
- * build requires the message to reach a block boundary, so the padding overlay
- * stays engaged (`requiresPadding: true` in the mode table) — the runtime's
- * port-mode iterate rejects a non-multiple `seedInput`, and `xor@1` requires
- * equal-length operands, so honest partial-block support needs both a runtime
- * relaxation and a truncation step. Deferred deliberately: the cipher-agnostic
- * spine and the counter arithmetic are what CTR contributes to the mode
- * machine, and neither depends on the ragged tail.
+ * A message that ends mid-block is the case that makes "CTR needs no padding"
+ * true rather than merely stated, so the mode supports it directly: the
+ * ciphertext comes out exactly as long as the plaintext, for any length ≥ 1 —
+ * including a whole message SHORTER than one cipher block. No padding overlay
+ * is spliced into a CTR spec at all.
+ *
+ * Two pieces cooperate, and the coupling is the design:
+ *
+ *  - the iterate sets `allowPartialFinalBlock`, so the runtime runs
+ *    `ceil(len / B)` iterations and hands the last one a **short `in` block**
+ *    (its per-block `subarray` already clamps — see `IterateGroup` in
+ *    `core/types.ts`);
+ *  - `ctr-trim` (`truncate-to-reference@1`) then sits between the cipher body
+ *    and the XOR, trimming the full-width **keystream** down to that block's
+ *    width so `xor@1`'s equal-length requirement is met honestly.
+ *
+ * Trimming the keystream rather than the final concatenated output is the
+ * pedagogical choice. The alternative — zero-pad the message and trim at the
+ * end — would show a padded plaintext block visibly entering the XOR, which
+ * contradicts the very claim the mode is here to demonstrate.
+ *
+ * **The cipher body is untouched and stays cipher-agnostic, because the
+ * counter rides `chain`, not `in`.** `chain` is bootstrapped one block wide
+ * from `fetch-iv` and advanced by `increment-counter@1` (whose width derives
+ * from its input), so it is full width `B` on every iteration including the
+ * last. The core therefore always encrypts a full counter block and always
+ * emits full-width keystream; only `in` goes short. No `BlockCipherCore`
+ * changes, and no per-cipher work — the ragged tail arrived for every core at
+ * once.
  *
  * References: NIST SP 800-38A §6.5 + Appendix B.1 (CTR mode definition and the
  * standard incrementing function).
@@ -106,6 +128,10 @@ const CTR_ITERATE_ID = "ctr-blocks";
 // place because the KATs pin `ctr-xor:b{i}` / `ctr-increment:b{i}`.
 const CTR_XOR_ID = "ctr-xor";
 const CTR_INCREMENT_ID = "ctr-increment";
+// The ragged-tail trim. On every block but a final short one this is a
+// passthrough; on that one it is the step that makes the ciphertext match the
+// plaintext's length.
+const CTR_TRIM_ID = "ctr-trim";
 
 /**
  * Initial-counter narration. Block size is interpolated from the core because
@@ -165,6 +191,44 @@ exact same forward path rather than an inverse.`
   references: ["NIST SP 800-38A §6.5 (CTR-Encrypt / CTR-Decrypt)"],
 });
 
+/**
+ * Ragged-tail trim narration. Type-prose only — the per-frame value-prose
+ * (which bytes were actually discarded, and the "this is why the lengths
+ * match" sentence) comes from the registered narrator for
+ * `truncate-to-reference@1` in `src/ui/narration/truncate.tsx`, which can
+ * branch on the real widths as this static block cannot.
+ */
+const narrCtrTrim = (core: BlockCipherCore): StepDocumentation => ({
+  name: "Trim keystream to block (CTR)",
+  summary:
+    "Cuts the keystream down to the message block's width, so a message that ends mid-block needs no padding.",
+  detail: `## Trim keystream to block
+
+${core.familyName} always produces a full ${core.blockByteLength}-byte block of keystream — it knows
+no other size. But the *last* block of a message need not be that long: a
+message is not required to end on a block boundary in counter mode.
+
+This step reconciles the two. It keeps as many keystream bytes as the message
+block actually has and discards the rest, so the XOR below gets two operands of
+equal length.
+
+On every block except a final short one, it does nothing — the message block is
+already ${core.blockByteLength} bytes wide and the whole keystream survives.
+
+## Why this is the step that makes CTR padding-free
+
+ECB and CBC push each block **through** the cipher, and a block cipher has no
+meaning for a partial block — which is exactly why those modes must pad the
+message out to a whole block first.
+
+CTR never feeds the message to the cipher at all; the message only meets an
+XOR. So it can stop wherever it likes, and the ciphertext comes out **exactly
+as long as the plaintext**. Trimming here — rather than padding the message —
+is the honest depiction of that: no invented plaintext byte ever enters the
+computation.`,
+  references: ["NIST SP 800-38A §6.5 (CTR mode — the final partial block)"],
+});
+
 /** Counter-advance narration. */
 const narrIncrement: StepDocumentation = {
   name: "Advance counter (CTR)",
@@ -218,13 +282,26 @@ export function buildCtrSpec(core: BlockCipherCore, direction: CipherDirection):
   // seed-threading: `in` is never wired into the cipher at all.
   const keystream = core.buildEncryptBody(counterIn);
 
-  // Message block ⊕ keystream. Identical for both directions.
+  // Trim the full-width keystream down to THIS block's width. `reference` is
+  // the message block itself — only its length is read — so the trim follows
+  // the message rather than a param. A no-op on every full block; on a final
+  // short one it is what keeps the ciphertext the plaintext's length.
+  const ctrTrim: StepNode = {
+    kind: "step",
+    id: CTR_TRIM_ID,
+    type: "truncate-to-reference@1",
+    params: {},
+    portInputs: { input: keystream.output, reference: blockIn },
+    narrationOverride: narrCtrTrim(core),
+  };
+
+  // Message block ⊕ trimmed keystream. Identical for both directions.
   const ctrXor: StepNode = {
     kind: "step",
     id: CTR_XOR_ID,
     type: "xor@1",
     params: { inputCount: 2 },
-    portInputs: { operand0: blockIn, operand1: keystream.output },
+    portInputs: { operand0: blockIn, operand1: port(CTR_TRIM_ID, "output") },
     narrationOverride: narrCtrXor(core, isDecrypt),
   };
 
@@ -248,12 +325,16 @@ export function buildCtrSpec(core: BlockCipherCore, direction: CipherDirection):
     label: `CTR blocks (${core.familyName} keystream ⊕ message)`,
     seedInput: port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT),
     blockByteLength: core.blockByteLength,
+    // The ragged tail: the message may end mid-block, and the final iteration
+    // then receives a SHORT `in` block which `ctr-trim` matches the keystream
+    // to. ECB/CBC leave this absent and keep the whole-multiple requirement.
+    allowPartialFinalBlock: true,
     // The carry holds the counter: bootstrapped from T₀, advanced by +1.
     chainInput: port("fetch-iv", "output"),
     chainFeedback: port(CTR_INCREMENT_ID, "output"),
     bodyOutput: port(CTR_XOR_ID, "output"),
     outputPorts: ["out"],
-    children: [...keystream.nodes, ctrXor, ctrIncrement],
+    children: [...keystream.nodes, ctrTrim, ctrXor, ctrIncrement],
   };
 
   return {

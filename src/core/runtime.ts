@@ -299,12 +299,22 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
             `iterate '${node.id}': seedInput`,
             "upstream",
           );
-          if (seedSource.length % blockLen !== 0) {
+          // A ragged tail is legal only when the node opts in
+          // (`allowPartialFinalBlock` — CTR's stream-mode relaxation; see
+          // `IterateGroup` in core/types.ts). Without the flag a remainder is
+          // a spec/input bug: ECB and CBC push each block THROUGH the cipher,
+          // and a block cipher has no meaning for a partial block.
+          if (!node.allowPartialFinalBlock && seedSource.length % blockLen !== 0) {
             throw new Error(
               `iterate '${node.id}': seedInput output length ${seedSource.length} is not a multiple of blockByteLength ${blockLen}`,
             );
           }
-          const count = seedSource.length / blockLen;
+          // With the flag, the remainder gets its own final iteration whose
+          // `in` block is short — the `subarray` below already clamps, so no
+          // special-casing is needed in the loop itself.
+          const count = node.allowPartialFinalBlock
+            ? Math.ceil(seedSource.length / blockLen)
+            : seedSource.length / blockLen;
           const iteratePath = [...path, node.id];
           const collected: Uint8Array[] = [];
           // The chain value for iteration i (CBC: the previous ciphertext block,

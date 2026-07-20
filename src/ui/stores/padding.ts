@@ -137,7 +137,7 @@ const singleBlockLimits = (cipher: Cipher): { min: number; max: number } => {
  * Used by the Run handler to give a friendly error when the user's input is
  * the wrong size.
  *
- * Three families of behavior, keyed off whether the cipher has a
+ * Four families of behavior, keyed off whether the cipher has a
  * `BlockCipherCore` — the same fact that decides whether it can run a mode at
  * all:
  *
@@ -148,12 +148,15 @@ const singleBlockLimits = (cipher: Cipher): { min: number; max: number } => {
  *   • **Core, single-block**: exactly one block on decrypt; on encrypt,
  *     0..B-1 / 1..B / B..B depending on the padding scheme.
  *
- *   • **Core, multi-block (ECB/CBC/CTR)**: N × B bytes, up to MAX_BLOCKS_UI
+ *   • **Core, block modes (ECB/CBC)**: N × B bytes, up to MAX_BLOCKS_UI
  *     blocks. PKCS#7 / zero-pad / iso7816-4 each accept short input on
  *     encrypt (their pad step expands to the next block boundary); decrypt
- *     needs a clean block multiple. CTR is here rather than in a padding-free
- *     family of its own only because v1 can't truncate its last keystream
- *     block — see the branch comment below.
+ *     needs a clean block multiple.
+ *
+ *   • **Core, stream mode (CTR)**: any length 1..MAX_BYTES, both directions,
+ *     no alignment and no padding — the message is XORed with keystream, not
+ *     fed through the cipher. This is a family of its own precisely because
+ *     "needs no padding" is one of the facts the mode exists to teach.
  *
  * Every bound is derived from the core's block width `B` rather than a
  * hardcoded 16 — and since Blowfish's core landed (Phase C), the app itself
@@ -171,13 +174,26 @@ export const paddingLimits = (
   const B = core.blockByteLength;
   const MAX_BYTES = MAX_BLOCKS_UI * B;
 
-  // ── Multi-block (ECB / CBC / CTR) ───────────────────────────────────────
-  // CTR shares these bounds in v1 despite not needing padding in principle:
-  // the port-mode iterate rejects a non-block-multiple `seedInput` and `xor@1`
-  // requires equal-length operands, so the last keystream block cannot yet be
-  // truncated to a ragged tail. Until that lands, CTR is block-aligned like
-  // its siblings and keeps the padding overlay engaged.
-  if (cipherMode === "ecb" || cipherMode === "cbc" || cipherMode === "ctr") {
+  // ── CTR — the stream mode, no padding, no alignment ─────────────────────
+  // CTR encrypts the COUNTER to make keystream and XORs that with the message,
+  // so the message never enters the cipher and never needs topping up to a
+  // whole block. Any length ≥ 1 is legal in BOTH directions — including a
+  // message shorter than one block — and the ciphertext comes out exactly as
+  // long as the plaintext, so a decrypt input is bounded identically to an
+  // encrypt input. `scheme` is deliberately ignored: no padding overlay is
+  // spliced into a CTR spec at all (see `buildCanonicalPair` in stores/spec.ts,
+  // which passes no block width for CTR).
+  //
+  // min is 1 rather than 0 because a zero-length message yields zero
+  // iterations and so no trace to look at.
+  if (cipherMode === "ctr") {
+    return { min: 1, max: MAX_BYTES };
+  }
+
+  // ── Multi-block (ECB / CBC) ─────────────────────────────────────────────
+  // These feed each block THROUGH the cipher, which has no meaning for a
+  // partial block — hence the alignment requirement and the padding overlay.
+  if (cipherMode === "ecb" || cipherMode === "cbc") {
     if (mode === "decrypt") {
       // Decrypt input must be a clean ciphertext block multiple. The Run
       // handler also checks the alignment; this just bounds the overall
