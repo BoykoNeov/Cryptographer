@@ -271,6 +271,89 @@ describe("App — CBC IV flow (Phase 2)", () => {
     expect((readResultHex(container) ?? "").replace(/\s+/g, "")).toBe(PT_2_BLOCKS);
   });
 
+  it("drives AES-128 CFB through the whole App UI, byte-equal to node:crypto", () => {
+    // Same gap as the CTR test above: the CFB KAT calls `buildCfbSpec` directly
+    // and never touches the mode-dropdown ↔ spec-store ↔ IV-field ↔ Run wiring.
+    // CFB widened that wiring in two places — the Run handler's aux-seed branch
+    // and the IV row's visibility both moved behind `cipherModeUsesIv` — and if
+    // either had missed `cfb`, `aux["iv"]` would be absent and `fetch-iv` would
+    // fail, a break no spec-level test can see.
+    const { container } = render(() => <App />);
+
+    // Set the cipher EXPLICITLY — the selector leaks across tests in this file
+    // and Serpent shares AES's block and key width (see the CTR test's note).
+    fireEvent.change(findSelectByLabel(container, "cipher"), { target: { value: "aes-128" } });
+    fireEvent.change(findSelectByLabel(container, "mode of operation"), {
+      target: { value: "cfb" },
+    });
+
+    // The IV row appears for CFB too, where it holds the initial FEEDBACK
+    // REGISTER rather than a chaining value or a counter.
+    const ivInput = findInputByLabel(container, "IV");
+    expect(ivInput).not.toBeNull();
+    expect(ivInput?.value).toBe("000102030405060708090a0b0c0d0e0f");
+
+    const PT_2_BLOCKS = "00112233445566778899aabbccddeeff" + "ffeeddccbbaa99887766554433221100";
+    setInputValue(findInputByLabel(container, "plaintext") as HTMLInputElement, PT_2_BLOCKS);
+    setInputValue(
+      findInputByLabel(container, "key") as HTMLInputElement,
+      "000102030405060708090a0b0c0d0e0f",
+    );
+
+    fireEvent.click(findButton(container, "run"));
+    expect(container.querySelector(".error")).toBeNull();
+    const ct = (readResultHex(container) ?? "").replace(/\s+/g, "");
+    // Byte-equal to `node:crypto`'s aes-128-cfb (CFB128 — not cfb8/cfb1) for
+    // this (key, IV, plaintext), computed independently and pinned as a literal
+    // so this test needs no crypto import and cannot drift with the code.
+    expect(ct).toBe("0a852986053b9632795a3ee30a8e04a533104e7054ee4359839de5846b83f0c3");
+
+    // Block 0 is byte-identical to CTR's (above): both modes encrypt the IV to
+    // make the first keystream block, so they cannot differ there. Block 1 MUST
+    // differ — CTR advances to IV+1 while CFB loads the ciphertext. That
+    // contrast is the UI-level statement of what separates the two modes, and
+    // it would break if CFB's feedback were wired to a counter.
+    expect(ct.slice(0, 32)).toBe("0a852986053b9632795a3ee30a8e04a5");
+    expect(ct.slice(32)).not.toBe("fd8d3158ddb2eb1eedbca84b78861edc"); // CTR's block 1
+
+    // Flip to decrypt — which runs the SAME forward cipher, refilling the
+    // register from the arriving ciphertext — and recover the plaintext.
+    fireEvent.change(findSelectByLabel(container, "mode"), { target: { value: "decrypt" } });
+    fireEvent.click(findButton(container, "run"));
+    expect(container.querySelector(".error")).toBeNull();
+    expect((readResultHex(container) ?? "").replace(/\s+/g, "")).toBe(PT_2_BLOCKS);
+  });
+
+  it("accepts a ragged (non-block-multiple) message in CFB through the App UI", () => {
+    // The no-padding path, driven through the UI rather than the builder. This
+    // is what the browser smoke checked by hand; pinning it here means a future
+    // change that re-engages the padding overlay for CFB — or restores the
+    // alignment check in `needsAlignment` — fails deterministically instead of
+    // silently producing a block-padded ciphertext.
+    const { container } = render(() => <App />);
+    fireEvent.change(findSelectByLabel(container, "cipher"), { target: { value: "aes-128" } });
+    fireEvent.change(findSelectByLabel(container, "mode of operation"), {
+      target: { value: "cfb" },
+    });
+
+    // 19 bytes: one full block plus a 3-byte remainder, so both the full-width
+    // path and the keystream-trim path run in the same trace.
+    const PT_RAGGED = "00112233445566778899aabbccddeeffffeedd";
+    setInputValue(findInputByLabel(container, "plaintext") as HTMLInputElement, PT_RAGGED);
+    setInputValue(
+      findInputByLabel(container, "key") as HTMLInputElement,
+      "000102030405060708090a0b0c0d0e0f",
+    );
+
+    fireEvent.click(findButton(container, "run"));
+    expect(container.querySelector(".error")).toBeNull();
+    const ct = (readResultHex(container) ?? "").replace(/\s+/g, "");
+    // node:crypto's aes-128-cfb on the same 19 bytes. Length equality is the
+    // load-bearing half: a padded run would come out 32 bytes.
+    expect(ct).toBe("0a852986053b9632795a3ee30a8e04a533104e");
+    expect(ct.length).toBe(PT_RAGGED.length);
+  });
+
   it("invalid IV (wrong length) snaps back to the store's last known good value", () => {
     const { container } = render(() => <App />);
     fireEvent.change(findSelectByLabel(container, "mode of operation"), {
