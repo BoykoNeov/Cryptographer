@@ -1,7 +1,8 @@
 # Salsa20 — the second stream cipher, and the ARX shape generalization
 
 Status: **APPROVED, in progress.** Created 2026-07-20.
-**S1 SHIPPED 2026-07-20** — the ARX family is extracted; S2 (the cipher) is next.
+**S1 SHIPPED 2026-07-20** — the ARX family is extracted.
+**S2 SHIPPED 2026-07-20** — the cipher runs; S3 (shape / layout / diagram) is next.
 
 ## Context
 
@@ -119,7 +120,48 @@ that the partition gate judges whatever the walk returns.
 - `src/core/chacha-diagram.ts` — `deriveWordIndices` moves to a shared module
   parameterized by rail list; `opLabel`, `kind`, and `rfcLabel` stay ChaCha's.
 
-### Phase S2 — the cipher
+### Phase S2 — the cipher — **SHIPPED 2026-07-20**
+
+**Both of the plan's stated bets paid out.** The `"stream"`-as-a-sixth-mode
+abstraction held exactly as predicted: `salsa20: ["stream"]` was the entire cost
+and `isStreamCipher` / `isStreamCipherMode` / `cipherModeUsesIv` /
+`defaultCipherModeFor` gained **zero** arms, because every one already derives
+from that row. Full gate green: 282 files, 3791 passed, 2 skipped.
+
+**The oracle risk evaporated** — pycryptodome 3.23 is installed locally, so the
+vectors were generated directly rather than transcribed. The KAT rests on **two**
+independent sources: pycryptodome, and a from-spec reference implementation
+embedded in the test file (`refBlock`) that shares no code, data layout or
+execution model with the port graph. That second source is what makes the pinned
+literals non-circular, and it is the pattern to reuse for any future cipher
+`node:crypto` does not cover.
+
+**Perturbation, measured:** swapping rotation constants 9 and 13 fails 20 of 22
+tests. The two survivors are exactly the round-trip tautology and the
+state-assembly test — the plan's ranking argument, confirmed empirically rather
+than asserted.
+
+**Corrections to what this plan predicted:**
+
+- The plan flagged `tests/ctr-all-cores-kat.test.ts` as a canary that would
+  "break the moment Salsa20 lands". **It did not break — it failed silently.**
+  Its `ALL_CIPHERS` is a *local* hand-maintained shadow typed `readonly
+  Cipher[]`, not an exhaustive map, so adding a union member does not flag it;
+  the mirror simply stopped mirroring while every test kept passing against one
+  cipher fewer. An assertion pinning the local list to `CIPHER_OPTIONS` now makes
+  it self-policing. Silent-drift canaries are worse than loud ones; check for
+  this shape rather than assuming a listed canary will announce itself.
+- **An unlisted site needed changing:** `App.tsx`'s IV caption was gated on the
+  *generic* `isStreamCipher` but hardcoded ChaCha20's 4/12-from-1 text. Salsa20
+  is 8/8-from-0, so it would have named the wrong bytes for the one field whose
+  wrong value looks entirely plausible — the same failure mode as the IV-width
+  bug this plan already warned about. Now `IV_LAYOUT_CAPTION_BY_CIPHER`.
+- `tests/default-ciphertext-table.test.ts` was the **only** compiler-enforced
+  failure; the other listed canaries needed hand edits.
+
+Salsa20 is deliberately absent from that file's published-vector anchor list: its
+default key and nonce are a published pair, but its default plaintext is this
+project's own, so the ciphertext is not itself a published value.
 
 - `src/ciphers/salsa20.ts` (new) — modelled on `chacha20.ts`. Structural notes:
   - **Endianness.** Same convention: words travel big-endian, every LE↔BE crossing
