@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-27
+
 ### Added
 - **Pseudo-random generators — a fourth algorithm family, and the first one with no message.** Selecting **Generator** in the `kind` dropdown offers MINSTD under both multipliers the C++ standard names: `minstd_rand0` (`x ← 16807·x mod 2³¹−1`, Lehmer 1951 / Park–Miller 1988) and `minstd_rand` (`48271`, Park–Miller–Stockmeyer 1993). Every family before this one transforms data you hand it. A generator does not: its seed says *which* sequence to produce and nothing at all about *how much of it*, so the requested length has to enter the spec on its own. That is what the new **`zero-fill@1`** leaf is — an emitter of `N` zero bytes whose value is never read and whose **width** is the entire point, because the port-mode `iterate` derives its count by dividing that width by the word size. Bound to `seedInput`, it makes "ask for 42 bytes, get 11 passes with the last trimmed to 2" a structural fact of the graph rather than a number in a control. `constant-load@1` was rejected for the job despite fitting mechanically: it documents itself as the emitter of *published cryptographic constants*, so pressing it into service as a length-carrier would make the trace tell a learner that a 256-byte run of zeros is a published constant — and would put that array into every saved and URL-shared document.
 - **The family cost no runtime change whatsoever.** The generator loop is the shipped port-mode `iterate` with the state on the cross-iteration carry — OFB's shape exactly — so `chainInput` bootstraps from the seed, `chainFeedback` advances it, `bodyOutput` collects each word, and `allowPartialFinalBlock` plus `truncate-to-reference@1` handle a ragged tail the same way CTR/CFB/OFB/ChaCha20/Salsa20 already do. Spec size is constant in the requested length (one body, looped) rather than unrolled like SHAKE's squeeze. `chainFeedback` reads the **untrimmed** state while `bodyOutput` reads the trimmed word — and the file says plainly that this is byte-*indistinguishable* here, since only the final block is ever short and its feedback is discarded. It is OFB's choice for OFB's reason: the recurrence is defined on whole words and the trace should say so. That claim is measured rather than asserted — the KAT rebinds the wire and checks the streams match at four lengths, so a future topology where it *does* matter fails loudly instead of silently.
@@ -380,7 +382,8 @@ The initial release, reconstructed from `git log`. This entry covers everything 
 - **Playwright real-browser smoke tests** in `e2e/` (currently the Slice 6 graph drag/collapse spec).
 - ~528 tests across ~42 files; ~7s for the full gate, ~4s for vitest alone.
 
-[Unreleased]: https://github.com/BoykoNeov/Cryptographer/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/BoykoNeov/Cryptographer/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/BoykoNeov/Cryptographer/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/BoykoNeov/Cryptographer/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/BoykoNeov/Cryptographer/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/BoykoNeov/Cryptographer/compare/v0.7.0...v0.8.0
