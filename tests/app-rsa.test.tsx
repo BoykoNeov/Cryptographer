@@ -87,10 +87,13 @@ describe("App — RSA (public-key) category", () => {
   it("offers a Public-key kind that swaps in the RSA dropdown and hides key/mode-of-operation/padding", () => {
     const { container } = render(() => <App />);
     const kind = findSelectByLabel(container, "kind");
+    // The full category list, pinned in order. "prng" joined it when the
+    // generator family landed (`docs/plans/iterative-dancing-ocean.md`).
     expect(Array.from(kind.querySelectorAll("option")).map((o) => o.value)).toEqual([
       "cipher",
       "hash",
       "asymmetric",
+      "prng",
     ]);
 
     selectRsa(container);

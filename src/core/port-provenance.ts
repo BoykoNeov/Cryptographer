@@ -316,8 +316,9 @@ export const lookupProvenance = (stepType: string): ProvenanceFn | undefined =>
  *    `eea-step@1` / `eea-extract@1` (full-width carries/borrows mix every
  *    output byte across all input bytes — there is no clean per-cell mapping).
  *    Deferred to the distinct `≈`-treatment fast-follow.
- *  - **no inputs**: `constant-load@1`, `right-encode@1` (emit a literal / a
- *    param-derived encoding — nothing to point back to).
+ *  - **no inputs**: `constant-load@1`, `right-encode@1`, `zero-fill@1` (emit a
+ *    literal / a param-derived encoding / a run of zeros — nothing to point
+ *    back to).
  *  - **partial — synthesizes bytes with no input source**: `pad-with-byte@1`,
  *    `append-be64-length@1`, `encode-string@1`, `bytepad@1` (output bytes are
  *    partly fabricated — a length prefix / zero padding — not all gathered).
@@ -368,6 +369,11 @@ export const PROVENANCE_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set<string>([
   // no inputs
   "constant-load@1",
   "right-encode@1", // emits right_encode(value) from a param — nothing to point back to
+  // no inputs — emits `byteLength` zeros. There is a further reason beyond
+  // "nothing to point back to": a generator's body deliberately IGNORES the
+  // bytes this produces, reading only their width. Highlighting a provenance
+  // cone from a value nothing consumes would be actively misleading.
+  "zero-fill@1",
   // partial — synthesizes bytes
   "pad-with-byte@1",
   "append-be64-length@1",

@@ -290,6 +290,7 @@ import {
   xorWithAuxMeta,
   xorWithAuxPortContract,
 } from "../steps/xor-with-aux";
+import { zeroFill, zeroFillDoc, zeroFillPortContract } from "../steps/zero-fill";
 import { zeroPad, zeroPadDoc, zeroPadMeta, zeroPadPortContract } from "../steps/zero-pad";
 import { zeroUnpad, zeroUnpadDoc, zeroUnpadMeta, zeroUnpadPortContract } from "../steps/zero-unpad";
 
@@ -1039,6 +1040,18 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: constantLoad,
     shape: constantLoadPortContract,
     doc: constantLoadDoc,
+  });
+  // `zero-fill@1` (PRNG family, `docs/plans/iterative-dancing-ocean.md`) is
+  // `constant-load@1`'s sibling in shape — zero inputs, one output whose width
+  // is known at spec time — but its role is the opposite. `constant-load@1`
+  // exists so a published constant's VALUE reaches the dataflow; `zero-fill@1`
+  // exists so a requested LENGTH does. A generator has no message, so nothing
+  // else in its spec can tell the port-mode iterate how many times to run.
+  r.register("zero-fill@1", {
+    kind: "ported",
+    executor: zeroFill,
+    shape: zeroFillPortContract,
+    doc: zeroFillDoc,
   });
   r.register("shift-bits-right@1", {
     kind: "ported",

@@ -103,7 +103,7 @@ import { type TwofishRoundShape, analyzeTwofishRound } from "@/core/twofish-shap
 import type { AuxValue, State, StepNode } from "@/core/types";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { hasNarrationFn } from "../narration/registry";
-import { isAsymmetric, isHash, useAlgorithm } from "../stores/cipher";
+import { isAsymmetric, isHash, isPrng, useAlgorithm } from "../stores/cipher";
 import { getComposite, saveComposite } from "../stores/composites";
 import {
   isCuratedLayoutSuppressed,
@@ -3070,6 +3070,15 @@ export const GraphView = () => {
     const algo = useAlgorithm()();
     if (isHash(algo)) {
       return { inputLabel: "message", outputLabel: "digest" };
+    }
+    // A generator consumes a seed and produces a stream. Neither endpoint is a
+    // plaintext/ciphertext pair, and the fall-through below would label them as
+    // one — which browser smoke caught, because nothing in the type system
+    // objects to a wrong string. Kept in step with App.tsx's
+    // `inputLabel()`/`outputLabel()` so the graph pills and the linear sidebar
+    // never disagree.
+    if (isPrng(algo)) {
+      return { inputLabel: "seed", outputLabel: "random bytes" };
     }
     // RSA (asymmetric): encrypt consumes the message m → ciphertext c; decrypt
     // consumes c → m. Matches App.tsx's inputLabel()/outputLabel() so the graph

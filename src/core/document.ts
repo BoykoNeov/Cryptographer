@@ -260,6 +260,10 @@ export type DocumentMetadata = {
  *     supported for the loaded cipher.
  *   - For a `Hash` value: constructs a `kind: "hash"` SpecsByMode with
  *     the document's spec as the single slot.
+ *   - For a `Prng` value: constructs a `kind: "prng"` SpecsByMode the
+ *     same way, and additionally recovers the requested output length
+ *     from the spec's `zero-fill@1` leaf so the length control matches
+ *     the loaded document rather than the app default.
  *
  * Field naming history: `cipher` in schemaVersion 2; renamed to
  * `algorithm` in schemaVersion 3 (the rename IS the v2 → v3 migration

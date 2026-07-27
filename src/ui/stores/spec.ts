@@ -48,6 +48,7 @@ import {
   readKmacCustomization,
   readKmacKeyLength,
 } from "@/ciphers/kmac";
+import { buildMcgSpec, readMcgOutputLength } from "@/ciphers/lcg";
 import { buildCbcSpec } from "@/ciphers/modes/cbc";
 import { buildCfbSpec } from "@/ciphers/modes/cfb";
 import { buildCtrSpec } from "@/ciphers/modes/ctr";
@@ -101,15 +102,20 @@ import {
   type Asymmetric,
   type Cipher,
   type Hash,
+  type Prng,
   isAsymmetric,
   isCipher,
   isHash,
+  isPrng,
   setAsymmetric as setAsymmetricSignal,
   setCategory as setCategorySignal,
   setCipher as setCipherSignal,
   setHash as setHashSignal,
+  setPrng as setPrngSignal,
+  useCategory,
   useCipher,
   useHash,
+  usePrng,
 } from "./cipher";
 import {
   type CipherMode,
@@ -488,6 +494,50 @@ const asymmetricDefaults: Record<Asymmetric, Record<Mode, CipherSpec>> = {
 const resolveAsymmetricDefault = (a: Asymmetric, mode: Mode): CipherSpec =>
   asymmetricDefaults[a][mode];
 
+// ─── PRNG output length (editable spec DATA) ──────────────────────────────
+//
+// The direct analogue of `shakeOutputLength` above, and deliberately a SEPARATE
+// signal rather than a reuse of it. Two reasons: that signal's ceiling is chosen
+// for Keccak's squeeze economics (512 bytes ⇒ 4 permutations), which has nothing
+// to do with a generator's; and a user who sets a SHAKE digest length should not
+// find they have silently changed how much output a generator produces.
+//
+// A generator has no message, so this length is the ONLY thing that says how
+// much work to do. It reaches the spec as `zero-fill@1`'s width and the iterate
+// divides it by the word size — see `ciphers/lcg.ts`.
+
+/** Legibility ceiling on generator output. 1024 bytes ⇒ 256 MINSTD words ⇒ a
+ *  bit over 1500 frames, comfortably inside the scrubber's comfort zone (SHA-256
+ *  runs ~2300 frames for a single 64-byte block). Generous headroom over the
+ *  default so the loop can be watched growing; not a limit of the algorithm. */
+export const MAX_PRNG_OUTPUT = 1024;
+/**
+ * Default generator output: 42 bytes.
+ *
+ * Deliberately NOT a multiple of the 4-byte word. The default view should
+ * demonstrate the property that a stream has no block structure to the caller —
+ * the final word is trimmed and you get back exactly what you asked for — which
+ * is the same reason ChaCha20 defaults to 114 bytes and Salsa20 to 108 rather
+ * than to whole blocks. It also means the app's first paint exercises the
+ * partial-final-block path, so a regression there shows up in the browser rather
+ * than only under a test.
+ */
+export const DEFAULT_PRNG_OUTPUT = 42;
+
+const [prngOutputLength, setPrngOutputLengthSignal] = createSignal(DEFAULT_PRNG_OUTPUT);
+/** Accessor for the current generator output length (the UI stepper reads it). */
+export const usePrngOutputLength = (): (() => number) => prngOutputLength;
+
+/**
+ * Canonical spec for a PRNG variant, built ON DEMAND at the current
+ * `prngOutputLength()` — the same posture `resolveHashDefault` takes for the
+ * XOFs, and for the same reason: the length is structural (it changes the
+ * spec's `zero-fill@1` width and therefore the iteration count), so caching a
+ * table of pre-built specs would desync the signal from the active spec and make
+ * `isCustomSpec` report a pure length change as a user edit.
+ */
+const resolvePrngDefault = (p: Prng): CipherSpec => buildMcgSpec(p, prngOutputLength());
+
 // ─── Signals ─────────────────────────────────────────────────────────────
 //
 // Two-spec store: encrypt and decrypt are held simultaneously, in
@@ -565,7 +615,27 @@ type AsymmetricSpecsByMode = {
   readonly decrypt: CipherSpec;
 };
 
-export type SpecsByMode = CipherSpecsByMode | HashSpecsByMode | AsymmetricSpecsByMode;
+/**
+ * PRNG-shape SpecsByMode. Copies `HashSpecsByMode` exactly — a single,
+ * direction-less slot — because a generator has no inverse: there is no
+ * "un-generate", so `mode()` is as meaningless here as it is for a digest.
+ *
+ * Carries the `prng: Prng` discriminant for the same reason the hash shape
+ * carries its own: `resetSpec` / `isCustomSpec` / `setSpecFromDocument` need to
+ * know WHICH variant the active spec is in order to look up the canonical
+ * default, and recovering that by string-matching `single.id` would be fragile.
+ */
+type PrngSpecsByMode = {
+  readonly kind: "prng";
+  readonly prng: Prng;
+  readonly single: CipherSpec;
+};
+
+export type SpecsByMode =
+  | CipherSpecsByMode
+  | HashSpecsByMode
+  | AsymmetricSpecsByMode
+  | PrngSpecsByMode;
 
 /**
  * The block width to hand `applyPaddingScheme` — i.e. "should the padding
@@ -654,18 +724,48 @@ export const buildCanonicalAsymmetric = (a: Asymmetric): SpecsByMode => ({
   decrypt: resolveAsymmetricDefault(a, "decrypt"),
 });
 
+/**
+ * Sibling of `buildCanonicalHash` for PRNG variants — a single direction-less
+ * slot, built at the current output length. No (mode, cipherMode, padding)
+ * parameters apply.
+ */
+export const buildCanonicalPrng = (p: Prng): SpecsByMode => ({
+  kind: "prng",
+  prng: p,
+  single: resolvePrngDefault(p),
+});
+
 const [mode, setModeSignal] = createSignal<Mode>("encrypt");
 const [specs, setSpecs] = createSignal<SpecsByMode>(
   buildCanonicalPair(useCipher()(), useCipherMode()(), usePaddingScheme()()),
 );
 
+/**
+ * True when a `SpecsByMode` holds ONE direction-less slot rather than an
+ * encrypt/decrypt pair — i.e. the algorithm has no inverse to speak of.
+ * Hashes and PRNGs both qualify: there is no "un-digest" and no "un-generate".
+ *
+ * A predicate rather than an inline `kind === "hash"` comparison because the
+ * three sites below (`activeSpec`, `updateActive`, `updateBoth`) each need the
+ * same question answered, and a family wired into two of the three would fail
+ * *silently* — the third would fall through to `s[mode()]` and read `undefined`.
+ * That is the same reasoning `isStreamCipherMode` / `cipherModeUsesIv` are
+ * predicates rather than inline comparisons.
+ *
+ * The narrowed return type is what lets `{ ...current, single: updated }` below
+ * preserve each variant's own discriminant (`hash` / `prng`) without either
+ * branch naming the other.
+ */
+const isSingleSlotSpecs = (s: SpecsByMode): s is HashSpecsByMode | PrngSpecsByMode =>
+  s.kind === "hash" || s.kind === "prng";
+
 // Active-spec accessor — reads both signals so consumers tracking
-// `useSpec()` re-render on mode flips AND on per-slot edits. For hash
-// specs the mode signal is semantically meaningless (hashes have no
-// direction) so we return the single slot regardless of `mode()`.
+// `useSpec()` re-render on mode flips AND on per-slot edits. For hash and PRNG
+// specs the mode signal is semantically meaningless (neither has a direction)
+// so we return the single slot regardless of `mode()`.
 const activeSpec = (): CipherSpec => {
   const s = specs();
-  if (s.kind === "hash") return s.single;
+  if (isSingleSlotSpecs(s)) return s.single;
   // cipher + asymmetric both carry encrypt/decrypt slots indexed by mode.
   return s[mode()];
 };
@@ -713,13 +813,14 @@ export const useCipherSpecsByMode = (): (() => CipherSpecsByMode) => {
 // `mode()` is ignored.
 const updateActive = (updater: (s: CipherSpec) => CipherSpec): void => {
   const current = specs();
-  if (current.kind === "hash") {
+  if (isSingleSlotSpecs(current)) {
     const updated = updater(current.single);
     if (updated === current.single) return;
-    // Preserve the hash discriminant — without it, `resetSpec` and
-    // `isCustomSpec` would lose track of WHICH hash variant the active
-    // spec is when the user customizes (e.g. edits a leaf's params).
-    setSpecs({ kind: "hash", hash: current.hash, single: updated });
+    // Spread preserves the variant's own discriminant (`hash` / `prng`) —
+    // without it, `resetSpec` and `isCustomSpec` would lose track of WHICH
+    // variant the active spec is when the user customizes (e.g. edits a leaf's
+    // params).
+    setSpecs({ ...current, single: updated });
     return;
   }
   const m = mode();
@@ -750,10 +851,10 @@ const updateActive = (updater: (s: CipherSpec) => CipherSpec): void => {
 // op for hashes; defensive throw upstream).
 const updateBoth = (updater: (s: CipherSpec, m: Mode) => CipherSpec): void => {
   const current = specs();
-  if (current.kind === "hash") {
+  if (isSingleSlotSpecs(current)) {
     const updated = updater(current.single, "encrypt");
     if (updated === current.single) return;
-    setSpecs({ kind: "hash", hash: current.hash, single: updated });
+    setSpecs({ ...current, single: updated });
     return;
   }
   if (current.kind === "asymmetric") {
@@ -921,6 +1022,38 @@ export const setAsymmetric = (a: Asymmetric): void => {
 };
 
 /**
+ * Switch the active PRNG variant. Mirrors `setHash`'s shape — lands a
+ * `kind: "prng"` SpecsByMode and flips the category so `useAlgorithm()` resolves
+ * to the new value. No cipherMode / padding / direction axes apply; the UI hides
+ * those selectors (and the key field) when the PRNG category is active.
+ */
+export const setPrng = (p: Prng): void => {
+  setCategorySignal("prng");
+  setPrngSignal(p);
+  setSpecs(buildCanonicalPrng(p));
+};
+
+/**
+ * Set the generator's output length and, when a PRNG is active, rebuild the
+ * spec at the new length. Clamps to `[1, MAX_PRNG_OUTPUT]`.
+ *
+ * STRUCTURAL rebuild, not a param edit — the same rationale as
+ * `setShakeOutputLength`. The length is `zero-fill@1`'s width, which sets how
+ * many times the iterate runs; `editStepParams` could reach the param but would
+ * leave the signal and the spec free to disagree.
+ *
+ * No-op rebuild when a non-PRNG algorithm is active: the signal still updates
+ * (cheap), so switching to a generator later picks up the chosen length.
+ */
+export const setPrngOutputLength = (n: number): void => {
+  const clamped = Math.max(1, Math.min(MAX_PRNG_OUTPUT, Math.floor(n)));
+  setPrngOutputLengthSignal(clamped);
+  if (useCategory()() === "prng") {
+    setSpecs(buildCanonicalPrng(usePrng()()));
+  }
+};
+
+/**
  * Algorithm-level setter that routes to `setCipher` or `setHash`
  * depending on the category of the passed value. The single boundary
  * the App's algorithm-selector UI calls into so cross-category flips
@@ -937,6 +1070,8 @@ export const setAlgorithm = (a: Algorithm): void => {
     setHash(a);
   } else if (isAsymmetric(a)) {
     setAsymmetric(a);
+  } else if (isPrng(a)) {
+    setPrng(a);
   } else {
     setCipher(a);
   }
@@ -1730,6 +1865,27 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
     setSpecs({ kind: "hash", hash: doc.algorithm, single: doc.spec });
     return;
   }
+  // PRNG document branch — the closest sibling of the hash short-circuit above,
+  // since both land a single direction-less slot.
+  if (doc.algorithm !== undefined && isPrng(doc.algorithm)) {
+    setCategorySignal("prng");
+    setPrngSignal(doc.algorithm);
+    // Recover the requested output length from the loaded spec's `zero-fill@1`
+    // leaf, so the control shows the document's value and a later `resetSpec`
+    // rebuilds at that length instead of snapping back to the default. Set the
+    // RAW signal, not `setPrngOutputLength` — the doc's spec is landed verbatim
+    // below (it may be a customized variant), so a structural rebuild here would
+    // discard the user's edits.
+    const loadedLen = readMcgOutputLength(doc.spec);
+    if (loadedLen !== undefined) {
+      setPrngOutputLengthSignal(Math.max(1, Math.min(MAX_PRNG_OUTPUT, loadedLen)));
+    }
+    if (doc.session) {
+      setByteFormat(doc.session.byteFormat);
+    }
+    setSpecs({ kind: "prng", prng: doc.algorithm, single: doc.spec });
+    return;
+  }
   // Asymmetric (RSA) document branch — sibling of the hash short-circuit.
   // Like the cipher branch it lands the doc's single spec in the matching
   // mode slot and rebuilds the counterpart from canonical, but there is no
@@ -1867,6 +2023,15 @@ export const resetSpec = (): void => {
     updateActive(() => canonical);
     return;
   }
+  if (current.kind === "prng") {
+    // Rebuilt at the CURRENT output length, not the length the active spec
+    // happens to carry — matching the XOF branch above. Reset means "back to
+    // canonical for what is selected", and the length control is part of the
+    // selection, so a reset must not silently revert it too.
+    const canonical = resolvePrngDefault(current.prng);
+    updateActive(() => canonical);
+    return;
+  }
   if (current.kind === "asymmetric") {
     // No (cipherMode, padding) overlay — direct table read by (variant, mode).
     const canonical = resolveAsymmetricDefault(current.asymmetric, mode());
@@ -1943,6 +2108,14 @@ export const isCustomSpec = (): boolean => {
     // the SpecsByMode. Same deep-equal walk used for ciphers — the
     // hash table has no padding overlay to compose first.
     const canonical = resolveHashDefault(current.hash);
+    return !deepEqualJson(current.single, canonical);
+  }
+  if (current.kind === "prng") {
+    // Compared against the canonical built at the CURRENT output length, which
+    // is what keeps a pure length change reading "not custom" — the signal and
+    // the active spec move together through `setPrngOutputLength`'s structural
+    // rebuild, so only a real leaf edit diverges. Same contract as the XOFs.
+    const canonical = resolvePrngDefault(current.prng);
     return !deepEqualJson(current.single, canonical);
   }
   if (current.kind === "asymmetric") {

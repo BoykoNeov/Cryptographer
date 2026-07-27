@@ -27,7 +27,7 @@
  * `z.discriminatedUnion`'s per-option constraint without explicit casts.
  */
 
-import type { Asymmetric, Cipher, Hash } from "@/ui/stores/cipher";
+import type { Asymmetric, Cipher, Hash, Prng } from "@/ui/stores/cipher";
 import type { CipherMode } from "@/ui/stores/cipher-mode";
 import { z } from "zod";
 import { ALL_BYTE_FORMATS } from "./format";
@@ -96,13 +96,28 @@ export const HASH_IDS = [
 export const ASYMMETRIC_IDS = ["rsa"] as const satisfies readonly Asymmetric[];
 
 /**
- * Concatenation of cipher + hash + asymmetric ids. Used by the top-level
+ * Pseudo-random generator variants — `docs/plans/iterative-dancing-ocean.md`.
+ * `assertPrngCoverage` below pins this against the `Prng` union in
+ * `ui/stores/cipher.ts`.
+ */
+export const PRNG_IDS = ["minstd-rand0", "minstd-rand"] as const satisfies readonly Prng[];
+
+/**
+ * Concatenation of cipher + hash + asymmetric + prng ids. Used by the top-level
  * document's `algorithm` field, which accepts any cryptographic-primitive
  * family. Composed at the tuple level so the `z.enum(ALGORITHM_IDS)` below
  * stays a static-enum schema rather than a runtime union — so a saved RSA
  * document's `algorithm: "rsa"` hint round-trips through validation.
+ *
+ * **Widening this list does NOT bump `schemaVersion`.** Per `docs/versioning.md`
+ * the bump triggers are about wrapper-layer FIELDS (added, removed, or changed
+ * in meaning), not about a field gaining new legal values. Adding a family here
+ * is the same shape of change RSA made at v3 without a bump. The only
+ * consequence is forward-compat — an older build rejects a document naming an
+ * algorithm it has never heard of — which is the intended behaviour, and is
+ * reported by the existing friendly enum error rather than a silent misparse.
  */
-export const ALGORITHM_IDS = [...CIPHER_IDS, ...HASH_IDS, ...ASYMMETRIC_IDS] as const;
+export const ALGORITHM_IDS = [...CIPHER_IDS, ...HASH_IDS, ...ASYMMETRIC_IDS, ...PRNG_IDS] as const;
 
 export const CIPHER_MODES = [
   "single-block",
@@ -138,11 +153,13 @@ type MissingCipherMode = Exclude<CipherMode, (typeof CIPHER_MODES)[number]>;
 type MissingPaddingScheme = Exclude<PaddingScheme, (typeof PADDING_SCHEMES)[number]>;
 type MissingHash = Exclude<Hash, (typeof HASH_IDS)[number]>;
 type MissingAsymmetric = Exclude<Asymmetric, (typeof ASYMMETRIC_IDS)[number]>;
+type MissingPrng = Exclude<Prng, (typeof PRNG_IDS)[number]>;
 export const assertCipherCoverage: [MissingCipher] extends [never] ? true : never = true;
 export const assertCipherModeCoverage: [MissingCipherMode] extends [never] ? true : never = true;
 export const assertPaddingCoverage: [MissingPaddingScheme] extends [never] ? true : never = true;
 export const assertHashCoverage: [MissingHash] extends [never] ? true : never = true;
 export const assertAsymmetricCoverage: [MissingAsymmetric] extends [never] ? true : never = true;
+export const assertPrngCoverage: [MissingPrng] extends [never] ? true : never = true;
 
 // ─── Json (recursive) ─────────────────────────────────────────────────────
 // Mirrors the `Json` type in core/types.ts. `z.lazy` is the standard

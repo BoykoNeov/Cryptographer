@@ -128,6 +128,26 @@ export type Hash =
 export type Asymmetric = "rsa";
 
 /**
+ * Pseudo-random generator family — algorithms that consume a seed and emit a
+ * reproducible stream of bytes. MINSTD's two published multipliers are the first
+ * members (`docs/plans/iterative-dancing-ocean.md`).
+ *
+ * **Why a fourth family rather than a cipher with a stream mode.** A PRNG has no
+ * message. It has a seed (which sequence) and a requested length (how much of
+ * it) — and nothing to encrypt. Modelling one as a `Cipher` would make
+ * `isCipher` true, which drags in `SUPPORTED_CIPHER_MODES_BY_CIPHER`,
+ * `defaultCipherModeFor`, `paddingLimits` and `ivByteLengthFor`: precisely the
+ * surface a separate category costs nothing on. It would also present a
+ * plaintext field for something that has no plaintext, which is the sort of
+ * category lie the family split exists to prevent.
+ *
+ * Like a hash, a generator is **direction-less** — there is no inverse, so no
+ * encrypt/decrypt toggle — which is why `PrngSpecsByMode` in `stores/spec.ts`
+ * copies the single-slot hash shape rather than the two-slot cipher shape.
+ */
+export type Prng = "minstd-rand0" | "minstd-rand";
+
+/**
  * Category discriminant for the algorithm selector (Slice 2.10c, 2026-05-25).
  * The UI surfaces a top-level toggle between "cipher" and "hash"; the
  * specific dropdown alongside renders cipher or hash options depending on
@@ -141,7 +161,7 @@ export type Asymmetric = "rsa";
  * shape extends cleanly when SHA-3 / SHA-512 land — each family's dropdown
  * remembers independently.
  */
-export type Category = "cipher" | "hash" | "asymmetric";
+export type Category = "cipher" | "hash" | "asymmetric" | "prng";
 
 /**
  * Public umbrella type — every cryptographic primitive the app supports.
@@ -152,7 +172,7 @@ export type Category = "cipher" | "hash" | "asymmetric";
  * Implementing functions in terms of `Algorithm` and branching on category
  * is cheaper than maintaining parallel cipher-only and hash-only overloads.
  */
-export type Algorithm = Cipher | Hash | Asymmetric;
+export type Algorithm = Cipher | Hash | Asymmetric | Prng;
 
 const ALL_CIPHERS: readonly Cipher[] = [
   "aes-128",
@@ -205,6 +225,13 @@ export const isHash = (a: Algorithm): a is Hash =>
 export const isAsymmetric = (a: Algorithm): a is Asymmetric => a === "rsa";
 
 /**
+ * True when an algorithm is a pseudo-random generator. Defined alongside
+ * `isHash` / `isAsymmetric` so `isCipher` below can exclude all three
+ * non-cipher families explicitly.
+ */
+export const isPrng = (a: Algorithm): a is Prng => a === "minstd-rand0" || a === "minstd-rand";
+
+/**
  * True when an algorithm is a symmetric cipher (the keyed encrypt/decrypt
  * block primitives with cipher-mode + padding surfaces).
  *
@@ -217,7 +244,7 @@ export const isAsymmetric = (a: Algorithm): a is Asymmetric => a === "rsa";
  * The exhaustive-switch safety net does not catch a manual predicate. Every
  * new non-cipher family MUST be subtracted here.
  */
-export const isCipher = (a: Algorithm): a is Cipher => !isHash(a) && !isAsymmetric(a);
+export const isCipher = (a: Algorithm): a is Cipher => !isHash(a) && !isAsymmetric(a) && !isPrng(a);
 
 // Default to AES-128 so first-time / fresh-load users hit the canonical
 // FIPS-197 Appendix C.1 vector. Session-only — see file header.
@@ -246,10 +273,12 @@ export const setCipher = (c: Cipher): void => {
 
 const [hash, setHashSignal] = createSignal<Hash>("sha-256");
 const [asymmetric, setAsymmetricSignal] = createSignal<Asymmetric>("rsa");
+const [prng, setPrngSignal] = createSignal<Prng>("minstd-rand0");
 const [category, setCategorySignal] = createSignal<Category>("cipher");
 
 export const useHash = () => hash;
 export const useAsymmetric = () => asymmetric;
+export const usePrng = () => prng;
 export const useCategory = () => category;
 
 /**
@@ -268,6 +297,13 @@ export const setHash = (h: Hash): void => {
  *  public-key algorithms. */
 export const setAsymmetric = (a: Asymmetric): void => {
   setAsymmetricSignal(a);
+};
+
+/** Set the active PRNG variant. Does NOT flip category — mirrors `setHash` /
+ *  `setAsymmetric`; the category-flipping setter of the same name lives in
+ *  `stores/spec.ts` and composes both. */
+export const setPrng = (p: Prng): void => {
+  setPrngSignal(p);
 };
 
 /** Flip the active category without changing the cipher / hash / asymmetric
@@ -291,6 +327,7 @@ export const useAlgorithm = (): (() => Algorithm) => {
     const c = category();
     if (c === "cipher") return cipher();
     if (c === "hash") return hash();
+    if (c === "prng") return prng();
     return asymmetric();
   };
 };
@@ -330,6 +367,16 @@ const ALL_ASYMMETRICS: readonly Asymmetric[] = ["rsa"];
 export const ASYMMETRIC_OPTIONS = ALL_ASYMMETRICS;
 export const ASYMMETRIC_LABELS: Record<Asymmetric, string> = {
   rsa: "RSA (textbook)",
+};
+
+/** PRNG dropdown options + labels. The two variants differ in exactly one
+ *  constant — the multiplier — which is the point: the label names the standard
+ *  identifier a learner will meet in C++ or in the literature. */
+const ALL_PRNGS: readonly Prng[] = ["minstd-rand0", "minstd-rand"];
+export const PRNG_OPTIONS = ALL_PRNGS;
+export const PRNG_LABELS: Record<Prng, string> = {
+  "minstd-rand0": "MINSTD (a = 16807)",
+  "minstd-rand": "MINSTD (a = 48271)",
 };
 
 /** Display labels for the selector. Keep in sync with `ALL_CIPHERS`. */
@@ -415,6 +462,14 @@ export const ASYMMETRIC_DESCRIPTIONS: Record<Asymmetric, string> = {
   rsa: "Textbook RSA — public-key: key-gen (p, q, e → n, φ, d) + modular exponentiation. No padding.",
 };
 
+/** Per-PRNG one-liner. Mirrors `PRNG_LABELS`. */
+export const PRNG_DESCRIPTIONS: Record<Prng, string> = {
+  "minstd-rand0":
+    "MINSTD (Lehmer 1951 / Park–Miller 1988) — x ← 16807·x mod 2³¹−1. One multiply, one remainder; predictable, not secure.",
+  "minstd-rand":
+    "MINSTD revised (Park–Miller–Stockmeyer 1993) — x ← 48271·x mod 2³¹−1. Same structure, better spectral behaviour.",
+};
+
 /**
  * Resolve the one-liner for any algorithm, routing by family. Used by the
  * header caption and the selector caption so the two surfaces stay in sync
@@ -426,7 +481,9 @@ export const describeAlgorithm = (a: Algorithm): string =>
     ? HASH_DESCRIPTIONS[a]
     : isAsymmetric(a)
       ? ASYMMETRIC_DESCRIPTIONS[a]
-      : CIPHER_DESCRIPTIONS[a];
+      : isPrng(a)
+        ? PRNG_DESCRIPTIONS[a]
+        : CIPHER_DESCRIPTIONS[a];
 
 // ─── Historical one-liners (2026-07-12) ──────────────────────────────────────
 //
@@ -499,13 +556,27 @@ export const ASYMMETRIC_HISTORY: Record<Asymmetric, string> = {
   rsa: "Rivest, Shamir & Adleman, 1977 — the first practical public-key cryptosystem; secretly pre-discovered by GCHQ's Cocks in 1973.",
 };
 
+/** Per-PRNG historical one-liner. Mirrors `PRNG_DESCRIPTIONS`. */
+export const PRNG_HISTORY: Record<Prng, string> = {
+  "minstd-rand0":
+    "D. H. Lehmer's 1951 generator, which Park & Miller proposed in 1988 as a 'minimal standard' any generator should at least match; it became the default in countless libraries, and the source of countless flawed simulations.",
+  "minstd-rand":
+    "Park, Miller & Stockmeyer's 1993 revision after correspondence over the original's spectral flaws; both multipliers are named in the C++ standard, which is unusual — few algorithms have their constants fixed by an ISO document.",
+};
+
 /**
  * Resolve the historical one-liner for any algorithm, routing by family.
  * Sibling of `describeAlgorithm` (which the header uses); this one feeds only
  * the selector caption.
  */
 export const historyOfAlgorithm = (a: Algorithm): string =>
-  isHash(a) ? HASH_HISTORY[a] : isAsymmetric(a) ? ASYMMETRIC_HISTORY[a] : CIPHER_HISTORY[a];
+  isHash(a)
+    ? HASH_HISTORY[a]
+    : isAsymmetric(a)
+      ? ASYMMETRIC_HISTORY[a]
+      : isPrng(a)
+        ? PRNG_HISTORY[a]
+        : CIPHER_HISTORY[a];
 
 /**
  * Canonical default key per cipher — FIPS-197 §A.1 / §A.2 / §A.3 expansion
@@ -904,10 +975,41 @@ export const DEFAULT_CT_BYTES_BY_ASYMMETRIC: Record<Asymmetric, Uint8Array> = {
   rsa: new Uint8Array([0x0a, 0xe6]),
 };
 
+// ─── PRNG defaults ─────────────────────────────────────────────────────────
+//
+// A generator is keyless in the symmetric sense — the seed is its only input,
+// and it arrives through the plaintext field — so the key default is empty and
+// the UI hides that field, exactly as it does for hashes and RSA.
+
+/** Empty key per PRNG — generators have no symmetric key field. */
+export const DEFAULT_KEY_BYTES_BY_PRNG: Record<Prng, Uint8Array> = {
+  "minstd-rand0": new Uint8Array(0),
+  "minstd-rand": new Uint8Array(0),
+};
+
+/**
+ * Default seed per PRNG — **1**, as a 4-byte big-endian word.
+ *
+ * Not an arbitrary choice: 1 is `std::minstd_rand`'s `default_seed`, and it is
+ * the seed under which ISO/IEC 14882 §rand.predef states the conformance value
+ * both variants must produce. So the app's first Run on a generator reproduces a
+ * published sequence — the same "first impression IS a test vector" property
+ * AES-128 gets from FIPS-197 §C.1 and ChaCha20 from RFC 8439 §2.4.2.
+ *
+ * From this seed `minstd-rand0` opens 16807, 282475249, 1622650073, … — the most
+ * widely republished fingerprint of the generator, and recognisable on sight to
+ * anyone who has met it before.
+ */
+export const DEFAULT_PT_BYTES_BY_PRNG: Record<Prng, Uint8Array> = {
+  "minstd-rand0": new Uint8Array([0x00, 0x00, 0x00, 0x01]),
+  "minstd-rand": new Uint8Array([0x00, 0x00, 0x00, 0x01]),
+};
+
 /** Test-only reset; production code never calls this. */
 export const __resetCipherForTests = (): void => {
   setCipherSignal("aes-128");
   setHashSignal("sha-256");
   setAsymmetricSignal("rsa");
+  setPrngSignal("minstd-rand0");
   setCategorySignal("cipher");
 };

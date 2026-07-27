@@ -111,6 +111,9 @@ describe("port-provenance coverage contract", () => {
       // no inputs
       "constant-load@1",
       "right-encode@1",
+      // no inputs — and a generator's body reads only its WIDTH, never its
+      // bytes, so a provenance cone would point at a value nothing consumes
+      "zero-fill@1",
       // partial — synthesizes bytes with no input source
       "pad-with-byte@1",
       "append-be64-length@1",

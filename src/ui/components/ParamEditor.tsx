@@ -281,6 +281,9 @@ export const ParamEditor = (props: Props) => {
             <Match when={getStep().type === "constant-load@1"}>
               <ConstantLoadBlock step={getStep()} />
             </Match>
+            <Match when={getStep().type === "zero-fill@1"}>
+              <ZeroFillBlock step={getStep()} />
+            </Match>
             <Match when={getStep().type === "aes.publish-round-keys@1"}>
               <PublishRoundKeysBlock step={getStep()} />
             </Match>
@@ -2624,6 +2627,32 @@ const ConstantLoadBlock = (props: { step: StepLeaf }) => {
         <pre class="param-hex-dump">{hex()}</pre>
       </details>
     </>
+  );
+};
+
+// zero-fill@1.
+//
+// Read-only, deliberately. `byteLength` here is not an independent parameter —
+// it mirrors the "output bytes" control above the trace, whose setter
+// (`setPrngOutputLength`) performs a STRUCTURAL rebuild of the spec. Letting the
+// value be edited in two places would let the signal and the spec disagree: the
+// generator would produce the count typed here while the control still showed
+// the old number. Same posture as the read-only structural scalars elsewhere in
+// this file (`blockSize`, the DES permutation tables).
+const ZeroFillBlock = (props: { step: StepLeaf }) => {
+  const byteLength = (): number => (props.step.params as { byteLength?: number }).byteLength ?? 0;
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>Bytes requested</dt>
+        <dd>{byteLength()}</dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Set it with</dt>
+        <dd class="muted">the “output bytes” control above the trace</dd>
+      </div>
+    </dl>
   );
 };
 

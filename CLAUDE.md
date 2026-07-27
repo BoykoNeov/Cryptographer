@@ -81,6 +81,42 @@ eight derived tuples match Bernstein's published columnround/rowround tuples
 exactly, which checks the word-index threading that every structural assertion is
 blind to.
 
+**MINSTD (2026-07-27) is the first PSEUDO-RANDOM GENERATOR, and the fourth
+algorithm family** (`docs/plans/iterative-dancing-ocean.md`, P1 shipped; P2
+ANSI-C LCG + `add-mod@1` and P3 ChaCha20-CSPRNG still open). Its significance is
+that it is the first primitive with **no message at all**. Every other family
+transforms data you hand it; a generator's seed says *which* sequence, never *how
+much of it*, so the requested length must enter the spec on its own — as the new
+`zero-fill@1` leaf, whose bytes are never read and whose **width** bound to an
+iterate's `seedInput` is what makes the count `ceil(N/w)`. (Rejected:
+`constant-load@1` with a zero array — it documents itself as the emitter of
+published constants, so the trace would lie, and the array would ride in every
+saved/shared doc.) **The family cost ZERO runtime change**: the loop is the
+shipped port-mode `iterate` with the state on the cross-iteration carry, which is
+OFB's shape, plus `allowPartialFinalBlock` + `truncate-to-reference@1` for the
+ragged tail. Three structural facts. (1) **`prng` is a fourth `Category`, NOT a
+cipher with a stream mode** — `isCipher`-false keeps
+`SUPPORTED_CIPHER_MODES_BY_CIPHER` / `defaultCipherModeFor` / `paddingLimits` /
+`ivByteLengthFor` untouched, and `tests/cipher-mode-fallback.test.ts` needs no
+fourth class because a `Prng` is not a `Cipher`. (2) It is **direction-less like a
+hash**, so `PrngSpecsByMode` copies the single-slot hash shape; the two are now
+handled together by `isSingleSlotSpecs` in `stores/spec.ts` and by a positive
+`hasDirection()` in `App.tsx`. Seed rides `inputs.plaintext` with
+`key.byteLength: 0`; labels are "seed" / "random bytes" **in both the sidebar and
+the graph's endpoint pills** — the graph arm was found by browser smoke, since
+nothing type-checks a label string. (3) Output length is a **separate signal**
+from `shakeOutputLength` (different ceiling, different meaning) with the same
+structural-rebuild + `read…OutputLength` contract. **The bug class to remember is
+`isCipher`**: it is a hand-written predicate the compiler trusts, so an
+un-subtracted family silently becomes a cipher — RSA shipped exactly this once,
+and the guard in `tests/prng-family-surface.test.ts` was verified by perturbing
+the predicate, not by assuming. Verified against ISO/IEC 14882 §rand.predef's
+normative conformance values (10000th from seed 1 = 1043618065 / 399268537).
+**Do not repeat the plan's error** that a trimmed `chainFeedback` is a live bug:
+only the final block is short and its feedback is discarded, so it is
+byte-indistinguishable — the untrimmed wire is OFB's *honesty* choice, and the
+KAT perturbs the binding to say so.
+
 Registering a core has THREE consequences: the cipher gains ECB/CBC/CTR/CFB/OFB, `paddingLimits` starts deriving its bounds from the core, and **the padding overlay becomes reachable — including in single-block mode** (user decision, Phase C: padding follows core-presence; a separate gate could only have encoded "AES is special"). **The STREAM modes (CTR + CFB + OFB) are exempt from the third**: `buildCanonicalPair` passes no block width for them and no pad is ever spliced in. That exemption is asked at three sites (`overlayBlockBytes`, `paddingLimits`, the App's padding selector) and is funnelled through one predicate, `isStreamCipherMode` in `stores/cipher-mode.ts` — as is the parallel "does this mode use an IV?" question (`cipherModeUsesIv`: CBC's chain bootstrap, CTR's initial counter, CFB's and OFB's initial registers all share `aux["iv"]`), asked at aux seeding, session export, and the IV field. A mode wired into two of three sites fails silently, which is why these are predicates and not inline comparisons.
 
 **OFB (2026-07-20) is the fifth mode, and the first to cost no new PREDICATE either** — CFB had already extracted `isStreamCipherMode` / `cipherModeUsesIv`, so OFB is one mode file plus a fifth arm on each. It is **CFB with one wire moved and the direction branch deleted**: `chainFeedback` is the core body's own output (`O_j = E(O_{j-1})`), so the keystream depends only on key+IV and is identical in both directions — encrypt and decrypt are structurally the same spec, CTR's symmetry rather than CFB's asymmetry. **Deliberately the UNTRIMMED `keystream.output`**, not `ofb-trim.output`: byte-indistinguishable (nothing reads the final iteration's feedback — perturbation-verified, 132/132 still pass either way), but the recurrence is defined on whole blocks and the trace should say so. **The trap is the mirror of CFB's: here round-trip is FREE and proves nothing** — one spec used both ways round-trips by construction even if the keystream rule is entirely wrong — so `tests/ofb-all-cores-kat.test.ts` ranks it last and leans on `node:crypto`'s `aes-*-ofb` (no `-ofb8` name trap; §6.4 fixes s=b), the keystream read out and checked against `E(IV)`/`E(E(IV))`/`E(E(E(IV)))`, an ECB-rebuilt chain per core, **the three-way contrast** (CTR/CFB/OFB agree on block 0 = `E(IV)`, must diverge from block 1 — the assertion that catches a mode quietly being its neighbour), and OFB's **zero** error propagation (one corrupt byte ⇒ one damaged byte, vs CFB's two blocks). Perturbation run: rewiring feedback to CFB's source fails 83/132.
@@ -289,6 +325,7 @@ If a future need argues for one of these, revisit then.
 - `docs/help/graph-view.md` — user-facing reference for the graph view (edges, drag/drop, palette, warning glyphs, toolbar). Bundled into the app via Vite `?raw` and rendered inside the in-app help modal (`?` button in the graph toolbar). Keep this file the single source of truth — both GitHub readers and the in-app modal display the same prose.
 
 **Plans:**
+- PRNG family — MINSTD, the fourth `Category` (P1 shipped 2026-07-27; P2 ANSI-C LCG + `add-mod@1`, P3 ChaCha20-CSPRNG open; P4 MT19937 deferred by user decision): `docs/plans/iterative-dancing-ocean.md`. Memory: `project_prng_family_plan.md`.
 - ChaCha20 — first stream cipher, first coreless cipher (ALL phases incl. P5 diagrams shipped 2026-07-20 — plan CLOSED): `docs/plans/fluffy-orbiting-shannon.md`. Memory: `project_chacha20_plan.md`.
 - Original architectural plan: `~/.claude/plans/i-want-to-build-tender-spark.md`
 - Approved UX/feature plan (phases 1–4: frame preservation, run history + diff, byte format toggle, deferred 2D viz): `docs/plans/suggestions-1-4.md`

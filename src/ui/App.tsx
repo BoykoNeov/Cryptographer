@@ -73,6 +73,10 @@ import { TwofishRoundDiagram } from "./components/TwofishRoundDiagram";
 // narration registry. Without it, <StepNarration /> would render nothing.
 // Idempotent.
 import "./narration/index";
+// The generator's word width, for the output-length caption. Imported from the
+// cipher module rather than hardcoded so the caption cannot drift from the spec
+// builder's actual block size.
+import { MCG_WORD_BYTES } from "@/ciphers/lcg";
 import { clearDirty, setAutoRerun, setDirty, useAutoRerun, useDirty } from "./stores/auto-rerun";
 import {
   blockByteLengthFor,
@@ -95,24 +99,32 @@ import {
   DEFAULT_KEY_BYTES_BY_ASYMMETRIC,
   DEFAULT_KEY_BYTES_BY_CIPHER,
   DEFAULT_KEY_BYTES_BY_HASH,
+  DEFAULT_KEY_BYTES_BY_PRNG,
   DEFAULT_PT_BYTES_BY_ASYMMETRIC,
   DEFAULT_PT_BYTES_BY_CIPHER,
   DEFAULT_PT_BYTES_BY_HASH,
+  DEFAULT_PT_BYTES_BY_PRNG,
   HASH_DESCRIPTIONS,
   HASH_LABELS,
   HASH_OPTIONS,
   type Hash,
   IV_LAYOUT_CAPTION_BY_CIPHER,
+  PRNG_DESCRIPTIONS,
+  PRNG_LABELS,
+  PRNG_OPTIONS,
+  type Prng,
   describeAlgorithm,
   historyOfAlgorithm,
   isAsymmetric,
   isCipher,
   isHash,
+  isPrng,
   useAlgorithm,
   useAsymmetric,
   useCategory,
   useCipher,
   useHash,
+  usePrng,
 } from "./stores/cipher";
 import {
   CIPHER_MODE_LABELS,
@@ -155,6 +167,7 @@ import {
 import { registry } from "./stores/registry";
 import {
   MAX_KMAC_KEY_LENGTH,
+  MAX_PRNG_OUTPUT,
   MAX_SHAKE_OUTPUT,
   isCustomSpec,
   isKmacHash,
@@ -169,12 +182,15 @@ import {
   setKmacKeyLength,
   setMode,
   setPadding,
+  setPrng,
+  setPrngOutputLength,
   setShakeOutputLength,
   setSpecFromDocument,
   useCshakeN,
   useCshakeS,
   useKmacS,
   useMode,
+  usePrngOutputLength,
   useShakeOutputLength,
   useSpec,
 } from "./stores/spec";
@@ -244,7 +260,9 @@ export const App = () => {
   const category = useCategory();
   const hash = useHash();
   const asymmetric = useAsymmetric();
+  const prng = usePrng();
   const shakeOutputLength = useShakeOutputLength();
+  const prngOutputLength = usePrngOutputLength();
   const cshakeN = useCshakeN();
   const cshakeS = useCshakeS();
   const kmacS = useKmacS();
@@ -512,6 +530,18 @@ export const App = () => {
         if (inputBytes.length > MAX_HASH_INPUT) {
           throw new Error(
             `${inputLabel()}: ${HASH_LABELS[hash()]} accepts 0..${MAX_HASH_INPUT} bytes in this explorer; got ${inputBytes.length}. (SHA-256 itself has no such limit — the cap keeps the per-byte trace small enough to scrub. ${MAX_HASH_INPUT} bytes is ~${Math.ceil((MAX_HASH_INPUT + 9) / 64)} blocks.)`,
+          );
+        }
+      } else if (isPrng(algorithm())) {
+        // Generator branch. The seed is a single machine word, and unlike a
+        // message its width is not negotiable: the iterate bootstraps its chain
+        // from these exact bytes, so a seed of the wrong width would reach
+        // `mod-mul@1` as a differently-sized big-endian integer and quietly
+        // produce a valid-looking stream from the wrong starting value. Checking
+        // here names the problem; the runtime would not.
+        if (inputBytes.length !== MCG_WORD_BYTES) {
+          throw new Error(
+            `${inputLabel()}: ${PRNG_LABELS[prng()]} takes a ${MCG_WORD_BYTES}-byte seed (one 32-bit word); got ${inputBytes.length}.`,
           );
         }
       } else {
@@ -1173,6 +1203,40 @@ export const App = () => {
   };
 
   /**
+   * Switch the active generator. Mirrors `changeHash`: swap the seed field to
+   * the new variant's canonical default only if it still holds the OLD one, so a
+   * seed the user typed survives the switch (the sacred-input policy every
+   * selector here follows).
+   *
+   * Both MINSTD variants share the default seed of 1, so the swap is usually a
+   * no-op today — written as a general swap anyway, because a future generator
+   * with a different seed width (a CSPRNG's 32 bytes) would otherwise leave a
+   * 4-byte seed in the field and fail at Run with a length error.
+   */
+  const changePrng = (next: Prng): void => {
+    const prev = prng();
+    if (prev === next) return;
+    const currentPt = tryParseBytes(inputText(), fmt());
+    if (currentPt && bytesEqual(currentPt, DEFAULT_PT_BYTES_BY_PRNG[prev])) {
+      setInputText(formatBytes(DEFAULT_PT_BYTES_BY_PRNG[next], fmt()));
+    }
+    // C3 stack boundary (see `changeCipher`): a generator switch rebuilds the
+    // spec; suppress the rebuild's capture and clear the stale undo history.
+    withBoundaryReset(() => setPrng(next));
+  };
+
+  /**
+   * Change how many bytes the generator produces. Structurally identical to
+   * `changeShakeOutputLength` — a rebuild off a selector outside the undo
+   * snapshot — so it takes the same C3 boundary reset. The store clamps to
+   * [1, MAX_PRNG_OUTPUT].
+   */
+  const changePrngOutputLength = (next: number): void => {
+    if (!Number.isFinite(next)) return; // ignore an empty / non-numeric field
+    withBoundaryReset(() => setPrngOutputLength(next));
+  };
+
+  /**
    * Change a cSHAKE customization string (N or S). Like the output-length
    * control it is a STRUCTURAL rebuild off a selector outside the undo snapshot,
    * so it goes through the same C3 boundary reset.
@@ -1228,7 +1292,13 @@ export const App = () => {
     const prev = category();
     if (prev === next) return;
     const nextAlgorithm: Algorithm =
-      next === "cipher" ? cipher() : next === "hash" ? hash() : asymmetric();
+      next === "cipher"
+        ? cipher()
+        : next === "hash"
+          ? hash()
+          : next === "prng"
+            ? prng()
+            : asymmetric();
     const prevKeyDefault = algorithmDefaultKey(algorithm());
     const currentKey = tryParseBytes(keyText(), fmt());
     if (currentKey && bytesEqual(currentKey, prevKeyDefault)) {
@@ -1327,14 +1397,31 @@ export const App = () => {
   // becomes "digest". Without this override the UI would show
   // "plaintext (hex)" and "ciphertext (hex)" for a SHA-256 run, which is
   // a category lie.
+  /**
+   * True when the active algorithm has an encrypt/decrypt direction at all.
+   * Hashes and generators do not: there is no un-digest and no un-generate, so
+   * `mode()` is inert for both and the toggle must be hidden.
+   *
+   * Positive phrasing on purpose. The alternative — `!isHash(a) && !isPrng(a)`
+   * — grows a new negation every time a direction-less family lands, at every
+   * site that asks, and a site that misses one shows a toggle that silently does
+   * nothing. Same reasoning as `isStreamCipherMode` in `stores/cipher-mode.ts`.
+   */
+  const hasDirection = () => !isHash(algorithm()) && !isPrng(algorithm());
+
   const inputLabel = () => {
     if (isHash(algorithm())) return "message";
+    // A generator's only input is its seed — which sequence to produce. It is
+    // emphatically NOT a plaintext: nothing about it is being transformed into
+    // the output, and calling it one would teach the wrong model.
+    if (isPrng(algorithm())) return "seed";
     // RSA: encrypt consumes the message m, decrypt consumes the ciphertext c.
     if (isAsymmetric(algorithm())) return mode() === "encrypt" ? "message" : "ciphertext";
     return mode() === "encrypt" ? "plaintext" : "ciphertext";
   };
   const outputLabel = () => {
     if (isHash(algorithm())) return "digest";
+    if (isPrng(algorithm())) return "random bytes";
     if (isAsymmetric(algorithm())) return mode() === "encrypt" ? "ciphertext" : "message";
     return mode() === "encrypt" ? "ciphertext" : "plaintext";
   };
@@ -1366,7 +1453,9 @@ export const App = () => {
                   ? HASH_LABELS[hash()]
                   : category() === "asymmetric"
                     ? ASYMMETRIC_LABELS[asymmetric()]
-                    : CIPHER_LABELS[cipher()]
+                    : category() === "prng"
+                      ? PRNG_LABELS[prng()]
+                      : CIPHER_LABELS[cipher()]
               })`
             : spec().name}
         </span>
@@ -1399,20 +1488,24 @@ export const App = () => {
           <select
             value={category()}
             onChange={(e) => changeCategory(e.currentTarget.value as Category)}
-            title="Cipher = symmetric encrypt/decrypt with a key. Hash = one-way digest (no key, no direction). Public-key = asymmetric (RSA) — encrypt/decrypt with a key pair, no symmetric key field."
+            title="Cipher = symmetric encrypt/decrypt with a key. Hash = one-way digest (no key, no direction). Public-key = asymmetric (RSA) — encrypt/decrypt with a key pair, no symmetric key field. Generator = pseudo-random bytes from a seed (no key, no message, no direction)."
           >
             <option value="cipher">Cipher</option>
             <option value="hash">Hash</option>
             <option value="asymmetric">Public-key</option>
+            <option value="prng">Generator</option>
           </select>
         </label>
-        {/* Slice 2.10c — mode selector hidden for hash category. Hashes
-            have no encrypt/decrypt direction; showing the toggle would
-            be a category lie. The spec store carries a dead `mode`
-            signal in hash mode (the discriminated `HashSpecsByMode`
-            ignores `mode()`); hiding the selector here is the UI half
-            of that contract. */}
-        <Show when={!isHash(algorithm())}>
+        {/* Slice 2.10c — mode selector hidden for the DIRECTION-LESS families.
+            Hashes have no encrypt/decrypt direction, and neither do generators
+            (there is no "un-generate"); showing the toggle would be a category
+            lie either way. The spec store carries a dead `mode` signal for both
+            — `HashSpecsByMode` and `PrngSpecsByMode` each hold a single slot and
+            ignore `mode()` — and hiding the selector here is the UI half of that
+            contract. Phrased as a positive question so a future direction-less
+            family is one arm on `hasDirection`, not a third negation nobody
+            remembers to add. */}
+        <Show when={hasDirection()}>
           <label>
             mode
             <select
@@ -1669,6 +1762,70 @@ export const App = () => {
               </button>
             </Show>
           </label>
+        </Show>
+        {/* Generator panel (`docs/plans/iterative-dancing-ocean.md`). Sibling of
+            the hash panel: a variant dropdown plus an output-length control,
+            because a generator's length is not implied by any input the way a
+            cipher's is by its message. No mode, no padding, no IV, no key —
+            those selectors are all hidden for this category. */}
+        <Show when={category() === "prng"}>
+          <label class="cipher-label">
+            generator
+            <div class="cipher-select-row">
+              <select
+                value={prng()}
+                onChange={(e) => changePrng(e.currentTarget.value as Prng)}
+                title={PRNG_DESCRIPTIONS[prng()]}
+              >
+                <For each={PRNG_OPTIONS}>
+                  {(p) => (
+                    <option value={p} title={PRNG_DESCRIPTIONS[p]}>
+                      {p === prng() && isCustom()
+                        ? `Custom (was ${PRNG_LABELS[p]})`
+                        : PRNG_LABELS[p]}
+                    </option>
+                  )}
+                </For>
+              </select>
+            </div>
+            <Show when={isCustom()}>
+              <button
+                type="button"
+                class="reset-spec-button"
+                onClick={() => resetSpec()}
+                title={`Discard edits and restore the canonical ${PRNG_LABELS[prng()]} spec`}
+              >
+                reset
+              </button>
+            </Show>
+          </label>
+          {/* How much output to generate. Structural rebuild on COMMIT
+              (blur/Enter/spinner), never per keystroke — each change rewires the
+              iterate's word count. Mirrors the SHAKE output-length control
+              exactly, including the caption that makes the loop count explicit,
+              so the relationship "length ⇒ iterations" is visible before the
+              user scrubs the trace. */}
+          <label class="shake-output-length" title="How many bytes of output to generate">
+            output bytes
+            <input
+              type="number"
+              min={1}
+              max={MAX_PRNG_OUTPUT}
+              step={1}
+              value={prngOutputLength()}
+              onChange={(e) => changePrngOutputLength(e.currentTarget.valueAsNumber)}
+            />
+          </label>
+          <span class="shake-block-caption">
+            {(() => {
+              const n = prngOutputLength();
+              const words = Math.ceil(n / MCG_WORD_BYTES);
+              const remainder = n % MCG_WORD_BYTES;
+              return `${words} word${words === 1 ? "" : "s"} × ${MCG_WORD_BYTES} bytes${
+                remainder === 0 ? "" : ` (last trimmed to ${remainder})`
+              } · max ${MAX_PRNG_OUTPUT}`;
+            })()}
+          </span>
         </Show>
         {/* Slice 2.10c (2026-05-25) — cipher-specific selectors. Mode of
             operation + padding both apply only to block ciphers; for
@@ -2367,6 +2524,7 @@ const tryParseBytes = (text: string, fmt: ByteFormat): Uint8Array | null => {
 const algorithmDefaultKey = (a: Algorithm): Uint8Array => {
   if (isHash(a)) return DEFAULT_KEY_BYTES_BY_HASH[a];
   if (isAsymmetric(a)) return DEFAULT_KEY_BYTES_BY_ASYMMETRIC[a]; // empty — no key
+  if (isPrng(a)) return DEFAULT_KEY_BYTES_BY_PRNG[a]; // empty — the seed is the input
   return DEFAULT_KEY_BYTES_BY_CIPHER[a];
 };
 
@@ -2382,6 +2540,10 @@ const algorithmDefaultPt = (a: Algorithm): Uint8Array => {
   // ciphertext default is swapped in mode-aware by `changeMode` (mirrors how
   // `DEFAULT_CT_BYTES_BY_CIPHER` is consulted for ciphers in decrypt mode).
   if (isAsymmetric(a)) return DEFAULT_PT_BYTES_BY_ASYMMETRIC[a];
+  // A generator's "plaintext" is its seed — 1, the seed under which the ISO
+  // conformance values are stated, so the first Run reproduces a published
+  // sequence.
+  if (isPrng(a)) return DEFAULT_PT_BYTES_BY_PRNG[a];
   return DEFAULT_PT_BYTES_BY_CIPHER[a];
 };
 
