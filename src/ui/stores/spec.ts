@@ -506,10 +506,25 @@ const resolveAsymmetricDefault = (a: Asymmetric, mode: Mode): CipherSpec =>
 // much work to do. It reaches the spec as `zero-fill@1`'s width and the iterate
 // divides it by the word size — see `ciphers/lcg.ts`.
 
-/** Legibility ceiling on generator output. 1024 bytes ⇒ 256 MINSTD words ⇒ a
- *  bit over 1500 frames, comfortably inside the scrubber's comfort zone (SHA-256
- *  runs ~2300 frames for a single 64-byte block). Generous headroom over the
- *  default so the loop can be watched growing; not a limit of the algorithm. */
+/**
+ * Legibility ceiling on generator output.
+ *
+ * A MINSTD trace is `1 + 4·ceil(N/4)` frames — the request leaf, then four per
+ * word (measured in the browser: 42 bytes ⇒ 45 frames) — so this ceiling means
+ * 256 words and 1025 frames. For comparison SHA-256 runs ~2300 frames for a
+ * single 64-byte block, so the frame count itself is modest.
+ *
+ * **Measured cost at the ceiling, rather than assumed:** a length change at
+ * 1024 bytes takes ~1.6–2.0 s end to end (200 ms debounce + canonical rebuild +
+ * run + re-render). That is well above the ~200 ms this project quotes for a
+ * *param* edit, and it is the honest reason for a ceiling here at all — the
+ * cost is in re-rendering ~1000 step entries, not in the arithmetic. The
+ * default of 42 bytes is instant; a user reaching the maximum has opted into
+ * the wait. Raise this only with a fresh measurement, and lower it if the step
+ * strip ever gets heavier per row.
+ *
+ * Not a limit of the algorithm.
+ */
 export const MAX_PRNG_OUTPUT = 1024;
 /**
  * Default generator output: 42 bytes.

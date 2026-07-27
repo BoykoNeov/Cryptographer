@@ -2600,17 +2600,52 @@ const SplitBytesBlock = (props: { step: StepLeaf }) => {
 
 // constant-load@1.
 //
-// Read-only hex dump of `bytes`. Editing would conceptually be valid (the
-// PortContract declares the output length as a function of `params.bytes`),
-// but the SHA-256 spec carries two large constants (256-byte K table, 32-byte
-// H table) that aren't pedagogical to edit byte-by-byte — the user's
-// natural lever is the rotation constants in σ/Σ, not the SHA constants.
-// Locking matches the spirit of "the canonical FIPS tables are the canonical
-// state."
+// Editable when the constant is SMALL, read-only when it is a published table.
+//
+// The original block locked every constant, on a rationale that named exactly
+// one cipher: "the SHA-256 spec carries two large constants (256-byte K table,
+// 32-byte H table) that aren't pedagogical to edit byte-by-byte — the user's
+// natural lever is the rotation constants in σ/Σ, not the SHA constants."
+//
+// **That rationale had gone stale, and checking it is what set this threshold.**
+// Slice 2.4 chose one-constant-per-leaf granularity, so SHA-256 does not carry a
+// 256-byte K leaf at all — it carries 64 four-byte ones (and 8 for H), precisely
+// so that each is "addressable by spec authors and editors". The single large
+// `constant-load@1` still in the app is Blowfish's 72-byte π P-array seed.
+//
+// The distinction the old comment was really drawing is therefore about WIDTH,
+// not about which cipher: a handful of bytes is a parameter a learner can reason
+// about, a table of dozens is canonical published state. MINSTD's multiplier and
+// modulus are four bytes each and are not incidental data — they ARE the
+// generator (`x ← a·x mod m`), the parameters the whole family exists to let
+// someone experiment with. Set `a = 1` and the generator stops generating; swap
+// the prime modulus for a power of two and the low bits collapse. None of that
+// is reachable if the cell is a `<pre>`.
+//
+// Consequence worth stating plainly: this also unlocks SHA-256's individual
+// round constants, which is consistent with why they were split one-per-leaf in
+// the first place. Blowfish's π seed stays locked. AES's Rcon and the FIPS
+// S-box tables are unaffected — they are not this step type.
+//
+// **A user edit here is genuinely load-bearing**, not cosmetic: `constant-load@1`
+// declares its output byteLength as a function of `params.bytes`, so the length
+// must not change — hence per-cell `ByteCellInput` editing (which replaces a
+// byte in place) rather than an append/remove row like `aux-load`'s.
+const CONSTANT_LOAD_EDITABLE_MAX_BYTES = 8;
+
 const ConstantLoadBlock = (props: { step: StepLeaf }) => {
   const params = (): { bytes?: readonly number[] } => props.step.params as never;
   const bytes = (): readonly number[] => params().bytes ?? [];
   const hex = (): string => formatBytes(Uint8Array.from(bytes()), "hex");
+  const isEditable = (): boolean =>
+    bytes().length > 0 && bytes().length <= CONSTANT_LOAD_EDITABLE_MAX_BYTES;
+
+  const writeBytes = (next: readonly number[]): void => {
+    editStepParams(props.step.id, {
+      ...(props.step.params as Record<string, Json>),
+      bytes: [...next],
+    });
+  };
 
   return (
     <>
@@ -2620,12 +2655,38 @@ const ConstantLoadBlock = (props: { step: StepLeaf }) => {
           <dd>{bytes().length}</dd>
         </div>
       </dl>
-      <details class="param-section param-collapsible">
-        <summary class="param-section-label">
-          Bytes ({bytes().length} entries, hex — click to expand)
-        </summary>
-        <pre class="param-hex-dump">{hex()}</pre>
-      </details>
+      <Show
+        when={isEditable()}
+        fallback={
+          <details class="param-section param-collapsible">
+            <summary class="param-section-label">
+              Bytes ({bytes().length} entries, hex — click to expand)
+            </summary>
+            <pre class="param-hex-dump">{hex()}</pre>
+          </details>
+        }
+      >
+        <div class="param-section">
+          <div class="param-section-label">Bytes (editable)</div>
+          {/* Reuses KeyExpansionBlock's `.rcon-row` styling — a horizontal strip
+              of byte cells, the house pattern for a small editable array. */}
+          <div class="rcon-row">
+            <For each={bytes()}>
+              {(value, i) => (
+                <ByteCellInput
+                  value={value}
+                  onCommit={(next) => {
+                    const out = [...bytes()];
+                    out[i()] = next;
+                    writeBytes(out);
+                  }}
+                />
+              )}
+            </For>
+          </div>
+          <div class="muted small">= {bytes().reduce((n, b) => n * 256 + b, 0)} (big-endian)</div>
+        </div>
+      </Show>
     </>
   );
 };
