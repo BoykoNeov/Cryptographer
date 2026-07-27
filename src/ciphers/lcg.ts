@@ -188,7 +188,9 @@ export const LCG_PARAMS: Record<LcgVariant, LcgParams> = {
   "ansi-c-lcg": { a: 1103515245, c: 12345, m: ANSI_C_MODULUS },
 };
 
-/** True for the mixed (affine) form — the variants that carry a "+ c". */
+/** True for the mixed (affine) form — the variants that carry a "+ c".
+ *  `buildLcgSpec` routes through this rather than testing `c !== 0` inline, so
+ *  there is exactly one place that decides which form a variant is. */
 export const isMixedLcg = (variant: LcgVariant): boolean => LCG_PARAMS[variant].c !== 0;
 
 /** The generator's word width in bytes. Every modulus here fits in 32 bits, so
@@ -687,7 +689,7 @@ const iterateLabel = (variant: LcgVariant): string => {
  */
 export const buildLcgSpec = (variant: LcgVariant, outputLength: number): CipherSpec => {
   const { a, c, m } = LCG_PARAMS[variant];
-  const mixed = c !== 0;
+  const mixed = isMixedLcg(variant);
 
   // In the mixed form the multiply is only half the recurrence, so it takes the
   // `prod` id and the `add-mod@1` below becomes the state node. In the

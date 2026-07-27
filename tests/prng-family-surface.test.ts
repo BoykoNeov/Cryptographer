@@ -281,51 +281,64 @@ describe("PRNG family surface", () => {
   // ─── 5. Document round-trip ────────────────────────────────────────────
 
   describe("save / load", () => {
-    it("round-trips a generator document including its output length", () => {
-      // The length is the piece most likely to be silently dropped: it lives in
-      // the spec (so it survives serialization for free) but ALSO in a signal
-      // the UI reads. Without `readLcgOutputLength` in the load path the two
-      // disagree — the trace shows 137 bytes while the control reads 42.
-      setPrng("minstd-rand");
-      setPrngOutputLength(137);
+    // Looped over the option list rather than written once per variant: this is
+    // the ONE path where the persisted `PRNG_IDS` enum, `setSpecFromDocument`'s
+    // prng branch and `readLcgOutputLength` all meet, so a new variant that is
+    // only added to two of the three would round-trip wrong. Written per-variant
+    // it silently covers whichever ones happened to be named when it was
+    // authored — which is exactly what happened between P1 and P2.
+    for (const prng of PRNG_OPTIONS) {
+      it(`round-trips a ${prng} document including its output length`, () => {
+        // The length is the piece most likely to be silently dropped: it lives
+        // in the spec (so it survives serialization for free) but ALSO in a
+        // signal the UI reads. Without `readLcgOutputLength` in the load path
+        // the two disagree — the trace shows 137 bytes while the control reads
+        // the default.
+        setPrng(prng);
+        setPrngOutputLength(137);
 
-      const doc: CipherDocument = {
-        schemaVersion: CURRENT_SCHEMA_VERSION,
-        spec: useSpec()(),
-        algorithm: "minstd-rand",
-      };
-      const text = serializeDocument(doc);
+        const doc: CipherDocument = {
+          schemaVersion: CURRENT_SCHEMA_VERSION,
+          spec: useSpec()(),
+          algorithm: prng,
+        };
+        const text = serializeDocument(doc);
 
-      // Land somewhere else entirely, then load.
-      setCipher("aes-128");
-      setPrngOutputLength(DEFAULT_PRNG_OUTPUT);
-      expect(useCategory()()).toBe("cipher");
+        // Land somewhere else entirely, then load.
+        setCipher("aes-128");
+        setPrngOutputLength(DEFAULT_PRNG_OUTPUT);
+        expect(useCategory()()).toBe("cipher");
 
-      const parsed = parseDocument(text);
-      expect(parsed.ok, parsed.ok ? "" : parsed.error).toBe(true);
-      if (!parsed.ok) return;
-      setSpecFromDocument(parsed.doc);
+        const parsed = parseDocument(text);
+        expect(parsed.ok, parsed.ok ? "" : parsed.error).toBe(true);
+        if (!parsed.ok) return;
+        setSpecFromDocument(parsed.doc);
 
-      expect(useCategory()()).toBe("prng");
-      expect(usePrng()()).toBe("minstd-rand");
-      expect(usePrngOutputLength()()).toBe(137);
-      expect(useSpecsByMode()().kind).toBe("prng");
-      // And the loaded spec is the canonical one for that length — so it reads
-      // "not custom" rather than showing a spurious reset button.
-      expect(isCustomSpec()).toBe(false);
-    });
-
-    it("a generator document validates against the persisted algorithm enum", () => {
-      // Guards the `ALGORITHM_IDS` widening end-to-end: `z.enum` rejects an
-      // algorithm string it does not know, so a missing PRNG_IDS spread would
-      // make every saved generator document unloadable.
-      const text = serializeDocument({
-        schemaVersion: CURRENT_SCHEMA_VERSION,
-        spec: buildLcgSpec("minstd-rand0", 42),
-        algorithm: "minstd-rand0",
+        expect(useCategory()()).toBe("prng");
+        expect(usePrng()()).toBe(prng);
+        expect(usePrngOutputLength()()).toBe(137);
+        expect(useSpecsByMode()().kind).toBe("prng");
+        // And the loaded spec is the canonical one for that length — so it
+        // reads "not custom" rather than showing a spurious reset button.
+        expect(isCustomSpec()).toBe(false);
       });
-      const parsed = parseDocument(text);
-      expect(parsed.ok, parsed.ok ? "" : parsed.error).toBe(true);
-    });
+
+      it(`a ${prng} document validates against the persisted algorithm enum`, () => {
+        // `PRNG_IDS` is pinned to the `Prng` union in BOTH directions at
+        // compile time (`satisfies readonly Prng[]` one way, `assertPrngCoverage`
+        // the other), so a missing variant is a type error rather than a
+        // runtime surprise. What is NOT compile-checked is that the ids reach
+        // Zod: `ALGORITHM_IDS` spreads four lists, and dropping the spread
+        // leaves every assertion above green while `z.enum` rejects the string
+        // and makes every saved generator document unloadable.
+        const text = serializeDocument({
+          schemaVersion: CURRENT_SCHEMA_VERSION,
+          spec: buildLcgSpec(prng, 42),
+          algorithm: prng,
+        });
+        const parsed = parseDocument(text);
+        expect(parsed.ok, parsed.ok ? "" : parsed.error).toBe(true);
+      });
+    }
   });
 });
