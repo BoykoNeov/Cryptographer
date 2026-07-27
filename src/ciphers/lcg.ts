@@ -143,6 +143,7 @@
 import type { CipherSpec, StepDocumentation, StepNode } from "../core/types";
 import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "../core/types";
 import { port } from "./block-cipher-core";
+import { PRNG_REQUEST_ID, readPrngOutputLength } from "./prng-request";
 
 // ─── Variants ─────────────────────────────────────────────────────────────
 
@@ -215,7 +216,10 @@ const DISPLAY_NAME: Record<LcgVariant, string> = {
 // `mod-mul@1` in the multiplicative form, the `add-mod@1` in the mixed one. That
 // invariant is what lets `chainFeedback` bind to one id for both forms.
 
-export const LCG_REQUEST_ID = "request";
+/** The `zero-fill@1` request leaf. Re-exported under the LCG's own name for the
+ *  call sites that predate the shared module; the id itself is the whole PRNG
+ *  family's convention and lives in `prng-request.ts`. */
+export const LCG_REQUEST_ID = PRNG_REQUEST_ID;
 export const LCG_ITERATE_ID = "words";
 export const LCG_MULTIPLIER_ID = "mult";
 export const LCG_INCREMENT_ID = "incr";
@@ -819,22 +823,11 @@ export const buildLcgSpec = (variant: LcgVariant, outputLength: number): CipherS
 };
 
 /**
- * Read the requested output length back out of a built LCG spec (the `request`
- * leaf's `byteLength`). Used when loading a saved or shared document so the
- * app's output-length control lands on the document's value rather than the
- * default — without this, a round-trip silently resets the length.
+ * Read the requested output length back out of a built LCG spec.
  *
- * Variant-agnostic by construction: it keys on the request leaf, which every
- * variant carries at the same id in the same position.
- *
- * Mirrors `readShakeOutputLength` in `ciphers/shake.ts`.
+ * Now an alias of the family-wide `readPrngOutputLength` — the reader was never
+ * LCG-specific (it keys on the request leaf's id, which every generator shares),
+ * and the ChaCha20 CSPRNG needs exactly the same function. Kept as a named
+ * export so LCG call sites read in the LCG's own vocabulary.
  */
-export const readLcgOutputLength = (spec: CipherSpec): number | undefined => {
-  for (const node of spec.steps) {
-    if (node.kind === "step" && node.id === LCG_REQUEST_ID) {
-      const len = (node.params as Record<string, unknown>).byteLength;
-      if (typeof len === "number" && Number.isInteger(len) && len >= 1) return len;
-    }
-  }
-  return undefined;
-};
+export const readLcgOutputLength = readPrngOutputLength;

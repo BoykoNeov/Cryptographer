@@ -144,8 +144,13 @@ export type Asymmetric = "rsa";
  * Like a hash, a generator is **direction-less** — there is no inverse, so no
  * encrypt/decrypt toggle — which is why `PrngSpecsByMode` in `stores/spec.ts`
  * copies the single-slot hash shape rather than the two-slot cipher shape.
+ *
+ * The family spans both halves of the subject deliberately: three linear
+ * congruential generators whose output is trivially predictable, and one
+ * (`chacha20-csprng`) that is not. The comparison is the point — see
+ * `ciphers/chacha20-csprng.ts` on the single step that separates them.
  */
-export type Prng = "minstd-rand0" | "minstd-rand" | "ansi-c-lcg";
+export type Prng = "minstd-rand0" | "minstd-rand" | "ansi-c-lcg" | "chacha20-csprng";
 
 /**
  * Category discriminant for the algorithm selector (Slice 2.10c, 2026-05-25).
@@ -236,7 +241,7 @@ export const isAsymmetric = (a: Algorithm): a is Asymmetric => a === "rsa";
  * generator silently acquires a mode selector, padding and a key field. Reading
  * the list means the union and the predicate cannot disagree.
  */
-const ALL_PRNGS: readonly Prng[] = ["minstd-rand0", "minstd-rand", "ansi-c-lcg"];
+const ALL_PRNGS: readonly Prng[] = ["minstd-rand0", "minstd-rand", "ansi-c-lcg", "chacha20-csprng"];
 
 /**
  * True when an algorithm is a pseudo-random generator. Defined alongside
@@ -394,6 +399,10 @@ export const PRNG_LABELS: Record<Prng, string> = {
   // generator, not this LCG. The C standard's own §7.22.2.2 example and
   // POSIX `rand_r` are what this recurrence actually is.
   "ansi-c-lcg": "ANSI C LCG (rand_r)",
+  // The odd one out, and labelled as such: the other three are named after
+  // their constants because their constants are all they are. This one is named
+  // after a cipher, because it IS one.
+  "chacha20-csprng": "ChaCha20 CSPRNG (secure)",
 };
 
 /** Display labels for the selector. Keep in sync with `ALL_CIPHERS`. */
@@ -487,6 +496,8 @@ export const PRNG_DESCRIPTIONS: Record<Prng, string> = {
     "MINSTD revised (Park–Miller–Stockmeyer 1993) — x ← 48271·x mod 2³¹−1. Same structure, better spectral behaviour.",
   "ansi-c-lcg":
     "ANSI C LCG (rand_r) — x ← (1103515245·x + 12345) mod 2³¹. A power-of-two modulus: the low bits are almost pure structure.",
+  "chacha20-csprng":
+    "ChaCha20 as a generator — the stream cipher with the message removed. Twenty rounds per 64 bytes, and unlike the LCGs its output does not reveal its state.",
 };
 
 /**
@@ -583,6 +594,8 @@ export const PRNG_HISTORY: Record<Prng, string> = {
     "Park, Miller & Stockmeyer's 1993 revision after correspondence over the original's spectral flaws; both multipliers are named in the C++ standard, which is unusual — few algorithms have their constants fixed by an ISO document.",
   "ansi-c-lcg":
     "The sample rand() published in the 1989 ANSI C standard (and carried into POSIX rand_r) — an implementation illustration that a generation of programs shipped verbatim. Its power-of-two modulus makes the low bits worthless, which is exactly why the sample discards the bottom 16 before returning a number.",
+  "chacha20-csprng":
+    "Daniel J. Bernstein's 2008 stream cipher, run as a generator — the configuration Linux's getrandom() and BSD's arc4random() actually use. It is the answer to the defect the three LCGs above demonstrate: their output hands over their state, and a CSPRNG's does not.",
 };
 
 /**
@@ -1007,6 +1020,51 @@ export const DEFAULT_KEY_BYTES_BY_PRNG: Record<Prng, Uint8Array> = {
   "minstd-rand0": new Uint8Array(0),
   "minstd-rand": new Uint8Array(0),
   "ansi-c-lcg": new Uint8Array(0),
+  "chacha20-csprng": new Uint8Array(0),
+};
+
+/**
+ * Seed width in bytes, per generator.
+ *
+ * A generator's seed width is **not negotiable** the way a message length is:
+ * the seed is bound straight into the generator's state, so bytes of the wrong
+ * width do not produce an error, they produce a valid-looking stream from the
+ * wrong starting point. `App.tsx` validates against this table at the input
+ * boundary, where the problem can be named; the runtime would silently coerce.
+ *
+ * The three LCGs take one 32-bit word. The CSPRNG takes 32 bytes, because its
+ * seed occupies ChaCha20's 256-bit key region — which is why this is a table
+ * rather than the single `LCG_WORD_BYTES` constant the family shipped with.
+ */
+export const SEED_BYTES_BY_PRNG: Record<Prng, number> = {
+  "minstd-rand0": 4,
+  "minstd-rand": 4,
+  "ansi-c-lcg": 4,
+  "chacha20-csprng": 32,
+};
+
+/**
+ * How much output one pass of a generator's loop produces — the `iterate`'s
+ * `blockByteLength`, and therefore what the requested length is divided by to
+ * get the iteration count.
+ *
+ * An LCG emits one 32-bit word per pass; the CSPRNG emits a whole 64-byte
+ * ChaCha20 block. The output-length caption reads this so it can say "4 blocks
+ * × 64 bytes" rather than mislabelling blocks as words.
+ */
+export const PRNG_UNIT_BYTES_BY_PRNG: Record<Prng, number> = {
+  "minstd-rand0": 4,
+  "minstd-rand": 4,
+  "ansi-c-lcg": 4,
+  "chacha20-csprng": 64,
+};
+
+/** What one pass of the loop is CALLED, for the same caption. */
+export const PRNG_UNIT_NOUN_BY_PRNG: Record<Prng, string> = {
+  "minstd-rand0": "word",
+  "minstd-rand": "word",
+  "ansi-c-lcg": "word",
+  "chacha20-csprng": "block",
 };
 
 /**
@@ -1031,6 +1089,12 @@ export const DEFAULT_PT_BYTES_BY_PRNG: Record<Prng, Uint8Array> = {
   "minstd-rand0": new Uint8Array([0x00, 0x00, 0x00, 0x01]),
   "minstd-rand": new Uint8Array([0x00, 0x00, 0x00, 0x01]),
   "ansi-c-lcg": new Uint8Array([0x00, 0x00, 0x00, 0x01]),
+  // All-zero, and for the same reason seed 1 is right for the LCGs: it is the
+  // seed under which a published vector exists. With a zero seed (and this
+  // generator's zero nonce and counter 0) the stream opens
+  // `76 b8 e0 ad a0 f1 3d 90 …` — RFC 8439 Appendix A.1's first ChaCha20
+  // block-function test vector. The app's first Run reproduces a standard.
+  "chacha20-csprng": new Uint8Array(32),
 };
 
 /** Test-only reset; production code never calls this. */

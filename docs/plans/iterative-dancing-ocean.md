@@ -1,8 +1,46 @@
 # Pseudo-random generators — a fourth algorithm family
 
 **Status:** **P1 SHIPPED 2026-07-27** (family surface + MINSTD ×2).
-**P2 SHIPPED 2026-07-27** (ANSI C LCG + `add-mod@1`). P3 in scope and not
-started; P4 (MT19937) deferred to its own decision.
+**P2 SHIPPED 2026-07-27** (ANSI C LCG + `add-mod@1`).
+**P3 SHIPPED 2026-07-27** (ChaCha20 CSPRNG). P4 (MT19937) deferred to its own
+decision — **with P3 done, the plan is otherwise CLOSED.**
+
+### P3 shipped — what changed against the plan
+
+1. **The seed cannot reach the block function through a port, and the plan did
+   not notice.** It specified `chainInput` = a zero counter and the body reading
+   the seed — but the body lives inside the iterate, and the runtime seeds a
+   body's scope with only that iterate's own `in`/`chain` ports, so `$input` is
+   unreachable from in there. The LCGs' `port($input)` bootstrap works only
+   because it sits at top level. The seed now travels `aux["seed"]`, published by
+   `App.tsx` for every generator beside the CBC IV line, and read with the same
+   `aux-load-bytes@1` leaf the ChaCha20 cipher uses for its key. Rejected:
+   carrying it on the chain beside the counter (puts an invariant on the one wire
+   the trace exists to show changing).
+2. **P3 cost ZERO new step types** — the plan did not claim otherwise but did not
+   predict it either. Every leaf already existed, so it cleared no provenance,
+   narration or `NO_PARAMS_PORT_NATIVE_TYPES` gate. CFB's property, and evidence
+   the ARX and generator vocabularies were already complete.
+3. **The shared output ceiling had to be split per-variant, which the plan did
+   not anticipate.** `MAX_PRNG_OUTPUT` = 1024 is calibrated for an LCG's ~4
+   frames per word; at that length the CSPRNG builds ~16,000 frames. A new
+   `MAX_CSPRNG_OUTPUT` = 256 (3,958 frames, **measured** at ~2.0 s — the same
+   wall-clock budget the LCG ceiling already occupies) is clamped at three sites,
+   including the one a stepper-only clamp misses: **switching variants**.
+   Similarly `LCG_WORD_BYTES` became a per-variant `SEED_BYTES_BY_PRNG`, since
+   this is the family's first non-word seed — which is also what broke
+   `tests/prng-family-surface.test.ts`'s looped seed-width assertion.
+4. **The payoff was real and is now pinned.** The plan asked to verify the ARX
+   cell and quarter-round diagram light up for free. They do, verified against
+   the shipped functions rather than by eye: the CSPRNG spec yields the same 10
+   recognized double rounds and the same 980 never-replicate nodes as the
+   cipher's, and 960 of its 991 frames resolve to a quarter round.
+5. **The default seed is all-zero, making first paint RFC 8439 §A.1's published
+   block-function vector** (`76 b8 e0 ad …`) — the plan did not specify a default
+   and this buys MINSTD's "first impression IS a test vector" property for free.
+6. **`readLcgOutputLength` was never LCG-specific**, so it and the request-leaf id
+   moved to a shared `ciphers/prng-request.ts` rather than being copied. The
+   MINSTD specs stay byte-identical (only the constant's home changed).
 
 ### P2 shipped — what changed against the plan
 

@@ -104,6 +104,7 @@ export const PRNG_IDS = [
   "minstd-rand0",
   "minstd-rand",
   "ansi-c-lcg",
+  "chacha20-csprng",
 ] as const satisfies readonly Prng[];
 
 /**

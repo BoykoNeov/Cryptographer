@@ -24,6 +24,7 @@
  * bug once already.
  */
 
+import { buildChaCha20CsprngSpec } from "@/ciphers/chacha20-csprng";
 import { LCG_ITERATE_ID, LCG_WORD_BYTES, buildLcgSpec } from "@/ciphers/lcg";
 import {
   CURRENT_SCHEMA_VERSION,
@@ -41,6 +42,8 @@ import {
   HASH_OPTIONS,
   PRNG_LABELS,
   PRNG_OPTIONS,
+  type Prng,
+  SEED_BYTES_BY_PRNG,
   __resetCipherForTests,
   isAsymmetric,
   isCipher,
@@ -55,9 +58,11 @@ import { __resetLayoutsForTests } from "@/ui/stores/layout";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
 import {
   DEFAULT_PRNG_OUTPUT,
+  MAX_CSPRNG_OUTPUT,
   MAX_PRNG_OUTPUT,
   __resetSpecForTests,
   isCustomSpec,
+  maxPrngOutputFor,
   resetSpec,
   setAlgorithm,
   setCipher,
@@ -80,6 +85,15 @@ const resetAll = (): void => {
   __resetSpecForTests();
   setPrngOutputLength(DEFAULT_PRNG_OUTPUT);
 };
+
+/**
+ * Build a canonical spec for any generator, without going through the store.
+ * Routes on the variant because the family now spans two builders — the shared
+ * LCG template and the ChaCha20 CSPRNG — and a test that called only the former
+ * would silently stop covering the newest variant.
+ */
+const buildPrngSpecFor = (p: Prng, length: number) =>
+  p === "chacha20-csprng" ? buildChaCha20CsprngSpec(length) : buildLcgSpec(p, length);
 
 const ALL_ALGORITHMS: readonly Algorithm[] = [
   ...CIPHER_OPTIONS,
@@ -134,13 +148,27 @@ describe("PRNG family surface", () => {
       }
     });
 
-    it("every generator has a label and a default seed", () => {
+    it("every generator has a label and a default seed of its own width", () => {
       for (const p of PRNG_OPTIONS) {
         expect(PRNG_LABELS[p]).toBeTruthy();
-        // The seed is one word wide; the key is empty (generators are keyless
-        // in the symmetric sense, and the UI hides the field on that basis).
-        expect(DEFAULT_PT_BYTES_BY_PRNG[p]).toHaveLength(LCG_WORD_BYTES);
+        // Per-variant, NOT one constant. The LCGs take a 32-bit word; the
+        // CSPRNG takes 32 bytes, because its seed occupies ChaCha20's key
+        // region. A default that disagreed with `SEED_BYTES_BY_PRNG` would make
+        // the app throw its own seed-width error on first Run — and the same
+        // table is what `App.tsx` validates against, so this pins both halves.
+        expect(DEFAULT_PT_BYTES_BY_PRNG[p]).toHaveLength(SEED_BYTES_BY_PRNG[p]);
+        // The key is empty for every generator (they are keyless in the
+        // symmetric sense, and the UI hides the field on that basis) — the
+        // CSPRNG included, whose seed rides the plaintext field like the rest.
         expect(DEFAULT_KEY_BYTES_BY_PRNG[p]).toHaveLength(0);
+      }
+    });
+
+    it("the LCGs share the one-word seed the family shipped with", () => {
+      // Keeps the generalization above honest: widening to a per-variant table
+      // must not have quietly changed what the three LCGs accept.
+      for (const p of ["minstd-rand0", "minstd-rand", "ansi-c-lcg"] as const) {
+        expect(SEED_BYTES_BY_PRNG[p]).toBe(LCG_WORD_BYTES);
       }
     });
   });
@@ -215,6 +243,36 @@ describe("PRNG family surface", () => {
       expect(usePrngOutputLength()()).toBe(1);
       setPrngOutputLength(MAX_PRNG_OUTPUT + 5000);
       expect(usePrngOutputLength()()).toBe(MAX_PRNG_OUTPUT);
+    });
+
+    it("clamps the CSPRNG to its own, much lower ceiling", () => {
+      // The generators differ in frame cost by three orders of magnitude: an
+      // LCG spends ~4 frames per 4-byte word, the CSPRNG ~990 per 64-byte
+      // block. One shared ceiling cannot serve both — at 1024 bytes the CSPRNG
+      // would build ~16,000 frames and take tens of seconds per edit.
+      setPrng("chacha20-csprng");
+      setPrngOutputLength(MAX_PRNG_OUTPUT);
+      expect(usePrngOutputLength()()).toBe(MAX_CSPRNG_OUTPUT);
+      expect(maxPrngOutputFor("chacha20-csprng")).toBe(MAX_CSPRNG_OUTPUT);
+      expect(maxPrngOutputFor("minstd-rand0")).toBe(MAX_PRNG_OUTPUT);
+    });
+
+    it("re-clamps a too-long length when SWITCHING to the CSPRNG", () => {
+      // The length signal is shared across variants, so a length legal under an
+      // LCG can be far above what the CSPRNG can render. Clamping only inside
+      // `setPrngOutputLength` would miss this path entirely — the user never
+      // touches the stepper, they just change the dropdown.
+      setPrng("minstd-rand0");
+      setPrngOutputLength(MAX_PRNG_OUTPUT);
+      expect(usePrngOutputLength()()).toBe(MAX_PRNG_OUTPUT);
+
+      setPrng("chacha20-csprng");
+      expect(usePrngOutputLength()()).toBe(MAX_CSPRNG_OUTPUT);
+      // And the spec that landed was built at the clamped length, not the
+      // original — otherwise the control and the trace would disagree.
+      const request = useSpec()().steps.find((n) => n.id === "request");
+      if (request === undefined || request.kind !== "step") throw new Error("no request leaf");
+      expect((request.params as { byteLength?: number }).byteLength).toBe(MAX_CSPRNG_OUTPUT);
     });
 
     it("a pure length change does NOT read as a custom spec", () => {
@@ -333,7 +391,7 @@ describe("PRNG family surface", () => {
         // and makes every saved generator document unloadable.
         const text = serializeDocument({
           schemaVersion: CURRENT_SCHEMA_VERSION,
-          spec: buildLcgSpec(prng, 42),
+          spec: buildPrngSpecFor(prng, 42),
           algorithm: prng,
         });
         const parsed = parseDocument(text);

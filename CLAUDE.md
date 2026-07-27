@@ -117,6 +117,41 @@ only the final block is short and its feedback is discarded, so it is
 byte-indistinguishable — the untrimmed wire is OFB's *honesty* choice, and the
 KAT perturbs the binding to say so.
 
+**The ChaCha20 CSPRNG (2026-07-27) is P3, the family's secure generator, and it
+cost ZERO new step types.** It is the shipped ChaCha20 spec with the message and
+the final XOR deleted — which is what a stream cipher already was — so every leaf
+it needs already existed and it cleared no provenance / narration /
+`NO_PARAMS_PORT_NATIVE_TYPES` gate (CFB's property). Five things worth carrying
+forward. (1) **The seed CANNOT reach the body through a port.** Its block function
+lives inside the iterate, and the runtime seeds a body's scope with only that
+iterate's own `in`/`chain` ports, so `$input` is unreachable — the LCGs'
+`port($input)` bootstrap works only because their iterate is top-level. The seed
+travels `aux["seed"]`, published in `App.tsx` beside the CBC IV line for the whole
+family (`isPrng`-gated, not variant-gated), read by `aux-load-bytes@1` — the same
+leaf the cipher uses for its key, which is honest since to this construction the
+seed IS the key. Rejected: carrying it on the chain beside the counter (an
+invariant on the one wire the trace exists to show changing). (2) **The twenty
+rounds are SHARED, not copied**: `buildDoubleRoundGroups` was extracted from
+`chacha20.ts`, so the generator inherits `analyzeArxGroup` / `arxRoundNeverModes` /
+the canonical ARX cell / the quarter-round diagram for free — **verified, not
+assumed**: same 10 recognized double rounds, same 980 never-replicate nodes as the
+cipher, and 960 of 991 frames (10×8×12) resolve to a quarter round. The extraction
+left both shipped specs byte-identical, pinned by digests captured **before** the
+refactor — take them first or the test pins the new bytes to themselves. (3)
+**Counter starts at 0, not the cipher's 1**; nonce is twelve zeros (safe for a
+generator, catastrophic for a cipher) and gets no endianness crossing since a
+reversed zero word is a zero word. The all-zero default seed makes first paint
+RFC 8439 §A.1's published vector (`76 b8 e0 ad …`). Perturbation run: counter-1
+fails 32/44, dropping the seed's LE↔BE crossing fails 16 (only the counting-seed
+cases — reversing zeros is identity, which is why a distinct-byte seed is in the
+suite). (4) **Ceilings and seed widths went per-variant**: `MAX_CSPRNG_OUTPUT` =
+256 vs the LCGs' 1024 (~990 frames/block vs ~4/word; 3,958 frames measured at
+~2.0 s, the same wall-clock budget the LCG ceiling occupies), clamped at three
+sites including the one a stepper-only clamp misses — **switching variants**. And
+`LCG_WORD_BYTES` became `SEED_BYTES_BY_PRNG` for the first non-word seed. (5)
+`readLcgOutputLength` was never LCG-specific; it and the request-leaf id moved to
+`ciphers/prng-request.ts`.
+
 **The ANSI C LCG (`rand_r`, 2026-07-27) is the second PRNG phase, and it is one
 leaf away from MINSTD.** `x ← (1103515245·x + 12345) mod 2³¹` — the sample
 `rand()` from ISO/IEC 9899 §7.22.2.2, **never call it "glibc `rand()`"** (glibc's
@@ -353,7 +388,7 @@ If a future need argues for one of these, revisit then.
 - `docs/help/graph-view.md` — user-facing reference for the graph view (edges, drag/drop, palette, warning glyphs, toolbar). Bundled into the app via Vite `?raw` and rendered inside the in-app help modal (`?` button in the graph toolbar). Keep this file the single source of truth — both GitHub readers and the in-app modal display the same prose.
 
 **Plans:**
-- PRNG family — the LCGs, the fourth `Category` (P1 MINSTD + P2 ANSI-C LCG/`add-mod@1` both shipped 2026-07-27; P3 ChaCha20-CSPRNG open; P4 MT19937 deferred by user decision): `docs/plans/iterative-dancing-ocean.md`. Memory: `project_prng_family_plan.md`.
+- PRNG family — the fourth `Category` (P1 MINSTD + P2 ANSI-C LCG/`add-mod@1` + P3 ChaCha20-CSPRNG all shipped 2026-07-27; P4 MT19937 deferred by user decision, so the plan is otherwise CLOSED): `docs/plans/iterative-dancing-ocean.md`. Memory: `project_prng_family_plan.md`.
 - ChaCha20 — first stream cipher, first coreless cipher (ALL phases incl. P5 diagrams shipped 2026-07-20 — plan CLOSED): `docs/plans/fluffy-orbiting-shannon.md`. Memory: `project_chacha20_plan.md`.
 - Original architectural plan: `~/.claude/plans/i-want-to-build-tender-spark.md`
 - Approved UX/feature plan (phases 1–4: frame preservation, run history + diff, byte format toggle, deferred 2D viz): `docs/plans/suggestions-1-4.md`

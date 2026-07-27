@@ -486,6 +486,89 @@ keystream, so a new nonce is required.`,
   references: ["RFC 8439 §2.4"],
 };
 
+// ─── The twenty rounds ────────────────────────────────────────────────────
+
+/**
+ * The ten double rounds — RFC 8439 §2.3's entire mixing stage, as a list of
+ * group nodes plus the binding carrying the mixed state out of the last one.
+ *
+ * **Exported so a second algorithm can compose the same rounds** without
+ * touching this file's spec builders. `ciphers/chacha20-csprng.ts` builds its
+ * own head (the state is assembled from a seed rather than a key) and its own
+ * tail (there is no message, so no XOR), but the twenty rounds between them are
+ * the same twenty rounds and should be the same code.
+ *
+ * That matters beyond deduplication. The graph view recognizes an ARX double
+ * round by SHAPE — `analyzeArxGroup` / `arxRoundNeverModes` in
+ * `core/arx-group.ts`, the canonical layout cell, and
+ * `<ChaChaQuarterRoundDiagram />` all key off the wiring, not off the cipher —
+ * so a consumer that builds its rounds through this function inherits every one
+ * of those surfaces automatically. A hand-copied variant would not, and the
+ * divergence would only show up in a browser.
+ *
+ * Extracting this left the shipped ChaCha20 specs byte-identical;
+ * `tests/chacha20-csprng-kat.test.ts` pins both directions by hash against
+ * digests taken BEFORE the extraction, because spec-only saves feed the
+ * URL-share hash and a one-byte drift would silently repoint every shared link.
+ *
+ * @param stateBinding the assembled 16-word state entering round 1
+ * @returns the ten group nodes, and the binding for the mixed state leaving
+ *          round 10 (which the caller must still feed forward — see
+ *          `narrFinalAdd` on why that step is not optional)
+ */
+export const buildDoubleRoundGroups = (
+  stateBinding: PortBinding,
+): { readonly nodes: StepNode[]; readonly output: PortBinding } => {
+  const nodes: StepNode[] = [];
+  let binding = stateBinding;
+
+  for (let dr = 0; dr < DOUBLE_ROUNDS; dr++) {
+    const groupId = `double-round.${dr}`;
+    const splitId = `${groupId}.split`;
+    const concatId = `${groupId}.concat`;
+
+    // Inside the group's fresh scope: the 64-byte seed becomes 16 words.
+    const words: PortBinding[] = Array.from({ length: 16 }, (_, i) => port(splitId, `output${i}`));
+
+    const children: StepNode[] = [
+      {
+        kind: "step",
+        id: splitId,
+        type: "split-bytes@1",
+        params: { widths: [...STATE_WORD_WIDTHS] },
+        portInputs: { input: port(groupId, "in") },
+      },
+    ];
+
+    QUARTER_ROUND_INDICES.forEach((quad, qr) => {
+      children.push(...quarterRound(`${groupId}.qr${qr}`, words, quad));
+    });
+
+    children.push({
+      kind: "step",
+      id: concatId,
+      type: "concat@1",
+      params: { inputCount: 16 },
+      portInputs: Object.fromEntries(words.map((w, i) => [`input${i}`, w])),
+    });
+
+    nodes.push({
+      kind: "group",
+      id: groupId,
+      label: `Double round ${dr + 1} of ${DOUBLE_ROUNDS} (rounds ${2 * dr + 1}–${2 * dr + 2})`,
+      // 98 leaves apiece; uncollapsed by default this is a wall of chips.
+      defaultCollapsed: true,
+      seedInput: binding,
+      bodyOutput: port(concatId, "output"),
+      children,
+    });
+
+    binding = port(groupId, "out");
+  }
+
+  return { nodes, output: binding };
+};
+
 // ─── The block function body ──────────────────────────────────────────────
 
 /**
@@ -564,50 +647,8 @@ const buildBlockBody = (isDecrypt: boolean): StepNode[] => {
   ];
 
   // ── Ten double rounds ─────────────────────────────────────────────────
-  let stateBinding: PortBinding = port(STATE_INIT_ID, "output");
-  for (let dr = 0; dr < DOUBLE_ROUNDS; dr++) {
-    const groupId = `double-round.${dr}`;
-    const splitId = `${groupId}.split`;
-    const concatId = `${groupId}.concat`;
-
-    // Inside the group's fresh scope: the 64-byte seed becomes 16 words.
-    const words: PortBinding[] = Array.from({ length: 16 }, (_, i) => port(splitId, `output${i}`));
-
-    const children: StepNode[] = [
-      {
-        kind: "step",
-        id: splitId,
-        type: "split-bytes@1",
-        params: { widths: [...STATE_WORD_WIDTHS] },
-        portInputs: { input: port(groupId, "in") },
-      },
-    ];
-
-    QUARTER_ROUND_INDICES.forEach((quad, qr) => {
-      children.push(...quarterRound(`${groupId}.qr${qr}`, words, quad));
-    });
-
-    children.push({
-      kind: "step",
-      id: concatId,
-      type: "concat@1",
-      params: { inputCount: 16 },
-      portInputs: Object.fromEntries(words.map((w, i) => [`input${i}`, w])),
-    });
-
-    nodes.push({
-      kind: "group",
-      id: groupId,
-      label: `Double round ${dr + 1} of ${DOUBLE_ROUNDS} (rounds ${2 * dr + 1}–${2 * dr + 2})`,
-      // 98 leaves apiece; uncollapsed by default this is a wall of chips.
-      defaultCollapsed: true,
-      seedInput: stateBinding,
-      bodyOutput: port(concatId, "output"),
-      children,
-    });
-
-    stateBinding = port(groupId, "out");
-  }
+  const rounds = buildDoubleRoundGroups(port(STATE_INIT_ID, "output"));
+  nodes.push(...rounds.nodes);
 
   // ── Feed-forward, serialize, and meet the message ─────────────────────
   nodes.push(
@@ -619,7 +660,7 @@ const buildBlockBody = (isDecrypt: boolean): StepNode[] => {
       id: FINAL_ADD_ID,
       type: "add-mod-32@1",
       params: { inputCount: 2 },
-      portInputs: { operand0: stateBinding, operand1: port(STATE_INIT_ID, "output") },
+      portInputs: { operand0: rounds.output, operand1: port(STATE_INIT_ID, "output") },
       narrationOverride: narrFinalAdd,
     },
     {

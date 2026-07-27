@@ -38,6 +38,7 @@ import { blowfishSpec } from "@/ciphers/blowfish";
 import { blowfishCore } from "@/ciphers/blowfish-core";
 import { blowfishDecryptSpec } from "@/ciphers/blowfish-decrypt";
 import { chacha20DecryptSpec, chacha20EncryptSpec } from "@/ciphers/chacha20";
+import { buildChaCha20CsprngSpec } from "@/ciphers/chacha20-csprng";
 import { buildCshakeSpec, readCshakeCustomization } from "@/ciphers/cshake";
 import { desSpec } from "@/ciphers/des";
 import { desCore } from "@/ciphers/des-core";
@@ -48,12 +49,13 @@ import {
   readKmacCustomization,
   readKmacKeyLength,
 } from "@/ciphers/kmac";
-import { buildLcgSpec, readLcgOutputLength } from "@/ciphers/lcg";
+import { buildLcgSpec } from "@/ciphers/lcg";
 import { buildCbcSpec } from "@/ciphers/modes/cbc";
 import { buildCfbSpec } from "@/ciphers/modes/cfb";
 import { buildCtrSpec } from "@/ciphers/modes/ctr";
 import { buildEcbSpec } from "@/ciphers/modes/ecb";
 import { buildOfbSpec } from "@/ciphers/modes/ofb";
+import { readPrngOutputLength } from "@/ciphers/prng-request";
 import { rsaDecryptSpec, rsaEncryptSpec } from "@/ciphers/rsa";
 import { salsa20DecryptSpec, salsa20EncryptSpec } from "@/ciphers/salsa20";
 import { serpent128Spec } from "@/ciphers/serpent-128";
@@ -526,6 +528,47 @@ const resolveAsymmetricDefault = (a: Asymmetric, mode: Mode): CipherSpec =>
  * Not a limit of the algorithm.
  */
 export const MAX_PRNG_OUTPUT = 1024;
+
+/**
+ * The ChaCha20 CSPRNG's own, much lower ceiling.
+ *
+ * The generators in this family differ in frame cost by three orders of
+ * magnitude, so one shared ceiling cannot serve both. An LCG spends ~4 frames
+ * per 4-byte word; the CSPRNG runs twenty rounds — ~990 frames — per 64-byte
+ * block. At the LCG's 1024-byte ceiling the CSPRNG would build ~16,000 frames
+ * and take tens of seconds to re-render on every edit, which would make the
+ * param-editing experiment the family exists for unusable.
+ *
+ * 256 bytes is four blocks, 3,958 frames — about twice what the shipped
+ * ChaCha20 cipher builds for its 114-byte default.
+ *
+ * **Measured in the browser, not assumed** (the same obligation
+ * `MAX_PRNG_OUTPUT` above discharges for the LCGs): a length change from 42 to
+ * 256 bytes — 991 → 3,958 frames — takes **~2.0 s** end to end, and the reverse
+ * ~1.3 s. That is deliberately calibrated to land on the SAME wall-clock budget
+ * the LCGs' own ceiling already occupies (~1.6–2.0 s at 1024 bytes), so the two
+ * ceilings cost a user the same wait despite differing 4× in bytes and ~4× in
+ * frames. The 42-byte default is comfortable; a user at the maximum has opted
+ * into the wait.
+ *
+ * Re-measure before raising this, and lower it if the step strip ever gets
+ * heavier per row.
+ *
+ * Not a limit of the algorithm; a legibility and responsiveness limit, and the
+ * honest one to state since the per-block cost is intrinsic to what makes this
+ * generator secure.
+ */
+export const MAX_CSPRNG_OUTPUT = 256;
+
+/**
+ * The output ceiling for a given generator. Asked at every site that clamps —
+ * `setPrngOutputLength`, `setPrng` (a variant switch can leave a length above
+ * the new variant's ceiling), and the App's stepper `max`. A site that used the
+ * bare `MAX_PRNG_OUTPUT` instead would let a 1024-byte length survive into the
+ * CSPRNG and hang the UI.
+ */
+export const maxPrngOutputFor = (p: Prng): number =>
+  p === "chacha20-csprng" ? MAX_CSPRNG_OUTPUT : MAX_PRNG_OUTPUT;
 /**
  * Default generator output: 42 bytes.
  *
@@ -551,7 +594,10 @@ export const usePrngOutputLength = (): (() => number) => prngOutputLength;
  * table of pre-built specs would desync the signal from the active spec and make
  * `isCustomSpec` report a pure length change as a user edit.
  */
-const resolvePrngDefault = (p: Prng): CipherSpec => buildLcgSpec(p, prngOutputLength());
+const resolvePrngDefault = (p: Prng): CipherSpec =>
+  p === "chacha20-csprng"
+    ? buildChaCha20CsprngSpec(Math.min(prngOutputLength(), MAX_CSPRNG_OUTPUT))
+    : buildLcgSpec(p, prngOutputLength());
 
 // ─── Signals ─────────────────────────────────────────────────────────────
 //
@@ -1045,12 +1091,19 @@ export const setAsymmetric = (a: Asymmetric): void => {
 export const setPrng = (p: Prng): void => {
   setCategorySignal("prng");
   setPrngSignal(p);
+  // Re-clamp the shared length signal against the INCOMING variant's ceiling.
+  // The generators' ceilings differ by 4× (see `maxPrngOutputFor`), so a length
+  // chosen under an LCG can be far above what the CSPRNG can render in
+  // reasonable time. Without this, switching variants would land a 1024-byte
+  // request on a generator that spends ~990 frames per 64 bytes.
+  const capped = Math.min(prngOutputLength(), maxPrngOutputFor(p));
+  if (capped !== prngOutputLength()) setPrngOutputLengthSignal(capped);
   setSpecs(buildCanonicalPrng(p));
 };
 
 /**
  * Set the generator's output length and, when a PRNG is active, rebuild the
- * spec at the new length. Clamps to `[1, MAX_PRNG_OUTPUT]`.
+ * spec at the new length. Clamps to `[1, maxPrngOutputFor(active variant)]`.
  *
  * STRUCTURAL rebuild, not a param edit — the same rationale as
  * `setShakeOutputLength`. The length is `zero-fill@1`'s width, which sets how
@@ -1058,10 +1111,14 @@ export const setPrng = (p: Prng): void => {
  * leave the signal and the spec free to disagree.
  *
  * No-op rebuild when a non-PRNG algorithm is active: the signal still updates
- * (cheap), so switching to a generator later picks up the chosen length.
+ * (cheap), so switching to a generator later picks up the chosen length. The
+ * ceiling in that case is the ACTIVE variant's, and `setPrng` re-clamps on the
+ * way in — so a length chosen while a cipher was selected cannot smuggle a
+ * 1024-byte request onto the CSPRNG.
  */
 export const setPrngOutputLength = (n: number): void => {
-  const clamped = Math.max(1, Math.min(MAX_PRNG_OUTPUT, Math.floor(n)));
+  const ceiling = useCategory()() === "prng" ? maxPrngOutputFor(usePrng()()) : MAX_PRNG_OUTPUT;
+  const clamped = Math.max(1, Math.min(ceiling, Math.floor(n)));
   setPrngOutputLengthSignal(clamped);
   if (useCategory()() === "prng") {
     setSpecs(buildCanonicalPrng(usePrng()()));
@@ -1891,9 +1948,12 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
     // RAW signal, not `setPrngOutputLength` — the doc's spec is landed verbatim
     // below (it may be a customized variant), so a structural rebuild here would
     // discard the user's edits.
-    const loadedLen = readLcgOutputLength(doc.spec);
+    const loadedLen = readPrngOutputLength(doc.spec);
     if (loadedLen !== undefined) {
-      setPrngOutputLengthSignal(Math.max(1, Math.min(MAX_PRNG_OUTPUT, loadedLen)));
+      // Clamped against the LOADED variant's ceiling, not the family maximum —
+      // otherwise a hand-edited CSPRNG document could land a length the app
+      // will not re-render in reasonable time.
+      setPrngOutputLengthSignal(Math.max(1, Math.min(maxPrngOutputFor(doc.algorithm), loadedLen)));
     }
     if (doc.session) {
       setByteFormat(doc.session.byteFormat);

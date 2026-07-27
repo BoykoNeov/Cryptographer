@@ -76,6 +76,7 @@ import "./narration/index";
 // The generator's word width, for the output-length caption. Imported from the
 // cipher module rather than hardcoded so the caption cannot drift from the spec
 // builder's actual block size.
+import { PRNG_SEED_AUX } from "@/ciphers/chacha20-csprng";
 import { LCG_WORD_BYTES } from "@/ciphers/lcg";
 import { clearDirty, setAutoRerun, setDirty, useAutoRerun, useDirty } from "./stores/auto-rerun";
 import {
@@ -112,7 +113,10 @@ import {
   PRNG_DESCRIPTIONS,
   PRNG_LABELS,
   PRNG_OPTIONS,
+  PRNG_UNIT_BYTES_BY_PRNG,
+  PRNG_UNIT_NOUN_BY_PRNG,
   type Prng,
+  SEED_BYTES_BY_PRNG,
   describeAlgorithm,
   historyOfAlgorithm,
   isAsymmetric,
@@ -167,10 +171,10 @@ import {
 import { registry } from "./stores/registry";
 import {
   MAX_KMAC_KEY_LENGTH,
-  MAX_PRNG_OUTPUT,
   MAX_SHAKE_OUTPUT,
   isCustomSpec,
   isKmacHash,
+  maxPrngOutputFor,
   resetSpec,
   setAlgorithm,
   setAsymmetric,
@@ -533,15 +537,21 @@ export const App = () => {
           );
         }
       } else if (isPrng(algorithm())) {
-        // Generator branch. The seed is a single machine word, and unlike a
-        // message its width is not negotiable: the iterate bootstraps its chain
-        // from these exact bytes, so a seed of the wrong width would reach
-        // `mod-mul@1` as a differently-sized big-endian integer and quietly
-        // produce a valid-looking stream from the wrong starting value. Checking
-        // here names the problem; the runtime would not.
-        if (inputBytes.length !== LCG_WORD_BYTES) {
+        // Generator branch. Unlike a message, a seed's width is not negotiable:
+        // it is bound straight into the generator's state, so a seed of the
+        // wrong width would quietly produce a valid-looking stream from the
+        // wrong starting value rather than an error. Checking here names the
+        // problem; the runtime would silently coerce.
+        //
+        // Per-variant, NOT one constant: the LCGs take a 32-bit word, the
+        // ChaCha20 CSPRNG takes 32 bytes (its seed occupies the cipher's key
+        // region). See `SEED_BYTES_BY_PRNG`.
+        const seedBytes = SEED_BYTES_BY_PRNG[prng()];
+        if (inputBytes.length !== seedBytes) {
           throw new Error(
-            `${inputLabel()}: ${PRNG_LABELS[prng()]} takes a ${LCG_WORD_BYTES}-byte seed (one 32-bit word); got ${inputBytes.length}.`,
+            `${inputLabel()}: ${PRNG_LABELS[prng()]} takes a ${seedBytes}-byte seed${
+              seedBytes === LCG_WORD_BYTES ? " (one 32-bit word)" : ""
+            }; got ${inputBytes.length}.`,
           );
         }
       } else {
@@ -621,6 +631,25 @@ export const App = () => {
       // IV input's label and the mode's narration carry the distinction.
       if (cipherModeUsesIv(cipherMode())) {
         initialAux.set("iv", new Uint8Array(ivBytes()));
+      }
+      // A generator's seed is ALSO published to aux, under `seed`.
+      //
+      // The seed already arrives as the initial state (it rides `plaintext` —
+      // the family convention, with the field relabelled "seed"), and the LCGs
+      // reach it that way, through `port($input)` at the top level. But a
+      // generator whose body sits inside a container cannot: port flow does not
+      // cross a container scope, so the runtime seeds an iterate body with only
+      // that iterate's own `in`/`chain` ports and `$input` is unreachable from
+      // in there. Aux is the documented cross-scope channel.
+      //
+      // ChaCha20-CSPRNG's block function needs the seed inside the loop, and
+      // reads it with the same `aux-load-bytes@1` leaf the ChaCha20 cipher uses
+      // to fetch its key — which is the honest picture, since to that
+      // construction the seed IS the key. Published for every generator rather
+      // than gated on the variant: it costs one entry, and a variant-specific
+      // gate is the kind of thing a fifth generator would silently miss.
+      if (isPrng(algorithm())) {
+        initialAux.set(PRNG_SEED_AUX, new Uint8Array(inputBytes));
       }
       const currentSpec = spec();
       // Every spec is port-native (Phase C retired the legacy dispatch flag),
@@ -1229,7 +1258,8 @@ export const App = () => {
    * Change how many bytes the generator produces. Structurally identical to
    * `changeShakeOutputLength` — a rebuild off a selector outside the undo
    * snapshot — so it takes the same C3 boundary reset. The store clamps to
-   * [1, MAX_PRNG_OUTPUT].
+   * [1, maxPrngOutputFor(active variant)] — per-variant, because the CSPRNG's
+   * ceiling is a quarter of the LCGs'.
    */
   const changePrngOutputLength = (next: number): void => {
     if (!Number.isFinite(next)) return; // ignore an empty / non-numeric field
@@ -1810,7 +1840,7 @@ export const App = () => {
             <input
               type="number"
               min={1}
-              max={MAX_PRNG_OUTPUT}
+              max={maxPrngOutputFor(prng())}
               step={1}
               value={prngOutputLength()}
               onChange={(e) => changePrngOutputLength(e.currentTarget.valueAsNumber)}
@@ -1818,12 +1848,17 @@ export const App = () => {
           </label>
           <span class="shake-block-caption">
             {(() => {
+              // Per-variant: an LCG loop emits one 4-byte word per pass, the
+              // CSPRNG a whole 64-byte ChaCha20 block. Reading the widths off
+              // the tables keeps the caption from calling blocks "words".
               const n = prngOutputLength();
-              const words = Math.ceil(n / LCG_WORD_BYTES);
-              const remainder = n % LCG_WORD_BYTES;
-              return `${words} word${words === 1 ? "" : "s"} × ${LCG_WORD_BYTES} bytes${
+              const unit = PRNG_UNIT_BYTES_BY_PRNG[prng()];
+              const noun = PRNG_UNIT_NOUN_BY_PRNG[prng()];
+              const units = Math.ceil(n / unit);
+              const remainder = n % unit;
+              return `${units} ${noun}${units === 1 ? "" : "s"} × ${unit} bytes${
                 remainder === 0 ? "" : ` (last trimmed to ${remainder})`
-              } · max ${MAX_PRNG_OUTPUT}`;
+              } · max ${maxPrngOutputFor(prng())}`;
             })()}
           </span>
         </Show>
