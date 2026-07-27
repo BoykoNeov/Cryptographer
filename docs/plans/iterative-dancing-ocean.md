@@ -1,7 +1,41 @@
 # Pseudo-random generators — a fourth algorithm family
 
-**Status:** **P1 SHIPPED 2026-07-27** (family surface + MINSTD ×2). P2–P3 in
-scope and not started; P4 (MT19937) deferred to its own decision.
+**Status:** **P1 SHIPPED 2026-07-27** (family surface + MINSTD ×2).
+**P2 SHIPPED 2026-07-27** (ANSI C LCG + `add-mod@1`). P3 in scope and not
+started; P4 (MT19937) deferred to its own decision.
+
+### P2 shipped — what changed against the plan
+
+1. **`add-mod@1` has NO params, so it needed the `NO_PARAMS_PORT_NATIVE_TYPES`
+   entry the plan explicitly said it would not.** The plan reasoned "both new
+   leaves have params, so the no-params set is not involved" while its own
+   signature for the step was `add-mod@1 { }` — and the shipped `mod-mul@1` it
+   is templated on takes `params: {}`. Without the entry it drops to the
+   raw-JSON fallback and renders `{}`, which is what `mod-mul@1` does today.
+   (That sibling was left alone: fixing it changes RSA's editor, a different
+   feature's defect.)
+2. **`isPrng` became membership over `ALL_PRNGS` rather than gaining a third
+   `===` arm.** The `isCipher` landmine the plan documented as a per-*family*
+   hazard is re-armed by every new *variant*: a forgotten arm makes `isPrng`
+   false, `isCipher` true, and the compiler believes it. Reading the same list
+   the dropdown reads removes the drift permanently.
+3. **The plan's five ANSI-C reference states were correct, and a stronger
+   second anchor came free.** Dividing them by 65536 mod 32768 gives
+   `16838, 5758, 10113, 17515, 31051` — the published opening of C's `rand()`.
+   Both sequences are pinned, and the second is derived from the runtime's
+   output so it cannot degenerate into a tautology if the app's emitted value
+   ever changes.
+4. **A byte-identity hash pin on the MINSTD specs was added, which the plan only
+   prescribed for P3's ChaCha20 export.** The same hazard applies here: spec-only
+   saves feed the URL-share hash, so reflowing one narration sentence while
+   generalizing the builder would repoint every previously shared MINSTD link
+   without changing a byte of output. Digests were taken from the shipped P1
+   builder before the refactor.
+5. **Emitting the raw state rather than C's top-15-bit extraction was a real
+   decision, not an omission.** The extraction is C's workaround for the low-bit
+   weakness; performing it would hide the defect the variant exists to show. The
+   cost is a prose obligation — the `emit` narration states the relationship and
+   prints both sequences — and the plan did not anticipate it.
 
 ### P1 shipped — what changed against the plan
 

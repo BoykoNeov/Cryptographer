@@ -9,6 +9,7 @@
  */
 
 import { StepRegistry } from "../core/registry";
+import { addMod, addModDoc, addModPortContract } from "../steps/add-mod";
 import { addMod16, addMod16Doc, addMod16PortContract } from "../steps/add-mod-16";
 import { addMod32, addMod32Doc, addMod32PortContract } from "../steps/add-mod-32";
 import { and, andDoc, andPortContract } from "../steps/and";
@@ -1090,6 +1091,15 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: condModMul,
     shape: condModMulPortContract,
     doc: condModMulDoc,
+  });
+  // Sibling of `mod-mul@1` — the "+ c" of a mixed congruential generator.
+  // NOT `add-mod-32@1`, whose modulus is the fixed machine word; here the
+  // modulus arrives on a port so it stays visible and editable.
+  r.register("add-mod@1", {
+    kind: "ported",
+    executor: addMod,
+    shape: addModPortContract,
+    doc: addModDoc,
   });
   r.register("mod-inverse@1", {
     kind: "ported",

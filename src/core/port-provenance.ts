@@ -312,7 +312,8 @@ export const lookupProvenance = (stepType: string): ProvenanceFn | undefined =>
  *    `increment-counter@1` (CTR's +1 — an exact cone that would still mislead,
  *    see its inline note),
  *    the RSA big-integer primitives `mul@1` / `sub@1` / `mod-mul@1` /
- *    `cond-mod-mul@1` / `mod-inverse@1`, and the traced extended-Euclid loop
+ *    `cond-mod-mul@1` / `mod-inverse@1`, the LCG family's `add-mod@1`,
+ *    and the traced extended-Euclid loop
  *    `eea-step@1` / `eea-extract@1` (full-width carries/borrows mix every
  *    output byte across all input bytes — there is no clean per-cell mapping).
  *    Deferred to the distinct `≈`-treatment fast-follow.
@@ -360,6 +361,10 @@ export const PROVENANCE_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set<string>([
   "mod-mul@1",
   "cond-mod-mul@1",
   "mod-inverse@1",
+  // approximate — the LCG family's "+ c". Same rationale as `add-mod-32@1`
+  // above (a carry crosses byte boundaries) compounded by the reduction, which
+  // can rewrite every byte at once when the sum crosses the modulus.
+  "add-mod@1",
   // approximate — the traced extended-Euclid loop (RSA Phase 4): each rung's
   // quotient/remainder + the mod-φ-reduced coefficient mix every output byte
   // across the input tuple, exactly like the `mod-inverse@1` oracle they

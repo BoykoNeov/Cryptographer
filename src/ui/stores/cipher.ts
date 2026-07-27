@@ -145,7 +145,7 @@ export type Asymmetric = "rsa";
  * encrypt/decrypt toggle — which is why `PrngSpecsByMode` in `stores/spec.ts`
  * copies the single-slot hash shape rather than the two-slot cipher shape.
  */
-export type Prng = "minstd-rand0" | "minstd-rand";
+export type Prng = "minstd-rand0" | "minstd-rand" | "ansi-c-lcg";
 
 /**
  * Category discriminant for the algorithm selector (Slice 2.10c, 2026-05-25).
@@ -225,11 +225,25 @@ export const isHash = (a: Algorithm): a is Hash =>
 export const isAsymmetric = (a: Algorithm): a is Asymmetric => a === "rsa";
 
 /**
+ * The generator variants, hoisted above `isPrng` so the predicate can be
+ * expressed as membership rather than a hand-written disjunction. `PRNG_OPTIONS`
+ * re-exports it further down, beside the other families' option lists.
+ *
+ * **Membership, not `a === … || a === …`, is deliberate.** The disjunction form
+ * re-arms the `isCipher` landmine on every new *variant*, not just every new
+ * family: widen the `Prng` union, forget the extra arm, and `isPrng` returns
+ * false, so `isCipher` returns true and the compiler believes it — the
+ * generator silently acquires a mode selector, padding and a key field. Reading
+ * the list means the union and the predicate cannot disagree.
+ */
+const ALL_PRNGS: readonly Prng[] = ["minstd-rand0", "minstd-rand", "ansi-c-lcg"];
+
+/**
  * True when an algorithm is a pseudo-random generator. Defined alongside
  * `isHash` / `isAsymmetric` so `isCipher` below can exclude all three
  * non-cipher families explicitly.
  */
-export const isPrng = (a: Algorithm): a is Prng => a === "minstd-rand0" || a === "minstd-rand";
+export const isPrng = (a: Algorithm): a is Prng => (ALL_PRNGS as readonly string[]).includes(a);
 
 /**
  * True when an algorithm is a symmetric cipher (the keyed encrypt/decrypt
@@ -369,14 +383,17 @@ export const ASYMMETRIC_LABELS: Record<Asymmetric, string> = {
   rsa: "RSA (textbook)",
 };
 
-/** PRNG dropdown options + labels. The two variants differ in exactly one
- *  constant — the multiplier — which is the point: the label names the standard
- *  identifier a learner will meet in C++ or in the literature. */
-const ALL_PRNGS: readonly Prng[] = ["minstd-rand0", "minstd-rand"];
+/** PRNG dropdown options + labels. The variants differ in a handful of
+ *  constants — which is the point: the label names the standard identifier a
+ *  learner will meet in C++, in C, or in the literature. */
 export const PRNG_OPTIONS = ALL_PRNGS;
 export const PRNG_LABELS: Record<Prng, string> = {
   "minstd-rand0": "MINSTD (a = 16807)",
   "minstd-rand": "MINSTD (a = 48271)",
+  // NOT "glibc rand()" — glibc's default is a TYPE_3 additive-feedback
+  // generator, not this LCG. The C standard's own §7.22.2.2 example and
+  // POSIX `rand_r` are what this recurrence actually is.
+  "ansi-c-lcg": "ANSI C LCG (rand_r)",
 };
 
 /** Display labels for the selector. Keep in sync with `ALL_CIPHERS`. */
@@ -468,6 +485,8 @@ export const PRNG_DESCRIPTIONS: Record<Prng, string> = {
     "MINSTD (Lehmer 1951 / Park–Miller 1988) — x ← 16807·x mod 2³¹−1. One multiply, one remainder; predictable, not secure.",
   "minstd-rand":
     "MINSTD revised (Park–Miller–Stockmeyer 1993) — x ← 48271·x mod 2³¹−1. Same structure, better spectral behaviour.",
+  "ansi-c-lcg":
+    "ANSI C LCG (rand_r) — x ← (1103515245·x + 12345) mod 2³¹. A power-of-two modulus: the low bits are almost pure structure.",
 };
 
 /**
@@ -562,6 +581,8 @@ export const PRNG_HISTORY: Record<Prng, string> = {
     "D. H. Lehmer's 1951 generator, which Park & Miller proposed in 1988 as a 'minimal standard' any generator should at least match; it became the default in countless libraries, and the source of countless flawed simulations.",
   "minstd-rand":
     "Park, Miller & Stockmeyer's 1993 revision after correspondence over the original's spectral flaws; both multipliers are named in the C++ standard, which is unusual — few algorithms have their constants fixed by an ISO document.",
+  "ansi-c-lcg":
+    "The sample rand() published in the 1989 ANSI C standard (and carried into POSIX rand_r) — an implementation illustration that a generation of programs shipped verbatim. Its power-of-two modulus makes the low bits worthless, which is exactly why the sample discards the bottom 16 before returning a number.",
 };
 
 /**
@@ -985,6 +1006,7 @@ export const DEFAULT_CT_BYTES_BY_ASYMMETRIC: Record<Asymmetric, Uint8Array> = {
 export const DEFAULT_KEY_BYTES_BY_PRNG: Record<Prng, Uint8Array> = {
   "minstd-rand0": new Uint8Array(0),
   "minstd-rand": new Uint8Array(0),
+  "ansi-c-lcg": new Uint8Array(0),
 };
 
 /**
@@ -999,10 +1021,16 @@ export const DEFAULT_KEY_BYTES_BY_PRNG: Record<Prng, Uint8Array> = {
  * From this seed `minstd-rand0` opens 16807, 282475249, 1622650073, … — the most
  * widely republished fingerprint of the generator, and recognisable on sight to
  * anyone who has met it before.
+ *
+ * Seed 1 is the right default for the ANSI C variant too, and for the same
+ * reason: `srand(1)` is what C guarantees an unseeded `rand()` behaves as, so
+ * the opening states 1103527590, 377401575, 662824084, … are the ones a learner
+ * will find quoted everywhere the sample generator is discussed.
  */
 export const DEFAULT_PT_BYTES_BY_PRNG: Record<Prng, Uint8Array> = {
   "minstd-rand0": new Uint8Array([0x00, 0x00, 0x00, 0x01]),
   "minstd-rand": new Uint8Array([0x00, 0x00, 0x00, 0x01]),
+  "ansi-c-lcg": new Uint8Array([0x00, 0x00, 0x00, 0x01]),
 };
 
 /** Test-only reset; production code never calls this. */

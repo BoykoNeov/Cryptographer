@@ -105,6 +105,9 @@ describe("port-provenance coverage contract", () => {
       "mod-mul@1",
       "cond-mod-mul@1",
       "mod-inverse@1",
+      // approximate — the LCG family's "+ c": a carry crosses byte boundaries,
+      // and the reduction can rewrite every byte when the sum crosses m
+      "add-mod@1",
       // approximate — the traced extended-Euclid loop (RSA Phase 4)
       "eea-step@1",
       "eea-extract@1",

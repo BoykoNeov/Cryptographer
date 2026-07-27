@@ -29,7 +29,7 @@
  * published tables stay locked.
  */
 
-import { MCG_ITERATE_ID, MCG_MODULUS_ID, MCG_MULTIPLIER_ID } from "@/ciphers/lcg";
+import { LCG_INCREMENT_ID, LCG_ITERATE_ID, LCG_MODULUS_ID, LCG_MULTIPLIER_ID } from "@/ciphers/lcg";
 import { findStep } from "@/core/spec-mutations";
 import type { Json, StepLeaf, StepNode } from "@/core/types";
 import { ParamEditor } from "@/ui/components/ParamEditor";
@@ -62,7 +62,7 @@ describe("MINSTD — the published constants are editable from the app", () => {
   });
 
   it("the multiplier renders as editable byte cells, not a locked hex dump", () => {
-    const { container } = render(() => <ParamEditor stepId={MCG_MULTIPLIER_ID} />);
+    const { container } = render(() => <ParamEditor stepId={LCG_MULTIPLIER_ID} />);
     // The house pattern for a small editable array (KeyExpansionBlock's Rcon).
     const cells = container.querySelectorAll<HTMLInputElement>(".rcon-row input");
     expect(cells.length, "one byte cell per byte of the 4-byte multiplier").toBe(4);
@@ -74,15 +74,15 @@ describe("MINSTD — the published constants are editable from the app", () => {
 
   it("editing a multiplier byte commits to the spec", () => {
     // 16807 = 0x000041a7. Rewrite the low byte to 0xa8 → 16808.
-    expect(leafBytes(MCG_MULTIPLIER_ID)).toEqual([0x00, 0x00, 0x41, 0xa7]);
+    expect(leafBytes(LCG_MULTIPLIER_ID)).toEqual([0x00, 0x00, 0x41, 0xa7]);
 
-    const { container } = render(() => <ParamEditor stepId={MCG_MULTIPLIER_ID} />);
+    const { container } = render(() => <ParamEditor stepId={LCG_MULTIPLIER_ID} />);
     const cells = container.querySelectorAll<HTMLInputElement>(".rcon-row input");
     const low = cells[3] as HTMLInputElement;
     fireEvent.input(low, { target: { value: "a8" } });
     fireEvent.blur(low); // ByteCellInput commits on blur
 
-    expect(leafBytes(MCG_MULTIPLIER_ID), "the edit reached the spec").toEqual([
+    expect(leafBytes(LCG_MULTIPLIER_ID), "the edit reached the spec").toEqual([
       0x00, 0x00, 0x41, 0xa8,
     ]);
   });
@@ -90,9 +90,9 @@ describe("MINSTD — the published constants are editable from the app", () => {
   it("the modulus is editable too — the other half of the recurrence", () => {
     // Both constants matter pedagogically: swapping the prime modulus for a
     // power of two is what makes the low-bit weakness appear.
-    expect(leafBytes(MCG_MODULUS_ID)).toEqual([0x7f, 0xff, 0xff, 0xff]);
+    expect(leafBytes(LCG_MODULUS_ID)).toEqual([0x7f, 0xff, 0xff, 0xff]);
 
-    const { container } = render(() => <ParamEditor stepId={MCG_MODULUS_ID} />);
+    const { container } = render(() => <ParamEditor stepId={LCG_MODULUS_ID} />);
     const cells = container.querySelectorAll<HTMLInputElement>(".rcon-row input");
     expect(cells.length, "one cell per byte of the modulus").toBe(4);
 
@@ -100,7 +100,7 @@ describe("MINSTD — the published constants are editable from the app", () => {
     fireEvent.input(high, { target: { value: "80" } });
     fireEvent.blur(high);
 
-    expect(leafBytes(MCG_MODULUS_ID), "modulus is now 2^31, a power of two").toEqual([
+    expect(leafBytes(LCG_MODULUS_ID), "modulus is now 2^31, a power of two").toEqual([
       0x80, 0xff, 0xff, 0xff,
     ]);
   });
@@ -110,19 +110,64 @@ describe("MINSTD — the published constants are editable from the app", () => {
     // the generator's iterate, so a mutation helper that only walked top-level
     // steps would silently no-op and every assertion above would still pass on
     // a stale read. Assert the iterate's child is the object that changed.
-    const { container } = render(() => <ParamEditor stepId={MCG_MULTIPLIER_ID} />);
+    const { container } = render(() => <ParamEditor stepId={LCG_MULTIPLIER_ID} />);
     const cell = container.querySelectorAll<HTMLInputElement>(
       ".rcon-row input",
     )[3] as HTMLInputElement;
     fireEvent.input(cell, { target: { value: "03" } });
     fireEvent.blur(cell);
 
-    const iterate = useSpec()().steps.find((n: StepNode) => n.id === MCG_ITERATE_ID);
+    const iterate = useSpec()().steps.find((n: StepNode) => n.id === LCG_ITERATE_ID);
     if (iterate === undefined || iterate.kind !== "iterate") throw new Error("no iterate");
     const mult = iterate.children.find(
-      (c: StepNode): c is StepLeaf => c.kind === "step" && c.id === MCG_MULTIPLIER_ID,
+      (c: StepNode): c is StepLeaf => c.kind === "step" && c.id === LCG_MULTIPLIER_ID,
     );
     expect(bytesOf(mult?.params)).toEqual([0x00, 0x00, 0x41, 0x03]);
+  });
+});
+
+describe("ANSI C LCG — the increment is editable from the app too", () => {
+  beforeEach(() => {
+    __resetCipherForTests();
+    __resetSpecForTests();
+    setPrng("ansi-c-lcg");
+  });
+
+  afterEach(() => {
+    cleanup();
+    __resetCipherForTests();
+    __resetSpecForTests();
+  });
+
+  it("c renders as editable byte cells", () => {
+    // The mixed form's whole pedagogical point is the editable (a, c, m) triple.
+    // `a` and `m` are covered above under MINSTD — this is the third, and it is
+    // the one that only exists on this variant, so nothing else would catch it
+    // being rendered as a locked dump.
+    expect(leafBytes(LCG_INCREMENT_ID)).toEqual([0x00, 0x00, 0x30, 0x39]); // 12345
+
+    const { container } = render(() => <ParamEditor stepId={LCG_INCREMENT_ID} />);
+    const cells = container.querySelectorAll<HTMLInputElement>(".rcon-row input");
+    expect(cells.length, "one cell per byte of the increment").toBe(4);
+
+    // 12345 is odd, which is the Hull–Dobell condition for a full period.
+    // Making it even is the experiment the narration invites.
+    const low = cells[3] as HTMLInputElement;
+    fireEvent.input(low, { target: { value: "38" } });
+    fireEvent.blur(low);
+
+    expect(leafBytes(LCG_INCREMENT_ID), "c is now 12344, an even increment").toEqual([
+      0x00, 0x00, 0x30, 0x38,
+    ]);
+  });
+
+  it("the multiplicative variants have no increment leaf at all", () => {
+    // Guards the FORM, not the value: MINSTD does not add zero, it does not add.
+    // If the builder ever emitted an `incr` of 0 for it, the streams would stay
+    // correct and the editor would offer a constant that teaches the wrong
+    // thing.
+    setPrng("minstd-rand0");
+    expect(findStep(useSpec()(), LCG_INCREMENT_ID)).toBeNull();
   });
 });
 

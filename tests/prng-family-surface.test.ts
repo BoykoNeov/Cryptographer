@@ -24,7 +24,7 @@
  * bug once already.
  */
 
-import { MCG_ITERATE_ID, MCG_WORD_BYTES, buildMcgSpec } from "@/ciphers/lcg";
+import { LCG_ITERATE_ID, LCG_WORD_BYTES, buildLcgSpec } from "@/ciphers/lcg";
 import {
   CURRENT_SCHEMA_VERSION,
   type CipherDocument,
@@ -139,7 +139,7 @@ describe("PRNG family surface", () => {
         expect(PRNG_LABELS[p]).toBeTruthy();
         // The seed is one word wide; the key is empty (generators are keyless
         // in the symmetric sense, and the UI hides the field on that basis).
-        expect(DEFAULT_PT_BYTES_BY_PRNG[p]).toHaveLength(MCG_WORD_BYTES);
+        expect(DEFAULT_PT_BYTES_BY_PRNG[p]).toHaveLength(LCG_WORD_BYTES);
         expect(DEFAULT_KEY_BYTES_BY_PRNG[p]).toHaveLength(0);
       }
     });
@@ -193,7 +193,7 @@ describe("PRNG family surface", () => {
       // So the app's FIRST PAINT exercises the partial-final-block path. A
       // regression in the trim would otherwise be invisible until someone typed
       // an awkward number. Same reasoning as ChaCha20's 114-byte default.
-      expect(DEFAULT_PRNG_OUTPUT % MCG_WORD_BYTES).not.toBe(0);
+      expect(DEFAULT_PRNG_OUTPUT % LCG_WORD_BYTES).not.toBe(0);
     });
 
     it("changing it rebuilds the spec structurally", () => {
@@ -249,12 +249,12 @@ describe("PRNG family surface", () => {
       // Rewrite the multiplier constant — the edit a learner actually makes.
       const specs = useSpecsByMode()();
       if (specs.kind !== "prng") throw new Error("expected a prng SpecsByMode");
-      const iterate = specs.single.steps.find((n) => n.id === MCG_ITERATE_ID);
+      const iterate = specs.single.steps.find((n) => n.id === LCG_ITERATE_ID);
       if (iterate === undefined || iterate.kind !== "iterate") throw new Error("no iterate");
       const edited = {
         ...specs.single,
         steps: specs.single.steps.map((n) =>
-          n.id === MCG_ITERATE_ID
+          n.id === LCG_ITERATE_ID
             ? {
                 ...iterate,
                 children: iterate.children.map((c) =>
@@ -284,7 +284,7 @@ describe("PRNG family surface", () => {
     it("round-trips a generator document including its output length", () => {
       // The length is the piece most likely to be silently dropped: it lives in
       // the spec (so it survives serialization for free) but ALSO in a signal
-      // the UI reads. Without `readMcgOutputLength` in the load path the two
+      // the UI reads. Without `readLcgOutputLength` in the load path the two
       // disagree — the trace shows 137 bytes while the control reads 42.
       setPrng("minstd-rand");
       setPrngOutputLength(137);
@@ -321,7 +321,7 @@ describe("PRNG family surface", () => {
       // make every saved generator document unloadable.
       const text = serializeDocument({
         schemaVersion: CURRENT_SCHEMA_VERSION,
-        spec: buildMcgSpec("minstd-rand0", 42),
+        spec: buildLcgSpec("minstd-rand0", 42),
         algorithm: "minstd-rand0",
       });
       const parsed = parseDocument(text);

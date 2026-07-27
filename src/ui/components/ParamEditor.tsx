@@ -2778,6 +2778,7 @@ const NO_PARAMS_PORT_NATIVE_TYPES = new Set([
   "keccak.theta@1",
   "increment-counter@1",
   "truncate-to-reference@1",
+  "add-mod@1",
 ]);
 
 const portNativeNoParamsLabel = (stepType: string): string => {
@@ -2796,6 +2797,11 @@ const portNativeNoParamsLabel = (stepType: string): string => {
       return "Keeps the first N bytes of the input, discarding the rest (NIST SP 800-38A §6.5 — CTR's final partial block). No editable parameters; N is however wide the wired 'reference' value is, so it follows the message length rather than a setting.";
     case "keccak.theta@1":
       return "θ (theta) — mixes whole columns of the Keccak state (FIPS 202 §3.2.1). No editable parameters; the 5×5×64 geometry is fixed.";
+    // Note the contrast with `add-mod-32@1`, which is fixed to 2³² because its
+    // modulus is just the machine word. Here the modulus is data, and the
+    // constant feeding that port is where the editing happens.
+    case "add-mod@1":
+      return "(a + b) mod n — adds the two wired numbers and reduces modulo the wired modulus. No editable parameters here: all three values arrive on ports, so to change the modulus, edit the constant wired into it.";
     default:
       return "No editable parameters.";
   }

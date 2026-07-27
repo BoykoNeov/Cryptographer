@@ -100,7 +100,11 @@ export const ASYMMETRIC_IDS = ["rsa"] as const satisfies readonly Asymmetric[];
  * `assertPrngCoverage` below pins this against the `Prng` union in
  * `ui/stores/cipher.ts`.
  */
-export const PRNG_IDS = ["minstd-rand0", "minstd-rand"] as const satisfies readonly Prng[];
+export const PRNG_IDS = [
+  "minstd-rand0",
+  "minstd-rand",
+  "ansi-c-lcg",
+] as const satisfies readonly Prng[];
 
 /**
  * Concatenation of cipher + hash + asymmetric + prng ids. Used by the top-level

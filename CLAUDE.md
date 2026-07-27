@@ -82,8 +82,8 @@ exactly, which checks the word-index threading that every structural assertion i
 blind to.
 
 **MINSTD (2026-07-27) is the first PSEUDO-RANDOM GENERATOR, and the fourth
-algorithm family** (`docs/plans/iterative-dancing-ocean.md`, P1 shipped; P2
-ANSI-C LCG + `add-mod@1` and P3 ChaCha20-CSPRNG still open). Its significance is
+algorithm family** (`docs/plans/iterative-dancing-ocean.md`, P1 + P2 shipped;
+P3 ChaCha20-CSPRNG still open). Its significance is
 that it is the first primitive with **no message at all**. Every other family
 transforms data you hand it; a generator's seed says *which* sequence, never *how
 much of it*, so the requested length must enter the spec on its own — as the new
@@ -116,6 +116,34 @@ normative conformance values (10000th from seed 1 = 1043618065 / 399268537).
 only the final block is short and its feedback is discarded, so it is
 byte-indistinguishable — the untrimmed wire is OFB's *honesty* choice, and the
 KAT perturbs the binding to say so.
+
+**The ANSI C LCG (`rand_r`, 2026-07-27) is the second PRNG phase, and it is one
+leaf away from MINSTD.** `x ← (1103515245·x + 12345) mod 2³¹` — the sample
+`rand()` from ISO/IEC 9899 §7.22.2.2, **never call it "glibc `rand()`"** (glibc's
+default is a TYPE_3 additive-feedback generator, a different stream). The new leaf
+is `add-mod@1`, whose **modulus arrives on a PORT** — that is the whole reason it
+exists rather than `add-mod-32@1` + an `and@1` mask, which is correct only for
+power-of-two moduli and goes silently wrong the moment a learner edits in a prime.
+Four things worth carrying forward. (1) **`c = 0` is a FORM, not a value**:
+`buildLcgSpec` emits no `incr` and no `add-mod@1` for the multiplicative variants,
+and `LCG_STATE_ID` names whichever node produces the next state so `chainFeedback`
+wires identically across both forms; a test pins the two child lists, since streams
+agreeing would not catch a spurious `+ 0`. (2) **The app emits the RAW STATE, not
+C's `(state/65536) % 32768`** — the extraction is C's workaround for the low-bit
+weakness, so performing it would hide the defect the variant exists to show; the
+obligation that creates is prose (the `emit` narration states the relationship and
+prints both `1103527590, …` and `16838, 5758, …`), and the KAT derives the second
+sequence from the RUNTIME's output so it cannot silently become a tautology.
+(3) **Teaching claims are asserted against emitted bytes AND against the
+contrast** — bit 0's period-2 alternation is read off the stream, paired with an
+assertion that MINSTD's prime modulus does not alternate, so the property is
+attributed to the modulus rather than to one generator. (4) **The MINSTD specs are
+pinned BY HASH** across the builder generalization: spec-only saves feed the
+URL-share hash, so a reflowed narration sentence would repoint every previously
+shared link while every behavioural test stayed green — hence narration split per
+variant rather than woven with conditionals. Plus: **`isPrng` is now membership
+over `ALL_PRNGS`**, because the `isCipher` landmine is re-armed by every new
+*variant*, not just every new family.
 
 Registering a core has THREE consequences: the cipher gains ECB/CBC/CTR/CFB/OFB, `paddingLimits` starts deriving its bounds from the core, and **the padding overlay becomes reachable — including in single-block mode** (user decision, Phase C: padding follows core-presence; a separate gate could only have encoded "AES is special"). **The STREAM modes (CTR + CFB + OFB) are exempt from the third**: `buildCanonicalPair` passes no block width for them and no pad is ever spliced in. That exemption is asked at three sites (`overlayBlockBytes`, `paddingLimits`, the App's padding selector) and is funnelled through one predicate, `isStreamCipherMode` in `stores/cipher-mode.ts` — as is the parallel "does this mode use an IV?" question (`cipherModeUsesIv`: CBC's chain bootstrap, CTR's initial counter, CFB's and OFB's initial registers all share `aux["iv"]`), asked at aux seeding, session export, and the IV field. A mode wired into two of three sites fails silently, which is why these are predicates and not inline comparisons.
 
@@ -325,7 +353,7 @@ If a future need argues for one of these, revisit then.
 - `docs/help/graph-view.md` — user-facing reference for the graph view (edges, drag/drop, palette, warning glyphs, toolbar). Bundled into the app via Vite `?raw` and rendered inside the in-app help modal (`?` button in the graph toolbar). Keep this file the single source of truth — both GitHub readers and the in-app modal display the same prose.
 
 **Plans:**
-- PRNG family — MINSTD, the fourth `Category` (P1 shipped 2026-07-27; P2 ANSI-C LCG + `add-mod@1`, P3 ChaCha20-CSPRNG open; P4 MT19937 deferred by user decision): `docs/plans/iterative-dancing-ocean.md`. Memory: `project_prng_family_plan.md`.
+- PRNG family — the LCGs, the fourth `Category` (P1 MINSTD + P2 ANSI-C LCG/`add-mod@1` both shipped 2026-07-27; P3 ChaCha20-CSPRNG open; P4 MT19937 deferred by user decision): `docs/plans/iterative-dancing-ocean.md`. Memory: `project_prng_family_plan.md`.
 - ChaCha20 — first stream cipher, first coreless cipher (ALL phases incl. P5 diagrams shipped 2026-07-20 — plan CLOSED): `docs/plans/fluffy-orbiting-shannon.md`. Memory: `project_chacha20_plan.md`.
 - Original architectural plan: `~/.claude/plans/i-want-to-build-tender-spark.md`
 - Approved UX/feature plan (phases 1–4: frame preservation, run history + diff, byte format toggle, deferred 2D viz): `docs/plans/suggestions-1-4.md`

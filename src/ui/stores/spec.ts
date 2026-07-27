@@ -48,7 +48,7 @@ import {
   readKmacCustomization,
   readKmacKeyLength,
 } from "@/ciphers/kmac";
-import { buildMcgSpec, readMcgOutputLength } from "@/ciphers/lcg";
+import { buildLcgSpec, readLcgOutputLength } from "@/ciphers/lcg";
 import { buildCbcSpec } from "@/ciphers/modes/cbc";
 import { buildCfbSpec } from "@/ciphers/modes/cfb";
 import { buildCtrSpec } from "@/ciphers/modes/ctr";
@@ -551,7 +551,7 @@ export const usePrngOutputLength = (): (() => number) => prngOutputLength;
  * table of pre-built specs would desync the signal from the active spec and make
  * `isCustomSpec` report a pure length change as a user edit.
  */
-const resolvePrngDefault = (p: Prng): CipherSpec => buildMcgSpec(p, prngOutputLength());
+const resolvePrngDefault = (p: Prng): CipherSpec => buildLcgSpec(p, prngOutputLength());
 
 // ─── Signals ─────────────────────────────────────────────────────────────
 //
@@ -1891,7 +1891,7 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
     // RAW signal, not `setPrngOutputLength` — the doc's spec is landed verbatim
     // below (it may be a customized variant), so a structural rebuild here would
     // discard the user's edits.
-    const loadedLen = readMcgOutputLength(doc.spec);
+    const loadedLen = readLcgOutputLength(doc.spec);
     if (loadedLen !== undefined) {
       setPrngOutputLengthSignal(Math.max(1, Math.min(MAX_PRNG_OUTPUT, loadedLen)));
     }

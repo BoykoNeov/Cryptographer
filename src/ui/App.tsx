@@ -76,7 +76,7 @@ import "./narration/index";
 // The generator's word width, for the output-length caption. Imported from the
 // cipher module rather than hardcoded so the caption cannot drift from the spec
 // builder's actual block size.
-import { MCG_WORD_BYTES } from "@/ciphers/lcg";
+import { LCG_WORD_BYTES } from "@/ciphers/lcg";
 import { clearDirty, setAutoRerun, setDirty, useAutoRerun, useDirty } from "./stores/auto-rerun";
 import {
   blockByteLengthFor,
@@ -539,9 +539,9 @@ export const App = () => {
         // `mod-mul@1` as a differently-sized big-endian integer and quietly
         // produce a valid-looking stream from the wrong starting value. Checking
         // here names the problem; the runtime would not.
-        if (inputBytes.length !== MCG_WORD_BYTES) {
+        if (inputBytes.length !== LCG_WORD_BYTES) {
           throw new Error(
-            `${inputLabel()}: ${PRNG_LABELS[prng()]} takes a ${MCG_WORD_BYTES}-byte seed (one 32-bit word); got ${inputBytes.length}.`,
+            `${inputLabel()}: ${PRNG_LABELS[prng()]} takes a ${LCG_WORD_BYTES}-byte seed (one 32-bit word); got ${inputBytes.length}.`,
           );
         }
       } else {
@@ -1819,9 +1819,9 @@ export const App = () => {
           <span class="shake-block-caption">
             {(() => {
               const n = prngOutputLength();
-              const words = Math.ceil(n / MCG_WORD_BYTES);
-              const remainder = n % MCG_WORD_BYTES;
-              return `${words} word${words === 1 ? "" : "s"} × ${MCG_WORD_BYTES} bytes${
+              const words = Math.ceil(n / LCG_WORD_BYTES);
+              const remainder = n % LCG_WORD_BYTES;
+              return `${words} word${words === 1 ? "" : "s"} × ${LCG_WORD_BYTES} bytes${
                 remainder === 0 ? "" : ` (last trimmed to ${remainder})`
               } · max ${MAX_PRNG_OUTPUT}`;
             })()}
