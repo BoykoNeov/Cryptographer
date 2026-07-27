@@ -164,9 +164,12 @@ export const setIvBytes = (bytes: Uint8Array, blockByteLength?: number): void =>
  * policy the key and plaintext fields already follow. `reconcileIvWidth` alone
  * is not enough for that job: it short-circuits when the width is unchanged,
  * so switching between two 16-byte-IV ciphers would silently keep the old
- * bytes. Harmless when the IV is an opaque block; wrong for ChaCha20, whose
- * first four bytes are a counter, and where inheriting AES's `00 01 02 03`
- * starts it at 0x03020100 and quietly reproduces no published vector.
+ * bytes. Harmless when the IV is an opaque block; wrong for a stream cipher,
+ * whose leading bytes are a block counter. Inheriting AES's `00 01 02 03`
+ * starts ChaCha20 at 0x03020100 and quietly reproduces no published vector —
+ * and since Salsa20 there is a second 16-byte-IV stream cipher with a
+ * DIFFERENT split (8 counter bytes, not 4), so the two of them inherit each
+ * other's counters as readily as they inherit AES's.
  */
 export const canonicalIvFor = (byteLength: number, registeredDefault?: Uint8Array): Uint8Array =>
   registeredDefault ?? defaultIvOfWidth(byteLength);
@@ -178,11 +181,17 @@ export const reconcileIvWidth = (
   if (blockByteLength === undefined) return;
   if (ivBytes().length === blockByteLength) return;
   // `canonicalDefault` lets a caller override the generic ascending pattern for
-  // a cipher whose IV has internal structure. ChaCha20 is the only one today:
-  // its first four bytes are a little-endian block counter, and the generic
-  // `00 01 02 03 …` would silently start it at 0x03020100 — legal, consistent,
-  // and matching no published test vector. The store still knows nothing about
-  // which cipher is active; the caller supplies the bytes.
+  // a cipher whose IV has internal structure — the stream ciphers, whose
+  // leading bytes are a block counter (ChaCha20's four, little-endian;
+  // Salsa20's eight). The generic `00 01 02 03 …` would silently start
+  // ChaCha20 at 0x03020100 — legal, consistent, and matching no published test
+  // vector. The store still knows nothing about which cipher is active; the
+  // caller supplies the bytes.
+  //
+  // Note what this does NOT cover, and why `canonicalIvFor` exists above: the
+  // equal-width short-circuit two lines up. Both stream ciphers want a 16-byte
+  // IV under different layouts, so switching between them never reaches this
+  // line at all.
   setIvBytes(canonicalDefault ?? defaultIvOfWidth(blockByteLength), blockByteLength);
 };
 

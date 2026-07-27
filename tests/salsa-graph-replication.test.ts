@@ -19,16 +19,20 @@
  *      against the actual transform, so it is a measurement and not a story.)
  *   2. With the guard, it survives intact and the cell holds together.
  *
- * **The guard under test is the GENERALIZED one.** `GraphView` builds its
- * `"never"` map from `analyzeArxGroup`, which asks both ARX analyzers, so
- * Salsa20 is covered by the same code path that covers ChaCha20 rather than by
- * a second hardcoded list. This file mirrors that composition deliberately: if
- * someone ever narrows the guard back to one cipher, this fails.
+ * **The guard under test is the REAL one, imported.** `GraphView`'s `"never"`
+ * map is `arxRoundNeverModes(spec())` and nothing else, so this file calls that
+ * exact function. It used to re-implement the composition locally — which meant
+ * narrowing the shipped guard back to one cipher would have left every
+ * assertion here green while the browser cell fell apart, the very failure this
+ * file was written to prevent. The function lives in `core/arx-group.ts`
+ * precisely so a node-environment test can reach it without importing a Solid
+ * component tree.
  */
 
+import { chacha20EncryptSpec } from "@/ciphers/chacha20";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { SALSA20_IV_BYTES, salsa20EncryptSpec } from "@/ciphers/salsa20";
-import { analyzeChaChaDoubleRound } from "@/core/chacha-shape";
+import { arxRoundNeverModes } from "@/core/arx-group";
 import { deriveAuxGraph, replicateHighFanoutSources } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
 import { analyzeSalsaDoubleRound } from "@/core/salsa-shape";
@@ -71,35 +75,11 @@ const doubleRoundShapes = () => {
 };
 
 /**
- * The `"never"` map `GraphView` builds — composed exactly as the component
- * composes it, through the both-analyzers helper rather than through
- * `analyzeSalsaDoubleRound` alone.
+ * The `"never"` map `GraphView` builds — literally the function the component
+ * calls, applied to the shipped Salsa20 spec. Nothing is re-derived here, which
+ * is the point: a change that narrows the guard breaks this file.
  */
-const neverModes = (): Record<string, "never"> => {
-  const modes: Record<string, "never"> = {};
-  const analyzeArxGroup = (g: StepGroup) =>
-    analyzeChaChaDoubleRound(g) ?? analyzeSalsaDoubleRound(g);
-  const walk = (nodes: readonly StepNode[]): void => {
-    for (const n of nodes) {
-      if (n.kind === "step") continue;
-      if (n.kind === "group") {
-        const shape = analyzeArxGroup(n);
-        if (shape) {
-          for (const id of [
-            shape.splitId,
-            shape.concatId,
-            ...shape.quarterRounds.flatMap((qr) => qr.memberIds),
-          ]) {
-            modes[id] = "never";
-          }
-        }
-      }
-      walk(n.children);
-    }
-  };
-  walk(salsa20EncryptSpec.steps);
-  return modes;
-};
+const neverModes = (): Record<string, "never"> => arxRoundNeverModes(salsa20EncryptSpec);
 
 describe("Salsa20 double-round split vs high-fanout replication", () => {
   const shapes = doubleRoundShapes();
@@ -168,5 +148,13 @@ describe("Salsa20 double-round split vs high-fanout replication", () => {
   it("the guard covers all ten double rounds, not just the first", () => {
     expect(shapes).toHaveLength(10);
     expect(Object.keys(neverModes())).toHaveLength(10 * 98);
+  });
+
+  it("the guard generalizes with the SHAPE FAMILY, not the cipher list", () => {
+    // The assertion a locally-rebuilt map could never make, and the reason this
+    // one is imported: ONE function, unchanged, covers both ARX ciphers.
+    // Narrowing it to either analyzer alone empties one of these two maps.
+    expect(Object.keys(arxRoundNeverModes(salsa20EncryptSpec))).toHaveLength(10 * 98);
+    expect(Object.keys(arxRoundNeverModes(chacha20EncryptSpec))).toHaveLength(10 * 98);
   });
 });

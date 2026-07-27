@@ -109,10 +109,14 @@ FF FF FF FF  →  00 00 00 00      (wraps around)
 
 The output is always the same length as the input, and the counter's width is
 whatever that length happens to be — there is no width setting. That is
-deliberate: a counter block is exactly one cipher block wide, which is 16 bytes
-for AES or Serpent, 8 for DES or Blowfish, and 4 for Speck32/64. Deriving the
-width from the wiring is what lets the *same* step work inside every cipher's
-CTR loop.
+deliberate, and it is what lets the *same* step serve two different jobs.
+
+In **CTR mode** the counter is a whole cipher block, so its width is the block
+width: 16 bytes for AES, Serpent or Twofish, 8 for DES or Blowfish, 4 for
+Speck32/64. In a **stream cipher** the counter is instead one field of a larger
+state, and the two shipped ones disagree about how big it is — ChaCha20
+increments 4 bytes and Salsa20 8, both inside a 64-byte block. No param could
+have been right for all of these at once; reading the width off the wire is.
 
 ## Where it fits
 

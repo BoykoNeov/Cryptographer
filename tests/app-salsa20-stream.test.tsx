@@ -191,14 +191,39 @@ describe("Salsa20 — App wiring for the second stream cipher", () => {
   it("does NOT clobber a user-typed IV when switching cipher", () => {
     // The other side of the policy: the key and plaintext fields treat a
     // user-typed value as sacred, and the IV must match them.
+    //
+    // This runs the EXACT hop sequence of the test above and asserts the
+    // opposite outcome, which is what makes it non-vacuous. On its own,
+    // "type into the field, read the field back" proves nothing — an
+    // uncontrolled input would echo the text whether or not the store ever
+    // heard about it. The sibling test is the control: it establishes that
+    // these same three hops DO rewrite the field when it holds a default, so
+    // the field demonstrably tracks the store, and surviving all three hops
+    // here can only mean the store kept the typed bytes.
+    //
+    // Note the blur. `IvInput` commits on blur or Enter, never on input — the
+    // draft is local signal state until then — so a test that only fires
+    // `input` leaves the store untouched and is asserting on nothing.
     const { container } = render(() => <App />);
-    useCipher(container, "salsa20");
+    useCipher(container, "chacha20");
     const ivInput = findInputByLabel(container, "IV");
     expect(ivInput).not.toBeNull();
 
     const typed = "ff".repeat(16);
     fireEvent.input(ivInput as HTMLInputElement, { target: { value: typed } });
-    expect((ivInput as HTMLInputElement).value).toBe(typed);
+    fireEvent.blur(ivInput as HTMLInputElement);
+    expect(findInputByLabel(container, "IV")?.value).toBe(typed);
+
+    // The branch under test: `changeCipher`'s else arm. `ivIsPreviousDefault`
+    // is false, so it falls through to `reconcileIvWidth`, which short-circuits
+    // on equal width (16 = 16) and leaves the bytes alone. Anyone "fixing" that
+    // short-circuit to always reseed would clobber a user's IV on every
+    // stream↔stream switch, and this is the assertion that would catch it.
+    useCipher(container, "salsa20");
+    expect(findInputByLabel(container, "IV")?.value).toBe(typed);
+
+    useCipher(container, "chacha20");
+    expect(findInputByLabel(container, "IV")?.value).toBe(typed);
   });
 
   // ── End to end ──────────────────────────────────────────────────────────

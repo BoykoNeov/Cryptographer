@@ -22,10 +22,18 @@
  * ports feeds exactly one consumer, so a per-port rule would never have fired
  * and this whole hazard would not exist. That is precisely why it had to be
  * checked against the pipeline instead of reasoned about.
+ *
+ * **The guard under test is the REAL one, imported.** `GraphView`'s `"never"`
+ * map is `arxRoundNeverModes(spec())` and nothing else, so this file calls that
+ * exact function rather than rebuilding the map from
+ * `analyzeChaChaDoubleRound`. A local copy is not a test of the guard: since
+ * S3 the shipped guard asks BOTH ARX analyzers, and one narrowed to Salsa alone
+ * would strand every ChaCha round while a hand-rolled map here stayed green.
  */
 
 import { chacha20EncryptSpec } from "@/ciphers/chacha20";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { arxRoundNeverModes } from "@/core/arx-group";
 import { analyzeChaChaDoubleRound } from "@/core/chacha-shape";
 import { deriveAuxGraph, replicateHighFanoutSources } from "@/core/graph";
 import { runSpec } from "@/core/runtime";
@@ -65,20 +73,11 @@ const doubleRoundShapes = () => {
   return out.filter((s): s is NonNullable<typeof s> => s !== null);
 };
 
-/** The `"never"` map GraphView builds for ChaCha rounds. */
-const neverModes = (): Record<string, "never"> => {
-  const modes: Record<string, "never"> = {};
-  for (const shape of doubleRoundShapes()) {
-    for (const id of [
-      shape.splitId,
-      shape.concatId,
-      ...shape.quarterRounds.flatMap((qr) => qr.memberIds),
-    ]) {
-      modes[id] = "never";
-    }
-  }
-  return modes;
-};
+/**
+ * The `"never"` map GraphView builds — literally the function the component
+ * calls, applied to the shipped ChaCha20 spec.
+ */
+const neverModes = (): Record<string, "never"> => arxRoundNeverModes(chacha20EncryptSpec);
 
 describe("ChaCha20 double-round split vs high-fanout replication", () => {
   const shapes = doubleRoundShapes();

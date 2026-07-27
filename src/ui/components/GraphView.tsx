@@ -35,13 +35,13 @@
  * starts no drag). Above threshold, the click handler is suppressed.
  */
 
+import { arxDoubleRoundsById, arxRoundNeverModes } from "@/core/arx-group";
 import { arxDoubleRoundPlacement } from "@/core/arx-round-layout";
 import type { ArxDoubleRoundShape } from "@/core/arx-round-shape";
 import {
   type CellProvenanceSummary,
   summarizeCellProvenance,
 } from "@/core/cell-provenance-summary";
-import { analyzeChaChaDoubleRound } from "@/core/chacha-shape";
 import { curatedDefaultFor, mergeLayoutSpecs, scaleCuratedLayout } from "@/core/default-layouts";
 import {
   type EdgeValueLookup,
@@ -80,7 +80,6 @@ import {
 } from "@/core/graph";
 import { resolvePortMap } from "@/core/port-projection";
 import { type LegalSource, legalSourcesForInput } from "@/core/port-sources";
-import { analyzeSalsaDoubleRound } from "@/core/salsa-shape";
 import { allColorableSources, assignSourceColors } from "@/core/source-colors";
 import {
   STROKE_STYLE_CATALOGUE,
@@ -101,7 +100,7 @@ import {
 import { inferShapesAtAnchors, validateShapes } from "@/core/spec-shapes";
 import { twofishRoundPlacement } from "@/core/twofish-layout";
 import { type TwofishRoundShape, analyzeTwofishRound } from "@/core/twofish-shape";
-import type { AuxValue, State, StepGroup, StepNode } from "@/core/types";
+import type { AuxValue, State, StepNode } from "@/core/types";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { hasNarrationFn } from "../narration/registry";
 import { isAsymmetric, isHash, useAlgorithm } from "../stores/cipher";
@@ -588,23 +587,6 @@ const EMPTY_TWOFISH_ROUNDS: ReadonlyMap<string, TwofishRoundShape> = new Map();
  * vertical ribbon.
  */
 const EMPTY_ARX_ROUNDS: ReadonlyMap<string, ArxDoubleRoundShape> = new Map();
-
-/**
- * Recognize a group as ANY cipher's ARX double round.
- *
- * ChaCha20 and Salsa20 share the double-round envelope and therefore share the
- * canonical layout — only the twelve-op walk inside differs, which is why there
- * are two analyzers rather than one. Asking both here (rather than keeping a
- * per-cipher map, or worse a hardcoded id list) is what makes every downstream
- * consumer — the layout AND the replication guard — generalize with the shape
- * family instead of with the cipher list. A third ARX cipher adds one line.
- *
- * The two analyzers are mutually exclusive by construction: they anchor on
- * different rotation constants (`<<< 7` vs `<<< 18`) and their walks reject each
- * other's dependency graphs, so at most one can match.
- */
-const analyzeArxGroup = (group: StepGroup): ArxDoubleRoundShape | null =>
-  analyzeChaChaDoubleRound(group) ?? analyzeSalsaDoubleRound(group);
 
 /**
  * Replica placement info, derived once at the top of `layoutRoot` from the
@@ -3350,43 +3332,15 @@ export const GraphView = () => {
 
   /**
    * ARX double rounds are self-contained two-tier cells, and their split is the
-   * most extreme fan-out source in the app. `replicateHighFanoutSources`
-   * counts DISTINCT CONSUMERS per source NODE (not per output port), and the
-   * 16-way split feeds SIXTEEN of them over twenty edges — each of the four
-   * COLUMN quarter rounds reads it through four heads: `a += b` (two words),
-   * `d ^= a`, `c += d`, and `b ^= c`, which reads `b` a second time because `b`
-   * is not reassigned until the `<<< 12` after it. That is five times the
-   * threshold, so without this the split would be deleted from the graph and
-   * scattered into sixteen chips, destroying the cell. (Each split output port
-   * feeds exactly one consumer, so a per-port rule would not have fired at all
-   * — which is precisely why this had to be checked against the pipeline rather
-   * than assumed.) No other round member comes close: every ARX operation feeds
-   * at most two others. We mark every member `"never"` anyway, matching the
-   * Twofish and Feistel precedent.
+   * most extreme fan-out source in the app — see `arxRoundNeverModes` in
+   * `core/arx-group.ts` for the measured consumer counts and what happens
+   * without the guard. It lives there, not here, so the replication tests can
+   * drive the SAME function this component does rather than a local paraphrase
+   * of it.
    */
-  const arxRoundNeverModes = createMemo<{ readonly [id: string]: "never" }>(() => {
-    const modes: Record<string, "never"> = {};
-    const walk = (nodes: readonly StepNode[]): void => {
-      for (const node of nodes) {
-        if (node.kind === "step") continue;
-        if (node.kind === "group") {
-          const shape = analyzeArxGroup(node);
-          if (shape !== null) {
-            for (const id of [
-              shape.splitId,
-              shape.concatId,
-              ...shape.quarterRounds.flatMap((qr) => qr.memberIds),
-            ]) {
-              modes[id] = "never";
-            }
-          }
-        }
-        walk(node.children);
-      }
-    };
-    walk(spec().steps);
-    return modes;
-  });
+  const arxNeverModes = createMemo<{ readonly [id: string]: "never" }>(() =>
+    arxRoundNeverModes(spec()),
+  );
 
   const replicatedGraph = createMemo<CipherGraph>(() =>
     replicate()
@@ -3394,7 +3348,7 @@ export const GraphView = () => {
           // Round members first so a user's explicit per-source override
           // (rare on a round-internal split) still wins on top.
           ...twofishRoundNeverModes(),
-          ...arxRoundNeverModes(),
+          ...arxNeverModes(),
           ...feistelRoundNeverModes(),
           ...replicationModes(),
         })
@@ -4013,21 +3967,7 @@ export const GraphView = () => {
   // two-tier quarter-round grid is always on, because the alternative for a
   // 98-leaf ARX group is a vertical ribbon with no structure at all, and there
   // is no "original" view worth preserving for an A/B comparison.
-  const arxRoundsById = createMemo(() => {
-    const m = new Map<string, ArxDoubleRoundShape>();
-    const walk = (nodes: readonly StepNode[]): void => {
-      for (const node of nodes) {
-        if (node.kind === "step") continue;
-        if (node.kind === "group") {
-          const shape = analyzeArxGroup(node);
-          if (shape !== null) m.set(node.id, shape);
-        }
-        walk(node.children);
-      }
-    };
-    walk(spec().steps);
-    return m;
-  });
+  const arxRoundsById = createMemo(() => arxDoubleRoundsById(spec()));
 
   // `baseLayout` passes feistelRounds (so the source-x lookup matches the final
   // layout for Feistel round leaves) but still OMITS portAssignment +

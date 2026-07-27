@@ -58,6 +58,16 @@ no-op edit; `partitionOperands` + the partition gate are the whole validation
 duplicated** — `GraphView` asks `analyzeArxGroup` (both analyzers) and its
 `chacha*` names are now `arx*`, so guard + layout + shape map generalize with the
 SHAPE FAMILY rather than the cipher list; a third ARX cipher costs one line.
+**`analyzeArxGroup` + `arxRoundNeverModes` + `arxDoubleRoundsById` live in
+`src/core/arx-group.ts`, NOT in `GraphView.tsx`** (moved 2026-07-27), and the
+reason is a review finding worth keeping: both replication tests had re-created
+the composition locally, so narrowing the shipped guard back to one cipher would
+have left every assertion green while the browser cell fell apart — the exact
+class of failure those files exist to prevent. It cannot live in
+`arx-round-shape.ts` (imported BY both `*-shape.ts` files, so calling them there
+is a cycle) and it cannot be exported from `GraphView.tsx` (a node-env test
+would drag in the whole Solid component), which is why it gets its own leaf
+module. Tests must import it, never rebuild it.
 **Measured:** Salsa's split feeds **24 consumers over 28 edges**, MORE extreme
 than ChaCha's 16/20, because only its XORs write back so a word stays "original"
 across three of four lines instead of two. **The diagram is NOT ChaCha's with

@@ -50,7 +50,7 @@ import type { Cipher } from "./cipher";
 
 export type CipherMode = "single-block" | "ecb" | "cbc" | "ctr" | "cfb" | "ofb" | "stream";
 
-// All four SP 800-38A confidentiality modes ship, alongside single-block. ECB
+// All five SP 800-38A confidentiality modes ship, alongside single-block. ECB
 // and CBC arrived with the cipher-agnostic mode machine; CTR followed, built
 // from the same `BlockCipherCore` contract with no changes to it — the contract
 // was designed against CTR precisely so that third mode would cost one file.
@@ -182,10 +182,12 @@ export const cipherModeUsesIv = (mode: CipherMode): boolean =>
   mode === "ctr" ||
   mode === "cfb" ||
   mode === "ofb" ||
-  // ChaCha20's IV is the only one with internal structure: a 32-bit
-  // little-endian block counter followed by a 96-bit nonce. One aux slot and
-  // one field still serve, as with the other four — the label carries the
-  // distinction. See `DEFAULT_IV_BYTES_BY_CIPHER` in stores/cipher.ts.
+  // The stream ciphers' IVs are the ones with internal structure — and they do
+  // not agree on it: ChaCha20 is a 32-bit little-endian block counter followed
+  // by a 96-bit nonce, Salsa20 an 8-byte counter followed by an 8-byte nonce.
+  // One aux slot and one field still serve, as with the other four; the
+  // per-cipher caption (`IV_LAYOUT_CAPTION_BY_CIPHER`) carries the distinction.
+  // See `DEFAULT_IV_BYTES_BY_CIPHER` in stores/cipher.ts.
   mode === "stream";
 
 export const isCipherModeSupported = (cipher: Cipher, mode: CipherMode): boolean =>
