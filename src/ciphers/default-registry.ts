@@ -148,6 +148,8 @@ import {
 } from "../steps/key-expansion";
 import { modInverse, modInverseDoc, modInversePortContract } from "../steps/mod-inverse";
 import { modMul, modMulDoc, modMulPortContract } from "../steps/mod-mul";
+import { mt19937Seed, mt19937SeedDoc, mt19937SeedPortContract } from "../steps/mt19937-seed";
+import { mt19937Twist, mt19937TwistDoc, mt19937TwistPortContract } from "../steps/mt19937-twist";
 import { mul, mulDoc, mulPortContract } from "../steps/mul";
 import { not, notDoc, notPortContract } from "../steps/not";
 import { padWithByte, padWithByteDoc, padWithBytePortContract } from "../steps/pad-with-byte";
@@ -230,6 +232,11 @@ import {
   serpentSubBytesMeta,
   serpentSubBytesPortContract,
 } from "../steps/serpent-sub-bytes";
+import {
+  shiftBitsLeft,
+  shiftBitsLeftDoc,
+  shiftBitsLeftPortContract,
+} from "../steps/shift-bits-left";
 import {
   shiftBitsRight,
   shiftBitsRightDoc,
@@ -1059,6 +1066,43 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: shiftBitsRight,
     shape: shiftBitsRightPortContract,
     doc: shiftBitsRightDoc,
+  });
+  // `shift-bits-left@1` (2026-08-09, for MT19937's tempering) completes the
+  // rotate/shift square. Unlike `rotate-bits-left@1` — which buys no behaviour,
+  // since ROL(w, n) IS ROR(w, B − n) — this one is a genuinely distinct
+  // operation: a shift drops the bits a rotation would wrap. MT19937's
+  // tempering writes `(y << 7) & 0x9d2c5680` and `(y << 15) & 0xefc60000`, and
+  // for THOSE TWO CONSTANTS a rotation would coincidentally agree (each mask's
+  // low bits are exactly the bits a rotation wraps in). Shipping the rotation
+  // and relying on that would break the moment a learner edits a mask, which
+  // is the entire point of this app. See `src/steps/shift-bits-left.ts`.
+  r.register("shift-bits-left@1", {
+    kind: "ported",
+    executor: shiftBitsLeft,
+    shape: shiftBitsLeftPortContract,
+    doc: shiftBitsLeftDoc,
+  });
+  // ─── MT19937 (docs/plans/validated-growing-dongarra.md) ───────────────────
+  // The PRNG family's two deliberate monoliths, and the only two in the app
+  // whose opacity is STRUCTURAL rather than a volume judgement:
+  //   - `mt19937.seed@1`'s recurrence needs the loop index (`+ i`), and no
+  //     leaf in this app produces one;
+  //   - `mt19937.twist@1` reads three words (mt[i], mt[i+1], mt[i+397]) where
+  //     an iterate body can see only its own block.
+  // Both carry rich value-prose narration in the spec instead (the
+  // `twofish.h-expand@1` posture). Everything AFTER them — the tempering that
+  // is the generator's actual teaching point — is fully decomposed.
+  r.register("mt19937.seed@1", {
+    kind: "ported",
+    executor: mt19937Seed,
+    shape: mt19937SeedPortContract,
+    doc: mt19937SeedDoc,
+  });
+  r.register("mt19937.twist@1", {
+    kind: "ported",
+    executor: mt19937Twist,
+    shape: mt19937TwistPortContract,
+    doc: mt19937TwistDoc,
   });
   // ─── RSA big-integer primitives (docs/plans/shimmying-booping-moth.md) ────
   // Port-native, `bigint`-internal, big-endian. `mul`/`sub` build the

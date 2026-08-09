@@ -246,3 +246,65 @@ export const shr64 = (x: bigint, n: bigint): bigint => {
   const mask = (1n << 64n) - 1n;
   return (x & mask) >> n;
 };
+
+// ─── Logical left-shift helpers ───────────────────────────────────────────
+//
+// The mirror of the `shr{N}` family above: bits shifted off the TOP drop; the
+// bottom is zero-filled.
+//
+//   SHL(w, n) = (w << n) & mask
+//
+// The mask is what makes this a fixed-width operation rather than JS's native
+// widening — without it `shl16(0xffff, 4)` would be `0xffff0`, a 20-bit value
+// that is not a 16-bit word at all. Callers MUST canonicalize `n` to `[0, B)`;
+// `src/steps/shift-bits-left.ts` short-circuits `n >= B` to all-zero output
+// BEFORE calling these, because JS `<<` truncates the shift amount modulo 32
+// (so `shl32(x, 32)` via a raw `x << 32` would return `x`, not 0) — the exact
+// hazard documented on the right-shift family.
+//
+// Shipped 2026-08-09 for MT19937's tempering (Matsumoto & Nishimura 1998
+// §3), whose middle two steps are `y ^= (y << 7) & 0x9d2c5680` and
+// `y ^= (y << 15) & 0xefc60000`.
+//
+// **Why not reuse `rotate-bits-left@1`.** For those two specific constants a
+// rotation would give the same answer — the masks' low 7 and low 15 bits are
+// clear, so the bits a rotation wraps around are exactly the bits the mask
+// deletes. That is a numerical coincidence of MT19937's tempering constants,
+// not a property of the algorithm, and it evaporates the moment a learner
+// edits a mask. A shift is what the specification says, so a shift is what the
+// trace shows; this is `rotate-bits-left@1`'s own justification inverted.
+
+/** Logical left-shift an 8-bit word by `n` positions. `n` ∈ [0, 8). */
+export const shl8 = (x: number, n: number): number => {
+  return ((x & 0xff) << n) & 0xff;
+};
+
+/** Logical left-shift a 16-bit word by `n` positions. `n` ∈ [0, 16). */
+export const shl16 = (x: number, n: number): number => {
+  return ((x & 0xffff) << n) & 0xffff;
+};
+
+/**
+ * Logical left-shift a 32-bit word by `n` positions. `n` ∈ [0, 32).
+ *
+ * The trailing `>>> 0` is load-bearing, and is the one asymmetry with
+ * `shr32`. JS bitwise operators work on SIGNED 32-bit integers, so `<<`
+ * returns a negative number whenever the result's top bit lands set —
+ * `1 << 31` is `-2147483648`, not `2147483648`. `>>> 0` reinterprets those
+ * same bits as unsigned, which is the view every caller here wants.
+ */
+export const shl32 = (x: number, n: number): number => {
+  return ((x >>> 0) << n) >>> 0;
+};
+
+/**
+ * Logical left-shift a 64-bit word by `n` positions. `n` ∈ [0, 64).
+ *
+ * `n` is `bigint` for the same reason as `shr64`. Unlike the fixed-width JS
+ * operators, bigint `<<` grows without bound, so the mask AFTER the shift is
+ * what keeps the result a 64-bit word.
+ */
+export const shl64 = (x: bigint, n: bigint): bigint => {
+  const mask = (1n << 64n) - 1n;
+  return ((x & mask) << n) & mask;
+};

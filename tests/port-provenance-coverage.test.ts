@@ -79,7 +79,7 @@ describe("port-provenance coverage contract", () => {
     }
   });
 
-  it("allowlist contents are exactly the expected 22 (rationale set-pin)", () => {
+  it("allowlist contents are exactly the expected 23 (rationale set-pin)", () => {
     // Grouped by the FOUR distinct rationales — see PROVENANCE_NO_OP_ALLOWLIST's
     // doc. Keeping the groups visible here stops a future edit from quietly
     // relabelling an exact-but-plumbing bridge as "approximate".
@@ -93,6 +93,10 @@ describe("port-provenance coverage contract", () => {
       // of 8 splits every output byte across two input bytes.
       "rotate-bits-left@1",
       "shift-bits-right@1",
+      // approximate — the left-handed mirror (MT19937 tempering). A shift by a
+      // non-multiple of 8 splits every output byte across two input bytes, so
+      // byte-level provenance can only ever be approximate.
+      "shift-bits-left@1",
       // approximate — CTR's counter +1: the carry cone is exact but reaches
       // past one byte only 1 increment in 256, so highlighting it would lie
       // about how much of the tail actually contributes

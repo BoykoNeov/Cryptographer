@@ -261,7 +261,8 @@ export const ParamEditor = (props: Props) => {
               when={
                 getStep().type === "rotate-bits-right@1" ||
                 getStep().type === "rotate-bits-left@1" ||
-                getStep().type === "shift-bits-right@1"
+                getStep().type === "shift-bits-right@1" ||
+                getStep().type === "shift-bits-left@1"
               }
             >
               <BitOpBlock step={getStep()} matchingCount={matchingSteps()} />
@@ -2347,6 +2348,12 @@ const BitOpBlock = (props: BlockProps) => {
     // Naming the direction here is the same fidelity argument that justifies
     // `rotate-bits-left@1` existing at all — the editor and the RFC agree.
     if (props.step.type === "rotate-bits-left@1") return "Cyclic rotate left (ROTL)";
+    // MT19937's tempering writes two of its four steps leftward. Naming the
+    // direction matters more here than anywhere else this block serves: for
+    // MT's published masks a rotation would give the same answer, so the label
+    // is the only thing on screen distinguishing the operation the algorithm
+    // specifies from the one that coincidentally agrees with it.
+    if (props.step.type === "shift-bits-left@1") return "Logical shift left (SHL)";
     return "Logical shift right (SHR)";
   };
 
@@ -2779,6 +2786,8 @@ const NO_PARAMS_PORT_NATIVE_TYPES = new Set([
   "increment-counter@1",
   "truncate-to-reference@1",
   "add-mod@1",
+  "mt19937.seed@1",
+  "mt19937.twist@1",
 ]);
 
 const portNativeNoParamsLabel = (stepType: string): string => {
@@ -2802,6 +2811,17 @@ const portNativeNoParamsLabel = (stepType: string): string => {
     // constant feeding that port is where the editing happens.
     case "add-mod@1":
       return "(a + b) mod n — adds the two wired numbers and reduces modulo the wired modulus. No editable parameters here: all three values arrive on ports, so to change the modulus, edit the constant wired into it.";
+    // The two MT19937 monoliths. Their constants are genuinely not editable —
+    // unlike the LCGs, whose (a, c, m) ride on `constant-load@1` leaves for the
+    // express purpose of being edited. Saying WHY here keeps the contrast from
+    // reading as an oversight: these two stages cannot be decomposed into
+    // visible leaves at all (see each step's description), so there is nowhere
+    // for a constant to live where a learner could reach it. The tempering
+    // below them is fully editable, and is where the experiments are.
+    case "mt19937.seed@1":
+      return "Expands the 32-bit seed into the 624-word state (Matsumoto & Nishimura 1998). No editable parameters: the recurrence adds its own loop index, which no element in this app can produce, so it runs as one step rather than 623 — see the description for what that costs.";
+    case "mt19937.twist@1":
+      return "Advances all 624 words at once (Matsumoto & Nishimura 1998). No editable parameters: each step reads three different words of the state, which a loop body here cannot reach, so the whole twist runs as one step — see the description.";
     default:
       return "No editable parameters.";
   }

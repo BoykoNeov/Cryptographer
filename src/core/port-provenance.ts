@@ -352,6 +352,10 @@ export const PROVENANCE_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set<string>([
   // case.
   "rotate-bits-left@1",
   "shift-bits-right@1",
+  // approximate — same rationale as its right-handed sibling: a shift by a
+  // non-multiple of 8 draws each output byte from two input bytes. MT19937's
+  // 7- and 15-bit tempering shifts are exactly that case.
+  "shift-bits-left@1",
   // approximate — per-lane bit rotation (Keccak ρ); a rotated byte draws from
   // up to two input bytes, so byte-level provenance is only approximate.
   "rotate-lanes@1",
