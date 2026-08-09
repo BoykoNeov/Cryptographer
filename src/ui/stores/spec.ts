@@ -56,6 +56,7 @@ import { buildCtrSpec } from "@/ciphers/modes/ctr";
 import { buildEcbSpec } from "@/ciphers/modes/ecb";
 import { buildOfbSpec } from "@/ciphers/modes/ofb";
 import { buildMt19937Spec } from "@/ciphers/mt19937";
+import { buildInverseNttSpec, buildNttSpec } from "@/ciphers/ntt-3329-256";
 import { readPrngOutputLength } from "@/ciphers/prng-request";
 import { rsaDecryptSpec, rsaEncryptSpec } from "@/ciphers/rsa";
 import { salsa20DecryptSpec, salsa20EncryptSpec } from "@/ciphers/salsa20";
@@ -105,15 +106,18 @@ import {
   type Asymmetric,
   type Cipher,
   type Hash,
+  type Lattice,
   type Prng,
   isAsymmetric,
   isCipher,
   isHash,
+  isLattice,
   isPrng,
   setAsymmetric as setAsymmetricSignal,
   setCategory as setCategorySignal,
   setCipher as setCipherSignal,
   setHash as setHashSignal,
+  setLattice as setLatticeSignal,
   setPrng as setPrngSignal,
   useCategory,
   useCipher,
@@ -497,6 +501,19 @@ const asymmetricDefaults: Record<Asymmetric, Record<Mode, CipherSpec>> = {
 const resolveAsymmetricDefault = (a: Asymmetric, mode: Mode): CipherSpec =>
   asymmetricDefaults[a][mode];
 
+/**
+ * Canonical-spec table for the lattice family — sibling of `asymmetricDefaults`,
+ * and the same flat `variant × Mode` shape for the same reason: a direction pair
+ * with no cipher-mode and no padding axis. "encrypt" is the forward transform,
+ * "decrypt" the inverse.
+ */
+const latticeDefaults: Record<Lattice, Record<Mode, CipherSpec>> = {
+  "ntt-3329-256": { encrypt: buildNttSpec(), decrypt: buildInverseNttSpec() },
+};
+
+/** Pick the canonical lattice spec for a `(lattice, mode)` pair. */
+const resolveLatticeDefault = (l: Lattice, mode: Mode): CipherSpec => latticeDefaults[l][mode];
+
 // ─── PRNG output length (editable spec DATA) ──────────────────────────────
 //
 // The direct analogue of `shakeOutputLength` above, and deliberately a SEPARATE
@@ -699,11 +716,27 @@ type PrngSpecsByMode = {
   readonly single: CipherSpec;
 };
 
+/**
+ * Lattice-shape SpecsByMode. Copies `AsymmetricSpecsByMode`, NOT the hash /
+ * PRNG single-slot shape: the transform is direction-ful — forward and inverse
+ * are a genuine pair — but it has no cipher-mode and no padding axis, which is
+ * precisely RSA's situation. That RSA had already carved out "a non-cipher
+ * family with two directions" is what makes this a copy rather than new
+ * surface.
+ */
+type LatticeSpecsByMode = {
+  readonly kind: "lattice";
+  readonly lattice: Lattice;
+  readonly encrypt: CipherSpec;
+  readonly decrypt: CipherSpec;
+};
+
 export type SpecsByMode =
   | CipherSpecsByMode
   | HashSpecsByMode
   | AsymmetricSpecsByMode
-  | PrngSpecsByMode;
+  | PrngSpecsByMode
+  | LatticeSpecsByMode;
 
 /**
  * The block width to hand `applyPaddingScheme` — i.e. "should the padding
@@ -803,6 +836,17 @@ export const buildCanonicalPrng = (p: Prng): SpecsByMode => ({
   single: resolvePrngDefault(p),
 });
 
+/**
+ * Sibling of `buildCanonicalAsymmetric` for the lattice family — two slots,
+ * forward and inverse. No (cipherMode, padding) parameters apply.
+ */
+export const buildCanonicalLattice = (l: Lattice): SpecsByMode => ({
+  kind: "lattice",
+  lattice: l,
+  encrypt: resolveLatticeDefault(l, "encrypt"),
+  decrypt: resolveLatticeDefault(l, "decrypt"),
+});
+
 const [mode, setModeSignal] = createSignal<Mode>("encrypt");
 const [specs, setSpecs] = createSignal<SpecsByMode>(
   buildCanonicalPair(useCipher()(), useCipherMode()(), usePaddingScheme()()),
@@ -895,7 +939,11 @@ const updateActive = (updater: (s: CipherSpec) => CipherSpec): void => {
   const prev = current[m];
   const updated = updater(prev);
   if (updated === prev) return; // reference-equal → no-op write
-  if (current.kind === "asymmetric") {
+  // The two-slot NON-cipher kinds (asymmetric, lattice). Spread preserves each
+  // one's own discriminant + variant field, so a customized RSA or NTT spec
+  // does not lose track of which variant it started from — the same reason the
+  // single-slot branch above spreads rather than reconstructing.
+  if (current.kind === "asymmetric" || current.kind === "lattice") {
     setSpecs(
       m === "encrypt"
         ? { ...current, encrypt: updated, decrypt: current.decrypt }
@@ -925,11 +973,11 @@ const updateBoth = (updater: (s: CipherSpec, m: Mode) => CipherSpec): void => {
     setSpecs({ ...current, single: updated });
     return;
   }
-  if (current.kind === "asymmetric") {
-    // The only caller that reaches here for asymmetric is `setPadding`
-    // (`applyPaddingScheme` is inert for non-AES specs — RSA has no overlay);
-    // `duplicateRoundInSpec` throws upstream for non-cipher kinds. Apply to
-    // both slots preserving the discriminant.
+  if (current.kind === "asymmetric" || current.kind === "lattice") {
+    // The only caller that reaches here for these kinds is `setPadding`
+    // (`applyPaddingScheme` is inert for non-AES specs — neither RSA nor the
+    // NTT has an overlay); `duplicateRoundInSpec` throws upstream for
+    // non-cipher kinds. Apply to both slots preserving the discriminant.
     setSpecs({
       ...current,
       encrypt: updater(current.encrypt, "encrypt"),
@@ -1090,6 +1138,19 @@ export const setAsymmetric = (a: Asymmetric): void => {
 };
 
 /**
+ * Switch the active lattice variant. Mirrors `setAsymmetric` exactly — lands a
+ * `kind: "lattice"` SpecsByMode with both direction slots and flips the category
+ * so `useAlgorithm()` resolves to the new value. No cipherMode / padding axes
+ * apply; the UI hides those selectors and the key field when the lattice
+ * category is active, but KEEPS the direction toggle (unlike hash and PRNG).
+ */
+export const setLattice = (l: Lattice): void => {
+  setCategorySignal("lattice");
+  setLatticeSignal(l);
+  setSpecs(buildCanonicalLattice(l));
+};
+
+/**
  * Switch the active PRNG variant. Mirrors `setHash`'s shape — lands a
  * `kind: "prng"` SpecsByMode and flips the category so `useAlgorithm()` resolves
  * to the new value. No cipherMode / padding / direction axes apply; the UI hides
@@ -1151,6 +1212,8 @@ export const setAlgorithm = (a: Algorithm): void => {
     setAsymmetric(a);
   } else if (isPrng(a)) {
     setPrng(a);
+  } else if (isLattice(a)) {
+    setLattice(a);
   } else {
     setCipher(a);
   }
@@ -2000,6 +2063,38 @@ export const setSpecFromDocument = (doc: CipherDocument): void => {
     );
     return;
   }
+  // Lattice document branch — the asymmetric branch above, verbatim, because
+  // the shape is identical: two direction slots, no cipherMode, no padding.
+  // Without it a saved NTT document would fall through to the cipher branch and
+  // land a lattice spec under `kind: "cipher"`, where `resolveDefault` would
+  // crash on the next reset.
+  if (doc.algorithm !== undefined && isLattice(doc.algorithm)) {
+    setCategorySignal("lattice");
+    setLatticeSignal(doc.algorithm);
+    if (doc.session) {
+      setByteFormat(doc.session.byteFormat);
+      setModeSignal(doc.session.mode);
+    }
+    const docMode: Mode = doc.session?.mode ?? mode();
+    const otherMode: Mode = docMode === "encrypt" ? "decrypt" : "encrypt";
+    const otherCanonical = resolveLatticeDefault(doc.algorithm, otherMode);
+    setSpecs(
+      docMode === "encrypt"
+        ? {
+            kind: "lattice",
+            lattice: doc.algorithm,
+            encrypt: doc.spec,
+            decrypt: otherCanonical,
+          }
+        : {
+            kind: "lattice",
+            lattice: doc.algorithm,
+            encrypt: otherCanonical,
+            decrypt: doc.spec,
+          },
+    );
+    return;
+  }
   // Slice 2.10c (2026-05-25): from here down is the cipher-document
   // branch. Land in category "cipher" defensively — a recipient previously
   // in "hash" category needs its selector flipped back so the cipher
@@ -2120,6 +2215,12 @@ export const resetSpec = (): void => {
     updateActive(() => canonical);
     return;
   }
+  if (current.kind === "lattice") {
+    // Same shape as the asymmetric branch: two directions, no overlay.
+    const canonical = resolveLatticeDefault(current.lattice, mode());
+    updateActive(() => canonical);
+    return;
+  }
   const canonical = applyPaddingScheme(
     resolveDefault(useCipher()(), useCipherMode()(), mode()),
     mode(),
@@ -2202,6 +2303,10 @@ export const isCustomSpec = (): boolean => {
   }
   if (current.kind === "asymmetric") {
     const canonical = resolveAsymmetricDefault(current.asymmetric, mode());
+    return !deepEqualJson(activeSpec(), canonical);
+  }
+  if (current.kind === "lattice") {
+    const canonical = resolveLatticeDefault(current.lattice, mode());
     return !deepEqualJson(activeSpec(), canonical);
   }
   const canonical = applyPaddingScheme(

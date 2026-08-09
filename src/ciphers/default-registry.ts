@@ -301,6 +301,13 @@ import {
 import { zeroFill, zeroFillDoc, zeroFillPortContract } from "../steps/zero-fill";
 import { zeroPad, zeroPadDoc, zeroPadMeta, zeroPadPortContract } from "../steps/zero-pad";
 import { zeroUnpad, zeroUnpadDoc, zeroUnpadMeta, zeroUnpadPortContract } from "../steps/zero-unpad";
+import { zqVecAdd, zqVecAddDoc, zqVecAddPortContract } from "../steps/zq-vec-add";
+import {
+  zqVecMulScalar,
+  zqVecMulScalarDoc,
+  zqVecMulScalarPortContract,
+} from "../steps/zq-vec-mul-scalar";
+import { zqVecSub, zqVecSubDoc, zqVecSubPortContract } from "../steps/zq-vec-sub";
 
 export const buildDefaultRegistry = (): StepRegistry => {
   const r = new StepRegistry();
@@ -1060,6 +1067,35 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: zeroFill,
     shape: zeroFillPortContract,
     doc: zeroFillDoc,
+  });
+  // ─── The Z_q vector family (ML-KEM P1) ──────────────────────────────────
+  //
+  // `docs/plans/unified-stargazing-quasar.md`. Three element-wise primitives
+  // over a vector of `coeffBytes`-wide coefficients modulo a WIRED q. They are
+  // the whole arithmetic surface of the number-theoretic transform: the
+  // butterfly is `mul-scalar` + `add` + `sub` and nothing else.
+  //
+  // Deliberately NOT `add-mod@1` / `mod-mul@1` with a bigger port: those read a
+  // whole port as ONE big-endian integer, so a 512-byte polynomial would become
+  // a single 4096-bit number. The element width is the entire difference, and
+  // it is what makes these polynomial operations rather than integer ones.
+  r.register("zq-vec-add@1", {
+    kind: "ported",
+    executor: zqVecAdd,
+    shape: zqVecAddPortContract,
+    doc: zqVecAddDoc,
+  });
+  r.register("zq-vec-sub@1", {
+    kind: "ported",
+    executor: zqVecSub,
+    shape: zqVecSubPortContract,
+    doc: zqVecSubDoc,
+  });
+  r.register("zq-vec-mul-scalar@1", {
+    kind: "ported",
+    executor: zqVecMulScalar,
+    shape: zqVecMulScalarPortContract,
+    doc: zqVecMulScalarDoc,
   });
   r.register("shift-bits-right@1", {
     kind: "ported",

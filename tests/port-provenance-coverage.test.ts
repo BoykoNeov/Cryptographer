@@ -79,7 +79,7 @@ describe("port-provenance coverage contract", () => {
     }
   });
 
-  it("allowlist contents are exactly the expected 23 (rationale set-pin)", () => {
+  it("allowlist contents are exactly the expected 29 (rationale set-pin)", () => {
     // Grouped by the FOUR distinct rationales — see PROVENANCE_NO_OP_ALLOWLIST's
     // doc. Keeping the groups visible here stops a future edit from quietly
     // relabelling an exact-but-plumbing bridge as "approximate".
@@ -112,6 +112,12 @@ describe("port-provenance coverage contract", () => {
       // approximate — the LCG family's "+ c": a carry crosses byte boundaries,
       // and the reduction can rewrite every byte when the sum crosses m
       "add-mod@1",
+      // approximate — the Z_q vector family (ML-KEM). Element-wise, but the
+      // dependency WITHIN one 2-byte element is value-dependent (carry + the
+      // reduction mod q), so no value-independent index fn can be exact.
+      "zq-vec-add@1",
+      "zq-vec-sub@1",
+      "zq-vec-mul-scalar@1",
       // approximate — the traced extended-Euclid loop (RSA Phase 4)
       "eea-step@1",
       "eea-extract@1",

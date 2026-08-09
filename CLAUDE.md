@@ -191,6 +191,56 @@ different stream from the same number and stays a test-only oracle — and the
 default seed is **5489**, not the family's 1, because the rule was always "the
 seed that has a published vector".
 
+**The NTT over Z_3329 (2026-08-09) is the FIFTH `Category`, `"lattice"`, and the
+app's first post-quantum object** (`docs/plans/unified-stargazing-quasar.md`, P1
+shipped; P2–P5 open). It is the arithmetic ML-KEM is built on, and its
+significance beyond "one more algorithm" is that it is the first family that is
+**non-cipher AND direction-ful** — so `LatticeSpecsByMode` copies
+`AsymmetricSpecsByMode` (two slots) rather than the hash/PRNG single slot, and
+RSA's surface (no key field, no cipher mode, no padding, direction toggle kept)
+is reused wholesale. Six structural facts. (1) **Seven layers, not eight, and
+the inverse scales by `128⁻¹ = 3303`, NOT `256⁻¹ = 3316`** — `q − 1 = 2⁸·13`
+admits no primitive 512th root, so the transform stops at 128 degree-1
+polynomials and the accumulated factor is 2⁷. The wrong constant halves every
+coefficient and is otherwise self-consistent; it is a KAT perturbation, not a
+comment. (2) **The 127 twiddle factors ride the cross-iteration chain as a
+rotating 256-byte table**, passing layer to layer via `chainOutput` →
+`chainInput`. Zero runtime change — CBC's machinery. The `aux["blockIndex"]`
+alternative computes the same coefficients and passes every test; what it
+cannot do is let the learner WATCH the factors advance, which is the whole
+point of the view. **This is the first shipped iterate whose chain width (a
+fixed 256 B) differs from its block width (512 → 8)** — permissive in
+`runtime.ts`, but that was read-verified, so a throwaway spike run-verified it
+first. (3) **`q` reaches the butterfly through aux, not a port, and could not do
+otherwise**: the runtime seeds a body scope with only that iterate's own
+`in`/`chain`, so `cipherConstants["q"]` + `aux-load-bytes@1` inside each body is
+forced. The CSPRNG-seed lesson and the Twofish-subkey precondition, met a third
+time. (4) **The ζ table is stored in CONSUMPTION order** (`17^BitRev7(i)`, FIPS
+203 App. A verbatim), never ascending exponent — the rotating cursor depends on
+strictly sequential consumption, and a mis-ordered table yields a transform that
+agrees with nothing. The forward pre-rotates to start at ζ¹; the inverse
+consumes from the BACK (ζ¹²⁷ → ζ¹) so it takes the table unrotated. (5) **The
+three new `zq-vec-*@1` primitives are NOT `add-mod@1`/`mod-mul@1` with wider
+ports** — those read a whole port as one big-endian integer, so a 512-byte
+polynomial would become a single 4096-bit number. The `coeffBytes` element width
+is the entire difference. They are provenance-ALLOWLISTED, not exact:
+element-wise looks like `xor@1`'s exact column map but the dependency WITHIN one
+2-byte element is value-dependent (carry + reduction), so no value-independent
+index fn can be exact. (6) **Verification is against the DEFINITION**: FIPS 203
+§2.4.4 defines the NTT as 128 pairs of polynomial evaluations, and that double
+loop is the rank-1 oracle, sharing no code with the butterflies; the convolution
+theorem ranks second (**with the degree-1 base-case multiply written out — an
+element-wise `∘` is simply wrong**), and `INTT(NTT(f)) = f` ranks LAST because
+matched-wrong implementations pass it. **Two measured findings worth carrying
+forward**: the plan's ~1.6 ms/spec-node model is **~20× pessimistic for
+`runSpec` alone** (43 nodes + 636 frames measured 5.5 ms vs 129 ms predicted),
+so that coefficient is really the UI pipeline, not the runtime; and the NTT is
+the first spec with **seven sibling iterates**, which broke every UI reading
+that took a trace-wide max `blockIndex` (the "Block i of N" badge labelled
+layer 1's only group "Block 1 of 64") — scope such questions with
+`iterateScopeKey` in `core/step-id.ts`, and note that **`TraceFrame.path`
+excludes the leaf's own id** despite what its comment claimed until 2026-08-09.
+
 **The ANSI C LCG (`rand_r`, 2026-07-27) is the second PRNG phase, and it is one
 leaf away from MINSTD.** `x ← (1103515245·x + 12345) mod 2³¹` — the sample
 `rand()` from ISO/IEC 9899 §7.22.2.2, **never call it "glibc `rand()`"** (glibc's
@@ -384,6 +434,7 @@ A list of footguns Claude has historically tripped on, grouped by topic (AES, pa
 - **Solid components need `createMemo` for derived values** read multiple times in JSX, and **`For` callbacks aren't reactive scopes** — inline dynamic prop reads into the JSX, don't capture them in a `const`.
 - **Solid signal setters return the value they set**, so a `: void` wrapper around a setter must use a block body, not an expression body, under `exactOptionalPropertyTypes`.
 - **Don't redirect native command stderr in PowerShell with `2>&1`** — wraps stderr in `NativeCommandError` and falsely flips `$?`.
+- **A new non-cipher FAMILY must be subtracted from `isCipher` in the same edit that widens `Algorithm`.** It is a hand-written type predicate, so the compiler believes whatever it says; an un-subtracted family silently acquires a key field, a cipher-mode selector and padding. Write the new predicate as membership over a list (`isPrng` / `isLattice`), not a disjunction, because the landmine is re-armed by every new *variant* too. Then perturb the predicate to prove the guard test is live. Also check `describeAlgorithm` and `historyOfAlgorithm` — both fall through to the CIPHER table, so a missing arm is a silent `undefined` rather than a type error.
 - **Adding a new cipher means checking whether it is a BLOCK cipher.** The three-table rule below assumes it is. A stream cipher (ChaCha20) has no core, so `BLOCK_CIPHER_CORES` stays untouched; its `SUPPORTED_CIPHER_MODES_BY_CIPHER` row does NOT include `"single-block"`, which breaks every hardcoded `"single-block"` fallback (use `defaultCipherModeFor`); and its IV width comes from `ivByteLengthFor`, not `blockByteLengthFor`. `tests/cipher-mode-fallback.test.ts` keeps three classes apart — cored, coreless-awaiting-a-core, and stream — because asserting a stream cipher is "single-block only" would be wrong.
 - **Adding a new (cipher, cipherMode) spec means updating THREE tables**: `BLOCK_CIPHER_CORES` in `stores/block-cipher-cores.ts` (the cipher needs a core to run a mode at all), `defaults` in `stores/spec.ts`, AND `SUPPORTED_CIPHER_MODES_BY_CIPHER` in `stores/cipher-mode.ts`. `tests/cipher-mode-fallback.test.ts` is the canary — it asserts the three agree. **Adding a new MODE touches only the last two** (plus `SUPPORTED_CIPHER_MODES`, `CIPHER_MODE_LABELS`, and — the one CFB found the hard way — **`CIPHER_MODES` in `core/document-schema.ts`**, the persisted-document mode list, which is guarded by its own compile-time exhaustiveness assert (`assertCipherModeCoverage`) and so surfaces as a cryptic `Type 'true' is not assignable to type 'never'` rather than a named error). A mode adds no core, so `BLOCK_CIPHER_CORES` is untouched. Watch the AES-128 row in `defaults`: it keeps hand-authored ECB/CBC constants that ~35 modules compare by REFERENCE, so a new mode must be spread in via a narrow per-mode helper (`ctrFromCore`), never a full `modesFromCore` that would regenerate them.
 - **A new bare-name port-native step type must clear TWO coverage gates**, both set-equality pins that fail CI until a conscious decision lands: `tests/port-provenance-coverage.test.ts` (an exact provenance fn in `core/port-provenance.ts` OR an entry in `PROVENANCE_NO_OP_ALLOWLIST` — *and* the test's own literal copy of that allowlist), and `tests/narration-registry-contract.test.ts` (which port-native steps escape only because they omit `shapeContract` — so **a step can ship with zero narration and CI stays green**; if the step's teaching point is per-frame and value-dependent, a static `narrationOverride` cannot express it and you must register a real `NarrationFn`, then *scrub to the frame in the browser and read it*). Note the provenance gate's set-pin lives in **two** files — `tests/port-provenance-coverage.test.ts` and `tests/port-provenance.test.ts`'s own exact-mapping count — so run the full suite, not just the file CLAUDE.md names. Also add a `ParamEditor` blurb — for a no-params step that means both `NO_PARAMS_PORT_NATIVE_TYPES` and `portNativeNoParamsLabel`.
@@ -427,7 +478,7 @@ If a future need argues for one of these, revisit then.
 - `docs/help/graph-view.md` — user-facing reference for the graph view (edges, drag/drop, palette, warning glyphs, toolbar). Bundled into the app via Vite `?raw` and rendered inside the in-app help modal (`?` button in the graph toolbar). Keep this file the single source of truth — both GitHub readers and the in-app modal display the same prose.
 
 **Plans:**
-- **ML-KEM / post-quantum — the lattice layer (PLANNED 2026-08-09, none started)**: `docs/plans/unified-stargazing-quasar.md`. Memory: `project_next_work_pqc.md`. Five phases: P1 NTT-over-Z_3329 as its own selectable algorithm (fifth `Category`, `"lattice"`) → P2 the rest of the lattice layer → P3 K-PKE → P4 ML-KEM-768 encaps/decaps (joins `Asymmetric`) → P5 pedagogy. **ML-DSA is deliberately out of scope** (its signing loop retries an unbounded number of times on *intermediate* values, which the build-spec-then-run model can't express without a simulate-then-rebuild pass — its own plan). Two facts from that plan worth knowing before any depth decision anywhere in the app: **groups emit no frames** (`runtime.ts` has one `frames.push`, in the leaf branch — so a Keccak-f[1600] is exactly 216 frames / 240 spec nodes), and fitting the two published measurements gives **≈1.6 ms per spec NODE vs ≈0.095 ms per FRAME — node count dominates by ~17×**, which is why an `iterate` is affordable where an unroll is not. Also: `runtime.ts:336` publishes `aux["blockIndex"]` on every port-mode iterate, so a body CAN be index-aware (this is not the MT19937 `+ i` wall, which was about a leaf *producing* an index); and **Node 24's `node:crypto` ships native ML-KEM with deterministic seeded keygen** — check `node:crypto` for a new primitive before hunting published vectors.
+- **ML-KEM / post-quantum — the lattice layer (P1 SHIPPED 2026-08-09; P2–P5 open)**: `docs/plans/unified-stargazing-quasar.md`. Memory: `project_next_work_pqc.md`. Five phases: **P1 NTT-over-Z_3329 as its own selectable algorithm (fifth `Category`, `"lattice"`) — SHIPPED** → P2 the rest of the lattice layer → P3 K-PKE → P4 ML-KEM-768 encaps/decaps (joins `Asymmetric`) → P5 pedagogy. **ML-DSA is deliberately out of scope** (its signing loop retries an unbounded number of times on *intermediate* values, which the build-spec-then-run model can't express without a simulate-then-rebuild pass — its own plan). Two facts from that plan worth knowing before any depth decision anywhere in the app: **groups emit no frames** (`runtime.ts` has one `frames.push`, in the leaf branch — so a Keccak-f[1600] is exactly 216 frames / 240 spec nodes), and fitting the two published measurements gives **≈1.6 ms per spec NODE vs ≈0.095 ms per FRAME — node count dominates by ~17×**, which is why an `iterate` is affordable where an unroll is not. Also: `runtime.ts:336` publishes `aux["blockIndex"]` on every port-mode iterate, so a body CAN be index-aware (this is not the MT19937 `+ i` wall, which was about a leaf *producing* an index); and **Node 24's `node:crypto` ships native ML-KEM with deterministic seeded keygen** — check `node:crypto` for a new primitive before hunting published vectors.
 - PRNG family — the fourth `Category` (P1 MINSTD + P2 ANSI-C LCG/`add-mod@1` + P3 ChaCha20-CSPRNG shipped 2026-07-27; **P4 MT19937 shipped 2026-08-09 — plan CLOSED**): `docs/plans/iterative-dancing-ocean.md`, with P4 planned and executed in `docs/plans/validated-growing-dongarra.md`. Memory: `project_prng_family_plan.md`.
 - ChaCha20 — first stream cipher, first coreless cipher (ALL phases incl. P5 diagrams shipped 2026-07-20 — plan CLOSED): `docs/plans/fluffy-orbiting-shannon.md`. Memory: `project_chacha20_plan.md`.
 - Original architectural plan: `~/.claude/plans/i-want-to-build-tender-spark.md`

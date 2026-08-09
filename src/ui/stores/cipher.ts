@@ -19,6 +19,8 @@
  */
 
 import { createSignal } from "solid-js";
+import { POLY_BYTES } from "../../ciphers/mlkem-constants";
+import { DEFAULT_NTT_INPUT, DEFAULT_NTT_OUTPUT } from "../../ciphers/ntt-3329-256";
 
 export type AesCipher = "aes-128" | "aes-192" | "aes-256";
 export type SpeckCipher = "speck-32-64-be" | "speck-32-64-le";
@@ -153,6 +155,31 @@ export type Asymmetric = "rsa";
 export type Prng = "minstd-rand0" | "minstd-rand" | "ansi-c-lcg" | "mt19937" | "chacha20-csprng";
 
 /**
+ * Lattice family — arithmetic over the polynomial ring
+ * `R_q = Z_q[X]/(X²⁵⁶+1)` with `q = 3329`, the setting the NIST post-quantum
+ * standards are built in. The number-theoretic transform is the first (and, at
+ * P1, only) member: `docs/plans/unified-stargazing-quasar.md`.
+ *
+ * **Why a fifth family rather than a cipher or a hash.** The NTT is a change of
+ * representation, not an encryption and not a digest:
+ *
+ * - It is **not a cipher**. There is no key, and `isCipher` returning true would
+ *   drag in `SUPPORTED_CIPHER_MODES_BY_CIPHER`, `defaultCipherModeFor`,
+ *   `paddingLimits` and `ivByteLengthFor` — presenting a key field, a mode
+ *   selector and a padding scheme for something that has none of them.
+ * - It is **not a hash**: it is invertible, exactly.
+ * - It is **not a PRNG**: it has a message (the polynomial).
+ * - It is **not public-key**: no key pair.
+ *
+ * Unlike the hash and PRNG families it IS direction-ful — forward and inverse
+ * are a genuine pair — so `LatticeSpecsByMode` in `stores/spec.ts` copies the
+ * two-slot `AsymmetricSpecsByMode` shape rather than the single-slot hash one.
+ * RSA is the precedent that matters here: a non-cipher family with two
+ * directions was already a solved surface.
+ */
+export type Lattice = "ntt-3329-256";
+
+/**
  * Category discriminant for the algorithm selector (Slice 2.10c, 2026-05-25).
  * The UI surfaces a top-level toggle between "cipher" and "hash"; the
  * specific dropdown alongside renders cipher or hash options depending on
@@ -166,7 +193,7 @@ export type Prng = "minstd-rand0" | "minstd-rand" | "ansi-c-lcg" | "mt19937" | "
  * shape extends cleanly when SHA-3 / SHA-512 land — each family's dropdown
  * remembers independently.
  */
-export type Category = "cipher" | "hash" | "asymmetric" | "prng";
+export type Category = "cipher" | "hash" | "asymmetric" | "prng" | "lattice";
 
 /**
  * Public umbrella type — every cryptographic primitive the app supports.
@@ -177,7 +204,7 @@ export type Category = "cipher" | "hash" | "asymmetric" | "prng";
  * Implementing functions in terms of `Algorithm` and branching on category
  * is cheaper than maintaining parallel cipher-only and hash-only overloads.
  */
-export type Algorithm = Cipher | Hash | Asymmetric | Prng;
+export type Algorithm = Cipher | Hash | Asymmetric | Prng | Lattice;
 
 const ALL_CIPHERS: readonly Cipher[] = [
   "aes-128",
@@ -257,6 +284,22 @@ const ALL_PRNGS: readonly Prng[] = [
 export const isPrng = (a: Algorithm): a is Prng => (ALL_PRNGS as readonly string[]).includes(a);
 
 /**
+ * The lattice variants. Membership, for the reason spelled out on `ALL_PRNGS`
+ * above — a hand-written disjunction re-arms the `isCipher` landmine on every
+ * new *variant*, and the compiler believes a type predicate whatever it says.
+ * P2's additions land here and nowhere else.
+ */
+const ALL_LATTICE: readonly Lattice[] = ["ntt-3329-256"];
+
+/**
+ * True when an algorithm is in the lattice family. Defined alongside `isHash` /
+ * `isAsymmetric` / `isPrng` so `isCipher` below can exclude all four non-cipher
+ * families explicitly.
+ */
+export const isLattice = (a: Algorithm): a is Lattice =>
+  (ALL_LATTICE as readonly string[]).includes(a);
+
+/**
  * True when an algorithm is a symmetric cipher (the keyed encrypt/decrypt
  * block primitives with cipher-mode + padding surfaces).
  *
@@ -269,7 +312,8 @@ export const isPrng = (a: Algorithm): a is Prng => (ALL_PRNGS as readonly string
  * The exhaustive-switch safety net does not catch a manual predicate. Every
  * new non-cipher family MUST be subtracted here.
  */
-export const isCipher = (a: Algorithm): a is Cipher => !isHash(a) && !isAsymmetric(a) && !isPrng(a);
+export const isCipher = (a: Algorithm): a is Cipher =>
+  !isHash(a) && !isAsymmetric(a) && !isPrng(a) && !isLattice(a);
 
 // Default to AES-128 so first-time / fresh-load users hit the canonical
 // FIPS-197 Appendix C.1 vector. Session-only — see file header.
@@ -299,11 +343,13 @@ export const setCipher = (c: Cipher): void => {
 const [hash, setHashSignal] = createSignal<Hash>("sha-256");
 const [asymmetric, setAsymmetricSignal] = createSignal<Asymmetric>("rsa");
 const [prng, setPrngSignal] = createSignal<Prng>("minstd-rand0");
+const [lattice, setLatticeSignal] = createSignal<Lattice>("ntt-3329-256");
 const [category, setCategorySignal] = createSignal<Category>("cipher");
 
 export const useHash = () => hash;
 export const useAsymmetric = () => asymmetric;
 export const usePrng = () => prng;
+export const useLattice = () => lattice;
 export const useCategory = () => category;
 
 /**
@@ -331,6 +377,13 @@ export const setPrng = (p: Prng): void => {
   setPrngSignal(p);
 };
 
+/** Set the active lattice variant. Does NOT flip category — mirrors `setHash` /
+ *  `setAsymmetric` / `setPrng`; the category-flipping setter of the same name
+ *  lives in `stores/spec.ts` and composes both. */
+export const setLattice = (l: Lattice): void => {
+  setLatticeSignal(l);
+};
+
 /** Flip the active category without changing the cipher / hash / asymmetric
  *  signals. */
 export const setCategory = (c: Category): void => {
@@ -353,6 +406,7 @@ export const useAlgorithm = (): (() => Algorithm) => {
     if (c === "cipher") return cipher();
     if (c === "hash") return hash();
     if (c === "prng") return prng();
+    if (c === "lattice") return lattice();
     return asymmetric();
   };
 };
@@ -392,6 +446,13 @@ const ALL_ASYMMETRICS: readonly Asymmetric[] = ["rsa"];
 export const ASYMMETRIC_OPTIONS = ALL_ASYMMETRICS;
 export const ASYMMETRIC_LABELS: Record<Asymmetric, string> = {
   rsa: "RSA (textbook)",
+};
+
+/** Lattice dropdown options + labels. One entry today (the NTT); mirrors the
+ *  other families' option shapes so the selector renders any family uniformly. */
+export const LATTICE_OPTIONS = ALL_LATTICE;
+export const LATTICE_LABELS: Record<Lattice, string> = {
+  "ntt-3329-256": "NTT over Z₃₃₂₉[X]/(X²⁵⁶+1)",
 };
 
 /** PRNG dropdown options + labels. The variants differ in a handful of
@@ -511,6 +572,12 @@ export const PRNG_DESCRIPTIONS: Record<Prng, string> = {
     "ChaCha20 as a generator — the stream cipher with the message removed. Twenty rounds per 64 bytes, and unlike the LCGs its output does not reveal its state.",
 };
 
+/** Per-lattice one-liner. Mirrors `LATTICE_LABELS`. */
+export const LATTICE_DESCRIPTIONS: Record<Lattice, string> = {
+  "ntt-3329-256":
+    "Number-theoretic transform — the FFT done in integers mod the prime 3329; makes polynomial multiplication in ML-KEM's ring cheap and exact.",
+};
+
 /**
  * Resolve the one-liner for any algorithm, routing by family. Used by the
  * header caption and the selector caption so the two surfaces stay in sync
@@ -524,7 +591,9 @@ export const describeAlgorithm = (a: Algorithm): string =>
       ? ASYMMETRIC_DESCRIPTIONS[a]
       : isPrng(a)
         ? PRNG_DESCRIPTIONS[a]
-        : CIPHER_DESCRIPTIONS[a];
+        : isLattice(a)
+          ? LATTICE_DESCRIPTIONS[a]
+          : CIPHER_DESCRIPTIONS[a];
 
 // ─── Historical one-liners (2026-07-12) ──────────────────────────────────────
 //
@@ -611,6 +680,12 @@ export const PRNG_HISTORY: Record<Prng, string> = {
     "Daniel J. Bernstein's 2008 stream cipher, run as a generator — the configuration Linux's getrandom() and BSD's arc4random() actually use. It is the answer to the defect the three LCGs above demonstrate: their output hands over their state, and a CSPRNG's does not.",
 };
 
+/** Per-lattice historical one-liner. Mirrors `LATTICE_DESCRIPTIONS`. */
+export const LATTICE_HISTORY: Record<Lattice, string> = {
+  "ntt-3329-256":
+    "Gauss described the algorithm in 1805, two years before Fourier's own work; Cooley & Tukey rediscovered it in 1965 and Pollard moved it into modular arithmetic in 1971. NIST's 2024 post-quantum standard ML-KEM (FIPS 203) does not merely use it for speed — it stores keys and ciphertexts in the transformed domain, making this transform part of the data format itself.",
+};
+
 /**
  * Resolve the historical one-liner for any algorithm, routing by family.
  * Sibling of `describeAlgorithm` (which the header uses); this one feeds only
@@ -623,7 +698,9 @@ export const historyOfAlgorithm = (a: Algorithm): string =>
       ? ASYMMETRIC_HISTORY[a]
       : isPrng(a)
         ? PRNG_HISTORY[a]
-        : CIPHER_HISTORY[a];
+        : isLattice(a)
+          ? LATTICE_HISTORY[a]
+          : CIPHER_HISTORY[a];
 
 /**
  * Canonical default key per cipher — FIPS-197 §A.1 / §A.2 / §A.3 expansion
@@ -1126,11 +1203,78 @@ export const DEFAULT_PT_BYTES_BY_PRNG: Record<Prng, Uint8Array> = {
   "chacha20-csprng": new Uint8Array(32),
 };
 
+// ─── Lattice defaults ──────────────────────────────────────────────────────
+//
+// The transform is keyless — it is a change of representation, not an
+// encryption — so the key default is empty and the UI hides the field, the same
+// posture the hash, RSA and PRNG families take.
+
+/** Empty key per lattice variant — the transform has no key. */
+export const DEFAULT_KEY_BYTES_BY_LATTICE: Record<Lattice, Uint8Array> = {
+  "ntt-3329-256": new Uint8Array(0),
+};
+
+/**
+ * Default polynomial: `f(X) = 0 + 1·X + 2·X² + … + 255·X²⁵⁵`, the sequential
+ * house pattern AES and Serpent open on, and every coefficient safely below q.
+ * It transforms into something with no visible structure, which is what makes
+ * it worth looking at.
+ *
+ * **The input width is not negotiable here**, unlike a cipher's message. A ring
+ * element is exactly 256 coefficients, so the polynomial is exactly 512 bytes;
+ * anything else makes the first layer's block split meaningless and the runtime
+ * throws. Same posture as `SEED_BYTES_BY_PRNG`.
+ */
+export const DEFAULT_PT_BYTES_BY_LATTICE: Record<Lattice, Uint8Array> = {
+  "ntt-3329-256": DEFAULT_NTT_INPUT,
+};
+
+/**
+ * Default *transformed* polynomial — the inverse direction's input, i.e. the
+ * forward transform of the polynomial above. So landing in "inverse" mode and
+ * running gives back the sequential coefficients, mirroring how a cipher's
+ * decrypt default round-trips to its canonical plaintext.
+ *
+ * Computed by running the shipped forward spec rather than hand-derived, and
+ * pinned by `tests/ntt-3329-256-kat.test.ts` so it cannot drift from the
+ * implementation.
+ */
+export const DEFAULT_CT_BYTES_BY_LATTICE: Record<Lattice, Uint8Array> = {
+  "ntt-3329-256": DEFAULT_NTT_OUTPUT,
+};
+
+/**
+ * The input the field should hold when a lattice variant becomes active, given
+ * the direction. Forward wants the polynomial; inverse wants its transform, so
+ * the first run in that direction returns the polynomial rather than
+ * transforming an already-untransformed value into 512 bytes of garbage.
+ *
+ * **Exported rather than inlined in `App.tsx` so a test can drive the real
+ * rule.** `DEFAULT_CT_BYTES_BY_LATTICE` shipped for a few hours with no reader
+ * at all, and the surface test asserted only its CONTENTS — which stays green
+ * whether or not anything consumes it. RSA still has that hole
+ * (`DEFAULT_CT_BYTES_BY_ASYMMETRIC` has no consumer); it matters less there
+ * because its message is two bytes, and more here because nobody retypes 512
+ * bytes of hex.
+ *
+ * The mode literal is spelled out rather than imported as `Mode` from
+ * `stores/spec.ts`, which imports THIS module.
+ */
+export const latticeDefaultInput = (l: Lattice, mode: "encrypt" | "decrypt"): Uint8Array =>
+  mode === "decrypt" ? DEFAULT_CT_BYTES_BY_LATTICE[l] : DEFAULT_PT_BYTES_BY_LATTICE[l];
+
+/** Polynomial width in bytes, per lattice variant — the analogue of
+ *  `SEED_BYTES_BY_PRNG`. A ring element is 256 coefficients × 2 bytes. */
+export const INPUT_BYTES_BY_LATTICE: Record<Lattice, number> = {
+  "ntt-3329-256": POLY_BYTES,
+};
+
 /** Test-only reset; production code never calls this. */
 export const __resetCipherForTests = (): void => {
   setCipherSignal("aes-128");
   setHashSignal("sha-256");
   setAsymmetricSignal("rsa");
   setPrngSignal("minstd-rand0");
+  setLatticeSignal("ntt-3329-256");
   setCategorySignal("cipher");
 };

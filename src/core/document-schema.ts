@@ -27,7 +27,7 @@
  * `z.discriminatedUnion`'s per-option constraint without explicit casts.
  */
 
-import type { Asymmetric, Cipher, Hash, Prng } from "@/ui/stores/cipher";
+import type { Asymmetric, Cipher, Hash, Lattice, Prng } from "@/ui/stores/cipher";
 import type { CipherMode } from "@/ui/stores/cipher-mode";
 import { z } from "zod";
 import { ALL_BYTE_FORMATS } from "./format";
@@ -109,7 +109,14 @@ export const PRNG_IDS = [
 ] as const satisfies readonly Prng[];
 
 /**
- * Concatenation of cipher + hash + asymmetric + prng ids. Used by the top-level
+ * Lattice variants — `docs/plans/unified-stargazing-quasar.md`. The
+ * number-theoretic transform is the first member. `assertLatticeCoverage` below
+ * pins this against the `Lattice` union in `ui/stores/cipher.ts`.
+ */
+export const LATTICE_IDS = ["ntt-3329-256"] as const satisfies readonly Lattice[];
+
+/**
+ * Concatenation of cipher + hash + asymmetric + prng + lattice ids. Used by the top-level
  * document's `algorithm` field, which accepts any cryptographic-primitive
  * family. Composed at the tuple level so the `z.enum(ALGORITHM_IDS)` below
  * stays a static-enum schema rather than a runtime union — so a saved RSA
@@ -123,7 +130,13 @@ export const PRNG_IDS = [
  * algorithm it has never heard of — which is the intended behaviour, and is
  * reported by the existing friendly enum error rather than a silent misparse.
  */
-export const ALGORITHM_IDS = [...CIPHER_IDS, ...HASH_IDS, ...ASYMMETRIC_IDS, ...PRNG_IDS] as const;
+export const ALGORITHM_IDS = [
+  ...CIPHER_IDS,
+  ...HASH_IDS,
+  ...ASYMMETRIC_IDS,
+  ...PRNG_IDS,
+  ...LATTICE_IDS,
+] as const;
 
 export const CIPHER_MODES = [
   "single-block",
@@ -160,12 +173,14 @@ type MissingPaddingScheme = Exclude<PaddingScheme, (typeof PADDING_SCHEMES)[numb
 type MissingHash = Exclude<Hash, (typeof HASH_IDS)[number]>;
 type MissingAsymmetric = Exclude<Asymmetric, (typeof ASYMMETRIC_IDS)[number]>;
 type MissingPrng = Exclude<Prng, (typeof PRNG_IDS)[number]>;
+type MissingLattice = Exclude<Lattice, (typeof LATTICE_IDS)[number]>;
 export const assertCipherCoverage: [MissingCipher] extends [never] ? true : never = true;
 export const assertCipherModeCoverage: [MissingCipherMode] extends [never] ? true : never = true;
 export const assertPaddingCoverage: [MissingPaddingScheme] extends [never] ? true : never = true;
 export const assertHashCoverage: [MissingHash] extends [never] ? true : never = true;
 export const assertAsymmetricCoverage: [MissingAsymmetric] extends [never] ? true : never = true;
 export const assertPrngCoverage: [MissingPrng] extends [never] ? true : never = true;
+export const assertLatticeCoverage: [MissingLattice] extends [never] ? true : never = true;
 
 // ─── Json (recursive) ─────────────────────────────────────────────────────
 // Mirrors the `Json` type in core/types.ts. `z.lazy` is the standard

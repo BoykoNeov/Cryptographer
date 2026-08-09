@@ -313,6 +313,9 @@ export const lookupProvenance = (stepType: string): ProvenanceFn | undefined =>
  *    see its inline note),
  *    the RSA big-integer primitives `mul@1` / `sub@1` / `mod-mul@1` /
  *    `cond-mod-mul@1` / `mod-inverse@1`, the LCG family's `add-mod@1`,
+ *    the Z_q vector family `zq-vec-add@1` / `zq-vec-sub@1` /
+ *    `zq-vec-mul-scalar@1` (element-wise, but the dependency inside one
+ *    element is value-dependent — see the inline note),
  *    and the traced extended-Euclid loop
  *    `eea-step@1` / `eea-extract@1` (full-width carries/borrows mix every
  *    output byte across all input bytes — there is no clean per-cell mapping).
@@ -369,6 +372,19 @@ export const PROVENANCE_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set<string>([
   // above (a carry crosses byte boundaries) compounded by the reduction, which
   // can rewrite every byte at once when the sum crosses the modulus.
   "add-mod@1",
+  // approximate — the Z_q vector family (ML-KEM). Worth spelling out, because
+  // "element-wise" makes these look like they belong with `xor@1`'s exact
+  // column mapping and they do not. The true dependency set of one OUTPUT byte
+  // is the whole 2-byte element it sits in, on every input port — a carry
+  // between the two bytes and the reduction mod q both cross the boundary. And
+  // it is worse than merely coarse: whether the low byte actually reaches the
+  // high one depends on the VALUES, so no value-independent index fn can be
+  // exact here. Highlighting the whole element would over-report, which is the
+  // "missing never wrong" property this module exists to protect. Same
+  // rationale as `add-mod@1` / `mod-mul@1` above, one element at a time.
+  "zq-vec-add@1",
+  "zq-vec-sub@1",
+  "zq-vec-mul-scalar@1",
   // approximate — the traced extended-Euclid loop (RSA Phase 4): each rung's
   // quotient/remainder + the mod-φ-reduced coefficient mix every output byte
   // across the input tuple, exactly like the `mod-inverse@1` oracle they

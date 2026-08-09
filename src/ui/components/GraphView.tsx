@@ -103,7 +103,7 @@ import { type TwofishRoundShape, analyzeTwofishRound } from "@/core/twofish-shap
 import type { AuxValue, State, StepNode } from "@/core/types";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { hasNarrationFn } from "../narration/registry";
-import { isAsymmetric, isHash, isPrng, useAlgorithm } from "../stores/cipher";
+import { isAsymmetric, isHash, isLattice, isPrng, useAlgorithm } from "../stores/cipher";
 import { getComposite, saveComposite } from "../stores/composites";
 import {
   isCuratedLayoutSuppressed,
@@ -3127,6 +3127,16 @@ export const GraphView = () => {
       return useMode()() === "encrypt"
         ? { inputLabel: "message", outputLabel: "ciphertext" }
         : { inputLabel: "ciphertext", outputLabel: "message" };
+    }
+    // Lattice: a polynomial goes in and its transform comes out. Neither side
+    // is a plaintext or a ciphertext — the transform conceals nothing — so the
+    // pills say what the values actually are. Same wording as App.tsx's
+    // inputLabel()/outputLabel(); the PRNG note above is on the record that a
+    // wrong label here is invisible to the type system and to every test.
+    if (isLattice(algo)) {
+      return useMode()() === "encrypt"
+        ? { inputLabel: "polynomial", outputLabel: "transformed polynomial" }
+        : { inputLabel: "transformed polynomial", outputLabel: "polynomial" };
     }
     return useMode()() === "encrypt"
       ? { inputLabel: "plaintext", outputLabel: "ciphertext" }

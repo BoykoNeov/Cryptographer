@@ -78,6 +78,8 @@ import "./narration/index";
 // builder's actual block size.
 import { PRNG_SEED_AUX } from "@/ciphers/chacha20-csprng";
 import { LCG_WORD_BYTES } from "@/ciphers/lcg";
+import { COEFF_BYTES, ML_KEM_N } from "@/ciphers/mlkem-constants";
+import { iterateScopeKey } from "@/core/step-id";
 import { clearDirty, setAutoRerun, setDirty, useAutoRerun, useDirty } from "./stores/auto-rerun";
 import {
   blockByteLengthFor,
@@ -100,6 +102,7 @@ import {
   DEFAULT_KEY_BYTES_BY_ASYMMETRIC,
   DEFAULT_KEY_BYTES_BY_CIPHER,
   DEFAULT_KEY_BYTES_BY_HASH,
+  DEFAULT_KEY_BYTES_BY_LATTICE,
   DEFAULT_KEY_BYTES_BY_PRNG,
   DEFAULT_PT_BYTES_BY_ASYMMETRIC,
   DEFAULT_PT_BYTES_BY_CIPHER,
@@ -109,7 +112,12 @@ import {
   HASH_LABELS,
   HASH_OPTIONS,
   type Hash,
+  INPUT_BYTES_BY_LATTICE,
   IV_LAYOUT_CAPTION_BY_CIPHER,
+  LATTICE_DESCRIPTIONS,
+  LATTICE_LABELS,
+  LATTICE_OPTIONS,
+  type Lattice,
   PRNG_DESCRIPTIONS,
   PRNG_LABELS,
   PRNG_OPTIONS,
@@ -122,12 +130,15 @@ import {
   isAsymmetric,
   isCipher,
   isHash,
+  isLattice,
   isPrng,
+  latticeDefaultInput,
   useAlgorithm,
   useAsymmetric,
   useCategory,
   useCipher,
   useHash,
+  useLattice,
   usePrng,
 } from "./stores/cipher";
 import {
@@ -172,6 +183,7 @@ import { registry } from "./stores/registry";
 import {
   MAX_KMAC_KEY_LENGTH,
   MAX_SHAKE_OUTPUT,
+  type Mode,
   isCustomSpec,
   isKmacHash,
   maxPrngOutputFor,
@@ -184,6 +196,7 @@ import {
   setHash,
   setKmacCustomization,
   setKmacKeyLength,
+  setLattice,
   setMode,
   setPadding,
   setPrng,
@@ -265,6 +278,7 @@ export const App = () => {
   const hash = useHash();
   const asymmetric = useAsymmetric();
   const prng = usePrng();
+  const lattice = useLattice();
   const shakeOutputLength = useShakeOutputLength();
   const prngOutputLength = usePrngOutputLength();
   const cshakeN = useCshakeN();
@@ -552,6 +566,24 @@ export const App = () => {
             `${inputLabel()}: ${PRNG_LABELS[prng()]} takes a ${seedBytes}-byte seed${
               seedBytes === LCG_WORD_BYTES ? " (one 32-bit word)" : ""
             }; got ${inputBytes.length}.`,
+          );
+        }
+      } else if (isLattice(algorithm())) {
+        // Lattice branch. A ring element is exactly 256 coefficients, so the
+        // input is exactly 512 bytes — not negotiable the way a message length
+        // is, and the same posture as the generator branch above.
+        //
+        // **This branch must exist, and not only for the friendly message.**
+        // The final `else` is RSA's, and it reads `cipherConstants.q` — which
+        // the NTT spec also publishes, for an entirely unrelated purpose. It
+        // happens to be inert today (RSA's check needs `p` too, and the NTT has
+        // no `p`), but leaving a lattice spec to fall through into a
+        // modulus-value check written for a different algorithm is an accident
+        // waiting for someone to add a `p`.
+        const wanted = INPUT_BYTES_BY_LATTICE[lattice()];
+        if (inputBytes.length !== wanted) {
+          throw new Error(
+            `${inputLabel()}: ${LATTICE_LABELS[lattice()]} takes a ${wanted}-byte polynomial (${ML_KEM_N} coefficients × ${COEFF_BYTES} bytes); got ${inputBytes.length}.`,
           );
         }
       } else {
@@ -986,9 +1018,9 @@ export const App = () => {
         }
       }
       const currentPt = tryParseBytes(inputText(), fmt());
-      const prevPtDefault = algorithmDefaultPt(prevAlgorithm);
+      const prevPtDefault = algorithmDefaultPt(prevAlgorithm, mode());
       if (currentPt && bytesEqual(currentPt, prevPtDefault)) {
-        setInputText(formatBytes(algorithmDefaultPt(doc.algorithm), fmt()));
+        setInputText(formatBytes(algorithmDefaultPt(doc.algorithm, mode()), fmt()));
       }
     }
     setError(null);
@@ -1328,16 +1360,18 @@ export const App = () => {
           ? hash()
           : next === "prng"
             ? prng()
-            : asymmetric();
+            : next === "lattice"
+              ? lattice()
+              : asymmetric();
     const prevKeyDefault = algorithmDefaultKey(algorithm());
     const currentKey = tryParseBytes(keyText(), fmt());
     if (currentKey && bytesEqual(currentKey, prevKeyDefault)) {
       setKeyText(formatBytes(algorithmDefaultKey(nextAlgorithm), fmt()));
     }
-    const prevPtDefault = algorithmDefaultPt(algorithm());
+    const prevPtDefault = algorithmDefaultPt(algorithm(), mode());
     const currentPt = tryParseBytes(inputText(), fmt());
     if (currentPt && bytesEqual(currentPt, prevPtDefault)) {
-      setInputText(formatBytes(algorithmDefaultPt(nextAlgorithm), fmt()));
+      setInputText(formatBytes(algorithmDefaultPt(nextAlgorithm, mode()), fmt()));
     }
     // C3 stack boundary (see `changeCipher`): crossing algorithm families
     // rebuilds the spec off the category signal; suppress + clear.
@@ -1405,20 +1439,41 @@ export const App = () => {
   const history = useHistory();
   const historyCount = createMemo(() => history().length);
 
-  // Total block count across the current trace (for the BlockBadge "of N"
-  // suffix). Counts unique blockIndex values rather than reading
-  // aux["blockCount"] so it works for any future iterate-using spec.
-  // Returns 1 when no frames are tagged with blockIndex (single-block).
-  const blockCount = createMemo<number>(() => {
+  // Block count for the BlockBadge's "of N" suffix, PER ITERATE SCOPE.
+  //
+  // **Why this is scoped rather than a single trace-wide maximum.** Until the
+  // NTT landed, every shipped spec had exactly one `iterate` — CBC's blocks,
+  // SHA-256's message blocks, a generator's words — so "the largest blockIndex
+  // anywhere in the trace" and "how many times MY loop ran" were the same
+  // number. The NTT is the first spec with SEVEN SIBLING iterates running
+  // different counts (1, 2, 4, … 64 butterfly groups), and the trace-wide
+  // maximum labelled layer 1's only group "Block 1 of 64".
+  //
+  // A frame's `path` is its container chain followed by its own id, so
+  // dropping the last element identifies the scope it was emitted in. Frames in
+  // a nested group inside an iterate get their own key, which is harmless: they
+  // share that iterate's blockIndex range, so they resolve to the same count.
+  //
+  // Computed once per trace into a map rather than rescanning per frame — the
+  // NTT's trace is ~1000 frames and the badge re-renders on every scrub.
+  const blockCounts = createMemo<ReadonlyMap<string, number>>(() => {
     void version();
+    const counts = new Map<string, number>();
     const t = getTrace();
-    if (!t) return 1;
-    let maxIdx = -1;
+    if (!t) return counts;
     for (const f of t.frames) {
-      if (f.blockIndex !== undefined && f.blockIndex > maxIdx) maxIdx = f.blockIndex;
+      if (f.blockIndex === undefined) continue;
+      const key = iterateScopeKey(f.path);
+      const prev = counts.get(key);
+      if (prev === undefined || f.blockIndex > prev) counts.set(key, f.blockIndex);
     }
-    return maxIdx < 0 ? 1 : maxIdx + 1;
+    for (const [k, maxIdx] of counts) counts.set(k, maxIdx + 1);
+    return counts;
   });
+
+  /** Blocks the loop THIS frame belongs to ran. 1 when the frame is outside any
+   *  iterate (the badge hides itself at 1). */
+  const blockCountFor = (f: TraceFrame): number => blockCounts().get(iterateScopeKey(f.path)) ?? 1;
 
   // Labels switch between encrypt/decrypt modes so the UI doesn't lie.
   // Slice 2.10c (2026-05-25): hash branch overrides the labels — hashes
@@ -1447,12 +1502,19 @@ export const App = () => {
     if (isPrng(algorithm())) return "seed";
     // RSA: encrypt consumes the message m, decrypt consumes the ciphertext c.
     if (isAsymmetric(algorithm())) return mode() === "encrypt" ? "message" : "ciphertext";
+    // The lattice family transforms a polynomial into its transformed form and
+    // back. Neither side is a plaintext or a ciphertext — nothing is being
+    // concealed — so both directions are named for what they hold.
+    if (isLattice(algorithm()))
+      return mode() === "encrypt" ? "polynomial" : "transformed polynomial";
     return mode() === "encrypt" ? "plaintext" : "ciphertext";
   };
   const outputLabel = () => {
     if (isHash(algorithm())) return "digest";
     if (isPrng(algorithm())) return "random bytes";
     if (isAsymmetric(algorithm())) return mode() === "encrypt" ? "ciphertext" : "message";
+    if (isLattice(algorithm()))
+      return mode() === "encrypt" ? "transformed polynomial" : "polynomial";
     return mode() === "encrypt" ? "ciphertext" : "plaintext";
   };
 
@@ -1485,7 +1547,9 @@ export const App = () => {
                     ? ASYMMETRIC_LABELS[asymmetric()]
                     : category() === "prng"
                       ? PRNG_LABELS[prng()]
-                      : CIPHER_LABELS[cipher()]
+                      : category() === "lattice"
+                        ? LATTICE_LABELS[lattice()]
+                        : CIPHER_LABELS[cipher()]
               })`
             : spec().name}
         </span>
@@ -1518,12 +1582,13 @@ export const App = () => {
           <select
             value={category()}
             onChange={(e) => changeCategory(e.currentTarget.value as Category)}
-            title="Cipher = symmetric encrypt/decrypt with a key. Hash = one-way digest (no key, no direction). Public-key = asymmetric (RSA) — encrypt/decrypt with a key pair, no symmetric key field. Generator = pseudo-random bytes from a seed (no key, no message, no direction)."
+            title="Cipher = symmetric encrypt/decrypt with a key. Hash = one-way digest (no key, no direction). Public-key = asymmetric (RSA) — encrypt/decrypt with a key pair, no symmetric key field. Generator = pseudo-random bytes from a seed (no key, no message, no direction). Lattice = polynomial arithmetic over Z_3329 — the setting the post-quantum standards are built in; invertible, and keyless."
           >
             <option value="cipher">Cipher</option>
             <option value="hash">Hash</option>
             <option value="asymmetric">Public-key</option>
             <option value="prng">Generator</option>
+            <option value="lattice">Lattice</option>
           </select>
         </label>
         {/* Slice 2.10c — mode selector hidden for the DIRECTION-LESS families.
@@ -1567,8 +1632,13 @@ export const App = () => {
                 });
               }}
             >
-              <option value="encrypt">encrypt</option>
-              <option value="decrypt">decrypt</option>
+              {/* The lattice family reuses the encrypt/decrypt AXIS but not the
+                  vocabulary: the NTT conceals nothing, so calling its forward
+                  direction "encrypt" would be the same category lie the input
+                  labels above avoid. The stored values stay "encrypt"/"decrypt"
+                  — only the words the user reads change. */}
+              <option value="encrypt">{isLattice(algorithm()) ? "forward" : "encrypt"}</option>
+              <option value="decrypt">{isLattice(algorithm()) ? "inverse" : "decrypt"}</option>
             </select>
           </label>
         </Show>
@@ -1787,6 +1857,50 @@ export const App = () => {
                 class="reset-spec-button"
                 onClick={() => resetSpec()}
                 title={`Discard edits and restore the canonical ${ASYMMETRIC_LABELS[asymmetric()]} spec`}
+              >
+                reset
+              </button>
+            </Show>
+          </label>
+        </Show>
+        {/* Lattice dropdown — shown only when category=lattice
+            (`docs/plans/unified-stargazing-quasar.md`). Templated on the
+            asymmetric panel above rather than the generator panel below,
+            because the lattice family is direction-FUL: the mode toggle stays
+            visible and both spec slots are live. No key, no cipher mode, no
+            padding, no IV. `q` and the ζ table are editable through the
+            cipher-constants panel, so the spec can diverge and the
+            "Custom (was …)" indicator + reset button apply. */}
+        <Show when={category() === "lattice"}>
+          <label class="cipher-label">
+            transform
+            <div class="cipher-select-row">
+              <select
+                value={lattice()}
+                onChange={(e) =>
+                  // C3 stack boundary (see `changeCipher`): a lattice-variant
+                  // switch rebuilds the spec; suppress + clear.
+                  withBoundaryReset(() => setLattice(e.currentTarget.value as Lattice))
+                }
+                title={LATTICE_DESCRIPTIONS[lattice()]}
+              >
+                <For each={LATTICE_OPTIONS}>
+                  {(l) => (
+                    <option value={l} title={LATTICE_DESCRIPTIONS[l]}>
+                      {l === lattice() && isCustom()
+                        ? `Custom (was ${LATTICE_LABELS[l]})`
+                        : LATTICE_LABELS[l]}
+                    </option>
+                  )}
+                </For>
+              </select>
+            </div>
+            <Show when={isCustom()}>
+              <button
+                type="button"
+                class="reset-spec-button"
+                onClick={() => resetSpec()}
+                title={`Discard edits and restore the canonical ${LATTICE_LABELS[lattice()]} spec`}
               >
                 reset
               </button>
@@ -2311,7 +2425,7 @@ export const App = () => {
 
                   {/* Multi-block context chip. Only renders when the current
                       frame belongs to an iterate node (blockIndex is set). */}
-                  <BlockBadge blockIndex={frame().blockIndex} blockCount={blockCount()} />
+                  <BlockBadge blockIndex={frame().blockIndex} blockCount={blockCountFor(frame())} />
 
                   {/* State view (PortFlowView for every shipped frame; see
                       `FrameStateView`). Every key schedule is now decomposed
@@ -2560,6 +2674,7 @@ const algorithmDefaultKey = (a: Algorithm): Uint8Array => {
   if (isHash(a)) return DEFAULT_KEY_BYTES_BY_HASH[a];
   if (isAsymmetric(a)) return DEFAULT_KEY_BYTES_BY_ASYMMETRIC[a]; // empty — no key
   if (isPrng(a)) return DEFAULT_KEY_BYTES_BY_PRNG[a]; // empty — the seed is the input
+  if (isLattice(a)) return DEFAULT_KEY_BYTES_BY_LATTICE[a]; // empty — the transform has no key
   return DEFAULT_KEY_BYTES_BY_CIPHER[a];
 };
 
@@ -2569,7 +2684,7 @@ const algorithmDefaultKey = (a: Algorithm): Uint8Array => {
  * (FIPS 180-4 §A.1 single-block KAT), so first-time hash users land on
  * the textbook digest.
  */
-const algorithmDefaultPt = (a: Algorithm): Uint8Array => {
+const algorithmDefaultPt = (a: Algorithm, mode: Mode = "encrypt"): Uint8Array => {
   if (isHash(a)) return DEFAULT_PT_BYTES_BY_HASH[a];
   // RSA's "plaintext" default is its encrypt-mode message; the decrypt-mode
   // ciphertext default is swapped in mode-aware by `changeMode` (mirrors how
@@ -2579,6 +2694,19 @@ const algorithmDefaultPt = (a: Algorithm): Uint8Array => {
   // conformance values are stated, so the first Run reproduces a published
   // sequence.
   if (isPrng(a)) return DEFAULT_PT_BYTES_BY_PRNG[a];
+  // The lattice family is the one non-cipher family with a DIRECTION whose two
+  // sides hold genuinely different values, so its default is mode-aware — the
+  // same rule `changeCipher` applies via `DEFAULT_CT_BYTES_BY_CIPHER`.
+  //
+  // Landing in the inverse direction has to put the TRANSFORMED polynomial in
+  // the field, or the first run transforms an already-untransformed value and
+  // shows the user 512 bytes of garbage. `changeMode` copies the previous
+  // output across on a flip, which covers every later transition; this covers
+  // the first landing, which nothing else does. (RSA has the identical hole —
+  // `DEFAULT_CT_BYTES_BY_ASYMMETRIC` has no reader — but its message is two
+  // bytes a user retypes in seconds, where this is 512 bytes of hex nobody is
+  // going to reconstruct by hand.)
+  if (isLattice(a)) return latticeDefaultInput(a, mode);
   return DEFAULT_PT_BYTES_BY_CIPHER[a];
 };
 

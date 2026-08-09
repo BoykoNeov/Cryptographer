@@ -88,12 +88,14 @@ describe("App — RSA (public-key) category", () => {
     const { container } = render(() => <App />);
     const kind = findSelectByLabel(container, "kind");
     // The full category list, pinned in order. "prng" joined it when the
-    // generator family landed (`docs/plans/iterative-dancing-ocean.md`).
+    // generator family landed (`docs/plans/iterative-dancing-ocean.md`);
+    // "lattice" when the NTT did (`docs/plans/unified-stargazing-quasar.md`).
     expect(Array.from(kind.querySelectorAll("option")).map((o) => o.value)).toEqual([
       "cipher",
       "hash",
       "asymmetric",
       "prng",
+      "lattice",
     ]);
 
     selectRsa(container);

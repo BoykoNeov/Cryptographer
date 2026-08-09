@@ -687,7 +687,9 @@ export type CipherSpec = {
 export type TraceFrame = {
   /** Monotonic frame index across the whole trace. */
   readonly index: number;
-  /** Path of group ids from root to this leaf, then the leaf's id. */
+  /** Chain of container ids from the root down to (but NOT including) this
+   *  leaf — the leaf's own id rides `stepId`. `iterateScopeKey` in
+   *  `core/step-id.ts` turns this into a scope key. */
   readonly path: readonly string[];
   readonly stepId: string;
   readonly stepType: string;

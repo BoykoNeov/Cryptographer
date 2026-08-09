@@ -322,6 +322,20 @@ export const ParamEditor = (props: Props) => {
             <Match when={getStep().type === "twofish.publish-subkeys@1"}>
               <TwofishPublishSubkeysBlock step={getStep()} />
             </Match>
+            <Match
+              when={
+                getStep().type === "zq-vec-add@1" ||
+                getStep().type === "zq-vec-sub@1" ||
+                getStep().type === "zq-vec-mul-scalar@1"
+              }
+            >
+              {/*
+                The Z_q vector family (ML-KEM P1). One block for all three: they
+                share a param shape exactly, and the thing a learner needs told
+                is the same in each — the modulus is NOT here, it is on a wire.
+              */}
+              <ZqVecBlock step={getStep()} />
+            </Match>
             <Match when={getStep().type === "blowfish.sbox-lookup@1"}>
               <BlowfishSboxLookupBlock step={getStep()} />
             </Match>
@@ -1188,6 +1202,44 @@ const TwofishHExpandBlock = (props: { step: StepLeaf }) => {
       <div class="param-scalar-row">
         <dt>Operation</dt>
         <dd>RS S-vector → key-dependent S0..S3 + 40 h evals → A/B intermediates</dd>
+      </div>
+    </dl>
+  );
+};
+
+// The Z_q vector family (ML-KEM P1): `zq-vec-add@1`, `zq-vec-sub@1`,
+// `zq-vec-mul-scalar@1`. Two read-only structural scalars plus one line whose
+// only job is to answer the question every learner asks at this leaf: "where is
+// q?". It is on a wire, not in here — the same message `add-mod@1`'s blurb
+// carries, and the whole reason both steps take their modulus on a port.
+//
+// Read-only is deliberate for BOTH scalars. `coeffBytes` sets every downstream
+// port width, so editing one leaf's copy would desync it from its siblings.
+// `littleEndian` is genuinely interesting to flip — but flipping it on one leaf
+// while its neighbours keep the other convention is not a different transform,
+// it is not a transform at all. Making it a real experiment needs a scoped
+// apply-all (the Speck α/β precedent, `project_speck_arx_editable`); deferred.
+const ZqVecBlock = (props: { step: StepLeaf }) => {
+  const params = (): { coeffBytes?: number; littleEndian?: boolean } => props.step.params as never;
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>Coefficient width</dt>
+        <dd>{params().coeffBytes ?? "—"} bytes per coefficient</dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Byte order</dt>
+        <dd>
+          {params().littleEndian === true ? "little-endian" : "big-endian"} within each coefficient
+        </dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Modulus q</dt>
+        <dd>
+          Not a parameter — it arrives on the <code>modulus</code> port. To change it, edit the
+          value wired into that port.
+        </dd>
       </div>
     </dl>
   );

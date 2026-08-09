@@ -107,6 +107,10 @@ const KITCHEN_SINK: Json = {
   offset: 0,
   bytes: [0, 0, 0, 0],
   value: 0, // right-encode@1 (SP 800-185 — encodes the output-length commitment)
+  // zq-vec-mul-scalar@1 (ML-KEM P1) — its `scalar` port declares its width from
+  // `coeffBytes`, so the contract is function-form and needs both params.
+  coeffBytes: 2,
+  littleEndian: false,
 } as unknown as Json;
 
 type Scan = {

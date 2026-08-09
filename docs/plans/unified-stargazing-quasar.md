@@ -1,6 +1,7 @@
 # ML-KEM — the lattice layer, and the app's first post-quantum algorithm
 
-**Status: PLANNED 2026-08-09.** Five phases, none started. Scope decided with
+**Status: P1 SHIPPED 2026-08-09. P2–P5 open.** Five phases; the NTT is
+selectable under a fifth `Category`, `"lattice"`. Scope decided with
 the user at plan time: **ML-KEM only** (ML-DSA deferred to its own plan),
 **Keccak calls are monolith frames that cross-reference the already-visible
 SHAKE**, and **P1 ships the NTT as its own selectable algorithm**.
@@ -250,6 +251,54 @@ Two independent checks, and the second is the strong one:
   test. This checks the transform against something that is not itself the
   transform, unlike `NTT⁻¹(NTT(f)) = f`, which a pair of matched-wrong
   implementations passes — the same trap CFB's round-trip test documents.
+
+**P1 OUTCOME (2026-08-09).** Shipped as planned, with five corrections worth
+carrying into P2:
+
+1. **`q` on a port was not achievable as written, and the plan's spike item (d)
+   was asking the wrong question.** The vector leaves live INSIDE a layer's
+   iterate, and `runtime.ts` seeds a body scope with only that iterate's own
+   `in`/`chain` ports — so a top-level `cipherConstants["q"]` cannot reach them
+   by port at all. It rides aux (`aux-load-bytes@1`) inside each body, which is
+   forced rather than a canvas preference. This also dissolves the 381-consumer
+   replication worry: the plan conflated frame count with spec-node count, and
+   per body it is ONE aux-load feeding THREE consumers — at, not above, the
+   threshold.
+2. **The final scale is `128⁻¹ = 3303`, not `n⁻¹` read as `256⁻¹`.** The plan's
+   phrase "a final multiply by `n⁻¹ mod q`" invites exactly the wrong constant.
+   Seven layers ⇒ 2⁷.
+3. **The convolution-theorem oracle needs the degree-1 base-case multiply,
+   which the plan assigned to P2.** `NTT⁻¹(NTT(f) ∘ NTT(g))` with an
+   element-wise `∘` is simply wrong. It is ~10 lines written inside the test.
+   The stronger and cheaper rank-1 oracle turned out to be **direct CRT
+   evaluation** against FIPS 203 §2.4.4's definition, which shares no code with
+   the butterflies at all.
+4. **The measurement model is ~20× pessimistic for the runtime alone.** The
+   spike measured 43 spec nodes + 636 frames at **5.5 ms**, against 129 ms
+   predicted. The 1.6 ms/node coefficient is therefore dominated by the UI
+   pipeline (graph derivation, layout, Solid render), not by `runSpec`. Node
+   count is still the driver and the depth decisions stand — but do not quote
+   the model as wall-clock for anything that does not re-render.
+5. **The coverage gates were cleared in P1, not P5** (the plan's own sequencing
+   bug: the steps register in P1 and P1 must end green). The three `zq-vec-*@1`
+   steps are on `PROVENANCE_NO_OP_ALLOWLIST` rather than carrying exact
+   provenance fns — element-wise looks like `xor@1`'s exact column mapping but
+   is not, because the dependency WITHIN one 2-byte element is value-dependent
+   (carry plus the reduction), so no value-independent index fn can be exact.
+   Same rationale as `add-mod@1`.
+
+Deferred from P1, deliberately, and both worth picking up in P5:
+
+- **`littleEndian` is read-only in the ParamEditor.** Flipping it on ONE leaf
+  while its siblings keep the other convention is not a different transform, it
+  is not a transform at all — a real experiment needs a scoped apply-all (the
+  Speck α/β precedent).
+- **The cipher-constants panel renders 258 editable byte cells** (`q`, the
+  256-byte ζ table, `128⁻¹`). The shape is precedent — SHA-256's K is 256 bytes
+  — but "break one ζ and watch one butterfly go wrong" is a headline experiment
+  in the shipped narration, and finding the right pair among 128 unlabelled ones
+  is not the two-keystroke edit MINSTD's `a` is. The table wants index labels,
+  or a ζ-aware editor block.
 
 ### P2 — the rest of the lattice layer
 

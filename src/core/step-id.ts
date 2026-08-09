@@ -49,3 +49,28 @@ const SUFFIX_PATTERN = /(?::b\d+|:r\d+)+$/;
  */
 export const canonicalStepId = (frameStepId: string): string =>
   frameStepId.replace(SUFFIX_PATTERN, "");
+
+/**
+ * A stable key for the container scope a frame was emitted in.
+ *
+ * A `TraceFrame`'s `path` is the chain of container ids it sits inside — it
+ * does NOT include the leaf's own id, which rides `stepId` separately. So the
+ * path IS the scope and this is a join, not a slice. (Worth stating: the field's
+ * own comment in `types.ts` said otherwise until 2026-08-09.)
+ *
+ * **What it is for.** A frame's `blockIndex` counts iterations of the loop that
+ * emitted it, so any "block i of N" reading needs N *for that loop*, not for the
+ * trace. Until the NTT (`ciphers/ntt-3329-256.ts`) every shipped spec had
+ * exactly one `iterate`, so a trace-wide maximum was accidentally correct; the
+ * NTT's seven sibling layer-iterates run 1, 2, 4, … 64 groups and it is not.
+ * Grouping frames by this key separates them.
+ *
+ * Frames in a nested group inside an iterate (DES's `rounds` group) get a key of
+ * their own. That is harmless — they share their iterate's `blockIndex` range,
+ * so both keys resolve to the same count.
+ *
+ * Segments join on `/`, which the spec-id grammar (lowercase letters, digits,
+ * dots and dashes) cannot contain — so two different paths can never collide on
+ * their joined form.
+ */
+export const iterateScopeKey = (path: readonly string[]): string => path.join("/");
