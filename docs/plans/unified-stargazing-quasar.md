@@ -1,6 +1,6 @@
 # ML-KEM — the lattice layer, and the app's first post-quantum algorithm
 
-**Status: P1 SHIPPED 2026-08-09. P2–P5 open.** Five phases; the NTT is
+**Status: P1 + P2 SHIPPED 2026-08-09. P3–P5 open.** Five phases; the NTT is
 selectable under a fifth `Category`, `"lattice"`. Scope decided with
 the user at plan time: **ML-KEM only** (ML-DSA deferred to its own plan),
 **Keccak calls are monolith frames that cross-reference the already-visible
@@ -300,7 +300,7 @@ Deferred from P1, deliberately, and both worth picking up in P5:
   is not the two-keystroke edit MINSTD's `a` is. The table wants index labels,
   or a ζ-aware editor block.
 
-### P2 — the rest of the lattice layer
+### P2 — the rest of the lattice layer — SHIPPED 2026-08-09
 
 Pointwise/base-case multiplication (`zq-vec-mul-pointwise@1`), polynomial
 add/sub reuse P1's steps, `zq-compress@1` / `zq-decompress@1`,
@@ -321,6 +321,75 @@ directly against the FIPS 203 §4.2.1 formulas over the full coefficient range
 (they are total functions on `[0, q)` — exhaustive testing is cheap at
 `q = 3329`), and pin CBD against the reference bit-counting definition. Only
 then lean on P3.
+
+**P2 OUTCOME (2026-08-09).** Shipped as five step types across four commits
+(`f4239d3`, `0ac8159`, `f521b91`, `96847ef`), with six corrections worth
+carrying into P3.
+
+1. **The step is NOT "pointwise", and the plan's own name for it is the trap.**
+   Multiplying two transformed polynomials element-wise is what every other
+   transform buys you and is simply wrong here — the transform stops at 128
+   degree-1 polynomials, so a product is a per-PAIR multiply in
+   `Z_q[X]/(X²−γ)`. Shipped as **`zq-base-case-mul@1`**, deliberately breaking
+   the `zq-vec-` family prefix, because a learner meets the name in the palette
+   before the description. It is **polymorphic over `k` pairs**: `k = 128` with
+   the whole γ table is `MultiplyNTTs`, `k = 1` is one `BaseCaseMultiply` — so
+   P3 drops this same executor inside an iterate rather than needing a second
+   step type. A test pins that the two forms agree.
+2. **The γ exponent in this plan is WRONG and is corrected in code.** The
+   Critical-files line said "the 128 ζ² base-case values"; FIPS 203 Alg 11 uses
+   `ζ^(2·BitRev7(i) + 1)`. The missing `+ 1` gives `1, 3328, 1729, 1600, …`
+   where the true table is `17, 3312, 2761, 568, …`. `GAMMAS` derives it as
+   `ZETAS[i]²·17` so the relation to the published table stays visible. Note
+   P1's *test* oracle already had the exponent right — only the prose was wrong,
+   which is exactly why the code was checked against FIPS rather than against
+   the plan. **Second independent check, worth reusing:** `γ[2i] = ZETAS[64+i]`
+   and `γ[2i+1] = q − ZETAS[64+i]`, so the upper half of the published ζ table
+   re-verifies this one.
+3. **`Compress(Decompress(y)) = y` holds only while `2^d ≤ q`.** The plan said
+   "verify it, don't assume" and the verification paid: at `d = 12` it fails,
+   because 4096 bucket indices cannot survive a trip through 3329 values. That
+   is pigeonhole rather than a rounding slip, and it is why FIPS 203 defines
+   `Compress_d` for `d < 12` only. Also measured: `q` being odd means
+   compression can never hit a rounding tie, so **the tie rule is observable
+   only in decompression** — a truncating compressor passes every tie-focused
+   spot check anyone would write.
+4. **Write FIPS 203's `m` as `min(2^d, q)`, never as a `d === 12` branch.** The
+   rule exists because 12 bits can carry 4095, which is not a ring element, and
+   every narrower `d` cannot. The min reproduces it exactly at `q = 3329` and
+   keeps behaving sensibly if a learner edits `q`, where a literal 12 goes
+   quietly wrong.
+5. **An external oracle existed in P2 that this plan said would only be
+   transitive through P3.** `tests/zq-byte-encode-decode.test.ts` carries a real
+   ML-KEM-768 `ek` from Node 24's OpenSSL: decoding it FIPS-fashion yields 768
+   coefficients all inside `[0, q)` (where ~19% of random 12-bit values are
+   not), and re-encoding reproduces it byte for byte. **Captured as a byte
+   fixture, not generated** — CI runs Node 22 and has no ML-KEM, so a live call
+   would skip there, which is the vacuous-suite hole. See the CORRECTION block
+   in P3 for why it could not be seed-reproducible anyway.
+6. **`insertStepIntoSpec` gives a palette-dropped leaf `params: {}`.** Any
+   ParamEditor row gated on a value being *present* therefore vanishes exactly
+   when the user needs it — a dropped `zq-compress@1` could never be given its
+   `d`. Rows must be keyed on the step TYPE. Found by writing
+   `tests/zq-param-editor-coverage.test.tsx`, which exists because the standing
+   `param-editor-coverage.test.tsx` walks only types appearing in a SHIPPED
+   spec — a scope that does not cover a palette-only family. This generalises
+   past the lattice layer and is now in `docs/gotchas.md`.
+
+Deliberately deferred, and each is a P3 obligation rather than an omission:
+
+- **No narration.** All five omit `shapeContract`, so
+  `tests/narration-registry-contract.test.ts` passes them silently — the hole
+  CLAUDE.md names. Correct for P2, since no spec uses them. **The moment K-PKE
+  wires them in, five leaves render with zero narration and CI stays green.**
+  Register real `NarrationFn`s in P3 and scrub to the frames in a browser.
+- **No browser pass.** The only surfaces P2 touches are the ParamEditor block
+  and the palette chip; the jsdom coverage test above drives the real
+  drop-then-edit path and is strictly more durable than a look, and the palette
+  chip plus doc panel are registry-driven. Stated rather than left unsaid.
+- **`d` and `η` are editable; `coeffBytes` and `littleEndian` stay read-only**,
+  per P1's deferral. `d`'s two families label it differently ("Bits kept" vs
+  "Bits per coeff") because one discards and the other does not.
 
 ### P3 — K-PKE (the IND-CPA core)
 
@@ -410,11 +479,17 @@ for the no-params steps, entries in `NO_PARAMS_PORT_NATIVE_TYPES` and
 ## Critical files
 
 **New:**
-- `src/ciphers/mlkem-constants.ts` — `q`, the 128 ζ values, the 128 ζ² base-case
-  values, `n⁻¹ mod q`. Module constants, never spec params.
+- `src/ciphers/mlkem-constants.ts` — `q`, the 128 ζ values, the 128 base-case γ
+  values, `128⁻¹ mod q`. Module constants, never spec params. **The γ values are
+  `ζ^(2·BitRev7(i) + 1)`, NOT `ζ²`** — this line said `ζ²` until P2 corrected it,
+  and the missing `+ 1` yields a table that agrees with nothing (see the P2
+  OUTCOME block). Likewise `128⁻¹`, not `n⁻¹` read as `256⁻¹`.
 - `src/ciphers/ntt-3329-256.ts` — forward/inverse layer-iterate builders (P1).
 - `src/ciphers/k-pke.ts`, `src/ciphers/ml-kem-768.ts` — the KEM specs (P3/P4).
-- `src/steps/zq-*.ts` — the vector primitives (P1/P2).
+- `src/steps/zq-*.ts` — the vector primitives. P1: `zq-vec-add@1`,
+  `zq-vec-sub@1`, `zq-vec-mul-scalar@1`. P2: `zq-compress@1`,
+  `zq-decompress@1`, `zq-byte-encode@1`, `zq-byte-decode@1`, `zq-cbd@1`,
+  `zq-base-case-mul@1`.
 - `src/steps/ml-kem-*.ts` — the five Keccak monoliths (P3).
 
 **Modified:**
