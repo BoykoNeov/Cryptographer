@@ -301,6 +301,11 @@ import {
 import { zeroFill, zeroFillDoc, zeroFillPortContract } from "../steps/zero-fill";
 import { zeroPad, zeroPadDoc, zeroPadMeta, zeroPadPortContract } from "../steps/zero-pad";
 import { zeroUnpad, zeroUnpadDoc, zeroUnpadMeta, zeroUnpadPortContract } from "../steps/zero-unpad";
+import {
+  zqBaseCaseMul,
+  zqBaseCaseMulDoc,
+  zqBaseCaseMulPortContract,
+} from "../steps/zq-base-case-mul";
 import { zqByteDecode, zqByteDecodeDoc, zqByteDecodePortContract } from "../steps/zq-byte-decode";
 import { zqByteEncode, zqByteEncodeDoc, zqByteEncodePortContract } from "../steps/zq-byte-encode";
 import { zqCbd, zqCbdDoc, zqCbdPortContract } from "../steps/zq-cbd";
@@ -1144,6 +1149,17 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: zqCbd,
     shape: zqCbdPortContract,
     doc: zqCbdDoc,
+  });
+  // Deliberately NOT named "pointwise". Multiplying two transformed polynomials
+  // element by element is what every other transform buys you and it is simply
+  // wrong here: this one stops at 128 degree-1 polynomials, so a product is a
+  // per-PAIR multiply in Z_q[X]/(X²−γ). The broken family prefix says so at the
+  // palette, where a learner meets the name before the description.
+  r.register("zq-base-case-mul@1", {
+    kind: "ported",
+    executor: zqBaseCaseMul,
+    shape: zqBaseCaseMulPortContract,
+    doc: zqBaseCaseMulDoc,
   });
   r.register("shift-bits-right@1", {
     kind: "ported",

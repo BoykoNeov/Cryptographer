@@ -95,6 +95,30 @@ export const ZETAS: readonly number[] = [
   1722, 1212, 1874, 1029, 2110, 2935, 885, 2154,
 ];
 
+/**
+ * `GAMMAS[i] = 17^(2·BitRev7(i) + 1) mod 3329`, i = 0…127 — the modulus of the
+ * degree-1 quotient ring each base-case multiplication happens in
+ * (FIPS 203 Algorithm 11).
+ *
+ * ## The `+ 1` in the exponent is the whole point
+ *
+ * `docs/plans/unified-stargazing-quasar.md` describes these as "the 128 ζ²
+ * base-case values", and that phrasing drops the `+ 1`. It is not a rounding
+ * error: `ZETAS[i]²` gives `1, 3328, 1729, 1600, …` where the correct table is
+ * `17, 3312, 2761, 568, …`. Derived here as `ZETAS[i]² · 17`, which is the same
+ * thing written so the relationship to the published table is visible.
+ *
+ * ## Why they are ± pairs, and the cross-check that falls out
+ *
+ * `γ[2i] = ZETAS[64 + i]` and `γ[2i+1] = q − ZETAS[64 + i]` — every consecutive
+ * pair is a value and its negative. That is not a coincidence to be admired but
+ * a **second, independent check on this table against FIPS 203 Appendix A**: the
+ * upper half of the published ζ table reappears here, so a transcription slip in
+ * either one breaks the relation. `tests/zq-base-case-mul.test.ts` asserts it
+ * entry by entry alongside re-deriving every value from the exponent.
+ */
+export const GAMMAS: readonly number[] = ZETAS.map((z) => (z * z * NTT_ROOT) % ML_KEM_Q);
+
 // ─── Byte encodings (big-endian, the app's port convention) ───────────────
 
 /** Encode one coefficient as `COEFF_BYTES` big-endian bytes. */
@@ -118,6 +142,20 @@ export const N_INV_BYTES: Uint8Array = coeffBytes(N_INV_128);
 export const ZETA_TABLE_BYTES: Uint8Array = (() => {
   const out = new Uint8Array(ZETAS.length * COEFF_BYTES);
   ZETAS.forEach((z, i) => out.set(coeffBytes(z), i * COEFF_BYTES));
+  return out;
+})();
+
+/**
+ * The γ table as 256 bytes — 128 entries, ascending index, big-endian each.
+ *
+ * Unlike `ZETA_TABLE_BYTES` this one is consumed by **index**, not by a rotating
+ * cursor: `zq-base-case-mul@1` takes a `gamma` port holding one entry per
+ * coefficient pair, so a whole-polynomial multiply wires this table entire and a
+ * per-pair multiply inside a loop takes one slice of it.
+ */
+export const GAMMA_TABLE_BYTES: Uint8Array = (() => {
+  const out = new Uint8Array(GAMMAS.length * COEFF_BYTES);
+  GAMMAS.forEach((g, i) => out.set(coeffBytes(g), i * COEFF_BYTES));
   return out;
 })();
 

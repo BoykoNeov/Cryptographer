@@ -135,6 +135,10 @@ describe("port-provenance coverage contract", () => {
       // one coefficient is a popcount over 2η bits, so a byte-level cone would
       // claim a whole input byte for each of two different outputs.
       "zq-cbd@1",
+      // approximate — the base-case multiply. An output coefficient depends on
+      // both coefficients of its pair on both inputs plus that pair's γ, every
+      // dependency value-dependent inside the element.
+      "zq-base-case-mul@1",
       // approximate — the traced extended-Euclid loop (RSA Phase 4)
       "eea-step@1",
       "eea-extract@1",

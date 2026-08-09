@@ -410,6 +410,13 @@ export const PROVENANCE_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set<string>([
   // small number and the byte-level cone would claim the whole byte for each of
   // two different outputs.
   "zq-cbd@1",
+  // approximate — the base-case multiply (ML-KEM P2). The P1 element-wise
+  // rationale, one step coarser: an output coefficient depends on BOTH
+  // coefficients of its pair on both input ports plus that pair's γ, and every
+  // one of those dependencies is value-dependent inside the element (carry plus
+  // the reduction). A cone would name six elements and be right about none of
+  // them at byte granularity.
+  "zq-base-case-mul@1",
   // approximate — the traced extended-Euclid loop (RSA Phase 4): each rung's
   // quotient/remainder + the mod-φ-reduced coefficient mix every output byte
   // across the input tuple, exactly like the `mod-inverse@1` oracle they

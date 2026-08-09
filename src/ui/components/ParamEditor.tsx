@@ -331,7 +331,8 @@ export const ParamEditor = (props: Props) => {
                 getStep().type === "zq-decompress@1" ||
                 getStep().type === "zq-byte-encode@1" ||
                 getStep().type === "zq-byte-decode@1" ||
-                getStep().type === "zq-cbd@1"
+                getStep().type === "zq-cbd@1" ||
+                getStep().type === "zq-base-case-mul@1"
               }
             >
               {/*
@@ -1241,6 +1242,13 @@ const ZqVecBlock = (props: { step: StepLeaf }) => {
   const coeffBytes = (): number => params().coeffBytes ?? 2;
   const isPacking = (): boolean =>
     props.step.type === "zq-byte-encode@1" || props.step.type === "zq-byte-decode@1";
+  // Which rows to show is keyed on the step TYPE, never on whether the value
+  // happens to be present. `insertStepIntoSpec` gives a palette-dropped leaf
+  // `params: {}`, so a presence test would hide the only control that can set
+  // the value — the editor would be unusable at exactly the moment it matters.
+  const hasD = (): boolean =>
+    props.step.type === "zq-compress@1" || props.step.type === "zq-decompress@1" || isPacking();
+  const hasEta = (): boolean => props.step.type === "zq-cbd@1";
 
   const writeParams = (patch: Record<string, Json>) => {
     editStepParams(props.step.id, {
@@ -1261,7 +1269,7 @@ const ZqVecBlock = (props: { step: StepLeaf }) => {
           {params().littleEndian === true ? "little-endian" : "big-endian"} within each coefficient
         </dd>
       </div>
-      <Show when={params().d !== undefined}>
+      <Show when={hasD()}>
         <div class="param-scalar-row">
           {/* The two families that carry `d` mean different things by it, and
               the label says which: the compression pair DISCARDS down to d bits,
@@ -1286,7 +1294,7 @@ const ZqVecBlock = (props: { step: StepLeaf }) => {
           </dd>
         </div>
       </Show>
-      <Show when={params().eta !== undefined}>
+      <Show when={hasEta()}>
         <div class="param-scalar-row">
           {/* Editable, and the most consequential number in the family: it is
               the whole security-versus-decryption-failure trade-off in one
