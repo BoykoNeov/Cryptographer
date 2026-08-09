@@ -8370,8 +8370,20 @@ const ContainerRect = (props: {
         }
       }}
     >
+      {/* Hover tooltip. The LABEL is included because it is otherwise
+          unreachable when it doesn't fit its box: V1's commit message
+          claimed the full label "remains discoverable via the `<title>`
+          tooltip", but this element only ever carried the container's kind
+          and id, so a squeezed label had no un-squeezed reading anywhere in
+          the UI. Option B's click gives it one on the canvas; this gives it
+          one on hover, which is the cheaper gesture when you only want to
+          identify a container in passing.
+
+          APPENDED rather than prepended: several tests (and the curated-layout
+          helper) locate a container by `title.startsWith`/`includes` on the
+          `kind: id` prefix, so the prefix stays exactly where it was. */}
       <title>
-        {props.container.kind}: {props.container.id}
+        {props.container.kind}: {props.container.id} — {props.container.label}
         {props.container.blockSpan !== undefined && props.container.blockSpan > 1
           ? ` — ×${props.container.blockSpan}`
           : ""}

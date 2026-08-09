@@ -19,7 +19,14 @@
  *     `lengthAdjust` doesn't visually spread them across the available
  *     width. This is the deliberate trade-off of the conditional path.
  *   - The full label remains accessible via the parent `<g>`'s `<title>`,
- *     so the truncation is purely visual.
+ *     so the truncation is purely visual. NOTE: this was FALSE as shipped —
+ *     `<title>` carried only the container's kind and id until the label was
+ *     appended to it (follow-up to `c266628`). The claim originates in V1's
+ *     commit message and was never true; see the test itself for the detail.
+ *   - Truncation is only half the answer, and it is the half that fits in a
+ *     box: a ~3.5× compression is legible as a shape, not as words. Clicking
+ *     the header reads the label at full size — "Option B", pinned by
+ *     `tests/graph-view-label-expansion.test.tsx`.
  *   - Drag still works at the X coordinate where the overflowing label
  *     used to live — Slice 6's `pointer-events: none` is preserved.
  *
@@ -168,6 +175,14 @@ describe("GraphView — container label truncation (V1, SVG textLength)", () => 
   });
 
   it("keeps the full label discoverable via the parent <g>'s <title>", () => {
+    // This test's name was aspirational until 2026-08-09. `<title>` carried
+    // only `group: round.10` — the kind and id — so the claim in this file's
+    // header, and in V1's own commit message, that a truncated label "remains
+    // discoverable via the <title> tooltip" was simply false: the full text
+    // was unreachable anywhere in the UI. The label is now appended to the
+    // tooltip (and Option B, `tests/graph-view-label-expansion.test.tsx`,
+    // gives it a click-to-read on the canvas), so the name is finally honest
+    // and this asserts BOTH halves.
     seedAes128Trace();
     const { container } = render(() => <GraphView />);
 
@@ -176,10 +191,10 @@ describe("GraphView — container label truncation (V1, SVG textLength)", () => 
     expect(parentG).not.toBeNull();
     const title = parentG?.querySelector("title");
     expect(title).not.toBeNull();
-    // <title> carries `group: round.10` — the container kind + id, used as
-    // a browser-native tooltip on hover. Independent of the visible label,
-    // so it survives whatever truncation we apply.
+    // The kind + id prefix, which several other tests locate containers by.
     expect(title?.textContent).toContain("round.10");
+    // ...and the label itself, un-truncated, whatever the visible text does.
+    expect(title?.textContent).toContain("Round 10 (final, no MixColumns)");
   });
 
   it("preserves pointer-events:none on the label so drag still works through it", () => {
