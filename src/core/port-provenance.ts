@@ -385,6 +385,13 @@ export const PROVENANCE_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set<string>([
   "zq-vec-add@1",
   "zq-vec-sub@1",
   "zq-vec-mul-scalar@1",
+  // approximate — the compression pair (ML-KEM P2), same one-element-at-a-time
+  // story as the three above and then some: both are round-to-nearest over a
+  // ratio, so a single low-bit change in the input can carry all the way up
+  // through the element. `zq-decompress@1` is additionally NOT the inverse of
+  // its partner, which makes an exact-looking highlight doubly misleading.
+  "zq-compress@1",
+  "zq-decompress@1",
   // approximate — the traced extended-Euclid loop (RSA Phase 4): each rung's
   // quotient/remainder + the mod-φ-reduced coefficient mix every output byte
   // across the input tuple, exactly like the `mod-inverse@1` oracle they

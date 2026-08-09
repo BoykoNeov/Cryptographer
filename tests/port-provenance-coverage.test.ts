@@ -118,6 +118,12 @@ describe("port-provenance coverage contract", () => {
       "zq-vec-add@1",
       "zq-vec-sub@1",
       "zq-vec-mul-scalar@1",
+      // approximate — the compression pair (ML-KEM P2). Round-to-nearest over a
+      // ratio, so a single low-bit change can carry up through the element; and
+      // `zq-decompress@1` is not the inverse of its partner, which would make an
+      // exact-looking highlight doubly misleading.
+      "zq-compress@1",
+      "zq-decompress@1",
       // approximate — the traced extended-Euclid loop (RSA Phase 4)
       "eea-step@1",
       "eea-extract@1",

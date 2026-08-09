@@ -301,6 +301,8 @@ import {
 import { zeroFill, zeroFillDoc, zeroFillPortContract } from "../steps/zero-fill";
 import { zeroPad, zeroPadDoc, zeroPadMeta, zeroPadPortContract } from "../steps/zero-pad";
 import { zeroUnpad, zeroUnpadDoc, zeroUnpadMeta, zeroUnpadPortContract } from "../steps/zero-unpad";
+import { zqCompress, zqCompressDoc, zqCompressPortContract } from "../steps/zq-compress";
+import { zqDecompress, zqDecompressDoc, zqDecompressPortContract } from "../steps/zq-decompress";
 import { zqVecAdd, zqVecAddDoc, zqVecAddPortContract } from "../steps/zq-vec-add";
 import {
   zqVecMulScalar,
@@ -1096,6 +1098,22 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: zqVecMulScalar,
     shape: zqVecMulScalarPortContract,
     doc: zqVecMulScalarDoc,
+  });
+  // ML-KEM P2 — the rest of the lattice layer. `zq-compress@1` is the only
+  // LOSSY step in the whole algorithm, and its partner is not its inverse:
+  // decompression picks a bucket centre. That pair is where ML-KEM's ciphertext
+  // gets small and where its correctness argument gets its error bound.
+  r.register("zq-compress@1", {
+    kind: "ported",
+    executor: zqCompress,
+    shape: zqCompressPortContract,
+    doc: zqCompressDoc,
+  });
+  r.register("zq-decompress@1", {
+    kind: "ported",
+    executor: zqDecompress,
+    shape: zqDecompressPortContract,
+    doc: zqDecompressDoc,
   });
   r.register("shift-bits-right@1", {
     kind: "ported",

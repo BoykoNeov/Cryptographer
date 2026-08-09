@@ -75,6 +75,26 @@ export const readZqVecParams = (params: Json, step: string): ZqVecParams => {
   return { coeffBytes, littleEndian };
 };
 
+/**
+ * Read a bit-width parameter (`d` for the compression and packing steps, `eta`
+ * for centred-binomial sampling).
+ *
+ * Kept here rather than in each step because all four P2 steps want the same
+ * error message and the same "must fit an element" reasoning: a `d` wider than
+ * the coefficient it is written back into would silently lose its top bits, the
+ * identical failure mode `readZqModulus` guards against for `q`.
+ */
+export const readZqBitWidth = (params: Json, step: string, key: string, max: number): number => {
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error(`${step}: params must be an object`);
+  }
+  const value = (params as Record<string, Json>)[key];
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > max) {
+    throw new Error(`${step}: params.${key} must be an integer in 1..${max}, got ${String(value)}`);
+  }
+  return value;
+};
+
 // ─── Element codec ────────────────────────────────────────────────────────
 
 /** Read element `i` of a packed vector as an integer. */

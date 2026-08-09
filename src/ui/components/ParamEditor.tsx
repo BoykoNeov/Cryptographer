@@ -326,13 +326,17 @@ export const ParamEditor = (props: Props) => {
               when={
                 getStep().type === "zq-vec-add@1" ||
                 getStep().type === "zq-vec-sub@1" ||
-                getStep().type === "zq-vec-mul-scalar@1"
+                getStep().type === "zq-vec-mul-scalar@1" ||
+                getStep().type === "zq-compress@1" ||
+                getStep().type === "zq-decompress@1"
               }
             >
               {/*
-                The Z_q vector family (ML-KEM P1). One block for all three: they
-                share a param shape exactly, and the thing a learner needs told
-                is the same in each — the modulus is NOT here, it is on a wire.
+                The Z_q vector family (ML-KEM P1 + P2). One block for all of
+                them: they share a param shape, and the thing a learner needs
+                told is the same in each — the modulus is NOT here, it is on a
+                wire. The compression pair adds `d`, which the block renders
+                only when present.
               */}
               <ZqVecBlock step={getStep()} />
             </Match>
@@ -1207,20 +1211,38 @@ const TwofishHExpandBlock = (props: { step: StepLeaf }) => {
   );
 };
 
-// The Z_q vector family (ML-KEM P1): `zq-vec-add@1`, `zq-vec-sub@1`,
-// `zq-vec-mul-scalar@1`. Two read-only structural scalars plus one line whose
-// only job is to answer the question every learner asks at this leaf: "where is
-// q?". It is on a wire, not in here — the same message `add-mod@1`'s blurb
-// carries, and the whole reason both steps take their modulus on a port.
+// The Z_q vector family (ML-KEM P1 + P2): `zq-vec-add@1`, `zq-vec-sub@1`,
+// `zq-vec-mul-scalar@1`, `zq-compress@1`, `zq-decompress@1`. Two read-only
+// structural scalars plus one line whose only job is to answer the question
+// every learner asks at this leaf: "where is q?". It is on a wire, not in here —
+// the same message `add-mod@1`'s blurb carries, and the whole reason both steps
+// take their modulus on a port.
 //
-// Read-only is deliberate for BOTH scalars. `coeffBytes` sets every downstream
-// port width, so editing one leaf's copy would desync it from its siblings.
-// `littleEndian` is genuinely interesting to flip — but flipping it on one leaf
-// while its neighbours keep the other convention is not a different transform,
-// it is not a transform at all. Making it a real experiment needs a scoped
-// apply-all (the Speck α/β precedent, `project_speck_arx_editable`); deferred.
+// Read-only is deliberate for BOTH structural scalars. `coeffBytes` sets every
+// downstream port width, so editing one leaf's copy would desync it from its
+// siblings. `littleEndian` is genuinely interesting to flip — but flipping it on
+// one leaf while its neighbours keep the other convention is not a different
+// transform, it is not a transform at all. Making it a real experiment needs a
+// scoped apply-all (the Speck α/β precedent, `project_speck_arx_editable`);
+// deferred.
+//
+// `d` (the compression pair only) is the exception, and EDITABLE. Turning it
+// down and watching information disappear is the entire teaching point of the
+// step it belongs to, its legal range is validated loudly by the executor, and
+// unlike `littleEndian` a single leaf's `d` is meaningful on its own. The one
+// hazard is that a compress/decompress PAIR must agree — so the row says so,
+// since a mismatch is silent everywhere else.
 const ZqVecBlock = (props: { step: StepLeaf }) => {
-  const params = (): { coeffBytes?: number; littleEndian?: boolean } => props.step.params as never;
+  const params = (): { coeffBytes?: number; littleEndian?: boolean; d?: number } =>
+    props.step.params as never;
+  const coeffBytes = (): number => params().coeffBytes ?? 2;
+
+  const writeParams = (patch: Record<string, Json>) => {
+    editStepParams(props.step.id, {
+      ...(props.step.params as Record<string, Json>),
+      ...patch,
+    });
+  };
 
   return (
     <dl class="param-scalars">
@@ -1234,6 +1256,23 @@ const ZqVecBlock = (props: { step: StepLeaf }) => {
           {params().littleEndian === true ? "little-endian" : "big-endian"} within each coefficient
         </dd>
       </div>
+      <Show when={params().d !== undefined}>
+        <div class="param-scalar-row">
+          <dt>Bits kept (d)</dt>
+          <dd>
+            <IntInput
+              value={params().d ?? 0}
+              min={1}
+              max={8 * coeffBytes()}
+              placeholder="10"
+              onCommit={(next) => writeParams({ d: next })}
+            />{" "}
+            <span class="param-scalar-hint">
+              a compress and its matching decompress must use the same d — nothing checks it
+            </span>
+          </dd>
+        </div>
+      </Show>
       <div class="param-scalar-row">
         <dt>Modulus q</dt>
         <dd>

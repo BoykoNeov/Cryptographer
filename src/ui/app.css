@@ -948,6 +948,14 @@ button:disabled {
   margin: 0;
 }
 
+/* Trailing caveat beside an editable scalar — used where a value is legal on
+   its own but must agree with a value somewhere else that nothing checks (the
+   Z_q compression pair's `d`). Muted so it reads as a footnote, not a label. */
+.param-scalar-hint {
+  color: var(--muted);
+  font-size: 10px;
+}
+
 /* Grouped section inside a param editor (a label + the editor for one
    chunk of the params). Used by the key-expansion block. */
 .param-section {
