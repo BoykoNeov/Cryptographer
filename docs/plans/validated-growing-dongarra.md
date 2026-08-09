@@ -1,10 +1,22 @@
 # MT19937 — the PRNG family's P4, and the generator that is neither weak nor safe
 
-**Status:** planned 2026-08-09, awaiting implementation. This is P4 of
-`docs/plans/iterative-dancing-ocean.md`, which reserved the slot as "deferred,
-not authorized" pending a depth decision "against a working app, not on paper".
-That decision is now taken (below). On completion, flip that plan's P4 line to
-point here and mark the family plan CLOSED.
+**Status: SHIPPED 2026-08-09 — CLOSED.** P4a (primitives + oracle), P4b (the
+spec + surface) and P4c (narration, browser smoke, docs) all landed; the family
+plan `docs/plans/iterative-dancing-ocean.md` is closed with it.
+
+**What the plan got wrong, recorded because both were caught by doing rather
+than reasoning.** (1) The output ceiling: the plan expected to have to measure
+before ruling out a per-variant arm. Measured, 42 → 1024 settles in **~325 ms**
+— roughly six times inside the CSPRNG's budget — so `maxPrngOutputFor` gained
+no arm. The reason is that the step strip renders one entry per SPEC NODE and
+tempering is twelve leaves whatever the block count, so MT19937's UI cost is
+nearly flat in output length. (2) The plan assumed the family-surface guard
+would catch a missing variant. Perturbing it showed the suite passes
+**vacuously** — every assertion iterates `PRNG_OPTIONS`, so deleting MT19937
+took the file from 28 tests to 26, all green. Now pinned against
+`Record<Prng, string>`'s compiler-enforced keys, and re-perturbed to watch it
+fail. A third near-miss is recorded in `docs/gotchas.md`: a mask perturbation
+that was a no-op *because* `y << 7` zeroes the bits it touched.
 
 ## Context
 

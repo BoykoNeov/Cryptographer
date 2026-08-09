@@ -152,6 +152,45 @@ sites including the one a stepper-only clamp misses — **switching variants**. 
 `readLcgOutputLength` was never LCG-specific; it and the request-leaf id moved to
 `ciphers/prng-request.ts`.
 
+**MT19937 (2026-08-09) is P4, the family's fifth generator, and the one that
+separates "passes statistical tests" from "unpredictable"** (`docs/plans/
+validated-growing-dongarra.md`; the family plan is now CLOSED). The LCGs fail
+both properties, the CSPRNG has both — a learner meeting only those concludes
+they are one property, and MT19937 is the counterexample. Five things worth
+carrying forward. (1) **Its two monoliths are opaque STRUCTURALLY, not by volume
+judgement** — the distinction matters because the precedents
+(`blowfish.key-schedule@1`, `twofish.h-expand@1`) are the other kind.
+`init_genrand` adds the **loop index** (`+ i`) and no leaf in this app produces
+one; the twist reads **three** words (`mt[i]`, `mt[i+1]`, `mt[i+397]`) where an
+iterate body sees only its own block — and it does not vectorize either, since
+the update is in place and from `i = 227` the third read lands on an
+already-twisted word. Say which case you are in, in the step's own description.
+(2) **Three iterate firsts, all load-bearing**: the temper loop carries NOTHING
+between iterations (no `chainInput`/`chainFeedback` — the app's only carry-free
+port-mode iterate, because tempering is a pure map over the state array); the
+2496-byte state rides a **port**, not aux (P3's aux lesson applies only when the
+body is inside the loop — nothing crosses a scope here); and the trim is a
+**SIBLING** of the iterate, which is forced, not stylistic, because the body's
+only per-block reference is `in`, always a full word, so no short reference
+exists. All three were spiked with pre-existing primitives BEFORE any MT code
+was written. (3) **`shift-bits-left@1` exists on purpose** where
+`rotate-bits-left@1` + `and@1` would compute the same answer for MT's two
+published masks (each mask's low bits are exactly what a rotation wraps in) —
+a coincidence of those constants that dies the moment a learner edits one.
+Related measured gotcha: perturbing the mask's low bits is a **no-op**, because
+`y << 7` zeroes them; when a perturbation changes nothing, find out why before
+weakening the test. (4) **The family-surface suite passed VACUOUSLY** when
+MT19937 was deleted from `ALL_PRNGS` — 28 tests became 26, all green, because
+every assertion iterates `PRNG_OPTIONS`. Pinned now against
+`Record<Prng, string>`'s compiler-enforced keys. Any options-list-driven suite
+has this hole. (5) **No new ceiling**: 1024 bytes measures ~325 ms (the step
+strip is per SPEC NODE, and tempering is twelve leaves whatever the block
+count), so `maxPrngOutputFor` gains no arm; above 2496 bytes (one twist) the
+builder THROWS. Seeding is `init_genrand` ONLY — `init_by_array` produces a
+different stream from the same number and stays a test-only oracle — and the
+default seed is **5489**, not the family's 1, because the rule was always "the
+seed that has a published vector".
+
 **The ANSI C LCG (`rand_r`, 2026-07-27) is the second PRNG phase, and it is one
 leaf away from MINSTD.** `x ← (1103515245·x + 12345) mod 2³¹` — the sample
 `rand()` from ISO/IEC 9899 §7.22.2.2, **never call it "glibc `rand()`"** (glibc's
@@ -388,7 +427,7 @@ If a future need argues for one of these, revisit then.
 - `docs/help/graph-view.md` — user-facing reference for the graph view (edges, drag/drop, palette, warning glyphs, toolbar). Bundled into the app via Vite `?raw` and rendered inside the in-app help modal (`?` button in the graph toolbar). Keep this file the single source of truth — both GitHub readers and the in-app modal display the same prose.
 
 **Plans:**
-- PRNG family — the fourth `Category` (P1 MINSTD + P2 ANSI-C LCG/`add-mod@1` + P3 ChaCha20-CSPRNG all shipped 2026-07-27; P4 MT19937 deferred by user decision, so the plan is otherwise CLOSED): `docs/plans/iterative-dancing-ocean.md`. Memory: `project_prng_family_plan.md`.
+- PRNG family — the fourth `Category` (P1 MINSTD + P2 ANSI-C LCG/`add-mod@1` + P3 ChaCha20-CSPRNG shipped 2026-07-27; **P4 MT19937 shipped 2026-08-09 — plan CLOSED**): `docs/plans/iterative-dancing-ocean.md`, with P4 planned and executed in `docs/plans/validated-growing-dongarra.md`. Memory: `project_prng_family_plan.md`.
 - ChaCha20 — first stream cipher, first coreless cipher (ALL phases incl. P5 diagrams shipped 2026-07-20 — plan CLOSED): `docs/plans/fluffy-orbiting-shannon.md`. Memory: `project_chacha20_plan.md`.
 - Original architectural plan: `~/.claude/plans/i-want-to-build-tender-spark.md`
 - Approved UX/feature plan (phases 1–4: frame preservation, run history + diff, byte format toggle, deferred 2D viz): `docs/plans/suggestions-1-4.md`

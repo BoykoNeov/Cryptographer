@@ -2,8 +2,13 @@
 
 **Status:** **P1 SHIPPED 2026-07-27** (family surface + MINSTD ×2).
 **P2 SHIPPED 2026-07-27** (ANSI C LCG + `add-mod@1`).
-**P3 SHIPPED 2026-07-27** (ChaCha20 CSPRNG). P4 (MT19937) deferred to its own
-decision — **with P3 done, the plan is otherwise CLOSED.**
+**P3 SHIPPED 2026-07-27** (ChaCha20 CSPRNG).
+**P4 SHIPPED 2026-08-09** (MT19937) — authorized after P3, planned and executed
+in `docs/plans/validated-growing-dongarra.md`, which carries the depth decision
+this plan deferred ("decide against a working app, not on paper"). It turned out
+not to be a judgement call: two of MT19937's three stages are *structurally*
+inexpressible as port-mode iterates, so both are monoliths and the tempering —
+where the teaching lives — is fully decomposed. **The plan is now CLOSED.**
 
 ### P3 shipped — what changed against the plan
 
@@ -331,6 +336,15 @@ experiment that is the plan's pedagogical point. Ships with its KAT.
 **P3 — ChaCha20 CSPRNG.** Export the double-round builder, compose the
 keystream-only spec, verify the ARX cell + quarter-round diagram light up in the
 browser. Ships with the `node:crypto` KAT.
+
+**P4 — MT19937. SHIPPED 2026-08-09; see `docs/plans/validated-growing-dongarra.md`.**
+The note below was written before the work and got the shape right but the
+reason wrong: the blocker is not frame volume, it is expressibility.
+`init_genrand` needs the LOOP INDEX (`+ i`) and no leaf produces one; the twist
+reads THREE words where a body sees only its own block. Both are monoliths for
+that reason, and the tempering is decomposed into twelve editable leaves per
+word. The seeding trap flagged below was real and is handled: `init_genrand`
+only, with `init_by_array` kept as a test-only oracle. Original note:
 
 **P4 — MT19937 (deferred, not authorized).** 624-word state, 624-step twist per
 refill — three to four orders of magnitude more frames than the others, which
