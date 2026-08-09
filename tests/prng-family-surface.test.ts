@@ -26,7 +26,7 @@
 
 import { buildChaCha20CsprngSpec } from "@/ciphers/chacha20-csprng";
 import { LCG_ITERATE_ID, LCG_WORD_BYTES, buildLcgSpec } from "@/ciphers/lcg";
-import { buildMt19937Spec } from "@/ciphers/mt19937";
+import { MT_MAX_OUTPUT_BYTES, buildMt19937Spec } from "@/ciphers/mt19937";
 import {
   CURRENT_SCHEMA_VERSION,
   type CipherDocument,
@@ -266,6 +266,28 @@ describe("PRNG family surface", () => {
       expect(usePrngOutputLength()()).toBe(1);
       setPrngOutputLength(MAX_PRNG_OUTPUT + 5000);
       expect(usePrngOutputLength()()).toBe(MAX_PRNG_OUTPUT);
+    });
+
+    it("keeps MAX_PRNG_OUTPUT inside what ONE MT19937 twist can supply", () => {
+      // MT19937 is the only variant whose `resolvePrngDefault` arm does not
+      // clamp: it does not need to, because 1024 < 2496 and the builder's
+      // refusal above 2496 is therefore unreachable from the UI. That is an
+      // INEQUALITY between two constants in different files, and
+      // `MAX_PRNG_OUTPUT`'s own docblock invites raising it ("Raise this only
+      // with a fresh measurement") — so the next person to do that would get an
+      // uncaught throw in the spec-rebuild path rather than a clamped value.
+      //
+      // Pin the relationship here so raising the ceiling fails loudly and names
+      // the reason. If MT19937 ever needs to exceed one twist, it needs a
+      // refill in the spec, not a bigger number here.
+      expect(MAX_PRNG_OUTPUT).toBeLessThanOrEqual(MT_MAX_OUTPUT_BYTES);
+      // And the builder really does refuse past its own limit.
+      expect(() => buildMt19937Spec(MT_MAX_OUTPUT_BYTES + 1)).toThrow(/second twist/);
+      // The UI ceiling is reachable and legal.
+      setPrng("mt19937");
+      setPrngOutputLength(MAX_PRNG_OUTPUT);
+      expect(usePrngOutputLength()()).toBe(MAX_PRNG_OUTPUT);
+      expect(() => buildMt19937Spec(usePrngOutputLength()())).not.toThrow();
     });
 
     it("clamps the CSPRNG to its own, much lower ceiling", () => {

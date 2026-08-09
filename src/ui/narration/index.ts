@@ -33,6 +33,7 @@ import {
   desSBoxesNarration,
   desXorWithKNarration,
 } from "./des";
+import { mt19937SeedNarration, mt19937TwistNarration } from "./mt19937";
 import {
   iso78164PadNarration,
   iso78164UnpadNarration,
@@ -126,6 +127,18 @@ export const initNarrationRegistry = (): void => {
   // allowlist (parity with the four `*.publish-round-keys@1` tails).
   registerNarration("twofish.sbox-lookup@1", twofishSboxLookupNarration);
   registerNarration("twofish.h-expand@1", twofishHExpandNarration);
+  // MT19937's two monoliths (2026-08-09). Same reasoning as `h-expand` above,
+  // for a stronger version of the same situation: these two are opaque because
+  // they are STRUCTURALLY inexpressible as visible loops (one needs the loop
+  // index, the other reads three words of the state at once), not because a
+  // decomposition would merely be long. A static description alone would ask
+  // the learner to take 624 steps on faith, so each gets disclosure rows
+  // carrying the REAL words this run produced — read off the frame's own
+  // ports, never recomputed. The twelve tempering leaves below them need no
+  // narrator: they are ordinary shifts, masks and XORs whose port I/O table is
+  // already legible, and they carry per-leaf `narrationOverride` prose.
+  registerNarration("mt19937.seed@1", mt19937SeedNarration);
+  registerNarration("mt19937.twist@1", mt19937TwistNarration);
   // CTR's ragged tail (2026-07-20) — `truncate-to-reference@1` is a bare-name
   // port-native primitive, so it escapes the contract test's shapeContract
   // scope and could have shipped silently un-narrated. It gets a real narrator
