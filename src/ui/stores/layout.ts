@@ -111,6 +111,11 @@ const isLayoutSpec = (v: unknown): v is LayoutSpec => {
   // name). Checked loosely like `replicationModes` — the file-I/O path's Zod
   // schema validates entries, and the renderer falls back to `solid` for any
   // unknown value anyway.
+  // expandedLabels ("Option B", V2 of label truncation): same array-of-string
+  // shape as `collapsedGroups` / `expandedGroups`. Optional — missing is fine.
+  if (o.expandedLabels !== undefined && !Array.isArray(o.expandedLabels)) {
+    return false;
+  }
   if (o.strokeStyles !== undefined) {
     if (
       o.strokeStyles === null ||
@@ -195,6 +200,17 @@ const cloneExpandedGroups = (layout: LayoutSpec): string[] => {
  * Absent field treated as empty. Mirrors the clone helpers above. Empty map
  * is never persisted (see `buildLayoutSpec`'s omission discipline).
  */
+/**
+ * Helper: snapshot a layout's `expandedLabels` (container ids whose squeezed
+ * header label the user clicked to render at natural width — "Option B") as
+ * a plain mutable array. Absent field treated as empty. Mirrors
+ * `cloneExpandedGroups`; empty array is never persisted (see
+ * `buildLayoutSpec`'s omission discipline).
+ */
+const cloneExpandedLabels = (layout: LayoutSpec): string[] => {
+  return layout.expandedLabels ? [...layout.expandedLabels] : [];
+};
+
 const cloneStrokeStyles = (layout: LayoutSpec): { [sourceId: string]: string } => {
   const out: { [sourceId: string]: string } = {};
   if (layout.strokeStyles) {
@@ -216,12 +232,15 @@ const cloneStrokeStyles = (layout: LayoutSpec): { [sourceId: string]: string } =
  * **Field order is load-bearing.** `JSON.stringify` serializes in insertion
  * order and the byte-stability gate pins that order, so the optionals must
  * be spread in the fixed sequence `replicationModes → relativePositions →
- * expandedGroups → strokeStyles`. Each is conditionally spread only when
- * non-empty. (This replaced an unrolled 2^N branch matrix once a fourth
- * optional field would have pushed it to 16 branches — conditional-spread
- * is called on drag/edit, not a hot loop, so the earlier monomorphism
- * concern doesn't apply.) `strokeStyles` is a REQUIRED positional param
- * (no default) so `tsc` flags any call site that forgets it.
+ * expandedGroups → strokeStyles → expandedLabels`. A NEW optional appends to
+ * the end of that sequence; it never displaces an existing one, or every
+ * previously shared URL for a customized layout would repoint. Each is
+ * conditionally spread only when non-empty. (This replaced an unrolled 2^N
+ * branch matrix once a fourth optional field would have pushed it to 16
+ * branches — conditional-spread is called on drag/edit, not a hot loop, so
+ * the earlier monomorphism concern doesn't apply.) Every optional is a
+ * REQUIRED positional param (no default) so `tsc` flags any call site that
+ * forgets one.
  */
 const buildLayoutSpec = (
   positions: { readonly [stepId: string]: { readonly x: number; readonly y: number } },
@@ -231,6 +250,7 @@ const buildLayoutSpec = (
   relativePositions: { [syntheticId: string]: RelativePosition },
   expandedGroups: readonly string[],
   strokeStyles: { [sourceId: string]: string },
+  expandedLabels: readonly string[],
 ): LayoutSpec => {
   return {
     positions,
@@ -240,6 +260,7 @@ const buildLayoutSpec = (
     ...(Object.keys(relativePositions).length > 0 ? { relativePositions } : {}),
     ...(expandedGroups.length > 0 ? { expandedGroups } : {}),
     ...(Object.keys(strokeStyles).length > 0 ? { strokeStyles } : {}),
+    ...(expandedLabels.length > 0 ? { expandedLabels } : {}),
   };
 };
 
@@ -277,6 +298,7 @@ export const setNodePosition = (specId: string, nodeId: string, x: number, y: nu
     cloneRelativePositions(current),
     cloneExpandedGroups(current),
     cloneStrokeStyles(current),
+    cloneExpandedLabels(current),
   );
   const map = { ...layoutMap(), [specId]: next };
   setLayoutMapSignal(map);
@@ -304,6 +326,7 @@ export const clearNodePosition = (specId: string, nodeId: string): void => {
     cloneRelativePositions(current),
     cloneExpandedGroups(current),
     cloneStrokeStyles(current),
+    cloneExpandedLabels(current),
   );
   if (!hasUserLayout(next)) {
     const map = { ...layoutMap() };
@@ -349,6 +372,7 @@ export const setRelativePosition = (
     relatives,
     cloneExpandedGroups(current),
     cloneStrokeStyles(current),
+    cloneExpandedLabels(current),
   );
   const map = { ...layoutMap(), [specId]: next };
   setLayoutMapSignal(map);
@@ -376,6 +400,7 @@ export const clearRelativePosition = (specId: string, nodeId: string): void => {
     relatives,
     cloneExpandedGroups(current),
     cloneStrokeStyles(current),
+    cloneExpandedLabels(current),
   );
   if (!hasUserLayout(next)) {
     const map = { ...layoutMap() };
@@ -471,6 +496,7 @@ export const toggleCollapse = (specId: string, containerId: string, inDefaults: 
     cloneRelativePositions(current),
     [...expandedSet],
     cloneStrokeStyles(current),
+    cloneExpandedLabels(current),
   );
   // A toggle on a default-collapsed-but-not-yet-touched container CAN
   // produce a layout with only `expandedGroups` populated, which still
@@ -568,6 +594,57 @@ const writeCollapseExpand = (
     cloneRelativePositions(current),
     [...expandedSet],
     cloneStrokeStyles(current),
+    cloneExpandedLabels(current),
+  );
+  if (!hasUserLayout(next)) {
+    const map = { ...layoutMap() };
+    delete (map as { [specId: string]: LayoutSpec })[specId];
+    setLayoutMapSignal(map);
+    persist(map);
+    return;
+  }
+  const map = { ...layoutMap(), [specId]: next };
+  setLayoutMapSignal(map);
+  persist(map);
+};
+
+/**
+ * Toggle one container's header-label expansion ("Option B", the V2
+ * follow-up to the 2026-05-13 label-truncation work).
+ *
+ * A long container label is rendered compressed to fit its box (SVG
+ * `textLength` + `lengthAdjust="spacingAndGlyphs"`). That keeps it inside
+ * the box but at a compression ratio that can reach ~3.5× — Salsa20's
+ * "Double round 1 of 10 (column round then row round)" is ~350px of text in
+ * a 102px slot, unreadable at any zoom. Presence in this set means "draw
+ * that one at natural width instead", which the overlay layer in GraphView
+ * does on top of every other node.
+ *
+ * Unlike `toggleCollapse` there is no spec-default to arbitrate against —
+ * a spec author never declares a label expanded — so this is a plain
+ * presence/absence set, not the defaults ∪ overrides − overrides dance.
+ *
+ * Re-collapsing the last expanded label with no other customization leaves
+ * the layout empty; the entry is dropped so `cryptographer.layouts` (and
+ * any spec-only save) stays byte-stable.
+ */
+export const toggleLabelExpansion = (specId: string, containerId: string): void => {
+  const current = layoutMap()[specId] ?? emptyLayout();
+  const labels = new Set(cloneExpandedLabels(current));
+  if (labels.has(containerId)) {
+    labels.delete(containerId);
+  } else {
+    labels.add(containerId);
+  }
+  const next = buildLayoutSpec(
+    current.positions,
+    current.collapsedGroups,
+    current.flowDirection,
+    cloneReplicationModes(current),
+    cloneRelativePositions(current),
+    cloneExpandedGroups(current),
+    cloneStrokeStyles(current),
+    [...labels],
   );
   if (!hasUserLayout(next)) {
     const map = { ...layoutMap() };
@@ -610,6 +687,7 @@ export const setReplicationMode = (
     cloneRelativePositions(current),
     cloneExpandedGroups(current),
     cloneStrokeStyles(current),
+    cloneExpandedLabels(current),
   );
   // If the resulting layout is entirely empty (no pins, no collapsed, no
   // modes, no relative pins), drop the entry from the map — same byte-
@@ -658,6 +736,7 @@ export const setSourceStroke = (
     cloneRelativePositions(current),
     cloneExpandedGroups(current),
     strokes,
+    cloneExpandedLabels(current),
   );
   // If the resulting layout is entirely empty, drop the spec from the map —
   // same byte-stability discipline as `setReplicationMode`.
@@ -771,6 +850,7 @@ export const rescaleAllPositions = (factor: number): void => {
       newRelatives,
       cloneExpandedGroups(layout),
       cloneStrokeStyles(layout),
+      cloneExpandedLabels(layout),
     );
     changed = true;
   }
@@ -818,6 +898,13 @@ export const hasUserLayout = (layout: LayoutSpec | null): boolean => {
   // only populated field is `strokeStyles`, and that must persist + ride
   // through Save / Share. Same reasoning as `expandedGroups` above.
   if (layout.strokeStyles && Object.keys(layout.strokeStyles).length > 0) return true;
+  // Label expansion ("Option B", V2 of label truncation): un-squeezing a
+  // container's header label is meaningful customization on its own — a
+  // Salsa20 session where the user did nothing but click "Double round 3"
+  // open to read it produces a layout whose only populated field is
+  // `expandedLabels: ["double-round.3"]`, and that must persist + ride
+  // through Save / Share. Same reasoning as `expandedGroups` above.
+  if (layout.expandedLabels && layout.expandedLabels.length > 0) return true;
   return false;
 };
 
@@ -893,8 +980,8 @@ export const renameLayoutIds = (
   // `strokeStyles` keys on the CANONICAL source id — the same id namespace
   // as `replicationModes` (replica nodes collapse to their origin) — so a
   // rename remaps it in parallel. Empty result is omitted per byte-stability
-  // discipline. MUST be spread LAST in the return object (after
-  // expandedGroups) to match `buildLayoutSpec`'s insertion order; a
+  // discipline. Its slot in the return object (after expandedGroups, before
+  // expandedLabels) must match `buildLayoutSpec`'s insertion order; a
   // divergence would silently change a doc's bytes on duplicate-round rename.
   let newStrokeStyles: { [sourceId: string]: string } | undefined;
   if (layout.strokeStyles && Object.keys(layout.strokeStyles).length > 0) {
@@ -906,6 +993,18 @@ export const renameLayoutIds = (
     if (Object.keys(remapped).length > 0) newStrokeStyles = remapped;
   }
 
+  // `expandedLabels` ("Option B") keys real CONTAINER ids — exactly the ids
+  // the duplicate-round mutator renumbers — so it must be remapped in
+  // parallel with `collapsedGroups` / `expandedGroups`. Skipping it is the
+  // one omission here that `tsc` cannot catch: the field would simply pass
+  // through pointing at `round.3` after that round became `round.4`, and the
+  // user's expanded label would silently snap shut. MUST be spread LAST to
+  // match `buildLayoutSpec`'s insertion order.
+  let newExpandedLabels: readonly string[] | undefined;
+  if (layout.expandedLabels && layout.expandedLabels.length > 0) {
+    newExpandedLabels = layout.expandedLabels.map((id) => renames.get(id) ?? id);
+  }
+
   return {
     positions: newPositions,
     collapsedGroups: newCollapsedGroups,
@@ -914,6 +1013,7 @@ export const renameLayoutIds = (
     ...(newRelativePositions ? { relativePositions: newRelativePositions } : {}),
     ...(newExpandedGroups ? { expandedGroups: newExpandedGroups } : {}),
     ...(newStrokeStyles ? { strokeStyles: newStrokeStyles } : {}),
+    ...(newExpandedLabels ? { expandedLabels: newExpandedLabels } : {}),
   };
 };
 

@@ -124,6 +124,7 @@ import {
   setReplicationMode,
   setSourceStroke,
   toggleCollapse,
+  toggleLabelExpansion,
   useLayoutMap,
 } from "../stores/layout";
 import { isOffsetsEnabledForLayout } from "../stores/offsets-hatch";
@@ -243,6 +244,14 @@ const EMPTY_COLOR_MAP: ReadonlyMap<string, string> = new Map();
  * `view-source-strokes.ts`), so most sessions read this identity.
  */
 const EMPTY_STROKE_MAP: ReadonlyMap<string, string> = new Map();
+
+/**
+ * Shared identity for "no container has its header label expanded"
+ * ("Option B"). Same GC-churn rationale as `EMPTY_STROKE_MAP`, and the same
+ * common case: the overwhelming majority of sessions never click a label
+ * open, so this identity is what `expandedLabelSet()` returns.
+ */
+const EMPTY_ID_SET: ReadonlySet<string> = new Set();
 
 // ─── Layout constants ──────────────────────────────────────────────────────
 // All in CSS pixels. The size-and-gap subset scales with the active view
@@ -560,6 +569,23 @@ const labelTextLength = (
   const naturalEstimate = container.label.length * LABEL_PX_PER_CHAR;
   return naturalEstimate > available ? available : undefined;
 };
+
+/**
+ * The container header label's baseline origin. Extracted so the in-box
+ * label and the expanded-label overlay ("Option B") read from ONE source:
+ * the x depends on `isRoundDuplicatable` (a duplicatable round reserves room
+ * for a second header chip), so an overlay that re-derived the expression
+ * would sit ~18px left of the squeezed label it replaces and the expansion
+ * would read as a jump rather than a reveal.
+ */
+const containerLabelOrigin = (
+  container: ContainerNode,
+  box: { x: number; y: number },
+  consts: LayoutConstants,
+): { x: number; y: number } => ({
+  x: box.x + consts.CONTAINER_PAD + (isRoundDuplicatable(container.id) ? WARNING_DOT_SIZE + 6 : 0),
+  y: box.y + HEADER_H / 2 + 1,
+});
 
 // ─── Layout ────────────────────────────────────────────────────────────────
 
@@ -2814,6 +2840,20 @@ export const GraphView = () => {
   );
 
   /**
+   * Container ids whose header label the user has clicked open ("Option B").
+   *
+   * Read off the USER layout rather than `effectiveLayout()`, following the
+   * `strokeStyles` precedent: a curated default layout never pre-expands a
+   * label (the curated layouts predate the field, and "which labels are open"
+   * is a reading gesture, not an arrangement), and `mergeLayoutSpecs` drops
+   * the field for the same reason it drops strokes.
+   */
+  const expandedLabelSet = createMemo<ReadonlySet<string>>(() => {
+    const ids = userLayout()?.expandedLabels;
+    return ids === undefined ? EMPTY_ID_SET : new Set(ids);
+  });
+
+  /**
    * Every container id in the spec, document order (nested included). Drives
    * the toolbar's "collapse all" / "expand all" buttons — both their bulk
    * store calls and their disabled state. Re-derives only on spec change.
@@ -4676,6 +4716,43 @@ export const GraphView = () => {
    *     `before:firstChild` instead of `after:source`. Minor; not
    *     worth refactoring for.
    */
+  /**
+   * Presentation model for the expanded-label overlay ("Option B"): one entry
+   * per container whose label the user clicked open AND that is currently on
+   * the canvas with a laid-out box.
+   *
+   * The width is the same `LABEL_PX_PER_CHAR` estimate `labelTextLength` uses
+   * to DECIDE the squeeze — deliberately the same heuristic rather than a real
+   * `getComputedTextLength`, because measuring would need a rendered node (and
+   * would not exist at all in jsdom). It only sizes the backing plate, so a
+   * few px of over-estimate is invisible; under-estimating would clip the
+   * plate under the last glyph, which is why 7 stays a slight over-estimate.
+   *
+   * Guarded by an `expandedLabelSet()` size check so the common case (nothing
+   * expanded) allocates nothing per re-layout.
+   */
+  const expandedLabelOverlays = createMemo<
+    readonly { id: string; x: number; y: number; w: number; label: string }[]
+  >(() => {
+    const expanded = expandedLabelSet();
+    if (expanded.size === 0) return [];
+    const out: { id: string; x: number; y: number; w: number; label: string }[] = [];
+    for (const container of graph().containers) {
+      if (!expanded.has(container.id)) continue;
+      const box = layout().boxes.get(container.id);
+      if (!box) continue;
+      const origin = containerLabelOrigin(container, box, consts());
+      out.push({
+        id: container.id,
+        x: origin.x,
+        y: origin.y,
+        w: container.label.length * LABEL_PX_PER_CHAR,
+        label: container.label,
+      });
+    }
+    return out;
+  });
+
   const dropGutters = createMemo<readonly DropGutterRect[]>(() => {
     const out: DropGutterRect[] = [];
     const cs = consts();
@@ -6701,7 +6778,30 @@ export const GraphView = () => {
                         box={b()}
                         isCollapsed={collapsedSet().has(container.id)}
                         consts={consts()}
-                        onDragStart={(e) => startNodeDrag(container.id, e)}
+                        isLabelExpanded={expandedLabelSet().has(container.id)}
+                        // "Option B": a sub-threshold press-and-release on the
+                        // header band toggles the label expansion, riding the
+                        // SAME `onClickFallback` path leaves use for
+                        // click-to-scrub — so a real drag never fires it, and
+                        // there is no second `onClick` handler to double-fire
+                        // (the trap `LeafRect`'s comment documents).
+                        //
+                        // The gesture is wired ONLY for headers whose label
+                        // actually squeezes, so every other header stays as
+                        // inert as it was. The gate is computed from
+                        // `labelTextLength` — which reads label + box width,
+                        // NOT the expansion state — precisely so it stays open
+                        // once expanded; gating on "is currently squeezed"
+                        // would let a user expand a label and never close it.
+                        onDragStart={(e) =>
+                          startNodeDrag(
+                            container.id,
+                            e,
+                            labelTextLength(container, b().w, consts()) === undefined
+                              ? undefined
+                              : () => toggleLabelExpansion(spec().id, container.id),
+                          )
+                        }
                         // `inDefaults` routes the flip to expandedGroups vs
                         // collapsedGroups so the "never in both sets" invariant
                         // holds — see `toggleCollapse` in `stores/layout.ts`.
@@ -7334,6 +7434,43 @@ export const GraphView = () => {
                   width={g.w}
                   height={g.h}
                 />
+              )}
+            </For>
+
+            {/* "Option B" — expanded container labels. Rendered LAST, after
+              every container, leaf and gutter, because that is the only
+              place SVG paint order lets a full-width label survive: a
+              Salsa20 double-round label is ~350px of text starting inside a
+              152px box, so it crosses several later containers and their
+              leaf chips, all of which would paint over it. Each gets an
+              opaque backing plate for the same reason — the text lands on
+              top of arbitrary canvas, not on the header band it started in.
+
+              `pointer-events: none` on the whole layer: the label is a
+              READOUT, and letting it eat clicks would put a 350px-wide dead
+              strip over other containers' leaves. Re-collapsing it happens
+              back at the header band, where the gesture was armed. */}
+            <For each={expandedLabelOverlays()}>
+              {(o) => (
+                <g class="graph-container-label-overlay" pointer-events="none">
+                  <rect
+                    class="graph-container-label-plate"
+                    x={o.x - 4}
+                    y={o.y - HEADER_H / 2 + 1}
+                    width={o.w + 8}
+                    height={HEADER_H - 2}
+                    rx={3}
+                    ry={3}
+                  />
+                  <text
+                    class="graph-container-label graph-container-label-expanded"
+                    x={o.x}
+                    y={o.y}
+                    dominant-baseline="central"
+                  >
+                    {o.label}
+                  </text>
+                </g>
               )}
             </For>
           </svg>
@@ -8162,6 +8299,12 @@ const ContainerRect = (props: {
   consts: LayoutConstants;
   onDragStart: (e: PointerEvent) => void;
   onToggleCollapse: () => void;
+  /**
+   * True when the user has clicked this container's squeezed header label
+   * open ("Option B"). Suppresses the in-box label — the overlay layer
+   * draws the full-width one on top of every node instead.
+   */
+  isLabelExpanded: boolean;
   /** Slice 9 — validation warnings to surface on this container's header.
    * Populated either when a container's own id (e.g. an iterate) carries
    * a warning, or when collapse remapped a child's warning to this
@@ -8206,13 +8349,11 @@ const ContainerRect = (props: {
   // protecting against. Depends on `consts.CONTAINER_PAD` (density-derived)
   // for the available-width arithmetic, so it also tracks density flips.
   const labelTL = createMemo(() => labelTextLength(props.container, props.box.w, props.consts));
-  // When the duplicate button renders next to the delete chip, the label
-  // text needs to start further right or it sits underneath the chip on
-  // hover. The delete chip alone is tolerated (existing behavior); a
-  // SECOND chip pushes the overlap past readability. Memoize so the
-  // shift recomputes only when the spec/container id changes.
-  const labelLeftOffset = createMemo(() =>
-    isRoundDuplicatable(props.container.id) ? WARNING_DOT_SIZE + 6 : 0,
+  // Label origin (x accounts for the duplicate chip's reserved room — see
+  // `containerLabelOrigin`). Shared with the expanded-label overlay so the
+  // two can't drift apart.
+  const labelOrigin = createMemo(() =>
+    containerLabelOrigin(props.container, props.box, props.consts),
   );
   return (
     <g
@@ -8269,19 +8410,35 @@ const ContainerRect = (props: {
         fill="transparent"
         data-drop-anchor={props.container.id}
         data-state-shape={props.stateShape}
+        // "Option B" — marks the headers whose label is long enough to need
+        // squeezing, i.e. exactly the ones where a sub-threshold click
+        // toggles the label expansion. Mirrors the call site's gate, which
+        // reads the same expansion-INDEPENDENT `labelTextLength`: the mark
+        // therefore stays put while the label is expanded, which is what
+        // lets the user click it shut again. Read by the smoke to pick a
+        // target without re-deriving the heuristic.
+        data-label-squeezed={labelTL() === undefined ? undefined : "true"}
         onPointerDown={(e) => props.onDragStart(e)}
         data-testid={`graph-container-header-${props.container.id}`}
       />
-      <text
-        class="graph-container-label"
-        x={props.box.x + props.consts.CONTAINER_PAD + labelLeftOffset()}
-        y={props.box.y + HEADER_H / 2 + 1}
-        dominant-baseline="central"
-        textLength={labelTL()}
-        lengthAdjust={labelTL() === undefined ? undefined : "spacingAndGlyphs"}
-      >
-        {props.container.label}
-      </text>
+      {/* The in-box label. Suppressed entirely while the user has this
+          container's label expanded ("Option B") — the overlay layer draws
+          it there instead, at natural width and on top of every node, so
+          rendering both would stack a squeezed copy under the readable
+          one. `<Show>` rather than an opacity flip so there is exactly one
+          `.graph-container-label` per container for tests + a11y. */}
+      <Show when={!props.isLabelExpanded}>
+        <text
+          class="graph-container-label"
+          x={labelOrigin().x}
+          y={labelOrigin().y}
+          dominant-baseline="central"
+          textLength={labelTL()}
+          lengthAdjust={labelTL() === undefined ? undefined : "spacingAndGlyphs"}
+        >
+          {props.container.label}
+        </text>
+      </Show>
       <Show
         when={
           props.container.kind === "iterate" &&

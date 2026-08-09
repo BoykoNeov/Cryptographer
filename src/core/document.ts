@@ -198,12 +198,36 @@ export type LayoutSpec = {
    * map and the picker is one `<select>`. Unknown/legacy names render as
    * `solid` (forward-compat).
    *
-   * MUST stay the LAST optional field: `JSON.stringify` serializes in
-   * insertion order and the byte-stability gate pins that order. Absent /
-   * empty when the user has assigned no manual stroke override — same
-   * byte-stability discipline as the other optional fields.
+   * Its position in this list is load-bearing: `JSON.stringify` serializes
+   * in insertion order and the byte-stability gate pins that order, so an
+   * existing optional field never MOVES — a new one appends after the last
+   * (see `expandedLabels` below). Absent / empty when the user has assigned
+   * no manual stroke override — same byte-stability discipline as the other
+   * optional fields.
    */
   readonly strokeStyles?: { readonly [sourceId: string]: string };
+  /**
+   * Container ids whose header label the user has clicked to un-squeeze
+   * ("Option B", the V2 follow-up to the 2026-05-13 label-truncation work).
+   *
+   * A container header renders its label compressed via SVG `textLength` +
+   * `lengthAdjust="spacingAndGlyphs"` whenever the label's natural width
+   * exceeds the header room left by the chevron and the `×N` badge — see
+   * `GraphView.tsx::labelTextLength`. That keeps the label inside its box,
+   * but at a cost: Salsa20's "Double round 1 of 10 (column round then row
+   * round)" is ~350px of text crushed into 102px, which is not readable at
+   * any zoom. Presence of a container id here means "render this one at its
+   * natural width instead, overflowing the box", which the late overlay
+   * layer in `GraphView` draws on top of everything else.
+   *
+   * Only ids whose label ACTUALLY squeezes are ever added — a header whose
+   * label fits has nothing to expand, and its click gesture stays inert.
+   *
+   * MUST stay the LAST optional field (see `strokeStyles` above for why the
+   * order is pinned). Absent / empty when the user has expanded no label —
+   * same byte-stability discipline as the other optional fields.
+   */
+  readonly expandedLabels?: readonly string[];
 };
 
 /**

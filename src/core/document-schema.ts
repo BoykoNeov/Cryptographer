@@ -531,11 +531,18 @@ export const LayoutSpecSchema = z
     // an enum of the 24 catalogue names — so a document written by a future,
     // larger catalogue opens on an older build without hard-failing (the
     // renderer falls back to `solid` for unrecognised names). Additive
-    // optional field; MUST stay last for byte-stability (insertion order).
+    // optional field; its position is pinned for byte-stability (insertion
+    // order), so a newer optional appends AFTER it rather than displacing it.
     // No schemaVersion bump — same precedent as `expandedGroups` /
     // `relativePositions`. Empty map is never serialized (see
     // `layout.ts::buildLayoutSpec`).
     strokeStyles: z.record(z.string()).optional(),
+    // Container ids whose squeezed header label the user clicked to render
+    // at natural width ("Option B", V2 of the 2026-05-13 label-truncation
+    // work). Additive optional field; MUST stay last for byte-stability.
+    // No schemaVersion bump — same precedent as every optional above it.
+    // Empty array is never serialized (see `layout.ts::buildLayoutSpec`).
+    expandedLabels: z.array(z.string()).optional(),
   })
   .strict();
 

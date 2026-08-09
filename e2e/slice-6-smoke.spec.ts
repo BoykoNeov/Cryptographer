@@ -105,6 +105,24 @@ const dragContainerHeader = async (
   await page.mouse.up();
 };
 
+/**
+ * Press and release a container header without moving — the sub-threshold
+ * gesture that `startNodeDrag`'s `onClickFallback` path turns into a click.
+ *
+ * Targets the header's CENTRE deliberately. The left edge carries the
+ * hover-revealed delete / duplicate chips, which take the press and make the
+ * gesture look like it silently did nothing.
+ */
+const clickContainerHeader = async (page: Page, containerId: string): Promise<void> => {
+  const header = page.locator(`[data-testid="graph-container-header-${containerId}"]`);
+  await header.scrollIntoViewIfNeeded();
+  const box = await header.boundingBox();
+  if (!box) throw new Error(`could not get bounding box for ${containerId} header`);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.up();
+};
+
 // ─── Tests ────────────────────────────────────────────────────────────────
 
 test.describe("Slice 6 — Real browser drag + collapse + persistence", () => {
@@ -220,5 +238,75 @@ test.describe("Slice 6 — Real browser drag + collapse + persistence", () => {
     await page.getByRole("button", { name: /save/i }).first().click();
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toMatch(/^aes-128@1-\d{8}\.cipher\.json$/);
+  });
+
+  /**
+   * "Option B" — click-to-expand for a squeezed container label.
+   *
+   * This lives in a REAL browser because jsdom cannot judge the one thing
+   * that can break it: the label sits over the header band carrying
+   * `pointer-events: none`, and jsdom's event dispatch ignores that property
+   * entirely (`feedback_jsdom_pointer_events_gap`). The jsdom suite in
+   * `tests/graph-view-label-expansion.test.tsx` would stay green on a
+   * gesture no cursor could ever reach.
+   *
+   * Salsa20 rather than AES-128: its double-round labels squeeze in the
+   * shipped defaults, whereas AES-128's verbose final-round label only
+   * squeezes with offsets AND replication disabled.
+   */
+  test("Option B — clicking a squeezed header expands its label, and it survives a reload", async ({
+    page,
+  }) => {
+    // Switch to Salsa20 (the `cipher` selector is the third <select>).
+    await page.locator("select").nth(2).selectOption("salsa20");
+    await openGraphTab(page);
+
+    // The component marks headers whose label needs squeezing; picking the
+    // target from that mark rather than re-deriving `labelTextLength`'s
+    // heuristic keeps this test honest if the heuristic is ever retuned.
+    const squeezed = page.locator("[data-label-squeezed]");
+    expect(await squeezed.count()).toBeGreaterThan(0);
+
+    const label = page
+      .locator("text.graph-container-label", { hasText: "Double round 1 of 10" })
+      .first();
+    // V1 state: the label is compressed to fit.
+    expect(await label.getAttribute("textLength")).not.toBeNull();
+
+    // Click the header CENTRE. Not its left edge: the delete / duplicate
+    // chips are hover-revealed there and swallow the press, which reads as
+    // "the click silently did nothing" (the occlusion trap
+    // `e2e/composite-save-drop-smoke.spec.ts` also documents).
+    await clickContainerHeader(page, "double-round.0");
+
+    const expanded = page.locator("text.graph-container-label-expanded", {
+      hasText: "Double round 1 of 10",
+    });
+    await expect(expanded).toHaveCount(1);
+    // Drawn at natural width — no compression left on the surviving label.
+    expect(await expanded.first().getAttribute("textLength")).toBeNull();
+    // The plate that keeps it readable over whatever it now overlaps.
+    await expect(page.locator(".graph-container-label-plate")).toHaveCount(1);
+
+    // Persisted, and rehydrated after a real page reload.
+    const layout = await readPersistedLayout(page, "salsa20@1");
+    expect(layout?.expandedLabels).toEqual(["double-round.0"]);
+
+    // Reload. The cipher selector is NOT persisted (the app boots on
+    // AES-128), so re-select Salsa20 — the layout sidecar is keyed by
+    // `spec.id`, and re-selecting is what brings `salsa20@1` back into
+    // view. That the expansion is still there afterwards is the point:
+    // it came from localStorage, not from anything in memory.
+    await page.reload();
+    await page.locator("select").nth(2).selectOption("salsa20");
+    await openGraphTab(page);
+    await expect(expanded).toHaveCount(1);
+
+    // And a second click closes it again — the gesture stays armed while
+    // expanded, which is the property a "is it squeezed right now?" gate
+    // would silently break.
+    await clickContainerHeader(page, "double-round.0");
+    await expect(expanded).toHaveCount(0);
+    expect(await readPersistedLayout(page, "salsa20@1")).toBeNull();
   });
 });

@@ -90,6 +90,16 @@ internalized.
   N), not on a specific chip. The chips are capped at 6 — for N > 6
   the last is an ellipsis chip labelled `+M more blocks`. To bring the
   real body back, click the header chevron again.
+- **Click a container's header** to read its full label when that label
+  is too long for the box. A long label is compressed to fit — Salsa20's
+  "Double round 1 of 10 (column round then row round)" is about three
+  and a half times wider than the header it sits in, which is legible
+  as a shape and not as words. Clicking the header (anywhere on the
+  band, not the chevron) redraws that one label at full size on a plate
+  over the canvas; clicking again puts it back. Headers whose label
+  already fits do nothing, and the gesture never fires when you were
+  actually dragging. Which labels you left open is saved with the
+  layout, so it survives a reload and travels through `Save` / `Share`.
 - **Click a leaf** to focus the linear trace's scrubber on the matching
   frame. The param panel below the graph shows that step's parameters
   for in-place editing.
@@ -293,8 +303,8 @@ chain one step at a time.
 ## What survives a save
 
 `Save` writes a JSON document. With "include session" off, only the
-spec (and any layout pins or collapsed containers you set) lands in the
-file — byte-stable, safe to share. With it on, the active mode, cipher,
+spec (and any layout pins, collapsed containers, or expanded labels you
+set) lands in the file — byte-stable, safe to share. With it on, the active mode, cipher,
 input, key, byte format, and padding scheme are captured too. `Load`
 restores everything; `Share…` packs the same document into a URL hash
 so a single link reconstructs the view.

@@ -36,6 +36,7 @@ import {
   setReplicationMode,
   setSourceStroke,
   toggleCollapse,
+  toggleLabelExpansion,
   useLayoutMap,
 } from "@/ui/stores/layout";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -304,6 +305,66 @@ describe("layout store — hasUserLayout counts expandedGroups", () => {
     // would defeat the byte-stability gate that spec-only saves depend
     // on. Same discipline as `replicationModes` / `relativePositions`.
     expect("expandedGroups" in parsed["aes-128@1"]).toBe(false);
+  });
+});
+
+describe("layout store — toggleLabelExpansion (Option B)", () => {
+  it("adds then removes a container id, and persists each flip", () => {
+    toggleLabelExpansion("salsa20@1", "double-round.0");
+    expect(getLayoutForSpec("salsa20@1")?.expandedLabels).toEqual(["double-round.0"]);
+    expect(JSON.parse(storage.getItem(STORAGE_KEY) as string)["salsa20@1"].expandedLabels).toEqual([
+      "double-round.0",
+    ]);
+
+    toggleLabelExpansion("salsa20@1", "double-round.0");
+    // Re-collapsing the ONLY customization must drop the whole entry, not
+    // leave an `expandedLabels: []` behind — spec-only saves feed the
+    // URL-share hash, and present-but-empty is different bytes than absent.
+    expect(getLayoutForSpec("salsa20@1")).toBeNull();
+  });
+
+  it("a layout whose only customization is expandedLabels counts as user layout", () => {
+    toggleLabelExpansion("salsa20@1", "double-round.3");
+    expect(hasUserLayout(getLayoutForSpec("salsa20@1"))).toBe(true);
+  });
+
+  it("keeps other customizations when the last expansion is cleared", () => {
+    setNodePosition("salsa20@1", "double-round.1", 40, 60);
+    toggleLabelExpansion("salsa20@1", "double-round.1");
+    toggleLabelExpansion("salsa20@1", "double-round.1");
+
+    const l = getLayoutForSpec("salsa20@1");
+    expect(l?.positions["double-round.1"]).toEqual({ x: 40, y: 60 });
+    expect(Object.hasOwn(l as LayoutSpec, "expandedLabels")).toBe(false);
+  });
+
+  it("emits expandedLabels LAST in the serialized form (byte-stable key order)", () => {
+    // Insertion order IS the serialized order. A new optional field that
+    // displaced an existing one would repoint every previously shared URL
+    // whose document carries a customized layout.
+    setNodePosition("aes-128@1", "round.1", 10, 10);
+    toggleCollapse("aes-128@1", "round.2", false);
+    setReplicationMode("aes-128@1", "key-expansion", "always");
+    setRelativePosition("aes-128@1", "key-expansion@->round.1", 3, 4);
+    setSourceStroke("aes-128@1", "key-expansion", "short-dash");
+    toggleLabelExpansion("aes-128@1", "round.10");
+
+    const parsed = JSON.parse(storage.getItem(STORAGE_KEY) as string);
+    expect(Object.keys(parsed["aes-128@1"])).toEqual([
+      "positions",
+      "collapsedGroups",
+      "flowDirection",
+      "replicationModes",
+      "relativePositions",
+      "strokeStyles",
+      "expandedLabels",
+    ]);
+  });
+
+  it("empty expandedLabels is OMITTED from the serialized form (byte-stability)", () => {
+    setNodePosition("aes-128@1", "round.1", 100, 100);
+    const parsed = JSON.parse(storage.getItem(STORAGE_KEY) as string);
+    expect("expandedLabels" in parsed["aes-128@1"]).toBe(false);
   });
 });
 

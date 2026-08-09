@@ -178,7 +178,7 @@ describe("renameLayoutIds — strokeStyles", () => {
     expect(Object.hasOwn(result, "strokeStyles")).toBe(false);
   });
 
-  it("emits strokeStyles LAST in the returned object (byte-stable key order)", () => {
+  it("emits every optional field in buildLayoutSpec's order (byte-stable key order)", () => {
     // With every optional field populated, renameLayoutIds must reproduce
     // buildLayoutSpec's insertion order or a duplicate-round rename would
     // silently change a shared doc's bytes.
@@ -190,6 +190,7 @@ describe("renameLayoutIds — strokeStyles", () => {
       relativePositions: { "key-expansion@->round.3": { dx: 2, dy: 3 } },
       expandedGroups: ["round.7"],
       strokeStyles: { "key-expansion": "short-dash" },
+      expandedLabels: ["round.9"],
     };
     const result = renameLayoutIds(layout, new Map([["round.3", "round.4"]]));
     expect(Object.keys(result)).toEqual([
@@ -200,7 +201,48 @@ describe("renameLayoutIds — strokeStyles", () => {
       "relativePositions",
       "expandedGroups",
       "strokeStyles",
+      "expandedLabels",
     ]);
+  });
+});
+
+describe("renameLayoutIds — expandedLabels (Option B)", () => {
+  it("renames each id; un-renamed ids stay", () => {
+    // `expandedLabels` keys real CONTAINER ids — exactly what the
+    // duplicate-round mutator renumbers. This is the one field whose
+    // omission from the remap `tsc` cannot catch: the layout would still
+    // compile, still persist, and simply point at a round that no longer
+    // exists, snapping the user's expanded label shut on duplicate.
+    const layout: LayoutSpec = {
+      positions: {},
+      collapsedGroups: [],
+      flowDirection: "ltr",
+      expandedLabels: ["round.3", "round.9"],
+    };
+    const result = renameLayoutIds(layout, new Map([["round.3", "round.4"]]));
+
+    expect(result.expandedLabels).toEqual(["round.4", "round.9"]);
+  });
+
+  it("leaves `expandedLabels` absent when the input had no such field", () => {
+    const layout: LayoutSpec = {
+      positions: {},
+      collapsedGroups: ["round.3"],
+      flowDirection: "ltr",
+    };
+    const result = renameLayoutIds(layout, new Map([["round.3", "round.4"]]));
+    expect(Object.hasOwn(result, "expandedLabels")).toBe(false);
+  });
+
+  it("drops the field entirely when the input expandedLabels is empty (byte stability)", () => {
+    const layout: LayoutSpec = {
+      positions: {},
+      collapsedGroups: [],
+      flowDirection: "ltr",
+      expandedLabels: [],
+    };
+    const result = renameLayoutIds(layout, new Map([["foo", "bar"]]));
+    expect(Object.hasOwn(result, "expandedLabels")).toBe(false);
   });
 });
 

@@ -3773,10 +3773,28 @@ button:disabled {
      fires. pointer-events:none routes those clicks through to the rect.
      The browser tooltip via <title> on the parent <g> still works
      because hover detection runs on the group, not the label.
-     LONGER-TERM: label truncation + click-to-expand is the next priority
-     before more graph-readability work — see plans/peppy-knitting-fairy
-     "Next priority" section. */
+     Click-to-expand ("Option B") is layered on the HEADER BAND rather than
+     on this element, precisely so this rule can stay as-is: the label keeps
+     absorbing nothing, and the drag handle underneath keeps every pixel. */
   pointer-events: none;
+}
+
+/* "Option B" — a label the user clicked open renders at natural width in the
+   late overlay layer, which means it lands on top of arbitrary canvas rather
+   than on its own header band. The plate is what keeps it readable there:
+   opaque enough to hide the leaves and wires it crosses, outlined so it reads
+   as a deliberate readout rather than a rendering glitch. */
+.graph-container-label-plate {
+  fill: var(--bg-elev-2);
+  stroke: var(--accent);
+  stroke-width: 1;
+}
+
+/* Full brightness (the in-box label is `--muted`): an expanded label is the
+   thing the user just asked to read, and it has to win against whatever it is
+   drawn over. */
+.graph-container-label-expanded {
+  fill: var(--text);
 }
 
 .graph-iterate-badge {
