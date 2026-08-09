@@ -303,6 +303,7 @@ import { zeroPad, zeroPadDoc, zeroPadMeta, zeroPadPortContract } from "../steps/
 import { zeroUnpad, zeroUnpadDoc, zeroUnpadMeta, zeroUnpadPortContract } from "../steps/zero-unpad";
 import { zqByteDecode, zqByteDecodeDoc, zqByteDecodePortContract } from "../steps/zq-byte-decode";
 import { zqByteEncode, zqByteEncodeDoc, zqByteEncodePortContract } from "../steps/zq-byte-encode";
+import { zqCbd, zqCbdDoc, zqCbdPortContract } from "../steps/zq-cbd";
 import { zqCompress, zqCompressDoc, zqCompressPortContract } from "../steps/zq-compress";
 import { zqDecompress, zqDecompressDoc, zqDecompressPortContract } from "../steps/zq-decompress";
 import { zqVecAdd, zqVecAddDoc, zqVecAddPortContract } from "../steps/zq-vec-add";
@@ -1133,6 +1134,16 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: zqByteDecode,
     shape: zqByteDecodePortContract,
     doc: zqByteDecodeDoc,
+  });
+  // The one place randomness becomes a ring element. Everything else in the
+  // lattice layer rearranges numbers deterministically; this produces the secret
+  // and the noise, and `eta` is the single knob trading security against the
+  // point where decryption starts to fail.
+  r.register("zq-cbd@1", {
+    kind: "ported",
+    executor: zqCbd,
+    shape: zqCbdPortContract,
+    doc: zqCbdDoc,
   });
   r.register("shift-bits-right@1", {
     kind: "ported",

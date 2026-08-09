@@ -404,6 +404,12 @@ export const PROVENANCE_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set<string>([
   // "missing never wrong" stance says decline rather than over-report.
   "zq-byte-encode@1",
   "zq-byte-decode@1",
+  // approximate — centred-binomial sampling (ML-KEM P2). Bit-level like the
+  // packing pair above, and coarser still: one output coefficient is a POPCOUNT
+  // over 2η bits, so at η = 2 four bits of one input byte collapse into a single
+  // small number and the byte-level cone would claim the whole byte for each of
+  // two different outputs.
+  "zq-cbd@1",
   // approximate — the traced extended-Euclid loop (RSA Phase 4): each rung's
   // quotient/remainder + the mod-φ-reduced coefficient mix every output byte
   // across the input tuple, exactly like the `mod-inverse@1` oracle they

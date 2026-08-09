@@ -330,7 +330,8 @@ export const ParamEditor = (props: Props) => {
                 getStep().type === "zq-compress@1" ||
                 getStep().type === "zq-decompress@1" ||
                 getStep().type === "zq-byte-encode@1" ||
-                getStep().type === "zq-byte-decode@1"
+                getStep().type === "zq-byte-decode@1" ||
+                getStep().type === "zq-cbd@1"
               }
             >
               {/*
@@ -1235,7 +1236,7 @@ const TwofishHExpandBlock = (props: { step: StepLeaf }) => {
 // hazard is that a compress/decompress PAIR must agree — so the row says so,
 // since a mismatch is silent everywhere else.
 const ZqVecBlock = (props: { step: StepLeaf }) => {
-  const params = (): { coeffBytes?: number; littleEndian?: boolean; d?: number } =>
+  const params = (): { coeffBytes?: number; littleEndian?: boolean; d?: number; eta?: number } =>
     props.step.params as never;
   const coeffBytes = (): number => params().coeffBytes ?? 2;
   const isPacking = (): boolean =>
@@ -1281,6 +1282,28 @@ const ZqVecBlock = (props: { step: StepLeaf }) => {
               {isPacking()
                 ? "the step that unpacks these bytes must use the same d — the bytes do not record it"
                 : "a compress and its matching decompress must use the same d — nothing checks it"}
+            </span>
+          </dd>
+        </div>
+      </Show>
+      <Show when={params().eta !== undefined}>
+        <div class="param-scalar-row">
+          {/* Editable, and the most consequential number in the family: it is
+              the whole security-versus-decryption-failure trade-off in one
+              value. Unlike `d` it has no partner step to stay in sync with —
+              nothing downstream needs to know what η produced a polynomial —
+              so the hint spends its words on what turning it up actually does. */}
+          <dt>Noise η</dt>
+          <dd>
+            <IntInput
+              value={params().eta ?? 0}
+              min={1}
+              max={8 * coeffBytes()}
+              placeholder="2"
+              onCommit={(next) => writeParams({ eta: next })}
+            />{" "}
+            <span class="param-scalar-hint">
+              samples land in −η…η; larger is harder to break and closer to decryption failing
             </span>
           </dd>
         </div>

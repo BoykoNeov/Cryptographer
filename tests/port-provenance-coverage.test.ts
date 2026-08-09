@@ -131,6 +131,10 @@ describe("port-provenance coverage contract", () => {
       // cone over-reports by about half. Same call as `rotate-bits-right@1`.
       "zq-byte-encode@1",
       "zq-byte-decode@1",
+      // approximate — centred-binomial sampling. Bit-level and coarser still:
+      // one coefficient is a popcount over 2η bits, so a byte-level cone would
+      // claim a whole input byte for each of two different outputs.
+      "zq-cbd@1",
       // approximate — the traced extended-Euclid loop (RSA Phase 4)
       "eea-step@1",
       "eea-extract@1",
