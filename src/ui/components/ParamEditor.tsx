@@ -328,7 +328,9 @@ export const ParamEditor = (props: Props) => {
                 getStep().type === "zq-vec-sub@1" ||
                 getStep().type === "zq-vec-mul-scalar@1" ||
                 getStep().type === "zq-compress@1" ||
-                getStep().type === "zq-decompress@1"
+                getStep().type === "zq-decompress@1" ||
+                getStep().type === "zq-byte-encode@1" ||
+                getStep().type === "zq-byte-decode@1"
               }
             >
               {/*
@@ -1236,6 +1238,8 @@ const ZqVecBlock = (props: { step: StepLeaf }) => {
   const params = (): { coeffBytes?: number; littleEndian?: boolean; d?: number } =>
     props.step.params as never;
   const coeffBytes = (): number => params().coeffBytes ?? 2;
+  const isPacking = (): boolean =>
+    props.step.type === "zq-byte-encode@1" || props.step.type === "zq-byte-decode@1";
 
   const writeParams = (patch: Record<string, Json>) => {
     editStepParams(props.step.id, {
@@ -1258,17 +1262,25 @@ const ZqVecBlock = (props: { step: StepLeaf }) => {
       </div>
       <Show when={params().d !== undefined}>
         <div class="param-scalar-row">
-          <dt>Bits kept (d)</dt>
+          {/* The two families that carry `d` mean different things by it, and
+              the label says which: the compression pair DISCARDS down to d bits,
+              the packing pair STORES in d bits without losing anything. Same
+              number, same hazard — the partner step must agree and nothing
+              checks that — but reading "bits kept" on an encoder would suggest a
+              loss that is not happening there. */}
+          <dt>{isPacking() ? "Bits per coeff (d)" : "Bits kept (d)"}</dt>
           <dd>
             <IntInput
               value={params().d ?? 0}
               min={1}
               max={8 * coeffBytes()}
-              placeholder="10"
+              placeholder={isPacking() ? "12" : "10"}
               onCommit={(next) => writeParams({ d: next })}
             />{" "}
             <span class="param-scalar-hint">
-              a compress and its matching decompress must use the same d — nothing checks it
+              {isPacking()
+                ? "the step that unpacks these bytes must use the same d — the bytes do not record it"
+                : "a compress and its matching decompress must use the same d — nothing checks it"}
             </span>
           </dd>
         </div>

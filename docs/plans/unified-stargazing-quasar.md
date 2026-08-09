@@ -349,6 +349,28 @@ export is a fixed 22-byte header followed by the raw 1184-byte `ek`, and
 re-importing a hand-assembled SPKI works (probed at plan time). Encrypt/decrypt
 are pinned transitively in P4.
 
+> **CORRECTION, measured during P2 (2026-08-09) — the seed is IGNORED.** On
+> **Node v24.14.1**, `generateKeyPairSync("ml-kem-768", { seed })` accepts the
+> option without complaint and returns a **different key on every call**: three
+> successive runs with `Buffer.alloc(64, 7)` produced three different `ek`s. So
+> the "deterministic from `d‖z`" oracle above **does not exist as written**, and
+> P3 must not be planned around it. What was verified at plan time was
+> availability and the SPKI layout, both of which hold (`spki.length` 1206, the
+> trailing 1184 bytes being `ek`); the determinism half was assumed. Three
+> options for P3, in the order worth trying: (a) import a private key from a
+> hand-assembled PKCS#8 carrying the **seed** choice of the ML-KEM `PrivateKey`
+> CHOICE, then derive `ek` from it — the exported PKCS#8 here is 2498 bytes, so
+> this build stores an expanded form and the seed form needs checking; (b) drop
+> to published FIPS 203 intermediate values / the ACVP vectors; (c) pin against a
+> second independent implementation. Resolve this **before** writing P3's KAT,
+> not after — it decides what P3 can claim.
+>
+> Also worth carrying forward: a `node:crypto` `ek` is still a perfectly good
+> oracle for anything that does not need reproducibility. P2 used one to pin the
+> 12-bit packing (`tests/zq-byte-encode-decode.test.ts`), which the plan had
+> assumed would only be checkable transitively through P3 — **captured as a byte
+> fixture**, because CI runs Node 22 and has no ML-KEM at all.
+
 ### P4 — ML-KEM encapsulation and decapsulation
 
 The Fujisaki–Okamoto wrapper: `G`, the re-encryption check, and implicit

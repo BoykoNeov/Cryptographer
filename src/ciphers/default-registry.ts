@@ -301,6 +301,8 @@ import {
 import { zeroFill, zeroFillDoc, zeroFillPortContract } from "../steps/zero-fill";
 import { zeroPad, zeroPadDoc, zeroPadMeta, zeroPadPortContract } from "../steps/zero-pad";
 import { zeroUnpad, zeroUnpadDoc, zeroUnpadMeta, zeroUnpadPortContract } from "../steps/zero-unpad";
+import { zqByteDecode, zqByteDecodeDoc, zqByteDecodePortContract } from "../steps/zq-byte-decode";
+import { zqByteEncode, zqByteEncodeDoc, zqByteEncodePortContract } from "../steps/zq-byte-encode";
 import { zqCompress, zqCompressDoc, zqCompressPortContract } from "../steps/zq-compress";
 import { zqDecompress, zqDecompressDoc, zqDecompressPortContract } from "../steps/zq-decompress";
 import { zqVecAdd, zqVecAddDoc, zqVecAddPortContract } from "../steps/zq-vec-add";
@@ -1114,6 +1116,23 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: zqDecompress,
     shape: zqDecompressPortContract,
     doc: zqDecompressDoc,
+  });
+  // The dense `d`-bit packing (FIPS 203 Alg 5 / 6). Kept apart from the
+  // compression pair on purpose: compressing loses information and packing does
+  // not, and a trace that showed them as one step would let a learner attribute
+  // the loss to the wrong operation. Together they are why a post-quantum public
+  // key is 1184 bytes rather than 1568.
+  r.register("zq-byte-encode@1", {
+    kind: "ported",
+    executor: zqByteEncode,
+    shape: zqByteEncodePortContract,
+    doc: zqByteEncodeDoc,
+  });
+  r.register("zq-byte-decode@1", {
+    kind: "ported",
+    executor: zqByteDecode,
+    shape: zqByteDecodePortContract,
+    doc: zqByteDecodeDoc,
   });
   r.register("shift-bits-right@1", {
     kind: "ported",

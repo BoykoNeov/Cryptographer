@@ -124,6 +124,13 @@ describe("port-provenance coverage contract", () => {
       // exact-looking highlight doubly misleading.
       "zq-compress@1",
       "zq-decompress@1",
+      // approximate — the dense d-bit packing pair (ML-KEM P2). Coarse rather
+      // than value-dependent, unlike everything else in this family: the
+      // mapping is a pure bit shuffle and an exact fn IS derivable, but at
+      // d = 12 coefficients stop landing on byte boundaries so a byte-level
+      // cone over-reports by about half. Same call as `rotate-bits-right@1`.
+      "zq-byte-encode@1",
+      "zq-byte-decode@1",
       // approximate — the traced extended-Euclid loop (RSA Phase 4)
       "eea-step@1",
       "eea-extract@1",

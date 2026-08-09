@@ -392,6 +392,18 @@ export const PROVENANCE_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set<string>([
   // its partner, which makes an exact-looking highlight doubly misleading.
   "zq-compress@1",
   "zq-decompress@1",
+  // approximate — the dense d-bit packing pair (ML-KEM P2). These are the ONE
+  // place in the Z_q family where the reason is coarseness rather than
+  // value-dependence, and the distinction is worth recording because it was a
+  // conscious call: the mapping IS a pure value-independent bit shuffle, so an
+  // exact fn is derivable. It would just be a bad highlight. At d = 12 the
+  // coefficients stop landing on byte boundaries, so one output byte carries
+  // bits from two different coefficients and a byte-level cone over-reports by
+  // roughly half its area. That is precisely the `rotate-bits-right@1` /
+  // `shift-bits-right@1` rationale — bit-level op, byte-level answer — and the
+  // "missing never wrong" stance says decline rather than over-report.
+  "zq-byte-encode@1",
+  "zq-byte-decode@1",
   // approximate — the traced extended-Euclid loop (RSA Phase 4): each rung's
   // quotient/remainder + the mod-φ-reduced coefficient mix every output byte
   // across the input tuple, exactly like the `mod-inverse@1` oracle they
