@@ -1,5 +1,13 @@
 # Graph-readability polish — follow-ups after the editable threshold
 
+**Status: CLOSED 2026-05-15.** Items 2, 3 and 6 shipped 2026-05-14; items 1, 4
+and 5 were carried forward into the successor plan
+[`graph-narrative-and-zoom.md`](./graph-narrative-and-zoom.md) as its Slices 2,
+7 and 6 respectively — see that file's "Cross-references" section, which names
+this plan as its closed predecessor. Nothing here is outstanding; the per-item
+table below is the original capture and is preserved as the record of what was
+seen in that browser pass, not as a backlog.
+
 Captured 2026-05-14, post-Phase-2-CBC session. The session that shipped the editable fanout threshold + single-edge replication panel rows (`5af14f0`) surfaced four follow-up gaps during manual browser verification. None blocks correctness; all are visual / UX polish.
 
 ## Status

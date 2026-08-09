@@ -1,6 +1,25 @@
 # Draggable replica chips + block chips
 
-Status: in flight, opened 2026-05-19.
+**Status: SHIPPED 2026-05-19 — CLOSED.** Delivered in `6faac0a` (the
+`LayoutSpec.relativePositions` sidecar) and the slices that followed it, and
+released in v0.5.0; the full delivery record is the `CHANGELOG.md` entry under
+`[0.5.0] - 2026-05-19` ("Aux replica chips and block chips become draggable").
+Pin model shipped as designed below — **relative** `{dx, dy}` deltas keyed by
+synthetic id, anchored implicitly to the chip's graph relationship, so dragging
+the anchor carries the chip along. Both reset surfaces shipped (the per-node ↺
+glyph and the toolbar `[reset layout]`). Pinned by
+`tests/draggable-replicas-layout.test.ts` + `tests/draggable-replicas-drag.test.tsx`.
+
+**This file is the live design record for a shipped schema field**, not
+historical background: `src/core/document-schema.ts`, `src/core/document.ts`,
+`src/ui/stores/layout.ts` and seven sites in `src/ui/components/GraphView.tsx`
+all point a reader here for the rationale behind `relativePositions`. Everything
+in "Out of scope (deferred)" at the foot of the file is still deferred and still
+accurate.
+
+*(Header corrected 2026-08-09 — it had read "in flight, opened 2026-05-19" for
+the ~3 months since the work landed, which is how this plan came to be
+mis-triaged as unfinished during a backlog sweep.)*
 
 ## Context
 
