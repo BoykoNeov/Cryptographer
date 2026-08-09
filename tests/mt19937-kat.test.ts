@@ -13,6 +13,13 @@
 
 import { port } from "@/ciphers/block-cipher-core";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import {
+  MT_MAX_OUTPUT_BYTES,
+  MT_TEMPER_B,
+  MT_WORD_BYTES,
+  buildMt19937Spec,
+  readMt19937OutputLength,
+} from "@/ciphers/mt19937";
 import { runSpec } from "@/core/runtime";
 import type { AuxValue, CipherSpec } from "@/core/types";
 import { MT_N, initGenrand } from "@/steps/mt19937-seed";
@@ -415,5 +422,120 @@ describe("MT19937 — the output function is a bijection, so the state leaks", (
     expect(a).not.toBe(b); // a bijection keeps distinct states distinct
     expect(untemper(a)).toBe(twisted[0] as number);
     expect(untemper(b)).toBe(twisted[1] as number);
+  });
+});
+
+// ─── 4. The spec, through the real runtime ────────────────────────────────
+//
+// Everything above drives executors and a hand-written reference. This section
+// is what connects them to the thing the app actually runs: the built spec,
+// through `runSpec`, with its twelve-leaf tempering chain doing the work the
+// `temper` reference above does in four lines.
+
+/** The reference as a BYTE stream: each word big-endian, cut to `byteLength` —
+ *  which is what the spec is expected to produce. */
+const refBytes = (seed: number, byteLength: number): number[] => {
+  const words = refStream(seed, Math.ceil(byteLength / MT_WORD_BYTES));
+  const out: number[] = [];
+  for (const w of words) {
+    out.push((w >>> 24) & 0xff, (w >>> 16) & 0xff, (w >>> 8) & 0xff, w & 0xff);
+  }
+  return out.slice(0, byteLength);
+};
+
+const seedBytes = (seed: number): Uint8Array =>
+  new Uint8Array([(seed >>> 24) & 0xff, (seed >>> 16) & 0xff, (seed >>> 8) & 0xff, seed & 0xff]);
+
+describe("MT19937 — the spec", () => {
+  it("reproduces the published opening bytes from the default seed", () => {
+    // The app's first paint IS this vector: d091bb5c 22ae9ef6 e7e1faee d5c31f79.
+    const out = run(buildMt19937Spec(16), seedBytes(DEFAULT_SEED));
+    expect(Array.from(out, (b) => b.toString(16).padStart(2, "0")).join("")).toBe(
+      "d091bb5c22ae9ef6e7e1faeed5c31f79",
+    );
+  });
+
+  it("matches the independent reference across the whole length range", () => {
+    // 1 and 3 are shorter than one word — the case that only exists because the
+    // trim sits outside the loop. 42 is the app's default. 2496 is one full
+    // twist, the largest legal request.
+    for (const len of [1, 3, 4, 5, 42, 100, 624, MT_MAX_OUTPUT_BYTES]) {
+      const out = run(buildMt19937Spec(len), seedBytes(DEFAULT_SEED));
+      expect(out.length, `length ${len}`).toBe(len);
+      expect(Array.from(out), `bytes at length ${len}`).toEqual(refBytes(DEFAULT_SEED, len));
+    }
+  });
+
+  it("produces a different stream for a different seed", () => {
+    // Guards the seed actually reaching `mt19937.seed@1` — a spec that ignored
+    // `$input` would pass every fixed-vector test above.
+    const a = run(buildMt19937Spec(16), seedBytes(DEFAULT_SEED));
+    const b = run(buildMt19937Spec(16), seedBytes(1));
+    expect(Array.from(b)).not.toEqual(Array.from(a));
+    expect(Array.from(b)).toEqual(refBytes(1, 16));
+  });
+
+  it("refuses a request that would need a second twist", () => {
+    // The app is a strict subset of the algorithm here, and says so rather than
+    // emitting a stream with a refill silently missing.
+    expect(() => buildMt19937Spec(MT_MAX_OUTPUT_BYTES + 1)).toThrow(/second twist/);
+    expect(() => buildMt19937Spec(0)).toThrow(/positive integer/);
+  });
+
+  it("round-trips its output length through the spec", () => {
+    // The saved-document path: a reloaded spec must land the app's stepper on
+    // the document's length, not on the default.
+    for (const len of [1, 42, 137, MT_MAX_OUTPUT_BYTES]) {
+      expect(readMt19937OutputLength(buildMt19937Spec(len))).toBe(len);
+    }
+  });
+
+  it("keeps the tempering constants LIVE, not decorative", () => {
+    // The masks ride `constant-load@1` leaves so a learner can edit them. If
+    // the executor had them hardcoded, the chip would be a lie — so rewrite one
+    // in the spec and require the output to change.
+    const spec = buildMt19937Spec(16);
+    const temperNode = spec.steps.find((n) => n.id === "temper");
+    if (temperNode === undefined || temperNode.kind !== "iterate") {
+      throw new Error("expected the temper iterate");
+    }
+    const edited = {
+      ...spec,
+      steps: spec.steps.map((n) =>
+        n.kind === "iterate" && n.id === "temper"
+          ? {
+              ...n,
+              children: n.children.map((c) =>
+                c.kind === "step" && c.id === "mask-b"
+                  ? { ...c, params: { bytes: [0x00, 0x00, 0x00, 0x00] } }
+                  : c,
+              ),
+            }
+          : n,
+      ),
+    } as typeof spec;
+    const before = run(spec, seedBytes(DEFAULT_SEED));
+    const after = run(edited, seedBytes(DEFAULT_SEED));
+    expect(Array.from(after)).not.toEqual(Array.from(before));
+    // And the constant really is the published one.
+    expect(MT_TEMPER_B).toBe(0x9d2c5680);
+  });
+
+  it("tempers every word — the state words never appear in the output", () => {
+    // A wiring slip that bound `bodyOutput` to the iterate's `in` port instead
+    // of `y4` would emit the raw state and pass nothing here.
+    const twisted = twist(initGenrand(DEFAULT_SEED));
+    const out = run(buildMt19937Spec(16), seedBytes(DEFAULT_SEED));
+    const emitted = [0, 1, 2, 3].map(
+      (i) =>
+        (((out[i * 4] as number) << 24) |
+          ((out[i * 4 + 1] as number) << 16) |
+          ((out[i * 4 + 2] as number) << 8) |
+          (out[i * 4 + 3] as number)) >>>
+        0,
+    );
+    for (let i = 0; i < 4; i++) {
+      expect(emitted[i]).not.toBe(twisted[i] as number);
+    }
   });
 });

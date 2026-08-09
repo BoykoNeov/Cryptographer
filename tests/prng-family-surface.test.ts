@@ -26,6 +26,7 @@
 
 import { buildChaCha20CsprngSpec } from "@/ciphers/chacha20-csprng";
 import { LCG_ITERATE_ID, LCG_WORD_BYTES, buildLcgSpec } from "@/ciphers/lcg";
+import { buildMt19937Spec } from "@/ciphers/mt19937";
 import {
   CURRENT_SCHEMA_VERSION,
   type CipherDocument,
@@ -88,12 +89,20 @@ const resetAll = (): void => {
 
 /**
  * Build a canonical spec for any generator, without going through the store.
- * Routes on the variant because the family now spans two builders — the shared
- * LCG template and the ChaCha20 CSPRNG — and a test that called only the former
- * would silently stop covering the newest variant.
+ * Routes on the variant because the family now spans THREE builders — the
+ * shared LCG template, the ChaCha20 CSPRNG and MT19937 — and a test that called
+ * only the first would silently stop covering the newest variant.
+ *
+ * This dispatcher earned its keep when MT19937 landed: adding the variant to
+ * the `Prng` union broke this line at compile time, which is precisely the
+ * coverage-erosion this shape exists to prevent.
  */
 const buildPrngSpecFor = (p: Prng, length: number) =>
-  p === "chacha20-csprng" ? buildChaCha20CsprngSpec(length) : buildLcgSpec(p, length);
+  p === "chacha20-csprng"
+    ? buildChaCha20CsprngSpec(length)
+    : p === "mt19937"
+      ? buildMt19937Spec(length)
+      : buildLcgSpec(p, length);
 
 const ALL_ALGORITHMS: readonly Algorithm[] = [
   ...CIPHER_OPTIONS,
@@ -116,6 +125,20 @@ describe("PRNG family surface", () => {
       for (const p of PRNG_OPTIONS) {
         expect(isCipher(p), `isCipher("${p}") must be false`).toBe(false);
       }
+    });
+
+    it("PRNG_OPTIONS lists EVERY member of the Prng union", () => {
+      // Found by perturbation while adding MT19937, and worth the extra test:
+      // every assertion in this file iterates `PRNG_OPTIONS`, so a variant
+      // missing from `ALL_PRNGS` does not fail anything — it silently shrinks
+      // the loops and the whole file passes VACUOUSLY. Deleting MT19937 from
+      // `ALL_PRNGS` took this suite from 28 tests to 26, all green.
+      //
+      // `PRNG_LABELS` is a `Record<Prng, string>`, so the COMPILER already
+      // forces it to carry every variant. Comparing the runtime list against
+      // its keys is what converts that compile-time exhaustiveness into a
+      // check on the list every other test here trusts.
+      expect([...PRNG_OPTIONS].sort()).toEqual(Object.keys(PRNG_LABELS).sort());
     });
 
     it("every algorithm belongs to exactly one family", () => {

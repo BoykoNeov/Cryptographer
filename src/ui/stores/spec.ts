@@ -55,6 +55,7 @@ import { buildCfbSpec } from "@/ciphers/modes/cfb";
 import { buildCtrSpec } from "@/ciphers/modes/ctr";
 import { buildEcbSpec } from "@/ciphers/modes/ecb";
 import { buildOfbSpec } from "@/ciphers/modes/ofb";
+import { buildMt19937Spec } from "@/ciphers/mt19937";
 import { readPrngOutputLength } from "@/ciphers/prng-request";
 import { rsaDecryptSpec, rsaEncryptSpec } from "@/ciphers/rsa";
 import { salsa20DecryptSpec, salsa20EncryptSpec } from "@/ciphers/salsa20";
@@ -597,7 +598,13 @@ export const usePrngOutputLength = (): (() => number) => prngOutputLength;
 const resolvePrngDefault = (p: Prng): CipherSpec =>
   p === "chacha20-csprng"
     ? buildChaCha20CsprngSpec(Math.min(prngOutputLength(), MAX_CSPRNG_OUTPUT))
-    : buildLcgSpec(p, prngOutputLength());
+    : p === "mt19937"
+      ? // MT19937 needs no clamp of its own: `MAX_PRNG_OUTPUT` (1024) is well
+        // inside the 2496 bytes one twist supplies, so the builder's refusal
+        // above that is unreachable from the UI and stays a guard on the
+        // builder's own contract rather than a ceiling a user can hit.
+        buildMt19937Spec(prngOutputLength())
+      : buildLcgSpec(p, prngOutputLength());
 
 // ─── Signals ─────────────────────────────────────────────────────────────
 //

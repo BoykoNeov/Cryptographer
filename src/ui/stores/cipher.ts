@@ -150,7 +150,7 @@ export type Asymmetric = "rsa";
  * (`chacha20-csprng`) that is not. The comparison is the point — see
  * `ciphers/chacha20-csprng.ts` on the single step that separates them.
  */
-export type Prng = "minstd-rand0" | "minstd-rand" | "ansi-c-lcg" | "chacha20-csprng";
+export type Prng = "minstd-rand0" | "minstd-rand" | "ansi-c-lcg" | "mt19937" | "chacha20-csprng";
 
 /**
  * Category discriminant for the algorithm selector (Slice 2.10c, 2026-05-25).
@@ -241,7 +241,13 @@ export const isAsymmetric = (a: Algorithm): a is Asymmetric => a === "rsa";
  * generator silently acquires a mode selector, padding and a key field. Reading
  * the list means the union and the predicate cannot disagree.
  */
-const ALL_PRNGS: readonly Prng[] = ["minstd-rand0", "minstd-rand", "ansi-c-lcg", "chacha20-csprng"];
+const ALL_PRNGS: readonly Prng[] = [
+  "minstd-rand0",
+  "minstd-rand",
+  "ansi-c-lcg",
+  "mt19937",
+  "chacha20-csprng",
+];
 
 /**
  * True when an algorithm is a pseudo-random generator. Defined alongside
@@ -399,6 +405,9 @@ export const PRNG_LABELS: Record<Prng, string> = {
   // generator, not this LCG. The C standard's own §7.22.2.2 example and
   // POSIX `rand_r` are what this recurrence actually is.
   "ansi-c-lcg": "ANSI C LCG (rand_r)",
+  // Named after the algorithm rather than its constants: unlike the three
+  // above, MT19937 is not summarised by a multiplier.
+  mt19937: "MT19937 (Mersenne Twister)",
   // The odd one out, and labelled as such: the other three are named after
   // their constants because their constants are all they are. This one is named
   // after a cipher, because it IS one.
@@ -496,6 +505,8 @@ export const PRNG_DESCRIPTIONS: Record<Prng, string> = {
     "MINSTD revised (Park–Miller–Stockmeyer 1993) — x ← 48271·x mod 2³¹−1. Same structure, better spectral behaviour.",
   "ansi-c-lcg":
     "ANSI C LCG (rand_r) — x ← (1103515245·x + 12345) mod 2³¹. A power-of-two modulus: the low bits are almost pure structure.",
+  mt19937:
+    "Mersenne Twister — period 2¹⁹⁹³⁷−1, passes the statistical batteries the LCGs fail, and is still fully predictable: 624 outputs recover the whole state.",
   "chacha20-csprng":
     "ChaCha20 as a generator — the stream cipher with the message removed. Twenty rounds per 64 bytes, and unlike the LCGs its output does not reveal its state.",
 };
@@ -592,6 +603,8 @@ export const PRNG_HISTORY: Record<Prng, string> = {
     "D. H. Lehmer's 1951 generator, which Park & Miller proposed in 1988 as a 'minimal standard' any generator should at least match; it became the default in countless libraries, and the source of countless flawed simulations.",
   "minstd-rand":
     "Park, Miller & Stockmeyer's 1993 revision after correspondence over the original's spectral flaws; both multipliers are named in the C++ standard, which is unusual — few algorithms have their constants fixed by an ISO document.",
+  mt19937:
+    "Matsumoto & Nishimura, 1998 — the default generator in Python, C++, MATLAB, Ruby and PHP, and the one a learner is most likely to have already used. It was a genuine advance over the LCGs on every statistical measure, and was never intended to be unpredictable; a 2000s generation of web applications used it for session tokens and password resets anyway.",
   "ansi-c-lcg":
     "The sample rand() published in the 1989 ANSI C standard (and carried into POSIX rand_r) — an implementation illustration that a generation of programs shipped verbatim. Its power-of-two modulus makes the low bits worthless, which is exactly why the sample discards the bottom 16 before returning a number.",
   "chacha20-csprng":
@@ -1020,6 +1033,7 @@ export const DEFAULT_KEY_BYTES_BY_PRNG: Record<Prng, Uint8Array> = {
   "minstd-rand0": new Uint8Array(0),
   "minstd-rand": new Uint8Array(0),
   "ansi-c-lcg": new Uint8Array(0),
+  mt19937: new Uint8Array(0),
   "chacha20-csprng": new Uint8Array(0),
 };
 
@@ -1040,6 +1054,9 @@ export const SEED_BYTES_BY_PRNG: Record<Prng, number> = {
   "minstd-rand0": 4,
   "minstd-rand": 4,
   "ansi-c-lcg": 4,
+  // init_genrand takes a 32-bit seed, like the LCGs — the STATE is 624 words,
+  // but the seed that selects it is one.
+  mt19937: 4,
   "chacha20-csprng": 32,
 };
 
@@ -1056,6 +1073,7 @@ export const PRNG_UNIT_BYTES_BY_PRNG: Record<Prng, number> = {
   "minstd-rand0": 4,
   "minstd-rand": 4,
   "ansi-c-lcg": 4,
+  mt19937: 4,
   "chacha20-csprng": 64,
 };
 
@@ -1064,6 +1082,7 @@ export const PRNG_UNIT_NOUN_BY_PRNG: Record<Prng, string> = {
   "minstd-rand0": "word",
   "minstd-rand": "word",
   "ansi-c-lcg": "word",
+  mt19937: "word",
   "chacha20-csprng": "block",
 };
 
@@ -1084,11 +1103,21 @@ export const PRNG_UNIT_NOUN_BY_PRNG: Record<Prng, string> = {
  * reason: `srand(1)` is what C guarantees an unseeded `rand()` behaves as, so
  * the opening states 1103527590, 377401575, 662824084, … are the ones a learner
  * will find quoted everywhere the sample generator is discussed.
+ *
+ * **MT19937 is the exception, and for the same underlying reason.** Its default
+ * is 5489 rather than 1, because 5489 is `std::mt19937`'s `default_seed` — the
+ * seed under which ISO/IEC 14882 §rand.predef states its conformance value. The
+ * rule is "the seed that has a published vector", not "the number 1"; for three
+ * of these generators those coincide, and for this one they do not.
  */
 export const DEFAULT_PT_BYTES_BY_PRNG: Record<Prng, Uint8Array> = {
   "minstd-rand0": new Uint8Array([0x00, 0x00, 0x00, 0x01]),
   "minstd-rand": new Uint8Array([0x00, 0x00, 0x00, 0x01]),
   "ansi-c-lcg": new Uint8Array([0x00, 0x00, 0x00, 0x01]),
+  // 5489 = 0x1571 — `std::mt19937`'s default_seed. The app's first paint
+  // therefore opens `d0 91 bb 5c 22 ae 9e f6 …`, which is the published
+  // sequence anyone who has printed MT19937's first outputs will recognise.
+  mt19937: new Uint8Array([0x00, 0x00, 0x15, 0x71]),
   // All-zero, and for the same reason seed 1 is right for the LCGs: it is the
   // seed under which a published vector exists. With a zero seed (and this
   // generator's zero nonce and counter 0) the stream opens
