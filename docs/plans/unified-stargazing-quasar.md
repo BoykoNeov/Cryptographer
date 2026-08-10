@@ -440,6 +440,38 @@ are pinned transitively in P4.
 > assumed would only be checkable transitively through P3 — **captured as a byte
 > fixture**, because CI runs Node 22 and has no ML-KEM at all.
 
+> **RESOLVED at the start of P3 (2026-08-10) — option (a) works, and gives more
+> than `ek`.** A hand-assembled PKCS#8 carrying the `seed` arm of the ML-KEM
+> `PrivateKey` CHOICE imports cleanly on v24.14.1 and is fully deterministic, so
+> the seed → key oracle exists after all — we choose the seed, rather than being
+> handed one. Four measured facts:
+>
+> - **The `[0]` tag must be IMPLICIT** (`0x80 0x40 <64 bytes>` inside the outer
+>   `OCTET STRING`). The EXPLICIT spelling (`0xa0`) and a bare `OCTET STRING`
+>   are both rejected with `error:1E08010C:DECODER routines::unsupported`.
+> - **`generateKeyPairSync`'s own export uses the *both* arm** — `SEQUENCE {
+>   OCTET STRING (64) seed, OCTET STRING (2400) expandedKey }`, hence the 2498
+>   bytes the correction above noticed. So the seed is recoverable from any
+>   generated key, and re-importing it reproduces that key exactly. That is how
+>   the two halves were cross-checked rather than assumed.
+> - **The expanded `dk` is FIPS 203 §7.1's layout, verified byte for byte**:
+>   `dk_PKE (1152) ‖ ek (1184) ‖ H(ek) (32) ‖ z (32)`. This is the part that
+>   beats the original plan: P3 gets a direct oracle for K-PKE keygen's **secret**
+>   half (`ByteEncode_12(ŝ)`), not merely for `ek`, so a wrong CBD or a wrong NTT
+>   on `s` is caught where it happens instead of only through `t̂`.
+> - **P4's oracle works through a seed-imported key too**: `encapsulate` /
+>   `decapsulate` round-trip, and a corrupted ciphertext decapsulates without
+>   throwing to a deterministic, different secret.
+>
+> Captured as `tests/fixtures/ml-kem-768-seed-vectors.json` (18 seeds → `ek`,
+> `dk_PKE`, `H(ek)`; 4 encapsulations; one cross-decapsulation pair), because CI
+> is on Node 22. Every seed is derived from its own label so the fixture is
+> rebuildable; the harvest script is `M:\claud_projects\temp\p3-oracle\harvest.mjs`
+> and its essentials are documented in `tests/ml-kem-oracle-fixture.test.ts`'s
+> header. Two of the eighteen seeds share `d` and differ in `z`, which is the only
+> way the fixture can assert §7.1's split — same `ek`, same `dk_PKE`, different
+> implicit-rejection secret. That pins P4's hardest-to-see branch before P4 starts.
+
 ### P4 — ML-KEM encapsulation and decapsulation
 
 The Fujisaki–Okamoto wrapper: `G`, the re-encryption check, and implicit
@@ -491,6 +523,12 @@ for the no-params steps, entries in `NO_PARAMS_PORT_NATIVE_TYPES` and
   `zq-decompress@1`, `zq-byte-encode@1`, `zq-byte-decode@1`, `zq-cbd@1`,
   `zq-base-case-mul@1`.
 - `src/steps/ml-kem-*.ts` — the five Keccak monoliths (P3).
+- `src/ciphers/keccak-compute.ts` — the sponge in one call, for those monoliths
+  (P3). **Not a second Keccak**: it drives the same nine step executors
+  `buildKeccakRound` emits as spec nodes, with the same constants, so the
+  one-frame hash inside ML-KEM cannot drift from the sponge the Hash selector
+  shows. Measured at ~48 ms for a keygen-sized workload, and pinned against both
+  `node:crypto` and the app's own traced `buildSha3256Spec()`.
 
 **Modified:**
 - `src/ui/stores/cipher.ts` — fifth `Category`, `Lattice` union, `Asymmetric`

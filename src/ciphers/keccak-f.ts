@@ -48,7 +48,7 @@ const laneStart = (x: number, y: number): number => (x + 5 * y) * LANE_BYTES;
  * script derived these from the triangular recurrence and confirmed the full
  * hash matches).
  */
-const RHO_OFFSETS: readonly number[] = [
+export const RHO_OFFSETS: readonly number[] = [
   0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14,
 ];
 
@@ -56,7 +56,7 @@ const RHO_OFFSETS: readonly number[] = [
  * π (pi) lane transposition as a 200-byte gather: the new lane (x,y) is the old
  * lane ((x+3y) mod 5, x) — FIPS 202 §3.2.3. `output[i] = input[PI_INDICES[i]]`.
  */
-const PI_INDICES: readonly number[] = (() => {
+export const PI_INDICES: readonly number[] = (() => {
   const idx = new Array<number>(STATE_BYTES);
   for (let x = 0; x < 5; x++) {
     for (let y = 0; y < 5; y++) {
@@ -85,8 +85,8 @@ const chiShift = (k: number): readonly number[] => {
   }
   return idx;
 };
-const CHI_SHIFT1 = chiShift(1); // A[x+1]
-const CHI_SHIFT2 = chiShift(2); // A[x+2]
+export const CHI_SHIFT1 = chiShift(1); // A[x+1]
+export const CHI_SHIFT2 = chiShift(2); // A[x+2]
 
 /**
  * ι (iota) round constants RC[0..23], each a 64-bit value derived from the

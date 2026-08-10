@@ -229,11 +229,23 @@ describe("a genuine ML-KEM-768 encapsulation key pins the bit order", () => {
   it("decodes the three encoded polynomials into 768 coefficients, every one inside [0, q)", () => {
     // 12 bits can express 4096 values and the ring has 3329, so ~19% of random
     // 12-bit values are out of range. 768 in a row landing in range is not luck.
+    //
+    // Read RAW — `decodePerturbed` with no perturbation — rather than through
+    // `runDecode`. FIPS 203's ByteDecode_d ends in `mod min(2^d, q)` and the
+    // shipped step faithfully does the same, so a range check made through it
+    // can never fail whatever bytes go in. (Found while writing P3's fixture
+    // test, which had inherited the same vacuous shape.) The `runDecode` path
+    // is still pinned against this key, by the re-encode test below.
     const coeffs = [0, 1, 2].flatMap((p) =>
-      runDecode(EK_FIXTURE.subarray(p * 384, (p + 1) * 384), 12),
+      decodePerturbed(EK_FIXTURE.subarray(p * 384, (p + 1) * 384), 12, false, false),
     );
     expect(coeffs).toHaveLength(768);
     expect(coeffs.filter((c) => c >= Q)).toEqual([]);
+    // ...and the shipped step agrees with the raw read, its reduction never
+    // firing, which is what makes the two checks one check.
+    expect(
+      [0, 1, 2].flatMap((p) => runDecode(EK_FIXTURE.subarray(p * 384, (p + 1) * 384), 12)),
+    ).toEqual(coeffs);
   });
 
   it("re-encodes those coefficients back to the key's own bytes, exactly", () => {
