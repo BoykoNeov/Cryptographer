@@ -50,6 +50,7 @@ import {
   readKmacKeyLength,
 } from "@/ciphers/kmac";
 import { buildLcgSpec } from "@/ciphers/lcg";
+import { buildMlKemDecapsSpec, buildMlKemEncapsSpec } from "@/ciphers/ml-kem-768";
 import { buildCbcSpec } from "@/ciphers/modes/cbc";
 import { buildCfbSpec } from "@/ciphers/modes/cfb";
 import { buildCtrSpec } from "@/ciphers/modes/ctr";
@@ -494,6 +495,11 @@ export const isCshakeHash = (h: Hash): boolean => h === "cshake128" || h === "cs
  */
 const asymmetricDefaults: Record<Asymmetric, Record<Mode, CipherSpec>> = {
   rsa: { encrypt: rsaEncryptSpec, decrypt: rsaDecryptSpec },
+  // A KEM's two directions are encapsulation and decapsulation. They map onto
+  // the encrypt/decrypt slots directly — encapsulation's output is the
+  // ciphertext decapsulation takes as its input — which is why ML-KEM joined
+  // this family rather than the lattice one it shares all its arithmetic with.
+  "ml-kem-768": { encrypt: buildMlKemEncapsSpec(), decrypt: buildMlKemDecapsSpec() },
 };
 
 /** Pick the canonical asymmetric spec for an `(asymmetric, mode)` pair.

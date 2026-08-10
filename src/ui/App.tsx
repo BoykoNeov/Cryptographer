@@ -97,6 +97,7 @@ import {
   CIPHER_OPTIONS,
   type Category,
   type Cipher,
+  DEFAULT_CT_BYTES_BY_ASYMMETRIC,
   DEFAULT_CT_BYTES_BY_CIPHER,
   DEFAULT_IV_BYTES_BY_CIPHER,
   DEFAULT_KEY_BYTES_BY_ASYMMETRIC,
@@ -1500,6 +1501,13 @@ export const App = () => {
     // emphatically NOT a plaintext: nothing about it is being transformed into
     // the output, and calling it one would teach the wrong model.
     if (isPrng(algorithm())) return "seed";
+    // A KEM is not an encryption scheme, and the labels have to say so or the
+    // whole point is lost. Encapsulation does not transport a message the caller
+    // chose — it agrees a secret, and its input is the 32 bytes a real
+    // implementation would draw at random. Decapsulation returns that secret,
+    // never a plaintext.
+    if (algorithm() === "ml-kem-768")
+      return mode() === "encrypt" ? "message m (random)" : "ciphertext";
     // RSA: encrypt consumes the message m, decrypt consumes the ciphertext c.
     if (isAsymmetric(algorithm())) return mode() === "encrypt" ? "message" : "ciphertext";
     // The lattice family transforms a polynomial into its transformed form and
@@ -1512,6 +1520,7 @@ export const App = () => {
   const outputLabel = () => {
     if (isHash(algorithm())) return "digest";
     if (isPrng(algorithm())) return "random bytes";
+    if (algorithm() === "ml-kem-768") return mode() === "encrypt" ? "ciphertext" : "shared secret";
     if (isAsymmetric(algorithm())) return mode() === "encrypt" ? "ciphertext" : "message";
     if (isLattice(algorithm()))
       return mode() === "encrypt" ? "transformed polynomial" : "polynomial";
@@ -2686,10 +2695,18 @@ const algorithmDefaultKey = (a: Algorithm): Uint8Array => {
  */
 const algorithmDefaultPt = (a: Algorithm, mode: Mode = "encrypt"): Uint8Array => {
   if (isHash(a)) return DEFAULT_PT_BYTES_BY_HASH[a];
-  // RSA's "plaintext" default is its encrypt-mode message; the decrypt-mode
-  // ciphertext default is swapped in mode-aware by `changeMode` (mirrors how
-  // `DEFAULT_CT_BYTES_BY_CIPHER` is consulted for ciphers in decrypt mode).
-  if (isAsymmetric(a)) return DEFAULT_PT_BYTES_BY_ASYMMETRIC[a];
+  // The asymmetric family's default is MODE-AWARE, which it was not until P4.
+  // RSA could get away without it — its ciphertext is two bytes a user retypes
+  // in seconds — but ML-KEM's is 1088 bytes nobody will reconstruct by hand, and
+  // landing in the decapsulation direction with an encapsulation-shaped input in
+  // the field is a length error rather than a trace. This is the identical hole
+  // the lattice family fixed for the identical reason, and fixing it here gave
+  // `DEFAULT_CT_BYTES_BY_ASYMMETRIC` its first reader.
+  if (isAsymmetric(a)) {
+    return mode === "encrypt"
+      ? DEFAULT_PT_BYTES_BY_ASYMMETRIC[a]
+      : DEFAULT_CT_BYTES_BY_ASYMMETRIC[a];
+  }
   // A generator's "plaintext" is its seed — 1, the seed under which the ISO
   // conformance values are stated, so the first Run reproduces a published
   // sequence.
@@ -2702,10 +2719,9 @@ const algorithmDefaultPt = (a: Algorithm, mode: Mode = "encrypt"): Uint8Array =>
   // the field, or the first run transforms an already-untransformed value and
   // shows the user 512 bytes of garbage. `changeMode` copies the previous
   // output across on a flip, which covers every later transition; this covers
-  // the first landing, which nothing else does. (RSA has the identical hole —
-  // `DEFAULT_CT_BYTES_BY_ASYMMETRIC` has no reader — but its message is two
-  // bytes a user retypes in seconds, where this is 512 bytes of hex nobody is
-  // going to reconstruct by hand.)
+  // the first landing, which nothing else does. (The asymmetric family had the
+  // identical hole until P4, when ML-KEM's 1088-byte ciphertext made it
+  // untenable — see the mode-aware branch above.)
   if (isLattice(a)) return latticeDefaultInput(a, mode);
   return DEFAULT_PT_BYTES_BY_CIPHER[a];
 };

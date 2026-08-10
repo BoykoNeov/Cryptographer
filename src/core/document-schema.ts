@@ -89,11 +89,14 @@ export const HASH_IDS = [
 ] as const satisfies readonly Hash[];
 
 /**
- * Asymmetric (public-key) variants — `docs/plans/shimmying-booping-moth.md`.
- * RSA is the first member. `assertAsymmetricCoverage` below pins it against
- * the `Asymmetric` union in `ui/stores/cipher.ts`.
+ * Asymmetric (public-key) variants — `docs/plans/shimmying-booping-moth.md`
+ * (RSA, the first member) and `docs/plans/unified-stargazing-quasar.md` P4
+ * (ML-KEM-768). `assertAsymmetricCoverage` below pins this against the
+ * `Asymmetric` union in `ui/stores/cipher.ts`, and a missing entry surfaces as
+ * a cryptic `Type 'true' is not assignable to type 'never'` rather than a named
+ * error — which is exactly how P4 found this line.
  */
-export const ASYMMETRIC_IDS = ["rsa"] as const satisfies readonly Asymmetric[];
+export const ASYMMETRIC_IDS = ["rsa", "ml-kem-768"] as const satisfies readonly Asymmetric[];
 
 /**
  * Pseudo-random generator variants — `docs/plans/iterative-dancing-ocean.md`.

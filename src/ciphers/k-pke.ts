@@ -276,14 +276,21 @@ const own = (ctx: KPkeEmbedding, id: string, portName = "output"): PortBinding =
 
 // ─── Small builders ───────────────────────────────────────────────────────
 
-/** The shared modulus source, plus the γ table. Both are top-level here — port
- *  flow reaches every consumer, unlike inside an iterate body where aux is
- *  forced (see `ntt-3329-256.ts`'s header). */
-export const kPkeConstantNodes = (withGamma: boolean): StepNode[] => {
+/**
+ * The shared modulus source, plus the γ table.
+ *
+ * They read `cipherConstants` through aux rather than being wired from a
+ * parent, and that is not a stylistic choice: **port flow cannot cross a scope
+ * boundary**, so a body placed inside a group or an iterate cannot reach a `q`
+ * leaf outside it. Aux is the only channel that crosses. ML-KEM's collapsed
+ * key-generation group therefore emits its own prefixed pair — same bytes, same
+ * `cipherConstants`, its own two leaves.
+ */
+export const kPkeConstantNodes = (withGamma: boolean, prefix = ""): StepNode[] => {
   const nodes: StepNode[] = [
     {
       kind: "step",
-      id: Q_ID,
+      id: `${prefix}${Q_ID}`,
       type: "aux-load-bytes@1",
       params: { auxName: "q", byteLength: COEFF_BYTES },
     },
@@ -291,7 +298,7 @@ export const kPkeConstantNodes = (withGamma: boolean): StepNode[] => {
   if (withGamma) {
     nodes.push({
       kind: "step",
-      id: GAMMA_ID,
+      id: `${prefix}${GAMMA_ID}`,
       type: "aux-load-bytes@1",
       params: { auxName: "gamma", byteLength: GAMMA_TABLE_BYTES.length },
     });

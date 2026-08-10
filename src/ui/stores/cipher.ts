@@ -19,6 +19,7 @@
  */
 
 import { createSignal } from "solid-js";
+import { ML_KEM_DEFAULT_CIPHERTEXT, ML_KEM_DEFAULT_MESSAGE } from "../../ciphers/ml-kem-768";
 import { POLY_BYTES } from "../../ciphers/mlkem-constants";
 import { DEFAULT_NTT_INPUT, DEFAULT_NTT_OUTPUT } from "../../ciphers/ntt-3329-256";
 
@@ -127,7 +128,7 @@ export type Hash =
  * family + category is what lets the UI hide those three symmetric-only
  * surfaces (presenting a "key" field for RSA would miseducate).
  */
-export type Asymmetric = "rsa";
+export type Asymmetric = "rsa" | "ml-kem-768";
 
 /**
  * Pseudo-random generator family — algorithms that consume a seed and emit a
@@ -250,11 +251,27 @@ export const isHash = (a: Algorithm): a is Hash =>
   a === "kmacxof256";
 
 /**
- * True when an algorithm is in the asymmetric (public-key) family. RSA today.
+ * The public-key variants, hoisted above `isAsymmetric` so the predicate can be
+ * membership rather than a disjunction. `ASYMMETRIC_OPTIONS` re-exports it
+ * further down, beside the other families' option lists.
+ *
+ * **Converted from `a === "rsa"` in the same edit that added ML-KEM (P4).** The
+ * disjunction form re-arms the `isCipher` landmine on every new *variant*, not
+ * just every new family: widen the union, forget the extra arm, and
+ * `isAsymmetric` returns false — so `isCipher` returns true, and because it is a
+ * hand-written type predicate the compiler believes it. ML-KEM would silently
+ * acquire a symmetric key field, a cipher-mode selector and a padding scheme.
+ * The same conversion was made for `isPrng` after MT19937 for the same reason.
+ */
+const ALL_ASYMMETRICS: readonly Asymmetric[] = ["rsa", "ml-kem-768"];
+
+/**
+ * True when an algorithm is in the asymmetric (public-key) family.
  * Defined alongside `isHash` so `isCipher` can exclude BOTH non-cipher
  * families explicitly.
  */
-export const isAsymmetric = (a: Algorithm): a is Asymmetric => a === "rsa";
+export const isAsymmetric = (a: Algorithm): a is Asymmetric =>
+  (ALL_ASYMMETRICS as readonly string[]).includes(a);
 
 /**
  * The generator variants, hoisted above `isPrng` so the predicate can be
@@ -440,12 +457,13 @@ export const HASH_LABELS: Record<Hash, string> = {
   kmacxof256: "KMACXOF256",
 };
 
-/** Asymmetric dropdown options + labels. One entry today (RSA); mirrors the
- *  cipher / hash option shapes so the selector renders any family uniformly. */
-const ALL_ASYMMETRICS: readonly Asymmetric[] = ["rsa"];
+/** Asymmetric dropdown options + labels. The list itself lives up beside
+ *  `isAsymmetric`, which reads it — see the note there on why the predicate is
+ *  membership rather than a disjunction. */
 export const ASYMMETRIC_OPTIONS = ALL_ASYMMETRICS;
 export const ASYMMETRIC_LABELS: Record<Asymmetric, string> = {
   rsa: "RSA (textbook)",
+  "ml-kem-768": "ML-KEM-768 (post-quantum KEM)",
 };
 
 /** Lattice dropdown options + labels. One entry today (the NTT); mirrors the
@@ -556,6 +574,8 @@ export const HASH_DESCRIPTIONS: Record<Hash, string> = {
 /** Per-asymmetric one-liner. Mirrors `ASYMMETRIC_LABELS`. */
 export const ASYMMETRIC_DESCRIPTIONS: Record<Asymmetric, string> = {
   rsa: "Textbook RSA — public-key: key-gen (p, q, e → n, φ, d) + modular exponentiation. No padding.",
+  "ml-kem-768":
+    "ML-KEM-768 (FIPS 203) — post-quantum key encapsulation over lattices; agrees a 32-byte secret instead of encrypting a message, and rejects forged ciphertexts silently.",
 };
 
 /** Per-PRNG one-liner. Mirrors `PRNG_LABELS`. */
@@ -664,6 +684,8 @@ export const HASH_HISTORY: Record<Hash, string> = {
 /** Per-asymmetric historical one-liner. Mirrors `ASYMMETRIC_DESCRIPTIONS`. */
 export const ASYMMETRIC_HISTORY: Record<Asymmetric, string> = {
   rsa: "Rivest, Shamir & Adleman, 1977 — the first practical public-key cryptosystem; secretly pre-discovered by GCHQ's Cocks in 1973.",
+  "ml-kem-768":
+    "CRYSTALS-Kyber (Bos, Ducas, Kiltz, Lepoint, Lyubashevsky, Schanck, Schwabe, Seiler & Stehlé) won NIST's 2016–2022 post-quantum competition and was standardised as FIPS 203 in August 2024 — the first new public-key standard in decades, chosen because a large quantum computer would break RSA and elliptic curves outright while leaving lattice problems standing.",
 };
 
 /** Per-PRNG historical one-liner. Mirrors `PRNG_DESCRIPTIONS`. */
@@ -1087,16 +1109,29 @@ export const DEFAULT_PT_BYTES_BY_HASH: Record<Hash, Uint8Array> = {
 /** Empty key per asymmetric variant — RSA has no symmetric key field. */
 export const DEFAULT_KEY_BYTES_BY_ASYMMETRIC: Record<Asymmetric, Uint8Array> = {
   rsa: new Uint8Array(0),
+  // ML-KEM has a key PAIR, but not a symmetric key — the pair is derived inside
+  // the spec from an editable 64-byte seed leaf, exactly as RSA derives n and d
+  // from p, q and e.
+  "ml-kem-768": new Uint8Array(0),
 };
 
 /** Default message m (encrypt input) — 65 as a 2-byte BE integer. */
 export const DEFAULT_PT_BYTES_BY_ASYMMETRIC: Record<Asymmetric, Uint8Array> = {
   rsa: new Uint8Array([0x00, 0x41]),
+  // Encapsulation's input is not a message in the usual sense: it is the 32
+  // bytes a real implementation would draw at random, and the "randomness" the
+  // encryption runs with is derived from them rather than drawn separately.
+  "ml-kem-768": ML_KEM_DEFAULT_MESSAGE,
 };
 
 /** Default ciphertext c (decrypt input) — 2790 (= 65¹⁷ mod 3233) as 2-byte BE. */
 export const DEFAULT_CT_BYTES_BY_ASYMMETRIC: Record<Asymmetric, Uint8Array> = {
   rsa: new Uint8Array([0x0a, 0xe6]),
+  // OpenSSL's own encapsulation under this seed, so the first Run in the
+  // decapsulation direction reproduces a shared secret a different
+  // implementation reported. 1088 bytes nobody would retype, which is why this
+  // table finally acquired a reader — see `algorithmDefaultPt` in App.tsx.
+  "ml-kem-768": ML_KEM_DEFAULT_CIPHERTEXT,
 };
 
 // ─── PRNG defaults ─────────────────────────────────────────────────────────
