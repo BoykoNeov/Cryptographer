@@ -1,6 +1,6 @@
 # ML-KEM — the lattice layer, and the app's first post-quantum algorithm
 
-**Status: P1 + P2 SHIPPED 2026-08-09; P3 SHIPPED 2026-08-10. P4–P5 open.** Five phases; the NTT is
+**Status: P1 + P2 SHIPPED 2026-08-09; P3 + P4 SHIPPED 2026-08-10. P5 open.** Five phases; the NTT is
 selectable under a fifth `Category`, `"lattice"`. Scope decided with
 the user at plan time: **ML-KEM only** (ML-DSA deferred to its own plan),
 **Keccak calls are monolith frames that cross-reference the already-visible
@@ -513,7 +513,7 @@ P4:
    groups have disjoint id sets. Any future "embed an existing spec N times" work
    inherits this obligation.
 
-### P4 — ML-KEM encapsulation and decapsulation
+### P4 — ML-KEM encapsulation and decapsulation — SHIPPED 2026-08-10
 
 The Fujisaki–Okamoto wrapper: `G`, the re-encryption check, and implicit
 rejection via `J`. Adds `"ml-kem-768"` to `Asymmetric`, widens `isAsymmetric` to
@@ -618,6 +618,57 @@ caught this plan stating a constant wrongly:
   `H(ek)`. With keygen inside the spec these are equal by construction, so say
   so where the spec computes it.
 - The `dk` parse offsets of §7.1's `dk_PKE ‖ ek ‖ H(ek) ‖ z`.
+
+#### OUTCOME (2026-08-10) — what P4 actually cost, and what it found
+
+**Shipped in four commits**: the K-PKE extraction (prefixable node lists +
+pre-refactor spec digests), `ml-kem.select-shared-secret@1`, the two specs plus
+the family surface, and the browser scrub.
+
+**Measured, all three predictions wrong in the same direction.** Encapsulation is
+1,066 nodes / 13,441 frames; decapsulation 1,359 / 17,542. `runSpec` takes 1.5 s
+and 0.9 s. In the browser a decapsulation re-run settles in **~0.9 s** — the
+fitted 1.6 ms/node + 0.095 ms/frame model predicted 3–4 s and would have argued
+for taking `dk` through aux and never showing the key being born. That is the
+third phase running where the coefficient is pessimistic; treat it as an upper
+bound on the UI pipeline, never as a design constraint on its own.
+
+**Five things worth carrying forward.**
+
+1. **A group has exactly ONE input port**, and that is what decided which bodies
+   are collapsed. Key generation takes only the seed, so it groups for free; the
+   encryption and decryption bodies take two and three inputs and could only be
+   boxed by concatenating outside and splitting back inside — plumbing serving
+   the box rather than the algorithm. The group's single output is `ek ‖ dk`,
+   which is exactly what FIPS 203's KeyGen returns, so the split outside it is
+   the standard's own `(ek, dk)` rather than an artefact of the constraint.
+2. **`q` and `gamma` appear twice** because port flow cannot cross a group
+   boundary. Third time this constraint has decided a design (after the CSPRNG's
+   seed and the NTT's modulus); `kPkeConstantNodes` now takes a prefix.
+3. **The wrong version of `J(z ‖ c)` is unrepresentable without moving nodes.**
+   Same-scope wiring is forward-only, so binding `j-in` to `re.c` where it stands
+   throws rather than computing the wrong answer. A weak structural guard, but a
+   real one — and the perturbation test had to relocate two nodes to write the
+   mistake at all.
+4. **The browser scrub found a bug no headless test could.** Switching from RSA
+   to ML-KEM left RSA's 2-byte message in the field and the trace died on
+   `zq-vec-add: ports "a" (512 bytes) and "b" (32 bytes)`. The public-key
+   dropdown wired straight to `setAsymmetric` with no smart input swap — because
+   RSA was the only member, so a variant switch was **unreachable and therefore
+   untested**. Generalised in `docs/gotchas.md`: a one-member family's
+   variant-switch handler is dead code until the second member lands.
+5. **The fixture's corruption is `c[0] ^= 0x01`.** It records the flag
+   `corruptedCiphertextFlipsByte0` but not the value; a different flip gives a
+   different decoy that reads as a broken implementation. Found by trying `0xff`.
+
+**The narration debt is CLOSED.** All twelve narrated lattice types were read on
+screen at the parameters this section names — `zq-compress@1` at d = 10 / 4 / 1,
+`zq-decompress@1` at all three, `ml-kem.hash-g@1` at both call sites,
+`ml-kem.sample-ntt@1` reporting a real block count, and `ml-kem.hash-h@1` /
+`ml-kem.kdf-j@1` rendered outside a test spec for the first time. The select was
+read in BOTH verdicts: flipping one ciphertext bit in the field turns "the
+ciphertexts MATCH" into "the ciphertexts DIFFER in 1 of 1088 bytes", names the
+divergent byte, and changes the output without raising an error.
 
 #### The narration debt — PAID 2026-08-10, with one half deliberately left open
 

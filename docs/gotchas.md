@@ -240,6 +240,29 @@ This was measured 2026-06-01 while attempting topology "A" for the Speck key sch
 - **`SampleNTT`'s loop condition must be the ACCEPTED-COEFFICIENT count, never a block count.** ~1 candidate in 6 exceeds `q` and is discarded, so the bytes a draw consumes is a random variable with no fixed bound — the same failure class as an undersized RSA square-and-multiply unroll. And **"needs more than two squeeze blocks" is a VACUOUS assertion**: acceptance is ~81%, so 256 coefficients need ~473 bytes and *every* draw already spends three 168-byte blocks. Measured over 162 draws: 160 take three, 2 take four. Assert that the count VARIES.
 - **`Compress₁` is the decision step, and it is why the noise has to be small.** Decryption ends by rounding every coefficient of `w` to whichever of 0 or `⌈q/2⌉` it is nearer. Everything upstream — the size of η, the compression widths `du`/`dv` — exists to keep the accumulated error under half a bucket so that rounding lands on the right side.
 
+## Algorithm families with one member
+
+- **A one-member family's variant-switch handler is dead code until the second
+  member lands — and it will be missing.** ML-KEM found this: the public-key
+  dropdown wired straight to `setAsymmetric` with no smart input swap, unlike
+  `changeHash` / `changePrng`, because RSA was the only member and switching
+  *within* the family was unreachable. The first click on the second member left
+  RSA's 2-byte message in the field and the trace died on
+  `zq-vec-add: ports "a" (512 bytes) and "b" (32 bytes) must be the same length`
+  — a stale input wearing the costume of an arithmetic bug. **No headless test
+  can see this**: the handler is UI-only, and every KAT passed. When adding a
+  second member to any family, go and read that family's `change*` handler
+  before anything else, and check it against the families that already have
+  several.
+- **If the family's defaults are direction-dependent, the swap must be
+  MODE-AWARE.** Compare against the previous variant's default *at the current
+  mode* and swap in the next variant's default *at the current mode*. A
+  mode-blind comparison never matches in the decrypt direction, so the field
+  silently keeps the wrong bytes — a distinct branch, and it needs its own test.
+- Related: `DEFAULT_CT_BYTES_BY_ASYMMETRIC` sat with **no reader at all** until
+  ML-KEM, because RSA's ciphertext is two bytes a user retypes in seconds. A
+  table nothing reads is not evidence that nothing needs it.
+
 ## Tooling / shell
 
 - **Don't redirect native command stderr in PowerShell with `2>&1`.** PowerShell 5.1 wraps stderr lines in `NativeCommandError` records and sets `$?` to false even on success exit code 0. Capture stdout only, or merge in a different way.
