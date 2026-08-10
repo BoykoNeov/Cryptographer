@@ -78,6 +78,12 @@ import {
   replicateHighFanoutSources,
   validateGraph,
 } from "@/core/graph";
+import { nttButterflyPlacement } from "@/core/ntt-layout";
+import {
+  type NttButterflyShape,
+  nttButterfliesById,
+  nttButterflyNeverModes,
+} from "@/core/ntt-shape";
 import { resolvePortMap } from "@/core/port-projection";
 import { type LegalSource, legalSourcesForInput } from "@/core/port-sources";
 import { allColorableSources, assignSourceColors } from "@/core/source-colors";
@@ -613,6 +619,15 @@ const EMPTY_TWOFISH_ROUNDS: ReadonlyMap<string, TwofishRoundShape> = new Map();
  * vertical ribbon.
  */
 const EMPTY_ARX_ROUNDS: ReadonlyMap<string, ArxDoubleRoundShape> = new Map();
+
+/**
+ * Empty NTT-butterfly map — the fourth parallel default (see
+ * `EMPTY_FEISTEL_ROUNDS`). Unlike the three above, an id present here names an
+ * **iterate**, not a group: an NTT layer's body is a port-mode loop run once
+ * per butterfly group. It lays out as the 3 × 4 butterfly cell (see
+ * `ntt-layout.ts`) instead of an eight-chip horizontal ribbon.
+ */
+const EMPTY_NTT_BUTTERFLIES: ReadonlyMap<string, NttButterflyShape> = new Map();
 
 /**
  * Replica placement info, derived once at the top of `layoutRoot` from the
@@ -1363,6 +1378,15 @@ const layoutNode = (
    * untouched.
    */
   arxRounds: ReadonlyMap<string, ArxDoubleRoundShape> = EMPTY_ARX_ROUNDS,
+  /**
+   * Butterfly-shaped NTT layers (id → derived `NttButterflyShape`). The fourth
+   * member of the canonical-layout family, and the first whose container is an
+   * **iterate** rather than a group: an id here lays out as the 3 × 4 butterfly
+   * cell (see `ntt-layout.ts`). Kept a separate param for the same reason as
+   * `twofishRounds` and `arxRounds` — the three earlier paths stay
+   * byte-identically untouched.
+   */
+  nttButterflies: ReadonlyMap<string, NttButterflyShape> = EMPTY_NTT_BUTTERFLIES,
 ): Box => {
   const container = containersById.get(id);
   const pin = pinned.get(id);
@@ -1481,6 +1505,42 @@ const layoutNode = (
     const innerX = startX + consts.CONTAINER_PAD;
     const innerY = startY + HEADER_H + consts.CONTAINER_PAD;
     const placement = arxDoubleRoundPlacement(arx, container.childIds, {
+      leafW: consts.LEAF_W,
+      leafH: consts.LEAF_H,
+    });
+    for (const childId of container.childIds) {
+      const off = placement.offsets.get(childId);
+      if (off === undefined) continue;
+      const delta = relativePins.get(childId);
+      out.set(childId, {
+        x: innerX + off.dx + (delta?.dx ?? 0),
+        y: innerY + off.dy + (delta?.dy ?? 0),
+        w: consts.LEAF_W,
+        h: consts.LEAF_H,
+      });
+    }
+    const w = placement.bodyW + 2 * consts.CONTAINER_PAD;
+    const h = HEADER_H + placement.bodyH + 2 * consts.CONTAINER_PAD;
+    const box: Box = { x: startX, y: startY, w, h };
+    out.set(id, box);
+    return box;
+  }
+
+  // Canonical NTT butterfly layout — the same idea as the three branches above,
+  // but the container is an ITERATE (an NTT layer runs its butterfly body once
+  // per group of coefficients). Two rails with the split centred above and the
+  // recombine below, and the ζ machinery in a side lane so its wires never
+  // cross the butterfly's own. See `ntt-layout.ts`.
+  //
+  // Reaching this branch means the iterate is EXPANDED: `expandCollapsedIterates`
+  // swaps a collapsed iterate's body for per-block chips before layout runs, and
+  // a collapsed container has no childIds at all (handled far above), so a cell
+  // and a chip row are mutually exclusive by construction.
+  const ntt = nttButterflies.get(id);
+  if (container.kind === "iterate" && ntt !== undefined) {
+    const innerX = startX + consts.CONTAINER_PAD;
+    const innerY = startY + HEADER_H + consts.CONTAINER_PAD;
+    const placement = nttButterflyPlacement(ntt, container.childIds, {
       leafW: consts.LEAF_W,
       leafH: consts.LEAF_H,
     });
@@ -1624,6 +1684,7 @@ const layoutNode = (
         feistelRounds,
         twofishRounds,
         arxRounds,
+        nttButterflies,
       );
       innerY = naturalY + childBox.h + consts.STACK_GAP;
       const renderedBottom = childBox.y + childBox.h;
@@ -1782,6 +1843,7 @@ const layoutNode = (
       feistelRounds,
       twofishRounds,
       arxRounds,
+      nttButterflies,
     );
     innerX = childBox.x + childBox.w + consts.FLOW_GAP;
     lastChildRight = childBox.x + childBox.w;
@@ -1929,6 +1991,13 @@ export const layoutRoot = (
    * the canonical two-tier quarter-round grid. Optional; defaults empty.
    */
   arxRounds: ReadonlyMap<string, ArxDoubleRoundShape> = EMPTY_ARX_ROUNDS,
+  /**
+   * Butterfly-shaped NTT layers (id → derived shape). Threaded down to
+   * `layoutNode` alongside the other three so an NTT layer lays out as the
+   * canonical butterfly cell. Keyed on ITERATE ids, not group ids. Optional;
+   * defaults empty.
+   */
+  nttButterflies: ReadonlyMap<string, NttButterflyShape> = EMPTY_NTT_BUTTERFLIES,
 ): { boxes: Map<string, Box>; canvasW: number; canvasH: number } => {
   const containersById = new Map<string, ContainerNode>();
   for (const c of graph.containers) containersById.set(c.id, c);
@@ -2048,6 +2117,7 @@ export const layoutRoot = (
       feistelRounds,
       twofishRounds,
       arxRounds,
+      nttButterflies,
     );
     cursorX = naturalX + box.w + consts.FLOW_GAP;
     if (offsetsEnabled && !isAuxOnly) altCounter += 1;
@@ -3401,6 +3471,17 @@ export const GraphView = () => {
     arxRoundNeverModes(spec()),
   );
 
+  /**
+   * NTT butterflies get the same treatment, for a weaker but real reason: no
+   * member crosses the DEFAULT threshold of 3 (the measurement is in
+   * `nttButterflyNeverModes`), but the threshold is a user control that goes
+   * down to 1, and at 2 the modulus and the forward split would be deleted and
+   * scattered. Lives in `core/ntt-shape.ts` so the tests drive this function.
+   */
+  const nttNeverModes = createMemo<{ readonly [id: string]: "never" }>(() =>
+    nttButterflyNeverModes(spec()),
+  );
+
   const replicatedGraph = createMemo<CipherGraph>(() =>
     replicate()
       ? replicateHighFanoutSources(expandedGraph(), replicationThreshold(), {
@@ -3408,6 +3489,7 @@ export const GraphView = () => {
           // (rare on a round-internal split) still wins on top.
           ...twofishRoundNeverModes(),
           ...arxNeverModes(),
+          ...nttNeverModes(),
           ...feistelRoundNeverModes(),
           ...replicationModes(),
         })
@@ -4028,6 +4110,14 @@ export const GraphView = () => {
   // is no "original" view worth preserving for an A/B comparison.
   const arxRoundsById = createMemo(() => arxDoubleRoundsById(spec()));
 
+  // NTT butterfly shapes, keyed by LAYER-ITERATE id — the fourth member of the
+  // family, and the first keyed on an iterate rather than a group. Always on,
+  // for the ARX reason: the alternative is an eight-chip horizontal ribbon per
+  // layer (a 12,752 px canvas for the forward transform, measured) in which no
+  // structural fact about a butterfly is visible, so there is no "original"
+  // view worth preserving.
+  const nttButterfliesByIdMemo = createMemo(() => nttButterfliesById(spec()));
+
   // `baseLayout` passes feistelRounds (so the source-x lookup matches the final
   // layout for Feistel round leaves) but still OMITS portAssignment +
   // relativePins — passing `undefined` lets layoutRoot's defaults apply.
@@ -4042,6 +4132,7 @@ export const GraphView = () => {
       feistelRoundsById(),
       twofishRoundsById(),
       arxRoundsById(),
+      nttButterfliesByIdMemo(),
     ),
   );
 
@@ -4197,6 +4288,7 @@ export const GraphView = () => {
       feistelRoundsById(),
       twofishRoundsById(),
       arxRoundsById(),
+      nttButterfliesByIdMemo(),
     ),
   );
 
