@@ -1275,6 +1275,36 @@ export const App = () => {
    * with a different seed width (a CSPRNG's 32 bytes) would otherwise leave a
    * 4-byte seed in the field and fail at Run with a length error.
    */
+  /**
+   * Change the active public-key variant.
+   *
+   * **This did not exist until ML-KEM landed, and its absence was a real bug the
+   * browser found on the first click.** RSA was the only member of the family, so
+   * a variant switch was unreachable and the dropdown wired straight to
+   * `setAsymmetric`. With a second member the omission surfaces immediately:
+   * switching to ML-KEM kept RSA's 2-byte message in the field, and the trace
+   * died on `zq-vec-add: ports "a" (512 bytes) and "b" (32 bytes) must be the
+   * same length` — a message-shaped length error naming a polynomial primitive,
+   * which reads as an arithmetic bug rather than a stale input.
+   *
+   * Mirrors `changeHash` / `changePrng`, with one difference: this family's
+   * defaults are MODE-AWARE (see `algorithmDefaultPt`), so the comparison and the
+   * swap both have to be taken at the current direction. Comparing an
+   * encapsulation-shaped default while sitting in decapsulation would never
+   * match, and the field would silently keep the wrong bytes.
+   */
+  const changeAsymmetric = (next: Asymmetric): void => {
+    const prev = asymmetric();
+    if (prev === next) return;
+    const currentPt = tryParseBytes(inputText(), fmt());
+    if (currentPt && bytesEqual(currentPt, algorithmDefaultPt(prev, mode()))) {
+      setInputText(formatBytes(algorithmDefaultPt(next, mode()), fmt()));
+    }
+    // C3 stack boundary (see `changeCipher`): a variant switch rebuilds the
+    // spec; suppress the rebuild's capture and clear the stale undo history.
+    withBoundaryReset(() => setAsymmetric(next));
+  };
+
   const changePrng = (next: Prng): void => {
     const prev = prng();
     if (prev === next) return;
@@ -1842,11 +1872,7 @@ export const App = () => {
             <div class="cipher-select-row">
               <select
                 value={asymmetric()}
-                onChange={(e) =>
-                  // C3 stack boundary (see `changeCipher`): an asymmetric-
-                  // variant switch rebuilds the spec; suppress + clear.
-                  withBoundaryReset(() => setAsymmetric(e.currentTarget.value as Asymmetric))
-                }
+                onChange={(e) => changeAsymmetric(e.currentTarget.value as Asymmetric)}
                 title={ASYMMETRIC_DESCRIPTIONS[asymmetric()]}
               >
                 <For each={ASYMMETRIC_OPTIONS}>
