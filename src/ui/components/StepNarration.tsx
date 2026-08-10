@@ -60,10 +60,28 @@ type Props = {
  * row expanded. The Prose's JSX (which reads `props.fmt` inline) then
  * surgically updates the byte text inside the body.
  *
- * Per-step narrators always produce the same cardinality and order
- * per `stepType` (16 byte units for SubBytes, 4 row units for
- * ShiftRows, etc.), so `Index`'s position-key is conceptually stable —
- * position N always corresponds to the same conceptual sub-unit.
+ * Per-step narrators produce a stable order per `stepType` (16 byte
+ * units for SubBytes, 4 row units for ShiftRows, etc.), so `Index`'s
+ * position-key is conceptually stable — position N always corresponds
+ * to the same conceptual sub-unit.
+ *
+ * **Cardinality, however, may vary — TRAILING units can be conditional.**
+ * This was an unqualified "always the same cardinality" until the lattice
+ * narrators landed (2026-08-10): `zq-decompress@1` adds a row only at
+ * `d = 1` (where the step is the message entering the ring) and
+ * `ml-kem.hash-g@1` adds one only at its key-generation call site. A
+ * trailing row's ROLE may swap too, not merely its presence:
+ * `zq-compress@1` keeps three rows either way, but its third is about
+ * ciphertext size at `d = 10 / 4` and about recovering the message at
+ * `d = 1`.
+ *
+ * All of that stays compatible with `<Index>` precisely because the
+ * variation is at the TAIL — Solid adds, removes or re-evaluates the last
+ * `<details>` and leaves the preceding ones in place, so no earlier row's
+ * `open` state is disturbed. A narrator that inserted or removed a unit in
+ * the MIDDLE would silently shift every row below it onto a different
+ * position key, and would need `<For>` with an explicit key instead. Don't
+ * do that; append conditional rows.
  *
  * `<Dynamic component={unit.Prose}>` is the correct primitive for the
  * dynamic component reference: when `unit()` returns a new unit with a

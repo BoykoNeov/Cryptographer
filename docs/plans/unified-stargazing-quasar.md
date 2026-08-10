@@ -559,17 +559,34 @@ browser yet.* The only user-selectable lattice spec is the NTT, and it emits
 a single one of these narrators. They are pinned by jsdom render assertions over
 real frames, which is strictly weaker than looking:
 `feedback_visual_smoke_vs_property_tests` is on the record twice in this plan
-already. **When ML-KEM becomes selectable, scrub to one frame of each of the
-eleven and read the prose.** Layout, disclosure-row density on a 256-coefficient
-frame, and whether the `<details>` labels are legible at all are precisely the
-properties these tests are blind to.
+already. Layout, disclosure-row density on a 256-coefficient frame, and whether
+the `<details>` labels are legible at all are precisely the properties these
+tests are blind to.
 
-One narrator bug is already on the record from this work, and it argues the
-scrub is not a formality: `zqCompressNarration` printed FIPS 203's error bound
-with an integer floor, so at `d = 10` it rendered "worst error 2 of a possible
-1". The bound is `⌈q/2^(d+1)⌋` — round to **nearest**. It was caught only because
-the test derives the bound independently instead of reusing the narrator's
-expression.
+**Scrub ACROSS frames of the same step type at different params — not one frame
+per type.** One-per-type is the weaker pass and would have missed the worst bug
+this work produced. Minimum coverage: `zq-compress@1` at **d = 10, 4 AND 1**,
+`zq-decompress@1` at **d = 1 vs 10**, `ml-kem.hash-g@1` at **both call sites**,
+and several `ml-kem.sample-ntt@1` draws (the block count is the whole point).
+
+Two narrator bugs are already on the record from this work, and they are the
+argument that the scrub is not a formality:
+
+1. `zqCompressNarration` printed FIPS 203's error bound with an integer floor,
+   so at `d = 10` it rendered "worst error 2 of a possible 1". The bound is
+   `⌈q/2^(d+1)⌋` — round to **nearest**. Caught only because the test derives
+   the bound independently instead of reusing the narrator's expression.
+2. The same narrator's third row called a **`d = 1` compression a ciphertext
+   size optimisation** — but that leaf is Decrypt *recovering the message*, the
+   one place compression is applied to the message rather than a ciphertext. The
+   test asserting `(d = ${d})` appears for every `d` was blind to it by
+   construction: it only exercises the first row's headline. Fixed with a
+   `d === 1` arm mirroring the decompress narrator's, plus a negative test.
+   **`zq-compress@1` runs at `d ∈ {10, 4, 1}` — assuming `{10, 4}` is wrong.**
+
+Both are the same failure mode: prose that is correct for the frame the author
+had in mind and false for a sibling frame of the same step type. That is what
+scrubbing across params catches and what a per-type spot check does not.
 
 ### P5 — pedagogy
 

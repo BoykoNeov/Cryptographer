@@ -124,8 +124,15 @@ const num = (n: number): string => n.toLocaleString("en-US");
 
 /**
  * Compression is the only lossy operation in ML-KEM. The rows show the bucket
- * each coefficient landed in, the error that cost on THIS frame, and the size
- * consequence — `d` is read off the frame because it differs per leaf.
+ * each coefficient landed in and the error that cost on THIS frame.
+ *
+ * **`d` is read off the frame, and the third row FORKS on it.** K-PKE compresses
+ * at `d = 10` and `d = 4` to shrink a ciphertext for the wire — but also at
+ * `d = 1` in Decrypt, where the step is *recovering the message* and has nothing
+ * to do with size. An earlier draft printed the size sentence unconditionally
+ * and so told a learner that message recovery was a ciphertext optimisation, on
+ * the one frame where compression is applied to the message. Any row added here
+ * must be checked against all three widths.
  */
 export const zqCompressNarration: NarrationFn = (frame) => {
   const p = safeVecParams(frame.params, "zq-compress@1");
@@ -227,6 +234,40 @@ export const zqCompressNarration: NarrationFn = (frame) => {
     ),
   });
 
+  // The third row depends on WHY this leaf is compressing, and there are two
+  // reasons in K-PKE. At d = 10 / 4 it is shrinking a ciphertext for the wire.
+  // At d = 1 it is Decrypt asking "which of the two buckets is this nearer to?"
+  // — the step that RECOVERS the message. Printing the size sentence there
+  // would tell a learner that message recovery is a size optimisation, on the
+  // one frame where compression is applied to the message rather than to a
+  // ciphertext. Mirrors the d = 1 arm in `zqDecompressNarration`.
+  if (d === 1) {
+    units.push({
+      key: "decode",
+      label: "3 — d = 1: this is the decryption, asked as a rounding question",
+      Prose: () => (
+        <div>
+          <p>
+            Two buckets, so every coefficient becomes a single bit: is it nearer to <code>0</code>{" "}
+            or nearer to <code>{String((q + 1n) / 2n)}</code>? That question <em>is</em> the
+            decryption. The message was planted at those two maximally distant points, and
+            everything the scheme did in between — the noise, the compression of the ciphertext, the
+            approximate recovery — moved each coefficient by less than a quarter of the circle.
+          </p>
+          <p>
+            So the errors this step normally introduces are, here, the errors it{" "}
+            <strong>removes</strong>. Rounding to the nearer of two points discards exactly the
+            accumulated noise, which is why the bound in the row above is the number the whole
+            construction is built around: while every coefficient stays within{" "}
+            <code>{String((q + 1n) / 4n)}</code> or so of where it started, every bit comes back
+            exactly.
+          </p>
+        </div>
+      ),
+    });
+    return units;
+  }
+
   units.push({
     key: "size",
     label: "3 — this is why a lattice ciphertext is small enough to send",
@@ -238,10 +279,11 @@ export const zqCompressNarration: NarrationFn = (frame) => {
           {num(xs.length * d)}.
         </p>
         <p>
-          Compression is applied to ciphertexts and never to the parts that must survive intact —
-          which is the useful way to read it. It is not a space optimisation bolted on afterwards;
-          it is the step that makes the scheme's ciphertext a practical size, and the reason the
-          rest of the design can tolerate it is the error bound above.
+          Here compression is being applied to a ciphertext, which is the case it exists for: it is
+          not a space optimisation bolted on afterwards, it is the step that makes the ciphertext a
+          practical size, and what lets the rest of the design tolerate it is the error bound above.
+          (The same step also runs at <code>d = 1</code> during decryption, for an entirely
+          different reason — there it recovers the message rather than shrinking anything.)
         </p>
       </div>
     ),
@@ -1072,14 +1114,20 @@ export const mlKemHashHNarration: NarrationFn = (frame) => {
     },
     {
       key: "one-frame",
-      label: "2 — one frame here, 216 in the Hash view",
+      // Deliberately NOT a frame count. One Keccak-f[1600] is 216 frames, but a
+      // sponge is pad + one permutation PER ABSORBED BLOCK + squeeze, so the
+      // number depends on the input: the traced SHA3-256 spec measures 222
+      // frames on a short message and 1,974 on the 1184 bytes of an
+      // encapsulation key. No single figure is right, so none is printed.
+      label: "2 — one frame here, a few hundred per block in the Hash view",
       Prose: () => (
         <div>
           <p>
-            This is a full sponge: pad, absorb, twenty-four Keccak-f[1600] rounds, squeeze. It
-            collapses to a single frame because ML-KEM calls a hash roughly seventeen times per key
-            generation, and drawn out in full that is over four thousand nodes of hashing before a
-            single polynomial coefficient has been multiplied.
+            This is a full sponge: pad, then twenty-four rounds of the Keccak-f[1600] permutation
+            for every {num(136)}-byte block absorbed, then squeeze. It collapses to a single frame
+            because ML-KEM calls a hash roughly seventeen times per key generation, and drawn out in
+            full that is thousands of nodes of hashing before a single polynomial coefficient has
+            been multiplied.
           </p>
           <p>
             The code behind it drives the same nine step executors the traced SHA3-256 spec emits,

@@ -253,6 +253,36 @@ describe("lattice narration — compression states the error it actually caused"
     }
   });
 
+  it("does NOT call a d = 1 compression a ciphertext size optimisation", () => {
+    // The bug the `(d = ${d})` assertion above is blind to by construction: it
+    // only exercises unit 1's headline, so a later unit that assumes "this
+    // leaf is shrinking a ciphertext" sails through. K-PKE compresses at d = 1
+    // during DECRYPT, where the step recovers the message — telling a learner
+    // that message recovery is a size optimisation, on the one frame where
+    // compression is applied to the message rather than a ciphertext.
+    const messageFrames = framesOfType("zq-compress@1").filter(
+      (f) => (f.params as { d: number }).d === 1,
+    );
+    expect(messageFrames.length, "Decrypt compresses back to one bit").toBeGreaterThan(0);
+    for (const frame of messageFrames) {
+      const text = proseText(zqCompressNarration(frame));
+      expect(text).not.toContain("small enough to send");
+      expect(text).not.toContain("practical size");
+      // …and says the true thing instead.
+      expect(text).toContain("asked as a rounding question");
+    }
+
+    // The size row IS present where it is honest — otherwise this test would
+    // pass against a narrator that simply deleted the sentence everywhere.
+    const wireFrames = framesOfType("zq-compress@1").filter(
+      (f) => (f.params as { d: number }).d !== 1,
+    );
+    expect(wireFrames.length).toBeGreaterThan(0);
+    for (const frame of wireFrames) {
+      expect(proseText(zqCompressNarration(frame))).toContain("small enough to send");
+    }
+  });
+
   it("prints bucket indices that match the frame's output port", () => {
     const frame = firstFrame("zq-compress@1");
     const a = frame.portInputs?.get("a");
@@ -519,8 +549,20 @@ describe("lattice narration — H and J, driven through a purpose-built spec", (
   it("H points at the traced sponge rather than pretending to be primitive", () => {
     const frame = fixtureFrames().find((f) => f.stepId === "h");
     const text = proseText(mlKemHashHNarration(frame as TraceFrame));
-    expect(text).toContain("216");
     expect(text).toContain("SHA3-256 under Hash");
+    expect(text).toContain("Keccak-f[1600]");
+  });
+
+  it("does NOT print a frame count for the traced sponge, because none is right", () => {
+    // An earlier draft said "one frame here, 216 in the Hash view". 216 is one
+    // Keccak-f[1600] permutation — but a sponge runs one permutation PER
+    // ABSORBED BLOCK, so the traced SHA3-256 spec measures 222 frames on a
+    // short message and 1,974 on the 1184 bytes of an encapsulation key. The
+    // old test pinned `toContain("216")`, which asserted the claim rather than
+    // checking it. Assert the absence instead.
+    const frame = fixtureFrames().find((f) => f.stepId === "h");
+    const text = proseText(mlKemHashHNarration(frame as TraceFrame));
+    expect(text).not.toContain("216");
   });
 
   it("J leads with implicit rejection, the branch no round trip reaches", () => {
