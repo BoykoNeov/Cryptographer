@@ -369,3 +369,40 @@ describe("perturbation", () => {
     expect(hex(r.output)).not.toBe(v.ek);
   });
 });
+
+// ─── 5. Node ids, which collide SILENTLY ──────────────────────────────────
+
+/**
+ * Six embedded transforms in KeyGen and seven in Encrypt, each contributing ~66
+ * nodes, alongside ~120 of their own. The flat trace keys every frame by
+ * `stepId`, so two nodes sharing an id do not throw — they produce a trace with
+ * duplicate keys, which takes out the scrubber, frame preservation and the graph
+ * derivation with no error message at all.
+ *
+ * `tests/ntt-3329-256-kat.test.ts` asserts the same property over two synthetic
+ * `buildNttGroup` calls. That checks the helper; this checks the thing actually
+ * shipped, where the transforms are mixed in with everything else and the
+ * near-misses live (`t.0` is both the dot-product prefix of `t.0.mul0` and the
+ * final add — confusing, and deliberately confirmed non-colliding).
+ */
+describe("every shipped K-PKE spec has globally distinct node ids", () => {
+  const v = FIXTURE.vectors[0] as { ek: string; dkPke: string };
+
+  const specs: readonly [string, CipherSpec][] = [
+    ["keygen", buildKPkeKeyGenSpec()],
+    ["encrypt", buildKPkeEncryptSpec(unhex(v.ek), new Uint8Array(32).fill(3))],
+    ["decrypt", buildKPkeDecryptSpec(unhex(v.dkPke))],
+  ];
+
+  for (const [label, spec] of specs) {
+    it(`${label} repeats no id`, () => {
+      const ids: string[] = [];
+      walk(spec.steps, (n) => ids.push(n.id));
+      const duplicates = ids.filter((id, i) => ids.indexOf(id) !== i);
+      expect(duplicates, `duplicated ids in the ${label} spec`).toEqual([]);
+      // A floor: if the walk stopped at the top level it would find no
+      // duplicates and prove nothing. KeyGen alone is ~485 nodes.
+      expect(ids.length).toBeGreaterThan(280);
+    });
+  }
+});

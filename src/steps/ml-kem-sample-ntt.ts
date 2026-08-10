@@ -167,8 +167,9 @@ no way to know in advance how many will be: it depends on the hash output.
 ## The step's cost depends on its value, not its size
 
 Everything else in this app takes the same amount of work every time. This does
-not. Watch the squeeze counter on this step across the nine matrix entries —
-most draws need three 168-byte blocks, some need four.
+not: most draws need three 168-byte blocks of squeezing, and some need four.
+Measured over 162 real draws — nine matrix entries across eighteen seeds — 160
+took three and two took four.
 
 That is why the loop asks *"do I have 256 coefficients yet?"* and never *"have I
 used my three blocks?"*. Squeezing a fixed number of blocks would work almost

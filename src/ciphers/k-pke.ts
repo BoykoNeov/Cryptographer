@@ -63,7 +63,6 @@ import {
   COEFF_BYTES,
   GAMMA_TABLE_BYTES,
   N_INV_BYTES,
-  POLY_BYTES,
   Q_BYTES,
   ZETA_TABLE_BYTES,
 } from "./mlkem-constants";
@@ -907,6 +906,3 @@ export const buildKPkeDecryptSpec = (dk: Uint8Array): CipherSpec => {
     outputFrom: port("m", "output"),
   };
 };
-
-/** A polynomial on a port, re-exported so tests need not reach into constants. */
-export { POLY_BYTES };
