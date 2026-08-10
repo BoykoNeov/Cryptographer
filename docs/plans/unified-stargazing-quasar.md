@@ -661,6 +661,27 @@ bound on the UI pipeline, never as a design constraint on its own.
    `corruptedCiphertextFlipsByte0` but not the value; a different flip gives a
    different decoy that reads as a broken implementation. Found by trying `0xff`.
 
+**Two coverage gaps found by the closing advisor pass, both now closed.** (a) The
+plan asked for `isAsymmetric` to be perturbed and it had not been. Deleting
+`"ml-kem-768"` from `ALL_ASYMMETRICS` passes `tsc` cleanly — the list is
+`readonly Asymmetric[]`, and the `Record<Asymmetric, …>` tables stay green — and
+was caught only incidentally, by a UI test noticing the dropdown had lost an
+option. Nothing asserted `isCipher` staying false. `tests/asymmetric-family-surface.test.ts`
+now does, in the shape `prng-family-surface.test.ts` established, with the
+anti-vacuity list pin FIRST because every other assertion iterates the list.
+(b) `document-roundtrip.test.ts` does not enumerate algorithms, so it passed
+throughout P4 without ever touching an ML-KEM document; the new file round-trips
+each variant.
+
+**One graph observation, deliberately not acted on.** `dk-split` has four
+consumers against the replication threshold of three, so it scatters into ghost
+chips beside them — `replicateHighFanoutSources` counts consumers per source
+NODE, not per output port. Rendered and looked at: it is the same treatment `q`
+and `gamma` already get, there are no warning glyphs, and unlike Twofish and
+ChaCha there is no canonical layout cell for it to break. **Revisit when P5 adds
+the butterfly cell** — that is when a `neverModes` guard becomes the question it
+was for those two.
+
 **The narration debt is CLOSED.** All twelve narrated lattice types were read on
 screen at the parameters this section names — `zq-compress@1` at d = 10 / 4 / 1,
 `zq-decompress@1` at all three, `ml-kem.hash-g@1` at both call sites,
