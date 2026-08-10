@@ -146,6 +146,15 @@ import {
   keyExpansionV2Meta,
   keyExpansionV2PortContract,
 } from "../steps/key-expansion";
+import { mlKemHashG, mlKemHashGDoc, mlKemHashGPortContract } from "../steps/ml-kem-hash-g";
+import { mlKemHashH, mlKemHashHDoc, mlKemHashHPortContract } from "../steps/ml-kem-hash-h";
+import { mlKemKdfJ, mlKemKdfJDoc, mlKemKdfJPortContract } from "../steps/ml-kem-kdf-j";
+import { mlKemPrf, mlKemPrfDoc, mlKemPrfPortContract } from "../steps/ml-kem-prf";
+import {
+  mlKemSampleNtt,
+  mlKemSampleNttDoc,
+  mlKemSampleNttPortContract,
+} from "../steps/ml-kem-sample-ntt";
 import { modInverse, modInverseDoc, modInversePortContract } from "../steps/mod-inverse";
 import { modMul, modMulDoc, modMulPortContract } from "../steps/mod-mul";
 import { mt19937Seed, mt19937SeedDoc, mt19937SeedPortContract } from "../steps/mt19937-seed";
@@ -1160,6 +1169,60 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: zqBaseCaseMul,
     shape: zqBaseCaseMulPortContract,
     doc: zqBaseCaseMulDoc,
+  });
+  // ML-KEM P3 — the five Keccak calls, one frame each.
+  //
+  // These are a THIRD kind of monolith, new to this app, and the distinction is
+  // worth keeping straight because the other two kinds are apologies and this
+  // one is not. `blowfish.key-schedule@1` is opaque because there is nothing
+  // legible to show; `mt19937.twist@1` is opaque because an iterate body
+  // structurally cannot express it. These are opaque only for VOLUME: the sponge
+  // is one dropdown away, fully decomposed, under Hash → SHA3-256 / SHAKE128.
+  // ML-KEM makes ~17 sponge calls per key generation and 240 spec nodes apiece
+  // would bury the polynomial arithmetic under ~4,080 nodes of hashing.
+  //
+  // And they are the same sponge mechanically, not merely moral equivalents:
+  // `keccak-compute.ts` drives the very nine executors the runtime walks, with
+  // the same constants, pinned against `node:crypto` AND the app's own traced
+  // SHA3-256 spec. Each step's `detail` names its function and points at the
+  // selector entry, per the "say which kind of monolith you are" rule MT19937
+  // established.
+  r.register("ml-kem.hash-g@1", {
+    kind: "ported",
+    executor: mlKemHashG,
+    shape: mlKemHashGPortContract,
+    doc: mlKemHashGDoc,
+  });
+  r.register("ml-kem.hash-h@1", {
+    kind: "ported",
+    executor: mlKemHashH,
+    shape: mlKemHashHPortContract,
+    doc: mlKemHashHDoc,
+  });
+  // `J` is a KDF, not a hash, and it is registered separately from `H` for the
+  // reason it exists: it is the only thing in ML-KEM that derives a secret from
+  // a value the ATTACKER chose — the implicit-rejection branch.
+  r.register("ml-kem.kdf-j@1", {
+    kind: "ported",
+    executor: mlKemKdfJ,
+    shape: mlKemKdfJPortContract,
+    doc: mlKemKdfJDoc,
+  });
+  r.register("ml-kem.prf@1", {
+    kind: "ported",
+    executor: mlKemPrf,
+    shape: mlKemPrfPortContract,
+    doc: mlKemPrfDoc,
+  });
+  // The one step in the app whose cost depends on the VALUE it is hashing:
+  // ~1 candidate in 6 exceeds q and is discarded, so the number of squeeze
+  // blocks is a random variable. Its `squeezes` output port exists to make that
+  // observable rather than asserted in a comment.
+  r.register("ml-kem.sample-ntt@1", {
+    kind: "ported",
+    executor: mlKemSampleNtt,
+    shape: mlKemSampleNttPortContract,
+    doc: mlKemSampleNttDoc,
   });
   r.register("shift-bits-right@1", {
     kind: "ported",

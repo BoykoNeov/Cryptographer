@@ -111,6 +111,9 @@ const KITCHEN_SINK: Json = {
   // `coeffBytes`, so the contract is function-form and needs both params.
   coeffBytes: 2,
   littleEndian: false,
+  // ml-kem.prf@1 (ML-KEM P3) — its output width is 64η, derived rather than
+  // fixed, so the contract is function-form and needs η to resolve at all.
+  eta: 2,
 } as unknown as Json;
 
 type Scan = {

@@ -332,7 +332,12 @@ export const ParamEditor = (props: Props) => {
                 getStep().type === "zq-byte-encode@1" ||
                 getStep().type === "zq-byte-decode@1" ||
                 getStep().type === "zq-cbd@1" ||
-                getStep().type === "zq-base-case-mul@1"
+                getStep().type === "zq-base-case-mul@1" ||
+                // P3's sampler belongs to this block rather than the monolith
+                // family: it carries the same coefficient-width params and takes
+                // q on the same `modulus` port, so the "where is q?" answer this
+                // block exists to give is the one a learner needs there too.
+                getStep().type === "ml-kem.sample-ntt@1"
               }
             >
               {/*
@@ -343,6 +348,16 @@ export const ParamEditor = (props: Props) => {
                 only when present.
               */}
               <ZqVecBlock step={getStep()} />
+            </Match>
+            <Match when={getStep().type === "ml-kem.prf@1"}>
+              {/*
+                The PRF gets its own block rather than joining the Z_q one: it
+                has no coefficients and no modulus port, so that block's two
+                structural rows and its "where is q?" line would all be wrong.
+                Its η means something different too — there it sets a sample
+                range, here it sets an output length.
+              */}
+              <MlKemPrfBlock step={getStep()} />
             </Match>
             <Match when={getStep().type === "blowfish.sbox-lookup@1"}>
               <BlowfishSboxLookupBlock step={getStep()} />
@@ -1321,6 +1336,53 @@ const ZqVecBlock = (props: { step: StepLeaf }) => {
         <dd>
           Not a parameter — it arrives on the <code>modulus</code> port. To change it, edit the
           value wired into that port.
+        </dd>
+      </div>
+    </dl>
+  );
+};
+
+// ML-KEM's PRF (P3). One editable number, and the row's job is to say what that
+// number does HERE — because the same letter η appears on `zq-cbd@1` two steps
+// downstream meaning something related but not identical. There it decides how
+// wide the sampled values are; here it decides how many bytes get squeezed. The
+// two must agree, and nothing checks that, so the hint says so — the same hazard
+// the `d` row carries for the compression pair.
+//
+// Keyed on the step TYPE, like every row in this family: a palette-dropped leaf
+// arrives with `params: {}`, so gating on the value being present would hide the
+// control at exactly the moment it is needed.
+const MlKemPrfBlock = (props: { step: StepLeaf }) => {
+  const params = (): { eta?: number } => props.step.params as never;
+
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>Noise η</dt>
+        <dd>
+          <IntInput
+            value={params().eta ?? 0}
+            min={1}
+            max={8}
+            placeholder="2"
+            onCommit={(next) =>
+              editStepParams(props.step.id, {
+                ...(props.step.params as Record<string, Json>),
+                eta: next,
+              })
+            }
+          />{" "}
+          <span class="param-scalar-hint">
+            squeezes 64η bytes — exactly what the sampler below spends on 256 coefficients, so its η
+            must match this one
+          </span>
+        </dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Counter</dt>
+        <dd>
+          Not a parameter — it is the byte joined onto the seed just above this step. That is what
+          makes six different polynomials come out of one 32-byte secret.
         </dd>
       </div>
     </dl>
@@ -2922,6 +2984,11 @@ const NO_PARAMS_PORT_NATIVE_TYPES = new Set([
   "add-mod@1",
   "mt19937.seed@1",
   "mt19937.twist@1",
+  // ML-KEM P3. Three of the five Keccak monoliths take nothing at all: the
+  // function and its output length are both fixed by FIPS 203 §4.1.
+  "ml-kem.hash-g@1",
+  "ml-kem.hash-h@1",
+  "ml-kem.kdf-j@1",
 ]);
 
 const portNativeNoParamsLabel = (stepType: string): string => {
@@ -2940,6 +3007,15 @@ const portNativeNoParamsLabel = (stepType: string): string => {
       return "Keeps the first N bytes of the input, discarding the rest (NIST SP 800-38A §6.5 — CTR's final partial block). No editable parameters; N is however wide the wired 'reference' value is, so it follows the message length rather than a setting.";
     case "keccak.theta@1":
       return "θ (theta) — mixes whole columns of the Keccak state (FIPS 202 §3.2.1). No editable parameters; the 5×5×64 geometry is fixed.";
+    // The three parameterless ML-KEM monoliths. Each blurb names the sponge and
+    // where to go and watch it, because that pointer is the whole difference
+    // between this kind of opaque step and the kind that has nothing to show.
+    case "ml-kem.hash-g@1":
+      return "G — SHA3-512 (FIPS 203 §4.1), collapsed to one frame. No editable parameters; the 64 bytes it produces are split into two halves by the step below it. Watch the same sponge decomposed under Hash → SHA3-256.";
+    case "ml-kem.hash-h@1":
+      return "H — SHA3-256 (FIPS 203 §4.1), collapsed to one frame. No editable parameters. It binds a ciphertext to one public key rather than keeping anything secret. Watch the same sponge decomposed under Hash → SHA3-256.";
+    case "ml-kem.kdf-j@1":
+      return "J — SHAKE256 squeezed to 32 bytes (FIPS 203 §4.1). No editable parameters; the length is fixed because its output has to be indistinguishable from a real shared secret. Watch the same sponge decomposed under Hash → SHAKE256.";
     // Note the contrast with `add-mod-32@1`, which is fixed to 2³² because its
     // modulus is just the machine word. Here the modulus is data, and the
     // constant feeding that port is where the editing happens.

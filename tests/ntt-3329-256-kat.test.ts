@@ -40,6 +40,7 @@
  * not a pass.
  */
 
+import { createHash } from "node:crypto";
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import {
   COEFF_BYTES,
@@ -56,6 +57,7 @@ import {
   DEFAULT_NTT_INPUT,
   DEFAULT_NTT_OUTPUT,
   buildInverseNttSpec,
+  buildNttGroup,
   buildNttSpec,
   nttLayerId,
 } from "@/ciphers/ntt-3329-256";
@@ -467,5 +469,84 @@ describe("perturbation — each of these must break something", () => {
       outputFrom: { node: nttLayerId(6), port: "out" },
     };
     expect(runPoly(shortened, f)).not.toEqual(nttByDefinition(f));
+  });
+});
+
+// ─── The P3 extraction, guarded ───────────────────────────────────────────
+
+/**
+ * P3 pulled the layer-building out of the two spec builders into
+ * `buildNttNodes`, so K-PKE can embed the same transform six times over
+ * instead of growing a second implementation of it.
+ *
+ * These digests were captured from the shipped specs **before** that
+ * extraction. The ordering is the entire point — a digest taken afterwards
+ * pins the new bytes to themselves and guards nothing (the ChaCha20-CSPRNG
+ * precedent, `tests/chacha20-csprng-kat.test.ts`).
+ *
+ * Why it deserves a test at all: spec-only saves are byte-stable and feed the
+ * `#doc=` URL-share hash, so a one-byte drift here silently repoints every NTT
+ * link anyone has ever shared while every behavioural test above stays green.
+ */
+describe("the P3 layer extraction left both shipped specs byte-identical", () => {
+  const PRE_REFACTOR_FORWARD = "1373944691ae035483180dbac7a774814fece00c1f2af70e72bcf039147d8fe7";
+  const PRE_REFACTOR_INVERSE = "e0117545ff9e08f92985fc690d945497ca2b446c3270b54edae18ec8a88cf7e8";
+
+  const digest = (spec: CipherSpec): string =>
+    createHash("sha256").update(JSON.stringify(spec)).digest("hex");
+
+  it("leaves the forward spec byte-identical", () => {
+    expect(digest(buildNttSpec())).toBe(PRE_REFACTOR_FORWARD);
+  });
+
+  it("leaves the inverse spec byte-identical", () => {
+    expect(digest(buildInverseNttSpec())).toBe(PRE_REFACTOR_INVERSE);
+  });
+});
+
+/**
+ * The property the extraction exists to provide, and the one that breaks
+ * silently if it is missing.
+ *
+ * The flat trace keys every frame by `stepId`. Two transforms in one spec whose
+ * nodes are both called `layer1.split` do not throw — they produce a trace with
+ * duplicate keys, which takes out the scrubber, frame preservation and the
+ * graph derivation without a single error message. So the prefix is not a
+ * cosmetic namespacing choice, and it is asserted rather than trusted.
+ */
+describe("embedded transforms carry globally distinct node ids", () => {
+  const idsIn = (nodes: readonly StepNode[]): string[] =>
+    nodes.flatMap((n) => [n.id, ...(n.kind === "step" ? [] : idsIn(n.children))]);
+
+  it("gives two embedded groups disjoint id sets", () => {
+    const first = buildNttGroup({
+      id: "ntt.s0",
+      label: "NTT(s₀)",
+      direction: "forward",
+      seedBinding: { node: "somewhere", port: "output" },
+    });
+    const second = buildNttGroup({
+      id: "ntt.s1",
+      label: "NTT(s₁)",
+      direction: "forward",
+      seedBinding: { node: "somewhere", port: "output" },
+    });
+    const all = [...idsIn([first]), ...idsIn([second])];
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it("prefixes every id, not merely the layer iterates", () => {
+    // The layer ids were always built through a helper; the head nodes
+    // (`zeta-table`, `cursor`) and the inverse's `scale` tail were literals,
+    // which is exactly where a prefix is easy to forget.
+    const group = buildNttGroup({
+      id: "ntt.u",
+      label: "NTT⁻¹(u)",
+      direction: "inverse",
+      seedBinding: { node: "somewhere", port: "output" },
+    });
+    const inner = idsIn(group.children);
+    expect(inner.length).toBeGreaterThan(0);
+    expect(inner.every((id) => id.startsWith("ntt.u."))).toBe(true);
   });
 });

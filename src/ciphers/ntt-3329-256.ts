@@ -104,7 +104,13 @@
  * which a pair of matched-wrong implementations passes.
  */
 
-import type { CipherSpec, StepDocumentation, StepNode } from "../core/types";
+import type {
+  CipherSpec,
+  PortBinding,
+  StepDocumentation,
+  StepGroup,
+  StepNode,
+} from "../core/types";
 import { INPUT_SOURCE_ID, INPUT_SOURCE_PORT } from "../core/types";
 import { port } from "./block-cipher-core";
 import {
@@ -134,8 +140,16 @@ export const INTT_SCALE_ID = "scale";
 export const INTT_NINV_ID = "ninv";
 export const INTT_SCALE_Q_ID = "scale-q";
 
-/** Layer `n` (1-based) — the iterate node itself. */
-export const nttLayerId = (n: number): string => `layer${n}`;
+/**
+ * Layer `n` (1-based) — the iterate node itself.
+ *
+ * `prefix` exists because K-PKE embeds up to seven of these transforms in one
+ * spec, and the flat trace keys every frame by `stepId`: six copies of
+ * `layer1.split` would collide silently, taking the scrubber, frame preservation
+ * and the graph derivation with them. The standalone specs pass no prefix, which
+ * is what keeps their bytes identical to the P1 shipped form.
+ */
+export const nttLayerId = (n: number, prefix = ""): string => `${prefix}layer${n}`;
 
 /** The chain port each layer publishes its final cursor position on. */
 const CURSOR_PORT = "cursor";
@@ -239,12 +253,12 @@ type LayerGeometry = {
   readonly id: string;
 };
 
-const geometryFor = (displayIndex: number, len: number): LayerGeometry => ({
+const geometryFor = (displayIndex: number, len: number, prefix = ""): LayerGeometry => ({
   displayIndex,
   len,
   groups: ML_KEM_N / (2 * len),
   blockBytes: len * 2 * COEFF_BYTES,
-  id: nttLayerId(displayIndex),
+  id: nttLayerId(displayIndex, prefix),
 });
 
 const narrLayerSplit = (g: LayerGeometry): StepDocumentation => ({
@@ -669,64 +683,197 @@ const inverseLayerBody = (g: LayerGeometry): StepNode[] => {
   ];
 };
 
-// ─── The specs ────────────────────────────────────────────────────────────
-
 const layerLabel = (g: LayerGeometry): string =>
   `Layer ${g.displayIndex} — ${g.groups} group${g.groups === 1 ? "" : "s"} of ${2 * g.len}, pairing distance ${g.len}`;
+
+// ─── The reusable transform block ─────────────────────────────────────────
+
+/** Which butterfly the layers run, and therefore which order they run in. */
+export type NttDirection = "forward" | "inverse";
+
+export type NttBlockOptions = {
+  readonly direction: NttDirection;
+  /**
+   * Where layer 1 reads its 512-byte polynomial. The standalone specs pass the
+   * spec input; a K-PKE group passes its own `in` port.
+   */
+  readonly seedBinding: PortBinding;
+  /**
+   * Prepended to every node id. **Required to be distinct per instance** when
+   * more than one transform lives in a spec — see `nttLayerId`. Defaults to
+   * empty, which reproduces the P1 standalone specs byte for byte.
+   */
+  readonly prefix?: string;
+};
+
+export type NttBlock = {
+  readonly nodes: readonly StepNode[];
+  /** Where the transformed polynomial comes out. */
+  readonly output: PortBinding;
+};
+
+/**
+ * The head nodes, the seven layer iterates, and (inverse only) the final
+ * `× 128⁻¹` scaling — everything that makes one transform, with no spec around
+ * it.
+ *
+ * Extracted from the two spec builders so that K-PKE, which needs up to seven
+ * transforms in a single spec, gets exactly the object the NTT selector entry
+ * shows rather than a second implementation of it. The extraction is pinned by
+ * spec digests taken BEFORE it happened (`tests/ntt-3329-256-kat.test.ts`), the
+ * ChaCha20-CSPRNG precedent: a digest captured afterwards pins the new bytes to
+ * themselves and guards nothing.
+ */
+export const buildNttNodes = (options: NttBlockOptions): NttBlock => {
+  const { direction, seedBinding } = options;
+  const prefix = options.prefix ?? "";
+  const forward = direction === "forward";
+  const zetaTableId = `${prefix}${NTT_ZETA_TABLE_ID}`;
+  const cursorSplitId = `${prefix}${NTT_CURSOR_SPLIT_ID}`;
+  const cursorId = `${prefix}${NTT_CURSOR_ID}`;
+
+  const steps: StepNode[] = [
+    {
+      kind: "step",
+      id: zetaTableId,
+      type: "aux-load-bytes@1",
+      params: { auxName: "zeta", byteLength: ZETA_TABLE_BYTES.length },
+      narrationOverride: narrZetaTable,
+    },
+  ];
+
+  // Only the forward direction pre-rotates: it consumes ζ¹ upward, so ζ⁰ has to
+  // move out of the way first. The inverse consumes from the back, starting at
+  // ζ¹²⁷, and takes the published table as it stands.
+  if (forward) {
+    steps.push(
+      {
+        kind: "step",
+        id: cursorSplitId,
+        type: "split-bytes@1",
+        params: { widths: [COEFF_BYTES, ZETA_TABLE_BYTES.length - COEFF_BYTES] },
+        portInputs: { input: port(zetaTableId, "output") },
+        narrationOverride: narrCursorSplit,
+      },
+      {
+        kind: "step",
+        id: cursorId,
+        type: "concat@1",
+        params: { inputCount: 2 },
+        portInputs: {
+          input0: port(cursorSplitId, "output1"),
+          input1: port(cursorSplitId, "output0"),
+        },
+        narrationOverride: narrCursor,
+      },
+    );
+  }
+
+  for (let n = 1; n <= NTT_LAYERS; n++) {
+    // Forward: layer n has pairing distance 128 / 2^(n-1), so the widest group
+    // comes first. The inverse runs the layers in the OPPOSITE order — its
+    // layer 1 has the smallest pairing distance (2), which is the forward layer
+    // 7's. Node ids still key on `n`, the display index, so either spec reads
+    // top to bottom.
+    const g = geometryFor(n, layerLen(forward ? n : NTT_LAYERS + 1 - n), prefix);
+    steps.push({
+      kind: "iterate",
+      id: g.id,
+      label: layerLabel(g),
+      seedInput: n === 1 ? seedBinding : port(nttLayerId(n - 1, prefix), "out"),
+      blockByteLength: g.blockBytes,
+      chainInput:
+        n === 1
+          ? port(forward ? cursorId : zetaTableId, "output")
+          : port(nttLayerId(n - 1, prefix), CURSOR_PORT),
+      chainFeedback: port(`${g.id}.advance`, "output"),
+      chainOutput: CURSOR_PORT,
+      bodyOutput: port(`${g.id}.out`, "output"),
+      outputPorts: ["out"],
+      children: forward ? forwardLayerBody(g) : inverseLayerBody(g),
+    });
+  }
+
+  const lastLayer = port(nttLayerId(NTT_LAYERS, prefix), "out");
+  if (forward) return { nodes: steps, output: lastLayer };
+
+  // The inverse's seven layers accumulate a factor of 2⁷; this removes it.
+  const ninvId = `${prefix}${INTT_NINV_ID}`;
+  const scaleQId = `${prefix}${INTT_SCALE_Q_ID}`;
+  const scaleId = `${prefix}${INTT_SCALE_ID}`;
+  steps.push(
+    {
+      kind: "step",
+      id: ninvId,
+      type: "aux-load-bytes@1",
+      params: { auxName: "ninv", byteLength: COEFF_BYTES },
+      narrationOverride: narrScale,
+    },
+    {
+      kind: "step",
+      id: scaleQId,
+      type: "aux-load-bytes@1",
+      params: { auxName: "q", byteLength: COEFF_BYTES },
+      narrationOverride: narrModulus,
+    },
+    {
+      kind: "step",
+      id: scaleId,
+      type: "zq-vec-mul-scalar@1",
+      params: { ...VEC_PARAMS },
+      portInputs: {
+        a: lastLayer,
+        scalar: port(ninvId, "output"),
+        modulus: port(scaleQId, "output"),
+      },
+      narrationOverride: narrScale,
+    },
+  );
+  return { nodes: steps, output: port(scaleId, "output") };
+};
+
+/**
+ * One transform wrapped as a collapsible group, for callers that embed several.
+ *
+ * A group's scope is the boundary for free: the polynomial enters on `seedInput`
+ * and leaves on `bodyOutput`, while `q`, `zeta` and `ninv` reach the butterflies
+ * through aux, which crosses scopes freely. That is the same division of labour
+ * the NTT already relies on one level down, inside each layer's iterate.
+ */
+export const buildNttGroup = (options: {
+  readonly id: string;
+  readonly label: string;
+  readonly direction: NttDirection;
+  readonly seedBinding: PortBinding;
+}): StepGroup => {
+  const { nodes, output } = buildNttNodes({
+    direction: options.direction,
+    seedBinding: port(options.id, "in"),
+    prefix: `${options.id}.`,
+  });
+  return {
+    kind: "group",
+    id: options.id,
+    label: options.label,
+    defaultCollapsed: true,
+    seedInput: options.seedBinding,
+    bodyOutput: output,
+    children: [...nodes],
+  };
+};
+
+// ─── The specs ────────────────────────────────────────────────────────────
 
 /**
  * The forward transform. Layers run with pairing distance 128 → 2, and the ζ
  * cursor is pre-rotated so the first group lands on ζ¹.
  */
 export const buildNttSpec = (): CipherSpec => {
-  const steps: StepNode[] = [
-    {
-      kind: "step",
-      id: NTT_ZETA_TABLE_ID,
-      type: "aux-load-bytes@1",
-      params: { auxName: "zeta", byteLength: ZETA_TABLE_BYTES.length },
-      narrationOverride: narrZetaTable,
-    },
-    {
-      kind: "step",
-      id: NTT_CURSOR_SPLIT_ID,
-      type: "split-bytes@1",
-      params: { widths: [COEFF_BYTES, ZETA_TABLE_BYTES.length - COEFF_BYTES] },
-      portInputs: { input: port(NTT_ZETA_TABLE_ID, "output") },
-      narrationOverride: narrCursorSplit,
-    },
-    {
-      kind: "step",
-      id: NTT_CURSOR_ID,
-      type: "concat@1",
-      params: { inputCount: 2 },
-      portInputs: {
-        input0: port(NTT_CURSOR_SPLIT_ID, "output1"),
-        input1: port(NTT_CURSOR_SPLIT_ID, "output0"),
-      },
-      narrationOverride: narrCursor,
-    },
-  ];
-
-  for (let n = 1; n <= NTT_LAYERS; n++) {
-    // Forward: layer n has pairing distance 128 / 2^(n-1), so the widest group
-    // comes first.
-    const g = geometryFor(n, layerLen(n));
-    steps.push({
-      kind: "iterate",
-      id: g.id,
-      label: layerLabel(g),
-      seedInput:
-        n === 1 ? port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT) : port(nttLayerId(n - 1), "out"),
-      blockByteLength: g.blockBytes,
-      chainInput: n === 1 ? port(NTT_CURSOR_ID, "output") : port(nttLayerId(n - 1), CURSOR_PORT),
-      chainFeedback: port(`${g.id}.advance`, "output"),
-      chainOutput: CURSOR_PORT,
-      bodyOutput: port(`${g.id}.out`, "output"),
-      outputPorts: ["out"],
-      children: forwardLayerBody(g),
-    });
-  }
+  const { nodes } = buildNttNodes({
+    direction: "forward",
+    seedBinding: port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT),
+  });
+  const steps = [...nodes];
 
   return {
     id: "ntt-3329-256@1",
@@ -752,66 +899,11 @@ export const buildNttSpec = (): CipherSpec => {
  * seven layers accumulate.
  */
 export const buildInverseNttSpec = (): CipherSpec => {
-  const steps: StepNode[] = [
-    {
-      kind: "step",
-      id: NTT_ZETA_TABLE_ID,
-      type: "aux-load-bytes@1",
-      params: { auxName: "zeta", byteLength: ZETA_TABLE_BYTES.length },
-      narrationOverride: narrZetaTable,
-    },
-  ];
-
-  for (let n = 1; n <= NTT_LAYERS; n++) {
-    // The inverse runs the layers in the OPPOSITE order: its layer 1 has the
-    // smallest pairing distance (2), which is the forward layer 7's. Node ids
-    // still key on `n` — the display index — so the spec reads top to bottom.
-    const g = geometryFor(n, layerLen(NTT_LAYERS + 1 - n));
-    steps.push({
-      kind: "iterate",
-      id: g.id,
-      label: layerLabel(g),
-      seedInput:
-        n === 1 ? port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT) : port(nttLayerId(n - 1), "out"),
-      blockByteLength: g.blockBytes,
-      chainInput:
-        n === 1 ? port(NTT_ZETA_TABLE_ID, "output") : port(nttLayerId(n - 1), CURSOR_PORT),
-      chainFeedback: port(`${g.id}.advance`, "output"),
-      chainOutput: CURSOR_PORT,
-      bodyOutput: port(`${g.id}.out`, "output"),
-      outputPorts: ["out"],
-      children: inverseLayerBody(g),
-    });
-  }
-
-  steps.push(
-    {
-      kind: "step",
-      id: INTT_NINV_ID,
-      type: "aux-load-bytes@1",
-      params: { auxName: "ninv", byteLength: COEFF_BYTES },
-      narrationOverride: narrScale,
-    },
-    {
-      kind: "step",
-      id: INTT_SCALE_Q_ID,
-      type: "aux-load-bytes@1",
-      params: { auxName: "q", byteLength: COEFF_BYTES },
-      narrationOverride: narrModulus,
-    },
-    {
-      kind: "step",
-      id: INTT_SCALE_ID,
-      type: "zq-vec-mul-scalar@1",
-      params: { ...VEC_PARAMS },
-      portInputs: {
-        a: port(nttLayerId(NTT_LAYERS), "out"),
-        scalar: port(INTT_NINV_ID, "output"),
-        modulus: port(INTT_SCALE_Q_ID, "output"),
-      },
-      narrationOverride: narrScale,
-    },
-  );
+  const { nodes } = buildNttNodes({
+    direction: "inverse",
+    seedBinding: port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT),
+  });
+  const steps = [...nodes];
 
   return {
     id: "ntt-3329-256-inverse@1",

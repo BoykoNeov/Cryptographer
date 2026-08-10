@@ -33,7 +33,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const FALLBACK_RE = /no editor for step type/i;
 
-/** Every Z_q step type, P1's three and P2's five. */
+/**
+ * Every Z_q step type — P1's three and P2's six — plus P3's sampler, which
+ * shares their param shape and their `modulus` port and therefore their block.
+ */
 const ZQ_STEP_TYPES = [
   "zq-vec-add@1",
   "zq-vec-sub@1",
@@ -44,6 +47,21 @@ const ZQ_STEP_TYPES = [
   "zq-byte-decode@1",
   "zq-cbd@1",
   "zq-base-case-mul@1",
+  "ml-kem.sample-ntt@1",
+] as const;
+
+/**
+ * P3's five Keccak monoliths, which are palette-only for the same reason the
+ * P2 steps were: no shipped spec references them until ML-KEM reaches the
+ * selector in P4. Three take no params and must land on the no-params blurb
+ * rather than the raw-JSON fallback; `prf` has its own block; `sample-ntt` is
+ * in the Z_q list above.
+ */
+const MONOLITH_STEP_TYPES = [
+  "ml-kem.hash-g@1",
+  "ml-kem.hash-h@1",
+  "ml-kem.kdf-j@1",
+  "ml-kem.prf@1",
 ] as const;
 
 /** Steps whose `d` is meant to be editable. */
@@ -86,6 +104,55 @@ describe("ParamEditor covers every Z_q step type — including the palette-only 
       unmount();
     });
   }
+
+  for (const stepType of MONOLITH_STEP_TYPES) {
+    it(`${stepType} dropped from the palette renders a real editor`, () => {
+      const newId = insertStepIntoSpec(stepType, {
+        kind: "after",
+        stepId: firstLeafId(useSpec()().steps),
+      });
+      const { queryByText, unmount } = render(() => <ParamEditor stepId={newId} />);
+      expect(
+        queryByText(FALLBACK_RE),
+        `${stepType} renders the raw-JSON fallback — give it a <Match> in ParamEditor.tsx`,
+      ).toBeNull();
+      unmount();
+    });
+  }
+
+  it("points every parameterless monolith at the sponge it collapses", () => {
+    // The rule MT19937 established and this family has a third answer to: a
+    // monolith must say WHICH KIND it is. These are opaque only for volume, and
+    // the blurb has to send the reader to the decomposed version rather than
+    // imply there is nothing to see. A generic "no editable parameters" line
+    // would pass the fallback check above while losing the point.
+    for (const stepType of ["ml-kem.hash-g@1", "ml-kem.hash-h@1", "ml-kem.kdf-j@1"] as const) {
+      __resetSpecForTests();
+      setLattice("ntt-3329-256");
+      const newId = insertStepIntoSpec(stepType, {
+        kind: "after",
+        stepId: firstLeafId(useSpec()().steps),
+      });
+      const leaf = render(() => <ParamEditor stepId={newId} />);
+      expect(
+        leaf.queryByText(/Watch the same sponge decomposed under Hash/),
+        `${stepType}'s no-params blurb does not point at the decomposed sponge`,
+      ).not.toBeNull();
+      leaf.unmount();
+    }
+  });
+
+  it("a freshly dropped PRF still offers its η control", () => {
+    const newId = insertStepIntoSpec("ml-kem.prf@1", {
+      kind: "after",
+      stepId: firstLeafId(useSpec()().steps),
+    });
+    const { queryByText } = render(() => <ParamEditor stepId={newId} />);
+    expect(queryByText(/Noise η/)).not.toBeNull();
+    // And it must NOT claim a modulus port it does not have — the reason it got
+    // its own block instead of joining the Z_q one.
+    expect(queryByText(/Modulus q/)).toBeNull();
+  });
 
   it("a freshly dropped compression step still offers its d control", () => {
     // The regression this file exists for: `insertStepIntoSpec` supplies
