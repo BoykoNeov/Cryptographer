@@ -192,8 +192,8 @@ default seed is **5489**, not the family's 1, because the rule was always "the
 seed that has a published vector".
 
 **The NTT over Z_3329 (2026-08-09) is the FIFTH `Category`, `"lattice"`, and the
-app's first post-quantum object** (`docs/plans/unified-stargazing-quasar.md`, P1 + P2
-shipped; P3–P5 open). It is the arithmetic ML-KEM is built on, and its
+app's first post-quantum object** (`docs/plans/unified-stargazing-quasar.md`, all
+five phases shipped). It is the arithmetic ML-KEM is built on, and its
 significance beyond "one more algorithm" is that it is the first family that is
 **non-cipher AND direction-ful** — so `LatticeSpecsByMode` copies
 `AsymmetricSpecsByMode` (two slots) rather than the hash/PRNG single slot, and
@@ -350,6 +350,44 @@ nodes**: same-scope wiring is forward-only, so binding `j-in` to `re.c` where it
 stands throws. (7) **The oracle fixture's corruption is `c[0] ^= 0x01`** — it
 records the flag but not the value, and a different flip yields a different decoy
 that reads as a broken implementation.
+
+**P5 — pedagogy (2026-08-10) — closes the lattice arc, and costs ZERO new step
+types**: everything in it is derivation over leaves that already existed, so it
+cleared no coverage gate. Eight things worth carrying. (1) **The canonical
+butterfly cell is the layout family's FOURTH member and the first keyed on an
+`iterate`** — the other three (`feistel`/`twofish`/`arx`) all analyze a
+`StepGroup` and gate on `container.kind === "group"`. Safe *by construction*,
+not by care: `expandCollapsedIterates` substitutes block chips only for
+COLLAPSED iterates, and a collapsed container returns from `layoutNode`'s chip
+branch long before any cell branch, so a cell and a chip row are mutually
+exclusive. (2) **The grid was derived from an edge-router fact that generalises
+past this family** (now in `docs/gotchas.md`): the router holds the SOURCE's y
+for the first half of a wire's x-span then settles onto the TARGET's, so a
+source outside two SAME-ROW boxes cannot reach the far one without entering the
+near one — the far box's y *is* the near box's y-band. Hence the modulus sits
+BETWEEN the rails and the ζ pair takes its own row with the rotation rightmost.
+(3) **The audit that found it is the strongest verification any of the four
+cells has had**: sample every rendered path against every leaf box, then re-run
+with the recognizer stubbed to separate your crossings from pre-existing ones.
+Measured 34 → 1 (forward) and 47 → 1 (inverse); canvas ~12,800 → ~6,600 px. (4)
+**One slot table serves both butterflies** because `analyzeNttButterfly` resolves
+direction into ROLES first, and the role sets are disjoint exactly at
+`twist`/`diff` — pinned by test, since losing it collides two leaves into one
+position. (5) **The replication guard here is INSURANCE, not a fix** — the
+opposite of ARX's, and the test says so: nothing crosses the default threshold
+of 3 (split and modulus feed exactly three consumers, and the check is a strict
+`>`), but the threshold is a user control that goes to 1. (6) **The butterfly
+diagram is the first DIRECTION-AWARE one since Twofish's** — ChaCha's and
+Salsa's are blind because those specs are structurally identical. Two of its
+geometry bugs were invisible to every unit test: the crossing's diagonals
+computed onto a single x (rendering as one vertical line), and the inverse's
+longest output line running past the viewBox. (7) **`zq-base-case-mul@1` IS
+browser-reachable** via ML-KEM-768, and its test drives the frame **through the
+spec store**, not a locally built K-PKE spec — these components read the ACTIVE
+spec, so a locally built one is invisible to them (the same mistake had the
+butterfly tests asserting against the forward diagram twice). (8) **`dk-split`,
+P4's conditioned revisit: NO ACTION**, because the condition did not apply — it
+is not a butterfly member, so no cell contains it and none can break.
 
 **The lattice narration debt — PAID 2026-08-10, ahead of P4 rather than inside
 it.** P3 left the note that the P2/P3 step types omit `shapeContract`, so
@@ -615,7 +653,7 @@ If a future need argues for one of these, revisit then.
 - `docs/help/graph-view.md` — user-facing reference for the graph view (edges, drag/drop, palette, warning glyphs, toolbar). Bundled into the app via Vite `?raw` and rendered inside the in-app help modal (`?` button in the graph toolbar). Keep this file the single source of truth — both GitHub readers and the in-app modal display the same prose.
 
 **Plans:**
-- **ML-KEM / post-quantum — the lattice layer (P1 + P2 SHIPPED 2026-08-09, P3 + P4 SHIPPED 2026-08-10; P5 open)**: `docs/plans/unified-stargazing-quasar.md`. Memory: `project_next_work_pqc.md`. Five phases: **P1 NTT-over-Z_3329 as its own selectable algorithm (fifth `Category`, `"lattice"`) — SHIPPED** → **P2 the rest of the lattice layer (compress/decompress, the 12-bit packing, CBD sampling, the base-case multiply) — SHIPPED** → **P3 K-PKE (KeyGen/Encrypt/Decrypt, again no selector entry) — SHIPPED** → **P4 ML-KEM-768 encaps/decaps (joins `Asymmetric`) — SHIPPED** → P5 pedagogy. **ML-DSA is deliberately out of scope** (its signing loop retries an unbounded number of times on *intermediate* values, which the build-spec-then-run model can't express without a simulate-then-rebuild pass — its own plan). Two facts from that plan worth knowing before any depth decision anywhere in the app: **groups emit no frames** (`runtime.ts` has one `frames.push`, in the leaf branch — so a Keccak-f[1600] is exactly 216 frames / 240 spec nodes), and fitting the two published measurements gives **≈1.6 ms per spec NODE vs ≈0.095 ms per FRAME — node count dominates by ~17×**, which is why an `iterate` is affordable where an unroll is not. Also: `runtime.ts:336` publishes `aux["blockIndex"]` on every port-mode iterate, so a body CAN be index-aware (this is not the MT19937 `+ i` wall, which was about a leaf *producing* an index); and **Node 24's `node:crypto` ships native ML-KEM — its `seed` OPTION is silently ignored on v24.14.1, but P3 recovered determinism by IMPORTING a hand-assembled PKCS#8 carrying the implicit-tagged `[0]` seed arm**, so the oracle exists and is committed at `tests/fixtures/ml-kem-768-seed-vectors.json`; check `node:crypto` for a new primitive before hunting published vectors, and capture what it gives you as a byte fixture since CI runs Node 22.
+- **ML-KEM / post-quantum — the lattice layer (ALL FIVE PHASES SHIPPED; P1 + P2 2026-08-09, P3 + P4 + P5 2026-08-10 — plan CLOSED)**: `docs/plans/unified-stargazing-quasar.md`. Memory: `project_next_work_pqc.md`. Five phases: **P1 NTT-over-Z_3329 as its own selectable algorithm (fifth `Category`, `"lattice"`) — SHIPPED** → **P2 the rest of the lattice layer (compress/decompress, the 12-bit packing, CBD sampling, the base-case multiply) — SHIPPED** → **P3 K-PKE (KeyGen/Encrypt/Decrypt, again no selector entry) — SHIPPED** → **P4 ML-KEM-768 encaps/decaps (joins `Asymmetric`) — SHIPPED** → **P5 pedagogy (the canonical butterfly cell + the two linear-view diagrams) — SHIPPED**. **ML-DSA is deliberately out of scope** (its signing loop retries an unbounded number of times on *intermediate* values, which the build-spec-then-run model can't express without a simulate-then-rebuild pass — its own plan). Two facts from that plan worth knowing before any depth decision anywhere in the app: **groups emit no frames** (`runtime.ts` has one `frames.push`, in the leaf branch — so a Keccak-f[1600] is exactly 216 frames / 240 spec nodes), and fitting the two published measurements gives **≈1.6 ms per spec NODE vs ≈0.095 ms per FRAME — node count dominates by ~17×**, which is why an `iterate` is affordable where an unroll is not. Also: `runtime.ts:336` publishes `aux["blockIndex"]` on every port-mode iterate, so a body CAN be index-aware (this is not the MT19937 `+ i` wall, which was about a leaf *producing* an index); and **Node 24's `node:crypto` ships native ML-KEM — its `seed` OPTION is silently ignored on v24.14.1, but P3 recovered determinism by IMPORTING a hand-assembled PKCS#8 carrying the implicit-tagged `[0]` seed arm**, so the oracle exists and is committed at `tests/fixtures/ml-kem-768-seed-vectors.json`; check `node:crypto` for a new primitive before hunting published vectors, and capture what it gives you as a byte fixture since CI runs Node 22.
 - PRNG family — the fourth `Category` (P1 MINSTD + P2 ANSI-C LCG/`add-mod@1` + P3 ChaCha20-CSPRNG shipped 2026-07-27; **P4 MT19937 shipped 2026-08-09 — plan CLOSED**): `docs/plans/iterative-dancing-ocean.md`, with P4 planned and executed in `docs/plans/validated-growing-dongarra.md`. Memory: `project_prng_family_plan.md`.
 - ChaCha20 — first stream cipher, first coreless cipher (ALL phases incl. P5 diagrams shipped 2026-07-20 — plan CLOSED): `docs/plans/fluffy-orbiting-shannon.md`. Memory: `project_chacha20_plan.md`.
 - Original architectural plan: `~/.claude/plans/i-want-to-build-tender-spark.md`

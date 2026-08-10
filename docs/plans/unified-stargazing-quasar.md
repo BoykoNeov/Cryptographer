@@ -750,7 +750,7 @@ Both are the same failure mode: prose that is correct for the frame the author
 had in mind and false for a sibling frame of the same step type. That is what
 scrubbing across params catches and what a per-type spot check does not.
 
-### P5 — pedagogy
+### P5 — pedagogy — SHIPPED 2026-08-10
 
 Canonical NTT butterfly layout (the fourth member of the
 `feistel-shape` / `twofish-shape` / `arx-group` family), a linear-view diagram
@@ -764,6 +764,87 @@ Every new bare-name port-native step must clear **both** coverage gates —
 and `tests/narration-registry-contract.test.ts` — plus a `ParamEditor` block and,
 for the no-params steps, entries in `NO_PARAMS_PORT_NATIVE_TYPES` and
 `portNativeNoParamsLabel`.
+
+#### OUTCOME (2026-08-10) — what P5 actually cost, and what it found
+
+**Shipped in two commits**: the canonical butterfly cell (`core/ntt-shape.ts` +
+`core/ntt-layout.ts` + the `GraphView` threading), and the two linear-view
+diagrams (`core/ntt-diagram.ts` + `NttButterflyDiagram` +
+`ZqBaseCaseMulDiagram`). **Zero new step types**, as the phase's own brief
+required — every part of P5 is derivation over leaves that already existed, so
+it cleared no coverage gate. The per-leaf narration the brief also listed was
+paid ahead of P4 and was not reopened.
+
+**Eight things worth carrying forward.**
+
+1. **The cell is the family's FIRST keyed on an `iterate` rather than a group.**
+   All three predecessors (`feistel` / `twofish` / `arx`) analyze a `StepGroup`,
+   and `layoutNode`'s three canonical branches each gate on
+   `container.kind === "group"`. A layer body is a port-mode `iterate`, so this
+   one gates on `kind === "iterate"`. It is safe for a reason worth stating
+   rather than trusting: `expandCollapsedIterates` replaces a body with
+   per-block chips only when the iterate is COLLAPSED, so a cell and a chip row
+   are mutually exclusive **by construction**.
+2. **The grid was derived from an EDGE-ROUTER fact, and the audit that found it
+   generalises.** The router draws a cubic holding the SOURCE's y for the first
+   half of its x-span and settling onto the TARGET's y for the second. The
+   consequence that decided two placements: a source outside two same-row boxes
+   cannot reach the far one without entering the near one, because the far
+   box's y *is* the near box's y-band. So the modulus sits BETWEEN the rails,
+   and the ζ pair takes a row of its own with the rotation rightmost.
+   Both were found by **sampling every rendered path against every leaf box** in
+   a real browser and asking which boxes it passes through that are not its
+   endpoints — a check strictly stronger than looking, and the first time this
+   project has run it.
+3. **The measurement.** Wires crossing a box they do not terminate at:
+   forward 34 → 1, inverse 47 → 1; canvas ~12,800 → ~6,600 px wide. The two
+   survivors are pre-existing and outside any cell, **confirmed by re-running
+   the audit with the recognizer stubbed out** rather than by reasoning about
+   which were whose.
+4. **One slot table serves both butterflies, and that is not a shortcut.** The
+   analyzer resolves the direction into ROLES before the layout sees anything,
+   and the role sets differ exactly where the shapes do — a Cooley–Tukey body
+   has `{twist, hi}` and never a `diff`, a Gentleman–Sande one the reverse. A
+   test pins that disjointness, because losing it would silently collide two
+   leaves into one position.
+5. **The replication guard here is INSURANCE, not a fix — the opposite of ARX's,
+   and the test says so.** Nothing crosses the default threshold of 3: the
+   Cooley–Tukey split and the modulus feed exactly three consumers each and the
+   check is a strict `>`. But the threshold is a user control that goes to 1,
+   and at 2 the cell loses both hubs. Recording which kind of guard it is
+   matters more than having it.
+6. **The butterfly diagram is the first DIRECTION-AWARE one since Twofish.**
+   ChaCha20's and Salsa20's diagrams are direction-blind because those specs are
+   structurally identical; the NTT's are not, so the twiddle box moves to the
+   other side of the crossing. Two geometry bugs in it were invisible to every
+   unit test and found only by looking: the crossing's two diagonals were
+   computed onto a single x (the X rendered as one vertical line), and the
+   inverse's longest output line ran past the viewBox and vanished.
+7. **`zq-base-case-mul@1` IS browser-reachable** — the plan left that open. It is
+   emitted by K-PKE's matrix-vector product, so it reaches a user through
+   ML-KEM-768. Its test drives the frame through **the spec store at
+   `ml-kem-768`**, not a locally built K-PKE spec, which is both the honest path
+   and the fix for the first version rendering nothing: these components read
+   the ACTIVE spec, so a locally built one is invisible to them. The same
+   mistake had the butterfly tests asserting against the forward diagram twice.
+8. **`dk-split` — the P4 revisit, resolved: NO ACTION, deliberately.** P4
+   conditioned it on this phase ("that is when a `neverModes` guard becomes the
+   question it was for those two"). The answer is no, and the reason is that the
+   condition turned out not to apply: `dk-split` is not a butterfly member, so
+   no canonical cell contains it and none can be broken by its replication. It
+   keeps the treatment `q` and `gamma` already get, with no warning glyphs. The
+   guard added in this phase is scoped to recognized butterflies and does not
+   name it.
+
+**Left open.** The butterfly cell and both diagrams were read on screen in both
+directions of the standalone NTT, and the geometric audit was run against both.
+The one thing not looked at is the cell **rendered inside ML-KEM-768**, where
+the layers sit two scopes deeper inside default-collapsed transform groups —
+recognition there is pinned by unit test (the prefixed K-PKE ids) and the
+base-case diagram is driven through the ML-KEM spec, but neither was opened in a
+browser, because the extension dropped partway through the phase. It is a
+low-risk gap (the layout branch reads only `container.kind` and the shape) but it
+is a gap.
 
 ## Critical files
 
