@@ -57,6 +57,7 @@ import { FeistelRoundBytes } from "./components/FeistelRoundBytes";
 import { FeistelSwapDiagram } from "./components/FeistelSwapDiagram";
 import { GraphView } from "./components/GraphView";
 import { IvInput } from "./components/IvInput";
+import { NttButterflyDiagram } from "./components/NttButterflyDiagram";
 import { ParamEditor } from "./components/ParamEditor";
 import { PortFlowView } from "./components/PortFlowView";
 import { PortWiringEditor } from "./components/PortWiringEditor";
@@ -69,6 +70,7 @@ import { StepNarration } from "./components/StepNarration";
 import { StepStrip } from "./components/StepStrip";
 import { TraceTimeline } from "./components/TraceTimeline";
 import { TwofishRoundDiagram } from "./components/TwofishRoundDiagram";
+import { ZqBaseCaseMulDiagram } from "./components/ZqBaseCaseMulDiagram";
 // Side-effect import: register the per-frame narration fns into the shared
 // narration registry. Without it, <StepNarration /> would render nothing.
 // Idempotent.
@@ -2509,6 +2511,24 @@ export const App = () => {
                       construction. This one adds the scratch lane that in-place
                       accumulation has no need of. */}
                   <SalsaQuarterRoundDiagram frame={frame()} />
+
+                  {/* The lattice family is none of the above. Its loop body is
+                      a butterfly: two coefficients in, two out, each output
+                      depending on both. The graph's canonical cell shows a
+                      layer's anatomy; only at this altitude does the CROSSING —
+                      the reason the transform is invertible at all — become
+                      visible. Unlike the two ARX diagrams this one is
+                      direction-aware, because the forward and inverse
+                      butterflies are genuinely different shapes. */}
+                  <NttButterflyDiagram frame={frame()} />
+
+                  {/* The lattice layer's other picture, and the only one that
+                      draws a single leaf. `zq-base-case-mul@1` is the one
+                      operation in the family that is NOT element-wise, and the
+                      reason is a ring fact — X² folds back onto the constant
+                      term — that prose can state but only an arrow can show.
+                      Reachable through ML-KEM-768, which embeds K-PKE. */}
+                  <ZqBaseCaseMulDiagram frame={frame()} />
 
                   {/* Per-frame value-prose. Cipher-agnostic dispatch via
                       the narration registry (`src/ui/narration/`).

@@ -79,6 +79,20 @@ const MUL_TYPE = "zq-vec-mul-scalar@1";
 const IN_PORT = "in";
 const CHAIN_PORT = "chain";
 
+/**
+ * `split-bytes@1` names its outputs `output0`, `output1`, … in widths order, so
+ * the FIRST is the low half of the coefficients. Reading that is reading the
+ * primitive's own contract, the way this module already reads `"a"`, `"b"`,
+ * `"modulus"` and `"input0"` — it is not a dependence on the NTT's node ids.
+ *
+ * It is the anchor that tells "low" from "high" without asking the addition,
+ * which is what lets the addition be checked as an unordered pair.
+ */
+const SPLIT_LOW_PORT = "output0";
+const SPLIT_HIGH_PORT = "output1";
+/** Every `zq-vec-*@1` publishes its single result on `output`. */
+const MUL_OUT_PORT = "output";
+
 /** Leaves in one butterfly body. No optional members — see the header. */
 export const NTT_BUTTERFLY_LEAVES = 8;
 
@@ -160,6 +174,25 @@ const inputAt = (leaf: StepLeaf, name: string): PortBinding | undefined => portI
 /** True iff `binding` names any output of `nodeId`. */
 const comesFrom = (binding: PortBinding | undefined, nodeId: string): boolean =>
   binding !== undefined && binding.node === nodeId;
+
+/** True iff `binding` is exactly `want` (node and port both). */
+const bindingEquals = (binding: PortBinding | undefined, want: PortBinding): boolean =>
+  binding !== undefined && sameBinding(binding, want);
+
+/**
+ * True iff a two-operand leaf reads exactly `x` and `y`, in EITHER order.
+ *
+ * Used for the additions only. `zq-vec-add@1` is commutative, so swapping its
+ * two operands is a legal no-op edit and must not make the layer stop being a
+ * butterfly; the subtractions are checked positionally, because reversing them
+ * is not a no-op.
+ */
+const readsUnorderedPair = (leaf: StepLeaf, x: PortBinding, y: PortBinding): boolean => {
+  const a = inputAt(leaf, "a");
+  const b = inputAt(leaf, "b");
+  if (a === undefined || b === undefined) return false;
+  return (sameBinding(a, x) && sameBinding(b, y)) || (sameBinding(a, y) && sameBinding(b, x));
+};
 
 /** True iff the leaf is a `split-bytes@1` cutting its input into two pieces. */
 const isTwoWaySplit = (leaf: StepLeaf): boolean => {
@@ -249,35 +282,31 @@ export const analyzeNttButterfly = (node: IterateGroup): NttButterflyShape | nul
   if (subConsumesMul === mulConsumesSub) return null; // neither, or a cycle
   const kind: NttButterflyKind = subConsumesMul ? "cooley-tukey" : "gentleman-sande";
 
+  const loHalf: PortBinding = { node: split.id, port: SPLIT_LOW_PORT };
+  const hiHalf: PortBinding = { node: split.id, port: SPLIT_HIGH_PORT };
+
   if (kind === "cooley-tukey") {
     // t = ζ·hi ; lo′ = lo + t ; hi′ = lo − t.
-    // Both combining steps read the multiply as `b` and the ORIGINAL low half
-    // as `a` — the same wire, which is what makes `hi′ = lo + 2t` inexpressible
-    // (see the `hi` step's narration).
-    if (!comesFrom(inputAt(add, "b"), mul.id)) return null;
+    if (!bindingEquals(inputAt(mul, "a"), hiHalf)) return null;
+    // The SUBTRACTION is checked positionally, because it has to be: `lo − t`
+    // reversed is `t − lo`, which negates every high coefficient.
+    if (!bindingEquals(inputAt(sub, "a"), loHalf)) return null;
     if (!comesFrom(inputAt(sub, "b"), mul.id)) return null;
-    const addA = inputAt(add, "a");
-    const subA = inputAt(sub, "a");
-    if (!addA || !subA || !sameBinding(addA, subA)) return null;
-    if (addA.node !== split.id) return null;
-    // The multiply scales the OTHER half — a different port of the same split.
-    const mulA = inputAt(mul, "a");
-    if (!mulA || mulA.node !== split.id || mulA.port === addA.port) return null;
+    // The ADDITION is checked as an unordered pair, because it has to be:
+    // addition commutes, so swapping its operands is a legal no-op edit and
+    // must not drop the layer to the generic layout. (The Salsa20 walk records
+    // the same reasoning; `partitionOperands` there does the same job.)
+    if (!readsUnorderedPair(add, loHalf, { node: mul.id, port: MUL_OUT_PORT })) return null;
+    // Both combining steps must read the SAME original low half — the wire that
+    // makes `hi′ = lo + 2t` inexpressible (see the `hi` step's narration).
   } else {
     // lo′ = lo + hi ; hi′ = ζ·(hi − lo).
-    // The add and the sub each read both halves of the split, in opposite
-    // orders — `hi − lo`, not `lo − hi` (reversing it negates every high
-    // coefficient, and the linear twist carries the error to the output).
-    const addA = inputAt(add, "a");
-    const addB = inputAt(add, "b");
-    const subA = inputAt(sub, "a");
-    const subB = inputAt(sub, "b");
-    if (!addA || !addB || !subA || !subB) return null;
-    for (const b of [addA, addB, subA, subB]) {
-      if (b.node !== split.id) return null;
-    }
-    if (addA.port === addB.port || subA.port === subB.port) return null;
-    if (subA.port !== addB.port || subB.port !== addA.port) return null;
+    if (!comesFrom(inputAt(mul, "a"), sub.id)) return null;
+    // Strict, and for the same reason: `hi − lo`, not `lo − hi`.
+    if (!bindingEquals(inputAt(sub, "a"), hiHalf)) return null;
+    if (!bindingEquals(inputAt(sub, "b"), loHalf)) return null;
+    // Unordered, and for the same reason.
+    if (!readsUnorderedPair(add, loHalf, hiHalf)) return null;
   }
 
   // 6. The recombine is the iterate's `bodyOutput`: low half then high half,

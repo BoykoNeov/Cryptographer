@@ -173,6 +173,38 @@ describe("NTT butterfly recognition — every other family's loops", () => {
   });
 });
 
+describe("NTT butterfly recognition — commutativity", () => {
+  // The addition commutes, so swapping its two operands is a legal no-op edit
+  // and must NOT drop the layer to the generic layout. This mirrors the Salsa20
+  // walk, which was deliberately left swap-tolerant for the same reason: a
+  // positional check there would reject an edit that changes nothing.
+  //
+  // The pair is the point. Swapping the ADDITION is tolerated; swapping the
+  // SUBTRACTION (below) is refused, because that one is not a no-op.
+  it.each([
+    ["forward", true],
+    ["inverse", false],
+  ])("still recognizes a %s butterfly whose addition operands are swapped", (_n, forward) => {
+    const spec = clone(forward ? forwardSpec : inverseSpec);
+    const layer = iteratesOf(spec)[0] as IterateGroup;
+    const add = layer.children.find(
+      (c) => c.kind === "step" && c.type === "zq-vec-add@1",
+    ) as StepLeaf;
+    const ports = add.portInputs as Record<string, { node: string; port: string }>;
+    const a = ports.a;
+    const b = ports.b;
+    if (a && b) {
+      ports.a = b;
+      ports.b = a;
+    }
+    const shape = analyzeNttButterfly(layer);
+    expect(shape).not.toBeNull();
+    // And it still reads the direction correctly, since nothing about the
+    // discriminator went through the addition.
+    expect(shape?.kind).toBe(forward ? "cooley-tukey" : "gentleman-sande");
+  });
+});
+
 describe("NTT butterfly recognition — what it declines", () => {
   it("declines a butterfly whose subtraction operands are swapped", () => {
     // `hi − lo` reversed negates every high coefficient. In the INVERSE that is
