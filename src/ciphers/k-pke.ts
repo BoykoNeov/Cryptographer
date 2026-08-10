@@ -233,12 +233,53 @@ The tell, if it ever happens: ρ stays correct while the secret key goes wrong.`
   references: ["FIPS 203 Algorithm 13 — K-PKE.KeyGen"],
 });
 
+// ─── Embedding: the prefix, and the two shared constant sources ───────────
+
+/**
+ * Everything a K-PKE body needs to know about the spec it is being built into.
+ *
+ * **The prefix is not cosmetic.** ML-KEM's decapsulation embeds THREE K-PKE
+ * bodies in one spec — key generation, decryption, and the re-encryption — and
+ * each of them contains up to seven number-theoretic transforms whose layers are
+ * called `layer1`, `layer2`, … The flat trace keys frames by `stepId`, so two
+ * bodies sharing an id do not raise an error: they silently break the scrubber,
+ * frame preservation across re-runs, and the graph derivation. Every id a body
+ * emits therefore goes through `ctx.prefix`, and the standalone specs pass `""`
+ * so their bytes are unchanged (pinned by `tests/k-pke-spec-digests.test.ts`).
+ *
+ * `q` and `gamma` arrive as bindings rather than being emitted per body, because
+ * one modulus source can feed every body in the spec — and the point of showing
+ * `q` as a visible, editable leaf is undermined by three of them.
+ */
+export type KPkeEmbedding = {
+  /** Prepended to every node id this body emits. `""` for a standalone spec. */
+  readonly prefix: string;
+  /** The single visible modulus source. */
+  readonly q: PortBinding;
+  /** The γ table the degree-1 base-case multiplies read. */
+  readonly gamma: PortBinding;
+};
+
+/** The standalone-spec embedding: no prefix, constants emitted by the spec. */
+const STANDALONE: KPkeEmbedding = {
+  prefix: "",
+  q: port(Q_ID, "output"),
+  gamma: port(GAMMA_ID, "output"),
+};
+
+/** A body-local id, namespaced into the spec it is being embedded in. */
+const nid = (ctx: KPkeEmbedding, id: string): string => `${ctx.prefix}${id}`;
+
+/** A binding onto one of this body's own nodes. */
+const own = (ctx: KPkeEmbedding, id: string, portName = "output"): PortBinding =>
+  port(nid(ctx, id), portName);
+
 // ─── Small builders ───────────────────────────────────────────────────────
 
 /** The shared modulus source, plus the γ table. Both are top-level here — port
  *  flow reaches every consumer, unlike inside an iterate body where aux is
  *  forced (see `ntt-3329-256.ts`'s header). */
-const constantNodes = (withGamma: boolean): StepNode[] => {
+export const kPkeConstantNodes = (withGamma: boolean): StepNode[] => {
   const nodes: StepNode[] = [
     {
       kind: "step",
@@ -265,78 +306,84 @@ const constantNodes = (withGamma: boolean): StepNode[] => {
  * the bytes go on, which is the only difference between the matrix and its
  * transpose.
  */
-const matrixEntryNodes = (options: {
-  readonly id: string;
-  readonly rho: PortBinding;
-  readonly row: number;
-  readonly col: number;
-  readonly transposed: boolean;
-}): StepNode[] => {
+const matrixEntryNodes = (
+  ctx: KPkeEmbedding,
+  options: {
+    readonly id: string;
+    readonly rho: PortBinding;
+    readonly row: number;
+    readonly col: number;
+    readonly transposed: boolean;
+  },
+): StepNode[] => {
   const { id, rho, row, col, transposed } = options;
   const first = transposed ? row : col;
   const second = transposed ? col : row;
   return [
     {
       kind: "step",
-      id: `${id}.idx`,
+      id: nid(ctx, `${id}.idx`),
       type: "constant-load@1",
       params: { bytes: [first, second] },
       narrationOverride: narrMatrixIndex(row, col, transposed),
     },
     {
       kind: "step",
-      id: `${id}.seed`,
+      id: nid(ctx, `${id}.seed`),
       type: "concat@1",
       params: { inputCount: 2 },
-      portInputs: { input0: rho, input1: port(`${id}.idx`, "output") },
+      portInputs: { input0: rho, input1: own(ctx, `${id}.idx`) },
     },
     {
       kind: "step",
-      id,
+      id: nid(ctx, id),
       type: "ml-kem.sample-ntt@1",
       params: { ...VEC_PARAMS },
-      portInputs: { input: port(`${id}.seed`, "output"), modulus: port(Q_ID, "output") },
+      portInputs: { input: own(ctx, `${id}.seed`), modulus: ctx.q },
     },
   ];
 };
 
 /** One noise polynomial: counter byte, join, stretch, sample. */
-const noiseNodes = (options: {
-  readonly id: string;
-  readonly seed: PortBinding;
-  readonly counter: number;
-  readonly eta: number;
-  readonly label: string;
-}): StepNode[] => {
+const noiseNodes = (
+  ctx: KPkeEmbedding,
+  options: {
+    readonly id: string;
+    readonly seed: PortBinding;
+    readonly counter: number;
+    readonly eta: number;
+    readonly label: string;
+  },
+): StepNode[] => {
   const { id, seed, counter, eta, label } = options;
   return [
     {
       kind: "step",
-      id: `${id}.ctr`,
+      id: nid(ctx, `${id}.ctr`),
       type: "constant-load@1",
       params: { bytes: [counter] },
       narrationOverride: narrCounter(counter, label),
     },
     {
       kind: "step",
-      id: `${id}.in`,
+      id: nid(ctx, `${id}.in`),
       type: "concat@1",
       params: { inputCount: 2 },
-      portInputs: { input0: seed, input1: port(`${id}.ctr`, "output") },
+      portInputs: { input0: seed, input1: own(ctx, `${id}.ctr`) },
     },
     {
       kind: "step",
-      id: `${id}.prf`,
+      id: nid(ctx, `${id}.prf`),
       type: "ml-kem.prf@1",
       params: { eta },
-      portInputs: { input: port(`${id}.in`, "output") },
+      portInputs: { input: own(ctx, `${id}.in`) },
     },
     {
       kind: "step",
-      id,
+      id: nid(ctx, id),
       type: "zq-cbd@1",
       params: { ...VEC_PARAMS, eta },
-      portInputs: { a: port(`${id}.prf`, "output"), modulus: port(Q_ID, "output") },
+      portInputs: { a: own(ctx, `${id}.prf`), modulus: ctx.q },
     },
   ];
 };
@@ -350,85 +397,88 @@ const noiseNodes = (options: {
  * own ring `Z_q[X]/(X²−γ)`. The step type's broken family prefix says so at the
  * palette; this is the place that would have got it wrong.
  */
-const dotProductNodes = (options: {
-  readonly id: string;
-  readonly matrixRow: readonly PortBinding[];
-  readonly vector: readonly PortBinding[];
-}): { readonly nodes: StepNode[]; readonly output: PortBinding } => {
+const dotProductNodes = (
+  ctx: KPkeEmbedding,
+  options: {
+    readonly id: string;
+    readonly matrixRow: readonly PortBinding[];
+    readonly vector: readonly PortBinding[];
+  },
+): { readonly nodes: StepNode[]; readonly output: PortBinding } => {
   const { id, matrixRow, vector } = options;
   const nodes: StepNode[] = [];
 
   for (let j = 0; j < matrixRow.length; j++) {
     nodes.push({
       kind: "step",
-      id: `${id}.mul${j}`,
+      id: nid(ctx, `${id}.mul${j}`),
       type: "zq-base-case-mul@1",
       params: { ...VEC_PARAMS },
       portInputs: {
         a: matrixRow[j] as PortBinding,
         b: vector[j] as PortBinding,
-        gamma: port(GAMMA_ID, "output"),
-        modulus: port(Q_ID, "output"),
+        gamma: ctx.gamma,
+        modulus: ctx.q,
       },
     });
   }
 
-  let running: PortBinding = port(`${id}.mul0`, "output");
+  let running: PortBinding = own(ctx, `${id}.mul0`);
   for (let j = 1; j < matrixRow.length; j++) {
     const sumId = `${id}.sum${j}`;
     nodes.push({
       kind: "step",
-      id: sumId,
+      id: nid(ctx, sumId),
       type: "zq-vec-add@1",
       params: { ...VEC_PARAMS },
       portInputs: {
         a: running,
-        b: port(`${id}.mul${j}`, "output"),
-        modulus: port(Q_ID, "output"),
+        b: own(ctx, `${id}.mul${j}`),
+        modulus: ctx.q,
       },
     });
-    running = port(sumId, "output");
+    running = own(ctx, sumId);
   }
 
   return { nodes, output: running };
 };
 
 /** `zq-vec-add@1` over two polynomials. */
-const addNode = (id: string, a: PortBinding, b: PortBinding): StepNode => ({
+const addNode = (ctx: KPkeEmbedding, id: string, a: PortBinding, b: PortBinding): StepNode => ({
   kind: "step",
-  id,
+  id: nid(ctx, id),
   type: "zq-vec-add@1",
   params: { ...VEC_PARAMS },
-  portInputs: { a, b, modulus: port(Q_ID, "output") },
+  portInputs: { a, b, modulus: ctx.q },
 });
 
 /** The dense 12-bit packing of one polynomial. */
-const encodeNode = (id: string, a: PortBinding, d = D_ENCODE): StepNode => ({
+const encodeNode = (ctx: KPkeEmbedding, id: string, a: PortBinding, d = D_ENCODE): StepNode => ({
   kind: "step",
-  id,
+  id: nid(ctx, id),
   type: "zq-byte-encode@1",
   params: { ...VEC_PARAMS, d },
-  portInputs: { a, modulus: port(Q_ID, "output") },
+  portInputs: { a, modulus: ctx.q },
 });
 
 /** Its partner, which loses nothing — unlike compress/decompress. */
-const decodeNode = (id: string, a: PortBinding, d = D_ENCODE): StepNode => ({
+const decodeNode = (ctx: KPkeEmbedding, id: string, a: PortBinding, d = D_ENCODE): StepNode => ({
   kind: "step",
-  id,
+  id: nid(ctx, id),
   type: "zq-byte-decode@1",
   params: { ...VEC_PARAMS, d },
-  portInputs: { a, modulus: port(Q_ID, "output") },
+  portInputs: { a, modulus: ctx.q },
 });
 
 /** `concat@1` over an arbitrary list of bindings. */
-const concatNode = (id: string, parts: readonly PortBinding[]): StepNode => {
+const concatNode = (ctx: KPkeEmbedding, id: string, parts: readonly PortBinding[]): StepNode => {
   const portInputs: Record<string, PortBinding> = {};
   parts.forEach((p, i) => {
     portInputs[`input${i}`] = p;
   });
   return {
     kind: "step",
-    id,
+    id: nid(ctx, id),
     type: "concat@1",
     params: { inputCount: parts.length },
     portInputs,
@@ -437,13 +487,14 @@ const concatNode = (id: string, parts: readonly PortBinding[]): StepNode => {
 
 /** Cut a wide value into fixed-width pieces. */
 const splitNode = (
+  ctx: KPkeEmbedding,
   id: string,
   input: PortBinding,
   widths: readonly number[],
   narration?: StepDocumentation,
 ): StepNode => ({
   kind: "step",
-  id,
+  id: nid(ctx, id),
   type: "split-bytes@1",
   params: { widths: [...widths] },
   portInputs: { input },
@@ -459,30 +510,39 @@ const splitNode = (
  * because a spec has one output port and the encapsulation key is the one a
  * learner is looking for. Both halves are pinned by the KAT.
  */
-export const buildKPkeKeyGenSpec = (): CipherSpec => {
-  const steps: StepNode[] = [...constantNodes(true)];
+export const kPkeKeyGenNodes = (
+  ctx: KPkeEmbedding,
+  seed: PortBinding,
+): {
+  readonly nodes: StepNode[];
+  /** `ByteEncode₁₂(t̂) ‖ ρ` — the encapsulation key. */
+  readonly ek: PortBinding;
+  /** `ByteEncode₁₂(ŝ)` — the K-PKE decryption key. */
+  readonly dk: PortBinding;
+} => {
+  const steps: StepNode[] = [];
 
   // (ρ, σ) ← G(d ‖ k)
   steps.push(
     {
       kind: "step",
-      id: "k-byte",
+      id: nid(ctx, "k-byte"),
       type: "constant-load@1",
       params: { bytes: [K_PKE_K] },
       narrationOverride: narrKByte,
     },
-    concatNode("g-in", [port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT), port("k-byte", "output")]),
+    concatNode(ctx, "g-in", [seed, own(ctx, "k-byte")]),
     {
       kind: "step",
-      id: "g",
+      id: nid(ctx, "g"),
       type: "ml-kem.hash-g@1",
       params: {},
-      portInputs: { input: port("g-in", "output") },
+      portInputs: { input: own(ctx, "g-in") },
     },
-    splitNode(KPKE_RHO_ID, port("g", "output"), [32, 32], narrSeedSplit),
+    splitNode(ctx, KPKE_RHO_ID, own(ctx, "g"), [32, 32], narrSeedSplit),
   );
-  const rho = port(KPKE_RHO_ID, "output0");
-  const sigma = port(KPKE_RHO_ID, "output1");
+  const rho = own(ctx, KPKE_RHO_ID, "output0");
+  const sigma = own(ctx, KPKE_RHO_ID, "output1");
 
   // Â[i][j] ← SampleNTT(ρ ‖ j ‖ i). Column byte first — see the narration.
   const matrix: PortBinding[][] = [];
@@ -490,8 +550,8 @@ export const buildKPkeKeyGenSpec = (): CipherSpec => {
     const row: PortBinding[] = [];
     for (let j = 0; j < K_PKE_K; j++) {
       const id = `A.${i}${j}`;
-      steps.push(...matrixEntryNodes({ id, rho, row: i, col: j, transposed: false }));
-      row.push(port(id, "output"));
+      steps.push(...matrixEntryNodes(ctx, { id, rho, row: i, col: j, transposed: false }));
+      row.push(own(ctx, id));
     }
     matrix.push(row);
   }
@@ -502,14 +562,14 @@ export const buildKPkeKeyGenSpec = (): CipherSpec => {
   for (let i = 0; i < K_PKE_K; i++) {
     const id = `s.${i}`;
     steps.push(
-      ...noiseNodes({ id, seed: sigma, counter: i, eta: ETA_1, label: `the secret s${i}` }),
+      ...noiseNodes(ctx, { id, seed: sigma, counter: i, eta: ETA_1, label: `the secret s${i}` }),
     );
-    secret.push(port(id, "output"));
+    secret.push(own(ctx, id));
   }
   for (let i = 0; i < K_PKE_K; i++) {
     const id = `e.${i}`;
     steps.push(
-      ...noiseNodes({
+      ...noiseNodes(ctx, {
         id,
         seed: sigma,
         counter: K_PKE_K + i,
@@ -517,7 +577,7 @@ export const buildKPkeKeyGenSpec = (): CipherSpec => {
         label: `the error e${i}`,
       }),
     );
-    error.push(port(id, "output"));
+    error.push(own(ctx, id));
   }
 
   // ŝ ← NTT(s), ê ← NTT(e). Six of the shipped transform, default-collapsed.
@@ -527,54 +587,61 @@ export const buildKPkeKeyGenSpec = (): CipherSpec => {
     const id = `ntt.s${i}`;
     steps.push(
       buildNttGroup({
-        id,
+        id: nid(ctx, id),
         label: `NTT(s${i})`,
         direction: "forward",
         seedBinding: secret[i] as PortBinding,
       }),
     );
-    secretHat.push(port(id, "out"));
+    secretHat.push(own(ctx, id, "out"));
   }
   for (let i = 0; i < K_PKE_K; i++) {
     const id = `ntt.e${i}`;
     steps.push(
       buildNttGroup({
-        id,
+        id: nid(ctx, id),
         label: `NTT(e${i})`,
         direction: "forward",
         seedBinding: error[i] as PortBinding,
       }),
     );
-    errorHat.push(port(id, "out"));
+    errorHat.push(own(ctx, id, "out"));
   }
 
   // t̂ ← Â ∘ ŝ + ê
   const tHat: PortBinding[] = [];
   for (let i = 0; i < K_PKE_K; i++) {
-    const dot = dotProductNodes({
+    const dot = dotProductNodes(ctx, {
       id: `t.${i}`,
       matrixRow: matrix[i] as PortBinding[],
       vector: secretHat,
     });
     steps.push(...dot.nodes);
-    steps.push(addNode(`t.${i}`, dot.output, errorHat[i] as PortBinding));
-    tHat.push(port(`t.${i}`, "output"));
+    steps.push(addNode(ctx, `t.${i}`, dot.output, errorHat[i] as PortBinding));
+    tHat.push(own(ctx, `t.${i}`));
   }
 
   // ek ← ByteEncode₁₂(t̂) ‖ ρ  and  dk ← ByteEncode₁₂(ŝ)
   const ekParts: PortBinding[] = [];
   for (let i = 0; i < K_PKE_K; i++) {
-    steps.push(encodeNode(`ek.enc${i}`, tHat[i] as PortBinding));
-    ekParts.push(port(`ek.enc${i}`, "output"));
+    steps.push(encodeNode(ctx, `ek.enc${i}`, tHat[i] as PortBinding));
+    ekParts.push(own(ctx, `ek.enc${i}`));
   }
-  steps.push(concatNode(KPKE_EK_ID, [...ekParts, rho]));
+  steps.push(concatNode(ctx, KPKE_EK_ID, [...ekParts, rho]));
 
   const dkParts: PortBinding[] = [];
   for (let i = 0; i < K_PKE_K; i++) {
-    steps.push(encodeNode(`dk.enc${i}`, secretHat[i] as PortBinding));
-    dkParts.push(port(`dk.enc${i}`, "output"));
+    steps.push(encodeNode(ctx, `dk.enc${i}`, secretHat[i] as PortBinding));
+    dkParts.push(own(ctx, `dk.enc${i}`));
   }
-  steps.push(concatNode(KPKE_DK_ID, dkParts));
+  steps.push(concatNode(ctx, KPKE_DK_ID, dkParts));
+
+  return { nodes: steps, ek: own(ctx, KPKE_EK_ID), dk: own(ctx, KPKE_DK_ID) };
+};
+
+export const buildKPkeKeyGenSpec = (): CipherSpec => {
+  const steps: StepNode[] = [...kPkeConstantNodes(true)];
+  steps.push(...kPkeKeyGenNodes(STANDALONE, port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT)).nodes);
 
   return {
     id: "k-pke-768-keygen@1",
@@ -600,35 +667,33 @@ export const buildKPkeKeyGenSpec = (): CipherSpec => {
  * Both arrive through aux (`cipherConstants`), the channel `q` and the ζ table
  * already use. The message is the spec's input.
  */
-export const buildKPkeEncryptSpec = (ek: Uint8Array, r: Uint8Array): CipherSpec => {
-  const steps: StepNode[] = [...constantNodes(true)];
+export const kPkeEncryptNodes = (
+  ctx: KPkeEmbedding,
+  options: {
+    /** The encapsulation key, however it reached this spec. */
+    readonly ek: PortBinding;
+    /** The 32-byte message `m`. */
+    readonly message: PortBinding;
+    /** The 32-byte randomness `r` — ML-KEM derives it from `G`; K-PKE is told. */
+    readonly randomness: PortBinding;
+  },
+): { readonly nodes: StepNode[]; readonly ciphertext: PortBinding } => {
+  const { ek: ekBinding, message, randomness } = options;
+  const steps: StepNode[] = [];
 
   steps.push(
-    {
-      kind: "step",
-      id: KPKE_EK_IN_ID,
-      type: "aux-load-bytes@1",
-      params: { auxName: KPKE_EK_AUX, byteLength: EK_BYTES },
-    },
-    {
-      kind: "step",
-      id: "r-in",
-      type: "aux-load-bytes@1",
-      params: { auxName: KPKE_RANDOMNESS_AUX, byteLength: 32 },
-    },
     // t̂ is the first 3·384 bytes of ek; ρ is the trailing 32.
-    splitNode("ek-split", port(KPKE_EK_IN_ID, "output"), [
+    splitNode(ctx, "ek-split", ekBinding, [
       ...Array.from({ length: K_PKE_K }, () => ENCODED_POLY_BYTES),
       32,
     ]),
   );
-  const rho = port("ek-split", `output${K_PKE_K}`);
-  const randomness = port("r-in", "output");
+  const rho = own(ctx, "ek-split", `output${K_PKE_K}`);
 
   const tHat: PortBinding[] = [];
   for (let i = 0; i < K_PKE_K; i++) {
-    steps.push(decodeNode(`t.dec${i}`, port("ek-split", `output${i}`)));
-    tHat.push(port(`t.dec${i}`, "output"));
+    steps.push(decodeNode(ctx, `t.dec${i}`, own(ctx, "ek-split", `output${i}`)));
+    tHat.push(own(ctx, `t.dec${i}`));
   }
 
   // Âᵀ[i][j] ← SampleNTT(ρ ‖ i ‖ j). The bytes go on the other way round here,
@@ -638,8 +703,8 @@ export const buildKPkeEncryptSpec = (ek: Uint8Array, r: Uint8Array): CipherSpec 
     const row: PortBinding[] = [];
     for (let j = 0; j < K_PKE_K; j++) {
       const id = `At.${i}${j}`;
-      steps.push(...matrixEntryNodes({ id, rho, row: i, col: j, transposed: true }));
-      row.push(port(id, "output"));
+      steps.push(...matrixEntryNodes(ctx, { id, rho, row: i, col: j, transposed: true }));
+      row.push(own(ctx, id));
     }
     matrixT.push(row);
   }
@@ -649,15 +714,21 @@ export const buildKPkeEncryptSpec = (ek: Uint8Array, r: Uint8Array): CipherSpec 
   for (let i = 0; i < K_PKE_K; i++) {
     const id = `y.${i}`;
     steps.push(
-      ...noiseNodes({ id, seed: randomness, counter: i, eta: ETA_1, label: `the blinding y${i}` }),
+      ...noiseNodes(ctx, {
+        id,
+        seed: randomness,
+        counter: i,
+        eta: ETA_1,
+        label: `the blinding y${i}`,
+      }),
     );
-    y.push(port(id, "output"));
+    y.push(own(ctx, id));
   }
   const e1: PortBinding[] = [];
   for (let i = 0; i < K_PKE_K; i++) {
     const id = `e1.${i}`;
     steps.push(
-      ...noiseNodes({
+      ...noiseNodes(ctx, {
         id,
         seed: randomness,
         counter: K_PKE_K + i,
@@ -665,10 +736,10 @@ export const buildKPkeEncryptSpec = (ek: Uint8Array, r: Uint8Array): CipherSpec 
         label: `the error e₁${i}`,
       }),
     );
-    e1.push(port(id, "output"));
+    e1.push(own(ctx, id));
   }
   steps.push(
-    ...noiseNodes({
+    ...noiseNodes(ctx, {
       id: "e2",
       seed: randomness,
       counter: 2 * K_PKE_K,
@@ -683,19 +754,19 @@ export const buildKPkeEncryptSpec = (ek: Uint8Array, r: Uint8Array): CipherSpec 
     const id = `ntt.y${i}`;
     steps.push(
       buildNttGroup({
-        id,
+        id: nid(ctx, id),
         label: `NTT(y${i})`,
         direction: "forward",
         seedBinding: y[i] as PortBinding,
       }),
     );
-    yHat.push(port(id, "out"));
+    yHat.push(own(ctx, id, "out"));
   }
 
   // u ← NTT⁻¹(Âᵀ ∘ ŷ) + e₁
   const u: PortBinding[] = [];
   for (let i = 0; i < K_PKE_K; i++) {
-    const dot = dotProductNodes({
+    const dot = dotProductNodes(ctx, {
       id: `au.${i}`,
       matrixRow: matrixT[i] as PortBinding[],
       vector: yHat,
@@ -704,37 +775,37 @@ export const buildKPkeEncryptSpec = (ek: Uint8Array, r: Uint8Array): CipherSpec 
     const inv = `intt.u${i}`;
     steps.push(
       buildNttGroup({
-        id: inv,
+        id: nid(ctx, inv),
         label: `NTT⁻¹((Aᵀŷ)${i})`,
         direction: "inverse",
         seedBinding: dot.output,
       }),
     );
-    steps.push(addNode(`u.${i}`, port(inv, "out"), e1[i] as PortBinding));
-    u.push(port(`u.${i}`, "output"));
+    steps.push(addNode(ctx, `u.${i}`, own(ctx, inv, "out"), e1[i] as PortBinding));
+    u.push(own(ctx, `u.${i}`));
   }
 
   // μ ← Decompress₁(ByteDecode₁(m)) — one bit per coefficient, 0 or ⌈q/2⌉.
-  steps.push(decodeNode("mu.dec", port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT), 1), {
+  steps.push(decodeNode(ctx, "mu.dec", message, 1), {
     kind: "step",
-    id: "mu",
+    id: nid(ctx, "mu"),
     type: "zq-decompress@1",
     params: { ...VEC_PARAMS, d: 1 },
-    portInputs: { a: port("mu.dec", "output"), modulus: port(Q_ID, "output") },
+    portInputs: { a: own(ctx, "mu.dec"), modulus: ctx.q },
   });
 
   // v ← NTT⁻¹(t̂ᵀ ∘ ŷ) + e₂ + μ
-  const dotV = dotProductNodes({ id: "tv", matrixRow: tHat, vector: yHat });
+  const dotV = dotProductNodes(ctx, { id: "tv", matrixRow: tHat, vector: yHat });
   steps.push(...dotV.nodes);
   steps.push(
     buildNttGroup({
-      id: "intt.v",
+      id: nid(ctx, "intt.v"),
       label: "NTT⁻¹(t̂ᵀŷ)",
       direction: "inverse",
       seedBinding: dotV.output,
     }),
-    addNode("v.e2", port("intt.v", "out"), port("e2", "output")),
-    addNode("v", port("v.e2", "output"), port("mu", "output")),
+    addNode(ctx, "v.e2", own(ctx, "intt.v", "out"), own(ctx, "e2")),
+    addNode(ctx, "v", own(ctx, "v.e2"), own(ctx, "mu")),
   );
 
   // c ← ByteEncode_du(Compress_du(u)) ‖ ByteEncode_dv(Compress_dv(v))
@@ -743,25 +814,51 @@ export const buildKPkeEncryptSpec = (ek: Uint8Array, r: Uint8Array): CipherSpec 
     steps.push(
       {
         kind: "step",
-        id: `c1.cmp${i}`,
+        id: nid(ctx, `c1.cmp${i}`),
         type: "zq-compress@1",
         params: { ...VEC_PARAMS, d: D_U },
-        portInputs: { a: u[i] as PortBinding, modulus: port(Q_ID, "output") },
+        portInputs: { a: u[i] as PortBinding, modulus: ctx.q },
       },
-      encodeNode(`c1.enc${i}`, port(`c1.cmp${i}`, "output"), D_U),
+      encodeNode(ctx, `c1.enc${i}`, own(ctx, `c1.cmp${i}`), D_U),
     );
-    c1Parts.push(port(`c1.enc${i}`, "output"));
+    c1Parts.push(own(ctx, `c1.enc${i}`));
   }
   steps.push(
     {
       kind: "step",
-      id: "c2.cmp",
+      id: nid(ctx, "c2.cmp"),
       type: "zq-compress@1",
       params: { ...VEC_PARAMS, d: D_V },
-      portInputs: { a: port("v", "output"), modulus: port(Q_ID, "output") },
+      portInputs: { a: own(ctx, "v"), modulus: ctx.q },
     },
-    encodeNode("c2.enc", port("c2.cmp", "output"), D_V),
-    concatNode("c", [...c1Parts, port("c2.enc", "output")]),
+    encodeNode(ctx, "c2.enc", own(ctx, "c2.cmp"), D_V),
+    concatNode(ctx, "c", [...c1Parts, own(ctx, "c2.enc")]),
+  );
+
+  return { nodes: steps, ciphertext: own(ctx, "c") };
+};
+
+export const buildKPkeEncryptSpec = (ek: Uint8Array, r: Uint8Array): CipherSpec => {
+  const steps: StepNode[] = [...kPkeConstantNodes(true)];
+
+  steps.push(
+    {
+      kind: "step",
+      id: KPKE_EK_IN_ID,
+      type: "aux-load-bytes@1",
+      params: { auxName: KPKE_EK_AUX, byteLength: EK_BYTES },
+    },
+    {
+      kind: "step",
+      id: "r-in",
+      type: "aux-load-bytes@1",
+      params: { auxName: KPKE_RANDOMNESS_AUX, byteLength: 32 },
+    },
+    ...kPkeEncryptNodes(STANDALONE, {
+      ek: port(KPKE_EK_IN_ID, "output"),
+      message: port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT),
+      randomness: port("r-in", "output"),
+    }).nodes,
   );
 
   return {
@@ -788,23 +885,27 @@ export const buildKPkeEncryptSpec = (ek: Uint8Array, r: Uint8Array): CipherSpec 
 // ─── K-PKE.Decrypt (FIPS 203 Algorithm 15) ────────────────────────────────
 
 /** Decrypt a ciphertext under `dk_PKE`, recovering the 32-byte message. */
-export const buildKPkeDecryptSpec = (dk: Uint8Array): CipherSpec => {
-  const steps: StepNode[] = [...constantNodes(true)];
+export const kPkeDecryptNodes = (
+  ctx: KPkeEmbedding,
+  options: {
+    /** `ByteEncode₁₂(ŝ)`, however it reached this spec. */
+    readonly dk: PortBinding;
+    /** `c₁ ‖ c₂`. */
+    readonly ciphertext: PortBinding;
+  },
+): { readonly nodes: StepNode[]; readonly message: PortBinding } => {
+  const { dk: dkBinding, ciphertext } = options;
+  const steps: StepNode[] = [];
 
   steps.push(
-    {
-      kind: "step",
-      id: KPKE_DK_IN_ID,
-      type: "aux-load-bytes@1",
-      params: { auxName: KPKE_DK_AUX, byteLength: DK_BYTES },
-    },
-    splitNode("c-split", port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT), [
+    splitNode(ctx, "c-split", ciphertext, [
       ...Array.from({ length: K_PKE_K }, () => 32 * D_U),
       32 * D_V,
     ]),
     splitNode(
+      ctx,
       "dk-split",
-      port(KPKE_DK_IN_ID, "output"),
+      dkBinding,
       Array.from({ length: K_PKE_K }, () => ENCODED_POLY_BYTES),
     ),
   );
@@ -813,28 +914,28 @@ export const buildKPkeDecryptSpec = (dk: Uint8Array): CipherSpec => {
   // its inverse: what comes back is a bucket centre, not the original value.
   const uPrime: PortBinding[] = [];
   for (let i = 0; i < K_PKE_K; i++) {
-    steps.push(decodeNode(`u.dec${i}`, port("c-split", `output${i}`), D_U), {
+    steps.push(decodeNode(ctx, `u.dec${i}`, own(ctx, "c-split", `output${i}`), D_U), {
       kind: "step",
-      id: `u.${i}`,
+      id: nid(ctx, `u.${i}`),
       type: "zq-decompress@1",
       params: { ...VEC_PARAMS, d: D_U },
-      portInputs: { a: port(`u.dec${i}`, "output"), modulus: port(Q_ID, "output") },
+      portInputs: { a: own(ctx, `u.dec${i}`), modulus: ctx.q },
     });
-    uPrime.push(port(`u.${i}`, "output"));
+    uPrime.push(own(ctx, `u.${i}`));
   }
 
-  steps.push(decodeNode("v.dec", port("c-split", `output${K_PKE_K}`), D_V), {
+  steps.push(decodeNode(ctx, "v.dec", own(ctx, "c-split", `output${K_PKE_K}`), D_V), {
     kind: "step",
-    id: "v",
+    id: nid(ctx, "v"),
     type: "zq-decompress@1",
     params: { ...VEC_PARAMS, d: D_V },
-    portInputs: { a: port("v.dec", "output"), modulus: port(Q_ID, "output") },
+    portInputs: { a: own(ctx, "v.dec"), modulus: ctx.q },
   });
 
   const sHat: PortBinding[] = [];
   for (let i = 0; i < K_PKE_K; i++) {
-    steps.push(decodeNode(`s.dec${i}`, port("dk-split", `output${i}`)));
-    sHat.push(port(`s.dec${i}`, "output"));
+    steps.push(decodeNode(ctx, `s.dec${i}`, own(ctx, "dk-split", `output${i}`)));
+    sHat.push(own(ctx, `s.dec${i}`));
   }
 
   // ŵ ← NTT(u′)
@@ -843,34 +944,34 @@ export const buildKPkeDecryptSpec = (dk: Uint8Array): CipherSpec => {
     const id = `ntt.u${i}`;
     steps.push(
       buildNttGroup({
-        id,
+        id: nid(ctx, id),
         label: `NTT(u′${i})`,
         direction: "forward",
         seedBinding: uPrime[i] as PortBinding,
       }),
     );
-    uHat.push(port(id, "out"));
+    uHat.push(own(ctx, id, "out"));
   }
 
   // w ← v′ − NTT⁻¹(ŝᵀ ∘ û)
-  const dot = dotProductNodes({ id: "su", matrixRow: sHat, vector: uHat });
+  const dot = dotProductNodes(ctx, { id: "su", matrixRow: sHat, vector: uHat });
   steps.push(...dot.nodes);
   steps.push(
     buildNttGroup({
-      id: "intt.w",
+      id: nid(ctx, "intt.w"),
       label: "NTT⁻¹(ŝᵀû′)",
       direction: "inverse",
       seedBinding: dot.output,
     }),
     {
       kind: "step",
-      id: "w",
+      id: nid(ctx, "w"),
       type: "zq-vec-sub@1",
       params: { ...VEC_PARAMS },
       portInputs: {
-        a: port("v", "output"),
-        b: port("intt.w", "out"),
-        modulus: port(Q_ID, "output"),
+        a: own(ctx, "v"),
+        b: own(ctx, "intt.w", "out"),
+        modulus: ctx.q,
       },
     },
     // m ← ByteEncode₁(Compress₁(w)). Compressing to ONE bit is the decision
@@ -879,12 +980,31 @@ export const buildKPkeDecryptSpec = (dk: Uint8Array): CipherSpec => {
     // to stay small enough for that rounding to land on the right side.
     {
       kind: "step",
-      id: "m.cmp",
+      id: nid(ctx, "m.cmp"),
       type: "zq-compress@1",
       params: { ...VEC_PARAMS, d: 1 },
-      portInputs: { a: port("w", "output"), modulus: port(Q_ID, "output") },
+      portInputs: { a: own(ctx, "w"), modulus: ctx.q },
     },
-    encodeNode("m", port("m.cmp", "output"), 1),
+    encodeNode(ctx, "m", own(ctx, "m.cmp"), 1),
+  );
+
+  return { nodes: steps, message: own(ctx, "m") };
+};
+
+export const buildKPkeDecryptSpec = (dk: Uint8Array): CipherSpec => {
+  const steps: StepNode[] = [...kPkeConstantNodes(true)];
+
+  steps.push(
+    {
+      kind: "step",
+      id: KPKE_DK_IN_ID,
+      type: "aux-load-bytes@1",
+      params: { auxName: KPKE_DK_AUX, byteLength: DK_BYTES },
+    },
+    ...kPkeDecryptNodes(STANDALONE, {
+      dk: port(KPKE_DK_IN_ID, "output"),
+      ciphertext: port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT),
+    }).nodes,
   );
 
   return {

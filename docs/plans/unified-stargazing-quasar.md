@@ -534,6 +534,91 @@ Watch the **vacuous-suite hole** (`validated-growing-dongarra.md`): any surface
 test that iterates an options list passes green when a variant is missing. Pin
 against `Record<Asymmetric, string>`'s compiler-enforced keys.
 
+#### Settled before any code (2026-08-10 — measurements + two user decisions)
+
+**Measured**, by running the three SHIPPED P3 builders (throwaway test, deleted):
+
+| spec | nodes | frames | `runSpec` |
+|---|---|---|---|
+| K-PKE.KeyGen | 485 | 6,197 | 145 ms |
+| K-PKE.Encrypt | 572 | 7,236 | 173 ms |
+| K-PKE.Decrypt | 293 | 4,101 | 28 ms |
+
+So an ML-KEM spec's size is a matter of which K-PKE bodies it embeds, and the
+one open design question was whether key generation is one of them.
+
+1. **Key material: the key pair is BORN INSIDE BOTH SPECS** (user decision;
+   the plan's original design, chosen over the two cheaper alternatives). The
+   64-byte seed `d ‖ z` is the editable source of truth — RSA's `p, q, e`
+   precedent — and a default-collapsed key-generation group derives `ek`,
+   `dk_PKE`, `h = H(ek)` and `z` from it in both directions. Cost: encaps
+   ≈ 1,065 nodes, decaps ≈ 1,355 nodes / ~17.5k frames, against a fitted
+   ~1.6 ms/node + ~0.095 ms/frame UI pipeline that predicts 3–4 s per re-run —
+   ABOVE the ~2.0 s ceiling the CSPRNG occupies. **The prediction is a model,
+   not a measurement, and this plan has twice recorded that model as ~8–20×
+   pessimistic for `runSpec`.** Browser-measure the real decaps re-run and
+   report it; if it is genuinely unusable, the fallback (already costed) is
+   `dk` through aux the way K-PKE Encrypt/Decrypt already take it, at
+   ≈ 870 nodes.
+2. **Implicit rejection is ONE leaf**, `ml-kem.select-shared-secret@1` (user
+   decision, one teaching point ⇒ one leaf, the `twofish.h-expand@1`
+   precedent). FIPS 203 §7.3's `if c ≠ c′ then K′ = J(z ‖ c)` cannot be a
+   branch — the spec model is straight-line step/group/iterate — and a select
+   is the honest depiction anyway: both secrets are computed every time, and
+   one is chosen without leaking which. The verdict is what its narrator
+   prints. Gates it must clear: `tests/port-provenance-coverage.test.ts` AND
+   `tests/port-provenance.test.ts`'s own count, `NO_PARAMS_PORT_NATIVE_TYPES`
+   + `portNativeNoParamsLabel`, and the narration contract — which now
+   **auto-enrols it** through P3's `ml-kem.` prefix walk, so it fails loudly
+   instead of passing silently. That is the P3 narration work paying off in
+   the very next phase.
+3. **Family placement stays `Asymmetric`.** The plan's revisit condition
+   ("if the lattice category has by then grown a second member") is NOT met —
+   lattice still has exactly one selectable member — and the placement puts
+   ML-KEM beside RSA, which is the comparison that teaches.
+4. **The encaps oracle is already direct**, which the plan expected to need
+   building: `tests/k-pke-kat.test.ts` runs the FO recovery today
+   (`m′ = Decrypt(dk, c)` on the fixture ciphertext, then `(K′, r′) = G(m′ ‖ H(ek))`
+   test-side). So encaps is pinned byte-for-byte on BOTH `ciphertext` and
+   `sharedSecret` with no new oracle work.
+
+**Order of operations**, with the one step that is easy to get backwards first:
+
+1. **Capture digests of the three shipped K-PKE specs BEFORE touching
+   `k-pke.ts`**, then extract prefixable node-list builders from it and assert
+   byte-identity after. This is the CSPRNG `buildDoubleRoundGroups` extraction
+   verbatim — take the digests afterwards and the test pins the new bytes to
+   themselves. **Node-id prefixing is load-bearing in a way P3 only half
+   exercised**: decaps embeds THREE K-PKE bodies, each carrying `layer1.*`
+   iterate ids, and a collision produces no error at all — just a broken
+   scrubber, broken frame preservation and a wrong graph.
+2. `ml-kem.select-shared-secret@1` + its gates.
+3. `src/ciphers/ml-kem-768.ts` — the two builders.
+4. The family surface. Widen the `Asymmetric` union, add to `ALL_ASYMMETRICS`
+   and convert `isAsymmetric` to membership **in the same edit**, then perturb
+   the predicate to prove the guard test is live. The three
+   `Record<Asymmetric, …>` tables are compiler-enforced; the option list is
+   not — that is the landmine.
+5. `tests/ml-kem-768-kat.test.ts`, ranked by what discriminates: `hEk` →
+   `ek` / `dk_PKE` → encaps `c` + `K` → decaps `K` → **`rejectedSharedSecret`**
+   (the strongest assertion in P4, and already sitting in the fixture) →
+   round-trip LAST.
+6. The browser scrub (below), then docs + memory.
+
+**Published facts to check against FIPS 203 itself, not against this plan, and
+to ship as perturbations so the failure signature is pinned** — each has a
+wrong version that is entirely self-consistent, which is how P2 and P3 both
+caught this plan stating a constant wrongly:
+
+- `J(z ‖ c)` takes the **received** `c`, never the re-encrypted `c′`. With a
+  valid ciphertext the two are equal, so this is invisible to every test that
+  does not corrupt one.
+- Which 32 bytes out of `G`'s 64 are `K` and which are `r`.
+- Decapsulation uses the `h` **stored inside `dk`**, not a freshly recomputed
+  `H(ek)`. With keygen inside the spec these are equal by construction, so say
+  so where the spec computes it.
+- The `dk` parse offsets of §7.1's `dk_PKE ‖ ek ‖ H(ek) ‖ z`.
+
 #### The narration debt — PAID 2026-08-10, with one half deliberately left open
 
 P3 recorded that the P2/P3 step types omit `shapeContract`, so
@@ -566,8 +651,13 @@ tests are blind to.
 **Scrub ACROSS frames of the same step type at different params — not one frame
 per type.** One-per-type is the weaker pass and would have missed the worst bug
 this work produced. Minimum coverage: `zq-compress@1` at **d = 10, 4 AND 1**,
-`zq-decompress@1` at **d = 1 vs 10**, `ml-kem.hash-g@1` at **both call sites**,
-and several `ml-kem.sample-ntt@1` draws (the block count is the whole point).
+`zq-decompress@1` at **d = 1 vs 10**, `ml-kem.hash-g@1` at **all THREE call
+sites** (keygen's `d ‖ k`, encaps' `m ‖ H(ek)`, decaps' `m′ ‖ h` — it was two
+when this was written; the FO wrapper adds the third), and several
+`ml-kem.sample-ntt@1` draws (the block count is the whole point). Add
+`ml-kem.hash-h@1` and `ml-kem.kdf-j@1`, which no shipped spec has ever emitted:
+their narrators have been rendered ONLY inside a purpose-built two-leaf test
+spec, so nobody has looked at them at all.
 
 Two narrator bugs are already on the record from this work, and they are the
 argument that the scrub is not a formality:
