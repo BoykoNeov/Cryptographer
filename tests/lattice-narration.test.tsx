@@ -49,6 +49,7 @@ import {
   mlKemKdfJNarration,
   mlKemPrfNarration,
   mlKemSampleNttNarration,
+  mlKemSelectSharedSecretNarration,
   zqBaseCaseMulNarration,
   zqByteDecodeNarration,
   zqByteEncodeNarration,
@@ -141,6 +142,7 @@ describe("lattice narration — registry dispatch", () => {
       ["ml-kem.hash-g@1", mlKemHashGNarration],
       ["ml-kem.hash-h@1", mlKemHashHNarration],
       ["ml-kem.kdf-j@1", mlKemKdfJNarration],
+      ["ml-kem.select-shared-secret@1", mlKemSelectSharedSecretNarration],
     ];
     for (const [stepType, fn] of expected) {
       expect(lookupNarration(stepType), `${stepType} dispatch`).toBe(fn);
@@ -481,17 +483,29 @@ describe("lattice narration — G names its halves by call site", () => {
     expect(text).toContain("the input is d ‖ k, not d");
   });
 
-  it("a 64-byte input reads as encapsulation instead — (K, r)", () => {
-    // P4's call site. Constructed here from the same narrator so the branch is
-    // covered before the FO wrapper exists to exercise it.
+  it("a 64-byte input reads as the shared-secret derivation instead — (K, r)", () => {
+    // P4's call sites — plural, and that is the point of this test's wording.
+    // `G` is called THREE times in a full ML-KEM run and there are only two
+    // input lengths: encapsulation derives (K, r) from `m ‖ H(ek)`, and
+    // decapsulation derives (K′, r′) from `m′ ‖ h`. Those are the same 64 bytes
+    // carrying the same meaning — deliberately, since the re-encryption check
+    // turns on decapsulation reproducing what encapsulation did.
+    //
+    // So the narrator must NOT claim a direction it cannot see. An earlier
+    // version said "encapsulation" outright, which is false on one of the three
+    // call sites and would have been read as fact by anyone scrubbing a
+    // decapsulation trace.
     const frame = firstFrame("ml-kem.hash-g@1");
-    const encapsFrame: TraceFrame = {
+    const foFrame: TraceFrame = {
       ...frame,
       portInputs: new Map(frame.portInputs ?? []).set("input", new Uint8Array(64)),
     };
-    const text = proseText(mlKemHashGNarration(encapsFrame));
+    const text = proseText(mlKemHashGNarration(foFrame));
     expect(text).toContain("m ‖ H(ek)");
-    expect(text).toContain("encapsulation");
+    expect(text).toContain("shared-secret derivation");
+    // Both directions named, neither claimed as THE one.
+    expect(text).toContain("Encapsulation does this once");
+    expect(text).toContain("decapsulation repeats it");
     expect(text).not.toContain("the input is d ‖ k, not d");
   });
 });
@@ -604,6 +618,7 @@ describe("lattice narration — narrators decline rather than throw", () => {
       ["ml-kem.hash-g@1", mlKemHashGNarration],
       ["ml-kem.hash-h@1", mlKemHashHNarration],
       ["ml-kem.kdf-j@1", mlKemKdfJNarration],
+      ["ml-kem.select-shared-secret@1", mlKemSelectSharedSecretNarration],
     ];
     for (const [stepType, fn] of narrators) {
       expect(() => fn(bare(stepType)), `${stepType} must not throw`).not.toThrow();

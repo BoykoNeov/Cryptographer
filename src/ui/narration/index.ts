@@ -45,6 +45,7 @@ import {
   mlKemKdfJNarration,
   mlKemPrfNarration,
   mlKemSampleNttNarration,
+  mlKemSelectSharedSecretNarration,
   zqBaseCaseMulNarration,
   zqByteDecodeNarration,
   zqByteEncodeNarration,
@@ -195,6 +196,10 @@ export const initNarrationRegistry = (): void => {
   registerNarration("ml-kem.hash-g@1", mlKemHashGNarration);
   registerNarration("ml-kem.hash-h@1", mlKemHashHNarration);
   registerNarration("ml-kem.kdf-j@1", mlKemKdfJNarration);
+  // P4's one new step type, and the only narrator in the app whose headline is a
+  // VERDICT rather than a description: whether this ciphertext survived the
+  // re-encryption check is not knowable from the spec, only from the frame.
+  registerNarration("ml-kem.select-shared-secret@1", mlKemSelectSharedSecretNarration);
   initialized = true;
 };
 

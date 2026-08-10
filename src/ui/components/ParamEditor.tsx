@@ -2989,6 +2989,9 @@ const NO_PARAMS_PORT_NATIVE_TYPES = new Set([
   "ml-kem.hash-g@1",
   "ml-kem.hash-h@1",
   "ml-kem.kdf-j@1",
+  // ML-KEM P4. The two things it needs to know — which ciphertext arrived and
+  // which one was recomputed — are WIRED, not configured, which is the point.
+  "ml-kem.select-shared-secret@1",
 ]);
 
 const portNativeNoParamsLabel = (stepType: string): string => {
@@ -3016,6 +3019,8 @@ const portNativeNoParamsLabel = (stepType: string): string => {
       return "H — SHA3-256 (FIPS 203 §4.1), collapsed to one frame. No editable parameters. It binds a ciphertext to one public key rather than keeping anything secret. Watch the same sponge decomposed under Hash → SHA3-256.";
     case "ml-kem.kdf-j@1":
       return "J — SHAKE256 squeezed to 32 bytes (FIPS 203 §4.1). No editable parameters; the length is fixed because its output has to be indistinguishable from a real shared secret. Watch the same sponge decomposed under Hash → SHAKE256.";
+    case "ml-kem.select-shared-secret@1":
+      return "Implicit rejection (FIPS 203 Algorithm 18) — returns the real shared secret when the re-encrypted ciphertext matches the one that arrived, and an undetectable decoy when it does not. No editable parameters; both ciphertexts and both candidate secrets arrive on ports. There is no branch here even in a real implementation: whether a ciphertext was rejected is precisely the bit this construction hides.";
     // Note the contrast with `add-mod-32@1`, which is fixed to 2³² because its
     // modulus is just the machine word. Here the modulus is data, and the
     // constant feeding that port is where the editing happens.

@@ -124,7 +124,7 @@ describe("narration-registry coverage contract", () => {
     // A sanity pin on the WALK, not on the family: if a rename ever moved
     // these out from under both prefixes the filter would silently match
     // nothing and every assertion below would pass vacuously.
-    expect(latticeStepTypes.length).toBe(14);
+    expect(latticeStepTypes.length).toBe(15);
     expect(latticeStepTypes).toContain("zq-vec-add@1");
     expect(latticeStepTypes).toContain("ml-kem.sample-ntt@1");
   });
@@ -147,12 +147,12 @@ describe("narration-registry coverage contract", () => {
     ).toEqual([]);
   });
 
-  it("registers fns for the 11 narrated lattice step types", () => {
+  it("registers fns for the 12 narrated lattice step types", () => {
     // Explicit per-type assertions rather than a count: a count would let
-    // a swap (one registered, one dropped) pass. Two of these —
-    // `ml-kem.hash-h@1` and `ml-kem.kdf-j@1` — are registered but emitted
-    // by NO shipped spec until P4's FO wrapper lands; they are covered
-    // here and exercised against real runtime frames in
+    // a swap (one registered, one dropped) pass. `ml-kem.hash-h@1`,
+    // `ml-kem.kdf-j@1` and `ml-kem.select-shared-secret@1` are emitted by
+    // no shipped spec until P4's FO wrapper lands; they are covered here
+    // and exercised against real runtime frames in
     // `tests/lattice-narration.test.tsx`.
     for (const t of [
       "zq-compress@1",
@@ -166,6 +166,7 @@ describe("narration-registry coverage contract", () => {
       "ml-kem.hash-g@1",
       "ml-kem.hash-h@1",
       "ml-kem.kdf-j@1",
+      "ml-kem.select-shared-secret@1",
     ]) {
       expect(hasNarrationFn(t), `${t} should have a registered NarrationFn`).toBe(true);
     }

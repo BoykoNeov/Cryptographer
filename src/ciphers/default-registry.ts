@@ -155,6 +155,11 @@ import {
   mlKemSampleNttDoc,
   mlKemSampleNttPortContract,
 } from "../steps/ml-kem-sample-ntt";
+import {
+  mlKemSelectSharedSecret,
+  mlKemSelectSharedSecretDoc,
+  mlKemSelectSharedSecretPortContract,
+} from "../steps/ml-kem-select-shared-secret";
 import { modInverse, modInverseDoc, modInversePortContract } from "../steps/mod-inverse";
 import { modMul, modMulDoc, modMulPortContract } from "../steps/mod-mul";
 import { mt19937Seed, mt19937SeedDoc, mt19937SeedPortContract } from "../steps/mt19937-seed";
@@ -1223,6 +1228,16 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: mlKemSampleNtt,
     shape: mlKemSampleNttPortContract,
     doc: mlKemSampleNttDoc,
+  });
+  // The one step that separates the IND-CPA scheme from the IND-CCA KEM. It is a
+  // SELECT rather than a branch — not because the spec model lacks a branch node
+  // (it does), but because a real implementation must not branch here either:
+  // whether a ciphertext was rejected is exactly the bit the construction hides.
+  r.register("ml-kem.select-shared-secret@1", {
+    kind: "ported",
+    executor: mlKemSelectSharedSecret,
+    shape: mlKemSelectSharedSecretPortContract,
+    doc: mlKemSelectSharedSecretDoc,
   });
   r.register("shift-bits-right@1", {
     kind: "ported",

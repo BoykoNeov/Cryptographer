@@ -1003,8 +1003,15 @@ export const mlKemPrfNarration: NarrationFn = (frame) => {
 /**
  * `G` splits its 64-byte output into two 32-byte halves that mean different
  * things at different call sites. The narrator distinguishes them by input
- * length rather than by guessing — 33 bytes is `d ‖ k` in key generation,
- * 64 is `m ‖ H(ek)` in encapsulation.
+ * length rather than by guessing — 33 bytes is `d ‖ k` in key generation, 64 is
+ * `m ‖ H(ek)` in the FO derivation.
+ *
+ * **There are THREE call sites and only two input lengths**: encapsulation
+ * derives `(K, r)` from `m ‖ H(ek)`, and decapsulation derives `(K′, r′)` from
+ * `m′ ‖ h` — the same 64 bytes, the same meaning, deliberately so, since the
+ * whole re-encryption check turns on decapsulation being able to reproduce what
+ * encapsulation did. So the non-keygen prose is written to be true of both
+ * rather than claiming a direction it cannot see.
  */
 export const mlKemHashGNarration: NarrationFn = (frame) => {
   const input = frame.portInputs?.get("input");
@@ -1035,8 +1042,10 @@ export const mlKemHashGNarration: NarrationFn = (frame) => {
             </>
           ) : (
             <>
-              <strong>encapsulation</strong>: <code>K</code> is the shared secret and <code>r</code>{" "}
-              is the randomness the encryption is then run with
+              the <strong>shared-secret derivation</strong>: <code>K</code> is the shared secret and{" "}
+              <code>r</code> is the randomness the encryption is then run with. Encapsulation does
+              this once; decapsulation repeats it on the message it recovered, and getting the same
+              two halves back is exactly what its re-encryption check depends on
             </>
           )}
           .
@@ -1190,4 +1199,151 @@ export const mlKemKdfJNarration: NarrationFn = (frame) => {
       ),
     },
   ];
+};
+
+// ─── ml-kem.select-shared-secret@1 ─────────────────────────────────────────
+
+/**
+ * The one narrator in the app whose headline is a VERDICT.
+ *
+ * Everything else here describes an operation; this one reports an outcome that
+ * differs frame to frame and cannot be known from the spec — did the ciphertext
+ * survive the re-encryption check, or did the decoy come out? That is precisely
+ * the criterion for a `NarrationFn` over a static per-node override, and it is
+ * why corrupting one byte in the browser is worth doing: the prose changes.
+ */
+export const mlKemSelectSharedSecretNarration: NarrationFn = (frame) => {
+  const c = frame.portInputs?.get("ciphertext");
+  const cPrime = frame.portInputs?.get("reencryption");
+  const shared = frame.portInputs?.get("shared");
+  const rejection = frame.portInputs?.get("rejection");
+  const out = frame.portOutputs?.get("output");
+  if (
+    !(c instanceof Uint8Array) ||
+    !(cPrime instanceof Uint8Array) ||
+    !(shared instanceof Uint8Array) ||
+    !(rejection instanceof Uint8Array) ||
+    !(out instanceof Uint8Array)
+  ) {
+    return null;
+  }
+
+  // Counted, not short-circuited: "they differ" is much less informative than
+  // "they differ in 411 of 1088 bytes", and the second number is what tells a
+  // reader whether they flipped one bit or wired something up wrong.
+  const n = Math.min(c.length, cPrime.length);
+  let differing = Math.abs(c.length - cPrime.length);
+  let firstDiff = -1;
+  for (let i = 0; i < n; i++) {
+    if (c[i] !== cPrime[i]) {
+      differing++;
+      if (firstDiff < 0) firstDiff = i;
+    }
+  }
+  const matched = differing === 0;
+
+  const units: NarrationUnit[] = [];
+
+  units.push({
+    key: "verdict",
+    label: matched
+      ? "1 — the ciphertexts MATCH, so the real shared secret comes out"
+      : `1 — the ciphertexts DIFFER in ${differing} of ${c.length} bytes, so the decoy comes out`,
+    Prose: (props) => (
+      <div>
+        <p>
+          Decapsulation has just re-encrypted the message it recovered and produced a second
+          ciphertext. This step compares it against the one that actually arrived
+          {matched ? (
+            <> — and every one of the {c.length} bytes agrees.</>
+          ) : (
+            <>
+              {" "}
+              — and they part company at byte <code>{firstDiff}</code>.
+            </>
+          )}
+        </p>
+        <ValueList
+          items={[
+            { label: "c  (received)", text: formatBytes(c.subarray(0, 8), props.fmt) },
+            { label: "c′ (recomputed)", text: formatBytes(cPrime.subarray(0, 8), props.fmt) },
+          ]}
+        />
+        <p>
+          {matched ? (
+            <>
+              So the ciphertext was honestly produced by someone who ran the encryption forwards,
+              and the shared secret <code>K′</code> that came out of <code>G</code> is returned
+              unchanged: <Bytes bytes={out.subarray(0, 8)} fmt={props.fmt} /> …
+            </>
+          ) : (
+            <>
+              So this ciphertext was not produced by running the encryption forwards. The real
+              candidate <code>K′</code> is discarded and <code>K̄ = J(z ‖ c)</code> is returned
+              instead: <Bytes bytes={out.subarray(0, 8)} fmt={props.fmt} /> …
+            </>
+          )}
+        </p>
+      </div>
+    ),
+  });
+
+  units.push({
+    key: "candidates",
+    label: "2 — both secrets were computed, whichever one is returned",
+    Prose: (props) => (
+      <div>
+        <p>
+          Neither candidate was computed conditionally. Both are sitting on this step's input ports
+          on every run, and the output is assembled from them with a mask rather than chosen by a
+          branch:
+        </p>
+        <ValueList
+          items={[
+            {
+              label: `K′ (from G)${matched ? "  ← returned" : ""}`,
+              text: formatBytes(shared.subarray(0, 8), props.fmt),
+            },
+            {
+              label: `K̄ (from J)${matched ? "" : "  ← returned"}`,
+              text: formatBytes(rejection.subarray(0, 8), props.fmt),
+            },
+          ]}
+        />
+        <p>
+          The wasted work is deliberate. If the code skipped computing the decoy when the ciphertext
+          was valid, the time it took would announce the verdict — and whether a ciphertext was
+          rejected is exactly the one bit an attacker needs. The mask makes both paths cost the
+          same.
+        </p>
+      </div>
+    ),
+  });
+
+  units.push({
+    key: "why-not-an-error",
+    label: "3 — why a bad ciphertext gets a key instead of an error",
+    Prose: () => (
+      <div>
+        <p>
+          The encryption scheme underneath never fails: hand it any {c.length} bytes and it returns
+          some 32-byte message. An attacker turns that into a key-recovery attack by submitting
+          ciphertexts they built by hand rather than encrypted, and reading the answer to "did that
+          one work?" out of each reply.
+        </p>
+        <p>
+          Returning a plausible key removes the answer. The decoy is derived from <code>z</code> — a
+          secret held only by the key's owner — and from the failing ciphertext itself, so it is
+          unpredictable, different for every bad ciphertext, and indistinguishable from a real
+          shared secret. The sender finds out only later, when the two sides fail to agree on a key.
+        </p>
+        <p>
+          This single step is the whole difference between the textbook encryption scheme this is
+          built from and a key-exchange mechanism it is safe to expose to strangers.
+        </p>
+      </div>
+    ),
+  });
+
+  return units;
 };
