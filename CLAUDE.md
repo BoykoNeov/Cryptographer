@@ -269,8 +269,8 @@ only in combination. (4) **An external oracle existed that the plan said would b
 transitive-only**: a real ML-KEM-768 `ek` from Node 24's OpenSSL decodes to 768
 in-range coefficients and re-encodes byte-identically. Stored as a byte FIXTURE
 because CI is Node 22 — and because **`generateKeyPairSync` silently ignores its
-`seed` option on v24.14.1**, so the deterministic-keygen oracle P3/P4 were planned
-around does not exist as written. (5) **Verification ranks by what discriminates**:
+`seed` option on v24.14.1**. P2 concluded from that the deterministic oracle P3/P4
+were planned around did not exist; **P3 disproved it — see below.** (5) **Verification ranks by what discriminates**:
 exhaustive over the whole domain where it is cheap (~40k evals at this modulus),
 an oracle derived DIFFERENTLY from the implementation (floor-then-compare vs
 add-half-and-floor), the distribution checked by feeding every bit pattern once so
@@ -281,6 +281,45 @@ there would delete P1's oracle. (6) **`insertStepIntoSpec` gives a dropped leaf
 exactly when needed; key rows on the step TYPE. `param-editor-coverage.test.ts`
 walks only SHIPPED-spec types, so a palette-only family needs its own coverage
 test — see `docs/gotchas.md`, since this generalises past the lattice layer.
+
+**P3 — K-PKE (2026-08-10) — is the scheme ML-KEM wraps, and it also ships NO
+selector entry**: K-PKE is secure only against an attacker who watches, and the
+part that fixes that is P4, so a learner handed it alone would be worse off than
+one who never saw it. Its surface is `tests/k-pke-kat.test.ts`. Seven things
+worth carrying forward. (1) **The deterministic seed → key oracle EXISTS; P2's
+conclusion was wrong.** The `seed` *option* is ignored, but a hand-assembled
+PKCS#8 carrying the seed arm of the ML-KEM `PrivateKey` CHOICE imports cleanly and
+is deterministic — **the `[0]` tag must be IMPLICIT** (`0x80 0x40`; the EXPLICIT
+`0xa0` and a bare OCTET STRING are both `DECODER routines::unsupported`). And it
+gives more than `ek`: the expanded `dk` is §7.1's `dk_PKE ‖ ek ‖ H(ek) ‖ z`, so
+the SECRET half is pinned too. (2) **KeyGen/Encrypt/Decrypt are three separate
+specs BECAUSE the oracle gives checkpoints** — ρ pins `G`, `dk_PKE` pins
+PRF+CBD+NTT(s), `ek` pins the matrix and the matrix-vector product; a combined
+spec throws that away and every failure becomes "something is wrong". (3)
+**Encrypt/Decrypt get a direct oracle from the FO loop run test-side**, which the
+plan expected to be transitive-only: decrypt OpenSSL's ciphertext → `m′`, compute
+`(K′, r′) = G(m′ ‖ H(ek))` in the test, re-encrypt, require `c` back byte for
+byte. (4) **Three published facts whose wrong versions are self-consistent**, each
+checked against the fixture BEFORE any spec code and each shipped as a
+perturbation so the FAILURE SIGNATURE is pinned: `G(d ‖ k)` not `G(d)` (breaks ρ);
+`A[i][j] = SampleNTT(ρ ‖ j ‖ i)` in KeyGen but `ρ ‖ i ‖ j` in Encrypt — the byte
+swap IS the transpose (breaks `ek`, leaves ρ and `dk_PKE` green); `N` = 0,1,2 for
+`s` then 3,4,5 for `e` (breaks `dk_PKE`, leaves ρ green). (5) **The plan's
+SampleNTT block-count assertion was VACUOUS**: acceptance is ~81%, so *every* draw
+already spends three 168-byte blocks and "more than two" asserts nothing. Measured
+over 162 draws — 160 take three, 2 take four — so the live assertion is that the
+count VARIES, exposed on a `squeezes` output port (the app's first permanently
+unconsumed output port; look at it in the graph when P4 renders it). (6)
+**Embedding an existing spec N times ⇒ node ids MUST be prefixed**, and assert it
+on the SHIPPED specs, not on two synthetic helper calls. The flat trace keys
+frames by `stepId`, so six copies of `layer1.split` break the scrubber, frame
+preservation and the graph derivation with **no error at all**. (7) **The
+1.6 ms/node model is ~8× pessimistic for `runSpec` again** (keygen 485 nodes /
+6,197 frames / 146 ms), restating P1's finding that the coefficient is the UI
+pipeline. **Open P4 obligation:** the P2/P3 step types omit `shapeContract`, so
+`narration-registry-contract.test.ts` passes them silently — harmless while
+nothing renders them, and a dozen zero-narration leaves the moment P4 makes
+ML-KEM selectable.
 
 **The ANSI C LCG (`rand_r`, 2026-07-27) is the second PRNG phase, and it is one
 leaf away from MINSTD.** `x ← (1103515245·x + 12345) mod 2³¹` — the sample
@@ -519,7 +558,7 @@ If a future need argues for one of these, revisit then.
 - `docs/help/graph-view.md` — user-facing reference for the graph view (edges, drag/drop, palette, warning glyphs, toolbar). Bundled into the app via Vite `?raw` and rendered inside the in-app help modal (`?` button in the graph toolbar). Keep this file the single source of truth — both GitHub readers and the in-app modal display the same prose.
 
 **Plans:**
-- **ML-KEM / post-quantum — the lattice layer (P1 + P2 SHIPPED 2026-08-09; P3–P5 open)**: `docs/plans/unified-stargazing-quasar.md`. Memory: `project_next_work_pqc.md`. Five phases: **P1 NTT-over-Z_3329 as its own selectable algorithm (fifth `Category`, `"lattice"`) — SHIPPED** → **P2 the rest of the lattice layer (compress/decompress, the 12-bit packing, CBD sampling, the base-case multiply) — SHIPPED** → P3 K-PKE → P4 ML-KEM-768 encaps/decaps (joins `Asymmetric`) → P5 pedagogy. **ML-DSA is deliberately out of scope** (its signing loop retries an unbounded number of times on *intermediate* values, which the build-spec-then-run model can't express without a simulate-then-rebuild pass — its own plan). Two facts from that plan worth knowing before any depth decision anywhere in the app: **groups emit no frames** (`runtime.ts` has one `frames.push`, in the leaf branch — so a Keccak-f[1600] is exactly 216 frames / 240 spec nodes), and fitting the two published measurements gives **≈1.6 ms per spec NODE vs ≈0.095 ms per FRAME — node count dominates by ~17×**, which is why an `iterate` is affordable where an unroll is not. Also: `runtime.ts:336` publishes `aux["blockIndex"]` on every port-mode iterate, so a body CAN be index-aware (this is not the MT19937 `+ i` wall, which was about a leaf *producing* an index); and **Node 24's `node:crypto` ships native ML-KEM — but its `seed` option is SILENTLY IGNORED on v24.14.1** (three runs with the same seed gave three different keys), so P3/P4's planned deterministic-keygen oracle must be re-established before their KATs are written; still, check `node:crypto` for a new primitive before hunting published vectors, and capture what it gives you as a byte fixture since CI runs Node 22.
+- **ML-KEM / post-quantum — the lattice layer (P1 + P2 SHIPPED 2026-08-09, P3 SHIPPED 2026-08-10; P4–P5 open)**: `docs/plans/unified-stargazing-quasar.md`. Memory: `project_next_work_pqc.md`. Five phases: **P1 NTT-over-Z_3329 as its own selectable algorithm (fifth `Category`, `"lattice"`) — SHIPPED** → **P2 the rest of the lattice layer (compress/decompress, the 12-bit packing, CBD sampling, the base-case multiply) — SHIPPED** → **P3 K-PKE (KeyGen/Encrypt/Decrypt, again no selector entry) — SHIPPED** → P4 ML-KEM-768 encaps/decaps (joins `Asymmetric`) → P5 pedagogy. **ML-DSA is deliberately out of scope** (its signing loop retries an unbounded number of times on *intermediate* values, which the build-spec-then-run model can't express without a simulate-then-rebuild pass — its own plan). Two facts from that plan worth knowing before any depth decision anywhere in the app: **groups emit no frames** (`runtime.ts` has one `frames.push`, in the leaf branch — so a Keccak-f[1600] is exactly 216 frames / 240 spec nodes), and fitting the two published measurements gives **≈1.6 ms per spec NODE vs ≈0.095 ms per FRAME — node count dominates by ~17×**, which is why an `iterate` is affordable where an unroll is not. Also: `runtime.ts:336` publishes `aux["blockIndex"]` on every port-mode iterate, so a body CAN be index-aware (this is not the MT19937 `+ i` wall, which was about a leaf *producing* an index); and **Node 24's `node:crypto` ships native ML-KEM — its `seed` OPTION is silently ignored on v24.14.1, but P3 recovered determinism by IMPORTING a hand-assembled PKCS#8 carrying the implicit-tagged `[0]` seed arm**, so the oracle exists and is committed at `tests/fixtures/ml-kem-768-seed-vectors.json`; check `node:crypto` for a new primitive before hunting published vectors, and capture what it gives you as a byte fixture since CI runs Node 22.
 - PRNG family — the fourth `Category` (P1 MINSTD + P2 ANSI-C LCG/`add-mod@1` + P3 ChaCha20-CSPRNG shipped 2026-07-27; **P4 MT19937 shipped 2026-08-09 — plan CLOSED**): `docs/plans/iterative-dancing-ocean.md`, with P4 planned and executed in `docs/plans/validated-growing-dongarra.md`. Memory: `project_prng_family_plan.md`.
 - ChaCha20 — first stream cipher, first coreless cipher (ALL phases incl. P5 diagrams shipped 2026-07-20 — plan CLOSED): `docs/plans/fluffy-orbiting-shannon.md`. Memory: `project_chacha20_plan.md`.
 - Original architectural plan: `~/.claude/plans/i-want-to-build-tender-spark.md`
