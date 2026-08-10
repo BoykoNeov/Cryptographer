@@ -316,10 +316,34 @@ frames by `stepId`, so six copies of `layer1.split` break the scrubber, frame
 preservation and the graph derivation with **no error at all**. (7) **The
 1.6 ms/node model is ~8× pessimistic for `runSpec` again** (keygen 485 nodes /
 6,197 frames / 146 ms), restating P1's finding that the coefficient is the UI
-pipeline. **Open P4 obligation:** the P2/P3 step types omit `shapeContract`, so
-`narration-registry-contract.test.ts` passes them silently — harmless while
-nothing renders them, and a dozen zero-narration leaves the moment P4 makes
-ML-KEM selectable.
+pipeline.
+
+**The lattice narration debt — PAID 2026-08-10, ahead of P4 rather than inside
+it.** P3 left the note that the P2/P3 step types omit `shapeContract`, so
+`narration-registry-contract.test.ts` waved all fourteen through. Measured, the
+gap was **126 leaves** across the shipped K-PKE specs with neither a
+`NarrationFn` nor a per-node `narrationOverride`. Four things worth carrying.
+(1) **Eleven narrators + three allowlist entries**, split on the
+`truncate-to-reference@1` criterion — *does the teaching point change frame to
+frame?* The `zq-vec-*@1` trio is the allowlist case (128–256 identical
+coefficients per frame ⇒ the only honest unit would mean hundreds of
+`<details>`, against the registry's own convention), and the NTT butterflies
+already carry per-node overrides. `ml-kem.sample-ntt@1` is the strongest
+narrator case in the app: **its `squeezes` port — verified by spike to reach the
+frame, not just the executor's return — is the app's only value-dependent
+cost.** (2) **The gate hole is closed FOR THIS FAMILY by a prefix walk over
+`registry.types()`** (`zq-` / `ml-kem.`), never a hand-list — a hand-list is the
+vacuous-suite hazard, a prefix enrols a new step automatically. Perturbation-
+verified. The **asymmetry is deliberate and documented in the test header**:
+~60 other port-native types still escape, because widening globally would demand
+allowlist entries for `xor@1`/`concat@1`/… whose posture is already settled.
+(3) **A narrator bug shipped and was caught only because the test derived FIPS
+203's bound independently**: the compression error bound is `⌈q/2^(d+1)⌋` — round
+to **nearest**, not floor — so a floored version rendered "worst error 2 of a
+possible 1" at `d = 10`. (4) **None of the eleven is browser-reachable yet** —
+the only selectable lattice spec is the NTT, which emits *exactly* the three
+allowlisted types. Reading all eleven on screen is an explicit **P4 obligation**
+recorded in the plan's own P4 section, not only in memory.
 
 **The ANSI C LCG (`rand_r`, 2026-07-27) is the second PRNG phase, and it is one
 leaf away from MINSTD.** `x ← (1103515245·x + 12345) mod 2³¹` — the sample
@@ -517,7 +541,7 @@ A list of footguns Claude has historically tripped on, grouped by topic (AES, pa
 - **A new non-cipher FAMILY must be subtracted from `isCipher` in the same edit that widens `Algorithm`.** It is a hand-written type predicate, so the compiler believes whatever it says; an un-subtracted family silently acquires a key field, a cipher-mode selector and padding. Write the new predicate as membership over a list (`isPrng` / `isLattice`), not a disjunction, because the landmine is re-armed by every new *variant* too. Then perturb the predicate to prove the guard test is live. Also check `describeAlgorithm` and `historyOfAlgorithm` — both fall through to the CIPHER table, so a missing arm is a silent `undefined` rather than a type error.
 - **Adding a new cipher means checking whether it is a BLOCK cipher.** The three-table rule below assumes it is. A stream cipher (ChaCha20) has no core, so `BLOCK_CIPHER_CORES` stays untouched; its `SUPPORTED_CIPHER_MODES_BY_CIPHER` row does NOT include `"single-block"`, which breaks every hardcoded `"single-block"` fallback (use `defaultCipherModeFor`); and its IV width comes from `ivByteLengthFor`, not `blockByteLengthFor`. `tests/cipher-mode-fallback.test.ts` keeps three classes apart — cored, coreless-awaiting-a-core, and stream — because asserting a stream cipher is "single-block only" would be wrong.
 - **Adding a new (cipher, cipherMode) spec means updating THREE tables**: `BLOCK_CIPHER_CORES` in `stores/block-cipher-cores.ts` (the cipher needs a core to run a mode at all), `defaults` in `stores/spec.ts`, AND `SUPPORTED_CIPHER_MODES_BY_CIPHER` in `stores/cipher-mode.ts`. `tests/cipher-mode-fallback.test.ts` is the canary — it asserts the three agree. **Adding a new MODE touches only the last two** (plus `SUPPORTED_CIPHER_MODES`, `CIPHER_MODE_LABELS`, and — the one CFB found the hard way — **`CIPHER_MODES` in `core/document-schema.ts`**, the persisted-document mode list, which is guarded by its own compile-time exhaustiveness assert (`assertCipherModeCoverage`) and so surfaces as a cryptic `Type 'true' is not assignable to type 'never'` rather than a named error). A mode adds no core, so `BLOCK_CIPHER_CORES` is untouched. Watch the AES-128 row in `defaults`: it keeps hand-authored ECB/CBC constants that ~35 modules compare by REFERENCE, so a new mode must be spread in via a narrow per-mode helper (`ctrFromCore`), never a full `modesFromCore` that would regenerate them.
-- **A new bare-name port-native step type must clear TWO coverage gates**, both set-equality pins that fail CI until a conscious decision lands: `tests/port-provenance-coverage.test.ts` (an exact provenance fn in `core/port-provenance.ts` OR an entry in `PROVENANCE_NO_OP_ALLOWLIST` — *and* the test's own literal copy of that allowlist), and `tests/narration-registry-contract.test.ts` (which port-native steps escape only because they omit `shapeContract` — so **a step can ship with zero narration and CI stays green**; if the step's teaching point is per-frame and value-dependent, a static `narrationOverride` cannot express it and you must register a real `NarrationFn`, then *scrub to the frame in the browser and read it*). Note the provenance gate's set-pin lives in **two** files — `tests/port-provenance-coverage.test.ts` and `tests/port-provenance.test.ts`'s own exact-mapping count — so run the full suite, not just the file CLAUDE.md names. Also add a `ParamEditor` blurb — for a no-params step that means both `NO_PARAMS_PORT_NATIVE_TYPES` and `portNativeNoParamsLabel`.
+- **A new bare-name port-native step type must clear TWO coverage gates**, both set-equality pins that fail CI until a conscious decision lands: `tests/port-provenance-coverage.test.ts` (an exact provenance fn in `core/port-provenance.ts` OR an entry in `PROVENANCE_NO_OP_ALLOWLIST` — *and* the test's own literal copy of that allowlist), and `tests/narration-registry-contract.test.ts` (which port-native steps escape only because they omit `shapeContract` — so **a step can ship with zero narration and CI stays green**; if the step's teaching point is per-frame and value-dependent, a static `narrationOverride` cannot express it and you must register a real `NarrationFn`, then *scrub to the frame in the browser and read it*). **If you are adding a whole FAMILY of port-native steps, give it a prefix-derived block in that test** — the lattice precedent (2026-08-10): walk `registry.types()` filtered on the family's name prefix and require narrator-or-allowlist, so member fifteen enrols itself. A hand-list is the vacuous-suite hazard; the prefix is not. Note the provenance gate's set-pin lives in **two** files — `tests/port-provenance-coverage.test.ts` and `tests/port-provenance.test.ts`'s own exact-mapping count — so run the full suite, not just the file CLAUDE.md names. Also add a `ParamEditor` blurb — for a no-params step that means both `NO_PARAMS_PORT_NATIVE_TYPES` and `portNativeNoParamsLabel`.
 - **Port-native primitives use DIFFERENT param names than legacy steps**: `rotate-bits-right` / `shift-bits-right` use `bits` (not `shift`), no `byteLength`; `add-mod-32` / `xor` / `and` / `concat` use `inputCount`, no `byteLength`; `not` takes empty params; `split-bytes` uses `widths`. Copy-pasting a spec node from a legacy step fails with "params.X must be …" naming the param the executor WANTED — not the wrong one supplied. Full table in `docs/gotchas.md`.
 
 For AES gotchas (column-major state, FIPS-197 appendix keys, AES-256 Nk>6 branch, SubBytes/ShiftRows commute), Speck byte-order conventions, Serpent standard-vs-bitslice form mixing, and the padding overlay's block-width contract: read `docs/gotchas.md`.

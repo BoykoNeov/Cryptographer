@@ -241,6 +241,32 @@ export const NARRATION_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
   // it, each narrated via its own `narrationOverride`. Below the cell-shape gate
   // anyway (`input: "any"`) — listed here for parity.
   "twofish.publish-subkeys@1",
+  // The three element-wise Z_q vector primitives (lattice P1, allowlisted
+  // 2026-08-10 when the rest of the family got narrators). This is the AES /
+  // Blowfish / Twofish port-native-round-body posture, and it is a conscious
+  // decision rather than an omission — the other eleven lattice step types DO
+  // have narrators in `./lattice.tsx`.
+  //
+  // Three reasons, in order of weight:
+  //   1. A frame here carries 128–256 coefficients and the operation is the
+  //      same on every one of them. The only honest conceptual unit is the
+  //      coefficient, which would mean hundreds of `<details>` — flatly against
+  //      this file's own authoring convention ("a future SHAKE / Keccak step on
+  //      a 200-byte state must NOT emit 200 `<details>`"). A sampled handful
+  //      would be arbitrary: no coefficient is more interesting than another.
+  //   2. The one genuinely surprising fact — that Z_q has no negatives, so
+  //      `3 − 5` is `3327` — is not per-frame. It is a property of the ring,
+  //      it leads `zq-vec-sub@1`'s own type-level description, and where it
+  //      matters most (freshly sampled noise) it is narrated per-frame by
+  //      `zq-cbd@1`, whose values are small enough for the point to land.
+  //   3. These are the NTT's butterfly leaves, and the butterflies already
+  //      carry per-node `narrationOverride` prose naming each one's role in
+  //      its layer (405 of 430 shipped leaves) — prose a type-keyed narrator
+  //      could not write, because it depends on where in the transform the
+  //      leaf sits rather than on what it computed.
+  "zq-vec-add@1",
+  "zq-vec-sub@1",
+  "zq-vec-mul-scalar@1",
   // Bit-level linear transforms — byte-level prose would be misleading.
   // (Bit-permutation is honest at byte granularity — narrated in Phase 2.)
   "serpent.linear-transform@1",

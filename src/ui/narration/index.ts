@@ -18,8 +18,14 @@
  *     concat-blocks, compute-block-count
  *   - Aux (Phase 3): aux-load, aux-xor, aux-copy, iv-load,
  *     xor-aux-into-state, state-to-aux
- * Allowlist shrinks to the irreducible 6 entries (4 key-expansion +
- * 2 bit-level Serpent linear transforms).
+ *   - Lattice (2026-08-10): the six Z_q arithmetic steps that are not
+ *     element-wise (compress / decompress / cbd / base-case-mul /
+ *     byte-encode / byte-decode) plus all five ML-KEM Keccak monoliths.
+ *     The three element-wise `zq-vec-*@1` primitives are allowlisted
+ *     instead — 256 coefficients per frame, one conceptual unit each.
+ *
+ * The allowlist is no longer "the irreducible 6" it was at Phase 3; see the
+ * per-entry rationales on the constant itself, which are the authority.
  */
 
 import { auxCopyNarration, auxLoadNarration, auxXorNarration } from "./aux-primitives";
@@ -33,6 +39,19 @@ import {
   desSBoxesNarration,
   desXorWithKNarration,
 } from "./des";
+import {
+  mlKemHashGNarration,
+  mlKemHashHNarration,
+  mlKemKdfJNarration,
+  mlKemPrfNarration,
+  mlKemSampleNttNarration,
+  zqBaseCaseMulNarration,
+  zqByteDecodeNarration,
+  zqByteEncodeNarration,
+  zqCbdNarration,
+  zqCompressNarration,
+  zqDecompressNarration,
+} from "./lattice";
 import { mt19937SeedNarration, mt19937TwistNarration } from "./mt19937";
 import {
   iso78164PadNarration,
@@ -148,6 +167,34 @@ export const initNarrationRegistry = (): void => {
   // `narrationOverride` cannot branch on the widths, so that sentence — the
   // point of the whole partial-block feature — is only sayable here.
   registerNarration("truncate-to-reference@1", truncateToReferenceNarration);
+  // The lattice family (2026-08-10) — every step type introduced by P2 (the
+  // lattice arithmetic) and P3 (K-PKE) of the ML-KEM plan, registered ahead of
+  // P4 making ML-KEM selectable. Until P4 these render in no user-reachable
+  // spec, which is exactly why they could have shipped silently un-narrated:
+  // they are bare-name / dotted port-native types with no `shapeContract`, so
+  // the contract test's cell-shape walk never saw them. It does now — see the
+  // lattice-family block in `tests/narration-registry-contract.test.ts`.
+  //
+  // Each of these earns a narrator on the `truncate-to-reference@1` criterion —
+  // the teaching point is per-frame, so a static `narrationOverride` cannot say
+  // it. `ml-kem.sample-ntt@1` is the strongest case in the app: it is the only
+  // step whose COST depends on the value, and it publishes the block count on a
+  // port so the narrator can report what actually happened. The three
+  // `zq-vec-*@1` steps go the other way and sit on NARRATION_NO_OP_ALLOWLIST —
+  // 256 coefficients per frame is far past the "don't emit 200 <details>"
+  // convention, and the NTT's butterfly leaves already carry per-node
+  // `narrationOverride` prose.
+  registerNarration("zq-compress@1", zqCompressNarration);
+  registerNarration("zq-decompress@1", zqDecompressNarration);
+  registerNarration("zq-cbd@1", zqCbdNarration);
+  registerNarration("zq-base-case-mul@1", zqBaseCaseMulNarration);
+  registerNarration("zq-byte-encode@1", zqByteEncodeNarration);
+  registerNarration("zq-byte-decode@1", zqByteDecodeNarration);
+  registerNarration("ml-kem.sample-ntt@1", mlKemSampleNttNarration);
+  registerNarration("ml-kem.prf@1", mlKemPrfNarration);
+  registerNarration("ml-kem.hash-g@1", mlKemHashGNarration);
+  registerNarration("ml-kem.hash-h@1", mlKemHashHNarration);
+  registerNarration("ml-kem.kdf-j@1", mlKemKdfJNarration);
   initialized = true;
 };
 

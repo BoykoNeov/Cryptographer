@@ -14,6 +14,37 @@
  * the offending stepType AND suggests both fixes. New cipher authors
  * either write a narration fn or make an explicit "we considered this
  * and the byte-level surface isn't worth it" decision via the allowlist.
+ *
+ * ## The `shapeContract` hole, and why the lattice walk below exists
+ *
+ * The cell-shape walk above is keyed on the doc block's `shapeContract`,
+ * which PORT-NATIVE steps deliberately omit — port lengths there are
+ * wiring-determined, so declaring a fixed state shape would be a lie.
+ * The consequence is that a port-native step type can ship with zero
+ * per-frame narration and this test stays green. That is a real hole and
+ * it has bitten once already: `truncate-to-reference@1` escaped it and
+ * got its narrator only because someone noticed by hand.
+ *
+ * It bit hardest in the lattice family, where P2 and P3 landed fourteen
+ * port-native step types at once — every one invisible here. So the
+ * lattice-family block below closes the hole FOR THAT FAMILY by walking
+ * `registry.types()` filtered on the family's two name prefixes instead
+ * of on `shapeContract`. Prefix-derived rather than hand-listed on
+ * purpose: a hand-list is the vacuous-suite hazard from
+ * `docs/plans/validated-growing-dongarra.md` (a suite that iterates a
+ * list passes green when an entry goes missing), whereas a prefix filter
+ * enrols a new lattice step automatically, the moment it registers.
+ *
+ * This creates a deliberate ASYMMETRY worth naming so a later reader does
+ * not mistake it for an oversight: lattice port-native steps are gated,
+ * the other ~60 port-native types in the registry still are not. The
+ * family-shaped fix was chosen over widening the gate globally because
+ * widening it would light up dozens of steps at once — `xor@1`,
+ * `concat@1`, `split-bytes@1` and friends — whose posture is already
+ * settled (PortFlowView plus a per-node `narrationOverride`, the AES
+ * round-body precedent) and which would all need allowlist entries
+ * asserting a decision nobody is actually revisiting. If a future family
+ * lands the same way, give it its own prefix block here.
  */
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
@@ -76,6 +107,81 @@ describe("narration-registry coverage contract", () => {
   // The four matrix AES round-operation narrators (byte-substitution /
   // shift-rows / mix-columns / add-round-key) were retired in Phase 5
   // Slice 5.1 (2026-05-30) with their step types + the MatrixState shape.
+
+  // ── The lattice family (2026-08-10) ──────────────────────────────────
+  //
+  // Prefix-derived, NOT hand-listed — see the header. `zq-` covers the
+  // nine P1+P2 arithmetic primitives, `ml-kem.` the five P3 Keccak
+  // monoliths. A fourteenth lattice step registered tomorrow enrols here
+  // without anyone remembering to add it.
+  const LATTICE_PREFIXES = ["zq-", "ml-kem."] as const;
+  const latticeStepTypes = registry
+    .types()
+    .filter((t) => LATTICE_PREFIXES.some((prefix) => t.startsWith(prefix)))
+    .sort();
+
+  it("inventories the lattice step types the prefix walk is meant to catch", () => {
+    // A sanity pin on the WALK, not on the family: if a rename ever moved
+    // these out from under both prefixes the filter would silently match
+    // nothing and every assertion below would pass vacuously.
+    expect(latticeStepTypes.length).toBe(14);
+    expect(latticeStepTypes).toContain("zq-vec-add@1");
+    expect(latticeStepTypes).toContain("ml-kem.sample-ntt@1");
+  });
+
+  it("every lattice step type is either narration-registered or allowlisted", () => {
+    // The gate this whole block exists for. These are port-native types
+    // with no `shapeContract`, so the cell-shape walk above cannot see
+    // them — without this, all fourteen could render with zero per-frame
+    // prose and CI would stay green.
+    const uncovered = latticeStepTypes.filter(
+      (t) => !hasNarrationFn(t) && !NARRATION_NO_OP_ALLOWLIST.has(t),
+    );
+    expect(
+      uncovered,
+      `lattice step types with neither a NarrationFn nor an allowlist entry:\n${uncovered
+        .map((t) => `  - ${t}`)
+        .join(
+          "\n",
+        )}\n\nRegister one in src/ui/narration/lattice.tsx (wired in index.ts), or allowlist it in registry.ts with a rationale.`,
+    ).toEqual([]);
+  });
+
+  it("registers fns for the 11 narrated lattice step types", () => {
+    // Explicit per-type assertions rather than a count: a count would let
+    // a swap (one registered, one dropped) pass. Two of these —
+    // `ml-kem.hash-h@1` and `ml-kem.kdf-j@1` — are registered but emitted
+    // by NO shipped spec until P4's FO wrapper lands; they are covered
+    // here and exercised against real runtime frames in
+    // `tests/lattice-narration.test.tsx`.
+    for (const t of [
+      "zq-compress@1",
+      "zq-decompress@1",
+      "zq-cbd@1",
+      "zq-base-case-mul@1",
+      "zq-byte-encode@1",
+      "zq-byte-decode@1",
+      "ml-kem.sample-ntt@1",
+      "ml-kem.prf@1",
+      "ml-kem.hash-g@1",
+      "ml-kem.hash-h@1",
+      "ml-kem.kdf-j@1",
+    ]) {
+      expect(hasNarrationFn(t), `${t} should have a registered NarrationFn`).toBe(true);
+    }
+  });
+
+  it("allowlists exactly the three element-wise Z_q vector primitives", () => {
+    // The deliberate no-op half of the family decision. Negative arm
+    // included: an element-wise primitive drifting onto the narrated list
+    // (or a narrated step onto the allowlist) means the wires crossed.
+    for (const t of ["zq-vec-add@1", "zq-vec-sub@1", "zq-vec-mul-scalar@1"]) {
+      expect(NARRATION_NO_OP_ALLOWLIST.has(t), `${t} should be allowlisted`).toBe(true);
+      expect(hasNarrationFn(t), `${t} should NOT also have a narrator`).toBe(false);
+    }
+    const allowlistedLattice = latticeStepTypes.filter((t) => NARRATION_NO_OP_ALLOWLIST.has(t));
+    expect(allowlistedLattice).toEqual(["zq-vec-add@1", "zq-vec-mul-scalar@1", "zq-vec-sub@1"]);
+  });
 
   it("registers fns for Serpent byte-level + bit-permutation steps (Phase 2)", () => {
     expect(hasNarrationFn("serpent.sub-bytes@1")).toBe(true);
@@ -144,7 +250,8 @@ describe("narration-registry coverage contract", () => {
     // decomposition) and K4 (DES decomposition) will touch the data array,
     // not the assertion arithmetic.
     //
-    // Current contents (11 entries):
+    // Current contents (15 entries — the count in this comment has drifted
+    // before; the literal below is the authority):
     //   - 4 monolithic key-expansion / key-schedule ORACLE step types
     //     (`aes.key-expansion@{1,2}`, `serpent.key-expansion@1`,
     //     `des.key-schedule@1`). Every schedule decomposed into port-native
@@ -162,6 +269,9 @@ describe("narration-registry coverage contract", () => {
     //     group (`rsa.publish-key-params@1`); same posture — the n = p·q /
     //     φ = (p−1)(q−1) / d = e⁻¹ mod φ math is the self-narrated leaves
     //     above it.
+    //   - 3 element-wise Z_q vector primitives (lattice, 2026-08-10) — the
+    //     first entries here whose rationale is CARDINALITY rather than
+    //     identity-passthrough. See the note on the entries themselves.
     const expected = new Set<string>([
       "aes.key-expansion@1",
       "aes.key-expansion@2",
@@ -179,6 +289,17 @@ describe("narration-registry coverage contract", () => {
       "rsa.publish-key-params@1",
       // Twofish (2026-07-12): the VISIBLE-PHT-half aux-publish tail.
       "twofish.publish-subkeys@1",
+      // Lattice P1 (allowlisted 2026-08-10): the three element-wise Z_q vector
+      // primitives. NOT a publish tail — a different rationale entirely, and
+      // the first entries here that are on the list for CARDINALITY rather
+      // than for being identity passthroughs. A frame carries 128–256
+      // coefficients treated identically, so the only honest conceptual unit
+      // would mean hundreds of `<details>`, against this file's own authoring
+      // convention. The rest of the lattice family IS narrated
+      // (`src/ui/narration/lattice.tsx`); see the block above.
+      "zq-vec-add@1",
+      "zq-vec-sub@1",
+      "zq-vec-mul-scalar@1",
     ]);
     expect(NARRATION_NO_OP_ALLOWLIST).toEqual(expected);
     // Negative assertion: the 6 round-body DES step types must NOT be on

@@ -534,6 +534,43 @@ Watch the **vacuous-suite hole** (`validated-growing-dongarra.md`): any surface
 test that iterates an options list passes green when a variant is missing. Pin
 against `Record<Asymmetric, string>`'s compiler-enforced keys.
 
+#### The narration debt — PAID 2026-08-10, with one half deliberately left open
+
+P3 recorded that the P2/P3 step types omit `shapeContract`, so
+`narration-registry-contract.test.ts` passed all fourteen of them silently, and
+that this would bite the moment P4 made ML-KEM selectable. That was paid ahead of
+P4 rather than inside it:
+
+- **Eleven narrators** in `src/ui/narration/lattice.tsx`, one per lattice step
+  type whose teaching point is per-frame; **three allowlisted**
+  (`zq-vec-add|sub|mul-scalar@1` — 128–256 identical coefficients per frame, so
+  the only honest conceptual unit would mean hundreds of `<details>`).
+- **The gate hole is closed for this family** by a prefix-derived walk over
+  `registry.types()` (`zq-` / `ml-kem.`) rather than a hand-list, so a
+  fifteenth lattice step enrols automatically. Verified live by perturbation.
+- Driven through **real frames from the shipped K-PKE specs** in
+  `tests/lattice-narration.test.tsx`; `ml-kem.hash-h@1` / `ml-kem.kdf-j@1`, which
+  no shipped spec emits until the FO wrapper, get a purpose-built two-leaf spec
+  so their narrators are still exercised by the real runtime.
+
+**The open half, and it is P4's to close.** *None of the eleven is reachable in a
+browser yet.* The only user-selectable lattice spec is the NTT, and it emits
+**exactly** the three ALLOWLISTED types — so no amount of clicking today renders
+a single one of these narrators. They are pinned by jsdom render assertions over
+real frames, which is strictly weaker than looking:
+`feedback_visual_smoke_vs_property_tests` is on the record twice in this plan
+already. **When ML-KEM becomes selectable, scrub to one frame of each of the
+eleven and read the prose.** Layout, disclosure-row density on a 256-coefficient
+frame, and whether the `<details>` labels are legible at all are precisely the
+properties these tests are blind to.
+
+One narrator bug is already on the record from this work, and it argues the
+scrub is not a formality: `zqCompressNarration` printed FIPS 203's error bound
+with an integer floor, so at `d = 10` it rendered "worst error 2 of a possible
+1". The bound is `⌈q/2^(d+1)⌋` — round to **nearest**. It was caught only because
+the test derives the bound independently instead of reusing the narrator's
+expression.
+
 ### P5 — pedagogy
 
 Canonical NTT butterfly layout (the fourth member of the
