@@ -1,6 +1,6 @@
 # ML-KEM — the lattice layer, and the app's first post-quantum algorithm
 
-**Status: P1 + P2 SHIPPED 2026-08-09. P3–P5 open.** Five phases; the NTT is
+**Status: P1 + P2 SHIPPED 2026-08-09; P3 SHIPPED 2026-08-10. P4–P5 open.** Five phases; the NTT is
 selectable under a fifth `Category`, `"lattice"`. Scope decided with
 the user at plan time: **ML-KEM only** (ML-DSA deferred to its own plan),
 **Keccak calls are monolith frames that cross-reference the already-visible
@@ -391,7 +391,7 @@ Deliberately deferred, and each is a P3 obligation rather than an omission:
   per P1's deferral. `d`'s two families label it differently ("Bits kept" vs
   "Bits per coeff") because one discards and the other does not.
 
-### P3 — K-PKE (the IND-CPA core)
+### P3 — K-PKE (the IND-CPA core) — SHIPPED 2026-08-10
 
 `KeyGen`, `Encrypt`, `Decrypt` per FIPS 203 §5, with the five `ml-kem.*` Keccak
 monoliths. No selector entry yet — shipping a half-algorithm to users would
@@ -472,6 +472,47 @@ are pinned transitively in P4.
 > way the fixture can assert §7.1's split — same `ek`, same `dk_PKE`, different
 > implicit-rejection secret. That pins P4's hardest-to-see branch before P4 starts.
 
+**P3 OUTCOME (2026-08-10).** Shipped as planned. Six things worth carrying into
+P4:
+
+1. **Encrypt and Decrypt had a direct oracle after all, and it is the FO loop
+   run test-side.** The plan expected them to be "pinned transitively in P4",
+   because the fixture's encapsulations are ML-KEM's — `crypto.encapsulate`
+   picks `m` internally, so no seed → `(m, r)` → `c` row exists. But decrypting
+   OpenSSL's ciphertext gives `m′`, `(K′, r′) = G(m′ ‖ H(ek))` is computable in
+   the test, and re-encrypting must reproduce `c` **byte for byte**. That single
+   assertion pins Decrypt against OpenSSL's Encrypt, Encrypt against it, and `G`
+   — and it front-loads P4's hardest machinery. Round-trip still ranks last.
+2. **The plan's SampleNTT block-count assertion was VACUOUS as worded.**
+   "Enough seeds that at least one polynomial demonstrably needs an extra squeeze
+   block" — but acceptance is ~3329/4096, so 256 coefficients need ~315
+   candidates ≈ 473 bytes and **every** draw already spends three 168-byte
+   blocks. Measured over the fixture's 162 draws: **160 take three, 2 take
+   four.** The live assertion is that the count *varies*; the executor exposes it
+   on a `squeezes` output port so it is observable rather than argued.
+3. **Three published facts checked against the fixture before any spec code, and
+   each wrong variant is self-consistent.** `G(d ‖ k)` not `G(d)` (the draft's
+   spelling; breaks ρ). `A[i][j] = SampleNTT(ρ ‖ j ‖ i)` in KeyGen and `ρ ‖ i ‖ j`
+   in Encrypt — the byte swap IS the transpose (breaks `ek`, leaves ρ and
+   `dk_PKE` green). `N` = 0,1,2 for `s` then 3,4,5 for `e` (breaks `dk_PKE`,
+   leaves ρ green). All three failure signatures are pinned as perturbations, so
+   a future breakage announces which layer it is in.
+4. **The three checkpoints work exactly as hoped, and they are why KeyGen is its
+   own spec.** ρ → `dk_PKE` → `ek`, in that order, each failing where its cause
+   lives. This is the whole argument against a single combined spec.
+5. **Measured budget, and the 1.6 ms/node model is again ~8× pessimistic for
+   `runSpec` alone**: keygen 485 nodes / 6,197 frames / **146 ms**; encrypt 572 /
+   7,236 / **129 ms**; decrypt 293 / 4,101 / **22 ms**. P1's finding restated —
+   that coefficient is the UI pipeline, not the runtime. At the UI rate P4's
+   encapsulation lands near ~1.0 s, inside the budget the CSPRNG occupies, so
+   **no depth decision needs revisiting**.
+6. **Node-id prefixing is load-bearing and was made explicit.** Six transforms in
+   one spec means six `layer1.split`; the flat trace keys frames by `stepId`, so
+   a collision breaks the scrubber and the graph derivation **without an error**.
+   `buildNttNodes`/`buildNttGroup` take a prefix and a test asserts two embedded
+   groups have disjoint id sets. Any future "embed an existing spec N times" work
+   inherits this obligation.
+
 ### P4 — ML-KEM encapsulation and decapsulation
 
 The Fujisaki–Okamoto wrapper: `G`, the re-encryption check, and implicit
@@ -517,7 +558,11 @@ for the no-params steps, entries in `NO_PARAMS_PORT_NATIVE_TYPES` and
   and the missing `+ 1` yields a table that agrees with nothing (see the P2
   OUTCOME block). Likewise `128⁻¹`, not `n⁻¹` read as `256⁻¹`.
 - `src/ciphers/ntt-3329-256.ts` — forward/inverse layer-iterate builders (P1).
-- `src/ciphers/k-pke.ts`, `src/ciphers/ml-kem-768.ts` — the KEM specs (P3/P4).
+- `src/ciphers/k-pke.ts` (P3, SHIPPED) — three separate builders, not one
+  combined spec, because the oracle gives **checkpoints** and a combined spec
+  would throw them away. `ek`/`dk_PKE`/`r` reach Encrypt and Decrypt through
+  `cipherConstants` + `aux-load-bytes@1`, the channel `q` and ζ already use.
+  `src/ciphers/ml-kem-768.ts` — the KEM spec (P4).
 - `src/steps/zq-*.ts` — the vector primitives. P1: `zq-vec-add@1`,
   `zq-vec-sub@1`, `zq-vec-mul-scalar@1`. P2: `zq-compress@1`,
   `zq-decompress@1`, `zq-byte-encode@1`, `zq-byte-decode@1`, `zq-cbd@1`,
