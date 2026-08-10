@@ -836,15 +836,26 @@ paid ahead of P4 and was not reopened.
    guard added in this phase is scoped to recognized butterflies and does not
    name it.
 
-**Left open.** The butterfly cell and both diagrams were read on screen in both
-directions of the standalone NTT, and the geometric audit was run against both.
-The one thing not looked at is the cell **rendered inside ML-KEM-768**, where
-the layers sit two scopes deeper inside default-collapsed transform groups —
-recognition there is pinned by unit test (the prefixed K-PKE ids) and the
-base-case diagram is driven through the ML-KEM spec, but neither was opened in a
-browser, because the extension dropped partway through the phase. It is a
-low-risk gap (the layout branch reads only `container.kind` and the shape) but it
-is a gap.
+**Verified in a real browser, both contexts.** The cell and both diagrams were
+read on screen in both directions of the standalone NTT, and the geometric audit
+was run against both. The cell **rendered inside ML-KEM-768** — where the layers
+sit two scopes deeper inside default-collapsed transform groups — was closed by a
+**throwaway Playwright spec** after the browser extension dropped mid-phase; the
+workaround existed, so leaving it open would have been a choice rather than a
+blocker. The real question there was never the cell's geometry (the layout branch
+reads only `container.kind` and the shape map, both already tested at depth) but
+whether a collapsed transform group expands to show layer boxes at all. It does:
+with everything expanded, the butterfly leaves land in consecutive groups of
+eight on exactly **five distinct y values at a 60 px pitch** — the cell's grid,
+where the generic ribbon would give one or two. The spec was run once, recorded,
+and deleted, per the dormant-Playwright posture.
+
+Two mechanics worth reusing if another throwaway spec is needed: the view
+switcher is a **`tab` role, not a button** (read off the failure's
+error-context YAML rather than guessed), and clicking a container header
+directly is defeated by neighbouring leaf rects intercepting the pointer on a
+~14,000 px canvas — drive the toolbar's own `expand all` instead, which
+exercises the same expansion path.
 
 ## Critical files
 

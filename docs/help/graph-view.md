@@ -22,6 +22,18 @@ internalized.
 - **Solid horizontal arrows** are the *state spine*: the cipher state
   flowing left-to-right through consecutive same-parent leaves. Time
   flows rightward.
+- **Some containers lay out as a recognisable picture rather than a
+  stack.** When a container's wiring matches a shape the app knows, it is
+  arranged the way the textbook draws it instead of as a generic row or
+  column: a Feistel round (DES, Blowfish) as the two-column cell with its
+  swap; a Twofish round as its four rails; a ChaCha20 or Salsa20 double
+  round as eight quarter-round blocks in two tiers; and an NTT layer as
+  the butterfly — two rails with the split above and the rejoin below,
+  and the twiddle-factor table on its own row. Recognition is from the
+  wiring alone, so **rewire one operand and the container falls back to
+  the plain layout** — which is the honest signal that it is no longer
+  the shape it was. The steps stay real either way: still draggable,
+  still click-to-scrub, still wireable.
 - **Dashed animated arrows** are *aux edges*: named values one step
   publishes (`auxWrites`) that another step reads (`auxReads`). The label
   on each edge is the aux key — `roundKey.0`, `feedback`, `iv`, etc.
