@@ -367,6 +367,27 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
                 ),
               );
             }
+            // Repeat-until (`stopWhen`, ML-DSA signing's rejection loop). The
+            // check sits AFTER both the output collection and the chain advance
+            // on purpose: the attempt that succeeds must be the one the loop
+            // reports, so `chainOutput` harvests ITS chain value, not the
+            // previous attempt's. A flag that is not exactly one byte is a
+            // wiring mistake (an accept flag wired to a whole polynomial), and a
+            // silently-truthy multi-byte value would hide it — so it throws.
+            if (node.stopWhen !== undefined) {
+              const flag = resolveBinding(
+                bodyOutputs,
+                node.stopWhen,
+                `iterate '${node.id}': stopWhen`,
+                "body",
+              );
+              if (flag.length !== 1) {
+                throw new Error(
+                  `iterate '${node.id}': stopWhen must name a 1-byte flag, got ${flag.length} bytes from ${node.stopWhen.node}/${node.stopWhen.port}`,
+                );
+              }
+              if (flag[0] !== 0) break;
+            }
           }
           // Concatenate per-iteration outputs → the container's exit bytes.
           const total = collected.reduce((n, b) => n + b.length, 0);
@@ -392,6 +413,13 @@ export const runSpec = (spec: CipherSpec, registry: StepRegistry, input: Runtime
         }
 
         // ── Aux mode (legacy — matrix CBC/CTR) ────────────────────────────
+        // `stopWhen` names a BODY port, and only port mode has ports in its
+        // body scope — fail loud rather than silently run every iteration.
+        if (node.stopWhen !== undefined) {
+          throw new Error(
+            `iterate '${node.id}': stopWhen requires port mode (set seedInput/blockByteLength/bodyOutput)`,
+          );
+        }
         if (
           node.countFromAux === undefined ||
           node.blocksFromAux === undefined ||

@@ -356,6 +356,32 @@ export type IterateGroup = {
    * byte-identically, which is what keeps ECB and CBC provably unaffected.
    */
   readonly allowPartialFinalBlock?: boolean;
+  /**
+   * Port mode only — a **repeat-until** loop: stop as soon as an attempt
+   * succeeds (ML-DSA signing's rejection loop, FIPS 204 Algorithm 7).
+   *
+   * Names a body port carrying a **1-byte flag**. It resolves in the body scope
+   * at the END of each iteration — after that iteration's `bodyOutput` is
+   * collected and its `chainFeedback` has advanced the chain — and a non-zero
+   * byte ends the loop there. So `chainOutput` harvests the chain value of the
+   * attempt that stopped the loop, not the one before it.
+   *
+   * The cap is the ordinary iteration count (`seedInput` width ÷
+   * `blockByteLength`), usually fed by a `zero-fill@1` whose bytes are never
+   * read — the PRNG "length enters as a width" precedent. Hitting the cap is
+   * not an error: the loop just ends, and the spec is expected to carry its
+   * own "accepted?" byte out on the chain so a downstream leaf can say so.
+   * (FIPS 204 §3.4 allows an implementation to bound the loop.)
+   *
+   * Every count reader in the UI derives from the TRACE (`blockIndex` stamps),
+   * so a loop that stops at 3 of 8 shows 3 everywhere with no spec-side
+   * arithmetic to update. The emitted `out` port is the concatenation of the
+   * iterations that actually ran, so its width varies with the stop.
+   *
+   * Additive optional field (no `schemaVersion` bump — same posture as
+   * `allowPartialFinalBlock`). Absent ⇒ every iteration runs, byte-identically.
+   */
+  readonly stopWhen?: PortBinding;
 };
 
 /**

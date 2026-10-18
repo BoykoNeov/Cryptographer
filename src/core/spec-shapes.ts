@@ -304,8 +304,17 @@ const walk = (
     // optional `outputPorts` field per the Slice 2.6a container-edge
     // mixin.
     const recordContainerOutputs = (): void => {
-      const declared = node.outputPorts ?? ["out"];
-      scopeOutputs.set(node.id, new Set(declared));
+      const declared = new Set(node.outputPorts ?? ["out"]);
+      // A port-mode iterate also publishes its harvested chain on
+      // `chainOutput` (the runtime adds it beside `outputPorts`). Until
+      // ML-DSA signing, every harvest was read only through `outputFrom`,
+      // which this walk never checks, so leaving it out was invisible; a
+      // SIBLING that reads the harvest (signing's split of
+      // `κ ‖ accepted ‖ σ`) got a false `port-input-unresolvable`.
+      if (node.kind === "iterate" && node.chainOutput !== undefined) {
+        declared.add(node.chainOutput);
+      }
+      scopeOutputs.set(node.id, declared);
     };
 
     if (node.kind === "group") {
@@ -416,6 +425,13 @@ const walk = (
       if (node.bodyOutput !== undefined) {
         const bodyScope = collectDirectChildOutputs(node.children, ctx.registry);
         validateContainerBinding(node.id, "bodyOutput", node.bodyOutput, bodyScope, ctx);
+      }
+      // `stopWhen` (the repeat-until flag) resolves in the same place
+      // `bodyOutput` does — the body's outputs after the iteration — so it is
+      // validated against the same direct-child scope.
+      if (node.stopWhen !== undefined) {
+        const bodyScope = collectDirectChildOutputs(node.children, ctx.registry);
+        validateContainerBinding(node.id, "stopWhen", node.stopWhen, bodyScope, ctx);
       }
       // Seed the body scope with the ports the runtime injects: always
       // `port(iterateId, "in")` (the per-block bytes), and — for a chaining

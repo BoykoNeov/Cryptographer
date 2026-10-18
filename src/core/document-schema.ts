@@ -357,6 +357,12 @@ export const IterateGroupSchema = z.object({
   // input it was built to accept. Pinned by
   // `tests/ctr-partial-block-document-roundtrip.test.ts`.
   allowPartialFinalBlock: z.boolean().optional(),
+  // Repeat-until (2026-10-18, ML-DSA signing) — the body port whose 1-byte
+  // flag ends the loop early. Additive optional (no schemaVersion bump), and
+  // declared for the same Zod-strips-unknown-keys reason as the fields above:
+  // without it a shared signing link would reopen running every attempt up to
+  // the cap, with no error. Pinned by `tests/runtime-iterate-stop-when.test.ts`.
+  stopWhen: PortBindingSchema.optional(),
   children: z.array(z.lazy(() => StepNodeSchema)),
   ...containerPortEdgeFields,
   ...loopingContainerSeedFields,
