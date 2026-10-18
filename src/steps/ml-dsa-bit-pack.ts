@@ -138,11 +138,9 @@ export const mlDsaBitUnpack: PortedExecutor = (inputs, params, _ctx) => {
 
 const SHARED = `## Where the range comes from
 
-| what | range | bits |
-|---|---|---|
-| secret vectors s1, s2 | −η … η | 3 (η = 2) |
-| low part of the key, t0 | −4,095 … 4,096 | 13 |
-| the signature's z | −131,071 … 131,072 | 18 |
+- **Secret vectors s1, s2:** −η … η, so 3 bits at η = 2.
+- **The low part of the key, t0:** −4,095 … 4,096, so 13 bits.
+- **The signature's z:** −131,071 … 131,072, so 18 bits.
 
 The two ends arrive on the \`lower\` and \`upper\` ports, as wired constants, so
 one constant can set both the range a value is drawn from and the way it is

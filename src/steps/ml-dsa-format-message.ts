@@ -92,14 +92,14 @@ M′ = 0 ‖ length(ctx) ‖ ctx ‖ M
 ## Why it matters so much
 
 Leave this step out and signing still works — every signature you make
-verifies under this app. But every *other* implementation adds the prefix
+verifies under this app. But every **other** implementation adds the prefix
 before checking, so they are all checking different bytes from the ones that
 were signed, and they all say "invalid". It is the most common way to make
 ML-DSA signatures nobody else accepts.
 
 ## What the context string is for
 
-It lets an application say what a signature is *for*. A signature made with
+It lets an application say what a signature is **for**. A signature made with
 context "login" will not verify with context "payment", even under the same
 key, so one cannot be replayed as the other. Most uses leave it empty.`,
   params: new Map([

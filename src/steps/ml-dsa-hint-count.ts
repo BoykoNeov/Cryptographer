@@ -79,7 +79,7 @@ output = 1  if count ≤ ω,  else 0
 
 ## Why there is a limit
 
-A signature stores its hint compactly, as a list of *positions* — which
+A signature stores its hint compactly, as a list of **positions** — which
 coefficients need correcting — rather than a bit for every coefficient. It has
 room for exactly **ω** positions (80 in ML-DSA-44). A candidate that needs more
 corrections than that cannot be written down, so it is discarded and the signer

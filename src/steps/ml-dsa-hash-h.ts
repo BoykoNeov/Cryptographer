@@ -64,16 +64,18 @@ export const mlDsaHashHDoc: StepDocumentation = {
 ML-DSA's hash function. It is plain **SHAKE256**, squeezed to whatever length
 the caller asks for — and ML-DSA asks for five different things:
 
-| call | bytes out | what the output is |
-|---|---|---|
-| over the 32-byte key seed and \`k ‖ l\` | 128 | ρ, ρ′ and K — the public seed, the secret seed, a signing key |
-| over the public key | 64 | **tr**, a fingerprint of the public key |
-| over tr and the formatted message | 64 | **μ**, what actually gets signed |
-| over K, the randomness and μ | 64 | **ρ″**, the seed for this signature's masks |
-| over μ and the packed commitment | 32 | **c̃**, the commitment hash in the signature |
+- **128 bytes** over the 32-byte key seed and \`k ‖ l\`: ρ, ρ′ and K — the
+  public seed, the secret seed and a signing key.
+- **64 bytes** over the public key: **tr**, a fingerprint of the public key.
+- **64 bytes** over tr and the formatted message: **μ**, what actually gets
+  signed.
+- **64 bytes** over K, the randomness and μ: **ρ″**, the seed for this
+  signature's masks.
+- **32 bytes** over μ and the packed commitment: **c̃**, the commitment hash
+  in the signature.
 
 The same function serves all of them. What changes is what the bytes are
-*for*, which is why any splitting into parts happens in a separate, visible
+for, which is why any splitting into parts happens in a separate, visible
 step after this one.
 
 ## Why fold the public key into the message hash

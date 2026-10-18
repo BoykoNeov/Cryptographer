@@ -21,11 +21,12 @@
  */
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
+import { findStep } from "@/core/spec-mutations";
 import type { StepNode } from "@/core/types";
 import { ML_DSA_BLOCK_ROWS, ParamEditor } from "@/ui/components/ParamEditor";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetSpecForTests, insertStepIntoSpec, setLattice, useSpec } from "@/ui/stores/spec";
-import { cleanup, render } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const FALLBACK_RE = /no editor for step type/i;
@@ -118,4 +119,44 @@ describe("ParamEditor covers every ML-DSA and Z_q step — from a palette drop",
       }
     }
   });
+
+  it("the context editor saves hex bytes, and reverts a malformed entry", () => {
+    // The one new input widget in the ML-DSA block. Driven through the real
+    // store, so what is asserted is the params the spec actually holds.
+    const newId = insertStepIntoSpec("ml-dsa.format-message@1", {
+      kind: "after",
+      stepId: firstLeafId(useSpec()().steps),
+    });
+    const { container, unmount } = render(() => <ParamEditor stepId={newId} />);
+    const field = container.querySelector("input.int-input") as HTMLInputElement;
+    expect(field).not.toBeNull();
+    const contextNow = () =>
+      (findStep(useSpec()(), newId)?.params as { context?: number[] }).context;
+
+    fireEvent.input(field, { target: { value: "61 62" } });
+    fireEvent.blur(field);
+    expect(contextNow()).toEqual([0x61, 0x62]);
+
+    // Half a byte: refused, and the saved value is untouched.
+    fireEvent.input(field, { target: { value: "6" } });
+    fireEvent.blur(field);
+    expect(contextNow()).toEqual([0x61, 0x62]);
+    unmount();
+  });
+});
+
+describe("ML-DSA step descriptions use only markup the description panel renders", () => {
+  // The renderer (src/ui/components/markdown.tsx) supports headings, lists,
+  // code fences, **bold** and `code`. A pipe table or a *single-star* italic
+  // shows up as raw punctuation, and nothing else would notice.
+  for (const stepType of [...ML_DSA_TYPES, "zq-vec-mul@1", "zq-inf-norm-below@1"]) {
+    it(`${stepType}: no tables, no single-star italics`, () => {
+      const detail = registry.getDoc(stepType)?.detail ?? "";
+      expect(detail.length).toBeGreaterThan(0);
+      expect(detail, "pipe table").not.toMatch(/^\|.*\|$/m);
+      expect(detail.replace(/\*\*/g, ""), "single-star italic").not.toMatch(
+        /(?<![\w*])\*[A-Za-z][^*\n]*\*(?![\w*])/,
+      );
+    });
+  }
 });

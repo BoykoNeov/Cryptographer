@@ -88,7 +88,7 @@ output[i] = (a[i] · b[i]) mod q
 ## When this is the right way to multiply polynomials
 
 Multiplying two polynomials directly costs 256 × 256 products. A transform
-turns that into something cheaper — but *how much* cheaper depends on the
+turns that into something cheaper — but **how much** cheaper depends on the
 modulus.
 
 - **Modulo 8380417** (ML-DSA), the transform runs all eight layers and splits a

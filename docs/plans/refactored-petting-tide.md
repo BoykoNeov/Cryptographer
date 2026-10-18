@@ -361,6 +361,24 @@ packers. That is twenty steps: eighteen `ml-dsa.*` plus `zq-vec-mul@1` and
    directory's `package.json`. The rewrite was caught in `git status` and
    reverted.
 
+**Browser smoke (P2 exit).**
+- All twenty steps appear in the graph palette under their names.
+- `format-message` dropped onto a real canvas shows its block. Typing `61 62`
+  through real keystrokes saved two context bytes, and the field read back
+  `61 62`.
+- The description renderer (`markdown.tsx`) supports neither tables nor
+  single-star italics, and both showed up in the new step descriptions as raw
+  punctuation. They are rewritten as lists and bold. A test now bans both in
+  every ML-DSA description. Two older steps (`rotate-bits-left`,
+  `ml-kem.hash-g`) still carry a table and are left as they are.
+- **Not seen on screen: the narrators.** A palette-dropped step has no
+  coefficient width set and nothing wired, so it never runs and never makes
+  a frame. The narrators are tested on real runtime frames in jsdom only, and
+  reading them in the browser stays a P5 item.
+- The graph tab's first render took over 45 s on a cold dev server while
+  another project's test suite held the CPU. That is the P1 freeze pattern
+  again, and it is not caused by P2.
+
 ### P3 — key generation + verification specs (still no selector entry)
 
 - `src/ciphers/ml-dsa-44.ts` with **prefixable builders** from day one,

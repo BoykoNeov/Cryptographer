@@ -113,7 +113,7 @@ is for.
 
 ## Rounding, not chopping
 
-Because \`r0\` is centred on zero, this rounds to the *nearest* multiple —
+Because \`r0\` is centred on zero, this rounds to the **nearest** multiple —
 \`r = 4097\` with \`d = 12\` becomes \`r1 = 1, r0 = 1\`, but \`r = 6143\` becomes
 \`r1 = 1, r0 = 2047\` and \`r = 6145\` becomes \`r1 = 2, r0 = −2047\`. Simply chopping
 off the low bits would give a consistent-looking public key that no other

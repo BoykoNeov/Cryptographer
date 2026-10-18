@@ -99,7 +99,7 @@ end. A vector of four polynomials becomes 4 × 256 × 6 / 8 = 768 bytes.
 The signer hashes μ together with these bytes to get the challenge seed c̃. The
 verifier recomputes w1 from the signature, packs it the same way, and hashes
 again: if the two hashes match, the signature is valid. So signer and verifier
-must produce the *same bytes*, which is why the width is derived from γ2
+must produce the **same bytes**, which is why the width is derived from γ2
 rather than set by hand.
 
 ## Why the width follows γ2

@@ -103,7 +103,7 @@ parameters.
 
 ## Why the direction can be read off the low bits
 
-A small drift that crossed a bucket edge must have crossed the *nearer* edge.
+A small drift that crossed a bucket edge must have crossed the **nearer** edge.
 If the value now sits in the upper half of its bucket, the edge it just came
 through is the upper one, so the bucket it came from is the one above.
 

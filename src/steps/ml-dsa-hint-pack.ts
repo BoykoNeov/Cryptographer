@@ -179,7 +179,7 @@ export const mlDsaHintPackDoc: StepDocumentation = {
   detail: `# HintBitPack
 
 A hint is almost all zeros: at most ω ones among all the coefficients. So rather
-than a bit for every coefficient, the signature stores *where the ones are*:
+than a bit for every coefficient, the signature stores **where the ones are**:
 
 - the first ω bytes list the **positions** of the ones (0 … 255 within their
   polynomial), polynomial by polynomial, with zeros filling the rest;

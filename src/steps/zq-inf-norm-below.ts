@@ -113,7 +113,7 @@ Answers one question: is **every** coefficient of this vector close to zero?
 ## Close to zero, on a circle
 
 Coefficients live on a clock face with \`q\` positions, so "close to zero" means
-close on *either* side. A coefficient of \`q − 5\` is five steps below zero —
+close on **either** side. A coefficient of \`q − 5\` is five steps below zero —
 small — even though as a plain number it is huge. So each value is first read
 as a signed number between \`−(q−1)/2\` and \`(q−1)/2\`, and its size is its
 distance from zero:

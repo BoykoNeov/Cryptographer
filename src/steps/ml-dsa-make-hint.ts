@@ -96,7 +96,7 @@ h[i] = 0   otherwise
 
 To keep the public key small, the signer published only the high bits of part
 of its key. A verifier working from that public key therefore computes the
-signer's commitment *slightly wrong* — off by a small amount it cannot know.
+signer's commitment **slightly wrong** — off by a small amount it cannot know.
 
 Most of the time that small error changes nothing: the high bits come out the
 same. But a coefficient sitting near a bucket edge can be nudged across it, and
