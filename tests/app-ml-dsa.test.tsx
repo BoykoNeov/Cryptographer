@@ -181,6 +181,26 @@ describe("App — ML-DSA-44 in the public-key family", () => {
     expect((getByText("Use the message from Sign") as HTMLButtonElement).disabled).toBe(true);
   }, 180_000);
 
+  it("flipping back from Verify restores the signed message, not the verdict", async () => {
+    // The generic mode-flip swap copies the output into the input. Verify's
+    // output is a one-byte verdict, so without the ML-DSA exception the message
+    // field would come back as "01" — and the recorder would then remember "01"
+    // as the signed message, losing it from both places.
+    const { container } = render(() => <App />);
+    selectMlDsa(container);
+    fireEvent.input(findInputByLabel(container, "message"), { target: { value: "4869" } });
+    run(container);
+    await waitFor(() => expect(resultText(container)?.replace(/\s/g, "").length).toBe(4840), {
+      timeout: 60_000,
+    });
+    fireEvent.change(findSelectByLabel(container, "mode"), { target: { value: "decrypt" } });
+    run(container);
+    await waitFor(() => expect(resultText(container)).toMatch(/^0[01]$/), { timeout: 60_000 });
+
+    fireEvent.change(findSelectByLabel(container, "mode"), { target: { value: "encrypt" } });
+    expect(findInputByLabel(container, "message").value).toBe("4869");
+  }, 180_000);
+
   it("refuses a signature of the wrong length with a sentence, not a split error", async () => {
     const { container } = render(() => <App />);
     selectMlDsa(container);

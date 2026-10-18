@@ -187,7 +187,7 @@ import {
   usePaddingScheme,
 } from "./stores/padding";
 import { registry } from "./stores/registry";
-import { recordSignedMessage } from "./stores/signed-message";
+import { recordSignedMessage, useSignedMessage } from "./stores/signed-message";
 import {
   MAX_KMAC_KEY_LENGTH,
   MAX_SHAKE_OUTPUT,
@@ -1569,6 +1569,7 @@ export const App = () => {
    */
   const hasDirection = () => !isHash(algorithm()) && !isPrng(algorithm());
 
+  const signedMessage = useSignedMessage();
   // Remember what ML-DSA-44 Sign is signing, so Verify can offer to copy it in
   // (the mode flip replaces this field with the signature). Recording only
   // fills a store; nothing is copied until the user asks.
@@ -1690,7 +1691,15 @@ export const App = () => {
                 // update cycle, avoiding a flicker where decrypt
                 // momentarily runs on the encrypt-mode input.
                 const newMode = e.currentTarget.value as "encrypt" | "decrypt";
-                const swapText = outputText();
+                // ML-DSA-44 is the exception going BACK to Sign: Verify's
+                // output is a one-byte verdict, so the generic swap would put
+                // `01` where the message was — and the signed-message recorder
+                // would then remember `01` as the message. Restore the message
+                // that was signed instead.
+                const signedBack =
+                  algorithm() === "ml-dsa-44" && newMode === "encrypt" ? signedMessage() : null;
+                const swapText =
+                  signedBack !== null ? formatBytes(signedBack, fmt()) : outputText();
                 batch(() => {
                   setMode(newMode);
                   if (swapText) setInputText(swapText);

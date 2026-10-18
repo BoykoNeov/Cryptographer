@@ -645,6 +645,16 @@ the RSA arm, which reads `cipherConstants.q` for an unrelated check.
 - Read every P2 narrator on screen (the ML-KEM narration-debt lesson). Browser
   smoke throughout; the extension may drop, and the throwaway Playwright recipe
   is in memory.
+- **Relabel the attempt loop's chips** — the graph's collapsed-iterate chips and
+  the badge say "block N"/"Block i of N"; for signing they are attempts.
+- **Found after P4, fixed there; the sibling left for here:** the mode flip
+  copies the output into the input in BOTH directions, so Verify → Sign put the
+  one-byte verdict where the message was (and the signed-message recorder then
+  remembered it). P4's follow-up restores the recorded message for ML-DSA
+  (`tests/app-ml-dsa.test.tsx`, perturbation-verified: without it the field
+  reads `00`). ML-KEM-768 has the same older pattern — decapsulation → back to
+  encapsulation puts the 32-byte shared secret in the "message m (random)"
+  field. Harmless (32 bytes is a valid m) but wrong-looking; decide here.
 
 ## Critical files
 
