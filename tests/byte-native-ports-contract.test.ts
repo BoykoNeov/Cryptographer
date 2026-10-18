@@ -114,6 +114,12 @@ const KITCHEN_SINK: Json = {
   // ml-kem.prf@1 (ML-KEM P3) — its output width is 64η, derived rather than
   // fixed, so the contract is function-form and needs η to resolve at all.
   eta: 2,
+  // ML-DSA P2 — `ml-dsa.hash-h@1`'s output width is its `outBytes`, and the
+  // samplers' output widths follow the matrix shape (k, l), so all of these are
+  // function-form contracts that cannot resolve without them.
+  outBytes: 32,
+  k: 4,
+  l: 4,
 } as unknown as Json;
 
 type Scan = {

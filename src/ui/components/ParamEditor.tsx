@@ -352,6 +352,9 @@ export const ParamEditor = (props: Props) => {
               */}
               <ZqVecBlock step={getStep()} />
             </Match>
+            <Match when={getStep().type === "ml-dsa.format-message@1"}>
+              <MlDsaFormatMessageBlock step={getStep()} />
+            </Match>
             <Match when={ML_DSA_BLOCK_ROWS[getStep().type] !== undefined}>
               {/*
                 The ML-DSA layer (P2). Its own block rather than the Z_q one,
@@ -1391,6 +1394,22 @@ const D_ROW: MlDsaIntRow = {
   max: 31,
   placeholder: "13",
 };
+const K_ROW: MlDsaIntRow = {
+  key: "k",
+  label: "Rows (k)",
+  hint: "4 for ML-DSA-44 — the length of t, w and the hint",
+  min: 1,
+  max: 16,
+  placeholder: "4",
+};
+const L_ROW: MlDsaIntRow = {
+  key: "l",
+  label: "Columns (l)",
+  hint: "4 for ML-DSA-44 — the length of s1, y and z",
+  min: 1,
+  max: 16,
+  placeholder: "4",
+};
 export const ML_DSA_BLOCK_ROWS: Record<string, MlDsaRows> = {
   "ml-dsa.power2round@1": { codec: true, ints: [D_ROW], wired: ["modulus — q"] },
   "ml-dsa.decompose@1": {
@@ -1405,6 +1424,124 @@ export const ML_DSA_BLOCK_ROWS: Record<string, MlDsaRows> = {
     ints: [],
     wired: ["omega — ω, the most hint bits a signature has room for"],
   },
+  "ml-dsa.hash-h@1": {
+    codec: false,
+    ints: [
+      {
+        key: "outBytes",
+        label: "Output length",
+        hint: "128 to expand the key seed, 64 for tr / μ / ρ″, 32 for the commitment hash c̃",
+        min: 1,
+        max: 4096,
+        placeholder: "64",
+      },
+    ],
+    wired: [],
+  },
+  "ml-dsa.expand-a@1": { codec: true, ints: [K_ROW, L_ROW], wired: ["modulus — q"] },
+  "ml-dsa.expand-s@1": {
+    codec: true,
+    ints: [
+      K_ROW,
+      L_ROW,
+      {
+        key: "eta",
+        label: "Secret range (η)",
+        hint: "coefficients land in −η … η; FIPS 204 defines only 2 and 4",
+        min: 2,
+        max: 4,
+        placeholder: "2",
+      },
+    ],
+    wired: ["modulus — q"],
+  },
+  "ml-dsa.expand-mask@1": {
+    codec: true,
+    ints: [L_ROW],
+    wired: ["kappa — κ, this attempt's counter", "gamma1 — γ1, the mask's range", "modulus — q"],
+  },
+  "ml-dsa.sample-in-ball@1": {
+    codec: true,
+    ints: [
+      {
+        key: "tau",
+        label: "Nonzero entries (τ)",
+        hint: "39 for ML-DSA-44; at most 64, the number of sign bits",
+        min: 1,
+        max: 64,
+        placeholder: "39",
+      },
+    ],
+    wired: ["modulus — q"],
+  },
+};
+
+// ML-DSA's message formatter: one param, the context string, edited as hex.
+// It is the one ML-DSA param that is DATA rather than a size — the bytes an
+// application binds its signatures to — and it is variable-length (0…255), so
+// neither the integer rows above nor a fixed row of byte cells fits it. A
+// malformed entry reverts rather than half-applying, the IntInput convention.
+const parseHexBytes = (text: string): number[] | null => {
+  const clean = text.replace(/[\s,]/g, "").replace(/^0x/i, "");
+  if (clean.length % 2 !== 0 || !/^[0-9a-f]*$/i.test(clean)) return null;
+  const out: number[] = [];
+  for (let i = 0; i < clean.length; i += 2) out.push(Number.parseInt(clean.slice(i, i + 2), 16));
+  return out.length <= 255 ? out : null;
+};
+
+const MlDsaFormatMessageBlock = (props: { step: StepLeaf }) => {
+  const context = (): number[] => {
+    const v = (props.step.params as Record<string, Json>).context;
+    return Array.isArray(v) ? (v.filter((b) => typeof b === "number") as number[]) : [];
+  };
+  const asHex = (): string =>
+    context()
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join(" ");
+  const [draft, setDraft] = createSignal<string | null>(null);
+  const commit = () => {
+    const text = draft();
+    setDraft(null);
+    if (text === null) return;
+    const parsed = parseHexBytes(text);
+    if (parsed === null) return;
+    editStepParams(props.step.id, {
+      ...(props.step.params as Record<string, Json>),
+      context: parsed,
+    });
+  };
+  return (
+    <dl class="param-scalars">
+      <div class="param-scalar-row">
+        <dt>Context (hex)</dt>
+        <dd>
+          <input
+            type="text"
+            class="int-input"
+            spellcheck={false}
+            placeholder="empty"
+            value={draft() ?? asHex()}
+            onInput={(e) => setDraft(e.currentTarget.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+              else if (e.key === "Escape") setDraft(null);
+            }}
+          />{" "}
+          <span class="param-scalar-hint">
+            {context().length} of at most 255 bytes — the signer and the verifier must use the same
+            one
+          </span>
+        </dd>
+      </div>
+      <div class="param-scalar-row">
+        <dt>Prefix</dt>
+        <dd>
+          Always <code>00</code> (the message itself, not a pre-hash) then the context's length.
+        </dd>
+      </div>
+    </dl>
+  );
 };
 
 const MlDsaBlock = (props: { step: StepLeaf }) => {
@@ -3112,6 +3249,10 @@ const NO_PARAMS_PORT_NATIVE_TYPES = new Set([
   // ML-KEM P4. The two things it needs to know — which ciphertext arrived and
   // which one was recomputed — are WIRED, not configured, which is the point.
   "ml-kem.select-shared-secret@1",
+  // ML-DSA P2. The transform pair takes nothing: the modulus and the ζ table are
+  // built in, deliberately, because the table means nothing at any other q.
+  "ml-dsa.ntt@1",
+  "ml-dsa.intt@1",
 ]);
 
 const portNativeNoParamsLabel = (stepType: string): string => {
@@ -3139,6 +3280,10 @@ const portNativeNoParamsLabel = (stepType: string): string => {
       return "H — SHA3-256 (FIPS 203 §4.1), collapsed to one frame. No editable parameters. It binds a ciphertext to one public key rather than keeping anything secret. Watch the same sponge decomposed under Hash → SHA3-256.";
     case "ml-kem.kdf-j@1":
       return "J — SHAKE256 squeezed to 32 bytes (FIPS 203 §4.1). No editable parameters; the length is fixed because its output has to be indistinguishable from a real shared secret. Watch the same sponge decomposed under Hash → SHAKE256.";
+    case "ml-dsa.ntt@1":
+      return "NTT mod 8380417 (FIPS 204 Algorithm 41), collapsed to one frame. No editable parameters; the modulus and twiddle table are built in, since the table only makes sense at q = 8380417. Watch the same transform layer by layer under Lattice → NTT mod 8380417.";
+    case "ml-dsa.intt@1":
+      return "Inverse NTT mod 8380417 (FIPS 204 Algorithm 42), collapsed to one frame. No editable parameters; the modulus, twiddle table and final 256⁻¹ scaling are built in. Watch the same transform layer by layer under Lattice → NTT mod 8380417.";
     case "ml-kem.select-shared-secret@1":
       return "Implicit rejection (FIPS 203 Algorithm 18) — returns the real shared secret when the re-encrypted ciphertext matches the one that arrived, and an undetectable decoy when it does not. No editable parameters; both ciphertexts and both candidate secrets arrive on ports. There is no branch here even in a real implementation: whether a ciphertext was rejected is precisely the bit this construction hides.";
     // Note the contrast with `add-mod-32@1`, which is fixed to 2³² because its

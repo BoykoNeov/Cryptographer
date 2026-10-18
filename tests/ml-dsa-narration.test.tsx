@@ -245,3 +245,139 @@ describe("hints — MakeHint, UseHint and the count", () => {
     expect(proseText(mlDsaHintCountNarration(frame("hc-over")))).toContain("too many: 1 > ω = 0");
   });
 });
+
+// ─── The one-frame steps: NTT, H, the samplers, the formatter ─────────────
+
+describe("ML-DSA narration — the one-frame steps, on real frames", () => {
+  /** The seed is the spec's input; everything else hangs off it. */
+  const seedSpec: CipherSpec = {
+    id: "ml-dsa-narration-samplers",
+    name: "ML-DSA sampler narration fixture",
+    stateShape: "bytes",
+    inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+    steps: [
+      constant("q", ML_DSA_Q_BYTES),
+      constant("kappa", new Uint8Array([0, 8])),
+      constant("gamma1", mlDsaCoeffBytes(1 << 17)),
+      {
+        kind: "step",
+        id: "h128",
+        type: "ml-dsa.hash-h@1",
+        params: { outBytes: 128 },
+        portInputs: { input },
+      },
+      {
+        kind: "step",
+        id: "a",
+        type: "ml-dsa.expand-a@1",
+        params: { ...P, k: 4, l: 4 },
+        portInputs: { input, modulus: from("q") },
+      },
+      {
+        kind: "step",
+        id: "s",
+        type: "ml-dsa.expand-s@1",
+        params: { ...P, k: 4, l: 4, eta: 2 },
+        portInputs: { input: from("h128"), modulus: from("q") },
+      },
+      {
+        kind: "step",
+        id: "y",
+        type: "ml-dsa.expand-mask@1",
+        params: { ...P, l: 4 },
+        portInputs: {
+          input: from("h128"),
+          kappa: from("kappa"),
+          gamma1: from("gamma1"),
+          modulus: from("q"),
+        },
+      },
+      {
+        kind: "step",
+        id: "ntt",
+        type: "ml-dsa.ntt@1",
+        params: {},
+        portInputs: { input: from("y") },
+      },
+      {
+        kind: "step",
+        id: "intt",
+        type: "ml-dsa.intt@1",
+        params: {},
+        portInputs: { input: from("ntt") },
+      },
+      {
+        kind: "step",
+        id: "c",
+        type: "ml-dsa.sample-in-ball@1",
+        params: { ...P, tau: 39 },
+        portInputs: { input, modulus: from("q") },
+      },
+      {
+        kind: "step",
+        id: "m",
+        type: "ml-dsa.format-message@1",
+        params: { context: [0x61, 0x62] },
+        portInputs: { input },
+      },
+    ],
+  };
+  const seed = Uint8Array.from({ length: 32 }, (_, i) => (i * 29 + 3) & 0xff);
+  const sFrames = runSpec(seedSpec, registry, {
+    initialState: { shape: "bytes", bytes: seed },
+    initialAux: new Map<string, AuxValue>([["key", new Uint8Array(0)]]),
+  }).frames;
+  const sFrame = (id: string): TraceFrame => {
+    const f = sFrames.find((x) => x.stepId === id);
+    if (f === undefined) throw new Error(`no frame ${id}`);
+    return f;
+  };
+
+  it("every one-frame step dispatches to a narrator that accepts its frame", () => {
+    for (const id of ["h128", "a", "s", "y", "ntt", "intt", "c", "m"]) {
+      const f = sFrame(id);
+      const units = lookupNarration(f.stepType)?.(f);
+      expect(units, `${f.stepType} declined its frame`).not.toBeNull();
+      expect(units?.length ?? 0).toBeGreaterThan(0);
+    }
+  });
+
+  it("H names its call site by the output length", () => {
+    const text = proseText(lookupNarration("ml-dsa.hash-h@1")?.(sFrame("h128")) ?? null);
+    expect(text).toContain("SHAKE256 over 32 bytes → 128");
+    expect(text).toContain("ρ (32 bytes), ρ′ (64) and K (32)");
+  });
+
+  it("ExpandMask reads κ off its port: κ = 8 is attempt 3", () => {
+    const text = proseText(lookupNarration("ml-dsa.expand-mask@1")?.(sFrame("y")) ?? null);
+    expect(text).toContain("attempt 3: counters 8 … 11");
+  });
+
+  it("the NTT pair counts its polynomials and says where the traced version lives", () => {
+    const text = proseText(lookupNarration("ml-dsa.ntt@1")?.(sFrame("ntt")) ?? null);
+    expect(text).toContain("4 polynomials transformed");
+    expect(text).toContain("NTT mod 8380417");
+    expect(proseText(lookupNarration("ml-dsa.intt@1")?.(sFrame("intt")) ?? null)).toContain(
+      "transformed back",
+    );
+  });
+
+  it("SampleInBall reports τ entries and the frame's own rejection count", () => {
+    const f = sFrame("c");
+    const rej = f.portOutputs?.get("rejections") as Uint8Array;
+    const count = ((rej[0] as number) << 8) | (rej[1] as number);
+    const text = proseText(lookupNarration("ml-dsa.sample-in-ball@1")?.(f) ?? null);
+    expect(text).toContain("39 nonzero");
+    expect(text).toContain(`${count} squeezed byte${count === 1 ? "" : "s"} thrown away`);
+  });
+
+  it("ExpandS counts the five values it actually drew", () => {
+    const text = proseText(lookupNarration("ml-dsa.expand-s@1")?.(sFrame("s")) ?? null);
+    expect(text).toContain("2,048 secret coefficients, each in −2 … 2");
+  });
+
+  it("format-message shows the context's length byte", () => {
+    const text = proseText(lookupNarration("ml-dsa.format-message@1")?.(sFrame("m")) ?? null);
+    expect(text).toContain("prefix 00 02 + a 2-byte context");
+  });
+});

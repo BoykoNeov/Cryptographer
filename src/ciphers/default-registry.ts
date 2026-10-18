@@ -151,6 +151,19 @@ import {
   mlDsaDecomposeDoc,
   mlDsaDecomposePortContract,
 } from "../steps/ml-dsa-decompose";
+import { mlDsaExpandA, mlDsaExpandADoc, mlDsaExpandAPortContract } from "../steps/ml-dsa-expand-a";
+import {
+  mlDsaExpandMask,
+  mlDsaExpandMaskDoc,
+  mlDsaExpandMaskPortContract,
+} from "../steps/ml-dsa-expand-mask";
+import { mlDsaExpandS, mlDsaExpandSDoc, mlDsaExpandSPortContract } from "../steps/ml-dsa-expand-s";
+import {
+  mlDsaFormatMessage,
+  mlDsaFormatMessageDoc,
+  mlDsaFormatMessagePortContract,
+} from "../steps/ml-dsa-format-message";
+import { mlDsaHashH, mlDsaHashHDoc, mlDsaHashHPortContract } from "../steps/ml-dsa-hash-h";
 import {
   mlDsaHintCount,
   mlDsaHintCountDoc,
@@ -162,10 +175,22 @@ import {
   mlDsaMakeHintPortContract,
 } from "../steps/ml-dsa-make-hint";
 import {
+  mlDsaIntt,
+  mlDsaInttDoc,
+  mlDsaNtt,
+  mlDsaNttDoc,
+  mlDsaNttPortContract,
+} from "../steps/ml-dsa-ntt";
+import {
   mlDsaPower2Round,
   mlDsaPower2RoundDoc,
   mlDsaPower2RoundPortContract,
 } from "../steps/ml-dsa-power2round";
+import {
+  mlDsaSampleInBall,
+  mlDsaSampleInBallDoc,
+  mlDsaSampleInBallPortContract,
+} from "../steps/ml-dsa-sample-in-ball";
 import { mlDsaUseHint, mlDsaUseHintDoc, mlDsaUseHintPortContract } from "../steps/ml-dsa-use-hint";
 import { mlKemHashG, mlKemHashGDoc, mlKemHashGPortContract } from "../steps/ml-kem-hash-g";
 import { mlKemHashH, mlKemHashHDoc, mlKemHashHPortContract } from "../steps/ml-kem-hash-h";
@@ -1319,6 +1344,60 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: mlDsaHintCount,
     shape: mlDsaHintCountPortContract,
     doc: mlDsaHintCountDoc,
+  });
+  // The transform and the Keccak calls, one frame each: the ML-KEM "third
+  // kind" of monolith, a cross-reference. The NTT is traced in full under
+  // Lattice -> NTT mod 8380417 and the sponge under Hash -> SHAKE128/256; both
+  // collapse here for volume (one signing attempt runs 21 transforms). The NTT
+  // pair is pinned against the traced spec; the samplers draw from the SHAKE
+  // stream incrementally, because every one but ExpandMask rejects candidates.
+  r.register("ml-dsa.ntt@1", {
+    kind: "ported",
+    executor: mlDsaNtt,
+    shape: mlDsaNttPortContract,
+    doc: mlDsaNttDoc,
+  });
+  r.register("ml-dsa.intt@1", {
+    kind: "ported",
+    executor: mlDsaIntt,
+    shape: mlDsaNttPortContract,
+    doc: mlDsaInttDoc,
+  });
+  r.register("ml-dsa.hash-h@1", {
+    kind: "ported",
+    executor: mlDsaHashH,
+    shape: mlDsaHashHPortContract,
+    doc: mlDsaHashHDoc,
+  });
+  r.register("ml-dsa.expand-a@1", {
+    kind: "ported",
+    executor: mlDsaExpandA,
+    shape: mlDsaExpandAPortContract,
+    doc: mlDsaExpandADoc,
+  });
+  r.register("ml-dsa.expand-s@1", {
+    kind: "ported",
+    executor: mlDsaExpandS,
+    shape: mlDsaExpandSPortContract,
+    doc: mlDsaExpandSDoc,
+  });
+  r.register("ml-dsa.expand-mask@1", {
+    kind: "ported",
+    executor: mlDsaExpandMask,
+    shape: mlDsaExpandMaskPortContract,
+    doc: mlDsaExpandMaskDoc,
+  });
+  r.register("ml-dsa.sample-in-ball@1", {
+    kind: "ported",
+    executor: mlDsaSampleInBall,
+    shape: mlDsaSampleInBallPortContract,
+    doc: mlDsaSampleInBallDoc,
+  });
+  r.register("ml-dsa.format-message@1", {
+    kind: "ported",
+    executor: mlDsaFormatMessage,
+    shape: mlDsaFormatMessagePortContract,
+    doc: mlDsaFormatMessageDoc,
   });
   r.register("shift-bits-right@1", {
     kind: "ported",

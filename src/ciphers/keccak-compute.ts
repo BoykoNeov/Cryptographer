@@ -228,33 +228,72 @@ export const shake256 = (message: Uint8Array, outputBytes: number): Uint8Array =
   keccakSponge(message, RATE_SHAKE256, DOMAIN_SHAKE, outputBytes);
 
 /**
- * An incremental SHAKE128 squeeze, for `SampleNTT`.
+ * An incremental SHAKE squeeze at either rate — for the samplers that reject
+ * candidates (`SampleNTT`, ML-DSA's `RejNTTPoly`, `RejBoundedPoly`,
+ * `SampleInBall`).
  *
- * `SampleNTT` rejects candidate coefficients `≥ q` and cannot know in advance
- * how many bytes it will need — the count is a random variable with no fixed
- * bound. Squeezing a hardcoded number of blocks is therefore a *silently wrong
- * matrix on some seeds*: the same failure class as an under-sized RSA unroll.
- * This returns a stateful reader so the caller's loop condition can be the
- * accepted-coefficient count, which is the only correct one.
+ * A rejection sampler cannot know in advance how many bytes it will need — the
+ * count is a random variable with no fixed bound. Squeezing a hardcoded number
+ * of blocks is therefore a *silently wrong output on some seeds*: the same
+ * failure class as an under-sized RSA unroll. This returns a stateful reader so
+ * the caller's loop condition can be the accepted count, which is the only
+ * correct one.
  */
-export const shake128Reader = (message: Uint8Array): (() => Uint8Array) => {
+const shakeReader = (message: Uint8Array, rate: number): (() => Uint8Array) => {
   const padded = outputOf(
-    keccakPad(one("input", message), { rate: RATE_SHAKE128, domainByte: DOMAIN_SHAKE }, CTX),
+    keccakPad(one("input", message), { rate, domainByte: DOMAIN_SHAKE }, CTX),
     "pad10*1",
   );
   let state: Uint8Array = new Uint8Array(STATE_BYTES);
-  for (let offset = 0; offset < padded.length; offset += RATE_SHAKE128) {
+  for (let offset = 0; offset < padded.length; offset += rate) {
     const absorbed = new Uint8Array(state);
-    for (let i = 0; i < RATE_SHAKE128; i++) {
+    for (let i = 0; i < rate; i++) {
       absorbed[i] = (absorbed[i] as number) ^ (padded[offset + i] as number);
     }
     state = keccakPermuteBytes(absorbed);
   }
   let first = true;
-  /** Squeeze the next 168-byte block. */
+  /** Squeeze the next `rate`-byte block. */
   return (): Uint8Array => {
     if (!first) state = keccakPermuteBytes(state);
     first = false;
-    return state.slice(0, RATE_SHAKE128);
+    return state.slice(0, rate);
+  };
+};
+
+/** SHAKE128, 168 bytes per squeeze — `SampleNTT` and `RejNTTPoly`. */
+export const shake128Reader = (message: Uint8Array): (() => Uint8Array) =>
+  shakeReader(message, RATE_SHAKE128);
+
+/** SHAKE256, 136 bytes per squeeze — `RejBoundedPoly` and `SampleInBall`. */
+export const shake256Reader = (message: Uint8Array): (() => Uint8Array) =>
+  shakeReader(message, RATE_SHAKE256);
+
+/**
+ * The same squeeze, one byte at a time, counting what it has handed out.
+ *
+ * FIPS 204 states its samplers as `H.Squeeze(ctx, 1)` / `G.Squeeze(ctx, 3)` —
+ * a continuous byte stream with no block boundaries in sight. Reading through
+ * this keeps the executors in that shape, so a sampler that takes three bytes
+ * at a time does not have to reason about a group straddling two blocks.
+ * (At the shipped rates it never does — 168 is a multiple of 3 — but a learner
+ * changing the rate would otherwise get a silently different stream.)
+ */
+export const byteStream = (
+  nextBlock: () => Uint8Array,
+): { next: () => number; consumed: () => number } => {
+  let block: Uint8Array = new Uint8Array(0);
+  let pos = 0;
+  let consumed = 0;
+  return {
+    next: () => {
+      if (pos >= block.length) {
+        block = nextBlock();
+        pos = 0;
+      }
+      consumed += 1;
+      return block[pos++] as number;
+    },
+    consumed: () => consumed,
   };
 };

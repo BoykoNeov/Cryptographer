@@ -55,9 +55,17 @@ import {
 } from "./lattice";
 import {
   mlDsaDecomposeNarration,
+  mlDsaExpandANarration,
+  mlDsaExpandMaskNarration,
+  mlDsaExpandSNarration,
+  mlDsaFormatMessageNarration,
+  mlDsaHashHNarration,
   mlDsaHintCountNarration,
+  mlDsaInttNarration,
   mlDsaMakeHintNarration,
+  mlDsaNttNarration,
   mlDsaPower2RoundNarration,
+  mlDsaSampleInBallNarration,
   mlDsaUseHintNarration,
   zqInfNormBelowNarration,
 } from "./ml-dsa";
@@ -216,6 +224,14 @@ export const initNarrationRegistry = (): void => {
   registerNarration("ml-dsa.make-hint@1", mlDsaMakeHintNarration);
   registerNarration("ml-dsa.use-hint@1", mlDsaUseHintNarration);
   registerNarration("ml-dsa.hint-count@1", mlDsaHintCountNarration);
+  registerNarration("ml-dsa.ntt@1", mlDsaNttNarration);
+  registerNarration("ml-dsa.intt@1", mlDsaInttNarration);
+  registerNarration("ml-dsa.hash-h@1", mlDsaHashHNarration);
+  registerNarration("ml-dsa.expand-a@1", mlDsaExpandANarration);
+  registerNarration("ml-dsa.expand-s@1", mlDsaExpandSNarration);
+  registerNarration("ml-dsa.expand-mask@1", mlDsaExpandMaskNarration);
+  registerNarration("ml-dsa.sample-in-ball@1", mlDsaSampleInBallNarration);
+  registerNarration("ml-dsa.format-message@1", mlDsaFormatMessageNarration);
   initialized = true;
 };
 

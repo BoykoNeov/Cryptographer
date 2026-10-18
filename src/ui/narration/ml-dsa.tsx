@@ -23,7 +23,7 @@
 
 import { decompose, modPm } from "@/core/ml-dsa-arith";
 import type { TraceFrame } from "@/core/types";
-import { ValueList, coeffs, intParam, modulusOf, num, safeVecParams } from "./lattice";
+import { Bytes, ValueList, coeffs, intParam, modulusOf, num, safeVecParams } from "./lattice";
 import type { NarrationFn } from "./registry";
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
@@ -417,6 +417,293 @@ export const mlDsaHintCountNarration: NarrationFn = (frame) => {
                 ? "That fills every slot — and exactly full is allowed."
                 : `That leaves ${num(omega - count)} slot${omega - count === 1 ? "" : "s"} unused.`
               : "It cannot be written down, so the candidate signature is thrown away and the signer tries again."}
+          </p>
+        </div>
+      ),
+    },
+  ];
+};
+
+// ─── ml-dsa.ntt@1 / ml-dsa.intt@1 ──────────────────────────────────────────
+
+/**
+ * The cross-reference monoliths. The per-frame facts are how many polynomials
+ * went through and what coefficient 0 became; the standing fact — this is one
+ * frame of something traced elsewhere — is said in the second row, in the
+ * ML-KEM hash narrators' words.
+ */
+const nttNarration =
+  (direction: "forward" | "inverse"): NarrationFn =>
+  (frame) => {
+    const input = frame.portInputs?.get("input");
+    const out = frame.portOutputs?.get("output");
+    if (!(input instanceof Uint8Array) || !(out instanceof Uint8Array)) return null;
+    if (input.length === 0 || input.length % 1024 !== 0 || out.length !== input.length) return null;
+    const p = { coeffBytes: 4, littleEndian: false };
+    const polys = input.length / 1024;
+    const a0 = Number(coeffs(input.subarray(0, 4), p)[0]);
+    const b0 = Number(coeffs(out.subarray(0, 4), p)[0]);
+    return [
+      {
+        key: "count",
+        label: `1 — ${polys} polynomial${polys === 1 ? "" : "s"} ${direction === "forward" ? "transformed" : "transformed back"}`,
+        Prose: () => (
+          <div>
+            <p>
+              {direction === "forward"
+                ? `Each of the ${polys} polynomial${polys === 1 ? "" : "s"} went through all eight layers of the transform on its own. Afterwards, multiplying two of them is one product per coefficient.`
+                : `Each of the ${polys} polynomial${polys === 1 ? "" : "s"} went back through the eight layers in reverse, then every coefficient was multiplied by 256⁻¹ = 8,347,681.`}
+            </p>
+            <ValueList
+              items={[
+                { label: "coefficient 0 in", text: num(a0) },
+                { label: "coefficient 0 out", text: num(b0) },
+              ]}
+            />
+          </div>
+        ),
+      },
+      {
+        key: "one-frame",
+        label: "2 — one frame here, eight layers under Lattice",
+        Prose: () => (
+          <div>
+            <p>
+              This is the whole transform collapsed to one step, because ML-DSA needs about twenty
+              of them per signing attempt. Select <b>NTT mod 8380417</b> under <b>Lattice</b> to
+              watch the same transform run butterfly by butterfly; the two are tested to agree.
+            </p>
+          </div>
+        ),
+      },
+    ];
+  };
+
+export const mlDsaNttNarration: NarrationFn = nttNarration("forward");
+export const mlDsaInttNarration: NarrationFn = nttNarration("inverse");
+
+// ─── ml-dsa.hash-h@1 ───────────────────────────────────────────────────────
+
+/** What a call of a given length is, at ML-DSA's call sites. */
+const hashJob = (outBytes: number): string => {
+  switch (outBytes) {
+    case 128:
+      return "the key-seed expansion: ρ (32 bytes), ρ′ (64) and K (32)";
+    case 64:
+      return "tr, μ or ρ″ — a 64-byte fingerprint of the public key, of the message, or of this signature's randomness";
+    case 32:
+      return "c̃, the commitment hash a signature carries";
+    default:
+      return "a length none of ML-DSA's own calls uses";
+  }
+};
+
+export const mlDsaHashHNarration: NarrationFn = (frame) => {
+  const input = frame.portInputs?.get("input");
+  const out = frame.portOutputs?.get("output");
+  if (!(input instanceof Uint8Array) || !(out instanceof Uint8Array)) return null;
+  return [
+    {
+      key: "digest",
+      label: `1 — SHAKE256 over ${num(input.length)} bytes → ${num(out.length)}`,
+      Prose: (props) => (
+        <div>
+          <p>
+            {num(out.length)} bytes is {hashJob(out.length)}.
+          </p>
+          <p>
+            <Bytes bytes={out.subarray(0, Math.min(out.length, 32))} fmt={props.fmt} />
+            {out.length > 32 ? " …" : ""}
+          </p>
+          <p>
+            The sponge is the one under <b>Hash → SHAKE256</b>, collapsed to one frame here.
+          </p>
+        </div>
+      ),
+    },
+  ];
+};
+
+// ─── ml-dsa.expand-a@1 / expand-s@1 / expand-mask@1 ────────────────────────
+
+export const mlDsaExpandANarration: NarrationFn = (frame) => {
+  const k = intParam(frame.params, "k");
+  const l = intParam(frame.params, "l");
+  const p = safeVecParams(frame.params, "ml-dsa.expand-a@1");
+  const out = frame.portOutputs?.get("output");
+  if (k === null || l === null || !p || !(out instanceof Uint8Array)) return null;
+  const first = coeffs(out.subarray(0, 4 * p.coeffBytes), p).map((c) => num(Number(c)));
+  return [
+    {
+      key: "matrix",
+      label: `1 — a ${k} × ${l} matrix: ${num(k * l)} polynomials, ${num(k * l * 256)} coefficients`,
+      Prose: () => (
+        <div>
+          <p>
+            Every entry was squeezed out of SHAKE256's smaller sibling, SHAKE128, from the public
+            seed followed by two index bytes — the column, then the row. Candidates of 23 bits were
+            kept only when below q, so each entry cost a slightly different number of bytes.
+          </p>
+          <p>
+            Entry [0][0] begins <code>{first.join(", ")}, …</code> — already in the transformed
+            domain, because a uniformly random matrix is just as random after the transform.
+          </p>
+        </div>
+      ),
+    },
+  ];
+};
+
+export const mlDsaExpandSNarration: NarrationFn = (frame) => {
+  const p = safeVecParams(frame.params, "ml-dsa.expand-s@1");
+  const eta = intParam(frame.params, "eta");
+  if (!p || eta === null) return null;
+  const qb = modulusOf(frame, p);
+  const s1 = vecOf(frame.portOutputs, "s1", p);
+  const s2 = vecOf(frame.portOutputs, "s2", p);
+  if (qb === null || s1 === null || s2 === null) return null;
+  const q = Number(qb);
+  const all = [...s1, ...s2].map((v) => signed(v, q));
+  const counts = new Map<number, number>();
+  for (const v of all) counts.set(v, (counts.get(v) ?? 0) + 1);
+  const histogram: { label: string; text: string }[] = [];
+  for (let v = -eta; v <= eta; v++)
+    histogram.push({ label: sNum(v), text: num(counts.get(v) ?? 0) });
+  return [
+    {
+      key: "histogram",
+      label: `1 — ${num(all.length)} secret coefficients, each in ${sNum(-eta)} … ${eta}`,
+      Prose: () => (
+        <div>
+          <p>
+            How often each value came up in s1 and s2 together. The rule draws them uniformly, so
+            the counts should be roughly equal — roughly{" "}
+            {num(Math.round(all.length / (2 * eta + 1)))} each:
+          </p>
+          <ValueList items={histogram} />
+          <p>
+            A negative value travels the wire as q minus its size: −1 is <code>{num(q - 1)}</code>.
+          </p>
+        </div>
+      ),
+    },
+  ];
+};
+
+export const mlDsaExpandMaskNarration: NarrationFn = (frame) => {
+  const p = safeVecParams(frame.params, "ml-dsa.expand-mask@1");
+  const l = intParam(frame.params, "l");
+  if (!p || l === null) return null;
+  const kappa = scalarOf(frame, "kappa");
+  const gamma1 = scalarOf(frame, "gamma1");
+  const qb = modulusOf(frame, p);
+  const y = vecOf(frame.portOutputs, "output", p);
+  if (kappa === null || gamma1 === null || qb === null || y === null) return null;
+  const q = Number(qb);
+  let max = 0;
+  for (const v of y) max = Math.max(max, Math.abs(signed(v, q)));
+  const attempt = Math.floor(kappa / l) + 1;
+  return [
+    {
+      key: "counter",
+      label: `1 — attempt ${attempt}: counters ${num(kappa)} … ${num(kappa + l - 1)}`,
+      Prose: () => (
+        <div>
+          <p>
+            κ = {num(kappa)} and l = {l}, so this is signing attempt {attempt}, and its {l}{" "}
+            polynomials were drawn from counters {num(kappa)} to {num(kappa + l - 1)}. Every attempt
+            uses counters no earlier attempt touched, so its mask is new.
+          </p>
+          <p>
+            The coefficients spread over −{num(gamma1 - 1)} … {num(gamma1)}; the largest here is{" "}
+            {num(max)} from zero. The mask is big on purpose: it is what drowns out the secret.
+          </p>
+        </div>
+      ),
+    },
+  ];
+};
+
+// ─── ml-dsa.sample-in-ball@1 ───────────────────────────────────────────────
+
+export const mlDsaSampleInBallNarration: NarrationFn = (frame) => {
+  const p = safeVecParams(frame.params, "ml-dsa.sample-in-ball@1");
+  const tau = intParam(frame.params, "tau");
+  if (!p || tau === null) return null;
+  const qb = modulusOf(frame, p);
+  const c = vecOf(frame.portOutputs, "output", p);
+  const rej = frame.portOutputs?.get("rejections");
+  if (qb === null || c === null || !(rej instanceof Uint8Array)) return null;
+  const q = Number(qb);
+  const s = c.map((v) => signed(v, q));
+  const plus = s.filter((v) => v === 1).length;
+  const minus = s.filter((v) => v === -1).length;
+  const rejections = ((rej[0] ?? 0) << 8) | (rej[1] ?? 0);
+  const positions = s.flatMap((v, i) => (v !== 0 ? [i] : []));
+  return [
+    {
+      key: "shape",
+      label: `1 — ${plus + minus} nonzero: ${plus} × (+1), ${minus} × (−1)`,
+      Prose: () => (
+        <div>
+          <p>
+            Exactly τ = {tau} of the 256 coefficients are ±1, at positions{" "}
+            {positions.slice(0, 10).join(", ")}
+            {positions.length > 10 ? ", …" : ""}. The rest are 0.
+          </p>
+          <p>
+            That sparseness is the point: multiplying a secret whose coefficients are at most η by
+            this c gives coefficients no bigger than τ·η — the β the signing checks leave room for.
+          </p>
+        </div>
+      ),
+    },
+    {
+      key: "rejections",
+      label: `2 — ${rejections} squeezed byte${rejections === 1 ? "" : "s"} thrown away`,
+      Prose: () => (
+        <div>
+          <p>
+            Each placement needs a byte no larger than the position being filled, and a larger one
+            is discarded. On this hash that happened {rejections} time{rejections === 1 ? "" : "s"}.
+            Another hash would give another number — this step's cost depends on its input's value,
+            not its size.
+          </p>
+        </div>
+      ),
+    },
+  ];
+};
+
+// ─── ml-dsa.format-message@1 ───────────────────────────────────────────────
+
+export const mlDsaFormatMessageNarration: NarrationFn = (frame) => {
+  const input = frame.portInputs?.get("input");
+  const out = frame.portOutputs?.get("output");
+  if (!(input instanceof Uint8Array) || !(out instanceof Uint8Array) || out.length < 2) return null;
+  const ctxLen = out[1] as number;
+  return [
+    {
+      key: "prefix",
+      label:
+        ctxLen === 0
+          ? `1 — prefix 00 00: no context, ${num(input.length)}-byte message`
+          : `1 — prefix 00 ${ctxLen.toString(16).padStart(2, "0")} + a ${ctxLen}-byte context`,
+      Prose: (props) => (
+        <div>
+          <p>
+            The first byte, 0, says the message itself is being signed (the pre-hashed variant uses
+            1). The second is the context string's length, {ctxLen}
+            {ctxLen === 0 ? ", so nothing follows it but the message." : ":"}
+          </p>
+          {ctxLen > 0 ? (
+            <p>
+              <Bytes bytes={out.subarray(2, 2 + ctxLen)} fmt={props.fmt} />
+            </p>
+          ) : null}
+          <p>
+            Leave this prefix out and every other implementation rejects the signature, because it
+            would be checking different bytes from the ones that were signed.
           </p>
         </div>
       ),
