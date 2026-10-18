@@ -3282,6 +3282,8 @@ const NO_PARAMS_PORT_NATIVE_TYPES = new Set([
   // built in, deliberately, because the table means nothing at any other q.
   "ml-dsa.ntt@1",
   "ml-dsa.intt@1",
+  // ML-DSA P3. Like ML-KEM's select, everything it judges arrives on ports.
+  "ml-dsa.verdict@1",
 ]);
 
 const portNativeNoParamsLabel = (stepType: string): string => {
@@ -3313,6 +3315,8 @@ const portNativeNoParamsLabel = (stepType: string): string => {
       return "NTT mod 8380417 (FIPS 204 Algorithm 41), collapsed to one frame. No editable parameters; the modulus and twiddle table are built in, since the table only makes sense at q = 8380417. Watch the same transform layer by layer under Lattice → NTT mod 8380417.";
     case "ml-dsa.intt@1":
       return "Inverse NTT mod 8380417 (FIPS 204 Algorithm 42), collapsed to one frame. No editable parameters; the modulus, twiddle table and final 256⁻¹ scaling are built in. Watch the same transform layer by layer under Lattice → NTT mod 8380417.";
+    case "ml-dsa.verdict@1":
+      return "The verdict of ML-DSA verification (FIPS 204 Algorithm 8) — valid only if the recomputed challenge c̃′ matches the signature's c̃, every coefficient of z is below γ1 − β, and the hint was well formed. No editable parameters; all three facts arrive on ports, so the bound is changed where γ1 and β are.";
     case "ml-kem.select-shared-secret@1":
       return "Implicit rejection (FIPS 203 Algorithm 18) — returns the real shared secret when the re-encrypted ciphertext matches the one that arrived, and an undetectable decoy when it does not. No editable parameters; both ciphertexts and both candidate secrets arrive on ports. There is no branch here even in a real implementation: whether a ciphertext was rejected is precisely the bit this construction hides.";
     // Note the contrast with `add-mod-32@1`, which is fixed to 2³² because its

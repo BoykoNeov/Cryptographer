@@ -1,6 +1,6 @@
 # ML-DSA-44 — the post-quantum signature, and the app's first loop that stops on its own
 
-**Status: P1 + P2 SHIPPED 2026-10-18; P3–P5 open.** Five phases. Successor to
+**Status: P1 + P2 + P3 SHIPPED 2026-10-18; P4–P5 open.** Five phases. Successor to
 `docs/plans/unified-stargazing-quasar.md` (ML-KEM, CLOSED), which deferred
 ML-DSA to "its own plan and its own advisor pass" because signing retries an
 unbounded number of times. This is that plan.
@@ -401,6 +401,72 @@ packers. That is twenty steps: eighteen `ml-dsa.*` plus `zq-vec-mul@1` and
 - The `ExpandA` byte order `ρ ‖ j ‖ i` vs `ρ ‖ i ‖ j` (a transpose) is a
   perturbation that leaves ρ and `sk` green and breaks `pk`. Pin that
   signature.
+
+**P3 OUTCOME (2026-10-18).** Shipped as `src/ciphers/ml-dsa-44.ts` (the
+verification spec, plus the key-generation body, group and matrix-product
+builders P4 will reuse) and one new step, `ml-dsa.verdict@1`. Every check
+passed on the first run. Eight things to carry forward:
+
+1. **Verification's input is the signature; the message is an editable
+   leaf.** A spec has one input, and `split-bytes@1` has no open-ended slot,
+   so a variable-length message and a fixed 2420-byte signature cannot share
+   it. The signature is fixed-width, so it takes the input, which is also
+   ML-KEM decapsulation's shape. How a learner types the message in P4's UI is
+   a user-facing question to ask then; the body is binding-driven
+   (`mlDsaVerifyNodes(ctx, constants, { pk, mPrime, signature })`), so either
+   answer only changes the wrapper.
+2. **No standalone key-generation spec.** K-PKE had one; here the checkpoints
+   (ρ, `sk`, `pk`) are read off the trace inside the shipped verify spec's
+   `keygen.` group, which tests the embedding that ships rather than a second
+   copy of it.
+3. **Constants:** q, γ1, γ2, β and ω live in `cipherConstants` (editable in
+   the Constants panel). γ1 − β (the norm bound) and γ1 − 1 (z's packing low
+   end) are `sub@1` leaves, never second constants. Values fixed by a
+   structural param (η, the t0 range, 2^d) are `constant-load@1` leaves. Key
+   generation's group loads only its own q.
+4. **All k·l matrix products are ONE `zq-vec-mul@1` frame**: Â against
+   `concat(v̂ × k)`, then a split and a per-row add chain (`matVecNodes`,
+   shared with P4). Element-wise multiplication makes that possible, and it is
+   the contrast with ML-KEM's per-pair multiply.
+5. **The verdict reads three flags, and the tests read its INPUTS.** A
+   malformed hint arrives as an all-zero hint with `valid = 0`, which also
+   breaks the challenge, so the output byte alone cannot tell whether the hint
+   flag is wired. The malformed-signature test asserts the verdict's
+   `hintValid` input, and a perturbation that rewires it shows the output
+   stays 0 while that assertion fails. The narrator names EVERY failed check
+   for the same reason.
+6. **A new fixture case, `p3.overNorm`, makes the norm check load-bearing.**
+   It is the default pair's first signing attempt (rejected for z), packed
+   anyway: z exceeds γ1 − β but still fits the packing range, ct0 and the
+   hint count pass, so the challenge matches and only the norm flag rejects
+   it. Node and noble both reject it (recorded). Without it, nothing in
+   verification needs the norm check, because a flipped z bit fails on the
+   challenge first.
+7. **Defaults (fixture `p3.defaultPair`):** the counting seed, the message
+   "Hello, world!" (deterministic signing takes three attempts: z, then r0,
+   then accepted) and noble's deterministic signature, which Node verifies.
+   P4's signing must reproduce exactly those bytes.
+8. **Perturbations run:** drop ‖ k ‖ l (ρ breaks); compare c̃ with itself (every
+   positive case still verifies, only a negative case catches it); drop the
+   norm flag (only the over-norm case catches it); drop the hint flag (output
+   still 0, the input assertion catches it). ExpandA's index order is NOT a
+   spec-level edge (the step is a monolith); `tests/ml-dsa-44-oracle.test.ts`
+   keeps that perturbation.
+
+**Cost.** One verification is 91 frames and ~0.2–0.5 s in `runSpec`, almost
+all of it the two ExpandA calls' incremental SHAKE128 (the shared byte-level
+Keccak). P4's attempt loop runs ExpandA once, outside the loop, so this does
+not multiply by κ. `tests/ml-dsa-44-spec.test.ts` memoizes runs.
+
+**Browser smoke.** No selector entry yet, so the spec was loaded through a
+share link (`#doc=`) into ML-KEM-768's decrypt slot, which is the only way to
+reach it. The default signature showed `01` and, at frame 91 of 91, "VALID:
+all three checks pass". One flipped challenge bit showed `00` and "INVALID:
+c̃′ ≠ c̃" with the other two checks ticked. The graph drew with key
+generation as one collapsed box and no console errors. A hand-built document
+without `keyBytes: []` kept the previous algorithm's 16-byte key and refused
+to run ("key: expected 0 bytes, got 16"). That is an artefact of the
+hand-built document; the app's own saves were not checked for it.
 
 ### P4 — signing, the loop, and the selector entry
 

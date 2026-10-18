@@ -856,3 +856,91 @@ export const mlDsaHintUnpackNarration: NarrationFn = (frame) => {
     },
   ];
 };
+
+// ─── ml-dsa.verdict@1 ──────────────────────────────────────────────────────
+
+/**
+ * The second VERDICT headline in the app, after ML-KEM's select: whether this
+ * signature is valid is not knowable from the spec, only from the frame. The
+ * headline names every check that failed, because a signature can fail more
+ * than one — a malformed hint arrives here as an all-zero hint, so it almost
+ * always mismatches the challenge as well, and saying only "c̃ mismatch" would
+ * hide the reason that actually decided it.
+ */
+export const mlDsaVerdictNarration: NarrationFn = (frame) => {
+  const challenge = frame.portInputs?.get("challenge");
+  const recomputed = frame.portInputs?.get("recomputed");
+  const normOk = frame.portInputs?.get("normOk");
+  const hintValid = frame.portInputs?.get("hintValid");
+  const out = frame.portOutputs?.get("output");
+  if (
+    !(challenge instanceof Uint8Array) ||
+    !(recomputed instanceof Uint8Array) ||
+    !(normOk instanceof Uint8Array) ||
+    !(hintValid instanceof Uint8Array) ||
+    !(out instanceof Uint8Array)
+  ) {
+    return null;
+  }
+  const valid = out[0] === 1;
+  const hintOk = hintValid[0] === 1;
+  const zOk = normOk[0] === 1;
+  const firstDiff = challenge.findIndex((b, i) => b !== recomputed[i]);
+  const cOk = firstDiff === -1 && challenge.length === recomputed.length;
+  const failed = [
+    ...(hintOk ? [] : ["the hint is malformed"]),
+    ...(zOk ? [] : ["z is too large"]),
+    ...(cOk ? [] : ["c̃′ ≠ c̃"]),
+  ];
+  return [
+    {
+      key: "verdict",
+      label: valid ? "1 — VALID: all three checks pass" : `1 — INVALID: ${failed.join("; ")}`,
+      Prose: () => (
+        <div>
+          <p>
+            {valid
+              ? "The verifier rebuilt the signer's commitment from the public key, z and the hint alone, hashed it, and got the signature's own challenge back. Only someone holding the matching secret key could have produced that, for this exact message."
+              : "The signature is rejected. Verification never stops early, so all three checks were computed; the ones that failed are listed above."}
+          </p>
+        </div>
+      ),
+    },
+    {
+      key: "checks",
+      label: `2 — hint ${hintOk ? "✓" : "✗"} · ‖z‖∞ ${zOk ? "✓" : "✗"} · challenge ${cOk ? "✓" : "✗"}`,
+      Prose: (props) => (
+        <div>
+          <ul>
+            <li>
+              <strong>Hint well formed:</strong>{" "}
+              {hintOk
+                ? "yes."
+                : "no — the bytes break the hint format, so the hint was replaced by zeros and the signature is refused whatever else holds."}
+            </li>
+            <li>
+              <strong>Every coefficient of z below γ1 − β:</strong>{" "}
+              {zOk
+                ? "yes."
+                : "no — a z this large is exactly what a forger without the key would need, so the bound refuses it even if the equation holds."}
+            </li>
+            <li>
+              <strong>Challenge matches:</strong>{" "}
+              {cOk ? (
+                <>
+                  yes — both are <Bytes bytes={challenge} fmt={props.fmt} />.
+                </>
+              ) : (
+                <>
+                  no — the signature carries <Bytes bytes={challenge} fmt={props.fmt} /> but the
+                  verifier computed <Bytes bytes={recomputed} fmt={props.fmt} />
+                  {firstDiff >= 0 ? `, first differing at byte ${firstDiff}` : ""}.
+                </>
+              )}
+            </li>
+          </ul>
+        </div>
+      ),
+    },
+  ];
+};

@@ -208,6 +208,7 @@ import {
   mlDsaSampleInBallPortContract,
 } from "../steps/ml-dsa-sample-in-ball";
 import { mlDsaUseHint, mlDsaUseHintDoc, mlDsaUseHintPortContract } from "../steps/ml-dsa-use-hint";
+import { mlDsaVerdict, mlDsaVerdictDoc, mlDsaVerdictPortContract } from "../steps/ml-dsa-verdict";
 import {
   mlDsaW1Encode,
   mlDsaW1EncodeDoc,
@@ -1454,6 +1455,14 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: mlDsaHintUnpack,
     shape: mlDsaHintUnpackPortContract,
     doc: mlDsaHintUnpackDoc,
+  });
+  // ML-DSA P3: verification's last line. All three conditions meet in one
+  // frame, so a rejected signature's trace says which one it broke.
+  r.register("ml-dsa.verdict@1", {
+    kind: "ported",
+    executor: mlDsaVerdict,
+    shape: mlDsaVerdictPortContract,
+    doc: mlDsaVerdictDoc,
   });
   r.register("shift-bits-right@1", {
     kind: "ported",

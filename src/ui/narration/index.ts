@@ -71,6 +71,7 @@ import {
   mlDsaPower2RoundNarration,
   mlDsaSampleInBallNarration,
   mlDsaUseHintNarration,
+  mlDsaVerdictNarration,
   mlDsaW1EncodeNarration,
   zqInfNormBelowNarration,
 } from "./ml-dsa";
@@ -242,6 +243,8 @@ export const initNarrationRegistry = (): void => {
   registerNarration("ml-dsa.w1-encode@1", mlDsaW1EncodeNarration);
   registerNarration("ml-dsa.hint-pack@1", mlDsaHintPackNarration);
   registerNarration("ml-dsa.hint-unpack@1", mlDsaHintUnpackNarration);
+  // ML-DSA P3 — the verification verdict, the second VERDICT headline.
+  registerNarration("ml-dsa.verdict@1", mlDsaVerdictNarration);
   initialized = true;
 };
 
