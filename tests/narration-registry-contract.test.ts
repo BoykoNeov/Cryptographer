@@ -124,7 +124,9 @@ describe("narration-registry coverage contract", () => {
     // A sanity pin on the WALK, not on the family: if a rename ever moved
     // these out from under both prefixes the filter would silently match
     // nothing and every assertion below would pass vacuously.
-    expect(latticeStepTypes.length).toBe(36); // ML-DSA P3 added ml-dsa.verdict@1
+    // ML-DSA P3 added ml-dsa.verdict@1 (36); P4 added publish, attempt-verdict and
+    // release-signature (39).
+    expect(latticeStepTypes.length).toBe(39);
     expect(latticeStepTypes).toContain("zq-vec-add@1");
     expect(latticeStepTypes).toContain("ml-kem.sample-ntt@1");
     expect(latticeStepTypes).toContain("ml-dsa.decompose@1");
@@ -196,7 +198,7 @@ describe("narration-registry coverage contract", () => {
     }
   });
 
-  it("allowlists exactly the four element-wise Z_q vector primitives", () => {
+  it("allowlists exactly the four element-wise Z_q vector primitives and signing's publish tail", () => {
     // The deliberate no-op half of the family decision. Negative arm
     // included: an element-wise primitive drifting onto the narrated list
     // (or a narrated step onto the allowlist) means the wires crossed.
@@ -206,6 +208,8 @@ describe("narration-registry coverage contract", () => {
     }
     const allowlistedLattice = latticeStepTypes.filter((t) => NARRATION_NO_OP_ALLOWLIST.has(t));
     expect(allowlistedLattice).toEqual([
+      // ML-DSA P4: an identity-passthrough aux-publish tail, the RSA posture.
+      "ml-dsa.publish@1",
       "zq-vec-add@1",
       "zq-vec-mul-scalar@1",
       "zq-vec-mul@1",
@@ -319,6 +323,8 @@ describe("narration-registry coverage contract", () => {
       "rsa.publish-key-params@1",
       // Twofish (2026-07-12): the VISIBLE-PHT-half aux-publish tail.
       "twofish.publish-subkeys@1",
+      // ML-DSA P4 (2026-10-18): signing's precomputation publish tail.
+      "ml-dsa.publish@1",
       // Lattice P1 (allowlisted 2026-08-10): the three element-wise Z_q vector
       // primitives. NOT a publish tail — a different rationale entirely, and
       // the first entries here that are on the list for CARDINALITY rather

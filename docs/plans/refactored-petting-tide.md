@@ -1,6 +1,6 @@
 # ML-DSA-44 — the post-quantum signature, and the app's first loop that stops on its own
 
-**Status: P1 + P2 + P3 SHIPPED 2026-10-18; P4–P5 open.** Five phases. Successor to
+**Status: P1 + P2 + P3 SHIPPED 2026-10-18; P4 SHIPPED 2026-10-19; P5 open.** Five phases. Successor to
 `docs/plans/unified-stargazing-quasar.md` (ML-KEM, CLOSED), which deferred
 ML-DSA to "its own plan and its own advisor pass" because signing retries an
 unbounded number of times. This is that plan.
@@ -500,7 +500,131 @@ pair's three-attempt shape (z, r0, accepted) is pinned in
    same edit, and update `describeAlgorithm`, `historyOfAlgorithm` and the
    labels.
 5. Narrator for the attempt verdict. Like ML-KEM's select, it is a VERDICT
-   headline: "attempt 2 rejected: ‖z‖∞ = 131,040 ≥ γ1−β = 130,994".
+   headline: "attempt 1 rejected: ‖z‖∞ = 131,029 ≥ γ1−β = 130,994; ‖r0‖∞ = …".
+
+**P4 STEP 1 OUTCOME — the repeat-until loop (2026-10-18).** `stopWhen` shipped on
+the port-mode `iterate` (types, runtime, schema, static checker), proven by a toy
+built from shipped primitives only (`tests/runtime-iterate-stop-when.test.ts`).
+Its chain is `counter ‖ accepted`, so the value differs on every pass and the
+accept flag rides out of the loop — a pass count alone cannot tell "accepted on
+the last allowed attempt" from "hit the cap" (both 8 passes). Five things:
+
+1. **The check sits after `chainFeedback`.** Moved above it, the harvest reads
+   the attempt BEFORE the winning one; that perturbation fails 4 tests. Removing
+   the schema entry fails the behavioural Save/Load test (the reloaded loop runs
+   all 8 attempts, no error anywhere). Both run, then restored.
+2. **A pre-existing checker gap, fixed:** `spec-shapes.ts` never recorded an
+   iterate's `chainOutput` port, so a SIBLING reading the harvest got a false
+   `port-input-unresolvable`. Invisible until now because every shipped harvest
+   is read only through `outputFrom`, which that walk does not check. Signing's
+   `κ ‖ accepted ‖ σ` split is the first sibling reader.
+3. **No change needed, checked:** `cloneGroupWithFreshIds` rejects iterates
+   outright (`assertCompositeSubtreeSupported`); the port-wiring editor rewires
+   LEAF ports only; `duplicateRound`'s `bodyOutput` remap touches groups only.
+4. **Every count reader derives from the trace**, so 3 of 8 shows 3 with no
+   change: the graph's `blockSpan` (`graph.ts`, max `blockIndex` + 1) and the
+   "Block i of N" badge (`App.tsx`'s `blockCounts`, scoped by `iterateScopeKey`).
+   Pinned at unit level against the real `deriveAuxGraph` /
+   `expandCollapsedIterates`; the BROWSER check of chips and badge moves to the
+   signing spec, which is where a learner will see it.
+5. **A flag must be exactly one byte** (a wider one throws — an accept flag wired
+   to a polynomial is a mistake a truthy check would hide), and `stopWhen` in aux
+   mode throws.
+
+**Measured rejection statistics (instrumented noble copy, 1,500 random keys,
+6,639 attempts).** 4.43 attempts per signature (FIPS 204 Table 1 says 4.25). By
+FIRST failed check in noble's order: z 46%, r0 31%, hint count 0.5%, **ct0
+never** — the largest ‖ct0‖∞ seen was 72,641 against γ2 = 95,232, about 6σ short.
+So the plan's "a case per rejection reason" is reachable for three of four:
+
+- **hint:** "Hello, world! #17" under the default seed: attempts z, z, **hint
+  (81 ones, ω + 1)**, z, r0, z, r0, accepted. Noble reaches the hint count only
+  after every other check passes, so the app's failed SET on that attempt must
+  be exactly {hint}.
+- **first try:** "Hello, world! #0" — accepted on attempt 1.
+- **context:** "Hello, world!" with ctx "cryptographer" — 12 attempts.
+- **ct0 has no external case.** Lowering γ2 would also move Decompose's buckets,
+  w1's width and the r0 bound, so no reference would agree. Instead a test-side
+  copy of the spec tightens ONLY the ct0 check's bound and asserts the flag, the
+  narrator and the retry — a wiring pin, which is all a spec test can pin.
+
+Noble records the FIRST failure; the app computes all four flags every attempt.
+So a fixture "z" means z is AMONG the app's failures — assert containment there,
+set equality only where noble's order makes it exact (the hint case).
+
+**P4 STEPS 2–4 OUTCOME — signing, and the selector entry (2026-10-18/19).**
+`buildMlDsa44SignSpec` (sign: message in, signature out) joins the verify spec;
+ML-DSA-44 is the third `Asymmetric` member (sign = encrypt slot, verify =
+decrypt). Byte-exact against noble on the first run for all four cases. Three
+new steps, and the decisions that shaped them:
+
+1. **`ml-dsa.publish@1`** — the B-minimal aux tail (RSA's posture): Â, ŝ1, ŝ2,
+   t̂0, μ, ρ″ are computed once and filed under `ml-dsa.sign.*`, because the
+   attempt body sees only its own `in`/`chain`. The prefix keeps them clear of
+   the editable constants in the same global map. Narration-allowlisted with the
+   other publish tails.
+2. **`ml-dsa.attempt-verdict@1`** takes THREE ports per check: the flag (which
+   alone decides — the `<` / `≤` rules stay in the check steps), the measured
+   value and the limit. The last two are display ports (the `twofish.h-expand`
+   precedent), forced by the fact that a `NarrationFn` sees only its own frame:
+   without them the headline could name the failed check but not the number,
+   and adding ports later would mean an `@2`. P2 had already given
+   `zq-inf-norm-below@1` a `norm` port and `hint-count@1` a `count` port for
+   exactly this. Outputs: `accepted` (the `stopWhen` flag and the select
+   multiplier) and `failed` (a bitmask, the loop's `bodyOutput`, so `out` is a
+   free one-byte-per-attempt log).
+3. **`ml-dsa.release-signature@1`** — the signature if accepted, EMPTY at the
+   cap. A capped loop's chain still holds 2,420 well-formed bytes (the last
+   candidate, z and h zeroed); handing that out would look real and fail to
+   verify. Its narrator reads the log: "SIGNED: accepted on attempt 3", then each
+   rejected attempt's reasons.
+
+**The select is multiply-by-the-accept-bit**, not a new step: `concat(0,0,0,
+accepted)` is the flag as one coefficient, and `zq-vec-mul-scalar@1` applies it
+to z and h before packing. **Correction to the P2 rule's premise, measured:** a
+rejected z rarely overshoots its PACKING range — z exceeds γ1 − β far more often
+than γ1, and the default pair's rejected z fits (as P3's over-norm signature
+already showed). The case that needs the select is the HINT: the #17 attempt's
+81 ones cannot be packed into ω = 80 slots, and removing the h select throws
+there (pinned).
+
+**The default pair, read off the trace:** attempt 1 fails z (131,029 ≥ 130,994)
+AND r0 (95,166 ≥ 95,154) — noble records only "z"; attempt 2 fails r0 (95,190);
+attempt 3 passes with z two under its limit (130,992). ct0 peaked at 57,327 of
+95,232.
+
+**Perturbations, run:** ω = 81 makes the #17 case stop at attempt 3 with
+different bytes (the edit-a-bound experiment, on the fixture's only real edge
+case); advancing κ by 1 instead of l changes every byte; dropping the h select
+throws. Plus the ct0 wiring pin (a test-only bound of 1 rejects every attempt by
+ct0, the loop retries to its cap, release emits nothing).
+
+**The user's decision on Verify's message (2026-10-18): an opt-in copy button.**
+Verify checks a message held in its own spec (a `constant-load@1` leaf, P3's
+shape); the mode flip carries the signature across but never the message. A
+Verify-only sidebar row (`MlDsaVerifyMessage`) shows the message being checked
+and "Use the message from Sign", fed by a session-only `signed-message` store
+that records Sign's input. Nothing copies on its own (the cross-mode rule), and
+the app test asserts INVALID before the click and VALID after it.
+
+**One source for endpoint labels.** `endpointLabelsFor` (stores/cipher.ts) now
+feeds both the sidebar and the graph pills. The two were hand-kept copies, and
+ML-KEM-768's pills had read "message → ciphertext" against the sidebar's
+"message m (random) → ciphertext" — fixed by the same change.
+
+**The cap is 32, set from measurement.** One attempt costs ~31 ms of `runSpec`
+and 71 frames, on top of ~190 ms fixed (key generation's two ExpandA calls and
+the precomputation's third). So a run that reaches 32 attempts takes ~1.2 s and
+~2,300 frames, about ML-KEM decapsulation's budget; 64 would take ~2.2 s. With
+the standard bounds an attempt passes with p ≈ 0.226 (1,500 / 6,639 measured),
+so 32 straight rejections hit ≈ 1 message in 3,700 (64: ≈ 1 in 13 million).
+The cap is chosen for the case it exists for — a learner who tightened a bound,
+where every run reaches it — not for the default odds. It is the length of a
+`zero-fill@1` leaf, so it is editable like any other width.
+
+**A signature has a fixed width**, so Verify's input gets its own App
+validation arm (2,420 bytes, said in a sentence) — also keeping ML-DSA out of
+the RSA arm, which reads `cipherConstants.q` for an unrelated check.
 
 **Oracle:**
 - Noble's deterministic fixture, byte-exact. A wrong rejection rule changes κ,

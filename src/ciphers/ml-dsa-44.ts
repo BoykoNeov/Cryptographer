@@ -1,17 +1,25 @@
 /**
- * ML-DSA-44 — the lattice signature (FIPS 204), key generation and
- * verification. `docs/plans/refactored-petting-tide.md`, P3.
+ * ML-DSA-44 — the lattice signature (FIPS 204): key generation, signing and
+ * verification. `docs/plans/refactored-petting-tide.md`, P3 + P4.
  *
- * ## What ships here, and what does not yet
+ * ## What ships here
  *
- * Signing is P4. It is the part of ML-DSA that teaches the most — a loop that
- * throws away candidate signatures until one is safe to publish — and it needs
- * a loop that stops on its own, which the engine does not have yet. So this
- * file builds the two halves that need no loop: **key generation** (FIPS 204
- * Algorithm 6) and **verification** (Algorithm 8). Like K-PKE before ML-KEM,
- * there is no selector entry until the whole scheme exists; a signature scheme
- * that can check signatures but not make them is not something to hand a
- * learner on its own.
+ * Three algorithms: **key generation** (FIPS 204 Algorithm 6), **verification**
+ * (Algorithm 8, P3) and **signing** (Algorithm 7, P4). Signing is the part of
+ * ML-DSA that teaches the most — a loop that throws away candidate signatures
+ * until one is safe to publish — and it rides the port-mode `iterate`'s
+ * `stopWhen`, the repeat-until loop P4 added to the engine for it.
+ *
+ * ## Signing's attempt loop
+ *
+ * Everything that does not change between attempts (Â, ŝ1, ŝ2, t̂0, μ, ρ″) is
+ * computed once and filed into aux by `ml-dsa.publish@1`, because a loop body
+ * sees only its own `in` and `chain` wires. Each attempt reads them back, makes
+ * a candidate, runs all four checks, and passes `κ + l ‖ accepted ‖ σ` along
+ * the chain; `stopWhen` reads the accept flag. A rejected candidate is
+ * multiplied by zero before packing — a select, not a branch — so the strict
+ * packers never see an out-of-range z. `ml-dsa.release-signature@1` then hands
+ * out the signature, or nothing if the cap was reached.
  *
  * ## The key pair is born inside the spec
  *
@@ -157,10 +165,12 @@ export const ML_DSA_44_DEFAULT_SEED = new Uint8Array(
 
 /**
  * The default message. Chosen, not arbitrary: under the default seed its
- * deterministic signature takes THREE attempts — the first rejected because z
- * came out too large, the second because r0 did — so P4's signing trace shows
- * both common rejections on first paint. Measured by the P2 composition in
- * `tests/ml-dsa-44-oracle.test.ts`; recorded in the fixture's `p3` section.
+ * deterministic signature takes THREE attempts — the first fails z AND r0, the
+ * second fails r0, the third is accepted with z two under its limit — so the
+ * signing trace shows both common rejections on first paint. Measured by the P2
+ * composition in `tests/ml-dsa-44-oracle.test.ts` (which, like FIPS, stops at
+ * the first failure and so records attempt 1 as "z"); recorded in the
+ * fixture's `p3` section.
  */
 export const ML_DSA_44_DEFAULT_MESSAGE = new TextEncoder().encode("Hello, world!");
 
@@ -416,6 +426,121 @@ unrelated 32 bytes.`,
 
 // ─── Embedding ─────────────────────────────────────────────────────────────
 
+// ─── Narration for signing's own leaves ───────────────────────────────────
+
+const narrRnd: StepDocumentation = {
+  name: "rnd — 32 zero bytes (deterministic signing)",
+  summary: "The signer's fresh randomness, set to zeros: the deterministic variant.",
+  detail: `# rnd = 32 zero bytes
+
+FIPS 204 mixes 32 bytes of fresh randomness, **rnd**, into every signature
+("hedged" signing). It can also be run with rnd fixed at 32 zero bytes, the
+**deterministic** variant: the same key and message then always give the same
+signature. That is what this app does, so its output can be checked byte for
+byte against another implementation.
+
+Both variants are secure. Hedged signing protects against attacks that disturb
+the signer's computation; deterministic signing protects against a broken random
+number generator.`,
+  params: new Map(),
+  references: ["FIPS 204 Algorithm 2 (ML-DSA.Sign), Algorithm 7 line 7"],
+};
+
+const narrR0Bound: StepDocumentation = {
+  name: "γ2 − β — how large r0 may be",
+  summary: "The r0 check's limit, derived from the editable γ2 and β.",
+  detail: `# γ2 − β
+
+The limit for the r0 check. Derived here from γ2 and β rather than stored, so
+editing either one moves this check with it.`,
+  params: new Map(),
+  references: ["FIPS 204 Algorithm 7, line 24"],
+};
+
+const narrChainSplit: StepDocumentation = {
+  name: "Unpack the carried value",
+  summary: "Separates κ, the previous attempt's accept flag and its candidate.",
+  detail: `# Unpack the carried value
+
+Each attempt receives what the previous one passed on: the counter **κ** (four
+bytes), whether that attempt was accepted (one byte), and its candidate signature.
+Only κ is used here: it selects which mask polynomials this attempt draws. The
+first attempt receives all zeros.`,
+  params: new Map(),
+  references: ["FIPS 204 Algorithm 7, lines 9 and 32"],
+};
+
+const narrKeep: StepDocumentation = {
+  name: "The accept bit as a multiplier",
+  summary: "Turns the accept flag into a 0 or 1 that z and h are multiplied by.",
+  detail: `# The accept bit as a multiplier
+
+Three zero bytes followed by the accept flag form one four-byte coefficient worth
+**0** (rejected) or **1** (accepted). z and h are multiplied by it before packing.
+An accepted candidate passes through unchanged; a rejected one becomes zeros.
+
+This is a choice made **without a branch**, the way careful code does it: every
+attempt runs the same steps, and the multiplication is what discards a rejected
+candidate. It also keeps the packers safe. A rejected z can lie outside the range
+the packer accepts, and a rejected hint can have too many ones to fit.`,
+  params: new Map(),
+  references: ["FIPS 204 Algorithm 7, lines 23–31"],
+};
+
+const narrNext: StepDocumentation = {
+  name: "Pass on to the next attempt",
+  summary: "Packs κ + l, the accept flag and the candidate for the next attempt.",
+  detail: `# Pass on to the next attempt
+
+The value carried to the next attempt: the counter advanced by **l = 4** (each
+attempt consumes four mask polynomials), this attempt's accept flag, and its
+candidate signature. If the flag is 1 the loop stops here, and this is the value
+it reports.`,
+  params: new Map(),
+  references: ["FIPS 204 Algorithm 7, line 32"],
+};
+
+const narrCap: StepDocumentation = {
+  name: "The attempt limit",
+  summary: "One never-read zero byte per attempt the signer may make.",
+  detail: `# The attempt limit
+
+FIPS 204 lets an implementation stop after a fixed number of attempts. This
+step's length **is** that number: the attempt loop runs once per byte, and stops
+early as soon as an attempt is accepted. The bytes themselves are never read.
+
+With the standard parameters an attempt is accepted a little less than one time
+in four, so all 32 attempts fail for roughly one message in 3,700 — and then
+there is no signature, and the last step says so. Tightening β or γ1 makes
+rejection much more likely, and the limit is what keeps such an experiment from
+running for a long time. Lengthen this step for more attempts.`,
+  params: new Map(),
+  references: ["FIPS 204 §3.4"],
+};
+
+const narrChainStart: StepDocumentation = {
+  name: "What the first attempt receives",
+  summary: "κ = 0, no accepted attempt yet, and an empty candidate.",
+  detail: `# What the first attempt receives
+
+All zeros: the counter κ starts at 0, nothing has been accepted, and there is no
+candidate signature yet.`,
+  params: new Map(),
+  references: ["FIPS 204 Algorithm 7, line 9"],
+};
+
+const narrHarvest: StepDocumentation = {
+  name: "What the loop ended with",
+  summary: "Splits the last attempt's carried value into κ, the accept flag and the signature.",
+  detail: `# What the loop ended with
+
+The value the last attempt passed on. If its accept flag is 1, the candidate is
+the signature. If the loop reached its limit instead, the flag is 0 and there is
+no signature.`,
+  params: new Map(),
+  references: ["FIPS 204 Algorithm 7"],
+};
+
 /**
  * The wire for each editable constant, as seen from one scope. Port flow cannot
  * cross a group boundary, so each scope that needs a constant loads its own
@@ -646,6 +771,49 @@ const bitPackNode = (
   type: "ml-dsa.bit-pack@1",
   params: { ...VEC },
   portInputs: { a, lower, upper, modulus: ctx.q },
+});
+
+/** `ml-dsa.bit-unpack@1` with its range on two wires. */
+const bitUnpackNode = (
+  ctx: MlDsaEmbedding,
+  id: string,
+  a: PortBinding,
+  lower: PortBinding,
+  upper: PortBinding,
+): StepNode => ({
+  kind: "step",
+  id: nid(ctx, id),
+  type: "ml-dsa.bit-unpack@1",
+  params: { ...VEC },
+  portInputs: { a, lower, upper, modulus: ctx.q },
+});
+
+/** `ml-dsa.decompose@1` — HighBits on `high`, LowBits on `low`. */
+const decomposeNode = (
+  ctx: MlDsaEmbedding,
+  id: string,
+  a: PortBinding,
+  gamma2: PortBinding,
+): StepNode => ({
+  kind: "step",
+  id: nid(ctx, id),
+  type: "ml-dsa.decompose@1",
+  params: { ...VEC },
+  portInputs: { a, gamma2, modulus: ctx.q },
+});
+
+/** `zq-inf-norm-below@1` — the flag on `output`, the measured norm on `norm`. */
+const normNode = (
+  ctx: MlDsaEmbedding,
+  id: string,
+  a: PortBinding,
+  bound: PortBinding,
+): StepNode => ({
+  kind: "step",
+  id: nid(ctx, id),
+  type: "zq-inf-norm-below@1",
+  params: { ...VEC },
+  portInputs: { a, bound, modulus: ctx.q },
 });
 
 // ─── ML-DSA.KeyGen_internal (FIPS 204 Algorithm 6) ─────────────────────────
@@ -1020,5 +1188,426 @@ export const buildMlDsa44VerifySpec = (options: MlDsaVerifyOptions = {}): Cipher
     cipherConstants: { ...CONSTANTS },
     steps,
     outputFrom: verify.verdict,
+  };
+};
+
+// ─── ML-DSA.Sign_internal (FIPS 204 Algorithm 7) ───────────────────────────
+
+/** The stored-value prefix the publish step writes under (clear of `q`, `gamma1`, …). */
+export const MLDSA_SIGN_AUX_PREFIX = "ml-dsa.sign";
+/** Signing's landmarks. */
+export const MLDSA_SIGN_PUBLISH_ID = "sign.publish";
+export const MLDSA_ATTEMPTS_ID = "attempts";
+export const MLDSA_ATTEMPT_PREFIX = "attempt.";
+export const MLDSA_ATTEMPT_VERDICT_ID = "verdict";
+export const MLDSA_SIGN_HARVEST_ID = "harvest";
+export const MLDSA_RELEASE_ID = "release";
+
+/** κ on the chain: four bytes, big-endian — the width `add-mod-32@1` advances. */
+const KAPPA_BYTES = 4;
+/** The chain: `κ ‖ accepted ‖ σ`. */
+const CHAIN_WIDTHS = [KAPPA_BYTES, 1, ML_DSA_44_SIG_BYTES] as const;
+
+/** What the loop body reads back from aux, with each value's width. */
+const PUBLISHED = {
+  A: K * L * ML_DSA_POLY_BYTES,
+  s1: L * ML_DSA_POLY_BYTES,
+  s2: K * ML_DSA_POLY_BYTES,
+  t0: K * ML_DSA_POLY_BYTES,
+  mu: 64,
+  rhoPP: 64,
+} as const;
+type Published = keyof typeof PUBLISHED;
+
+/**
+ * Lines 1–8: everything an attempt needs that does not change between
+ * attempts — decode sk, move s1/s2/t0 into the transformed domain, expand Â,
+ * μ ← H(tr ‖ M′, 64), ρ″ ← H(K ‖ rnd ‖ μ, 64) — then publish it for the loop.
+ */
+// sk-split's ports, in skEncode order: ρ, K, tr, s1, s2, t0.
+export const mlDsaSignPrecomputeNodes = (
+  ctx: MlDsaEmbedding,
+  options: { readonly sk: PortBinding; readonly mPrime: PortBinding },
+): StepNode[] => {
+  const half = 2 ** (ML_DSA_D - 1);
+  return [
+    splitNode(ctx, "sk-split", options.sk, [
+      32,
+      32,
+      64,
+      L * ETA_POLY_BYTES,
+      K * ETA_POLY_BYTES,
+      K * T0_POLY_BYTES,
+    ]),
+    coeffConstant(nid(ctx, "eta"), ML_DSA_44_ETA),
+    coeffConstant(nid(ctx, "t0-lo"), half - 1),
+    coeffConstant(nid(ctx, "t0-hi"), half),
+    bitUnpackNode(ctx, "s1", own(ctx, "sk-split", "output3"), own(ctx, "eta"), own(ctx, "eta")),
+    bitUnpackNode(ctx, "s2", own(ctx, "sk-split", "output4"), own(ctx, "eta"), own(ctx, "eta")),
+    bitUnpackNode(ctx, "t0", own(ctx, "sk-split", "output5"), own(ctx, "t0-lo"), own(ctx, "t0-hi")),
+    nttNode(ctx, "ntt.s1", own(ctx, "s1")),
+    nttNode(ctx, "ntt.s2", own(ctx, "s2")),
+    nttNode(ctx, "ntt.t0", own(ctx, "t0")),
+    {
+      kind: "step",
+      id: nid(ctx, "A"),
+      type: "ml-dsa.expand-a@1",
+      params: { ...VEC, k: K, l: L },
+      portInputs: { input: own(ctx, "sk-split", "output0"), modulus: ctx.q },
+    },
+    concatNode(ctx, "mu-in", [own(ctx, "sk-split", "output2"), options.mPrime]),
+    hashNode(ctx, "mu", own(ctx, "mu-in"), 64),
+    {
+      kind: "step",
+      id: nid(ctx, "rnd"),
+      type: "constant-load@1",
+      params: { bytes: new Array<number>(32).fill(0) },
+      narrationOverride: narrRnd,
+    },
+    concatNode(ctx, "rho-pp-in", [
+      own(ctx, "sk-split", "output1"),
+      own(ctx, "rnd"),
+      own(ctx, "mu"),
+    ]),
+    hashNode(ctx, "rho-pp", own(ctx, "rho-pp-in"), 64),
+    {
+      kind: "step",
+      id: MLDSA_SIGN_PUBLISH_ID,
+      type: "ml-dsa.publish@1",
+      params: { outputPrefix: MLDSA_SIGN_AUX_PREFIX, keys: Object.keys(PUBLISHED) },
+      portInputs: {
+        A: own(ctx, "A"),
+        s1: own(ctx, "ntt.s1"),
+        s2: own(ctx, "ntt.s2"),
+        t0: own(ctx, "ntt.t0"),
+        mu: own(ctx, "mu"),
+        rhoPP: own(ctx, "rho-pp"),
+      },
+    },
+  ];
+};
+
+/** An `aux-load-bytes@1` reading one published value inside the loop body. */
+const loadPublished = (ctx: MlDsaEmbedding, name: Published): StepNode => ({
+  kind: "step",
+  id: nid(ctx, `load.${name}`),
+  type: "aux-load-bytes@1",
+  params: { auxName: `${MLDSA_SIGN_AUX_PREFIX}.${name}`, byteLength: PUBLISHED[name] },
+});
+
+/**
+ * Lines 10–31: ONE attempt. Reads κ from the chain and the precomputed values
+ * from aux; emits the next chain value `κ + l ‖ accepted ‖ σ-candidate`, the
+ * accept flag (the loop's `stopWhen`) and the `failed` byte (its per-attempt
+ * output). `iterateId` is the loop the body sits in.
+ */
+export const mlDsaAttemptNodes = (
+  iterateId: string,
+): {
+  readonly nodes: StepNode[];
+  readonly next: PortBinding;
+  readonly accepted: PortBinding;
+  readonly failed: PortBinding;
+} => {
+  // Port flow stops at the loop's boundary, so the body loads its own copy of
+  // every editable constant — and derives γ2 − β, the r0 bound, beside the two
+  // bounds `mlDsaConstantNodes` already derives.
+  const constants = mlDsaConstantNodes(MLDSA_ATTEMPT_PREFIX, true);
+  const c = constants.bindings;
+  const ctx: MlDsaEmbedding = { prefix: MLDSA_ATTEMPT_PREFIX, q: c.q };
+  const nodes: StepNode[] = [
+    ...constants.nodes,
+    {
+      kind: "step",
+      id: nid(ctx, "r0-bound"),
+      type: "sub@1",
+      params: {},
+      portInputs: { a: c.gamma2, b: own(ctx, "beta") },
+      narrationOverride: narrR0Bound,
+    },
+    splitNode(ctx, "chain", port(iterateId, "chain"), CHAIN_WIDTHS, narrChainSplit),
+    ...(Object.keys(PUBLISHED) as Published[]).map((name) => loadPublished(ctx, name)),
+  ];
+  const kappa = own(ctx, "chain", "output0");
+  const load = (name: Published) => own(ctx, `load.${name}`);
+
+  // y ← ExpandMask(ρ″, κ);  w ← NTT⁻¹(Â ∘ NTT(y));  w1 ← HighBits(w)
+  nodes.push({
+    kind: "step",
+    id: nid(ctx, "y"),
+    type: "ml-dsa.expand-mask@1",
+    params: { ...VEC, l: L },
+    portInputs: { input: load("rhoPP"), kappa, gamma1: c.gamma1, modulus: c.q },
+  });
+  nodes.push(nttNode(ctx, "ntt.y", own(ctx, "y")));
+  const ay = matVecNodes(ctx, { id: "Ay", matrix: load("A"), vector: own(ctx, "ntt.y") });
+  nodes.push(
+    ...ay.nodes,
+    nttNode(ctx, "w", ay.output, true),
+    decomposeNode(ctx, "w.split", own(ctx, "w"), c.gamma2),
+    {
+      kind: "step",
+      id: nid(ctx, "w1.enc"),
+      type: "ml-dsa.w1-encode@1",
+      params: { ...VEC },
+      portInputs: { a: own(ctx, "w.split", "high"), gamma2: c.gamma2, modulus: c.q },
+    },
+    // c̃ ← H(μ ‖ w1Encode(w1), 32);  c ← SampleInBall(c̃);  ĉ ← NTT(c)
+    concatNode(ctx, "c-in", [load("mu"), own(ctx, "w1.enc")]),
+    hashNode(ctx, "c-tilde", own(ctx, "c-in"), 32),
+    {
+      kind: "step",
+      id: nid(ctx, "c"),
+      type: "ml-dsa.sample-in-ball@1",
+      params: { ...VEC, tau: ML_DSA_44_TAU },
+      portInputs: { input: own(ctx, "c-tilde"), modulus: c.q },
+    },
+    nttNode(ctx, "ntt.c", own(ctx, "c")),
+    concatNode(
+      ctx,
+      "c.rep-l",
+      Array.from({ length: L }, () => own(ctx, "ntt.c")),
+    ),
+    concatNode(
+      ctx,
+      "c.rep-k",
+      Array.from({ length: K }, () => own(ctx, "ntt.c")),
+    ),
+    // z ← y + NTT⁻¹(ĉ ∘ ŝ1)
+    vecNode(ctx, "cs1.hat", "zq-vec-mul@1", own(ctx, "c.rep-l"), load("s1")),
+    nttNode(ctx, "cs1", own(ctx, "cs1.hat"), true),
+    vecNode(ctx, "z", "zq-vec-add@1", own(ctx, "y"), own(ctx, "cs1")),
+    // r0 ← LowBits(w − NTT⁻¹(ĉ ∘ ŝ2))
+    vecNode(ctx, "cs2.hat", "zq-vec-mul@1", own(ctx, "c.rep-k"), load("s2")),
+    nttNode(ctx, "cs2", own(ctx, "cs2.hat"), true),
+    vecNode(ctx, "w-cs2", "zq-vec-sub@1", own(ctx, "w"), own(ctx, "cs2")),
+    decomposeNode(ctx, "r", own(ctx, "w-cs2"), c.gamma2),
+    // ct0 ← NTT⁻¹(ĉ ∘ t̂0);  h ← MakeHint(−ct0, w − cs2 + ct0)
+    vecNode(ctx, "ct0.hat", "zq-vec-mul@1", own(ctx, "c.rep-k"), load("t0")),
+    nttNode(ctx, "ct0", own(ctx, "ct0.hat"), true),
+    {
+      kind: "step",
+      id: nid(ctx, "zero"),
+      type: "zero-fill@1",
+      params: { byteLength: K * ML_DSA_POLY_BYTES },
+    },
+    vecNode(ctx, "neg-ct0", "zq-vec-sub@1", own(ctx, "zero"), own(ctx, "ct0")),
+    vecNode(ctx, "hint-r", "zq-vec-add@1", own(ctx, "w-cs2"), own(ctx, "ct0")),
+    {
+      kind: "step",
+      id: nid(ctx, "h"),
+      type: "ml-dsa.make-hint@1",
+      params: { ...VEC },
+      portInputs: { z: own(ctx, "neg-ct0"), r: own(ctx, "hint-r"), gamma2: c.gamma2, modulus: c.q },
+    },
+  );
+
+  // The four checks — every one, every attempt — and the verdict.
+  nodes.push(
+    normNode(ctx, "check.z", own(ctx, "z"), c.zBound),
+    normNode(ctx, "check.r0", own(ctx, "r", "low"), own(ctx, "r0-bound")),
+    normNode(ctx, "check.ct0", own(ctx, "ct0"), c.gamma2),
+    {
+      kind: "step",
+      id: nid(ctx, "check.hint"),
+      type: "ml-dsa.hint-count@1",
+      params: { ...VEC },
+      portInputs: { h: own(ctx, "h"), omega: c.omega },
+    },
+    {
+      kind: "step",
+      id: nid(ctx, MLDSA_ATTEMPT_VERDICT_ID),
+      type: "ml-dsa.attempt-verdict@1",
+      params: {},
+      portInputs: {
+        zOk: own(ctx, "check.z"),
+        zNorm: own(ctx, "check.z", "norm"),
+        zBound: c.zBound,
+        r0Ok: own(ctx, "check.r0"),
+        r0Norm: own(ctx, "check.r0", "norm"),
+        r0Bound: own(ctx, "r0-bound"),
+        ct0Ok: own(ctx, "check.ct0"),
+        ct0Norm: own(ctx, "check.ct0", "norm"),
+        ct0Bound: c.gamma2,
+        hintOk: own(ctx, "check.hint"),
+        hintCount: own(ctx, "check.hint", "count"),
+        omega: c.omega,
+      },
+    },
+  );
+  const accepted = own(ctx, MLDSA_ATTEMPT_VERDICT_ID, "accepted");
+
+  // Select without a branch: multiply z and h by the accept bit. A rejected
+  // candidate becomes zeros, which the strict packers accept; an accepted one
+  // is unchanged. FIPS never encodes a rejected candidate — neither, in effect,
+  // does this.
+  nodes.push(
+    {
+      kind: "step",
+      id: nid(ctx, "zero3"),
+      type: "constant-load@1",
+      params: { bytes: [0, 0, 0] },
+    },
+    {
+      kind: "step",
+      id: nid(ctx, "keep"),
+      type: "concat@1",
+      params: { inputCount: 2 },
+      // 3 zero bytes ‖ the flag = the flag as one 4-byte coefficient (0 or 1).
+      portInputs: { input0: own(ctx, "zero3"), input1: accepted },
+      narrationOverride: narrKeep,
+    },
+  );
+  nodes.push(
+    {
+      kind: "step",
+      id: nid(ctx, "z.kept"),
+      type: "zq-vec-mul-scalar@1",
+      params: { ...VEC },
+      portInputs: { a: own(ctx, "z"), scalar: own(ctx, "keep"), modulus: c.q },
+    },
+    {
+      kind: "step",
+      id: nid(ctx, "h.kept"),
+      type: "zq-vec-mul-scalar@1",
+      params: { ...VEC },
+      portInputs: { a: own(ctx, "h"), scalar: own(ctx, "keep"), modulus: c.q },
+    },
+    // σ ← sigEncode(c̃, z mod± q, h)
+    bitPackNode(ctx, "z.pack", own(ctx, "z.kept"), c.zLower, c.gamma1),
+    {
+      kind: "step",
+      id: nid(ctx, "h.pack"),
+      type: "ml-dsa.hint-pack@1",
+      params: { ...VEC },
+      portInputs: { h: own(ctx, "h.kept"), omega: c.omega },
+    },
+    concatNode(ctx, "sigma", [own(ctx, "c-tilde"), own(ctx, "z.pack"), own(ctx, "h.pack")]),
+    // κ ← κ + l: the next attempt draws the next l mask polynomials.
+    {
+      kind: "step",
+      id: nid(ctx, "l"),
+      type: "constant-load@1",
+      params: { bytes: [0, 0, 0, L] },
+    },
+    {
+      kind: "step",
+      id: nid(ctx, "kappa-next"),
+      type: "add-mod-32@1",
+      params: { inputCount: 2 },
+      portInputs: { operand0: kappa, operand1: own(ctx, "l") },
+    },
+    concatNode(ctx, "next", [own(ctx, "kappa-next"), accepted, own(ctx, "sigma")], narrNext),
+  );
+  return {
+    nodes,
+    next: own(ctx, "next"),
+    accepted,
+    failed: own(ctx, MLDSA_ATTEMPT_VERDICT_ID, "failed"),
+  };
+};
+
+/**
+ * The most attempts a signature may take. Set from measurement (plan, P4): an
+ * attempt costs ~31 ms of runtime and 71 frames on top of ~190 ms fixed, so a
+ * run that reaches 32 takes ~1.2 s and ~2,300 frames — about ML-KEM
+ * decapsulation's budget. With the standard bounds an attempt passes with
+ * probability ≈ 0.226 (1,500 of 6,639 measured), so 32 straight rejections
+ * happen for ≈ 1 message in 3,700; 64 would make that ≈ 1 in 13 million but
+ * double the worst case, which is the case a learner tightening a bound hits.
+ */
+export const ML_DSA_44_DEFAULT_ATTEMPT_CAP = 32;
+
+export type MlDsaSignOptions = Omit<MlDsaVerifyOptions, "message"> & {
+  /** The most attempts the loop may run before giving up. */
+  readonly attemptCap?: number;
+};
+
+/**
+ * ML-DSA-44 signing: message in, signature out (or nothing, if every attempt
+ * up to the cap was rejected). Deterministic (`rnd = 0³²`), so the default
+ * message under the default seed reproduces `ML_DSA_44_DEFAULT_SIGNATURE`.
+ */
+export const buildMlDsa44SignSpec = (options: MlDsaSignOptions = {}): CipherSpec => {
+  const seed = options.seed ?? ML_DSA_44_DEFAULT_SEED;
+  const context = options.context ?? new Uint8Array(0);
+  const cap = options.attemptCap ?? ML_DSA_44_DEFAULT_ATTEMPT_CAP;
+
+  const constants = mlDsaConstantNodes("", true);
+  const material = mlDsaKeyMaterialNodes(seed);
+  const pre: MlDsaEmbedding = { prefix: "sign.", q: constants.bindings.q };
+  const attempt = mlDsaAttemptNodes(MLDSA_ATTEMPTS_ID);
+
+  const steps: StepNode[] = [
+    ...constants.nodes,
+    ...material.nodes,
+    // M′ ← 0 ‖ |ctx| ‖ ctx ‖ M — the message is the spec's input.
+    {
+      kind: "step",
+      id: MLDSA_MPRIME_ID,
+      type: "ml-dsa.format-message@1",
+      params: { context: [...context] },
+      portInputs: { input: port(INPUT_SOURCE_ID, INPUT_SOURCE_PORT) },
+    },
+    ...mlDsaSignPrecomputeNodes(pre, { sk: material.sk, mPrime: port(MLDSA_MPRIME_ID, "output") }),
+    // The cap: one never-read zero byte per allowed attempt (the PRNG
+    // "length enters as a width" precedent), and the chain's starting value.
+    {
+      kind: "step",
+      id: "attempt-cap",
+      type: "zero-fill@1",
+      params: { byteLength: cap },
+      narrationOverride: narrCap,
+    },
+    {
+      kind: "step",
+      id: "chain-start",
+      type: "zero-fill@1",
+      params: { byteLength: CHAIN_WIDTHS.reduce((a, b) => a + b, 0) },
+      narrationOverride: narrChainStart,
+    },
+    {
+      kind: "iterate",
+      id: MLDSA_ATTEMPTS_ID,
+      label: "Signing attempts — repeat until one passes all four checks",
+      defaultCollapsed: true,
+      blockByteLength: 1,
+      seedInput: port("attempt-cap", "output"),
+      chainInput: port("chain-start", "output"),
+      chainFeedback: attempt.next,
+      bodyOutput: attempt.failed,
+      stopWhen: attempt.accepted,
+      chainOutput: "result",
+      children: attempt.nodes,
+    },
+    {
+      kind: "step",
+      id: MLDSA_SIGN_HARVEST_ID,
+      type: "split-bytes@1",
+      params: { widths: [...CHAIN_WIDTHS] },
+      portInputs: { input: port(MLDSA_ATTEMPTS_ID, "result") },
+      narrationOverride: narrHarvest,
+    },
+    {
+      kind: "step",
+      id: MLDSA_RELEASE_ID,
+      type: "ml-dsa.release-signature@1",
+      params: {},
+      portInputs: {
+        accepted: port(MLDSA_SIGN_HARVEST_ID, "output1"),
+        signature: port(MLDSA_SIGN_HARVEST_ID, "output2"),
+        log: port(MLDSA_ATTEMPTS_ID, "out"),
+      },
+    },
+  ];
+
+  return {
+    id: "ml-dsa-44-sign@1",
+    name: "ML-DSA-44 signing",
+    stateShape: "bytes",
+    inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+    cipherConstants: { ...CONSTANTS },
+    steps,
+    outputFrom: port(MLDSA_RELEASE_ID, "output"),
   };
 };

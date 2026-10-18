@@ -109,7 +109,7 @@ import { type TwofishRoundShape, analyzeTwofishRound } from "@/core/twofish-shap
 import type { AuxValue, State, StepNode } from "@/core/types";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { hasNarrationFn } from "../narration/registry";
-import { isAsymmetric, isHash, isLattice, isPrng, useAlgorithm } from "../stores/cipher";
+import { endpointLabelsFor, useAlgorithm } from "../stores/cipher";
 import { getComposite, saveComposite } from "../stores/composites";
 import {
   isCuratedLayoutSuppressed,
@@ -3177,40 +3177,10 @@ export const GraphView = () => {
    * when the first spec lands. Memory pointer: [[project_hash_future]].
    */
   const endpointLabels = createMemo<{ inputLabel: string; outputLabel: string }>(() => {
-    const algo = useAlgorithm()();
-    if (isHash(algo)) {
-      return { inputLabel: "message", outputLabel: "digest" };
-    }
-    // A generator consumes a seed and produces a stream. Neither endpoint is a
-    // plaintext/ciphertext pair, and the fall-through below would label them as
-    // one — which browser smoke caught, because nothing in the type system
-    // objects to a wrong string. Kept in step with App.tsx's
-    // `inputLabel()`/`outputLabel()` so the graph pills and the linear sidebar
-    // never disagree.
-    if (isPrng(algo)) {
-      return { inputLabel: "seed", outputLabel: "random bytes" };
-    }
-    // RSA (asymmetric): encrypt consumes the message m → ciphertext c; decrypt
-    // consumes c → m. Matches App.tsx's inputLabel()/outputLabel() so the graph
-    // endpoint pills agree with the linear sidebar.
-    if (isAsymmetric(algo)) {
-      return useMode()() === "encrypt"
-        ? { inputLabel: "message", outputLabel: "ciphertext" }
-        : { inputLabel: "ciphertext", outputLabel: "message" };
-    }
-    // Lattice: a polynomial goes in and its transform comes out. Neither side
-    // is a plaintext or a ciphertext — the transform conceals nothing — so the
-    // pills say what the values actually are. Same wording as App.tsx's
-    // inputLabel()/outputLabel(); the PRNG note above is on the record that a
-    // wrong label here is invisible to the type system and to every test.
-    if (isLattice(algo)) {
-      return useMode()() === "encrypt"
-        ? { inputLabel: "polynomial", outputLabel: "transformed polynomial" }
-        : { inputLabel: "transformed polynomial", outputLabel: "polynomial" };
-    }
-    return useMode()() === "encrypt"
-      ? { inputLabel: "plaintext", outputLabel: "ciphertext" }
-      : { inputLabel: "ciphertext", outputLabel: "plaintext" };
+    // One source for the sidebar's field labels and these pills, so the two
+    // can never disagree (see `endpointLabelsFor`).
+    const { input, output } = endpointLabelsFor(useAlgorithm()(), useMode()());
+    return { inputLabel: input, outputLabel: output };
   });
 
   /**

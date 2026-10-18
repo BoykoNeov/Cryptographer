@@ -19,6 +19,7 @@
  */
 
 import { createSignal } from "solid-js";
+import { ML_DSA_44_DEFAULT_MESSAGE, ML_DSA_44_DEFAULT_SIGNATURE } from "../../ciphers/ml-dsa-44";
 import { ML_KEM_DEFAULT_CIPHERTEXT, ML_KEM_DEFAULT_MESSAGE } from "../../ciphers/ml-kem-768";
 import { ML_DSA_COEFF_BYTES, ML_DSA_POLY_BYTES } from "../../ciphers/mldsa-constants";
 import { POLY_BYTES } from "../../ciphers/mlkem-constants";
@@ -130,7 +131,7 @@ export type Hash =
  * family + category is what lets the UI hide those three symmetric-only
  * surfaces (presenting a "key" field for RSA would miseducate).
  */
-export type Asymmetric = "rsa" | "ml-kem-768";
+export type Asymmetric = "rsa" | "ml-kem-768" | "ml-dsa-44";
 
 /**
  * Pseudo-random generator family — algorithms that consume a seed and emit a
@@ -265,7 +266,7 @@ export const isHash = (a: Algorithm): a is Hash =>
  * acquire a symmetric key field, a cipher-mode selector and a padding scheme.
  * The same conversion was made for `isPrng` after MT19937 for the same reason.
  */
-const ALL_ASYMMETRICS: readonly Asymmetric[] = ["rsa", "ml-kem-768"];
+const ALL_ASYMMETRICS: readonly Asymmetric[] = ["rsa", "ml-kem-768", "ml-dsa-44"];
 
 /**
  * True when an algorithm is in the asymmetric (public-key) family.
@@ -317,6 +318,52 @@ const ALL_LATTICE: readonly Lattice[] = ["ntt-3329-256", "ntt-8380417-256"];
  */
 export const isLattice = (a: Algorithm): a is Lattice =>
   (ALL_LATTICE as readonly string[]).includes(a);
+
+/**
+ * What the input and the output ARE, in words, for an algorithm and direction.
+ * The one source for both the sidebar's field labels (`App.tsx`) and the graph's
+ * endpoint pills (`GraphView.tsx`).
+ *
+ * It exists because those two were hand-kept copies, and a wrong label is
+ * invisible to the type system and to every test that does not read the string:
+ * the PRNG pills were found wrong by browser smoke, and ML-KEM-768's pills said
+ * "message → ciphertext" while the sidebar said "message m (random) →
+ * ciphertext" until this function replaced both (2026-10-18, ML-DSA P4).
+ *
+ * The labels name what a value is, never borrow a cipher's words for something
+ * that is not one: a KEM agrees a secret rather than transporting a message, a
+ * signature scheme signs and checks rather than encrypting, and the NTT conceals
+ * nothing. The mode literal is spelled out for the same import-cycle reason as
+ * `latticeDefaultInput` below.
+ */
+export const endpointLabelsFor = (
+  a: Algorithm,
+  mode: "encrypt" | "decrypt",
+): { readonly input: string; readonly output: string } => {
+  const pair = (enc: readonly [string, string], dec: readonly [string, string]) => {
+    const [input, output] = mode === "encrypt" ? enc : dec;
+    return { input, output };
+  };
+  if (isHash(a)) return { input: "message", output: "digest" };
+  // A generator's only input is its seed — which sequence to produce. Nothing
+  // about it is transformed into the output, so it is not a plaintext.
+  if (isPrng(a)) return { input: "seed", output: "random bytes" };
+  // A KEM does not transport a message the caller chose — it agrees a secret,
+  // and its input is the 32 bytes a real implementation would draw at random.
+  if (a === "ml-kem-768") {
+    return pair(["message m (random)", "ciphertext"], ["ciphertext", "shared secret"]);
+  }
+  // A signature conceals nothing: signing turns a message into a signature,
+  // and verification turns a signature into a verdict (valid or not).
+  if (a === "ml-dsa-44") return pair(["message", "signature"], ["signature", "verdict"]);
+  // RSA: encrypt consumes the message m, decrypt consumes the ciphertext c.
+  if (isAsymmetric(a)) return pair(["message", "ciphertext"], ["ciphertext", "message"]);
+  // The lattice family transforms a polynomial into its transformed form and back.
+  if (isLattice(a)) {
+    return pair(["polynomial", "transformed polynomial"], ["transformed polynomial", "polynomial"]);
+  }
+  return pair(["plaintext", "ciphertext"], ["ciphertext", "plaintext"]);
+};
 
 /**
  * True when an algorithm is a symmetric cipher (the keyed encrypt/decrypt
@@ -466,6 +513,7 @@ export const ASYMMETRIC_OPTIONS = ALL_ASYMMETRICS;
 export const ASYMMETRIC_LABELS: Record<Asymmetric, string> = {
   rsa: "RSA (textbook)",
   "ml-kem-768": "ML-KEM-768 (post-quantum KEM)",
+  "ml-dsa-44": "ML-DSA-44 (post-quantum signature)",
 };
 
 /** Lattice dropdown options + labels. ML-KEM's transform and ML-DSA's; mirrors the
@@ -579,6 +627,8 @@ export const ASYMMETRIC_DESCRIPTIONS: Record<Asymmetric, string> = {
   rsa: "Textbook RSA — public-key: key-gen (p, q, e → n, φ, d) + modular exponentiation. No padding.",
   "ml-kem-768":
     "ML-KEM-768 (FIPS 203) — post-quantum key encapsulation over lattices; agrees a 32-byte secret instead of encrypting a message, and rejects forged ciphertexts silently.",
+  "ml-dsa-44":
+    "ML-DSA-44 (FIPS 204) — post-quantum signatures over lattices; signing throws away candidate signatures that could leak the secret key and tries again, about four attempts per signature.",
 };
 
 /** Per-PRNG one-liner. Mirrors `PRNG_LABELS`. */
@@ -691,6 +741,8 @@ export const ASYMMETRIC_HISTORY: Record<Asymmetric, string> = {
   rsa: "Rivest, Shamir & Adleman, 1977 — the first practical public-key cryptosystem; secretly pre-discovered by GCHQ's Cocks in 1973.",
   "ml-kem-768":
     "CRYSTALS-Kyber (Bos, Ducas, Kiltz, Lepoint, Lyubashevsky, Schanck, Schwabe, Seiler & Stehlé) won NIST's 2016–2022 post-quantum competition and was standardised as FIPS 203 in August 2024 — the first new public-key standard in decades, chosen because a large quantum computer would break RSA and elliptic curves outright while leaving lattice problems standing.",
+  "ml-dsa-44":
+    "CRYSTALS-Dilithium (Ducas, Kiltz, Lepoint, Lyubashevsky, Schwabe, Seiler & Stehlé, 2017), standardised as FIPS 204 in August 2024 beside ML-KEM. Its signing loop descends from Lyubashevsky's 2009 'Fiat–Shamir with aborts': reject any response that would reveal the key, and try again.",
 };
 
 /** Per-PRNG historical one-liner. Mirrors `PRNG_DESCRIPTIONS`. */
@@ -1120,6 +1172,8 @@ export const DEFAULT_KEY_BYTES_BY_ASYMMETRIC: Record<Asymmetric, Uint8Array> = {
   // the spec from an editable 64-byte seed leaf, exactly as RSA derives n and d
   // from p, q and e.
   "ml-kem-768": new Uint8Array(0),
+  // The same for ML-DSA: its key pair is born inside the spec from a 32-byte seed.
+  "ml-dsa-44": new Uint8Array(0),
 };
 
 /** Default message m (encrypt input) — 65 as a 2-byte BE integer. */
@@ -1129,6 +1183,10 @@ export const DEFAULT_PT_BYTES_BY_ASYMMETRIC: Record<Asymmetric, Uint8Array> = {
   // bytes a real implementation would draw at random, and the "randomness" the
   // encryption runs with is derived from them rather than drawn separately.
   "ml-kem-768": ML_KEM_DEFAULT_MESSAGE,
+  // Sign's input is the message. "Hello, world!" takes three attempts under the
+  // default seed — the first fails z AND r0, the second r0, the third is
+  // accepted — so the first Run shows both common rejections.
+  "ml-dsa-44": ML_DSA_44_DEFAULT_MESSAGE,
 };
 
 /** Default ciphertext c (decrypt input) — 2790 (= 65¹⁷ mod 3233) as 2-byte BE. */
@@ -1139,6 +1197,9 @@ export const DEFAULT_CT_BYTES_BY_ASYMMETRIC: Record<Asymmetric, Uint8Array> = {
   // implementation reported. 1088 bytes nobody would retype, which is why this
   // table finally acquired a reader — see `algorithmDefaultPt` in App.tsx.
   "ml-kem-768": ML_KEM_DEFAULT_CIPHERTEXT,
+  // Verify's input is the signature — noble's deterministic one over the default
+  // message, which Node verifies and which signing reproduces byte for byte.
+  "ml-dsa-44": ML_DSA_44_DEFAULT_SIGNATURE,
 };
 
 // ─── PRNG defaults ─────────────────────────────────────────────────────────

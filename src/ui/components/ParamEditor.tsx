@@ -386,6 +386,10 @@ export const ParamEditor = (props: Props) => {
               */}
               <RsaPublishKeyParamsBlock step={getStep()} />
             </Match>
+            <Match when={getStep().type === "ml-dsa.publish@1"}>
+              {/* ML-DSA P4: signing's precomputation tail — same read-only shape. */}
+              <MlDsaPublishBlock step={getStep()} />
+            </Match>
             <Match when={getStep().type === "pad-with-byte@1"}>
               <PadWithByteBlock step={getStep()} matchingCount={matchingSteps()} />
             </Match>
@@ -2152,6 +2156,40 @@ const RsaPublishKeyParamsBlock = (props: { step: StepLeaf }) => {
   );
 };
 
+// ml-dsa.publish@1 — the aux-publish tail of ML-DSA signing's precomputation
+// (P4). Read-only, like the RSA tail above: the names are structural (the loop
+// body reads them back by exactly these names), so editing them here could
+// only break the wiring. Renders sensibly from a palette drop's empty params.
+const MlDsaPublishBlock = (props: { step: StepLeaf }) => {
+  const params = (): { outputPrefix?: string; keys?: readonly string[] } =>
+    props.step.params as never;
+  const prefix = (): string => params().outputPrefix ?? "—";
+  const published = (): string => {
+    const keys = params().keys ?? [];
+    return keys.length === 0 ? "—" : keys.map((k) => `${prefix()}.${k}`).join(", ");
+  };
+  return (
+    <>
+      <dl class="param-scalars">
+        <div class="param-scalar-row">
+          <dt>Stored under</dt>
+          <dd>{prefix()}</dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Values stored</dt>
+          <dd>{published()}</dd>
+        </div>
+      </dl>
+      <p class="muted small">
+        Files the values signing computes once — Â, ŝ1, ŝ2, t̂0, μ and ρ″ — under these names, so
+        every attempt inside the loop can read them back. A loop's steps can only be wired to the
+        loop's own inputs. These names are structural: the attempts look them up by exactly these
+        names.
+      </p>
+    </>
+  );
+};
+
 // DES key-schedule: three structural tables (PC-1, PC-2, SHIFTS) plus two
 // aux-name scalars. Rendered the same way as the AES key-expansion block
 // (scalars + collapsible table) but with three independent tables instead
@@ -3284,6 +3322,9 @@ const NO_PARAMS_PORT_NATIVE_TYPES = new Set([
   "ml-dsa.intt@1",
   // ML-DSA P3. Like ML-KEM's select, everything it judges arrives on ports.
   "ml-dsa.verdict@1",
+  // ML-DSA P4. The same: flags, values, limits and the log are all wired.
+  "ml-dsa.attempt-verdict@1",
+  "ml-dsa.release-signature@1",
 ]);
 
 const portNativeNoParamsLabel = (stepType: string): string => {
@@ -3317,6 +3358,10 @@ const portNativeNoParamsLabel = (stepType: string): string => {
       return "Inverse NTT mod 8380417 (FIPS 204 Algorithm 42), collapsed to one frame. No editable parameters; the modulus, twiddle table and final 256⁻¹ scaling are built in. Watch the same transform layer by layer under Lattice → NTT mod 8380417.";
     case "ml-dsa.verdict@1":
       return "The verdict of ML-DSA verification (FIPS 204 Algorithm 8) — valid only if the recomputed challenge c̃′ matches the signature's c̃, every coefficient of z is below γ1 − β, and the hint was well formed. No editable parameters; all three facts arrive on ports, so the bound is changed where γ1 and β are.";
+    case "ml-dsa.attempt-verdict@1":
+      return "Keep or reject one signing attempt (FIPS 204 Algorithm 7) — kept only if all four checks pass: z and r0 small enough, c·t0 small enough, and at most ω hint bits. No editable parameters; each check's answer, measured value and limit arrive on ports, so a limit is changed where γ1, γ2, β and ω are.";
+    case "ml-dsa.release-signature@1":
+      return "Releases the signature if an attempt was accepted, and nothing if the signer reached its attempt limit (FIPS 204 §3.4). No editable parameters; to change the limit, change the length of the attempt-limit step that feeds the loop.";
     case "ml-kem.select-shared-secret@1":
       return "Implicit rejection (FIPS 203 Algorithm 18) — returns the real shared secret when the re-encrypted ciphertext matches the one that arrived, and an undetectable decoy when it does not. No editable parameters; both ciphertexts and both candidate secrets arrive on ports. There is no branch here even in a real implementation: whether a ciphertext was rejected is precisely the bit this construction hides.";
     // Note the contrast with `add-mod-32@1`, which is fixed to 2³² because its

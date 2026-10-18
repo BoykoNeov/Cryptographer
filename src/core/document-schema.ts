@@ -96,7 +96,11 @@ export const HASH_IDS = [
  * a cryptic `Type 'true' is not assignable to type 'never'` rather than a named
  * error — which is exactly how P4 found this line.
  */
-export const ASYMMETRIC_IDS = ["rsa", "ml-kem-768"] as const satisfies readonly Asymmetric[];
+export const ASYMMETRIC_IDS = [
+  "rsa",
+  "ml-kem-768",
+  "ml-dsa-44",
+] as const satisfies readonly Asymmetric[];
 
 /**
  * Pseudo-random generator variants — `docs/plans/iterative-dancing-ocean.md`.

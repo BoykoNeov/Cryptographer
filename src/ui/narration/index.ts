@@ -54,6 +54,7 @@ import {
   zqDecompressNarration,
 } from "./lattice";
 import {
+  mlDsaAttemptVerdictNarration,
   mlDsaBitPackNarration,
   mlDsaBitUnpackNarration,
   mlDsaDecomposeNarration,
@@ -69,6 +70,7 @@ import {
   mlDsaMakeHintNarration,
   mlDsaNttNarration,
   mlDsaPower2RoundNarration,
+  mlDsaReleaseSignatureNarration,
   mlDsaSampleInBallNarration,
   mlDsaUseHintNarration,
   mlDsaVerdictNarration,
@@ -245,6 +247,8 @@ export const initNarrationRegistry = (): void => {
   registerNarration("ml-dsa.hint-unpack@1", mlDsaHintUnpackNarration);
   // ML-DSA P3 — the verification verdict, the second VERDICT headline.
   registerNarration("ml-dsa.verdict@1", mlDsaVerdictNarration);
+  registerNarration("ml-dsa.attempt-verdict@1", mlDsaAttemptVerdictNarration);
+  registerNarration("ml-dsa.release-signature@1", mlDsaReleaseSignatureNarration);
   initialized = true;
 };
 

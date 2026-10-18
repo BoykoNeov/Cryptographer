@@ -23,7 +23,14 @@
 
 import { decompose, modPm } from "@/core/ml-dsa-arith";
 import type { TraceFrame } from "@/core/types";
+import {
+  ATTEMPT_CHECKS,
+  type AttemptCheck,
+  attemptCheckPorts,
+  failedChecks,
+} from "@/steps/ml-dsa-attempt-verdict";
 import { hintBitUnpack } from "@/steps/ml-dsa-hint-pack";
+import { Index } from "solid-js";
 import { Bytes, ValueList, coeffs, intParam, modulusOf, num, safeVecParams } from "./lattice";
 import type { NarrationFn } from "./registry";
 
@@ -939,6 +946,168 @@ export const mlDsaVerdictNarration: NarrationFn = (frame) => {
               )}
             </li>
           </ul>
+        </div>
+      ),
+    },
+  ];
+};
+
+// ─── ml-dsa.attempt-verdict@1 ──────────────────────────────────────────────
+
+/** Labels for the four checks, as a learner reads them. */
+const CHECK_LABEL: Record<AttemptCheck, { readonly value: string; readonly limit: string }> = {
+  z: { value: "‖z‖∞", limit: "γ1 − β" },
+  r0: { value: "‖r0‖∞", limit: "γ2 − β" },
+  ct0: { value: "‖c·t0‖∞", limit: "γ2" },
+  hint: { value: "#h", limit: "ω" },
+};
+
+/** One check's measured value against its limit, e.g. "‖z‖∞ = 131,029 ≥ γ1 − β = 130,994". */
+const checkLine = (check: AttemptCheck, value: number, limit: number, ok: boolean): string => {
+  const { value: v, limit: l } = CHECK_LABEL[check];
+  // Norms are strict (<), the hint count is not (≤) — so the failing relation differs.
+  const rel = check === "hint" ? (ok ? "≤" : ">") : ok ? "<" : "≥";
+  return `${v} = ${num(value)} ${rel} ${l} = ${num(limit)}`;
+};
+
+/** How one check came out, in words: the margin it passed by, or failed by. */
+const checkVerdict = (r: {
+  readonly check: AttemptCheck;
+  readonly ok: boolean;
+  readonly value: number;
+  readonly limit: number;
+}): string => {
+  if (r.check === "hint") {
+    return r.ok
+      ? `passes, with room for ${num(r.limit - r.value)} more.`
+      : `fails: ${num(r.value - r.limit)} too many to fit the signature's slots.`;
+  }
+  return r.ok
+    ? `passes, ${num(r.limit - r.value)} to spare.`
+    : `fails, over by ${num(r.value - r.limit + 1)}.`;
+};
+
+/**
+ * The third VERDICT headline in the app. Whether this attempt is kept is not
+ * knowable from the spec, only from the frame, and the reason is the lesson:
+ * "attempt 1 rejected: ‖z‖∞ = 131,029 ≥ γ1 − β = 130,994; ‖r0‖∞ = …". Every failed check
+ * is named, because all four run on every attempt and more than one can fail.
+ */
+export const mlDsaAttemptVerdictNarration: NarrationFn = (frame) => {
+  const accepted = frame.portOutputs?.get("accepted");
+  if (!(accepted instanceof Uint8Array)) return null;
+  const rows: { check: AttemptCheck; ok: boolean; value: number; limit: number }[] = [];
+  for (const { name } of ATTEMPT_CHECKS) {
+    const ports = attemptCheckPorts(name);
+    const ok = frame.portInputs?.get(ports.ok);
+    const value = scalarOf(frame, ports.value);
+    const limit = scalarOf(frame, ports.limit);
+    if (!(ok instanceof Uint8Array) || value === null || limit === null) return null;
+    rows.push({ check: name, ok: ok[0] === 1, value, limit });
+  }
+  const attempt = frame.blockIndex === undefined ? "" : `attempt ${frame.blockIndex + 1} `;
+  const failed = rows.filter((r) => !r.ok);
+  const headline =
+    failed.length === 0
+      ? `1 — ${attempt}ACCEPTED: all four checks pass`
+      : `1 — ${attempt}rejected: ${failed.map((r) => checkLine(r.check, r.value, r.limit, false)).join("; ")}`;
+  return [
+    {
+      key: "verdict",
+      label: headline,
+      Prose: () => (
+        <div>
+          <p>
+            {failed.length === 0
+              ? "Every check passed, so this candidate is safe to publish: it reveals nothing about the secret key, and the verifier will rebuild the same commitment. The loop stops here, and this candidate is the signature."
+              : "This candidate is thrown away. Publishing it could leak something about the secret key or fail to verify, so the signer draws a fresh mask and tries again."}
+          </p>
+          {failed.length > 1 ? (
+            <p>
+              More than one check failed. The standard stops at the first failure; here all four are
+              always computed, so every reason is visible.
+            </p>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      key: "checks",
+      label: `2 — ${rows.map((r) => `${CHECK_LABEL[r.check].value} ${r.ok ? "✓" : "✗"}`).join(" · ")}`,
+      Prose: () => (
+        <div>
+          <ul>
+            <Index each={rows}>
+              {(r) => (
+                <li>
+                  <code>{checkLine(r().check, r().value, r().limit, r().ok)}</code> —{" "}
+                  {checkVerdict(r())}
+                </li>
+              )}
+            </Index>
+          </ul>
+        </div>
+      ),
+    },
+  ];
+};
+
+// ─── ml-dsa.release-signature@1 ────────────────────────────────────────────
+
+/** "z", "r0 and z", … — the failed checks a log byte records. */
+const reasonList = (failedByte: number): string =>
+  failedChecks(failedByte)
+    .map((c) => CHECK_LABEL[c].value)
+    .join(" and ");
+
+export const mlDsaReleaseSignatureNarration: NarrationFn = (frame) => {
+  const accepted = frame.portInputs?.get("accepted");
+  const log = frame.portInputs?.get("log");
+  const out = frame.portOutputs?.get("output");
+  if (
+    !(accepted instanceof Uint8Array) ||
+    !(log instanceof Uint8Array) ||
+    !(out instanceof Uint8Array)
+  ) {
+    return null;
+  }
+  const ok = accepted[0] === 1;
+  const n = log.length;
+  const rejected = Array.from(log.subarray(0, ok ? n - 1 : n));
+  return [
+    {
+      key: "verdict",
+      label: ok
+        ? `1 — SIGNED: accepted on attempt ${n}, ${num(out.length)} bytes`
+        : `1 — NO SIGNATURE: all ${n} attempts were rejected`,
+      Prose: () => (
+        <div>
+          <p>
+            {ok
+              ? `Attempt ${n} passed all four checks, so its candidate is the signature: c̃, then z, then the hint.`
+              : `The loop reached its limit of ${n} attempts without accepting one, so there is no signature to give. The output is empty rather than the last rejected candidate, which would look like a signature and fail to verify.`}
+          </p>
+        </div>
+      ),
+    },
+    {
+      key: "attempts",
+      label: `2 — ${rejected.length} rejected attempt${rejected.length === 1 ? "" : "s"}`,
+      Prose: () => (
+        <div>
+          {rejected.length === 0 ? (
+            <p>The very first attempt was accepted.</p>
+          ) : (
+            <ul>
+              <Index each={rejected}>
+                {(b, i) => (
+                  <li>
+                    attempt {i + 1}: rejected by {reasonList(b())}
+                  </li>
+                )}
+              </Index>
+            </ul>
+          )}
         </div>
       ),
     },

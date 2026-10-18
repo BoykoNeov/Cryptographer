@@ -241,6 +241,13 @@ export const NARRATION_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
   // it, each narrated via its own `narrationOverride`. Below the cell-shape gate
   // anyway (`input: "any"`) — listed here for parity.
   "twofish.publish-subkeys@1",
+  // The aux-publish tail of ML-DSA signing's precomputation (P4, 2026-10-18).
+  // Identity passthrough that files Â, ŝ1, ŝ2, t̂0, μ and ρ″ under
+  // aux["ml-dsa.sign.*"] so the attempt loop's body can read them back — a loop
+  // body sees only its own `in` and `chain` wires. Same posture as the tails
+  // above: every value it carries is computed and shown by the leaves feeding
+  // it. The only `ml-dsa.` step on this list; the rest of the family is narrated.
+  "ml-dsa.publish@1",
   // The three element-wise Z_q vector primitives (lattice P1, allowlisted
   // 2026-08-10 when the rest of the family got narrators). This is the AES /
   // Blowfish / Twofish port-native-round-body posture, and it is a conscious

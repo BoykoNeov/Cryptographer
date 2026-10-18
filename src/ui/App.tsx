@@ -57,6 +57,7 @@ import { FeistelRoundBytes } from "./components/FeistelRoundBytes";
 import { FeistelSwapDiagram } from "./components/FeistelSwapDiagram";
 import { GraphView } from "./components/GraphView";
 import { IvInput } from "./components/IvInput";
+import { MlDsaVerifyMessage } from "./components/MlDsaVerifyMessage";
 import { NttButterflyDiagram } from "./components/NttButterflyDiagram";
 import { ParamEditor } from "./components/ParamEditor";
 import { PortFlowView } from "./components/PortFlowView";
@@ -80,6 +81,7 @@ import "./narration/index";
 // builder's actual block size.
 import { PRNG_SEED_AUX } from "@/ciphers/chacha20-csprng";
 import { LCG_WORD_BYTES } from "@/ciphers/lcg";
+import { ML_DSA_44_SIG_BYTES } from "@/ciphers/ml-dsa-44";
 import { ML_KEM_N } from "@/ciphers/mlkem-constants";
 import { iterateScopeKey } from "@/core/step-id";
 import { clearDirty, setAutoRerun, setDirty, useAutoRerun, useDirty } from "./stores/auto-rerun";
@@ -130,6 +132,7 @@ import {
   type Prng,
   SEED_BYTES_BY_PRNG,
   describeAlgorithm,
+  endpointLabelsFor,
   historyOfAlgorithm,
   isAsymmetric,
   isCipher,
@@ -184,6 +187,7 @@ import {
   usePaddingScheme,
 } from "./stores/padding";
 import { registry } from "./stores/registry";
+import { recordSignedMessage } from "./stores/signed-message";
 import {
   MAX_KMAC_KEY_LENGTH,
   MAX_SHAKE_OUTPUT,
@@ -589,6 +593,17 @@ export const App = () => {
         if (inputBytes.length !== wanted) {
           throw new Error(
             `${inputLabel()}: ${LATTICE_LABELS[lattice()]} takes a ${wanted}-byte polynomial (${ML_KEM_N} coefficients × ${COEFF_BYTES_BY_LATTICE[lattice()]} bytes); got ${inputBytes.length}.`,
+          );
+        }
+      } else if (algorithm() === "ml-dsa-44") {
+        // ML-DSA branch. Its own arm for the reason the lattice one above gives:
+        // the spec publishes `cipherConstants.q`, and the RSA arm below reads
+        // `q` for an unrelated check. A signature has a fixed width — c̃ ‖ z ‖ h
+        // — and a wrong length would otherwise surface as an internal split
+        // error several steps in. A message to sign may be any length.
+        if (mode() === "decrypt" && inputBytes.length !== ML_DSA_44_SIG_BYTES) {
+          throw new Error(
+            `${inputLabel()}: an ML-DSA-44 signature is exactly ${ML_DSA_44_SIG_BYTES} bytes (32-byte challenge, 2304-byte z, ${ML_DSA_44_SIG_BYTES - 32 - 2304}-byte hint); got ${inputBytes.length}.`,
           );
         }
       } else {
@@ -1554,37 +1569,19 @@ export const App = () => {
    */
   const hasDirection = () => !isHash(algorithm()) && !isPrng(algorithm());
 
-  const inputLabel = () => {
-    if (isHash(algorithm())) return "message";
-    // A generator's only input is its seed — which sequence to produce. It is
-    // emphatically NOT a plaintext: nothing about it is being transformed into
-    // the output, and calling it one would teach the wrong model.
-    if (isPrng(algorithm())) return "seed";
-    // A KEM is not an encryption scheme, and the labels have to say so or the
-    // whole point is lost. Encapsulation does not transport a message the caller
-    // chose — it agrees a secret, and its input is the 32 bytes a real
-    // implementation would draw at random. Decapsulation returns that secret,
-    // never a plaintext.
-    if (algorithm() === "ml-kem-768")
-      return mode() === "encrypt" ? "message m (random)" : "ciphertext";
-    // RSA: encrypt consumes the message m, decrypt consumes the ciphertext c.
-    if (isAsymmetric(algorithm())) return mode() === "encrypt" ? "message" : "ciphertext";
-    // The lattice family transforms a polynomial into its transformed form and
-    // back. Neither side is a plaintext or a ciphertext — nothing is being
-    // concealed — so both directions are named for what they hold.
-    if (isLattice(algorithm()))
-      return mode() === "encrypt" ? "polynomial" : "transformed polynomial";
-    return mode() === "encrypt" ? "plaintext" : "ciphertext";
-  };
-  const outputLabel = () => {
-    if (isHash(algorithm())) return "digest";
-    if (isPrng(algorithm())) return "random bytes";
-    if (algorithm() === "ml-kem-768") return mode() === "encrypt" ? "ciphertext" : "shared secret";
-    if (isAsymmetric(algorithm())) return mode() === "encrypt" ? "ciphertext" : "message";
-    if (isLattice(algorithm()))
-      return mode() === "encrypt" ? "transformed polynomial" : "polynomial";
-    return mode() === "encrypt" ? "ciphertext" : "plaintext";
-  };
+  // Remember what ML-DSA-44 Sign is signing, so Verify can offer to copy it in
+  // (the mode flip replaces this field with the signature). Recording only
+  // fills a store; nothing is copied until the user asks.
+  createEffect(() => {
+    if (algorithm() !== "ml-dsa-44" || mode() !== "encrypt") return;
+    const message = tryParseBytes(inputText(), fmt());
+    if (message !== null) recordSignedMessage(message);
+  });
+
+  // Both labels come from one shared function, which the graph's endpoint
+  // pills read too — see `endpointLabelsFor` for why they are not kept here.
+  const inputLabel = () => endpointLabelsFor(algorithm(), mode()).input;
+  const outputLabel = () => endpointLabelsFor(algorithm(), mode()).output;
 
   return (
     <div class="app">
@@ -2181,6 +2178,12 @@ export const App = () => {
             spellcheck={false}
           />
         </label>
+        {/* ML-DSA-44 Verify checks the signature in the field above against a
+            message held in its own spec; this row shows that message and offers
+            the opt-in copy from Sign (never automatic — the cross-mode rule). */}
+        <Show when={algorithm() === "ml-dsa-44" && mode() === "decrypt"}>
+          <MlDsaVerifyMessage />
+        </Show>
         {/* Key field shown whenever the live spec CONSUMES a key
             (`inputs.key.byteLength > 0`) — the honest test. Every cipher is
             keyed; most hashes are keyless (SHA-256 declares byteLength 0, so a

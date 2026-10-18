@@ -147,6 +147,11 @@ import {
   keyExpansionV2PortContract,
 } from "../steps/key-expansion";
 import {
+  mlDsaAttemptVerdict,
+  mlDsaAttemptVerdictDoc,
+  mlDsaAttemptVerdictPortContract,
+} from "../steps/ml-dsa-attempt-verdict";
+import {
   mlDsaBitPack,
   mlDsaBitPackDoc,
   mlDsaBitPackPortContract,
@@ -202,6 +207,17 @@ import {
   mlDsaPower2RoundDoc,
   mlDsaPower2RoundPortContract,
 } from "../steps/ml-dsa-power2round";
+import {
+  mlDsaPublish,
+  mlDsaPublishDoc,
+  mlDsaPublishMeta,
+  mlDsaPublishPortContract,
+} from "../steps/ml-dsa-publish";
+import {
+  mlDsaReleaseSignature,
+  mlDsaReleaseSignatureDoc,
+  mlDsaReleaseSignaturePortContract,
+} from "../steps/ml-dsa-release-signature";
 import {
   mlDsaSampleInBall,
   mlDsaSampleInBallDoc,
@@ -1463,6 +1479,29 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: mlDsaVerdict,
     shape: mlDsaVerdictPortContract,
     doc: mlDsaVerdictDoc,
+  });
+  // ML-DSA P4 — signing. `publish` files the once-per-signature values into
+  // aux so the attempt loop's body can read them (port flow stops at the
+  // loop's boundary); `attempt-verdict` is the rejection test; and
+  // `release-signature` hands out the signature, or nothing at the cap.
+  r.register("ml-dsa.publish@1", {
+    kind: "ported",
+    executor: mlDsaPublish,
+    shape: mlDsaPublishPortContract,
+    meta: mlDsaPublishMeta,
+    doc: mlDsaPublishDoc,
+  });
+  r.register("ml-dsa.attempt-verdict@1", {
+    kind: "ported",
+    executor: mlDsaAttemptVerdict,
+    shape: mlDsaAttemptVerdictPortContract,
+    doc: mlDsaAttemptVerdictDoc,
+  });
+  r.register("ml-dsa.release-signature@1", {
+    kind: "ported",
+    executor: mlDsaReleaseSignature,
+    shape: mlDsaReleaseSignaturePortContract,
+    doc: mlDsaReleaseSignatureDoc,
   });
   r.register("shift-bits-right@1", {
     kind: "ported",

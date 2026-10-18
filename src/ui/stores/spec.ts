@@ -50,6 +50,7 @@ import {
   readKmacKeyLength,
 } from "@/ciphers/kmac";
 import { buildLcgSpec } from "@/ciphers/lcg";
+import { buildMlDsa44SignSpec, buildMlDsa44VerifySpec } from "@/ciphers/ml-dsa-44";
 import { buildMlKemDecapsSpec, buildMlKemEncapsSpec } from "@/ciphers/ml-kem-768";
 import { buildCbcSpec } from "@/ciphers/modes/cbc";
 import { buildCfbSpec } from "@/ciphers/modes/cfb";
@@ -501,6 +502,10 @@ const asymmetricDefaults: Record<Asymmetric, Record<Mode, CipherSpec>> = {
   // ciphertext decapsulation takes as its input — which is why ML-KEM joined
   // this family rather than the lattice one it shares all its arithmetic with.
   "ml-kem-768": { encrypt: buildMlKemEncapsSpec(), decrypt: buildMlKemDecapsSpec() },
+  // A signature scheme's two directions are signing and verification. Signing's
+  // output — the signature — is exactly verification's input, the same
+  // hand-off encapsulation → decapsulation makes.
+  "ml-dsa-44": { encrypt: buildMlDsa44SignSpec(), decrypt: buildMlDsa44VerifySpec() },
 };
 
 /** Pick the canonical asymmetric spec for an `(asymmetric, mode)` pair.

@@ -94,7 +94,7 @@ describe("App — ML-KEM-768 in the public-key family", () => {
     resetAll();
   });
 
-  it("offers both public-key variants and keeps the family's surfaces", () => {
+  it("offers the public-key variants and keeps the family's surfaces", () => {
     const { container } = render(() => <App />);
     fireEvent.change(findSelectByLabel(container, "kind"), { target: { value: "asymmetric" } });
 
@@ -102,6 +102,7 @@ describe("App — ML-KEM-768 in the public-key family", () => {
     expect(Array.from(algo.querySelectorAll("option")).map((o) => o.value)).toEqual([
       "rsa",
       "ml-kem-768",
+      "ml-dsa-44",
     ]);
 
     fireEvent.change(algo, { target: { value: "ml-kem-768" } });
