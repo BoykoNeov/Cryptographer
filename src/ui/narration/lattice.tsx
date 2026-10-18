@@ -62,7 +62,7 @@ import type { NarrationFn, NarrationUnit } from "./registry";
  * would take the whole linear view down on a spec the runtime itself rejects
  * a moment later. Every entry point funnels through this.
  */
-const safeVecParams = (params: Json, step: string): ZqVecParams | null => {
+export const safeVecParams = (params: Json, step: string): ZqVecParams | null => {
   try {
     return readZqVecParams(params, step);
   } catch {
@@ -71,14 +71,14 @@ const safeVecParams = (params: Json, step: string): ZqVecParams | null => {
 };
 
 /** Read an integer param, or null when absent/malformed (narrators decline). */
-const intParam = (params: Json, key: string): number | null => {
+export const intParam = (params: Json, key: string): number | null => {
   if (typeof params !== "object" || params === null || Array.isArray(params)) return null;
   const v = (params as Record<string, Json>)[key];
   return typeof v === "number" && Number.isInteger(v) ? v : null;
 };
 
 /** Every coefficient of a packed vector, as bigints. */
-const coeffs = (bytes: Uint8Array, p: ZqVecParams): bigint[] => {
+export const coeffs = (bytes: Uint8Array, p: ZqVecParams): bigint[] => {
   const n = Math.floor(bytes.length / p.coeffBytes);
   const out: bigint[] = [];
   for (let i = 0; i < n; i++) out.push(readCoeff(bytes, i, p));
@@ -86,7 +86,10 @@ const coeffs = (bytes: Uint8Array, p: ZqVecParams): bigint[] => {
 };
 
 /** The modulus port, as a bigint — or null when it is missing or zero. */
-const modulusOf = (frame: { portInputs?: ReadonlyMap<string, Uint8Array> }, p: ZqVecParams) => {
+export const modulusOf = (
+  frame: { portInputs?: ReadonlyMap<string, Uint8Array> },
+  p: ZqVecParams,
+) => {
   const m = frame.portInputs?.get("modulus");
   if (!(m instanceof Uint8Array) || m.length === 0) return null;
   const q = readCoeff(m, 0, p);
@@ -98,7 +101,7 @@ const modulusOf = (frame: { portInputs?: ReadonlyMap<string, Uint8Array> }, p: Z
  * Twofish narrators — an unstyled `<ol>` today, but keeping one class name
  * means a future style reaches all of them at once.
  */
-const ValueList = (props: { items: { label: string; text: string }[] }) => (
+export const ValueList = (props: { items: { label: string; text: string }[] }) => (
   <ol class="twofish-word-list">
     <Index each={props.items}>
       {(it) => (
@@ -113,12 +116,12 @@ const ValueList = (props: { items: { label: string; text: string }[] }) => (
 );
 
 /** Bytes rendered in the active format. */
-const Bytes = (props: { bytes: Uint8Array; fmt: ByteFormat }) => (
+export const Bytes = (props: { bytes: Uint8Array; fmt: ByteFormat }) => (
   <code>{formatBytes(props.bytes, props.fmt)}</code>
 );
 
 /** `n` rendered with thousands separators, for the size sentences. */
-const num = (n: number): string => n.toLocaleString("en-US");
+export const num = (n: number): string => n.toLocaleString("en-US");
 
 // ─── zq-compress@1 ─────────────────────────────────────────────────────────
 

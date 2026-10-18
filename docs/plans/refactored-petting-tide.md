@@ -251,6 +251,24 @@ tooltip named only Z_3329 and only RSA.
 
 ### P2 — the ML-DSA arithmetic layer (palette only, no selector entry)
 
+**Two rules decided at P2's start (2026-10-18, on the advisor's catch):**
+
+1. **Ports vs params.** Every constant a learner might edit reaches every
+   step that uses it on a wire. That covers q, γ1, γ2, ω, the norm bounds and
+   the packing ranges. Params hold only structural sizes: d, k, l, η, τ and
+   output lengths. The audit that forced the rule: γ1 also fixes ExpandMask's
+   width and z's packing range, γ2 also fixes w1's packing width, and ω also
+   fixes the packed hint's length. A param copy of any of those would break
+   P4's "edit γ1, watch κ change" with a crash or an unreadable signature.
+   So FIPS's `w1Encode` becomes its own step, which reads γ2.
+2. **The packers stay strict, and P4 selects before packing.** The signing
+   loop does not branch, so it encodes a candidate on every attempt. A
+   rejected `z` can sit up to β outside BitPack's range, and a rejected `h`
+   can hold more than ω ones. Rather than making the packers accept anything,
+   P4 swaps a rejected attempt for zeros before encoding: a select, the
+   ML-KEM precedent. That matches FIPS, which never encodes a rejected
+   candidate. Nothing in P2 changes.
+
 New steps, each with tests in the same commit:
 - **Generic `zq-` steps:**
   - `zq-vec-mul@1`: element-wise, the NTT-domain product. It is deliberately a

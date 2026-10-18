@@ -385,6 +385,14 @@ export const PROVENANCE_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set<string>([
   "zq-vec-add@1",
   "zq-vec-sub@1",
   "zq-vec-mul-scalar@1",
+  // ML-DSA P2's element-wise product: the same story on 4-byte elements, where
+  // the product reaches 46 bits before the reduction folds it back.
+  "zq-vec-mul@1",
+  // approximate — the infinity-norm check (ML-DSA P2). Its one-byte verdict
+  // depends on EVERY coefficient (the largest decides), and which one is
+  // largest is a property of the values, so the honest cone is "all of the
+  // input" — which says nothing. Its `norm` output is the same story.
+  "zq-inf-norm-below@1",
   // approximate — the compression pair (ML-KEM P2), same one-element-at-a-time
   // story as the three above and then some: both are round-to-nearest over a
   // ratio, so a single low-bit change in the input can carry all the way up

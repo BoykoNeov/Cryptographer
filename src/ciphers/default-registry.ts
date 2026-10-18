@@ -146,6 +146,27 @@ import {
   keyExpansionV2Meta,
   keyExpansionV2PortContract,
 } from "../steps/key-expansion";
+import {
+  mlDsaDecompose,
+  mlDsaDecomposeDoc,
+  mlDsaDecomposePortContract,
+} from "../steps/ml-dsa-decompose";
+import {
+  mlDsaHintCount,
+  mlDsaHintCountDoc,
+  mlDsaHintCountPortContract,
+} from "../steps/ml-dsa-hint-count";
+import {
+  mlDsaMakeHint,
+  mlDsaMakeHintDoc,
+  mlDsaMakeHintPortContract,
+} from "../steps/ml-dsa-make-hint";
+import {
+  mlDsaPower2Round,
+  mlDsaPower2RoundDoc,
+  mlDsaPower2RoundPortContract,
+} from "../steps/ml-dsa-power2round";
+import { mlDsaUseHint, mlDsaUseHintDoc, mlDsaUseHintPortContract } from "../steps/ml-dsa-use-hint";
 import { mlKemHashG, mlKemHashGDoc, mlKemHashGPortContract } from "../steps/ml-kem-hash-g";
 import { mlKemHashH, mlKemHashHDoc, mlKemHashHPortContract } from "../steps/ml-kem-hash-h";
 import { mlKemKdfJ, mlKemKdfJDoc, mlKemKdfJPortContract } from "../steps/ml-kem-kdf-j";
@@ -325,7 +346,13 @@ import { zqByteEncode, zqByteEncodeDoc, zqByteEncodePortContract } from "../step
 import { zqCbd, zqCbdDoc, zqCbdPortContract } from "../steps/zq-cbd";
 import { zqCompress, zqCompressDoc, zqCompressPortContract } from "../steps/zq-compress";
 import { zqDecompress, zqDecompressDoc, zqDecompressPortContract } from "../steps/zq-decompress";
+import {
+  zqInfNormBelow,
+  zqInfNormBelowDoc,
+  zqInfNormBelowPortContract,
+} from "../steps/zq-inf-norm-below";
 import { zqVecAdd, zqVecAddDoc, zqVecAddPortContract } from "../steps/zq-vec-add";
+import { zqVecMul, zqVecMulDoc, zqVecMulPortContract } from "../steps/zq-vec-mul";
 import {
   zqVecMulScalar,
   zqVecMulScalarDoc,
@@ -1238,6 +1265,60 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: mlKemSelectSharedSecret,
     shape: mlKemSelectSharedSecretPortContract,
     doc: mlKemSelectSharedSecretDoc,
+  });
+  // ─── ML-DSA P2 — the arithmetic layer (docs/plans/refactored-petting-tide.md) ──
+  //
+  // Palette-only, like ML-KEM's P2: no shipped spec uses these until the
+  // signature reaches the selector in P4. Two of them are generic (`zq-`): the
+  // ELEMENT-WISE multiply — correct here, where q = 8380417 lets the transform
+  // run all eight layers, and wrong for ML-KEM's 3329, which is why it sits
+  // beside `zq-base-case-mul@1` rather than replacing it — and the infinity-norm
+  // check every rejection test in signing is built from.
+  //
+  // Every constant a learner might edit (γ1, γ2, ω, the bounds) arrives on a
+  // PORT, never a param, so one constant feeds every step that depends on it.
+  // Structural sizes (d, k, l, η, τ) stay params.
+  r.register("zq-vec-mul@1", {
+    kind: "ported",
+    executor: zqVecMul,
+    shape: zqVecMulPortContract,
+    doc: zqVecMulDoc,
+  });
+  r.register("zq-inf-norm-below@1", {
+    kind: "ported",
+    executor: zqInfNormBelow,
+    shape: zqInfNormBelowPortContract,
+    doc: zqInfNormBelowDoc,
+  });
+  r.register("ml-dsa.power2round@1", {
+    kind: "ported",
+    executor: mlDsaPower2Round,
+    shape: mlDsaPower2RoundPortContract,
+    doc: mlDsaPower2RoundDoc,
+  });
+  r.register("ml-dsa.decompose@1", {
+    kind: "ported",
+    executor: mlDsaDecompose,
+    shape: mlDsaDecomposePortContract,
+    doc: mlDsaDecomposeDoc,
+  });
+  r.register("ml-dsa.make-hint@1", {
+    kind: "ported",
+    executor: mlDsaMakeHint,
+    shape: mlDsaMakeHintPortContract,
+    doc: mlDsaMakeHintDoc,
+  });
+  r.register("ml-dsa.use-hint@1", {
+    kind: "ported",
+    executor: mlDsaUseHint,
+    shape: mlDsaUseHintPortContract,
+    doc: mlDsaUseHintDoc,
+  });
+  r.register("ml-dsa.hint-count@1", {
+    kind: "ported",
+    executor: mlDsaHintCount,
+    shape: mlDsaHintCountPortContract,
+    doc: mlDsaHintCountDoc,
   });
   r.register("shift-bits-right@1", {
     kind: "ported",

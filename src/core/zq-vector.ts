@@ -156,6 +156,30 @@ export const readZqModulus = (
   return q;
 };
 
+/**
+ * Read a non-negative scalar that arrives on a port — a bound, γ2, ω, a
+ * counter — as a big-endian integer of whatever width it was wired at.
+ *
+ * ML-DSA (P2 of `docs/plans/refactored-petting-tide.md`) puts every constant a
+ * learner might edit on a wire rather than in a param, so that ONE constant
+ * feeds every step that depends on it; this is the reader for those wires.
+ * Returned as a `number` because every such value in the family is far below
+ * 2⁵³ — and checked, so a wider value is an error rather than a rounding.
+ */
+export const readScalarPort = (
+  inputs: ReadonlyMap<string, Uint8Array>,
+  portName: string,
+  step: string,
+): number => {
+  const bytes = requireZqPort(inputs, portName, step);
+  let v = 0n;
+  for (const b of bytes) v = (v << 8n) | BigInt(b);
+  if (v > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`${step}: input port "${portName}" carries ${v}, too large for this step`);
+  }
+  return Number(v);
+};
+
 /** Element count of a vector port, with the "whole number of coefficients" check. */
 export const zqElementCount = (
   bytes: Uint8Array,

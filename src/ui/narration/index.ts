@@ -53,6 +53,14 @@ import {
   zqCompressNarration,
   zqDecompressNarration,
 } from "./lattice";
+import {
+  mlDsaDecomposeNarration,
+  mlDsaHintCountNarration,
+  mlDsaMakeHintNarration,
+  mlDsaPower2RoundNarration,
+  mlDsaUseHintNarration,
+  zqInfNormBelowNarration,
+} from "./ml-dsa";
 import { mt19937SeedNarration, mt19937TwistNarration } from "./mt19937";
 import {
   iso78164PadNarration,
@@ -200,6 +208,14 @@ export const initNarrationRegistry = (): void => {
   // VERDICT rather than a description: whether this ciphertext survived the
   // re-encryption check is not knowable from the spec, only from the frame.
   registerNarration("ml-kem.select-shared-secret@1", mlKemSelectSharedSecretNarration);
+  // ML-DSA P2 (docs/plans/refactored-petting-tide.md) — the rounding, hint and
+  // norm-check steps. Every one carries a value-dependent verdict or count.
+  registerNarration("zq-inf-norm-below@1", zqInfNormBelowNarration);
+  registerNarration("ml-dsa.power2round@1", mlDsaPower2RoundNarration);
+  registerNarration("ml-dsa.decompose@1", mlDsaDecomposeNarration);
+  registerNarration("ml-dsa.make-hint@1", mlDsaMakeHintNarration);
+  registerNarration("ml-dsa.use-hint@1", mlDsaUseHintNarration);
+  registerNarration("ml-dsa.hint-count@1", mlDsaHintCountNarration);
   initialized = true;
 };
 

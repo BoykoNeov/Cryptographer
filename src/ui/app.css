@@ -956,6 +956,13 @@ button:disabled {
   font-size: 10px;
 }
 
+/* The ML-DSA block's "wired constants" list — the ports a learner edits
+   instead of params. Tight, so a four-port step stays one glance tall. */
+.param-scalar-list {
+  margin: 2px 0 0;
+  padding-left: 16px;
+}
+
 /* Grouped section inside a param editor (a label + the editor for one
    chunk of the params). Used by the key-expansion block. */
 .param-section {

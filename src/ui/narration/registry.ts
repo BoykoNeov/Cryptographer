@@ -267,6 +267,12 @@ export const NARRATION_NO_OP_ALLOWLIST: ReadonlySet<string> = new Set([
   "zq-vec-add@1",
   "zq-vec-sub@1",
   "zq-vec-mul-scalar@1",
+  // ML-DSA P2's element-wise product, for every reason above: one product per
+  // coefficient, identical on all 256. What makes it worth a palette entry —
+  // that element-wise is CORRECT at q = 8380417 and wrong at 3329 — is a fact
+  // about the two primes, not about any frame, and it leads the step's own
+  // type-level description.
+  "zq-vec-mul@1",
   // Bit-level linear transforms — byte-level prose would be misleading.
   // (Bit-permutation is honest at byte granularity — narrated in Phase 2.)
   "serpent.linear-transform@1",

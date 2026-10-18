@@ -111,10 +111,10 @@ describe("narration-registry coverage contract", () => {
   // ── The lattice family (2026-08-10) ──────────────────────────────────
   //
   // Prefix-derived, NOT hand-listed — see the header. `zq-` covers the
-  // nine P1+P2 arithmetic primitives, `ml-kem.` the five P3 Keccak
-  // monoliths. A fourteenth lattice step registered tomorrow enrols here
-  // without anyone remembering to add it.
-  const LATTICE_PREFIXES = ["zq-", "ml-kem."] as const;
+  // Z_q arithmetic primitives (ML-KEM P1+P2 and ML-DSA P2's two), `ml-kem.`
+  // the ML-KEM monoliths, `ml-dsa.` the ML-DSA layer. A new lattice step
+  // registered tomorrow enrols here without anyone remembering to add it.
+  const LATTICE_PREFIXES = ["zq-", "ml-kem.", "ml-dsa."] as const;
   const latticeStepTypes = registry
     .types()
     .filter((t) => LATTICE_PREFIXES.some((prefix) => t.startsWith(prefix)))
@@ -124,9 +124,10 @@ describe("narration-registry coverage contract", () => {
     // A sanity pin on the WALK, not on the family: if a rename ever moved
     // these out from under both prefixes the filter would silently match
     // nothing and every assertion below would pass vacuously.
-    expect(latticeStepTypes.length).toBe(15);
+    expect(latticeStepTypes.length).toBe(22);
     expect(latticeStepTypes).toContain("zq-vec-add@1");
     expect(latticeStepTypes).toContain("ml-kem.sample-ntt@1");
+    expect(latticeStepTypes).toContain("ml-dsa.decompose@1");
   });
 
   it("every lattice step type is either narration-registered or allowlisted", () => {
@@ -147,7 +148,7 @@ describe("narration-registry coverage contract", () => {
     ).toEqual([]);
   });
 
-  it("registers fns for the 12 narrated lattice step types", () => {
+  it("registers fns for the narrated lattice step types", () => {
     // Explicit per-type assertions rather than a count: a count would let
     // a swap (one registered, one dropped) pass. `ml-kem.hash-h@1`,
     // `ml-kem.kdf-j@1` and `ml-kem.select-shared-secret@1` are emitted by
@@ -167,21 +168,33 @@ describe("narration-registry coverage contract", () => {
       "ml-kem.hash-h@1",
       "ml-kem.kdf-j@1",
       "ml-kem.select-shared-secret@1",
+      // ML-DSA P2 — narrated in src/ui/narration/ml-dsa.tsx.
+      "zq-inf-norm-below@1",
+      "ml-dsa.power2round@1",
+      "ml-dsa.decompose@1",
+      "ml-dsa.make-hint@1",
+      "ml-dsa.use-hint@1",
+      "ml-dsa.hint-count@1",
     ]) {
       expect(hasNarrationFn(t), `${t} should have a registered NarrationFn`).toBe(true);
     }
   });
 
-  it("allowlists exactly the three element-wise Z_q vector primitives", () => {
+  it("allowlists exactly the four element-wise Z_q vector primitives", () => {
     // The deliberate no-op half of the family decision. Negative arm
     // included: an element-wise primitive drifting onto the narrated list
     // (or a narrated step onto the allowlist) means the wires crossed.
-    for (const t of ["zq-vec-add@1", "zq-vec-sub@1", "zq-vec-mul-scalar@1"]) {
+    for (const t of ["zq-vec-add@1", "zq-vec-sub@1", "zq-vec-mul-scalar@1", "zq-vec-mul@1"]) {
       expect(NARRATION_NO_OP_ALLOWLIST.has(t), `${t} should be allowlisted`).toBe(true);
       expect(hasNarrationFn(t), `${t} should NOT also have a narrator`).toBe(false);
     }
     const allowlistedLattice = latticeStepTypes.filter((t) => NARRATION_NO_OP_ALLOWLIST.has(t));
-    expect(allowlistedLattice).toEqual(["zq-vec-add@1", "zq-vec-mul-scalar@1", "zq-vec-sub@1"]);
+    expect(allowlistedLattice).toEqual([
+      "zq-vec-add@1",
+      "zq-vec-mul-scalar@1",
+      "zq-vec-mul@1",
+      "zq-vec-sub@1",
+    ]);
   });
 
   it("registers fns for Serpent byte-level + bit-permutation steps (Phase 2)", () => {
@@ -301,6 +314,7 @@ describe("narration-registry coverage contract", () => {
       "zq-vec-add@1",
       "zq-vec-sub@1",
       "zq-vec-mul-scalar@1",
+      "zq-vec-mul@1",
     ]);
     expect(NARRATION_NO_OP_ALLOWLIST).toEqual(expected);
     // Negative assertion: the 6 round-body DES step types must NOT be on

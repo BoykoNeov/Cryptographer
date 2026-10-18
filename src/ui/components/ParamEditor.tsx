@@ -333,6 +333,9 @@ export const ParamEditor = (props: Props) => {
                 getStep().type === "zq-byte-decode@1" ||
                 getStep().type === "zq-cbd@1" ||
                 getStep().type === "zq-base-case-mul@1" ||
+                // ML-DSA P2's two generic additions share the family's shape.
+                getStep().type === "zq-vec-mul@1" ||
+                getStep().type === "zq-inf-norm-below@1" ||
                 // P3's sampler belongs to this block rather than the monolith
                 // family: it carries the same coefficient-width params and takes
                 // q on the same `modulus` port, so the "where is q?" answer this
@@ -348,6 +351,15 @@ export const ParamEditor = (props: Props) => {
                 only when present.
               */}
               <ZqVecBlock step={getStep()} />
+            </Match>
+            <Match when={ML_DSA_BLOCK_ROWS[getStep().type] !== undefined}>
+              {/*
+                The ML-DSA layer (P2). Its own block rather than the Z_q one,
+                because the "where is q?" answer is not the only one these steps
+                need: γ1, γ2, ω and the packing bounds are ALSO wired, and a
+                learner looking for them here has to be told where they went.
+              */}
+              <MlDsaBlock step={getStep()} />
             </Match>
             <Match when={getStep().type === "ml-kem.prf@1"}>
               {/*
@@ -1338,6 +1350,114 @@ const ZqVecBlock = (props: { step: StepLeaf }) => {
           value wired into that port.
         </dd>
       </div>
+    </dl>
+  );
+};
+
+// The ML-DSA layer (P2 of docs/plans/refactored-petting-tide.md). One block,
+// driven by a per-type table, because the steps differ only in WHICH rows they
+// need — and the rule deciding the rows is the family's design rule:
+//
+//   - Every constant a learner might edit (q, γ1, γ2, ω, the norm and packing
+//     bounds) arrives on a PORT. The block names those ports, so "where do I
+//     change γ2?" has an answer on screen. Making them params instead would let
+//     two steps that must agree quietly disagree.
+//   - Structural sizes (d, k, l, η, τ, an output length) are PARAMS, editable
+//     here, because each one is meaningful on a single leaf.
+//
+// Rows are keyed on the step TYPE, never on whether the value is present:
+// `insertStepIntoSpec` gives a palette-dropped leaf `params: {}`, and a
+// presence-gated row would hide the only control that can set it.
+type MlDsaIntRow = {
+  readonly key: string;
+  readonly label: string;
+  readonly hint: string;
+  readonly min: number;
+  readonly max: number;
+  readonly placeholder: string;
+};
+type MlDsaRows = {
+  /** Does this step carry the Z_q coefficient codec (coeffBytes / littleEndian)? */
+  readonly codec: boolean;
+  readonly ints: readonly MlDsaIntRow[];
+  /** Ports that carry a constant rather than data, with what each one is. */
+  readonly wired: readonly string[];
+};
+const D_ROW: MlDsaIntRow = {
+  key: "d",
+  label: "Bits split off (d)",
+  hint: "13 in every ML-DSA parameter set; the public key keeps the rest",
+  min: 1,
+  max: 31,
+  placeholder: "13",
+};
+export const ML_DSA_BLOCK_ROWS: Record<string, MlDsaRows> = {
+  "ml-dsa.power2round@1": { codec: true, ints: [D_ROW], wired: ["modulus — q"] },
+  "ml-dsa.decompose@1": {
+    codec: true,
+    ints: [],
+    wired: ["gamma2 — γ2, half a bucket's width", "modulus — q"],
+  },
+  "ml-dsa.make-hint@1": { codec: true, ints: [], wired: ["gamma2 — γ2", "modulus — q"] },
+  "ml-dsa.use-hint@1": { codec: true, ints: [], wired: ["gamma2 — γ2", "modulus — q"] },
+  "ml-dsa.hint-count@1": {
+    codec: true,
+    ints: [],
+    wired: ["omega — ω, the most hint bits a signature has room for"],
+  },
+};
+
+const MlDsaBlock = (props: { step: StepLeaf }) => {
+  const rows = (): MlDsaRows | undefined => ML_DSA_BLOCK_ROWS[props.step.type];
+  const params = (): Record<string, Json> => props.step.params as Record<string, Json>;
+  const intValue = (key: string): number => {
+    const v = params()[key];
+    return typeof v === "number" ? v : 0;
+  };
+  return (
+    <dl class="param-scalars">
+      <Show when={rows()?.codec}>
+        <div class="param-scalar-row">
+          <dt>Coefficient width</dt>
+          <dd>{intValue("coeffBytes") || "—"} bytes per coefficient</dd>
+        </div>
+        <div class="param-scalar-row">
+          <dt>Byte order</dt>
+          <dd>
+            {params().littleEndian === true ? "little-endian" : "big-endian"} within each
+            coefficient
+          </dd>
+        </div>
+      </Show>
+      <For each={rows()?.ints ?? []}>
+        {(row) => (
+          <div class="param-scalar-row">
+            <dt>{row.label}</dt>
+            <dd>
+              <IntInput
+                value={intValue(row.key)}
+                min={row.min}
+                max={row.max}
+                placeholder={row.placeholder}
+                onCommit={(next) => editStepParams(props.step.id, { ...params(), [row.key]: next })}
+              />{" "}
+              <span class="param-scalar-hint">{row.hint}</span>
+            </dd>
+          </div>
+        )}
+      </For>
+      <Show when={(rows()?.wired.length ?? 0) > 0}>
+        <div class="param-scalar-row">
+          <dt>Wired constants</dt>
+          <dd>
+            Not parameters — each arrives on its own port, so one constant can feed every step that
+            depends on it. To change one, edit the value wired into:
+            <ul class="param-scalar-list">
+              <For each={rows()?.wired ?? []}>{(w) => <li>{w}</li>}</For>
+            </ul>
+          </dd>
+        </div>
+      </Show>
     </dl>
   );
 };
