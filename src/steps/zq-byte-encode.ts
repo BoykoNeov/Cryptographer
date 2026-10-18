@@ -151,14 +151,17 @@ A coefficient too large for \`d\` bits is rejected rather than quietly truncated
 The ceiling is whichever is smaller: \`2^d\`, or \`q\` itself — so at \`d = 12\`,
 where 12 bits could hold 4096 values but the ring only has 3329, the ring wins.`,
   params: new Map([
-    ["coeffBytes", "How many bytes each incoming coefficient occupies. 2 here."],
+    [
+      "coeffBytes",
+      "How many bytes each incoming coefficient occupies — 2 for ML-KEM, 4 for ML-DSA.",
+    ],
     [
       "littleEndian",
       "Byte order within one INCOMING coefficient. It does not affect the packed output, whose bit order is fixed by the specification (least significant bit first).",
     ],
     [
       "d",
-      "Bits per coefficient in the packed output. 12 for a public key or an uncompressed polynomial; 1, 4, 5, 10 or 11 for the compressed parts of a ciphertext.",
+      "Bits per coefficient in the packed output. In ML-KEM, 12 for a public key or an uncompressed polynomial and 1, 4, 5, 10 or 11 for the compressed parts of a ciphertext. In ML-DSA, 10 for the public key's t1 (this step is FIPS 204's SimpleBitPack).",
     ],
   ]),
   references: [

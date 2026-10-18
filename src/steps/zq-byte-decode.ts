@@ -121,7 +121,10 @@ bit first — the mirror of the packing step, and set by the specification rathe
 than by any parameter here. The byte-order parameter below describes only how
 each recovered coefficient is written into its outgoing slot.`,
   params: new Map([
-    ["coeffBytes", "How many bytes each recovered coefficient occupies. 2 here."],
+    [
+      "coeffBytes",
+      "How many bytes each recovered coefficient occupies — 2 for ML-KEM, 4 for ML-DSA.",
+    ],
     [
       "littleEndian",
       "Byte order within one OUTGOING coefficient. It does not affect how the packed input is read, whose bit order is fixed by the specification (least significant bit first).",

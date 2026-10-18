@@ -1460,6 +1460,35 @@ export const ML_DSA_BLOCK_ROWS: Record<string, MlDsaRows> = {
     ints: [L_ROW],
     wired: ["kappa — κ, this attempt's counter", "gamma1 — γ1, the mask's range", "modulus — q"],
   },
+  "ml-dsa.bit-pack@1": {
+    codec: true,
+    ints: [],
+    wired: [
+      "lower — a, how far below zero the range reaches",
+      "upper — b, how far above",
+      "modulus — q",
+    ],
+  },
+  "ml-dsa.bit-unpack@1": {
+    codec: true,
+    ints: [],
+    wired: ["lower — a, the range's reach below zero", "upper — b, its reach above", "modulus — q"],
+  },
+  "ml-dsa.w1-encode@1": {
+    codec: true,
+    ints: [],
+    wired: ["gamma2 — γ2, which sets the bucket count and so the width", "modulus — q"],
+  },
+  "ml-dsa.hint-pack@1": {
+    codec: true,
+    ints: [],
+    wired: ["omega — ω, the number of position slots"],
+  },
+  "ml-dsa.hint-unpack@1": {
+    codec: true,
+    ints: [],
+    wired: ["omega — ω, the number of position slots"],
+  },
   "ml-dsa.sample-in-ball@1": {
     codec: true,
     ints: [

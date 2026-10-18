@@ -54,6 +54,8 @@ import {
   zqDecompressNarration,
 } from "./lattice";
 import {
+  mlDsaBitPackNarration,
+  mlDsaBitUnpackNarration,
   mlDsaDecomposeNarration,
   mlDsaExpandANarration,
   mlDsaExpandMaskNarration,
@@ -61,12 +63,15 @@ import {
   mlDsaFormatMessageNarration,
   mlDsaHashHNarration,
   mlDsaHintCountNarration,
+  mlDsaHintPackNarration,
+  mlDsaHintUnpackNarration,
   mlDsaInttNarration,
   mlDsaMakeHintNarration,
   mlDsaNttNarration,
   mlDsaPower2RoundNarration,
   mlDsaSampleInBallNarration,
   mlDsaUseHintNarration,
+  mlDsaW1EncodeNarration,
   zqInfNormBelowNarration,
 } from "./ml-dsa";
 import { mt19937SeedNarration, mt19937TwistNarration } from "./mt19937";
@@ -232,6 +237,11 @@ export const initNarrationRegistry = (): void => {
   registerNarration("ml-dsa.expand-mask@1", mlDsaExpandMaskNarration);
   registerNarration("ml-dsa.sample-in-ball@1", mlDsaSampleInBallNarration);
   registerNarration("ml-dsa.format-message@1", mlDsaFormatMessageNarration);
+  registerNarration("ml-dsa.bit-pack@1", mlDsaBitPackNarration);
+  registerNarration("ml-dsa.bit-unpack@1", mlDsaBitUnpackNarration);
+  registerNarration("ml-dsa.w1-encode@1", mlDsaW1EncodeNarration);
+  registerNarration("ml-dsa.hint-pack@1", mlDsaHintPackNarration);
+  registerNarration("ml-dsa.hint-unpack@1", mlDsaHintUnpackNarration);
   initialized = true;
 };
 

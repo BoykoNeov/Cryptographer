@@ -381,3 +381,113 @@ describe("ML-DSA narration — the one-frame steps, on real frames", () => {
     expect(text).toContain("prefix 00 02 + a 2-byte context");
   });
 });
+
+// ─── The packers ──────────────────────────────────────────────────────────
+
+describe("ML-DSA narration — the packers, on real frames", () => {
+  const h = new Array<number>(1024).fill(0);
+  h[3] = 1;
+  h[300] = 1;
+  const leftover = new Uint8Array(84);
+  leftover[79] = 7; // a non-zero byte after the last listed position — rule 3
+
+  const packSpec: CipherSpec = {
+    id: "ml-dsa-narration-packers",
+    name: "ML-DSA packer narration fixture",
+    stateShape: "bytes",
+    inputs: { plaintext: { shape: "bytes" }, key: { byteLength: 0 } },
+    steps: [
+      constant("q", ML_DSA_Q_BYTES),
+      constant("g2", mlDsaCoeffBytes(g2)),
+      constant("eta", mlDsaCoeffBytes(2)),
+      constant("omega", new Uint8Array([80])),
+      constant("h", packMlDsaPoly(h)),
+      constant("bad-hint", leftover),
+      {
+        kind: "step",
+        id: "pack",
+        type: "ml-dsa.bit-pack@1",
+        params: P,
+        portInputs: { a: input, lower: from("eta"), upper: from("eta"), modulus: from("q") },
+      },
+      {
+        kind: "step",
+        id: "unpack",
+        type: "ml-dsa.bit-unpack@1",
+        params: P,
+        portInputs: { a: from("pack"), lower: from("eta"), upper: from("eta"), modulus: from("q") },
+      },
+      {
+        kind: "step",
+        id: "w1",
+        type: "ml-dsa.w1-encode@1",
+        params: P,
+        portInputs: { a: from("unpack"), gamma2: from("g2"), modulus: from("q") },
+      },
+      {
+        kind: "step",
+        id: "hp",
+        type: "ml-dsa.hint-pack@1",
+        params: P,
+        portInputs: { h: from("h"), omega: from("omega") },
+      },
+      {
+        kind: "step",
+        id: "hu-ok",
+        type: "ml-dsa.hint-unpack@1",
+        params: P,
+        portInputs: { input: from("hp"), omega: from("omega") },
+      },
+      {
+        kind: "step",
+        id: "hu-bad",
+        type: "ml-dsa.hint-unpack@1",
+        params: P,
+        portInputs: { input: from("bad-hint"), omega: from("omega") },
+      },
+    ],
+  };
+  // 256 small non-negative values: valid secret coefficients AND valid w1 indices.
+  const values = Array.from({ length: 256 }, (_, i) => i % 3);
+  const pFrames = runSpec(packSpec, registry, {
+    initialState: { shape: "bytes", bytes: packMlDsaPoly(values) },
+    initialAux: new Map<string, AuxValue>([["key", new Uint8Array(0)]]),
+  }).frames;
+  const pFrame = (id: string): TraceFrame => {
+    const f = pFrames.find((x) => x.stepId === id);
+    if (f === undefined) throw new Error(`no frame ${id}`);
+    return f;
+  };
+  const narrate = (id: string) => {
+    const f = pFrame(id);
+    return proseText(lookupNarration(f.stepType)?.(f) ?? null);
+  };
+
+  it("bit-pack names the range it is packing and its width", () => {
+    const text = narrate("pack");
+    expect(text).toContain("256 values in −2 … 2, 3 bits each");
+    expect(text).toContain("the secret vectors s1 and s2");
+    expect(text).toContain("96 bytes out");
+  });
+
+  it("bit-unpack reads the same layout back", () => {
+    expect(narrate("unpack")).toContain("256 values in −2 … 2, 3 bits each");
+  });
+
+  it("w1-encode derives 6 bits from 44 buckets", () => {
+    expect(narrate("w1")).toContain("44 buckets need 6 bits each → 192 bytes");
+  });
+
+  it("hint-pack reports the slots it used and the running totals", () => {
+    const text = narrate("hp");
+    expect(text).toContain("2 of 80 position slots used, 84 bytes");
+    expect(text).toContain("1, 2, 2, 2");
+  });
+
+  it("hint-unpack says well-formed — and for a malformed hint, WHICH rule it broke", () => {
+    expect(narrate("hu-ok")).toContain("well-formed: 2 hint positions");
+    const bad = narrate("hu-bad");
+    expect(bad).toContain("malformed");
+    expect(bad).toContain("byte 79, after the last listed position, is 7");
+  });
+});

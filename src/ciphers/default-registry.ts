@@ -147,6 +147,14 @@ import {
   keyExpansionV2PortContract,
 } from "../steps/key-expansion";
 import {
+  mlDsaBitPack,
+  mlDsaBitPackDoc,
+  mlDsaBitPackPortContract,
+  mlDsaBitUnpack,
+  mlDsaBitUnpackDoc,
+  mlDsaBitUnpackPortContract,
+} from "../steps/ml-dsa-bit-pack";
+import {
   mlDsaDecompose,
   mlDsaDecomposeDoc,
   mlDsaDecomposePortContract,
@@ -170,6 +178,14 @@ import {
   mlDsaHintCountPortContract,
 } from "../steps/ml-dsa-hint-count";
 import {
+  mlDsaHintPack,
+  mlDsaHintPackDoc,
+  mlDsaHintPackPortContract,
+  mlDsaHintUnpack,
+  mlDsaHintUnpackDoc,
+  mlDsaHintUnpackPortContract,
+} from "../steps/ml-dsa-hint-pack";
+import {
   mlDsaMakeHint,
   mlDsaMakeHintDoc,
   mlDsaMakeHintPortContract,
@@ -192,6 +208,11 @@ import {
   mlDsaSampleInBallPortContract,
 } from "../steps/ml-dsa-sample-in-ball";
 import { mlDsaUseHint, mlDsaUseHintDoc, mlDsaUseHintPortContract } from "../steps/ml-dsa-use-hint";
+import {
+  mlDsaW1Encode,
+  mlDsaW1EncodeDoc,
+  mlDsaW1EncodePortContract,
+} from "../steps/ml-dsa-w1-encode";
 import { mlKemHashG, mlKemHashGDoc, mlKemHashGPortContract } from "../steps/ml-kem-hash-g";
 import { mlKemHashH, mlKemHashHDoc, mlKemHashHPortContract } from "../steps/ml-kem-hash-h";
 import { mlKemKdfJ, mlKemKdfJDoc, mlKemKdfJPortContract } from "../steps/ml-kem-kdf-j";
@@ -1398,6 +1419,41 @@ export const buildDefaultRegistry = (): StepRegistry => {
     executor: mlDsaFormatMessage,
     shape: mlDsaFormatMessagePortContract,
     doc: mlDsaFormatMessageDoc,
+  });
+  // The packers. The UNSIGNED pack is zq-byte-encode@1 unchanged (it already is
+  // FIPS 204's SimpleBitPack); these add what it cannot do. bit-pack holds a
+  // range that dips below zero, by storing b − w. w1-encode derives its width
+  // from the wired γ2. The hint pair stores positions, not bits, and unpacking
+  // refuses malformed bytes with a flag, never a throw.
+  r.register("ml-dsa.bit-pack@1", {
+    kind: "ported",
+    executor: mlDsaBitPack,
+    shape: mlDsaBitPackPortContract,
+    doc: mlDsaBitPackDoc,
+  });
+  r.register("ml-dsa.bit-unpack@1", {
+    kind: "ported",
+    executor: mlDsaBitUnpack,
+    shape: mlDsaBitUnpackPortContract,
+    doc: mlDsaBitUnpackDoc,
+  });
+  r.register("ml-dsa.w1-encode@1", {
+    kind: "ported",
+    executor: mlDsaW1Encode,
+    shape: mlDsaW1EncodePortContract,
+    doc: mlDsaW1EncodeDoc,
+  });
+  r.register("ml-dsa.hint-pack@1", {
+    kind: "ported",
+    executor: mlDsaHintPack,
+    shape: mlDsaHintPackPortContract,
+    doc: mlDsaHintPackDoc,
+  });
+  r.register("ml-dsa.hint-unpack@1", {
+    kind: "ported",
+    executor: mlDsaHintUnpack,
+    shape: mlDsaHintUnpackPortContract,
+    doc: mlDsaHintUnpackDoc,
   });
   r.register("shift-bits-right@1", {
     kind: "ported",

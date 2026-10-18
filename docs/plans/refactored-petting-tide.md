@@ -1,6 +1,6 @@
 # ML-DSA-44 — the post-quantum signature, and the app's first loop that stops on its own
 
-**Status: P1 SHIPPED 2026-10-18; P2–P5 open.** Five phases. Successor to
+**Status: P1 + P2 SHIPPED 2026-10-18; P3–P5 open.** Five phases. Successor to
 `docs/plans/unified-stargazing-quasar.md` (ML-KEM, CLOSED), which deferred
 ML-DSA to "its own plan and its own advisor pass" because signing retries an
 unbounded number of times. This is that plan.
@@ -305,6 +305,61 @@ New steps, each with tests in the same commit:
   MakeHint/UseHint over all r. Assert the FIPS identity
   `UseHint(MakeHint(z, r), r) = HighBits(r + z)` for ‖z‖ ≤ γ2.
 - The samplers byte-matched against the noble fixture's intermediates.
+
+**P2 OUTCOME (2026-10-18).** Shipped in three commits: rounding, samplers,
+packers. That is twenty steps: eighteen `ml-dsa.*` plus `zq-vec-mul@1` and
+`zq-inf-norm-below@1`. Seven things to carry forward:
+
+1. **The strongest check was a composition, not a per-step test.**
+   `tests/ml-dsa-44-oracle.test.ts` builds FIPS 204's KeyGen, Verify and Sign
+   out of nothing but the registered executors. Key generation reproduces
+   Node's pk and the 2560-byte expanded sk from three seeds. Verification
+   agrees with Node on 18 valid signatures and on one malformed hint per
+   refusal rule. Deterministic signing reproduces noble's bytes. All three
+   matched on the first run. Noble and Node were cross-checked both ways before
+   the fixture was written: same pk and sk from the same seed, and each
+   accepts the other's signatures, with and without a context. P3's specs
+   inherit this as a ready-made oracle at every checkpoint.
+2. **ExpandA covers the whole matrix, a deliberate departure from ML-KEM's
+   visible index join.** ML-DSA never builds the transpose, so the
+   `ρ ‖ s ‖ r` order is one convention, not a distinction between call sites.
+   The order is pinned by Node's pk, and the test keeps a runnable transpose
+   perturbation whose signature is recorded: ρ and s1/s2 stay green, while t1,
+   tr and t0 break.
+3. **The fixture's nine signatures took 1, 1, 1, 2, 2, 7, 8, 9 and 12
+   attempts. Every rejection came from the z or the r0 check, none from ct0 or
+   the hint count.** So the byte-exact signing match pins two of the four
+   checks directly. The other two are pinned only by the ±1 unit tests. P4's
+   "a case per rejection reason" therefore needs the planned search, and
+   should not assume the fixture already contains one.
+4. **Perturbations, run not assumed:** each breaks one rule and is restored byte for byte.
+   - Drop Decompose's wrap-round case: 27 failures (the exhaustive test and
+     the signing match).
+   - Big-endian ExpandS index: 4. Transposed ExpandA: 23.
+   - Big-endian ExpandMask counter: 9. That counter only differs from its
+     correct form from attempt 2 on, which the fixture's multi-attempt
+     signatures reach.
+   - Forget HintBitUnpack's rule 3: 2 (one oracle case and one unit test).
+   - `<` for hint-count's `≤`: 2. `≤` for the norm check's `<`: 1. These two
+     edge flips are caught ONLY by the ±1 unit tests. No real signature in
+     the fixture lands on an edge, so the oracle is blind to them, which is
+     why those tests exist.
+5. **The unsigned packer needed no new step.** `zq-byte-encode@1` already *is*
+   SimpleBitPack (the same LSB-first stream), and the oracle uses it for the
+   public key's t1 at d = 10. `w1Encode` became its own step only because its
+   width must follow the wired γ2.
+6. **Three wrong numbers of my own, caught before commit:** the uncompressed
+   public key is 2,976 bytes, not 2,336. ExpandA rejects about 1 candidate in
+   1,024, not 1 in 500. And the paragraph on spare bit patterns in BitUnpack
+   had it backwards: only the 3-bit secret fields have spare patterns, while
+   z's and t0's ranges fill their fields exactly.
+7. **Process gotchas.** `tests/byte-native-ports-contract.test.ts` resolves
+   every function-form port contract under a shared `KITCHEN_SINK` params
+   object, so a new param name that sizes a port (`outBytes`, `k`, `l`) must
+   be added there. Only the full gate found this. Separately,
+   `npm --prefix X init -y` ignores the prefix and rewrites the CURRENT
+   directory's `package.json`. The rewrite was caught in `git status` and
+   reverted.
 
 ### P3 — key generation + verification specs (still no selector entry)
 

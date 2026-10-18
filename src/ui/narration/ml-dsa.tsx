@@ -23,6 +23,7 @@
 
 import { decompose, modPm } from "@/core/ml-dsa-arith";
 import type { TraceFrame } from "@/core/types";
+import { hintBitUnpack } from "@/steps/ml-dsa-hint-pack";
 import { Bytes, ValueList, coeffs, intParam, modulusOf, num, safeVecParams } from "./lattice";
 import type { NarrationFn } from "./registry";
 
@@ -704,6 +705,151 @@ export const mlDsaFormatMessageNarration: NarrationFn = (frame) => {
           <p>
             Leave this prefix out and every other implementation rejects the signature, because it
             would be checking different bytes from the ones that were signed.
+          </p>
+        </div>
+      ),
+    },
+  ];
+};
+
+// ─── ml-dsa.bit-pack@1 / bit-unpack@1 / w1-encode@1 ────────────────────────
+
+/** What a signed range is, at ML-DSA's call sites. */
+const rangeJob = (a: number, b: number): string => {
+  if (a === b && a <= 4) return "the secret vectors s1 and s2";
+  if (b === 4096 && a === 4095) return "t0, the low part of the key";
+  if (b === a + 1 && b >= 1 << 17) return "the signature's z";
+  return "a range none of ML-DSA's own encodings uses";
+};
+
+const packNarration =
+  (direction: "pack" | "unpack"): NarrationFn =>
+  (frame) => {
+    const a = scalarOf(frame, "lower");
+    const b = scalarOf(frame, "upper");
+    const input = frame.portInputs?.get("a");
+    const output = frame.portOutputs?.get("output");
+    if (
+      a === null ||
+      b === null ||
+      !(input instanceof Uint8Array) ||
+      !(output instanceof Uint8Array)
+    ) {
+      return null;
+    }
+    const width = Math.floor(Math.log2(a + b)) + 1;
+    const packed = direction === "pack" ? output : input;
+    const count = Math.floor((packed.length * 8) / width);
+    return [
+      {
+        key: "range",
+        label: `1 — ${num(count)} values in −${num(a)} … ${num(b)}, ${width} bits each`,
+        Prose: () => (
+          <div>
+            <p>
+              This range is {rangeJob(a, b)}. Each value w is stored as <code>{num(b)} − w</code>,
+              which turns −{num(a)} … {num(b)} into 0 … {num(a + b)} — {width} bits.
+            </p>
+            <p>
+              {num(count)} values × {width} bits = {num(packed.length)} bytes
+              {direction === "pack" ? " out." : " in."}
+            </p>
+          </div>
+        ),
+      },
+    ];
+  };
+
+export const mlDsaBitPackNarration: NarrationFn = packNarration("pack");
+export const mlDsaBitUnpackNarration: NarrationFn = packNarration("unpack");
+
+export const mlDsaW1EncodeNarration: NarrationFn = (frame) => {
+  const p = safeVecParams(frame.params, "ml-dsa.w1-encode@1");
+  if (!p) return null;
+  const qb = modulusOf(frame, p);
+  const g2 = scalarOf(frame, "gamma2");
+  const out = frame.portOutputs?.get("output");
+  if (qb === null || g2 === null || g2 === 0 || !(out instanceof Uint8Array)) return null;
+  const q = Number(qb);
+  if ((q - 1) % (2 * g2) !== 0) return null;
+  const m = (q - 1) / (2 * g2);
+  const width = Math.floor(Math.log2(m - 1)) + 1;
+  return [
+    {
+      key: "width",
+      label: `1 — ${m} buckets need ${width} bits each → ${num(out.length)} bytes`,
+      Prose: () => (
+        <div>
+          <p>
+            γ2 = {num(g2)} cuts the range into (q − 1)/2γ2 = {m} buckets, numbered 0 … {m - 1}, and{" "}
+            {m - 1} needs {width} bits. So every high-bits index is written in {width} bits, low bit
+            first.
+          </p>
+          <p>
+            These are the bytes hashed with μ into the challenge. The verifier packs its own w1 the
+            same way; if the two hashes agree, the signature is valid.
+          </p>
+        </div>
+      ),
+    },
+  ];
+};
+
+// ─── ml-dsa.hint-pack@1 / hint-unpack@1 ────────────────────────────────────
+
+export const mlDsaHintPackNarration: NarrationFn = (frame) => {
+  const omega = scalarOf(frame, "omega");
+  const out = frame.portOutputs?.get("output");
+  if (omega === null || !(out instanceof Uint8Array) || out.length <= omega) return null;
+  const k = out.length - omega;
+  const totals = [...out.subarray(omega)];
+  const used = totals.at(-1) ?? 0;
+  const perPoly = totals.map((t, i) => t - (i === 0 ? 0 : (totals[i - 1] as number)));
+  return [
+    {
+      key: "layout",
+      label: `1 — ${used} of ${omega} position slots used, ${out.length} bytes`,
+      Prose: () => (
+        <div>
+          <p>
+            The first {omega} bytes list where the hint's ones are; the last {k} are running totals
+            — {totals.join(", ")} — so polynomial by polynomial the counts are {perPoly.join(", ")}.
+          </p>
+          <p>
+            The {omega - used} unused slot{omega - used === 1 ? "" : "s"} must be zero. That is not
+            padding for its own sake: it makes the encoding unique, so nobody can rewrite a valid
+            hint into a different valid one.
+          </p>
+        </div>
+      ),
+    },
+  ];
+};
+
+export const mlDsaHintUnpackNarration: NarrationFn = (frame) => {
+  const omega = scalarOf(frame, "omega");
+  const input = frame.portInputs?.get("input");
+  const valid = frame.portOutputs?.get("valid");
+  if (omega === null || !(input instanceof Uint8Array) || !(valid instanceof Uint8Array))
+    return null;
+  if (input.length <= omega) return null;
+  // The executor's own decoder, called again for the REASON — the frame only
+  // carries the verdict.
+  const { error } = hintBitUnpack(input, omega);
+  const used = input[input.length - 1] ?? 0;
+  return [
+    {
+      key: "verdict",
+      label:
+        valid[0] === 1
+          ? `1 — well-formed: ${used} hint position${used === 1 ? "" : "s"}`
+          : "1 — malformed: the signature is invalid",
+      Prose: () => (
+        <div>
+          <p>
+            {valid[0] === 1
+              ? `The running totals never go down or past ω = ${omega}, the positions within each polynomial strictly increase, and every unused slot is zero. ${used} coefficient${used === 1 ? "" : "s"} will be corrected.`
+              : `Refused: ${error ?? "the bytes break the format"}. A verifier answers "invalid" here rather than guessing what was meant.`}
           </p>
         </div>
       ),

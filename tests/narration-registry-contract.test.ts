@@ -124,7 +124,7 @@ describe("narration-registry coverage contract", () => {
     // A sanity pin on the WALK, not on the family: if a rename ever moved
     // these out from under both prefixes the filter would silently match
     // nothing and every assertion below would pass vacuously.
-    expect(latticeStepTypes.length).toBe(30);
+    expect(latticeStepTypes.length).toBe(35);
     expect(latticeStepTypes).toContain("zq-vec-add@1");
     expect(latticeStepTypes).toContain("ml-kem.sample-ntt@1");
     expect(latticeStepTypes).toContain("ml-dsa.decompose@1");
@@ -183,6 +183,11 @@ describe("narration-registry coverage contract", () => {
       "ml-dsa.expand-mask@1",
       "ml-dsa.sample-in-ball@1",
       "ml-dsa.format-message@1",
+      "ml-dsa.bit-pack@1",
+      "ml-dsa.bit-unpack@1",
+      "ml-dsa.w1-encode@1",
+      "ml-dsa.hint-pack@1",
+      "ml-dsa.hint-unpack@1",
     ]) {
       expect(hasNarrationFn(t), `${t} should have a registered NarrationFn`).toBe(true);
     }
