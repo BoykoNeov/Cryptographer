@@ -1650,7 +1650,7 @@ export const App = () => {
           <select
             value={category()}
             onChange={(e) => changeCategory(e.currentTarget.value as Category)}
-            title="Cipher = symmetric encrypt/decrypt with a key. Hash = one-way digest (no key, no direction). Public-key = asymmetric (RSA) — encrypt/decrypt with a key pair, no symmetric key field. Generator = pseudo-random bytes from a seed (no key, no message, no direction). Lattice = polynomial arithmetic over Z_3329 — the setting the post-quantum standards are built in; invertible, and keyless."
+            title="Cipher = symmetric encrypt/decrypt with a key. Hash = one-way digest (no key, no direction). Public-key = asymmetric (RSA, ML-KEM) — a key pair, no symmetric key field. Generator = pseudo-random bytes from a seed (no key, no message, no direction). Lattice = polynomial arithmetic over Z_q (q = 3329 for ML-KEM, 8380417 for ML-DSA) — the setting the post-quantum standards are built in; invertible, and keyless."
           >
             <option value="cipher">Cipher</option>
             <option value="hash">Hash</option>

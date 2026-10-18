@@ -225,15 +225,29 @@ consult before it starts (`feedback_iterative_slice_review`).
    for palette-built butterflies. Pinned by `tests/ntt-diagram.test.tsx` and
    perturbation-verified.
 
-**Not fully explained:** the first browser session froze for minutes. With the
-input-swap fix, both switches run with no long tasks (152 ms / 10 ms). The
-freeze appeared only on the stale-input path and was never reproduced in jsdom.
-Screenshots timed out for the whole session even while the page ran at
-~60 fps, so the extension's capture was unreliable independently of the app.
-A jsdom run of the new App test also stalled for over five minutes once, while
-it used `toBe` on multi-kilobyte hex strings; it has passed in ~15 s every run
-since `expectHex` replaced those assertions. Watch for both in P3/P4, where the
-inputs are larger.
+**The graph cell, measured (P1 step 5, done after the first commit on the
+advisor's catch).** With everything expanded, all eight layers lay out as the
+canonical butterfly cell: 67 leaves (3 heads + 8 × 8), each layer's eight on
+**exactly five rows at a 60 px pitch**, the same grid ML-KEM's transform gets.
+Opening the graph tab cost one 66 ms long task; `expand all` cost none.
+
+**The first-session freeze is NOT the stale input.** Replayed with the
+input-swap fix temporarily removed, the exact original sequence (lattice →
+ML-DSA with ML-KEM's 512-byte polynomial left in the field) ran in 5 ms + 10 ms
+with zero long tasks and showed the friendly length error. An EDITED 512-byte
+polynomial surviving the switch (the advisor's concern: the sacred-input
+policy re-creates the stale state) behaves the same. The freeze happened only
+on the first page loads after the new files appeared, so a cold dev server
+compiling modules on demand is the likeliest cause. That is unproven; it never
+recurred. Chrome-extension screenshots timed out for the whole session even
+while the page ran at ~60 fps, so the capture failures were the extension, not
+the app.
+
+**The jsdom stall.** One run of `app-lattice-switch.test.tsx` stalled for 5+
+minutes while it used `toBe` on multi-kilobyte hex strings and a fixed 500 ms
+sleep. Both are gone (`expectHex` and a `waitFor` on the shown result), and
+it has passed in ~15 s on every run since. Also fixed: the `kind` dropdown's
+tooltip named only Z_3329 and only RSA.
 
 ### P2 — the ML-DSA arithmetic layer (palette only, no selector entry)
 

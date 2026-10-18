@@ -32,7 +32,7 @@ import { __resetHistoryForTests } from "@/ui/stores/history";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
 import { __resetSpecForTests } from "@/ui/stores/spec";
 import { __resetTraceForTests } from "@/ui/stores/trace";
-import { cleanup, fireEvent, render } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const hex = (b: Uint8Array): string =>
@@ -116,8 +116,17 @@ describe("App — switching lattice transform swaps a default input, keeps a typ
     fireEvent.change(findSelectByLabel(container, "kind"), { target: { value: "lattice" } });
     // Flipping direction copies the shown OUTPUT into the input (so the inverse
     // undoes what was just computed), so let the forward run land first —
-    // otherwise the previous algorithm's output is what gets copied.
-    await new Promise((r) => setTimeout(r, 500));
+    // otherwise the previous algorithm's output is what gets copied. Waits on
+    // the RESULT, not a fixed sleep: the run sits behind a 200 ms debounce, and
+    // a fixed sleep is the race app-url-share.test.tsx's boot tests lost under
+    // full-suite load.
+    await waitFor(
+      () => {
+        const shown = container.querySelector(".inputs-result code")?.textContent ?? "";
+        expect(shown === hex(DEFAULT_NTT_OUTPUT), "forward result not shown yet").toBe(true);
+      },
+      { timeout: 10000 },
+    );
     fireEvent.change(findSelectByLabel(container, "mode"), { target: { value: "decrypt" } });
     expectHex(
       findInputByLabel(container, "transformed polynomial").value,
