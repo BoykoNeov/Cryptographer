@@ -156,10 +156,12 @@ const CURSOR_PORT = "cursor";
 
 /** Vector-step params. Big-endian per coefficient — the app's standing "a port
  *  carries a non-negative big-endian integer" convention. */
-const VEC_PARAMS = { coeffBytes: COEFF_BYTES, littleEndian: false } as const;
+const vecParams = (profile: NttProfile) =>
+  ({ coeffBytes: profile.coeffBytes, littleEndian: false }) as const;
 
-/** Coefficients paired by layer `n`: 128, 64, 32, … 2. */
-const layerLen = (n: number): number => ML_KEM_N / 2 ** n;
+/** Coefficients paired by layer `n`: 128, 64, 32, … down to the last layer's
+ *  distance (2 for ML-KEM's seven layers, 1 for ML-DSA's eight). */
+const layerLen = (n: number, profile: NttProfile): number => profile.n / 2 ** n;
 
 // ─── Narration ────────────────────────────────────────────────────────────
 //
@@ -240,7 +242,7 @@ already there.`,
  * inside a narrator was the first version of this file and it printed the wrong
  * layer number on every inverse frame.
  */
-type LayerGeometry = {
+export type LayerGeometry = {
   /** 1-based position in the spec, as the label shows it. */
   readonly displayIndex: number;
   /** Pairing distance in coefficients: 128 … 2. */
@@ -253,11 +255,16 @@ type LayerGeometry = {
   readonly id: string;
 };
 
-const geometryFor = (displayIndex: number, len: number, prefix = ""): LayerGeometry => ({
+const geometryFor = (
+  displayIndex: number,
+  len: number,
+  profile: NttProfile,
+  prefix = "",
+): LayerGeometry => ({
   displayIndex,
   len,
-  groups: ML_KEM_N / (2 * len),
-  blockBytes: len * 2 * COEFF_BYTES,
+  groups: profile.n / (2 * len),
+  blockBytes: len * 2 * profile.coeffBytes,
   id: nttLayerId(displayIndex, prefix),
 });
 
@@ -360,7 +367,7 @@ gives a wrong answer that still looks like noise.`,
   references: ["FIPS 203 Algorithm 9"],
 };
 
-const narrForwardAdd: StepDocumentation = {
+export const narrForwardAdd: StepDocumentation = {
   name: "lo′ = lo + t",
   summary: "The sum half of the butterfly.",
   detail: `## Half of a two-line operation
@@ -401,7 +408,7 @@ like large numbers — subtract 3329 in your head to see the small ones.`,
   references: ["FIPS 203 Algorithm 9"],
 };
 
-const narrInverseAdd: StepDocumentation = {
+export const narrInverseAdd: StepDocumentation = {
   name: "lo′ = lo + hi",
   summary: "The inverse butterfly combines first and twists afterwards.",
   detail: `## The inverse is not the forward run backwards
@@ -419,7 +426,7 @@ This step is the sum, and it needs no twiddle factor at all.`,
   references: ["FIPS 203 Algorithm 10"],
 };
 
-const narrInverseSub: StepDocumentation = {
+export const narrInverseSub: StepDocumentation = {
   name: "hi − lo",
   summary: "The difference, before it is scaled by the twiddle factor.",
   detail: `## Difference first, twist second
@@ -448,7 +455,7 @@ final scaling step at the bottom removes.`,
   references: ["FIPS 203 Algorithm 10"],
 };
 
-const narrRecombine: StepDocumentation = {
+export const narrRecombine: StepDocumentation = {
   name: "Rejoin the halves",
   summary: "Puts the two transformed halves back in place, low then high.",
   detail: `## Nothing moves
@@ -485,13 +492,90 @@ polynomial.`,
   references: ["FIPS 203 Algorithm 10", "FIPS 203 §2.4.4"],
 };
 
+// ─── Profiles: what differs between the transforms this builder serves ─────
+
+/**
+ * Per-occurrence prose for one transform. ML-KEM's is the set of constants
+ * above; ML-DSA's lives in `ntt-8380417-256.ts`. Prose that quotes a number
+ * (`3329`, `seven layers`, `ζ¹²⁷`) belongs to exactly one transform, which is
+ * why the prose is part of the profile rather than templated — a template
+ * would have to reproduce ML-KEM's sentences byte for byte to keep its shared
+ * links stable, and would read worse for both.
+ */
+export type NttNarration = {
+  readonly zetaTable: StepDocumentation;
+  readonly cursorSplit: StepDocumentation;
+  readonly cursor: StepDocumentation;
+  readonly layerSplit: (g: LayerGeometry) => StepDocumentation;
+  readonly zetaRead: (g: LayerGeometry) => StepDocumentation;
+  readonly advance: StepDocumentation;
+  readonly modulus: StepDocumentation;
+  readonly twist: StepDocumentation;
+  readonly forwardAdd: StepDocumentation;
+  readonly forwardSub: StepDocumentation;
+  readonly inverseAdd: StepDocumentation;
+  readonly inverseSub: StepDocumentation;
+  readonly inverseTwist: StepDocumentation;
+  readonly recombine: StepDocumentation;
+  readonly scale: StepDocumentation;
+};
+
+/**
+ * Everything that differs between ML-KEM's transform (q = 3329, seven layers)
+ * and ML-DSA's (q = 8380417, eight layers). The algorithm — the butterflies,
+ * the rotating ζ cursor, the layer iterates, `q` through aux — is the same
+ * object, which is the point of sharing one builder: the ML-DSA selector entry
+ * shows exactly the machine ML-KEM shows, with a different prime in it.
+ *
+ * `q`, the ζ table and the scaling constant are NOT here: they ride
+ * `cipherConstants` / aux under the same names in both specs, so only their
+ * WIDTHS reach the builder.
+ */
+export type NttProfile = {
+  /** Coefficients in a polynomial. 256 for both. */
+  readonly n: number;
+  /** Butterfly layers: 7 for ML-KEM, 8 for ML-DSA. */
+  readonly layers: number;
+  /** Bytes per coefficient on a port: 2 for ML-KEM, 4 for ML-DSA. */
+  readonly coeffBytes: number;
+  /** Width of the rotating ζ table: 256 bytes for ML-KEM, 1024 for ML-DSA. */
+  readonly zetaTableBytes: number;
+  readonly narration: NttNarration;
+};
+
+/** ML-KEM's transform. The default everywhere, which is what keeps every
+ *  shipped ML-KEM / K-PKE spec byte-identical to its pre-ML-DSA form. */
+export const ML_KEM_NTT_PROFILE: NttProfile = {
+  n: ML_KEM_N,
+  layers: NTT_LAYERS,
+  coeffBytes: COEFF_BYTES,
+  zetaTableBytes: ZETA_TABLE_BYTES.length,
+  narration: {
+    zetaTable: narrZetaTable,
+    cursorSplit: narrCursorSplit,
+    cursor: narrCursor,
+    layerSplit: narrLayerSplit,
+    zetaRead: narrZetaRead,
+    advance: narrAdvance,
+    modulus: narrModulus,
+    twist: narrTwist,
+    forwardAdd: narrForwardAdd,
+    forwardSub: narrForwardSub,
+    inverseAdd: narrInverseAdd,
+    inverseSub: narrInverseSub,
+    inverseTwist: narrInverseTwist,
+    recombine: narrRecombine,
+    scale: narrScale,
+  },
+};
+
 // ─── Layer bodies ─────────────────────────────────────────────────────────
 
 /**
  * One forward layer's butterfly group. Runs once per group; the runtime hands
  * it this group's coefficients on `in` and the ζ cursor on `chain`.
  */
-const forwardLayerBody = (g: LayerGeometry): StepNode[] => {
+const forwardLayerBody = (g: LayerGeometry, profile: NttProfile): StepNode[] => {
   const id = g.id;
   const half = g.blockBytes / 2;
   return [
@@ -501,15 +585,15 @@ const forwardLayerBody = (g: LayerGeometry): StepNode[] => {
       type: "split-bytes@1",
       params: { widths: [half, half] },
       portInputs: { input: port(id, "in") },
-      narrationOverride: narrLayerSplit(g),
+      narrationOverride: profile.narration.layerSplit(g),
     },
     {
       kind: "step",
       id: `${id}.zeta`,
       type: "split-bytes@1",
-      params: { widths: [COEFF_BYTES, ZETA_TABLE_BYTES.length - COEFF_BYTES] },
+      params: { widths: [profile.coeffBytes, profile.zetaTableBytes - profile.coeffBytes] },
       portInputs: { input: port(id, "chain") },
-      narrationOverride: narrZetaRead(g),
+      narrationOverride: profile.narration.zetaRead(g),
     },
     {
       // Forced through aux: port flow cannot cross into an iterate body. See
@@ -517,45 +601,45 @@ const forwardLayerBody = (g: LayerGeometry): StepNode[] => {
       kind: "step",
       id: `${id}.q`,
       type: "aux-load-bytes@1",
-      params: { auxName: "q", byteLength: COEFF_BYTES },
-      narrationOverride: narrModulus,
+      params: { auxName: "q", byteLength: profile.coeffBytes },
+      narrationOverride: profile.narration.modulus,
     },
     {
       kind: "step",
       id: `${id}.twist`,
       type: "zq-vec-mul-scalar@1",
-      params: { ...VEC_PARAMS },
+      params: { ...vecParams(profile) },
       portInputs: {
         a: port(`${id}.split`, "output1"),
         scalar: port(`${id}.zeta`, "output0"),
         modulus: port(`${id}.q`, "output"),
       },
-      narrationOverride: narrTwist,
+      narrationOverride: profile.narration.twist,
     },
     {
       kind: "step",
       id: `${id}.lo`,
       type: "zq-vec-add@1",
-      params: { ...VEC_PARAMS },
+      params: { ...vecParams(profile) },
       portInputs: {
         a: port(`${id}.split`, "output0"),
         b: port(`${id}.twist`, "output"),
         modulus: port(`${id}.q`, "output"),
       },
-      narrationOverride: narrForwardAdd,
+      narrationOverride: profile.narration.forwardAdd,
     },
     {
       // Reads the ORIGINAL low half, not `lo` above — see that step's prose.
       kind: "step",
       id: `${id}.hi`,
       type: "zq-vec-sub@1",
-      params: { ...VEC_PARAMS },
+      params: { ...vecParams(profile) },
       portInputs: {
         a: port(`${id}.split`, "output0"),
         b: port(`${id}.twist`, "output"),
         modulus: port(`${id}.q`, "output"),
       },
-      narrationOverride: narrForwardSub,
+      narrationOverride: profile.narration.forwardSub,
     },
     {
       kind: "step",
@@ -566,7 +650,7 @@ const forwardLayerBody = (g: LayerGeometry): StepNode[] => {
         input0: port(`${id}.lo`, "output"),
         input1: port(`${id}.hi`, "output"),
       },
-      narrationOverride: narrRecombine,
+      narrationOverride: profile.narration.recombine,
     },
     {
       // Rotate LEFT: the consumed factor goes to the back.
@@ -578,7 +662,7 @@ const forwardLayerBody = (g: LayerGeometry): StepNode[] => {
         input0: port(`${id}.zeta`, "output1"),
         input1: port(`${id}.zeta`, "output0"),
       },
-      narrationOverride: narrAdvance,
+      narrationOverride: profile.narration.advance,
     },
   ];
 };
@@ -589,7 +673,7 @@ const forwardLayerBody = (g: LayerGeometry): StepNode[] => {
  * ζ¹), the rotation goes the other way, and the twiddle multiply happens after
  * the subtraction rather than before the addition.
  */
-const inverseLayerBody = (g: LayerGeometry): StepNode[] => {
+const inverseLayerBody = (g: LayerGeometry, profile: NttProfile): StepNode[] => {
   const id = g.id;
   const half = g.blockBytes / 2;
   return [
@@ -599,7 +683,7 @@ const inverseLayerBody = (g: LayerGeometry): StepNode[] => {
       type: "split-bytes@1",
       params: { widths: [half, half] },
       portInputs: { input: port(id, "in") },
-      narrationOverride: narrLayerSplit(g),
+      narrationOverride: profile.narration.layerSplit(g),
     },
     {
       kind: "step",
@@ -607,28 +691,28 @@ const inverseLayerBody = (g: LayerGeometry): StepNode[] => {
       type: "split-bytes@1",
       // The cursor sits at the BACK here: output0 is the remaining table,
       // output1 is this group's ζ.
-      params: { widths: [ZETA_TABLE_BYTES.length - COEFF_BYTES, COEFF_BYTES] },
+      params: { widths: [profile.zetaTableBytes - profile.coeffBytes, profile.coeffBytes] },
       portInputs: { input: port(id, "chain") },
-      narrationOverride: narrZetaRead(g),
+      narrationOverride: profile.narration.zetaRead(g),
     },
     {
       kind: "step",
       id: `${id}.q`,
       type: "aux-load-bytes@1",
-      params: { auxName: "q", byteLength: COEFF_BYTES },
-      narrationOverride: narrModulus,
+      params: { auxName: "q", byteLength: profile.coeffBytes },
+      narrationOverride: profile.narration.modulus,
     },
     {
       kind: "step",
       id: `${id}.lo`,
       type: "zq-vec-add@1",
-      params: { ...VEC_PARAMS },
+      params: { ...vecParams(profile) },
       portInputs: {
         a: port(`${id}.split`, "output0"),
         b: port(`${id}.split`, "output1"),
         modulus: port(`${id}.q`, "output"),
       },
-      narrationOverride: narrInverseAdd,
+      narrationOverride: profile.narration.inverseAdd,
     },
     {
       // `hi − lo`, in that order. Reversed, every high coefficient comes out
@@ -636,25 +720,25 @@ const inverseLayerBody = (g: LayerGeometry): StepNode[] => {
       kind: "step",
       id: `${id}.diff`,
       type: "zq-vec-sub@1",
-      params: { ...VEC_PARAMS },
+      params: { ...vecParams(profile) },
       portInputs: {
         a: port(`${id}.split`, "output1"),
         b: port(`${id}.split`, "output0"),
         modulus: port(`${id}.q`, "output"),
       },
-      narrationOverride: narrInverseSub,
+      narrationOverride: profile.narration.inverseSub,
     },
     {
       kind: "step",
       id: `${id}.hi`,
       type: "zq-vec-mul-scalar@1",
-      params: { ...VEC_PARAMS },
+      params: { ...vecParams(profile) },
       portInputs: {
         a: port(`${id}.diff`, "output"),
         scalar: port(`${id}.zeta`, "output1"),
         modulus: port(`${id}.q`, "output"),
       },
-      narrationOverride: narrInverseTwist,
+      narrationOverride: profile.narration.inverseTwist,
     },
     {
       kind: "step",
@@ -665,7 +749,7 @@ const inverseLayerBody = (g: LayerGeometry): StepNode[] => {
         input0: port(`${id}.lo`, "output"),
         input1: port(`${id}.hi`, "output"),
       },
-      narrationOverride: narrRecombine,
+      narrationOverride: profile.narration.recombine,
     },
     {
       // Rotate RIGHT: the consumed factor (at the back) moves to the front, so
@@ -678,7 +762,7 @@ const inverseLayerBody = (g: LayerGeometry): StepNode[] => {
         input0: port(`${id}.zeta`, "output1"),
         input1: port(`${id}.zeta`, "output0"),
       },
-      narrationOverride: narrAdvance,
+      narrationOverride: profile.narration.advance,
     },
   ];
 };
@@ -704,6 +788,12 @@ export type NttBlockOptions = {
    * empty, which reproduces the P1 standalone specs byte for byte.
    */
   readonly prefix?: string;
+  /**
+   * Which transform: ML-KEM's seven layers over q = 3329 (the default, and the
+   * only value every pre-ML-DSA caller ever passed) or ML-DSA's eight over
+   * q = 8380417. See `NttProfile`.
+   */
+  readonly profile?: NttProfile;
 };
 
 export type NttBlock = {
@@ -727,6 +817,7 @@ export type NttBlock = {
 export const buildNttNodes = (options: NttBlockOptions): NttBlock => {
   const { direction, seedBinding } = options;
   const prefix = options.prefix ?? "";
+  const profile = options.profile ?? ML_KEM_NTT_PROFILE;
   const forward = direction === "forward";
   const zetaTableId = `${prefix}${NTT_ZETA_TABLE_ID}`;
   const cursorSplitId = `${prefix}${NTT_CURSOR_SPLIT_ID}`;
@@ -737,8 +828,8 @@ export const buildNttNodes = (options: NttBlockOptions): NttBlock => {
       kind: "step",
       id: zetaTableId,
       type: "aux-load-bytes@1",
-      params: { auxName: "zeta", byteLength: ZETA_TABLE_BYTES.length },
-      narrationOverride: narrZetaTable,
+      params: { auxName: "zeta", byteLength: profile.zetaTableBytes },
+      narrationOverride: profile.narration.zetaTable,
     },
   ];
 
@@ -751,9 +842,9 @@ export const buildNttNodes = (options: NttBlockOptions): NttBlock => {
         kind: "step",
         id: cursorSplitId,
         type: "split-bytes@1",
-        params: { widths: [COEFF_BYTES, ZETA_TABLE_BYTES.length - COEFF_BYTES] },
+        params: { widths: [profile.coeffBytes, profile.zetaTableBytes - profile.coeffBytes] },
         portInputs: { input: port(zetaTableId, "output") },
-        narrationOverride: narrCursorSplit,
+        narrationOverride: profile.narration.cursorSplit,
       },
       {
         kind: "step",
@@ -764,18 +855,23 @@ export const buildNttNodes = (options: NttBlockOptions): NttBlock => {
           input0: port(cursorSplitId, "output1"),
           input1: port(cursorSplitId, "output0"),
         },
-        narrationOverride: narrCursor,
+        narrationOverride: profile.narration.cursor,
       },
     );
   }
 
-  for (let n = 1; n <= NTT_LAYERS; n++) {
+  for (let n = 1; n <= profile.layers; n++) {
     // Forward: layer n has pairing distance 128 / 2^(n-1), so the widest group
     // comes first. The inverse runs the layers in the OPPOSITE order — its
     // layer 1 has the smallest pairing distance (2), which is the forward layer
     // 7's. Node ids still key on `n`, the display index, so either spec reads
     // top to bottom.
-    const g = geometryFor(n, layerLen(forward ? n : NTT_LAYERS + 1 - n), prefix);
+    const g = geometryFor(
+      n,
+      layerLen(forward ? n : profile.layers + 1 - n, profile),
+      profile,
+      prefix,
+    );
     steps.push({
       kind: "iterate",
       id: g.id,
@@ -790,11 +886,11 @@ export const buildNttNodes = (options: NttBlockOptions): NttBlock => {
       chainOutput: CURSOR_PORT,
       bodyOutput: port(`${g.id}.out`, "output"),
       outputPorts: ["out"],
-      children: forward ? forwardLayerBody(g) : inverseLayerBody(g),
+      children: forward ? forwardLayerBody(g, profile) : inverseLayerBody(g, profile),
     });
   }
 
-  const lastLayer = port(nttLayerId(NTT_LAYERS, prefix), "out");
+  const lastLayer = port(nttLayerId(profile.layers, prefix), "out");
   if (forward) return { nodes: steps, output: lastLayer };
 
   // The inverse's seven layers accumulate a factor of 2⁷; this removes it.
@@ -806,27 +902,27 @@ export const buildNttNodes = (options: NttBlockOptions): NttBlock => {
       kind: "step",
       id: ninvId,
       type: "aux-load-bytes@1",
-      params: { auxName: "ninv", byteLength: COEFF_BYTES },
-      narrationOverride: narrScale,
+      params: { auxName: "ninv", byteLength: profile.coeffBytes },
+      narrationOverride: profile.narration.scale,
     },
     {
       kind: "step",
       id: scaleQId,
       type: "aux-load-bytes@1",
-      params: { auxName: "q", byteLength: COEFF_BYTES },
-      narrationOverride: narrModulus,
+      params: { auxName: "q", byteLength: profile.coeffBytes },
+      narrationOverride: profile.narration.modulus,
     },
     {
       kind: "step",
       id: scaleId,
       type: "zq-vec-mul-scalar@1",
-      params: { ...VEC_PARAMS },
+      params: { ...vecParams(profile) },
       portInputs: {
         a: lastLayer,
         scalar: port(ninvId, "output"),
         modulus: port(scaleQId, "output"),
       },
-      narrationOverride: narrScale,
+      narrationOverride: profile.narration.scale,
     },
   );
   return { nodes: steps, output: port(scaleId, "output") };
@@ -845,11 +941,13 @@ export const buildNttGroup = (options: {
   readonly label: string;
   readonly direction: NttDirection;
   readonly seedBinding: PortBinding;
+  readonly profile?: NttProfile;
 }): StepGroup => {
   const { nodes, output } = buildNttNodes({
     direction: options.direction,
     seedBinding: port(options.id, "in"),
     prefix: `${options.id}.`,
+    ...(options.profile !== undefined ? { profile: options.profile } : {}),
   });
   return {
     kind: "group",

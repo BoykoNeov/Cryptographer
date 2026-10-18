@@ -1,6 +1,6 @@
 # ML-DSA-44 — the post-quantum signature, and the app's first loop that stops on its own
 
-**Status: PLANNED 2026-10-18.** Five phases. Successor to
+**Status: P1 SHIPPED 2026-10-18; P2–P5 open.** Five phases. Successor to
 `docs/plans/unified-stargazing-quasar.md` (ML-KEM, CLOSED), which deferred
 ML-DSA to "its own plan and its own advisor pass" because signing retries an
 unbounded number of times. This is that plan.
@@ -193,6 +193,47 @@ consult before it starts (`feedback_iterative_slice_review`).
 - 256⁻¹ swapped for ML-KEM's 128⁻¹ shape.
 - An ascending-exponent table.
 - 7 layers instead of 8.
+
+**P1 OUTCOME (2026-10-18).** Shipped as planned. Five things to carry forward:
+
+1. **The parameterization is a PROFILE, and prose is part of it.** `NttProfile`
+   holds n, layers, coeffBytes and zetaTableBytes plus an `NttNarration`.
+   Templating ML-KEM's sentences would have had to reproduce them byte for byte
+   to keep the spec digests (and therefore shared links) stable, so each
+   transform owns its own prose for every leaf that quotes a number. The
+   sum, difference and rejoin prose is shared. Digests captured before the
+   change: `tests/ml-kem-768-spec-digests.test.ts` is new; the NTT and K-PKE
+   digests already existed. All came out identical.
+2. **FIPS 204 Appendix B lists entry 0 as 0, not 1753⁰ = 1.** Nothing reads it.
+   Entries 1…255 are re-derived in the KAT, and a perturbation changes entry 0
+   and asserts that nothing moves.
+3. **My own narration had a wrong number, caught before shipping:** 8380416² ≈
+   7·10¹³ is 46 bits, well inside a double's exact range (2⁵³), not past it.
+   The real point is that it exceeds 32 bits. The KAT reference arithmetic stays
+   in `number` for exactly that reason.
+4. **The same stale-input bug ML-KEM P4 found, one family over, found again by
+   the browser.** The lattice dropdown called `setLattice` directly, because a
+   variant switch was unreachable with one member. Fixed with a mode-aware
+   `changeLattice`, pinned by `tests/app-lattice-switch.test.tsx` (both
+   directions plus typed-input survival) and perturbation-verified.
+   **Generalization: every family dropdown needs a change handler the moment it
+   gains a second member.** Families with one member today: none left that
+   have a direction.
+5. **The butterfly diagram hardcoded "FIPS 203 Algorithm 9/10".** It now reads
+   the citation from the twiddle multiply's `narrationOverride.references[0]`
+   (spec-derived, not inferred from width or modulus), falling back to FIPS 203
+   for palette-built butterflies. Pinned by `tests/ntt-diagram.test.tsx` and
+   perturbation-verified.
+
+**Not fully explained:** the first browser session froze for minutes. With the
+input-swap fix, both switches run with no long tasks (152 ms / 10 ms). The
+freeze appeared only on the stale-input path and was never reproduced in jsdom.
+Screenshots timed out for the whole session even while the page ran at
+~60 fps, so the extension's capture was unreliable independently of the app.
+A jsdom run of the new App test also stalled for over five minutes once, while
+it used `toBe` on multi-kilobyte hex strings; it has passed in ~15 s every run
+since `expectHex` replaced those assertions. Watch for both in P3/P4, where the
+inputs are larger.
 
 ### P2 — the ML-DSA arithmetic layer (palette only, no selector entry)
 

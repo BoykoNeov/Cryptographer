@@ -113,10 +113,15 @@ export const PRNG_IDS = [
 
 /**
  * Lattice variants — `docs/plans/unified-stargazing-quasar.md`. The
- * number-theoretic transform is the first member. `assertLatticeCoverage` below
+ * number-theoretic transform is the first member; ML-DSA's transform over
+ * q = 8380417 the second (`docs/plans/refactored-petting-tide.md`, P1).
+ * `assertLatticeCoverage` below
  * pins this against the `Lattice` union in `ui/stores/cipher.ts`.
  */
-export const LATTICE_IDS = ["ntt-3329-256"] as const satisfies readonly Lattice[];
+export const LATTICE_IDS = [
+  "ntt-3329-256",
+  "ntt-8380417-256",
+] as const satisfies readonly Lattice[];
 
 /**
  * Concatenation of cipher + hash + asymmetric + prng + lattice ids. Used by the top-level

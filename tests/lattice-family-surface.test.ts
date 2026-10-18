@@ -36,6 +36,7 @@
  * THEM is what makes a missing variant fail.
  */
 
+import { ML_DSA_POLY_BYTES } from "@/ciphers/mldsa-constants";
 import { POLY_BYTES } from "@/ciphers/mlkem-constants";
 import { DEFAULT_NTT_INPUT, DEFAULT_NTT_OUTPUT } from "@/ciphers/ntt-3329-256";
 import {
@@ -49,6 +50,7 @@ import {
   ASYMMETRIC_OPTIONS,
   type Algorithm,
   CIPHER_OPTIONS,
+  COEFF_BYTES_BY_LATTICE,
   DEFAULT_CT_BYTES_BY_LATTICE,
   DEFAULT_KEY_BYTES_BY_LATTICE,
   DEFAULT_PT_BYTES_BY_LATTICE,
@@ -157,10 +159,19 @@ describe("the five families partition Algorithm", () => {
   it("the transform is keyless and takes a fixed-width polynomial", () => {
     for (const l of ALL) {
       expect(DEFAULT_KEY_BYTES_BY_LATTICE[l].length).toBe(0);
-      expect(INPUT_BYTES_BY_LATTICE[l]).toBe(POLY_BYTES);
-      expect(DEFAULT_PT_BYTES_BY_LATTICE[l].length).toBe(POLY_BYTES);
-      expect(DEFAULT_CT_BYTES_BY_LATTICE[l].length).toBe(POLY_BYTES);
+      // 256 coefficients each; the WIDTH of a coefficient is per-variant.
+      expect(INPUT_BYTES_BY_LATTICE[l]).toBe(256 * COEFF_BYTES_BY_LATTICE[l]);
+      expect(DEFAULT_PT_BYTES_BY_LATTICE[l].length).toBe(INPUT_BYTES_BY_LATTICE[l]);
+      expect(DEFAULT_CT_BYTES_BY_LATTICE[l].length).toBe(INPUT_BYTES_BY_LATTICE[l]);
     }
+  });
+
+  it("ML-KEM's transform is 512 bytes and ML-DSA's 1024 — pinned per key, not per options list", () => {
+    // The vacuous-suite hazard (MT19937 P4): every assertion above iterates the
+    // options list, so a variant deleted from it would pass silently.
+    expect(INPUT_BYTES_BY_LATTICE["ntt-3329-256"]).toBe(POLY_BYTES);
+    expect(INPUT_BYTES_BY_LATTICE["ntt-8380417-256"]).toBe(ML_DSA_POLY_BYTES);
+    expect(ALL).toContain("ntt-8380417-256");
   });
 });
 

@@ -58,6 +58,7 @@ import { buildEcbSpec } from "@/ciphers/modes/ecb";
 import { buildOfbSpec } from "@/ciphers/modes/ofb";
 import { buildMt19937Spec } from "@/ciphers/mt19937";
 import { buildInverseNttSpec, buildNttSpec } from "@/ciphers/ntt-3329-256";
+import { buildMlDsaInverseNttSpec, buildMlDsaNttSpec } from "@/ciphers/ntt-8380417-256";
 import { readPrngOutputLength } from "@/ciphers/prng-request";
 import { rsaDecryptSpec, rsaEncryptSpec } from "@/ciphers/rsa";
 import { salsa20DecryptSpec, salsa20EncryptSpec } from "@/ciphers/salsa20";
@@ -515,6 +516,7 @@ const resolveAsymmetricDefault = (a: Asymmetric, mode: Mode): CipherSpec =>
  */
 const latticeDefaults: Record<Lattice, Record<Mode, CipherSpec>> = {
   "ntt-3329-256": { encrypt: buildNttSpec(), decrypt: buildInverseNttSpec() },
+  "ntt-8380417-256": { encrypt: buildMlDsaNttSpec(), decrypt: buildMlDsaInverseNttSpec() },
 };
 
 /** Pick the canonical lattice spec for a `(lattice, mode)` pair. */

@@ -25,6 +25,7 @@
 
 import { buildDefaultRegistry } from "@/ciphers/default-registry";
 import { DEFAULT_NTT_INPUT, DEFAULT_NTT_OUTPUT } from "@/ciphers/ntt-3329-256";
+import { DEFAULT_ML_DSA_NTT_INPUT, DEFAULT_ML_DSA_NTT_OUTPUT } from "@/ciphers/ntt-8380417-256";
 import { BASE_CASE_MUL_TYPE } from "@/core/ntt-diagram";
 import { runSpec } from "@/core/runtime";
 import { makeBytesState } from "@/core/state/bytes";
@@ -171,6 +172,48 @@ describe("<NttButterflyDiagram />", () => {
     ));
     expect(last.container.querySelector(".ntt-butterfly-diagram-kind")?.textContent).toBe(
       "pairs j with j + 2 · group 64 of 64",
+    );
+  });
+
+  it("cites each transform's OWN standard — FIPS 203 for ML-KEM, FIPS 204 for ML-DSA", () => {
+    // The diagram cannot tell the two transforms apart from their wiring — they
+    // are the same machine — so it reads the citation off the twiddle multiply.
+    // ML-DSA's transform showed "FIPS 203 Algorithm 9" in the browser before
+    // this; nothing else checked it.
+    const cases = [
+      ["ntt-3329-256", true, DEFAULT_NTT_INPUT, "FIPS 203 Algorithm 9"],
+      ["ntt-3329-256", false, DEFAULT_NTT_OUTPUT, "FIPS 203 Algorithm 10"],
+      ["ntt-8380417-256", true, DEFAULT_ML_DSA_NTT_INPUT, "FIPS 204 Algorithm 41"],
+      ["ntt-8380417-256", false, DEFAULT_ML_DSA_NTT_OUTPUT, "FIPS 204 Algorithm 42"],
+    ] as const;
+    for (const [lattice, forward, input, expected] of cases) {
+      setLattice(lattice);
+      setMode(forward ? "encrypt" : "decrypt");
+      const trace = runSpec(useSpec()(), registry, { initialState: makeBytesState(input) });
+      setTrace(trace);
+      const { container, unmount } = render(() => (
+        <NttButterflyDiagram frame={frameIn(trace, "layer1", ".lo", 0)} />
+      ));
+      expect(container.textContent, `${lattice} ${forward ? "forward" : "inverse"}`).toContain(
+        expected,
+      );
+      unmount();
+    }
+  });
+
+  it("labels ML-DSA's eighth layer as 128 groups at pairing distance 1", () => {
+    // The layer ML-KEM's prime cannot run.
+    setLattice("ntt-8380417-256");
+    setMode("encrypt");
+    const trace = runSpec(useSpec()(), registry, {
+      initialState: makeBytesState(DEFAULT_ML_DSA_NTT_INPUT),
+    });
+    setTrace(trace);
+    const { container } = render(() => (
+      <NttButterflyDiagram frame={frameIn(trace, "layer8", ".twist", 127)} />
+    ));
+    expect(container.querySelector(".ntt-butterfly-diagram-kind")?.textContent).toBe(
+      "pairs j with j + 1 · group 128 of 128",
     );
   });
 

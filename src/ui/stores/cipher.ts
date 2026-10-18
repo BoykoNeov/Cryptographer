@@ -20,8 +20,10 @@
 
 import { createSignal } from "solid-js";
 import { ML_KEM_DEFAULT_CIPHERTEXT, ML_KEM_DEFAULT_MESSAGE } from "../../ciphers/ml-kem-768";
+import { ML_DSA_COEFF_BYTES, ML_DSA_POLY_BYTES } from "../../ciphers/mldsa-constants";
 import { POLY_BYTES } from "../../ciphers/mlkem-constants";
 import { DEFAULT_NTT_INPUT, DEFAULT_NTT_OUTPUT } from "../../ciphers/ntt-3329-256";
+import { DEFAULT_ML_DSA_NTT_INPUT, DEFAULT_ML_DSA_NTT_OUTPUT } from "../../ciphers/ntt-8380417-256";
 
 export type AesCipher = "aes-128" | "aes-192" | "aes-256";
 export type SpeckCipher = "speck-32-64-be" | "speck-32-64-le";
@@ -178,7 +180,7 @@ export type Prng = "minstd-rand0" | "minstd-rand" | "ansi-c-lcg" | "mt19937" | "
  * RSA is the precedent that matters here: a non-cipher family with two
  * directions was already a solved surface.
  */
-export type Lattice = "ntt-3329-256";
+export type Lattice = "ntt-3329-256" | "ntt-8380417-256";
 
 /**
  * Category discriminant for the algorithm selector (Slice 2.10c, 2026-05-25).
@@ -306,7 +308,7 @@ export const isPrng = (a: Algorithm): a is Prng => (ALL_PRNGS as readonly string
  * new *variant*, and the compiler believes a type predicate whatever it says.
  * P2's additions land here and nowhere else.
  */
-const ALL_LATTICE: readonly Lattice[] = ["ntt-3329-256"];
+const ALL_LATTICE: readonly Lattice[] = ["ntt-3329-256", "ntt-8380417-256"];
 
 /**
  * True when an algorithm is in the lattice family. Defined alongside `isHash` /
@@ -466,11 +468,12 @@ export const ASYMMETRIC_LABELS: Record<Asymmetric, string> = {
   "ml-kem-768": "ML-KEM-768 (post-quantum KEM)",
 };
 
-/** Lattice dropdown options + labels. One entry today (the NTT); mirrors the
+/** Lattice dropdown options + labels. ML-KEM's transform and ML-DSA's; mirrors the
  *  other families' option shapes so the selector renders any family uniformly. */
 export const LATTICE_OPTIONS = ALL_LATTICE;
 export const LATTICE_LABELS: Record<Lattice, string> = {
   "ntt-3329-256": "NTT over Z₃₃₂₉[X]/(X²⁵⁶+1)",
+  "ntt-8380417-256": "NTT over Z₈₃₈₀₄₁₇[X]/(X²⁵⁶+1)",
 };
 
 /** PRNG dropdown options + labels. The variants differ in a handful of
@@ -596,6 +599,8 @@ export const PRNG_DESCRIPTIONS: Record<Prng, string> = {
 export const LATTICE_DESCRIPTIONS: Record<Lattice, string> = {
   "ntt-3329-256":
     "Number-theoretic transform — the FFT done in integers mod the prime 3329; makes polynomial multiplication in ML-KEM's ring cheap and exact.",
+  "ntt-8380417-256":
+    "The same transform over ML-DSA's prime 8380417 — whose extra factors of two allow an eighth layer, so the transformed polynomial is 256 independent values and multiplication becomes element-wise.",
 };
 
 /**
@@ -706,6 +711,8 @@ export const PRNG_HISTORY: Record<Prng, string> = {
 export const LATTICE_HISTORY: Record<Lattice, string> = {
   "ntt-3329-256":
     "Gauss described the algorithm in 1805, two years before Fourier's own work; Cooley & Tukey rediscovered it in 1965 and Pollard moved it into modular arithmetic in 1971. NIST's 2024 post-quantum standard ML-KEM (FIPS 203) does not merely use it for speed — it stores keys and ciphertexts in the transformed domain, making this transform part of the data format itself.",
+  "ntt-8380417-256":
+    "The prime 8380417 = 2²³ − 2¹³ + 1 was chosen for CRYSTALS-Dilithium (Ducas, Kiltz, Lepoint, Lyubashevsky, Schwabe, Seiler, Stehlé, 2017) so that a 512th root of unity exists and the transform splits all the way down. Standardized by NIST in 2024 as the arithmetic of ML-DSA (FIPS 204), the post-quantum signature that is ML-KEM's sibling.",
 };
 
 /**
@@ -1247,6 +1254,7 @@ export const DEFAULT_PT_BYTES_BY_PRNG: Record<Prng, Uint8Array> = {
 /** Empty key per lattice variant — the transform has no key. */
 export const DEFAULT_KEY_BYTES_BY_LATTICE: Record<Lattice, Uint8Array> = {
   "ntt-3329-256": new Uint8Array(0),
+  "ntt-8380417-256": new Uint8Array(0),
 };
 
 /**
@@ -1262,6 +1270,7 @@ export const DEFAULT_KEY_BYTES_BY_LATTICE: Record<Lattice, Uint8Array> = {
  */
 export const DEFAULT_PT_BYTES_BY_LATTICE: Record<Lattice, Uint8Array> = {
   "ntt-3329-256": DEFAULT_NTT_INPUT,
+  "ntt-8380417-256": DEFAULT_ML_DSA_NTT_INPUT,
 };
 
 /**
@@ -1276,6 +1285,7 @@ export const DEFAULT_PT_BYTES_BY_LATTICE: Record<Lattice, Uint8Array> = {
  */
 export const DEFAULT_CT_BYTES_BY_LATTICE: Record<Lattice, Uint8Array> = {
   "ntt-3329-256": DEFAULT_NTT_OUTPUT,
+  "ntt-8380417-256": DEFAULT_ML_DSA_NTT_OUTPUT,
 };
 
 /**
@@ -1299,9 +1309,18 @@ export const latticeDefaultInput = (l: Lattice, mode: "encrypt" | "decrypt"): Ui
   mode === "decrypt" ? DEFAULT_CT_BYTES_BY_LATTICE[l] : DEFAULT_PT_BYTES_BY_LATTICE[l];
 
 /** Polynomial width in bytes, per lattice variant — the analogue of
- *  `SEED_BYTES_BY_PRNG`. A ring element is 256 coefficients × 2 bytes. */
+ *  `SEED_BYTES_BY_PRNG`. A ring element is 256 coefficients, at 2 bytes each
+ *  for q = 3329 and 4 bytes each for q = 8380417. */
 export const INPUT_BYTES_BY_LATTICE: Record<Lattice, number> = {
   "ntt-3329-256": POLY_BYTES,
+  "ntt-8380417-256": ML_DSA_POLY_BYTES,
+};
+
+/** Bytes per coefficient, per lattice variant — what the input-width error
+ *  message quotes. */
+export const COEFF_BYTES_BY_LATTICE: Record<Lattice, number> = {
+  "ntt-3329-256": 2,
+  "ntt-8380417-256": ML_DSA_COEFF_BYTES,
 };
 
 /** Test-only reset; production code never calls this. */

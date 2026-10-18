@@ -91,7 +91,8 @@ export type NttButterflyDiagramModel = {
   readonly kind: NttButterflyKind;
   /** Printed name of the butterfly, e.g. `Cooley–Tukey`. */
   readonly butterflyName: string;
-  /** FIPS 203's algorithm number for this butterfly. */
+  /** The standard's algorithm number for this butterfly — FIPS 203's for ML-KEM's
+   *  transform, FIPS 204's for ML-DSA's. See `butterflyReference`. */
   readonly reference: string;
   /** Coefficients this group covers (both halves together). */
   readonly groupCoefficients: number;
@@ -164,6 +165,30 @@ const box = (
  *   iterates running 1, 2, 4 … 64 groups, so a trace-wide maximum labels layer
  *   1's only group "1 of 64" (see `iterateScopeKey`).
  */
+/**
+ * Which standard's algorithm this butterfly is, read from the SPEC rather than
+ * inferred.
+ *
+ * The same diagram serves ML-KEM's transform (FIPS 203 Algorithms 9/10) and
+ * ML-DSA's (FIPS 204 Algorithms 41/42), and nothing in the wiring says which
+ * standard a butterfly belongs to — guessing from the coefficient width or the
+ * modulus would be a proxy that breaks the moment a learner edits either. The
+ * shipped builders already cite the right algorithm on the twiddle multiply's
+ * `narrationOverride`, so that citation is the answer. A butterfly assembled
+ * from the palette carries no override and falls back to FIPS 203, the first
+ * transform the app shipped.
+ */
+const butterflyReference = (
+  layer: IterateGroup,
+  shape: NttButterflyShape,
+  forward: boolean,
+): string => {
+  const twist = layer.children.find((c) => c.id === shape.twistId);
+  const cited = twist?.kind === "step" ? twist.narrationOverride?.references?.[0] : undefined;
+  if (cited !== undefined) return cited;
+  return forward ? "FIPS 203 Algorithm 9" : "FIPS 203 Algorithm 10";
+};
+
 export const nttButterflyDiagramModel = (
   layer: IterateGroup,
   shape: NttButterflyShape,
@@ -209,7 +234,7 @@ export const nttButterflyDiagramModel = (
     layerId: shape.layerId,
     kind: shape.kind,
     butterflyName: forward ? "Cooley–Tukey" : "Gentleman–Sande",
-    reference: forward ? "FIPS 203 Algorithm 9" : "FIPS 203 Algorithm 10",
+    reference: butterflyReference(layer, shape, forward),
     groupCoefficients,
     pairingDistance,
     groupIndex,

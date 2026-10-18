@@ -228,9 +228,16 @@ describe("App — Boot decode (Slice 7)", () => {
 
     render(() => <App />);
 
-    await waitFor(() => {
-      expect(useSpec()().id).toBe("aes-256@1");
-    });
+    // 10s deadline, the share-status test's precedent above: the boot decode
+    // runs through DecompressionStream asynchronously, and under full-suite
+    // load it outran `waitFor`'s default 1s once (2026-10-18) while passing 9/9
+    // alone. The decode is correct; only the deadline was tight.
+    await waitFor(
+      () => {
+        expect(useSpec()().id).toBe("aes-256@1");
+      },
+      { timeout: 10000 },
+    );
     // Hash cleared so a refresh doesn't re-apply (which would clobber
     // any subsequent edits the user made since the initial load).
     expect(window.location.hash).toBe("");
@@ -265,9 +272,12 @@ describe("App — Boot decode (Slice 7)", () => {
 
     const { container } = render(() => <App />);
 
-    await waitFor(() => {
-      expect(useByteFormat()()).toBe("ascii");
-    });
+    await waitFor(
+      () => {
+        expect(useByteFormat()()).toBe("ascii");
+      },
+      { timeout: 10000 }, // see the boot-decode test above
+    );
     // Spec id unchanged (same AES-128) but byteFormat snapped to ASCII.
     expect(useSpec()().id).toBe("aes-128@1");
     // Plaintext field renders the bytes through ASCII (would be hex if

@@ -262,6 +262,13 @@ This was measured 2026-06-01 while attempting topology "A" for the Speck key sch
   mode* and swap in the next variant's default *at the current mode*. A
   mode-blind comparison never matches in the decrypt direction, so the field
   silently keeps the wrong bytes — a distinct branch, and it needs its own test.
+- **Met again, one family over, with this entry already written (ML-DSA P1,
+  2026-10-18).** The lattice dropdown called `setLattice` directly; adding
+  ML-DSA's NTT left ML-KEM's 512-byte polynomial in the field. It was found by a
+  browser smoke, not by reading this section first — which is the step that
+  would have caught it. Fixed with a mode-aware `changeLattice`, pinned by
+  `tests/app-lattice-switch.test.tsx`. Every family with a direction now has a
+  `change*` handler; a family added later will not, until its second member.
 - Related: `DEFAULT_CT_BYTES_BY_ASYMMETRIC` sat with **no reader at all** until
   ML-KEM, because RSA's ciphertext is two bytes a user retypes in seconds. A
   table nothing reads is not evidence that nothing needs it.

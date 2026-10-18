@@ -80,7 +80,7 @@ import "./narration/index";
 // builder's actual block size.
 import { PRNG_SEED_AUX } from "@/ciphers/chacha20-csprng";
 import { LCG_WORD_BYTES } from "@/ciphers/lcg";
-import { COEFF_BYTES, ML_KEM_N } from "@/ciphers/mlkem-constants";
+import { ML_KEM_N } from "@/ciphers/mlkem-constants";
 import { iterateScopeKey } from "@/core/step-id";
 import { clearDirty, setAutoRerun, setDirty, useAutoRerun, useDirty } from "./stores/auto-rerun";
 import {
@@ -97,6 +97,7 @@ import {
   CIPHER_DESCRIPTIONS,
   CIPHER_LABELS,
   CIPHER_OPTIONS,
+  COEFF_BYTES_BY_LATTICE,
   type Category,
   type Cipher,
   DEFAULT_CT_BYTES_BY_ASYMMETRIC,
@@ -573,7 +574,8 @@ export const App = () => {
         }
       } else if (isLattice(algorithm())) {
         // Lattice branch. A ring element is exactly 256 coefficients, so the
-        // input is exactly 512 bytes — not negotiable the way a message length
+        // input is exactly 512 bytes (1024 for ML-DSA's four-byte
+        // coefficients) — not negotiable the way a message length
         // is, and the same posture as the generator branch above.
         //
         // **This branch must exist, and not only for the friendly message.**
@@ -586,7 +588,7 @@ export const App = () => {
         const wanted = INPUT_BYTES_BY_LATTICE[lattice()];
         if (inputBytes.length !== wanted) {
           throw new Error(
-            `${inputLabel()}: ${LATTICE_LABELS[lattice()]} takes a ${wanted}-byte polynomial (${ML_KEM_N} coefficients × ${COEFF_BYTES} bytes); got ${inputBytes.length}.`,
+            `${inputLabel()}: ${LATTICE_LABELS[lattice()]} takes a ${wanted}-byte polynomial (${ML_KEM_N} coefficients × ${COEFF_BYTES_BY_LATTICE[lattice()]} bytes); got ${inputBytes.length}.`,
           );
         }
       } else {
@@ -1307,6 +1309,31 @@ export const App = () => {
     withBoundaryReset(() => setAsymmetric(next));
   };
 
+  /**
+   * Change the active lattice transform.
+   *
+   * **The same bug `changeAsymmetric` records, met again in the next family.**
+   * The NTT was the lattice family's only member, so a variant switch was
+   * unreachable and the dropdown wired straight to `setLattice`. ML-DSA's
+   * transform made it reachable, and the first switch left ML-KEM's 512-byte
+   * polynomial in the field, where the 1024-byte transform rejected it.
+   *
+   * Mode-aware for the same reason as `changeAsymmetric`: forward wants a
+   * polynomial and inverse wants its transform, so the default is compared and
+   * swapped at the current direction. A polynomial the user typed survives.
+   */
+  const changeLattice = (next: Lattice): void => {
+    const prev = lattice();
+    if (prev === next) return;
+    const currentPt = tryParseBytes(inputText(), fmt());
+    if (currentPt && bytesEqual(currentPt, algorithmDefaultPt(prev, mode()))) {
+      setInputText(formatBytes(algorithmDefaultPt(next, mode()), fmt()));
+    }
+    // C3 stack boundary (see `changeCipher`): a lattice-variant switch
+    // rebuilds the spec; suppress the rebuild's capture and clear the history.
+    withBoundaryReset(() => setLattice(next));
+  };
+
   const changePrng = (next: Prng): void => {
     const prev = prng();
     if (prev === next) return;
@@ -1914,11 +1941,7 @@ export const App = () => {
             <div class="cipher-select-row">
               <select
                 value={lattice()}
-                onChange={(e) =>
-                  // C3 stack boundary (see `changeCipher`): a lattice-variant
-                  // switch rebuilds the spec; suppress + clear.
-                  withBoundaryReset(() => setLattice(e.currentTarget.value as Lattice))
-                }
+                onChange={(e) => changeLattice(e.currentTarget.value as Lattice)}
                 title={LATTICE_DESCRIPTIONS[lattice()]}
               >
                 <For each={LATTICE_OPTIONS}>
