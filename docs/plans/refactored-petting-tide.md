@@ -466,7 +466,17 @@ c̃′ ≠ c̃" with the other two checks ticked. The graph drew with key
 generation as one collapsed box and no console errors. A hand-built document
 without `keyBytes: []` kept the previous algorithm's 16-byte key and refused
 to run ("key: expected 0 bytes, got 16"). That is an artefact of the
-hand-built document; the app's own saves were not checked for it.
+hand-built document only: the app's own session save turns an empty key
+field into `keyBytes: []` (`parseBytes("")` is an empty array, not a
+failure), and load restores it, so real share links are unaffected.
+
+**Gotchas for P4, found the hard way here.** A new `ml-dsa.` step must bump
+the lattice inventory pin in `tests/narration-registry-contract.test.ts`
+(35 → 36 for the verdict). It is a deliberate set-size pin, and only the full
+gate runs it. And run `tsc` after writing the TESTS, not just the source: a
+`readonly` return type in a test file cost one commit attempt. The default
+pair's three-attempt shape (z, r0, accepted) is pinned in
+`tests/ml-dsa-44-oracle.test.ts`, where attempt reasons are observable.
 
 ### P4 — signing, the loop, and the selector entry
 

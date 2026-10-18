@@ -378,4 +378,19 @@ describe("ML-DSA-44 deterministic signing from the P2 steps = noble's bytes", ()
       });
     }
   }
+
+  it("the P3 default pair: noble's bytes, after exactly three attempts — rejected by z, then r0", () => {
+    // `ML_DSA_44_DEFAULT_MESSAGE` was chosen for this shape, so P4's signing
+    // trace opens on both common rejections. Pinned here, where the attempt
+    // reasons are observable, rather than only stated in a comment.
+    const d = FIXTURE.p3.defaultPair;
+    const k = KEYS[d.keyIndex] as Key;
+    const { sig, attempts } = sign(
+      unhex(k.sk),
+      formatMessage(unhex(d.message), unhex(d.context)),
+      new Uint8Array(32),
+    );
+    expect(hex(sig)).toBe(d.deterministic);
+    expect(attempts.map((a) => a.rejectedBy)).toEqual(["z", "r0", null]);
+  });
 });
