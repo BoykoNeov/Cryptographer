@@ -22,6 +22,7 @@
  */
 
 import { decompose, modPm } from "@/core/ml-dsa-arith";
+import { firstHinted } from "@/core/ml-dsa-diagram";
 import { type AttemptCheck, failedChecks } from "@/steps/ml-dsa-attempt-verdict";
 import { hintBitUnpack } from "@/steps/ml-dsa-hint-pack";
 import { Index } from "solid-js";
@@ -295,7 +296,8 @@ export const mlDsaMakeHintNarration: NarrationFn = (frame) => {
       ),
     },
   ];
-  const i = ones[0];
+  // The same coefficient the rounding diagram draws (`firstHinted`).
+  const i = firstHinted(h);
   if (i !== undefined) {
     const ri = r[i] as number;
     const zi = z[i] as number;
@@ -334,10 +336,10 @@ export const mlDsaUseHintNarration: NarrationFn = (frame) => {
 
   let up = 0;
   let down = 0;
-  let firstCorrected = -1;
+  // The same coefficient the rounding diagram draws (`firstHinted`).
+  const firstCorrected = firstHinted(h) ?? -1;
   h.forEach((b, i) => {
     if (b !== 1) return;
-    if (firstCorrected < 0) firstCorrected = i;
     if (decompose(r[i] as number, g2, q).r0 > 0) up++;
     else down++;
   });

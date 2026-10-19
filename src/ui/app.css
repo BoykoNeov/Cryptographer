@@ -5758,3 +5758,142 @@ button:disabled {
   margin: 0;
   max-width: 70ch;
 }
+
+/* ─── ML-DSA rounding diagram (Decompose / MakeHint / UseHint) ─────────── */
+
+.ml-dsa-rounding-diagram {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev-1);
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.ml-dsa-rounding-diagram-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.ml-dsa-rounding-diagram-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.ml-dsa-rounding-diagram-kind {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.ml-dsa-rounding-diagram-svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.ml-dsa-rounding-diagram-note {
+  max-width: 600px;
+  line-height: 1.5;
+}
+
+/* The overview strip: every bucket on the circle. */
+.ml-dsa-rounding-diagram-cell {
+  fill: var(--bg-elev-2);
+  stroke: var(--border);
+  stroke-width: 0.5;
+}
+
+.ml-dsa-rounding-diagram-cell-home {
+  fill: var(--accent);
+}
+
+.ml-dsa-rounding-diagram-cell-target {
+  fill: var(--accent-success);
+}
+
+.ml-dsa-rounding-diagram-small {
+  font-size: 9px;
+  font-family: var(--mono);
+  fill: var(--muted);
+}
+
+/* The close-up's three buckets. */
+.ml-dsa-rounding-diagram-bucket {
+  fill: var(--bg-elev-2);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.ml-dsa-rounding-diagram-bucket-home {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+}
+
+/* Where a hint sends the value. Green, because it is where the value belongs. */
+.ml-dsa-rounding-diagram-bucket-target {
+  stroke: var(--accent-success);
+  stroke-width: 1.5;
+}
+
+.ml-dsa-rounding-diagram-bucket-label,
+.ml-dsa-rounding-diagram-centre-label,
+.ml-dsa-rounding-diagram-bracket-label,
+.ml-dsa-rounding-diagram-hop-label {
+  font-size: 10px;
+  font-family: var(--mono);
+  text-anchor: middle;
+}
+
+.ml-dsa-rounding-diagram-bucket-label {
+  fill: var(--text);
+}
+
+.ml-dsa-rounding-diagram-centre-label,
+.ml-dsa-rounding-diagram-bracket-label {
+  fill: var(--muted);
+}
+
+.ml-dsa-rounding-diagram-tick {
+  stroke: var(--muted);
+  stroke-width: 1;
+}
+
+.ml-dsa-rounding-diagram-dot {
+  fill: var(--text);
+}
+
+.ml-dsa-rounding-diagram-dot-second {
+  fill: var(--accent-success);
+}
+
+.ml-dsa-rounding-diagram-value-label {
+  font-size: 10px;
+  font-family: var(--mono);
+  fill: var(--text);
+}
+
+.ml-dsa-rounding-diagram-bracket {
+  stroke: var(--accent);
+  stroke-width: 1;
+}
+
+.ml-dsa-rounding-diagram-shift,
+.ml-dsa-rounding-diagram-hop {
+  fill: none;
+  stroke: var(--accent-success);
+  stroke-width: 1.5;
+}
+
+.ml-dsa-rounding-diagram-hop-label {
+  fill: var(--accent-success);
+}
+
+.ml-dsa-rounding-diagram-arrowhead {
+  fill: var(--accent-success);
+}

@@ -654,7 +654,24 @@ the RSA arm, which reads `cipherConstants.q` for an unrelated check.
   bullet questions with a stray paragraph break mid-sentence.
 - A **Decompose / hint diagram**: the number line cut into 2γ2-wide buckets, the
   value, its high/low parts, and how one hint bit moves the verifier's
-  rounding.
+  rounding. **DONE 2026-10-19** — `MlDsaRoundingDiagram.tsx` over the pure
+  `core/ml-dsa-diagram.ts`, on Decompose, MakeHint and UseHint frames: a strip
+  of all m buckets and a close-up of three (the value's own, wrapping mod m).
+  Values are placed by their low part, never raw residue; every drawn number
+  comes from the frame's output ports, and disagreement draws nothing; q and γ2
+  come from the ports (a synthetic γ2 = (q−1)/32 gives 16 buckets). The
+  strongest test crosses two runs: for every coefficient of the kept attempt,
+  MakeHint's `r + z` and Verify's UseHint output both equal the committed w1
+  read off Decompose. Six perturbations each failed their own test (placing by
+  raw residue, swapping r and r + z, not checking Decompose's or UseHint's
+  outputs, a hard-coded γ2, the narrator picking another coefficient).
+  Browser smoke found two layout bugs no test could see — the edge line ran
+  through centred value labels, and the straight shift arrow vanished between
+  dots 9 px apart — fixed by inward-anchored labels and an arc, then
+  re-checked by measuring every label's box against every edge. On screen the
+  story connects: Sign's coefficient 3 is r = 5,803,752, 5,400 below bucket
+  30's edge, z = +9,223 carries it into 31; Verify's UseHint shows the same r,
+  offset +89,832, hinted up to 31.
 - Read every P2 narrator on screen (the ML-KEM narration-debt lesson). Browser
   smoke throughout; the extension may drop, and the throwaway Playwright recipe
   is in memory.

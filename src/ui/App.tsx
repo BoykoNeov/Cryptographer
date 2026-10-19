@@ -63,6 +63,7 @@ import { FeistelSwapDiagram } from "./components/FeistelSwapDiagram";
 import { GraphView } from "./components/GraphView";
 import { IvInput } from "./components/IvInput";
 import { MlDsaAttemptsPanel } from "./components/MlDsaAttemptsPanel";
+import { MlDsaRoundingDiagram } from "./components/MlDsaRoundingDiagram";
 import { MlDsaVerifyMessage } from "./components/MlDsaVerifyMessage";
 import { NttButterflyDiagram } from "./components/NttButterflyDiagram";
 import { ParamEditor } from "./components/ParamEditor";
@@ -2598,6 +2599,14 @@ export const App = () => {
                       Self-detecting (only the signing trace has verdict
                       frames), collapsed outside the loop like RoundKeyPanel. */}
                   <MlDsaAttemptsPanel frame={frame()} />
+
+                  {/* ML-DSA's rounding picture: a signature keeps only the
+                      bucket a value falls in, and a hint bit moves the
+                      verifier's value back across a bucket edge when the
+                      difference it never saw pushed it over. Prose states it;
+                      only a dot beside an edge shows it. Self-detecting on
+                      Decompose / MakeHint / UseHint frames. */}
+                  <MlDsaRoundingDiagram frame={frame()} />
 
                   {/* Per-frame value-prose. Cipher-agnostic dispatch via
                       the narration registry (`src/ui/narration/`).

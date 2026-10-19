@@ -330,3 +330,43 @@ describe("App — the signing attempts panel (P5)", () => {
     expect(panel(container)).toBeNull();
   }, 120_000);
 });
+
+describe("App — the rounding diagram (P5)", () => {
+  beforeEach(() => resetAll());
+  afterEach(() => {
+    cleanup();
+    resetAll();
+  });
+
+  const diagram = (container: HTMLElement): HTMLElement | null =>
+    container.querySelector<HTMLElement>(".ml-dsa-rounding-diagram");
+
+  /** Index of the first frame of `type` on the given attempt (1-based), or of any if undefined. */
+  const frameOf = (type: string, attempt?: number): number =>
+    getTrace()?.frames.findIndex(
+      (f) => f.stepType === type && (attempt === undefined || f.blockIndex === attempt - 1),
+    ) ?? -1;
+
+  it("shows a Decompose and a MakeHint frame on the bucket ruler, and nothing elsewhere", async () => {
+    const { container } = render(() => <App />);
+    selectMlDsa(container);
+    run(container);
+    await waitFor(() => expect(resultText(container)?.replace(/\s/g, "").length).toBe(4840), {
+      timeout: 60_000,
+    });
+
+    setFrame(frameOf("ml-dsa.decompose@1", 1));
+    await waitFor(() => expect(diagram(container)).not.toBeNull());
+    expect(diagram(container)?.textContent).toContain("Decompose · 44 buckets");
+    expect(diagram(container)?.textContent).toContain("low part");
+
+    // The kept attempt's MakeHint: an arrow from r to r + z across an edge.
+    setFrame(frameOf("ml-dsa.make-hint@1", 3));
+    await waitFor(() => expect(diagram(container)?.textContent).toContain("MakeHint"));
+    expect(diagram(container)?.textContent).toContain("r + z =");
+    expect(diagram(container)?.textContent).toContain("75 of 1,024 here");
+
+    setFrame(frameOf("ml-dsa.attempt-verdict@1", 3));
+    await waitFor(() => expect(diagram(container)).toBeNull());
+  }, 120_000);
+});
