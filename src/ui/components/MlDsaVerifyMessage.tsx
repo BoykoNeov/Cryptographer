@@ -21,7 +21,7 @@ import { formatBytes } from "@/core/format";
 import type { StepNode } from "@/core/types";
 import { Show, createMemo } from "solid-js";
 import { useByteFormat } from "../stores/format";
-import { useSignedMessage } from "../stores/signed-message";
+import { useSignedMessage } from "../stores/forward-input";
 import { editStepParams, useSpec } from "../stores/spec";
 
 /** The verify spec's message leaf bytes, or null if the step is gone or edited away. */

@@ -260,7 +260,9 @@ describe("stopWhen — every count reader shows the attempts RUN, not the cap", 
     const chips = expandCollapsedIterates(collapseGraph(graph, collapsed), collapsed).nodes.filter(
       (n) => n.blockChipOf === "attempts",
     );
-    expect(chips.map((c) => c.label)).toEqual(["block 1", "block 2", "block 3"]);
+    // A `stopWhen` loop's passes are attempts (`core/iteration-noun.ts`), so the
+    // chips say so — and there are three of them, not the cap's worth.
+    expect(chips.map((c) => c.label)).toEqual(["attempt 1", "attempt 2", "attempt 3"]);
   });
 
   it("the static validator accepts the binding and flags a dangling one", () => {

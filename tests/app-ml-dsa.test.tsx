@@ -23,16 +23,21 @@
  * under test, not the store setters.
  */
 
-import { ML_DSA_44_DEFAULT_MESSAGE, ML_DSA_44_DEFAULT_SIGNATURE } from "@/ciphers/ml-dsa-44";
+import {
+  MLDSA_ATTEMPT_PREFIX,
+  MLDSA_ATTEMPT_VERDICT_ID,
+  ML_DSA_44_DEFAULT_MESSAGE,
+  ML_DSA_44_DEFAULT_SIGNATURE,
+} from "@/ciphers/ml-dsa-44";
 import { App } from "@/ui/App";
 import { endpointLabelsFor } from "@/ui/stores/cipher";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetByteFormatForTests } from "@/ui/stores/format";
+import { __resetForwardInputsForTests } from "@/ui/stores/forward-input";
 import { __resetHistoryForTests } from "@/ui/stores/history";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
-import { __resetSignedMessageForTests } from "@/ui/stores/signed-message";
 import { __resetSpecForTests } from "@/ui/stores/spec";
-import { __resetTraceForTests } from "@/ui/stores/trace";
+import { __resetTraceForTests, getTrace, setFrame } from "@/ui/stores/trace";
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -68,7 +73,7 @@ const resetAll = (): void => {
   __resetPaddingForTests();
   __resetSpecForTests();
   __resetCipherForTests();
-  __resetSignedMessageForTests();
+  __resetForwardInputsForTests();
 };
 
 const selectMlDsa = (container: HTMLElement): void => {
@@ -200,6 +205,25 @@ describe("App — ML-DSA-44 in the public-key family", () => {
     fireEvent.change(findSelectByLabel(container, "mode"), { target: { value: "encrypt" } });
     expect(findInputByLabel(container, "message").value).toBe("4869");
   }, 180_000);
+
+  it("labels a signing pass an ATTEMPT in the step view's badge, not a block", async () => {
+    // Signing's loop retries the whole message; it never splits it. The badge
+    // used to read "Block 2 of 3" here. The default message is signed on its
+    // third attempt, so the count is the attempts that ran, not the cap.
+    const { container } = render(() => <App />);
+    selectMlDsa(container);
+    run(container);
+    await waitFor(() => expect(resultText(container)?.replace(/\s/g, "").length).toBe(4840), {
+      timeout: 60_000,
+    });
+    const verdictOfAttempt2 = `${MLDSA_ATTEMPT_PREFIX}${MLDSA_ATTEMPT_VERDICT_ID}:b1`;
+    const index = getTrace()?.frames.findIndex((f) => f.stepId === verdictOfAttempt2) ?? -1;
+    expect(index).toBeGreaterThan(0);
+    setFrame(index);
+    await waitFor(() =>
+      expect(container.querySelector(".block-badge")?.textContent).toBe("Attempt 2 of 3"),
+    );
+  }, 120_000);
 
   it("refuses a signature of the wrong length with a sentence, not a split error", async () => {
     const { container } = render(() => <App />);

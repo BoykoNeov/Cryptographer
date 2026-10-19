@@ -645,8 +645,14 @@ the RSA arm, which reads `cipherConstants.q` for an unrelated check.
 - Read every P2 narrator on screen (the ML-KEM narration-debt lesson). Browser
   smoke throughout; the extension may drop, and the throwaway Playwright recipe
   is in memory.
-- **Relabel the attempt loop's chips** — the graph's collapsed-iterate chips and
-  the badge say "block N"/"Block i of N"; for signing they are attempts.
+- ~~**Relabel the attempt loop's chips**~~ **DONE 2026-10-19.** The noun is
+  derived from `stopWhen` (`src/core/iteration-noun.ts`), not from the cipher
+  name: a loop that decides when to stop is retrying. It reaches the graph via
+  `GraphContainer.iterationNoun` and the badge via the active spec's iterates.
+  Tests: `tests/iteration-noun.test.ts` (on the SHIPPED signing spec, not a toy)
+  and the badge case in `tests/app-ml-dsa.test.tsx`. Left as "block": the graph
+  inspector's `(block N)` suffix on a selected value, which is an index into
+  the loop rather than a name for it.
 - **Found after P4, fixed there; the sibling left for here:** the mode flip
   copies the output into the input in BOTH directions, so Verify → Sign put the
   one-byte verdict where the message was (and the signed-message recorder then
@@ -655,6 +661,12 @@ the RSA arm, which reads `cipherConstants.q` for an unrelated check.
   reads `00`). ML-KEM-768 has the same older pattern — decapsulation → back to
   encapsulation puts the 32-byte shared secret in the "message m (random)"
   field. Harmless (32 bytes is a valid m) but wrong-looking; decide here.
+  **DONE 2026-10-19:** restored the same way. `stores/signed-message.ts` became
+  `stores/forward-input.ts`, keyed per algorithm, with
+  `restoresForwardInputOnFlipBack` as membership over a list. Its read is
+  `untrack`ed — a tracked read subscribed the recording effect to the store it
+  writes and blew the stack in jsdom. Perturbation-verified: without ML-KEM in
+  the list the field comes back holding K.
 
 ## Critical files
 

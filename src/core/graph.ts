@@ -72,6 +72,7 @@
  * container interleave at the root.
  */
 
+import { type IterationNoun, iterationNounOf, pluralNoun } from "./iteration-noun";
 import type { StepRegistry } from "./registry";
 import { canonicalStepId } from "./step-id";
 import type { CipherSpec, IterateGroup, PortBinding, StateShape, StepNode, Trace } from "./types";
@@ -210,6 +211,12 @@ export type ContainerNode = {
   readonly childIds: readonly string[];
   /** Iterate's iteration count from the trace (undefined for groups). */
   readonly blockSpan?: number;
+  /**
+   * What one pass of this loop is called — `"attempt"` for a repeat-until loop
+   * (ML-DSA signing), `"block"` otherwise. Set on iterates only; see
+   * `core/iteration-noun.ts` for why the word is derived from `stopWhen`.
+   */
+  readonly iterationNoun?: IterationNoun;
 };
 
 /**
@@ -547,6 +554,7 @@ const walkSpec = (
         label: node.label ?? node.id,
         containerPath,
         childIds: grandChildIds,
+        iterationNoun: iterationNounOf(node),
       });
     } else if (node.kind === "for-each-subgraph") {
       // For-each-subgraph (Slice 2.0a). Treated as its own container kind
@@ -1711,12 +1719,16 @@ export const expandCollapsedIterates = (
     // iterate-kind branch reads `container.childIds` and recurses into
     // each child; the chips sit inside the iterate's body box. The
     // `isInsideIterate` leaf-render check picks them up via this path.
+    //
+    // The chip's word follows the loop's: a signing loop's passes are
+    // "attempt 1", "attempt 2", not blocks of a message.
+    const noun = iterate.iterationNoun ?? "block";
     const chipNodes: GraphNode[] = [];
     for (let i = 0; i < visibleCount; i++) {
       chipNodes.push({
         stepId: blockChipId(iterate.id, i),
         stepType: BLOCK_CHIP_STEP_TYPE,
-        label: `block ${i + 1}`,
+        label: `${noun} ${i + 1}`,
         containerPath: [...iterate.containerPath, iterate.id],
         blockChipOf: iterate.id,
       });
@@ -1726,7 +1738,7 @@ export const expandCollapsedIterates = (
         stepId: blockMoreChipId(iterate.id),
         stepType: BLOCK_CHIP_STEP_TYPE,
         // Hidden-block count = N minus visible non-ellipsis chips.
-        label: `+${N - visibleCount} more blocks`,
+        label: `+${N - visibleCount} more ${pluralNoun(noun)}`,
         containerPath: [...iterate.containerPath, iterate.id],
         blockChipOf: iterate.id,
       });

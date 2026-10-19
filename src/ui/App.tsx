@@ -32,6 +32,11 @@ import {
   serializeDocument,
 } from "@/core/document";
 import { type ByteFormat, formatBytes, parseBytes, parseBytesWithLength } from "@/core/format";
+import {
+  type IterationNoun,
+  iterationNounForPath,
+  iterationNounsById,
+} from "@/core/iteration-noun";
 import { runSpec } from "@/core/runtime";
 import { makeBytesState } from "@/core/state/bytes";
 import type { AuxValue, State, TraceFrame } from "@/core/types";
@@ -169,6 +174,11 @@ import {
   withBoundaryReset,
 } from "./stores/edit-history";
 import { setByteFormat, useByteFormat } from "./stores/format";
+import {
+  forwardInputFor,
+  recordForwardInput,
+  restoresForwardInputOnFlipBack,
+} from "./stores/forward-input";
 import { pushSnapshot, useHistory } from "./stores/history";
 import {
   DEFAULT_IV_LENGTH,
@@ -187,7 +197,6 @@ import {
   usePaddingScheme,
 } from "./stores/padding";
 import { registry } from "./stores/registry";
-import { recordSignedMessage, useSignedMessage } from "./stores/signed-message";
 import {
   MAX_KMAC_KEY_LENGTH,
   MAX_SHAKE_OUTPUT,
@@ -1550,6 +1559,13 @@ export const App = () => {
    *  iterate (the badge hides itself at 1). */
   const blockCountFor = (f: TraceFrame): number => blockCounts().get(iterateScopeKey(f.path)) ?? 1;
 
+  // Which word the badge uses for this frame's loop — "Attempt" inside ML-DSA
+  // signing's repeat-until loop, "Block" everywhere else. Keyed by iterate id
+  // from the active spec, so it follows a learner's edits.
+  const iterationNouns = createMemo(() => iterationNounsById(spec().steps));
+  const iterationNounFor = (f: TraceFrame): IterationNoun =>
+    iterationNounForPath(f.path, iterationNouns());
+
   // Labels switch between encrypt/decrypt modes so the UI doesn't lie.
   // Slice 2.10c (2026-05-25): hash branch overrides the labels — hashes
   // are direction-less (no encrypt/decrypt; `mode()` is semantically
@@ -1569,14 +1585,15 @@ export const App = () => {
    */
   const hasDirection = () => !isHash(algorithm()) && !isPrng(algorithm());
 
-  const signedMessage = useSignedMessage();
-  // Remember what ML-DSA-44 Sign is signing, so Verify can offer to copy it in
-  // (the mode flip replaces this field with the signature). Recording only
-  // fills a store; nothing is copied until the user asks.
+  // Remember what the forward direction holds for the schemes whose way BACK
+  // cannot reuse the output (ML-DSA Sign's message, ML-KEM's `m`) — see
+  // `stores/forward-input.ts`. Recording only fills a store; the mode flip
+  // below restores it, and ML-DSA's Verify offers it behind an opt-in button.
   createEffect(() => {
-    if (algorithm() !== "ml-dsa-44" || mode() !== "encrypt") return;
-    const message = tryParseBytes(inputText(), fmt());
-    if (message !== null) recordSignedMessage(message);
+    const a = algorithm();
+    if (!restoresForwardInputOnFlipBack(a) || mode() !== "encrypt") return;
+    const forward = tryParseBytes(inputText(), fmt());
+    if (forward !== null) recordForwardInput(a, forward);
   });
 
   // Both labels come from one shared function, which the graph's endpoint
@@ -1691,15 +1708,17 @@ export const App = () => {
                 // update cycle, avoiding a flicker where decrypt
                 // momentarily runs on the encrypt-mode input.
                 const newMode = e.currentTarget.value as "encrypt" | "decrypt";
-                // ML-DSA-44 is the exception going BACK to Sign: Verify's
-                // output is a one-byte verdict, so the generic swap would put
-                // `01` where the message was — and the signed-message recorder
-                // would then remember `01` as the message. Restore the message
-                // that was signed instead.
-                const signedBack =
-                  algorithm() === "ml-dsa-44" && newMode === "encrypt" ? signedMessage() : null;
-                const swapText =
-                  signedBack !== null ? formatBytes(signedBack, fmt()) : outputText();
+                // ML-DSA-44 and ML-KEM-768 are the exceptions going BACK to
+                // the forward direction: Verify's output is a one-byte verdict
+                // and decapsulation's is the shared secret, neither of which is
+                // what Sign or encapsulation takes. The generic swap would put
+                // it in the input field — and the recorder above would then
+                // remember it. Restore the recorded forward input instead.
+                const restored =
+                  newMode === "encrypt" && restoresForwardInputOnFlipBack(algorithm())
+                    ? forwardInputFor(algorithm())
+                    : null;
+                const swapText = restored !== null ? formatBytes(restored, fmt()) : outputText();
                 batch(() => {
                   setMode(newMode);
                   if (swapText) setInputText(swapText);
@@ -2497,7 +2516,11 @@ export const App = () => {
 
                   {/* Multi-block context chip. Only renders when the current
                       frame belongs to an iterate node (blockIndex is set). */}
-                  <BlockBadge blockIndex={frame().blockIndex} blockCount={blockCountFor(frame())} />
+                  <BlockBadge
+                    blockIndex={frame().blockIndex}
+                    blockCount={blockCountFor(frame())}
+                    noun={iterationNounFor(frame())}
+                  />
 
                   {/* State view (PortFlowView for every shipped frame; see
                       `FrameStateView`). Every key schedule is now decomposed

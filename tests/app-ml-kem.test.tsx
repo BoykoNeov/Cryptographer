@@ -37,11 +37,12 @@ import { ML_KEM_DEFAULT_CIPHERTEXT, ML_KEM_DEFAULT_MESSAGE } from "@/ciphers/ml-
 import { App } from "@/ui/App";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetByteFormatForTests } from "@/ui/stores/format";
+import { __resetForwardInputsForTests } from "@/ui/stores/forward-input";
 import { __resetHistoryForTests } from "@/ui/stores/history";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
 import { __resetSpecForTests } from "@/ui/stores/spec";
 import { __resetTraceForTests } from "@/ui/stores/trace";
-import { cleanup, fireEvent, render } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const hex = (b: Uint8Array): string =>
@@ -77,6 +78,19 @@ const resetAll = (): void => {
   __resetPaddingForTests();
   __resetSpecForTests();
   __resetCipherForTests();
+  __resetForwardInputsForTests();
+};
+
+/** The result row's value, once a run has produced one, with spacing removed. */
+const resultHex = (container: HTMLElement): string | null =>
+  container.querySelector(".inputs-result code")?.textContent?.replace(/\s/g, "") ?? null;
+
+const run = (container: HTMLElement): void => {
+  const button = Array.from(container.querySelectorAll("button")).find(
+    (b) => b.textContent?.trim() === "run",
+  );
+  if (!button) throw new Error("run button not found");
+  fireEvent.click(button);
 };
 
 /** Public-key category, then the ML-KEM variant — the exact two clicks. */
@@ -166,6 +180,30 @@ describe("App — ML-KEM-768 in the public-key family", () => {
     // correct — it is the user's value, and silently overwriting it is worse.
     expect(findInputByLabel(container, "message").value).toBe("0042");
   });
+
+  it("flipping back from decapsulation restores m, not the shared secret", async () => {
+    // The mode flip copies the output into the input. Decapsulation's output is
+    // the shared secret, so without the restore the "message m" field would
+    // come back holding K. Any 32 bytes are a valid m, so nothing would fail —
+    // the learner would just be running a different key exchange unawares.
+    const { container } = render(() => <App />);
+    selectMlKem(container);
+    const m = "11".repeat(32);
+    fireEvent.input(findInputByLabel(container, "message m (random)"), { target: { value: m } });
+    run(container);
+    // 1088-byte ciphertext = 2176 hex digits.
+    await waitFor(() => expect(resultHex(container)?.length).toBe(2176), { timeout: 60_000 });
+
+    fireEvent.change(findSelectByLabel(container, "mode"), { target: { value: "decrypt" } });
+    run(container);
+    await waitFor(() => expect(resultHex(container)?.length).toBe(64), { timeout: 60_000 });
+    const sharedSecret = resultHex(container);
+    // The assertion below is only meaningful if K and m differ.
+    expect(sharedSecret).not.toBe(m);
+
+    fireEvent.change(findSelectByLabel(container, "mode"), { target: { value: "encrypt" } });
+    expect(findInputByLabel(container, "message m (random)").value.replace(/\s/g, "")).toBe(m);
+  }, 180_000);
 
   it("names the endpoints as a KEM's, not an encryption scheme's", () => {
     // A KEM does not transport a chosen message and does not return a
