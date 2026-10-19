@@ -5667,3 +5667,94 @@ button:disabled {
   max-width: 560px;
   line-height: 1.5;
 }
+
+/* ─── ML-DSA signing attempts panel ─────────────────────────────────────────
+   One row per attempt of the signing loop (`MlDsaAttemptsPanel`). The header
+   reuses RoundKeyPanel's collapsible strip classes; pass/fail is carried by a
+   ✓/✗ glyph AND colour, never colour alone. The kept attempt gets a green rule
+   on its left, the attempt you are looking at the accent background. */
+.ml-dsa-attempts-panel {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ml-dsa-attempts-summary {
+  color: var(--text);
+}
+
+.ml-dsa-attempts-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* Five numeric columns overflow a phone-width sidebar; scroll the table,
+     never the page. */
+  overflow-x: auto;
+}
+
+.ml-dsa-attempts-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  align-self: flex-start;
+}
+
+.ml-dsa-attempts-table th,
+.ml-dsa-attempts-table td {
+  padding: 3px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.ml-dsa-attempts-table thead th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.ml-dsa-attempts-num {
+  text-align: right !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.ml-dsa-attempts-row {
+  cursor: pointer;
+}
+
+.ml-dsa-attempts-row:hover {
+  background: var(--bg-elev-2);
+}
+
+.ml-dsa-attempts-row-current {
+  background: var(--accent-soft);
+}
+
+.ml-dsa-attempts-row-accepted th {
+  box-shadow: inset 3px 0 0 var(--accent-success-strong);
+}
+
+.ml-dsa-attempts-pass {
+  color: var(--accent-success);
+}
+
+.ml-dsa-attempts-fail {
+  color: var(--danger, #dc2626);
+}
+
+/* The attempt number is the row's keyboard target: a real button, styled as
+   plain text so the table does not read as a grid of buttons. */
+.ml-dsa-attempts-go {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+
+.ml-dsa-attempts-note {
+  margin: 0;
+  max-width: 70ch;
+}

@@ -30,6 +30,7 @@ import {
   ML_DSA_44_DEFAULT_SIGNATURE,
 } from "@/ciphers/ml-dsa-44";
 import { App } from "@/ui/App";
+import { __resetMlDsaAttemptsPanelForTests } from "@/ui/components/MlDsaAttemptsPanel";
 import { endpointLabelsFor } from "@/ui/stores/cipher";
 import { __resetCipherForTests } from "@/ui/stores/cipher";
 import { __resetByteFormatForTests } from "@/ui/stores/format";
@@ -37,7 +38,7 @@ import { __resetForwardInputsForTests } from "@/ui/stores/forward-input";
 import { __resetHistoryForTests } from "@/ui/stores/history";
 import { __resetPaddingForTests } from "@/ui/stores/padding";
 import { __resetSpecForTests } from "@/ui/stores/spec";
-import { __resetTraceForTests, getTrace, setFrame } from "@/ui/stores/trace";
+import { __resetTraceForTests, getTrace, setFrame, useFrameIndex } from "@/ui/stores/trace";
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -74,6 +75,7 @@ const resetAll = (): void => {
   __resetSpecForTests();
   __resetCipherForTests();
   __resetForwardInputsForTests();
+  __resetMlDsaAttemptsPanelForTests();
 };
 
 const selectMlDsa = (container: HTMLElement): void => {
@@ -235,4 +237,96 @@ describe("App — ML-DSA-44 in the public-key family", () => {
       expect(container.textContent).toContain("an ML-DSA-44 signature is exactly 2420 bytes"),
     );
   });
+});
+
+describe("App — the signing attempts panel (P5)", () => {
+  beforeEach(() => resetAll());
+  afterEach(() => {
+    cleanup();
+    resetAll();
+  });
+
+  /** Sign the default message and wait for the signature. */
+  const signDefault = async (container: HTMLElement): Promise<void> => {
+    selectMlDsa(container);
+    run(container);
+    await waitFor(() => expect(resultText(container)?.replace(/\s/g, "").length).toBe(4840), {
+      timeout: 60_000,
+    });
+  };
+
+  const verdictIndex = (attempt: number): number => {
+    const id = `${MLDSA_ATTEMPT_PREFIX}${MLDSA_ATTEMPT_VERDICT_ID}:b${attempt - 1}`;
+    return getTrace()?.frames.findIndex((f) => f.stepId === id) ?? -1;
+  };
+
+  const panel = (container: HTMLElement): HTMLElement | null =>
+    container.querySelector<HTMLElement>(".ml-dsa-attempts-panel");
+  const rows = (container: HTMLElement): HTMLTableRowElement[] =>
+    Array.from(container.querySelectorAll<HTMLTableRowElement>(".ml-dsa-attempts-row"));
+
+  it("lists every attempt with its four values, the kept one marked, the current one accented", async () => {
+    const { container } = render(() => <App />);
+    await signDefault(container);
+    setFrame(verdictIndex(2));
+    await waitFor(() => expect(rows(container).length).toBe(3));
+
+    expect(panel(container)?.textContent).toContain("accepted on attempt 3 of 3");
+    const [r1, r2, r3] = rows(container);
+    // Attempt 1 fails z AND r0 (the plan's recorded trace); the cells say so.
+    expect(r1?.textContent).toContain("131,029 ✗");
+    expect(r1?.textContent).toContain("95,166 ✗");
+    expect(r2?.textContent).toContain("95,190 ✗");
+    expect(r3?.textContent).toContain("130,992 ✓");
+    expect(r3?.classList.contains("ml-dsa-attempts-row-accepted")).toBe(true);
+    expect(r1?.classList.contains("ml-dsa-attempts-row-accepted")).toBe(false);
+    // You are on attempt 2.
+    expect(r2?.getAttribute("aria-current")).toBe("step");
+    expect(r1?.getAttribute("aria-current")).toBeNull();
+    // The limit lives in the column header, with the PASSING relation.
+    const headers = Array.from(container.querySelectorAll(".ml-dsa-attempts-table th[scope=col]"));
+    expect(headers.map((h) => h.textContent)).toContain("‖z‖∞ < 130,994");
+    expect(headers.map((h) => h.textContent)).toContain("#h ≤ 80");
+  }, 120_000);
+
+  it("clicking a row, or Enter on its button, jumps to that attempt's verdict", async () => {
+    const { container } = render(() => <App />);
+    await signDefault(container);
+    setFrame(verdictIndex(2));
+    await waitFor(() => expect(rows(container).length).toBe(3));
+
+    fireEvent.click(rows(container)[0] as HTMLElement);
+    expect(useFrameIndex()()).toBe(verdictIndex(1));
+
+    const go = rows(container)[2]?.querySelector("button") as HTMLButtonElement;
+    fireEvent.keyDown(go, { key: "Enter" });
+    expect(useFrameIndex()()).toBe(verdictIndex(3));
+  }, 120_000);
+
+  it("starts collapsed outside the loop, and the header opens it", async () => {
+    const { container } = render(() => <App />);
+    await signDefault(container);
+    setFrame(0);
+    await waitFor(() => expect(panel(container)).not.toBeNull());
+    expect(rows(container).length).toBe(0);
+    const header = panel(container)?.querySelector("button") as HTMLButtonElement;
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(header);
+    await waitFor(() => expect(rows(container).length).toBe(3));
+  }, 120_000);
+
+  it("is absent from verification, which has no loop", async () => {
+    // Sign first, so the panel has existed, then flip: the signature carries
+    // across and Verify runs on it. A panel that kept the signing trace's rows
+    // would survive the flip.
+    const { container } = render(() => <App />);
+    await signDefault(container);
+    setFrame(verdictIndex(1));
+    await waitFor(() => expect(rows(container).length).toBe(3));
+    fireEvent.change(findSelectByLabel(container, "mode"), { target: { value: "decrypt" } });
+    run(container);
+    await waitFor(() => expect(resultText(container)).toBe("01"), { timeout: 60_000 });
+    setFrame(0);
+    expect(panel(container)).toBeNull();
+  }, 120_000);
 });

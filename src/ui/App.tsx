@@ -62,6 +62,7 @@ import { FeistelRoundBytes } from "./components/FeistelRoundBytes";
 import { FeistelSwapDiagram } from "./components/FeistelSwapDiagram";
 import { GraphView } from "./components/GraphView";
 import { IvInput } from "./components/IvInput";
+import { MlDsaAttemptsPanel } from "./components/MlDsaAttemptsPanel";
 import { MlDsaVerifyMessage } from "./components/MlDsaVerifyMessage";
 import { NttButterflyDiagram } from "./components/NttButterflyDiagram";
 import { ParamEditor } from "./components/ParamEditor";
@@ -2587,6 +2588,16 @@ export const App = () => {
                       term — that prose can state but only an arrow can show.
                       Reachable through ML-KEM-768, which embeds K-PKE. */}
                   <ZqBaseCaseMulDiagram frame={frame()} />
+
+                  {/* ML-DSA signing is a repeat-until loop: each attempt signs
+                      the whole message again and keeps the candidate only if
+                      four bounds hold. One attempt's narrator sees only its
+                      own frame; this table lines every attempt's four measured
+                      values up against their limits, so a learner sees how
+                      many tries a signature took and how near the misses were.
+                      Self-detecting (only the signing trace has verdict
+                      frames), collapsed outside the loop like RoundKeyPanel. */}
+                  <MlDsaAttemptsPanel frame={frame()} />
 
                   {/* Per-frame value-prose. Cipher-agnostic dispatch via
                       the narration registry (`src/ui/narration/`).

@@ -639,6 +639,19 @@ the RSA arm, which reads `cipherConstants.q` for an unrelated check.
 
 - A linear-view **rejection-loop panel**: one row per attempt, its four bound
   values against their limits, the accepted row highlighted, click to scrub.
+  **DONE 2026-10-19** — `MlDsaAttemptsPanel.tsx` over the pure
+  `narration/ml-dsa-attempts.ts`, which the attempt verdict's narrator now
+  shares, so the table and the prose cannot read the ports differently.
+  Pass/fail is each check's own flag, never re-compared from value vs limit.
+  Rows are grouped by loop scope (`iterateScopeKey`). Expanded inside the loop
+  and on the release step, collapsed elsewhere (RoundKeyPanel's pattern).
+  Perturbation-verified, each breakage failing exactly its own test: dropping
+  the scope grouping, deciding pass by value vs limit, and a row scrubbing one
+  frame off. Browser-smoked on the default pair: the 3 rows read 131,029 ✗ /
+  95,166 ✗, then 95,190 ✗, then accepted at 130,992; clicking row 2 lands on
+  attempt 2's verdict, whose narrator agrees (95,190 ≥ 95,154). Seen in passing
+  for the narrator-reading item: the verdict step's doc renders its four
+  bullet questions with a stray paragraph break mid-sentence.
 - A **Decompose / hint diagram**: the number line cut into 2γ2-wide buckets, the
   value, its high/low parts, and how one hint bit moves the verifier's
   rounding.

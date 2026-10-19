@@ -22,28 +22,14 @@
  */
 
 import { decompose, modPm } from "@/core/ml-dsa-arith";
-import type { TraceFrame } from "@/core/types";
-import {
-  ATTEMPT_CHECKS,
-  type AttemptCheck,
-  attemptCheckPorts,
-  failedChecks,
-} from "@/steps/ml-dsa-attempt-verdict";
+import { type AttemptCheck, failedChecks } from "@/steps/ml-dsa-attempt-verdict";
 import { hintBitUnpack } from "@/steps/ml-dsa-hint-pack";
 import { Index } from "solid-js";
 import { Bytes, ValueList, coeffs, intParam, modulusOf, num, safeVecParams } from "./lattice";
+import { CHECK_LABEL, checkLine, readAttemptChecks, scalarOf } from "./ml-dsa-attempts";
 import type { NarrationFn } from "./registry";
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
-
-/** A scalar input port (γ2, a bound, ω) as a number, or null. */
-const scalarOf = (frame: TraceFrame, name: string): number | null => {
-  const bytes = frame.portInputs?.get(name);
-  if (!(bytes instanceof Uint8Array) || bytes.length === 0 || bytes.length > 6) return null;
-  let v = 0;
-  for (const b of bytes) v = v * 256 + b;
-  return v;
-};
 
 /** A vector port as numbers, or null. */
 const vecOf = (
@@ -954,22 +940,6 @@ export const mlDsaVerdictNarration: NarrationFn = (frame) => {
 
 // ─── ml-dsa.attempt-verdict@1 ──────────────────────────────────────────────
 
-/** Labels for the four checks, as a learner reads them. */
-const CHECK_LABEL: Record<AttemptCheck, { readonly value: string; readonly limit: string }> = {
-  z: { value: "‖z‖∞", limit: "γ1 − β" },
-  r0: { value: "‖r0‖∞", limit: "γ2 − β" },
-  ct0: { value: "‖c·t0‖∞", limit: "γ2" },
-  hint: { value: "#h", limit: "ω" },
-};
-
-/** One check's measured value against its limit, e.g. "‖z‖∞ = 131,029 ≥ γ1 − β = 130,994". */
-const checkLine = (check: AttemptCheck, value: number, limit: number, ok: boolean): string => {
-  const { value: v, limit: l } = CHECK_LABEL[check];
-  // Norms are strict (<), the hint count is not (≤) — so the failing relation differs.
-  const rel = check === "hint" ? (ok ? "≤" : ">") : ok ? "<" : "≥";
-  return `${v} = ${num(value)} ${rel} ${l} = ${num(limit)}`;
-};
-
 /** How one check came out, in words: the margin it passed by, or failed by. */
 const checkVerdict = (r: {
   readonly check: AttemptCheck;
@@ -996,15 +966,9 @@ const checkVerdict = (r: {
 export const mlDsaAttemptVerdictNarration: NarrationFn = (frame) => {
   const accepted = frame.portOutputs?.get("accepted");
   if (!(accepted instanceof Uint8Array)) return null;
-  const rows: { check: AttemptCheck; ok: boolean; value: number; limit: number }[] = [];
-  for (const { name } of ATTEMPT_CHECKS) {
-    const ports = attemptCheckPorts(name);
-    const ok = frame.portInputs?.get(ports.ok);
-    const value = scalarOf(frame, ports.value);
-    const limit = scalarOf(frame, ports.limit);
-    if (!(ok instanceof Uint8Array) || value === null || limit === null) return null;
-    rows.push({ check: name, ok: ok[0] === 1, value, limit });
-  }
+  // The same reader the attempts panel uses, so prose and table cannot disagree.
+  const rows = readAttemptChecks(frame);
+  if (rows === null) return null;
   const attempt = frame.blockIndex === undefined ? "" : `attempt ${frame.blockIndex + 1} `;
   const failed = rows.filter((r) => !r.ok);
   const headline =
